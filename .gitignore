@@ -1,0 +1,11 @@
+/kernel-deps
+/limine
+/ovmf
+*.iso
+*.hdd
+/iso_root
+/kernel/freestnd-c-hdrs-0bsd
+/kernel/cc-runtime*
+/kernel/bin
+/kernel/obj
+/.vscode
