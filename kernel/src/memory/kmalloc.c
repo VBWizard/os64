@@ -6,7 +6,8 @@
 void *kmalloc_aligned(uint64_t length)
 {
 	uint64_t addr = allocate_memory_aligned(length);
-	paging_map_page((pt_entry_t*)kKernelPML4v, addr  + kHHMDOffset, addr, PAGE_PRESENT | PAGE_WRITE);
+	uint64_t virtual_address = addr + kHHDMOffset;
+	paging_map_page((pt_entry_t*)kKernelPML4v, virtual_address, addr, PAGE_PRESENT | PAGE_WRITE);
 	return (void*)addr;
 }
 
@@ -14,6 +15,7 @@ void *kmalloc_aligned(uint64_t length)
 void *kmalloc(uint64_t length)
 {
 	uint64_t addr = allocate_memory(length);
-	paging_map_page((pt_entry_t*)kKernelPML4v, addr  + kHHMDOffset, addr, PAGE_PRESENT | PAGE_WRITE);
-	return (void*)addr + kHHMDOffset;
+	uint64_t virtual_address = addr + kHHDMOffset;
+	paging_map_page((pt_entry_t*)kKernelPML4v, virtual_address, addr, PAGE_PRESENT | PAGE_WRITE);
+	return (void*)addr + kHHDMOffset;
 }

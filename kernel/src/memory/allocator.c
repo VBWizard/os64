@@ -135,7 +135,7 @@ void allocator_init()
 
 	//Create an allocator entry for kMemoryStatus which is MAX_MEMORY_STATUS_COUNT entries long
 	//kMemoryStatus = (memory_status_t*)allocate_memory(allocate_size);
-	kMemoryStatus = (memory_status_t*)0x9000;
+	kMemoryStatus = (memory_status_t*)(0x9000 + kHHDMOffset);
 
 	//Parse the memory map into the newly created kMemoryStatus
 	for (uint64_t cnt=0;cnt<kMemMapEntryCount;cnt++)

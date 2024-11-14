@@ -30,7 +30,7 @@ typedef struct {
 
 extern pt_entry_t kKernelPML4;
 extern pt_entry_t kKernelPML4v;
-extern uint64_t kHHMDOffset;
+extern uint64_t kHHDMOffset;
 
 void paging_init(/*uint64_t kernel_physical, uint64_t kernel_virtual*/);
 void paging_map_page(

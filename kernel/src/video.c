@@ -1,5 +1,6 @@
-#include "video.h"
 #include <stdbool.h>
+#include "CONFIG.h"
+#include "video.h"
 #include "strings/sprintf.h"
 #include "memset.h"
 
@@ -80,7 +81,7 @@ void init_video(struct limine_framebuffer *framebuffer, struct limine_module_res
 	kFrameBuffer.pixels_per_scan_line = framebuffer->pitch / 4;
 	kFrameBuffer.buffer_size = framebuffer->height * framebuffer->pitch;
 
-	const char *fName = "zap-light16.psf";
+	const char *fName = FRAMEBUFFER_FONT;
 	struct limine_file *file = getFile(module_response, fName);
 	if (file == NULL)
 	{

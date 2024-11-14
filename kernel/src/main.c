@@ -164,20 +164,20 @@ void limine_boot_entry_point(void) {
 	//
 
 	boot_init();
-	kHHMDOffset = hhmd_response->offset;
-	kKernelPML4v = kHHMDOffset + kKernelPML4;
+	kHHDMOffset = hhmd_response->offset;
+	kKernelPML4v = kHHDMOffset + kKernelPML4;
 	init_video(framebuffer, module_response);
 	printf("Parsing memory map\n");
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
-	printf("Initializing paging ... \n");
+	printf("Initializing paging (HHMD) ... \n");
 	paging_init(/*kernel_base_address_physical, kernel_base_address_virtual*/);
-	printf("Initializing allocator, available memory is %u\n",kAvailableMemory);
+	printf("Initializing allocator, available memory is %u bytes\n",kAvailableMemory);
 	allocator_init();
 
 	char *x=kmalloc(512);	
 	char *y=kmalloc(512);	
 	sprintf(x, "Hello %u world!\n",1234);
-	sprintf(y, "Hello %u world!\n",1234);
+	sprintf(y, "Hello %u world!\n",5678);
     // We're done, just hang...
     hcf();
 }

@@ -9,7 +9,8 @@
 
 pt_entry_t kKernelPML4;
 pt_entry_t kKernelPML4v;
-uint64_t kHHMDOffset;
+//Higher Half Direct Mapping offset
+uint64_t kHHDMOffset;
 
 // Helper function to create a page entry with specified flags
 static inline pt_entry_t table_entry(uint64_t physical_address, uint64_t flags) {
@@ -26,69 +27,61 @@ static inline pt_entry_t table_entry(uint64_t physical_address, uint64_t flags) 
 void paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address, pt_entry_t* pdpt, pt_entry_t* pd, pt_entry_t* pt, pt_entry_t* page_entry) 
 {
     // Get the PML4 entry
-    pdpt = (pt_entry_t*)(pml4[PML4_INDEX(virtual_address)] & ~0xFFF) + kHHMDOffset;
+    pdpt = (pt_entry_t*)(pml4[PML4_INDEX(virtual_address)] & ~0xFFF);
 
     // Get the PDPT entry
-    pd = (pt_entry_t*)((pdpt)[PDPT_INDEX(virtual_address)] & ~0xFFF) + kHHMDOffset;
+    pd = (pt_entry_t*)((pdpt)[PDPT_INDEX(virtual_address)] & ~0xFFF);
 
     // Get the PD entry
-    pt = (pt_entry_t*)((pd)[PD_INDEX(virtual_address)] & ~0xFFF) + kHHMDOffset;
+    pt = (pt_entry_t*)((pd)[PD_INDEX(virtual_address)] & ~0xFFF);
 
     // Get the PT entry
-    page_entry = (pt_entry_t*)(pt)[PT_INDEX(virtual_address)] + kHHMDOffset;
+    page_entry = (pt_entry_t*)(pt)[PT_INDEX(virtual_address)];
 }
 
-void paging_map_page(
-	pt_entry_t* pml4,
-	uint64_t virtual_address,
-	uint64_t physical_address,
-	uint64_t flags)
-{
-	uint64_t pdpt_entry = 0, pd_entry = 0, pt_entry = 0, page_entry = 0;
-	flags = flags & 0xfff;
+#define PHYS_TO_VIRT(addr) ((addr) + kHHDMOffset)
 
-    // Get the PML4 entry
-    pdpt_entry = (pml4[PML4_INDEX(physical_address)] & ~0xFFF) + kHHMDOffset;
-
-	if (pdpt_entry != kHHMDOffset)
+void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
+    // Step 1: Traverse or allocate the PDPT table
+    pt_entry_t *pdpt;
+    if (pml4[PML4_INDEX(virtual_address)] & PAGE_PRESENT) 
 	{
-		// Get the PDPT entry
-		pd_entry = (((pt_entry_t*)pdpt_entry)[PDPT_INDEX(physical_address)] & ~0xFFF) + kHHMDOffset;
-
-		if (pd_entry != kHHMDOffset)
-		{
-			// Get the PD entry
-			pt_entry = (((pt_entry_t*)pd_entry)[PD_INDEX(physical_address)] & ~0xFFF) + kHHMDOffset;
-
-			if (pt_entry != kHHMDOffset)
-			// Get the PT entry
-				page_entry = ((pt_entry_t*)pt_entry)[PT_INDEX(physical_address)] + kHHMDOffset;
-		}
-	}
-	if (pdpt_entry == kHHMDOffset || pdpt_entry == 0)
+        pdpt = (pt_entry_t *)PHYS_TO_VIRT(pml4[PML4_INDEX(virtual_address)] & ~0xFFF);
+    } 
+	else 
 	{
-		// PDPT page doesn't exist, get one
-		pdpt_entry = (uint64_t)kmalloc_aligned(PAGE_SIZE);
-	}
-	pml4[PML4_INDEX(physical_address)] = table_entry((uint64_t)pdpt_entry, flags);
+        pdpt = (pt_entry_t*)allocate_memory_aligned(PAGE_SIZE);
+        pml4[PML4_INDEX(virtual_address)] = ((uint64_t)pdpt - kHHDMOffset) | flags | PAGE_PRESENT;
+        pdpt = (pt_entry_t *)PHYS_TO_VIRT((uint64_t)pdpt);  // Use virtual address
+    }
 
-	if (pd_entry == kHHMDOffset || pd_entry == 0)
+    // Step 2: Traverse or allocate the PD table
+    pt_entry_t *pd;
+    if (pdpt[PDPT_INDEX(virtual_address)] & PAGE_PRESENT) 
 	{
-		pd_entry = (uint64_t)kmalloc_aligned(PAGE_SIZE);
-	}
-	 ((pt_entry_t*)pdpt_entry)[PDPT_INDEX(physical_address)] = table_entry((uint64_t)pd_entry, flags);
+        pd = (pt_entry_t *)PHYS_TO_VIRT(pdpt[PDPT_INDEX(virtual_address)] & ~0xFFF);
+    } 
+	else 
+	{
+        pd = (pt_entry_t*)allocate_memory_aligned(PAGE_SIZE);
+        pdpt[PDPT_INDEX(virtual_address)] = ((uint64_t)pd - kHHDMOffset) | flags | PAGE_PRESENT;
+        pd = (pt_entry_t *)PHYS_TO_VIRT((uint64_t)pd);  // Use virtual address
+    }
 
-	if (pt_entry == kHHMDOffset || pt_entry == 0)
+    // Step 3: Traverse or allocate the PT table
+    pt_entry_t *pt;
+    if (pd[PD_INDEX(virtual_address)] & PAGE_PRESENT) 
 	{
-		pt_entry = (uint64_t)kmalloc_aligned(PAGE_SIZE);
-	}
-	 ((pt_entry_t*)pd_entry)[PD_INDEX(physical_address)] = table_entry((uint64_t)pt_entry, flags);
+        pt = (pt_entry_t *)PHYS_TO_VIRT(pd[PD_INDEX(virtual_address)] & ~0xFFF);
+    } else 
+	{
+        pt = (pt_entry_t*)allocate_memory_aligned(PAGE_SIZE);
+        pd[PD_INDEX(virtual_address)] = ((uint64_t)pt - kHHDMOffset) | flags | PAGE_PRESENT;
+        pt = (pt_entry_t *)PHYS_TO_VIRT((uint64_t)pt);  // Use virtual address
+    }
 
-	if (page_entry == kHHMDOffset || page_entry == 0) 
-	{
-		page_entry = (uint64_t)kmalloc_aligned(PAGE_SIZE);
-	}	
-	 ((pt_entry_t*)pt_entry)[PT_INDEX(physical_address)] = table_entry(virtual_address, flags);
+    // Step 4: Map the final page in the PT table
+    pt[PT_INDEX(virtual_address)] = physical_address | flags | PAGE_PRESENT;
 }
 
 void paging_map_pages(
@@ -99,7 +92,7 @@ void paging_map_pages(
 	uint64_t flags)
 {
 	for (uint64_t cnt=0;cnt<page_count;cnt++)
-		paging_map_page(pml4, virtual_address + kHHMDOffset + (PAGE_SIZE * cnt), physical_address + (PAGE_SIZE * cnt), flags);
+		paging_map_page(pml4, virtual_address + kHHDMOffset + (PAGE_SIZE * cnt), physical_address + (PAGE_SIZE * cnt), flags);
 }
 
 void paging_init()
@@ -107,18 +100,18 @@ void paging_init()
 	//Get the lowest available address above or equal to 0x1000 (don't include the zero page)
 	uint64_t memoryBaseAddress = getLowestAvailableMemoryAddress(0x1000);
 	//PML4 entry 0 points to 0x1000 - 512GB coverage
-	*(pt_entry_t*)(kKernelPML4v) = memoryBaseAddress | PAGE_PRESENT | PAGE_WRITE;
+	*(pt_entry_t*)(kKernelPML4v) = (memoryBaseAddress) | PAGE_PRESENT | PAGE_WRITE;
 	//PDPT entry 0 points to 0x2000 - 1GB coverage
-	*(pt_entry_t*)(memoryBaseAddress + kHHMDOffset) = (memoryBaseAddress + PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITE;
+	*(pt_entry_t*)(memoryBaseAddress + kHHDMOffset) = ((memoryBaseAddress + kHHDMOffset)  + PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITE;
 	//PD entry 0 points to 0x3000 - 2MB coverage
-	*(pt_entry_t*)(memoryBaseAddress + kHHMDOffset + PAGE_SIZE) = (memoryBaseAddress + (PAGE_SIZE * 2)) | PAGE_PRESENT | PAGE_WRITE;
+	*(pt_entry_t*)(memoryBaseAddress + kHHDMOffset + PAGE_SIZE) = ((memoryBaseAddress + kHHDMOffset)  + (PAGE_SIZE * 2)) | PAGE_PRESENT | PAGE_WRITE;
 
 	uint64_t temp =  sizeof(memory_status_t);
 	uint64_t page_count_to_map = (INITIAL_MEMORY_STATUS_COUNT * temp) / PAGE_SIZE;
 	//Map the allocator starting at 0x4000
 	for (pt_entry_t cnt=0;cnt<page_count_to_map;cnt++)
 	{
-		uint64_t virtual_address = (memoryBaseAddress + kHHMDOffset + PAGE_SIZE * 2) + (cnt*8);
+		uint64_t virtual_address = (memoryBaseAddress + kHHDMOffset + (PAGE_SIZE * 2)) + (cnt*8);
 		uint64_t physical_address = (memoryBaseAddress + (PAGE_SIZE * (3 + cnt)));
 		*(pt_entry_t*)(virtual_address) = physical_address | PAGE_PRESENT | PAGE_WRITE;
 	}
