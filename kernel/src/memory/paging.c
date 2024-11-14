@@ -1,5 +1,3 @@
-#include <stdint.h>
-#include <stddef.h>
 #include "paging.h"
 #include "CONFIG.h"
 #include "kmalloc.h"
@@ -84,15 +82,61 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
     pt[PT_INDEX(virtual_address)] = physical_address | flags | PAGE_PRESENT;
 }
 
-void paging_map_pages(
-	pt_entry_t* pml4,
-	uint64_t virtual_address,
-	uint64_t physical_address,
-	uint64_t page_count,
-	uint64_t flags)
+void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address) {
+    // Step 1: Traverse the PDPT table
+    pt_entry_t *pdpt;
+    if (pml4[PML4_INDEX(virtual_address)] & PAGE_PRESENT) {
+        pdpt = (pt_entry_t *)PHYS_TO_VIRT(pml4[PML4_INDEX(virtual_address)] & ~0xFFF);
+    } else {
+        // The page is not mapped, so nothing to unmap
+        return;
+    }
+
+    // Step 2: Traverse the PD table
+    pt_entry_t *pd;
+    if (pdpt[PDPT_INDEX(virtual_address)] & PAGE_PRESENT) {
+        pd = (pt_entry_t *)PHYS_TO_VIRT(pdpt[PDPT_INDEX(virtual_address)] & ~0xFFF);
+    } else {
+        // The page is not mapped, so nothing to unmap
+        return;
+    }
+
+    // Step 3: Traverse the PT table
+    pt_entry_t *pt;
+    if (pd[PD_INDEX(virtual_address)] & PAGE_PRESENT) {
+        pt = (pt_entry_t *)PHYS_TO_VIRT(pd[PD_INDEX(virtual_address)] & ~0xFFF);
+    } else {
+        // The page is not mapped, so nothing to unmap
+        return;
+    }
+
+    // Step 4: Unmap the final page in the PT table
+    if (pt[PT_INDEX(virtual_address)] & PAGE_PRESENT) {
+        pt[PT_INDEX(virtual_address)] = 0;  // Clear the page entry to unmap it
+        // Flush the TLB entry for this virtual address
+       asm volatile("invlpg [%0]" : : "r"(virtual_address) : "memory");
+    }
+}
+
+void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physical_address,uint64_t page_count,uint64_t flags)
 {
 	for (uint64_t cnt=0;cnt<page_count;cnt++)
 		paging_map_page(pml4, virtual_address + kHHDMOffset + (PAGE_SIZE * cnt), physical_address + (PAGE_SIZE * cnt), flags);
+}
+
+void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t length) {
+    // Align the virtual address down to the nearest page boundary
+    uint64_t aligned_address = virtual_address & ~(PAGE_SIZE - 1);
+
+    // Adjust the length to account for any extra bytes due to alignment
+    size_t end_address = virtual_address + length;
+    size_t aligned_length = end_address - aligned_address;
+    size_t num_pages = (aligned_length + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    // Unmap each page in the range
+    for (size_t i = 0; i < num_pages; i++) {
+        paging_unmap_page(pml4, aligned_address + i * PAGE_SIZE);
+    }
 }
 
 void paging_init()

@@ -2,6 +2,7 @@
 #include "allocator.h"
 #include "memmap.h"
 #include "paging.h"
+#include "memset.h"
 
 memory_status_t *kMemoryStatus;
 //Points to the next available kernel status
@@ -11,6 +12,15 @@ uintptr_t memoryBaseAddress;
 //NOTE: Will return the passed address if it is already page aligned
 static inline uintptr_t round_up_to_nearest_page(uintptr_t addr) {
     return (addr + 0xFFF) & ~0xFFF;
+}
+
+//Identify whether any statuses allocate on the page passed.
+bool physical_page_is_allocated_on(uintptr_t physical_page)
+{
+	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
+		if ((kMemoryStatus[cnt].startAddress & 0xFFFFFFFFFFFFF000) == physical_page && kMemoryStatus[cnt].in_use == true)
+			return true;
+	return false;
 }
 
 /// @brief Get the address of the first block of memory found that is greater than or equal to the length passed
@@ -35,12 +45,12 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 	return NULL;
 }
 
-memory_status_t* get_status_entry_for_requested_address(uint64_t address,uint64_t requested_length)
+memory_status_t* get_status_entry_for_requested_address(uint64_t address,uint64_t requested_length, bool in_use)
 {
 	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
 	{
 		if ( (kMemoryStatus[cnt].startAddress <= address && kMemoryStatus[cnt].startAddress + kMemoryStatus[cnt].length >= address) &&
-			kMemoryStatus[cnt].in_use == false &&
+			kMemoryStatus[cnt].in_use == in_use &&
 			kMemoryStatus[cnt].length >= requested_length
 		)
 			return &kMemoryStatus[cnt];
@@ -62,7 +72,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t address, uint64_t requeste
 	}
 	else
 	{
-		memaddr = get_status_entry_for_requested_address(address, page_aligned);
+		memaddr = get_status_entry_for_requested_address(address, page_aligned, false);
 		if ( memaddr == NULL)
 			__asm__("cli\nhlt\n");
 	}
@@ -89,7 +99,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t address, uint64_t requeste
 		}
 		else
 		{
-			kMemoryStatus[kMemoryStatusCurrentPtr].length = memaddr->length - requested_length;
+			kMemoryStatus[kMemoryStatusCurrentPtr].length = requested_length;
 			memaddr->startAddress += requested_length;
 			memaddr->length -= requested_length;
 			retVal = kMemoryStatus[kMemoryStatusCurrentPtr].startAddress;
@@ -118,6 +128,19 @@ uint64_t allocate_memory_aligned(uint64_t requested_length)
 uint64_t allocate_memory(uint64_t requested_length)
 {
 	return allocate_memory_at_address_internal(0, requested_length, false, false);
+}
+
+//TODO: Coalesce adjacent memory blocks back together
+int free_memory(uint64_t address)
+{
+	memory_status_t *status_entry = get_status_entry_for_requested_address(address, 0, true);
+	if (status_entry != NULL)
+	{
+		status_entry->in_use = false;
+		//Memory should still be mapped so we can clear it out safely
+		memset((void*)(status_entry->startAddress + kHHDMOffset), 0, status_entry->length);
+	}
+	return status_entry->length;
 }
 
 void allocator_init()

@@ -2,6 +2,7 @@
 #define PAGING_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "CONFIG.h"
 #include "memmap.h"
 
@@ -46,4 +47,6 @@ void paging_map_pages(
 	uint64_t page_count,
 	uint64_t flags);
 
+void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address);
+void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t length);
 #endif // PAGING_H

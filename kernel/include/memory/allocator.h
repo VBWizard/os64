@@ -13,9 +13,11 @@ typedef struct memory_status_s
 
 } memory_status_t;
 
+bool physical_page_is_allocated_on(uintptr_t physical_page_start);
 uint64_t allocate_memory_at_address(uint64_t address, uint64_t requested_length, bool use_address);
 uint64_t allocate_memory_aligned(uint64_t requested_length);
 uint64_t allocate_memory(uint64_t requested_length);
+int free_memory(uint64_t address);
 void allocator_init();
 
 #endif

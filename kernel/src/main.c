@@ -178,6 +178,27 @@ void limine_boot_entry_point(void) {
 	char *y=kmalloc(512);	
 	sprintf(x, "Hello %u world!\n",1234);
 	sprintf(y, "Hello %u world!\n",5678);
+	kfree(x);
+	kfree(y);
+
+	int loopCnt = 5;
+	char* z[loopCnt];
+
+	for (int cnt=0;cnt<loopCnt;cnt++)
+	{
+		z[cnt] = kmalloc(100);
+		sprintf(z[cnt], "Hello %u world\n", cnt);
+		//print(z[cnt]);
+	}
+	for (int cnt=0;cnt<loopCnt;cnt++)
+		kfree(z[cnt]);
     // We're done, just hang...
-    hcf();
+    
+	extern uint64_t kMemoryStatusCurrentPtr;
+	extern memory_status_t *kMemoryStatus;
+	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
+	{
+		printf("Starts at 0x%016x for 0x%016x (%s)\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
+	}
+	hcf();
 }

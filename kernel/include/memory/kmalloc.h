@@ -6,4 +6,5 @@
 
 void *kmalloc_aligned(uint64_t length);
 void *kmalloc(uint64_t length);
+void kfree(void *address);
 #endif
