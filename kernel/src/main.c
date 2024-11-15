@@ -8,6 +8,8 @@
 #include "memmap.h"
 #include "kmalloc.h"
 #include "sprintf.h"
+#include "io.h"
+#include "serial_logging.h"
 
 uint8_t* fb_ptr = NULL;
 void boot_init();
@@ -61,10 +63,8 @@ struct limine_module_request module_request = {
     .revision = 0
 };
 
-
 // Finally, define the start and end markers for the Limine requests.
 // These can also be moved anywhere, to any .c file, as seen fit.
-
 __attribute__((used, section(".limine_requests_end")))
 static volatile LIMINE_REQUESTS_END_MARKER;
 
@@ -117,6 +117,8 @@ int memcmp(const void *s1, const void *s2, size_t n) {
 
 // Halt and catch fire function.
 static void hcf(void) {
+	printf("Nothing to do, hcf!");
+	printd(DEBUG_BOOT,"Nothing to do, hcf!");
     for (;;) {
         asm ("hlt");
     }
@@ -163,42 +165,29 @@ void limine_boot_entry_point(void) {
 	// Initialize the kernel memory pool
 	//
 
+	printd(DEBUG_BOOT, "***** OS64 - system initializing! *****\n");
+
 	boot_init();
+	init_serial(0x3f8);
 	kHHDMOffset = hhmd_response->offset;
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
 	init_video(framebuffer, module_response);
-	printf("Parsing memory map\n");
+	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");
 	paging_init(/*kernel_base_address_physical, kernel_base_address_virtual*/);
 	printf("Initializing allocator, available memory is %u bytes\n",kAvailableMemory);
 	allocator_init();
 
-	char *x=kmalloc(512);	
-	char *y=kmalloc(512);	
-	sprintf(x, "Hello %u world!\n",1234);
-	sprintf(y, "Hello %u world!\n",5678);
-	kfree(x);
-	kfree(y);
 
-	int loopCnt = 5;
-	char* z[loopCnt];
-
-	for (int cnt=0;cnt<loopCnt;cnt++)
-	{
-		z[cnt] = kmalloc(100);
-		sprintf(z[cnt], "Hello %u world\n", cnt);
-		//print(z[cnt]);
-	}
-	for (int cnt=0;cnt<loopCnt;cnt++)
-		kfree(z[cnt]);
     // We're done, just hang...
     
 	extern uint64_t kMemoryStatusCurrentPtr;
 	extern memory_status_t *kMemoryStatus;
+	printd(DEBUG_BOOT, "BOOT END: Status of memory status:\n");
 	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
 	{
-		printf("Starts at 0x%016x for 0x%016x (%s)\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
+		printd(DEBUG_BOOT, "\tMemory at 0x%016Lx for 0x%016Lx is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
 	}
 	hcf();
 }

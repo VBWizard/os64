@@ -273,7 +273,9 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 				--fmt;
 			continue;
 		}
-		if (qualifier == 'l')
+		if (qualifier == 'L')
+			num = va_arg(args, unsigned long long);
+		else if (qualifier == 'l')
 			num = va_arg(args, unsigned long);
 		else if (qualifier == 'h') {
 			num = (unsigned short)va_arg(args, int);

@@ -31,7 +31,7 @@ int printf(const char *fmt, ...)
 	int printed;
 
 	memset(printf_buf,0,1024);
-        va_start(args, fmt);
+	va_start(args, fmt);
 	printed = vsprintf(printf_buf, fmt, args);
 	va_end(args);
 	print(printf_buf);

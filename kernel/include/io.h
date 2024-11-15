@@ -15,7 +15,16 @@
 #define PIC2_DATA                   0xA1
 #define PIC_READ_IRR                0x0a    /* OCW3 irq ready next CMD read */
 #define PIC_READ_ISR                0x0b    /* OCW3 irq service next CMD read */
+#define COM1 0x3f8
+#define LSR 0x05         // Line Status Register offset
+#define THRE 0x20        // Transmit Holding Register Empty bit
 
+static __inline unsigned char inb(unsigned short __port)
+{
+	unsigned char __val;
+	__asm__ volatile ("inb %0, %1" : "=a" (__val) : "dN" (__port));
+	return __val;
+}
 
 static __inline void outb(unsigned short __port, unsigned char __val)
 {
@@ -30,13 +39,6 @@ static __inline void outw(unsigned short __port, unsigned short __val)
 static __inline void outl(unsigned short __port, unsigned int __val)
 {
 	__asm__ volatile ("outd %1, %0" : : "a" (__val), "dN" (__port));
-}
-
-static __inline unsigned char inb(unsigned short __port)
-{
-	unsigned char __val;
-	__asm__ volatile ("inb %0, %1" : "=a" (__val) : "dN" (__port));
-	return __val;
 }
 
 static __inline unsigned short inw(unsigned short __port)
@@ -96,3 +98,5 @@ static __inline void insl(unsigned short __port, void *__buf, unsigned long __n)
 }
 #endif	/* IO_H */
 
+int init_serial(int port);
+void write_serial(int port, char a);

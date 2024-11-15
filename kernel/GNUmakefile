@@ -128,7 +128,6 @@ cc-runtime-x86_64/cc-runtime.a: cc-runtime/*
 bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
 	mkdir -p "$$(dirname $@)"
 	$(LD) $(OBJ) cc-runtime-x86_64/cc-runtime.a $(LDFLAGS) -o $@
-
 # Include header dependencies.
 -include $(HEADER_DEPS)
 

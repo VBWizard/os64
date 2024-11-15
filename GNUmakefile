@@ -6,7 +6,7 @@ QEMUDEBUGFLAGS = -S -s
 override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval override $(1) := $(2)))
 
 # Default user QEMU flags. These are appended to the QEMU command calls.
-$(call USER_VARIABLE,QEMUFLAGS,-m 2G)
+$(call USER_VARIABLE,QEMUFLAGS,-m 8g -serial mon:stdio)
 
 override IMAGE_NAME := os64_kernel
 
@@ -90,6 +90,8 @@ $(IMAGE_NAME).iso: limine/limine kernel
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		iso_root -o $(IMAGE_NAME).iso
 	./limine/limine bios-install $(IMAGE_NAME).iso
+	rm /mnt/c/temp/os64_kernel.iso
+	cp os64_kernel.iso /mnt/c/temp
 
 $(IMAGE_NAME).hdd: limine/limine kernel
 	rm -f $(IMAGE_NAME).hdd
