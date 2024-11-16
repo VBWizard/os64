@@ -37,7 +37,7 @@ uint8_t* fb_ptr = NULL;
 static void hcf(int error_number) {
     int error = error_number;
 	for (;;) {
-        asm ("hlt");
+		asm ("sti\nhlt\n");
     }
 }
 
@@ -69,7 +69,7 @@ void kernel_main()
 
 	printd(DEBUG_BOOT, "***** OS64 - system initializing! *****\n");
 
-	boot_init();
+	hardware_init();
 	init_serial(0x3f8);
 	kHHDMOffset = hhmd_response->offset;
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
@@ -93,5 +93,5 @@ void kernel_main()
 	}
 	printf("All done, hcf-time!\n");
 	printd(DEBUG_BOOT,"All done, hcf-time!\n");
-	hcf(-6);
+	hcf(0);
 }

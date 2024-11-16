@@ -6,7 +6,9 @@ QEMUDEBUGFLAGS = -S -s
 override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval override $(1) := $(2)))
 
 # Default user QEMU flags. These are appended to the QEMU command calls.
-$(call USER_VARIABLE,QEMUFLAGS,-m 8g -serial mon:stdio)
+# Send COM1 port output to the console with: -serial mon:stdio 
+# Send debug logging to file with: -D qemu_debug.log 
+$(call USER_VARIABLE,QEMUFLAGS,-monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -m 8g -serial file:qemu_com1.log -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
 
 override IMAGE_NAME := os64_kernel
 
@@ -16,6 +18,7 @@ all: $(IMAGE_NAME).iso
 .PHONY: all-hdd
 all-hdd: $(IMAGE_NAME).hdd
 
+# Local qemu: ~/src/qemu-9.2.0-rc0/build/
 .PHONY: run
 run: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \

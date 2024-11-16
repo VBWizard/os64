@@ -9,3 +9,6 @@
 /kernel/bin
 /kernel/obj
 /.vscode
+log
+os64_kernel_debug.asm
+*.log

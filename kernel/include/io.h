@@ -22,13 +22,13 @@
 static __inline unsigned char inb(unsigned short __port)
 {
 	unsigned char __val;
-	__asm__ volatile ("inb %0, %1" : "=a" (__val) : "dN" (__port));
+	__asm__ volatile ("in %0, %1" : "=a" (__val) : "dN" (__port));
 	return __val;
 }
 
 static __inline void outb(unsigned short __port, unsigned char __val)
 {
-	__asm__ volatile ("outb %1, %0" : : "a" (__val), "dN" (__port));
+	__asm__ volatile ("out %1, %0" : : "a" (__val), "dN" (__port));
 }
 
 static __inline void outw(unsigned short __port, unsigned short __val)

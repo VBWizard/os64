@@ -31,7 +31,7 @@ $(call USER_VARIABLE,AR,x86_64-elf-ar)
 $(call USER_VARIABLE,LD,x86_64-elf-ld)
 
 # User controllable C flags.
-$(call USER_VARIABLE,CFLAGS,-g -O0 -I include -pipe)
+$(call USER_VARIABLE,CFLAGS,-mno-red-zone -g -O0 -I include -pipe)
 
 # User controllable C preprocessor flags. We set none by default.
 $(call USER_VARIABLE,CPPFLAGS,)
@@ -102,13 +102,13 @@ override LDFLAGS += \
     -gc-sections \
     -T linker.ld
 
-# Use "find" to glob all *.c, *.S, and *.asm files in the tree and obtain the
-# object and header dependency file names.
-override CFILES := $(shell cd src && find -L * -type f -name '*.c' | LC_ALL=C sort)
-override ASFILES := $(shell cd src && find -L * -type f -name '*.S' | LC_ALL=C sort)
-override NASMFILES := $(shell cd src && find -L * -type f -name '*.asm' | LC_ALL=C sort)
-override OBJ := $(addprefix obj/,$(CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o))
-override HEADER_DEPS := $(addprefix obj/,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
+# Use "find" to glob all *.c, *.S, and *.asm files in the tree.
+override CFILES := $(shell find src -type f -name '*.c' | LC_ALL=C sort)
+override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
+override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
+override OBJ := $(patsubst src/%,obj/%,$(CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o))
+override HEADER_DEPS := $(patsubst src/%,obj/%,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
+
 
 # Default target.
 .PHONY: all
