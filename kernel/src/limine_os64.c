@@ -33,6 +33,13 @@ volatile struct limine_module_request module_request = {
     .revision = 0
 };
 
+ __attribute__((used, section(".limine_requests")))
+volatile struct limine_smp_request smp_request = {
+    .id = LIMINE_SMP_REQUEST,
+    .revision = 0
+};
+
+
 __attribute__((used, section(".limine_requests_start")))
 static volatile LIMINE_REQUESTS_START_MARKER;
 __attribute__((used, section(".limine_requests_end")))
@@ -93,7 +100,8 @@ int memcmp(const void *s1, const void *s2, size_t n) {
 int verify_limine_responses(struct limine_memmap_response* memmap_response, 
 		struct limine_hhdm_response* hhmd_response,
 		struct limine_framebuffer_response* framebuffer_response,
-		struct limine_module_response* module_response)
+		struct limine_module_response* module_response,
+		struct limine_smp_response* smp_response)
 {
 	if (memmap_response == NULL || memmap_response->entry_count == 0)
 		return -1;
@@ -106,6 +114,9 @@ int verify_limine_responses(struct limine_memmap_response* memmap_response,
 
 	if (module_response == NULL)
 		return -4;
+
+	if (smp_response == NULL)
+		return -5;
 
 	return 0;
 }

@@ -7,7 +7,7 @@
 handler_irq0_asm:
 	cli
 	IRQ_PROLOGUE
-	# call handler_irq0_c     # Call the C handler
+	call handler_irq0_c     # Call the C handler
     mov al, 0x20            # Send EOI to PIC
     out 0x20, al
 	IRQ_EPILOGUE

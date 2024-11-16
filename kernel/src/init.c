@@ -7,8 +7,14 @@
 #include "driver/system/idt.h"
 #include "serial_logging.h"
 #include "io.h"
+#include "rtc.h"
+
+#define PIC_REMAP_OFFSET 32
 
 extern void init_PIT();
+
+time_t kSystemStartTime, kSystemCurrentTime;
+int kTimeZone;
 
 void hardware_init()
 {
@@ -19,12 +25,23 @@ void hardware_init()
 	// Put the CR3 value in KpageDirectoryBaseAddress
   	__asm__("mov rax, cr3\n"
     		"mov %0, rax\n" : "=r"(kKernelPML4));
-	
-	//__asm__("mov rbx, 10\ncall init_PIT\n");
-	initialize_pit_timer(TICKS_PER_SECOND);
-	pic_remap(0x20,0x28);
+
+
+	//I decided to go with init_PIT (assembly) instead of initialize_pit_timer (C) b/c when using init_PIT the drift is almost impreceptable
+	__asm__ ("mov rbx, %[ticks]\n" // Move TICKS_PER_SECOND into RBX
+    "call init_PIT\n"     // Call the init_PIT function
+    :
+    : [ticks] "r" ((uint64_t)TICKS_PER_SECOND) // Input operand
+    : "rbx"                          // Clobbered register
+);
+	pic_remap(0 + PIC_REMAP_OFFSET, 8 + PIC_REMAP_OFFSET);
 	initialize_idt();
 	//Enable interrupts
 	asm ("sti\n");
 	printd(DEBUG_BOOT, "Interrupts enabled\n");
+
+	struct tm date_time_buff = getRTCDate();
+    kSystemStartTime = mktime(&date_time_buff);
+    kTimeZone = -5;
+    kSystemCurrentTime = kSystemStartTime;
 }

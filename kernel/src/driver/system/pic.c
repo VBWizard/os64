@@ -41,6 +41,5 @@ uint8_t get_slave_pic_offset() {
 
 int pic_irq0_mapping() {
     uint8_t master_offset = get_master_pic_offset();
-    uint8_t slave_offset = get_slave_pic_offset();
 	return master_offset;
 }

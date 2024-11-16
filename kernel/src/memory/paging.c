@@ -5,7 +5,9 @@
 #include "memmap.h"
 #include "BasicRenderer.h"
 
+//Kernel paging pml4 table physical address
 pt_entry_t kKernelPML4;
+//Kernel paging pml4 table virtual (higher half) address
 pt_entry_t kKernelPML4v;
 //Higher Half Direct Mapping offset
 uint64_t kHHDMOffset;
