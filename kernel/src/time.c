@@ -1,6 +1,10 @@
 #include "time.h"
+#include <stdint.h>
+#include "serial_logging.h"
 
 extern int kTimeZone;
+extern volatile uint64_t kTicksSinceStart;
+extern volatile uint64_t kTicksPerSecond;
 
 const int _ytab[2][12] = {
   {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
@@ -198,4 +202,34 @@ struct tm *localtime_r(const time_t *timer, struct tm *tmbuf) {
 
   t = *timer - kTimeZone;
   return gmtime(&t, tmbuf);
+}
+
+
+void kwait(uint64_t msToWait)
+{
+    uint64_t endTicks = kTicksSinceStart + (msToWait * kTicksPerSecond) / 1000;
+    while (kTicksSinceStart < endTicks)
+    {
+        __asm__ volatile ("pause");
+    }
+}
+
+void __attribute__((noinline))waitTicks(int TicksToWait)
+{
+    //printf("ttw=%u",ttw);
+    if (TicksToWait<=0)
+        return;
+    if (TicksToWait>5000)
+        printd(DEBUG_EXCEPTIONS,"waitTicks: Excessive ticks value %u\n",TicksToWait);
+    do
+    {
+        __asm("sti\nhlt\n");
+        TicksToWait--;
+    } while (TicksToWait>0);
+    return;
+}
+
+void wait(int msToWait)
+{
+    waitTicks(msToWait/MS_PER_TICK);
 }

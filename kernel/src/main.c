@@ -17,7 +17,7 @@ struct limine_memmap_response *memmap_response;
 struct limine_hhdm_response *hhmd_response;
 struct limine_framebuffer_response *framebuffer_response;
 struct limine_module_response *limine_module_response;
-struct limine_smp_response *limine_smp_info;
+extern struct limine_smp_response *kLimineSMPInfo;
 struct limine_framebuffer *framebuffer;
 
 __attribute__((used, section(".limine_requests")))
@@ -46,9 +46,9 @@ void limine_boot_entry_point(void) {
 	hhmd_response = hhmd_request.response;
 	framebuffer_response = framebuffer_request.response;
 	limine_module_response = module_request.response;
-	limine_smp_info = smp_request.response;
+	kLimineSMPInfo = smp_request.response;
 
-	int limine_response_status = verify_limine_responses(memmap_response, hhmd_response, framebuffer_response, limine_module_response, limine_smp_info);
+	int limine_response_status = verify_limine_responses(memmap_response, hhmd_response, framebuffer_response, limine_module_response, kLimineSMPInfo);
 
 	if (limine_response_status != 0)
 		hcf(limine_response_status);

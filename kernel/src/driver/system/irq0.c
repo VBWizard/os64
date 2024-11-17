@@ -3,10 +3,10 @@
 #include "io.h"
 #include "time.h"
 
-uint64_t kTicksSinceStart;
+volatile uint64_t kTicksSinceStart;
 /// @brief Uptime in seconds
-uint64_t kUptime;
-extern time_t kSystemCurrentTime;
+volatile uint64_t kUptime;
+extern volatile time_t kSystemCurrentTime;
 
 /// @brief Handles the PIT timer signal
 __attribute__((used))

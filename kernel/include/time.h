@@ -2,6 +2,8 @@
 #ifndef TIME_H
 #define TIME_H
 
+#include <stdint.h>
+
 typedef long time_t;
 
 struct tm {
@@ -30,4 +32,7 @@ struct tm {
 time_t mktime(struct tm *tmbuf);
 time_t mktime_simple(const struct tm *time);
 struct tm *gmtime(const time_t *timer, struct tm *tmbuf);
+void kwait(uint64_t msToWait);
+void wait(int msToWait);
+
 #endif // TIME_H

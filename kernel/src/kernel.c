@@ -11,6 +11,8 @@
 #include "serial_logging.h"
 #include "init.h"
 #include "strftime.h"
+#include "driver/system/cpudet.h"
+#include "smp.h"
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 extern volatile struct limine_memmap_request memmap_request;
@@ -21,10 +23,12 @@ extern volatile struct limine_smp_request smp_request;
 extern struct limine_module_response *limine_module_response;
 extern struct limine_memmap_response *memmap_response;
 extern time_t kSystemCurrentTime;
-uint64_t kTicksPerSecond;
 extern int kTimeZone;
-bool kInitDone;
 extern BasicRenderer kRenderer;
+
+bool kInitDone;
+uint64_t kTicksPerSecond;
+struct limine_smp_response *kLimineSMPInfo;
 
 void kernel_main()
 {
@@ -40,10 +44,14 @@ void kernel_main()
 	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");
-	paging_init(/*kernel_base_address_physical, kernel_base_address_virtual*/);
+	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
-
+	detect_cpu();
+	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
+	printf("SMP: Initializing ...\n");
+	init_SMP();
+	kLimineSMPInfo = smp_request.response;
 
     // We're done, just hang...
     

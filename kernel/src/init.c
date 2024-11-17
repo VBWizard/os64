@@ -13,7 +13,8 @@
 
 extern void init_PIT();
 
-time_t kSystemStartTime, kSystemCurrentTime;
+volatile time_t kSystemStartTime;
+volatile time_t kSystemCurrentTime;
 int kTimeZone;
 
 void hardware_init()
