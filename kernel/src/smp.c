@@ -4,6 +4,7 @@
 #include "apic.h"
 #include "paging.h"
 #include "serial_logging.h"
+#include "BasicRenderer.h"
 
 cpu_t *kCPUInfo;
 
@@ -28,4 +29,5 @@ void init_SMP()
 			printd(DEBUG_SMP, "BSP apic timer HZ = %u\n",kCPUInfo[0].ticksPerSecond);
 		}
 	}
+	printf("SMP: BSP timer %u\n",kCPUInfo[0].ticksPerSecond);
 }

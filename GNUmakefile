@@ -8,7 +8,7 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # Default user QEMU flags. These are appended to the QEMU command calls.
 # Send COM1 port output to the console with: -serial mon:stdio 
 # Send debug logging to file with: -D qemu_debug.log 
-$(call USER_VARIABLE,QEMUFLAGS,-m 8g -smp 2 -serial file:qemu_com1.log -monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
+$(call USER_VARIABLE,QEMUFLAGS,-m 8g -smp 2 -no-reboot -serial file:qemu_com1.log -monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
 
 override IMAGE_NAME := os64_kernel
 

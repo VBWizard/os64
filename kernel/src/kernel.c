@@ -13,6 +13,8 @@
 #include "strftime.h"
 #include "driver/system/cpudet.h"
 #include "smp.h"
+#include "gdt.h"
+#include "tss.h"
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 extern volatile struct limine_memmap_request memmap_request;
@@ -47,6 +49,7 @@ void kernel_main()
 	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
+	init_GDT();
 	detect_cpu();
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 	printf("SMP: Initializing ...\n");
