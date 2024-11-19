@@ -13,9 +13,9 @@
 
 extern void init_PIT();
 
-volatile time_t kSystemStartTime;
-volatile time_t kSystemCurrentTime;
-int kTimeZone;
+extern volatile uint64_t kSystemStartTime, kUptime;
+extern volatile uint64_t kSystemCurrentTime;
+extern volatile int kTimeZone;
 
 void hardware_init()
 {

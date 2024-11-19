@@ -126,25 +126,25 @@ cc-runtime-x86_64/cc-runtime.a: cc-runtime/*
 
 # Link rules for the final executable.
 bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
-	mkdir -p "$$(dirname $@)"
+	@mkdir -p "$$(dirname $@)"
 	$(LD) $(OBJ) cc-runtime-x86_64/cc-runtime.a $(LDFLAGS) -o $@
 # Include header dependencies.
 -include $(HEADER_DEPS)
 
 # Compilation rules for *.c files.
 obj/%.c.o: src/%.c GNUmakefile
-	mkdir -p "$$(dirname $@)"
-	$(CC) $(CFLAGS) -c $< -o $@
+	@mkdir -p "$$(dirname $@)"
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compilation rules for *.S files.
 obj/%.S.o: src/%.S GNUmakefile
-	mkdir -p "$$(dirname $@)"
-	$(CC) $(CFLAGS) -c $< -o $@
+	@mkdir -p "$$(dirname $@)"
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compilation rules for *.asm (nasm) files.
 obj/%.asm.o: src/%.asm GNUmakefile
-	mkdir -p "$$(dirname $@)"
-	nasm $(NASMFLAGS) $< -o $@
+	@mkdir -p "$$(dirname $@)"
+	@nasm $(NASMFLAGS) $< -o $@
 
 # Remove object files and the final executable.
 .PHONY: clean

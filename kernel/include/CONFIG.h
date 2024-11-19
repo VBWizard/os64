@@ -21,6 +21,8 @@
 #define DEBUG_EXCEPTIONS 1 << 0
 #define DEBUG_BOOT 1 << 1
 #define DEBUG_SMP 1 << 2
+#define DEBUG_PCI_DISCOVERY 1 << 3
+#define DEBUG_PCI 1 << 4
 #define DEBUG_OPTIONS DEBUG_EVERYTHING 
 
 #endif // CONFIG_H

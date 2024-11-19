@@ -51,7 +51,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
 	else 
 	{
         pdpt = (pt_entry_t*)allocate_memory_aligned(PAGE_SIZE);
-        pml4[PML4_INDEX(virtual_address)] = ((uint64_t)pdpt - kHHDMOffset) | flags | PAGE_PRESENT;
+        pml4[PML4_INDEX(virtual_address)] = ((uint64_t)pdpt) | flags | PAGE_PRESENT;
         pdpt = (pt_entry_t *)PHYS_TO_VIRT((uint64_t)pdpt);  // Use virtual address
     }
 
@@ -64,7 +64,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
 	else 
 	{
         pd = (pt_entry_t*)allocate_memory_aligned(PAGE_SIZE);
-        pdpt[PDPT_INDEX(virtual_address)] = ((uint64_t)pd - kHHDMOffset) | flags | PAGE_PRESENT;
+        pdpt[PDPT_INDEX(virtual_address)] = ((uint64_t)pd) | flags | PAGE_PRESENT;
         pd = (pt_entry_t *)PHYS_TO_VIRT((uint64_t)pd);  // Use virtual address
     }
 
@@ -76,7 +76,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
     } else 
 	{
         pt = (pt_entry_t*)allocate_memory_aligned(PAGE_SIZE);
-        pd[PD_INDEX(virtual_address)] = ((uint64_t)pt - kHHDMOffset) | flags | PAGE_PRESENT;
+        pd[PD_INDEX(virtual_address)] = ((uint64_t)pt) | flags | PAGE_PRESENT;
         pt = (pt_entry_t *)PHYS_TO_VIRT((uint64_t)pt);  // Use virtual address
     }
 

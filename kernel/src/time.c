@@ -1,10 +1,11 @@
 #include "time.h"
 #include <stdint.h>
+#include "kernel.h"
 #include "serial_logging.h"
 
 extern int kTimeZone;
 extern volatile uint64_t kTicksSinceStart;
-extern volatile uint64_t kTicksPerSecond;
+extern uint64_t kTicksPerSecond;
 
 const int _ytab[2][12] = {
   {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},

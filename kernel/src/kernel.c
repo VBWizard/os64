@@ -1,6 +1,5 @@
 #include <stddef.h>
 #include "kernel.h"
-#include "limine.h"
 #include "paging.h"
 #include "allocator.h"
 #include "video.h"
@@ -15,20 +14,13 @@
 #include "smp.h"
 #include "gdt.h"
 #include "tss.h"
+#include "pci.h"
 
-extern volatile struct limine_framebuffer_request framebuffer_request;
-extern volatile struct limine_memmap_request memmap_request;
-extern volatile struct limine_kernel_address_request kernel_address_request;
-extern volatile struct limine_hhdm_request hhmd_request;
-extern volatile struct limine_module_request module_request;
-extern volatile struct limine_smp_request smp_request;
-extern struct limine_module_response *limine_module_response;
-extern struct limine_memmap_response *memmap_response;
-extern time_t kSystemCurrentTime;
-extern int kTimeZone;
-extern BasicRenderer kRenderer;
+volatile uint64_t kSystemStartTime, kUptime, kTicksSinceStart;
+volatile uint64_t kSystemCurrentTime;
+int kTimeZone;
 
-bool kInitDone;
+volatile bool kInitDone;
 uint64_t kTicksPerSecond;
 struct limine_smp_response *kLimineSMPInfo;
 
@@ -50,6 +42,10 @@ void kernel_main()
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
 	init_GDT();
+	
+	printf("Initializing PCI ... ");
+	init_PCI();
+	printf("%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
 	detect_cpu();
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 	printf("SMP: Initializing ...\n");
