@@ -8,7 +8,28 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # Default user QEMU flags. These are appended to the QEMU command calls.
 # Send COM1 port output to the console with: -serial mon:stdio 
 # Send debug logging to file with: -D qemu_debug.log 
-$(call USER_VARIABLE,QEMUFLAGS,-m 8g -smp 2 -no-reboot -serial file:qemu_com1.log -monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
+# $(call USER_VARIABLE,QEMUFLAGS,-m 8g -smp 2 -no-reboot -serial file:qemu_com1.log -monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
+
+# Define the base QEMU flags
+QEMU_BASE_FLAGS = -m 8g -smp 2 -no-reboot \
+                  -serial file:qemu_com1.log \
+                  -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
+                  -d $(shell echo int,cpu_reset,pcall,guest_errors)
+
+# Define drive/device flags
+QEMU_DRIVE_FLAGS = \
+                  -drive file=/home/yogi/disk_images/nvme.img,if=none,id=nvme1 \
+                  -device nvme,drive=nvme1,serial=nvme1-serial \
+                  -drive file=/home/yogi/disk_images/sata.img,if=none,id=sata1 \
+                  -device ahci,id=ahci1 \
+                  -device ide-hd,drive=sata1,bus=ahci1.0
+
+# Combine all flags
+QEMUFLAGS_ADD = $(QEMU_BASE_FLAGS) $(QEMU_DRIVE_FLAGS)
+
+# Use the combined flags in your target
+$(call USER_VARIABLE,QEMUFLAGS,$(QEMUFLAGS_ADD))
+
 
 override IMAGE_NAME := os64_kernel
 

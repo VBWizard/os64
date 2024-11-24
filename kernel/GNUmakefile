@@ -77,6 +77,7 @@ override CFLAGS += \
 	-Werror \
 	-Wno-error=unused-but-set-parameter \
 	-Wno-error=unused-variable \
+	-Wno-error=unused-but-set-variable \
 	$(INCLUDE_FLAGS)
 #    -nostdinc \
 

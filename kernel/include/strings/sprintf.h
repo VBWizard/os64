@@ -21,7 +21,6 @@
 #define	_PRINTF_H	1
 
 #include <stddef.h>
-
 #include <stdarg.h>
 
 int sprintf(char *buf, const char *fmt, ...);

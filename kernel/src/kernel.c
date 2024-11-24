@@ -15,6 +15,8 @@
 #include "gdt.h"
 #include "tss.h"
 #include "pci.h"
+#include "ahci.h"
+#include "strcpy.h"
 
 volatile uint64_t kSystemStartTime, kUptime, kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
@@ -43,8 +45,10 @@ void kernel_main()
 	allocator_init();
 	init_GDT();
 	
-	printf("Initializing PCI ... ");
+	printf("Initializing PCI ...\n");
 	init_PCI();
+	printf("Initializing AHCI ...\n");
+	init_AHCI();
 	printf("%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
 	detect_cpu();
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
@@ -52,6 +56,16 @@ void kernel_main()
 	init_SMP();
 	kLimineSMPInfo = smp_request.response;
 
+	//Temporary - make sure paging is working correctly
+	char* x = kmalloc(256);
+	char* y = kmalloc(128);
+
+	strncpy(x, "This is test # 1", 20);
+	strncpy(y, "this is test # 2", 20);
+	kfree(x);
+	x = kmalloc(256);
+	strncpy(x, "This is test 3", 20);
+	
     // We're done, just hang...
     
 	extern uint64_t kMemoryStatusCurrentPtr;

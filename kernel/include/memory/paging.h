@@ -23,6 +23,10 @@
 #define KERNEL_PT_PAGES 32
 #define PT_ADDRESS   0x4000
 #define PT END PT_ADDRESS + (0x1000 * KERNEL_PT_PAGES) //Enough room to map 64MB of memory for the kernel
+#define RELOAD_CR3 __asm__ __volatile__("mov rax, cr3\n\t"          \
+                                        "mov cr3, rax\n\t"          \
+                                        ::: "rax");
+#define PHYS_TO_VIRT(addr) ((pt_entry_t)(addr) + kHHDMOffset)
 
 typedef uint64_t pt_entry_t;
 typedef struct {

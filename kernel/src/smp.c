@@ -13,7 +13,6 @@ extern 	uint8_t apciGetAPICID(unsigned whichAPIC);
 
 void init_SMP()
 {
-	int x = sizeof(cpu_t);
 	kCPUInfo = kmalloc((kLimineSMPInfo->cpu_count - 1) * sizeof(cpu_t));
 	for (uint64_t core = 0; core < kLimineSMPInfo->cpu_count;core++)
 	{

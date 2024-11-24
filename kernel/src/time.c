@@ -211,7 +211,7 @@ void kwait(uint64_t msToWait)
     uint64_t endTicks = kTicksSinceStart + (msToWait * kTicksPerSecond) / 1000;
     while (kTicksSinceStart < endTicks)
     {
-        __asm__ volatile ("pause");
+        __asm__ volatile ("pause\n");
     }
 }
 
@@ -224,7 +224,7 @@ void __attribute__((noinline))waitTicks(int TicksToWait)
         printd(DEBUG_EXCEPTIONS,"waitTicks: Excessive ticks value %u\n",TicksToWait);
     do
     {
-        __asm("sti\nhlt\n");
+        __asm("pause\n");
         TicksToWait--;
     } while (TicksToWait>0);
     return;

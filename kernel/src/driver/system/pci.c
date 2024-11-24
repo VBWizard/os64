@@ -6,12 +6,13 @@
 #include "strcpy.h"
 #include "driver/system/pci_c_header.h"
 
-int kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
+uint8_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
 pci_bridge_t* kPCIBridgeHeaders;
 pci_device_t* kPCIDeviceHeaders;
 pci_device_t* kPCIDeviceFunctions;
 
- uint32_t pciConfigReadDWord (uint8_t bus, uint8_t slot,
+
+uint32_t pciConfigReadDWord (uint8_t bus, uint8_t slot,
                              uint8_t func, uint8_t offset)
  {
     uint32_t address;
@@ -41,7 +42,7 @@ bool getDeviceHeader(pci_device_t* node, uint8_t bus, uint8_t slot, uint8_t func
     for (int cnt=0;cnt<16;cnt++)
     {
         value=pciConfigReadDWord(bus, slot, func, cnt*4);
-        if (value==0xFFFFFFFF)
+		if (value==0xFFFFFFFF)
             return false;
         switch(cnt)
         {
@@ -57,6 +58,7 @@ bool getDeviceHeader(pci_device_t* node, uint8_t bus, uint8_t slot, uint8_t func
                 node->class=value >> 24;
                 node->subClass=(value & 0x00FF0000) >> 16;
                 node->prog=(value & 0x0000FF00) >> 8;
+				node->class_dword = value;
                 break;
             case 3:
                 node->headerType=(value >> 16) & 0x7f;
@@ -234,6 +236,80 @@ void getVendorLongName(uint32_t vendorID, char* vendorLongName)
     strcpy(vendorLongName,"Not Found");
 }
 
+ int pci_get_bridges(pci_bridge_t* bridges)
+ {
+	int bridge_count;
+
+	for (int idx = 0; idx < kPCIBridgeCount; idx++)
+	{
+		memcpy(&bridges[bridge_count], &kPCIBridgeHeaders[idx], sizeof(pci_bridge_t));
+		bridge_count++;
+	}
+	return bridge_count;
+ }
+
+/// @brief Returns a list of pci devices matching the passed class/subclass
+/// @param device_class The class of the device you are looking for, pass 0xFF for all classes
+/// @param device_subclass The subclass of the device(s) you are looking for, pass 0xFF for all subclasses
+/// @param devices An allocated device array large enough to hold 100 devices
+/// @return The count of devices added to the device array
+int pci_get_device(uint32_t device_class, uint32_t device_subclass, pci_device_t* devices)
+{
+	int device_count;
+	for (int idx = 0; idx < kPCIDeviceCount; idx++)
+	{
+		if ((device_class == 0xFF || kPCIDeviceHeaders[idx].class == device_class) && 
+			(device_subclass == 0xFF || kPCIDeviceHeaders[idx].subClass == device_subclass))
+		{
+			memcpy(&devices[device_count], &kPCIDeviceHeaders[idx], sizeof(pci_device_t));
+			device_count++;
+		}
+	}
+	for (int idx = 0; idx < kPCIDeviceCount; idx++)
+	{
+		if ((device_class == 0xFF || kPCIDeviceFunctions[idx].class == device_class) && 
+			(device_subclass == 0xFF || kPCIDeviceFunctions[idx].subClass == device_subclass))
+		{
+			memcpy(&devices[device_count], &kPCIDeviceFunctions[idx], sizeof(pci_device_t));
+			device_count++;
+		}
+	}
+	return device_count;
+}
+
+void pci_print_discovery_results()
+{
+	char name[255] = {0};
+	char vendor[255] = {0};
+
+	printd(DEBUG_PCI, "PCI Discovery\n");
+	printd(DEBUG_PCI, "\tBusses\n");
+	for (int bridge=0;bridge<kPCIBridgeCount;bridge++)
+	{
+		getDeviceName(kPCIBridgeHeaders[bridge].vendor, kPCIBridgeHeaders[bridge].device,(char*)&name);
+		getVendorLongName(kPCIBridgeHeaders[bridge].vendor, (char*)vendor);
+		printd(DEBUG_PCI, "\t\t0x%02x:0x%02x:0x%02x: %s (0x%04x) - %s (0x%04x)\n", kPCIBridgeHeaders[bridge].busNo, kPCIBridgeHeaders[bridge].deviceNo, kPCIBridgeHeaders[bridge].funcNo,
+		vendor, kPCIBridgeHeaders[bridge].vendor, &name, kPCIBridgeHeaders[bridge].device);
+	}
+	printd(DEBUG_PCI, "\tDevices\n");
+	for (int dev=0;dev<kPCIDeviceCount;dev++)
+	{
+		getDeviceName(kPCIDeviceHeaders[dev].vendor, kPCIDeviceHeaders[dev].device,(char*)&name);
+		getVendorLongName(kPCIDeviceHeaders[dev].vendor, (char*)vendor);
+		printd(DEBUG_PCI, "\t\t0x%02x:0x%02x:0x%02x: %s (0x%04x) - %s (0x%04x), c 0x%02x, sc 0x%02x  (class dword=0x%08x)\n", kPCIDeviceHeaders[dev].busNo, kPCIDeviceHeaders[dev].deviceNo, kPCIDeviceHeaders[dev].funcNo,
+		vendor, kPCIDeviceHeaders[dev].vendor, &name, kPCIDeviceHeaders[dev].device, kPCIDeviceHeaders[dev].class, kPCIDeviceHeaders[dev].subClass, kPCIDeviceHeaders[dev].class_dword);
+	}
+	for (int func=0;func<kPCIFunctionCount;func++)
+	{
+		getDeviceName(kPCIDeviceFunctions[func].vendor, kPCIDeviceFunctions[func].device,(char*)&name);
+		getVendorLongName(kPCIDeviceFunctions[func].vendor, (char*)vendor);
+		printd(DEBUG_PCI, "\t\t0x%02x:0x%02x:0x%02x: %s (0x%04x) - %s (0x%04x), c 0x%02x, sc 0x%02x  (class dword=0x%08x)(F)\n", kPCIDeviceFunctions[func].busNo, kPCIDeviceFunctions[func].deviceNo, kPCIDeviceFunctions[func].funcNo,
+		vendor, kPCIDeviceFunctions[func].vendor, &name, kPCIDeviceFunctions[func].device, kPCIDeviceFunctions[func].class, kPCIDeviceFunctions[func].subClass, kPCIDeviceFunctions[func].class_dword);
+	}
+
+	printd(DEBUG_PCI, "\n");
+}
+
 void init_PCI()
  {
 
@@ -288,34 +364,4 @@ void init_PCI()
 		}
 	}
 	
-	char name[255] = {0};
-	char vendor[255] = {0};
-
-	printd(DEBUG_PCI, "PCI Discovery\n");
-	printd(DEBUG_PCI, "\tBusses\n");
-	for (int bridge=0;bridge<kPCIBridgeCount;bridge++)
-	{
-		getDeviceName(kPCIBridgeHeaders[bridge].vendor, kPCIBridgeHeaders[bridge].device,(char*)&name);
-		getVendorLongName(kPCIBridgeHeaders[bridge].vendor, (char*)vendor);
-		printd(DEBUG_PCI, "\t\t0x%02x:0x%02x:0x%02x: %s (0x%04x) - %s (0x%04x)\n", kPCIBridgeHeaders[bridge].busNo, kPCIBridgeHeaders[bridge].deviceNo, kPCIBridgeHeaders[bridge].funcNo,
-		vendor, kPCIBridgeHeaders[bridge].vendor, &name, kPCIBridgeHeaders[bridge].device);
-	}
-	printd(DEBUG_PCI, "\tDevices\n");
-	for (int dev=0;dev<kPCIDeviceCount;dev++)
-	{
-		getDeviceName(kPCIDeviceHeaders[dev].vendor, kPCIDeviceHeaders[dev].device,(char*)&name);
-		printd(DEBUG_PCI, "\t\t0x%02x:0x%02x:0x%02x: %s (0x%04x) - %s (0x%04x)\n", kPCIDeviceHeaders[dev].busNo, kPCIDeviceHeaders[dev].deviceNo, kPCIDeviceHeaders[dev].funcNo,
-		vendor, kPCIDeviceHeaders[dev].vendor, &name, kPCIDeviceHeaders[dev].device);
-	}
-	for (int func=0;func<kPCIFunctionCount;func++)
-	{
-		getDeviceName(kPCIDeviceFunctions[func].vendor, kPCIDeviceFunctions[func].device,(char*)&name);
-		printd(DEBUG_PCI, "\t\t0x%02x:0x%02x:0x%02x: %s (0x%04x) - %s (0x%04x) (F)\n", kPCIDeviceFunctions[func].busNo, kPCIDeviceFunctions[func].deviceNo, kPCIDeviceFunctions[func].funcNo,
-		vendor, kPCIDeviceFunctions[func].vendor, &name, kPCIDeviceFunctions[func].device);
-	}
-
-	printd(DEBUG_PCI, "\n");
-
-
-
  }
