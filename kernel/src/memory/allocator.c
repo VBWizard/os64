@@ -58,11 +58,28 @@ memory_status_t* get_status_entry_for_requested_address(uint64_t address,uint64_
 	return NULL;
 }
 
-uint64_t allocate_memory_at_address_internal(uint64_t address, uint64_t requested_length, bool use_address, bool page_aligned)
+void update_existing_status_entry(memory_status_t* entry, uint64_t address, uint64_t length, bool in_use)
+{
+	entry->startAddress = address;
+	entry->length = length;
+	entry->in_use = in_use;
+}
+
+memory_status_t* make_new_status_entry(uint64_t address, uint64_t length, bool in_use)
+{
+	kMemoryStatus[kMemoryStatusCurrentPtr].startAddress = address;
+	kMemoryStatus[kMemoryStatusCurrentPtr].length = length;
+	kMemoryStatus[kMemoryStatusCurrentPtr].in_use = in_use;
+	kMemoryStatusCurrentPtr++;
+	return &kMemoryStatus[kMemoryStatusCurrentPtr-1];
+}
+
+uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_t requested_length, bool use_address, bool page_aligned)
 {
 	memory_status_t* memaddr;
 	uint64_t retVal = 0;
-
+	uint64_t found_block_original_length = 0;
+	uint64_t block_before_length = 0;
 	//Find the appropriate memory status page
 	if (!use_address)
 	{
@@ -72,7 +89,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t address, uint64_t requeste
 	}
 	else
 	{
-		memaddr = get_status_entry_for_requested_address(address, page_aligned, false);
+		memaddr = get_status_entry_for_requested_address(requested_address, page_aligned, false);
 		if ( memaddr == NULL)
 			__asm__("cli\nhlt\n");
 	}
@@ -85,26 +102,34 @@ uint64_t allocate_memory_at_address_internal(uint64_t address, uint64_t requeste
 	}
 	else //memory available is > requested memory
 	{
-		//Create a new memory_status for the memory we're assigning
-		//Update memaddr to remove the memory we're assigning
-		kMemoryStatus[kMemoryStatusCurrentPtr].startAddress = memaddr->startAddress;
-		kMemoryStatus[kMemoryStatusCurrentPtr].in_use = true;
+		found_block_original_length = memaddr->length;
+		//Create a new memory_status for the memory we're assigning.
+		memory_status_t* block_before_requested;
+		memory_status_t* new_entry = make_new_status_entry(
+							  use_address?requested_address
+							  	:page_aligned?round_up_to_nearest_page(memaddr->startAddress):memaddr->startAddress, 
+							  page_aligned?round_up_to_nearest_page(requested_length):requested_length, 
+							  true);
+		//If a specific address was requested and there was memory before the requested address, make a block from its starting address to the requested address - 1
+		if (use_address && memaddr->startAddress != requested_address)
+		{
+			block_before_length = requested_address - memaddr->startAddress;
+			block_before_requested = make_new_status_entry(memaddr->startAddress, requested_address - memaddr->startAddress, false);
+		}
 
-		if (page_aligned)
-		{
-			kMemoryStatus[kMemoryStatusCurrentPtr].length = round_up_to_nearest_page(requested_length);
-			memaddr->startAddress += round_up_to_nearest_page(requested_length);
-			memaddr->length -= round_up_to_nearest_page(requested_length);
-			retVal = round_up_to_nearest_page(kMemoryStatus[kMemoryStatusCurrentPtr].startAddress);
-		}
+		//Fixup the exiting entry to just point to what's left after the allocated memory
+		//If a specific address was requested, make the current status point to the address after the requested memory
+		if (use_address)
+			update_existing_status_entry(memaddr, requested_address + requested_length, found_block_original_length - block_before_length - requested_length, false);
 		else
-		{
-			kMemoryStatus[kMemoryStatusCurrentPtr].length = requested_length;
-			memaddr->startAddress += requested_length;
-			memaddr->length -= requested_length;
-			retVal = kMemoryStatus[kMemoryStatusCurrentPtr].startAddress;
-		}
-		kMemoryStatusCurrentPtr++;
+			//Otherwise just update the starting address and length of the existing address to point to after the allocated memory
+			update_existing_status_entry(memaddr, 
+			                             page_aligned?memaddr->startAddress + round_up_to_nearest_page(requested_length):memaddr->startAddress + requested_length,
+										 page_aligned?memaddr->length-round_up_to_nearest_page(requested_length):memaddr->length-requested_length,
+										 false
+										 );
+		retVal = new_entry->startAddress;
+
 	}
 	return retVal;
 }
@@ -131,7 +156,7 @@ uint64_t allocate_memory(uint64_t requested_length)
 }
 
 //TODO: Coalesce adjacent memory blocks back together
-int free_memory(uint64_t address)
+uint64_t free_memory(uint64_t address)
 {
 	memory_status_t *status_entry = get_status_entry_for_requested_address(address, 0, true);
 	if (status_entry != NULL)
@@ -139,8 +164,9 @@ int free_memory(uint64_t address)
 		status_entry->in_use = false;
 		//Memory should still be mapped so we can clear it out safely
 		memset((void*)(status_entry->startAddress + kHHDMOffset), 0, status_entry->length);
+		return status_entry->length;
 	}
-	return status_entry->length;
+	return 0;
 }
 
 void allocator_init()

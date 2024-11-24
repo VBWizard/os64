@@ -1,126 +1,35 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
-#include <limine.h>
-#include "paging.h"
-#include "allocator.h"
-#include "video.h"
-#include "memmap.h"
-#include "kmalloc.h"
-#include "sprintf.h"
-#include "io.h"
-#include "serial_logging.h"
+#include "limine.h"
+#include "kernel.h"
+#include "limine_os64.h"
+
+extern volatile struct limine_framebuffer_request framebuffer_request;
+extern volatile struct limine_memmap_request memmap_request;
+extern volatile struct limine_kernel_address_request kernel_address_request;
+extern volatile struct limine_hhdm_request hhmd_request;
+extern volatile struct limine_module_request module_request;
+extern volatile struct limine_smp_request smp_request;
+extern uint64_t kHHDMOffset;
+
+struct limine_memmap_response *memmap_response;
+struct limine_hhdm_response *hhmd_response;
+struct limine_framebuffer_response *framebuffer_response;
+struct limine_module_response *limine_module_response;
+extern struct limine_smp_response *kLimineSMPInfo;
+struct limine_framebuffer *framebuffer;
+
+__attribute__((used, section(".limine_requests")))
+volatile LIMINE_BASE_REVISION(3);
 
 uint8_t* fb_ptr = NULL;
-void boot_init();
-
-static void hcf(void) ;
-
-// Set the base revision to 3, this is recommended as this is the latest
-// base revision described by the Limine boot protocol specification.
-// See specification for further info.
-
-__attribute__((used, section(".limine_requests")))
-static volatile LIMINE_BASE_REVISION(3);
-
-// The Limine requests can be placed anywhere, but it is important that
-// the compiler does not optimise them away, so, usually, they should
-// be made volatile or equivalent, _and_ they should be accessed at least
-// once or marked as used with the "used" attribute as done here.
-
-__attribute__((used, section(".limine_requests_start")))
-static volatile LIMINE_REQUESTS_START_MARKER;
-
-
- __attribute__((used, section(".limine_requests")))
- static volatile struct limine_framebuffer_request framebuffer_request = {
-     .id = LIMINE_FRAMEBUFFER_REQUEST,
-     .revision = 0
- };
-
-
- __attribute__((used, section(".limine_requests")))
- static volatile struct limine_memmap_request memmap_request = {
-     .id = LIMINE_MEMMAP_REQUEST,
-     .revision = 0
- };
-
- __attribute__((used, section(".limine_requests")))
- struct limine_kernel_address_request kernel_address_request = {
-     .id = LIMINE_KERNEL_ADDRESS_REQUEST,
-     .revision = 0,
- };
-
- __attribute__((used, section(".limine_requests")))
- struct limine_hhdm_request hhmd_request = {
-     .id = LIMINE_HHDM_REQUEST,
-     .revision = 0,
- };
-
-__attribute__((used, section(".limine_requests")))
-struct limine_module_request module_request = {
-    .id = LIMINE_MODULE_REQUEST,
-    .revision = 0
-};
-
-// Finally, define the start and end markers for the Limine requests.
-// These can also be moved anywhere, to any .c file, as seen fit.
-__attribute__((used, section(".limine_requests_end")))
-static volatile LIMINE_REQUESTS_END_MARKER;
-
-// GCC and Clang reserve the right to generate calls to the following
-// 4 functions even if they are not directly called.
-// Implement them as the C specification mandates.
-// DO NOT remove or rename these functions, or stuff will eventually break!
-// They CAN be moved to a different .c file.
-
-void *memcpy(void *dest, const void *src, size_t n) {
-    uint8_t *pdest = (uint8_t *)dest;
-    const uint8_t *psrc = (const uint8_t *)src;
-
-    for (size_t i = 0; i < n; i++) {
-        pdest[i] = psrc[i];
-    }
-
-    return dest;
-}
-
-void *memmove(void *dest, const void *src, size_t n) {
-    uint8_t *pdest = (uint8_t *)dest;
-    const uint8_t *psrc = (const uint8_t *)src;
-
-    if (src > dest) {
-        for (size_t i = 0; i < n; i++) {
-            pdest[i] = psrc[i];
-        }
-    } else if (src < dest) {
-        for (size_t i = n; i > 0; i--) {
-            pdest[i-1] = psrc[i-1];
-        }
-    }
-
-    return dest;
-}
-
-int memcmp(const void *s1, const void *s2, size_t n) {
-    const uint8_t *p1 = (const uint8_t *)s1;
-    const uint8_t *p2 = (const uint8_t *)s2;
-
-    for (size_t i = 0; i < n; i++) {
-        if (p1[i] != p2[i]) {
-            return p1[i] < p2[i] ? -1 : 1;
-        }
-    }
-
-    return 0;
-}
 
 // Halt and catch fire function.
-static void hcf(void) {
-	printf("Nothing to do, hcf!");
-	printd(DEBUG_BOOT,"Nothing to do, hcf!");
-    for (;;) {
-        asm ("hlt");
+static void hcf(int error_number) {
+    int error = error_number;
+	for (;;) {
+		asm ("sti\nhlt\n");
     }
 }
 
@@ -130,64 +39,20 @@ static void hcf(void) {
 void limine_boot_entry_point(void) {
     // Ensure the bootloader actually understands our base revision (see spec).
     if (LIMINE_BASE_REVISION_SUPPORTED == false) {
-        hcf();
+        hcf(-5);
     }
 
-    // Ensure we got a framebuffer.
-    // if (framebuffer_request.response == NULL
-    //  || framebuffer_request.response->framebuffer_count < 1) {
-    //     hcf();
-    // }
+	memmap_response = memmap_request.response;
+	hhmd_response = hhmd_request.response;
+	framebuffer_response = framebuffer_request.response;
+	limine_module_response = module_request.response;
+	kLimineSMPInfo = smp_request.response;
 
-    // // Note: we assume the framebuffer model is RGB with 32-bit pixels.
-    // for (size_t i = 0; i < 100; i++) {
-    //     volatile uint32_t *fb_ptr = framebuffer->address;
-    //     fb_ptr[i * (framebuffer->pitch / 4) + i] = 0xffffff;
-    // }
-	// volatile uint32_t *fb_ptr = framebuffer->address;
+	int limine_response_status = verify_limine_responses(memmap_response, hhmd_response, framebuffer_response, limine_module_response, kLimineSMPInfo);
 
-	if (memmap_request.response == NULL) {
-		hcf();
-	}
-	struct limine_memmap_response *memmap_response = memmap_request.response;
-	//struct limine_kernel_address_response *kernal_address = kernel_address_request.response;
-	struct limine_hhdm_response *hhmd_response = hhmd_request.response;
-	struct limine_framebuffer_response* framebuffer_response = framebuffer_request.response;
-	struct limine_framebuffer *framebuffer = framebuffer_request.response->framebuffers[0];
-	struct limine_module_response *module_response = module_request.response;
-	//uint64_t kernel_base_address_physical = kernal_address->physical_base;
-	//uint64_t kernel_base_address_virtual = kernal_address->virtual_base;
-	// Initialize the kernel memory pool
-	// kmalloc_initialize();
-
-	// Initialize the kernel memory pool
-
-	// Initialize the kernel memory pool
-	//
-
-	printd(DEBUG_BOOT, "***** OS64 - system initializing! *****\n");
-
-	boot_init();
-	init_serial(0x3f8);
+	if (limine_response_status != 0)
+		hcf(limine_response_status);
+	
 	kHHDMOffset = hhmd_response->offset;
-	kKernelPML4v = kHHDMOffset + kKernelPML4;
-	init_video(framebuffer, module_response);
-	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
-	memmap_init(memmap_response->entries, memmap_response->entry_count);
-	printf("Initializing paging (HHMD) ... \n");
-	paging_init(/*kernel_base_address_physical, kernel_base_address_virtual*/);
-	printf("Initializing allocator, available memory is %u bytes\n",kAvailableMemory);
-	allocator_init();
-
-
-    // We're done, just hang...
-    
-	extern uint64_t kMemoryStatusCurrentPtr;
-	extern memory_status_t *kMemoryStatus;
-	printd(DEBUG_BOOT, "BOOT END: Status of memory status:\n");
-	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
-	{
-		printd(DEBUG_BOOT, "\tMemory at 0x%016Lx for 0x%016Lx is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
-	}
-	hcf();
+	kernel_main();
 }

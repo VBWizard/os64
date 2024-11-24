@@ -22,13 +22,13 @@
 static __inline unsigned char inb(unsigned short __port)
 {
 	unsigned char __val;
-	__asm__ volatile ("inb %0, %1" : "=a" (__val) : "dN" (__port));
+	__asm__ volatile ("in %0, %1" : "=a" (__val) : "dN" (__port));
 	return __val;
 }
 
 static __inline void outb(unsigned short __port, unsigned char __val)
 {
-	__asm__ volatile ("outb %1, %0" : : "a" (__val), "dN" (__port));
+	__asm__ volatile ("out %1, %0" : : "a" (__val), "dN" (__port));
 }
 
 static __inline void outw(unsigned short __port, unsigned short __val)
@@ -38,7 +38,7 @@ static __inline void outw(unsigned short __port, unsigned short __val)
 
 static __inline void outl(unsigned short __port, unsigned int __val)
 {
-	__asm__ volatile ("outd %1, %0" : : "a" (__val), "dN" (__port));
+	__asm__ volatile ("out %1, %0" : : "a" (__val), "dN" (__port));
 }
 
 static __inline unsigned short inw(unsigned short __port)
@@ -51,7 +51,7 @@ static __inline unsigned short inw(unsigned short __port)
 static __inline unsigned int inl(unsigned short __port)
 {
 	unsigned int __val;
-	__asm__ volatile ("ind %0, %1" : "=a" (__val) : "dN" (__port));
+	__asm__ volatile ("in %0, %1" : "=a" (__val) : "dN" (__port));
 	return __val;
 }
 
@@ -76,21 +76,21 @@ static __inline void outsl(unsigned short __port, const void *__buf, unsigned lo
 		      : "d" (__port));
 }
 
-static __inline void insb(unsigned short __port, void *__buf, unsigned long __n)
+static __inline void insb(unsigned short __port, const void *__buf, unsigned long __n)
 {
 	__asm__ volatile ("cld; rep; insb"
 		      : "+D" (__buf), "+c" (__n)
 		      : "d" (__port));
 }
 
-static __inline void insw(unsigned short __port, void *__buf, unsigned long __n)
+static __inline void insw(unsigned short __port, const void *__buf, unsigned long __n)
 {
 	__asm__ volatile ("cld; rep; insw"
 		      : "+D" (__buf), "+c" (__n)
 		      : "d" (__port));
 }
 
-static __inline void insl(unsigned short __port, void *__buf, unsigned long __n)
+static __inline void insl(unsigned short __port, const void *__buf, unsigned long __n)
 {
 	__asm__ volatile ("cld; rep; insd"
 		      : "+D" (__buf), "+c" (__n)

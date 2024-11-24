@@ -4,6 +4,7 @@
 #include "video.h"
 
 extern BasicRenderer kRenderer;
+uint32_t kFrameBufferBackgroundColor;
 
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font)
 {
@@ -82,16 +83,19 @@ void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigne
     {
         for (unsigned long x = xOff; x < xOff + 8; x++)
         {
-            if ((*fontPtr & (0b10000000 >> (x - xOff))) > 0)
-            {
-                *(unsigned int *)(pixPtr + x + (y * basicrenderer->framebuffer->pixels_per_scan_line)) = basicrenderer->color;
+            if (x >= basicrenderer->framebuffer->width || y >= basicrenderer->framebuffer->height)
+                continue;
+
+            if ((*fontPtr & (0b10000000 >> (x - xOff))) > 0) {
+                *(pixPtr + x + (y * basicrenderer->framebuffer->pixels_per_scan_line)) = basicrenderer->color;
+            } else {
+                *(pixPtr + x + (y * basicrenderer->framebuffer->pixels_per_scan_line)) = kFrameBufferBackgroundColor;
             }
         }
         fontPtr++;
     }
-
-    return;
 }
+
 
 void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor)
 {
@@ -111,6 +115,8 @@ void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor)
         basicrenderer->cursor_position.x = 0;
         basicrenderer->cursor_position.y = 0;
     }
+
+	kFrameBufferBackgroundColor = color;
 
     return;
 }

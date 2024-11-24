@@ -22,16 +22,16 @@ $(call USER_VARIABLE,DESTDIR,)
 $(call USER_VARIABLE,PREFIX,/usr/local)
 
 # User controllable C compiler command.
-$(call USER_VARIABLE,CC,cc)
+$(call USER_VARIABLE,CC,x86_64-elf-gcc)
 
 # User controllable archiver command.
-$(call USER_VARIABLE,AR,ar)
+$(call USER_VARIABLE,AR,x86_64-elf-ar)
 
 # User controllable linker command.
-$(call USER_VARIABLE,LD,ld)
+$(call USER_VARIABLE,LD,x86_64-elf-ld)
 
 # User controllable C flags.
-$(call USER_VARIABLE,CFLAGS,-g -O0 -I include -pipe)
+$(call USER_VARIABLE,CFLAGS,-mno-red-zone -g -O0 -I include -pipe)
 
 # User controllable C preprocessor flags. We set none by default.
 $(call USER_VARIABLE,CPPFLAGS,)
@@ -77,6 +77,7 @@ override CFLAGS += \
 	-Werror \
 	-Wno-error=unused-but-set-parameter \
 	-Wno-error=unused-variable \
+	-Wno-error=unused-but-set-variable \
 	$(INCLUDE_FLAGS)
 #    -nostdinc \
 
@@ -102,13 +103,13 @@ override LDFLAGS += \
     -gc-sections \
     -T linker.ld
 
-# Use "find" to glob all *.c, *.S, and *.asm files in the tree and obtain the
-# object and header dependency file names.
-override CFILES := $(shell cd src && find -L * -type f -name '*.c' | LC_ALL=C sort)
-override ASFILES := $(shell cd src && find -L * -type f -name '*.S' | LC_ALL=C sort)
-override NASMFILES := $(shell cd src && find -L * -type f -name '*.asm' | LC_ALL=C sort)
-override OBJ := $(addprefix obj/,$(CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o))
-override HEADER_DEPS := $(addprefix obj/,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
+# Use "find" to glob all *.c, *.S, and *.asm files in the tree.
+override CFILES := $(shell find src -type f -name '*.c' | LC_ALL=C sort)
+override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
+override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
+override OBJ := $(patsubst src/%,obj/%,$(CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o))
+override HEADER_DEPS := $(patsubst src/%,obj/%,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
+
 
 # Default target.
 .PHONY: all
@@ -126,25 +127,25 @@ cc-runtime-x86_64/cc-runtime.a: cc-runtime/*
 
 # Link rules for the final executable.
 bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
-	mkdir -p "$$(dirname $@)"
+	@mkdir -p "$$(dirname $@)"
 	$(LD) $(OBJ) cc-runtime-x86_64/cc-runtime.a $(LDFLAGS) -o $@
 # Include header dependencies.
 -include $(HEADER_DEPS)
 
 # Compilation rules for *.c files.
 obj/%.c.o: src/%.c GNUmakefile
-	mkdir -p "$$(dirname $@)"
-	$(CC) $(CFLAGS) -c $< -o $@
+	@mkdir -p "$$(dirname $@)"
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compilation rules for *.S files.
 obj/%.S.o: src/%.S GNUmakefile
-	mkdir -p "$$(dirname $@)"
-	$(CC) $(CFLAGS) -c $< -o $@
+	@mkdir -p "$$(dirname $@)"
+	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compilation rules for *.asm (nasm) files.
 obj/%.asm.o: src/%.asm GNUmakefile
-	mkdir -p "$$(dirname $@)"
-	nasm $(NASMFLAGS) $< -o $@
+	@mkdir -p "$$(dirname $@)"
+	@nasm $(NASMFLAGS) $< -o $@
 
 # Remove object files and the final executable.
 .PHONY: clean
