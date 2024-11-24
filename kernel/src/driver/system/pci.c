@@ -5,6 +5,7 @@
 #include "kmalloc.h"
 #include "strcpy.h"
 #include "driver/system/pci_c_header.h"
+#include "memset.h"
 
 uint8_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
 pci_bridge_t* kPCIBridgeHeaders;
@@ -184,7 +185,7 @@ void addBridge(pci_device_t* node, uint8_t bus, uint8_t device, uint8_t function
 {
     pci_device_t newNode;
     pci_bridge_t bridge;
-	memcpy(&bridge, 0, sizeof(pci_bridge_t));
+	memset(&bridge, 0, sizeof(pci_bridge_t));
 	bridge.vendor = 0xffff;
     getBridgeHeader(&bridge, bus, device, function);
     if (bridge.vendor==0xFFFF)
@@ -212,7 +213,7 @@ void getDeviceName(uint32_t vendorID, uint32_t deviceID, char* deviceName)
     for (int cnt=0; cnt<7000;cnt++)
         if (PciDevTable[cnt].VenId == vendorID && PciDevTable[cnt].DevId==deviceID)
         {
-            strcpy(deviceName, PciDevTable[cnt].ChipDesc);
+            strncpy(deviceName, PciDevTable[cnt].ChipDesc, 80);
             return;
         }
     strcpy(deviceName,"Not Found");
@@ -229,7 +230,7 @@ void getVendorLongName(uint32_t vendorID, char* vendorLongName)
     for (unsigned cnt=0; cnt<PCI_VENTABLE_LEN;cnt++)
         if (PciVenTable[cnt].VenId == (uint16_t)vendorID)
         {
-            strcpy(vendorLongName, PciVenTable[cnt].VenFull);
+            strncpy(vendorLongName, PciVenTable[cnt].VenFull,80);
             return;
         }
     strcpy(vendorLongName,"Not Found");
