@@ -22,8 +22,8 @@ uint32_t pciConfigReadDWord (uint8_t bus, uint8_t slot,
     uint32_t num;
     
     /* create configuration address as per Figure 1 */
-    address = (uint32_t)((lbus << 16) | (lslot << 11) |
-              (lfunc << 8) | (offset & 0xfc) | ((uint32_t)0x80000000));
+    address = ((lbus << 16) | (lslot << 11) |
+              (lfunc << 8) | (offset & 0xfc) | (0x80000000));
  
     /* write out the address */
     outl (PCI_CONFIG_ADDRESS, address);
@@ -37,8 +37,6 @@ bool getDeviceHeader(pci_device_t* node, uint8_t bus, uint8_t slot, uint8_t func
 {
     uint32_t value;
 
-    //printd(DEBUG_PCI_DISCOVERY,"Building device header for %u:%u:%u\n",bus,slot,func);
-    //Get the entire header
     for (int cnt=0;cnt<16;cnt++)
     {
         value=pciConfigReadDWord(bus, slot, func, cnt*4);
@@ -83,6 +81,8 @@ bool getDeviceHeader(pci_device_t* node, uint8_t bus, uint8_t slot, uint8_t func
                 node->interrupt_line=value&0xFF;
                 node->interrupt_pin=(value >> 8)&0xFF;
                 break;
+			default:
+				break;
         }
     }
     node->busNo=bus;
@@ -169,6 +169,8 @@ bool getBridgeHeader(pci_bridge_t* node, uint8_t bus, uint8_t slot, uint8_t func
                 node->interrupt_pin=(value >> 8)&0xFF;
                 node->bridgeControl=(value>>16)&0xFFFF;
                 break;
+			default:
+				break;
 
         }
     }
@@ -182,30 +184,27 @@ void addBridge(pci_device_t* node, uint8_t bus, uint8_t device, uint8_t function
 {
     pci_device_t newNode;
     pci_bridge_t bridge;
-    //int lastSubBridgeNum=0;
+	memcpy(&bridge, 0, sizeof(pci_bridge_t));
+	bridge.vendor = 0xffff;
     getBridgeHeader(&bridge, bus, device, function);
     if (bridge.vendor==0xFFFF)
         return;
-    //         bridge.busNo=bus;bridge.deviceNo=device;bridge.funcNo=function;
     printd(DEBUG_PCI_DISCOVERY,"\t\t\tFound bridge on %02X:%02X:%02X,Cls#%02X pBus#%02X, sBus#%02X, suBus# %02X,MF=%u\n",bus, device, function, bridge.class, bridge.primaryBusNum, bridge.secondaryBusNum, bridge.subordinateBusNum, bridge.multiFunction);
     printd(DEBUG_PCI_DISCOVERY,"\t\t\tdeviceID: %04X, vendorID: %04X, class: %04X, subclass %04X:%04X\n", bridge.device, bridge.vendor, bridge.class, bridge.subClass);
     memcpy(&kPCIBridgeHeaders[kPCIBridgeCount++],&bridge,sizeof(pci_bridge_t));
     memcpy(&newNode,node,sizeof(pci_device_t));
-    //printd(DEBUG_PCI_DISCOVERY,"\t\t\tbridge entry created\n");
 }
 
 void addDevice(pci_device_t* node)
 {
     printd(DEBUG_PCI_DISCOVERY,"\tFound device #%u on %02X:%02X:0, Ven# %04X Dev# %04X Cls# %02X MF=%u\n",kPCIDeviceCount, node->busNo, node->deviceNo, node->vendor, node->device, node->class, node->multiFunction);
     memcpy(&kPCIDeviceHeaders[kPCIDeviceCount++],node,sizeof(pci_device_t));
-    //printd(DEBUG_PCI_DISCOVERY,"\tdevice entry created\n");
 }
 
 void addFunction(pci_device_t* node)
 {
     printd(DEBUG_PCI_DISCOVERY,"\t\t\t\tFound function: deviceID: %04X, vendorID: %04X, class: %04X, subclass %04X:%04X\n", node->device, node->vendor, node->class, node->subClass);
     memcpy(&kPCIDeviceFunctions[kPCIFunctionCount++],node,sizeof(pci_bridge_t));
-    //printd(DEBUG_PCI_DISCOVERY,"\t\t\t\tFunction entry created\n");
 }
 
 void getDeviceName(uint32_t vendorID, uint32_t deviceID, char* deviceName)
@@ -238,7 +237,7 @@ void getVendorLongName(uint32_t vendorID, char* vendorLongName)
 
  int pci_get_bridges(pci_bridge_t* bridges)
  {
-	int bridge_count;
+	int bridge_count=0;
 
 	for (int idx = 0; idx < kPCIBridgeCount; idx++)
 	{
@@ -255,7 +254,7 @@ void getVendorLongName(uint32_t vendorID, char* vendorLongName)
 /// @return The count of devices added to the device array
 int pci_get_device(uint32_t device_class, uint32_t device_subclass, pci_device_t* devices)
 {
-	int device_count;
+	int device_count = 0;
 	for (int idx = 0; idx < kPCIDeviceCount; idx++)
 	{
 		if ((device_class == 0xFF || kPCIDeviceHeaders[idx].class == device_class) && 
@@ -315,43 +314,40 @@ void init_PCI()
 
 	pci_device_t device, funcDevice;
 	uint16_t prevDev=0,prevBus=0;
-	uint16_t currBus, currSlot, currFunc;
+	uint16_t currFunc;
 
 	kPCIDeviceCount=kPCIBridgeCount=kPCIFunctionCount=kPCIBusCount=0;
 
 	kPCIDeviceHeaders = kmalloc(sizeof(pci_device_t) * PCI_DEVICE_SLOTS);
-	kPCIBridgeHeaders = kmalloc(sizeof(pci_device_t) * PCI_BRIDGE_SLOTS);;
-	kPCIDeviceFunctions = kmalloc(sizeof(pci_device_t) * PCI_FUNCTION_SLOTS);;
+	kPCIBridgeHeaders = kmalloc(sizeof(pci_device_t) * PCI_BRIDGE_SLOTS);
+	kPCIDeviceFunctions = kmalloc(sizeof(pci_device_t) * PCI_FUNCTION_SLOTS);
 
 	printd(DEBUG_PCI_DISCOVERY,"Iterating the PCI busses ...\n");
-	for (currBus=0;currBus<50;currBus++)
+	for (uint16_t currBus=0;currBus<50;currBus++)
 	{
-		for (currSlot=0;currSlot<32;currSlot++)
+		for (uint16_t currSlot=0;currSlot<32;currSlot++)
 		{
-		//if device found print it
-		currFunc=0;
-		prevDev=0;
-		//printd(DEBUG_PCI_DISCOVERY,"Current bus=%u, slot=%u\n",currBus,currSlot);
-		if (getDeviceHeader(&device, currBus, currSlot, currFunc)==true)
-		{
-			if (prevBus!=currBus)
+			//if device found print it
+			currFunc=0;
+			prevDev=0;
+			if (getDeviceHeader(&device, currBus, currSlot, currFunc)==true)
 			{
-				prevBus=currBus;
-				kPCIBusCount++;
-			}
-			//printPCIHeader(&device);
-			if (device.class==0x06)
-			{
-				addBridge(&device, currBus, currSlot, currFunc);
-			}
-			else
-				addDevice(&device);
-			//if found device is multi-function, iterate all of the functions
-			for (currFunc=0;currFunc<8;currFunc++)
-			{
-				getDeviceHeader(&funcDevice, currBus, currSlot, currFunc);
-				if (funcDevice.vendor!=0xFFFF)
-					if (funcDevice.device != device.device && funcDevice.device != prevDev)
+				if (prevBus!=currBus)
+				{
+					prevBus=currBus;
+					kPCIBusCount++;
+				}
+				if (device.class==0x06)
+				{
+					addBridge(&device, currBus, currSlot, currFunc);
+				}
+				else
+					addDevice(&device);
+				//if found device is multi-function, iterate all of the functions
+				for (currFunc=0;currFunc<8;currFunc++)
+				{
+					getDeviceHeader(&funcDevice, currBus, currSlot, currFunc);
+					if (funcDevice.vendor!=0xFFFF && funcDevice.device != device.device && funcDevice.device != prevDev)
 					{
 						prevDev=funcDevice.device;
 						if (funcDevice.class == 0x06)

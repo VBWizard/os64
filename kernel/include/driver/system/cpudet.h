@@ -122,8 +122,18 @@ typedef struct
 
 typedef struct
 {
-    int family, model, stepping, type, brand, extended_family;
-    char vendor[50], model_name[50], detected_processor_name[50], type_name[50], family_name[50], brand_name[50];
+    int family;
+	int model;
+	int stepping;
+	int type;
+	int brand;
+	int extended_family;
+    char vendor[50];
+	char model_name[50];
+	char detected_processor_name[50];
+	char type_name[50];
+	char family_name[50];
+	char brand_name[50];
     
 } cpuinfo_t;
 

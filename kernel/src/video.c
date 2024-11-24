@@ -49,8 +49,6 @@ bool checkStringEndsWith(const char* str, const char* end)
         if (str == _str)
             return false;
     }
-
-    return true;
 }
 
 struct limine_file* getFile(struct limine_module_response *module_response, const char* name)

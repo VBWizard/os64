@@ -27,7 +27,7 @@ void *kmalloc_dma32(uint32_t address, uint64_t length)
 	uint64_t page_count = length / PAGE_SIZE;
 	if (length % PAGE_SIZE != 0)
 		page_count++;
-	paging_map_pages((pt_entry_t*)kKernelPML4v, address, address, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	paging_map_pages((pt_entry_t*)kKernelPML4v, addr, addr, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 	memset((void*)(uintptr_t)address, 0, length);
 	return (void*)(uintptr_t)address;
 }

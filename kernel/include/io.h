@@ -76,21 +76,21 @@ static __inline void outsl(unsigned short __port, const void *__buf, unsigned lo
 		      : "d" (__port));
 }
 
-static __inline void insb(unsigned short __port, void *__buf, unsigned long __n)
+static __inline void insb(unsigned short __port, const void *__buf, unsigned long __n)
 {
 	__asm__ volatile ("cld; rep; insb"
 		      : "+D" (__buf), "+c" (__n)
 		      : "d" (__port));
 }
 
-static __inline void insw(unsigned short __port, void *__buf, unsigned long __n)
+static __inline void insw(unsigned short __port, const void *__buf, unsigned long __n)
 {
 	__asm__ volatile ("cld; rep; insw"
 		      : "+D" (__buf), "+c" (__n)
 		      : "d" (__port));
 }
 
-static __inline void insl(unsigned short __port, void *__buf, unsigned long __n)
+static __inline void insl(unsigned short __port, const void *__buf, unsigned long __n)
 {
 	__asm__ volatile ("cld; rep; insd"
 		      : "+D" (__buf), "+c" (__n)

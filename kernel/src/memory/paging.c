@@ -150,9 +150,9 @@ void paging_init()
 	//PML4 entry 0 points to 0x1000 - 512GB coverage
 	*(pt_entry_t*)(kKernelPML4v) = (memoryBaseAddress) | PAGE_PRESENT | PAGE_WRITE;
 	//PDPT entry 0 points to 0x2000 - 1GB coverage
-	*(pt_entry_t*)(memoryBaseAddress + kHHDMOffset) = ((memoryBaseAddress)  + PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITE;
+	*(pt_entry_t*)(memoryBaseAddress + kHHDMOffset) = (memoryBaseAddress  + PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITE;
 	//PD entry 0 points to 0x3000 - 2MB coverage
-	*(pt_entry_t*)(memoryBaseAddress + kHHDMOffset + PAGE_SIZE) = ((memoryBaseAddress)  + (PAGE_SIZE * 2)) | PAGE_PRESENT | PAGE_WRITE;
+	*(pt_entry_t*)(memoryBaseAddress + kHHDMOffset + PAGE_SIZE) = (memoryBaseAddress  + (PAGE_SIZE * 2)) | PAGE_PRESENT | PAGE_WRITE;
 
 	uint64_t temp =  sizeof(memory_status_t);
 	uint64_t page_count_to_map = (INITIAL_MEMORY_STATUS_COUNT * temp) / PAGE_SIZE;

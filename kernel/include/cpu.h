@@ -24,7 +24,7 @@
 #define CPUID_FLAG_PAT          0x10000         /* Page Attribute Table. */
 #define CPUID_FLAG_PSE36        0x20000         /* 36-bit Page Size Extensions. */
 #define CPUID_FLAG_PSN          0x40000         /* Processor Serial Number. */
-#define CPUID_FLAG_CLFL         0x80000         /* CLFLUSH - fixme? */
+#define CPUID_FLAG_CLFL         0x80000         /* CLFLUSH*/
 #define CPUID_FLAG_DTES         0x200000        /* Debug Trace and EMON Store MSRs. */
 #define CPUID_FLAG_ACPI         0x400000        /* Thermal Cotrol MSR. */
 #define CPUID_FLAG_MMX          0x800000        /* MMX instruction set. */

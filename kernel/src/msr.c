@@ -13,12 +13,12 @@ uint64_t rdmsr64(unsigned index) {
 }
 
 
-// void rdmsr32(unsigned index,uint32_t* loVal, uint32_t* hiVal)
-// {
-//     unsigned long long lTemp = rdmsr64(index);
-//     *hiVal = lTemp >> 32;
-//     *loVal = lTemp & 0xFFFFFFFF;
-// }
+ void rdmsr32(unsigned index,uint32_t* loVal, uint32_t* hiVal)
+ {
+     unsigned long long lTemp = rdmsr64(index);
+     *hiVal = lTemp >> 32;
+     *loVal = lTemp & 0xFFFFFFFF;
+ }
 
 void wrmsr64(unsigned index, uint64_t val) {
     uint32_t low = (uint32_t)(val & 0xFFFFFFFF);    // Extract low 32 bits
@@ -32,9 +32,9 @@ void wrmsr64(unsigned index, uint64_t val) {
 }
 
 
-// void wrmsr32(unsigned index, uint32_t loVal, uint32_t hiVal)
-// {
-//     //NOTE: hiVal=EDX, loVal=EAX
-//     wrmsr64(index, ((uint64_t)hiVal << 32) | loVal);
-    
-// }
+void wrmsr32(unsigned index, uint32_t loVal, uint32_t hiVal)
+{
+    //NOTE: hiVal=EDX, loVal=EAX
+    wrmsr64(index, ((uint64_t)hiVal << 32) | loVal);
+ 
+}

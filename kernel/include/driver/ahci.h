@@ -352,6 +352,26 @@ typedef union _AHCI_TASK_FILE_DATA_STATUS {
  
 } AHCI_TASK_FILE_DATA_STATUS, *PAHCI_TASK_FILE_DATA_STATUS;
 
+/* Scatter/gather descriptor entry. */
+
+typedef struct {
+    uint32_t    phys_addr;      /* Physical address. */
+    uint32_t    size;           /* Entry size. */
+} vds_sg;
+
+typedef struct {
+    uint32_t    region_size;    /* Region size in bytes. */
+    uint32_t    offset;         /* Offset. */
+    uint16_t    seg_sel;        /* Segment or selector. */
+    uint16_t    resvd;          /* Reserved. */
+    uint16_t    num_avail;      /* Number of entries available. */
+    uint16_t    num_used;       /* Number of entries used. */
+    union {
+        vds_sg      sg[1];      /* S/G entry array. */
+        uint32_t    pte[1];     /* Page table entry array. */
+    } u;
+} vds_edds;
+
 
 typedef struct
 {
@@ -393,8 +413,8 @@ typedef struct
     /** Saved high bits of EAX. */
     uint16_t        saved_eax_hi;
     /** VDS EDDS DMA buffer descriptor structure. */
-//    vds_edds        edds;
-//    vds_sg          edds_more_sg[NUM_EDDS_SG - 1];
+    vds_edds        edds;
+    vds_sg          edds_more_sg[NUM_EDDS_SG - 1];
 } ahci_t;
 
 /* Virtual DMA Services (VDS) */
@@ -413,29 +433,9 @@ typedef struct {
 } vds_dds;
 
 
-/* Scatter/gather descriptor entry. */
-
-typedef struct {
-    uint32_t    phys_addr;      /* Physical address. */
-    uint32_t    size;           /* Entry size. */
-} vds_sg;
-
 /* The extended DDS for scatter/gather. Note that the EDDS contains either
  * S/G descriptors or x86-style PTEs.
  */
-
-typedef struct {
-    uint32_t    region_size;    /* Region size in bytes. */
-    uint32_t    offset;         /* Offset. */
-    uint16_t    seg_sel;        /* Segment or selector. */
-    uint16_t    resvd;          /* Reserved. */
-    uint16_t    num_avail;      /* Number of entries available. */
-    uint16_t    num_used;       /* Number of entries used. */
-    union {
-        vds_sg      sg[1];      /* S/G entry array. */
-        uint32_t    pte[1];     /* Page table entry array. */
-    } u;
-} vds_edds;
 
 typedef struct {
     uint32_t NP:5;                   //0-4
@@ -652,7 +652,7 @@ typedef volatile struct tagHBA_PORT
         AHCI_SERIAL_ATA_CONTROL sctl;   // 0x2C, SATA control (SCR0:SControl))
 	//uint32_t	serr;		// 0x30, SATA error (SCR1:SError)
         AHCI_SERIAL_ATA_ERROR_ERROR serr;
-        //AHCI_SERIAL_ATA_ERROR_DIAGNOSTICS sdiag;
+		//CLR 11/24/2024 - removed commented AHCI_SERIAL_ATA_ERROR_DIAGNOSTICS
 	uint32_t	sact;		// 0x34, SATA active (SCR3:SActive)
 	uint32_t	ci;		// 0x38, command issue
 	uint32_t	sntf;		// 0x3C, SATA notification (SCR4:SNotification)
@@ -777,7 +777,7 @@ typedef volatile struct tagHBA_FIS
 	uint8_t		rsv[0x100-0xA0];
 } HBA_FIS;
 
-int ahci_check_type(hba_port_t *port, uint32_t* sig);
+int ahci_check_type(const hba_port_t *port, uint32_t* sig);
 void ahci_probe_ports(HBA_MEM *abar);
 void printAHCICaps();
 bool init_AHCI();
@@ -785,12 +785,12 @@ void ahci_port_rebase(hba_port_t *port, int portno, uintptr_t remapBase);
 void start_cmd(hba_port_t *port);
 void ata_stop_cmd(volatile hba_port_t *port);
 void ahciIdentify(hba_port_t* port, int deviceType);
-int ata_find_cmdslot(hba_port_t *port);
+int ata_find_cmdslot(const hba_port_t *port);
 void waitForPortIdle(hba_port_t *port);
 void ahciSetCurrentDisk(hba_port_t* port);
 int ahciRead(hba_port_t* port, int sector, uint8_t* buffer, int sector_count);
 int ahciBlockingRead28(uint32_t sector, uint8_t *buffer, uint32_t sector_count);
-int ahciBlockingWrite28(/*unsigned drive, */uint32_t sector, uint8_t *buffer, uint32_t sector_count);
+int ahciBlockingWrite28(uint32_t sector, uint8_t *buffer, uint32_t sector_count);
 void ahci_port_activate_device(HBA_MEM* h, hba_port_t* p);
 void ahci_enable_port(HBA_MEM* ad, int pt);
 extern volatile HBA_MEM* ABARs;

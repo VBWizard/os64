@@ -24,5 +24,4 @@ struct tm getRTCDate()
     tmbuf.tm_year = tmbuf.tm_year - 1900;
     tmbuf.__tm_gmtoff = -5 * 60 * 60;
 	return tmbuf;
-//printf("System Date = %d/%d/%d %d:%d:%d\n", tmbuf.tm_mon, tmbuf.tm_mday, tmbuf.tm_year, tmbuf.tm_hour, tmbuf.tm_min, tmbuf.tm_sec, tmbuf.tm_hour, tmbuf.tm_min, tmbuf.tm_sec);
 }

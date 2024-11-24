@@ -40,7 +40,7 @@ TK0NF (Track 0 Not Found)
 AMNF (Address Mark Not Found)*/
 
 #ifndef ATAHD_H
-#define	ATAHD_H
+#define ATAHD_H
 
 #include <stdbool.h>
 #include "time.h"
@@ -90,7 +90,6 @@ printk("status=%02X", inb(ATA_PORT_STATUS));
 #define ATA_ADDRESS1(x)     (x+3)
 #define ATA_ADDRESS2(x)     (x+4)
 #define ATA_ADDRESS3(x)     (x+5)
-//#define ATA_DRIVE_SELECT(x) (x+6)
 #define ATA_COMMAND(x)      (x+7)
 #define ATA_DCR(x)          (x+0x206)   /* device control register */
  
@@ -148,5 +147,5 @@ typedef struct
 
 int ataIdentify(ataDeviceInfo_t* devInfo);
 
-#endif	/* ATAHD_H */
+#endif /* ATAHD_H */
 

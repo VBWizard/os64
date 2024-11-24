@@ -14,12 +14,12 @@
     push r13
     push r14
     push r15
-	pushfq
+    pushfq
 .endm
 
 .macro RESTORE_ALL
     popfq
-	pop r15
+    pop r15
     pop r14
     pop r13
     pop r12

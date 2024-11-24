@@ -79,7 +79,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	memory_status_t* memaddr;
 	uint64_t retVal = 0;
 	uint64_t found_block_original_length = 0;
-	uint64_t block_before_length;
+	uint64_t block_before_length = 0;
 	//Find the appropriate memory status page
 	if (!use_address)
 	{
@@ -156,7 +156,7 @@ uint64_t allocate_memory(uint64_t requested_length)
 }
 
 //TODO: Coalesce adjacent memory blocks back together
-int free_memory(uint64_t address)
+uint64_t free_memory(uint64_t address)
 {
 	memory_status_t *status_entry = get_status_entry_for_requested_address(address, 0, true);
 	if (status_entry != NULL)
@@ -164,8 +164,9 @@ int free_memory(uint64_t address)
 		status_entry->in_use = false;
 		//Memory should still be mapped so we can clear it out safely
 		memset((void*)(status_entry->startAddress + kHHDMOffset), 0, status_entry->length);
+		return status_entry->length;
 	}
-	return status_entry->length;
+	return 0;
 }
 
 void allocator_init()

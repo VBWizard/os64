@@ -26,8 +26,6 @@
  */
 
 /* You need to include a file with  fairly(ish) compliant printf prototype, Decimal and String support like %s and %d and this is truely all you need! */
-//#include <stdio.h> /* for printf(); */
-
 #include <cpuid.h>
 #include "driver/system/cpudet.h"
 #include "sprintf.h"
@@ -149,6 +147,9 @@ int do_intel(void) {
 		case 3:
 		sprintf(kcpuInfo.type_name,"Reserved");
 		break;
+		default:
+		sprintf(kcpuInfo.type_name,"Unidentified");
+		break;
 	}
 	switch(kcpuInfo.family) {
 		case 3:
@@ -165,6 +166,10 @@ int do_intel(void) {
 		break;
 		case 15:
 		sprintf(kcpuInfo.family_name,"Pentium 4");
+		break;
+		default:
+		sprintf(kcpuInfo.family_name, "Unidentified");
+		break;
 	}
 	if(kcpuInfo.family == 15) {
 		kcpuInfo.extended_family = (eax >> 20) & 0xff;
@@ -237,6 +242,8 @@ int do_intel(void) {
 		}
 		break;
 		case 15:
+		break;
+		default:
 		break;
 	}
 	__get_cpuid(0x80000000, &max_eax, &unused, &unused, &unused);
