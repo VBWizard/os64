@@ -8,13 +8,15 @@ uint64_t kMemMapEntryCount;
 limine_memmap_entry_t** kMemMap;
 uint64_t kKernelExecutableStartAddress=0;
 uint64_t kKernelExecutablePageCount=0;
+
 void calculateAvailableMemory()
 {
 	printd(DEBUG_BOOT,"MEMMAP: Parsing memory map ... \n");
 	for (uint64_t entry = 0; entry < kMemMapEntryCount; entry++)
 	{
 		kTotalMemory += kMemMap[entry]->length;
-		if (kMemMap[entry]->type == LIMINE_MEMMAP_USABLE ||kMemMap[entry]->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE)
+		//CLR 11/24/2024 - Removed claiming LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE as usable memory
+		if (kMemMap[entry]->type == LIMINE_MEMMAP_USABLE)
 		{
 			kAvailableMemory += kMemMap[entry]->length;
 			printd(DEBUG_BOOT,"\t %u: 0x%016Lx for 0x%016Lx bytes (type %u)\n", entry, kMemMap[entry]->base, kMemMap[entry]->length, kMemMap[entry]->type);
@@ -37,7 +39,8 @@ uint64_t getLowestAvailableMemoryAddress(uint64_t startAddress)
 
 	for (uint64_t i = 0; i < kMemMapEntryCount; i++)
 	{
-		if ((kMemMap[i]->type == LIMINE_MEMMAP_USABLE ||kMemMap[i]->type == LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE) && kMemMap[i]->base >= startAddress)
+		//CLR 11/24/2024 - Removed claiming LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE as usable memory
+		if ((kMemMap[i]->type == LIMINE_MEMMAP_USABLE) && kMemMap[i]->base >= startAddress)
 			return kMemMap[i]->base;
 	}
 memmap_broken_loop:

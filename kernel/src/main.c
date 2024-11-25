@@ -20,6 +20,9 @@ struct limine_module_response *limine_module_response;
 extern struct limine_smp_response *kLimineSMPInfo;
 struct limine_framebuffer *framebuffer;
 
+char kernel_stack[0x1000*64] __attribute__((aligned(16)));
+
+
 __attribute__((used, section(".limine_requests")))
 volatile LIMINE_BASE_REVISION(3);
 
@@ -38,7 +41,14 @@ static void hcf(int error_number) {
 // linker script accordingly.
 void limine_boot_entry_point(void) {
     // Ensure the bootloader actually understands our base revision (see spec).
-    if (LIMINE_BASE_REVISION_SUPPORTED == false) {
+    
+		__asm__ __volatile__ (
+		"lea rsp, [%0 + %1 - 0x100]"
+		:
+		: "r"(kernel_stack), "i"(0x1000*64)
+	);
+
+	if (LIMINE_BASE_REVISION_SUPPORTED == false) {
         hcf(-5);
     }
 

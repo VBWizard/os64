@@ -114,7 +114,7 @@ $(IMAGE_NAME).iso: limine/limine kernel
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		iso_root -o $(IMAGE_NAME).iso
 	./limine/limine bios-install $(IMAGE_NAME).iso
-	rm /mnt/c/temp/os64_kernel.iso
+	rm -f /mnt/c/temp/os64_kernel.iso
 	cp os64_kernel.iso /mnt/c/temp
 
 $(IMAGE_NAME).hdd: limine/limine kernel

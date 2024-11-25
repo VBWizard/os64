@@ -40,7 +40,7 @@
 
 #define ABARS_PAGE_COUNT 10
 #define AHCI_ABAR_REMAPPED_ADDRESS 0xFFF00000
-#define AHCI_PORT_BASE_REMAP_ADDRESS 0x40000
+#define AHCI_PORT_BASE_REMAP_ADDRESS 0x400000
 #define COMMAND_TIMEOUT 5000 // Total timeout in milliseconds
 #define POLL_INTERVAL    10  // Polling interval in milliseconds
 

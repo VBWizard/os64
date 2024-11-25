@@ -28,6 +28,7 @@ HBA_MEM* ahciABAR;
 uintptr_t* ahciDiskBuffer;
 HBA_MEM *ABARs;
 
+uint64_t kAHCIPortRemapBase = AHCI_PORT_BASE_REMAP_ADDRESS; //probably only need 0xA000
 
 
 void ata_start_cmd(volatile hba_port_t *port) {
@@ -315,7 +316,6 @@ void ahci_probe_ports(HBA_MEM *ahci_abar) {
     // Search disk in impelemented ports
     uint32_t port_implemented = ahci_abar->pi;
     int i = 0;
-    uint64_t port_remap_base = AHCI_PORT_BASE_REMAP_ADDRESS; //probably only need 0xA000
     if (port_implemented > 0)
         printd(DEBUG_AHCI, "AHCI: Probing ports via remapped ABAR 0x%016x, value 0x%02X\n", ahci_abar, ahci_abar->pi);
     while (i < 32) 
@@ -330,18 +330,19 @@ void ahci_probe_ports(HBA_MEM *ahci_abar) {
             //Found a SATA disk
 			//TODO: Change ACHI logic to support 64-bit so you can just randomly assign memory to the port
 			//port_remap_base = (uint64_t)kmalloc_aligned(0x10000);
-			port_remap_base = (uint64_t)kmalloc_dma32(port_remap_base,0x10000);
+			int base = (uint64_t)kmalloc_dma32(kAHCIPortRemapBase,0x10000);
+			kAHCIPortRemapBase=base + 0x10000;
             if (dt == AHCI_DEV_SATA) {
                 printd(DEBUG_AHCI, "AHCI: SATA drive found at port %d (0x%08x)\n", i, &ahci_abar->ports[i]);
                 printd(DEBUG_AHCI, "AHCI:\tCLB=0x%08x, fb=0x%08x\n", ahci_abar->ports[i].clb, ahci_abar->ports[i].fb);
-                ahci_port_rebase(&ahci_abar->ports[i], i, port_remap_base);
+                ahci_port_rebase(&ahci_abar->ports[i], i, base);
                 	//det reset, disable slumber and Partial state
 			//reset port, send COMRESET signal
                 ahciIdentify(&ahci_abar->ports[i], AHCI_DEV_SATA);
             } else if (dt == AHCI_DEV_SATAPI) {
                 printd(DEBUG_AHCI, "AHCI:SATAPI drive found at port %d (0x%08x)\n", i, &ahci_abar->ports[i]);
                 printd(DEBUG_AHCI, "AHCI:\tCLB=0x%08x, fb=0x%08x\n", ahci_abar->ports[i].clb, ahci_abar->ports[i].fb);
-                ahci_port_rebase(&ahci_abar->ports[i], i, port_remap_base);
+                ahci_port_rebase(&ahci_abar->ports[i], i, base);
                 //Run an ATA_IDENTIFY
                 ahciIdentify(&ahci_abar->ports[i], AHCI_DEV_SATAPI);
             } else if (dt == AHCI_DEV_SEMB) {
@@ -471,6 +472,7 @@ bool init_AHCI()
     bool ahciDeviceFound = false;
     char buffer[150];
 
+	kATADeviceInfo = kmalloc(20 * sizeof(ataDeviceInfo_t));
 	ahciDiskBuffer = kmalloc(0x10000*20);
 	//The AHCI disk buffer has to be accessed using its physical address.  So get rid of the HHMD Offset and map without it
 	ahciDiskBuffer = (uintptr_t*)(((uint64_t)ahciDiskBuffer) - kHHDMOffset);
@@ -531,7 +533,7 @@ bool init_AHCI()
             ahci_probe_ports(ahciABAR);
         }
     if (!ahciDeviceFound) {
-        printd(DEBUG_AHCI, "AHCI: No AHCI devices found.");
+        printd(DEBUG_AHCI, "AHCI: No AHCI devices found.\n");
         return false;
     }
 

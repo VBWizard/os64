@@ -25,20 +25,45 @@ static inline pt_entry_t table_entry(uint64_t physical_address, uint64_t flags) 
 #define PT_INDEX(addr)    (((addr) >> 12) & 0x1FF)
 
 // Walk the paging table to find the paging entries for a virtual address
-void paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address, pt_entry_t* pdpt, pt_entry_t* pd, pt_entry_t* pt, pt_entry_t* page_entry) 
+uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address) 
 {
     // Get the PML4 entry
-    pdpt = (pt_entry_t*)(pml4[PML4_INDEX(virtual_address)] & ~0xFFF);
+    uintptr_t pdpt = (uintptr_t)(pt_entry_t*)(pml4[PML4_INDEX(virtual_address)] & ~0xFFF);
+    if (pdpt == 0) 
+	{
+        // Log or handle error: PML4 entry is invalid
+        return 0;
+    }
+    pdpt |= kHHDMOffset;
 
     // Get the PDPT entry
-    pd = (pt_entry_t*)((pdpt)[PDPT_INDEX(virtual_address)] & ~0xFFF);
+    uintptr_t pd = (uintptr_t)((pt_entry_t*)pdpt)[PDPT_INDEX(virtual_address)] & ~0xFFF;
+    if (pd == 0) 
+	{
+        // Log or handle error: PDPT entry is invalid
+        return 0;
+    }
+    pd |= kHHDMOffset;
 
     // Get the PD entry
-    pt = (pt_entry_t*)((pd)[PD_INDEX(virtual_address)] & ~0xFFF);
+    uintptr_t pt = (uintptr_t)((pt_entry_t*)pd)[PD_INDEX(virtual_address)] & ~0xFFF;
+    if (pt == 0) 
+	{
+        // Log or handle error: PD entry is invalid
+        return 0;
+    }
+    pt |= kHHDMOffset;
 
     // Get the PT entry
-    page_entry = (pt_entry_t*)(pt)[PT_INDEX(virtual_address)];
+    uintptr_t page_entry = (uintptr_t)((pt_entry_t*)pt)[PT_INDEX(virtual_address)] & ~0xFFF;
+    if (page_entry == 0) {
+        // Log or handle error: PT entry is invalid
+        return 0;
+    }
+
+    return page_entry;
 }
+
 
 void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
 	// Step 1: Traverse or allocate the PDPT table

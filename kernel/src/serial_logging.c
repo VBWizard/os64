@@ -4,9 +4,10 @@
 #include "memset.h"
 #include "io.h"
 
+char print_buf[2048];
+
 void printd(uint64_t debug_level, const char *fmt, ...)
 {
-	char print_buf[2048];
 	int printed;
 
 	if ((DEBUG_OPTIONS & debug_level) == debug_level)

@@ -18,6 +18,8 @@
 #include "ahci.h"
 #include "strcpy.h"
 
+#include "memset.h"
+
 volatile uint64_t kSystemStartTime, kUptime, kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
 int kTimeZone;
@@ -59,24 +61,27 @@ void kernel_main()
 	//Temporary - make sure paging is working correctly
 	char* x = kmalloc(256);
 	char* y = kmalloc(128);
+	char* iii = kmalloc(0x1000000);
+	//memset(iii, 0, 0x1000000);
 
 	strncpy(x, "This is test # 1", 20);
 	strncpy(y, "this is test # 2", 20);
 	kfree(x);
 	x = kmalloc(256);
 	strncpy(x, "This is test 3", 20);
-	
+
+
     // We're done, just hang...
-    
+  
 	extern uint64_t kMemoryStatusCurrentPtr;
 	extern memory_status_t *kMemoryStatus;
-	printd(DEBUG_BOOT, "BOOT END: Status of memory status:\n");
+	printd(DEBUG_BOOT, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
 	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
 	{
 		printd(DEBUG_BOOT, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
 	}
 	printf("All done, hcf-time!\n");
-	printd(DEBUG_BOOT,"All done, hcf-time!\n");
+	printd(DEBUG_BOOT,"All done, hcf-time!\n");	
 	while (true)
 	{
 		strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
@@ -84,4 +89,5 @@ void kernel_main()
 		printf("%s",startTime);
 	}
 	while (true) {asm("sti\nhlt\n");}
+
 }

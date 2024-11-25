@@ -105,10 +105,28 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		found_block_original_length = memaddr->length;
 		//Create a new memory_status for the memory we're assigning.
 		memory_status_t* block_before_requested;
+
+		//The starting address for the new Status entry, aligned if necessary.  THIS IS ONLY USED AS A RETURN VALUE FROM THIS METHOD
+		uint64_t aligned_start;
+		uint64_t true_start = memaddr->startAddress;
+		uint64_t aligned_length = 0;
+		if (page_aligned)
+		{
+			aligned_start = round_up_to_nearest_page(memaddr->startAddress);
+			//Count the extra bytes between the aligned start and the real start, and add the requested length
+			aligned_length = aligned_start - memaddr->startAddress + requested_length;
+		}
+		else
+		{
+			aligned_start = memaddr->startAddress;
+			aligned_length = requested_length;
+		}
+		uint64_t aligned_end = true_start + aligned_length;
+
 		memory_status_t* new_entry = make_new_status_entry(
-							  use_address?requested_address
-							  	:page_aligned?round_up_to_nearest_page(memaddr->startAddress):memaddr->startAddress, 
-							  page_aligned?round_up_to_nearest_page(requested_length):requested_length, 
+							  use_address?requested_address:
+							  	memaddr->startAddress, 
+							  aligned_length, 
 							  true);
 		//If a specific address was requested and there was memory before the requested address, make a block from its starting address to the requested address - 1
 		if (use_address && memaddr->startAddress != requested_address)
@@ -124,13 +142,17 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		else
 			//Otherwise just update the starting address and length of the existing address to point to after the allocated memory
 			update_existing_status_entry(memaddr, 
-			                             page_aligned?memaddr->startAddress + round_up_to_nearest_page(requested_length):memaddr->startAddress + requested_length,
-										 page_aligned?memaddr->length-round_up_to_nearest_page(requested_length):memaddr->length-requested_length,
+			                             //The end of the created block which is the new startAddress of the existing block
+										 aligned_end,
+										 memaddr->length - aligned_length,
 										 false
 										 );
-		retVal = new_entry->startAddress;
+		retVal = use_address?requested_address:aligned_start;
 
 	}
+	int a = 0;
+	if (retVal == 0x7b000)
+		a += 1;
 	return retVal;
 }
 
@@ -169,6 +191,7 @@ uint64_t free_memory(uint64_t address)
 	return 0;
 }
 
+#define RESERVED_PAGES 9
 void allocator_init()
 {
 
@@ -177,7 +200,7 @@ void allocator_init()
 	
 	//Get the lowest available address above or equal to 0x1000 (don't include the zero page)
 	//NOTE: First pages went to paging structures
-	memoryBaseAddress = getLowestAvailableMemoryAddress(0x1000) + (9 * PAGE_SIZE);
+	memoryBaseAddress = getLowestAvailableMemoryAddress(0x1000) + (RESERVED_PAGES * PAGE_SIZE);
 
 	//Update the kernel page tables for the memory used by kMemoryStatus
 	//paging_map_pages((pt_entry_t*)kKernelPML4v, memoryBaseAddress, memoryBaseAddress, page_count, PAGE_PRESENT | PAGE_WRITE);
@@ -189,15 +212,15 @@ void allocator_init()
 	//Parse the memory map into the newly created kMemoryStatus
 	for (uint64_t cnt=0;cnt<kMemMapEntryCount;cnt++)
 	{
-		kMemoryStatus[cnt].startAddress = kMemMap[cnt]->base;
-		kMemoryStatus[cnt].length = kMemMap[cnt]->length;
-		kMemoryStatus[cnt].in_use = kMemMap[cnt]->type != LIMINE_MEMMAP_USABLE && kMemMap[cnt]->type != LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE;  //If the type isn't 0/5 then the area is in use
-		if (cnt==0)
+		if (kMemMap[cnt]->type == LIMINE_MEMMAP_USABLE)
 		{
-			kMemoryStatus[cnt].startAddress = memoryBaseAddress;
-			kMemoryStatus[cnt].length = kMemoryStatus[cnt].length - (9 * PAGE_SIZE);
+			kMemoryStatus[kMemoryStatusCurrentPtr].startAddress = kMemMap[cnt]->base;
+			kMemoryStatus[kMemoryStatusCurrentPtr].length = kMemMap[cnt]->length;
+			//CLR 11/24/2024 - Removed claiming LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE as usable memory
+			kMemoryStatus[kMemoryStatusCurrentPtr].in_use = kMemMap[cnt]->type != LIMINE_MEMMAP_USABLE;  //If the type isn't 0/5 then the area is in use
+			kMemoryStatusCurrentPtr++;
 		}
-		kMemoryStatusCurrentPtr++;
 	}
-
+		kMemoryStatus[0].startAddress = memoryBaseAddress;
+		kMemoryStatus[0].length = kMemoryStatus[0].length - (RESERVED_PAGES * PAGE_SIZE);
 }

@@ -53,4 +53,6 @@ void paging_map_pages(
 
 void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address);
 void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t length);
+uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address);
+
 #endif // PAGING_H
