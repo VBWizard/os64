@@ -150,9 +150,6 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		retVal = use_address?requested_address:aligned_start;
 
 	}
-	int a = 0;
-	if (retVal == 0x7b000)
-		a += 1;
 	return retVal;
 }
 

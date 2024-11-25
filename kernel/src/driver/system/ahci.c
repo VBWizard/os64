@@ -26,7 +26,7 @@ int ahciHostCount = 0;
 hba_port_t* kAHCICurrentDisk;
 HBA_MEM* ahciABAR;
 uintptr_t* ahciDiskBuffer;
-HBA_MEM *ABARs;
+HBA_MEM *kABARs;
 
 uint64_t kAHCIPortRemapBase = AHCI_PORT_BASE_REMAP_ADDRESS; //probably only need 0xA000
 
@@ -477,7 +477,7 @@ bool init_AHCI()
 	//The AHCI disk buffer has to be accessed using its physical address.  So get rid of the HHMD Offset and map without it
 	ahciDiskBuffer = (uintptr_t*)(((uint64_t)ahciDiskBuffer) - kHHDMOffset);
 	paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t)ahciDiskBuffer, (uintptr_t)ahciDiskBuffer, 0x10000 / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
-	ABARs = kmalloc(ABARS_PAGE_COUNT * sizeof(HBA_MEM));
+	kABARs = kmalloc(ABARS_PAGE_COUNT * sizeof(HBA_MEM));
 	ahciCaps = kmalloc(ABARS_PAGE_COUNT * sizeof(ahcicaps_t));
 	    if (!kPCIDeviceCount) {
         printd(DEBUG_AHCI, "AHCI: PCI not initialized, cannot initialize AHCI.");
@@ -495,7 +495,7 @@ bool init_AHCI()
 			paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t) ahciABAR, kPCISATADevice.baseAdd[5] , (ABARS_PAGE_COUNT * sizeof(HBA_MEM)) / PAGE_SIZE + 1,PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 			paging_map_page((pt_entry_t*)kKernelPML4v, kPCISATADevice.baseAdd[5],kPCISATADevice.baseAdd[5],PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
             RELOAD_CR3
-			memcpy((void*)&ABARs[ahciHostCount++], (void*) ahciABAR, sizeof (HBA_MEM));
+			memcpy((void*)&kABARs[ahciHostCount++], (void*) ahciABAR, sizeof (HBA_MEM));
             printd(DEBUG_AHCI, "0x%08x\n", ahciABAR);
             memcpy(&ahciCaps[ahciCapsCount++], (void*) ahciABAR, sizeof (ahcicaps_t));
             if (!(ahciABAR->ghc.AE)) {
@@ -519,7 +519,7 @@ bool init_AHCI()
 			paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t) ahciABAR, kPCISATADevice.baseAdd[5] , (ABARS_PAGE_COUNT * sizeof(HBA_MEM)) / PAGE_SIZE + 1,PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 			paging_map_page((pt_entry_t*)kKernelPML4v, kPCISATADevice.baseAdd[5],kPCISATADevice.baseAdd[5],PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
             RELOAD_CR3
-			memcpy((void*)&ABARs[ahciHostCount++], (void*) ahciABAR, sizeof (HBA_MEM));
+			memcpy((void*)&kABARs[ahciHostCount++], (void*) ahciABAR, sizeof (HBA_MEM));
             printd(DEBUG_AHCI, "0x%08x\n", ahciABAR);
             memcpy(&ahciCaps[ahciCapsCount++], (void*) ahciABAR, sizeof (ahcicaps_t));
             if (!(ahciABAR->ghc.AE)) {
@@ -540,3 +540,187 @@ bool init_AHCI()
 
     return true;
 }
+
+void ahciSetCurrentDisk(hba_port_t* port) {
+    kAHCICurrentDisk = port;
+}
+
+int find_cmdslot(volatile hba_port_t *port) {
+    printd(DEBUG_AHCI, "AHCI: find_cmdslot - finding a slot to use to execute a command\n");
+    // An empty command slot has its respective bit cleared to �0� in both the PxCI and PxSACT registers.
+    // If not set in SACT and CI, the slot is free // Checked
+    
+    uint32_t slots = (/*port->sact | */port->ci);
+    int num_of_slots = ahciABAR->cap.NCS;
+    printd(DEBUG_AHCI,"ahciABAR = %08X, Total slots available: %d\n",ahciABAR, ahciABAR->cap.NCS);
+    int i;
+    for (i = 0; i < num_of_slots; i++) {
+
+        if ((slots & 1) == 0) {
+            printd(DEBUG_AHCI, "AHCI: [command slot is : %d]\n", i);
+            return i;
+
+        }
+        printd(DEBUG_AHCI, "Slot %u is busy (0x%08x)\n", i,slots);
+        slots >>= 1;
+    }
+    printd(DEBUG_AHCI, "AHCI: Cannot find free command list entry, count=%u, slots=0x%08x\n", num_of_slots, slots);
+    return -1;
+}
+
+
+int ahci_physical_read(uint32_t sector, uint8_t *buffer, uint32_t sector_count) {
+    int prdCntr = 0;
+
+    //CLR 06/07/2016 - Must add partition start sector
+    memset(buffer,0,sector_count*512);
+    
+    printd(DEBUG_AHCI, "AHCI: read on port=0x%08x,sector=0x%08x,buffer=0x%08x,sector_count=%u\n", kAHCICurrentDisk,sector,buffer,sector_count);
+
+    kAHCICurrentDisk->pxis.AsUlong = (uint32_t) - 1; // Clear pending interrupt bits
+    //int spin = 0; // Spin lock timeout counter
+
+    HBA_CMD_HEADER* cmdhdr = (HBA_CMD_HEADER*) (uint64_t)kAHCICurrentDisk->clb;
+    int slot = find_cmdslot(kAHCICurrentDisk);
+    if (slot == -1)
+        return false;
+    HBA_CMD_HEADER* cmdheader = cmdhdr + slot;
+    printd(DEBUG_AHCI, "AHCI: cmdheader=0x%08x\n", cmdheader);
+    cmdheader->prdtl = (uint16_t) ((sector_count - 1) >> 4) + 1; // PRDT entries count
+
+    HBA_CMD_TBL *cmdtbl = (HBA_CMD_TBL*) (uint64_t)(cmdheader->ctba);
+    memset(cmdtbl, 0, sizeof (HBA_CMD_TBL) +
+            (cmdheader->prdtl) * sizeof (HBA_PRDT_ENTRY));
+    printd(DEBUG_AHCI, "AHCI: read - cmdtable=0x%08x,ctba=0x%08x\n", cmdtbl, cmdheader->ctba);
+
+    // 8K bytes (16 sectors) per PRDT
+    for (int i = 0; i < cmdheader->prdtl; i++) {
+        cmdtbl->prdt_entry[prdCntr].dba_64 = (uintptr_t*) buffer;
+        cmdtbl->prdt_entry[prdCntr].dbc = sector_count * 512;
+        cmdtbl->prdt_entry[prdCntr].i = 1;
+        //buffer += 4 * 1024; // 4K words
+        //sector_count -= sector_count; // 16 sectors
+        prdCntr++;
+    }
+    // Last entry
+    cmdtbl->prdt_entry[prdCntr].dba_64 = (uintptr_t*) buffer + 4 * 1024;
+    cmdtbl->prdt_entry[prdCntr].dbc = 0; // 512 bytes per sector
+    cmdtbl->prdt_entry[prdCntr].i = 0;
+
+    // Setup command
+    FIS_REG_H2D *cmdfis = (FIS_REG_H2D*) (&cmdtbl->cfis);
+
+    cmdfis->fis_type = FIS_TYPE_REG_H2D;
+    cmdfis->c = 1; // Command
+    cmdfis->command = ATA_CMD_READ_DMA_EX;
+    cmdfis->lba0 = (uint8_t) sector;
+    cmdfis->lba1 = (uint8_t) (sector >> 8);
+    cmdfis->lba2 = (uint8_t) (sector >> 16);
+    cmdfis->device = 1 << 6; // LBA mode
+
+    cmdfis->lba3 = (uint8_t) (sector >> 24);
+    cmdfis->lba4 = (uint8_t) 0;
+    cmdfis->lba5 = (uint8_t) 0;
+
+    cmdfis->countl = LOBYTE((uint16_t) sector_count);
+    cmdfis->counth = HIBYTE((uint16_t) sector_count);
+
+    int lCMdVal = AhciIssueCmd(kAHCICurrentDisk, slot);
+    if (lCMdVal) {
+        printd(DEBUG_AHCI, "AHCI: ***Error reading from disk***\n");
+        return -1;
+    }
+
+    // Check again
+    if (kAHCICurrentDisk->pxis.TFES) {
+        printd(DEBUG_AHCI, "AHCI: Read disk error\n");
+        return false;
+    }
+    return true;
+}
+
+/*
+void ahciSetCurrentPart(partEntry_t part) 
+{
+    kAHCICurrentPart = part;
+}
+
+int ahciBlockingRead28(uint32_t sector, uint8_t *buffer, uint32_t sector_count) {
+    int prdCntr = 0;
+
+    //CLR 06/07/2016 - Must add partition start sector
+    sector+=kAHCICurrentPart.partStartSector;
+    memset(buffer,0,sector_count*512);
+    
+    printd(DEBUG_AHCI, "AHCI: read on port=0x%08x,sector=0x%08x,buffer=0x%08x,sector_count=%u\n", kAHCICurrentDisk,sector,buffer,sector_count);
+
+    kAHCICurrentDisk->pxis.AsUlong = (uint32_t) - 1; // Clear pending interrupt bits
+    //int spin = 0; // Spin lock timeout counter
+
+    HBA_CMD_HEADER* cmdhdr = (HBA_CMD_HEADER*) kAHCICurrentDisk->clb;
+    int slot = find_cmdslot(kAHCICurrentDisk);
+    if (slot == -1)
+        return false;
+    HBA_CMD_HEADER* cmdheader = cmdhdr + slot;
+    printd(DEBUG_AHCI, "AHCI: cmdheader=0x%08x\n", cmdheader);
+    cmdheader->prdtl = (uint16_t) ((sector_count - 1) >> 4) + 1; // PRDT entries count
+
+    HBA_CMD_TBL *cmdtbl = (HBA_CMD_TBL*) (cmdheader->ctba);
+    memset(cmdtbl, 0, sizeof (HBA_CMD_TBL) +
+            (cmdheader->prdtl - 1) * sizeof (HBA_PRDT_ENTRY));
+    printd(DEBUG_AHCI, "AHCI: read - cmdtable=0x%08x,ctba=0x%08x\n", cmdtbl, cmdheader->ctba);
+
+    // 8K bytes (16 sectors) per PRDT
+    for (int i = 0; i < cmdheader->prdtl - 1; i++) {
+        cmdtbl->prdt_entry[prdCntr].dba = (uint32_t) buffer;
+        cmdtbl->prdt_entry[prdCntr].dbc = 8 * 1024; // 8K bytes
+        cmdtbl->prdt_entry[prdCntr].i = 1;
+        buffer += 4 * 1024; // 4K words
+        sector_count -= 16; // 16 sectors
+        prdCntr++;
+    }
+    // Last entry
+    cmdtbl->prdt_entry[prdCntr].dba = (uint32_t) buffer;
+    cmdtbl->prdt_entry[prdCntr].dbc = sector_count << 9; // 512 bytes per sector
+    cmdtbl->prdt_entry[prdCntr].i = 1;
+
+    // Setup command
+    FIS_REG_H2D *cmdfis = (FIS_REG_H2D*) (&cmdtbl->cfis);
+
+    cmdfis->fis_type = FIS_TYPE_REG_H2D;
+    cmdfis->c = 1; // Command
+    cmdfis->command = ATA_CMD_READ_DMA_EX;
+    cmdfis->lba0 = (uint8_t) sector;
+    cmdfis->lba1 = (uint8_t) (sector >> 8);
+    cmdfis->lba2 = (uint8_t) (sector >> 16);
+    cmdfis->device = 1 << 6; // LBA mode
+
+    cmdfis->lba3 = (uint8_t) (sector >> 24);
+    cmdfis->lba4 = (uint8_t) 0;
+    cmdfis->lba5 = (uint8_t) 0;
+
+    cmdfis->countl = LOBYTE((uint16_t) sector_count);
+    cmdfis->counth = HIBYTE((uint16_t) sector_count);
+
+    int lCMdVal = AhciIssueCmd(kAHCICurrentDisk, slot);
+    if (!lCMdVal) {
+        printd(DEBUG_AHCI, "AHCI: ***Error reading from disk***\n");
+        return -1;
+    }
+
+    // Check again
+    if (kAHCICurrentDisk->pxis.TFES) {
+        printd(DEBUG_AHCI, "AHCI: Read disk error\n");
+        return false;
+    }
+    return true;
+}
+
+int ahciRead(volatile hba_port_t* port, int sector, uint8_t* buffer, int sector_count) {
+    ahciSetCurrentDisk(port);
+    if (ahciBlockingRead28(sector, buffer, sector_count))
+        return sector_count;
+    else
+        return 0;
+}
+*/

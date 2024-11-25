@@ -17,9 +17,11 @@
 #include "pci.h"
 #include "ahci.h"
 #include "strcpy.h"
-
+#include "ata.h"
 #include "memset.h"
 
+
+extern ataDeviceInfo_t* kATADeviceInfo;
 volatile uint64_t kSystemStartTime, kUptime, kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
 int kTimeZone;
@@ -70,6 +72,17 @@ void kernel_main()
 	x = kmalloc(256);
 	strncpy(x, "This is test 3", 20);
 
+	//Verify AHCI is working by doing direct disk read of the first 2 sectors of the disk.
+	ahciSetCurrentDisk((hba_port_t*)kATADeviceInfo[4].ioPort);
+	unsigned char* buffer = kmalloc(16384);
+	buffer = (unsigned char*)((uintptr_t)buffer) - kHHDMOffset;
+	paging_map_pages((pt_entry_t*)kKernelPML4v, (uint64_t)buffer, (uint64_t)buffer, 4, PAGE_PRESENT | PAGE_WRITE);
+	memset(buffer,0,8192);
+	ahci_physical_read(0,(uint8_t*)buffer,2);
+	if (buffer[510]!=0x55 || buffer[511] != 0xAA)
+		printf("AHCI disk read incorrect.  Expected 0x55, 0xAA, got 0x%02X, 0x%02X\n", buffer[510], buffer[511]);
+	else
+		printf("AHCI disk read test passed ...\n");
 
     // We're done, just hang...
   

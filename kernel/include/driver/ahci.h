@@ -44,6 +44,20 @@
 #define COMMAND_TIMEOUT 5000 // Total timeout in milliseconds
 #define POLL_INTERVAL    10  // Polling interval in milliseconds
 
+#define ATA_CMD_READ_DMA 0xC8
+#define ATA_CMD_READ_DMA_EX 0x25
+#define ATA_CMD_WRITE_DMA 0xCA
+#define ATA_CMD_WRITE_DMA_EX 0x35
+
+#define ATA_DEV_BUSY 0x80
+#define ATA_DEV_DRQ 0x08
+
+#define LOBYTE(w) ((uint8_t)(w))
+#define HIBYTE(w) ((uint8_t)(((uint16_t)(w) >> 8) & 0xFF))
+#define LOWORD(w) ((uint16_)(w))
+#define HIWORD(w) ((uint16_t)(((uint32_t)(w) >> 16)&0xFFFF))
+
+
 #define VDS_SERVICE             0x81
 
 #define VDS_GET_VERSION         0x02    /* Get version */
@@ -790,8 +804,9 @@ void waitForPortIdle(hba_port_t *port);
 void ahciSetCurrentDisk(hba_port_t* port);
 int ahciRead(hba_port_t* port, int sector, uint8_t* buffer, int sector_count);
 int ahciBlockingRead28(uint32_t sector, uint8_t *buffer, uint32_t sector_count);
+int ahci_physical_read(uint32_t sector, uint8_t *buffer, uint32_t sector_count);
 int ahciBlockingWrite28(uint32_t sector, uint8_t *buffer, uint32_t sector_count);
 void ahci_port_activate_device(HBA_MEM* h, hba_port_t* p);
 void ahci_enable_port(HBA_MEM* ad, int pt);
-extern volatile HBA_MEM* ABARs;
+extern volatile HBA_MEM* kABARs;
 #endif	/* AHCI_H */
