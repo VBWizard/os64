@@ -323,6 +323,8 @@ void ahci_probe_ports(HBA_MEM *ahci_abar) {
     int i = 0;
     if (port_implemented > 0)
         printd(DEBUG_AHCI, "AHCI: Probing ports via remapped ABAR 0x%016x, value 0x%02X\n", ahci_abar, ahci_abar->pi);
+	else
+		printd(DEBUG_AHCI, "AHCI: Port not implemented, skipping probing\n");
     while (i < 32) 
     {
         if (port_implemented & 1) 
@@ -546,13 +548,14 @@ void init_AHCI_device(int device_index, bool function)
 	paging_map_page((pt_entry_t*)kKernelPML4v, kPCISATADevice.baseAdd[5],kPCISATADevice.baseAdd[5],PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 	RELOAD_CR3
 	memcpy((void*)&kABARs[ahciHostCount++], (void*) ahciABAR, sizeof (HBA_MEM));
-	printd(DEBUG_AHCI, "0x%08x\n", ahciABAR);
+	printd(DEBUG_AHCI, "0x%016lx\n", ahciABAR);
 	memcpy(&ahciCaps[ahciCapsCount++], (void*) ahciABAR, sizeof (ahcicaps_t));
 	if (!(ahciABAR->ghc.AE)) {
 		printd(DEBUG_AHCI,"switching to AHCI mode\n");
 		ahciABAR->ghc.AE=1;
 	}
 	ahciABAR->ghc.IE=1;
+	printd(DEBUG_AHCI, "AHCI: AHCI mode enabled for device\n");
 	ahci_probe_ports(ahciABAR);
 }
 

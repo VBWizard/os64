@@ -39,7 +39,7 @@
 #include "vfs.h"
 
 #define ABARS_PAGE_COUNT 10
-#define AHCI_ABAR_REMAPPED_ADDRESS 0xFFF00000
+#define AHCI_ABAR_REMAPPED_ADDRESS 0xFFFF8000F0000000
 #define AHCI_PORT_BASE_REMAP_ADDRESS 0x4400000
 #define COMMAND_TIMEOUT 1000 // Total timeout in milliseconds
 #define POLL_INTERVAL    100  // Polling interval in milliseconds
