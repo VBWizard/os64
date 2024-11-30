@@ -19,17 +19,20 @@
 #include "strcpy.h"
 #include "ata.h"
 #include "memset.h"
+#include "part_table.h"
+#include "vfs.h"
+#include "acpi.h"
 
+extern block_device_info_t* kATADeviceInfo;
+extern int kATADeviceInfoCount;
 
-extern ataDeviceInfo_t* kATADeviceInfo;
 volatile uint64_t kSystemStartTime, kUptime, kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
 int kTimeZone;
-
 volatile bool kInitDone;
+volatile bool kFBInitDone = 0;
 uint64_t kTicksPerSecond;
 struct limine_smp_response *kLimineSMPInfo;
-
 void kernel_main()
 {
 	kInitDone = false;
@@ -37,23 +40,36 @@ void kernel_main()
 	hardware_init();
 	char startTime[100];
 	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
-	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
+#ifdef ENABLE_COM1
 	init_serial(0x3f8);
-	kKernelPML4v = kHHDMOffset + kKernelPML4;
+#endif
 	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
+	kFBInitDone = true;
+	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
+	kKernelPML4v = kHHDMOffset + kKernelPML4;
+	printf(	"***** OS64 - system booting at %s *****\n", startTime);
 	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");
 	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
+	printf("Initializing ACPI\n");
+	acpiFindTables();
+		if (kPCIBaseAddress)
+	{
+		paging_map_pages((pt_entry_t*)kKernelPML4v, kHHDMOffset | kPCIBaseAddress, kPCIBaseAddress, 0x10000, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+		printd(DEBUG_BOOT, "Mapped PCI base address to the same physical address for 10,000 pages\n");
+		kPCIBaseAddress = kHHDMOffset | kPCIBaseAddress;
+	}
+
 	init_GDT();
 	
-	printf("Initializing PCI ...\n");
+	printf("Initializing PCI: \n");
 	init_PCI();
+	printf("\t%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
 	printf("Initializing AHCI ...\n");
 	init_AHCI();
-	printf("%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
 	detect_cpu();
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 	printf("SMP: Initializing ...\n");
@@ -63,7 +79,7 @@ void kernel_main()
 	//Temporary - make sure paging is working correctly
 	char* x = kmalloc(256);
 	char* y = kmalloc(128);
-	char* iii = kmalloc(0x1000000);
+	//char* iii = kmalloc(0x10000000);
 	//memset(iii, 0, 0x1000000);
 
 	strncpy(x, "This is test # 1", 20);
@@ -72,17 +88,27 @@ void kernel_main()
 	x = kmalloc(256);
 	strncpy(x, "This is test 3", 20);
 
-	//Verify AHCI is working by doing direct disk read of the first 2 sectors of the disk.
-	ahciSetCurrentDisk((hba_port_t*)kATADeviceInfo[4].ioPort);
 	unsigned char* buffer = kmalloc(16384);
 	buffer = (unsigned char*)((uintptr_t)buffer) - kHHDMOffset;
 	paging_map_pages((pt_entry_t*)kKernelPML4v, (uint64_t)buffer, (uint64_t)buffer, 4, PAGE_PRESENT | PAGE_WRITE);
 	memset(buffer,0,8192);
-	ahci_physical_read(0,(uint8_t*)buffer,2);
+	//The first 4 slots are reserved for ATA devices.  The 4th slot is the first slot for AHCI and/or NVME
+	ahci_lba_read((void*)&kATADeviceInfo[4], 0,(void*)buffer,2);
 	if (buffer[510]!=0x55 || buffer[511] != 0xAA)
 		printf("AHCI disk read incorrect.  Expected 0x55, 0xAA, got 0x%02X, 0x%02X\n", buffer[510], buffer[511]);
 	else
 		printf("AHCI disk read test passed ...\n");
+
+	block_operations_t* ahciBlockOps;
+	ahciBlockOps = kmalloc(sizeof(ahciBlockOps));
+	ahciBlockOps->read = (void*)&ahci_lba_read;
+	kATADeviceInfo[4].block_device->partTableType = detect_partition_table_type(&kATADeviceInfo[4]);
+	read_block_partitions(kATADeviceInfo, kATADeviceInfoCount);
+	file_operations_t* fileOps;
+	fileOps = kmalloc(sizeof(file_operations_t));
+	fileOps->initialize = &ext2_initialize_filesystem;
+	
+	kRegisterFileSystem("/", &kATADeviceInfo[4], 0, fileOps);
 
     // We're done, just hang...
   

@@ -144,6 +144,9 @@
 #define PCI_CLASS_SUBCLASS_DATA_ACQUISITION_DPIO      0x1100 // Data Acquisition and Processing I/O
 #define PCI_CLASS_SUBCLASS_DATA_ACQUISITION_OTHER     0x1180 // Data Acquisition (Other)
 
+#define PCI_MMIO_OFFSET(bus, device, function, offset) \
+    ((uint64_t)(bus) << 20 | (uint64_t)(device) << 15 | (uint64_t)(function) << 12 | (offset & ~3))
+
 typedef struct
 {
     uint8_t busNo, deviceNo, funcNo;

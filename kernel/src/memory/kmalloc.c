@@ -21,7 +21,30 @@ void *kmalloc_aligned(uint64_t length)
 	return (void*)virtual_address;
 }
 
-void *kmalloc_dma32(uint32_t address, uint64_t length)
+// Allocate unaligned memory for the kernel
+void *kmalloc(uint64_t length)
+{
+	uint64_t addr = allocate_memory(length);
+	uint64_t virtual_address = addr + kHHDMOffset;
+	kmalloc_common(addr, virtual_address, length);
+	return (void*)virtual_address;
+}
+
+/// @brief Same as kmalloc except the page mappings are physical-to-physical
+/// @param length 
+/// @return 
+void *kmalloc_dma(uint64_t length)
+{
+	uint64_t addr = allocate_memory(length);
+	uint64_t page_count = length / PAGE_SIZE;
+	if (length % PAGE_SIZE != 0)
+		page_count++;
+	paging_map_pages((pt_entry_t*)kKernelPML4v, addr, addr, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	memset((void*)(uintptr_t)addr, 0, length);
+	return (void*)(uintptr_t)addr;
+}
+
+void *kmalloc_dma32_address(uint32_t address, uint64_t length)
 {
 	uint64_t addr = allocate_memory_at_address(address, length, true);
 	uint64_t page_count = length / PAGE_SIZE;
@@ -30,15 +53,6 @@ void *kmalloc_dma32(uint32_t address, uint64_t length)
 	paging_map_pages((pt_entry_t*)kKernelPML4v, addr, addr, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 	memset((void*)(uintptr_t)address, 0, length);
 	return (void*)(uintptr_t)address;
-}
-
-// Allocate unaligned memory for the kernel
-void *kmalloc(uint64_t length)
-{
-	uint64_t addr = allocate_memory(length);
-	uint64_t virtual_address = addr + kHHDMOffset;
-	kmalloc_common(addr, virtual_address, length);
-	return (void*)virtual_address;
 }
 
 void kfree(void *address) {

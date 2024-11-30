@@ -11,7 +11,7 @@ uint64_t kKernelExecutablePageCount=0;
 
 void calculateAvailableMemory()
 {
-	printd(DEBUG_BOOT,"MEMMAP: Parsing memory map ... \n");
+	printd(DEBUG_MEMMAP,"MEMMAP: Parsing memory map ... \n");
 	for (uint64_t entry = 0; entry < kMemMapEntryCount; entry++)
 	{
 		kTotalMemory += kMemMap[entry]->length;
@@ -19,10 +19,10 @@ void calculateAvailableMemory()
 		if (kMemMap[entry]->type == LIMINE_MEMMAP_USABLE)
 		{
 			kAvailableMemory += kMemMap[entry]->length;
-			printd(DEBUG_BOOT,"\t %u: 0x%016Lx for 0x%016Lx bytes (type %u)\n", entry, kMemMap[entry]->base, kMemMap[entry]->length, kMemMap[entry]->type);
+			printd(DEBUG_MEMMAP,"\t %u: 0x%016Lx for 0x%016Lx bytes (type %u)\n", entry, kMemMap[entry]->base, kMemMap[entry]->length, kMemMap[entry]->type);
 		}
 		else
-			printd(DEBUG_BOOT,"\t %u: 0x%016Lx for 0x%016Lx bytes (type %u - unusable)\n", entry, kMemMap[entry]->base, kMemMap[entry]->length, kMemMap[entry]->type);
+			printd(DEBUG_MEMMAP,"\t %u: 0x%016Lx for 0x%016Lx bytes (type %u - unusable)\n", entry, kMemMap[entry]->base, kMemMap[entry]->length, kMemMap[entry]->type);
 
 		if (kMemMap[entry]->type == LIMINE_MEMMAP_KERNEL_AND_MODULES)
 		{
@@ -30,8 +30,8 @@ void calculateAvailableMemory()
 			kKernelExecutablePageCount = kMemMap[entry]->length % PAGE_SIZE;
 		}
 	}
-	printd(DEBUG_BOOT, "MEMMAP: Parsing done\n");
-	printd(DEBUG_BOOT, "MEMMAP: Usable memory: %Lu\n", kAvailableMemory);
+	printd(DEBUG_MEMMAP, "MEMMAP: Parsing done\n");
+	printd(DEBUG_MEMMAP, "MEMMAP: Usable memory: %Lu\n", kAvailableMemory);
 }
 
 uint64_t getLowestAvailableMemoryAddress(uint64_t startAddress)

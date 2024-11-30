@@ -6,11 +6,23 @@
 #include "strcpy.h"
 #include "driver/system/pci_c_header.h"
 #include "memset.h"
+#include "acpi.h"
 
 uint8_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
 pci_bridge_t* kPCIBridgeHeaders;
 pci_device_t* kPCIDeviceHeaders;
 pci_device_t* kPCIDeviceFunctions;
+
+
+uint32_t readPCIRegister(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset) {
+    uint64_t configAddress = kPCIBaseAddress + PCI_MMIO_OFFSET(bus, device, function, offset);
+    volatile uint32_t* configSpace = (volatile uint32_t*)configAddress;
+
+    uint32_t value = *configSpace;
+    printd(DEBUG_PCI, "PCI Config [Bus %u, Device %u, Function %u, Offset 0x%02x] = 0x%08x\n",
+           bus, device, function, offset, value);
+	return value;
+}
 
 
 uint32_t pciConfigReadDWord (uint8_t bus, uint8_t slot,
@@ -40,7 +52,8 @@ bool getDeviceHeader(pci_device_t* node, uint8_t bus, uint8_t slot, uint8_t func
 
     for (int cnt=0;cnt<16;cnt++)
     {
-        value=pciConfigReadDWord(bus, slot, func, cnt*4);
+        //value=pciConfigReadDWord(bus, slot, func, cnt*4);
+		value=readPCIRegister(bus, slot, func, cnt*4);
 		if (value==0xFFFFFFFF)
             return false;
         switch(cnt)
@@ -100,7 +113,8 @@ bool getBridgeHeader(pci_bridge_t* node, uint8_t bus, uint8_t slot, uint8_t func
     //Get the entire header
     for (int cnt=0;cnt<14;cnt++)
     {
-        value=pciConfigReadDWord(bus, slot, func, cnt*4);
+        //value=pciConfigReadDWord(bus, slot, func, cnt*4);
+		value=readPCIRegister(bus, slot, func, cnt*4);
         if (value==0xFFFFFFFF)
             return false;
         switch(cnt)
@@ -190,21 +204,21 @@ void addBridge(pci_device_t* node, uint8_t bus, uint8_t device, uint8_t function
     getBridgeHeader(&bridge, bus, device, function);
     if (bridge.vendor==0xFFFF)
         return;
-    printd(DEBUG_PCI_DISCOVERY,"\t\t\tFound bridge on %02X:%02X:%02X,Cls#%02X pBus#%02X, sBus#%02X, suBus# %02X,MF=%u\n",bus, device, function, bridge.class, bridge.primaryBusNum, bridge.secondaryBusNum, bridge.subordinateBusNum, bridge.multiFunction);
-    printd(DEBUG_PCI_DISCOVERY,"\t\t\tdeviceID: %04X, vendorID: %04X, class: %04X, subclass %04X:%04X\n", bridge.device, bridge.vendor, bridge.class, bridge.subClass);
+    printd(DEBUG_PCI_DISCOVERY,"\t* Found bridge on %02X:%02X:%02X,Cls#%02X pBus#%02X, sBus#%02X, suBus# %02X,MF=%u\n",bus, device, function, bridge.class, bridge.primaryBusNum, bridge.secondaryBusNum, bridge.subordinateBusNum, bridge.multiFunction);
+    printd(DEBUG_PCI_DISCOVERY,"\t  deviceID: %04X, vendorID: %04X, class: %04X, subclass %04X\n", bridge.device, bridge.vendor, bridge.class, bridge.subClass);
     memcpy(&kPCIBridgeHeaders[kPCIBridgeCount++],&bridge,sizeof(pci_bridge_t));
     memcpy(&newNode,node,sizeof(pci_device_t));
 }
 
 void addDevice(pci_device_t* node)
 {
-    printd(DEBUG_PCI_DISCOVERY,"\tFound device #%u on %02X:%02X:0, Ven# %04X Dev# %04X Cls# %02X MF=%u\n",kPCIDeviceCount, node->busNo, node->deviceNo, node->vendor, node->device, node->class, node->multiFunction);
+    printd(DEBUG_PCI_DISCOVERY,"\t\t* Found device #%u on %02X:%02X:0, Ven# %04X Dev# %04X Cls# %02X, Sbcls 0x%04x MF=%u\n",kPCIDeviceCount, node->busNo, node->deviceNo, node->vendor, node->device, node->class, node->subClass, node->multiFunction);
     memcpy(&kPCIDeviceHeaders[kPCIDeviceCount++],node,sizeof(pci_device_t));
 }
 
 void addFunction(pci_device_t* node)
 {
-    printd(DEBUG_PCI_DISCOVERY,"\t\t\t\tFound function: deviceID: %04X, vendorID: %04X, class: %04X, subclass %04X:%04X\n", node->device, node->vendor, node->class, node->subClass);
+    printd(DEBUG_PCI_DISCOVERY,"\t\t* Found function #%u on %02X:%02X:0, Ven# %04X Dev# %04X Cls# %02X, Sbcls 0x%04x MF=%u\n",kPCIFunctionCount, node->busNo, node->deviceNo, node->vendor, node->device, node->class, node->subClass, node->multiFunction);
     memcpy(&kPCIDeviceFunctions[kPCIFunctionCount++],node,sizeof(pci_bridge_t));
 }
 

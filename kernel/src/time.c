@@ -218,6 +218,7 @@ void kwait(uint64_t msToWait)
 void __attribute__((noinline))waitTicks(int TicksToWait)
 {
     //printf("ttw=%u",ttw);
+	__asm__ __volatile__ ("sti\n");
     if (TicksToWait<=0)
         return;
     if (TicksToWait>5000)

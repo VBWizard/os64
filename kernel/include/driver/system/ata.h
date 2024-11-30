@@ -45,6 +45,7 @@ AMNF (Address Mark Not Found)*/
 #include <stdbool.h>
 #include "time.h"
 #include "ahci.h"
+#include "vfs.h"
 
 extern int kTicksPerMS;
 #define SHOW_STATUS \
@@ -104,48 +105,16 @@ printk("status=%02X", inb(ATA_PORT_STATUS));
 #define ATA_COMMAND_WRITE_SECTOR 0x30
 
 
-enum whichDrive
-{
-    master = 0,
-    slave = 1
-};
-
 enum eATADeviceType
 {
     ATA_DEVICE_TYPE_HD,
     ATA_DEVICE_TYPE_CD,
     ATA_DEVICE_TYPE_SATA_HD,
-    ATA_DEVICE_TYPE_SATA_CD
+    ATA_DEVICE_TYPE_SATA_CD,
+	ATA_DEVICE_TYPE_NVME_HD
 };
 
-enum whichBus
-{
-    ATAPrimary,
-    ATASecondary,
-    SATA
-};
-
-typedef struct 
-{
-    uint16_t ATAIdentifyData[256];
-    char ATADeviceModel[80];
-    bool queryATAData;
-    uint8_t ATADeviceAvailable;
-    int ATADeviceType;
-    uint32_t totalSectorCount;
-    uint32_t sectorSize;
-    bool lbaSupported;
-    bool lba48Supported;
-    bool dmaSupported;
-    enum whichBus bus; 
-    enum whichDrive driveNo;
-    uintptr_t ioPort;
-    uint8_t irqNum;
-    uint8_t driveHeadPortDesignation;
-    HBA_MEM* ABAR;
-} __attribute__((packed)) ataDeviceInfo_t;
-
-int ataIdentify(ataDeviceInfo_t* devInfo);
+int ataIdentify(block_device_info_t* devInfo);
 
 #endif /* ATAHD_H */
 

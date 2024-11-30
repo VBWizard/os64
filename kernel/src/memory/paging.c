@@ -5,6 +5,8 @@
 #include "memmap.h"
 #include "BasicRenderer.h"
 #include "memory/memset.h"
+#include "CONFIG.h"
+#include "serial_logging.h"
 
 //Kernel paging pml4 table physical address
 pt_entry_t kKernelPML4;
@@ -23,6 +25,41 @@ static inline pt_entry_t table_entry(uint64_t physical_address, uint64_t flags) 
 #define PDPT_INDEX(addr)  (((addr) >> 30) & 0x1FF)
 #define PD_INDEX(addr)    (((addr) >> 21) & 0x1FF)
 #define PT_INDEX(addr)    (((addr) >> 12) & 0x1FF)
+
+void validatePagingHierarchy(uintptr_t address) {
+    uintptr_t* pml4 = (uintptr_t*)kKernelPML4v;
+    uintptr_t pml4Index = (address >> 39) & 0x1FF;
+    uintptr_t pdptIndex = (address >> 30) & 0x1FF;
+    uintptr_t pdIndex = (address >> 21) & 0x1FF;
+    uintptr_t ptIndex = (address >> 12) & 0x1FF;
+
+    uintptr_t pml4Entry = pml4[pml4Index];
+    printd(DEBUG_PAGING, "PAGING: PML4[%zu]: 0x%016lx\n", pml4Index, pml4Entry);
+    if (!(pml4Entry & 0x1)) {
+        printd(DEBUG_PAGING, "PAGING: PML4 entry not present\n");
+        return;
+    }
+
+    uintptr_t* pdpt = (uintptr_t*)((kHHDMOffset | pml4Entry) & ~0xFFF);
+    uintptr_t pdptEntry = pdpt[pdptIndex];
+    printd(DEBUG_PAGING, "PAGING: PDPT[%zu]: 0x%016lx\n", pdptIndex, pdptEntry);
+    if (!(pdptEntry & 0x1)) {
+        printd(DEBUG_PAGING, "PAGING: PDPT entry not present\n");
+        return;
+    }
+
+    uintptr_t* pd = (uintptr_t*)((kHHDMOffset | pdptEntry) & ~0xFFF);
+    uintptr_t pdEntry = pd[pdIndex];
+    printd(DEBUG_PAGING, "PAGING: PD[%zu]: 0x%016lx\n", pdIndex, pdEntry);
+    if (!(pdEntry & 0x1)) {
+        printd(DEBUG_PAGING, "PAGING: PD entry not present\n");
+        return;
+    }
+
+    uintptr_t* pt = (uintptr_t*)((kHHDMOffset | pdEntry) & ~0xFFF);
+    uintptr_t pte = pt[ptIndex];
+    printd(DEBUG_PAGING, "PAGING: PT[%zu]: 0x%016lx\n", ptIndex, pte);
+}
 
 // Walk the paging table to find the paging entries for a virtual address
 uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address) 

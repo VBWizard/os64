@@ -36,13 +36,13 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-
+#include "vfs.h"
 
 #define ABARS_PAGE_COUNT 10
 #define AHCI_ABAR_REMAPPED_ADDRESS 0xFFF00000
-#define AHCI_PORT_BASE_REMAP_ADDRESS 0x400000
-#define COMMAND_TIMEOUT 5000 // Total timeout in milliseconds
-#define POLL_INTERVAL    10  // Polling interval in milliseconds
+#define AHCI_PORT_BASE_REMAP_ADDRESS 0x4400000
+#define COMMAND_TIMEOUT 1000 // Total timeout in milliseconds
+#define POLL_INTERVAL    100  // Polling interval in milliseconds
 
 #define ATA_CMD_READ_DMA 0xC8
 #define ATA_CMD_READ_DMA_EX 0x25
@@ -349,22 +349,22 @@ typedef union _AHCI_INTERRUPT_STATUS {
  
 }  AHCI_INTERRUPT_STATUS, *PAHCI_INTERRUPT_STATUS;
 
-//Status of the Task File Data as defined in AHCI1.0 section 3.3.8
+// Status of the Task File Data as defined in AHCI 1.0, section 3.3.8
 typedef union _AHCI_TASK_FILE_DATA_STATUS {
- 
     struct {
-        //LSB
-        uint32_t ERR :1; // Indicates an error during the transfer.
-        uint32_t CS1 :2; //Command Specific
-        uint32_t DRQ :1; // Indicates a data transfer is requested
-        uint32_t CS2 :3; //Command Specific
-        uint32_t BSY :1; // Indicates the interface is busy
-        //MSB
+        // LSB
+        uint8_t ERR : 1;  // Indicates an error during the transfer.
+        uint8_t CS1 : 2;  // Command specific.
+        uint8_t DRQ : 1;  // Indicates a data transfer is requested.
+        uint8_t CS2 : 3;  // Command specific.
+        uint8_t BSY : 1;  // Indicates the interface is busy.
+        // MSB
     };
- 
-    uint32_t AsUchar;
- 
+
+    uint8_t AsUchar;  // Full byte access to the task file data status.
+
 } AHCI_TASK_FILE_DATA_STATUS, *PAHCI_TASK_FILE_DATA_STATUS;
+
 
 /* Scatter/gather descriptor entry. */
 
@@ -797,16 +797,18 @@ void printAHCICaps();
 bool init_AHCI();
 void ahci_port_rebase(hba_port_t *port, int portno, uintptr_t remapBase);
 void start_cmd(hba_port_t *port);
-void ata_stop_cmd(volatile hba_port_t *port);
+void ahci_stop_cmd(volatile hba_port_t *port);
 void ahciIdentify(hba_port_t* port, int deviceType);
 int ata_find_cmdslot(const hba_port_t *port);
 void waitForPortIdle(hba_port_t *port);
 void ahciSetCurrentDisk(hba_port_t* port);
 int ahciRead(hba_port_t* port, int sector, uint8_t* buffer, int sector_count);
 int ahciBlockingRead28(uint32_t sector, uint8_t *buffer, uint32_t sector_count);
-int ahci_physical_read(uint32_t sector, uint8_t *buffer, uint32_t sector_count);
 int ahciBlockingWrite28(uint32_t sector, uint8_t *buffer, uint32_t sector_count);
 void ahci_port_activate_device(HBA_MEM* h, hba_port_t* p);
 void ahci_enable_port(HBA_MEM* ad, int pt);
+
+int ahci_lba_read(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count);
+
 extern volatile HBA_MEM* kABARs;
 #endif	/* AHCI_H */

@@ -3,6 +3,8 @@
 #include "memmap.h"
 #include "paging.h"
 #include "memset.h"
+#include "serial_logging.h"
+#include "panic.h"
 
 memory_status_t *kMemoryStatus;
 //Points to the next available kernel status
@@ -49,12 +51,13 @@ memory_status_t* get_status_entry_for_requested_address(uint64_t address,uint64_
 {
 	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
 	{
-		if ( (kMemoryStatus[cnt].startAddress <= address && kMemoryStatus[cnt].startAddress + kMemoryStatus[cnt].length >= address) &&
+		if ( (kMemoryStatus[cnt].startAddress <= address && kMemoryStatus[cnt].startAddress + kMemoryStatus[cnt].length > address) &&
 			kMemoryStatus[cnt].in_use == in_use &&
 			kMemoryStatus[cnt].length >= requested_length
 		)
 			return &kMemoryStatus[cnt];
 	}
+	panic("Can't allocate requested address!!! :-(\n");
 	return NULL;
 }
 
@@ -80,6 +83,15 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	uint64_t retVal = 0;
 	uint64_t found_block_original_length = 0;
 	uint64_t block_before_length = 0;
+	uint64_t aligned_start;
+	uint64_t aligned_length = 0;
+
+	if (requested_length >= 200000000)
+	{
+		int a = 0;
+		a+=1;
+	}
+
 	//Find the appropriate memory status page
 	if (!use_address)
 	{
@@ -107,9 +119,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		memory_status_t* block_before_requested;
 
 		//The starting address for the new Status entry, aligned if necessary.  THIS IS ONLY USED AS A RETURN VALUE FROM THIS METHOD
-		uint64_t aligned_start;
 		uint64_t true_start = memaddr->startAddress;
-		uint64_t aligned_length = 0;
 		if (page_aligned)
 		{
 			aligned_start = round_up_to_nearest_page(memaddr->startAddress);
@@ -150,6 +160,8 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		retVal = use_address?requested_address:aligned_start;
 
 	}
+	printd(DEBUG_PAGING, "allocate_memory_at_address_internal: Allocated 0x%08x bytes at phys address 0x%08x (%s - %s)\n", aligned_length, use_address?requested_address:aligned_start,
+			use_address?"requested address":"",page_aligned?"aligned":"");
 	return retVal;
 }
 
