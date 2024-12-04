@@ -225,13 +225,18 @@ void __attribute__((noinline))waitTicks(int TicksToWait)
         printd(DEBUG_EXCEPTIONS,"waitTicks: Excessive ticks value %u\n",TicksToWait);
     do
     {
-        __asm("pause\n");
+        __asm("sti\nhlt\n");
         TicksToWait--;
     } while (TicksToWait>0);
     return;
 }
 
-void wait(int msToWait)
+void wait(uint64_t msToWait)
 {
-    waitTicks(msToWait/MS_PER_TICK);
+	__asm__("sti\n");
+	uint64_t ticksToWait = msToWait/MS_PER_TICK; 
+	//CLR 12/03/2024: Added in case request is to wait less than MS_PER_TICK
+	if (ticksToWait==0)
+		ticksToWait=1;
+    waitTicks(ticksToWait);
 }

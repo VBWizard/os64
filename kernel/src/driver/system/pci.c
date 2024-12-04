@@ -12,16 +12,53 @@ uint8_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount;
 pci_bridge_t* kPCIBridgeHeaders;
 pci_device_t* kPCIDeviceHeaders;
 pci_device_t* kPCIDeviceFunctions;
+uintptr_t kPCIBaseAddress=0;
 
+#define PCI_CONFIG_SPACE_LIMIT 0x100 // Standard configuration space limit (256 bytes)
+#define PCI_EXTENDED_CONFIG_SPACE_LIMIT 0x1000 // Extended configuration space limit (4 KB)
 
+// Assuming we're using the standard 256-byte config space for now
 uint32_t readPCIRegister(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset) {
+    // Check for alignment (offset must be a multiple of 4)
+    if (offset % 4 != 0) {
+        printd(DEBUG_PCI, "Invalid offset: 0x%02x. Must be aligned to 4 bytes.\n", offset);
+        return 0xFFFFFFFF; // Indicate error
+    }
+
+    // Check that the offset is within bounds
+    if (offset >= PCI_CONFIG_SPACE_LIMIT) {
+        printd(DEBUG_PCI, "Invalid offset: 0x%02x. Exceeds configuration space limit.\n", offset);
+        return 0xFFFFFFFF; // Indicate error
+    }
+
     uint64_t configAddress = kPCIBaseAddress + PCI_MMIO_OFFSET(bus, device, function, offset);
     volatile uint32_t* configSpace = (volatile uint32_t*)configAddress;
 
     uint32_t value = *configSpace;
     printd(DEBUG_PCI, "PCI Config [Bus %u, Device %u, Function %u, Offset 0x%02x] = 0x%08x\n",
            bus, device, function, offset, value);
-	return value;
+    return value;
+}
+
+void writePCIRegister(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset, uint32_t value) {
+    // Check for alignment (offset must be a multiple of 4)
+    if (offset % 4 != 0) {
+        printd(DEBUG_PCI, "Invalid offset: 0x%02x. Must be aligned to 4 bytes.\n", offset);
+        return;
+    }
+
+    // Check that the offset is within bounds
+    if (offset >= PCI_CONFIG_SPACE_LIMIT) {
+        printd(DEBUG_PCI, "Invalid offset: 0x%02x. Exceeds configuration space limit.\n", offset);
+        return;
+    }
+
+    uint64_t configAddress = kPCIBaseAddress + PCI_MMIO_OFFSET(bus, device, function, offset);
+    volatile uint32_t* configSpace = (volatile uint32_t*)configAddress;
+
+    *configSpace = value;
+    printd(DEBUG_PCI, "PCI Config [Bus %u, Device %u, Function %u, Offset 0x%02x] = 0x%08x\n",
+           bus, device, function, offset, value);
 }
 
 
@@ -39,7 +76,7 @@ uint32_t pciConfigReadDWord (uint8_t bus, uint8_t slot,
               (lfunc << 8) | (offset & 0xfc) | (0x80000000));
  
     /* write out the address */
-    outl (PCI_CONFIG_ADDRESS, address);
+    outl (PCI_CONFIG_IO_ADDRESS, address);
     /* read in the data */
     /* (offset & 2) * 8) = 0 will choose the first word of the 32 bits register */
     num = inl (PCI_CONFIG_DATA);
@@ -338,7 +375,7 @@ void init_PCI()
 	kPCIDeviceFunctions = kmalloc(sizeof(pci_device_t) * PCI_FUNCTION_SLOTS);
 
 	printd(DEBUG_PCI_DISCOVERY,"Iterating the PCI busses ...\n");
-	for (uint16_t currBus=0;currBus<50;currBus++)
+	for (uint16_t currBus=0;currBus<255;currBus++)
 	{
 		for (uint16_t currSlot=0;currSlot<32;currSlot++)
 		{
@@ -376,3 +413,13 @@ void init_PCI()
 	}
 	
  }
+
+pci_config_space_t *pci_get_config_space(uint8_t bus, uint8_t device, uint8_t function) {
+    // Calculate the address of the configuration space for the given B:D:F
+    uintptr_t configSpaceAddress = PCI_CONFIG_ADDRESS(bus, device, function, 0x00);
+    
+    // Cast the address to a pointer to pci_config_space_t
+    pci_config_space_t *configSpace = (pci_config_space_t *)configSpaceAddress;
+
+    return configSpace;
+}

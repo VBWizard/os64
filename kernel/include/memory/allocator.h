@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#define RESERVED_PAGES 9
+
 typedef struct memory_status_s
 {
 	uint64_t startAddress;

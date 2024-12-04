@@ -22,6 +22,7 @@
 #include "part_table.h"
 #include "vfs.h"
 #include "acpi.h"
+#include "nvme.h"
 
 extern block_device_info_t* kATADeviceInfo;
 extern int kATADeviceInfoCount;
@@ -33,8 +34,11 @@ volatile bool kInitDone;
 volatile bool kFBInitDone = 0;
 uint64_t kTicksPerSecond;
 struct limine_smp_response *kLimineSMPInfo;
+uint64_t kDebugLevel = 0;
+
 void kernel_main()
 {
+	kDebugLevel = DEBUG_OPTIONS;
 	kInitDone = false;
 	kTicksPerSecond = TICKS_PER_SECOND;
 	hardware_init();
@@ -43,17 +47,17 @@ void kernel_main()
 #ifdef ENABLE_COM1
 	init_serial(0x3f8);
 #endif
+	kKernelPML4v = kHHDMOffset + kKernelPML4;
+	memmap_init(memmap_response->entries, memmap_response->entry_count);
+	paging_init();
+	allocator_init();
 	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
 	kFBInitDone = true;
-	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
-	kKernelPML4v = kHHDMOffset + kKernelPML4;
-	printf(	"***** OS64 - system booting at %s *****\n", startTime);
 	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
-	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");
-	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
-	allocator_init();
+	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
+	printf(	"***** OS64 - system booting at %s *****\n", startTime);
 	printf("Initializing ACPI\n");
 	acpiFindTables();
 		if (kPCIBaseAddress)
@@ -65,11 +69,13 @@ void kernel_main()
 
 	init_GDT();
 	
-	printf("Initializing PCI: \n");
+	printf("Initializing PCI: ");
 	init_PCI();
 	printf("\t%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
 	printf("Initializing AHCI ...\n");
 	init_AHCI();
+	printf("Initializing NVME: ");
+	init_NVME();
 	detect_cpu();
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 	printf("SMP: Initializing ...\n");
@@ -88,6 +94,7 @@ void kernel_main()
 	x = kmalloc(256);
 	strncpy(x, "This is test 3", 20);
 
+/*
 	unsigned char* buffer = kmalloc(16384);
 	buffer = (unsigned char*)((uintptr_t)buffer) - kHHDMOffset;
 	paging_map_pages((pt_entry_t*)kKernelPML4v, (uint64_t)buffer, (uint64_t)buffer, 4, PAGE_PRESENT | PAGE_WRITE);
@@ -109,23 +116,24 @@ void kernel_main()
 	fileOps->initialize = &ext2_initialize_filesystem;
 	
 	kRegisterFileSystem("/", &kATADeviceInfo[4], 0, fileOps);
-
+*/
     // We're done, just hang...
   
 	extern uint64_t kMemoryStatusCurrentPtr;
 	extern memory_status_t *kMemoryStatus;
-	printd(DEBUG_BOOT, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
+	printd(DEBUG_MEMMAP, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
 	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
 	{
-		printd(DEBUG_BOOT, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
+		printd(DEBUG_MEMMAP, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
 	}
 	printf("All done, hcf-time!\n");
-	printd(DEBUG_BOOT,"All done, hcf-time!\n");	
+	printd(DEBUG_MEMMAP,"All done, hcf-time!\n");	
 	while (true)
 	{
 		strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
 		moveto(&kRenderer, 0,20);
 		printf("%s",startTime);
+		asm("sti\nhlt\n");
 	}
 	while (true) {asm("sti\nhlt\n");}
 

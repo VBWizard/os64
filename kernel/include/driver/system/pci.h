@@ -5,7 +5,15 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PCI_CONFIG_ADDRESS 	0xCF8
+#define PCI_DEVICE_REMAP_BASE 0xFFFFFFFF00000000
+
+#define PCI_CONFIG_SPACE_LIMIT 0x100 // Standard configuration space limit (256 bytes)
+#define PCI_EXTENDED_CONFIG_SPACE_LIMIT 0x1000 // Extended configuration space limit (4 KB)
+
+#define MMIO_LOWER_BOUND 0xA0000000  // Example lower bound for MMIO regions
+#define MMIO_UPPER_BOUND 0xF0000000  // Updated upper bound for MMIO regions to better reflect typical MMIO ranges (below reserved system regions)
+
+#define PCI_CONFIG_IO_ADDRESS 0xCF8
 #define PCI_CONFIG_DATA    	0xCFC
 #define PCI_DEVICE_SLOTS 	0x100
 #define PCI_BRIDGE_SLOTS 	0x10
@@ -147,6 +155,37 @@
 #define PCI_MMIO_OFFSET(bus, device, function, offset) \
     ((uint64_t)(bus) << 20 | (uint64_t)(device) << 15 | (uint64_t)(function) << 12 | (offset & ~3))
 
+#define PCI_CONFIG_ADDRESS(bus, device, function, offset) \
+    ((uintptr_t)kPCIBaseAddress + ((bus) << 20) + ((device) << 15) + ((function) << 12) + (offset))
+
+typedef struct {
+    uint16_t vendorID;               // Offset 0x00: Vendor ID (identifies the manufacturer of the device)
+    uint16_t deviceID;               // Offset 0x02: Device ID (identifies the specific device)
+    uint16_t command;                // Offset 0x04: Command register (controls the device's capabilities)
+    uint16_t status;                 // Offset 0x06: Status register (provides status information about the device)
+    uint8_t revisionID;              // Offset 0x08: Revision ID (specifies the revision of the device)
+    uint8_t progIF;                  // Offset 0x09: Programming Interface (defines specific device programming model)
+    uint8_t subclass;                // Offset 0x0A: Subclass code (specifies the device's function within its class)
+    uint8_t classCode;               // Offset 0x0B: Class code (specifies the type of device, e.g., mass storage)
+    uint8_t cacheLineSize;           // Offset 0x0C: Cache line size (cache line size in 32-bit words)
+    uint8_t latencyTimer;            // Offset 0x0D: Latency timer (specifies latency requirements for the device)
+    uint8_t headerType;              // Offset 0x0E: Header type (specifies the layout of the configuration space)
+    uint8_t BIST;                    // Offset 0x0F: Built-in Self-Test (BIST) capability/status
+    uint32_t BAR[6];                 // Offsets 0x10 - 0x27: Base Address Registers (BARs) for mapping device memory or I/O regions
+    uint32_t cardbusCISPtr;          // Offset 0x28: CardBus CIS Pointer (only used for CardBus devices)
+    uint16_t subsystemVendorID;      // Offset 0x2C: Subsystem Vendor ID (identifies the manufacturer of the subsystem)
+    uint16_t subsystemID;            // Offset 0x2E: Subsystem ID (identifies the specific subsystem)
+    uint32_t expansionROMBaseAddr;   // Offset 0x30: Expansion ROM Base Address (memory address for expansion ROM)
+    uint8_t capabilitiesPtr;         // Offset 0x34: Capabilities Pointer (points to linked list of capabilities)
+    uint8_t reserved1[3];            // Offset 0x35 - 0x37: Reserved for future use
+    uint32_t reserved2;              // Offset 0x38: Reserved for future use
+    uint8_t interruptLine;           // Offset 0x3C: Interrupt Line (specifies which interrupt line the device is using)
+    uint8_t interruptPin;            // Offset 0x3D: Interrupt Pin (specifies which interrupt pin the device uses)
+    uint8_t minGrant;                // Offset 0x3E: Minimum Grant (minimum amount of time the device needs for PCI bus access)
+    uint8_t maxLatency;              // Offset 0x3F: Maximum Latency (maximum time the device can wait before needing PCI bus access)
+} __attribute__((packed)) pci_config_space_t;
+
+
 typedef struct
 {
     uint8_t busNo, deviceNo, funcNo;
@@ -183,8 +222,12 @@ extern uint8_t kPCIDeviceCount, kPCIBridgeCount, kPCIFunctionCount, kPCIBusCount
 extern pci_device_t* kPCIDeviceHeaders;
 extern pci_bridge_t* kPCIBridgeHeaders;
 extern pci_device_t* kPCIDeviceFunctions;
+extern uintptr_t kPCIBaseAddress;
 
 char* getDeviceNameP(pci_device_t* node, char* buffer);
+uint32_t readPCIRegister(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset);
+void writePCIRegister(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset, uint32_t value);
+pci_config_space_t *pci_get_config_space(uint8_t bus, uint8_t device, uint8_t function);
 
 void init_PCI();
 

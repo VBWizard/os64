@@ -200,7 +200,6 @@ uint64_t free_memory(uint64_t address)
 	return 0;
 }
 
-#define RESERVED_PAGES 9
 void allocator_init()
 {
 

@@ -50,7 +50,7 @@ static volatile LIMINE_REQUESTS_END_MARKER;
 // Implement them as the C specification mandates.
 // DO NOT remove or rename these functions, or stuff will eventually break!
 // They CAN be moved to a different .c file.
-void *memmove(void *dest, const void *src, size_t n) {
+void *memmove_limine(void *dest, const void *src, size_t n) {
     uint8_t *pdest = (uint8_t *)dest;
     const uint8_t *psrc = (const uint8_t *)src;
 

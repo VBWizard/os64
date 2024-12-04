@@ -38,6 +38,7 @@ typedef struct
 {
     struct Point cursor_position;
     struct Framebuffer *framebuffer;
+	unsigned int *shadow_buffer;
     struct PSF1_FONT *psf1_font;
 
     unsigned int color;

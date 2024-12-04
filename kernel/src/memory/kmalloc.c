@@ -2,6 +2,7 @@
 #include "allocator.h"
 #include "paging.h"
 #include "memset.h"
+#include "serial_logging.h"
 
 void kmalloc_common(uint64_t physical_address, uint64_t virtual_address, uint64_t length)
 {
@@ -35,12 +36,20 @@ void *kmalloc(uint64_t length)
 /// @return 
 void *kmalloc_dma(uint64_t length)
 {
-	uint64_t addr = allocate_memory(length);
+	printd(DEBUG_KMALLOC,"kmalloc_dma: Allocating 0x%016lu bytes\n", length);
+	uint64_t addr = allocate_memory_aligned(length);
 	uint64_t page_count = length / PAGE_SIZE;
 	if (length % PAGE_SIZE != 0)
 		page_count++;
-	paging_map_pages((pt_entry_t*)kKernelPML4v, addr, addr, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	if ((addr & 0x00000FFF) > 0)
+		page_count++;
+
+	printd(DEBUG_KMALLOC,"kmalloc_dma: Identity mapping 0x%016lx, for %u pages (PRESENT/WRITE/PCD)\n", addr, page_count);
+	paging_map_pages((pt_entry_t*)kKernelPML4v, addr & 0xFFFFFFFFFFFFF000, addr & 0xFFFFFFFFFFFFF000, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+
+	printd(DEBUG_KMALLOC,"kmalloc_dma: memsetting 0x%016lu bytes...\n", length);
 	memset((void*)(uintptr_t)addr, 0, length);
+	printd(DEBUG_KMALLOC,"kmalloc_dma: returning 0x%016lx ...\n", addr);
 	return (void*)(uintptr_t)addr;
 }
 

@@ -9,6 +9,7 @@
 extern volatile uint64_t kUptime;
 extern volatile uint64_t kTicksSinceStart;
 extern volatile bool kFBInitDone;
+extern uint64_t kDebugLevel;
 
 char print_buf[2048];
 char print_buf2[2048];
@@ -17,7 +18,7 @@ void printd(uint64_t debug_level, const char *fmt, ...)
 {
 	int printed;
 
-	if ((DEBUG_OPTIONS & debug_level) == debug_level)
+	if ((kDebugLevel & debug_level) == debug_level)
 	{
 		va_list args;
 		va_start(args, fmt);

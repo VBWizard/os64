@@ -382,7 +382,7 @@ int do_amd(void) {
 	if(extended >= 0x80000007) {
 		__get_cpuid(0x80000007, &unused, &unused, &unused, &edx);
 		if(edx & 1) {
-			printd(DEBUG_BOOT, "Temperature Sensing Diode Detected!\n");
+			printd(DEBUG_BOOT, "CPU: Temperature Sensing Diode Detected!\n");
 		}
 	}
 	return 0;

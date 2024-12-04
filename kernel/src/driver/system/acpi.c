@@ -4,7 +4,7 @@
 #include "serial_logging.h"
 #include "paging.h"
 
-uintptr_t kPCIBaseAddress=0;
+extern uintptr_t kPCIBaseAddress;
 void parseMCFG(uintptr_t mcfgAddress) {
     acpi_mcfg_table_t* mcfg = (acpi_mcfg_table_t*)mcfgAddress;
 
@@ -96,6 +96,7 @@ acpiFADT_t* acpiFindTable(void* RootSDT, char* tableSignature) {
         // Iterate through entries without taking the address of packed members
         for (uint32_t i = 0; i < entries; i++) {
             tablePointer = *(uint64_t*)((uint8_t*)RootSDT + sizeof(acpi_table_header_t) + (i * sizeof(uint64_t)));
+			printd(DEBUG_ACPI, "ACPI: Looking for %s at table pointed to by index %u at 0x%016lx\n", tableSignature, i, tablePointer);
             acpi_table_header_t* table = (acpi_table_header_t*)(uintptr_t)tablePointer;
 
             if (!strncmp(table->Signature, tableSignature, 4)) {
@@ -122,9 +123,12 @@ void acpiFindTables() {
     printd(DEBUG_ACPI, "acpiFindTables: Looking for ACPI tables\n");
 
     uint16_t* ebdaPtr = (uint16_t*)0x40E;
-    uintptr_t rsdpBaseAddress = 0xFFFFFFFF;
+	uint16_t* edbaSize = (uint16_t*)0x410;
+    uintptr_t rsdpBaseAddress = 0xFFFFFFFFFFFFFFFF;
 
 	paging_map_pages((pt_entry_t*)kKernelPML4v, 0x0, 0x0, 1, PAGE_PRESENT);
+
+	printd(DEBUG_ACPI, "ACPI: EBDA is at 0x%04x for 0x%04x bytes\n",*ebdaPtr, *edbaSize);
 
     // Search in the EBDA
     if (ebdaPtr && *ebdaPtr != 0) {
@@ -136,14 +140,14 @@ void acpiFindTables() {
 
     // Fallback search in high memory
     if (rsdpBaseAddress == 0xFFFFFFFFFFFFFFFF) {
-		paging_map_pages((pt_entry_t*)kKernelPML4v, 0xE0000, 0xE0000, (0x20000 / PAGE_SIZE) + 1, PAGE_PRESENT);
-        rsdpBaseAddress = doRSDPSearch(0xE0000, 0x1FFFF);
+		paging_map_pages((pt_entry_t*)kKernelPML4v, 0x0000, 0xE0000, (0x20000 / PAGE_SIZE) + 1, PAGE_PRESENT);
+        rsdpBaseAddress = doRSDPSearch(0x00000, 0xFFFFF);
 		//paging_map_pages((pt_entry_t*)kKernelPML4v, 0xE0000, 0xE0000, (0x20000 / PAGE_SIZE) + 1, 0);
     }
 
 	paging_map_pages((pt_entry_t*)kKernelPML4v, 0x0, 0x0, 1, 0);
 
-    if (rsdpBaseAddress == 0xFFFFFFFFFFFFFFFF) {
+    if ( (rsdpBaseAddress == 0xFFFFFFFFFFFFFFFF) | (rsdpBaseAddress == 0x00000000FFFFFFFF) ) {
         printd(DEBUG_ACPI, "ACPI RSDP table not found\n");
         return;
     }
@@ -152,17 +156,20 @@ void acpiFindTables() {
     rsdpTable = (acpiRSDPHeader_t*)rsdpBaseAddress;
     printd(DEBUG_ACPI, "ACPI RSDP found at 0x%016x\n", (unsigned long long)rsdpBaseAddress);
 
+	printd(DEBUG_ACPI, "ACPI RSDP revision = 0x%02x, OEMID = %c%c%c%c%c%c\n", rsdpTable->firstPart.Revision, rsdpTable->firstPart.OEMID[0], rsdpTable->firstPart.OEMID[1], rsdpTable->firstPart.OEMID[2], rsdpTable->firstPart.OEMID[3], rsdpTable->firstPart.OEMID[4], rsdpTable->firstPart.OEMID[5]);
+
     // Determine root SDT (RSDT or XSDT)
     if (rsdpTable->firstPart.Revision >= 2 && rsdpTable->XsdtAddress) {
         // Use XSDT for ACPI v2.0+
         rootSDT = (void*)(uintptr_t)rsdpTable->XsdtAddress;
-		paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t)rootSDT, (uintptr_t)rootSDT, (0x20000 / PAGE_SIZE) + 1, PAGE_PRESENT);
+		paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t)rootSDT & 0xFFFFFFFFFFF00000, (uintptr_t)rootSDT & 0xFFFFFFFFFFF00000, (0x100000 / PAGE_SIZE) + 1, PAGE_PRESENT);
         acpiXSDT_t* xsdt = (acpiXSDT_t*)rootSDT;
         printd(DEBUG_ACPI, "Using XSDT at 0x%016x\n", (unsigned long long)rsdpTable->XsdtAddress);
-    } else if (rsdpTable->firstPart.RsdtAddress) {
+    } 
+	else if (rsdpTable->firstPart.RsdtAddress) {
         // Use RSDT for ACPI v1.0
         rootSDT = (void*)(uintptr_t)rsdpTable->firstPart.RsdtAddress;
-		paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t)rootSDT, (uintptr_t)rootSDT, (0x20000 / PAGE_SIZE) + 1, PAGE_PRESENT);
+		paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t)rootSDT & 0xFFFFFFFFFFFFFFFF, (uintptr_t)rootSDT & 0xFFFFFFFFFFFFFFFF, (0x20000 / PAGE_SIZE) + 1, PAGE_PRESENT);
         acpiRSDT_t* rsdt = (acpiRSDT_t*)rootSDT;
         printd(DEBUG_ACPI, "Using RSDT at 0x%08x\n", rsdpTable->firstPart.RsdtAddress);
     } else {
