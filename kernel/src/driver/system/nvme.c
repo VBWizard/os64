@@ -185,13 +185,13 @@ void nvme_admin_init_queues(nvme_controller_t* controller)
     size_t subQueueSize = controller->maxQueueEntries * sizeof(nvme_submission_queue_entry_t);
     size_t compQueueSize = controller->maxQueueEntries * sizeof(nvme_completion_queue_entry_t);
 printf("1 ");
-	kDebugLevel |= DEBUG_PAGING;
+//	kDebugLevel |= DEBUG_PAGING;
     // Allocate memory for admin and command queues
     controller->adminSubQueue = kmalloc_dma(subQueueSize);
     if (!controller->adminSubQueue) panic("Failed to allocate memory for admin submission queue\n");
 printf("2 ");
     controller->cmdSubQueue = kmalloc_dma(subQueueSize);
-	kDebugLevel &= ~(DEBUG_PAGING);
+//	kDebugLevel &= ~(DEBUG_PAGING);
 printf("2.5 ");
     if (!controller->cmdSubQueue) panic("Failed to allocate memory for command submission queue\n");
 

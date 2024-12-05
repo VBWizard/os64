@@ -12,3 +12,4 @@
 log
 os64_kernel_debug.asm
 *.log
+os64_kernel.sym

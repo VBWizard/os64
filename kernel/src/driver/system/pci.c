@@ -375,7 +375,7 @@ void init_PCI()
 	kPCIDeviceFunctions = kmalloc(sizeof(pci_device_t) * PCI_FUNCTION_SLOTS);
 
 	printd(DEBUG_PCI_DISCOVERY,"Iterating the PCI busses ...\n");
-	for (uint16_t currBus=0;currBus<255;currBus++)
+	for (uint16_t currBus=0;currBus<50;currBus++)
 	{
 		for (uint16_t currSlot=0;currSlot<32;currSlot++)
 		{

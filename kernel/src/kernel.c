@@ -35,35 +35,19 @@ volatile bool kFBInitDone = 0;
 uint64_t kTicksPerSecond;
 struct limine_smp_response *kLimineSMPInfo;
 uint64_t kDebugLevel = 0;
+uintptr_t kKernelStack = 0;
+char startTime[100];
 
-void kernel_main()
+void kernel_init()
 {
-	kDebugLevel = DEBUG_OPTIONS;
-	kInitDone = false;
-	kTicksPerSecond = TICKS_PER_SECOND;
-	hardware_init();
-	char startTime[100];
-	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
-#ifdef ENABLE_COM1
-	init_serial(0x3f8);
-#endif
-	kKernelPML4v = kHHDMOffset + kKernelPML4;
-	memmap_init(memmap_response->entries, memmap_response->entry_count);
-	paging_init();
-	allocator_init();
-	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
-	kFBInitDone = true;
-	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
-	printf("Initializing paging (HHMD) ... \n");
-	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
 	printf(	"***** OS64 - system booting at %s *****\n", startTime);
 	printf("Initializing ACPI\n");
 	acpiFindTables();
-		if (kPCIBaseAddress)
+	if (kPCIBaseAddress)
 	{
-		paging_map_pages((pt_entry_t*)kKernelPML4v, kHHDMOffset | kPCIBaseAddress, kPCIBaseAddress, 0x10000, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
-		printd(DEBUG_BOOT, "Mapped PCI base address to the same physical address for 10,000 pages\n");
+		printd(DEBUG_BOOT, "Mapping PCI base physical address 0x%016x to the same physical address in the HHMD for 10,000 pages\n", kPCIBaseAddress);
+		paging_map_pages((pt_entry_t*)kKernelPML4v, kHHDMOffset | kPCIBaseAddress, kPCIBaseAddress, 0x5000, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 		kPCIBaseAddress = kHHDMOffset | kPCIBaseAddress;
 	}
 
@@ -137,4 +121,29 @@ void kernel_main()
 	}
 	while (true) {asm("sti\nhlt\n");}
 
+}
+
+void kernel_main()
+{
+	kDebugLevel = DEBUG_OPTIONS;
+	kInitDone = false;
+	kTicksPerSecond = TICKS_PER_SECOND;
+	hardware_init();
+	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
+#ifdef ENABLE_COM1
+	init_serial(0x3f8);
+#endif
+	kKernelPML4v = kHHDMOffset + kKernelPML4;
+	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
+	kFBInitDone = true;
+	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
+	memmap_init(memmap_response->entries, memmap_response->entry_count);
+	printf("Initializing paging (HHMD) ... \n");
+	paging_init();
+	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
+	allocator_init();
+
+	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
+	__asm__ volatile ("mov rsp, %0" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
+	kernel_init();
 }
