@@ -1,0 +1,1 @@
+void process_kernel_commandline(char* cmdline);

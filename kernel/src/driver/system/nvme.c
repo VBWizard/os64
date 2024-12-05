@@ -26,7 +26,7 @@ void nvme_print_version(uint32_t versionRegisterValue) {
     uint8_t tertiaryVersion = versionRegisterValue & 0xFF;
 
     // Print the NVMe version
-    printf("NVMe Version %d.%d.%d\n", majorVersion, minorVersion, tertiaryVersion);
+    printf("NVMe Version %d.%d.%d", majorVersion, minorVersion, tertiaryVersion);
     printd(DEBUG_NVME, "NVMe Version: %d.%d.%d\n", majorVersion, minorVersion, tertiaryVersion);
 }
 
@@ -40,7 +40,6 @@ void nvme_enable_features(uint8_t bus, uint8_t device, uint8_t function)
 }
 
 bool nvme_reset_controller(nvme_controller_t* controller) {
-volatile uint32_t *cc = (volatile uint32_t *)(controller->mmioAddress + 0x14);
 uint32_t currentDelay = 0;
 uint32_t intervalDelay = controller->defaultTimeout / 20;
 	uint16_t pmcsr = readPCIRegister(controller->nvmePCIDevice->busNo, controller->nvmePCIDevice->deviceNo, controller->nvmePCIDevice->funcNo, PCI_POWER_MGMT_AND_STTS);
@@ -184,7 +183,7 @@ void nvme_admin_init_queues(nvme_controller_t* controller)
     // Calculate queue sizes
     size_t subQueueSize = controller->maxQueueEntries * sizeof(nvme_submission_queue_entry_t);
     size_t compQueueSize = controller->maxQueueEntries * sizeof(nvme_completion_queue_entry_t);
-printf("1 ");
+printf("  (1 ");
 //	kDebugLevel |= DEBUG_PAGING;
     // Allocate memory for admin and command queues
     controller->adminSubQueue = kmalloc_dma(subQueueSize);
@@ -220,7 +219,7 @@ printf("5 ");
 
     // Set AQA (Admin Queue Attributes) register
     controller->registers->aqa = ((controller->maxQueueEntries - 1) << 16) | (controller->maxQueueEntries - 1);
-printf("6");
+printf("6 ");
 
     // Set ASQ (Admin Submission Queue) base address
     volatile uint32_t* asq_low = (volatile uint32_t*)&controller->registers->asq;
@@ -247,7 +246,7 @@ printf("9 ");
     *acq_low = (uint32_t)((uintptr_t)controller->adminCompQueue & 0xFFFFFFFF);
     *acq_high = (uint32_t)((uintptr_t)controller->adminCompQueue >> 32);
 
-printf("10 ");
+printf("10)\n");
 
     // Initialize queue indices
     controller->cmdSubQueueTailIndex = 0;
@@ -344,7 +343,6 @@ uint64_t nvme_get_Base_Memory_Address(pci_device_t* nvmeDevice, pci_config_space
 
 void nvme_init_device(pci_device_t* nvmeDevice)
 {
-	bool barIs64Bit = false;
 	uint64_t baseMemoryAddressMask = 0;
 	uint64_t baseMemoryAddress = 0;
 

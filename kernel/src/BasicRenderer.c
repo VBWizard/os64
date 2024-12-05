@@ -14,7 +14,7 @@ bool frameBufferRequiresUpdate = false;
 
 void update_framebuffer_from_shadow()
 {
-#if ENABLE_DOUBLE_BUFFER
+#ifdef ENABLE_DOUBLE_BUFFER
 	printd(DEBUG_BOOT,"Start framebuffer update\n");
 	//memcpy(kRenderer.framebuffer->base_address, kRenderer.shadow_buffer, kRenderer.framebuffer->buffer_size);
 	uintptr_t* src = (uintptr_t*)kRenderer.shadow_buffer;
@@ -126,9 +126,6 @@ void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer
     basicrenderer->psf1_font = psf1_font;
 #ifdef ENABLE_DOUBLE_BUFFER
 	basicrenderer->shadow_buffer = kmalloc_aligned(basicrenderer->framebuffer->buffer_size);
-#endif
-	uint64_t buff_address = paging_walk_paging_table((pt_entry_t*)kKernelPML4v, (uintptr_t)basicrenderer->framebuffer->base_address);
-#ifdef ENABLE_DOUBLE_BUFFER
 	memcpy(basicrenderer->shadow_buffer, basicrenderer->framebuffer->base_address, basicrenderer->framebuffer->buffer_size);
 #endif
     return;
@@ -136,8 +133,8 @@ void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer
 
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y)
 {
-	basicrenderer->cursor_position.x = x;
-	basicrenderer->cursor_position.y = y * 16;
+	basicrenderer->cursor_position.x = x * 8;
+	basicrenderer->cursor_position.y = y * basicrenderer->psf1_font->psf1_header->charsize;
 }
 
 int printf(const char *fmt, ...)

@@ -7,6 +7,7 @@
 #include "io.h"
 #include "CONFIG.h"
 #include "paging.h"
+#include "strcpy.h"
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 extern volatile struct limine_memmap_request memmap_request;
@@ -14,14 +15,18 @@ extern volatile struct limine_kernel_address_request kernel_address_request;
 extern volatile struct limine_hhdm_request hhmd_request;
 extern volatile struct limine_module_request module_request;
 extern volatile struct limine_smp_request smp_request;
+extern struct limine_smp_response *kLimineSMPInfo;
+extern volatile struct limine_kernel_file_request kernel_file_request;
 extern uint64_t kHHDMOffset;
+extern uint64_t kDebugLevel;
+extern char kKernelCommandline[];
 
 struct limine_memmap_response *memmap_response;
 struct limine_hhdm_response *hhmd_response;
 struct limine_framebuffer_response *framebuffer_response;
 struct limine_module_response *limine_module_response;
-extern struct limine_smp_response *kLimineSMPInfo;
 struct limine_framebuffer *framebuffer;
+struct limine_kernel_file_response *kernelFileResponse;
 
 char kernel_stack[0x1000*64] __attribute__((aligned(16)));
 
@@ -106,7 +111,6 @@ void post_code(uint8_t code) {
 // If renaming kmain() to something else, make sure to change the
 // linker script accordingly.
 void limine_boot_entry_point(void) {
-	uint64_t temp;
     // Ensure the bootloader actually understands our base revision (see spec).
 		__asm__ __volatile__ (
 		"lea rsp, [%0 + %1 - 0x100]"
@@ -123,6 +127,8 @@ void limine_boot_entry_point(void) {
 	framebuffer_response = framebuffer_request.response;
 	limine_module_response = module_request.response;
 	kLimineSMPInfo = smp_request.response;
+	kernelFileResponse = kernel_file_request.response;
+	strncpy(kKernelCommandline, kernelFileResponse->kernel_file->cmdline, 512);
 
 	int limine_response_status = verify_limine_responses(memmap_response, hhmd_response, framebuffer_response, limine_module_response, kLimineSMPInfo);
 

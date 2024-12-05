@@ -39,6 +39,12 @@ volatile struct limine_smp_request smp_request = {
     .revision = 0
 };
 
+ __attribute__((used, section(".limine_requests")))
+volatile struct limine_kernel_file_request kernel_file_request = {
+    .id = LIMINE_KERNEL_FILE_REQUEST,
+    .revision = 0
+};
+
 
 __attribute__((used, section(".limine_requests_start")))
 static volatile LIMINE_REQUESTS_START_MARKER;

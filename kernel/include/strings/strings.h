@@ -12,6 +12,7 @@
 #include "strings/strcmp.h"
 #include "strings/strcpy.h"
 #include "strings/strlen.h"
+#include "strings/strstr.h"
 
 #define ISDIGIT(c) ((c) - '0' + 0U <= 9U)
 #define ISALPHA(c) (((c) | 32) - 'a' + 0U <= 'z' - 'a' + 0U)

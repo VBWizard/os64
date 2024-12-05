@@ -23,9 +23,12 @@
 #include "vfs.h"
 #include "acpi.h"
 #include "nvme.h"
+#include "kernel_commandline.h"
 
 extern block_device_info_t* kATADeviceInfo;
 extern int kATADeviceInfoCount;
+extern bool kEnableAHCI;
+extern bool kEnableNVME;
 
 volatile uint64_t kSystemStartTime, kUptime, kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
@@ -36,6 +39,8 @@ uint64_t kTicksPerSecond;
 struct limine_smp_response *kLimineSMPInfo;
 uint64_t kDebugLevel = 0;
 uintptr_t kKernelStack = 0;
+char kKernelCommandline[512];
+
 char startTime[100];
 
 void kernel_init()
@@ -56,21 +61,25 @@ void kernel_init()
 	printf("Initializing PCI: ");
 	init_PCI();
 	printf("\t%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
-	printf("Initializing AHCI ...\n");
-	init_AHCI();
-	printf("Initializing NVME: ");
-	init_NVME();
+	if (kEnableAHCI)
+	{
+		printf("Initializing AHCI ...\n");
+		init_AHCI();
+	}
+	if (kEnableNVME)
+	{
+		printf("Initializing NVME: ");
+		init_NVME();
+	}
 	detect_cpu();
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
-	printf("SMP: Initializing ...\n");
+	printf("SMP: Initializing ... ");
 	init_SMP();
 	kLimineSMPInfo = smp_request.response;
 
 	//Temporary - make sure paging is working correctly
 	char* x = kmalloc(256);
 	char* y = kmalloc(128);
-	//char* iii = kmalloc(0x10000000);
-	//memset(iii, 0, 0x1000000);
 
 	strncpy(x, "This is test # 1", 20);
 	strncpy(y, "this is test # 2", 20);
@@ -115,7 +124,7 @@ void kernel_init()
 	while (true)
 	{
 		strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
-		moveto(&kRenderer, 0,20);
+		moveto(&kRenderer, 60,0);
 		printf("%s",startTime);
 		asm("sti\nhlt\n");
 	}
@@ -128,6 +137,8 @@ void kernel_main()
 	kDebugLevel = DEBUG_OPTIONS;
 	kInitDone = false;
 	kTicksPerSecond = TICKS_PER_SECOND;
+
+	process_kernel_commandline(kKernelCommandline);
 	hardware_init();
 	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
 #ifdef ENABLE_COM1
@@ -135,15 +146,14 @@ void kernel_main()
 #endif
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
 	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
-	kFBInitDone = true;
 	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");
 	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
-
 	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
 	__asm__ volatile ("mov rsp, %0" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
+	printf("Kernel stack initialized, 0x%x bytes\n", KERNEL_STACK_SIZE);
 	kernel_init();
 }

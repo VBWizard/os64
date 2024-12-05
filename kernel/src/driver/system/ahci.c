@@ -372,7 +372,6 @@ int AhciIssueCmd(volatile hba_port_t *port, int cmdslot)
     unsigned int elapsed = 0;
     int Status = 0; // 0 for success, negative for errors
 	unsigned char temp = 0;
-	volatile uint8_t *tfd_reg = &port->tfd.AsUchar;
 
 uint32_t timeout = 1000000; // Example: Timeout after 1 second
 uint32_t tfd_value;
@@ -525,7 +524,6 @@ printd(DEBUG_AHCI, "0x%08x\n", *address);
 
 void init_AHCI_device(int device_index, bool function)
 {
-    bool ahciDeviceFound = false;
     char buffer[150];
 
 	if (!function)
@@ -562,7 +560,7 @@ void init_AHCI_device(int device_index, bool function)
 bool init_AHCI()
 {
 	bool ahciDeviceFound = false;
-    kATADeviceInfoCount = 4;
+    kATADeviceInfoCount = 0;
 	init_block();
 	kATADeviceInfo = kmalloc(20 * sizeof(block_device_info_t));
 	kATADeviceInfo->block_device = kmalloc(sizeof(block_device_t));

@@ -164,14 +164,12 @@ void acpiFindTables() {
         // Use XSDT for ACPI v2.0+
         rootSDT = (void*)(uintptr_t)rsdpTable->XsdtAddress;
 		paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t)rootSDT & 0xFFFFFFFFFFF00000, (uintptr_t)rootSDT & 0xFFFFFFFFFFF00000, (0x100000 / PAGE_SIZE) + 1, PAGE_PRESENT);
-        acpiXSDT_t* xsdt = (acpiXSDT_t*)rootSDT;
         printd(DEBUG_ACPI, "ACPI: Using XSDT at 0x%016x\n", (unsigned long long)rsdpTable->XsdtAddress);
     } 
 	else if (rsdpTable->firstPart.RsdtAddress) {
         // Use RSDT for ACPI v1.0
         rootSDT = (void*)(uintptr_t)rsdpTable->firstPart.RsdtAddress;
 		paging_map_pages((pt_entry_t*)kKernelPML4v, (uintptr_t)rootSDT & 0xFFFFFFFFFFFFFFFF, (uintptr_t)rootSDT & 0xFFFFFFFFFFFFFFFF, (0x20000 / PAGE_SIZE) + 1, PAGE_PRESENT);
-        acpiRSDT_t* rsdt = (acpiRSDT_t*)rootSDT;
         printd(DEBUG_ACPI, "ACPI: Using RSDT at 0x%08x\n", rsdpTable->firstPart.RsdtAddress);
     } else {
         printd(DEBUG_ACPI, "ACPI: No valid RSDT or XSDT found\n");
