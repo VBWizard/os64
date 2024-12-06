@@ -9,7 +9,7 @@ void kmalloc_common(uint64_t physical_address, uint64_t virtual_address, uint64_
 	uint64_t page_count = length / PAGE_SIZE;
 	if (length % PAGE_SIZE != 0)
 		page_count++;
-	paging_map_pages((pt_entry_t*)kKernelPML4v, virtual_address & 0xFFFFFFFFFFFFF000, physical_address & 0xFFFFFFFFFFFFF000, page_count, PAGE_PRESENT | PAGE_WRITE);
+	paging_map_pages((pt_entry_t*)kKernelPML4v, virtual_address & PAGE_ADDRESS_MASK, physical_address & PAGE_ADDRESS_MASK, page_count, PAGE_PRESENT | PAGE_WRITE);
 	memset((void*)virtual_address, 0, length);
 }
 
@@ -45,7 +45,7 @@ void *kmalloc_dma(uint64_t length)
 		page_count++;
 
 	printd(DEBUG_KMALLOC,"kmalloc_dma: Identity mapping 0x%016lx, for %u pages (PRESENT/WRITE/PCD)\n", addr, page_count);
-	paging_map_pages((pt_entry_t*)kKernelPML4v, addr & 0xFFFFFFFFFFFFF000, addr & 0xFFFFFFFFFFFFF000, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	paging_map_pages((pt_entry_t*)kKernelPML4v, addr & PAGE_ADDRESS_MASK, addr & PAGE_ADDRESS_MASK, page_count, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 
 	printd(DEBUG_KMALLOC,"kmalloc_dma: memsetting 0x%016lu bytes...\n", length);
 	memset((void*)(uintptr_t)addr, 0, length);
@@ -66,17 +66,19 @@ void *kmalloc_dma32_address(uint32_t address, uint64_t length)
 
 void kfree(void *address) {
     // Free the allocation (remove the HHDM offset from the address when freeing it)
-    int freed_length = free_memory((uintptr_t)address - kHHDMOffset);
-
+	printd(DEBUG_KMALLOC, "KMALLOC: Freeing address 0x%016lx\n",address);
+    int freed_length = free_memory((uintptr_t)address > kHHDMOffset?(uintptr_t)address - kHHDMOffset:(uintptr_t)address);
+	printd(DEBUG_KMALLOC, "KMALLOC: Freed!  Length is 0x%016lx\n",address);
     // Iterate over each page within the freed range
     for (int cnt = 0; cnt < (freed_length + PAGE_SIZE - 1) / PAGE_SIZE; cnt++) {
         // Calculate the virtual address for each page in the range
         uintptr_t page_virtual_address = (uintptr_t)address + (cnt * PAGE_SIZE);
 
         // If there are no other allocations on this page
-        if (!physical_page_is_allocated_on(((uintptr_t)page_virtual_address - kHHDMOffset) & 0xFFFFFFFFFFFFF000)) {
+//TODO: Fix me!  This broke on physical hardware
+/*        if (!physical_page_is_allocated_on(((uintptr_t)page_virtual_address - kHHDMOffset) & PAGE_ADDRESS_MASK)) {
             // Unmap the page if it's no longer in use
             paging_unmap_page((pt_entry_t*)kKernelPML4v, page_virtual_address);
         }
-    }
+*/    }
 }

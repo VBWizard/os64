@@ -17,6 +17,9 @@
 #define PAGE_GLOBAL       (1ULL << 8)    // Global page
 #define PAGE_NO_EXECUTE   (1ULL << 63)   // No-execute
 
+#define PAGE_FLAGS_MASK 0xFFFUL
+#define PAGE_ADDRESS_MASK  (~PAGE_FLAGS_MASK)
+
 // Initial paging table entry locations
 #define PDPT_ADDRESS 0x2000
 #define PD_ADDRESS   0x3000

@@ -109,8 +109,10 @@ uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address)
 
 void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
     // Align addresses to 4 KB boundaries
-    physical_address &= 0xFFFFFFFFFFFFF000;
-    virtual_address &= 0xFFFFFFFFFFFFF000;
+    physical_address &= PAGE_ADDRESS_MASK;
+    virtual_address &= PAGE_ADDRESS_MASK;
+
+	uint8_t tableRequiredFlags = (flags & PAGE_WRITE)?PAGE_WRITE:0;
 
     printd(DEBUG_PAGING, "PAGING: Map 0x%016lx to 0x%016lx flags 0x%08lx\n", physical_address, virtual_address, flags);
 
@@ -120,7 +122,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
 
     if (pml4e & PAGE_PRESENT) {
         // Combine existing flags with new flags
-        pml4[PML4_INDEX(virtual_address)] = (pml4e & ~0xFFF) | ((pml4e | flags) & 0xFFF);
+        pml4[PML4_INDEX(virtual_address)] = (pml4e & ~0xFFF) | ((pml4e | tableRequiredFlags) & 0xFFF);
         uint64_t pdpt_phys = pml4[PML4_INDEX(virtual_address)] & ~0xFFF;
         pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(pdpt_phys);
 	    printd(DEBUG_PAGING, "\tPDPT present @ 0x%016x\n",pdpt_page);
@@ -130,7 +132,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
         uint64_t new_pdpt_phys = allocate_memory_aligned(PAGE_SIZE);
         pt_entry_t *new_pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pdpt_phys);
         memset(new_pdpt_page, 0, PAGE_SIZE);
-        pml4[PML4_INDEX(virtual_address)] = new_pdpt_phys | flags | PAGE_PRESENT;
+        pml4[PML4_INDEX(virtual_address)] = new_pdpt_phys | tableRequiredFlags | PAGE_PRESENT;
         pdpt_page = new_pdpt_page;
     }
 
@@ -140,7 +142,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
 
     if (pdpt_entry & PAGE_PRESENT) {
         // Combine existing flags with new flags
-        pdpt_page[PDPT_INDEX(virtual_address)] = (pdpt_entry & ~0xFFF) | ((pdpt_entry | flags) & 0xFFF);
+        pdpt_page[PDPT_INDEX(virtual_address)] = (pdpt_entry & ~0xFFF) | ((pdpt_entry | tableRequiredFlags) & 0xFFF);
         uint64_t pd_phys = pdpt_page[PDPT_INDEX(virtual_address)] & ~0xFFF;
         pd_page = (pt_entry_t *)PHYS_TO_VIRT(pd_phys);
 	    printd(DEBUG_PAGING, "\tPD present @ 0x%016x\n", pd_page);
@@ -150,7 +152,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
         uint64_t new_pd_phys = allocate_memory_aligned(PAGE_SIZE);
         pt_entry_t *new_pd_page = (pt_entry_t *)PHYS_TO_VIRT(new_pd_phys);
         memset(new_pd_page, 0, PAGE_SIZE);
-        pdpt_page[PDPT_INDEX(virtual_address)] = new_pd_phys | flags | PAGE_PRESENT;
+        pdpt_page[PDPT_INDEX(virtual_address)] = new_pd_phys | tableRequiredFlags | PAGE_PRESENT;
         pd_page = new_pd_page;
     }
 
@@ -160,13 +162,10 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
 
     if (pd_entry & PAGE_PRESENT) {
        // Combine existing flags with new flags
-        pd_page[PD_INDEX(virtual_address)] = (pd_entry & ~0xFFF) | ((pd_entry | flags) & 0xFFF);
+        pd_page[PD_INDEX(virtual_address)] = (pd_entry & ~0xFFF) | ((pd_entry | tableRequiredFlags) & 0xFFF);
         uint64_t pt_phys = pd_page[PD_INDEX(virtual_address)] & ~0xFFF;
         pt_page = (pt_entry_t *)PHYS_TO_VIRT(pt_phys);
 	    printd(DEBUG_PAGING, "\tPT present @ 0x%016lx\n", pt_page);
-		//TODO: FIXME!  HACK!!!
-		pt_page = (pt_entry_t*)(((uint64_t)0xFFFF8000 << 32) | ((uint64_t)pt_page & 0xFFFFFFFF));
-	    printd(DEBUG_PAGING, "\t\tPT present @ 0x%016lx\n", pt_page);
     } else {
         // Allocate new PT page
 	    printd(DEBUG_PAGING, "\tPT not present - allocating it\n");
@@ -175,7 +174,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
         memset(new_pt_page, 0, PAGE_SIZE);
         if ((((uintptr_t)new_pt_page >> 32) & 0xFFFFFFFF) != 0xFFFF8000)
 			panic("Bad page table entry address. (0x%016lx)  kHHDMOffset = 0x%016lx\n", new_pt_page, kHHDMOffset);
-		pd_page[PD_INDEX(virtual_address)] = new_pt_phys | flags | PAGE_PRESENT;
+		pd_page[PD_INDEX(virtual_address)] = new_pt_phys | tableRequiredFlags | PAGE_PRESENT;
         pt_page = new_pt_page;
     }
 
