@@ -257,6 +257,7 @@ typedef struct {
 	uint16_t queueDepth;
 	uint16_t adminCID;
 	uint16_t cmdCID;
+	uint32_t blockSize;
  } nvme_controller_t;
 
 #include <stdint.h>
@@ -289,6 +290,6 @@ typedef struct {
 } nvme_namespace_data_t;
 
 void init_NVME();
-
+void nvme_read_disk();
 #endif // NVME_H
 

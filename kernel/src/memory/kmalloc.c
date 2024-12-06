@@ -81,4 +81,7 @@ void kfree(void *address) {
             paging_unmap_page((pt_entry_t*)kKernelPML4v, page_virtual_address);
         }
 */    }
+#ifdef KMALLOC_CLEAR_FREED_POINTERS
+	address = (void*)0xBADBADBA;
+#endif
 }
