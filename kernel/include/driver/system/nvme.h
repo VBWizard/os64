@@ -291,5 +291,7 @@ typedef struct {
 
 void init_NVME();
 void nvme_read_disk();
+void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer);
+
 #endif // NVME_H
 

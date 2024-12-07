@@ -100,6 +100,5 @@ void init_video(struct limine_framebuffer *framebuffer, struct limine_module_res
 
     clear(&kRenderer, 0xff000080, true); // color blue
 	moveto(&kRenderer, 0, 0);
-    printf("Frame buffer initialized ...\n");
 	kFBInitDone = true;
 }

@@ -1,6 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+//#define DISK_WRITING_ENABLED
 #define ENABLE_COM1
 //#define ENABLE_DOUBLE_BUFFER
 //  Timing related configuration

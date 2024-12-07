@@ -672,6 +672,7 @@ void nvme_identify(nvme_controller_t* controller)
 	kfree(command);
 }
 
+#ifdef DISK_WRITING_ENABLED
 void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer)
 {
 	nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
@@ -708,6 +709,7 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 	kfree((void*)cmd->prp1);
 	kfree(cmd);
 }
+#endif
 
 void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer)
 {
