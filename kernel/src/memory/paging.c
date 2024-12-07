@@ -9,8 +9,7 @@
 #include "serial_logging.h"
 #include "memcpy.h"
 #include "panic.h"
-
-extern uintptr_t kDebugLevel;
+#include "printd.h"
 
 //Kernel paging pml4 table physical address
 pt_entry_t kKernelPML4;
@@ -222,7 +221,7 @@ void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address) {
 
 void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physical_address,uint64_t page_count,uint64_t flags)
 {
-	uint64_t temp;
+	__uint128_t temp;
 
 	if ((physical_address & 0x00000FFF) > 0)
 	{

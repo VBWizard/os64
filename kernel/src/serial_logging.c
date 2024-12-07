@@ -1,23 +1,24 @@
 #include "serial_logging.h"
+#include <stdbool.h>
 #include "CONFIG.h"
 #include "sprintf.h"
 #include "memset.h"
 #include "io.h"
 #include "CONFIG.h"
-#include "BasicRenderer.h"
+#include "printd.h"
 
 extern volatile uint64_t kUptime;
 extern volatile uint64_t kTicksSinceStart;
 extern volatile bool kFBInitDone;
-extern uint64_t kDebugLevel;
 
 char print_buf[2048];
 char print_buf2[2048];
 
-void printd(uint64_t debug_level, const char *fmt, ...)
+void printd(__uint128_t debug_level, const char *fmt, ...)
 {
 	int printed;
-
+	__uint128_t a = 0;
+	
 	if ((kDebugLevel & debug_level) == debug_level)
 	{
 		va_list args;

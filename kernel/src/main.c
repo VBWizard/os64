@@ -8,6 +8,7 @@
 #include "CONFIG.h"
 #include "paging.h"
 #include "strcpy.h"
+#include "printd.h"
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 extern volatile struct limine_memmap_request memmap_request;
@@ -18,7 +19,6 @@ extern volatile struct limine_smp_request smp_request;
 extern struct limine_smp_response *kLimineSMPInfo;
 extern volatile struct limine_kernel_file_request kernel_file_request;
 extern uint64_t kHHDMOffset;
-extern uint64_t kDebugLevel;
 extern char kKernelCommandline[];
 
 struct limine_memmap_response *memmap_response;

@@ -2,9 +2,8 @@
 #include <stdbool.h>
 #include "strings/strings.h"
 #include <stdint.h>
-#include "serial_logging.h"
+#include "printd.h"
 
-extern uint64_t kDebugLevel;
 bool kEnableAHCI=true, kEnableNVME=true;
 
 void process_kernel_commandline(char* cmdline)
@@ -19,6 +18,11 @@ void process_kernel_commandline(char* cmdline)
 	{
 		kDebugLevel = 0xffffffffffffffff;
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter alllog passed, all categories of logging will be done\n");
+	}
+	if (strnstr(cmdline,"detlog",512) != NULL)
+	{
+		kDebugLevel |= DEBUG_DETAILED;
+		printd(DEBUG_BOOT, "CMDLINE:\t Parameter det passed,  Detailed logging enabled\n");
 	}
 	if (strnstr(cmdline,"noahci",512) != NULL)
 	{

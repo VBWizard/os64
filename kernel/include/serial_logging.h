@@ -5,6 +5,6 @@
 #include <stdint.h>
 #include "CONFIG.h"
 
-void printd(uint64_t debug_level, const char *fmt, ...);
+void printd(__uint128_t debug_level, const char *fmt, ...);
 
 #endif

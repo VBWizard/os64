@@ -9,12 +9,18 @@
 #include "math.h"
 #include "memset.h"
 #include "memcpy.h"
+#include "vfs.h"
+#include "ata.h"
+#include "printd.h"
 
-extern uint64_t kDebugLevel;
+extern block_device_info_t* kATADeviceInfo;
+extern int kATADeviceInfoCount;
+
 int kNVMEControllerCount = 0;
 uint16_t initialCMDValue;
 uint32_t bar0InitialValue, bar1InitialValue;
 uint64_t nvmeBaseAddressRemap = NVME_ABAR_OVERRIDE_ADDRESS;	
+char* nvmeIdentifyInfo;
 
 void log_nvme_debug_info(
     volatile nvme_controller_t* controller,         // Base NVMe registers address
@@ -156,7 +162,7 @@ bool nvme_wait_for_ready_after_enabled(nvme_controller_t* controller, uint32_t m
 }
 
 void nvme_initialize_controller(nvme_controller_t* controller) {
-    printd(DEBUG_NVME, "Configuring NVMe Controller Configuration (CC) register\n");
+    printd(DEBUG_NVME | DEBUG_DETAILED, "Configuring NVMe Controller Configuration (CC) register\n");
 
     uint32_t cc = 0;
 
@@ -168,7 +174,7 @@ void nvme_initialize_controller(nvme_controller_t* controller) {
 
     // Ensure MPS is within the supported range from CAP.MPSMIN to CAP.MPSMAX
     if (mps < controller->minPageSize || mps > controller->maxPageSize) {
-        printd(DEBUG_NVME, "Error: Host page size is not supported by the controller\n");
+        printd(DEBUG_NVME | DEBUG_DETAILED, "Error: Host page size is not supported by the controller\n");
         panic("Error: Host page size is not supported by the controller\n");
         return; // Handle failure appropriately
     }
@@ -199,7 +205,7 @@ void nvme_initialize_controller(nvme_controller_t* controller) {
         return; // Handle failure appropriately
     }
 
-    printd(DEBUG_NVME, "Controller successfully configured and ready\n");
+    printd(DEBUG_NVME | DEBUG_DETAILED, "Controller successfully configured and ready\n");
 }
 
 // Assume you have an nvme_controller_t* named controller
@@ -221,7 +227,7 @@ void nvme_ring_doorbell(nvme_controller_t* controller, uint16_t queueID, bool is
         // Write the new tail index to the submission doorbell
         *submissionDoorbell = newIndex;
 	    __asm__ volatile("mfence" ::: "memory");
-        printd(DEBUG_NVME, "NVME: Ringing submission queue doorbell for queue %u at %p, new tail index: %u\n", queueID, submissionDoorbell, newIndex);
+        printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Ringing submission queue doorbell for queue %u at %p, new tail index: %u\n", queueID, submissionDoorbell, newIndex);
     } else {
         // Calculate the address for the completion doorbell register
 		volatile uint32_t* completionDoorbell = (volatile uint32_t*)((uintptr_t)controller->registers +
@@ -231,7 +237,7 @@ void nvme_ring_doorbell(nvme_controller_t* controller, uint16_t queueID, bool is
         // Write the new head index to the completion doorbell
         *completionDoorbell = newIndex;
 	    __asm__ volatile("mfence" ::: "memory");
-        printd(DEBUG_NVME, "NVME: Ringing completion queue doorbell for queue %u at %p, new head index: %u\n", queueID, completionDoorbell, newIndex);
+        printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Ringing completion queue doorbell for queue %u at %p, new head index: %u\n", queueID, completionDoorbell, newIndex);
     }
 }
 
@@ -241,7 +247,7 @@ void nvme_ring_doorbell(nvme_controller_t* controller, uint16_t queueID, bool is
 /// @param isAdminQueue 
 void submit_command(nvme_controller_t* controller, nvme_submission_queue_entry_t* cmd, bool isAdminQueue) {
 
-	printd(DEBUG_NVME,"NVME: submit_command: opc=0x%04x, nsid=0x%08x, cid=0x%08x, prp1=%p, cwd10=0x%08x, cwd11=0x%08x\n",
+	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: submit_command: opc=0x%04x, nsid=0x%08x, cid=0x%08x, prp1=%p, cwd10=0x%08x, cwd11=0x%08x\n",
 		cmd->opc, cmd->nsid, cmd->cid, cmd->prp1, cmd->cdw10, cmd->cdw11);
 
     // Add command to the submission queue
@@ -253,13 +259,13 @@ void submit_command(nvme_controller_t* controller, nvme_submission_queue_entry_t
         subQueue = controller->admSubQueue;
         tailIndexPtr = &controller->admSubQueueTailIndex;
         maxQueueEntries = controller->queueDepth;
-		printd(DEBUG_NVME, "NVME: submit_command: Using Admin sub queue @ 0x%016lx, tail = 0x%04x, queue depth = 0x%04x\n",
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: submit_command: Using Admin sub queue @ 0x%016lx, tail = 0x%04x, queue depth = 0x%04x\n",
 		subQueue, *tailIndexPtr, maxQueueEntries);
     } else {
         subQueue = controller->cmdSubQueue;  // Single command queue
         tailIndexPtr = &controller->cmdSubQueueTailIndex;
         maxQueueEntries = controller->queueDepth; // Single queue size
-		printd(DEBUG_NVME, "NVME: submit_command: Using Cmd sub queue @ 0x%016lx, tail = 0x%04x, queue depth = 0x%04x\n",
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: submit_command: Using Cmd sub queue @ 0x%016lx, tail = 0x%04x, queue depth = 0x%04x\n",
 		subQueue, *tailIndexPtr, maxQueueEntries);
     }
 
@@ -268,7 +274,7 @@ void submit_command(nvme_controller_t* controller, nvme_submission_queue_entry_t
 
     // Increment tail index, wrapping if necessary
     *tailIndexPtr = (*tailIndexPtr + 1) % maxQueueEntries;
-	printd(DEBUG_NVME, "NVME: submit_command: Incremented tail, now 0x%04x\n",*tailIndexPtr);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: submit_command: Incremented tail, now 0x%04x\n",*tailIndexPtr);
 
 __asm__ volatile ("sfence" ::: "memory"); // Ensure memory writes are visible
 
@@ -278,7 +284,7 @@ __asm__ volatile ("sfence" ::: "memory"); // Ensure memory writes are visible
 
 void nvme_init_admin_queues(nvme_controller_t* controller)
 {
-    printd(DEBUG_NVME, "NVME: Initializing all queues to the max (0x%04x) entries (0x%016lx bytes for submission queues)\n", 
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initializing all queues to the max (0x%04x) entries (0x%016lx bytes for submission queues)\n", 
            controller->maxQueueEntries, controller->maxQueueEntries * sizeof(nvme_submission_queue_entry_t));
 
 printf("  (1 ");
@@ -287,15 +293,15 @@ printf("  (1 ");
 	if (controller->maxQueueEntries > 0x40)
 	{
 		controller->queueDepth = 0x40;
-		printd(DEBUG_NVME, "NVME: Controller supports more than 64 queue entries (0x%04x), will use %u entries\n", controller->maxQueueEntries, controller->queueDepth);
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Controller supports more than 64 queue entries (0x%04x), will use %u entries\n", controller->maxQueueEntries, controller->queueDepth);
 	}
 	else
 	{
 		controller->queueDepth = controller->maxQueueEntries;
-		printd(DEBUG_NVME, "NVME: Controller doesn't supports 64 queue entries (0x%04x), will use %u entries\n", controller->maxQueueEntries, controller->queueDepth);
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Controller doesn't supports 64 queue entries (0x%04x), will use %u entries\n", controller->maxQueueEntries, controller->queueDepth);
 	}
 	controller->registers->aqa = ((controller->queueDepth - 1) << 16) | (controller->queueDepth - 1);
-	printd(DEBUG_NVME,"NVME: Setting the aqa register to 0x%08x to support %u queues\n",controller->registers->aqa, controller->queueDepth);
+	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Setting the aqa register to 0x%08x to support %u queues\n",controller->registers->aqa, controller->queueDepth);
 
 printf("2 ");
     // Calculate queue sizes
@@ -348,7 +354,7 @@ printf("8 ");
     if (verify_asq != (uintptr_t)controller->admSubQueue) {
         panic("ASQ write failed. Read back value: 0x%016lx\n", verify_asq);
     } else {
-        printd(DEBUG_NVME, "ASQ successfully set to: 0x%016lx\n", verify_asq);
+        printd(DEBUG_NVME | DEBUG_DETAILED, "ASQ successfully set to: 0x%016lx\n", verify_asq);
     }
 
 printf("9 ");
@@ -357,7 +363,7 @@ printf("9 ");
     volatile uint32_t* acq_high = acq_low + 1;
     *acq_low = (uint32_t)((uintptr_t)controller->admCompQueue & 0xFFFFFFFF);
     *acq_high = (uint32_t)((uintptr_t)controller->admCompQueue >> 32);
-	printd(DEBUG_NVME, "ACQ successfully set to: 0x%016lx\n", (uintptr_t)*acq_high << 32 | *acq_low);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "ACQ successfully set to: 0x%016lx\n", (uintptr_t)*acq_high << 32 | *acq_low);
 
 printf("10)\n");
 
@@ -367,7 +373,7 @@ printf("10)\n");
 	controller->admCompQueueHeadIndex = 0;
 	controller->cmdCompQueueHeadIndex = 0;
 	controller->admCompCurrentPhases = 0;
-    printd(DEBUG_NVME, "NVME: Admin queues initialized successfully\n");
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Admin queues initialized successfully\n");
 }
 
 uint8_t get_and_update_phase_bit(uint64_t* expected_phases, uint32_t index) {
@@ -410,7 +416,7 @@ void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, vo
 		elapsed+=delay;
 	}
 	
-	printd(DEBUG_NVME, "NVME:\tWaiting for completion of cid 0x%04x, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
 						entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
 	
 	if (elapsed >= controller->defaultTimeout)
@@ -418,7 +424,7 @@ void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, vo
 		log_nvme_debug_info(controller, command, entry, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, adminQueue?0:1);
 		panic("Timeout (%u seconds) waiting for command completion\n", controller->defaultTimeout);
 	}
-	printd(DEBUG_NVME, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+	printd(DEBUG_NVME | DEBUG_DETAILED, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
 						entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
 }
 
@@ -446,7 +452,7 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
 	}
 	
 	controller->cmdCompQueue = (volatile nvme_completion_queue_entry_t*)cmd->prp1;
-    printd(DEBUG_NVME, "NVME: Command Completion Queue successfully created at 0x%016lx\n",cmd->prp1);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Command Completion Queue successfully created at 0x%016lx\n",cmd->prp1);
 
     // Step 2: Create I/O Submission Queue
     memset(cmd, 0, sizeof(nvme_submission_queue_entry_t));
@@ -471,8 +477,7 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
 	__asm__ volatile("mfence" ::: "memory");
 
 	controller->cmdSubQueue = (void*)cmd->prp1;
-    printd(DEBUG_NVME, "NVME: Command Submission Queue successfully created at 0x%016lx\n",cmd->prp1);
-	printd(DEBUG_NVME, "NVME: kfreeing cmd @ 0x%016lx\n", cmd);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Command Submission Queue successfully created at 0x%016lx\n",cmd->prp1);
 	kfree(cmd);
 }
 
@@ -487,19 +492,19 @@ void nvme_extract_cap(nvme_controller_t* controller) {
 	controller->doorbellStride = (cap >> 32) & 0xF;
 	controller->defaultTimeout = ((cap >> 24) & 0xFF);
 
-    printd(DEBUG_NVME, "NVME: Maximum Queue Entries Supported: %u\n", controller->maxQueueEntries);
-    printd(DEBUG_NVME, "NVME: Contiguous Queues Required: %u\n", controller->contiguousQueuesRequired);
-    printd(DEBUG_NVME, "NVME: Minimum Memory Page Size: %lu bytes\n", 1UL << (12 + controller->minPageSize));
-    printd(DEBUG_NVME, "NVME: Maximum Memory Page Size: %lu bytes\n", 1UL << (12 + controller->maxPageSize));
-    printd(DEBUG_NVME, "NVME: Command Sets Supported: %u\n", controller->cmdSetSupported);
-    printd(DEBUG_NVME, "NVME: Doorbell Stride: %u (distance between doorbells: %u bytes)\n", controller->doorbellStride, 4 * (1 << controller->doorbellStride));
-    printd(DEBUG_NVME, "NVME: Timeout: %u * 500 ms = %u ms\n", controller->defaultTimeout, controller->defaultTimeout * 500);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Maximum Queue Entries Supported: %u\n", controller->maxQueueEntries);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Contiguous Queues Required: %u\n", controller->contiguousQueuesRequired);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Minimum Memory Page Size: %lu bytes\n", 1UL << (12 + controller->minPageSize));
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Maximum Memory Page Size: %lu bytes\n", 1UL << (12 + controller->maxPageSize));
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Command Sets Supported: %u\n", controller->cmdSetSupported);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Doorbell Stride: %u (distance between doorbells: %u bytes)\n", controller->doorbellStride, 4 * (1 << controller->doorbellStride));
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Timeout: %u * 500 ms = %u ms\n", controller->defaultTimeout, controller->defaultTimeout * 500);
 
 	//If the timeout presented by the controller is too large, use our own value. (10 seconds)
 	if (controller->defaultTimeout > 20)
 	{
 		controller->defaultTimeout = 20 * 500;
-		printd(DEBUG_NVME, "NVME Controller timeout too long, setting to 20 (10 seconds)\n");
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME Controller timeout too long, setting to 20 (10 seconds)\n");
 	}
 	else
 		//Set timeout to MS
@@ -508,7 +513,7 @@ void nvme_extract_cap(nvme_controller_t* controller) {
 
 void print_BARs(pci_config_space_t* config, char* state)
 {
-	printd(DEBUG_NVME, "NVME: BARs at %s: 0=0x%08x, 1=0x%08x, 2=0x%08x, 3=0x%08x, 4=0x%08x, 5=0x%08x, ", 
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: BARs at %s: 0=0x%08x, 1=0x%08x, 2=0x%08x, 3=0x%08x, 4=0x%08x, 5=0x%08x, ", 
 		state, config->BAR[0], config->BAR[1], config->BAR[2], config->BAR[3], config->BAR[4], config->BAR[5]);
 }
 
@@ -519,7 +524,7 @@ uint64_t nvme_get_Base_Memory_Address(pci_device_t* nvmeDevice, pci_config_space
 	//To determine the amount of address space needed by a PCI device, you must save the original value of the BAR, write a value of all 1's to the register, then read it back. 
 	//The original value of the BAR should then be restored. 
 
-	printd(DEBUG_NVME, "NVME: Initializing BARs\n");
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initializing BARs\n");
 
 	//Disable IO/Memory Decode
 	initialCMDValue = readPCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, PCI_COMMAND_OFFSET);
@@ -548,15 +553,15 @@ uint64_t nvme_get_Base_Memory_Address(pci_device_t* nvmeDevice, pci_config_space
 	writePCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, PCI_COMMAND_OFFSET, initialCMDValue);
 	wait(50);
 
-	printd(DEBUG_NVME, "NVME: Found MMIO Base Address MASK at BAR index 0, value 0x%08x\n",finalBaseAddressMask);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Found MMIO Base Address MASK at BAR index 0, value 0x%08x\n",finalBaseAddressMask);
 
 	if (finalBaseAddressMask > 0 && (finalBaseAddressMask & 0x1) != 0x1)
 	{
-		printd(DEBUG_NVME, "NVME: MMIO Base Address is 64-bit, adjusting mask value with the value 0x%08x\n", bar1Value);
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: MMIO Base Address is 64-bit, adjusting mask value with the value 0x%08x\n", bar1Value);
 		finalBaseAddressMask |= ((uint64_t)bar1Value << 32);
 	}
 
-	printd(DEBUG_NVME, "NVME: Final mask value is 0x%016x\n",finalBaseAddressMask);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Final mask value is 0x%016x\n",finalBaseAddressMask);
 
 	return finalBaseAddressMask  &= 0xFFFFFFFFFFFFFFF0;
 
@@ -576,9 +581,9 @@ uint32_t nvme_parse_lba_format(uint8_t* namespace_buffer, uint8_t index) {
     uint64_t block_size = 1ULL << lbads;
 
     // Print the results
-    printd(DEBUG_NVME, "Index: %u\n", index);
-    printd(DEBUG_NVME, "LBADS: %u\n", lbads);
-    printd(DEBUG_NVME, "Block Size: %lu bytes\n", block_size);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "Index: %u\n", index);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "LBADS: %u\n", lbads);
+    printd(DEBUG_NVME | DEBUG_DETAILED, "Block Size: %lu bytes\n", block_size);
 
 	return block_size;
 }
@@ -602,7 +607,7 @@ void nvme_set_features(nvme_controller_t* controller)
 	uint16_t max_submission_queues = (completion->cmd_specific & 0xFFFF) + 1;
 	uint16_t max_completion_queues = ((completion->cmd_specific >> 16) & 0xFFFF) + 1;
 
-	printd(DEBUG_NVME, "Max Submission Queues: %u, Max Completion Queues: %u\n", 
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Max Submission Queues: %u, Max Completion Queues: %u\n", 
 		max_submission_queues, max_completion_queues);
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 	kfree(command);
@@ -613,9 +618,11 @@ void nvme_identify(nvme_controller_t* controller)
 	uint64_t elapsed = 0;
 	nvme_submission_queue_entry_t* command = kmalloc(sizeof(nvme_submission_queue_entry_t));
 
+	nvmeIdentifyInfo = kmalloc_dma(PAGE_SIZE);
+
 	command->opc = NVME_ADMIN_IDENTIFY;
 	command->nsid = 0x0;
-	command->prp1 = (uint64_t)kmalloc_dma(PAGE_SIZE);
+	command->prp1 = (uintptr_t)nvmeIdentifyInfo;
 	command->cid = controller->adminCID++;
 	command->cdw10 = 2; // number of namespaces
 	submit_command(controller, command, true);
@@ -633,7 +640,7 @@ void nvme_identify(nvme_controller_t* controller)
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 
 	controller->nsid = *(uint32_t*)command->prp1;
-	printd(DEBUG_NVME, "Number of namespaces: 0x%08x\n", *(uint32_t*)command->prp1);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Number of namespaces: 0x%08x\n", *(uint32_t*)command->prp1);
 
 	command->opc = NVME_ADMIN_IDENTIFY;
 	command->nsid = controller->nsid;
@@ -654,16 +661,16 @@ void nvme_identify(nvme_controller_t* controller)
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 
 	nvme_namespace_data_t* idData = (nvme_namespace_data_t*)command->prp1;
-	printd(DEBUG_NVME, "Namespace Size: %lu logical blocks\n", idData->namespaceSize);
-	printd(DEBUG_NVME, "Namespace Capacity: %lu logical blocks\n", idData->namespaceCapacity);
-	printd(DEBUG_NVME, "Namespace Utilization: %lu logical blocks\n", idData->namespaceUtilization);
-	printd(DEBUG_NVME, "Namespace Features: 0x%02X\n", idData->namespaceFeatures);
-	printd(DEBUG_NVME, "Number of LBA Formats: %u\n", idData->numOfLBAFormats + 1); // 0-based index
-	printd(DEBUG_NVME, "Active LBA Format: %u\n", idData->formattedLBASize & 0x0F);
-	printd(DEBUG_NVME, "Formatted LBA Size: %u\n", idData->formattedLBASize);
-	printd(DEBUG_NVME, "NVM Capacity (bytes): ");
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Namespace Size: %lu logical blocks\n", idData->namespaceSize);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Namespace Capacity: %lu logical blocks\n", idData->namespaceCapacity);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Namespace Utilization: %lu logical blocks\n", idData->namespaceUtilization);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Namespace Features: 0x%02X\n", idData->namespaceFeatures);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Number of LBA Formats: %u\n", idData->numOfLBAFormats + 1); // 0-based index
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Active LBA Format: %u\n", idData->formattedLBASize & 0x0F);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Formatted LBA Size: %u\n", idData->formattedLBASize);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVM Capacity (bytes): ");
 
-	printd(DEBUG_NVME, "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x ",
+	printd(DEBUG_NVME | DEBUG_DETAILED, "%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x ",
 		idData->nvmcap[0], idData->nvmcap[1], idData->nvmcap[2], idData->nvmcap[3], idData->nvmcap[4], idData->nvmcap[5], idData->nvmcap[6], idData->nvmcap[7], idData->nvmcap[8], 
 		idData->nvmcap[9], idData->nvmcap[10], idData->nvmcap[11], idData->nvmcap[12], idData->nvmcap[13], idData->nvmcap[14], idData->nvmcap[15]);
 
@@ -694,7 +701,7 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 	cmd->cdw10 = LBA & 0xffffffff;
 	cmd->cdw11 = LBA >> 32;
 	cmd->cdw12 = blockCount;
-	printd(DEBUG_NVME,"NVME: Submitting write request for 0x%08lx blocks to LBA 0x%016x\n", blockCount, LBA);
+	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Submitting write request for 0x%08lx blocks to LBA 0x%016x\n", blockCount, LBA);
     submit_command(controller, cmd, false);
 	
 	volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
@@ -731,7 +738,7 @@ void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, 
 	cmd->cdw10 = LBA & 0xffffffff;
 	cmd->cdw11 = LBA >> 32;
 	cmd->cdw12 = blockCount;
-	printd(DEBUG_NVME,"NVME: Submitting read request for 0x%08lx blocks from LBA 0x%016x\n", blockCount, LBA);
+	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Submitting read request for 0x%08lx blocks from LBA 0x%016x\n", blockCount, LBA);
     submit_command(controller, cmd, false);
 	
 	volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
@@ -755,7 +762,7 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 
 	nvme_enable_features(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo);
 
-	printd(DEBUG_NVME, "NVME: Retrieving PCI config for device at %u:%u:%u\n",nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Retrieving PCI config for device at %u:%u:%u\n",nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo);
 	pci_config_space_t *config = pci_get_config_space(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo);
 
 	baseMemoryAddressMask = nvme_get_Base_Memory_Address(nvmeDevice, config);
@@ -767,15 +774,15 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	if (baseMemoryAddress < kAvailableMemory && bar0InitialValue > 0xA0000000 )
 	{
 		baseMemoryAddress = ((uint64_t)bar0InitialValue | ((uint64_t)bar1InitialValue << 32)) & ~(0xf);
-		printd(DEBUG_NVME, "NVME: Initial base memory address is valid.  We'll use it! (0x%016lx)\n", baseMemoryAddress);
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initial base memory address is valid.  We'll use it! (0x%016lx)\n", baseMemoryAddress);
 	}
 	else
 	{
 		uint64_t temp = nvmeBaseAddressRemap;
 		nvmeBaseAddressRemap += bar0_size;
-		printd(DEBUG_NVME, "NVME: Initial base memory address (0x%016lx) is outside physical memory.  Using 0x%016x instead\n",baseMemoryAddress,temp);
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initial base memory address (0x%016lx) is outside physical memory.  Using 0x%016x instead\n",baseMemoryAddress,temp);
 		baseMemoryAddress = temp;
-		printd(DEBUG_NVME, "Initializing base address 0x%08x to Bar[0], and 0x0 to BAR[1]\n",baseMemoryAddress);
+		printd(DEBUG_NVME | DEBUG_DETAILED, "Initializing base address 0x%08x to Bar[0], and 0x0 to BAR[1]\n",baseMemoryAddress);
 		writePCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, PCI_BAR0_OFFSET, baseMemoryAddress & 0xFFFFFFFF);
 		wait(50);
 		writePCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, PCI_BAR0_OFFSET + 4, 0);
@@ -786,14 +793,14 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	print_BARs(config, "post config");
 
 	nvme_controller_t* controller = kmalloc(sizeof(nvme_controller_t));
-	printd(DEBUG_NVME, "Allocated controller_t at 0x%08x\n",controller);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Allocated controller_t at 0x%08x\n",controller);
 	controller->nvmePCIDevice = nvmeDevice;
 	controller->mmioAddress = baseMemoryAddress;
 	controller->registers = (volatile nvme_controller_regs_t*)controller->mmioAddress;
 	controller->mmioSize = bar0_size;
 	controller->adminCID = controller->cmdCID = 0;
 
-	printd(DEBUG_NVME,"NVME: Updating paging for MMIO Base Address, identity mapped at 0x%016lx\n", controller->mmioAddress);
+	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Updating paging for MMIO Base Address, identity mapped at 0x%016lx\n", controller->mmioAddress);
 	paging_map_pages((pt_entry_t*)kKernelPML4v, controller->mmioAddress, controller->mmioAddress, bar0_size / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 
 	nvme_print_version(controller->registers->version);
@@ -807,12 +814,10 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	printd(DEBUG_NVME,"Performing a test read ... \n");
 	char* buffer = kmalloc(controller->blockSize);
 	nvme_read_disk(controller, 0, controller->blockSize, buffer);
-
-
-
+	//vfs_add_block_device(/*available*/true, enum whichBus bus, ATA_DEVICE_TYPE_NVME_HD, nvmeIdentifyInfo, );
 	kfree(buffer);
-
 	kNVMEControllerCount++;
+
 
 	// 		uint32_t cmd_status = readPCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, 0x06 & ~0x3); // Align offset
 	// 		uint16_t status = (cmd_status >> 16) & 0xFFFF; // Extract upper 16 bits

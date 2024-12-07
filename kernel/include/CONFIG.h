@@ -31,13 +31,14 @@
 #define DEBUG_HARDDRIVE 1 << 5
 #define DEBUG_AHCI 1 << 6
 // TEMPORARY!!!
-#define DEBUG_MEMMAP 1 << 7
-#define DEBUG_ACPI 1 << 8
-#define DEBUG_PAGING 1 << 9
-#define DEBUG_ALLOCATOR 1 << 10
-#define DEBUG_KMALLOC 1 << 10
-#define DEBUG_NVME 1 << 12
-#define DEBUG_OPTIONS (DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_HARDDRIVE | DEBUG_NVME)
+#define DEBUG_MEMMAP (__uint128_t)1 << 7
+#define DEBUG_ACPI (__uint128_t)1 << 8
+#define DEBUG_PAGING (__uint128_t)1 << 9
+#define DEBUG_ALLOCATOR (__uint128_t)1 << 10
+#define DEBUG_KMALLOC (__uint128_t)1 << 10
+#define DEBUG_NVME (__uint128_t)1 << 12
+#define DEBUG_DETAILED (__uint128_t)1 << 127
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_HARDDRIVE | DEBUG_NVME)
 //#define DEBUG_OPTIONS (DEBUG_EXCEPTIONS | DEBUG_BOOT)
 
 #endif // CONFIG_H

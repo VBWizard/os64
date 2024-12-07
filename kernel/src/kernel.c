@@ -37,7 +37,7 @@ volatile bool kInitDone;
 volatile bool kFBInitDone = 0;
 uint64_t kTicksPerSecond;
 struct limine_smp_response *kLimineSMPInfo;
-uint64_t kDebugLevel = 0;
+__uint128_t kDebugLevel = 0;
 uintptr_t kKernelStack = 0;
 char kKernelCommandline[512];
 
@@ -45,8 +45,6 @@ char startTime[100];
 
 void kernel_init()
 {
-	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
-	printf(	"***** OS64 - system booting at %s *****\n", startTime);
 	printf("Initializing ACPI\n");
 	acpiFindTables();
 	if (kPCIBaseAddress)
@@ -87,29 +85,30 @@ void kernel_init()
 	x = kmalloc(256);
 	strncpy(x, "This is test 3", 20);
 
-/*
+
 	unsigned char* buffer = kmalloc(16384);
 	buffer = (unsigned char*)((uintptr_t)buffer) - kHHDMOffset;
 	paging_map_pages((pt_entry_t*)kKernelPML4v, (uint64_t)buffer, (uint64_t)buffer, 4, PAGE_PRESENT | PAGE_WRITE);
 	memset(buffer,0,8192);
 	//The first 4 slots are reserved for ATA devices.  The 4th slot is the first slot for AHCI and/or NVME
-	ahci_lba_read((void*)&kATADeviceInfo[4], 0,(void*)buffer,2);
-	if (buffer[510]!=0x55 || buffer[511] != 0xAA)
-		printf("AHCI disk read incorrect.  Expected 0x55, 0xAA, got 0x%02X, 0x%02X\n", buffer[510], buffer[511]);
-	else
-		printf("AHCI disk read test passed ...\n");
+	//ahci_lba_read((void*)&kATADeviceInfo[0], 0,(void*)buffer,2);
+	//if (buffer[510]!=0x55 || buffer[511] != 0xAA)
+	//	printf("%s disk read incorrect.  Expected 0x55, 0xAA, got 0x%02X, 0x%02X\n", 
+	//		kATADeviceInfo->bus==NVME?"NVME":"AHCI",buffer[510], buffer[511]);
+	//else
+	//	printf("%s disk read test passed ...\n", kATADeviceInfo->bus==NVME?"NVME":"AHCI");
 
 	block_operations_t* ahciBlockOps;
 	ahciBlockOps = kmalloc(sizeof(ahciBlockOps));
 	ahciBlockOps->read = (void*)&ahci_lba_read;
-	kATADeviceInfo[4].block_device->partTableType = detect_partition_table_type(&kATADeviceInfo[4]);
+	kATADeviceInfo[0].block_device->partTableType = detect_partition_table_type(&kATADeviceInfo[0]);
 	read_block_partitions(kATADeviceInfo, kATADeviceInfoCount);
 	file_operations_t* fileOps;
 	fileOps = kmalloc(sizeof(file_operations_t));
 	fileOps->initialize = &ext2_initialize_filesystem;
 	
-	kRegisterFileSystem("/", &kATADeviceInfo[4], 0, fileOps);
-*/
+	kRegisterBlockDevice("/", &kATADeviceInfo[0], 0, fileOps);
+ 
     // We're done, just hang...
   
 	extern uint64_t kMemoryStatusCurrentPtr;
@@ -121,6 +120,7 @@ void kernel_init()
 	}
 	printf("All done, hcf-time!\n");
 	printd(DEBUG_MEMMAP,"All done, hcf-time!\n");	
+	printf("12345678901234567890123456789012345678901234567890123456789012345678901234567890\n");
 	while (true)
 	{
 		strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
@@ -132,6 +132,14 @@ void kernel_init()
 
 }
 
+void log_debug_level(__uint128_t value) {
+    uint64_t high = (uint64_t)(value >> 64);
+    uint64_t low = (uint64_t)value;
+    printd(DEBUG_BOOT,"DEBUG_OPTIONS high: 0x%016lx, low: 0x%016lx\n", high, low);
+}
+
+//NOTE: The stack is re-loaded in this method, after paging is initialized.  Any method level variables declared will no longer exist after that.
+//		Make changes in kernel_init() instead if you need variables.
 void kernel_main()
 {
 	kDebugLevel = DEBUG_OPTIONS;
@@ -146,6 +154,12 @@ void kernel_main()
 #endif
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
 	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
+	log_debug_level(kDebugLevel);
+	log_debug_level(DEBUG_OPTIONS);
+	__uint128_t test_debug = ((__uint128_t)1 << 127);
+	log_debug_level(test_debug);
+	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
+	printf(	"***** OS64 - system booting at %s *****\n", startTime);
 	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");
