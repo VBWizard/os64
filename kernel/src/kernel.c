@@ -49,7 +49,7 @@ void kernel_init()
 	acpiFindTables();
 	if (kPCIBaseAddress)
 	{
-		printd(DEBUG_BOOT, "Mapping PCI base physical address 0x%016x to the same physical address in the HHMD for 10,000 pages\n", kPCIBaseAddress);
+		printd(DEBUG_BOOT, "HH identity mapping PCI base physical address 0x%016x for 10,000 pages\n", kPCIBaseAddress);
 		paging_map_pages((pt_entry_t*)kKernelPML4v, kHHDMOffset | kPCIBaseAddress, kPCIBaseAddress, 0x5000, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 		kPCIBaseAddress = kHHDMOffset | kPCIBaseAddress;
 	}

@@ -5,7 +5,6 @@
 .global divide_by_zero_handler
 divide_by_zero_handler:
     # call handler_divide_by_zero     # Call the C handler
-	call beep_speaker
 loop_of_death_zero:
 	jmp loop_of_death_zero
     SAVE_ALL                        # Save all general-purpose registers
@@ -16,8 +15,6 @@ loop_of_death_zero:
 .section .text
 general_protection_fault_handler:
     # call handler_divide_by_zero     # Call the C handler
-	call beep_speaker
-	call beep_speaker
 loop_of_death_gpf:
 	nop
 	jmp loop_of_death_gpf
@@ -30,9 +27,6 @@ loop_of_death_gpf:
 .section .text
 page_fault_handler:
 loop_of_death_pf:
-	call beep_speaker
-	call beep_speaker
-	call beep_speaker
 	nop
 	jmp loop_of_death_pf
     SAVE_ALL                        # Save all general-purpose registers

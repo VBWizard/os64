@@ -58,7 +58,7 @@ void ahci_stop_cmd(volatile hba_port_t *port) {
 }
 
 int ata_find_cmdslot(const hba_port_t *port) {
-    printd(DEBUG_AHCI, "AHCI: find_cmdslot - finding a slot to use to execute a command\n");
+    printd(DEBUG_AHCI | DEBUG_DETAILED, "AHCI: find_cmdslot - finding a slot to use to execute a command\n");
     // An empty command slot has its respective bit cleared to 0 in both the PxCI and PxSACT registers.
     // If not set in SACT and CI, the slot is free // Checked
     

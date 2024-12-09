@@ -626,6 +626,19 @@ void nvme_parse_model_name(char nvme_device_name[40], char* deviceName)
 
 }
 
+uint64_t calculate_mdts(uint8_t mdts) {
+    uint64_t max_size = 1; // Start with 2^0
+    uint8_t shift = 12 + mdts; // Add the base shift (12 for 4 KB)
+
+    // Perform left-shift iteratively to calculate 2^shift
+    while (shift > 0) {
+        max_size *= 2; // Multiply by 2 for each bit
+        shift--;
+    }
+
+    return max_size; // Return the computed size in bytes
+}
+
 void nvme_identify(nvme_controller_t* controller)
 {
 	uint64_t elapsed = 0;
@@ -709,8 +722,8 @@ void nvme_identify(nvme_controller_t* controller)
 
 	nvme_identify_controller_t* cData = (nvme_identify_controller_t*)command->prp1;
 	nvme_parse_model_name(cData->mn, controller->deviceName);
-	controller->maxPagesPerPRP = cData->mdts;
-	printd(DEBUG_NVME, "NVME: Device found, model: %s\n", controller->deviceName);
+	controller->maxBytesPerPRP = calculate_mdts(cData->mdts);
+	printd(DEBUG_NVME, "NVME: Device found, model: %s, max bytes per PRP = %u\n", controller->deviceName, controller->maxBytesPerPRP);
 
 	kfree(buffer);
 	kfree(command);
@@ -773,18 +786,24 @@ void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, 
 
 	//fixup length
 	uint32_t blockCount = length / controller->blockSize;
-	uint32_t prpCount = blockCount / controller->maxPagesPerPRP;
+
+	if (controller->maxBytesPerPRP==0)
+		panic("nvme_read_disk: controller->maxBytesPerPRP = 0\n");
+	
+	if (length%controller->blockSize)
+		blockCount+=1;
+
+	//Count of prp's needed to fulfill the request since only 1 page can be retrieved by prp1, and one by prp2
+	//prp2 has to be a list if more than 2 pages are to be transferred
+	uint32_t prpCount = length / PAGE_SIZE; 
+	if (length % PAGE_SIZE)
+		prpCount++;
 
 	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: read - request is for LBA 0x%016lx, length 0x%016lx to buffer 0x%016lx\n", LBA, length, buffer);
-
-	if (blockCount % controller->maxPagesPerPRP)
-		prpCount++;
 
 	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: read - PRP count = 0x%08x\n", prpCount);
 	nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
 
-	if (length > PAGE_SIZE && length%PAGE_SIZE)
-		blockCount+=1;
 	
 	if (blockCount > 0xffffffff)
 		panic("NVME: Read request length too large.  Requested length = 0x%016lx which is 0x%016lx blocks.  Max blocks is 0xffffffff", length, blockCount);
