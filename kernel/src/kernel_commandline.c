@@ -24,6 +24,12 @@ void process_kernel_commandline(char* cmdline)
 		kDebugLevel |= DEBUG_DETAILED;
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter det passed,  Detailed logging enabled\n");
 	}
+	if (strnstr(cmdline,"extradetlog",512) != NULL)
+	{
+		kDebugLevel |= DEBUG_DETAILED;
+		kDebugLevel |= DEBUG_EXTRA_DETAILED;
+		printd(DEBUG_BOOT, "CMDLINE:\t Parameter det passed,  Detailed logging enabled\n");
+	}
 	if (strnstr(cmdline,"noahci",512) != NULL)
 	{
 		kEnableAHCI=false;

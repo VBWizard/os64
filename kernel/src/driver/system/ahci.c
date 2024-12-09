@@ -13,16 +13,17 @@
 #include "block_device.h"
 #include "vfs.h"
 #include "panic.h"
+#include "strings.h"
 
 pci_device_t kPCISATADevice;
 extern uint8_t kPCIDeviceCount;
 extern uint8_t kPCIFunctionCount;
 extern pci_device_t* kPCIDeviceHeaders;
 extern pci_device_t* kPCIDeviceFunctions;
-block_device_info_t* kATADeviceInfo;
+block_device_info_t* kBlockDeviceInfo;
+int kBlockDeviceInfoCount;
 int ahciCapsCount;
 ahcicaps_t* ahciCaps;
-int kATADeviceInfoCount;
 uint8_t ahciReadBuff[512];
 int ahciHostCount = 0;
 hba_port_t* kAHCICurrentDisk;
@@ -443,7 +444,7 @@ while ((status & (ATA_SR_BSY | ATA_SR_DRQ)) && timeout--) {
 }
 
 void ahciIdentify(hba_port_t* port, int deviceType) {
-    printd(DEBUG_AHCI, "AHCI: ahciIdentify, port@0x%08x(%u), clb@0x%08x\n", port, kATADeviceInfoCount, &port->clb);
+    printd(DEBUG_AHCI, "AHCI: ahciIdentify, port@0x%08x(%u), clb@0x%08x\n", port, kBlockDeviceInfoCount, &port->clb);
     HBA_CMD_HEADER* cmdhdr = (HBA_CMD_HEADER*)(uint64_t) port->clb;
     int slot = ata_find_cmdslot(port);
     if (slot == -1)
@@ -497,28 +498,30 @@ printd(DEBUG_AHCI, "0x%08x\n", *address);
         printf("AHCI: ***Error identifying device (%u)***\n",lCmdVal);
         return;
     }
-    kATADeviceInfo[kATADeviceInfoCount].ATADeviceAvailable = true;
-    kATADeviceInfo[kATADeviceInfoCount].bus = SATA;
-    kATADeviceInfo[kATADeviceInfoCount].driveNo = kATADeviceInfoCount;
-    kATADeviceInfo[kATADeviceInfoCount].ioPort = (uintptr_t) port;
-    kATADeviceInfo[kATADeviceInfoCount].irqNum = 0;
-    kATADeviceInfo[kATADeviceInfoCount].driveHeadPortDesignation = 0x0;
-    kATADeviceInfo[kATADeviceInfoCount].queryATAData = false;
+    kBlockDeviceInfo[kBlockDeviceInfoCount].DeviceAvailable = true;
+    kBlockDeviceInfo[kBlockDeviceInfoCount].bus = BUS_SATA;
+    kBlockDeviceInfo[kBlockDeviceInfoCount].driveNo = kBlockDeviceInfoCount;
+    kBlockDeviceInfo[kBlockDeviceInfoCount].ioPort = (uintptr_t) port;
+    kBlockDeviceInfo[kBlockDeviceInfoCount].irqNum = 0;
+    kBlockDeviceInfo[kBlockDeviceInfoCount].driveHeadPortDesignation = 0x0;
+    kBlockDeviceInfo[kBlockDeviceInfoCount].queryATAData = false;
     if (deviceType == AHCI_DEV_SATAPI)
-        kATADeviceInfo[kATADeviceInfoCount].ATADeviceType=ATA_DEVICE_TYPE_SATA_CD;
+        kBlockDeviceInfo[kBlockDeviceInfoCount].ATADeviceType=ATA_DEVICE_TYPE_SATA_CD;
     else
-        kATADeviceInfo[kATADeviceInfoCount].ATADeviceType=ATA_DEVICE_TYPE_SATA_HD;
-    //kATADeviceInfo[kATADeviceInfoCount].ABAR=ahciABAR;
-    memcpy(kATADeviceInfo[kATADeviceInfoCount].ATAIdentifyData, (void*) ahciDiskBuffer, 512);
-	ataIdentify(&kATADeviceInfo[kATADeviceInfoCount]);
-	kATADeviceInfo[kATADeviceInfoCount].block_device = kmalloc(sizeof(block_device_t));
-	kATADeviceInfo[kATADeviceInfoCount].block_device->name = kATADeviceInfo[kATADeviceInfoCount - 1].ATADeviceModel;
-	kATADeviceInfo[kATADeviceInfoCount].block_device->device = &kATADeviceInfo[kATADeviceInfoCount];
-	kATADeviceInfo[kATADeviceInfoCount].block_device->ops = kmalloc(sizeof(block_operations_t));
-	kATADeviceInfo[kATADeviceInfoCount].block_device->ops->read = (void*)&ahci_lba_read;
-	add_block_device(port, &kATADeviceInfo[kATADeviceInfoCount]);
-	kATADeviceInfoCount++;
-    printd(DEBUG_AHCI, "AHCI: SATA device found, name=%s\n", kATADeviceInfo[kATADeviceInfoCount - 1].ATADeviceModel);
+        kBlockDeviceInfo[kBlockDeviceInfoCount].ATADeviceType=ATA_DEVICE_TYPE_SATA_HD;
+    //kBlockDeviceInfo[kBlockDeviceInfoCount].ABAR=ahciABAR;
+    memcpy(kBlockDeviceInfo[kBlockDeviceInfoCount].ATAIdentifyData, (void*) ahciDiskBuffer, 512);
+	ataIdentify(&kBlockDeviceInfo[kBlockDeviceInfoCount]);
+	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device = kmalloc(sizeof(block_device_t));
+	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->name = kmalloc(0x100);
+	strncpy(kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->name, kBlockDeviceInfo[kBlockDeviceInfoCount].ATADeviceModel, 0x100);
+	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->device = &kBlockDeviceInfo[kBlockDeviceInfoCount];
+	strtrim(kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->name);
+	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->ops = kmalloc(sizeof(block_operations_t));
+	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->ops->read = (void*)&ahci_lba_read;
+	add_block_device(port, &kBlockDeviceInfo[kBlockDeviceInfoCount]);
+	kBlockDeviceInfoCount++;
+    printd(DEBUG_AHCI, "AHCI: SATA device found, name=%s\n", kBlockDeviceInfo[kBlockDeviceInfoCount - 1].ATADeviceModel);
 }
 
 
@@ -560,10 +563,10 @@ void init_AHCI_device(int device_index, bool function)
 bool init_AHCI()
 {
 	bool ahciDeviceFound = false;
-    kATADeviceInfoCount = 0;
+    kBlockDeviceInfoCount = 0;
 	init_block();
-	kATADeviceInfo = kmalloc(20 * sizeof(block_device_info_t));
-	kATADeviceInfo->block_device = kmalloc(sizeof(block_device_t));
+	kBlockDeviceInfo = kmalloc(20 * sizeof(block_device_info_t));
+	kBlockDeviceInfo->block_device = kmalloc(sizeof(block_device_t));
 	ahciDiskBuffer = kmalloc_aligned(0x10000*20);
 	//The AHCI disk buffer has to be accessed using its physical address.  So get rid of the HHMD Offset and map without it
 	ahciDiskBuffer = (uintptr_t*)(((uint64_t)ahciDiskBuffer) - kHHDMOffset);

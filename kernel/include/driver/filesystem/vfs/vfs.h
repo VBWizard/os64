@@ -26,7 +26,7 @@ typedef struct inode vfs_inode_t;
 typedef struct dentry dentry_t;
 typedef struct vfsmount vfs_mount_t;
 typedef struct inode_operations vfs_inode_operations_t;
-typedef struct file_system vfs_filesystem_t;
+typedef struct vfs_block_device vfs_block_device_t;
 typedef struct inode inode_t;
 typedef struct file vfs_file_t;
 typedef struct file_operations file_operations_t;
@@ -39,7 +39,8 @@ typedef enum
 	FILESYSTEM_TYPE_UNDEFINED,
 	FILESYSTEM_TYPE_FAT,
 	FILESYSTEM_TYPE_FAT32,
-	FILESYSTEM_TYPE_EXT2
+	FILESYSTEM_TYPE_EXT2,
+	FILESYSTEM_TYPE_NTFS
 } e_filesystem_type;
 
 enum whichBus
@@ -47,8 +48,8 @@ enum whichBus
 	BUS_NONE,
     BUS_ATA_PRIMARY,
     BUS_ATA_SECONDARY,
-    SATA,
-	NVME
+    BUS_SATA,
+	BUS_NVME
 };
 
 typedef enum
@@ -69,7 +70,7 @@ typedef struct
     uint16_t ATAIdentifyData[256];
     char ATADeviceModel[80];
     bool queryATAData;
-    uint8_t ATADeviceAvailable;
+    uint8_t DeviceAvailable;
     int ATADeviceType;
     uint32_t totalSectorCount;
     uint32_t sectorSize;
@@ -83,6 +84,7 @@ typedef struct
     uint8_t driveHeadPortDesignation;
 	int major;
 	block_device_t* block_device;
+	void* block_extra_info;
 } __attribute__((packed)) block_device_info_t;
 
 struct block_operations
@@ -185,7 +187,7 @@ struct vfs_partition_table
     bool validBootSector;
 } __attribute__((packed));
 
-struct file_system
+struct vfs_block_device
 {
 	vfs_mount_t *mount; 
 	vfs_inode_operations_t* iops;
@@ -241,7 +243,7 @@ extern dlist_t* kBlockDeviceDList;
 
 void init_block();
 dlist_node_t* add_block_device(volatile void* device, block_device_info_t* block_device);
-vfs_filesystem_t* kRegisterFileSystem(char *mountPoint, block_device_info_t *device, int partNo, file_operations_t* fileOps);
+vfs_block_device_t* kRegisterBlockDevice(char *mountPoint, block_device_info_t *device, int partNo, file_operations_t* fileOps);
 int ext2_initialize_filesystem(block_device_info_t* device);
 
 #endif

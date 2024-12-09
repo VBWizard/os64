@@ -7,12 +7,12 @@
 #include "vfs.h"
 #include "ext2.h"
 
-vfs_filesystem_t* kRegisterFileSystem(char *mountPoint, block_device_info_t *device, int partNo, file_operations_t* fileOps)
+vfs_block_device_t* kRegisterBlockDevice(char *mountPoint, block_device_info_t *device, int partNo, file_operations_t* fileOps)
 {
-    vfs_filesystem_t *fs;
+    vfs_block_device_t *fs;
 	
-    fs = kmalloc(sizeof(vfs_filesystem_t));
-    memset(fs, 0, sizeof(vfs_filesystem_t));
+    fs = kmalloc(sizeof(vfs_block_device_t));
+    memset(fs, 0, sizeof(vfs_block_device_t));
 	
 	fs->partNumber = partNo;
     fs->mount = kmalloc(sizeof(vfs_mount_t));

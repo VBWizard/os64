@@ -12,9 +12,10 @@
 #include "vfs.h"
 #include "ata.h"
 #include "printd.h"
+#include "strings.h"
 
-extern block_device_info_t* kATADeviceInfo;
-extern int kATADeviceInfoCount;
+extern block_device_info_t* kBlockDeviceInfo;
+extern int kBlockDeviceInfoCount;
 
 int kNVMEControllerCount = 0;
 uint16_t initialCMDValue;
@@ -259,22 +260,21 @@ void submit_command(nvme_controller_t* controller, nvme_submission_queue_entry_t
         subQueue = controller->admSubQueue;
         tailIndexPtr = &controller->admSubQueueTailIndex;
         maxQueueEntries = controller->queueDepth;
-		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: submit_command: Using Admin sub queue @ 0x%016lx, tail = 0x%04x, queue depth = 0x%04x\n",
-		subQueue, *tailIndexPtr, maxQueueEntries);
     } else {
         subQueue = controller->cmdSubQueue;  // Single command queue
         tailIndexPtr = &controller->cmdSubQueueTailIndex;
         maxQueueEntries = controller->queueDepth; // Single queue size
-		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: submit_command: Using Cmd sub queue @ 0x%016lx, tail = 0x%04x, queue depth = 0x%04x\n",
-		subQueue, *tailIndexPtr, maxQueueEntries);
     }
+
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: submit_command: Using %s sub queue @ 0x%016lx, tail = 0x%04x, queue depth = 0x%04x\n",
+		isAdminQueue?"admin":"cmd", subQueue, *tailIndexPtr, maxQueueEntries);
 
     // Add the command to the submission queue
     subQueue[*tailIndexPtr] = *cmd;
 
     // Increment tail index, wrapping if necessary
     *tailIndexPtr = (*tailIndexPtr + 1) % maxQueueEntries;
-	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: submit_command: Incremented tail, now 0x%04x\n",*tailIndexPtr);
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: submit_command: Incremented tail, now 0x%04x\n",*tailIndexPtr);
 
 __asm__ volatile ("sfence" ::: "memory"); // Ensure memory writes are visible
 
@@ -410,13 +410,13 @@ void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, vo
 	else
 		expectedPhase = get_and_update_phase_bit(&controller->cmdCompCurrentPhases, controller->cmdCompQueueHeadIndex);
 
-	while ((entry->cid != entry->cid || entry->status.phase_tag != expectedPhase) && elapsed < controller->defaultTimeout)
+	while ((entry->cid != command->cid || entry->status.phase_tag != expectedPhase) && elapsed < controller->defaultTimeout)
 	{
 		wait(delay);
 		elapsed+=delay;
 	}
 	
-	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
 						entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
 	
 	if (elapsed >= controller->defaultTimeout)
@@ -424,8 +424,9 @@ void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, vo
 		log_nvme_debug_info(controller, command, entry, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, adminQueue?0:1);
 		panic("Timeout (%u seconds) waiting for command completion\n", controller->defaultTimeout);
 	}
-	printd(DEBUG_NVME | DEBUG_DETAILED, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
-						entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
+	if (elapsed > 0)
+		printd(DEBUG_NVME | DEBUG_DETAILED, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+							entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
 }
 
 void nvme_init_cmd_queues(nvme_controller_t* controller)
@@ -613,6 +614,18 @@ void nvme_set_features(nvme_controller_t* controller)
 	kfree(command);
 }
 
+void nvme_parse_model_name(char nvme_device_name[40], char* deviceName)
+{
+
+	for (int cnt=0;cnt<39;cnt++)
+		deviceName[cnt] = nvme_device_name[cnt];
+	
+	deviceName[39]='\0';
+
+	strtrim(deviceName);
+
+}
+
 void nvme_identify(nvme_controller_t* controller)
 {
 	uint64_t elapsed = 0;
@@ -620,6 +633,7 @@ void nvme_identify(nvme_controller_t* controller)
 
 	nvmeIdentifyInfo = kmalloc_dma(PAGE_SIZE);
 
+	//List of Active Namespace IDs:
 	command->opc = NVME_ADMIN_IDENTIFY;
 	command->nsid = 0x0;
 	command->prp1 = (uintptr_t)nvmeIdentifyInfo;
@@ -642,9 +656,11 @@ void nvme_identify(nvme_controller_t* controller)
 	controller->nsid = *(uint32_t*)command->prp1;
 	printd(DEBUG_NVME | DEBUG_DETAILED, "Number of namespaces: 0x%08x\n", *(uint32_t*)command->prp1);
 
-	command->opc = NVME_ADMIN_IDENTIFY;
+	char* buffer = kmalloc_dma(PAGE_SIZE);
+
+	//Identify Namespace Data Structure:
 	command->nsid = controller->nsid;
-	// leave command->prp1 as it was, we can re-use it
+	command->prp1 = (uintptr_t)buffer;
 	command->cid = controller->adminCID++;
 	command->cdw10 = 0; // Identify Namespace Data Structure
 	submit_command(controller, command, true);
@@ -652,7 +668,6 @@ void nvme_identify(nvme_controller_t* controller)
 	// Wait for completion
 	completionEntry = &controller->admCompQueue[controller->admCompQueueHeadIndex];
 	nvme_wait_for_completion(controller, true, completionEntry,  command);
-	
 	if (completionEntry->status.status_code != 0)
 	{
 		log_nvme_debug_info(controller, command, completionEntry, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
@@ -676,6 +691,28 @@ void nvme_identify(nvme_controller_t* controller)
 
 	controller->blockSize = nvme_parse_lba_format((uint8_t*)idData, idData->formattedLBASize & 0x0F);
 	
+	//Identify Controller Data Structure:
+	// leave command->prp1 as it was, we can re-use it
+	command->nsid=0x0;
+	command->cdw10 = 1; // Identify Controller Data Structure
+	submit_command(controller, command, true);
+
+	// Wait for completion
+	completionEntry = &controller->admCompQueue[controller->admCompQueueHeadIndex];
+	nvme_wait_for_completion(controller, true, completionEntry,  command);
+	if (completionEntry->status.status_code != 0)
+	{
+		log_nvme_debug_info(controller, command, completionEntry, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
+		panic("Admin completion status != 0!!! (0x%08x\n",completionEntry->status);
+	}
+	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
+
+	nvme_identify_controller_t* cData = (nvme_identify_controller_t*)command->prp1;
+	nvme_parse_model_name(cData->mn, controller->deviceName);
+	controller->maxPagesPerPRP = cData->mdts;
+	printd(DEBUG_NVME, "NVME: Device found, model: %s\n", controller->deviceName);
+
+	kfree(buffer);
 	kfree(command);
 }
 
@@ -718,12 +755,34 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 }
 #endif
 
+uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
+{
+
+	uintptr_t* prpList = kmalloc_dma(prpCount * sizeof(uintptr_t));
+	for (uint32_t idx = 0; idx<prpCount;idx++)
+	{
+		prpList[idx]=startAddress;
+		startAddress+=PAGE_SIZE;
+	}
+	return (uintptr_t)prpList;	
+}
+
+
 void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer)
 {
-	nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
 
 	//fixup length
 	uint32_t blockCount = length / controller->blockSize;
+	uint32_t prpCount = blockCount / controller->maxPagesPerPRP;
+
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: read - request is for LBA 0x%016lx, length 0x%016lx to buffer 0x%016lx\n", LBA, length, buffer);
+
+	if (blockCount % controller->maxPagesPerPRP)
+		prpCount++;
+
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: read - PRP count = 0x%08x\n", prpCount);
+	nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
+
 	if (length > PAGE_SIZE && length%PAGE_SIZE)
 		blockCount+=1;
 	
@@ -734,11 +793,21 @@ void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, 
 	cmd->opc = NVME_OPCODE_READ;
 	cmd->nsid = controller->nsid;
     cmd->cid = controller->cmdCID++;
-	cmd->prp1 = (uintptr_t)kmalloc_dma(length);
+	cmd->prp1 = (uintptr_t)kmalloc_dma(blockCount * controller->blockSize);
+	if (prpCount == 2)
+	{
+		cmd->prp2 = cmd->prp1 + PAGE_SIZE;
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: read - Set prp2 to 0x%016lx per prp count of 2\n", cmd->prp2);
+	}
+	else if (prpCount > 2)
+	{
+		cmd->prp2 = setup_prp_list(cmd->prp1 + PAGE_SIZE, prpCount-1);
+		printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: read - Set up prp list at 0x%016lx, submitted as prp2\n", cmd->prp2)	;
+	}
 	cmd->cdw10 = LBA & 0xffffffff;
 	cmd->cdw11 = LBA >> 32;
 	cmd->cdw12 = blockCount;
-	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Submitting read request for 0x%08lx blocks from LBA 0x%016x\n", blockCount, LBA);
+	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: read - Submitting read request for 0x%08lx blocks from LBA 0x%016x\n", blockCount, LBA);
     submit_command(controller, cmd, false);
 	
 	volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
@@ -750,10 +819,48 @@ void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, 
 		log_nvme_debug_info(controller, cmd, completionEntry, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, 1);
 		panic("NVME Read error.  System log contains more information.");
 	}
+    nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex++);  //update index to indicate the entries you have consumed
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"NVME: read - copying blocks to user's buffer @ 0x%016lx, length=0x%016lx\n", cmd->prp1, length);
 	memcpy(buffer, (void*)cmd->prp1, length);
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"NVME: read - freeing prp1\n");
 	kfree((void*)cmd->prp1);
+	if (prpCount > 2)
+	{
+		printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"NVME: read - freeing prp2\n");
+		kfree((void*)cmd->prp2);
+	}
 	kfree(cmd);
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"NVME: read - returning\n");
 }
+
+size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count)
+{
+	nvme_controller_t* controller = device->block_extra_info;
+	nvme_read_disk(controller, sector, sector_count * controller->blockSize, buffer);
+	return true;
+}
+
+void init_vfs_block_device(nvme_controller_t* controller, enum eATADeviceType deviceType)
+{
+	kBlockDeviceInfo[kBlockDeviceInfoCount].block_extra_info = (void*)controller;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].ATADeviceType = deviceType;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].bus = BUS_NVME;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].DeviceAvailable = true;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].dmaSupported = true;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].driveNo = kBlockDeviceInfoCount;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].major = 0x6;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].sectorSize = controller->blockSize;
+	strncpy(kBlockDeviceInfo[kBlockDeviceInfoCount].ATADeviceModel, controller->deviceName, 40);
+
+	block_device_t* blockDev = kmalloc(sizeof(block_device_t));
+	blockDev->name = controller->deviceName;
+	block_operations_t* bops = kmalloc(sizeof(block_operations_t));
+	bops->read = (void*)nvme_vfs_read_disk;
+	blockDev->ops = bops;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device = blockDev;
+	add_block_device(controller, &kBlockDeviceInfo[kBlockDeviceInfoCount]);
+}
+
 
 void nvme_init_device(pci_device_t* nvmeDevice)
 {
@@ -812,11 +919,14 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	nvme_init_cmd_queues(controller);
 
 	printd(DEBUG_NVME,"Performing a test read ... \n");
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Initializing a buffer of 0x%08x bytes for the test read\n");
 	char* buffer = kmalloc(controller->blockSize);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Calling nvme_read_disk\n");
 	nvme_read_disk(controller, 0, controller->blockSize, buffer);
-	//vfs_add_block_device(/*available*/true, enum whichBus bus, ATA_DEVICE_TYPE_NVME_HD, nvmeIdentifyInfo, );
+	init_vfs_block_device(controller, ATA_DEVICE_TYPE_NVME_HD);
 	kfree(buffer);
 	kNVMEControllerCount++;
+	kBlockDeviceInfoCount++;
 
 
 	// 		uint32_t cmd_status = readPCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, 0x06 & ~0x3); // Align offset

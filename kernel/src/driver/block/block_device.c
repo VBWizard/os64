@@ -16,11 +16,11 @@ dlist_node_t* add_block_device(volatile void* device, block_device_info_t* block
 
 	switch (block_device->bus)
 	{
-		case SATA:
+		case BUS_SATA:
 			major = 8;
 			minor = SATAMinor++;
 			break;
-		case NVME:
+		case BUS_NVME:
 			major = 259;
 			minor = NVMEMinor++;
 		break;

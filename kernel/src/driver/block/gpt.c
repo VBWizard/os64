@@ -36,21 +36,23 @@ int utf16_to_char_string(char* dest, uint16_t* src, int dest_length, int src_len
 
 bool parseGPT(block_device_info_t* device)
 {
-int readLen=0;
+	int readLen=0;
 	char *partBuffer = kmalloc(40*512);
+
+	printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT: parseGPT -  Retrieving MBR %s", device->block_device->name);
 	bool lResult=device->block_device->ops->read(device, 1, mbrBuffer, 1);
     if (!lResult)
         panic("parseGPT: Read error\n");
     gptHdr=(gpt_header_t*)mbrBuffer;
 
-    printd(DEBUG_HARDDRIVE,"GPT PT LBA=%u, PT entries=%04x, PT entry len=%04x, last usable LBA=%08x\n",
+    printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT:  parseGPT - GPT PT LBA=%u, PT entries=%04x, PT entry len=%04x, last usable LBA=%08x\n",
             gptHdr->partitionEntryLBA,
             gptHdr->numPartitionEntries,
             gptHdr->sizeofPartitionEntry,
             gptHdr->lastUsableLBA);
     readLen=((gptHdr->numPartitionEntries*gptHdr->sizeofPartitionEntry)/512)+1;
     
-    printd(DEBUG_HARDDRIVE,"Reading GPT partition table @ lba %u for %u sectors\n",gptHdr->partitionEntryLBA,readLen);
+    printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT:  parseGPT - Reading GPT partition table @ lba %u for %u sectors\n",gptHdr->partitionEntryLBA,readLen);
 	lResult=device->block_device->ops->read(device, gptHdr->partitionEntryLBA, partBuffer, readLen);
     if (!lResult)
         panic("parseGPT: Read error\n");
@@ -61,21 +63,26 @@ int readLen=0;
     for (int cnt=0;cnt<20;cnt++)
     {
 		if (gptPart[cnt].partTypeGUID[0] != 0)
-        	printd(DEBUG_HARDDRIVE,"Part %u, first=%u\n",cnt,gptPart[cnt].partFirstLBA);
-        if (gptPart[cnt].partFirstLBA>0)
-        {
-			device->block_device->partition_table->parts[cnt] = kmalloc(sizeof(partEntry_t));
-			device->block_device->partition_table->parts[cnt]->partStartSector = gptPart[cnt].partFirstLBA;
-            device->block_device->partition_table->parts[cnt]->partEndSector=gptPart[cnt].partLastLBA;
-            device->block_device->partition_table->parts[cnt]->partTotalSectors=device->block_device->partition_table->parts[cnt]->partEndSector-device->block_device->partition_table->parts[cnt]->partStartSector;
-        	memcpy(&device->block_device->partition_table->parts[cnt]->partTypeGUID, &gptPart[cnt].partTypeGUID, UUID_LENGTH);
-        	memcpy(&device->block_device->partition_table->parts[cnt]->uniquePartGUID, &gptPart[cnt].uniquePartGUID, UUID_LENGTH);
-			utf16_to_char_string((char*)&device->block_device->partition_table->parts[cnt]->partName, (uint16_t*)&gptPart[cnt].partName, 36, 72);
-			device->block_device->part_count++;
-        }
+		{
+        	printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT:  parseGPT - Part %u, first=%u\n",cnt,gptPart[cnt].partFirstLBA);
+			if (gptPart[cnt].partFirstLBA>0)
+			{
+				printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT: parseGPT -  Adding partition to device partiton list\n");
+				device->block_device->partition_table->parts[cnt] = kmalloc(sizeof(partEntry_t));
+				device->block_device->partition_table->parts[cnt]->partStartSector = gptPart[cnt].partFirstLBA;
+				device->block_device->partition_table->parts[cnt]->partEndSector=gptPart[cnt].partLastLBA;
+				device->block_device->partition_table->parts[cnt]->partTotalSectors=device->block_device->partition_table->parts[cnt]->partEndSector-device->block_device->partition_table->parts[cnt]->partStartSector;
+				memcpy(&device->block_device->partition_table->parts[cnt]->partTypeGUID, &gptPart[cnt].partTypeGUID, UUID_LENGTH);
+				memcpy(&device->block_device->partition_table->parts[cnt]->uniquePartGUID, &gptPart[cnt].uniquePartGUID, UUID_LENGTH);
+				utf16_to_char_string((char*)&device->block_device->partition_table->parts[cnt]->partName, (uint16_t*)&gptPart[cnt].partName, 36, 72);
+				device->block_device->part_count++;
+			}
+		}
     }
+	printd(DEBUG_BOOT | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"BOOT:  parseGPT - Freeing partBuffer\n");
 	kfree(partBuffer);
 
+	printd(DEBUG_BOOT | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"BOOT: parseGPT - returning\n");
     return true;
         
 }

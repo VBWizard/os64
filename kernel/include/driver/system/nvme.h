@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "pci.h"	
+#include "vfs.h"
 
 #define NUM_BITS (sizeof(uint64_t) * 8) // Number of bits in a uint64_t
 #define ITERATION_DELAY 100
@@ -258,6 +259,8 @@ typedef struct {
 	uint16_t adminCID;
 	uint16_t cmdCID;
 	uint32_t blockSize;
+	char deviceName[40];
+	uint32_t maxPagesPerPRP;
  } nvme_controller_t;
 
 #include <stdint.h>
@@ -289,8 +292,32 @@ typedef struct {
     uint8_t vs[3712];      // 0x100: Vendor-Specific Data
 } nvme_namespace_data_t;
 
+#include <stdint.h>
+
+typedef struct {
+    uint16_t vid;                  // Vendor ID
+    uint16_t ssvid;                // Subsystem Vendor ID
+    char sn[20];                   // Serial Number (ASCII string, not null-terminated)
+    char mn[40];                   // Model Number (ASCII string, not null-terminated)
+    char fr[8];                    // Firmware Revision (ASCII string, not null-terminated)
+    uint8_t rab;                   // Recommended Arbitration Burst
+    uint8_t ieee[3];               // IEEE OUI Identifier
+    uint8_t cmic;                  // Controller Multi-Path I/O and Namespace Sharing Capabilities
+    uint8_t mdts;                  // Maximum Data Transfer Size
+    uint16_t cntlid;               // Controller ID
+    uint32_t ver;                  // Version
+    uint32_t rtd3r;                // RTD3 Resume Latency
+    uint32_t rtd3e;                // RTD3 Entry Latency
+    uint32_t oaes;                 // Optional Asynchronous Events Supported
+    uint32_t ctratt;               // Controller Attributes
+    uint8_t reserved[156];         // Reserved
+    uint8_t reserved2[1344];       // Reserved
+    uint8_t oacs;                  // Optional Admin Command Support
+    // Add additional fields as needed based on the specification
+} nvme_identify_controller_t;
+
 void init_NVME();
-void nvme_read_disk();
+size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count);
 void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer);
 
 #endif // NVME_H

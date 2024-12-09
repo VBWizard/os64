@@ -6,6 +6,7 @@
 #include "io.h"
 #include "CONFIG.h"
 #include "printd.h"
+#include "BasicRenderer.h"
 
 extern volatile uint64_t kUptime;
 extern volatile uint64_t kTicksSinceStart;
