@@ -3,39 +3,47 @@
 #include "strcmp.h"
 #include "serial_logging.h"
 #include "paging.h"
+#include "panic.h"
 
 extern uintptr_t kPCIBaseAddress;
+extern uintptr_t kLimineRSDP;
+
 void parseMCFG(uintptr_t mcfgAddress) {
     acpi_mcfg_table_t* mcfg = (acpi_mcfg_table_t*)mcfgAddress;
 
     // Calculate the number of entries in the MCFG table
 	size_t headerSize = sizeof(acpi_mcfg_table_t);
     size_t entryCount = (mcfg->length - headerSize) / sizeof(acpi_mcfg_entry_t);
-    printd(DEBUG_ACPI, "ACPI: MCFG Table has %u entries\n", entryCount);
+    printd(DEBUG_ACPI | DEBUG_DETAILED, "ACPI: MCFG Table has %u entries\n", entryCount);
 
  // Iterate through the entries
 	acpi_mcfg_entry_t* entries = (acpi_mcfg_entry_t*)((uint8_t*)mcfg + headerSize);
     for (size_t i = 0; i < entryCount; i++) {
         acpi_mcfg_entry_t* entry = &entries[i];
-        printd(DEBUG_ACPI, "ACPI:  Entry %u:\n", i);
-        printd(DEBUG_ACPI, "ACPI:    Base Address: 0x%016x\n", (unsigned long long)entry->base_address);
-        printd(DEBUG_ACPI, "ACPI:    Segment Group: %u\n", entry->segment_group);
-        printd(DEBUG_ACPI, "ACPI:    Start Bus: %u\n", entry->start_bus_number);
-        printd(DEBUG_ACPI, "ACPI:    End Bus: %u\n", entry->end_bus_number);
-        printd(DEBUG_ACPI, "ACPI:    Reserved: 0x%08x\n", entry->reserved);
+        printd(DEBUG_ACPI | DEBUG_DETAILED, "ACPI:  Entry %u:\n", i);
+        printd(DEBUG_ACPI | DEBUG_DETAILED, "ACPI:    Base Address: 0x%016x\n", (unsigned long long)entry->base_address);
+        printd(DEBUG_ACPI | DEBUG_DETAILED, "ACPI:    Segment Group: %u\n", entry->segment_group);
+        printd(DEBUG_ACPI | DEBUG_DETAILED, "ACPI:    Start Bus: %u\n", entry->start_bus_number);
+        printd(DEBUG_ACPI | DEBUG_DETAILED, "ACPI:    End Bus: %u\n", entry->end_bus_number);
+        printd(DEBUG_ACPI | DEBUG_DETAILED, "ACPI:    Reserved: 0x%08x\n", entry->reserved);
 	}
     for (size_t i = 0; i < entryCount; i++) {
         // Access each MCFG entry
         acpi_mcfg_entry_t* entry = (acpi_mcfg_entry_t*)&entries[i];
-        printd(DEBUG_ACPI, "ACPI: Entry %u: BaseAddress=0x%016llx, SegmentGroup=%u, StartBus=%u, EndBus=%u\n",
+        printd(DEBUG_ACPI, "ACPI: Entry %u: BaseAddress=0x%016lx, SegmentGroup=%u, StartBus=%u, EndBus=%u\n",
                i, (unsigned long long)entry->base_address, entry->segment_group,
                entry->start_bus_number, entry->end_bus_number);
 
-        // Example: Use the BaseAddress for Segment 0
+        // Use the BaseAddress for Segment 0 to identify the PCI base address
         if (entry->segment_group == 0) {
 			kPCIBaseAddress = entry->base_address;
-            printd(DEBUG_BOOT, "ACPI: *Found PCI Segment 0 Base Address: 0x%08x\n", (unsigned long long)entry->base_address);
+            printd(DEBUG_BOOT, "ACPI: *Found PCI Segment 0 Base Address: 0x%08x, mapping 0x7800 pages so that we can scan 120 busses\n", (unsigned long long)entry->base_address);	
+			paging_map_pages((pt_entry_t*)kKernelPML4v,kHHDMOffset | kPCIBaseAddress, kPCIBaseAddress, 0x7800, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
         }
+		else
+		{
+			panic("PCI base address not found in MCFG\n");
+		}
 		break;
     }
 }
@@ -83,7 +91,7 @@ acpiFADT_t* acpiFindTable(void* RootSDT, char* tableSignature) {
             acpi_table_header_t* table = (acpi_table_header_t*)(uintptr_t)tablePointer;
 
             if (!strncmp(table->Signature, tableSignature, 4)) {
-                printd(DEBUG_ACPI, "ACPI: Table '%s' found at 0x%08x\n", tableSignature, tablePointer);
+                printd(DEBUG_ACPI | DEBUG_DETAILED, "ACPI: Table '%s' found at 0x%08x\n", tableSignature, tablePointer);
                 return (acpiFADT_t*)table;
             }
         }
@@ -120,38 +128,46 @@ void acpiFindTables() {
     acpiRSDPHeader_t* rsdpTable;
     void* rootSDT = NULL; // Supports both RSDT and XSDT
     acpiFADT_t* fadtSDP;
-
-    printd(DEBUG_ACPI, "ACPI: Looking for ACPI tables\n");
-
-    uint16_t* ebdaPtr = (uint16_t*)0x40E;
+	uint16_t* ebdaPtr = (uint16_t*)0x40E;
 	uint16_t* edbaSize = (uint16_t*)0x410;
-    uintptr_t rsdpBaseAddress = 0xFFFFFFFFFFFFFFFF;
+	uintptr_t rsdpBaseAddress = 0xFFFFFFFFFFFFFFFF;
 
-	paging_map_pages((pt_entry_t*)kKernelPML4v, 0x0, 0x0, 1, PAGE_PRESENT);
+	if (kLimineRSDP==0)
+	{
+		printd(DEBUG_ACPI, "ACPI: Looking for ACPI tables\n");
 
-	printd(DEBUG_ACPI, "ACPI: EBDA is at 0x%04x for 0x%04x bytes\n",*ebdaPtr, *edbaSize);
+		paging_map_pages((pt_entry_t*)kKernelPML4v, 0x0, 0x0, 1, PAGE_PRESENT);
 
-    // Search in the EBDA
-    if (ebdaPtr && *ebdaPtr != 0) {
-        uintptr_t ebdaAddress = (uintptr_t)(*ebdaPtr) * 16; // EBDA address in paragraphs
-		paging_map_pages((pt_entry_t*)kKernelPML4v, ebdaAddress, ebdaAddress, (0x60400 / PAGE_SIZE) + 1, PAGE_PRESENT);
-        rsdpBaseAddress = doRSDPSearch(ebdaAddress, 0x603ff);
-		//paging_map_pages((pt_entry_t*)kKernelPML4v, ebdaAddress, ebdaAddress, (0x10000 / PAGE_SIZE) + 1, 0);
-    }
+		printd(DEBUG_ACPI, "ACPI: EBDA is at 0x%04x for 0x%04x bytes\n",*ebdaPtr, *edbaSize);
 
-    // Fallback search in high memory
-    if (rsdpBaseAddress == 0xFFFFFFFFFFFFFFFF) {
-		paging_map_pages((pt_entry_t*)kKernelPML4v, 0x0000, 0xE0000, (0x20000 / PAGE_SIZE) + 1, PAGE_PRESENT);
-        rsdpBaseAddress = doRSDPSearch(0x00000, 0xFFFFF);
-		//paging_map_pages((pt_entry_t*)kKernelPML4v, 0xE0000, 0xE0000, (0x20000 / PAGE_SIZE) + 1, 0);
-    }
+		// Search in the EBDA
+		if (ebdaPtr && *ebdaPtr != 0) {
+			uintptr_t ebdaAddress = (uintptr_t)(*ebdaPtr) * 16; // EBDA address in paragraphs
+			paging_map_pages((pt_entry_t*)kKernelPML4v, ebdaAddress, ebdaAddress, (0x60400 / PAGE_SIZE) + 1, PAGE_PRESENT);
+			rsdpBaseAddress = doRSDPSearch(ebdaAddress, 0x603ff);
+			//paging_map_pages((pt_entry_t*)kKernelPML4v, ebdaAddress, ebdaAddress, (0x10000 / PAGE_SIZE) + 1, 0);
+		}
 
-	paging_map_pages((pt_entry_t*)kKernelPML4v, 0x0, 0x0, 1, 0);
+		// Fallback search in high memory
+		if (rsdpBaseAddress == 0xFFFFFFFFFFFFFFFF) {
+			paging_map_pages((pt_entry_t*)kKernelPML4v, 0x90000, 0x90000, (0x70000 / PAGE_SIZE) + 1, PAGE_PRESENT);
+			rsdpBaseAddress = doRSDPSearch(0x90000, 0x6FFFF);
+			//paging_map_pages((pt_entry_t*)kKernelPML4v, 0xE0000, 0xE0000, (0x20000 / PAGE_SIZE) + 1, 0);
+		}
 
-    if ( (rsdpBaseAddress == 0xFFFFFFFFFFFFFFFF) | (rsdpBaseAddress == 0x00000000FFFFFFFF) ) {
-        printd(DEBUG_ACPI, "ACPI: RSDP table not found\n");
-        return;
-    }
+		paging_map_pages((pt_entry_t*)kKernelPML4v, 0x0, 0x0, 1, 0);
+
+		if ( (rsdpBaseAddress == 0xFFFFFFFFFFFFFFFF) | (rsdpBaseAddress == 0x00000000FFFFFFFF) ) {
+			printd(DEBUG_ACPI, "ACPI: RSDP table not found\n");
+			return;
+		}
+
+	}
+	else
+	{
+		rsdpBaseAddress = kLimineRSDP;
+		printd(DEBUG_ACPI, "ACPI: Limine passed PCI base address of 0x%016lx, we'll use that\n",kLimineRSDP);
+	}
 
 	paging_map_pages((pt_entry_t*)kKernelPML4v, rsdpBaseAddress, rsdpBaseAddress, (0x20000 / PAGE_SIZE) + 1, PAGE_PRESENT);
     rsdpTable = (acpiRSDPHeader_t*)rsdpBaseAddress;

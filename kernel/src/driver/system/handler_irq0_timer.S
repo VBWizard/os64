@@ -41,10 +41,10 @@ ticks_not_expired:
 	mov [irq0_current_count], rax
 
 	# Get the count of ticks since the last FB update
-	mov rax, [fb_update_count]
-	inc rax
-	cmp rax, 500 # NOTE: As of now IRQ0 fires 100 times per second, so a count of 20 = 200 ms?
-	jl over_fb_update
+# #	mov rax, [fb_update_count]
+# #	inc rax
+# #	cmp rax, 500 # NOTE: As of now IRQ0 fires 100 times per second, so a count of 20 = 200 ms?
+# #	jl over_fb_update
 
 	# If it is the desired frequency
 #	push rax
@@ -53,7 +53,7 @@ ticks_not_expired:
 #	cmp rax, 0
 #	pop rax
 #	je over_fb_update
-	call update_framebuffer_from_shadow
+#	#call update_framebuffer_from_shadow
 	xor rax,rax
 over_fb_update:
     mov [fb_update_count], rax

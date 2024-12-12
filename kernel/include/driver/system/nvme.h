@@ -261,6 +261,7 @@ typedef struct {
 	uint32_t blockSize;
 	char deviceName[40];
 	uint32_t maxBytesPerPRP;
+	uint32_t cmdQID;
  } nvme_controller_t;
 
 #include <stdint.h>
@@ -290,31 +291,39 @@ typedef struct {
     uint64_t anagrpid;     // 0x60: ANA Group Identifier
     uint8_t reserved2[88]; // 0x68: Reserved
     uint8_t vs[3712];      // 0x100: Vendor-Specific Data
-} nvme_namespace_data_t;
+}  __attribute__((packed))  nvme_namespace_data_t;
 
 #include <stdint.h>
 
 typedef struct {
-    uint16_t vid;                  // Vendor ID
-    uint16_t ssvid;                // Subsystem Vendor ID
-    char sn[20];                   // Serial Number (ASCII string, not null-terminated)
-    char mn[40];                   // Model Number (ASCII string, not null-terminated)
-    char fr[8];                    // Firmware Revision (ASCII string, not null-terminated)
-    uint8_t rab;                   // Recommended Arbitration Burst
-    uint8_t ieee[3];               // IEEE OUI Identifier
-    uint8_t cmic;                  // Controller Multi-Path I/O and Namespace Sharing Capabilities
-    uint8_t mdts;                  // Maximum Data Transfer Size
-    uint16_t cntlid;               // Controller ID
-    uint32_t ver;                  // Version
-    uint32_t rtd3r;                // RTD3 Resume Latency
-    uint32_t rtd3e;                // RTD3 Entry Latency
-    uint32_t oaes;                 // Optional Asynchronous Events Supported
-    uint32_t ctratt;               // Controller Attributes
-    uint8_t reserved[156];         // Reserved
-    uint8_t reserved2[1344];       // Reserved
-    uint8_t oacs;                  // Optional Admin Command Support
-    // Add additional fields as needed based on the specification
+    uint16_t vid;                    // Vendor ID
+    uint16_t ssvid;                  // Subsystem Vendor ID
+    char sn[20];                     // Serial Number (ASCII string, not null-terminated)
+    char mn[40];                     // Model Number (ASCII string, not null-terminated)
+    char fr[8];                      // Firmware Revision (ASCII string, not null-terminated)
+    uint8_t rab;                     // Recommended Arbitration Burst
+    uint8_t ieee[3];                 // IEEE OUI Identifier
+    uint8_t cmic;                    // Controller Multi-Path I/O and Namespace Sharing Capabilities
+    uint8_t mdts;                    // Maximum Data Transfer Size
+    uint16_t cntlid;                 // Controller ID
+    uint32_t ver;                    // Version
+    uint32_t rtd3r;                  // RTD3 Resume Latency
+    uint32_t rtd3e;                  // RTD3 Entry Latency
+    uint32_t oaes;                   // Optional Asynchronous Events Supported
+    uint32_t ctratt;                 // Controller Attributes
+    uint8_t reserved1[156];          // Reserved
+    uint16_t num_submission_queues;  // Number of Submission Queues (at 0x12A)
+    uint16_t num_completion_queues;  // Number of Completion Queues (at 0x12C)
+    uint16_t sqes;                   // Submission Queue Entry Size
+    uint16_t cqes;                   // Completion Queue Entry Size
+    uint32_t nn;                     // Number of Namespaces
+    uint32_t oncs;                   // Optional NVM Command Support
+    uint32_t fuses;                  // Fused Operation Support
+    uint8_t vwc;                     // Volatile Write Cache
+    uint8_t reserved2[1783];         // Adjust for alignment
 } nvme_identify_controller_t;
+
+
 
 void init_NVME();
 size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count);

@@ -9,6 +9,7 @@
 #include "paging.h"
 #include "strcpy.h"
 #include "printd.h"
+#include "pci_lookup.h"
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 extern volatile struct limine_memmap_request memmap_request;
@@ -16,10 +17,13 @@ extern volatile struct limine_kernel_address_request kernel_address_request;
 extern volatile struct limine_hhdm_request hhmd_request;
 extern volatile struct limine_module_request module_request;
 extern volatile struct limine_smp_request smp_request;
+extern volatile struct limine_rsdp_request rsdp_request;
 extern struct limine_smp_response *kLimineSMPInfo;
 extern volatile struct limine_kernel_file_request kernel_file_request;
 extern uint64_t kHHDMOffset;
 extern char kKernelCommandline[];
+extern pci_device_id_t *kPCIIdsData;
+extern uint32_t kPCIIdsCount;
 
 struct limine_memmap_response *memmap_response;
 struct limine_hhdm_response *hhmd_response;
@@ -27,9 +31,10 @@ struct limine_framebuffer_response *framebuffer_response;
 struct limine_module_response *limine_module_response;
 struct limine_framebuffer *framebuffer;
 struct limine_kernel_file_response *kernelFileResponse;
-
+struct limine_rsdp_response *rsdp_response;
 char kernel_stack[0x1000*64] __attribute__((aligned(16)));
-
+uintptr_t kLimineRSDP = 0;
+uint64_t kLimineRSDPVersion = 0;
 
 __attribute__((used, section(".limine_requests")))
 volatile LIMINE_BASE_REVISION(3);
@@ -128,8 +133,13 @@ void limine_boot_entry_point(void) {
 	limine_module_response = module_request.response;
 	kLimineSMPInfo = smp_request.response;
 	kernelFileResponse = kernel_file_request.response;
+	kLimineRSDP = (uintptr_t)rsdp_request.response->address;
+	kLimineRSDPVersion = rsdp_request.response->revision;
+	rsdp_response = rsdp_request.response;
 	strncpy(kKernelCommandline, kernelFileResponse->kernel_file->cmdline, 512);
-
+	struct limine_file* pciIdsFile = getFile(module_request.response, "pci_devices.bin");
+	kPCIIdsCount = pciIdsFile->size/sizeof(pci_device_id_t);
+	kPCIIdsData = (pci_device_id_t*)pciIdsFile->address;
 	int limine_response_status = verify_limine_responses(memmap_response, hhmd_response, framebuffer_response, limine_module_response, kLimineSMPInfo);
 
 	if (limine_response_status != 0)

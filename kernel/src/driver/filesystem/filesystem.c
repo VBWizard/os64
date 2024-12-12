@@ -38,9 +38,9 @@ void detect_partition_filesystem_type(block_device_info_t* device, int partNumbe
 	kfree(fsbuffer);
 
 	if (device->block_device->partition_table->parts[partNumber]->filesystemType == FILESYSTEM_TYPE_UNDEFINED)
-		printd(DEBUG_BOOT, "BOOT: Could not detect filesystem for device %s, partition %u\n", device->block_device->name, partNumber);
+		printd(DEBUG_EXCEPTIONS, "BOOT: Could not detect filesystem for device %s, partition %u\n", device->block_device->name, partNumber);
 	else
-		printd(DEBUG_BOOT, "BOOT: Detected filesystem type for device %s, partition %u is %s\n",
+		printd(DEBUG_HARDDRIVE, "BOOT: Detected filesystem type for device %s, partition %u is %s\n",
 				device->block_device->name, partNumber, 
 				fsType);
 }

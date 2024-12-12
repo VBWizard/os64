@@ -49,8 +49,6 @@ void kernel_init()
 	acpiFindTables();
 	if (kPCIBaseAddress)
 	{
-		printd(DEBUG_BOOT, "HH identity mapping PCI base physical address 0x%016x for 10,000 pages\n", kPCIBaseAddress);
-		paging_map_pages((pt_entry_t*)kKernelPML4v, kHHDMOffset | kPCIBaseAddress, kPCIBaseAddress, 0x5000, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
 		kPCIBaseAddress = kHHDMOffset | kPCIBaseAddress;
 	}
 
@@ -85,22 +83,13 @@ void kernel_init()
 	x = kmalloc(256);
 	strncpy(x, "This is test 3", 20);
 
-	file_operations_t* fileOps;
+	file_operations_t fileOps;
 	for (int idx=0;idx<kBlockDeviceInfoCount;idx++)
 	{
 		if (kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_SATA_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_NVME_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_HD)
 		{
 			kBlockDeviceInfo[idx].block_device->partTableType = detect_partition_table_type(&kBlockDeviceInfo[idx]);
 			read_block_partitions(&kBlockDeviceInfo[idx]);
-/*			fileOps = kmalloc(sizeof(file_operations_t));
-			fileOps->initialize = &ext2_initialize_filesystem;
-			if (idx==0)
-				kRegisterBlockDevice("/", &kBlockDeviceInfo[idx], 0, fileOps);
-			else
-			{
-				kRegisterBlockDevice("/", &kBlockDeviceInfo[idx], 0, fileOps);
-			}
-*/
 /*			switch (kBlockDeviceInfo[cnt].ATADeviceType)
 			{
 				case ATA_DEVICE_TYPE_SATA_HD:
@@ -112,7 +101,18 @@ void kernel_init()
 */		}
 	}
 
- 
+	for (int cnt=0;cnt<kBlockDeviceInfoCount;cnt++)
+		for (int part=0;part<kBlockDeviceInfo[cnt].block_device->part_count;part++)
+			if (kBlockDeviceInfo[cnt].block_device->partition_table->parts[cnt]->filesystemType == FILESYSTEM_TYPE_EXT2)
+			{
+				fileOps.initialize = &ext2_initialize_filesystem;
+				vfs_block_device_t* t = kRegisterBlockDevice("/", &kBlockDeviceInfo[cnt], cnt, &fileOps);
+				t->fops->initialize(&kBlockDeviceInfo[cnt]);
+				
+
+			}
+
+
 
     // We're done, just hang...
   
@@ -129,7 +129,7 @@ void kernel_init()
 	while (true)
 	{
 		strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
-		moveto(&kRenderer, 60,0);
+		moveto(&kRenderer, 80,0);
 		printf("%s",startTime);
 		asm("sti\nhlt\n");
 	}
@@ -137,9 +137,15 @@ void kernel_init()
 
 }
 
+void parse_debug_level(__uint128_t value, uint64_t* high, uint64_t* low)
+{
+    *high = (uint64_t)(value >> 64);
+    *low = (uint64_t)value;
+}
+
 void log_debug_level(__uint128_t value) {
-    uint64_t high = (uint64_t)(value >> 64);
-    uint64_t low = (uint64_t)value;
+	uint64_t high, low;
+	parse_debug_level(value, &high, &low);
     printd(DEBUG_BOOT,"DEBUG_OPTIONS 0x%016lx%016lx\n", high, low);
 }
 
@@ -159,9 +165,12 @@ void kernel_main()
 #endif
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
 	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
-	log_debug_level(kDebugLevel);
 	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
 	printf(	"***** OS64 - system booting at %s *****\n", startTime);
+	uint64_t high, low;
+	parse_debug_level(kDebugLevel, &high, &low);
+	printf("Commandline: %s (debug level 0x%016lx%016lx)\n",kKernelCommandline, high, low);
+	log_debug_level(kDebugLevel);
 	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");

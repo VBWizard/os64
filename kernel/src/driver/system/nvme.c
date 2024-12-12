@@ -242,6 +242,23 @@ void nvme_ring_doorbell(nvme_controller_t* controller, uint16_t queueID, bool is
     }
 }
 
+uint8_t get_and_update_phase_bit(uint64_t* expected_phases, uint32_t index) {
+    // Calculate the bit position within the uint64_t
+    uint32_t bit_position = index % NUM_BITS;
+
+    // Retrieve the current value of the bit
+    uint8_t current_phase = (*expected_phases & (1ULL << bit_position)) >> bit_position;
+
+    // Invert the phase value (1 for 0, 0 for 1) - this is the new current value
+    uint8_t inverted_phase = !current_phase;
+
+    // Save the new value back to the bit
+    *expected_phases ^= (1ULL << bit_position);
+
+    // Return the inverted phase value
+    return inverted_phase;
+}
+
 /// @brief Submit NVME command
 /// @param controller 
 /// @param cmd 
@@ -280,6 +297,42 @@ __asm__ volatile ("sfence" ::: "memory"); // Ensure memory writes are visible
 
     // Ring the doorbell to inform controller
     nvme_ring_doorbell(controller, isAdminQueue ? 0 : 1, true, *tailIndexPtr);
+}
+
+/// @brief Wait for an admin or command queue entry to reflect completion (updates current phase, panics on timeout, ignores completion errors)
+/// @param controller 
+/// @param adminQueue 
+/// @param entry 
+/// @param cid 
+/// @param entryIndex 
+void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, volatile nvme_completion_queue_entry_t* entry, nvme_submission_queue_entry_t* command)
+{
+	uint32_t elapsed = 0;
+	uint32_t delay = 10;
+	int expectedPhase = 0;
+
+	if (adminQueue)
+		expectedPhase = get_and_update_phase_bit(&controller->admCompCurrentPhases, controller->admCompQueueHeadIndex);
+	else
+		expectedPhase = get_and_update_phase_bit(&controller->cmdCompCurrentPhases, controller->cmdCompQueueHeadIndex);
+
+	while ((entry->cid != command->cid || entry->status.phase_tag != expectedPhase) && elapsed < controller->defaultTimeout)
+	{
+		wait(delay);
+		elapsed+=delay;
+	}
+	
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+						entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
+	
+	if (elapsed >= controller->defaultTimeout)
+	{
+		log_nvme_debug_info(controller, command, entry, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, adminQueue?0:1);
+		panic("Timeout (%u seconds) waiting for command completion\n", controller->defaultTimeout);
+	}
+	if (elapsed > 0)
+		printd(DEBUG_NVME | DEBUG_DETAILED, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+							entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
 }
 
 void nvme_init_admin_queues(nvme_controller_t* controller)
@@ -376,59 +429,6 @@ printf("10)\n");
     printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Admin queues initialized successfully\n");
 }
 
-uint8_t get_and_update_phase_bit(uint64_t* expected_phases, uint32_t index) {
-    // Calculate the bit position within the uint64_t
-    uint32_t bit_position = index % NUM_BITS;
-
-    // Retrieve the current value of the bit
-    uint8_t current_phase = (*expected_phases & (1ULL << bit_position)) >> bit_position;
-
-    // Invert the phase value (1 for 0, 0 for 1) - this is the new current value
-    uint8_t inverted_phase = !current_phase;
-
-    // Save the new value back to the bit
-    *expected_phases ^= (1ULL << bit_position);
-
-    // Return the inverted phase value
-    return inverted_phase;
-}
-
-/// @brief Wait for an admin or command queue entry to reflect completion (updates current phase, panics on timeout, ignores completion errors)
-/// @param controller 
-/// @param adminQueue 
-/// @param entry 
-/// @param cid 
-/// @param entryIndex 
-void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, volatile nvme_completion_queue_entry_t* entry, nvme_submission_queue_entry_t* command)
-{
-	uint32_t elapsed = 0;
-	uint32_t delay = 10;
-	int expectedPhase = 0;
-
-	if (adminQueue)
-		expectedPhase = get_and_update_phase_bit(&controller->admCompCurrentPhases, controller->admCompQueueHeadIndex);
-	else
-		expectedPhase = get_and_update_phase_bit(&controller->cmdCompCurrentPhases, controller->cmdCompQueueHeadIndex);
-
-	while ((entry->cid != command->cid || entry->status.phase_tag != expectedPhase) && elapsed < controller->defaultTimeout)
-	{
-		wait(delay);
-		elapsed+=delay;
-	}
-	
-	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
-						entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
-	
-	if (elapsed >= controller->defaultTimeout)
-	{
-		log_nvme_debug_info(controller, command, entry, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, adminQueue?0:1);
-		panic("Timeout (%u seconds) waiting for command completion\n", controller->defaultTimeout);
-	}
-	if (elapsed > 0)
-		printd(DEBUG_NVME | DEBUG_DETAILED, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
-							entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
-}
-
 void nvme_init_cmd_queues(nvme_controller_t* controller)
 {
    nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
@@ -439,7 +439,7 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
     cmd->cid = controller->adminCID++;
 	uint32_t mallocSize = sizeof(nvme_completion_queue_entry_t) * controller->queueDepth;
     cmd->prp1 = (uintptr_t)kmalloc_dma(mallocSize);         // Physical address of CQ buffer
-    cmd->cdw10 = 0x0000001 | ((controller->queueDepth - 1)<<16); // CQ ID = 1, Queue Size = QUEUE_DEPTH - 1
+    cmd->cdw10 = controller->cmdQID | ((controller->queueDepth - 1)<<16); // CQ ID = 1, Queue Size = QUEUE_DEPTH - 1
     cmd->cdw11 = 0x1;                 // Interrupts disabled, Physically Contiguous
     // Submit command to Admin SQ
     submit_command(controller, cmd, true);
@@ -707,6 +707,7 @@ void nvme_identify(nvme_controller_t* controller)
 	//Identify Controller Data Structure:
 	// leave command->prp1 as it was, we can re-use it
 	command->nsid=0x0;
+	command->cid = controller->adminCID++;
 	command->cdw10 = 1; // Identify Controller Data Structure
 	submit_command(controller, command, true);
 
@@ -925,6 +926,7 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	controller->registers = (volatile nvme_controller_regs_t*)controller->mmioAddress;
 	controller->mmioSize = bar0_size;
 	controller->adminCID = controller->cmdCID = 0;
+	controller->cmdQID = 1;
 
 	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Updating paging for MMIO Base Address, identity mapped at 0x%016lx\n", controller->mmioAddress);
 	paging_map_pages((pt_entry_t*)kKernelPML4v, controller->mmioAddress, controller->mmioAddress, bar0_size / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
@@ -936,7 +938,6 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	nvme_identify(controller);
 	nvme_set_features(controller);
 	nvme_init_cmd_queues(controller);
-
 	printd(DEBUG_NVME,"Performing a test read ... \n");
 	printd(DEBUG_NVME | DEBUG_DETAILED, "Initializing a buffer of 0x%08x bytes for the test read\n");
 	char* buffer = kmalloc(controller->blockSize);

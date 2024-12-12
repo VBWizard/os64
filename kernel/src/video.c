@@ -3,6 +3,7 @@
 #include "video.h"
 #include "strings/sprintf.h"
 #include "memset.h"
+#include "limine_os64.h"
 
 extern volatile bool kFBInitDone;
 
@@ -23,52 +24,6 @@ static void hcf(void) {
         asm ("idle 0");
 #endif
     }
-}
-
-bool checkStringEndsWith(const char* str, const char* end)
-{
-    const char* _str = str;
-    const char* _end = end;
-
-    while(*str != 0)
-        str++;
-    str--;
-
-    while(*end != 0)
-        end++;
-    end--;
-
-    while (true)
-    {
-        if (*str != *end)
-            return false;
-
-        str--;
-        end--;
-
-        if (end == _end || (str == _str && end == _end))
-            return true;
-
-        if (str == _str)
-            return false;
-    }
-}
-
-struct limine_file* getFile(struct limine_module_response *module_response, const char* name)
-{
-    if (module_response == NULL)
-    {
-        hcf();
-    }
-
-    for (size_t i = 0; i < module_response->module_count; i++) 
-    {
-        struct limine_file *f = module_response->modules[i];
-        if (checkStringEndsWith(f->path, name))
-            return f;
-    }
-    
-    return NULL;
 }
 
 void init_video(struct limine_framebuffer *framebuffer, struct limine_module_response *module_response)

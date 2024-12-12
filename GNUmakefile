@@ -15,7 +15,7 @@ QEMU_BASE_FLAGS = -m 8g -smp 2 -no-reboot \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
                   -d $(shell echo int,cpu_reset,pcall,guest_errors)
-
+				  
 # Define drive/device flags
 QEMU_DRIVE_FLAGS = \
                   -drive file=/home/yogi/disk_images/nvme.img,if=none,id=nvme1 \
@@ -43,22 +43,30 @@ all-hdd: $(IMAGE_NAME).hdd
 .PHONY: run
 run: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-M q35 \
+		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS)
 
 debug: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-M q35 \
+		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
+		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
+
+.PHONY: debug-hdd-eufi
+debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd
+	qemu-system-x86_64 \
+		-machine q35 \
+		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
+		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
 
 .PHONY: run-uefi
 run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-M q35 \
+		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
@@ -67,14 +75,14 @@ run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso
 .PHONY: run-hdd
 run-hdd: $(IMAGE_NAME).hdd
 	qemu-system-x86_64 \
-		-M q35 \
+		-machine q35 \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
 run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd
 	qemu-system-x86_64 \
-		-M q35 \
+		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
@@ -118,22 +126,34 @@ $(IMAGE_NAME).iso: limine/limine kernel
 	@cp -v os64_kernel.iso /mnt/c/temp
 
 $(IMAGE_NAME).hdd: limine/limine kernel
-	@rm -f $(IMAGE_NAME).hdd
-	@dd if=/dev/zero bs=1M count=0 seek=64 of=$(IMAGE_NAME).hdd
-	@sgdisk $(IMAGE_NAME).hdd -n 1:2048 -t 1:ef00
-	@./limine/limine bios-install $(IMAGE_NAME).hdd
-	@mformat -i $(IMAGE_NAME).hdd@@1M
-	@mmd -i $(IMAGE_NAME).hdd@@1M ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
-	@mcopy -i $(IMAGE_NAME).hdd@@1M kernel/bin/os64_kernel ::/boot
-	@mcopy -i $(IMAGE_NAME).hdd@@1M limine.conf limine/limine-bios.sys ::/boot/limine
-	@mcopy -i $(IMAGE_NAME).hdd@@1M limine/BOOTX64.EFI ::/EFI/BOOT
-	@mcopy -i $(IMAGE_NAME).hdd@@1M limine/BOOTIA32.EFI ::/EFI/BOOT
-	@mcopy -i $(IMAGE_NAME).hdd@@1M external/test.txt ::/boot
+#	@rm -f $(IMAGE_NAME).hdd
+#	@dd if=/dev/zero bs=1M count=0 seek=1024 of=$(IMAGE_NAME).hdd
+#	# Create the EFI partition
+#	@sgdisk $(IMAGE_NAME).hdd --new=1:2048:+64M --typecode=1:EF00 --change-name=1:"EFI System Partition"
+#	# Create the second partition (480 MB)
+#	@sgdisk $(IMAGE_NAME).hdd --new=2:133120:+480M --typecode=2:8300 --change-name=2:"ext2_part"
+#	# Create the third partition (480 MB)
+#	@sgdisk $(IMAGE_NAME).hdd  --new=3:1116160:+400M --typecode=3:0700 --change-name=3:"win_part"
+#	sudo losetup /dev/loop2 -P $(IMAGE_NAME).hdd
+#	sudo mkfs.fat -F32 /dev/loop2p2
+#	sudo mkfs.ext2 /dev/loop2p3
+#	sudo losetup -d /dev/loop2
+#	@./limine/limine bios-install $(IMAGE_NAME).hdd
+#	@mformat -i $(IMAGE_NAME).hdd@@1048576 ::
+#	# Create directories on the EFI partition
+#	@mmd -i $(IMAGE_NAME).hdd@@1048576 ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
+	# Copy bootloader and kernel files to the EFI partition
+	@mcopy -i $(IMAGE_NAME).hdd@@1048576 kernel/bin/os64_kernel ::/boot
+#	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine.conf limine/limine-bios.sys ::/boot/limine
+#	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTX64.EFI ::/EFI/BOOT
+#	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/BOOTIA32.EFI ::/EFI/BOOT
+#	@mcopy -i $(IMAGE_NAME).hdd@@1048576 limine/limine-bios.sys  ::/EFI/BOOT
+#	@mcopy -i $(IMAGE_NAME).hdd@@1M external/* ::/boot
 
 .PHONY: clean
 clean:
 	$(MAKE) -C kernel clean
-	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd
+#	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd
 
 .PHONY: distclean
 distclean: clean
