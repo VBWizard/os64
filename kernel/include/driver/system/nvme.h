@@ -260,8 +260,9 @@ typedef struct {
 	uint16_t cmdCID;
 	uint32_t blockSize;
 	char deviceName[40];
-	uint32_t maxBytesPerPRP;
+	uint32_t maxBytesPerTransfer;
 	uint32_t cmdQID;
+	char* dmaReadBuffer, *dmaWriteBuffer;
  } nvme_controller_t;
 
 #include <stdint.h>

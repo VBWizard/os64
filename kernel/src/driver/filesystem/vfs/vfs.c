@@ -1,11 +1,12 @@
+#include "vfs.h"
 #include "driver/filesystem/vfs/vfs.h"
 #include "kmalloc.h"
 #include "memcpy.h"
 #include "memset.h"
 #include "strings/strings.h"
 #include "panic.h"
-#include "vfs.h"
-#include "ext2.h"
+#include "ext2_fs.h"
+#include "ext2_vfs.h"
 
 vfs_block_device_t* kRegisterBlockDevice(char *mountPoint, block_device_info_t *device, int partNo, file_operations_t* fileOps)
 {
@@ -39,13 +40,15 @@ vfs_block_device_t* kRegisterBlockDevice(char *mountPoint, block_device_info_t *
     fs->dirs = kmalloc(sizeof(vfs_directory_t*)*VFS_MAX_OPEN_DIRS);
     fs->vfsWriteBuffer = NULL;
     fs->vfsReadBuffer = NULL;
-	if (fs->fops->initialize != NULL)
-		fs->fops->initialize(device);
+	fs->block_device_info = device;
+	// if (fs->fops->initialize != NULL)
+	// 	fs->fops->initialize(device);
     return fs;
 }
 
-int ext2_initialize_filesystem(block_device_info_t* device)
+int ext2_initialize_filesystem(vfs_block_device_t* device)
 {
-	ext2_get_superblock(device->block_device);
+	ext2_get_superblock(device);
+	
 	return 0;
 }

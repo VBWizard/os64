@@ -1,8 +1,8 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-//#define DISK_WRITING_ENABLED
 #define ENABLE_COM1
+//#define DISK_WRITING_ENABLED
 //#define ENABLE_DOUBLE_BUFFER
 //  Timing related configuration
 #define TICKS_PER_SECOND 100
@@ -19,6 +19,10 @@
 
 // Framebuffer related
 #define FRAMEBUFFER_FONT "zap-ext-light16.psf"
+
+// Linux defines so we have access to some header values that aren't accessible otherwise
+#define __KERNEL__
+#define __USE_MISC
 
 // Debugging related configuration
 #define DEBUG_EVERYTHING 0xFFFFFFFFFFFFFFFF
@@ -37,9 +41,11 @@
 #define DEBUG_ALLOCATOR (__uint128_t)1 << 10
 #define DEBUG_KMALLOC (__uint128_t)1 << 10
 #define DEBUG_NVME (__uint128_t)1 << 12
+#define DEBUG_VFS (__uint128_t)1 << 13
+
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED  (__uint128_t)1 << 127
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT)
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_HARDDRIVE | DEBUG_MEMMAP | DEBUG_ALLOCATOR)
 //#define DEBUG_OPTIONS (DEBUG_EXCEPTIONS | DEBUG_BOOT)
 
 #endif // CONFIG_H

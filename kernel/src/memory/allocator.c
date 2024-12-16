@@ -160,7 +160,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		retVal = use_address?requested_address:aligned_start;
 
 	}
-	printd(DEBUG_PAGING, "allocate_memory_at_address_internal: Allocated 0x%08x bytes at phys address 0x%08x (%s - %s)\n", aligned_length, use_address?requested_address:aligned_start,
+	printd(DEBUG_ALLOCATOR, "allocate_memory_at_address_internal: Allocated 0x%08x bytes at phys address 0x%08x (%s - %s)\n", aligned_length, use_address?requested_address:aligned_start,
 			use_address?"requested address":"",page_aligned?"aligned":"");
 	return retVal;
 }

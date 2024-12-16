@@ -75,7 +75,9 @@ bool parseGPT(block_device_info_t* device)
 				memcpy(&device->block_device->partition_table->parts[cnt]->partTypeGUID, &gptPart[cnt].partTypeGUID, UUID_LENGTH);
 				memcpy(&device->block_device->partition_table->parts[cnt]->uniquePartGUID, &gptPart[cnt].uniquePartGUID, UUID_LENGTH);
 				utf16_to_char_string((char*)&device->block_device->partition_table->parts[cnt]->partName, (uint16_t*)&gptPart[cnt].partName, 36, 72);
+				device->block_device->partition_table->parts[cnt]->block_device_info = device;
 				device->block_device->part_count++;
+				device->block_device->partition_table->partCount++;
 			}
 		}
     }

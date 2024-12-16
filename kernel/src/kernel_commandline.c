@@ -84,17 +84,17 @@ void process_kernel_commandline(char* cmdline)
 	}
 	if (strnstr(cmdline,"DEBUG_ALLOCATOR",512) != NULL)
 	{
-		kDebugLevel |= DEBUG_BOOT;
+		kDebugLevel |= DEBUG_ALLOCATOR;
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter DEBUG_ALLOCATOR passed, memory allocator logging will be done\n");
 	}
 	if (strnstr(cmdline,"DEBUG_KMALLOC",512) != NULL)
 	{
-		kDebugLevel |= DEBUG_BOOT;
+		kDebugLevel |= DEBUG_KMALLOC;
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter DEBUG_KMALLOC passed, kernel memory allocation logging will be done\n");
 	}
 	if (strnstr(cmdline,"DEBUG_NVME",512) != NULL)
 	{
-		kDebugLevel |= DEBUG_BOOT;
+		kDebugLevel |= DEBUG_NVME;
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter DEBUG_NVME passed, NVME logging will be done\n");
 	}
 

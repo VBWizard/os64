@@ -103,16 +103,16 @@ void kernel_init()
 
 	for (int cnt=0;cnt<kBlockDeviceInfoCount;cnt++)
 		for (int part=0;part<kBlockDeviceInfo[cnt].block_device->part_count;part++)
-			if (kBlockDeviceInfo[cnt].block_device->partition_table->parts[cnt]->filesystemType == FILESYSTEM_TYPE_EXT2)
+			if (kBlockDeviceInfo[cnt].block_device->partition_table->parts[part]->filesystemType == FILESYSTEM_TYPE_EXT2)
 			{
 				fileOps.initialize = &ext2_initialize_filesystem;
-				vfs_block_device_t* t = kRegisterBlockDevice("/", &kBlockDeviceInfo[cnt], cnt, &fileOps);
-				t->fops->initialize(&kBlockDeviceInfo[cnt]);
+				vfs_block_device_t* t = kRegisterBlockDevice("/", &kBlockDeviceInfo[cnt], part, &fileOps);
+				t->fops->initialize(t);
 				
 
 			}
 
-
+	uint64_t addr = paging_walk_paging_table((pt_entry_t*)kKernelPML4v, 0x200000);
 
     // We're done, just hang...
   

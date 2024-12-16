@@ -25,13 +25,13 @@ char* nvmeIdentifyInfo;
 
 void log_nvme_debug_info(
     volatile nvme_controller_t* controller,         // Base NVMe registers address
-    volatile nvme_submission_queue_entry_t* submission_queue, // Submission Queue pointer
-    volatile nvme_completion_queue_entry_t* completion_queue, // Completion Queue pointer
+	bool admin,
     uint32_t sq_tail,                          // Submission Queue Tail index
     uint32_t cq_head,                          // Completion Queue Head index
     uint32_t queue_size,                        // Queue size
 	uint32_t queueID
 ) {
+	__asm__ volatile("sfence" ::: "memory");
     printd(DEBUG_EXCEPTIONS, "=== NVMe Debug Information ===\n");
 
 	int a = queue_size;
@@ -46,8 +46,8 @@ void log_nvme_debug_info(
     // Submission Queue State
     printd(DEBUG_EXCEPTIONS, "Submission Queue Tail: %u\n", sq_tail);
     printd(DEBUG_EXCEPTIONS, "Submission Queue Entries:\n");
-    for (uint32_t i = 0; i < 10; i++) {
-        const nvme_submission_queue_entry_t* cmd = (void*)&submission_queue[i];
+    for (uint32_t i = (sq_tail - 5) % controller->maxQueueEntries; i < (sq_tail + 5) % controller->maxQueueEntries; i++) {
+        const nvme_submission_queue_entry_t* cmd = (admin?(void*)&controller->admSubQueue[i]:(void*)&controller->cmdSubQueue[i]);
         printd(DEBUG_EXCEPTIONS, "%u: OPC=0x%02X CID=%u NSID=0x%X CDW10=0x%08X CWD11=0x%08x CWD12=0x%08x PRP1=0x%016lx\n",
                i, cmd->opc, cmd->cid, cmd->nsid, cmd->cdw10, cmd->cdw11, cmd->cdw12, cmd->prp1);
     }
@@ -55,8 +55,8 @@ void log_nvme_debug_info(
     // Completion Queue State
     printd(DEBUG_EXCEPTIONS, "Completion Queue Head: %u\n", cq_head);
     printd(DEBUG_EXCEPTIONS, "Completion Queue Entries:\n");
-    for (uint32_t i = 0; i < 10; i++) {
-        const nvme_completion_queue_entry_t* entry = (void*)&completion_queue[i];
+    for (uint32_t i = (cq_head - 5) % controller->maxQueueEntries; i < (cq_head + 5) % controller->maxQueueEntries; i++) {
+        const nvme_completion_queue_entry_t* entry = (admin?(void*)&controller->admCompQueue[i]:(void*)&controller->cmdCompQueue[i]);
         printd(DEBUG_EXCEPTIONS, "  [%u]: SQHD=%u CID=%u Status=0x%04X\n",
                i, entry->sqhd, entry->cid, entry->status);
     }
@@ -263,10 +263,10 @@ uint8_t get_and_update_phase_bit(uint64_t* expected_phases, uint32_t index) {
 /// @param controller 
 /// @param cmd 
 /// @param isAdminQueue 
-void submit_command(nvme_controller_t* controller, nvme_submission_queue_entry_t* cmd, bool isAdminQueue) {
+void nvme_submit_command(nvme_controller_t* controller, nvme_submission_queue_entry_t* cmd, bool isAdminQueue) {
 
-	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: submit_command: opc=0x%04x, nsid=0x%08x, cid=0x%08x, prp1=%p, cwd10=0x%08x, cwd11=0x%08x\n",
-		cmd->opc, cmd->nsid, cmd->cid, cmd->prp1, cmd->cdw10, cmd->cdw11);
+	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: submit_command: opc=0x%04x,nsid=0x%04x,cid=0x%04x,prp1=%p,prp2=%p,cwd10=0x%08x,cwd11=0x%08x,cdw12=0x%08x\n",
+		cmd->opc, cmd->nsid, cmd->cid, cmd->prp1, cmd->prp2, cmd->cdw10, cmd->cdw11, cmd->cdw12);
 
     // Add command to the submission queue
     nvme_submission_queue_entry_t* subQueue;
@@ -316,18 +316,18 @@ void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, vo
 	else
 		expectedPhase = get_and_update_phase_bit(&controller->cmdCompCurrentPhases, controller->cmdCompQueueHeadIndex);
 
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, expectedPhase = %u, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+						entry->cid, expectedPhase, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
+	
 	while ((entry->cid != command->cid || entry->status.phase_tag != expectedPhase) && elapsed < controller->defaultTimeout)
 	{
 		wait(delay);
 		elapsed+=delay;
 	}
 	
-	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
-						entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
-	
 	if (elapsed >= controller->defaultTimeout)
 	{
-		log_nvme_debug_info(controller, command, entry, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, adminQueue?0:1);
+		log_nvme_debug_info(controller, adminQueue, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, adminQueue?0:1);
 		panic("Timeout (%u seconds) waiting for command completion\n", controller->defaultTimeout);
 	}
 	if (elapsed > 0)
@@ -442,13 +442,13 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
     cmd->cdw10 = controller->cmdQID | ((controller->queueDepth - 1)<<16); // CQ ID = 1, Queue Size = QUEUE_DEPTH - 1
     cmd->cdw11 = 0x1;                 // Interrupts disabled, Physically Contiguous
     // Submit command to Admin SQ
-    submit_command(controller, cmd, true);
+    nvme_submit_command(controller, cmd, true);
 	nvme_completion_queue_entry_t* completionEntry = &controller->admCompQueue[controller->admCompQueueHeadIndex];
 	nvme_wait_for_completion(controller, true, completionEntry, cmd);
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 	if (completionEntry->status.status_code != 0 || completionEntry->status.status_code_type != 0)
 	{
-		log_nvme_debug_info(controller, cmd, completionEntry, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
+		log_nvme_debug_info(controller, true, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
 		panic("Queue completion status != 0!!! (0x%08x\n",completionEntry->status.status_code);
 	}
 	
@@ -465,13 +465,13 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
     cmd->cdw10 = ((controller->queueDepth - 1) << 16) | 1; //Queue Size = QUEUE_DEPTH - 1,  SQ ID = 1
     cmd->cdw11 = 0x00010001;          // Priority = 0 (high), PC=1
 
-    submit_command(controller, cmd, true);
+    nvme_submit_command(controller, cmd, true);
 
 	completionEntry = &controller->admCompQueue[controller->admCompQueueHeadIndex];
 	nvme_wait_for_completion(controller, true, completionEntry, cmd);
 	if (completionEntry->status.status_code != 0 || completionEntry->status.status_code_type != 0)
 	{
-		log_nvme_debug_info(controller, cmd, completionEntry, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
+		log_nvme_debug_info(controller, true, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
 		panic("Admin completion status != 0!!! (0x%08x\n",completionEntry->status.status_code);
 	}
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
@@ -599,7 +599,7 @@ void nvme_set_features(nvme_controller_t* controller)
 	command->cdw10 = 0x07; // Feature Identifier: Number of Queue
 	// Request 4 Submission Queues and 4 Completion Queues
 	command->cdw11 = ((4 - 1) << 16) | (4 - 1);
-	submit_command(controller, command, true);
+	nvme_submit_command(controller, command, true);
 	// Wait for completion
 	nvme_completion_queue_entry_t* completion = &controller->admCompQueue[controller->admCompQueueHeadIndex];
 	nvme_wait_for_completion(controller, true, completion, command);
@@ -652,7 +652,7 @@ void nvme_identify(nvme_controller_t* controller)
 	command->prp1 = (uintptr_t)nvmeIdentifyInfo;
 	command->cid = controller->adminCID++;
 	command->cdw10 = 2; // number of namespaces
-	submit_command(controller, command, true);
+	nvme_submit_command(controller, command, true);
 
 	nvme_completion_queue_entry_t* completionEntry = &controller->admCompQueue[controller->admCompQueueHeadIndex];
 	
@@ -661,7 +661,7 @@ void nvme_identify(nvme_controller_t* controller)
 
 	if (completionEntry->status.status_code != 0)
 	{
-		log_nvme_debug_info(controller, command, completionEntry, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
+		log_nvme_debug_info(controller, true, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
 		panic("Admin completion status != 0!!! (0x%08x\n",completionEntry->status.status_code);
 	}
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
@@ -676,14 +676,14 @@ void nvme_identify(nvme_controller_t* controller)
 	command->prp1 = (uintptr_t)buffer;
 	command->cid = controller->adminCID++;
 	command->cdw10 = 0; // Identify Namespace Data Structure
-	submit_command(controller, command, true);
+	nvme_submit_command(controller, command, true);
 
 	// Wait for completion
 	completionEntry = &controller->admCompQueue[controller->admCompQueueHeadIndex];
 	nvme_wait_for_completion(controller, true, completionEntry,  command);
 	if (completionEntry->status.status_code != 0)
 	{
-		log_nvme_debug_info(controller, command, completionEntry, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
+		log_nvme_debug_info(controller, true, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
 		panic("Admin completion status != 0!!! (0x%08x\n",completionEntry->status);
 	}
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
@@ -709,22 +709,26 @@ void nvme_identify(nvme_controller_t* controller)
 	command->nsid=0x0;
 	command->cid = controller->adminCID++;
 	command->cdw10 = 1; // Identify Controller Data Structure
-	submit_command(controller, command, true);
+	nvme_submit_command(controller, command, true);
 
 	// Wait for completion
 	completionEntry = &controller->admCompQueue[controller->admCompQueueHeadIndex];
 	nvme_wait_for_completion(controller, true, completionEntry,  command);
 	if (completionEntry->status.status_code != 0)
 	{
-		log_nvme_debug_info(controller, command, completionEntry, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
+		log_nvme_debug_info(controller, true, controller->admSubQueueTailIndex, controller->admCompQueueHeadIndex, controller->maxQueueEntries, 0);
 		panic("Admin completion status != 0!!! (0x%08x\n",completionEntry->status);
 	}
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 
 	nvme_identify_controller_t* cData = (nvme_identify_controller_t*)command->prp1;
 	nvme_parse_model_name(cData->mn, controller->deviceName);
-	controller->maxBytesPerPRP = calculate_mdts(cData->mdts);
-	printd(DEBUG_NVME, "NVME: Device found, model: %s, max bytes per PRP = %u\n", controller->deviceName, controller->maxBytesPerPRP);
+	controller->maxBytesPerTransfer = calculate_mdts(cData->mdts);
+	printd(DEBUG_NVME, "NVME: Identified max bytes per NVME transfer: 0x%08x bytes", controller->maxBytesPerTransfer);
+	controller->dmaReadBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
+
+	//controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
+	printd(DEBUG_NVME, "NVME: Device found, model: %s, max bytes per PRP = %u\n", controller->deviceName, controller->maxBytesPerTransfer);
 
 	kfree(buffer);
 	kfree(command);
@@ -761,7 +765,7 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 	//Validate the completion result
 	if (completionEntry->status.status_code || completionEntry->status.status_code_type)
 	{
-		log_nvme_debug_info(controller, cmd, completionEntry, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, 1);
+		log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, 1);
 		panic("NVME Write error.  System log contains more information.");
 	}
 	kfree((void*)cmd->prp1);
@@ -781,76 +785,81 @@ uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
 	return (uintptr_t)prpList;	
 }
 
+void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
+    if (controller->maxBytesPerTransfer == 0) {
+        panic("nvme_read_disk: controller->maxBytesPerTransfer = 0\n");
+    }
 
-void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer)
-{
+    size_t remaining = length;
+    uintptr_t userBufferOffset = (uintptr_t)buffer;
+    uint64_t currentLBA = LBA;
+    size_t maxTransferBlocks = controller->maxBytesPerTransfer / controller->blockSize;
 
-	//fixup length
-	uint32_t blockCount = length / controller->blockSize;
+    while (remaining > 0) {
+        // Calculate the size of the current transfer
+        size_t transferLength = remaining > controller->maxBytesPerTransfer ? controller->maxBytesPerTransfer : remaining;
+        uint32_t blockCount = transferLength / controller->blockSize;
+        if (transferLength % controller->blockSize) {
+            blockCount++;
+        }
 
-	if (controller->maxBytesPerPRP==0)
-		panic("nvme_read_disk: controller->maxBytesPerPRP = 0\n");
-	
-	if (length%controller->blockSize)
-		blockCount+=1;
+        // Calculate PRP count for this transfer
+        uint32_t prpCount = transferLength / PAGE_SIZE;
+        if (transferLength % PAGE_SIZE) {
+            prpCount++;
+        }
 
-	//Count of prp's needed to fulfill the request since only 1 page can be retrieved by prp1, and one by prp2
-	//prp2 has to be a list if more than 2 pages are to be transferred
-	uint32_t prpCount = length / PAGE_SIZE; 
-	if (length % PAGE_SIZE)
-		prpCount++;
+        // Allocate the NVMe command
+        nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
 
-	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: read - request is for LBA 0x%016lx, length 0x%016lx to buffer 0x%016lx\n", LBA, length, buffer);
+        // Populate the NVMe read command
+        cmd->opc = NVME_OPCODE_READ;
+        cmd->nsid = controller->nsid;
+        cmd->cid = controller->cmdCID++;
+        cmd->prp1 = (uintptr_t)controller->dmaReadBuffer;
 
-	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: read - PRP count = 0x%08x\n", prpCount);
-	nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
+        if (prpCount == 2) {
+            cmd->prp2 = cmd->prp1 + PAGE_SIZE;
+        } else if (prpCount > 2) {
+            cmd->prp2 = setup_prp_list(cmd->prp1 + PAGE_SIZE, prpCount - 1);
+        }
 
-	
-	if (blockCount > 0xffffffff)
-		panic("NVME: Read request length too large.  Requested length = 0x%016lx which is 0x%016lx blocks.  Max blocks is 0xffffffff", length, blockCount);
+        cmd->cdw10 = currentLBA & 0xffffffff;
+        cmd->cdw11 = currentLBA >> 32;
+        cmd->cdw12 = blockCount - 1; // cdw12 = number of blocks minus 1
 
-	//Populate the NVME command
-	cmd->opc = NVME_OPCODE_READ;
-	cmd->nsid = controller->nsid;
-    cmd->cid = controller->cmdCID++;
-	cmd->prp1 = (uintptr_t)kmalloc_dma(blockCount * controller->blockSize);
-	if (prpCount == 2)
-	{
-		cmd->prp2 = cmd->prp1 + PAGE_SIZE;
-		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: read - Set prp2 to 0x%016lx per prp count of 2\n", cmd->prp2);
-	}
-	else if (prpCount > 2)
-	{
-		cmd->prp2 = setup_prp_list(cmd->prp1 + PAGE_SIZE, prpCount-1);
-		printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: read - Set up prp list at 0x%016lx, submitted as prp2\n", cmd->prp2)	;
-	}
-	cmd->cdw10 = LBA & 0xffffffff;
-	cmd->cdw11 = LBA >> 32;
-	cmd->cdw12 = blockCount;
-	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: read - Submitting read request for 0x%08lx blocks from LBA 0x%016x\n", blockCount, LBA);
-    submit_command(controller, cmd, false);
-	
-	volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
-	nvme_wait_for_completion(controller, false, (volatile nvme_completion_queue_entry_t*)completionEntry, cmd);
 
-	//Validate the completion result
-	if (completionEntry->status.status_code || completionEntry->status.status_code_type)
-	{
-		log_nvme_debug_info(controller, cmd, completionEntry, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, 1);
-		panic("NVME Read error.  System log contains more information.");
-	}
-    nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex++);  //update index to indicate the entries you have consumed
-	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"NVME: read - copying blocks to user's buffer @ 0x%016lx, length=0x%016lx\n", cmd->prp1, length);
-	memcpy(buffer, (void*)cmd->prp1, length);
-	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"NVME: read - freeing prp1\n");
-	kfree((void*)cmd->prp1);
-	if (prpCount > 2)
-	{
-		printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"NVME: read - freeing prp2\n");
-		kfree((void*)cmd->prp2);
-	}
-	kfree(cmd);
-	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"NVME: read - returning\n");
+        printd(DEBUG_NVME | DEBUG_DETAILED, "Submitting NVMe read: LBA=0x%016lx, Blocks=%u, DMA Buffer=0x%016lx\n", currentLBA, blockCount, controller->dmaReadBuffer);
+        nvme_submit_command(controller, cmd, false);
+
+        volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
+		printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: Current completion queue head index = %u\n",controller->cmdCompQueueHeadIndex);
+        nvme_wait_for_completion(controller, false, completionEntry, cmd);
+
+        // Validate the completion result
+        if (completionEntry->status.status_code || completionEntry->status.status_code_type) {
+            log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, 1);
+            panic("NVMe Read error. System log contains more information.");
+        }
+
+        nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);  // Update index for consumed entries
+		controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex+ 1) % controller->queueDepth;
+
+        // Copy the data from the DMA buffer to the user buffer
+        printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data to user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n", (uintptr_t)controller->dmaReadBuffer, userBufferOffset, transferLength);
+        memcpy((void*)userBufferOffset, controller->dmaReadBuffer, transferLength);
+
+        // Free PRPs and command
+        if (prpCount > 2) {
+            kfree((void*)cmd->prp2);
+        }
+        kfree(cmd);
+
+        // Update offsets and remaining data
+        userBufferOffset += transferLength;
+        currentLBA += blockCount;
+        remaining -= transferLength;
+    }
 }
 
 size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count)
@@ -879,6 +888,8 @@ void init_vfs_block_device(nvme_controller_t* controller, enum eATADeviceType de
 	blockDev->ops = bops;
 	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device = blockDev;
 	add_block_device(controller, &kBlockDeviceInfo[kBlockDeviceInfoCount]);
+	kBlockDeviceInfoCount++;
+
 }
 
 
@@ -946,7 +957,6 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	init_vfs_block_device(controller, ATA_DEVICE_TYPE_NVME_HD);
 	kfree(buffer);
 	kNVMEControllerCount++;
-	kBlockDeviceInfoCount++;
 
 
 	// 		uint32_t cmd_status = readPCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, 0x06 & ~0x3); // Align offset

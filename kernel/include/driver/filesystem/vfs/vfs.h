@@ -177,6 +177,7 @@ typedef struct
     uint8_t systemID;
 	char partName[36];
 	e_filesystem_type filesystemType;
+	block_device_info_t* block_device_info;
 } partEntry_t;
 
 struct vfs_partition_table
@@ -204,7 +205,10 @@ struct vfs_block_device
 	int blockSize;
 	int inodes_per_block;
 	int inode_table_blocks;
-	
+	void* super_block;
+	void* block_group_descriptor;
+	void* root_dir_inode;
+	block_device_info_t* block_device_info;	
 };
 
 struct file
@@ -235,7 +239,7 @@ struct file_operations
 	size_t (*write) (const void * data, int size, int count, void *f);
 	int (*flush) (void *f);
 	int (*rm) (const char *filename);
-	int (*initialize) (block_device_info_t* device);
+	int (*initialize) (vfs_block_device_t* device);
 };
 
 
@@ -244,6 +248,6 @@ extern dlist_t* kBlockDeviceDList;
 void init_block();
 dlist_node_t* add_block_device(volatile void* device, block_device_info_t* block_device);
 vfs_block_device_t* kRegisterBlockDevice(char *mountPoint, block_device_info_t *device, int partNo, file_operations_t* fileOps);
-int ext2_initialize_filesystem(block_device_info_t* device);
+int ext2_initialize_filesystem(vfs_block_device_t* device);
 
 #endif

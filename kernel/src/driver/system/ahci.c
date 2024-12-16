@@ -651,10 +651,13 @@ int ahci_lba_read(block_device_info_t* device, uint64_t sector, void* buffer, ui
     int prdCntr = 0;
 
 	if (kAHCIBuffer == NULL)
-		kAHCIBuffer = kmalloc_dma(65536*10);
+		kAHCIBuffer = kmalloc_dma(AHCI_READ_BUFFER_SIZE);
 
-	if (sector_count * 512 > 65536*10)
-		panic("ahci_lba_read: Requested read %u larger than %u\n", sector_count * 512, 65536*10);
+	if (sector_count == 0)
+		panic("ahci_lba-read: Attempt to read a sector_count of 0\n");
+
+	if (sector_count * 512 > AHCI_READ_BUFFER_SIZE)
+		panic("ahci_lba_read: Requested read %u larger than %u\n", sector_count * 512, AHCI_READ_BUFFER_SIZE);
 
 	hba_port_t* port = (void*)device->ioPort;
     //CLR 06/07/2016 - Must add partition start sector

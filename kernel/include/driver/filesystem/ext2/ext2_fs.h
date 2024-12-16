@@ -20,6 +20,10 @@
 
 #include <stdint.h>
 
+
+#define ERROR_BAD_EXT2_MAGIC 0x1
+
+#define EXT2_NAME_LEN 255
 /*
  * The second extended filesystem constants/structures
  */
@@ -146,7 +150,7 @@ struct ext2_acl_entry	/* Access Control List Entry */
 /*
  * Structure of a blocks group descriptor
  */
-struct ext2_group_desc
+typedef struct
 {
 	uint32_t	bg_block_bitmap;		/* Blocks bitmap block */
 	uint32_t	bg_inode_bitmap;		/* Inodes bitmap block */
@@ -156,7 +160,7 @@ struct ext2_group_desc
 	uint16_t	bg_used_dirs_count;	/* Directories count */
 	uint16_t	bg_pad;
 	uint32_t	bg_reserved[3];
-};
+} ext2_group_desc_t;
 
 /*
  * Macro-instructions used to manage group descriptors
@@ -205,59 +209,64 @@ struct ext2_group_desc
 /*
  * Structure of an inode on the disk
  */
+#include <stdint.h>
+
+#pragma pack(push, 1) // Using pragma pack to ensure no padding is added.
+#include <stdint.h>
+#include <stdbool.h>
+
+typedef enum {
+    EXT2_FILE_TYPE_UNKNOWN = 0x0,    // Unknown file type
+    EXT2_FILE_TYPE_REGULAR = 0x1,    // Regular file
+    EXT2_FILE_TYPE_DIRECTORY = 0x2, // Directory
+    EXT2_FILE_TYPE_CHAR_DEVICE = 0x3, // Character device
+    EXT2_FILE_TYPE_LINUX_DIRECTORY = 0x4, // Block device
+    EXT2_FILE_TYPE_FIFO = 0x5,       // FIFO (pipe)
+    EXT2_FILE_TYPE_SOCKET = 0x6,     // Socket
+    EXT2_FILE_TYPE_SYMLINK = 0x7     // Symbolic link
+} E_EXT2_INODE_TYPE_T;
+
 typedef struct {
+    union {
+        uint16_t i_mode; // Raw i_mode value
+        struct {
+            uint16_t other_execute : 1;     // Other execute permission
+            uint16_t other_write   : 1;     // Other write permission
+            uint16_t other_read    : 1;     // Other read permission
+            uint16_t group_execute : 1;     // Group execute permission
+            uint16_t group_write   : 1;     // Group write permission
+            uint16_t group_read    : 1;     // Group read permission
+            uint16_t owner_execute : 1;     // Owner execute permission
+            uint16_t owner_write   : 1;     // Owner write permission
+            uint16_t owner_read    : 1;     // Owner read permission
+            uint16_t setuid        : 1;     // Set UID
+            uint16_t setgid        : 1;     // Set GID
+            uint16_t sticky        : 1;     // Sticky bit
+            E_EXT2_INODE_TYPE_T file_type     : 4;     // File type (bits 15–12)
+        };
+    };
+    uint16_t i_uid;        // Lower 16 bits of Owner UID
+    uint32_t i_size;       // File size in bytes (lower 32 bits)
+    uint32_t i_atime;      // Last access time
+    uint32_t i_ctime;      // Creation time
+    uint32_t i_mtime;      // Last modification time
+    uint32_t i_dtime;      // Deletion time
+    uint16_t i_gid;        // Lower 16 bits of Group ID
+    uint16_t i_links_count; // Number of hard links
+    uint32_t i_blocks;     // Number of 512-byte blocks reserved for the file
+    uint32_t i_flags;      // File flags
+    uint32_t i_osd1;       // OS-specific value (unused in most cases)
 
-	uint16_t	i_mode;		/* File mode */
-	uint16_t	i_uid;		/* Owner Uid */
-	uint32_t	i_size;		/* Size in bytes */
-	uint32_t	i_atime;	/* Access time */
-	uint32_t	i_ctime;	/* Creation time */
-	uint32_t	i_mtime;	/* Modification time */
-	uint32_t	i_dtime;	/* Deletion Time */
-	uint16_t	i_gid;		/* Group Id */
-	uint16_t	i_links_count;	/* Links count */
-	uint32_t	i_blocks;	/* Blocks count */
-	uint32_t	i_flags;	/* File flags */
-	union {
-		struct {
-			uint32_t  l_i_reserved1;
-		} linux1;
-		struct {
-			uint32_t  h_i_translator;
-		} hurd1;
-		struct {
-			uint32_t  m_i_reserved1;
-		} masix1;
-	} osd1;				/* OS dependent 1 */
-
-	uint32_t	i_block[EXT2_N_BLOCKS];/* Pointers to blocks */
-	uint32_t	i_version;	/* File version (for NFS) */
-	uint32_t	i_file_acl;	/* File ACL */
-	uint32_t	i_dir_acl;	/* Directory ACL */
-	uint32_t	i_faddr;	/* Fragment address */
-	union {
-		struct {
-			uint8_t	l_i_frag;	/* Fragment number */
-			uint8_t	l_i_fsize;	/* Fragment size */
-			uint16_t	i_pad1;
-			uint32_t	l_i_reserved2[2];
-		} linux2;
-		struct {
-			uint8_t	h_i_frag;	/* Fragment number */
-			uint8_t	h_i_fsize;	/* Fragment size */
-			uint16_t	h_i_mode_high;
-			uint16_t	h_i_uid_high;
-			uint16_t	h_i_gid_high;
-			uint32_t	h_i_author;
-		} hurd2;
-		struct {
-			uint8_t	m_i_frag;	/* Fragment number */
-			uint8_t	m_i_fsize;	/* Fragment size */
-			uint16_t	m_pad1;
-			uint32_t	m_i_reserved2[2];
-		} masix2;
-	} osd2;				/* OS dependent 2 */
+    uint32_t i_block[15];  // Pointers to blocks (12 direct, 1 singly indirect, 1 doubly indirect, 1 triply indirect)
+    uint32_t i_generation; // File version (used by NFS)
+    uint32_t i_file_acl;   // File ACL (extended attributes for ext2)
+    uint32_t i_dir_acl;    // Directory ACL (only for directories, otherwise 0)
+    uint32_t i_faddr;      // Fragment address (unused in most implementations)
+    uint8_t  i_osd2[12];   // OS-specific value (usually zero in ext2)
 } ext2_inode_t;
+
+
+#pragma pack(pop) // Resetting the pack value.
 
 #if defined(__KERNEL__) || defined(__linux__)
 #define i_reserved1	osd1.linux1.l_i_reserved1
@@ -429,114 +438,13 @@ struct ext2_dir_entry {
 #define EXT2_FEATURE_INCOMPAT_SUPP	0
 #define EXT2_FEATURE_RO_COMPAT_SUPP	0
 
-#ifdef __KERNEL__
-/*
- * Function prototypes
- */
-
-/*
- * Ok, these declarations are also in <linux/kernel.h> but none of the
- * ext2 source programs needs to include it so they are duplicated here.
- */
-# define NORET_TYPE    /**/
-# define ATTRIB_NORET  __attribute__((noreturn))
-# define NORET_AND     noreturn,
-
-/* acl.c */
-extern int ext2_permission (struct inode *, int);
-
-/* balloc.c */
-extern int ext2_new_block (const struct inode *, unsigned long,
-			   uint32_t *, uint32_t *, int *);
-extern void ext2_free_blocks (const struct inode *, unsigned long,
-			      unsigned long);
-extern unsigned long ext2_count_free_blocks (struct super_block *);
-extern void ext2_check_blocks_bitmap (struct super_block *);
-
-/* bitmap.c */
-extern unsigned long ext2_count_free (struct buffer_head *, unsigned);
-
-/* dir.c */
-extern int ext2_check_dir_entry (const char *, struct inode *,
-				 struct ext2_dir_entry *, struct buffer_head *,
-				 unsigned long);
-
-/* file.c */
-extern int ext2_read (struct inode *, struct file *, char *, int);
-extern int ext2_write (struct inode *, struct file *, char *, int);
-
-/* fsync.c */
-extern int ext2_sync_file (struct inode *, struct file *);
-
-/* ialloc.c */
-extern struct inode * ext2_new_inode (const struct inode *, int, int *);
-extern void ext2_free_inode (struct inode *);
-extern unsigned long ext2_count_free_inodes (struct super_block *);
-extern void ext2_check_inodes_bitmap (struct super_block *);
-
-/* inode.c */
-extern int ext2_bmap (struct inode *, int);
-
-extern struct buffer_head * ext2_getblk (struct inode *, long, int, int *);
-extern struct buffer_head * ext2_bread (struct inode *, int, int, int *);
-
-extern int ext2_getcluster (struct inode * inode, long block);
-extern void ext2_read_inode (struct inode *);
-extern void ext2_write_inode (struct inode *);
-extern void ext2_put_inode (struct inode *);
-extern int ext2_sync_inode (struct inode *);
-extern void ext2_discard_prealloc (struct inode *);
-
-/* ioctl.c */
-extern int ext2_ioctl (struct inode *, struct file *, unsigned int,
-		       unsigned long);
-
-/* namei.c */
-extern void ext2_release (struct inode *, struct file *);
-extern int ext2_lookup (struct inode *,const char *, int, struct inode **);
-extern int ext2_create (struct inode *,const char *, int, int,
-			struct inode **);
-extern int ext2_mkdir (struct inode *, const char *, int, int);
-extern int ext2_rmdir (struct inode *, const char *, int);
-extern int ext2_unlink (struct inode *, const char *, int);
-extern int ext2_symlink (struct inode *, const char *, int, const char *);
-extern int ext2_link (struct inode *, struct inode *, const char *, int);
-extern int ext2_mknod (struct inode *, const char *, int, int, int);
-extern int ext2_rename (struct inode *, const char *, int,
-			struct inode *, const char *, int, int);
-
-/* super.c */
-extern void ext2_error (struct super_block *, const char *, const char *, ...)
-	__attribute__ ((format (printf, 3, 4)));
-extern NORET_TYPE void ext2_panic (struct super_block *, const char *,
-				   const char *, ...)
-	__attribute__ ((NORET_AND format (printf, 3, 4)));
-extern void ext2_warning (struct super_block *, const char *, const char *, ...)
-	__attribute__ ((format (printf, 3, 4)));
-extern void ext2_put_super (struct super_block *);
-extern void ext2_write_super (struct super_block *);
-extern int ext2_remount (struct super_block *, int *, char *);
-extern struct super_block * ext2_read_super (struct super_block *,void *,int);
-extern int init_ext2_fs(void);
-extern void ext2_statfs (struct super_block *, struct statfs *, int);
-
-/* truncate.c */
-extern void ext2_truncate (struct inode *);
-
-/*
- * Inodes and files operations
- */
-
-/* dir.c */
-extern struct inode_operations ext2_dir_inode_operations;
-
-/* file.c */
-extern struct inode_operations ext2_file_inode_operations;
-
-/* symlink.c */
-extern struct inode_operations ext2_symlink_inode_operations;
-
-#endif	/* __KERNEL__ */
+typedef struct {
+    uint32_t    inode;        /* Inode number */
+    uint16_t    rec_len;      /* Directory entry length */
+    uint8_t     name_len;     /* Name length */
+    uint8_t     file_type;     /* File type */
+    char        name[EXT2_NAME_LEN];   /* File name */
+} __attribute__((packed)) ext2_dir_entry_2_t;
 
 #endif	/* _LINUX_EXT2_FS_H */
 
