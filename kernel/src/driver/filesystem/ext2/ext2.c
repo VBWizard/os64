@@ -12,7 +12,7 @@
 //TODO: Get sector size from hardware driver
 #define SB_LOCATION (1024/DISK_SECTOR_SIZE)
 
-int ext2_vfs_read_block(vfs_block_device_t* device, int blockNo, void* buffer, int length)
+int ext2_vfs_read_block(vfs_filesystem_t* device, int blockNo, void* buffer, int length)
 {
 	int readLen = length / DISK_SECTOR_SIZE;
 	if (length % DISK_SECTOR_SIZE)
@@ -85,7 +85,7 @@ uint32_t ext2_get_directory_entry_count(void* dir_data, uint32_t dir_size) {
     return count;
 }
 
-int ext2_get_superblock(vfs_block_device_t* device)
+int ext2_get_superblock(vfs_filesystem_t* device)
 {
 	int start_sector = device->block_device_info->block_device->partition_table->parts[device->partNumber]->partStartSector;
 	device->super_block = kmalloc(sizeof(ext2_super_block_t));

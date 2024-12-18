@@ -3,7 +3,10 @@
 #include "paging.h"
 #include "memset.h"
 #include "serial_logging.h"
+#include "panic.h"
 
+uint64_t kFreeCallCount=0;
+#define KFREE_COMPACT_FREQUENCY 100
 void kmalloc_common(uint64_t physical_address, uint64_t virtual_address, uint64_t length)
 {
 	uint64_t page_count = length / PAGE_SIZE;
@@ -36,7 +39,11 @@ void *kmalloc(uint64_t length)
 /// @return 
 void *kmalloc_dma(uint64_t length)
 {
-	printd(DEBUG_KMALLOC,"kmalloc_dma: Allocating 0x%016lu bytes\n", length);
+	printd(DEBUG_KMALLOC,"kmalloc_dma: Allocating %lu bytes\n", length);
+	
+	int a=0;
+	if (length >= 0x2000000)
+		a++;
 	uint64_t addr = allocate_memory_aligned(length);
 	uint64_t page_count = length / PAGE_SIZE;
 	if (length % PAGE_SIZE != 0)
@@ -64,23 +71,18 @@ void *kmalloc_dma32_address(uint32_t address, uint64_t length)
 	return (void*)(uintptr_t)address;
 }
 
-void kfree(void *address) {
+void kfree(void *address) 
+{
+	uintptr_t physicalAddress = (uintptr_t)address > kHHDMOffset?(uintptr_t)address - kHHDMOffset:(uintptr_t)address;
     // Free the allocation (remove the HHDM offset from the address when freeing it)
-	printd(DEBUG_KMALLOC, "KMALLOC: Freeing address 0x%016lx\n",address);
-    int freed_length = free_memory((uintptr_t)address > kHHDMOffset?(uintptr_t)address - kHHDMOffset:(uintptr_t)address);
-	printd(DEBUG_KMALLOC, "KMALLOC: Freed!  Length is 0x%016lx\n",address);
-    // Iterate over each page within the freed range
-    for (int cnt = 0; cnt < (freed_length + PAGE_SIZE - 1) / PAGE_SIZE; cnt++) {
-        // Calculate the virtual address for each page in the range
-        uintptr_t page_virtual_address = (uintptr_t)address + (cnt * PAGE_SIZE);
+	printd(DEBUG_KMALLOC, "KMALLOC: Freeing address 0x%016lx (0x%16lx)\n",address, physicalAddress);
 
-        // If there are no other allocations on this page
-//TODO: Fix me!  This broke on physical hardware
-/*        if (!physical_page_is_allocated_on(((uintptr_t)page_virtual_address - kHHDMOffset) & PAGE_ADDRESS_MASK)) {
-            // Unmap the page if it's no longer in use
-            paging_unmap_page((pt_entry_t*)kKernelPML4v, page_virtual_address);
-        }
-*/    }
+	uint64_t idx = free_memory(physicalAddress);
+	if (idx==0xFFFFFFFF)
+		panic("kFree: free_memory returned 0xFFFFFFFF indicating it could not find the block of memory to free for physical address 0x%016lx\n",physicalAddress);
+    //merge_freed_block(idx);
+	//if (++kFreeCallCount%KFREE_COMPACT_FREQUENCY==0)
+	//	compact_memory_array();
 #ifdef KMALLOC_CLEAR_FREED_POINTERS
 	address = (void*)0xBADBADBA;
 #endif

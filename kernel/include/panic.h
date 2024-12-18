@@ -6,8 +6,8 @@ extern "C" {
 #endif
 
 void panic(const char *format, ...);
-
-
+void panic_no_shutdown(const char *format, ...);
+void debug_print_mem(uint64_t address, uint64_t byteCount);
 #ifdef __cplusplus
 }
 #endif

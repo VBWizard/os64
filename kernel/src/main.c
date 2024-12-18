@@ -35,6 +35,8 @@ struct limine_rsdp_response *rsdp_response;
 char kernel_stack[0x1000*64] __attribute__((aligned(16)));
 uintptr_t kLimineRSDP = 0;
 uint64_t kLimineRSDPVersion = 0;
+uintptr_t kKernelBaseAddressP = 0;
+uintptr_t kKernelBaseAddressV = 0;
 
 __attribute__((used, section(".limine_requests")))
 volatile LIMINE_BASE_REVISION(3);
@@ -140,6 +142,8 @@ void limine_boot_entry_point(void) {
 	struct limine_file* pciIdsFile = getFile(module_request.response, "pci_devices.bin");
 	kPCIIdsCount = pciIdsFile->size/sizeof(pci_device_id_t);
 	kPCIIdsData = (pci_device_id_t*)pciIdsFile->address;
+	kKernelBaseAddressP = kernel_address_request.response->physical_base;
+	kKernelBaseAddressV = kernel_address_request.response->virtual_base;
 	int limine_response_status = verify_limine_responses(memmap_response, hhmd_response, framebuffer_response, limine_module_response, kLimineSMPInfo);
 
 	if (limine_response_status != 0)

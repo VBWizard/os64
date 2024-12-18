@@ -376,7 +376,9 @@ void init_PCI()
 	pci_device_t device, funcDevice;
 	uint16_t prevDev=0,prevBus=0;
 	uint16_t currFunc;
-
+	__uint128_t saved = kDebugLevel;
+	kDebugLevel &= ~(DEBUG_PCI_DISCOVERY);
+	kDebugLevel &= ~(DEBUG_PCI);
 	kPCIDeviceCount=kPCIBridgeCount=kPCIFunctionCount=kPCIBusCount=0;
 
 	kPCIDeviceHeaders = kmalloc(sizeof(pci_device_t) * PCI_DEVICE_SLOTS);
@@ -422,6 +424,8 @@ void init_PCI()
 			}
 		}
 	}
+	
+	kDebugLevel = saved;
 	pci_print_discovery_results();
  }
 

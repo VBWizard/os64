@@ -9,12 +9,12 @@ void init_block()
 	kBlockDeviceDList = kmalloc(sizeof(dlist_t));
 }
 
-dlist_node_t* add_block_device(volatile void* device, block_device_info_t* block_device)
+dlist_node_t* add_block_device(vfs_filesystem_t* vfs_block_device)
 {
 	int major = 0;
 	int minor = 0;
 
-	switch (block_device->bus)
+	switch (vfs_block_device->block_device_info->bus)
 	{
 		case BUS_SATA:
 			major = 8;
@@ -28,7 +28,10 @@ dlist_node_t* add_block_device(volatile void* device, block_device_info_t* block
 			major = 0;
 			minor = 0;
 	}
-	dlist_node_t* retVal = dlist_add(kBlockDeviceDList, device);
+	vfs_block_device->major = major;
+	vfs_block_device->minor = minor;
+
+	dlist_node_t* retVal = dlist_add(kBlockDeviceDList, vfs_block_device);
 	retVal->major = major;
 	retVal->minor = minor;
 	return retVal;

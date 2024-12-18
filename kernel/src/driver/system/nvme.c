@@ -138,7 +138,7 @@ uint32_t intervalDelay = controller->defaultTimeout / 20;
 		return false;
 	}
 
-    printd(DEBUG_NVME, "NVMe: controller reset completed and ready.\n");
+    printd(DEBUG_NVME, "NVMe: controller reset completed, back online.\n");
 	return true;
 }
 
@@ -724,7 +724,8 @@ void nvme_identify(nvme_controller_t* controller)
 	nvme_identify_controller_t* cData = (nvme_identify_controller_t*)command->prp1;
 	nvme_parse_model_name(cData->mn, controller->deviceName);
 	controller->maxBytesPerTransfer = calculate_mdts(cData->mdts);
-	printd(DEBUG_NVME, "NVME: Identified max bytes per NVME transfer: 0x%08x bytes", controller->maxBytesPerTransfer);
+	printd(DEBUG_NVME, "NVME: Identified max bytes per NVME transfer: 0x%08x bytes\n", controller->maxBytesPerTransfer);
+	//kDebugLevel |= DEBUG_KMALLOC | DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED;
 	controller->dmaReadBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
 
 	//controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
@@ -734,6 +735,18 @@ void nvme_identify(nvme_controller_t* controller)
 	kfree(command);
 }
 
+uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
+{
+
+	uintptr_t* prpList = kmalloc_dma(prpCount * sizeof(uintptr_t));
+	for (uint32_t idx = 0; idx<prpCount;idx++)
+	{
+		prpList[idx]=startAddress;
+		startAddress+=PAGE_SIZE;
+	}
+	return (uintptr_t)prpList;	
+}
+
 #ifdef DISK_WRITING_ENABLED
 void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer)
 {
@@ -741,7 +754,7 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 
 	//fixup length
 	uint32_t blockCount = length / controller->blockSize;
-	if (length > PAGE_SIZE && length%PAGE_SIZE)
+	if (length%controller->blockSize)
 		blockCount+=1;
 	
 	if (blockCount > 0xffffffff)
@@ -757,7 +770,7 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 	cmd->cdw11 = LBA >> 32;
 	cmd->cdw12 = blockCount;
 	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Submitting write request for 0x%08lx blocks to LBA 0x%016x\n", blockCount, LBA);
-    submit_command(controller, cmd, false);
+    nvme_submit_command(controller, cmd, false);
 	
 	volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
 	nvme_wait_for_completion(controller, false, (volatile nvme_completion_queue_entry_t*)completionEntry, cmd);
@@ -768,22 +781,15 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 		log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, 1);
 		panic("NVME Write error.  System log contains more information.");
 	}
+
+	nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);  // Update index for consumed entries
+	controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex+ 1) % controller->queueDepth;
+
 	kfree((void*)cmd->prp1);
 	kfree(cmd);
 }
 #endif
 
-uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
-{
-
-	uintptr_t* prpList = kmalloc_dma(prpCount * sizeof(uintptr_t));
-	for (uint32_t idx = 0; idx<prpCount;idx++)
-	{
-		prpList[idx]=startAddress;
-		startAddress+=PAGE_SIZE;
-	}
-	return (uintptr_t)prpList;	
-}
 
 void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
     if (controller->maxBytesPerTransfer == 0) {
@@ -869,6 +875,12 @@ size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* bu
 	return true;
 }
 
+void nvme_vfs_write_disk(block_device_info_t* device, uint64_t sector, void* buffer, size_t length)
+{
+	nvme_controller_t* controller = device->block_extra_info;
+	nvme_write_disk(controller, sector, length * controller->blockSize, buffer);
+}
+
 void init_vfs_block_device(nvme_controller_t* controller, enum eATADeviceType deviceType)
 {
 	kBlockDeviceInfo[kBlockDeviceInfoCount].block_extra_info = (void*)controller;
@@ -885,9 +897,10 @@ void init_vfs_block_device(nvme_controller_t* controller, enum eATADeviceType de
 	blockDev->name = controller->deviceName;
 	block_operations_t* bops = kmalloc(sizeof(block_operations_t));
 	bops->read = (void*)nvme_vfs_read_disk;
+	bops->write = (void*)nvme_vfs_write_disk;
 	blockDev->ops = bops;
 	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device = blockDev;
-	add_block_device(controller, &kBlockDeviceInfo[kBlockDeviceInfoCount]);
+	//add_block_device(controller, &kBlockDeviceInfo[kBlockDeviceInfoCount]);
 	kBlockDeviceInfoCount++;
 
 }

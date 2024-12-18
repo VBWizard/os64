@@ -16,7 +16,6 @@
 #include "tss.h"
 #include "pci.h"
 #include "ahci.h"
-#include "strcpy.h"
 #include "ata.h"
 #include "memset.h"
 #include "part_table.h"
@@ -24,6 +23,9 @@
 #include "acpi.h"
 #include "nvme.h"
 #include "kernel_commandline.h"
+#include "strings.h"
+#include "fat_glue.h"
+#include "shutdown.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -41,7 +43,8 @@ __uint128_t kDebugLevel = 0;
 uintptr_t kKernelStack = 0;
 char kKernelCommandline[512];
 
-char startTime[100];
+char startTime[100] = {0};
+uint64_t lastTime = 0;
 
 void kernel_init()
 {
@@ -73,17 +76,10 @@ void kernel_init()
 	init_SMP();
 	kLimineSMPInfo = smp_request.response;
 
-	//Temporary - make sure paging is working correctly
-	char* x = kmalloc(256);
-	char* y = kmalloc(128);
-
-	strncpy(x, "This is test # 1", 20);
-	strncpy(y, "this is test # 2", 20);
-	kfree(x);
-	x = kmalloc(256);
-	strncpy(x, "This is test 3", 20);
-
-	file_operations_t fileOps;
+	vfs_filesystem_t* testFS;
+	bool mounted = false;
+	vfs_file_operations_t fileOps;
+	vfs_directory_operations_t dirOps;
 	for (int idx=0;idx<kBlockDeviceInfoCount;idx++)
 	{
 		if (kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_SATA_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_NVME_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_HD)
@@ -102,39 +98,72 @@ void kernel_init()
 	}
 
 	for (int cnt=0;cnt<kBlockDeviceInfoCount;cnt++)
+	{
 		for (int part=0;part<kBlockDeviceInfo[cnt].block_device->part_count;part++)
-			if (kBlockDeviceInfo[cnt].block_device->partition_table->parts[part]->filesystemType == FILESYSTEM_TYPE_EXT2)
+		{
+			switch (kBlockDeviceInfo[cnt].block_device->partition_table->parts[part]->filesystemType)
 			{
-				fileOps.initialize = &ext2_initialize_filesystem;
-				vfs_block_device_t* t = kRegisterBlockDevice("/", &kBlockDeviceInfo[cnt], part, &fileOps);
-				t->fops->initialize(t);
-				
-
+				// case FILESYSTEM_TYPE_EXT2:
+				// 	fileOps.initialize = &ext2_initialize_filesystem;
+				// 	vfs_filesystem_t* t = kRegisterFilesystem("/", &kBlockDeviceInfo[cnt], part, &fileOps);
+				// 	mounted = true;
+				// 	break;
+				case FILESYSTEM_TYPE_FAT32:
+					fileOps = fat_fops;
+					dirOps = fat_dops;
+					testFS = kRegisterFilesystem("/", &kBlockDeviceInfo[cnt], part, &fileOps, &dirOps);
+					mounted = true;
+					break;
+				default: break;
 			}
-
-	uint64_t addr = paging_walk_paging_table((pt_entry_t*)kKernelPML4v, 0x200000);
-
+			if (mounted)break;
+		}
+		if (mounted)break;
+	}
+	
     // We're done, just hang...
   
-	extern uint64_t kMemoryStatusCurrentPtr;
-	extern memory_status_t *kMemoryStatus;
-	printd(DEBUG_MEMMAP, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
-	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
-	{
-		printd(DEBUG_MEMMAP, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
-	}
-	printf("All done, hcf-time!\n");
-	printd(DEBUG_MEMMAP,"All done, hcf-time!\n");	
-	printf("12345678901234567890123456789012345678901234567890123456789012345678901234567890\n");
-	while (true)
-	{
-		strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
-		moveto(&kRenderer, 80,0);
-		printf("%s",startTime);
-		asm("sti\nhlt\n");
-	}
-	while (true) {asm("sti\nhlt\n");}
+	// vfs_file_t* testFile = NULL;
+	// vfs_directory_t* testDir = NULL;
+	// FILINFO* fi=kmalloc(sizeof(FILINFO));
 
+	// char* contents = kmalloc(4096);
+
+	// if (testFS!=NULL)
+	// {
+	// 	if(testFS->fops->open(&testFile, "/fat32_partition", "r", testFS)==0)
+	// 	{
+	// 		testFS->fops->read(testFile, contents, 4096);
+	// 		testFS->fops->close(testFile);
+	// 		printf("fat32_partition file contents = %s\n",contents);
+	// 	}
+	// 	if (testFS->fops->open(&testFile, "/test2","c", testFS)==0)
+	// 	{
+	// 		testFS->fops->write(testFile, "Hello world from Chris!\n",24);
+	// 		testFS->fops->close(testFile);
+	// 		printf("File written\n");
+	// 	}
+	// 	if(testFS->fops->open(&testFile, "/test2", "r", testFS)==0)
+	// 	{
+	// 		testFS->fops->fgets(testFile, contents, 4096);
+	// 		testFS->fops->close(testFile);
+	// 		printf("New file test2 Contents = %s\n",contents);
+	// 	}
+	// 	if (testFS->dops->open(&testDir, "/", testFS)==0)
+	// 	{
+	// 		do
+	// 		{
+	// 			testFS->dops->read(testDir, fi);
+	// 			printf("File %s: Size %u\n",fi->fname, fi->fsize);
+	// 		} while (fi->fname[0] != '\0');
+	// 	}
+
+	// }
+
+	// kfree(contents);
+
+
+	shutdown();
 }
 
 void parse_debug_level(__uint128_t value, uint64_t* high, uint64_t* low)

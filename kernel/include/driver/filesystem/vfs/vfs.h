@@ -7,11 +7,13 @@
 #include "dlist.h"
 #include "types.h"
 
+
 #define DENTRY_ROOT 0xFFFFFFFF    
 #define VFS_MAX_OPEN_FILES 512
 #define VFS_MAX_OPEN_DIRS 64
 #define VFS_FILE_ALLOC_SIZE 65535+FS_FILE_COPYBUFFER_SIZE
 #define VFS_MAX_PARTITIONS 128
+#define DEFAULT_SECTOR_SIZE 512
 
 #define SEEK_SET	0	/* Seek from beginning of file.  */
 #define SEEK_CUR	1	/* Seek from current position.  */
@@ -21,15 +23,15 @@ struct vfs_partition_table;
 
 typedef struct directory vfs_directory_t;
 typedef struct direntry vfs_dirent_t;
-typedef struct dir_operations dirops_t;
+typedef struct dir_operations vfs_directory_operations_t;
 typedef struct inode vfs_inode_t;
 typedef struct dentry dentry_t;
 typedef struct vfsmount vfs_mount_t;
 typedef struct inode_operations vfs_inode_operations_t;
-typedef struct vfs_block_device vfs_block_device_t;
+typedef struct vfs_filesystem vfs_filesystem_t;
 typedef struct inode inode_t;
 typedef struct file vfs_file_t;
-typedef struct file_operations file_operations_t;
+typedef struct file_operations vfs_file_operations_t;
 typedef struct block_device block_device_t;
 typedef struct block_operations block_operations_t;
 typedef struct vfs_partition_table vfs_partition_table_t;
@@ -91,7 +93,7 @@ struct block_operations
 {
 	//int (*seek) (void *dev, long offset, int origin);
 	size_t (*read) (void* device, uint64_t sector, void * buffer, uint64_t sectorCount);
-	//write: someday
+	size_t (*write) (void* device, uint64_t sector, const void * buffer, uint64_t sectorCount);
 };
 
 typedef enum
@@ -145,7 +147,7 @@ struct directory
 {
 	char* f_path;
 	inode_t* f_inode;
-	dirops_t* dops;
+	vfs_directory_operations_t* dops;
 	void* handle;
 	dlist_t listEntry;
 	void *owner;
@@ -154,9 +156,9 @@ struct directory
 
 struct dir_operations
 {
-	void* (*open) (const char* path, void* dir);
-	int (*read) (void *dir, vfs_dirent_t *entry);
-	int (*close) (void *dir);
+	int (*open) (vfs_directory_t** vfs_dir, const char* path, vfs_filesystem_t* vfs_fs);
+	int (*read) (vfs_directory_t* vfs_dir, void* fileInfo);
+	int (*close) (vfs_directory_t* vfs_dir);
 };
 	
 struct dentry
@@ -188,15 +190,15 @@ struct vfs_partition_table
     bool validBootSector;
 } __attribute__((packed));
 
-struct vfs_block_device
+struct vfs_filesystem
 {
 	vfs_mount_t *mount; 
 	vfs_inode_operations_t* iops;
 	//Block operations
-	block_operations_t bops;
+	block_operations_t* bops;
 	//File operations
-	file_operations_t* fops;
-	dirops_t* dops;
+	vfs_file_operations_t* fops;
+	vfs_directory_operations_t* dops;
 	dlist_t inode_list;
 	vfs_file_t *files;
 	vfs_directory_t *dirs;
@@ -209,6 +211,10 @@ struct vfs_block_device
 	void* block_group_descriptor;
 	void* root_dir_inode;
 	block_device_info_t* block_device_info;	
+	uint8_t major;
+	uint8_t minor;
+	uint8_t fatDiskNumber;
+	void* fs_specific;
 };
 
 struct file
@@ -216,7 +222,7 @@ struct file
 	eFileType filetype;
 	char* f_path;
 	inode_t* f_inode;
-	file_operations_t* fops;
+	vfs_file_operations_t* fops;
 	void* handle;
 	void *pipe, *pipeContent, **pipeContentPtr;
 	void *copyBuffer;
@@ -227,27 +233,27 @@ struct file
 
 struct file_operations
 {
-	vfs_file_t* (*open) (char *filename, const char *mode);
-	//int (*close) (file_t *);
-	void (*close) (void *); //using this temporarily for fat fs
-	//int (*seek) (file_t *, long offset, int whence);
-	int (*seek) (void *f, long offset, int origin);
-	//size_t (*read) (file_t *, char *, size_t, uint64_t *);
-	size_t (*read) (void * buffer, int size, int length, void *f);
-	//size_t (*write) (file_t *, const char *, size_t, uint64_t *);
-	long (*tell) (void *f);
-	size_t (*write) (const void * data, int size, int count, void *f);
+    int (*open)(vfs_file_t** vfs_file, const char* path, const char* mode, vfs_filesystem_t* vfs_fs);
+    int (*read)(vfs_file_t* vfs_file, void* buffer, size_t size);
+	char* (*fgets)(vfs_file_t* vfs_file, char* buffer, int length);
+	int (*fputs)(vfs_file_t* vfs_file, char* buffer);
+	int (*tell)(vfs_file_t* vfs_file);
+	int (*fprintf)(vfs_file_t* vfs_file, const char* fmt, ...);
+    int (*write)(vfs_file_t* vfs_file, const void* buffer, size_t size);
+    int (*seek)(vfs_file_t* vfs_file, long offset, int whence);
+	int (*sync)(vfs_file_t* vfs_file);
+    int (*close)(vfs_file_t* vfs_file);
 	int (*flush) (void *f);
 	int (*rm) (const char *filename);
-	int (*initialize) (vfs_block_device_t* device);
+	int (*initialize) (vfs_filesystem_t* device);
+	int (*uninitialize) (vfs_filesystem_t* device);
 };
 
 
 extern dlist_t* kBlockDeviceDList;
 
 void init_block();
-dlist_node_t* add_block_device(volatile void* device, block_device_info_t* block_device);
-vfs_block_device_t* kRegisterBlockDevice(char *mountPoint, block_device_info_t *device, int partNo, file_operations_t* fileOps);
-int ext2_initialize_filesystem(vfs_block_device_t* device);
+vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps);
+int ext2_initialize_filesystem(vfs_filesystem_t* device);
 
 #endif

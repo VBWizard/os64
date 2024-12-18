@@ -323,7 +323,7 @@ void ahci_probe_ports(HBA_MEM *ahci_abar) {
     uint32_t port_implemented = ahci_abar->pi;
     int i = 0;
     if (port_implemented > 0)
-        printd(DEBUG_AHCI, "AHCI: Probing ports via remapped ABAR 0x%016x, value 0x%02X\n", ahci_abar, ahci_abar->pi);
+        printd(DEBUG_AHCI, "AHCI: Probing ports via remapped ABAR 0x%016lx, value 0x%04X\n", ahci_abar, ahci_abar->pi);
 	else
 		printd(DEBUG_AHCI, "AHCI: Port not implemented, skipping probing\n");
     while (i < 32) 
@@ -335,21 +335,16 @@ void ahci_probe_ports(HBA_MEM *ahci_abar) {
             //Get the SATA device signature
             int dt = ahci_check_type(&ahci_abar->ports[i], &sig);
             //Found a SATA disk
-			//TODO: Change ACHI logic to support 64-bit so you can just randomly assign memory to the port
-			//port_remap_base = (uint64_t)kmalloc_aligned(0x10000);
-			int base = (uint64_t)kmalloc_dma32_address(kAHCIPortRemapBase,0x20000);
-			//NOTE: Every time we allocate an ABAR we ask for a specific address, BUT more memory is allocated between these allocations, so need to bump up the increment
-			kAHCIPortRemapBase=base + 0x40000;
+			uintptr_t base = (uintptr_t)((uint64_t)ahci_abar->ports[i].clbu << 32 | ahci_abar->ports[i].clb);
+			paging_map_pages((pt_entry_t*)kKernelPML4v, base, base, 0x40000 / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
             if (dt == AHCI_DEV_SATA) {
                 printd(DEBUG_AHCI, "AHCI: SATA drive found at port %d (0x%08x)\n", i, &ahci_abar->ports[i]);
-                //printd(DEBUG_AHCI, "AHCI:\tCLB=0x%08x, fb=0x%08x\n", ahci_abar->ports[i].clb, ahci_abar->ports[i].fb);
+                printd(DEBUG_AHCI | DEBUG_DETAILED, "AHCI:\tCLB=0x%08x, fb=0x%08x\n", ahci_abar->ports[i].clb, ahci_abar->ports[i].fb);
                 ahci_port_rebase(&ahci_abar->ports[i], i, base);
-                	//det reset, disable slumber and Partial state
-			//reset port, send COMRESET signal
                 ahciIdentify(&ahci_abar->ports[i], AHCI_DEV_SATA);
             } else if (dt == AHCI_DEV_SATAPI) {
                 printd(DEBUG_AHCI, "AHCI:SATAPI drive found at port %d (0x%08x)\n", i, &ahci_abar->ports[i]);
-                //printd(DEBUG_AHCI, "AHCI:\tCLB=0x%08x, fb=0x%08x\n", ahci_abar->ports[i].clb, ahci_abar->ports[i].fb);
+                printd(DEBUG_AHCI | DEBUG_DETAILED, "AHCI:\tCLB=0x%08x, fb=0x%08x\n", ahci_abar->ports[i].clb, ahci_abar->ports[i].fb);
                 ahci_port_rebase(&ahci_abar->ports[i], i, base);
                 //Run an ATA_IDENTIFY
                 ahciIdentify(&ahci_abar->ports[i], AHCI_DEV_SATAPI);
@@ -502,6 +497,7 @@ printd(DEBUG_AHCI, "0x%08x\n", *address);
     kBlockDeviceInfo[kBlockDeviceInfoCount].bus = BUS_SATA;
     kBlockDeviceInfo[kBlockDeviceInfoCount].driveNo = kBlockDeviceInfoCount;
     kBlockDeviceInfo[kBlockDeviceInfoCount].ioPort = (uintptr_t) port;
+	kBlockDeviceInfo[kBlockDeviceInfoCount].block_extra_info = (void*)&kBlockDeviceInfo[kBlockDeviceInfoCount];
     kBlockDeviceInfo[kBlockDeviceInfoCount].irqNum = 0;
     kBlockDeviceInfo[kBlockDeviceInfoCount].driveHeadPortDesignation = 0x0;
     kBlockDeviceInfo[kBlockDeviceInfoCount].queryATAData = false;
@@ -519,7 +515,7 @@ printd(DEBUG_AHCI, "0x%08x\n", *address);
 	strtrim(kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->name);
 	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->ops = kmalloc(sizeof(block_operations_t));
 	kBlockDeviceInfo[kBlockDeviceInfoCount].block_device->ops->read = (void*)&ahci_lba_read;
-	add_block_device(port, &kBlockDeviceInfo[kBlockDeviceInfoCount]);
+	//add_block_device(port, &kBlockDeviceInfo[kBlockDeviceInfoCount]);
 	kBlockDeviceInfoCount++;
     printd(DEBUG_AHCI, "AHCI: SATA device found, name=%s\n", kBlockDeviceInfo[kBlockDeviceInfoCount - 1].ATADeviceModel);
 }
@@ -562,6 +558,7 @@ void init_AHCI_device(int device_index, bool function)
 
 bool init_AHCI()
 {
+	printd(DEBUG_AHCI, "AHCI: Initializing AHCI ...\n");
 	bool ahciDeviceFound = false;
     kBlockDeviceInfoCount = 0;
 	init_block();

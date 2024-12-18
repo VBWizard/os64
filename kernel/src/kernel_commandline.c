@@ -97,5 +97,10 @@ void process_kernel_commandline(char* cmdline)
 		kDebugLevel |= DEBUG_NVME;
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter DEBUG_NVME passed, NVME logging will be done\n");
 	}
+	if (strnstr(cmdline,"DEBUG_EVERYTHING",512) != NULL)
+	{
+		kDebugLevel |= DEBUG_EVERYTHING;
+		printd(DEBUG_BOOT, "CMDLINE:\t Parameter DEBUG_NVME passed, NVME logging will be done\n");
+	}
 
 }

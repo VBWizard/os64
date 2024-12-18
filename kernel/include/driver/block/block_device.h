@@ -5,7 +5,9 @@
 #include "dlist.h"
 #include "vfs.h"
 
+extern dlist_t* kBlockDeviceDList;
+
 	void init_block();
-	dlist_node_t* add_block_device(volatile void* device, block_device_info_t* block_device);
+	dlist_node_t* add_block_device(vfs_filesystem_t* vfs_block_device);
 
 #endif

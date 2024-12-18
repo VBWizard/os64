@@ -5,15 +5,94 @@
 #include "memset.h"
 #include "serial_logging.h"
 #include "panic.h"
+#include "memcpy.h"
 
 memory_status_t *kMemoryStatus;
-//Points to the next available kernel status
+//Points to the next available kernel status - increment AFTER use
 uint64_t kMemoryStatusCurrentPtr = 0;
 uintptr_t memoryBaseAddress;
 
 //NOTE: Will return the passed address if it is already page aligned
 static inline uintptr_t round_up_to_nearest_page(uintptr_t addr) {
     return (addr + 0xFFF) & ~0xFFF;
+}
+
+void compact_memory_array() {
+    size_t writeIndex = 0; // Where the next valid entry will be written
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Compacting memory status array\n");
+
+    for (size_t i = 0; i < kMemoryStatusCurrentPtr; i++) 
+	{
+		//If the current entry is in use
+        if (kMemoryStatus[i].length > 0) 
+		{
+            //And the "write to" index isn't the same as the current entry
+            if (i != writeIndex) 
+			{
+			// Copy the valid entry to the "write to" index
+                kMemoryStatus[writeIndex] = kMemoryStatus[i];
+            }
+			//Increment the "write to" index regardless
+            writeIndex++;
+        }
+    }
+
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: Clearing out compacted entries\n");
+    // Clear remaining entries after the last valid index
+    for (size_t i = writeIndex; i < kMemoryStatusCurrentPtr; i++) {
+        kMemoryStatus[i].startAddress = 0;
+        kMemoryStatus[i].length = 0;
+        kMemoryStatus[i].in_use = false;
+    }
+	kMemoryStatusCurrentPtr=writeIndex;
+}
+
+bool merge_freed_block(uint64_t freedIndex) {
+    memory_status_t *freedBlock = &kMemoryStatus[freedIndex];
+
+    // Scan for a parent block to merge into
+	memory_status_t* ours=&kMemoryStatus[freedIndex];
+    printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Looking for an entry to merge ours at index %u, address 0x%016lx with\n", freedIndex, ours->startAddress);
+	for (size_t idx = 0; idx < kMemoryStatusCurrentPtr; idx++) {
+        if (idx == freedIndex) continue; // Skip the block being freed
+
+        memory_status_t *candidate = &kMemoryStatus[idx];
+		if (candidate->startAddress == 0x0) continue;
+        // Check if the candidate is free and contiguous
+        if (!candidate->in_use && candidate->length > 0) {
+            // Merge freed block into candidate (preceding)
+            if (candidate->startAddress + candidate->length == freedBlock->startAddress) {
+				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: found a p candidate with start=0x%016lx, length=0x%016lx, in_use=%u\n", 
+						candidate->startAddress, candidate->length, candidate->in_use);
+                candidate->length += freedBlock->length;
+
+                // Invalidate the freed block
+                freedBlock->startAddress = 0;
+                freedBlock->length = 0;
+                freedBlock->in_use = false;
+				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: Merged with candidate: start=0x%016lx, length=0x%016lx, in_use=%u\n", 
+						candidate->startAddress, candidate->length, candidate->in_use);
+                return true;
+            }
+
+            // Merge candidate into freed block (following)
+            if (freedBlock->startAddress + freedBlock->length == candidate->startAddress) {
+				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: found an f candidate with start=0x%016lx, length=0x%016lx, in_use=%u\n", 
+						candidate->startAddress, candidate->length, candidate->in_use);
+                candidate->length += freedBlock->length;
+
+                // Invalidate the freed block
+                freedBlock->startAddress = 0;
+                freedBlock->length = 0;
+                freedBlock->in_use = false;
+				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: Merged with candidate: start=0x%016lx, length=0x%016lx, in_use=%u\n", 
+						candidate->startAddress, candidate->length, candidate->in_use);
+				return true;
+            }
+        }
+    }
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\t allocator: Did not find a candidate to merge with\n");
+	return false;
 }
 
 //Identify whether any statuses allocate on the page passed.
@@ -33,7 +112,8 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 {
 	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
 	{
-		if (kMemoryStatus[cnt].in_use == false && 
+		//Don't allow page 0 to be allocated!!!
+		if (kMemoryStatus[cnt].startAddress > 0 && kMemoryStatus[cnt].in_use == false && 
 		//Either the requested block doesn't need to be aligned and the current status' size is big enough
 			( 
 				(page_aligned == false && kMemoryStatus[cnt].length >= requested_length)
@@ -47,6 +127,20 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 	return NULL;
 }
 
+uint64_t get_status_index_for_requested_address(uint64_t address,uint64_t requested_length, bool in_use)
+{
+	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
+	{
+		if ( (kMemoryStatus[cnt].startAddress <= address && kMemoryStatus[cnt].startAddress + kMemoryStatus[cnt].length > address) &&
+			kMemoryStatus[cnt].in_use == in_use &&
+			kMemoryStatus[cnt].length >= requested_length
+		)
+			return cnt;
+	}
+	panic("get_status_index_for_requested_address: Can't find the index!!! :-(\n");
+	return 0;
+}
+
 memory_status_t* get_status_entry_for_requested_address(uint64_t address,uint64_t requested_length, bool in_use)
 {
 	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
@@ -57,7 +151,7 @@ memory_status_t* get_status_entry_for_requested_address(uint64_t address,uint64_
 		)
 			return &kMemoryStatus[cnt];
 	}
-	panic("Can't allocate requested address!!! :-(\n");
+	panic("get_status_entry_for_requested_address: Can't find the index!!! :-(\n");
 	return NULL;
 }
 
@@ -101,7 +195,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	}
 	else
 	{
-		memaddr = get_status_entry_for_requested_address(requested_address, page_aligned, false);
+		memaddr = get_status_entry_for_requested_address(requested_address, requested_length, false);
 		if ( memaddr == NULL)
 			__asm__("cli\nhlt\n");
 	}
@@ -133,6 +227,9 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		}
 		uint64_t aligned_end = true_start + aligned_length;
 
+		//Create an entry for the memory being utilized
+		//NOTE that even if an aligned address was requested, the new entry will start with the unaligned start address. 
+		//The address RETURNED will be the aligned address
 		memory_status_t* new_entry = make_new_status_entry(
 							  use_address?requested_address:
 							  	memaddr->startAddress, 
@@ -189,15 +286,19 @@ uint64_t allocate_memory(uint64_t requested_length)
 //TODO: Coalesce adjacent memory blocks back together
 uint64_t free_memory(uint64_t address)
 {
-	memory_status_t *status_entry = get_status_entry_for_requested_address(address, 0, true);
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Freeing memory at 0x%016lx\n", address);
+	uint64_t statusIdx = get_status_index_for_requested_address(address, 0, true);
+	memory_status_t *status_entry = &kMemoryStatus[statusIdx];
 	if (status_entry != NULL)
 	{
+		printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Found block to free, address = 0x%016lx, length=0x%016lx\n", status_entry->startAddress, status_entry->length);
 		status_entry->in_use = false;
 		//Memory should still be mapped so we can clear it out safely
-		memset((void*)(status_entry->startAddress + kHHDMOffset), 0, status_entry->length);
-		return status_entry->length;
+		memset((void*)(status_entry->startAddress + kHHDMOffset), 0xFE, status_entry->length);
+		return statusIdx;
 	}
-	return 0;
+	panic("ALLOCATOR: Did not find kMemoryStatus entry to mark not in use, address was: 0x%016lx\n",address);
+	return 0xFFFFFFFF;
 }
 
 void allocator_init()
@@ -215,7 +316,7 @@ void allocator_init()
 
 	//Create an allocator entry for kMemoryStatus which is MAX_MEMORY_STATUS_COUNT entries long
 	//kMemoryStatus = (memory_status_t*)allocate_memory(allocate_size);
-	kMemoryStatus = (memory_status_t*)(0x9000 + kHHDMOffset);
+	kMemoryStatus = (memory_status_t*)(memoryBaseAddress + kHHDMOffset);
 
 	//Parse the memory map into the newly created kMemoryStatus
 	for (uint64_t cnt=0;cnt<kMemMapEntryCount;cnt++)
@@ -229,6 +330,15 @@ void allocator_init()
 			kMemoryStatusCurrentPtr++;
 		}
 	}
-		kMemoryStatus[0].startAddress = memoryBaseAddress;
-		kMemoryStatus[0].length = kMemoryStatus[0].length - (RESERVED_PAGES * PAGE_SIZE);
+
+	//Officially allocate our allocator entries and map them, along with the reverved pages where we created our initial paging pages
+	uint64_t size = sizeof(memory_status_t);
+	uint64_t allocSize = size*INITIAL_MEMORY_STATUS_COUNT;
+	uint64_t newAddress = allocate_memory(allocSize) | kHHDMOffset;
+	uint64_t mapSize = allocSize/PAGE_SIZE;
+	if (allocSize%PAGE_SIZE)
+		mapSize++;
+	paging_map_pages((pt_entry_t*)kKernelPML4v, newAddress, newAddress - kHHDMOffset, mapSize, PAGE_PRESENT | PAGE_WRITE);
+	memcpy((void*)newAddress, kMemoryStatus, kMemoryStatusCurrentPtr * size);
+	kMemoryStatus = (memory_status_t*)newAddress;
 }

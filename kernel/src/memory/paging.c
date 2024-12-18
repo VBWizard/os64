@@ -10,7 +10,9 @@
 #include "memcpy.h"
 #include "panic.h"
 #include "printd.h"
+#include "video.h"
 
+extern uintptr_t kKernelBaseAddressP;
 //Kernel paging pml4 table physical address
 pt_entry_t kKernelPML4;
 //Kernel paging pml4 table virtual (higher half) address
@@ -70,21 +72,21 @@ uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address)
     // Get the PML4 entry
     uintptr_t pdpt_entry = pml4[PML4_INDEX(virtual_address)];
     if ((pdpt_entry & 0x1) == 0) { // Check Present bit
-        return 0; // PML4 entry is invalid
+        return 0xbadbadba; // PML4 entry is invalid
     }
     pt_entry_t* pdpt = (pt_entry_t*)((pdpt_entry & ~0xFFF) | kHHDMOffset);
 
     // Get the PDPT entry
     uintptr_t pd_entry = pdpt[PDPT_INDEX(virtual_address)];
     if ((pd_entry & 0x1) == 0) { // Check Present bit
-        return 0; // PDPT entry is invalid
+        return 0xbadbadba; // PDPT entry is invalid
     }
     pt_entry_t* pd = (pt_entry_t*)((pd_entry & ~0xFFF) | kHHDMOffset);
 
     // Get the PD entry
     uintptr_t pd_entry_value = pd[PD_INDEX(virtual_address)];
     if ((pd_entry_value & 0x1) == 0) { // Check Present bit
-        return 0; // PD entry is invalid
+        return 0xbadbadba; // PD entry is invalid
     }
 
     // Check for a 2 MiB page
@@ -98,11 +100,16 @@ uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address)
     pt_entry_t* pt = (pt_entry_t*)((pd_entry_value & ~0xFFF) | kHHDMOffset);
     uintptr_t pt_entry = pt[PT_INDEX(virtual_address)];
     if ((pt_entry & 0x1) == 0) { // Check Present bit
-        return 0; // PT entry is invalid
+        return 0xbadbadba; // PT entry is invalid
     }
 
     // Calculate the physical address for a 4 KiB page
-    uintptr_t physical_address = (pt_entry & ~0xFFF) | (virtual_address & 0xFFF);
+    //   First get rid of the page attributes
+	uintptr_t physical_address = (pt_entry & ~0xFFF);
+	//   Second, add the virtual address' last 12 bits back on
+	 physical_address |= (virtual_address & 0xFFF);
+	//   Third, get rid of any HH parts
+	physical_address &= 0x0000FFFFFFFFFFFF;
     return physical_address;
 }
 
@@ -165,6 +172,13 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
         uint64_t pt_phys = pd_page[PD_INDEX(virtual_address)] & ~0xFFF;
         pt_page = (pt_entry_t *)PHYS_TO_VIRT(pt_phys);
 	    printd(DEBUG_PAGING, "\tPT present @ 0x%016lx\n", pt_page);
+		if ((uint64_t)*pt_page > kMaxPhysicalAddress)
+		{
+			printf("Paging error: PT Entry at 0x%08x has value 0x%08x\n", pt_page, *pt_page);
+			debug_print_mem((uint64_t)pt_page & 0xFFFFF000, 1024);
+deadloop:
+goto deadloop;
+		}
     } else {
         // Allocate new PT page
 	    printd(DEBUG_PAGING, "\tPT not present - allocating it\n");
@@ -236,6 +250,9 @@ void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physica
 	}
 
 
+	if (physical_address < 0x1000)
+		panic("paging_map_pages: Attempt to map physical address 0x%016lx to virtual address 0x%016lx\n", physical_address, virtual_address);
+
 	printd(DEBUG_PAGING, "PAGING: Mapping 0x%08x pages at 0x%016lx to 0x%016lx with flags 0x%08x\n", page_count, physical_address, virtual_address, flags);
 
 	if (page_count > 0xA1)
@@ -268,6 +285,43 @@ void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t lengt
     }
 }
 
+
+void create_new_paging_tables()
+{
+	uint64_t* pml4 = kmalloc_aligned(PAGE_SIZE);
+	uint64_t* pdpt = kmalloc_aligned(PAGE_SIZE);
+	uint64_t* pd = kmalloc_aligned(PAGE_SIZE);
+	uint64_t* pt = kmalloc_aligned(PAGE_SIZE);
+
+	*pml4 = (uint64_t)VIRT_TO_PHYS(pdpt) | PAGE_PRESENT | PAGE_WRITE;
+	uint64_t* tempPDe = 0, *tempPTe = 0;
+
+	for (uintptr_t pdpte=0;pdpte<4;pdpte++)
+	{
+		pdpt[pdpte]=(uint64_t)VIRT_TO_PHYS(kmalloc_aligned(PAGE_SIZE)) | PAGE_PRESENT | PAGE_WRITE;
+		tempPDe = (uint64_t*)((pdpt[pdpte] & 0xFFFFF000) + kHHDMOffset);
+		//Map 1 GB
+		for (uintptr_t pde=0;pde<1;pde++)
+		{
+			tempPDe[pde]=(uint64_t)VIRT_TO_PHYS(kmalloc_aligned(PAGE_SIZE)) | PAGE_PRESENT | PAGE_WRITE;
+			tempPTe = (uint64_t*)((tempPDe[pde] & 0xFFFFF000) + kHHDMOffset);
+			for (uintptr_t pte=0;pte<512;pte++)
+			{
+				tempPTe[pte]=(uint64_t)VIRT_TO_PHYS(kmalloc_aligned(PAGE_SIZE)) | PAGE_PRESENT | PAGE_WRITE;
+			}
+		}
+	}
+
+	paging_map_page(pml4, 0, 0, 0); //make page 0 invalid
+	//TODO: Fix this ... it makes the whole kernel writeable because of BSS and writeable data, etc.
+	paging_map_pages(pml4, kKernelBaseAddressP | kHHDMOffset, kKernelBaseAddressP, 0x1000, PAGE_PRESENT | PAGE_WRITE);
+	uintptr_t rendererPhysical = paging_walk_paging_table((pt_entry_t*)kKernelPML4v, (uintptr_t)&kRenderer);
+	paging_map_pages(pml4, PHYS_TO_VIRT(&rendererPhysical), (pt_entry_t)&rendererPhysical, PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);	
+	//kRenderer
+	//kFrameBuffer
+	//kFrameBuffer->base_address
+
+}
 
 void paging_init()
 {
