@@ -39,9 +39,9 @@ bool parseGPT(block_device_info_t* device)
 	int readLen=0;
 	char *partBuffer = kmalloc(40*512);
 
-	printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT: parseGPT -  Retrieving MBR %s", device->block_device->name);
+	printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT: parseGPT -  Retrieving MBR for %s\n", device->block_device->name);
 	bool lResult=device->block_device->ops->read(device, 1, mbrBuffer, 1);
-    if (!lResult)
+    if (lResult)
         panic("parseGPT: Read error\n");
     gptHdr=(gpt_header_t*)mbrBuffer;
 
@@ -54,7 +54,7 @@ bool parseGPT(block_device_info_t* device)
     
     printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT:  parseGPT - Reading GPT partition table @ lba %u for %u sectors\n",gptHdr->partitionEntryLBA,readLen);
 	lResult=device->block_device->ops->read(device, gptHdr->partitionEntryLBA, partBuffer, readLen);
-    if (!lResult)
+    if (lResult)
         panic("parseGPT: Read error\n");
     
     gptPart=(gpt_part_entry_t*)partBuffer;

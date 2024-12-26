@@ -23,7 +23,7 @@
      - 3) & 255) ^ 1) <= 2U)
 #define ISUPPER(c)  ((c) >= 'A' && (c) <= 'Z')
 
-	void strtrim(char *input);
+	char *strtrim(char *str);
 
 #endif	/* STRINGS_H */
 

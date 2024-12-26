@@ -12,6 +12,8 @@ void kmalloc_common(uint64_t physical_address, uint64_t virtual_address, uint64_
 	uint64_t page_count = length / PAGE_SIZE;
 	if (length % PAGE_SIZE != 0)
 		page_count++;
+	if (virtual_address % PAGE_SIZE)
+		page_count++;
 	paging_map_pages((pt_entry_t*)kKernelPML4v, virtual_address & PAGE_ADDRESS_MASK, physical_address & PAGE_ADDRESS_MASK, page_count, PAGE_PRESENT | PAGE_WRITE);
 	memset((void*)virtual_address, 0, length);
 }

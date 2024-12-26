@@ -11,6 +11,7 @@
 extern volatile uint64_t kUptime;
 extern volatile uint64_t kTicksSinceStart;
 extern volatile bool kFBInitDone;
+extern bool kOverrideFileLogging;
 
 char print_buf[2048];
 char print_buf2[2048];
@@ -31,13 +32,17 @@ void printd(__uint128_t debug_level, const char *fmt, ...)
         printed = sprintf(print_buf2, "%u (0x%04x) AP%u: %s",kTicksSinceStart, taskNum, 0, print_buf);
 
 #ifdef ENABLE_COM1
+	if (!kOverrideFileLogging)
 		for (int cnt=0;cnt<printed;cnt++)
 		{
 			write_serial(COM1,print_buf2[cnt]);
 		}
+	else
+		if (kFBInitDone)
+			printf("%s",print_buf2);
 #else
 		if (kFBInitDone)
-		printf("%s",print_buf2);
+			printf("%s",print_buf2);
 #endif
 		va_end(args);
 	}

@@ -1,7 +1,10 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#include <stdbool.h>
+
 #define ENABLE_COM1
+
 #define DISK_WRITING_ENABLED
 //#define ENABLE_DOUBLE_BUFFER
 //  Timing related configuration
@@ -25,6 +28,8 @@
 #define __USE_MISC
 
 // Debugging related configuration
+#define SHUTOFF_ON_PANIC 0
+
 #define DEBUG_EVERYTHING ((__uint128_t)0xFFFFFFFFFFFFFFFFULL | ((__uint128_t)0xFFFFFFFFFFFFFFFFULL << 64))
 #define DEBUG_NOTHING 0x0000000000000000
 #define DEBUG_EXCEPTIONS 1 << 0
@@ -46,7 +51,7 @@
 
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED  (__uint128_t)1 << 127
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_SHUTDOWN | DEBUG_BOOT | DEBUG_HARDDRIVE)
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_SHUTDOWN | DEBUG_BOOT | DEBUG_HARDDRIVE | DEBUG_AHCI)
 //#define DEBUG_OPTIONS (DEBUG_EXCEPTIONS | DEBUG_BOOT)
 
 #endif // CONFIG_H

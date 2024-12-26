@@ -23,7 +23,7 @@ e_part_table_type detect_partition_table_type(block_device_info_t* device)
 
     // Read MBR
     lResult = device->block_device->ops->read(device, 0, &mbr, 1);
-    if (!lResult)
+    if (lResult)
 	{
 		printd(DEBUG_BOOT | DEBUG_DETAILED, "BOOT: Error detecting partition type\n");
         return PART_TABLE_TYPE_ERROR;
@@ -48,7 +48,7 @@ e_part_table_type detect_partition_table_type(block_device_info_t* device)
         // Read GPT Header
 		printd(DEBUG_BOOT | DEBUG_DETAILED, "BOOT: Found protective MBR\n");
 	    lResult = device->block_device->ops->read(device, 1, &gpt, 1);
-        if (!lResult)
+        if (lResult)
 		{
 			printd(DEBUG_BOOT | DEBUG_DETAILED, "BOOT: Error reading GPT header\n");
             return PART_TABLE_TYPE_ERROR;

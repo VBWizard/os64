@@ -293,8 +293,9 @@ uint64_t free_memory(uint64_t address)
 	{
 		printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Found block to free, address = 0x%016lx, length=0x%016lx\n", status_entry->startAddress, status_entry->length);
 		status_entry->in_use = false;
-		//Memory should still be mapped so we can clear it out safely
-		memset((void*)(status_entry->startAddress + kHHDMOffset), 0xFE, status_entry->length);
+		//TODO: Fix this.  It isn't working because some addresses are NOT offset by the HHDM
+//		//Memory should still be mapped so we can clear it out safely
+//		memset((void*)(status_entry->startAddress + kHHDMOffset), 0xFE, status_entry->length);
 		return statusIdx;
 	}
 	panic("ALLOCATOR: Did not find kMemoryStatus entry to mark not in use, address was: 0x%016lx\n",address);
@@ -338,7 +339,7 @@ void allocator_init()
 	uint64_t mapSize = allocSize/PAGE_SIZE;
 	if (allocSize%PAGE_SIZE)
 		mapSize++;
-	paging_map_pages((pt_entry_t*)kKernelPML4v, newAddress, newAddress - kHHDMOffset, mapSize, PAGE_PRESENT | PAGE_WRITE);
+	//paging_map_pages((pt_entry_t*)kKernelPML4v, newAddress, newAddress - kHHDMOffset, mapSize, PAGE_PRESENT | PAGE_WRITE);
 	memcpy((void*)newAddress, kMemoryStatus, kMemoryStatusCurrentPtr * size);
 	kMemoryStatus = (memory_status_t*)newAddress;
 }

@@ -42,6 +42,7 @@ struct limine_smp_response *kLimineSMPInfo;
 __uint128_t kDebugLevel = 0;
 uintptr_t kKernelStack = 0;
 char kKernelCommandline[512];
+bool kOverrideFileLogging;
 
 char startTime[100] = {0};
 uint64_t lastTime = 0;
@@ -123,44 +124,58 @@ void kernel_init()
 	
     // We're done, just hang...
   
-	// vfs_file_t* testFile = NULL;
-	// vfs_directory_t* testDir = NULL;
-	// FILINFO* fi=kmalloc(sizeof(FILINFO));
+	printf("\nDisk tests:\n");
+	vfs_file_t* testFile = NULL;
+	vfs_directory_t* testDir = NULL;
+	FILINFO* fi=kmalloc(sizeof(FILINFO));
 
-	// char* contents = kmalloc(4096);
+	char* contents = kmalloc(4096);
 
-	// if (testFS!=NULL)
-	// {
-	// 	if(testFS->fops->open(&testFile, "/fat32_partition", "r", testFS)==0)
-	// 	{
-	// 		testFS->fops->read(testFile, contents, 4096);
-	// 		testFS->fops->close(testFile);
-	// 		printf("fat32_partition file contents = %s\n",contents);
-	// 	}
-	// 	if (testFS->fops->open(&testFile, "/test2","c", testFS)==0)
-	// 	{
-	// 		testFS->fops->write(testFile, "Hello world from Chris!\n",24);
-	// 		testFS->fops->close(testFile);
-	// 		printf("File written\n");
-	// 	}
-	// 	if(testFS->fops->open(&testFile, "/test2", "r", testFS)==0)
-	// 	{
-	// 		testFS->fops->fgets(testFile, contents, 4096);
-	// 		testFS->fops->close(testFile);
-	// 		printf("New file test2 Contents = %s\n",contents);
-	// 	}
-	// 	if (testFS->dops->open(&testDir, "/", testFS)==0)
-	// 	{
-	// 		do
-	// 		{
-	// 			testFS->dops->read(testDir, fi);
-	// 			printf("File %s: Size %u\n",fi->fname, fi->fsize);
-	// 		} while (fi->fname[0] != '\0');
-	// 	}
+	if (testFS!=NULL)
+	{
+		if(testFS->fops->open(&testFile, "/fat32_partition", "r", testFS)==0)
+		{
+			testFS->fops->read(testFile, contents, 4096);
+			printf("fat32_partition file contents via read = %s\n",contents);
+			testFS->fops->seek(testFile, 0, SEEK_SET);
+			memset(contents, 0, 4096);
+			testFS->fops->fgets(testFile, contents, 4096);
+			printf("fat32_partition file contents via fgets = %s \n",contents);
+			testFS->fops->close(testFile);
+		}
+		if (testFS->dops->open(&testDir, "/", testFS)==0)
+		{
+			do
+			{
+				if(!testFS->dops->read(testDir, fi) && fi->fname[0] != '\0')
+				{
+					if (fi->fattrib & AM_DIR)
+						printf("Directory: %s\n",fi->fname);
+					else
+						printf("File: %s - Attrib 0x%02x - Size %u\n",fi->fname, fi->fattrib, fi->fsize);
+				}
+			} while (fi->fname[0] != '\0');
+		}
+		if (testFS->bops->write)
+		{
+			if (testFS->fops->open(&testFile, "/test2","c", testFS)==0)
+			{
+				testFS->fops->write(testFile, "Hello world from Chris!\n",24);
+				testFS->fops->close(testFile);
+				printf("New test file /test2 written\n");
+			}
+			if(testFS->fops->open(&testFile, "/test2", "r", testFS)==0)
+			{
+				testFS->fops->fgets(testFile, contents, 4096);
+				testFS->fops->close(testFile);
+				printf("New file test2 Contents = %s\n",contents);
+			}
+		}
+		else
+			printf("Disk %s does not have a write function, skipping write tests\n", testFS->block_device_info->ATADeviceModel);
+	}
 
-	// }
-
-	// kfree(contents);
+	kfree(contents);
 
 
 	shutdown();
@@ -193,7 +208,10 @@ void kernel_main()
 	init_serial(0x3f8);
 #endif
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
-	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
+	pt_entry_t* temp = (pt_entry_t*)kKernelPML4v;
+
+	uintptr_t value = VIRT_TO_PHYS(kKernelPML4v) | PAGE_PRESENT | PAGE_WRITE;
+ 	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
 	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
 	printf(	"***** OS64 - system booting at %s *****\n", startTime);
 	uint64_t high, low;
@@ -206,6 +224,7 @@ void kernel_main()
 	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
+	init_os64_paging_tables();
 	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
 	__asm__ volatile ("mov rsp, %0" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
 	printf("Kernel stack initialized, 0x%x bytes\n", KERNEL_STACK_SIZE);

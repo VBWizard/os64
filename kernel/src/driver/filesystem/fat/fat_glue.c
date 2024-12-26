@@ -19,9 +19,9 @@ vfs_filesystem_t* vfs_get_device_by_fat_disk_number(uint8_t fatDiskNumber)
 
 	do
 	{
-		if (bdl->data != 0)
+		if (bdl->next != 0)
 		{
-			vfsdev = (vfs_filesystem_t*)bdl->data;
+			vfsdev = (vfs_filesystem_t*)bdl->next->data;
 			if (vfsdev->fatDiskNumber == fatDiskNumber)
 				return vfsdev;
 		}
@@ -65,10 +65,8 @@ DRESULT disk_read (
 	if (fs==NULL)
 		panic("fat disk_read: Cannot find vfs device for disk number %u\n",pdrv);
 
-	fs->bops->read(fs->block_device_info, 
+	return fs->bops->read(fs->block_device_info, 
 				fs->block_device_info->block_device->partition_table->parts[fs->partNumber]->partStartSector + sector, buff, count);
-
-	return 0;
 	}
 
 /*-----------------------------------------------------------------------*/
@@ -187,7 +185,7 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
     if (strcmp(mode, "r") == 0) fat_mode = FA_READ;
     else if (strcmp(mode, "w") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
     else if (strcmp(mode, "a") == 0) fat_mode = FA_WRITE | FA_OPEN_APPEND;
-	else if (strcmp(mode, "c") == 0) fat_mode = FA_WRITE | FA_CREATE_NEW;
+	else if (strcmp(mode, "c") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
 	
 	char lPath[255];
 	strncpy(lPath, path, 255);

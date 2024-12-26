@@ -81,11 +81,12 @@ void calculateAvailableMemory()
 			kKernelExecutableStartAddress = kMemMap[entry]->base;
 			kKernelExecutablePageCount = kMemMap[entry]->length % PAGE_SIZE;
 		}
-		if (entry == kMemMapEntryCount - 1)
+		if (kMemMap[entry]->type == LIMINE_MEMMAP_USABLE)
 			kMaxPhysicalAddress = kMemMap[entry]->base + kMemMap[entry]->length;
 	}
 	printd(DEBUG_MEMMAP, "MEMMAP: Parsing done\n");
 	printd(DEBUG_MEMMAP, "MEMMAP: Usable memory: %Lu\n", kAvailableMemory);
+	printd(DEBUG_MEMMAP, "MEMMAP: Calculated max physical address: 0x%016lx\n",kMaxPhysicalAddress);
 }
 
 uint64_t getLowestAvailableMemoryAddress(uint64_t startAddress)

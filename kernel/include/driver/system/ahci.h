@@ -47,6 +47,9 @@
 #define COMMAND_TIMEOUT 1000 // Total timeout in milliseconds
 #define POLL_INTERVAL    100  // Polling interval in milliseconds
 
+#define ATA_SR_BSY 0x80
+#define ATA_SR_DRQ 0x08
+
 #define ATA_CMD_READ_DMA 0xC8
 #define ATA_CMD_READ_DMA_EX 0x25
 #define ATA_CMD_WRITE_DMA 0xCA
@@ -745,7 +748,7 @@ typedef struct tagHBA_PRDT_ENTRY
 			uint32_t    dba;        // Data base address
 			uint32_t    dbau;       // Data base address upper 32 bits
 		};
-		uintptr_t* dba_64;
+		uintptr_t dba_64;
 	 };
      uint32_t    rsv0;       // Reserved
  
@@ -794,7 +797,7 @@ typedef volatile struct tagHBA_FIS
 	uint8_t		rsv[0x100-0xA0];
 } HBA_FIS;
 
-int ahci_check_type(const hba_port_t *port, uint32_t* sig);
+uint32_t ahci_check_type(const hba_port_t *port, uint32_t* sig);
 void ahci_probe_ports(HBA_MEM *abar);
 void printAHCICaps();
 bool init_AHCI();

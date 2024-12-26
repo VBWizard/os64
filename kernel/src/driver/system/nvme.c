@@ -872,7 +872,7 @@ size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* bu
 {
 	nvme_controller_t* controller = device->block_extra_info;
 	nvme_read_disk(controller, sector, sector_count * controller->blockSize, buffer);
-	return true;
+	return 0;
 }
 
 void nvme_vfs_write_disk(block_device_info_t* device, uint64_t sector, void* buffer, size_t length)

@@ -4,10 +4,13 @@
 #include <stdint.h>
 #include "printd.h"
 
+extern bool kOverrideFileLogging;
 bool kEnableAHCI=true, kEnableNVME=true;
 
 void process_kernel_commandline(char* cmdline)
 {	
+	kOverrideFileLogging=false;
+
 	printd(DEBUG_BOOT, "CMDLINE: Commandline processing\n");
 	if (strnstr(cmdline,"nolog",512) != NULL)
 	{
@@ -102,5 +105,12 @@ void process_kernel_commandline(char* cmdline)
 		kDebugLevel |= DEBUG_EVERYTHING;
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter DEBUG_NVME passed, NVME logging will be done\n");
 	}
+#ifdef ENABLE_COM1
+	if (strnstr(cmdline,"NOLOGFILE",512) != NULL)
+	{
+		kOverrideFileLogging = true;
+		printd(DEBUG_BOOT, "CMDLINE:\t Parameter NOLOGFILE passed, logging go to the screen\n");
+	}
+#endif
 
 }

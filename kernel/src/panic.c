@@ -34,7 +34,9 @@ void __attribute__((noinline))panic(const char *format, ...)
     vsprintf(sprintf_buf, format, args);
 	va_end(args);
 	print(sprintf_buf);
+#if SHUTOFF_ON_PANIC == 1	
 	shutdown();
+#endif 
     panicLoop: 
     __asm__("cli\nhlt\n");
     goto panicLoop;
