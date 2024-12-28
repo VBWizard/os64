@@ -11,6 +11,7 @@ extern int kTimeZone;
 
 void shutdown()
 {
+	uint64_t memInUse=0;
 	uint64_t lastTime = 0;
 	char startTime[100] = {0};
 	printd(DEBUG_SHUTDOWN, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
@@ -18,9 +19,13 @@ void shutdown()
 	{
 		printd(DEBUG_SHUTDOWN, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
 		if (kMemoryStatus[cnt].in_use)
+		{
 			usedCount++;
+			memInUse+=kMemoryStatus[cnt].length;
+		}
 	}
-	printd(DEBUG_SHUTDOWN, "Found %u memory status entries in use, only %u really utilized\n", kMemoryStatusCurrentPtr, usedCount);
+	printd(DEBUG_SHUTDOWN, "Found %u memory in use at shutdown\n", memInUse);
+	printd(DEBUG_SHUTDOWN, "Found %u memory status entries,  %u in use\n", kMemoryStatusCurrentPtr, usedCount);
 	printf("All done, hcf-time!\n");
 	printd(DEBUG_BOOT,"All done, hcf-time!\n");	
 	printf("12345678901234567890123456789012345678901234567890123456789012345678901234567890\n");

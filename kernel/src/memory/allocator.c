@@ -52,7 +52,7 @@ bool merge_freed_block(uint64_t freedIndex) {
 
     // Scan for a parent block to merge into
 	memory_status_t* ours=&kMemoryStatus[freedIndex];
-    printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Looking for an entry to merge ours at index %u, address 0x%016lx with\n", freedIndex, ours->startAddress);
+    printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Looking for an entry to merge ours at index %u, address 0x%016lx, with\n", freedIndex, ours->startAddress);
 	for (size_t idx = 0; idx < kMemoryStatusCurrentPtr; idx++) {
         if (idx == freedIndex) continue; // Skip the block being freed
 
@@ -80,6 +80,8 @@ bool merge_freed_block(uint64_t freedIndex) {
 				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: found an f candidate with start=0x%016lx, length=0x%016lx, in_use=%u\n", 
 						candidate->startAddress, candidate->length, candidate->in_use);
                 candidate->length += freedBlock->length;
+				//The found candidate followed our block to be freed, so its new address becomes our block's
+				candidate->startAddress = freedBlock->startAddress;
 
                 // Invalidate the freed block
                 freedBlock->startAddress = 0;
@@ -189,6 +191,9 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	//Find the appropriate memory status page
 	if (!use_address)
 	{
+		//When a specific address is NOT requested, internally align request to 8 bytes since our architecture is 64-bit
+		// Align to the next multiple of 8
+		requested_length = (requested_length + 7) & ~((size_t)7);
 		memaddr = get_status_entry_for_first_available_address(requested_length, page_aligned);
 		if (memaddr == NULL)
 			__asm__("cli\nhlt\n");

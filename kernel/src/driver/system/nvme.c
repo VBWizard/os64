@@ -727,6 +727,7 @@ void nvme_identify(nvme_controller_t* controller)
 	printd(DEBUG_NVME, "NVME: Identified max bytes per NVME transfer: 0x%08x bytes\n", controller->maxBytesPerTransfer);
 	//kDebugLevel |= DEBUG_KMALLOC | DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED;
 	controller->dmaReadBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
+	controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
 
 	//controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
 	printd(DEBUG_NVME, "NVME: Device found, model: %s, max bytes per PRP = %u\n", controller->deviceName, controller->maxBytesPerTransfer);
@@ -748,45 +749,80 @@ uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
 }
 
 #ifdef DISK_WRITING_ENABLED
-void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer)
-{
-	nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
+void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
+    if (controller->maxBytesPerTransfer == 0) {
+        panic("nvme_write_disk: controller->maxBytesPerTransfer = 0\n");
+    }
 
-	//fixup length
-	uint32_t blockCount = length / controller->blockSize;
-	if (length%controller->blockSize)
-		blockCount+=1;
-	
-	if (blockCount > 0xffffffff)
-		panic("NVME: Write request length too large.  Requested length = 0x%016lx which is 0x%016lx blocks.  Max blocks is 0xffffffff", length, blockCount);
+    size_t remaining = length;
+    uintptr_t userBufferOffset = (uintptr_t)buffer;
+    uint64_t currentLBA = LBA;
+    size_t maxTransferBlocks = controller->maxBytesPerTransfer / controller->blockSize;
 
-	//Populate the NVME command
-	cmd->opc = NVME_OPCODE_WRITE;
-	cmd->nsid = controller->nsid;
-    cmd->cid = controller->cmdCID++;
-	cmd->prp1 = (uintptr_t)kmalloc_dma(length);
-	memcpy((void*)cmd->prp1, buffer, length);
-	cmd->cdw10 = LBA & 0xffffffff;
-	cmd->cdw11 = LBA >> 32;
-	cmd->cdw12 = blockCount;
-	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Submitting write request for 0x%08lx blocks to LBA 0x%016x\n", blockCount, LBA);
-    nvme_submit_command(controller, cmd, false);
-	
-	volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
-	nvme_wait_for_completion(controller, false, (volatile nvme_completion_queue_entry_t*)completionEntry, cmd);
+    while (remaining > 0) {
+        // Calculate the size of the current transfer
+        size_t transferLength = remaining > controller->maxBytesPerTransfer ? controller->maxBytesPerTransfer : remaining;
+        uint32_t blockCount = transferLength / controller->blockSize;
+        if (transferLength % controller->blockSize) {
+            blockCount++;
+        }
 
-	//Validate the completion result
-	if (completionEntry->status.status_code || completionEntry->status.status_code_type)
-	{
-		log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, 1);
-		panic("NVME Write error.  System log contains more information.");
-	}
+        // Calculate PRP count for this transfer
+        uint32_t prpCount = transferLength / PAGE_SIZE;
+        if (transferLength % PAGE_SIZE) {
+            prpCount++;
+        }
 
-	nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);  // Update index for consumed entries
-	controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex+ 1) % controller->queueDepth;
+        // Allocate the NVMe command
+        nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
 
-	kfree((void*)cmd->prp1);
-	kfree(cmd);
+        // Populate the NVMe read command
+        cmd->opc = NVME_OPCODE_WRITE;
+        cmd->nsid = controller->nsid;
+        cmd->cid = controller->cmdCID++;
+        cmd->prp1 = (uintptr_t)controller->dmaWriteBuffer;
+
+        if (prpCount == 2) {
+            cmd->prp2 = cmd->prp1 + PAGE_SIZE;
+        } else if (prpCount > 2) {
+            cmd->prp2 = setup_prp_list(cmd->prp1 + PAGE_SIZE, prpCount - 1);
+        }
+
+        cmd->cdw10 = currentLBA & 0xffffffff;
+        cmd->cdw11 = currentLBA >> 32;
+        cmd->cdw12 = blockCount - 1; // cdw12 = number of blocks minus 1
+
+        printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data from user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n", 
+				(uintptr_t)controller->dmaWriteBuffer, userBufferOffset, transferLength);
+		memcpy(controller->dmaWriteBuffer, (void*)userBufferOffset,transferLength);
+
+        printd(DEBUG_NVME | DEBUG_DETAILED, "Submitting NVMe write: LBA=0x%016lx, Blocks=%u, DMA Buffer=0x%016lx\n", currentLBA, blockCount, controller->dmaReadBuffer);
+        nvme_submit_command(controller, cmd, false);
+
+        volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
+		printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: Current write completion queue head index = %u\n",controller->cmdCompQueueHeadIndex);
+        nvme_wait_for_completion(controller, false, completionEntry, cmd);
+
+        // Validate the completion result
+        if (completionEntry->status.status_code || completionEntry->status.status_code_type) {
+            log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, controller->queueDepth, 1);
+            panic("NVMe Read error. System log contains more information.");
+        }
+
+        nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);  // Update index for consumed entries
+		controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex+ 1) % controller->queueDepth;
+
+        // Free PRPs and command
+        if (prpCount > 2) {
+            kfree((void*)cmd->prp2);
+        }
+        kfree(cmd);
+
+        // Update offsets and remaining data
+        userBufferOffset += transferLength;
+        currentLBA += blockCount;
+        remaining -= transferLength;
+    }
 }
 #endif
 

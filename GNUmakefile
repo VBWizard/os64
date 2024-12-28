@@ -20,9 +20,9 @@ QEMU_BASE_FLAGS = -m 8g -smp 2 -no-reboot \
 QEMU_DRIVE_FLAGS = \
                   -drive file=/home/yogi/disk_images/nvme.img,if=none,id=nvme1 \
                   -device nvme,drive=nvme1,serial=nvme1-serial \
-                  -drive file=/home/yogi/disk_images/sata.img,if=none,id=sata1 \
-                  -device ahci,id=ahci1 \
-                  -device ide-hd,drive=sata1,bus=ahci1.0
+                  #-drive file=/home/yogi/disk_images/sata.img,if=none,id=sata1 \
+                  #-device ahci,id=ahci1 \
+                  #-device ide-hd,drive=sata1,bus=ahci1.0
 
 # Combine all flags
 QEMUFLAGS_ADD = $(QEMU_BASE_FLAGS) $(QEMU_DRIVE_FLAGS)

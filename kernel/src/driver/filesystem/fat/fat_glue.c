@@ -30,6 +30,8 @@ vfs_filesystem_t* vfs_get_device_by_fat_disk_number(uint8_t fatDiskNumber)
 	return NULL;
 }
 
+/***********               DISK LEVEL METHODS               ************/
+
 DSTATUS disk_status (
 	BYTE pdrv		/* Physical drive nmuber to identify the drive */
 )
@@ -127,6 +129,8 @@ DRESULT disk_ioctl (
 	return 0;
 }
 
+/***********                  MISC METHODS                  ************/
+
 void* ff_memalloc (	/* Returns pointer to the allocated memory block (null if not enough core) */
 	UINT msize		/* Number of bytes to allocate */
 )
@@ -174,6 +178,8 @@ void create_fat_path(char* fsPath, vfs_filesystem_t* vfs_fs)
 	sprintf(fsPath,"%u:%s", vfs_fs->fatDiskNumber, tempPath);
 
 }
+
+/***********             PARTITION LEVEL METHODS            ************/
 
 static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, vfs_filesystem_t* vfs_fs)
 {
@@ -327,6 +333,7 @@ static int fat_uninitialize(vfs_filesystem_t* vfs_fs)
 	return retVal;
 }
 
+/***********           DIRECTORY LEVEL METHODS          ************/
 // FAT directory methods
 static int fat_open_dir(vfs_directory_t** vfs_dir, const char* path, vfs_filesystem_t* vfs_fs)
 {
@@ -358,6 +365,14 @@ static int fat_read_dir(vfs_directory_t* vfs_dir, void* filInfo)
 	return f_readdir(dir, filInfo);
 }
 
+static int fat_mkdir(char* path, vfs_filesystem_t* vfs_fs)
+{
+	char lPath[255];
+	strncpy(lPath, path, 255);
+	create_fat_path(lPath, vfs_fs);
+	return f_mkdir(lPath);
+}
+
 // FAT filesystem operations
 vfs_file_operations_t fat_fops = {
 	.initialize = fat_initialize,
@@ -380,7 +395,8 @@ vfs_file_operations_t fat_fops = {
 vfs_directory_operations_t fat_dops = {
 	.open=fat_open_dir,
 	.close=fat_close_dir,
-	.read=fat_read_dir
+	.read=fat_read_dir,
+	.mkdir=fat_mkdir
 };
 
 typedef uint32_t DWORD;

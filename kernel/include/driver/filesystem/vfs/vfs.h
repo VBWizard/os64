@@ -159,6 +159,7 @@ struct dir_operations
 	int (*open) (vfs_directory_t** vfs_dir, const char* path, vfs_filesystem_t* vfs_fs);
 	int (*read) (vfs_directory_t* vfs_dir, void* fileInfo);
 	int (*close) (vfs_directory_t* vfs_dir);
+	int (*mkdir) (char* path, vfs_filesystem_t* vfs_f);
 };
 	
 struct dentry
