@@ -330,7 +330,7 @@ void ahci_probe_ports(HBA_MEM *ahci_abar) {
 	uint32_t port0 = paging_walk_paging_table_keep_flags((uintptr_t*)kKernelPML4v, (uintptr_t)&ahci_abar->ports[0], true);
 	uint32_t port1 = paging_walk_paging_table_keep_flags((uintptr_t*)kKernelPML4v, (uintptr_t)&ahci_abar->ports[1], true);
 	
-	printd(DEBUG_BOOT, "AHCI: Port0  address is 0x%016lx (physical=0x%016lx), Port1 address is 0x%016lx (physical=0x%016lx)\n", &ahci_abar->ports[0], port0, &ahci_abar->ports[1], port1);
+	printd(DEBUG_AHCI, "AHCI: Port0  address is 0x%016lx (physical=0x%016lx), Port1 address is 0x%016lx (physical=0x%016lx)\n", &ahci_abar->ports[0], port0, &ahci_abar->ports[1], port1);
 
 	while (i < 32) 
     {
