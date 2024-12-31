@@ -19,7 +19,6 @@ char print_buf2[2048];
 void printd(__uint128_t debug_level, const char *fmt, ...)
 {
 	int printed;
-	__uint128_t a = 0;
 	
 	if ((kDebugLevel & debug_level) == debug_level)
 	{

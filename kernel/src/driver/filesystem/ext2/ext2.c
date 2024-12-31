@@ -30,8 +30,7 @@ ext2_inode_t* ext2_get_inode(ext2_super_block_t* sb, void* inodeTable, int inode
         // Calculate the address of the current inode
         void* inode_ptr = (uint8_t*)inodeTable + (inodeToAccess * sb->s_inode_size);
 
-        // Cast to your struct to interpret the data
-        ext2_inode_t* inode = (ext2_inode_t*)inode_ptr;
+        //Remarked as unused: ext2_inode_t* inode = (ext2_inode_t*)inode_ptr;
 
         // Now you can access the inode fields
 		return inode_ptr;
@@ -99,7 +98,7 @@ int ext2_get_superblock(vfs_filesystem_t* device)
     device->blockSize = 1024 << sb->s_log_block_size;
 
 	//Read the block group descriptor
-	uint32_t num_block_groups = (sb->s_blocks_count + sb->s_blocks_per_group - 1) / sb->s_blocks_per_group;
+	//Remarked as unused: uint32_t num_block_groups = (sb->s_blocks_count + sb->s_blocks_per_group - 1) / sb->s_blocks_per_group;
 	uint32_t blockToRead = start_sector + SB_LOCATION / DISK_SECTOR_SIZE + device->blockSize / DISK_SECTOR_SIZE;
 	device->block_group_descriptor = kmalloc(sizeof(ext2_group_desc_t));
 	device->block_device_info->block_device->ops->read(device->block_device_info, blockToRead, device->block_group_descriptor, 1);

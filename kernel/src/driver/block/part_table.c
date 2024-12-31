@@ -71,7 +71,7 @@ e_part_table_type detect_partition_table_type(block_device_info_t* device)
     }
 }
 
-bool read_block_partitions(block_device_info_t* device)
+bool detect_partition_filesystem_types(block_device_info_t* device)
 {
 	bool lResult;
 	if (device->bus != BUS_NONE && (device->ATADeviceType == ATA_DEVICE_TYPE_SATA_HD || device->ATADeviceType == ATA_DEVICE_TYPE_NVME_HD))

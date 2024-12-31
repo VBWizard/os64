@@ -214,8 +214,6 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	else //memory available is > requested memory
 	{
 		found_block_original_length = memaddr->length;
-		//Create a new memory_status for the memory we're assigning.
-		memory_status_t* block_before_requested;
 
 		//The starting address for the new Status entry, aligned if necessary.  THIS IS ONLY USED AS A RETURN VALUE FROM THIS METHOD
 		uint64_t true_start = memaddr->startAddress;
@@ -235,7 +233,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		//Create an entry for the memory being utilized
 		//NOTE that even if an aligned address was requested, the new entry will start with the unaligned start address. 
 		//The address RETURNED will be the aligned address
-		memory_status_t* new_entry = make_new_status_entry(
+		/*memory_status_t* new_entry = */make_new_status_entry(
 							  use_address?requested_address:
 							  	memaddr->startAddress, 
 							  aligned_length, 
@@ -244,7 +242,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		if (use_address && memaddr->startAddress != requested_address)
 		{
 			block_before_length = requested_address - memaddr->startAddress;
-			block_before_requested = make_new_status_entry(memaddr->startAddress, requested_address - memaddr->startAddress, false);
+			make_new_status_entry(memaddr->startAddress, requested_address - memaddr->startAddress, false);
 		}
 
 		//Fixup the exiting entry to just point to what's left after the allocated memory

@@ -656,7 +656,7 @@ int find_cmdslot(volatile hba_port_t *port) {
 }
 
 int ahci_lba_read(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count) {
-    int prdCntr = 0;
+
 	// Each PRD can handle 16 sectors = 8 KiB
 	uint32_t sectors_per_prd = 16;
 	uint32_t prd_count = (sector_count + sectors_per_prd - 1) / sectors_per_prd;

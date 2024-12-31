@@ -1,4 +1,5 @@
 #include "vfs.h"
+#include "part_table.h"
 #include "driver/filesystem/vfs/vfs.h"
 #include "kmalloc.h"
 #include "memcpy.h"
@@ -8,6 +9,9 @@
 #include "ext2_fs.h"
 #include "ext2_vfs.h"
 #include "block_device.h"
+#include "sprintf.h"
+#include "fat_glue.h"
+#include "serial_logging.h"
 
 uint8_t kFatDiskNumber=0;
 
@@ -58,5 +62,99 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 {
 	ext2_get_superblock(device);
 	
+	return 0;
+}
+
+char* compare_part_uuids(const char* rootPartUUID, const char* currPartUUID)
+{
+	char* result = 0;
+
+	//Make currPartUUID look like rootPartUUID
+	//The format is U32-U16-U16-BYBY-BYBYBYBYBYBY
+	uint32_t currPart1=(uint32_t)*(uint32_t*)currPartUUID;
+	currPartUUID+=4;
+	uint16_t currPart2=(uint16_t)*(uint16_t*)currPartUUID;
+	currPartUUID+=2;
+	uint16_t currPart3=(uint16_t)*(uint16_t*)currPartUUID;
+	currPartUUID+=2;
+	uint8_t currPart4[2];
+	currPart4[0]=*(uint8_t*)currPartUUID;
+	currPartUUID+=1;
+	currPart4[1]=*(uint8_t*)currPartUUID;
+	currPartUUID+=1;
+
+	uint8_t currPart5[6];
+	for (int cnt=0;cnt<6;cnt++)
+	{
+		currPart5[cnt]=*(uint8_t*)currPartUUID;
+		currPartUUID+=1;
+	}
+
+	char* currPartStr=kmalloc(20);
+	sprintf(currPartStr, "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+			currPart1, currPart2, currPart3, 
+			currPart4[0], currPart4[1],
+			currPart5[0], currPart5[1], currPart5[2], currPart5[3], currPart5[4], currPart5[5]);
+
+	//Compare the formatted currPartUUID to the part UUID passed to be the root
+	result = strnstr(rootPartUUID, currPartStr,36);
+	kfree(currPartStr);
+
+	printd(DEBUG_BOOT | DEBUG_DETAILED, "\tBOOT: Compared rootPartUUID=%s with partition %s, result=%p\n", rootPartUUID, currPartStr, result);
+	if (result==rootPartUUID)
+		return result;
+	return NULL;
+}
+
+int vfs_mount_root_part(char* rootPartUUID)
+{
+	vfs_file_operations_t fileOps;
+	vfs_directory_operations_t dirOps;
+	bool mounted=false;
+
+	//First we need to get the partition tables of all of the detected drives, and identify the partition types of each of the partitions
+	for (int idx=0;idx<kBlockDeviceInfoCount;idx++)
+	{
+		if (kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_SATA_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_NVME_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_HD)
+		{
+			kBlockDeviceInfo[idx].block_device->partTableType = detect_partition_table_type(&kBlockDeviceInfo[idx]);
+			detect_partition_filesystem_types(&kBlockDeviceInfo[idx]);
+		}
+	}
+
+	//Then we need to look for the partition UUID mentioned in the boot commandline parameter ROOTPARTUUID.  If it is found we'll mount it as the root of the filesystem
+	for (int idx=0;idx<kBlockDeviceInfoCount;idx++)
+	{
+		for (int partno=0;partno<kBlockDeviceInfo[idx].block_device->part_count;partno++)
+		{
+			if (compare_part_uuids(rootPartUUID, (char*)kBlockDeviceInfo[idx].block_device->partition_table->parts[partno]->uniquePartGUID))
+			{
+				switch (kBlockDeviceInfo[idx].block_device->partition_table->parts[partno]->filesystemType)
+				{
+					// case FILESYSTEM_TYPE_EXT2:
+					// 	fileOps.initialize = &ext2_initialize_filesystem;
+					// 	vfs_filesystem_t* t = kRegisterFilesystem("/", &kBlockDeviceInfo[cnt], part, &fileOps);
+					// 	mounted = true;
+					// 	break;
+					case FILESYSTEM_TYPE_FAT32:
+						fileOps = fat_fops;
+						dirOps = fat_dops;
+						printd(DEBUG_BOOT, "BOOT: Root filesystem found, mounting\n");
+						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps);
+						mounted=true;
+						break;
+					default: 
+						panic("Could not mount root filesystem, type=%u", kBlockDeviceInfo[idx].block_device->partition_table->parts[partno]->filesystemType);
+					break;
+				}
+			}
+			if (mounted)
+				break;
+		}
+		if (mounted)
+			break;
+	}
+	if (kRootFilesystem==NULL)
+		panic("BOOT: Could not find/mount root filesystem\n");
 	return 0;
 }

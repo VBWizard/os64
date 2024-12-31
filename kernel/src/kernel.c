@@ -18,7 +18,6 @@
 #include "ahci.h"
 #include "ata.h"
 #include "memset.h"
-#include "part_table.h"
 #include "vfs.h"
 #include "acpi.h"
 #include "nvme.h"
@@ -27,6 +26,7 @@
 #include "fat_glue.h"
 #include "shutdown.h"
 #include "tests.h"
+#include "panic.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -44,7 +44,8 @@ __uint128_t kDebugLevel = 0;
 uintptr_t kKernelStack = 0;
 char kKernelCommandline[512];
 bool kOverrideFileLogging;
-
+char kRootPartUUID[36] = {0};
+vfs_filesystem_t* kRootFilesystem=NULL;
 char startTime[100] = {0};
 uint64_t lastTime = 0;
 
@@ -75,61 +76,22 @@ void kernel_init()
 	detect_cpu();
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 	printf("SMP: Initializing ... ");
-	init_SMP();
 	kLimineSMPInfo = smp_request.response;
+	init_SMP();
 
-	vfs_filesystem_t* testFS;
-	bool mounted = false;
-	vfs_file_operations_t fileOps;
-	vfs_directory_operations_t dirOps;
-	for (int idx=0;idx<kBlockDeviceInfoCount;idx++)
+	if (kRootPartUUID[0])
 	{
-		if (kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_SATA_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_NVME_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_HD)
-		{
-			kBlockDeviceInfo[idx].block_device->partTableType = detect_partition_table_type(&kBlockDeviceInfo[idx]);
-			read_block_partitions(&kBlockDeviceInfo[idx]);
-/*			switch (kBlockDeviceInfo[cnt].ATADeviceType)
-			{
-				case ATA_DEVICE_TYPE_SATA_HD:
-					 ATA_DEVICE_TYPE_NVME_HD:
-					 ATA_DEVICE_TYPE_HD:
-
-			}
-			fileOps->initialize = &ext2_initialize_filesystem;
-*/		}
+		printd(DEBUG_BOOT, "BOOT: ROOTPARTUUID passed in commandline.  Will mount '%s' as the root partition\n",&kRootPartUUID);
+		vfs_mount_root_part((char*)&kRootPartUUID);
 	}
 
-	for (int cnt=0;cnt<kBlockDeviceInfoCount;cnt++)
+	if (kRootFilesystem!=NULL)
 	{
-		for (int part=0;part<kBlockDeviceInfo[cnt].block_device->part_count;part++)
-		{
-			switch (kBlockDeviceInfo[cnt].block_device->partition_table->parts[part]->filesystemType)
-			{
-				// case FILESYSTEM_TYPE_EXT2:
-				// 	fileOps.initialize = &ext2_initialize_filesystem;
-				// 	vfs_filesystem_t* t = kRegisterFilesystem("/", &kBlockDeviceInfo[cnt], part, &fileOps);
-				// 	mounted = true;
-				// 	break;
-				case FILESYSTEM_TYPE_FAT32:
-					fileOps = fat_fops;
-					dirOps = fat_dops;
-					testFS = kRegisterFilesystem("/", &kBlockDeviceInfo[cnt], part, &fileOps, &dirOps);
-					mounted = true;
-					break;
-				default: break;
-			}
-			if (mounted)break;
-		}
-		if (mounted)break;
-	}
-	
-	if (testFS!=NULL)
-	{
-		int lResult = testVFS(testFS);
-		if (lResult)
-			printf("Disk test failed: %u\n",lResult);
-	}
-	testFS->fops->uninitialize(testFS);
+	 	int lResult = testVFS(kRootFilesystem);
+	 	if (lResult)
+	 		panic("Root filesystem disk test failed: %u\n",lResult);
+		kRootFilesystem->fops->uninitialize(kRootFilesystem);
+	 }
 
 	shutdown();
 }
@@ -161,9 +123,7 @@ void kernel_main()
 	init_serial(0x3f8);
 #endif
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
-	pt_entry_t* temp = (pt_entry_t*)kKernelPML4v;
 
-	uintptr_t value = VIRT_TO_PHYS(kKernelPML4v) | PAGE_PRESENT | PAGE_WRITE;
  	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
 	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
 	printf(	"***** OS64 - system booting at %s *****\n", startTime);

@@ -5,6 +5,7 @@
 #include "printd.h"
 
 extern bool kOverrideFileLogging;
+extern char kRootPartUUID[];
 bool kEnableAHCI=true, kEnableNVME=true;
 
 void process_kernel_commandline(char* cmdline)
@@ -110,6 +111,12 @@ void process_kernel_commandline(char* cmdline)
 	{
 		kOverrideFileLogging = true;
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter NOLOGFILE passed, logging go to the screen\n");
+	}
+	char* ptr=0;
+	if ((ptr=strnstr(cmdline,"ROOTPARTUUID=",512)) != NULL)
+	{
+		ptr+=13;
+		strncpy((char*)&kRootPartUUID, ptr, 36);
 	}
 #endif
 

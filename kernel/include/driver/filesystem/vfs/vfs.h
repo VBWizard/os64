@@ -252,9 +252,13 @@ struct file_operations
 
 
 extern dlist_t* kBlockDeviceDList;
+extern block_device_info_t* kBlockDeviceInfo;
+extern int kBlockDeviceInfoCount;
+extern vfs_filesystem_t* kRootFilesystem;
 
 void init_block();
 vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps);
 int ext2_initialize_filesystem(vfs_filesystem_t* device);
+int vfs_mount_root_part(char* rootPartUUID);
 
 #endif

@@ -44,14 +44,7 @@ volatile LIMINE_BASE_REVISION(3);
 uint8_t* fb_ptr = NULL;
 
 // Halt and catch fire function.
-static void hcf(int error_number) {
-    int error = error_number;
-/*	char* buffer = (char*)0xb8000;
-	buffer[0] = 'H';
-	buffer[2] = 'C';
-	buffer[4] = 'F';
-	buffer[6] = '!';
-	buffer[8] = '!';*/
+static void hcf() {
 	for (;;) {
 		asm ("sti\nhlt\n");
     }
@@ -126,7 +119,7 @@ void limine_boot_entry_point(void) {
 	);
 
 	if (LIMINE_BASE_REVISION_SUPPORTED == false) {
-        hcf(-5);
+        hcf();
     }
 
 	memmap_response = memmap_request.response;
@@ -147,7 +140,7 @@ void limine_boot_entry_point(void) {
 	int limine_response_status = verify_limine_responses(memmap_response, hhmd_response, framebuffer_response, limine_module_response, kLimineSMPInfo);
 
 	if (limine_response_status != 0)
-		hcf(limine_response_status);
+		hcf();
 	
 	kHHDMOffset = hhmd_response->offset;
 	kernel_main();
