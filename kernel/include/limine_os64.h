@@ -8,4 +8,7 @@ int verify_limine_responses(struct limine_memmap_response* memmap_response,
 		struct limine_module_response* module_response,
 		struct limine_smp_response* smp_response);
 		
+
+struct limine_file* getFile(struct limine_module_response *module_response, const char* name);
+
 #endif

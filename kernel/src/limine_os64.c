@@ -39,6 +39,18 @@ volatile struct limine_smp_request smp_request = {
     .revision = 0
 };
 
+ __attribute__((used, section(".limine_requests")))
+volatile struct limine_kernel_file_request kernel_file_request = {
+    .id = LIMINE_KERNEL_FILE_REQUEST,
+    .revision = 0
+};
+
+ __attribute__((used, section(".limine_requests")))
+volatile struct limine_rsdp_request rsdp_request = {
+    .id = LIMINE_RSDP_REQUEST,
+    .revision = 0
+};
+
 
 __attribute__((used, section(".limine_requests_start")))
 static volatile LIMINE_REQUESTS_START_MARKER;
@@ -50,7 +62,7 @@ static volatile LIMINE_REQUESTS_END_MARKER;
 // Implement them as the C specification mandates.
 // DO NOT remove or rename these functions, or stuff will eventually break!
 // They CAN be moved to a different .c file.
-void *memmove(void *dest, const void *src, size_t n) {
+void *memmove_limine(void *dest, const void *src, size_t n) {
     uint8_t *pdest = (uint8_t *)dest;
     const uint8_t *psrc = (const uint8_t *)src;
 
@@ -65,19 +77,6 @@ void *memmove(void *dest, const void *src, size_t n) {
     }
 
     return dest;
-}
-
-int memcmp(const void *s1, const void *s2, size_t n) {
-    const uint8_t *p1 = (const uint8_t *)s1;
-    const uint8_t *p2 = (const uint8_t *)s2;
-
-    for (size_t i = 0; i < n; i++) {
-        if (p1[i] != p2[i]) {
-            return p1[i] < p2[i] ? -1 : 1;
-        }
-    }
-
-    return 0;
 }
 
 /// @brief Verify all of the limine responses are valid 
@@ -108,4 +107,54 @@ int verify_limine_responses(struct limine_memmap_response* memmap_response,
 		return -5;
 
 	return 0;
+}
+
+static void hcf(void) {
+    for (;;) {
+	}
+}
+bool checkStringEndsWith(const char* str, const char* end)
+{
+    const char* _str = str;
+    const char* _end = end;
+
+    while(*str != 0)
+        str++;
+    str--;
+
+    while(*end != 0)
+        end++;
+    end--;
+
+    while (true)
+    {
+        if (*str != *end)
+            return false;
+
+        str--;
+        end--;
+
+        if (end == _end || (str == _str && end == _end))
+            return true;
+
+        if (str == _str)
+            return false;
+    }
+}
+
+struct limine_file* getFile(struct limine_module_response *module_response, const char* name)
+{
+    if (module_response == NULL)
+    {
+        hcf();
+    }
+
+    for (size_t i = 0; i < module_response->module_count; i++) 
+    {
+        struct limine_file *f = module_response->modules[i];
+        if (checkStringEndsWith(f->path, name))
+            return f;
+    }
+    
+    return NULL;
 }

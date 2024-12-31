@@ -6,6 +6,12 @@
 #include "CONFIG.h"
 #include "memmap.h"
 
+#define PML4_SHIFT 39
+#define PDPT_SHIFT 30
+#define PD_SHIFT   21
+#define PT_SHIFT   12
+
+
 // Page table entry flags
 #define PAGE_PRESENT      (1ULL << 0)    // Page is present
 #define PAGE_WRITE        (1ULL << 1)    // Writable
@@ -17,6 +23,9 @@
 #define PAGE_GLOBAL       (1ULL << 8)    // Global page
 #define PAGE_NO_EXECUTE   (1ULL << 63)   // No-execute
 
+#define PAGE_FLAGS_MASK 0xFFFUL
+#define PAGE_ADDRESS_MASK  (~PAGE_FLAGS_MASK)
+
 // Initial paging table entry locations
 #define PDPT_ADDRESS 0x2000
 #define PD_ADDRESS   0x3000
@@ -27,7 +36,7 @@
                                         "mov cr3, rax\n\t"          \
                                         ::: "rax");
 #define PHYS_TO_VIRT(addr) ((pt_entry_t)(addr) + kHHDMOffset)
-
+#define VIRT_TO_PHYS(addr) ((pt_entry_t)(addr) & 0x00000FFFFFFFFFFF)
 typedef uint64_t pt_entry_t;
 typedef struct {
 	pt_entry_t entries[512];
@@ -36,13 +45,12 @@ typedef struct {
 extern pt_entry_t kKernelPML4;
 extern pt_entry_t kKernelPML4v;
 extern uint64_t kHHDMOffset;
+//Pointer to the beginning of the pool of identity mapped pages that are allocated and mapped, to be used for page tables
+extern uintptr_t kPagingPagesBaseAddressV;
+extern uintptr_t kPagingPagesBaseAddressP;
 
 void paging_init(/*uint64_t kernel_physical, uint64_t kernel_virtual*/);
-void paging_map_page(
-	pt_entry_t* pml4,
-	uint64_t virtual_address,
-	uint64_t physical_address,
-	uint64_t flags);
+void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physical_address, uint64_t flags);
 
 void paging_map_pages(
 	pt_entry_t* pml4,
@@ -53,4 +61,9 @@ void paging_map_pages(
 
 void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address);
 void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t length);
+uintptr_t paging_walk_paging_table_keep_flags(pt_entry_t* pml4, uint64_t virtual_address, bool keepPageFlags);
+uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address);
+void validatePagingHierarchy(uintptr_t address);
+void init_os64_paging_tables();
+
 #endif // PAGING_H

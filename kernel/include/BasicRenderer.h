@@ -38,11 +38,14 @@ typedef struct
 {
     struct Point cursor_position;
     struct Framebuffer *framebuffer;
+	unsigned int *shadow_buffer;
     struct PSF1_FONT *psf1_font;
 
     unsigned int color;
     bool overwrite;
 } BasicRenderer;
+
+extern BasicRenderer kRenderer;
 
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font);
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y);

@@ -39,3 +39,17 @@ void *memcpy(void *dest1, const void *src1, size_t len) {
 
     return dest1;
 }
+
+void memmove(void *dest, const void *src, size_t n) {
+    if (dest < src) {
+        // No overlap or safe to copy forward
+        memcpy(dest, src, n);
+    } else {
+        // Overlap: Copy backward
+        unsigned char *d = (unsigned char *)dest + n;
+        const unsigned char *s = (const unsigned char *)src + n;
+        while (n--) {
+            *(--d) = *(--s);
+        }
+    }
+}

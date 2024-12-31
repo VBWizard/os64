@@ -218,19 +218,25 @@ void kwait(uint64_t msToWait)
 void __attribute__((noinline))waitTicks(int TicksToWait)
 {
     //printf("ttw=%u",ttw);
+	__asm__ __volatile__ ("sti\n");
     if (TicksToWait<=0)
         return;
     if (TicksToWait>5000)
         printd(DEBUG_EXCEPTIONS,"waitTicks: Excessive ticks value %u\n",TicksToWait);
     do
     {
-        __asm("pause\n");
+        __asm("sti\nhlt\n");
         TicksToWait--;
     } while (TicksToWait>0);
     return;
 }
 
-void wait(int msToWait)
+void wait(uint64_t msToWait)
 {
-    waitTicks(msToWait/MS_PER_TICK);
+	__asm__("sti\n");
+	uint64_t ticksToWait = msToWait/MS_PER_TICK; 
+	//CLR 12/03/2024: Added in case request is to wait less than MS_PER_TICK
+	if (ticksToWait==0)
+		ticksToWait=1;
+    waitTicks(ticksToWait);
 }

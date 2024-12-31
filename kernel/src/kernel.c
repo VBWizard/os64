@@ -16,72 +16,130 @@
 #include "tss.h"
 #include "pci.h"
 #include "ahci.h"
-#include "strcpy.h"
+#include "ata.h"
+#include "memset.h"
+#include "vfs.h"
+#include "acpi.h"
+#include "nvme.h"
+#include "kernel_commandline.h"
+#include "strings.h"
+#include "fat_glue.h"
+#include "shutdown.h"
+#include "tests.h"
+#include "panic.h"
+
+extern block_device_info_t* kBlockDeviceInfo;
+extern int kBlockDeviceInfoCount;
+extern bool kEnableAHCI;
+extern bool kEnableNVME;
 
 volatile uint64_t kSystemStartTime, kUptime, kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
 int kTimeZone;
-
 volatile bool kInitDone;
+volatile bool kFBInitDone = 0;
 uint64_t kTicksPerSecond;
 struct limine_smp_response *kLimineSMPInfo;
+__uint128_t kDebugLevel = 0;
+uintptr_t kKernelStack = 0;
+char kKernelCommandline[512];
+bool kOverrideFileLogging;
+char kRootPartUUID[36] = {0};
+vfs_filesystem_t* kRootFilesystem=NULL;
+char startTime[100] = {0};
+uint64_t lastTime = 0;
 
+void kernel_init()
+{
+	printf("Initializing ACPI\n");
+	acpiFindTables();
+	if (kPCIBaseAddress)
+	{
+		kPCIBaseAddress = kHHDMOffset | kPCIBaseAddress;
+	}
+
+	init_GDT();
+	
+	printf("Initializing PCI: ");
+	init_PCI();
+	printf("\t%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
+	if (kEnableAHCI)
+	{
+		printf("Initializing AHCI ...\n");
+		init_AHCI();
+	}
+	if (kEnableNVME)
+	{
+		printf("Initializing NVME: ");
+		init_NVME();
+	}
+	detect_cpu();
+	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
+	printf("SMP: Initializing ... ");
+	kLimineSMPInfo = smp_request.response;
+	init_SMP();
+
+	if (kRootPartUUID[0])
+	{
+		printd(DEBUG_BOOT, "BOOT: ROOTPARTUUID passed in commandline.  Will mount '%s' as the root partition\n",&kRootPartUUID);
+		vfs_mount_root_part((char*)&kRootPartUUID);
+	}
+
+	if (kRootFilesystem!=NULL)
+	{
+	 	int lResult = testVFS(kRootFilesystem);
+	 	if (lResult)
+	 		panic("Root filesystem disk test failed: %u\n",lResult);
+		kRootFilesystem->fops->uninitialize(kRootFilesystem);
+	 }
+
+	shutdown();
+}
+
+void parse_debug_level(__uint128_t value, uint64_t* high, uint64_t* low)
+{
+    *high = (uint64_t)(value >> 64);
+    *low = (uint64_t)value;
+}
+
+void log_debug_level(__uint128_t value) {
+	uint64_t high, low;
+	parse_debug_level(value, &high, &low);
+    printd(DEBUG_BOOT,"DEBUG_OPTIONS 0x%016lx%016lx\n", high, low);
+}
+
+//NOTE: The stack is re-loaded in this method, after paging is initialized.  Any method level variables declared will no longer exist after that.
+//		Make changes in kernel_init() instead if you need variables.
 void kernel_main()
 {
+	kDebugLevel = DEBUG_OPTIONS;
 	kInitDone = false;
 	kTicksPerSecond = TICKS_PER_SECOND;
+
+	process_kernel_commandline(kKernelCommandline);
 	hardware_init();
-	char startTime[100];
 	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
-	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
+#ifdef ENABLE_COM1
 	init_serial(0x3f8);
+#endif
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
-	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
+
+ 	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
+	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
+	printf(	"***** OS64 - system booting at %s *****\n", startTime);
+	uint64_t high, low;
+	parse_debug_level(kDebugLevel, &high, &low);
+	printf("Commandline: %s (debug level 0x%016lx%016lx)\n",kKernelCommandline, high, low);
+	log_debug_level(kDebugLevel);
 	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");
 	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
-	init_GDT();
-	
-	printf("Initializing PCI ...\n");
-	init_PCI();
-	printf("Initializing AHCI ...\n");
-	init_AHCI();
-	printf("%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
-	detect_cpu();
-	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
-	printf("SMP: Initializing ...\n");
-	init_SMP();
-	kLimineSMPInfo = smp_request.response;
-
-	//Temporary - make sure paging is working correctly
-	char* x = kmalloc(256);
-	char* y = kmalloc(128);
-
-	strncpy(x, "This is test # 1", 20);
-	strncpy(y, "this is test # 2", 20);
-	kfree(x);
-	x = kmalloc(256);
-	strncpy(x, "This is test 3", 20);
-	
-    // We're done, just hang...
-    
-	extern uint64_t kMemoryStatusCurrentPtr;
-	extern memory_status_t *kMemoryStatus;
-	printd(DEBUG_BOOT, "BOOT END: Status of memory status:\n");
-	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
-	{
-		printd(DEBUG_BOOT, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
-	}
-	printf("All done, hcf-time!\n");
-	printd(DEBUG_BOOT,"All done, hcf-time!\n");
-	while (true)
-	{
-		strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
-		moveto(&kRenderer, 0,20);
-		printf("%s",startTime);
-	}
-	while (true) {asm("sti\nhlt\n");}
+	init_os64_paging_tables();
+	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
+	__asm__ volatile ("mov rsp, %0" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
+	printf("Kernel stack initialized, 0x%x bytes\n", KERNEL_STACK_SIZE);
+	kernel_init();
 }

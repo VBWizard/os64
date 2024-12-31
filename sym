@@ -1,0 +1,2 @@
+objdump -x -t kernel/bin/os64_kernel > os64_kernel.sym
+vi os64_kernel.sym

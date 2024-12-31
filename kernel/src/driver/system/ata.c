@@ -6,7 +6,7 @@
 
 bool useCDROMIdentify=false;
 
-void ataGetModelFromIdentify(ataDeviceInfo_t* devInfo)
+void ataGetModelFromIdentify(block_device_info_t* devInfo)
 {
     uint16_t* ident=devInfo->ATAIdentifyData+27;
     for (int cnt=0;cnt<40;cnt+=2)
@@ -18,7 +18,7 @@ void ataGetModelFromIdentify(ataDeviceInfo_t* devInfo)
 }
 
 
-int ataIdentify(ataDeviceInfo_t* devInfo)
+int ataIdentify(block_device_info_t* devInfo)
 {
     //For ATA devices, read the identity data.  For SATA, we've already read it into ATAIdentityData
     if (devInfo->queryATAData)

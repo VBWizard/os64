@@ -12,3 +12,6 @@
 log
 os64_kernel_debug.asm
 *.log
+os64_kernel.sym
+external/pci_devices.bin
+pci.ids

@@ -33,7 +33,7 @@ static __inline void outb(unsigned short __port, unsigned char __val)
 
 static __inline void outw(unsigned short __port, unsigned short __val)
 {
-	__asm__ volatile ("outw %1, %0" : : "a" (__val), "dN" (__port));
+	__asm__ volatile ("out %1, %0" : : "a" (__val), "dN" (__port));
 }
 
 static __inline void outl(unsigned short __port, unsigned int __val)
@@ -44,7 +44,7 @@ static __inline void outl(unsigned short __port, unsigned int __val)
 static __inline unsigned short inw(unsigned short __port)
 {
 	unsigned short __val;
-	__asm__ volatile ("inw %0, %1" : "=a" (__val) : "dN" (__port));
+	__asm__ volatile ("in %0, %1" : "=a" (__val) : "dN" (__port));
 	return __val;
 }
 
