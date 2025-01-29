@@ -39,10 +39,10 @@ typedef struct
 	void *prev, *next;
 } thread_context_t;
 
-typedef struct 
+typedef struct s_thread
 {
 	uint64_t threadID;
-	unsigned char mp_apic;
+	uint64_t mp_apic;
 	bool exited, idleThread, execDontSaveRegisters;
 	uint64_t retVal;
 	thread_context_t regs;
@@ -52,8 +52,8 @@ typedef struct
 	uint64_t lastRunStartTicks, lastRunEndTicks, totalRunningTicks;
 	uintptr_t esp0BaseV, esp0BaseP, esp0Size, esp3BaseV, esp3BaseP, esp3Size;
 	void* ownerTask;
-	void *forkedThread;
-	void *prev, *next;
+	struct s_thread *forkedThread;
+	struct s_thread *prev, *next;
 } thread_t;
 
 thread_t* createThread(void* parentTask, bool kernelThread);

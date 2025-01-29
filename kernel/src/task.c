@@ -11,10 +11,11 @@
 #include "memcpy.h"
 #include "paging.h"
 #include "strcmp.h"
+#include "strstr.h"
 
 extern volatile uint64_t kSystemCurrentTime;
 
-task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask)
+task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
 {
     printd(DEBUG_TASK,"task_initialize: Initializing task\n");
 
@@ -27,6 +28,10 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask)
 	newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v & ~(kHHDMOffset));
 	newTask->threads = createThread((void*)newTask, kernelTask);
 	newTask->threads->idleThread = idleTask;
+	if (idleTask)
+		newTask->threads->mp_apic = pinnedAPICId;
+	else
+		newTask->threads->mp_apic = 0xffffffffffffffff;
 	newTask->taskID = newTask->threads->threadID;
 	newTask->exited = false;
     printd(DEBUG_TASK,"task_initialize: Mapping the task_t struct into the task, v=0x%08x, p=0x%08x\n",TASK_STRUCT_VADDR,newTask);
@@ -38,11 +43,11 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask)
 	return newTask;
 }
 
-task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask)
+task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID)
 {
 	uintptr_t mapPages;
-	bool isIdleTask = strncmp(path, "/idle",10) == 0;
-	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask);
+	bool isIdleTask = strnstr(path, "/idle",10);
+	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
 
     //Copy the path (parameter) value from the parentTask's memory.
     newTask->path=kmalloc(TASK_MAX_PATH_LEN); 

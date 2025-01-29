@@ -95,7 +95,7 @@ void create_kernel_task()
 	parentTask.stdin = STDIN;
 	parentTask.stdout = STDOUT;
 	parentTask.stderr = STDERR;
-	kKernelTask = task_create("ktask", 0, NULL, &parentTask, true);
+	kKernelTask = task_create("ktask", 0, NULL, &parentTask, true, 0);
 	scheduler_init();
 	scheduler_submit_new_task(kKernelTask);
 	mp_CoreHasRunScheduledThread[0] = true;
@@ -147,10 +147,9 @@ void kernel_init()
     for (int cnt=0;cnt<kMPCoreCount;cnt++)
     {
 		char idleTaskName[10];
-		kIdleTasks[cnt] = task_create("/idle", 0, NULL, kKernelTask, true);
+		sprintf(idleTaskName, "/idle%u",cnt);
+		kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, cnt);
 		scheduler_submit_new_task(kIdleTasks[cnt]);
-		//TODO: Get rid of this break when implementing AP scheduling
-		break;
 	}
 
 	scheduler_enable();

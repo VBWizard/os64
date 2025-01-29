@@ -176,7 +176,6 @@ void set_queue_head(eThreadState queue, thread_t* thread)
 		default:
 			panic("set_queue_head: Queue %u not found\n", queue);
 	}
-	thread->next = NO_NEXT;
 	thread->prev = NO_PREV;
 }
 
@@ -564,6 +563,7 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 					thread->totalRunTicks);
 		if ( thread->prioritizedTicksInRunnable >= mostIdleTicks)
 		{
+			//All non-idle threads, and idle threads belonging to the current core, can be selected to run
 			if (!thread->idleThread || (thread->idleThread && thread->mp_apic==cls->apic_id))
 			{
 				if (thread->idleThread)
@@ -600,7 +600,7 @@ void scheduler_run_new_thread()
 
 		task_t *taskToStop = (task_t*)threadToStop->ownerTask;
 			#ifdef SCHEDULER_DEBUG
-			printd(DEBUG_SCHEDULER,"*Found task 0x%08x to take off CPU @0x%04x:0x%08x (thread exited=%u, thread retval=0x%08x).\n",
+			printd(DEBUG_SCHEDULER,"*Found thread 0x%08x to take off CPU @0x%04x:0x%08x (exited=%u, retval=0x%08x).\n",
 					taskToStop->taskID, 
 					mp_isrSavedCS[apic_id],mp_isrSavedRIP[apic_id],
 					threadToStop->exited, 
@@ -690,14 +690,22 @@ void scheduler_do()
     mp_inScheduler[apic_id] = true;
     mp_waitingForScheduler[apic_id] = false;
     printd(DEBUG_SCHEDULER,"****************************** SCHEDULER *******************************\n");
-    printd(DEBUG_SCHEDULER,"\tscheduler: AP %u, current CR3 = 0x%08x\n",apic_id,getCR3());
+    printd(DEBUG_SCHEDULER,"scheduler: AP %u, current CR3 = 0x%08x\n",apic_id,getCR3());
 #ifdef SCHEDULER_DEBUG
     uint64_t ticksBefore=rdtsc();
 #endif
-    printd(DEBUG_SCHEDULER, "Checking whether there's a new task to run or not\n");
-    while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
-    scheduler_run_new_thread();
-    __sync_lock_release(&kSchedulerSwitchTasksLock);   
+	//Lock the section of code from the time we start looking for another thread to run, until we're done 
+	//either switching threads, or have identified that there's no new thread to run
+	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
+    thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
+  	if (threadToRun->threadID!=cls->threadID)
+    {
+		printd(DEBUG_SCHEDULER, "Time to make the donuts. (switch threads)\n");
+		scheduler_run_new_thread();
+	}
+	else
+        printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with the current thread\n");
+	__sync_lock_release(&kSchedulerSwitchTasksLock);   
     kSchedulerCallCount++;
     mp_nextScheduleTicks[apic_id]=kTicksSinceStart+TICKS_PER_SCHEDULER_RUN_AP;
 #ifdef SCHEDULER_DEBUG
