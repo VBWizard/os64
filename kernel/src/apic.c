@@ -4,6 +4,7 @@
 #include "smp.h"
 #include "msr.h"
 #include "time.h"
+#include "x86_64.h"
 
 bool apicCheckFor() {
    uint32_t eax=0, edx=0, notused=0;
@@ -111,9 +112,19 @@ uint32_t apicGetHZ() {
     return ticksPer10ms;
 }
 
-int tscGetTicksPerSecond()
-{
-    uint64_t ticksBefore=rdtsc64();
-    kwait(500);
-    return (rdtsc64()-ticksBefore)*2;
+void ioapic_write(uint32_t reg, uint32_t value) {
+    volatile uint32_t *ioapic_base = (uint32_t *)kIOAPICAddress;
+    ioapic_base[IOAPIC_REGSEL_OFFSET / 4] = reg;
+    ioapic_base[IOAPIC_WIN_OFFSET / 4] = value;
+}
+
+void remap_irq0_to_apic(uint32_t vector) {
+    //Remap IR0 from the PIC to the calling core's IO APIC
+	// IOAPIC Redirection Table Entry for IRQ0 (Index 0x10 and 0x11)
+    uint32_t irq0_low = vector;  // Vector number and flags (e.g., fixed delivery mode)
+    uint32_t irq0_high = 0x00000000;  // Destination APIC ID
+
+    // Write high 32 bits first, then low 32 bits
+    ioapic_write(0x11, irq0_high);
+    ioapic_write(0x10, irq0_low);
 }

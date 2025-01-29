@@ -4,7 +4,6 @@
 #include "sprintf.h"
 #include "memset.h"
 #include "io.h"
-#include "CONFIG.h"
 #include "printd.h"
 #include "BasicRenderer.h"
 

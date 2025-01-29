@@ -21,6 +21,11 @@ extern uintptr_t kKernelBaseAddressP;
 extern pci_device_id_t *kPCIIdsData;
 extern uint32_t kPCIIdsCount;
 extern struct limine_smp_response *kLimineSMPInfo;
+uintptr_t kKernelPageMappings[KERNEL_PAGE_COUNT][2]={0};
+int kKernelPageMappingsCount=0;
+
+#define KERNEL_PAGE_MAPPINGS_VIRTUAL_IDX 0
+#define KERNEL_PAGE_MAPPINGS_PHYSICAL_IDX 1
 
 //Kernel paging pml4 table physical address
 pt_entry_t kKernelPML4;
@@ -28,6 +33,7 @@ pt_entry_t kKernelPML4;
 pt_entry_t kKernelPML4v;
 //Higher Half Direct Mapping offset
 uint64_t kHHDMOffset;
+uint64_t kPagingPagesCount;
 uintptr_t kPagingPagesBaseAddressV, kPagingPagesBaseAddressP;
 uintptr_t kPagingPagesCurrentPtr;
 
@@ -41,8 +47,6 @@ static inline pt_entry_t table_entry(uint64_t physical_address, uint64_t flags) 
 #define PDPT_INDEX(addr)  (((addr) >> 30) & 0x1FF)
 #define PD_INDEX(addr)    (((addr) >> 21) & 0x1FF)
 #define PT_INDEX(addr)    (((addr) >> 12) & 0x1FF)
-
-uintptr_t get_new_paging_table_page();
 
 void validatePagingHierarchy(uintptr_t address) {
     uintptr_t* pml4 = (uintptr_t*)kKernelPML4v;
@@ -143,7 +147,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
 
 	uint8_t tableRequiredFlags = (flags & PAGE_WRITE)?PAGE_WRITE:0;
 
-    printd(DEBUG_PAGING, "PAGING: Map 0x%016lx to 0x%016lx flags 0x%08lx\n", physical_address, virtual_address, flags);
+    printd(DEBUG_PAGING | DEBUG_DETAILED, "PAGING: Map 0x%016lx to 0x%016lx flags 0x%08lx\n", physical_address, virtual_address, flags);
 
     // Step 1: Traverse or allocate the PDPT table
     pt_entry_t *pdpt_page;
@@ -158,7 +162,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
     } else {
         // Allocate new PDPT page
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPDPT not present - allocating it\n");
-        uint64_t new_pdpt_phys = get_new_paging_table_page();
+        uint64_t new_pdpt_phys = get_paging_table_page();
         pt_entry_t *new_pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pdpt_phys);
         memset(new_pdpt_page, 0, PAGE_SIZE);
         pml4[PML4_INDEX(virtual_address)] = new_pdpt_phys | tableRequiredFlags | PAGE_PRESENT;
@@ -178,7 +182,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
     } else {
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPD not present - allocating it\n");
         // Allocate new PD page
-        uint64_t new_pd_phys = get_new_paging_table_page();
+        uint64_t new_pd_phys = get_paging_table_page();
         pt_entry_t *new_pd_page = (pt_entry_t *)PHYS_TO_VIRT(new_pd_phys);
         memset(new_pd_page, 0, PAGE_SIZE);
         pdpt_page[PDPT_INDEX(virtual_address)] = new_pd_phys | tableRequiredFlags | PAGE_PRESENT;
@@ -198,7 +202,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
     } else {
         // Allocate new PT page
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPT not present - allocating it\n");
-        uint64_t new_pt_phys = get_new_paging_table_page();
+        uint64_t new_pt_phys = get_paging_table_page();
         pt_entry_t *new_pt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pt_phys);
         memset(new_pt_page, 0, PAGE_SIZE);
         if ((((uintptr_t)new_pt_page >> 32) & 0xFFFFFFFF) != 0xFFFF8000)
@@ -253,6 +257,9 @@ void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physica
 {
 	__uint128_t temp;
 
+	if ((uintptr_t)pml4 < kHHDMOffset)
+		pml4 = (uintptr_t*)((uintptr_t)pml4 | kHHDMOffset);
+
 	if ((physical_address & 0x00000FFF) > 0)
 	{
 		physical_address &= 0xFFFFFFFFFFFFF000;
@@ -266,8 +273,8 @@ void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physica
 	}
 
 
-	if (physical_address < 0x1000)
-		panic("paging_map_pages: Attempt to map physical address 0x%016lx to virtual address 0x%016lx\n", physical_address, virtual_address);
+//	if (physical_address < 0x1000)
+//		panic("paging_map_pages: Attempt to map physical address 0x%016lx to virtual address 0x%016lx\n", physical_address, virtual_address);
 
 	printd(DEBUG_PAGING, "PAGING: Mapping 0x%08x pages at 0x%016lx to 0x%016lx with flags 0x%08x\n", page_count, physical_address, virtual_address, flags);
 
@@ -325,11 +332,50 @@ void paging_init()
 
 }
 
-uintptr_t get_new_paging_table_page()
+uintptr_t get_paging_table_page()
 {
 	uintptr_t retVal = kPagingPagesCurrentPtr;
 	kPagingPagesCurrentPtr += PAGE_SIZE;
 	return retVal;
+}
+
+uintptr_t get_paging_table_pageV()
+{
+	uintptr_t retVal = get_paging_table_page();
+	retVal |= kHHDMOffset;
+	return retVal;
+}
+
+void save_kernel_mappings()
+{
+	uintptr_t physAddrLookup;
+
+	for (uintptr_t addrV=kKernelBaseAddressV;addrV < kKernelBaseAddressV + (KERNEL_PAGE_COUNT * PAGE_SIZE); addrV+=PAGE_SIZE)
+	{
+		physAddrLookup = paging_walk_paging_table_keep_flags((pt_entry_t*)kKernelPML4v, addrV, true);
+		if (physAddrLookup != 0 && physAddrLookup != 0xbadbadba)
+		{
+			kKernelPageMappings[kKernelPageMappingsCount][KERNEL_PAGE_MAPPINGS_VIRTUAL_IDX] = addrV;
+			kKernelPageMappings[kKernelPageMappingsCount++][KERNEL_PAGE_MAPPINGS_PHYSICAL_IDX] = physAddrLookup;
+			printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\t\tPAGING: Vaddr 0x%016lx maps to Paddr 0x%016lx\n", addrV, physAddrLookup);
+		}
+	}
+}
+
+void paging_map_kernel_into_pml4(uintptr_t* pml4v)
+{
+	printd(DEBUG_PAGING | DEBUG_DETAILED,"PAGING (paging_map_kernel_into_pml4): Mapping virtual kernel (0x%016lx) to physical kernel (0x%016lx), %u pages in new page tables\n", kKernelBaseAddressV, kKernelBaseAddressP, kKernelPageMappingsCount);
+	for (int cnt=0;cnt<kKernelPageMappingsCount;cnt++)
+	{
+			uintptr_t virt = kKernelPageMappings[cnt][KERNEL_PAGE_MAPPINGS_VIRTUAL_IDX];
+			if (virt > 0)
+			{
+				uintptr_t phys = kKernelPageMappings[cnt][KERNEL_PAGE_MAPPINGS_PHYSICAL_IDX];
+				uint64_t flags = phys & 0xFFF;
+				paging_map_page(pml4v, virt, phys & 0xFFFFFFFFFFFFF000, flags);
+			}
+	}
+	printd(DEBUG_PAGING | DEBUG_DETAILED, "PAGING (paging_map_kernel_into_pml4): %u kernel page mappings copied\n",kKernelPageMappingsCount);
 }
 
 void init_os64_paging_tables()
@@ -340,21 +386,24 @@ void init_os64_paging_tables()
 	uintptr_t physAddrLookup = 0;
 
 	uint64_t allocSize = kMaxPhysicalAddress / PAGE_SIZE;
-	pagesToMap = allocSize / PAGE_SIZE;
+	kPagingPagesCount = allocSize / PAGE_SIZE;
 	if (allocSize % PAGE_SIZE)
-		pagesToMap++;
+		kPagingPagesCount++;
 	//Preallocate mapped pages for use when a new paging page is required by paging_map_page
 	kPagingPagesBaseAddressP = (uintptr_t)allocate_memory_aligned(allocSize);
 	kPagingPagesBaseAddressV = kPagingPagesBaseAddressP | kHHDMOffset;
 	kPagingPagesCurrentPtr = kPagingPagesBaseAddressP;
 
+
 	//Make sure all the pages are empty
 	memset((void*)kPagingPagesBaseAddressV, 0, allocSize);
+
+	save_kernel_mappings();
 
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"PAGING: Allocated page pool - 0x%08x pages at 0x%016x (virtual=0x%016lx)\n",
 			kMaxPhysicalAddress / PAGE_SIZE, kPagingPagesBaseAddressP, kPagingPagesBaseAddressV);
 
-    uintptr_t* pml4p = (uintptr_t*)get_new_paging_table_page();
+    uintptr_t* pml4p = (uintptr_t*)get_paging_table_page();
 	uintptr_t* pml4v = (uintptr_t*)((uintptr_t)pml4p | kHHDMOffset);
 
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"PAGING: Mapping existing items into the new pml4\n");
@@ -362,21 +411,19 @@ void init_os64_paging_tables()
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual pml4 (%p) to physical pml4 (%p)\n", pml4v, pml4p);
 	paging_map_page(pml4v, (uintptr_t)pml4v, (uintptr_t)pml4p, PAGE_PRESENT | PAGE_WRITE);
 
-	//Map the kernel into the new paging structure
+	//make page 0 invalid
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map page 0\n");
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual page 0 to physical page 0 (not present)\n");
-	paging_map_page(pml4v, 0, 0, 0); //make page 0 invalid
+	paging_map_page(pml4v, 0, 0, 0); 
 
 	//Map the page pool into the new structure
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map paging page pool\n");
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual page pool (0x%016lx) to physical page pool (0x%016lx)\n", kPagingPagesBaseAddressV, kPagingPagesBaseAddressP);
-	paging_map_pages(pml4v, kPagingPagesBaseAddressV, kPagingPagesBaseAddressP, (kMaxPhysicalAddress / PAGE_SIZE) / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
+	paging_map_pages(pml4v, kPagingPagesBaseAddressV, kPagingPagesBaseAddressP, kPagingPagesCount, PAGE_PRESENT | PAGE_WRITE);
 
-	//TODO: Fix this ... it makes the whole kernel writeable because of BSS and writeable data, etc.
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map kernel\n");
-	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual kernel (0x%016lx) to physical kernel (0x%016lx), %u pages in new page tables\n", kKernelBaseAddressV, kKernelBaseAddressP, 0x1000);
-	paging_map_pages(pml4v, kKernelBaseAddressV , kKernelBaseAddressP, 0x1000, PAGE_PRESENT | PAGE_WRITE);
-
+	paging_map_kernel_into_pml4(pml4v);
+	
 	//Map the renderer struct
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map renderer\n");
 	physAddrLookup = paging_walk_paging_table((pt_entry_t*)kKernelPML4v, (uintptr_t)&kRenderer);

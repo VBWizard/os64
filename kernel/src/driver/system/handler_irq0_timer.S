@@ -9,20 +9,10 @@
 handler_irq0_asm:
 	cli
     push rax
-    push rbx
-    push rcx
-    push rdx
-    push rsi
-    push rdi
-    push rbp
-    push r8
-    push r9
-    push r10
-    push r11
-    push r12
-    push r13
-    push r14
-    push r15
+
+	mov al, 0x20            # Send EOI to PIC
+    out 0x20, al
+
 	# Increment the number of ticks since the system was started
 	inc qword ptr [kTicksSinceStart]
 	# Grab the "current count" of ticks in the current second
@@ -32,6 +22,7 @@ handler_irq0_asm:
 	cmp rax, [kTicksPerSecond] 
 	# If it is less, then don't need to update the system time, so skip it
 	jl ticks_not_expired
+
 	# Update the system time
 	inc qword ptr [kSystemCurrentTime]
 	inc qword ptr [kUptime]
@@ -60,23 +51,10 @@ over_fb_update:
 
 	mov al, 0x20            # Send EOI to PIC
     out 0x20, al
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
 	# No need to STI as flags are popped on IRET
-    iretq                    # Return from interrupt
+    pop rax
+	sti
+	iretq                    # Return from interrupt
 
 
 .section .bss

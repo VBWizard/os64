@@ -10,7 +10,7 @@
 extern uint64_t kTicksPerSecond;
 /// @brief Is kernel initialization complete?
 extern volatile bool kInitDone;
-
+extern bool kEnableSMP;
 extern volatile uint64_t kSystemStartTime, kUptime;
 extern volatile uint64_t kSystemCurrentTime;
 extern volatile uint64_t kTicksSinceStart;
@@ -26,6 +26,7 @@ extern struct limine_module_response *limine_module_response;
 extern struct limine_memmap_response *memmap_response;
 extern int kTimeZone;
 extern BasicRenderer kRenderer;
+extern uint64_t kCPUCyclesPerSecond;
 
 void kernel_main();
 

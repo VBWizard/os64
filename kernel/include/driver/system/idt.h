@@ -24,4 +24,7 @@ struct IDTPointer {
 
 void initialize_idt();
 
+extern struct IDTEntry kIDT[256];
+extern struct IDTPointer kIDTPtr;
+
 #endif

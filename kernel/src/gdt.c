@@ -38,8 +38,14 @@ void init_GDT()
 {
 	kGDT = kmalloc(GDT_ENTRIES * sizeof(gdt_entry_t));
 
+	//kernel code segment
 	set_gdt_entry(kGDT, GDT_KERNEL_CODE_ENTRY, 0, 0xFFFFF, GDT_ACCESS_KERNEL_CODE_HELPER, GDT_FLAGS_64BIT_CODE, GDT_S_CODE_DATA_SEGMENT);
+	//kernel data segment
 	set_gdt_entry(kGDT, GDT_KERNEL_DATA_ENTRY, 0, 0xFFFFF, GDT_ACCESS_KERNEL_DATA_HELPER, GDT_FLAGS_64BIT_DATA, GDT_S_CODE_DATA_SEGMENT);
+	//user code segment
+	set_gdt_entry(kGDT, GDT_USER_CODE_ENTRY, 0, 0xFFFFF, GDT_ACCESS_USER_CODE_HELPER,GDT_FLAGS_64BIT_CODE, GDT_S_CODE_DATA_SEGMENT);
+	//user data segment
+	set_gdt_entry(kGDT, GDT_USER_DATA_ENTRY, 0, 0xFFFFF, GDT_ACCESS_USER_DATA_HELPER, GDT_FLAGS_64BIT_DATA, GDT_S_CODE_DATA_SEGMENT);
 
 	kGDTr.base = (uintptr_t)kGDT;
 	kGDTr.limit = sizeof(gdt_entry_t) * GDT_ENTRIES;

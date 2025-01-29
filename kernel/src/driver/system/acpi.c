@@ -4,6 +4,7 @@
 #include "serial_logging.h"
 #include "paging.h"
 #include "panic.h"
+#include "smp.h"
 
 extern uintptr_t kPCIBaseAddress;
 extern uintptr_t kLimineRSDP;
@@ -217,4 +218,27 @@ void acpiFindTables() {
     } else {
         printd(DEBUG_ACPI, "MCFG table not found\n");
     }
+
+	//Locate MADT (Multiple APIC Description Table)
+	acpi_table_header_t *madtHeader = (void*)acpiFindTable(rootSDT, "APIC");
+
+	if (madtHeader)
+	{
+        printd(DEBUG_ACPI, "ACPI: MADT (APIC) table found at %p\n", madtHeader);
+		uintptr_t detail = sizeof(acpi_table_header_t);
+		detail += (uintptr_t)madtHeader + 8;
+
+		while (detail < (uintptr_t)madtHeader + madtHeader->Length)
+		{
+			if (*(uint8_t*)detail == 0x01)
+			{
+				IO_APIC_Entry *entry = (IO_APIC_Entry *)detail;
+				kIOAPICAddress = entry->ioapic_addr;
+		        printd(DEBUG_SMP | DEBUG_DETAILED, "ACPI: IO APIC address found in MADT table, value = 0x%08x\n", kIOAPICAddress);
+				break;
+			}
+			else
+				detail += *(uint8_t*)(detail + 1);
+		}
+	}
 }

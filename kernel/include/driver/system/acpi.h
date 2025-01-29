@@ -160,6 +160,14 @@ typedef struct {
     uint64_t reserved;            // Reserved (8 bytes)
 } __attribute__((packed)) acpi_mcfg_table_t;
 
+typedef struct {
+    uint8_t  type;    // = 1 for IO APIC
+    uint8_t  length;  // length of this structure, e.g. 12 bytes
+    uint8_t  ioapic_id;
+    uint8_t  reserved; // or interrupt offset depending on specification revision
+    uint32_t ioapic_addr;  // Physical address of the IO APIC
+    uint32_t global_sys_int_base; // First GSI handled by this IO APIC
+} __attribute__((packed)) IO_APIC_Entry;
 
 typedef struct {
     char Signature[4];      // Table signature (e.g., "MCFG", "FACP")

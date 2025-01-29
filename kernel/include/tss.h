@@ -38,6 +38,8 @@ typedef struct {
     uint16_t iomap_base;   // I/O Map Base Address
 } __attribute__((packed)) tss_t;
 
+extern tss_t kInitialTSS;
+
 void init_tss();
 
 #endif
