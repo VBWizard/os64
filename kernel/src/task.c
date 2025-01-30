@@ -12,8 +12,22 @@
 #include "paging.h"
 #include "strcmp.h"
 #include "strstr.h"
+#include "smp.h"
+#include "smp_core.h"
+#include "scheduler.h"
 
 extern volatile uint64_t kSystemCurrentTime;
+
+void task_idle_loop()
+{
+	core_local_storage_t *cls = get_core_local_storage();
+
+	while (1==1)
+	{
+		kIdleTicks[cls->apic_id]++;
+       scheduler_yield(cls);
+	}
+}
 
 task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
 {
@@ -64,6 +78,12 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
     }
     strcpy(newTask->exename, slash2);
 	printd(DEBUG_TASK, "task_create: Executable name is %s\n", newTask->exename);
+
+	if (isIdleTask)
+	{
+		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
+		newTask->threads->regs.RIP = (uint64_t)&task_idle_loop;
+	}
 
 	gmtime((time_t*)&kSystemCurrentTime,&newTask->startTime);
 

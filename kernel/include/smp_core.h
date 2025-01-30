@@ -23,6 +23,8 @@
 #define BOOTSTRAP_PROCESSOR_ID 0
 void ap_initialization_handler();
 void mp_enable_scheduling_vector(int apic_id);
+void mp_restart_apic_timer_count();
+void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode);
 
 static inline core_local_storage_t* get_core_local_storage(void)
 {

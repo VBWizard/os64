@@ -38,6 +38,7 @@ thread_t *qUSleep;
 thread_t *qISleep;
 
 volatile uint64_t kTaskSwitchCount=0;
+volatile uint64_t kIdleTicks[MAX_CPUS] = {0};
 volatile uintptr_t mp_schedStack[MAX_CPUS]; //Loaded by scheduler when it is called 
 volatile uint32_t mp_timesEnteringScheduler[MAX_CPUS] = {0};
 volatile bool mp_inScheduler[MAX_CPUS] = {false};
@@ -150,7 +151,7 @@ thread_t* scheduler_find_open_next_queue_slot(thread_t *queue)
 		q=q->next;
 		slotNum++;
 	}
-	printd(DEBUG_SCHEDULER, "scheduler_find_open_next_queue_slot: Found available thread slot in queue %s at slot # %u\n", slotNum);
+	printd(DEBUG_SCHEDULER, "scheduler_find_open_next_queue_slot: Found available thread slot at slot # %u\n", slotNum);
 	return q;
 }
 
@@ -294,13 +295,10 @@ void scheduler_remove_thread_from_queue(eThreadState queue, thread_t *thread)
 
 void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
 {
-#ifdef SCHEDULER_DEBUG
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\tchangeThreadQueue: Changing thread state for 0x%04x from %s to %s\n",
             thread->threadID,
             THREAD_STATE_NAMES[thread->threadState],
             THREAD_STATE_NAMES[newState]);
-#endif
-
 	//A thread can be in no queue when this method is called.  If it is then don't do the remove step
 	if (thread->threadState!=THREAD_STATE_NONE)
     	scheduler_remove_thread_from_queue(thread->threadState,thread);
@@ -393,7 +391,6 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
         thread->regs.GS=mp_isrSavedGS[apic_id];
         thread->regs.CR3=mp_isrSavedCR3[apic_id];
     }
-#ifdef SCHEDULER_DEBUG
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*\tSave (or not): CR3=0x%08x, CS=0x%04x, EIP=0x%08x, SS=0x%04x, DS=0x%04x, EAX=0x%08x, EBX=0x%08x, ECX=0x%08x, EDX=0x%08x, ESI=0x%08x, EDI=0x%08x, ESP=0x%08x, EBP=0x%08x, FLAGS=0x%08x\n",
             thread->regs.CR3,
             thread->regs.CS,
@@ -409,7 +406,6 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
             thread->regs.RSP,
             thread->regs.RBP,
             thread->regs.RFLAGS);
-#endif	
 }
 
 void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
@@ -471,7 +467,6 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
         mp_isrSavedCR3[apic_id] = thread->regs.CR3; 
 //        memcpy((uintptr_t*)((process_t*)task->process)->stackStart, (uintptr_t*)parent->stackStart, ((process_t*)task->process)->stackSize);
     }
-#ifdef SCHEDULER_DEBUG
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*\tLoad: CR3=0x%08x, CS=0x%04X, EIP=0x%08x, SS=0x%04X, DS=0x%04X, EAX=0x%08x, EBX=0x%08x, ECX=0x%08x, EDX=0x%08x, ESI=0x%08x, EDI=0x%08x, ESP=0x%08x, EBP=0x%08x, FLAGS=0x%08x\n",
             mp_isrSavedCR3[apic_id],
             mp_isrSavedCS[apic_id],
@@ -487,14 +482,11 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
             mp_isrSavedRSP[apic_id],
             mp_isrSavedRBP[apic_id],
             mp_isrSavedRFlags[apic_id]);
-#endif	
 }
 
 void scheduler_add_to_queue(thread_t *queue, thread_t* thread)
 {
-#ifdef SCHEDULER_DEBUG
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t\taddToQ: Adding thread 0x%04x to queue %s\n",thread->threadID,THREAD_STATE_NAMES[thread->threadState]);
-#endif
     while (queue->next!=NO_NEXT)
     {
         queue++;
@@ -506,12 +498,10 @@ void scheduler_add_to_queue(thread_t *queue, thread_t* thread)
 
 void scheduler_remove_from_queue(thread_t *queue, thread_t* thread, bool panicOnNotFound)
 {
-	#ifdef SCHEDULER_DEBUG
-		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t\tremoveFromQ: Removing thread 0x%08x (0x%16lx) from queue %s\n",
-				thread->threadID,
-				thread,
-				THREAD_STATE_NAMES[thread->threadState]);
-	#endif
+	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t\tremoveFromQ: Removing thread 0x%08x (0x%16lx) from queue %s\n",
+			thread->threadID,
+			thread,
+			THREAD_STATE_NAMES[thread->threadState]);
     while (queue!=NO_NEXT)
     {
         if (queue->threadID==thread->threadID)
@@ -576,9 +566,45 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
         queue=queue->next;
     }
 
-	if (threadToRun == NO_THREAD)
+	if (threadToRun == NO_THREAD && !justBrowsing)
 		panic("scheduler_find_thread_to_run: No runnable threads found\n");
 	return threadToRun;
+}
+
+void triggerScheduler(core_local_storage_t *cls)
+{
+
+    if (mp_inScheduler[cls->apic_id])
+    {
+        printd(DEBUG_SCHEDULER,"triggerScheduler: Called but already in scheduler, exiting!\n");
+        return;
+    }
+    printd(DEBUG_SCHEDULER,"triggerScheduler: triggering scheduler\n");
+    mp_waitingForScheduler[cls->apic_id] = true;
+    mp_schedulerEnabled[cls->apic_id] = true;
+
+    mp_restart_apic_timer_count();
+    send_ipi(cls->apic_id, IPI_SCHEDULE_VECTOR, 0, 1, 0);
+    while (mp_waitingForScheduler[cls->apic_id])
+        __asm__ volatile("sti\nhlt\n");      //Halt the scheduler runs again
+}
+
+
+/// @brief Yield control of the CPU
+/// @param cls Optional - can be NULL if not valid in the calling context
+/// @details Yields control of the CPU if there is another thread that is ready to run.  If not, does a sti\nhlt\n to wait for the next timer tick (BSP) or scheduling IPI
+void scheduler_yield(core_local_storage_t *cls)
+{
+	 if (!cls)
+	 	cls = get_core_local_storage();
+
+	thread_t* thread=scheduler_find_thread_to_run(cls, true);
+
+	//If another thread is ready to run then trigger the scheduler, otherwise just hlt until the next scheduling IPI
+	if (thread && thread->threadID != cls->threadID)
+		triggerScheduler(cls);
+	else
+		__asm__("sti\nhlt\n");
 }
 
 void scheduler_run_new_thread()
@@ -599,19 +625,15 @@ void scheduler_run_new_thread()
 		threadToStop=scheduler_get_running_thread(cls->threadID);
 
 		task_t *taskToStop = (task_t*)threadToStop->ownerTask;
-			#ifdef SCHEDULER_DEBUG
-			printd(DEBUG_SCHEDULER,"*Found thread 0x%08x to take off CPU @0x%04x:0x%08x (exited=%u, retval=0x%08x).\n",
-					taskToStop->taskID, 
-					mp_isrSavedCS[apic_id],mp_isrSavedRIP[apic_id],
-					threadToStop->exited, 
-					threadToStop->retVal);
-			#endif
+		printd(DEBUG_SCHEDULER,"*Found thread 0x%08x to take off CPU @0x%04x:0x%08x (exited=%u, retval=0x%08x).\n",
+				taskToStop->taskID, 
+				mp_isrSavedCS[apic_id],mp_isrSavedRIP[apic_id],
+				threadToStop->exited, 
+				threadToStop->retVal);
 
 		if (threadToStop->exited)
 		{
-			#ifdef SCHEDULER_DEBUG
 			printd(DEBUG_SCHEDULER,"*Thread (0x%08x) ended, moving it to the zombie queue.\n",threadToStop->threadID);
-			#endif
 
 			threadToStopNewQueue=THREAD_STATE_ZOMBIE;
 			//TODO: If this is the last thread for the task then do something with the task, INCLUDING resetting its GDT entry
@@ -660,9 +682,7 @@ void scheduler_run_new_thread()
             pTask->cSwitches++;
         }
         //printd(DEBUG_SCHEDULER,"Active STDIN/STDOUT/STDERR=0x%08x/0x%08x/0x%08x, owner %s\n",activeSTDIN, activeSTDOUT, activeSTDERR, (process_t*)(activeSTDIN->owner)->exename==NULL?"":(process_t*)(activeSTDIN->owner)->exename);
-#ifdef SCHEDULER_DEBUG
 		printd(DEBUG_SCHEDULER,"*Restarting CPU with new process (0x%04x) @ 0x%04x:0x%08x\n",threadToRun->threadID,threadToRun->regs.CS,threadToRun->regs.RIP);
-#endif
 		task_t* taskToStop = (task_t*)threadToStop->ownerTask;
 
 		printd(DEBUG_SCHEDULER,"*Total running ticks: 0x%04x: %u, 0x%04x: %u\n",

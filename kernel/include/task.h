@@ -96,5 +96,5 @@
 		void *prev, *next;
     } task_t;
 
-	task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask);
+	task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 #endif

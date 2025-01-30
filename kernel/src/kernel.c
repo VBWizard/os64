@@ -159,7 +159,7 @@ void kernel_init()
 	cls->threadID = kKernelTask->threads->threadID;
 
 	mp_enable_scheduling_vector(0);
-	//__asm__("hlt\n");
+	__asm__("hlt\n");
 /*
 	if (kRootPartUUID[0])
 	{
