@@ -33,6 +33,8 @@
 #include "x86_64.h"
 #include "smp_core.h"
 #include "apic.h"
+#include "signals.h"
+
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -137,6 +139,7 @@ void kernel_init()
 	}
 	else
 		printf("SMP: Disabled due to nosmp parameter\n");
+	init_signals();
 
 	create_kernel_task();
 
@@ -159,7 +162,7 @@ void kernel_init()
 	cls->threadID = kKernelTask->threads->threadID;
 
 	mp_enable_scheduling_vector(0);
-	__asm__("hlt\n");
+	kProcessSignals = true;
 /*
 	if (kRootPartUUID[0])
 	{

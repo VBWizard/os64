@@ -27,7 +27,7 @@ extern 	uint8_t apciGetAPICID(unsigned whichAPIC);
 extern void enable_fsgsbase();
 
 int kLocalAPICTimerSpeed[MAX_CPUS];
-volatile core_local_storage_t* kCoreLocalStorage;
+volatile core_local_storage_t* kCoreLocalStorage = 0;
 
 bool mp_scan_for_config(uintptr_t start, uintptr_t length)
 {

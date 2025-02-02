@@ -72,6 +72,35 @@ bool mark_TID_unused(uint32_t tid)
 	return wasSet;
 }
 
+/// @brief Create and return a block of aligned, guarded stack memory
+/// @param pml4 CR3 for the thread
+/// @param virtualStart The virtual address to map the stack to.  This value is populated by this function, on return
+/// @param requestedLength The length of the stack to be created
+/// @param isRing3Stack Is this a user stack (for including PAGE_USER in the mapping flags)
+/// @return The physical start address of the block of unmapped memory preceding the stack
+uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtualStart, uint64_t requestedLength, bool isRing3Stack)
+{
+	//Create and return a block of aligned, guarded stack memory
+	//To do so, allocate more memory than we need and leave the first Xk and last Xk unmapped (paging)
+	//Allocate THREAD_STACK_GUARD_PAGE_COUNT * 2 so there is room for THREAD_STACK_GUARD_PAGE_COUNT pages on each side of the stack
+	uint64_t physStackAddress = allocate_memory_aligned(requestedLength + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE * 2));
+	
+	//Ignore the first THREAD_STACK_GUARD_PAGE_COUNT pages when assigning the virtual start address
+	*virtualStart = isRing3Stack?THREAD_USER_STACK_INITIAL_VIRT_ADDRESS:THREAD_KERNEL_STACK_VIRTUAL_START;
+	//				(physStackAddress + (PAGE_SIZE*THREAD_STACK_GUARD_PAGE_COUNT)) | kHHDMOffset;
+	uint64_t flags = PAGE_PRESENT | PAGE_WRITE;
+	if (isRing3Stack)
+		flags |= PAGE_USER;
+
+	uint64_t pagesToMap = requestedLength / PAGE_SIZE;
+	if (requestedLength % PAGE_SIZE)
+		pagesToMap++;
+	uint64_t physStartMapAddress = physStackAddress + (PAGE_SIZE*THREAD_STACK_GUARD_PAGE_COUNT);
+	paging_map_pages((pt_entry_t*)pml4, *virtualStart, physStartMapAddress, pagesToMap, flags);
+
+	return physStackAddress;
+}
+
 uint64_t get_thread_id()
 {
 	uint32_t tid;
@@ -95,49 +124,46 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 
 	newThread->threadID = get_thread_id();
 
+	//TODO: Fixme - is one of the wrong?
 	newThread->regs.userCR3 = ((task_t*)ownerTask)->pml4;
+	newThread->regs.CR3 = (uint64_t)((task_t*)ownerTask)->pml4;
     printd(DEBUG_THREAD,"createThread: Set thread PML4 to %p\n",newThread->regs.userCR3);
 
 	paging_map_kernel_into_pml4(((task_t*)ownerTask)->pml4v);
 
 	if (kernelThread)
 	{
-		newThread->regs.DS = newThread->regs.ES = newThread->regs.FS = newThread->regs.GS = newThread->regs.SS = GDT_KERNEL_DATA_ENTRY << 3 | 3;
-		newThread->regs.CS = GDT_KERNEL_CODE_ENTRY << 3 | 3;
+		newThread->regs.DS = newThread->regs.ES = newThread->regs.FS = newThread->regs.GS = newThread->regs.SS = GDT_KERNEL_DATA_ENTRY << 3;
+		newThread->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
 	}
 	else
 	{
 		newThread->regs.DS = newThread->regs.ES = newThread->regs.FS = newThread->regs.GS = newThread->regs.SS = GDT_USER_DATA_ENTRY << 3 | 3;
 		newThread->regs.CS = GDT_USER_CODE_ENTRY << 3 | 3;
-		newThread->esp3BaseP = (uintptr_t)allocate_memory_aligned(THREAD_USER_STACK_SIZE);
-		newThread->esp3BaseV = (uintptr_t)THREAD_USER_STACK_VIRTUAL_START;
-		paging_map_pages(((task_t*)ownerTask)->pml4v, newThread->esp3BaseV, newThread->esp3BaseP, THREAD_USER_STACK_SIZE / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
-	    printd(DEBUG_THREAD | DEBUG_DETAILED,"\n");
+		newThread->esp3BaseP = thread_allocate_guarded_stack_memory((uintptr_t)((task_t*)ownerTask)->pml4v, &newThread->esp3BaseV, THREAD_USER_STACK_SIZE, true);
+	    printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring3 stack for thread at P=0x%016lx, P=0x%016lx\n", newThread->esp3BaseP, newThread->esp3BaseV);
 	}
+	newThread->esp0BaseP = (uintptr_t)thread_allocate_guarded_stack_memory((uintptr_t)((task_t*)ownerTask)->pml4v, &newThread->esp0BaseV, THREAD_KERNEL_STACK_SIZE, false);
+	printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring0 stack for thread at P=0x%016lx, P=0x%016lx\n", newThread->esp0BaseP, newThread->esp0BaseV);
+
 	printd(DEBUG_THREAD | DEBUG_DETAILED,"createThread: Initialized %s thread segment registers, CS=0x%08x, others=0x%08x\n", kernelThread?"kernel":"user", newThread->regs.CS, newThread->regs.DS);
-
-	newThread->esp0BaseP = (uintptr_t)allocate_memory_aligned(THREAD_KERNEL_STACK_SIZE);
-	newThread->esp0BaseV = (uintptr_t)THREAD_KERNEL_STACK_VIRTUAL_START;
-
-	paging_map_pages(((task_t*)ownerTask)->pml4v, newThread->esp0BaseV, newThread->esp0BaseP, THREAD_KERNEL_STACK_SIZE / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
-
-    printd(DEBUG_THREAD | DEBUG_DETAILED,"createThread: Stacks allocated, ESP0=0x%016lx (p=0x%016lx), ESP3=0x%016lx (p=0x%016lx)\n",
-		newThread->esp0BaseV, newThread->esp0BaseP, newThread->esp3BaseV, newThread->esp3BaseP);
 
 	if (kernelThread)
 	{
+		//TODO: FIX ME - both RSP and RSP0 assigned kernel stack
 		newThread->regs.SS = GDT_KERNEL_DATA_ENTRY << 3;
-		newThread->regs.RSP = THREAD_KERNEL_STACK_INITIAL_VIRT_ADDRESS;
+		//NOTE: The magic 6's are to leave room before the end of the stack just in case
+		newThread->regs.RSP = newThread->esp0BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
 		newThread->regs.SS0 = GDT_KERNEL_DATA_ENTRY << 3;
-		newThread->regs.RSP0 = THREAD_KERNEL_STACK_INITIAL_VIRT_ADDRESS;
+		newThread->regs.RSP0 = newThread->esp0BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
 	}
 	else
 	{
-		newThread->regs.SS = (GDT_USER_DATA_ENTRY << 3) | 3;
-		newThread->regs.RSP = THREAD_USER_STACK_INITIAL_VIRT_ADDRESS;
+		newThread->regs.SS = GDT_USER_DATA_ENTRY << 3;
+		newThread->regs.RSP = newThread->esp3BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
+		newThread->regs.SS0 = GDT_KERNEL_DATA_ENTRY << 3;
+		newThread->regs.RSP0 = newThread->esp3BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
 	}
-	newThread->regs.SS0 = GDT_KERNEL_DATA_ENTRY << 3;
-	newThread->regs.RSP0 = THREAD_KERNEL_STACK_INITIAL_VIRT_ADDRESS;
 
 	newThread->regs.RFLAGS = 0x202;  //Interrupts enabled, reserved bit 1 set
 

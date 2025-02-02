@@ -3,11 +3,15 @@
 #include "allocator.h"
 #include "BasicRenderer.h"
 #include "strftime.h"
+#include "signals.h"
+#include "task.h"
 
 int usedCount=0;
 extern volatile uint64_t kSystemCurrentTime;
+extern volatile uint64_t kTicksSinceStart;
 extern BasicRenderer kRenderer;
 extern int kTimeZone;
+extern task_t* kKernelTask;
 
 void shutdown()
 {
@@ -38,7 +42,7 @@ void shutdown()
 			moveto(&kRenderer, 80,0);
 			printf("%s",startTime);
 		}
-		asm("sti\nhlt\n");
+		sigaction(SIGSLEEP, NULL, kTicksSinceStart+90,kKernelTask->threads);
 	}
 	while (true) {asm("sti\nhlt\n");}
 }

@@ -4,7 +4,7 @@
 
 extern uintptr_t kKernelStack;
 
-tss_t kInitialTSS;
+tss_t kInitialTSS = {0};
 
 void init_tss() {
     // Define the TSS

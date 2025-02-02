@@ -3,15 +3,18 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "signals.h"
+
+#define THREAD_STACK_GUARD_PAGE_COUNT	4			//Number of pages of unmapped memory assigned to each side of a stack as a guard
 
 #define MAX_THREADS (1024 * 1024 - 1)
 #define RESERVED_THREADS 32
 
-#define THREAD_USER_STACK_VIRTUAL_START 0xB0000000
+#define THREAD_USER_STACK_VIRTUAL_START 0x1000
 #define THREAD_USER_STACK_SIZE  0x100000	//1MB user stack
 #define THREAD_USER_STACK_INITIAL_VIRT_ADDRESS THREAD_USER_STACK_VIRTUAL_START + THREAD_USER_STACK_SIZE - 8
 
-#define THREAD_KERNEL_STACK_VIRTUAL_START 0xFFFF8000FFF00000
+#define THREAD_KERNEL_STACK_VIRTUAL_START 0x20000
 #define THREAD_KERNEL_STACK_SIZE  0x10000	//64k kernel stack
 #define THREAD_KERNEL_STACK_INITIAL_VIRT_ADDRESS THREAD_KERNEL_STACK_VIRTUAL_START + THREAD_KERNEL_STACK_SIZE - 8
 
@@ -54,6 +57,7 @@ typedef struct s_thread
 	void* ownerTask;
 	struct s_thread *forkedThread;
 	struct s_thread *prev, *next;
+	signals_t signals;
 } thread_t;
 
 thread_t* createThread(void* parentTask, bool kernelThread);

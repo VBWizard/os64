@@ -59,7 +59,7 @@
         void* elf;
         char* path;
         uint64_t retVal;
-        //signal_t signals;
+        //signals_t signals;
         uint64_t heapStart, heapEnd;
         short priority;           //-20=highest, 20=lowest
         void* exitHandler[TASK_MAX_EXIT_HANDLERS];

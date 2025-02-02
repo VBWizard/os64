@@ -8,10 +8,69 @@
 .extern mp_CoreHasRunScheduledThread
 .extern mp_SchedulerTaskSwitched
 .extern kKernelPML4v
-
-.extern write_eoi
+.extern kMPEOIOffset
 .extern scheduler_do
 .extern mp_timesEnteringScheduler
+.extern mp_inScheduler
+
+.globl _write_eoi
+.type _write_eoi, @function
+_write_eoi:
+	push rax
+	mov rax, kMPEOIOffset
+	mov dword ptr [rax], 0
+	pop rax
+	ret
+
+.globl _check_signals
+.type _check_signals, @function
+_check_signals:
+# Check if signals are enabled and if so see if it's time to process them
+	push rax
+	mov al, [kProcessSignals]
+	cmp al, 1
+	jne over_process_signals
+
+	mov ax, [signals_update_count]
+	inc ax
+	cmp ax, signalProcTickFrequency # Check signals every X ticks
+	jl over_process_signals
+	push rbx
+	push rcx
+	push rdx
+	push rsi
+	push rdi
+	push rbp
+	push r8
+	push r9
+	push r10
+	push r11
+	push r12
+	push r13
+	push r14
+	push r15
+	pushf
+	call processSignals
+	popf
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+	mov ax, 0
+over_process_signals:
+	mov [signals_update_count], ax
+	pop rax
+	ret
 
     # ******************** NEW MP SCHEUDLER CODE ********************
 .globl _schedule_ap
@@ -19,26 +78,43 @@
 _schedule_ap:
     # NOTE: Stack is:
     # 0x00: Vector number
-    # 0x04: Error code (if applicable)
-    # 0x08: EIP
-    # 0x0C: CS
-    # 0x10: EFLAGS
-    # 0x14: ESP - only if we're returning to a different privilege level
-    # 0x18: SS - only if we're returning to a different privilege level
+    # 0x08: Error code (if applicable)
+    # 0x10: RIP
+    # 0x18: CS
+    # 0x20: EFLAGS
+    # 0x28: ESP - only if we're returning to a different privilege level
+    # 0x30: SS - only if we're returning to a different privilege level
     # NOTE: Throughout this routine we will use EAX (the apic_id) for the index into each mp_isrSaved array variable
     # and EBX for the data to be stored to each mp_isrSaved array variable
-#    cli                                 # Disable interrupts
-sti
-    push rax                            # Save original EAX value
-    call write_eoi                      # Acknowledge the interrupt
-    pop rax                             # Restore original EAX value
-    add rsp, 8                          # get rid of vector158 return address
+    cli                                 # Disable interrupts
+# remarked this out and am calling _schedule_ap directly instead of vector158/vector161
+#    add rsp, 8                          # get rid of vector158/vector161 return address
     push rbx                            # Save original EBX value
+
+	# Verify we aren't in the scheduler ISR already.  If so then we can't continue.  Do this as early as possible
+	mov rbx, [mp_inScheduler]
+	cmp rbx, 0
+	jne scheduler_halt_and_catch_fire	# booleans are 1 byte
+	jmp scheduler_continue_1
+scheduler_halt_and_catch_fire:
+	pop rbx
+	call _write_eoi
+	iretq
+scheduler_continue_1:
+	# Since we're not, put us in the scheduler!
+	mov rbx,1
+	mov [mp_inScheduler], rbx
+
+	call _check_signals
     mov rbx, rax                        # Put the original EAX value in EBX
-	mov rax, [gs:8]						# APIC_ID is the first field of the core_local_storage_t struct
+	mov rax, [gs:8]						# APIC_ID is the second field of the core_local_storage_t struct
 	# APIC_ID is now in the RAX register
-    mov [mp_isrSavedRAX + rax * 8], rbx # Save original EAX value in the array
-    pop rbx                             # Restore original EBX value
+	mov [mp_isrSavedRAX + rax * 8], rbx # Save original EAX value in the array
+
+    pop rbx 
+	
+	mov [temp_rsp + rax * 8], rsp
+	                            # Restore original EBX value
     mov [mp_isrSavedRBX + rax * 8], rbx # Save original EBX value in the array
 	mov [mp_isrSavedR15 + rax * 8], r15 # Save the value of the R15 register so we can use it
 
@@ -85,10 +161,14 @@ dontSkipRegisters:
     jne same_priv_lvl_save_stack_and_flags
     
     # For ring 3 processes, we need to save the SS/ESP/Flags from the stack
-    mov rbx, [rsp+24]
+    # TODO: Fix for ring 3!!!
+	mov rbx, [rsp+24]
     mov [mp_isrSavedSS + rax * 8], rbx
-    mov rbx, [rsp+32]
-    mov [mp_isrSavedRSP + rax * 8], rbx
+    # Get the RSP value from the temporary rsp location
+	mov rbx, [temp_rsp + rax * 8]
+    # Pop the interrupt stack frame off the stack (ring 3 is SS/RSP/RFLAGS/CS/RIP)
+	add rbx, 40
+	mov [mp_isrSavedRSP + rax * 8], rbx
     mov rbx, [rsp+16]
     mov [mp_isrSavedRFlags + rax * 8], rbx
     jmp over_save_samel_priv_lvl_stack_and_flags
@@ -97,17 +177,23 @@ same_priv_lvl_save_stack_and_flags:
     # For ring 0 processes, we need to save the SS/ESP/Flags from current values
     mov rbx, ss
     mov [mp_isrSavedSS + rax * 8], rbx
-    mov [mp_isrSavedRSP + rax * 8], rsp
+    # Get the RSP value from the temporary rsp location
+	mov rbx, [temp_rsp + rax * 8]
+    # Pop the interrupt stack frame off the stack (ring 0 should be RFLAGS/CS/RIP bit with IRETQ we have to also include SS/RSP)
+	add rbx, 40
+    mov [mp_isrSavedRSP + rax * 8], rbx
     pushfq
 	pop rbx
     mov [mp_isrSavedRFlags + rax * 8], rbx
 
 over_save_samel_priv_lvl_stack_and_flags:
 	# Save CS/RIP for both rings (64-bit mode)
-	mov rbx, [rsp + 8]
+	mov rbx, [temp_rsp + rax * 8]
+	mov rbx, [rbx + 8]
 	mov [mp_isrSavedCS + rax * 8], rbx  # Save 64-bit CS value
 
-	mov rbx, [rsp]
+	mov rbx, [temp_rsp + rax * 8]
+	mov rbx, [rbx]
 	mov [mp_isrSavedRIP + rax * 8], rbx # Save 64-bit RIP value
 
     
@@ -123,7 +209,6 @@ overSetESP:
 	push r15
     # Call the scheduler
     call scheduler_do
-#    cli
 	pop r15								# core_local_storage_t base address is now in r15
     mov rax, [r15 + 16]					# Get the new threadID
     shr rax, 3
@@ -182,14 +267,15 @@ continue1:
     mov CR3, rax
 overRestoreCR3:
     pop rax
-
     mov bl, [threadIsKernel + rax * 8]
     cmp bl,1           
-    jne overKernelReturn
+    jne ring3Return
 
+# Ring 0 return (I expected to not have to do this for a same priv lvl return but I have to anyways)
     mov rbx, [mp_isrSavedSS + rax * 8]
-    mov ss, rbx
-    mov rsp, [mp_isrSavedRSP + rax * 8]
+    push rbx
+	mov rbx, [mp_isrSavedRSP + rax * 8]
+	push rbx
 
 	jmp overSignalReturn
 
@@ -218,15 +304,47 @@ overRestoreCR3:
 #    mov cr3, ebx
 
 overSignalReturn:
-    # Restore the last of the registers
-    mov r15, [mp_isrSavedR15 + rax * 8]
+	# Restore the last of the registers
+	# Yes these would still be on the stack if I didn't release them when saving the RSP last time the thread ran,
+	# but I'd rather keep the variables and stack in sync so my debug logging is never wrong
+	mov rbx, [mp_isrSavedRFlags + rax * 8]
+	push rbx
+    mov rbx, [mp_isrSavedCS + rax * 8]
+	push rbx
+	mov rbx, [mp_isrSavedRIP + rax * 8]
+	push rbx
+notFirstTimeScheduled:
+
+	call _write_eoi
+
+	# Test1
+	push rax
+	mov rax, 0xffffffff00000000
+	cmp rbx, rax
+	jge overScheduleTest1
+	nop
+overScheduleTest1:
+	pop rax
+
+	mov rbx, [mp_inScheduler + rax]
+	cmp rbx,0
+	je scheduler_halt_and_catch_fire2
+	jmp scheduler_continue_2
+scheduler_halt_and_catch_fire2:
+	# If you got here then mp_inScheduler should have been true, BUT it was false!  Illogical.  Find it and fix it!
+	jmp scheduler_halt_and_catch_fire2
+scheduler_continue_2:
+	xor rbx, rbx
+	mov [mp_inScheduler + rax], rbx
+
+	mov r15, [mp_isrSavedR15 + rax * 8]
 	mov rbx, [mp_isrSavedRBX + rax * 8]
     mov rax, [mp_isrSavedRAX + rax * 8]
     iretq
 
 
 
-overKernelReturn:
+ring3Return:
     # NOTE: EAX still holds apic_id
     mov rbx, [mp_isrSavedRIP + rax * 8]
     mov [rsp], rbx
@@ -255,7 +373,8 @@ doTheJump:
     mov r15, [mp_isrSavedR15 + rax * 8]
 	mov rbx, [mp_isrSavedRBX + rax * 8]
     mov rax, [mp_isrSavedRAX + rax * 8]
-    sti                                         # Only enable interrupts immediately before IRET
+	call _write_eoi
+	sti
     retfq 0
 
 .section .data
@@ -264,3 +383,11 @@ threadIsKernel:
     .rept 128      # Room for 128 processors' values
     .byte 0
     .endr
+signals_update_count:	
+	.rept 8 
+	.byte 0
+	.endr
+temp_rsp:
+	.rept 8
+	.quad 8
+	.endr

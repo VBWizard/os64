@@ -278,7 +278,7 @@ void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physica
 
 	printd(DEBUG_PAGING, "PAGING: Mapping 0x%08x pages at 0x%016lx to 0x%016lx with flags 0x%08x\n", page_count, physical_address, virtual_address, flags);
 
-	if (page_count > 0xA1)
+	if (page_count > 0x10)
 	{
 		temp = kDebugLevel;
 		kDebugLevel = 0;

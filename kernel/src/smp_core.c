@@ -10,11 +10,15 @@
 #include "kernel.h"
 
 extern void syscall_Enter();
+extern volatile bool mp_inScheduler[MAX_CPUS];
 
+bool kCLSInitialized = false;
 #include <stdint.h>
 
 // Assuming kMPApicBase and APIC_EOI_OFFSET are properly defined elsewhere
 extern volatile uintptr_t kMPApicBase;
+uintptr_t kMPEOIOffset = 0;
+extern void _write_eoi();
 #define APIC_EOI_OFFSET 0xB0
 
 void write_eoi() {
@@ -36,25 +40,42 @@ void write_eoi() {
 
 }
 
-void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode) {
+void send_ipi_int(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode, bool CLISTI) 
+{
+
+	core_local_storage_t *cls = get_core_local_storage();
+	if (mp_inScheduler[cls->apic_id])
+	{
+		printd(DEBUG_SMP | DEBUG_DETAILED,"MP: send_ipi_int - NOT sending an IPI because we're already in the scheduler");
+		return;
+	}
     printd(DEBUG_SMP | DEBUG_DETAILED,"MP: Sending IPI for 0x%02x to AP%u\n",vector, apic_id);
     // Ensure previous IPI command has completed
     while (*((volatile uint32_t*)(kMPICRLow)) & 0x01000){};
 
-	__asm__("cli\n");
+	if (CLISTI)
+		__asm__("cli\n");
 
     // Write to the high part of the ICR (destination field)
     *((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;
 
     // Write to the low part of the ICR (command and vector)
+	// Removed setting of level bit 14 (| (level << 14) )
     uint32_t icr_low_value = vector | (delivery_mode << 8) | (level << 14) | (trigger_mode << 15) | 0x00004000;
     *((volatile uint32_t*)(kMPICRLow)) = icr_low_value;
     printd(DEBUG_SMP | DEBUG_DETAILED,"MP: IPI delivered\n",apic_id);
+	if (CLISTI)
 	__asm__("sti\n");
+}
+
+void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode) 
+{
+	send_ipi_int(apic_id, vector, delivery_mode, level, trigger_mode, true);
 }
 
 static inline void set_gs_base(uint64_t base) {
 	wrmsr64(IA32_GS_BASE, base);
+	kCLSInitialized = true;
 }
 
 void init_core_local_storage(unsigned apic_id) 
@@ -66,6 +87,7 @@ void init_core_local_storage(unsigned apic_id)
 	core_local_storage_t *cls = (core_local_storage_t*)coreBase;
 	cls->apic_id = apic_id;
 	cls->self = cls;
+	kMPEOIOffset = kMPApicBase | APIC_EOI_OFFSET;
 }
 
 uint32_t ap_get_timer_ticks_per_interval(int ticksToWait)
@@ -161,12 +183,8 @@ void mp_restart_apic_timer_count()
     // We need to write the count to the timer, but first get the current state of the LVT_TIMER register so we can restore it after
     // That way if the timer was disabled, it will remain disabled, and if it was enabled, it will remain enabled
     write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount);  //Trigger X times per second based on config setting
-    uint32_t val = read_apic_register(kMPApicBase + APIC_LVT_TIMER); // Use the read function
-    val |= (1U << APIC_TIMER_PERIODIC_MODE_BIT);  // Ensure periodic mode is set
-    val = ENABLE_TIMER(val);
-    write_apic_register(kMPApicBase + APIC_LVT_TIMER, val);
-    printd(DEBUG_SMP, "AP: restart_apic_timer_count: Timer is restarted (0x%08x)\n", val);
-    write_eoi();
+	//_write_eoi();
+    //printd(DEBUG_SMP, "AP: restart_apic_timer_count: Timer is restarted (0x%08x)\n", val);
 }
 
 void ap_configure_scheduler_timer()
@@ -190,7 +208,7 @@ void ap_configure_scheduler_timer()
     write_apic_register(kMPApicBase + APIC_LVT_TIMER, lvtValue);
     
     //NOTE: localAPICTimerSpeed is how many times the local APIC timer ticks in 1 second
-    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount);  //Trigger X times per second based on config setting
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * 3);  //Trigger X times per second based on config setting
     printd (DEBUG_SMP, "AP: ap_configure_scheduler_timer: Timer is configured (0x%08x) to fire INT 0x%02x every %u ticks (ticks per second=%u)\n", 
         lvtValue, 
         IPI_SCHEDULE_VECTOR, 

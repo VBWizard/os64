@@ -23,11 +23,12 @@
 	extern volatile bool kMasterSchedulerEnabled;
 	extern bool mp_CoreHasRunScheduledThread[MAX_CPUS];
 	extern volatile uint64_t kIdleTicks[MAX_CPUS];
-
+	extern volatile bool mp_inScheduler[MAX_CPUS];
 	void scheduler_init();
 	void scheduler_enable();
 	void scheduler_disable();
 	void scheduler_submit_new_task(task_t *newTask);
 	void scheduler_change_thread_queue(thread_t* thread, eThreadState newState);
 	void scheduler_yield(core_local_storage_t *cls);
+	void scheduler_trigger(core_local_storage_t *cls);
 #endif

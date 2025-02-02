@@ -162,3 +162,10 @@ vector159:
     pop rax
 	sti
 	iretq
+.globl vector161
+vector161: # scheduling IPI vector
+	cli
+	call _schedule_ap
+	sti
+	iretq
+

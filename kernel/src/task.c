@@ -15,6 +15,7 @@
 #include "smp.h"
 #include "smp_core.h"
 #include "scheduler.h"
+#include "panic.h"
 
 extern volatile uint64_t kSystemCurrentTime;
 
@@ -25,7 +26,7 @@ void task_idle_loop()
 	while (1==1)
 	{
 		kIdleTicks[cls->apic_id]++;
-       scheduler_yield(cls);
+		__asm__("sti\nhlt\n");
 	}
 }
 
@@ -38,8 +39,16 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 
 	newTask->parentTask = parentTask;
 	newTask->priority = TASK_DEFAULT_PRIORITY;
-	newTask->pml4v = (uintptr_t*)get_paging_table_pageV();
-	newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v & ~(kHHDMOffset));
+	if (kernelTask)
+	{
+		newTask->pml4v = (uint64_t*)kKernelPML4v;
+		newTask->pml4 = (uint64_t*)kKernelPML4;
+	}
+	else
+	{
+		newTask->pml4v = (uintptr_t*)get_paging_table_pageV();  
+		newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v & ~(kHHDMOffset));
+	}
 	newTask->threads = createThread((void*)newTask, kernelTask);
 	newTask->threads->idleThread = idleTask;
 	if (idleTask)

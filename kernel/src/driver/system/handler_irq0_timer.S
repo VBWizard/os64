@@ -1,16 +1,18 @@
 .code64
 .intel_syntax noprefix
-.extern kTicksSinceStart, kSystemCurrentTime, kUptime, kTicksPerSecond
+.extern kTicksSinceStart, kSystemCurrentTime, kUptime, kTicksPerSecond, kProcessSignals
 .extern update_framebuffer_from_shadow
 .extern frameBufferRequiresUpdate
-
+.extern processSignals
+.extern signalProcTickFrequency
 .global handler_irq0_asm
 .section .text
+
 handler_irq0_asm:
-	cli
     push rax
 
-	mov al, 0x20            # Send EOI to PIC
+	# Send EOI to PIC
+	mov al, 0x20            
     out 0x20, al
 
 	# Increment the number of ticks since the system was started
@@ -30,33 +32,8 @@ handler_irq0_asm:
 	xor rax, rax
 ticks_not_expired:
 	mov [irq0_current_count], rax
-
-	# Get the count of ticks since the last FB update
-# #	mov rax, [fb_update_count]
-# #	inc rax
-# #	cmp rax, 500 # NOTE: As of now IRQ0 fires 100 times per second, so a count of 20 = 200 ms?
-# #	jl over_fb_update
-
-	# If it is the desired frequency
-#	push rax
-	# Check to see if other code has updated the FB
-#	mov rax, [frameBufferRequiresUpdate]
-#	cmp rax, 0
-#	pop rax
-#	je over_fb_update
-#	#call update_framebuffer_from_shadow
-	xor rax,rax
-over_fb_update:
-    mov [fb_update_count], rax
-
-	mov al, 0x20            # Send EOI to PIC
-    out 0x20, al
-	# No need to STI as flags are popped on IRET
-    pop rax
-	sti
+	pop rax
 	iretq                    # Return from interrupt
-
 
 .section .bss
 	irq0_current_count:		.space 8
-	fb_update_count:		.space 8
