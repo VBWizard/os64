@@ -40,9 +40,8 @@ void write_eoi() {
 
 }
 
-void send_ipi_int(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode, bool CLISTI) 
+void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode) 
 {
-
 	core_local_storage_t *cls = get_core_local_storage();
 	if (mp_inScheduler[cls->apic_id])
 	{
@@ -53,9 +52,6 @@ void send_ipi_int(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uin
     // Ensure previous IPI command has completed
     while (*((volatile uint32_t*)(kMPICRLow)) & 0x01000){};
 
-	if (CLISTI)
-		__asm__("cli\n");
-
     // Write to the high part of the ICR (destination field)
     *((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;
 
@@ -64,13 +60,6 @@ void send_ipi_int(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uin
     uint32_t icr_low_value = vector | (delivery_mode << 8) | (level << 14) | (trigger_mode << 15) | 0x00004000;
     *((volatile uint32_t*)(kMPICRLow)) = icr_low_value;
     printd(DEBUG_SMP | DEBUG_DETAILED,"MP: IPI delivered\n",apic_id);
-	if (CLISTI)
-	__asm__("sti\n");
-}
-
-void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode) 
-{
-	send_ipi_int(apic_id, vector, delivery_mode, level, trigger_mode, true);
 }
 
 static inline void set_gs_base(uint64_t base) {
@@ -197,7 +186,7 @@ void ap_configure_scheduler_timer()
     uint32_t lvtValue;
 
     // Set the interrupt vector to 0x7E
-    lvtValue = IPI_SCHEDULE_VECTOR;
+    lvtValue = TIMER_SCHEDULE_VECTOR;
 
     // Set to periodic mode by setting the periodic mode bit
     lvtValue |= (1U << APIC_TIMER_PERIODIC_MODE_BIT);
@@ -211,7 +200,7 @@ void ap_configure_scheduler_timer()
     write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * 3);  //Trigger X times per second based on config setting
     printd (DEBUG_SMP, "AP: ap_configure_scheduler_timer: Timer is configured (0x%08x) to fire INT 0x%02x every %u ticks (ticks per second=%u)\n", 
         lvtValue, 
-        IPI_SCHEDULE_VECTOR, 
+        TIMER_SCHEDULE_VECTOR, 
         cls->apicTimerCount, 
         cls->apicTicksPerSecond);
     write_eoi();

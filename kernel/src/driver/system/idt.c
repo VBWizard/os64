@@ -1,4 +1,5 @@
 #include "driver/system/idt.h"
+#include "smp_core.h"
 
 extern void vector155();
 extern void vector156();
@@ -41,12 +42,12 @@ void initialize_idt() {
     set_idt_entry(0x21, (uint64_t)&handler_irq1_asm, 0x28, 0x8E); // IRQ1 (Keyboard)
 
 	// SET MP handlers
-	set_idt_entry(0x7b, (uint64_t)&vector155, 0x28, 0x8E);		// Invalidate TLB IPI
-	set_idt_entry(0x7c, (uint64_t)&vector156, 0x28, 0x8E);		// AP Disable IPI
-	set_idt_entry(0x7d, (uint64_t)&vector157, 0x28, 0x8E);		// AP Enable IPI
-	set_idt_entry(0x7e, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// AP Scheduler (timer ISR)
-	set_idt_entry(0x7f, (uint64_t)&vector159, 0x28, 0x8E);		// AP Initialization IPI
-	set_idt_entry(0x81, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// Scheduling IPI (calls same method as the vector158 AP Scheduler)
+	set_idt_entry(IPI_INVALIDATE_TLB_VECTOR, (uint64_t)&vector155, 0x28, 0x8E);		// Invalidate TLB IPI
+	set_idt_entry(IPI_DISABLE_SCHEDULING_VECTOR, (uint64_t)&vector156, 0x28, 0x8E);		// AP Disable IPI
+	set_idt_entry(IPI_ENABLE_SCHEDULING_VECTOR, (uint64_t)&vector157, 0x28, 0x8E);		// AP Enable IPI
+	set_idt_entry(TIMER_SCHEDULE_VECTOR, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// AP Scheduler (timer ISR)
+	set_idt_entry(IPI_AP_INITIALIZATION_VECTOR, (uint64_t)&vector159, 0x28, 0x8E);		// AP Initialization IPI
+	set_idt_entry(IPI_MANUAL_SCHEDULE_VECTOR, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// Scheduling IPI (calls same method as the vector158 AP Scheduler)
 
     // Load IDT
     asm volatile ("lidt %0" : : "m" (kIDTPtr));

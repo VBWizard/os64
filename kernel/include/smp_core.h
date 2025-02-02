@@ -12,11 +12,12 @@
 #define APIC_LVT_MASK_BIT  16  // The mask bit is typically the 16th bit
 
 #define BASE_TIMER_VECTOR 0xF1          // Base timer vector for local APIC timer interrupts        
-#define TIMER_SCHEDULE_VECTOR 0x7E        // IPI vector for scheduling APs
-#define IPI_ENABLE_SCHEDULING_VECTOR 0x7D
-#define IPI_DISABLE_SCHEDULING_VECTOR 0x7C
 #define IPI_INVALIDATE_TLB_VECTOR 0x7B  // IPI vector for invalidating the TLB on APs
-#define IPI_SCHEDULE_VECTOR 0x81 //IPI vector for manually triggering the scheduler
+#define IPI_DISABLE_SCHEDULING_VECTOR 0x7C
+#define IPI_ENABLE_SCHEDULING_VECTOR 0x7D
+#define TIMER_SCHEDULE_VECTOR 0x7E        // IPI vector for scheduling APs
+#define IPI_AP_INITIALIZATION_VECTOR 0x7f
+#define IPI_MANUAL_SCHEDULE_VECTOR 0x81
 #define ENABLE_TIMER(val) (val & ~(1U << APIC_LVT_MASK_BIT))
 #define DISABLE_TIMER(val) (val | (1U << APIC_LVT_MASK_BIT))
 

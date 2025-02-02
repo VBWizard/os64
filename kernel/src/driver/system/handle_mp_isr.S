@@ -120,7 +120,6 @@ vector157: # AP Enable vector
 	iretq
 .globl vector158
 vector158:  # AP Scheduler vector
-	cli
 	call _schedule_ap
 	sti
 	iretq
@@ -164,7 +163,6 @@ vector159:
 	iretq
 .globl vector161
 vector161: # scheduling IPI vector
-	cli
 	call _schedule_ap
 	sti
 	iretq

@@ -595,7 +595,7 @@ void scheduler_trigger(core_local_storage_t *cls)
 
 	//Since we're calling a different vector than the APIC timer does, we need to reset the timer count
     mp_restart_apic_timer_count();
-    send_ipi(cls->apic_id, IPI_SCHEDULE_VECTOR, 0, 1, 0);
+    send_ipi(cls->apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 	__asm__ volatile("sti\nhlt\n");      //Halt till the scheduler runs again
 }
 
@@ -741,7 +741,6 @@ void scheduler_do()
 	//Lock the section of code from the time we start looking for another thread to run, until we're done 
 	//either switching threads, or have identified that there's no new thread to run
 	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
-	__asm__("cli\n");
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, true);
   	if (threadToRun != NO_THREAD && threadToRun->threadID!=cls->threadID)
     {
@@ -754,7 +753,6 @@ void scheduler_do()
         printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   
-	__asm__("sti\n");
     kSchedulerCallCount++;
     mp_nextScheduleTicks[apic_id]=kTicksSinceStart+TICKS_PER_SCHEDULER_RUN_AP;
 #ifdef SCHEDULER_DEBUG
