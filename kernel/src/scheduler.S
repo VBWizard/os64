@@ -94,9 +94,9 @@ _schedule_ap:
 	# Verify we aren't in the scheduler ISR already.  If so then we can't continue.  Do this as early as possible
 	mov rbx, [mp_inScheduler]
 	cmp rbx, 0
-	jne scheduler_halt_and_catch_fire	# booleans are 1 byte
+	jne scheduler_halt_and_catch_a_coffee	# booleans are 1 byte
 	jmp scheduler_continue_1
-scheduler_halt_and_catch_fire:
+scheduler_halt_and_catch_a_coffee:
 	pop rbx
 	call _write_eoi
 	iretq
@@ -328,11 +328,11 @@ overScheduleTest1:
 
 	mov rbx, [mp_inScheduler + rax]
 	cmp rbx,0
-	je scheduler_halt_and_catch_fire2
+	je scheduler_halt_and_catch_a_coffee2
 	jmp scheduler_continue_2
-scheduler_halt_and_catch_fire2:
+scheduler_halt_and_catch_a_coffee2:
 	# If you got here then mp_inScheduler should have been true, BUT it was false!  Illogical.  Find it and fix it!
-	jmp scheduler_halt_and_catch_fire2
+	jmp scheduler_halt_and_catch_a_coffee2
 scheduler_continue_2:
 	xor rbx, rbx
 	mov [mp_inScheduler + rax], rbx
