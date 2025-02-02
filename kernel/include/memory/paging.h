@@ -11,6 +11,7 @@
 #define PD_SHIFT   21
 #define PT_SHIFT   12
 
+#define KERNEL_PAGE_COUNT 0x1000
 
 // Page table entry flags
 #define PAGE_PRESENT      (1ULL << 0)    // Page is present
@@ -48,6 +49,9 @@ extern uint64_t kHHDMOffset;
 //Pointer to the beginning of the pool of identity mapped pages that are allocated and mapped, to be used for page tables
 extern uintptr_t kPagingPagesBaseAddressV;
 extern uintptr_t kPagingPagesBaseAddressP;
+extern uintptr_t kKernelPageMappings[KERNEL_PAGE_COUNT][2];
+extern int kKernelPageMappingsCount;
+
 
 void paging_init(/*uint64_t kernel_physical, uint64_t kernel_virtual*/);
 void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physical_address, uint64_t flags);
@@ -65,5 +69,8 @@ uintptr_t paging_walk_paging_table_keep_flags(pt_entry_t* pml4, uint64_t virtual
 uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address);
 void validatePagingHierarchy(uintptr_t address);
 void init_os64_paging_tables();
+void paging_map_kernel_into_pml4(uintptr_t* pml4v);
+uintptr_t get_paging_table_page();
+uintptr_t get_paging_table_pageV();
 
 #endif // PAGING_H

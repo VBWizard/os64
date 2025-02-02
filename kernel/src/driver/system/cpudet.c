@@ -387,10 +387,3 @@ int do_amd(void) {
 	}
 	return 0;
 }
-
-unsigned long long rdtsc64(void)
-{
-    unsigned hi, lo;
-    __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
-    return ( (unsigned long long)lo)|( ((unsigned long long)hi)<<32 );
-}

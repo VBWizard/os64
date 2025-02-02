@@ -13,6 +13,7 @@
 #include "driver/system/cpudet.h"
 #include "smp.h"
 #include "gdt.h"
+#include "idt.h"
 #include "tss.h"
 #include "pci.h"
 #include "ahci.h"
@@ -27,13 +28,22 @@
 #include "shutdown.h"
 #include "tests.h"
 #include "panic.h"
+#include "task.h"
+#include "scheduler.h"
+#include "x86_64.h"
+#include "smp_core.h"
+#include "apic.h"
+#include "signals.h"
+
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
 extern bool kEnableAHCI;
 extern bool kEnableNVME;
-
-volatile uint64_t kSystemStartTime, kUptime, kTicksSinceStart;
+bool kEnableSMP;
+volatile uint64_t kSystemStartTime;
+volatile uint64_t kUptime;
+volatile uint64_t kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
 int kTimeZone;
 volatile bool kInitDone;
@@ -48,6 +58,50 @@ char kRootPartUUID[36] = {0};
 vfs_filesystem_t* kRootFilesystem=NULL;
 char startTime[100] = {0};
 uint64_t lastTime = 0;
+task_t* kKernelTask;
+uint64_t kCPUCyclesPerSecond;
+task_t* kIdleTasks[MAX_CPUS];
+
+/// @brief Create the kernel task
+/// This is done manually whereas every other task in the system is created by calling the task_create method in task.c.
+void create_kernel_task()
+{
+	task_t parentTask = {0};
+	//The structure of the environment as as follows:
+	//*Addr 0: 
+	//	Room for 512 8 byte pointers to the environment strings
+	//*Addr 4096:
+	//	Room for 512 more 8 byte pointers to the remaining environment strings
+	//*Addr 8192:
+	//  1024 environment strings @ 512 bytes each
+	//TODO: Change this to be MMAP'd
+	parentTask.envPSize = 0;
+	parentTask.envSize = 0;
+	parentTask.realEnvp = (char**)allocate_memory_aligned(TASK_ENVIRONMENT_MAX_SIZE);
+	parentTask.realEnv = (char*)parentTask.mappedEnvp+(PAGE_SIZE*2);
+	parentTask.mappedEnvp = (char**)TASK_ENVP_VIRT;
+	parentTask.mappedEnv = (char*)TASK_ENV_VIRT;
+	paging_map_pages((uintptr_t*)kKernelPML4v, (uintptr_t)parentTask.mappedEnvp, (uintptr_t)parentTask.realEnvp, TASK_ENVIRONMENT_MAX_SIZE / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
+	memset(parentTask.mappedEnvp, 0, TASK_ENVIRONMENT_MAX_SIZE);
+	parentTask.envPSize = TASK_ENVIRONMENT_MAX_ENTRIES * sizeof(uintptr_t);
+	parentTask.envSize = TASK_ENVIRONMENT_MAX_SIZE - parentTask.envPSize;
+
+	parentTask.mappedEnv = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET);
+	((char**)parentTask.mappedEnvp)[0] = parentTask.mappedEnv;
+	strncpy(parentTask.mappedEnvp[0], "PATH=/", TASK_MAX_PATH_LEN);
+
+	((char**)parentTask.mappedEnvp)[1] = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET + 8);
+	strncpy(parentTask.mappedEnvp[1], "HOSTNAME=yogi.localhost.localdomain", TASK_MAX_PATH_LEN);
+	((char**)parentTask.mappedEnvp)[2] = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET + 16);
+	strncpy(parentTask.mappedEnvp[2], "CWD=/", TASK_MAX_PATH_LEN);
+	parentTask.stdin = STDIN;
+	parentTask.stdout = STDOUT;
+	parentTask.stderr = STDERR;
+	kKernelTask = task_create("ktask", 0, NULL, &parentTask, true, 0);
+	scheduler_init();
+	scheduler_submit_new_task(kKernelTask);
+	mp_CoreHasRunScheduledThread[0] = true;
+}
 
 void kernel_init()
 {
@@ -74,11 +128,42 @@ void kernel_init()
 		init_NVME();
 	}
 	detect_cpu();
-	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
-	printf("SMP: Initializing ... ");
-	kLimineSMPInfo = smp_request.response;
-	init_SMP();
+	kCPUCyclesPerSecond = tscGetCyclesPerSecond();
 
+	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
+	if (kEnableSMP)
+	{
+		printf("SMP: Initializing ...\n");
+		kLimineSMPInfo = smp_request.response;
+		init_SMP();
+	}
+	else
+		printf("SMP: Disabled due to nosmp parameter\n");
+	init_signals();
+
+	create_kernel_task();
+
+	ap_initialization_handler();
+
+	remap_irq0_to_apic(0x20);
+
+    for (int cnt=0;cnt<kMPCoreCount;cnt++)
+    {
+		char idleTaskName[10];
+		sprintf(idleTaskName, "/idle%u",cnt);
+		kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, cnt);
+		scheduler_submit_new_task(kIdleTasks[cnt]);
+	}
+
+	scheduler_enable();
+
+	scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
+	core_local_storage_t *cls = get_core_local_storage();
+	cls->threadID = kKernelTask->threads->threadID;
+
+	mp_enable_scheduling_vector(0);
+	kProcessSignals = true;
+/*
 	if (kRootPartUUID[0])
 	{
 		printd(DEBUG_BOOT, "BOOT: ROOTPARTUUID passed in commandline.  Will mount '%s' as the root partition\n",&kRootPartUUID);
@@ -92,7 +177,7 @@ void kernel_init()
 	 		panic("Root filesystem disk test failed: %u\n",lResult);
 		kRootFilesystem->fops->uninitialize(kRootFilesystem);
 	 }
-
+*/
 	shutdown();
 }
 
@@ -116,6 +201,7 @@ void kernel_main()
 	kInitDone = false;
 	kTicksPerSecond = TICKS_PER_SECOND;
 
+	kEnableSMP = true;
 	process_kernel_commandline(kKernelCommandline);
 	hardware_init();
 	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));

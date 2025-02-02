@@ -2,19 +2,73 @@
 #define SMP_H
 
 #include <stdint.h>
+#include "mpspec_def.h"
+#include "thread.h"
+
+#define MAX_CPUS 24
+#define APIC_EOI_OFFSET    0xB0
+#define AP_STACK_BASE 0x500000
+#define AP_STACK_SIZE 0x1000
+
+typedef enum mpRecType
+{
+    CPU=0,
+    BUS,
+    IOAPIC,
+    IOINTASS,
+    LOCALINTASS
+} eMPRecType;
 
 typedef struct
 {
     int apicID;
     //Virtual register base address
 	uint64_t registerBase;
+	//IO APIC address
+	uint64_t ioAPICAddress;
+	uint64_t mp_id_reg, mp_svr, mp_eoi, mp_icr_low, mp_icr_high;
     uint64_t ticksPerSecond;
 	//Put an address in this field and the CPU will jump out of park, to it
 	void *goto_address;
 } cpu_t;
 
-extern cpu_t *kCPUInfo;
+typedef struct mpConfig
+{
+    union 
+    {unsigned char rec[20];
+    struct mpc_cpu cpu;
+    struct mpc_bus bus;
+    struct mpc_ioapic apic;
+    struct mpc_intsrc irqSrc;
+    struct mpc_lintsrc lintSrc;
+    };
+    eMPRecType recType;
+    uintptr_t prevRecAddress;
+    uintptr_t nextRecAddress;
+    
+} __attribute__((packed))mpConfig_t;
 
-void init_SMP();
+typedef struct 
+{
+	void *self;										// 0
+	uint64_t apic_id;								// 8
+	uint64_t threadID;								// 16
+	uint64_t apicTicksPerSecond;					// 24
+	uint64_t apicTimerCount;
+	thread_t *currentThread;
+} __attribute__((packed)) core_local_storage_t;
+
+
+extern cpu_t *kCPUInfo;
+extern volatile uintptr_t kMPApicBase;
+extern int kLocalAPICTimerSpeed[MAX_CPUS];
+extern volatile core_local_storage_t* kCoreLocalStorage;
+extern volatile uint8_t kMPCoreCount;
+extern uintptr_t kMPICRLow;
+extern uintptr_t kMPICRHigh;
+extern uint64_t kMPIdReg;
+extern uintptr_t kIOAPICAddress;
+
+int init_SMP();
 
 #endif

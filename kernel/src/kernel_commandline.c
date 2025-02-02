@@ -3,6 +3,7 @@
 #include "strings/strings.h"
 #include <stdint.h>
 #include "printd.h"
+#include "kernel.h"
 
 extern bool kOverrideFileLogging;
 extern char kRootPartUUID[];
@@ -107,17 +108,22 @@ void process_kernel_commandline(char* cmdline)
 		printd(DEBUG_BOOT, "CMDLINE:\t Parameter DEBUG_NVME passed, NVME logging will be done\n");
 	}
 #ifdef ENABLE_COM1
-	if (strnstr(cmdline,"NOLOGFILE",512) != NULL)
+	if (strnstr(cmdline,"noseriallog",512) != NULL)
 	{
 		kOverrideFileLogging = true;
-		printd(DEBUG_BOOT, "CMDLINE:\t Parameter NOLOGFILE passed, logging go to the screen\n");
+		printd(DEBUG_BOOT, "CMDLINE:\t Parameter NOLOGFILE passed, logging will go to the screen\n");
 	}
+#endif
+	if (strnstr(cmdline,"NOSMP",512) != NULL)
+	{
+		kEnableSMP = false;
+		printd(DEBUG_BOOT, "CMDLINE:\t Parameter NOSMP passed, only the boot processor core will be initialized\n");
+	}
+
 	char* ptr=0;
 	if ((ptr=strnstr(cmdline,"ROOTPARTUUID=",512)) != NULL)
 	{
 		ptr+=13;
 		strncpy((char*)&kRootPartUUID, ptr, 36);
 	}
-#endif
-
 }

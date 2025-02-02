@@ -15,6 +15,8 @@ loop_of_death_zero:
 .section .text
 general_protection_fault_handler:
     # call handler_divide_by_zero     # Call the C handler
+	mov r15, [gs:0]						# R15 now points at the core_local_storage_t struct
+
 loop_of_death_gpf:
 	nop
 	jmp loop_of_death_gpf

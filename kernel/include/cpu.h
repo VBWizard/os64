@@ -37,6 +37,4 @@
 #define CPUID_FLAG_IA64         0x40000000      /* IA-64 (64-bit Intel CPU) */
 #define CPUID_FLAG_PBE          0x80000000      /* Pending Break Event. */
 
-extern unsigned long long rdtsc64(void);
-
 #endif

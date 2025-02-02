@@ -3,11 +3,17 @@
 #include "allocator.h"
 #include "BasicRenderer.h"
 #include "strftime.h"
+#include "signals.h"
+#include "task.h"
+#include "io.h"
 
 int usedCount=0;
 extern volatile uint64_t kSystemCurrentTime;
+extern volatile uint64_t kTicksSinceStart;
 extern BasicRenderer kRenderer;
 extern int kTimeZone;
+extern volatile uint64_t kSystemStartTime;
+extern task_t* kKernelTask;
 
 void shutdown()
 {
@@ -37,8 +43,18 @@ void shutdown()
 			lastTime = kSystemCurrentTime;
 			moveto(&kRenderer, 80,0);
 			printf("%s",startTime);
+			moveto(&kRenderer, 60, 2);
+			printf("kTicksSinceStart=%u\n", kTicksSinceStart);
+			moveto(&kRenderer, 60, 3);
+			printf("kSystemCurrentTime-kSystemStartTime=%u\n", kSystemCurrentTime - kSystemStartTime );
+			moveto(&kRenderer, 60, 4);
+			printf("kTicksSinceStart-(kSystemCurrentTime-kSystemStartTime)*10=%u", kTicksSinceStart-(kSystemCurrentTime - kSystemStartTime) * 10);
 		}
-		asm("sti\nhlt\n");
+		sigaction(SIGSLEEP, NULL, kTicksSinceStart+99,kKernelTask->threads);
+		//wait(10);
+		// Mask IRQ0 in the PIC (8259A)
+		//outb(0x21, inb(0x21) | 0x01); // Mask IRQ0 on the master PIC
+
 	}
 	while (true) {asm("sti\nhlt\n");}
 }

@@ -11,6 +11,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#define IOAPIC_REGSEL_OFFSET 0x00
+#define IOAPIC_WIN_OFFSET 0x10
+
 #define IA32_APIC_BASE_MSR              0x1B
 #define IA32_APIC_BASE_MSR_BSP          0x100 // Processor is a BSP
 #define APIC_SW_ENABLE                  0x100
@@ -42,9 +45,8 @@
 #define APIC_TIMER_MODE_PERIODIC        0x20000
 #define APIC_TIMER_MODE_TSCDEADLINE     0x60000
 
-bool apicCheckFor();
+bool check_for_apic();
 uint8_t acpiGetAPICVersion();
-uint8_t apciGetAPICID();
 uint64_t apicGetAPICBase(void);
 uint32_t apicReadRegister(uint32_t reg);
 void apicWriteRegister(uint64_t reg, uint32_t value);
@@ -54,4 +56,6 @@ void apicDisable();
 void apicEnable();
 bool apicIsEnabled();
 int tscGetTicksPerSecond();
+void remap_irq0_to_apic(uint32_t vector);
+
 #endif	/* APIC_H */

@@ -7,8 +7,10 @@
 #define GDT_ENTRIES 128
 #define GDT_KERNEL_CODE_ENTRY 5
 #define GDT_KERNEL_DATA_ENTRY 6
-
-
+#define GDT_USER_CODE_ENTRY   7
+#define GDT_USER_DATA_ENTRY   8
+#define GDT_FIRST_TSS_ENTRY   20
+#define TSS_SELECTOR (GDT_FIRST_TSS_ENTRY << 3)
 // Helper define for TSS
 #define GDT_ACCESS_HELPER_TSS (GDT_ACCESS_PRESENT | GDT_ACCESS_EXECUTABLE) // TSS descriptor
 // Helper for 
@@ -90,5 +92,4 @@ void init_GDT();
 
 extern gdt_entry_t *kGDT;
 extern gdt_pointer_t kGDTr;
-
 #endif
