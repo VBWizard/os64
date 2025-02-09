@@ -423,7 +423,9 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
         thread->regs.GS=mp_isrSavedGS[apic_id];
         thread->regs.CR3=mp_isrSavedCR3[apic_id];
     }
+#if SCHEDULER_DEBUG == 1
 	debug_print_registers(apic_id, "save (or not)", false);
+#endif
 }
 
 void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
@@ -453,7 +455,7 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
     mp_isrSavedGS[apic_id]=thread->regs.GS;
     mp_isrSavedCR3[apic_id]=thread->regs.CR3;
     
-    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"loadISRSavedRegs: Loading SYSENTER_ESP_MSR with value 0x%08x\n",thread->regs.RSP0);
+    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"scheduler_load_thread: Loading SYSENTER_ESP_MSR with value 0x%08x\n",thread->regs.RSP0);
     //kInitialTSS
 
 	//Set the syscall (ring 0) stack pointer.  This replaces using SYSENTER_ESP_MSR from the old 32-bit code.
@@ -485,8 +487,9 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
         mp_isrSavedCR3[apic_id] = thread->regs.CR3; 
 //        memcpy((uintptr_t*)((process_t*)task->process)->stackStart, (uintptr_t*)parent->stackStart, ((process_t*)task->process)->stackSize);
     }
-
+#if SCHEDULER_DEBUG == 1
 	debug_print_registers(apic_id, "load", false);
+#endif
 }
 
 void scheduler_add_to_queue(thread_t *queue, thread_t* thread)
@@ -629,12 +632,12 @@ void scheduler_run_new_thread()
 {
 	core_local_storage_t *cls = get_core_local_storage();
 	uint64_t apic_id = cls->apic_id;
-	thread_t* threadToStop;
+	thread_t* threadToStop=NULL;
     eThreadState threadToStopNewQueue=0;
 
     printd(DEBUG_SCHEDULER,"*AP%lu: In runAnotherTask, mp_CoreHasRunScheduledThread=%s!\n",apic_id,mp_CoreHasRunScheduledThread[apic_id]?"true":"false");
 
-    if (apic_id != 0 && mp_CoreHasRunScheduledThread[apic_id])
+    if (apic_id != 0 && !mp_CoreHasRunScheduledThread[apic_id])
     {
         printd(DEBUG_SCHEDULER,"*AP%u: No threads have been scheduled on this core yet, no thread to stop!\n",apic_id);
     }
@@ -648,12 +651,6 @@ void scheduler_run_new_thread()
 				mp_isrSavedCS[apic_id],mp_isrSavedRIP[apic_id],
 				threadToStop->exited, 
 				threadToStop->retVal);
-
-if (threadToStop->signals.sigind > 2)
-{
-	int a = 0;
-	a +=1;
-}
 
 		if (threadToStop->exited)
 		{
@@ -673,7 +670,7 @@ if (threadToStop->signals.sigind > 2)
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
 	task_t* taskToRun = (task_t*)threadToRun->ownerTask;
 	
-    if (threadToRun->threadID==threadToStop->threadID)
+    if (threadToStop && threadToRun->threadID==threadToStop->threadID)
     {
         printd(DEBUG_SCHEDULER,"*No new thread to run, continuing with the current task\n");
 		debug_print_registers(apic_id, "continue2", false);
@@ -708,13 +705,21 @@ if (threadToStop->signals.sigind > 2)
         }
         //printd(DEBUG_SCHEDULER,"Active STDIN/STDOUT/STDERR=0x%08x/0x%08x/0x%08x, owner %s\n",activeSTDIN, activeSTDOUT, activeSTDERR, (process_t*)(activeSTDIN->owner)->exename==NULL?"":(process_t*)(activeSTDIN->owner)->exename);
 		printd(DEBUG_SCHEDULER,"*Restarting CPU with new process (0x%04x) @ 0x%04x:0x%08x\n",threadToRun->threadID,threadToRun->regs.CS,threadToRun->regs.RIP);
-		task_t* taskToStop = (task_t*)threadToStop->ownerTask;
-
-		printd(DEBUG_SCHEDULER,"*Total running ticks: 0x%04x: %u, 0x%04x: %u\n",
+		if (threadToStop && threadToStop != NO_THREAD)
+		{
+			task_t* taskToStop = (task_t*)threadToStop->ownerTask;
+			printd(DEBUG_SCHEDULER,"*Total running ticks: 0x%04x: %u, 0x%04x: %u\n",
 				taskToStop->taskID,
 				threadToStop->totalRunTicks,
 				taskToRun->taskID,
 				threadToRun->totalRunTicks);
+		}
+		else
+		{
+			printd(DEBUG_SCHEDULER,"*Total running ticks: ----: ----, 0x%04x: %u\n",
+				taskToRun->taskID,
+				threadToRun->totalRunTicks);
+		}
 		mp_schedulerTaskSwitched[apic_id]=true;
 		kTaskSwitchCount++;
 		mp_ForkReturn[apic_id] = false;
@@ -760,12 +765,11 @@ void scheduler_do()
 #endif
     mp_CoreHasRunScheduledThread[apic_id] = true;
 
-__asm__("clts\n");  //TODO: Hackish but have to clear the task switched flag BEFORE using the FPU
 #ifdef SCHEDULER_DEBUG
     printd(DEBUG_SCHEDULER,"*Scheduler: calls=%u, task switchs=%u, ticks since start=0x%08x\n",kSchedulerCallCount, kTaskSwitchCount, kTicksSinceStart);
     uint64_t diff = ticksAfter-ticksBefore;
     uint64_t timeInScheduler = (diff/kCPUCyclesPerSecond)*100;
     printd(DEBUG_SCHEDULER,"%lu ticks expired (%lu CPU cycles)\n",timeInScheduler, diff);
-    printd(DEBUG_SCHEDULER,"**************************************************************************\n");
 #endif
+	printd(DEBUG_SCHEDULER,"**************************************************************************\n");
 }

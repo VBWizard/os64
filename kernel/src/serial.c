@@ -25,7 +25,8 @@ int is_transmit_empty(int port) {
 }
 
 void write_serial(int port, char a) {
-   while (is_transmit_empty(port) == 0){}
+   //while (is_transmit_empty(port) == 0){}
    outb(port,a);
+   __asm__("nop\nnop\nnop\n");
    //wait(0);
 }

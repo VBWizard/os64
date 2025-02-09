@@ -91,9 +91,18 @@ _schedule_ap:
 	sti
     push rbx                            # Save original EBX value
 
+    mov rbx, rax                        # Put the original EAX value in EBX
+	mov rax, [gs:8]						# APIC_ID is the second field of the core_local_storage_t struct
+	# APIC_ID is now in the RAX register
+	cmp rax, 0
+	jne over_check_signals
+	call _check_signals
+over_check_signals:
+	mov [mp_isrSavedRAX + rax * 8], rbx # Save original EAX value in the array
+
 	# Verify we aren't in the scheduler ISR already.  If so then we can't continue.  Do this as early as possible
-	mov rbx, [mp_inScheduler]
-	cmp rbx, 0
+	mov bl, [mp_inScheduler + rax]
+	cmp bl, 0
 	jne scheduler_halt_and_catch_a_coffee	# booleans are 1 byte
 	jmp scheduler_continue_1
 scheduler_halt_and_catch_a_coffee:
@@ -102,14 +111,9 @@ scheduler_halt_and_catch_a_coffee:
 	iretq
 scheduler_continue_1:
 	# Since we're not, put us in the scheduler!
-	mov rbx,1
-	mov [mp_inScheduler], rbx
+	mov bl,1
+	mov [mp_inScheduler + rax], bl
 
-	call _check_signals
-    mov rbx, rax                        # Put the original EAX value in EBX
-	mov rax, [gs:8]						# APIC_ID is the second field of the core_local_storage_t struct
-	# APIC_ID is now in the RAX register
-	mov [mp_isrSavedRAX + rax * 8], rbx # Save original EAX value in the array
 
     pop rbx 
 	
@@ -129,7 +133,8 @@ scheduler_continue_1:
     mov cr3, rbx
 
 	mov rbx, 0
-    cmp [mp_CoreHasRunScheduledThread + rax * 8], rbx # For APs that are entering the scheduler for the first time
+	# For APs that are entering the scheduler for the first time, don't save registers to saved variables
+    cmp [mp_CoreHasRunScheduledThread + rax], rbx # NOTE: variable is a bool, 1 byte per element
     je OverSaveRegisters                # Skip saving of registers
 
 dontSkipRegisters:
@@ -211,7 +216,6 @@ overSetESP:
     call scheduler_do
 	pop r15								# core_local_storage_t base address is now in r15
     mov rax, [r15 + 16]					# Get the new threadID
-    shr rax, 3
     cmp rax, 0x0022
     jne overBreakInISR
 breakInISRLabel: 
@@ -267,7 +271,7 @@ continue1:
     mov CR3, rax
 overRestoreCR3:
     pop rax
-    mov bl, [threadIsKernel + rax * 8]
+    mov bl, [threadIsKernel + rax * 1]
     cmp bl,1           
     jne ring3Return
 
@@ -314,9 +318,6 @@ overSignalReturn:
 	mov rbx, [mp_isrSavedRIP + rax * 8]
 	push rbx
 notFirstTimeScheduled:
-
-	call _write_eoi
-
 	# Test1
 	push rax
 	mov rax, 0xffffffff00000000
@@ -334,8 +335,9 @@ scheduler_halt_and_catch_a_coffee2:
 	# If you got here then mp_inScheduler should have been true, BUT it was false!  Illogical.  Find it and fix it!
 	jmp scheduler_halt_and_catch_a_coffee2
 scheduler_continue_2:
+	call _write_eoi
 	xor rbx, rbx
-	mov [mp_inScheduler + rax], rbx
+	mov [mp_inScheduler + rax], bl
 
 	mov r15, [mp_isrSavedR15 + rax * 8]
 	mov rbx, [mp_isrSavedRBX + rax * 8]

@@ -4,8 +4,8 @@
 .code64
 
 
-.globl vector155
-vector155:
+.globl vector123
+vector123:
 	cli
 	push rax
 	push rbx
@@ -42,8 +42,8 @@ vector155:
     pop rax
 	sti
 	iretq
-.globl vector156
-vector156: # AP Disable vector
+.globl vector124
+vector124: # AP Disable vector
 	cli
 	push rax
 	push rbx
@@ -80,8 +80,8 @@ vector156: # AP Disable vector
     pop rax
 	sti
 	iretq
-.globl vector157
-vector157: # AP Enable vector
+.globl vector125
+vector125: # AP Enable vector
 	cli
 	push rax
 	push rbx
@@ -118,13 +118,8 @@ vector157: # AP Enable vector
     pop rax
 	sti
 	iretq
-.globl vector158
-vector158:  # AP Scheduler vector
-	call _schedule_ap
-	sti
-	iretq
-.globl vector159 # AP Initialization vector
-vector159:
+.globl vector127 # AP Initialization vector
+vector127:
 	cli
 	push rax
 	push rbx
@@ -161,9 +156,3 @@ vector159:
     pop rax
 	sti
 	iretq
-.globl vector161
-vector161: # scheduling IPI vector
-	call _schedule_ap
-	sti
-	iretq
-

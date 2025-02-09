@@ -89,6 +89,7 @@ typedef struct {
 void set_gdt_entry( gdt_entry_t* gdt_table, int entryNo, uint64_t base, uint32_t limit, uint8_t access, uint8_t flags, uint8_t setSFlag);
 /// @brief Set a system GDT entry (TSS/LDT/Other)
 void init_GDT();
+void load_gdt_and_jump();
 
 extern gdt_entry_t *kGDT;
 extern gdt_pointer_t kGDTr;

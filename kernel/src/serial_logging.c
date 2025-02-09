@@ -8,6 +8,7 @@
 #include "BasicRenderer.h"
 #include "smp.h"
 #include "smp_core.h"
+#include "panic.h"
 
 extern volatile uint64_t kUptime;
 extern volatile uint64_t kTicksSinceStart;
@@ -20,7 +21,18 @@ char print_buf2[2048];
 void printd(__uint128_t debug_level, const char *fmt, ...)
 {
 	int printed;
-	
+
+#ifdef DEBUG_FOCUS_APIC_ID
+	if (kSMPInitDone)
+	{
+		core_local_storage_t* tempcls = get_core_local_storage();
+		if (tempcls==NULL)
+			panic("Brought to you compliments of Nova - the best AI in the world");
+		if (DEBUG_FOCUS_APIC_ID != tempcls->apic_id)
+			return;
+	}
+#endif
+
 	if ((kDebugLevel & debug_level) == debug_level)
 	{
 		uint64_t threadID = 0, apic_id = 0;

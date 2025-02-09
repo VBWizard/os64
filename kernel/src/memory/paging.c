@@ -278,19 +278,19 @@ void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physica
 
 	printd(DEBUG_PAGING, "PAGING: Mapping 0x%08x pages at 0x%016lx to 0x%016lx with flags 0x%08x\n", page_count, physical_address, virtual_address, flags);
 
-	if (page_count > 0x10)
-	{
-		temp = kDebugLevel;
-		kDebugLevel = 0;
-	}
+	// if (page_count > 0x10)
+	// {
+	// 	temp = kDebugLevel;
+	// 	kDebugLevel = 0;
+	// }
 
 	for (uint64_t cnt=0;cnt<page_count;cnt++)
 		paging_map_page(pml4, virtual_address + (PAGE_SIZE * cnt), physical_address + (PAGE_SIZE * cnt), flags);
 	
-	if (page_count > 0xA1)
-	{
-		kDebugLevel = temp;
-	}
+	// if (page_count > 0xA1)
+	// {
+	// 	kDebugLevel = temp;
+	// }
 }
 
 void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t length) {

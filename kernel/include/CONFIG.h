@@ -7,6 +7,7 @@
 
 #define DISK_WRITING_ENABLED
 //#define ENABLE_DOUBLE_BUFFER
+
 //  Timing related configuration
 #define TICKS_PER_SECOND 100
 // Milliseconds per tick
@@ -27,7 +28,7 @@
 #define MP_SCHEDULER_RUNS_PER_SECOND 10
 #define TICKS_PER_SCHEDULER_RUN TICKS_PER_SECOND / MP_SCHEDULER_RUNS_PER_SECOND
 #define TICKS_PER_SCHEDULER_RUN_AP TICKS_PER_SCHEDULER_RUN
-#define SCHEDULER_DEBUG
+//#define SCHEDULER_DEBUG 1
 
 // Framebuffer related
 #define FRAMEBUFFER_FONT "zap-ext-light16.psf"
@@ -38,6 +39,8 @@
 
 // Debugging related configuration
 #define SHUTOFF_ON_PANIC 0
+//remark to disable
+//#define DEBUG_FOCUS_APIC_ID 1
 
 #define DEBUG_EVERYTHING ((__uint128_t)0xFFFFFFFFFFFFFFFFULL | ((__uint128_t)0xFFFFFFFFFFFFFFFFULL << 64))
 #define DEBUG_NOTHING 0x0000000000000000

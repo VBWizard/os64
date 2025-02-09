@@ -9,6 +9,7 @@
 #include "memset.h"
 #include "gdt.h"
 #include "task.h"
+#include "panic.h"
 
 extern uintptr_t kKernelBaseAddressV;
 extern uintptr_t kKernelBaseAddressP;
@@ -84,9 +85,10 @@ uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtua
 	//To do so, allocate more memory than we need and leave the first Xk and last Xk unmapped (paging)
 	//Allocate THREAD_STACK_GUARD_PAGE_COUNT * 2 so there is room for THREAD_STACK_GUARD_PAGE_COUNT pages on each side of the stack
 	uint64_t physStackAddress = allocate_memory_aligned(requestedLength + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE * 2));
-	
-	//Ignore the first THREAD_STACK_GUARD_PAGE_COUNT pages when assigning the virtual start address
-	*virtualStart = isRing3Stack?THREAD_USER_STACK_INITIAL_VIRT_ADDRESS:THREAD_KERNEL_STACK_VIRTUAL_START;
+	if (!physStackAddress) {
+    	panic("Failed to allocate stack memory!\n");
+	}
+	*virtualStart = physStackAddress | kHHDMOffset;//isRing3Stack?THREAD_USER_STACK_INITIAL_VIRT_ADDRESS:THREAD_KERNEL_STACK_VIRTUAL_START;
 	//				(physStackAddress + (PAGE_SIZE*THREAD_STACK_GUARD_PAGE_COUNT)) | kHHDMOffset;
 	uint64_t flags = PAGE_PRESENT | PAGE_WRITE;
 	if (isRing3Stack)
