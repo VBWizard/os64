@@ -61,5 +61,6 @@ typedef struct s_thread
 } thread_t;
 
 thread_t* createThread(void* parentTask, bool kernelThread);
+uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtualStart, uint64_t requestedLength, bool isRing3Stack);
 
 #endif

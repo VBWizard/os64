@@ -10,6 +10,7 @@
 #include "memset.h"
 #include "strcmp.h"
 #include "panic.h"
+#include "smp_core.h"
 
 cpu_t *kCPUInfo;
 volatile uintptr_t kMPApicBase;
@@ -21,7 +22,7 @@ struct mpf_intel* mp;
 struct mpc_table* mc;
 uintptr_t kMPICRLow=0;
 uintptr_t kMPICRHigh=0;
-
+uintptr_t kMPLVTTimer=0;
 extern struct limine_smp_response *kLimineSMPInfo;
 extern 	uint8_t apciGetAPICID(unsigned whichAPIC);
 extern void enable_fsgsbase();
@@ -244,12 +245,17 @@ int init_SMP()
 		kCPUInfo[core].goto_address = &kLimineSMPInfo->cpus[core]->goto_address;
 		kCPUInfo[core].registerBase=apicGetAPICBase();
 		kCPUInfo[core].ioAPICAddress = kIOAPICAddress;
+		kCPUInfo[core].apic_lvt_timer  = kCPUInfo[core].registerBase + 0x320; // LVT Timer
+		kCPUInfo[core].apic_lvt_lint0  = kCPUInfo[core].registerBase + 0x350; // LVT LINT0 (External IRQ)
+		kCPUInfo[core].apic_lvt_lint1  = kCPUInfo[core].registerBase + 0x360; // LVT LINT1 (NMI)
+		kCPUInfo[core].apic_lvt_error  = kCPUInfo[core].registerBase + 0x370; // LVT Error Register
+		kCPUInfo[core].apic_tpr = kCPUInfo[core].registerBase + 0x80; // LVT Error Register
 		//Offset to virtual since this is a virtual address
-		kCPUInfo[core].mp_id_reg=kCPUInfo[core].registerBase+0x20;
-		kCPUInfo[core].mp_svr=kCPUInfo[core].registerBase+0xF0;
-		kCPUInfo[core].mp_eoi=kCPUInfo[core].registerBase+0xB0;
-		kCPUInfo[core].mp_icr_low=kCPUInfo[core].registerBase+0x300;
-		kCPUInfo[core].mp_icr_high=kCPUInfo[core].registerBase+0x310;
+		kCPUInfo[core].apic_id_reg=kCPUInfo[core].registerBase+0x20;
+		kCPUInfo[core].apic_svr=kCPUInfo[core].registerBase+0xF0;
+		kCPUInfo[core].apic_eoi=kCPUInfo[core].registerBase+0xB0;
+		kCPUInfo[core].apic_icr_low=kCPUInfo[core].registerBase+0x300;
+		kCPUInfo[core].apic_icr_high=kCPUInfo[core].registerBase+0x310;
 		if (core == 0)
 		{
 			printd(DEBUG_SMP, "BSP APIC register base found @ 0x%016lx, remapped to 0x%016lx\n",kCPUInfo[0].registerBase, kCPUInfo[0].registerBase + kHHDMOffset);
@@ -261,12 +267,18 @@ int init_SMP()
 		}
 		else
 			kCPUInfo[core].ticksPerSecond=kCPUInfo[0].ticksPerSecond;
+		//Now that we've logged all the register values and mapped them to the higher half, make them higher half
 		kCPUInfo[core].registerBase += kHHDMOffset;
-		kCPUInfo[core].mp_id_reg += kHHDMOffset;
-		kCPUInfo[core].mp_svr += kHHDMOffset;
-		kCPUInfo[core].mp_eoi += kHHDMOffset;
-		kCPUInfo[core].mp_icr_low += kHHDMOffset;
-		kCPUInfo[core].mp_icr_high += kHHDMOffset;
+		kCPUInfo[core].apic_id_reg += kHHDMOffset;
+		kCPUInfo[core].apic_svr += kHHDMOffset;
+		kCPUInfo[core].apic_eoi += kHHDMOffset;
+		kCPUInfo[core].apic_icr_low += kHHDMOffset;
+		kCPUInfo[core].apic_icr_high += kHHDMOffset;
+		kCPUInfo[core].apic_lvt_timer += kHHDMOffset;
+		kCPUInfo[core].apic_lvt_lint0 += kHHDMOffset;
+		kCPUInfo[core].apic_lvt_lint1 += kHHDMOffset;
+		kCPUInfo[core].apic_lvt_error += kHHDMOffset;
+		kCPUInfo[core].apic_tpr += kHHDMOffset;
 		kCPUInfo[core].ticksPerSecond=apicGetHZ();
 	}
 	if (check_for_apic())
@@ -274,7 +286,8 @@ int init_SMP()
 		kMPApicBase = kCPUInfo[0].registerBase;
 		kMPICRLow=kMPApicBase+0x300;
 		kMPICRHigh=kMPApicBase+0x310;
-		kMPIdReg = kCPUInfo[0].mp_id_reg;
+		kMPLVTTimer=kMPApicBase+0x320;
+		kMPIdReg = kCPUInfo[0].apic_id_reg;
         printd(DEBUG_SMP, "SMP: %s APIC %u Found, address 0x%016lx, initializing ... ", 
 			acpiGetAPICVersion()==0?"Discrete":"Integrated", 
 			kCPUInfo[0].apicID, 
@@ -284,7 +297,6 @@ int init_SMP()
 		else
 			printf("WARNING - not enabled ... ");
         printf("done\n");
-
 	}
 	printf("BSP timer %u\n",kCPUInfo[0].ticksPerSecond);
 	kCoreLocalStorage = kmalloc_aligned(kLimineSMPInfo->cpu_count * sizeof(core_local_storage_t));

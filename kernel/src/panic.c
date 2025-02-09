@@ -25,7 +25,7 @@ void panic_no_shutdown(const char *format, ...)
 }
 
 
-void __attribute__((noinline))panic(const char *format, ...)
+void __attribute__((noreturn, noinline))panic(const char *format, ...)
 {
     va_list args;
     va_start( args, format );

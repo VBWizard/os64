@@ -26,7 +26,8 @@ typedef struct
 	uint64_t registerBase;
 	//IO APIC address
 	uint64_t ioAPICAddress;
-	uint64_t mp_id_reg, mp_svr, mp_eoi, mp_icr_low, mp_icr_high;
+	uint64_t apic_lvt_timer, apic_lvt_lint0, apic_lvt_lint1, apic_lvt_error, apic_tpr;
+	uint64_t apic_id_reg, apic_svr, apic_eoi, apic_icr_low, apic_icr_high;
     uint64_t ticksPerSecond;
 	//Put an address in this field and the CPU will jump out of park, to it
 	void *goto_address;
@@ -55,8 +56,10 @@ typedef struct
 	uint64_t threadID;								// 16
 	uint64_t apicTicksPerSecond;					// 24
 	uint64_t apicTimerCount;
+	uintptr_t stackVirtualAddress, stackPhysicalAddress;
 	thread_t *currentThread;
-} __attribute__((packed)) core_local_storage_t;
+	bool coreAwoken, coreInitialized;
+} core_local_storage_t;
 
 
 extern cpu_t *kCPUInfo;

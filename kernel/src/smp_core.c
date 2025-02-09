@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include "smp_core.h"
 #include "x86_64.h"
 #include "CONFIG.h"
@@ -8,17 +9,33 @@
 #include "serial_logging.h"
 #include "kmalloc.h"
 #include "kernel.h"
+#include "time.h"
+#include "apic.h"
+#include "gdt.h"
+#include "tss.h"
+#include "thread.h"
+#include "idt.h"
 
+extern struct IDTPointer kIDTPtr;
 extern void syscall_Enter();
 extern volatile bool mp_inScheduler[MAX_CPUS];
-
+extern void ap_wakeup_stub();
+extern uint64_t kKernelPML4;
+extern uint64_t kKernelPML4v;
+extern uint64_t kHHDMOffset;
+extern uint64_t kMPLVTTimer;
 bool kCLSInitialized = false;
-#include <stdint.h>
+bool kSMPInitDone = false;
+uintptr_t stackVirtualAddress, stackPhysicalAddress;
+uintptr_t kMPEOIOffset = 0;
+uint8_t tempStack[1024];
+uint32_t temp_apic_id;
+core_local_storage_t *tempCls;
 
 // Assuming kMPApicBase and APIC_EOI_OFFSET are properly defined elsewhere
 extern volatile uintptr_t kMPApicBase;
-uintptr_t kMPEOIOffset = 0;
 extern void _write_eoi();
+
 #define APIC_EOI_OFFSET 0xB0
 
 void write_eoi() {
@@ -42,10 +59,10 @@ void write_eoi() {
 
 void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode) 
 {
-	core_local_storage_t *cls = get_core_local_storage();
-	if (mp_inScheduler[cls->apic_id])
+	core_local_storage_t *cls = get_core_local_storage_for_core(apic_id);
+	if (mp_inScheduler[cls->apic_id] && vector == IPI_MANUAL_SCHEDULE_VECTOR)
 	{
-		printd(DEBUG_SMP | DEBUG_DETAILED,"MP: send_ipi_int - NOT sending an IPI because we're already in the scheduler");
+		printd(DEBUG_SMP | DEBUG_DETAILED,"MP: send_ipi_int - NOT sending an scheduling IPI because we're already in the scheduler");
 		return;
 	}
     printd(DEBUG_SMP | DEBUG_DETAILED,"MP: Sending IPI for 0x%02x to AP%u\n",vector, apic_id);
@@ -77,6 +94,116 @@ void init_core_local_storage(unsigned apic_id)
 	cls->apic_id = apic_id;
 	cls->self = cls;
 	kMPEOIOffset = kMPApicBase | APIC_EOI_OFFSET;
+	printd(DEBUG_THREAD | DEBUG_DETAILED, "Core local storage initialized to 0%16lx for core %u", coreBase, apic_id);
+}
+
+// Called to finish initializing the AP (stack switch has been done in ap_wakeup_entry())
+void ap_wakeup_after_stack_switch(uint64_t apic_id, uint64_t stackVirtualAddress, uint64_t stackPhysicalAddress)
+{
+    volatile core_local_storage_t *temp_cls = get_core_local_storage();
+    temp_cls->stackVirtualAddress = stackVirtualAddress;
+    temp_cls->stackPhysicalAddress = stackPhysicalAddress;
+
+    // Read APIC_BASE_MSR
+    uint32_t lvt_timer = read_apic_register(kMPApicBase + APIC_LVT_TIMER);
+    uint32_t spurious_vector = read_apic_register(kMPApicBase + APIC_SPURIOUS_VECTOR);
+    printd(DEBUG_SMP, "AP%u: LVT_TIMER = 0x%08x, SPURIOUS_VECTOR = 0x%08x\n", apic_id, lvt_timer, spurious_vector);
+
+	*((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;  // Set destination APIC ID
+	*((volatile uint32_t*) (kCPUInfo[apic_id].apic_tpr)) = 0x30;  // Correct TPR
+	__asm__ volatile ("mfence");  // Ensure memory writes complete
+
+	*((volatile uint32_t*)kCPUInfo[apic_id].apic_svr) |= 0x100; // Set bit 8 (Enable LAPIC)
+	//EOI to clear out the IRR as we don't know what is awaiting us when we enable the APIC/LVT otherwise
+	*((volatile uint32_t*)kCPUInfo[apic_id].apic_eoi) = 0;
+
+		// Debugging: Check if AP is ready to receive IPI
+    printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: Ready to receive IPI? APIC_STATUS = 0x%08x\n", apic_id, *((volatile uint32_t*)kMPICRLow));
+
+	// Set the spurious vector to 0xFF and enable interrupts (bit 8)
+	*((volatile uint32_t*) (kCPUInfo[apic_id].apic_svr)) = 0x1FF;  // Enable APIC + Set spurious vector to 0xFF
+	__asm__ volatile ("mfence");  // Ensure memory writes complete
+
+	// Debugging: Confirm that AP is now ready to receive IPIs
+	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: Ready to receive IPI? APIC_STATUS = 0x%08x\n", apic_id, *((volatile uint32_t*)kMPICRLow));
+
+	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: LVT before: 0x%08x\n", apic_id, *((volatile uint32_t*)kMPLVTTimer));
+	
+	// Unmask LVT0 (timer) and LVT1 (error) by clearing the mask bit (bit 16)
+	*((volatile uint32_t*)kMPLVTTimer) &= ~0x10000;  // Unmask LVT0 (timer)
+	*((volatile uint32_t*)kMPLVTTimer) &= ~0x20000;  // Unmask LVT1 (error)
+	__asm__ volatile ("mfence");  // Ensure memory writes complete
+	// Debugging: Confirm LVT lines are unmasked
+	printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: LVT after: 0x%08x\n", apic_id, *((volatile uint32_t*)kMPLVTTimer));
+
+	// Now the AP is ready to receive and process the IPI
+	temp_cls->coreAwoken = true;
+}
+
+void ap_wakeup_entry() {
+    __asm__(
+        "mov rsp, %2\n"    // Set RSP safely
+        "mov cr3, %0\n"    // Load CR3 first (so AX isn’t clobbered)
+        "mov ax, %1\n"     // Load Kernel Data Segment (0x30)
+        "mov ds, ax\n"
+        "mov es, ax\n"
+        "mov fs, ax\n"
+        "mov ss, ax\n"
+        :: "r" (kKernelPML4), "r" ((uint16_t)0x30), "r" (tempStack + 1024 - 8)
+    );
+
+    temp_apic_id = read_apic_id();
+
+    // Set up the rest of the AP initialization
+    load_gdt_and_jump(&kGDTr);
+    init_tss();
+    init_core_local_storage(temp_apic_id);
+    asm volatile ("lidt %0" : : "m" (kIDTPtr));
+
+	// Set up the AP stack
+    stackVirtualAddress = (uintptr_t)kmalloc_aligned(AP_STACK_SIZE);
+    stackPhysicalAddress = stackVirtualAddress & ~(kHHDMOffset);
+
+    __asm__("mov rsp, %0\n"::"r" (stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t)));
+	
+	tempCls = get_core_local_storage();
+
+	// Initialize the AP after stack switch (set spurious vector, enable interrupts, etc.)
+    ap_wakeup_after_stack_switch(temp_apic_id, stackVirtualAddress, stackPhysicalAddress);
+
+    // Loop to ensure the AP doesn't fall off the function
+    while (1) {
+        __asm__("sti\nhlt\n");  // Enable interrupts and halt the AP
+    }
+}
+
+void ap_wake_up_aps() {
+	volatile core_local_storage_t *cls;
+    for (int coreToWake = 0; coreToWake < kMPCoreCount; coreToWake++) {
+        uint32_t apic_id = kCPUInfo[coreToWake].apicID;
+        if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
+        
+        printd(DEBUG_SMP, "MP: Waking up AP %u\n", apic_id);
+		*((volatile uint64_t *) kCPUInfo[apic_id].goto_address) = (uint64_t) &ap_wakeup_entry;
+
+		cls = get_core_local_storage_for_core(coreToWake);
+
+		while (!cls->coreAwoken) {wait(10);}
+        send_ipi(apic_id, IPI_AP_INITIALIZATION_VECTOR, 0, 1, 0);
+		while (!cls->coreInitialized) {wait(10);}
+		send_ipi(apic_id, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
+		kSMPInitDone = true;
+    }
+}
+
+void ap_enable_schedulers() {
+    for (int i = 0; i < kMPCoreCount; i++) {
+        uint32_t apic_id = kCPUInfo[i].apicID;
+        if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
+        
+        printd(DEBUG_SMP, "MP: Enabling scheduling on AP %u\n", apic_id);
+        mp_enable_scheduling_vector(apic_id);
+    }
 }
 
 uint32_t ap_get_timer_ticks_per_interval(int ticksToWait)
@@ -91,12 +218,11 @@ uint32_t ap_get_timer_ticks_per_interval(int ticksToWait)
     printd(DEBUG_SMP, "DEBUG: Before wait\n");
     while (kTicksSinceStart < end) 
 	{
-		__asm__("sti\nhlt\n");
+		__asm__("nop\n");
 	}
-    printd(DEBUG_SMP, "DEBUG: After wait\n");
-
     //Read the current count
     uint32_t count=read_apic_register(kMPApicBase + APIC_TIMER_CURRENT_COUNT);
+    printd(DEBUG_SMP, "DEBUG: After wait\n");
     //Calculate the speed
     uint32_t localAPICSpeed = (0xFFFFFFFF - count); 
 	uint32_t MSPerTick = 1000 / TICKS_PER_SECOND;
@@ -107,7 +233,6 @@ uint32_t ap_get_timer_ticks_per_interval(int ticksToWait)
 void mp_determine_local_APIC_timer_speed()
 {
 	core_local_storage_t *cls = get_core_local_storage();
-    printf("Determining local APIC timer frequency for core %u ... ", cls->apic_id);
     printd(DEBUG_SMP, "getAPICTicksPerSecond: Determining local APIC timer frequency\n");
     //Get apic timer ticks per second 3 times and average the sum
     for (int i = 0; i < TIMER_SYNC_ITERATIONS; i++) {
@@ -126,14 +251,7 @@ void ap_initialization_handler() {
     uint32_t apic_id = read_apic_id();  // Function to read the APIC ID register
     printd(DEBUG_SMP,"AP: initialization handler\n",apic_id);
 
-    // Initialize the stack space for the AP
-	if (apic_id != BOOTSTRAP_PROCESSOR_ID)
-	{
-		uint8_t* stack_top = kmalloc(AP_STACK_SIZE);
-		stack_top += AP_STACK_SIZE - sizeof(uintptr_t);
-		// Set the stack pointer. Inline assembly might be needed depending on your environment
-		__asm__("mov rsp, %0\n" : : "r" (stack_top));
-	}
+    // NOTE: Stack was already initialized in ap_wakeup_entry
 
 	//STAR MSR
 	//Format: 63..48 | 47..32 | 31..16 | 15..0
@@ -161,6 +279,8 @@ void ap_initialization_handler() {
 	//Divide the # of APIC timer ticks per second by the number of scheduler runs expected per second to get the timer's initial value
 	cls->apicTimerCount = cls->apicTicksPerSecond / MP_SCHEDULER_RUNS_PER_SECOND;
     
+	cls->coreInitialized = true;
+
 	// Acknowledge the interrupt if not the BSP (BSP calls this method directly)
 	if (cls->apic_id != BOOTSTRAP_PROCESSOR_ID)
     	write_eoi();  // Function to send an End-of-Interrupt signal to the APIC
@@ -186,7 +306,7 @@ void ap_configure_scheduler_timer()
     uint32_t lvtValue;
 
     // Set the interrupt vector to 0x7E
-    lvtValue = TIMER_SCHEDULE_VECTOR;
+    lvtValue = IPI_TIMER_SCHEDULE_VECTOR;
 
     // Set to periodic mode by setting the periodic mode bit
     lvtValue |= (1U << APIC_TIMER_PERIODIC_MODE_BIT);
@@ -200,7 +320,7 @@ void ap_configure_scheduler_timer()
     write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * 3);  //Trigger X times per second based on config setting
     printd (DEBUG_SMP, "AP: ap_configure_scheduler_timer: Timer is configured (0x%08x) to fire INT 0x%02x every %u ticks (ticks per second=%u)\n", 
         lvtValue, 
-        TIMER_SCHEDULE_VECTOR, 
+        IPI_TIMER_SCHEDULE_VECTOR, 
         cls->apicTimerCount, 
         cls->apicTicksPerSecond);
     write_eoi();

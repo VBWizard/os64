@@ -162,6 +162,11 @@ void kernel_init()
 	cls->threadID = kKernelTask->threads->threadID;
 
 	mp_enable_scheduling_vector(0);
+
+	wait(1000);
+
+	ap_wake_up_aps();
+
 	kProcessSignals = true;
 /*
 	if (kRootPartUUID[0])
