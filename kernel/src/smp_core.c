@@ -157,7 +157,6 @@ void ap_wakeup_entry() {
     // Set up the rest of the AP initialization
     load_gdt_and_jump(&kGDTr);
     init_tss();
-    init_core_local_storage(temp_apic_id);
     asm volatile ("lidt %0" : : "m" (kIDTPtr));
 
 	// Set up the AP stack
@@ -166,6 +165,8 @@ void ap_wakeup_entry() {
 
     __asm__("mov rsp, %0\n"::"r" (stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t)));
 	
+    init_core_local_storage(temp_apic_id);
+
 	tempCls = get_core_local_storage();
 
 	// Initialize the AP after stack switch (set spurious vector, enable interrupts, etc.)
@@ -176,10 +177,14 @@ void ap_wakeup_entry() {
         __asm__("sti\nhlt\n");  // Enable interrupts and halt the AP
     }
 }
-
 void ap_wake_up_aps() {
 	volatile core_local_storage_t *cls;
-    for (int coreToWake = 0; coreToWake < kMPCoreCount; coreToWake++) {
+    
+	//TODO: Remve me!
+	//Temporary debugging statement
+#include "log.h"
+	printd(DEBUG_BOOT, "core_log_buffers[0] = %p, kCPUInfo[0] = %p", core_log_buffers, &kCPUInfo[0]);
+	for (int coreToWake = 0; coreToWake < kMPCoreCount; coreToWake++) {
         uint32_t apic_id = kCPUInfo[coreToWake].apicID;
         if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
         

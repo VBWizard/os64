@@ -30,3 +30,10 @@ void write_serial(int port, char a) {
    __asm__("nop\nnop\nnop\n");
    //wait(0);
 }
+
+// Implemented to handle processing a string and writing all the bytes via write_serial()
+void serial_print_string(const char *message) {
+    for (const char *c = message; *c; c++) {
+        write_serial(COM1,*c);
+    }
+}

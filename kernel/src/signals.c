@@ -6,21 +6,40 @@
 #include "serial_logging.h"
 #include "panic.h"
 #include "thread.h"
+#include "smp_core.h"
 
 extern pt_entry_t kKernelPML4;
 bool kProcessSignals = false;
 uint8_t signalProcTickFrequency;
 
+/// @brief 
+/// @param signal See SIGNALS.H for the enum
+/// @param sigAction 
+/// @param sigData Data to accompany the signal (i.e. for SIGSLEEP, wake up ticks)
+/// @param thrd - The thread to signal.  If NULL the current thread is signaled
+/// @return 
 void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
 {
 	uintptr_t *a = sigAction;
 	thread_t *thread = thrd;
+
+	if (thread == NULL)
+	{
+		core_local_storage_t* cls = get_core_local_storage();
+		thread = cls->currentThread;
+	}
+
 	switch (signal)
 	{
 		case SIGSLEEP:
 			thread->signals.sigind|=SIGSLEEP;
 			thread->signals.sigdata[SIGSLEEP]=sigData;
             printd(DEBUG_SIGNALS,"Signalling SLEEP for thread 0x%08x, wakeTicks=%i\n",thread->threadID,sigData);
+			scheduler_trigger(NULL);
+			break;
+		case SIGLOGFLUSH:
+			thread->signals.sigind |= SIGLOGFLUSH;
+			printd(DEBUG_SIGNALS, "Signalling LOGFLUSH for thread 0x%08x\n", thread->threadID);
 			scheduler_trigger(NULL);
 			break;
 		default:
@@ -73,6 +92,7 @@ void processSignals()
 		qSleep = qSleep->next;
 	}
 
+	
     printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tprocessSignals: Done processing signals\n");
 	if (awoken)
 	{

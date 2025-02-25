@@ -23,7 +23,8 @@
         SIGSTOP = 1 << 5,
         SIGIO = 1 << 6,
         SIGKILL = 9,
-        SIGCONT = 1 << 7
+        SIGCONT = 1 << 7,
+		SIGLOGFLUSH = 1 << 9
     } signals;
 
 	extern bool kProcessSignals;

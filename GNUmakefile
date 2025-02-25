@@ -11,7 +11,7 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # $(call USER_VARIABLE,QEMUFLAGS,-m 8g -smp 2 -no-reboot -serial file:qemu_com1.log -monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
 
 # Define the base QEMU flags
-QEMU_BASE_FLAGS = -m 8g -smp 3 -no-reboot \
+QEMU_BASE_FLAGS = -m 8g -smp 2 -no-reboot \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
                   -d $(shell echo int,cpu_reset,pcall,guest_errors)

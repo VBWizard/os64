@@ -46,6 +46,7 @@ volatile bool mp_inScheduler[MAX_CPUS] = {false};
 volatile bool mp_waitingForScheduler[MAX_CPUS] = {false};
 volatile uint32_t mp_nextScheduleTicks[MAX_CPUS];
 volatile bool kMasterSchedulerEnabled = false;
+volatile bool kSchedulerInitialized = false;
 bool mp_schedulerEnabled[MAX_CPUS] = {false};
 uint64_t kSchedulerCallCount = 0;
 volatile int kSchedulerSwitchTasksLock;
@@ -112,6 +113,7 @@ void scheduler_init()
 {
 	kTaskList = NO_TASK;
 	kThreadList = NO_THREAD;
+	kSchedulerInitialized = true;
     printd(DEBUG_SCHEDULER,"\tInitialized kThreadList @ 0x%08x, sizeof(thread_t)=0x%02X\n",kThreadList,sizeof(thread_t));
 
     for (int cnt=0;cnt<kMPCoreCount;cnt++)
@@ -531,6 +533,16 @@ void scheduler_remove_from_queue(thread_t *queue, thread_t* thread, bool panicOn
 
     if (panicOnNotFound)
         panic("scheduler_remove_from_queue: Can't find queue entry to remove!");
+}
+
+void scheduler_wake_isleep_task(task_t *task) {
+    if (task == NULL || task->threads == NULL) return; // Ensure task is valid
+
+    if (task->threads->threadState == THREAD_STATE_ISLEEP) {
+        scheduler_change_thread_queue(task->threads, THREAD_STATE_RUNNABLE);
+    }
+    task->threads->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
+    scheduler_trigger(NULL);
 }
 
 thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrowsing)

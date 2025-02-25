@@ -34,7 +34,7 @@
 #include "smp_core.h"
 #include "apic.h"
 #include "signals.h"
-
+#include "log.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -61,6 +61,7 @@ uint64_t lastTime = 0;
 task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
 task_t* kIdleTasks[MAX_CPUS];
+task_t* kLogDTask;
 
 /// @brief Create the kernel task
 /// This is done manually whereas every other task in the system is created by calling the task_create method in task.c.
@@ -114,6 +115,9 @@ void kernel_init()
 
 	init_GDT();
 	
+	logging_queueing_init();
+
+
 	printf("Initializing PCI: ");
 	init_PCI();
 	printf("\t%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
@@ -155,6 +159,9 @@ void kernel_init()
 		scheduler_submit_new_task(kIdleTasks[cnt]);
 	}
 
+	kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, 0);
+	scheduler_submit_new_task(kLogDTask);
+
 	scheduler_enable();
 
 	scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
@@ -183,6 +190,7 @@ void kernel_init()
 		kRootFilesystem->fops->uninitialize(kRootFilesystem);
 	 }
 */
+__asm__ volatile ("mov ax, 0x33\nmov ds,ax\n");  // 0x33 is a likely invalid selector
 	shutdown();
 }
 

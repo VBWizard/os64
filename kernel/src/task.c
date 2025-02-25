@@ -16,6 +16,7 @@
 #include "smp_core.h"
 #include "scheduler.h"
 #include "panic.h"
+#include "log.h"
 
 extern volatile uint64_t kSystemCurrentTime;
 
@@ -92,6 +93,12 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	{
 		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
 		newTask->threads->regs.RIP = (uint64_t)&task_idle_loop;
+	}
+
+	if (strnstr(path, "/logd",10))
+	{
+		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
+		newTask->threads->regs.RIP = (uint64_t)&logd_thread;
 	}
 
 	gmtime((time_t*)&kSystemCurrentTime,&newTask->startTime);

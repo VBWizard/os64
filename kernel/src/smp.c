@@ -238,7 +238,7 @@ int init_SMP()
 	if (!kIOAPICAddress)
 		panic("Unable to determine IO APIC address after _MP_ and ACPI scans.");
 	kMPCoreCount = kLimineSMPInfo->cpu_count;
-	kCPUInfo = kmalloc((kMPCoreCount - 1) * sizeof(cpu_t));
+	kCPUInfo = kmalloc((kMPCoreCount) * sizeof(cpu_t));
 	for (uint64_t core = 0; core < kMPCoreCount;core++)
 	{
 		kCPUInfo[core].apicID =  kLimineSMPInfo->cpus[core]->lapic_id;

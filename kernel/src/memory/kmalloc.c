@@ -30,6 +30,8 @@ void *kmalloc_aligned(uint64_t length)
 // Allocate unaligned memory for the kernel
 void *kmalloc(uint64_t length)
 {
+	if (length==0)
+		panic("kmalloc: Attempt to allocate 0 bytes is invalid\n");
 	uint64_t addr = allocate_memory(length);
 	uint64_t virtual_address = addr + kHHDMOffset;
 	kmalloc_common(addr, virtual_address, length);
