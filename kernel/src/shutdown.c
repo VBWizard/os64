@@ -19,7 +19,7 @@ void shutdown()
 {
 	uint64_t memInUse=0;
 	uint64_t lastTime = 0;
-	char startTime[100] = {0};
+	char currentTime[100] = {0};
 	printd(DEBUG_SHUTDOWN, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
 	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
 	{
@@ -39,13 +39,14 @@ void shutdown()
 	{
 		if (lastTime != kSystemCurrentTime)
 		{
-			strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
+			uint64_t minutesUptime = (kTicksSinceStart / TICKS_PER_SECOND) / 60; // adjust 1000 if needed
+			strftime_epoch(&currentTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
 			lastTime = kSystemCurrentTime;
-			moveto(&kRenderer, 80,0);
-			printf("%s",startTime);
+		
+			moveto(&kRenderer, 95, 0);
+			printf("%s %lu min", currentTime, minutesUptime);
 		}
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart+99,kKernelTask->threads);
-
+		sigaction(SIGSLEEP, NULL, kTicksSinceStart+49,kKernelTask->threads);
 	}
 	while (true) {asm("sti\nhlt\n");}
 }

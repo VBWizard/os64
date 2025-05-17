@@ -24,22 +24,30 @@ extern struct limine_smp_response *kLimineSMPInfo;
 //TODO: Add continued logic
 void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8_t category, bool continued, const char *message) 
 {
+	core_local_storage_t *cls = get_core_local_storage();
 	continued = continued;
 
 	if (!kLoggingInitialized)
 		return;
 	if (core >= MAX_CPUS) panic("Invalid core ID in log_store_entry: %u", core);
-    log_buffer_t *buf = &core_log_buffers[core];
+    
+	//TODO: Decide whether  to do per core logging.  If not then get rid of the other queues
+	//log_buffer_t *buf = &core_log_buffers[core];
+	log_buffer_t *buf = &core_log_buffers[0];
     
     // Acquire lock
     while (__sync_lock_test_and_set(&buf->lock, 1)) { /* spin-wait */ }
     
     log_entry_t *entry = &buf->entries[buf->head];
-    entry->timestamp = kSystemCurrentTime;
+    entry->timestamp = kTicksSinceStart;
     entry->tick_count = tick_count;
     entry->core_id = core;
     entry->log_level = priority;
     entry->category = category;
+	if (kSMPInitDone)
+		entry->threadID = cls->currentThread->threadID;
+	else
+		entry->threadID = 0;
     sprintf(entry->message, "%s", message);
     
     buf->head = (buf->head + 1) % buf->capacity;
@@ -84,18 +92,19 @@ void logd_thread() {
 			for (int core = 0; core < kMPCoreCount; core++) {
 				buffer = &core_log_buffers[core];
 				
-				printd(DEBUG_LOGGING, "Logd processing: core=%d, head=%zu, tail=%zu\n", core, buffer->head, buffer->tail);
+                //05/10/2025 - Commented out for testing. We want DEBUG_LOGGING on for other things, but don't want this recursive call.
+				//printd(DEBUG_LOGGING, "Logd processing: core=%d, head=%zu, tail=%zu\n", core, buffer->head, buffer->tail);
 
 				while (buffer->head != buffer->tail && processed_logs < MAX_BATCH_SIZE) {  // Process up to MAX_BATCH_SIZE logs
 					log_entry_t *entry = &buffer->entries[buffer->tail];
 					char print_buf2[300];
 					sprintf(print_buf2, "%u (0x%04x) AP%u: %s", 
-						kTicksSinceStart, 
-						get_core_local_storage()->currentThread->threadID, 
+						entry->timestamp, 
+						entry->threadID, 
 						entry->core_id, 
 						entry->message);
 					serial_print_string(print_buf2);  // Flush log to serial
-					
+					sprintf(entry->message, "%*s", MAX_LOG_MESSAGE_SIZE-1, "");
 					buffer->tail = (buffer->tail + 1) % buffer->capacity;
 					processed_logs++;
 				}

@@ -26,8 +26,13 @@ void task_idle_loop()
 
 	while (1==1)
 	{
-		kIdleTicks[cls->apic_id]++;
-		__asm__("sti\nhlt\n");
+			uint64_t rsp_before_save;
+			//TODO: Nova said I have to remind myself to remove this
+			__asm__ volatile ("mov %0, rsp" : "=r" (rsp_before_save));  // Capture RSP
+			if (rsp_before_save >= 0xffff800000092e00 && rsp_before_save <= 0xffff800000092eb0)
+				printd(DEBUG_THREAD, "AP%d before save, actual RSP: 0x%lx", cls->apic_id, rsp_before_save);
+			//TODO: End ... as in she'll stop nagging me now
+				__asm__("sti\nhlt\n");
 	}
 }
 

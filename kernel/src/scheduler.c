@@ -366,10 +366,10 @@ void debug_print_registers(uint64_t apic_id, char* prefix, bool unconditional)
 	if (unconditional)
 	{
 		savedDebugFlags = kDebugLevel;
-		savedDebugFlags |= DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED;
+		savedDebugFlags |= DEBUG_SCHEDULER;
 	}
 
-    printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
+    printd(DEBUG_SCHEDULER,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
             prefix,
 			mp_isrSavedCR3[apic_id],
             mp_isrSavedCS[apic_id],
@@ -604,7 +604,7 @@ void scheduler_trigger(core_local_storage_t *cls)
         printd(DEBUG_SCHEDULER,"scheduler_trigger: ERROR: Called but already in scheduler, exiting!\n");
         return;
     }
-    printd(DEBUG_SCHEDULER,"scheduler_trigger: triggering scheduler\n");
+//    printd(DEBUG_SCHEDULER,"scheduler_trigger: triggering scheduler\n");
     mp_waitingForScheduler[cls->apic_id] = true;
     mp_schedulerEnabled[cls->apic_id] = true;
 
@@ -685,7 +685,9 @@ void scheduler_run_new_thread()
     if (threadToStop && threadToRun->threadID==threadToStop->threadID)
     {
         printd(DEBUG_SCHEDULER,"*No new thread to run, continuing with the current task\n");
+		#if SCHEDULER_DEBUG == 1
 		debug_print_registers(apic_id, "continue2", false);
+		#endif
         if (threadToStop->execDontSaveRegisters)
         {
             printd(DEBUG_SCHEDULER,"Thread to keep running was just exec'd, loading registers from tss\n");
@@ -766,7 +768,9 @@ void scheduler_do()
 	}
 	else
 	{
+		#if SCHEDULER_DEBUG == 1
 		debug_print_registers(apic_id, "continue", true);
+		#endif
         printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   

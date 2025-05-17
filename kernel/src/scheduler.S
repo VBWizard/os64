@@ -94,22 +94,23 @@ _schedule_ap:
     mov rbx, rax                        # Put the original EAX value in EBX
 	mov rax, [gs:8]						# APIC_ID is the second field of the core_local_storage_t struct
 	# APIC_ID is now in the RAX register
+	# If the BSP is running the scheduler, do the signal check
 	cmp rax, 0
 	jne over_check_signals
 	call _check_signals
 over_check_signals:
-	mov [mp_isrSavedRAX + rax * 8], rbx # Save original EAX value in the array
 
 	# Verify we aren't in the scheduler ISR already.  If so then we can't continue.  Do this as early as possible
-	mov bl, [mp_inScheduler + rax]
-	cmp bl, 0
-	jne scheduler_halt_and_catch_a_coffee	# booleans are 1 byte
+	mov al, [mp_inScheduler + rax]
+	cmp al, 0
+	jne already_in_scheduler_exit	# booleans are 1 byte
 	jmp scheduler_continue_1
-scheduler_halt_and_catch_a_coffee:
+already_in_scheduler_exit:
 	pop rbx
 	call _write_eoi
 	iretq
 scheduler_continue_1:
+	mov [mp_isrSavedRAX + rax * 8], rbx # Save original EAX value in the array
 	# Since we're not, put us in the scheduler!
 	mov bl,1
 	mov [mp_inScheduler + rax], bl
@@ -134,7 +135,7 @@ scheduler_continue_1:
 
 	mov rbx, 0
 	# For APs that are entering the scheduler for the first time, don't save registers to saved variables
-    cmp [mp_CoreHasRunScheduledThread + rax], rbx # NOTE: variable is a bool, 1 byte per element
+    cmp [mp_CoreHasRunScheduledThread + rax], bl # NOTE: variable is a bool, 1 byte per element
     je OverSaveRegisters                # Skip saving of registers
 
 dontSkipRegisters:
@@ -322,9 +323,9 @@ notFirstTimeScheduled:
 	push rax
 	mov rax, 0xffffffff00000000
 	cmp rbx, rax
-	jge overScheduleTest1
+	jge overScheduleTestRIP
 	nop
-overScheduleTest1:
+overScheduleTestRIP:
 	pop rax
 
 	mov rbx, [mp_inScheduler + rax]

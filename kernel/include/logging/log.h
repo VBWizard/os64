@@ -7,12 +7,10 @@
 
 //Set to sizeof(log_entry_t)*10 to enable buffer full processing
 
-//TODO: FIX ME ... back to 1*
-#define LOG_BUFFER_SIZE (5 * 1024 * 1024) // 1MB per core
+#define LOG_BUFFER_SIZE (1 * 1024 * 1024) // 1MB per core
 #define MAX_LOG_MESSAGE_SIZE 256
-//TODO: Change back to a reasonable number
-#define MAX_BATCH_SIZE 10000  // Process up to 10 messages before sleeping
-#define LOGD_SLEEP_TICKS (1 * TICKS_PER_SECOND)  // Sleep for 1 second (100 * 10ms)
+#define MAX_BATCH_SIZE 1000  // Process up to 10 messages before sleeping
+#define LOGD_SLEEP_TICKS (TICKS_PER_SECOND)  // Sleep for 1 second
 #define LOGD_FLUSH_WAIT_TICKS 100
 typedef struct log_entry {
     uint64_t timestamp;
@@ -20,6 +18,7 @@ typedef struct log_entry {
     uint16_t core_id;
     uint8_t log_level;
     uint8_t category;
+	uint64_t threadID;
     char message[MAX_LOG_MESSAGE_SIZE];
 } log_entry_t;
 

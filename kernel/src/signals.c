@@ -9,6 +9,7 @@
 #include "smp_core.h"
 
 extern pt_entry_t kKernelPML4;
+extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
 uint8_t signalProcTickFrequency;
 
@@ -79,6 +80,8 @@ void processSignals()
 
     printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tScanning Interruptable Sleep queue\n");
 
+	//Set the scheduler task switch lock so that other APs don't see inconsistent state
+	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
 	while (qSleep != NO_THREAD)
 	{
 		if (qSleep->signals.sigdata[SIGSLEEP] < kTicksSinceStart)
@@ -91,6 +94,8 @@ void processSignals()
 		}
 		qSleep = qSleep->next;
 	}
+	//Relese the lock
+	__sync_lock_release(&kSchedulerSwitchTasksLock);   
 
 	
     printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tprocessSignals: Done processing signals\n");

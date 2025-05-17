@@ -29,7 +29,7 @@ void __attribute__((noreturn, noinline))panic(const char *format, ...)
 {
     va_list args;
     va_start( args, format );
-    printf("\n>>>panic at instruction prior to address 0x%08x<<<\n", __builtin_return_address(0));
+    printf("\n>>>panic at instruction prior to address 0x%016lx<<<\n", __builtin_return_address(0));
     printf("  >>>");
     vsprintf(sprintf_buf, format, args);
 	va_end(args);

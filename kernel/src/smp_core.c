@@ -182,8 +182,6 @@ void ap_wake_up_aps() {
     
 	//TODO: Remve me!
 	//Temporary debugging statement
-#include "log.h"
-	printd(DEBUG_BOOT, "core_log_buffers[0] = %p, kCPUInfo[0] = %p", core_log_buffers, &kCPUInfo[0]);
 	for (int coreToWake = 0; coreToWake < kMPCoreCount; coreToWake++) {
         uint32_t apic_id = kCPUInfo[coreToWake].apicID;
         if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
