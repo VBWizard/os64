@@ -352,9 +352,9 @@ ring3Return:
     mov rbx, [mp_isrSavedRIP + rax * 8]
     mov [rsp], rbx
     mov rbx, [mp_isrSavedCS + rax * 8]
-    mov [esp + 8], rbx
+    mov [rsp + 8], rbx
     mov rbx, [mp_isrSavedRSP + rax * 8]
-    mov [esp + 16], rbx
+    mov [rsp + 16], rbx
     mov ebx, [mp_isrSavedSS + rax * 8]
     mov [rsp + 24], rbx
     mov bl,[mp_SchedulerTaskSwitched + rax]			# mp_SchedulerTaskSwitched is a byte array, 1 byte per core
