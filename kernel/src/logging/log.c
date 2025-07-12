@@ -84,36 +84,41 @@ void logging_queueing_init() {
 
 void logd_thread() {
     log_buffer_t *buffer;
-	while (1) {
+
+    while (1) {
         int processed_logs = 0;
 
-		//if (kLoggingInitialized)
-		{
-			for (int core = 0; core < kMPCoreCount; core++) {
-				buffer = &core_log_buffers[core];
-				
-                //05/10/2025 - Commented out for testing. We want DEBUG_LOGGING on for other things, but don't want this recursive call.
-				//printd(DEBUG_LOGGING, "Logd processing: core=%d, head=%zu, tail=%zu\n", core, buffer->head, buffer->tail);
+        if (kLoggingInitialized) {
+            for (int core = 0; core < kMPCoreCount; core++) {
+                buffer = &core_log_buffers[core];
 
-				while (buffer->head != buffer->tail && processed_logs < MAX_BATCH_SIZE) {  // Process up to MAX_BATCH_SIZE logs
-					log_entry_t *entry = &buffer->entries[buffer->tail];
-					char print_buf2[300];
-					sprintf(print_buf2, "%u (0x%04x) AP%u: %s", 
-						entry->timestamp, 
-						entry->threadID, 
-						entry->core_id, 
-						entry->message);
-					serial_print_string(print_buf2);  // Flush log to serial
-					sprintf(entry->message, "%*s", MAX_LOG_MESSAGE_SIZE-1, "");
-					buffer->tail = (buffer->tail + 1) % buffer->capacity;
-					processed_logs++;
-				}
-			}
-		}
+                /* Skip cores whose buffers are not yet allocated */
+                if (!buffer->entries)
+                    continue;
+
+                /* Process up to MAX_BATCH_SIZE entries for this core */
+                while (buffer->head != buffer->tail &&
+                       processed_logs < MAX_BATCH_SIZE) {
+                    log_entry_t *entry = &buffer->entries[buffer->tail];
+                    char print_buf2[300];
+
+                    sprintf(print_buf2, "%u (0x%04x) AP%u: %s",
+                            entry->timestamp,
+                            entry->threadID,
+                            entry->core_id,
+                            entry->message);
+                    serial_print_string(print_buf2);
+
+                    sprintf(entry->message, "%*s", MAX_LOG_MESSAGE_SIZE - 1, "");
+                    buffer->tail = (buffer->tail + 1) % buffer->capacity;
+                    processed_logs++;
+                }
+            }
+        }
 
         if (processed_logs < MAX_BATCH_SIZE) {
-            // Not much to process, sleep for a bit
-			thread_t *self = get_core_local_storage()->currentThread;
+            /* Not much to process, sleep for a bit or until buffers exist */
+            thread_t *self = get_core_local_storage()->currentThread;
             sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
         }
     }
