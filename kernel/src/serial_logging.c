@@ -43,9 +43,9 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     va_end(args);
     
 
-	#if ENABLE_LOG_BUFFERING == 1
-    if (kSchedulerInitialized)
-	{
+#if ENABLE_LOG_BUFFERING == 1
+    if (kLoggingInitialized)
+    {
 		size_t msg_len = strlen(print_buf);
 		size_t offset = 0;
 		while (offset < msg_len) {
