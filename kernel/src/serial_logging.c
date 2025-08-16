@@ -74,12 +74,12 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
 	//  if this code is enabled. :-(
 	{
     	char print_buf2[2048];
-    	snprintf(print_buf2, sizeof(print_buf2), "%u (0x%04x) AP%u: %s", tick_count, threadID, core, print_buf);
+        snprintf(print_buf2, sizeof(print_buf2), "%lu (0x%04llx) AP%u: %s", tick_count, threadID, core, print_buf);
     	serial_print_string(print_buf2);
 	}	
 #else
     char print_buf2[2048];
-    snprintf(print_buf2, sizeof(print_buf2), "%u (0x%04x) AP%u: %s", tick_count, threadID, core, print_buf);
+    snprintf(print_buf2, sizeof(print_buf2), "%lu (0x%04llx) AP%u: %s", tick_count, threadID, core, print_buf);
     serial_print_string(print_buf2);
 #endif
 }
