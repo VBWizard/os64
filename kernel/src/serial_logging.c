@@ -22,6 +22,7 @@ extern bool kOverrideFileLogging;
 extern bool kEnableSMP;
 extern volatile bool kSchedulerInitialized;
 char print_buf[2048];
+static volatile uint32_t print_lock = 0;
 
 void printd(__uint128_t debug_level, const char *fmt, ...) {
     if ((kDebugLevel & debug_level) != debug_level) return;
@@ -36,12 +37,13 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
 	uint64_t tick_count = kTicksSinceStart;
     uint8_t priority = (debug_level >> 126) & 0x3;  // Extract top 2 bits for priority
     uint8_t category = __builtin_ctz(debug_level & 0x3FFFFFFFFFFFFFFF); // First category set
-    
+
+    while (__sync_lock_test_and_set(&print_lock, 1)) { /* spin-wait */ }
+
     va_list args;
     va_start(args, fmt);
     int printed = vsprintf(print_buf, fmt, args);
     va_end(args);
-    
 
 #if ENABLE_LOG_BUFFERING == 1
     if (kLoggingInitialized)
@@ -75,11 +77,13 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
 	{
     	char print_buf2[2048];
     	snprintf(print_buf2, sizeof(print_buf2), "%u (0x%04x) AP%u: %s", tick_count, threadID, core, print_buf);
-    	serial_print_string(print_buf2);
-	}	
+        serial_print_string(print_buf2);
+        }
 #else
     char print_buf2[2048];
     snprintf(print_buf2, sizeof(print_buf2), "%u (0x%04x) AP%u: %s", tick_count, threadID, core, print_buf);
     serial_print_string(print_buf2);
 #endif
+
+    __sync_lock_release(&print_lock);
 }
