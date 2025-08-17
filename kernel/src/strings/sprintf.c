@@ -15,10 +15,8 @@
 #include "strings.h"
 #include "memset.h"
 #include "strlen.h"
-#include "printd.h"
 
-extern uint32_t* kTicksSinceStart;
-volatile uint32_t lock_mp_printd;
+extern volatile uint64_t kTicksSinceStart;
 
 static int skip_atoi(const char **s)
 {
