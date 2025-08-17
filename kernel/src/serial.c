@@ -13,7 +13,7 @@ static inline void serial_lock_release() {
     __sync_lock_release(&serial_lock);
 }
 
-static void write_serial_unlocked(int port, char a) {
+static inline void serial_write_char(int port, char a) {
     outb(port, a);
     __asm__("nop\nnop\nnop\n");
 }
@@ -46,7 +46,7 @@ int is_transmit_empty(int port) {
 
 void write_serial(int port, char a) {
     serial_lock_acquire();
-    write_serial_unlocked(port, a);
+    serial_write_char(port, a);
     serial_lock_release();
 }
 
@@ -54,7 +54,7 @@ void write_serial(int port, char a) {
 void serial_print_string(const char *message) {
     serial_lock_acquire();
     for (const char *c = message; *c; c++) {
-        write_serial_unlocked(COM1, *c);
+        serial_write_char(COM1, *c);
     }
     serial_lock_release();
 }
