@@ -106,10 +106,12 @@ over_check_signals:
 	jne already_in_scheduler_exit	# booleans are 1 byte
 	jmp scheduler_continue_1
 already_in_scheduler_exit:
-	pop rbx
+	mov rax, rbx                        # Bugfix 08/18/2025: Restore rax from rbx before returning
+    pop rbx
 	call _write_eoi
 	iretq
 scheduler_continue_1:
+    mov rax, [gs:8]                     # Bugfix 08/18/2025: Restore rax with APIC_ID
 	mov [mp_isrSavedRAX + rax * 8], rbx # Save original EAX value in the array
 	# Since we're not, put us in the scheduler!
 	mov bl,1
