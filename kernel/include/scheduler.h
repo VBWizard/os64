@@ -35,4 +35,5 @@
 	void scheduler_yield(core_local_storage_t *cls);
 	void scheduler_trigger(core_local_storage_t *cls);
 	void scheduler_wake_isleep_task(task_t *task);
+    bool in_scheduler_context(void);
 #endif

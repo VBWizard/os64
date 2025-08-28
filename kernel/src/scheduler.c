@@ -44,7 +44,6 @@ volatile uintptr_t mp_schedStack[MAX_CPUS]; //Loaded by scheduler when it is cal
 volatile uint32_t mp_timesEnteringScheduler[MAX_CPUS] = {0};
 volatile bool mp_inScheduler[MAX_CPUS] = {false};
 volatile bool mp_waitingForScheduler[MAX_CPUS] = {false};
-volatile uint32_t mp_nextScheduleTicks[MAX_CPUS];
 volatile bool kMasterSchedulerEnabled = false;
 volatile bool kSchedulerInitialized = false;
 bool mp_schedulerEnabled[MAX_CPUS] = {false};
@@ -775,7 +774,6 @@ void scheduler_do()
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   
     kSchedulerCallCount++;
-    mp_nextScheduleTicks[apic_id]=kTicksSinceStart+TICKS_PER_SCHEDULER_RUN_AP;
 #ifdef SCHEDULER_DEBUG
     uint64_t ticksAfter=rdtsc();
 #endif
