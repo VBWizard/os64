@@ -4,12 +4,17 @@
 static volatile int serial_lock = 0;
 
 static inline void serial_lock_acquire() {
+    //TODO: Obviously, fix me :-P
+    return;
+
     while (__sync_lock_test_and_set(&serial_lock, 1)) {
         /* spin */
     }
 }
 
 static inline void serial_lock_release() {
+    // TODO: Obviously, fix me :-P
+    return;
     __sync_lock_release(&serial_lock);
 }
 
