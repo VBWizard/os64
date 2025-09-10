@@ -29,11 +29,14 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     uint16_t core = 0;  // Default core if SMP isn't initialized
 	uint64_t threadID = 0;
 
-    if (kSMPInitDone && kCLSInitialized) {
-        core = read_apic_id();  // Get actual core ID if SMP is initialized
-		threadID = get_core_local_storage()->currentThread->threadID;
+    core = read_apic_id(); // Get actual core ID if SMP is initialized
+    if (kSMPInitDone && kCLSInitialized)
+    {
+        core_local_storage_t *cls = get_core_local_storage();
+        if (cls->currentThread)
+            threadID = cls->currentThread->threadID;
     }
-	uint64_t tick_count = kTicksSinceStart;
+    uint64_t tick_count = kTicksSinceStart;
     uint8_t priority = (debug_level >> 126) & 0x3;  // Extract top 2 bits for priority
     uint8_t category = __builtin_ctz(debug_level & 0x3FFFFFFFFFFFFFFF); // First category set
     

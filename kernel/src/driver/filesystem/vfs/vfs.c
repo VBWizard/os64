@@ -98,11 +98,15 @@ char* compare_part_uuids(const char* rootPartUUID, const char* currPartUUID)
 
 	//Compare the formatted currPartUUID to the part UUID passed to be the root
 	result = strnstr(rootPartUUID, currPartStr,36);
-	kfree(currPartStr);
 
 	printd(DEBUG_BOOT | DEBUG_DETAILED, "\tBOOT: Compared rootPartUUID=%s with partition %s, result=%p\n", rootPartUUID, currPartStr, result);
-	if (result==rootPartUUID)
-		return result;
+
+    kfree(currPartStr);
+
+    if (result == rootPartUUID)
+    {
+        return result;
+    }
 	return NULL;
 }
 

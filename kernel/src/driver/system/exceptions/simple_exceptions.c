@@ -10,19 +10,19 @@
 void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     core_local_storage_t* core = get_core_local_storage();
 
-    printf("\n>>> EXCEPTION PANIC: %s <<<\n", message);  // 🛠 FIXED: Actually print the message!
-    printf(">>> AP %lu (Thread %lu) <<<\n", core->apic_id, core->threadID);
-    printf(">>> Faulting instruction: 0x%016lx <<<\n", rip);
+    printf("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);  // 🛠 FIXED: Actually print the message!
+    printf(">>> AP %lu (Thread %lu) <<<                        \n", core->apic_id, core->threadID);
+    printf(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
     
     if (error_code != 0xFFFFFFFFFFFFFFFF) {
-        printf(">>> Error Code: 0x%lx <<<\n", error_code);
+        printf(">>> Error Code: 0x%lx <<<                          \n", error_code);
     }
     if (core->currentThread) {
 		task_t *task = (task_t*)core->currentThread->ownerTask;
 
-        printf(">>> Excepting Task: %s <<<\n", task->path);
+        printf(">>> Excepting Task: %s <<<                         \n", task->path);
     } else {
-        printf(">>> No current task (core likely idle) <<<\n");
+        printf(">>> No current task (core likely idle) <<<         \n");
     }
 
 	// **Log it only if logging is initialized**

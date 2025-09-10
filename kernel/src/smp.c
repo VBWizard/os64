@@ -296,9 +296,8 @@ int init_SMP()
             printf("enabled ... ");
 		else
 			printf("WARNING - not enabled ... ");
-        printf("done\n");
+        printf("done. ");
 	}
-	printf("BSP timer %u\n",kCPUInfo[0].ticksPerSecond);
 	kCoreLocalStorage = kmalloc_aligned(kLimineSMPInfo->cpu_count * sizeof(core_local_storage_t));
 	return mp_records;
 }

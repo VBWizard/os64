@@ -137,10 +137,11 @@ void kernel_init()
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 	if (kEnableSMP)
 	{
-		printf("SMP: Initializing ...\n");
+		printf("SMP: Initializing ... ");
 		kLimineSMPInfo = smp_request.response;
 		init_SMP();
-	}
+        printf("(%u cores initialized)\n", kMPCoreCount);
+    }
 	else
 		printf("SMP: Disabled due to nosmp parameter\n");
 	init_signals();
@@ -246,7 +247,7 @@ void kernel_main()
 	allocator_init();
 	init_os64_paging_tables();
 	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
-	__asm__ volatile ("mov rsp, %0" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
+	__asm__ volatile ("cli\nmov rsp, %0\nsti\n" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
 	printf("Kernel stack initialized, 0x%x bytes\n", KERNEL_STACK_SIZE);
 	kernel_init();
 }

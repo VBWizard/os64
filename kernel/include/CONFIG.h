@@ -28,10 +28,7 @@
 #define ENABLE_LOG_BUFFERING 1 // Set to 0 to disable buffering
 
 //Scheduler Related
-//How many ticks expire between scheduler runs (@100hz - 5=20 ticks per run, 10=10  ticks per run (10 ticks * 10 ms = 100ms @ 100 TPS))
 #define MP_SCHEDULER_RUNS_PER_SECOND 10
-#define TICKS_PER_SCHEDULER_RUN TICKS_PER_SECOND / MP_SCHEDULER_RUNS_PER_SECOND
-#define TICKS_PER_SCHEDULER_RUN_AP TICKS_PER_SCHEDULER_RUN
 #define SCHEDULER_DEBUG 1
 
 // Framebuffer related
@@ -70,7 +67,7 @@
 #define DEBUG_LOGGING (__uint128_t)1 << 18
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED  (__uint128_t)1 << 127
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_SCHEDULER | DEBUG_THREAD | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED | DEBUG_SIGNALS)
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_SCHEDULER | DEBUG_THREAD | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED | DEBUG_SIGNALS | DEBUG_SMP)
 //#define DEBUG_OPTIONS (DEBUG_EXCEPTIONS | DEBUG_BOOT)
 extern __uint128_t kDebugLevel;
 

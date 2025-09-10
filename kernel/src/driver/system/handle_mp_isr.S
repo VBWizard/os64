@@ -5,7 +5,7 @@
 
 
 .globl vector123
-vector123:
+vector123: # IPI_INVALIDATE_TLB_VECTOR
 	cli
 	push rax
 	push rbx
@@ -43,7 +43,7 @@ vector123:
 	sti
 	iretq
 .globl vector124
-vector124: # AP Disable vector
+vector124: # AP Disable vector (IPI_DISABLE_SCHEDULING_VECTOR)
 	cli
 	push rax
 	push rbx
@@ -80,8 +80,8 @@ vector124: # AP Disable vector
     pop rax
 	sti
 	iretq
-.globl vector125
-vector125: # AP Enable vector
+.globl vector125 
+vector125: # AP Enable vector (IPI_ENABLE_SCHEDULING_VECTOR)
 	cli
 	push rax
 	push rbx
@@ -118,7 +118,7 @@ vector125: # AP Enable vector
     pop rax
 	sti
 	iretq
-.globl vector127 # AP Initialization vector
+.globl vector127 # AP Initialization vector (IPI_AP_INITIALIZATION_VECTOR)
 vector127:
 	cli
 	push rax

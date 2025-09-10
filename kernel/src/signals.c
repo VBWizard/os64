@@ -21,8 +21,8 @@ uint8_t signalProcTickFrequency;
 /// @return 
 void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
 {
-	uintptr_t *a = sigAction;
-	thread_t *thread = thrd;
+    uintptr_t *a = sigAction; // Temporary workaround to suppress "unused parameter 'sigAction'" compiler error
+    thread_t *thread = thrd;
 
 	if (thread == NULL)
 	{
@@ -99,11 +99,7 @@ void processSignals()
 
 	
     printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tprocessSignals: Done processing signals\n");
-	if (awoken)
-	{
-        printd(DEBUG_SIGNALS,"\tTrigger the scheduler to process ... the awoken\n");
-	 	scheduler_trigger(NULL);
-	}
+    //No need to act on "awoken" since processSignals() is called by the scheduler
 	if (priorCR3 != (uint64_t)kKernelPML4)
 	    __asm__("mov cr3,%[cr3Val]\n"::[cr3Val] "r" (priorCR3));
 }

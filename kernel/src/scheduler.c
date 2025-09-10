@@ -120,10 +120,10 @@ void scheduler_init()
         printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "\tAllocating stack for CPU %u, 0x%04x bytes\n",cnt,SCHEDULER_STACK_SIZE);
         mp_schedStack[cnt] = (uintptr_t)kmalloc_aligned(0x4000);
 		uintptr_t base = mp_schedStack[cnt] & ~(kHHDMOffset);
-        printd(DEBUG_SCHEDULER, "\t\tStack is at 0x%08x\n",mp_schedStack[cnt]);
+        printd(DEBUG_SCHEDULER, "\t\tStack is at 0x%016x\n",mp_schedStack[cnt]);
         paging_map_pages((uintptr_t*)kKernelPML4v, (uintptr_t)mp_schedStack[cnt], base, SCHEDULER_STACK_SIZE/PAGE_SIZE, 0x7);
         mp_schedStack[cnt] += SCHEDULER_STACK_SIZE - sizeof(uintptr_t);
-        printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "\t\tAdjusted stack is at 0x%08x\n",mp_schedStack[cnt]);
+        printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "\t\tAdjusted stack is at 0x%016x\n",mp_schedStack[cnt]);
     }
 }
 

@@ -11,7 +11,6 @@
 #include "smp_core.h"
 #include "task.h"
 #include "scheduler.h"  //for scheduler_wake_task
-
 // TODO: Replace sprintf with snprintf once implemented
 // TODO: Implement dump_log_buffer() to handle emergency log flushes when buffer is full in place of panicking
 
@@ -33,10 +32,7 @@ void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8
     
 	//TODO: Decide whether  to do per core logging.  If not then get rid of the other queues
 	//log_buffer_t *buf = &core_log_buffers[core];
-	log_buffer_t *buf = &core_log_buffers[0];
-    
-    // Acquire lock
-    while (__sync_lock_test_and_set(&buf->lock, 1)) { /* spin-wait */ }
+	log_buffer_t *buf = &core_log_buffers[core];
     
     log_entry_t *entry = &buf->entries[buf->head];
     entry->timestamp = kTicksSinceStart;
@@ -67,7 +63,6 @@ void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8
 	}
 	
     // Release lock
-    __sync_lock_release(&buf->lock);
 }
 
 void logging_queueing_init() {
@@ -84,6 +79,7 @@ void logging_queueing_init() {
 
 void logd_thread() {
     log_buffer_t *buffer;
+    thread_t *self = get_core_local_storage()->currentThread;
 
     while (1) {
         int processed_logs = 0;
@@ -109,18 +105,14 @@ void logd_thread() {
                             entry->message);
                     serial_print_string(print_buf2);
 
-                    sprintf(entry->message, "%*s", MAX_LOG_MESSAGE_SIZE - 1, "");
+                    memset(entry->message, 0, MAX_LOG_MESSAGE_SIZE);
                     buffer->tail = (buffer->tail + 1) % buffer->capacity;
                     processed_logs++;
                 }
             }
         }
 
-        if (processed_logs < MAX_BATCH_SIZE) {
-            /* Not much to process, sleep for a bit or until buffers exist */
-            thread_t *self = get_core_local_storage()->currentThread;
-            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
-        }
+        sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
     }
 }
 

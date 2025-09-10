@@ -29,12 +29,12 @@ _check_signals:
 	push rax
 	mov al, [kProcessSignals]
 	cmp al, 1
-	jne over_process_signals
+	jne process_signals_disabled
 
 	mov ax, [signals_update_count]
 	inc ax
 	cmp ax, signalProcTickFrequency # Check signals every X ticks
-	jl over_process_signals
+	jb over_process_signals
 	push rbx
 	push rcx
 	push rdx
@@ -69,6 +69,7 @@ _check_signals:
 	mov ax, 0
 over_process_signals:
 	mov [signals_update_count], ax
+process_signals_disabled:
 	pop rax
 	ret
 
@@ -104,32 +105,25 @@ _schedule_ap:
 already_in_scheduler_exit:
 	mov rax, rbx                        # Bugfix 08/18/2025: Restore rax from rbx before returning
     pop rbx
-	call _write_eoi
+    call _write_eoi
 	iretq
 
 not_in_scheduler_continue:
+    # Tag AP as 'in scheduler'
+	mov byte ptr [mp_inScheduler + rax], 1
+
 	# If the BSP is running the scheduler, do the signal check
 	cmp rax, 0
 	jne over_check_signals
 	call _check_signals
 over_check_signals:
-    mov rax, [gs:8]                     # Bugfix 08/18/2025: Restore rax with APIC_ID
-	mov [mp_isrSavedRAX + rax * 8], rbx # Save original EAX value in the array
-	# Since we're not, put us in the scheduler!
-	mov bl,1
-	mov [mp_inScheduler + rax], bl
+	mov [mp_isrSavedRAX + rax * 8], rbx # Save original RAX value in the array
 
-
+    # Restore RBX value from when we entered the routine
     pop rbx 
 	
 	mov [temp_rsp + rax * 8], rsp
-	                            # Restore original EBX value
     mov [mp_isrSavedRBX + rax * 8], rbx # Save original EBX value in the array
-	mov [mp_isrSavedR15 + rax * 8], r15 # Save the value of the R15 register so we can use it
-
-	mov r15, [gs:0]						# R15 now points at the core_local_storage_t struct
-
-
 
     mov rbx, cr3
     mov [mp_isrSavedCR3 + rax * 8], rbx # Save CR3 in the array
@@ -156,7 +150,7 @@ dontSkipRegisters:
     mov [mp_isrSavedR12 + rax * 8], r12
     mov [mp_isrSavedR13 + rax * 8], r13
     mov [mp_isrSavedR14 + rax * 8], r14
-	# r15 was saved earlier
+	mov [mp_isrSavedR15 + rax * 8], r15 # Save the value of the R15 register so we can use it
 
     mov rbx, ds
     mov [mp_isrSavedDS + rax * 8], rbx
@@ -210,17 +204,16 @@ over_save_samel_priv_lvl_stack_and_flags:
 OverSaveRegisters:
     # Keep track of how many times we've entered the scheduler
     inc qword ptr [mp_timesEnteringScheduler + rax*8]
+    
+    # Load the scheduler stack pointer
     mov rsp, [mp_schedStack + rax * 8]
 overSetESP:
 
     # push RAX which has the apic_id, so that it is available when we get back from scheduling
     push rax
-	# push R15 which has the core_local_storage_t base address, so that it is available when we get back from scheduling
-	push r15
     # Call the scheduler
     call scheduler_do
-	pop r15								# core_local_storage_t base address is now in r15
-    mov rax, [r15 + 16]					# Get the new threadID
+	mov rax, [gs:16]						# APIC_ID is the second field of the core_local_storage_t struct
     cmp rax, 0x0022
     jne overBreakInISR
 breakInISRLabel: 
@@ -228,17 +221,19 @@ breakInISRLabel:
 
 overBreakInISR:
 
+    # Put the apic_id back in RAX
     pop rax                 			# apic_id is now in EAX
+    
+    # Identify whether the new CS is ring 3 for setting the threadIsKernel entry
     mov rbx, [mp_isrSavedCS + rax * 8]
     and rbx, 3
     cmp rbx, 3
     je nonKernelProcess
-
     mov rbx,1
-    jmp continue1
+    jmp kernelProcess
 nonKernelProcess:
     mov rbx,0
-continue1:
+kernelProcess:
     mov [threadIsKernel + rax], bl		# threadIsKernel is a byte array, one for each core
 
     # Restore all the segment registers except CS
@@ -261,7 +256,7 @@ continue1:
 	mov r12, [mp_isrSavedR12 + rax * 8]
 	mov r13, [mp_isrSavedR13 + rax * 8]
 	mov r14, [mp_isrSavedR14 + rax * 8]
-	# We'll restore r15 later, before returning to ring 3
+	mov r15, [mp_isrSavedR15 + rax * 8]
     
 	# Unconditionally set the IOPL bits of flags (TODO: Fix this)
     mov rbx, [mp_isrSavedRFlags + rax * 8]
@@ -275,6 +270,8 @@ continue1:
     je overRestoreCR3
     mov CR3, rax
 overRestoreCR3:
+
+    # If the new thread to be executed is ring 3, jump to a different return path
     pop rax
     mov bl, [threadIsKernel + rax * 1]
     cmp bl,1           
@@ -328,12 +325,14 @@ notFirstTimeScheduled:
 	mov rax, 0xffffffff00000000
 	cmp rbx, rax
 	jge overScheduleTestRIP
+invalidRIP:
 	nop
 overScheduleTestRIP:
-	pop rax
+	mov r15, rbx
+    pop rax
 
-	mov rbx, [mp_inScheduler + rax]
-	cmp rbx,0
+	mov bl, [mp_inScheduler + rax]
+	cmp bl,0
 	je scheduler_halt_and_catch_a_coffee2
 	jmp scheduler_continue_2
 scheduler_halt_and_catch_a_coffee2:
@@ -341,9 +340,8 @@ scheduler_halt_and_catch_a_coffee2:
 	jmp scheduler_halt_and_catch_a_coffee2
 scheduler_continue_2:
 
-	mov r15, [mp_isrSavedR15 + rax * 8]
 	mov rbx, [mp_isrSavedRBX + rax * 8]
-	call _write_eoi
+    call _write_eoi
 	mov byte ptr [mp_inScheduler + rax], 0
     mov rax, [mp_isrSavedRAX + rax * 8]
     iretq
@@ -376,11 +374,10 @@ doTheJump:
     and rbx, 0xFFFFFFFFFFFFFDFF                         # Clear the IF flag
     push rbx
     popf
-    mov r15, [mp_isrSavedR15 + rax * 8]
 	mov rbx, [mp_isrSavedRBX + rax * 8]
+	mov byte ptr [mp_inScheduler + rax], 0
     mov rax, [mp_isrSavedRAX + rax * 8]
-	call _write_eoi
-	sti
+    call _write_eoi
     retfq 0
 
 .section .data
@@ -394,6 +391,6 @@ signals_update_count:
 	.byte 0
 	.endr
 temp_rsp:
-	.rept 8
+	.rept 24
 	.quad 8
 	.endr
