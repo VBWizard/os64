@@ -67,7 +67,7 @@ static cmdopt_t cmdopts[] = {
     {"NVME", OPT_BOOL, &kEnableNVME, true, 0},
     {"NONVME", OPT_BOOL, &kEnableNVME, false, 0},
     {"LOGFILE", OPT_BOOL, &kOverrideFileLogging, true, 0},
-    {"ROOT=", OPT_STRING, kRootPartUUID, 0, 64},
+    {"ROOT", OPT_STRING, kRootPartUUID, 0, 64},
 };
 
 void process_kernel_commandline(char *cmdline)
@@ -84,10 +84,10 @@ void process_kernel_commandline(char *cmdline)
             char *arg = argv[j];
             if (opt->type == OPT_STRING)
             {
-                size_t n = strlen(opt->name);
-                if (strncmp(arg, opt->name, n) == 0 && arg[n] == '=')
+                size_t name_len = strlen(opt->name);
+                if (strncmp(arg, opt->name, name_len) == 0 && arg[name_len] == '=')
                 {
-                    strncpy(opt->dest, arg + n + 1, opt->maxlen);
+                    strncpy(opt->dest, arg + name_len + 1, opt->maxlen);
                     ((char *)opt->dest)[opt->maxlen - 1] = '\0';
                     break;
                 }
