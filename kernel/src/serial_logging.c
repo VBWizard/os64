@@ -1,4 +1,3 @@
-#include "log.h"
 #include "serial_logging.h"
 #include <stdbool.h>
 #include "CONFIG.h"
@@ -15,6 +14,8 @@
 #include "strlen.h"
 #include "strcpy.h"
 
+#define MAX_FIRST_MESSAGE_SIZE MAX_LOG_MESSAGE_SIZE - 10 // Leave space for prefix and null terminator
+
 extern volatile uint64_t kUptime;
 extern volatile uint64_t kTicksSinceStart;
 extern volatile bool kFBInitDone;
@@ -24,6 +25,8 @@ extern volatile bool kSchedulerInitialized;
 char print_buf[2048];
 
 void printd(__uint128_t debug_level, const char *fmt, ...) {
+    bool msg_continued = false;
+    
     if ((kDebugLevel & debug_level) != debug_level) return;
     
     uint16_t core = 0;  // Default core if SMP isn't initialized
@@ -42,9 +45,8 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     
     va_list args;
     va_start(args, fmt);
-    int printed = vsprintf(print_buf, fmt, args);
+    vsprintf(print_buf, fmt, args);
     va_end(args);
-    
 
 #if ENABLE_LOG_BUFFERING == 1
     if (kLoggingInitialized)
@@ -52,25 +54,22 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
 		size_t msg_len = strlen(print_buf);
 		size_t offset = 0;
 		while (offset < msg_len) {
-			char chunk[MAX_LOG_MESSAGE_SIZE - 4];  // Leave space for prefix and null terminator
-			size_t chunk_size = MAX_LOG_MESSAGE_SIZE - 5; // Ensuring room for \0
-			
-			strncpy(chunk, print_buf + offset, chunk_size);
-			chunk[chunk_size] = '\0';
-			
-			if (offset == 0) {
-				log_store_entry(core, tick_count, priority, category, false, chunk);
-				offset += strlen(chunk); // Only increment by the actual length of printed data
-				//if (kFBInitDone) printf("%s\n",chunk);
-			} else {
-				char cont_msg[MAX_LOG_MESSAGE_SIZE];
-				snprintf(cont_msg, sizeof(cont_msg), "%s", chunk);
-				log_store_entry(core, tick_count, priority, category, true, cont_msg);
-				offset += MAX_LOG_MESSAGE_SIZE; // Only increment by the actual length of printed data
-				//if (kFBInitDone) printf("%s\n",cont_msg);
-			}
-		}
-	}
+            char chunk[MAX_LOG_MESSAGE_SIZE];
+            chunk[MAX_FIRST_MESSAGE_SIZE - 1] = '\0'; // Make sure the last character of the string is a null terminator
+
+            //If the message will be split, the first message needs to be 10 characters less than the length of the string
+            //  Additional messages can be the entire MAX_LOG_MESSAGE_SIZE
+            if (offset == 0) {
+                msg_continued = false;
+                strncpy(chunk, print_buf, MAX_FIRST_MESSAGE_SIZE);
+            } else {
+                msg_continued = true;
+                strncpy(chunk, print_buf + offset, MAX_LOG_MESSAGE_SIZE);
+            }
+            offset += strlen(chunk); // Only increment by the actual length of printed data
+            log_store_entry(core, tick_count, priority, category, msg_continued, chunk);
+        }
+    }
 	else
 	//TODO: FIX ME!  Worst case of duplicate code EVER
 	//  Temporary justification is that the code it duplicates is hidden inside an #else which means it's disabled

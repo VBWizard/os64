@@ -3,13 +3,14 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include "smp.h"
 
 //Set to sizeof(log_entry_t)*10 to enable buffer full processing
 
 #define LOG_BUFFER_SIZE (1 * 1024 * 1024) // 1MB per core
 #define MAX_LOG_MESSAGE_SIZE 256
-#define MAX_BATCH_SIZE 1000  // Process up to 10 messages before sleeping
+#define MAX_BATCH_SIZE 1000  // Process up to X messages before sleeping
 #define LOGD_SLEEP_TICKS (TICKS_PER_SECOND)  // Sleep for 1 second
 #define LOGD_FLUSH_WAIT_TICKS 100
 typedef struct log_entry {
@@ -19,6 +20,8 @@ typedef struct log_entry {
     uint8_t log_level;
     uint8_t category;
 	uint64_t threadID;
+    /// @brief message is the continuation of a previous entry
+    bool continued;
     char message[MAX_LOG_MESSAGE_SIZE];
 } log_entry_t;
 

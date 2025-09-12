@@ -46,7 +46,7 @@ void shutdown()
 			moveto(&kRenderer, 95, 0);
 			printf("%s %lu min", currentTime, minutesUptime);
 		}
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart+49,kKernelTask->threads);
+		sigaction(SIGSLEEP, NULL, kTicksSinceStart+90,kKernelTask->threads);
 	}
 	while (true) {asm("sti\nhlt\n");}
 }

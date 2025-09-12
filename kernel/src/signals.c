@@ -33,10 +33,11 @@ void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
 	switch (signal)
 	{
 		case SIGSLEEP:
-			thread->signals.sigind|=SIGSLEEP;
-			thread->signals.sigdata[SIGSLEEP]=sigData;
-            printd(DEBUG_SIGNALS,"Signalling SLEEP for thread 0x%08x, wakeTicks=%i\n",thread->threadID,sigData);
-			scheduler_trigger(NULL);
+		//Set the data first in case a task switch takes place before setting the sigind	
+        thread->signals.sigdata[SIGSLEEP]=sigData;
+            thread->signals.sigind |= SIGSLEEP;
+            printd(DEBUG_SIGNALS, "Signalling SLEEP for thread 0x%08x, wakeTicks=%i\n", thread->threadID, sigData);
+            scheduler_trigger(NULL);
 			break;
 		case SIGLOGFLUSH:
 			thread->signals.sigind |= SIGLOGFLUSH;
@@ -84,7 +85,7 @@ void processSignals()
 	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
 	while (qSleep != NO_THREAD)
 	{
-		if (qSleep->signals.sigdata[SIGSLEEP] < kTicksSinceStart)
+		if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) //Wake up the thread if the wake time is *now* or in the past
 		{
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			qSleep->signals.sigind&=~(SIGSLEEP);

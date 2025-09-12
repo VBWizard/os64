@@ -368,7 +368,7 @@ void debug_print_registers(uint64_t apic_id, char* prefix, bool unconditional)
 		savedDebugFlags |= DEBUG_SCHEDULER;
 	}
 
-    printd(DEBUG_SCHEDULER,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
+    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
             prefix,
 			mp_isrSavedCR3[apic_id],
             mp_isrSavedCS[apic_id],
@@ -646,7 +646,7 @@ void scheduler_run_new_thread()
 	thread_t* threadToStop=NULL;
     eThreadState threadToStopNewQueue=0;
 
-    printd(DEBUG_SCHEDULER,"*AP%lu: In runAnotherTask, mp_CoreHasRunScheduledThread=%s!\n",apic_id,mp_CoreHasRunScheduledThread[apic_id]?"true":"false");
+    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*AP%lu: In runAnotherTask, mp_CoreHasRunScheduledThread=%s!\n",apic_id,mp_CoreHasRunScheduledThread[apic_id]?"true":"false");
 
     if (apic_id != 0 && !mp_CoreHasRunScheduledThread[apic_id])
     {
@@ -677,7 +677,7 @@ void scheduler_run_new_thread()
         scheduler_store_thread(cls, threadToStop);              //we're taking it off the cpu so save the registers
         scheduler_change_thread_queue(threadToStop, threadToStopNewQueue);
 	}
-	printd(DEBUG_SCHEDULER,"*Finding thread to run\n");
+	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*Finding thread to run\n");
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
 	task_t* taskToRun = (task_t*)threadToRun->ownerTask;
 	

@@ -11,27 +11,22 @@
 #include "smp_core.h"
 #include "task.h"
 #include "scheduler.h"  //for scheduler_wake_task
-// TODO: Replace sprintf with snprintf once implemented
 // TODO: Implement dump_log_buffer() to handle emergency log flushes when buffer is full in place of panicking
 
 extern task_t* kLogDTask;
-extern volatile uint64_t kSystemCurrentTime; // Ensure we reference it properly
+extern volatile uint64_t kTicksSinceStart;
 log_buffer_t core_log_buffers[MAX_CPUS];
 bool kLoggingInitialized = false;
 extern struct limine_smp_response *kLimineSMPInfo;
 
-//TODO: Add continued logic
 void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8_t category, bool continued, const char *message) 
 {
 	core_local_storage_t *cls = get_core_local_storage();
-	continued = continued;
 
 	if (!kLoggingInitialized)
 		return;
 	if (core >= MAX_CPUS) panic("Invalid core ID in log_store_entry: %u", core);
     
-	//TODO: Decide whether  to do per core logging.  If not then get rid of the other queues
-	//log_buffer_t *buf = &core_log_buffers[core];
 	log_buffer_t *buf = &core_log_buffers[core];
     
     log_entry_t *entry = &buf->entries[buf->head];
@@ -40,6 +35,7 @@ void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8
     entry->core_id = core;
     entry->log_level = priority;
     entry->category = category;
+    entry->continued = continued;
 	if (kSMPInitDone)
 		entry->threadID = cls->currentThread->threadID;
 	else
@@ -62,7 +58,6 @@ void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8
 		panic("LOGD: Log buffer full, can't continue");
 	}
 	
-    // Release lock
 }
 
 void logging_queueing_init() {
@@ -98,11 +93,22 @@ void logd_thread() {
                     log_entry_t *entry = &buffer->entries[buffer->tail];
                     char print_buf2[300];
 
-                    sprintf(print_buf2, "%u (0x%04x) AP%u: %s",
-                            entry->timestamp,
-                            entry->threadID,
-                            entry->core_id,
-                            entry->message);
+                    if (entry->continued)
+                    {
+                        // Just continue printing the message without prefixing formatting
+                        snprintf(print_buf2,
+                                 MAX_LOG_MESSAGE_SIZE,
+                                 "%s",
+                                 entry->message);
+                    }
+                    else
+                        snprintf(print_buf2,
+                                 MAX_LOG_MESSAGE_SIZE,
+                                 "%u (0x%04x) AP%u: %s",
+                                 entry->timestamp,
+                                 entry->threadID,
+                                 entry->core_id,
+                                 entry->message);
                     serial_print_string(print_buf2);
 
                     memset(entry->message, 0, MAX_LOG_MESSAGE_SIZE);
