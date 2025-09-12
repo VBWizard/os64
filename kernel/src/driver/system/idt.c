@@ -15,7 +15,7 @@ extern void handler_irq0_asm();
 extern void handler_irq1_asm();
 extern void divide_by_zero_handler();
 extern void invalid_opcode_handler();
-extern void double_fault_handler(); // TODO: Consider stack switch
+extern void double_fault_handler();
 extern void general_protection_fault_handler();
 extern void page_fault_handler();
 extern void machine_check_handler();
@@ -39,8 +39,7 @@ void initialize_idt() {
 	// IDT Entries for all major exceptions, all using 0x8E (Interrupt Gate)
 	set_idt_entry(0x00, (uint64_t)&divide_by_zero_handler, 0x28, 0x8E); // #DE
 	set_idt_entry(0x06, (uint64_t)&invalid_opcode_handler, 0x28, 0x8E); // #UD
-	// TODO: Consider a stack switch for #DF to avoid triple faults if the current stack is corrupted.
-	set_idt_entry(0x08, (uint64_t)&double_fault_handler, 0x28, 0x8E); // #DF (TODO: Stack switch?)
+	set_idt_entry(0x08, (uint64_t)&double_fault_handler, 0x28, 0x8E);
 	set_idt_entry(0x0D, (uint64_t)&general_protection_fault_handler, 0x28, 0x8E); // #GP
 	set_idt_entry(0x0E, (uint64_t)&page_fault_handler, 0x28, 0x8E); // #PF
 	set_idt_entry(0x12, (uint64_t)&machine_check_handler, 0x28, 0x8E); // #MC

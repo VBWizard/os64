@@ -30,7 +30,7 @@ typedef struct log_buffer {
     size_t head;
     size_t tail;
     size_t capacity;
-    volatile uint32_t lock;
+    _Atomic uint32_t lock;
 } log_buffer_t;
 
 extern log_buffer_t core_log_buffers[MAX_CPUS];

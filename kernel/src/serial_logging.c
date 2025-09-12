@@ -55,7 +55,6 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
 		size_t offset = 0;
 		while (offset < msg_len) {
             char chunk[MAX_LOG_MESSAGE_SIZE];
-            chunk[MAX_FIRST_MESSAGE_SIZE - 1] = '\0'; // Make sure the last character of the string is a null terminator
 
             //If the message will be split, the first message needs to be 10 characters less than the length of the string
             //  Additional messages can be the entire MAX_LOG_MESSAGE_SIZE
@@ -67,6 +66,7 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
                 strncpy(chunk, print_buf + offset, MAX_LOG_MESSAGE_SIZE);
             }
             offset += strlen(chunk); // Only increment by the actual length of printed data
+            chunk[MAX_FIRST_MESSAGE_SIZE - 1] = '\0'; // Make sure the last character of the string is a null terminator
             log_store_entry(core, tick_count, priority, category, msg_continued, chunk);
         }
     }

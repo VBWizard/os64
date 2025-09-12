@@ -11,6 +11,7 @@
 #include "smp_core.h"
 #include "task.h"
 #include "scheduler.h"  //for scheduler_wake_task
+#include "signals.h"
 // TODO: Implement dump_log_buffer() to handle emergency log flushes when buffer is full in place of panicking
 
 extern task_t* kLogDTask;
@@ -40,8 +41,8 @@ void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8
 		entry->threadID = cls->currentThread->threadID;
 	else
 		entry->threadID = 0;
-    sprintf(entry->message, "%s", message);
-    
+    snprintf(entry->message, MAX_LOG_MESSAGE_SIZE, "%s", message);
+    entry->message[MAX_LOG_MESSAGE_SIZE-1] = '\0';
     buf->head = (buf->head + 1) % buf->capacity;
     
 	if ((buf->head + 1) % buf->capacity == buf->tail) 

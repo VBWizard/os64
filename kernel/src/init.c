@@ -38,8 +38,10 @@ void hardware_init()
 	pic_remap(0 + PIC_REMAP_OFFSET, 8 + PIC_REMAP_OFFSET);
 	initialize_idt();
 	//Enable interrupts
-	asm ("sti\n");
-	printd(DEBUG_BOOT, "Interrupts enabled\n");
+    outb(0x64, 0xAD); // Disable first port temporarily
+    outb(0x64, 0xAE); // Enable first port again (keyboard)
+    asm("sti\n");
+    printd(DEBUG_BOOT, "Interrupts enabled\n");
 
 	struct tm date_time_buff = getRTCDate();
     kSystemStartTime = mktime(&date_time_buff);

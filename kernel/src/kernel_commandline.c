@@ -72,16 +72,16 @@ static cmdopt_t cmdopts[] = {
 
 void process_kernel_commandline(char *cmdline)
 {
-    char *argv[MAX_CMDLINE_TOKENS];
+    const char *argv[MAX_CMDLINE_TOKENS];
     int argc = tokenize(cmdline, argv, MAX_CMDLINE_TOKENS);
 
     for (unsigned i = 0; i < sizeof(cmdopts) / sizeof(cmdopt_t); i++)
     {
         cmdopt_t *opt = &cmdopts[i];
 
-        for (int j = 0; j < argc; j++)
+        for (int argnum = 0; argnum < argc; argnum++)
         {
-            char *arg = argv[j];
+            const char *arg = argv[argnum];
             if (opt->type == OPT_STRING)
             {
                 size_t name_len = strlen(opt->name);

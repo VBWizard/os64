@@ -161,7 +161,7 @@ void kernel_init()
 	}
 
 	#if ENABLE_LOG_BUFFERING == 1
-	kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, 0);
+    kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, 0);
 	scheduler_submit_new_task(kLogDTask);
 	#endif
 	scheduler_enable();
@@ -215,9 +215,6 @@ void kernel_main()
 	kInitDone = false;
 	kTicksPerSecond = TICKS_PER_SECOND;
 
-	//TODO: Move this to a keyboard initialization function
-	outb(0x64, 0xAD); // Disable first port temporarily
-	outb(0x64, 0xAE); // Enable first port again (keyboard)
 	// Unmask IRQ1 (keyboard) on primary PIC
 	uint8_t mask = inb(0x21);
 	mask &= ~(1 << 1); // Clear bit 1 (unmask IRQ1)
