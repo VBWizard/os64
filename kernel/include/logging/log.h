@@ -8,11 +8,11 @@
 
 //Set to sizeof(log_entry_t)*10 to enable buffer full processing
 
-#define LOG_BUFFER_SIZE (1 * 1024 * 1024) // 1MB per core
+#define LOG_BUFFER_SIZE (1024 * 1024 * 1) // Size of buffer per core
 #define MAX_LOG_MESSAGE_SIZE 256
 #define MAX_BATCH_SIZE 1000  // Process up to X messages before sleeping
-#define LOGD_SLEEP_TICKS (TICKS_PER_SECOND)  // Sleep for 1 second
-#define LOGD_FLUSH_WAIT_TICKS 100
+#define LOGD_SLEEP_TICKS (TICKS_PER_SECOND * 5)  // Sleep for X seconds to let the logs build up
+#define LOGD_FLUSH_WAIT_TICKS 20
 typedef struct log_entry {
     uint64_t timestamp;
     uint64_t tick_count;
@@ -38,6 +38,5 @@ extern bool kLoggingInitialized;
 void logging_queueing_init();
 void dump_log_buffer(uint16_t core);
 void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8_t category, bool continued, const char *message);
-void logd_thread();
-
+bool logd_thread(bool daemon);
 #endif // LOG_H

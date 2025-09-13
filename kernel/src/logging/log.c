@@ -19,6 +19,8 @@ extern volatile uint64_t kTicksSinceStart;
 log_buffer_t core_log_buffers[MAX_CPUS];
 bool kLoggingInitialized = false;
 extern struct limine_smp_response *kLimineSMPInfo;
+// Ensures only one logd worker processes the buffers at a time
+_Atomic uint32_t kLogDWorkLock = 0;
 
 void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8_t category, bool continued, const char *message) 
 {
@@ -28,9 +30,9 @@ void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8
 		return;
 	if (core >= MAX_CPUS) panic("Invalid core ID in log_store_entry: %u", core);
     
-	log_buffer_t *buf = &core_log_buffers[core];
+	log_buffer_t *buffer = &core_log_buffers[core];
     
-    log_entry_t *entry = &buf->entries[buf->head];
+    log_entry_t *entry = &buffer->entries[buffer->head];
     entry->timestamp = kTicksSinceStart;
     entry->tick_count = tick_count;
     entry->core_id = core;
@@ -43,22 +45,13 @@ void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8
 		entry->threadID = 0;
     snprintf(entry->message, MAX_LOG_MESSAGE_SIZE, "%s", message);
     entry->message[MAX_LOG_MESSAGE_SIZE-1] = '\0';
-    buf->head = (buf->head + 1) % buf->capacity;
-    
-	if ((buf->head + 1) % buf->capacity == buf->tail) 
-	{
-		//TODO: Fix this issue
-		//FOR NOW JUST PANIC.  Scheduler calls printd() which causes the lock this code is in to block *in the scheduler*
-		/*		scheduler_wake_isleep_task(kLogDTask);  // Wake logd immediately
-	
-		// Wait while the buffer is still full, sleeping briefly to avoid wasting CPU cycles
-		while ((buf->head + 1) % buf->capacity == buf->tail) {
-			sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_FLUSH_WAIT_TICKS, NULL);
-		}
-		*/	
-		panic("LOGD: Log buffer full, can't continue");
-	}
-	
+    buffer->head = (buffer->head + 1) % buffer->capacity;
+
+    while ((buffer->head + 1) % buffer->capacity == buffer->tail)
+        //Attempt to execute logd flushing method
+        if (!logd_thread(false))
+            //If that fails, the logd daemon is sleeping inside the lock so go to sleep and let it run to flush the logs
+            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_FLUSH_WAIT_TICKS, NULL);
 }
 
 void logging_queueing_init() {
@@ -73,52 +66,63 @@ void logging_queueing_init() {
 	kLoggingInitialized = true;
 }
 
-void logd_thread() {
+bool logd_thread(bool daemon) {
     log_buffer_t *buffer;
     thread_t *self = get_core_local_storage()->currentThread;
+    bool nonDaemonRunSuccess = false;
 
     while (1) {
         int processed_logs = 0;
 
-        if (kLoggingInitialized) {
-            for (int core = 0; core < kMPCoreCount; core++) {
-                buffer = &core_log_buffers[core];
+        // Try-lock: if another CPU is already flushing, skip work this tick
+        if (!__sync_lock_test_and_set(&kLogDWorkLock, 1))
+        {
+            nonDaemonRunSuccess = true;
+            if (kLoggingInitialized)
+            {
+                for (int core = 0; core < kMPCoreCount; core++)
+                {
+                    buffer = &core_log_buffers[core];
 
-                /* Skip cores whose buffers are not yet allocated */
-                if (!buffer->entries)
-                    continue;
+                    /* Skip cores whose buffers are not yet allocated */
+                    if (!buffer->entries)
+                        continue;
 
-                /* Process up to MAX_BATCH_SIZE entries for this core */
-                while (buffer->head != buffer->tail &&
-                       processed_logs < MAX_BATCH_SIZE) {
-                    log_entry_t *entry = &buffer->entries[buffer->tail];
-                    char print_buf2[300];
-
-                    if (entry->continued)
+                    /* Process up to MAX_BATCH_SIZE entries for this core */
+                    while (buffer->head != buffer->tail &&
+                           processed_logs < MAX_BATCH_SIZE)
                     {
-                        // Just continue printing the message without prefixing formatting
-                        snprintf(print_buf2,
-                                 MAX_LOG_MESSAGE_SIZE,
-                                 "%s",
-                                 entry->message);
-                    }
-                    else
-                        snprintf(print_buf2,
-                                 MAX_LOG_MESSAGE_SIZE,
-                                 "%u (0x%04x) AP%u: %s",
-                                 entry->timestamp,
-                                 entry->threadID,
-                                 entry->core_id,
-                                 entry->message);
-                    serial_print_string(print_buf2);
+                        log_entry_t *entry = &buffer->entries[buffer->tail];
+                        char print_buf2[300];
 
-                    memset(entry->message, 0, MAX_LOG_MESSAGE_SIZE);
-                    buffer->tail = (buffer->tail + 1) % buffer->capacity;
-                    processed_logs++;
+                        if (entry->continued)
+                        {
+                            // Just continue printing the message without prefixing formatting
+                            snprintf(print_buf2,
+                                     MAX_LOG_MESSAGE_SIZE,
+                                     "%s",
+                                     entry->message);
+                        }
+                        else
+                            snprintf(print_buf2,
+                                     MAX_LOG_MESSAGE_SIZE,
+                                     "%u (0x%04x) AP%u: %s",
+                                     entry->timestamp,
+                                     entry->threadID,
+                                     entry->core_id,
+                                     entry->message);
+                        serial_print_string(print_buf2);
+
+                        memset(entry->message, 0, MAX_LOG_MESSAGE_SIZE);
+                        buffer->tail = (buffer->tail + 1) % buffer->capacity;
+                        processed_logs++;
+                    }
                 }
             }
+            __sync_lock_release(&kLogDWorkLock);
         }
-
+        if (!daemon)
+            return nonDaemonRunSuccess;
         sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
     }
 }

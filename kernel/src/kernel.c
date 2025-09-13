@@ -162,12 +162,13 @@ void kernel_init()
 
 	#if ENABLE_LOG_BUFFERING == 1
     kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, 0);
-	scheduler_submit_new_task(kLogDTask);
-	#endif
+    // Pass daemon=true (first arg in RDI) to logd_thread
+    kLogDTask->threads->regs.RDI = 1;
+    scheduler_submit_new_task(kLogDTask);
+#endif
 	scheduler_enable();
-
-	scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
-	core_local_storage_t *cls = get_core_local_storage();
+    scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
+    core_local_storage_t *cls = get_core_local_storage();
 	cls->threadID = kKernelTask->threads->threadID;
 
 	mp_enable_scheduling_vector(0);
