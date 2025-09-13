@@ -33,7 +33,7 @@ typedef struct
 #define MAX_CMDLINE_TOKENS 64
 
 // Simple in-place whitespace tokenizer
-static int tokenize(char *cmdline, char **argv, int max)
+static int tokenize(char *cmdline, const char **argv, int max)
 {
     int argc = 0;
     char *p = cmdline;

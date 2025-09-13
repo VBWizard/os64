@@ -613,15 +613,6 @@ void scheduler_trigger(core_local_storage_t *cls)
 	__asm__ volatile("sti\nhlt\n");      //Halt till the scheduler runs again
 }
 
-void scheduler_debug_rsp_value(char* prefix)
-{
-	uint64_t temp_rsp;
-
-	__asm__ volatile("mov %0, rsp\n": "=r" (temp_rsp));
-	printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "scheduler_debug_rsp_value: %s RSP is 0x%016lx\n", prefix, temp_rsp);
-}
-
-
 /// @brief Yield control of the CPU
 /// @param cls Optional - can be NULL if not valid in the calling context
 /// @details Yields control of the CPU if there is another thread that is ready to run.  If not, does a sti\nhlt\n to wait for the next timer tick (BSP) or scheduling IPI
@@ -753,8 +744,8 @@ void scheduler_do()
     mp_waitingForScheduler[apic_id] = false;
     printd(DEBUG_SCHEDULER,"****************************** SCHEDULER *******************************\n");
     printd(DEBUG_SCHEDULER,"scheduler: AP %u, current CR3 = 0x%08x\n",apic_id,getCR3());
-#ifdef SCHEDULER_DEBUG
-    uint64_t ticksBefore=rdtsc();
+#if SCHEDULER_DEBUG == 1
+    uint64_t ticksBefore = rdtsc();
 #endif
 	//Lock the section of code from the time we start looking for another thread to run, until we're done 
 	//either switching threads, or have identified that there's no new thread to run
@@ -767,20 +758,20 @@ void scheduler_do()
 	}
 	else
 	{
-		#if SCHEDULER_DEBUG == 1
+#if SCHEDULER_DEBUG == 1
 		debug_print_registers(apic_id, "continue", true);
-		#endif
+#endif
         printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   
     kSchedulerCallCount++;
-#ifdef SCHEDULER_DEBUG
-    uint64_t ticksAfter=rdtsc();
+#if SCHEDULER_DEBUG == 1
+    uint64_t ticksAfter = rdtsc();
 #endif
     mp_CoreHasRunScheduledThread[apic_id] = true;
 
-#ifdef SCHEDULER_DEBUG
-    printd(DEBUG_SCHEDULER,"*Scheduler: calls=%u, task switchs=%u, ticks since start=0x%08x\n",kSchedulerCallCount, kTaskSwitchCount, kTicksSinceStart);
+#if SCHEDULER_DEBUG == 1
+    printd(DEBUG_SCHEDULER, "*Scheduler: calls=%u, task switchs=%u, ticks since start=0x%08x\n", kSchedulerCallCount, kTaskSwitchCount, kTicksSinceStart);
     uint64_t diff = ticksAfter-ticksBefore;
     uint64_t timeInScheduler = (diff/kCPUCyclesPerSecond)*100;
     printd(DEBUG_SCHEDULER,"%lu ticks expired (%lu CPU cycles)\n",timeInScheduler, diff);
