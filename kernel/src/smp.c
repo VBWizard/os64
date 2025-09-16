@@ -230,14 +230,15 @@ unsigned int parse_mp_table()
 }
 
 //We will gather the details for each core, but only enable them if kEnableSMP = true
-int init_SMP()
+int init_SMP(bool enableSMP)
 {
 	int mp_records;
-	kMPConfigTable = kmalloc(MAX_CPUS * sizeof(mpConfig_t));
-	mp_records = parse_mp_table();
+    kMPCoreCount = enableSMP?kLimineSMPInfo->cpu_count:1;
+
+    kMPConfigTable = kmalloc(MAX_CPUS * sizeof(mpConfig_t));
+    mp_records = parse_mp_table();
 	if (!kIOAPICAddress)
 		panic("Unable to determine IO APIC address after _MP_ and ACPI scans.");
-	kMPCoreCount = kLimineSMPInfo->cpu_count;
 	kCPUInfo = kmalloc((kMPCoreCount) * sizeof(cpu_t));
 	for (uint64_t core = 0; core < kMPCoreCount;core++)
 	{

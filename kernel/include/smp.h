@@ -72,6 +72,6 @@ extern uintptr_t kMPICRHigh;
 extern uint64_t kMPIdReg;
 extern uintptr_t kIOAPICAddress;
 
-int init_SMP();
+int init_SMP(bool enableSMP);
 
 #endif

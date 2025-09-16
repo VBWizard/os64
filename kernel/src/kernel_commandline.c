@@ -6,6 +6,7 @@
 #include "kernel.h"
 
 extern bool kOverrideFileLogging;
+extern bool kEnableSMP;
 extern char kRootPartUUID[];
 bool kEnableAHCI = true, kEnableNVME = true;
 
@@ -57,9 +58,10 @@ static int tokenize(char *cmdline, const char **argv, int max)
 
 // Table of all recognized switches / key=value pairs
 static cmdopt_t cmdopts[] = {
-   //Name/Type/Dest/FlagMask/MaxLen
+    // Name/Type/Dest/FlagMask/MaxLen
     {"nolog", OPT_UINT128_CLEAR, &kDebugLevel, 0, 0},
     {"alllog", OPT_UINT128_OR, &kDebugLevel, DEBUG_EVERYTHING, 0},
+    {"nosmp", OPT_BOOL, &kEnableSMP, false, 0},
     {"DEBUG_DETAILED", OPT_UINT128_OR, &kDebugLevel, DEBUG_DETAILED, 0},
     {"DEBUG_EXTRA_DETAILED", OPT_UINT128_OR, &kDebugLevel, DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, 0},
     {"AHCI", OPT_BOOL, &kEnableAHCI, true, 0},

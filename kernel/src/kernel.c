@@ -40,7 +40,7 @@ extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
 extern bool kEnableAHCI;
 extern bool kEnableNVME;
-bool kEnableSMP;
+bool kEnableSMP = true;
 volatile uint64_t kSystemStartTime;
 volatile uint64_t kUptime;
 volatile uint64_t kTicksSinceStart;
@@ -135,16 +135,12 @@ void kernel_init()
 	kCPUCyclesPerSecond = tscGetCyclesPerSecond();
 
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
-	if (kEnableSMP)
-	{
-		printf("SMP: Initializing ... ");
-		kLimineSMPInfo = smp_request.response;
-		init_SMP();
-        printf("(%u cores initialized)\n", kMPCoreCount);
-    }
-	else
-		printf("SMP: Disabled due to nosmp parameter\n");
-	init_signals();
+    printf("SMP: Initializing ... ");
+    kLimineSMPInfo = smp_request.response;
+    init_SMP(kEnableSMP);
+    printf("(%u cores initialized)\n", kMPCoreCount);
+
+    init_signals();
 
 	create_kernel_task();
 
@@ -221,7 +217,6 @@ void kernel_main()
 	mask &= ~(1 << 1); // Clear bit 1 (unmask IRQ1)
 	outb(0x21, mask);
 
-	kEnableSMP = true;
 	process_kernel_commandline(kKernelCommandline);
 	hardware_init();
 	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
