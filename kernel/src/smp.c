@@ -230,43 +230,70 @@ unsigned int parse_mp_table()
 }
 
 //We will gather the details for each core, but only enable them if kEnableSMP = true
-int init_SMP()
+int init_SMP(bool enableSMP)
 {
 	int mp_records;
-	kMPConfigTable = kmalloc(MAX_CPUS * sizeof(mpConfig_t));
-	mp_records = parse_mp_table();
-	if (!kIOAPICAddress)
-		panic("Unable to determine IO APIC address after _MP_ and ACPI scans.");
-	kMPCoreCount = kLimineSMPInfo->cpu_count;
-	kCPUInfo = kmalloc((kMPCoreCount) * sizeof(cpu_t));
-	for (uint64_t core = 0; core < kMPCoreCount;core++)
-	{
-		kCPUInfo[core].apicID =  kLimineSMPInfo->cpus[core]->lapic_id;
-		kCPUInfo[core].goto_address = &kLimineSMPInfo->cpus[core]->goto_address;
-		kCPUInfo[core].registerBase=apicGetAPICBase();
-		kCPUInfo[core].ioAPICAddress = kIOAPICAddress;
-		kCPUInfo[core].apic_lvt_timer  = kCPUInfo[core].registerBase + 0x320; // LVT Timer
-		kCPUInfo[core].apic_lvt_lint0  = kCPUInfo[core].registerBase + 0x350; // LVT LINT0 (External IRQ)
-		kCPUInfo[core].apic_lvt_lint1  = kCPUInfo[core].registerBase + 0x360; // LVT LINT1 (NMI)
-		kCPUInfo[core].apic_lvt_error  = kCPUInfo[core].registerBase + 0x370; // LVT Error Register
-		kCPUInfo[core].apic_tpr = kCPUInfo[core].registerBase + 0x80; // LVT Error Register
-		//Offset to virtual since this is a virtual address
-		kCPUInfo[core].apic_id_reg=kCPUInfo[core].registerBase+0x20;
-		kCPUInfo[core].apic_svr=kCPUInfo[core].registerBase+0xF0;
-		kCPUInfo[core].apic_eoi=kCPUInfo[core].registerBase+0xB0;
-		kCPUInfo[core].apic_icr_low=kCPUInfo[core].registerBase+0x300;
-		kCPUInfo[core].apic_icr_high=kCPUInfo[core].registerBase+0x310;
-		if (core == 0)
-		{
-			printd(DEBUG_SMP, "BSP APIC register base found @ 0x%016lx, remapped to 0x%016lx\n",kCPUInfo[0].registerBase, kCPUInfo[0].registerBase + kHHDMOffset);
-			paging_map_page((pt_entry_t*)kKernelPML4v, kCPUInfo[0].registerBase + kHHDMOffset, kCPUInfo[0].registerBase, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
-			paging_map_page((pt_entry_t*)kKernelPML4v, kIOAPICAddress + kHHDMOffset, kIOAPICAddress, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
-			printd(DEBUG_SMP, "SMP: IO APIC found @ 0x%016lx, remapped to 0x%016lx\n", kIOAPICAddress, kIOAPICAddress + kHHDMOffset);
-			kIOAPICAddress += kHHDMOffset;
-			printd(DEBUG_SMP, "BSP apic timer HZ = %u\n",kCPUInfo[core].ticksPerSecond);
-		}
-		else
-			kCPUInfo[core].ticksPerSecond=kCPUInfo[0].ticksPerSecond;
+    kMPCoreCount = enableSMP?kLimineSMPInfo->cpu_count:1;
+
+    kMPConfigTable = kmalloc(MAX_CPUS * sizeof(mpConfig_t));
+    mp_records = parse_mp_table();
+    if (!kIOAPICAddress)
+    {
+        if (enableSMP)
+                    panic("Unable to determine IO APIC address after _MP_ and ACPI scans.");
+#ifndef DEBUG_NONE
+            if ((kDebugLevel & DEBUG_SMP) == DEBUG_SMP)
+                    printd(DEBUG_SMP, "SMP: IO APIC address unavailable, continuing without SMP support.\n");
+#endif
+    }
+    kCPUInfo = kmalloc((kMPCoreCount) * sizeof(cpu_t));
+    for (uint64_t core = 0; core < kMPCoreCount;core++)
+    {
+            bool haveLimineCPUInfo = kLimineSMPInfo && (kLimineSMPInfo->cpu_count > core);
+            if (haveLimineCPUInfo)
+            {
+                    kCPUInfo[core].apicID =  kLimineSMPInfo->cpus[core]->lapic_id;
+                    kCPUInfo[core].goto_address = &kLimineSMPInfo->cpus[core]->goto_address;
+            }
+            else
+            {
+                    kCPUInfo[core].apicID = core;
+                    kCPUInfo[core].goto_address = NULL;
+            }
+            kCPUInfo[core].registerBase=apicGetAPICBase();
+            kCPUInfo[core].ioAPICAddress = kIOAPICAddress;
+            kCPUInfo[core].apic_lvt_timer  = kCPUInfo[core].registerBase + 0x320; // LVT Timer
+            kCPUInfo[core].apic_lvt_lint0  = kCPUInfo[core].registerBase + 0x350; // LVT LINT0 (External IRQ)
+            kCPUInfo[core].apic_lvt_lint1  = kCPUInfo[core].registerBase + 0x360; // LVT LINT1 (NMI)
+            kCPUInfo[core].apic_lvt_error  = kCPUInfo[core].registerBase + 0x370; // LVT Error Register
+            kCPUInfo[core].apic_tpr = kCPUInfo[core].registerBase + 0x80; // LVT Error Register
+            //Offset to virtual since this is a virtual address
+            kCPUInfo[core].apic_id_reg=kCPUInfo[core].registerBase+0x20;
+            kCPUInfo[core].apic_svr=kCPUInfo[core].registerBase+0xF0;
+            kCPUInfo[core].apic_eoi=kCPUInfo[core].registerBase+0xB0;
+            kCPUInfo[core].apic_icr_low=kCPUInfo[core].registerBase+0x300;
+            kCPUInfo[core].apic_icr_high=kCPUInfo[core].registerBase+0x310;
+            if (core == 0)
+            {
+                printd(DEBUG_SMP, "BSP APIC register base found @ 0x%016lx, remapped to 0x%016lx\n",kCPUInfo[0].registerBase, kCPUInfo[0].registerBase + kHHDMOffset);
+                paging_map_page((pt_entry_t*)kKernelPML4v, kCPUInfo[0].registerBase + kHHDMOffset, kCPUInfo[0].registerBase, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+                if (kIOAPICAddress)
+                {
+                        paging_map_page((pt_entry_t*)kKernelPML4v, kIOAPICAddress + kHHDMOffset, kIOAPICAddress, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+                        printd(DEBUG_SMP, "SMP: IO APIC found @ 0x%016lx, remapped to 0x%016lx\n", kIOAPICAddress, kIOAPICAddress + kHHDMOffset);
+                        kIOAPICAddress += kHHDMOffset;
+                }
+                else
+                {
+#ifndef DEBUG_NONE
+                    if ((kDebugLevel & DEBUG_SMP) == DEBUG_SMP)
+                            printd(DEBUG_SMP, "SMP: IO APIC not present, skipping remap.\n");
+#endif
+                }
+                printd(DEBUG_SMP, "BSP apic timer HZ = %u\n",kCPUInfo[core].ticksPerSecond);
+        }
+        else
+            kCPUInfo[core].ticksPerSecond=kCPUInfo[0].ticksPerSecond;
 		//Now that we've logged all the register values and mapped them to the higher half, make them higher half
 		kCPUInfo[core].registerBase += kHHDMOffset;
 		kCPUInfo[core].apic_id_reg += kHHDMOffset;
