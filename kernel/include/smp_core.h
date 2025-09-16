@@ -48,7 +48,6 @@ static inline core_local_storage_t* get_core_local_storage(void)
 
 static inline core_local_storage_t* get_core_local_storage_for_core(uint64_t coreNum)
 {
-	int size = sizeof(core_local_storage_t);  //0x48
 	return (core_local_storage_t*)kCoreLocalStorage +
                         coreNum;
 }

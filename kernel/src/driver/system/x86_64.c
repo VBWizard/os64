@@ -25,8 +25,14 @@ void write_apic_register(uintptr_t reg, uint32_t value) {
 }
 
 // Function to read the APIC ID of the current processor
+//NOTE: Returns 0 if SMP is not yet initialized
 uint32_t read_apic_id() {
-    uint32_t id = read_apic_register(kMPIdReg);
+    uint32_t id;
+    
+    if (kMPIdReg)
+        id = read_apic_register(kMPIdReg);
+    else
+        id = 0;
     return id >> 24;
 }
 

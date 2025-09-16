@@ -1,6 +1,12 @@
 #include "io.h"
 #include "time.h"
 
+static volatile int serial_lock = 0;
+
+static inline void serial_write_char(int port, char a) {
+    outb(port, a);
+}
+
 int init_serial(int port) {
     outb(COM1 + 1, 0x00); // Disable all interrupts
     outb(COM1 + 3, 0x80); // Enable DLAB (set baud rate divisor)
@@ -9,24 +15,28 @@ int init_serial(int port) {
     outb(COM1 + 3, 0x03); // 8 bits, no parity, one stop bit
     outb(COM1 + 2, 0xC7); // Enable FIFO, clear them, 14-byte threshold
     outb(COM1 + 4, 0x0B); // IRQs enabled, RTS/DSR set
-	// Check if serial is faulty (i.e: not same byte as sent)
-	if(inb(port + 0) != 0xAE) {
-		return 1;
-	}
+    // Check if serial is faulty (i.e: not same byte as sent)
+    if (inb(port + 0) != 0xAE) {
+        return 1;
+    }
 
-	// If serial is not faulty set it in normal operation mode
-	// (not-loopback with IRQs enabled and OUT#1 and OUT#2 bits enabled)
-	outb(port + 4, 0x0F);
-	return 0;
+    // If serial is not faulty set it in normal operation mode
+    // (not-loopback with IRQs enabled and OUT#1 and OUT#2 bits enabled)
+    outb(port + 4, 0x0F);
+    return 0;
 }
 
 int is_transmit_empty(int port) {
-   return inb(port + 5) & 0x20;
+    return inb(port + 5) & 0x20;
 }
 
 void write_serial(int port, char a) {
-   //while (is_transmit_empty(port) == 0){}
-   outb(port,a);
-   __asm__("nop\nnop\nnop\n");
-   //wait(0);
+    serial_write_char(port, a);
+}
+
+// Implemented to handle processing a string and writing all the bytes via write_serial()
+void serial_print_string(const char *message) {
+    for (const char *c = message; *c; c++) {
+        serial_write_char(COM1, *c);
+    }
 }

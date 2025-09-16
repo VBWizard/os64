@@ -338,7 +338,7 @@ void pci_print_discovery_results()
 	{
 		getDeviceName(kPCIBridgeHeaders[bridge].vendor, kPCIBridgeHeaders[bridge].device,(char*)&name);
 		getVendorLongName(kPCIBridgeHeaders[bridge].vendor, (char*)vendor);
-		if (kDebugLevel && DEBUG_DETAILED)
+		if (kDebugLevel & DEBUG_DETAILED)
 			printd(DEBUG_PCI, "\t\t%02x:%02x:%02x:%s(0x%04x)-%s(0x%04x)\n", kPCIBridgeHeaders[bridge].busNo, kPCIBridgeHeaders[bridge].deviceNo, kPCIBridgeHeaders[bridge].funcNo,
 			vendor, kPCIBridgeHeaders[bridge].vendor, &name, kPCIBridgeHeaders[bridge].device);
 		else
@@ -350,7 +350,7 @@ void pci_print_discovery_results()
 	{
 		getDeviceName(kPCIDeviceHeaders[dev].vendor, kPCIDeviceHeaders[dev].device,(char*)&name);
 		getVendorLongName(kPCIDeviceHeaders[dev].vendor, (char*)vendor);
-		if (kDebugLevel && DEBUG_DETAILED)
+		if (kDebugLevel & DEBUG_DETAILED)
 			printd(DEBUG_PCI, "\t\t0x%02x:0x%02x:0x%02x:%s(0x%04x)-%s(0x%04x),c=%u,sc=%u\n", kPCIDeviceHeaders[dev].busNo, kPCIDeviceHeaders[dev].deviceNo, kPCIDeviceHeaders[dev].funcNo,
 			vendor, kPCIDeviceHeaders[dev].vendor, &name, kPCIDeviceHeaders[dev].device, kPCIDeviceHeaders[dev].class, kPCIDeviceHeaders[dev].subClass);
 		else

@@ -6,21 +6,42 @@
 #include "serial_logging.h"
 #include "panic.h"
 #include "thread.h"
+#include "smp_core.h"
 
 extern pt_entry_t kKernelPML4;
+extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
 uint8_t signalProcTickFrequency;
 
+/// @brief 
+/// @param signal See SIGNALS.H for the enum
+/// @param sigAction 
+/// @param sigData Data to accompany the signal (i.e. for SIGSLEEP, wake up ticks)
+/// @param thrd - The thread to signal.  If NULL the current thread is signaled
+/// @return 
 void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
 {
-	uintptr_t *a = sigAction;
-	thread_t *thread = thrd;
+    uintptr_t *a = sigAction; // Temporary workaround to suppress "unused parameter 'sigAction'" compiler error
+    thread_t *thread = thrd;
+
+	if (thread == NULL)
+	{
+		core_local_storage_t* cls = get_core_local_storage();
+		thread = cls->currentThread;
+	}
+
 	switch (signal)
 	{
 		case SIGSLEEP:
-			thread->signals.sigind|=SIGSLEEP;
-			thread->signals.sigdata[SIGSLEEP]=sigData;
-            printd(DEBUG_SIGNALS,"Signalling SLEEP for thread 0x%08x, wakeTicks=%i\n",thread->threadID,sigData);
+		//Set the data first in case a task switch takes place before setting the sigind	
+        thread->signals.sigdata[SIGSLEEP]=sigData;
+            thread->signals.sigind |= SIGSLEEP;
+            printd(DEBUG_SIGNALS, "Signalling SLEEP for thread 0x%08x, wakeTicks=%i\n", thread->threadID, sigData);
+            scheduler_trigger(NULL);
+			break;
+		case SIGLOGFLUSH:
+			thread->signals.sigind |= SIGLOGFLUSH;
+			printd(DEBUG_SIGNALS, "Signalling LOGFLUSH for thread 0x%08x\n", thread->threadID);
 			scheduler_trigger(NULL);
 			break;
 		default:
@@ -60,9 +81,11 @@ void processSignals()
 
     printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tScanning Interruptable Sleep queue\n");
 
+	//Set the scheduler task switch lock so that other APs don't see inconsistent state
+	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
 	while (qSleep != NO_THREAD)
 	{
-		if (qSleep->signals.sigdata[SIGSLEEP] < kTicksSinceStart)
+		if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) //Wake up the thread if the wake time is *now* or in the past
 		{
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			qSleep->signals.sigind&=~(SIGSLEEP);
@@ -72,13 +95,12 @@ void processSignals()
 		}
 		qSleep = qSleep->next;
 	}
+	//Relese the lock
+	__sync_lock_release(&kSchedulerSwitchTasksLock);   
 
+	
     printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tprocessSignals: Done processing signals\n");
-	if (awoken)
-	{
-        printd(DEBUG_SIGNALS,"\tTrigger the scheduler to process ... the awoken\n");
-	 	scheduler_trigger(NULL);
-	}
+    //No need to act on "awoken" since processSignals() is called by the scheduler
 	if (priorCR3 != (uint64_t)kKernelPML4)
 	    __asm__("mov cr3,%[cr3Val]\n"::[cr3Val] "r" (priorCR3));
 }

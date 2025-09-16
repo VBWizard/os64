@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "CONFIG.h"
 
+void serial_print_string(const char *message);
 void printd(__uint128_t debug_level, const char *fmt, ...);
 
 #endif

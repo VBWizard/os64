@@ -44,8 +44,8 @@ volatile uintptr_t mp_schedStack[MAX_CPUS]; //Loaded by scheduler when it is cal
 volatile uint32_t mp_timesEnteringScheduler[MAX_CPUS] = {0};
 volatile bool mp_inScheduler[MAX_CPUS] = {false};
 volatile bool mp_waitingForScheduler[MAX_CPUS] = {false};
-volatile uint32_t mp_nextScheduleTicks[MAX_CPUS];
 volatile bool kMasterSchedulerEnabled = false;
+volatile bool kSchedulerInitialized = false;
 bool mp_schedulerEnabled[MAX_CPUS] = {false};
 uint64_t kSchedulerCallCount = 0;
 volatile int kSchedulerSwitchTasksLock;
@@ -112,6 +112,7 @@ void scheduler_init()
 {
 	kTaskList = NO_TASK;
 	kThreadList = NO_THREAD;
+	kSchedulerInitialized = true;
     printd(DEBUG_SCHEDULER,"\tInitialized kThreadList @ 0x%08x, sizeof(thread_t)=0x%02X\n",kThreadList,sizeof(thread_t));
 
     for (int cnt=0;cnt<kMPCoreCount;cnt++)
@@ -119,10 +120,10 @@ void scheduler_init()
         printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "\tAllocating stack for CPU %u, 0x%04x bytes\n",cnt,SCHEDULER_STACK_SIZE);
         mp_schedStack[cnt] = (uintptr_t)kmalloc_aligned(0x4000);
 		uintptr_t base = mp_schedStack[cnt] & ~(kHHDMOffset);
-        printd(DEBUG_SCHEDULER, "\t\tStack is at 0x%08x\n",mp_schedStack[cnt]);
+        printd(DEBUG_SCHEDULER, "\t\tStack is at 0x%016x\n",mp_schedStack[cnt]);
         paging_map_pages((uintptr_t*)kKernelPML4v, (uintptr_t)mp_schedStack[cnt], base, SCHEDULER_STACK_SIZE/PAGE_SIZE, 0x7);
         mp_schedStack[cnt] += SCHEDULER_STACK_SIZE - sizeof(uintptr_t);
-        printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "\t\tAdjusted stack is at 0x%08x\n",mp_schedStack[cnt]);
+        printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "\t\tAdjusted stack is at 0x%016x\n",mp_schedStack[cnt]);
     }
 }
 
@@ -364,10 +365,10 @@ void debug_print_registers(uint64_t apic_id, char* prefix, bool unconditional)
 	if (unconditional)
 	{
 		savedDebugFlags = kDebugLevel;
-		savedDebugFlags |= DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED;
+		savedDebugFlags |= DEBUG_SCHEDULER;
 	}
 
-    printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
+    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
             prefix,
 			mp_isrSavedCR3[apic_id],
             mp_isrSavedCS[apic_id],
@@ -533,6 +534,16 @@ void scheduler_remove_from_queue(thread_t *queue, thread_t* thread, bool panicOn
         panic("scheduler_remove_from_queue: Can't find queue entry to remove!");
 }
 
+void scheduler_wake_isleep_task(task_t *task) {
+    if (task == NULL || task->threads == NULL) return; // Ensure task is valid
+
+    if (task->threads->threadState == THREAD_STATE_ISLEEP) {
+        scheduler_change_thread_queue(task->threads, THREAD_STATE_RUNNABLE);
+    }
+    task->threads->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
+    scheduler_trigger(NULL);
+}
+
 thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrowsing)
 {
     uint32_t mostIdleTicks=0, oldTicks;
@@ -592,7 +603,7 @@ void scheduler_trigger(core_local_storage_t *cls)
         printd(DEBUG_SCHEDULER,"scheduler_trigger: ERROR: Called but already in scheduler, exiting!\n");
         return;
     }
-    printd(DEBUG_SCHEDULER,"scheduler_trigger: triggering scheduler\n");
+//    printd(DEBUG_SCHEDULER,"scheduler_trigger: triggering scheduler\n");
     mp_waitingForScheduler[cls->apic_id] = true;
     mp_schedulerEnabled[cls->apic_id] = true;
 
@@ -601,15 +612,6 @@ void scheduler_trigger(core_local_storage_t *cls)
     send_ipi(cls->apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 	__asm__ volatile("sti\nhlt\n");      //Halt till the scheduler runs again
 }
-
-void scheduler_debug_rsp_value(char* prefix)
-{
-	uint64_t temp_rsp;
-
-	__asm__ volatile("mov %0, rsp\n": "=r" (temp_rsp));
-	printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "scheduler_debug_rsp_value: %s RSP is 0x%016lx\n", prefix, temp_rsp);
-}
-
 
 /// @brief Yield control of the CPU
 /// @param cls Optional - can be NULL if not valid in the calling context
@@ -635,7 +637,7 @@ void scheduler_run_new_thread()
 	thread_t* threadToStop=NULL;
     eThreadState threadToStopNewQueue=0;
 
-    printd(DEBUG_SCHEDULER,"*AP%lu: In runAnotherTask, mp_CoreHasRunScheduledThread=%s!\n",apic_id,mp_CoreHasRunScheduledThread[apic_id]?"true":"false");
+    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*AP%lu: In runAnotherTask, mp_CoreHasRunScheduledThread=%s!\n",apic_id,mp_CoreHasRunScheduledThread[apic_id]?"true":"false");
 
     if (apic_id != 0 && !mp_CoreHasRunScheduledThread[apic_id])
     {
@@ -666,14 +668,16 @@ void scheduler_run_new_thread()
         scheduler_store_thread(cls, threadToStop);              //we're taking it off the cpu so save the registers
         scheduler_change_thread_queue(threadToStop, threadToStopNewQueue);
 	}
-	printd(DEBUG_SCHEDULER,"*Finding thread to run\n");
+	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*Finding thread to run\n");
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
 	task_t* taskToRun = (task_t*)threadToRun->ownerTask;
 	
     if (threadToStop && threadToRun->threadID==threadToStop->threadID)
     {
         printd(DEBUG_SCHEDULER,"*No new thread to run, continuing with the current task\n");
+		#if SCHEDULER_DEBUG == 1
 		debug_print_registers(apic_id, "continue2", false);
+		#endif
         if (threadToStop->execDontSaveRegisters)
         {
             printd(DEBUG_SCHEDULER,"Thread to keep running was just exec'd, loading registers from tss\n");
@@ -740,8 +744,8 @@ void scheduler_do()
     mp_waitingForScheduler[apic_id] = false;
     printd(DEBUG_SCHEDULER,"****************************** SCHEDULER *******************************\n");
     printd(DEBUG_SCHEDULER,"scheduler: AP %u, current CR3 = 0x%08x\n",apic_id,getCR3());
-#ifdef SCHEDULER_DEBUG
-    uint64_t ticksBefore=rdtsc();
+#if SCHEDULER_DEBUG == 1
+    uint64_t ticksBefore = rdtsc();
 #endif
 	//Lock the section of code from the time we start looking for another thread to run, until we're done 
 	//either switching threads, or have identified that there's no new thread to run
@@ -754,19 +758,20 @@ void scheduler_do()
 	}
 	else
 	{
+#if SCHEDULER_DEBUG == 1
 		debug_print_registers(apic_id, "continue", true);
+#endif
         printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   
     kSchedulerCallCount++;
-    mp_nextScheduleTicks[apic_id]=kTicksSinceStart+TICKS_PER_SCHEDULER_RUN_AP;
-#ifdef SCHEDULER_DEBUG
-    uint64_t ticksAfter=rdtsc();
+#if SCHEDULER_DEBUG == 1
+    uint64_t ticksAfter = rdtsc();
 #endif
     mp_CoreHasRunScheduledThread[apic_id] = true;
 
-#ifdef SCHEDULER_DEBUG
-    printd(DEBUG_SCHEDULER,"*Scheduler: calls=%u, task switchs=%u, ticks since start=0x%08x\n",kSchedulerCallCount, kTaskSwitchCount, kTicksSinceStart);
+#if SCHEDULER_DEBUG == 1
+    printd(DEBUG_SCHEDULER, "*Scheduler: calls=%u, task switchs=%u, ticks since start=0x%08x\n", kSchedulerCallCount, kTaskSwitchCount, kTicksSinceStart);
     uint64_t diff = ticksAfter-ticksBefore;
     uint64_t timeInScheduler = (diff/kCPUCyclesPerSecond)*100;
     printd(DEBUG_SCHEDULER,"%lu ticks expired (%lu CPU cycles)\n",timeInScheduler, diff);

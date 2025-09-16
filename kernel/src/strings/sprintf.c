@@ -15,10 +15,8 @@
 #include "strings.h"
 #include "memset.h"
 #include "strlen.h"
-#include "printd.h"
 
-extern uint32_t* kTicksSinceStart;
-volatile uint32_t lock_mp_printd;
+extern volatile uint64_t kTicksSinceStart;
 
 static int skip_atoi(const char **s)
 {
@@ -291,15 +289,32 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 	return str - buf;
 }
 
-int sprintf(char *buf, const char *fmt, ...)
-{
-	va_list args;
-	int i;
-
-	va_start(args, fmt);
-	i = vsprintf(buf, fmt, args);
-	va_end(args);
-	return i;
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list args) {
+    if (size == 0) return 0; // No space to write anything
+    int len = vsprintf(buf, fmt, args);
+    if (len >= (int)size) {
+        buf[size - 1] = '\0'; // Ensure null termination if truncated
+        return size - 1;
+    }
+    return len;
 }
 
+int snprintf(char *buf, size_t size, const char *fmt, ...) {
+    va_list args;
+    int i;
 
+    va_start(args, fmt);
+    i = vsnprintf(buf, size, fmt, args);
+    va_end(args);
+    return i;
+}
+
+int sprintf(char *buf, const char *fmt, ...) {
+    va_list args;
+    int i;
+
+    va_start(args, fmt);
+    i = vsprintf(buf, fmt, args);
+    va_end(args);
+    return i;
+}

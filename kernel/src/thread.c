@@ -88,8 +88,12 @@ uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtua
 	if (!physStackAddress) {
     	panic("Failed to allocate stack memory!\n");
 	}
-	*virtualStart = physStackAddress | kHHDMOffset;//isRing3Stack?THREAD_USER_STACK_INITIAL_VIRT_ADDRESS:THREAD_KERNEL_STACK_VIRTUAL_START;
-	//				(physStackAddress + (PAGE_SIZE*THREAD_STACK_GUARD_PAGE_COUNT)) | kHHDMOffset;
+    //If *no* starting virtual address, then calculate on in HHMD
+    if (*virtualStart==0)
+    {
+    	*virtualStart = physStackAddress | kHHDMOffset;//isRing3Stack?THREAD_USER_STACK_INITIAL_VIRT_ADDRESS:THREAD_KERNEL_STACK_VIRTUAL_START;
+    	//				(physStackAddress + (PAGE_SIZE*THREAD_STACK_GUARD_PAGE_COUNT)) | kHHDMOffset;
+    }
 	uint64_t flags = PAGE_PRESENT | PAGE_WRITE;
 	if (isRing3Stack)
 		flags |= PAGE_USER;
@@ -142,11 +146,13 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 	{
 		newThread->regs.DS = newThread->regs.ES = newThread->regs.FS = newThread->regs.GS = newThread->regs.SS = GDT_USER_DATA_ENTRY << 3 | 3;
 		newThread->regs.CS = GDT_USER_CODE_ENTRY << 3 | 3;
+		newThread->esp3BaseV = 0;
 		newThread->esp3BaseP = thread_allocate_guarded_stack_memory((uintptr_t)((task_t*)ownerTask)->pml4v, &newThread->esp3BaseV, THREAD_USER_STACK_SIZE, true);
 	    printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring3 stack for thread at P=0x%016lx, P=0x%016lx\n", newThread->esp3BaseP, newThread->esp3BaseV);
 	}
+	newThread->esp0BaseV = 0;
 	newThread->esp0BaseP = (uintptr_t)thread_allocate_guarded_stack_memory((uintptr_t)((task_t*)ownerTask)->pml4v, &newThread->esp0BaseV, THREAD_KERNEL_STACK_SIZE, false);
-	printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring0 stack for thread at P=0x%016lx, P=0x%016lx\n", newThread->esp0BaseP, newThread->esp0BaseV);
+	printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring0 stack for thread at P=0x%016lx, V=0x%016lx\n", newThread->esp0BaseP, newThread->esp0BaseV);
 
 	printd(DEBUG_THREAD | DEBUG_DETAILED,"createThread: Initialized %s thread segment registers, CS=0x%08x, others=0x%08x\n", kernelThread?"kernel":"user", newThread->regs.CS, newThread->regs.DS);
 

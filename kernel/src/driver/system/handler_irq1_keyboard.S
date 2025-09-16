@@ -6,9 +6,9 @@
 # extern handler_irq1_c
 .section .text
 handler_irq1_asm:
-    SAVE_ALL                # Save all general-purpose registers
-#    call handler_ireq_c     # Call the C handler
+	push rax
+    in al, 0x60             # <--- READ the keyboard data port (clears IRQ internally)
     mov al, 0x20            # Send EOI to PIC
     out 0x20, al
-    RESTORE_ALL                 # Restore all registers
+	pop rax
     iretq                    # Return from interrupt

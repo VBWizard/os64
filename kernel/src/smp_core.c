@@ -94,7 +94,7 @@ void init_core_local_storage(unsigned apic_id)
 	cls->apic_id = apic_id;
 	cls->self = cls;
 	kMPEOIOffset = kMPApicBase | APIC_EOI_OFFSET;
-	printd(DEBUG_THREAD | DEBUG_DETAILED, "Core local storage initialized to 0%16lx for core %u", coreBase, apic_id);
+	printd(DEBUG_THREAD | DEBUG_DETAILED, "Core local storage initialized to 0%16lx for core %u\n", coreBase, apic_id);
 }
 
 // Called to finish initializing the AP (stack switch has been done in ap_wakeup_entry())
@@ -103,6 +103,8 @@ void ap_wakeup_after_stack_switch(uint64_t apic_id, uint64_t stackVirtualAddress
     volatile core_local_storage_t *temp_cls = get_core_local_storage();
     temp_cls->stackVirtualAddress = stackVirtualAddress;
     temp_cls->stackPhysicalAddress = stackPhysicalAddress;
+
+    printd(DEBUG_SMP, "AP%u: Initial stack v/p: 0x%016x/0x%016x\n",apic_id, stackVirtualAddress, stackPhysicalAddress);
 
     // Read APIC_BASE_MSR
     uint32_t lvt_timer = read_apic_register(kMPApicBase + APIC_LVT_TIMER);
@@ -117,7 +119,7 @@ void ap_wakeup_after_stack_switch(uint64_t apic_id, uint64_t stackVirtualAddress
 	//EOI to clear out the IRR as we don't know what is awaiting us when we enable the APIC/LVT otherwise
 	*((volatile uint32_t*)kCPUInfo[apic_id].apic_eoi) = 0;
 
-		// Debugging: Check if AP is ready to receive IPI
+	// Debugging: Check if AP is ready to receive IPI
     printd(DEBUG_SMP | DEBUG_DETAILED, "AP%u: Ready to receive IPI? APIC_STATUS = 0x%08x\n", apic_id, *((volatile uint32_t*)kMPICRLow));
 
 	// Set the spurious vector to 0xFF and enable interrupts (bit 8)
@@ -157,7 +159,6 @@ void ap_wakeup_entry() {
     // Set up the rest of the AP initialization
     load_gdt_and_jump(&kGDTr);
     init_tss();
-    init_core_local_storage(temp_apic_id);
     asm volatile ("lidt %0" : : "m" (kIDTPtr));
 
 	// Set up the AP stack
@@ -166,6 +167,8 @@ void ap_wakeup_entry() {
 
     __asm__("mov rsp, %0\n"::"r" (stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t)));
 	
+    init_core_local_storage(temp_apic_id);
+
 	tempCls = get_core_local_storage();
 
 	// Initialize the AP after stack switch (set spurious vector, enable interrupts, etc.)
@@ -176,10 +179,12 @@ void ap_wakeup_entry() {
         __asm__("sti\nhlt\n");  // Enable interrupts and halt the AP
     }
 }
-
 void ap_wake_up_aps() {
 	volatile core_local_storage_t *cls;
-    for (int coreToWake = 0; coreToWake < kMPCoreCount; coreToWake++) {
+    
+	//TODO: Remve me!
+	//Temporary debugging statement
+	for (int coreToWake = 0; coreToWake < kMPCoreCount; coreToWake++) {
         uint32_t apic_id = kCPUInfo[coreToWake].apicID;
         if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
         

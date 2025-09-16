@@ -15,6 +15,7 @@
 // Microseconds per tick
 #define MIS_PER_TICK 1000000 / TICKS_PER_SECOND
 // Memory related configuration
+
 #define PAGE_SIZE 0x1000
 #define KERNEL_PAGED_BASE_ADDRESS 0xFFFFFFFF80000000
 #define INITIAL_MEMORY_STATUS_COUNT 100000
@@ -23,12 +24,12 @@
 //Signal related
 #define SIGNAL_PROCESS_TICK_FREQUENCY 1 //20 MS if TICKS_PER_SECOND = 100 (1 tick every 10 MS)
 
+//Logging related
+#define ENABLE_LOG_BUFFERING 1 // Set to 0 to disable buffering
+
 //Scheduler Related
-//How many ticks expire between scheduler runs (@100hz - 5=20 ticks per run, 10=10  ticks per run (10 ticks * 10 ms = 100ms @ 100 TPS))
 #define MP_SCHEDULER_RUNS_PER_SECOND 10
-#define TICKS_PER_SCHEDULER_RUN TICKS_PER_SECOND / MP_SCHEDULER_RUNS_PER_SECOND
-#define TICKS_PER_SCHEDULER_RUN_AP TICKS_PER_SCHEDULER_RUN
-//#define SCHEDULER_DEBUG 1
+#define SCHEDULER_DEBUG 1
 
 // Framebuffer related
 #define FRAMEBUFFER_FONT "zap-ext-light16.psf"
@@ -63,10 +64,10 @@
 #define DEBUG_TASK (__uint128_t)1 << 15
 #define DEBUG_SCHEDULER (__uint128_t)1 << 16
 #define DEBUG_SIGNALS (__uint128_t)1 << 17
-
+#define DEBUG_LOGGING (__uint128_t)1 << 18
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED  (__uint128_t)1 << 127
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_HARDDRIVE | DEBUG_SMP | DEBUG_SCHEDULER | DEBUG_THREAD | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED)
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_SCHEDULER | DEBUG_THREAD | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED | DEBUG_SIGNALS | DEBUG_SMP)
 //#define DEBUG_OPTIONS (DEBUG_EXCEPTIONS | DEBUG_BOOT)
 extern __uint128_t kDebugLevel;
 

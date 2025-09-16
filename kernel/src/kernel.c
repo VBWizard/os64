@@ -34,7 +34,7 @@
 #include "smp_core.h"
 #include "apic.h"
 #include "signals.h"
-
+#include "log.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -61,6 +61,7 @@ uint64_t lastTime = 0;
 task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
 task_t* kIdleTasks[MAX_CPUS];
+task_t* kLogDTask;
 
 /// @brief Create the kernel task
 /// This is done manually whereas every other task in the system is created by calling the task_create method in task.c.
@@ -114,6 +115,9 @@ void kernel_init()
 
 	init_GDT();
 	
+	logging_queueing_init();
+
+
 	printf("Initializing PCI: ");
 	init_PCI();
 	printf("\t%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
@@ -133,10 +137,11 @@ void kernel_init()
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 	if (kEnableSMP)
 	{
-		printf("SMP: Initializing ...\n");
+		printf("SMP: Initializing ... ");
 		kLimineSMPInfo = smp_request.response;
 		init_SMP();
-	}
+        printf("(%u cores initialized)\n", kMPCoreCount);
+    }
 	else
 		printf("SMP: Disabled due to nosmp parameter\n");
 	init_signals();
@@ -155,10 +160,15 @@ void kernel_init()
 		scheduler_submit_new_task(kIdleTasks[cnt]);
 	}
 
+	#if ENABLE_LOG_BUFFERING == 1
+    kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, 0);
+    // Pass daemon=true (first arg in RDI) to logd_thread
+    kLogDTask->threads->regs.RDI = 1;
+    scheduler_submit_new_task(kLogDTask);
+#endif
 	scheduler_enable();
-
-	scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
-	core_local_storage_t *cls = get_core_local_storage();
+    scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
+    core_local_storage_t *cls = get_core_local_storage();
 	cls->threadID = kKernelTask->threads->threadID;
 
 	mp_enable_scheduling_vector(0);
@@ -206,6 +216,11 @@ void kernel_main()
 	kInitDone = false;
 	kTicksPerSecond = TICKS_PER_SECOND;
 
+	// Unmask IRQ1 (keyboard) on primary PIC
+	uint8_t mask = inb(0x21);
+	mask &= ~(1 << 1); // Clear bit 1 (unmask IRQ1)
+	outb(0x21, mask);
+
 	kEnableSMP = true;
 	process_kernel_commandline(kKernelCommandline);
 	hardware_init();
@@ -230,7 +245,7 @@ void kernel_main()
 	allocator_init();
 	init_os64_paging_tables();
 	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
-	__asm__ volatile ("mov rsp, %0" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
+	__asm__ volatile ("cli\nmov rsp, %0\nsti\n" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
 	printf("Kernel stack initialized, 0x%x bytes\n", KERNEL_STACK_SIZE);
 	kernel_init();
 }
