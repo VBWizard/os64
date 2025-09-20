@@ -58,4 +58,6 @@ bool apicIsEnabled();
 int tscGetTicksPerSecond();
 void remap_irq0_to_apic(uint32_t vector);
 
+extern volatile bool kIRQ0UsesLapic;
+
 #endif	/* APIC_H */

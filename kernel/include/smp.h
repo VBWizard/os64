@@ -74,6 +74,8 @@ extern uintptr_t kMPICRLow;
 extern uintptr_t kMPICRHigh;
 extern uint64_t kMPIdReg;
 extern uintptr_t kIOAPICAddress;
+extern mpConfig_t* kMPConfigTable;
+extern uint32_t kMPConfigTableCount;
 
 int init_SMP(bool enableSMP);
 
