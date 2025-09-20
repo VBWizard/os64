@@ -5,8 +5,8 @@
 #include "driver/system/pit.h"
 #include "driver/system/pic.h"
 #include "driver/system/idt.h"
+#include "driver/system/keyboard.h"
 #include "serial_logging.h"
-#include "io.h"
 #include "rtc.h"
 
 #define PIC_REMAP_OFFSET 32
@@ -37,9 +37,7 @@ void hardware_init()
 );
 	pic_remap(0 + PIC_REMAP_OFFSET, 8 + PIC_REMAP_OFFSET);
 	initialize_idt();
-	//Enable interrupts
-    outb(0x64, 0xAD); // Disable first port temporarily
-    outb(0x64, 0xAE); // Enable first port again (keyboard)
+	keyboard_init();
     asm("sti\n");
     printd(DEBUG_BOOT, "Interrupts enabled\n");
 
