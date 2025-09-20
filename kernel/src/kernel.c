@@ -149,7 +149,11 @@ void kernel_init()
 
 	remap_irq0_to_apic(0x20);
 
-    for (int cnt=0;cnt<kMPCoreCount;cnt++)
+    // Init and run tests before configuring and enabling the scheduler
+    test_framework_init();
+    test_run_all();
+
+    for (int cnt = 0; cnt < kMPCoreCount; cnt++)
     {
 		char idleTaskName[10];
 		sprintf(idleTaskName, "/idle%u",cnt);
@@ -163,10 +167,7 @@ void kernel_init()
     kLogDTask->threads->regs.RDI = 1;
     scheduler_submit_new_task(kLogDTask);
 #endif
-    //Run tests before enabling the scheduler
-    test_framework_init();
-    test_run_all();
-    
+   
     scheduler_enable();
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
     core_local_storage_t *cls = get_core_local_storage();
