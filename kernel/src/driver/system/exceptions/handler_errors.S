@@ -2,6 +2,9 @@
 .intel_syntax noprefix
 .section .text
 
+.extern gLastFaultRbp
+.extern gLastFaultRsp
+
 .global divide_by_zero_handler
 divide_by_zero_handler:
     cli
@@ -34,8 +37,14 @@ general_protection_fault_handler:
 .global page_fault_handler
 page_fault_handler:
     cli
-    pop rdi   # Get error code
-    pop rsi   # Get RIP (next on stack)
+    mov rax, rbp
+    mov qword ptr [rip + gLastFaultRbp], rax
+    mov rax, rsp
+    mov qword ptr [rip + gLastFaultRsp], rax
+    pop rsi   # Get error code
+    pop rdx   # Get RIP (next on stack)
+    mov rax, cr2
+    mov rdi, rax
     call handle_page_fault
     hlt
 
@@ -45,4 +54,3 @@ machine_check_handler:
     mov rdi, [rsp]  # Get RIP
     call handle_machine_check
     hlt
-
