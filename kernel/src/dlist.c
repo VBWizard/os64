@@ -44,7 +44,7 @@ void dlist_remove(dlist_t* list, dlist_node_t* node) {
     list->size--;
 }
 
-/// @brief Destroy a dlist_t.  Note that each ->data will be kfree'd
+/// @brief Destroy a dlist_t.  Caller remains responsible for freeing node data.
 /// @param list 
 void dlist_destroy(dlist_t* list) 
 {
@@ -54,9 +54,6 @@ void dlist_destroy(dlist_t* list)
     while (current != NULL) 
 	{
         next = current->next;
-		kfree((void*)current->data);
-        // Free the data if a callback is provided
-        // Free the node itself
         kfree(current);
 
         current = next;

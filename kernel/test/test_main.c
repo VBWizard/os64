@@ -2,6 +2,7 @@
 
 #include "memory/kmalloc.h"
 #include "exceptions.h"
+#include "dlist.h"
 #include <stdint.h>
 
 static test_case_t g_test_cases[TEST_MAX_CASES];
@@ -45,10 +46,88 @@ after_fault:
 	return true;
 }
 
+static bool test_dlist_basic_operations(void)
+{
+	dlist_t list;
+	dlist_init(&list);
+
+	if (list.head != NULL || list.tail != NULL || list.size != 0)
+	{
+		TEST_FAIL("dlist_init leaves list in non-empty state");
+	}
+
+	int value1 = 1;
+	int value2 = 2;
+	int value3 = 3;
+
+	dlist_node_t* node1 = dlist_add(&list, &value1);
+	if (list.size != 1 || list.head != node1 || list.tail != node1)
+	{
+		TEST_FAIL("dlist_add failed to set head/tail for first element");
+	}
+
+	dlist_node_t* node2 = dlist_add(&list, &value2);
+	if (list.size != 2 || list.head != node1 || list.tail != node2)
+	{
+		TEST_FAIL("dlist_add failed to append second element");
+	}
+	if (node1->next != node2 || node2->prev != node1 || node2->next != NULL)
+	{
+		TEST_FAIL("dlist_add did not link nodes correctly");
+	}
+
+	dlist_node_t* node3 = dlist_add(&list, &value3);
+	if (list.size != 3 || list.tail != node3)
+	{
+		TEST_FAIL("dlist_add failed to append third element");
+	}
+	if (node2->next != node3 || node3->prev != node2)
+	{
+		TEST_FAIL("dlist_add corrupts middle linkage");
+	}
+
+	dlist_remove(&list, node2);
+	if (list.size != 2 || list.head != node1 || list.tail != node3)
+	{
+		TEST_FAIL("dlist_remove on middle node produced incorrect list metadata");
+	}
+	if (node1->next != node3 || node3->prev != node1)
+	{
+		TEST_FAIL("dlist_remove on middle node broke adjacency");
+	}
+
+	dlist_remove(&list, node1);
+	if (list.size != 1 || list.head != node3 || list.tail != node3)
+	{
+		TEST_FAIL("dlist_remove on head did not promote next node");
+	}
+	if (node3->prev != NULL || node3->next != NULL)
+	{
+		TEST_FAIL("dlist_remove on head left stray links");
+	}
+
+	dlist_remove(&list, node3);
+	if (list.size != 0 || list.head != NULL || list.tail != NULL)
+	{
+		TEST_FAIL("dlist_remove on final node did not empty list");
+	}
+
+	dlist_add(&list, &value1);
+	dlist_add(&list, &value2);
+	dlist_destroy(&list);
+	if (list.size != 0 || list.head != NULL || list.tail != NULL)
+	{
+		TEST_FAIL("dlist_destroy failed to reset list state");
+	}
+
+	return true;
+}
+
 static void register_builtin_tests(void)
 {
     test_register("kmalloc_not_null", test_kmalloc_not_null);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set);
+    test_register("dlist_basic_operations", test_dlist_basic_operations);
 }
 
 void test_framework_init(void)
