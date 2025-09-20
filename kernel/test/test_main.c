@@ -59,23 +59,24 @@ void test_run_all(void)
         test_case_t *test = &g_test_cases[index];
         const char *name = test->name ? test->name : "<unnamed>";
 
+        printd(DEBUG_TESTS, "BUILT-IN TESTS: Running all tests:\n");
         bool result = false;
         if (test->func != NULL) {
             result = test->func();
         } else {
-            printd(DEBUG_TESTS, "    FAIL: %s\n", "Test function pointer is NULL");
+            printd(DEBUG_TESTS, "\tFAIL: %s\n", "Invalid test. Test function pointer is NULL");
         }
 
         if (result) {
             ++passed;
-            printd(DEBUG_TESTS, "[Test] %s... OK\n", name);
+            printd(DEBUG_TESTS, "\t[Test] %s... OK\n", name);
         } else {
             ++failed;
-            printd(DEBUG_TESTS, "[Test] %s... FAIL\n", name);
+            printd(DEBUG_TESTS, "\t[Test] %s... FAIL\n", name);
         }
     }
 
-    printd(DEBUG_TESTS, "%u passed, %u failed\n", (unsigned int)passed, (unsigned int)failed);
+    printd(DEBUG_TESTS, "BUILT-IN TESTS: %u passed, %u failed\n", (unsigned int)passed, (unsigned int)failed);
 
     if (failed > 0) {
         printd(DEBUG_TESTS, "Test framework detected failures. System halted.\n");

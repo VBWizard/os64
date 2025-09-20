@@ -163,7 +163,11 @@ void kernel_init()
     kLogDTask->threads->regs.RDI = 1;
     scheduler_submit_new_task(kLogDTask);
 #endif
-	scheduler_enable();
+    //Run tests before enabling the scheduler
+    test_framework_init();
+    test_run_all();
+    
+    scheduler_enable();
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
     core_local_storage_t *cls = get_core_local_storage();
 	cls->threadID = kKernelTask->threads->threadID;
@@ -176,8 +180,6 @@ void kernel_init()
 
 	kProcessSignals = true;
 
-	test_framework_init();
-	test_run_all();
 /*
 	if (kRootPartUUID[0])
 	{
