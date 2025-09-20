@@ -27,6 +27,7 @@
 #include "fat_glue.h"
 #include "shutdown.h"
 #include "tests.h"
+#include "test_framework.h"
 #include "panic.h"
 #include "task.h"
 #include "scheduler.h"
@@ -162,7 +163,11 @@ void kernel_init()
     kLogDTask->threads->regs.RDI = 1;
     scheduler_submit_new_task(kLogDTask);
 #endif
-	scheduler_enable();
+    //Run tests before enabling the scheduler
+    test_framework_init();
+    test_run_all();
+    
+    scheduler_enable();
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
     core_local_storage_t *cls = get_core_local_storage();
 	cls->threadID = kKernelTask->threads->threadID;
@@ -174,6 +179,7 @@ void kernel_init()
 	ap_wake_up_aps();
 
 	kProcessSignals = true;
+
 /*
 	if (kRootPartUUID[0])
 	{
