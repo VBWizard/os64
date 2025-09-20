@@ -1,6 +1,8 @@
 #include "test_framework.h"
 
 #include "memory/kmalloc.h"
+#include "exceptions.h"
+#include <stdint.h>
 
 static test_case_t g_test_cases[TEST_MAX_CASES];
 static size_t g_test_case_count = 0;
@@ -31,9 +33,22 @@ static bool test_kmalloc_not_null(void)
     return true;
 }
 
+static bool test_page_fault_does_not_panic_when_testing_flag_is_set(void)
+{
+	void *resume = &&after_fault;
+	kTestingPageFaults = true;
+	kTestingPageFaultResumeRip = (uint64_t)(uintptr_t)resume;
+	*((volatile uint32_t *)0x0) = 0x1234;
+after_fault:
+	kTestingPageFaults = false;
+	kTestingPageFaultResumeRip = 0;
+	return true;
+}
+
 static void register_builtin_tests(void)
 {
     test_register("kmalloc_not_null", test_kmalloc_not_null);
+    test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set);
 }
 
 void test_framework_init(void)
@@ -55,11 +70,12 @@ void test_run_all(void)
     size_t passed = 0;
     size_t failed = 0;
 
-    for (size_t index = 0; index < g_test_case_count; ++index) {
+    printd(DEBUG_TESTS, "BUILT-IN TESTS: Running all tests:\n");
+    for (size_t index = 0; index < g_test_case_count; ++index)
+    {
         test_case_t *test = &g_test_cases[index];
         const char *name = test->name ? test->name : "<unnamed>";
 
-        printd(DEBUG_TESTS, "BUILT-IN TESTS: Running all tests:\n");
         bool result = false;
         if (test->func != NULL) {
             result = test->func();

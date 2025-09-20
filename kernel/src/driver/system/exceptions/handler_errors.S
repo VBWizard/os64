@@ -4,6 +4,7 @@
 
 .extern gLastFaultRbp
 .extern gLastFaultRsp
+.extern kTestingPageFaults
 
 .global divide_by_zero_handler
 divide_by_zero_handler:
@@ -41,12 +42,18 @@ page_fault_handler:
     mov qword ptr [rip + gLastFaultRbp], rax
     mov rax, rsp
     mov qword ptr [rip + gLastFaultRsp], rax
-    pop rsi   # Get error code
-    pop rdx   # Get RIP (next on stack)
+    mov rsi, [rsp]      # Get error code
+    mov rdx, [rsp + 8]  # Get RIP (next on stack)
     mov rax, cr2
     mov rdi, rax
     call handle_page_fault
+    cmp byte ptr [rip + kTestingPageFaults], 0
+    jne .page_fault_resume
     hlt
+
+.page_fault_resume:
+    add rsp, 8          # Discard error code before iretq
+    iretq
 
 .global machine_check_handler
 machine_check_handler:
