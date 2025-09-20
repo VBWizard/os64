@@ -86,7 +86,6 @@ bool logd_thread(bool daemon) {
             {
                 for (int core = 0; core < kMPCoreCount; core++)
                 {
-                    __asm__("pause\n");
                     buffer = &core_log_buffers[core];
 
                     /* Skip cores whose buffers are not yet allocated */
