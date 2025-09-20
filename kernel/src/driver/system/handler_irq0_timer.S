@@ -5,6 +5,8 @@
 .extern frameBufferRequiresUpdate
 .extern processSignals
 .extern signalProcTickFrequency
+.extern kMPApicBase
+.extern kIRQ0UsesLapic
 .global handler_irq0_asm
 .section .text
 
@@ -29,9 +31,18 @@ handler_irq0_asm:
 ticks_not_expired:
 	mov [irq0_current_count], rax
 
-	# Send EOI to PIC
-	mov al, 0x20            
+	# Acknowledge interrupt on the appropriate controller
+	cmp byte ptr [rip + kIRQ0UsesLapic], 0
+	je send_pic_eoi
+	mov rax, qword ptr [rip + kMPApicBase]
+	mov dword ptr [rax + 0xB0], 0
+	jmp irq0_eoi_done
+
+send_pic_eoi:
+	mov al, 0x20
     out 0x20, al
+
+irq0_eoi_done:
 
 	pop rax
 	iretq                    # Return from interrupt
