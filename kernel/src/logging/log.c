@@ -47,11 +47,15 @@ void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8
     entry->message[MAX_LOG_MESSAGE_SIZE-1] = '\0';
     buffer->head = (buffer->head + 1) % buffer->capacity;
 
+    //If the log buffer is *full* then attempt to flush the buffer directly. If that fails, put the current thread to sleep
+    //so that logd has a chance to wake up and flush the buffer.
+    //NOTE: Putting the thread to sleep is *a bad idea* because the scheduler calls printd() a bunch of times, and putting the scheduler
+    //to sleep to start another thread? That just makes no sense.
     while ((buffer->head + 1) % buffer->capacity == buffer->tail)
         //Attempt to execute logd flushing method
         if (!logd_thread(false))
-            //If that fails, the logd daemon is sleeping inside the lock so go to sleep and let it run to flush the logs
-            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_FLUSH_WAIT_TICKS, NULL);
+            //If that fails, throw a panic for now until we figure out a better approach
+            panic("log_store_entry: logd buffer for core %u is full", core);
 }
 
 void logging_queueing_init() {
@@ -82,6 +86,7 @@ bool logd_thread(bool daemon) {
             {
                 for (int core = 0; core < kMPCoreCount; core++)
                 {
+                    __asm__("pause\n");
                     buffer = &core_log_buffers[core];
 
                     /* Skip cores whose buffers are not yet allocated */
@@ -113,7 +118,8 @@ bool logd_thread(bool daemon) {
                                      entry->message);
                         serial_print_string(print_buf2);
 
-                        memset(entry->message, 0, MAX_LOG_MESSAGE_SIZE);
+                        // memset(entry->message, 0, MAX_LOG_MESSAGE_SIZE);
+                        entry->message[0] = '\0';
                         buffer->tail = (buffer->tail + 1) % buffer->capacity;
                         processed_logs++;
                     }
