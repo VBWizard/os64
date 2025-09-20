@@ -39,6 +39,11 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 
 	newTask->parentTask = parentTask;
 	newTask->priority = TASK_DEFAULT_PRIORITY;
+
+	newTask->mmaps = kmalloc(sizeof(dlist_t));
+	if (newTask->mmaps) {
+		dlist_init(newTask->mmaps);
+	}
 	if (kernelTask)
 	{
 		newTask->pml4v = (uint64_t*)kKernelPML4v;

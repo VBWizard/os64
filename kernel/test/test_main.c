@@ -1,6 +1,8 @@
 #include "test_framework.h"
 
 #include "memory/kmalloc.h"
+#include "memory/memset.h"
+#include "memory/vma.h"
 #include "exceptions.h"
 #include "dlist.h"
 #include <stdint.h>
@@ -123,11 +125,53 @@ static bool test_dlist_basic_operations(void)
 	return true;
 }
 
+static bool test_vma_insert_and_lookup(void)
+{
+	task_t* task = kmalloc(sizeof(task_t));
+	if (!task) {
+		TEST_FAIL("test_vma: failed to allocate task");
+	}
+
+	memset(task, 0, sizeof(task_t));
+
+	task->mmaps = kmalloc(sizeof(dlist_t));
+	if (!task->mmaps) {
+		TEST_FAIL("test_vma: failed to allocate mmaps list");
+	}
+	dlist_init(task->mmaps);
+
+	uintptr_t start = 0x100000;
+	uintptr_t end = 0x102000;
+	vma_t* vma = vma_create(start, end, PROT_READ | PROT_WRITE, MAP_PRIVATE, NULL, 0);
+	if (!vma) {
+		TEST_FAIL("test_vma: failed to allocate vma");
+	}
+
+	vma_add(task, vma);
+
+	vma_t* found = vma_lookup(task, 0x101000);
+	if (!found || found != vma) {
+		TEST_FAIL("vma_lookup failed to find inserted VMA");
+	}
+
+    found = vma_lookup(task, 0x11101000);
+    if (found)
+        TEST_FAIL("vma_lookup found inserted VMA when it should not have");
+
+    dlist_destroy(task->mmaps);
+	kfree(task->mmaps);
+	vma_destroy(vma);
+	kfree(task);
+
+	return true;
+}
+
 static void register_builtin_tests(void)
 {
     test_register("kmalloc_not_null", test_kmalloc_not_null);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set);
     test_register("dlist_basic_operations", test_dlist_basic_operations);
+    test_register("vma_insert_and_lookup", test_vma_insert_and_lookup);
 }
 
 void test_framework_init(void)
