@@ -15,6 +15,7 @@ uint64_t gLastFaultRsp = 0;
 uint64_t gLastFaultErrorCode = 0;
 bool kTestingPageFaults = false;
 uint64_t kTestingPageFaultResumeRip = 0;
+uint64_t kPageFaultCount;
 
 static bool is_canonical_address(uint64_t address)
 {
@@ -164,18 +165,23 @@ static void log_page_fault_bits(uint64_t error_code)
 void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
 	gLastFaultErrorCode = error_code;
-
-	if (kTestingPageFaults) {
-		if (gLastFaultRsp != 0 && kTestingPageFaultResumeRip != 0) {
+    kPageFaultCount++;
+    if (kTestingPageFaults)
+    {
+        if (gLastFaultRsp != 0 && kTestingPageFaultResumeRip != 0) {
 			uint64_t *stack = (uint64_t*)gLastFaultRsp;
 			// Error code at stack[0], return RIP at stack[1]
 			stack[1] = kTestingPageFaultResumeRip;
 		}
 		printd(DEBUG_EXCEPTIONS, "\tPage fault occurred during test mode, returning without halt.\n");
-		return;
-	}
+        //Clear the CR2
+        __asm__ __volatile__(
+            "xor rax, rax\n\t"
+            "mov cr2, rax\n\t");
+        return;
+    }
 
-	printf("\nPAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%016lx\n", rip, cr2, error_code);
+    printf("\nPAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%016lx\n", rip, cr2, error_code);
 	if (kLoggingInitialized) {
 		printd(DEBUG_EXCEPTIONS, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%016lx\n", rip, cr2, error_code);
 	}
