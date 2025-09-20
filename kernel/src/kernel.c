@@ -27,6 +27,7 @@
 #include "fat_glue.h"
 #include "shutdown.h"
 #include "tests.h"
+#include "test_framework.h"
 #include "panic.h"
 #include "task.h"
 #include "scheduler.h"
@@ -174,6 +175,9 @@ void kernel_init()
 	ap_wake_up_aps();
 
 	kProcessSignals = true;
+
+	test_framework_init();
+	test_run_all();
 /*
 	if (kRootPartUUID[0])
 	{
