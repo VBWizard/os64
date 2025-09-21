@@ -104,11 +104,15 @@ override LDFLAGS += \
     -T linker.ld
 
 # Use "find" to glob all *.c, *.S, and *.asm files in the tree.
-override CFILES := $(shell find src -type f -name '*.c' | LC_ALL=C sort)
+override SRC_CFILES := $(shell find src -type f -name '*.c' | LC_ALL=C sort)
+override TEST_CFILES := $(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort)
+override CFILES := $(SRC_CFILES) $(TEST_CFILES)
 override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
-override OBJ := $(patsubst src/%,obj/%,$(CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o))
-override HEADER_DEPS := $(patsubst src/%,obj/%,$(CFILES:.c=.c.d) $(ASFILES:.S=.S.d))
+override OBJ := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.o) $(ASFILES:.S=.S.o) $(NASMFILES:.asm=.asm.o)) \
+    $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.o))
+override HEADER_DEPS := $(patsubst src/%,obj/%,$(SRC_CFILES:.c=.c.d) $(ASFILES:.S=.S.d)) \
+    $(patsubst test/%,obj/test/%,$(TEST_CFILES:.c=.c.d))
 
 
 # Default target.
@@ -134,6 +138,10 @@ bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
 
 # Compilation rules for *.c files.
 obj/%.c.o: src/%.c GNUmakefile
+	@mkdir -p "$$(dirname $@)"
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+obj/test/%.c.o: test/%.c GNUmakefile
 	@mkdir -p "$$(dirname $@)"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
