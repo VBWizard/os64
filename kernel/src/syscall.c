@@ -207,29 +207,58 @@ static bool prepare_syscall_args(const syscall_entry_t *entry, const uint64_t in
 
 static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_len)
 {
-	if (!user_str || !buffer || buffer_len == 0)
-	{
-		return false;
-	}
+        if (!user_str || !buffer || buffer_len == 0)
+        {
+                return false;
+        }
 
-	size_t written = 0;
-	while (written < buffer_len - 1)
-	{
-		char ch = 0;
-		if (!validate_and_copy_user_data(user_str + written, sizeof(char), &ch))
-		{
-			return false;
-		}
+        uint64_t original_cr3 = 0;
+        asm volatile("mov %0, cr3" : "=r"(original_cr3));
 
-		buffer[written++] = ch;
-		if (ch == '\0')
-		{
-			return true;
-		}
-	}
+        const uint64_t kernel_cr3 = (uint64_t)kKernelPML4;
+        bool temporarily_switched_to_user_cr3 = false;
 
-	buffer[buffer_len - 1] = '\0';
-	return false;
+        if (original_cr3 == kernel_cr3)
+        {
+                uint32_t cpu_index = get_current_cpu_index();
+                if (cpu_index < MAX_CPUS && g_saved_cr3_valid[cpu_index])
+                {
+                        uint64_t user_cr3 = g_saved_cr3[cpu_index];
+                        if (user_cr3 && user_cr3 != kernel_cr3)
+                        {
+                                asm volatile("mov cr3, %0" :: "r"(user_cr3) : "memory");
+                                temporarily_switched_to_user_cr3 = true;
+                        }
+                }
+        }
+
+        bool success = false;
+        size_t written = 0;
+        while (written < buffer_len - 1)
+        {
+                char ch = 0;
+                if (!validate_and_copy_user_data(user_str + written, sizeof(char), &ch))
+                {
+                        goto out;
+                }
+
+                buffer[written++] = ch;
+                if (ch == '\0')
+                {
+                        success = true;
+                        goto out;
+                }
+        }
+
+        buffer[buffer_len - 1] = '\0';
+
+out:
+        if (temporarily_switched_to_user_cr3)
+        {
+                asm volatile("mov cr3, %0" :: "r"(original_cr3) : "memory");
+        }
+
+        return success;
 }
 
 static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
