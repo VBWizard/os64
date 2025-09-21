@@ -5,6 +5,38 @@
 #include "msr.h"
 #include "time.h"
 #include "x86_64.h"
+#include "io.h"
+#include "serial_logging.h"
+
+volatile bool kIRQ0UsesLapic = false;
+
+static void set_imcr_to_apic(void)
+{
+    outb(0x22, 0x70);
+    uint8_t value = inb(0x23);
+    outb(0x23, value | 0x01);
+}
+
+static uint8_t get_ioapic_redirection_index_for_irq(uint8_t irq)
+{
+    if (!kMPConfigTable || !kMPConfigTableCount) {
+        return irq;
+    }
+
+    for (uint32_t i = 0; i < kMPConfigTableCount; ++i) {
+        if (kMPConfigTable[i].recType != IOINTASS) {
+            continue;
+        }
+
+        struct mpc_intsrc entry = kMPConfigTable[i].irqSrc;
+        // Bus 1 corresponds to ISA in the MP tables; that's where PIT lives.
+        if (entry.srcbus == 1 && entry.srcbusirq == irq) {
+            return entry.dstirq;
+        }
+    }
+
+    return irq;
+}
 
 bool apicCheckFor() {
    uint32_t eax=0, edx=0, notused=0;
@@ -119,12 +151,30 @@ void ioapic_write(uint32_t reg, uint32_t value) {
 }
 
 void remap_irq0_to_apic(uint32_t vector) {
-    //Remap IR0 from the PIC to the calling core's IO APIC
-	// IOAPIC Redirection Table Entry for IRQ0 (Index 0x10 and 0x11)
-    uint32_t irq0_low = vector;  // Vector number and flags (e.g., fixed delivery mode)
-    uint32_t irq0_high = 0x00000000;  // Destination APIC ID
+    if (!kIOAPICAddress) {
+        return;
+    }
 
-    // Write high 32 bits first, then low 32 bits
-    ioapic_write(0x11, irq0_high);
-    ioapic_write(0x10, irq0_low);
+    uint8_t redirection_index = get_ioapic_redirection_index_for_irq(0);
+    uint32_t low_reg = 0x10 + ((uint32_t)redirection_index * 2);
+    uint32_t high_reg = low_reg + 1;
+
+    // Route PIT IRQ0 to the BSP LAPIC using the MP-provided IOAPIC redirection entry
+    uint32_t irq0_low = vector & 0xFF; // keep delivery mode fixed, edge triggered, active high
+    uint32_t irq0_high = ((uint32_t)kCPUInfo[0].apicID) << 24; // physical destination
+
+    ioapic_write(high_reg, irq0_high);
+    ioapic_write(low_reg, irq0_low);
+
+    printd(DEBUG_SMP, "IOAPIC: IRQ0 mapped to redirection %u, vector 0x%02x, dest APIC %u\n",
+           redirection_index, vector & 0xFF, kCPUInfo[0].apicID);
+
+    set_imcr_to_apic();
+
+    // Mask IRQ0 on the legacy PIC; PIT interrupts now arrive through the IOAPIC
+    uint8_t pic_mask = inb(PIC1_DATA);
+    pic_mask |= 0x01; // set bit 0 to mask IRQ0
+    outb(PIC1_DATA, pic_mask);
+
+    kIRQ0UsesLapic = true;
 }

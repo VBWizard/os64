@@ -17,6 +17,7 @@ volatile uintptr_t kMPApicBase;
 volatile uint8_t kMPCoreCount;
 struct mpf_intel* kMPTable;
 mpConfig_t* kMPConfigTable;
+uint32_t kMPConfigTableCount = 0;
 uintptr_t kIOAPICAddress;
 struct mpf_intel* mp;
 struct mpc_table* mc;
@@ -79,6 +80,7 @@ unsigned int parse_mp_table()
     uint8_t* recPtr;
     char lTempString[15];
     memset(lTempString, 0, 15);
+    kMPConfigTableCount = 0;
     if (mp_find_tables())
 	{
 		printd(DEBUG_SMP,"MP table found @ 0x%08x, sig=%c%c%c%c, features=%u/%u/%u/%u/%u, length=%u\n", kMPTable, kMPTable->signature[0], kMPTable->signature[1], kMPTable->signature[2], kMPTable->signature[3], kMPTable->feature1, kMPTable->feature2, kMPTable->feature3, kMPTable->feature4, kMPTable->feature5, kMPTable->length);
@@ -223,6 +225,7 @@ unsigned int parse_mp_table()
 					break;
 			}
 		}
+		kMPConfigTableCount = mc->count;
 		printd(DEBUG_SMP | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"rec5 pp=%08X(%08X),np=%08X(%08X)\n", kMPConfigTable[5].prevRecAddress, &kMPConfigTable[4], kMPConfigTable[5].nextRecAddress, &kMPConfigTable[6]);
 		return mc->count;
 	}

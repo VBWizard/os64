@@ -11,7 +11,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     core_local_storage_t* core = get_core_local_storage();
 
     printf("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);  // 🛠 FIXED: Actually print the message!
-    printf(">>> AP %lu (Thread %lu) <<<                        \n", core->apic_id, core->threadID);
+    printf(">>> AP %lu (Thread 0x%08x) <<<                        \n", core->apic_id, core->threadID);
     printf(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
     
     if (error_code != 0xFFFFFFFFFFFFFFFF) {

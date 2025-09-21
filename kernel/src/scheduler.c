@@ -365,8 +365,8 @@ void debug_print_registers(uint64_t apic_id, char* prefix, bool unconditional)
 	if (unconditional)
 	{
 		savedDebugFlags = kDebugLevel;
-		savedDebugFlags |= DEBUG_SCHEDULER;
-	}
+        kDebugLevel |= DEBUG_SCHEDULER;
+    }
 
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
             prefix,
@@ -457,10 +457,12 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
     mp_isrSavedCR3[apic_id]=thread->regs.CR3;
     
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"scheduler_load_thread: Loading SYSENTER_ESP_MSR with value 0x%08x\n",thread->regs.RSP0);
-    //kInitialTSS
 
-	//Set the syscall (ring 0) stack pointer.  This replaces using SYSENTER_ESP_MSR from the old 32-bit code.
-	kInitialTSS.rsp0 = thread->regs.RSP0;
+	// Update the per-core TSS so SYSCALL transitions land on the correct kernel stack
+	if (cls->tss)
+	{
+		tss_set_rsp0(cls->apic_id, thread->regs.RSP0);
+	}
 
 	//TODO: Handle forked threads
     if (((task_t*)cls->currentThread->ownerTask)->justForked)
@@ -776,5 +778,6 @@ void scheduler_do()
     uint64_t timeInScheduler = (diff/kCPUCyclesPerSecond)*100;
     printd(DEBUG_SCHEDULER,"%lu ticks expired (%lu CPU cycles)\n",timeInScheduler, diff);
 #endif
-	printd(DEBUG_SCHEDULER,"**************************************************************************\n");
+    printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s\n", ((task_t *)(cls->currentThread->ownerTask))->path);
+    printd(DEBUG_SCHEDULER,"**************************************************************************\n");
 }

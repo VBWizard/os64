@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "mpspec_def.h"
 #include "thread.h"
+#include "tss.h"
 
 #define MAX_CPUS 24
 #define APIC_EOI_OFFSET    0xB0
@@ -59,6 +60,8 @@ typedef struct
 	uintptr_t stackVirtualAddress, stackPhysicalAddress;
 	thread_t *currentThread;
 	bool coreAwoken, coreInitialized;
+	tss_t *tss;
+	uint64_t kernel_rsp0;
 } core_local_storage_t;
 
 
@@ -71,6 +74,8 @@ extern uintptr_t kMPICRLow;
 extern uintptr_t kMPICRHigh;
 extern uint64_t kMPIdReg;
 extern uintptr_t kIOAPICAddress;
+extern mpConfig_t* kMPConfigTable;
+extern uint32_t kMPConfigTableCount;
 
 int init_SMP(bool enableSMP);
 
