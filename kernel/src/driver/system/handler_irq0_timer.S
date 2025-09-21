@@ -14,22 +14,22 @@ handler_irq0_asm:
     push rax
 
 	# Increment the number of ticks since the system was started
-	lock inc qword ptr [kTicksSinceStart]
+	lock inc qword ptr [rip + kTicksSinceStart]
 	# Grab the "current count" of ticks in the current second
-	mov rax, [irq0_current_count]
+	mov rax, [rip + irq0_current_count]
 	inc rax
 	# Compare the current count of ticks to the number of ticks per second
-	cmp rax, [kTicksPerSecond] 
+	cmp rax, [rip + kTicksPerSecond] 
 	# If it is less, then don't need to update the system time, so skip it
 	jb ticks_not_expired
 
 	# Update the system time
-	lock inc qword ptr [kSystemCurrentTime]
-	lock inc qword ptr [kUptime]
+	lock inc qword ptr [rip + kSystemCurrentTime]
+	lock inc qword ptr [rip + kUptime]
 	# Reset the current count
 	xor rax, rax
 ticks_not_expired:
-	mov [irq0_current_count], rax
+	mov [rip + irq0_current_count], rax
 
 	# Acknowledge interrupt on the appropriate controller
 	cmp byte ptr [rip + kIRQ0UsesLapic], 0

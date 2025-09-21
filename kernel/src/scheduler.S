@@ -377,6 +377,8 @@ doTheJump:
 	mov rbx, [mp_isrSavedRBX + rax * 8]
 	mov byte ptr [mp_inScheduler + rax], 0
     mov rax, [mp_isrSavedRAX + rax * 8]
+    # CLI so that the retfq happens before the next scheduling ISR is triggered
+    cli
     call _write_eoi
     retfq 0
 

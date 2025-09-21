@@ -34,6 +34,8 @@ uint8_t tempStack[1024];
 uint32_t temp_apic_id;
 core_local_storage_t *tempCls;
 
+#define TIMER_MAGIC_VALUE 1
+
 // Assuming kMPApicBase and APIC_EOI_OFFSET are properly defined elsewhere
 extern volatile uintptr_t kMPApicBase;
 extern void _write_eoi();
@@ -77,8 +79,8 @@ void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_
     // Write to the low part of the ICR (command and vector)
 	// Removed setting of level bit 14 (| (level << 14) )
     uint32_t icr_low_value = vector | (delivery_mode << 8) | (level << 14) | (trigger_mode << 15) | 0x00004000;
-    *((volatile uint32_t*)(kMPICRLow)) = icr_low_value;
-    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: IPI delivered\n",apic_id);
+    printd(DEBUG_SMP | DEBUG_DETAILED, "MP: Delivering IPI\n", apic_id);
+    *((volatile uint32_t *)(kMPICRLow)) = icr_low_value;
 }
 
 static inline void set_gs_base(uint64_t base) {
@@ -306,7 +308,7 @@ void mp_restart_apic_timer_count()
 	core_local_storage_t *cls = get_core_local_storage();
     // We need to write the count to the timer, but first get the current state of the LVT_TIMER register so we can restore it after
     // That way if the timer was disabled, it will remain disabled, and if it was enabled, it will remain enabled
-    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount);  //Trigger X times per second based on config setting
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * TIMER_MAGIC_VALUE);  //Trigger X times per second based on config setting
 	//_write_eoi();
     //printd(DEBUG_SMP, "AP: restart_apic_timer_count: Timer is restarted (0x%08x)\n", val);
 }
@@ -332,7 +334,7 @@ void ap_configure_scheduler_timer()
     write_apic_register(kMPApicBase + APIC_LVT_TIMER, lvtValue);
     
     //NOTE: localAPICTimerSpeed is how many times the local APIC timer ticks in 1 second
-    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * 3);  //Trigger X times per second based on config setting
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * TIMER_MAGIC_VALUE); // Trigger X times per second based on config setting
     printd (DEBUG_SMP, "AP: ap_configure_scheduler_timer: Timer is configured (0x%08x) to fire INT 0x%02x every %u ticks (ticks per second=%u)\n", 
         lvtValue, 
         IPI_TIMER_SCHEDULE_VECTOR, 
