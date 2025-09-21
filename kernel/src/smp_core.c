@@ -1,5 +1,7 @@
 #include <stdint.h>
+#include <stddef.h>
 #include "smp_core.h"
+#include "smp_offsets.h"
 #include "x86_64.h"
 #include "CONFIG.h"
 #include "msr.h"
@@ -93,6 +95,8 @@ void init_core_local_storage(unsigned apic_id)
 	core_local_storage_t *cls = (core_local_storage_t*)coreBase;
 	cls->apic_id = apic_id;
 	cls->self = cls;
+	cls->tss = tss_get_for_cpu(apic_id);
+	cls->kernel_rsp0 = cls->tss ? cls->tss->rsp0 : 0;
 	kMPEOIOffset = kMPApicBase | APIC_EOI_OFFSET;
 	printd(DEBUG_THREAD | DEBUG_DETAILED, "Core local storage initialized to 0%16lx for core %u\n", coreBase, apic_id);
 }
@@ -158,7 +162,7 @@ void ap_wakeup_entry() {
 
     // Set up the rest of the AP initialization
     load_gdt_and_jump(&kGDTr);
-    init_tss();
+    tss_initialize_cpu(temp_apic_id);
     asm volatile ("lidt %0" : : "m" (kIDTPtr));
 
 	// Set up the AP stack
@@ -167,9 +171,15 @@ void ap_wakeup_entry() {
 
     __asm__("mov rsp, %0\n"::"r" (stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t)));
 	
+    tss_set_rsp0(temp_apic_id, stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t));
+
     init_core_local_storage(temp_apic_id);
 
 	tempCls = get_core_local_storage();
+    if (tempCls)
+    {
+        tempCls->kernel_rsp0 = stackVirtualAddress + AP_STACK_SIZE - sizeof(uintptr_t);
+    }
 
 	// Initialize the AP after stack switch (set spurious vector, enable interrupts, etc.)
     ap_wakeup_after_stack_switch(temp_apic_id, stackVirtualAddress, stackPhysicalAddress);

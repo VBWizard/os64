@@ -50,7 +50,7 @@ void init_GDT()
 	kGDTr.base = (uintptr_t)kGDT;
 	kGDTr.limit = sizeof(gdt_entry_t) * GDT_ENTRIES;
 
-	load_gdt_and_jump(&kGDTr);
+    load_gdt_and_jump(&kGDTr);
 
-	init_tss();
+    tss_initialize_cpu(0);
 }
