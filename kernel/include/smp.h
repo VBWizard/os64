@@ -5,6 +5,7 @@
 #include "mpspec_def.h"
 #include "thread.h"
 #include "tss.h"
+#include "task.h"
 
 #define MAX_CPUS 24
 #define APIC_EOI_OFFSET    0xB0
@@ -62,6 +63,7 @@ typedef struct
 	bool coreAwoken, coreInitialized;
 	tss_t *tss;
 	uint64_t kernel_rsp0;
+    task_t *task;
 } core_local_storage_t;
 
 

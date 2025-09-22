@@ -735,6 +735,8 @@ void scheduler_run_new_thread()
             mp_ForkReturn[apic_id] = mp_isrSavedRSP[apic_id];
             taskToRun->justForked = 0;
         }
+        //Update the core local storage task
+        cls->task = taskToRun;
 	} //New thread loaded
 }
 

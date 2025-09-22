@@ -100,7 +100,7 @@ void create_kernel_task()
 	parentTask.stdout = STDOUT;
 	parentTask.stderr = STDERR;
 	kKernelTask = task_create("ktask", 0, NULL, &parentTask, true, 0);
-	scheduler_init();
+    scheduler_init();
 	scheduler_submit_new_task(kKernelTask);
 	mp_CoreHasRunScheduledThread[0] = true;
 }
@@ -149,6 +149,10 @@ void kernel_init()
 
 	remap_irq0_to_apic(0x20);
 
+    // We need the cls->task to be populated for running tests, so ...
+    // put the kernel task in the cls because it'll be the first task to start running
+    get_core_local_storage()->task = kKernelTask;
+    kKernelTask->pml4 = (pt_entry_t*)kKernelPML4v;
     // Init and run tests before configuring and enabling the scheduler
     test_framework_init();
     test_run_all();

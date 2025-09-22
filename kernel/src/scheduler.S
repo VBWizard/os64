@@ -85,10 +85,8 @@ _schedule_ap:
     # 0x20: EFLAGS
     # 0x28: ESP - only if we're returning to a different privilege level
     # 0x30: SS - only if we're returning to a different privilege level
-    # NOTE: Throughout this routine we will use EAX (the apic_id) for the index into each mp_isrSaved array variable
-    # and EBX for the data to be stored to each mp_isrSaved array variable
-# remarked this out and am calling _schedule_ap directly instead of vector158/vector161
-#    add rsp, 8                          # get rid of vector158/vector161 return address
+    # NOTE: Throughout this routine we will use RAX (the apic_id) for the index into each mp_isrSaved array variable
+    # and RBX for the data to be stored to each mp_isrSaved array variable
 	sti
     push rbx                            # Save original EBX value
 

@@ -6,6 +6,7 @@
 #include "exceptions.h"
 #include "dlist.h"
 #include <stdint.h>
+#include "smp_core.h"
 
 static test_case_t g_test_cases[TEST_MAX_CASES];
 static size_t g_test_case_count = 0;
@@ -166,12 +167,27 @@ static bool test_vma_insert_and_lookup(void)
 	return true;
 }
 
+bool test_vma_page_fault_resolved()
+{
+    uintptr_t test_addr = 0x400000; // Some unused safe test address
+    vma_t *vma = vma_create(test_addr, test_addr + PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, NULL, 0);
+    vma_add(get_core_local_storage()->task, vma);
+
+    uint64_t old_faults = kPageFaultCount;
+
+    volatile uint32_t *ptr = (volatile uint32_t *)test_addr;
+    *ptr = 0xBEEFCAFE; // Should trigger page fault and be resolved
+
+    return (kPageFaultCount == old_faults + 1);
+}
+
 static void register_builtin_tests(void)
 {
     test_register("kmalloc_not_null", test_kmalloc_not_null);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set);
     test_register("dlist_basic_operations", test_dlist_basic_operations);
     test_register("vma_insert_and_lookup", test_vma_insert_and_lookup);
+    test_register("vma_page_fault_resolved", test_vma_page_fault_resolved);
 }
 
 void test_framework_init(void)

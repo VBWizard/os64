@@ -9,6 +9,8 @@
 #include "log.h"
 #include "memory/paging.h"
 #include "exceptions.h"
+#include "memory/vma.h"
+#include "kmalloc.h"
 
 uint64_t gLastFaultRbp = 0;
 uint64_t gLastFaultRsp = 0;
@@ -164,35 +166,64 @@ static void log_page_fault_bits(uint64_t error_code)
 
 void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
-	gLastFaultErrorCode = error_code;
-    kPageFaultCount++;
     if (kTestingPageFaults)
     {
-        if (gLastFaultRsp != 0 && kTestingPageFaultResumeRip != 0) {
-			uint64_t *stack = (uint64_t*)gLastFaultRsp;
-			// Error code at stack[0], return RIP at stack[1]
-			stack[1] = kTestingPageFaultResumeRip;
-		}
-		printd(DEBUG_EXCEPTIONS, "\tPage fault occurred during test mode, returning without halt.\n");
-        //Clear the CR2
+        if (gLastFaultRsp != 0 && kTestingPageFaultResumeRip != 0)
+        {
+            uint64_t *stack = (uint64_t *)gLastFaultRsp;
+            // Error code at stack[0], return RIP at stack[1]
+            stack[1] = kTestingPageFaultResumeRip;
+        }
+        printd(DEBUG_EXCEPTIONS, "\tPage fault occurred during test mode, returning without halt.\n");
+        // Clear the CR2
         __asm__ __volatile__(
             "xor rax, rax\n\t"
             "mov cr2, rax\n\t");
         return;
     }
 
-    printf("\nPAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%016lx\n", rip, cr2, error_code);
-	if (kLoggingInitialized) {
-		printd(DEBUG_EXCEPTIONS, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%016lx\n", rip, cr2, error_code);
-	}
+    printd(DEBUG_EXCEPTIONS, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
+    task_t *task = get_core_local_storage()->task;
+    vma_t *vma = vma_lookup(task, cr2);
+    if (!vma)
+    {
+        printd(DEBUG_EXCEPTIONS, "No VMA found for address 0x%016lx.\n", cr2);
+        log_page_fault_bits(error_code);
+        dump_stack_trace(rip);
+        panic("Paging exception: Invalid memory access with no VMA");
+    }
 
-	log_page_fault_bits(error_code);
+    if (vma->loaded)
+    {
+        printd(DEBUG_EXCEPTIONS, "VMA found for address 0x%016lx, but already loaded\n", cr2);
+        log_page_fault_bits(error_code);
+        dump_stack_trace(rip);
+        panic("Paging exception: Invalid memory access, VMA already loaded");
+    }
 
-	dump_stack_trace(rip);
+    printd(DEBUG_EXCEPTIONS, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x)\n", vma->start, vma->end, vma->prot);
 
-	printf("Unrecoverable page fault. Panicking.\n");
-	panic("PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%016lx\n", rip, cr2, error_code);
+    // Calculate aligned fault address
+    uintptr_t aligned = cr2 & ~(PAGE_SIZE - 1);
+
+    // Allocate physical page
+    void *phys = kmalloc(PAGE_SIZE) - kHHDMOffset;
+    if (!phys)
+        panic("Failed to allocate page during fault resolution");
+
+    // Map the page into task's address space
+    uint64_t flags = PAGE_PRESENT | PAGE_USER;
+    if (vma->prot & PROT_WRITE)
+        flags |= PAGE_WRITE;
+
+    paging_map_page((pt_entry_t *)task->pml4, aligned, (uintptr_t)phys, flags);
+    vma->loaded = true;
+
+    printd(DEBUG_EXCEPTIONS, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
+
+    kPageFaultCount++;
 }
+
 
 void handle_machine_check(uint64_t rip) {
     exception_panic("Machine Check (#MC) occurred!", rip, 0xFFFFFFFFFFFFFFFF);
