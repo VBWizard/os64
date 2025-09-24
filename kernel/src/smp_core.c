@@ -39,7 +39,7 @@ extern volatile uintptr_t kMPApicBase;
 extern void _write_eoi();
 
 #define APIC_EOI_OFFSET 0xB0
-#define SMP_MAGIC_NUMBER 2
+#define SMP_MAGIC_NUMBER 3
 
 void write_eoi() {
     __asm__ volatile (

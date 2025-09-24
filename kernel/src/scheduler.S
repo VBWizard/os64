@@ -77,25 +77,27 @@ process_signals_disabled:
 .globl _schedule_ap
 .type _schedule_ap, @function
 _schedule_ap:
-    # NOTE: Stack is:
-    # 0x00: Vector number
-    # 0x08: Error code (if applicable)
-    # 0x10: RIP
-    # 0x18: CS
-    # 0x20: EFLAGS
-    # 0x28: ESP - only if we're returning to a different privilege level
-    # 0x30: SS - only if we're returning to a different privilege level
+    # NOTE: On entry the CPU pushed:
+    # 0x00: RIP
+    # 0x08: CS
+    # 0x10: RFLAGS
+    # 0x18: RSP (only if returning to a different privilege level)
+    # 0x20: SS  (only if returning to a different privilege level)
+    # We then push RBX below that frame before doing any work.
     # NOTE: Throughout this routine we will use RAX (the apic_id) for the index into each mp_isrSaved array variable
     # and RBX for the data to be stored to each mp_isrSaved array variable
 	sti
     push rbx                            # Save original EBX value
 
     mov rbx, rax                        # Put the original EAX value in EBX
-	mov rax, [gs:8]						# APIC_ID is the second field of the core_local_storage_t struct
 	# APIC_ID is now in the RAX register
+	mov rax, [gs:8]						# APIC_ID is the second field of the core_local_storage_t struct
+
+    push rbx
+    lea rbx, [rsp + 16]                 # Adjust rsp to reflect state *before* push rbx and before any changes
+	mov [temp_rsp + rax * 8], rbx
 
 	# Verify we aren't in the scheduler ISR already.  If so then we can't continue.  Do this as early as possible
-    push rbx
 	mov bl, [mp_inScheduler + rax]
 	cmp bl, 0
     pop rbx
@@ -120,7 +122,6 @@ over_check_signals:
     # Restore RBX value from when we entered the routine
     pop rbx 
 	
-	mov [temp_rsp + rax * 8], rsp
     mov [mp_isrSavedRBX + rax * 8], rbx # Save original EBX value in the array
 
     mov rbx, cr3
@@ -157,21 +158,21 @@ dontSkipRegisters:
     mov ebx, fs
     mov [mp_isrSavedFS + rax * 8], rbx
     # Figure out if the CS was a kernel process or not
-    mov rbx, [rsp+8]
+    # Interrupt frame layout: [0]=RIP, [8]=CS, [16]=RFLAGS, [+24]=RSP, [+32]=SS (ring3 only)
+    mov rcx, [temp_rsp + rax * 8]
+    mov rbx, [rcx + 8]
     and rbx, 3
     cmp rbx, 3
     jne same_priv_lvl_save_stack_and_flags
     
     # For ring 3 processes, we need to save the SS/ESP/Flags from the stack
     # TODO: Fix for ring 3!!!
-	mov rbx, [rsp+24]
+	mov rbx, [rcx + 32]
     mov [mp_isrSavedSS + rax * 8], rbx
-    # Get the RSP value from the temporary rsp location
-	mov rbx, [temp_rsp + rax * 8]
-    # Pop the interrupt stack frame off the stack (ring 3 is SS/RSP/RFLAGS/CS/RIP)
-	add rbx, 40
+    # Get the RSP value from the interrupt stack frame (ring 3 pushes RIP/CS/RFLAGS/RSP/SS)
+	mov rbx, [rcx + 24]
 	mov [mp_isrSavedRSP + rax * 8], rbx
-    mov rbx, [rsp+16]
+    mov rbx, [rcx + 16]
     mov [mp_isrSavedRFlags + rax * 8], rbx
     jmp over_save_samel_priv_lvl_stack_and_flags
 
@@ -179,9 +180,8 @@ same_priv_lvl_save_stack_and_flags:
     # For ring 0 processes, we need to save the SS/ESP/Flags from current values
     mov rbx, ss
     mov [mp_isrSavedSS + rax * 8], rbx
-    # Get the RSP value from the temporary rsp location
+    # Get the RSP value from the interrupt stack frame (ring 0 pushes RIP/CS/RFLAGS)
 	mov rbx, [temp_rsp + rax * 8]
-    # Pop the interrupt stack frame off the stack (ring 0 should be RFLAGS/CS/RIP bit with IRETQ we have to also include SS/RSP)
 	add rbx, 40
     mov [mp_isrSavedRSP + rax * 8], rbx
     pushfq
@@ -190,12 +190,11 @@ same_priv_lvl_save_stack_and_flags:
 
 over_save_samel_priv_lvl_stack_and_flags:
 	# Save CS/RIP for both rings (64-bit mode)
-	mov rbx, [temp_rsp + rax * 8]
-	mov rbx, [rbx + 8]
+	mov rcx, [temp_rsp + rax * 8]
+	mov rbx, [rcx + 8]
 	mov [mp_isrSavedCS + rax * 8], rbx  # Save 64-bit CS value
 
-	mov rbx, [temp_rsp + rax * 8]
-	mov rbx, [rbx]
+	mov rbx, [rcx]
 	mov [mp_isrSavedRIP + rax * 8], rbx # Save 64-bit RIP value
 
     
