@@ -780,6 +780,6 @@ void scheduler_do()
     uint64_t timeInScheduler = (diff/kCPUCyclesPerSecond)*100;
     printd(DEBUG_SCHEDULER,"%lu ticks expired (%lu CPU cycles)\n",timeInScheduler, diff);
 #endif
-    printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s\n", ((task_t *)(cls->currentThread->ownerTask))->path);
+    printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s\n", ((task_t *)(cls->task))->path);
     printd(DEBUG_SCHEDULER,"**************************************************************************\n");
 }

@@ -11,7 +11,7 @@
 #define LOG_BUFFER_SIZE (1024 * 1024 * 1) // Size of buffer per core
 #define MAX_LOG_MESSAGE_SIZE 256
 #define MAX_BATCH_SIZE 1000  // Process up to X messages before sleeping
-#define LOGD_SLEEP_TICKS (TICKS_PER_SECOND * 5)  // Sleep for X seconds to let the logs build up
+#define LOGD_SLEEP_TICKS (TICKS_PER_SECOND * 1)  // Sleep for X seconds to let the logs build up
 typedef struct log_entry {
     uint64_t timestamp;
     uint64_t tick_count;

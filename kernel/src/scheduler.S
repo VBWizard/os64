@@ -87,24 +87,24 @@ _schedule_ap:
     # NOTE: Throughout this routine we will use RAX (the apic_id) for the index into each mp_isrSaved array variable
     # and RBX for the data to be stored to each mp_isrSaved array variable
 	sti
-    push rbx                            # Save original EBX value
+    push rbx                            # Save original RBX value
 
-    mov rbx, rax                        # Put the original EAX value in EBX
+    mov rbx, rax                        # Put the original RAX value in RBX
 	# APIC_ID is now in the RAX register
 	mov rax, [gs:8]						# APIC_ID is the second field of the core_local_storage_t struct
 
-    push rbx
+    push rbx                            # Save original RAX value
     lea rbx, [rsp + 16]                 # Adjust rsp to reflect state *before* push rbx and before any changes
 	mov [temp_rsp + rax * 8], rbx
 
 	# Verify we aren't in the scheduler ISR already.  If so then we can't continue.  Do this as early as possible
 	mov bl, [mp_inScheduler + rax]
 	cmp bl, 0
-    pop rbx
+    pop rbx                             # Restore original RAX value to RBX
 	je not_in_scheduler_continue
 already_in_scheduler_exit:
-	mov rax, rbx                        # Bugfix 08/18/2025: Restore rax from rbx before returning
-    pop rbx
+    mov rax, rbx                        # Bugfix 08/18/2025: Restore rax from rbx before returning
+    pop rbx                             # Restore original RBX value
     call _write_eoi
 	iretq
 
