@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include "CONFIG.h"
 #include "sprintf.h"
+#include "memcpy.h"
 #include "memset.h"
 #include "io.h"
 #include "printd.h"
@@ -12,7 +13,6 @@
 #include "x86_64.h"
 #include "log.h"
 #include "strlen.h"
-#include "strcpy.h"
 
 #define MAX_FIRST_MESSAGE_SIZE MAX_LOG_MESSAGE_SIZE - 10 // Leave space for prefix and null terminator
 
@@ -55,19 +55,21 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
 		size_t offset = 0;
 		while (offset < msg_len) {
             char chunk[MAX_LOG_MESSAGE_SIZE];
+            size_t chunk_capacity = (offset == 0) ? MAX_FIRST_MESSAGE_SIZE : MAX_LOG_MESSAGE_SIZE;
+            size_t max_payload = chunk_capacity - 1; // leave room for null terminator
+            size_t remaining = msg_len - offset;
+            size_t copy_len = remaining < max_payload ? remaining : max_payload;
 
-            //If the message will be split, the first message needs to be 10 characters less than the length of the string
-            //  Additional messages can be the entire MAX_LOG_MESSAGE_SIZE
-            if (offset == 0) {
-                msg_continued = false;
-                strncpy(chunk, print_buf, MAX_FIRST_MESSAGE_SIZE);
-            } else {
-                msg_continued = true;
-                strncpy(chunk, print_buf + offset, MAX_LOG_MESSAGE_SIZE);
-            }
-            offset += strlen(chunk); // Only increment by the actual length of printed data
-            chunk[MAX_FIRST_MESSAGE_SIZE - 1] = '\0'; // Make sure the last character of the string is a null terminator
+            if (copy_len == 0)
+                break; // Safety: should not happen, but avoid infinite loop
+
+            memcpy(chunk, print_buf + offset, copy_len);
+            chunk[copy_len] = '\0';
+
+            msg_continued = (offset != 0);
             log_store_entry(core, tick_count, priority, category, msg_continued, chunk);
+
+            offset += copy_len;
         }
     }
 	else

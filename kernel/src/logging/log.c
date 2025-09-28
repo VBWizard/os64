@@ -110,7 +110,7 @@ bool logd_thread(bool daemon) {
                         else
                             snprintf(print_buf2,
                                      MAX_LOG_MESSAGE_SIZE,
-                                     "%u (0x%04x) AP%u: %s",
+                                     "%lu (0x%04lx) AP%u: %s",
                                      entry->timestamp,
                                      entry->threadID,
                                      entry->core_id,
