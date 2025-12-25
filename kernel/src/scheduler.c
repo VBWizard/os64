@@ -62,6 +62,12 @@ extern uint64_t kHHDMOffset;
 
 const char* THREAD_STATE_NAMES[] = {"None","Running","Runnable","Stopped","Uninterruptable Sleep","Interruptable Sleep","Exited","Zombie"};
 
+// Trap into the scheduler ISR directly so voluntary yields don't depend on a LAPIC IPI.
+static inline void scheduler_invoke_vector(void)
+{
+	asm volatile("int %0" :: "i"(IPI_MANUAL_SCHEDULE_VECTOR) : "memory");
+}
+
 void scheduler_enable()
 {
 	core_local_storage_t *cls = get_core_local_storage();
@@ -560,8 +566,8 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 		task = (task_t*)thread->ownerTask;
 		oldTicks=thread->prioritizedTicksInRunnable;
 		//This is where we increment all the runnable ticks, based on the process' priority
-		if (!thread->idleThread)
-			thread->prioritizedTicksInRunnable+=(RUNNABLE_TICKS_INTERVAL-task->priority)+1;
+        if (!thread->idleThread && !justBrowsing)
+            thread->prioritizedTicksInRunnable+=(RUNNABLE_TICKS_INTERVAL-task->priority)+1;
 		if (!justBrowsing)
 			printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t%u-Thr 0x%08x (tsk 0x%08x-%s), pri=%i, oldt=%u, newt=%u (runt=%u)\n",
 					queEntryNum,
@@ -627,7 +633,7 @@ void scheduler_yield(core_local_storage_t *cls)
 
 	//If another thread is ready to run then trigger the scheduler, otherwise just hlt until the next scheduling IPI
 	if (thread != NO_THREAD && thread->threadID != cls->threadID)
-		scheduler_trigger(cls);
+		scheduler_invoke_vector();
 	else
 		__asm__("sti\nhlt\n");
 }
