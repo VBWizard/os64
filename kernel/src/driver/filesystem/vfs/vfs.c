@@ -146,7 +146,8 @@ int vfs_mount_root_part(char* rootPartUUID)
 						printd(DEBUG_BOOT, "BOOT: Root filesystem found, mounting\n");
 						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps);
 						mounted=true;
-						break;
+                        printd(DEBUG_BOOT, "BOOT: Root filesystem successfully mounted\n");
+                        break;
 					default: 
 						panic("Could not mount root filesystem, type=%u", kBlockDeviceInfo[idx].block_device->partition_table->parts[partno]->filesystemType);
 					break;

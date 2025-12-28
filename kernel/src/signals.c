@@ -71,13 +71,14 @@ void processSignals()
 	// Update CR3 only if needed.
 	if (priorCR3 != (uint64_t)kKernelPML4)
 	{
-		__asm__ __volatile__(
-			"mov cr3, %[cr3Val]\n"
-			:
-			: [cr3Val] "r"((uint64_t)kKernelPML4)
-			: "memory"
-		);
-	}
+        // TODO: Temporary, remove me!
+        panic("processSignals: Should not get here!");
+        __asm__ __volatile__(
+            "mov cr3, %[cr3Val]\n"
+            :
+            : [cr3Val] "r"((uint64_t)kKernelPML4)
+            : "memory");
+    }
 
     printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tScanning Interruptable Sleep queue\n");
 

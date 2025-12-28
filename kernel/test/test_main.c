@@ -12,7 +12,9 @@ static test_case_t g_test_cases[TEST_MAX_CASES];
 static size_t g_test_case_count = 0;
 static bool g_framework_initialized = false;
 
-bool test_register(const char *name, bool (*func)(void))
+bool test_vma_file_backed_page_fault_resolved(void);
+
+bool test_register(const char *name, bool (*func)(void), int phase)
 {
     if (g_test_case_count >= TEST_MAX_CASES) {
         const char *test_name = name ? name : "<unnamed>";
@@ -22,6 +24,7 @@ bool test_register(const char *name, bool (*func)(void))
 
     g_test_cases[g_test_case_count].name = name;
     g_test_cases[g_test_case_count].func = func;
+    g_test_cases[g_test_case_count].phase = phase;
     g_test_case_count++;
     return true;
 }
@@ -183,11 +186,12 @@ bool test_vma_page_fault_resolved()
 
 static void register_builtin_tests(void)
 {
-    test_register("kmalloc_not_null", test_kmalloc_not_null);
-    test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set);
-    test_register("dlist_basic_operations", test_dlist_basic_operations);
-    test_register("vma_insert_and_lookup", test_vma_insert_and_lookup);
-    test_register("vma_page_fault_resolved", test_vma_page_fault_resolved);
+    test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
+    test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
+    test_register("dlist_basic_operations", test_dlist_basic_operations, TEST_PHASE_PREBOOT);
+    test_register("vma_insert_and_lookup", test_vma_insert_and_lookup, TEST_PHASE_PREBOOT);
+    test_register("vma_page_fault_resolved", test_vma_page_fault_resolved, TEST_PHASE_PREBOOT);
+    test_register("vma_file_backed_page_fault_resolved", test_vma_file_backed_page_fault_resolved, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)
@@ -200,7 +204,7 @@ void test_framework_init(void)
     register_builtin_tests();
 }
 
-void test_run_all(void)
+static void test_run_phase(int phase, const char *label)
 {
     if (!g_framework_initialized) {
         test_framework_init();
@@ -209,11 +213,15 @@ void test_run_all(void)
     size_t passed = 0;
     size_t failed = 0;
 
-    printd(DEBUG_TESTS, "BUILT-IN TESTS: Running all tests:\n");
+    printd(DEBUG_TESTS, "BUILT-IN TESTS: Running %s tests:\n", label);
     for (size_t index = 0; index < g_test_case_count; ++index)
     {
         test_case_t *test = &g_test_cases[index];
         const char *name = test->name ? test->name : "<unnamed>";
+
+        if (test->phase != phase) {
+            continue;
+        }
 
         bool result = false;
         if (test->func != NULL) {
@@ -239,4 +247,14 @@ void test_run_all(void)
             __asm__ volatile ("cli; hlt");
         }
     }
+}
+
+void test_run_preboot(void)
+{
+    test_run_phase(TEST_PHASE_PREBOOT, "pre-boot");
+}
+
+void test_run_postboot(void)
+{
+    test_run_phase(TEST_PHASE_POSTBOOT, "post-boot");
 }

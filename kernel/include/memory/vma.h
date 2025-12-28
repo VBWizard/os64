@@ -51,6 +51,8 @@ void vma_add(task_t* task, vma_t* vma);
 
 vma_t* vma_lookup(task_t* task, uintptr_t addr);
 
+uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr);
+
 void vma_destroy(vma_t* vma);
 
 #endif // MEMORY_VMA_H

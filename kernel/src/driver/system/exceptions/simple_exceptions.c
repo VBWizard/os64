@@ -206,17 +206,16 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     // Calculate aligned fault address
     uintptr_t aligned = cr2 & ~(PAGE_SIZE - 1);
 
-    // Allocate physical page
-    void *phys = kmalloc(PAGE_SIZE) - kHHDMOffset;
+    uintptr_t phys = vma_resolve_backing_page(vma, cr2);
     if (!phys)
-        panic("Failed to allocate page during fault resolution");
+        panic("Failed to resolve page during fault resolution");
 
     // Map the page into task's address space
     uint64_t flags = PAGE_PRESENT | PAGE_USER;
     if (vma->prot & PROT_WRITE)
         flags |= PAGE_WRITE;
 
-    paging_map_page((pt_entry_t *)task->pml4, aligned, (uintptr_t)phys, flags);
+    paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
     vma->loaded = true;
 
     printd(DEBUG_EXCEPTIONS, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);

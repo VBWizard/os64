@@ -55,7 +55,7 @@ __uint128_t kDebugLevel = 0;
 uintptr_t kKernelStack = 0;
 char kKernelCommandline[512];
 bool kOverrideFileLogging;
-char kRootPartUUID[36] = {0};
+char kRootPartUUID[37] = {0};
 vfs_filesystem_t* kRootFilesystem=NULL;
 char startTime[100] = {0};
 uint64_t lastTime = 0;
@@ -152,10 +152,11 @@ void kernel_init()
     // We need the cls->task to be populated for running tests, so ...
     // put the kernel task in the cls because it'll be the first task to start running
     get_core_local_storage()->task = kKernelTask;
-    kKernelTask->pml4 = (pt_entry_t*)kKernelPML4v;
+    kKernelTask->pml4 = (pt_entry_t*)kKernelPML4;
+    kKernelTask->pml4v = (pt_entry_t*)kKernelPML4v;
     // Init and run tests before configuring and enabling the scheduler
     test_framework_init();
-    test_run_all();
+    test_run_preboot();
 
     for (int cnt = 0; cnt < kMPCoreCount; cnt++)
     {
@@ -185,12 +186,14 @@ void kernel_init()
 
 	kProcessSignals = true;
 
-/*
+    printd(DEBUG_BOOT, "BOOT: If a ROOTPARTUUID (%s) was passed in the commandline, we'll load it.\n", &kRootPartUUID);
 	if (kRootPartUUID[0])
 	{
 		printd(DEBUG_BOOT, "BOOT: ROOTPARTUUID passed in commandline.  Will mount '%s' as the root partition\n",&kRootPartUUID);
 		vfs_mount_root_part((char*)&kRootPartUUID);
 	}
+
+    test_run_postboot();
 
 	if (kRootFilesystem!=NULL)
 	{
@@ -199,7 +202,7 @@ void kernel_init()
 	 		panic("Root filesystem disk test failed: %u\n",lResult);
 		kRootFilesystem->fops->uninitialize(kRootFilesystem);
 	 }
-*/
+
 	shutdown();
 }
 

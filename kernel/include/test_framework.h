@@ -14,10 +14,17 @@
 typedef struct test_case {
     const char *name;
     bool (*func)(void);
+    int phase;
 } test_case_t;
 
-bool test_register(const char *name, bool (*func)(void));
+enum {
+    TEST_PHASE_PREBOOT = 0,
+    TEST_PHASE_POSTBOOT = 1
+};
+
+bool test_register(const char *name, bool (*func)(void), int phase);
 void test_framework_init(void);
-void test_run_all(void);
+void test_run_preboot(void);
+void test_run_postboot(void);
 
 #endif

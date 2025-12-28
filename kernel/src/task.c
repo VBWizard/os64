@@ -17,6 +17,7 @@
 #include "scheduler.h"
 #include "panic.h"
 #include "log.h"
+#include "elf_loader.h"
 
 extern volatile uint64_t kSystemCurrentTime;
 
@@ -75,6 +76,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 {
 	uintptr_t mapPages;
 	bool isIdleTask = strnstr(path, "/idle",10);
+	bool isLogdTask = strnstr(path, "/logd",10);
 	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
 
     //Copy the path (parameter) value from the parentTask's memory.
@@ -99,10 +101,16 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		newTask->threads->regs.RIP = (uint64_t)&task_idle_loop;
 	}
 
-	if (strnstr(path, "/logd",10))
+	if (isLogdTask)
 	{
 		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
 		newTask->threads->regs.RIP = (uint64_t)&logd_thread;
+	}
+
+	if (!isIdleTask && !isLogdTask && kRootFilesystem != NULL)
+	{
+		if (elf_load_task_from_path(newTask, newTask->path) != 0)
+			panic("task_create: Failed to load ELF for task %s\n", newTask->path);
 	}
 
 	gmtime((time_t*)&kSystemCurrentTime,&newTask->startTime);

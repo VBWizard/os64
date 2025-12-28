@@ -1,10 +1,63 @@
 #include "memory/vma.h"
-
+#include "memory/mmap.h"
 #include "memory/kmalloc.h"
+#include "paging.h"
+#include "panic.h"
+#include "filesystem/filesystem.h"
 
 static inline bool vma_contains(const vma_t* vma, uintptr_t addr)
 {
     return vma != NULL && addr >= vma->start && addr < vma->end;
+}
+
+// Resolves and returns the physical address of a page for the given faulting address.
+// This function handles anonymous and file-backed memory only (CoW later).
+uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr)
+{
+    uintptr_t page_offset = (fault_addr & ~(PAGE_SIZE - 1)) - vma->start;
+    uintptr_t phys = 0;
+
+    if ((vma->flags & MAP_ANONYMOUS) || vma->file == NULL)
+    {
+        void *virt = kmalloc_aligned(PAGE_SIZE); // Page-aligned for direct mapping
+        phys = (uintptr_t)virt - kHHDMOffset;
+    }
+    else
+    {
+        vfs_file_t *file = (vfs_file_t *)vma->file;
+        vfs_file_operations_t *fops = NULL;
+        uint64_t file_offset = vma->file_offset + page_offset;
+
+        if (file == NULL)
+            panic("vma_resolve_backing_page: Null file backing");
+
+        if (file->fops != NULL)
+        {
+            fops = file->fops;
+        }
+        else if (file->owner != NULL)
+        {
+            fops = ((vfs_filesystem_t *)file->owner)->fops;
+        }
+
+        if (fops == NULL || fops->read == NULL || fops->seek == NULL)
+            panic("vma_resolve_backing_page: File ops not available for backing");
+
+        // Allocate a physical page
+        void *virt = kmalloc_aligned(PAGE_SIZE);
+        if (!virt)
+            panic("Failed to allocate page for file-backed VMA");
+
+        phys = (uintptr_t)virt - kHHDMOffset;
+
+        if (fops->seek(file, (long)file_offset, SEEK_SET) < 0)
+            panic("vma_resolve_backing_page: Failed to seek file backing");
+
+        int bytes_read = fops->read(file, virt, PAGE_SIZE);
+        if (bytes_read < 0)
+            panic("vma_resolve_backing_page: Failed to read file backing");
+    }
+    return phys;
 }
 
 vma_t* vma_create(uintptr_t start,

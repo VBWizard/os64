@@ -203,7 +203,8 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 
     (*vfs_file)->handle = fat_file;
 	(*vfs_file)->f_path = (void*)path;
-	(*vfs_file)->owner = 0x0;
+	(*vfs_file)->fops = vfs_fs != NULL ? vfs_fs->fops : &fat_fops;
+	(*vfs_file)->owner = vfs_fs;
     return 0;	
 }
 

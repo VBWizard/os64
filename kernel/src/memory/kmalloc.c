@@ -44,7 +44,6 @@ void *kmalloc(uint64_t length)
 void *kmalloc_dma(uint64_t length)
 {
 	printd(DEBUG_KMALLOC,"kmalloc_dma: Allocating %lu bytes\n", length);
-	
 	int a=0;
 	if (length >= 0x2000000)
 		a++;
@@ -64,6 +63,10 @@ void *kmalloc_dma(uint64_t length)
 	return (void*)(uintptr_t)addr;
 }
 
+/// @brief Same as kmalloc except allocates the memory in DMA space
+/// @param Physical address to assign
+/// @param length
+/// @return
 void *kmalloc_dma32_address(uint32_t address, uint64_t length)
 {
 	uint64_t addr = allocate_memory_at_address(address, length, true);
@@ -75,7 +78,10 @@ void *kmalloc_dma32_address(uint32_t address, uint64_t length)
 	return (void*)(uintptr_t)address;
 }
 
-void kfree(void *address) 
+/// @brief Free previously kmalloc'd space
+/// @param
+/// @return
+void kfree(void *address)
 {
 	uintptr_t physicalAddress = (uintptr_t)address > kHHDMOffset?(uintptr_t)address - kHHDMOffset:(uintptr_t)address;
     // Free the allocation (remove the HHDM offset from the address when freeing it)
