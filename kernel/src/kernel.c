@@ -195,6 +195,14 @@ void kernel_init()
 
     test_run_postboot();
 
+    if (kRootFilesystem != NULL)
+    {
+        // Temporary: run a tiny kernel-mode ELF to validate the loader.
+        task_t *testElfTask = task_create("/bin/test_elf", 0, NULL, kKernelTask, true, 0);
+        scheduler_submit_new_task(testElfTask);
+        wait(250);
+    }
+
 	if (kRootFilesystem!=NULL)
 	{
 	 	int lResult = testVFS(kRootFilesystem);

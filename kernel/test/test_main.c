@@ -3,6 +3,7 @@
 #include "memory/kmalloc.h"
 #include "memory/memset.h"
 #include "memory/vma.h"
+#include "paging.h"
 #include "exceptions.h"
 #include "dlist.h"
 #include <stdint.h>
@@ -172,16 +173,25 @@ static bool test_vma_insert_and_lookup(void)
 
 bool test_vma_page_fault_resolved()
 {
-    uintptr_t test_addr = 0x400000; // Some unused safe test address
+    uintptr_t test_addr = 0x60000000; // Keep clear of ELF loader test mapping.
+    task_t *task = get_core_local_storage()->task;
     vma_t *vma = vma_create(test_addr, test_addr + PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, NULL, 0);
-    vma_add(get_core_local_storage()->task, vma);
+    vma_add(task, vma);
 
     uint64_t old_faults = kPageFaultCount;
 
     volatile uint32_t *ptr = (volatile uint32_t *)test_addr;
     *ptr = 0xBEEFCAFE; // Should trigger page fault and be resolved
 
-    return (kPageFaultCount == old_faults + 1);
+    bool ok = (kPageFaultCount == old_faults + 1);
+
+    paging_unmap_page((pt_entry_t *)task->pml4v, test_addr);
+    if (task->mmaps != NULL && vma->listItem != NULL) {
+        dlist_remove(task->mmaps, vma->listItem);
+    }
+    vma_destroy(vma);
+
+    return ok;
 }
 
 static void register_builtin_tests(void)
