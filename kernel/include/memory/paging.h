@@ -54,17 +54,17 @@ extern int kKernelPageMappingsCount;
 
 
 void paging_init(/*uint64_t kernel_physical, uint64_t kernel_virtual*/);
-void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physical_address, uint64_t flags);
+void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physical_address, uint64_t flags);
 
 void paging_map_pages(
-	pt_entry_t* pml4,
+	pt_entry_t* pml4v,
 	uint64_t virtual_address,
 	uint64_t physical_address,
 	uint64_t page_count,
 	uint64_t flags);
 
-void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address);
-void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t length);
+void paging_unmap_page(pt_entry_t *pml4v, uint64_t virtual_address);
+void paging_unmap_pages(pt_entry_t *pml4v, uint64_t virtual_address, size_t length);
 uintptr_t paging_walk_paging_table_keep_flags(pt_entry_t* pml4, uint64_t virtual_address, bool keepPageFlags);
 uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address);
 void validatePagingHierarchy(uintptr_t address);
