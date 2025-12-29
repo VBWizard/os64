@@ -176,3 +176,7 @@ install: all
 uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/share/$(OUTPUT)/$(OUTPUT)"
 	-rmdir "$(DESTDIR)$(PREFIX)/share/$(OUTPUT)"
+
+.PHONY: test-elf
+test-elf:
+	$(MAKE) -C test/elf OUTPUT=../../bin/test_elf CC="$(CC)" LD="$(LD)"

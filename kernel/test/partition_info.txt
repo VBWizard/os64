@@ -1,0 +1,1 @@
+Ima fat32 partition on the NVME disk

@@ -12,14 +12,20 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 
 # Define the base QEMU flags
 # -smp 2 
-QEMU_BASE_FLAGS = -m 8g -no-reboot \
+QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 2 \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
                   -d $(shell echo int,cpu_reset,pcall,guest_errors)
 				  
+# Disk image configuration
+DISK_IMAGE ?= $(CURDIR)/disk/os64.img
+DISK_OFFSET ?= 1048576
+DISK_SIZE_MB ?= 64
+DISK_PARTUUID ?= 2f4fd02e-68b4-4c82-98bc-72467529b3fc
+
 # Define drive/device flags
 QEMU_DRIVE_FLAGS = \
-                  -drive file=/home/yogi/disk_images/nvme.img,if=none,id=nvme1 \
+                  -drive file=$(DISK_IMAGE),if=none,id=nvme1 \
                   -device nvme,drive=nvme1,serial=nvme1-serial \
                   #-drive file=/home/yogi/disk_images/sata.img,if=none,id=sata1 \
                   #-device ahci,id=ahci1 \
@@ -42,14 +48,14 @@ all-hdd: $(IMAGE_NAME).hdd
 
 # Local qemu: ~/src/qemu-9.2.0-rc0/build/
 .PHONY: run
-run: $(IMAGE_NAME).iso
+run: $(IMAGE_NAME).iso disk-populate
 	qemu-system-x86_64 \
 		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS)
 
-debug: $(IMAGE_NAME).iso
+debug: $(IMAGE_NAME).iso disk-populate
 	qemu-system-x86_64 \
 		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
@@ -57,7 +63,7 @@ debug: $(IMAGE_NAME).iso
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
 
 .PHONY: debug-hdd-eufi
-debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd
+debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd disk-populate
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -65,7 +71,7 @@ debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
 
 .PHONY: run-uefi
-run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso
+run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso disk-populate
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -74,14 +80,14 @@ run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd
-run-hdd: $(IMAGE_NAME).hdd
+run-hdd: $(IMAGE_NAME).hdd disk-populate
 	qemu-system-x86_64 \
 		-machine q35 \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
-run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd
+run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd disk-populate
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -104,6 +110,23 @@ kernel-deps:
 .PHONY: kernel
 kernel: kernel-deps
 	$(MAKE) -C kernel
+	$(MAKE) -C kernel test-elf
+
+.PHONY: disk
+disk:
+	@mkdir -p "$$(dirname $(DISK_IMAGE))"
+	dd if=/dev/zero of=$(DISK_IMAGE) bs=1M count=$(DISK_SIZE_MB)
+	sgdisk $(DISK_IMAGE) --new=1:2048:+32M --typecode=1:0700 --change-name=1:"os64" --partition-guid=1:$(DISK_PARTUUID)
+	mformat -F -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::
+
+.PHONY: disk-init
+disk-init: disk
+
+.PHONY: disk-populate
+disk-populate: disk-init kernel
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/bin > /dev/null 2>&1
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/test_elf ::/bin/test_elf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 
 # Removed this from both top and bottom of the next section
 #	rm -rf iso_root

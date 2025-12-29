@@ -106,6 +106,6 @@ int testVFS(vfs_filesystem_t *testFS)
 	else
         printd(DEBUG_TESTS, "Disk %s does not have a write function, skipping write tests\n", testFS->block_device_info->ATADeviceModel);
     kfree(contents);
-    printd(DEBUG_TESTS, "All VFS tests passed successfully.");
+    printd(DEBUG_TESTS, "BOOT: All VFS tests passed successfully.\n");
 	return 0;
 }
