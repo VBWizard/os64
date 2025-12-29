@@ -164,6 +164,7 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 		newThread->regs.RSP = newThread->esp0BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
 		newThread->regs.SS0 = GDT_KERNEL_DATA_ENTRY << 3;
 		newThread->regs.RSP0 = newThread->esp0BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
+		*(uintptr_t *)newThread->regs.RSP = (uintptr_t)&task_exit;
 	}
 	else
 	{

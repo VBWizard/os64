@@ -31,6 +31,30 @@ void task_idle_loop()
 	}
 }
 
+void task_exit(void)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	task_t *task = cls ? cls->task : NULL;
+
+	if (thread) {
+		thread->exited = true;
+		thread->retVal = 0;
+	}
+
+	if (task) {
+		task->exited = true;
+		task->retVal = 0;
+	}
+
+	scheduler_yield(cls);
+
+	while (1==1)
+	{
+		__asm__("sti\nhlt\n");
+	}
+}
+
 task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
 {
     printd(DEBUG_TASK,"task_initialize: Initializing task\n");

@@ -19,7 +19,4 @@ _start:
     mov al, '\n'
     out dx, al
 
-.loop:
-    sti
-    hlt
-    jmp .loop
+    ret

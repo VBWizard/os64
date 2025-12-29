@@ -97,4 +97,5 @@
     } task_t;
 
 	task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
+	void task_exit(void);
 #endif
