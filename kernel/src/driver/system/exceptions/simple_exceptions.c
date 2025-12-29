@@ -17,7 +17,7 @@ uint64_t gLastFaultRsp = 0;
 uint64_t gLastFaultErrorCode = 0;
 bool kTestingPageFaults = false;
 uint64_t kTestingPageFaultResumeRip = 0;
-uint64_t kPageFaultCount;
+volatile uint64_t kPageFaultCount;
 
 static bool is_canonical_address(uint64_t address)
 {

@@ -36,6 +36,7 @@
 #include "apic.h"
 #include "signals.h"
 #include "log.h"
+#include "exceptions.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -195,18 +196,20 @@ void kernel_init()
 
     test_run_postboot();
 
-    if (kRootFilesystem != NULL)
-    {
-        // Temporary: run a tiny kernel-mode ELF to validate the loader.
-        task_t *testElfTask = task_create("/bin/test_elf", 0, NULL, kKernelTask, true, 0);
-        scheduler_submit_new_task(testElfTask);
-        wait(250);
-    }
-
 	if (kRootFilesystem!=NULL)
 	{
-	 	int lResult = testVFS(kRootFilesystem);
-	 	if (lResult)
+        // Temporary: run a tiny kernel-mode ELF to validate the loader.
+		uint64_t faults_before = kPageFaultCount;
+        task_t *testElfTask = task_create("/bin/test_elf", 0, NULL, kKernelTask, true, 0);
+        scheduler_submit_new_task(testElfTask);
+		for (int tries = 0; tries < 50 && kPageFaultCount == faults_before; tries++) {
+			wait(100);
+		}
+		if (kPageFaultCount == faults_before) {
+			panic("ELF loader test did not fault in any pages within timeout\n");
+		}
+        int lResult = testVFS(kRootFilesystem);
+        if (lResult)
 	 		panic("Root filesystem disk test failed: %u\n",lResult);
 		kRootFilesystem->fops->uninitialize(kRootFilesystem);
 	 }
