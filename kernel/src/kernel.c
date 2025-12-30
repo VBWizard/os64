@@ -64,12 +64,12 @@ task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
+task_t parentTask = {0};
 
 /// @brief Create the kernel task
 /// This is done manually whereas every other task in the system is created by calling the task_create method in task.c.
 void create_kernel_task()
 {
-	task_t parentTask = {0};
 	//The structure of the environment as as follows:
 	//*Addr 0: 
 	//	Room for 512 8 byte pointers to the environment strings

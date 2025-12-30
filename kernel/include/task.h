@@ -49,7 +49,7 @@
 		int64_t ru_nivcsw;       /* involuntary context switches */
 	};
 
-    typedef struct
+    typedef struct task
     {
 		//The task identifier.  This will be the same as the first threadID assigned to the task
 		uint64_t taskID;
@@ -63,7 +63,11 @@
         uint64_t heapStart, heapEnd;
         short priority;           //-20=highest, 20=lowest
         void* exitHandler[TASK_MAX_EXIT_HANDLERS];
-        void* parentTask;
+        struct task* parentTask;
+        struct task* deadChildHead;
+        struct task* deadChildTail;
+        struct task* deadChildNext;
+        bool waitingForChild;
         bool kernelTask;
         struct tm startTime, endTime;
         uint64_t entryPoint;
@@ -98,4 +102,5 @@
 
 	task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
+	task_t* task_wait(task_t* parentTask, uint64_t* exitCode);
 #endif

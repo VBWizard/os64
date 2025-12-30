@@ -300,6 +300,20 @@ void scheduler_remove_thread_from_queue(eThreadState queue, thread_t *thread)
     thread->next = thread->prev = NO_THREAD;
 }
 
+void scheduler_reap_zombie_thread(thread_t *thread)
+{
+    if (thread == NULL) {
+        return;
+    }
+
+    while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
+    if (thread->threadState == THREAD_STATE_ZOMBIE) {
+        scheduler_remove_thread_from_queue(THREAD_STATE_ZOMBIE, thread);
+        thread->threadState = THREAD_STATE_NONE;
+    }
+    __sync_lock_release(&kSchedulerSwitchTasksLock);
+}
+
 void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
 {
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\tchangeThreadQueue: Changing thread state for 0x%04x from %s to %s\n",

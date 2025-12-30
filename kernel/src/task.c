@@ -31,6 +31,28 @@ void task_idle_loop()
 	}
 }
 
+static void task_enqueue_dead_child(task_t *child)
+{
+	task_t *parent = child->parentTask;
+
+	if (parent == NULL) {
+		return;
+	}
+
+	child->deadChildNext = NULL;
+	if (parent->deadChildTail != NULL) {
+		parent->deadChildTail->deadChildNext = child;
+	} else {
+		parent->deadChildHead = child;
+	}
+	parent->deadChildTail = child;
+
+	if (parent->waitingForChild) {
+		parent->waitingForChild = false;
+		scheduler_wake_isleep_task(parent);
+	}
+}
+
 void task_exit(void)
 {
 	core_local_storage_t *cls = get_core_local_storage();
@@ -45,6 +67,7 @@ void task_exit(void)
 	if (task) {
 		task->exited = true;
 		task->retVal = 0;
+		task_enqueue_dead_child(task);
 	}
 
 	scheduler_yield(cls);
@@ -52,6 +75,40 @@ void task_exit(void)
 	while (1==1)
 	{
 		__asm__("sti\nhlt\n");
+	}
+}
+
+task_t* task_wait(task_t* parentTask, uint64_t* exitCode)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *parent = parentTask ? parentTask : (cls ? cls->task : NULL);
+
+	if (parent == NULL || parent->threads == NULL) {
+		return NULL;
+	}
+
+	while (1==1)
+	{
+		task_t *child = parent->deadChildHead;
+		if (child != NULL) {
+			parent->deadChildHead = child->deadChildNext;
+			if (parent->deadChildHead == NULL) {
+				parent->deadChildTail = NULL;
+			}
+			child->deadChildNext = NULL;
+			if (exitCode != NULL) {
+				*exitCode = child->retVal;
+			}
+			if (child->threads != NULL) {
+				scheduler_reap_zombie_thread(child->threads);
+			}
+			return child;
+		}
+
+		parent->waitingForChild = true;
+		scheduler_change_thread_queue(parent->threads, THREAD_STATE_ISLEEP);
+		scheduler_yield(cls);
+		parent->waitingForChild = false;
 	}
 }
 
