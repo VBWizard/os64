@@ -17,6 +17,7 @@
 #include "tss.h"
 #include "thread.h"
 #include "idt.h"
+#include "panic.h"
 
 extern struct IDTPointer kIDTPtr;
 extern void syscall_Enter();
@@ -87,9 +88,9 @@ static inline void set_gs_base(uint64_t base) {
 	kCLSInitialized = true;
 }
 
-void init_core_local_storage(unsigned apic_id) 
+void init_core_local_storage(unsigned apic_id)
 {
-    
+
 	uint64_t coreBase = (uint64_t)kCoreLocalStorage +
                         (apic_id * sizeof(core_local_storage_t));
     set_gs_base(coreBase);
@@ -98,8 +99,18 @@ void init_core_local_storage(unsigned apic_id)
 	cls->self = cls;
 	cls->tss = tss_get_for_cpu(apic_id);
 	cls->kernel_rsp0 = cls->tss ? cls->tss->rsp0 : 0;
+
+	// Allocate upper-half kernel interrupt stack for CR3 switching
+	void *kernel_stack = kmalloc_aligned(KERNEL_INTERRUPT_STACK_SIZE);
+	if (!kernel_stack)
+		panic("Failed to allocate kernel interrupt stack for CPU %u", apic_id);
+
+	cls->kernel_interrupt_stack_base = (uintptr_t)kernel_stack;
+	cls->kernel_interrupt_stack_top = (uintptr_t)kernel_stack + KERNEL_INTERRUPT_STACK_SIZE;
+
 	kMPEOIOffset = kMPApicBase | APIC_EOI_OFFSET;
-	printd(DEBUG_THREAD | DEBUG_DETAILED, "Core local storage initialized to 0%16lx for core %u\n", coreBase, apic_id);
+	printd(DEBUG_THREAD | DEBUG_DETAILED, "Core local storage initialized to 0%16lx for core %u (kernel stack: 0x%lx-0x%lx)\n",
+		coreBase, apic_id, cls->kernel_interrupt_stack_base, cls->kernel_interrupt_stack_top);
 }
 
 // Called to finish initializing the AP (stack switch has been done in ap_wakeup_entry())

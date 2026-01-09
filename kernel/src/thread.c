@@ -13,6 +13,9 @@
 
 extern uintptr_t kKernelBaseAddressV;
 extern uintptr_t kKernelBaseAddressP;
+extern uintptr_t kHHDMOffset;
+extern uintptr_t kKernelPML4v;
+extern pt_entry_t kKernelPML4;
 
 //Will be a BSS variable so all indices will be 0 when the kernel is loaded
 uint64_t kTIDBitmap[MAX_THREADS / sizeof(uint64_t) * 8];
@@ -135,7 +138,8 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 	newThread->regs.CR3 = (uint64_t)((task_t*)ownerTask)->pml4;
     printd(DEBUG_THREAD,"createThread: Set thread PML4 to %p\n",newThread->regs.userCR3);
 
-	paging_map_kernel_into_pml4(((task_t*)ownerTask)->pml4v);
+	// Note: No need to call paging_map_kernel_into_pml4() anymore!
+	// Upper-half page tables are now shared directly via PML4 entries
 
 	if (kernelThread)
 	{
@@ -146,13 +150,15 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 	{
 		newThread->regs.DS = newThread->regs.ES = newThread->regs.FS = newThread->regs.GS = newThread->regs.SS = GDT_USER_DATA_ENTRY << 3 | 3;
 		newThread->regs.CS = GDT_USER_CODE_ENTRY << 3 | 3;
-		newThread->esp3BaseV = 0;
-		newThread->esp3BaseP = thread_allocate_guarded_stack_memory((uintptr_t)((task_t*)ownerTask)->pml4v, &newThread->esp3BaseV, THREAD_USER_STACK_SIZE, true);
-	    printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring3 stack for thread at P=0x%016lx, P=0x%016lx\n", newThread->esp3BaseP, newThread->esp3BaseV);
+		// Allocate user stack (ring 3) in task's lower-half address space
+		newThread->esp3BaseV = (uintptr_t)task_alloc_guarded_stack((task_t*)ownerTask, THREAD_USER_STACK_SIZE, true);
+		newThread->esp3BaseP = 0; // Not needed - stack is in task-specific virtual space
+	    printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring3 stack for thread at V=0x%016lx\n", newThread->esp3BaseV);
 	}
-	newThread->esp0BaseV = 0;
-	newThread->esp0BaseP = (uintptr_t)thread_allocate_guarded_stack_memory((uintptr_t)((task_t*)ownerTask)->pml4v, &newThread->esp0BaseV, THREAD_KERNEL_STACK_SIZE, false);
-	printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring0 stack for thread at P=0x%016lx, V=0x%016lx\n", newThread->esp0BaseP, newThread->esp0BaseV);
+	// Allocate kernel stack (ring 0) in task's lower-half address space
+	newThread->esp0BaseV = (uintptr_t)task_alloc_guarded_stack((task_t*)ownerTask, THREAD_KERNEL_STACK_SIZE, false);
+	newThread->esp0BaseP = 0; // Not needed - stack is in task-specific virtual space
+	printd(DEBUG_THREAD | DEBUG_DETAILED,"Created guarded ring0 stack for thread at V=0x%016lx\n", newThread->esp0BaseV);
 
 	printd(DEBUG_THREAD | DEBUG_DETAILED,"createThread: Initialized %s thread segment registers, CS=0x%08x, others=0x%08x\n", kernelThread?"kernel":"user", newThread->regs.CS, newThread->regs.DS);
 
@@ -164,7 +170,34 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 		newThread->regs.RSP = newThread->esp0BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
 		newThread->regs.SS0 = GDT_KERNEL_DATA_ENTRY << 3;
 		newThread->regs.RSP0 = newThread->esp0BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
-		*(uintptr_t *)newThread->regs.RSP = (uintptr_t)&task_exit;
+
+		// Write return address to stack
+		task_t *task = (task_t*)ownerTask;
+
+		// For ktask/idle (using kKernelPML4), stack is directly accessible
+		if (task->pml4v == (uint64_t*)kKernelPML4v) {
+			*(uintptr_t *)newThread->regs.RSP = (uintptr_t)&task_exit;
+		} else {
+			// For other tasks: temporarily map the stack page into kernel space to write to it
+			uintptr_t phys_rsp = paging_walk_paging_table((pt_entry_t*)task->pml4v, newThread->regs.RSP);
+			if (phys_rsp && phys_rsp != 0xbadbadba) {
+				// Use a temporary virtual address in kernel space for the mapping
+				#define KERNEL_TEMP_MAP_ADDR 0xFFFFFFFF80000000UL
+
+				// Get the page-aligned physical address and offset within page
+				uintptr_t phys_page = phys_rsp & ~0xFFF;
+				uintptr_t offset = phys_rsp & 0xFFF;
+
+				// Temporarily map the physical page into kernel PML4
+				paging_map_pages((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR, phys_page, 1, PAGE_PRESENT | PAGE_WRITE);
+
+				// Write the return address via the temporary mapping
+				*(uintptr_t *)(KERNEL_TEMP_MAP_ADDR + offset) = (uintptr_t)&task_exit;
+
+				// Unmap the temporary page
+				paging_unmap_page((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR);
+			}
+		}
 	}
 	else
 	{

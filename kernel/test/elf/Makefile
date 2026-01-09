@@ -3,7 +3,7 @@ OUTPUT ?= ../../bin/test_elf
 CC ?= x86_64-elf-gcc
 LD ?= x86_64-elf-ld
 
-CFLAGS ?= -m64 -ffreestanding -fno-pic -fno-pie -nostdlib -nostartfiles -nodefaultlibs -Wall -Wextra
+CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -nostdlib -nostartfiles -nodefaultlibs -Wall -Wextra
 LDFLAGS ?= -static -nostdlib -T linker.ld -z max-page-size=0x1000
 
 OBJS := serial_ping.o

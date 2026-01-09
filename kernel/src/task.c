@@ -18,8 +18,98 @@
 #include "panic.h"
 #include "log.h"
 #include "elf_loader.h"
+#include "allocator.h"
+#include "memset.h"
 
 extern volatile uint64_t kSystemCurrentTime;
+extern task_t* kKernelTask;
+extern uintptr_t kKernelPML4;
+
+/// @brief Allocate page-aligned memory for task-specific use (stacks, structures, etc.)
+/// This allocates memory in the lower half of the address space at task-specific virtual addresses.
+/// @param task The task to allocate memory for
+/// @param size Size in bytes to allocate (will be rounded up to page boundary)
+/// @return Virtual address of allocated memory, or NULL on failure
+void* task_alloc_aligned(task_t* task, size_t size)
+{
+	if (!task || size == 0) {
+		return NULL;
+	}
+
+	// Round size up to page boundary
+	size_t aligned_size = (size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+	size_t page_count = aligned_size / PAGE_SIZE;
+
+	// Allocate physical memory
+	uintptr_t phys = allocate_memory_aligned(aligned_size);
+	if (phys == 0) {
+		printd(DEBUG_TASK, "task_alloc_aligned: Failed to allocate %lu bytes of physical memory\n", aligned_size);
+		return NULL;
+	}
+
+	// Get virtual address for this allocation
+	uintptr_t virt = task->taskMemoryNextVirt;
+
+	// Map pages into task's PML4
+	paging_map_pages(task->pml4v, virt, phys, page_count, PAGE_PRESENT | PAGE_WRITE);
+
+	// Update next available address
+	task->taskMemoryNextVirt += aligned_size;
+
+	printd(DEBUG_TASK | DEBUG_DETAILED, "task_alloc_aligned: Allocated %lu bytes (phys=0x%lx, virt=0x%lx) for task %s\n",
+		aligned_size, phys, virt, task->exename);
+
+	return (void*)virt;
+}
+
+/// @brief Allocate guarded stack memory for a task
+/// Allocates stack with guard pages on both sides to detect stack overflow
+/// @param task The task to allocate stack for
+/// @param stackSize Size of usable stack (guard pages are added automatically)
+/// @param isRing3 true for user stack (PAGE_USER set), false for kernel stack
+/// @return Virtual address of stack base (bottom), or NULL on failure
+void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
+{
+	if (!task || stackSize == 0) {
+		return NULL;
+	}
+
+	// Calculate total allocation size including guard pages
+	size_t total_size = stackSize + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE * 2);
+	size_t aligned_size = (total_size + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+	// Allocate physical memory for entire region (including guards)
+	uintptr_t phys = allocate_memory_aligned(aligned_size);
+	if (phys == 0) {
+		printd(DEBUG_TASK, "task_alloc_guarded_stack: Failed to allocate %lu bytes\n", aligned_size);
+		return NULL;
+	}
+
+	// Get virtual address range (includes guards)
+	uintptr_t virt_base = task->taskMemoryNextVirt;
+
+	// Reserve entire virtual range (including guard regions)
+	task->taskMemoryNextVirt += aligned_size;
+
+	// Map only the usable stack pages (skip guard pages on each end)
+	uintptr_t phys_stack_start = phys + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE);
+	uintptr_t virt_stack_start = virt_base + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE);
+	size_t stack_page_count = (stackSize + PAGE_SIZE - 1) / PAGE_SIZE;  // Round up to cover full stack
+
+	uint64_t flags = PAGE_PRESENT | PAGE_WRITE;
+	if (isRing3) {
+		flags |= PAGE_USER;
+	}
+
+	paging_map_pages(task->pml4v, virt_stack_start, phys_stack_start, stack_page_count, flags);
+
+	printd(DEBUG_TASK | DEBUG_DETAILED, "task_alloc_guarded_stack: Allocated %lu byte %s stack at virt=0x%lx (phys=0x%lx), guards: 0x%lx-0x%lx and 0x%lx-0x%lx\n",
+		stackSize, isRing3 ? "user" : "kernel", virt_stack_start, phys_stack_start,
+		virt_base, virt_stack_start,
+		virt_stack_start + stackSize, virt_base + aligned_size);
+
+	return (void*)virt_stack_start;
+}
 
 void task_idle_loop()
 {
@@ -56,6 +146,19 @@ static void task_enqueue_dead_child(task_t *child)
 void task_exit(void)
 {
 	core_local_storage_t *cls = get_core_local_storage();
+
+	// CRITICAL: Switch to kernel context before doing anything!
+	// We're currently running on task's stack with task's CR3 loaded
+	// Need to switch to kernel stack and kKernelPML4 to safely access kernel structures
+
+	// Switch to kernel interrupt stack
+	uintptr_t kernel_rsp = cls->kernel_interrupt_stack_top - 16;
+	__asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
+
+	// Switch to kKernelPML4
+	__asm__ volatile("mov cr3, %0" : : "r"((uint64_t)kKernelPML4) : "memory");
+
+	// Now we're in kernel context - safe to access kernel structures
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	task_t *task = cls ? cls->task : NULL;
 
@@ -119,23 +222,53 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	task_t* newTask = kmalloc_aligned(sizeof(task_t));
     printd(DEBUG_TASK,"task_initialize: Malloc'd 0x%016x for process\n",newTask);
 
-	newTask->parentTask = parentTask;
-	newTask->priority = TASK_DEFAULT_PRIORITY;
+    if (idleTask)
+    {
+        newTask->pml4v = parentTask->pml4v;
+        newTask->pml4 = parentTask->pml4;
+    }
+    
+    newTask->parentTask = parentTask;
+    newTask->priority = TASK_DEFAULT_PRIORITY;
 
 	newTask->mmaps = kmalloc(sizeof(dlist_t));
 	if (newTask->mmaps) {
 		dlist_init(newTask->mmaps);
 	}
-	if (kernelTask)
+
+	// Special case: ktask (the main kernel task) uses kKernelPML4 directly
+	// All other tasks get their own PML4 with shared upper-half page tables
+	if (kKernelTask == NULL && kernelTask)
 	{
+		// This is ktask - use the kernel PML4 directly
 		newTask->pml4v = (uint64_t*)kKernelPML4v;
 		newTask->pml4 = (uint64_t*)kKernelPML4;
+		newTask->taskMemoryNextVirt = KERNEL_TASK_MEMORY_BASE;
+		printd(DEBUG_TASK | DEBUG_DETAILED, "task_initialize: ktask using kKernelPML4 directly\n");
 	}
 	else
 	{
-		newTask->pml4v = (uintptr_t*)get_paging_table_pageV();  
-		newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v & ~(kHHDMOffset));
+        if (!idleTask)
+        {
+            // Allocate new PML4 for this task
+            newTask->pml4v = (uintptr_t*)get_paging_table_pageV();
+            newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v & ~(kHHDMOffset));
+
+            // Clear the new PML4
+            memset(newTask->pml4v, 0, PAGE_SIZE);
+
+            // Copy upper-half PML4 entries (256-511) from kKernelPML4
+            // This shares the kernel page table structures (not the data, just the pointers)
+            uintptr_t* kernelPML4 = (uintptr_t*)kKernelPML4v;
+            for (int i = 256; i < 512; i++) {
+                newTask->pml4v[i] = kernelPML4[i];
+            }
+        }
+		newTask->taskMemoryNextVirt = kernelTask ? KERNEL_TASK_MEMORY_BASE : USER_TASK_MEMORY_BASE;
+		printd(DEBUG_TASK | DEBUG_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s task (shared upper-half)\n",
+			newTask->pml4, kernelTask ? "kernel" : "user");
 	}
+
 	newTask->threads = createThread((void*)newTask, kernelTask);
 	newTask->threads->idleThread = idleTask;
 	if (idleTask)
@@ -144,11 +277,9 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		newTask->threads->mp_apic = 0xffffffffffffffff;
 	newTask->taskID = newTask->threads->threadID;
 	newTask->exited = false;
-    printd(DEBUG_TASK,"task_initialize: Mapping the task_t struct into the task, v=0x%08x, p=0x%08x\n",TASK_STRUCT_VADDR,newTask);
-	uint32_t mapPages = sizeof(task_t) / PAGE_SIZE;
-	if (sizeof(task_t) % PAGE_SIZE)
-		mapPages++;
-	paging_map_pages(newTask->pml4v, TASK_STRUCT_VADDR, (uintptr_t)newTask, mapPages, PAGE_PRESENT | PAGE_WRITE);
+
+	// Note: TASK_STRUCT_VADDR mapping removed - it was unused
+	// task_t lives in kernel heap (HHDM space) and doesn't need fixed virtual mapping
 
 	return newTask;
 }

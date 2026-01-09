@@ -140,7 +140,7 @@ void kernel_init()
     printf("SMP: Initializing ... ");
     kLimineSMPInfo = smp_request.response;
     init_SMP(kEnableSMP);
-    printf("(%u cores initialized)\n", kMPCoreCount);
+    printf("(%u core(s) initialized)\n", kMPCoreCount);
 
     init_signals();
 

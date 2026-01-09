@@ -355,3 +355,152 @@ To change config, edit `QEMUFLAGS` in root `GNUmakefile`.
 - Core-local storage accessed via `get_core_local_storage()`
 - Always disable interrupts when modifying thread queues
 - Test thoroughly with SMP enabled (multiple cores)
+
+## Coding Style and Best Practices
+
+### Extern Declarations
+
+**Always place `extern` declarations at the top of the file, never inside functions.**
+
+```c
+// GOOD - at top of file
+extern uintptr_t kKernelPML4;
+extern uintptr_t kHHDMOffset;
+
+void some_function(void) {
+    // use kKernelPML4
+}
+
+// BAD - inside function
+void some_function(void) {
+    extern uintptr_t kKernelPML4;  // Don't do this!
+}
+```
+
+This makes external dependencies clear and easy to find at a glance.
+
+### Context Switching Between Task and Kernel Space
+
+**Problem**: When running in task context (task's CR3 loaded, task's stack), you cannot safely access kernel structures because they may not be mapped in the task's address space.
+
+**Solution**: Switch both CR3 and RSP before accessing kernel data structures:
+
+```c
+void task_exit(void) {
+    core_local_storage_t *cls = get_core_local_storage();  // CLS is in shared upper-half
+
+    // Switch to kernel stack
+    uintptr_t kernel_rsp = cls->kernel_interrupt_stack_top - 16;
+    __asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
+
+    // Switch to kKernelPML4
+    __asm__ volatile("mov cr3, %0" : : "r"((uint64_t)kKernelPML4) : "memory");
+
+    // Now safe to access kernel structures
+    thread_t *thread = cls->currentThread;
+    // ...
+}
+```
+
+**Key points**:
+- Core-local storage (CLS) is accessible from any CR3 (it's in the shared upper-half)
+- Switch stack BEFORE switching CR3 (otherwise local variables become inaccessible)
+- Use `kernel_interrupt_stack_top` from CLS for the kernel stack pointer
+- The `"memory"` clobber on CR3 load prevents compiler reordering
+
+### Temporary Mapping for Cross-Address-Space Access
+
+**Problem**: When kernel needs to write to task memory (e.g., writing return address to task's stack), the task's pages aren't accessible in kKernelPML4.
+
+**Bad Solution**: Use `kmalloc()` for task stacks - this makes them permanently accessible from kernel space, defeating memory isolation.
+
+**Good Solution**: Use temporary mapping:
+
+```c
+// Allocate with allocate_memory_aligned() - keeps it isolated
+uintptr_t phys = allocate_memory_aligned(size);
+
+// Map only into task's PML4
+paging_map_pages(task->pml4v, virt, phys, pages, flags);
+
+// Later, when kernel needs to write to it:
+// 1. Get physical address via page table walk
+uintptr_t phys_addr = paging_walk_paging_table((pt_entry_t*)task->pml4v, task_virt_addr);
+
+// 2. Temporarily map into kernel space
+#define KERNEL_TEMP_MAP_ADDR 0xFFFFFFFF80000000UL
+paging_map_pages((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR, phys_addr & ~0xFFF, 1, PAGE_PRESENT | PAGE_WRITE);
+
+// 3. Access via temporary mapping
+*(uint64_t *)(KERNEL_TEMP_MAP_ADDR + (phys_addr & 0xFFF)) = value;
+
+// 4. Unmap temporary page
+paging_unmap_page((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR);
+```
+
+**Benefits**:
+- Task memory remains isolated from kernel
+- No permanent mappings cluttering kernel address space
+- Doesn't waste kmalloc pool on large allocations (like stacks)
+
+### HHDM (Higher-Half Direct Mapping) Limitations
+
+**Important**: The HHDM may not cover all physical memory. Specifically:
+
+- Memory allocated with `kmalloc()` or `kmalloc_aligned()` **IS** accessible via HHDM in kKernelPML4
+- Memory allocated with `allocate_memory_aligned()` **MAY NOT BE** accessible via HHDM in kKernelPML4
+
+**When to use each**:
+- `kmalloc()`: For kernel data structures that need to be permanently accessible
+- `allocate_memory_aligned()`: For task-specific memory (stacks, heap pages) that should be isolated
+
+**Converting addresses**:
+- Physical to HHDM: `phys | kHHDMOffset` (but verify it's actually mapped!)
+- HHDM to Physical: `hhdm - kHHDMOffset`
+
+### Static Variables and SMP Safety
+
+**Warning**: Using `static` variables in functions can create race conditions in SMP (multi-core) systems.
+
+```c
+// NOT SMP-safe - race condition if multiple cores call this simultaneously
+void some_function(void) {
+    static kernel_read_params_t params;  // Shared across all cores!
+    params.file = file;
+    // If another core calls this function, 'params' gets clobbered
+}
+```
+
+**Solution**: Use per-CPU storage via core-local storage:
+
+```c
+// Add field to core_local_storage_t
+typedef struct {
+    // ... existing fields ...
+    kernel_read_params_t temp_params;
+} core_local_storage_t;
+
+// Access via CLS
+void some_function(void) {
+    core_local_storage_t *cls = get_core_local_storage();
+    cls->temp_params.file = file;
+    // Each core has its own copy
+}
+```
+
+### Writing to Task Memory from Kernel
+
+When creating threads, the return address needs to be written to the task's stack. The stack may only be mapped in the task's PML4, not kKernelPML4.
+
+**Special case**: ktask/idle tasks use kKernelPML4 directly, so their stacks are accessible:
+
+```c
+task_t *task = (task_t*)ownerTask;
+
+if (task->pml4v == (uint64_t*)kKernelPML4v) {
+    // ktask/idle - stack is directly accessible
+    *(uintptr_t *)newThread->regs.RSP = (uintptr_t)&task_exit;
+} else {
+    // Other tasks - use temporary mapping technique (see above)
+}
+```

@@ -9,13 +9,16 @@
 
 #define TASK_MAX_EXIT_HANDLERS 10
 #define TASK_DEFAULT_PRIORITY 0
-#define TASK_STRUCT_VADDR 0xFFFF8000FFFFF000
+// TASK_STRUCT_VADDR removed - task_t now lives in kernel heap, no fixed mapping needed
 #define TASK_HEAP_START 0x70000000
 #define TASK_HEAP_END   0x00007FFFFFFFFFFF
 #define TASK_ARGV_VIRT 0x6f000000
 //Virtual address of the environment pointers
 #define TASK_ENVP_VIRT 0x6f010000
 #define TASK_ENV_VIRT 0x6f006000
+// Task-specific memory allocation base addresses (lower half)
+#define USER_TASK_MEMORY_BASE   0x10000000  // 256MB - for user task allocations
+#define KERNEL_TASK_MEMORY_BASE 0x40000000  // 1GB - for kernel task allocations
 #define STDIN (void*)0
 #define STDOUT (void*)1
 #define STDERR (void*)2
@@ -97,10 +100,13 @@
         uintptr_t *stackInitialPage;
         uint32_t minorFaults, majorFaults, cSwitches;
 		uint64_t* pml4, *pml4v;
+		uintptr_t taskMemoryNextVirt;  // Next available virtual address for task-specific allocations
 		void *prev, *next;
     } task_t;
 
 	task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
 	task_t* task_wait(task_t* parentTask, uint64_t* exitCode);
+	void* task_alloc_aligned(task_t* task, size_t size);
+	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
 #endif
