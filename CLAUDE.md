@@ -408,6 +408,45 @@ void task_exit(void) {
 - Use `kernel_interrupt_stack_top` from CLS for the kernel stack pointer
 - The `"memory"` clobber on CR3 load prevents compiler reordering
 
+**CRITICAL: Reload CLS Pointer After Stack Switch**
+
+After switching RSP (and optionally CR3), the original `cls` pointer variable becomes invalid because it was likely stored on the old stack. You MUST reload it via `get_core_local_storage()`:
+
+```c
+void call_in_kernel_context(void (*func)(void*), void *arg)
+{
+    core_local_storage_t *cls = get_core_local_storage();
+
+    // Save values to CLS before stack switch
+    cls->saved_func = func;
+    cls->saved_arg = arg;
+
+    // Switch to kernel stack
+    __asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
+
+    // Switch to kKernelPML4
+    __asm__ volatile("mov cr3, %0" : : "r"(kKernelPML4) : "memory");
+
+    // CRITICAL: Reload CLS after context switch!
+    // The old 'cls' variable is on the old stack and now invalid.
+    cls = get_core_local_storage();  // Reads from GS:0, always valid
+
+    // Now safe to access cls
+    cls->saved_func(cls->saved_arg);
+}
+```
+
+**Why this is necessary**:
+- Local variables (including `cls`) may be stored on the stack by the compiler
+- After `mov rsp`, that stack is no longer accessible
+- Accessing the old `cls` pointer reads garbage → crash (often GPF with corrupted RIP)
+- `get_core_local_storage()` reads from `GS:0`, which is always valid regardless of RSP or CR3
+
+**Symptoms of this bug**:
+- General Protection Fault (#GP) with corrupted RIP like `0xf000ff53f000ff53`
+- Happens after stack/CR3 switch when trying to dereference the stale `cls` pointer
+- Only occurs in SMP systems under specific timing/load conditions
+
 ### Temporary Mapping for Cross-Address-Space Access
 
 **Problem**: When kernel needs to write to task memory (e.g., writing return address to task's stack), the task's pages aren't accessible in kKernelPML4.
@@ -474,19 +513,32 @@ void some_function(void) {
 **Solution**: Use per-CPU storage via core-local storage:
 
 ```c
-// Add field to core_local_storage_t
+// Add field to core_local_storage_t with meaningful prefix
+// Example: cikc_ = call_in_kernel_context (the function that owns these variables)
 typedef struct {
     // ... existing fields ...
-    kernel_read_params_t temp_params;
+
+    // cikc = call_in_kernel_context (vma.c context switching scratch space)
+    void (*cikc_saved_func)(void*);
+    void *cikc_saved_arg;
+    uint64_t cikc_saved_cr3;
+    uint64_t cikc_saved_rsp;
 } core_local_storage_t;
 
 // Access via CLS
-void some_function(void) {
+void call_in_kernel_context(void (*func)(void*), void *arg) {
     core_local_storage_t *cls = get_core_local_storage();
-    cls->temp_params.file = file;
-    // Each core has its own copy
+    cls->cikc_saved_func = func;
+    cls->cikc_saved_arg = arg;
+    // Each core has its own isolated copy
 }
 ```
+
+**Naming Convention for CLS Scratch Variables**:
+- Use a meaningful abbreviation as prefix (e.g., `cikc_` for `call_in_kernel_context`)
+- Add a comment above the variables explaining what the abbreviation stands for
+- This prevents accidental reuse in unrelated functions
+- Makes it clear which function owns these scratch variables
 
 ### Writing to Task Memory from Kernel
 

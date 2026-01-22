@@ -66,6 +66,12 @@ typedef struct
     task_t *task;
 	uintptr_t kernel_interrupt_stack_base;  // Upper-half kernel stack for CR3 switching
 	uintptr_t kernel_interrupt_stack_top;   // Top of kernel interrupt stack
+
+	// cikc = call_in_kernel_context (vma.c context switching scratch space)
+	void (*cikc_saved_func)(void*);
+	void *cikc_saved_arg;
+	uint64_t cikc_saved_cr3;
+	uint64_t cikc_saved_rsp;
 } core_local_storage_t;
 
 

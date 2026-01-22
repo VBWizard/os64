@@ -41,34 +41,36 @@ static void call_in_kernel_context(void (*func)(void*), void *arg)
 {
     core_local_storage_t *cls = get_core_local_storage();
 
-    // Static storage for ALL variables (accessible in both contexts)
-    static void (*saved_func)(void*);
-    static void *saved_arg;
-    static uint64_t saved_cr3, saved_rsp;
-
-    // Save parameters before stack switch
-    saved_func = func;
-    saved_arg = arg;
+    // Save parameters before stack switch (use CLS for SMP safety)
+    cls->cikc_saved_func = func;
+    cls->cikc_saved_arg = arg;
 
     // Save task context
-    __asm__ volatile("mov %0, cr3" : "=r"(saved_cr3));
-    __asm__ volatile("mov %0, rsp" : "=r"(saved_rsp));
+    __asm__ volatile("mov %0, cr3" : "=r"(cls->cikc_saved_cr3));
+    __asm__ volatile("mov %0, rsp" : "=r"(cls->cikc_saved_rsp));
 
-    // Switch to kernel stack (leave room for function call)
+    // Save kernel stack pointer in local var (on current stack, before switch)
     uintptr_t kernel_rsp = cls->kernel_interrupt_stack_top - 16;
+
+    // Switch to kernel stack
     __asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
 
     // Switch to kKernelPML4
     __asm__ volatile("mov cr3, %0" : : "r"((uint64_t)kKernelPML4) : "memory");
 
-    // Call function in kernel context (using saved parameters)
-    saved_func(saved_arg);
+    // CRITICAL: Reload CLS pointer after stack/CR3 switch!
+    // The previous 'cls' variable is on the old stack and no longer accessible.
+    // get_core_local_storage() reads from GS:0, which is always valid.
+    cls = get_core_local_storage();
+
+    // Call function in kernel context (using saved parameters from reloaded cls)
+    cls->cikc_saved_func(cls->cikc_saved_arg);
 
     // Restore task CR3
-    __asm__ volatile("mov cr3, %0" : : "r"(saved_cr3) : "memory");
+    __asm__ volatile("mov cr3, %0" : : "r"(cls->cikc_saved_cr3) : "memory");
 
     // Restore task stack
-    __asm__ volatile("mov rsp, %0" : : "r"(saved_rsp));
+    __asm__ volatile("mov rsp, %0" : : "r"(cls->cikc_saved_rsp));
 }
 
 // Resolves and returns the physical address of a page for the given faulting address.
