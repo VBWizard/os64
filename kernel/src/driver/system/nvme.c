@@ -812,8 +812,8 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
             panic("NVMe Read error. System log contains more information.");
         }
 
+        controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex + 1) % controller->queueDepth;
         nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);  // Update index for consumed entries
-		controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex+ 1) % controller->queueDepth;
 
         // Free PRPs and command
         if (prpCount > 2) {
@@ -859,6 +859,9 @@ void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, 
         // Populate the NVMe read command
         cmd->opc = NVME_OPCODE_READ;
         cmd->nsid = controller->nsid;
+        // cmdCID wraps safely: we poll to completion before the next command is
+        // submitted, so no two commands are ever in-flight with the same CID.
+        // Revisit if concurrent I/O is added (requires locking first).
         cmd->cid = controller->cmdCID++;
         cmd->prp1 = (uintptr_t)controller->dmaReadBuffer;
 
@@ -886,8 +889,8 @@ void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, 
             panic("NVMe Read error. System log contains more information.");
         }
 
+        controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex + 1) % controller->queueDepth;
         nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);  // Update index for consumed entries
-		controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex+ 1) % controller->queueDepth;
 
         // Copy the data from the DMA buffer to the user buffer
         printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data to user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n", (uintptr_t)controller->dmaReadBuffer, userBufferOffset, transferLength);
