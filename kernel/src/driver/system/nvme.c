@@ -111,9 +111,16 @@ uint32_t intervalDelay = controller->defaultTimeout / 20;
     controller->registers->cc &= ~(0x1);  // Clear the EN bit (bit 0)
 
     // 2. Poll CSTS register until the RDY bit becomes 0 (controller acknowledges reset)
-    while (controller->registers->csts & 0x1) {
-        // RDY bit is 1, waiting for it to become 0
+    while ((controller->registers->csts & 0x1) && currentDelay < controller->defaultTimeout) {
+        wait(intervalDelay);
+        currentDelay += intervalDelay;
     }
+    if (currentDelay >= controller->defaultTimeout) {
+        printd(DEBUG_NVME, "NVMe: Timeout waiting for RDY to clear after reset.\n");
+        panic("NVMe: CSTS RDY did not clear after CC.EN was cleared\n");
+        return false;
+    }
+    currentDelay = 0;
 
 	wait(100);
 
@@ -558,7 +565,7 @@ uint64_t nvme_get_Base_Memory_Address(pci_device_t* nvmeDevice, pci_config_space
 		finalBaseAddressMask |= ((uint64_t)bar1Value << 32);
 	}
 
-	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Final mask value is 0x%016x\n",finalBaseAddressMask);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Final mask value is 0x%016lx\n",finalBaseAddressMask);
 
 	return finalBaseAddressMask  &= 0xFFFFFFFFFFFFFFF0;
 
@@ -662,7 +669,9 @@ void nvme_identify(nvme_controller_t* controller)
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 
 	controller->nsid = *(uint32_t*)command->prp1;
-	printd(DEBUG_NVME | DEBUG_DETAILED, "Number of namespaces: 0x%08x\n", *(uint32_t*)command->prp1);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Number of namespaces: 0x%08x\n", controller->nsid);
+	kfree(nvmeIdentifyInfo);
+	nvmeIdentifyInfo = NULL;
 
 	char* buffer = kmalloc_dma(PAGE_SIZE);
 
@@ -960,7 +969,7 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	{
 		uint64_t temp = nvmeBaseAddressRemap;
 		nvmeBaseAddressRemap += bar0_size;
-		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initial base memory address (0x%016lx) is outside physical memory.  Using 0x%016x instead\n",baseMemoryAddress,temp);
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initial base memory address (0x%016lx) is outside physical memory.  Using 0x%016lx instead\n",baseMemoryAddress,temp);
 		baseMemoryAddress = temp;
 		printd(DEBUG_NVME | DEBUG_DETAILED, "Initializing base address 0x%08x to Bar[0], and 0x0 to BAR[1]\n",baseMemoryAddress);
 		writePCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, PCI_BAR0_OFFSET, baseMemoryAddress & 0xFFFFFFFF);
@@ -973,7 +982,7 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	print_BARs(config, "post config");
 
 	nvme_controller_t* controller = kmalloc(sizeof(nvme_controller_t));
-	printd(DEBUG_NVME | DEBUG_DETAILED, "Allocated controller_t at 0x%08x\n",controller);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Allocated controller_t at 0x%016lx\n",(uintptr_t)controller);
 	controller->nvmePCIDevice = nvmeDevice;
 	controller->mmioAddress = baseMemoryAddress;
 	controller->registers = (volatile nvme_controller_regs_t*)controller->mmioAddress;
