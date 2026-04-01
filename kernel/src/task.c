@@ -151,12 +151,19 @@ void task_exit(void)
 	// We're currently running on task's stack with task's CR3 loaded
 	// Need to switch to kernel stack and kKernelPML4 to safely access kernel structures
 
-	// Switch to kernel interrupt stack
+	// Save kernel stack pointer (from CLS while it's still valid)
 	uintptr_t kernel_rsp = cls->kernel_interrupt_stack_top - 16;
+
+	// Switch to kernel interrupt stack
 	__asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
 
 	// Switch to kKernelPML4
 	__asm__ volatile("mov cr3, %0" : : "r"((uint64_t)kKernelPML4) : "memory");
+
+	// CRITICAL: Reload CLS pointer after stack/CR3 switch!
+	// The previous 'cls' variable was on the task's stack and is now invalid.
+	// get_core_local_storage() reads from GS:0, which is always valid.
+	cls = get_core_local_storage();
 
 	// Now we're in kernel context - safe to access kernel structures
 	thread_t *thread = cls ? cls->currentThread : NULL;
