@@ -740,16 +740,57 @@ void nvme_identify(nvme_controller_t* controller)
 	kfree(command);
 }
 
-uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
+// Build a PRP list covering prpCount data pages starting at startAddress.
+// Each list page holds 512 entries. If the list spans more than one page the
+// last entry on each intermediate page is a chain pointer to the next list
+// page, per the NVMe spec.  Returns the address of the first list page.
+static uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
 {
+    const uint32_t entries_per_page = PAGE_SIZE / sizeof(uintptr_t); // 512
 
-	uintptr_t* prpList = kmalloc_dma(prpCount * sizeof(uintptr_t));
-	for (uint32_t idx = 0; idx<prpCount;idx++)
-	{
-		prpList[idx]=startAddress;
-		startAddress+=PAGE_SIZE;
-	}
-	return (uintptr_t)prpList;	
+    uintptr_t firstListPage = (uintptr_t)kmalloc_dma(PAGE_SIZE);
+    uintptr_t* currentPage  = (uintptr_t*)firstListPage;
+    uint32_t remaining = prpCount;
+
+    while (remaining > 0) {
+        if (remaining <= entries_per_page) {
+            // Last (or only) list page: fill entirely with data addresses.
+            for (uint32_t i = 0; i < remaining; i++) {
+                currentPage[i] = startAddress;
+                startAddress += PAGE_SIZE;
+            }
+            remaining = 0;
+        } else {
+            // More list pages needed: 511 data entries, then a chain pointer.
+            for (uint32_t i = 0; i < entries_per_page - 1; i++) {
+                currentPage[i] = startAddress;
+                startAddress += PAGE_SIZE;
+            }
+            remaining -= entries_per_page - 1;
+            uintptr_t* nextPage = (uintptr_t*)kmalloc_dma(PAGE_SIZE);
+            currentPage[entries_per_page - 1] = (uintptr_t)nextPage;
+            currentPage = nextPage;
+        }
+    }
+
+    return firstListPage;
+}
+
+// Walk and free every page in a chained PRP list.  prpCount must match the
+// value passed to setup_prp_list so we know where the chain ends.
+static void free_prp_list(uintptr_t listPage, uint32_t prpCount)
+{
+    const uint32_t entries_per_page = PAGE_SIZE / sizeof(uintptr_t);
+    uint32_t remaining = prpCount;
+
+    while (remaining > entries_per_page) {
+        uintptr_t* page = (uintptr_t*)listPage;
+        uintptr_t nextPage = page[entries_per_page - 1]; // chain pointer
+        kfree((void*)listPage);
+        listPage = nextPage;
+        remaining -= entries_per_page - 1;
+    }
+    kfree((void*)listPage); // last (or only) page
 }
 
 static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer, bool isWrite) {
@@ -821,7 +862,7 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
         }
 
         if (prpCount > 2)
-            kfree((void*)cmd->prp2);
+            free_prp_list(cmd->prp2, prpCount - 1);
         kfree(cmd);
 
         userBufferOffset += transferLength;
