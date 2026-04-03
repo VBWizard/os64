@@ -11,6 +11,7 @@ extern uint64_t kTicksPerSecond;
 /// @brief Is kernel initialization complete?
 extern volatile bool kInitDone;
 extern bool kEnableSMP;
+extern bool kBspSchedulerMode;
 extern volatile uint64_t kSystemStartTime, kUptime;
 extern volatile uint64_t kSystemCurrentTime;
 extern volatile uint64_t kTicksSinceStart;

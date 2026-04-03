@@ -27,6 +27,7 @@ extern uint64_t kKernelPML4;
 extern uint64_t kKernelPML4v;
 extern uint64_t kHHDMOffset;
 extern uint64_t kMPLVTTimer;
+extern bool kBspSchedulerMode;
 bool kCLSInitialized = false;
 bool kSMPInitDone = false;
 uintptr_t stackVirtualAddress, stackPhysicalAddress;
@@ -211,16 +212,24 @@ void ap_wake_up_aps() {
         if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
         
         printd(DEBUG_SMP, "MP: Waking up AP %u\n", apic_id);
-		*((volatile uint64_t *) kCPUInfo[apic_id].goto_address) = (uint64_t) &ap_wakeup_entry;
+			*((volatile uint64_t *) kCPUInfo[apic_id].goto_address) = (uint64_t) &ap_wakeup_entry;
 
-		cls = get_core_local_storage_for_core(coreToWake);
+			cls = get_core_local_storage_for_core(coreToWake);
 
-		while (!cls->coreAwoken) {wait(10);}
-        send_ipi(apic_id, IPI_AP_INITIALIZATION_VECTOR, 0, 1, 0);
-		while (!cls->coreInitialized) {wait(10);}
-		send_ipi(apic_id, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
+			while (!cls->coreAwoken) {wait(10);}
+			send_ipi(apic_id, IPI_AP_INITIALIZATION_VECTOR, 0, 1, 0);
+			while (!cls->coreInitialized) {wait(10);}
+			if (kBspSchedulerMode)
+			{
+				// Wake-on-work mode: park AP timers and kick each AP once so it can run its idle thread.
+				send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+			}
+			else
+			{
+				send_ipi(apic_id, IPI_ENABLE_SCHEDULING_VECTOR, 0, 1, 0);
+			}
+	    }
 		kSMPInitDone = true;
-    }
 }
 
 void ap_enable_schedulers() {
@@ -229,7 +238,10 @@ void ap_enable_schedulers() {
         if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
         
         printd(DEBUG_SMP, "MP: Enabling scheduling on AP %u\n", apic_id);
-        mp_enable_scheduling_vector(apic_id);
+        if (kBspSchedulerMode)
+            send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+        else
+            mp_enable_scheduling_vector(apic_id);
     }
 }
 
@@ -361,7 +373,14 @@ void testAPTimerTickISR()
 
 void enableAPScheduling_ISR()
 {
-    ap_configure_scheduler_timer();
+	ap_configure_scheduler_timer();
+	core_local_storage_t *cls = get_core_local_storage();
+	if (kBspSchedulerMode && cls->apic_id != BOOTSTRAP_PROCESSOR_ID)
+	{
+		printd(DEBUG_SMP, "AP: enableAPScheduling_ISR: BSP scheduler mode active, leaving AP %u timer masked\n", cls->apic_id);
+		write_eoi();
+		return;
+	}
     uint32_t val = read_apic_register(kMPApicBase + APIC_LVT_TIMER); // Use the read function
     //ConfigureAPITimer disables the timer, so enable it now
     val |= (1U << APIC_TIMER_PERIODIC_MODE_BIT);  // Ensure periodic mode is set

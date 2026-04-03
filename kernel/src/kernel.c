@@ -43,6 +43,7 @@ extern int kBlockDeviceInfoCount;
 extern bool kEnableAHCI;
 extern bool kEnableNVME;
 bool kEnableSMP = true;
+bool kBspSchedulerMode = false;
 volatile uint64_t kSystemStartTime;
 volatile uint64_t kUptime;
 volatile uint64_t kTicksSinceStart;

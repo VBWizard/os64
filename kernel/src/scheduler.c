@@ -57,6 +57,8 @@ uint64_t mp_ForkReturn[MAX_CPUS] = {false};
 
 extern pt_entry_t kKernelPML4v;
 extern uint64_t kHHDMOffset;
+extern bool kBspSchedulerMode;
+extern bool kSMPInitDone;
 
 #define VERIFY_QUEUE(q) if (q<0 || (q>THREAD_STATE_ISLEEP && q!=THREAD_STATE_ZOMBIE)) panic("VERIFY_QUEUE: Invalid state %u\n", q)
 
@@ -66,6 +68,38 @@ const char* THREAD_STATE_NAMES[] = {"None","Running","Runnable","Stopped","Unint
 static inline void scheduler_invoke_vector(void)
 {
 	asm volatile("int %0" :: "i"(IPI_MANUAL_SCHEDULE_VECTOR) : "memory");
+}
+
+static void scheduler_nudge_parked_aps(thread_t *thread)
+{
+	if (!kBspSchedulerMode || !kSMPInitDone || thread == NULL || thread->idleThread) {
+		return;
+	}
+
+	// In BSP scheduler mode, generic work stays on the BSP.
+	// Only explicitly AP-targeted threads should wake a parked AP.
+	if (thread->mp_apic == (uint64_t)-1 || thread->mp_apic == BOOTSTRAP_PROCESSOR_ID) {
+		return;
+	}
+
+	core_local_storage_t *cls = get_core_local_storage();
+	uint64_t current_apic_id = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	uint64_t target_core = thread->mp_apic;
+
+	if (target_core >= kMPCoreCount) {
+		return;
+	}
+
+	uint32_t target_apic_id = kCPUInfo[target_core].apicID;
+	if (target_apic_id == BOOTSTRAP_PROCESSOR_ID || target_apic_id == current_apic_id) {
+		return;
+	}
+
+	if (mp_inScheduler[target_apic_id]) {
+		return;
+	}
+
+	send_ipi(target_apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 }
 
 void scheduler_enable()
@@ -328,11 +362,14 @@ void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
         thread->totalRunTicks+=(kTicksSinceStart-thread->lastRunStartTicks);
     }
     thread->threadState=newState;
-    scheduler_add_thread_to_queue(newState,thread);
-    if (newState==THREAD_STATE_RUNNABLE)
-        thread->prioritizedTicksInRunnable=0;
-    else if (newState==THREAD_STATE_RUNNING)
-        thread->lastRunStartTicks=kTicksSinceStart;
+	    scheduler_add_thread_to_queue(newState,thread);
+	    if (newState==THREAD_STATE_RUNNABLE)
+	    {
+	        thread->prioritizedTicksInRunnable=0;
+	        scheduler_nudge_parked_aps(thread);
+	    }
+	    else if (newState==THREAD_STATE_RUNNING)
+	        thread->lastRunStartTicks=kTicksSinceStart;
 }
 
 void scheduler_submit_new_task(task_t *newTask)
