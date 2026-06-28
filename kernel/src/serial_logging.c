@@ -42,7 +42,7 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     uint64_t tick_count = kTicksSinceStart;
     uint8_t priority = (debug_level >> 126) & 0x3;  // Extract top 2 bits for priority
     uint8_t category = __builtin_ctz(debug_level & 0x3FFFFFFFFFFFFFFF); // First category set
-    
+
     va_list args;
     va_start(args, fmt);
     vsprintf(print_buf, fmt, args);
