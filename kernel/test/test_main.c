@@ -615,8 +615,13 @@ static bool test_elf_loader(void)
         return false;
     }
 
-    if (kPageFaultCount == faults_before) {
-        printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - no page faults (demand paging did not fire)\n");
+    // The test ELF spans two pages: _start on page 1 (0x400000) and page2_func
+    // on page 2 (0x401000).  At least two demand-page faults must have fired —
+    // one per page.  This catches any regression of the vma->loaded-per-VMA bug
+    // where the second fault in the same VMA would panic instead of mapping.
+    if (kPageFaultCount < faults_before + 2) {
+        printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - expected >=2 page faults, got %lu\n",
+               kPageFaultCount - faults_before);
         return false;
     }
 
