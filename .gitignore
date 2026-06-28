@@ -17,3 +17,4 @@ os64_kernel.sym
 external/pci_devices.bin
 pci.ids
 /.vendor
+/kernel/include/asm-offsets.h

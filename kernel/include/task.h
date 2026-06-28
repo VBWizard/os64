@@ -52,6 +52,8 @@
 		int64_t ru_nivcsw;       /* involuntary context switches */
 	};
 
+    //NOTE: If you need access to any of the struct members, add a #DEFINE to asm-offsets.c and
+    //      a constant will be created in asm-offsets.c at compile time.
     typedef struct task
     {
 		//The task identifier.  This will be the same as the first threadID assigned to the task

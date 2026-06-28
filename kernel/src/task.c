@@ -1,4 +1,3 @@
-#include <stddef.h>
 #include "task.h"
 #include "CONFIG.h"
 #include "kmalloc.h"
@@ -26,14 +25,6 @@
 extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
 extern uintptr_t kKernelPML4;
-
-// Validate the struct offsets hardcoded in task_exit_asm.S at compile time.
-_Static_assert(offsetof(core_local_storage_t, currentThread) == 56,
-               "CLS_CURRENTTHREAD_OFFSET in task_exit_asm.S needs update");
-_Static_assert(offsetof(thread_t, ownerTask) == 384,
-               "THREAD_OWNERTASK_OFFSET in task_exit_asm.S needs update");
-_Static_assert(offsetof(task_t, retVal) == 168,
-               "TASK_RETVAL_OFFSET in task_exit_asm.S needs update");
 
 // Shared virtual address bump pointer for all tasks that use kKernelPML4 directly.
 // Tasks sharing the same PML4 must draw from the same counter or their stack

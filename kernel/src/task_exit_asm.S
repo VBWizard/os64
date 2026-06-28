@@ -1,10 +1,7 @@
+#include "asm-offsets.h"
+
 .code64
 .intel_syntax noprefix
-
-// Struct field offsets - must match _Static_assert checks in task.c
-.set CLS_CURRENTTHREAD_OFFSET,  56
-.set THREAD_OWNERTASK_OFFSET,  384
-.set TASK_RETVAL_OFFSET,       168
 
 .extern task_exit
 

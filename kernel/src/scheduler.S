@@ -1,3 +1,5 @@
+#include "asm-offsets.h"
+
 .code64
 .intel_syntax noprefix
 .extern mp_isrSavedCS, mp_isrSavedRIP, mp_isrSavedErrorCode, mp_isrSavedRAX, mp_isrSavedRBX, mp_isrSavedRCX, mp_isrSavedRDX
@@ -91,7 +93,7 @@ _schedule_ap:
 
     mov rbx, rax                        # Put the original RAX value in RBX
 	# APIC_ID is now in the RAX register
-	mov rax, [gs:8]						# APIC_ID is the second field of the core_local_storage_t struct
+	mov rax, [gs:CLS_APIC_ID_OFFSET]		# apic_id — offset auto-generated from CLS struct via asm-offsets.h
 
     push rbx                            # Save original RAX value
     lea rbx, [rsp + 16]                 # Adjust rsp to reflect state *before* push rbx and before any changes
