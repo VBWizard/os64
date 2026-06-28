@@ -56,12 +56,12 @@
     {
 		//The task identifier.  This will be the same as the first threadID assigned to the task
 		uint64_t taskID;
-		bool exited;
+		volatile bool exited;
         char exename[128];
         thread_t* threads;
         void* elf;
         char* path;
-        uint64_t retVal;
+        volatile uint64_t retVal;
         //signals_t signals;
         uint64_t heapStart, heapEnd;
         short priority;           //-20=highest, 20=lowest
@@ -107,6 +107,7 @@
 
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
+	void task_exit_with_retval(void);   // asm stub: captures RAX into task->retVal then calls task_exit
 	task_t* task_wait(task_t* parentTask, uint64_t* exitCode);
 	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);

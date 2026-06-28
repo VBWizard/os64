@@ -176,7 +176,7 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 
 		// For ktask/idle (using kKernelPML4), stack is directly accessible
 		if (task->pml4v == (uint64_t*)kKernelPML4v) {
-			*(uintptr_t *)newThread->regs.RSP = (uintptr_t)&task_exit;
+			*(uintptr_t *)newThread->regs.RSP = (uintptr_t)&task_exit_with_retval;
 		} else {
 			// For other tasks: temporarily map the stack page into kernel space to write to it
 			uintptr_t phys_rsp = paging_walk_paging_table((pt_entry_t*)task->pml4v, newThread->regs.RSP);
@@ -192,7 +192,7 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 				paging_map_pages((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR, phys_page, 1, PAGE_PRESENT | PAGE_WRITE);
 
 				// Write the return address via the temporary mapping
-				*(uintptr_t *)(KERNEL_TEMP_MAP_ADDR + offset) = (uintptr_t)&task_exit;
+				*(uintptr_t *)(KERNEL_TEMP_MAP_ADDR + offset) = (uintptr_t)&task_exit_with_retval;
 
 				// Unmap the temporary page
 				paging_unmap_page((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR);

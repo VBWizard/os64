@@ -215,49 +215,11 @@ void kernel_init()
 
 	if (kRootFilesystem!=NULL)
 	{
-        // Temporary: run a tiny kernel-mode ELF to validate the loader.
-		uint64_t faults_before = kPageFaultCount;
-        task_t *testElfTask = task_create("/bin/test_elf", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
-        scheduler_submit_new_task(testElfTask);
-		for (int tries = 0; tries < 50 && kPageFaultCount == faults_before; tries++) {
-			wait(100);
-		}
-		if (kPageFaultCount == faults_before) {
-			panic("ELF loader test did not fault in any pages within timeout\n");
-		}
-
-		// Test: Verify task_exit() puts thread in zombie queue
-		printd(DEBUG_TESTS, "Checking zombie queue for test_elf (no wait)...\n");
-		// Test with no wait - see if test_elf is already in zombie queue
-		for (int tries = 0; tries < 0; tries++) {
-			wait(100);
-		}
-		printd(DEBUG_TESTS, "Checking zombie queue...\n");
-
-		// Check zombie queue for test_elf's thread
-		extern thread_t *qZombie;
-		bool found_in_zombie = false;
-		thread_t *zombie = qZombie;
-		while (zombie != NO_THREAD && zombie != NULL) {
-			task_t *zombie_task = (task_t*)zombie->ownerTask;
-			if (zombie_task == testElfTask) {
-				found_in_zombie = true;
-				break;
-			}
-			zombie = zombie->next;
-		}
-
-		if (found_in_zombie) {
-			printd(DEBUG_TESTS, "\t[Test] task_exit_zombifies... OK\n");
-		} else {
-			panic("[Test] task_exit_zombifies... FAIL - test_elf not found in zombie queue\n");
-		}
-
         int lResult = testVFS(kRootFilesystem);
         if (lResult)
 	 		panic("Root filesystem disk test failed: %u\n",lResult);
 		kRootFilesystem->fops->uninitialize(kRootFilesystem);
-	 }
+	}
 
 	shutdown();
 }

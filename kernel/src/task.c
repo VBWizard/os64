@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include "task.h"
 #include "CONFIG.h"
 #include "kmalloc.h"
@@ -25,6 +26,14 @@
 extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
 extern uintptr_t kKernelPML4;
+
+// Validate the struct offsets hardcoded in task_exit_asm.S at compile time.
+_Static_assert(offsetof(core_local_storage_t, currentThread) == 56,
+               "CLS_CURRENTTHREAD_OFFSET in task_exit_asm.S needs update");
+_Static_assert(offsetof(thread_t, ownerTask) == 384,
+               "THREAD_OWNERTASK_OFFSET in task_exit_asm.S needs update");
+_Static_assert(offsetof(task_t, retVal) == 168,
+               "TASK_RETVAL_OFFSET in task_exit_asm.S needs update");
 
 // Shared virtual address bump pointer for all tasks that use kKernelPML4 directly.
 // Tasks sharing the same PML4 must draw from the same counter or their stack
@@ -242,14 +251,16 @@ void task_exit(void)
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	task_t *task = cls ? cls->task : NULL;
 
+	// task->retVal was already written by task_exit_with_retval (asm) before
+	// any C code ran or any stack switch occurred.  We just propagate it to
+	// thread->retVal and mark both as exited.
 	if (thread) {
 		thread->exited = true;
-		thread->retVal = 0;
+		thread->retVal = task ? task->retVal : 0;
 	}
 
 	if (task) {
 		task->exited = true;
-		task->retVal = 0;
 		task_enqueue_dead_child(task);
 	}
 

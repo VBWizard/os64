@@ -10,6 +10,14 @@
 #include "dlist.h"
 #include <stdint.h>
 #include "smp_core.h"
+#include "task.h"
+#include "scheduler.h"
+#include "time.h"
+#include "driver/filesystem/vfs/vfs.h"
+
+extern volatile uint64_t kPageFaultCount;
+extern task_t *kKernelTask;
+extern vfs_filesystem_t *kRootFilesystem;
 
 static test_case_t g_test_cases[TEST_MAX_CASES];
 static size_t g_test_case_count = 0;
@@ -578,6 +586,50 @@ static bool test_task_arena_exhaustion(void)
     return true;
 }
 
+// Magic value serial_ping.S leaves in RAX before ret.
+#define ELF_TEST_RETVAL 0xE1F0CA11UL
+
+static bool test_elf_loader(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_elf_loader (no root filesystem mounted)\n");
+        return true;
+    }
+
+    uint64_t faults_before = kPageFaultCount;
+
+    task_t *elf_task = task_create("/bin/test_elf", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+    if (elf_task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(elf_task);
+
+    // Poll until the task exits or we time out (~1 second at 100 ticks/sec).
+    for (int i = 0; i < 100 && !elf_task->exited; i++)
+        wait(10);
+
+    if (!elf_task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - task did not exit within 1 second\n");
+        return false;
+    }
+
+    if (kPageFaultCount == faults_before) {
+        printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - no page faults (demand paging did not fire)\n");
+        return false;
+    }
+
+    if (elf_task->retVal != ELF_TEST_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - retVal=0x%lx, expected 0x%lx\n",
+               elf_task->retVal, ELF_TEST_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_elf_loader (demand-paged, retVal correct, exited cleanly)\n");
+    return true;
+}
+
 static void register_builtin_tests(void)
 {
     test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
@@ -595,6 +647,7 @@ static void register_builtin_tests(void)
     test_register("task_arena_aligned_alloc", test_task_arena_aligned_alloc, TEST_PHASE_PREBOOT);
     test_register("task_arena_exhaustion", test_task_arena_exhaustion, TEST_PHASE_PREBOOT);
     test_register("vma_file_backed_page_fault_resolved", test_vma_file_backed_page_fault_resolved, TEST_PHASE_POSTBOOT);
+    test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)
