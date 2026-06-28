@@ -38,6 +38,7 @@
 #include "log.h"
 #include "exceptions.h"
 #include "kworker.h"
+#include "env.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -82,25 +83,10 @@ void create_kernel_task()
 	//*Addr 8192:
 	//  1024 environment strings @ 512 bytes each
 	//TODO: Change this to be MMAP'd
-	parentTask.envPSize = 0;
-	parentTask.envSize = 0;
-	parentTask.realEnvp = (char**)allocate_memory_aligned(TASK_ENVIRONMENT_MAX_SIZE);
-	parentTask.realEnv = (char*)parentTask.mappedEnvp+(PAGE_SIZE*2);
-	parentTask.mappedEnvp = (char**)TASK_ENVP_VIRT;
-	parentTask.mappedEnv = (char*)TASK_ENV_VIRT;
-	paging_map_pages((uintptr_t*)kKernelPML4v, (uintptr_t)parentTask.mappedEnvp, (uintptr_t)parentTask.realEnvp, TASK_ENVIRONMENT_MAX_SIZE / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
-	memset(parentTask.mappedEnvp, 0, TASK_ENVIRONMENT_MAX_SIZE);
-	parentTask.envPSize = TASK_ENVIRONMENT_MAX_ENTRIES * sizeof(uintptr_t);
-	parentTask.envSize = TASK_ENVIRONMENT_MAX_SIZE - parentTask.envPSize;
-
-	parentTask.mappedEnv = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET);
-	((char**)parentTask.mappedEnvp)[0] = parentTask.mappedEnv;
-	strncpy(parentTask.mappedEnvp[0], "PATH=/", TASK_MAX_PATH_LEN);
-
-	((char**)parentTask.mappedEnvp)[1] = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET + 8);
-	strncpy(parentTask.mappedEnvp[1], "HOSTNAME=yogi.localhost.localdomain", TASK_MAX_PATH_LEN);
-	((char**)parentTask.mappedEnvp)[2] = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET + 16);
-	strncpy(parentTask.mappedEnvp[2], "CWD=/", TASK_MAX_PATH_LEN);
+	parentTask.env = env_create();
+	env_set(parentTask.env, "PATH",     "/");
+	env_set(parentTask.env, "HOSTNAME", "yogi.localhost.localdomain");
+	env_set(parentTask.env, "CWD",      "/");
 	parentTask.stdin = STDIN;
 	parentTask.stdout = STDOUT;
 	parentTask.stderr = STDERR;

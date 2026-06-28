@@ -6,6 +6,7 @@
 #include "dlist.h"
 #include "thread.h"
 #include "time.h"
+#include "env.h"
 
 #define TASK_MAX_EXIT_HANDLERS 10
 #define TASK_DEFAULT_PRIORITY 0
@@ -86,15 +87,7 @@
         char* cwd;                              //Current working directory for the process
         void* startHandler[TASK_MAX_EXIT_HANDLERS];
         int startHandlerPtr;
-        //Paged address of the environment pointers
-		char** mappedEnvp;
-		//Real address of the envionment pointers
-        char** realEnvp;
-		//Paged address of the environment values
-        char* mappedEnv;
-		//Real address of the environment values
-        char* realEnv;
-		uint64_t envPSize, envSize;
+        envpage_t *env;    // flat key/val environment; inherited CoW by child tasks
         bool justForked;
         uint32_t forkChildCR3;
         uint32_t childNumber;

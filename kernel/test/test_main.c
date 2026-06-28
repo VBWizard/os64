@@ -2,6 +2,8 @@
 
 #include "memory/kmalloc.h"
 #include "memory/memset.h"
+#include "strcmp.h"
+#include "strlen.h"
 #include "memory/memcpy.h"
 #include "memory/vma.h"
 #include "memory/arena.h"
@@ -705,6 +707,193 @@ static bool test_elf_loader(void)
     return true;
 }
 
+// ── env tests ────────────────────────────────────────────────────────────────
+
+static bool test_env_create_empty(void)
+{
+    envpage_t *env = env_create();
+    if (!env)
+        TEST_FAIL("env_create returned NULL");
+    if (env->count != 0)
+        TEST_FAIL("fresh env has non-zero count");
+    if (env->data_end != 0)
+        TEST_FAIL("fresh env has non-zero data_end");
+    if (env_get(env, "ANYTHING") != NULL)
+        TEST_FAIL("env_get on empty env should return NULL");
+    kfree(env);
+    return true;
+}
+
+static bool test_env_set_and_get(void)
+{
+    envpage_t *env = env_create();
+    if (!env) TEST_FAIL("env_create returned NULL");
+
+    if (!env_set(env, "PATH", "/bin:/usr/bin"))
+        TEST_FAIL("env_set returned false");
+    if (env->count != 1)
+        TEST_FAIL("count should be 1 after one set");
+
+    const char *v = env_get(env, "PATH");
+    if (!v)
+        TEST_FAIL("env_get returned NULL for existing key");
+    if (strcmp(v, "/bin:/usr/bin") != 0)
+        TEST_FAIL("env_get returned wrong value");
+
+    kfree(env);
+    return true;
+}
+
+static bool test_env_update_shorter_val(void)
+{
+    envpage_t *env = env_create();
+    if (!env) TEST_FAIL("env_create returned NULL");
+
+    env_set(env, "HOME", "/home/longusername");
+    env_set(env, "HOME", "/root");          // shorter replacement
+
+    if (env->count != 1)
+        TEST_FAIL("count should still be 1 after update");
+    const char *v = env_get(env, "HOME");
+    if (!v || strcmp(v, "/root") != 0)
+        TEST_FAIL("env_get returned wrong value after shorter update");
+
+    kfree(env);
+    return true;
+}
+
+static bool test_env_update_longer_val(void)
+{
+    envpage_t *env = env_create();
+    if (!env) TEST_FAIL("env_create returned NULL");
+
+    env_set(env, "TERM", "vt100");
+    env_set(env, "TERM", "xterm-256color");  // longer replacement
+
+    if (env->count != 1)
+        TEST_FAIL("count should still be 1 after update");
+    const char *v = env_get(env, "TERM");
+    if (!v || strcmp(v, "xterm-256color") != 0)
+        TEST_FAIL("env_get returned wrong value after longer update");
+
+    kfree(env);
+    return true;
+}
+
+static bool test_env_multi_key(void)
+{
+    envpage_t *env = env_create();
+    if (!env) TEST_FAIL("env_create returned NULL");
+
+    env_set(env, "A", "alpha");
+    env_set(env, "B", "bravo");
+    env_set(env, "C", "charlie");
+
+    if (env->count != 3)
+        TEST_FAIL("count should be 3");
+    if (strcmp(env_get(env, "A"), "alpha")   != 0) TEST_FAIL("wrong value for A");
+    if (strcmp(env_get(env, "B"), "bravo")   != 0) TEST_FAIL("wrong value for B");
+    if (strcmp(env_get(env, "C"), "charlie") != 0) TEST_FAIL("wrong value for C");
+    if (env_get(env, "D") != NULL)
+        TEST_FAIL("missing key should return NULL");
+
+    kfree(env);
+    return true;
+}
+
+static bool test_env_inherit_copies(void)
+{
+    envpage_t *parent = env_create();
+    if (!parent) TEST_FAIL("env_create returned NULL");
+    env_set(parent, "PATH", "/bin");
+    env_set(parent, "USER", "root");
+
+    envpage_t *child = env_inherit(parent);
+    if (!child) TEST_FAIL("env_inherit returned NULL");
+
+    if (strcmp(env_get(child, "PATH"), "/bin") != 0)
+        TEST_FAIL("child missing PATH from parent");
+    if (strcmp(env_get(child, "USER"), "root") != 0)
+        TEST_FAIL("child missing USER from parent");
+
+    kfree(parent);
+    kfree(child);
+    return true;
+}
+
+static bool test_env_inherit_independence(void)
+{
+    envpage_t *parent = env_create();
+    if (!parent) TEST_FAIL("env_create returned NULL");
+    env_set(parent, "SHARED", "original");
+
+    envpage_t *child = env_inherit(parent);
+    if (!child) TEST_FAIL("env_inherit returned NULL");
+
+    // Child modifies its copy; parent must be unaffected.
+    env_set(child, "SHARED", "modified");
+    env_set(child, "CHILD_ONLY", "yes");
+
+    if (strcmp(env_get(parent, "SHARED"), "original") != 0)
+        TEST_FAIL("parent SHARED was modified by child");
+    if (env_get(parent, "CHILD_ONLY") != NULL)
+        TEST_FAIL("parent sees child-only key after inherit");
+
+    kfree(parent);
+    kfree(child);
+    return true;
+}
+
+static bool test_env_count_accurate(void)
+{
+    envpage_t *env = env_create();
+    if (!env) TEST_FAIL("env_create returned NULL");
+
+    env_set(env, "X", "1");
+    env_set(env, "Y", "2");
+    if (env->count != 2) TEST_FAIL("count wrong after 2 sets");
+
+    env_set(env, "X", "updated");   // update, not add
+    if (env->count != 2) TEST_FAIL("count should stay 2 after update");
+
+    env_set(env, "Z", "3");
+    if (env->count != 3) TEST_FAIL("count wrong after add following update");
+
+    kfree(env);
+    return true;
+}
+
+static bool test_env_capacity_full(void)
+{
+    envpage_t *env = env_create();
+    if (!env) TEST_FAIL("env_create returned NULL");
+
+    // Fill the page with entries "K000\0V000\0", "K001\0V001\0", ...
+    // Each entry is 5+5 = 10 bytes; capacity ~4084 bytes → ~408 entries max.
+    bool got_false = false;
+    char key[8], val[8];
+    for (int i = 0; i < 600; i++) {
+        // Build "K%03d" and "V%03d" by hand (no sprintf available here easily).
+        key[0]='K'; key[1]='0'+(i/100)%10; key[2]='0'+(i/10)%10; key[3]='0'+i%10; key[4]='\0';
+        val[0]='V'; val[1]='0'+(i/100)%10; val[2]='0'+(i/10)%10; val[3]='0'+i%10; val[4]='\0';
+        if (!env_set(env, key, val)) {
+            got_false = true;
+            break;
+        }
+    }
+    if (!got_false)
+        TEST_FAIL("env_set never returned false — capacity check may be broken");
+
+    // Entries set before the page filled must still be readable.
+    if (env_get(env, "K000") == NULL)
+        TEST_FAIL("K000 missing after fill");
+
+    kfree(env);
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 static void register_builtin_tests(void)
 {
     test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
@@ -718,6 +907,15 @@ static void register_builtin_tests(void)
     test_register("vma_insert_and_lookup", test_vma_insert_and_lookup, TEST_PHASE_PREBOOT);
     test_register("vma_page_fault_resolved", test_vma_page_fault_resolved, TEST_PHASE_PREBOOT);
     test_register("vma_cow_write", test_vma_cow_write, TEST_PHASE_PREBOOT);
+    test_register("env_create_empty",        test_env_create_empty,          TEST_PHASE_PREBOOT);
+    test_register("env_set_and_get",         test_env_set_and_get,           TEST_PHASE_PREBOOT);
+    test_register("env_update_shorter_val",  test_env_update_shorter_val,    TEST_PHASE_PREBOOT);
+    test_register("env_update_longer_val",   test_env_update_longer_val,     TEST_PHASE_PREBOOT);
+    test_register("env_multi_key",           test_env_multi_key,             TEST_PHASE_PREBOOT);
+    test_register("env_inherit_copies",      test_env_inherit_copies,        TEST_PHASE_PREBOOT);
+    test_register("env_inherit_independence",test_env_inherit_independence,  TEST_PHASE_PREBOOT);
+    test_register("env_count_accurate",      test_env_count_accurate,        TEST_PHASE_PREBOOT);
+    test_register("env_capacity_full",       test_env_capacity_full,         TEST_PHASE_PREBOOT);
     test_register("task_arena_create_and_destroy", test_task_arena_create_and_destroy, TEST_PHASE_PREBOOT);
     test_register("task_arena_alloc_and_convert", test_task_arena_alloc_and_convert, TEST_PHASE_PREBOOT);
     test_register("task_arena_aligned_alloc", test_task_arena_aligned_alloc, TEST_PHASE_PREBOOT);

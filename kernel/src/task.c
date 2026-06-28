@@ -1,4 +1,5 @@
 #include "task.h"
+#include "env.h"
 #include "CONFIG.h"
 #include "kmalloc.h"
 #include "thread.h"
@@ -483,22 +484,10 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 
 	newTask->kernelTask=isKernelTask;
 
-	//The kernel task's environment will be created manually, and TASK_ENVIRONMENT_SIZE will be allocated to it
-	//Every other task will have a parentTask, and we'll map the parentTask's environment to the child.
-	//Since the environment pages will be COW, the child can modify it
-	//Map the parentTask's environment pointers into the new task
-	newTask->mappedEnvp = parentTaskPtr->mappedEnvp;
-	newTask->mappedEnv = parentTaskPtr->mappedEnv;
-	newTask->realEnvp = parentTaskPtr->realEnvp;
-	newTask->envPSize = parentTaskPtr->envPSize;
-	newTask->envSize = parentTaskPtr->envSize;
-
-	//Map the parentTask's environment pointers and values into the new task
-	//TODO: Make the parentTask's environment COW before mapping it into the child
-	mapPages = (newTask->envPSize + newTask->envSize) / PAGE_SIZE;
-	if ((newTask->envPSize + newTask->envSize) % PAGE_SIZE)
-		mapPages++;
-	paging_map_pages(newTask->pml4v, (uintptr_t)newTask->mappedEnvp, (uintptr_t)parentTaskPtr->realEnvp, mapPages,PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+	// Inherit the parent's environment.  env_inherit makes a full independent copy
+	// so parent and child can diverge freely.  True CoW (sharing the physical page
+	// until first write) is a future optimisation.
+	newTask->env = env_inherit(parentTaskPtr->env);
 
 	return newTask;
 }
