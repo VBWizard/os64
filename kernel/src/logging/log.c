@@ -77,7 +77,10 @@ void logging_queueing_init() {
 // so multi-chunk messages are never split by the interleave logic.
 static void logd_drain_one(log_buffer_t *buffer)
 {
-    char print_buf2[MAX_LOG_MESSAGE_SIZE + 32];
+    // Worst-case formatted output: 20 (%lu ticks) + 22 ((0x%016lx threadID))
+    // + 9 (AP65535:) + 1 (space) + 255 (message) + NUL = 308 bytes.
+    // Use 512 to stay well clear even if metadata is corrupted.
+    char print_buf2[MAX_LOG_MESSAGE_SIZE + 256];
     log_entry_t *entry = &buffer->entries[buffer->tail];
 
     if (!entry->continued)

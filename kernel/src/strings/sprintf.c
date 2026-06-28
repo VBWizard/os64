@@ -290,12 +290,15 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 }
 
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list args) {
-    if (size == 0) return 0; // No space to write anything
-    int len = vsprintf(buf, fmt, args);
-    if (len >= (int)size) {
-        buf[size - 1] = '\0'; // Ensure null termination if truncated
-        return size - 1;
-    }
+    if (size == 0) return 0;
+    // vsprintf has no size limit — write to a temp buffer first, then
+    // copy at most (size-1) bytes.  2048 safely covers every kernel
+    // format string (the longest is debug_print_registers at ~400 chars).
+    char _tmp[2048];
+    int len = vsprintf(_tmp, fmt, args);
+    size_t n = ((size_t)len < size - 1) ? (size_t)len : size - 1;
+    for (size_t i = 0; i < n; i++) buf[i] = _tmp[i];
+    buf[n] = '\0';
     return len;
 }
 
