@@ -686,7 +686,16 @@ void scheduler_trigger(core_local_storage_t *cls)
 	//Since we're calling a different vector than the APIC timer does, we need to reset the timer count
     mp_restart_apic_timer_count();
     send_ipi(cls->apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
-	__asm__ volatile("sti\nhlt\n");      //Halt till the scheduler runs again
+    // Wait until the ISR has run and cleared mp_waitingForScheduler.
+    // Using a checked loop rather than a bare sti;hlt because the ISR may
+    // fire before we reach hlt (e.g. during send_ipi's printd). If that
+    // happens the thread gets context-switched away mid-function; when it
+    // is later rescheduled it resumes here, the flag is already cleared,
+    // and the loop exits without blocking.
+    __asm__ volatile("sti");
+    while (mp_waitingForScheduler[cls->apic_id])
+        __asm__ volatile("hlt");
+    cls = get_core_local_storage();
 }
 
 /// @brief Yield control of the CPU

@@ -26,6 +26,9 @@
 
 //Logging related
 #define ENABLE_LOG_BUFFERING 1  // Set to 0 to disable buffering
+// Wait for transmit-empty before each serial byte. Required at 115200 on real
+// hardware and some hypervisors; disable if it causes hangs on your platform.
+#define SERIAL_WAIT_FOR_TRANSMIT 1
 
 //Scheduler Related
 #define MP_SCHEDULER_RUNS_PER_SECOND 10

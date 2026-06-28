@@ -1,5 +1,6 @@
 #include "io.h"
 #include "time.h"
+#include "CONFIG.h"
 
 static volatile int serial_lock = 0;
 
@@ -36,7 +37,21 @@ void write_serial(int port, char a) {
 
 // Implemented to handle processing a string and writing all the bytes via write_serial()
 void serial_print_string(const char *message) {
+#if SERIAL_WAIT_FOR_TRANSMIT
+    // Burst up to 16 bytes per wait (matches the 16550 TX FIFO depth).
+    // THRE (LSR bit 5) in FIFO mode means the TX FIFO is completely empty,
+    // so after each wait there are exactly 16 free slots — no overflow risk.
+    // count resets to 0 at the start of each call so back-to-back calls
+    // also wait before their first byte.
+    int count = 0;
     for (const char *c = message; *c; c++) {
+        if (count == 0)
+            while (!is_transmit_empty(COM1));
         serial_write_char(COM1, *c);
+        count = (count + 1) % 16;
     }
+#else
+    for (const char *c = message; *c; c++)
+        serial_write_char(COM1, *c);
+#endif
 }
