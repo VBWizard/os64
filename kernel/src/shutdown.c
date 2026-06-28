@@ -32,9 +32,7 @@ void shutdown()
 	}
 	printd(DEBUG_SHUTDOWN, "Found %u memory in use at shutdown\n", memInUse);
 	printd(DEBUG_SHUTDOWN, "Found %u memory status entries,  %u in use\n", kMemoryStatusCurrentPtr, usedCount);
-	printf("All done, hcf-time!\n");
-	printd(DEBUG_EXCEPTIONS,"All done, hcf-time!\n");	
-	printf("12345678901234567890123456789012345678901234567890123456789012345678901234567890\n");
+	printf("Kernel loaded!  Idling for now until we have a userland to run!");
 	while (true)
 	{
 		if (lastTime != kSystemCurrentTime)
