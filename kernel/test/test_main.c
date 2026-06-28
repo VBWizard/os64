@@ -2,9 +2,11 @@
 
 #include "memory/kmalloc.h"
 #include "memory/memset.h"
+#include "memory/memcpy.h"
 #include "memory/vma.h"
 #include "memory/arena.h"
 #include "memory/task_arena.h"
+#include "allocator.h"
 #include "paging.h"
 #include "exceptions.h"
 #include "dlist.h"
@@ -586,6 +588,74 @@ static bool test_task_arena_exhaustion(void)
     return true;
 }
 
+// Test that a write to a CoW-mapped page:
+//   (a) triggers exactly one page fault,
+//   (b) the write succeeds (page is remapped writable),
+//   (c) the rest of the page is a faithful copy of the original,
+//   (d) the original physical page is not modified,
+//   (e) the physical page behind the VMA changes (private copy allocated).
+static bool test_vma_cow_write(void)
+{
+    task_t *task = get_core_local_storage()->task;
+    uintptr_t test_addr = 0x61000000;  // well clear of other test VAs
+
+    // Allocate a physical source page and fill it with a known pattern.
+    uintptr_t orig_phys = allocate_memory_aligned(PAGE_SIZE);
+    if (!orig_phys)
+        TEST_FAIL("cow: failed to allocate source page");
+    memset((void *)(orig_phys | kHHDMOffset), 0xAB, PAGE_SIZE);
+
+    // Create a CoW VMA (PROT_WRITE so the page fault handler grants write access
+    // once the page is privatised) and map the source page read-only.  The absence
+    // of PAGE_WRITE on the mapping is what causes the CoW fault on the first write.
+    vma_t *vma = vma_create(test_addr, test_addr + PAGE_SIZE,
+                            PROT_READ | PROT_WRITE, MAP_PRIVATE, NULL, 0);
+    if (!vma)
+        TEST_FAIL("cow: failed to create VMA");
+    vma->cow = true;
+    vma_add(task, vma);
+    paging_map_page((pt_entry_t *)task->pml4v, test_addr, orig_phys,
+                    PAGE_PRESENT | PAGE_USER);  // intentionally no PAGE_WRITE
+
+    uint64_t faults_before = kPageFaultCount;
+
+    // Write to the CoW page.  This must fault, copy the page, remap writable,
+    // and allow the CPU to retry the store — all transparently.
+    volatile uint8_t *ptr = (volatile uint8_t *)test_addr;
+    *ptr = 0xCD;
+
+    // Exactly one CoW fault must have fired.
+    if (kPageFaultCount != faults_before + 1)
+        TEST_FAIL("cow: expected exactly 1 page fault");
+
+    // The write must have landed in the private copy.
+    if (*ptr != 0xCD)
+        TEST_FAIL("cow: write did not persist after CoW fault");
+
+    // The rest of the page must carry the original fill (content was copied).
+    if (*(volatile uint8_t *)(test_addr + 1) != 0xAB)
+        TEST_FAIL("cow: CoW page content was not copied from the original");
+
+    // The original physical page must be intact.
+    if (((volatile uint8_t *)(orig_phys | kHHDMOffset))[0] != 0xAB)
+        TEST_FAIL("cow: original physical page was modified by CoW");
+
+    // The physical page now backing the VMA must be a different page.
+    uintptr_t new_phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, test_addr);
+    if (new_phys == orig_phys)
+        TEST_FAIL("cow: physical page was not replaced with a private copy");
+
+    // Cleanup: unmap, remove VMA, free both physical pages.
+    paging_unmap_page((pt_entry_t *)task->pml4v, test_addr);
+    if (task->mmaps != NULL && vma->listItem != NULL)
+        dlist_remove(task->mmaps, vma->listItem);
+    vma_destroy(vma);
+    free_memory(orig_phys);
+    kfree((void *)(new_phys | kHHDMOffset)); // new_phys was kmalloc_aligned in the CoW handler
+
+    return true;
+}
+
 // Magic value serial_ping.S leaves in RAX before ret.
 #define ELF_TEST_RETVAL 0xE1F0CA11UL
 
@@ -647,6 +717,7 @@ static void register_builtin_tests(void)
     test_register("arena_exhaustion", test_arena_exhaustion, TEST_PHASE_PREBOOT);
     test_register("vma_insert_and_lookup", test_vma_insert_and_lookup, TEST_PHASE_PREBOOT);
     test_register("vma_page_fault_resolved", test_vma_page_fault_resolved, TEST_PHASE_PREBOOT);
+    test_register("vma_cow_write", test_vma_cow_write, TEST_PHASE_PREBOOT);
     test_register("task_arena_create_and_destroy", test_task_arena_create_and_destroy, TEST_PHASE_PREBOOT);
     test_register("task_arena_alloc_and_convert", test_task_arena_alloc_and_convert, TEST_PHASE_PREBOOT);
     test_register("task_arena_aligned_alloc", test_task_arena_aligned_alloc, TEST_PHASE_PREBOOT);

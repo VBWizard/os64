@@ -8,9 +8,11 @@
 #include "CONFIG.h"
 #include "log.h"
 #include "memory/paging.h"
+#include "memory/memcpy.h"
 #include "exceptions.h"
 #include "memory/vma.h"
 #include "kmalloc.h"
+#include "allocator.h"
 
 uint64_t gLastFaultRbp = 0;
 uint64_t gLastFaultRsp = 0;
@@ -193,11 +195,65 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         panic("Paging exception: Invalid memory access with no VMA");
     }
 
-    printd(DEBUG_EXCEPTIONS, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x)\n", vma->start, vma->end, vma->prot);
+    printd(DEBUG_EXCEPTIONS, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x, cow=%d)\n", vma->start, vma->end, vma->prot, vma->cow);
 
     // Calculate aligned fault address
     uintptr_t aligned = cr2 & ~(PAGE_SIZE - 1);
 
+    // Classify the fault from the error code:
+    //   bit 0 (P): 0 = page not present, 1 = page present (protection violation)
+    //   bit 1 (W): 0 = read fault,        1 = write fault
+    bool page_was_present = (error_code & 0x1) != 0;
+    bool was_write        = (error_code & 0x2) != 0;
+
+    if (page_was_present && was_write && vma->cow)
+    {
+        // Copy-on-Write fault: the page is present but mapped read-only because
+        // it is (or was) shared with another task.  Allocate a private copy,
+        // duplicate the content, then remap writable so the faulting store can retry.
+        uintptr_t old_phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, aligned);
+        if (!old_phys || old_phys == 0xbadbadba)
+            panic("CoW fault: page table walk did not find the original page");
+
+        // kmalloc_aligned guarantees the page is accessible via HHDM in kKernelPML4.
+        // allocate_memory_aligned() does not make that guarantee.
+        void *new_virt = kmalloc_aligned(PAGE_SIZE);
+        if (!new_virt)
+            panic("CoW fault: failed to allocate replacement page");
+        uintptr_t new_phys = (uintptr_t)new_virt - kHHDMOffset;
+
+        // Copy the old page's content via HHDM — the source physical page is
+        // accessible at (old_phys | kHHDMOffset); the dest is new_virt directly.
+        memcpy(new_virt,
+               (void *)(old_phys | kHHDMOffset),
+               PAGE_SIZE);
+
+        // Remap the virtual address to the new private page, now writable.
+        uint64_t cow_flags = PAGE_PRESENT | PAGE_USER | PAGE_WRITE;
+        paging_map_page((pt_entry_t *)task->pml4v, aligned, new_phys, cow_flags);
+
+        // paging_map_page does not flush the TLB on map (only on unmap), so we
+        // must invalidate this entry explicitly or the CPU retries against the
+        // stale read-only TLB entry and faults again immediately.
+        __asm__ volatile("invlpg [%0]" :: "r"(aligned) : "memory");
+
+        printd(DEBUG_EXCEPTIONS, "CoW: 0x%016lx privatised (old phys 0x%016lx -> new phys 0x%016lx)\n",
+               aligned, old_phys, new_phys);
+        kPageFaultCount++;
+        return;
+    }
+
+    if (page_was_present)
+    {
+        // Page is present but the access was denied and this VMA is not CoW.
+        // This is a genuine protection violation, not a recoverable fault.
+        printd(DEBUG_EXCEPTIONS, "Protection violation at RIP=0x%016lx, CR2=0x%016lx\n", rip, cr2);
+        log_page_fault_bits(error_code);
+        dump_stack_trace(rip);
+        panic("Paging exception: protection violation (write to read-only non-CoW page)");
+    }
+
+    // Demand page fault: page is not present yet.  Resolve via the VMA's backing.
     uintptr_t phys = vma_resolve_backing_page(vma, cr2);
     if (!phys)
         panic("Failed to resolve page during fault resolution");
