@@ -193,14 +193,6 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         panic("Paging exception: Invalid memory access with no VMA");
     }
 
-    if (vma->loaded)
-    {
-        printd(DEBUG_EXCEPTIONS, "VMA found for address 0x%016lx, but already loaded\n", cr2);
-        log_page_fault_bits(error_code);
-        dump_stack_trace(rip);
-        panic("Paging exception: Invalid memory access, VMA already loaded");
-    }
-
     printd(DEBUG_EXCEPTIONS, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x)\n", vma->start, vma->end, vma->prot);
 
     // Calculate aligned fault address
@@ -216,7 +208,6 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         flags |= PAGE_WRITE;
 
     paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
-    vma->loaded = true;
 
     printd(DEBUG_EXCEPTIONS, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
 

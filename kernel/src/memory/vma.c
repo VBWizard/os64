@@ -106,24 +106,33 @@ uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr)
         if (fops == NULL || fops->read == NULL || fops->seek == NULL)
             panic("vma_resolve_backing_page: File ops not available for backing");
 
-        // Allocate buffer using kmalloc (mapped in kKernelPML4)
+        // Allocate both the page buffer and the params struct using kmalloc so
+        // they live in the HHDM (upper half) and remain accessible after the
+        // CR3 switch to kKernelPML4 inside call_in_kernel_context.
+        // Stack-local params would be on the task stack, which is NOT mapped
+        // in kKernelPML4, causing kernel_read_file to dereference garbage.
         void *virt = kmalloc_aligned(PAGE_SIZE);
         if (!virt)
             panic("Failed to allocate page for file-backed VMA");
 
-        // Static params in kernel .bss (upper-half, accessible from both contexts)
-        static kernel_read_params_t params;
-        params.file = file;
-        params.fops = fops;
-        params.file_offset = file_offset;
-        params.buffer = virt;
-        params.size = PAGE_SIZE;
-        params.result = 0;
+        kernel_read_params_t *params = kmalloc(sizeof(kernel_read_params_t));
+        if (!params)
+            panic("Failed to allocate kernel_read_params_t");
+
+        params->file = file;
+        params->fops = fops;
+        params->file_offset = file_offset;
+        params->buffer = virt;
+        params->size = PAGE_SIZE;
+        params->result = 0;
 
         // Switch to kernel context (kernel stack + kKernelPML4) and read file
-        call_in_kernel_context((void (*)(void*))kernel_read_file, &params);
+        call_in_kernel_context((void (*)(void*))kernel_read_file, params);
 
-        if (params.result < 0)
+        int read_result = params->result;
+        kfree(params);
+
+        if (read_result < 0)
             panic("vma_resolve_backing_page: Failed to read file backing");
 
         // Get physical address from virtual (kmalloc returns HHDM addresses)
@@ -151,7 +160,6 @@ vma_t* vma_create(uintptr_t start,
     vma->file = file;
     vma->file_offset = file_offset;
     vma->cow = false;
-    vma->loaded = false;
     vma->listItem = NULL;
 
     return vma;

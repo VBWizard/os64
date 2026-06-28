@@ -36,7 +36,6 @@ typedef struct vma {
     void* file;                   // Optional backing file
     uint64_t file_offset;         // File offset for mmap
     bool cow;                     // Is this region CoW-enabled?
-    bool loaded;                  // Has it been faulted in yet?
     dlist_node_t* listItem;       // Back-pointer to the owning task's list node
 } vma_t;
 
