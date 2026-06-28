@@ -81,7 +81,6 @@ bool logd_thread(bool daemon) {
         // Try-lock: if another CPU is already flushing, skip work this tick
         if (!__sync_lock_test_and_set(&kLogDWorkLock, 1))
         {
-            nonDaemonRunSuccess = true;
             if (kLoggingInitialized)
             {
                 for (int core = 0; core < kMPCoreCount; core++)
@@ -124,6 +123,7 @@ bool logd_thread(bool daemon) {
                     }
                 }
             }
+            nonDaemonRunSuccess = processed_logs > 0;
             __sync_lock_release(&kLogDWorkLock);
         }
         if (!daemon)
@@ -131,5 +131,4 @@ bool logd_thread(bool daemon) {
         sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
     }
 }
-
 

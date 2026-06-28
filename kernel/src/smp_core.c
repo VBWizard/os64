@@ -64,24 +64,26 @@ void write_eoi() {
 
 void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_t level, uint32_t trigger_mode) 
 {
-	core_local_storage_t *cls = get_core_local_storage_for_core(apic_id);
-	if (mp_inScheduler[cls->apic_id] && vector == IPI_MANUAL_SCHEDULE_VECTOR)
+	core_local_storage_t *target_cls = get_core_local_storage_for_core(apic_id);
+	core_local_storage_t *sender_cls = get_core_local_storage();
+	uint32_t sender_apic_id = sender_cls ? sender_cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	if (mp_inScheduler[target_cls->apic_id] && vector == IPI_MANUAL_SCHEDULE_VECTOR)
 	{
 		printd(DEBUG_SMP | DEBUG_DETAILED,"MP: send_ipi_int - NOT sending an scheduling IPI because we're already in the scheduler");
 		return;
 	}
-    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: Sending IPI for 0x%02x to AP%u\n",vector, apic_id);
+    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: AP%u sending IPI 0x%02x to AP%u\n",sender_apic_id, vector, apic_id);
     // Ensure previous IPI command has completed
     while (*((volatile uint32_t*)(kMPICRLow)) & 0x01000){};
 
-    // Write to the high part of the ICR (destination field)
+    // Write to the high pa Canrt of the ICR (destination field)
     *((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;
 
     // Write to the low part of the ICR (command and vector)
 	// Removed setting of level bit 14 (| (level << 14) )
     uint32_t icr_low_value = vector | (delivery_mode << 8) | (level << 14) | (trigger_mode << 15) | 0x00004000;
     *((volatile uint32_t*)(kMPICRLow)) = icr_low_value;
-    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: IPI delivered\n",apic_id);
+    printd(DEBUG_SMP | DEBUG_DETAILED,"MP: AP%u programmed ICR for AP%u (0x%04x)\n",sender_apic_id, apic_id, vector);
 }
 
 static inline void set_gs_base(uint64_t base) {

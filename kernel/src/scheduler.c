@@ -70,6 +70,15 @@ static inline void scheduler_invoke_vector(void)
 	asm volatile("int %0" :: "i"(IPI_MANUAL_SCHEDULE_VECTOR) : "memory");
 }
 
+static bool scheduler_thread_can_run_on_core(thread_t *thread, core_local_storage_t *cls)
+{
+	if (thread == NULL || cls == NULL) {
+		return false;
+	}
+
+	return thread->mp_apic == THREAD_NO_AFFINITY || thread->mp_apic == cls->apic_id;
+}
+
 static void scheduler_nudge_parked_aps(thread_t *thread)
 {
 	if (!kBspSchedulerMode || !kSMPInitDone || thread == NULL || thread->idleThread) {
@@ -78,19 +87,13 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 
 	// In BSP scheduler mode, generic work stays on the BSP.
 	// Only explicitly AP-targeted threads should wake a parked AP.
-	if (thread->mp_apic == (uint64_t)-1 || thread->mp_apic == BOOTSTRAP_PROCESSOR_ID) {
+	if (thread->mp_apic == THREAD_NO_AFFINITY || thread->mp_apic == BOOTSTRAP_PROCESSOR_ID) {
 		return;
 	}
 
 	core_local_storage_t *cls = get_core_local_storage();
 	uint64_t current_apic_id = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
-	uint64_t target_core = thread->mp_apic;
-
-	if (target_core >= kMPCoreCount) {
-		return;
-	}
-
-	uint32_t target_apic_id = kCPUInfo[target_core].apicID;
+	uint32_t target_apic_id = thread->mp_apic;
 	if (target_apic_id == BOOTSTRAP_PROCESSOR_ID || target_apic_id == current_apic_id) {
 		return;
 	}
@@ -99,6 +102,11 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 		return;
 	}
 
+	printd(DEBUG_TASK | DEBUG_DETAILED,
+		"scheduler_nudge_parked_aps: nudging APIC %u for thread 0x%08x (task %s)\n",
+		target_apic_id,
+		thread->threadID,
+		((task_t*)thread->ownerTask)->exename);
 	send_ipi(target_apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 }
 
@@ -456,6 +464,10 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
         printd(DEBUG_SCHEDULER,"storeISRSavedRegs: AP hasn't been through the scheduler before, not saving registers\n");
         return;
     }
+    if (mp_isrSavedCS[apic_id] == 0)
+        panic("scheduler_store_thread: AP%u storing CS=0 into thread 0x%x (%s), RIP=0x%016lx\n",
+            apic_id, thread->threadID, task->exename, mp_isrSavedRIP[apic_id]);
+
     if (thread->execDontSaveRegisters)
     {
         printd(DEBUG_SCHEDULER, "* storeISRSavedRegs: ***Process %u exec'd, not saving registers***\n", task->taskID);
@@ -619,8 +631,8 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 		//This is where we increment all the runnable ticks, based on the process' priority
         if (!thread->idleThread && !justBrowsing)
             thread->prioritizedTicksInRunnable+=(RUNNABLE_TICKS_INTERVAL-task->priority)+1;
-		if (!justBrowsing)
-			printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t%u-Thr 0x%08x (tsk 0x%08x-%s), pri=%i, oldt=%u, newt=%u (runt=%u)\n",
+			if (!justBrowsing)
+				printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t%u-Thr 0x%08x (tsk 0x%08x-%s), pri=%i, oldt=%u, newt=%u (runt=%u)\n",
 					queEntryNum,
 					thread->threadID, 
 					task->taskID,
@@ -629,17 +641,22 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 					oldTicks,
 					thread->prioritizedTicksInRunnable, 
 					thread->totalRunTicks);
-		if ( thread->prioritizedTicksInRunnable >= mostIdleTicks)
-		{
-			//All non-idle threads, and idle threads belonging to the current core, can be selected to run
-			if (!thread->idleThread || (thread->idleThread && thread->mp_apic==cls->apic_id))
+			if (thread->prioritizedTicksInRunnable >= mostIdleTicks)
 			{
-				if (thread->idleThread)
-					printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*\t\tfindTaskToRun: Found idle thread for APIC %u\n",cls->apic_id);
-				threadToRun=thread;
-				mostIdleTicks=thread->prioritizedTicksInRunnable;
+				if (scheduler_thread_can_run_on_core(thread, cls))
+				{
+					if (thread->mp_apic != THREAD_NO_AFFINITY && !thread->idleThread)
+						printd(DEBUG_TASK | DEBUG_DETAILED,
+							"scheduler_find_thread_to_run: APIC %u selecting pinned thread 0x%08x for APIC %u\n",
+							cls->apic_id,
+							thread->threadID,
+							thread->mp_apic);
+					if (thread->idleThread)
+						printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*\t\tfindTaskToRun: Found idle thread for APIC %u\n",cls->apic_id);
+					threadToRun=thread;
+					mostIdleTicks=thread->prioritizedTicksInRunnable;
+				}
 			}
-		}
         queEntryNum++;
         queue=queue->next;
     }
@@ -720,7 +737,7 @@ void scheduler_run_new_thread()
 			threadToStopNewQueue=THREAD_STATE_ZOMBIE;
 			//TODO: If this is the last thread for the task then do something with the task, INCLUDING resetting its GDT entry
 		}
-        else if (threadToStop->signals.sigind && SIGSLEEP)
+        else if (threadToStop->signals.sigind & SIGSLEEP)
 			threadToStopNewQueue=THREAD_STATE_ISLEEP;
 		else
             threadToStopNewQueue=THREAD_STATE_RUNNABLE;

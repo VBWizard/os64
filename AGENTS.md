@@ -1,6 +1,24 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Agent Instructions
+### Regression-First Debugging
+IMPORTANT: When a new crash, hang, fault, or behavioral regression appears after recent edits, first assume the most recent relevant change may have caused it.
+
+Before proposing broader theories or making further code changes:
+1. Identify the last change(s) made in the affected path.
+2. Compare the new symptom to the immediately previous known-good behavior.
+3. Consider whether the latest edit changed the failure mode rather than fixing the root cause.
+4. Prefer minimal rollback or targeted instrumentation over additional speculative fixes.
+5. Do not treat the new symptom in isolation until the most recent changes have been ruled out.
+
+For low-level code such as scheduler, interrupt, SMP, paging, and context-switch paths:
+- Bias strongly toward regression-first reasoning.
+- Make one controlled change at a time.
+- If a new issue appears after a risky edit, pause and reassess before continuing.
+
+
+
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 

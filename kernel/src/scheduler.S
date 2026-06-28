@@ -127,6 +127,17 @@ over_check_signals:
     mov rbx, cr3
     mov [mp_isrSavedCR3 + rax * 8], rbx # Save CR3 in the array
 
+	# Save RIP and CS from the interrupt frame BEFORE switching CR3.
+	# Kernel tasks with their own PML4 have their stack only mapped in that PML4.
+	# After switching to kKernelPML4, dereferencing temp_rsp reads from the wrong
+	# physical pages (e.g. ktask's stack instead of the interrupted task's stack).
+	mov rbx, [temp_rsp + rax * 8]
+	mov rbx, [rbx]
+	mov [mp_isrSavedRIP + rax * 8], rbx
+	mov rbx, [temp_rsp + rax * 8]
+	mov rbx, [rbx + 8]
+	mov [mp_isrSavedCS + rax * 8], rbx
+
     mov rbx, kKernelPML4
     mov cr3, rbx
 
@@ -157,16 +168,17 @@ dontSkipRegisters:
     mov [mp_isrSavedES + rax * 8], rbx
     mov ebx, fs
     mov [mp_isrSavedFS + rax * 8], rbx
-    # Figure out if the CS was a kernel process or not
-    # Interrupt frame layout: [0]=RIP, [8]=CS, [16]=RFLAGS, [+24]=RSP, [+32]=SS (ring3 only)
-    mov rcx, [temp_rsp + rax * 8]
-    mov rbx, [rcx + 8]
+    # Figure out if the CS was a kernel process or not, using the value saved before CR3 switch.
+    # Reading via temp_rsp after the CR3 switch would give garbage for tasks with their own PML4.
+    mov rbx, [mp_isrSavedCS + rax * 8]
     and rbx, 3
     cmp rbx, 3
     jne same_priv_lvl_save_stack_and_flags
-    
+
     # For ring 3 processes, we need to save the SS/ESP/Flags from the stack
-    # TODO: Fix for ring 3!!!
+    # NOTE: ring-3 frames land on the kernel interrupt stack (RSP0, HHDM), accessible after CR3 switch
+    # TODO: Verify for ring-3 tasks with their own PML4
+    mov rcx, [temp_rsp + rax * 8]
 	mov rbx, [rcx + 32]
     mov [mp_isrSavedSS + rax * 8], rbx
     # Get the RSP value from the interrupt stack frame (ring 3 pushes RIP/CS/RFLAGS/RSP/SS)
@@ -189,13 +201,7 @@ same_priv_lvl_save_stack_and_flags:
     mov [mp_isrSavedRFlags + rax * 8], rbx
 
 over_save_samel_priv_lvl_stack_and_flags:
-	# Save CS/RIP for both rings (64-bit mode)
-	mov rcx, [temp_rsp + rax * 8]
-	mov rbx, [rcx + 8]
-	mov [mp_isrSavedCS + rax * 8], rbx  # Save 64-bit CS value
-
-	mov rbx, [rcx]
-	mov [mp_isrSavedRIP + rax * 8], rbx # Save 64-bit RIP value
+	# CS and RIP already saved from the interrupt frame before the CR3 switch above.
 
     
 OverSaveRegisters:
@@ -209,17 +215,10 @@ overSetESP:
     # push RAX which has the apic_id, so that it is available when we get back from scheduling
     push rax
     # Call the scheduler
-    call scheduler_do
-	mov rax, [gs:16]						# APIC_ID is the second field of the core_local_storage_t struct
-    cmp rax, 0x0022
-    jne overBreakInISR
-breakInISRLabel: 
-    nop
+	call scheduler_do
 
-overBreakInISR:
-
-    # Put the apic_id back in RAX
-    pop rax                 			# apic_id is now in EAX
+	# Put the apic_id back in RAX
+	pop rax                 			# apic_id is now in EAX
     
     # Identify whether the new CS is ring 3 for setting the threadIsKernel entry
     mov rbx, [mp_isrSavedCS + rax * 8]
@@ -307,6 +306,13 @@ overRestoreCR3:
 #    mov cr3, ebx
 
 overSignalReturn:
+    cmp rax, 1
+    jne notCoreOneExiting
+
+coreOneExiting:
+    nop
+notCoreOneExiting:
+
 	# Restore the last of the registers
 	# Yes these would still be on the stack if I didn't release them when saving the RSP last time the thread ran,
 	# but I'd rather keep the variables and stack in sync so my debug logging is never wrong
@@ -316,7 +322,7 @@ overSignalReturn:
 	push rbx
 	mov rbx, [mp_isrSavedRIP + rax * 8]
 	push rbx
-notFirstTimeScheduled:
+
 	# Test1
 	push rax
 	mov rax, 0xffffffff00000000

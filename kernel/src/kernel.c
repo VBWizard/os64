@@ -37,6 +37,7 @@
 #include "signals.h"
 #include "log.h"
 #include "exceptions.h"
+#include "kworker.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -44,6 +45,7 @@ extern bool kEnableAHCI;
 extern bool kEnableNVME;
 bool kEnableSMP = true;
 bool kBspSchedulerMode = false;
+bool kEnableKWorker = false;
 volatile uint64_t kSystemStartTime;
 volatile uint64_t kUptime;
 volatile uint64_t kTicksSinceStart;
@@ -65,6 +67,7 @@ task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
+task_t* kKWorkerTask;
 task_t parentTask = {0};
 
 /// @brief Create the kernel task
@@ -101,7 +104,7 @@ void create_kernel_task()
 	parentTask.stdin = STDIN;
 	parentTask.stdout = STDOUT;
 	parentTask.stderr = STDERR;
-	kKernelTask = task_create("ktask", 0, NULL, &parentTask, true, 0);
+	kKernelTask = task_create("ktask", 0, NULL, &parentTask, true, THREAD_NO_AFFINITY);
     scheduler_init();
 	scheduler_submit_new_task(kKernelTask);
 	mp_CoreHasRunScheduledThread[0] = true;
@@ -160,22 +163,35 @@ void kernel_init()
     test_framework_init();
     test_run_preboot();
 
-    for (int cnt = 0; cnt < kMPCoreCount; cnt++)
-    {
-		char idleTaskName[10];
-		sprintf(idleTaskName, "/idle%u",cnt);
-		kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, cnt);
-		scheduler_submit_new_task(kIdleTasks[cnt]);
-	}
+	    for (int cnt = 0; cnt < kMPCoreCount; cnt++)
+	    {
+			char idleTaskName[10];
+			sprintf(idleTaskName, "/idle%u",cnt);
+			kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, kCPUInfo[cnt].apicID);
+			scheduler_submit_new_task(kIdleTasks[cnt]);
+		}
 
 	#if ENABLE_LOG_BUFFERING == 1
-    kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, 0);
-    // Pass daemon=true (first arg in RDI) to logd_thread
-    kLogDTask->threads->regs.RDI = 1;
-    scheduler_submit_new_task(kLogDTask);
-#endif
-   
-    scheduler_enable();
+	    kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+	    // Pass daemon=true (first arg in RDI) to logd_thread
+	    kLogDTask->threads->regs.RDI = 1;
+	    scheduler_submit_new_task(kLogDTask);
+	#endif
+
+	if (kEnableKWorker && kMPCoreCount > 1)
+	{
+	    kKWorkerTask = task_create("/kworker1", 0, NULL, kKernelTask, true, kCPUInfo[1].apicID);
+	    kKWorkerTask->threads->regs.RDI = 1;
+	    kKWorkerTask->autoReap = true;
+	    printd(DEBUG_TASK | DEBUG_DETAILED,
+	    	"kernel_init: enabling /kworker1 on APIC %u (task=0x%08x, thread=0x%08x)\n",
+	    	kCPUInfo[1].apicID,
+	    	kKWorkerTask->taskID,
+	    	kKWorkerTask->threads->threadID);
+	    scheduler_submit_new_task(kKWorkerTask);
+	}
+	   
+	    scheduler_enable();
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
     core_local_storage_t *cls = get_core_local_storage();
 	cls->threadID = kKernelTask->threads->threadID;
@@ -201,7 +217,7 @@ void kernel_init()
 	{
         // Temporary: run a tiny kernel-mode ELF to validate the loader.
 		uint64_t faults_before = kPageFaultCount;
-        task_t *testElfTask = task_create("/bin/test_elf", 0, NULL, kKernelTask, true, 0);
+        task_t *testElfTask = task_create("/bin/test_elf", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
         scheduler_submit_new_task(testElfTask);
 		for (int tries = 0; tries < 50 && kPageFaultCount == faults_before; tries++) {
 			wait(100);

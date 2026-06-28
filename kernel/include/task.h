@@ -71,6 +71,7 @@
         struct task* deadChildTail;
         struct task* deadChildNext;
         bool waitingForChild;
+        bool autoReap;
         bool kernelTask;
         struct tm startTime, endTime;
         uint64_t entryPoint;
@@ -104,9 +105,10 @@
 		void *prev, *next;
     } task_t;
 
-	task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
+		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
 	task_t* task_wait(task_t* parentTask, uint64_t* exitCode);
+	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
-#endif
+	#endif

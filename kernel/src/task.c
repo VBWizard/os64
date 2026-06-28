@@ -20,10 +20,16 @@
 #include "elf_loader.h"
 #include "allocator.h"
 #include "memset.h"
+#include "kworker.h"
 
 extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
 extern uintptr_t kKernelPML4;
+
+// Shared virtual address bump pointer for all tasks that use kKernelPML4 directly.
+// Tasks sharing the same PML4 must draw from the same counter or their stack
+// allocations collide at the same virtual address, overwriting each other's PTEs.
+static uintptr_t kKernelTaskMemoryNextVirt = KERNEL_TASK_MEMORY_BASE;
 
 /// @brief Allocate page-aligned memory for task-specific use (stacks, structures, etc.)
 /// This allocates memory in the lower half of the address space at task-specific virtual addresses.
@@ -47,14 +53,17 @@ void* task_alloc_aligned(task_t* task, size_t size)
 		return NULL;
 	}
 
-	// Get virtual address for this allocation
-	uintptr_t virt = task->taskMemoryNextVirt;
+	// Tasks sharing kKernelPML4 must use a shared counter; per-task counters all
+	// start at KERNEL_TASK_MEMORY_BASE and would map at the same virtual address.
+	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
+		? &kKernelTaskMemoryNextVirt
+		: &task->taskMemoryNextVirt;
+
+	uintptr_t virt = *counter;
+	*counter += aligned_size;
 
 	// Map pages into task's PML4
 	paging_map_pages(task->pml4v, virt, phys, page_count, PAGE_PRESENT | PAGE_WRITE);
-
-	// Update next available address
-	task->taskMemoryNextVirt += aligned_size;
 
 	printd(DEBUG_TASK | DEBUG_DETAILED, "task_alloc_aligned: Allocated %lu bytes (phys=0x%lx, virt=0x%lx) for task %s\n",
 		aligned_size, phys, virt, task->exename);
@@ -85,11 +94,14 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 		return NULL;
 	}
 
-	// Get virtual address range (includes guards)
-	uintptr_t virt_base = task->taskMemoryNextVirt;
+	// Tasks sharing kKernelPML4 must use a shared counter; per-task counters all
+	// start at KERNEL_TASK_MEMORY_BASE and would map at the same virtual address.
+	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
+		? &kKernelTaskMemoryNextVirt
+		: &task->taskMemoryNextVirt;
 
-	// Reserve entire virtual range (including guard regions)
-	task->taskMemoryNextVirt += aligned_size;
+	uintptr_t virt_base = *counter;
+	*counter += aligned_size;
 
 	// Map only the usable stack pages (skip guard pages on each end)
 	uintptr_t phys_stack_start = phys + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE);
@@ -141,6 +153,67 @@ static void task_enqueue_dead_child(task_t *child)
 		parent->waitingForChild = false;
 		scheduler_wake_isleep_task(parent);
 	}
+}
+
+static void task_remove_dead_child(task_t *parent, task_t *child)
+{
+	task_t *prev = NULL;
+	task_t *curr = parent ? parent->deadChildHead : NULL;
+
+	while (curr != NULL) {
+		if (curr == child) {
+			if (prev != NULL) {
+				prev->deadChildNext = curr->deadChildNext;
+			} else {
+				parent->deadChildHead = curr->deadChildNext;
+			}
+
+			if (parent->deadChildTail == curr) {
+				parent->deadChildTail = prev;
+			}
+
+			curr->deadChildNext = NULL;
+			return;
+		}
+
+		prev = curr;
+		curr = curr->deadChildNext;
+	}
+}
+
+int task_reap_eligible_zombies(size_t max_to_reap)
+{
+	task_t *task = kTaskList;
+	size_t reaped = 0;
+
+	while (task != NO_TASK && task != NULL && reaped < max_to_reap) {
+		task_t *child = task->deadChildHead;
+		while (child != NULL && reaped < max_to_reap) {
+			task_t *next_child = child->deadChildNext;
+			bool eligible = child->autoReap || task->exited || child->parentTask == NULL;
+
+			if (eligible) {
+				printd(DEBUG_TASK | DEBUG_DETAILED,
+					"task_reap_eligible_zombies: reaping child task 0x%08x (%s), parent=0x%08x (%s), autoReap=%u, parentExited=%u\n",
+					child->taskID,
+					child->exename,
+					task->taskID,
+					task->exename,
+					child->autoReap,
+					task->exited);
+				task_remove_dead_child(task, child);
+				if (child->threads != NULL) {
+					scheduler_reap_zombie_thread(child->threads);
+				}
+				reaped++;
+			}
+
+			child = next_child;
+		}
+		task = task->next;
+	}
+
+	return (int)reaped;
 }
 
 void task_exit(void)
@@ -278,12 +351,15 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 
 	newTask->threads = createThread((void*)newTask, kernelTask);
 	newTask->threads->idleThread = idleTask;
-	if (idleTask)
-		newTask->threads->mp_apic = pinnedAPICId;
-	else
-		newTask->threads->mp_apic = 0xffffffffffffffff;
+	newTask->threads->mp_apic = pinnedAPICId;
+	printd(DEBUG_TASK | DEBUG_DETAILED,
+		"task_initialize: thread 0x%08x affinity set to %s0x%08lx\n",
+		newTask->threads->threadID,
+		pinnedAPICId == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
+		pinnedAPICId);
 	newTask->taskID = newTask->threads->threadID;
 	newTask->exited = false;
+	newTask->autoReap = false;
 
 	// Note: TASK_STRUCT_VADDR mapping removed - it was unused
 	// task_t lives in kernel heap (HHDM space) and doesn't need fixed virtual mapping
@@ -296,13 +372,22 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	uintptr_t mapPages;
 	bool isIdleTask = strnstr(path, "/idle",10);
 	bool isLogdTask = strnstr(path, "/logd",10);
+	bool isKWorkerTask = strnstr(path, "/kworker",10);
 	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
 
     //Copy the path (parameter) value from the parentTask's memory.
     newTask->path=kmalloc(TASK_MAX_PATH_LEN); 
 	strncpy(newTask->path,path,TASK_MAX_PATH_LEN);
 
-    printd(DEBUG_TASK,"task_create: Creating %s task for %s\n",isKernelTask?"kernel":"user",newTask->path);
+	    printd(DEBUG_TASK,"task_create: Creating %s task for %s\n",isKernelTask?"kernel":"user",newTask->path);
+	printd(DEBUG_TASK | DEBUG_DETAILED,
+		"task_create: path=%s pinnedAPICID=%s0x%08lx idle=%u logd=%u kworker=%u\n",
+		newTask->path,
+		pinnedAPICID == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
+		pinnedAPICID,
+		isIdleTask,
+		isLogdTask,
+		isKWorkerTask);
 
     char *slash=newTask->path, *slash2=newTask->path;
     while (slash!=NULL)
@@ -326,7 +411,13 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		newTask->threads->regs.RIP = (uint64_t)&logd_thread;
 	}
 
-	if (!isIdleTask && !isLogdTask && kRootFilesystem != NULL)
+	if (isKWorkerTask)
+	{
+		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
+		newTask->threads->regs.RIP = (uint64_t)&kworker_thread;
+	}
+
+	if (!isIdleTask && !isLogdTask && !isKWorkerTask && kRootFilesystem != NULL)
 	{
 		if (elf_load_task_from_path(newTask, newTask->path) != 0)
 			panic("task_create: Failed to load ELF for task %s\n", newTask->path);
