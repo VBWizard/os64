@@ -109,6 +109,7 @@ static void logd_drain_one(log_buffer_t *buffer)
 bool logd_thread(bool daemon) {
     thread_t *self = get_core_local_storage()->currentThread;
     bool nonDaemonRunSuccess = false;
+    static uint32_t drain_pass = 0;
 
     while (1) {
         int processed_logs = 0;
@@ -147,6 +148,27 @@ bool logd_thread(bool daemon) {
                 } while (any);
             }
             nonDaemonRunSuccess = processed_logs > 0;
+            drain_pass++;
+
+            // Every 10 passes (~10 seconds), print queue depths directly to
+            // serial so we can monitor buffer pressure without adding to the
+            // ring buffers themselves (which would skew the numbers).
+            if (drain_pass % 5 == 0) {
+                char stats[128];
+                int pos = snprintf(stats, sizeof(stats),
+                    "[logd] tick=%lu pass=%u drained=%d", kTicksSinceStart, drain_pass, processed_logs);
+                for (int c = 0; c < kMPCoreCount && pos < (int)sizeof(stats) - 32; c++) {
+                    log_buffer_t *b = &core_log_buffers[c];
+                    size_t used = (b->head >= b->tail)
+                        ? b->head - b->tail
+                        : b->capacity - b->tail + b->head;
+                    pos += snprintf(stats + pos, sizeof(stats) - pos,
+                        " AP%d=%lu/%lu", c, (unsigned long)used, (unsigned long)b->capacity);
+                }
+                snprintf(stats + pos, sizeof(stats) - pos, "\n");
+                serial_print_string(stats);
+            }
+
             __sync_lock_release(&kLogDWorkLock);
         }
         if (!daemon)

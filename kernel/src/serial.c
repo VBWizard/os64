@@ -10,7 +10,7 @@ static inline void serial_write_char(int port, char a) {
 int init_serial(int port) {
     outb(COM1 + 1, 0x00); // Disable all interrupts
     outb(COM1 + 3, 0x80); // Enable DLAB (set baud rate divisor)
-    outb(COM1 + 0, 0x03); // Divisor low byte (38400 baud)
+    outb(COM1 + 0, 0x01); // Divisor low byte (115200 baud)
     outb(COM1 + 1, 0x00); // Divisor high byte
     outb(COM1 + 3, 0x03); // 8 bits, no parity, one stop bit
     outb(COM1 + 2, 0xC7); // Enable FIFO, clear them, 14-byte threshold

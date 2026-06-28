@@ -8,7 +8,8 @@
 
 //Set to sizeof(log_entry_t)*10 to enable buffer full processing
 
-#define LOG_BUFFER_SIZE (1024 * 1024 * 1) // Size of buffer per core
+#define LOG_BUFFER_SIZE_MB 5
+#define LOG_BUFFER_SIZE (1024 * 1024 * LOG_BUFFER_SIZE_MB) // Size of buffer per core
 #define MAX_LOG_MESSAGE_SIZE 256
 #define LOGD_SLEEP_TICKS (TICKS_PER_SECOND * 1)  // Sleep for X seconds to let the logs build up
 typedef struct log_entry {
