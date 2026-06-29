@@ -165,7 +165,7 @@ static int elf_map_segment(task_t *task, vfs_file_t *file, const Elf64_Phdr *phd
 }
 
 /// @brief Populate a task from an open ELF file.
-int elf_load_task_from_file(task_t *task, vfs_file_t *file)
+int elf_load_from_file(task_t *task, vfs_file_t *file)
 {
     if (task == NULL || file == NULL) {
         return -1;
@@ -257,7 +257,7 @@ int elf_load_task_from_file(task_t *task, vfs_file_t *file)
 }
 
 /// @brief Open an ELF by path and populate a task from it.
-int elf_load_task_from_path(task_t *task, const char *path)
+int elf_load_from_path(task_t *task, const char *path)
 {
     if (task == NULL || path == NULL || kRootFilesystem == NULL) {
         return -1;
@@ -272,5 +272,5 @@ int elf_load_task_from_path(task_t *task, const char *path)
         return -1;
     }
 
-    return elf_load_task_from_file(task, file);
+    return elf_load_from_file(task, file);
 }

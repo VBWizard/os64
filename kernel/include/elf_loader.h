@@ -17,8 +17,8 @@ typedef struct {
 } elf_image_t;
 
 /// @brief Populate task VMAs and entry point from an open ELF file.
-int elf_load_task_from_file(task_t *task, vfs_file_t *file);
+int elf_load_from_file(task_t *task, vfs_file_t *file);
 /// @brief Open an ELF by path and populate task VMAs and entry point.
-int elf_load_task_from_path(task_t *task, const char *path);
+int elf_load_from_path(task_t *task, const char *path);
 
 #endif

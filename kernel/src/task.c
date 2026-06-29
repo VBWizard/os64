@@ -370,6 +370,32 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	return newTask;
 }
 
+// Wire up the user-space entry registers after the ELF is loaded.
+// Called by task_create (and in future by task_exec) once elf_load_from_path
+// has set regs.RIP and task->entryPoint.
+static void task_setup_entry(task_t *task)
+{
+	if (task->threads == NULL)
+		return;
+
+	// argc → RDI
+	task->threads->regs.RDI = (uint64_t)task->argc;
+
+	// argv → RSI  (already mapped at TASK_ARGV_VIRT by task_create)
+	task->threads->regs.RSI = (task->argc > 0) ? TASK_ARGV_VIRT : 0;
+
+	// env → RDX  (map env page(s) read-only into task's address space first)
+	if (task->env != NULL) {
+		uintptr_t env_phys = (uintptr_t)task->env - kHHDMOffset;
+		paging_map_pages(task->pml4v, TASK_ENV_VIRT, env_phys,
+		                 task->env->page_count,
+		                 PAGE_PRESENT | PAGE_USER);
+		task->threads->regs.RDX = TASK_ENV_VIRT;
+	} else {
+		task->threads->regs.RDX = 0;
+	}
+}
+
 task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID)
 {
 	uintptr_t mapPages;
@@ -422,8 +448,9 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 
 	if (!isIdleTask && !isLogdTask && !isKWorkerTask && kRootFilesystem != NULL)
 	{
-		if (elf_load_task_from_path(newTask, newTask->path) != 0)
+		if (elf_load_from_path(newTask, newTask->path) != 0)
 			panic("task_create: Failed to load ELF for task %s\n", newTask->path);
+		task_setup_entry(newTask);
 	}
 
 	gmtime((time_t*)&kSystemCurrentTime,&newTask->startTime);
