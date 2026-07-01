@@ -335,7 +335,15 @@ void paging_init()
 		*(pt_entry_t*)(virtual_address) = physical_address | PAGE_PRESENT | PAGE_WRITE;
 	}
 
-
+	// Set CR0.WP (bit 16) so that ring-0 code respects page write-protection bits.
+	// Without this bit, kernel code can write to read-only pages and CoW faults
+	// never fire — the hardware enforces WP only for ring-3 code by default.
+	__asm__ volatile(
+		"mov rax, cr0\n\t"
+		"or rax, 0x10000\n\t"
+		"mov cr0, rax\n\t"
+		::: "rax"
+	);
 }
 
 uintptr_t get_paging_table_page()
