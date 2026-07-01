@@ -194,12 +194,27 @@ same_priv_lvl_save_stack_and_flags:
     # For ring 0 processes, we need to save the SS/ESP/Flags from current values
     mov rbx, ss
     mov [mp_isrSavedSS + rax * 8], rbx
-    # Get the RSP value from the interrupt stack frame (ring 0 pushes RIP/CS/RFLAGS)
+    # IMPORTANT x86-64 detail: in 64-bit long mode an interrupt ALWAYS pushes the
+    # full 5-QWORD frame (SS, RSP, RFLAGS, CS, RIP = 40 bytes), even when there is
+    # NO privilege change (ring 0 -> ring 0).  This differs from 32-bit protected
+    # mode, where a same-privilege interrupt pushes only 3 entries (no SS/ESP).
+    # temp_rsp points at the RIP field (bottom of the frame), so:
+    #   original_RSP = temp_rsp + 40   (the value the thread had before the interrupt)
+    # iretq also pops all 5 entries, so save/restore stays symmetric.
+    #
+    # Do NOT change this to +24: that assumes the 32-bit "3 QWORD" rule and yields
+    # saved_RSP = original_RSP - 16.  On resume the thread runs with RSP 16 bytes
+    # too low; if it was preempted at a function's very first 'push %rbp' (before
+    # the prologue sets up RBP), the callee builds its frame off the wrong RSP and
+    # reads garbage locals — e.g. memcpy reading a bogus length, running away up
+    # the stack, smashing return addresses, and faulting with #UD/#GP.
 	mov rbx, [temp_rsp + rax * 8]
 	add rbx, 40
     mov [mp_isrSavedRSP + rax * 8], rbx
-    pushfq
-	pop rbx
+    # Save the interrupted RFLAGS from the interrupt frame rather than the current ISR flags.
+    # Frame layout (bottom -> top): [temp_rsp+0]=RIP, +8=CS, +16=RFLAGS, +24=RSP, +32=SS.
+    mov rbx, [temp_rsp + rax * 8]
+    mov rbx, [rbx + 16]
     mov [mp_isrSavedRFlags + rax * 8], rbx
 
 over_save_samel_priv_lvl_stack_and_flags:

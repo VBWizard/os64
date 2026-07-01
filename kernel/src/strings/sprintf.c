@@ -291,10 +291,12 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list args) {
     if (size == 0) return 0;
-    // vsprintf has no size limit — write to a temp buffer first, then
-    // copy at most (size-1) bytes.  2048 safely covers every kernel
-    // format string (the longest is debug_print_registers at ~400 chars).
-    char _tmp[2048];
+    // vsprintf has no size limit — write to a temp buffer first, then copy at
+    // most (size-1) bytes.  All kernel snprintf callers go through log.c where
+    // the largest output is a drain-line: ~50-char header + 256-char message
+    // = ~310 bytes.  512 covers that with margin; keep well under 2048 to
+    // avoid blowing small per-task stacks (logd runs on a 4 KB thread stack).
+    char _tmp[512];
     int len = vsprintf(_tmp, fmt, args);
     size_t n = ((size_t)len < size - 1) ? (size_t)len : size - 1;
     for (size_t i = 0; i < n; i++) buf[i] = _tmp[i];

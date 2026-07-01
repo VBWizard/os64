@@ -80,7 +80,7 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     	char print_buf2[2048];
         sprintf(print_buf2, "%lu (0x%04lx) AP%u: %s", tick_count, threadID, core, print_buf);
     	serial_print_string(print_buf2);
-	}	
+	}
 #else
     char print_buf2[2048];
     sprintf(print_buf2, "%lu (0x%04lx) AP%u: %s", tick_count, threadID, core, print_buf);
