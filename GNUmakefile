@@ -132,6 +132,40 @@ disk-populate: disk-init kernel
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 
+# ---- VirtualBox disk sync -------------------------------------------------
+# The VBox VM boots the DVD from C:/temp/os64_kernel.iso (refreshed by the
+# ISO rule above) and uses a FIXED-format VDI as its NVMe hard disk. A fixed
+# VDI is just a small header + block map + the raw disk bytes laid out flat,
+# so syncing it is one dd of $(DISK_IMAGE) into the data area — no VBoxManage
+# needed, and the medium UUID VBox has registered is untouched.
+#
+# THE VM MUST BE POWERED OFF when running this.
+#
+# One-time setup (already done 2026-07-03; repeat only if DISK_SIZE_MB
+# changes or the VDI is recreated):
+#   1. qemu-img convert -f raw -O vdi -o static=on $(DISK_IMAGE) new.vdi
+#   2. Preserve the registered medium UUID (16 bytes at offset 0x188):
+#      dd if=old.vdi of=new.vdi bs=1 skip=392 seek=392 count=16 conv=notrunc
+#   3. Move new.vdi into place at $(VBOX_VDI).
+VBOX_VDI ?= /mnt/i/Virtualbox_VMs/OS64/OS64/OS64_NVME.vdi
+
+.PHONY: vbox-sync
+vbox-sync: disk-populate
+	@if [ ! -f "$(VBOX_VDI)" ]; then echo "vbox-sync: VDI not found: $(VBOX_VDI)"; exit 1; fi
+	@TYPE=$$(od -An -t u4 -j 76 -N 4 "$(VBOX_VDI)" | tr -d ' '); \
+	if [ "$$TYPE" != "2" ]; then \
+		echo "vbox-sync: ERROR: $(VBOX_VDI) is not a FIXED VDI (type=$$TYPE) — see one-time setup comments above this target"; exit 1; \
+	fi
+	@CAP=$$(od -An -t u8 -j 368 -N 8 "$(VBOX_VDI)" | tr -d ' '); \
+	IMG=$$(stat -c %s "$(DISK_IMAGE)"); \
+	if [ "$$CAP" != "$$IMG" ]; then \
+		echo "vbox-sync: ERROR: VDI capacity ($$CAP) != $(DISK_IMAGE) size ($$IMG) — recreate the VDI (one-time setup)"; exit 1; \
+	fi
+	@OFF=$$(od -An -t u4 -j 344 -N 4 "$(VBOX_VDI)" | tr -d ' '); \
+	echo "vbox-sync: writing $(DISK_IMAGE) into $(VBOX_VDI) at data offset $$OFF (VM must be POWERED OFF)"; \
+	dd if="$(DISK_IMAGE)" of="$(VBOX_VDI)" bs=1M oflag=seek_bytes seek=$$OFF conv=notrunc status=none
+	@echo "vbox-sync: done"
+
 # Removed this from both top and bottom of the next section
 #	rm -rf iso_root
 $(IMAGE_NAME).iso: limine/limine kernel
