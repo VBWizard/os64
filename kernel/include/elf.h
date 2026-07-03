@@ -159,4 +159,41 @@ typedef struct {
 #define ELF64_R_TYPE(i) ((i) & 0xffffffff)
 #define ELF64_R_INFO(s, t) ((((Elf64_Xword)(s)) << 32) + ((t) & 0xffffffff))
 
+// x86-64 relocation types (subset needed for eager-bound dynamic linking —
+// no lazy PLT resolution, so JUMP_SLOT is handled identically to GLOB_DAT).
+#define R_X86_64_NONE      0
+#define R_X86_64_64        1  // S + A
+#define R_X86_64_PC32      2  // S + A - P
+#define R_X86_64_GLOB_DAT  6  // S
+#define R_X86_64_JUMP_SLOT 7  // S
+#define R_X86_64_RELATIVE  8  // B + A
+
+// PT_DYNAMIC is an array of these, terminated by a DT_NULL entry.
+typedef struct {
+    Elf64_Sxword d_tag;
+    union {
+        Elf64_Xword d_val;
+        Elf64_Addr  d_ptr;
+    } d_un;
+} Elf64_Dyn;
+
+// Dynamic section tags (subset — see shared_object.c for how each is used).
+// Symbol table size isn't given directly by any DT_* tag; it's derived from
+// DT_HASH's nchain field (the second word of the hash table), which is what
+// every symbol-table consumer — including real dynamic linkers — relies on.
+#define DT_NULL     0
+#define DT_NEEDED   1
+#define DT_PLTRELSZ 2
+#define DT_PLTGOT   3
+#define DT_HASH     4
+#define DT_STRTAB   5
+#define DT_SYMTAB   6
+#define DT_RELA     7
+#define DT_RELASZ   8
+#define DT_RELAENT  9
+#define DT_STRSZ    10
+#define DT_SYMENT   11
+#define DT_JMPREL   23
+#define DT_PLTREL   20
+
 #endif

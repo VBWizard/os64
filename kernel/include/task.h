@@ -97,6 +97,7 @@
         uint32_t minorFaults, majorFaults, cSwitches;
 		uint64_t* pml4, *pml4v;
 		uintptr_t taskMemoryNextVirt;  // Next available virtual address for task-specific allocations
+		dlist_t* shared_objects;       // shared_object_t* this task depends on (dynamic linking, bookkeeping only — see shared_object.c)
 		void *prev, *next;
     } task_t;
 

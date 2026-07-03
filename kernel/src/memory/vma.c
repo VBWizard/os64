@@ -37,7 +37,7 @@ static void kernel_read_file(kernel_read_params_t *params)
 }
 
 // Trampoline: switches to kernel stack and CR3, calls function, switches back
-static void call_in_kernel_context(void (*func)(void*), void *arg)
+void call_in_kernel_context(void (*func)(void*), void *arg)
 {
     core_local_storage_t *cls = get_core_local_storage();
 

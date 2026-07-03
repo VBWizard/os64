@@ -19,6 +19,9 @@
 #include "panic.h"
 #include "log.h"
 #include "elf_loader.h"
+#include "shared_object.h"
+#include "memory/vma.h"
+#include "sprintf.h"
 #include "allocator.h"
 #include "memset.h"
 #include "kworker.h"
@@ -318,6 +321,9 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	if (newTask->mmaps) {
 		dlist_init(newTask->mmaps);
 	}
+	// Lazily created on first use by task_map_shared_object — most tasks
+	// never touch dynamic linking, so most never allocate this at all.
+	newTask->shared_objects = NULL;
 
 	// Special case: ktask (the main kernel task) uses kKernelPML4 directly
 	// All other tasks get their own PML4 with shared upper-half page tables
@@ -368,6 +374,112 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	// task_t lives in kernel heap (HHDM space) and doesn't need fixed virtual mapping
 
 	return newTask;
+}
+
+// Maps every segment of a loaded shared_object_t (main executable or
+// library, both go through the same registry — see shared_object.c) into
+// `task` as demand-paged VMAs — no physical pages are mapped here at all.
+// A task that never calls into a given page of a library never pays for it;
+// the first real touch (from ANY task using this object) faults, and
+// shared_object_resolve_page (called from simple_exceptions.c) resolves and
+// caches that page for every task after it. See MAP_SHARED_LIBRARY in
+// memory/vma.h for how the fault handler recognizes these VMAs.
+//
+// Writable segments get `vma->cow = true`, same as before: the physical
+// page a fault resolves to may be shared with other tasks, so the first
+// WRITE (a completely separate trigger from the first READ/resolve) must
+// still go through the *existing, unmodified* CoW fault handler to
+// privatize a copy. Nothing about that handler needed to change for this.
+//
+// Returns false (mapping nothing) if `so` is already in this task's
+// shared_objects list — the dependency closure below is a graph, not a
+// tree, so the same object can be reached twice (diamond dependencies, or
+// a dependency cycle) and must only be mapped once per task.
+static bool task_map_shared_object(task_t *task, shared_object_t *so)
+{
+	if (task->shared_objects == NULL) {
+		task->shared_objects = kmalloc(sizeof(dlist_t));
+		if (task->shared_objects == NULL) {
+			panic("task_map_shared_object: failed to allocate shared_objects list for %s", so->path);
+		}
+		dlist_init(task->shared_objects);
+	}
+
+	// Already mapped into this task? (dedup + cycle guard for the closure
+	// walk below — checked BEFORE creating VMAs so a revisit maps nothing.)
+	for (dlist_node_t *node = task->shared_objects->head; node != NULL; node = node->next) {
+		if ((shared_object_t *)node->data == so) {
+			return false;
+		}
+	}
+
+	for (size_t i = 0; i < so->seg_count; i++) {
+		elf_segment_range_t *seg = &so->segs[i];
+		uintptr_t virt = so->load_bias + seg->vaddr_off;
+		bool writable = (seg->prot & PROT_WRITE) != 0;
+
+		vma_t *vma = vma_create(virt, virt + seg->pages * PAGE_SIZE, seg->prot,
+		                         MAP_SHARED_LIBRARY, (void *)so, 0);
+		if (vma == NULL) {
+			panic("task_map_shared_object: failed to create VMA for %s segment %lu", so->path, i);
+		}
+		vma->cow = writable;
+		vma_add(task, vma);
+	}
+
+	dlist_add(task->shared_objects, so);
+	return true;
+}
+
+// Maps `so` and its ENTIRE dependency closure (so->deps, recursively) into
+// `task`. Mapping the whole closure — not just the direct DT_NEEDED list —
+// is what upholds the invariant shared_object.c's scoped resolver depends
+// on: any address a cached, relocated page can reference lives inside the
+// owning object's dependency closure, so every task sharing that page must
+// have that closure mapped. task_map_shared_object's already-mapped check
+// terminates diamonds and cycles.
+static void task_map_shared_object_closure(task_t *task, shared_object_t *so)
+{
+	if (!task_map_shared_object(task, so)) {
+		return;  // already mapped — its deps were mapped along with it
+	}
+	for (size_t i = 0; i < so->dep_count; i++) {
+		task_map_shared_object_closure(task, so->deps[i]);
+	}
+}
+
+// Loads a dynamically-linked executable: maps the executable itself and
+// its full dependency closure (each object loaded at most once system-wide,
+// physically shared across every task that needs it — see
+// shared_object_load_or_get, which also loads DT_NEEDED dependencies
+// recursively) as demand-paged VMAs. No relocations are applied here — that
+// happens lazily, per page, the first time any task's page fault touches
+// that page (shared_object_resolve_page), resolving symbols against each
+// object's own dependency scope. Mutually exclusive with
+// elf_load_from_path's static path — task_create picks one or the other up
+// front via elf_is_dynamic().
+static void elf_resolve_dynamic_dependencies(task_t *task, const char *path)
+{
+	shared_object_t *main_so = shared_object_load_or_get(path);
+	if (main_so == NULL) {
+		// Covers open/parse/allocation failure AND a non-ET_DYN image — a
+		// dynamically-linked non-PIE (ET_EXEC) binary would need e_entry
+		// and its p_vaddr values treated as already-absolute rather than
+		// load_bias-relative, which the shared fixed-address window can't
+		// express; shared_object_load_or_get rejects those for every image
+		// (main executable and libraries alike).
+		panic("elf_resolve_dynamic_dependencies: failed to load %s (missing, malformed, or not ET_DYN)", path);
+	}
+
+	task_map_shared_object_closure(task, main_so);
+
+	task->elf = main_so->image;
+	// ET_DYN: e_entry is load_bias-relative, same as every other address in
+	// the image (unlike ET_EXEC, where it would already be absolute).
+	task->entryPoint = main_so->load_bias + main_so->image->ehdr.e_entry;
+	if (task->threads != NULL) {
+		task->threads->regs.RIP = task->entryPoint;
+	}
 }
 
 // Wire up the user-space entry registers after the ELF is loaded.
@@ -448,8 +560,11 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 
 	if (!isIdleTask && !isLogdTask && !isKWorkerTask && kRootFilesystem != NULL)
 	{
-		if (elf_load_from_path(newTask, newTask->path) != 0)
+		if (elf_is_dynamic(newTask->path)) {
+			elf_resolve_dynamic_dependencies(newTask, newTask->path);
+		} else if (elf_load_from_path(newTask, newTask->path) != 0) {
 			panic("task_create: Failed to load ELF for task %s\n", newTask->path);
+		}
 		task_setup_entry(newTask);
 	}
 

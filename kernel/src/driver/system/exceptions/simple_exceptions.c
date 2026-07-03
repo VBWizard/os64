@@ -13,6 +13,7 @@
 #include "memory/vma.h"
 #include "kmalloc.h"
 #include "allocator.h"
+#include "shared_object.h"
 
 uint64_t gLastFaultRbp = 0;
 uint64_t gLastFaultRsp = 0;
@@ -253,7 +254,36 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         panic("Paging exception: protection violation (write to read-only non-CoW page)");
     }
 
-    // Demand page fault: page is not present yet.  Resolve via the VMA's backing.
+    // Demand page fault: page is not present yet.
+    if (vma->flags & MAP_SHARED_LIBRARY)
+    {
+        // This VMA belongs to a dynamically-linked image (library or main
+        // executable) — vma->file is a shared_object_t*, not a vfs_file_t*.
+        // Resolution goes through the per-image page cache instead of a
+        // plain per-VMA file read: whichever task touches a given page
+        // first reads it from the file and applies that page's
+        // relocations; every task after gets the same physical page. The
+        // symbols those relocations reference resolve against the OBJECT'S
+        // own dependency scope (so + so->deps, inside shared_object.c) —
+        // deliberately not this task's view, since the resolved page is
+        // cached and shared with every other task that maps this object.
+        // Never PAGE_WRITE here even for a writable segment — vma->cow
+        // (checked above) governs the write path separately, through the
+        // existing, unmodified CoW branch.
+        shared_object_t *so = (shared_object_t *)vma->file;
+        size_t page_idx = (aligned - so->load_bias) / PAGE_SIZE;
+
+        uintptr_t phys = shared_object_resolve_page(so, page_idx);
+        if (!phys)
+            panic("Failed to resolve shared-object page during fault resolution");
+
+        paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, PAGE_PRESENT | PAGE_USER);
+        kPageFaultCount++;
+        return;
+    }
+
+    // Ordinary demand page fault: page is not present yet.  Resolve via the
+    // VMA's backing (static executables, anonymous memory).
     uintptr_t phys = vma_resolve_backing_page(vma, cr2);
     if (!phys)
         panic("Failed to resolve page during fault resolution");

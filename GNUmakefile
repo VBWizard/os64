@@ -8,6 +8,7 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # Default user QEMU flags. These are appended to the QEMU command calls.
 # Send COM1 port output to the console with: -serial mon:stdio 
 # Send debug logging to file with: -D qemu_debug.log 
+# debug hardware ints and such: -d $(shell echo int,cpu_reset,pcall,guest_errors) \
 # $(call USER_VARIABLE,QEMUFLAGS,-m 8g -smp 2 -no-reboot -serial file:qemu_com1.log -monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
 
 # Define the base QEMU flags
@@ -15,7 +16,7 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 2\
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
-                  -d $(shell echo int,cpu_reset,pcall,guest_errors)
+				  -D qemu_debug.log 
 				  
 # Disk image configuration
 DISK_IMAGE ?= $(CURDIR)/disk/os64.img
@@ -125,7 +126,10 @@ disk-init: disk
 .PHONY: disk-populate
 disk-populate: disk-init kernel
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/bin > /dev/null 2>&1
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/lib > /dev/null 2>&1
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/test_elf ::/bin/test_elf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/dyn_consumer ::/bin/dyn_consumer
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 
 # Removed this from both top and bottom of the next section

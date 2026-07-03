@@ -106,7 +106,11 @@ override LDFLAGS += \
 # Use "find" to glob all *.c, *.S, and *.asm files in the tree.
 # asm-offsets.c is a build tool, not a kernel object — handled separately.
 override SRC_CFILES := $(filter-out src/asm-offsets.c,$(shell find src -type f -name '*.c' | LC_ALL=C sort))
-override TEST_CFILES := $(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort)
+# test/elf and test/shlib hold standalone freestanding fixture sources (built
+# by their own sub-Makefiles via the test-elf/test-shlib targets below, with
+# their own -fpie/-fPIC flags) — they are not kernel test code and must not
+# be compiled into the kernel binary, unlike test_main.c/test_vma_*.c.
+override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
 override CFILES := $(SRC_CFILES) $(TEST_CFILES)
 override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
@@ -186,6 +190,12 @@ uninstall:
 	rm -f "$(DESTDIR)$(PREFIX)/share/$(OUTPUT)/$(OUTPUT)"
 	-rmdir "$(DESTDIR)$(PREFIX)/share/$(OUTPUT)"
 
+.PHONY: test-shlib
+test-shlib:
+	$(MAKE) -C test/shlib OUTPUT=../../bin/libtest.so CC="$(CC)" LD="$(LD)"
+
+# dyn_consumer (built by test-elf below) links against libtest.so, so the
+# library has to exist first.
 .PHONY: test-elf
-test-elf:
+test-elf: test-shlib
 	$(MAKE) -C test/elf OUTPUT=../../bin/test_elf CC="$(CC)" LD="$(LD)"

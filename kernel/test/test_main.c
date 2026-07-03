@@ -18,6 +18,7 @@
 #include "scheduler.h"
 #include "time.h"
 #include "driver/filesystem/vfs/vfs.h"
+#include "shared_object.h"
 
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -707,6 +708,111 @@ static bool test_elf_loader(void)
     return true;
 }
 
+// dyn_consumer.c calls shlib_add(2,3) twice and packs both results:
+//   call 1: shlib_counter 42 -> 43 (this task's newly-privatized copy), returns 2+3+43=48
+//   call 2: reads back 43 from that SAME private copy, becomes 44, returns 2+3+44=49
+// Two different tasks should get the IDENTICAL packed value despite both
+// writing to what started out as the same physical page — if CoW isolation
+// were broken, the second task to run would see the first task's
+// already-incremented counter instead. See kernel/test/elf/dyn_consumer.c
+// and kernel/test/shlib/libtest.c.
+#define DYN_CONSUMER_EXPECTED_PACKED 0x300031UL
+
+static bool test_dynamic_linking(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_dynamic_linking (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task_a = task_create("/bin/dyn_consumer", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+    if (task_a == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task A) returned NULL\n");
+        return false;
+    }
+    scheduler_submit_new_task(task_a);
+
+    task_t *task_b = task_create("/bin/dyn_consumer", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+    if (task_b == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task B) returned NULL\n");
+        return false;
+    }
+    scheduler_submit_new_task(task_b);
+
+    // Poll until both tasks exit or we time out (~1 second at 100 ticks/sec).
+    for (int i = 0; i < 100 && (!task_a->exited || !task_b->exited); i++)
+        wait(10);
+
+    if (!task_a->exited || !task_b->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task(s) did not exit within 1 second\n");
+        return false;
+    }
+
+    if (task_a->retVal != DYN_CONSUMER_EXPECTED_PACKED) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task A retVal=0x%lx, expected 0x%lx\n",
+               task_a->retVal, (uint64_t)DYN_CONSUMER_EXPECTED_PACKED);
+        return false;
+    }
+
+    if (task_b->retVal != DYN_CONSUMER_EXPECTED_PACKED) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task B retVal=0x%lx, expected 0x%lx (CoW isolation broken?)\n",
+               task_b->retVal, (uint64_t)DYN_CONSUMER_EXPECTED_PACKED);
+        return false;
+    }
+
+    // Both tasks must have found the SAME shared_object_t via the registry
+    // (cache-hit path, not a fresh load each time). shared_object_load_or_get
+    // bumps refcount on every call — direct lookups AND the internal
+    // recursive loads of DT_NEEDED dependencies. The main executable is
+    // requested once per task_create plus once here: A + B + this call = 3.
+    shared_object_t *exe_so = shared_object_load_or_get("/bin/dyn_consumer");
+    if (exe_so == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - dyn_consumer not found in registry after both tasks ran\n");
+        return false;
+    }
+    if (exe_so->refcount != 3) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - dyn_consumer refcount=%u, expected 3 (task A + task B + this lookup)\n",
+               exe_so->refcount);
+        return false;
+    }
+
+    // libtest.so, by contrast, is loaded as dyn_consumer's DT_NEEDED
+    // dependency exactly ONCE — the second task_create cache-hits the
+    // already-loaded executable and never re-walks its deps — so: that one
+    // dependency edge + this lookup = 2. It must also be exactly the object
+    // dyn_consumer's own dependency scope points at (per-object symbol
+    // resolution — see shared_object.h's deps[]).
+    shared_object_t *so = shared_object_load_or_get("/lib/libtest.so");
+    if (so == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - libtest.so not found in registry after both tasks ran\n");
+        return false;
+    }
+    if (so->refcount != 2) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - libtest.so refcount=%u, expected 2 (dyn_consumer's dep edge + this lookup)\n",
+               so->refcount);
+        return false;
+    }
+    if (exe_so->dep_count != 1 || exe_so->deps[0] != so) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - dyn_consumer's dependency scope doesn't point at the registry's libtest.so\n");
+        return false;
+    }
+
+    // Task A and task B must share the SAME physical page backing
+    // libtest.so's code segment — proving true cross-task physical sharing,
+    // not silently-duplicated per-task copies — even though their .data
+    // pages have since diverged via CoW.
+    uintptr_t code_phys_a = paging_walk_paging_table((pt_entry_t *)task_a->pml4v, so->load_bias);
+    uintptr_t code_phys_b = paging_walk_paging_table((pt_entry_t *)task_b->pml4v, so->load_bias);
+    if (code_phys_a == 0 || code_phys_a == 0xbadbadba || code_phys_a != code_phys_b) {
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - libtest.so code page not physically shared (A=0x%lx, B=0x%lx)\n",
+               code_phys_a, code_phys_b);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_dynamic_linking (symbol resolution, relocation, CoW isolation, and physical sharing all correct)\n");
+    return true;
+}
+
 // ── env tests ────────────────────────────────────────────────────────────────
 
 static bool test_env_create_empty(void)
@@ -922,6 +1028,7 @@ static void register_builtin_tests(void)
     test_register("task_arena_exhaustion", test_task_arena_exhaustion, TEST_PHASE_PREBOOT);
     test_register("vma_file_backed_page_fault_resolved", test_vma_file_backed_page_fault_resolved, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
+    test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)
