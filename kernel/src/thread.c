@@ -171,32 +171,23 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 		newThread->regs.SS0 = GDT_KERNEL_DATA_ENTRY << 3;
 		newThread->regs.RSP0 = newThread->esp0BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
 
-		// Write return address to stack
+		// Seed the ring0 stack with task_exit_with_retval as the initial return
+		// address, so that if the top-level thread function ever returns it lands
+		// in the task-teardown path instead of running off the end of the stack.
+		//
+		// The stack lives at a task-local, lower-half VA that is NOT mapped in
+		// kKernelPML4, so for tasks with their own PML4 we cannot write through
+		// newThread->regs.RSP directly. Instead we translate the stack VA to its
+		// physical page (walking the task's OWN page tables) and write through the
+		// HHDM alias: since yesterday's lazy-HHDM change, every allocator-owned
+		// page — which the guarded stack is — is reachable at phys | kHHDMOffset
+		// while allocated. This works uniformly for ktask/idle (kKernelPML4) and
+		// for own-PML4 tasks, and replaces the old scratch-VA temp mapping that
+		// aliased the first kernel text page (0xffffffff80000000).
 		task_t *task = (task_t*)ownerTask;
-
-		// For ktask/idle (using kKernelPML4), stack is directly accessible
-		if (task->pml4v == (uint64_t*)kKernelPML4v) {
-			*(uintptr_t *)newThread->regs.RSP = (uintptr_t)&task_exit_with_retval;
-		} else {
-			// For other tasks: temporarily map the stack page into kernel space to write to it
-			uintptr_t phys_rsp = paging_walk_paging_table((pt_entry_t*)task->pml4v, newThread->regs.RSP);
-			if (phys_rsp && phys_rsp != 0xbadbadba) {
-				// Use a temporary virtual address in kernel space for the mapping
-				#define KERNEL_TEMP_MAP_ADDR 0xFFFFFFFF80000000UL
-
-				// Get the page-aligned physical address and offset within page
-				uintptr_t phys_page = phys_rsp & ~0xFFF;
-				uintptr_t offset = phys_rsp & 0xFFF;
-
-				// Temporarily map the physical page into kernel PML4
-				paging_map_pages((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR, phys_page, 1, PAGE_PRESENT | PAGE_WRITE);
-
-				// Write the return address via the temporary mapping
-				*(uintptr_t *)(KERNEL_TEMP_MAP_ADDR + offset) = (uintptr_t)&task_exit_with_retval;
-
-				// Unmap the temporary page
-				paging_unmap_page((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR);
-			}
+		uintptr_t phys_rsp = paging_walk_paging_table((pt_entry_t*)task->pml4v, newThread->regs.RSP);
+		if (phys_rsp && phys_rsp != 0xbadbadba) {
+			*(uintptr_t *)(phys_rsp | kHHDMOffset) = (uintptr_t)&task_exit_with_retval;
 		}
 	}
 	else

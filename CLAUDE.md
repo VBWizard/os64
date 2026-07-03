@@ -453,40 +453,49 @@ void call_in_kernel_context(void (*func)(void*), void *arg)
 - Happens after stack/CR3 switch when trying to dereference the stale `cls` pointer
 - Only occurs in SMP systems under specific timing/load conditions
 
-### Temporary Mapping for Cross-Address-Space Access
+### Writing to Task Memory from Kernel via the HHDM (preferred)
 
-**Problem**: When kernel needs to write to task memory (e.g., writing return address to task's stack), the task's pages aren't accessible in kKernelPML4.
+**Problem**: When the kernel needs to write to task memory (e.g., writing a
+return address to a task's stack), the task's pages are mapped at a task-local,
+lower-half VA that is NOT present in kKernelPML4. You cannot write through the
+task VA directly.
 
-**Bad Solution**: Use `kmalloc()` for task stacks - this makes them permanently accessible from kernel space, defeating memory isolation.
+**Bad Solution**: Use `kmalloc()` for task stacks — this makes them permanently
+accessible from kernel space, defeating memory isolation.
 
-**Good Solution**: Use temporary mapping:
+**Solution (since the lazy-HHDM change)**: Translate the task VA to its physical
+page through the task's own page tables, then write through the HHDM alias. Any
+allocator-owned page (which task stacks/heap are — they come from
+`allocate_memory_aligned()`) is reachable at `phys | kHHDMOffset` in kKernelPML4
+*while allocated*, so no temporary mapping is needed:
 
 ```c
-// Allocate with allocate_memory_aligned() - keeps it isolated
+// Allocate with allocate_memory_aligned() - keeps it isolated,
+// but it IS HHDM-reachable from the kernel while allocated.
 uintptr_t phys = allocate_memory_aligned(size);
 
-// Map only into task's PML4
+// Map only into task's PML4 (task sees it at its lower-half VA)
 paging_map_pages(task->pml4v, virt, phys, pages, flags);
 
-// Later, when kernel needs to write to it:
-// 1. Get physical address via page table walk
+// Later, when the kernel needs to write to it:
+// 1. Resolve the task VA to physical via the task's OWN page tables
 uintptr_t phys_addr = paging_walk_paging_table((pt_entry_t*)task->pml4v, task_virt_addr);
 
-// 2. Temporarily map into kernel space
-#define KERNEL_TEMP_MAP_ADDR 0xFFFFFFFF80000000UL
-paging_map_pages((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR, phys_addr & ~0xFFF, 1, PAGE_PRESENT | PAGE_WRITE);
-
-// 3. Access via temporary mapping
-*(uint64_t *)(KERNEL_TEMP_MAP_ADDR + (phys_addr & 0xFFF)) = value;
-
-// 4. Unmap temporary page
-paging_unmap_page((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR);
+// 2. Write through the HHDM alias — no temp mapping, no unmap, no TLB dance
+if (phys_addr && phys_addr != 0xbadbadba)
+    *(uint64_t *)(phys_addr | kHHDMOffset) = value;
 ```
 
-**Benefits**:
-- Task memory remains isolated from kernel
-- No permanent mappings cluttering kernel address space
-- Doesn't waste kmalloc pool on large allocations (like stacks)
+**Why not a scratch temporary mapping**: The old technique mapped the page at a
+fixed scratch VA in kKernelPML4, wrote, then unmapped. Do NOT resurrect it, and
+in particular never reuse `0xffffffff80000000` as the scratch VA — that is the
+kernel link base, so mapping/unmapping there clobbers the kernel's own first
+text page. The HHDM write above supersedes it entirely.
+
+**Validity note**: `phys | kHHDMOffset` is valid only while the page is
+allocated. That is always true right after you allocate/map it (e.g. at
+thread-creation time). Touching it after free is the intentional use-after-free
+tripwire — see the HHDM section below.
 
 ### HHDM (Higher-Half Direct Mapping) — Lazy Maintenance
 
