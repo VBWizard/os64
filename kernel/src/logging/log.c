@@ -153,13 +153,18 @@ bool logd_thread(bool daemon) {
             nonDaemonRunSuccess = processed_logs > 0;
             drain_pass++;
 
-            // Every 10 passes (~10 seconds), print queue depths directly to
-            // serial so we can monitor buffer pressure without adding to the
-            // ring buffers themselves (which would skew the numbers).
-            if (drain_pass % 5 == 0) {
+            // Print queue depths directly to serial after every pass, so we
+            // can monitor buffer pressure without adding to the ring buffers
+            // themselves (which would skew the numbers). One line per drain
+            // (~2/sec) is cheap, and per-pass visibility is what cracked the
+            // 2026-07 slow-walk investigation. AP is the core the pass ran
+            // on — kworker drains from AP1 every 2s through this same code,
+            // so without it the stats can't tell the two drainers apart.
+            {
                 char stats[128];
                 int pos = snprintf(stats, sizeof(stats),
-                    "[logd] tick=%lu pass=%u drained=%d", kTicksSinceStart, drain_pass, processed_logs);
+                    "[logd] AP%u tick=%lu pass=%u drained=%d",
+                    get_core_local_storage()->apic_id, kTicksSinceStart, drain_pass, processed_logs);
                 for (int c = 0; c < kMPCoreCount && pos < (int)sizeof(stats) - 32; c++) {
                     log_buffer_t *b = &core_log_buffers[c];
                     size_t used = (b->head >= b->tail)
