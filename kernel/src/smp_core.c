@@ -73,8 +73,17 @@ void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_
 		return;
 	}
     printd(DEBUG_SMP | DEBUG_DETAILED,"MP: AP%u sending IPI 0x%02x to AP%u\n",sender_apic_id, vector, apic_id);
-    // Ensure previous IPI command has completed
-    while (*((volatile uint32_t*)(kMPICRLow)) & 0x01000){};
+    // Ensure previous IPI command has completed — with a bound. An IPI whose
+    // delivery-status bit never clears (wedged target core, virtual APIC
+    // quirk) previously spun here forever, silently; a loud panic with the
+    // vector and sender beats an invisible hang every time.
+    uint64_t icr_wait_spins = 0;
+    while (*((volatile uint32_t*)(kMPICRLow)) & 0x01000)
+    {
+        if (++icr_wait_spins > 100000000UL)
+            panic("send_ipi: ICR delivery-status stuck busy — AP%u sending vector 0x%02x to AP%u never completed", sender_apic_id, vector, apic_id);
+        __builtin_ia32_pause();
+    }
 
     // Write to the high pa Canrt of the ICR (destination field)
     *((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;
@@ -388,6 +397,13 @@ void enableAPScheduling_ISR()
     val |= (1U << APIC_TIMER_PERIODIC_MODE_BIT);  // Ensure periodic mode is set
     val = ENABLE_TIMER(val);
     write_apic_register(kMPApicBase + APIC_LVT_TIMER, val);
+    // Re-arm AFTER the final LVT write: the SDM permits LVT timer writes to
+    // disarm the timer (and requires it for mode changes), and virtual APIC
+    // implementations vary in how liberally they disarm. Writing the initial
+    // count is THE arming action, so doing it last guarantees a running
+    // timer on every implementation — on a lenient one (QEMU) it's just a
+    // harmless phase reset.
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * SMP_MAGIC_NUMBER);
     printd (DEBUG_SMP, "AP: enableAPScheduling_ISR: Timer is enabled (0x%08x)\n", val);
     write_eoi();
 }
@@ -425,7 +441,10 @@ void mpDisableAP(int apic_id)
 
 void mpSendInvTLB()
 {
-    return;
+    // Until the APs are actually up there is nobody to shoot down — and
+    // sending IPIs at parked/uninitialized cores is asking for trouble.
+    if (!kSMPInitDone)
+        return;
     // Send an IPI to the AP to invalidate the TLB
     // Send to all APs except the current one
     for (int i = 0; i < kMPCoreCount; i++) {

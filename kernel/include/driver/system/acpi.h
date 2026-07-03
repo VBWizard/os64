@@ -169,6 +169,27 @@ typedef struct {
     uint32_t global_sys_int_base; // First GSI handled by this IO APIC
 } __attribute__((packed)) IO_APIC_Entry;
 
+// MADT type 2: Interrupt Source Override. Declares that an ISA IRQ is NOT
+// wired to the identically-numbered IOAPIC input. The classic, near-universal
+// example is the PIT: ISA IRQ 0 -> GSI 2. QEMU happens to also expose the MP
+// tables in a way our lookup understood, but VirtualBox (and real hardware)
+// only guarantee THIS — ignoring it routes IRQ0 to a masked IOAPIC pin and
+// the system's tick heartbeat silently stops (July 2026 VBox bring-up bug).
+typedef struct {
+    uint8_t  type;    // = 2 for Interrupt Source Override
+    uint8_t  length;  // 10
+    uint8_t  bus;     // always 0 (ISA)
+    uint8_t  source;  // ISA IRQ number being overridden
+    uint32_t gsi;     // the global system interrupt it is actually wired to
+    uint16_t flags;   // MPS INTI flags: bits 0-1 polarity, bits 2-3 trigger mode
+} __attribute__((packed)) Interrupt_Source_Override_Entry;
+
+// Per-ISA-IRQ routing gleaned from the MADT overrides above: kISAIrqToGSI[n]
+// is the GSI for ISA IRQ n, or -1 if no override exists (identity mapping per
+// the ACPI spec). kISAIrqOverrideFlags[n] holds the matching MPS INTI flags.
+extern int16_t kISAIrqToGSI[16];
+extern uint16_t kISAIrqOverrideFlags[16];
+
 typedef struct {
     char Signature[4];      // Table signature (e.g., "MCFG", "FACP")
     uint32_t Length;        // Length of the table, including the header

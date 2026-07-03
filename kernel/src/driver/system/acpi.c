@@ -9,6 +9,12 @@
 extern uintptr_t kPCIBaseAddress;
 extern uintptr_t kLimineRSDP;
 
+// ISA IRQ -> GSI routing from the MADT's Interrupt Source Overrides (see
+// acpi.h). -1 = no override = identity mapping per the ACPI spec.
+int16_t kISAIrqToGSI[16] = { -1, -1, -1, -1, -1, -1, -1, -1,
+                             -1, -1, -1, -1, -1, -1, -1, -1 };
+uint16_t kISAIrqOverrideFlags[16] = { 0 };
+
 void parseMCFG(uintptr_t mcfgAddress) {
     acpi_mcfg_table_t* mcfg = (acpi_mcfg_table_t*)mcfgAddress;
 
@@ -228,17 +234,37 @@ void acpiFindTables() {
 		uintptr_t detail = sizeof(acpi_table_header_t);
 		detail += (uintptr_t)madtHeader + 8;
 
+		// Walk EVERY entry (no early break): we want the first IO APIC (type
+		// 1) AND every Interrupt Source Override (type 2). The overrides are
+		// what tell us an ISA IRQ is wired to a different IOAPIC input than
+		// its own number — most importantly the PIT (IRQ 0 -> GSI 2 on
+		// VirtualBox and real hardware). See acpi.h.
 		while (detail < (uintptr_t)madtHeader + madtHeader->Length)
 		{
-			if (*(uint8_t*)detail == 0x01)
+			uint8_t entryType = *(uint8_t*)detail;
+			uint8_t entryLength = *(uint8_t*)(detail + 1);
+			if (entryLength == 0)
+				break;  // malformed entry — bail rather than loop forever
+
+			if (entryType == 0x01 && kIOAPICAddress == 0)
 			{
 				IO_APIC_Entry *entry = (IO_APIC_Entry *)detail;
 				kIOAPICAddress = entry->ioapic_addr;
 		        printd(DEBUG_SMP | DEBUG_DETAILED, "ACPI: IO APIC address found in MADT table, value = 0x%08x\n", kIOAPICAddress);
-				break;
 			}
-			else
-				detail += *(uint8_t*)(detail + 1);
+			else if (entryType == 0x02)
+			{
+				Interrupt_Source_Override_Entry *iso = (Interrupt_Source_Override_Entry *)detail;
+				if (iso->source < 16)
+				{
+					kISAIrqToGSI[iso->source] = (int16_t)iso->gsi;
+					kISAIrqOverrideFlags[iso->source] = iso->flags;
+				}
+		        printd(DEBUG_SMP | DEBUG_DETAILED, "ACPI: MADT interrupt source override: ISA IRQ %u -> GSI %u (flags 0x%04x)\n",
+		               iso->source, iso->gsi, iso->flags);
+			}
+
+			detail += entryLength;
 		}
 	}
 }
