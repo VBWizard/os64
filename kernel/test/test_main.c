@@ -19,6 +19,7 @@
 #include "time.h"
 #include "driver/filesystem/vfs/vfs.h"
 #include "shared_object.h"
+#include "env.h"
 
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -708,6 +709,60 @@ static bool test_elf_loader(void)
     return true;
 }
 
+// Success sentinel arg_echo.c returns after verifying argc/argv/env.  A failure
+// instead returns 0xE00000xx identifying exactly which invariant broke — see
+// kernel/test/elf/arg_echo.c.
+#define ARG_ECHO_RETVAL 0x00A11600DUL
+
+// Regression test for argument/environment passing.  Guards two fixes made
+// together: task_setup_entry() must latch RDI/RSI/RDX AFTER argc/argv/env are
+// populated (not before, when they are still zero), and task_create()'s argv
+// construction must copy the strings into the task's own blob with
+// TASK_ARGV_VIRT-relative pointers (rather than dangling into caller memory).
+static bool test_task_args(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_task_args (no root filesystem mounted)\n");
+        return true;
+    }
+
+    // Launch /bin/arg_echo with a known argv.  The fixture asserts argc==3,
+    // argv==TASK_ARGV_VIRT, argv[0..2] == {"/bin/arg_echo","hello","world"},
+    // argv[3]==NULL, and a non-empty env at TASK_ENV_VIRT.
+    char *args[] = { "/bin/arg_echo", "hello", "world" };
+    task_t *task = task_create("/bin/arg_echo", 3, args, kKernelTask, true, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_args - task_create returned NULL\n");
+        return false;
+    }
+
+    // Seed one environment variable so the fixture can confirm env *content*
+    // (not just the pointer) flowed through.  env is already mapped at
+    // TASK_ENV_VIRT, so writing the shared page is visible to the task.
+    env_set(task->env, "OSTEST", "1");
+
+    scheduler_submit_new_task(task);
+
+    // Poll until the task exits or we time out (~1 second at 100 ticks/sec).
+    for (int i = 0; i < 100 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_args - task did not exit within 1 second\n");
+        return false;
+    }
+
+    if (task->retVal != ARG_ECHO_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_args - retVal=0x%lx, expected 0x%lx "
+               "(0xE00000xx identifies the failed check)\n",
+               task->retVal, ARG_ECHO_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_task_args (argc/argv/env delivered correctly)\n");
+    return true;
+}
+
 // dyn_consumer.c calls shlib_add(2,3) twice and packs both results:
 //   call 1: shlib_counter 42 -> 43 (this task's newly-privatized copy), returns 2+3+43=48
 //   call 2: reads back 43 from that SAME private copy, becomes 44, returns 2+3+44=49
@@ -1028,6 +1083,7 @@ static void register_builtin_tests(void)
     test_register("task_arena_exhaustion", test_task_arena_exhaustion, TEST_PHASE_PREBOOT);
     test_register("vma_file_backed_page_fault_resolved", test_vma_file_backed_page_fault_resolved, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
+    test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
 }
 

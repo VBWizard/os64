@@ -110,7 +110,7 @@ override SRC_CFILES := $(filter-out src/asm-offsets.c,$(shell find src -type f -
 # by their own sub-Makefiles via the test-elf/test-shlib targets below, with
 # their own -fpie/-fPIC flags) — they are not kernel test code and must not
 # be compiled into the kernel binary, unlike test_main.c/test_vma_*.c.
-override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
+override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/elf/arg_echo.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
 override CFILES := $(SRC_CFILES) $(TEST_CFILES)
 override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)

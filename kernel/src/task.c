@@ -514,6 +514,9 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isIdleTask = strnstr(path, "/idle",10);
 	bool isLogdTask = strnstr(path, "/logd",10);
 	bool isKWorkerTask = strnstr(path, "/kworker",10);
+	// Set when we actually load an ELF image below, so we know to latch the ELF
+	// entry registers (argc/argv/env) later — AFTER those fields are populated.
+	bool loadedElfProgram = false;
 	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
 
     //Copy the path (parameter) value from the parentTask's memory.
@@ -565,7 +568,11 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		} else if (elf_load_from_path(newTask, newTask->path) != 0) {
 			panic("task_create: Failed to load ELF for task %s\n", newTask->path);
 		}
-		task_setup_entry(newTask);
+		// NOTE: entry registers (RDI/RSI/RDX) are latched later, after argc/argv
+		// are built and mapped and env is inherited. Calling task_setup_entry()
+		// here would read a still-zeroed argc/argv/env and hand the program
+		// argc=0, argv=NULL, env=NULL.
+		loadedElfProgram = true;
 	}
 
 	gmtime((time_t*)&kSystemCurrentTime,&newTask->startTime);
@@ -597,32 +604,47 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        newTask->stderr=STDERR;
 	}
 
-	//Argument handling
-	//If arguments were passed to this method then set the task based on those arguments
-	if (argc > 0)
+	//Argument handling.
+	//Every task has at least argv[0] (its own path), so if the caller passed no
+	//arguments we synthesize argc=1 with argv[0]=path.  We build a single blob:
+	//   [ (argc+1) pointer slots, NULL-terminated ][ argc fixed-size string slots ]
+	//and map it at TASK_ARGV_VIRT.  Two things matter for correctness:
+	//  1. Each string is copied into the blob's OWN slots (never left pointing at
+	//     the caller's argv memory, which the old code did — corrupting the caller
+	//     and handing the program dangling pointers).
+	//  2. The pointer slots hold TASK-space addresses (TASK_ARGV_VIRT + offset), not
+	//     kernel addresses, so the program sees a self-consistent argv inside its
+	//     own address space once the blob is mapped.
+	int effectiveArgc = (argc > 0) ? argc : 1;
+	newTask->argc = effectiveArgc;
+
+	size_t argvPtrBytes  = (size_t)(effectiveArgc + 1) * sizeof(char*);
+	size_t argvStrBytes  = (size_t)effectiveArgc * TASK_MAX_PATH_LEN;
+	size_t argvBlobBytes = argvPtrBytes + argvStrBytes;
+
+	newTask->argv = (char**)kmalloc_aligned(argvBlobBytes);
+	char *argvStrBase = (char*)newTask->argv + argvPtrBytes;   // kernel view of the string area
+	for (int cnt = 0; cnt < effectiveArgc; cnt++)
 	{
-		newTask->argc = argc;
-		newTask->argv=(char**)kmalloc_aligned(2*sizeof(char*) + (TASK_MAX_PATH_LEN * argc)); 
-		for (int cnt=0;cnt<argc;cnt++)
-		{
-			newTask->argv[cnt] = (char*)(argv+(sizeof(char*) * cnt) + (TASK_MAX_PATH_LEN * cnt));
-			memcpy(newTask->argv[cnt], argv[cnt], TASK_MAX_PATH_LEN);
-		}
+		//Source string: caller-provided argv[cnt], or the path for the implicit argv[0].
+		const char *src = (argc > 0) ? argv[cnt] : path;
+		char *dst = argvStrBase + ((size_t)cnt * TASK_MAX_PATH_LEN);
+		strncpy(dst, src, TASK_MAX_PATH_LEN);
+		dst[TASK_MAX_PATH_LEN - 1] = '\0';                     // strncpy won't NUL-terminate an over-long src
+		//Store the address the PROGRAM will use (its own TASK_ARGV_VIRT view).
+		newTask->argv[cnt] = (char*)(uintptr_t)(TASK_ARGV_VIRT + argvPtrBytes + ((size_t)cnt * TASK_MAX_PATH_LEN));
 	}
-	else
-	{
-		//No arguments were passed, but there is always at least 1 argument which is the 
-		//path/filename of the program being executed
-		newTask->argc = 1;
-		newTask->argv=(char**)kmalloc_aligned(2*sizeof(char*) + TASK_MAX_PATH_LEN); 
-		newTask->argv[0] = (char*)newTask->argv+sizeof(char*)*2;
-		strncpy(newTask->argv[0], path,TASK_MAX_PATH_LEN);
-	}
-	//Map the created argv at the "standard" argumets memory address
-	mapPages = (newTask->argc * TASK_MAX_PATH_LEN) / PAGE_SIZE;
-	if (newTask->argc % PAGE_SIZE)
-		mapPages++;
-	paging_map_pages(newTask->pml4v, TASK_ARGV_VIRT, (uintptr_t)newTask->argv, mapPages,PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+	newTask->argv[effectiveArgc] = NULL;                       // argv[argc] == NULL (convention)
+
+	//Map the whole argv blob at the "standard" argument address.
+	//kmalloc_aligned() returns an HHDM (upper-half virtual) address; paging_map_pages
+	//needs the underlying PHYSICAL address, so convert with -kHHDMOffset (same as the
+	//env mapping does in task_setup_entry).  Passing the HHDM address directly stuffs
+	//non-canonical high bits into the PTE and faults with a reserved-bit #PF (0x8) the
+	//moment the program dereferences argv.
+	mapPages = (argvBlobBytes + PAGE_SIZE - 1) / PAGE_SIZE;
+	uintptr_t argvPhys = (uintptr_t)newTask->argv - kHHDMOffset;
+	paging_map_pages(newTask->pml4v, TASK_ARGV_VIRT, argvPhys, mapPages, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
 
 	newTask->kernelTask=isKernelTask;
 
@@ -630,6 +652,13 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// so parent and child can diverge freely.  True CoW (sharing the physical page
 	// until first write) is a future optimisation.
 	newTask->env = env_inherit(parentTaskPtr->env);
+
+	// Now that argc/argv are built and mapped (TASK_ARGV_VIRT) and env is
+	// inherited, latch the ELF entry registers: RDI=argc, RSI=argv, RDX=env.
+	// Must run AFTER the argument/env setup above.
+	if (loadedElfProgram) {
+		task_setup_entry(newTask);
+	}
 
 	return newTask;
 }

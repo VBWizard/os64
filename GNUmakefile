@@ -128,6 +128,7 @@ disk-populate: disk-init kernel
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/bin > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/lib > /dev/null 2>&1
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/test_elf ::/bin/test_elf
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/arg_echo ::/bin/arg_echo
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/dyn_consumer ::/bin/dyn_consumer
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
