@@ -12,6 +12,32 @@ memory_status_t *kMemoryStatus;
 uint64_t kMemoryStatusCurrentPtr = 0;
 uintptr_t memoryBaseAddress;
 
+// Serializes ALL allocator state (kMemoryStatus, kMemoryStatusCurrentPtr) and
+// the HHDM map/unmap that rides along with allocate/free. Allocations happen
+// concurrently from page-fault handlers on multiple cores (CoW privatization,
+// demand paging, shared-object page resolution all kmalloc in fault context),
+// and this ledger was previously completely unguarded. Interrupts are
+// disabled while held (irqsave pattern): a holder preempted mid-update on one
+// core would deadlock a fault-context spinner (IF=0) on that same core.
+static volatile uint32_t kMemoryStatusLock = 0;
+
+static inline uint64_t allocator_lock(void)
+{
+	uint64_t flags;
+	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+	__asm__ volatile("cli" ::: "memory");
+	while (__sync_lock_test_and_set(&kMemoryStatusLock, 1))
+		__builtin_ia32_pause();
+	return flags;
+}
+
+static inline void allocator_unlock(uint64_t flags)
+{
+	__sync_lock_release(&kMemoryStatusLock);
+	if (flags & 0x200)  // restore IF only if the caller had interrupts enabled
+		__asm__ volatile("sti" ::: "memory");
+}
+
 //NOTE: Will return the passed address if it is already page aligned
 static inline uintptr_t round_up_to_nearest_page(uintptr_t addr) {
     return (addr + 0xFFF) & ~0xFFF;
@@ -175,12 +201,20 @@ memory_status_t* make_new_status_entry(uint64_t address, uint64_t length, bool i
 
 uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_t requested_length, bool use_address, bool page_aligned)
 {
+	uint64_t irqflags = allocator_lock();
 	memory_status_t* memaddr;
 	uint64_t retVal = 0;
 	uint64_t found_block_original_length = 0;
 	uint64_t block_before_length = 0;
 	uint64_t aligned_start;
 	uint64_t aligned_length = 0;
+	// The full extent recorded in kMemoryStatus for this allocation — captured
+	// per-branch (memaddr gets repurposed to describe the leftover block below,
+	// so it can't be read afterwards) and HHDM-mapped just before returning.
+	// This is what makes `phys | kHHDMOffset` valid for every allocator-owned
+	// byte, on every memory map — see paging_hhdm_map_range (paging.h).
+	uint64_t hhdm_extent_start = 0;
+	uint64_t hhdm_extent_length = 0;
 
 	if (requested_length >= 200000000)
 	{
@@ -210,6 +244,8 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	{
 		memaddr->in_use = true;
 		retVal = memaddr->startAddress;
+		hhdm_extent_start = memaddr->startAddress;
+		hhdm_extent_length = requested_length;
 	}
 	else //memory available is > requested memory
 	{
@@ -235,9 +271,12 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		//The address RETURNED will be the aligned address
 		/*memory_status_t* new_entry = */make_new_status_entry(
 							  use_address?requested_address:
-							  	memaddr->startAddress, 
-							  aligned_length, 
+							  	memaddr->startAddress,
+							  aligned_length,
 							  true);
+		//Same extent the status entry just recorded — free_memory will unmap this same range later
+		hhdm_extent_start = use_address?requested_address:memaddr->startAddress;
+		hhdm_extent_length = aligned_length;
 		//If a specific address was requested and there was memory before the requested address, make a block from its starting address to the requested address - 1
 		if (use_address && memaddr->startAddress != requested_address)
 		{
@@ -262,6 +301,15 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	}
 	printd(DEBUG_ALLOCATOR, "allocate_memory_at_address_internal: Allocated 0x%08x bytes at phys address 0x%08x (%s - %s)\n", aligned_length, use_address?requested_address:aligned_start,
 			use_address?"requested address":"",page_aligned?"aligned":"");
+
+	//Keep the "allocated <=> HHDM-mapped" invariant: map the extent's pages at
+	//their HHDM addresses in the kernel tables (no-op until the real kernel
+	//page tables are live — early allocations are retro-mapped when
+	//init_os64_paging_tables builds them).
+	if (retVal != 0)
+		paging_hhdm_map_range(hhdm_extent_start, hhdm_extent_length);
+
+	allocator_unlock(irqflags);
 	return retVal;
 }
 
@@ -286,19 +334,45 @@ uint64_t allocate_memory(uint64_t requested_length)
 	return allocate_memory_at_address_internal(0, requested_length, false, false);
 }
 
-//TODO: Coalesce adjacent memory blocks back together
+//How many frees between compaction passes over the status array
+#define FREE_COMPACT_FREQUENCY 10
+static uint64_t kFreeCompactCounter = 0;
+
 uint64_t free_memory(uint64_t address)
 {
 	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Freeing memory at 0x%016lx\n", address);
+	uint64_t irqflags = allocator_lock();
 	uint64_t statusIdx = get_status_index_for_requested_address(address, 0, true);
 	memory_status_t *status_entry = &kMemoryStatus[statusIdx];
 	if (status_entry != NULL)
 	{
 		printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Found block to free, address = 0x%016lx, length=0x%016lx\n", status_entry->startAddress, status_entry->length);
 		status_entry->in_use = false;
-		//TODO: Fix this.  It isn't working because some addresses are NOT offset by the HHDM
-//		//Memory should still be mapped so we can clear it out safely
+		//NOTE: If poison-on-free is ever wanted, the memset below is now safe —
+		//the extent is guaranteed HHDM-mapped until the unmap call after it.
+		//Left disabled: it also poisons pages still mapped (and possibly live)
+		//in task address spaces, which is the point of the tripwire but should
+		//be turned on deliberately, not as a side effect of this change.
 //		memset((void*)(status_entry->startAddress + kHHDMOffset), 0xFE, status_entry->length);
+
+		//Drop the HHDM mapping of every page this extent fully owns (partial
+		//boundary pages that may host live neighbouring allocations stay
+		//mapped). From here on, touching this memory through the HHDM faults:
+		//that's the use-after-free tripwire, by design. Also broadcasts a TLB
+		//shootdown to the other cores.
+		paging_hhdm_unmap_range(status_entry->startAddress, status_entry->length);
+
+		//Coalescing and periodic compaction moved here from kfree so they run
+		//under the allocator lock — both rewrite kMemoryStatus (and compaction
+		//invalidates every index), so doing them outside the lock raced any
+		//concurrent allocation on another core. NOTE: after these, statusIdx
+		//may no longer refer to the freed entry — callers must not use it to
+		//index kMemoryStatus, only to detect failure.
+		merge_freed_block(statusIdx);
+		if (++kFreeCompactCounter % FREE_COMPACT_FREQUENCY == 0)
+			compact_memory_array();
+
+		allocator_unlock(irqflags);
 		return statusIdx;
 	}
 	panic("ALLOCATOR: Did not find kMemoryStatus entry to mark not in use, address was: 0x%016lx\n",address);

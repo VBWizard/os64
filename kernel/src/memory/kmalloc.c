@@ -90,9 +90,10 @@ void kfree(void *address)
 	uint64_t idx = free_memory(physicalAddress);
 	if (idx==0xFFFFFFFF)
 		panic("kFree: free_memory returned 0xFFFFFFFF indicating it could not find the block of memory to free for physical address 0x%016lx\n",physicalAddress);
-    merge_freed_block(idx);
-	if (++kFreeCallCount%KFREE_COMPACT_FREQUENCY==0)
-		compact_memory_array();
+	//Merging + periodic compaction now happen inside free_memory, under the
+	//allocator lock — they rewrite kMemoryStatus and raced concurrent
+	//allocations when done here, outside it. (idx is only valid as an error
+	//signal after free_memory returns, not as an array index.)
 #ifdef KMALLOC_CLEAR_FREED_POINTERS
 	address = (void*)0xBADBADBA;
 #endif

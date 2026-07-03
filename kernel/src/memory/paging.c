@@ -21,6 +21,7 @@ extern uintptr_t kKernelBaseAddressP;
 extern pci_device_id_t *kPCIIdsData;
 extern uint32_t kPCIIdsCount;
 extern struct limine_smp_response *kLimineSMPInfo;
+extern void mpSendInvTLB();  // smp_core.c — TLB-shootdown IPI to the other cores
 uintptr_t kKernelPageMappings[KERNEL_PAGE_COUNT][2]={0};
 int kKernelPageMappingsCount=0;
 
@@ -257,6 +258,51 @@ void paging_unmap_page(pt_entry_t *pml4v, uint64_t virtual_address) {
         // Flush the TLB entry for this virtual address
        asm volatile("invlpg [%0]" : : "r"(virtual_address) : "memory");
     }
+}
+
+// See paging.h for the design rationale (lazy HHDM: map-on-alloc /
+// unmap-on-free with the boundary-page rule, instead of an eager full
+// direct map).
+volatile bool kHHDMMaintenanceEnabled = false;
+
+void paging_hhdm_map_range(uintptr_t phys_start, uint64_t length)
+{
+	if (!kHHDMMaintenanceEnabled || length == 0)
+		return;
+
+	// Every page the extent OVERLAPS gets mapped (round the start down, the
+	// end up) — a caller handed bytes anywhere in a page must be able to
+	// dereference that whole page's HHDM alias. Overlap with a neighbouring
+	// extent's boundary page is fine: the mapping is idempotent.
+	uintptr_t first_page = phys_start & PAGE_ADDRESS_MASK;
+	uintptr_t end_page = (phys_start + length + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
+
+	paging_map_pages((pt_entry_t *)kKernelPML4v, first_page | kHHDMOffset, first_page,
+	                 (end_page - first_page) / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
+}
+
+void paging_hhdm_unmap_range(uintptr_t phys_start, uint64_t length)
+{
+	if (!kHHDMMaintenanceEnabled || length == 0)
+		return;
+
+	// Only pages FULLY CONTAINED in the extent (round the start up, the end
+	// down): a partial boundary page may host live neighbouring allocations
+	// whose HHDM access must keep working, so it stays mapped.
+	uintptr_t first_page = (phys_start + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
+	uintptr_t end_page = (phys_start + length) & PAGE_ADDRESS_MASK;
+	if (end_page <= first_page)
+		return;  // extent smaller than a page, or only partial pages — nothing we own outright
+
+	for (uintptr_t page = first_page; page < end_page; page += PAGE_SIZE)
+		paging_unmap_page((pt_entry_t *)kKernelPML4v, page | kHHDMOffset);  // invlpg's locally
+
+	// Cross-core shootdown so the other cores' TLBs drop the stale entries
+	// too. Fire-and-forget is safe here: HHDM virt<->phys is a fixed 1:1
+	// relation, so a stale entry that survives a beat can never produce a
+	// WRONG translation (remapping recreates the identical PTE) — it can
+	// only let that core miss the use-after-free tripwire for that beat.
+	mpSendInvTLB();
 }
 
 void paging_map_pages(pt_entry_t* pml4v,uint64_t virtual_address,uint64_t physical_address,uint64_t page_count,uint64_t flags)
@@ -557,8 +603,33 @@ void init_os64_paging_tables()
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual IDT (0x%016lx) to physical IDT (0x%016lx), %u pages in new page tables\n", idtr.base, physAddrLookup, pagesToMap);
 	paging_map_pages(pml4v, idtr.base & PAGE_ADDRESS_MASK, physAddrLookup & PAGE_ADDRESS_MASK, pagesToMap, PAGE_PRESENT | PAGE_WRITE);
 
+	// Retro-map pass for lazy HHDM maintenance (see paging.h): everything the
+	// allocator handed out BEFORE these tables existed (the paging page pool,
+	// kMemoryStatus itself, anything else early boot grabbed) was reached
+	// through Limine's full-HHDM tables until now. Walk the allocator's
+	// ledger and HHDM-map every currently-allocated extent into the new
+	// tables, so the "allocated <=> HHDM-mapped" invariant holds from the
+	// moment we switch CR3. Free extents deliberately stay unmapped — that's
+	// the tripwire. From here on, allocate/free maintain this incrementally.
+	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Retro-map allocated extents at HHDM\n");
+	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
+	{
+		memory_status_t *entry = &kMemoryStatus[cnt];
+		if (!entry->in_use || entry->length == 0 || entry->startAddress == 0)
+			continue;
+		uintptr_t first_page = entry->startAddress & PAGE_ADDRESS_MASK;
+		uintptr_t end_page = (entry->startAddress + entry->length + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
+		printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: HHDM retro-map 0x%016lx, %u pages\n", first_page, (end_page - first_page) / PAGE_SIZE);
+		paging_map_pages(pml4v, first_page | kHHDMOffset, first_page,
+		                 (end_page - first_page) / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
+	}
+
 	kKernelPML4 = (uintptr_t)pml4p;
 	kKernelPML4v = (uintptr_t)pml4v;
 
 	asm volatile ("cli\nmov cr3, %0\nsti" :: "r"(kKernelPML4) : "memory");
+
+	// Limine's full-HHDM tables are gone; from now on the allocator maintains
+	// HHDM mappings itself (paging_hhdm_map_range/paging_hhdm_unmap_range).
+	kHHDMMaintenanceEnabled = true;
 }

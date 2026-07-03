@@ -488,20 +488,39 @@ paging_unmap_page((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR);
 - No permanent mappings cluttering kernel address space
 - Doesn't waste kmalloc pool on large allocations (like stacks)
 
-### HHDM (Higher-Half Direct Mapping) Limitations
+### HHDM (Higher-Half Direct Mapping) — Lazy Maintenance
 
-**Important**: The HHDM may not cover all physical memory. Specifically:
+**The rule (since July 2026): physical memory is HHDM-mapped in the kernel
+page tables exactly while the allocator considers it allocated.**
 
-- Memory allocated with `kmalloc()` or `kmalloc_aligned()` **IS** accessible via HHDM in kKernelPML4
-- Memory allocated with `allocate_memory_aligned()` **MAY NOT BE** accessible via HHDM in kKernelPML4
+- ANY allocator-owned memory — `kmalloc()`, `kmalloc_aligned()`, AND
+  `allocate_memory_aligned()` — **IS** accessible via `phys | kHHDMOffset`
+  while allocated, on every memory map (no more layout luck).
+- Freed or never-allocated RAM is **deliberately unmapped**: touching it via
+  the HHDM page-faults with a "use-after-free or wild pointer?" panic. This
+  is a designed tripwire (DEBUG_PAGEALLOC-style), chosen over an eager
+  Linux-style full direct map.
+- Mechanics: the allocator's single alloc/free choke points call
+  `paging_hhdm_map_range()` / `paging_hhdm_unmap_range()` (see paging.h for
+  the boundary-page rules); frees broadcast a TLB-shootdown IPI. Early-boot
+  allocations are retro-mapped when `init_os64_paging_tables()` builds the
+  real tables. MMIO/reserved regions still require explicit mappings.
 
 **When to use each**:
 - `kmalloc()`: For kernel data structures that need to be permanently accessible
-- `allocate_memory_aligned()`: For task-specific memory (stacks, heap pages) that should be isolated
+- `allocate_memory_aligned()`: For task-specific memory (stacks, heap pages) —
+  note it IS kernel-visible via HHDM while allocated, so the temporary-mapping
+  technique above is no longer strictly required for reading/writing task
+  pages from the kernel (it remains valid, just redundant)
 
 **Converting addresses**:
-- Physical to HHDM: `phys | kHHDMOffset` (but verify it's actually mapped!)
+- Physical to HHDM: `phys | kHHDMOffset` (valid iff the memory is currently allocated)
 - HHDM to Physical: `hhdm - kHHDMOffset`
+
+**Locking**: all allocator entry points take an interrupts-disabled spinlock
+(`kMemoryStatusLock`) — allocations happen concurrently from page-fault
+handlers on multiple cores. Never call allocate/free while holding another
+spinlock that a fault path might also take.
 
 ### Static Variables and SMP Safety
 

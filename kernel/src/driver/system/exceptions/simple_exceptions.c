@@ -193,6 +193,13 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         printd(DEBUG_EXCEPTIONS, "No VMA found for address 0x%016lx.\n", cr2);
         log_page_fault_bits(error_code);
         dump_stack_trace(rip);
+        // A fault in the HHDM range is the lazy-HHDM tripwire firing (see
+        // paging.h): physical memory is only HHDM-mapped while allocated, so
+        // this is a use-after-free, a wild physical-address dereference, or
+        // memory that never came from the allocator (e.g. MMIO that needs an
+        // explicit mapping). Say so, rather than the generic no-VMA message.
+        if (kHHDMMaintenanceEnabled && cr2 >= kHHDMOffset && cr2 < kHHDMOffset + 0x1000000000000UL)
+            panic("Paging exception: HHDM access to unallocated physical address 0x%016lx — use-after-free or wild pointer?", cr2 - kHHDMOffset);
         panic("Paging exception: Invalid memory access with no VMA");
     }
 
