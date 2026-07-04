@@ -140,6 +140,17 @@ over_check_signals:
 	mov rbx, [rbx + 8]
 	mov [mp_isrSavedCS + rax * 8], rbx
 
+	# RFLAGS has the SAME constraint as RIP/CS: for a ring0 task with its own
+	# PML4 the interrupt frame sits on that task's own lower-half ring0 stack,
+	# which is NOT mapped in kKernelPML4. So read it from the frame here, BEFORE
+	# the CR3 switch, rather than after (where the dereference would hit the wrong
+	# physical page, or fault). Frame layout: [temp_rsp+0]=RIP, +8=CS, +16=RFLAGS,
+	# +24=RSP, +32=SS. (RSP/SS below don't dereference the frame, so they're fine
+	# after the switch.)
+	mov rbx, [temp_rsp + rax * 8]
+	mov rbx, [rbx + 16]
+	mov [mp_isrSavedRFlags + rax * 8], rbx
+
     mov rbx, kKernelPML4
     mov cr3, rbx
 
@@ -186,8 +197,7 @@ dontSkipRegisters:
     # Get the RSP value from the interrupt stack frame (ring 3 pushes RIP/CS/RFLAGS/RSP/SS)
 	mov rbx, [rcx + 24]
 	mov [mp_isrSavedRSP + rax * 8], rbx
-    mov rbx, [rcx + 16]
-    mov [mp_isrSavedRFlags + rax * 8], rbx
+    # RFLAGS already saved from the frame before the CR3 switch (see above).
     jmp over_save_samel_priv_lvl_stack_and_flags
 
 same_priv_lvl_save_stack_and_flags:
@@ -211,11 +221,9 @@ same_priv_lvl_save_stack_and_flags:
 	mov rbx, [temp_rsp + rax * 8]
 	add rbx, 40
     mov [mp_isrSavedRSP + rax * 8], rbx
-    # Save the interrupted RFLAGS from the interrupt frame rather than the current ISR flags.
-    # Frame layout (bottom -> top): [temp_rsp+0]=RIP, +8=CS, +16=RFLAGS, +24=RSP, +32=SS.
-    mov rbx, [temp_rsp + rax * 8]
-    mov rbx, [rbx + 16]
-    mov [mp_isrSavedRFlags + rax * 8], rbx
+    # RFLAGS already saved from the frame BEFORE the CR3 switch (see the pre-switch
+    # save near RIP/CS). Reading it here would dereference the interrupted ring0
+    # stack under kKernelPML4 -- the wrong physical page for an own-PML4 kernel task.
 
 over_save_samel_priv_lvl_stack_and_flags:
 	# CS and RIP already saved from the interrupt frame before the CR3 switch above.
