@@ -154,6 +154,7 @@ void kernel_init()
     if (kRunTests)
     {
         test_framework_init();
+        printf("Running pre-boot tests ...\n");
         test_run_preboot();
     }
 
@@ -207,6 +208,7 @@ void kernel_init()
 
     if (kRunTests)
     {
+        printf("Running post-boot tests ...\n");
         test_run_postboot();
     }
 
