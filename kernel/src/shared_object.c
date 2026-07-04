@@ -178,6 +178,24 @@ uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx)
     // below), and only same-page losers wait, on the slot itself.
     uintptr_t prev = __sync_val_compare_and_swap(&so->page_phys[page_idx], 0, SHARED_OBJECT_PAGE_RESOLVING);
     if (prev != 0) {
+        // Another core is resolving this SAME page; wait for it to publish.
+        //
+        // We must spin here with interrupts ENABLED. This runs inside the page-
+        // fault handler, which is entered with interrupts masked (interrupt gate).
+        // The core that won the CAS may block on timer-dependent I/O while
+        // fetching the page (kernel_read_page -> NVMe -> nvme_wait_for_completion
+        // -> wait()). Under BSP-only scheduling the BSP's APIC timer is the ONLY
+        // thing advancing kTicksSinceStart, so if we spun here with interrupts
+        // masked we would freeze that clock, the resolver's wait() would never
+        // return, it would never publish, and both cores would deadlock. Enabling
+        // interrupts keeps the timekeeper alive so the resolver can make progress.
+        //
+        // This is deliberately the ONE spot in the fault path that re-enables
+        // interrupts: CR2 is already captured into a parameter by the asm stub, we
+        // hold no locks here, and the loop is otherwise state-free — the safest
+        // possible place to become preemptible. The real fix is to USLEEP on the
+        // I/O completion signal rather than busy-waiting for the page at all.
+        __asm__ volatile("sti");
         while ((phys = *slot) == SHARED_OBJECT_PAGE_RESOLVING) {
             __builtin_ia32_pause();
         }
