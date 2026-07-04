@@ -217,17 +217,26 @@ void kwait(uint64_t msToWait)
 
 void __attribute__((noinline))waitTicks(int TicksToWait)
 {
-    //printf("ttw=%u",ttw);
+    // Enable interrupts before waiting: on the BSP it is THIS core's own timer
+    // ISR that advances kTicksSinceStart, so with interrupts masked the loop
+    // below would never make progress. (It also keeps the wait preemptible,
+    // matching the old hlt-based behavior.)
 	__asm__ __volatile__ ("sti\n");
     if (TicksToWait<=0)
         return;
     if (TicksToWait>5000)
         printd(DEBUG_EXCEPTIONS,"waitTicks: Excessive ticks value %u\n",TicksToWait);
-    do
-    {
-        __asm("sti\nhlt\n");
-        TicksToWait--;
-    } while (TicksToWait>0);
+
+    // Wait by watching the GLOBAL tick counter instead of counting hlt wake-ups.
+    // The old loop did `sti; hlt; TicksToWait--`, assuming every wake-up was a
+    // local APIC timer tick. That assumption breaks on any core whose timer is
+    // masked (an AP parked under BSP-only scheduling): its hlt never wakes on a
+    // tick, so the wait would hang, or limp forward one stray IPI at a time.
+    // kTicksSinceStart is advanced by the BSP timer and is global, so spinning
+    // on it is correct on every core -- the same approach kwait() already uses.
+    uint64_t target = kTicksSinceStart + (uint64_t)TicksToWait;
+    while (kTicksSinceStart < target)
+        __asm__ volatile ("pause\n");
     return;
 }
 

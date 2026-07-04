@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include "apic.h"
+#include "acpi.h"
 #include "cpu.h"
 #include "smp.h"
 #include "msr.h"
@@ -19,6 +20,20 @@ static void set_imcr_to_apic(void)
 
 static uint8_t get_ioapic_redirection_index_for_irq(uint8_t irq)
 {
+    // First choice: the ACPI MADT's Interrupt Source Overrides — the modern,
+    // guaranteed source for "this ISA IRQ is wired to a different IOAPIC
+    // input". The PIT is the canonical case: ISA IRQ 0 -> GSI 2 on
+    // VirtualBox and most real hardware. Relying on the MP tables alone
+    // routed IRQ0 to a masked pin on VBox and froze the system heartbeat
+    // (ticks stopped the instant IRQ0 moved from PIC to IOAPIC).
+    if (irq < 16 && kISAIrqToGSI[irq] >= 0) {
+        return (uint8_t)kISAIrqToGSI[irq];
+    }
+
+    // Fallback: legacy Intel MP tables (what QEMU/SeaBIOS happened to make
+    // work). NOTE the srcbus==1 assumption — MP bus numbering is
+    // BIOS-enumerated, so ISA being bus 1 is a SeaBIOS convention, not a
+    // rule; that's why the MADT overrides above are checked first.
     if (!kMPConfigTable || !kMPConfigTableCount) {
         return irq;
     }
@@ -159,9 +174,22 @@ void remap_irq0_to_apic(uint32_t vector) {
     uint32_t low_reg = 0x10 + ((uint32_t)redirection_index * 2);
     uint32_t high_reg = low_reg + 1;
 
-    // Route PIT IRQ0 to the BSP LAPIC using the MP-provided IOAPIC redirection entry
-    uint32_t irq0_low = vector & 0xFF; // keep delivery mode fixed, edge triggered, active high
+    // Route PIT IRQ0 to the BSP LAPIC via the redirection entry the firmware
+    // says IRQ0 is wired to (MADT override first, MP tables second)
+    uint32_t irq0_low = vector & 0xFF; // delivery mode fixed; edge/high unless the override says otherwise
     uint32_t irq0_high = ((uint32_t)kCPUInfo[0].apicID) << 24; // physical destination
+
+    // Honor the override's MPS INTI flags: polarity (bits 0-1, 11 = active
+    // low -> redirection bit 13) and trigger mode (bits 2-3, 11 = level ->
+    // redirection bit 15). 00 means "conforms to bus" = edge/high for ISA,
+    // which is the default already encoded in irq0_low.
+    if (kISAIrqToGSI[0] >= 0) {
+        uint16_t iso_flags = kISAIrqOverrideFlags[0];
+        if ((iso_flags & 0x3) == 0x3)
+            irq0_low |= (1u << 13);   // active low
+        if (((iso_flags >> 2) & 0x3) == 0x3)
+            irq0_low |= (1u << 15);   // level triggered
+    }
 
     ioapic_write(high_reg, irq0_high);
     ioapic_write(low_reg, irq0_low);

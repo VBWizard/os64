@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include "CONFIG.h"
 #include "sprintf.h"
+#include "memcpy.h"
 #include "memset.h"
 #include "io.h"
 #include "printd.h"
@@ -12,7 +13,6 @@
 #include "x86_64.h"
 #include "log.h"
 #include "strlen.h"
-#include "strcpy.h"
 
 #define MAX_FIRST_MESSAGE_SIZE MAX_LOG_MESSAGE_SIZE - 10 // Leave space for prefix and null terminator
 
@@ -22,11 +22,19 @@ extern volatile bool kFBInitDone;
 extern bool kOverrideFileLogging;
 extern bool kEnableSMP;
 extern volatile bool kSchedulerInitialized;
-char print_buf[2048];
 
 void printd(__uint128_t debug_level, const char *fmt, ...) {
+    // Formatting scratch buffer. MUST be a local (per-call, per-stack) and never
+    // a shared global: printd runs concurrently on every core, and a single
+    // shared buffer gets clobbered mid-format when two cores log at once — which
+    // corrupts the message BEFORE it is copied into the per-core log queue,
+    // producing garbled log entries that logd then faithfully prints. A local
+    // also makes printd re-entrancy-safe (e.g. a fault handler logging while an
+    // outer printd is mid-format on the same core). The sibling print_buf2 below
+    // is already a local for the same reason.
+    char print_buf[2048];
     bool msg_continued = false;
-    
+
     if ((kDebugLevel & debug_level) != debug_level) return;
     
     uint16_t core = 0;  // Default core if SMP isn't initialized
@@ -42,7 +50,7 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     uint64_t tick_count = kTicksSinceStart;
     uint8_t priority = (debug_level >> 126) & 0x3;  // Extract top 2 bits for priority
     uint8_t category = __builtin_ctz(debug_level & 0x3FFFFFFFFFFFFFFF); // First category set
-    
+
     va_list args;
     va_start(args, fmt);
     vsprintf(print_buf, fmt, args);
@@ -55,19 +63,21 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
 		size_t offset = 0;
 		while (offset < msg_len) {
             char chunk[MAX_LOG_MESSAGE_SIZE];
+            size_t chunk_capacity = (offset == 0) ? MAX_FIRST_MESSAGE_SIZE : MAX_LOG_MESSAGE_SIZE;
+            size_t max_payload = chunk_capacity - 1; // leave room for null terminator
+            size_t remaining = msg_len - offset;
+            size_t copy_len = remaining < max_payload ? remaining : max_payload;
 
-            //If the message will be split, the first message needs to be 10 characters less than the length of the string
-            //  Additional messages can be the entire MAX_LOG_MESSAGE_SIZE
-            if (offset == 0) {
-                msg_continued = false;
-                strncpy(chunk, print_buf, MAX_FIRST_MESSAGE_SIZE);
-            } else {
-                msg_continued = true;
-                strncpy(chunk, print_buf + offset, MAX_LOG_MESSAGE_SIZE);
-            }
-            offset += strlen(chunk); // Only increment by the actual length of printed data
-            chunk[MAX_FIRST_MESSAGE_SIZE - 1] = '\0'; // Make sure the last character of the string is a null terminator
+            if (copy_len == 0)
+                break; // Safety: should not happen, but avoid infinite loop
+
+            memcpy(chunk, print_buf + offset, copy_len);
+            chunk[copy_len] = '\0';
+
+            msg_continued = (offset != 0);
             log_store_entry(core, tick_count, priority, category, msg_continued, chunk);
+
+            offset += copy_len;
         }
     }
 	else
@@ -78,7 +88,7 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     	char print_buf2[2048];
         sprintf(print_buf2, "%lu (0x%04lx) AP%u: %s", tick_count, threadID, core, print_buf);
     	serial_print_string(print_buf2);
-	}	
+	}
 #else
     char print_buf2[2048];
     sprintf(print_buf2, "%lu (0x%04lx) AP%u: %s", tick_count, threadID, core, print_buf);

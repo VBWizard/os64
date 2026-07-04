@@ -54,17 +54,46 @@ extern int kKernelPageMappingsCount;
 
 
 void paging_init(/*uint64_t kernel_physical, uint64_t kernel_virtual*/);
-void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physical_address, uint64_t flags);
+void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physical_address, uint64_t flags);
 
 void paging_map_pages(
-	pt_entry_t* pml4,
+	pt_entry_t* pml4v,
 	uint64_t virtual_address,
 	uint64_t physical_address,
 	uint64_t page_count,
 	uint64_t flags);
 
-void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address);
-void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t length);
+void paging_unmap_page(pt_entry_t *pml4v, uint64_t virtual_address);
+void paging_unmap_pages(pt_entry_t *pml4v, uint64_t virtual_address, size_t length);
+
+// ---- Lazy HHDM maintenance (map-on-alloc / unmap-on-free) ----
+// Physical memory is HHDM-mapped in the kernel page tables ONLY while the
+// allocator considers it allocated. The allocator calls these two functions
+// from its single alloc/free choke points; nothing else should. The payoff:
+// `phys | kHHDMOffset` is guaranteed dereferenceable for ANY allocator-owned
+// extent (no more "works on QEMU because the memory map happens to line up"),
+// and touching freed or never-allocated RAM through the HHDM faults — a
+// deliberate use-after-free/wild-pointer tripwire, in the spirit of Linux's
+// DEBUG_PAGEALLOC, chosen over an eager Linux-style full direct map.
+//
+// False until init_os64_paging_tables() has built the real kernel tables and
+// switched CR3 — before that, Limine's own full-HHDM tables are live and
+// allocations made that early are retro-mapped during the table build.
+extern volatile bool kHHDMMaintenanceEnabled;
+
+/// @brief Map every page overlapping physical [phys_start, phys_start+length)
+/// at its HHDM address in the kernel page tables. Idempotent (HHDM virt<->phys
+/// is a fixed 1:1 relation, so remapping writes an identical PTE). No-op until
+/// kHHDMMaintenanceEnabled.
+void paging_hhdm_map_range(uintptr_t phys_start, uint64_t length);
+
+/// @brief Unmap the HHDM mapping of every page FULLY CONTAINED in physical
+/// [phys_start, phys_start+length). Boundary partial pages are deliberately
+/// left mapped — unaligned (8-byte-granularity) kernel allocations can share
+/// a page with live neighbouring extents, and interior pages are the only
+/// ones this extent provably owns outright. Broadcasts a TLB-shootdown IPI
+/// to the other cores when anything was actually unmapped.
+void paging_hhdm_unmap_range(uintptr_t phys_start, uint64_t length);
 uintptr_t paging_walk_paging_table_keep_flags(pt_entry_t* pml4, uint64_t virtual_address, bool keepPageFlags);
 uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address);
 void validatePagingHierarchy(uintptr_t address);

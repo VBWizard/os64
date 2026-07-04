@@ -5,11 +5,12 @@
 #include "mpspec_def.h"
 #include "thread.h"
 #include "tss.h"
+#include "task.h"
 
 #define MAX_CPUS 24
 #define APIC_EOI_OFFSET    0xB0
-#define AP_STACK_BASE 0x500000
 #define AP_STACK_SIZE 0x1000
+#define KERNEL_INTERRUPT_STACK_SIZE (16 * 4096)  // 64KB per-CPU kernel stack
 
 typedef enum mpRecType
 {
@@ -50,7 +51,7 @@ typedef struct mpConfig
     
 } __attribute__((packed))mpConfig_t;
 
-typedef struct 
+typedef struct
 {
 	void *self;										// 0
 	uint64_t apic_id;								// 8
@@ -62,6 +63,15 @@ typedef struct
 	bool coreAwoken, coreInitialized;
 	tss_t *tss;
 	uint64_t kernel_rsp0;
+    task_t *task;
+	uintptr_t kernel_interrupt_stack_base;  // Upper-half kernel stack for CR3 switching
+	uintptr_t kernel_interrupt_stack_top;   // Top of kernel interrupt stack
+
+	// cikc = call_in_kernel_context (vma.c context switching scratch space)
+	void (*cikc_saved_func)(void*);
+	void *cikc_saved_arg;
+	uint64_t cikc_saved_cr3;
+	uint64_t cikc_saved_rsp;
 } core_local_storage_t;
 
 

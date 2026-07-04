@@ -14,19 +14,19 @@ extern uint64_t kSystemCurrentTime; // Your kernel's epoch time variable
 vfs_filesystem_t* vfs_get_device_by_fat_disk_number(uint8_t fatDiskNumber)
 {
 
-	dlist_node_t* bdl = (dlist_node_t*)kBlockDeviceDList;
-	vfs_filesystem_t* vfsdev;
-
-	do
+	if (kBlockDeviceDList == NULL)
 	{
-		if (bdl->next != 0)
+		return NULL;
+	}
+
+	for (dlist_node_t* node = kBlockDeviceDList->head; node != NULL; node = node->next)
+	{
+		vfs_filesystem_t* vfsdev = (vfs_filesystem_t*)node->data;
+		if (vfsdev != NULL && vfsdev->fatDiskNumber == fatDiskNumber)
 		{
-			vfsdev = (vfs_filesystem_t*)bdl->next->data;
-			if (vfsdev->fatDiskNumber == fatDiskNumber)
-				return vfsdev;
+			return vfsdev;
 		}
-		bdl = bdl->next;
-	} while (bdl);
+	}
 	return NULL;
 }
 
@@ -203,7 +203,8 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 
     (*vfs_file)->handle = fat_file;
 	(*vfs_file)->f_path = (void*)path;
-	(*vfs_file)->owner = 0x0;
+	(*vfs_file)->fops = vfs_fs != NULL ? vfs_fs->fops : &fat_fops;
+	(*vfs_file)->owner = vfs_fs;
     return 0;	
 }
 
@@ -400,4 +401,3 @@ vfs_directory_operations_t fat_dops = {
 };
 
 typedef uint32_t DWORD;
-

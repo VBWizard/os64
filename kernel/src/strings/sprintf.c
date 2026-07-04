@@ -41,7 +41,17 @@ __res = ((unsigned long) n) % (unsigned) base; \
 n = ((unsigned long) n) / (unsigned) base; \
 __res; })
 
-static char *number(char *str, long num, int base, int size, int precision,
+// Bounded store used by the formatter below. It stores the byte only while the
+// cursor is still inside the caller's buffer (str < end), but ALWAYS advances
+// the cursor, so the return value is the would-be length (C99 snprintf
+// semantics) and overlong output is truncated instead of overflowing the
+// buffer. The argument is evaluated into a temporary FIRST so side effects
+// (va_arg, *s++) always happen even when we are past `end`; otherwise a
+// truncated %c/%s would desync the variadic arguments. Relies on `str`/`end`
+// being in scope (number() and format_core()); #undef'd at end of file.
+#define EMIT(ch) do { char __emit_c = (char)(ch); if (str < end) *str = __emit_c; ++str; } while (0)
+
+static char *number(char *str, char *end, long num, int base, int size, int precision,
 		    int type)
 {
 	/* we are called with base 8, 10 or 16, only, thus don't need "G..."  */
@@ -90,30 +100,30 @@ static char *number(char *str, long num, int base, int size, int precision,
 	size -= precision;
 	if (!(type & (ZEROPAD + LEFT)))
 		while (size-- > 0)
-			*str++ = ' ';
+			EMIT(' ');
 	if (sign)
-		*str++ = sign;
+		EMIT(sign);
 	if (type & SPECIAL) {
 		if (base == 8)
-			*str++ = '0';
+			EMIT('0');
 		else if (base == 16) {
-			*str++ = '0';
-			*str++ = ('X' | locase);
+			EMIT('0');
+			EMIT('X' | locase);
 		}
 	}
 	if (!(type & LEFT))
 		while (size-- > 0)
-			*str++ = c;
+			EMIT(c);
 	while (i < precision--)
-		*str++ = '0';
+		EMIT('0');
 	while (i-- > 0)
-		*str++ = tmp[i];
+		EMIT(tmp[i]);
 	while (size-- > 0)
-		*str++ = ' ';
+		EMIT(' ');
 	return str;
 }
 
-int vsprintf(char *buf, const char *fmt, va_list args)
+static int format_core(char *buf, size_t size, const char *fmt, va_list args)
 {
 	int len;
 	unsigned long num;
@@ -128,9 +138,22 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 				   number of chars for from string */
 	int qualifier;		/* 'h', 'l', or 'L' for integer fields */
 
+	// Last writable content position: buf[0..size-2] hold content, buf[size-1]
+	// holds the terminating NUL, so stores are allowed while (str < end). Callers
+	// that want no size limit (vsprintf) pass SIZE_MAX; clamp `end` to the top of
+	// the address space so buf+size can't overflow and the guard is simply never
+	// hit — making the unbounded path byte-identical to the old vsprintf.
+	char *end;
+	if (size == 0)
+		end = buf;
+	else if (size > (size_t)(UINTPTR_MAX - (uintptr_t)buf))
+		end = (char *)UINTPTR_MAX;
+	else
+		end = buf + (size - 1);
+
 	for (str = buf; *fmt; ++fmt) {
 		if (*fmt != '%') {
-			*str++ = *fmt;
+			EMIT(*fmt);
 			continue;
 		}
 
@@ -199,10 +222,10 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 		case 'c':	//character
 			if (!(flags & LEFT))
 				while (--field_width > 0)
-					*str++ = ' ';
-			*str++ = (unsigned char)va_arg(args, int);
+					EMIT(' ');
+			EMIT((unsigned char)va_arg(args, int));
 			while (--field_width > 0)
-				*str++ = ' ';
+				EMIT(' ');
 			continue;
 
 		case 's':	//string
@@ -214,11 +237,11 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 
 			if (!(flags & LEFT))
 				while (len < field_width--)
-					*str++ = ' ';
+					EMIT(' ');
 			for (i = 0; i < len; ++i)
-				*str++ = *s++;
+				EMIT(*s++);
 			while (len < field_width--)
-				*str++ = ' ';
+				EMIT(' ');
 			continue;
 
 		case 'p':	//pointer
@@ -226,7 +249,7 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 				field_width = 2 * sizeof(void *);
 				flags |= ZEROPAD;
 			}
-			str = number(str,
+			str = number(str, end,
 				     (unsigned long)va_arg(args, void *), 16,
 				     field_width, precision, flags);
 			continue;
@@ -242,7 +265,7 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 			continue;
 
 		case '%':	//Literal % character
-			*str++ = '%';
+			EMIT('%');
 			continue;
 
 			/* integer number formats - set up the flags and "break" */
@@ -264,9 +287,9 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 			break;
 
 		default:
-			*str++ = '%';
+			EMIT('%');
 			if (*fmt)
-				*str++ = *fmt;
+				EMIT(*fmt);
 			else
 				--fmt;
 			continue;
@@ -283,20 +306,28 @@ int vsprintf(char *buf, const char *fmt, va_list args)
 			num = va_arg(args, int);
 		else
 			num = va_arg(args, unsigned int);
-		str = number(str, num, base, field_width, precision, flags);
+		str = number(str, end, num, base, field_width, precision, flags);
 	}
-	*str = '\0';
+	// NUL-terminate within the buffer (unless size==0, where nothing is writable).
+	if (size != 0)
+		*((str < end) ? str : end) = '\0';
 	return str - buf;
 }
 
+// vsprintf keeps its unbounded contract (callers guarantee the buffer is big
+// enough) by driving the bounded core with SIZE_MAX, so its output is
+// byte-identical to before this change.
+int vsprintf(char *buf, const char *fmt, va_list args)
+{
+	return format_core(buf, SIZE_MAX, fmt, args);
+}
+
+// Bounded formatting straight into the caller's buffer — no unbounded temp to
+// overflow. Writes at most size-1 chars plus a NUL, and returns the would-be
+// length (C99 semantics). Fixes the stack overflow where a long %s (e.g. a
+// malformed ELF DT_NEEDED name) blew a fixed 512-byte temp before truncation.
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list args) {
-    if (size == 0) return 0; // No space to write anything
-    int len = vsprintf(buf, fmt, args);
-    if (len >= (int)size) {
-        buf[size - 1] = '\0'; // Ensure null termination if truncated
-        return size - 1;
-    }
-    return len;
+    return format_core(buf, size, fmt, args);
 }
 
 int snprintf(char *buf, size_t size, const char *fmt, ...) {
@@ -318,3 +349,4 @@ int sprintf(char *buf, const char *fmt, ...) {
     va_end(args);
     return i;
 }
+#undef EMIT

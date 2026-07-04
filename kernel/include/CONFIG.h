@@ -25,7 +25,10 @@
 #define SIGNAL_PROCESS_TICK_FREQUENCY 1 //20 MS if TICKS_PER_SECOND = 100 (1 tick every 10 MS)
 
 //Logging related
-#define ENABLE_LOG_BUFFERING 0 // Set to 0 to disable buffering
+#define ENABLE_LOG_BUFFERING 1  // Set to 0 to disable buffering
+// Wait for transmit-empty before each serial byte. Required at 115200 on real
+// hardware and some hypervisors; disable if it causes hangs on your platform.
+#define SERIAL_WAIT_FOR_TRANSMIT 1
 
 //Scheduler Related
 #define MP_SCHEDULER_RUNS_PER_SECOND 10
@@ -66,10 +69,13 @@
 #define DEBUG_SIGNALS (__uint128_t)1 << 17
 #define DEBUG_LOGGING (__uint128_t)1 << 18
 #define DEBUG_TESTS (__uint128_t)1 << 19
+#define DEBUG_SYSCALL (__uint128_t)1 << 20
+#define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
-#define DEBUG_EXTRA_DETAILED  (__uint128_t)1 << 127
-#define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS)
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS | DEBUG_SCHEDULER | DEBUG_THREAD | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED | DEBUG_SIGNALS | DEBUG_SMP | DEBUG_TESTS)
+#define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
+#define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS) 
+// | DEBUG_SPECIAL
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS | DEBUG_SMP | DEBUG_SCHEDULER | DEBUG_THREAD | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED)
 //#define DEBUG_OPTIONS DEBUG_MINIMAL_OPTIONS
 extern __uint128_t kDebugLevel;
 

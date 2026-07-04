@@ -7,6 +7,8 @@
 #include "shutdown.h"
 #include "BasicRenderer.h"
 #include "paging.h"
+#include "serial_logging.h"
+#include "log.h"
 
 char sprintf_buf[2000];
 
@@ -19,7 +21,9 @@ void panic_no_shutdown(const char *format, ...)
     vsprintf(sprintf_buf, format, args);
 	va_end(args);
 	print(sprintf_buf);
-    panicLoop: 
+    printd(DEBUG_EXCEPTIONS, sprintf_buf);
+    logd_thread(false);
+panicLoop:
     __asm__("cli\nhlt\n");
     goto panicLoop;
 }
@@ -34,8 +38,10 @@ void __attribute__((noreturn, noinline))panic(const char *format, ...)
     vsprintf(sprintf_buf, format, args);
 	va_end(args);
 	print(sprintf_buf);
-#if SHUTOFF_ON_PANIC == 1	
-	shutdown();
+    printd(DEBUG_EXCEPTIONS, sprintf_buf);
+    logd_thread(false);
+#if SHUTOFF_ON_PANIC == 1
+    shutdown();
 #endif 
     panicLoop: 
     __asm__("cli\nhlt\n");

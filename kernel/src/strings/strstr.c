@@ -39,42 +39,23 @@ char* strstr(const char* string, const char* substring)
 
 char* strnstr(const char* string, const char* substring, int length)
 {
-    register const char *a, *b;
+    if (length <= 0) {
+        return (char *)0;
+    }
 
-    /* First scan quickly through the two strings looking for a
-     * single-character match.  When it's found, then compare the
-     * rest of the substring.
-     */
-    int len = length;
-
-    b = substring;
-    if (*b == 0) 
-    {
+    if (*substring == 0) {
         return (char *)string;
     }
-    for ( ; *string != 0; string += 1) 
-    {
-        if (*string != *b) 
-        {
-            if (len-- <= 0)
-                return (char *)string;
-            continue;
+
+    for (int i = 0; i < length && string[i] != 0; i++) {
+        int j = 0;
+        while (i + j < length && substring[j] != 0 && string[i + j] == substring[j]) {
+            j++;
         }
-        a = string;
-        while (1) 
-        {
-            if (*b == 0) 
-            {
-                return (char *)string;
-            }
-            if (len-- <= 0)
-                return (char *)string;
-            if (*a++ != *b++) 
-            {
-                break;
-            }
+        if (substring[j] == 0) {
+            return (char *)(string + i);
         }
-        b = substring;
     }
+
     return (char *)0;
 }

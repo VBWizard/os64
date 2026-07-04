@@ -9,9 +9,17 @@
 /kernel/bin
 /kernel/obj
 /.vscode
+/disk
 log
 os64_kernel_debug.asm
 *.log
 os64_kernel.sym
 external/pci_devices.bin
 pci.ids
+/.vendor
+/kernel/include/asm-offsets.h
+.codex
+/output
+/tmp
+*.o
+*.swp

@@ -20,6 +20,7 @@
 
 #define THREAD_VIRTUAL_STRUCT_ADDRESS 0xF0000000
 #define NO_THREAD (void*)0xFFFFFFFFFFFFFFFF
+#define THREAD_NO_AFFINITY UINT64_C(0xFFFFFFFFFFFFFFFF)
 
 typedef enum
 {
@@ -46,8 +47,9 @@ typedef struct s_thread
 {
 	uint64_t threadID;
 	uint64_t mp_apic;
-	bool exited, idleThread, execDontSaveRegisters;
-	uint64_t retVal;
+	volatile bool exited;
+	bool idleThread, execDontSaveRegisters;
+	volatile uint64_t retVal;
 	thread_context_t regs;
 	uintptr_t* pml4;
 	eThreadState threadState;

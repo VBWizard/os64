@@ -1,0 +1,4 @@
+#!/bin/bash
+objdump -S -l kernel/bin/test_elf -M intel --architecture=x86_64 > test_elf_debug.asm
+vi test_elf_debug.asm
+

@@ -32,6 +32,7 @@
 	void scheduler_disable();
 	void scheduler_submit_new_task(task_t *newTask);
 	void scheduler_change_thread_queue(thread_t* thread, eThreadState newState);
+	void scheduler_reap_zombie_thread(thread_t *thread);
 	void scheduler_yield(core_local_storage_t *cls);
 	void scheduler_trigger(core_local_storage_t *cls);
 	void scheduler_wake_isleep_task(task_t *task);

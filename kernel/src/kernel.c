@@ -36,12 +36,21 @@
 #include "apic.h"
 #include "signals.h"
 #include "log.h"
+#include "exceptions.h"
+#include "kworker.h"
+#include "env.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
 extern bool kEnableAHCI;
 extern bool kEnableNVME;
 bool kEnableSMP = true;
+bool kBspSchedulerMode = false;
+bool kEnableKWorker = false;
+// Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,
+// post-boot, and the disk/VFS tests) — used to isolate a boot hang by booting
+// with no test code in the path.
+bool kRunTests = true;
 volatile uint64_t kSystemStartTime;
 volatile uint64_t kUptime;
 volatile uint64_t kTicksSinceStart;
@@ -55,7 +64,7 @@ __uint128_t kDebugLevel = 0;
 uintptr_t kKernelStack = 0;
 char kKernelCommandline[512];
 bool kOverrideFileLogging;
-char kRootPartUUID[36] = {0};
+char kRootPartUUID[37] = {0};
 vfs_filesystem_t* kRootFilesystem=NULL;
 char startTime[100] = {0};
 uint64_t lastTime = 0;
@@ -63,12 +72,13 @@ task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
+task_t* kKWorkerTask;
+task_t parentTask = {0};
 
 /// @brief Create the kernel task
 /// This is done manually whereas every other task in the system is created by calling the task_create method in task.c.
 void create_kernel_task()
 {
-	task_t parentTask = {0};
 	//The structure of the environment as as follows:
 	//*Addr 0: 
 	//	Room for 512 8 byte pointers to the environment strings
@@ -77,30 +87,15 @@ void create_kernel_task()
 	//*Addr 8192:
 	//  1024 environment strings @ 512 bytes each
 	//TODO: Change this to be MMAP'd
-	parentTask.envPSize = 0;
-	parentTask.envSize = 0;
-	parentTask.realEnvp = (char**)allocate_memory_aligned(TASK_ENVIRONMENT_MAX_SIZE);
-	parentTask.realEnv = (char*)parentTask.mappedEnvp+(PAGE_SIZE*2);
-	parentTask.mappedEnvp = (char**)TASK_ENVP_VIRT;
-	parentTask.mappedEnv = (char*)TASK_ENV_VIRT;
-	paging_map_pages((uintptr_t*)kKernelPML4v, (uintptr_t)parentTask.mappedEnvp, (uintptr_t)parentTask.realEnvp, TASK_ENVIRONMENT_MAX_SIZE / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
-	memset(parentTask.mappedEnvp, 0, TASK_ENVIRONMENT_MAX_SIZE);
-	parentTask.envPSize = TASK_ENVIRONMENT_MAX_ENTRIES * sizeof(uintptr_t);
-	parentTask.envSize = TASK_ENVIRONMENT_MAX_SIZE - parentTask.envPSize;
-
-	parentTask.mappedEnv = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET);
-	((char**)parentTask.mappedEnvp)[0] = parentTask.mappedEnv;
-	strncpy(parentTask.mappedEnvp[0], "PATH=/", TASK_MAX_PATH_LEN);
-
-	((char**)parentTask.mappedEnvp)[1] = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET + 8);
-	strncpy(parentTask.mappedEnvp[1], "HOSTNAME=yogi.localhost.localdomain", TASK_MAX_PATH_LEN);
-	((char**)parentTask.mappedEnvp)[2] = (char*)(parentTask.mappedEnvp + TASK_ENVIRONMENT_DATA_OFFSET + 16);
-	strncpy(parentTask.mappedEnvp[2], "CWD=/", TASK_MAX_PATH_LEN);
+	parentTask.env = env_create();
+	env_set(parentTask.env, "PATH",     "/");
+	env_set(parentTask.env, "HOSTNAME", "yogi.localhost.localdomain");
+	env_set(parentTask.env, "CWD",      "/");
 	parentTask.stdin = STDIN;
 	parentTask.stdout = STDOUT;
 	parentTask.stderr = STDERR;
-	kKernelTask = task_create("ktask", 0, NULL, &parentTask, true, 0);
-	scheduler_init();
+	kKernelTask = task_create("ktask", 0, NULL, &parentTask, true, THREAD_NO_AFFINITY);
+    scheduler_init();
 	scheduler_submit_new_task(kKernelTask);
 	mp_CoreHasRunScheduledThread[0] = true;
 }
@@ -139,7 +134,7 @@ void kernel_init()
     printf("SMP: Initializing ... ");
     kLimineSMPInfo = smp_request.response;
     init_SMP(kEnableSMP);
-    printf("(%u cores initialized)\n", kMPCoreCount);
+    printf("(%u core(s) initialized)\n", kMPCoreCount);
 
     init_signals();
 
@@ -149,26 +144,49 @@ void kernel_init()
 
 	remap_irq0_to_apic(0x20);
 
+    // We need the cls->task to be populated for running tests, so ...
+    // put the kernel task in the cls because it'll be the first task to start running
+    get_core_local_storage()->task = kKernelTask;
+    kKernelTask->pml4 = (pt_entry_t*)kKernelPML4;
+    kKernelTask->pml4v = (pt_entry_t*)kKernelPML4v;
     // Init and run tests before configuring and enabling the scheduler
-    test_framework_init();
-    test_run_all();
-
-    for (int cnt = 0; cnt < kMPCoreCount; cnt++)
+    // (skippable via the NOTESTS cmdline flag).
+    if (kRunTests)
     {
-		char idleTaskName[10];
-		sprintf(idleTaskName, "/idle%u",cnt);
-		kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, cnt);
-		scheduler_submit_new_task(kIdleTasks[cnt]);
-	}
+        test_framework_init();
+        printf("Running pre-boot tests ...\n");
+        test_run_preboot();
+    }
+
+	    for (int cnt = 0; cnt < kMPCoreCount; cnt++)
+	    {
+			char idleTaskName[10];
+			sprintf(idleTaskName, "/idle%u",cnt);
+			kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, kCPUInfo[cnt].apicID);
+			scheduler_submit_new_task(kIdleTasks[cnt]);
+		}
 
 	#if ENABLE_LOG_BUFFERING == 1
-    kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, 0);
-    // Pass daemon=true (first arg in RDI) to logd_thread
-    kLogDTask->threads->regs.RDI = 1;
-    scheduler_submit_new_task(kLogDTask);
-#endif
-   
-    scheduler_enable();
+	    kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+	    // Pass daemon=true (first arg in RDI) to logd_thread
+	    kLogDTask->threads->regs.RDI = 1;
+	    scheduler_submit_new_task(kLogDTask);
+	#endif
+
+	if (kEnableKWorker && kMPCoreCount > 1)
+	{
+	    kKWorkerTask = task_create("/kworker1", 0, NULL, kKernelTask, true, kCPUInfo[1].apicID);
+	    kKWorkerTask->threads->regs.RDI = 1;
+	    kKWorkerTask->autoReap = true;
+	    printd(DEBUG_TASK | DEBUG_DETAILED,
+	    	"kernel_init: enabling /kworker1 on APIC %u (task=0x%08x, thread=0x%08x)\n",
+	    	kCPUInfo[1].apicID,
+	    	kKWorkerTask->taskID,
+	    	kKWorkerTask->threads->threadID);
+	    scheduler_submit_new_task(kKWorkerTask);
+	}
+	   
+	    scheduler_enable();
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
     core_local_storage_t *cls = get_core_local_storage();
 	cls->threadID = kKernelTask->threads->threadID;
@@ -181,21 +199,27 @@ void kernel_init()
 
 	kProcessSignals = true;
 
-/*
+    printd(DEBUG_BOOT, "BOOT: If a ROOTPARTUUID (%s) was passed in the commandline, we'll load it.\n", &kRootPartUUID);
 	if (kRootPartUUID[0])
 	{
 		printd(DEBUG_BOOT, "BOOT: ROOTPARTUUID passed in commandline.  Will mount '%s' as the root partition\n",&kRootPartUUID);
 		vfs_mount_root_part((char*)&kRootPartUUID);
 	}
 
-	if (kRootFilesystem!=NULL)
+    if (kRunTests)
+    {
+        printf("Running post-boot tests ...\n");
+        test_run_postboot();
+    }
+
+	if (kRunTests && kRootFilesystem!=NULL)
 	{
-	 	int lResult = testVFS(kRootFilesystem);
-	 	if (lResult)
+        int lResult = testVFS(kRootFilesystem);
+        if (lResult)
 	 		panic("Root filesystem disk test failed: %u\n",lResult);
 		kRootFilesystem->fops->uninitialize(kRootFilesystem);
-	 }
-*/
+	}
+
 	shutdown();
 }
 

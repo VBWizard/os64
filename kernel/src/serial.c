@@ -1,5 +1,6 @@
 #include "io.h"
 #include "time.h"
+#include "CONFIG.h"
 
 static volatile int serial_lock = 0;
 
@@ -10,7 +11,7 @@ static inline void serial_write_char(int port, char a) {
 int init_serial(int port) {
     outb(COM1 + 1, 0x00); // Disable all interrupts
     outb(COM1 + 3, 0x80); // Enable DLAB (set baud rate divisor)
-    outb(COM1 + 0, 0x03); // Divisor low byte (38400 baud)
+    outb(COM1 + 0, 0x01); // Divisor low byte (115200 baud)
     outb(COM1 + 1, 0x00); // Divisor high byte
     outb(COM1 + 3, 0x03); // 8 bits, no parity, one stop bit
     outb(COM1 + 2, 0xC7); // Enable FIFO, clear them, 14-byte threshold
@@ -36,7 +37,21 @@ void write_serial(int port, char a) {
 
 // Implemented to handle processing a string and writing all the bytes via write_serial()
 void serial_print_string(const char *message) {
+#if SERIAL_WAIT_FOR_TRANSMIT
+    // Burst up to 16 bytes per wait (matches the 16550 TX FIFO depth).
+    // THRE (LSR bit 5) in FIFO mode means the TX FIFO is completely empty,
+    // so after each wait there are exactly 16 free slots — no overflow risk.
+    // count resets to 0 at the start of each call so back-to-back calls
+    // also wait before their first byte.
+    int count = 0;
     for (const char *c = message; *c; c++) {
+        if (count == 0)
+            while (!is_transmit_empty(COM1));
         serial_write_char(COM1, *c);
+        count = (count + 1) % 16;
     }
+#else
+    for (const char *c = message; *c; c++)
+        serial_write_char(COM1, *c);
+#endif
 }

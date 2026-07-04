@@ -21,6 +21,7 @@ extern uintptr_t kKernelBaseAddressP;
 extern pci_device_id_t *kPCIIdsData;
 extern uint32_t kPCIIdsCount;
 extern struct limine_smp_response *kLimineSMPInfo;
+extern void mpSendInvTLB();  // smp_core.c — TLB-shootdown IPI to the other cores
 uintptr_t kKernelPageMappings[KERNEL_PAGE_COUNT][2]={0};
 int kKernelPageMappingsCount=0;
 
@@ -140,23 +141,26 @@ uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address)
 	return paging_walk_paging_table_keep_flags(pml4, virtual_address, false);
 }
 
-void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
+void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
     // Align addresses to 4 KB boundaries
     physical_address &= PAGE_ADDRESS_MASK;
     virtual_address &= PAGE_ADDRESS_MASK;
 
 	uint8_t tableRequiredFlags = (flags & PAGE_WRITE)?PAGE_WRITE:0;
 
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+
     printd(DEBUG_PAGING | DEBUG_DETAILED, "PAGING: Map 0x%016lx to 0x%016lx flags 0x%08lx\n", physical_address, virtual_address, flags);
 
     // Step 1: Traverse or allocate the PDPT table
     pt_entry_t *pdpt_page;
-    uint64_t pml4e = pml4[PML4_INDEX(virtual_address)];
+    uint64_t pml4e = pml4v[PML4_INDEX(virtual_address)];
 
     if (pml4e & PAGE_PRESENT) {
         // Combine existing flags with new flags
-        pml4[PML4_INDEX(virtual_address)] = (pml4e & ~0xFFF) | ((pml4e | tableRequiredFlags) & 0xFFF);
-        uint64_t pdpt_phys = pml4[PML4_INDEX(virtual_address)] & ~0xFFF;
+        pml4v[PML4_INDEX(virtual_address)] = (pml4e & ~0xFFF) | ((pml4e | tableRequiredFlags) & 0xFFF);
+        uint64_t pdpt_phys = pml4v[PML4_INDEX(virtual_address)] & ~0xFFF;
         pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(pdpt_phys);
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPDPT present @ 0x%016lx\n",pdpt_page);
     } else {
@@ -165,7 +169,7 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
         uint64_t new_pdpt_phys = get_paging_table_page();
         pt_entry_t *new_pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pdpt_phys);
         memset(new_pdpt_page, 0, PAGE_SIZE);
-        pml4[PML4_INDEX(virtual_address)] = new_pdpt_phys | tableRequiredFlags | PAGE_PRESENT;
+        pml4v[PML4_INDEX(virtual_address)] = new_pdpt_phys | tableRequiredFlags | PAGE_PRESENT;
         pdpt_page = new_pdpt_page;
     }
 
@@ -217,11 +221,14 @@ void paging_map_page(pt_entry_t *pml4, uint64_t virtual_address, uint64_t physic
     pt_page[PT_INDEX(virtual_address)] = physical_address | finalFlags;
 }
 
-void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address) {
+void paging_unmap_page(pt_entry_t *pml4v, uint64_t virtual_address) {
+    if ((uintptr_t)pml4v < kHHDMOffset)
+        pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+
     // Step 1: Traverse the PDPT table
     pt_entry_t *pdpt;
-    if (pml4[PML4_INDEX(virtual_address)] & PAGE_PRESENT) {
-        pdpt = (pt_entry_t *)PHYS_TO_VIRT(pml4[PML4_INDEX(virtual_address)] & ~0xFFF);
+    if (pml4v[PML4_INDEX(virtual_address)] & PAGE_PRESENT) {
+        pdpt = (pt_entry_t *)PHYS_TO_VIRT(pml4v[PML4_INDEX(virtual_address)] & ~0xFFF);
     } else {
         // The page is not mapped, so nothing to unmap
         return;
@@ -253,12 +260,57 @@ void paging_unmap_page(pt_entry_t *pml4, uint64_t virtual_address) {
     }
 }
 
-void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physical_address,uint64_t page_count,uint64_t flags)
+// See paging.h for the design rationale (lazy HHDM: map-on-alloc /
+// unmap-on-free with the boundary-page rule, instead of an eager full
+// direct map).
+volatile bool kHHDMMaintenanceEnabled = false;
+
+void paging_hhdm_map_range(uintptr_t phys_start, uint64_t length)
+{
+	if (!kHHDMMaintenanceEnabled || length == 0)
+		return;
+
+	// Every page the extent OVERLAPS gets mapped (round the start down, the
+	// end up) — a caller handed bytes anywhere in a page must be able to
+	// dereference that whole page's HHDM alias. Overlap with a neighbouring
+	// extent's boundary page is fine: the mapping is idempotent.
+	uintptr_t first_page = phys_start & PAGE_ADDRESS_MASK;
+	uintptr_t end_page = (phys_start + length + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
+
+	paging_map_pages((pt_entry_t *)kKernelPML4v, first_page | kHHDMOffset, first_page,
+	                 (end_page - first_page) / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
+}
+
+void paging_hhdm_unmap_range(uintptr_t phys_start, uint64_t length)
+{
+	if (!kHHDMMaintenanceEnabled || length == 0)
+		return;
+
+	// Only pages FULLY CONTAINED in the extent (round the start up, the end
+	// down): a partial boundary page may host live neighbouring allocations
+	// whose HHDM access must keep working, so it stays mapped.
+	uintptr_t first_page = (phys_start + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
+	uintptr_t end_page = (phys_start + length) & PAGE_ADDRESS_MASK;
+	if (end_page <= first_page)
+		return;  // extent smaller than a page, or only partial pages — nothing we own outright
+
+	for (uintptr_t page = first_page; page < end_page; page += PAGE_SIZE)
+		paging_unmap_page((pt_entry_t *)kKernelPML4v, page | kHHDMOffset);  // invlpg's locally
+
+	// Cross-core shootdown so the other cores' TLBs drop the stale entries
+	// too. Fire-and-forget is safe here: HHDM virt<->phys is a fixed 1:1
+	// relation, so a stale entry that survives a beat can never produce a
+	// WRONG translation (remapping recreates the identical PTE) — it can
+	// only let that core miss the use-after-free tripwire for that beat.
+	mpSendInvTLB();
+}
+
+void paging_map_pages(pt_entry_t* pml4v,uint64_t virtual_address,uint64_t physical_address,uint64_t page_count,uint64_t flags)
 {
 	__uint128_t temp;
 
-	if ((uintptr_t)pml4 < kHHDMOffset)
-		pml4 = (uintptr_t*)((uintptr_t)pml4 | kHHDMOffset);
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (uintptr_t*)((uintptr_t)pml4v | kHHDMOffset);
 
 	if ((physical_address & 0x00000FFF) > 0)
 	{
@@ -285,7 +337,7 @@ void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physica
 	// }
 
 	for (uint64_t cnt=0;cnt<page_count;cnt++)
-		paging_map_page(pml4, virtual_address + (PAGE_SIZE * cnt), physical_address + (PAGE_SIZE * cnt), flags);
+		paging_map_page(pml4v, virtual_address + (PAGE_SIZE * cnt), physical_address + (PAGE_SIZE * cnt), flags);
 	
 	// if (page_count > 0xA1)
 	// {
@@ -293,7 +345,7 @@ void paging_map_pages(pt_entry_t* pml4,uint64_t virtual_address,uint64_t physica
 	// }
 }
 
-void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t length) {
+void paging_unmap_pages(pt_entry_t *pml4v, uint64_t virtual_address, size_t length) {
     // Align the virtual address down to the nearest page boundary
     uint64_t aligned_address = virtual_address & ~(PAGE_SIZE - 1);
 
@@ -304,8 +356,8 @@ void paging_unmap_pages(pt_entry_t *pml4, uint64_t virtual_address, size_t lengt
 
     // Unmap each page in the range
     for (size_t i = 0; i < num_pages; i++) {
-        paging_unmap_page(pml4, aligned_address + i * PAGE_SIZE);
-    }
+        paging_unmap_page(pml4v, aligned_address + i * PAGE_SIZE);
+}
 }
 
 void paging_init()
@@ -329,7 +381,15 @@ void paging_init()
 		*(pt_entry_t*)(virtual_address) = physical_address | PAGE_PRESENT | PAGE_WRITE;
 	}
 
-
+	// Set CR0.WP (bit 16) so that ring-0 code respects page write-protection bits.
+	// Without this bit, kernel code can write to read-only pages and CoW faults
+	// never fire — the hardware enforces WP only for ring-3 code by default.
+	__asm__ volatile(
+		"mov rax, cr0\n\t"
+		"or rax, 0x10000\n\t"
+		"mov cr0, rax\n\t"
+		::: "rax"
+	);
 }
 
 uintptr_t get_paging_table_page()
@@ -543,8 +603,33 @@ void init_os64_paging_tables()
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual IDT (0x%016lx) to physical IDT (0x%016lx), %u pages in new page tables\n", idtr.base, physAddrLookup, pagesToMap);
 	paging_map_pages(pml4v, idtr.base & PAGE_ADDRESS_MASK, physAddrLookup & PAGE_ADDRESS_MASK, pagesToMap, PAGE_PRESENT | PAGE_WRITE);
 
+	// Retro-map pass for lazy HHDM maintenance (see paging.h): everything the
+	// allocator handed out BEFORE these tables existed (the paging page pool,
+	// kMemoryStatus itself, anything else early boot grabbed) was reached
+	// through Limine's full-HHDM tables until now. Walk the allocator's
+	// ledger and HHDM-map every currently-allocated extent into the new
+	// tables, so the "allocated <=> HHDM-mapped" invariant holds from the
+	// moment we switch CR3. Free extents deliberately stay unmapped — that's
+	// the tripwire. From here on, allocate/free maintain this incrementally.
+	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Retro-map allocated extents at HHDM\n");
+	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
+	{
+		memory_status_t *entry = &kMemoryStatus[cnt];
+		if (!entry->in_use || entry->length == 0 || entry->startAddress == 0)
+			continue;
+		uintptr_t first_page = entry->startAddress & PAGE_ADDRESS_MASK;
+		uintptr_t end_page = (entry->startAddress + entry->length + PAGE_SIZE - 1) & PAGE_ADDRESS_MASK;
+		printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: HHDM retro-map 0x%016lx, %u pages\n", first_page, (end_page - first_page) / PAGE_SIZE);
+		paging_map_pages(pml4v, first_page | kHHDMOffset, first_page,
+		                 (end_page - first_page) / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE);
+	}
+
 	kKernelPML4 = (uintptr_t)pml4p;
 	kKernelPML4v = (uintptr_t)pml4v;
 
 	asm volatile ("cli\nmov cr3, %0\nsti" :: "r"(kKernelPML4) : "memory");
+
+	// Limine's full-HHDM tables are gone; from now on the allocator maintains
+	// HHDM mappings itself (paging_hhdm_map_range/paging_hhdm_unmap_range).
+	kHHDMMaintenanceEnabled = true;
 }

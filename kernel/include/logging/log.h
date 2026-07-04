@@ -8,13 +8,16 @@
 
 //Set to sizeof(log_entry_t)*10 to enable buffer full processing
 
-#define LOG_BUFFER_SIZE (1024 * 1024 * 1) // Size of buffer per core
+#define LOG_BUFFER_SIZE_MB 5
+#define LOG_BUFFER_SIZE (1024 * 1024 * LOG_BUFFER_SIZE_MB) // Size of buffer per core
 #define MAX_LOG_MESSAGE_SIZE 256
-#define MAX_BATCH_SIZE 1000  // Process up to X messages before sleeping
-#define LOGD_SLEEP_TICKS (TICKS_PER_SECOND * 5)  // Sleep for X seconds to let the logs build up
+// Drain twice a second: smaller accumulations per pass mean shorter serial
+// bursts, which keeps QEMU/TCG from stalling the whole VM (and the guest
+// clock) on one big once-a-second flush.
+#define LOGD_SLEEP_TICKS (TICKS_PER_SECOND / 2)
 typedef struct log_entry {
-    uint64_t timestamp;
-    uint64_t tick_count;
+    uint64_t ticks;     // kTicksSinceStart at log time — used for display
+    uint64_t tsc;       // RDTSC at log time — used for cross-core sort order
     uint16_t core_id;
     uint8_t log_level;
     uint8_t category;
@@ -36,6 +39,6 @@ extern log_buffer_t core_log_buffers[MAX_CPUS];
 extern bool kLoggingInitialized;
 void logging_queueing_init();
 void dump_log_buffer(uint16_t core);
-void log_store_entry(uint16_t core, uint64_t tick_count, uint8_t priority, uint8_t category, bool continued, const char *message);
+void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message);
 bool logd_thread(bool daemon);
 #endif // LOG_H

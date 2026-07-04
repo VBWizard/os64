@@ -1,5 +1,6 @@
 #include "block_device.h"
 #include "kmalloc.h"
+#include "panic.h"
 
 dlist_t* kBlockDeviceDList;
 int SATAMinor=0, NVMEMinor=0;
@@ -7,6 +8,11 @@ int SATAMinor=0, NVMEMinor=0;
 void init_block()
 {
 	kBlockDeviceDList = kmalloc(sizeof(dlist_t));
+	if (kBlockDeviceDList == NULL)
+	{
+		panic("init_block: failed to allocate block device dlist\n");
+	}
+	dlist_init(kBlockDeviceDList);
 }
 
 dlist_node_t* add_block_device(vfs_filesystem_t* vfs_block_device)
@@ -36,4 +42,3 @@ dlist_node_t* add_block_device(vfs_filesystem_t* vfs_block_device)
 	retVal->minor = minor;
 	return retVal;
 }
-

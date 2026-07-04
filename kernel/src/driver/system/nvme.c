@@ -111,9 +111,16 @@ uint32_t intervalDelay = controller->defaultTimeout / 20;
     controller->registers->cc &= ~(0x1);  // Clear the EN bit (bit 0)
 
     // 2. Poll CSTS register until the RDY bit becomes 0 (controller acknowledges reset)
-    while (controller->registers->csts & 0x1) {
-        // RDY bit is 1, waiting for it to become 0
+    while ((controller->registers->csts & 0x1) && currentDelay < controller->defaultTimeout) {
+        wait(intervalDelay);
+        currentDelay += intervalDelay;
     }
+    if (currentDelay >= controller->defaultTimeout) {
+        printd(DEBUG_NVME, "NVMe: Timeout waiting for RDY to clear after reset.\n");
+        panic("NVMe: CSTS RDY did not clear after CC.EN was cleared\n");
+        return false;
+    }
+    currentDelay = 0;
 
 	wait(100);
 
@@ -558,7 +565,7 @@ uint64_t nvme_get_Base_Memory_Address(pci_device_t* nvmeDevice, pci_config_space
 		finalBaseAddressMask |= ((uint64_t)bar1Value << 32);
 	}
 
-	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Final mask value is 0x%016x\n",finalBaseAddressMask);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Final mask value is 0x%016lx\n",finalBaseAddressMask);
 
 	return finalBaseAddressMask  &= 0xFFFFFFFFFFFFFFF0;
 
@@ -662,7 +669,9 @@ void nvme_identify(nvme_controller_t* controller)
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 
 	controller->nsid = *(uint32_t*)command->prp1;
-	printd(DEBUG_NVME | DEBUG_DETAILED, "Number of namespaces: 0x%08x\n", *(uint32_t*)command->prp1);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Number of namespaces: 0x%08x\n", controller->nsid);
+	kfree(nvmeIdentifyInfo);
+	nvmeIdentifyInfo = NULL;
 
 	char* buffer = kmalloc_dma(PAGE_SIZE);
 
@@ -731,170 +740,145 @@ void nvme_identify(nvme_controller_t* controller)
 	kfree(command);
 }
 
-uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
+// Build a PRP list covering prpCount data pages starting at startAddress.
+// Each list page holds 512 entries. If the list spans more than one page the
+// last entry on each intermediate page is a chain pointer to the next list
+// page, per the NVMe spec.  Returns the address of the first list page.
+static uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
 {
+    const uint32_t entries_per_page = PAGE_SIZE / sizeof(uintptr_t); // 512
 
-	uintptr_t* prpList = kmalloc_dma(prpCount * sizeof(uintptr_t));
-	for (uint32_t idx = 0; idx<prpCount;idx++)
-	{
-		prpList[idx]=startAddress;
-		startAddress+=PAGE_SIZE;
-	}
-	return (uintptr_t)prpList;	
+    uintptr_t firstListPage = (uintptr_t)kmalloc_dma(PAGE_SIZE);
+    uintptr_t* currentPage  = (uintptr_t*)firstListPage;
+    uint32_t remaining = prpCount;
+
+    while (remaining > 0) {
+        if (remaining <= entries_per_page) {
+            // Last (or only) list page: fill entirely with data addresses.
+            for (uint32_t i = 0; i < remaining; i++) {
+                currentPage[i] = startAddress;
+                startAddress += PAGE_SIZE;
+            }
+            remaining = 0;
+        } else {
+            // More list pages needed: 511 data entries, then a chain pointer.
+            for (uint32_t i = 0; i < entries_per_page - 1; i++) {
+                currentPage[i] = startAddress;
+                startAddress += PAGE_SIZE;
+            }
+            remaining -= entries_per_page - 1;
+            uintptr_t* nextPage = (uintptr_t*)kmalloc_dma(PAGE_SIZE);
+            currentPage[entries_per_page - 1] = (uintptr_t)nextPage;
+            currentPage = nextPage;
+        }
+    }
+
+    return firstListPage;
+}
+
+// Walk and free every page in a chained PRP list.  prpCount must match the
+// value passed to setup_prp_list so we know where the chain ends.
+static void free_prp_list(uintptr_t listPage, uint32_t prpCount)
+{
+    const uint32_t entries_per_page = PAGE_SIZE / sizeof(uintptr_t);
+    uint32_t remaining = prpCount;
+
+    while (remaining > entries_per_page) {
+        uintptr_t* page = (uintptr_t*)listPage;
+        uintptr_t nextPage = page[entries_per_page - 1]; // chain pointer
+        kfree((void*)listPage);
+        listPage = nextPage;
+        remaining -= entries_per_page - 1;
+    }
+    kfree((void*)listPage); // last (or only) page
+}
+
+static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer, bool isWrite) {
+    if (controller->maxBytesPerTransfer == 0)
+        panic("nvme_do_io: controller->maxBytesPerTransfer = 0\n");
+
+    size_t remaining = length;
+    uintptr_t userBufferOffset = (uintptr_t)buffer;
+    uint64_t currentLBA = LBA;
+
+    while (remaining > 0) {
+        size_t transferLength = remaining > controller->maxBytesPerTransfer ? controller->maxBytesPerTransfer : remaining;
+        uint32_t blockCount = transferLength / controller->blockSize;
+        if (transferLength % controller->blockSize)
+            blockCount++;
+
+        uint32_t prpCount = transferLength / PAGE_SIZE;
+        if (transferLength % PAGE_SIZE)
+            prpCount++;
+
+        char* dmaBuffer = isWrite ? controller->dmaWriteBuffer : controller->dmaReadBuffer;
+
+        nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
+        cmd->opc  = isWrite ? NVME_OPCODE_WRITE : NVME_OPCODE_READ;
+        cmd->nsid = controller->nsid;
+        // cmdCID wraps safely: we poll to completion before the next command is
+        // submitted, so no two commands are ever in-flight with the same CID.
+        // Revisit if concurrent I/O is added (requires locking first).
+        cmd->cid  = controller->cmdCID++;
+        cmd->prp1 = (uintptr_t)dmaBuffer;
+
+        if (prpCount == 2)
+            cmd->prp2 = cmd->prp1 + PAGE_SIZE;
+        else if (prpCount > 2)
+            cmd->prp2 = setup_prp_list(cmd->prp1 + PAGE_SIZE, prpCount - 1);
+
+        cmd->cdw10 = currentLBA & 0xffffffff;
+        cmd->cdw11 = currentLBA >> 32;
+        cmd->cdw12 = blockCount - 1;
+
+        if (isWrite) {
+            printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data from user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n",
+                (uintptr_t)dmaBuffer, userBufferOffset, transferLength);
+            memcpy(dmaBuffer, (void*)userBufferOffset, transferLength);
+        }
+
+        printd(DEBUG_NVME | DEBUG_DETAILED, "Submitting NVMe %s: LBA=0x%016lx, Blocks=%u, DMA Buffer=0x%016lx\n",
+            isWrite ? "write" : "read", currentLBA, blockCount, (uintptr_t)dmaBuffer);
+        nvme_submit_command(controller, cmd, false);
+
+        volatile nvme_completion_queue_entry_t* completionEntry =
+            (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
+        printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: Current %s completion queue head index = %u\n",
+            isWrite ? "write" : "read", controller->cmdCompQueueHeadIndex);
+        nvme_wait_for_completion(controller, false, completionEntry, cmd);
+
+        if (completionEntry->status.status_code || completionEntry->status.status_code_type) {
+            log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, 1);
+            panic("NVMe %s error. System log contains more information.", isWrite ? "write" : "read");
+        }
+
+        controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex + 1) % controller->queueDepth;
+        nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);
+
+        if (!isWrite) {
+            printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data to user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n",
+                (uintptr_t)dmaBuffer, userBufferOffset, transferLength);
+            memcpy((void*)userBufferOffset, dmaBuffer, transferLength);
+        }
+
+        if (prpCount > 2)
+            free_prp_list(cmd->prp2, prpCount - 1);
+        kfree(cmd);
+
+        userBufferOffset += transferLength;
+        currentLBA += blockCount;
+        remaining -= transferLength;
+    }
 }
 
 #ifdef DISK_WRITING_ENABLED
 void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
-    if (controller->maxBytesPerTransfer == 0) {
-        panic("nvme_write_disk: controller->maxBytesPerTransfer = 0\n");
-    }
-
-    size_t remaining = length;
-    uintptr_t userBufferOffset = (uintptr_t)buffer;
-    uint64_t currentLBA = LBA;
-
-    while (remaining > 0) {
-        // Calculate the size of the current transfer
-        size_t transferLength = remaining > controller->maxBytesPerTransfer ? controller->maxBytesPerTransfer : remaining;
-        uint32_t blockCount = transferLength / controller->blockSize;
-        if (transferLength % controller->blockSize) {
-            blockCount++;
-        }
-
-        // Calculate PRP count for this transfer
-        uint32_t prpCount = transferLength / PAGE_SIZE;
-        if (transferLength % PAGE_SIZE) {
-            prpCount++;
-        }
-
-        // Allocate the NVMe command
-        nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
-
-        // Populate the NVMe read command
-        cmd->opc = NVME_OPCODE_WRITE;
-        cmd->nsid = controller->nsid;
-        cmd->cid = controller->cmdCID++;
-        cmd->prp1 = (uintptr_t)controller->dmaWriteBuffer;
-
-        if (prpCount == 2) {
-            cmd->prp2 = cmd->prp1 + PAGE_SIZE;
-        } else if (prpCount > 2) {
-            cmd->prp2 = setup_prp_list(cmd->prp1 + PAGE_SIZE, prpCount - 1);
-        }
-
-        cmd->cdw10 = currentLBA & 0xffffffff;
-        cmd->cdw11 = currentLBA >> 32;
-        cmd->cdw12 = blockCount - 1; // cdw12 = number of blocks minus 1
-
-        printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data from user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n", 
-				(uintptr_t)controller->dmaWriteBuffer, userBufferOffset, transferLength);
-		memcpy(controller->dmaWriteBuffer, (void*)userBufferOffset,transferLength);
-
-        printd(DEBUG_NVME | DEBUG_DETAILED, "Submitting NVMe write: LBA=0x%016lx, Blocks=%u, DMA Buffer=0x%016lx\n", currentLBA, blockCount, controller->dmaReadBuffer);
-        nvme_submit_command(controller, cmd, false);
-
-        volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
-		printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: Current write completion queue head index = %u\n",controller->cmdCompQueueHeadIndex);
-        nvme_wait_for_completion(controller, false, completionEntry, cmd);
-
-        // Validate the completion result
-        if (completionEntry->status.status_code || completionEntry->status.status_code_type) {
-            log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, 1);
-            panic("NVMe Read error. System log contains more information.");
-        }
-
-        nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);  // Update index for consumed entries
-		controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex+ 1) % controller->queueDepth;
-
-        // Free PRPs and command
-        if (prpCount > 2) {
-            kfree((void*)cmd->prp2);
-        }
-        kfree(cmd);
-
-        // Update offsets and remaining data
-        userBufferOffset += transferLength;
-        currentLBA += blockCount;
-        remaining -= transferLength;
-    }
+    nvme_do_io(controller, LBA, length, buffer, true);
 }
 #endif
 
-
 void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
-    if (controller->maxBytesPerTransfer == 0) {
-        panic("nvme_read_disk: controller->maxBytesPerTransfer = 0\n");
-    }
-
-    size_t remaining = length;
-    uintptr_t userBufferOffset = (uintptr_t)buffer;
-    uint64_t currentLBA = LBA;
-
-    while (remaining > 0) {
-        // Calculate the size of the current transfer
-        size_t transferLength = remaining > controller->maxBytesPerTransfer ? controller->maxBytesPerTransfer : remaining;
-        uint32_t blockCount = transferLength / controller->blockSize;
-        if (transferLength % controller->blockSize) {
-            blockCount++;
-        }
-
-        // Calculate PRP count for this transfer
-        uint32_t prpCount = transferLength / PAGE_SIZE;
-        if (transferLength % PAGE_SIZE) {
-            prpCount++;
-        }
-
-        // Allocate the NVMe command
-        nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
-
-        // Populate the NVMe read command
-        cmd->opc = NVME_OPCODE_READ;
-        cmd->nsid = controller->nsid;
-        cmd->cid = controller->cmdCID++;
-        cmd->prp1 = (uintptr_t)controller->dmaReadBuffer;
-
-        if (prpCount == 2) {
-            cmd->prp2 = cmd->prp1 + PAGE_SIZE;
-        } else if (prpCount > 2) {
-            cmd->prp2 = setup_prp_list(cmd->prp1 + PAGE_SIZE, prpCount - 1);
-        }
-
-        cmd->cdw10 = currentLBA & 0xffffffff;
-        cmd->cdw11 = currentLBA >> 32;
-        cmd->cdw12 = blockCount - 1; // cdw12 = number of blocks minus 1
-
-
-        printd(DEBUG_NVME | DEBUG_DETAILED, "Submitting NVMe read: LBA=0x%016lx, Blocks=%u, DMA Buffer=0x%016lx\n", currentLBA, blockCount, controller->dmaReadBuffer);
-        nvme_submit_command(controller, cmd, false);
-
-        volatile nvme_completion_queue_entry_t* completionEntry = (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
-		printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME: Current completion queue head index = %u\n",controller->cmdCompQueueHeadIndex);
-        nvme_wait_for_completion(controller, false, completionEntry, cmd);
-
-        // Validate the completion result
-        if (completionEntry->status.status_code || completionEntry->status.status_code_type) {
-            log_nvme_debug_info(controller, false, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, 1);
-            panic("NVMe Read error. System log contains more information.");
-        }
-
-        nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);  // Update index for consumed entries
-		controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex+ 1) % controller->queueDepth;
-
-        // Copy the data from the DMA buffer to the user buffer
-        printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data to user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n", (uintptr_t)controller->dmaReadBuffer, userBufferOffset, transferLength);
-        memcpy((void*)userBufferOffset, controller->dmaReadBuffer, transferLength);
-
-        // Free PRPs and command
-        if (prpCount > 2) {
-            kfree((void*)cmd->prp2);
-        }
-        kfree(cmd);
-
-        // Update offsets and remaining data
-        userBufferOffset += transferLength;
-        currentLBA += blockCount;
-        remaining -= transferLength;
-    }
+    nvme_do_io(controller, LBA, length, buffer, false);
 }
 
 size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count)
@@ -960,7 +944,7 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	{
 		uint64_t temp = nvmeBaseAddressRemap;
 		nvmeBaseAddressRemap += bar0_size;
-		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initial base memory address (0x%016lx) is outside physical memory.  Using 0x%016x instead\n",baseMemoryAddress,temp);
+		printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initial base memory address (0x%016lx) is outside physical memory.  Using 0x%016lx instead\n",baseMemoryAddress,temp);
 		baseMemoryAddress = temp;
 		printd(DEBUG_NVME | DEBUG_DETAILED, "Initializing base address 0x%08x to Bar[0], and 0x0 to BAR[1]\n",baseMemoryAddress);
 		writePCIRegister(nvmeDevice->busNo, nvmeDevice->deviceNo, nvmeDevice->funcNo, PCI_BAR0_OFFSET, baseMemoryAddress & 0xFFFFFFFF);
@@ -973,7 +957,7 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	print_BARs(config, "post config");
 
 	nvme_controller_t* controller = kmalloc(sizeof(nvme_controller_t));
-	printd(DEBUG_NVME | DEBUG_DETAILED, "Allocated controller_t at 0x%08x\n",controller);
+	printd(DEBUG_NVME | DEBUG_DETAILED, "Allocated controller_t at 0x%016lx\n",(uintptr_t)controller);
 	controller->nvmePCIDevice = nvmeDevice;
 	controller->mmioAddress = baseMemoryAddress;
 	controller->registers = (volatile nvme_controller_regs_t*)controller->mmioAddress;
