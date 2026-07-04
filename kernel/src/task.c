@@ -75,6 +75,23 @@ void* task_alloc_aligned(task_t* task, size_t size)
 	return (void*)virt;
 }
 
+/// @brief Reserve `size` bytes of task-address-space VA, advancing the correct
+///        next-virtual counter, and return the base of the reserved range.
+/// Tasks that SHARE kKernelPML4 (ktask, idle) must draw from the shared
+/// kKernelTaskMemoryNextVirt counter: their per-task taskMemoryNextVirt all
+/// start at KERNEL_TASK_MEMORY_BASE, so drawing from that would hand the same VA
+/// to every such task and collide with their own stacks. Single source of truth
+/// for both stack and arena VA allocation — keep all task-VA reservations here.
+uintptr_t task_reserve_task_virt(task_t* task, size_t size)
+{
+	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
+		? &kKernelTaskMemoryNextVirt
+		: &task->taskMemoryNextVirt;
+	uintptr_t base = *counter;
+	*counter += size;
+	return base;
+}
+
 /// @brief Allocate guarded stack memory for a task
 /// Allocates stack with guard pages on both sides to detect stack overflow
 /// @param task The task to allocate stack for
@@ -98,14 +115,7 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 		return NULL;
 	}
 
-	// Tasks sharing kKernelPML4 must use a shared counter; per-task counters all
-	// start at KERNEL_TASK_MEMORY_BASE and would map at the same virtual address.
-	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
-		? &kKernelTaskMemoryNextVirt
-		: &task->taskMemoryNextVirt;
-
-	uintptr_t virt_base = *counter;
-	*counter += aligned_size;
+	uintptr_t virt_base = task_reserve_task_virt(task, aligned_size);
 
 	// Map only the usable stack pages (skip guard pages on each end)
 	uintptr_t phys_stack_start = phys + (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE);

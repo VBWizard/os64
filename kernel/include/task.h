@@ -108,4 +108,5 @@
 	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
+	uintptr_t task_reserve_task_virt(task_t* task, size_t size);
 	#endif
