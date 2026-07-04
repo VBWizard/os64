@@ -22,11 +22,19 @@ extern volatile bool kFBInitDone;
 extern bool kOverrideFileLogging;
 extern bool kEnableSMP;
 extern volatile bool kSchedulerInitialized;
-char print_buf[2048];
 
 void printd(__uint128_t debug_level, const char *fmt, ...) {
+    // Formatting scratch buffer. MUST be a local (per-call, per-stack) and never
+    // a shared global: printd runs concurrently on every core, and a single
+    // shared buffer gets clobbered mid-format when two cores log at once — which
+    // corrupts the message BEFORE it is copied into the per-core log queue,
+    // producing garbled log entries that logd then faithfully prints. A local
+    // also makes printd re-entrancy-safe (e.g. a fault handler logging while an
+    // outer printd is mid-format on the same core). The sibling print_buf2 below
+    // is already a local for the same reason.
+    char print_buf[2048];
     bool msg_continued = false;
-    
+
     if ((kDebugLevel & debug_level) != debug_level) return;
     
     uint16_t core = 0;  // Default core if SMP isn't initialized
