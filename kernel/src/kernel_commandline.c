@@ -9,6 +9,7 @@ extern bool kOverrideFileLogging;
 extern bool kEnableSMP;
 extern bool kBspSchedulerMode;
 extern bool kEnableKWorker;
+extern bool kRunTests;
 extern char kRootPartUUID[];
 bool kEnableAHCI = true, kEnableNVME = true;
 
@@ -71,6 +72,7 @@ static cmdopt_t cmdopts[] = {
     {"NVME", OPT_BOOL, &kEnableNVME, true, 0},
     {"NONVME", OPT_BOOL, &kEnableNVME, false, 0},
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
+    {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
     {"LOGFILE", OPT_BOOL, &kOverrideFileLogging, true, 0},
     {"ROOT", OPT_STRING, kRootPartUUID, 0, 64},

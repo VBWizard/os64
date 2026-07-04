@@ -47,6 +47,10 @@ extern bool kEnableNVME;
 bool kEnableSMP = true;
 bool kBspSchedulerMode = false;
 bool kEnableKWorker = false;
+// Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,
+// post-boot, and the disk/VFS tests) — used to isolate a boot hang by booting
+// with no test code in the path.
+bool kRunTests = true;
 volatile uint64_t kSystemStartTime;
 volatile uint64_t kUptime;
 volatile uint64_t kTicksSinceStart;
@@ -146,8 +150,12 @@ void kernel_init()
     kKernelTask->pml4 = (pt_entry_t*)kKernelPML4;
     kKernelTask->pml4v = (pt_entry_t*)kKernelPML4v;
     // Init and run tests before configuring and enabling the scheduler
-    test_framework_init();
-    test_run_preboot();
+    // (skippable via the NOTESTS cmdline flag).
+    if (kRunTests)
+    {
+        test_framework_init();
+        test_run_preboot();
+    }
 
 	    for (int cnt = 0; cnt < kMPCoreCount; cnt++)
 	    {
@@ -197,9 +205,12 @@ void kernel_init()
 		vfs_mount_root_part((char*)&kRootPartUUID);
 	}
 
-    test_run_postboot();
+    if (kRunTests)
+    {
+        test_run_postboot();
+    }
 
-	if (kRootFilesystem!=NULL)
+	if (kRunTests && kRootFilesystem!=NULL)
 	{
         int lResult = testVFS(kRootFilesystem);
         if (lResult)
