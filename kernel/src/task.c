@@ -230,29 +230,20 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 	return (int)reaped;
 }
 
-void task_exit(void)
+// Kernel-context tail of task_exit(). It runs on the kernel interrupt stack with
+// kKernelPML4 loaded, AFTER task_exit() has switched RSP/CR3. It's a SEPARATE
+// function on purpose: task_exit() CALLs it right after the switch, so the call
+// pushes onto the already-switched kernel stack and this function's prologue puts
+// its rbp there — meaning every local below is accessed through a frame that IS
+// mapped in kKernelPML4. Doing this work inline in task_exit() would (at -O0)
+// access locals through the old task-stack rbp, which is not mapped after the
+// CR3 switch. noinline is mandatory (inlining would defeat the whole point).
+// Never returns.
+static void __attribute__((noinline)) task_exit_finish(void)
 {
+	// GS-based, valid regardless of RSP/CR3; frame is now on the kernel stack.
 	core_local_storage_t *cls = get_core_local_storage();
 
-	// CRITICAL: Switch to kernel context before doing anything!
-	// We're currently running on task's stack with task's CR3 loaded
-	// Need to switch to kernel stack and kKernelPML4 to safely access kernel structures
-
-	// Save kernel stack pointer (from CLS while it's still valid)
-	uintptr_t kernel_rsp = cls->kernel_interrupt_stack_top - 16;
-
-	// Switch to kernel interrupt stack
-	__asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
-
-	// Switch to kKernelPML4
-	__asm__ volatile("mov cr3, %0" : : "r"((uint64_t)kKernelPML4) : "memory");
-
-	// CRITICAL: Reload CLS pointer after stack/CR3 switch!
-	// The previous 'cls' variable was on the task's stack and is now invalid.
-	// get_core_local_storage() reads from GS:0, which is always valid.
-	cls = get_core_local_storage();
-
-	// Now we're in kernel context - safe to access kernel structures
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	task_t *task = cls ? cls->task : NULL;
 
@@ -275,6 +266,36 @@ void task_exit(void)
 	{
 		__asm__("sti\nhlt\n");
 	}
+}
+
+void task_exit(void)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+
+	// We're on the task's stack with the task's CR3 loaded; that stack lives at a
+	// task-local lower-half VA that is NOT mapped in kKernelPML4. Read the kernel
+	// interrupt stack top from CLS (via GS, valid under any CR3) while the task
+	// CR3 is still loaded, and 16-align it so the `call` below keeps the SysV
+	// stack alignment (rsp%16==8 at the callee's entry).
+	uintptr_t kernel_rsp = (cls->kernel_interrupt_stack_top - 16) & ~(uintptr_t)0xF;
+
+	// Switch RSP to the kernel stack, switch CR3 to kKernelPML4, then IMMEDIATELY
+	// call the continuation — one asm block, NOTHING in between. This is the crux:
+	// at -O0 rbp still points at the old task stack after the switch, so any C
+	// statement here would read/write an unmapped (or wrong) physical page. The
+	// `call` touches no C local — it pushes the return address onto the
+	// already-switched kernel stack, and task_exit_finish() builds its frame
+	// there. The callee is passed as an operand (indirect call) so we don't lean
+	// on an assembler symbol name. Never returns.
+	__asm__ volatile(
+		"mov rsp, %0\n\t"
+		"mov cr3, %1\n\t"
+		"call %2\n\t"
+		:
+		: "r"(kernel_rsp), "r"((uint64_t)kKernelPML4), "r"(task_exit_finish)
+		: "memory");
+
+	__builtin_unreachable();
 }
 
 task_t* task_wait(task_t* parentTask, uint64_t* exitCode)

@@ -381,77 +381,85 @@ This makes external dependencies clear and easy to find at a glance.
 
 ### Context Switching Between Task and Kernel Space
 
-**Problem**: When running in task context (task's CR3 loaded, task's stack), you cannot safely access kernel structures because they may not be mapped in the task's address space.
+**Problem**: When running in task context (task's CR3 loaded, task's own stack),
+you cannot safely access kernel structures — the task's stack lives at a
+lower-half VA that is NOT mapped in kKernelPML4, and kernel data may not be
+mapped in the task's address space. You must switch RSP to a kernel stack and
+CR3 to kKernelPML4 first.
 
-**Solution**: Switch both CR3 and RSP before accessing kernel data structures:
+**The subtle trap — do NOT "switch, then reload cls".** This recipe (which this
+file used to recommend) is broken at `-O0`: reloading `cls = get_core_local_storage()`
+*after* the switch **stores the result into a local**, and that local is `[rbp-X]`
+— still on the OLD task stack, because `mov rsp` does not move `rbp`. Every C
+local after the switch (`cls`, `thread`, `task`, …) is accessed through that
+stale `rbp`. It only *appears* to work because the lower-half VA happens to map
+to *some* page under kKernelPML4, so the store/reload is self-consistent — while
+silently scribbling on the wrong physical page, one `-O2` rebuild away from a
+fault.
 
 ```c
-void task_exit(void) {
-    core_local_storage_t *cls = get_core_local_storage();
-
-    // Save kernel stack pointer (from CLS while it's still valid)
-    uintptr_t kernel_rsp = cls->kernel_interrupt_stack_top - 16;
-
-    // Switch to kernel stack
-    __asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
-
-    // Switch to kKernelPML4
-    __asm__ volatile("mov cr3, %0" : : "r"((uint64_t)kKernelPML4) : "memory");
-
-    // CRITICAL: Reload CLS pointer after stack/CR3 switch!
-    cls = get_core_local_storage();
-
-    // Now safe to access kernel structures
-    thread_t *thread = cls->currentThread;
-    // ...
-}
+// WRONG — the reload writes cls to a local on the old (now-unmapped) stack:
+__asm__ volatile("mov rsp, %0" :: "r"(kernel_rsp));
+__asm__ volatile("mov cr3, %0" :: "r"(kKernelPML4) : "memory");
+cls = get_core_local_storage();          // stores to [rbp-X] on the OLD stack — UB
+thread_t *thread = cls->currentThread;   // and every local access after is stale
 ```
 
-**Key points**:
-- Core-local storage (CLS) is accessible from any CR3 (it's in the shared upper-half)
-- Save values from CLS (like kernel_rsp) BEFORE switching stack
-- Switch stack BEFORE switching CR3 (order matters for some edge cases)
-- **ALWAYS reload CLS pointer after switching RSP/CR3** - the old pointer is invalid
-- The `"memory"` clobber on CR3 load prevents compiler reordering
+**Correct rule: never touch a C local across the switch.** Get everything you
+need into *registers* before the switch, then transfer control to code that runs
+in a fresh frame on the new stack.
 
-**CRITICAL: Reload CLS Pointer After Stack Switch**
-
-After switching RSP (and optionally CR3), the original `cls` pointer variable becomes invalid because it was likely stored on the old stack. You MUST reload it via `get_core_local_storage()`:
+**Case 1 — the function does not return (e.g. `task_exit`).** Switch RSP/CR3 and
+immediately `call` a `noinline` continuation, with NOTHING in between. The `call`
+touches no local (it pushes the return address onto the already-switched kernel
+stack), and the continuation's prologue puts its `rbp` on the kernel stack, so
+all of *its* locals are valid:
 
 ```c
-void call_in_kernel_context(void (*func)(void*), void *arg)
+static void __attribute__((noinline)) task_exit_finish(void)
+{
+    // Fresh frame on the kernel stack; GS-based cls is valid under any CR3.
+    core_local_storage_t *cls = get_core_local_storage();
+    // ... all kernel-context work here ...
+}
+
+void task_exit(void)
 {
     core_local_storage_t *cls = get_core_local_storage();
+    // 16-align so the `call` keeps SysV alignment (rsp%16==8 at callee entry).
+    uintptr_t kernel_rsp = (cls->kernel_interrupt_stack_top - 16) & ~(uintptr_t)0xF;
 
-    // Save values to CLS before stack switch
-    cls->saved_func = func;
-    cls->saved_arg = arg;
-
-    // Switch to kernel stack
-    __asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
-
-    // Switch to kKernelPML4
-    __asm__ volatile("mov cr3, %0" : : "r"(kKernelPML4) : "memory");
-
-    // CRITICAL: Reload CLS after context switch!
-    // The old 'cls' variable is on the old stack and now invalid.
-    cls = get_core_local_storage();  // Reads from GS:0, always valid
-
-    // Now safe to access cls
-    cls->saved_func(cls->saved_arg);
+    // One asm block, NOTHING between the switch and the call. All operands are
+    // loaded into registers BEFORE the switch, while rbp is still valid.
+    __asm__ volatile(
+        "mov rsp, %0\n\t"
+        "mov cr3, %1\n\t"
+        "call %2\n\t"
+        :: "r"(kernel_rsp), "r"((uint64_t)kKernelPML4), "r"(task_exit_finish)
+        : "memory");
+    __builtin_unreachable();
 }
 ```
 
-**Why this is necessary**:
-- Local variables (including `cls`) may be stored on the stack by the compiler
-- After `mov rsp`, that stack is no longer accessible
-- Accessing the old `cls` pointer reads garbage → crash (often GPF with corrupted RIP)
-- `get_core_local_storage()` reads from `GS:0`, which is always valid regardless of RSP or CR3
+**Case 2 — the function must return (e.g. `call_in_kernel_context`).** A
+run-and-never-return continuation won't do: whichever frame restores RSP/CR3 has
+to read the saved values, and that frame's `rbp` is the stale one. Do the whole
+dance — save → switch → call → restore → switch-back — in a naked asm trampoline
+(or one inline-asm block) so no C local is ever touched across a switch. Stash
+inputs in CLS (GS-relative) beforehand, precisely because GS is valid under any
+CR3/RSP.
 
-**Symptoms of this bug**:
-- General Protection Fault (#GP) with corrupted RIP like `0xf000ff53f000ff53`
-- Happens after stack/CR3 switch when trying to dereference the stale `cls` pointer
-- Only occurs in SMP systems under specific timing/load conditions
+**Key points**:
+- CLS is reachable from any CR3 (shared upper-half) via `get_core_local_storage()`
+  (GS:0) — that's why it's the safe place to stash values across a switch.
+- Load everything you need into registers BEFORE `mov rsp`; after it, `rbp` is stale.
+- The `"memory"` clobber on the CR3 load prevents the compiler reordering memory
+  accesses across the switch.
+
+**Symptoms of getting this wrong**:
+- Intermittent corruption of unrelated kernel memory (the wrong physical page
+  behind the stale `rbp`), or a #PF/#GP in the switch path if that VA is unmapped.
+- Often masked at `-O0` and only surfaces under different codegen or memory layout.
 
 ### Writing to Task Memory from Kernel via the HHDM (preferred)
 
