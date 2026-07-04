@@ -15,7 +15,9 @@ void kmalloc_common(uint64_t physical_address, uint64_t virtual_address, uint64_
 	if (virtual_address % PAGE_SIZE)
 		page_count++;
 	paging_map_pages((pt_entry_t*)kKernelPML4v, virtual_address & PAGE_ADDRESS_MASK, physical_address & PAGE_ADDRESS_MASK, page_count, PAGE_PRESENT | PAGE_WRITE);
-	memset((void*)virtual_address, 0, length);
+	// Page contents are already zeroed centrally by the allocator choke point
+	// (allocate_memory_at_address_internal). kmalloc always runs after
+	// kHHDMMaintenanceEnabled is set, so that zeroing is guaranteed to have run.
 }
 
 // Allocate aligned memory for the kernel

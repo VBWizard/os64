@@ -83,7 +83,10 @@ uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr)
 
     if ((vma->flags & MAP_ANONYMOUS) || vma->file == NULL)
     {
-        // Use physical allocator directly - kmalloc might map into kKernelPML4 only
+        // Use physical allocator directly - kmalloc might map into kKernelPML4 only.
+        // The page comes back already zeroed: allocate_memory_aligned() zeroes at
+        // the allocator choke point, which is exactly the zero-initialization an
+        // anonymous/BSS/heap mapping requires.
         phys = allocate_memory_aligned(PAGE_SIZE);
     }
     else

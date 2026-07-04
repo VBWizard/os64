@@ -307,7 +307,24 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	//page tables are live — early allocations are retro-mapped when
 	//init_os64_paging_tables builds them).
 	if (retVal != 0)
+	{
 		paging_hhdm_map_range(hhdm_extent_start, hhdm_extent_length);
+
+		//SECURITY: never hand out memory containing another allocation's stale
+		//data. Zero the whole extent through its HHDM alias, now that it's mapped.
+		//This is THE single zero-on-alloc choke point — it covers kmalloc(),
+		//allocate_memory(), allocate_memory_aligned(), and the demand-paged
+		//anonymous/BSS/heap pages resolved through the fault path — so callers no
+		//longer memset individually (except kmalloc_dma, which must zero through
+		//its uncached mapping for device coherency).
+		//
+		//Guarded on kHHDMMaintenanceEnabled because before the real page tables
+		//are live the HHDM alias is not valid (paging_hhdm_map_range above is a
+		//no-op then). The only pre-flag allocations are page-table pages, which
+		//are fully written when populated and so need no zeroing here.
+		if (kHHDMMaintenanceEnabled)
+			memset((void *)(hhdm_extent_start | kHHDMOffset), 0, hhdm_extent_length);
+	}
 
 	allocator_unlock(irqflags);
 	return retVal;
