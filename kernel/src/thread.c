@@ -192,6 +192,33 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 	}
 	else
 	{
+		// ─── RING3 (user) THREADS ARE NOT FULLY WIRED YET ───────────────────────
+		// Deliberately deferred until ring3 task bring-up. Two things here are
+		// known-incomplete, on purpose:
+		//
+		// 1. EXIT PATH IS NOT SEEDED. Unlike the kernelThread branch above, we do
+		//    NOT seed a return address on the user stack. A ring3 _start that does
+		//    `ret` (GCC will NOT turn a C `return` into a syscall, so this is always
+		//    possible) will pop 0/garbage and fault. Seeding task_exit_with_retval
+		//    like the ring0 path would NOT help — it's a kernel address, and `ret`
+		//    to it from CPL 3 faults (#GP/#PF).
+		//
+		//    The correct fix (proven in the 32-bit OS — see
+		//    ~/src/os/kproj/chrisOSKernel/src/process.c: `processExit`, ~line 349):
+		//    seed regs.RSP with the VA of a small RING3 exit trampoline mapped
+		//    PAGE_USER into the task, e.g. `mov rax, SYS_exit; syscall`. On `ret`
+		//    the thread lands there in ring3 (a plain ring3→ring3 return, no fault),
+		//    and the syscall does the ring3→ring0 crossing cleanly. os64 has it
+		//    easier than the 32-bit version: argc/argv/env ride in RDI/RSI/RDX, so
+		//    there is no call frame to hand-craft — just one seeded return address.
+		//
+		// 2. REGISTER SETUP BELOW IS WRONG for a real user thread and must be fixed
+		//    in the same ring3 pass: RSP0 (the ring0 stack used on trap/syscall
+		//    entry) is set to the USER stack (esp3BaseV) instead of esp0BaseV, and
+		//    the offsets use THREAD_KERNEL_STACK_SIZE instead of THREAD_USER_STACK_SIZE.
+		//
+		// >> If you are chasing a #PF/#GP right after a ring3 task returns from
+		// >> _start — THIS is why. It is a missing feature, not a mystery. <<
 		newThread->regs.SS = GDT_USER_DATA_ENTRY << 3;
 		newThread->regs.RSP = newThread->esp3BaseV + THREAD_KERNEL_STACK_SIZE - sizeof(uintptr_t) * 6;
 		newThread->regs.SS0 = GDT_KERNEL_DATA_ENTRY << 3;
