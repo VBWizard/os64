@@ -21,6 +21,8 @@ void asm_offsets(void)
     /* core_local_storage_t (smp.h) — used in task_exit_asm.S, scheduler.S */
     DEFINE(CLS_APIC_ID_OFFSET,       offsetof(core_local_storage_t, apic_id));
     DEFINE(CLS_CURRENTTHREAD_OFFSET, offsetof(core_local_storage_t, currentThread));
+    /* used by call_in_kernel_context (task_exit_asm.S) */
+    DEFINE(CLS_KERNEL_INTERRUPT_STACK_TOP_OFFSET, offsetof(core_local_storage_t, kernel_interrupt_stack_top));
 
     /* thread_t (thread.h) — used in task_exit_asm.S */
     DEFINE(THREAD_OWNERTASK_OFFSET, offsetof(thread_t, ownerTask));

@@ -37,42 +37,15 @@ static void kernel_read_file(kernel_read_params_t *params)
     params->result = params->fops->read(params->file, params->buffer, params->size);
 }
 
-// Trampoline: switches to kernel stack and CR3, calls function, switches back
-void call_in_kernel_context(void (*func)(void*), void *arg)
-{
-    core_local_storage_t *cls = get_core_local_storage();
-
-    // Save parameters before stack switch (use CLS for SMP safety)
-    cls->cikc_saved_func = func;
-    cls->cikc_saved_arg = arg;
-
-    // Save task context
-    __asm__ volatile("mov %0, cr3" : "=r"(cls->cikc_saved_cr3));
-    __asm__ volatile("mov %0, rsp" : "=r"(cls->cikc_saved_rsp));
-
-    // Save kernel stack pointer in local var (on current stack, before switch)
-    uintptr_t kernel_rsp = cls->kernel_interrupt_stack_top - 16;
-
-    // Switch to kernel stack
-    __asm__ volatile("mov rsp, %0" : : "r"(kernel_rsp));
-
-    // Switch to kKernelPML4
-    __asm__ volatile("mov cr3, %0" : : "r"((uint64_t)kKernelPML4) : "memory");
-
-    // CRITICAL: Reload CLS pointer after stack/CR3 switch!
-    // The previous 'cls' variable is on the old stack and no longer accessible.
-    // get_core_local_storage() reads from GS:0, which is always valid.
-    cls = get_core_local_storage();
-
-    // Call function in kernel context (using saved parameters from reloaded cls)
-    cls->cikc_saved_func(cls->cikc_saved_arg);
-
-    // Restore task CR3
-    __asm__ volatile("mov cr3, %0" : : "r"(cls->cikc_saved_cr3) : "memory");
-
-    // Restore task stack
-    __asm__ volatile("mov rsp, %0" : : "r"(cls->cikc_saved_rsp));
-}
+// call_in_kernel_context() is a NAKED asm trampoline in task_exit_asm.S.
+//
+// The former C version here switched RSP/CR3 in a normal C frame and then
+// accessed locals (the reloaded `cls`, etc.) through an rbp still pointing at
+// the task's own stack — which is unmapped once kKernelPML4 is loaded. That was
+// UB, masked only by the -O0 stack layout. The asm version keeps task CR3/RSP
+// and func/arg in callee-saved registers across the switch so no C local is ever
+// touched in the wrong address space. See the CLAUDE.md "Context Switching
+// Between Task and Kernel Space" section (Case 2 — the must-return case).
 
 // Resolves and returns the physical address of a page for the given faulting address.
 // This function handles anonymous and file-backed memory only (CoW later).
