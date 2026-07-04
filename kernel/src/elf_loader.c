@@ -150,6 +150,11 @@ static int elf_map_segment(task_t *task, vfs_file_t *file, const Elf64_Phdr *phd
         if (file_vma == NULL) {
             return -1;
         }
+        // The file supplies bytes only up to file_end (p_vaddr + p_filesz).  When
+        // that lands mid-page, page_file_end rounds up past it and the remainder of
+        // that final page is BSS: cap file_size at the real file extent so the
+        // fault path zero-fills the tail rather than reading stale file bytes.
+        file_vma->file_size = file_end - page_start;
         vma_add(task, file_vma);
         anon_start = page_file_end;
     }

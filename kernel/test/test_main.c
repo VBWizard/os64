@@ -30,6 +30,7 @@ static size_t g_test_case_count = 0;
 static bool g_framework_initialized = false;
 
 bool test_vma_file_backed_page_fault_resolved(void);
+bool test_vma_partial_page_bss_zero_filled(void);
 
 bool test_register(const char *name, bool (*func)(void), int phase)
 {
@@ -1082,6 +1083,7 @@ static void register_builtin_tests(void)
     test_register("task_arena_aligned_alloc", test_task_arena_aligned_alloc, TEST_PHASE_PREBOOT);
     test_register("task_arena_exhaustion", test_task_arena_exhaustion, TEST_PHASE_PREBOOT);
     test_register("vma_file_backed_page_fault_resolved", test_vma_file_backed_page_fault_resolved, TEST_PHASE_POSTBOOT);
+    test_register("vma_partial_page_bss_zero_filled", test_vma_partial_page_bss_zero_filled, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);

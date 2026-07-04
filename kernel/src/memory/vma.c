@@ -1,6 +1,7 @@
 #include "memory/vma.h"
 #include "memory/mmap.h"
 #include "memory/kmalloc.h"
+#include "memory/memset.h"
 #include "allocator.h"
 #include "task.h"
 #include "paging.h"
@@ -115,25 +116,47 @@ uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr)
         if (!virt)
             panic("Failed to allocate page for file-backed VMA");
 
-        kernel_read_params_t *params = kmalloc(sizeof(kernel_read_params_t));
-        if (!params)
-            panic("Failed to allocate kernel_read_params_t");
+        // Only the bytes up to vma->file_size (measured from vma->start) are real
+        // file content; anything past that within this page is BSS and must read
+        // back as zero.  This is what keeps an ELF segment whose p_filesz ends
+        // partway through a page from pulling unrelated file bytes into the tail.
+        size_t page_valid;
+        if (page_offset >= vma->file_size)
+            page_valid = 0;
+        else {
+            page_valid = (size_t)(vma->file_size - page_offset);
+            if (page_valid > PAGE_SIZE)
+                page_valid = PAGE_SIZE;
+        }
 
-        params->file = file;
-        params->fops = fops;
-        params->file_offset = file_offset;
-        params->buffer = virt;
-        params->size = PAGE_SIZE;
-        params->result = 0;
+        // Whenever the page is not fully file-backed, zero it first so the
+        // [page_valid, PAGE_SIZE) tail is guaranteed zero regardless of what the
+        // allocator handed us.
+        if (page_valid < PAGE_SIZE)
+            memset(virt, 0, PAGE_SIZE);
 
-        // Switch to kernel context (kernel stack + kKernelPML4) and read file
-        call_in_kernel_context((void (*)(void*))kernel_read_file, params);
+        if (page_valid > 0)
+        {
+            kernel_read_params_t *params = kmalloc(sizeof(kernel_read_params_t));
+            if (!params)
+                panic("Failed to allocate kernel_read_params_t");
 
-        int read_result = params->result;
-        kfree(params);
+            params->file = file;
+            params->fops = fops;
+            params->file_offset = file_offset;
+            params->buffer = virt;
+            params->size = page_valid;
+            params->result = 0;
 
-        if (read_result < 0)
-            panic("vma_resolve_backing_page: Failed to read file backing");
+            // Switch to kernel context (kernel stack + kKernelPML4) and read file
+            call_in_kernel_context((void (*)(void*))kernel_read_file, params);
+
+            int read_result = params->result;
+            kfree(params);
+
+            if (read_result < 0)
+                panic("vma_resolve_backing_page: Failed to read file backing");
+        }
 
         // Get physical address from virtual (kmalloc returns HHDM addresses)
         phys = (uintptr_t)virt - kHHDMOffset;
@@ -159,6 +182,10 @@ vma_t* vma_create(uintptr_t start,
     vma->flags = flags;
     vma->file = file;
     vma->file_offset = file_offset;
+    // Default: the entire VMA is file-backed.  Callers that map an ELF segment
+    // with a partial-page BSS tail lower this to the true file extent so the
+    // fault path zero-fills the remainder (see elf_map_segment).
+    vma->file_size = end - start;
     vma->cow = false;
     vma->listItem = NULL;
 

@@ -45,6 +45,13 @@ typedef struct vma {
     int flags;                    // MAP_PRIVATE, MAP_SHARED, etc.
     void* file;                   // Optional backing file
     uint64_t file_offset;         // File offset for mmap
+    // Number of bytes from `start` that are backed by real file content.
+    // For a fully file-backed VMA this equals (end - start).  For an ELF
+    // segment whose file data ends partway through its final page (p_filesz <
+    // p_memsz), it is set smaller than the VMA span so the page-fault path
+    // reads only the genuine file bytes and zero-fills the BSS tail of that
+    // page instead of reading past p_filesz into unrelated file bytes.
+    uint64_t file_size;
     bool cow;                     // Is this region CoW-enabled?
     dlist_node_t* listItem;       // Back-pointer to the owning task's list node
 } vma_t;
