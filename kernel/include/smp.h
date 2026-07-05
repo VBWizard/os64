@@ -72,6 +72,13 @@ typedef struct
 	void *cikc_saved_arg;
 	uint64_t cikc_saved_cr3;
 	uint64_t cikc_saved_rsp;
+
+	// syscall_Enter's stash for the user RSP between "SYSCALL landed" and "we're
+	// on the kernel stack" (syscall.S).  GS-relative so the entry stub never has
+	// to touch the user stack (a bogus ring-3 RSP must not be able to fault the
+	// kernel).  Safe as a single per-core slot because SFMASK clears IF on entry:
+	// nothing can preempt between the store and the reload.
+	uint64_t syscall_user_rsp;
 } core_local_storage_t;
 
 

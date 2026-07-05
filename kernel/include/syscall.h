@@ -15,8 +15,21 @@ typedef uint64_t (*syscall_func_t)(
 typedef struct {
     syscall_func_t func;
     const char* name;
+    // DANGER: leave this false unless the handler switches STACKS too.  The
+    // dispatcher runs on the thread's syscall kernel stack — a task-local VA
+    // that kKernelPML4 does not map — so flipping CR3 under a C handler
+    // triple-faults on the next stack access.  The user CR3 already maps the
+    // full kernel upper half; see the syscall_table comment in syscall.c.
     bool needs_cr3_switch;
-    bool needs_user_copy;
+    // Bit i set = arg i is a USER-SPACE POINTER the dispatcher should
+    // range-check before the handler runs.  A mask (not a blanket "check all
+    // six") because unused argument registers carry ring-3 garbage — and
+    // right after a previous syscall that garbage is kernel addresses our own
+    // clobber convention left behind, which a blanket >= kHHDMOffset scan
+    // "helpfully" rejects.  (write() was the first casualty: R10 held a
+    // leftover kernel pointer from yield(), so a perfectly valid write got
+    // SYSCALL_RESULT_BAD_USER_DATA without the handler ever running.)
+    uint8_t user_ptr_arg_mask;
     bool trace_enabled;
 } syscall_entry_t;
 
@@ -33,12 +46,13 @@ uint64_t _syscall_dispatch(
 );
 
 // A macro to help define syscalls in syscall_table[]
-#define SYSCALL_DEFINE(NUM, NAME, FN, CR3, COPY) \
-    [NUM] = { .func = FN, .name = NAME, .needs_cr3_switch = CR3, .needs_user_copy = COPY, .trace_enabled = false }
+// PTRMASK: bitmask of which args are user pointers (see user_ptr_arg_mask).
+#define SYSCALL_DEFINE(NUM, NAME, FN, CR3, PTRMASK) \
+    [NUM] = { .func = FN, .name = NAME, .needs_cr3_switch = CR3, .user_ptr_arg_mask = PTRMASK, .trace_enabled = false }
 
 // Optional: variant with trace flag
-#define SYSCALL_DEFINE_EX(NUM, NAME, FN, CR3, COPY, TRACE) \
-    [NUM] = { .func = FN, .name = NAME, .needs_cr3_switch = CR3, .needs_user_copy = COPY, .trace_enabled = TRACE }
+#define SYSCALL_DEFINE_EX(NUM, NAME, FN, CR3, PTRMASK, TRACE) \
+    [NUM] = { .func = FN, .name = NAME, .needs_cr3_switch = CR3, .user_ptr_arg_mask = PTRMASK, .trace_enabled = TRACE }
 
 void switch_to_kernel_cr3(void);
 void restore_user_cr3(void);

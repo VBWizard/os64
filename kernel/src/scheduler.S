@@ -88,7 +88,20 @@ _schedule_ap:
     # We then push RBX below that frame before doing any work.
     # NOTE: Throughout this routine we will use RAX (the apic_id) for the index into each mp_isrSaved array variable
     # and RBX for the data to be stored to each mp_isrSaved array variable
-	sti
+    #
+    # INTERRUPTS STAY OFF until mp_inScheduler is set (below).  The old `sti`
+    # here opened a re-entry window: a HARDWARE scheduler interrupt is shielded
+    # during this prologue by the APIC (no EOI sent yet -> same-priority
+    # delivery held), but the late scheduler_yield() entered via SOFTWARE
+    # `int`, which never sets the APIC in-service bit — so a pending timer
+    # interrupt (very likely pending: syscalls run with IF masked) could nest
+    # into this handler between the old sti and the mp_inScheduler store,
+    # clobbering temp_rsp and the mp_isrSaved arrays with this handler's own
+    # half-saved context; the eventual "resume" then iretq'd into garbage
+    # (first seen as a #GP at a non-canonical RIP on syscall_smoke's first
+    # yield).  scheduler_yield and its software `int` are gone — every entry
+    # is a real LAPIC interrupt now — but the guard-before-sti ordering stays:
+    # it is correct for any entry path, present or future.
     push rbx                            # Save original RBX value
 
     mov rbx, rax                        # Put the original RAX value in RBX
@@ -113,6 +126,10 @@ already_in_scheduler_exit:
 not_in_scheduler_continue:
     # Tag AP as 'in scheduler'
 	mov byte ptr [mp_inScheduler + rax], 1
+
+	# Guard flag is up — a nested scheduler entry now exits via the
+	# already_in_scheduler path, so it is safe to take interrupts again.
+	sti
 
 	# If the BSP is running the scheduler, do the signal check
 	cmp rax, 0
@@ -140,16 +157,36 @@ over_check_signals:
 	mov rbx, [rbx + 8]
 	mov [mp_isrSavedCS + rax * 8], rbx
 
-	# RFLAGS has the SAME constraint as RIP/CS: for a ring0 task with its own
-	# PML4 the interrupt frame sits on that task's own lower-half ring0 stack,
-	# which is NOT mapped in kKernelPML4. So read it from the frame here, BEFORE
-	# the CR3 switch, rather than after (where the dereference would hit the wrong
-	# physical page, or fault). Frame layout: [temp_rsp+0]=RIP, +8=CS, +16=RFLAGS,
-	# +24=RSP, +32=SS. (RSP/SS below don't dereference the frame, so they're fine
-	# after the switch.)
+	# RFLAGS/RSP/SS have the SAME constraint as RIP/CS: for a task with its own
+	# PML4 (ring0 kernel task OR ring3 user task) the interrupt frame sits on a
+	# stack that is NOT mapped in kKernelPML4. So read ALL FIVE frame fields
+	# here, BEFORE the CR3 switch, rather than after (where the dereference
+	# would hit the wrong physical page, or fault). Frame layout:
+	# [temp_rsp+0]=RIP, +8=CS, +16=RFLAGS, +24=RSP, +32=SS — long mode ALWAYS
+	# pushes all five, even ring0->ring0, so this is valid for every entry.
 	mov rbx, [temp_rsp + rax * 8]
 	mov rbx, [rbx + 16]
 	mov [mp_isrSavedRFlags + rax * 8], rbx
+
+	# RSP must come from the frame's +24 field — NOT from temp_rsp arithmetic.
+	# The CPU aligns RSP down to a 16-byte boundary before pushing an interrupt
+	# frame in 64-bit mode, so "frame base + 40" only recovers the ALIGNED
+	# value: any interrupted RSP not on a 16-byte boundary loses its remainder
+	# (up to 15 bytes) and the thread resumes reading byte-shifted qwords off
+	# its own stack.  -O0 C code masked this for years (every leave/ret resyncs
+	# RSP from RBP); the syscall path's hand-written asm finally exposed it as
+	# a #GP at a byte-shifted non-canonical RIP.  The +24 field is the TRUE
+	# pre-alignment RSP, pushed by the CPU itself.
+	mov rbx, [temp_rsp + rax * 8]
+	mov rbx, [rbx + 24]
+	mov [mp_isrSavedRSP + rax * 8], rbx
+
+	# SS from the frame's +32 field, same reasoning (and the frame value is
+	# correct for BOTH rings: ring0 pushes the current kernel SS, ring3 pushes
+	# the user SS).
+	mov rbx, [temp_rsp + rax * 8]
+	mov rbx, [rbx + 32]
+	mov [mp_isrSavedSS + rax * 8], rbx
 
     mov rbx, kKernelPML4
     mov cr3, rbx
@@ -181,54 +218,17 @@ dontSkipRegisters:
     mov [mp_isrSavedES + rax * 8], rbx
     mov ebx, fs
     mov [mp_isrSavedFS + rax * 8], rbx
-    # Figure out if the CS was a kernel process or not, using the value saved before CR3 switch.
-    # Reading via temp_rsp after the CR3 switch would give garbage for tasks with their own PML4.
-    mov rbx, [mp_isrSavedCS + rax * 8]
-    and rbx, 3
-    cmp rbx, 3
-    jne same_priv_lvl_save_stack_and_flags
 
-    # For ring 3 processes, we need to save the SS/ESP/Flags from the stack
-    # NOTE: ring-3 frames land on the kernel interrupt stack (RSP0, HHDM), accessible after CR3 switch
-    # TODO: Verify for ring-3 tasks with their own PML4
-    mov rcx, [temp_rsp + rax * 8]
-	mov rbx, [rcx + 32]
-    mov [mp_isrSavedSS + rax * 8], rbx
-    # Get the RSP value from the interrupt stack frame (ring 3 pushes RIP/CS/RFLAGS/RSP/SS)
-	mov rbx, [rcx + 24]
-	mov [mp_isrSavedRSP + rax * 8], rbx
-    # RFLAGS already saved from the frame before the CR3 switch (see above).
-    jmp over_save_samel_priv_lvl_stack_and_flags
+    # RIP/CS/RFLAGS/RSP/SS were ALL saved from the interrupt frame before the
+    # CR3 switch above — the 5-QWORD frame is identical in shape for ring0 and
+    # ring3 entries (long mode always pushes all five), so no per-ring branch
+    # is needed here anymore.  The old ring0 arm computed RSP as frame+40,
+    # which loses the interrupted RSP's low bits to the CPU's 16-byte frame
+    # alignment; the old ring3 arm dereferenced the frame AFTER the CR3 switch,
+    # which reads the wrong physical page for a user task with its own PML4
+    # (its RSP0 kernel stack is task-local, not HHDM).  Both are now handled
+    # by the single pre-switch frame read.
 
-same_priv_lvl_save_stack_and_flags:
-    # For ring 0 processes, we need to save the SS/ESP/Flags from current values
-    mov rbx, ss
-    mov [mp_isrSavedSS + rax * 8], rbx
-    # IMPORTANT x86-64 detail: in 64-bit long mode an interrupt ALWAYS pushes the
-    # full 5-QWORD frame (SS, RSP, RFLAGS, CS, RIP = 40 bytes), even when there is
-    # NO privilege change (ring 0 -> ring 0).  This differs from 32-bit protected
-    # mode, where a same-privilege interrupt pushes only 3 entries (no SS/ESP).
-    # temp_rsp points at the RIP field (bottom of the frame), so:
-    #   original_RSP = temp_rsp + 40   (the value the thread had before the interrupt)
-    # iretq also pops all 5 entries, so save/restore stays symmetric.
-    #
-    # Do NOT change this to +24: that assumes the 32-bit "3 QWORD" rule and yields
-    # saved_RSP = original_RSP - 16.  On resume the thread runs with RSP 16 bytes
-    # too low; if it was preempted at a function's very first 'push %rbp' (before
-    # the prologue sets up RBP), the callee builds its frame off the wrong RSP and
-    # reads garbage locals — e.g. memcpy reading a bogus length, running away up
-    # the stack, smashing return addresses, and faulting with #UD/#GP.
-	mov rbx, [temp_rsp + rax * 8]
-	add rbx, 40
-    mov [mp_isrSavedRSP + rax * 8], rbx
-    # RFLAGS already saved from the frame BEFORE the CR3 switch (see the pre-switch
-    # save near RIP/CS). Reading it here would dereference the interrupted ring0
-    # stack under kKernelPML4 -- the wrong physical page for an own-PML4 kernel task.
-
-over_save_samel_priv_lvl_stack_and_flags:
-	# CS and RIP already saved from the interrupt frame before the CR3 switch above.
-
-    
 OverSaveRegisters:
     # Keep track of how many times we've entered the scheduler
     inc qword ptr [mp_timesEnteringScheduler + rax*8]
@@ -245,7 +245,9 @@ overSetESP:
 	# Put the apic_id back in RAX
 	pop rax                 			# apic_id is now in EAX
     
-    # Identify whether the new CS is ring 3 for setting the threadIsKernel entry
+    # Identify whether the new CS is ring 3 for setting the threadIsKernel entry.
+    # (Informational/debug only since the ring0/ring3 return paths were unified —
+    # iretq handles both privilege levels from the same 5-qword frame.)
     mov rbx, [mp_isrSavedCS + rax * 8]
     and rbx, 3
     cmp rbx, 3
@@ -292,13 +294,17 @@ kernelProcess:
     mov CR3, rax
 overRestoreCR3:
 
-    # If the new thread to be executed is ring 3, jump to a different return path
     pop rax
-    mov bl, [threadIsKernel + rax * 1]
-    cmp bl,1           
-    jne ring3Return
 
-# Ring 0 return (I expected to not have to do this for a same priv lvl return but I have to anyways)
+# Unified ring0/ring3 return.  iretq consumes the SAME full 5-qword frame
+# (SS:RSP:RFLAGS:CS:RIP) for both cases — for a ring3 CS (RPL 3) it performs
+# the privilege drop and stack switch natively, and unlike the old retfq-based
+# ring3Return path it also restores RFLAGS from the frame, so user tasks start
+# with IF=1 and stay preemptible (retfq left ring 3 running with interrupts
+# off — whatever popf loaded stayed loaded, and we had cleared IF).
+# (I expected to not have to push SS:RSP for a same-priv-level return but I
+# have to anyways — long mode always pushes/pops all 5, so save/restore stays
+# symmetric.)
     mov rbx, [mp_isrSavedSS + rax * 8]
     push rbx
 	mov rbx, [mp_isrSavedRSP + rax * 8]
@@ -373,40 +379,6 @@ scheduler_continue_2:
 	mov byte ptr [mp_inScheduler + rax], 0
     mov rax, [mp_isrSavedRAX + rax * 8]
     iretq
-
-
-
-ring3Return:
-    # NOTE: EAX still holds apic_id
-    mov rbx, [mp_isrSavedRIP + rax * 8]
-    mov [rsp], rbx
-    mov rbx, [mp_isrSavedCS + rax * 8]
-    mov [rsp + 8], rbx
-    mov rbx, [mp_isrSavedRSP + rax * 8]
-    mov [rsp + 16], rbx
-    mov ebx, [mp_isrSavedSS + rax * 8]
-    mov [rsp + 24], rbx
-    mov bl,[mp_SchedulerTaskSwitched + rax]			# mp_SchedulerTaskSwitched is a byte array, 1 byte per core
-    cmp bl,0
-    jnz newTaskLoaded
-    jmp doTheJump
-
-newTaskLoaded:
-    # Stack is already where it was when we started the ISR
-    # reset the task switched indicator
-    mov ebx,0
-    mov [mp_SchedulerTaskSwitched + rax], bl
-
-doTheJump:
-    mov rbx, [mp_isrSavedRFlags + rax * 8]
-    and rbx, 0xFFFFFFFFFFFFFDFF                         # Clear the IF flag
-    push rbx
-    popf
-	mov rbx, [mp_isrSavedRBX + rax * 8]
-	mov byte ptr [mp_inScheduler + rax], 0
-    mov rax, [mp_isrSavedRAX + rax * 8]
-    call _write_eoi
-    retfq 0
 
 .section .data
 .align 8

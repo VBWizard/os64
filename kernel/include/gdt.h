@@ -5,10 +5,18 @@
 #include <stdbool.h>
 
 #define GDT_ENTRIES 128
+// Entry ORDER here is dictated by the SYSCALL/SYSRET hardware contract, not taste:
+//   SYSCALL loads CS = STAR[47:32] and SS = STAR[47:32] + 8
+//     -> kernel DATA must sit immediately after kernel CODE.
+//   SYSRETQ loads CS = STAR[63:48] + 16 and SS = STAR[63:48] + 8
+//     -> user CODE must sit immediately after user DATA (yes, the opposite
+//        order from the kernel pair — the +16 skips over a 32-bit user code
+//        slot that 64-bit-only os64 doesn't need, but the spacing is fixed).
+// smp_core.c builds STAR from these and static-asserts both orderings.
 #define GDT_KERNEL_CODE_ENTRY 5
 #define GDT_KERNEL_DATA_ENTRY 6
-#define GDT_USER_CODE_ENTRY   7
-#define GDT_USER_DATA_ENTRY   8
+#define GDT_USER_DATA_ENTRY   7
+#define GDT_USER_CODE_ENTRY   8
 #define GDT_FIRST_TSS_ENTRY   20
 #define TSS_SELECTOR (GDT_FIRST_TSS_ENTRY << 3)
 // Helper define for TSS

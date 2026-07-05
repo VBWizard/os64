@@ -15,7 +15,13 @@
 #define THREAD_USER_STACK_INITIAL_VIRT_ADDRESS THREAD_USER_STACK_VIRTUAL_START + THREAD_USER_STACK_SIZE - 8
 
 #define THREAD_KERNEL_STACK_VIRTUAL_START 0x20000
-#define THREAD_KERNEL_STACK_SIZE  0xFFFF	//64k kernel stack
+// MUST be a page multiple: the stack TOP (base + size) seeds RSP0/regs.RSP,
+// and an odd size makes every kernel RSP in the OS odd.  That interacts
+// fatally with the CPU's 16-byte RSP alignment on interrupt delivery — up to
+// 15 bytes of live stack silently vanish per preemption.  (This was 0xFFFF,
+// "64k" minus one byte; found during ring-3 bring-up as byte-SHIFTED values
+// popping off resumed stacks.)
+#define THREAD_KERNEL_STACK_SIZE  0x10000	//64k kernel stack
 #define THREAD_KERNEL_STACK_INITIAL_VIRT_ADDRESS THREAD_KERNEL_STACK_VIRTUAL_START + THREAD_KERNEL_STACK_SIZE - 8
 
 #define THREAD_VIRTUAL_STRUCT_ADDRESS 0xF0000000

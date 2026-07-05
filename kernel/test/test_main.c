@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "panic.h"
 
 #include "memory/kmalloc.h"
 #include "memory/memset.h"
@@ -869,6 +870,90 @@ static bool test_dynamic_linking(void)
     return true;
 }
 
+// ── ring-3 / syscall tests ───────────────────────────────────────────────────
+// These are the first tests to launch a task with isKernelTask=false — actual
+// CPL 3 execution, crossing back and forth through syscall_Enter/sysretq.
+// Everything before them ran ELF fixtures at ring 0.
+
+// Success sentinel syscall_smoke.c exits with after yield + write + explicit
+// exit all succeed.  Failures exit with 0xE51Cxxxx codes identifying the step.
+#define SYSCALL_SMOKE_RETVAL 0x0005E00DUL
+
+static bool test_ring3_syscall_smoke(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_syscall_smoke (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/syscall_smoke", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // Poll until the task exits or we time out (~1 second at 100 ticks/sec).
+    for (int i = 0; i < 100 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - task did not exit within 1 second "
+               "(likely died crossing ring 3 <-> ring 0; check STAR/GDT/sysret)\n");
+        return false;
+    }
+
+    if (task->retVal != SYSCALL_SMOKE_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - retVal=0x%lx, expected 0x%lx "
+               "(0xE51Cxxxx identifies the failed step)\n",
+               task->retVal, (uint64_t)SYSCALL_SMOKE_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_syscall_smoke (ring3 launch, yield, write, explicit exit)\n");
+    return true;
+}
+
+// exit_by_return.c just `return`s this from _start; it can only reach retVal
+// via the seeded user-stack return address -> ring-3 exit trampoline ->
+// SYSCALL_EXIT chain, so this asserts that whole path.
+#define EXIT_BY_RETURN_MAGIC 0x2E7BEA57UL
+
+static bool test_ring3_exit_by_return(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_exit_by_return (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/exit_by_return", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    for (int i = 0; i < 100 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - task did not exit within 1 second "
+               "(trampoline seed or mapping broken? see task_setup_ring3_exit_path)\n");
+        return false;
+    }
+
+    if (task->retVal != EXIT_BY_RETURN_MAGIC) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - retVal=0x%lx, expected 0x%lx\n",
+               task->retVal, (uint64_t)EXIT_BY_RETURN_MAGIC);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_exit_by_return (ret -> trampoline -> exit syscall)\n");
+    return true;
+}
+
 // ── env tests ────────────────────────────────────────────────────────────────
 
 static bool test_env_create_empty(void)
@@ -1087,6 +1172,8 @@ static void register_builtin_tests(void)
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
+    test_register("ring3_syscall_smoke", test_ring3_syscall_smoke, TEST_PHASE_POSTBOOT);
+    test_register("ring3_exit_by_return", test_ring3_exit_by_return, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)
@@ -1137,10 +1224,11 @@ static void test_run_phase(int phase, const char *label)
     printd(DEBUG_TESTS, "BUILT-IN TESTS: %u passed, %u failed\n", (unsigned int)passed, (unsigned int)failed);
 
     if (failed > 0) {
-        printd(DEBUG_TESTS, "Test framework detected failures. System halted.\n");
-        for (;;) {
-            __asm__ volatile ("cli; hlt");
-        }
+        // panic(), not a bare cli/hlt: panic force-drains the log buffer to
+        // serial before halting.  The old halt stranded this message — and any
+        // test results logd hadn't drained yet — in the ring buffer forever.
+        panic("Test framework: %u %s test(s) failed. System halted.\n",
+              (unsigned int)failed, label);
     }
 }
 

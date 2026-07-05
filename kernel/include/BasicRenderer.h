@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "limine.h"
 #include "video.h"
 
@@ -50,6 +51,7 @@ extern BasicRenderer kRenderer;
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font);
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y);
 void print(const char* str);
+void print_n(const char* str, size_t length);
 int printf(const char *fmt, ...);
 void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff);
 void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor);

@@ -3,10 +3,14 @@
 
 #include <stdint.h>
 
+#define EFER_MSR 0xC0000080
 #define STAR_MSR 0xC0000081
 #define LSTAR_MSR 0xC0000082
 #define CSTAR_MSR 0xC0000083
 #define SFMASK_MSR 0xC0000084
+
+// EFER bits os64 cares about
+#define EFER_SCE (1ULL << 0)   // SYSCALL/SYSRET enable — without it, `syscall` is #UD
 
 uint64_t rdmsr64(unsigned index);
 void wrmsr64(unsigned index, uint64_t val);

@@ -1,12 +1,15 @@
 #include "syscall.h"
+#include "syscall_numbers.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "BasicRenderer.h"
+#include "panic.h"
 #include "printd.h"
 #include "scheduler.h"
 #include "smp_core.h"
+#include "task.h"
 #include "memory/memcpy.h"
 #include "memory/paging.h"
 #include "log.h"
@@ -20,31 +23,42 @@ static bool g_saved_cr3_valid[MAX_CPUS];
 static inline uint32_t get_current_cpu_index(void);
 static bool prepare_syscall_args(const syscall_entry_t *entry, const uint64_t incoming[6], uint64_t prepared[6]);
 static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_len);
+static bool copy_user_buffer(const void *user_src, void *kernel_dst, size_t length);
 
 static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
+// NOTE: syscall.S marshals the syscall registers straight into
+// _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
+// shim here (the old register-pinned-locals version relied on behavior GCC
+// only guarantees for inline-asm operands).
+// Last column is user_ptr_arg_mask: bit i = "arg i is a user pointer, range-
+// check it at the boundary".  Non-pointer args (handles, lengths, exit codes)
+// and unused arg registers (ring-3 garbage!) must NOT be checked.
+//
+// needs_cr3_switch is FALSE for every current entry, on purpose.  Handlers run
+// on the calling task's CR3, which maps BOTH the user's buffers (lower half)
+// AND the whole kernel (upper half is shared into every task PML4) — there is
+// nothing a syscall needs that the user CR3 can't see.  Switching to
+// kKernelPML4 mid-syscall is actively fatal: the thread's syscall kernel stack
+// is a task-local VA that kKernelPML4 does NOT map, so the first C statement
+// after the switch touches an unmapped stack -> #PF -> the #PF handler pushes
+// onto the same unmapped stack -> double -> TRIPLE FAULT (write() proved this
+// the very first time the flag was ever exercised).  If a future syscall
+// genuinely needs kernel context, it must switch STACK and CR3 together — see
+// call_in_kernel_context in task_exit_asm.S for the proven pattern.
 syscall_entry_t syscall_table[MAX_SYSCALLS] = {
-	SYSCALL_DEFINE(0, "yield", syscall_yield, false, false),
-	SYSCALL_DEFINE(1, "debug_log", syscall_debug_log, true, true),
+	SYSCALL_DEFINE(SYSCALL_YIELD,     "yield",     syscall_yield,     false, 0x00),
+	SYSCALL_DEFINE(SYSCALL_DEBUG_LOG, "debug_log", syscall_debug_log, false, 0x01),  // arg0 = message
+	SYSCALL_DEFINE(SYSCALL_EXIT,      "exit",      syscall_exit,      false, 0x00),
+	SYSCALL_DEFINE(SYSCALL_WRITE,     "write",     syscall_write,     false, 0x02),  // arg1 = buffer
 };
-
-uint64_t _syscall(void)
-{
-	register uint64_t syscall_number __asm__("rax");
-	register uint64_t arg0 __asm__("rdi");
-	register uint64_t arg1 __asm__("rsi");
-	register uint64_t arg2 __asm__("rdx");
-	register uint64_t arg3 __asm__("r10");
-	register uint64_t arg4 __asm__("r8");
-	register uint64_t arg5 __asm__("r9");
-
-	return _syscall_dispatch(syscall_number,
-		arg0, arg1, arg2,
-		arg3, arg4, arg5);
-}
 
 uint64_t _syscall_dispatch(
 	uint64_t syscall_number,
@@ -54,6 +68,10 @@ uint64_t _syscall_dispatch(
 	const uint64_t raw_args[6] = { arg0, arg1, arg2, arg3, arg4, arg5 };
 	uint64_t prepared_args[6] = {0};
 	bool switched_cr3 = false;
+	uint64_t entry_cr3 = 0;
+
+	// Remember the address space we arrived on for the exit tripwire below.
+	asm volatile("mov %0, cr3" : "=r"(entry_cr3));
 
 	if (syscall_number >= MAX_SYSCALLS)
 	{
@@ -92,6 +110,19 @@ uint64_t _syscall_dispatch(
 	if (switched_cr3)
 	{
 		restore_user_cr3();
+	}
+
+	// Boundary tripwire (a keeper from the 32-bit OS): a syscall must leave on
+	// the same address space it arrived on.  Escaping to ring 3 with the kernel
+	// CR3 still loaded "works" (kernel maps are a superset) right up until it
+	// corrupts something unrelated, so catch it here where the cause is obvious.
+	// (Threads that legitimately ARRIVED on the kernel CR3 are exempt.)
+	uint64_t exit_cr3 = 0;
+	asm volatile("mov %0, cr3" : "=r"(exit_cr3));
+	if (exit_cr3 != entry_cr3)
+	{
+		panic("_syscall_dispatch: syscall %lu (%s) entered on CR3 %#lx but is leaving on %#lx\n",
+		      syscall_number, entry->name ? entry->name : "(unnamed)", entry_cr3, exit_cr3);
 	}
 
 	return result;
@@ -138,8 +169,10 @@ bool validate_and_copy_user_data(const void* user_ptr, size_t length, void* kern
 
 	uintptr_t user_address = (uintptr_t)user_ptr;
 
-	// Reject addresses that clearly point into kernel-mapped memory
-	if (user_address >= kHHDMOffset)
+	// Reject ranges that start in — or run into — kernel-mapped memory.  The
+	// subtraction form also catches user_address+length overflowing to wrap
+	// back below kHHDMOffset.
+	if (user_address >= kHHDMOffset || length > kHHDMOffset - user_address)
 	{
 		return false;
 	}
@@ -180,17 +213,22 @@ static inline uint32_t get_current_cpu_index(void)
 	return (uint32_t)apic_id;
 }
 
+// Boundary validation of user-pointer arguments, driven by the entry's
+// user_ptr_arg_mask.  Only args the table declares as pointers are checked —
+// see the mask's comment in syscall.h for why checking all six is a bug, not
+// extra safety.  NULL is allowed through here so handlers can give it a
+// per-call meaning (the copy helpers reject NULL where it matters).
 static bool prepare_syscall_args(const syscall_entry_t *entry, const uint64_t incoming[6], uint64_t prepared[6])
 {
 	memcpy(prepared, incoming, sizeof(uint64_t) * 6);
 
-	if (!entry->needs_user_copy)
-	{
-		return true;
-	}
-
 	for (size_t i = 0; i < 6; ++i)
 	{
+		if (!(entry->user_ptr_arg_mask & (1u << i)))
+		{
+			continue;
+		}
+
 		if (prepared[i] == 0)
 		{
 			continue;
@@ -205,6 +243,49 @@ static bool prepare_syscall_args(const syscall_entry_t *entry, const uint64_t in
 	return true;
 }
 
+// ── User-copy CR3 window ─────────────────────────────────────────────────────
+// The dispatcher may already have moved this core to the kernel CR3 (entries
+// with needs_cr3_switch), but user pointers only resolve under the USER CR3.
+// The copy helpers below therefore run inside a "window": open() drops back to
+// the user CR3 the dispatcher saved for this core (when there is one), and
+// close() restores whatever was loaded before.  Interrupts are masked for the
+// whole syscall (SFMASK clears IF), so the window can't be preempted while the
+// "wrong" CR3 is live.
+static uint64_t user_cr3_window_open(bool *switched)
+{
+        uint64_t original_cr3 = 0;
+        asm volatile("mov %0, cr3" : "=r"(original_cr3));
+
+        *switched = false;
+        if (original_cr3 == (uint64_t)kKernelPML4)
+        {
+                uint32_t cpu_index = get_current_cpu_index();
+                if (g_saved_cr3_valid[cpu_index])
+                {
+                        uint64_t user_cr3 = g_saved_cr3[cpu_index];
+                        if (user_cr3 && user_cr3 != (uint64_t)kKernelPML4)
+                        {
+                                asm volatile("mov cr3, %0" :: "r"(user_cr3) : "memory");
+                                *switched = true;
+                        }
+                }
+        }
+
+        return original_cr3;
+}
+
+static void user_cr3_window_close(uint64_t original_cr3, bool switched)
+{
+        if (switched)
+        {
+                asm volatile("mov cr3, %0" :: "r"(original_cr3) : "memory");
+        }
+}
+
+// Copy a NUL-terminated string from user space into a kernel buffer, walking
+// byte-by-byte so an unterminated user string can't run past buffer_len.
+// Returns false if the user range is invalid or no NUL appears within the
+// buffer (the buffer is still NUL-terminated for safe logging either way).
 static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_len)
 {
         if (!user_str || !buffer || buffer_len == 0)
@@ -212,25 +293,8 @@ static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_l
                 return false;
         }
 
-        uint64_t original_cr3 = 0;
-        asm volatile("mov %0, cr3" : "=r"(original_cr3));
-
-        const uint64_t kernel_cr3 = (uint64_t)kKernelPML4;
-        bool temporarily_switched_to_user_cr3 = false;
-
-        if (original_cr3 == kernel_cr3)
-        {
-                uint32_t cpu_index = get_current_cpu_index();
-                if (cpu_index < MAX_CPUS && g_saved_cr3_valid[cpu_index])
-                {
-                        uint64_t user_cr3 = g_saved_cr3[cpu_index];
-                        if (user_cr3 && user_cr3 != kernel_cr3)
-                        {
-                                asm volatile("mov cr3, %0" :: "r"(user_cr3) : "memory");
-                                temporarily_switched_to_user_cr3 = true;
-                        }
-                }
-        }
+        bool switched = false;
+        uint64_t original_cr3 = user_cr3_window_open(&switched);
 
         bool success = false;
         size_t written = 0;
@@ -253,11 +317,26 @@ static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_l
         buffer[buffer_len - 1] = '\0';
 
 out:
-        if (temporarily_switched_to_user_cr3)
+        user_cr3_window_close(original_cr3, switched);
+        return success;
+}
+
+// Copy exactly `length` bytes from user space into a kernel buffer.  The
+// length-based sibling of copy_user_string, for payloads that aren't strings
+// (write() buffers may legally contain NUL bytes).
+static bool copy_user_buffer(const void *user_src, void *kernel_dst, size_t length)
+{
+        if (!user_src || !kernel_dst || length == 0)
         {
-                asm volatile("mov cr3, %0" :: "r"(original_cr3) : "memory");
+                return false;
         }
 
+        bool switched = false;
+        uint64_t original_cr3 = user_cr3_window_open(&switched);
+
+        bool success = validate_and_copy_user_data(user_src, length, kernel_dst);
+
+        user_cr3_window_close(original_cr3, switched);
         return success;
 }
 
@@ -271,7 +350,13 @@ static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	(void)arg4;
 	(void)arg5;
 
-	scheduler_yield(NULL);
+	// scheduler_trigger: genuine APIC self-IPI into the scheduler, same entry
+	// semantics as the timer path (in-service bit, EOI discipline).  Returns
+	// as soon as the scheduler decides — immediately if nothing else is
+	// runnable, after a context-switch round trip if something was.
+	// (Replaced scheduler_yield, whose direct software `int` bypassed APIC
+	// nesting protection and whose empty-queue path slept a full tick.)
+	scheduler_trigger(NULL);
 	return 0;
 }
 
@@ -294,4 +379,83 @@ static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	printf("[user] %s\n", kernel_buffer);
 	return 0;
+}
+
+// exit(code) — terminate the calling task.  arg0 becomes the task's retVal
+// (harvested by task_wait / the test harness).  Everything after the retVal
+// store is task_exit()'s problem: it switches to the per-core kernel interrupt
+// stack and kKernelPML4 itself, marks task+thread exited, and yields away for
+// good — which is why this entry runs with needs_cr3_switch=false (the
+// dispatcher's save/restore bookkeeping would never get to run anyway).
+static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1;
+	(void)arg2;
+	(void)arg3;
+	(void)arg4;
+	(void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task)
+	{
+		task->retVal = arg0;
+	}
+
+	task_exit();
+	__builtin_unreachable();
+}
+
+// write(handle, buffer, length) — write bytes to an output handle.
+// Until a per-task handle table exists, only the two console handles are
+// valid, and both reach the screen.  Runs entirely on the calling task's CR3
+// (user buffer in the lower half, console/renderer in the shared upper half —
+// see the table comment).  The user buffer is ferried through a bounded
+// kernel chunk so arbitrary user lengths never map to unbounded kernel stack
+// use.  Returns the byte count written, or a SYSCALL_RESULT_* error sentinel.
+#define WRITE_CHUNK_SIZE 512
+static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3;
+	(void)arg4;
+	(void)arg5;
+
+	uint64_t handle = arg0;
+	const char *user_buffer = (const char*)arg1;
+	size_t length = (size_t)arg2;
+
+	if (handle != SYSCALL_HANDLE_CONSOLE_OUT && handle != SYSCALL_HANDLE_CONSOLE_ERR)
+	{
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	if (length == 0)
+	{
+		return 0;
+	}
+
+	char chunk[WRITE_CHUNK_SIZE];
+	size_t copied = 0;
+	while (copied < length)
+	{
+		size_t this_chunk = length - copied;
+		if (this_chunk > sizeof(chunk))
+		{
+			this_chunk = sizeof(chunk);
+		}
+
+		if (!copy_user_buffer(user_buffer + copied, chunk, this_chunk))
+		{
+			// Report progress if some bytes already made it to the console;
+			// only fail outright when nothing was written.
+			return copied ? copied : SYSCALL_RESULT_BAD_USER_DATA;
+		}
+
+		print_n(chunk, this_chunk);
+		copied += this_chunk;
+	}
+
+	return copied;
 }

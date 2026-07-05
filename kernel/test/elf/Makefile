@@ -1,6 +1,8 @@
 OUTPUT ?= ../../bin/test_elf
 DYN_OUTPUT ?= ../../bin/dyn_consumer
 ARG_OUTPUT ?= ../../bin/arg_echo
+SMOKE_OUTPUT ?= ../../bin/syscall_smoke
+RETEXIT_OUTPUT ?= ../../bin/exit_by_return
 LIBTEST ?= ../../bin/libtest.so
 
 CC ?= x86_64-elf-gcc
@@ -18,7 +20,9 @@ LDFLAGS ?= -static -nostdlib -T linker.ld -z max-page-size=0x1000
 # locals by pushing its exception frame right on top of them.
 # -masm=intel: all asm in this project — kernel and fixtures alike — is
 # Intel syntax (see outb in dyn_consumer.c).
-DYN_CFLAGS ?= -g -m64 -ffreestanding -fpie -mno-red-zone -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra
+# -mno-mmx/-mno-sse/-mno-sse2: SIMD is #UD until CR4.OSFXSR + FPU context
+# switching exist (see ARG_CFLAGS note).
+DYN_CFLAGS ?= -g -m64 -ffreestanding -fpie -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra
 # --hash-style=sysv pins the DT_HASH table the kernel's loader derives the
 # dynamic symbol count from (nchain). Bare-metal binutils defaults to sysv
 # today, but hosted targets default to gnu-only — pinning it costs nothing
@@ -31,12 +35,14 @@ DYN_LDFLAGS ?= -pie -z now -e _start --no-allow-shlib-undefined --hash-style=sys
 # hardening as dyn_consumer (-mno-red-zone etc.) because it runs with interrupts
 # enabled and can be preempted mid-function, and -masm=intel to match the
 # project-wide asm syntax convention.
-ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra
+# -mno-mmx/-mno-sse/-mno-sse2: CR4.OSFXSR is off, so SIMD is #UD even at
+# ring 3 — same rule as the kernel until the FPU-state slice enables it.
+ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra
 
 OBJS := serial_ping.o
 
 .PHONY: all
-all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT)
+all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT)
 
 $(OUTPUT): $(OBJS)
 	@mkdir -p "$$(dirname $@)"
@@ -52,6 +58,23 @@ $(ARG_OUTPUT): arg_echo.o
 arg_echo.o: arg_echo.c
 	$(CC) $(ARG_CFLAGS) -c $< -o $@
 
+# The ring-3 syscall fixtures are static freestanding C like arg_echo, so they
+# share ARG_CFLAGS (-mno-red-zone matters even more here: these actually run
+# at CPL 3 with interrupts enabled and WILL be preempted).
+$(SMOKE_OUTPUT): syscall_smoke.o
+	@mkdir -p "$$(dirname $@)"
+	$(LD) $(LDFLAGS) -o $@ syscall_smoke.o
+
+syscall_smoke.o: syscall_smoke.c
+	$(CC) $(ARG_CFLAGS) -c $< -o $@
+
+$(RETEXIT_OUTPUT): exit_by_return.o
+	@mkdir -p "$$(dirname $@)"
+	$(LD) $(LDFLAGS) -o $@ exit_by_return.o
+
+exit_by_return.o: exit_by_return.c
+	$(CC) $(ARG_CFLAGS) -c $< -o $@
+
 $(DYN_OUTPUT): dyn_consumer.o $(LIBTEST)
 	@mkdir -p "$$(dirname $@)"
 	$(LD) $(DYN_LDFLAGS) -o $@ dyn_consumer.o $(LIBTEST)
@@ -61,4 +84,4 @@ dyn_consumer.o: dyn_consumer.c
 
 .PHONY: clean
 clean:
-	rm -f $(OBJS) $(OUTPUT) dyn_consumer.o $(DYN_OUTPUT) arg_echo.o $(ARG_OUTPUT)
+	rm -f $(OBJS) $(OUTPUT) dyn_consumer.o $(DYN_OUTPUT) arg_echo.o $(ARG_OUTPUT) syscall_smoke.o $(SMOKE_OUTPUT) exit_by_return.o $(RETEXIT_OUTPUT)

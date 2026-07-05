@@ -10,7 +10,9 @@ LD ?= x86_64-elf-ld
 # its frame starting AT the current RSP — directly into those red-zone
 # locals — silently corrupting them. Matches the kernel's own CFLAGS for
 # exactly this reason.
-CFLAGS ?= -g -m64 -ffreestanding -fPIC -mno-red-zone -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -Wall -Wextra
+# -mno-mmx/-mno-sse/-mno-sse2: SIMD is #UD until CR4.OSFXSR + FPU context
+# switching exist (see test/elf/Makefile's ARG_CFLAGS note).
+CFLAGS ?= -g -m64 -ffreestanding -fPIC -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -Wall -Wextra
 # NOTE: -shared is NOT passed to $(CC) here — this cross toolchain's specs
 # were built without shared-library support and silently drop it before the
 # link step ever happens (confirmed via `gcc -### -shared ...`). Compiling

@@ -14,7 +14,21 @@ void set_gdt_entry_additional_for_system_descriptors(gdt_entry_additional_t* add
     additional_entry->reserved = 0;                      // Reserved, must be 0
 }
 
-void set_gdt_entry(gdt_entry_t* gdt_table, int entryNo, uint64_t base, uint32_t limit, uint8_t access, uint8_t flags, uint8_t isSystem) 
+// sFlag is the x86 descriptor S flag, exactly as the GDT_S_* defines read:
+//   GDT_S_SYSTEM_SEGMENT (0)    — system descriptor (TSS/LDT).  These are
+//                                 16 bytes in long mode, so the upper half of
+//                                 the base is written into gdt_table[entryNo+1]
+//                                 which MUST be reserved for that purpose.
+//   GDT_S_CODE_DATA_SEGMENT (1) — ordinary 8-byte code/data descriptor; the
+//                                 S bit is OR'd into access and entryNo+1 is
+//                                 NOT touched.
+// History note: this used to treat the flag as "isSystem" (inverted!), so
+// every code/data entry silently ZEROED its successor entry.  That stayed
+// latent while init_GDT wrote entries in ascending order (each casualty was
+// rewritten by the next call) and only bit when the user code/data GDT order
+// was swapped for SYSRET — the last write wiped the user code descriptor and
+// every ring-3 iretq died with #GP(selector).
+void set_gdt_entry(gdt_entry_t* gdt_table, int entryNo, uint64_t base, uint32_t limit, uint8_t access, uint8_t flags, uint8_t sFlag)
 {
     // Set the first 8-byte entry
     gdt_table[entryNo].base_low = base & 0xFFFF;			//32 bits
@@ -25,7 +39,7 @@ void set_gdt_entry(gdt_entry_t* gdt_table, int entryNo, uint64_t base, uint32_t 
     gdt_table[entryNo].access = access;
 
     // Handle system descriptor setup
-    if (isSystem)
+    if (sFlag == GDT_S_SYSTEM_SEGMENT)
         set_gdt_entry_additional_for_system_descriptors((gdt_entry_additional_t*)&gdt_table[entryNo + 1], base);
 	else
         gdt_table[entryNo].access |= 0x10;

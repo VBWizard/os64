@@ -1,4 +1,5 @@
 #include "asm-offsets.h"
+#include "syscall_numbers.h"
 
 .code64
 .intel_syntax noprefix
@@ -69,3 +70,31 @@ call_in_kernel_context:
     pop  r13
     pop  r12
     ret
+
+// ── Ring-3 exit trampoline TEMPLATE ──────────────────────────────────────────
+//
+// These bytes are never executed here in the kernel image.  task_create()
+// copies them into a user-mapped, read-only+executable page at
+// TASK_EXIT_TRAMPOLINE_VIRT, and seeds that address as the initial return
+// address on every ring-3 thread's user stack.  A user _start that plainly
+// `ret`s therefore lands HERE at CPL 3 (an ordinary ring3→ring3 return — the
+// ring-0 task_exit_with_retval seeding trick can't work for user threads
+// because returning from CPL 3 into kernel text faults), and we convert the
+// C return value into a proper exit syscall:
+//   RAX (SysV return value) → RDI (exit code arg) → SYSCALL_EXIT.
+//
+// Must stay position-independent: RIP-relative jump only, no absolute
+// references (the copy runs at a completely different VA than it was
+// assembled at).  Kept in .rodata — it is DATA to the kernel, and mapping the
+// user page without PAGE_WRITE means the program can't scribble on its own
+// exit path.
+.section .rodata
+.globl user_exit_trampoline_template
+.globl user_exit_trampoline_template_end
+user_exit_trampoline_template:
+    mov  rdi, rax                   // exit code = _start's return value
+    mov  eax, SYSCALL_EXIT
+    syscall
+1:  jmp  1b                         // exit never returns; spin if it somehow does
+user_exit_trampoline_template_end:
+.section .text

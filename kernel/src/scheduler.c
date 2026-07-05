@@ -64,11 +64,12 @@ extern bool kSMPInitDone;
 
 const char* THREAD_STATE_NAMES[] = {"None","Running","Runnable","Stopped","Uninterruptable Sleep","Interruptable Sleep","Exited","Zombie"};
 
-// Trap into the scheduler ISR directly so voluntary yields don't depend on a LAPIC IPI.
-static inline void scheduler_invoke_vector(void)
-{
-	asm volatile("int %0" :: "i"(IPI_MANUAL_SCHEDULE_VECTOR) : "memory");
-}
+// NOTE: there was a scheduler_invoke_vector() here that entered the scheduler
+// with a direct software `int`.  Removed with scheduler_yield(): a software
+// int never sets the APIC in-service bit, so such entries dodge the
+// EOI-based nesting protection that every hardware/IPI entry gets.  All
+// scheduler entries now go through a real LAPIC interrupt (timer or
+// send_ipi in scheduler_trigger).
 
 static bool scheduler_thread_can_run_on_core(thread_t *thread, core_local_storage_t *cls)
 {
@@ -698,22 +699,14 @@ void scheduler_trigger(core_local_storage_t *cls)
     cls = get_core_local_storage();
 }
 
-/// @brief Yield control of the CPU
-/// @param cls Optional - can be NULL if not valid in the calling context
-/// @details Yields control of the CPU if there is another thread that is ready to run.  If not, does a sti\nhlt\n to wait for the next timer tick (BSP) or scheduling IPI
-void scheduler_yield(core_local_storage_t *cls)
-{
-	 if (!cls)
-	 	cls = get_core_local_storage();
-
-	thread_t* thread=scheduler_find_thread_to_run(cls, true);
-
-	//If another thread is ready to run then trigger the scheduler, otherwise just hlt until the next scheduling IPI
-	if (thread != NO_THREAD && thread->threadID != cls->threadID)
-		scheduler_invoke_vector();
-	else
-		__asm__("sti\nhlt\n");
-}
+// scheduler_yield() used to live here.  It was retired in favor of
+// scheduler_trigger() (above) once syscalls started yielding: it entered the
+// scheduler via a direct software `int`, which never sets the APIC in-service
+// bit — so unlike every hardware entry it had NO nesting protection (a
+// pending timer could re-enter _schedule_ap mid-prologue), and its
+// peek-the-queue-then-fire logic raced the world changing in between.
+// scheduler_trigger's genuine self-IPI gives every scheduler entry — timer or
+// manual — identical interrupt semantics.
 
 void scheduler_run_new_thread()
 {

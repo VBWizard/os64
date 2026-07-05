@@ -17,6 +17,10 @@
 //Virtual address of the environment pointers
 #define TASK_ENVP_VIRT 0x6f010000
 #define TASK_ENV_VIRT 0x6f006000
+//Virtual address of the ring-3 exit trampoline page (read-only+exec, user).
+//Seeded as _start's return address so a plain `ret` becomes an exit syscall.
+//See task_setup_ring3_exit_path() and the template in task_exit_asm.S.
+#define TASK_EXIT_TRAMPOLINE_VIRT 0x6f020000
 // Task-specific memory allocation base addresses (lower half)
 #define USER_TASK_MEMORY_BASE   0x10000000  // 256MB - for user task allocations
 #define KERNEL_TASK_MEMORY_BASE 0x40000000  // 1GB - for kernel task allocations
@@ -78,6 +82,11 @@
         bool kernelTask;
         struct tm startTime, endTime;
         uint64_t entryPoint;
+        // ELF load bias: 0 for static (ET_EXEC) programs, the randomized/fixed
+        // relocation offset for PIE (ET_DYN) ones.  Consumed by the GDB
+        // symbol-autoload hook (debug_task_loaded) so .gdbinit can offset the
+        // program's debug info to where the image actually landed.
+        uint64_t loadBias;
         int argc;
         char** argv;
         struct rusage usage;

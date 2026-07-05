@@ -31,7 +31,12 @@ $(call USER_VARIABLE,AR,x86_64-elf-ar)
 $(call USER_VARIABLE,LD,x86_64-elf-ld)
 
 # User controllable C flags.
-$(call USER_VARIABLE,CFLAGS,-mno-red-zone -g -O0 -I include -pipe)
+# -mno-mmx/-mno-sse/-mno-sse2: the kernel must not emit SIMD — the scheduler
+# does not save/restore FPU/XMM state on context switch, and CR4.OSFXSR is
+# off anyway (any SSE instruction is #UD; the syscall dispatcher's array
+# zeroing found this the hard way).  Revisit when an FPU-state slice adds
+# fxsave/xsave switching for userland.
+$(call USER_VARIABLE,CFLAGS,-mno-red-zone -mno-mmx -mno-sse -mno-sse2 -g -O0 -I include -pipe)
 
 # User controllable C preprocessor flags. We set none by default.
 $(call USER_VARIABLE,CPPFLAGS,)
@@ -110,7 +115,7 @@ override SRC_CFILES := $(filter-out src/asm-offsets.c,$(shell find src -type f -
 # by their own sub-Makefiles via the test-elf/test-shlib targets below, with
 # their own -fpie/-fPIC flags) — they are not kernel test code and must not
 # be compiled into the kernel binary, unlike test_main.c/test_vma_*.c.
-override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/elf/arg_echo.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
+override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/elf/arg_echo.c test/elf/syscall_smoke.c test/elf/exit_by_return.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
 override CFILES := $(SRC_CFILES) $(TEST_CFILES)
 override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)

@@ -13,11 +13,12 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 
 # Define the base QEMU flags
 # -smp 2 
-QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 2\
+QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 2 \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
-				  -D qemu_debug.log 
-				  
+				  -d $(shell echo int,cpu_reset,pcall,guest_errors)
+#				  -D qemu_debug.log 
+
 # Disk image configuration
 DISK_IMAGE ?= $(CURDIR)/disk/os64.img
 DISK_OFFSET ?= 1048576
@@ -130,6 +131,8 @@ disk-populate: disk-init kernel
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/test_elf ::/bin/test_elf
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/arg_echo ::/bin/arg_echo
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/dyn_consumer ::/bin/dyn_consumer
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/syscall_smoke ::/bin/syscall_smoke
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/exit_by_return ::/bin/exit_by_return
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 

@@ -260,7 +260,11 @@ static void __attribute__((noinline)) task_exit_finish(void)
 		task_enqueue_dead_child(task);
 	}
 
-	scheduler_yield(cls);
+	// Enter the scheduler via its normal APIC-IPI path; it sees the exited
+	// flags set above and moves this thread to the zombie queue.  A dead
+	// thread is never rescheduled, so trigger's wait-loop (and the belt-and-
+	// suspenders hlt loop below) should never actually run to completion.
+	scheduler_trigger(cls);
 
 	while (1==1)
 	{
@@ -327,7 +331,7 @@ task_t* task_wait(task_t* parentTask, uint64_t* exitCode)
 
 		parent->waitingForChild = true;
 		scheduler_change_thread_queue(parent->threads, THREAD_STATE_ISLEEP);
-		scheduler_yield(cls);
+		scheduler_trigger(cls);
 		parent->waitingForChild = false;
 	}
 }
@@ -507,9 +511,78 @@ static void elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 	task->elf = main_so->image;
 	// ET_DYN: e_entry is load_bias-relative, same as every other address in
 	// the image (unlike ET_EXEC, where it would already be absolute).
+	task->loadBias = main_so->load_bias;
 	task->entryPoint = main_so->load_bias + main_so->image->ehdr.e_entry;
 	if (task->threads != NULL) {
 		task->threads->regs.RIP = task->entryPoint;
+	}
+}
+
+// GDB symbol-autoload notch.  utility/os64_symbols.gdb plants a SILENT
+// breakpoint on debug_task_loaded(), reads the two globals below, runs
+// add-symbol-file for kernel/bin/<basename> at the right offset, and resumes
+// without stopping — so every program's debug info appears in GDB the moment
+// the kernel loads it, with all binaries free to share the same link address.
+// Replaces both manual add-symbol-file and the old-OS trick of giving every
+// executable a unique link address.
+//
+// The info travels through GLOBALS (kernel .bss — mapped identically in every
+// address space, trivially readable by the gdbstub) rather than function
+// arguments: the first version passed the kmalloc'd path pointer as an arg
+// and GDB's frame-argument read failed with "Cannot access memory" — frame
+// timing, CR3, and heap-mapping subtleties all conspire against argument
+// parsing, and none of them apply to a fixed-address kernel array.
+// noinline + the asm sliver keep any -O level from eliding the call or the
+// symbol.  Runs (and costs a string copy) whether or not a debugger is
+// attached.
+char kDebugTaskLoadedPath[TASK_MAX_PATH_LEN];
+uint64_t kDebugTaskLoadedBias;
+void __attribute__((noinline)) debug_task_loaded(void)
+{
+	__asm__ volatile("" :: "r"(kDebugTaskLoadedPath), "r"(&kDebugTaskLoadedBias) : "memory");
+}
+
+// Wire up the ring-3 EXIT path for a user task.  Counterpart of the ring0
+// branch in createThread() (which seeds task_exit_with_retval directly —
+// impossible for ring 3, where returning into kernel text faults).
+//
+// Two steps, both prescribed by the 32-bit OS's proven design (processExit):
+//   1. Copy the position-independent trampoline template (task_exit_asm.S)
+//      into a fresh page and map it into the task at TASK_EXIT_TRAMPOLINE_VIRT,
+//      user-visible but READ-ONLY (PAGE_USER without PAGE_WRITE, executable) —
+//      the program can run its exit path but not scribble on it.
+//   2. Seed the trampoline's VA as the initial return address at [regs.RSP]
+//      (createThread left that qword slot for us).  A _start that plainly
+//      `ret`s pops it and lands in the trampoline at CPL 3, which converts
+//      RAX into an exit syscall — same retVal contract as ring0 tasks.
+//
+// The seed is written through the HHDM alias of the stack's physical page
+// (same idiom as the ring0 seeding in createThread) because the user stack VA
+// is only mapped in the task's own PML4, not the kernel's.
+extern const char user_exit_trampoline_template[];
+extern const char user_exit_trampoline_template_end[];
+static void task_setup_ring3_exit_path(task_t *task)
+{
+	if (task->threads == NULL)
+		return;
+
+	size_t template_bytes = (size_t)(user_exit_trampoline_template_end - user_exit_trampoline_template);
+
+	// kmalloc_aligned hands back a zeroed, page-aligned HHDM address; the byte
+	// copy is tiny (a handful of instructions) so one page is plenty.
+	void *trampoline_page = kmalloc_aligned(PAGE_SIZE);
+	memcpy(trampoline_page, user_exit_trampoline_template, template_bytes);
+
+	uintptr_t trampoline_phys = (uintptr_t)trampoline_page - kHHDMOffset;
+	paging_map_pages(task->pml4v, TASK_EXIT_TRAMPOLINE_VIRT, trampoline_phys, 1,
+	                 PAGE_PRESENT | PAGE_USER);
+
+	uintptr_t phys_rsp = paging_walk_paging_table((pt_entry_t*)task->pml4v, task->threads->regs.RSP);
+	if (phys_rsp && phys_rsp != 0xbadbadba) {
+		*(uintptr_t *)(phys_rsp | kHHDMOffset) = (uintptr_t)TASK_EXIT_TRAMPOLINE_VIRT;
+	} else {
+		panic("task_setup_ring3_exit_path: user stack VA 0x%016lx not mapped in task PML4 for %s\n",
+		      task->threads->regs.RSP, task->exename);
 	}
 }
 
@@ -689,6 +762,21 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// Must run AFTER the argument/env setup above.
 	if (loadedElfProgram) {
 		task_setup_entry(newTask);
+
+		// Ring-3 tasks also get their exit path wired here (ring-0 ELF tasks
+		// were already seeded with task_exit_with_retval in createThread —
+		// mapping the trampoline for them would overwrite that seed).
+		if (!isKernelTask) {
+			task_setup_ring3_exit_path(newTask);
+		}
+
+		// Tell an attached GDB (if any) which program image just landed and
+		// where, so it can auto-load the matching symbol file.  Stage the
+		// info in the debug globals first — see debug_task_loaded's comment.
+		strncpy(kDebugTaskLoadedPath, newTask->path, TASK_MAX_PATH_LEN);
+		kDebugTaskLoadedPath[TASK_MAX_PATH_LEN - 1] = '\0';
+		kDebugTaskLoadedBias = newTask->loadBias;
+		debug_task_loaded();
 	}
 
 	return newTask;

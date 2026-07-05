@@ -146,7 +146,16 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
     physical_address &= PAGE_ADDRESS_MASK;
     virtual_address &= PAGE_ADDRESS_MASK;
 
-	uint8_t tableRequiredFlags = (flags & PAGE_WRITE)?PAGE_WRITE:0;
+	// Flags that must be present at EVERY level of the walk, not just the PTE:
+	// on x86-64 an access is only permitted if the needed right exists in the
+	// PML4E, PDPTE, and PDE as well as the leaf.  WRITE was always propagated;
+	// PAGE_USER must be too — a ring-3 access to a page whose leaf says USER
+	// but whose PDE doesn't still faults (#PF error 0x15 on a fetch: present +
+	// user + instruction).  This bit never mattered before the first true
+	// ring-3 task: supervisor accesses ignore U/S, so ring-0 ELF tasks ran
+	// happily on USER-less intermediate tables.  Permissions still ENFORCE at
+	// the leaf — a USER intermediate over a supervisor-only PTE grants nothing.
+	uint8_t tableRequiredFlags = (flags & (PAGE_WRITE | PAGE_USER));
 
 	if ((uintptr_t)pml4v < kHHDMOffset)
 		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);

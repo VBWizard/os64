@@ -21,7 +21,10 @@ static void tss_install_descriptor(uint32_t cpu_index, tss_t *tss)
     uint64_t base = (uint64_t)tss;
     uint32_t limit = sizeof(tss_t) - 1;
     int descriptor = tss_descriptor_index(cpu_index);
-    set_gdt_entry(kGDT, descriptor, base, limit, GDT_ACCESS_TSS, 0x00, 1);
+    // GDT_S_SYSTEM_SEGMENT: a 64-bit TSS descriptor is 16 bytes — the upper
+    // half of the base lands in GDT entry descriptor+1 (reserved for it by
+    // tss_descriptor_index's 2-entry stride).
+    set_gdt_entry(kGDT, descriptor, base, limit, GDT_ACCESS_TSS, 0x00, GDT_S_SYSTEM_SEGMENT);
     kTSSSelector[cpu_index] = (uint16_t)(descriptor << 3);
 }
 

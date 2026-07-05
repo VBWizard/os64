@@ -3,6 +3,7 @@
 #include "panic.h"
 #include "BasicRenderer.h"
 #include "serial_logging.h"
+#include "sprintf.h"
 #include "smp_core.h"
 #include "task.h"
 #include "CONFIG.h"
@@ -97,28 +98,45 @@ void dump_stack_trace(uint64_t rip)
 	}
 }
 
+// Emit a line to BOTH the screen and the serial port.  Exceptions must be
+// diagnosable from either — a #GP that only ever appears on the framebuffer
+// is invisible to headless/CI runs.  Serial output goes DIRECTLY through
+// serial_print_string, bypassing the printd ring buffer entirely: this core
+// is about to cli/hlt, so anything left in the buffer depends on another
+// core's logd/kworker still being alive to drain it (and logd_thread(false)
+// is only a try-lock — it can silently drain nothing).  A panic path must
+// not have dependencies.
+#define EXCEPTION_PRINT(fmt, ...) do { \
+        printf(fmt, ##__VA_ARGS__); \
+        char _exc_line[512]; \
+        snprintf(_exc_line, sizeof(_exc_line), fmt, ##__VA_ARGS__); \
+        serial_print_string(_exc_line); \
+    } while (0)
+
 void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     core_local_storage_t* core = get_core_local_storage();
 
-    printf("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);  // 🛠 FIXED: Actually print the message!
-    printf(">>> AP %lu (Thread 0x%08x) <<<                        \n", core->apic_id, core->threadID);
-    printf(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
-    
+    EXCEPTION_PRINT("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);
+    EXCEPTION_PRINT(">>> AP %lu (Thread 0x%08x) <<<                        \n", core->apic_id, core->threadID);
+    EXCEPTION_PRINT(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
+
     if (error_code != 0xFFFFFFFFFFFFFFFF) {
-        printf(">>> Error Code: 0x%lx <<<                          \n", error_code);
+        EXCEPTION_PRINT(">>> Error Code: 0x%lx <<<                          \n", error_code);
     }
     if (core->currentThread) {
 		task_t *task = (task_t*)core->currentThread->ownerTask;
 
-        printf(">>> Excepting Task: %s <<<                         \n", task->path);
+        EXCEPTION_PRINT(">>> Excepting Task: %s <<<                         \n", task->path);
     } else {
-        printf(">>> No current task (core likely idle) <<<         \n");
+        EXCEPTION_PRINT(">>> No current task (core likely idle) <<<         \n");
     }
 
-	// **Log it only if logging is initialized**
+	// Best-effort drain of the printd ring buffer too, so the log context
+	// LEADING UP to the exception makes it out with us.  Try-lock inside —
+	// if another core holds the drain lock this does nothing, which is why
+	// the exception report itself went directly to serial above.
 	if (kLoggingInitialized) {
-		printd(DEBUG_EXCEPTIONS, "EXCEPTION: %s (AP %lu, Thread %lu, RIP: 0x%016lx, Error Code: 0x%lx)\n",
-				message, core->apic_id, core->threadID, rip, error_code);
+		logd_thread(false);
 	}
 
 	while (1) { __asm__ volatile ("cli\nhlt\n"); }
@@ -255,10 +273,18 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     {
         // Page is present but the access was denied and this VMA is not CoW.
         // This is a genuine protection violation, not a recoverable fault.
+        // Decode the error bits into the panic message rather than assuming
+        // write-to-read-only: a USER instruction fetch through intermediate
+        // tables lacking PAGE_USER lands here too (that exact fault, error
+        // 0x15, is how ring-3 bring-up found the paging_map_page U/S bug),
+        // and a wrong message sends the reader hunting in the wrong place.
         printd(DEBUG_EXCEPTIONS, "Protection violation at RIP=0x%016lx, CR2=0x%016lx\n", rip, cr2);
         log_page_fault_bits(error_code);
         dump_stack_trace(rip);
-        panic("Paging exception: protection violation (write to read-only non-CoW page)");
+        panic("Paging exception: protection violation (%s access, %s mode, error=0x%lx) on a present non-CoW page",
+              (error_code & 0x10) ? "instruction-fetch" : ((error_code & 0x2) ? "write" : "read"),
+              (error_code & 0x4) ? "user" : "supervisor",
+              error_code);
     }
 
     // Demand page fault: page is not present yet.

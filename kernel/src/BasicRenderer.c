@@ -1,5 +1,6 @@
 #include "BasicRenderer.h"
 #include "sprintf.h"
+#include "strings/strlen.h"
 #include "memset.h"
 #include "video.h"
 #include "memcpy.h"
@@ -151,10 +152,13 @@ int printf(const char *fmt, ...)
 	return printed;
 }
 
-void print(const char* str) {
+// Length-bounded console output — the worker behind print().  Exists so the
+// write() syscall can push exact byte counts (which may legally contain NUL
+// bytes) through the same cursor/wrap/scroll logic instead of duplicating it.
+void print_n(const char* str, size_t length) {
     const char *chr = str;
     BasicRenderer *basicrenderer = &kRenderer;
-    while (*chr != 0) {
+    for (size_t i = 0; i < length; i++, chr++) {
         switch (*chr) {
             case '\n':
                 basicrenderer->cursor_position.x = 0;
@@ -180,9 +184,11 @@ void print(const char* str) {
             scroll_framebuffer_full(basicrenderer);
             basicrenderer->cursor_position.y = basicrenderer->framebuffer->height - 16;
         }
-
-        chr++;
     }
+}
+
+void print(const char* str) {
+    print_n(str, strlen(str));
 }
 
 void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff)

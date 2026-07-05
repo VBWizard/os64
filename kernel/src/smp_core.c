@@ -303,13 +303,35 @@ void ap_initialization_handler() {
 
     // NOTE: Stack was already initialized in ap_wakeup_entry
 
-	//STAR MSR
-	//Format: 63..48 | 47..32 | 31..16 | 15..0
-	//--------|--------|--------|-------
-	//Reserved| Kernel CS Segment Selector | User CS Segment Selector | Reserved (zeros)
-	uint64_t starValue = ((uint64_t)GDT_KERNEL_CODE_ENTRY << 3) << 32 | ((GDT_USER_CODE_ENTRY << 3) | 3) << 16;
+	//STAR MSR — segment selectors for the SYSCALL/SYSRET fast path.
+	//Format: 63..48                 | 47..32                  | 31..0
+	//--------|------------------------|-------------------------|------
+	//        | SYSRET base selector   | SYSCALL base selector   | legacy 32-bit SYSCALL EIP (unused in long mode)
+	//
+	//SYSCALL loads CS = STAR[47:32] and SS = STAR[47:32]+8, so the base is simply
+	//the kernel code selector (kernel data sits right after it in the GDT).
+	//
+	//SYSRETQ loads CS = STAR[63:48]+16 and SS = STAR[63:48]+8, so the base must be
+	//8 BELOW the user data selector, with user code 8 above user data (the GDT is
+	//laid out to satisfy this — see gdt.h).  RPL 3 is baked into the base so the
+	//loaded selectors carry ring 3.  Both layout preconditions are asserted below
+	//so a GDT reshuffle fails the build instead of #GP'ing on the first sysret.
+	_Static_assert(GDT_KERNEL_DATA_ENTRY == GDT_KERNEL_CODE_ENTRY + 1,
+	               "SYSCALL requires kernel data GDT entry immediately after kernel code");
+	_Static_assert(GDT_USER_CODE_ENTRY == GDT_USER_DATA_ENTRY + 1,
+	               "SYSRETQ requires user code GDT entry immediately after user data");
 
-    wrmsr64(STAR_MSR,starValue);                      //Set sysenter CS(88) and SS(33), and return CS(93) & SS(3b)
+	uint64_t syscallBase = (uint64_t)GDT_KERNEL_CODE_ENTRY << 3;
+	uint64_t sysretBase  = ((uint64_t)(GDT_USER_DATA_ENTRY - 1) << 3) | 3;
+	uint64_t starValue   = (sysretBase << 48) | (syscallBase << 32);
+
+    wrmsr64(STAR_MSR,starValue);   //SYSCALL: CS=0x28/SS=0x30; SYSRETQ: CS=0x43/SS=0x3B (RPL 3)
+
+	//EFER.SCE — actually ENABLE the SYSCALL/SYSRET instructions.  The boot
+	//environment leaves EFER with LME/LMA/NXE only; without SCE, `syscall`
+	//raises #UD no matter how carefully STAR/LSTAR/SFMASK were programmed.
+	//Per-core like the rest of this block (EFER is a per-core MSR).
+	wrmsr64(EFER_MSR, rdmsr64(EFER_MSR) | EFER_SCE);
 
 	//LSTAR MSR
 	//Format: 63..0 = Entry point to the kernel's system call method
