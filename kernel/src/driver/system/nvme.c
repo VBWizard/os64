@@ -13,6 +13,11 @@
 #include "ata.h"
 #include "printd.h"
 #include "strings.h"
+#include "spinlock.h"
+#include "smp.h"
+#include "smp_core.h"
+#include "kernel.h"
+#include "driver/system/x86_64.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -310,8 +315,6 @@ __asm__ volatile ("sfence" ::: "memory"); // Ensure memory writes are visible
 /// @param entryIndex 
 void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, volatile nvme_completion_queue_entry_t* entry, nvme_submission_queue_entry_t* command)
 {
-	uint32_t elapsed = 0;
-	uint32_t delay = 10;
 	int expectedPhase = 0;
 
 	if (adminQueue)
@@ -319,23 +322,82 @@ void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, vo
 	else
 		expectedPhase = get_and_update_phase_bit(&controller->cmdCompCurrentPhases, controller->cmdCompQueueHeadIndex);
 
-	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, expectedPhase = %u, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+	printd(DEBUG_NVME | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "NVME:\tWaiting for completion of cid 0x%04x, expectedPhase = %u, before wait, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n",
 						entry->cid, expectedPhase, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
-	
-	while ((entry->cid != command->cid || entry->status.phase_tag != expectedPhase) && elapsed < controller->defaultTimeout)
+
+	// Poll with PAUSE against a same-core rdtsc deadline — deliberately NOT
+	// the tick-based wait(): I/O-queue waits run under the controller ioLock
+	// with interrupts off, and if the waiting core is the BSP, IF=0 there
+	// stops IRQ0 and kTicksSinceStart itself — a tick-based timeout would
+	// never expire. rdtsc read on ONE core is monotonic, so it's safe here
+	// (cross-core TSC comparison is what must be avoided on QEMU/WSL2).
+	// During init_NVME, kCPUCyclesPerSecond hasn't been measured yet
+	// (detect_cpu runs after storage init), so fall back to a generous
+	// fixed cycle budget (~5s on a 4GHz part).
+	uint64_t deadline_cycles = kCPUCyclesPerSecond
+		? (uint64_t)controller->defaultTimeout * (kCPUCyclesPerSecond / 1000)
+		: 20000000000ULL;
+	uint64_t start = rdtsc();
+	bool timed_out = false;
+	bool waited = false;
+
+	while (entry->cid != command->cid || entry->status.phase_tag != expectedPhase)
 	{
-		wait(delay);
-		elapsed+=delay;
+		if (rdtsc() - start > deadline_cycles)
+		{
+			timed_out = true;
+			break;
+		}
+		waited = true;
+		__builtin_ia32_pause();
 	}
-	
-	if (elapsed >= controller->defaultTimeout)
+
+	if (timed_out)
 	{
 		log_nvme_debug_info(controller, adminQueue, controller->cmdSubQueueTailIndex, controller->cmdCompQueueHeadIndex, adminQueue?0:1);
-		panic("Timeout (%u seconds) waiting for command completion\n", controller->defaultTimeout);
+		panic("Timeout (%u ms) waiting for NVMe completion of cid 0x%04x\n", controller->defaultTimeout, command->cid);
 	}
-	if (elapsed > 0)
-		printd(DEBUG_NVME | DEBUG_DETAILED, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n", 	
+	if (waited)
+		printd(DEBUG_NVME | DEBUG_DETAILED, "\tNVME:\t After waiting for completion of cid 0x%04x, status={status_code: 0x%02x, status_code_type: 0x%02x, more: 0x%u, phase: %u}\n",
 							entry->cid, entry->status.status_code, entry->status.status_code_type, entry->status.more, entry->status.phase_tag);
+}
+
+// ---------------------------------------------------------------------------
+// I/O-queue serialization. nvme_do_io is strictly one-command-at-a-time
+// (submit → poll the CQ head slot → advance head), which is only correct if
+// commands never interleave. They CAN: file-backed demand paging issues disk
+// reads from the page-fault path (vma.c), concurrently with whatever thread
+// was already reading — on another core, or on the SAME core via preemption
+// while polling. Interleaved, both waiters capture the same CQ head slot; one
+// consumes it, the other spins into the timeout panic (seen ~50% of VBox
+// boots; QEMU's BSPSCHED entry masked it by squeezing threads onto the BSP).
+//
+// The lock is irqsave so the holder cannot be preempted: a bare spinlock
+// could deadlock one core (holder preempted, fault-context IF=0 spinner
+// waiting on it forever). Consequence: the completion poll above must never
+// depend on ticks (see rdtsc rationale there).
+// ---------------------------------------------------------------------------
+static uint64_t nvme_io_lock(nvme_controller_t* controller)
+{
+	// Same-core re-entry tripwire: only this core ever writes its own id
+	// into ioLockOwner, so reading our id back means WE hold the lock and
+	// have re-entered — i.e. a page fault taken INSIDE the critical section
+	// needed disk I/O. That must never happen (the DMA bounce buffers and
+	// queues are HHDM/kmalloc-mapped); panic loudly instead of spinning
+	// silently forever with interrupts off.
+	int64_t me = kCoreLocalStorage ? (int64_t)get_core_local_storage()->apic_id : 0;
+	if (controller->ioLockOwner == me)
+		panic("NVMe: nested I/O on core %ld — disk read from a fault taken inside nvme_do_io?\n", me);
+
+	uint64_t flags = spinlock_acquire_irqsave(&controller->ioLock);
+	controller->ioLockOwner = me;
+	return flags;
+}
+
+static void nvme_io_unlock(nvme_controller_t* controller, uint64_t flags)
+{
+	controller->ioLockOwner = -1;
+	spinlock_release_irqrestore(&controller->ioLock, flags);
 }
 
 void nvme_init_admin_queues(nvme_controller_t* controller)
@@ -429,6 +491,8 @@ printf("10)\n");
 	controller->admCompQueueHeadIndex = 0;
 	controller->cmdCompQueueHeadIndex = 0;
 	controller->admCompCurrentPhases = 0;
+	controller->ioLock = 0;
+	controller->ioLockOwner = -1;
     printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Admin queues initialized successfully\n");
 }
 
@@ -816,10 +880,6 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
         nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
         cmd->opc  = isWrite ? NVME_OPCODE_WRITE : NVME_OPCODE_READ;
         cmd->nsid = controller->nsid;
-        // cmdCID wraps safely: we poll to completion before the next command is
-        // submitted, so no two commands are ever in-flight with the same CID.
-        // Revisit if concurrent I/O is added (requires locking first).
-        cmd->cid  = controller->cmdCID++;
         cmd->prp1 = (uintptr_t)dmaBuffer;
 
         if (prpCount == 2)
@@ -830,6 +890,15 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
         cmd->cdw10 = currentLBA & 0xffffffff;
         cmd->cdw11 = currentLBA >> 32;
         cmd->cdw12 = blockCount - 1;
+
+        // ---- Critical section: everything that touches the shared queues,
+        // the CID counter, or the shared DMA bounce buffers. See the ioLock
+        // comment block above nvme_io_lock for why this exists.
+        uint64_t lockFlags = nvme_io_lock(controller);
+
+        // CID wraps safely: the lock guarantees one command in flight, so no
+        // two commands ever share a CID slot.
+        cmd->cid  = controller->cmdCID++;
 
         if (isWrite) {
             printd(DEBUG_NVME | DEBUG_DETAILED, "Copying data from user buffer: DMA Buffer=0x%016lx, User Buffer Offset=0x%016lx, Length=%lu\n",
@@ -860,6 +929,9 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
                 (uintptr_t)dmaBuffer, userBufferOffset, transferLength);
             memcpy((void*)userBufferOffset, dmaBuffer, transferLength);
         }
+
+        nvme_io_unlock(controller, lockFlags);
+        // ---- End critical section.
 
         if (prpCount > 2)
             free_prp_list(cmd->prp2, prpCount - 1);

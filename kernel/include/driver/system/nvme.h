@@ -263,6 +263,15 @@ typedef struct {
 	uint32_t maxBytesPerTransfer;
 	uint32_t cmdQID;
 	char* dmaReadBuffer, *dmaWriteBuffer;
+	// Serializes the ENTIRE submit→complete→copy critical section for the
+	// I/O queue (see nvme_do_io). The driver is strictly one-command-at-a-
+	// time by design; without this lock, a page-fault-path disk read (file-
+	// backed demand paging reads via vma.c) can interleave with another
+	// thread's read and both end up polling the same completion-queue slot —
+	// one wins, the other spins into the 5s timeout. ioLockOwner holds the
+	// APIC id of the holder (-1 = free) as a same-core re-entry tripwire.
+	volatile uint32_t ioLock;
+	volatile int64_t ioLockOwner;
  } nvme_controller_t;
 
 #include <stdint.h>

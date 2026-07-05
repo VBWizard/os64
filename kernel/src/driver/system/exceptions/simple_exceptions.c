@@ -204,7 +204,20 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     }
 
     printd(DEBUG_EXCEPTIONS, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
-    task_t *task = get_core_local_storage()->task;
+
+    // Guard against faults BEFORE per-core state exists (early boot: CLS not
+    // allocated and/or GS base not programmed). Without this, [gs:0] returns
+    // junk, ->task is junk, and vma_lookup faults on the junk pointer — the
+    // handler then re-enters itself until the stack dies in a triple fault,
+    // taking the diagnosable panic below with it.
+    task_t *task = kCoreLocalStorage ? get_core_local_storage()->task : NULL;
+    if (!task)
+    {
+        log_page_fault_bits(error_code);
+        dump_stack_trace(rip);
+        panic("Page fault with no task context (early boot?): RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx",
+              rip, cr2, error_code);
+    }
     vma_t *vma = vma_lookup(task, cr2);
     if (!vma)
     {
