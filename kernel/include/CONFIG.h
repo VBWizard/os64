@@ -30,7 +30,13 @@
 #define SERIAL_WAIT_FOR_TRANSMIT 1
 
 //Scheduler Related
-#define MP_SCHEDULER_RUNS_PER_SECOND 10
+// One scheduler pass per timer tick (10ms). This is also the SIGSLEEP wake
+// granularity — every sleeping thread in the system wakes on this grid, so
+// it caps animation frame rates (the GUI's bounce demo paces itself with
+// 1-tick sleeps). Ran at 10/sec for years because nothing needed better;
+// raised to match TICKS_PER_SECOND when the GUI gave sleeping threads a
+// reason to wake quickly.
+#define MP_SCHEDULER_RUNS_PER_SECOND 100
 #define SCHEDULER_DEBUG 1
 
 // Framebuffer related
