@@ -9,6 +9,7 @@ extern bool kOverrideFileLogging;
 extern bool kEnableSMP;
 extern bool kBspSchedulerMode;
 extern bool kEnableKWorker;
+extern bool kEnableGUI;
 extern bool kRunTests;
 extern char kRootPartUUID[];
 bool kEnableAHCI = true, kEnableNVME = true;
@@ -74,8 +75,13 @@ static cmdopt_t cmdopts[] = {
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
+    {"GUI", OPT_BOOL, &kEnableGUI, true, 0},
+    {"DEBUG_GUI", OPT_UINT128_OR, &kDebugLevel, DEBUG_GUI, 0},
     {"LOGFILE", OPT_BOOL, &kOverrideFileLogging, true, 0},
     {"ROOT", OPT_STRING, kRootPartUUID, 0, 64},
+    // Older boot entries (VBox/Bosgame in limine.conf) still use the long
+    // form; the strnstr-era parser accepted it, the table parser must too.
+    {"ROOTPARTUUID", OPT_STRING, kRootPartUUID, 0, 64},
 };
 
 void process_kernel_commandline(char *cmdline)

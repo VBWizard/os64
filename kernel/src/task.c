@@ -25,6 +25,8 @@
 #include "allocator.h"
 #include "memset.h"
 #include "kworker.h"
+#include "gui/compositor.h"
+#include "gui/gui_demos.h"
 
 extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
@@ -618,6 +620,9 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isIdleTask = strnstr(path, "/idle",10);
 	bool isLogdTask = strnstr(path, "/logd",10);
 	bool isKWorkerTask = strnstr(path, "/kworker",10);
+	bool isGuiCompTask = strnstr(path, "/guicomp",10);
+	bool isGBounceTask = strnstr(path, "/gbounce",10);
+	bool isGKeysTask = strnstr(path, "/gkeys",10);
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
 	bool loadedElfProgram = false;
@@ -629,13 +634,14 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 
 	    printd(DEBUG_TASK,"task_create: Creating %s task for %s\n",isKernelTask?"kernel":"user",newTask->path);
 	printd(DEBUG_TASK | DEBUG_DETAILED,
-		"task_create: path=%s pinnedAPICID=%s0x%08lx idle=%u logd=%u kworker=%u\n",
+		"task_create: path=%s pinnedAPICID=%s0x%08lx idle=%u logd=%u kworker=%u guicomp=%u\n",
 		newTask->path,
 		pinnedAPICID == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
 		pinnedAPICID,
 		isIdleTask,
 		isLogdTask,
-		isKWorkerTask);
+		isKWorkerTask,
+		isGuiCompTask);
 
     char *slash=newTask->path, *slash2=newTask->path;
     while (slash!=NULL)
@@ -665,7 +671,25 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		newTask->threads->regs.RIP = (uint64_t)&kworker_thread;
 	}
 
-	if (!isIdleTask && !isLogdTask && !isKWorkerTask && kRootFilesystem != NULL)
+	if (isGuiCompTask)
+	{
+		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
+		newTask->threads->regs.RIP = (uint64_t)&guicomp_thread;
+	}
+
+	if (isGBounceTask)
+	{
+		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
+		newTask->threads->regs.RIP = (uint64_t)&gbounce_thread;
+	}
+
+	if (isGKeysTask)
+	{
+		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
+		newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
+	}
+
+	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask && !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
 	{
 		if (elf_is_dynamic(newTask->path)) {
 			elf_resolve_dynamic_dependencies(newTask, newTask->path);

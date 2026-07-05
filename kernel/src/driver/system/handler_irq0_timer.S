@@ -1,8 +1,6 @@
 .code64
 .intel_syntax noprefix
 .extern kTicksSinceStart, kSystemCurrentTime, kUptime, kTicksPerSecond, kProcessSignals
-.extern update_framebuffer_from_shadow
-.extern frameBufferRequiresUpdate
 .extern processSignals
 .extern signalProcTickFrequency
 .extern kMPApicBase

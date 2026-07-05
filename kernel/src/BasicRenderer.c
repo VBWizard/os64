@@ -5,43 +5,30 @@
 #include "video.h"
 #include "memcpy.h"
 #include "serial_logging.h"
-#include "kmalloc.h"
-#include "msr.h"
-#include "paging.h"
 
 extern BasicRenderer kRenderer;
 uint32_t kFrameBufferBackgroundColor;
-bool frameBufferRequiresUpdate = false;
+volatile console_sink_fn kConsoleSink = NULL;
 
-void update_framebuffer_from_shadow()
-{
-#ifdef ENABLE_DOUBLE_BUFFER
-	printd(DEBUG_BOOT,"Start framebuffer update\n");
-	//memcpy(kRenderer.framebuffer->base_address, kRenderer.shadow_buffer, kRenderer.framebuffer->buffer_size);
-	uintptr_t* src = (uintptr_t*)kRenderer.shadow_buffer;
-	uintptr_t* dest = (uintptr_t*)kRenderer.framebuffer->base_address;
-	// for (size_t cnt=0;cnt<kRenderer.framebuffer->buffer_size;cnt+=sizeof(uintptr_t))
-	// 	*dest++ = *src++;
-	for (size_t i = 0; i < kRenderer.framebuffer->buffer_size / sizeof(uintptr_t) / 4; i++) {
-    	dest[i] = src[i];
-}
-//__asm__ volatile ("sfence" ::: "memory"); // Serialize writes
-	printd(DEBUG_BOOT,"Executed sfence\n");
-#endif
-}
+// NOTE: this file is the LEGACY text console — direct-to-framebuffer, no
+// windowing. The GUI subsystem (kernel/src/gui/) renders through its own
+// surface engine and, when active, will divert print_n() into a console
+// window. The old half-finished shadow-buffer/MTRR experiments that lived
+// here were removed when the GUI's backbuffer superseded them.
 
 void clear_bottom_lines(unsigned int *pixPtr, unsigned int pixels_per_scanline, unsigned int width, unsigned int start_line, unsigned int end_line) {
-    size_t clear_bytes = (end_line - start_line) * width * sizeof(unsigned int);
-    unsigned int *start = pixPtr + (start_line * pixels_per_scanline);
-    memset(start, kFrameBufferBackgroundColor, clear_bytes);
+    // 32-bit fill, NOT memset: memset replicates a single byte, which only
+    // painted the right color when all four background-color bytes happened
+    // to match (i.e. black).
+    for (unsigned int line = start_line; line < end_line; line++) {
+        unsigned int *row = pixPtr + (line * pixels_per_scanline);
+        for (unsigned int x = 0; x < width; x++)
+            row[x] = kFrameBufferBackgroundColor;
+    }
 }
 
 void scroll_framebuffer_full(BasicRenderer *basicrenderer) {
-#ifdef ENABLE_DOUBLE_BUFFER
-    unsigned int *pixPtr = (unsigned int *)basicrenderer->shadow_buffer;
-#else
     unsigned int *pixPtr = (unsigned int *)basicrenderer->framebuffer->base_address;
-#endif
     unsigned int pixels_per_scanline = basicrenderer->framebuffer->pixels_per_scan_line;
     unsigned int width = basicrenderer->framebuffer->width;
     unsigned int height = basicrenderer->framebuffer->height;
@@ -56,66 +43,6 @@ void scroll_framebuffer_full(BasicRenderer *basicrenderer) {
 	clear_bottom_lines(pixPtr, pixels_per_scanline, width, height - 16, height);
 }
 
-void scroll_framebuffer(BasicRenderer *basicrenderer) {
-#ifdef ENABLE_DOUBLE_BUFFER
-    unsigned int *pixPtr = (unsigned int *)basicrenderer->shadow_buffer;
-#else
-    unsigned int *pixPtr = (unsigned int *)basicrenderer->framebuffer->base_address;
-#endif
-    unsigned int pixels_per_scanline = basicrenderer->framebuffer->pixels_per_scan_line;
-    unsigned int width = basicrenderer->framebuffer->width;
-    unsigned int height = basicrenderer->framebuffer->height;
-
-	for (int cnt=0;cnt<16;cnt++)
-    // Adjusted loop to include the last line
-    for (unsigned int y = 0; y < height - 1; y++) {
-        unsigned int *source = pixPtr + ((y + 1) * pixels_per_scanline);
-        unsigned int *destination = pixPtr + (y * pixels_per_scanline);
-        memmove(destination, source, width * sizeof(unsigned int)); // Move only the visible pixels
-    }
-
-    // Clear the bottom line
-    unsigned int *lastLine = pixPtr + ((height - 1) * pixels_per_scanline);
-    for (unsigned int x = 0; x < width; x++) {
-        lastLine[x] = kFrameBufferBackgroundColor; // Clear to background color
-    }
-
-}
-
-// Round up to the nearest power of two
-uint64_t round_up_power_of_two(uint64_t size) {
-    uint64_t power = 1;
-    while (power < size) {
-        power <<= 1;
-    }
-    return power;
-}
-
-// Set up an MTRR for write-combining
-void setup_mtrr_write_combine(uint64_t framebuffer_base, uint64_t framebuffer_size) {
-    // Round framebuffer size up to nearest power of two
-    uint64_t range_size = round_up_power_of_two(framebuffer_size);
-
-    // Verify alignment of the base address to the range size
-    if (framebuffer_base % range_size != 0) {
-        printf("Error: Framebuffer base address is not aligned to range size.\n");
-        return;
-    }
-
-    // Set the MTRR base address with WC type (6)
-    uint64_t mtrr_base = framebuffer_base | 0x06; // WC = 6
-
-    // Set the MTRR mask with range size and enable bit
-    uint64_t mtrr_mask = ~(range_size - 1) & 0xFFFFFFFFFFFFF000ULL; // Mask for range size
-    mtrr_mask |= 0x800; // Enable bit
-
-    // Write to MTRR base (MSR 0x200) and mask (MSR 0x201)
-    wrmsr64(0x200, mtrr_base);
-    wrmsr64(0x201, mtrr_mask);
-
-    printf("MTRR configured: Base=0x%llx, Size=0x%llx\n", framebuffer_base, range_size);
-}
-
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font)
 {
     basicrenderer->color = 0xffffffff;
@@ -125,10 +52,6 @@ void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer
 
     basicrenderer->framebuffer = framebuffer;
     basicrenderer->psf1_font = psf1_font;
-#ifdef ENABLE_DOUBLE_BUFFER
-	basicrenderer->shadow_buffer = kmalloc_aligned(basicrenderer->framebuffer->buffer_size);
-	memcpy(basicrenderer->shadow_buffer, basicrenderer->framebuffer->base_address, basicrenderer->framebuffer->buffer_size);
-#endif
     return;
 }
 
@@ -156,6 +79,15 @@ int printf(const char *fmt, ...)
 // write() syscall can push exact byte counts (which may legally contain NUL
 // bytes) through the same cursor/wrap/scroll logic instead of duplicating it.
 void print_n(const char* str, size_t length) {
+    // GUI console diversion (see kConsoleSink in BasicRenderer.h). Snapshot
+    // the pointer once: panic may NULL it concurrently, and we must not call
+    // through a pointer we haven't checked.
+    console_sink_fn sink = kConsoleSink;
+    if (sink) {
+        sink(str, length);
+        return;
+    }
+
     const char *chr = str;
     BasicRenderer *basicrenderer = &kRenderer;
     for (size_t i = 0; i < length; i++, chr++) {
@@ -193,11 +125,7 @@ void print(const char* str) {
 
 void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff)
 {
-#ifdef ENABLE_DOUBLE_BUFFER
-    unsigned int *pixPtr = (unsigned int *)basicrenderer->shadow_buffer;
-#else
     unsigned int *pixPtr = (unsigned int *)basicrenderer->framebuffer->base_address;
-#endif
     char *fontPtr = (char *)basicrenderer->psf1_font->glyph_buffer + (chr * basicrenderer->psf1_font->psf1_header->charsize);
 
     for (unsigned long y = yOff; y < yOff + 16; y++)
@@ -215,16 +143,11 @@ void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigne
         }
         fontPtr++;
     }
-	frameBufferRequiresUpdate = true;
 }
 
 void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor)
 {
-#ifdef ENABLE_DOUBLE_BUFFER
-    uint64_t fbBase = (uint64_t)basicrenderer->shadow_buffer;
-#else
     uint64_t fbBase = (uint64_t)basicrenderer->framebuffer->base_address;
-#endif
     uint64_t pxlsPerScanline = basicrenderer->framebuffer->pixels_per_scan_line;
 
     for (int64_t y = 0; y < basicrenderer->framebuffer->height; y++)

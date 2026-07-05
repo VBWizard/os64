@@ -13,6 +13,7 @@ struct IDTPointer kIDTPtr;
 
 extern void handler_irq0_asm();
 extern void handler_irq1_asm();
+extern void handler_irq12_asm();
 extern void divide_by_zero_handler();
 extern void invalid_opcode_handler();
 extern void double_fault_handler();
@@ -46,7 +47,16 @@ void initialize_idt() {
 
     // Set IRQ handlers
     set_idt_entry(0x20, (uint64_t)&handler_irq0_asm, 0x28, 0x8E); // IRQ0 (PIT)
-    set_idt_entry(0x21, (uint64_t)&handler_irq1_asm, 0x28, 0x8E); // IRQ1 (Keyboard)
+    set_idt_entry(0x21, (uint64_t)&handler_irq1_asm, 0x28, 0x8E); // IRQ1 (Keyboard), legacy-PIC vector
+    set_idt_entry(0x2C, (uint64_t)&handler_irq12_asm, 0x28, 0x8E); // IRQ12 (PS/2 mouse), legacy-PIC vector
+
+    // IOAPIC-delivered input IRQs use these HIGHER vectors instead: the APs
+    // run with LAPIC TPR = 0x30 (smp_core.c), which silently masks every
+    // vector below 0x40 — the legacy 0x2x vectors never fire on an AP. The
+    // GUI routes keyboard/mouse at the compositor's core, so their vectors
+    // must clear that bar. Same handlers; EOI logic is vector-agnostic.
+    set_idt_entry(0x41, (uint64_t)&handler_irq1_asm, 0x28, 0x8E); // IRQ1 via IOAPIC
+    set_idt_entry(0x4C, (uint64_t)&handler_irq12_asm, 0x28, 0x8E); // IRQ12 via IOAPIC
 
 	// SET MP handlers
 	set_idt_entry(IPI_INVALIDATE_TLB_VECTOR, (uint64_t)&vector123, 0x28, 0x8E);		// Invalidate TLB IPI

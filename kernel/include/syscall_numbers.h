@@ -20,4 +20,18 @@
 #define SYSCALL_HANDLE_CONSOLE_OUT  1
 #define SYSCALL_HANDLE_CONSOLE_ERR  2
 
+// --- GUI syscalls: RESERVED, not yet in the dispatch table -----------------
+// The GUI client API (gui/gui_client.h) is kernel-direct today; each function
+// is already syscall-shaped and annotated in gui/gui_client.c with the
+// user_ptr_mask it needs. When userland GUI apps arrive, add SYSCALL_DEFINE
+// rows for these numbers — see GRAPHICS.md "Userland migration" for the
+// recipe (gui_window_get_surface is the one call whose implementation must
+// change: kernel pixel pointer -> shared-memory mapping).
+#define SYSCALL_GUI_WINDOW_CREATE       16
+#define SYSCALL_GUI_WINDOW_DESTROY      17
+#define SYSCALL_GUI_WINDOW_GET_SURFACE  18
+#define SYSCALL_GUI_WINDOW_PRESENT      19
+#define SYSCALL_GUI_EVENT_POLL          20
+#define SYSCALL_GUI_SCREEN_INFO         21
+
 #endif

@@ -1,22 +1,18 @@
 #include "driver/system/keyboard.h"
+#include "driver/system/mouse.h"
 #include <stddef.h>
 #include "memset.h"
 #include "CONFIG.h"
 #include "printd.h"
 #include "io.h"
+#include "gui/input.h"
 
 // Keystrokes are generated from PS/2 set-1 scancodes and exposed through a
 // simple ring buffer so other subsystems can poll without blocking the IRQ path.
+// When the GUI is active, key-down AND key-up events are additionally injected
+// into the unified GUI input queue (gui/input.h).
 
 #define KEYBOARD_MAX_SCANCODE 128
-
-typedef enum keyboard_modifiers {
-    KEYBOARD_MOD_SHIFT = 1u << 0,
-    KEYBOARD_MOD_CTRL  = 1u << 1,
-    KEYBOARD_MOD_ALT   = 1u << 2,
-    KEYBOARD_MOD_CAPS  = 1u << 3,
-    KEYBOARD_MOD_NUM   = 1u << 4,
-} keyboard_modifiers_t;
 
 static keyboard_event_t s_event_buffer[KEYBOARD_BUFFER_SIZE];
 static volatile size_t s_event_head;
@@ -368,7 +364,14 @@ void keyboard_handle_scancode(uint8_t scancode) {
     }
 
     if (!is_break) {
+        // Make code (including hardware typematic repeats). Emit on PRESS:
+        // interactive consumers want to react when the key goes down, and
+        // holding a key repeats for free. (This used to emit on release,
+        // which made every keystroke feel like it lagged by its own length.)
         s_key_state[code] = true;
+        char ascii = keyboard_translate_scancode(code);
+        keyboard_emit_event(code, ascii);
+        input_inject_key(ascii, code, s_modifiers, true);
         return;
     }
 
@@ -379,8 +382,26 @@ void keyboard_handle_scancode(uint8_t scancode) {
 
     s_key_state[code] = false;
 
-    char ascii = keyboard_translate_scancode(code);
-    keyboard_emit_event(code, ascii);
+    // Break code: the legacy ring only carries keystrokes (presses), but the
+    // GUI needs KEY_UP too — modifier-drag interactions and chords depend on
+    // knowing when a key was released.
+    input_inject_key(keyboard_translate_scancode(code), code, s_modifiers, false);
+}
+
+void ps2_handle_irq(void) {
+    // Drain the 8042 until its output buffer is empty. Status bit 0 = data
+    // available; bit 5 = the byte came from the AUX (mouse) port. Dispatching
+    // on bit 5 makes it harmless that IRQ1 and IRQ12 share this routine —
+    // each byte reaches the right driver no matter which IRQ fired.
+    uint8_t status;
+    while ((status = inb(0x64)) & 0x01) {
+        uint8_t data = inb(0x60);
+        if (status & 0x20) {
+            mouse_handle_byte(data);
+        } else {
+            keyboard_handle_scancode(data);
+        }
+    }
 }
 
 // Quick check for queued keystrokes.

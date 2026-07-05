@@ -39,6 +39,8 @@
 #include "exceptions.h"
 #include "kworker.h"
 #include "env.h"
+#include "gui/compositor.h"
+#include "driver/system/mouse.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -144,6 +146,33 @@ void kernel_init()
 
 	remap_irq0_to_apic(0x20);
 
+	// Keyboard IRQ1 rides the IOAPIC too — unconditionally, GUI or not.
+	// remap_irq0_to_apic just switched the IMCR to APIC mode, which cuts the
+	// legacy PIC's INTR wire; PIC-delivered IRQ1 only kept working where
+	// firmware left LINT0 in virtual-wire mode (QEMU yes, VBox/real HW not
+	// guaranteed). Same vector (0x21), same handler — only the delivery path
+	// and EOI target change.
+	//
+	// Destination: with the GUI running, input IRQs are aimed at the
+	// COMPOSITOR's core so a keystroke or mouse packet wakes its hlt-wait
+	// immediately (input latency without a busy-wait — see guicomp_thread's
+	// pacing). Text-mode boots keep them on the BSP.
+	// Vectors 0x41/0x4C, not the legacy 0x21/0x2C: AP LAPICs run with
+	// TPR = 0x30, which masks all vectors below 0x40 (see idt.c).
+	uint8_t inputIrqDest = kCPUInfo[0].apicID;
+	if (kEnableGUI && gui_compositor_affinity() != THREAD_NO_AFFINITY)
+		inputIrqDest = (uint8_t)gui_compositor_affinity();
+	ioapic_adopt_isa_irq(1, 0x41, inputIrqDest, &kIRQ1UsesLapic);
+
+	// The mouse only matters to the GUI; a text-mode boot skips the whole
+	// AUX-port bring-up (and IRQ12 stays dormant — its IDT entry exists but
+	// nothing routes to it).
+	if (kEnableGUI)
+	{
+		mouse_init();
+		ioapic_adopt_isa_irq(12, 0x4C, inputIrqDest, &kIRQ12UsesLapic);
+	}
+
     // We need the cls->task to be populated for running tests, so ...
     // put the kernel task in the cls because it'll be the first task to start running
     get_core_local_storage()->task = kKernelTask;
@@ -218,6 +247,26 @@ void kernel_init()
         if (lResult)
 	 		panic("Root filesystem disk test failed: %u\n",lResult);
 		kRootFilesystem->fops->uninitialize(kRootFilesystem);
+	}
+
+	// The GUI is strictly optional (DOS/Windows relationship): without the GUI
+	// cmdline flag we run tests and shut down exactly as before. With it, the
+	// desktop owns the machine — start the compositor and park the kernel task
+	// in a sleep loop (1s naps, immediately re-armed; all real work happens in
+	// the compositor and app tasks).
+	if (kEnableGUI)
+	{
+		printf("Starting GUI ...\n");
+		gui_start();
+		// Park with a periodic status line: once the console window attaches
+		// (kConsoleSink), these printfs flow into the desktop — living proof
+		// the print_n diversion works end to end.
+		uint64_t statusCount = 0;
+		while (1)
+		{
+			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
+			printf("os64: up %lu ticks, GUI running (status #%lu)\n", kTicksSinceStart, ++statusCount);
+		}
 	}
 
 	shutdown();

@@ -9,11 +9,17 @@
 #include "paging.h"
 #include "serial_logging.h"
 #include "log.h"
+#include "gui/compositor.h"
 
 char sprintf_buf[2000];
 
 void panic_no_shutdown(const char *format, ...)
 {
+    // FIRST: detach the GUI console sink so everything below renders raw on
+    // the framebuffer — the GUI (or the lock some thread died holding) can
+    // never stand between a panic and the screen.
+    gui_emergency_disable();
+
     va_list args;
     va_start( args, format );
     printf("\n>>>panic at instruction prior to address 0x%08x<<<\n", __builtin_return_address(0));
@@ -31,6 +37,9 @@ panicLoop:
 
 void __attribute__((noreturn, noinline))panic(const char *format, ...)
 {
+    // FIRST: detach the GUI console sink (see panic_no_shutdown).
+    gui_emergency_disable();
+
     va_list args;
     va_start( args, format );
     printf("\n>>>panic at instruction prior to address 0x%016lx<<<\n", __builtin_return_address(0));

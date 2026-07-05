@@ -10,6 +10,8 @@
 #include "serial_logging.h"
 
 volatile bool kIRQ0UsesLapic = false;
+volatile bool kIRQ1UsesLapic = false;
+volatile bool kIRQ12UsesLapic = false;
 
 static void set_imcr_to_apic(void)
 {
@@ -165,44 +167,80 @@ void ioapic_write(uint32_t reg, uint32_t value) {
     ioapic_base[IOAPIC_WIN_OFFSET / 4] = value;
 }
 
+// Program the IOAPIC redirection entry that firmware says this ISA IRQ is
+// wired to (MADT override first, MP tables second), targeting the given
+// LAPIC. Returns false when there is no IOAPIC to program.
+static bool ioapic_route_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_id) {
+    if (!kIOAPICAddress) {
+        return false;
+    }
+
+    uint8_t redirection_index = get_ioapic_redirection_index_for_irq(isa_irq);
+    uint32_t low_reg = 0x10 + ((uint32_t)redirection_index * 2);
+    uint32_t high_reg = low_reg + 1;
+
+    uint32_t entry_low = vector; // delivery mode fixed; edge/high unless the override says otherwise
+    uint32_t entry_high = ((uint32_t)dest_apic_id) << 24; // physical destination
+
+    // Honor the override's MPS INTI flags: polarity (bits 0-1, 11 = active
+    // low -> redirection bit 13) and trigger mode (bits 2-3, 11 = level ->
+    // redirection bit 15). 00 means "conforms to bus" = edge/high for ISA,
+    // which is the default already encoded in entry_low.
+    if (kISAIrqToGSI[isa_irq] >= 0) {
+        uint16_t iso_flags = kISAIrqOverrideFlags[isa_irq];
+        if ((iso_flags & 0x3) == 0x3)
+            entry_low |= (1u << 13);   // active low
+        if (((iso_flags >> 2) & 0x3) == 0x3)
+            entry_low |= (1u << 15);   // level triggered
+    }
+
+    ioapic_write(high_reg, entry_high);
+    ioapic_write(low_reg, entry_low);
+
+    printd(DEBUG_SMP, "IOAPIC: IRQ%u mapped to redirection %u, vector 0x%02x, dest APIC %u\n",
+           isa_irq, redirection_index, vector, dest_apic_id);
+
+    return true;
+}
+
+// Move an ISA IRQ from the legacy PIC to the IOAPIC: program the redirection
+// entry (targeting dest_apic_id), mask the line on the PIC so it can't
+// double-deliver, and flip the handler's EOI-path flag (each IRQ's asm
+// handler tests its own k*UsesLapic to choose LAPIC vs PIC EOI).
+//
+// Why this exists for MORE than IRQ0: set_imcr_to_apic() disconnects the
+// PIC's INTR wire from the CPU. After that, PIC-delivered interrupts only
+// still arrive if firmware happened to leave LINT0 in virtual-wire mode —
+// true on QEMU, NOT guaranteed on VBox or real hardware. Any IRQ we actually
+// depend on must therefore ride the IOAPIC.
+//
+// The destination matters more than it looks: the GUI routes the input IRQs
+// (1 and 12) at the COMPOSITOR's core, so a keyboard/mouse interrupt ends
+// the compositor's hlt-wait directly — input latency without busy-waiting.
+void ioapic_adopt_isa_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_id, volatile bool *uses_lapic_flag) {
+    if (!ioapic_route_irq(isa_irq, vector, dest_apic_id)) {
+        return;
+    }
+
+    if (isa_irq < 8) {
+        outb(PIC1_DATA, inb(PIC1_DATA) | (uint8_t)(1u << isa_irq));
+    } else {
+        outb(PIC2_DATA, inb(PIC2_DATA) | (uint8_t)(1u << (isa_irq - 8)));
+    }
+
+    *uses_lapic_flag = true;
+}
+
 void remap_irq0_to_apic(uint32_t vector) {
     if (!kIOAPICAddress) {
         return;
     }
 
-    uint8_t redirection_index = get_ioapic_redirection_index_for_irq(0);
-    uint32_t low_reg = 0x10 + ((uint32_t)redirection_index * 2);
-    uint32_t high_reg = low_reg + 1;
-
-    // Route PIT IRQ0 to the BSP LAPIC via the redirection entry the firmware
-    // says IRQ0 is wired to (MADT override first, MP tables second)
-    uint32_t irq0_low = vector & 0xFF; // delivery mode fixed; edge/high unless the override says otherwise
-    uint32_t irq0_high = ((uint32_t)kCPUInfo[0].apicID) << 24; // physical destination
-
-    // Honor the override's MPS INTI flags: polarity (bits 0-1, 11 = active
-    // low -> redirection bit 13) and trigger mode (bits 2-3, 11 = level ->
-    // redirection bit 15). 00 means "conforms to bus" = edge/high for ISA,
-    // which is the default already encoded in irq0_low.
-    if (kISAIrqToGSI[0] >= 0) {
-        uint16_t iso_flags = kISAIrqOverrideFlags[0];
-        if ((iso_flags & 0x3) == 0x3)
-            irq0_low |= (1u << 13);   // active low
-        if (((iso_flags >> 2) & 0x3) == 0x3)
-            irq0_low |= (1u << 15);   // level triggered
-    }
-
-    ioapic_write(high_reg, irq0_high);
-    ioapic_write(low_reg, irq0_low);
-
-    printd(DEBUG_SMP, "IOAPIC: IRQ0 mapped to redirection %u, vector 0x%02x, dest APIC %u\n",
-           redirection_index, vector & 0xFF, kCPUInfo[0].apicID);
+    // Route PIT IRQ0 through the IOAPIC (to the BSP — it owns timekeeping),
+    // then switch the platform to APIC mode. The IMCR write is deliberately
+    // NOT in ioapic_adopt_isa_irq — it is a one-time platform-wide switch,
+    // not a per-IRQ action.
+    ioapic_adopt_isa_irq(0, (uint8_t)(vector & 0xFF), kCPUInfo[0].apicID, &kIRQ0UsesLapic);
 
     set_imcr_to_apic();
-
-    // Mask IRQ0 on the legacy PIC; PIT interrupts now arrive through the IOAPIC
-    uint8_t pic_mask = inb(PIC1_DATA);
-    pic_mask |= 0x01; // set bit 0 to mask IRQ0
-    outb(PIC1_DATA, pic_mask);
-
-    kIRQ0UsesLapic = true;
 }

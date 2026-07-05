@@ -58,6 +58,14 @@ bool apicIsEnabled();
 int tscGetTicksPerSecond();
 void remap_irq0_to_apic(uint32_t vector);
 
+// Move an ISA IRQ from the legacy PIC to the IOAPIC (see apic.c for why any
+// IRQ we depend on must do this once the IMCR is switched to APIC mode).
+// dest_apic_id picks which core's LAPIC receives it; pass the handler's
+// k*UsesLapic flag so its EOI path follows the routing.
+void ioapic_adopt_isa_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_id, volatile bool *uses_lapic_flag);
+
 extern volatile bool kIRQ0UsesLapic;
+extern volatile bool kIRQ1UsesLapic;
+extern volatile bool kIRQ12UsesLapic;
 
 #endif	/* APIC_H */

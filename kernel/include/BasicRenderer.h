@@ -39,7 +39,6 @@ typedef struct
 {
     struct Point cursor_position;
     struct Framebuffer *framebuffer;
-	unsigned int *shadow_buffer;
     struct PSF1_FONT *psf1_font;
 
     unsigned int color;
@@ -47,6 +46,17 @@ typedef struct
 } BasicRenderer;
 
 extern BasicRenderer kRenderer;
+
+// When non-NULL, print_n() diverts all console bytes to the GUI console
+// window (kernel/src/gui/console_window.c) instead of drawing directly on
+// the framebuffer. ONE seam covers everything: printf/print/panic and the
+// WRITE syscall all funnel through print_n. A plain volatile pointer, not a
+// lock — panic() must be able to kill the diversion with a single store
+// from ANY context (gui_emergency_disable), after which text falls back to
+// the direct-to-framebuffer path and scribbles over the desktop (which is
+// exactly what you want from a dead system).
+typedef void (*console_sink_fn)(const char *bytes, size_t length);
+extern volatile console_sink_fn kConsoleSink;
 
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font);
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y);

@@ -6,6 +6,7 @@
 #include "serial_logging.h"
 #include "panic.h"
 #include "memcpy.h"
+#include "spinlock.h"
 
 memory_status_t *kMemoryStatus;
 //Points to the next available kernel status - increment AFTER use
@@ -19,23 +20,17 @@ uintptr_t memoryBaseAddress;
 // and this ledger was previously completely unguarded. Interrupts are
 // disabled while held (irqsave pattern): a holder preempted mid-update on one
 // core would deadlock a fault-context spinner (IF=0) on that same core.
-static volatile uint32_t kMemoryStatusLock = 0;
+// The lock/unlock mechanics live in spinlock.h (this was their birthplace).
+static spinlock_t kMemoryStatusLock = 0;
 
 static inline uint64_t allocator_lock(void)
 {
-	uint64_t flags;
-	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
-	__asm__ volatile("cli" ::: "memory");
-	while (__sync_lock_test_and_set(&kMemoryStatusLock, 1))
-		__builtin_ia32_pause();
-	return flags;
+	return spinlock_acquire_irqsave(&kMemoryStatusLock);
 }
 
 static inline void allocator_unlock(uint64_t flags)
 {
-	__sync_lock_release(&kMemoryStatusLock);
-	if (flags & 0x200)  // restore IF only if the caller had interrupts enabled
-		__asm__ volatile("sti" ::: "memory");
+	spinlock_release_irqrestore(&kMemoryStatusLock, flags);
 }
 
 //NOTE: Will return the passed address if it is already page aligned
