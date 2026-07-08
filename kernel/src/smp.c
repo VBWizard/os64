@@ -31,6 +31,12 @@ extern void enable_fsgsbase();
 int kLocalAPICTimerSpeed[MAX_CPUS];
 volatile core_local_storage_t* kCoreLocalStorage = 0;
 
+// MAXCORES=N cmdline cap on how many cores init_SMP brings up; 0 = no cap.
+// Cores beyond the cap are never woken — they stay parked in Limine's AP
+// spin-loop. Useful on new hardware (e.g. the 12-core Bosgame P5) to keep
+// the variable count down while bringing the machine up.
+int kMaxActiveCores = 0;
+
 bool mp_scan_for_config(uintptr_t start, uintptr_t length)
 {
 	uint64_t pagesToMap = length / PAGE_SIZE;
@@ -237,6 +243,16 @@ int init_SMP(bool enableSMP)
 {
 	int mp_records;
     kMPCoreCount = enableSMP?kLimineSMPInfo->cpu_count:1;
+
+    // Apply the MAXCORES=N cmdline cap. Everything downstream (kCPUInfo
+    // sizing, idle-task creation, AP wake-up, scheduler loops) iterates
+    // kMPCoreCount, so clamping here is the single point of truth; the
+    // capped-off cores are simply never started.
+    if (kMaxActiveCores > 0 && kMPCoreCount > kMaxActiveCores)
+    {
+        printf("SMP: MAXCORES=%u capping core count (%u available) ... ", kMaxActiveCores, kMPCoreCount);
+        kMPCoreCount = kMaxActiveCores;
+    }
 
     kMPConfigTable = kmalloc(MAX_CPUS * sizeof(mpConfig_t));
     mp_records = parse_mp_table();

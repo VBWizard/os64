@@ -12,6 +12,7 @@ extern bool kEnableKWorker;
 extern bool kEnableGUI;
 extern bool kRunTests;
 extern char kRootPartUUID[];
+extern int kMaxActiveCores;
 bool kEnableAHCI = true, kEnableNVME = true;
 
 // -----------------------------------------------------------------------
@@ -23,7 +24,8 @@ typedef enum
     OPT_BOOL,
     OPT_UINT128_CLEAR,
     OPT_UINT128_OR,
-    OPT_STRING
+    OPT_STRING,
+    OPT_INT      // NAME=<decimal>, stored to an int
 } opt_type_t;
 
 typedef struct
@@ -36,6 +38,23 @@ typedef struct
 } cmdopt_t;
 
 #define MAX_CMDLINE_TOKENS 64
+
+// Minimal decimal parser for OPT_INT values (no atoi in the kernel string
+// lib). Returns -1 on empty/non-numeric input so callers can reject it.
+static int parse_decimal(const char *s)
+{
+    int value = 0;
+    if (!*s)
+        return -1;
+    while (*s)
+    {
+        if (*s < '0' || *s > '9')
+            return -1;
+        value = value * 10 + (*s - '0');
+        s++;
+    }
+    return value;
+}
 
 // Simple in-place whitespace tokenizer
 static int tokenize(char *cmdline, const char **argv, int max)
@@ -66,6 +85,9 @@ static cmdopt_t cmdopts[] = {
     {"nolog", OPT_UINT128_CLEAR, &kDebugLevel, 0, 0},
     {"alllog", OPT_UINT128_OR, &kDebugLevel, DEBUG_EVERYTHING, 0},
     {"nosmp", OPT_BOOL, &kEnableSMP, false, 0},
+    // Cap the number of cores init_SMP brings up (0 = use them all). The
+    // uncapped cores are never woken — they stay parked in Limine's AP loop.
+    {"MAXCORES", OPT_INT, &kMaxActiveCores, 0, 0},
     {"DEBUG_DETAILED", OPT_UINT128_OR, &kDebugLevel, DEBUG_DETAILED, 0},
     {"DEBUG_EXTRA_DETAILED", OPT_UINT128_OR, &kDebugLevel, DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, 0},
     {"AHCI", OPT_BOOL, &kEnableAHCI, true, 0},
@@ -103,6 +125,19 @@ void process_kernel_commandline(char *cmdline)
                 {
                     strncpy(opt->dest, arg + name_len + 1, opt->maxlen);
                     ((char *)opt->dest)[opt->maxlen - 1] = '\0';
+                    break;
+                }
+            }
+            else if (opt->type == OPT_INT)
+            {
+                size_t name_len = strlen(opt->name);
+                if (strncmp(arg, opt->name, name_len) == 0 && arg[name_len] == '=')
+                {
+                    int value = parse_decimal(arg + name_len + 1);
+                    // Reject garbage (parse_decimal returns -1) but keep the
+                    // option's compiled-in default rather than guessing.
+                    if (value >= 0)
+                        *(int *)opt->dest = value;
                     break;
                 }
             }

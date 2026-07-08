@@ -233,6 +233,8 @@ make -C kernel test-elf
 - Common options:
   - `ROOTPARTUUID=<uuid>`: Mount partition as root
   - `nosmp`: Disable multicore support
+  - `MAXCORES=<n>`: Cap how many cores init_SMP brings up (0/absent = all;
+    capped-off cores stay parked in Limine's AP loop)
   - `noahci`: Disable AHCI driver
   - `nonvme`: Disable NVMe driver
   - `nolog` / `noseriallog` / `alllog`: Control logging
