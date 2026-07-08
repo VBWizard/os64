@@ -20,6 +20,8 @@ extern uintptr_t kKernelBaseAddressV;
 extern uintptr_t kKernelBaseAddressP;
 extern pci_device_id_t *kPCIIdsData;
 extern uint32_t kPCIIdsCount;
+extern void* kRamdiskModuleAddress;
+extern uint64_t kRamdiskModuleSize;
 extern struct limine_smp_response *kLimineSMPInfo;
 extern void mpSendInvTLB();  // smp_core.c — TLB-shootdown IPI to the other cores
 uintptr_t kKernelPageMappings[KERNEL_PAGE_COUNT][2]={0};
@@ -558,6 +560,22 @@ void init_os64_paging_tables()
 		pagesToMap++;
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual PCIID data (0x%016lx) to physical PCIID data (0x%016lx), %u pages in new page tables\n", kPCIIdsData, physAddrLookup, pagesToMap);
 	paging_map_pages(pml4v, (uintptr_t)kPCIIdsData, physAddrLookup, pagesToMap, PAGE_PRESENT | PAGE_WRITE);
+
+	//Map the RAMDisk module if the boot entry passed one (same recipe as the
+	//font and PCI-ID modules above: Limine loaded it physically contiguous
+	//and handed us its HHDM VA; its memmap type — KERNEL_AND_MODULES — keeps
+	//the allocator away from it, so re-mapping it at the same VA keeps
+	//kRamdiskModuleAddress valid for the life of the kernel).
+	if (kRamdiskModuleAddress != NULL)
+	{
+		printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map RAMDisk module\n");
+		physAddrLookup = paging_walk_paging_table((pt_entry_t*)kKernelPML4v, (uintptr_t)kRamdiskModuleAddress);
+		pagesToMap = kRamdiskModuleSize / PAGE_SIZE;
+		if (kRamdiskModuleSize % PAGE_SIZE)
+			pagesToMap++;
+		printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual RAMDisk module (0x%016lx) to physical RAMDisk module (0x%016lx), %u pages in new page tables\n", kRamdiskModuleAddress, physAddrLookup, pagesToMap);
+		paging_map_pages(pml4v, (uintptr_t)kRamdiskModuleAddress, physAddrLookup, pagesToMap, PAGE_PRESENT | PAGE_WRITE);
+	}
 
 	//Map the limine SMP info
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map Limine SMP Info structures\n");

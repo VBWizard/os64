@@ -14,6 +14,9 @@ extern bool kRunTests;
 extern char kRootPartUUID[];
 extern int kMaxActiveCores;
 bool kEnableAHCI = true, kEnableNVME = true;
+// Off by default: the RAMDisk only activates when a boot entry passes BOTH
+// the os64_disk.img module and the RAMDISK flag (see ramdisk.h).
+bool kEnableRamdisk = false;
 
 // -----------------------------------------------------------------------
 // Kernel command-line parser definitions
@@ -94,6 +97,7 @@ static cmdopt_t cmdopts[] = {
     {"NOAHCI", OPT_BOOL, &kEnableAHCI, false, 0},
     {"NVME", OPT_BOOL, &kEnableNVME, true, 0},
     {"NONVME", OPT_BOOL, &kEnableNVME, false, 0},
+    {"RAMDISK", OPT_BOOL, &kEnableRamdisk, true, 0},
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},

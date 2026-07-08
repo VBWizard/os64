@@ -74,7 +74,10 @@ e_part_table_type detect_partition_table_type(block_device_info_t* device)
 bool detect_partition_filesystem_types(block_device_info_t* device)
 {
 	bool lResult;
-	if (device->bus != BUS_NONE && (device->ATADeviceType == ATA_DEVICE_TYPE_SATA_HD || device->ATADeviceType == ATA_DEVICE_TYPE_NVME_HD))
+	// Same device-type list vfs_mount_root_part() scans. Plain HD is included
+	// for the RAMDisk (BUS_NONE) — the old bus != BUS_NONE guard kept it from
+	// ever getting its GPT parsed, so the root GUID scan saw zero partitions.
+	if (device->ATADeviceType == ATA_DEVICE_TYPE_SATA_HD || device->ATADeviceType == ATA_DEVICE_TYPE_NVME_HD || device->ATADeviceType == ATA_DEVICE_TYPE_HD)
 	{
 		printd(DEBUG_BOOT | DEBUG_DETAILED,"BOOT: Reading partitions for disk %s", device->block_device->name);
 		switch (device->block_device->partTableType)

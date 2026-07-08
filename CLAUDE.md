@@ -159,6 +159,12 @@ make -C kernel test-elf
 - GPT partition table support (`gpt.c`)
 - Block device abstraction layer (`block_device.c`)
 - Registered devices tracked in `kBlockDeviceDList`
+- RAMDisk (`ramdisk.c`): the QEMU disk image passed as a Limine module
+  (`os64_disk.img` on the ISO), registered as a memcpy-backed block device.
+  Activated only when a boot entry passes BOTH the module and the `RAMDISK`
+  cmdline flag; registered before AHCI/NVMe so it wins the root GUID scan.
+  Lets the ISO boot self-contained on real hardware (no disk prep). Writes
+  land in RAM only — every boot starts from a pristine image.
 
 **Storage Drivers (`kernel/src/driver/system/`):**
 - **AHCI** (`ahci.c`): SATA hard drive/SSD support
@@ -237,6 +243,8 @@ make -C kernel test-elf
     capped-off cores stay parked in Limine's AP loop)
   - `noahci`: Disable AHCI driver
   - `nonvme`: Disable NVMe driver
+  - `RAMDISK`: Register the `os64_disk.img` Limine module as a RAM-backed
+    block device (see `/RAMDisk Boot` in limine.conf)
   - `nolog` / `noseriallog` / `alllog`: Control logging
 
 ### Logging and Debugging

@@ -24,6 +24,8 @@ extern uint64_t kHHDMOffset;
 extern char kKernelCommandline[];
 extern pci_device_id_t *kPCIIdsData;
 extern uint32_t kPCIIdsCount;
+extern void* kRamdiskModuleAddress;
+extern uint64_t kRamdiskModuleSize;
 
 struct limine_memmap_response *memmap_response;
 struct limine_hhdm_response *hhmd_response;
@@ -135,6 +137,17 @@ void limine_boot_entry_point(void) {
 	struct limine_file* pciIdsFile = getFile(module_request.response, "pci_devices.bin");
 	kPCIIdsCount = pciIdsFile->size/sizeof(pci_device_id_t);
 	kPCIIdsData = (pci_device_id_t*)pciIdsFile->address;
+	// The RAMDisk module is optional — only boot entries that pass
+	// module_path .../os64_disk.img (plus the RAMDISK cmdline flag) have it.
+	// Limine already loaded it into RAM; we just keep the pointer. The blob
+	// stays reachable after the CR3 switch because init_os64_paging_tables()
+	// retro-maps it, same as the console font module.
+	struct limine_file* ramdiskFile = getFile(module_request.response, "os64_disk.img");
+	if (ramdiskFile != NULL)
+	{
+		kRamdiskModuleAddress = ramdiskFile->address;
+		kRamdiskModuleSize = ramdiskFile->size;
+	}
 	kKernelBaseAddressP = kernel_address_request.response->physical_base;
 	kKernelBaseAddressV = kernel_address_request.response->virtual_base;
 	int limine_response_status = verify_limine_responses(memmap_response, hhmd_response, framebuffer_response, limine_module_response, kLimineSMPInfo);

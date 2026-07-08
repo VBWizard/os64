@@ -172,9 +172,14 @@ vbox-sync: disk-populate
 
 # Removed this from both top and bottom of the next section
 #	rm -rf iso_root
-$(IMAGE_NAME).iso: limine/limine kernel
+$(IMAGE_NAME).iso: limine/limine kernel disk-populate
 	@mkdir -p iso_root/boot
 	cp kernel/bin/$(IMAGE_NAME) iso_root/boot/
+	# The QEMU NVMe disk image rides along on the ISO as a Limine module so
+	# RAMDISK boot entries can mount it as root with no physical disk prep
+	# (see /RAMDisk Boot in limine.conf). Copied after disk-populate so the
+	# module always carries the freshly built test binaries.
+	cp $(DISK_IMAGE) iso_root/boot/os64_disk.img
 	@cp external/* iso_root/boot/
 	@cp external/* iso_root/
 	@mkdir -p iso_root/boot/limine

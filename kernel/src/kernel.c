@@ -42,11 +42,13 @@
 #include "gui/compositor.h"
 #include "driver/system/mouse.h"
 #include "block_device.h"
+#include "ramdisk.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
 extern bool kEnableAHCI;
 extern bool kEnableNVME;
+extern bool kEnableRamdisk;
 bool kEnableSMP = true;
 bool kBspSchedulerMode = false;
 bool kEnableKWorker = false;
@@ -124,6 +126,22 @@ void kernel_init()
 	// registers into it. (It used to be allocated inside init_AHCI(), which
 	// left noahci boots with a NULL table for NVMe to scribble through.)
 	init_block();
+
+	// Register the RAMDisk FIRST: the module is a byte-for-byte copy of the
+	// QEMU NVMe disk image, so a physical disk carrying the same partition
+	// GUID can coexist with it — and the UUID scan in vfs_mount_root_part()
+	// takes the first match, which must be the RAMDisk when the boot entry
+	// asked for it.
+	if (kEnableRamdisk)
+	{
+		if (kRamdiskModuleAddress != NULL)
+		{
+			printf("Initializing RAMDisk (%lu MB from boot module)\n", kRamdiskModuleSize / (1024 * 1024));
+			init_ramdisk_block_device(kRamdiskModuleAddress, kRamdiskModuleSize);
+		}
+		else
+			printf("RAMDISK flag passed but no os64_disk.img module found; ignoring\n");
+	}
 
 	if (kEnableAHCI)
 	{
