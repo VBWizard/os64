@@ -20,8 +20,10 @@ extern uint8_t kPCIDeviceCount;
 extern uint8_t kPCIFunctionCount;
 extern pci_device_t* kPCIDeviceHeaders;
 extern pci_device_t* kPCIDeviceFunctions;
-block_device_info_t* kBlockDeviceInfo;
-int kBlockDeviceInfoCount;
+// kBlockDeviceInfo/kBlockDeviceInfoCount are defined in block_device.c now
+// (shared with NVMe and the RAMDisk, so they can't be AHCI-owned).
+extern block_device_info_t* kBlockDeviceInfo;
+extern int kBlockDeviceInfoCount;
 int ahciCapsCount;
 ahcicaps_t* ahciCaps;
 uint8_t ahciReadBuff[512];
@@ -571,10 +573,9 @@ bool init_AHCI()
 {
 	printd(DEBUG_AHCI, "AHCI: Initializing AHCI ...\n");
 	bool ahciDeviceFound = false;
-    kBlockDeviceInfoCount = 0;
+	// The device table/dlist setup moved into init_block() (kernel_init also
+	// calls it, before any storage driver); this call is now a no-op safety.
 	init_block();
-	kBlockDeviceInfo = kmalloc(20 * sizeof(block_device_info_t));
-	kBlockDeviceInfo->block_device = kmalloc(sizeof(block_device_t));
 	ahciDiskBuffer = kmalloc_aligned(0x10000*20);
 	//The AHCI disk buffer has to be accessed using its physical address.  So get rid of the HHMD Offset and map without it
 	ahciDiskBuffer = (uintptr_t*)(((uint64_t)ahciDiskBuffer) - kHHDMOffset);

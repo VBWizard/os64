@@ -41,6 +41,7 @@
 #include "env.h"
 #include "gui/compositor.h"
 #include "driver/system/mouse.h"
+#include "block_device.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -119,6 +120,11 @@ void kernel_init()
 	printf("Initializing PCI: ");
 	init_PCI();
 	printf("\t%u Busses, %u devices\n",kPCIBridgeCount,kPCIDeviceCount+kPCIFunctionCount);
+	// The shared block-device table must exist before ANY storage driver
+	// registers into it. (It used to be allocated inside init_AHCI(), which
+	// left noahci boots with a NULL table for NVMe to scribble through.)
+	init_block();
+
 	if (kEnableAHCI)
 	{
 		printf("Initializing AHCI ...\n");
