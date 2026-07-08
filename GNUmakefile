@@ -20,9 +20,14 @@ QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 4 \
 #				  -D qemu_debug.log 
 
 # Disk image configuration
+# DISK_SIZE_MB: 512MB (was 64) so the ramdisk boot has real working room —
+# e.g. redirecting kernel logging to a file once the OS is up (lost on
+# shutdown by design). The image is sparse on the build host (see the disk
+# target), but the full size is what Limine loads into RAM on ramdisk boots
+# and what the ISO carries, so don't grow it casually.
 DISK_IMAGE ?= $(CURDIR)/disk/os64.img
 DISK_OFFSET ?= 1048576
-DISK_SIZE_MB ?= 64
+DISK_SIZE_MB ?= 512
 DISK_PARTUUID ?= 2f4fd02e-68b4-4c82-98bc-72467529b3fc
 
 # Define drive/device flags
@@ -117,8 +122,16 @@ kernel: kernel-deps
 .PHONY: disk
 disk:
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
-	dd if=/dev/zero of=$(DISK_IMAGE) bs=1M count=$(DISK_SIZE_MB)
-	sgdisk $(DISK_IMAGE) --new=1:2048:+32M --typecode=1:0700 --change-name=1:"os64" --partition-guid=1:$(DISK_PARTUUID)
+	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
+	# rebuilding the image (which happens on every make — disk is .PHONY)
+	# doesn't write $(DISK_SIZE_MB)MB of zeros each time. The rm matters:
+	# truncate alone would leave stale GPT/FAT bytes from a previous image.
+	rm -f $(DISK_IMAGE)
+	truncate -s $(DISK_SIZE_MB)M $(DISK_IMAGE)
+	# --new=1:2048:0 — end sector 0 means "largest possible": the partition
+	# auto-fills the image (minus the backup GPT at the end), so DISK_SIZE_MB
+	# is the single knob for image AND partition size.
+	sgdisk $(DISK_IMAGE) --new=1:2048:0 --typecode=1:0700 --change-name=1:"os64" --partition-guid=1:$(DISK_PARTUUID)
 	mformat -F -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::
 
 .PHONY: disk-init

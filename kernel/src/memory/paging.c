@@ -405,6 +405,12 @@ void paging_init()
 
 uintptr_t get_paging_table_page()
 {
+	// Exhaustion tripwire: this is a bump allocator that never frees. Without
+	// this check, running past the pool silently hands out pages the physical
+	// allocator ALSO owns — two owners, one page, corruption with no
+	// fingerprints. A loud panic here names the culprit instead.
+	if (kPagingPagesCurrentPtr >= kPagingPagesBaseAddressP + (kPagingPagesCount * PAGE_SIZE))
+		panic("get_paging_table_page: paging page pool exhausted (%lu pages) — grow the pool sizing in init_os64_paging_tables\n", kPagingPagesCount);
 	uintptr_t retVal = kPagingPagesCurrentPtr;
 	kPagingPagesCurrentPtr += PAGE_SIZE;
 	return retVal;
@@ -457,6 +463,14 @@ void init_os64_paging_tables()
 	uintptr_t physAddrLookup = 0;
 
 	uint64_t allocSize = kMaxPhysicalAddress / PAGE_SIZE;
+	// The pool formula above scales with physical RAM (one pool page per 16MB),
+	// but the ramdisk module's retro-map (below) consumes pool pages in
+	// proportion to the MODULE's size instead — one page table per 2MB mapped.
+	// A 512MB ramdisk would eat 256 pool pages (half the pool on an 8GB
+	// machine), so fund those page tables explicitly: PTs + a few extra for
+	// the PD/PDPT levels the mapping may also allocate.
+	if (kRamdiskModuleSize > 0)
+		allocSize += ((kRamdiskModuleSize / (512 * PAGE_SIZE)) + 8) * PAGE_SIZE;
 	kPagingPagesCount = allocSize / PAGE_SIZE;
 	if (allocSize % PAGE_SIZE)
 		kPagingPagesCount++;
