@@ -54,8 +54,10 @@ hobby-scale judgment calls — re-rank freely.
 | **Interruptible syscall bodies** — `sti` after entry frame / `cli` before sysret; `g_saved_cr3` per-CPU→per-thread; audit handlers | Feature-gate | M | HARD GATE before `read` (userland step 2) | ABI § Interruptibility |
 | RAX:RDX error convention (resolved in design) | Feature-gate | S–M | with libos64 scaffolding | ABI § register contract |
 | Natural typed handler signatures via SYSCALL_DEFINE cast (resolved in design) | Cleanup | S | with the RAX:RDX refresh | ABI § add-a-syscall |
-| Fork register-load path (`scheduler_load_thread` panics on `justForked`) | Feature-gate | M | when fork/exec is implemented (both patterns now first-class) | SCHEDULER #1 |
-| FPU/SIMD state in the context switch (lift `-mno-sse` from user builds after) | Feature-gate | M | before userland wants floating point | ABI (deferred) |
+| Fork register-load path (`scheduler_load_thread` panics on `justForked`) | Feature-gate | M | when fork/exec is implemented (both patterns now first-class; fork is the author's favorite — treat it well) | SCHEDULER #1 |
+| FPU/SIMD state in the context switch (lift `-mno-sse` from user builds after) | Feature-gate | M | before userland wants floating point (blocks ps/top-style cpu%) | ABI (deferred) / LIBOS64 |
+| libos64 `LIBOS64_HIDDEN` macro + `-fvisibility=hidden` build wiring (PLT-free internal calls, the modern replacement for libChrisOS's `I` twins) | Feature-gate | S | first libos64 scaffolding task | LIBOS64 § shared object |
+| libos64 buffered `<os64/stdio.h>` layer (FILE*/fread/fwrite over raw handles) | Feature-gate | M | second phase — raw `<os64/io.h>` is enough for the shell | LIBOS64 § handles |
 
 ## Performance / fairness / cleanup
 
