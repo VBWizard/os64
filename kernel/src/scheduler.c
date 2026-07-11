@@ -349,7 +349,7 @@ void scheduler_reap_zombie_thread(thread_t *thread)
         return;
     }
 
-    while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
+    while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
     if (thread->threadState == THREAD_STATE_ZOMBIE) {
         scheduler_remove_thread_from_queue(THREAD_STATE_ZOMBIE, thread);
         thread->threadState = THREAD_STATE_NONE;
@@ -829,7 +829,7 @@ void scheduler_do()
 #endif
 	//Lock the section of code from the time we start looking for another thread to run, until we're done 
 	//either switching threads, or have identified that there's no new thread to run
-	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
+	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, true);
   	if (threadToRun != NO_THREAD && threadToRun->threadID!=cls->threadID)
     {

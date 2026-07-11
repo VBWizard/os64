@@ -206,11 +206,18 @@ void kernel_init()
     if (kRunTests)
     {
         test_framework_init();
-        printf("Running pre-boot tests ...\n");
+        printf("Running pre-boot tests ... ");
         test_run_preboot();
+        printf(" done\n");
     }
 
-	    for (int cnt = 0; cnt < kMPCoreCount; cnt++)
+	// BOOTMARK mile-markers (kernel.h) — PERMANENT instrumentation, gated by
+	// the BOOTMARKS cmdline flag. Born hunting the 54-second VBox boot
+	// (2026-07-11); kept because per-phase tick+TSC deltas answer "where did
+	// boot time go" in one run.
+	BOOTMARK("preboot-done");
+
+        for (int cnt = 0; cnt < kMPCoreCount; cnt++)
 	    {
 			char idleTaskName[10];
 			sprintf(idleTaskName, "/idle%u",cnt);
@@ -218,12 +225,15 @@ void kernel_init()
 			scheduler_submit_new_task(kIdleTasks[cnt]);
 		}
 
+	BOOTMARK("idle-tasks-created");
+
 	#if ENABLE_LOG_BUFFERING == 1
 	    kLogDTask = task_create("/logd", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
 	    // Pass daemon=true (first arg in RDI) to logd_thread
 	    kLogDTask->threads->regs.RDI = 1;
 	    scheduler_submit_new_task(kLogDTask);
 	#endif
+	BOOTMARK("logd+kworker-created");
 
 	if (kEnableKWorker && kMPCoreCount > 1)
 	{
@@ -242,14 +252,19 @@ void kernel_init()
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
     core_local_storage_t *cls = get_core_local_storage();
 	cls->threadID = kKernelTask->threads->threadID;
+	BOOTMARK("scheduler-enabled");
 
 	mp_enable_scheduling_vector(0);
+	BOOTMARK("bsp-sched-vector-on");
 
 	wait(1000);
+	BOOTMARK("wait1000-done");
 
 	ap_wake_up_aps();
+	BOOTMARK("aps-awake");
 
 	kProcessSignals = true;
+	BOOTMARK("signals-on");
 
 
     printd(DEBUG_BOOT, "BOOT: If a ROOTPARTUUID (%s) was passed in the commandline, we'll load it.\n", &kRootPartUUID);

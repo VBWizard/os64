@@ -30,6 +30,16 @@ extern int kTimeZone;
 extern BasicRenderer kRenderer;
 extern uint64_t kCPUCyclesPerSecond;
 
+// BOOTMARK: boot-phase mile-markers, printed via printf (direct to screen +
+// serial, unqueued — visible even when the log path itself is the suspect).
+// Each line carries tick AND raw TSC, so two markers give wall time (TSC
+// delta) and tick-advance per phase — the tick-starvation ratio that cracked
+// the 54-second VBox boot (2026-07-11). Enable with the BOOTMARKS cmdline
+// flag; costs nothing when off. Callers need x86_64.h (rdtsc) in scope.
+extern bool kEnableBootmarks;
+#define BOOTMARK(name) do { if (kEnableBootmarks) \
+    printf("BOOTMARK %-22s tick=%lu tsc=%lu\n", name, kTicksSinceStart, rdtsc()); } while (0)
+
 void kernel_main();
 
 #endif

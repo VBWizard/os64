@@ -59,7 +59,7 @@ void processSignals()
 	printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tScanning Interruptable Sleep queue\n");
 
 	//Set the scheduler task switch lock so that other APs don't see inconsistent state
-	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1));
+	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
 	while (qSleep != NO_THREAD)
 	{
 		if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past

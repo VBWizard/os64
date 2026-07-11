@@ -234,13 +234,21 @@ void ap_wake_up_aps() {
         if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
         
         printd(DEBUG_SMP, "MP: Waking up AP %u\n", apic_id);
+			// BOOTMARK mile-markers (kernel.h) — permanent, BOOTMARKS-gated.
+			// Per-AP resolution because AP bring-up was the 54-second culprit.
+			if (kEnableBootmarks)
+				printf("BOOTMARK ap%u-wake              tick=%lu tsc=%lu\n", apic_id, kTicksSinceStart, rdtsc());
 			*((volatile uint64_t *) kCPUInfo[apic_id].goto_address) = (uint64_t) &ap_wakeup_entry;
 
 			cls = get_core_local_storage_for_core(coreToWake);
 
 			while (!cls->coreAwoken) {wait(10);}
+			if (kEnableBootmarks)
+				printf("BOOTMARK ap%u-awoken            tick=%lu tsc=%lu\n", apic_id, kTicksSinceStart, rdtsc());
 			send_ipi(apic_id, IPI_AP_INITIALIZATION_VECTOR, 0, 1, 0);
 			while (!cls->coreInitialized) {wait(10);}
+			if (kEnableBootmarks)
+				printf("BOOTMARK ap%u-initialized       tick=%lu tsc=%lu\n", apic_id, kTicksSinceStart, rdtsc());
 			if (kBspSchedulerMode)
 			{
 				// Wake-on-work mode: park AP timers and kick each AP once so it can run its idle thread.
@@ -277,9 +285,13 @@ uint32_t ap_get_timer_ticks_per_interval(int ticksToWait)
     write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, 0xFFFFFFFF);  // Large count
     uint32_t end = kTicksSinceStart + ticksToWait;
     printd(DEBUG_SMP, "DEBUG: Before wait\n");
-    while (kTicksSinceStart < end) 
+    // pause, not nop: this is a hot spin on a shared variable, and under a
+    // hypervisor a nop-spin can keep this vCPU pegged while the BSP (whose
+    // timer ISR advances kTicksSinceStart) is descheduled by the HOST —
+    // stretching this "100ms" wait many times over (the 54-second VBox boot).
+    while (kTicksSinceStart < end)
 	{
-		__asm__("nop\n");
+		__builtin_ia32_pause();
 	}
     //Read the current count
     uint32_t count=read_apic_register(kMPApicBase + APIC_TIMER_CURRENT_COUNT);
@@ -301,6 +313,12 @@ void mp_determine_local_APIC_timer_speed()
         cls->apicTicksPerSecond += (ap_get_timer_ticks_per_interval(TICKS_PER_SECOND / 10) * 10); //10 ticks is 100 ms or 1/10 second
     }
     cls->apicTicksPerSecond /=TIMER_SYNC_ITERATIONS;
+    // Defuse the calibration timer: the one-shot rounds above leave the LVT
+    // armed UNMASKED with vector 0 and a ~68-second fuse (count 0xFFFFFFFF at
+    // div16) — an illegal-vector delivery waiting to happen on any boot that
+    // idles long enough before the scheduler reprograms it. Mask it here;
+    // ap_configure_scheduler_timer sets the real vector/mode later.
+    write_apic_register(kMPApicBase + APIC_LVT_TIMER, DISABLE_TIMER(0));
     int displayedSpeed = cls->apicTicksPerSecond/1000/1000;
     printd(DEBUG_SMP, "Local APIC timer *adjusted* frequency is %u MHz (average %u ticks per second)\n", displayedSpeed,cls->apicTicksPerSecond);
 }
@@ -357,8 +375,20 @@ void ap_initialization_handler() {
 	init_core_local_storage(apic_id);
 	core_local_storage_t *cls = get_core_local_storage();
 
-	mp_determine_local_APIC_timer_speed();
-	
+	// Calibrate the LAPIC timer frequency ONCE, on the BSP; APs inherit its
+	// number. Every core on the package runs off the same crystal, so per-AP
+	// recalibration was pure redundancy — and actively harmful: each AP spent
+	// 3×10 tick-paced spins calibrating against a tick clock that AP bring-up
+	// itself was starving (host-descheduled hot-spinning vCPUs), which BOTH
+	// stretched boot (the 54-second VBox mystery, 2026-07-11) AND produced
+	// 2x-wrong AP frequencies (the corrupted apicTPS readings). The BSP's
+	// number is measured early, before any of that noise exists.
+	if (apic_id == BOOTSTRAP_PROCESSOR_ID)
+		mp_determine_local_APIC_timer_speed();
+	else
+		cls->apicTicksPerSecond =
+			get_core_local_storage_for_core(BOOTSTRAP_PROCESSOR_ID)->apicTicksPerSecond;
+
 	//Divide the # of APIC timer ticks per second by the number of scheduler runs expected per second to get the timer's initial value
 	cls->apicTimerCount = cls->apicTicksPerSecond / MP_SCHEDULER_RUNS_PER_SECOND;
     
