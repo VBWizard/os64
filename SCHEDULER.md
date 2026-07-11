@@ -122,11 +122,11 @@ RFLAGS from the frame — so user tasks resume with IF=1. (The old
   LAPIC frequency against `kTicksSinceStart` at bring-up
   (`mp_determine_local_APIC_timer_speed`, 3-round average), then arms
   periodic mode with `apicTimerCount = apicTicksPerSecond /
-  MP_SCHEDULER_RUNS_PER_SECOND` (=100, raised from 10 for the GUI).
-  **Caveat:** the arming write multiplies by `SMP_MAGIC_NUMBER` (3), so the
-  *effective* pass rate per core is ~33/sec, not 100 — observed directly as
-  the GUI ball animating at ~33fps. If cadence ever needs to match the
-  config name exactly, that ×3 is the knob to interrogate.
+  MP_SCHEDULER_RUNS_PER_SECOND` (=100, raised from 10 for the GUI) — and
+  since 2026-07-11 the config is the truth: a genuine ~100 passes/sec/core.
+  (History: an arming multiplier `SMP_MAGIC_NUMBER=3` silently divided this
+  to ~33 for most of the project's life — see "The magic number autopsy"
+  below before ever reintroducing one.)
 - **Signal processing** (`processSignals`) runs from the scheduler prologue
   on the **BSP only**, every `SIGNAL_PROCESS_TICK_FREQUENCY` (=1) passes.
   SIGSLEEP wake granularity = BSP pass cadence. This is the number that was
@@ -275,22 +275,58 @@ throughput can be lower still — see the unsolved serial slow-walk.) Budget
 against the scheduler's chatter BEFORE enabling DEBUG_SCHEDULER on
 many-core hardware:
 
-- Plain DEBUG_SCHEDULER emits ~300 bytes per pass (banners + status).
-  One core at the effective ~33 passes/sec ≈ 10KB/s — *just* under the
-  wire. This is why single- and dual-core QEMU development always felt
-  fine and hid the problem.
-- Twelve cores: 12 × 33 × ~300B ≈ **120KB/s — ten times the wire.**
+- Plain DEBUG_SCHEDULER emits ~300 bytes per pass (banners + status). At
+  the true 100 passes/sec, ONE core produces ~30KB/s — **nearly 3× the
+  wire by itself.** (At the old ~33/sec effective cadence one core just
+  fit, which is how the problem stayed hidden for years.)
+- Twelve cores: 12 × 100 × ~300B ≈ **360KB/s — thirty times the wire.**
 - Add DEBUG_DETAILED and `scheduler_find_thread_to_run` prints a line per
-  runnable thread per pass: ~10 threads adds ~1.2KB/pass →
-  ≈ **475KB/s, forty times the wire.** EXTRA_DETAILED is worse again.
+  runnable thread per pass — multiples worse again.
 
-The log path buffers what the wire can't drain; at 10-40× oversubscription
-the backlog grows without bound and takes the system down with it. This is
-exactly the "12-core Bosgame with default logging crashed at boot" incident
-— fixed with `nolog` + `MAXCORES=4` on that entry. Rules of thumb: on more
-than ~2 cores boot `nolog` and enable narrow subsystem bits (DEBUG_GUI)
-instead of DEBUG_SCHEDULER; if you truly need scheduler logs on wide
-hardware, cap cores with MAXCORES and accept the slowdown.
+The log path buffers what the wire can't drain (5MB/core of runway, and
+the never-drop rule means nothing is discarded); sustained oversubscription
+eventually reaches the forced-flush path, whose LOGFULL tripwire prints the
+moment a producer starts paying the drain cost itself. This family of
+overload is what crashed the 12-core Bosgame with default logging (fixed
+with `nolog` + `MAXCORES=4` on that entry). Rules of thumb: on more than ~2
+cores boot `nolog` and enable narrow subsystem bits (DEBUG_GUI) instead of
+DEBUG_SCHEDULER; if you truly need scheduler logs on wide hardware, cap
+cores with MAXCORES and accept the slowdown.
+
+### The magic number autopsy (2026-07-10/11) — read before "optimizing" cadence
+
+For most of this project's life, a `SMP_MAGIC_NUMBER 3` multiplier in the
+LAPIC arming silently divided the configured 100 passes/sec to ~33. The
+two-day investigation that removed it is this subsystem's best cautionary
+tale, and every layer was MEASURED (RTC-referenced probes; the technique is
+in VERIFICATION.md):
+
+- The PIT, the tick clock, the APIC calibration, and the arming were all
+  proven EXACT — wall clock 100.0 ticks/sec against the CMOS RTC, per-core
+  timer fires matching the armed rate on every core. The multiplier was
+  compensating for none of them.
+- What it actually rationed: **DEBUG_SCHEDULER's printd volume.** Each
+  verbose pass performs ~6 printds — two vsprintf-class formats each —
+  largely INSIDE `kSchedulerSwitchTasksLock`, INSIDE the un-EOI'd
+  interrupt. Under QEMU/TCG at -O0 that cost 5-23ms per pass (measured;
+  single passes up to **1.3 seconds**).
+- Consequences, each confirmed numerically: all cores convoy on the one
+  lock (~195 passes/sec system-wide ceiling ÷ 4 cores ≈ the observed
+  44-56/sec each); the BSP's long in-service windows starve IRQ0 — the
+  LAPIC pending bit holds exactly ONE tick, so at ~2.3 ticks arriving per
+  window, survival ≈ 1/2.3 ≈ 43% (measured: 48 ticks/sec); and AP timer
+  calibrations performed against the starved tick clock came out ~2× wrong.
+- On VBox the same config froze outright at ~100 passes/sec (still an open
+  case — the non-irqsave lock's self-deadlock is the prime suspect; see
+  DEBTS).
+
+**The lesson: cure the pass COST, never the pass RATE.** The remedies (all
+in DEBTS): move printds outside the scheduler lock; the prologue reorder
+that legalizes an early EOI (read the five frame fields, THEN EOI — with
+the `mp_inScheduler` guard checked BEFORE the `temp_rsp` store so a nested
+entry can't clobber it; the whole pre-`sti` prologue runs with IF=0, which
+makes that reordering atomic); and/or routing IRQ0 above the scheduler's
+priority class so the wall clock is unstealable no matter what a pass does.
 
 ## Failure fingerprints (symptom → cause)
 
@@ -319,9 +355,12 @@ hardware, cap cores with MAXCORES and accept the slowdown.
   qRunnable or the queue links are corrupt — check recent queue surgery for
   lock violations (invariant 5).
 - **Everything schedules but sleeps oversleep massively:** signal cadence —
-  check `SIGNAL_PROCESS_TICK_FREQUENCY`, the LAPIC arming multiplier
-  (SMP_MAGIC_NUMBER), and that the BSP (the only signal processor) isn't
-  starved.
+  check `SIGNAL_PROCESS_TICK_FREQUENCY` and that the BSP (the only signal
+  processor) isn't starved.
+- **Wall clock runs slow (ticks/sec below TICKS_PER_SECOND) under verbose
+  logging:** the autopsy's disease — long un-EOI'd passes are eating PIT
+  ticks (the pending bit holds exactly one). Measure pass cost, get the
+  printds out of the pass/lock; don't touch the timer, it's innocent.
 - **Many-core boot dies early with verbose logging (bare metal) or crawls
   (QEMU):** serial oversubscription — see "do the math first" above.
   `nolog` + MAXCORES, then re-enable narrow debug bits.
@@ -334,9 +373,20 @@ hardware, cap cores with MAXCORES and accept the slowdown.
    thread.
 3. An IRQ-safe wake primitive (event-driven, sub-tick) — only if a real
    need appears; the 100Hz cadence covers the GUI.
-4. `SMP_MAGIC_NUMBER` makes effective pass cadence ~⅓ of
-   MP_SCHEDULER_RUNS_PER_SECOND — rename/derive honestly when next touched.
+4. Printds execute inside `kSchedulerSwitchTasksLock` — the convoy the
+   autopsy convicted. Move them out (queue surgery stays locked;
+   find-then-run stays atomic). Requirement from Chris: DEBUG_DETAILED must
+   be slow-but-honest, never a lockup.
 5. MAX_CPUS=24 vs. the 3900X boundary (above).
 6. BSPSCHED + GUI coexistence: needs only the damage-wake nudge IPI (see
    the BSPSCHED section) — `gui_start()`'s pin refusal is tick-spin-era
    conservatism kept until that exists.
+7. Wall-clock hardening (the autopsy's structural fixes): early EOI via the
+   prologue reorder, and/or IRQ0 above the scheduler's priority class.
+8. `kSchedulerSwitchTasksLock` is raw and non-irqsave, and is taken from
+   thread context (reap) — self-deadlock possible (the open VBox-freeze
+   suspect). Fix: irqsave + a bounded-spin panic tripwire (send_ipi's ICR
+   pattern).
+9. The VBox freeze at 100 passes/sec + DEBUG_SCHEDULER: unexplained on
+   native-speed hardware (the TCG convoy math doesn't transfer). Hunt with
+   the #8 tripwire.

@@ -46,6 +46,7 @@ hobby-scale judgment calls — re-rank freely.
 | `#DF` IST emergency stack | Robustness | S–M | none | ABI (deferred) |
 | MAX_CPUS=24 vs. the 3900X's 24 threads (index 24 = one past every per-CPU array) — raise the constant or guard with MAXCORES | Robustness | S | before booting the 3900X | SCHEDULER #5 |
 | `free_memory` return value must never be used as an index post-merge/compaction (documented at both ends; latent footgun) | Cleanup | XS | none | MEMORY #4 |
+| `mp_timesEnteringScheduler` stride mismatch: `uint32_t[]` in C, but scheduler.S increments `qword ptr [.. + rax*8]` — core N's asm bumps elements 2N/2N+1 while C reads element N (first-pass check reads a value asm never touched; masked by `mp_CoreHasRunScheduledThread`). Make it `uint64_t[]` in C | Hole (latent) | XS | none — found 2026-07-10 during tick diagnostics | SCHEDULER (scheduler.S / scheduler.c) |
 
 ## Userland-gating (blocks the shell roadmap)
 
@@ -64,7 +65,12 @@ hobby-scale judgment calls — re-rank freely.
 | Debt | Sev | Cost | Gate | Source |
 |---|---|---|---|---|
 | AP sibling starvation — no intra-pass timeslicing under a CPU-bound thread | Robustness | L | when it bites | SCHEDULER #2 / GRAPHICS #10 |
-| `SMP_MAGIC_NUMBER` makes effective cadence ~⅓ of `MP_SCHEDULER_RUNS_PER_SECOND` — rename/derive honestly | Cleanup | S | when next touching timer arming | SCHEDULER #4 |
+| Move scheduler printds OUTSIDE `kSchedulerSwitchTasksLock` (the convoy: DETAILED must be slow-but-honest, never a lockup) | Robustness | M | none — Chris's "bend to my will" requirement | SCHEDULER #4 / autopsy |
+| Wall-clock hardening: early EOI via prologue reorder (guard before `temp_rsp` store, then EOI after the 5 frame reads) and/or IRQ0 above scheduler priority | Robustness | M | Chris's #1 pick post-autopsy | SCHEDULER #7 / autopsy |
+| `kSchedulerSwitchTasksLock`: irqsave + bounded-spin panic tripwire (send_ipi ICR pattern) — also the VBox-freeze hunt instrument | Robustness | S | none | SCHEDULER #8-9 |
+| Log-full strategy honoring never-drop: bigger buffers (100MB fine) and/or high-water logd wake; forced flush must never run from scheduler/interrupt context. Never propose dropping entries | Robustness | M | before sustained verbose runs on real hardware | log.c / never-drop rule |
+| `kCPUCyclesPerSecond` miscalibrated ~10× under QEMU/TCG — trust cycle counts, fix the calibration | Cleanup | S | before anything times itself with it | kernel.c tscGetCyclesPerSecond |
+| Uncomment the divide-config write in `ap_configure_scheduler_timer` — arming currently depends on the divisor leftover from calibration | Cleanup | XS | none | smp_core.c |
 | Allocator first-fit linear scans (merge scans whole ledger; compaction every 10th free) | Cleanup | L | measure before caring | MEMORY #2 |
 | IRQ-safe sub-tick wake primitive | Feature-gate | M | only if a real need appears (100Hz covers the GUI) | SCHEDULER #3 |
 

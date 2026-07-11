@@ -44,10 +44,18 @@ A windowed QEMU steals the human's keyboard focus mid-typing. Agent runs
 are headless, with serial going somewhere session-private:
 
 ```bash
-qemu-system-x86_64 <base flags> \
+qemu-system-x86_64 -machine q35 -cdrom os64_kernel.iso -boot d \
+  <QEMU_BASE_FLAGS + disk flags, lifted VERBATIM from the run target> \
   -display none -serial file:$SCRATCH/run_com1.log \
   -monitor telnet:127.0.0.1:55555,server,nowait   # keep monitor if driving input/screenshots; -monitor none otherwise
 ```
+
+**Lift the flags from the `run` target verbatim — never reconstruct them
+from memory.** `-machine q35` in particular is load-bearing: os64 targets
+q35 exclusively, and QEMU's default i440FX board #GP-panic-loops within a
+few ticks of boot (right after the DEBUG_OPTIONS banner, before ACPI —
+see the harness fingerprints). A hand-typed flag set that "looks right"
+cost a real debugging detour on 2026-07-11.
 
 Offer `-vnc :0` instead of `-display none` if the human wants to peek.
 
@@ -174,3 +182,10 @@ until it has seen at least QEMU + one of the other two.
   limitation).
 - **Ghost bugs that survive your fix:** stale objects — the clean-build
   rule.
+- **#GP panic loop within ~3 ticks of boot, right after the DEBUG_OPTIONS
+  banner:** you booted the wrong machine type — QEMU defaulted to i440FX
+  because `-machine q35` was omitted. The kernel is fine; fix the flags.
+- **pkill self-match, part two:** the bracket trick (`x86_6[4]`) protects
+  the *pattern*, but if the same compound command LAUNCHES qemu, the
+  literal string in the launch line still matches your own shell — exit
+  144 before the launch runs. Kill and launch in SEPARATE commands.

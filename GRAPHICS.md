@@ -99,8 +99,11 @@ adopted unconditionally at boot; IRQ12 only when `GUI` is set.
   a few hundred ms of input latency, and why the SIGSLEEP-paced bounce demo
   crawled at ~5-10fps. The cadence bump (`MP_SCHEDULER_RUNS_PER_SECOND`
   10→100 = one pass per 10ms tick) fixed both: nominal wake latency is now
-  ~one tick and the ball runs ~33fps. The lesson stands: SIGSLEEP-paced
-  clients are capped by signal cadence, not by the compositor.
+  ~one tick. (Second healing, 2026-07-11: removing the SMP_MAGIC_NUMBER
+  arming multiplier — SCHEDULER.md's autopsy — took the effective pass rate
+  from ~33 to a true ~100/sec, and the ball from ~33fps to ~100fps.) The
+  lesson stands: SIGSLEEP-paced clients are capped by signal cadence, not
+  by the compositor.
 - **Scar #2 (tick spin):** the interim "spin to the next tick while input is
   hot" workaround ate one full core — a full HOST core under VBox/QEMU —
   whenever the mouse moved. And its first version spun on `rdtsc()`: per-core

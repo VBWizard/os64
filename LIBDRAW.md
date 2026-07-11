@@ -93,13 +93,12 @@ while (running) {
 `frame_wait` sleeps the leftover of the target budget against
 `kTicksSinceStart`-based real time, so an app takes **whatever cadence the
 scheduler currently delivers and gets smoother for free when the scheduler
-gets faster** — no recompile. Today the practical ceiling for a sleep-paced
-app is ~33 fps: the system clock is 100 Hz, but SIGSLEEP wakes are checked
-at scheduler-pass cadence, which `SMP_MAGIC_NUMBER=3` divides to ~33 Hz
-(SCHEDULER.md limitation #4 / DEBTS). Fixing that one constant lifts the
-ceiling to ~100 fps with zero app changes — which is exactly why the frame
-loop must not bake in a rate. (~33 fps is already "smooth as can be" on
-bare metal, so this is headroom, not a blocker.)
+gets faster** — no recompile. This already paid out once: when the
+SMP_MAGIC_NUMBER multiplier was removed (2026-07-11, see SCHEDULER.md's
+autopsy), sleep-paced animation jumped from a ~33 fps ceiling to ~100 fps
+overnight, with zero app changes — the bounce demo visibly tripled its
+speed. That event is the standing proof of why the frame loop must never
+bake in a rate.
 
 ### Crisp frames come from double buffering — not from frame rate
 
@@ -204,10 +203,10 @@ App-driven from the very first line.
   interim, or the kernel snapshot regressed). See "Crisp frames" above. The
   app-side check: confirm you draw a COMPLETE frame before each publish, not
   a partial one.
-- **Animation janky at exactly ~33 fps:** not a libdraw bug — the
-  `SMP_MAGIC_NUMBER` wake-cadence ceiling. Confirm `frame_wait` is
-  real-time-based (not spinning) and move on; the fix is the scheduler
-  constant.
+- **Animation capped well below the scheduler rate:** not a libdraw bug —
+  SIGSLEEP wake cadence is the ceiling for sleep-paced apps. Confirm
+  `frame_wait` is real-time-based (not spinning), then check the scheduler's
+  actual pass rate (SCHEDULER.md; its autopsy section is the case study).
 - **Text draws garbage/blank:** the embedded font blob didn't link in, or a
   byte past the glyph table was indexed (non-ASCII with a 256-glyph font).
 - **Draw corrupts neighbouring windows:** a primitive wrote outside the
@@ -220,8 +219,7 @@ App-driven from the very first line.
 - Proportional / multiple fonts (present scope is one embedded bitmap font).
 - Alpha/translucency (GRAPHICS.md future item; `blit_masked` already does
   shaped, not blended).
-- The `SMP_MAGIC_NUMBER` wake-cadence fix that lifts the frame ceiling
-  (SCHEDULER.md #4 / DEBTS) — not a libdraw change, but what unlocks its
-  headroom.
+- ~~The `SMP_MAGIC_NUMBER` wake-cadence fix~~ — DONE 2026-07-11; the frame
+  ceiling is now ~100 fps (SCHEDULER.md autopsy).
 - Everything rides the userland roadmap: libos64 scaffolding → the GUI
   syscalls (16-22) land in the dispatch table → gbounce/gkeys port.
