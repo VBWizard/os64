@@ -49,6 +49,7 @@ extern int kBlockDeviceInfoCount;
 extern bool kEnableAHCI;
 extern bool kEnableNVME;
 extern bool kEnableRamdisk;
+extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch block below
 bool kEnableSMP = true;
 bool kBspSchedulerMode = false;
 bool kEnableKWorker = false;
@@ -272,6 +273,35 @@ void kernel_init()
 	{
 		printd(DEBUG_BOOT, "BOOT: ROOTPARTUUID passed in commandline.  Will mount '%s' as the root partition\n",&kRootPartUUID);
 		vfs_mount_root_part((char*)&kRootPartUUID);
+	}
+
+	// TEMP (userland bring-up, remove when the shell exists): launch
+	// /bin/hello as a FIRST-CLASS scheduled application from the normal boot
+	// flow — task_create + scheduler_submit_new_task, then walk away. No test
+	// harness, no exited-polling: the scheduler picks it up on some core, it
+	// runs at CPL 3, prints, and exits entirely on its own. This is the exact
+	// shape the shell launcher will take (submit /bin/shell, don't babysit).
+	// Gated on the HELLO cmdline flag. The brief wait only paces the boot log
+	// so hello's output lands in order — the app runs via the scheduler, not
+	// via this wait.
+	if (kRunHello && kRootFilesystem != NULL)
+	{
+		printf("Launching /bin/hello as a userland application ...\n");
+		task_t *helloTask = task_create("/bin/hello", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+		if (helloTask)
+		{
+			scheduler_submit_new_task(helloTask);
+			// Let the scheduler run it on its own for a beat, then report the
+			// outcome to serial (hello's own os64_puts output lands on the
+			// framebuffer console, not here). exited+retVal==0 = it ran at
+			// CPL 3 and exited cleanly, all via the scheduler.
+			wait(1000);
+			printf("  /bin/hello: %s (retVal=0x%lx)\n",
+			       helloTask->exited ? "ran and exited via the scheduler" : "did NOT exit in 1s",
+			       helloTask->retVal);
+		}
+		else
+			printf("  /bin/hello launch failed (not on the image?)\n");
 	}
 
     if (kRunTests)

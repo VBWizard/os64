@@ -20,6 +20,10 @@ bool kEnableRamdisk = false;
 // BOOTMARK boot-phase mile-markers (kernel.h) — off by default so the boot
 // screen stays clean; flip on per-entry when timing a boot.
 bool kEnableBootmarks = false;
+// TEMP (userland bring-up): launch /bin/hello as a normal scheduled app from
+// the boot flow (not the test harness). Remove once the shell exists — it's
+// the stand-in for "launch init/shell". Off by default.
+bool kRunHello = false;
 
 // -----------------------------------------------------------------------
 // Kernel command-line parser definitions
@@ -102,6 +106,7 @@ static cmdopt_t cmdopts[] = {
     {"NONVME", OPT_BOOL, &kEnableNVME, false, 0},
     {"RAMDISK", OPT_BOOL, &kEnableRamdisk, true, 0},
     {"BOOTMARKS", OPT_BOOL, &kEnableBootmarks, true, 0},
+    {"HELLO", OPT_BOOL, &kRunHello, true, 0},
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
