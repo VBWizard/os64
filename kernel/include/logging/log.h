@@ -8,7 +8,12 @@
 
 //Set to sizeof(log_entry_t)*10 to enable buffer full processing
 
-#define LOG_BUFFER_SIZE_MB 5
+// 16MB/core (was 5): the DETAILED boot burst peaked at ~11.9k of 17.7k
+// entries (~67% of 5MB) — and the burst happens BEFORE any filesystem
+// exists, so only capacity can absorb it (the post-mount file sink handles
+// steady state; see the klog plan). 3x headroom over worst observed; crank
+// freely — never-drop is the house rule and RAM is cheap here.
+#define LOG_BUFFER_SIZE_MB 16
 #define LOG_BUFFER_SIZE (1024 * 1024 * LOG_BUFFER_SIZE_MB) // Size of buffer per core
 #define MAX_LOG_MESSAGE_SIZE 256
 // Drain twice a second: smaller accumulations per pass mean shorter serial
