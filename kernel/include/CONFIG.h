@@ -37,7 +37,7 @@
 // raised to match TICKS_PER_SECOND when the GUI gave sleeping threads a
 // reason to wake quickly.
 #define MP_SCHEDULER_RUNS_PER_SECOND 100
-#define SCHEDULER_DEBUG 1
+#define SCHEDULER_DEBUG 0
 
 // Framebuffer related
 #define FRAMEBUFFER_FONT "zap-ext-light16.psf"
@@ -81,7 +81,7 @@
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
 #define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS) 
 // | DEBUG_SPECIAL
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS | DEBUG_SCHEDULER | DEBUG_NVME)
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS)
 //#define DEBUG_OPTIONS DEBUG_MINIMAL_OPTIONS
 extern __uint128_t kDebugLevel;
 
