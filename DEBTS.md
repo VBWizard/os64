@@ -81,6 +81,7 @@ hobby-scale judgment calls — re-rank freely.
 | Alpha translucency (X byte in XRGB reserved; `surface_blit_masked` already shapes) | Feature-gate | M | UX | GRAPHICS #7 |
 | Runtime resolution switching (only `framebuffers[0]` used) | Feature-gate | M | UX | GRAPHICS #8 |
 | Verify SIGSLEEP wake latency holds under load (fixed to ~1 tick; unverified at load) | Cleanup | S | none | GRAPHICS #10 |
+| **libdraw/libui** userland graphics library — port surface.c primitives to ring-3 (L1) + the widget model (L2, grown app-driven); embedded PSF1 font; cadence-agnostic frame loop | Feature-gate | M–L | after GUI syscalls 16-22 land in the dispatch table + libos64 scaffolding | LIBDRAW.md |
 
 ## Build system
 
