@@ -15,9 +15,17 @@
 
 int main(int argc, char **argv, char **envp)
 {
-    (void)argc; (void)argv; (void)envp;   // handoff ABI not wired yet
+    (void)envp;
 
     os64_puts("Hello from os64 userland! (app: hello, via libos64)\n");
+
+    // Prove the startup handoff: the kernel passed argc/argv in RDI/RSI and
+    // launch let them through. argv[0] is the path we were launched as.
+    if (argc > 0 && argv && argv[0]) {
+        os64_puts("hello: launched as ");
+        os64_puts(argv[0]);
+        os64_puts("\n");
+    }
 
     // Prove the process/scheduler round trip too: yield, then come back.
     os64_yield();

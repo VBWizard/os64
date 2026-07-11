@@ -154,6 +154,19 @@ off: no waiting on interrupt-delivered events, keep bodies short.
 
 ## Ring-3 task lifecycle
 
+**Startup handoff (register-based, and already built):** os64 does NOT use a
+SysV-style initial stack (argc/argv/envp/auxv pushed as a block). Instead
+`task_create()` latches the new thread's entry registers directly —
+`RDI=argc`, `RSI=argv` (the argv blob is built and mapped at
+`TASK_ARGV_VIRT`=0x6f000000 with task-space pointers), `RDX=envp`
+(`TASK_ENV_VIRT`) — which is exactly the SysV *calling* convention for
+`main(argc, argv, envp)`. So the `launch` stub does nothing but pass those
+registers through to `main`; the initial user stack carries ONLY the return
+address to the exit trampoline (below). When no args are given, the kernel
+synthesizes `argc=1, argv[0]=path`. (Historical footgun: an early `launch`
+zeroed RDI/RSI/RDX and discarded the whole handoff — a stub must PRESERVE
+them.)
+
 **Birth:** `task_create()` loads the ELF (demand-paged via VMAs), builds
 the user stack, and seeds its initial return address with
 `TASK_EXIT_TRAMPOLINE_VIRT` — a user-mapped, **read-only + executable**

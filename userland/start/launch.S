@@ -9,10 +9,14 @@
 // exit trampoline is a pure-ABI backstop for binaries with no launch; a
 // libos64 program always comes through here.)
 //
-// argc/argv/envp handoff is NOT wired yet (the initial-stack-layout ABI is
-// unspecified — see ABI.md's open "startup handoff" item). main() is called
-// with zeroed args for now; hello doesn't need them. When the layout is
-// designed, this stub reads it and nothing else changes.
+// argc/argv/envp handoff: the KERNEL already sets it up in registers before
+// entering us — task_create latches RDI=argc, RSI=argv (@TASK_ARGV_VIRT),
+// RDX=envp (@TASK_ENV_VIRT) into the new thread's saved regs, which is
+// exactly the SysV register order for main(argc, argv, envp). So launch does
+// NOTHING but preserve them and call main. (An earlier version zeroed
+// RDI/RSI/RDX here and threw the whole handoff away — hence hello's fake
+// empty args. The contract is register-based, not stack-based; the initial
+// user stack carries only the return address to the exit trampoline.)
 
 .code64
 .intel_syntax noprefix
@@ -21,14 +25,20 @@
 .global _start
 .type _start, @function
 
+// Put _start in its own section so the app link script (*(.text._start)
+// first) places it at the load base — the ELF entry sits at 0x400000, the
+// conventional and debugger-friendly layout. Without this, _start lands in
+// plain .text and whatever object links first (the app's main) takes the
+// base instead. Correct either way (ENTRY(_start) sets e_entry), but this
+// is the one you want when you attach a debugger.
+.section .text._start, "ax", @progbits
 _start:
     xor rbp, rbp                // terminate the frame-pointer chain (ABI: the
                                 // outermost frame has rbp = 0)
 
-    // main(argc=0, argv=NULL, envp=NULL) until the handoff ABI exists.
-    xor edi, edi
-    xor esi, esi
-    xor edx, edx
+    // RDI/RSI/RDX arrive holding argc/argv/envp (kernel-set — see above),
+    // which ARE main's first three SysV arguments. Pass them through
+    // untouched.
     call main
 
     // main returned: RAX = its int return value. Convert to exit(code).

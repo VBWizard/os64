@@ -45,9 +45,19 @@ class Os64SymbolAutoload(gdb.Breakpoint):
             path = gdb.parse_and_eval("kDebugTaskLoadedPath").string()
             bias = int(gdb.parse_and_eval("kDebugTaskLoadedBias"))
             name = os.path.basename(path)
-            symfile = os.path.abspath(os.path.join("kernel", "bin", name))
+            # Search both binary output dirs: the kernel test fixtures live in
+            # kernel/bin, real userland apps (hello, and everything after it)
+            # in userland/bin. Without userland/bin here, an app's symbols
+            # silently never load — which is exactly why /bin/hello showed no
+            # source in the debugger.
+            symfile = None
+            for d in (os.path.join("kernel", "bin"), os.path.join("userland", "bin")):
+                cand = os.path.abspath(os.path.join(d, name))
+                if os.path.exists(cand):
+                    symfile = cand
+                    break
             key = (symfile, bias)
-            if key != self.current and os.path.exists(symfile):
+            if symfile and key != self.current:
                 if self.current is not None:
                     gdb.execute("remove-symbol-file %s" % self.current[0],
                                 to_string=True)
