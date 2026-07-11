@@ -25,9 +25,14 @@
 
 //Logging related
 #define ENABLE_LOG_BUFFERING 1  // Set to 0 to disable buffering
-// Wait for transmit-empty before each serial byte. Required at 115200 on real
-// hardware and some hypervisors; disable if it causes hangs on your platform.
-#define SERIAL_WAIT_FOR_TRANSMIT 1
+// Wait for transmit-empty before each serial byte. 2026-07-11 finding: on
+// VBox this LSR poll was the logd drain throttle (~11.5KB/s, VM-exit priced
+// per byte) — with it OFF, drains run at port speed and DETAILED stays
+// drained. Keep OFF for file/disconnected serial sinks. CAVEAT: with a REAL
+// serial listener attached, unpaced writes can overrun the UART FIFO and
+// drop bytes ON THE WIRE — turn this back on wherever a physical consumer
+// sits (never-drop applies to the wire too).
+#define SERIAL_WAIT_FOR_TRANSMIT 0
 
 //Scheduler Related
 // One scheduler pass per timer tick (10ms). This is also the SIGSLEEP wake
@@ -81,7 +86,7 @@
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
 #define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS) 
 // | DEBUG_SPECIAL
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS)
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS | DEBUG_SCHEDULER)
 //#define DEBUG_OPTIONS DEBUG_MINIMAL_OPTIONS
 extern __uint128_t kDebugLevel;
 

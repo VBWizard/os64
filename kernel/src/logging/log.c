@@ -21,6 +21,9 @@ bool kLoggingInitialized = false;
 extern struct limine_smp_response *kLimineSMPInfo;
 // Ensures only one logd worker processes the buffers at a time
 _Atomic uint32_t kLogDWorkLock = 0;
+// Which core currently holds kLogDWorkLock (0xFFFFFFFF = nobody) — purely
+// forensic, for the no-progress panic in log_store_entry.
+volatile uint32_t kLogDDrainerCore = 0xFFFFFFFF;
 
 void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message)
 {
@@ -49,27 +52,51 @@ void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t ca
     entry->message[MAX_LOG_MESSAGE_SIZE-1] = '\0';
     buffer->head = (buffer->head + 1) % buffer->capacity;
 
-    //If the log buffer is *full* then attempt to flush the buffer directly. If that fails, put the current thread to sleep
-    //so that logd has a chance to wake up and flush the buffer.
-    //NOTE: Putting the thread to sleep is *a bad idea* because the scheduler calls printd() a bunch of times, and putting the scheduler
-    //to sleep to start another thread? That just makes no sense.
-    while ((buffer->head + 1) % buffer->capacity == buffer->tail)
+    //If the log buffer is *full*: flush it ourselves, or wait for the drain
+    //that is already running. NEVER drop a byte (house rule) — and never
+    //panic while help is mid-flight: the old instant-panic on a failed
+    //try-lock fired precisely when another context was ALREADY draining our
+    //queue (the k-way merge covers every core), i.e. exactly when patience
+    //would have won (2026-07-11, VBox DETAILED).
+    //NOTE: Putting the thread to sleep is still *a bad idea* — the scheduler
+    //itself calls printd(), and the scheduler cannot sleep.
+    if ((buffer->head + 1) % buffer->capacity == buffer->tail)
     {
-        // PERMANENT tripwire (kept after the 2026-07-11 wager it was built
-        // for): the forced flush honors the never-drop-a-byte rule, but it
-        // makes the PRODUCER pay wire-speed costs — fine in a thread, brutal
-        // inside the scheduler. If this ever prints, log production has
-        // outrun logd and this path needs the never-drop remedies (bigger
-        // buffers / high-water logd wake — see DEBTS). printf ON PURPOSE:
-        // it bypasses these queues, so it can't be drowned by the flood
-        // it's reporting on.
+        // PERMANENT tripwire: if this prints, production outran logd and a
+        // producer is paying drain costs — fine in a thread, brutal inside
+        // the scheduler; see DEBTS for the never-drop remedies. printf ON
+        // PURPOSE: it bypasses these queues, so it can't be drowned by the
+        // flood it's reporting on.
         static volatile uint64_t forcedFlushCount = 0;
-        printf("LOGFULL: core %u queue full at tick %lu (occurrence #%lu) — producer force-flushing!\n",
+        printf("LOGFULL: core %u queue full at tick %lu (occurrence #%lu)\n",
                core, kTicksSinceStart, __sync_add_and_fetch(&forcedFlushCount, 1));
-        //Attempt to execute logd flushing method
-        if (!logd_thread(false))
-            //If that fails, throw a panic for now until we figure out a better approach
-            panic("log_store_entry: logd buffer for core %u is full", core);
+
+        uint64_t idleSpins = 0;
+        size_t lastTail = buffer->tail;
+        while ((buffer->head + 1) % buffer->capacity == buffer->tail)
+        {
+            //Try to run a drain chunk ourselves. False = someone else holds
+            //kLogDWorkLock and is draining right now — our queue included.
+            if (logd_thread(false))
+            {
+                lastTail = buffer->tail;
+                idleSpins = 0;
+                continue;
+            }
+            __builtin_ia32_pause();
+            if (buffer->tail != lastTail)
+            {
+                //The other drainer is making progress — keep waiting.
+                lastTail = buffer->tail;
+                idleSpins = 0;
+            }
+            //ZERO progress for an eon means the drainer can never run again —
+            //e.g. it lives on THIS core and we are spinning above it in
+            //interrupt context. A loud forensic panic beats a silent wedge.
+            else if (++idleSpins > 2000000000UL)
+                panic("log_store_entry: core %u queue full with NO drain progress (drainer=core %u, head=%lu tail=%lu)\n",
+                      core, kLogDDrainerCore, (unsigned long)buffer->head, (unsigned long)buffer->tail);
+        }
     }
 }
 
@@ -129,14 +156,19 @@ bool logd_thread(bool daemon) {
 
     while (1) {
         int processed_logs = 0;
+        bool backlog = false;
 
         // Try-lock: if another CPU is already flushing, skip this wakeup
         if (!__sync_lock_test_and_set(&kLogDWorkLock, 1))
         {
+            kLogDDrainerCore = get_core_local_storage()->apic_id;
             if (kLoggingInitialized)
             {
                 // k-way merge: on each step pick the core whose oldest entry
-                // has the lowest TSC, print it, repeat until all buffers empty.
+                // has the lowest TSC, print it, repeat — BOUNDED at
+                // LOGD_DRAIN_CHUNK entries per lock hold (see log.h: the old
+                // until-empty loop never terminated under sustained
+                // production, welding the lock shut forever).
                 // Only logd updates tail pointers so no per-buffer lock needed.
                 bool any;
                 do {
@@ -161,18 +193,24 @@ bool logd_thread(bool daemon) {
                         logd_drain_one(&core_log_buffers[best_core]);
                         processed_logs++;
                     }
-                } while (any);
+                } while (any && processed_logs < LOGD_DRAIN_CHUNK);
+                backlog = any;
             }
             nonDaemonRunSuccess = processed_logs > 0;
             drain_pass++;
 
-            // Print queue depths directly to serial after every pass, so we
-            // can monitor buffer pressure without adding to the ring buffers
-            // themselves (which would skew the numbers). One line per drain
-            // (~2/sec) is cheap, and per-pass visibility is what cracked the
-            // 2026-07 slow-walk investigation. AP is the core the pass ran
-            // on — kworker drains from AP1 every 2s through this same code,
-            // so without it the stats can't tell the two drainers apart.
+            // Print queue depths directly to serial, so we can monitor buffer
+            // pressure without adding to the ring buffers themselves (which
+            // would skew the numbers). Quiet passes always print; while a
+            // backlog persists the heartbeat is rate-limited to every
+            // LOGD_STATS_EVERY-th pass so it can't flood the wire it reports
+            // on. Per-pass visibility cracked the 2026-07 slow-walk, and the
+            // 2026-07-11 eternal-drain bug was spotted precisely because this
+            // line STOPPED printing — keep it alive under all conditions. AP
+            // is the core the pass ran on — kworker drains from AP1 every 2s
+            // through this same code, so without it the stats can't tell the
+            // two drainers apart.
+            if (!backlog || (drain_pass % LOGD_STATS_EVERY) == 0)
             {
                 char stats[128];
                 int pos = snprintf(stats, sizeof(stats),
@@ -190,11 +228,16 @@ bool logd_thread(bool daemon) {
                 serial_print_string(stats);
             }
 
+            kLogDDrainerCore = 0xFFFFFFFF;
             __sync_lock_release(&kLogDWorkLock);
         }
         if (!daemon)
             return nonDaemonRunSuccess;
-        // Sleep only when all queues were empty; wake up periodically regardless
+        // Backlog remaining (chunk bound hit): come straight back for more —
+        // sleeping now would cap throughput at CHUNK/LOGD_SLEEP_TICKS.
+        if (backlog)
+            continue;
+        // Queues drained dry: sleep, wake up periodically regardless.
         sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
     }
 }
