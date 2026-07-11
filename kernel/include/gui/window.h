@@ -34,7 +34,14 @@ typedef struct window
     char      title[GUI_WINDOW_TITLE_MAX];
 
     rect_t    frame;      // screen rect INCLUDING decorations
-    surface_t content;    // the client-drawn pixels (frame minus chrome)
+    surface_t content;    // what the COMPOSITOR composites (the front buffer)
+    // The client's drawing target (the back buffer). gui_window_get_surface
+    // hands this out; gui_window_present snapshots the damage rect
+    // canvas→content under kGuiLock, so the compositor only ever sees
+    // finished frames (GRAPHICS.md "Atomic frames" — snapshot-on-publish).
+    // Under userland these pages become task-mapped shared memory; the
+    // content surface stays kernel-side either way.
+    surface_t canvas;
 
     // Per-window event queue: the compositor pushes routed events, the
     // owning app thread pops them via gui_event_poll(). Drop-newest on full.

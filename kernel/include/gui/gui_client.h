@@ -23,9 +23,11 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 
 int64_t gui_window_destroy(int64_t handle);
 
-// Get the window's drawable content surface. TODAY this hands out a kernel
-// pixel pointer (clients are kernel threads); under userland this becomes a
-// shared-memory mapping — the one call whose implementation must change.
+// Get the window's drawable CANVAS (the client-owned back buffer). Draw at
+// will — nothing shows until present() snapshots your damage rect into the
+// compositor-side content surface (atomic frames: the screen only ever
+// shows finished frames). Under userland the canvas pages become a
+// shared-memory mapping; the snapshot semantics stay identical.
 int64_t gui_window_get_surface(int64_t handle, surface_t *out);
 
 // Publish content changes: `damage` in CONTENT coordinates (NULL = all).

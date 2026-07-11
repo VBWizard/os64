@@ -14,6 +14,7 @@
 #include "CONFIG.h"
 #include "printd.h"
 #include "video.h"
+#include "memcpy.h"
 
 extern struct Framebuffer kFrameBuffer;
 
@@ -81,9 +82,10 @@ int64_t gui_window_destroy(int64_t handle)
 }
 
 // Future syscall: SYSCALL_GUI_WINDOW_GET_SURFACE (18), user_ptr_mask 0b10
-// (out-struct). THE userland pivot: today `out->pixels` is a kernel pointer;
-// under userland this call instead maps the window's pixel pages into the
-// task's address space and returns the task-local VA.
+// (out-struct). Hands out the window's CANVAS — the client-owned back
+// buffer; the compositor never reads it (it composites `content`, which
+// present() snapshots into — see window.h). Under userland this call maps
+// the canvas pages into the task's address space and returns the task VA.
 int64_t gui_window_get_surface(int64_t handle, surface_t *out)
 {
 	if (!out)
@@ -94,7 +96,7 @@ int64_t gui_window_get_surface(int64_t handle, surface_t *out)
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 		return GUI_ERR_INVALID_HANDLE;
 	}
-	*out = win->content;
+	*out = win->canvas;
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
 	return 0;
 }
@@ -110,23 +112,35 @@ int64_t gui_window_present(int64_t handle, const rect_t *damage)
 		return GUI_ERR_INVALID_HANDLE;
 	}
 
-	// Translate content-local damage to screen coordinates while we still
-	// hold the lock (the frame can't move under us here).
-	rect_t content_screen = wm_content_rect_on_screen(win);
-	rect_t screen_damage;
+	// Clip the damage to the content bounds (NULL = the whole content).
+	rect_t content_bounds = {0, 0, (int32_t)win->content.width, (int32_t)win->content.height};
+	rect_t local;
 	if (damage) {
-		rect_t content_bounds = {0, 0, (int32_t)win->content.width, (int32_t)win->content.height};
-		rect_t clipped;
-		if (!rect_intersect(*damage, content_bounds, &clipped)) {
+		if (!rect_intersect(*damage, content_bounds, &local)) {
 			spinlock_release_irqrestore(&kGuiLock, irqflags);
 			return 0;   // empty damage: legal no-op
 		}
-		screen_damage = (rect_t){content_screen.x + clipped.x,
-		                         content_screen.y + clipped.y,
-		                         clipped.w, clipped.h};
 	} else {
-		screen_damage = content_screen;
+		local = content_bounds;
 	}
+
+	// Snapshot-on-publish (GRAPHICS.md "Atomic frames"): copy the damage rect
+	// canvas → content under kGuiLock. The compositor only ever composites
+	// content, so a frame on screen is always a frame the client FINISHED —
+	// this is what fuses the mid-draw torn ball back into one ball. Cost is
+	// one damage-bounded row-wise copy, the same order as the composite blit
+	// that follows it.
+	for (int32_t y = 0; y < local.h; y++)
+		memcpy(win->content.pixels + (size_t)(local.y + y) * win->content.pitch_px + local.x,
+		       win->canvas.pixels  + (size_t)(local.y + y) * win->canvas.pitch_px  + local.x,
+		       (size_t)local.w * sizeof(uint32_t));
+
+	// Translate content-local damage to screen coordinates while we still
+	// hold the lock (the frame can't move under us here).
+	rect_t content_screen = wm_content_rect_on_screen(win);
+	rect_t screen_damage = (rect_t){content_screen.x + local.x,
+	                                content_screen.y + local.y,
+	                                local.w, local.h};
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
 
 	// Separate acquisition inside — kGuiLock is not recursive.

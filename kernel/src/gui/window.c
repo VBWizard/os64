@@ -72,7 +72,17 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 		kfree(w);
 		return NULL;
 	}
+	// The client-facing back buffer (see window.h). Filled identically to
+	// content so a client's first PARTIAL present doesn't snapshot garbage
+	// around its damage rect.
+	if (surface_init(&w->canvas, (uint32_t)content_w, (uint32_t)content_h) != 0) {
+		surface_free(&w->content);
+		kfree(w);
+		return NULL;
+	}
 	surface_fill_rect(&w->content,
+	                  (rect_t){0, 0, content_w, content_h}, WINDOW_CONTENT_INITIAL);
+	surface_fill_rect(&w->canvas,
 	                  (rect_t){0, 0, content_w, content_h}, WINDOW_CONTENT_INITIAL);
 
 	w->id = s_next_id++;
@@ -98,6 +108,7 @@ void wm_destroy(window_t *w)
 	unlink_window(w);
 	if (s_focused == w)
 		s_focused = s_top;
+	surface_free(&w->canvas);
 	surface_free(&w->content);
 	kfree(w);
 }
