@@ -104,7 +104,6 @@ void create_kernel_task()
 	scheduler_submit_new_task(kKernelTask);
 	mp_CoreHasRunScheduledThread[0] = true;
 }
-
 void kernel_init()
 {
 	printf("Initializing ACPI\n");
@@ -251,6 +250,7 @@ void kernel_init()
 	ap_wake_up_aps();
 
 	kProcessSignals = true;
+
 
     printd(DEBUG_BOOT, "BOOT: If a ROOTPARTUUID (%s) was passed in the commandline, we'll load it.\n", &kRootPartUUID);
 	if (kRootPartUUID[0])

@@ -41,7 +41,18 @@ extern volatile uintptr_t kMPApicBase;
 extern void _write_eoi();
 
 #define APIC_EOI_OFFSET 0xB0
-#define SMP_MAGIC_NUMBER 3
+
+// EPITAPH (2026-07-11): here lay SMP_MAGIC_NUMBER (3), which multiplied every
+// LAPIC timer arming below and silently divided the scheduler to ~33
+// passes/sec for most of this project's life. The investigation that killed
+// it proved the calibration, the arming, the PIT, and the tick clock all
+// EXACT — the multiplier was actually rationing DEBUG_SCHEDULER's printd
+// volume: string formatting inside kSchedulerSwitchTasksLock inside the
+// un-EOI'd scheduler interrupt convoyed every core (~195 passes/sec
+// system-wide cap, single passes up to 1.3s) and starved IRQ0 down to ~48
+// ticks/sec (the LAPIC pending bit holds exactly ONE tick). Full autopsy in
+// SCHEDULER.md. Cure the pass COST, never the pass RATE — do not reintroduce
+// a multiplier here.
 
 void write_eoi() {
     __asm__ volatile (
@@ -363,7 +374,7 @@ void mp_restart_apic_timer_count()
 	core_local_storage_t *cls = get_core_local_storage();
     // We need to write the count to the timer, but first get the current state of the LVT_TIMER register so we can restore it after
     // That way if the timer was disabled, it will remain disabled, and if it was enabled, it will remain enabled
-    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * SMP_MAGIC_NUMBER);  //Trigger X times per second based on config setting
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount);  //Trigger X times per second based on config setting
 	//_write_eoi();
     //printd(DEBUG_SMP, "AP: restart_apic_timer_count: Timer is restarted (0x%08x)\n", val);
 }
@@ -389,7 +400,7 @@ void ap_configure_scheduler_timer()
     write_apic_register(kMPApicBase + APIC_LVT_TIMER, lvtValue);
     
     //NOTE: localAPICTimerSpeed is how many times the local APIC timer ticks in 1 second
-    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * SMP_MAGIC_NUMBER);  //Trigger X times per second based on config setting
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount);  //Trigger X times per second based on config setting
     printd (DEBUG_SMP, "AP: ap_configure_scheduler_timer: Timer is configured (0x%08x) to fire INT 0x%02x every %u ticks (ticks per second=%u)\n", 
         lvtValue, 
         IPI_TIMER_SCHEDULE_VECTOR, 
@@ -425,7 +436,7 @@ void enableAPScheduling_ISR()
     // count is THE arming action, so doing it last guarantees a running
     // timer on every implementation — on a lenient one (QEMU) it's just a
     // harmless phase reset.
-    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount * SMP_MAGIC_NUMBER);
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, cls->apicTimerCount);
     printd (DEBUG_SMP, "AP: enableAPScheduling_ISR: Timer is enabled (0x%08x)\n", val);
     write_eoi();
 }

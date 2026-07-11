@@ -54,10 +54,23 @@ void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t ca
     //NOTE: Putting the thread to sleep is *a bad idea* because the scheduler calls printd() a bunch of times, and putting the scheduler
     //to sleep to start another thread? That just makes no sense.
     while ((buffer->head + 1) % buffer->capacity == buffer->tail)
+    {
+        // PERMANENT tripwire (kept after the 2026-07-11 wager it was built
+        // for): the forced flush honors the never-drop-a-byte rule, but it
+        // makes the PRODUCER pay wire-speed costs — fine in a thread, brutal
+        // inside the scheduler. If this ever prints, log production has
+        // outrun logd and this path needs the never-drop remedies (bigger
+        // buffers / high-water logd wake — see DEBTS). printf ON PURPOSE:
+        // it bypasses these queues, so it can't be drowned by the flood
+        // it's reporting on.
+        static volatile uint64_t forcedFlushCount = 0;
+        printf("LOGFULL: core %u queue full at tick %lu (occurrence #%lu) — producer force-flushing!\n",
+               core, kTicksSinceStart, __sync_add_and_fetch(&forcedFlushCount, 1));
         //Attempt to execute logd flushing method
         if (!logd_thread(false))
             //If that fails, throw a panic for now until we figure out a better approach
             panic("log_store_entry: logd buffer for core %u is full", core);
+    }
 }
 
 void logging_queueing_init() {
