@@ -954,6 +954,46 @@ static bool test_ring3_exit_by_return(void)
     return true;
 }
 
+// hello — the first REAL userland app (not a hand-written fixture): built from
+// abi/ + launch + libos64 + apps/hello, dropped on the disk as /bin/hello.
+// It puts a string via libos64's os64_puts (SYSCALL_WRITE), yields, puts
+// again, and `return 0;`s from main — which launch converts to exit(0). So a
+// clean retVal==0 proves the WHOLE userland pipeline end to end: contract →
+// startup stub → library → app → load → run at CPL 3 → exit. This is the
+// repeatable path every future app rides.
+static bool test_userland_hello(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_userland_hello (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/hello", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_userland_hello - task_create returned NULL (is /bin/hello on the image?)\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    for (int i = 0; i < 100 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_userland_hello - task did not exit within 1 second\n");
+        return false;
+    }
+
+    if (task->retVal != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_userland_hello - retVal=0x%lx, expected 0 "
+               "(main returned nonzero, or launch->exit path is broken)\n", task->retVal);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_userland_hello (abi + launch + libos64 + app, ring3, clean exit 0)\n");
+    return true;
+}
+
 // ── env tests ────────────────────────────────────────────────────────────────
 
 static bool test_env_create_empty(void)
@@ -1174,6 +1214,7 @@ static void register_builtin_tests(void)
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
     test_register("ring3_syscall_smoke", test_ring3_syscall_smoke, TEST_PHASE_POSTBOOT);
     test_register("ring3_exit_by_return", test_ring3_exit_by_return, TEST_PHASE_POSTBOOT);
+    test_register("userland_hello", test_userland_hello, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

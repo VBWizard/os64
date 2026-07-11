@@ -119,6 +119,14 @@ kernel: kernel-deps
 	$(MAKE) -C kernel
 	$(MAKE) -C kernel test-elf
 
+# The os64 userland (launch + libos64 + apps). Separate tree, its own
+# makefile; produces ring-3 ELFs under userland/bin/ that disk-populate drops
+# onto the image. Depends on nothing in the kernel build — it links only
+# against the abi/ contract.
+.PHONY: userland
+userland:
+	$(MAKE) -C userland
+
 .PHONY: disk
 disk:
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
@@ -138,7 +146,7 @@ disk:
 disk-init: disk
 
 .PHONY: disk-populate
-disk-populate: disk-init kernel
+disk-populate: disk-init kernel userland
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/bin > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/lib > /dev/null 2>&1
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/test_elf ::/bin/test_elf
@@ -146,6 +154,7 @@ disk-populate: disk-init kernel
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/dyn_consumer ::/bin/dyn_consumer
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/syscall_smoke ::/bin/syscall_smoke
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/exit_by_return ::/bin/exit_by_return
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/hello ::/bin/hello
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 
