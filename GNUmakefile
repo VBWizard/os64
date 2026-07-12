@@ -19,15 +19,38 @@ QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 4 \
 				  -d $(shell echo int,cpu_reset,pcall,guest_errors)
 #				  -D qemu_debug.log 
 
-# Disk image configuration
-# DISK_SIZE_MB: 512MB (was 64) so the ramdisk boot has real working room —
-# e.g. redirecting kernel logging to a file once the OS is up (lost on
-# shutdown by design). The image is sparse on the build host (see the disk
-# target), but the full size is what Limine loads into RAM on ramdisk boots
-# and what the ISO carries, so don't grow it casually.
+# Disk image configuration.
+#
+# ** DISK_SIZE_MB is the ONE knob for the ramdisk size. ** It sizes both the
+# image file AND the partition inside it (the `disk` target passes end-sector
+# 0 to sgdisk = "fill the image"). Change this number, run `make`, done.
+#
+# The full size is what Limine loads into RAM on a ramdisk boot AND what the
+# ISO carries — so it directly costs boot time (~1s/32MB) and build-copy time.
+# The image is sparse on the build HOST (rm+truncate in the disk target), so
+# the on-disk build file stays tiny regardless; only the ISO/RAM cost scales.
+#
+# ** HARD FLOOR: ~40MB, use 64MB. ** The disk target runs `mformat -F`, which
+# FORCES FAT32 — and FAT32 is only legal at >= 65525 clusters (~34MB of data
+# area at 1 sector/cluster). Below that, mformat emits a malformed hybrid
+# (FAT32 layout but a FAT16-range cluster count and the 16-bit size field set)
+# that the os64 FAT driver misclassifies as FAT16 and can't read — every file
+# open fails ("Failed to open /partition_info" panic, seen 2026-07-12 at
+# 32MB). 64MB gives a clean FAT32 (small-size=0, ~128k clusters). Do NOT drop
+# below 64 without also dropping `-F` / teaching the driver FAT16 (see DEBTS).
+#
+# Sized to the FILES on it (~57KB of apps+fixtures) plus headroom. History:
+# 64MB originally, briefly 512MB to reserve space for a log-to-disk sink that
+# doesn't exist yet ("an hour of heavy logs" is 100s of MB regardless — a
+# log-sink-design problem, not a boot-image one), so 512MB was 99.99% empty
+# dead weight and cost ~30s of boot load. Back to the proven 64MB floor.
+#
+# The full size is what Limine loads into RAM on a ramdisk boot AND what the
+# ISO carries, so it costs boot + build-copy time. The image is sparse on the
+# build HOST (rm+truncate), so only the ISO/RAM cost scales, not build disk.
 DISK_IMAGE ?= $(CURDIR)/disk/os64.img
 DISK_OFFSET ?= 1048576
-DISK_SIZE_MB ?= 512
+DISK_SIZE_MB ?= 64
 DISK_PARTUUID ?= 2f4fd02e-68b4-4c82-98bc-72467529b3fc
 
 # Define drive/device flags

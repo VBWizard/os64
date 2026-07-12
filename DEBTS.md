@@ -96,6 +96,7 @@ hobby-scale judgment calls — re-rank freely.
 | Debt | Sev | Cost | Gate | Source |
 |---|---|---|---|---|
 | Kernel makefile `-MMD` dependency tracking is broken (no `.d` files generated) — forces a manual `make -C kernel clean` after every header change | Robustness | S–M | none — real daily footgun | VERIFICATION § build |
+| os64 FAT driver can't read a sub-FAT32-minimum volume: `mformat -F` forces FAT32, but <65525 clusters (~34MB) yields a malformed hybrid the driver misclassifies as FAT16 → every open fails. Currently worked around by the 64MB DISK_SIZE_MB floor. Fix = teach the driver FAT16 (or drop `-F` and let mformat pick), so the ramdisk can shrink below 64MB | Robustness | M | if the ramdisk ever needs to be <64MB | GNUmakefile disk target / fat driver |
 
 ## Explicitly NOT debts (recorded so they aren't re-litigated)
 
