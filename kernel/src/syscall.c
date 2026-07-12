@@ -12,8 +12,15 @@
 #include "task.h"
 #include "memory/memcpy.h"
 #include "memory/paging.h"
+#include "memory/kmalloc.h"
+#include "memory/vma.h"   // call_in_kernel_context
 #include "log.h"
 #include "console.h"
+
+// spawn: cap on argv length. A command line's worth of args is plenty; the
+// per-arg length cap is task.c's TASK_MAX_PATH_LEN (the blob it builds uses
+// fixed-size slots of that width).
+#define SPAWN_MAX_ARGS 32
 
 #define SYSCALL_RESULT_INVALID UINT64_C(0xFFFFFFFFFFFFFFFF)
 #define SYSCALL_RESULT_BAD_USER_DATA UINT64_C(0xFFFFFFFFFFFFFFFE)
@@ -30,6 +37,10 @@ static bool copy_to_user_buffer(void *user_dst, const void *kernel_src, size_t l
 static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -63,6 +74,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_EXIT,      "exit",      syscall_exit,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_WRITE,     "write",     syscall_write,     false, 0x02),  // arg1 = buffer
 	SYSCALL_DEFINE(SYSCALL_READ,      "read",      syscall_read,      false, 0x02),  // arg1 = buffer (written)
+	SYSCALL_DEFINE(SYSCALL_SPAWN,     "spawn",     syscall_spawn,     false, 0x03),  // arg0 = path, arg1 = argv
+	SYSCALL_DEFINE(SYSCALL_WAIT,      "wait",      syscall_wait,      false, 0x02),  // arg1 = exit-code out ptr
 };
 
 uint64_t _syscall_dispatch(
@@ -537,4 +550,162 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 
 	return (uint64_t)got;
+}
+
+// Marshal a user argv (NULL-terminated array of user string pointers) into
+// kernel space: fills kargv[] (<= SPAWN_MAX_ARGS, NULL-terminated) with
+// pointers into strbuf, each string copied from user space. Returns argc, or
+// -1 on a bad user pointer. NULL user_argv means "no args" (argc 0).
+static int marshal_user_argv(char *const *user_argv, char *kargv[],
+                             char *strbuf, size_t strbuf_len)
+{
+	if (user_argv == NULL)
+	{
+		kargv[0] = NULL;
+		return 0;
+	}
+
+	size_t used = 0;
+	int argc = 0;
+	for (argc = 0; argc < SPAWN_MAX_ARGS; argc++)
+	{
+		// Read user_argv[argc] — a user-space char* — into the kernel.
+		char *uptr = NULL;
+		if (!copy_user_buffer(&user_argv[argc], &uptr, sizeof(char *)))
+			return -1;
+		if (uptr == NULL)
+			break;   // NULL terminator: end of argv
+
+		char *dst = strbuf + used;
+		size_t avail = strbuf_len - used;
+		if (avail < 2)
+			return -1;   // out of scratch space
+		size_t cap = avail < TASK_MAX_PATH_LEN ? avail : TASK_MAX_PATH_LEN;
+		if (!copy_user_string((const char *)uptr, dst, cap))
+			return -1;
+
+		kargv[argc] = dst;
+		// Advance past the copied (NUL-terminated) string.
+		size_t slen = 0;
+		while (dst[slen] != '\0')
+			slen++;
+		used += slen + 1;
+	}
+	kargv[argc] = NULL;
+	return argc;
+}
+
+// All the state task_create() needs, in ONE kmalloc'd (HHDM) block so it is
+// reachable from BOTH the syscall CR3 (to fill in) AND kKernelPML4 (where the
+// helper below runs). Nothing here may live on the syscall's task-local kernel
+// stack — kKernelPML4 doesn't map it. argv[] points into argvstrs[], both in
+// this block.
+typedef struct {
+	char   path[TASK_MAX_PATH_LEN];
+	int    argc;
+	char  *argv[SPAWN_MAX_ARGS + 1];
+	char   argvstrs[SPAWN_MAX_ARGS * TASK_MAX_PATH_LEN];
+	task_t *parent;
+	volatile long result;                 // child pid, or -1 on failure
+} spawn_params_t;
+
+// Runs under kKernelPML4 (via call_in_kernel_context), because task_create
+// does disk I/O — the ELF load touches NVMe/AHCI DMA regions that are mapped
+// in the kernel tables but NOT in a user task's CR3 (which is why calling
+// task_create directly from the syscall faulted in nvme_submit_command). Same
+// discipline the demand-pager uses for kernel_read_file.
+static void spawn_do_create(void *arg)
+{
+	spawn_params_t *p = (spawn_params_t *)arg;
+	task_t *child = task_create(p->path, p->argc, p->argv, p->parent,
+	                            false, THREAD_NO_AFFINITY);
+	if (child != NULL)
+	{
+		scheduler_submit_new_task(child);
+		p->result = (long)child->taskID;
+	}
+	else
+	{
+		p->result = -1;
+	}
+}
+
+// spawn(path, argv) — launch `path` as a child of the calling task and return
+// its pid (task id), or a SYSCALL_RESULT_* sentinel. Non-blocking: the child
+// is submitted to the scheduler and runs concurrently; the caller reaps it
+// with wait(). The child inherits the caller's environment (task_create does
+// this via the parent).
+static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	const char *user_path = (const char *)arg0;
+	char *const *user_argv = (char *const *)arg1;
+
+	spawn_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// Marshal path + argv from user space into the HHDM block (runs on the
+	// caller's CR3, which maps both the user args and the HHDM).
+	if (!copy_user_string(user_path, p->path, sizeof(p->path)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	int argc = marshal_user_argv(user_argv, p->argv, p->argvstrs, sizeof(p->argvstrs));
+	if (argc < 0)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	p->argc = argc;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	p->parent = cls ? cls->task : NULL;
+	p->result = 0;
+
+	// task_create runs under kKernelPML4 so its disk I/O sees the DMA mappings.
+	call_in_kernel_context(spawn_do_create, p);
+
+	long r = p->result;
+	kfree(p);
+	if (r < 0)
+		return SYSCALL_RESULT_INVALID;   // bad path / load failure
+	return (uint64_t)r;
+}
+
+// wait(pid, exit_code_out) — block until a child exits, reap it, return its
+// pid. pid > 0 waits for that specific child; pid == 0 waits for the FIRST of
+// any child to end (os64's own design, not POSIX). Writes the child's exit
+// code to *exit_code_out (if non-NULL). Returns the ended pid, or a
+// SYSCALL_RESULT_* sentinel (e.g. no matching child exists). If the child has
+// ALREADY exited, returns immediately without sleeping.
+static uint64_t syscall_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	uint64_t targetPid = arg0;
+	int *user_code = (int *)arg1;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *parent = cls ? cls->task : NULL;
+	if (parent == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	uint64_t exitCode = 0;
+	task_t *child = task_wait(parent, targetPid, &exitCode);
+	if (child == NULL)
+		return SYSCALL_RESULT_INVALID;   // no such child
+
+	uint64_t endedPid = child->taskID;
+	if (user_code != NULL)
+	{
+		int code = (int)exitCode;
+		if (!copy_to_user_buffer(user_code, &code, sizeof(code)))
+			return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	return endedPid;
 }

@@ -113,7 +113,12 @@
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
 	void task_exit_with_retval(void);   // asm stub: captures RAX into task->retVal then calls task_exit
-	task_t* task_wait(task_t* parentTask, uint64_t* exitCode);
+	// Block until a child of parentTask exits, reap it, return it (its exit
+	// code via *exitCode). targetPid > 0 waits for that specific child;
+	// targetPid == 0 waits for the first of ANY child to end. Returns
+	// immediately if a matching child has already exited; returns NULL if no
+	// matching child exists at all.
+	task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode);
 	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);

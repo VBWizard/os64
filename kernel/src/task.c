@@ -18,6 +18,8 @@
 #include "scheduler.h"
 #include "panic.h"
 #include "log.h"
+#include "signals.h"
+#include "kernel.h"
 #include "elf_loader.h"
 #include "shared_object.h"
 #include "memory/vma.h"
@@ -167,6 +169,15 @@ static void task_enqueue_dead_child(task_t *child)
 
 	if (parent->waitingForChild) {
 		parent->waitingForChild = false;
+		// Clear the backstop SIGSLEEP so the woken parent doesn't get parked
+		// straight back to ISLEEP by the scheduler (which re-sleeps any thread
+		// whose SIGSLEEP is still set). Then wake it to re-check its children.
+		// The wake is unconditional on ANY child death; task_wait's own scan
+		// decides whether THIS death matches what the parent is waiting for.
+		if (parent->threads != NULL) {
+			parent->threads->signals.sigind &= ~SIGSLEEP;
+			parent->threads->signals.sigdata[SIGSLEEP] = 0;
+		}
 		scheduler_wake_isleep_task(parent);
 	}
 }
@@ -304,7 +315,48 @@ void task_exit(void)
 	__builtin_unreachable();
 }
 
-task_t* task_wait(task_t* parentTask, uint64_t* exitCode)
+// Backstop sleep for task_wait: a child exit normally wakes the parent
+// immediately (task_enqueue_dead_child), but the backstop guarantees liveness
+// if that wake is ever lost to the classic check-then-sleep race — the parent
+// re-checks its dead children within a second regardless. (Same discipline as
+// console_read.)
+#define TASK_WAIT_BACKSTOP_TICKS TICKS_PER_SECOND
+
+// Pop the first dead child matching targetPid (0 = any) off the parent's list,
+// or NULL if none match. Unlinks from the deadChild list; caller reaps.
+static task_t *task_pop_dead_child(task_t *parent, uint64_t targetPid)
+{
+	task_t *prev = NULL;
+	for (task_t *child = parent->deadChildHead; child != NULL; child = child->deadChildNext)
+	{
+		if (targetPid == 0 || child->taskID == targetPid)
+		{
+			if (prev == NULL)
+				parent->deadChildHead = child->deadChildNext;
+			else
+				prev->deadChildNext = child->deadChildNext;
+			if (parent->deadChildTail == child)
+				parent->deadChildTail = prev;
+			child->deadChildNext = NULL;
+			return child;
+		}
+		prev = child;
+	}
+	return NULL;
+}
+
+// Is there a LIVE child matching targetPid? (Used to fail wait() fast when the
+// caller asks for a child that doesn't exist / has already been reaped.)
+static bool task_has_live_child(task_t *parent, uint64_t targetPid)
+{
+	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
+		if (t->parentTask == parent && !t->exited)
+			if (targetPid == 0 || t->taskID == targetPid)
+				return true;
+	return false;
+}
+
+task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 {
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *parent = parentTask ? parentTask : (cls ? cls->task : NULL);
@@ -315,13 +367,10 @@ task_t* task_wait(task_t* parentTask, uint64_t* exitCode)
 
 	while (1==1)
 	{
-		task_t *child = parent->deadChildHead;
+		// Check FIRST: an already-dead matching child returns immediately, no
+		// sleep (the "don't wait if the child already ended" rule).
+		task_t *child = task_pop_dead_child(parent, targetPid);
 		if (child != NULL) {
-			parent->deadChildHead = child->deadChildNext;
-			if (parent->deadChildHead == NULL) {
-				parent->deadChildTail = NULL;
-			}
-			child->deadChildNext = NULL;
 			if (exitCode != NULL) {
 				*exitCode = child->retVal;
 			}
@@ -331,9 +380,16 @@ task_t* task_wait(task_t* parentTask, uint64_t* exitCode)
 			return child;
 		}
 
+		// No dead match. If there is no matching LIVE child either, there is
+		// nothing to wait for — fail rather than sleep forever.
+		if (!task_has_live_child(parent, targetPid)) {
+			return NULL;
+		}
+
+		// Park until a child exits (woken by task_enqueue_dead_child) or the
+		// backstop fires; then loop and re-check. SIGSLEEP parks atomically.
 		parent->waitingForChild = true;
-		scheduler_change_thread_queue(parent->threads, THREAD_STATE_ISLEEP);
-		scheduler_trigger(cls);
+		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, parent->threads);
 		parent->waitingForChild = false;
 	}
 }
