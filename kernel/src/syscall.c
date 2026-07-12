@@ -420,7 +420,7 @@ static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
-	printf("[user] %s\n", kernel_buffer);
+	printd(DEBUG_APPLICATION,"[user] %s\n", kernel_buffer);
 	return 0;
 }
 

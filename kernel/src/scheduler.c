@@ -103,7 +103,7 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 		return;
 	}
 
-	printd(DEBUG_TASK | DEBUG_DETAILED,
+	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
 		"scheduler_nudge_parked_aps: nudging APIC %u for thread 0x%08x (task %s)\n",
 		target_apic_id,
 		thread->threadID,
@@ -434,7 +434,7 @@ void debug_print_registers(uint64_t apic_id, char* prefix, bool unconditional)
         kDebugLevel |= DEBUG_SCHEDULER;
     }
 
-    printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
+    printd(DEBUG_SCHEDULER | DEBUG_EXTRA_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
             prefix,
 			mp_isrSavedCR3[apic_id],
             mp_isrSavedCS[apic_id],
@@ -494,9 +494,7 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
         thread->regs.GS=mp_isrSavedGS[apic_id];
         thread->regs.CR3=mp_isrSavedCR3[apic_id];
     }
-#if SCHEDULER_DEBUG == 1
-	debug_print_registers(apic_id, "save (or not)", false);
-#endif
+    debug_print_registers(apic_id, "save (or not)", false);
 }
 
 void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
@@ -560,9 +558,7 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
         mp_isrSavedCR3[apic_id] = thread->regs.CR3; 
 //        memcpy((uintptr_t*)((process_t*)task->process)->stackStart, (uintptr_t*)parent->stackStart, ((process_t*)task->process)->stackSize);
     }
-#if SCHEDULER_DEBUG == 1
 	debug_print_registers(apic_id, "load", false);
-#endif
 }
 
 void scheduler_add_to_queue(thread_t *queue, thread_t* thread)
@@ -647,7 +643,7 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 				if (scheduler_thread_can_run_on_core(thread, cls))
 				{
 					if (thread->mp_apic != THREAD_NO_AFFINITY && !thread->idleThread)
-						printd(DEBUG_TASK | DEBUG_DETAILED,
+						printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
 							"scheduler_find_thread_to_run: APIC %u selecting pinned thread 0x%08x for APIC %u\n",
 							cls->apic_id,
 							thread->threadID,
@@ -753,9 +749,7 @@ void scheduler_run_new_thread()
     if (threadToStop && threadToRun->threadID==threadToStop->threadID)
     {
         printd(DEBUG_SCHEDULER,"*No new thread to run, continuing with the current task\n");
-		#if SCHEDULER_DEBUG == 1
 		debug_print_registers(apic_id, "continue2", false);
-		#endif
         if (threadToStop->execDontSaveRegisters)
         {
             printd(DEBUG_SCHEDULER,"Thread to keep running was just exec'd, loading registers from tss\n");
@@ -786,8 +780,18 @@ void scheduler_run_new_thread()
             pTask->cSwitches++;
         }
         //printd(DEBUG_SCHEDULER,"Active STDIN/STDOUT/STDERR=0x%08x/0x%08x/0x%08x, owner %s\n",activeSTDIN, activeSTDOUT, activeSTDERR, (process_t*)(activeSTDIN->owner)->exename==NULL?"":(process_t*)(activeSTDIN->owner)->exename);
-		printd(DEBUG_SCHEDULER,"*Restarting CPU with new process (0x%04x) @ 0x%04x:0x%08x\n",threadToRun->threadID,threadToRun->regs.CS,threadToRun->regs.RIP);
-		if (threadToStop && threadToStop != NO_THREAD)
+        // The task-switch trace: which thread, from which PROGRAM, at which RIP.
+        // Its own level (DEBUG_TASKSWITCH, always on in MINIMAL) so you can watch
+        // husk -> hello -> husk without enabling the DEBUG_SCHEDULER firehose, and
+        // so the level names the message honestly. Runtime-gated, not #if-gated:
+        // switch it off from the cmdline, no rebuild — same move as the register
+        // dump above.
+        printd(DEBUG_TASKSWITCH, "*Restarting CPU with new thread (0x%04x - %s) @ 0x%04x:0x%08x\n",
+            threadToRun->threadID,
+            ((task_t*)(threadToRun->ownerTask))->exename,
+            threadToRun->regs.CS,
+            threadToRun->regs.RIP);
+        if (threadToStop && threadToStop != NO_THREAD)
 		{
 			task_t* taskToStop = (task_t*)threadToStop->ownerTask;
 			printd(DEBUG_SCHEDULER,"*Total running ticks: 0x%04x: %u, 0x%04x: %u\n",
@@ -838,9 +842,7 @@ void scheduler_do()
 	}
 	else
 	{
-#if SCHEDULER_DEBUG == 1
 		debug_print_registers(apic_id, "continue", true);
-#endif
         printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   

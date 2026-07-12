@@ -399,7 +399,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
     printd(DEBUG_TASK,"task_initialize: Initializing task\n");
 
 	task_t* newTask = kmalloc_aligned(sizeof(task_t));
-    printd(DEBUG_TASK,"task_initialize: Malloc'd 0x%016x for process\n",newTask);
+    printd(DEBUG_TASK,"task_initialize: Malloc'd 0x%016x for new task\n",newTask);
 
     if (idleTask)
     {

@@ -42,7 +42,7 @@
 // raised to match TICKS_PER_SECOND when the GUI gave sleeping threads a
 // reason to wake quickly.
 #define MP_SCHEDULER_RUNS_PER_SECOND 100
-#define SCHEDULER_DEBUG 0
+#define SCHEDULER_DEBUG 1
 
 // Framebuffer related
 #define FRAMEBUFFER_FONT "zap-ext-light16.psf"
@@ -81,12 +81,22 @@
 #define DEBUG_TESTS (__uint128_t)1 << 19
 #define DEBUG_SYSCALL (__uint128_t)1 << 20
 #define DEBUG_GUI (__uint128_t)1 << 21
+#define DEBUG_APPLICATION (__uint128_t)1 << 22
+// One line, one bit: "which program is the CPU running right now?" — the
+// task-switch trace. It rides in MINIMAL (i.e. always on) because when you're
+// bringing up spawn/wait you always want to see husk -> hello -> husk, and you
+// never want the whole DEBUG_SCHEDULER firehose to get it. It previously
+// borrowed DEBUG_EXCEPTIONS purely because that bit happens to be always-on —
+// which made the level lie about what the message is. The mask is 128 bits
+// wide and 23 are spoken for; a bit is the cheapest thing in this kernel, and
+// a level that means what it says is worth far more than the bit it costs.
+#define DEBUG_TASKSWITCH (__uint128_t)1 << 23
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
-#define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS) 
+#define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS | DEBUG_APPLICATION | DEBUG_TASK | DEBUG_TASKSWITCH | DEBUG_DETAILED)
 // | DEBUG_SPECIAL
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS | DEBUG_SCHEDULER)
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS)
 //#define DEBUG_OPTIONS DEBUG_MINIMAL_OPTIONS
 extern __uint128_t kDebugLevel;
 
