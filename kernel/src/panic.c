@@ -20,6 +20,12 @@ void panic_no_shutdown(const char *format, ...)
     // never stand between a panic and the screen.
     gui_emergency_disable();
 
+    // Same reasoning, one layer down: if we faulted while holding the renderer
+    // lock (or another core died holding it), every printf below would spin
+    // forever with interrupts off and the panic would never reach the screen.
+    // A panic nobody can read is worse than a garbled one — bust the lock.
+    renderer_bust_lock();
+
     va_list args;
     va_start( args, format );
     printf("\n>>>panic at instruction prior to address 0x%08x<<<\n", __builtin_return_address(0));
@@ -37,8 +43,11 @@ panicLoop:
 
 void __attribute__((noreturn, noinline))panic(const char *format, ...)
 {
-    // FIRST: detach the GUI console sink (see panic_no_shutdown).
+    // FIRST: detach the GUI console sink, then bust the renderer lock
+    // (see panic_no_shutdown for both — nothing stands between a panic and
+    // the framebuffer).
     gui_emergency_disable();
+    renderer_bust_lock();
 
     va_list args;
     va_start( args, format );

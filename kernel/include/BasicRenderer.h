@@ -58,12 +58,23 @@ extern BasicRenderer kRenderer;
 typedef void (*console_sink_fn)(const char *bytes, size_t length);
 extern volatile console_sink_fn kConsoleSink;
 
+// Glyph cell size for the built-in PSF1 console font. These were bare 8s and
+// 16s scattered through the renderer; naming them means a font change breaks
+// in one place instead of five. (FONT_HEIGHT still shadows the font's own
+// charsize field — where a BasicRenderer is in hand, prefer
+// psf1_font->psf1_header->charsize, which is the authority.)
+#define FONT_WIDTH  8
+#define FONT_HEIGHT 16
+
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font);
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y);
-void print(const char* str);
+void get_cursor_pos(BasicRenderer *basicrenderer, unsigned int *x, unsigned int *y);
+void print_at(BasicRenderer *basicrenderer, unsigned int x, unsigned int y, const char *str);
+void print(const char *str);
 void print_n(const char* str, size_t length);
 int printf(const char *fmt, ...);
 void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff);
 void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor);
+void renderer_bust_lock(void);
 
 #endif

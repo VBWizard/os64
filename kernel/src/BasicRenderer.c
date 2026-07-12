@@ -5,10 +5,38 @@
 #include "video.h"
 #include "memcpy.h"
 #include "serial_logging.h"
+#include "spinlock.h"
 
 extern BasicRenderer kRenderer;
 uint32_t kFrameBufferBackgroundColor;
 volatile console_sink_fn kConsoleSink = NULL;
+
+// The console cursor is shared mutable state, and as of husk it has more than
+// one writer: the kernel task paints the uptime clock while a user task echoes
+// keystrokes — on a different core. Every cursor read-modify-write in here
+// (advance, wrap, scroll) is therefore a critical section; without this lock
+// two cores interleave mid-string and the console garbles.
+//
+// irqsave (the house idiom, see spinlock.h) because print_n is reachable from
+// interrupt and exception context: a plain spinlock would let an IRQ land on a
+// core that already holds it and deadlock that core against itself.
+//
+// Cost note: a full-screen scroll (a ~3MB memmove) now runs with interrupts
+// disabled, so a scroll can delay this core's tick by a few hundred µs. The
+// console is not a hot path and correctness beats that jitter — but if the
+// console ever gets busy enough to matter, the fix is a scroll that doesn't
+// hold the lock, not a lock that doesn't cover the scroll.
+static spinlock_t kRendererLock = 0;
+
+// Panic escape hatch. If a core dies (or faults) while holding the renderer
+// lock, the panic path must still reach the screen — a panic that deadlocks
+// on a console lock is a panic nobody ever reads. panic() busts the lock the
+// same way it detaches the GUI sink: nothing stands between a panic and the
+// framebuffer. Safe by construction because after this we are not coming back.
+void renderer_bust_lock(void)
+{
+	__sync_lock_release(&kRendererLock);
+}
 
 // NOTE: this file is the LEGACY text console — direct-to-framebuffer, no
 // windowing. The GUI subsystem (kernel/src/gui/) renders through its own
@@ -57,8 +85,63 @@ void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer
 
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y)
 {
-	basicrenderer->cursor_position.x = x * 8;
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+	basicrenderer->cursor_position.x = x * FONT_WIDTH;
 	basicrenderer->cursor_position.y = y * basicrenderer->psf1_font->psf1_header->charsize;
+	spinlock_release_irqrestore(&kRendererLock, flags);
+}
+
+// Read back the cursor in character cells — the inverse of moveto().
+//
+// NOTE: this is a snapshot, not a reservation. It is NOT a safe basis for a
+// save/moveto/print/restore sequence while another core can print: the four
+// steps aren't atomic, so the restore can rewind the cursor over output that
+// landed in between. That is exactly why the uptime clock uses print_at()
+// instead. Kept because "where is the cursor?" is a legitimate question.
+void get_cursor_pos(BasicRenderer *basicrenderer, unsigned int* x, unsigned int* y)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+	*x = basicrenderer->cursor_position.x / FONT_WIDTH;
+	*y = basicrenderer->cursor_position.y / basicrenderer->psf1_font->psf1_header->charsize;
+	spinlock_release_irqrestore(&kRendererLock, flags);
+}
+
+// Draw a string at an absolute character cell WITHOUT touching the shared
+// console cursor — no advance, no wrap, no scroll, nothing to save or restore.
+//
+// This is what a STATUS WIDGET wants (the uptime clock in the top-right
+// corner). A widget parks glyphs at fixed coordinates; it is not a console
+// write and has no business borrowing the console's cursor. Since husk moved
+// in, the console has a live tenant echoing keystrokes from another core, and
+// any widget that hijacks the cursor will land its text in the middle of
+// somebody's prompt.
+//
+// Clips at the screen edge rather than wrapping: a widget that overflows its
+// corner should be truncated, never allowed to reflow the console.
+void print_at(BasicRenderer *basicrenderer, unsigned int x, unsigned int y, const char *str)
+{
+	// If the GUI owns the console, the raw framebuffer is not ours to scribble
+	// on — the compositor would just overpaint us (or we would tear its frame).
+	if (kConsoleSink)
+		return;
+
+	const unsigned int charHeight = basicrenderer->psf1_font->psf1_header->charsize;
+	unsigned int px = x * FONT_WIDTH;
+	unsigned int py = y * charHeight;
+
+	// Same lock as print_n: we don't touch the cursor, but we DO share the
+	// framebuffer — drawing into a scroll-in-progress would tear.
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+	for (const char *chr = str; *chr; chr++)
+	{
+		if (px + FONT_WIDTH > basicrenderer->framebuffer->width)
+			break;
+		if (py + charHeight > basicrenderer->framebuffer->height)
+			break;
+		put_char(basicrenderer, *chr, px, py);
+		px += FONT_WIDTH;
+	}
+	spinlock_release_irqrestore(&kRendererLock, flags);
 }
 
 int printf(const char *fmt, ...)
@@ -90,33 +173,40 @@ void print_n(const char* str, size_t length) {
 
     const char *chr = str;
     BasicRenderer *basicrenderer = &kRenderer;
+
+    // Hold the lock for the WHOLE string, not per character: the point is that
+    // two concurrent printers must not interleave their glyphs (or, worse, have
+    // one core's wrap/scroll relocate the cursor out from under the other's
+    // next put_char). One print_n call == one atomic console write.
+    uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
     for (size_t i = 0; i < length; i++, chr++) {
         switch (*chr) {
             case '\n':
                 basicrenderer->cursor_position.x = 0;
-                basicrenderer->cursor_position.y += 16;
+                basicrenderer->cursor_position.y += FONT_HEIGHT;
                 break;
             case '\t':
-                basicrenderer->cursor_position.x += 8;
+                basicrenderer->cursor_position.x += FONT_WIDTH;
                 break;
             default:
                 put_char(basicrenderer, *chr, basicrenderer->cursor_position.x, basicrenderer->cursor_position.y);
-                basicrenderer->cursor_position.x += 8;
+                basicrenderer->cursor_position.x += FONT_WIDTH;
                 break;
         }
 
         // Handle line wrapping
-        if (basicrenderer->cursor_position.x + 8 > basicrenderer->framebuffer->width) {
+        if (basicrenderer->cursor_position.x + FONT_WIDTH > basicrenderer->framebuffer->width) {
             basicrenderer->cursor_position.x = 0;
-            basicrenderer->cursor_position.y += 16;
+            basicrenderer->cursor_position.y += FONT_HEIGHT;
         }
 
         // Handle scrolling
-        if (basicrenderer->cursor_position.y + 16 > basicrenderer->framebuffer->height) {
+        if (basicrenderer->cursor_position.y + FONT_HEIGHT > basicrenderer->framebuffer->height) {
             scroll_framebuffer_full(basicrenderer);
-            basicrenderer->cursor_position.y = basicrenderer->framebuffer->height - 16;
+            basicrenderer->cursor_position.y = basicrenderer->framebuffer->height - FONT_HEIGHT;
         }
     }
+    spinlock_release_irqrestore(&kRendererLock, flags);
 }
 
 void print(const char* str) {
@@ -150,6 +240,10 @@ void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor)
     uint64_t fbBase = (uint64_t)basicrenderer->framebuffer->base_address;
     uint64_t pxlsPerScanline = basicrenderer->framebuffer->pixels_per_scan_line;
 
+    // Wiping the screen and homing the cursor is the most destructive thing the
+    // renderer does — it must not land in the middle of another core's string.
+    uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+
     for (int64_t y = 0; y < basicrenderer->framebuffer->height; y++)
     {
         for (int64_t x = 0; x < basicrenderer->framebuffer->width; x++)
@@ -165,5 +259,7 @@ void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor)
     }
 
 	kFrameBufferBackgroundColor = color;
+
+    spinlock_release_irqrestore(&kRendererLock, flags);
     return;
 }
