@@ -50,6 +50,7 @@ extern bool kEnableAHCI;
 extern bool kEnableNVME;
 extern bool kEnableRamdisk;
 extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch block below
+extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 bool kEnableSMP = true;
 bool kBspSchedulerMode = false;
 bool kEnableKWorker = false;
@@ -302,6 +303,22 @@ void kernel_init()
 		}
 		else
 			printf("  /bin/hello launch failed (not on the image?)\n");
+	}
+
+	// TEMP (read-syscall bring-up, remove with keytest): launch /bin/keytest
+	// and PARK the kernel task forever so the scheduler keeps running — keytest
+	// blocks in read(0) waiting for keys, so the system must stay alive. Skips
+	// the tests/shutdown path on purpose; this is a dedicated input-demo boot.
+	if (kRunKeytest && kRootFilesystem != NULL)
+	{
+		printf("Launching /bin/keytest (system stays up for keyboard input) ...\n");
+		task_t *ktTask = task_create("/bin/keytest", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+		if (ktTask)
+			scheduler_submit_new_task(ktTask);
+		else
+			printf("  /bin/keytest launch failed (not on the image?)\n");
+		while (1)
+			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
 	}
 
     if (kRunTests)

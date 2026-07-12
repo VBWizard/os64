@@ -24,6 +24,9 @@ bool kEnableBootmarks = false;
 // the boot flow (not the test harness). Remove once the shell exists — it's
 // the stand-in for "launch init/shell". Off by default.
 bool kRunHello = false;
+// TEMP (read-syscall bring-up): launch /bin/keytest and keep the system up so
+// it can block on read(0) and echo injected keys. Remove with keytest.
+bool kRunKeytest = false;
 
 // -----------------------------------------------------------------------
 // Kernel command-line parser definitions
@@ -107,6 +110,7 @@ static cmdopt_t cmdopts[] = {
     {"RAMDISK", OPT_BOOL, &kEnableRamdisk, true, 0},
     {"BOOTMARKS", OPT_BOOL, &kEnableBootmarks, true, 0},
     {"HELLO", OPT_BOOL, &kRunHello, true, 0},
+    {"KEYTEST", OPT_BOOL, &kRunKeytest, true, 0},
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},

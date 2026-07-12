@@ -155,6 +155,7 @@ disk-populate: disk-init kernel userland
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/syscall_smoke ::/bin/syscall_smoke
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/exit_by_return ::/bin/exit_by_return
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/hello ::/bin/hello
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/keytest ::/bin/keytest
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 
