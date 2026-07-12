@@ -322,22 +322,6 @@ void kernel_init()
 			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
 	}
 
-	// Launch the shell and park the kernel task so the scheduler keeps running
-	// it (husk loops forever on read/spawn/wait). The kernel task is husk's
-	// parent, so husk inherits its environment. (When husk becomes the real
-	// init path this replaces the HELLO/KEYTEST temps entirely.)
-	if (kRunHusk && kRootFilesystem != NULL)
-	{
-		printf("Launching /bin/husk (the shell) ...\n");
-		task_t *huskTask = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
-		if (huskTask)
-			scheduler_submit_new_task(huskTask);
-		else
-			printf("  /bin/husk launch failed (not on the image?)\n");
-		while (1)
-			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
-	}
-
     if (kRunTests)
     {
         printf("Running post-boot tests ...\n");
@@ -349,15 +333,29 @@ void kernel_init()
         int lResult = testVFS(kRootFilesystem);
         if (lResult)
 	 		panic("Root filesystem disk test failed: %u\n",lResult);
-		kRootFilesystem->fops->uninitialize(kRootFilesystem);
+		//No longer uninitialize the root file system!
 	}
 
-	// The GUI is strictly optional (DOS/Windows relationship): without the GUI
-	// cmdline flag we run tests and shut down exactly as before. With it, the
-	// desktop owns the machine — start the compositor and park the kernel task
-	// in a sleep loop (1s naps, immediately re-armed; all real work happens in
-	// the compositor and app tasks).
-	if (kEnableGUI)
+    // Launch the shell and park the kernel task so the scheduler keeps running
+    // it (husk loops forever on read/spawn/wait). The kernel task is husk's
+    // parent, so husk inherits its environment. (When husk becomes the real
+    // init path this replaces the HELLO/KEYTEST temps entirely.)
+    if (kRunHusk && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/husk (the shell) ...\n");
+        task_t *huskTask = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (huskTask)
+            scheduler_submit_new_task(huskTask);
+        else
+            printf("  /bin/husk launch failed (not on the image?)\n");
+    }
+    
+    // The GUI is strictly optional (DOS/Windows relationship): without the GUI
+    // cmdline flag we run tests and shut down exactly as before. With it, the
+    // desktop owns the machine — start the compositor and park the kernel task
+    // in a sleep loop (1s naps, immediately re-armed; all real work happens in
+    // the compositor and app tasks).
+    if (kEnableGUI)
 	{
 		printf("Starting GUI ...\n");
 		gui_start();
