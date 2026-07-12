@@ -6,6 +6,7 @@
 #include "panic.h"
 #include "thread.h"
 #include "smp_core.h"
+#include "console.h"
 
 extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
@@ -72,6 +73,13 @@ void processSignals()
 		}
 		qSleep = qSleep->next;
 	}
+
+	// Wake a blocked console reader if the keyboard driver has input. Done
+	// here — under the lock, AFTER the qISleep walk above — so its queue
+	// surgery (ISLEEP->RUNNABLE) can't corrupt that iteration. Level-triggered
+	// on keyboard_has_event(), which is what makes console_read lost-wakeup-free.
+	console_wake_if_ready();
+
 	//Release the lock
 	__sync_lock_release(&kSchedulerSwitchTasksLock);
 

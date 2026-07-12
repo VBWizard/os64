@@ -13,6 +13,7 @@
 #include "memory/memcpy.h"
 #include "memory/paging.h"
 #include "log.h"
+#include "console.h"
 
 #define SYSCALL_RESULT_INVALID UINT64_C(0xFFFFFFFFFFFFFFFF)
 #define SYSCALL_RESULT_BAD_USER_DATA UINT64_C(0xFFFFFFFFFFFFFFFE)
@@ -24,8 +25,11 @@ static inline uint32_t get_current_cpu_index(void);
 static bool prepare_syscall_args(const syscall_entry_t *entry, const uint64_t incoming[6], uint64_t prepared[6]);
 static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_len);
 static bool copy_user_buffer(const void *user_src, void *kernel_dst, size_t length);
+static bool copy_to_user_buffer(void *user_dst, const void *kernel_src, size_t length);
 
 static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -58,6 +62,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_DEBUG_LOG, "debug_log", syscall_debug_log, false, 0x01),  // arg0 = message
 	SYSCALL_DEFINE(SYSCALL_EXIT,      "exit",      syscall_exit,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_WRITE,     "write",     syscall_write,     false, 0x02),  // arg1 = buffer
+	SYSCALL_DEFINE(SYSCALL_READ,      "read",      syscall_read,      false, 0x02),  // arg1 = buffer (written)
 };
 
 uint64_t _syscall_dispatch(
@@ -340,6 +345,31 @@ static bool copy_user_buffer(const void *user_src, void *kernel_dst, size_t leng
         return success;
 }
 
+// Copy `length` bytes from a kernel buffer OUT to user space — the reverse of
+// copy_user_buffer, for read()'s result. Range-checks the destination the same
+// way (reject any dst that reaches into kernel-mapped memory, overflow-safe).
+static bool copy_to_user_buffer(void *user_dst, const void *kernel_src, size_t length)
+{
+        if (!user_dst || !kernel_src || length == 0)
+        {
+                return false;
+        }
+
+        uintptr_t user_address = (uintptr_t)user_dst;
+        if (user_address >= kHHDMOffset || length > kHHDMOffset - user_address)
+        {
+                return false;
+        }
+
+        bool switched = false;
+        uint64_t original_cr3 = user_cr3_window_open(&switched);
+
+        memcpy(user_dst, kernel_src, length);
+
+        user_cr3_window_close(original_cr3, switched);
+        return true;
+}
+
 static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -458,4 +488,53 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 
 	return copied;
+}
+
+// read(handle, buffer, length) — read input bytes into a user buffer.
+// Until a per-task handle table exists, only stdin (handle 0) is valid; it
+// reads from the console keyboard. BLOCKS until at least one byte is available
+// (Unix terminal semantics) — the block happens inside console_read via
+// SIGSLEEP, so the calling thread sleeps (zero CPU) and other threads run
+// while it waits; it is woken when a key arrives. Returns the byte count, or a
+// SYSCALL_RESULT_* sentinel. Runs on the caller's CR3 (user buffer in the
+// lower half is directly writable); result ferried through a bounded kernel
+// chunk like write() does.
+#define READ_CHUNK_SIZE 256
+static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3;
+	(void)arg4;
+	(void)arg5;
+
+	uint64_t handle = arg0;
+	void *user_buffer = (void*)arg1;
+	size_t length = (size_t)arg2;
+
+	if (handle != SYSCALL_HANDLE_CONSOLE_IN)
+	{
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	if (length == 0)
+	{
+		return 0;
+	}
+
+	char chunk[READ_CHUNK_SIZE];
+	size_t want = length < sizeof(chunk) ? length : sizeof(chunk);
+
+	// Blocks until >=1 byte is available, then returns what's queued (<= want).
+	long got = console_read(chunk, want);
+	if (got <= 0)
+	{
+		return 0;
+	}
+
+	if (!copy_to_user_buffer(user_buffer, chunk, (size_t)got))
+	{
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	return (uint64_t)got;
 }

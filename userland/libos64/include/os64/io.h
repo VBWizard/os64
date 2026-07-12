@@ -13,10 +13,20 @@
 // negative value on error (the in-band status half of the ABI; no errno).
 long os64_write(int handle, const void *buf, size_t len);
 
+// Read up to `len` bytes from `handle` into `buf`. Blocks until at least one
+// byte is available, then returns the count read (>= 1), or negative on error.
+// handle 0 (stdin) reads the console keyboard.
+long os64_read(int handle, void *buf, size_t len);
+
 // Convenience: write a NUL-terminated string to the console (handle 1).
 long os64_puts(const char *s);
 
 // Terminate the task with `code`. Does not return.
 void os64_exit(int code) __attribute__((noreturn));
+
+// Diagnostic: print a string to the kernel serial log (prefixed "[user] ").
+// Distinct from os64_puts (which goes to the console) — this is for test
+// output an offscreen/headless run can capture.
+void os64_debug_log(const char *s);
 
 #endif // OS64_IO_H

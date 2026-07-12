@@ -21,10 +21,13 @@
 #define SYSCALL_DEBUG_LOG  1
 #define SYSCALL_EXIT       2
 #define SYSCALL_WRITE      3
+#define SYSCALL_READ       4
 
-// Well-known handles accepted by SYSCALL_WRITE until a real per-task handle
-// table exists.  1/2 mirror the "stdout/stderr" convention because it is a
-// genuinely good one — both currently reach the console.
+// Well-known handles until a real per-task handle table exists. 0/1/2 are the
+// stdin/stdout/stderr convention (a genuinely good one): READ(0) blocks on the
+// console keyboard, WRITE(1)/WRITE(2) reach the console. TTYs later make these
+// per-task redirectable without changing the numbers.
+#define SYSCALL_HANDLE_CONSOLE_IN   0
 #define SYSCALL_HANDLE_CONSOLE_OUT  1
 #define SYSCALL_HANDLE_CONSOLE_ERR  2
 

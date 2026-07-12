@@ -9,6 +9,12 @@ long os64_write(int handle, const void *buf, size_t len)
                                (uint64_t)buf, (uint64_t)len);
 }
 
+long os64_read(int handle, void *buf, size_t len)
+{
+    return (long)os64_syscall3(SYSCALL_READ, (uint64_t)handle,
+                               (uint64_t)buf, (uint64_t)len);
+}
+
 // strlen without libc: freestanding, and we own the whole world here.
 static size_t os64_strlen(const char *s)
 {
@@ -27,4 +33,9 @@ void os64_exit(int code)
 {
     os64_syscall1(SYSCALL_EXIT, (uint64_t)(unsigned int)code);
     __builtin_unreachable();
+}
+
+void os64_debug_log(const char *s)
+{
+    os64_syscall1(SYSCALL_DEBUG_LOG, (uint64_t)s);
 }
