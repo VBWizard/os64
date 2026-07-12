@@ -51,6 +51,7 @@ extern bool kEnableNVME;
 extern bool kEnableRamdisk;
 extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch block below
 extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
+extern bool kRunHusk;    // launch the shell from the boot flow
 bool kEnableSMP = true;
 bool kBspSchedulerMode = false;
 bool kEnableKWorker = false;
@@ -317,6 +318,22 @@ void kernel_init()
 			scheduler_submit_new_task(ktTask);
 		else
 			printf("  /bin/keytest launch failed (not on the image?)\n");
+		while (1)
+			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
+	}
+
+	// Launch the shell and park the kernel task so the scheduler keeps running
+	// it (husk loops forever on read/spawn/wait). The kernel task is husk's
+	// parent, so husk inherits its environment. (When husk becomes the real
+	// init path this replaces the HELLO/KEYTEST temps entirely.)
+	if (kRunHusk && kRootFilesystem != NULL)
+	{
+		printf("Launching /bin/husk (the shell) ...\n");
+		task_t *huskTask = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+		if (huskTask)
+			scheduler_submit_new_task(huskTask);
+		else
+			printf("  /bin/husk launch failed (not on the image?)\n");
 		while (1)
 			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
 	}

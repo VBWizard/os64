@@ -27,6 +27,9 @@ bool kRunHello = false;
 // TEMP (read-syscall bring-up): launch /bin/keytest and keep the system up so
 // it can block on read(0) and echo injected keys. Remove with keytest.
 bool kRunKeytest = false;
+// Launch /bin/husk (the shell) from the boot flow and keep the system up. This
+// is the real "launch the shell" path; the HELLO/KEYTEST temps fold into it.
+bool kRunHusk = false;
 
 // -----------------------------------------------------------------------
 // Kernel command-line parser definitions
@@ -111,6 +114,7 @@ static cmdopt_t cmdopts[] = {
     {"BOOTMARKS", OPT_BOOL, &kEnableBootmarks, true, 0},
     {"HELLO", OPT_BOOL, &kRunHello, true, 0},
     {"KEYTEST", OPT_BOOL, &kRunKeytest, true, 0},
+    {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
