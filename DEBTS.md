@@ -59,6 +59,9 @@ hobby-scale judgment calls — re-rank freely.
 | FPU/SIMD state in the context switch (lift `-mno-sse` from user builds after) | Feature-gate | M | before userland wants floating point (blocks ps/top-style cpu%) | ABI (deferred) / LIBOS64 |
 | libos64 `LIBOS64_HIDDEN` macro + `-fvisibility=hidden` build wiring (PLT-free internal calls, the modern replacement for libChrisOS's `I` twins) | Feature-gate | S | first libos64 scaffolding task | LIBOS64 § shared object |
 | libos64 buffered `<os64/stdio.h>` layer (FILE*/fread/fwrite over raw handles) | Feature-gate | M | second phase — raw `<os64/io.h>` is enough for the shell | LIBOS64 § handles |
+| **`map`/`unmap` syscalls + a libos64 `malloc`.** Userland has NO dynamic memory yet. Design ratified 2026-07-12: **NO `brk`/`sbrk`** — a single "end of heap" pointer can only return memory from the END, so one long-lived allocation on top pins everything under it (musl abandoned `brk` entirely for exactly this). Instead the kernel exposes **regions** (`map(len) → VA`, `unmap(VA, len)`) over the VMA demand-paging layer that already exists — a mapped region costs nothing until touched — and libos64 carves them into a `malloc`/`free`. Kernel stays dumb (regions); the cleverness lives in the userland allocator, so it can be swapped without touching the kernel. `TASK_HEAP_START` stops meaning "bottom of one growing heap" and starts meaning "where anonymous mappings live" | Feature-gate | M | before any app needs dynamic memory (i.e. the first non-trivial utility) | MEMORY / `vma.c` |
+| **Userland signal delivery.** `SIGPIPE`'s default action (terminate) is currently enforced *inside the kernel* (`raise_sigpipe_and_die`) because ring 3 cannot install a handler yet. Consequence: a program that wants to SURVIVE a vanishing reader can't — it always dies. Fix = deliver signals to ring 3 (handler + a way to return), after which `pipe_write` can hand `PIPE_ERR_CLOSED` back to a program that asked for it | Feature-gate | M | when a program needs to catch SIGPIPE (or any signal) | `signals.h` SIGPIPE / `syscall.c` |
+| **Named pipes (FIFOs).** Same pipe object, same semantics — the ONLY difference is the rendezvous: a VFS name instead of inheritance across spawn. A FIFO holds no data (0 bytes on disk forever); it is just a name that resolves to a kernel pipe object, and `open()` blocks until both a reader and a writer arrive. `pipe.c` was written unaware of how it was created, precisely so this is additive. Also the first VFS node that isn't a file — the same door **procfs** walks through | Feature-gate | M | when two UNRELATED processes need to talk | `pipe.c` / VFS |
 
 ## Performance / fairness / cleanup
 
@@ -75,6 +78,9 @@ hobby-scale judgment calls — re-rank freely.
 | Uncomment the divide-config write in `ap_configure_scheduler_timer` — arming currently depends on the divisor leftover from calibration | Cleanup | XS | none | smp_core.c |
 | Allocator first-fit linear scans (merge scans whole ledger; compaction every 10th free) | Cleanup | L | measure before caring | MEMORY #2 |
 | IRQ-safe sub-tick wake primitive | Feature-gate | M | only if a real need appears (100Hz covers the GUI) | SCHEDULER #3 |
+| Pipe waiter slots are SINGLE (one parked reader + one parked writer per pipe). A second waiter on the same end is still correct — it falls back on its ~1s SIGSLEEP backstop and re-checks — but it is slow. Fix = a real wait list per end | Cleanup | S | when >1 reader or >1 writer on one pipe becomes normal | `pipe.c` |
+| Console scroll runs with **interrupts off**: the renderer spinlock is held across a ~3MB full-screen `memmove`, so a scroll can delay that core's tick by a few hundred µs. Correctness beats the jitter (the console is not a hot path), but if it ever matters the fix is a scroll that does NOT hold the lock — not a lock that does not cover the scroll | Cleanup | S | if the console ever gets hot | `BasicRenderer.c` kRendererLock |
+| `handle_alloc`/`handle_close` take no lock — safe today because a task's handle table is touched only by that task's own syscalls (and by `spawn` while the child is still being built, before it is schedulable). Grows a lock the day handles are shared between threads of one task | Cleanup | S | when a task has >1 thread using handles | `handle.c` |
 
 ## GUI (all GRAPHICS.md "future work")
 
@@ -95,7 +101,9 @@ hobby-scale judgment calls — re-rank freely.
 
 | Debt | Sev | Cost | Gate | Source |
 |---|---|---|---|---|
+| **PIE + loader-assigned per-TASK load bias.** Apps are static `ET_EXEC`. Each now links at a UNIQUE base (`userland/tools/app_bases.py`, hashed from the app name) so GDB — which has one global symbol table keyed by address — can hold every app's symbols at once; without it, two programs in a pipeline both sat at `0x400000` and address→symbol lookup was a coin flip. That is a **stopgap** with three limits: (a) two instances of the SAME program (`upper \| upper`) still share a base and are indistinguishable in GDB; (b) a 16MB image cap per app; (c) 104 app slots. Real fix: build apps `-fPIE -pie`, teach `elf_loader` `ET_DYN` (choose bias, map segments at bias+vaddr, apply `R_X86_64_RELATIVE`), assign a unique bias **per task** into `task->loadBias`. Most plumbing already exists — `loadBias`, `elf_relocate.c`, and the autoloader's `add-symbol-file -o <bias>`. | Feature-gate | M | when a pipeline runs the same program twice, or an app outgrows 16MB | `task.c` debug_task_loaded / `app_bases.py` / `elf_relocate.c` |
 | Kernel makefile `-MMD` dependency tracking is broken (no `.d` files generated) — forces a manual `make -C kernel clean` after every header change | Robustness | S–M | none — real daily footgun | VERIFICATION § build |
+| `--defsym` **must precede `-T`** on the ld command line or it is silently ignored and every app links at the `0x400000` fallback — builds fine, runs fine, and fails only in the debugger. Guarded by a comment at the flag; a build-time assert (entry == assigned base) would make it loud instead of documented | Robustness | XS | none | `userland/GNUmakefile` APP_RULE |
 | os64 FAT driver can't read a sub-FAT32-minimum volume: `mformat -F` forces FAT32, but <65525 clusters (~34MB) yields a malformed hybrid the driver misclassifies as FAT16 → every open fails. Currently worked around by the 64MB DISK_SIZE_MB floor. Fix = teach the driver FAT16 (or drop `-F` and let mformat pick), so the ramdisk can shrink below 64MB | Robustness | M | if the ramdisk ever needs to be <64MB | GNUmakefile disk target / fat driver |
 
 ## Explicitly NOT debts (recorded so they aren't re-litigated)
@@ -106,3 +114,25 @@ hobby-scale judgment calls — re-rank freely.
   side-channel that is out of scope. See ABI § Memory-protection.
 - **The "Time to make the donuts" scheduler message**: load-bearing
   tradition, not debug noise. Never remove/reword. See SCHEDULER § donuts.
+- **Pipes carry TWO copies (user→kernel ring→user), not shared memory.** The
+  tempting "map one page into both tasks" optimization puts the ring's
+  head/tail pointers in memory USERLAND CAN WRITE, so a buggy program could
+  corrupt or hang the process on the other end. The kernel must be the arbiter
+  of the buffer. (Same call GRAPHICS.md makes: syscalls carry handles, never
+  pixels.) A future zero-copy `splice` can be added *behind the handle API*
+  without changing one line of any program — that is what handles are for.
+- **A bounded pipe is not a limitation — the bound IS the flow control.** A
+  writer that fills the 64KB ring BLOCKS, which throttles the producer to
+  exactly the consumer's speed and is the only reason a pipeline runs in
+  constant memory. Do not "fix" this by growing the buffer on demand; an
+  unbounded pipe is a memory leak with a friendly API. See `pipe.h`.
+- **spawn does NOT blanket-inherit the parent's handle table** (Unix does). A
+  child gets the console plus exactly the handles it was explicitly given.
+  Deliberate: a child can never accidentally hold some unrelated pipe end open,
+  which is a classic way pipelines hang. Do not "fix" this into Unix semantics.
+- **Write atomicity is capacity-bounded, not `PIPE_BUF`-bounded.** os64's rule
+  is one sentence — *a write of ≤ PIPE_CAPACITY lands whole, or it waits* —
+  instead of Unix's magic 4096 constant that everyone has to memorize. Reads
+  return SHORT and writes land WHOLE; the asymmetry is intentional (a reader
+  that waits to fill its buffer deadlocks interactive pipelines; a writer that
+  lands whole keeps records intact). See `pipe.h`.
