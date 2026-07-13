@@ -14,28 +14,34 @@ set confirm off
 set breakpoint pending on
 
 # ── Automatic per-program symbol loading ─────────────────────────────────────
-# The kernel calls debug_task_loaded(path, load_bias) every time it finishes
-# loading a program image (task.c).  The silent breakpoint below fires there,
-# reads the arguments, add-symbol-file's kernel/bin/<basename> (offset by the
-# load bias for PIE binaries), and resumes without stopping.  Every app's
-# debug info is available the moment the OS creates the task — no manual
-# loading, no unique-link-address tricks; all binaries happily at 0x400000.
+# The kernel calls debug_task_loaded() every time it finishes loading a program
+# image (task.c).  The silent breakpoint below fires there, reads the globals it
+# publishes, add-symbol-file's the matching binary, and resumes without stopping.
+#
+# IMPORTANT: the userland apps now each link at their OWN base (see
+# userland/tools/app_bases.py), so several apps' symbols can be loaded AT THE
+# SAME TIME without colliding.  That is what makes debugging a PIPELINE possible.
 python
 import gdb, os
 
-# Every os64 program links at the same base (0x400000), so keeping several
-# apps' symbol files loaded at once makes GDB's address->symbol lookup a coin
-# flip: a stop in one app gets LABELED with another app's function (observed:
-# a hit on syscall_smoke's _start displayed as "streq at arg_echo.c:64").
-# Since debugging is one-app-at-a-time in practice, the autoloader keeps ONLY
-# the most recently loaded app's symbols: previous ones are removed when a new
-# program loads.  Breakpoints against a not-yet-loaded (or unloaded) app
-# simply go pending and resolve when it (re)appears.
+# HISTORY, because this file used to say the opposite:
+# Every os64 program used to link at the same base (0x400000). Keeping several
+# apps' symbol files loaded at once therefore made GDB's address->symbol lookup
+# a coin flip: a stop in one app got LABELED with another app's function (once
+# observed: a hit on syscall_smoke's _start displayed as "streq at arg_echo.c").
+# The workaround was to keep ONLY the most recently loaded app's symbols and
+# remove the previous ones — which was fine while debugging was one-app-at-a-time.
+#
+# Pipelines ended that. `hello | upper` runs two programs AT ONCE, and unloading
+# one to look at the other is useless. So the apps now get unique link bases and
+# this autoloader ACCUMULATES: every program that loads keeps its symbols, because
+# no two of them can claim the same address anymore. (Which vindicates the old
+# 32-bit OS's unique-link-address trick — it was right all along.)
 class Os64SymbolAutoload(gdb.Breakpoint):
     def __init__(self):
         super(Os64SymbolAutoload, self).__init__("debug_task_loaded", internal=True)
         self.silent = True
-        self.current = None      # (abspath, bias) of the app symbols now loaded
+        self.loaded = set()      # (abspath, bias) pairs already add-symbol-file'd
 
     def stop(self):
         try:
@@ -57,15 +63,15 @@ class Os64SymbolAutoload(gdb.Breakpoint):
                     symfile = cand
                     break
             key = (symfile, bias)
-            if symfile and key != self.current:
-                if self.current is not None:
-                    gdb.execute("remove-symbol-file %s" % self.current[0],
-                                to_string=True)
+            # Skip anything already loaded — userland/bin/app_bases.gdb (sourced
+            # by .gdbinit) has usually loaded every app's symbols before the OS
+            # even boots, so breakpoints resolve immediately instead of pending.
+            if symfile and key not in self.loaded:
                 cmd = "add-symbol-file %s" % symfile
                 if bias:
                     cmd += " -o %#x" % bias
                 gdb.execute(cmd, to_string=True)
-                self.current = key
+                self.loaded.add(key)
                 gdb.write("[os64] symbols: %s%s\n"
                           % (symfile, (" (+%#x)" % bias) if bias else ""))
         except Exception as exc:
