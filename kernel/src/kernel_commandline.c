@@ -120,6 +120,9 @@ static cmdopt_t cmdopts[] = {
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
     {"GUI", OPT_BOOL, &kEnableGUI, true, 0},
     {"DEBUG_GUI", OPT_UINT128_OR, &kDebugLevel, DEBUG_GUI, 0},
+    // Pipes: lifecycle + every refcount change + every park/wake + EOF/EPIPE.
+    // Add DEBUG_DETAILED alongside it for the byte-by-byte data flow.
+    {"DEBUG_PIPE", OPT_UINT128_OR, &kDebugLevel, DEBUG_PIPE, 0},
     {"LOGFILE", OPT_BOOL, &kOverrideFileLogging, true, 0},
     {"ROOT", OPT_STRING, kRootPartUUID, 0, 64},
     // Older boot entries (VBox/Bosgame in limine.conf) still use the long

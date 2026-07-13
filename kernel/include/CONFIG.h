@@ -91,6 +91,21 @@
 // wide and 23 are spoken for; a bit is the cheapest thing in this kernel, and
 // a level that means what it says is worth far more than the bit it costs.
 #define DEBUG_TASKSWITCH (__uint128_t)1 << 23
+// Pipes get their own channel, and NOT because of volume (though a busy shell
+// pipes a lot, and these used to ride DEBUG_TASK — which lives in MINIMAL, so
+// every boot printed pipe chatter forever).
+//
+// The real reason: a pipeline's characteristic failure is a HANG, and the only
+// question that ever solves it is "who is parked waiting for what, and what are
+// the refcounts?" So DEBUG_PIPE traces exactly that — lifecycle, every refcount
+// change, every park and wake, and the two events that end a stream (EOF when
+// the last writer leaves, EPIPE when the last reader does). Those are RARE
+// events with high signal. The byte-by-byte data flow is a firehose and rides
+// DEBUG_PIPE | DEBUG_DETAILED instead, so the base level stays readable.
+//
+// Deliberately NOT in MINIMAL: opt in from the cmdline when you're chasing a
+// pipeline, stay silent otherwise.
+#define DEBUG_PIPE (__uint128_t)1 << 24
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
