@@ -4,13 +4,16 @@
 // grep, cat — all separate executables husk spawns. Zero feature duplication.
 //
 // v1: read -> parse argv -> spawn -> wait -> repeat. One builtin: `exit`.
-// stdin/stdout are the console (handles 0/1); no pipes, no redirection, no
-// TTYs yet — those layer on later without changing this loop.
+// v2: PIPELINES. `a | b | c` — husk creates the pipes, hands one end to each
+// child, and then closes its own copies. Note that husk does not move a single
+// byte of the data: it builds the plumbing and gets out of the way. The two
+// programs never learn they aren't talking to a terminal.
 
 #include "os64/os64.h"
 
 #define LINE_MAX 256
 #define ARGS_MAX 16
+#define MAX_STAGES 4          // a | b | c | d is plenty of rope for now
 
 // ── tiny freestanding helpers (no libc) ─────────────────────────────────────
 
@@ -83,6 +86,123 @@ static int parse(char *line, char *argv[], int maxargs)
 	return argc;
 }
 
+// Does the first whitespace-delimited word of `s` equal `word`? Non-destructive
+// — unlike parse(), which tokenizes in place — so builtins can be recognized
+// BEFORE the line is chewed up.
+static int first_token_is(const char *s, const char *word)
+{
+	while (*s == ' ') s++;
+	while (*word && *s == *word) { s++; word++; }
+	return *word == 0 && (*s == 0 || *s == ' ');
+}
+
+// Split a line on '|' into stage strings, in place. Returns the stage count.
+// (No quoting, no escapes — a bare '|' is always a pipe. Quoting is a parser
+// feature and husk's parser is deliberately tiny.)
+static int split_pipeline(char *line, char *stages[], int maxstages)
+{
+	int n = 0;
+	char *p = line;
+
+	stages[n++] = p;
+	while (*p && n < maxstages)
+	{
+		if (*p == '|')
+		{
+			*p++ = 0;              // terminate the stage before the bar
+			stages[n++] = p;       // next stage starts after it
+		}
+		else
+		{
+			p++;
+		}
+	}
+	return n;
+}
+
+// Report a reaped child to the serial log: "husk: pid <p> exited code <c>".
+static void report_exit(long ended, int code)
+{
+	char msg[64];
+	char nb[20];
+	int m = 0;
+
+	for (const char *s = "husk: pid "; *s; s++) msg[m++] = *s;
+	{ int k = utoa((unsigned long)ended, nb); for (int j = 0; j < k; j++) msg[m++] = nb[j]; }
+	for (const char *s = " exited code "; *s; s++) msg[m++] = *s;
+	{ int k = utoa((unsigned long)(unsigned int)code, nb); for (int j = 0; j < k; j++) msg[m++] = nb[j]; }
+	msg[m] = 0;
+	os64_debug_log(msg);
+}
+
+// Build and run a pipeline: spawn every stage, wiring stage i's stdout to
+// stage i+1's stdin through a pipe. The last stage keeps the console.
+//
+// THE CLOSE DISCIPLINE IS THE WHOLE JOB. Every end husk hands to a child, husk
+// must then close its OWN copy of — because the reader downstream sees
+// end-of-input only when the LAST write end closes. Keep husk's copy of a write
+// end open and that reader waits forever for an EOF that can never come: the
+// classic `a | b` hang that every hand-written shell suffers exactly once. The
+// child already holds its own reference, so closing ours takes nothing from it.
+static void run_pipeline(char *stages[], int nstages)
+{
+	long pids[MAX_STAGES];
+	int npids = 0;
+	int prev_read = -1;         // read end of the pipe from the PREVIOUS stage
+
+	for (int i = 0; i < nstages; i++)
+	{
+		char *cargv[ARGS_MAX];
+		if (parse(stages[i], cargv, ARGS_MAX) == 0)
+		{
+			os64_puts("husk: empty command in pipeline\n");
+			break;
+		}
+
+		// A pipe to the NEXT stage — the last stage doesn't need one.
+		int p[2] = { -1, -1 };
+		if (i < nstages - 1 && os64_pipe(p) < 0)
+		{
+			os64_puts("husk: out of pipes\n");
+			break;
+		}
+
+		int in  = prev_read;                        // -1 for the first stage: console
+		int out = (i < nstages - 1) ? p[1] : -1;    // -1 for the last stage: console
+
+		long pid = os64_spawn_redirected(cargv[0], cargv, in, out, -1);
+
+		// Hand-off done — drop husk's copies of both ends it just passed along.
+		if (prev_read >= 0) { os64_close(prev_read); prev_read = -1; }
+		if (p[1] >= 0)        os64_close(p[1]);
+
+		if (pid < 0)
+		{
+			os64_puts("husk: cannot run ");
+			os64_puts(cargv[0]);
+			os64_puts("\n");
+			if (p[0] >= 0) os64_close(p[0]);
+			break;
+		}
+
+		pids[npids++] = pid;
+		prev_read = p[0];       // this stage's output becomes the next one's input
+	}
+
+	if (prev_read >= 0)
+		os64_close(prev_read);  // belt and braces: never leave an end dangling
+
+	// Reap every child we launched. They run CONCURRENTLY — that is the point
+	// of a pipeline; stage 2 is already chewing on stage 1's first bytes long
+	// before stage 1 finishes. We just collect the corpses in order.
+	for (int i = 0; i < npids; i++)
+	{
+		int code = 0;
+		long ended = os64_wait(pids[i], &code);
+		report_exit(ended, code);
+	}
+}
+
 // ── the shell ───────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv, char **envp)
@@ -94,46 +214,24 @@ int main(int argc, char **argv, char **envp)
 	os64_debug_log("husk: started");
 
 	char line[LINE_MAX];
-	char *cargv[ARGS_MAX];
+	char *stages[MAX_STAGES];
 
 	for (;;)
 	{
 		prompt();
-		int n = read_line(line, sizeof(line));
-		if (n == 0)
+		if (read_line(line, sizeof(line)) == 0)
 			continue;
 
-		int ac = parse(line, cargv, ARGS_MAX);
-		if (ac == 0)
-			continue;
+		int nstages = split_pipeline(line, stages, MAX_STAGES);
 
-		if (str_eq(cargv[0], "exit"))
+		// `exit` is a builtin because it touches the SHELL'S OWN state (its
+		// lifetime) — no separate program could ever do it. Checked WITHOUT
+		// parse(), which tokenizes in place and would eat the line before
+		// run_pipeline ever saw the arguments.
+		if (nstages == 1 && first_token_is(stages[0], "exit"))
 			break;
 
-		long pid = os64_spawn(cargv[0], cargv);
-		if (pid < 0)
-		{
-			os64_puts("husk: cannot run ");
-			os64_puts(cargv[0]);
-			os64_puts("\n");
-			os64_debug_log("husk: spawn failed");
-			continue;
-		}
-
-		int code = 0;
-		long ended = os64_wait(pid, &code);
-
-		// Diagnostic to serial: proves spawn returned a pid and wait reaped it
-		// with the child's exit code. Build "husk: pid <p> exited code <c>".
-		char msg[64];
-		int m = 0;
-		char nb[20];
-		for (const char *s = "husk: pid "; *s; s++) msg[m++] = *s;
-		{ int k = utoa((unsigned long)ended, nb); for (int j = 0; j < k; j++) msg[m++] = nb[j]; }
-		for (const char *s = " exited code "; *s; s++) msg[m++] = *s;
-		{ int k = utoa((unsigned long)(unsigned int)code, nb); for (int j = 0; j < k; j++) msg[m++] = nb[j]; }
-		msg[m] = 0;
-		os64_debug_log(msg);
+		run_pipeline(stages, nstages);
 	}
 
 	os64_write(1, "husk: bye\n", 10);

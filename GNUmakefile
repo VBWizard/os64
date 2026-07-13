@@ -180,6 +180,7 @@ disk-populate: disk-init kernel userland
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/hello ::/bin/hello
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/keytest ::/bin/keytest
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/husk ::/bin/husk
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/upper ::/bin/upper
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 

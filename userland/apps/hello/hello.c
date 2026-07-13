@@ -30,7 +30,7 @@ int main(int argc, char **argv, char **envp)
     // Prove the process/scheduler round trip too: yield, then come back.
     os64_yield();
     os64_puts("hello: back from yield — exiting 0\n");
-    os64_debug_log("goodbye from hello 😏");
+    os64_debug_log("goodbye from hello :-)");
 
     return 0;   // launch converts this into exit(0); the kernel checks it
 }
