@@ -42,6 +42,8 @@ hobby-scale judgment calls — re-rank freely.
 
 | Debt | Sev | Cost | Gate | Source |
 |---|---|---|---|---|
+| **No task teardown — EVERY SPAWN LEAKS A TASK.** Nothing in the tree ever frees a dead task's memory: `task_reap_eligible_zombies` → `scheduler_reap_zombie_thread` only DEQUEUES the zombie thread (sets state NONE); the `task_t`, its PML4 + page tables, its kernel/user stacks, and its argv/env pages are never `kfree`d. Every `/bin/hello` from husk leaks the lot. Harmless at hobby scale today, fatal for a shell you leave running. Fix = a real `task_destroy()` (free stacks → page tables → argv/env → task_t), called from the reaper. It ALSO unblocks failing cleanly *after* allocation: `task_create` currently must validate the path BEFORE it builds anything (`elf_can_load`) precisely because there is nothing to unwind with | Hole (slow leak) | M | before anything runs for a long time spawning children | `task.c` reap path / `scheduler.c` |
+| `elf_resolve_dynamic_dependencies` still PANICS on a missing/malformed shared-object dependency (task.c). Ring-3-reachable if a dynamically-linked program with a bad `.so` is ever spawned — the static path no longer panics (`elf_can_load`), this one still does | Robustness | S | when userland gains dynamic binaries | `task.c` |
 | Allocator silent-OOM → panic | Robustness | S | none | MEMORY #1 |
 | `#DF` IST emergency stack | Robustness | S–M | none | ABI (deferred) |
 | MAX_CPUS=24 vs. the 3900X's 24 threads (index 24 = one past every per-CPU array) — raise the constant or guard with MAXCORES | Robustness | S | before booting the 3900X | SCHEDULER #5 |

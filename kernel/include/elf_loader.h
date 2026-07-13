@@ -94,4 +94,11 @@ int elf_load_from_path(task_t *task, const char *path);
 /// this before choosing a loading strategy.
 bool elf_is_dynamic(const char *path);
 
+// Could this path be run at all? Opens it and validates the ELF64 header,
+// allocating nothing. task_create calls this BEFORE it builds a task, so an
+// unloadable path (a typo, or a file that exists but isn't a program) fails
+// cheaply and cleanly instead of PANICKING the kernel — which is what it used
+// to do, meaning ring 3 could take the OS down with a fat-fingered filename.
+bool elf_can_load(const char *path);
+
 #endif

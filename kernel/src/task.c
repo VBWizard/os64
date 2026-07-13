@@ -705,6 +705,29 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
 	bool loadedElfProgram = false;
+
+	// CAN WE EVEN RUN THIS? Ask BEFORE task_initialize allocates a thing.
+	//
+	// A path we can't load is not a kernel error — it is just "no". This used to
+	// PANIC further down ("task_create: Failed to load ELF"), which meant RING 3
+	// COULD KILL THE KERNEL WITH A TYPO: one fat-fingered filename at the husk
+	// prompt took the whole OS down. Spawning a file that exists but isn't a
+	// program (/partition_info) did it too.
+	//
+	// Checking here, before anything is allocated, is what makes the failure
+	// clean: there is no task-teardown path in this tree to unwind with (see
+	// DEBTS), so the only way to fail without leaking is to fail before we
+	// build. spawn() now returns -1 and husk prints "cannot run <path>".
+	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask &&
+	    !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
+	{
+		if (!elf_can_load(path))
+		{
+			printd(DEBUG_TASK, "task_create: cannot load '%s' — not spawning\n", path);
+			return NULL;
+		}
+	}
+
 	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
 
     //Copy the path (parameter) value from the parentTask's memory.
@@ -773,7 +796,18 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		if (elf_is_dynamic(newTask->path)) {
 			elf_resolve_dynamic_dependencies(newTask, newTask->path);
 		} else if (elf_load_from_path(newTask, newTask->path) != 0) {
-			panic("task_create: Failed to load ELF for task %s\n", newTask->path);
+			// The header already validated (elf_can_load, above), so reaching
+			// here means the load failed MID-WAY — a truncated image, a bad
+			// program header, an allocation failure. Still not worth killing the
+			// OS over: return failure and let the caller say "cannot run".
+			//
+			// NOTE: this leaks newTask (struct + PML4 + stacks). There is no
+			// task teardown path in the tree yet — DEBTS row filed. A leak on a
+			// corrupt-binary edge case beats a panic on it, and the common cases
+			// (typo, not-a-program) never get this far.
+			printd(DEBUG_TASK, "task_create: ELF load failed for %s after its header validated "
+				"(truncated or malformed image?) — not spawning\n", newTask->path);
+			return NULL;
 		}
 		// NOTE: entry registers (RDI/RSI/RDX) are latched later, after argc/argv
 		// are built and mapped and env is inherited. Calling task_setup_entry()

@@ -1,4 +1,5 @@
 #include "elf_loader.h"
+#include "serial_logging.h"   // printd (elf_can_load traces why a spawn was refused)
 
 #include "CONFIG.h"
 #include "memory/kmalloc.h"
@@ -598,6 +599,45 @@ int elf_load_from_path(task_t *task, const char *path)
 /// (elf_resolve_dynamic_dependencies, task.c) — the two are mutually
 /// exclusive per task, so this check happens once up front rather than
 /// letting either path discover it's the wrong one partway through.
+// Could `path` actually be run? Opens it and validates the ELF64 header, and
+// allocates NOTHING — which is the whole point: task_create calls this BEFORE it
+// builds a task, so a bad path costs nothing and leaks nothing.
+//
+// WHY THIS EXISTS: task_create used to PANIC ("Failed to load ELF") when the
+// image wouldn't load. That meant ring 3 could take the kernel down with a
+// TYPO — one mistyped filename at the husk prompt killed the whole OS. It also
+// died on a path that exists but isn't a program (try /partition_info, a text
+// file). Neither is a kernel error. Both are just "no", and "no" is an answer a
+// shell is perfectly capable of printing.
+bool elf_can_load(const char *path)
+{
+    if (path == NULL || kRootFilesystem == NULL) {
+        return false;
+    }
+    if (kRootFilesystem->fops == NULL || kRootFilesystem->fops->open == NULL) {
+        return false;
+    }
+
+    vfs_file_t *file = NULL;
+    if (kRootFilesystem->fops->open(&file, path, "r", kRootFilesystem) != 0) {
+        printd(DEBUG_TASK, "elf_can_load: no such file: %s\n", path);
+        return false;   // the typo case
+    }
+
+    // It opened — but is it a PROGRAM? A text file opens just fine.
+    Elf64_Ehdr ehdr;
+    bool loadable = elf_read_at(file, 0, &ehdr, sizeof(ehdr)) && elf_validate_ehdr(&ehdr);
+    if (!loadable) {
+        printd(DEBUG_TASK, "elf_can_load: not a loadable ELF64: %s\n", path);
+    }
+
+    if (kRootFilesystem->fops->close != NULL) {
+        kRootFilesystem->fops->close(file);
+    }
+
+    return loadable;
+}
+
 bool elf_is_dynamic(const char *path)
 {
     if (path == NULL || kRootFilesystem == NULL) {
