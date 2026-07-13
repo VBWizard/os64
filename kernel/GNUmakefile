@@ -83,16 +83,40 @@ override CFLAGS += \
 	-Wno-error=unused-but-set-parameter \
 	-Wno-error=unused-variable \
 	-Wno-error=unused-but-set-variable \
-	$(INCLUDE_FLAGS)
+	$(INCLUDE_FLAGS) \
+	-MMD \
+	-MP
 #    -nostdinc \
 
+# ^^ -MMD/-MP live in CFLAGS because CFLAGS is what the compile rules actually
+# pass. They used to sit in CPPFLAGS below — which no rule has ever passed to
+# the compiler — so NO .d FILES WERE EVER GENERATED, `-include $(HEADER_DEPS)`
+# faithfully included nothing, and make had ZERO header dependencies. Every rule
+# knew only "this .o comes from this .c", so editing a HEADER rebuilt nothing:
+# make compared kernel.c (unchanged) against kernel.c.o, said "up to date", and
+# handed you an object compiled against the OLD header. The build lied, silently,
+# every time you touched a header — hence the standing "always make -C kernel
+# clean" folklore. (It cost a full debug cycle on 2026-07-12: a CONFIG.h edit
+# adding DEBUG_PIPE left kernel.c stale, so kDebugLevel kept the old value and
+# the new trace printed nothing.)
+#
+# What they do: gcc has already read every #include while compiling, so -MMD
+# tells it to also emit that list as a makefile fragment (obj/foo.c.d), which
+# `-include $(HEADER_DEPS)` pulls in. Now make knows foo.c.o depends on CONFIG.h
+# and rebuilds it. Self-maintaining: every compile regenerates the .d with the
+# current include list, so it can never drift. -MMD (not -MD) lists only OUR
+# headers, not system ones; -MP adds a phony target per header so DELETING a
+# header doesn't hard-fail with "no rule to make target".
+
 # Internal C preprocessor flags that should not be changed by the user.
+# NOTE: no compile rule passes $(CPPFLAGS) — it is effectively dead. Left in
+# place (minus the dep flags, which moved to CFLAGS where they are actually
+# used) rather than deleted, because the -I/-isystem entries would change header
+# resolution if they were ever wired up, and that is a separate decision.
 override CPPFLAGS := \
     -I src \
     -isystem freestnd-c-hdrs-0bsd \
-    $(CPPFLAGS) \
-    -MMD \
-    -MP
+    $(CPPFLAGS)
 
 # Internal nasm flags that should not be changed by the user.
 override NASMFLAGS += \

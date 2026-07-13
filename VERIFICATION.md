@@ -23,19 +23,29 @@ here, because your scratchpad dies with your session.*
 
 | Command | What it does |
 |---|---|
-| `make` | Build kernel + 512MB disk image + ISO (ISO also lands at /mnt/c/temp for VBox) |
+| `make` | Build kernel + 64MB disk image + ISO (ISO also lands at /mnt/c/temp for VBox) |
 | `make run` | QEMU BIOS boot, **windowed** — the human's mode |
 | `make run-uefi` | Same, OVMF/UEFI |
 | `make debug` | QEMU + GDB server :1234, waits (`-S -s`); `gdb kernel/bin/os64_kernel` → `target remote :1234`. QEMU's gdbstub breakpoints are linear-address based — no int3 patching, higher-half addresses work directly |
-| `make -C kernel` | Kernel only (seconds) — but see the clean-build rule |
+| `make -C kernel` | Kernel only (seconds); incremental and trustworthy — no clean needed |
 | `make vbox-sync` | dd the disk image into the VBox fixed VDI — **VM must be powered off**; capacity/type guards refuse a stale VDI |
 
-**Clean-build rule:** the kernel makefile's `-MMD` dependency tracking is
-broken (no .d files are generated). After ANY header change, `make -C
-kernel clean` first, or you will debug a ghost built from stale objects.
-When in doubt, clean — the build is seconds.
+**Incremental builds are trustworthy (since 2026-07-12).** Just `make run`.
+The old "always `make -C kernel clean` after a header change" rule is DEAD,
+and it was never superstition: `-MMD`/`-MP` sat in `CPPFLAGS`, which no
+compile rule ever passed to the compiler, so NO `.d` files were generated and
+make had zero header dependencies — editing a header rebuilt nothing and
+handed you objects compiled against the old version. The build lied. The flags
+now live in `CFLAGS` (where the rules actually pass them): touch `pipe.h` and
+exactly the 4 objects that include it rebuild; touch `CONFIG.h` and 66 do.
 
-Default QEMU config: 8GB RAM, `-smp 4`, serial → `qemu_com1.log`, monitor
+The same rot was downstream: the `disk` target was `.PHONY`, so every `make
+run` nuked and reformatted the 64MB image and forced `xorriso` to repack the
+77MB ISO — nothing below a phony prerequisite can ever be up to date. The disk
+image is a real file target now, so an unchanged tree rebuilds nothing (~0.1s)
+and `make run` just launches QEMU.
+
+Default QEMU config: 8GB RAM, `-smp 8`, serial → `qemu_com1.log`, monitor
 on telnet 127.0.0.1:55555, NVMe disk from `disk/os64.img`.
 
 ## Headless QEMU (the agent's mode)
@@ -180,8 +190,9 @@ until it has seen at least QEMU + one of the other two.
 - **No serial output ever + no QEMU error:** wrong `-serial` path, or the
   kernel died pre-serial-init, or a silent `cli; hlt` (see MEMORY.md's OOM
   limitation).
-- **Ghost bugs that survive your fix:** stale objects — the clean-build
-  rule.
+- **Ghost bugs that survive your fix:** stale objects. This was ENDEMIC until
+  2026-07-12 (dependency tracking was silently off — see the build section). If
+  it ever recurs, suspect the `.d` files before you suspect your fix.
 - **#GP panic loop within ~3 ticks of boot, right after the DEBUG_OPTIONS
   banner:** you booted the wrong machine type — QEMU defaulted to i440FX
   because `-machine q35` was omitted. The kernel is fine; fix the flags.

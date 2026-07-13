@@ -53,6 +53,7 @@ DISK_OFFSET ?= 1048576
 DISK_SIZE_MB ?= 64
 DISK_PARTUUID ?= 2f4fd02e-68b4-4c82-98bc-72467529b3fc
 
+
 # Define drive/device flags
 QEMU_DRIVE_FLAGS = \
                   -drive file=$(DISK_IMAGE),if=none,id=nvme1 \
@@ -70,22 +71,50 @@ $(call USER_VARIABLE,QEMUFLAGS,$(QEMUFLAGS_ADD))
 
 override IMAGE_NAME := os64_kernel
 
+# Say it out loud: a rule accidentally placed above `all` would otherwise
+# silently become the default goal (make picks the FIRST target in the file),
+# and `make` would quietly build one binary instead of the OS.
+.DEFAULT_GOAL := all
+
+# ---- What lands on the disk image -----------------------------------------
+# The userland apps are DISCOVERED, exactly the way userland/GNUmakefile does
+# it (apps/<name>/<name>.c => an app called <name>). So "drop a directory and
+# it builds" now also means "drop a directory and it lands on the image" — no
+# mcopy line to add, ever. (It used to need both, and a forgotten mcopy meant
+# an app that built perfectly and simply wasn't there at boot.)
+USERLAND_APPS := $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c))))
+USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
+
+# Kernel-side ring-3 test fixtures that also ride the image.
+KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
+                     syscall_smoke exit_by_return libtest.so)
+KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
+
+
 .PHONY: all
 all: $(IMAGE_NAME).iso
 
 .PHONY: all-hdd
 all-hdd: $(IMAGE_NAME).hdd
 
+# The sub-makes are the authority on whether these need rebuilding, so recurse
+# unconditionally — but let the FILE TIMESTAMPS decide what happens downstream.
+# The empty recipe (`;`) is the point: the sub-make either updates the binary
+# (new mtime -> the disk image and ISO rebuild) or leaves it alone (old mtime ->
+# they don't). That is what makes `make run` cheap when nothing changed.
+$(KERNEL_BIN) $(KERNEL_FIXTURES): kernel ;
+$(USERLAND_BINS): userland ;
+
 # Local qemu: ~/src/qemu-9.2.0-rc0/build/
 .PHONY: run
-run: $(IMAGE_NAME).iso disk-populate
+run: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
 		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS)
 
-debug: $(IMAGE_NAME).iso disk-populate
+debug: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
 		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
@@ -93,7 +122,7 @@ debug: $(IMAGE_NAME).iso disk-populate
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
 
 .PHONY: debug-hdd-eufi
-debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd disk-populate
+debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -101,7 +130,7 @@ debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd disk-populate
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
 
 .PHONY: run-uefi
-run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso disk-populate
+run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -110,14 +139,14 @@ run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso disk-populate
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd
-run-hdd: $(IMAGE_NAME).hdd disk-populate
+run-hdd: $(IMAGE_NAME).hdd $(DISK_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
-run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd disk-populate
+run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -150,13 +179,24 @@ kernel: kernel-deps
 userland:
 	$(MAKE) -C userland
 
-.PHONY: disk
-disk:
+# The disk image is a REAL FILE TARGET, not .PHONY.
+#
+# It used to be phony, which meant every single `make run` destroyed the image
+# (rm + sgdisk + mformat), re-mcopy'd all eleven files, and — because the ISO
+# carries this image as a Limine module — forced xorriso to repack the whole
+# 77MB ISO. Nothing downstream could EVER be up to date, because a phony
+# prerequisite is by definition always out of date. Fixing the kernel's header
+# dependencies bought nothing until this was fixed too.
+#
+# Now it rebuilds only when something that goes ON it actually changed. The
+# recipe still recreates the image from scratch (that is the honest thing to do
+# — it guarantees no stale files linger from a previous layout); what changed is
+# WHEN it runs.
+$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
-	# rebuilding the image (which happens on every make — disk is .PHONY)
-	# doesn't write $(DISK_SIZE_MB)MB of zeros each time. The rm matters:
-	# truncate alone would leave stale GPT/FAT bytes from a previous image.
+	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
+	# The rm matters: truncate alone would leave stale GPT/FAT bytes behind.
 	rm -f $(DISK_IMAGE)
 	truncate -s $(DISK_SIZE_MB)M $(DISK_IMAGE)
 	# --new=1:2048:0 — end sector 0 means "largest possible": the partition
@@ -164,25 +204,27 @@ disk:
 	# is the single knob for image AND partition size.
 	sgdisk $(DISK_IMAGE) --new=1:2048:0 --typecode=1:0700 --change-name=1:"os64" --partition-guid=1:$(DISK_PARTUUID)
 	mformat -F -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::
-
-.PHONY: disk-init
-disk-init: disk
-
-.PHONY: disk-populate
-disk-populate: disk-init kernel userland
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/bin > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/lib > /dev/null 2>&1
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/test_elf ::/bin/test_elf
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/arg_echo ::/bin/arg_echo
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/dyn_consumer ::/bin/dyn_consumer
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/syscall_smoke ::/bin/syscall_smoke
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/exit_by_return ::/bin/exit_by_return
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/hello ::/bin/hello
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/keytest ::/bin/keytest
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/husk ::/bin/husk
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/upper ::/bin/upper
+	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/bin/$(notdir $(f));))
+	# Every discovered userland app, automatically — no per-app line to forget.
+	$(foreach b,$(USERLAND_BINS),\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(b) ::/bin/$(notdir $(b));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
+	@echo "  disk image rebuilt: $(words $(USERLAND_APPS)) apps ($(USERLAND_APPS))"
+
+# Compatibility aliases. disk-populate/disk-init now just mean "make sure the
+# image is current"; `disk` FORCES a fresh one (the old always-rebuild behavior,
+# for when you want to be certain).
+.PHONY: disk-init disk-populate
+disk-init disk-populate: $(DISK_IMAGE)
+
+.PHONY: disk
+disk:
+	rm -f $(DISK_IMAGE)
+	$(MAKE) $(DISK_IMAGE)
 
 # ---- VirtualBox disk sync -------------------------------------------------
 # The VBox VM boots the DVD from C:/temp/os64_kernel.iso (refreshed by the
@@ -202,7 +244,7 @@ disk-populate: disk-init kernel userland
 VBOX_VDI ?= /mnt/i/Virtualbox_VMs/OS64/OS64/OS64_NVME.vdi
 
 .PHONY: vbox-sync
-vbox-sync: disk-populate
+vbox-sync: $(DISK_IMAGE)
 	@if [ ! -f "$(VBOX_VDI)" ]; then echo "vbox-sync: VDI not found: $(VBOX_VDI)"; exit 1; fi
 	@TYPE=$$(od -An -t u4 -j 76 -N 4 "$(VBOX_VDI)" | tr -d ' '); \
 	if [ "$$TYPE" != "2" ]; then \
@@ -220,7 +262,10 @@ vbox-sync: disk-populate
 
 # Removed this from both top and bottom of the next section
 #	rm -rf iso_root
-$(IMAGE_NAME).iso: limine/limine kernel disk-populate
+# Real file prerequisites, so xorriso only repacks the 77MB ISO when something
+# on it actually changed (it used to depend on the phony disk-populate, which
+# guaranteed a full repack on every single make).
+$(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf
 	@mkdir -p iso_root/boot
 	cp kernel/bin/$(IMAGE_NAME) iso_root/boot/
 	# The QEMU NVMe disk image rides along on the ISO as a Limine module so
