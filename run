@@ -1,2 +1,3 @@
 #!/bin/bash
-make clean && make run
+# make clean retired 07/12/2026 after Fable 5 fixed -MMD
+make run
