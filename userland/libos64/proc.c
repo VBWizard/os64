@@ -10,7 +10,23 @@ void os64_yield(void)
 
 long os64_spawn(const char *path, char *const argv[])
 {
-    return (long)os64_syscall2(SYSCALL_SPAWN, (uint64_t)path, (uint64_t)argv);
+    // -1/-1/-1: no redirection, all three streams stay on the console.
+    return os64_spawn_redirected(path, argv, -1, -1, -1);
+}
+
+long os64_spawn_redirected(const char *path, char *const argv[],
+                           int in, int out, int err)
+{
+    // 5 args (no os64_syscall5 exists, so ride syscall6 with a zero tail — the
+    // kernel handler ignores arg5, and the dispatcher only pointer-checks the
+    // args the table's mask marks, which is just path and argv).
+    return (long)os64_syscall6(SYSCALL_SPAWN,
+                               (uint64_t)path,
+                               (uint64_t)argv,
+                               (uint64_t)(int64_t)in,
+                               (uint64_t)(int64_t)out,
+                               (uint64_t)(int64_t)err,
+                               0);
 }
 
 long os64_wait(long pid, int *exit_code)

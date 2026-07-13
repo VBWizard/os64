@@ -16,6 +16,9 @@
 #include "memory/vma.h"   // call_in_kernel_context
 #include "log.h"
 #include "console.h"
+#include "handle.h"
+#include "pipe.h"
+#include "signals.h"
 
 // spawn: cap on argv length. A command line's worth of args is plenty; the
 // per-arg length cap is task.c's TASK_MAX_PATH_LEN (the blob it builds uses
@@ -48,6 +51,10 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -74,8 +81,10 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_EXIT,      "exit",      syscall_exit,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_WRITE,     "write",     syscall_write,     false, 0x02),  // arg1 = buffer
 	SYSCALL_DEFINE(SYSCALL_READ,      "read",      syscall_read,      false, 0x02),  // arg1 = buffer (written)
-	SYSCALL_DEFINE(SYSCALL_SPAWN,     "spawn",     syscall_spawn,     false, 0x03),  // arg0 = path, arg1 = argv
+	SYSCALL_DEFINE(SYSCALL_SPAWN,     "spawn",     syscall_spawn,     false, 0x03),  // arg0 = path, arg1 = argv (args 2-4 = in/out/err handles, NOT pointers)
 	SYSCALL_DEFINE(SYSCALL_WAIT,      "wait",      syscall_wait,      false, 0x02),  // arg1 = exit-code out ptr
+	SYSCALL_DEFINE(SYSCALL_PIPE,      "pipe",      syscall_pipe,      false, 0x01),  // arg0 = int[2] out
+	SYSCALL_DEFINE(SYSCALL_CLOSE,     "close",     syscall_close,     false, 0x00),  // arg0 = handle (an int, not a pointer)
 };
 
 uint64_t _syscall_dispatch(
@@ -450,13 +459,43 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	__builtin_unreachable();
 }
 
+// Raise SIGPIPE on the calling task: it wrote to a pipe whose readers have all
+// closed, i.e. it is producing into the void. DEFAULT ACTION IS TERMINATE, and
+// that default is load-bearing — it is precisely what makes `yes | head -1`
+// exit instead of spinning forever. We record the signal and then end the task
+// through the normal exit path (retVal carries the signal so a waiting parent
+// can see HOW the child died, not just that it did).
+//
+// A program that wants to SURVIVE a vanishing reader will, once userland signal
+// delivery exists, install a handler and get the PIPE_ERR_CLOSED return value
+// instead. Until then the kernel enforces the default, which is the behavior
+// every pipeline actually wants.
+#define TASK_EXIT_SIGPIPE 141   // 128 + signal, the classic "died by signal" encoding
+static void raise_sigpipe_and_die(task_t *task)
+{
+	if (task != NULL)
+	{
+		if (task->threads != NULL)
+			task->threads->signals.sigind |= SIGPIPE;
+		task->retVal = TASK_EXIT_SIGPIPE;
+		printd(DEBUG_TASK, "SIGPIPE: task %s wrote to a pipe with no readers — terminating\n",
+			task->exename);
+	}
+
+	task_exit();
+	__builtin_unreachable();
+}
+
 // write(handle, buffer, length) — write bytes to an output handle.
-// Until a per-task handle table exists, only the two console handles are
-// valid, and both reach the screen.  Runs entirely on the calling task's CR3
-// (user buffer in the lower half, console/renderer in the shared upper half —
-// see the table comment).  The user buffer is ferried through a bounded
-// kernel chunk so arbitrary user lengths never map to unbounded kernel stack
-// use.  Returns the byte count written, or a SYSCALL_RESULT_* error sentinel.
+//
+// The handle is resolved through the CALLING TASK'S HANDLE TABLE — which is the
+// entire point of handles. This function does not know or care whether handle 1
+// is the console or the write end of a pipe; it asks the table and dispatches on
+// the tag. That is why the shell can redirect a program's stdout into a pipeline
+// without the program (or this syscall) changing by one line.
+//
+// Runs on the calling task's CR3 (user buffer in the lower half, console and
+// pipe rings in the shared upper half — see the table comment).
 #define WRITE_CHUNK_SIZE 512
 static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
@@ -465,54 +504,121 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	(void)arg4;
 	(void)arg5;
 
-	uint64_t handle = arg0;
 	const char *user_buffer = (const char*)arg1;
 	size_t length = (size_t)arg2;
 
-	if (handle != SYSCALL_HANDLE_CONSOLE_OUT && handle != SYSCALL_HANDLE_CONSOLE_ERR)
-	{
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
 		return SYSCALL_RESULT_INVALID;
-	}
+
+	handle_t *h = handle_get(task, (int)(int64_t)arg0);
+	if (h == NULL)
+		return SYSCALL_RESULT_INVALID;
 
 	if (length == 0)
-	{
 		return 0;
-	}
 
-	char chunk[WRITE_CHUNK_SIZE];
-	size_t copied = 0;
-	while (copied < length)
+	switch (h->type)
 	{
-		size_t this_chunk = length - copied;
-		if (this_chunk > sizeof(chunk))
+		case HANDLE_CONSOLE_OUT:
+		case HANDLE_CONSOLE_ERR:
 		{
-			this_chunk = sizeof(chunk);
+			// Ferry through a bounded kernel chunk so an arbitrary user length
+			// never maps to unbounded kernel stack use.
+			char chunk[WRITE_CHUNK_SIZE];
+			size_t copied = 0;
+			while (copied < length)
+			{
+				size_t this_chunk = length - copied;
+				if (this_chunk > sizeof(chunk))
+					this_chunk = sizeof(chunk);
+
+				if (!copy_user_buffer(user_buffer + copied, chunk, this_chunk))
+				{
+					// Report progress if some bytes already made it to the
+					// console; only fail outright when nothing was written.
+					return copied ? copied : SYSCALL_RESULT_BAD_USER_DATA;
+				}
+
+				print_n(chunk, this_chunk);
+				copied += this_chunk;
+			}
+			return copied;
 		}
 
-		if (!copy_user_buffer(user_buffer + copied, chunk, this_chunk))
+		case HANDLE_PIPE_WRITE:
 		{
-			// Report progress if some bytes already made it to the console;
-			// only fail outright when nothing was written.
-			return copied ? copied : SYSCALL_RESULT_BAD_USER_DATA;
+			pipe_t *p = (pipe_t *)h->object;
+
+			// Copy the user bytes into kernel memory FIRST, in one piece, and
+			// only THEN hand them to pipe_write. Two reasons, both load-bearing:
+			//
+			// 1. ATOMICITY. Our rule is that a write of <= PIPE_CAPACITY lands
+			//    whole. If we chunked this through a 512-byte bounce buffer, a
+			//    blocked write would interleave with another writer's bytes and
+			//    the guarantee would be a lie.
+			// 2. FAULTS. pipe_write copies into the ring while holding the pipe
+			//    spinlock with interrupts OFF. Copying from USER memory there
+			//    could demand-page — and faulting inside a spinlock with IF=0 is
+			//    a deadlock (the fault handler wants locks the holder still has).
+			//    Faulting out here, before any lock is taken, is perfectly safe.
+			//
+			// A write LARGER than the capacity can never fit in the ring, so it
+			// is the one case that must chunk (documented in pipe.h) — we do it
+			// at capacity granularity, which keeps each chunk atomic.
+			size_t written = 0;
+			while (written < length)
+			{
+				size_t this_chunk = length - written;
+				if (this_chunk > PIPE_CAPACITY)
+					this_chunk = PIPE_CAPACITY;
+
+				char *kbuf = kmalloc(this_chunk);
+				if (kbuf == NULL)
+					return written ? written : SYSCALL_RESULT_INVALID;
+
+				if (!copy_user_buffer(user_buffer + written, kbuf, this_chunk))
+				{
+					kfree(kbuf);
+					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
+				}
+
+				long n = pipe_write(p, kbuf, this_chunk);   // BLOCKS if full
+				kfree(kbuf);
+
+				if (n == PIPE_ERR_CLOSED)
+				{
+					// Nobody is left to read this. Default action: terminate.
+					raise_sigpipe_and_die(task);
+					__builtin_unreachable();
+				}
+				if (n < 0)
+					return written ? written : SYSCALL_RESULT_INVALID;
+
+				written += (size_t)n;
+			}
+			return written;
 		}
 
-		print_n(chunk, this_chunk);
-		copied += this_chunk;
+		default:
+			// Reading-only handle (or the console's input side): not writable.
+			return SYSCALL_RESULT_INVALID;
 	}
-
-	return copied;
 }
 
 // read(handle, buffer, length) — read input bytes into a user buffer.
-// Until a per-task handle table exists, only stdin (handle 0) is valid; it
-// reads from the console keyboard. BLOCKS until at least one byte is available
-// (Unix terminal semantics) — the block happens inside console_read via
-// SIGSLEEP, so the calling thread sleeps (zero CPU) and other threads run
-// while it waits; it is woken when a key arrives. Returns the byte count, or a
-// SYSCALL_RESULT_* sentinel. Runs on the caller's CR3 (user buffer in the
-// lower half is directly writable); result ferried through a bounded kernel
-// chunk like write() does.
-#define READ_CHUNK_SIZE 256
+//
+// Resolved through the calling task's handle table, exactly like write(): this
+// syscall does not know whether handle 0 is the keyboard or the read end of a
+// pipe. Both BLOCK (via SIGSLEEP, so the thread genuinely sleeps at zero CPU
+// while other threads run) and both return SHORT — whatever is available right
+// now, not a filled buffer. A pipe read returns 0 at EOF, which is what a
+// filter uses to know its input is finished.
+//
+// Runs on the caller's CR3 (the user buffer, lower half, is directly writable);
+// results are ferried through a kernel bounce buffer.
+#define READ_CHUNK_SIZE 4096
 static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -520,36 +626,128 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	(void)arg4;
 	(void)arg5;
 
-	uint64_t handle = arg0;
 	void *user_buffer = (void*)arg1;
 	size_t length = (size_t)arg2;
 
-	if (handle != SYSCALL_HANDLE_CONSOLE_IN)
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	handle_t *h = handle_get(task, (int)(int64_t)arg0);
+	if (h == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	if (length == 0)
+		return 0;
+
+	size_t want = length < READ_CHUNK_SIZE ? length : READ_CHUNK_SIZE;
+	char *kbuf = kmalloc(want);
+	if (kbuf == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	long got = 0;
+	switch (h->type)
 	{
+		case HANDLE_CONSOLE_IN:
+			// Blocks until >=1 byte is available (terminal semantics).
+			got = console_read(kbuf, want);
+			break;
+
+		case HANDLE_PIPE_READ:
+			// Blocks until >=1 byte is available, OR the last writer closes —
+			// which returns 0, and 0 is EOF. (EOF is the absence of writers.)
+			// Copying into a KERNEL buffer, not straight to user space, for the
+			// same reason write() does the reverse: pipe_read copies under the
+			// pipe spinlock with interrupts off, and touching user memory there
+			// could demand-page into a deadlock.
+			got = pipe_read((pipe_t *)h->object, kbuf, want);
+			break;
+
+		default:
+			kfree(kbuf);
+			return SYSCALL_RESULT_INVALID;   // a write-only handle
+	}
+
+	if (got <= 0)
+	{
+		kfree(kbuf);
+		return 0;   // EOF (pipe) or nothing (console)
+	}
+
+	bool ok = copy_to_user_buffer(user_buffer, kbuf, (size_t)got);
+	kfree(kbuf);
+
+	if (!ok)
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	return (uint64_t)got;
+}
+
+// pipe(int out[2]) — create a pipe; out[0] = read end, out[1] = write end.
+//
+// The creator ends up holding BOTH ends (readers == writers == 1). A shell
+// hands one end to each child (spawn refs them) and then MUST close its own two
+// copies — if it doesn't, the writer count never reaches zero, the reader never
+// sees EOF, and `a | b` hangs forever. That is the single most common way a
+// hand-written shell breaks, so it is worth saying twice.
+static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	pipe_t *p = pipe_create();
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	int rh = handle_alloc(task, HANDLE_PIPE_READ, p);
+	int wh = handle_alloc(task, HANDLE_PIPE_WRITE, p);
+	if (rh < 0 || wh < 0)
+	{
+		// Out of handles — unwind cleanly. Close whichever end we DID install
+		// via the table (so its refcount drops), and the raw end we didn't.
+		if (rh >= 0) handle_close(task, rh); else pipe_close_read_end(p);
+		if (wh >= 0) handle_close(task, wh); else pipe_close_write_end(p);
 		return SYSCALL_RESULT_INVALID;
 	}
 
-	if (length == 0)
+	int handles[2] = { rh, wh };
+	if (!copy_to_user_buffer((void *)arg0, handles, sizeof(handles)))
 	{
-		return 0;
-	}
-
-	char chunk[READ_CHUNK_SIZE];
-	size_t want = length < sizeof(chunk) ? length : sizeof(chunk);
-
-	// Blocks until >=1 byte is available, then returns what's queued (<= want).
-	long got = console_read(chunk, want);
-	if (got <= 0)
-	{
-		return 0;
-	}
-
-	if (!copy_to_user_buffer(user_buffer, chunk, (size_t)got))
-	{
+		handle_close(task, rh);
+		handle_close(task, wh);
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
-	return (uint64_t)got;
+	printd(DEBUG_PIPE, "pipe: task %s got handles r=%d w=%d\n", task->exename, rh, wh);
+	return 0;
+}
+
+// close(handle) — give up one handle.
+//
+// For a pipe end this is not bookkeeping, it is SIGNALLING: dropping the last
+// write end is what delivers EOF to the reader, and dropping the last read end
+// is what delivers SIGPIPE to the writer. close() is how a program says "I am
+// done with this end" — and in a pipeline, saying so is mandatory.
+static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	if (!handle_close(task, (int)(int64_t)arg0))
+		return SYSCALL_RESULT_INVALID;
+
+	return 0;
 }
 
 // Marshal a user argv (NULL-terminated array of user string pointers) into
@@ -606,6 +804,12 @@ typedef struct {
 	char  *argv[SPAWN_MAX_ARGS + 1];
 	char   argvstrs[SPAWN_MAX_ARGS * TASK_MAX_PATH_LEN];
 	task_t *parent;
+	// Redirection for the child's slots 0/1/2, RESOLVED from the parent's
+	// handle numbers before we leave the caller's context (handle tables are
+	// per-task, and in there we still know who the caller is). HANDLE_NONE
+	// means "leave the child's default" — i.e. the console.
+	handle_type_t redirType[3];
+	void  *redirObject[3];
 	volatile long result;                 // child pid, or -1 on failure
 } spawn_params_t;
 
@@ -619,26 +823,54 @@ static void spawn_do_create(void *arg)
 	spawn_params_t *p = (spawn_params_t *)arg;
 	task_t *child = task_create(p->path, p->argc, p->argv, p->parent,
 	                            false, THREAD_NO_AFFINITY);
-	if (child != NULL)
-	{
-		scheduler_submit_new_task(child);
-		p->result = (long)child->taskID;
-	}
-	else
+	if (child == NULL)
 	{
 		p->result = -1;
+		return;
 	}
+
+	// Apply redirection BEFORE the child is submitted to the scheduler — the
+	// child must never get a single instruction of CPU with the wrong handles
+	// in slots 0/1/2. It is born already reading from and writing to the right
+	// places, and it will never know it was redirected. That is the whole trick
+	// behind `a | b`: neither program contains one line of pipe-awareness.
+	for (int slot = 0; slot < 3; slot++)
+	{
+		if (p->redirType[slot] == HANDLE_NONE)
+			continue;   // keep the child's default (console)
+
+		// The child gets its OWN reference on the pipe end. Two tasks now hold
+		// this end; both must close it before the refcount reaches zero and the
+		// EOF/EPIPE fires. (This ref is why the shell closing its copy does not
+		// yank the pipe out from under the child.)
+		if (p->redirType[slot] == HANDLE_PIPE_READ)
+			pipe_ref_read_end((pipe_t *)p->redirObject[slot]);
+		else if (p->redirType[slot] == HANDLE_PIPE_WRITE)
+			pipe_ref_write_end((pipe_t *)p->redirObject[slot]);
+
+		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
+	}
+
+	scheduler_submit_new_task(child);
+	p->result = (long)child->taskID;
 }
 
-// spawn(path, argv) — launch `path` as a child of the calling task and return
-// its pid (task id), or a SYSCALL_RESULT_* sentinel. Non-blocking: the child
-// is submitted to the scheduler and runs concurrently; the caller reaps it
-// with wait(). The child inherits the caller's environment (task_create does
-// this via the parent).
+// spawn(path, argv, in, out, err) — launch `path` as a child of the calling
+// task and return its pid, or a SYSCALL_RESULT_* sentinel. Non-blocking: the
+// child is submitted to the scheduler and runs concurrently; the caller reaps
+// it with wait(). The child inherits the caller's environment (via task_create's
+// parent).
+//
+// in/out/err are the CALLER'S handle numbers to install as the child's 0/1/2,
+// or -1 to leave that stream on the console. This is how a shell builds a
+// pipeline: spawn(a, ..., -1, pipeW, -1) and spawn(b, ..., pipeR, -1, -1). We
+// deliberately do NOT blanket-inherit the parent's whole handle table the way
+// Unix does — a child gets the console plus exactly what was asked for, and can
+// never accidentally hold some unrelated pipe end open (a classic pipeline hang).
 static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	(void)arg5;
 
 	const char *user_path = (const char *)arg0;
 	char *const *user_argv = (char *const *)arg1;
@@ -665,6 +897,29 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	core_local_storage_t *cls = get_core_local_storage();
 	p->parent = cls ? cls->task : NULL;
 	p->result = 0;
+
+	// Resolve the redirection handles HERE, in the caller's context, where the
+	// caller's handle table is the one in scope. spawn_do_create runs under
+	// kKernelPML4 and only ever sees the resolved (type, object) pairs.
+	int64_t redir[3] = { (int64_t)arg2, (int64_t)arg3, (int64_t)arg4 };
+	for (int slot = 0; slot < 3; slot++)
+	{
+		p->redirType[slot] = HANDLE_NONE;
+		p->redirObject[slot] = NULL;
+
+		if (redir[slot] < 0)
+			continue;   // -1 = leave this stream on the console
+
+		handle_t *h = (p->parent != NULL) ? handle_get(p->parent, (int)redir[slot]) : NULL;
+		if (h == NULL)
+		{
+			kfree(p);
+			return SYSCALL_RESULT_INVALID;   // caller passed a bogus handle
+		}
+
+		p->redirType[slot] = h->type;
+		p->redirObject[slot] = h->object;
+	}
 
 	// task_create runs under kKernelPML4 so its disk I/O sees the DMA mappings.
 	call_in_kernel_context(spawn_do_create, p);

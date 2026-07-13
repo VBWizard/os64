@@ -24,7 +24,15 @@
         SIGIO = 1 << 6,
         SIGKILL = 9,
         SIGCONT = 1 << 7,
-		SIGLOGFLUSH = 1 << 9
+		SIGLOGFLUSH = 1 << 9,
+		// Raised on a task that writes to a pipe whose readers have ALL closed
+		// — it is producing into the void. DEFAULT ACTION: TERMINATE, and that
+		// default is load-bearing: it is the entire reason `yes | head -1`
+		// exits instead of spinning forever. `head` closes its end, the writer
+		// upstream gets SIGPIPE, and a program that never handles it simply
+		// dies — which is exactly the right outcome. A program that wants to
+		// survive a vanishing reader handles the signal explicitly.
+		SIGPIPE = 1 << 10
     } signals;
 
 	extern bool kProcessSignals;

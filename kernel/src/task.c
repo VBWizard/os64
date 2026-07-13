@@ -23,6 +23,7 @@
 #include "elf_loader.h"
 #include "shared_object.h"
 #include "memory/vma.h"
+#include "handle.h"
 #include "sprintf.h"
 #include "allocator.h"
 #include "memset.h"
@@ -269,6 +270,14 @@ static void __attribute__((noinline)) task_exit_finish(void)
 	}
 
 	if (task) {
+		// Release every handle this task still holds — BEFORE it is enqueued as
+		// a dead child. For a pipe end this is the refcount that decides EOF /
+		// EPIPE, so death must give the ends back: a task that dies (or crashes)
+		// still holding the write end of a pipe would leave its reader blocked
+		// forever on an EOF that can never come. Dying is just another way of
+		// closing your handles.
+		handle_close_all(task);
+
 		task->exited = true;
 		task_enqueue_dead_child(task);
 	}
@@ -578,11 +587,25 @@ static void elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 
 // GDB symbol-autoload notch.  utility/os64_symbols.gdb plants a SILENT
 // breakpoint on debug_task_loaded(), reads the two globals below, runs
-// add-symbol-file for kernel/bin/<basename> at the right offset, and resumes
+// add-symbol-file for the matching binary at the right offset, and resumes
 // without stopping — so every program's debug info appears in GDB the moment
-// the kernel loads it, with all binaries free to share the same link address.
-// Replaces both manual add-symbol-file and the old-OS trick of giving every
-// executable a unique link address.
+// the kernel loads it.
+//
+// CORRECTION (this comment used to claim the autoloader "replaces the old-OS
+// trick of giving every executable a unique link address, with all binaries
+// free to share the same link address").  THAT WAS WRONG, and pipelines proved
+// it: `hello | upper` runs two programs AT ONCE, and when both link at 0x400000
+// they occupy the same linear addresses — GDB has one global symbol table keyed
+// by address, so it cannot tell them apart.  The autoloader could only cope by
+// unloading one app's symbols to load the other's, which is useless when you
+// need to step across a pipeline.
+//
+// So the unique-link-address trick is BACK, and it was right all along: every
+// app now links at its own base (userland/tools/app_bases.py, derived from a
+// hash of the app's name), and this autoloader ACCUMULATES symbols instead of
+// swapping them.  The proper fix — PIE with a loader-assigned per-TASK bias,
+// which also handles the same program running twice in one pipeline — is in
+// DEBTS; the bias plumbing below is already in place for it.
 //
 // The info travels through GLOBALS (kernel .bss — mapped identically in every
 // address space, trivially readable by the gdbstub) rather than function
@@ -787,6 +810,16 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        newTask->stdout=STDOUT;
        newTask->stderr=STDERR;
 	}
+
+	// Every task is born with a fresh handle table: 0/1/2 wired to the console.
+	//
+	// NOTE we do NOT blanket-inherit the parent's handles the way Unix does.
+	// A child gets the console, plus whatever spawn() explicitly redirects into
+	// slots 0/1/2 — nothing else. That is simpler AND safer: a child can never
+	// accidentally inherit some unrelated pipe end and keep it open, which is
+	// one of the classic ways a pipeline hangs. What the child gets is exactly
+	// what the parent asked for.
+	handle_table_init(newTask);
 
 	//Argument handling.
 	//Every task has at least argv[0] (its own path), so if the caller passed no

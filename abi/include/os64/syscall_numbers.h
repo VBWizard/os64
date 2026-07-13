@@ -24,6 +24,8 @@
 #define SYSCALL_READ       4
 #define SYSCALL_SPAWN      5
 #define SYSCALL_WAIT       6
+#define SYSCALL_PIPE       7
+#define SYSCALL_CLOSE      8
 
 // Well-known handles until a real per-task handle table exists. 0/1/2 are the
 // stdin/stdout/stderr convention (a genuinely good one): READ(0) blocks on the

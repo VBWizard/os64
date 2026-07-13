@@ -7,6 +7,7 @@
 #include "thread.h"
 #include "time.h"
 #include "env.h"
+#include "handle.h"
 
 #define TASK_MAX_EXIT_HANDLERS 10
 #define TASK_DEFAULT_PRIORITY 0
@@ -107,6 +108,12 @@
 		uint64_t* pml4, *pml4v;
 		uintptr_t taskMemoryNextVirt;  // Next available virtual address for task-specific allocations
 		dlist_t* shared_objects;       // shared_object_t* this task depends on (dynamic linking, bookkeeping only — see shared_object.c)
+		// The per-task handle table (handle.h). Handles 0/1/2 are stdin/stdout/
+		// stderr and start out wired to the console; the shell redirects them to
+		// pipe ends when it builds a pipeline. The legacy void* stdin/stdout/
+		// stderr fields above are the OLD (unused) placeholders from the first
+		// OS — this array is the real thing.
+		handle_t handles[TASK_MAX_HANDLES];
 		void *prev, *next;
     } task_t;
 

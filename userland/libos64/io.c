@@ -39,3 +39,13 @@ void os64_debug_log(const char *s)
 {
     os64_syscall1(SYSCALL_DEBUG_LOG, (uint64_t)s);
 }
+
+long os64_pipe(int h[2])
+{
+    return (long)os64_syscall1(SYSCALL_PIPE, (uint64_t)h);
+}
+
+long os64_close(int handle)
+{
+    return (long)os64_syscall1(SYSCALL_CLOSE, (uint64_t)(int64_t)handle);
+}

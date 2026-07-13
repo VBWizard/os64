@@ -15,8 +15,30 @@ long os64_write(int handle, const void *buf, size_t len);
 
 // Read up to `len` bytes from `handle` into `buf`. Blocks until at least one
 // byte is available, then returns the count read (>= 1), or negative on error.
-// handle 0 (stdin) reads the console keyboard.
+// handle 0 (stdin) reads the console keyboard — UNLESS the shell redirected it
+// to a pipe, which the program neither knows nor cares about.
+//
+// Returns SHORT: you get what is available now, not a filled buffer. Returns
+// 0 at END OF INPUT (all writers on the other end of the pipe have closed).
+// That 0 is how a filter knows its input is finished — the canonical loop is:
+//     while ((n = os64_read(0, buf, sizeof buf)) > 0) { ...process n bytes... }
 long os64_read(int handle, void *buf, size_t len);
+
+// Create a pipe. h[0] = read end, h[1] = write end. Returns 0, or negative.
+//
+// You now hold BOTH ends. Hand one to each child via os64_spawn_redirected()
+// and then CLOSE YOUR OWN TWO COPIES — this is not optional bookkeeping. The
+// reader on the far end sees end-of-input only when the LAST write end closes,
+// so a shell that keeps its copy of the write end open leaves the reader
+// waiting forever for an EOF that can never come. That is the single most
+// common way a hand-written shell hangs.
+long os64_pipe(int h[2]);
+
+// Give up a handle. For a pipe end this is SIGNALLING, not bookkeeping:
+// dropping the last write end is what delivers end-of-input to the reader, and
+// dropping the last read end is what kills a writer that is producing into the
+// void.
+long os64_close(int handle);
 
 // Convenience: write a NUL-terminated string to the console (handle 1).
 long os64_puts(const char *s);

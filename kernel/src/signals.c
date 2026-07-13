@@ -7,6 +7,7 @@
 #include "thread.h"
 #include "smp_core.h"
 #include "console.h"
+#include "pipe.h"
 
 extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
@@ -79,6 +80,16 @@ void processSignals()
 	// surgery (ISLEEP->RUNNABLE) can't corrupt that iteration. Level-triggered
 	// on keyboard_has_event(), which is what makes console_read lost-wakeup-free.
 	console_wake_if_ready();
+
+	// Same discipline, same reason, for pipes: wake any reader whose pipe has
+	// bytes (or whose last writer just left — that is its EOF), and any writer
+	// whose pipe has room (or whose last reader just left — that is its EPIPE).
+	// The fast path already woke the common cases directly from pipe_read /
+	// pipe_write; this level-triggered sweep exists to catch the one race they
+	// cannot: a thread that registered as a waiter but had not yet parked when
+	// the wake fired. Re-evaluating the CONDITION (not a remembered edge) is
+	// what makes pipes lost-wakeup-free.
+	pipe_wake_if_ready();
 
 	//Release the lock
 	__sync_lock_release(&kSchedulerSwitchTasksLock);
