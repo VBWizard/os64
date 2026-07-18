@@ -1009,6 +1009,10 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;   // no such file / bad path
 	}
 
+	// One handle references this file so far (see handleRefCount in vfs.h) —
+	// set BEFORE handle_alloc so no close path can ever see it uninitialized.
+	p->file->handleRefCount = 1;
+
 	int h = handle_alloc(task, HANDLE_FILE, p->file);
 	if (h < 0)
 	{
@@ -1161,6 +1165,15 @@ static void spawn_do_create(void *arg)
 			pipe_ref_read_end((pipe_t *)p->redirObject[slot]);
 		else if (p->redirType[slot] == HANDLE_PIPE_WRITE)
 			pipe_ref_write_end((pipe_t *)p->redirObject[slot]);
+		// Files share by the same rule (handleRefCount, vfs.h): the child's
+		// slot is a second reference on ONE open file, and only the last
+		// close runs the VFS close. This is what makes `upper < file` safe:
+		// the shell opens, spawns, and immediately closes its copy — the
+		// child's handle survives because the refcount says so. (Note the
+		// child inherits the file POSITION too — shared FIL, dup semantics —
+		// which for a just-opened redirect file is position 0, as intended.)
+		else if (p->redirType[slot] == HANDLE_FILE)
+			__sync_add_and_fetch(&((vfs_file_t *)p->redirObject[slot])->handleRefCount, 1);
 
 		handle_install(child, slot, p->redirType[slot], p->redirObject[slot]);
 	}

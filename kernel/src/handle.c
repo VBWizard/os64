@@ -102,6 +102,13 @@ void handle_file_object_close(void *vfs_file)
 	if (file == NULL || file->fops == NULL || file->fops->close == NULL)
 		return;
 
+	// Drop THIS handle's reference. Spawn redirection shares one open file
+	// between parent and child (see handleRefCount in vfs.h) — same rule as
+	// pipe ends: only the LAST holder's close actually closes. Atomic because
+	// parent and child can close concurrently on different cores.
+	if (__sync_sub_and_fetch(&file->handleRefCount, 1) > 0)
+		return;
+
 	// Harvest f_path BEFORE closing — the VFS close frees the file object, and
 	// for a HANDLE_FILE, f_path is always the kmalloc'd copy syscall_open made
 	// (the fs stores whatever pointer open() was given, so open() must hand it

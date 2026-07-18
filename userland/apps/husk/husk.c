@@ -8,6 +8,13 @@
 // child, and then closes its own copies. Note that husk does not move a single
 // byte of the data: it builds the plumbing and gets out of the way. The two
 // programs never learn they aren't talking to a terminal.
+// v3: REDIRECTION. `< file` and `> file` — husk opens the file and installs
+// the handle in the child's slot 0 or 1, exactly the way it installs a pipe
+// end. Same indirection, same close discipline, zero new mechanism in any
+// child program: `upper < notes.txt > SHOUTING.txt` works because upper
+// still just reads 0 and writes 1, none the wiser. A redirection beats a
+// pipe when both claim the same slot (`a | b < f`: b reads f, and a's pipe
+// simply sees its reader vanish — which is what SIGPIPE is for).
 
 #include "os64/os64.h"
 
@@ -135,6 +142,39 @@ static void report_exit(long ended, int code)
 	os64_debug_log(msg);
 }
 
+// Pull `< file` / `> file` out of an already-parsed argv, compacting what
+// remains. Writes the filenames through the out-params (NULL = no redirect)
+// and returns 0, or -1 on a dangling operator (`upper <` with no filename).
+// The operators must be their own tokens — husk's parser splits on spaces
+// only, and that simplicity is a feature (`upper<f` is a program named
+// "upper<f", which is honest, if unhelpful).
+static int extract_redirections(char *cargv[], char **inFile, char **outFile)
+{
+	*inFile = NULL;
+	*outFile = NULL;
+
+	int w = 0;
+	for (int r = 0; cargv[r]; r++)
+	{
+		if (str_eq(cargv[r], "<"))
+		{
+			if (!cargv[r + 1]) return -1;
+			*inFile = cargv[++r];
+		}
+		else if (str_eq(cargv[r], ">"))
+		{
+			if (!cargv[r + 1]) return -1;
+			*outFile = cargv[++r];
+		}
+		else
+		{
+			cargv[w++] = cargv[r];
+		}
+	}
+	cargv[w] = 0;
+	return w == 0 ? -1 : 0;   // a line that was ALL redirections has no program
+}
+
 // Build and run a pipeline: spawn every stage, wiring stage i's stdout to
 // stage i+1's stdin through a pipe. The last stage keeps the console.
 //
@@ -159,22 +199,60 @@ static void run_pipeline(char *stages[], int nstages)
 			break;
 		}
 
+		// Redirections come out of argv before the child ever sees it —
+		// `upper < in > out` runs upper with argc == 1, exactly as if the
+		// shell had been reading and writing the files itself.
+		char *inFile, *outFile;
+		if (extract_redirections(cargv, &inFile, &outFile) < 0)
+		{
+			os64_puts("husk: bad redirection (expected `< file` or `> file`)\n");
+			break;
+		}
+
+		// Open redirect files BEFORE creating the pipe — if the file isn't
+		// there, we want to fail while there's nothing yet to unwind.
+		int inRedir = -1, outRedir = -1;
+		if (inFile && (inRedir = (int)os64_open(inFile, "r")) < 0)
+		{
+			os64_puts("husk: cannot open ");
+			os64_puts(inFile);
+			os64_puts("\n");
+			break;
+		}
+		if (outFile && (outRedir = (int)os64_open(outFile, "w")) < 0)
+		{
+			os64_puts("husk: cannot create ");
+			os64_puts(outFile);
+			os64_puts("\n");
+			if (inRedir >= 0) os64_close(inRedir);
+			break;
+		}
+
 		// A pipe to the NEXT stage — the last stage doesn't need one.
 		int p[2] = { -1, -1 };
 		if (i < nstages - 1 && os64_pipe(p) < 0)
 		{
 			os64_puts("husk: out of pipes\n");
+			if (inRedir >= 0)  os64_close(inRedir);
+			if (outRedir >= 0) os64_close(outRedir);
 			break;
 		}
 
-		int in  = prev_read;                        // -1 for the first stage: console
-		int out = (i < nstages - 1) ? p[1] : -1;    // -1 for the last stage: console
+		// Slot priority: an explicit redirect beats the pipeline's plumbing.
+		int in  = (inRedir  >= 0) ? inRedir  : prev_read;    // -1: console
+		int out = (outRedir >= 0) ? outRedir
+		        : (i < nstages - 1) ? p[1] : -1;             // -1: console
 
 		long pid = os64_spawn_redirected(cargv[0], cargv, in, out, -1);
 
-		// Hand-off done — drop husk's copies of both ends it just passed along.
+		// Hand-off done — drop husk's copies of EVERYTHING it just passed
+		// along (or displaced). The displaced case matters: if a redirect won
+		// slot 0 over prev_read, husk still holds the pipe's read end, and
+		// closing it is what tells the upstream writer its reader is gone.
 		if (prev_read >= 0) { os64_close(prev_read); prev_read = -1; }
 		if (p[1] >= 0)        os64_close(p[1]);
+		if (inRedir >= 0)     os64_close(inRedir);
+		if (outRedir >= 0)    os64_close(outRedir);
 
 		if (pid < 0)
 		{

@@ -1038,6 +1038,48 @@ static bool test_ring3_file_io_concurrent(void)
     return true;
 }
 
+// redirect_io.c proves file redirection through spawn: a child's stdout/stdin
+// pointed at files, the parent closing its handle copies while the child still
+// writes (the handleRefCount test — before it, that close freed the FIL under
+// the child), and the full `upper < in > out` shape.  0x2ED1xxxx names the step.
+#define REDIRECT_IO_RETVAL 0x2ED1600DUL
+
+static bool test_ring3_redirect_io(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_redirect_io (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/redirect_io", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_redirect_io - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // The fixture spawns and reaps two children of its own — allow 3s.
+    for (int i = 0; i < 300 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_redirect_io - task did not exit within 3 seconds "
+               "(child wedged on a dead file handle? refcount regression?)\n");
+        return false;
+    }
+
+    if (task->retVal != REDIRECT_IO_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_redirect_io - retVal=0x%lx, expected 0x%lx "
+               "(0x2ED1xxxx identifies the failed step; see test/elf/redirect_io.c)\n",
+               task->retVal, (uint64_t)REDIRECT_IO_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_redirect_io (child stdout->file, early parent close, upper < in > out)\n");
+    return true;
+}
+
 // (A dedicated /bin/hello test lived here briefly during userland bring-up;
 // removed as redundant — ring3_syscall_smoke and ring3_exit_by_return already
 // cover load-run-exit at CPL 3, and the HELLO boot-flow launch exercises the
@@ -1265,6 +1307,7 @@ static void register_builtin_tests(void)
     test_register("ring3_exit_by_return", test_ring3_exit_by_return, TEST_PHASE_POSTBOOT);
     test_register("ring3_file_io", test_ring3_file_io, TEST_PHASE_POSTBOOT);
     test_register("ring3_file_io_concurrent", test_ring3_file_io_concurrent, TEST_PHASE_POSTBOOT);
+    test_register("ring3_redirect_io", test_ring3_redirect_io, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

@@ -235,6 +235,15 @@ struct file
 	void *copyBuffer;
 	uint32_t verification;
 	void *owner;
+	// HANDLE-LAYER refcount (task.h handle table, NOT a VFS concept): how many
+	// task handles reference this open file. Spawn redirection shares one open
+	// file between parent and child (same pattern as pipe end refcounts), and
+	// only the LAST close may run fops->close — otherwise the parent closing
+	// its copy frees the FIL out from under the child. Managed exclusively by
+	// syscall_open (=1), spawn_do_create (++), and handle_file_object_close
+	// (--, close at 0); kernel-internal users that call fops->open/close
+	// directly (ELF loader etc.) never touch it.
+	int handleRefCount;
 	//arena_t* arena;
 };
 
