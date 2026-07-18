@@ -70,9 +70,17 @@
 #define DEBUG_PAGING (__uint128_t)1 << 9
 #define DEBUG_ALLOCATOR (__uint128_t)1 << 10
 #define DEBUG_KMALLOC (__uint128_t)1 << 10
+// The demand pager's own channel — same doctrine as DEBUG_TASKSWITCH below:
+// a RESOLVED page fault is not an exception, it's the pager doing its job on
+// purpose, and logging routine success on the always-on EXCEPTIONS bit buries
+// the faults that are actually news. Announce + resolution ride the base
+// level here (opt-in from the cmdline, like DEBUG_PIPE); the per-fault VMA
+// detail adds DEBUG_DETAILED. UNresolved faults — no VMA, protection
+// violation, the lazy-HHDM tripwire — stay on DEBUG_EXCEPTIONS, because
+// those ARE news (and are about to be a panic).
+#define DEBUG_DEMAND_PAGING (__uint128_t)1 << 11
 #define DEBUG_NVME (__uint128_t)1 << 12
 #define DEBUG_VFS (__uint128_t)1 << 13
-#define DEBUG_SHUTDOWN (__uint128_t)1 << 13
 #define DEBUG_THREAD (__uint128_t)1 << 14
 #define DEBUG_TASK (__uint128_t)1 << 15
 #define DEBUG_SCHEDULER (__uint128_t)1 << 16
@@ -106,6 +114,10 @@
 // Deliberately NOT in MINIMAL: opt in from the cmdline when you're chasing a
 // pipeline, stay silent otherwise.
 #define DEBUG_PIPE (__uint128_t)1 << 24
+// Was 1 << 13, silently aliasing DEBUG_VFS — turning on VFS logging dragged
+// shutdown chatter along and vice versa. Own bit now. (DEBUG_KMALLOC still
+// aliases DEBUG_ALLOCATOR above; those two at least are the same subsystem.)
+#define DEBUG_SHUTDOWN (__uint128_t)1 << 25
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127

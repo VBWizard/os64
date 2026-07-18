@@ -131,6 +131,10 @@ static cmdopt_t cmdopts[] = {
     // Pipes: lifecycle + every refcount change + every park/wake + EOF/EPIPE.
     // Add DEBUG_DETAILED alongside it for the byte-by-byte data flow.
     {"DEBUG_PIPE", OPT_UINT128_OR, &kDebugLevel, DEBUG_PIPE, 0},
+    // Demand pager: fault announce + resolution (mapped/CoW), two lines per
+    // fault. Add DEBUG_DETAILED for the per-fault VMA lookup detail.
+    // Resolved faults are NOT on DEBUG_EXCEPTIONS anymore — opt in here.
+    {"DEBUG_DEMAND_PAGING", OPT_UINT128_OR, &kDebugLevel, DEBUG_DEMAND_PAGING, 0},
     {"LOGFILE", OPT_BOOL, &kOverrideFileLogging, true, 0},
     {"ROOT", OPT_STRING, kRootPartUUID, 0, 64},
     // Older boot entries (VBox/Bosgame in limine.conf) still use the long

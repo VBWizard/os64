@@ -203,7 +203,13 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         return;
     }
 
-    printd(DEBUG_EXCEPTIONS, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
+    // DEBUG_DEMAND_PAGING, not EXCEPTIONS: most faults that reach this line
+    // are the demand pager being asked to do its job, and EXCEPTIONS is
+    // always-on — routine paging traffic was drowning the default log. Every
+    // FATAL path below re-announces RIP/CR2/error on DEBUG_EXCEPTIONS (plus
+    // decoded bits and a stack trace) before it panics, so demoting this
+    // line loses nothing when a fault is actually news.
+    printd(DEBUG_DEMAND_PAGING, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
 
     // Guard against faults BEFORE per-core state exists (early boot: CLS not
     // allocated and/or GS base not programmed). Without this, [gs:0] returns
@@ -234,7 +240,9 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         panic("Paging exception: Invalid memory access with no VMA");
     }
 
-    printd(DEBUG_EXCEPTIONS, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x, cow=%d)\n", vma->start, vma->end, vma->prot, vma->cow);
+    // Per-fault detail: rides DETAILED so the base demand-paging channel
+    // stays a readable two-lines-per-fault (announce + resolution).
+    printd(DEBUG_DEMAND_PAGING | DEBUG_DETAILED, "Found VMA: 0x%016lx - 0x%016lx (prot=0x%x, cow=%d)\n", vma->start, vma->end, vma->prot, vma->cow);
 
     // Calculate aligned fault address
     uintptr_t aligned = cr2 & ~(PAGE_SIZE - 1);
@@ -276,7 +284,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // stale read-only TLB entry and faults again immediately.
         __asm__ volatile("invlpg [%0]" :: "r"(aligned) : "memory");
 
-        printd(DEBUG_EXCEPTIONS, "CoW: 0x%016lx privatised (old phys 0x%016lx -> new phys 0x%016lx)\n",
+        printd(DEBUG_DEMAND_PAGING, "CoW: 0x%016lx privatised (old phys 0x%016lx -> new phys 0x%016lx)\n",
                aligned, old_phys, new_phys);
         kPageFaultCount++;
         return;
@@ -341,7 +349,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 
     paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
 
-    printd(DEBUG_EXCEPTIONS, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
+    printd(DEBUG_DEMAND_PAGING, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
 
     kPageFaultCount++;
 }
