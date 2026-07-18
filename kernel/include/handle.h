@@ -29,6 +29,7 @@ typedef enum handle_type
 	HANDLE_CONSOLE_ERR,    // the console (a distinct tag so it can diverge later)
 	HANDLE_PIPE_READ,      // object = pipe_t*, read end
 	HANDLE_PIPE_WRITE,     // object = pipe_t*, write end
+	HANDLE_FILE,           // object = vfs_file_t*, open file on the root fs
 } handle_type_t;
 
 typedef struct handle
@@ -64,5 +65,16 @@ bool handle_close(struct task *t, int h);
 // the other side waits for an EOF that can never come. Death must release the
 // ends, or a crashed program hangs its pipeline partner.
 void handle_close_all(struct task *t);
+
+// Close a HANDLE_FILE's underlying vfs_file_t from ANY context — a syscall on
+// the caller's CR3 (routes through call_in_kernel_context, since a close may
+// flush to disk and disk I/O needs the kernel tables) or code already running
+// under kKernelPML4 (task-exit cleanup; calls the VFS directly, because
+// re-entering call_in_kernel_context from the kernel interrupt stack would
+// reset RSP to that stack's TOP and smash the live frames beneath it).
+// Also frees the file's f_path — for HANDLE_FILE objects that is ALWAYS the
+// kmalloc'd copy syscall_open made (see the lifetime note there).
+// Exposed so syscall_open can unwind a file it opened but couldn't table.
+void handle_file_object_close(void *vfs_file);
 
 #endif // HANDLE_H

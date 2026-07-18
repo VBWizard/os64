@@ -3,6 +3,7 @@ DYN_OUTPUT ?= ../../bin/dyn_consumer
 ARG_OUTPUT ?= ../../bin/arg_echo
 SMOKE_OUTPUT ?= ../../bin/syscall_smoke
 RETEXIT_OUTPUT ?= ../../bin/exit_by_return
+FILEIO_OUTPUT ?= ../../bin/file_io
 LIBTEST ?= ../../bin/libtest.so
 
 CC ?= x86_64-elf-gcc
@@ -37,12 +38,17 @@ DYN_LDFLAGS ?= -pie -z now -e _start --no-allow-shlib-undefined --hash-style=sys
 # project-wide asm syntax convention.
 # -mno-mmx/-mno-sse/-mno-sse2: CR4.OSFXSR is off, so SIMD is #UD even at
 # ring 3 — same rule as the kernel until the FPU-state slice enables it.
-ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra
+# -I../../../abi/include: fixtures take syscall numbers AND raw stubs from the
+# abi contract like every other ring-3 binary — a fixture with hand-copied
+# numbers is one renumbering away from testing the wrong syscall (the exact
+# drift class the abi/ split exists to kill; older fixtures predate the path
+# and still carry local copies — migrate them as they're touched).
+ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra -I../../../abi/include
 
 OBJS := serial_ping.o
 
 .PHONY: all
-all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT)
+all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT)
 
 $(OUTPUT): $(OBJS)
 	@mkdir -p "$$(dirname $@)"
@@ -75,6 +81,13 @@ $(RETEXIT_OUTPUT): exit_by_return.o
 exit_by_return.o: exit_by_return.c
 	$(CC) $(ARG_CFLAGS) -c $< -o $@
 
+$(FILEIO_OUTPUT): file_io.o
+	@mkdir -p "$$(dirname $@)"
+	$(LD) $(LDFLAGS) -o $@ file_io.o
+
+file_io.o: file_io.c
+	$(CC) $(ARG_CFLAGS) -c $< -o $@
+
 $(DYN_OUTPUT): dyn_consumer.o $(LIBTEST)
 	@mkdir -p "$$(dirname $@)"
 	$(LD) $(DYN_LDFLAGS) -o $@ dyn_consumer.o $(LIBTEST)
@@ -84,4 +97,4 @@ dyn_consumer.o: dyn_consumer.c
 
 .PHONY: clean
 clean:
-	rm -f $(OBJS) $(OUTPUT) dyn_consumer.o $(DYN_OUTPUT) arg_echo.o $(ARG_OUTPUT) syscall_smoke.o $(SMOKE_OUTPUT) exit_by_return.o $(RETEXIT_OUTPUT)
+	rm -f $(OBJS) $(OUTPUT) dyn_consumer.o $(DYN_OUTPUT) arg_echo.o $(ARG_OUTPUT) syscall_smoke.o $(SMOKE_OUTPUT) exit_by_return.o $(RETEXIT_OUTPUT) file_io.o $(FILEIO_OUTPUT)

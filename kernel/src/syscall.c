@@ -19,6 +19,7 @@
 #include "handle.h"
 #include "pipe.h"
 #include "signals.h"
+#include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
 
 // spawn: cap on argv length. A command line's worth of args is plenty; the
 // per-arg length cap is task.c's TASK_MAX_PATH_LEN (the blob it builds uses
@@ -55,6 +56,10 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -85,6 +90,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_WAIT,      "wait",      syscall_wait,      false, 0x02),  // arg1 = exit-code out ptr
 	SYSCALL_DEFINE(SYSCALL_PIPE,      "pipe",      syscall_pipe,      false, 0x01),  // arg0 = int[2] out
 	SYSCALL_DEFINE(SYSCALL_CLOSE,     "close",     syscall_close,     false, 0x00),  // arg0 = handle (an int, not a pointer)
+	SYSCALL_DEFINE(SYSCALL_OPEN,      "open",      syscall_open,      false, 0x03),  // arg0 = path, arg1 = mode (both strings)
+	SYSCALL_DEFINE(SYSCALL_SEEK,      "seek",      syscall_seek,      false, 0x00),  // args: handle, offset, whence — no pointers
 };
 
 uint64_t _syscall_dispatch(
@@ -486,6 +493,61 @@ static void raise_sigpipe_and_die(task_t *task)
 	__builtin_unreachable();
 }
 
+// ── File I/O plumbing (HANDLE_FILE) ──────────────────────────────────────────
+// Every actual file operation (read/write/seek — and open/close elsewhere)
+// runs under kKernelPML4 via call_in_kernel_context, because the VFS bottoms
+// out in NVMe/AHCI DMA structures that live in kernel-only mappings — calling
+// the driver on a user CR3 faults in nvme_submit_command, the exact lesson
+// spawn learned. Same rules as spawn_params_t: the params block AND the bounce
+// buffer are kmalloc'd (HHDM-reachable from both address spaces); nothing the
+// helper touches may live on the syscall's task-local kernel stack.
+// One page per hop for read() and file-write bounce buffers. (Defined here,
+// above BOTH read and write, because the file-write path below uses it too.)
+#define READ_CHUNK_SIZE 4096
+
+typedef struct {
+	vfs_file_t *file;
+	void       *buf;       // kmalloc'd kernel bounce buffer (never a user ptr)
+	size_t      len;
+	long        offset;    // seek only
+	int         whence;    // seek only
+	volatile long result;  // bytes moved / new position, or negative
+} file_io_params_t;
+
+static void file_do_read(void *arg)
+{
+	file_io_params_t *p = (file_io_params_t *)arg;
+	vfs_file_t *f = p->file;
+	p->result = (f->fops != NULL && f->fops->read != NULL)
+	                ? f->fops->read(f, p->buf, p->len) : -1;
+}
+
+static void file_do_write(void *arg)
+{
+	file_io_params_t *p = (file_io_params_t *)arg;
+	vfs_file_t *f = p->file;
+	p->result = (f->fops != NULL && f->fops->write != NULL)
+	                ? f->fops->write(f, p->buf, p->len) : -1;
+}
+
+static void file_do_seek(void *arg)
+{
+	file_io_params_t *p = (file_io_params_t *)arg;
+	vfs_file_t *f = p->file;
+
+	if (f->fops == NULL || f->fops->seek == NULL ||
+	    f->fops->seek(f, p->offset, p->whence) < 0)
+	{
+		p->result = -1;
+		return;
+	}
+
+	// seek()'s contract is "return the NEW absolute position" — genuinely more
+	// useful than Unix lseek's, and free: tell() already knows. (A filesystem
+	// with no tell() still seeks fine; the caller just gets 0 back.)
+	p->result = (f->fops->tell != NULL) ? f->fops->tell(f) : 0;
+}
+
 // write(handle, buffer, length) — write bytes to an output handle.
 //
 // The handle is resolved through the CALLING TASK'S HANDLE TABLE — which is the
@@ -601,6 +663,64 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			return written;
 		}
 
+		case HANDLE_FILE:
+		{
+			// Ferry through a bounded kernel bounce buffer, chunk by chunk.
+			// Unlike the pipe path there is no cross-writer atomicity promise
+			// to keep — a file write that lands in pieces is still one write —
+			// so chunking costs nothing but loop iterations. Both the params
+			// block and the buffer are kmalloc'd: file_do_write runs under
+			// kKernelPML4, which cannot see this syscall's stack.
+			file_io_params_t *fp = kmalloc(sizeof(*fp));
+			char *kbuf = kmalloc(READ_CHUNK_SIZE);
+			if (fp == NULL || kbuf == NULL)
+			{
+				if (fp)   kfree(fp);
+				if (kbuf) kfree(kbuf);
+				return SYSCALL_RESULT_INVALID;
+			}
+
+			size_t written = 0;
+			uint64_t rc = 0;
+			while (written < length)
+			{
+				size_t this_chunk = length - written;
+				if (this_chunk > READ_CHUNK_SIZE)
+					this_chunk = READ_CHUNK_SIZE;
+
+				// Copy from user space HERE, on the caller's CR3, where the
+				// user buffer actually resolves (and where a demand-page fault
+				// is safe — no locks held, kernel context not yet entered).
+				if (!copy_user_buffer(user_buffer + written, kbuf, this_chunk))
+				{
+					rc = written ? written : SYSCALL_RESULT_BAD_USER_DATA;
+					goto file_write_out;
+				}
+
+				fp->file = (vfs_file_t *)h->object;
+				fp->buf = kbuf;
+				fp->len = this_chunk;
+				fp->result = -1;
+				call_in_kernel_context(file_do_write, fp);
+
+				if (fp->result < 0)
+				{
+					rc = written ? written : SYSCALL_RESULT_INVALID;
+					goto file_write_out;
+				}
+
+				written += (size_t)fp->result;
+				if ((size_t)fp->result < this_chunk)
+					break;   // short write: filesystem/device is full — report progress
+			}
+			rc = written;
+
+file_write_out:
+			kfree(kbuf);
+			kfree(fp);
+			return rc;
+		}
+
 		default:
 			// Reading-only handle (or the console's input side): not writable.
 			return SYSCALL_RESULT_INVALID;
@@ -617,8 +737,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // filter uses to know its input is finished.
 //
 // Runs on the caller's CR3 (the user buffer, lower half, is directly writable);
-// results are ferried through a kernel bounce buffer.
-#define READ_CHUNK_SIZE 4096
+// results are ferried through a kernel bounce buffer (READ_CHUNK_SIZE per hop).
 static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -663,6 +782,36 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// could demand-page into a deadlock.
 			got = pipe_read((pipe_t *)h->object, kbuf, want);
 			break;
+
+		case HANDLE_FILE:
+		{
+			// Never blocks (a file always knows its bytes) and returns SHORT at
+			// the end: fewer bytes than asked near EOF, then 0 AT EOF — so the
+			// canonical filter loop works on a file with zero special-casing.
+			// The actual read runs under kKernelPML4 (see file_do_read); kbuf
+			// and the params block are kmalloc'd, reachable from both worlds.
+			file_io_params_t *fp = kmalloc(sizeof(*fp));
+			if (fp == NULL)
+			{
+				kfree(kbuf);
+				return SYSCALL_RESULT_INVALID;
+			}
+			fp->file = (vfs_file_t *)h->object;
+			fp->buf = kbuf;
+			fp->len = want;
+			fp->result = -1;
+			call_in_kernel_context(file_do_read, fp);
+			got = fp->result;
+			kfree(fp);
+
+			if (got < 0)
+			{
+				// A real device/filesystem error — distinct from EOF's clean 0.
+				kfree(kbuf);
+				return SYSCALL_RESULT_INVALID;
+			}
+			break;
+		}
 
 		default:
 			kfree(kbuf);
@@ -748,6 +897,171 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;
 
 	return 0;
+}
+
+// ── open / seek ──────────────────────────────────────────────────────────────
+
+// Everything open's kernel-context helper needs, in one kmalloc'd (HHDM)
+// block — spawn_params_t's little sibling. path_copy is special: the VFS
+// stores the path POINTER it is given (f_path), so open must hand it a string
+// with HANDLE lifetime, not syscall lifetime. handle_file_object_close frees
+// it when the handle dies; this block itself dies with the syscall.
+typedef struct {
+	char        mode[4];      // "r"/"w"/"a"/"c" — validated before we get here
+	char       *path_copy;    // kmalloc'd, becomes f_path, outlives the syscall
+	vfs_file_t *file;         // out: the opened file
+	volatile long result;     // 0 on success, negative on failure
+} open_params_t;
+
+// Runs under kKernelPML4: the open walks directories, which is disk I/O.
+static void open_do(void *arg)
+{
+	open_params_t *p = (open_params_t *)arg;
+
+	if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+	    kRootFilesystem->fops->open == NULL)
+	{
+		p->result = -1;
+		return;
+	}
+
+	p->result = kRootFilesystem->fops->open(&p->file, p->path_copy, p->mode,
+	                                        kRootFilesystem);
+}
+
+// open(path, mode) — open a file on the root filesystem, return a handle
+// (>= 3, the standard streams are never displaced), or a SYSCALL_RESULT_*
+// sentinel. mode is a 1-letter string, validated HERE at the boundary:
+//   "r" read existing   "w"/"c" create-or-truncate for writing   "a" append
+// NULL mode means "r". The handle then plugs into read/write/seek/close —
+// and into spawn's redirection slots, where `upper < file` falls out for free.
+static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	const char *user_path = (const char *)arg0;
+	const char *user_mode = (const char *)arg1;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	open_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// Marshal the path into a scratch buffer first (syscall lifetime), then
+	// clone it into path_copy (handle lifetime) once we know its real length.
+	char path[TASK_MAX_PATH_LEN];
+	if (!copy_user_string(user_path, path, sizeof(path)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	if (user_mode == NULL)
+	{
+		p->mode[0] = 'r';
+		p->mode[1] = '\0';
+	}
+	else if (!copy_user_string(user_mode, p->mode, sizeof(p->mode)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	// Boundary validation: exactly one known mode letter. An unrecognized mode
+	// would fall through the FAT glue as access-flags 0 — an open that succeeds
+	// and then can't read, which is a miserable thing to debug from ring 3.
+	if (p->mode[1] != '\0' ||
+	    (p->mode[0] != 'r' && p->mode[0] != 'w' &&
+	     p->mode[0] != 'a' && p->mode[0] != 'c'))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	size_t plen = 0;
+	while (path[plen] != '\0')
+		plen++;
+	p->path_copy = kmalloc(plen + 1);
+	if (p->path_copy == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+	memcpy(p->path_copy, path, plen + 1);
+
+	p->file = NULL;
+	p->result = -1;
+
+	// The directory walk does disk I/O — kernel context required (see open_do).
+	call_in_kernel_context(open_do, p);
+
+	if (p->result != 0 || p->file == NULL)
+	{
+		printd(DEBUG_SYSCALL, "open: task %s: '%s' mode '%s' failed\n",
+		       task->exename, p->path_copy, p->mode);
+		kfree(p->path_copy);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // no such file / bad path
+	}
+
+	int h = handle_alloc(task, HANDLE_FILE, p->file);
+	if (h < 0)
+	{
+		// Table full — unwind the open. This also frees path_copy (it is the
+		// file's f_path now; the closer owns it from here).
+		handle_file_object_close(p->file);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_SYSCALL, "open: task %s: '%s' mode '%s' -> handle %d\n",
+	       task->exename, p->path_copy, p->mode, h);
+	kfree(p);
+	return (uint64_t)h;
+}
+
+// seek(handle, offset, whence) — move a file handle's position; returns the
+// NEW absolute position (more useful than lseek's "whatever you passed in"),
+// or a SYSCALL_RESULT_* sentinel. whence is OS64_SEEK_SET/CUR/END (the ABI
+// header) which match the VFS's SEEK_* by design. Seeking a pipe or the
+// console is an error — position is a property only files have.
+static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	handle_t *h = handle_get(task, (int)(int64_t)arg0);
+	if (h == NULL || h->type != HANDLE_FILE)
+		return SYSCALL_RESULT_INVALID;
+
+	file_io_params_t *fp = kmalloc(sizeof(*fp));
+	if (fp == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	fp->file = (vfs_file_t *)h->object;
+	fp->offset = (long)(int64_t)arg1;
+	fp->whence = (int)(int64_t)arg2;
+	fp->result = -1;
+
+	// A FAT seek can walk the cluster chain — disk I/O, kernel context.
+	call_in_kernel_context(file_do_seek, fp);
+
+	long pos = fp->result;
+	kfree(fp);
+
+	if (pos < 0)
+		return SYSCALL_RESULT_INVALID;   // bad whence, or the seek itself failed
+	return (uint64_t)pos;
 }
 
 // Marshal a user argv (NULL-terminated array of user string pointers) into

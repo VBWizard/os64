@@ -10,8 +10,12 @@
 #include "handle.h"
 #include "task.h"
 #include "pipe.h"
+#include "vfs.h"
 #include "serial_logging.h"
 #include "CONFIG.h"
+#include "memory/paging.h"    // kKernelPML4 (the already-in-kernel-context test)
+#include "memory/kmalloc.h"   // kfree (the f_path copy owned by HANDLE_FILE)
+#include "memory/vma.h"       // call_in_kernel_context
 
 void handle_table_init(struct task *t)
 {
@@ -82,6 +86,45 @@ handle_t *handle_get(struct task *t, int h)
 	return &task->handles[h];
 }
 
+// Trampoline body for handle_file_object_close: runs under kKernelPML4 on the
+// core's kernel interrupt stack. The vfs_file_t is kmalloc'd (HHDM-reachable),
+// so passing it straight through as the arg is fine.
+static void file_close_in_kernel(void *arg)
+{
+	vfs_file_t *file = (vfs_file_t *)arg;
+	file->fops->close(file);
+}
+
+void handle_file_object_close(void *vfs_file)
+{
+	vfs_file_t *file = (vfs_file_t *)vfs_file;
+
+	if (file == NULL || file->fops == NULL || file->fops->close == NULL)
+		return;
+
+	// Harvest f_path BEFORE closing — the VFS close frees the file object, and
+	// for a HANDLE_FILE, f_path is always the kmalloc'd copy syscall_open made
+	// (the fs stores whatever pointer open() was given, so open() must hand it
+	// one with handle lifetime — and we are the end of that lifetime).
+	char *path_copy = file->f_path;
+
+	// A close can flush to disk, and disk I/O (NVMe/AHCI DMA structures) lives
+	// in mappings only kKernelPML4 has — same lesson spawn learned the
+	// triple-fault way. But call_in_kernel_context resets RSP to the interrupt
+	// stack's TOP, so calling it while ALREADY on that stack (task-exit cleanup
+	// closing a dead task's handles) would overwrite our own live frames.
+	// CR3 tells us which world we're in.
+	uint64_t cr3;
+	__asm__ volatile("mov %0, cr3" : "=r"(cr3));
+	if (cr3 == (uint64_t)kKernelPML4)
+		file->fops->close(file);
+	else
+		call_in_kernel_context(file_close_in_kernel, file);
+
+	if (path_copy != NULL)
+		kfree(path_copy);
+}
+
 bool handle_close(struct task *t, int h)
 {
 	task_t *task = (task_t *)t;
@@ -100,6 +143,9 @@ bool handle_close(struct task *t, int h)
 			break;
 		case HANDLE_PIPE_WRITE:
 			pipe_close_write_end((pipe_t *)handle->object);
+			break;
+		case HANDLE_FILE:
+			handle_file_object_close(handle->object);
 			break;
 		default:
 			// Console handles reference no object — nothing to release.

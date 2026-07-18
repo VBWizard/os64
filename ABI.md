@@ -149,8 +149,25 @@ off: no waiting on interrupt-delivered events, keep bodies short.
 | 0 | `yield` | Genuine APIC self-IPI into the scheduler — same nesting/EOI semantics as the timer path. Returns immediately if nothing else is runnable |
 | 1 | `debug_log(msg)` | Copies a user string, prints `[user] ...` |
 | 2 | `exit(code)` | Stores task->retVal, `task_exit()`, never returns |
-| 3 | `write(handle, buf, len)` | Handles 1/2 (console out/err) only, until the per-task handle table exists. Returns bytes written; partial progress reported over error |
+| 3 | `write(handle, buf, len)` | Dispatches on the handle's tag: console, pipe write end (whole-or-block ≤ capacity; EPIPE ⇒ SIGPIPE terminate), or file (chunked, runs under kKernelPML4). Returns bytes written; partial progress reported over error |
+| 4 | `read(handle, buf, len)` | Dispatches on the tag: console keyboard (blocks), pipe read end (blocks; 0 = EOF = no writers left), or file (short near end, 0 AT end — same contract, zero file-awareness needed). Returns bytes read |
+| 5 | `spawn(path, argv, in, out, err)` | Launch child, return pid (non-blocking). in/out/err = caller's handles to install as child's 0/1/2, −1 = console. NO blanket handle inheritance, by design |
+| 6 | `wait(pid, *code)` | Reap a child: pid>0 = that child, 0 = first of any. Returns ended pid, writes exit code via out-param. Returns immediately if already dead |
+| 7 | `pipe(int[2])` | Create pipe; [0]=read end, [1]=write end. Creator holds BOTH ends and must close its copies after handing them to children |
+| 8 | `close(handle)` | Drop the handle. For pipe ends this is signalling (EOF/EPIPE refcounts); for files it closes (and may flush) the VFS file. Double-close is an error |
+| 9 | `open(path, mode)` | Open a file on the root fs, return a handle (≥ 3). mode: "r"/"w"/"a"/"c", NULL ⇒ "r", validated at the boundary. The handle plugs into read/write/seek/close AND spawn redirection (`prog < file` for free) |
+| 10 | `seek(handle, offset, whence)` | Files only. whence = OS64_SEEK_SET/CUR/END (abi header). Returns the NEW absolute position (yes, better than lseek). SEEK_END+0 = file size |
 | 16-22 | GUI (reserved) | See GRAPHICS.md "The userland boundary" — create/destroy/get_surface/publish/event_poll/screen_info/event_wait |
+
+File syscalls (open/seek, and read/write/close on file handles) run their VFS
+work under kKernelPML4 via `call_in_kernel_context` — the ELF-load-in-spawn
+lesson generalized: disk I/O bottoms out in DMA structures only the kernel
+tables map. Params + bounce buffers ride in kmalloc'd (HHDM) blocks, never on
+the syscall's task-local stack. The one asymmetry: closing a file from the
+task-exit path is ALREADY in kernel context, and re-entering
+call_in_kernel_context from the kernel interrupt stack would reset RSP onto
+the live frames — handle_file_object_close checks CR3 and calls straight
+through in that case.
 
 ## Ring-3 task lifecycle
 

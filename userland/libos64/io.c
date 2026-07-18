@@ -40,6 +40,17 @@ void os64_debug_log(const char *s)
     os64_syscall1(SYSCALL_DEBUG_LOG, (uint64_t)s);
 }
 
+long os64_open(const char *path, const char *mode)
+{
+    return (long)os64_syscall2(SYSCALL_OPEN, (uint64_t)path, (uint64_t)mode);
+}
+
+long os64_seek(int handle, long offset, int whence)
+{
+    return (long)os64_syscall3(SYSCALL_SEEK, (uint64_t)(int64_t)handle,
+                               (uint64_t)offset, (uint64_t)(int64_t)whence);
+}
+
 long os64_pipe(int h[2])
 {
     return (long)os64_syscall1(SYSCALL_PIPE, (uint64_t)h);

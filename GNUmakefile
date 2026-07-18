@@ -87,7 +87,7 @@ USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
 
 # Kernel-side ring-3 test fixtures that also ride the image.
 KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
-                     syscall_smoke exit_by_return libtest.so)
+                     syscall_smoke exit_by_return file_io libtest.so)
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
 
 

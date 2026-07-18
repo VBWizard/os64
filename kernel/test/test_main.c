@@ -953,6 +953,47 @@ static bool test_ring3_exit_by_return(void)
     printd(DEBUG_TESTS, "\tPASS: test_ring3_exit_by_return (ret -> trampoline -> exit syscall)\n");
     return true;
 }
+// file_io.c walks the whole file-handle lifecycle at CPL 3: open /bin/hello,
+// read+verify the ELF magic, seek (SET and END), open a bogus path (must fail
+// in-band), close, double-close (must fail).  0xF11Exxxx identifies the step.
+#define FILE_IO_RETVAL 0x0F11E60DUL
+
+static bool test_ring3_file_io(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_file_io (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/file_io", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // File I/O is real disk I/O through call_in_kernel_context — allow 2s.
+    for (int i = 0; i < 200 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io - task did not exit within 2 seconds "
+               "(open/read/seek wedged? check the call_in_kernel_context paths)\n");
+        return false;
+    }
+
+    if (task->retVal != FILE_IO_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io - retVal=0x%lx, expected 0x%lx "
+               "(0xF11Exxxx identifies the failed step; see test/elf/file_io.c)\n",
+               task->retVal, (uint64_t)FILE_IO_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_file_io (open, read, seek SET/END, bogus open, close, double-close)\n");
+    return true;
+}
+
 // (A dedicated /bin/hello test lived here briefly during userland bring-up;
 // removed as redundant — ring3_syscall_smoke and ring3_exit_by_return already
 // cover load-run-exit at CPL 3, and the HELLO boot-flow launch exercises the
@@ -1178,6 +1219,7 @@ static void register_builtin_tests(void)
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
     test_register("ring3_syscall_smoke", test_ring3_syscall_smoke, TEST_PHASE_POSTBOOT);
     test_register("ring3_exit_by_return", test_ring3_exit_by_return, TEST_PHASE_POSTBOOT);
+    test_register("ring3_file_io", test_ring3_file_io, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

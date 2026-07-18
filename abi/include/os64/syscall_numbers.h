@@ -26,6 +26,15 @@
 #define SYSCALL_WAIT       6
 #define SYSCALL_PIPE       7
 #define SYSCALL_CLOSE      8
+#define SYSCALL_OPEN       9
+#define SYSCALL_SEEK       10
+
+// seek() whence values — where `offset` is measured FROM. Part of the ABI
+// because both sides must agree on the numbers; they intentionally match the
+// kernel VFS's internal SEEK_* so no translation layer is needed.
+#define OS64_SEEK_SET  0   // from the start of the file
+#define OS64_SEEK_CUR  1   // from the current position
+#define OS64_SEEK_END  2   // from the end (offset 0 = the size; negative backs up)
 
 // Well-known handles until a real per-task handle table exists. 0/1/2 are the
 // stdin/stdout/stderr convention (a genuinely good one): READ(0) blocks on the

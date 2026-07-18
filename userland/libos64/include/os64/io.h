@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "os64/syscall_numbers.h"   // OS64_SEEK_* — the seek() vocabulary
 
 // Write `len` bytes of `buf` to `handle`. Returns bytes written, or a
 // negative value on error (the in-band status half of the ABI; no errno).
@@ -23,6 +24,28 @@ long os64_write(int handle, const void *buf, size_t len);
 // That 0 is how a filter knows its input is finished — the canonical loop is:
 //     while ((n = os64_read(0, buf, sizeof buf)) > 0) { ...process n bytes... }
 long os64_read(int handle, void *buf, size_t len);
+
+// Open the file at `path` (absolute, on the root filesystem) and return a
+// handle, or negative on error (no such file, bad mode, out of handles).
+// `mode` is a one-letter string:
+//   "r"  read what exists            "a"  append to what exists
+//   "w"/"c"  create (or truncate) for writing
+// Pass NULL for "r" — reading is what almost every open is.
+//
+// The handle you get back is the SAME species as 0/1/2 and pipe ends: it
+// plugs into os64_read/os64_write/os64_close unchanged, and into
+// os64_spawn_redirected — put a file handle in a child's slot 0 and you have
+// `program < file` with zero new mechanism. A file read returns short counts
+// near the end and 0 AT the end, so the canonical filter loop needs no
+// file-awareness whatsoever. (That is the cat model working as designed.)
+long os64_open(const char *path, const char *mode);
+
+// Move a file handle's position. `whence` says what `offset` is measured
+// from: OS64_SEEK_SET (start), OS64_SEEK_CUR (here), OS64_SEEK_END (end —
+// offset 0 gives the file's size, negative offsets back up from it).
+// Returns the NEW absolute position, or negative on error. Only files have
+// a position — seeking a pipe or the console is an error.
+long os64_seek(int handle, long offset, int whence);
 
 // Create a pipe. h[0] = read end, h[1] = write end. Returns 0, or negative.
 //

@@ -5,6 +5,11 @@ MAKEFLAGS += -j$(shell nproc)
 INCLUDE_DIRS := $(shell find include -type d)
 # Prefix each directory with -I for GCC
 INCLUDE_FLAGS := $(patsubst %, -I%, $(INCLUDE_DIRS))
+# The kernel↔userland ABI contract (syscall numbers etc.) lives in abi/ at the
+# repo root — the kernel's include/syscall_numbers.h is a shim over it, so the
+# one set of numbers serves the dispatch table, the exit trampoline, and every
+# userland binary alike (they drifted once; never again).
+INCLUDE_FLAGS += -I../abi/include
 
 .SUFFIXES:
 
@@ -139,7 +144,7 @@ override SRC_CFILES := $(filter-out src/asm-offsets.c,$(shell find src -type f -
 # by their own sub-Makefiles via the test-elf/test-shlib targets below, with
 # their own -fpie/-fPIC flags) — they are not kernel test code and must not
 # be compiled into the kernel binary, unlike test_main.c/test_vma_*.c.
-override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/elf/arg_echo.c test/elf/syscall_smoke.c test/elf/exit_by_return.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
+override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/elf/arg_echo.c test/elf/syscall_smoke.c test/elf/exit_by_return.c test/elf/file_io.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
 override CFILES := $(SRC_CFILES) $(TEST_CFILES)
 override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
