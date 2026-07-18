@@ -26,6 +26,12 @@
 //
 // Usage:  upper            (type, see it shouted back)
 //         hello | upper    (the first os64 pipeline)
+//
+// LONG RUN: upper will take the cat model — args are filenames, no args means
+// stdin — once file handles/open() land (deferred past the shell, per the
+// roadmap). Until then it REFUSES args instead of silently ignoring them:
+// `upper hello` blocking forever on the keyboard while you stare at it is a
+// 20-minute debugging session waiting to happen (ask us how we know).
 
 #include "os64/os64.h"
 
@@ -33,7 +39,20 @@
 
 int main(int argc, char **argv, char **envp)
 {
-	(void)argc; (void)argv; (void)envp;
+	(void)argv; (void)envp;
+
+	// The tripwire: fail LOUDLY on args we can't honor yet, on handle 2 so a
+	// pipeline's data stream stays clean. A filter that ignores its arguments
+	// and blocks on the keyboard isn't broken — it's worse: it's *waiting*.
+	// When open() exists, this branch becomes the for-each-filename loop.
+	if (argc > 1)
+	{
+		static const char usage[] =
+			"upper: file arguments not supported yet (no open() until file "
+			"handles land)\nusage: upper < input, or pipe into it\n";
+		os64_write(2, usage, sizeof(usage) - 1);
+		return 1;
+	}
 
 	char buf[BUF_SIZE];
 	long n;
