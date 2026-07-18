@@ -89,6 +89,12 @@ typedef struct
 	void* block_extra_info;
 } __attribute__((packed)) block_device_info_t;
 
+// Return CONVENTION (despite the size_t): 0 = success, nonzero = error — NOT
+// a sector/byte count. The FAT glue's disk_read/disk_write propagate these
+// values directly as FatFs DRESULTs (0 = RES_OK), so a driver that returns a
+// count on success reports every successful transfer as a disk error. (An
+// nvme write returning void through the (void*) cast made "success" read as
+// RAX garbage once — see nvme_vfs_write_disk.)
 struct block_operations
 {
 	//int (*seek) (void *dev, long offset, int origin);

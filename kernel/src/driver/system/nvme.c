@@ -960,10 +960,16 @@ size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* bu
 	return 0;
 }
 
-void nvme_vfs_write_disk(block_device_info_t* device, uint64_t sector, void* buffer, size_t length)
+size_t nvme_vfs_write_disk(block_device_info_t* device, uint64_t sector, void* buffer, size_t length)
 {
 	nvme_controller_t* controller = device->block_extra_info;
 	nvme_write_disk(controller, sector, length * controller->blockSize, buffer);
+	// 0 = success, matching nvme_vfs_read_disk. This was `void` until the FAT
+	// glue started propagating write results (2026-07-18) — the bops cast hid
+	// the mismatch, so "success" was whatever RAX happened to hold, and the
+	// root-fs disk test failed on the first honest look at it. An NVMe error
+	// never reaches this line anyway: nvme_do_io panics on device errors.
+	return 0;
 }
 
 void init_vfs_block_device(nvme_controller_t* controller, enum eATADeviceType deviceType)

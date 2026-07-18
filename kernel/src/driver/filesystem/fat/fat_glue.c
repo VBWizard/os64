@@ -8,6 +8,7 @@
 #include "strings.h"
 #include "memcpy.h"
 #include "time.h"  // For time conversion functions
+#include "spinlock.h"  // ff_mutex_* reentrancy hooks (FF_FS_REENTRANT)
 
 extern uint64_t kSystemCurrentTime; // Your kernel's epoch time variable
 
@@ -86,9 +87,12 @@ DRESULT disk_write (
 	if (fs==NULL)
 		panic("fat disk_write: Cannot find vfs device for disk number %u\n",pdrv);
 
-	fs->bops->write(fs->block_device_info, 
+	// Propagate the driver's verdict (0 = success, like disk_read does).
+	// Swallowing it here told FatFs its metadata was safely on disk when the
+	// driver had just said otherwise — on the ramdisk that's invisible, on
+	// real hardware it's how filesystems die.
+	return fs->bops->write(fs->block_device_info,
 	fs->block_device_info->block_device->partition_table->parts[fs->partNumber]->partStartSector + sector, buff, count);
-	return 0;
 }
 
 /*-----------------------------------------------------------------------*/
@@ -101,27 +105,36 @@ DRESULT disk_ioctl (
 )
 {
 	vfs_filesystem_t* fs = vfs_get_device_by_fat_disk_number(pdrv);
+
+	// The NULL check must come BEFORE the partition lookup derefs fs (it used
+	// to come after, which made it decoration).
+	if (fs==NULL)
+		panic("fat disk_ioctl: Cannot find vfs device for disk number %u\n",pdrv);
+
 	partEntry_t* partition = fs->block_device_info->block_device->partition_table->parts[fs->partNumber];
 
-	if (fs==NULL)
-		panic("fat disk_write: Cannot find vfs device for disk number %u\n",pdrv);
-
-	uint16_t temp = 0;
+	// Out-parameter widths are FatFs's contract, not ours: LBA_t (4 bytes with
+	// FF_LBA64=0) for the count, WORD for the sector size, DWORD for the block
+	// size. Writing 2 bytes into a DWORD out-param leaves the top half as
+	// whatever was on the caller's stack — GET_BLOCK_SIZE used to do exactly
+	// that.
+	uint16_t sector_size = 0;
+	uint32_t block_size = 0;
 
 	switch(cmd)
 	{
 		case CTRL_SYNC:
 			break;
 		case GET_SECTOR_COUNT:
-			memcpy(buff, &partition->partTotalSectors,4);
+			memcpy(buff, &partition->partTotalSectors, sizeof(partition->partTotalSectors));
 			break;
 		case GET_SECTOR_SIZE:
-			temp = DEFAULT_SECTOR_SIZE;
-			memcpy(buff, &temp, 2);
+			sector_size = DEFAULT_SECTOR_SIZE;
+			memcpy(buff, &sector_size, sizeof(sector_size));
 			break;
 		case GET_BLOCK_SIZE:
-			temp = 1;
-			memcpy(buff, &temp, 2);
+			block_size = 1;   // erase-block granularity unknown: 1 = "no alignment hint"
+			memcpy(buff, &block_size, sizeof(block_size));
 			break;
 		case CTRL_TRIM:
 			break;
@@ -130,6 +143,60 @@ DRESULT disk_ioctl (
 }
 
 /***********                  MISC METHODS                  ************/
+
+// ── FatFs reentrancy hooks (FF_FS_REENTRANT) ───────────────────────────────
+//
+// Before these existed, FatFs ran with NO synchronization at all — and every
+// FATFS object carries a shared sector-window buffer (fs->win) that every
+// operation on that volume reads AND writes. Two cores inside f_read/f_open
+// on the same volume at the same time silently corrupt each other's view of
+// the FAT. That was survivable while file I/O was a boot-time, one-core
+// affair; it stopped being survivable the moment the open() syscall let any
+// two ring-3 tasks (on any two cores) do file I/O concurrently — plus the
+// demand pager, which f_reads ELF pages from page-fault context whenever it
+// pleases.
+//
+// FatFs asks for one mutex per volume, plus one "system" slot at index
+// FF_VOLUMES (only exercised when FF_FS_LOCK > 0 — with FF_FS_LOCK == 0
+// lock_volume() takes exactly ONE mutex per API call, no nesting, no
+// re-take, so a non-recursive lock is safe here).
+//
+// Why a spinlock and not something fancier: this is the allocator's own
+// irqsave idiom (spinlock.h), and it matches how file I/O actually runs
+// today — syscall bodies already execute with IF=0 (SFMASK), so holding a
+// spinlock across a FatFs call changes nothing for them. The known cost: a
+// long disk operation holds the lock (and the core's interrupts) for the
+// whole transfer, so a second core wanting the same volume spins. When the
+// interruptible-syscall-bodies debt is paid, this should graduate to a
+// sleeping mutex — the hook shape won't change, only these four bodies.
+//
+// The saved-RFLAGS slot is per-volume and written only AFTER the lock is
+// held (acquire returns the flags) and read only BEFORE it is released, so
+// hand-off between cores can't clobber a waiter's flags.
+static spinlock_t ff_volume_locks[FF_VOLUMES + 1];
+static uint64_t   ff_volume_lock_flags[FF_VOLUMES + 1];
+
+int ff_mutex_create (int vol)   /* 1: created, 0: failed */
+{
+	ff_volume_locks[vol] = 0;
+	return 1;
+}
+
+void ff_mutex_delete (int vol)
+{
+	ff_volume_locks[vol] = 0;
+}
+
+int ff_mutex_take (int vol)     /* 1: got it, 0: timeout — we spin, so never 0 */
+{
+	ff_volume_lock_flags[vol] = spinlock_acquire_irqsave(&ff_volume_locks[vol]);
+	return 1;
+}
+
+void ff_mutex_give (int vol)
+{
+	spinlock_release_irqrestore(&ff_volume_locks[vol], ff_volume_lock_flags[vol]);
+}
 
 void* ff_memalloc (	/* Returns pointer to the allocated memory block (null if not enough core) */
 	UINT msize		/* Number of bytes to allocate */
@@ -183,21 +250,44 @@ void create_fat_path(char* fsPath, vfs_filesystem_t* vfs_fs)
 
 static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, vfs_filesystem_t* vfs_fs)
 {
-	FIL* fat_file = kmalloc(sizeof(FIL));  // FIL object (FAT filesystem file handle)
     BYTE fat_mode = 0;
 
-	*vfs_file = kmalloc(sizeof(vfs_file_t));
-	// Convert VFS mode string to FAT mode flags
+	// Validate the mode BEFORE allocating anything. The old fall-through left
+	// fat_mode = 0 for an unrecognized string — an open with no access flags,
+	// which "succeeds" and then can't read, a miserable thing to debug from
+	// the far side of a syscall. ("c" predates "w" here and is byte-identical
+	// to it; kept for the existing callers/tests.)
     if (strcmp(mode, "r") == 0) fat_mode = FA_READ;
     else if (strcmp(mode, "w") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
     else if (strcmp(mode, "a") == 0) fat_mode = FA_WRITE | FA_OPEN_APPEND;
 	else if (strcmp(mode, "c") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
-	
+	else
+		return -1;
+
+	FIL* fat_file = kmalloc(sizeof(FIL));  // FIL object (FAT filesystem file handle)
+	*vfs_file = kmalloc(sizeof(vfs_file_t));
+	if (fat_file == NULL || *vfs_file == NULL)
+	{
+		// NOTE: kfree(NULL) is NOT a no-op in this kernel — free_memory can't
+		// find address 0 and panics — so each free gets its own guard.
+		if (fat_file != NULL)
+			kfree(fat_file);
+		if (*vfs_file != NULL)
+			kfree(*vfs_file);
+		*vfs_file = NULL;
+		return -1;
+	}
+
 	char lPath[255];
 	strncpy(lPath, path, 255);
 	create_fat_path(lPath, vfs_fs);
 
     if (f_open(fat_file, lPath, fat_mode) != FR_OK) {
+		// Failure must give back what it took — this path used to leak both
+		// allocations on every ENOENT (i.e. on every PATH-typo in the shell).
+		kfree(fat_file);
+		kfree(*vfs_file);
+		*vfs_file = NULL;
         return -1; // Error
     }
 
@@ -205,7 +295,7 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 	(*vfs_file)->f_path = (void*)path;
 	(*vfs_file)->fops = vfs_fs != NULL ? vfs_fs->fops : &fat_fops;
 	(*vfs_file)->owner = vfs_fs;
-    return 0;	
+    return 0;
 }
 
 // FAT read wrapper
@@ -292,45 +382,62 @@ static int fat_tell(vfs_file_t* vfs_file)
 	return f_tell((FIL*)vfs_file->handle);
 }
 
+// Format with the KERNEL's printf engine, then hand FatFs finished bytes.
+// The old body passed the va_list itself to f_printf as if it were the first
+// variadic argument — any %-format printed the pointer value of the list, not
+// the caller's data. (f_printf has no va_list variant, so formatting on our
+// side is the correct division of labor anyway: one printf dialect in the
+// kernel, not two.)
+#define FAT_FPRINTF_MAX 512
 static int fat_fprintf(vfs_file_t* vfs_file, const char* fmt, ...)
 {
+	char buffer[FAT_FPRINTF_MAX];
 	va_list args;
 
 	va_start(args, fmt);
-	return f_printf(vfs_file->handle, fmt, args);
+	int len = vsnprintf(buffer, sizeof(buffer), fmt, args);
 	va_end(args);
+
+	if (len < 0)
+		return -1;
+
+	return f_puts(buffer, vfs_file->handle);
 }
 
 static int fat_initialize(vfs_filesystem_t* vfs_fs) {
     // Allocate FAT context
     FATFS* fat_fs = kmalloc(sizeof(FATFS));
-	char* drive_label = kmalloc(255);
+	if (fat_fs == NULL)
+		return -1;
 
-	create_fat_path(drive_label, vfs_fs);
+	// All f_mount needs is the volume prefix ("N:"). This used to go through
+	// create_fat_path on a kmalloc'd buffer, which only produced a clean "N:"
+	// because every allocation in this kernel arrives zeroed (so the "path"
+	// being prefixed was the empty string). Deliberate guarantee or not,
+	// build-the-string-you-mean beats prefix-the-string-you-hope-is-empty.
+	char drive_label[8];
+	sprintf(drive_label, "%u:", vfs_fs->fatDiskNumber);
 
     // Mount the FATFS
     if (f_mount(fat_fs, drive_label, 1) != FR_OK) {
-        kfree(drive_label);
+        kfree(fat_fs);   // the failure path used to leak the FATFS too
         return -1; // Failed to mount
     }
 
     // Store the context in the VFS filesystem
     vfs_fs->fs_specific = fat_fs;
     vfs_fs->fops = &fat_fops;
-	kfree(drive_label);
     return 0; // Success
 }
 
 static int fat_uninitialize(vfs_filesystem_t* vfs_fs)
 {
-	int retVal = 0;
-	char* drive_label = kmalloc(255);
-	
-	create_fat_path(drive_label, vfs_fs);
+	char drive_label[8];
+	sprintf(drive_label, "%u:", vfs_fs->fatDiskNumber);
 
-	retVal = f_unmount(drive_label);
+	int retVal = f_unmount(drive_label);
 	kfree(vfs_fs->fs_specific);
-	kfree(drive_label);
+	vfs_fs->fs_specific = NULL;   // a dangling context pointer is a re-mount trap
 	return retVal;
 }
 
@@ -399,5 +506,3 @@ vfs_directory_operations_t fat_dops = {
 	.read=fat_read_dir,
 	.mkdir=fat_mkdir
 };
-
-typedef uint32_t DWORD;

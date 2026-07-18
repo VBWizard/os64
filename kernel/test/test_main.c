@@ -994,6 +994,50 @@ static bool test_ring3_file_io(void)
     return true;
 }
 
+// Two file_io fixtures at ONCE: the FatFs reentrancy regression. Before the
+// ff_mutex hooks (FF_FS_REENTRANT), two cores inside f_open/f_read on the same
+// volume shared the FATFS sector-window buffer unsynchronized — open() from
+// ring 3 made that trivially reachable. Both tasks open the same file, read,
+// seek, and close concurrently; both must come back bit-perfect.
+static bool test_ring3_file_io_concurrent(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_file_io_concurrent (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *a = task_create("/bin/file_io", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *b = task_create("/bin/file_io", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (a == NULL || b == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io_concurrent - task_create returned NULL\n");
+        return false;
+    }
+
+    // Submit back-to-back so their lifetimes overlap as much as the scheduler
+    // allows (with 8 cores they genuinely run simultaneously).
+    scheduler_submit_new_task(a);
+    scheduler_submit_new_task(b);
+
+    for (int i = 0; i < 300 && !(a->exited && b->exited); i++)
+        wait(10);
+
+    if (!a->exited || !b->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io_concurrent - task(s) did not exit within 3 seconds "
+               "(a=%d b=%d; deadlock in the FAT volume lock?)\n", a->exited, b->exited);
+        return false;
+    }
+
+    if (a->retVal != FILE_IO_RETVAL || b->retVal != FILE_IO_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io_concurrent - retVals 0x%lx / 0x%lx, expected 0x%lx "
+               "(one task saw corrupted data => reentrancy regression)\n",
+               a->retVal, b->retVal, (uint64_t)FILE_IO_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_file_io_concurrent (two tasks, same volume+file, simultaneous)\n");
+    return true;
+}
+
 // (A dedicated /bin/hello test lived here briefly during userland bring-up;
 // removed as redundant — ring3_syscall_smoke and ring3_exit_by_return already
 // cover load-run-exit at CPL 3, and the HELLO boot-flow launch exercises the
@@ -1220,6 +1264,7 @@ static void register_builtin_tests(void)
     test_register("ring3_syscall_smoke", test_ring3_syscall_smoke, TEST_PHASE_POSTBOOT);
     test_register("ring3_exit_by_return", test_ring3_exit_by_return, TEST_PHASE_POSTBOOT);
     test_register("ring3_file_io", test_ring3_file_io, TEST_PHASE_POSTBOOT);
+    test_register("ring3_file_io_concurrent", test_ring3_file_io_concurrent, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)
