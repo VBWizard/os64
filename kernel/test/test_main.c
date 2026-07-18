@@ -1080,6 +1080,45 @@ static bool test_ring3_redirect_io(void)
     return true;
 }
 
+// dir_list.c walks /bin and / through open(path,"d") + readdir at CPL 3:
+// entry names/sizes/DIR flags, sticky end-of-directory, type safety (readdir
+// on a file handle refuses), bogus paths, close semantics. 0x0D12xxxx codes.
+#define DIR_LIST_RETVAL 0x0D12600DUL
+
+static bool test_ring3_dir_list(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_dir_list (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/dir_list", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_dir_list - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    for (int i = 0; i < 200 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_dir_list - task did not exit within 2 seconds\n");
+        return false;
+    }
+
+    if (task->retVal != DIR_LIST_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_dir_list - retVal=0x%lx, expected 0x%lx "
+               "(0x0D12xxxx identifies the failed step; see test/elf/dir_list.c)\n",
+               task->retVal, (uint64_t)DIR_LIST_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_dir_list (readdir /bin + /, flags, sticky EOF, type safety)\n");
+    return true;
+}
+
 // (A dedicated /bin/hello test lived here briefly during userland bring-up;
 // removed as redundant — ring3_syscall_smoke and ring3_exit_by_return already
 // cover load-run-exit at CPL 3, and the HELLO boot-flow launch exercises the
@@ -1308,6 +1347,7 @@ static void register_builtin_tests(void)
     test_register("ring3_file_io", test_ring3_file_io, TEST_PHASE_POSTBOOT);
     test_register("ring3_file_io_concurrent", test_ring3_file_io_concurrent, TEST_PHASE_POSTBOOT);
     test_register("ring3_redirect_io", test_ring3_redirect_io, TEST_PHASE_POSTBOOT);
+    test_register("ring3_dir_list", test_ring3_dir_list, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

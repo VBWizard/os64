@@ -8,7 +8,7 @@ int testVFS(vfs_filesystem_t *testFS)
     printd(DEBUG_TESTS, "\nDisk tests:\n");
     vfs_file_t* testFile = NULL;
 	vfs_directory_t* testDir = NULL;
-	FILINFO* fi=kmalloc(sizeof(FILINFO));
+	os64_dirent_t de;   // dops->read speaks the fs-neutral dirent now
 	uint32_t lResult=0;
 	char* contents = kmalloc(4096);
 
@@ -30,16 +30,15 @@ int testVFS(vfs_filesystem_t *testFS)
 
 	if (testFS->dops->open(&testDir, "/", testFS)==0)
 	{
-		do
+		// 1 = entry, 0 = end, <0 = error — the os64_dirent contract.
+		while (testFS->dops->read(testDir, &de) == 1)
 		{
-			if(!testFS->dops->read(testDir, fi) && fi->fname[0] != '\0')
-			{
-				if (fi->fattrib & AM_DIR)
-                    printd(DEBUG_TESTS, "Directory: %s\n", fi->fname);
-                else
-                    printd(DEBUG_TESTS, "File: %s - Attrib 0x%02x - Size %u\n", fi->fname, fi->fattrib, fi->fsize);
-            }
-		} while (fi->fname[0] != '\0');
+			if (de.flags & OS64_DE_DIR)
+                printd(DEBUG_TESTS, "Directory: %s\n", de.name);
+            else
+                printd(DEBUG_TESTS, "File: %s - Size %lu\n", de.name, de.size);
+		}
+		testFS->dops->close(testDir);   // close frees the dir objects now
 	}
 	else
 	{

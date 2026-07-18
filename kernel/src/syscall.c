@@ -60,6 +60,8 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_readdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -92,6 +94,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_CLOSE,     "close",     syscall_close,     false, 0x00),  // arg0 = handle (an int, not a pointer)
 	SYSCALL_DEFINE(SYSCALL_OPEN,      "open",      syscall_open,      false, 0x03),  // arg0 = path, arg1 = mode (both strings)
 	SYSCALL_DEFINE(SYSCALL_SEEK,      "seek",      syscall_seek,      false, 0x00),  // args: handle, offset, whence — no pointers
+	SYSCALL_DEFINE(SYSCALL_READDIR,   "readdir",   syscall_readdir,   false, 0x02),  // arg1 = os64_dirent_t out ptr
 };
 
 uint64_t _syscall_dispatch(
@@ -907,9 +910,10 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // with HANDLE lifetime, not syscall lifetime. handle_file_object_close frees
 // it when the handle dies; this block itself dies with the syscall.
 typedef struct {
-	char        mode[4];      // "r"/"w"/"a"/"c" — validated before we get here
+	char        mode[4];      // "r"/"w"/"a"/"c"/"d" — validated before we get here
 	char       *path_copy;    // kmalloc'd, becomes f_path, outlives the syscall
-	vfs_file_t *file;         // out: the opened file
+	vfs_file_t *file;         // out: the opened file       (file modes)
+	vfs_directory_t *dir;     // out: the opened directory  (mode "d")
 	volatile long result;     // 0 on success, negative on failure
 } open_params_t;
 
@@ -917,6 +921,22 @@ typedef struct {
 static void open_do(void *arg)
 {
 	open_params_t *p = (open_params_t *)arg;
+
+	// Mode "d" opens a DIRECTORY for readdir() — same syscall, same handle
+	// table, different tag. "One handle type for everything" means opendir
+	// is just open asking for a different thing back.
+	if (p->mode[0] == 'd')
+	{
+		if (kRootFilesystem == NULL || kRootFilesystem->dops == NULL ||
+		    kRootFilesystem->dops->open == NULL)
+		{
+			p->result = -1;
+			return;
+		}
+		p->result = kRootFilesystem->dops->open(&p->dir, p->path_copy,
+		                                        kRootFilesystem);
+		return;
+	}
 
 	if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
 	    kRootFilesystem->fops->open == NULL)
@@ -927,6 +947,22 @@ static void open_do(void *arg)
 
 	p->result = kRootFilesystem->fops->open(&p->file, p->path_copy, p->mode,
 	                                        kRootFilesystem);
+}
+
+// readdir's kernel-context half: one dops->read per call, into the HHDM
+// params block (see syscall_readdir below).
+typedef struct {
+	vfs_directory_t *dir;
+	os64_dirent_t entry;    // out, when result == 1
+	volatile long result;   // 1 = entry, 0 = end of directory, <0 = error
+} readdir_params_t;
+
+static void readdir_do(void *arg)
+{
+	readdir_params_t *p = (readdir_params_t *)arg;
+	vfs_directory_t *d = p->dir;
+	p->result = (d->dops != NULL && d->dops->read != NULL)
+	                ? d->dops->read(d, &p->entry) : -1;
 }
 
 // open(path, mode) — open a file on the root filesystem, return a handle
@@ -975,9 +1011,10 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// Boundary validation: exactly one known mode letter. An unrecognized mode
 	// would fall through the FAT glue as access-flags 0 — an open that succeeds
 	// and then can't read, which is a miserable thing to debug from ring 3.
+	// ("d" = directory, for readdir — see open_do.)
 	if (p->mode[1] != '\0' ||
 	    (p->mode[0] != 'r' && p->mode[0] != 'w' &&
-	     p->mode[0] != 'a' && p->mode[0] != 'c'))
+	     p->mode[0] != 'a' && p->mode[0] != 'c' && p->mode[0] != 'd'))
 	{
 		kfree(p);
 		return SYSCALL_RESULT_BAD_USER_DATA;
@@ -995,38 +1032,100 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	memcpy(p->path_copy, path, plen + 1);
 
 	p->file = NULL;
+	p->dir = NULL;
 	p->result = -1;
+	bool is_dir = (p->mode[0] == 'd');
 
 	// The directory walk does disk I/O — kernel context required (see open_do).
 	call_in_kernel_context(open_do, p);
 
-	if (p->result != 0 || p->file == NULL)
+	if (p->result != 0 || (is_dir ? (void *)p->dir : (void *)p->file) == NULL)
 	{
 		printd(DEBUG_SYSCALL, "open: task %s: '%s' mode '%s' failed\n",
 		       task->exename, p->path_copy, p->mode);
 		kfree(p->path_copy);
 		kfree(p);
-		return SYSCALL_RESULT_INVALID;   // no such file / bad path
+		return SYSCALL_RESULT_INVALID;   // no such file/directory / bad path
 	}
 
-	// One handle references this file so far (see handleRefCount in vfs.h) —
-	// set BEFORE handle_alloc so no close path can ever see it uninitialized.
-	p->file->handleRefCount = 1;
-
-	int h = handle_alloc(task, HANDLE_FILE, p->file);
-	if (h < 0)
+	int h;
+	if (is_dir)
 	{
-		// Table full — unwind the open. This also frees path_copy (it is the
-		// file's f_path now; the closer owns it from here).
-		handle_file_object_close(p->file);
-		kfree(p);
-		return SYSCALL_RESULT_INVALID;
+		// Directories carry no refcount — spawn redirection rejects them, so
+		// this handle is the object's one and only owner (see handle.h).
+		h = handle_alloc(task, HANDLE_DIR, p->dir);
+		if (h < 0)
+		{
+			handle_dir_object_close(p->dir);   // also frees path_copy (f_path)
+			kfree(p);
+			return SYSCALL_RESULT_INVALID;
+		}
+	}
+	else
+	{
+		// One handle references this file so far (see handleRefCount in
+		// vfs.h) — set BEFORE handle_alloc so no close path can ever see it
+		// uninitialized.
+		p->file->handleRefCount = 1;
+
+		h = handle_alloc(task, HANDLE_FILE, p->file);
+		if (h < 0)
+		{
+			// Table full — unwind the open. This also frees path_copy (it is
+			// the file's f_path now; the closer owns it from here).
+			handle_file_object_close(p->file);
+			kfree(p);
+			return SYSCALL_RESULT_INVALID;
+		}
 	}
 
 	printd(DEBUG_SYSCALL, "open: task %s: '%s' mode '%s' -> handle %d\n",
 	       task->exename, p->path_copy, p->mode, h);
 	kfree(p);
 	return (uint64_t)h;
+}
+
+// readdir(handle, entry_out) — produce the next entry of an open directory
+// (a handle from open(path, "d")). Returns 1 = *entry_out filled, 0 = end of
+// directory, or a SYSCALL_RESULT_* sentinel. The entry is the fs-neutral
+// os64_dirent_t (abi/include/os64/dirent.h): name, size, and a DIR flag in
+// one call — no per-entry stat() dance.
+static uint64_t syscall_readdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	handle_t *h = handle_get(task, (int)(int64_t)arg0);
+	if (h == NULL || h->type != HANDLE_DIR)
+		return SYSCALL_RESULT_INVALID;   // not a directory handle
+
+	// Params + entry in one HHDM block: the dops->read runs under kKernelPML4
+	// (directory entries come off the disk), the copy-out runs back on the
+	// caller's CR3 — the block must be visible to both.
+	readdir_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+	p->dir = (vfs_directory_t *)h->object;
+	p->result = -1;
+
+	call_in_kernel_context(readdir_do, p);
+
+	long r = p->result;
+	if (r == 1 && !copy_to_user_buffer((void *)arg1, &p->entry, sizeof(p->entry)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	kfree(p);
+
+	if (r < 0)
+		return SYSCALL_RESULT_INVALID;
+	return (uint64_t)r;   // 1 = entry delivered, 0 = end of directory
 }
 
 // seek(handle, offset, whence) — move a file handle's position; returns the
@@ -1242,6 +1341,17 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		{
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;   // caller passed a bogus handle
+		}
+
+		// Directory handles don't cross the spawn boundary: a child's 0/1/2
+		// are byte streams, and a directory isn't one — and unlike files and
+		// pipe ends, vfs_directory_t has no refcount, so sharing one would
+		// dangle the child's copy the moment the parent closes. Reject here,
+		// where the caller gets a clean error instead of a haunted handle.
+		if (h->type == HANDLE_DIR)
+		{
+			kfree(p);
+			return SYSCALL_RESULT_INVALID;
 		}
 
 		p->redirType[slot] = h->type;

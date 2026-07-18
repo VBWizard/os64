@@ -51,6 +51,17 @@ long os64_seek(int handle, long offset, int whence)
                                (uint64_t)offset, (uint64_t)(int64_t)whence);
 }
 
+long os64_opendir(const char *path)
+{
+    return (long)os64_syscall2(SYSCALL_OPEN, (uint64_t)path, (uint64_t)"d");
+}
+
+long os64_readdir(int handle, os64_dirent_t *entry)
+{
+    return (long)os64_syscall2(SYSCALL_READDIR, (uint64_t)(int64_t)handle,
+                               (uint64_t)entry);
+}
+
 long os64_pipe(int h[2])
 {
     return (long)os64_syscall1(SYSCALL_PIPE, (uint64_t)h);

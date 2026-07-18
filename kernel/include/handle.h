@@ -30,6 +30,7 @@ typedef enum handle_type
 	HANDLE_PIPE_READ,      // object = pipe_t*, read end
 	HANDLE_PIPE_WRITE,     // object = pipe_t*, write end
 	HANDLE_FILE,           // object = vfs_file_t*, open file on the root fs
+	HANDLE_DIR,            // object = vfs_directory_t*, open directory (readdir)
 } handle_type_t;
 
 typedef struct handle
@@ -76,5 +77,11 @@ void handle_close_all(struct task *t);
 // kmalloc'd copy syscall_open made (see the lifetime note there).
 // Exposed so syscall_open can unwind a file it opened but couldn't table.
 void handle_file_object_close(void *vfs_file);
+
+// The directory sibling: closes a HANDLE_DIR's vfs_directory_t from any
+// context (same CR3-check discipline as files) and frees its f_path copy.
+// No refcount — directories can't be passed through spawn redirection (the
+// spawn boundary rejects them), so exactly one handle ever references one.
+void handle_dir_object_close(void *vfs_dir);
 
 #endif // HANDLE_H

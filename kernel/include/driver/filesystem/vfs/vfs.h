@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include "dlist.h"
 #include "types.h"
+#include "os64/dirent.h"   // os64_dirent_t — the fs-neutral dops->read contract
 
 
 #define DENTRY_ROOT 0xFFFFFFFF    
@@ -163,7 +164,13 @@ struct directory
 struct dir_operations
 {
 	int (*open) (vfs_directory_t** vfs_dir, const char* path, vfs_filesystem_t* vfs_fs);
-	int (*read) (vfs_directory_t* vfs_dir, void* fileInfo);
+	// Fills ONE fs-neutral entry per call. Returns 1 = entry produced,
+	// 0 = end of directory, <0 = error (the os64_dirent_t contract — see
+	// abi/include/os64/dirent.h). The driver translates its own on-disk
+	// shape (FILINFO, ext2_dir_entry_2, ...) internally; fs-specific structs
+	// never cross this seam. (The old signature passed a raw FILINFO through
+	// void* — a contract no second filesystem could ever have implemented.)
+	int (*read) (vfs_directory_t* vfs_dir, os64_dirent_t* entry);
 	int (*close) (vfs_directory_t* vfs_dir);
 	int (*mkdir) (char* path, vfs_filesystem_t* vfs_f);
 };

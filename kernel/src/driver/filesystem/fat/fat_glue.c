@@ -446,8 +446,10 @@ static int fat_uninitialize(vfs_filesystem_t* vfs_fs)
 static int fat_open_dir(vfs_directory_t** vfs_dir, const char* path, vfs_filesystem_t* vfs_fs)
 {
 	DIR* dir=kmalloc(sizeof(DIR));
-	char tempPath[255];
+	if (dir == NULL)
+		return -1;
 
+	char tempPath[255];
 	strncpy(tempPath, path, 255);
 	create_fat_path(tempPath, vfs_fs);
 
@@ -457,20 +459,50 @@ static int fat_open_dir(vfs_directory_t** vfs_dir, const char* path, vfs_filesys
 			return -1;
 		}
 	*vfs_dir = kmalloc(sizeof(vfs_directory_t));
+	if (*vfs_dir == NULL)
+	{
+		f_closedir(dir);
+		kfree(dir);
+		return -1;
+	}
 	(*vfs_dir)->handle=dir;
+	// Mirror fat_open: the caller's pointer lands in f_path (a caller wanting
+	// handle lifetime must pass a string with handle lifetime — syscall_open
+	// does), and dops/owner make the object self-describing so the handle
+	// layer can close it without knowing which filesystem it came from.
+	(*vfs_dir)->f_path = (char*)path;
+	(*vfs_dir)->dops = vfs_fs != NULL ? vfs_fs->dops : &fat_dops;
+	(*vfs_dir)->owner = vfs_fs;
 	return 0;
 }
 
 static int fat_close_dir(vfs_directory_t* vfs_dir)
 {
-	return f_closedir(vfs_dir->handle);
+	int result = f_closedir(vfs_dir->handle);
+	// Close frees what open allocated (this used to leak BOTH objects on
+	// every directory listing).
+	kfree(vfs_dir->handle);
+	kfree(vfs_dir);
+	return result;
 }
 
-static int fat_read_dir(vfs_directory_t* vfs_dir, void* filInfo)
+// Fill one fs-neutral entry (see dops->read in vfs.h): FILINFO stays inside
+// this driver, translated here. Returns 1 = entry, 0 = end, <0 = error.
+static int fat_read_dir(vfs_directory_t* vfs_dir, os64_dirent_t* entry)
 {
+	DIR* dir = vfs_dir->handle;
+	FILINFO fi;
 
-	DIR* dir=vfs_dir->handle;
-	return f_readdir(dir, filInfo);
+	if (f_readdir(dir, &fi) != FR_OK)
+		return -1;
+	if (fi.fname[0] == '\0')
+		return 0;   // FatFs's end-of-directory signal, converted to ours
+
+	strncpy(entry->name, fi.fname, OS64_DIRENT_NAME_MAX);
+	entry->name[OS64_DIRENT_NAME_MAX] = '\0';
+	entry->size = (fi.fattrib & AM_DIR) ? 0 : (uint64_t)fi.fsize;
+	entry->flags = (fi.fattrib & AM_DIR) ? OS64_DE_DIR : 0;
+	return 1;
 }
 
 static int fat_mkdir(char* path, vfs_filesystem_t* vfs_fs)

@@ -132,6 +132,37 @@ void handle_file_object_close(void *vfs_file)
 		kfree(path_copy);
 }
 
+// Directory sibling of the file pair above — same kernel-context discipline
+// (a directory close COULD flush fs state), same f_path-copy ownership, no
+// refcount (spawn rejects HANDLE_DIR, so a dir object has exactly one owner).
+static void dir_close_in_kernel(void *arg)
+{
+	vfs_directory_t *dir = (vfs_directory_t *)arg;
+	dir->dops->close(dir);
+}
+
+void handle_dir_object_close(void *vfs_dir)
+{
+	vfs_directory_t *dir = (vfs_directory_t *)vfs_dir;
+
+	if (dir == NULL || dir->dops == NULL || dir->dops->close == NULL)
+		return;
+
+	// Harvest before close — the VFS close frees the directory object, and
+	// f_path is the kmalloc'd copy syscall_open made (dir flavor).
+	char *path_copy = dir->f_path;
+
+	uint64_t cr3;
+	__asm__ volatile("mov %0, cr3" : "=r"(cr3));
+	if (cr3 == (uint64_t)kKernelPML4)
+		dir->dops->close(dir);
+	else
+		call_in_kernel_context(dir_close_in_kernel, dir);
+
+	if (path_copy != NULL)
+		kfree(path_copy);
+}
+
 bool handle_close(struct task *t, int h)
 {
 	task_t *task = (task_t *)t;
@@ -153,6 +184,9 @@ bool handle_close(struct task *t, int h)
 			break;
 		case HANDLE_FILE:
 			handle_file_object_close(handle->object);
+			break;
+		case HANDLE_DIR:
+			handle_dir_object_close(handle->object);
 			break;
 		default:
 			// Console handles reference no object — nothing to release.

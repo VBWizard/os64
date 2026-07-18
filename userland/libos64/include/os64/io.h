@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "os64/syscall_numbers.h"   // OS64_SEEK_* — the seek() vocabulary
+#include "os64/dirent.h"            // os64_dirent_t — what readdir() delivers
 
 // Write `len` bytes of `buf` to `handle`. Returns bytes written, or a
 // negative value on error (the in-band status half of the ABI; no errno).
@@ -46,6 +47,27 @@ long os64_open(const char *path, const char *mode);
 // Returns the NEW absolute position, or negative on error. Only files have
 // a position — seeking a pipe or the console is an error.
 long os64_seek(int handle, long offset, int whence);
+
+// Open the DIRECTORY at `path` for listing. Returns a handle for
+// os64_readdir(), released with plain os64_close() — a directory is just
+// another thing a handle can be. (Under the hood this is os64_open with
+// mode "d": one open, one handle table, one close.)
+long os64_opendir(const char *path);
+
+// Produce the next entry of an open directory: name, size, and an
+// OS64_DE_DIR flag in one call (see <os64/dirent.h> — no follow-up stat
+// needed to know what you're looking at). Returns:
+//   1  — *entry was filled in
+//   0  — end of directory (calling again keeps returning 0)
+//  <0  — error (bad handle, or the handle isn't a directory)
+//
+// The canonical listing loop — the spine of ls:
+//     long d = os64_opendir("/bin");
+//     os64_dirent_t e;
+//     while (os64_readdir(d, &e) == 1)
+//         ...e.name, e.size, (e.flags & OS64_DE_DIR)...
+//     os64_close(d);
+long os64_readdir(int handle, os64_dirent_t *entry);
 
 // Create a pipe. h[0] = read end, h[1] = write end. Returns 0, or negative.
 //
