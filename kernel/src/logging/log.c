@@ -242,3 +242,73 @@ bool logd_thread(bool daemon) {
     }
 }
 
+// See log.h. The one caller is panic — this is the "never drop a byte" rule
+// applied to the byte that matters most: a panic that dies with the evidence
+// still queued in RAM is worse than one that garbles a line getting it out.
+//
+// Exists because logd_thread(false) is NOT a flush: it's a bounded try-lock
+// drain — one LOGD_DRAIN_CHUNK if the lock is free, NOTHING if it isn't —
+// and the panic message (newest TSC, drained last in the oldest-first merge)
+// is precisely the entry a bounded pass leaves behind. Then cli/hlt orphans
+// the queue forever if the daemon lived on the dying core.
+void logd_emergency_flush(void)
+{
+    if (!kLoggingInitialized)
+        return;
+
+    // Give a live drainer a moment to finish — a clean handoff beats a mid-
+    // line bust when the holder is actually making progress (~a few ms).
+    bool locked = false;
+    for (uint64_t spins = 0; spins < 20000000UL; spins++)
+    {
+        if (!__sync_lock_test_and_set(&kLogDWorkLock, 1))
+        {
+            locked = true;
+            break;
+        }
+        __builtin_ia32_pause();
+    }
+    if (!locked)
+    {
+        // Holder is halted or wedged (it may be the reason we're panicking).
+        // Bust the lock and take over its drain mid-line; the interleave is
+        // the price of completeness.
+        kLogDWorkLock = 1;
+    }
+    kLogDDrainerCore = get_core_local_storage()->apic_id;
+
+    // Budget = every slot in every queue, so cores that are still alive and
+    // producing can't hold us hostage: we flush the backlog that existed when
+    // the panic hit (plus whatever slips in while we drain), then stop.
+    uint64_t budget = 0;
+    for (int c = 0; c < kMPCoreCount; c++)
+        budget += core_log_buffers[c].capacity;
+
+    while (budget--)
+    {
+        // Same oldest-first k-way merge as logd_thread, unbounded by chunks.
+        int best_core = -1;
+        uint64_t best_tsc = UINT64_MAX;
+        for (int c = 0; c < kMPCoreCount; c++)
+        {
+            log_buffer_t *buf = &core_log_buffers[c];
+            if (!buf->entries || buf->head == buf->tail)
+                continue;
+            uint64_t t = buf->entries[buf->tail].tsc;
+            if (t < best_tsc)
+            {
+                best_tsc = t;
+                best_core = c;
+            }
+        }
+        if (best_core < 0)
+            break;   // every queue empty: the backlog is on the wire
+        logd_drain_one(&core_log_buffers[best_core]);
+    }
+
+    // Release so surviving cores' logd can keep draining whatever they
+    // produce after this point — the panic'd core is done, they may not be.
+    kLogDDrainerCore = 0xFFFFFFFF;
+    __sync_lock_release(&kLogDWorkLock);
+}
+

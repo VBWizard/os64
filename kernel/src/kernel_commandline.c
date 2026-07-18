@@ -30,6 +30,13 @@ bool kRunKeytest = false;
 // Launch /bin/husk (the shell) from the boot flow and keep the system up. This
 // is the real "launch the shell" path; the HELLO/KEYTEST temps fold into it.
 bool kRunHusk = false;
+// Panic ON PURPOSE right after the post-boot tests: the standing diagnostic
+// for the panic pipeline itself. A panic's dying-breath serial path (direct
+// write + logd emergency flush, see panic.c) is exactly the kind of code that
+// silently regresses — it only runs when everything is already going wrong —
+// so this flag makes it a one-boot test: boot with TESTPANIC, then check the
+// log ends with the banner, the flushed backlog, and the repeated message.
+bool kTestPanic = false;
 
 // -----------------------------------------------------------------------
 // Kernel command-line parser definitions
@@ -117,6 +124,7 @@ static cmdopt_t cmdopts[] = {
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
+    {"TESTPANIC", OPT_BOOL, &kTestPanic, true, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
     {"GUI", OPT_BOOL, &kEnableGUI, true, 0},
     {"DEBUG_GUI", OPT_UINT128_OR, &kDebugLevel, DEBUG_GUI, 0},

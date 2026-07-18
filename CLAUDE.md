@@ -253,7 +253,11 @@ make -C kernel test-elf
 - Outputs to COM1 (0x3F8)
 - QEMU redirects to `qemu_com1.log`
 - `printd(DEBUG_LEVEL, fmt, ...)`: Conditional debug logging
-- `printf(fmt, ...)`: Always prints to both serial and framebuffer
+- `printf(fmt, ...)`: Framebuffer/console ONLY (its serial half left when logd
+  took over the wire — a stale "both sinks" claim here hid a real bug once).
+  Serial output goes through `printd`'s per-core queues, drained by logd.
+  Panics bypass everything: direct polled serial write + `logd_emergency_flush()`
+  (see panic.c). Boot with `TESTPANIC` on the cmdline to verify that pipeline.
 
 **Debug Macros:**
 - Use `printd(DEBUG_SUBSYSTEM, ...)` for conditional logging

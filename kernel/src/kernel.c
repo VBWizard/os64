@@ -52,6 +52,7 @@ extern bool kEnableRamdisk;
 extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch block below
 extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
+extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 bool kEnableSMP = true;
 bool kBspSchedulerMode = false;
 bool kEnableKWorker = false;
@@ -335,6 +336,13 @@ void kernel_init()
 	 		panic("Root filesystem disk test failed: %u\n",lResult);
 		//No longer uninitialize the root file system!
 	}
+
+	// The standing panic-pipeline diagnostic (see kTestPanic's comment in
+	// kernel_commandline.c). Placed HERE, after the full boot + test flow, so
+	// the log queues carry a realistic backlog for the emergency flush to
+	// prove itself against.
+	if (kTestPanic)
+		panic("TESTPANIC: deliberate panic — if you can read this in the serial log, the panic pipeline works\n");
 
     // Launch the shell and park the kernel task so the scheduler keeps running
     // it (husk loops forever on read/spawn/wait). The kernel task is husk's

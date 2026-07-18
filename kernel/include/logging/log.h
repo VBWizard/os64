@@ -59,4 +59,13 @@ void logging_queueing_init();
 void dump_log_buffer(uint16_t core);
 void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message);
 bool logd_thread(bool daemon);
+
+// PANIC-ONLY: drain every core's queue to serial, right now, on THIS core.
+// Busts kLogDWorkLock after a bounded grace wait (the holder may be halted or
+// wedged — a possibly-garbled line beats a silently lost one, the
+// renderer_bust_lock philosophy), then runs the oldest-first merge until the
+// queues are empty or a total-capacity budget is spent (still-running cores
+// can keep producing; we want the backlog, not the future). Never sleeps,
+// never takes another lock — safe from any dying context.
+void logd_emergency_flush(void);
 #endif // LOG_H

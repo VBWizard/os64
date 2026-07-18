@@ -13,6 +13,44 @@
 
 char sprintf_buf[2000];
 
+// Shared body of panic/panic_no_shutdown: get the message onto EVERY sink in
+// dying-breath order. The screen half was always right (bust the locks, then
+// draw); the serial half was quietly broken for as long as logd has owned the
+// wire: printf/print are FRAMEBUFFER-ONLY (their serial side left when logd
+// arrived), so a panic's only serial copy sat in the printd queue — the
+// NEWEST entry, i.e. the one a single bounded logd_thread(false) pass drains
+// LAST or not at all (and drains NEVER if another core held the work lock, or
+// if logd lived on this core when it cli/hlt'd). Result: panic on screen,
+// nothing in the log — discovered 2026-07-18 when a root-fs panic left
+// qemu_com1.log ending mid-boot, looking for all the world like a clean run.
+//
+// Order matters:
+//   1. Banner + message DIRECT to serial (serial_print_string is lock-free
+//      polled COM1 — cannot be lost, cannot wedge on a dead lock holder).
+//      If everything after this hangs, the cause is already on the wire.
+//   2. Emergency-flush the queued backlog — the printd trail that led here,
+//      which is exactly what post-mortem debugging wants.
+//   3. Repeat the message as the log's final line, so "tail the log" shows
+//      the cause without scrolling back through the flushed backlog.
+static void panic_broadcast(uintptr_t caller, const char *msg)
+{
+    char banner[96];
+
+    sprintf(banner, "\n>>>panic at instruction prior to address 0x%016lx<<<\n  >>>", caller);
+
+    // Screen first — it's already been made safe (sink detached, lock busted)
+    // and it's the sink a human is most likely watching in the moment.
+    print(banner);
+    print(msg);
+
+    // Serial, directly — steps 1 through 3 above.
+    serial_print_string(banner);
+    serial_print_string(msg);
+    logd_emergency_flush();
+    serial_print_string("\n>>>panic (repeated post-flush): ");
+    serial_print_string(msg);
+}
+
 void panic_no_shutdown(const char *format, ...)
 {
     // FIRST: detach the GUI console sink so everything below renders raw on
@@ -28,13 +66,9 @@ void panic_no_shutdown(const char *format, ...)
 
     va_list args;
     va_start( args, format );
-    printf("\n>>>panic at instruction prior to address 0x%08x<<<\n", __builtin_return_address(0));
-    printf("  >>>");
     vsprintf(sprintf_buf, format, args);
-	va_end(args);
-	print(sprintf_buf);
-    printd(DEBUG_EXCEPTIONS, sprintf_buf);
-    logd_thread(false);
+    va_end(args);
+    panic_broadcast((uintptr_t)__builtin_return_address(0), sprintf_buf);
 panicLoop:
     __asm__("cli\nhlt\n");
     goto panicLoop;
@@ -51,17 +85,13 @@ void __attribute__((noreturn, noinline))panic(const char *format, ...)
 
     va_list args;
     va_start( args, format );
-    printf("\n>>>panic at instruction prior to address 0x%016lx<<<\n", __builtin_return_address(0));
-    printf("  >>>");
     vsprintf(sprintf_buf, format, args);
-	va_end(args);
-	print(sprintf_buf);
-    printd(DEBUG_EXCEPTIONS, sprintf_buf);
-    logd_thread(false);
+    va_end(args);
+    panic_broadcast((uintptr_t)__builtin_return_address(0), sprintf_buf);
 #if SHUTOFF_ON_PANIC == 1
     shutdown();
-#endif 
-    panicLoop: 
+#endif
+    panicLoop:
     __asm__("cli\nhlt\n");
     goto panicLoop;
 }
