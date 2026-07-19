@@ -318,8 +318,6 @@ void paging_hhdm_unmap_range(uintptr_t phys_start, uint64_t length)
 
 void paging_map_pages(pt_entry_t* pml4v,uint64_t virtual_address,uint64_t physical_address,uint64_t page_count,uint64_t flags)
 {
-	__uint128_t temp;
-
 	if ((uintptr_t)pml4v < kHHDMOffset)
 		pml4v = (uintptr_t*)((uintptr_t)pml4v | kHHDMOffset);
 

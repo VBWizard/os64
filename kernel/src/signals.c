@@ -21,7 +21,7 @@ uint8_t signalProcTickFrequency;
 /// @return 
 void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
 {
-    uintptr_t *a = sigAction; // Temporary workaround to suppress "unused parameter 'sigAction'" compiler error
+    (void)sigAction;   // reserved for real handler registration; unused until then
     thread_t *thread = thrd;
 
 	if (thread == NULL)
@@ -55,7 +55,6 @@ void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
 void processSignals()
 {
 	thread_t *qSleep = qISleep;
-	bool awoken = false;
 
 	printd(DEBUG_SIGNALS | DEBUG_DETAILED,"processSignals: Start processing signals\n");
 	printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tScanning Interruptable Sleep queue\n");
@@ -70,7 +69,6 @@ void processSignals()
 			qSleep->signals.sigind &= ~(SIGSLEEP);
 			scheduler_change_thread_queue(qSleep, THREAD_STATE_RUNNABLE);
 			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP\n", qSleep->threadID);
-			awoken = true;
 		}
 		qSleep = qSleep->next;
 	}
