@@ -13,6 +13,7 @@
 #include "sprintf.h"
 #include "fat_glue.h"
 #include "serial_logging.h"
+#include "BasicRenderer.h"   // printf — mount-sweep lines belong on the glass too
 
 uint8_t kFatDiskNumber=0;
 
@@ -257,9 +258,30 @@ static bool vfs_guid_already_mounted(const uint8_t *guid)
 	return false;
 }
 
-// Auto-mount every recognized non-root partition at "/<fstype>". Runs once at
-// boot, after the root is claimed; partition tables were already detected by
-// vfs_mount_root_part's first pass.
+// THE AUTO-MOUNT ALLOWLIST: only partitions os64 itself authored may join
+// the namespace uninvited. Learned on the Bosgame P5, 2026-07-19, the hard
+// way: the first bare-metal boot of the mount sweep auto-mounted the
+// machine's WINDOWS EFI SYSTEM PARTITION — writable — plus its recovery
+// partition and a stray ext2. One husk redirection away from an unbootable
+// Windows. Foreign partitions now stay untouched until a deliberate mount
+// syscall exists; these GUIDs are the constants from the root GNUmakefile
+// (DISK_PARTUUID / EXT2_PARTUUID), unchanged since the disk image was born.
+static const char *kKnownPartGUIDs[] = {
+	"2f4fd02e-68b4-4c82-98bc-72467529b3fc",   // the os64 FAT partition
+	"1ec5f5ab-71b7-45cd-a7a4-05646e878e57",   // the os64 ext2 partition
+};
+
+static bool vfs_guid_is_ours(const uint8_t *guid)
+{
+	for (size_t i = 0; i < sizeof(kKnownPartGUIDs) / sizeof(kKnownPartGUIDs[0]); i++)
+		if (compare_part_uuids(kKnownPartGUIDs[i], (const char *)guid) != NULL)
+			return true;
+	return false;
+}
+
+// Auto-mount every recognized, OS64-AUTHORED non-root partition at
+// "/<fstype>". Runs once at boot, after the root is claimed; partition
+// tables were already detected by vfs_mount_root_part's first pass.
 static void vfs_mount_secondary_partitions(void)
 {
 	int fatCount = 0, ext2Count = 0;
@@ -293,6 +315,17 @@ static void vfs_mount_secondary_partitions(void)
 					continue;   // unrecognized/no filesystem — not mountable
 			}
 
+			if (!vfs_guid_is_ours(part->uniquePartGUID))
+			{
+				// Somebody else's partition (a Windows ESP, a Linux root,
+				// who knows) — acknowledge on the glass, touch NOTHING.
+				printf("skipping foreign %s partition (device %u part %u)\n",
+				       baseName, idx, partno);
+				printd(DEBUG_BOOT, "BOOT: foreign %s partition on device %u part %u — not ours, not mounted\n",
+				       baseName, idx, partno);
+				continue;
+			}
+
 			if (vfs_guid_already_mounted(part->uniquePartGUID))
 			{
 				printd(DEBUG_BOOT, "BOOT: skipping %s partition %u on device %u — GUID already mounted (twin)\n",
@@ -312,10 +345,20 @@ static void vfs_mount_secondary_partitions(void)
 			vfs_filesystem_t *fs = kRegisterFilesystem(prefix, &kBlockDeviceInfo[idx],
 			                                           partno, &fileOps, &dirOps);
 			if (fs != NULL)
+			{
 				printd(DEBUG_BOOT, "BOOT: mounted %s (device %u partition %u) at %s\n",
 				       baseName, idx, partno, prefix);
+				// Screen too (permanent): on real hardware the sweep meets
+				// partitions we didn't author — a Windows EFI partition, a
+				// recovery blob — and what got mounted WHERE is exactly the
+				// context a screen-only machine needs when something fails.
+				printf("mounted %s at %s\n", baseName, prefix);
+			}
 			else
+			{
+				printf("mount of %s (device %u part %u) FAILED\n", baseName, idx, partno);
 				(*counter)--;   // mount failed — give the name back
+			}
 		}
 	}
 }

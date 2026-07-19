@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "panic.h"
+#include "BasicRenderer.h"   // printf — failing test NAMES go on the glass (P5 has no serial)
 
 #include "memory/kmalloc.h"
 #include "memory/memset.h"
@@ -1896,6 +1897,11 @@ static void test_run_phase(int phase, const char *label)
         } else {
             ++failed;
             printd(DEBUG_TESTS, "\t[Test] %s... FAIL\n", name);
+            // PERMANENT screen print, not just serial: on a machine with no
+            // COM port (the P5), a failure whose name only went to serial is
+            // a confession sealed in an envelope. The panic below halts the
+            // system anyway — the name must be readable on the glass.
+            printf("  FAIL: %s\n", name);
         }
     }
 
