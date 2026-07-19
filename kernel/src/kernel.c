@@ -26,7 +26,6 @@
 #include "strings.h"
 #include "fat_glue.h"
 #include "shutdown.h"
-#include "tests.h"
 #include "test_framework.h"
 #include "panic.h"
 #include "task.h"
@@ -97,7 +96,10 @@ void create_kernel_task()
 	//  1024 environment strings @ 512 bytes each
 	//TODO: Change this to be MMAP'd
 	parentTask.env = env_create();
-	env_set(parentTask.env, "PATH",     "/");
+	// Where husk (and anything else consulting the environment) looks for
+	// programs — colon-separated, walked by userland PATH search. Every task
+	// inherits this block, so one seed here reaches the whole tree.
+	env_set(parentTask.env, "PATH",     "/bin");
 	env_set(parentTask.env, "HOSTNAME", "yogi.localhost.localdomain");
 	env_set(parentTask.env, "CWD",      "/");
 	parentTask.stdin = STDIN;
@@ -329,13 +331,12 @@ void kernel_init()
         test_run_postboot();
     }
 
-	if (kRunTests && kRootFilesystem!=NULL)
-	{
-        int lResult = testVFS(kRootFilesystem);
-        if (lResult)
-	 		panic("Root filesystem disk test failed: %u\n",lResult);
-		//No longer uninitialize the root file system!
-	}
+	// (The boot-time testVFS() block lived here from the beginning — outside
+	// the framework, panicking on failure. Its write/mkdir half now lives in
+	// the suite as test_vfs_write_mkdir, read-only-aware like everything
+	// else; its read half was long since covered by the ring-3 fixtures.
+	// Removed 2026-07-19 with tests.c itself — the day the framework
+	// finished eating its ancestor.)
 
 	// The standing panic-pipeline diagnostic (see kTestPanic's comment in
 	// kernel_commandline.c). Placed HERE, after the full boot + test flow, so
@@ -406,7 +407,17 @@ void kernel_main()
 	mask &= ~(1 << 1); // Clear bit 1 (unmask IRQ1)
 	outb(0x21, mask);
 
-	process_kernel_commandline(kKernelCommandline);
+	// The commandline tokenizer NUL-splits its input IN PLACE — hand it a
+	// scratch copy so kKernelCommandline itself stays printable. (The
+	// "Commandline:" boot line used to show only "ROOT=..." because by print
+	// time the parser had already replaced every space with a NUL — the
+	// flags weren't missing from the boot, just eaten from the string.)
+	{
+		static char cmdline_scratch[512];
+		strncpy(cmdline_scratch, kKernelCommandline, sizeof(cmdline_scratch));
+		cmdline_scratch[sizeof(cmdline_scratch) - 1] = '\0';
+		process_kernel_commandline(cmdline_scratch);
+	}
 	hardware_init();
 	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
 #ifdef ENABLE_COM1
@@ -420,8 +431,9 @@ void kernel_main()
 	uint64_t high, low;
 	parse_debug_level(kDebugLevel, &high, &low);
 	printf("Commandline: %s (debug level 0x%016lx%016lx)\n",kKernelCommandline, high, low);
-	log_debug_level(kDebugLevel);
-	printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
+    printd(DEBUG_BOOT, "Commandline: %s (debug level 0x%016lx%016lx)\n", kKernelCommandline, high, low);
+    log_debug_level(kDebugLevel);
+    printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
 	printf("Initializing paging (HHMD) ... \n");
 	paging_init();
