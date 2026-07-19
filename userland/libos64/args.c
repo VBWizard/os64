@@ -25,6 +25,8 @@ void os64_args_init(os64_args_t *a, int argc, char **argv,
 	a->specs = specs;
 	a->nspecs = nspecs;
 	a->about = NULL;       // opt-in: set it yourself after init (see args.h)
+	a->details = NULL;     // same deal — caller-owned struct means WE must
+	                       // null these, or help() reads stack garbage
 	a->index = 1;          // argv[0] is the program name, not an argument
 	a->bundle = NULL;
 	a->no_more_opts = 0;
@@ -162,10 +164,11 @@ void os64_args_help(const os64_args_t *a, const char *usage)
 {
     if (a->about != NULL)
         os64_printf("%s\n", a->about);
+    if (a->details != NULL)
+        os64_printf("%s\n", a->details);
     os64_printf("  usage: %s\n", usage);
-    if (a->specs == NULL)
-		return;
-	for (int i = 0; i < a->nspecs; i++)
+    if (a->specs == NULL) return;
+    for (int i = 0; i < a->nspecs; i++)
 	{
 		const os64_optspec_t *s = &a->specs[i];
 		// A blank row (letter 0, no name) prints NOTHING — it's what a
@@ -182,4 +185,5 @@ void os64_args_help(const os64_args_t *a, const char *usage)
 			os64_printf("  -%c    %-12s %s\n", s->letter, "",
 			            s->help ? s->help : "");
 	}
+    os64_printf("  -help        display this help and exit\n");
 }

@@ -62,11 +62,13 @@ typedef struct {
     const os64_optspec_t *specs;
     int nspecs;
     // OPTIONAL, yours to set after init (the caller owns this struct — that's
-    // the design): a one-line description of the program, printed by
-    // os64_args_help under the usage line. NULL = no description.
+    // the design): a one-line details of the program, printed by
+    // os64_args_help under the usage line. NULL = no details.
     //     os64_args_init(&a, argc, argv, specs, 1);
     //     a.about = "list directory contents";
     const char *about;
+    // OPTIONAL, same contract as about: a second line printed after it.
+    const char *details;
     // iteration state — the parser's, not yours
     int index;
     const char *bundle;       // mid "-la": pointer to the next letter
