@@ -162,6 +162,16 @@ off: no waiting on interrupt-delivered events, keep bodies short.
 | 13 | `unmap(base)` | Release an ENTIRE map() region — exact live base only (not the middle, not twice, not a code segment). Frees only pages actually touched; the VMA and its guard gap's tripwire semantics remain |
 | 14 | `getcwd(buf, len)` | Copy the task's cwd (canonical absolute — chdir guarantees it) to user space; returns its length. Kernel-owned "here": every path-taking syscall (open, opendir via mode "d", spawn, chdir) resolves relative paths against it |
 | 15 | `chdir(path)` | Resolve against cwd, CANONICALIZE (".."/"." collapse in vfs_canonicalize_path — the one place path hygiene happens), validate the target exists and is a directory via the real fs, store. Failure moves nothing. Children inherit cwd at spawn — which is why cd is a shell builtin, as it has been in every shell since the beginning |
+| 16–22 | *(reserved)* | The GUI block (window create/destroy/surface/present, event poll/wait, screen info) — numbers assigned in GRAPHICS.md before stat arrived; reserved means reserved |
+| 23 | `stat(path, entry_out)` | Fill one `os64_dirent_t` (the SAME struct readdir yields — stat is readdir for exactly one name; POSIX's separate `struct stat` is a fork os64 declines) for whatever `path` names, file or directory, without opening it. Resolves against cwd, routes through the mount table, per-fs via `dops->stat` (FAT: `f_stat`, root synthesized; ext2: inode resolve). 0 = filled; negative = nothing there. First consumer: husk's PATH search |
+
+**The environment block** (`abi/include/os64/env.h`): every task's env rides into
+its address space read-only at `TASK_ENV_VIRT` and reaches `main()` as the third
+argument (launch.S also stashes it for `os64_getenv`). Layout is ABI: a
+12-byte header (`page_count`, `count`, `data_end`) then packed `key\0value\0`
+pairs — real string keys, no `KEY=VALUE` re-splitting, no fixed-width slots.
+The kernel seeds `PATH=/bin`; husk walks colon-separated PATH entries at spawn
+(V7's gift — before 1979, Unix shells hardcoded `/bin`).
 | 16-22 | GUI (reserved) | See GRAPHICS.md "The userland boundary" — create/destroy/get_surface/publish/event_poll/screen_info/event_wait |
 
 File syscalls (open/seek, and read/write/close on file handles) run their VFS

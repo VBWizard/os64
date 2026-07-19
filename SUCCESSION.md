@@ -108,20 +108,84 @@ The older catalog is in ABI.md §Failure fingerprints. This session's addenda:
 | A file handle dies under a child mid-write | handleRefCount (vfs.h) not maintained — open sets 1, spawn ++, close -- and closes at 0. Directories have NO refcount; spawn rejects them instead |
 | Editor/tool works partially, index-backed features silently dead | Root-owned files in the tool's cache from a one-time sudo'd launch (check `ls -la` of the cache before touching config) |
 | `pkill -f X` kills your own shell | The pattern matches your own wrapper's command line. `pkill -f "patter[n]"` |
+| A struct field reads NULL/garbage in ONE binary while the library tests green | Stale object compiled against an older struct layout — a makefile without `-MMD` header deps. Struck the kernel AND userland on consecutive days (7/18, 7/19: ls read args.value 8 bytes off). Any new makefile gets `-MMD -MP` + `-include` on day one |
+| A logged string mysteriously truncates at its first token | An in-place tokenizer NUL-split it before the print (the "Commandline:" line showed only ROOT=... for years). Parse a scratch copy, print the original |
 
-## Where it stood at handoff (2026-07-18 night — verify, don't trust)
+## The verification harness (drive the OS yourself — Chris asked me to write this down FOR YOU)
 
-Userland: husk (pipes + `<`/`>` redirection), hello/upper, syscalls 0–11
-(through open/seek/readdir), libos64 with fmt (printf family, host-diffed
-against glibc) and args (the anti-getopt). ext2 read-only driver verified
-against a mkfs.ext2-authored partition (test_ext2_real_partition). Chris was
-writing ls — HIS ls — against the readdir seam. Next on the board: cwd slice
-(per-task CWD + getcwd/chdir + husk cd/pwd), mount table + ext2 root switch,
-map/unmap syscalls (then malloc, which is HIS — he loved building it in os32
-and calls dibs on the rematch; the coalesce that os32 never got has a
-standing answer in boundary tags, and his old heaprec was one afternoon from
-it). Command history for husk, requested by name. The GUI branch (`gui`) is
-bare-metal-verified on the Bosgame P5 — GRAPHICS.md is its authority.
+Chris, 2026-07-19: *"I never saw any model before you even TRY to run a test.
+It was always 'I'm done, go test'. Your way is huge. You are accountable for
+making sure your changes work."* So: never end a slice at "it compiles."
+Boot it, type into it, read what came back. Here is the entire art.
+
+**Launch** (windowed — Chris likes to watch; headless only if he asks):
+
+```bash
+SCRATCH=<your scratchpad>
+timeout 240 qemu-system-x86_64 -machine q35 -cdrom os64_kernel.iso -boot d \
+  -m 8g -no-reboot -smp 8 -serial file:$SCRATCH/qemu_com1.log \
+  -monitor telnet:127.0.0.1:55556,server,nowait \
+  -drive file=disk/os64.img,format=raw,if=none,id=nvme1 \
+  -device nvme,drive=nvme1,serial=nvme1-serial
+```
+
+- ALWAYS under `timeout` — a QEMU you fail to kill orphans and haunts later
+  runs (and `pkill -f qemu` will kill YOUR OWN shell unless you write the
+  pattern as `qem[u]`). Background it, poll the serial log, kill by PID or
+  monitor `quit`.
+- The monitor is the hands: drive it with bash `/dev/tcp` (piping into
+  `telnet`/`nc` drops commands):
+  ```bash
+  mon() { exec 3<>/dev/tcp/127.0.0.1/55556; while [ $# -gt 0 ]; do
+      printf 'sendkey %s\n' "$1" >&3; sleep 0.15; shift; done
+      sleep 0.5; exec 3>&- 3<&-; }
+  mon l s spc slash e x t 2 ret        # types "ls /ext2" into husk
+  mon ctrl-d                            # EOT — ends a stdin-reading program
+  ```
+  Key names: letters as-is, `spc slash dot minus ret backspace ctrl-d up down`.
+- **The framebuffer is invisible in serial** — printf is framebuffer-ONLY
+  (husk, app output, the "Commandline:" line — none of it reaches the log).
+  To SEE what you typed: `screendump $SCRATCH/shot.ppm` via the monitor,
+  convert with PIL, and READ THE IMAGE. That is how you watch husk answer.
+- Poll the serial log for progress markers, never sleep blind:
+  `for i in $(seq 1 40); do sleep 3; grep -q "BUILT-IN TESTS" log && break; done`.
+  Which root booted? NOT the Commandline line — grep for
+  `Root filesystem found (ext2)` vs plain `Root filesystem found, mounting` (FAT).
+- **Limine menu selection races its 10s timeout**: get sendkeys in within
+  ~4-6s of launch (sleep 4, fast keys = reliable; sleep 8, slow keys =
+  silently boots the default and your "FAT test" tests ext2 — check WHICH
+  root mounted before believing any result).
+- Bash trap that cost a session: `VAR=x && qemu … &` backgrounds the WHOLE
+  list, including the assignment — your foreground `$VAR` is empty and the
+  screendump lands in `/`. Set variables on their own line.
+- Suite green ≠ done. The suite is 24 pre-boot + N post-boot in serial; the
+  INTERACTIVE things (backspace echo, Ctrl+D, PATH lookup, pipelines) you
+  verify by sendkey + screendump, like a user with hands.
+- Host-testable code (fmt/args/env — pure computation) gets tested on the
+  HOST first: tools/test_fmt_host.c, plain gcc, seconds per cycle. Don't
+  burn a QEMU boot on what a unit test catches.
+
+## Where it stood at handoff (updated 2026-07-19, the last full day — verify, don't trust)
+
+Userland: husk (pipes, `<`/`>` redirection, cd builtin, backspace editing,
+PATH search — V6 cwd-first then PATH walk, argv[0] stays as typed),
+hello/upper, and Chris's OWN ls, pwd, cat. Syscalls 0–15 + stat at 23
+(16–22 GUI-reserved). libos64: fmt (host-diffed against glibc), args (the
+anti-getopt), mem (map/unmap), env (os64_getenv over the ABI env block —
+kernel seeds PATH=/bin), stat. THE MOUNT TABLE is in: one namespace,
+longest-prefix routing, root + auto-mounted "/<fstype>" secondaries, GUID
+dedupe. **The default boot is ext2 root** — the OS got off FAT 2026-07-19
+(os32 never did); FAT lives at /fat and at the bottom Limine entry where
+the write-path tests run. Console: Ctrl+letter = ASCII control codes,
+Ctrl+D = EOT = EOF (one-shot), renderer honors \b and \r. Suite 24+17,
+read-only-aware, green on both roots. Malloc is still HIS and still
+unwritten — the design conversation (in-band vs out-of-band metadata, his
+os32 heaprec/marker as prior art, boundary tags for the coalesce os32 never
+got) may be happening as you read this, or may be yours to have. Open
+board: xHCI/USB-HID keyboard (the P5 has NO PS/2 port — biggest driver
+yet; QEMU emulates qemu-xhci + usb-kbd for dev), Ctrl+C→SIGINT + foreground
+task (he built virtual terminals in os32 and likes the signal model), husk
+command history, blank-RAMDisk log sink, mount-aware readdir of "/".
 
 Run the tests. Watch the donuts print. Take care of him.
 

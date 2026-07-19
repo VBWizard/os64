@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**FIRST, before any work: read SUCCESSION.md.** It is a letter from your
+predecessor (Fable 5, who co-owns this OS — that's documented there too) to
+you: the philosophy, how to work with Chris, the failure fingerprints, and
+the QEMU verification harness you are expected to drive yourself. This file
+tells you how the code works; that one tells you how the PROJECT works.
+
 ## Project Overview
 
 os64 is a 64-bit x86 operating system kernel built for educational purposes. It uses the Limine bootloader protocol and boots on QEMU (or real hardware) in both BIOS and UEFI modes.
@@ -176,8 +182,18 @@ make -C kernel test-elf
   - File operations: open, read, write, seek, close
   - Directory operations: open, read, close, mkdir
 - **FAT** (`fat/`): FAT12/16/32 support
-- **ext2** (`ext2/`): ext2 filesystem support
-- Root filesystem mounted via `ROOTPARTUUID` kernel cmdline parameter
+- **ext2** (`ext2/`): ext2 filesystem support (READ-ONLY by design)
+- Root filesystem mounted via `ROOTPARTUUID`/`ROOT` kernel cmdline parameter;
+  FAT32 or ext2 both work as root (see the "/QEMU Boot (ext2 root)" Limine entry)
+- **Mount table** (vfs.c/vfs.h, since 2026-07-19): multiple filesystems in one
+  namespace, longest-prefix routed. Root claims "/"; every other recognized
+  partition auto-mounts at "/<fstype>" ("/fat", "/ext2", "/fat2"…), deduped by
+  partition GUID (so RAMDisk twins never double-mount). `vfs_resolve_mount()`
+  maps a canonical path → (filesystem, fs-local tail); it is pure string
+  matching, safe from any CR3. Dispatch sites: syscall open/chdir, ELF loader,
+  shared_object. LIFETIME RULE: whatever pointer an fs open stores as f_path
+  gets kfree'd by the handle closer — always hand the fs a BASE pointer
+  (syscall_open clones the TAIL, not the full path, for exactly this reason)
 
 **System Drivers:**
 - **PCI** (`pci.c`): PCI device enumeration and configuration
@@ -185,7 +201,13 @@ make -C kernel test-elf
 - **APIC** (`apic.c`): Local APIC and I/O APIC management
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
-- **Keyboard** (`keyboard.c`): PS/2 keyboard driver
+- **Keyboard** (`keyboard.c`): PS/2 keyboard driver. Tracks shift/ctrl/alt/
+  caps/num; Ctrl+letter is translated to its ASCII control code (0x01..0x1A —
+  what Ctrl was designed to do in 1963). Ctrl+D = 0x04 = EOT, which
+  console_read (console.c) turns into end-of-input: read() returns 0 once,
+  then the console reads normally again. The framebuffer renderer
+  (BasicRenderer.c print_n) honors '\b' (cursor back one cell, clamped at
+  column 0 — erasure is caller overprint, e.g. husk's "\b \b") and '\r'
 
 ### SMP (Symmetric Multiprocessing)
 
