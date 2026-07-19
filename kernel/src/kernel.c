@@ -456,5 +456,9 @@ void kernel_main()
 	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
 	__asm__ volatile ("cli\nmov rsp, %0\nsti\n" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
 	printf("Kernel stack initialized, 0x%x bytes\n", KERNEL_STACK_SIZE);
+	// kmalloc works now — give the console its RAM shadow so scrolling stops
+	// READING VRAM (fine in QEMU's RAM framebuffer, ~2 lines/second on the
+	// P5's real write-combined VRAM; see scroll_framebuffer_full).
+	renderer_attach_shadow();
 	kernel_init();
 }

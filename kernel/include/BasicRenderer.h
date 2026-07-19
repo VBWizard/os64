@@ -43,7 +43,20 @@ typedef struct
 
     unsigned int color;
     bool overwrite;
+    // RAM mirror of the framebuffer (same pixels_per_scan_line stride).
+    // NULL until renderer_attach_shadow() — the rule it exists to enforce:
+    // NEVER READ VRAM. Scrolling used to memmove the framebuffer itself,
+    // which is fine when the "framebuffer" is QEMU's RAM and ~2 lines per
+    // second when it is real write-combined VRAM across PCIe (the Bosgame
+    // P5's first scroll, 2026-07-19, was a sight). All reads hit this
+    // mirror; VRAM only ever receives writes.
+    unsigned int *shadow;
 } BasicRenderer;
+
+// Allocate the shadow and copy the live framebuffer into it — the one VRAM
+// read the console will ever perform. Call once kmalloc is up; every print
+// before that scrolls the slow honest way (early boot never fills a screen).
+void renderer_attach_shadow(void);
 
 extern BasicRenderer kRenderer;
 

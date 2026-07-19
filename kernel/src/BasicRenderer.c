@@ -6,6 +6,7 @@
 #include "memcpy.h"
 #include "serial_logging.h"
 #include "spinlock.h"
+#include "kmalloc.h"   // renderer_attach_shadow — the console's RAM mirror
 
 extern BasicRenderer kRenderer;
 uint32_t kFrameBufferBackgroundColor;
@@ -64,6 +65,20 @@ void scroll_framebuffer_full(BasicRenderer *basicrenderer) {
     size_t visible_lines = height - 16; // Height minus one font line
     size_t copy_bytes = visible_lines * pixels_per_scanline * sizeof(unsigned int);
 
+    if (basicrenderer->shadow != NULL) {
+        // The fast path, and the whole reason the shadow exists: scroll in
+        // RAM (memmove reads are cached and cheap), then push the finished
+        // frame to VRAM with a single pure-WRITE pass. Write-combining eats
+        // sequential stores at full speed; it was the READ half of the old
+        // in-place memmove that cost a quarter second per scroll on metal.
+        memmove(basicrenderer->shadow, basicrenderer->shadow + (16 * pixels_per_scanline), copy_bytes);
+        clear_bottom_lines(basicrenderer->shadow, pixels_per_scanline, width, height - 16, height);
+        memcpy(pixPtr, basicrenderer->shadow,
+               (size_t)height * pixels_per_scanline * sizeof(unsigned int));
+        return;
+    }
+
+    // No shadow yet (pre-kmalloc early boot): the honest slow way.
     // Move all lines up by FONT_HEIGHT (16 pixels)
     memmove(pixPtr, pixPtr + (16 * pixels_per_scanline), copy_bytes);
 
@@ -80,7 +95,25 @@ void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer
 
     basicrenderer->framebuffer = framebuffer;
     basicrenderer->psf1_font = psf1_font;
+    basicrenderer->shadow = NULL;   // attached later, once kmalloc exists
     return;
+}
+
+void renderer_attach_shadow(void)
+{
+    size_t bytes = (size_t)kRenderer.framebuffer->height *
+                   kRenderer.framebuffer->pixels_per_scan_line * sizeof(unsigned int);
+    unsigned int *shadow = kmalloc_aligned(bytes);
+    if (shadow == NULL)
+        return;   // no shadow, no harm: the slow path still works
+
+    uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+    // Seed from the live framebuffer — deliberately THE one and only VRAM
+    // read the console ever performs (a few tenths of a second on metal,
+    // once, at boot; from here on VRAM is write-only territory).
+    memcpy(shadow, (void *)kRenderer.framebuffer->base_address, bytes);
+    kRenderer.shadow = shadow;
+    spinlock_release_irqrestore(&kRendererLock, flags);
 }
 
 void moveto(BasicRenderer *basicrenderer, unsigned int x, unsigned int y)
@@ -239,11 +272,16 @@ void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigne
             if (x >= basicrenderer->framebuffer->width || y >= basicrenderer->framebuffer->height)
                 continue;
 
-            if ((*fontPtr & (0b10000000 >> (x - xOff))) > 0) {
-                *(pixPtr + x + (y * basicrenderer->framebuffer->pixels_per_scan_line)) = basicrenderer->color;
-            } else {
-                *(pixPtr + x + (y * basicrenderer->framebuffer->pixels_per_scan_line)) = kFrameBufferBackgroundColor;
-            }
+            // One store to VRAM, one to the shadow (writes only, both) —
+            // the mirror must stay pixel-true or the next scroll's blit
+            // would repaint the screen with stale glyphs.
+            unsigned int px = ((*fontPtr & (0b10000000 >> (x - xOff))) > 0)
+                                  ? basicrenderer->color
+                                  : kFrameBufferBackgroundColor;
+            size_t idx = x + (y * basicrenderer->framebuffer->pixels_per_scan_line);
+            *(pixPtr + idx) = px;
+            if (basicrenderer->shadow != NULL)
+                basicrenderer->shadow[idx] = px;
         }
         fontPtr++;
     }
@@ -263,6 +301,8 @@ void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor)
         for (int64_t x = 0; x < basicrenderer->framebuffer->width; x++)
         {
             *((uint32_t *)(fbBase + 4 * (x + pxlsPerScanline * y))) = color;
+            if (basicrenderer->shadow != NULL)
+                basicrenderer->shadow[x + pxlsPerScanline * y] = color;
         }
     }
 
