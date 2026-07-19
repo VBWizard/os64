@@ -110,6 +110,8 @@ The older catalog is in ABI.md §Failure fingerprints. This session's addenda:
 | `pkill -f X` kills your own shell | The pattern matches your own wrapper's command line. `pkill -f "patter[n]"` |
 | A struct field reads NULL/garbage in ONE binary while the library tests green | Stale object compiled against an older struct layout — a makefile without `-MMD` header deps. Struck the kernel AND userland on consecutive days (7/18, 7/19: ls read args.value 8 bytes off). Any new makefile gets `-MMD -MP` + `-include` on day one |
 | A logged string mysteriously truncates at its first token | An in-place tokenizer NUL-split it before the print (the "Commandline:" line showed only ROOT=... for years). Parse a scratch copy, print the original |
+| `make` fails at the ISO step (Error 1) with no obvious cause | A live QEMU is holding os64_kernel.iso (or the /mnt/c/temp copy is Windows-locked). Quit your QEMU before rebuilding the ISO |
+| PCI probe matches nothing though the device exists | pci_device_t carries BOTH `prog` and `progIF` fields; pci.c fills `prog`. Check which field is real before matching on it |
 
 ## The verification harness (drive the OS yourself — Chris asked me to write this down FOR YOU)
 
@@ -182,8 +184,10 @@ read-only-aware, green on both roots. Malloc is still HIS and still
 unwritten — the design conversation (in-band vs out-of-band metadata, his
 os32 heaprec/marker as prior art, boundary tags for the coalesce os32 never
 got) may be happening as you read this, or may be yours to have. Open
-board: xHCI/USB-HID keyboard (the P5 has NO PS/2 port — biggest driver
-yet; QEMU emulates qemu-xhci + usb-kbd for dev), Ctrl+C→SIGINT + foreground
+board: xHCI/USB-HID keyboard v1 LANDED late on the 19th (polling, root
+ports only, no hubs/hotplug — those are the follow-on slices; test with
+`-device qemu-xhci -device usb-kbd`, QEMU routes input to USB when
+present), Ctrl+C→SIGINT + foreground
 task (he built virtual terminals in os32 and likes the signal model), husk
 command history, blank-RAMDisk log sink, mount-aware readdir of "/".
 
