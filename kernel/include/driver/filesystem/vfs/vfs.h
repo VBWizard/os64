@@ -173,6 +173,12 @@ struct dir_operations
 	int (*read) (vfs_directory_t* vfs_dir, os64_dirent_t* entry);
 	int (*close) (vfs_directory_t* vfs_dir);
 	int (*mkdir) (char* path, vfs_filesystem_t* vfs_f);
+	// stat is readdir for exactly one name: fill the SAME os64_dirent_t that
+	// read() yields, for the object at `path` — file OR directory. (It lives
+	// in dops because the dirent is directory-entry vocabulary, not because
+	// the target must be a directory.) Returns 0 = filled, <0 = no such
+	// path. The path arrives fs-local — mount prefix already stripped.
+	int (*stat) (const char* path, os64_dirent_t* entry, vfs_filesystem_t* vfs_fs);
 };
 	
 struct dentry
@@ -277,6 +283,46 @@ extern dlist_t* kBlockDeviceDList;
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
 extern vfs_filesystem_t* kRootFilesystem;
+
+// ── The mount table ──────────────────────────────────────────────────────────
+// One namespace, many filesystems (the idea is Unix v1's — mount(1) predates
+// almost everything else): each mounted filesystem claims a PATH PREFIX, and
+// every canonical absolute path is routed to the longest matching prefix. The
+// root claims "/"; secondary partitions found at boot are auto-mounted at
+// "/<fstype>" ("/fat", "/ext2", then "/fat2"… if twins appear). A prefix is
+// purely a namespace claim — no directory of that name needs to exist on the
+// root filesystem (mount points as real directories are a refinement Unix
+// added later; we start where it started).
+//
+// kRootFilesystem remains the "/" entry's fs, kept as a convenient alias
+// because half the kernel gates on "is a root mounted yet?".
+
+#define VFS_MAX_MOUNTS 8
+#define VFS_MOUNT_PREFIX_MAX 32
+
+typedef struct {
+	char prefix[VFS_MOUNT_PREFIX_MAX]; // canonical: "/" for root, else "/name"
+	size_t prefix_len;                 // strlen(prefix); 1 marks the root entry
+	uint8_t part_guid[16];             // backing partition GUID — dedupe key, so
+	                                   // a RAMDisk and the NVMe disk it was
+	                                   // imaged from never both mount (first
+	                                   // registered wins, matching the root scan)
+	vfs_filesystem_t *fs;
+} vfs_mount_entry_t;
+
+extern vfs_mount_entry_t kMountTable[VFS_MAX_MOUNTS];
+extern int kMountCount;
+
+// Route a CANONICAL absolute path (vfs_canonicalize_path output — this is why
+// canonicalization happens first) to its filesystem by longest-prefix match.
+// On success, *tail (if non-NULL) points at the fs-local remainder, always
+// itself an absolute path: "/fat/bin/ls" → FAT fs, tail "/bin/ls"; "/fat" →
+// FAT fs, tail "/". For the root fs the tail is the path unchanged. The tail
+// points INTO the caller's path buffer (or at a static "/") — never free it,
+// and clone it if it must outlive the buffer (syscall_open does exactly this).
+// Returns NULL only when nothing is mounted. Pure string matching — no disk
+// I/O, safe from any context.
+vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tail);
 
 // Resolve `path` against `cwd` into a CANONICAL absolute path in `out`:
 // relative paths are prefixed with cwd, "." disappears, ".." pops a component

@@ -20,6 +20,8 @@
 #include "time.h"
 #include "driver/filesystem/vfs/vfs.h"
 #include "driver/filesystem/ext2/ext2_vfs.h"   // ext2_fops/ext2_dops (real-partition test)
+#include "ff.h"   // FR_OK/FR_EXIST — the dops->mkdir seam leaks FatFs codes
+                  // today (known wart); test_vfs_write_mkdir names them
 #include "shared_object.h"
 #include "env.h"
 #include "sprintf.h"
@@ -1048,6 +1050,14 @@ static bool test_ring3_file_io_concurrent(void)
 
 static bool test_ring3_redirect_io(void)
 {
+    // The fixture CREATES files on the root filesystem — on a read-only root
+    // (ext2) there is nothing to create them on. Skipping is the honest
+    // verdict: the write path isn't broken, it's absent by design. The FAT
+    // boot entry runs this for real.
+    if (kRootFilesystem != NULL && kRootFilesystem->fops->write == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_redirect_io (root filesystem is read-only)\n");
+        return true;
+    }
     if (kRootFilesystem == NULL) {
         printd(DEBUG_TESTS, "\tSKIP: test_ring3_redirect_io (no root filesystem mounted)\n");
         return true;
@@ -1171,9 +1181,12 @@ static bool test_ext2_real_partition(void)
         {
             if (dev->block_device->partition_table->parts[p]->filesystemType != FILESYSTEM_TYPE_EXT2)
                 continue;
-            // Assemble a minimal filesystem object by hand: this partition is
-            // NOT mounted into the namespace (no mount table yet — the ext2
-            // ROOT switch comes later); the test drives the driver directly.
+            // Assemble a minimal filesystem object by hand, deliberately
+            // BYPASSING the mount table: this is the driver-level test, and
+            // driving the driver directly keeps it meaningful even now that
+            // the namespace also mounts this partition (test_mount_table
+            // covers the routed path). Read-only driver, no locks — a second
+            // ext2_fs_t on the same partition is harmless.
             fs = kmalloc(sizeof(vfs_filesystem_t));
             if (fs == NULL)
                 return false;
@@ -1286,6 +1299,123 @@ static bool test_ext2_real_partition(void)
     return true;
 }
 
+// The mount table: longest-prefix routing over the LIVE table built at boot.
+// Semantics first (boundaries, tails), then real I/O through whatever
+// secondary mounts this boot actually produced — "/ext2" when FAT is root,
+// "/fat" when ext2 is (both partitions carry known content, so either way
+// there is something to verify end to end).
+static bool test_mount_table(void)
+{
+    if (kMountCount < 1 || kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_mount_table - no mounts (count=%d)\n", kMountCount);
+        return false;
+    }
+
+    // 1. The root always resolves, tail unchanged.
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount("/", &tail);
+    if (fs != kRootFilesystem || strncmp(tail, "/", 2) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_mount_table - '/' did not resolve to root\n");
+        return false;
+    }
+
+    // 2. Every non-root entry: exact prefix → its fs with tail "/", a child
+    //    path → tail with the prefix stripped, and a NON-boundary lookalike
+    //    ("/fatzz") must fall through to the root, never to the mount.
+    char probe[VFS_MOUNT_PREFIX_MAX + 8];
+    for (int i = 0; i < kMountCount; i++)
+    {
+        vfs_mount_entry_t *m = &kMountTable[i];
+        if (m->prefix_len == 1)
+            continue;
+
+        fs = vfs_resolve_mount(m->prefix, &tail);
+        if (fs != m->fs || strncmp(tail, "/", 2) != 0) {
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - '%s' exact match wrong (tail=%s)\n",
+                   m->prefix, tail ? tail : "NULL");
+            return false;
+        }
+
+        sprintf(probe, "%s/x", m->prefix);
+        fs = vfs_resolve_mount(probe, &tail);
+        if (fs != m->fs || strncmp(tail, "/x", 3) != 0) {
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - '%s' child tail wrong (tail=%s)\n",
+                   probe, tail ? tail : "NULL");
+            return false;
+        }
+
+        sprintf(probe, "%szz", m->prefix);
+        fs = vfs_resolve_mount(probe, &tail);
+        if (fs == m->fs) {
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - '%s' matched prefix '%s' (boundary leak)\n",
+                   probe, m->prefix);
+            return false;
+        }
+    }
+
+    // 3. Routed I/O through each secondary mount: list its root via dops
+    //    (must yield at least one entry), plus a content check where we know
+    //    the content: /ext2/hello.txt is Linux-authored, /fat/partition_info
+    //    ships on every FAT image.
+    int verified = 0;
+    for (int i = 0; i < kMountCount; i++)
+    {
+        vfs_mount_entry_t *m = &kMountTable[i];
+        if (m->prefix_len == 1)
+            continue;
+
+        vfs_directory_t *dir = NULL;
+        fs = vfs_resolve_mount(m->prefix, &tail);
+        if (fs->dops == NULL || fs->dops->open == NULL ||
+            fs->dops->open(&dir, tail, fs) != 0) {
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - opendir %s failed\n", m->prefix);
+            return false;
+        }
+        os64_dirent_t de;
+        int entries = 0;
+        while (fs->dops->read(dir, &de) == 1)
+            entries++;
+        fs->dops->close(dir);
+        if (entries == 0) {
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - %s listed empty\n", m->prefix);
+            return false;
+        }
+
+        const char *file_probe = NULL;
+        const char *expect = NULL;
+        if (strncmp(m->prefix, "/ext2", 6) == 0) {
+            file_probe = "/ext2/hello.txt";
+            expect = "Hello from a real ext2";
+        } else if (strncmp(m->prefix, "/fat", 5) == 0) {
+            file_probe = "/fat/partition_info";
+            expect = NULL;   // content varies; opening + reading >0 is the check
+        }
+        if (file_probe != NULL)
+        {
+            vfs_file_t *f = NULL;
+            char buf[64];
+            fs = vfs_resolve_mount(file_probe, &tail);
+            if (fs != m->fs ||
+                fs->fops->open(&f, tail, "r", fs) != 0) {
+                printd(DEBUG_TESTS, "\tFAIL: test_mount_table - open %s failed\n", file_probe);
+                return false;
+            }
+            int n = fs->fops->read(f, buf, sizeof(buf));
+            fs->fops->close(f);
+            if (n <= 0 || (expect != NULL && strncmp(buf, expect, strlen(expect)) != 0)) {
+                printd(DEBUG_TESTS, "\tFAIL: test_mount_table - %s content wrong (n=%d)\n",
+                       file_probe, n);
+                return false;
+            }
+            verified++;
+        }
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_mount_table (%d mounts, %d routed content checks)\n",
+           kMountCount, verified);
+    return true;
+}
+
 // map_unmap.c drives the heap primitive at CPL 3: anonymous regions demand-
 // paged and zeroed, guard-page separation, region independence, whole-region
 // unmap with strict base validation. 0x3A9xxxxx names the failed step.
@@ -1364,6 +1494,126 @@ static bool test_ring3_cwd(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_ring3_cwd (getcwd/chdir, canonicalization, relative open+spawn, inheritance)\n");
+    return true;
+}
+
+// The root-filesystem WRITE path, properly inside the framework at last:
+// create/write/read-back a file, mkdir, create/write/read-back inside the new
+// directory. This is the useful half of the old boot-time testVFS() — which
+// lived OUTSIDE the framework in tests.c, ran from kernel.c after the suite,
+// and PANICKED on failure (its panic ate a Friday: "Root filesystem disk test
+// failed: 4294967291" was this code trusting a then-void nvme write). Ported
+// at Chris's call, 2026-07-19; the legacy block and tests.c are gone. The
+// read half wasn't ported — file_io/dir_list/mount_table already cover reads
+// through the real syscall path.
+static bool test_vfs_write_mkdir(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_vfs_write_mkdir (no root filesystem mounted)\n");
+        return true;
+    }
+    // Writing needs a filesystem that writes AND a device that writes —
+    // ext2 is read-only by design, so this SKIPs on the ext2-root boots and
+    // runs for real on the FAT entry.
+    if (kRootFilesystem->fops->write == NULL || kRootFilesystem->bops->write == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_vfs_write_mkdir (root filesystem is read-only)\n");
+        return true;
+    }
+
+    static const char msg1[] = "Hello world from Chris!\n";        // heritage strings —
+    static const char msg2[] = "Hello world from Chris too!\n";    // testVFS's originals
+    char buf[64];
+    vfs_file_t *f = NULL;
+
+    // 1. Create, write, read back at the root.
+    if (kRootFilesystem->fops->open(&f, "/test2", "c", kRootFilesystem) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - create /test2 failed\n");
+        return false;
+    }
+    kRootFilesystem->fops->write(f, msg1, sizeof(msg1) - 1);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+    if (kRootFilesystem->fops->open(&f, "/test2", "r", kRootFilesystem) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - reopen /test2 failed\n");
+        return false;
+    }
+    int n = kRootFilesystem->fops->read(f, buf, sizeof(buf));
+    kRootFilesystem->fops->close(f);
+    if (n != (int)(sizeof(msg1) - 1) || strncmp(buf, msg1, sizeof(msg1) - 1) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - /test2 read-back mismatch (n=%d)\n", n);
+        return false;
+    }
+
+    // 2. mkdir. The dops->mkdir seam leaks raw FatFs codes today (a known
+    //    wart — no second filesystem implements mkdir yet to force the
+    //    neutral contract): FR_OK fresh, FR_EXIST on a persistent image
+    //    that's been through this test before. Both are success here.
+    int r = kRootFilesystem->dops->mkdir("/testdir", kRootFilesystem);
+    if (r != FR_OK && r != FR_EXIST) {
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - mkdir /testdir failed (%d)\n", r);
+        return false;
+    }
+
+    // 3. A file INSIDE the new directory — proves the directory is real.
+    if (kRootFilesystem->fops->open(&f, "/testdir/testfile", "c", kRootFilesystem) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - create /testdir/testfile failed\n");
+        return false;
+    }
+    kRootFilesystem->fops->write(f, msg2, sizeof(msg2) - 1);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+    if (kRootFilesystem->fops->open(&f, "/testdir/testfile", "r", kRootFilesystem) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - reopen /testdir/testfile failed\n");
+        return false;
+    }
+    n = kRootFilesystem->fops->read(f, buf, sizeof(buf));
+    kRootFilesystem->fops->close(f);
+    if (n != (int)(sizeof(msg2) - 1) || strncmp(buf, msg2, sizeof(msg2) - 1) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - /testdir/testfile read-back mismatch (n=%d)\n", n);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_vfs_write_mkdir (create/write/read-back, mkdir, nested file)\n");
+    return true;
+}
+
+// stat_test.c proves the stat syscall at CPL 3: file with size, directory,
+// the synthesized root entry, in-band absence, relative resolution, and
+// routing across the mount table. 0x57A7xxxx names the failed step.
+#define STAT_TEST_RETVAL 0x57A7600DUL
+
+static bool test_ring3_stat(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_stat (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/stat_test", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_stat - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // Six stats, all disk I/O through call_in_kernel_context — allow 2s.
+    for (int i = 0; i < 200 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_stat - task did not exit within 2 seconds\n");
+        return false;
+    }
+
+    if (task->retVal != STAT_TEST_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_stat - retVal=0x%lx, expected 0x%lx "
+               "(0x57A7xxxx identifies the failed step; see test/elf/stat_test.c)\n",
+               task->retVal, (uint64_t)STAT_TEST_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_stat (file, dir, root, absence, relative, cross-mount)\n");
     return true;
 }
 
@@ -1597,8 +1847,11 @@ static void register_builtin_tests(void)
     test_register("ring3_redirect_io", test_ring3_redirect_io, TEST_PHASE_POSTBOOT);
     test_register("ring3_dir_list", test_ring3_dir_list, TEST_PHASE_POSTBOOT);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
+    test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("ring3_map_unmap", test_ring3_map_unmap, TEST_PHASE_POSTBOOT);
     test_register("ring3_cwd", test_ring3_cwd, TEST_PHASE_POSTBOOT);
+    test_register("ring3_stat", test_ring3_stat, TEST_PHASE_POSTBOOT);
+    test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

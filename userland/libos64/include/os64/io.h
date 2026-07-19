@@ -76,6 +76,19 @@ long os64_opendir(const char *path);
 //     os64_close(d);
 long os64_readdir(int handle, os64_dirent_t *entry);
 
+// stat is readdir for exactly one name: fill *entry for whatever `path`
+// names — file OR directory — without opening it. Same os64_dirent_t that
+// readdir yields (one vocabulary for "an entry"; POSIX's separate struct
+// stat was a fork os64 declines). Relative paths resolve against cwd.
+// Returns 0 with *entry filled, or negative if nothing lives at `path`.
+//
+// The question it answers is "what is this?" — the spine of `ls file`:
+//     os64_dirent_t e;
+//     if (os64_stat(arg, &e) < 0)        ...no such thing...
+//     else if (e.flags & OS64_DE_DIR)    ...opendir/readdir loop...
+//     else                               ...print e.name, e.size directly...
+long os64_stat(const char *path, os64_dirent_t *entry);
+
 // Create a pipe. h[0] = read end, h[1] = write end. Returns 0, or negative.
 //
 // You now hold BOTH ends. Hand one to each child via os64_spawn_redirected()

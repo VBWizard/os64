@@ -50,6 +50,11 @@ long os64_opendir(const char *path)
     return (long)os64_syscall2(SYSCALL_OPEN, (uint64_t)path, (uint64_t)"d");
 }
 
+long os64_stat(const char *path, os64_dirent_t *entry)
+{
+    return (long)os64_syscall2(SYSCALL_STAT, (uint64_t)path, (uint64_t)entry);
+}
+
 long os64_readdir(int handle, os64_dirent_t *entry)
 {
     return (long)os64_syscall2(SYSCALL_READDIR, (uint64_t)(int64_t)handle,

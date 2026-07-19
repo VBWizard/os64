@@ -513,6 +513,38 @@ static int fat_mkdir(char* path, vfs_filesystem_t* vfs_fs)
 	return f_mkdir(lPath);
 }
 
+// stat is readdir for exactly one name (dops->stat in vfs.h): same FILINFO →
+// os64_dirent_t translation as fat_read_dir, sourced by f_stat instead of
+// f_readdir.
+static int fat_stat(const char* path, os64_dirent_t* entry, vfs_filesystem_t* vfs_fs)
+{
+	// FatFs refuses f_stat on the volume root BY DESIGN (the root directory
+	// has no directory entry of its own to report — true on the actual disk,
+	// not just in FatFs). Synthesize the answer instead: it's a directory.
+	if (path[0] == '/' && path[1] == '\0')
+	{
+		entry->name[0] = '/';
+		entry->name[1] = '\0';
+		entry->size = 0;
+		entry->flags = OS64_DE_DIR;
+		return 0;
+	}
+
+	char lPath[255];
+	strncpy(lPath, path, 255);
+	create_fat_path(lPath, vfs_fs);
+
+	FILINFO fi;
+	if (f_stat(lPath, &fi) != FR_OK)
+		return -1;
+
+	strncpy(entry->name, fi.fname, OS64_DIRENT_NAME_MAX);
+	entry->name[OS64_DIRENT_NAME_MAX] = '\0';
+	entry->size = (fi.fattrib & AM_DIR) ? 0 : (uint64_t)fi.fsize;
+	entry->flags = (fi.fattrib & AM_DIR) ? OS64_DE_DIR : 0;
+	return 0;
+}
+
 // FAT filesystem operations
 vfs_file_operations_t fat_fops = {
 	.initialize = fat_initialize,
@@ -536,5 +568,6 @@ vfs_directory_operations_t fat_dops = {
 	.open=fat_open_dir,
 	.close=fat_close_dir,
 	.read=fat_read_dir,
-	.mkdir=fat_mkdir
+	.mkdir=fat_mkdir,
+	.stat=fat_stat
 };

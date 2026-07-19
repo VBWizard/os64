@@ -302,12 +302,16 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path)
         return existing;
     }
 
-    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL || kRootFilesystem->fops->open == NULL) {
+    // Mount-routed like the ELF loader: a DT_NEEDED library resolves through
+    // the mount table, so "/lib/…" comes from wherever "/lib" actually lives.
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(path, &tail);
+    if (fs == NULL || fs->fops == NULL || fs->fops->open == NULL) {
         return NULL;
     }
 
     vfs_file_t *file = NULL;
-    if (kRootFilesystem->fops->open(&file, path, "r", kRootFilesystem) != 0) {
+    if (fs->fops->open(&file, tail, "r", fs) != 0) {
         return NULL;
     }
 
@@ -315,8 +319,8 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path)
     Elf64_Phdr *phdrs = NULL;
     Elf64_Half phnum = 0;
     if (elf_parse_image(file, &image, &phdrs, &phnum) != 0) {
-        if (kRootFilesystem->fops->close != NULL) {
-            kRootFilesystem->fops->close(file);
+        if (fs->fops->close != NULL) {
+            fs->fops->close(file);
         }
         return NULL;
     }
@@ -396,8 +400,8 @@ fail_parsed:
     // Common failure cleanup once the ELF has been parsed: nothing has been
     // registered yet, so the file handle and the parsed image (plus its
     // tables) are still exclusively ours to release.
-    if (kRootFilesystem->fops->close != NULL) {
-        kRootFilesystem->fops->close(file);
+    if (fs->fops->close != NULL) {
+        fs->fops->close(file);
     }
     elf_image_free(image);
     kfree(phdrs);

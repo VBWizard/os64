@@ -73,6 +73,8 @@ static uint64_t syscall_getcwd(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -110,6 +112,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_UNMAP,     "unmap",     syscall_unmap,     false, 0x01),  // arg0 = region base (user VA)
 	SYSCALL_DEFINE(SYSCALL_GETCWD,    "getcwd",    syscall_getcwd,    false, 0x01),  // arg0 = out buffer
 	SYSCALL_DEFINE(SYSCALL_CHDIR,     "chdir",     syscall_chdir,     false, 0x01),  // arg0 = path
+	SYSCALL_DEFINE(SYSCALL_STAT,      "stat",      syscall_stat,      false, 0x03),  // arg0 = path, arg1 = dirent out ptr
 };
 
 uint64_t _syscall_dispatch(
@@ -927,6 +930,11 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 typedef struct {
 	char        mode[4];      // "r"/"w"/"a"/"c"/"d" — validated before we get here
 	char       *path_copy;    // kmalloc'd, becomes f_path, outlives the syscall
+	vfs_filesystem_t *fs;     // mount-resolved BEFORE kernel context (pure
+	                          // string matching); path_copy is the fs-local
+	                          // TAIL, which is what the fs must see AND what
+	                          // f_path must be (the handle closer kfree's
+	                          // f_path — it has to be a base pointer)
 	vfs_file_t *file;         // out: the opened file       (file modes)
 	vfs_directory_t *dir;     // out: the opened directory  (mode "d")
 	volatile long result;     // 0 on success, negative on failure
@@ -942,26 +950,22 @@ static void open_do(void *arg)
 	// is just open asking for a different thing back.
 	if (p->mode[0] == 'd')
 	{
-		if (kRootFilesystem == NULL || kRootFilesystem->dops == NULL ||
-		    kRootFilesystem->dops->open == NULL)
+		if (p->fs->dops == NULL || p->fs->dops->open == NULL)
 		{
 			p->result = -1;
 			return;
 		}
-		p->result = kRootFilesystem->dops->open(&p->dir, p->path_copy,
-		                                        kRootFilesystem);
+		p->result = p->fs->dops->open(&p->dir, p->path_copy, p->fs);
 		return;
 	}
 
-	if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
-	    kRootFilesystem->fops->open == NULL)
+	if (p->fs->fops == NULL || p->fs->fops->open == NULL)
 	{
 		p->result = -1;
 		return;
 	}
 
-	p->result = kRootFilesystem->fops->open(&p->file, p->path_copy, p->mode,
-	                                        kRootFilesystem);
+	p->result = p->fs->fops->open(&p->file, p->path_copy, p->mode, p->fs);
 }
 
 // Resolve a just-copied user path against the task's cwd into canonical
@@ -1054,8 +1058,21 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
+	// Route the canonical path to its mounted filesystem HERE, before kernel
+	// context — the resolver is pure string matching against the mount table
+	// (kernel .data, visible from any CR3). What gets cloned below is the
+	// fs-local TAIL: the fs stores that pointer as f_path and the handle
+	// closer kfree's it, so it must be a base pointer, never path+offset.
+	const char *tail = NULL;
+	p->fs = vfs_resolve_mount(path, &tail);
+	if (p->fs == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
 	size_t plen = 0;
-	while (path[plen] != '\0')
+	while (tail[plen] != '\0')
 		plen++;
 	p->path_copy = kmalloc(plen + 1);
 	if (p->path_copy == NULL)
@@ -1063,7 +1080,7 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		kfree(p);
 		return SYSCALL_RESULT_INVALID;
 	}
-	memcpy(p->path_copy, path, plen + 1);
+	memcpy(p->path_copy, tail, plen + 1);
 
 	p->file = NULL;
 	p->dir = NULL;
@@ -1076,7 +1093,7 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (p->result != 0 || (is_dir ? (void *)p->dir : (void *)p->file) == NULL)
 	{
 		printd(DEBUG_SYSCALL, "open: task %s: '%s' mode '%s' failed\n",
-		       task->exename, p->path_copy, p->mode);
+		       task->exename, path, p->mode);   // full path — tail loses the mount
 		kfree(p->path_copy);
 		kfree(p);
 		return SYSCALL_RESULT_INVALID;   // no such file/directory / bad path
@@ -1114,7 +1131,7 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 
 	printd(DEBUG_SYSCALL, "open: task %s: '%s' mode '%s' -> handle %d\n",
-	       task->exename, p->path_copy, p->mode, h);
+	       task->exename, path, p->mode, h);   // full path — tail loses the mount
 	kfree(p);
 	return (uint64_t)h;
 }
@@ -1347,7 +1364,10 @@ static uint64_t syscall_getcwd(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // checking at change time is the entire advantage of kernel-owned cwd over
 // a writable environment string — a cwd can never hold garbage.
 typedef struct {
-	char path[TASK_MAX_PATH_LEN];
+	char path[TASK_MAX_PATH_LEN];  // FULL canonical path — this becomes cwd
+	vfs_filesystem_t *fs;          // mount-resolved from path (task context)
+	const char *fs_tail;           // fs-local remainder, points into path (or
+	                               // at a static "/") — transient, never freed
 	vfs_directory_t *dir;
 	volatile long result;
 } chdir_params_t;
@@ -1356,15 +1376,14 @@ static void chdir_do(void *arg)
 {
 	chdir_params_t *p = (chdir_params_t *)arg;
 
-	if (kRootFilesystem == NULL || kRootFilesystem->dops == NULL ||
-	    kRootFilesystem->dops->open == NULL)
+	if (p->fs->dops == NULL || p->fs->dops->open == NULL)
 	{
 		p->result = -1;
 		return;
 	}
-	p->result = kRootFilesystem->dops->open(&p->dir, p->path, kRootFilesystem);
+	p->result = p->fs->dops->open(&p->dir, p->fs_tail, p->fs);
 	if (p->result == 0 && p->dir != NULL)
-		kRootFilesystem->dops->close(p->dir);   // frees what open allocated
+		p->fs->dops->close(p->dir);   // frees what open allocated
 }
 
 // chdir(path) — resolve against the current cwd, canonicalize, validate,
@@ -1395,6 +1414,18 @@ static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
+	// Route to the mounted filesystem (cwd may cross into "/fat", "/ext2"…).
+	// The FULL canonical path is what cwd stores; the fs only validates its
+	// own tail. A bare mount prefix ("cd /fat") yields tail "/" — the fs root
+	// — which always exists, so mount prefixes are always enterable.
+	p->fs_tail = NULL;
+	p->fs = vfs_resolve_mount(p->path, &p->fs_tail);
+	if (p->fs == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
 	p->dir = NULL;
 	p->result = -1;
 	// The existence check walks the directory tree — disk I/O, kernel context.
@@ -1413,6 +1444,88 @@ static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// fits with room to spare.)
 	memcpy(task->cwd, p->path, sizeof(p->path));
 	printd(DEBUG_SYSCALL, "chdir: task %s: cwd = '%s'\n", task->exename, task->cwd);
+	kfree(p);
+	return 0;
+}
+
+// stat's kernel-context half: one dops->stat, into the HHDM params block.
+typedef struct {
+	char path[TASK_MAX_PATH_LEN];  // full canonical path (kept for logging)
+	vfs_filesystem_t *fs;          // mount-resolved in task context
+	const char *fs_tail;           // fs-local remainder; points into path or
+	                               // at a static "/" — transient, never freed
+	os64_dirent_t entry;           // out, when result == 0
+	volatile long result;
+} stat_params_t;
+
+static void stat_do(void *arg)
+{
+	stat_params_t *p = (stat_params_t *)arg;
+	p->result = (p->fs->dops != NULL && p->fs->dops->stat != NULL)
+	                ? p->fs->dops->stat(p->fs_tail, &p->entry, p->fs) : -1;
+}
+
+// stat(path, entry_out) — fill one os64_dirent_t for the object at `path`,
+// file or directory: the answer to "what is this one name?" without opening
+// it. Same struct readdir delivers — stat is readdir for exactly one name —
+// so callers speak ONE vocabulary for "an entry" (this is 1971's oldest
+// surviving syscall idea, minus POSIX's stat-vs-dirent split). Returns 0
+// with *entry_out filled, or a SYSCALL_RESULT_* sentinel / negative on
+// absence. ls uses this to tell a file argument from a directory argument.
+static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	char raw[TASK_MAX_PATH_LEN];
+	if (!copy_user_string((const char *)arg0, raw, sizeof(raw)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	stat_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	if (!resolve_user_path(task, raw, p->path, sizeof(p->path)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	p->fs_tail = NULL;
+	p->fs = vfs_resolve_mount(p->path, &p->fs_tail);
+	if (p->fs == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
+	p->result = -1;
+	// Path resolution walks the directory tree — disk I/O, kernel context.
+	call_in_kernel_context(stat_do, p);
+
+	if (p->result != 0)
+	{
+		printd(DEBUG_SYSCALL, "stat: task %s: '%s' — no such path\n",
+		       task->exename, p->path);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	if (!copy_to_user_buffer((void *)arg1, &p->entry, sizeof(p->entry)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	printd(DEBUG_SYSCALL, "stat: task %s: '%s' -> %s, size %lu\n",
+	       task->exename, p->path,
+	       (p->entry.flags & OS64_DE_DIR) ? "directory" : "file",
+	       p->entry.size);
 	kfree(p);
 	return 0;
 }

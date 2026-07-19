@@ -33,6 +33,9 @@
 #define SYSCALL_UNMAP      13
 #define SYSCALL_GETCWD     14
 #define SYSCALL_CHDIR      15
+// 16-22 are RESERVED for the GUI block (see below) — defined before stat
+// arrived, and reserved means reserved. File syscalls resume at 23.
+#define SYSCALL_STAT       23
 
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the

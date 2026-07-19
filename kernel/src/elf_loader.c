@@ -577,16 +577,22 @@ int elf_load_from_file(task_t *task, vfs_file_t *file)
 /// @brief Open an ELF by path and populate a task from it.
 int elf_load_from_path(task_t *task, const char *path)
 {
-    if (task == NULL || path == NULL || kRootFilesystem == NULL) {
+    if (task == NULL || path == NULL) {
+        return -1;
+    }
+
+    // Mount-routed: programs can live on ANY mounted filesystem now —
+    // "/fat/bin/ls" runs from the FAT volume when ext2 is root, and vice
+    // versa. (A NULL from the resolver means nothing is mounted at all,
+    // the same gate kRootFilesystem==NULL used to provide.)
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(path, &tail);
+    if (fs == NULL || fs->fops == NULL || fs->fops->open == NULL) {
         return -1;
     }
 
     vfs_file_t *file = NULL;
-    if (kRootFilesystem->fops == NULL || kRootFilesystem->fops->open == NULL) {
-        return -1;
-    }
-
-    if (kRootFilesystem->fops->open(&file, path, "r", kRootFilesystem) != 0) {
+    if (fs->fops->open(&file, tail, "r", fs) != 0) {
         return -1;
     }
 
@@ -611,15 +617,18 @@ int elf_load_from_path(task_t *task, const char *path)
 // shell is perfectly capable of printing.
 bool elf_can_load(const char *path)
 {
-    if (path == NULL || kRootFilesystem == NULL) {
+    if (path == NULL) {
         return false;
     }
-    if (kRootFilesystem->fops == NULL || kRootFilesystem->fops->open == NULL) {
+
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(path, &tail);
+    if (fs == NULL || fs->fops == NULL || fs->fops->open == NULL) {
         return false;
     }
 
     vfs_file_t *file = NULL;
-    if (kRootFilesystem->fops->open(&file, path, "r", kRootFilesystem) != 0) {
+    if (fs->fops->open(&file, tail, "r", fs) != 0) {
         printd(DEBUG_TASK, "elf_can_load: no such file: %s\n", path);
         return false;   // the typo case
     }
@@ -631,8 +640,8 @@ bool elf_can_load(const char *path)
         printd(DEBUG_TASK, "elf_can_load: not a loadable ELF64: %s\n", path);
     }
 
-    if (kRootFilesystem->fops->close != NULL) {
-        kRootFilesystem->fops->close(file);
+    if (fs->fops->close != NULL) {
+        fs->fops->close(file);
     }
 
     return loadable;
@@ -640,15 +649,18 @@ bool elf_can_load(const char *path)
 
 bool elf_is_dynamic(const char *path)
 {
-    if (path == NULL || kRootFilesystem == NULL) {
+    if (path == NULL) {
         return false;
     }
-    if (kRootFilesystem->fops == NULL || kRootFilesystem->fops->open == NULL) {
+
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(path, &tail);
+    if (fs == NULL || fs->fops == NULL || fs->fops->open == NULL) {
         return false;
     }
 
     vfs_file_t *file = NULL;
-    if (kRootFilesystem->fops->open(&file, path, "r", kRootFilesystem) != 0) {
+    if (fs->fops->open(&file, tail, "r", fs) != 0) {
         return false;
     }
 
@@ -668,8 +680,8 @@ bool elf_is_dynamic(const char *path)
         kfree(phdrs);
     }
 
-    if (kRootFilesystem->fops->close != NULL) {
-        kRootFilesystem->fops->close(file);
+    if (fs->fops->close != NULL) {
+        fs->fops->close(file);
     }
 
     return dynamic;

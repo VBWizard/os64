@@ -489,6 +489,48 @@ static int ext2_close_dir(vfs_directory_t *vfs_dir)
 	return 0;
 }
 
+// stat is readdir for exactly one name (dops->stat in vfs.h): resolve the
+// path to its inode and translate to the fs-neutral dirent — same vocabulary
+// ext2_read_dir speaks, sourced by path resolution instead of iteration.
+static int ext2_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vfs_fs)
+{
+	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
+
+	ext2_handle_t probe;
+	uint32_t ino = ext2_resolve_path(vfs_fs, e, path, &probe.inode);
+	if (ino == 0)
+		return -1;
+
+	// The name is the path's last component ("/dir1/deep.txt" → "deep.txt");
+	// the root's own name is "/" (it has no parent entry to be named by —
+	// the same truth fat_stat synthesizes for). Paths arrive canonical, so
+	// no trailing slashes to fend off.
+	if (path[0] == '/' && path[1] == '\0')
+	{
+		entry->name[0] = '/';
+		entry->name[1] = '\0';
+	}
+	else
+	{
+		const char *name = path;
+		for (const char *p = path; *p != '\0'; p++)
+			if (*p == '/' && p[1] != '\0')
+				name = p + 1;
+		size_t n = 0;
+		while (name[n] != '\0' && n < OS64_DIRENT_NAME_MAX)
+		{
+			entry->name[n] = name[n];
+			n++;
+		}
+		entry->name[n] = '\0';
+	}
+
+	bool is_dir = (probe.inode.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
+	entry->size = is_dir ? 0 : probe.inode.i_size;
+	entry->flags = is_dir ? OS64_DE_DIR : 0;
+	return 0;
+}
+
 // ── Mount-time initialization ───────────────────────────────────────────────
 
 int ext2_initialize_filesystem(vfs_filesystem_t *fs)
@@ -591,4 +633,5 @@ vfs_directory_operations_t ext2_dops = {
 	.open  = ext2_open_dir,
 	.read  = ext2_read_dir,
 	.close = ext2_close_dir,
+	.stat  = ext2_stat,
 };

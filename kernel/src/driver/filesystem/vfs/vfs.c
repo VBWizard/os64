@@ -3,6 +3,7 @@
 #include "driver/filesystem/vfs/vfs.h"
 #include "kmalloc.h"
 #include "memcpy.h"
+#include "memcmp.h"
 #include "memset.h"
 #include "strings/strings.h"
 #include "panic.h"
@@ -15,30 +16,74 @@
 
 uint8_t kFatDiskNumber=0;
 
+// The mount table (see vfs.h for the design note). Filled by
+// kRegisterFilesystem; consulted by vfs_resolve_mount. Boot-time only writes
+// today, so no lock — revisit when mount/umount syscalls exist.
+vfs_mount_entry_t kMountTable[VFS_MAX_MOUNTS];
+int kMountCount = 0;
+
+vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tail)
+{
+	vfs_mount_entry_t *best = NULL;
+
+	for (int i = 0; i < kMountCount; i++)
+	{
+		vfs_mount_entry_t *m = &kMountTable[i];
+		if (m->prefix_len == 1)
+		{
+			// The root ("/") matches every absolute path, as the fallback.
+			if (best == NULL)
+				best = m;
+			continue;
+		}
+		// "/fat" must match "/fat" and "/fat/…" but never "/fatso" — the
+		// character after the prefix has to be a boundary.
+		if (strncmp(canonical_path, m->prefix, m->prefix_len) == 0 &&
+		    (canonical_path[m->prefix_len] == '\0' || canonical_path[m->prefix_len] == '/'))
+		{
+			if (best == NULL || m->prefix_len > best->prefix_len)
+				best = m;
+		}
+	}
+
+	if (best == NULL)
+		return NULL;   // nothing mounted at all
+
+	if (tail != NULL)
+	{
+		if (best->prefix_len == 1)
+			*tail = canonical_path;                    // root: path unchanged
+		else if (canonical_path[best->prefix_len] == '\0')
+			*tail = "/";                               // "/fat" → fs root
+		else
+			*tail = canonical_path + best->prefix_len; // "/fat/x" → "/x"
+	}
+	return best->fs;
+}
+
 vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps)
 {
     vfs_filesystem_t *fs;
-	
+
     fs = kmalloc(sizeof(vfs_filesystem_t));
     memset(fs, 0, sizeof(vfs_filesystem_t));
-	
+
 	fs->partNumber = partNo;
     fs->mount = kmalloc(sizeof(vfs_mount_t));
-    
+
     fs->mount->mnt_root = kmalloc(sizeof(dentry_t));
-    fs->mount->mnt_root->d_name = kmalloc(strlen(mountPoint));
+    fs->mount->mnt_root->d_name = kmalloc(strlen(mountPoint) + 1);   // +1: the NUL
     strcpy(fs->mount->mnt_root->d_name,mountPoint);
-    
+
     //See if the filesystem being mounted is the root of the filesystem
     if (strncmp(mountPoint,"/",1024)==0)
         fs->mount->mnt_root->d_parent = (dentry_t*)DENTRY_ROOT;
-    else if (strncmp(mountPoint,"/pipe/",1024)==0)
-    {}
-    else if (strncmp(mountPoint,"/proc",1024)==0)
-    {}
-    else
-        panic("Mounting filesystem as non-root ... this is not yet supported");
-    
+    else if (mountPoint[0] != '/')
+        panic("Mounting filesystem at non-absolute mount point '%s'", mountPoint);
+    // Any other absolute prefix is a legal mount point now — the mount table
+    // routes it. (The old code allowed only "/", "/pipe/" and "/proc" and
+    // panicked on everything else; that guard died with the single-root era.)
+
     fs->fops = kmalloc(sizeof(vfs_file_operations_t));
     memcpy(fs->fops, fileOps,sizeof(vfs_file_operations_t));
 	fs->dops = kmalloc(sizeof(vfs_directory_operations_t));
@@ -50,11 +95,44 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
     fs->vfsWriteBuffer = NULL;
     fs->vfsReadBuffer = NULL;
 	fs->block_device_info = device;
+	// The dlist entry must exist BEFORE initialize: FatFs's disk_read glue
+	// resolves its drive number back to the device by walking this list.
 	add_block_device(fs);
 	if (device->block_device->partition_table->parts[partNo]->filesystemType==FILESYSTEM_TYPE_FAT32)
 		fs->fatDiskNumber=++kFatDiskNumber;
 	if (fs->fops->initialize != NULL)
-		fs->fops->initialize(fs);
+	{
+		// A failed initialize (unreadable superblock, feature we can't honor)
+		// means NO mount: the fs never enters the mount table, so no path can
+		// route to it. The dlist entry stays behind (unwinding it needs a
+		// remove that doesn't exist yet) — harmless, its fatDiskNumber is
+		// unique and nothing else matches on it. Boot-time, rare, logged.
+		int initResult = fs->fops->initialize(fs);
+		if (initResult != 0)
+		{
+			printd(DEBUG_BOOT, "BOOT: filesystem at %s failed to initialize (%d) — not mounted\n",
+			       mountPoint, initResult);
+			return NULL;
+		}
+	}
+
+	// Claim the prefix in the mount table — this is the moment the filesystem
+	// becomes reachable by path.
+	if (kMountCount >= VFS_MAX_MOUNTS)
+	{
+		printd(DEBUG_BOOT, "BOOT: mount table full (%u), %s not mounted\n",
+		       VFS_MAX_MOUNTS, mountPoint);
+		return NULL;
+	}
+	vfs_mount_entry_t *m = &kMountTable[kMountCount];
+	strncpy(m->prefix, mountPoint, VFS_MOUNT_PREFIX_MAX - 1);
+	m->prefix[VFS_MOUNT_PREFIX_MAX - 1] = '\0';
+	m->prefix_len = strlen(m->prefix);
+	memcpy(m->part_guid,
+	       device->block_device->partition_table->parts[partNo]->uniquePartGUID, 16);
+	m->fs = fs;
+	kMountCount++;
+
     return fs;
 }
 
@@ -168,6 +246,80 @@ char* compare_part_uuids(const char* rootPartUUID, const char* currPartUUID)
 	return NULL;
 }
 
+// Is this partition's GUID already backing a mount? (Dedupe: RAMDisk boots
+// register the RAMDisk image AND leave the NVMe original visible, with
+// identical GUIDs — see the call site comment.)
+static bool vfs_guid_already_mounted(const uint8_t *guid)
+{
+	for (int i = 0; i < kMountCount; i++)
+		if (memcmp(kMountTable[i].part_guid, guid, 16) == 0)
+			return true;
+	return false;
+}
+
+// Auto-mount every recognized non-root partition at "/<fstype>". Runs once at
+// boot, after the root is claimed; partition tables were already detected by
+// vfs_mount_root_part's first pass.
+static void vfs_mount_secondary_partitions(void)
+{
+	int fatCount = 0, ext2Count = 0;
+
+	for (int idx = 0; idx < kBlockDeviceInfoCount; idx++)
+	{
+		if (kBlockDeviceInfo[idx].ATADeviceType != ATA_DEVICE_TYPE_SATA_HD &&
+		    kBlockDeviceInfo[idx].ATADeviceType != ATA_DEVICE_TYPE_NVME_HD &&
+		    kBlockDeviceInfo[idx].ATADeviceType != ATA_DEVICE_TYPE_HD)
+			continue;
+
+		for (int partno = 0; partno < kBlockDeviceInfo[idx].block_device->part_count; partno++)
+		{
+			partEntry_t *part = kBlockDeviceInfo[idx].block_device->partition_table->parts[partno];
+
+			const char *baseName;
+			int *counter;
+			vfs_file_operations_t fileOps;
+			vfs_directory_operations_t dirOps;
+			switch (part->filesystemType)
+			{
+				case FILESYSTEM_TYPE_FAT32:
+					baseName = "fat";  counter = &fatCount;
+					fileOps = fat_fops;  dirOps = fat_dops;
+					break;
+				case FILESYSTEM_TYPE_EXT2:
+					baseName = "ext2"; counter = &ext2Count;
+					fileOps = ext2_fops; dirOps = ext2_dops;
+					break;
+				default:
+					continue;   // unrecognized/no filesystem — not mountable
+			}
+
+			if (vfs_guid_already_mounted(part->uniquePartGUID))
+			{
+				printd(DEBUG_BOOT, "BOOT: skipping %s partition %u on device %u — GUID already mounted (twin)\n",
+				       baseName, partno, idx);
+				continue;
+			}
+
+			// First of a type mounts bare ("/fat"); siblings get a number
+			// starting at 2 ("/fat2"), like device names always have.
+			char prefix[VFS_MOUNT_PREFIX_MAX];
+			(*counter)++;
+			if (*counter == 1)
+				sprintf(prefix, "/%s", baseName);
+			else
+				sprintf(prefix, "/%s%u", baseName, (unsigned)*counter);
+
+			vfs_filesystem_t *fs = kRegisterFilesystem(prefix, &kBlockDeviceInfo[idx],
+			                                           partno, &fileOps, &dirOps);
+			if (fs != NULL)
+				printd(DEBUG_BOOT, "BOOT: mounted %s (device %u partition %u) at %s\n",
+				       baseName, idx, partno, prefix);
+			else
+				(*counter)--;   // mount failed — give the name back
+		}
+	}
+}
+
 int vfs_mount_root_part(char* rootPartUUID)
 {
 	vfs_file_operations_t fileOps;
@@ -193,20 +345,26 @@ int vfs_mount_root_part(char* rootPartUUID)
 			{
 				switch (kBlockDeviceInfo[idx].block_device->partition_table->parts[partno]->filesystemType)
 				{
-					// case FILESYSTEM_TYPE_EXT2:
-					// 	fileOps.initialize = &ext2_initialize_filesystem;
-					// 	vfs_filesystem_t* t = kRegisterFilesystem("/", &kBlockDeviceInfo[cnt], part, &fileOps);
-					// 	mounted = true;
-					// 	break;
+					case FILESYSTEM_TYPE_EXT2:
+						// The OS that got off FAT: root on a real ext2
+						// partition, read-only for now (the driver is
+						// read-only by design — see ext2.c).
+						fileOps = ext2_fops;
+						dirOps = ext2_dops;
+						printd(DEBUG_BOOT, "BOOT: Root filesystem found (ext2), mounting read-only\n");
+						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps);
+						mounted = (kRootFilesystem != NULL);
+						break;
 					case FILESYSTEM_TYPE_FAT32:
 						fileOps = fat_fops;
 						dirOps = fat_dops;
 						printd(DEBUG_BOOT, "BOOT: Root filesystem found, mounting\n");
 						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps);
-						mounted=true;
-                        printd(DEBUG_BOOT, "BOOT: Root filesystem successfully mounted\n");
+						mounted = (kRootFilesystem != NULL);
+                        if (mounted)
+                            printd(DEBUG_BOOT, "BOOT: Root filesystem successfully mounted\n");
                         break;
-					default: 
+					default:
 						panic("Could not mount root filesystem, type=%u", kBlockDeviceInfo[idx].block_device->partition_table->parts[partno]->filesystemType);
 					break;
 				}
@@ -219,5 +377,14 @@ int vfs_mount_root_part(char* rootPartUUID)
 	}
 	if (kRootFilesystem==NULL)
 		panic("BOOT: Could not find/mount root filesystem\n");
+
+	// With the root claimed, sweep the remaining partitions and auto-mount
+	// every recognized filesystem at "/<fstype>" — whichever partition ISN'T
+	// the root becomes reachable by prefix ("/fat" when ext2 is root, "/ext2"
+	// when FAT is). Twins are skipped by partition GUID: a RAMDisk boot sees
+	// the RAMDisk copy AND the NVMe original with identical GUIDs, and
+	// mounting both would put two names on the same nominal volume — first
+	// registered wins, the same rule the root scan applies.
+	vfs_mount_secondary_partitions();
 	return 0;
 }

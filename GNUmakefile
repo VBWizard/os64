@@ -106,7 +106,7 @@ USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
 
 # Kernel-side ring-3 test fixtures that also ride the image.
 KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
-                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test libtest.so)
+                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test libtest.so)
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
 
 
@@ -212,8 +212,12 @@ userland:
 # — it guarantees no stale files linger from a previous layout); what changed is
 # WHEN it runs.
 # The ext2 test image, built entirely with host tools (mkfs.ext2 + debugfs —
-# no loop devices, no sudo). Rebuilds only when the generator changes.
-$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py GNUmakefile
+# no loop devices, no sudo). Since the mount table landed it is no longer
+# test-data-only: it carries /bin, /lib and /partition_info too, so an
+# ext2-ROOT boot (see the "/QEMU Boot (ext2 root)" Limine entry) finds the
+# same programs a FAT boot does. Rebuilds when the generator OR any binary
+# that rides it changes.
+$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -224,7 +228,18 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py GNUmakefile
 	# driver's simplest case while the driver IS its simplest case).
 	mkfs.ext2 -F -q -b 1024 -L OS64EXT2 -O ^dir_index $(EXT2_TEST_IMAGE)
 	debugfs -w -f $(EXT2_STAGING)/debugfs.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
-	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content)"
+	# Second debugfs pass: the program payload. Generated here (not in the
+	# python script) because the bin list is THIS makefile's knowledge — same
+	# discovery as the FAT mcopy loop below, no per-app line to forget.
+	printf 'mkdir /bin\nmkdir /lib\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
+	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
+	# FAT — the one file that must never lie about which filesystem it's on).
+	printf 'Ima ext2 partition on the NVME disk\n' > $(EXT2_STAGING)/partition_info.txt
+	printf 'cd /lib\nwrite kernel/bin/libtest.so libtest.so\ncd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
+	debugfs -w -f $(EXT2_STAGING)/debugfs_bins.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
+	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps)"
 
 $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
