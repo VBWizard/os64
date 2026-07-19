@@ -11,6 +11,13 @@
 #include "os64/syscall_numbers.h"   // OS64_SEEK_* — the seek() vocabulary
 #include "os64/dirent.h"            // os64_dirent_t — what readdir() delivers
 
+// The three standard streams, named — because os64_hprintf(2, ...) made two
+// of this OS's owners say "shame on both of us" in the same afternoon. The
+// numbers are ABI (they'll never change); the names are for reading.
+#define OS64_STDIN   0
+#define OS64_STDOUT  1
+#define OS64_STDERR  2
+
 // Write `len` bytes of `buf` to `handle`. Returns bytes written, or a
 // negative value on error (the in-band status half of the ABI; no errno).
 long os64_write(int handle, const void *buf, size_t len);
@@ -88,8 +95,9 @@ long os64_close(int handle);
 // Convenience: write a NUL-terminated string to the console (handle 1).
 long os64_puts(const char *s);
 
-// Terminate the task with `code`. Does not return.
-void os64_exit(int code) __attribute__((noreturn));
+// (os64_exit lived here for one glorious scaffolding week — exit is process
+// control, not I/O, and it moved home to <os64/proc.h> the day its owner
+// went looking for it there and rolled his eyes. 🙄)
 
 // Diagnostic: print a string to the kernel serial log (prefixed "[user] ").
 // Distinct from os64_puts (which goes to the console) — this is for test

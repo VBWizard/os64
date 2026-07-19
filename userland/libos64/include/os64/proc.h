@@ -5,8 +5,33 @@
 // so far; spawn/fork/exec*/waitpid arrive when the shell work pulls them in
 // (both spawn AND fork/exec are first-class — see LIBOS64.md/ABI.md).
 
+#include <stddef.h>
+
 // Yield the CPU to the scheduler; returns when rescheduled.
 void os64_yield(void);
+
+// Terminate the task with `code`. Does not return. (A plain `return` from
+// main() reaches the same place through launch — both paths are first-class;
+// this one is for exiting from anywhere BUT main.)
+void os64_exit(int code) __attribute__((noreturn));
+
+// The current working directory — process state, owned by the KERNEL (which
+// is what makes it trustworthy: chdir validates the target exists at change
+// time, stores it canonical, and every path-taking syscall resolves relative
+// paths against it — open("notes.txt"), spawn("hello"), opendir("dir1") all
+// mean "here"). A child inherits its parent's cwd at spawn; changing yours
+// changes a copy nobody else sees — which is precisely why cd must be a
+// shell BUILTIN and always has been, in every shell, ever.
+
+// Copy the cwd (canonical, absolute, NUL-terminated) into buf. Returns its
+// length, or negative if the buffer is too small. TASK_MAX_PATH_LEN is 128
+// kernel-side, so a 128-byte buffer always suffices.
+long os64_getcwd(char *buf, size_t len);
+
+// Change directory. Relative and messy paths welcome ("../dir1//./x") — the
+// kernel canonicalizes before storing. Returns 0, or negative if the target
+// doesn't exist or isn't a directory (in which case the cwd is UNCHANGED).
+long os64_chdir(const char *path);
 
 // Spawn `path` as a child, non-blocking. `argv` is a NULL-terminated array of
 // string pointers (argv[0] conventionally the program name); pass NULL for no

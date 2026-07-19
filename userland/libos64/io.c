@@ -29,12 +29,6 @@ long os64_puts(const char *s)
     return os64_write(SYSCALL_HANDLE_CONSOLE_OUT, s, os64_strlen(s));
 }
 
-void os64_exit(int code)
-{
-    os64_syscall1(SYSCALL_EXIT, (uint64_t)(unsigned int)code);
-    __builtin_unreachable();
-}
-
 void os64_debug_log(const char *s)
 {
     os64_syscall1(SYSCALL_DEBUG_LOG, (uint64_t)s);

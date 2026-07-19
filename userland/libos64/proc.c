@@ -8,6 +8,22 @@ void os64_yield(void)
     os64_syscall0(SYSCALL_YIELD);
 }
 
+void os64_exit(int code)
+{
+    os64_syscall1(SYSCALL_EXIT, (uint64_t)(unsigned int)code);
+    __builtin_unreachable();
+}
+
+long os64_getcwd(char *buf, size_t len)
+{
+    return (long)os64_syscall2(SYSCALL_GETCWD, (uint64_t)buf, (uint64_t)len);
+}
+
+long os64_chdir(const char *path)
+{
+    return (long)os64_syscall1(SYSCALL_CHDIR, (uint64_t)path);
+}
+
 long os64_spawn(const char *path, char *const argv[])
 {
     // -1/-1/-1: no redirection, all three streams stay on the console.

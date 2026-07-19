@@ -14,9 +14,17 @@ LD ?= x86_64-elf-ld
 #   -mno-mmx/sse/sse2 : SIMD is #UD until CR4.OSFXSR + FPU context switching
 #   -masm=intel   : project-wide asm syntax
 #   -fno-pic/-fno-pie : static, fixed-base for now (PIE is a later item)
+# -Werror in userland too (Chris, 2026-07-18): the const-discard that slipped
+# into the first ls proved the workshop needs the same alarm as the cathedral —
+# os64 does not repeat os32's three million warnings. The pressure valve for a
+# deliberately half-built work-in-progress: `make NOWERROR=1` (or from the
+# repo root: `make NOWERROR=1 run`) builds warnings-as-warnings for that run
+# only. The default is strict; softness is a choice you make out loud.
+WERROR_FLAG := $(if $(NOWERROR),,-Werror)
 CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone \
            -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
+           $(WERROR_FLAG) \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include
 LDFLAGS ?= -static -nostdlib -T $(CURDIR)/link/app.ld -z max-page-size=0x1000
 
@@ -24,7 +32,7 @@ BIN     := $(CURDIR)/bin
 OBJ     := $(CURDIR)/obj
 
 # libos64 objects + the launch stub link into every app.
-RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c
+RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c
 RUNTIME_OBJS := $(patsubst %,$(OBJ)/%.o,$(RUNTIME_SRCS))
 
 # Every apps/<name>/<name>.c is an app named <name>.
