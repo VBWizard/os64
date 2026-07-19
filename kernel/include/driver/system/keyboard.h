@@ -26,6 +26,12 @@ typedef struct keyboard_event {
 
 void keyboard_init(void);
 void keyboard_handle_scancode(uint8_t scancode);
+
+// THE delivery choke for every keyboard driver (PS/2 IRQ path and the USB
+// HID poll both land here): pushes key-downs into the console event ring
+// (spinlock-guarded — two producers now) and hands both edges to the GUI
+// input queue. `modifiers` is the KEYBOARD_MOD_* bitmask at press time.
+void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
 bool keyboard_has_event(void);
 bool keyboard_pop_event(keyboard_event_t *event);
 

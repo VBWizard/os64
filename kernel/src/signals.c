@@ -8,6 +8,7 @@
 #include "smp_core.h"
 #include "console.h"
 #include "pipe.h"
+#include "driver/system/usb/xhci.h"
 
 extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
@@ -72,6 +73,13 @@ void processSignals()
 		}
 		qSleep = qSleep->next;
 	}
+
+	// Drain the USB keyboard BEFORE the console wake check below, so a HID
+	// report that just completed becomes a ring event the same pass its
+	// reader wakes for. Polling here rides the exact liveness path the PS/2
+	// wake uses — no interrupt wiring, ~one-pass latency. Cheap when idle
+	// (guard branch + one cached-RAM read); does nothing before USB init.
+	xhci_poll();
 
 	// Wake a blocked console reader if the keyboard driver has input. Done
 	// here — under the lock, AFTER the qISleep walk above — so its queue

@@ -6,9 +6,11 @@
 #include "printd.h"
 #include "io.h"
 #include "gui/input.h"
+#include "spinlock.h"
 
-// Keystrokes are generated from PS/2 set-1 scancodes and exposed through a
-// simple ring buffer so other subsystems can poll without blocking the IRQ path.
+// Keystrokes are generated from PS/2 set-1 scancodes (this file) and USB HID
+// boot reports (usb/xhci.c) — both feed keyboard_deliver_event, and land in
+// one ring buffer other subsystems poll without blocking the producers.
 // When the GUI is active, key-down AND key-up events are additionally injected
 // into the unified GUI input queue (gui/input.h).
 
@@ -168,8 +170,15 @@ static inline size_t advance_index(size_t index) {
     return (index + 1u) % KEYBOARD_BUFFER_SIZE;
 }
 
+// Two producers can reach the event ring now — the PS/2 IRQ path and the
+// USB HID poll (xhci.c) — so the push is guarded. (The ring was born
+// lock-free single-producer; the lock arrived with the second keyboard
+// century. The consumer side, console_read, needs no lock: one consumer,
+// and head/tail stay single-writer per side.)
+static spinlock_t s_deliver_lock = 0;
+
 // Record a completed keystroke and apply local debug toggling shortcuts.
-static void keyboard_emit_event(uint8_t scancode, char ascii) {
+static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers) {
     if (ascii == 0) {
         return;
     }
@@ -190,21 +199,38 @@ static void keyboard_emit_event(uint8_t scancode, char ascii) {
     keyboard_event_t event = {
         .ascii = ascii,
         .scancode = scancode,
-        .shift = (s_modifiers & KEYBOARD_MOD_SHIFT) != 0,
-        .ctrl = (s_modifiers & KEYBOARD_MOD_CTRL) != 0,
-        .alt = (s_modifiers & KEYBOARD_MOD_ALT) != 0,
+        .shift = (modifiers & KEYBOARD_MOD_SHIFT) != 0,
+        .ctrl = (modifiers & KEYBOARD_MOD_CTRL) != 0,
+        .alt = (modifiers & KEYBOARD_MOD_ALT) != 0,
     };
+
+    uint64_t flags = spinlock_acquire_irqsave(&s_deliver_lock);
 
     size_t head = s_event_head;
     size_t next_head = advance_index(head);
 
     if (next_head == s_event_tail) {
         // Buffer is full: keep existing keystrokes and drop this one.
+        spinlock_release_irqrestore(&s_deliver_lock, flags);
         return;
     }
 
     s_event_buffer[head] = event;
     s_event_head = next_head;
+
+    spinlock_release_irqrestore(&s_deliver_lock, flags);
+}
+
+// THE delivery choke: every keyboard — 1981's 8042 or this decade's USB
+// HID — hands its translated keystrokes here, and everything downstream
+// (the console ring husk reads, the GUI input queue) is source-blind.
+// Key-downs enter the console ring; both edges reach the GUI (chords and
+// modifier-drags need releases).
+void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
+    if (pressed) {
+        keyboard_emit_event(scancode, ascii, modifiers);
+    }
+    input_inject_key(ascii, scancode, modifiers, pressed);
 }
 
 // Decide whether Caps Lock should affect this character.
@@ -380,8 +406,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
         // which made every keystroke feel like it lagged by its own length.)
         s_key_state[code] = true;
         char ascii = keyboard_translate_scancode(code);
-        keyboard_emit_event(code, ascii);
-        input_inject_key(ascii, code, s_modifiers, true);
+        keyboard_deliver_event(ascii, code, s_modifiers, true);
         return;
     }
 
@@ -394,8 +419,9 @@ void keyboard_handle_scancode(uint8_t scancode) {
 
     // Break code: the legacy ring only carries keystrokes (presses), but the
     // GUI needs KEY_UP too — modifier-drag interactions and chords depend on
-    // knowing when a key was released.
-    input_inject_key(keyboard_translate_scancode(code), code, s_modifiers, false);
+    // knowing when a key was released. (deliver_event routes releases to the
+    // GUI queue only.)
+    keyboard_deliver_event(keyboard_translate_scancode(code), code, s_modifiers, false);
 }
 
 void ps2_handle_irq(void) {

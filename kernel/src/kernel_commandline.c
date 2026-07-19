@@ -11,6 +11,7 @@ extern bool kBspSchedulerMode;
 extern bool kEnableKWorker;
 extern bool kEnableGUI;
 extern bool kRunTests;
+extern bool kEnableUSB;
 extern char kRootPartUUID[];
 extern int kMaxActiveCores;
 bool kEnableAHCI = true, kEnableNVME = true;
@@ -124,10 +125,12 @@ static cmdopt_t cmdopts[] = {
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
+    {"NOUSB", OPT_BOOL, &kEnableUSB, false, 0},
     {"TESTPANIC", OPT_BOOL, &kTestPanic, true, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
     {"GUI", OPT_BOOL, &kEnableGUI, true, 0},
     {"DEBUG_GUI", OPT_UINT128_OR, &kDebugLevel, DEBUG_GUI, 0},
+    {"DEBUG_USB", OPT_UINT128_OR, &kDebugLevel, DEBUG_USB, 0},
     // Pipes: lifecycle + every refcount change + every park/wake + EOF/EPIPE.
     // Add DEBUG_DETAILED alongside it for the byte-by-byte data flow.
     {"DEBUG_PIPE", OPT_UINT128_OR, &kDebugLevel, DEBUG_PIPE, 0},

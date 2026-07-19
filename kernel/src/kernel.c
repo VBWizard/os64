@@ -42,6 +42,7 @@
 #include "driver/system/mouse.h"
 #include "block_device.h"
 #include "ramdisk.h"
+#include "driver/system/usb/xhci.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -55,6 +56,8 @@ extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipe
 bool kEnableSMP = true;
 bool kBspSchedulerMode = false;
 bool kEnableKWorker = false;
+// Cleared by the NOUSB cmdline flag — skips xHCI bring-up entirely.
+bool kEnableUSB = true;
 // Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,
 // post-boot, and the disk/VFS tests) — used to isolate a boot hang by booting
 // with no test code in the path.
@@ -162,6 +165,16 @@ void kernel_init()
 	kCPUCyclesPerSecond = tscGetCyclesPerSecond();
 
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
+
+	// USB last among the bus drivers: the P5 has no PS/2 port, so this is
+	// where its keyboard comes from. Runs BEFORE task creation on purpose —
+	// the xHCI MMIO mapping lands in the kernel PML4's upper half and every
+	// task PML4 clones those entries at birth (see xhci.c).
+	if (kEnableUSB)
+	{
+		printf("Initializing USB (xHCI): ");
+		init_xHCI();
+	}
     printf("SMP: Initializing ... ");
     kLimineSMPInfo = smp_request.response;
     init_SMP(kEnableSMP);

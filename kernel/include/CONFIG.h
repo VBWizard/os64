@@ -118,6 +118,7 @@
 // shutdown chatter along and vice versa. Own bit now. (DEBUG_KMALLOC still
 // aliases DEBUG_ALLOCATOR above; those two at least are the same subsystem.)
 #define DEBUG_SHUTDOWN (__uint128_t)1 << 25
+#define DEBUG_USB (__uint128_t)1 << 26
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
