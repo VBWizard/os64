@@ -231,6 +231,7 @@ static char keyboard_translate_scancode(uint8_t scancode) {
     bool shift_active = (s_modifiers & KEYBOARD_MOD_SHIFT) != 0;
     bool caps_active = (s_modifiers & KEYBOARD_MOD_CAPS) != 0;
     bool num_active = (s_modifiers & KEYBOARD_MOD_NUM) != 0;
+    bool ctrl_active = (s_modifiers & KEYBOARD_MOD_CTRL) != 0;
 
     if (keyboard_is_keypad(scancode)) {
         if (!num_active) {
@@ -241,6 +242,15 @@ static char keyboard_translate_scancode(uint8_t scancode) {
     }
 
     if (keyboard_is_letter(base)) {
+        // Ctrl+letter yields the ASCII control code (0x01..0x1A). This is not
+        // a convention we're borrowing — it's what the Ctrl key was BUILT to
+        // do: 1963 ASCII laid out the control codes so that Ctrl simply strips
+        // the high bits of the letter. Ctrl+D = 0x04 = EOT ("End of
+        // Transmission"), which is why console_read treats it as end-of-input
+        // — same well Unix drank from, not an imitation of Unix.
+        if (ctrl_active) {
+            return (char)((base & ~0x20) - 'A' + 1);
+        }
         bool uppercase = shift_active ^ caps_active;
         if (uppercase) {
             if (base >= 'a' && base <= 'z') {

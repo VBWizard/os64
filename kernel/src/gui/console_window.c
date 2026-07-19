@@ -56,6 +56,13 @@ static void gui_console_sink(const char *bytes, size_t length)
 			grid_scroll_if_needed();
 		} else if (c == '\t') {
 			s_col = (s_col + 8) & ~7u;
+		} else if (c == '\b') {
+			// Cursor-back only, clamped at column 0 — erasure comes from the
+			// caller overprinting ("\b \b"), same contract as print_n.
+			if (s_col > 0)
+				s_col--;
+		} else if (c == '\r') {
+			s_col = 0;
 		} else if (c >= ' ') {
 			if (s_col >= CON_COLS) {   // wrap long lines
 				s_col = 0;

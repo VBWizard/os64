@@ -188,6 +188,20 @@ void print_n(const char* str, size_t length) {
             case '\t':
                 basicrenderer->cursor_position.x += FONT_WIDTH;
                 break;
+            case '\b':
+                // Move back one cell, clamped at the line start (a terminal
+                // never backspaces up a line). This only MOVES the cursor —
+                // erasure is the caller's job by overprinting, which is why
+                // husk rubs out a glyph with "\b \b": back, blank, back.
+                if (basicrenderer->cursor_position.x >= FONT_WIDTH)
+                    basicrenderer->cursor_position.x -= FONT_WIDTH;
+                break;
+            case '\r':
+                // Carriage return does what the carriage did: column zero,
+                // same line. (Previously fell through to default and drew a
+                // garbage glyph.)
+                basicrenderer->cursor_position.x = 0;
+                break;
             default:
                 put_char(basicrenderer, *chr, basicrenderer->cursor_position.x, basicrenderer->cursor_position.y);
                 basicrenderer->cursor_position.x += FONT_WIDTH;
