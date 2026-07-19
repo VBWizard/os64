@@ -278,6 +278,14 @@ extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
 extern vfs_filesystem_t* kRootFilesystem;
 
+// Resolve `path` against `cwd` into a CANONICAL absolute path in `out`:
+// relative paths are prefixed with cwd, "." disappears, ".." pops a component
+// (".." at the root stays at the root, per tradition), duplicate slashes
+// collapse. This is THE one place path hygiene happens — filesystems and
+// syscalls downstream only ever see clean absolute paths. Returns 0, or -1
+// if the result won't fit in outlen.
+int vfs_canonicalize_path(const char *cwd, const char *path, char *out, size_t outlen);
+
 void init_block();
 vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps);
 int ext2_initialize_filesystem(vfs_filesystem_t* device);

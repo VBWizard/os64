@@ -19,8 +19,10 @@
 #include "scheduler.h"
 #include "time.h"
 #include "driver/filesystem/vfs/vfs.h"
+#include "driver/filesystem/ext2/ext2_vfs.h"   // ext2_fops/ext2_dops (real-partition test)
 #include "shared_object.h"
 #include "env.h"
+#include "sprintf.h"
 
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -1119,6 +1121,252 @@ static bool test_ring3_dir_list(void)
     return true;
 }
 
+// ── The ext2 real-partition test ─────────────────────────────────────────────
+// Partition 2 of the disk image is formatted by the HOST's mkfs.ext2 and
+// populated by debugfs (see the GNUmakefile disk rule): os64 never wrote a
+// byte of it. This test mounts it with the ext2 driver and reads it back —
+// the honest proof that we parse real ext2, not our own private dialect.
+//
+// pattern.bin's 16-byte records are self-describing ("00001234:os64e2\n" =
+// record 1234 at byte 1234*16), so seeking into the direct, single-indirect,
+// and double-indirect regions and asking the record its own name catches any
+// off-by-one the block-map walk could commit. (Region math is documented in
+// tools/gen_ext2_testdata.py; block size is pinned to 1024 at mkfs time.)
+#define EXT2_PATTERN_RECORDS 98304UL
+#define EXT2_PATTERN_SIZE    (EXT2_PATTERN_RECORDS * 16)
+
+static bool ext2_check_record(vfs_filesystem_t *fs, vfs_file_t *f, uint64_t offset, const char *region)
+{
+    char got[17], want[20];
+
+    if (fs->fops->seek(f, (long)offset, SEEK_SET) < 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2 - seek to %lu (%s region) failed\n", offset, region);
+        return false;
+    }
+    if (fs->fops->read(f, got, 16) != 16) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2 - read at %lu (%s region) short\n", offset, region);
+        return false;
+    }
+    got[16] = '\0';
+    sprintf(want, "%08lu:os64e2\n", (unsigned long)(offset / 16));
+    if (strncmp(got, want, 16) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2 - %s region record at %lu: got '%s', want '%s'\n",
+               region, offset, got, want);
+        return false;
+    }
+    return true;
+}
+
+static bool test_ext2_real_partition(void)
+{
+    // Find the ext2 partition by detected filesystem type — the boot flow's
+    // superblock probe (filesystem.c) marks it during storage init.
+    vfs_filesystem_t *fs = NULL;
+    for (int d = 0; d < kBlockDeviceInfoCount && fs == NULL; d++)
+    {
+        block_device_info_t *dev = &kBlockDeviceInfo[d];
+        if (dev->block_device == NULL || dev->block_device->partition_table == NULL)
+            continue;
+        for (int p = 0; p < dev->block_device->partition_table->partCount; p++)
+        {
+            if (dev->block_device->partition_table->parts[p]->filesystemType != FILESYSTEM_TYPE_EXT2)
+                continue;
+            // Assemble a minimal filesystem object by hand: this partition is
+            // NOT mounted into the namespace (no mount table yet — the ext2
+            // ROOT switch comes later); the test drives the driver directly.
+            fs = kmalloc(sizeof(vfs_filesystem_t));
+            if (fs == NULL)
+                return false;
+            memset(fs, 0, sizeof(vfs_filesystem_t));
+            fs->partNumber = p;
+            fs->block_device_info = dev;
+            fs->bops = dev->block_device->ops;
+            fs->fops = &ext2_fops;
+            fs->dops = &ext2_dops;
+            break;
+        }
+    }
+    if (fs == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_real_partition (no ext2 partition detected)\n");
+        return true;
+    }
+
+    if (ext2_initialize_filesystem(fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - superblock/groups mount failed\n");
+        return false;
+    }
+
+    // 1. A small file, byte-for-byte: content authored by Linux.
+    static const char hello_expect[] =
+        "Hello from a real ext2 filesystem — written by Linux, read by os64!\n";
+    vfs_file_t *f = NULL;
+    char buf[128];
+    if (fs->fops->open(&f, "/hello.txt", "r", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - open /hello.txt failed\n");
+        return false;
+    }
+    int n = fs->fops->read(f, buf, sizeof(buf));
+    fs->fops->close(f);
+    if (n != (int)(sizeof(hello_expect) - 1) || strncmp(buf, hello_expect, sizeof(hello_expect) - 1) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - /hello.txt content mismatch (n=%d)\n", n);
+        return false;
+    }
+
+    // 2. Path resolution three directories deep.
+    if (fs->fops->open(&f, "/dir1/dir2/deep.txt", "r", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - open /dir1/dir2/deep.txt failed\n");
+        return false;
+    }
+    n = fs->fops->read(f, buf, sizeof(buf));
+    fs->fops->close(f);
+    if (n <= 0 || strncmp(buf, "the deep file", 13) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - deep.txt content mismatch\n");
+        return false;
+    }
+
+    // 3. The block-map workout: size via tell-at-end, then self-describing
+    //    records from each mapping regime.
+    if (fs->fops->open(&f, "/pattern.bin", "r", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - open /pattern.bin failed\n");
+        return false;
+    }
+    fs->fops->seek(f, 0, SEEK_END);
+    if ((uint64_t)fs->fops->tell(f) != EXT2_PATTERN_SIZE) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - pattern.bin size %d, want %lu\n",
+               fs->fops->tell(f), EXT2_PATTERN_SIZE);
+        fs->fops->close(f);
+        return false;
+    }
+    bool ok = ext2_check_record(fs, f, 0,                      "first")
+           && ext2_check_record(fs, f, 4096,                   "direct")
+           && ext2_check_record(fs, f, 100000,                 "single-indirect")
+           && ext2_check_record(fs, f, 1000000,                "double-indirect")
+           && ext2_check_record(fs, f, EXT2_PATTERN_SIZE - 16, "last");
+    fs->fops->close(f);
+    if (!ok)
+        return false;
+
+    // 4. The root listing through the fs-neutral dirent seam — same contract
+    //    ls uses, different filesystem, zero caller changes. (lost+found is
+    //    mkfs's own droppings and proves the listing is real.)
+    vfs_directory_t *dir = NULL;
+    if (fs->dops->open(&dir, "/", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - opendir / failed\n");
+        return false;
+    }
+    os64_dirent_t de;
+    bool saw_hello = false, saw_pattern = false, saw_dir1 = false, saw_lf = false;
+    int r;
+    while ((r = fs->dops->read(dir, &de)) == 1)
+    {
+        if (strncmp(de.name, "hello.txt", 10) == 0 && !(de.flags & OS64_DE_DIR))
+            saw_hello = true;
+        if (strncmp(de.name, "pattern.bin", 12) == 0 && de.size == EXT2_PATTERN_SIZE)
+            saw_pattern = true;
+        if (strncmp(de.name, "dir1", 5) == 0 && (de.flags & OS64_DE_DIR))
+            saw_dir1 = true;
+        if (strncmp(de.name, "lost+found", 11) == 0 && (de.flags & OS64_DE_DIR))
+            saw_lf = true;
+    }
+    fs->dops->close(dir);
+    if (r != 0 || !saw_hello || !saw_pattern || !saw_dir1 || !saw_lf) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - root listing (r=%d hello=%d pattern=%d dir1=%d lost+found=%d)\n",
+               r, saw_hello, saw_pattern, saw_dir1, saw_lf);
+        return false;
+    }
+
+    // 5. Absence must fail in-band, like everything else in this kernel.
+    if (fs->fops->open(&f, "/no/such/file", "r", fs) == 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - bogus path opened\n");
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_real_partition (mkfs.ext2-authored: hello, deep path, "
+           "direct/single/double-indirect records, root listing, bogus path)\n");
+    return true;
+}
+
+// map_unmap.c drives the heap primitive at CPL 3: anonymous regions demand-
+// paged and zeroed, guard-page separation, region independence, whole-region
+// unmap with strict base validation. 0x3A9xxxxx names the failed step.
+#define MAP_UNMAP_RETVAL 0x03A9600DUL
+
+static bool test_ring3_map_unmap(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_map_unmap (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/map_unmap", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_map_unmap - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    for (int i = 0; i < 200 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_map_unmap - task did not exit within 2 seconds "
+               "(fault storm in the demand pager? unmap freed a live page?)\n");
+        return false;
+    }
+
+    if (task->retVal != MAP_UNMAP_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_map_unmap - retVal=0x%lx, expected 0x%lx "
+               "(0x3A9xxxxx identifies the failed step; see test/elf/map_unmap.c)\n",
+               task->retVal, (uint64_t)MAP_UNMAP_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_map_unmap (zeroed demand pages, guard gap, independence, strict unmap)\n");
+    return true;
+}
+
+// cwd_test.c proves kernel-owned "here" at CPL 3: getcwd/chdir, canonical
+// ".." collapse, relative open AND relative spawn resolving against cwd, a
+// failed chdir moving nothing, and inheritance via a self-spawned child that
+// verifies where it was born. 0x0C3Dxxxx names the failed step.
+#define CWD_TEST_RETVAL 0x0C3D600DUL
+
+static bool test_ring3_cwd(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_cwd (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/cwd_test", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_cwd - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // Spawns and reaps a child of its own — allow 3s.
+    for (int i = 0; i < 300 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_cwd - task did not exit within 3 seconds\n");
+        return false;
+    }
+
+    if (task->retVal != CWD_TEST_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_cwd - retVal=0x%lx, expected 0x%lx "
+               "(0x0C3Dxxxx identifies the failed step; see test/elf/cwd_test.c)\n",
+               task->retVal, (uint64_t)CWD_TEST_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_cwd (getcwd/chdir, canonicalization, relative open+spawn, inheritance)\n");
+    return true;
+}
+
 // (A dedicated /bin/hello test lived here briefly during userland bring-up;
 // removed as redundant — ring3_syscall_smoke and ring3_exit_by_return already
 // cover load-run-exit at CPL 3, and the HELLO boot-flow launch exercises the
@@ -1348,6 +1596,9 @@ static void register_builtin_tests(void)
     test_register("ring3_file_io_concurrent", test_ring3_file_io_concurrent, TEST_PHASE_POSTBOOT);
     test_register("ring3_redirect_io", test_ring3_redirect_io, TEST_PHASE_POSTBOOT);
     test_register("ring3_dir_list", test_ring3_dir_list, TEST_PHASE_POSTBOOT);
+    test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
+    test_register("ring3_map_unmap", test_ring3_map_unmap, TEST_PHASE_POSTBOOT);
+    test_register("ring3_cwd", test_ring3_cwd, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

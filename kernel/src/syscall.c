@@ -20,6 +20,9 @@
 #include "pipe.h"
 #include "signals.h"
 #include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
+#include "allocator.h"  // free_memory — unmap returns pages at the choke point
+#include "dlist.h"      // dlist_remove (unmap drops the region's VMA node)
+#include "memory/mmap.h"   // MAP_ANONYMOUS (map()'s regions are anonymous)
 
 // spawn: cap on argv length. A command line's worth of args is plenty; the
 // per-arg length cap is task.c's TASK_MAX_PATH_LEN (the blob it builds uses
@@ -62,6 +65,14 @@ static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_readdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_map(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_getcwd(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -95,6 +106,10 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_OPEN,      "open",      syscall_open,      false, 0x03),  // arg0 = path, arg1 = mode (both strings)
 	SYSCALL_DEFINE(SYSCALL_SEEK,      "seek",      syscall_seek,      false, 0x00),  // args: handle, offset, whence — no pointers
 	SYSCALL_DEFINE(SYSCALL_READDIR,   "readdir",   syscall_readdir,   false, 0x02),  // arg1 = os64_dirent_t out ptr
+	SYSCALL_DEFINE(SYSCALL_MAP,       "map",       syscall_map,       false, 0x00),  // arg0 = length (not a pointer)
+	SYSCALL_DEFINE(SYSCALL_UNMAP,     "unmap",     syscall_unmap,     false, 0x01),  // arg0 = region base (user VA)
+	SYSCALL_DEFINE(SYSCALL_GETCWD,    "getcwd",    syscall_getcwd,    false, 0x01),  // arg0 = out buffer
+	SYSCALL_DEFINE(SYSCALL_CHDIR,     "chdir",     syscall_chdir,     false, 0x01),  // arg0 = path
 };
 
 uint64_t _syscall_dispatch(
@@ -949,6 +964,17 @@ static void open_do(void *arg)
 	                                        kRootFilesystem);
 }
 
+// Resolve a just-copied user path against the task's cwd into canonical
+// absolute form. THE relative-path choke point: open (files AND dirs), spawn,
+// and chdir all pass through here, which is what makes `cd /bin` + `hello`
+// (or ls with a bare "dir1") work everywhere at once — and means no
+// filesystem driver ever sees a "..". Returns false if the result overflows.
+static bool resolve_user_path(task_t *task, const char *in, char *out, size_t outlen)
+{
+	const char *cwd = (task != NULL && task->cwd != NULL) ? task->cwd : "/";
+	return vfs_canonicalize_path(cwd, in, out, outlen) == 0;
+}
+
 // readdir's kernel-context half: one dops->read per call, into the HHDM
 // params block (see syscall_readdir below).
 typedef struct {
@@ -990,8 +1016,16 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// Marshal the path into a scratch buffer first (syscall lifetime), then
 	// clone it into path_copy (handle lifetime) once we know its real length.
+	// Between the two: resolve against the task's cwd — open("notes.txt")
+	// means "here", and "here" is kernel state now.
+	char raw[TASK_MAX_PATH_LEN];
 	char path[TASK_MAX_PATH_LEN];
-	if (!copy_user_string(user_path, path, sizeof(path)))
+	if (!copy_user_string(user_path, raw, sizeof(raw)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	if (!resolve_user_path(task, raw, path, sizeof(path)))
 	{
 		kfree(p);
 		return SYSCALL_RESULT_BAD_USER_DATA;
@@ -1167,6 +1201,222 @@ static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return (uint64_t)pos;
 }
 
+// ── map / unmap ──────────────────────────────────────────────────────────────
+// THE heap primitive — the ratified no-brk design (DEBTS): the kernel hands
+// out whole demand-paged anonymous regions; userland's malloc carves them up.
+// There is deliberately no brk/sbrk and never will be: regions are
+// independent, so memory can be given back from the MIDDLE of the heap —
+// the structural fix for brk's only-shrink-from-the-end flaw.
+
+// map(len) — allocate a fresh anonymous region of at least `len` bytes
+// (rounded up to whole pages), demand-paged and GUARANTEED ZEROED (the
+// allocator zeroes at its choke point; the demand pager hands those pages
+// straight over). Returns the region's base address, or a sentinel.
+//
+// This is almost embarrassingly thin, and that's the design: creating a
+// mapping is just RECORDING INTENT (one VMA node). No pages move until the
+// task actually touches memory — first touch faults, the demand pager
+// resolves it, page by page, only for pages actually used.
+static uint64_t syscall_map(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	size_t length = (size_t)arg0;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL || length == 0)
+		return SYSCALL_RESULT_INVALID;
+
+	size_t rounded = (length + PAGE_SIZE - 1) & ~(size_t)(PAGE_SIZE - 1);
+
+	// The heap VA allocator is a bump pointer: heapEnd starts at
+	// TASK_HEAP_START and only ever advances. Freed regions' VAs are never
+	// reused (v1) — with a 47-bit heap range, address space is the cheapest
+	// resource this kernel owns, and never-reuse means a stale pointer into
+	// an unmapped region ALWAYS faults instead of aliasing a new region.
+	// (A use-after-unmap tripwire for free — same philosophy as the HHDM.)
+	uintptr_t base = task->heapEnd;
+	if (base + rounded >= TASK_HEAP_END || base + rounded < base)
+		return SYSCALL_RESULT_INVALID;   // out of heap VA (a 47-bit feat)
+
+	vma_t *vma = vma_create(base, base + rounded, PROT_READ | PROT_WRITE,
+	                        MAP_PRIVATE | MAP_ANONYMOUS, NULL, 0);
+	if (vma == NULL)
+		return SYSCALL_RESULT_INVALID;
+	vma_add(task, vma);
+
+	// Advance past the region PLUS one permanently-unmapped guard page:
+	// running off the end of a region faults instead of silently scribbling
+	// on the next one. malloc overruns announce themselves here.
+	task->heapEnd = base + rounded + PAGE_SIZE;
+
+	printd(DEBUG_SYSCALL, "map: task %s: %lu bytes at 0x%016lx\n",
+	       task->exename, rounded, base);
+	return (uint64_t)base;
+}
+
+// unmap(base) — release an ENTIRE region previously returned by map(). Whole
+// regions only, by design: partial unmap invites split-VMA bookkeeping for a
+// need malloc doesn't have (it gives back the regions it took). Frees every
+// page the task actually touched (untouched pages were never allocated —
+// that's demand paging's other half) and drops the VMA.
+static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	uintptr_t base = (uintptr_t)arg0;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL || task->mmaps == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// Find the region by EXACT base — and only accept regions map() made
+	// (anonymous, heap-range). Without this gate, userland could unmap its
+	// own code segment and the next instruction fetch becomes a kernel
+	// panic; a bad handle should hurt the caller, not the kernel.
+	dlist_node_t *node = task->mmaps->head;
+	vma_t *vma = NULL;
+	while (node != NULL)
+	{
+		vma_t *v = (vma_t *)node->data;
+		if (v != NULL && v->start == base)
+		{
+			vma = v;
+			break;
+		}
+		node = node->next;
+	}
+	if (vma == NULL || !(vma->flags & MAP_ANONYMOUS) || base < TASK_HEAP_START)
+		return SYSCALL_RESULT_INVALID;
+
+	// Give back every page that was actually faulted in. paging_unmap_page
+	// invlpg's locally; pages never touched have no PTE and nothing to free.
+	for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE)
+	{
+		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va);
+		if (phys != 0 && phys != 0xbadbadba)
+		{
+			paging_unmap_page((pt_entry_t *)task->pml4v, va);
+			// The allocator choke point: also HHDM-unmaps + TLB-shoots the
+			// kernel alias, per the lazy-HHDM rules.
+			free_memory(phys);
+		}
+	}
+
+	printd(DEBUG_SYSCALL, "unmap: task %s: region 0x%016lx-0x%016lx released\n",
+	       task->exename, vma->start, vma->end);
+
+	dlist_remove(task->mmaps, node);
+	vma_destroy(vma);
+	return 0;
+}
+
+// ── getcwd / chdir ───────────────────────────────────────────────────────────
+
+// getcwd(buf, len) — copy the task's current working directory (a canonical
+// absolute path — chdir guarantees it) into the user buffer. Returns the
+// path's length, or a sentinel if the buffer is too small. The trivial half
+// of the pair: the string is already sitting in the task struct.
+static uint64_t syscall_getcwd(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL || task->cwd == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	size_t len = 0;
+	while (task->cwd[len] != '\0')
+		len++;
+	if ((size_t)arg1 < len + 1)
+		return SYSCALL_RESULT_INVALID;   // buffer too small (NUL included)
+
+	if (!copy_to_user_buffer((void *)arg0, task->cwd, len + 1))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	return (uint64_t)len;
+}
+
+// chdir's kernel-context half: prove the target EXISTS and IS a directory by
+// opening it through the real filesystem, then close it again. Existence
+// checking at change time is the entire advantage of kernel-owned cwd over
+// a writable environment string — a cwd can never hold garbage.
+typedef struct {
+	char path[TASK_MAX_PATH_LEN];
+	vfs_directory_t *dir;
+	volatile long result;
+} chdir_params_t;
+
+static void chdir_do(void *arg)
+{
+	chdir_params_t *p = (chdir_params_t *)arg;
+
+	if (kRootFilesystem == NULL || kRootFilesystem->dops == NULL ||
+	    kRootFilesystem->dops->open == NULL)
+	{
+		p->result = -1;
+		return;
+	}
+	p->result = kRootFilesystem->dops->open(&p->dir, p->path, kRootFilesystem);
+	if (p->result == 0 && p->dir != NULL)
+		kRootFilesystem->dops->close(p->dir);   // frees what open allocated
+}
+
+// chdir(path) — resolve against the current cwd, canonicalize, validate,
+// store. After this returns 0, every relative path in every syscall means
+// the new place, and the string getcwd hands back is already clean ("cd
+// ../../.." from /bin is stored as "/", not as a growing trail of dots).
+static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL || task->cwd == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	char raw[TASK_MAX_PATH_LEN];
+	if (!copy_user_string((const char *)arg0, raw, sizeof(raw)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	chdir_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	if (!resolve_user_path(task, raw, p->path, sizeof(p->path)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	p->dir = NULL;
+	p->result = -1;
+	// The existence check walks the directory tree — disk I/O, kernel context.
+	call_in_kernel_context(chdir_do, p);
+
+	if (p->result != 0)
+	{
+		printd(DEBUG_SYSCALL, "chdir: task %s: '%s' is not a directory\n",
+		       task->exename, p->path);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // no such directory — cwd unchanged
+	}
+
+	// Committed: the canonical path becomes the task's "here".
+	// (task->cwd is a PAGE_SIZE kmalloc from task_create; TASK_MAX_PATH_LEN
+	// fits with room to spare.)
+	memcpy(task->cwd, p->path, sizeof(p->path));
+	printd(DEBUG_SYSCALL, "chdir: task %s: cwd = '%s'\n", task->exename, task->cwd);
+	kfree(p);
+	return 0;
+}
+
 // Marshal a user argv (NULL-terminated array of user string pointers) into
 // kernel space: fills kargv[] (<= SPAWN_MAX_ARGS, NULL-terminated) with
 // pointers into strbuf, each string copied from user space. Returns argc, or
@@ -1323,6 +1573,19 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	core_local_storage_t *cls = get_core_local_storage();
 	p->parent = cls ? cls->task : NULL;
 	p->result = 0;
+
+	// Resolve the program path against the caller's cwd, so `cd /bin` makes
+	// a bare `hello` launchable. (The child then INHERITS that cwd — the
+	// task_create plumbing for that predates these syscalls by a while.)
+	{
+		char canon[TASK_MAX_PATH_LEN];
+		if (!resolve_user_path(p->parent, p->path, canon, sizeof(canon)))
+		{
+			kfree(p);
+			return SYSCALL_RESULT_BAD_USER_DATA;
+		}
+		memcpy(p->path, canon, sizeof(canon));
+	}
 
 	// Resolve the redirection handles HERE, in the caller's context, where the
 	// caller's handle table is the one in scope. spawn_do_create runs under

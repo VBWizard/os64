@@ -309,6 +309,25 @@ int main(int argc, char **argv, char **envp)
 		if (nstages == 1 && first_token_is(stages[0], "exit"))
 			break;
 
+		// `cd` is THE canonical builtin — the textbook answer to "why must
+		// any command be built in?": an external cd would change ITS OWN
+		// cwd (a copy inherited at spawn) and take the change to its grave.
+		// Only the shell can move the shell. `cd` alone goes to the root —
+		// there's no $HOME to go home to yet.
+		if (nstages == 1 && first_token_is(stages[0], "cd"))
+		{
+			char *cargv[ARGS_MAX];
+			int cargc = parse(stages[0], cargv, ARGS_MAX);
+			const char *dest = (cargc > 1) ? cargv[1] : "/";
+			if (os64_chdir(dest) < 0)
+			{
+				os64_puts("husk: cd: no such directory: ");
+				os64_puts(dest);
+				os64_puts("\n");
+			}
+			continue;
+		}
+
 		run_pipeline(stages, nstages);
 	}
 

@@ -58,10 +58,68 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
     return fs;
 }
 
- int ext2_initialize_filesystem(vfs_filesystem_t* device)
+// (ext2_initialize_filesystem used to live here as a one-line wrapper around
+// the exploration sketch's superblock dump; the real implementation is in
+// driver/filesystem/ext2/ext2.c now, alongside the rest of the driver.)
+
+// The classic component-stack canonicalizer (see vfs.h for the contract).
+// `out` doubles as the stack: components are appended as "/name", and ".."
+// pops by scanning back to the previous '/'. No allocation, no recursion —
+// safe from any context that can hold two path buffers.
+int vfs_canonicalize_path(const char *cwd, const char *path, char *out, size_t outlen)
 {
-	ext2_get_superblock(device);
-	
+	if (out == NULL || outlen < 2 || path == NULL)
+		return -1;
+
+	size_t len = 0;   // bytes of `out` in use; out[0..len) holds "/a/b" form
+
+	// Seed: absolute input starts fresh at the root; relative input starts
+	// from cwd — by canonicalizing cwd's own components first, so a cwd that
+	// somehow carries a "." or ".." can't smuggle it past this choke point.
+	const char *sources[2] = { NULL, NULL };
+	int nsources = 0;
+	if (path[0] != '/')
+		sources[nsources++] = (cwd != NULL && cwd[0] == '/') ? cwd : "/";
+	sources[nsources++] = path;
+
+	for (int s = 0; s < nsources; s++)
+	{
+		const char *p = sources[s];
+		while (*p != '\0')
+		{
+			while (*p == '/')
+				p++;                       // collapse duplicate slashes
+			if (*p == '\0')
+				break;
+
+			const char *start = p;
+			while (*p != '\0' && *p != '/')
+				p++;
+			size_t clen = (size_t)(p - start);
+
+			if (clen == 1 && start[0] == '.')
+				continue;                  // "." — no movement
+			if (clen == 2 && start[0] == '.' && start[1] == '.')
+			{
+				// ".." — pop the last component; at the root, stay put.
+				while (len > 0 && out[len - 1] != '/')
+					len--;
+				if (len > 0)
+					len--;                 // eat the '/' too
+				continue;
+			}
+
+			if (len + 1 + clen + 1 > outlen)
+				return -1;                 // canonical form doesn't fit
+			out[len++] = '/';
+			for (size_t i = 0; i < clen; i++)
+				out[len++] = start[i];
+		}
+	}
+
+	if (len == 0)
+		out[len++] = '/';                  // everything popped: the root
+	out[len] = '\0';
 	return 0;
 }
 

@@ -144,8 +144,6 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 
 void task_idle_loop()
 {
-	core_local_storage_t *cls = get_core_local_storage();
-
 	while (1==1)
 	{
         __asm__("sti\nhlt\n");
@@ -844,6 +842,15 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        newTask->stdout=STDOUT;
        newTask->stderr=STDERR;
 	}
+
+	// INVARIANT: every task's cwd is a valid absolute path, no exceptions.
+	// ktask is created with a DUMMY stack-local parent whose cwd is NULL, so
+	// the inheritance branch above skipped the copy and left ktask's cwd an
+	// empty string — which every task in the system then inherited, since
+	// ktask is everyone's ancestor (getcwd returned "" — caught by cwd_test
+	// step 1 on the cwd slice's very first boot). Rootless tasks live at /.
+	if (newTask->cwd != NULL && newTask->cwd[0] == '\0')
+		strcpy(newTask->cwd, "/");
 
 	// Every task is born with a fresh handle table: 0/1/2 wired to the console.
 	//
