@@ -8,10 +8,11 @@
 
 // Flat key/val environment stored in one or more contiguous pages.
 //
-// Memory layout (per page_count pages):
-//
-//   [ uint32_t page_count | uint32_t count | uint32_t data_end | char data[] ]
-//   ^--- header (ENV_HEADER_SIZE bytes) ---^                    ^--- strings ---^
+// THE LAYOUT IS ABI (since os64_getenv landed in libos64): the struct lives
+// in abi/include/os64/env.h, shared with userland exactly like the syscall
+// numbers — the kernel maps this block read-only into every task and hands
+// it to main() as the third argument, so both sides must walk the same
+// bytes. envpage_t is the kernel's traditional name for it; keep using it.
 //
 // data[] holds alternating null-terminated strings:
 //   key0\0val0\0key1\0val1\0...
@@ -20,12 +21,8 @@
 //
 // page_count is currently always 1.  Multi-page expansion is reserved for
 // when a process needs more than ~4 KB of environment data.
-typedef struct {
-    uint32_t page_count;   // number of pages allocated (always >= 1)
-    uint32_t count;        // number of key/val pairs
-    uint32_t data_end;     // offset into data[] of the next free byte
-    char     data[];       // packed key\0val\0 pairs
-} envpage_t;
+#include "os64/env.h"
+typedef os64_env_block_t envpage_t;
 
 #define ENV_HEADER_SIZE       offsetof(envpage_t, data)
 #define ENV_DATA_CAPACITY(pg) ((uint32_t)((pg) * PAGE_SIZE - ENV_HEADER_SIZE))

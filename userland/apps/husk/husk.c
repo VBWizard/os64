@@ -68,6 +68,11 @@ static int read_line(char *buf, int cap)
 			if (n > 0) { n--; os64_write(1, "\b \b", 3); }   // rub out one glyph
 			continue;
 		}
+		// Other control chords (Ctrl+A..Z now arrive as 0x01..0x1A) have no
+		// line-editing meaning yet — swallow them rather than burying
+		// invisible bytes in the command. Tab stays: it's typeable text.
+		if ((unsigned char)c < 0x20 && c != '\t')
+			continue;
 		if (n < cap - 1)
 		{
 			buf[n++] = c;
@@ -175,6 +180,50 @@ static int extract_redirections(char *cargv[], char **inFile, char **outFile)
 	return w == 0 ? -1 : 0;   // a line that was ALL redirections has no program
 }
 
+// PATH search — V7's gift (1979; before that Unix shells hardcoded /bin).
+// Resolve a command name to something spawnable:
+//   - a name containing '/' names a PLACE — used exactly as typed, no search
+//   - a bare name tries the cwd first (so `cd /bin` + `ls` works exactly as
+//     it did before PATH existed), then each colon-separated PATH directory
+// Existence is probed with os64_stat — "what is this one name?" — so a
+// directory can never win the search (typing `bin` at / must not try to
+// exec a directory). Returns `cmd` itself or `buf` filled with the hit;
+// on no hit, returns `cmd` unresolved and lets spawn deliver the "no".
+static const char *resolve_command(const char *cmd, char *buf, int cap)
+{
+	for (const char *p = cmd; *p != '\0'; p++)
+		if (*p == '/')
+			return cmd;
+
+	os64_dirent_t e;
+	if (os64_stat(cmd, &e) == 0 && !(e.flags & OS64_DE_DIR))
+		return cmd;
+
+	const char *path = os64_getenv("PATH");
+	if (path == NULL)
+		return cmd;
+
+	while (*path != '\0')
+	{
+		int n = 0;
+		while (*path != '\0' && *path != ':' && n < cap - 1)
+			buf[n++] = *path++;
+		if (*path == ':')
+			path++;                        // step over the separator
+		if (n == 0)
+			continue;                      // empty PATH element: skip
+		if (n < cap - 1 && buf[n - 1] != '/')
+			buf[n++] = '/';
+		for (const char *c = cmd; *c != '\0' && n < cap - 1; c++)
+			buf[n++] = *c;
+		buf[n] = '\0';
+
+		if (os64_stat(buf, &e) == 0 && !(e.flags & OS64_DE_DIR))
+			return buf;
+	}
+	return cmd;
+}
+
 // Build and run a pipeline: spawn every stage, wiring stage i's stdout to
 // stage i+1's stdin through a pipe. The last stage keeps the console.
 //
@@ -243,7 +292,13 @@ static void run_pipeline(char *stages[], int nstages)
 		int out = (outRedir >= 0) ? outRedir
 		        : (i < nstages - 1) ? p[1] : -1;             // -1: console
 
-		long pid = os64_spawn_redirected(cargv[0], cargv, in, out, -1);
+		// PATH resolution happens HERE, at spawn time — argv[0] stays the
+		// name as typed (a program is told what it was called, not where it
+		// was found; that's how busybox-style tricks stay possible someday).
+		char pathbuf[256];
+		const char *prog = resolve_command(cargv[0], pathbuf, sizeof(pathbuf));
+
+		long pid = os64_spawn_redirected(prog, cargv, in, out, -1);
 
 		// Hand-off done — drop husk's copies of EVERYTHING it just passed
 		// along (or displaced). The displaced case matters: if a redirect won

@@ -21,10 +21,17 @@ LD ?= x86_64-elf-ld
 # repo root: `make NOWERROR=1 run`) builds warnings-as-warnings for that run
 # only. The default is strict; softness is a choice you make out loud.
 WERROR_FLAG := $(if $(NOWERROR),,-Werror)
+# -MMD -MP: header dependency tracking, same as the kernel makefile (and for
+# the same reason, learned the same day it almost was learned twice): without
+# it, growing a struct in args.h left every app's .o compiled against the OLD
+# layout — ls read args.value 8 bytes off and got NULL, on 2026-07-19, hours
+# after the kernel's identical lesson was already written down. The .d files
+# land next to the .o's; the -include below pulls them in. In CFLAGS because
+# CFLAGS is what the compile rules actually pass.
 CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone \
            -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
-           $(WERROR_FLAG) \
+           $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include
 LDFLAGS ?= -static -nostdlib -T $(CURDIR)/link/app.ld -z max-page-size=0x1000
 
@@ -32,7 +39,7 @@ BIN     := $(CURDIR)/bin
 OBJ     := $(CURDIR)/obj
 
 # libos64 objects + the launch stub link into every app.
-RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c
+RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/env.c
 RUNTIME_OBJS := $(patsubst %,$(OBJ)/%.o,$(RUNTIME_SRCS))
 
 # Every apps/<name>/<name>.c is an app named <name>.
@@ -87,6 +94,12 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS))
 	@$(foreach app,$(APPS),\
 	   printf 'add-symbol-file %s/%s %s\n' "$(BIN)" "$(app)" "$(APP_BASE_$(app))" >> $@;)
 	@printf '# (symbols for %s)\n' "$(APPS)" >> $@
+
+# Every .d gcc emitted for the runtime and each app — self-maintaining: each
+# compile regenerates its .d with the current include list, so it cannot drift.
+HEADER_DEPS := $(RUNTIME_OBJS:.o=.d) \
+               $(foreach app,$(APPS),$(OBJ)/apps/$(app)/$(app).c.d)
+-include $(HEADER_DEPS)
 
 $(OBJ)/%.c.o: %.c
 	@mkdir -p "$(dir $@)"

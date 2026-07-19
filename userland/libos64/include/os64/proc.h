@@ -28,6 +28,20 @@ void os64_exit(int code) __attribute__((noreturn));
 // kernel-side, so a 128-byte buffer always suffices.
 long os64_getcwd(char *buf, size_t len);
 
+// The ENVIRONMENT — more process state. The kernel maps every task's env
+// block read-only into its address space and hands it to main() as the third
+// argument; launch.S ALSO stashes that pointer in a library global before
+// calling main, so a leaf function can ask for a variable without the
+// program threading envp through itself. The block layout is ABI
+// (abi/include/os64/env.h): packed key\0value\0 pairs — real string keys
+// and values, no "KEY=VALUE" re-splitting, no os32-style fixed-width slots.
+
+// Look up `key`. Returns a pointer to its value INSIDE the (read-only,
+// process-lifetime) environment block, or NULL if unset. Never allocates.
+//
+//     const char *path = os64_getenv("PATH");   // e.g. "/bin"
+const char *os64_getenv(const char *key);
+
 // Change directory. Relative and messy paths welcome ("../dir1//./x") — the
 // kernel canonicalizes before storing. Returns 0, or negative if the target
 // doesn't exist or isn't a directory (in which case the cwd is UNCHANGED).

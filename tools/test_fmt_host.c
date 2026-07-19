@@ -9,7 +9,8 @@
 //
 // Build & run:
 //   gcc -I userland/libos64/include -I abi/include userland/libos64/fmt.c
-//       userland/libos64/args.c tools/test_fmt_host.c -o /tmp/os64_fmt_test
+//       userland/libos64/args.c userland/libos64/env.c tools/test_fmt_host.c
+//       -o /tmp/os64_fmt_test     (one line)
 //   /tmp/os64_fmt_test
 
 #include <stdio.h>
@@ -17,6 +18,12 @@
 #include <stdint.h>
 #include "os64/fmt.h"
 #include "os64/args.h"
+#include "os64/env.h"     // the ABI env block — os64_getenv walks it
+#include "os64/proc.h"    // os64_getenv declaration
+
+// env.c's global, normally stored by launch.S before main; the test sets it
+// to a hand-built block.
+extern const os64_env_block_t *__os64_env;
 
 // fmt.c's printf veneers call os64_write; on the host, swallow it.
 long os64_write(int handle, const void *buf, size_t len)
@@ -173,9 +180,31 @@ int main(void)
         EXPECT(os64_args_next(&a) == OS64_ARG_HELP);
         a.about = "print the current working directory";
         os64_args_help(&a, "pwd");           // must not crash on NULL specs
+        EXPECT(a.details == NULL);           // init must null it (stack garbage otherwise)
+        a.details = "the one true path, canonicalized";
+        os64_args_help(&a, "pwd");           // about + details + usage, no crash
         static const os64_optspec_t blank[] = { {0, NULL, 0, NULL} };
         os64_args_init(&a, 2, argv, blank, 1);
         os64_args_help(&a, "pwd");           // blank row: prints nothing
+    }
+    {   // ── env: os64_getenv over a hand-built ABI block ────────────────────
+        // (raw buffer + cast, because a struct ending in a flexible array
+        // member can't legally nest inside another struct)
+        static unsigned char raw[sizeof(os64_env_block_t) + 64];
+        os64_env_block_t *blk = (os64_env_block_t *)raw;
+        const char pairs[] = "PATH\0/bin\0HOSTNAME\0yogi\0";
+        memcpy(blk->data, pairs, sizeof(pairs));
+        blk->page_count = 1;
+        blk->count = 2;
+        blk->data_end = sizeof(pairs) - 1;   // through the last pair's NUL
+
+        __os64_env = blk;
+        EXPECT(os64_getenv("PATH") != NULL && strcmp(os64_getenv("PATH"), "/bin") == 0);
+        EXPECT(os64_getenv("HOSTNAME") != NULL && strcmp(os64_getenv("HOSTNAME"), "yogi") == 0);
+        EXPECT(os64_getenv("NOPE") == NULL);
+        EXPECT(os64_getenv("PAT") == NULL);     // prefix of a key is not the key
+        __os64_env = NULL;
+        EXPECT(os64_getenv("PATH") == NULL);    // no block = honest NULL
     }
     {   // value option may end a bundle, never sit inside one
         char *argv[] = { "prog", "-lo", "f", NULL };

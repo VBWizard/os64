@@ -22,6 +22,7 @@
 .intel_syntax noprefix
 
 .extern main
+.extern __os64_env
 .global _start
 .type _start, @function
 
@@ -39,6 +40,15 @@ _start:
     // RDI/RSI/RDX arrive holding argc/argv/envp (kernel-set — see above),
     // which ARE main's first three SysV arguments. Pass them through
     // untouched.
+
+    // But first: publish the env block pointer for os64_getenv (libos64
+    // env.c) — the environment is process-global state, and stashing it here
+    // means no program ever has to thread envp through its own call tree
+    // just so a leaf function can ask for PATH. RAX is free (no meaning at
+    // entry) and RDI/RSI/RDX stay untouched for main.
+    lea rax, [rip + __os64_env]
+    mov [rax], rdx
+
     call main
 
     // main returned: RAX = its int return value. Convert to exit(code).
