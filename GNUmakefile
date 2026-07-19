@@ -53,6 +53,25 @@ DISK_OFFSET ?= 1048576
 DISK_SIZE_MB ?= 64
 DISK_PARTUUID ?= 2f4fd02e-68b4-4c82-98bc-72467529b3fc
 
+# ---- The ext2 test partition (partition 2) --------------------------------
+# Formatted by REAL e2fsprogs on the build host and populated by debugfs —
+# os64 never writes a byte of it. That's the point: the kernel's ext2 driver
+# must parse a filesystem someone ELSE made (mkfs.ext2), with content written
+# OUTSIDE the OS. Block size pinned to 1024 so pattern.bin's 1.5MB reliably
+# exercises direct, single-indirect AND double-indirect block maps (see
+# tools/gen_ext2_testdata.py for the math).
+# The partition rides the same image (and therefore the ISO/ramdisk boots
+# too), right after the FAT partition. The FAT partition keeps DISK_SIZE_MB
+# and its GUID exactly as before — root mounting is untouched.
+EXT2_SIZE_MB ?= 16
+EXT2_PARTUUID ?= 1ec5f5ab-71b7-45cd-a7a4-05646e878e57
+EXT2_TEST_IMAGE ?= $(CURDIR)/disk/ext2_test.img
+EXT2_STAGING ?= $(CURDIR)/disk/ext2_staging
+# Partition 2 starts right after partition 1: 2048 boot-gap sectors + the FAT
+# partition. Total image adds 2MB slack for the GPT structures.
+EXT2_START_SECTOR := $(shell echo $$((2048 + $(DISK_SIZE_MB) * 2048)))
+TOTAL_DISK_MB := $(shell echo $$(($(DISK_SIZE_MB) + $(EXT2_SIZE_MB) + 2)))
+
 
 # Define drive/device flags
 QEMU_DRIVE_FLAGS = \
@@ -87,7 +106,7 @@ USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
 
 # Kernel-side ring-3 test fixtures that also ride the image.
 KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
-                     syscall_smoke exit_by_return file_io redirect_io dir_list libtest.so)
+                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test libtest.so)
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
 
 
@@ -192,18 +211,40 @@ userland:
 # recipe still recreates the image from scratch (that is the honest thing to do
 # — it guarantees no stale files linger from a previous layout); what changed is
 # WHEN it runs.
-$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt GNUmakefile
+# The ext2 test image, built entirely with host tools (mkfs.ext2 + debugfs —
+# no loop devices, no sudo). Rebuilds only when the generator changes.
+$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py GNUmakefile
+	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
+	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
+	rm -f $(EXT2_TEST_IMAGE)
+	truncate -s $(EXT2_SIZE_MB)M $(EXT2_TEST_IMAGE)
+	# -b 1024 pins the block size the test math depends on; -O ^dir_index
+	# keeps directories plain linear lists (dir_index is COMPAT — a linear
+	# reader works either way — but pinning it keeps the on-disk layout the
+	# driver's simplest case while the driver IS its simplest case).
+	mkfs.ext2 -F -q -b 1024 -L OS64EXT2 -O ^dir_index $(EXT2_TEST_IMAGE)
+	debugfs -w -f $(EXT2_STAGING)/debugfs.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
+	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content)"
+
+$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
 	# The rm matters: truncate alone would leave stale GPT/FAT bytes behind.
 	rm -f $(DISK_IMAGE)
-	truncate -s $(DISK_SIZE_MB)M $(DISK_IMAGE)
-	# --new=1:2048:0 — end sector 0 means "largest possible": the partition
-	# auto-fills the image (minus the backup GPT at the end), so DISK_SIZE_MB
-	# is the single knob for image AND partition size.
-	sgdisk $(DISK_IMAGE) --new=1:2048:0 --typecode=1:0700 --change-name=1:"os64" --partition-guid=1:$(DISK_PARTUUID)
-	mformat -F -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::
+	truncate -s $(TOTAL_DISK_MB)M $(DISK_IMAGE)
+	# Partition 1 (FAT root): same start, same size, same GUID as always —
+	# now explicitly bounded (+$(DISK_SIZE_MB)M) instead of "fill the image",
+	# because partition 2 lives after it.
+	sgdisk $(DISK_IMAGE) --new=1:2048:+$(DISK_SIZE_MB)M --typecode=1:0700 --change-name=1:"os64" --partition-guid=1:$(DISK_PARTUUID)
+	# Partition 2 (ext2 test): 0:0 = next free spot, fill the remainder.
+	sgdisk $(DISK_IMAGE) --new=2:0:0 --typecode=2:8300 --change-name=2:"ext2test" --partition-guid=2:$(EXT2_PARTUUID)
+	# -T bounds the FAT filesystem to partition 1's sectors — mformat cannot
+	# be allowed to size itself from the file, which now extends past the
+	# partition and into ext2 territory.
+	mformat -F -T $(shell echo $$(($(DISK_SIZE_MB) * 2048))) -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::
+	# Drop the host-authored ext2 filesystem into partition 2, byte for byte.
+	dd if=$(EXT2_TEST_IMAGE) of=$(DISK_IMAGE) bs=512 seek=$(EXT2_START_SECTOR) conv=notrunc,sparse status=none
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/bin > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/lib > /dev/null 2>&1
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
@@ -225,6 +266,18 @@ disk-init disk-populate: $(DISK_IMAGE)
 disk:
 	rm -f $(DISK_IMAGE)
 	$(MAKE) $(DISK_IMAGE)
+
+# Refresh compile_commands.json — the per-file compiler flags VSCode's
+# IntelliSense runs on (see .vscode/c_cpp_properties.json). bear records the
+# real invocations, so it needs them to RUN: this is a full rebuild. Rerun
+# after adding new source files; nothing else needs it.
+# -k (keep going): a half-written app mustn't truncate the database — bear
+# records every compile it SEES, so the more of the build that runs past a
+# broken file, the more complete the record. The build failing is fine here;
+# compdb's product is the json, not the ISO.
+.PHONY: compdb
+compdb:
+	-bear -- $(MAKE) -B -k
 
 # ---- VirtualBox disk sync -------------------------------------------------
 # The VBox VM boots the DVD from C:/temp/os64_kernel.iso (refreshed by the
