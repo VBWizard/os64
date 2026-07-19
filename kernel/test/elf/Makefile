@@ -6,6 +6,8 @@ RETEXIT_OUTPUT ?= ../../bin/exit_by_return
 FILEIO_OUTPUT ?= ../../bin/file_io
 REDIR_OUTPUT ?= ../../bin/redirect_io
 DIRLIST_OUTPUT ?= ../../bin/dir_list
+MAPUNMAP_OUTPUT ?= ../../bin/map_unmap
+CWDTEST_OUTPUT ?= ../../bin/cwd_test
 LIBTEST ?= ../../bin/libtest.so
 
 CC ?= x86_64-elf-gcc
@@ -50,7 +52,7 @@ ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -mno-mmx -m
 OBJS := serial_ping.o
 
 .PHONY: all
-all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT) $(REDIR_OUTPUT) $(DIRLIST_OUTPUT)
+all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT) $(REDIR_OUTPUT) $(DIRLIST_OUTPUT) $(MAPUNMAP_OUTPUT) $(CWDTEST_OUTPUT)
 
 $(OUTPUT): $(OBJS)
 	@mkdir -p "$$(dirname $@)"
@@ -104,6 +106,20 @@ $(DIRLIST_OUTPUT): dir_list.o
 dir_list.o: dir_list.c
 	$(CC) $(ARG_CFLAGS) -c $< -o $@
 
+$(MAPUNMAP_OUTPUT): map_unmap.o
+	@mkdir -p "$$(dirname $@)"
+	$(LD) $(LDFLAGS) -o $@ map_unmap.o
+
+map_unmap.o: map_unmap.c
+	$(CC) $(ARG_CFLAGS) -c $< -o $@
+
+$(CWDTEST_OUTPUT): cwd_test.o
+	@mkdir -p "$$(dirname $@)"
+	$(LD) $(LDFLAGS) -o $@ cwd_test.o
+
+cwd_test.o: cwd_test.c
+	$(CC) $(ARG_CFLAGS) -c $< -o $@
+
 $(DYN_OUTPUT): dyn_consumer.o $(LIBTEST)
 	@mkdir -p "$$(dirname $@)"
 	$(LD) $(DYN_LDFLAGS) -o $@ dyn_consumer.o $(LIBTEST)
@@ -113,4 +129,4 @@ dyn_consumer.o: dyn_consumer.c
 
 .PHONY: clean
 clean:
-	rm -f $(OBJS) $(OUTPUT) dyn_consumer.o $(DYN_OUTPUT) arg_echo.o $(ARG_OUTPUT) syscall_smoke.o $(SMOKE_OUTPUT) exit_by_return.o $(RETEXIT_OUTPUT) file_io.o $(FILEIO_OUTPUT) redirect_io.o $(REDIR_OUTPUT) dir_list.o $(DIRLIST_OUTPUT)
+	rm -f $(OBJS) $(OUTPUT) dyn_consumer.o $(DYN_OUTPUT) arg_echo.o $(ARG_OUTPUT) syscall_smoke.o $(SMOKE_OUTPUT) exit_by_return.o $(RETEXIT_OUTPUT) file_io.o $(FILEIO_OUTPUT) redirect_io.o $(REDIR_OUTPUT) dir_list.o $(DIRLIST_OUTPUT) map_unmap.o $(MAPUNMAP_OUTPUT) cwd_test.o $(CWDTEST_OUTPUT)

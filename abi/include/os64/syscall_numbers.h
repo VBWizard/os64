@@ -29,6 +29,10 @@
 #define SYSCALL_OPEN       9
 #define SYSCALL_SEEK       10
 #define SYSCALL_READDIR    11
+#define SYSCALL_MAP        12
+#define SYSCALL_UNMAP      13
+#define SYSCALL_GETCWD     14
+#define SYSCALL_CHDIR      15
 
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the
