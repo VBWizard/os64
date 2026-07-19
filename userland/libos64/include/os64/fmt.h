@@ -19,6 +19,16 @@
 // Deliberately absent until something demands them: floating point (nothing
 // in an OS wants it), %n (nothing GOOD wants it), locale anything.
 //
+// THE TYPE→FORMAT TABLE (house convention 2026-07-19: stdint.h names in all
+// new code — see nvme.c for the style done right since day one). os64 is
+// LP64 and owns this printf, so the whole mapping is five lines, no PRIu64
+// macro soup, ever:
+//   uint8_t / uint16_t / uint32_t     %u   (%x hex)   [varargs promote to int]
+//   int8_t  / int16_t  / int32_t      %d
+//   uint64_t / uintptr_t / size_t     %lu  (%lx hex)
+//   int64_t                           %ld
+//   any pointer                       %p
+//
 // These are freestanding and reentrant: no shared buffers, no allocation —
 // os64_printf's scratch lives on the caller's stack.
 
@@ -29,15 +39,15 @@
 // Format into buf (always NUL-terminated if size > 0). Returns the length
 // the FULL result would have — if it's >= size, the output was truncated
 // (the standard snprintf contract, which is one of C's genuinely good ones).
-int os64_snprintf(char *buf, size_t size, const char *fmt, ...);
-int os64_vsnprintf(char *buf, size_t size, const char *fmt, va_list args);
+int32_t os64_snprintf(char *buf, size_t size, const char *fmt, ...);
+int32_t os64_vsnprintf(char *buf, size_t size, const char *fmt, va_list args);
 
 // Format and write to a handle. os64_printf goes to 1 (stdout by
 // convention); os64_hprintf targets any handle — 2 for errors, a file, a
 // pipe end; it neither knows nor cares (that's the point of handles).
 // Returns bytes written, or negative on error. Output beyond 1024 formatted
 // bytes per call is truncated — print in pieces if you mean more.
-int os64_printf(const char *fmt, ...);
-int os64_hprintf(int handle, const char *fmt, ...);
+int32_t os64_printf(const char *fmt, ...);
+int32_t os64_hprintf(int32_t handle, const char *fmt, ...);
 
 #endif // OS64_FMT_H

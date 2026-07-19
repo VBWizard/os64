@@ -15,7 +15,7 @@ void *os64_map(size_t len)
     return (void *)r;
 }
 
-long os64_unmap(void *base)
+int64_t os64_unmap(void *base)
 {
     return (long)os64_syscall1(SYSCALL_UNMAP, (uint64_t)base);
 }

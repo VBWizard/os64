@@ -47,20 +47,21 @@
 // blank rows, but say what you mean: NULL, 0.)
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
     char        letter;       // the short form: 'l' for -l (required, unique)
     const char *name;         // the long form: "long" for --long (or NULL)
-    int         takes_value;  // option consumes a value (next token or =...)
+    int32_t     takes_value;  // option consumes a value (next token or =...)
     const char *help;         // one line, shown by os64_args_help
 } os64_optspec_t;
 
 typedef struct {
     // set by init — treat as read-only after
-    int argc;
+    int32_t argc;
     char **argv;
     const os64_optspec_t *specs;
-    int nspecs;
+    int32_t nspecs;
     // OPTIONAL, yours to set after init (the caller owns this struct — that's
     // the design): a one-line details of the program, printed by
     // os64_args_help under the usage line. NULL = no details.
@@ -70,9 +71,9 @@ typedef struct {
     // OPTIONAL, same contract as about: a second line printed after it.
     const char *details;
     // iteration state — the parser's, not yours
-    int index;
+    int32_t index;
     const char *bundle;       // mid "-la": pointer to the next letter
-    int no_more_opts;         // a "--" was seen
+    int32_t no_more_opts;     // a "--" was seen
     // per-result output
     const char *value;        // option's value / positional text / bad token
 } os64_args_t;
@@ -82,11 +83,11 @@ typedef struct {
 #define OS64_ARG_ERROR      (-3)  // .value = the offending token
 #define OS64_ARG_HELP       (-4)  // user asked for -h/--help
 
-void os64_args_init(os64_args_t *a, int argc, char **argv,
-                    const os64_optspec_t *specs, int nspecs);
+void os64_args_init(os64_args_t *a, int32_t argc, char **argv,
+                    const os64_optspec_t *specs, int32_t nspecs);
 
 // Returns a spec's letter, or one of the OS64_ARG_* results above.
-int os64_args_next(os64_args_t *a);
+int32_t os64_args_next(os64_args_t *a);
 
 // Print "usage: <usage>" plus one generated line per option, to handle 1.
 void os64_args_help(const os64_args_t *a, const char *usage);

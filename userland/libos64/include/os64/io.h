@@ -20,7 +20,7 @@
 
 // Write `len` bytes of `buf` to `handle`. Returns bytes written, or a
 // negative value on error (the in-band status half of the ABI; no errno).
-long os64_write(int handle, const void *buf, size_t len);
+int64_t os64_write(int32_t handle, const void *buf, size_t len);
 
 // Read up to `len` bytes from `handle` into `buf`. Blocks until at least one
 // byte is available, then returns the count read (>= 1), or negative on error.
@@ -31,7 +31,7 @@ long os64_write(int handle, const void *buf, size_t len);
 // 0 at END OF INPUT (all writers on the other end of the pipe have closed).
 // That 0 is how a filter knows its input is finished — the canonical loop is:
 //     while ((n = os64_read(0, buf, sizeof buf)) > 0) { ...process n bytes... }
-long os64_read(int handle, void *buf, size_t len);
+int64_t os64_read(int32_t handle, void *buf, size_t len);
 
 // Open the file at `path` (absolute, on the root filesystem) and return a
 // handle, or negative on error (no such file, bad mode, out of handles).
@@ -46,20 +46,20 @@ long os64_read(int handle, void *buf, size_t len);
 // `program < file` with zero new mechanism. A file read returns short counts
 // near the end and 0 AT the end, so the canonical filter loop needs no
 // file-awareness whatsoever. (That is the cat model working as designed.)
-long os64_open(const char *path, const char *mode);
+int64_t os64_open(const char *path, const char *mode);
 
 // Move a file handle's position. `whence` says what `offset` is measured
 // from: OS64_SEEK_SET (start), OS64_SEEK_CUR (here), OS64_SEEK_END (end —
 // offset 0 gives the file's size, negative offsets back up from it).
 // Returns the NEW absolute position, or negative on error. Only files have
 // a position — seeking a pipe or the console is an error.
-long os64_seek(int handle, long offset, int whence);
+int64_t os64_seek(int32_t handle, int64_t offset, int32_t whence);
 
 // Open the DIRECTORY at `path` for listing. Returns a handle for
 // os64_readdir(), released with plain os64_close() — a directory is just
 // another thing a handle can be. (Under the hood this is os64_open with
 // mode "d": one open, one handle table, one close.)
-long os64_opendir(const char *path);
+int64_t os64_opendir(const char *path);
 
 // Produce the next entry of an open directory: name, size, and an
 // OS64_DE_DIR flag in one call (see <os64/dirent.h> — no follow-up stat
@@ -74,7 +74,7 @@ long os64_opendir(const char *path);
 //     while (os64_readdir(d, &e) == 1)
 //         ...e.name, e.size, (e.flags & OS64_DE_DIR)...
 //     os64_close(d);
-long os64_readdir(int handle, os64_dirent_t *entry);
+int64_t os64_readdir(int32_t handle, os64_dirent_t *entry);
 
 // stat is readdir for exactly one name: fill *entry for whatever `path`
 // names — file OR directory — without opening it. Same os64_dirent_t that
@@ -87,7 +87,7 @@ long os64_readdir(int handle, os64_dirent_t *entry);
 //     if (os64_stat(arg, &e) < 0)        ...no such thing...
 //     else if (e.flags & OS64_DE_DIR)    ...opendir/readdir loop...
 //     else                               ...print e.name, e.size directly...
-long os64_stat(const char *path, os64_dirent_t *entry);
+int64_t os64_stat(const char *path, os64_dirent_t *entry);
 
 // Create a pipe. h[0] = read end, h[1] = write end. Returns 0, or negative.
 //
@@ -97,16 +97,16 @@ long os64_stat(const char *path, os64_dirent_t *entry);
 // so a shell that keeps its copy of the write end open leaves the reader
 // waiting forever for an EOF that can never come. That is the single most
 // common way a hand-written shell hangs.
-long os64_pipe(int h[2]);
+int64_t os64_pipe(int32_t h[2]);
 
 // Give up a handle. For a pipe end this is SIGNALLING, not bookkeeping:
 // dropping the last write end is what delivers end-of-input to the reader, and
 // dropping the last read end is what kills a writer that is producing into the
 // void.
-long os64_close(int handle);
+int64_t os64_close(int32_t handle);
 
 // Convenience: write a NUL-terminated string to the console (handle 1).
-long os64_puts(const char *s);
+int64_t os64_puts(const char *s);
 
 // (os64_exit lived here for one glorious scaffolding week — exit is process
 // control, not I/O, and it moved home to <os64/proc.h> the day its owner

@@ -6,6 +6,7 @@
 // (both spawn AND fork/exec are first-class — see LIBOS64.md/ABI.md).
 
 #include <stddef.h>
+#include <stdint.h>
 
 // Yield the CPU to the scheduler; returns when rescheduled.
 void os64_yield(void);
@@ -13,7 +14,7 @@ void os64_yield(void);
 // Terminate the task with `code`. Does not return. (A plain `return` from
 // main() reaches the same place through launch — both paths are first-class;
 // this one is for exiting from anywhere BUT main.)
-void os64_exit(int code) __attribute__((noreturn));
+void os64_exit(int32_t code) __attribute__((noreturn));
 
 // The current working directory — process state, owned by the KERNEL (which
 // is what makes it trustworthy: chdir validates the target exists at change
@@ -26,7 +27,7 @@ void os64_exit(int code) __attribute__((noreturn));
 // Copy the cwd (canonical, absolute, NUL-terminated) into buf. Returns its
 // length, or negative if the buffer is too small. TASK_MAX_PATH_LEN is 128
 // kernel-side, so a 128-byte buffer always suffices.
-long os64_getcwd(char *buf, size_t len);
+int64_t os64_getcwd(char *buf, size_t len);
 
 // The ENVIRONMENT — more process state. The kernel maps every task's env
 // block read-only into its address space and hands it to main() as the third
@@ -45,13 +46,13 @@ const char *os64_getenv(const char *key);
 // Change directory. Relative and messy paths welcome ("../dir1//./x") — the
 // kernel canonicalizes before storing. Returns 0, or negative if the target
 // doesn't exist or isn't a directory (in which case the cwd is UNCHANGED).
-long os64_chdir(const char *path);
+int64_t os64_chdir(const char *path);
 
 // Spawn `path` as a child, non-blocking. `argv` is a NULL-terminated array of
 // string pointers (argv[0] conventionally the program name); pass NULL for no
 // args. Returns the child's pid (> 0), or negative on error. The child
 // inherits this process's environment.
-long os64_spawn(const char *path, char *const argv[]);
+int64_t os64_spawn(const char *path, char *const argv[]);
 
 // Spawn with REDIRECTION: `in`/`out`/`err` are handles of THIS process to
 // install as the child's 0/1/2, or -1 to leave that stream on the console.
@@ -66,14 +67,14 @@ long os64_spawn(const char *path, char *const argv[]);
 //
 // The child gets its OWN reference on any pipe end passed here, so the parent
 // closing its copy does not yank the pipe out from under it.
-long os64_spawn_redirected(const char *path, char *const argv[],
-                           int in, int out, int err);
+int64_t os64_spawn_redirected(const char *path, char *const argv[],
+                           int32_t in, int32_t out, int32_t err);
 
 // Wait for a child to exit and reap it. pid > 0 waits for that specific child;
 // pid == 0 waits for the first of any child to end. Returns the pid that
 // ended (> 0), or negative if there's no such child; writes the child's exit
 // code to *exit_code if non-NULL. Returns immediately if the child already
 // ended.
-long os64_wait(long pid, int *exit_code);
+int64_t os64_wait(int64_t pid, int32_t *exit_code);
 
 #endif // OS64_PROC_H

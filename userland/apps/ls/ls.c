@@ -45,11 +45,11 @@ int main(int argc, char **argv)
             break; // <-- "/bin" arrives here
         case OS64_ARG_HELP:
             os64_args_help(&args, "ls [-l] [path]");
-            returnCode = 2;
+            returnCode = 1;
             break;
         default:
             os64_args_help(&args, "ls [-l] [path]");
-            returnCode = 3;
+            returnCode = 2;
             break;
         }
     }
@@ -58,19 +58,23 @@ int main(int argc, char **argv)
     {
         // Get a dirent_t for the passed positional argument to see if its a file or a directory.
         retVal = os64_stat(pathToListp, &statEntry);
-        //verify return status!
-        if (statEntry.flags == 0)
+        if (retVal != 0)
+        {
+            returnCode = 3;
+            os64_hprintf(OS64_STDERR, "Error: Could not stat file '%s' (%u)\n", pathToListp, retVal);
+        }
+        if (!returnCode && statEntry.flags == 0)
         {
             //Argument passed is a file so just print it and we're done!
             print_an_entry(&statEntry, longMode);
             os64_printf("\n");
         }
-        else
+        else if (!returnCode)
         {
 
             // Get the cwd. This will be used if no path was passed to ls, since pathToListp won't be set to that parameter's address
             // And yes I realize I don't "have to" do this but I am anyways. :-)
-            if (!pathToListp)
+            if (!pathToListp[0]=='\0')
                 os64_getcwd(pwdPathToList, 512);
             dirHandle = os64_opendir(pathToListp);
             if (dirHandle < 0)

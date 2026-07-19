@@ -13,6 +13,7 @@
 // MIDDLE, which makes brk's famous flaw structurally impossible here.
 
 #include <stddef.h>
+#include <stdint.h>
 
 // Allocate a fresh anonymous memory region of at least `len` bytes (rounded
 // up to whole 4KB pages). Returns the region base, or NULL. The region is:
@@ -31,6 +32,6 @@ void *os64_map(size_t len);
 // are bookkeeping nobody needs yet). Returns 0, or negative for an address
 // that isn't a live region base. Touching the region afterwards faults —
 // that's the use-after-free tripwire working, not a bug.
-long os64_unmap(void *base);
+int64_t os64_unmap(void *base);
 
 #endif // OS64_MEM_H

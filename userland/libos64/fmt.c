@@ -68,7 +68,7 @@ static char *utoa_rev(uint64_t v, unsigned base, int upper, char *end)
 	return p;
 }
 
-int os64_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
+int32_t os64_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
 {
 	fmt_out_t o = { buf, size, 0 };
 
@@ -223,7 +223,7 @@ done:
 	return (int)o.count;
 }
 
-int os64_snprintf(char *buf, size_t size, const char *fmt, ...)
+int32_t os64_snprintf(char *buf, size_t size, const char *fmt, ...)
 {
 	va_list args;
 	va_start(args, fmt);
@@ -238,7 +238,7 @@ int os64_snprintf(char *buf, size_t size, const char *fmt, ...)
 // the exact mistake the kernel's printd once made and unlearned.
 #define OS64_PRINTF_MAX 1024
 
-int os64_hprintf(int handle, const char *fmt, ...)
+int32_t os64_hprintf(int32_t handle, const char *fmt, ...)
 {
 	char buf[OS64_PRINTF_MAX];
 	va_list args;
@@ -254,7 +254,7 @@ int os64_hprintf(int handle, const char *fmt, ...)
 	return (int)os64_write(handle, buf, (size_t)len);
 }
 
-int os64_printf(const char *fmt, ...)
+int32_t os64_printf(const char *fmt, ...)
 {
 	char buf[OS64_PRINTF_MAX];
 	va_list args;

@@ -431,7 +431,7 @@ void kernel_main()
 	uint64_t high, low;
 	parse_debug_level(kDebugLevel, &high, &low);
 	printf("Commandline: %s (debug level 0x%016lx%016lx)\n",kKernelCommandline, high, low);
-    printd(DEBUG_BOOT, "Commandline: %s (debug level 0x%016lx%016lx)\n", kKernelCommandline, high, low);
+    printd(DEBUG_BOOT, "Commandline: %s", kKernelCommandline);
     log_debug_level(kDebugLevel);
     printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);

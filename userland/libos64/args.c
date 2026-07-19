@@ -17,8 +17,8 @@ static int a_streq_n(const char *a, const char *b, size_t n)
 	return b[n] == '\0';
 }
 
-void os64_args_init(os64_args_t *a, int argc, char **argv,
-                    const os64_optspec_t *specs, int nspecs)
+void os64_args_init(os64_args_t *a, int32_t argc, char **argv,
+                    const os64_optspec_t *specs, int32_t nspecs)
 {
 	a->argc = argc;
 	a->argv = argv;
@@ -79,7 +79,7 @@ static int deliver_short(os64_args_t *a, char c, const char *token)
 	return spec->letter;
 }
 
-int os64_args_next(os64_args_t *a)
+int32_t os64_args_next(os64_args_t *a)
 {
 	a->value = NULL;
 

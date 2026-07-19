@@ -48,7 +48,7 @@ int main(int argc, char **argv)
         else
         {
             //stat worked, so make sure the passed argument was a filename
-            if (statEntry.flags == 1)
+            if (statEntry.flags && OS64_DE_DIR == OS64_DE_DIR)
             {
                 returnCode = 5;
                 os64_hprintf(OS64_STDERR, "Error: Cannot cat a directory\n");
@@ -74,13 +74,11 @@ int main(int argc, char **argv)
         // If we got here, everything is kosher. Read the file and output it!
         while ((readCount = os64_read(fileHandle, buf, sizeof(buf))) > 0)
         {
-            os64_printf("%s", buf);
-            //NOTE: Need to memset the buffer here!
+            os64_write(1, buf, readCount);
         }
-        os64_printf("\n");
     }
 
-    if (fileHandle > 3)
+    if (fileHandle > 2)
         os64_close(fileHandle);
     os64_exit(returnCode);
 }
