@@ -185,6 +185,30 @@ static void log_page_fault_bits(uint64_t error_code)
 	}
 }
 
+// A user-mode fault the demand pager can't resolve is the APP's bug, not the
+// kernel's: kill the task, keep the OS.  This is the segmentation fault, and
+// the exit code is 139 by the oldest convention in Unix — 128 + 11, signal 11
+// being SIGSEGV's number since the Seventh Edition signal table (os64 doesn't
+// deliver signals for this yet, but the exit code keeps the lineage so shell
+// scripts and muscle memory read it correctly).
+//
+// Safe from #PF context: interrupts are already masked (the stub cli'd), we
+// are on the CPU-switched kernel interrupt stack, and task_exit() is built
+// for exactly this situation — it re-points RSP at that stack's top, switches
+// to kKernelPML4, and schedules away, never returning to the faulting frame.
+static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *why,
+    uint64_t cr2, uint64_t error_code, uint64_t rip)
+{
+	printf("\nSegmentation fault: task %lu, %s at 0x%016lx (RIP=0x%016lx, error=0x%lx)\n",
+	       task->taskID, why, cr2, rip, error_code);
+	printd(DEBUG_EXCEPTIONS, "Segmentation fault: task %lu, %s CR2=0x%016lx RIP=0x%016lx error=0x%lx\n",
+	       task->taskID, why, cr2, rip, error_code);
+
+	task->retVal = 139;   // 128 + SIGSEGV(11)
+	task_exit();
+	__builtin_unreachable();
+}
+
 void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
     if (kTestingPageFaults)
@@ -227,6 +251,13 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     vma_t *vma = vma_lookup(task, cr2);
     if (!vma)
     {
+        // Error bit 2 = the faulting access came from ring 3: the app chased
+        // a wild pointer.  Its problem, not ours — segfault the task.  (The
+        // kernel-mode paths below stay panics: a ring-0 no-VMA fault is a
+        // kernel bug, and the syscall copy helpers pre-validate user ranges
+        // precisely so a bad user pointer can never fault down here in ring 0.)
+        if (error_code & 0x4)
+            user_fault_kill(task, "access to unmapped address", cr2, error_code, rip);
         printd(DEBUG_EXCEPTIONS, "No VMA found for address 0x%016lx.\n", cr2);
         log_page_fault_bits(error_code);
         dump_stack_trace(rip);
@@ -237,7 +268,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // explicit mapping). Say so, rather than the generic no-VMA message.
         if (kHHDMMaintenanceEnabled && cr2 >= kHHDMOffset && cr2 < kHHDMOffset + 0x1000000000000UL)
             panic("Paging exception: HHDM access to unallocated physical address 0x%016lx — use-after-free or wild pointer?", cr2 - kHHDMOffset);
-        panic("Paging exception: Invalid memory access with no VMA");
+        panic("Paging exception: Invalid memory access with no VMA\n");
     }
 
     // Per-fault detail: rides DETAILED so the base demand-paging channel
@@ -292,6 +323,12 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 
     if (page_was_present)
     {
+        // Ring-3 protection violation on a non-CoW page (write to read-only
+        // data, jump into no-exec, etc.): the app's bug — segfault the task.
+        // Ring-0 violations fall through to the diagnosing panic below.
+        if (error_code & 0x4)
+            user_fault_kill(task, "protection violation", cr2, error_code, rip);
+
         // Page is present but the access was denied and this VMA is not CoW.
         // This is a genuine protection violation, not a recoverable fault.
         // Decode the error bits into the panic message rather than assuming

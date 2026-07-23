@@ -215,6 +215,53 @@ void restore_user_cr3(void)
 	}
 }
 
+// ── User-range pre-validation ────────────────────────────────────────────────
+// The copy helpers below memcpy through user VAs in ring 0.  A fault during
+// that copy is FINE when the page is demand-pageable — the #PF handler maps it
+// and the access retries — but a WILD pointer (no VMA, nothing mapped) faults
+// in KERNEL mode, and a kernel-mode fault with no VMA is, correctly, a panic.
+// An app must not be able to panic the OS by handing a syscall a garbage
+// pointer (ls did exactly that, 2026-07-22), so every page of a user range is
+// vetted before the memcpy touches it:
+//   - VMA-covered → legal: a not-present page is just demand paging waiting
+//     to happen.  For copy-OUT the VMA must also be writable — a store to a
+//     read-only page would be a ring-0 protection violation, another panic
+//     door.  (CoW pages pass correctly: their VMA says PROT_WRITE and the
+//     write fault resolves through the CoW branch.)
+//   - No VMA but present in the task's tables → legal: covers kernel-created
+//     eager mappings; the PTE's own W bit answers the writability question.
+//   - Neither → wild pointer; reject, so the syscall fails with
+//     SYSCALL_RESULT_BAD_USER_DATA instead of the kernel faulting.
+static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return false;
+
+	uintptr_t addr = (uintptr_t)user_ptr;
+	uintptr_t end = addr + length;   // no overflow: callers range-check vs kHHDMOffset first
+
+	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)
+	{
+		vma_t *vma = vma_lookup(task, page);
+		if (vma != NULL)
+		{
+			if (for_write && !(vma->prot & PROT_WRITE))
+				return false;
+			continue;
+		}
+
+		uintptr_t pte = paging_walk_paging_table_keep_flags((pt_entry_t *)task->pml4v, page, true);
+		if (pte == 0xbadbadba || !(pte & PAGE_PRESENT))
+			return false;
+		if (for_write && !(pte & PAGE_WRITE))
+			return false;
+	}
+
+	return true;
+}
+
 bool validate_and_copy_user_data(const void* user_ptr, size_t length, void* kernel_buffer)
 {
 	if (!user_ptr || !kernel_buffer || length == 0)
@@ -228,6 +275,11 @@ bool validate_and_copy_user_data(const void* user_ptr, size_t length, void* kern
 	// subtraction form also catches user_address+length overflowing to wrap
 	// back below kHHDMOffset.
 	if (user_address >= kHHDMOffset || length > kHHDMOffset - user_address)
+	{
+		return false;
+	}
+
+	if (!user_range_accessible(user_ptr, length, false))
 	{
 		return false;
 	}
@@ -407,6 +459,11 @@ static bool copy_to_user_buffer(void *user_dst, const void *kernel_src, size_t l
 
         uintptr_t user_address = (uintptr_t)user_dst;
         if (user_address >= kHHDMOffset || length > kHHDMOffset - user_address)
+        {
+                return false;
+        }
+
+        if (!user_range_accessible(user_dst, length, true))
         {
                 return false;
         }
