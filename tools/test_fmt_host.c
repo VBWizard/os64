@@ -218,6 +218,56 @@ int main(void)
         EXPECT(os64_args_next(&a) == OS64_ARG_ERROR);
     }
 
+    {   // ── os64_args_parse: the whole-loop convenience ─────────────────────
+        bool longMode = false, allMode = false;
+        const char *outName = NULL;
+        // Not static: the destinations are stack addresses. The three shapes:
+        // flag, flag, value option.
+        const os64_optspec_t pspecs[] = {
+            { 'l', "long", 0, "long listing",      .flag = &longMode },
+            { 'a', "all",  0, "include dotfiles",  .flag = &allMode },
+            { 'o', "out",  1, "output file",       .value_out = &outName },
+        };
+        const char *pos[2] = { NULL, NULL };
+        os64_args_t a;
+
+        // The happy path: bundle + long-form value + positional, one call.
+        char *argv[] = { "ls", "-la", "--out=f.txt", "/bin", NULL };
+        os64_args_init(&a, 4, argv, pspecs, 3);
+        EXPECT(os64_args_parse(&a, "ls [-la] [-o file] [path]", pos, 2) == 1);
+        EXPECT(longMode == true && allMode == true);
+        EXPECT(outName != NULL && strcmp(outName, "f.txt") == 0);
+        EXPECT(pos[0] != NULL && strcmp(pos[0], "/bin") == 0);
+
+        // More positionals than the app declared → ERROR.
+        char *argv2[] = { "ls", "p1", "p2", NULL };
+        os64_args_init(&a, 3, argv2, pspecs, 3);
+        EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_ERROR);
+
+        // Help and unknown option come back as their sentinels.
+        char *argv3[] = { "ls", "-h", NULL };
+        os64_args_init(&a, 2, argv3, pspecs, 3);
+        EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_HELP);
+        char *argv4[] = { "ls", "-z", NULL };
+        os64_args_init(&a, 2, argv4, pspecs, 3);
+        EXPECT(os64_args_parse(&a, "ls", pos, 1) == OS64_ARG_ERROR);
+
+        // A destination-less spec reached by parse is a programmer error.
+        const os64_optspec_t bare[] = { { 'x', NULL, 0, "no home" } };
+        char *argv5[] = { "prog", "-x", NULL };
+        os64_args_init(&a, 2, argv5, bare, 1);
+        EXPECT(os64_args_parse(&a, "prog", pos, 1) == OS64_ARG_ERROR);
+
+        // pwd-shaped: zero positionals allowed (NULL, 0); flags still land.
+        char *argv6[] = { "prog", "-l", NULL };
+        longMode = false;
+        os64_args_init(&a, 2, argv6, pspecs, 3);
+        EXPECT(os64_args_parse(&a, "prog", NULL, 0) == 0 && longMode == true);
+        char *argv7[] = { "prog", "oops", NULL };
+        os64_args_init(&a, 2, argv7, pspecs, 3);
+        EXPECT(os64_args_parse(&a, "prog", NULL, 0) == OS64_ARG_ERROR);
+    }
+
     if (failures == 0) {
         printf("fmt+args host tests: ALL PASS\n");
         return 0;

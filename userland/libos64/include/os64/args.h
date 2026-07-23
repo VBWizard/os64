@@ -1,6 +1,7 @@
 #ifndef OS64_ARGS_H
 #define OS64_ARGS_H
 
+#include <stdbool.h>
 // libos64 argument parsing — pulled into existence by ls, the first flagged
 // app (consumer-driven, exactly as agreed when upper's tripwire went in).
 //
@@ -54,6 +55,13 @@ typedef struct {
     const char *name;         // the long form: "long" for --long (or NULL)
     int32_t     takes_value;  // option consumes a value (next token or =...)
     const char *help;         // one line, shown by os64_args_help
+    // Destinations, used only by os64_args_parse (the whole-loop convenience
+    // below) — os64_args_next ignores them and delivers through its return
+    // value and .value exactly as always. Fill the one matching the option's
+    // shape; they sit at the END of the struct so every existing positional
+    // initializer ({'l', "long", 0, "text"}) keeps meaning what it meant.
+    bool    *flag;         // takes_value==0: parse sets *flag = true when seen
+    const char **value_out;   // takes_value==1: parse stores the value here
 } os64_optspec_t;
 
 typedef struct {
@@ -88,6 +96,34 @@ void os64_args_init(os64_args_t *a, int32_t argc, char **argv,
 
 // Returns a spec's letter, or one of the OS64_ARG_* results above.
 int32_t os64_args_next(os64_args_t *a);
+
+// The whole-loop convenience, built ON TOP of os64_args_next (which stays
+// public precisely so an app with genuinely odd arguments can keep the manual
+// loop — this is opt-in, not getopt-mandatory). After three apps hand-rolled
+// the same while/switch — flag case sets a variable, positional case saves a
+// pointer, help/default print help — the ceremony moved here and the spec
+// table, which already knew everything else, learned where results LAND
+// (.flag / .value_out above).
+//
+//     static const os64_optspec_t specs[] = {
+//         {'l', "long", 0, "one entry per line with sizes", .flag = &longMode}};
+//     const char *path = NULL;
+//     os64_args_init(&a, argc, argv, specs, 1);
+//     int32_t n = os64_args_parse(&a, "ls [-l] [path]", &path, 1);
+//     if (n < 0) os64_exit(n == OS64_ARG_HELP ? 0 : 2);
+//     // n = how many positionals landed; flags are already set
+//
+// Returns the number of positionals collected (0..max_positionals), or:
+//   OS64_ARG_HELP  — -h/--help was seen; help has been printed (usage is the
+//                    string you pass here). Exit success-ish, your call.
+//   OS64_ARG_ERROR — unknown option, missing/misplaced value, MORE positionals
+//                    than max_positionals, or a spec os64_args_parse reached
+//                    that has no destination (that last one is a programmer
+//                    error, surfaced loudly rather than silently dropped).
+//                    Help has been printed. Exit nonzero.
+// A program taking no positionals (pwd-shaped) passes NULL, 0.
+int32_t os64_args_parse(os64_args_t *a, const char *usage,
+                        const char **positionals, int32_t max_positionals);
 
 // Print "usage: <usage>" plus one generated line per option, to handle 1.
 void os64_args_help(const os64_args_t *a, const char *usage);

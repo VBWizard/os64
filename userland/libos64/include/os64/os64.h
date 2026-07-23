@@ -12,6 +12,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>  // bool/true/false — GCC ships this even freestanding
+                      // (no library behind it, same club as stdint.h); after
+                      // 30 years nobody should have to remember what 0 means
 #include "os64/io.h"
 #include "os64/proc.h"
 #include "os64/fmt.h"    // os64_printf/snprintf — columns without counting bytes

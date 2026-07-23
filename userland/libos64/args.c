@@ -160,6 +160,63 @@ int32_t os64_args_next(os64_args_t *a)
 	return deliver_short(a, tok[1], tok);
 }
 
+// The whole-loop convenience (contract and design case in args.h): drive
+// os64_args_next to END, landing each result where it belongs — flags through
+// spec->flag, values through spec->value_out, positionals into the caller's
+// array — and handling help/error by printing help and returning the sentinel.
+// Still pure computation plus os64_args_help's printing; still host-testable.
+int32_t os64_args_parse(os64_args_t *a, const char *usage,
+                        const char **positionals, int32_t max_positionals)
+{
+	int32_t npos = 0;
+	int32_t r;
+
+	while ((r = os64_args_next(a)) != OS64_ARG_END)
+	{
+		switch (r)
+		{
+		case OS64_ARG_POSITIONAL:
+			if (npos >= max_positionals)
+			{
+				os64_args_help(a, usage);
+				return OS64_ARG_ERROR;
+			}
+			positionals[npos++] = a->value;
+			break;
+
+		case OS64_ARG_HELP:
+			os64_args_help(a, usage);
+			return OS64_ARG_HELP;
+
+		case OS64_ARG_ERROR:
+			os64_args_help(a, usage);
+			return OS64_ARG_ERROR;
+
+		default:
+		{
+			// r is a spec letter — os64_args_next only returns letters it
+			// found in the table, so the lookup cannot miss.
+			const os64_optspec_t *spec = find_short(a, (char)r);
+			if (spec->takes_value && spec->value_out != NULL)
+				*spec->value_out = a->value;
+			else if (!spec->takes_value && spec->flag != NULL)
+				*spec->flag = true;
+			else
+			{
+				// A destination-less spec under parse is the PROGRAM's bug
+				// (the option would be silently swallowed) — fail loudly so
+				// it's found on the first run, not by a confused user.
+				os64_args_help(a, usage);
+				return OS64_ARG_ERROR;
+			}
+			break;
+		}
+		}
+	}
+
+	return npos;
+}
+
 void os64_args_help(const os64_args_t *a, const char *usage)
 {
     if (a->about != NULL)
