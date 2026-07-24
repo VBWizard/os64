@@ -62,6 +62,65 @@ vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tai
 	return best->fs;
 }
 
+// The synthetic phase of mount-aware readdir (see the struct directory note
+// in vfs.h). Called by syscall_readdir once the filesystem's own entries are
+// exhausted; walks kMountTable from the dir's saved cursor and serves each
+// mount point that sits DIRECTLY under this dir's mount prefix. A duplicate
+// is possible in principle (a real "fat" directory in the root fs would list
+// twice) — path RESOLUTION already gives the mount the last word there, and
+// the curated tree keeps such shadowing from arising in practice.
+int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry)
+{
+	if (dir->mount_prefix == NULL)
+		return 0;   // not a mount root — nothing synthetic to say
+
+	while (dir->mount_scan < kMountCount)
+	{
+		vfs_mount_entry_t *m = &kMountTable[dir->mount_scan++];
+		const char *rest = NULL;
+
+		// A child of "/" is "/name"; a child of "/mnt" would be "/mnt/name".
+		// (Nothing mounts below the first level today, but the parent match
+		// is written for the tree, not for today's flat table.)
+		if (dir->mount_prefix_len == 1)
+		{
+			if (m->prefix_len > 1)
+				rest = m->prefix + 1;
+		}
+		else if (m->prefix_len > dir->mount_prefix_len &&
+		         strncmp(m->prefix, dir->mount_prefix, dir->mount_prefix_len) == 0 &&
+		         m->prefix[dir->mount_prefix_len] == '/')
+		{
+			rest = m->prefix + dir->mount_prefix_len + 1;
+		}
+
+		if (rest == NULL || rest[0] == '\0')
+			continue;   // not under this dir (or IS this dir — the root entry)
+
+		bool direct_child = true;   // "/mnt/usb" under "/" is /mnt's to list
+		for (const char *c = rest; *c != '\0'; c++)
+			if (*c == '/')
+			{
+				direct_child = false;
+				break;
+			}
+		if (!direct_child)
+			continue;
+
+		memset(entry, 0, sizeof(*entry));
+		entry->flags = OS64_DE_DIR;   // a mount point always lists as a directory
+		size_t n = 0;
+		while (rest[n] != '\0' && n < OS64_DIRENT_NAME_MAX)
+		{
+			entry->name[n] = rest[n];
+			n++;
+		}
+		entry->name[n] = '\0';
+		return 1;
+	}
+	return 0;   // table exhausted — readdir's sticky EOF from here on
+}
+
 vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps)
 {
     vfs_filesystem_t *fs;

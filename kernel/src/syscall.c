@@ -1159,6 +1159,20 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	int h;
 	if (is_dir)
 	{
+		// Tag mount roots for mount-aware readdir: an fs-local path of "/"
+		// means this handle opened the top of its mount, so readdir must
+		// append the mount points living directly under it once the fs's
+		// own entries end (see vfs_readdir_child_mounts). The prefix is
+		// found by the fs pointer — one mount per fs by GUID dedupe.
+		if (p->path_copy[0] == '/' && p->path_copy[1] == '\0')
+			for (int i = 0; i < kMountCount; i++)
+				if (kMountTable[i].fs == p->fs)
+				{
+					p->dir->mount_prefix = kMountTable[i].prefix;
+					p->dir->mount_prefix_len = kMountTable[i].prefix_len;
+					break;
+				}
+
 		// Directories carry no refcount — spawn redirection rejects them, so
 		// this handle is the object's one and only owner (see handle.h).
 		h = handle_alloc(task, HANDLE_DIR, p->dir);
@@ -1224,6 +1238,13 @@ static uint64_t syscall_readdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	call_in_kernel_context(readdir_do, p);
 
 	long r = p->result;
+
+	// The fs's real entries are done: if this dir is a mount root, the mount
+	// points under it come next — namespace content no on-disk filesystem
+	// can know about. Pure mount-table scan, fine on the caller's CR3.
+	if (r == 0)
+		r = vfs_readdir_child_mounts(p->dir, &p->entry);
+
 	if (r == 1 && !copy_to_user_buffer((void *)arg1, &p->entry, sizeof(p->entry)))
 	{
 		kfree(p);

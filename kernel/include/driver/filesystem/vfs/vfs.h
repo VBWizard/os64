@@ -158,6 +158,20 @@ struct directory
 	void* handle;
 	dlist_t listEntry;
 	void *owner;
+	// Mount-aware readdir (tagged by syscall_open, consumed by
+	// syscall_readdir): when this handle opened the ROOT directory of its
+	// mount (fs-local path "/"), the mount points living directly under it
+	// ("/fat" when listing "/") are served as SYNTHETIC entries after the
+	// filesystem's own entries run out. A mount point is namespace routing,
+	// not directory content — the fs on disk has no such entry to return,
+	// so the VFS must speak for it or `ls /` can't see what `cd /fat`
+	// can reach. mount_prefix points into kMountTable (static storage,
+	// mounts never unmount) and stays NULL for any non-mount-root dir;
+	// mount_scan is the resume cursor for the synthetic phase (the
+	// allocator's zeroing initializes both).
+	const char *mount_prefix;
+	size_t mount_prefix_len;
+	int mount_scan;
 	//arena_t* arena;
 };
 
@@ -323,6 +337,13 @@ extern int kMountCount;
 // Returns NULL only when nothing is mounted. Pure string matching — no disk
 // I/O, safe from any context.
 vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tail);
+
+// The synthetic phase of mount-aware readdir: serve the next mount point
+// that is a DIRECT child of `dir`'s mount prefix (grandchildren belong to
+// deeper listings) as an os64_dirent_t — directory flag set, size 0.
+// Returns 1 = entry filled, 0 = no more (or dir isn't a mount root).
+// Pure kMountTable string scan — no disk I/O, safe from any CR3.
+int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry);
 
 // Resolve `path` against `cwd` into a CANONICAL absolute path in `out`:
 // relative paths are prefixed with cwd, "." disappears, ".." pops a component
