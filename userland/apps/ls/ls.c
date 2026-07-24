@@ -58,7 +58,7 @@ int main(int argc, char **argv)
     // help/default — is one os64_args_parse call. First adopter of the
     // convenience it inspired.
     static const os64_optspec_t specs[] = {
-        {'l', "long", 0, "one entry per line with sizes", .flag = &longMode}};
+        {'l', "long", false, "one entry per line with sizes", .flag = &longMode}};
 
     os64_args_init(&args, argc, argv, specs, 1);
     args.about = "List a directory or file";

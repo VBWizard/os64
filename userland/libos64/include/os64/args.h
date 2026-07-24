@@ -53,7 +53,7 @@
 typedef struct {
     char        letter;       // the short form: 'l' for -l (required, unique)
     const char *name;         // the long form: "long" for --long (or NULL)
-    int32_t     takes_value;  // option consumes a value (next token or =...)
+    bool     takes_value;  // option consumes a value (next token or =...)
     const char *help;         // one line, shown by os64_args_help
     // Destinations, used only by os64_args_parse (the whole-loop convenience
     // below) — os64_args_next ignores them and delivers through its return
