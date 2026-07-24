@@ -86,6 +86,31 @@ void scroll_framebuffer_full(BasicRenderer *basicrenderer) {
 	clear_bottom_lines(pixPtr, pixels_per_scanline, width, height - 16, height);
 }
 
+// Wipe the whole console to the background color — the screen half of form
+// feed ('\f', 0x0C: "eject the page" on a teletype; "wipe the glass" ever
+// since screens replaced paper). Caller holds kRendererLock (print_n does).
+//
+// Same shadow discipline as scroll_framebuffer_full: fill in RAM, then push
+// one pure-WRITE frame to VRAM. Cursor homing is the caller's job — this
+// function only owns the pixels.
+static void clear_framebuffer_full(BasicRenderer *basicrenderer)
+{
+    unsigned int *pixPtr = (unsigned int *)basicrenderer->framebuffer->base_address;
+    unsigned int pixels_per_scanline = basicrenderer->framebuffer->pixels_per_scan_line;
+    unsigned int width = basicrenderer->framebuffer->width;
+    unsigned int height = basicrenderer->framebuffer->height;
+
+    if (basicrenderer->shadow != NULL) {
+        clear_bottom_lines(basicrenderer->shadow, pixels_per_scanline, width, 0, height);
+        memcpy(pixPtr, basicrenderer->shadow,
+               (size_t)height * pixels_per_scanline * sizeof(unsigned int));
+        return;
+    }
+
+    // No shadow yet (pre-kmalloc early boot): paint VRAM directly.
+    clear_bottom_lines(pixPtr, pixels_per_scanline, width, 0, height);
+}
+
 void init_renderer(BasicRenderer *basicrenderer, struct Framebuffer *framebuffer, struct PSF1_FONT *psf1_font)
 {
     basicrenderer->color = 0xffffffff;
@@ -234,6 +259,17 @@ void print_n(const char* str, size_t length) {
                 // same line. (Previously fell through to default and drew a
                 // garbage glyph.)
                 basicrenderer->cursor_position.x = 0;
+                break;
+            case '\f':
+                // Form feed does what the form feed did: fresh page. Wipe
+                // the surface, home the cursor. Interpreted HERE, at the
+                // glass, on purpose: through a pipe or into a file '\f' is
+                // just a data byte, and whichever console eventually drains
+                // it clears ITS OWN surface — clear(1) needs no syscall and
+                // no knowledge of which screen it lands on.
+                clear_framebuffer_full(basicrenderer);
+                basicrenderer->cursor_position.x = 0;
+                basicrenderer->cursor_position.y = 0;
                 break;
             default:
                 put_char(basicrenderer, *chr, basicrenderer->cursor_position.x, basicrenderer->cursor_position.y);

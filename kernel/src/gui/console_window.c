@@ -63,6 +63,15 @@ static void gui_console_sink(const char *bytes, size_t length)
 				s_col--;
 		} else if (c == '\r') {
 			s_col = 0;
+		} else if (c == '\f') {
+			// Form feed = fresh page, same contract as print_n. Each console
+			// interprets '\f' against ITS OWN surface — this one wipes the
+			// grid; the legacy renderer wipes the framebuffer. That per-sink
+			// interpretation is what keeps clear(1) working no matter which
+			// screen (or future tty pipe) its byte ends up draining into.
+			memset(s_grid, 0, sizeof(s_grid));
+			s_row = 0;
+			s_col = 0;
 		} else if (c >= ' ') {
 			if (s_col >= CON_COLS) {   // wrap long lines
 				s_col = 0;
