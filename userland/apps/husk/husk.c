@@ -132,6 +132,73 @@ static int split_pipeline(char *line, char *stages[], int maxstages)
 	return n;
 }
 
+// Expand $-variables in a command line. Expansion happens here, in the
+// shell, before tokenization — so it works in front of every program ever
+// written, not just the ones that opted in (os32 put expansion in the
+// library and each app called it or didn't; echo did, most didn't).
+//
+// The vocabulary, in lookup order:
+//   $?     the last exit status (arrived with the Bourne shell, 1977; the
+//          Thompson shell could branch on a status but never let you SEE one)
+//   $CWD   the current directory, fetched LIVE from the kernel at expansion
+//          time. Unix's $PWD (csh's $cwd, 1978) is a shell-maintained COPY
+//          of kernel state, patched by hand on every cd and famous for
+//          drifting; os64 declines the cache and asks the owner — the truth
+//          costs one syscall and can never be stale.
+//   $NAME  the env block (os64_getenv). An unset name expands to nothing —
+//          Bourne's rule; a literal "$NOPE" in the output helps nobody.
+// A '$' that starts no name ($ alone, "$5", "$/") stays a literal '$'.
+static int is_name_start(char c)
+{
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+static int is_name_char(char c)
+{
+	return is_name_start(c) || (c >= '0' && c <= '9');
+}
+
+static void expand_line(const char *src, char *dst, int cap, int last_status)
+{
+	int n = 0;
+	while (*src && n < cap - 1)
+	{
+		if (src[0] == '$' && src[1] == '?')
+		{
+			char nb[20];
+			int k = utoa((unsigned long)(unsigned int)last_status, nb);
+			for (int j = 0; j < k && n < cap - 1; j++)
+				dst[n++] = nb[j];
+			src += 2;
+		}
+		else if (src[0] == '$' && is_name_start(src[1]))
+		{
+			char name[64];
+			int k = 0;
+			src++;                              // step over the '$'
+			while (is_name_char(*src) && k < (int)sizeof(name) - 1)
+				name[k++] = *src++;
+			name[k] = 0;
+
+			if (str_eq(name, "CWD"))
+			{
+				char cwd[256];
+				if (os64_getcwd(cwd, sizeof(cwd)) >= 0)
+					for (const char *v = cwd; *v && n < cap - 1; v++)
+						dst[n++] = *v;
+			}
+			else
+			{
+				const char *v = os64_getenv(name);
+				for (; v && *v && n < cap - 1; v++)
+					dst[n++] = *v;
+			}
+		}
+		else
+			dst[n++] = *src++;
+	}
+	dst[n] = 0;
+}
+
 // Report a reaped child to the serial log: "husk: pid <p> exited code <c>".
 static void report_exit(long ended, int code)
 {
@@ -227,17 +294,23 @@ static const char *resolve_command(const char *cmd, char *buf, int cap)
 // Build and run a pipeline: spawn every stage, wiring stage i's stdout to
 // stage i+1's stdin through a pipe. The last stage keeps the console.
 //
+// Returns the pipeline's exit status for $?: the LAST stage's exit code —
+// the same answer the Bourne shell has given since 1977, and the sensible
+// one: the last stage is the program whose output you just watched. Any
+// husk-side failure (bad redirection, unspawnable program) reports 1.
+//
 // THE CLOSE DISCIPLINE IS THE WHOLE JOB. Every end husk hands to a child, husk
 // must then close its OWN copy of — because the reader downstream sees
 // end-of-input only when the LAST write end closes. Keep husk's copy of a write
 // end open and that reader waits forever for an EOF that can never come: the
 // classic `a | b` hang that every hand-written shell suffers exactly once. The
 // child already holds its own reference, so closing ours takes nothing from it.
-static void run_pipeline(char *stages[], int nstages)
+static int run_pipeline(char *stages[], int nstages)
 {
 	long pids[MAX_STAGES];
 	int npids = 0;
 	int prev_read = -1;         // read end of the pipe from the PREVIOUS stage
+	int status = 0;             // what $? will remember of this line
 
 	for (int i = 0; i < nstages; i++)
 	{
@@ -245,6 +318,7 @@ static void run_pipeline(char *stages[], int nstages)
 		if (parse(stages[i], cargv, ARGS_MAX) == 0)
 		{
 			os64_puts("husk: empty command in pipeline\n");
+			status = 1;
 			break;
 		}
 
@@ -255,6 +329,7 @@ static void run_pipeline(char *stages[], int nstages)
 		if (extract_redirections(cargv, &inFile, &outFile) < 0)
 		{
 			os64_puts("husk: bad redirection (expected `< file` or `> file`)\n");
+			status = 1;
 			break;
 		}
 
@@ -266,6 +341,7 @@ static void run_pipeline(char *stages[], int nstages)
 			os64_puts("husk: cannot open ");
 			os64_puts(inFile);
 			os64_puts("\n");
+			status = 1;
 			break;
 		}
 		if (outFile && (outRedir = (int)os64_open(outFile, "w")) < 0)
@@ -274,6 +350,7 @@ static void run_pipeline(char *stages[], int nstages)
 			os64_puts(outFile);
 			os64_puts("\n");
 			if (inRedir >= 0) os64_close(inRedir);
+			status = 1;
 			break;
 		}
 
@@ -284,6 +361,7 @@ static void run_pipeline(char *stages[], int nstages)
 			os64_puts("husk: out of pipes\n");
 			if (inRedir >= 0)  os64_close(inRedir);
 			if (outRedir >= 0) os64_close(outRedir);
+			status = 1;
 			break;
 		}
 
@@ -315,6 +393,7 @@ static void run_pipeline(char *stages[], int nstages)
 			os64_puts(cargv[0]);
 			os64_puts("\n");
 			if (p[0] >= 0) os64_close(p[0]);
+			status = 1;
 			break;
 		}
 
@@ -333,7 +412,10 @@ static void run_pipeline(char *stages[], int nstages)
 		int code = 0;
 		long ended = os64_wait(pids[i], &code);
 		report_exit(ended, code);
+		status = code;          // reaped in launch order, so the last stage wins
 	}
+
+	return status;
 }
 
 // ── the shell ───────────────────────────────────────────────────────────────
@@ -347,7 +429,9 @@ int main(int argc, char **argv, char **envp)
 	os64_debug_log("husk: started");
 
 	char line[LINE_MAX];
+	char expanded[LINE_MAX + 512];  // headroom for expanded $CWD/$PATH values
 	char *stages[MAX_STAGES];
+	int last_status = 0;            // $? — nothing has failed yet
 
 	for (;;)
 	{
@@ -355,7 +439,11 @@ int main(int argc, char **argv, char **envp)
 		if (read_line(line, sizeof(line)) == 0)
 			continue;
 
-		int nstages = split_pipeline(line, stages, MAX_STAGES);
+		// $? is substituted BEFORE the line is split or tokenized, so it
+		// works anywhere on the line: `echo $?`, `cd $?` (weird, legal).
+		expand_line(line, expanded, sizeof(expanded), last_status);
+
+		int nstages = split_pipeline(expanded, stages, MAX_STAGES);
 
 		// `exit` is a builtin because it touches the SHELL'S OWN state (its
 		// lifetime) — no separate program could ever do it. Checked WITHOUT
@@ -379,11 +467,14 @@ int main(int argc, char **argv, char **envp)
 				os64_puts("husk: cd: no such directory: ");
 				os64_puts(dest);
 				os64_puts("\n");
+				last_status = 1;    // builtins report through $? too
 			}
+			else
+				last_status = 0;
 			continue;
 		}
 
-		run_pipeline(stages, nstages);
+		last_status = run_pipeline(stages, nstages);
 	}
 
 	os64_write(1, "husk: bye\n", 10);

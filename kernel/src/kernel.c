@@ -104,7 +104,11 @@ void create_kernel_task()
 	// inherits this block, so one seed here reaches the whole tree.
 	env_set(parentTask.env, "PATH",     "/bin");
 	env_set(parentTask.env, "HOSTNAME", "yogi.localhost.localdomain");
-	env_set(parentTask.env, "CWD",      "/");
+	// Deliberately NO "CWD" here: the kernel owns the real cwd (task->cwd,
+	// validated at every chdir) and husk's $CWD expansion asks it live via
+	// getcwd. An env-block copy could only ever go stale — it seeded "/" at
+	// boot and nothing updated it on chdir. Unix's $PWD is exactly that
+	// hand-maintained cache (drift and all); os64 declines to keep it.
 	parentTask.stdin = STDIN;
 	parentTask.stdout = STDOUT;
 	parentTask.stderr = STDERR;
