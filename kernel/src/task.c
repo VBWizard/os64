@@ -70,6 +70,11 @@ void* task_alloc_aligned(task_t* task, size_t size)
 
 	// Tasks sharing kKernelPML4 must use a shared counter; per-task counters all
 	// start at KERNEL_TASK_MEMORY_BASE and would map at the same virtual address.
+	// Since 2026-07-25 only ktask is in that position (idle tasks got their own
+	// PML4 — see the address-space note in task_initialize), so this branch has
+	// a single occupant today. It stays because the RULE is what matters: any
+	// future task that shares an address space must draw from the shared
+	// counter, and a lone occupant is not a reason to delete the guard rail.
 	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
 		? &kKernelTaskMemoryNextVirt
 		: &task->taskMemoryNextVirt;
@@ -88,11 +93,14 @@ void* task_alloc_aligned(task_t* task, size_t size)
 
 /// @brief Reserve `size` bytes of task-address-space VA, advancing the correct
 ///        next-virtual counter, and return the base of the reserved range.
-/// Tasks that SHARE kKernelPML4 (ktask, idle) must draw from the shared
+/// Tasks that SHARE kKernelPML4 must draw from the shared
 /// kKernelTaskMemoryNextVirt counter: their per-task taskMemoryNextVirt all
 /// start at KERNEL_TASK_MEMORY_BASE, so drawing from that would hand the same VA
 /// to every such task and collide with their own stacks. Single source of truth
 /// for both stack and arena VA allocation — keep all task-VA reservations here.
+/// (Only ktask shares today; idle tasks stopped sharing on 2026-07-25 — see
+/// task_initialize. This counter is the COUNTER-DRAW half of that problem; the
+/// FIXED-CONSTANT half — TASK_ARGV_VIRT and friends — is what the split fixed.)
 uintptr_t task_reserve_task_virt(task_t* task, size_t size)
 {
 	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
@@ -433,12 +441,8 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	task_t* newTask = kmalloc_aligned(sizeof(task_t));
     printd(DEBUG_TASK,"task_initialize: Malloc'd 0x%016x for new task\n",newTask);
 
-    if (idleTask)
-    {
-        newTask->pml4v = parentTask->pml4v;
-        newTask->pml4 = parentTask->pml4;
-    }
-    
+    // (Idle tasks used to inherit their parent's PML4 here — see the address
+    // space note below for why that had to stop.)
     newTask->parentTask = parentTask;
     newTask->priority = TASK_DEFAULT_PRIORITY;
 
@@ -450,8 +454,39 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	// never touch dynamic linking, so most never allocate this at all.
 	newTask->shared_objects = NULL;
 
-	// Special case: ktask (the main kernel task) uses kKernelPML4 directly
-	// All other tasks get their own PML4 with shared upper-half page tables
+	// ── ONE TASK, ONE ADDRESS SPACE ─────────────────────────────────────────
+	// ktask (the first kernel task) uses kKernelPML4 directly, because it IS
+	// the kernel's own context. EVERY other task — kernel, idle, or ring 3 —
+	// gets its OWN PML4 with the upper half shared.
+	//
+	// Idle tasks used to be an exception: they inherited ktask's PML4, on the
+	// reasoning that a thread which only ever runs `hlt` hardly needs an
+	// address space of its own. That made ktask and all N idle tasks share ONE
+	// address space, and task_create hands every task it builds a set of
+	// FIXED lower-half virtual addresses — TASK_ARGV_VIRT above all. Nine
+	// tasks mapping their own private blob at the same fixed VA in the same
+	// page table means eight of those mappings are silently destroyed; the
+	// last idle task created wins, and every one of the nine then reads ITS
+	// argv. (Chris found this on 2026-07-25 the first morning /proc existed:
+	// `cat /proc/32/cmdline` on ktask answered "/idle7". Harmless only by
+	// luck — kernel tasks load no ELF, so task_setup_entry never runs and
+	// nothing ever READ the clobbered mapping.)
+	//
+	// The half-fix was already in the tree and is worth understanding before
+	// touching this: task_alloc_aligned and task_reserve_task_virt route
+	// shared-PML4 tasks to a SHARED VA counter, precisely so their stacks and
+	// arenas could not collide the same way. That patch works and covers
+	// nothing that is a hardcoded constant rather than a counter draw — which
+	// is exactly what TASK_ARGV_VIRT, TASK_ENV_VIRT and
+	// TASK_EXIT_TRAMPOLINE_VIRT are. Rather than teach three more constants to
+	// dodge, remove the sharing: with one address space per task the fixed VAs
+	// are unambiguous by construction, and any future per-task fixed address
+	// is safe without anybody having to remember this comment.
+	//
+	// Cost: one PML4 page per idle task, and a CR3 reload when a core switches
+	// to its idle thread — which scheduler.S already elides when the value is
+	// unchanged (its restore path compares before loading), so this only ever
+	// costs a reload that genuinely crosses address spaces.
 	if (kKernelTask == NULL && kernelTask)
 	{
 		// This is ktask - use the kernel PML4 directly
@@ -462,25 +497,23 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	}
 	else
 	{
-        if (!idleTask)
-        {
-            // Allocate new PML4 for this task
-            newTask->pml4v = (uintptr_t*)get_paging_table_pageV();
-            newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v & ~(kHHDMOffset));
+		// Allocate new PML4 for this task
+		newTask->pml4v = (uintptr_t*)get_paging_table_pageV();
+		newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v & ~(kHHDMOffset));
 
-            // Clear the new PML4
-            memset(newTask->pml4v, 0, PAGE_SIZE);
+		// Clear the new PML4
+		memset(newTask->pml4v, 0, PAGE_SIZE);
 
-            // Copy upper-half PML4 entries (256-511) from kKernelPML4
-            // This shares the kernel page table structures (not the data, just the pointers)
-            uintptr_t* kernelPML4 = (uintptr_t*)kKernelPML4v;
-            for (int i = 256; i < 512; i++) {
-                newTask->pml4v[i] = kernelPML4[i];
-            }
-        }
+		// Copy upper-half PML4 entries (256-511) from kKernelPML4
+		// This shares the kernel page table structures (not the data, just the pointers)
+		uintptr_t* kernelPML4 = (uintptr_t*)kKernelPML4v;
+		for (int i = 256; i < 512; i++) {
+			newTask->pml4v[i] = kernelPML4[i];
+		}
+
 		newTask->taskMemoryNextVirt = kernelTask ? KERNEL_TASK_MEMORY_BASE : USER_TASK_MEMORY_BASE;
-		printd(DEBUG_TASK | DEBUG_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s task (shared upper-half)\n",
-			newTask->pml4, kernelTask ? "kernel" : "user");
+		printd(DEBUG_TASK | DEBUG_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s%s task (shared upper-half)\n",
+			newTask->pml4, idleTask ? "idle " : "", kernelTask ? "kernel" : "user");
 	}
 
 	newTask->threads = createThread((void*)newTask, kernelTask);

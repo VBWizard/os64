@@ -622,15 +622,31 @@ void call_in_kernel_context(void (*func)(void*), void *arg) {
 
 When creating threads, the return address needs to be written to the task's stack. The stack may only be mapped in the task's PML4, not kKernelPML4.
 
-**Special case**: ktask/idle tasks use kKernelPML4 directly, so their stacks are accessible:
+**Do NOT special-case ktask here.** This section used to show a
+`task->pml4v == kKernelPML4v` branch that wrote through the task VA directly
+for "ktask/idle". Two things retired it:
+
+1. **Idle tasks no longer share kKernelPML4** (2026-07-25). ONE TASK, ONE
+   ADDRESS SPACE is now the rule — only ktask itself uses the kernel PML4.
+   The old sharing meant N+1 tasks mapped their private blobs at the same
+   FIXED lower-half VAs (`TASK_ARGV_VIRT`, `TASK_ENV_VIRT`,
+   `TASK_EXIT_TRAMPOLINE_VIRT`), each silently destroying the last one's
+   mapping. See the address-space note in `task_initialize` for the whole
+   story; `/proc` is what finally made it visible.
+2. The **unconditional** page-walk + HHDM write (previous section) is correct
+   for every task including ktask, so the branch bought nothing but a way to
+   be wrong. `createThread` (thread.c) already does it this way:
 
 ```c
-task_t *task = (task_t*)ownerTask;
-
-if (task->pml4v == (uint64_t*)kKernelPML4v) {
-    // ktask/idle - stack is directly accessible
-    *(uintptr_t *)newThread->regs.RSP = (uintptr_t)&task_exit;
-} else {
-    // Other tasks - use temporary mapping technique (see above)
-}
+// Correct for ANY task, no special cases:
+uintptr_t phys_rsp = paging_walk_paging_table((pt_entry_t*)task->pml4v, newThread->regs.RSP);
+if (phys_rsp && phys_rsp != 0xbadbadba)
+    *(uintptr_t *)(phys_rsp | kHHDMOffset) = (uintptr_t)&task_exit_with_retval;
 ```
+
+**The general rule this leaves behind:** a fixed per-task virtual address is
+only safe in an address space that belongs to exactly one task. If you ever
+make two tasks share a PML4 again, every fixed lower-half VA in `task_create`
+becomes a collision, and the shared-counter dodge in `task_alloc_aligned` /
+`task_reserve_task_virt` will NOT save you — it only covers counter draws, not
+constants.
