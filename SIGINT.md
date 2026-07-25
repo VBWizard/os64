@@ -178,13 +178,29 @@ what was right and are free to do better where os64 can.
 - **The signal struct os64 still uses is os32's** — `sighandler[]`, `sigdata[]`,
   `sigmask`, `sigind`; SIGINT delivered by `sigind |= SIGINT`. os64 inherited it
   wholesale.
-- **The unfinished half is inherited too.** os32 registered handlers into
-  `sighandler[SIGINT] = sigAction`, but `executeSigHandler()` was an **empty
-  stub** — the async *delivery* to a userland handler was never built. os64's
-  `sigaction()` carries a `sigAction` param marked "reserved for real handler
-  registration; unused until then," and the "userland signal delivery" DEBT is
-  the SAME open TODO, fourteen years later. This design (kernel-enforced default
-  action) is the honest interim on both OSes; the DEBT is where they converge.
+- **CORRECTION (2026-07-24, after actually reading the ancestor): os32 had the
+  ENTIRE signal machine, working.** An earlier revision of this section claimed
+  the delivery half "was never built" based on one vestigial stub
+  (`executeSigHandler`) — wrong. The real path: `modifySignal()` →
+  `SYSCALL_SETSIGACTION` (userland registration), `signalTask()` →
+  `SYSCALL_SIGNAL` (a kill(2) equivalent os64 does not have yet), the
+  `sigProcAddress` resume trampoline in `_scheduler.s` (per-APIC-indexed —
+  SMP-aware delivery state), and `_sigJumpPoint`: a COMPLETE hand-rolled
+  sigreturn — pusha, call the handler as a plain function, restore the
+  original CR3 the trampoline stashed on the stack, popa, iretd BACK TO THE
+  INTERRUPTED INSTRUCTION. Deliver, run, resume. No sigreturn syscall needed;
+  the return rides the IRET frame the scheduler pre-built. PROVEN by
+  `aproj/testMainProgramEntry` (May 2016): registers HandleSEGV, deliberately
+  writes to unowned memory, and the ring-3 handler catches the fault and
+  exits with its own code. os64's "userland signal delivery" DEBT is therefore
+  a 64-bit SMP-hardened PORT of working family machinery, not an invention —
+  modifySignal → registration syscall, sigProcAddress → per-thread pending
+  redirect, _sigJumpPoint → the sigreturn stub. 64-bit amendments the port
+  must add: the ring-3-only redirect guard (never abandon an in-flight
+  syscall's locks), per-thread (not per-core-global) delivery state, and the
+  SysV x86-64 RED ZONE — the kernel must build the signal frame at least 128
+  bytes below the interrupted RSP or it corrupts leaf-function locals (a
+  hazard 32-bit os32 never had; its ABI has no red zone).
 
 **Where os64 may deliberately diverge:** the no-Linux-cosplay ethos may reshape
 what a tty even is; async delivery gets built fresh against real SMP (the
@@ -212,3 +228,104 @@ right, take a different road where os64 can do better.
 
 *Recorded 2026-07-19 for a successor to Fable 5, on the first evening in the
 chair. The design is understood; the writing waits for daylight. 🍩*
+
+---
+
+## AS BUILT — 2026-07-24 (v1 shipped; where it kept faith and where it diverged)
+
+Chris ratified at the keyboard (7/24): visible feedback at the prompt is
+REQUIRED ("a keystroke that does nothing erodes faith"), the controlling-shell
+tag is a `task_t` flag, and ~10ms latency is fine. Built and QEMU-verified the
+same evening. Two deliberate deviations from the design above, both found
+during build-time recon — recorded here so the doc stops describing a road not
+taken.
+
+### Deviation 1: the kill moved from the scheduler checkpoint to the SYSCALL BOUNDARY
+
+The resume-checkpoint reap ("run task_exit_finish's bookkeeping FOR the
+victim") has a hazard this doc missed: `scheduler_do` holds
+`kSchedulerSwitchTasksLock` across the whole pass, and `handle_close_all`
+bottoms out in filesystem closes — FatFs reentrancy locks that may be HELD by
+a thread which needs the scheduler to run. Closing a victim's handles from
+scheduler context is a deadlock waiting for its day. (Deferring the closes to
+collection time was designed, then rejected for v1: more moving parts than the
+gap it covers.)
+
+What shipped instead — the SIGPIPE rail, generalized. The raise is still one
+word-OR at the keystroke (`console_intr_intercept`, console.c, called from
+keyboard.c's delivery choke). The KILL is `raise_sigint_and_die` (syscall.c,
+twin of `raise_sigpipe_and_die`): the victim dies in its OWN context, through
+the normal `task_exit` path — free to sleep, safe to close handles, retVal
+130. Three roads lead there:
+
+1. **The dispatcher check** (`_syscall_dispatch`): any task DOING anything
+   crosses it constantly — a spinning `cat` dies at its next write call, in
+   MICROSECONDS, beating the 10ms promise.
+2. **`console_read` returns `CONSOLE_READ_INTERRUPTED`** at its loop top —
+   how a task blocked on stdin dies.
+3. **`pipe_read`/`pipe_write` return `PIPE_ERR_INTERRUPTED`** at their loop
+   tops — how blocked pipeline stages die.
+
+Sleepers reach their loop-top checks because `processSignals` now wakes any
+ISLEEP thread with SIGINT pending (an interrupt outranks the nap). The wake
+walk also captures `->next` BEFORE requeueing — the old walk followed the
+pointer after the node had been relinked into qRunnable.
+
+**The gap that lived for three hours — CLOSED the same evening (Slice A,
+7/24 late):** a syscall-free ring-3 spin (`while(1);`) never crosses the
+syscall boundary, so the pull half couldn't touch it. It dies now, by
+Chris's os32 trick, named by him in review: **"I *forced* the task to make a
+syscall."** os32's `_scheduler.s` rewrote the resume IRET frame to land in
+`defaultSIGINTHandler` — a stub whose only job is
+`call sysEnter_Vector(SYSCALL_ENDPROCESS)`. os64's port is
+`scheduler_sigint_forced_syscall()` (scheduler.c), called at BOTH resume
+flavors in scheduler_run_new_thread (the switch path after
+scheduler_load_thread, and the continue-with-same-thread path, which resumes
+from the mp_isrSaved arrays without a reload — both frame images get
+patched): pending SIGINT + no handler + **saved CS is ring 3** (the seatbelt:
+never abandon an in-flight syscall's locks; ring-0 frames are left to the
+pull path) → saved RIP := TASK_EXIT_TRAMPOLINE_VIRT. The victim resumes,
+executes the trampoline's `syscall`, and the dispatcher check already
+shipped does the honors. No new machinery — the redirect target is the exit
+trampoline every ring-3 task already carries, and the executioner is the
+dispatcher check from the pull half. When userland delivery lands, the
+handler-installed branch grows beside it exactly as os32 had two branches.
+Verified: fixture `spin_test` (prints once, then loops with zero syscalls) —
+Ctrl+C → `^C`, `$?` = 130, serial shows the SIGINT terminate line; pull-path
+regression (cat + Ctrl+C → 130) still green. Also corrected from the
+prior-art section: os32 WAS SMP (per-APIC mp_isrSaved* arrays) — its
+shoot-on-sight kill was safe not because of one core but because its kernel
+had almost no locks to leak. os64's executioner is careful because os64's
+kingdom is richer.
+
+### Deviation 2: shell Ctrl+C is a DATA BYTE, not an ignored signal
+
+Better than "ignored in v1": when the foreground task IS the controlling
+shell, the intercept declines and ETX flows to husk as data. husk's line
+editor treats 0x03 as line-kill — echo `^C`, discard the half-typed line,
+fresh prompt. The elevator button always lights up, and no userland signal
+delivery was needed. husk also echoes `^C` once after collecting a pipeline
+in which any stage died 130 (the echo at the funeral, ~10ms after the
+keystroke — reads the same to a human).
+
+### As designed, unchanged
+
+`kForegroundTask` (defined task.c, doctrine in task.h) rides `task_wait`,
+keyed on wait not spawn, restored to the shell on every return path; husk
+learned zero new tricks for it. `controllingShell` flag set at launch
+(kernel.c). Layering held: keyboard.c includes console.h only — no task or
+signal headers in the device layer.
+
+### Verified on the glass (QEMU, 7/24)
+
+- `ech` + Ctrl+C at prompt → `^C`, fresh prompt, shell alive, line not run
+- `cat` (blocked on stdin) + Ctrl+C → `^C`, `$?` = 130
+- `cat | cat` + Ctrl+C → waited stage dies 130, downstream EOFs clean,
+  `$?` = 0 (last stage wins — Bourne's answer), one `^C` echoed
+- `cat /bin/husk` mid-scroll + Ctrl+C → dies in its write loop, `$?` = 130
+- Ctrl+D EOF, backspace, ordinary commands: unchanged
+- Serial log: zero panics, zero scheduler errors; husk reports
+  `exited code 130` for every interrupted child
+
+*The 2012 signal struct finally received the signal it was built for,
+fourteen years and one word-OR later.*

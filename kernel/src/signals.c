@@ -64,14 +64,33 @@ void processSignals()
 	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
 	while (qSleep != NO_THREAD)
 	{
-		if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past
+		// Capture the neighbor BEFORE any requeue: scheduler_change_thread_queue
+		// relinks the node into qRunnable, so following ->next afterward would
+		// walk off into the wrong queue mid-iteration.
+		thread_t *nextSleeper = qSleep->next;
+
+		if (qSleep->signals.sigind & SIGINT)
+		{
+			// An interrupt outranks the nap. Cancel the sleep and wake the
+			// thread INTO its own blocking loop (console_read / pipe_read /
+			// pipe_write), whose top-of-loop SIGINT check bails out to the
+			// syscall boundary — where the default action (terminate, 130) is
+			// enforced in the dying task's own context, free to sleep and to
+			// close handles. This wake is what makes Ctrl+C reach a task that
+			// is blocked and would otherwise never run again to notice it.
+			qSleep->signals.sigdata[SIGSLEEP] = 0;
+			qSleep->signals.sigind &= ~(SIGSLEEP);
+			scheduler_change_thread_queue(qSleep, THREAD_STATE_RUNNABLE);
+			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by pending SIGINT\n", qSleep->threadID);
+		}
+		else if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past
 		{
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			qSleep->signals.sigind &= ~(SIGSLEEP);
 			scheduler_change_thread_queue(qSleep, THREAD_STATE_RUNNABLE);
 			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP\n", qSleep->threadID);
 		}
-		qSleep = qSleep->next;
+		qSleep = nextSleeper;
 	}
 
 	// Drain the USB keyboard BEFORE the console wake check below, so a HID

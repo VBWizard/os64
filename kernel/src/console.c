@@ -8,6 +8,7 @@
 #include "signals.h"
 #include "smp_core.h"
 #include "thread.h"
+#include "task.h"
 #include "kernel.h"
 #include "CONFIG.h"
 
@@ -25,6 +26,12 @@ static thread_t * volatile kConsoleWaiter = NULL;
 // same reason Unix chose Ctrl+D — EOT already MEANT this before either OS.
 #define CONSOLE_EOT 0x04
 
+// ASCII ETX, "End of Text" — what Ctrl+C strips down to, and the terminal
+// interrupt character since the DEC line disciplines. Same 1963 well EOT
+// drinks from: Unix's ISIG/VINTR machinery is what turned this keystroke
+// into a signal, and that is the lineage being honored here, not imitated.
+#define CONSOLE_ETX 0x03
+
 // EOT can arrive after bytes have already been gathered in the same drain
 // ("abc<Ctrl+D>"). Terminal semantics: deliver the bytes NOW, deliver the EOF
 // on the NEXT read. One console in v1, so one flag; becomes per-tty_t later
@@ -40,6 +47,35 @@ static volatile bool kConsoleEOFPending = false;
 // reader is genuinely asleep between these.
 #define CONSOLE_READ_BACKSTOP_TICKS TICKS_PER_SECOND
 
+// The interrupt-character policy (see console.h). Why this is a SIGNAL and
+// not a console byte: the classic victim (cat writing a huge file) is not
+// READING the console — nothing drains the ring, so an 0x03 buffered there
+// would sit unread forever. The interrupt must be delivered asynchronously,
+// at the keystroke. And why the SHELL gets the byte instead: Ctrl+C at an
+// idle prompt must never kill your shell — husk treats a data-byte 0x03 as
+// line-kill (echo ^C, fresh prompt), so the key always visibly DOES something.
+bool console_intr_intercept(char ascii)
+{
+	if (ascii != CONSOLE_ETX)
+		return false;
+
+	task_t *fg = kForegroundTask;
+	if (fg == NULL || fg->controllingShell)
+		return false;               // no owner yet, or the shell: stays data
+
+	thread_t *t = fg->threads;
+	if (t == NULL)
+		return false;
+
+	// One word-OR — all an IRQ path is allowed to do. The victim dies at its
+	// own next syscall boundary (dispatcher check / blocking-loop checks in
+	// console_read and pipe.c), in its own context, through the normal
+	// task_exit path. If it is parked in ISLEEP, processSignals sees this bit
+	// and wakes it into that check within a scheduler pass (~10ms).
+	t->signals.sigind |= SIGINT;
+	return true;                    // consumed: the byte never enters the ring
+}
+
 long console_read(char *buf, size_t len)
 {
 	if (len == 0)
@@ -52,9 +88,20 @@ long console_read(char *buf, size_t len)
 		return 0;
 	}
 
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = cls->currentThread;
+
 	size_t n = 0;
 	for (;;)
 	{
+		// A pending SIGINT outranks the read: the READER is being terminated.
+		// Checked at the top of every pass — this is how a reader parked
+		// below (and woken by processSignals when the bit appeared) exits the
+		// loop instead of parking forever. Any bytes in the ring stay for the
+		// next reader; a dying task has no further use for them.
+		if (self->signals.sigind & SIGINT)
+			return CONSOLE_READ_INTERRUPTED;
+
 		// Drain whatever translated keys are queued (skip pure-modifier /
 		// non-glyph events — they have ascii == 0).
 		keyboard_event_t ev;
@@ -78,9 +125,8 @@ long console_read(char *buf, size_t len)
 		// us atomically (the scheduler performs RUNNING->ISLEEP when we are
 		// genuinely off-CPU, so there is no "runnable while still executing"
 		// window). We resume here when woken — by a keypress via
-		// console_wake_if_ready, or by the backstop — and loop back to drain.
-		core_local_storage_t *cls = get_core_local_storage();
-		thread_t *self = cls->currentThread;
+		// console_wake_if_ready, by processSignals on a pending SIGINT, or by
+		// the backstop — and loop back to the SIGINT check and the drain.
 		kConsoleWaiter = self;
 		sigaction(SIGSLEEP, NULL, kTicksSinceStart + CONSOLE_READ_BACKSTOP_TICKS, self);
 	}

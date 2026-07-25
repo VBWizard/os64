@@ -68,6 +68,18 @@ static int read_line(char *buf, int cap)
 			if (n > 0) { n--; os64_write(1, "\b \b", 3); }   // rub out one glyph
 			continue;
 		}
+		if (c == 0x03)                       // ETX — Ctrl+C at the prompt
+		{
+			// The kernel only lets ETX through as DATA when the shell itself
+			// is foreground (console_intr_intercept) — any other time it
+			// becomes a SIGINT and we never see the byte. So this is always
+			// "Ctrl+C at the prompt": kill the half-typed line, say so, and
+			// let main() re-prompt. A keystroke that visibly does nothing
+			// erodes all faith that it ever does anything — house doctrine.
+			os64_write(1, "^C\n", 3);
+			buf[0] = 0;
+			return 0;
+		}
 		// Other control chords (Ctrl+A..Z now arrive as 0x01..0x1A) have no
 		// line-editing meaning yet — swallow them rather than burying
 		// invisible bytes in the command. Tab stays: it's typeable text.
@@ -407,13 +419,23 @@ static int run_pipeline(char *stages[], int nstages)
 	// Reap every child we launched. They run CONCURRENTLY — that is the point
 	// of a pipeline; stage 2 is already chewing on stage 1's first bytes long
 	// before stage 1 finishes. We just collect the corpses in order.
+	int interrupted = 0;
 	for (int i = 0; i < npids; i++)
 	{
 		int code = 0;
 		long ended = os64_wait(pids[i], &code);
 		report_exit(ended, code);
+		if (code == 130)        // 128 + SIGINT: died by Ctrl+C
+			interrupted = 1;
 		status = code;          // reaped in launch order, so the last stage wins
 	}
+
+	// Echo the interrupt ONCE, after the whole pipeline is collected — the
+	// victim was probably mid-line on the console, and this is the visible
+	// answer to the keystroke (a real terminal echoes ^C at the keypress; we
+	// echo at the funeral, ~10ms later, which reads the same to a human).
+	if (interrupted)
+		os64_write(1, "^C\n", 3);
 
 	return status;
 }

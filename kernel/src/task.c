@@ -35,6 +35,12 @@ extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
 extern uintptr_t kKernelPML4;
 
+// The foreground task (see task.h for the full doctrine). Starts NULL; the
+// kernel points it at husk at launch, and task_wait moves it to whichever
+// child the shell is blocked on. NULL means "nobody owns the console yet"
+// (early boot, test programs) and Ctrl+C stays an ordinary data byte.
+task_t * volatile kForegroundTask = NULL;
+
 // Shared virtual address bump pointer for all tasks that use kKernelPML4 directly.
 // Tasks sharing the same PML4 must draw from the same counter or their stack
 // allocations collide at the same virtual address, overwriting each other's PTEs.
@@ -352,15 +358,17 @@ static task_t *task_pop_dead_child(task_t *parent, uint64_t targetPid)
 	return NULL;
 }
 
-// Is there a LIVE child matching targetPid? (Used to fail wait() fast when the
-// caller asks for a child that doesn't exist / has already been reaped.)
-static bool task_has_live_child(task_t *parent, uint64_t targetPid)
+// Find a LIVE child matching targetPid (0 = any), or NULL. Two callers, two
+// jobs: task_wait uses NULL-ness to fail fast when the caller asks for a child
+// that doesn't exist / was already reaped, and uses the task itself to hand
+// the console over (the child being waited on IS the foreground task).
+static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 {
 	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
 		if (t->parentTask == parent && !t->exited)
 			if (targetPid == 0 || t->taskID == targetPid)
-				return true;
-	return false;
+				return t;
+	return NULL;
 }
 
 task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
@@ -370,6 +378,19 @@ task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 
 	if (parent == NULL || parent->threads == NULL) {
 		return NULL;
+	}
+
+	// The console changes hands HERE — the foreground task is by definition
+	// "the task the controlling shell is currently blocked waiting on." Keyed
+	// on wait, not spawn, so a future backgrounded (&) child never takes the
+	// console. Restored to the shell on EVERY return path below: a Ctrl+C at
+	// the prompt after this wait must find the shell foreground again (where
+	// it is a harmless line-kill byte), never a stale pointer at a dead child.
+	bool movesConsole = parent->controllingShell;
+	if (movesConsole) {
+		task_t *fg = task_find_live_child(parent, targetPid);
+		if (fg != NULL)
+			kForegroundTask = fg;
 	}
 
 	while (1==1)
@@ -384,12 +405,16 @@ task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			if (child->threads != NULL) {
 				scheduler_reap_zombie_thread(child->threads);
 			}
+			if (movesConsole)
+				kForegroundTask = parent;
 			return child;
 		}
 
 		// No dead match. If there is no matching LIVE child either, there is
 		// nothing to wait for — fail rather than sleep forever.
-		if (!task_has_live_child(parent, targetPid)) {
+		if (task_find_live_child(parent, targetPid) == NULL) {
+			if (movesConsole)
+				kForegroundTask = parent;
 			return NULL;
 		}
 

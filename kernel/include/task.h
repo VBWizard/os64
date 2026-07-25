@@ -80,6 +80,13 @@
         struct task* deadChildNext;
         bool waitingForChild;
         bool autoReap;
+        // The one task Ctrl+C must never kill: husk sitting at its prompt.
+        // Tagged by the kernel when it launches the shell (kernel.c). When the
+        // controlling shell IS the foreground task, ETX (0x03) stays a DATA
+        // byte — husk treats it as line-kill (^C, fresh prompt) — instead of
+        // becoming a SIGINT. A flag rather than a global pointer because it
+        // generalizes to per-tty controlling shells later (SIGINT.md).
+        bool controllingShell;
         bool kernelTask;
         struct tm startTime, endTime;
         uint64_t entryPoint;
@@ -116,6 +123,17 @@
 		handle_t handles[TASK_MAX_HANDLES];
 		void *prev, *next;
     } task_t;
+
+	// The foreground task: the one task the console belongs to RIGHT NOW —
+	// by definition, "the task the controlling shell is currently blocked
+	// waiting on" (or the shell itself, between commands). One pointer
+	// because v1 has one console; becomes a per-tty_t field when virtual
+	// terminals arrive, exactly like kConsoleWaiter (console.c). Moved by
+	// task_wait — keying the transfer on WAIT, not spawn, means a future
+	// backgrounded (&) child correctly never takes the console. Read from
+	// the keyboard IRQ path (console_intr_intercept), which is why it is a
+	// single aligned pointer: x86-64 reads it atomically, no lock needed.
+	extern task_t * volatile kForegroundTask;
 
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);

@@ -1,5 +1,6 @@
 #include "driver/system/keyboard.h"
 #include "driver/system/mouse.h"
+#include "console.h"
 #include <stddef.h>
 #include "memset.h"
 #include "CONFIG.h"
@@ -226,9 +227,16 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
 // (the console ring husk reads, the GUI input queue) is source-blind.
 // Key-downs enter the console ring; both edges reach the GUI (chords and
 // modifier-drags need releases).
+//
+// One byte gets a veto first: console_intr_intercept may CONSUME an ETX
+// (Ctrl+C -> 0x03) as the terminal interrupt character instead of letting it
+// enter the ring as data. The POLICY (who is foreground, who gets SIGINT)
+// lives entirely in console.c — this file stays a device driver and includes
+// no task or signal headers, exactly the layering SIGINT.md prescribes.
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
     if (pressed) {
-        keyboard_emit_event(scancode, ascii, modifiers);
+        if (!console_intr_intercept(ascii))
+            keyboard_emit_event(scancode, ascii, modifiers);
     }
     input_inject_key(ascii, scancode, modifiers, pressed);
 }

@@ -704,6 +704,45 @@ void scheduler_trigger(core_local_storage_t *cls)
 // scheduler_trigger's genuine self-IPI gives every scheduler entry — timer or
 // manual — identical interrupt semantics.
 
+// SIGINT push delivery, v1 — Chris's os32 forced-syscall trick ("I *forced*
+// the task to make a syscall") wearing a 64-bit seatbelt. If the thread this
+// core is about to resume has SIGINT pending, no handler installed, and was
+// interrupted IN RING 3 (holding no kernel locks — the seatbelt), point its
+// resume RIP at the task's exit trampoline (TASK_EXIT_TRAMPOLINE_VIRT, mapped
+// read-only into every ring-3 task). The victim resumes, immediately executes
+// `syscall`, and the dispatcher's SIGINT check does the honors — full
+// task_exit in the victim's own context, handles closed safely, retVal 130.
+// This closes the one gap in the pull design: a syscall-free spin loop.
+// Threads interrupted mid-syscall (CS ring 0) are left alone — they die at
+// the syscall boundary instead (console/pipe sentinels + dispatcher check).
+// When userland signal delivery lands, the sighandler check below grows the
+// second branch exactly as os32 had it: handler installed -> redirect to the
+// handler instead of the gallows.
+static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
+{
+	task_t *task = (task_t *)thread->ownerTask;
+
+	if (!(thread->signals.sigind & SIGINT))
+		return;
+	if (thread->exited || thread->idleThread)
+		return;
+	if (task == NULL || task->kernelTask)
+		return;
+	if (thread->signals.sighandler[SIGINT] != NULL)
+		return;                          // future: deliver, don't kill
+	if ((thread->regs.CS & 3) != 3)
+		return;                          // mid-syscall: the pull path owns it
+
+	// Patch BOTH images of the frame: regs (authoritative store) and the
+	// per-core isr array (what the ISR exit path actually IRETs from when the
+	// same thread continues without a reload). Idempotent on repeat passes.
+	thread->regs.RIP = TASK_EXIT_TRAMPOLINE_VIRT;
+	mp_isrSavedRIP[apic_id] = TASK_EXIT_TRAMPOLINE_VIRT;
+
+	printd(DEBUG_SCHEDULER, "*SIGINT: forcing thread 0x%08x (%s) into the exit trampoline\n",
+	       thread->threadID, task->exename);
+}
+
 void scheduler_run_new_thread()
 {
 	core_local_storage_t *cls = get_core_local_storage();
@@ -750,6 +789,10 @@ void scheduler_run_new_thread()
     {
         printd(DEBUG_SCHEDULER,"*No new thread to run, continuing with the current task\n");
 		debug_print_registers(apic_id, "continue2", false);
+        // Continue path resumes from the isr arrays WITHOUT a reload, so the
+        // forced-syscall check must run here too (regs were just stored above,
+        // so regs.CS is fresh for the ring-3 seatbelt).
+        scheduler_sigint_forced_syscall(threadToStop, apic_id);
         if (threadToStop->execDontSaveRegisters)
         {
             printd(DEBUG_SCHEDULER,"Thread to keep running was just exec'd, loading registers from tss\n");
@@ -764,6 +807,9 @@ void scheduler_run_new_thread()
         printd(DEBUG_SCHEDULER,"*Found thread to move to CPU (%x - %s)\n",threadToRun->threadID, taskToRun->exename);
         scheduler_change_thread_queue(threadToRun, THREAD_STATE_RUNNING);
         scheduler_load_thread(cls, threadToRun);
+        // The switch path: load just synced regs -> isr arrays, so the
+        // redirect (if owed) patches both images consistently.
+        scheduler_sigint_forced_syscall(threadToRun, apic_id);
 		task_t *pTask = (task_t*)threadToRun->ownerTask;
         if (!strnstr(pTask->exename, "/idle",10))
         {

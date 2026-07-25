@@ -194,8 +194,19 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 	if (len == 0)
 		return 0;
 
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = cls->currentThread;
+
 	for (;;)
 	{
+		// A pending SIGINT outranks the read — the READER is being terminated.
+		// Checked before the lock, at the top of every pass: this is how a
+		// reader parked below (woken by processSignals when the bit appeared)
+		// exits instead of re-parking forever. Buffered bytes stay put — a
+		// dying stage has no further use for them.
+		if (self->signals.sigind & SIGINT)
+			return PIPE_ERR_INTERRUPTED;
+
 		uint64_t flags = spinlock_acquire_irqsave(&p->lock);
 
 		if (p->count > 0)
@@ -236,8 +247,6 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 		}
 
 		// Empty, but a writer still exists: park until one shows up.
-		core_local_storage_t *cls = get_core_local_storage();
-		thread_t *self = cls->currentThread;
 		p->readWaiter = self;
 		uint32_t nw = p->writers;
 		spinlock_release_irqrestore(&p->lock, flags);   // never park holding the lock
@@ -260,10 +269,19 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 	if (len == 0)
 		return 0;
 
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = cls->currentThread;
+
 	size_t written = 0;
 
 	while (written < len)
 	{
+		// Same rule as pipe_read: a pending SIGINT means the WRITER is being
+		// terminated — stop pushing bytes and let the syscall boundary do the
+		// honors. Bytes already landed stay landed (they were real).
+		if (self->signals.sigind & SIGINT)
+			return PIPE_ERR_INTERRUPTED;
+
 		// A write of <= PIPE_CAPACITY lands WHOLE (our atomicity rule): wait for
 		// room for all of it, then copy it in one shot under the lock, so two
 		// writers can never interleave. A write LARGER than the capacity can
@@ -315,8 +333,6 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 		// Not enough room for the whole write: park until the reader drains.
 		// THIS is the backpressure — the producer is now running at exactly the
 		// consumer's speed, asleep and costing nothing while it waits.
-		core_local_storage_t *cls = get_core_local_storage();
-		thread_t *self = cls->currentThread;
 		p->writeWaiter = self;
 		size_t held = p->count;
 		spinlock_release_irqrestore(&p->lock, flags);   // never park holding the lock

@@ -371,7 +371,16 @@ void kernel_init()
         printf("Launching /bin/husk (the shell) ...\n");
         task_t *huskTask = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
         if (huskTask)
+        {
+            // Seat the shell at the console. controllingShell is Ctrl+C
+            // immunity (an ETX with the shell foreground stays a DATA byte —
+            // husk line-kills; it is never SIGINTed); kForegroundTask is who
+            // Ctrl+C aims at, and task_wait moves it to whichever child husk
+            // blocks on. Both set BEFORE the task can run. (SIGINT.md)
+            huskTask->controllingShell = true;
+            kForegroundTask = huskTask;
             scheduler_submit_new_task(huskTask);
+        }
         else
             printf("  /bin/husk launch failed (not on the image?)\n");
     }
