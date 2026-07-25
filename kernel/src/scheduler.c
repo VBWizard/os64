@@ -704,9 +704,10 @@ void scheduler_trigger(core_local_storage_t *cls)
 // scheduler_trigger's genuine self-IPI gives every scheduler entry — timer or
 // manual — identical interrupt semantics.
 
-// SIGINT push delivery, v1 — Chris's os32 forced-syscall trick ("I *forced*
+// Terminate push delivery, v1 — Chris's os32 forced-syscall trick ("I *forced*
 // the task to make a syscall") wearing a 64-bit seatbelt. If the thread this
-// core is about to resume has SIGINT pending, no handler installed, and was
+// core is about to resume has a TERMINATING signal pending (Ctrl+C, or a write
+// to its /proc ctl file), no handler installed, and was
 // interrupted IN RING 3 (holding no kernel locks — the seatbelt), point its
 // resume RIP at the task's exit trampoline (TASK_EXIT_TRAMPOLINE_VIRT, mapped
 // read-only into every ring-3 task). The victim resumes, immediately executes
@@ -722,13 +723,19 @@ static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
 {
 	task_t *task = (task_t *)thread->ownerTask;
 
-	if (!(thread->signals.sigind & SIGINT))
+	if (!(thread->signals.sigind & SIGNALS_TERMINATING))
 		return;
 	if (thread->exited || thread->idleThread)
 		return;
 	if (task == NULL || task->kernelTask)
 		return;
-	if (thread->signals.sighandler[SIGINT] != NULL)
+	// A SIGKILL is uncatchable by definition: an installed handler only earns
+	// a reprieve from the catchable half. This is the one place the two
+	// terminating signals genuinely differ today, and encoding it now means
+	// userland signal delivery inherits the right semantics instead of
+	// retrofitting them.
+	if (!(thread->signals.sigind & SIGKILL) &&
+	    thread->signals.sighandler[SIGINT] != NULL)
 		return;                          // future: deliver, don't kill
 	if ((thread->regs.CS & 3) != 3)
 		return;                          // mid-syscall: the pull path owns it
@@ -739,7 +746,8 @@ static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
 	thread->regs.RIP = TASK_EXIT_TRAMPOLINE_VIRT;
 	mp_isrSavedRIP[apic_id] = TASK_EXIT_TRAMPOLINE_VIRT;
 
-	printd(DEBUG_SCHEDULER, "*SIGINT: forcing thread 0x%08x (%s) into the exit trampoline\n",
+	printd(DEBUG_SCHEDULER, "*%s: forcing thread 0x%08x (%s) into the exit trampoline\n",
+	       (thread->signals.sigind & SIGKILL) ? "SIGKILL" : "SIGINT",
 	       thread->threadID, task->exename);
 }
 

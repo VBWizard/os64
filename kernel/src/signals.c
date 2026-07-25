@@ -69,19 +69,20 @@ void processSignals()
 		// walk off into the wrong queue mid-iteration.
 		thread_t *nextSleeper = qSleep->next;
 
-		if (qSleep->signals.sigind & SIGINT)
+		if (qSleep->signals.sigind & SIGNALS_TERMINATING)
 		{
-			// An interrupt outranks the nap. Cancel the sleep and wake the
-			// thread INTO its own blocking loop (console_read / pipe_read /
-			// pipe_write), whose top-of-loop SIGINT check bails out to the
+			// A pending terminate outranks the nap. Cancel the sleep and wake
+			// the thread INTO its own blocking loop (console_read / pipe_read /
+			// pipe_write), whose top-of-loop terminate check bails out to the
 			// syscall boundary — where the default action (terminate, 130) is
 			// enforced in the dying task's own context, free to sleep and to
-			// close handles. This wake is what makes Ctrl+C reach a task that
-			// is blocked and would otherwise never run again to notice it.
+			// close handles. This wake is what makes Ctrl+C (and a ctl write)
+			// reach a task that is blocked and would otherwise never run again
+			// to notice it.
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			qSleep->signals.sigind &= ~(SIGSLEEP);
 			scheduler_change_thread_queue(qSleep, THREAD_STATE_RUNNABLE);
-			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by pending SIGINT\n", qSleep->threadID);
+			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending terminate\n", qSleep->threadID);
 		}
 		else if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past
 		{

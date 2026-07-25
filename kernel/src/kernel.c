@@ -43,6 +43,7 @@
 #include "block_device.h"
 #include "ramdisk.h"
 #include "driver/system/usb/xhci.h"
+#include "driver/filesystem/proc/procfs.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -296,6 +297,14 @@ void kernel_init()
 		printd(DEBUG_BOOT, "BOOT: ROOTPARTUUID passed in commandline.  Will mount '%s' as the root partition\n",&kRootPartUUID);
 		vfs_mount_root_part((char*)&kRootPartUUID);
 	}
+
+	// /proc — processes as files (PROC.md). Mounted AFTER the root and the
+	// secondary-partition sweep for two reasons: the mount table is walked
+	// longest-prefix-first so order does not affect routing, but procfs has no
+	// partition GUID at all, and letting the sweep finish first keeps its
+	// all-zero GUID out of the dedupe comparisons. It also needs no filesystem
+	// underneath it — this mount works even if no disk was found.
+	procfs_mount();
 
 	// TEMP (userland bring-up, remove when the shell exists): launch
 	// /bin/hello as a FIRST-CLASS scheduled application from the normal boot

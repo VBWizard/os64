@@ -37,7 +37,7 @@ static bool g_saved_cr3_valid[MAX_CPUS];
 
 static inline uint32_t get_current_cpu_index(void);
 static bool prepare_syscall_args(const syscall_entry_t *entry, const uint64_t incoming[6], uint64_t prepared[6]);
-static void raise_sigint_and_die(task_t *task);   // defined with its SIGPIPE twin below
+static void raise_terminating_signal_and_die(task_t *task, thread_t *thread);   // defined with its SIGPIPE twin below
 static bool copy_user_string(const char *user_str, char *buffer, size_t buffer_len);
 static bool copy_user_buffer(const void *user_src, void *kernel_dst, size_t length);
 static bool copy_to_user_buffer(void *user_dst, const void *kernel_src, size_t length);
@@ -126,19 +126,20 @@ uint64_t _syscall_dispatch(
 	bool switched_cr3 = false;
 	uint64_t entry_cr3 = 0;
 
-	// The Ctrl+C checkpoint. Every task that is DOING anything passes through
-	// here constantly (cat's write loop = thousands of crossings a second), so
-	// a pending SIGINT set at the keystroke is enforced within microseconds —
-	// and in the victim's own context, where task_exit is safe. Tasks that are
-	// BLOCKED instead get here via their woken blocking loops (see
-	// raise_sigint_and_die). Only a syscall-free ring-3 spin evades this
-	// boundary entirely — a gap recorded in SIGINT.md, closed for real when
-	// userland signal delivery lands.
+	// The terminate checkpoint. Every task that is DOING anything passes
+	// through here constantly (cat's write loop = thousands of crossings a
+	// second), so a pending terminate — set at a keystroke (Ctrl+C) or by a
+	// write to /proc/<id>/ctl — is enforced within microseconds, and in the
+	// victim's own context, where task_exit is safe. Tasks that are BLOCKED
+	// instead get here via their woken blocking loops (see
+	// raise_terminating_signal_and_die). Only a syscall-free ring-3 spin
+	// evades this boundary entirely — and the forced-syscall push in
+	// scheduler.c closes that gap.
 	{
 		core_local_storage_t *sig_cls = get_core_local_storage();
 		thread_t *sig_thread = sig_cls ? sig_cls->currentThread : NULL;
-		if (sig_thread && (sig_thread->signals.sigind & SIGINT))
-			raise_sigint_and_die(sig_cls->task);
+		if (sig_thread && (sig_thread->signals.sigind & SIGNALS_TERMINATING))
+			raise_terminating_signal_and_die(sig_cls->task, sig_thread);
 	}
 
 	// Remember the address space we arrived on for the exit tripwire below.
@@ -571,25 +572,43 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // delivery exists, install a handler and get the PIPE_ERR_CLOSED return value
 // instead. Until then the kernel enforces the default, which is the behavior
 // every pipeline actually wants.
-// ── SIGINT: Ctrl+C's default action (design: SIGINT.md) ─────────────────────
+// ── The terminating signals: enforcing the default action (SIGINT.md, PROC.md)
 // Same "kernel enforces the default because ring 3 can't catch it" pattern as
 // SIGPIPE below, same 128+signo retVal encoding for a waiting parent. The bit
-// is set at the KEYSTROKE (console_intr_intercept, IRQ path — cat writing a
-// huge file is not reading the console, so a buffered byte could never work);
-// the KILL happens here, at the victim's own syscall boundary, in its own
-// context — free to sleep, safe to close handles, through the very same
-// task_exit path a voluntary death takes. Three roads lead here:
+// is set somewhere the victim is NOT running — at the KEYSTROKE
+// (console_intr_intercept, IRQ path — cat writing a huge file is not reading
+// the console, so a buffered byte could never work), or by another task
+// writing to /proc/<id>/ctl. The KILL happens here, at the victim's own
+// syscall boundary, in its own context — free to sleep, safe to close handles,
+// through the very same task_exit path a voluntary death takes. Three roads
+// lead here:
 //   1. the dispatcher check in _syscall_dispatch (a busy task's next syscall)
 //   2. console_read returning CONSOLE_READ_INTERRUPTED (blocked on stdin)
 //   3. pipe_read/pipe_write returning PIPE_ERR_INTERRUPTED (blocked on a pipe)
-#define TASK_EXIT_SIGINT 130    // 128 + SIGINT(2) — joins SIGPIPE's 141, segfault's 139
-static void raise_sigint_and_die(task_t *task)
+//
+// SIGKILL and SIGINT both terminate today (nothing in ring 3 can catch either
+// yet) but they are NOT the same event, and the exit status must not pretend
+// they are: a task killed through ctl did not die "interrupted from the
+// keyboard". SIGKILL wins when both are pending — the uncatchable one always
+// outranks the catchable one.
+// `thread` may be NULL: all four call sites run in the VICTIM'S OWN context
+// (that is the whole design), so the core's current thread is the right one
+// to ask which bit is pending.
+static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 {
+	if (thread == NULL)
+	{
+		core_local_storage_t *cls = get_core_local_storage();
+		thread = cls ? cls->currentThread : NULL;
+	}
+
+	bool killed = (thread != NULL) && (thread->signals.sigind & SIGKILL);
+
 	if (task != NULL)
 	{
-		task->retVal = TASK_EXIT_SIGINT;
-		printd(DEBUG_TASK, "SIGINT: task %s interrupted from the keyboard — terminating\n",
-			task->exename);
+		task->retVal = killed ? SIGNALS_EXIT_SIGKILL : SIGNALS_EXIT_SIGINT;
+		printd(DEBUG_TASK, "%s: task %s terminating (exit %lu)\n",
+			killed ? "SIGKILL" : "SIGINT", task->exename, task->retVal);
 	}
 
 	task_exit();
@@ -778,7 +797,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				{
 					// Ctrl+C landed while blocked on (or headed into) this
 					// pipe write. Same rail, different signal: terminate, 130.
-					raise_sigint_and_die(task);
+					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
 				if (n < 0)
@@ -902,7 +921,7 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				// Ctrl+C landed while (or before) we were blocked on stdin.
 				// Default action: terminate. The sentinel never reaches ring 3.
 				kfree(kbuf);
-				raise_sigint_and_die(task);
+				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
 			break;
@@ -919,7 +938,7 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			{
 				// Ctrl+C landed while blocked on (or headed into) a pipe read.
 				kfree(kbuf);
-				raise_sigint_and_die(task);
+				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
 			break;

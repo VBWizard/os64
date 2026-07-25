@@ -94,12 +94,13 @@ long console_read(char *buf, size_t len)
 	size_t n = 0;
 	for (;;)
 	{
-		// A pending SIGINT outranks the read: the READER is being terminated.
-		// Checked at the top of every pass — this is how a reader parked
-		// below (and woken by processSignals when the bit appeared) exits the
-		// loop instead of parking forever. Any bytes in the ring stay for the
-		// next reader; a dying task has no further use for them.
-		if (self->signals.sigind & SIGINT)
+		// A pending TERMINATE outranks the read: the READER is being killed,
+		// whether by Ctrl+C or by a write to its /proc ctl file. Checked at the
+		// top of every pass — this is how a reader parked below (and woken by
+		// processSignals when the bit appeared) exits the loop instead of
+		// parking forever. Any bytes in the ring stay for the next reader; a
+		// dying task has no further use for them.
+		if (self->signals.sigind & SIGNALS_TERMINATING)
 			return CONSOLE_READ_INTERRUPTED;
 
 		// Drain whatever translated keys are queued (skip pure-modifier /

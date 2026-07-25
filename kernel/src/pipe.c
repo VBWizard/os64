@@ -199,12 +199,13 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 
 	for (;;)
 	{
-		// A pending SIGINT outranks the read — the READER is being terminated.
-		// Checked before the lock, at the top of every pass: this is how a
-		// reader parked below (woken by processSignals when the bit appeared)
-		// exits instead of re-parking forever. Buffered bytes stay put — a
-		// dying stage has no further use for them.
-		if (self->signals.sigind & SIGINT)
+		// A pending TERMINATE outranks the read — the READER is being killed
+		// (Ctrl+C, or a write to its /proc ctl file). Checked before the lock,
+		// at the top of every pass: this is how a reader parked below (woken by
+		// processSignals when the bit appeared) exits instead of re-parking
+		// forever. Buffered bytes stay put — a dying stage has no further use
+		// for them.
+		if (self->signals.sigind & SIGNALS_TERMINATING)
 			return PIPE_ERR_INTERRUPTED;
 
 		uint64_t flags = spinlock_acquire_irqsave(&p->lock);
@@ -276,10 +277,10 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 
 	while (written < len)
 	{
-		// Same rule as pipe_read: a pending SIGINT means the WRITER is being
-		// terminated — stop pushing bytes and let the syscall boundary do the
+		// Same rule as pipe_read: a pending TERMINATE means the WRITER is being
+		// killed — stop pushing bytes and let the syscall boundary do the
 		// honors. Bytes already landed stay landed (they were real).
-		if (self->signals.sigind & SIGINT)
+		if (self->signals.sigind & SIGNALS_TERMINATING)
 			return PIPE_ERR_INTERRUPTED;
 
 		// A write of <= PIPE_CAPACITY lands WHOLE (our atomicity rule): wait for
