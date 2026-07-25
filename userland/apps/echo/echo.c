@@ -25,6 +25,23 @@
 
 #define OUT_MAX 256   // one decoded token; matches husk's whole-line cap
 
+// Did any write fail? echo used to ignore every return value and exit 0
+// unconditionally — which meant `echo kill > /proc/32/ctl` reported success
+// for a command the kernel had refused, and `$?` said 0. A program that could
+// not deliver its output has not succeeded, and must not claim it did.
+// (Found the day /proc's ctl file arrived, which is the first thing in os64
+// that ever answers a write with "no".)
+static bool gWriteFailed = false;
+
+// Every byte echo emits goes through here. os64_write returns the count, or a
+// negative sentinel — os64 has no errno by design, the return value IS the
+// answer (LIBOS64.md).
+static void emit(const char *s, size_t n)
+{
+    if (os64_write(1, s, n) < 0)
+        gWriteFailed = true;
+}
+
 static bool str_is(const char *a, const char *b)
 {
     while (*a && *a == *b) { a++; b++; }
@@ -106,24 +123,25 @@ int main(int argc, char **argv)
     for (bool first = true; argv[i] != NULL && !stop; i++, first = false)
     {
         if (!first)
-            os64_write(1, " ", 1);
+            emit(" ", 1);
 
         if (doEscapes)
         {
             char out[OUT_MAX];
             int32_t n = decode_escapes(argv[i], out, sizeof(out), &stop);
-            os64_write(1, out, (size_t)n);
+            emit(out, (size_t)n);
         }
         else
         {
             size_t n = 0;
             while (argv[i][n] != '\0')
                 n++;
-            os64_write(1, argv[i], n);
+            emit(argv[i], n);
         }
     }
 
     if (!noNewline && !stop)
-        os64_write(1, "\n", 1);
-    return 0;
+        emit("\n", 1);
+
+    return gWriteFailed ? 1 : 0;
 }
