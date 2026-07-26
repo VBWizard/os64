@@ -1,6 +1,8 @@
 // libos64 io.c — the friendly veneer over the raw write/exit syscalls.
 
 #include "os64/io.h"
+#include "os64/str.h"      // os64_strlen — was a private static here until
+                           // env.c needed string helpers too and it graduated
 #include "os64/syscall.h"
 
 int64_t os64_write(int32_t handle, const void *buf, size_t len)
@@ -13,15 +15,6 @@ int64_t os64_read(int32_t handle, void *buf, size_t len)
 {
     return (long)os64_syscall3(SYSCALL_READ, (uint64_t)handle,
                                (uint64_t)buf, (uint64_t)len);
-}
-
-// strlen without libc: freestanding, and we own the whole world here.
-static size_t os64_strlen(const char *s)
-{
-    size_t n = 0;
-    while (s[n])
-        n++;
-    return n;
 }
 
 int64_t os64_puts(const char *s)

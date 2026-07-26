@@ -39,7 +39,7 @@ BIN     := $(CURDIR)/bin
 OBJ     := $(CURDIR)/obj
 
 # libos64 objects + the launch stub link into every app.
-RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/env.c
+RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/env.c libos64/str.c
 RUNTIME_OBJS := $(patsubst %,$(OBJ)/%.o,$(RUNTIME_SRCS))
 
 # Every apps/<name>/<name>.c is an app named <name>.
