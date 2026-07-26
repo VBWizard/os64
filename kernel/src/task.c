@@ -434,6 +434,33 @@ task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	}
 }
 
+// The non-blocking half of task_wait (contract in task.h). Deliberately shares
+// task_wait's check-first block and NOTHING else: no live-child probe, because
+// "children exist but none are dead" is a normal answer here rather than a
+// reason to sleep; and no kForegroundTask movement, because reaping a
+// background corpse does not hand anyone the console.
+task_t* task_reap_any_dead(task_t* parentTask, uint64_t* exitCode)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *parent = parentTask ? parentTask : (cls ? cls->task : NULL);
+
+	if (parent == NULL)
+		return NULL;
+
+	// targetPid 0 = "the first of ANY child to have ended", the same wildcard
+	// task_wait uses — a shell polling for finished jobs does not care which.
+	task_t *child = task_pop_dead_child(parent, 0);
+	if (child == NULL)
+		return NULL;
+
+	if (exitCode != NULL)
+		*exitCode = child->retVal;
+	if (child->threads != NULL)
+		scheduler_reap_zombie_thread(child->threads);
+
+	return child;
+}
+
 task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
 {
     printd(DEBUG_TASK,"task_initialize: Initializing task\n");

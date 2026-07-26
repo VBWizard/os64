@@ -91,6 +91,22 @@ long console_read(char *buf, size_t len)
 	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
 
+	// A BACKGROUND job gets EOF instead of the keyboard — `cmd &` behaves as
+	// `cmd < /dev/null &`. Checked before the loop, not inside it: a background
+	// reader must never join the waiter queue at all, or it would take
+	// keystrokes the shell was owed. os32 had this hole and never noticed,
+	// because nothing anyone backgrounded there happened to read stdin.
+	//
+	// Keyed on backgroundJob (task.h) and NOT on kForegroundTask, deliberately:
+	// in `cat | upper` husk waits on the LAST stage, so `cat` is not the
+	// foreground task, and gating on that would hand the first stage of every
+	// console-reading pipeline an instant EOF.
+	//
+	// Writes stay untouched — a background job still prints to the screen,
+	// which was always the useful half of the bargain.
+	if (cls->task != NULL && cls->task->backgroundJob)
+		return 0;
+
 	size_t n = 0;
 	for (;;)
 	{

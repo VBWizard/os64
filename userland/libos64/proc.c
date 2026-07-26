@@ -27,25 +27,33 @@ int64_t os64_chdir(const char *path)
 int64_t os64_spawn(const char *path, char *const argv[])
 {
     // -1/-1/-1: no redirection, all three streams stay on the console.
-    return os64_spawn_redirected(path, argv, -1, -1, -1);
+    // flags 0: an ordinary foreground child.
+    return os64_spawn_redirected(path, argv, -1, -1, -1, 0);
 }
 
 int64_t os64_spawn_redirected(const char *path, char *const argv[],
-                           int32_t in, int32_t out, int32_t err)
+                           int32_t in, int32_t out, int32_t err,
+                           uint32_t flags)
 {
-    // 5 args (no os64_syscall5 exists, so ride syscall6 with a zero tail — the
-    // kernel handler ignores arg5, and the dispatcher only pointer-checks the
-    // args the table's mask marks, which is just path and argv).
+    // All six argument registers are spoken for now: arg5 carries OS64_SPAWN_*
+    // (it used to be a zero the kernel ignored). The dispatcher only
+    // pointer-checks the args the table's mask marks, which is just path and
+    // argv — flags is a value, not a pointer, and must not be range-checked.
     return (long)os64_syscall6(SYSCALL_SPAWN,
                                (uint64_t)path,
                                (uint64_t)argv,
                                (uint64_t)(int64_t)in,
                                (uint64_t)(int64_t)out,
                                (uint64_t)(int64_t)err,
-                               0);
+                               (uint64_t)flags);
 }
 
 int64_t os64_wait(int64_t pid, int32_t *exit_code)
 {
     return (long)os64_syscall2(SYSCALL_WAIT, (uint64_t)pid, (uint64_t)exit_code);
+}
+
+int64_t os64_reap(int32_t *exit_code)
+{
+    return (long)os64_syscall1(SYSCALL_REAP, (uint64_t)exit_code);
 }

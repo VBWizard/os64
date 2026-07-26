@@ -36,6 +36,19 @@
 // 16-22 are RESERVED for the GUI block (see below) — defined before stat
 // arrived, and reserved means reserved. File syscalls resume at 23.
 #define SYSCALL_STAT       23
+#define SYSCALL_REAP       24
+
+// spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
+// before this existed keeps working unchanged.
+//
+// BACKGROUND marks a job the shell launched with `&` and will NOT wait on. The
+// kernel needs to know because of the keyboard: a background job that reads
+// handle 0 would silently compete with the shell for your keystrokes (os32 had
+// exactly this hole — you simply never backgrounded anything that read stdin).
+// A background job's console read returns EOF instead, so `cmd &` behaves like
+// `cmd < /dev/null &`. Output is untouched: background jobs still write to the
+// screen, which was always the useful half.
+#define OS64_SPAWN_BACKGROUND  0x1
 
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the

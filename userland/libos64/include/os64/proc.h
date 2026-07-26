@@ -7,6 +7,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "os64/env.h"
+// For OS64_SPAWN_* — the spawn flag values are part of the kernel contract,
+// so they are defined once in the ABI rather than mirrored here.
+#include "os64/syscall_numbers.h"
 
 // Yield the CPU to the scheduler; returns when rescheduled.
 void os64_yield(void);
@@ -43,6 +47,9 @@ int64_t os64_getcwd(char *buf, size_t len);
 //     const char *path = os64_getenv("PATH");   // e.g. "/bin"
 const char *os64_getenv(const char *key);
 
+int32_t os64_env_next(os64_envent_t *buffer);
+
+
 // Change directory. Relative and messy paths welcome ("../dir1//./x") — the
 // kernel canonicalizes before storing. Returns 0, or negative if the target
 // doesn't exist or isn't a directory (in which case the cwd is UNCHANGED).
@@ -67,8 +74,16 @@ int64_t os64_spawn(const char *path, char *const argv[]);
 //
 // The child gets its OWN reference on any pipe end passed here, so the parent
 // closing its copy does not yank the pipe out from under it.
+//
+// `flags` is OS64_SPAWN_* (syscall_numbers.h); 0 is the everyday spawn.
+// OS64_SPAWN_BACKGROUND marks a job launched with `&`: the kernel gives its
+// reads of handle 0 an immediate EOF, so a background job can never quietly
+// take keystrokes the shell was owed. It stays a parameter of THIS function
+// rather than a fourth spawn entry point because a shell that redirects is
+// the only thing that ever wants it.
 int64_t os64_spawn_redirected(const char *path, char *const argv[],
-                           int32_t in, int32_t out, int32_t err);
+                           int32_t in, int32_t out, int32_t err,
+                           uint32_t flags);
 
 // Wait for a child to exit and reap it. pid > 0 waits for that specific child;
 // pid == 0 waits for the first of any child to end. Returns the pid that
@@ -76,5 +91,20 @@ int64_t os64_spawn_redirected(const char *path, char *const argv[],
 // code to *exit_code if non-NULL. Returns immediately if the child already
 // ended.
 int64_t os64_wait(int64_t pid, int32_t *exit_code);
+
+// Collect ONE already-finished child WITHOUT ever blocking. Returns that
+// child's pid (> 0), or 0 when nothing has finished — 0 is the ordinary
+// answer, not an error, so a shell can call this at every prompt without
+// treating the common case as a failure. Exit code via *exit_code if non-NULL.
+//
+// A separate call rather than a flag on os64_wait, because a "wait" that does
+// not wait is a name that lies. This is what makes `&` clean: reporting a
+// finished background job and reaping it are the same act, so nothing
+// accumulates and no kernel sweeper is needed —
+//
+//     int32_t code;  int64_t pid;
+//     while ((pid = os64_reap(&code)) > 0)
+//         /* one finished job */;
+int64_t os64_reap(int32_t *exit_code);
 
 #endif // OS64_PROC_H

@@ -87,6 +87,19 @@
         // becoming a SIGINT. A flag rather than a global pointer because it
         // generalizes to per-tty controlling shells later (SIGINT.md).
         bool controllingShell;
+        // Launched with `&` — a job the shell spawned and will NOT wait on.
+        // Consumed by console_read: a background job's read of handle 0
+        // returns EOF rather than joining the queue for the keyboard, so it
+        // can never silently eat the shell's keystrokes (`cmd &` behaves as
+        // `cmd < /dev/null &`). Deliberately NOT the same question as
+        // "is this kForegroundTask": in `cat | upper` husk waits on the LAST
+        // stage, so `cat` is not the foreground task and gating on that would
+        // hand every pipeline's first stage an instant EOF. Writes are
+        // untouched — a background job still prints to the screen.
+        // Cleared when `fg` arrives, which is why this is a job property and
+        // not a different object wired into the child's handle 0: fg must be
+        // able to re-attach input without surgery on a running task's table.
+        bool backgroundJob;
         bool kernelTask;
         struct tm startTime, endTime;
         uint64_t entryPoint;
@@ -144,6 +157,15 @@
 	// immediately if a matching child has already exited; returns NULL if no
 	// matching child exists at all.
 	task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode);
+	// task_wait's NON-BLOCKING half: reap the next already-dead child of
+	// parentTask and return it (exit code via *exitCode), or NULL if none has
+	// died — never sleeps, even when live children exist. This is what lets a
+	// shell collect background jobs at its prompt without hanging on the ones
+	// still running, and it is why `&` does not leak zombies the way os32's
+	// did: REPORTING a finished job and REAPING it are the same act.
+	// Does NOT touch kForegroundTask — collecting a background corpse is not
+	// a change of who owns the console.
+	task_t* task_reap_any_dead(task_t* parentTask, uint64_t* exitCode);
 	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);

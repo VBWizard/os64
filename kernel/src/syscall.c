@@ -76,6 +76,8 @@ static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -114,6 +116,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GETCWD,    "getcwd",    syscall_getcwd,    false, 0x01),  // arg0 = out buffer
 	SYSCALL_DEFINE(SYSCALL_CHDIR,     "chdir",     syscall_chdir,     false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_STAT,      "stat",      syscall_stat,      false, 0x03),  // arg0 = path, arg1 = dirent out ptr
+	SYSCALL_DEFINE(SYSCALL_REAP,      "reap",      syscall_reap,      false, 0x01),  // arg0 = exit-code out ptr
 };
 
 uint64_t _syscall_dispatch(
@@ -1750,6 +1753,7 @@ typedef struct {
 	// means "leave the child's default" — i.e. the console.
 	handle_type_t redirType[3];
 	void  *redirObject[3];
+	bool   background;                    // OS64_SPAWN_BACKGROUND (`&`)
 	volatile long result;                 // child pid, or -1 on failure
 } spawn_params_t;
 
@@ -1768,6 +1772,19 @@ static void spawn_do_create(void *arg)
 		p->result = -1;
 		return;
 	}
+
+	// Marked BEFORE the child is submitted to the scheduler, for the same
+	// reason redirection is applied below: it must not get one instruction of
+	// CPU in the wrong state. A background job that ran even briefly as a
+	// foreground one could steal a keystroke, and that race would be
+	// spectacularly hard to see.
+	//
+	// DEBT (DEBTS.md): the flag is NOT inherited — a background job that
+	// spawns its own child mints a FOREGROUND grandchild that can read the
+	// keyboard, reopening one generation down exactly the hole this flag
+	// closes. Latent while nothing backgrounded can spawn; the day husk runs
+	// scripts, this line is where the ruling lands.
+	child->backgroundJob = p->background;
 
 	// Apply redirection BEFORE the child is submitted to the scheduler — the
 	// child must never get a single instruction of CPU with the wrong handles
@@ -1819,14 +1836,23 @@ static void spawn_do_create(void *arg)
 static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg5;
-
 	const char *user_path = (const char *)arg0;
 	char *const *user_argv = (char *const *)arg1;
+
+	// arg5 = flags (OS64_SPAWN_*). Zero is the everyday spawn, so every caller
+	// written before this argument existed keeps working untouched — arg5 was
+	// previously ignored, and "ignored" and "zero means normal" agree.
+	// Unknown bits are REFUSED at the boundary rather than ignored: a flag the
+	// kernel silently drops is a request that appeared to succeed and didn't,
+	// the same reasoning that rejects unknown open() modes.
+	uint64_t flags = arg5;
+	if ((flags & ~(uint64_t)OS64_SPAWN_BACKGROUND) != 0)
+		return SYSCALL_RESULT_BAD_USER_DATA;
 
 	spawn_params_t *p = kmalloc(sizeof(*p));
 	if (p == NULL)
 		return SYSCALL_RESULT_INVALID;
+	p->background = (flags & OS64_SPAWN_BACKGROUND) != 0;
 
 	// Marshal path + argv from user space into the HHDM block (runs on the
 	// caller's CR3, which maps both the user args and the HHDM).
@@ -1927,6 +1953,48 @@ static uint64_t syscall_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	task_t *child = task_wait(parent, targetPid, &exitCode);
 	if (child == NULL)
 		return SYSCALL_RESULT_INVALID;   // no such child
+
+	uint64_t endedPid = child->taskID;
+	if (user_code != NULL)
+	{
+		int code = (int)exitCode;
+		if (!copy_to_user_buffer(user_code, &code, sizeof(code)))
+			return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	return endedPid;
+}
+
+// reap(exit_code_out) — collect ONE finished child without ever blocking.
+// Returns that child's task ID, or 0 for "nobody has died", or a
+// SYSCALL_RESULT_* sentinel.
+//
+// A separate syscall rather than a flag on wait(), on purpose: a "wait" that
+// does not wait is a name that lies, and this kernel has opinions about those.
+// The three-way answer is readdir's, not Unix's — 0 means the perfectly
+// ordinary "nothing to collect right now", not an error, so a shell can poll
+// it at every prompt without treating the common case as a failure.
+//
+// This is what makes `&` clean. A shell that reports `[1]+ 57 Done` has to
+// COLLECT that status, and collecting IS reaping — so the report and the
+// cleanup are one act, and background jobs never pile up as zombies the way
+// os32's did (its kshell forked, skipped the waitpid, and never spoke of the
+// child again). The shell buries its own dead; kworker never has to care.
+static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	int *user_code = (int *)arg0;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *parent = cls ? cls->task : NULL;
+	if (parent == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	uint64_t exitCode = 0;
+	task_t *child = task_reap_any_dead(parent, &exitCode);
+	if (child == NULL)
+		return 0;   // no finished children — the ordinary answer, not an error
 
 	uint64_t endedPid = child->taskID;
 	if (user_code != NULL)

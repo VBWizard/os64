@@ -211,6 +211,154 @@ static void expand_line(const char *src, char *dst, int cap, int last_status)
 	dst[n] = 0;
 }
 
+// ── background jobs ─────────────────────────────────────────────────────────
+// `cmd &` — the Thompson shell grew this in 1973, and os32's kshell had it too
+// (fork, skip the waitpid, never speak of the child again). os64 keeps the
+// half that was right and fixes the half that wasn't: os32 never collected a
+// backgrounded child's status, so every one of them became a zombie nobody
+// ever buried. Here, REPORTING a finished job and REAPING it are the same act
+// — os64_reap() at each prompt hands back a corpse, and the job table turns
+// that into `[1]+ 57 Done`. Nothing accumulates, and the kernel's kworker
+// never has to care: a shell buries its own dead.
+#define MAX_JOBS 8
+
+typedef struct {
+	int  used;
+	int  jobNum;                 // husk-local, small, what a human says out loud
+	long pids[MAX_STAGES];       // every stage — `a | b &` is ONE job
+	int  remaining;              // stages not yet collected
+	long reportPid;              // the LAST stage's pid: the job's public identity
+	int  lastCode;               // and its exit code — the pipeline's answer
+} job_t;
+
+static job_t gJobs[MAX_JOBS];
+static int   gNextJobNum = 1;
+
+static void put_num(unsigned long v)
+{
+	char b[20];
+	int k = utoa(v, b);
+	os64_write(1, b, (unsigned)k);
+}
+
+// "[1] 57" — job number and task number both, on purpose. In bash the pid is
+// noise because you kill a job by `%1`; os64 has no such notation, so the TASK
+// NUMBER is the handle you actually use: `echo kill > /proc/57/ctl`. Printing
+// it is load-bearing here, not decoration.
+static void job_announce(int jobNum, long pid)
+{
+	os64_write(1, "[", 1);
+	put_num((unsigned long)jobNum);
+	os64_write(1, "] ", 2);
+	put_num((unsigned long)pid);
+	os64_write(1, "\n", 1);
+}
+
+static void job_report_done(const job_t *j)
+{
+	os64_write(1, "[", 1);
+	put_num((unsigned long)j->jobNum);
+	os64_write(1, "]+ ", 3);
+	put_num((unsigned long)j->reportPid);
+	// Bourne's distinction, and a useful one: a job that FAILED should not read
+	// the same as one that succeeded from across the room.
+	if (j->lastCode == 0)
+		os64_write(1, " Done\n", 6);
+	else
+	{
+		os64_write(1, " Exit ", 6);
+		put_num((unsigned long)(unsigned int)j->lastCode);
+		os64_write(1, "\n", 1);
+	}
+}
+
+// Register a launched background pipeline. Returns the job number, or 0 if the
+// table is full (the job still RUNS — it just goes untracked, which is os32's
+// behavior and an honest fallback rather than a refusal to launch).
+static int job_add(const long *pids, int npids)
+{
+	for (int i = 0; i < MAX_JOBS; i++)
+	{
+		if (gJobs[i].used)
+			continue;
+		gJobs[i].used      = 1;
+		gJobs[i].jobNum    = gNextJobNum++;
+		gJobs[i].remaining = npids;
+		gJobs[i].lastCode  = 0;
+		for (int k = 0; k < npids; k++)
+			gJobs[i].pids[k] = pids[k];
+		gJobs[i].reportPid = pids[npids - 1];   // the last stage speaks for the job
+		return gJobs[i].jobNum;
+	}
+	return 0;
+}
+
+// A child just came back from reap(). If it belongs to a tracked job, count it
+// off; when the job's last stage is collected, announce it. Returns 1 if the
+// pid was ours to account for.
+static int job_note_reaped(long pid, int code)
+{
+	for (int i = 0; i < MAX_JOBS; i++)
+	{
+		if (!gJobs[i].used)
+			continue;
+		for (int k = 0; k < MAX_STAGES; k++)
+		{
+			if (gJobs[i].pids[k] != pid)
+				continue;
+			gJobs[i].pids[k] = -1;             // collected
+			if (pid == gJobs[i].reportPid)
+				gJobs[i].lastCode = code;      // the pipeline's status is its last stage's
+			if (--gJobs[i].remaining == 0)
+			{
+				job_report_done(&gJobs[i]);
+				gJobs[i].used = 0;
+			}
+			return 1;
+		}
+	}
+	return 0;
+}
+
+// Collect every finished background child. Called at the prompt, which is the
+// one moment a shell is guaranteed not to be in the middle of something — the
+// same place bash reports jobs, and for the same reason.
+static void jobs_poll(void)
+{
+	for (;;)
+	{
+		int code = 0;
+		long pid = os64_reap(&code);
+		if (pid <= 0)
+			break;              // 0 = nobody has died; that is the usual answer
+		job_note_reaped(pid, code);
+	}
+}
+
+// Strip a trailing `&` and say whether it was there. The `&` must be its OWN
+// token, exactly like `<` and `>`: husk splits on spaces only, so `hog&` is a
+// program named "hog&" — honest, if unhelpful, and consistent with every other
+// operator in this shell. (os32's kshell tested `*argv[argc-1]=='&'` and never
+// removed it, so every background program there was handed a final argument of
+// "&" and had to not care.)
+static int strip_background(char *line)
+{
+	int n = 0;
+	while (line[n] != '\0')
+		n++;
+	while (n > 0 && (line[n - 1] == ' ' || line[n - 1] == '\t'))
+		n--;
+	if (n == 0 || line[n - 1] != '&')
+		return 0;
+	if (n >= 2 && line[n - 2] != ' ' && line[n - 2] != '\t')
+		return 0;               // part of a token, not an operator
+	n--;                        // drop the '&' itself
+	while (n > 0 && (line[n - 1] == ' ' || line[n - 1] == '\t'))
+		n--;
+	line[n] = '\0';
+	return 1;
+}
+
 // Report a reaped child to the serial log: "husk: pid <p> exited code <c>".
 static void report_exit(long ended, int code)
 {
@@ -317,7 +465,7 @@ static const char *resolve_command(const char *cmd, char *buf, int cap)
 // end open and that reader waits forever for an EOF that can never come: the
 // classic `a | b` hang that every hand-written shell suffers exactly once. The
 // child already holds its own reference, so closing ours takes nothing from it.
-static int run_pipeline(char *stages[], int nstages)
+static int run_pipeline(char *stages[], int nstages, int background)
 {
 	long pids[MAX_STAGES];
 	int npids = 0;
@@ -388,7 +536,12 @@ static int run_pipeline(char *stages[], int nstages)
 		char pathbuf[256];
 		const char *prog = resolve_command(cargv[0], pathbuf, sizeof(pathbuf));
 
-		long pid = os64_spawn_redirected(prog, cargv, in, out, -1);
+		// The BACKGROUND flag rides all the way to task_create, because the
+		// kernel has to know before the child's first instruction: a background
+		// job's read of handle 0 returns EOF instead of competing with husk for
+		// the keyboard. Output is untouched — it still prints to the screen.
+		long pid = os64_spawn_redirected(prog, cargv, in, out, -1,
+		                                 background ? OS64_SPAWN_BACKGROUND : 0);
 
 		// Hand-off done — drop husk's copies of EVERYTHING it just passed
 		// along (or displaced). The displaced case matters: if a redirect won
@@ -415,6 +568,19 @@ static int run_pipeline(char *stages[], int nstages)
 
 	if (prev_read >= 0)
 		os64_close(prev_read);  // belt and braces: never leave an end dangling
+
+	// A BACKGROUND job is the one case where husk does not wait: it hands the
+	// pipeline to the job table, prints "[1] 57", and goes straight back to the
+	// prompt. The corpses are collected later by jobs_poll(). $? is 0 — the
+	// LAUNCH succeeded; the job's own status arrives with "[1]+ 57 Done", which
+	// is the only honest answer when the thing hasn't finished yet.
+	if (background && npids > 0)
+	{
+		int jobNum = job_add(pids, npids);
+		if (jobNum > 0)
+			job_announce(jobNum, pids[npids - 1]);
+		return status;
+	}
 
 	// Reap every child we launched. They run CONCURRENTLY — that is the point
 	// of a pipeline; stage 2 is already chewing on stage 1's first bytes long
@@ -457,6 +623,13 @@ int main(int argc, char **argv, char **envp)
 
 	for (;;)
 	{
+		// Bury any background job that finished while you were typing, BEFORE
+		// the prompt is drawn — so the "[1]+ 57 Done" line lands above a fresh
+		// prompt instead of halfway through the one you are looking at. This
+		// is also the only reaping background jobs ever get, which is exactly
+		// why they never pile up as zombies.
+		jobs_poll();
+
 		prompt();
 		if (read_line(line, sizeof(line)) == 0)
 			continue;
@@ -464,6 +637,13 @@ int main(int argc, char **argv, char **envp)
 		// $? is substituted BEFORE the line is split or tokenized, so it
 		// works anywhere on the line: `echo $?`, `cd $?` (weird, legal).
 		expand_line(line, expanded, sizeof(expanded), last_status);
+
+		// A trailing `&` applies to the WHOLE line, not the last stage:
+		// `hello | upper &` backgrounds the pipeline, which is why this runs
+		// before split_pipeline rather than inside it.
+		int background = strip_background(expanded);
+		if (expanded[0] == '\0')
+			continue;           // the line was nothing but an `&`
 
 		int nstages = split_pipeline(expanded, stages, MAX_STAGES);
 
@@ -496,7 +676,7 @@ int main(int argc, char **argv, char **envp)
 			continue;
 		}
 
-		last_status = run_pipeline(stages, nstages);
+		last_status = run_pipeline(stages, nstages, background);
 	}
 
 	os64_write(1, "husk: bye\n", 10);
