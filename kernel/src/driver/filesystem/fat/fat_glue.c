@@ -14,6 +14,14 @@ extern uint64_t kSystemCurrentTime; // Your kernel's epoch time variable
 
 vfs_filesystem_t* vfs_get_device_by_fat_disk_number(uint8_t fatDiskNumber)
 {
+	// FAT_DISK_NONE marks every non-FAT filesystem in the dlist (vfs.h). It
+	// must never be matchable: resolving it would hand FatFs a filesystem —
+	// and a partition base sector — that was never FAT's to touch. Real FAT
+	// disk numbers are 1-based, so a pdrv of 0 (uninitialized/leaked) falls
+	// through to NULL and the callers' "Cannot find vfs device" panic names
+	// the bug instead of letting the write land on the root partition.
+	if (fatDiskNumber == FAT_DISK_NONE)
+		return NULL;
 
 	if (kBlockDeviceDList == NULL)
 	{

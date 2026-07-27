@@ -224,6 +224,15 @@ struct vfs_partition_table
     bool validBootSector;
 } __attribute__((packed));
 
+// fatDiskNumber sentinel for non-FAT filesystems. Real FAT mounts get 1, 2, …
+// (++kFatDiskNumber); everything else must hold a value FatFs can never present
+// as a pdrv that resolves. Zero is NOT that value — kRegisterFilesystem memsets
+// the struct, and a stale/leaked pdrv of 0 once matched the EXT2 ROOT in the
+// dlist walk, aiming FAT-relative sector writes at the root partition (the
+// 2026-07-26 root-inode corruption hunt). vfs_get_device_by_fat_disk_number
+// refuses to match this value outright.
+#define FAT_DISK_NONE 0xFF
+
 struct vfs_filesystem
 {
 	vfs_mount_t *mount; 

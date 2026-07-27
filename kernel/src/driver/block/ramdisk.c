@@ -1,5 +1,6 @@
 #include "ramdisk.h"
 #include "ata.h"
+#include "block_device.h"
 #include "kmalloc.h"
 #include "memcpy.h"
 #include "strings.h"
@@ -38,6 +39,11 @@ size_t ramdisk_vfs_read_disk(block_device_info_t* device, uint64_t sector, void*
 
 size_t ramdisk_vfs_write_disk(block_device_info_t* device, uint64_t sector, const void* buffer, uint64_t sector_count)
 {
+	// Stray-write tripwire (block_device.c): same guard as the NVMe path.
+	// RAMDisk writes vanish at reboot, which makes THIS the boot mode where a
+	// misrouted write would be invisible forever — all the more reason to trap.
+	block_verify_write_allowed(device, sector, sector_count);
+
 	ramdisk_device_t* ramdisk = (ramdisk_device_t*)device->block_extra_info;
 
 	if (sector + sector_count > ramdisk->totalSectors)

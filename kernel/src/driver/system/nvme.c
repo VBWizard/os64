@@ -11,6 +11,7 @@
 #include "memcpy.h"
 #include "vfs.h"
 #include "ata.h"
+#include "block_device.h"
 #include "printd.h"
 #include "strings.h"
 #include "spinlock.h"
@@ -962,6 +963,12 @@ size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* bu
 
 size_t nvme_vfs_write_disk(block_device_info_t* device, uint64_t sector, void* buffer, size_t length)
 {
+	// Stray-write tripwire (block_device.c): a write that isn't fully inside
+	// a writable (FAT) partition panics HERE, with the culprit on the stack —
+	// earned by the 2026-07-26 root-inode zero-fill. `length` is a sector
+	// count at this layer (the byte conversion happens just below).
+	block_verify_write_allowed(device, sector, length);
+
 	nvme_controller_t* controller = device->block_extra_info;
 	nvme_write_disk(controller, sector, length * controller->blockSize, buffer);
 	// 0 = success, matching nvme_vfs_read_disk. This was `void` until the FAT

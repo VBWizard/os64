@@ -128,6 +128,14 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
     fs = kmalloc(sizeof(vfs_filesystem_t));
     memset(fs, 0, sizeof(vfs_filesystem_t));
 
+	// Non-FAT until proven FAT: the memset above left fatDiskNumber at 0, and
+	// 0 is a value FatFs can actually hand to disk_read/disk_write as a pdrv.
+	// Every non-FAT fs in the dlist matching pdrv 0 meant a leaked drive
+	// number resolved to the EXT2 ROOT and wrote FAT sectors over it (see the
+	// FAT_DISK_NONE comment in vfs.h). The FAT32 branch below overwrites this
+	// with a real 1-based number.
+	fs->fatDiskNumber = FAT_DISK_NONE;
+
 	fs->partNumber = partNo;
     fs->mount = kmalloc(sizeof(vfs_mount_t));
 
