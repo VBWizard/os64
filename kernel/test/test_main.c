@@ -1618,6 +1618,95 @@ static bool test_ring3_stat(void)
     return true;
 }
 
+// sleep_test.c drives sleep(ms) + ticks(out) at CPL 3: the 2012 SIGSLEEP
+// machinery's first ring-3 customer. It measures its own nap with the ticks
+// syscall at the reported rate (so the assertion survives any future
+// TICKS_PER_SECOND), proves sleep(0) is a yield and not a nap, and checks
+// the stopwatch only runs forward. 0x51EExxxx names the failed step.
+// Ctrl+C-interrupts-the-nap is deliberately NOT here — it's interactive,
+// verified by hand like the rest of the SIGINT family.
+#define SLEEP_TEST_RETVAL 0x51EE600DUL
+
+static bool test_ring3_sleep(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_sleep (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/sleep_test", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sleep - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // The fixture sleeps 200ms on purpose; give it 3s so a loaded suite
+    // never flakes the timeout while a genuine never-wakes bug still fails.
+    for (int i = 0; i < 300 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sleep - task did not exit within 3 seconds "
+               "(a sleeper processSignals never woke? deadline math off by an epoch?)\n");
+        return false;
+    }
+
+    if (task->retVal != SLEEP_TEST_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sleep - retVal=0x%lx, expected 0x%lx "
+               "(0x51EExxxx identifies the failed step; see test/elf/sleep_test.c)\n",
+               task->retVal, (uint64_t)SLEEP_TEST_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_sleep (parked >= request at reported rate, sleep(0) yields, monotonic)\n");
+    return true;
+}
+
+// Runs /bin/memory_test: the memory() syscall picture is sane AND the books
+// balance — free + used == usable, exactly, at rest, mid-allocation, and
+// after unmap (the fixture maps/touches/unmaps 256KB to watch the needle
+// move). A failure here with FAIL_BOOKS_* means the allocator's extent
+// ledger dropped or double-counted something: a real accounting bug, not a
+// test problem. 0xF3EExxxx names the failed step ("FREE GOOD" when whole).
+#define MEMORY_TEST_RETVAL 0xF3EE600DUL
+
+static bool test_ring3_memory(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_memory (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/memory_test", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_memory - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // 64 demand-paged touches plus six syscalls: instant. 3s is pure slack.
+    for (int i = 0; i < 300 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_memory - task did not exit within 3 seconds\n");
+        return false;
+    }
+
+    if (task->retVal != MEMORY_TEST_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_memory - retVal=0x%lx, expected 0x%lx "
+               "(0xF3EExxxx identifies the failed step; see test/elf/memory_test.c)\n",
+               task->retVal, (uint64_t)MEMORY_TEST_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_memory (fields sane, books balance at rest/mid-allocation/post-unmap)\n");
+    return true;
+}
+
 // (A dedicated /bin/hello test lived here briefly during userland bring-up;
 // removed as redundant — ring3_syscall_smoke and ring3_exit_by_return already
 // cover load-run-exit at CPL 3, and the HELLO boot-flow launch exercises the
@@ -1852,6 +1941,8 @@ static void register_builtin_tests(void)
     test_register("ring3_map_unmap", test_ring3_map_unmap, TEST_PHASE_POSTBOOT);
     test_register("ring3_cwd", test_ring3_cwd, TEST_PHASE_POSTBOOT);
     test_register("ring3_stat", test_ring3_stat, TEST_PHASE_POSTBOOT);
+    test_register("ring3_sleep", test_ring3_sleep, TEST_PHASE_POSTBOOT);
+    test_register("ring3_memory", test_ring3_memory, TEST_PHASE_POSTBOOT);
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
 }
 

@@ -391,6 +391,51 @@ uint64_t free_memory(uint64_t address)
 	return 0xFFFFFFFF;
 }
 
+// One atomic reading of the ledger for SYSCALL_MEMORY (and anyone else who
+// asks): free bytes, used bytes, and the largest contiguous free extent, all
+// captured under the allocator lock in ONE walk so the numbers describe the
+// SAME instant — separate walks could disagree after a context switch.
+// The ledger is seeded from every USABLE memmap entry (allocator_init), so
+// free + used must equal kAvailableMemory EXACTLY, forever. That identity is
+// the point of counting used here rather than deriving it: the moment a
+// merge/compaction/split bug drops or double-counts an extent, the books
+// stop balancing and the drift is visible from ring 3 (the memory_test
+// fixture asserts the reconciliation every boot).
+// O(kMemoryStatusCurrentPtr) under an irqsave spinlock: microseconds at our
+// entry counts, and top polls at human speed. If a profile ever disagrees,
+// running counters slot in behind this same signature.
+void allocator_memory_snapshot(uint64_t *free_bytes, uint64_t *used_bytes,
+                               uint64_t *largest_free_extent)
+{
+	uint64_t irqflags = allocator_lock();
+
+	uint64_t free_total = 0;
+	uint64_t used_total = 0;
+	uint64_t largest = 0;
+	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
+	{
+		if (kMemoryStatus[cnt].length == 0)
+			continue;   // cleared slot (compaction/merge leftovers)
+		if (kMemoryStatus[cnt].in_use)
+			used_total += kMemoryStatus[cnt].length;
+		else
+		{
+			free_total += kMemoryStatus[cnt].length;
+			if (kMemoryStatus[cnt].length > largest)
+				largest = kMemoryStatus[cnt].length;
+		}
+	}
+
+	allocator_unlock(irqflags);
+
+	if (free_bytes)
+		*free_bytes = free_total;
+	if (used_bytes)
+		*used_bytes = used_total;
+	if (largest_free_extent)
+		*largest_free_extent = largest;
+}
+
 void allocator_init()
 {
 

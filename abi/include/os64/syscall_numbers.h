@@ -38,6 +38,31 @@
 #define SYSCALL_STAT       23
 #define SYSCALL_REAP       24
 
+// sleep(ms) — park the calling thread for AT LEAST `ms` milliseconds.
+// The ABI speaks TIME; the kernel speaks ticks — the conversion happens at
+// the boundary, rounding UP to the ACTIVE scheduler interval (minimum one
+// tick), so granularity tracks the kernel's tick rate automatically and no
+// tick constant ever leaks into a compiled binary. Unix needed four
+// generations of this call (sleep/usleep/nanosleep/clock_nanosleep) because
+// the units kept being wrong; one syscall, milliseconds, honest floor.
+// sleep(0) is the documented free yield — no time, but the CPU goes back.
+// Returns 0 always: the only interruption that exists today is death, and
+// the dead read no return values (remaining-time semantics deliberately
+// wait for the SIGNALS.md EINTR-vs-restart ruling).
+#define SYSCALL_SLEEP      25
+
+// ticks(out) — fill an os64_ticks_t (os64/ticks.h) with the monotonic tick
+// count since boot AND the active tick rate. The stopwatch, not the
+// calendar — see the header for the doctrine and the everyday arithmetic.
+#define SYSCALL_TICKS      26
+
+// memory(out) — fill an os64_memory_t (os64/memory.h) with the physical
+// memory picture: total/usable/free/reclaimable/available + largest free
+// extent + live page size. One atomic snapshot under the allocator lock.
+// Every field keeps its meaning forever — see the header for why that
+// sentence took Linux 22 years (linuxatemyram.com, MemAvailable, 2014).
+#define SYSCALL_MEMORY     27
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

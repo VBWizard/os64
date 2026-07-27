@@ -25,6 +25,12 @@ uint64_t allocate_memory(uint64_t requested_length);
 bool merge_freed_block(uint64_t freedIndex);
 void compact_memory_array();
 uint64_t free_memory(uint64_t address);
+// Atomic {free, used, largest free extent} reading under the allocator lock —
+// the source of truth behind SYSCALL_MEMORY, in ONE walk so the numbers agree
+// with each other. free + used == kAvailableMemory is an INVARIANT; drift
+// means a ledger bug (see the definition). Any out-pointer may be NULL.
+void allocator_memory_snapshot(uint64_t *free_bytes, uint64_t *used_bytes,
+                               uint64_t *largest_free_extent);
 void allocator_init();
 
 #endif

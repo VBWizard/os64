@@ -19,3 +19,8 @@ int64_t os64_unmap(void *base)
 {
     return (long)os64_syscall1(SYSCALL_UNMAP, (uint64_t)base);
 }
+
+int64_t os64_memory(os64_memory_t *out)
+{
+    return (int64_t)os64_syscall1(SYSCALL_MEMORY, (uint64_t)out);
+}

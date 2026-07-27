@@ -57,3 +57,13 @@ int64_t os64_reap(int32_t *exit_code)
 {
     return (long)os64_syscall1(SYSCALL_REAP, (uint64_t)exit_code);
 }
+
+int64_t os64_sleep(uint64_t ms)
+{
+    return (long)os64_syscall1(SYSCALL_SLEEP, ms);
+}
+
+int64_t os64_ticks(os64_ticks_t *out)
+{
+    return (long)os64_syscall1(SYSCALL_TICKS, (uint64_t)out);
+}

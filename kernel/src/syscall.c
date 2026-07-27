@@ -23,6 +23,15 @@
 #include "allocator.h"  // free_memory — unmap returns pages at the choke point
 #include "dlist.h"      // dlist_remove (unmap drops the region's VMA node)
 #include "memory/mmap.h"   // MAP_ANONYMOUS (map()'s regions are anonymous)
+#include "CONFIG.h"        // TICKS_PER_SECOND — sleep()'s ms→ticks boundary
+#include "os64/ticks.h"    // os64_ticks_t — the ticks() out-struct (abi)
+#include "os64/memory.h"   // os64_memory_t — the memory() out-struct (abi)
+
+// The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
+// and handed to ring 3 by ticks().
+extern volatile uint64_t kTicksSinceStart;
+extern uint64_t kTotalMemory;      // installed RAM (memmap.c, Limine map sum)
+extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator governs
 
 // spawn: cap on argv length. A command line's worth of args is plenty; the
 // per-arg length cap is task.c's TASK_MAX_PATH_LEN (the blob it builds uses
@@ -78,6 +87,12 @@ static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -117,6 +132,9 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_CHDIR,     "chdir",     syscall_chdir,     false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_STAT,      "stat",      syscall_stat,      false, 0x03),  // arg0 = path, arg1 = dirent out ptr
 	SYSCALL_DEFINE(SYSCALL_REAP,      "reap",      syscall_reap,      false, 0x01),  // arg0 = exit-code out ptr
+	SYSCALL_DEFINE(SYSCALL_SLEEP,     "sleep",     syscall_sleep,     false, 0x00),  // arg0 = milliseconds (a value, no pointers)
+	SYSCALL_DEFINE(SYSCALL_TICKS,     "ticks",     syscall_ticks,     false, 0x01),  // arg0 = os64_ticks_t out ptr
+	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
 };
 
 uint64_t _syscall_dispatch(
@@ -2004,4 +2022,136 @@ static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 	return endedPid;
+}
+
+// sleep(ms) — park the calling thread for AT LEAST `ms` milliseconds.
+//
+// The kernel half of this syscall is OLDER THAN THE SYSCALL: the signal
+// struct has carried wake-ticks in sigdata[SIGSLEEP] since os32 (2012), and
+// processSignals has both halves of the wake — the deadline sweep, and the
+// terminate-outranks-the-nap cancel built for Ctrl+C. This handler is just
+// the door that lets ring 3 ask for what the kernel already knew how to do.
+//
+// Units: the ABI speaks TIME (ms); the kernel speaks ticks. The conversion
+// lives here, at the boundary, rounding UP against the ACTIVE rate — so a
+// kernel rebuilt at 1ms ticks silently improves every existing binary's
+// sleep(1) from 10ms to 1ms, and no tick constant ever calcifies into the
+// ABI. "At least ms" is the only honest promise: park latency, another
+// task's slice, and the signal sweep all land on top of the deadline.
+//
+// sleep(0) is the documented free yield — not folklore, not an accident.
+//
+// Interruption: a pending SIGINT/SIGKILL wakes the sleeper (processSignals'
+// nap-cancel) and the loop-top check below dies on the same rail as an
+// interrupted console read. Returns 0 always — the only interruption that
+// exists today is death, and the dead read no return values. Remaining-time
+// semantics deliberately wait for the SIGNALS.md EINTR-vs-restart ruling.
+static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	uint64_t ms = arg0;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = cls ? cls->currentThread : NULL;
+	if (self == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	if (ms == 0)
+	{
+		// No time requested: the CPU goes back, nothing is parked. Same
+		// trigger as syscall_yield — two honest doors onto one scheduler.
+		scheduler_trigger(NULL);
+		return 0;
+	}
+
+	// ms → ticks at the active rate, rounding UP; ms >= 1 guarantees at
+	// least one tick without a separate floor. The clamp keeps absurd
+	// requests from overflowing the multiply — capped, that's roughly
+	// 2.9 billion years at 100 ticks/second, which is close enough to
+	// "forever" that nobody will file a bug about the early wake.
+	uint64_t ticks;
+	if (ms > (UINT64_MAX - 999) / TICKS_PER_SECOND)
+		ticks = UINT64_MAX / 2;
+	else
+		ticks = (ms * TICKS_PER_SECOND + 999) / 1000;
+
+	uint64_t wakeTick = kTicksSinceStart + ticks;
+
+	// Level-triggered like every park in this kernel: check, sleep, re-check.
+	// processSignals wakes us for exactly two reasons — the deadline arrived,
+	// or a terminate is pending — and the loop top distinguishes them.
+	for (;;)
+	{
+		if (self->signals.sigind & SIGNALS_TERMINATING)
+		{
+			// Ctrl+C (or a ctl write) landed while we napped. Same rail as
+			// an interrupted console read: die here, in our own context.
+			raise_terminating_signal_and_die(cls->task, self);
+			__builtin_unreachable();
+		}
+
+		if (kTicksSinceStart >= wakeTick)
+			return 0;
+
+		// Park with the wake deadline in sigdata[SIGSLEEP] — sigaction
+		// triggers the scheduler itself, so we genuinely leave the CPU here
+		// and resume on the next line when woken.
+		sigaction(SIGSLEEP, NULL, wakeTick, self);
+	}
+}
+
+// ticks(out) — hand ring 3 the monotonic clock: tick count since boot plus
+// the ACTIVE tick rate, in one call (os64_ticks_t, abi os64/ticks.h — the
+// stopwatch/calendar doctrine lives there). One call because the two numbers
+// are only useful together: a count without its rate is a number wearing no
+// units. First consumers: top's CPU%, sleep's help printing the live
+// scheduler interval, uptime for whoever asks.
+static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	os64_ticks_t *user_out = (os64_ticks_t *)arg0;
+	if (user_out == NULL)
+		return SYSCALL_RESULT_BAD_USER_DATA;   // the whole point is the struct
+
+	os64_ticks_t t;
+	t.ticks = kTicksSinceStart;
+	t.per_second = TICKS_PER_SECOND;
+
+	if (!copy_to_user_buffer(user_out, &t, sizeof(t)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	return 0;
+}
+
+// memory(out) — the physical memory picture, one atomic snapshot. free/used/
+// largest come from a single walk of the allocator ledger under its lock
+// (allocator_memory_snapshot), so they agree with each other; total/usable
+// are boot-time memmap constants. `available` is summed HERE, in the kernel,
+// so userland never reinvents Linux's wrong-column arithmetic — and
+// `reclaimable` is the future page cache's seat at the table, honestly zero
+// until one exists. free + used == usable is a LIVE INVARIANT (see
+// os64/memory.h for the audit doctrine); the ring-3 fixture asserts it.
+static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	os64_memory_t *user_out = (os64_memory_t *)arg0;
+	if (user_out == NULL)
+		return SYSCALL_RESULT_BAD_USER_DATA;   // the whole point is the struct
+
+	os64_memory_t m;
+	m.total  = kTotalMemory;
+	m.usable = kAvailableMemory;
+	allocator_memory_snapshot(&m.free, &m.used, &m.largest_free_extent);
+	m.reclaimable = 0;                    // no page cache yet — the truth
+	m.available   = m.free + m.reclaimable;
+	m.page_size   = PAGE_SIZE;
+
+	if (!copy_to_user_buffer(user_out, &m, sizeof(m)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	return 0;
 }

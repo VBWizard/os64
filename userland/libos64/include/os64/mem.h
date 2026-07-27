@@ -14,6 +14,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "os64/memory.h"   // os64_memory_t — the abi contract for os64_memory()
 
 // Allocate a fresh anonymous memory region of at least `len` bytes (rounded
 // up to whole 4KB pages). Returns the region base, or NULL. The region is:
@@ -33,5 +34,12 @@ void *os64_map(size_t len);
 // that isn't a live region base. Touching the region afterwards faults —
 // that's the use-after-free tripwire working, not a bug.
 int64_t os64_unmap(void *base);
+
+// Fill *out with the physical memory picture — one atomic kernel snapshot
+// (see os64/memory.h for every field's meaning, fixed forever, and the
+// free + used == usable audit identity). Returns 0, or negative on a bad
+// pointer. The number a program deciding whether to allocate wants is
+// out->available — JUST that field, no arithmetic; that's the whole point.
+int64_t os64_memory(os64_memory_t *out);
 
 #endif // OS64_MEM_H

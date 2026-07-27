@@ -11,6 +11,9 @@
 // For OS64_SPAWN_* — the spawn flag values are part of the kernel contract,
 // so they are defined once in the ABI rather than mirrored here.
 #include "os64/syscall_numbers.h"
+// os64_ticks_t — the monotonic clock struct os64_ticks fills (and the
+// stopwatch-vs-calendar doctrine, which lives with the struct).
+#include "os64/ticks.h"
 
 // Yield the CPU to the scheduler; returns when rescheduled.
 void os64_yield(void);
@@ -106,5 +109,25 @@ int64_t os64_wait(int64_t pid, int32_t *exit_code);
 //     while ((pid = os64_reap(&code)) > 0)
 //         /* one finished job */;
 int64_t os64_reap(int32_t *exit_code);
+
+// Sleep for AT LEAST `ms` milliseconds — the thread genuinely parks, zero
+// CPU. The floor is the kernel's scheduler tick (1000/per_second ms — ask
+// os64_ticks); requests round UP to it, and the rounding tracks the ACTIVE
+// rate, so a faster-ticking kernel makes every existing binary's short
+// sleeps better with no recompile. os64_sleep(0) is the documented free
+// yield. Returns 0. (One call, milliseconds — Unix needed four generations
+// of this function because the units kept being wrong.)
+int64_t os64_sleep(uint64_t ms);
+
+// Read the monotonic clock: ticks since boot + the active tick rate, in one
+// call (the two numbers are only useful together). This is the STOPWATCH —
+// safe for intervals, CPU%, timeouts, uptime — never the calendar; see
+// os64/ticks.h for the doctrine and the everyday arithmetic. Returns 0, or
+// negative if `out` is bad.
+//
+//     os64_ticks_t t;
+//     os64_ticks(&t);
+//     /* uptime seconds = t.ticks / t.per_second */
+int64_t os64_ticks(os64_ticks_t *out);
 
 #endif // OS64_PROC_H
