@@ -20,6 +20,7 @@ to stay current:
 | `MEMORY.md` / `docs/arena_allocator.md` | Allocator, paging, arenas |
 | `VERIFICATION.md` | How this project proves things work |
 | `DEBTS.md` | Everything consciously deferred, and the "explicitly NOT debts" list — read that list before "fixing" a pipe/handle design decision that is actually a ratified choice |
+| `DIVERGENCES.md` | The ledger of every deliberate departure from Unix/Linux (and every convergence kept on merit) — breadcrumbs pointing at the doc that carries each argument; doubles as the future Linux-compat requirements list |
 
 ## The philosophy (the part that outlives any code)
 
