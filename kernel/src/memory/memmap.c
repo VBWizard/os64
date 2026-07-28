@@ -54,10 +54,28 @@ void calculateAvailableMemory()
 	char memType[100];
 	kMaxPhysicalAddress = 0;
 	kAvailableMemory = 0;
+	kTotalMemory = 0;
 	printd(DEBUG_MEMMAP,"MEMMAP: Parsing memory map ... \n");
 	for (uint64_t entry = 0; entry < kMemMapEntryCount; entry++)
 	{
-		kTotalMemory += kMemMap[entry]->length;
+		// kTotalMemory = installed physical RAM (what SYSCALL_MEMORY reports
+		// as .total). Only DRAM-backed entry types count: RESERVED is mostly
+		// MMIO address space (ECAM, PCI hole, LAPIC), FRAMEBUFFER is a device
+		// BAR, BAD is broken silicon — none of them are RAM you paid for.
+		// Summing every entry told an 8GB QEMU guest it had 20GB "total";
+		// free(1) caught it on its first run (2026-07-27).
+		switch (kMemMap[entry]->type)
+		{
+			case LIMINE_MEMMAP_USABLE:
+			case LIMINE_MEMMAP_ACPI_RECLAIMABLE:
+			case LIMINE_MEMMAP_ACPI_NVS:
+			case LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE:
+			case LIMINE_MEMMAP_KERNEL_AND_MODULES:
+				kTotalMemory += kMemMap[entry]->length;
+				break;
+			default:
+				break;
+		}
 		//CLR 11/24/2024 - Removed claiming LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE as usable memory
 		if (kMemMap[entry]->type == LIMINE_MEMMAP_USABLE)
 		{
@@ -79,7 +97,10 @@ void calculateAvailableMemory()
 		if (kMemMap[entry]->type == LIMINE_MEMMAP_KERNEL_AND_MODULES)
 		{
 			kKernelExecutableStartAddress = kMemMap[entry]->base;
-			kKernelExecutablePageCount = kMemMap[entry]->length % PAGE_SIZE;
+			// Was `% PAGE_SIZE` — a modulo where a divide belongs, so this
+			// held the REMAINDER bytes (0 for an aligned kernel), not the page
+			// count. No consumers yet, which is the only reason it never bit.
+			kKernelExecutablePageCount = kMemMap[entry]->length / PAGE_SIZE;
 		}
 		if (kMemMap[entry]->type == LIMINE_MEMMAP_USABLE)
 			kMaxPhysicalAddress = kMemMap[entry]->base + kMemMap[entry]->length;
