@@ -23,11 +23,11 @@ int main(int argc, char **argv)
     }
     else if (nPositionals > 0)
     {
-        os64_args_help(&args, "env");
+        os64_args_help(&args, "env"); // parse stayed silent for this case
         returnCode = 1;
     }
-    else
-        returnCode = (nPositionals == OS64_ARG_HELP) ? 0 : 1;
+    else if (nPositionals == OS64_ARG_ERROR)
+        returnCode = 1;
 
     return returnCode;
 }
