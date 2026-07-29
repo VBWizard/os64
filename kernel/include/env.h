@@ -45,4 +45,9 @@ const char *env_get(const envpage_t *env, const char *key);
 // there is no room in the current page allocation.
 bool        env_set(envpage_t *env, const char *key, const char *val);
 
+// Remove key (compacting the block).  Returns true whether or not the key
+// existed — unsetting the absent is success, not error (idempotent, the
+// way every shell's `unset` has behaved since Bourne).
+bool        env_unset(envpage_t *env, const char *key);
+
 #endif

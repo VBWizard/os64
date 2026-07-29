@@ -52,6 +52,24 @@ const char *os64_getenv(const char *key);
 
 int32_t os64_env_next(os64_envent_t *buffer);
 
+// Set (or replace) `key` in THIS process's environment. Takes effect
+// immediately — the env block the kernel mutates is the very page this
+// process reads, so a following os64_getenv sees the new value — and flows
+// to every child spawned AFTER the call. Children spawned BEFORE keep their
+// snapshot: environments are copied downward at spawn, never shared
+// sideways (the one-way valve that makes `export` a shell builtin).
+// Returns 0, or negative (env block full, bad key).
+//
+// CAUTION for walkers: a set/unset rewrites the block in place, so pointers
+// previously returned by os64_getenv and any in-flight os64_env_next walk
+// are invalidated. Finish iterating before you mutate.
+int64_t os64_setenv(const char *key, const char *value);
+
+// Remove `key` from this process's environment. Unsetting a key that isn't
+// there is success, not error — idempotent, the way `unset` has behaved in
+// every shell since Bourne. Same snapshot semantics as os64_setenv.
+int64_t os64_unsetenv(const char *key);
+
 
 // Change directory. Relative and messy paths welcome ("../dir1//./x") — the
 // kernel canonicalizes before storing. Returns 0, or negative if the target

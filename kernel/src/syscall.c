@@ -27,6 +27,7 @@
 #include "os64/ticks.h"    // os64_ticks_t — the ticks() out-struct (abi)
 #include "os64/memory.h"   // os64_memory_t — the memory() out-struct (abi)
 #include "os64/time.h"     // os64_time_t — the time() out-struct (abi)
+#include "env.h"           // env_set/env_unset — setenv() mutates the task's env block
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
@@ -102,6 +103,8 @@ static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -146,6 +149,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
 	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
 	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
+	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL (mask excludes it: NULL means unset)
 };
 
 uint64_t _syscall_dispatch(
@@ -2230,4 +2234,39 @@ static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_to_user_buffer(user_out, &t, sizeof(t)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	return 0;
+}
+
+// setenv(key, value|NULL) — mutate the calling task's environment (the abi
+// header has the doctrine: same physical page the task reads, children
+// snapshot at spawn). arg1 deliberately isn't in the dispatcher's pointer
+// mask — NULL is a legal value meaning "unset", so the range check happens
+// here, inside copy_user_string, only when a value is actually present.
+static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL || task->env == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// A key is a NAME, not a novel; a value has to fit the block anyway
+	// (one page minus header), so these bounds reject only the absurd.
+	char key[128];
+	char val[2048];
+
+	if (!copy_user_string((const char *)arg0, key, sizeof(key)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	if (key[0] == '\0')
+		return SYSCALL_RESULT_INVALID;      // the empty key names nothing
+
+	if (arg1 == 0)
+		return env_unset(task->env, key) ? 0 : SYSCALL_RESULT_INVALID;
+
+	if (!copy_user_string((const char *)arg1, val, sizeof(val)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	// env_set fails only when the block is full — surface that honestly.
+	return env_set(task->env, key, val) ? 0 : SYSCALL_RESULT_INVALID;
 }

@@ -96,6 +96,18 @@
 // start where they landed.)
 #define SYSCALL_TIME       29
 
+// setenv(key, value) — set (or remove) one variable in the CALLING task's
+// environment. value = NULL removes the key (idempotent: unsetting the
+// absent succeeds, as `unset` has since Bourne). The env block is the same
+// physical page the task sees read-only at its env mapping, so the change
+// is visible to the caller's own getenv immediately — and env_inherit
+// hands it to every child spawned AFTER this call. Children spawned BEFORE
+// keep their snapshot: environments flow down at spawn time, never
+// sideways (the one-way valve that makes export a shell BUILTIN — an
+// external `export` program would set its own copy and take it to the
+// grave). Fails only when the env block is full.
+#define SYSCALL_SETENV     30
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

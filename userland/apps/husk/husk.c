@@ -654,6 +654,78 @@ int main(int argc, char **argv, char **envp)
 		if (nstages == 1 && first_token_is(stages[0], "exit"))
 			break;
 
+		// `export` is a builtin by the same physics as cd: the environment
+		// copies DOWNWARD at spawn, never sideways or up, so an external
+		// export would set its own copy and take it to the grave. Flat
+		// model for now (no shell-variable tier — that arrives with husk
+		// programmability): export KEY=VALUE goes straight to the env,
+		// visible to every child spawned after. `export` alone lists the
+		// environment, same walk env(1) does.
+		if (nstages == 1 && first_token_is(stages[0], "export"))
+		{
+			char *eargv[ARGS_MAX];
+			int eargc = parse(stages[0], eargv, ARGS_MAX);
+			last_status = 0;
+			if (eargc < 2)
+			{
+				// Bare `export`: list. The block is mapped right here in
+				// our address space — walking it costs no syscalls.
+				os64_envent_t e = { .index = 0 };
+				while (os64_env_next(&e) == 0)
+				{
+					os64_puts(e.key);
+					os64_puts("=");
+					os64_puts(e.value);
+					os64_puts("\n");
+				}
+			}
+			else
+			{
+				// KEY=VALUE required; split at the FIRST '=' (values may
+				// contain their own — TZ=EST5EDT,M3.2.0 has no '=' but a
+				// PATH-like list someday might).
+				char *eq = eargv[1];
+				while (*eq && *eq != '=')
+					eq++;
+				if (*eq != '=' || eq == eargv[1])
+				{
+					os64_puts("husk: export: expected KEY=VALUE\n");
+					last_status = 1;
+				}
+				else
+				{
+					*eq = 0;   // split in place; parse() already owns the line
+					if (os64_setenv(eargv[1], eq + 1) != 0)
+					{
+						os64_puts("husk: export: failed (environment full?)\n");
+						last_status = 1;
+					}
+				}
+			}
+			continue;
+		}
+
+		// `unset` — export's undo, builtin by the same one-way valve.
+		// Unsetting the absent is success (idempotent since Bourne).
+		if (nstages == 1 && first_token_is(stages[0], "unset"))
+		{
+			char *uargv[ARGS_MAX];
+			int uargc = parse(stages[0], uargv, ARGS_MAX);
+			if (uargc < 2)
+			{
+				os64_puts("husk: unset: expected a KEY\n");
+				last_status = 1;
+			}
+			else
+			{
+				last_status = 0;
+				for (int u = 1; u < uargc; u++)
+					if (os64_unsetenv(uargv[u]) != 0)
+						last_status = 1;
+			}
+			continue;
+		}
+
 		// `cd` is THE canonical builtin — the textbook answer to "why must
 		// any command be built in?": an external cd would change ITS OWN
 		// cwd (a copy inherited at spawn) and take the change to its grave.
