@@ -819,7 +819,8 @@ void scheduler_run_new_thread()
         // redirect (if owed) patches both images consistently.
         scheduler_sigint_forced_syscall(threadToRun, apic_id);
 		task_t *pTask = (task_t*)threadToRun->ownerTask;
-        if (!strnstr(pTask->exename, "/idle",10))
+        // exename is a bare basename ("idle0", "idle1", ...) — no leading slash.
+        if (strncmp(pTask->exename, "idle", 4) != 0)
         {
  /*           activeSTDIN = pTask->stdin;
             activeSTDIN->owner = pTask;
