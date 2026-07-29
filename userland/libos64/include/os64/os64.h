@@ -21,5 +21,6 @@
 #include "os64/args.h"   // the arg parser (see its header for the anti-getopt case)
 #include "os64/mem.h"    // os64_map/os64_unmap — the wall malloc builds on
 #include "os64/str.h"    // strlen/strcopy/streq — and the case against strcpy
+#include "os64/date.h"   // os64_time/os64_date_now — the wall clock and calendar
 
 #endif // OS64_H

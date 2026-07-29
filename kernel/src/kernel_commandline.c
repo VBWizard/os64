@@ -13,6 +13,7 @@ extern bool kEnableGUI;
 extern bool kRunTests;
 extern bool kEnableUSB;
 extern char kRootPartUUID[];
+extern char kTZString[];
 extern int kMaxActiveCores;
 bool kEnableAHCI = true, kEnableNVME = true;
 // Off by default: the RAMDisk only activates when a boot entry passes BOTH
@@ -143,6 +144,9 @@ static cmdopt_t cmdopts[] = {
     // Older boot entries (VBox/Bosgame in limine.conf) still use the long
     // form; the strnstr-era parser accepted it, the table parser must too.
     {"ROOTPARTUUID", OPT_STRING, kRootPartUUID, 0, 64},
+    // Timezone, classic TZ format (TZ=EST5EDT). Stored verbatim; see the
+    // declaration in kernel.c for who consumes which half of it.
+    {"TZ", OPT_STRING, kTZString, 0, 64},
 };
 
 void process_kernel_commandline(char *cmdline)

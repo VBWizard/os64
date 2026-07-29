@@ -26,10 +26,15 @@
 #include "CONFIG.h"        // TICKS_PER_SECOND — sleep()'s ms→ticks boundary
 #include "os64/ticks.h"    // os64_ticks_t — the ticks() out-struct (abi)
 #include "os64/memory.h"   // os64_memory_t — the memory() out-struct (abi)
+#include "os64/time.h"     // os64_time_t — the time() out-struct (abi)
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
 extern volatile uint64_t kTicksSinceStart;
+extern volatile uint64_t kSystemCurrentTime;   // UTC epoch seconds (timer IRQ advances it)
+extern volatile uint64_t irq0_current_count;   // ticks into the current second (same IRQ)
+extern uint64_t kTicksPerSecond;
+extern int kTimeZone;                          // configured zone, HOURS east of UTC
 extern uint64_t kTotalMemory;      // installed RAM (memmap.c, Limine map sum)
 extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator governs
 
@@ -95,6 +100,8 @@ static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -138,6 +145,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_TICKS,     "ticks",     syscall_ticks,     false, 0x01),  // arg0 = os64_ticks_t out ptr
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
 	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
+	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
 };
 
 uint64_t _syscall_dispatch(
@@ -2187,5 +2195,39 @@ static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
 	print_at(&kRenderer, (unsigned int)arg0, (unsigned int)arg1, kernel_buffer);
+	return 0;
+}
+
+// time(out) — the wall clock's raw truth (see os64/time.h for the doctrine:
+// the kernel keeps a counter, the library keeps the calendar). One consistent
+// snapshot: epoch and the sub-second phase are advanced by the same timer IRQ,
+// so we read epoch / phase / epoch-again and retry if the second rolled in
+// between — otherwise a caller could see 12:00:00 paired with the last tick
+// of 11:59:59. The loop runs at most twice a second per caller in practice;
+// it exists for the once-a-day time a syscall straddles the boundary.
+static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	os64_time_t *user_out = (os64_time_t *)arg0;
+	if (user_out == NULL)
+		return SYSCALL_RESULT_BAD_USER_DATA;   // the whole point is the struct
+
+	uint64_t epoch, phase;
+	do {
+		epoch = kSystemCurrentTime;
+		phase = irq0_current_count;
+	} while (epoch != kSystemCurrentTime);
+
+	os64_time_t t;
+	t.epoch             = (int64_t)epoch;
+	t.tz_offset_minutes = kTimeZone * 60;     // kernel config is whole hours
+	t.ticks_into_second = (uint32_t)phase;
+	t.ticks_per_second  = (uint32_t)kTicksPerSecond;
+	t.reserved          = 0;
+
+	if (!copy_to_user_buffer(user_out, &t, sizeof(t)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
 	return 0;
 }

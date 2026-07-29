@@ -77,6 +77,12 @@ uintptr_t kKernelStack = 0;
 char kKernelCommandline[512];
 bool kOverrideFileLogging;
 char kRootPartUUID[37] = {0};
+// The TZ= kernel cmdline string, verbatim (classic V7/POSIX format, e.g.
+// EST5EDT). Two consumers: init.c derives kTimeZone's standard offset from
+// it, and kernel_init seeds it into the first task's environment — where
+// libos64's calendar applies the full policy (DST included). The kernel
+// itself never learns DST; it just delivers the string.
+char kTZString[64] = {0};
 vfs_filesystem_t* kRootFilesystem=NULL;
 char startTime[100] = {0};
 uint64_t lastTime = 0;
@@ -105,6 +111,15 @@ void create_kernel_task()
 	// inherits this block, so one seed here reaches the whole tree.
 	env_set(parentTask.env, "PATH",     "/bin");
 	env_set(parentTask.env, "HOSTNAME", "yogi.localhost.localdomain");
+	// TZ, if the boot cmdline provided one — the kernel is just the courier
+	// here: the string rides into the first task's environment, inheritance
+	// carries it to everything husk ever spawns, and libos64's calendar is
+	// what actually reads it (offset AND daylight-saving policy). No TZ on
+	// the cmdline = no TZ in the env = the library falls back to the
+	// kernel's standard offset via the time() syscall. Three tiers, each
+	// dumber than the one above it.
+	if (kTZString[0])
+		env_set(parentTask.env, "TZ", kTZString);
 	// Deliberately NO "CWD" here: the kernel owns the real cwd (task->cwd,
 	// validated at every chdir) and husk's $CWD expansion asks it live via
 	// getcwd. An env-block copy could only ever go stale — it seeded "/" at

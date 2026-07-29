@@ -86,6 +86,16 @@
 // bytes-in-the-stream survive pipes, VT buffers, and wires; syscalls don't.
 #define SYSCALL_PRINTAT    28
 
+// time(out) — fill an os64_time_t (os64/time.h) with the wall clock's raw
+// truth: UTC epoch seconds, the configured timezone offset, and the
+// sub-second tick phase, one consistent snapshot. The CALENDAR is not here
+// on purpose — the kernel keeps a counter; what a "March" is belongs to
+// libos64 (<os64/date.h>), exactly the split Unix picked and kept. (It took
+// them three tries: First Edition time() returned SIXTIETHS of a second in
+// 32 bits and wrapped every 2.26 years. Epoch seconds, UTC, 64 bits — we
+// start where they landed.)
+#define SYSCALL_TIME       29
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //
