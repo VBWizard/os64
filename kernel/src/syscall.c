@@ -722,6 +722,38 @@ static void file_do_seek(void *arg)
 	p->result = (f->fops->tell != NULL) ? f->fops->tell(f) : 0;
 }
 
+// The per-thread bounce block behind thread_t.syscallIOScratch: one
+// file_io_params_t header followed by READ_CHUNK_SIZE data bytes, allocated on
+// the thread's first read()/write() and reused for every one after. This
+// replaced a kmalloc/kfree PER CALL — which, with a no-freelist allocator,
+// meant a fresh zeroed page on the way in and a TLB-shootdown IPI to every
+// core on the way out, per syscall. A program reading a file byte-at-a-time
+// (os64_readline's pipe-safe mode) paid that toll per BYTE: the first top
+// spent ~3 seconds printing 30 tasks, nearly all of it right here.
+// kmalloc'd = upper half = visible under kKernelPML4 AND every task CR3,
+// which is exactly what call_in_kernel_context demands of the params block
+// and buffer anyway. Per-thread (not per-core) because console/pipe reads
+// BLOCK while holding the data area — see the field's comment in thread.h.
+// Reuse across calls is safe: a thread runs one syscall at a time, and both
+// consumers (read's bounce, write's bounce) are done with the block before
+// the syscall returns. Returns NULL only if the one-time allocation fails.
+static file_io_params_t *syscall_io_scratch(char **data_out)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	if (thread == NULL)
+		return NULL;
+
+	if (thread->syscallIOScratch == NULL)
+		thread->syscallIOScratch = kmalloc(sizeof(file_io_params_t) + READ_CHUNK_SIZE);
+	if (thread->syscallIOScratch == NULL)
+		return NULL;
+
+	if (data_out != NULL)
+		*data_out = (char *)thread->syscallIOScratch + sizeof(file_io_params_t);
+	return (file_io_params_t *)thread->syscallIOScratch;
+}
+
 // write(handle, buffer, length) — write bytes to an output handle.
 //
 // The handle is resolved through the CALLING TASK'S HANDLE TABLE — which is the
@@ -810,18 +842,34 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				if (this_chunk > PIPE_CAPACITY)
 					this_chunk = PIPE_CAPACITY;
 
-				char *kbuf = kmalloc(this_chunk);
-				if (kbuf == NULL)
-					return written ? written : SYSCALL_RESULT_INVALID;
+				// The common case — a line of text, a filter's buffer — fits
+				// the thread's scratch block: no allocation at all. Only a
+				// write bigger than the scratch kmallocs, because atomicity
+				// demands ONE piece up to PIPE_CAPACITY (see above) and that
+				// can genuinely exceed READ_CHUNK_SIZE. Safe to hold the
+				// scratch across pipe_write's block: it's THIS thread's.
+				char *scratch_data = NULL;
+				char *kbuf;
+				if (this_chunk <= READ_CHUNK_SIZE &&
+				    syscall_io_scratch(&scratch_data) != NULL)
+					kbuf = scratch_data;
+				else
+				{
+					kbuf = kmalloc(this_chunk);
+					if (kbuf == NULL)
+						return written ? written : SYSCALL_RESULT_INVALID;
+				}
 
 				if (!copy_user_buffer(user_buffer + written, kbuf, this_chunk))
 				{
-					kfree(kbuf);
+					if (kbuf != scratch_data)
+						kfree(kbuf);
 					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
 				}
 
 				long n = pipe_write(p, kbuf, this_chunk);   // BLOCKS if full
-				kfree(kbuf);
+				if (kbuf != scratch_data)
+					kfree(kbuf);
 
 				if (n == PIPE_ERR_CLOSED)
 				{
@@ -846,23 +894,18 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 		case HANDLE_FILE:
 		{
-			// Ferry through a bounded kernel bounce buffer, chunk by chunk.
-			// Unlike the pipe path there is no cross-writer atomicity promise
-			// to keep — a file write that lands in pieces is still one write —
-			// so chunking costs nothing but loop iterations. Both the params
-			// block and the buffer are kmalloc'd: file_do_write runs under
+			// Ferry through the thread's bounce block, chunk by chunk. Unlike
+			// the pipe path there is no cross-writer atomicity promise to
+			// keep — a file write that lands in pieces is still one write —
+			// so chunking costs nothing but loop iterations. The scratch is
+			// kmalloc'd (once, at first use): file_do_write runs under
 			// kKernelPML4, which cannot see this syscall's stack.
-			file_io_params_t *fp = kmalloc(sizeof(*fp));
-			char *kbuf = kmalloc(READ_CHUNK_SIZE);
-			if (fp == NULL || kbuf == NULL)
-			{
-				if (fp)   kfree(fp);
-				if (kbuf) kfree(kbuf);
+			char *kbuf = NULL;
+			file_io_params_t *fp = syscall_io_scratch(&kbuf);
+			if (fp == NULL)
 				return SYSCALL_RESULT_INVALID;
-			}
 
 			size_t written = 0;
-			uint64_t rc = 0;
 			while (written < length)
 			{
 				size_t this_chunk = length - written;
@@ -873,10 +916,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				// user buffer actually resolves (and where a demand-page fault
 				// is safe — no locks held, kernel context not yet entered).
 				if (!copy_user_buffer(user_buffer + written, kbuf, this_chunk))
-				{
-					rc = written ? written : SYSCALL_RESULT_BAD_USER_DATA;
-					goto file_write_out;
-				}
+					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
 
 				fp->file = (vfs_file_t *)h->object;
 				fp->buf = kbuf;
@@ -885,21 +925,13 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				call_in_kernel_context(file_do_write, fp);
 
 				if (fp->result < 0)
-				{
-					rc = written ? written : SYSCALL_RESULT_INVALID;
-					goto file_write_out;
-				}
+					return written ? written : SYSCALL_RESULT_INVALID;
 
 				written += (size_t)fp->result;
 				if ((size_t)fp->result < this_chunk)
 					break;   // short write: filesystem/device is full — report progress
 			}
-			rc = written;
-
-file_write_out:
-			kfree(kbuf);
-			kfree(fp);
-			return rc;
+			return written;
 		}
 
 		default:
@@ -942,21 +974,25 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return 0;
 
 	size_t want = length < READ_CHUNK_SIZE ? length : READ_CHUNK_SIZE;
-	char *kbuf = kmalloc(want);
-	if (kbuf == NULL)
+	// The thread-owned bounce block (see syscall_io_scratch): no allocation,
+	// no free, no per-call TLB shootdown — and therefore no kfree on ANY exit
+	// path below, which is why the error paths got shorter.
+	char *kbuf = NULL;
+	file_io_params_t *fp = syscall_io_scratch(&kbuf);
+	if (fp == NULL)
 		return SYSCALL_RESULT_INVALID;
 
 	long got = 0;
 	switch (h->type)
 	{
 		case HANDLE_CONSOLE_IN:
-			// Blocks until >=1 byte is available (terminal semantics).
+			// Blocks until >=1 byte is available (terminal semantics). The
+			// scratch is safe to hold across the block — it's THIS thread's.
 			got = console_read(kbuf, want);
 			if (got == CONSOLE_READ_INTERRUPTED)
 			{
 				// Ctrl+C landed while (or before) we were blocked on stdin.
 				// Default action: terminate. The sentinel never reaches ring 3.
-				kfree(kbuf);
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -973,7 +1009,6 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			if (got == PIPE_ERR_INTERRUPTED)
 			{
 				// Ctrl+C landed while blocked on (or headed into) a pipe read.
-				kfree(kbuf);
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -984,46 +1019,31 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// Never blocks (a file always knows its bytes) and returns SHORT at
 			// the end: fewer bytes than asked near EOF, then 0 AT EOF — so the
 			// canonical filter loop works on a file with zero special-casing.
-			// The actual read runs under kKernelPML4 (see file_do_read); kbuf
-			// and the params block are kmalloc'd, reachable from both worlds.
-			file_io_params_t *fp = kmalloc(sizeof(*fp));
-			if (fp == NULL)
-			{
-				kfree(kbuf);
-				return SYSCALL_RESULT_INVALID;
-			}
+			// The actual read runs under kKernelPML4 (see file_do_read); the
+			// scratch block is kmalloc'd (once), reachable from both worlds.
 			fp->file = (vfs_file_t *)h->object;
 			fp->buf = kbuf;
 			fp->len = want;
 			fp->result = -1;
 			call_in_kernel_context(file_do_read, fp);
 			got = fp->result;
-			kfree(fp);
 
 			if (got < 0)
 			{
 				// A real device/filesystem error — distinct from EOF's clean 0.
-				kfree(kbuf);
 				return SYSCALL_RESULT_INVALID;
 			}
 			break;
 		}
 
 		default:
-			kfree(kbuf);
 			return SYSCALL_RESULT_INVALID;   // a write-only handle
 	}
 
 	if (got <= 0)
-	{
-		kfree(kbuf);
 		return 0;   // EOF (pipe) or nothing (console)
-	}
 
-	bool ok = copy_to_user_buffer(user_buffer, kbuf, (size_t)got);
-	kfree(kbuf);
-
-	if (!ok)
+	if (!copy_to_user_buffer(user_buffer, kbuf, (size_t)got))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
 	return (uint64_t)got;
@@ -1394,7 +1414,10 @@ static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (h == NULL || h->type != HANDLE_FILE)
 		return SYSCALL_RESULT_INVALID;
 
-	file_io_params_t *fp = kmalloc(sizeof(*fp));
+	// The thread's bounce block (params header only; the data area is idle
+	// here). Seek sits on readline's fast path now — probe + surplus
+	// seek-back per line — so it sheds its per-call kmalloc/kfree too.
+	file_io_params_t *fp = syscall_io_scratch(NULL);
 	if (fp == NULL)
 		return SYSCALL_RESULT_INVALID;
 
@@ -1407,7 +1430,6 @@ static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	call_in_kernel_context(file_do_seek, fp);
 
 	long pos = fp->result;
-	kfree(fp);
 
 	if (pos < 0)
 		return SYSCALL_RESULT_INVALID;   // bad whence, or the seek itself failed

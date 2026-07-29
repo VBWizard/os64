@@ -66,6 +66,19 @@ typedef struct s_thread
 	struct s_thread *forkedThread;
 	struct s_thread *prev, *next;
 	signals_t signals;
+	// Per-thread syscall I/O bounce block, lazily kmalloc'd by syscall.c on the
+	// thread's first read()/write() and REUSED for every one after (it used to
+	// be kmalloc'd/kfree'd per call — with a no-freelist allocator that was a
+	// page allocation, a 4KB zero, and a TLB-shootdown IPI per call; top
+	// measured it in whole seconds). Per-THREAD, not per-core: console/pipe
+	// reads BLOCK while holding the buffer, and a sleeping thread's scratch
+	// must not be handed to whoever runs next on the core. Opaque here — the
+	// layout ([params][data]) is syscall.c's business (syscall_io_scratch()).
+	// Never freed: thread teardown doesn't exist yet (the task_destroy debt);
+	// this block rides along. FUTURE FORK WARNING: if fork ever copies
+	// thread_t wholesale, NULL this in the child or two threads will share
+	// one bounce buffer.
+	void *syscallIOScratch;
 } thread_t;
 
 thread_t* createThread(void* parentTask, bool kernelThread);
