@@ -108,6 +108,18 @@ int64_t os64_close(int32_t handle);
 // Convenience: write a NUL-terminated string to the console (handle 1).
 int64_t os64_puts(const char *s);
 
+// Park a string at an absolute character cell (x, y) on the PHYSICAL console
+// — the widget plane, for status widgets like clock's corner readout. This is
+// NOT a console write: no cursor motion, no wrap, no scroll, and the string
+// clips at the screen edge instead of reflowing anybody's prompt. It draws on
+// the machine's actual glass, outside the (future) virtual-terminal stack —
+// a VT switch won't disturb it, and it deliberately doesn't exist over a
+// remote session. Terminal content (full-screen repaints, anything that
+// should survive a pipe) is the escape-sequence slice's job, not this.
+// Last writer to a cell wins; widgets that share a corner deserve each other.
+// Returns 0, or negative (bad coordinates / unreadable string).
+int64_t os64_printat(uint32_t x, uint32_t y, const char *s);
+
 // (os64_exit lived here for one glorious scaffolding week — exit is process
 // control, not I/O, and it moved home to <os64/proc.h> the day its owner
 // went looking for it there and rolled his eyes. 🙄)

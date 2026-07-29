@@ -63,6 +63,29 @@
 // sentence took Linux 22 years (linuxatemyram.com, MemAvailable, 2014).
 #define SYSCALL_MEMORY     27
 
+// printat(x, y, str) — park a string at an absolute character CELL on the
+// physical console, without touching the console cursor: the WIDGET PLANE.
+//
+// This is deliberately NOT a console write and NOT cursor addressing. A
+// status widget (the uptime clock in the top-right corner) parks glyphs at
+// fixed coordinates; it has no business borrowing the console's shared
+// cursor, which another core is using to echo somebody's keystrokes. No
+// cursor motion, no wrap, no scroll — the string clips at the screen edge,
+// because a widget that overflows its corner should be truncated, never
+// allowed to reflow the console. (The kernel's own clock learned all of
+// this the hard way; see print_at() in BasicRenderer.c.)
+//
+// LAYERING DOCTRINE, decided before virtual terminals exist so they don't
+// have to rediscover it: the widget plane lives OUTSIDE the terminal stack.
+// When VTs arrive (F1-F9), switching terminals swaps console content UNDER
+// the widgets and never disturbs them — the clock survives an F3 the same
+// way it survives a scroll. And it does not travel: an SSH user is not
+// looking at this machine's glass, so the widget plane correctly does not
+// exist for them. Anything that IS terminal content — top's repaints, a
+// future vi — belongs to the in-band escape-sequence slice instead, because
+// bytes-in-the-stream survive pipes, VT buffers, and wires; syscalls don't.
+#define SYSCALL_PRINTAT    28
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

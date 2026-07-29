@@ -93,6 +93,8 @@ static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -135,6 +137,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SLEEP,     "sleep",     syscall_sleep,     false, 0x00),  // arg0 = milliseconds (a value, no pointers)
 	SYSCALL_DEFINE(SYSCALL_TICKS,     "ticks",     syscall_ticks,     false, 0x01),  // arg0 = os64_ticks_t out ptr
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
+	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
 };
 
 uint64_t _syscall_dispatch(
@@ -2153,5 +2156,36 @@ static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	if (!copy_to_user_buffer(user_out, &m, sizeof(m)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
+	return 0;
+}
+
+// printat(x, y, str) — the widget-plane syscall: park a string at an absolute
+// character cell on the physical console. See the abi header for the doctrine
+// (widget != console write; lives outside the future VT stack). The handler
+// is a bounds check, a string copy, and a handoff to print_at(), which brings
+// its own guarantees: no cursor motion, no wrap/scroll, clips at the screen
+// edge under the renderer lock, and politely declines while the GUI owns the
+// framebuffer.
+static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+
+	// One row of a widget, tops. print_at clips at the screen edge anyway, so
+	// a bigger buffer would buy nothing but copy time; a "widget" longer than
+	// this is console content that took a wrong turn at the API.
+	char kernel_buffer[256];
+
+	// Cap the CELL coordinates before print_at multiplies them into pixels:
+	// its edge-clip compares px against the framebuffer width AFTER the
+	// multiply, so an absurd x could wrap the 32-bit pixel math back onto the
+	// screen. No display has 4096 columns; nothing legitimate is lost.
+	if (arg0 > 4095 || arg1 > 4095)
+		return SYSCALL_RESULT_INVALID;
+
+	if (!copy_user_string((const char *)arg2, kernel_buffer, sizeof(kernel_buffer)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	print_at(&kRenderer, (unsigned int)arg0, (unsigned int)arg1, kernel_buffer);
 	return 0;
 }

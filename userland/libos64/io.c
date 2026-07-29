@@ -22,6 +22,12 @@ int64_t os64_puts(const char *s)
     return os64_write(SYSCALL_HANDLE_CONSOLE_OUT, s, os64_strlen(s));
 }
 
+int64_t os64_printat(uint32_t x, uint32_t y, const char *s)
+{
+    return (int64_t)os64_syscall3(SYSCALL_PRINTAT, (uint64_t)x, (uint64_t)y,
+                                  (uint64_t)s);
+}
+
 void os64_debug_log(const char *s)
 {
     os64_syscall1(SYSCALL_DEBUG_LOG, (uint64_t)s);
