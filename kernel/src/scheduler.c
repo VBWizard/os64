@@ -86,29 +86,75 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 		return;
 	}
 
-	// In BSP scheduler mode, generic work stays on the BSP.
-	// Only explicitly AP-targeted threads should wake a parked AP.
-	if (thread->mp_apic == THREAD_NO_AFFINITY || thread->mp_apic == BOOTSTRAP_PROCESSOR_ID) {
-		return;
-	}
-
 	core_local_storage_t *cls = get_core_local_storage();
 	uint64_t current_apic_id = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
-	uint32_t target_apic_id = thread->mp_apic;
-	if (target_apic_id == BOOTSTRAP_PROCESSOR_ID || target_apic_id == current_apic_id) {
+
+	// PINNED work nudges its designated core, as it always has.
+	if (thread->mp_apic != THREAD_NO_AFFINITY) {
+		if (thread->mp_apic == BOOTSTRAP_PROCESSOR_ID ||
+		    thread->mp_apic == current_apic_id ||
+		    mp_inScheduler[thread->mp_apic]) {
+			return;
+		}
+		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
+			"scheduler_nudge_parked_aps: nudging APIC %lu for pinned thread 0x%08x (task %s)\n",
+			thread->mp_apic, thread->threadID,
+			((task_t*)thread->ownerTask)->exename);
+		send_ipi(thread->mp_apic, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		return;
 	}
 
-	if (mp_inScheduler[target_apic_id]) {
+	// UNPINNED work recruits an idle core. This used to read "in BSP
+	// scheduler mode, generic work stays on the BSP" — a conservative rule
+	// from the nudge slice that quietly turned a 12-core P5 into a 2-core
+	// machine: three hogs left ten cores asleep while two of them split
+	// the BSP (Chris caught it on the way to bed, 2026-07-30). A runnable
+	// thread with nowhere pinned deserves the first idle core that can
+	// take it; the nudged core's own scheduler pass pulls from qRunnable,
+	// so this hands out a WAKE-UP, not a thread — the queue stays the one
+	// source of truth. One core per nudge (no thundering herd): each new
+	// runnable recruits at most one sleeper, which is exactly the arrival
+	// rate that created the demand.
+	//
+	// Cross-core reads here are safe: CLS and thread structs live in the
+	// shared upper half, and a stale read costs one wasted (or missed)
+	// nudge, self-healed by the next scheduler pass. KNOWN LIMIT, not new
+	// tonight: BSPSCHED APs don't preempt, so a compute-bound tenant owns
+	// its core until it blocks or dies (kworker read 0% while a hog held
+	// its core — pre-existing nudge-only semantics; AP fairness is its own
+	// future slice).
+	for (int i = 0; i < kMPCoreCount; i++)
+	{
+		uint32_t apic_id = kCPUInfo[i].apicID;
+		if (apic_id == BOOTSTRAP_PROCESSOR_ID || apic_id == current_apic_id)
+			continue;
+		// NOT gated on mp_schedulerEnabled, deliberately: under BSPSCHED the
+		// enable ISR leaves AP timers masked and never sets that flag, so
+		// requiring it excluded every core BSPSCHED itself parked — the
+		// first fan-out test recruited exactly ONE core (kworker's, enabled
+		// by its pin) and left the rest asleep. _schedule_ap gates only on
+		// re-entry (mp_inScheduler), so a manual nudge is safe for a core
+		// that has never been "enabled": its pass handles the never-ran
+		// case explicitly. kSMPInitDone (checked above) is the real
+		// readiness gate.
+		if (mp_inScheduler[apic_id])
+			continue;
+
+		core_local_storage_t *target = get_core_local_storage_for_core(apic_id);
+		if (target == NULL || target->currentThread == NULL ||
+		    target->currentThread == NO_THREAD)
+			continue;
+		if (!target->currentThread->idleThread)
+			continue;   // busy core — an idle one may still be ahead
+
+		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
+			"scheduler_nudge_parked_aps: recruiting idle APIC %u for thread 0x%08x (task %s)\n",
+			apic_id, thread->threadID,
+			((task_t*)thread->ownerTask)->exename);
+		send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		return;
 	}
-
-	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
-		"scheduler_nudge_parked_aps: nudging APIC %u for thread 0x%08x (task %s)\n",
-		target_apic_id,
-		thread->threadID,
-		((task_t*)thread->ownerTask)->exename);
-	send_ipi(target_apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+	// No idle core: the busy ones and the BSP pick it up on their own passes.
 }
 
 void scheduler_enable()
