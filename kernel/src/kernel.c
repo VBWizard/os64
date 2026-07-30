@@ -88,6 +88,12 @@ char startTime[100] = {0};
 uint64_t lastTime = 0;
 task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
+// Boot TSC calibration window, seconds (TSCCAL= on the cmdline). Default 15:
+// ±1 tick of boundary slop across 1500 ticks is ±0.07%, and the continuous
+// recalibrator tightens it from there. Droppable ("TSCCAL=5") for anyone who
+// gets tired of waiting — the owner's own words — at the usual price: a
+// 5s window starts life at ±0.2% and leans harder on the recalibrator.
+int kTSCCalibrationSeconds = 15;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
 task_t* kKWorkerTask;
@@ -182,7 +188,11 @@ void kernel_init()
 		init_NVME();
 	}
 	detect_cpu();
-	kCPUCyclesPerSecond = tscGetCyclesPerSecond();
+	// The pause has a NAME on the glass: a silent 15-second stare at a
+	// counter reads as a hang to anyone watching a boot.
+	printf("Calibrating TSC (%d second window) ... ", kTSCCalibrationSeconds);
+	kCPUCyclesPerSecond = tscGetCyclesPerSecond((uint32_t)kTSCCalibrationSeconds);
+	printf("%lu cycles/sec\n", kCPUCyclesPerSecond);
 
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 

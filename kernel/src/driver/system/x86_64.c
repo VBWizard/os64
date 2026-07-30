@@ -58,13 +58,22 @@ uint64_t getCR3()
 // lands in (kCPUCyclesPerSecond). The old int return meant every consumer of
 // that global did arithmetic with a wrapped negative on real hardware —
 // found when CPU-time accounting became the first consumer that CHECKED.
-uint64_t tscGetCyclesPerSecond()
+// Window length is the caller's call (TSCCAL= cmdline via kernel_init):
+// precision is ±1 tick over the window, so seconds=1 is ±1%, 15 is ±0.07%.
+// Clamped to [1, 60] — zero would divide by it, and a boot that
+// deliberately stares at a counter for a minute has confused calibration
+// with meditation.
+uint64_t tscGetCyclesPerSecond(uint32_t seconds)
 {
+    if (seconds < 1)
+        seconds = 1;
+    if (seconds > 60)
+        seconds = 60;
     uint64_t cyclesBefore=rdtsc();
     uint64_t cyclesDiff;
-    wait(1000);
-    cyclesDiff=(rdtsc()-cyclesBefore);
-    printd(DEBUG_EXCEPTIONS,"tscGetCyclesPerSecond: TSC cycles per second = %lu\n",cyclesDiff);
+    wait(seconds * 1000);
+    cyclesDiff=(rdtsc()-cyclesBefore) / seconds;
+    printd(DEBUG_EXCEPTIONS,"tscGetCyclesPerSecond: TSC cycles per second = %lu (%us window)\n",cyclesDiff,seconds);
     return cyclesDiff;
 }
 

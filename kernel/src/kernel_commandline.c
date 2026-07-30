@@ -14,6 +14,7 @@ extern bool kRunTests;
 extern bool kEnableUSB;
 extern char kRootPartUUID[];
 extern char kTZString[];
+extern int kTSCCalibrationSeconds;
 extern int kMaxActiveCores;
 bool kEnableAHCI = true, kEnableNVME = true;
 // Off by default: the RAMDisk only activates when a boot entry passes BOTH
@@ -147,6 +148,9 @@ static cmdopt_t cmdopts[] = {
     // Timezone, classic TZ format (TZ=EST5EDT). Stored verbatim; see the
     // declaration in kernel.c for who consumes which half of it.
     {"TZ", OPT_STRING, kTZString, 0, 64},
+    // Boot TSC calibration window in seconds (see kernel.c for the default
+    // and the precision arithmetic). TSCCAL=5 for the impatient.
+    {"TSCCAL", OPT_INT, &kTSCCalibrationSeconds, 0, 0},
 };
 
 void process_kernel_commandline(char *cmdline)
