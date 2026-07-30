@@ -42,8 +42,12 @@ OBJ     := $(CURDIR)/obj
 RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/env.c libos64/str.c libos64/date.c
 RUNTIME_OBJS := $(patsubst %,$(OBJ)/%.o,$(RUNTIME_SRCS))
 
-# Every apps/<name>/<name>.c is an app named <name>.
-APPS := $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c))))
+# Every apps/<name>/ directory holding .c files is an app named <name>.
+# $(sort) both orders and DEDUPES — essential since apps went multi-file
+# (top was the first: top.c + topMain.c): the wildcard yields the directory
+# once PER .c FILE, so without sort a two-file app appears twice in APPS
+# and its link rule gets eval'd twice.
+APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c)))))
 
 # EVERY APP LINKS AT ITS OWN BASE ADDRESS.
 #
@@ -75,10 +79,18 @@ all: $(addprefix $(BIN)/,$(APPS)) $(BIN)/app_bases.gdb
 # after -T is silently ignored and every app quietly links at the 0x400000
 # fallback again (which builds, runs, and fails only in the debugger — the worst
 # kind of bug). Verified: defsym-after-T -> 0x400000, defsym-before-T -> 0xe400000.
+# MULTI-FILE APPS (since top, 2026-07-27): EVERY .c in apps/<name>/ compiles
+# and links into <name> — before this, the rule named exactly <name>.c.o, so
+# a second source file wasn't "compiled but not linked", it was never even
+# compiled ("undefined reference to `topMain'" was the symptom). The wildcard
+# expands at eval time, so dropping another .c into the folder is picked up
+# by the next make with no registration step — the same drop-it-and-it-builds
+# contract the app DIRECTORIES follow, now honored one level down.
 define APP_RULE
-$(BIN)/$(1): $(OBJ)/apps/$(1)/$(1).c.o $(RUNTIME_OBJS)
+APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard apps/$(1)/*.c))
+$(BIN)/$(1): $$(APP_OBJS_$(1)) $(RUNTIME_OBJS)
 	@mkdir -p "$(BIN)"
-	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) $(LDFLAGS) -o $$@ $$< $(RUNTIME_OBJS)
+	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $(RUNTIME_OBJS)
 	@printf '  %-10s base %s\n' "$(1)" "$(APP_BASE_$(1))"
 endef
 $(foreach app,$(APPS),$(eval $(call APP_RULE,$(app))))
@@ -97,8 +109,12 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS))
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each
 # compile regenerates its .d with the current include list, so it cannot drift.
+# Enumerated per .c FILE (not per app) since apps went multi-file: the old
+# per-app form covered only <name>.c.d, which would have left topMain.c.o
+# stale against topMain.h edits — the EXACT bug class this makefile's -MMD
+# comment block memorializes, sneaking back through a side door.
 HEADER_DEPS := $(RUNTIME_OBJS:.o=.d) \
-               $(foreach app,$(APPS),$(OBJ)/apps/$(app)/$(app).c.d)
+               $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c))
 -include $(HEADER_DEPS)
 
 $(OBJ)/%.c.o: %.c

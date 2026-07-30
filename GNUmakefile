@@ -101,7 +101,9 @@ override IMAGE_NAME := os64_kernel
 # it builds" now also means "drop a directory and it lands on the image" — no
 # mcopy line to add, ever. (It used to need both, and a forgotten mcopy meant
 # an app that built perfectly and simply wasn't there at boot.)
-USERLAND_APPS := $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c))))
+# $(sort) dedupes: multi-file apps (top.c + topMain.c) list their directory
+# once per .c file — without it, top appears twice in every list built here.
+USERLAND_APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c)))))
 USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
 
 # Kernel-side ring-3 test fixtures that also ride the image.
