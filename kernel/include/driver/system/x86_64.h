@@ -8,5 +8,5 @@
 	uint32_t read_apic_id();
 	uint64_t rdtsc();
 	uint64_t getCR3();
-	int tscGetCyclesPerSecond();
+	uint64_t tscGetCyclesPerSecond();
 #endif

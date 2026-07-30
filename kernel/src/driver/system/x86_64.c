@@ -50,12 +50,17 @@ uint64_t getCR3()
     return cr3;
 }
 
-int tscGetCyclesPerSecond()
+// Returns uint64_t, NOT int: a modern TSC ticks ~3-4 BILLION times a second,
+// which overflows int32 and sign-extends into garbage in the uint64_t this
+// lands in (kCPUCyclesPerSecond). The old int return meant every consumer of
+// that global did arithmetic with a wrapped negative on real hardware —
+// found when CPU-time accounting became the first consumer that CHECKED.
+uint64_t tscGetCyclesPerSecond()
 {
     uint64_t cyclesBefore=rdtsc();
     uint64_t cyclesDiff;
     wait(1000);
     cyclesDiff=(rdtsc()-cyclesBefore);
-    printd(DEBUG_EXCEPTIONS,"tscGetCyclesPerSecond: TSC cycles per second = %u\n",cyclesDiff);
+    printd(DEBUG_EXCEPTIONS,"tscGetCyclesPerSecond: TSC cycles per second = %lu\n",cyclesDiff);
     return cyclesDiff;
 }
