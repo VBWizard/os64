@@ -29,6 +29,7 @@ typedef struct topent {
     uint64_t runtimeUS;
     uint64_t prevRuntimeUS;
     bool havePrev;              // first sighting has no delta — show 0.0
+    uint32_t core;              // where its thread last ran (status "core")
     uint64_t lastIterationUsed; // stale entries (task vanished) get reused
 } top_entry_t;
 
@@ -44,6 +45,8 @@ typedef struct {
     bool noSummary;     // -s  (hide the cores/idle/system summary lines)
     bool logLedger;     // -l  (raw ledger to the system log each refresh —
                         //      the accounting's own checkout harness)
+    bool perCore;       // -c  (one summary line per core — each core's books
+                        //      against its own ledger interval)
 } top_options_t;
 
 int32_t topMain(const top_options_t *opts);

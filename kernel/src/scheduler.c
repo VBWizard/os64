@@ -499,6 +499,10 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
 
 void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
 {
+	// Dispatch history for /proc (thread.h has the doctrine): cls is the
+	// TARGET core's storage, so this is correct even when the BSP loads a
+	// thread onto another core under BSPSCHED.
+	thread->lastRunApicID = cls->apic_id;
 	//task_t* task = cls->currentThread->ownerTask;
 	//task_t* ownerTask = ((task_t*)cls->currentThread->ownerTask)->ownerTask;
 	uint64_t apic_id = cls->apic_id;

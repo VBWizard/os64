@@ -503,6 +503,10 @@ static void proc_gen_task_status(proc_text_t *t, task_t *task)
 		ptext_addf(t, "bias\t%p\n", (void *)task->loadBias);
 	ptext_addf(t, "faults\t%u minor %u major\n", task->minorFaults, task->majorFaults);
 	ptext_addf(t, "switches\t%u\n", task->cSwitches);
+	// Where the task's thread last ran — the answer to "whose plate did
+	// this time come off", without which per-core arithmetic is guesswork.
+	if (th != NULL)
+		ptext_addf(t, "core\t%u\n", th->lastRunApicID);
 	// Real CPU time, charged at context-switch boundaries (thread.h has the
 	// doctrine). `ticks` below is the old sampling counter — kept because
 	// removing a field is an ABI event, but runtime_us is the honest one.
@@ -635,6 +639,7 @@ static void proc_gen_thread_status(proc_text_t *t, task_t *task, thread_t *th)
 	else
 		ptext_addf(t, "affinity\t%lu\n", th->mp_apic);
 	ptext_addf(t, "idle\t%s\n", th->idleThread ? "yes" : "no");
+	ptext_addf(t, "core\t%u\n", th->lastRunApicID);   // last dispatched here
 	ptext_addf(t, "ring\t%u\n", (unsigned)(th->regs.CS & 3));
 	ptext_addf(t, "rip\t%p\n", (void *)th->regs.RIP);
 	ptext_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);

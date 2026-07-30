@@ -6,6 +6,7 @@ static bool optZombies = false;
 static bool optAdaptive = false;
 static bool optNoSummary = false;
 static bool optLog = false;
+static bool optPerCore = false;
 
 int main(int argc, char **argv)
 {
@@ -23,9 +24,11 @@ int main(int argc, char **argv)
          .flag = &optNoSummary},
         {'l', "log", false, "Raw ledger to the system log each refresh (checkout mode)",
          .flag = &optLog},
+        {'c', "cores", false, "One summary line per core (each core's own books)",
+         .flag = &optPerCore},
     };
 
-    os64_args_init(&args, argc, argv, specs, 5);
+    os64_args_init(&args, argc, argv, specs, 6);
     args.about = "View the system's tasks and where the CPU time goes";
     int32_t nPositionals = os64_args_parse(&args, "top", &positional, 1);
     if (nPositionals == 0)
@@ -40,6 +43,7 @@ int main(int argc, char **argv)
         opts.adaptiveUnits = optAdaptive;
         opts.noSummary = optNoSummary;
         opts.logLedger = optLog;
+        opts.perCore = optPerCore;
         returnCode = topMain(&opts);
     }
     else if (nPositionals > 0)

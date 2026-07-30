@@ -145,6 +145,8 @@ static int32_t parseStatusFile(int32_t fileHandle, top_entry_t *entry)
             entry->PTID = os64_atou(value);
         else if (os64_streq(line, "kernel"))
             entry->KernelProc = os64_streq(value, "yes");
+        else if (os64_streq(line, "core"))
+            entry->core = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "runtime_us"))
             entry->runtimeUS = os64_atou(value);
     }
@@ -473,14 +475,38 @@ int32_t topMain(const top_options_t *opts)
                 os64_strcopy(skewBuf, sizeof(skewBuf), "-");
             framef("cores: %d (%d parked)   busy %s%%   idle %s%%   sched %s%%   tickskew %s%%\n",
                    coreCount, parked, b, i, s, skewBuf);
+
+            // -c: each core's books against ITS OWN ledger interval — the
+            // per-core closure test. busy is kernel-derived (total − idle −
+            // sched) so each line sums to 100.0 BY IDENTITY; the value is in
+            // the split, and in comparing a core's busy% against the task
+            // rows wearing its number in the C column.
+            if (opts->perCore)
+            {
+                for (int32_t c = 0; c < coreCount; c++)
+                {
+                    uint64_t dT = coresNow[c].total - coresPrev[c].total;
+                    if (dT < intervalUS / 100)
+                    {
+                        framef("  core %2d: parked\n", c);
+                        continue;
+                    }
+                    char cb[16], ci[16], cs[16];
+                    fmt_pct(cb, sizeof(cb), coresNow[c].busy  - coresPrev[c].busy,  dT);
+                    fmt_pct(ci, sizeof(ci), coresNow[c].idle  - coresPrev[c].idle,  dT);
+                    fmt_pct(cs, sizeof(cs), coresNow[c].sched - coresPrev[c].sched, dT);
+                    framef("  core %2d: busy %s%%   idle %s%%   sched %s%%   (%lums)\n",
+                           c, cb, ci, cs, dT / 1000);
+                }
+            }
         }
         else if (!opts->noSummary)
         {
             framef("cores: %d   (first interval - measuring)\n", coreCount);
         }
 
-        framef("\n%-6s %-9s %1s %6s %10s  %s\n",
-               "TID", "STATE", "K", "CPU%", "TIME", "COMMAND");
+        framef("\n%-6s %-9s %1s %2s %6s %10s  %s\n",
+               "TID", "STATE", "K", "C", "CPU%", "TIME", "COMMAND");
 
         for (uint32_t i = 0; i < shownCount; i++)
         {
@@ -496,10 +522,10 @@ int32_t topMain(const top_options_t *opts)
                 os64_strcopy(pctBuf, sizeof(pctBuf), "-");
             fmt_time(timeBuf, sizeof(timeBuf), e->runtimeUS, opts->adaptiveUnits);
 
-            framef("%-6lu %-9s %1s %6s %10s  %s\n",
+            framef("%-6lu %-9s %1s %2u %6s %10s  %s\n",
                    e->TID, state_name(e->State),
                    e->KernelProc ? "k" : " ",
-                   pctBuf, timeBuf, e->Command);
+                   e->core, pctBuf, timeBuf, e->Command);
 
             e->prevRuntimeUS = e->runtimeUS;
             e->havePrev = true;

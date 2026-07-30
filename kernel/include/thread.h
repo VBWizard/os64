@@ -79,6 +79,14 @@ typedef struct s_thread
 	// thread_t wholesale, NULL this in the child or two threads will share
 	// one bounce buffer.
 	void *syscallIOScratch;
+	// The core this thread was most recently DISPATCHED on — stamped by
+	// scheduler_load_thread, one store, no locking (single writer: the
+	// dispatching core). This is "where did it last run", not affinity
+	// (mp_apic is the pin; this is the history). Surfaced in /proc so a
+	// human summing per-core books can tell whose plate the time came off
+	// — the question that broke Chris's idle0 arithmetic the night the
+	// accounting converged (kworker's 0.5% was on core 1 all along).
+	uint32_t lastRunApicID;
 	// CPU time actually spent running, in TSC cycles — charged at context-
 	// switch boundaries by scheduler_do (NOT tick-sampled: a thread that
 	// runs 2ms slices between ticks is invisible to sampling but not to
