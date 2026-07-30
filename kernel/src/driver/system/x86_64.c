@@ -3,6 +3,9 @@
 #include "CONFIG.h"
 #include "serial_logging.h"
 
+extern volatile uint64_t kSystemCurrentTime;
+extern uint64_t kCPUCyclesPerSecond;
+
 uint64_t kMPIdReg=0;
 
 void cpuid(uint32_t* eax, uint32_t* ebx, uint32_t* ecx, uint32_t* edx) {
@@ -63,4 +66,57 @@ uint64_t tscGetCyclesPerSecond()
     cyclesDiff=(rdtsc()-cyclesBefore);
     printd(DEBUG_EXCEPTIONS,"tscGetCyclesPerSecond: TSC cycles per second = %lu\n",cyclesDiff);
     return cyclesDiff;
+}
+
+// Continuous TSC recalibration — the boot calibration's ±1% is a design
+// floor, not a bug: wait(1000) is a 100-tick window, and one tick of
+// boundary slop is one part in a hundred. Every µs the accounting ever
+// reports is converted through that number, so the P5's idle threads all
+// read 101.0% forever (the +1% was drawn in the machine's first second of
+// life and never rechecked). The cure is window size: re-derive
+// cycles-per-second from ΔTSC/Δepoch-seconds over an EVER-GROWING window —
+// 60s in, the window is 6000 ticks (±0.017%); ten minutes in, ±0.002%.
+// The number converges toward truth for as long as the machine is up.
+//
+// Called from the BSP's scheduler pass ONLY (apic_id 0): the base and
+// every re-read are same-core TSC samples, so cross-core TSC desync — the
+// documented landmine — never enters the math. Sanity band: a reading
+// >25% away from the boot calibration is discarded as clock lunacy (a
+// hypervisor pausing the world mid-window can manufacture one; VBox's
+// tick stream is a known suspect) — better to keep a 1%-wrong constant
+// than adopt a 45%-wrong "correction".
+void tsc_recalibrate(void)
+{
+    static uint64_t baseTSC = 0;
+    static uint64_t baseEpoch = 0;
+    static uint64_t nextCheckEpoch = 0;
+
+    if (baseTSC == 0)
+    {
+        baseTSC = rdtsc();
+        baseEpoch = kSystemCurrentTime;
+        nextCheckEpoch = baseEpoch + 60;
+        return;
+    }
+    if (kSystemCurrentTime < nextCheckEpoch)
+        return;
+
+    uint64_t dS = kSystemCurrentTime - baseEpoch;
+    if (dS == 0)
+        return;
+    uint64_t newRate = (rdtsc() - baseTSC) / dS;
+
+    uint64_t lo = kCPUCyclesPerSecond - kCPUCyclesPerSecond / 4;
+    uint64_t hi = kCPUCyclesPerSecond + kCPUCyclesPerSecond / 4;
+    if (newRate >= lo && newRate <= hi)
+    {
+        // DEBUG_BOOT, not DEBUG_SCHEDULER: one line a minute about the
+        // machine's clock is boot-subsystem news, and it must survive a
+        // trimmed debug set — the first verification boot had it on
+        // SCHEDULER and the recalibrator ran gagged for four minutes.
+        printd(DEBUG_BOOT, "tsc_recalibrate: %lu -> %lu cycles/sec (window %lus)\n",
+               kCPUCyclesPerSecond, newRate, dS);
+        kCPUCyclesPerSecond = newRate;
+    }
+    nextCheckEpoch = kSystemCurrentTime + 60;
 }

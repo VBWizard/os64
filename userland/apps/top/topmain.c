@@ -307,6 +307,15 @@ int32_t topMain(const top_options_t *opts)
                          / tickNow.per_second;
         tickThen = tickNow;
 
+        // A counter that went BACKWARD reads as zero delta, not as a
+        // 584-million-year spike: TSC recalibration re-prices the whole
+        // cycles→µs history, so a rate correction can step every
+        // runtime_us back slightly. Unsigned subtraction would turn that
+        // blip into the biggest number in the universe.
+        for (uint32_t i = 0; i < shownCount; i++)
+            if (shown[i]->runtimeUS < shown[i]->prevRuntimeUS)
+                shown[i]->prevRuntimeUS = shown[i]->runtimeUS;
+
         // ── Sort shown rows by CPU delta, descending (it IS top) ─────
         for (uint32_t i = 1; i < shownCount; i++)
         {
@@ -355,6 +364,13 @@ int32_t topMain(const top_options_t *opts)
             int32_t parked = 0;
             for (int32_t c = 0; c < coreCount; c++)
             {
+                // Same recalibration guard as the task rows: re-priced
+                // history can step any column backward once a minute.
+                if (coresNow[c].total < coresPrev[c].total) coresPrev[c].total = coresNow[c].total;
+                if (coresNow[c].busy  < coresPrev[c].busy)  coresPrev[c].busy  = coresNow[c].busy;
+                if (coresNow[c].idle  < coresPrev[c].idle)  coresPrev[c].idle  = coresNow[c].idle;
+                if (coresNow[c].sched < coresPrev[c].sched) coresPrev[c].sched = coresNow[c].sched;
+
                 uint64_t dTotal = coresNow[c].total - coresPrev[c].total;
                 if (dTotal < intervalUS / 100)
                 {

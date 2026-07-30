@@ -9,4 +9,5 @@
 	uint64_t rdtsc();
 	uint64_t getCR3();
 	uint64_t tscGetCyclesPerSecond();
+	void tsc_recalibrate(void);
 #endif
