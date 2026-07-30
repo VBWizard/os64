@@ -502,6 +502,92 @@ void mpDisableAP(int apic_id)
     printd (DEBUG_SMP, "MP: mpDisableAP: APIC %u, IPI sent for vector 0x%02x\n", apic_id, IPI_DISABLE_SCHEDULING_VECTOR);
 }
 
+// ── CPU-time settle-on-read ─────────────────────────────────────────────
+// The accounting charges at context-switch boundaries, which means a
+// core's books are only as fresh as its last scheduler pass — and a
+// monopolized or rarely-nudged core (BSPSCHED APs) settles in LUMPS: the
+// top -l audit measured idle1 alternating 0% and 208% per refresh while
+// summing to a perfect 0.9984 over time. Correct books, quantized
+// delivery. The fix: before /proc renders CPU-time numbers, ask every
+// core to settle its own in-flight span — each using ITS OWN TSC (the
+// reader must never do cross-core TSC math; that is the desync landmine).
+// Mode-agnostic by construction (Chris's requirement): an IPI lands the
+// same under BSPSCHED or free-running, and the handler is core-local
+// either way.
+
+volatile bool mp_acctSettleAck[MAX_CPUS];
+extern volatile uint64_t kTicksSinceStart;
+
+// The core-local settle: charge the running thread up to "now", restamp.
+// Called from the IPI handler (interrupts off) and inline for the local
+// core (under cli) — in both cases it cannot interleave with this core's
+// own scheduler pass, which is the only other writer of these fields.
+static void acct_settle_local(void)
+{
+    core_local_storage_t *cls = get_core_local_storage();
+    if (cls == NULL)
+        return;
+    uint64_t now = rdtsc();
+    if (cls->acctLastDispatchTSC != 0 &&
+        cls->currentThread != NULL && cls->currentThread != NO_THREAD)
+    {
+        cls->currentThread->runCycles += now - cls->acctLastDispatchTSC;
+        cls->acctLastDispatchTSC = now;
+    }
+}
+
+void acct_settle_ISR(void)
+{
+    acct_settle_local();
+    core_local_storage_t *cls = get_core_local_storage();
+    if (cls != NULL)
+        mp_acctSettleAck[cls->apic_id] = true;
+    write_eoi();
+}
+
+void mpAcctSettleAll(void)
+{
+    // Rate limit: books fresher than one tick are fresh enough. A top
+    // refresh reads ~30 /proc files back to back; only the first pays
+    // for the broadcast, the rest reuse the same settle.
+    static volatile uint64_t lastSettleTick = (uint64_t)-1;
+    if (kTicksSinceStart == lastSettleTick)
+        return;
+    lastSettleTick = kTicksSinceStart;
+
+    // Local core first, atomically vs our own interrupts.
+    uint64_t flags;
+    __asm__ volatile("pushfq\n\tpop %0\n\tcli" : "=r"(flags) :: "memory");
+    acct_settle_local();
+    __asm__ volatile("push %0\n\tpopfq" :: "r"(flags) : "memory", "cc");
+
+    if (!kSMPInitDone)
+        return;
+
+    uint32_t self = get_core_local_storage()->apic_id;
+    for (int i = 0; i < kMPCoreCount; i++)
+    {
+        uint32_t apic_id = kCPUInfo[i].apicID;
+        if (apic_id == self)
+            continue;
+        mp_acctSettleAck[apic_id] = false;
+        send_ipi(apic_id, IPI_ACCT_SETTLE_VECTOR, 0, 1, 0);
+    }
+
+    // Bounded wait for the acks: a wedged core must cost us staleness,
+    // never a hang — its books just stay one settle behind, which is
+    // exactly the pre-IPI status quo for that core.
+    for (int i = 0; i < kMPCoreCount; i++)
+    {
+        uint32_t apic_id = kCPUInfo[i].apicID;
+        if (apic_id == self)
+            continue;
+        uint64_t spins = 0;
+        while (!mp_acctSettleAck[apic_id] && ++spins < 2000000UL)
+            __builtin_ia32_pause();
+    }
+}
+
 void mpSendInvTLB()
 {
     // Until the APs are actually up there is nobody to shoot down — and

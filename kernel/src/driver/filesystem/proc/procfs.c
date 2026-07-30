@@ -448,6 +448,12 @@ static uint64_t proc_cycles_to_us(uint64_t cycles)
 // "now".
 static void proc_gen_cores(proc_text_t *t)
 {
+	// Settle-on-read: every core charges its in-flight span (locally, own
+	// TSC) before we render — so the books are never staler than this IPI
+	// round-trip, and BSPSCHED's lumpy settlement can't staircase a reader.
+	// Rate-limited inside (once per tick), so a top refresh pays once.
+	mpAcctSettleAll();
+
 	ptext_addf(t, "core\ttotal_us\tbusy_us\tidle_us\tsched_us\n");
 	for (uint8_t i = 0; i < kMPCoreCount; i++)
 	{
@@ -474,6 +480,10 @@ static void proc_gen_cores(proc_text_t *t)
 static void proc_gen_task_status(proc_text_t *t, task_t *task)
 {
 	thread_t *th = task->threads;
+
+	// Same settle as /proc/cores (rate-limited to once a tick): runtime_us
+	// below must not be a scheduler-pass stale on a monopolized core.
+	mpAcctSettleAll();
 
 	ptext_addf(t, "task\t%lu\n", task->taskID);
 	ptext_addf(t, "name\t%s\n", task->exename[0] ? task->exename : "(none)");
@@ -608,6 +618,8 @@ static void proc_gen_maps(proc_text_t *t, task_t *task)
 
 static void proc_gen_thread_status(proc_text_t *t, task_t *task, thread_t *th)
 {
+	mpAcctSettleAll();   // same freshness contract as the task status file
+
 	ptext_addf(t, "thread\t%lu\n", th->threadID);
 	ptext_addf(t, "task\t%lu\n", task->taskID);
 	ptext_addf(t, "state\t%s\n", proc_state_name(th->threadState));
