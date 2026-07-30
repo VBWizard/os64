@@ -300,12 +300,45 @@ int32_t topMain(const top_options_t *opts)
         readCores();
         os64_ticks(&tickNow);
 
-        // The measured interval, in µs — the one true denominator.
-        uint64_t intervalUS = 0;
+        // ── One clock to rule the division (Chris's ruling, 2026-07-30
+        // small hours: "everything should be using the same clock").
+        // Numerators (runtime_us, core columns) are LEDGER-clock (TSC→µs).
+        // If the denominator comes from the TICK clock, every skew between
+        // the two smears across every row — the P5's lockstep 100.5%s, the
+        // VBox −45%. So the interval is measured on the LEDGER'S OWN CLOCK:
+        // Δ(core 0's total_us) between refreshes. Core 0 always exists, and
+        // settle-on-read guarantees its meter is fresh at every read.
+        // The tick-clock interval is still computed — the DISAGREEMENT
+        // between the two is promoted to a first-class display line (skew),
+        // so tick-stream pathology becomes a watched number instead of a
+        // smear. Percentages sum by construction; the truth stays visible.
+        uint64_t tickIntervalUS = 0;
         if (tickNow.per_second > 0)
-            intervalUS = (tickNow.ticks - tickThen.ticks) * 1000000
-                         / tickNow.per_second;
+            tickIntervalUS = (tickNow.ticks - tickThen.ticks) * 1000000
+                             / tickNow.per_second;
         tickThen = tickNow;
+
+        // Recalibration guard must run BEFORE the ledger interval is taken
+        // (re-priced history can step any column backward once a minute).
+        for (int32_t c = 0; c < coreCount; c++)
+        {
+            if (coresNow[c].total < coresPrev[c].total) coresPrev[c].total = coresNow[c].total;
+            if (coresNow[c].busy  < coresPrev[c].busy)  coresPrev[c].busy  = coresNow[c].busy;
+            if (coresNow[c].idle  < coresPrev[c].idle)  coresPrev[c].idle  = coresNow[c].idle;
+            if (coresNow[c].sched < coresPrev[c].sched) coresPrev[c].sched = coresNow[c].sched;
+        }
+
+        uint64_t ledgerIntervalUS = 0;
+        if (haveCorePrev && coreCount > 0)
+            ledgerIntervalUS = coresNow[0].total - coresPrev[0].total;
+
+        // The ledger interval is the denominator when it's sane; the tick
+        // interval covers the first refresh and recalibration blips (a
+        // just-re-priced core 0 can post a near-zero delta for one round).
+        uint64_t intervalUS = tickIntervalUS;
+        if (ledgerIntervalUS > tickIntervalUS / 2 &&
+            ledgerIntervalUS < tickIntervalUS * 4)
+            intervalUS = ledgerIntervalUS;
 
         // A counter that went BACKWARD reads as zero delta, not as a
         // 584-million-year spike: TSC recalibration re-prices the whole
@@ -402,13 +435,8 @@ int32_t topMain(const top_options_t *opts)
             int32_t parked = 0;
             for (int32_t c = 0; c < coreCount; c++)
             {
-                // Same recalibration guard as the task rows: re-priced
-                // history can step any column backward once a minute.
-                if (coresNow[c].total < coresPrev[c].total) coresPrev[c].total = coresNow[c].total;
-                if (coresNow[c].busy  < coresPrev[c].busy)  coresPrev[c].busy  = coresNow[c].busy;
-                if (coresNow[c].idle  < coresPrev[c].idle)  coresPrev[c].idle  = coresNow[c].idle;
-                if (coresNow[c].sched < coresPrev[c].sched) coresPrev[c].sched = coresNow[c].sched;
-
+                // (Recalibration clamps already ran, before the ledger
+                // interval was taken from core 0.)
                 uint64_t dTotal = coresNow[c].total - coresPrev[c].total;
                 if (dTotal < intervalUS / 100)
                 {
@@ -425,8 +453,26 @@ int32_t topMain(const top_options_t *opts)
             fmt_pct(b, sizeof(b), dBusy, machineUS);
             fmt_pct(i, sizeof(i), dIdle, machineUS);
             fmt_pct(s, sizeof(s), dSched, machineUS);
-            framef("cores: %d (%d parked)   busy %s%%   idle %s%%   sched %s%%\n",
-                   coreCount, parked, b, i, s);
+
+            // The two clocks' disagreement, on its own leash: positive =
+            // the tick clock claims MORE time passed than the TSC ledger
+            // (lost-tick pathology reads negative — ticks fell behind).
+            // On a healthy box this reads ±0.x%; on a stuttering P5 it
+            // twitches with each hiccup; on VBox it IS the mystery.
+            char skewBuf[16];
+            if (ledgerIntervalUS > 0)
+            {
+                int64_t diff = (int64_t)tickIntervalUS - (int64_t)ledgerIntervalUS;
+                char sign = (diff < 0) ? '-' : '+';
+                uint64_t mag = (uint64_t)(diff < 0 ? -diff : diff);
+                uint64_t tenths = mag * 1000 / ledgerIntervalUS;
+                os64_snprintf(skewBuf, sizeof(skewBuf), "%c%lu.%lu",
+                              sign, tenths / 10, tenths % 10);
+            }
+            else
+                os64_strcopy(skewBuf, sizeof(skewBuf), "-");
+            framef("cores: %d (%d parked)   busy %s%%   idle %s%%   sched %s%%   tickskew %s%%\n",
+                   coreCount, parked, b, i, s, skewBuf);
         }
         else if (!opts->noSummary)
         {
