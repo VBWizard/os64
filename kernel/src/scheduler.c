@@ -881,6 +881,23 @@ void scheduler_do()
 	core_local_storage_t *cls = get_core_local_storage();
 	uint8_t apic_id = cls->apic_id;
     mp_waitingForScheduler[apic_id] = false;
+
+	// ── CPU-time accounting: the outgoing thread's slice ends HERE ──────────
+	// Charged at the switch boundary, not tick-sampled, so sub-tick slices
+	// are visible and nothing gets laundered into whoever the timer caught.
+	// Both rdtsc reads in every delta happen on THIS core (this function runs
+	// on the core being scheduled, even under BSPSCHED — the BSP only decides
+	// WHEN, the IPI makes each core run its own pass), so TSC desync between
+	// cores can never corrupt a delta. The ISR time between interrupt entry
+	// and this line rides on the outgoing thread — documented v1 honesty,
+	// fixable with entry stamps if it ever matters.
+	uint64_t acctPassStart = rdtsc();
+	if (cls->acctLastDispatchTSC != 0 &&
+	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
+		cls->currentThread->runCycles += acctPassStart - cls->acctLastDispatchTSC;
+	if (cls->acctZeroTSC == 0)
+		cls->acctZeroTSC = acctPassStart;   // this core's meter starts now
+
     printd(DEBUG_SCHEDULER,"****************************** SCHEDULER *******************************\n");
     printd(DEBUG_SCHEDULER,"scheduler: AP %u, current CR3 = 0x%08x\n",apic_id,getCR3());
 #if SCHEDULER_DEBUG == 1
@@ -915,4 +932,14 @@ void scheduler_do()
 #endif
     printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s\n", ((task_t *)(cls->task))->path);
     printd(DEBUG_SCHEDULER,"**************************************************************************\n");
+
+	// ── CPU-time accounting: the incoming thread's slice starts HERE ────────
+	// Covers both paths (switch and shortcut — a continued thread is still
+	// dispatched). Everything between acctPassStart and now was the
+	// scheduler's own time: it goes to this core's system bucket, which is
+	// what lets top show ghost-churn as "system: climbing" instead of
+	// laundering it into the innocent bystanders the timer interrupted.
+	uint64_t acctPassEnd = rdtsc();
+	cls->acctSchedCycles += acctPassEnd - acctPassStart;
+	cls->acctLastDispatchTSC = acctPassEnd;
 }

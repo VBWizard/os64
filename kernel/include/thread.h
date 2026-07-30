@@ -79,6 +79,16 @@ typedef struct s_thread
 	// thread_t wholesale, NULL this in the child or two threads will share
 	// one bounce buffer.
 	void *syscallIOScratch;
+	// CPU time actually spent running, in TSC cycles — charged at context-
+	// switch boundaries by scheduler_do (NOT tick-sampled: a thread that
+	// runs 2ms slices between ticks is invisible to sampling but not to
+	// this). Written only by the core the thread runs on, using that core's
+	// own TSC for both endpoints of every delta — cross-core TSC math is
+	// the desync landmine and this field never commits it. Converted to
+	// microseconds at /proc read time (kCPUCyclesPerSecond); raw cycles
+	// never leave the kernel. Idle threads accumulate here like everyone
+	// else — that is what makes "idle %" a measurement, not an assumption.
+	uint64_t runCycles;
 } thread_t;
 
 thread_t* createThread(void* parentTask, bool kernelThread);
