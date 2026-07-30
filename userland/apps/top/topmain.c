@@ -334,6 +334,44 @@ int32_t topMain(const top_options_t *opts)
             shown[j] = key;
         }
 
+        // ── The checkout channel (-l): raw ledger to the system log ──
+        // Chris's protocol: emit what the accounting ACTUALLY said, every
+        // refresh, in raw microseconds — no display rounding, no
+        // percentages — so the serial log becomes a dataset and the
+        // accounting can be audited statistically instead of by eyeball.
+        // MUST run here, while prev counters still hold LAST refresh's
+        // values (the display loop advances them). Cores first (the
+        // machine's books), then every row top holds, deltas included.
+        // One line per record, "toplog" prefix for grep.
+        if (opts->logLedger)
+        {
+            char lbuf[224];
+            os64_snprintf(lbuf, sizeof(lbuf),
+                          "toplog iter=%lu int_us=%lu cores=%d",
+                          topIterationsExecuted, intervalUS, coreCount);
+            os64_debug_log(lbuf);
+            for (int32_t c = 0; c < coreCount; c++)
+            {
+                os64_snprintf(lbuf, sizeof(lbuf),
+                              "toplog core=%d total=%lu busy=%lu idle=%lu sched=%lu dtotal=%lu didle=%lu",
+                              c, coresNow[c].total, coresNow[c].busy,
+                              coresNow[c].idle, coresNow[c].sched,
+                              coresNow[c].total - coresPrev[c].total,
+                              coresNow[c].idle - coresPrev[c].idle);
+                os64_debug_log(lbuf);
+            }
+            for (uint32_t i = 0; i < shownCount; i++)
+            {
+                top_entry_t *e = shown[i];
+                os64_snprintf(lbuf, sizeof(lbuf),
+                              "toplog tid=%lu name=%s state=%s run_us=%lu d_us=%lu",
+                              e->TID, e->Command, state_name(e->State),
+                              e->runtimeUS,
+                              e->havePrev ? e->runtimeUS - e->prevRuntimeUS : 0);
+                os64_debug_log(lbuf);
+            }
+        }
+
         // ── Compose the frame ─────────────────────────────────────────
         frame_reset();
 

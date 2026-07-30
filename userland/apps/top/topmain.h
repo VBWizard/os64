@@ -42,6 +42,8 @@ typedef struct {
     bool showZombies;   // -z
     bool adaptiveUnits; // -a
     bool noSummary;     // -s  (hide the cores/idle/system summary lines)
+    bool logLedger;     // -l  (raw ledger to the system log each refresh —
+                        //      the accounting's own checkout harness)
 } top_options_t;
 
 int32_t topMain(const top_options_t *opts);

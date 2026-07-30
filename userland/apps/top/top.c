@@ -5,6 +5,7 @@ static const char *delayValue = NULL;
 static bool optZombies = false;
 static bool optAdaptive = false;
 static bool optNoSummary = false;
+static bool optLog = false;
 
 int main(int argc, char **argv)
 {
@@ -20,9 +21,11 @@ int main(int argc, char **argv)
          .flag = &optAdaptive},
         {'s', "nosummary", false, "Hide the cores/idle/system summary lines",
          .flag = &optNoSummary},
+        {'l', "log", false, "Raw ledger to the system log each refresh (checkout mode)",
+         .flag = &optLog},
     };
 
-    os64_args_init(&args, argc, argv, specs, 4);
+    os64_args_init(&args, argc, argv, specs, 5);
     args.about = "View the system's tasks and where the CPU time goes";
     int32_t nPositionals = os64_args_parse(&args, "top", &positional, 1);
     if (nPositionals == 0)
@@ -36,6 +39,7 @@ int main(int argc, char **argv)
         opts.showZombies = optZombies;
         opts.adaptiveUnits = optAdaptive;
         opts.noSummary = optNoSummary;
+        opts.logLedger = optLog;
         returnCode = topMain(&opts);
     }
     else if (nPositionals > 0)
