@@ -580,8 +580,19 @@ static void acct_settle_local(void)
 
 void acct_settle_ISR(void)
 {
-    acct_settle_local();
     core_local_storage_t *cls = get_core_local_storage();
+    // The pass owns the meter while it runs. scheduler_do charges the
+    // outgoing thread at pass ENTRY but doesn't move acctLastDispatchTSC
+    // until pass EXIT — and the pass runs with interrupts enabled, so this
+    // IPI can land in between. Settling in that window re-charges the whole
+    // [lastDispatch → now] span on top of the entry charge: on a monopolized
+    // core that goes seconds between passes, that's seconds double-billed
+    // (top -d 5000 showed hogs >100% exactly this way, P5 2026-07-30). One
+    // settle of staleness beats double-charging — skip, ack, let the pass
+    // close its own books. (The header's "cannot interleave with this core's
+    // own scheduler pass" claim was simply wrong; this makes it true.)
+    if (cls != NULL && !mp_inScheduler[cls->apic_id])
+        acct_settle_local();
     if (cls != NULL)
         mp_acctSettleAck[cls->apic_id] = true;
     write_eoi();
