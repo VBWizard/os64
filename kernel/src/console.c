@@ -160,6 +160,10 @@ void console_wake_if_ready(void)
 		kConsoleWaiter = NULL;
 		w->signals.sigind &= ~SIGSLEEP;     // cancel the backstop sleep
 		w->signals.sigdata[SIGSLEEP] = 0;
-		scheduler_change_thread_queue(w, THREAD_STATE_RUNNABLE);
+		// _locked: our only caller is processSignals, which holds the
+		// scheduler queue lock across this wake (that's what makes the
+		// ISLEEP check above trustworthy). The public variant would
+		// re-acquire the lock and self-deadlock.
+		scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
 	}
 }

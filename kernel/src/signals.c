@@ -81,14 +81,14 @@ void processSignals()
 			// to notice it.
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			qSleep->signals.sigind &= ~(SIGSLEEP);
-			scheduler_change_thread_queue(qSleep, THREAD_STATE_RUNNABLE);
+			scheduler_change_thread_queue_locked(qSleep, THREAD_STATE_RUNNABLE);   //we hold the queue lock (above)
 			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending terminate\n", qSleep->threadID);
 		}
 		else if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past
 		{
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			qSleep->signals.sigind &= ~(SIGSLEEP);
-			scheduler_change_thread_queue(qSleep, THREAD_STATE_RUNNABLE);
+			scheduler_change_thread_queue_locked(qSleep, THREAD_STATE_RUNNABLE);   //we hold the queue lock (above)
 			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP\n", qSleep->threadID);
 		}
 		qSleep = nextSleeper;

@@ -62,6 +62,49 @@ extern bool kSMPInitDone;
 
 #define VERIFY_QUEUE(q) if (q<0 || (q>THREAD_STATE_ISLEEP && q!=THREAD_STATE_ZOMBIE)) panic("VERIFY_QUEUE: Invalid state %u\n", q)
 
+// ── Queue-lock discipline (the BSPSCHED fan-out made this load-bearing) ─────
+//
+// kSchedulerSwitchTasksLock protects the scheduler's doubly-linked queues
+// (qRunning/qRunnable/qISleep/...) and the kTaskList spine. Two kinds of
+// customer take it:
+//
+//   1. The scheduler's own entry path (scheduler_do, processSignals): raw
+//      test-and-set with IF *enabled* — safe because mp_inScheduler[] already
+//      guarantees this core cannot re-enter the scheduler on top of itself,
+//      and no other ISR touches these queues.
+//
+//   2. EVERYONE ELSE — thread-context wake/spawn paths (pipe wakes, task
+//      spawn, exit-wakes-parent). These MUST hold the lock with IF disabled
+//      (spinlock.h doctrine): a tick landing on a core that holds this lock
+//      in thread context would enter scheduler_do, spin on its own lock, and
+//      self-deadlock. For years these paths ran unlocked and got away with it
+//      because every unpinned thread lived on the BSP, where IF-masked
+//      syscalls made queue mutations same-core-exclusive by accident. The
+//      fan-out (b4ee823) put user threads on APs, turning that accident into
+//      a genuine cross-core race: a pipe wake on an AP relinking the same
+//      list the BSP's tick pass was walking corrupted the chain and wedged
+//      VBox solid (BSP looping in a torn list WHILE holding the lock — every
+//      core piles up behind it, only raw IRQ echo survives).
+//
+// scheduler_queues_lock/unlock are the type-2 idiom. Anything already inside
+// the lock calls the *_locked variants below; the public names lock for you.
+static inline uint64_t scheduler_queues_lock(void)
+{
+	uint64_t flags;
+	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+	__asm__ volatile("cli" ::: "memory");
+	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1))
+		__builtin_ia32_pause();
+	return flags;
+}
+
+static inline void scheduler_queues_unlock(uint64_t flags)
+{
+	__sync_lock_release(&kSchedulerSwitchTasksLock);
+	if (flags & 0x200)  // restore IF only if the caller had interrupts enabled
+		__asm__ volatile("sti" ::: "memory");
+}
+
 const char* THREAD_STATE_NAMES[] = {"None","Running","Runnable","Stopped","Uninterruptable Sleep","Interruptable Sleep","Exited","Zombie"};
 
 // NOTE: there was a scheduler_invoke_vector() here that entered the scheduler
@@ -395,15 +438,22 @@ void scheduler_reap_zombie_thread(thread_t *thread)
         return;
     }
 
-    while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
+    // Thread-context caller (waitpid) — IF must be off while holding the
+    // queue lock or a tick on this core self-deadlocks in scheduler_do.
+    uint64_t flags = scheduler_queues_lock();
     if (thread->threadState == THREAD_STATE_ZOMBIE) {
         scheduler_remove_thread_from_queue(THREAD_STATE_ZOMBIE, thread);
         thread->threadState = THREAD_STATE_NONE;
     }
-    __sync_lock_release(&kSchedulerSwitchTasksLock);
+    scheduler_queues_unlock(flags);
 }
 
-void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
+// The relink itself. Caller MUST hold kSchedulerSwitchTasksLock (scheduler_do,
+// processSignals, console_wake_if_ready, and the locking wrapper below are the
+// customers). The nudge at the bottom fires an IPI while the lock is held —
+// that's fine, send_ipi never waits; the woken AP just spins briefly on this
+// same lock before its pass proceeds.
+void scheduler_change_thread_queue_locked(thread_t* thread, eThreadState newState)
 {
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\tchangeThreadQueue: Changing thread state for 0x%04x from %s to %s\n",
             thread->threadID,
@@ -427,27 +477,77 @@ void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
 	        thread->lastRunStartTicks=kTicksSinceStart;
 }
 
+// Public entry: takes the queue lock (IF off — see the doctrine block up top)
+// around the relink. This is the one every thread-context caller uses: pipe
+// wakes, boot-time submissions, anything not already inside the scheduler.
+void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
+{
+	uint64_t flags = scheduler_queues_lock();
+	scheduler_change_thread_queue_locked(thread, newState);
+	scheduler_queues_unlock(flags);
+}
+
+// Wake a thread parked in ISLEEP — the pipe/console blocking-loop wake. Only
+// a thread that has ACTUALLY parked can be woken here; one still RUNNING has
+// not finished registering as a waiter — the caller's level-triggered sweep
+// catches it next pass (pipe.c documents that contract). The ISLEEP check,
+// the SIGSLEEP cancel, and the relink must be one atomic act under the queue
+// lock: without it, a wake running in the WAKER's thread context (possibly
+// on an AP since the fan-out) races processSignals' tick-driven walk of the
+// very same queue on the BSP.
+//
+// _locked variant: for callers already inside the lock (processSignals'
+// level-triggered pipe sweep). Public variant: thread-context fast paths
+// (pipe_read/pipe_write direct wakes).
+void scheduler_wake_isleep_thread_locked(thread_t *w)
+{
+	if (w == NULL || w->threadState != THREAD_STATE_ISLEEP)
+		return;
+
+	w->signals.sigind &= ~SIGSLEEP;      // cancel the backstop sleep
+	w->signals.sigdata[SIGSLEEP] = 0;
+	scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
+}
+
+void scheduler_wake_isleep_thread(thread_t *w)
+{
+	if (w == NULL)
+		return;
+
+	uint64_t flags = scheduler_queues_lock();
+	scheduler_wake_isleep_thread_locked(w);
+	scheduler_queues_unlock(flags);
+}
+
 void scheduler_submit_new_task(task_t *newTask)
 {
+	if (newTask->threads==NULL)
+		panic("scheduler_submit_new_task: Task does not have a thread assigned\n");
+
+	// Fully initialize the new node BEFORE it becomes reachable: lockless
+	// walkers (procfs) follow ->next with no protection, so publishing the
+	// node first and setting its links after hands them a torn read.
+	newTask->next=NO_TASK;
+	newTask->prev=NO_TASK;
+
+	// The kTaskList walk-and-append and the queue insert ride under the queue
+	// lock: spawn runs in the PARENT's thread context, which since the
+	// fan-out can be an AP racing the BSP's tick pass ("hog 1000 &" from a
+	// recruited husk was one of the wedges).
+	uint64_t flags = scheduler_queues_lock();
 	task_t* slot=scheduler_find_open_next_task_slot();
 	if (slot==NO_TASK)
 	{
-		slot = newTask;
 		kTaskList = newTask;
-		slot->next=NO_TASK;
-		newTask->prev=NO_TASK;
 	}
 	else
 	{
 		slot->next=newTask;
 		newTask->prev=slot;
-		newTask->next=NO_TASK;
 	}
 
-	if (newTask->threads==NULL)
-		panic("scheduler_submit_new_task: Task does not have a thread assigned\n");
-
-	scheduler_change_thread_queue(newTask->threads, THREAD_STATE_RUNNABLE);
+	scheduler_change_thread_queue_locked(newTask->threads, THREAD_STATE_RUNNABLE);
+	scheduler_queues_unlock(flags);
 }
 
 thread_t* scheduler_get_running_thread(uint64_t threadID)
@@ -655,10 +755,17 @@ void scheduler_remove_from_queue(thread_t *queue, thread_t* thread, bool panicOn
 void scheduler_wake_isleep_task(task_t *task) {
     if (task == NULL || task->threads == NULL) return; // Ensure task is valid
 
+    // Check-and-relink atomically (this runs in thread context — task_exit
+    // waking a parent — which the fan-out can place on any core). The
+    // trigger stays OUTSIDE the lock: it hlt-waits for a scheduler pass that
+    // needs this very lock, so triggering while holding it is a guaranteed
+    // self-deadlock.
+    uint64_t flags = scheduler_queues_lock();
     if (task->threads->threadState == THREAD_STATE_ISLEEP) {
-        scheduler_change_thread_queue(task->threads, THREAD_STATE_RUNNABLE);
+        scheduler_change_thread_queue_locked(task->threads, THREAD_STATE_RUNNABLE);
     }
     task->threads->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
+    scheduler_queues_unlock(flags);
     scheduler_trigger(NULL);
 }
 
@@ -740,7 +847,15 @@ void scheduler_trigger(core_local_storage_t *cls)
     // is later rescheduled it resumes here, the flag is already cleared,
     // and the loop exits without blocking.
     __asm__ volatile("sti");
-    while (mp_waitingForScheduler[cls->apic_id])
+    // Re-fetch CLS on EVERY check, not just after the loop: the scheduler
+    // pass this triggers switches us out, and since the fan-out we may be
+    // rescheduled on a DIFFERENT core. A stale cls here meant a migrated
+    // thread hlt-waited on its OLD core's flag — which can legitimately be
+    // set (that core mid-trigger for its own tenant), stranding us in hlt on
+    // a core whose timer may be masked (BSPSCHED). The core that resumed us
+    // cleared its own flag at scheduler_do entry, so the fresh read exits
+    // immediately.
+    while (mp_waitingForScheduler[get_core_local_storage()->apic_id])
         __asm__ volatile("hlt");
     cls = get_core_local_storage();
 }
@@ -837,7 +952,7 @@ void scheduler_run_new_thread()
 		else
             threadToStopNewQueue=THREAD_STATE_RUNNABLE;
         scheduler_store_thread(cls, threadToStop);              //we're taking it off the cpu so save the registers
-        scheduler_change_thread_queue(threadToStop, threadToStopNewQueue);
+        scheduler_change_thread_queue_locked(threadToStop, threadToStopNewQueue);   //scheduler_do holds the queue lock
 	}
 	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*Finding thread to run\n");
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
@@ -858,12 +973,12 @@ void scheduler_run_new_thread()
 			scheduler_load_thread(cls, threadToStop);
             threadToStop->execDontSaveRegisters = false;
         }
-        scheduler_change_thread_queue(threadToStop,THREAD_STATE_RUNNING);   //switch it back to the running queue
+        scheduler_change_thread_queue_locked(threadToStop,THREAD_STATE_RUNNING);   //switch it back to the running queue (queue lock held)
     }
 	else
 	{
         printd(DEBUG_SCHEDULER,"*Found thread to move to CPU (%x - %s)\n",threadToRun->threadID, taskToRun->exename);
-        scheduler_change_thread_queue(threadToRun, THREAD_STATE_RUNNING);
+        scheduler_change_thread_queue_locked(threadToRun, THREAD_STATE_RUNNING);    //queue lock held by scheduler_do
         scheduler_load_thread(cls, threadToRun);
         // The switch path: load just synced regs -> isr arrays, so the
         // redirect (if owed) patches both images consistently.
@@ -960,7 +1075,7 @@ void scheduler_do()
 #if SCHEDULER_DEBUG == 1
     uint64_t ticksBefore = rdtsc();
 #endif
-	//Lock the section of code from the time we start looking for another thread to run, until we're done 
+	//Lock the section of code from the time we start looking for another thread to run, until we're done
 	//either switching threads, or have identified that there's no new thread to run
 	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, true);
