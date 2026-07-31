@@ -88,13 +88,40 @@ extern bool kSMPInitDone;
 //
 // scheduler_queues_lock/unlock are the type-2 idiom. Anything already inside
 // the lock calls the *_locked variants below; the public names lock for you.
+
+// ── TEMP DIAG (VBox slow-motion hunt, 2026-07-30) ───────────────────────
+// Once a second the BSP's pass prints these to serial (DEBUG_BOOT). The
+// question they answer: WHERE do the cycles go when VBox drops into slow
+// motion — tick starvation (ticks vs TSC-ms disagree), an IPI storm
+// (nudge/trigger/send counts), lock convoy (max spin), or settle timeouts
+// (smp_core.c's counters)? Racy unlocked updates — fine for diagnosis.
+// REMOVE when the hunt closes.
+volatile uint64_t kDiagNudgeUnpinned = 0;
+volatile uint64_t kDiagNudgePinned = 0;
+volatile uint64_t kDiagTriggerCalls = 0;
+volatile uint64_t kDiagLockMaxSpins = 0;
+volatile uint64_t kDiagPassCount[MAX_CPUS] = {0};
+volatile uint64_t kDiagRunnableLen = 0;
+extern volatile uint64_t kDiagIPISends, kDiagICRMaxSpins, kDiagSettleBroadcasts,
+	kDiagSettleTimeouts, kDiagSettleMaxSpins, kDiagSettleLastLateAPIC;
+extern volatile uint32_t kDiagLastVector[MAX_CPUS], kDiagLVT[MAX_CPUS];
+extern uint32_t apic_in_service_vector(void);
+extern uint32_t read_apic_register(uintptr_t reg);
+extern volatile uintptr_t kMPApicBase;
+
 static inline uint64_t scheduler_queues_lock(void)
 {
 	uint64_t flags;
 	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
 	__asm__ volatile("cli" ::: "memory");
+	uint64_t spins = 0;                                // TEMP DIAG
 	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1))
+	{
+		spins++;                                       // TEMP DIAG
 		__builtin_ia32_pause();
+	}
+	if (spins > kDiagLockMaxSpins)                     // TEMP DIAG
+		kDiagLockMaxSpins = spins;                     // TEMP DIAG
 	return flags;
 }
 
@@ -143,6 +170,7 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 			"scheduler_nudge_parked_aps: nudging APIC %lu for pinned thread 0x%08x (task %s)\n",
 			thread->mp_apic, thread->threadID,
 			((task_t*)thread->ownerTask)->exename);
+		kDiagNudgePinned++;                             // TEMP DIAG
 		send_ipi(thread->mp_apic, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		return;
 	}
@@ -194,6 +222,7 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 			"scheduler_nudge_parked_aps: recruiting idle APIC %u for thread 0x%08x (task %s)\n",
 			apic_id, thread->threadID,
 			((task_t*)thread->ownerTask)->exename);
+		kDiagNudgeUnpinned++;                           // TEMP DIAG
 		send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		return;
 	}
@@ -814,6 +843,7 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
         queEntryNum++;
         queue=queue->next;
     }
+	kDiagRunnableLen = queEntryNum;                    // TEMP DIAG
 
 	if (threadToRun == NO_THREAD && !justBrowsing)
 		panic("scheduler_find_thread_to_run: No runnable threads found\n");
@@ -834,6 +864,7 @@ void scheduler_trigger(core_local_storage_t *cls)
         return;
     }
 //    printd(DEBUG_SCHEDULER,"scheduler_trigger: triggering scheduler\n");
+    kDiagTriggerCalls++;                                // TEMP DIAG
     mp_waitingForScheduler[cls->apic_id] = true;
     mp_schedulerEnabled[cls->apic_id] = true;
 
@@ -1075,9 +1106,71 @@ void scheduler_do()
 #if SCHEDULER_DEBUG == 1
     uint64_t ticksBefore = rdtsc();
 #endif
+	kDiagPassCount[apic_id]++;                          // TEMP DIAG
+	// TEMP DIAG: name the interrupt that drove THIS pass, and this core's
+	// LVT timer state, from this core's own LAPIC (core-local, safe here).
+	kDiagLastVector[apic_id] = apic_in_service_vector();
+	kDiagLVT[apic_id] = read_apic_register(kMPApicBase + 0x320);
+
+	// ── TEMP DIAG: the once-per-second report, BSP pass only ────────────
+	// ticks vs TSC-milliseconds answers "is the tick clock starving?";
+	// the rest answers "who is spending the time?". Values are deltas
+	// since the previous line except the max* fields, which reset here.
+	if (apic_id == 0)
+	{
+		static uint64_t diagLastTick = 0, diagLastTSC = 0;
+		static uint64_t dNudgeU = 0, dNudgeP = 0, dTrig = 0, dIPI = 0, dBcast = 0, dTO = 0;
+		static uint64_t dPass[4] = {0};
+		if (diagLastTSC == 0) { diagLastTick = kTicksSinceStart; diagLastTSC = acctPassStart; }
+		if (kTicksSinceStart - diagLastTick >= TICKS_PER_SECOND)
+		{
+			uint64_t tscMS = ((acctPassStart - diagLastTSC) * 1000UL) / kCPUCyclesPerSecond;
+			printd(DEBUG_BOOT,
+				"DIAG: ticks +%lu tsc +%lums | pass 0:%lu 1:%lu 2:%lu 3:%lu runq %lu | nudge u%lu p%lu trig %lu | ipi %lu icrmax %lu lockmax %lu | settle %lu to %lu (ap %lu) setmax %lu\n",
+				kTicksSinceStart - diagLastTick, tscMS,
+				kDiagPassCount[0] - dPass[0],
+				(kMPCoreCount > 1) ? kDiagPassCount[kCPUInfo[1].apicID] - dPass[1] : 0,
+				(kMPCoreCount > 2) ? kDiagPassCount[kCPUInfo[2].apicID] - dPass[2] : 0,
+				(kMPCoreCount > 3) ? kDiagPassCount[kCPUInfo[3].apicID] - dPass[3] : 0,
+				kDiagRunnableLen,
+				kDiagNudgeUnpinned - dNudgeU, kDiagNudgePinned - dNudgeP,
+				kDiagTriggerCalls - dTrig,
+				kDiagIPISends - dIPI, kDiagICRMaxSpins, kDiagLockMaxSpins,
+				kDiagSettleBroadcasts - dBcast, kDiagSettleTimeouts - dTO,
+				kDiagSettleLastLateAPIC, kDiagSettleMaxSpins);
+			printd(DEBUG_BOOT,
+				"DIAG2: vec/lvt 0:0x%02x/0x%05x 1:0x%02x/0x%05x 2:0x%02x/0x%05x 3:0x%02x/0x%05x\n",
+				kDiagLastVector[0], kDiagLVT[0],
+				(kMPCoreCount > 1) ? kDiagLastVector[kCPUInfo[1].apicID] : 0,
+				(kMPCoreCount > 1) ? kDiagLVT[kCPUInfo[1].apicID] : 0,
+				(kMPCoreCount > 2) ? kDiagLastVector[kCPUInfo[2].apicID] : 0,
+				(kMPCoreCount > 2) ? kDiagLVT[kCPUInfo[2].apicID] : 0,
+				(kMPCoreCount > 3) ? kDiagLastVector[kCPUInfo[3].apicID] : 0,
+				(kMPCoreCount > 3) ? kDiagLVT[kCPUInfo[3].apicID] : 0);
+			diagLastTick = kTicksSinceStart; diagLastTSC = acctPassStart;
+			dNudgeU = kDiagNudgeUnpinned; dNudgeP = kDiagNudgePinned;
+			dTrig = kDiagTriggerCalls; dIPI = kDiagIPISends;
+			dBcast = kDiagSettleBroadcasts; dTO = kDiagSettleTimeouts;
+			dPass[0] = kDiagPassCount[0];
+			if (kMPCoreCount > 1) dPass[1] = kDiagPassCount[kCPUInfo[1].apicID];
+			if (kMPCoreCount > 2) dPass[2] = kDiagPassCount[kCPUInfo[2].apicID];
+			if (kMPCoreCount > 3) dPass[3] = kDiagPassCount[kCPUInfo[3].apicID];
+			kDiagICRMaxSpins = 0; kDiagLockMaxSpins = 0; kDiagSettleMaxSpins = 0;
+		}
+	}
+
 	//Lock the section of code from the time we start looking for another thread to run, until we're done
 	//either switching threads, or have identified that there's no new thread to run
-	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
+	{
+		uint64_t lockSpins = 0;                        // TEMP DIAG
+		while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1))
+		{
+			lockSpins++;                               // TEMP DIAG
+			__builtin_ia32_pause();
+		}
+		if (lockSpins > kDiagLockMaxSpins)             // TEMP DIAG
+			kDiagLockMaxSpins = lockSpins;             // TEMP DIAG
+	}
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, true);
   	if (threadToRun != NO_THREAD && threadToRun->threadID!=cls->threadID)
     {

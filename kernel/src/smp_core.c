@@ -30,6 +30,44 @@ extern uint64_t kMPLVTTimer;
 extern bool kBspSchedulerMode;
 bool kCLSInitialized = false;
 bool kSMPInitDone = false;
+
+// ── TEMP DIAG (VBox slow-motion hunt, 2026-07-30) ───────────────────────
+// Counters the scheduler's once-per-second DIAG line reports. Everything
+// here prices the IPI economy: raw sends, the worst ICR delivery-status
+// wait (a descheduled vCPU can leave the busy bit set for MILLISECONDS on
+// a real hypervisor — invisible on TCG), and settle broadcasts with their
+// per-core ack timeouts. Racy unlocked increments — diagnostic tolerance.
+// REMOVE when the hunt closes.
+volatile uint64_t kDiagIPISends = 0;
+volatile uint64_t kDiagICRMaxSpins = 0;
+volatile uint64_t kDiagSettleBroadcasts = 0;
+volatile uint64_t kDiagSettleTimeouts = 0;
+volatile uint64_t kDiagSettleMaxSpins = 0;
+volatile uint64_t kDiagSettleLastLateAPIC = 0;
+// Sampled by every scheduler pass ON ITS OWN CORE (LAPIC is core-local):
+// which vector is actually in service (names the interrupt that drove the
+// pass — timer 0x7E vs manual 0x81 vs something unexpected), and the LVT
+// timer register (is the mask bit REALLY set on this implementation?).
+volatile uint32_t kDiagLastVector[MAX_CPUS] = {0};
+volatile uint32_t kDiagLVT[MAX_CPUS] = {0};
+
+// TEMP DIAG: highest vector currently in service on THIS core's LAPIC.
+// The ISR block is 8 dwords at 0x100..0x170, bit N of dword R = vector
+// R*32+N; the highest set bit is the interrupt being serviced right now.
+uint32_t apic_in_service_vector(void)
+{
+    for (int reg = 7; reg >= 0; reg--)
+    {
+        uint32_t v = read_apic_register(kMPApicBase + 0x100 + reg * 0x10);
+        if (v)
+        {
+            for (int b = 31; b >= 0; b--)
+                if (v & (1U << b))
+                    return (uint32_t)(reg * 32 + b);
+        }
+    }
+    return 0;
+}
 uintptr_t stackVirtualAddress, stackPhysicalAddress;
 uintptr_t kMPEOIOffset = 0;
 uint8_t tempStack[1024];
@@ -95,6 +133,9 @@ void send_ipi(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uint32_
             panic("send_ipi: ICR delivery-status stuck busy — AP%u sending vector 0x%02x to AP%u never completed", sender_apic_id, vector, apic_id);
         __builtin_ia32_pause();
     }
+    kDiagIPISends++;                                   // TEMP DIAG
+    if (icr_wait_spins > kDiagICRMaxSpins)             // TEMP DIAG
+        kDiagICRMaxSpins = icr_wait_spins;             // TEMP DIAG
 
     // Write to the high pa Canrt of the ICR (destination field)
     *((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;
@@ -518,6 +559,7 @@ void mpDisableAP(int apic_id)
 volatile bool mp_acctSettleAck[MAX_CPUS];
 extern volatile uint64_t kTicksSinceStart;
 
+
 // The core-local settle: charge the running thread up to "now", restamp.
 // Called from the IPI handler (interrupts off) and inline for the local
 // core (under cli) — in both cases it cannot interleave with this core's
@@ -564,6 +606,7 @@ void mpAcctSettleAll(void)
     if (!kSMPInitDone)
         return;
 
+    kDiagSettleBroadcasts++;                            // TEMP DIAG
     uint32_t self = get_core_local_storage()->apic_id;
     for (int i = 0; i < kMPCoreCount; i++)
     {
@@ -585,6 +628,13 @@ void mpAcctSettleAll(void)
         uint64_t spins = 0;
         while (!mp_acctSettleAck[apic_id] && ++spins < 2000000UL)
             __builtin_ia32_pause();
+        if (spins > kDiagSettleMaxSpins)                // TEMP DIAG
+            kDiagSettleMaxSpins = spins;                // TEMP DIAG
+        if (!mp_acctSettleAck[apic_id])                 // TEMP DIAG: bound hit
+        {
+            kDiagSettleTimeouts++;                      // TEMP DIAG
+            kDiagSettleLastLateAPIC = apic_id;          // TEMP DIAG
+        }
     }
 }
 
