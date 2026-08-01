@@ -67,3 +67,18 @@ int64_t os64_ticks(os64_ticks_t *out)
 {
     return (long)os64_syscall1(SYSCALL_TICKS, (uint64_t)out);
 }
+
+int64_t os64_setenv(const char *key, const char *value)
+{
+    // NULL value would mean "unset" at the syscall — os64_unsetenv is the
+    // honest spelling for that, so keep this one meaning exactly "set".
+    if (value == NULL)
+        return -1;
+    return (int64_t)os64_syscall2(SYSCALL_SETENV, (uint64_t)key,
+                                  (uint64_t)value);
+}
+
+int64_t os64_unsetenv(const char *key)
+{
+    return (int64_t)os64_syscall2(SYSCALL_SETENV, (uint64_t)key, 0);
+}

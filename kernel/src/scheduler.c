@@ -62,6 +62,76 @@ extern bool kSMPInitDone;
 
 #define VERIFY_QUEUE(q) if (q<0 || (q>THREAD_STATE_ISLEEP && q!=THREAD_STATE_ZOMBIE)) panic("VERIFY_QUEUE: Invalid state %u\n", q)
 
+// ── Queue-lock discipline (the BSPSCHED fan-out made this load-bearing) ─────
+//
+// kSchedulerSwitchTasksLock protects the scheduler's doubly-linked queues
+// (qRunning/qRunnable/qISleep/...) and the kTaskList spine. Two kinds of
+// customer take it:
+//
+//   1. The scheduler's own entry path (scheduler_do, processSignals): raw
+//      test-and-set with IF *enabled* — safe because mp_inScheduler[] already
+//      guarantees this core cannot re-enter the scheduler on top of itself,
+//      and no other ISR touches these queues.
+//
+//   2. EVERYONE ELSE — thread-context wake/spawn paths (pipe wakes, task
+//      spawn, exit-wakes-parent). These MUST hold the lock with IF disabled
+//      (spinlock.h doctrine): a tick landing on a core that holds this lock
+//      in thread context would enter scheduler_do, spin on its own lock, and
+//      self-deadlock. For years these paths ran unlocked and got away with it
+//      because every unpinned thread lived on the BSP, where IF-masked
+//      syscalls made queue mutations same-core-exclusive by accident. The
+//      fan-out (b4ee823) put user threads on APs, turning that accident into
+//      a genuine cross-core race: a pipe wake on an AP relinking the same
+//      list the BSP's tick pass was walking corrupted the chain and wedged
+//      VBox solid (BSP looping in a torn list WHILE holding the lock — every
+//      core piles up behind it, only raw IRQ echo survives).
+//
+// scheduler_queues_lock/unlock are the type-2 idiom. Anything already inside
+// the lock calls the *_locked variants below; the public names lock for you.
+
+// ── TEMP DIAG (VBox slow-motion hunt, 2026-07-30) ───────────────────────
+// Once a second the BSP's pass prints these to serial (DEBUG_BOOT). The
+// question they answer: WHERE do the cycles go when VBox drops into slow
+// motion — tick starvation (ticks vs TSC-ms disagree), an IPI storm
+// (nudge/trigger/send counts), lock convoy (max spin), or settle timeouts
+// (smp_core.c's counters)? Racy unlocked updates — fine for diagnosis.
+// REMOVE when the hunt closes.
+volatile uint64_t kDiagNudgeUnpinned = 0;
+volatile uint64_t kDiagNudgePinned = 0;
+volatile uint64_t kDiagTriggerCalls = 0;
+volatile uint64_t kDiagLockMaxSpins = 0;
+volatile uint64_t kDiagPassCount[MAX_CPUS] = {0};
+volatile uint64_t kDiagRunnableLen = 0;
+extern volatile uint64_t kDiagIPISends, kDiagICRMaxSpins, kDiagSettleBroadcasts,
+	kDiagSettleTimeouts, kDiagSettleMaxSpins, kDiagSettleLastLateAPIC;
+extern volatile uint32_t kDiagLastVector[MAX_CPUS], kDiagLVT[MAX_CPUS];
+extern uint32_t apic_in_service_vector(void);
+extern uint32_t read_apic_register(uintptr_t reg);
+extern volatile uintptr_t kMPApicBase;
+
+static inline uint64_t scheduler_queues_lock(void)
+{
+	uint64_t flags;
+	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+	__asm__ volatile("cli" ::: "memory");
+	uint64_t spins = 0;                                // TEMP DIAG
+	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1))
+	{
+		spins++;                                       // TEMP DIAG
+		__builtin_ia32_pause();
+	}
+	if (spins > kDiagLockMaxSpins)                     // TEMP DIAG
+		kDiagLockMaxSpins = spins;                     // TEMP DIAG
+	return flags;
+}
+
+static inline void scheduler_queues_unlock(uint64_t flags)
+{
+	__sync_lock_release(&kSchedulerSwitchTasksLock);
+	if (flags & 0x200)  // restore IF only if the caller had interrupts enabled
+		__asm__ volatile("sti" ::: "memory");
+}
+
 const char* THREAD_STATE_NAMES[] = {"None","Running","Runnable","Stopped","Uninterruptable Sleep","Interruptable Sleep","Exited","Zombie"};
 
 // NOTE: there was a scheduler_invoke_vector() here that entered the scheduler
@@ -86,29 +156,77 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 		return;
 	}
 
-	// In BSP scheduler mode, generic work stays on the BSP.
-	// Only explicitly AP-targeted threads should wake a parked AP.
-	if (thread->mp_apic == THREAD_NO_AFFINITY || thread->mp_apic == BOOTSTRAP_PROCESSOR_ID) {
-		return;
-	}
-
 	core_local_storage_t *cls = get_core_local_storage();
 	uint64_t current_apic_id = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
-	uint32_t target_apic_id = thread->mp_apic;
-	if (target_apic_id == BOOTSTRAP_PROCESSOR_ID || target_apic_id == current_apic_id) {
+
+	// PINNED work nudges its designated core, as it always has.
+	if (thread->mp_apic != THREAD_NO_AFFINITY) {
+		if (thread->mp_apic == BOOTSTRAP_PROCESSOR_ID ||
+		    thread->mp_apic == current_apic_id ||
+		    mp_inScheduler[thread->mp_apic]) {
+			return;
+		}
+		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
+			"scheduler_nudge_parked_aps: nudging APIC %lu for pinned thread 0x%08x (task %s)\n",
+			thread->mp_apic, thread->threadID,
+			((task_t*)thread->ownerTask)->exename);
+		kDiagNudgePinned++;                             // TEMP DIAG
+		send_ipi(thread->mp_apic, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		return;
 	}
 
-	if (mp_inScheduler[target_apic_id]) {
+	// UNPINNED work recruits an idle core. This used to read "in BSP
+	// scheduler mode, generic work stays on the BSP" — a conservative rule
+	// from the nudge slice that quietly turned a 12-core P5 into a 2-core
+	// machine: three hogs left ten cores asleep while two of them split
+	// the BSP (Chris caught it on the way to bed, 2026-07-30). A runnable
+	// thread with nowhere pinned deserves the first idle core that can
+	// take it; the nudged core's own scheduler pass pulls from qRunnable,
+	// so this hands out a WAKE-UP, not a thread — the queue stays the one
+	// source of truth. One core per nudge (no thundering herd): each new
+	// runnable recruits at most one sleeper, which is exactly the arrival
+	// rate that created the demand.
+	//
+	// Cross-core reads here are safe: CLS and thread structs live in the
+	// shared upper half, and a stale read costs one wasted (or missed)
+	// nudge, self-healed by the next scheduler pass. KNOWN LIMIT, not new
+	// tonight: BSPSCHED APs don't preempt, so a compute-bound tenant owns
+	// its core until it blocks or dies (kworker read 0% while a hog held
+	// its core — pre-existing nudge-only semantics; AP fairness is its own
+	// future slice).
+	for (int i = 0; i < kMPCoreCount; i++)
+	{
+		uint32_t apic_id = kCPUInfo[i].apicID;
+		if (apic_id == BOOTSTRAP_PROCESSOR_ID || apic_id == current_apic_id)
+			continue;
+		// NOT gated on mp_schedulerEnabled, deliberately: under BSPSCHED the
+		// enable ISR leaves AP timers masked and never sets that flag, so
+		// requiring it excluded every core BSPSCHED itself parked — the
+		// first fan-out test recruited exactly ONE core (kworker's, enabled
+		// by its pin) and left the rest asleep. _schedule_ap gates only on
+		// re-entry (mp_inScheduler), so a manual nudge is safe for a core
+		// that has never been "enabled": its pass handles the never-ran
+		// case explicitly. kSMPInitDone (checked above) is the real
+		// readiness gate.
+		if (mp_inScheduler[apic_id])
+			continue;
+
+		core_local_storage_t *target = get_core_local_storage_for_core(apic_id);
+		if (target == NULL || target->currentThread == NULL ||
+		    target->currentThread == NO_THREAD)
+			continue;
+		if (!target->currentThread->idleThread)
+			continue;   // busy core — an idle one may still be ahead
+
+		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
+			"scheduler_nudge_parked_aps: recruiting idle APIC %u for thread 0x%08x (task %s)\n",
+			apic_id, thread->threadID,
+			((task_t*)thread->ownerTask)->exename);
+		kDiagNudgeUnpinned++;                           // TEMP DIAG
+		send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		return;
 	}
-
-	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
-		"scheduler_nudge_parked_aps: nudging APIC %u for thread 0x%08x (task %s)\n",
-		target_apic_id,
-		thread->threadID,
-		((task_t*)thread->ownerTask)->exename);
-	send_ipi(target_apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+	// No idle core: the busy ones and the BSP pick it up on their own passes.
 }
 
 void scheduler_enable()
@@ -349,15 +467,22 @@ void scheduler_reap_zombie_thread(thread_t *thread)
         return;
     }
 
-    while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
+    // Thread-context caller (waitpid) — IF must be off while holding the
+    // queue lock or a tick on this core self-deadlocks in scheduler_do.
+    uint64_t flags = scheduler_queues_lock();
     if (thread->threadState == THREAD_STATE_ZOMBIE) {
         scheduler_remove_thread_from_queue(THREAD_STATE_ZOMBIE, thread);
         thread->threadState = THREAD_STATE_NONE;
     }
-    __sync_lock_release(&kSchedulerSwitchTasksLock);
+    scheduler_queues_unlock(flags);
 }
 
-void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
+// The relink itself. Caller MUST hold kSchedulerSwitchTasksLock (scheduler_do,
+// processSignals, console_wake_if_ready, and the locking wrapper below are the
+// customers). The nudge at the bottom fires an IPI while the lock is held —
+// that's fine, send_ipi never waits; the woken AP just spins briefly on this
+// same lock before its pass proceeds.
+void scheduler_change_thread_queue_locked(thread_t* thread, eThreadState newState)
 {
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\tchangeThreadQueue: Changing thread state for 0x%04x from %s to %s\n",
             thread->threadID,
@@ -381,27 +506,77 @@ void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
 	        thread->lastRunStartTicks=kTicksSinceStart;
 }
 
+// Public entry: takes the queue lock (IF off — see the doctrine block up top)
+// around the relink. This is the one every thread-context caller uses: pipe
+// wakes, boot-time submissions, anything not already inside the scheduler.
+void scheduler_change_thread_queue(thread_t* thread, eThreadState newState)
+{
+	uint64_t flags = scheduler_queues_lock();
+	scheduler_change_thread_queue_locked(thread, newState);
+	scheduler_queues_unlock(flags);
+}
+
+// Wake a thread parked in ISLEEP — the pipe/console blocking-loop wake. Only
+// a thread that has ACTUALLY parked can be woken here; one still RUNNING has
+// not finished registering as a waiter — the caller's level-triggered sweep
+// catches it next pass (pipe.c documents that contract). The ISLEEP check,
+// the SIGSLEEP cancel, and the relink must be one atomic act under the queue
+// lock: without it, a wake running in the WAKER's thread context (possibly
+// on an AP since the fan-out) races processSignals' tick-driven walk of the
+// very same queue on the BSP.
+//
+// _locked variant: for callers already inside the lock (processSignals'
+// level-triggered pipe sweep). Public variant: thread-context fast paths
+// (pipe_read/pipe_write direct wakes).
+void scheduler_wake_isleep_thread_locked(thread_t *w)
+{
+	if (w == NULL || w->threadState != THREAD_STATE_ISLEEP)
+		return;
+
+	w->signals.sigind &= ~SIGSLEEP;      // cancel the backstop sleep
+	w->signals.sigdata[SIGSLEEP] = 0;
+	scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
+}
+
+void scheduler_wake_isleep_thread(thread_t *w)
+{
+	if (w == NULL)
+		return;
+
+	uint64_t flags = scheduler_queues_lock();
+	scheduler_wake_isleep_thread_locked(w);
+	scheduler_queues_unlock(flags);
+}
+
 void scheduler_submit_new_task(task_t *newTask)
 {
+	if (newTask->threads==NULL)
+		panic("scheduler_submit_new_task: Task does not have a thread assigned\n");
+
+	// Fully initialize the new node BEFORE it becomes reachable: lockless
+	// walkers (procfs) follow ->next with no protection, so publishing the
+	// node first and setting its links after hands them a torn read.
+	newTask->next=NO_TASK;
+	newTask->prev=NO_TASK;
+
+	// The kTaskList walk-and-append and the queue insert ride under the queue
+	// lock: spawn runs in the PARENT's thread context, which since the
+	// fan-out can be an AP racing the BSP's tick pass ("hog 1000 &" from a
+	// recruited husk was one of the wedges).
+	uint64_t flags = scheduler_queues_lock();
 	task_t* slot=scheduler_find_open_next_task_slot();
 	if (slot==NO_TASK)
 	{
-		slot = newTask;
 		kTaskList = newTask;
-		slot->next=NO_TASK;
-		newTask->prev=NO_TASK;
 	}
 	else
 	{
 		slot->next=newTask;
 		newTask->prev=slot;
-		newTask->next=NO_TASK;
 	}
 
-	if (newTask->threads==NULL)
-		panic("scheduler_submit_new_task: Task does not have a thread assigned\n");
-
-	scheduler_change_thread_queue(newTask->threads, THREAD_STATE_RUNNABLE);
+	scheduler_change_thread_queue_locked(newTask->threads, THREAD_STATE_RUNNABLE);
+	scheduler_queues_unlock(flags);
 }
 
 thread_t* scheduler_get_running_thread(uint64_t threadID)
@@ -499,6 +674,10 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
 
 void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
 {
+	// Dispatch history for /proc (thread.h has the doctrine): cls is the
+	// TARGET core's storage, so this is correct even when the BSP loads a
+	// thread onto another core under BSPSCHED.
+	thread->lastRunApicID = cls->apic_id;
 	//task_t* task = cls->currentThread->ownerTask;
 	//task_t* ownerTask = ((task_t*)cls->currentThread->ownerTask)->ownerTask;
 	uint64_t apic_id = cls->apic_id;
@@ -605,10 +784,17 @@ void scheduler_remove_from_queue(thread_t *queue, thread_t* thread, bool panicOn
 void scheduler_wake_isleep_task(task_t *task) {
     if (task == NULL || task->threads == NULL) return; // Ensure task is valid
 
+    // Check-and-relink atomically (this runs in thread context — task_exit
+    // waking a parent — which the fan-out can place on any core). The
+    // trigger stays OUTSIDE the lock: it hlt-waits for a scheduler pass that
+    // needs this very lock, so triggering while holding it is a guaranteed
+    // self-deadlock.
+    uint64_t flags = scheduler_queues_lock();
     if (task->threads->threadState == THREAD_STATE_ISLEEP) {
-        scheduler_change_thread_queue(task->threads, THREAD_STATE_RUNNABLE);
+        scheduler_change_thread_queue_locked(task->threads, THREAD_STATE_RUNNABLE);
     }
     task->threads->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
+    scheduler_queues_unlock(flags);
     scheduler_trigger(NULL);
 }
 
@@ -657,6 +843,7 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
         queEntryNum++;
         queue=queue->next;
     }
+	kDiagRunnableLen = queEntryNum;                    // TEMP DIAG
 
 	if (threadToRun == NO_THREAD && !justBrowsing)
 		panic("scheduler_find_thread_to_run: No runnable threads found\n");
@@ -677,6 +864,7 @@ void scheduler_trigger(core_local_storage_t *cls)
         return;
     }
 //    printd(DEBUG_SCHEDULER,"scheduler_trigger: triggering scheduler\n");
+    kDiagTriggerCalls++;                                // TEMP DIAG
     mp_waitingForScheduler[cls->apic_id] = true;
     mp_schedulerEnabled[cls->apic_id] = true;
 
@@ -690,7 +878,15 @@ void scheduler_trigger(core_local_storage_t *cls)
     // is later rescheduled it resumes here, the flag is already cleared,
     // and the loop exits without blocking.
     __asm__ volatile("sti");
-    while (mp_waitingForScheduler[cls->apic_id])
+    // Re-fetch CLS on EVERY check, not just after the loop: the scheduler
+    // pass this triggers switches us out, and since the fan-out we may be
+    // rescheduled on a DIFFERENT core. A stale cls here meant a migrated
+    // thread hlt-waited on its OLD core's flag — which can legitimately be
+    // set (that core mid-trigger for its own tenant), stranding us in hlt on
+    // a core whose timer may be masked (BSPSCHED). The core that resumed us
+    // cleared its own flag at scheduler_do entry, so the fresh read exits
+    // immediately.
+    while (mp_waitingForScheduler[get_core_local_storage()->apic_id])
         __asm__ volatile("hlt");
     cls = get_core_local_storage();
 }
@@ -787,7 +983,7 @@ void scheduler_run_new_thread()
 		else
             threadToStopNewQueue=THREAD_STATE_RUNNABLE;
         scheduler_store_thread(cls, threadToStop);              //we're taking it off the cpu so save the registers
-        scheduler_change_thread_queue(threadToStop, threadToStopNewQueue);
+        scheduler_change_thread_queue_locked(threadToStop, threadToStopNewQueue);   //scheduler_do holds the queue lock
 	}
 	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*Finding thread to run\n");
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
@@ -808,18 +1004,19 @@ void scheduler_run_new_thread()
 			scheduler_load_thread(cls, threadToStop);
             threadToStop->execDontSaveRegisters = false;
         }
-        scheduler_change_thread_queue(threadToStop,THREAD_STATE_RUNNING);   //switch it back to the running queue
+        scheduler_change_thread_queue_locked(threadToStop,THREAD_STATE_RUNNING);   //switch it back to the running queue (queue lock held)
     }
 	else
 	{
         printd(DEBUG_SCHEDULER,"*Found thread to move to CPU (%x - %s)\n",threadToRun->threadID, taskToRun->exename);
-        scheduler_change_thread_queue(threadToRun, THREAD_STATE_RUNNING);
+        scheduler_change_thread_queue_locked(threadToRun, THREAD_STATE_RUNNING);    //queue lock held by scheduler_do
         scheduler_load_thread(cls, threadToRun);
         // The switch path: load just synced regs -> isr arrays, so the
         // redirect (if owed) patches both images consistently.
         scheduler_sigint_forced_syscall(threadToRun, apic_id);
 		task_t *pTask = (task_t*)threadToRun->ownerTask;
-        if (!strnstr(pTask->exename, "/idle",10))
+        // exename is a bare basename ("idle0", "idle1", ...) — no leading slash.
+        if (strncmp(pTask->exename, "idle", 4) != 0)
         {
  /*           activeSTDIN = pTask->stdin;
             activeSTDIN->owner = pTask;
@@ -880,14 +1077,100 @@ void scheduler_do()
 	core_local_storage_t *cls = get_core_local_storage();
 	uint8_t apic_id = cls->apic_id;
     mp_waitingForScheduler[apic_id] = false;
+
+	// ── CPU-time accounting: the outgoing thread's slice ends HERE ──────────
+	// Charged at the switch boundary, not tick-sampled, so sub-tick slices
+	// are visible and nothing gets laundered into whoever the timer caught.
+	// Both rdtsc reads in every delta happen on THIS core (this function runs
+	// on the core being scheduled, even under BSPSCHED — the BSP only decides
+	// WHEN, the IPI makes each core run its own pass), so TSC desync between
+	// cores can never corrupt a delta. The ISR time between interrupt entry
+	// and this line rides on the outgoing thread — documented v1 honesty,
+	// fixable with entry stamps if it ever matters.
+	uint64_t acctPassStart = rdtsc();
+	if (cls->acctLastDispatchTSC != 0 &&
+	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
+		cls->currentThread->runCycles += acctPassStart - cls->acctLastDispatchTSC;
+	if (cls->acctZeroTSC == 0)
+		cls->acctZeroTSC = acctPassStart;   // this core's meter starts now
+
+	// The BSP's pass also tends the cycles→µs exchange rate (x86_64.c has
+	// the doctrine: boot calibration is ±1% by construction; this converges
+	// it). BSP only — the recalibrator's TSC samples must all come from one
+	// core, and core 0 exists in every configuration.
+	if (apic_id == 0)
+		tsc_recalibrate();
+
     printd(DEBUG_SCHEDULER,"****************************** SCHEDULER *******************************\n");
     printd(DEBUG_SCHEDULER,"scheduler: AP %u, current CR3 = 0x%08x\n",apic_id,getCR3());
 #if SCHEDULER_DEBUG == 1
     uint64_t ticksBefore = rdtsc();
 #endif
-	//Lock the section of code from the time we start looking for another thread to run, until we're done 
+	kDiagPassCount[apic_id]++;                          // TEMP DIAG
+	// TEMP DIAG: name the interrupt that drove THIS pass, and this core's
+	// LVT timer state, from this core's own LAPIC (core-local, safe here).
+	kDiagLastVector[apic_id] = apic_in_service_vector();
+	kDiagLVT[apic_id] = read_apic_register(kMPApicBase + 0x320);
+
+	// ── TEMP DIAG: the once-per-second report, BSP pass only ────────────
+	// ticks vs TSC-milliseconds answers "is the tick clock starving?";
+	// the rest answers "who is spending the time?". Values are deltas
+	// since the previous line except the max* fields, which reset here.
+	if (apic_id == 0)
+	{
+		static uint64_t diagLastTick = 0, diagLastTSC = 0;
+		static uint64_t dNudgeU = 0, dNudgeP = 0, dTrig = 0, dIPI = 0, dBcast = 0, dTO = 0;
+		static uint64_t dPass[4] = {0};
+		if (diagLastTSC == 0) { diagLastTick = kTicksSinceStart; diagLastTSC = acctPassStart; }
+		if (kTicksSinceStart - diagLastTick >= TICKS_PER_SECOND)
+		{
+			uint64_t tscMS = ((acctPassStart - diagLastTSC) * 1000UL) / kCPUCyclesPerSecond;
+			printd(DEBUG_BOOT,
+				"DIAG: ticks +%lu tsc +%lums | pass 0:%lu 1:%lu 2:%lu 3:%lu runq %lu | nudge u%lu p%lu trig %lu | ipi %lu icrmax %lu lockmax %lu | settle %lu to %lu (ap %lu) setmax %lu\n",
+				kTicksSinceStart - diagLastTick, tscMS,
+				kDiagPassCount[0] - dPass[0],
+				(kMPCoreCount > 1) ? kDiagPassCount[kCPUInfo[1].apicID] - dPass[1] : 0,
+				(kMPCoreCount > 2) ? kDiagPassCount[kCPUInfo[2].apicID] - dPass[2] : 0,
+				(kMPCoreCount > 3) ? kDiagPassCount[kCPUInfo[3].apicID] - dPass[3] : 0,
+				kDiagRunnableLen,
+				kDiagNudgeUnpinned - dNudgeU, kDiagNudgePinned - dNudgeP,
+				kDiagTriggerCalls - dTrig,
+				kDiagIPISends - dIPI, kDiagICRMaxSpins, kDiagLockMaxSpins,
+				kDiagSettleBroadcasts - dBcast, kDiagSettleTimeouts - dTO,
+				kDiagSettleLastLateAPIC, kDiagSettleMaxSpins);
+			printd(DEBUG_BOOT,
+				"DIAG2: vec/lvt 0:0x%02x/0x%05x 1:0x%02x/0x%05x 2:0x%02x/0x%05x 3:0x%02x/0x%05x\n",
+				kDiagLastVector[0], kDiagLVT[0],
+				(kMPCoreCount > 1) ? kDiagLastVector[kCPUInfo[1].apicID] : 0,
+				(kMPCoreCount > 1) ? kDiagLVT[kCPUInfo[1].apicID] : 0,
+				(kMPCoreCount > 2) ? kDiagLastVector[kCPUInfo[2].apicID] : 0,
+				(kMPCoreCount > 2) ? kDiagLVT[kCPUInfo[2].apicID] : 0,
+				(kMPCoreCount > 3) ? kDiagLastVector[kCPUInfo[3].apicID] : 0,
+				(kMPCoreCount > 3) ? kDiagLVT[kCPUInfo[3].apicID] : 0);
+			diagLastTick = kTicksSinceStart; diagLastTSC = acctPassStart;
+			dNudgeU = kDiagNudgeUnpinned; dNudgeP = kDiagNudgePinned;
+			dTrig = kDiagTriggerCalls; dIPI = kDiagIPISends;
+			dBcast = kDiagSettleBroadcasts; dTO = kDiagSettleTimeouts;
+			dPass[0] = kDiagPassCount[0];
+			if (kMPCoreCount > 1) dPass[1] = kDiagPassCount[kCPUInfo[1].apicID];
+			if (kMPCoreCount > 2) dPass[2] = kDiagPassCount[kCPUInfo[2].apicID];
+			if (kMPCoreCount > 3) dPass[3] = kDiagPassCount[kCPUInfo[3].apicID];
+			kDiagICRMaxSpins = 0; kDiagLockMaxSpins = 0; kDiagSettleMaxSpins = 0;
+		}
+	}
+
+	//Lock the section of code from the time we start looking for another thread to run, until we're done
 	//either switching threads, or have identified that there's no new thread to run
-	while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1)) __builtin_ia32_pause();
+	{
+		uint64_t lockSpins = 0;                        // TEMP DIAG
+		while (__sync_lock_test_and_set(&kSchedulerSwitchTasksLock, 1))
+		{
+			lockSpins++;                               // TEMP DIAG
+			__builtin_ia32_pause();
+		}
+		if (lockSpins > kDiagLockMaxSpins)             // TEMP DIAG
+			kDiagLockMaxSpins = lockSpins;             // TEMP DIAG
+	}
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, true);
   	if (threadToRun != NO_THREAD && threadToRun->threadID!=cls->threadID)
     {
@@ -914,4 +1197,14 @@ void scheduler_do()
 #endif
     printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s\n", ((task_t *)(cls->task))->path);
     printd(DEBUG_SCHEDULER,"**************************************************************************\n");
+
+	// ── CPU-time accounting: the incoming thread's slice starts HERE ────────
+	// Covers both paths (switch and shortcut — a continued thread is still
+	// dispatched). Everything between acctPassStart and now was the
+	// scheduler's own time: it goes to this core's system bucket, which is
+	// what lets top show ghost-churn as "system: climbing" instead of
+	// laundering it into the innocent bystanders the timer interrupted.
+	uint64_t acctPassEnd = rdtsc();
+	cls->acctSchedCycles += acctPassEnd - acctPassStart;
+	cls->acctLastDispatchTSC = acctPassEnd;
 }

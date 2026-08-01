@@ -18,6 +18,7 @@
 // they should have been instead.
 
 #include <stddef.h>
+#include <stdint.h>    // os64_atoi/atou return fixed-width ints
 #include <stdbool.h>   // os64_streq returns one; a header must include what it uses
 
 // Length of a NUL-terminated string, not counting the NUL.
@@ -48,6 +49,23 @@ size_t os64_strcopy(char *dst, size_t cap, const char *src);
 // "equal" has confused people for fifty years. Ordering comparison arrives if
 // something ever needs to SORT — consumer-driven, like everything else here.
 bool os64_streq(const char *a, const char *b);
+
+// Parse a decimal integer from the front of `s`: optional +/- sign, then
+// digits, stopping at the first non-digit (the classic contract). Returns 0
+// for no-digits — indistinguishable from a real zero, which is atoi's
+// fifty-year-old wart; when a caller needs to tell them apart, a
+// full-diagnosis parser can join it (consumer-driven, as ever). The name
+// survives on merit: `atoi` is one of the handful of Unix names (fork, exec)
+// that earned its keep — every C programmer alive reads it instantly.
+// (Graduated from top's `temporaryAtoi` — "the library guy" was off playing
+// with the network, per the heckling in topmain.c, and has now returned.)
+int64_t os64_atoi(const char *s);
+
+// The unsigned sibling: digits only, no sign, same stop-at-first-non-digit
+// contract. This is the one /proc parsing wants — every value in a status
+// file is an unsigned decimal, and a stray '-' should end the number, not
+// negate a tick count.
+uint64_t os64_atou(const char *s);
 
 // Copy `n` bytes. No overlap handling (that is memmove's job, and nothing has
 // asked for one yet).

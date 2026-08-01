@@ -38,6 +38,7 @@ table, it gets its own mount with its own name, and this file stays untouched.
 
 ```
 /proc/                      one entry per live task, named by decimal taskID
+/proc/cores                 CPU time per core: total/busy/idle/sched µs
 /proc/<id>/                 a task
 /proc/<id>/status           state, parent, timing, fault counts
 /proc/<id>/cmdline          argv, one argument per line
@@ -65,6 +66,19 @@ doctrine on names that lie is settled (see `DEBUG_TASKSWITCH`).
 
 **No `.` and no `..`** — the same rule the rest of the tree follows: they are
 not directory content, and `readdir` never delivers them.
+
+**`cores`, not `cpu`, not `stat`** (the trap that makes an OS Linux was
+spotted from inside the car). One header line, one row per core, all values
+in microseconds — the ABI speaks TIME, so the TSC rate never leaves the
+kernel. The accounting behind it charges at **context-switch boundaries**
+(scheduler_do stamps the core's own TSC at pass entry and exit), not by tick
+sampling — so sub-tick slices are visible, idle is a *measurement* (the idle
+thread is charged like any other), and the scheduler's own overhead gets an
+honest `sched` column instead of being laundered into whichever thread the
+timer interrupted. `busy` is derived (total − idle − sched); what the ledger
+can't explain stays visibly unexplained rather than misattributed. Per-task
+CPU time appears as `runtime_us` in each status file, same clock, same
+boundary-charging. (v1 honesty: ISR time rides on the interrupted thread.)
 
 ## The format: text, tabular, one record per line
 

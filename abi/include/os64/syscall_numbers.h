@@ -63,6 +63,51 @@
 // sentence took Linux 22 years (linuxatemyram.com, MemAvailable, 2014).
 #define SYSCALL_MEMORY     27
 
+// printat(x, y, str) — park a string at an absolute character CELL on the
+// physical console, without touching the console cursor: the WIDGET PLANE.
+//
+// This is deliberately NOT a console write and NOT cursor addressing. A
+// status widget (the uptime clock in the top-right corner) parks glyphs at
+// fixed coordinates; it has no business borrowing the console's shared
+// cursor, which another core is using to echo somebody's keystrokes. No
+// cursor motion, no wrap, no scroll — the string clips at the screen edge,
+// because a widget that overflows its corner should be truncated, never
+// allowed to reflow the console. (The kernel's own clock learned all of
+// this the hard way; see print_at() in BasicRenderer.c.)
+//
+// LAYERING DOCTRINE, decided before virtual terminals exist so they don't
+// have to rediscover it: the widget plane lives OUTSIDE the terminal stack.
+// When VTs arrive (F1-F9), switching terminals swaps console content UNDER
+// the widgets and never disturbs them — the clock survives an F3 the same
+// way it survives a scroll. And it does not travel: an SSH user is not
+// looking at this machine's glass, so the widget plane correctly does not
+// exist for them. Anything that IS terminal content — top's repaints, a
+// future vi — belongs to the in-band escape-sequence slice instead, because
+// bytes-in-the-stream survive pipes, VT buffers, and wires; syscalls don't.
+#define SYSCALL_PRINTAT    28
+
+// time(out) — fill an os64_time_t (os64/time.h) with the wall clock's raw
+// truth: UTC epoch seconds, the configured timezone offset, and the
+// sub-second tick phase, one consistent snapshot. The CALENDAR is not here
+// on purpose — the kernel keeps a counter; what a "March" is belongs to
+// libos64 (<os64/date.h>), exactly the split Unix picked and kept. (It took
+// them three tries: First Edition time() returned SIXTIETHS of a second in
+// 32 bits and wrapped every 2.26 years. Epoch seconds, UTC, 64 bits — we
+// start where they landed.)
+#define SYSCALL_TIME       29
+
+// setenv(key, value) — set (or remove) one variable in the CALLING task's
+// environment. value = NULL removes the key (idempotent: unsetting the
+// absent succeeds, as `unset` has since Bourne). The env block is the same
+// physical page the task sees read-only at its env mapping, so the change
+// is visible to the caller's own getenv immediately — and env_inherit
+// hands it to every child spawned AFTER this call. Children spawned BEFORE
+// keep their snapshot: environments flow down at spawn time, never
+// sideways (the one-way valve that makes export a shell BUILTIN — an
+// external `export` program would set its own copy and take it to the
+// grave). Fails only when the env block is full.
+#define SYSCALL_SETENV     30
+
 // net_dial(dest) — open a network conversation. arg0 = const os64_netdest_t*
 // (os64/net.h): WHERE (ip, host order — ruling #2: the kernel owns the wire),
 // WHICH DOOR (port), HOW (protocol). Returns a handle you read() and write()
@@ -70,7 +115,12 @@
 // never crosses this boundary — libos64's os64_dial() parses it into this
 // struct (ruling #1: kernel speaks structs, the library speaks strings).
 // v1 speaks UDP; TCP takes the same struct in Phase 4.
-#define SYSCALL_NET_DIAL   28
+// (Historically 28 for a few uncommitted hours on the net branch — then the
+// userland branch minted printat/time/setenv at 28-30 in parallel, and the
+// merge ceded the numbers to the elder commits. Two branches, one registry:
+// the merge is where the registry gets reconciled, and this comment is the
+// scar that says so.)
+#define SYSCALL_NET_DIAL   31
 
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.

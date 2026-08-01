@@ -26,6 +26,8 @@
 #include "CONFIG.h"        // TICKS_PER_SECOND — sleep()'s ms→ticks boundary
 #include "os64/ticks.h"    // os64_ticks_t — the ticks() out-struct (abi)
 #include "os64/memory.h"   // os64_memory_t — the memory() out-struct (abi)
+#include "os64/time.h"     // os64_time_t — the time() out-struct (abi)
+#include "env.h"           // env_set/env_unset — setenv() mutates the task's env block
 #include "os64/net.h"      // os64_netdest_t — net_dial's in-struct (abi)
 #include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
 #include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
@@ -34,6 +36,10 @@
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
 extern volatile uint64_t kTicksSinceStart;
+extern volatile uint64_t kSystemCurrentTime;   // UTC epoch seconds (timer IRQ advances it)
+extern volatile uint64_t irq0_current_count;   // ticks into the current second (same IRQ)
+extern uint64_t kTicksPerSecond;
+extern int kTimeZone;                          // configured zone, HOURS east of UTC
 extern uint64_t kTotalMemory;      // installed RAM (memmap.c, Limine map sum)
 extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator governs
 
@@ -97,6 +103,12 @@ static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
@@ -141,6 +153,9 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SLEEP,     "sleep",     syscall_sleep,     false, 0x00),  // arg0 = milliseconds (a value, no pointers)
 	SYSCALL_DEFINE(SYSCALL_TICKS,     "ticks",     syscall_ticks,     false, 0x01),  // arg0 = os64_ticks_t out ptr
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
+	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
+	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
+	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL (mask excludes it: NULL means unset)
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 };
 
@@ -714,6 +729,38 @@ static void file_do_seek(void *arg)
 	p->result = (f->fops->tell != NULL) ? f->fops->tell(f) : 0;
 }
 
+// The per-thread bounce block behind thread_t.syscallIOScratch: one
+// file_io_params_t header followed by READ_CHUNK_SIZE data bytes, allocated on
+// the thread's first read()/write() and reused for every one after. This
+// replaced a kmalloc/kfree PER CALL — which, with a no-freelist allocator,
+// meant a fresh zeroed page on the way in and a TLB-shootdown IPI to every
+// core on the way out, per syscall. A program reading a file byte-at-a-time
+// (os64_readline's pipe-safe mode) paid that toll per BYTE: the first top
+// spent ~3 seconds printing 30 tasks, nearly all of it right here.
+// kmalloc'd = upper half = visible under kKernelPML4 AND every task CR3,
+// which is exactly what call_in_kernel_context demands of the params block
+// and buffer anyway. Per-thread (not per-core) because console/pipe reads
+// BLOCK while holding the data area — see the field's comment in thread.h.
+// Reuse across calls is safe: a thread runs one syscall at a time, and both
+// consumers (read's bounce, write's bounce) are done with the block before
+// the syscall returns. Returns NULL only if the one-time allocation fails.
+static file_io_params_t *syscall_io_scratch(char **data_out)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	if (thread == NULL)
+		return NULL;
+
+	if (thread->syscallIOScratch == NULL)
+		thread->syscallIOScratch = kmalloc(sizeof(file_io_params_t) + READ_CHUNK_SIZE);
+	if (thread->syscallIOScratch == NULL)
+		return NULL;
+
+	if (data_out != NULL)
+		*data_out = (char *)thread->syscallIOScratch + sizeof(file_io_params_t);
+	return (file_io_params_t *)thread->syscallIOScratch;
+}
+
 // write(handle, buffer, length) — write bytes to an output handle.
 //
 // The handle is resolved through the CALLING TASK'S HANDLE TABLE — which is the
@@ -802,18 +849,34 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				if (this_chunk > PIPE_CAPACITY)
 					this_chunk = PIPE_CAPACITY;
 
-				char *kbuf = kmalloc(this_chunk);
-				if (kbuf == NULL)
-					return written ? written : SYSCALL_RESULT_INVALID;
+				// The common case — a line of text, a filter's buffer — fits
+				// the thread's scratch block: no allocation at all. Only a
+				// write bigger than the scratch kmallocs, because atomicity
+				// demands ONE piece up to PIPE_CAPACITY (see above) and that
+				// can genuinely exceed READ_CHUNK_SIZE. Safe to hold the
+				// scratch across pipe_write's block: it's THIS thread's.
+				char *scratch_data = NULL;
+				char *kbuf;
+				if (this_chunk <= READ_CHUNK_SIZE &&
+				    syscall_io_scratch(&scratch_data) != NULL)
+					kbuf = scratch_data;
+				else
+				{
+					kbuf = kmalloc(this_chunk);
+					if (kbuf == NULL)
+						return written ? written : SYSCALL_RESULT_INVALID;
+				}
 
 				if (!copy_user_buffer(user_buffer + written, kbuf, this_chunk))
 				{
-					kfree(kbuf);
+					if (kbuf != scratch_data)
+						kfree(kbuf);
 					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
 				}
 
 				long n = pipe_write(p, kbuf, this_chunk);   // BLOCKS if full
-				kfree(kbuf);
+				if (kbuf != scratch_data)
+					kfree(kbuf);
 
 				if (n == PIPE_ERR_CLOSED)
 				{
@@ -861,23 +924,18 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 		case HANDLE_FILE:
 		{
-			// Ferry through a bounded kernel bounce buffer, chunk by chunk.
-			// Unlike the pipe path there is no cross-writer atomicity promise
-			// to keep — a file write that lands in pieces is still one write —
-			// so chunking costs nothing but loop iterations. Both the params
-			// block and the buffer are kmalloc'd: file_do_write runs under
+			// Ferry through the thread's bounce block, chunk by chunk. Unlike
+			// the pipe path there is no cross-writer atomicity promise to
+			// keep — a file write that lands in pieces is still one write —
+			// so chunking costs nothing but loop iterations. The scratch is
+			// kmalloc'd (once, at first use): file_do_write runs under
 			// kKernelPML4, which cannot see this syscall's stack.
-			file_io_params_t *fp = kmalloc(sizeof(*fp));
-			char *kbuf = kmalloc(READ_CHUNK_SIZE);
-			if (fp == NULL || kbuf == NULL)
-			{
-				if (fp)   kfree(fp);
-				if (kbuf) kfree(kbuf);
+			char *kbuf = NULL;
+			file_io_params_t *fp = syscall_io_scratch(&kbuf);
+			if (fp == NULL)
 				return SYSCALL_RESULT_INVALID;
-			}
 
 			size_t written = 0;
-			uint64_t rc = 0;
 			while (written < length)
 			{
 				size_t this_chunk = length - written;
@@ -888,10 +946,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				// user buffer actually resolves (and where a demand-page fault
 				// is safe — no locks held, kernel context not yet entered).
 				if (!copy_user_buffer(user_buffer + written, kbuf, this_chunk))
-				{
-					rc = written ? written : SYSCALL_RESULT_BAD_USER_DATA;
-					goto file_write_out;
-				}
+					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
 
 				fp->file = (vfs_file_t *)h->object;
 				fp->buf = kbuf;
@@ -900,21 +955,13 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				call_in_kernel_context(file_do_write, fp);
 
 				if (fp->result < 0)
-				{
-					rc = written ? written : SYSCALL_RESULT_INVALID;
-					goto file_write_out;
-				}
+					return written ? written : SYSCALL_RESULT_INVALID;
 
 				written += (size_t)fp->result;
 				if ((size_t)fp->result < this_chunk)
 					break;   // short write: filesystem/device is full — report progress
 			}
-			rc = written;
-
-file_write_out:
-			kfree(kbuf);
-			kfree(fp);
-			return rc;
+			return written;
 		}
 
 		default:
@@ -957,21 +1004,25 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return 0;
 
 	size_t want = length < READ_CHUNK_SIZE ? length : READ_CHUNK_SIZE;
-	char *kbuf = kmalloc(want);
-	if (kbuf == NULL)
+	// The thread-owned bounce block (see syscall_io_scratch): no allocation,
+	// no free, no per-call TLB shootdown — and therefore no kfree on ANY exit
+	// path below, which is why the error paths got shorter.
+	char *kbuf = NULL;
+	file_io_params_t *fp = syscall_io_scratch(&kbuf);
+	if (fp == NULL)
 		return SYSCALL_RESULT_INVALID;
 
 	long got = 0;
 	switch (h->type)
 	{
 		case HANDLE_CONSOLE_IN:
-			// Blocks until >=1 byte is available (terminal semantics).
+			// Blocks until >=1 byte is available (terminal semantics). The
+			// scratch is safe to hold across the block — it's THIS thread's.
 			got = console_read(kbuf, want);
 			if (got == CONSOLE_READ_INTERRUPTED)
 			{
 				// Ctrl+C landed while (or before) we were blocked on stdin.
 				// Default action: terminate. The sentinel never reaches ring 3.
-				kfree(kbuf);
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -988,7 +1039,6 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			if (got == PIPE_ERR_INTERRUPTED)
 			{
 				// Ctrl+C landed while blocked on (or headed into) a pipe read.
-				kfree(kbuf);
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1017,46 +1067,31 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// Never blocks (a file always knows its bytes) and returns SHORT at
 			// the end: fewer bytes than asked near EOF, then 0 AT EOF — so the
 			// canonical filter loop works on a file with zero special-casing.
-			// The actual read runs under kKernelPML4 (see file_do_read); kbuf
-			// and the params block are kmalloc'd, reachable from both worlds.
-			file_io_params_t *fp = kmalloc(sizeof(*fp));
-			if (fp == NULL)
-			{
-				kfree(kbuf);
-				return SYSCALL_RESULT_INVALID;
-			}
+			// The actual read runs under kKernelPML4 (see file_do_read); the
+			// scratch block is kmalloc'd (once), reachable from both worlds.
 			fp->file = (vfs_file_t *)h->object;
 			fp->buf = kbuf;
 			fp->len = want;
 			fp->result = -1;
 			call_in_kernel_context(file_do_read, fp);
 			got = fp->result;
-			kfree(fp);
 
 			if (got < 0)
 			{
 				// A real device/filesystem error — distinct from EOF's clean 0.
-				kfree(kbuf);
 				return SYSCALL_RESULT_INVALID;
 			}
 			break;
 		}
 
 		default:
-			kfree(kbuf);
 			return SYSCALL_RESULT_INVALID;   // a write-only handle
 	}
 
 	if (got <= 0)
-	{
-		kfree(kbuf);
 		return 0;   // EOF (pipe) or nothing (console)
-	}
 
-	bool ok = copy_to_user_buffer(user_buffer, kbuf, (size_t)got);
-	kfree(kbuf);
-
-	if (!ok)
+	if (!copy_to_user_buffer(user_buffer, kbuf, (size_t)got))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
 	return (uint64_t)got;
@@ -1476,7 +1511,10 @@ static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (h == NULL || h->type != HANDLE_FILE)
 		return SYSCALL_RESULT_INVALID;
 
-	file_io_params_t *fp = kmalloc(sizeof(*fp));
+	// The thread's bounce block (params header only; the data area is idle
+	// here). Seek sits on readline's fast path now — probe + surplus
+	// seek-back per line — so it sheds its per-call kmalloc/kfree too.
+	file_io_params_t *fp = syscall_io_scratch(NULL);
 	if (fp == NULL)
 		return SYSCALL_RESULT_INVALID;
 
@@ -1489,7 +1527,6 @@ static uint64_t syscall_seek(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	call_in_kernel_context(file_do_seek, fp);
 
 	long pos = fp->result;
-	kfree(fp);
 
 	if (pos < 0)
 		return SYSCALL_RESULT_INVALID;   // bad whence, or the seek itself failed
@@ -2254,4 +2291,104 @@ static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_to_user_buffer(user_out, &m, sizeof(m)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	return 0;
+}
+
+// printat(x, y, str) — the widget-plane syscall: park a string at an absolute
+// character cell on the physical console. See the abi header for the doctrine
+// (widget != console write; lives outside the future VT stack). The handler
+// is a bounds check, a string copy, and a handoff to print_at(), which brings
+// its own guarantees: no cursor motion, no wrap/scroll, clips at the screen
+// edge under the renderer lock, and politely declines while the GUI owns the
+// framebuffer.
+static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+
+	// One row of a widget, tops. print_at clips at the screen edge anyway, so
+	// a bigger buffer would buy nothing but copy time; a "widget" longer than
+	// this is console content that took a wrong turn at the API.
+	char kernel_buffer[256];
+
+	// Cap the CELL coordinates before print_at multiplies them into pixels:
+	// its edge-clip compares px against the framebuffer width AFTER the
+	// multiply, so an absurd x could wrap the 32-bit pixel math back onto the
+	// screen. No display has 4096 columns; nothing legitimate is lost.
+	if (arg0 > 4095 || arg1 > 4095)
+		return SYSCALL_RESULT_INVALID;
+
+	if (!copy_user_string((const char *)arg2, kernel_buffer, sizeof(kernel_buffer)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	print_at(&kRenderer, (unsigned int)arg0, (unsigned int)arg1, kernel_buffer);
+	return 0;
+}
+
+// time(out) — the wall clock's raw truth (see os64/time.h for the doctrine:
+// the kernel keeps a counter, the library keeps the calendar). One consistent
+// snapshot: epoch and the sub-second phase are advanced by the same timer IRQ,
+// so we read epoch / phase / epoch-again and retry if the second rolled in
+// between — otherwise a caller could see 12:00:00 paired with the last tick
+// of 11:59:59. The loop runs at most twice a second per caller in practice;
+// it exists for the once-a-day time a syscall straddles the boundary.
+static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	os64_time_t *user_out = (os64_time_t *)arg0;
+	if (user_out == NULL)
+		return SYSCALL_RESULT_BAD_USER_DATA;   // the whole point is the struct
+
+	uint64_t epoch, phase;
+	do {
+		epoch = kSystemCurrentTime;
+		phase = irq0_current_count;
+	} while (epoch != kSystemCurrentTime);
+
+	os64_time_t t;
+	t.epoch             = (int64_t)epoch;
+	t.tz_offset_minutes = kTimeZone * 60;     // kernel config is whole hours
+	t.ticks_into_second = (uint32_t)phase;
+	t.ticks_per_second  = (uint32_t)kTicksPerSecond;
+	t.reserved          = 0;
+
+	if (!copy_to_user_buffer(user_out, &t, sizeof(t)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	return 0;
+}
+
+// setenv(key, value|NULL) — mutate the calling task's environment (the abi
+// header has the doctrine: same physical page the task reads, children
+// snapshot at spawn). arg1 deliberately isn't in the dispatcher's pointer
+// mask — NULL is a legal value meaning "unset", so the range check happens
+// here, inside copy_user_string, only when a value is actually present.
+static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL || task->env == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// A key is a NAME, not a novel; a value has to fit the block anyway
+	// (one page minus header), so these bounds reject only the absurd.
+	char key[128];
+	char val[2048];
+
+	if (!copy_user_string((const char *)arg0, key, sizeof(key)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	if (key[0] == '\0')
+		return SYSCALL_RESULT_INVALID;      // the empty key names nothing
+
+	if (arg1 == 0)
+		return env_unset(task->env, key) ? 0 : SYSCALL_RESULT_INVALID;
+
+	if (!copy_user_string((const char *)arg1, val, sizeof(val)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	// env_set fails only when the block is full — surface that honestly.
+	return env_set(task->env, key, val) ? 0 : SYSCALL_RESULT_INVALID;
 }

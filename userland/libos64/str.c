@@ -67,3 +67,32 @@ void *os64_memset(void *dst, int c, size_t n)
         d[i] = (unsigned char)c;
     return dst;
 }
+
+int64_t os64_atoi(const char *s)
+{
+    int64_t sign = 1;
+    int64_t v = 0;
+
+    if (s == NULL)
+        return 0;
+    if (*s == '+' || *s == '-')
+    {
+        if (*s == '-')
+            sign = -1;
+        s++;
+    }
+    while (*s >= '0' && *s <= '9')
+        v = v * 10 + (*s++ - '0');
+    return sign * v;
+}
+
+uint64_t os64_atou(const char *s)
+{
+    uint64_t v = 0;
+
+    if (s == NULL)
+        return 0;
+    while (*s >= '0' && *s <= '9')
+        v = v * 10 + (uint64_t)(*s++ - '0');
+    return v;
+}

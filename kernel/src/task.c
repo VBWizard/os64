@@ -828,6 +828,9 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		isKWorkerTask,
 		isGuiCompTask);
 
+    // exename is the basename of the path: walk to the LAST slash, then step
+    // past it so we store "husk", not "/husk". (A path with no slash at all
+    // leaves slash2 pointing at the whole path, which is already the name.)
     char *slash=newTask->path, *slash2=newTask->path;
     while (slash!=NULL)
     {
@@ -835,6 +838,8 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
         if (slash)
             slash2 = slash;
     }
+    if (*slash2 == '/')
+        slash2++;
     strcpy(newTask->exename, slash2);
 	printd(DEBUG_TASK, "task_create: Executable name is %s\n", newTask->exename);
 

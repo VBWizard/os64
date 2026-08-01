@@ -105,14 +105,16 @@ void udp_conn_wake_if_ready(void)
 		}
 		spinlock_release_irqrestore(&c->lock, irqflags);
 
-		// Only a thread that has genuinely parked (ISLEEP) gets moved; a
-		// still-RUNNING waiter keeps its registration and the condition
-		// stays true for the next sweep — pipe_wake_thread's exact rule.
-		if (w != NULL && w->threadState == THREAD_STATE_ISLEEP)
+		// The scheduler's own wake primitive does the check-clear-relink
+		// behind its queue lock discipline (the 9badced rule: every relink
+		// pays the toll). The _locked variant because this sweep runs from
+		// processSignals, which already holds kSchedulerSwitchTasksLock —
+		// same reasoning, same variant, as pipe_wake_if_ready's calls.
+		// (A still-RUNNING waiter is left registered — the primitive's
+		// ISLEEP check — and the condition stays true for the next sweep.)
+		if (w != NULL)
 		{
-			w->signals.sigdata[SIGSLEEP] = 0;
-			w->signals.sigind &= ~(SIGSLEEP);
-			scheduler_change_thread_queue(w, THREAD_STATE_RUNNABLE);
+			scheduler_wake_isleep_thread_locked(w);
 			printd(DEBUG_NET | DEBUG_DETAILED, "udp_conn: woke reader on port %u\n", c->local_port);
 		}
 	}

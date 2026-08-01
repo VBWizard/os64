@@ -68,12 +68,12 @@ static void pipe_list_remove(pipe_t *p)
 // and let the next pass find it.
 static void pipe_wake_thread(thread_t *w)
 {
-	if (w == NULL || w->threadState != THREAD_STATE_ISLEEP)
-		return;
-
-	w->signals.sigind &= ~SIGSLEEP;      // cancel the backstop sleep
-	w->signals.sigdata[SIGSLEEP] = 0;
-	scheduler_change_thread_queue(w, THREAD_STATE_RUNNABLE);
+	// The check-clear-relink now lives in the scheduler behind its queue
+	// lock: this wake runs in the WAKER's thread context, which since the
+	// BSPSCHED fan-out can be an AP executing in true parallel with the
+	// BSP's tick pass over the same queues. The unlocked version of this
+	// relink is what corrupted the scheduler lists and wedged VBox.
+	scheduler_wake_isleep_thread(w);
 }
 
 pipe_t *pipe_create(void)
@@ -420,8 +420,11 @@ void pipe_wake_if_ready(void)
 
 		spinlock_release_irqrestore(&p->lock, flags);
 
-		pipe_wake_thread(r);
-		pipe_wake_thread(w);
+		// _locked variants: this sweep runs from processSignals, which
+		// already holds the scheduler queue lock — the public wake would
+		// re-acquire it and self-deadlock.
+		scheduler_wake_isleep_thread_locked(r);
+		scheduler_wake_isleep_thread_locked(w);
 	}
 
 	spinlock_release_irqrestore(&kPipeListLock, listFlags);

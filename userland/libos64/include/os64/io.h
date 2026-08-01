@@ -33,6 +33,43 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len);
 //     while ((n = os64_read(0, buf, sizeof buf)) > 0) { ...process n bytes... }
 int64_t os64_read(int32_t handle, void *buf, size_t len);
 
+// Read one LINE from `handle` into `buf` (cap bytes INCLUDING the
+// terminator): everything up to and including the next '\n', with the line
+// ending stripped — both '\n' and "\r\n", so a file that once passed through
+// Windows reads the same as one that never did. Always NUL-terminates.
+// Returns:
+//   1  — *buf holds a line (possibly empty — a blank line is still a line)
+//   0  — end of input (a final line with no trailing newline is delivered
+//        as a line first; THEN you get the 0)
+//  <0  — error from the underlying read (bad handle, etc.)
+//
+// The same shape as os64_readdir, on purpose: a directory produces entries,
+// a text file produces lines, and the loop is the same species — the spine
+// of parsing any /proc file:
+//     char line[256];
+//     int64_t h = os64_open("/proc/7/status", NULL);
+//     while (os64_readline(h, line, sizeof line) == 1)
+//         ...line is "key\tvalue", parse in place...
+//     os64_close(h);
+//
+// A line longer than cap-1 is delivered truncated and the REST OF THE LINE
+// IS CONSUMED: the next call returns the next line, never the severed tail
+// of this one. (Getting the tail of a long line served back as a bonus
+// "line" is the classic fgets footgun — size the buffer for the longest
+// line you believe in, and the loop stays honest either way.)
+//
+// Cost: on a FILE, a line is a few syscalls regardless of length — a chunk
+// is read and the surplus past the newline is SEEKED BACK, so the position
+// lands exactly after the '\n' (mixing readline with raw read()/seek() on
+// the same handle stays coherent). On a PIPE or the CONSOLE — which cannot
+// seek backward — it reads one byte per syscall, because a chunk would
+// STEAL bytes that belong to whoever reads the handle next. The Bourne
+// shell has read its input a byte at a time since 1977 for exactly this
+// reason — it is why `read` inside a shell script works instead of the
+// script eating the data. The gait is picked per call by asking the handle
+// whether it can seek; callers never care.
+int64_t os64_readline(int32_t handle, char *buf, size_t cap);
+
 // Open the file at `path` (absolute, on the root filesystem) and return a
 // handle, or negative on error (no such file, bad mode, out of handles).
 // `mode` is a one-letter string:
@@ -107,6 +144,18 @@ int64_t os64_close(int32_t handle);
 
 // Convenience: write a NUL-terminated string to the console (handle 1).
 int64_t os64_puts(const char *s);
+
+// Park a string at an absolute character cell (x, y) on the PHYSICAL console
+// — the widget plane, for status widgets like clock's corner readout. This is
+// NOT a console write: no cursor motion, no wrap, no scroll, and the string
+// clips at the screen edge instead of reflowing anybody's prompt. It draws on
+// the machine's actual glass, outside the (future) virtual-terminal stack —
+// a VT switch won't disturb it, and it deliberately doesn't exist over a
+// remote session. Terminal content (full-screen repaints, anything that
+// should survive a pipe) is the escape-sequence slice's job, not this.
+// Last writer to a cell wins; widgets that share a corner deserve each other.
+// Returns 0, or negative (bad coordinates / unreadable string).
+int64_t os64_printat(uint32_t x, uint32_t y, const char *s);
 
 // (os64_exit lived here for one glorious scaffolding week — exit is process
 // control, not I/O, and it moved home to <os64/proc.h> the day its owner

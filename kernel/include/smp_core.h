@@ -20,6 +20,11 @@
 #define IPI_TIMER_SCHEDULE_VECTOR 0x7E        // IPI vector for scheduling APs
 #define IPI_AP_INITIALIZATION_VECTOR 0x7f
 #define IPI_MANUAL_SCHEDULE_VECTOR 0x81
+// CPU-time settle-on-read (accounting): each core charges its in-flight
+// span locally so /proc reads never see books more than an IPI old.
+// ≥0x40 REQUIRED: AP TPR is 0x30, lower vectors silently never fire there.
+#define IPI_ACCT_SETTLE_VECTOR 0x82
+void mpAcctSettleAll(void);
 #define ENABLE_TIMER(val) (val & ~(1U << APIC_LVT_MASK_BIT))
 #define DISABLE_TIMER(val) (val | (1U << APIC_LVT_MASK_BIT))
 

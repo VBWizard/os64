@@ -91,3 +91,34 @@ bool env_set(envpage_t *env, const char *key, const char *val)
     env->count++;
     return true;
 }
+
+bool env_unset(envpage_t *env, const char *key)
+{
+    if (!env || !key)
+        return false;
+
+    // Same walk-and-compact env_set uses to replace a key — minus the append.
+    char *ptr = env->data;
+    char *end = env->data + env->data_end;
+    while (ptr < end) {
+        char *k = ptr;
+        while (ptr < end && *ptr) ptr++;
+        ptr++;
+        while (ptr < end && *ptr) ptr++;
+        ptr++;
+
+        if (strcmp(k, key) == 0) {
+            size_t tail = (size_t)(end - ptr);
+            memmove(k, ptr, tail);
+            env->data_end -= (uint32_t)(ptr - k);
+            env->count--;
+            // Re-zero the vacated tail: the region past data_end is
+            // documented as zeroed, and the read-only task mapping shows
+            // these bytes to userland — stale value fragments shouldn't
+            // linger where an env walker could trip over them.
+            memset(env->data + env->data_end, 0, (size_t)(ptr - k));
+            break;
+        }
+    }
+    return true;   // absent == already unset == success
+}

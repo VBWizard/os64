@@ -66,6 +66,37 @@ typedef struct s_thread
 	struct s_thread *forkedThread;
 	struct s_thread *prev, *next;
 	signals_t signals;
+	// Per-thread syscall I/O bounce block, lazily kmalloc'd by syscall.c on the
+	// thread's first read()/write() and REUSED for every one after (it used to
+	// be kmalloc'd/kfree'd per call — with a no-freelist allocator that was a
+	// page allocation, a 4KB zero, and a TLB-shootdown IPI per call; top
+	// measured it in whole seconds). Per-THREAD, not per-core: console/pipe
+	// reads BLOCK while holding the buffer, and a sleeping thread's scratch
+	// must not be handed to whoever runs next on the core. Opaque here — the
+	// layout ([params][data]) is syscall.c's business (syscall_io_scratch()).
+	// Never freed: thread teardown doesn't exist yet (the task_destroy debt);
+	// this block rides along. FUTURE FORK WARNING: if fork ever copies
+	// thread_t wholesale, NULL this in the child or two threads will share
+	// one bounce buffer.
+	void *syscallIOScratch;
+	// The core this thread was most recently DISPATCHED on — stamped by
+	// scheduler_load_thread, one store, no locking (single writer: the
+	// dispatching core). This is "where did it last run", not affinity
+	// (mp_apic is the pin; this is the history). Surfaced in /proc so a
+	// human summing per-core books can tell whose plate the time came off
+	// — the question that broke Chris's idle0 arithmetic the night the
+	// accounting converged (kworker's 0.5% was on core 1 all along).
+	uint32_t lastRunApicID;
+	// CPU time actually spent running, in TSC cycles — charged at context-
+	// switch boundaries by scheduler_do (NOT tick-sampled: a thread that
+	// runs 2ms slices between ticks is invisible to sampling but not to
+	// this). Written only by the core the thread runs on, using that core's
+	// own TSC for both endpoints of every delta — cross-core TSC math is
+	// the desync landmine and this field never commits it. Converted to
+	// microseconds at /proc read time (kCPUCyclesPerSecond); raw cycles
+	// never leave the kernel. Idle threads accumulate here like everyone
+	// else — that is what makes "idle %" a measurement, not an assumption.
+	uint64_t runCycles;
 } thread_t;
 
 thread_t* createThread(void* parentTask, bool kernelThread);
