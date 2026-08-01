@@ -9,6 +9,8 @@
 #include "console.h"
 #include "pipe.h"
 #include "driver/system/usb/xhci.h"
+#include "driver/net/virtio_net.h"
+#include "driver/net/dhcp.h"
 
 extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
@@ -100,6 +102,18 @@ void processSignals()
 	// wake uses — no interrupt wiring, ~one-pass latency. Cheap when idle
 	// (guard branch + one cached-RAM read); does nothing before USB init.
 	xhci_poll();
+
+	// Same liveness ride for the NIC: drain TX completions and deliver RX
+	// arrivals once per pass. Same economics as xhci_poll — a guard branch
+	// and two ring-index compares when idle; interrupt wiring is a future
+	// slice (NETWORK.md), and this path is what makes packets move today.
+	virtio_net_poll();
+
+	// DHCP's retry timer rides the same pass (one state compare when the
+	// lease is settled). Delivery of DHCP replies happens inside the poll
+	// above (UDP demux → dhcp_rx); this call only handles the wire going
+	// QUIET — resend, and eventually give up honestly.
+	dhcp_poll();
 
 	// Wake a blocked console reader if the keyboard driver has input. Done
 	// here — under the lock, AFTER the qISleep walk above — so its queue

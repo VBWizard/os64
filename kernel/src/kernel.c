@@ -43,6 +43,10 @@
 #include "block_device.h"
 #include "ramdisk.h"
 #include "driver/system/usb/xhci.h"
+#include "driver/net/virtio_net.h"
+#include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
+#include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
+#include "driver/net/dhcp.h"
 #include "driver/filesystem/proc/procfs.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
@@ -59,6 +63,8 @@ bool kBspSchedulerMode = false;
 bool kEnableKWorker = false;
 // Cleared by the NOUSB cmdline flag — skips xHCI bring-up entirely.
 bool kEnableUSB = true;
+// Cleared by the NONET cmdline flag — skips NIC bring-up (NETWORK.md arc).
+bool kEnableNet = true;
 // Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,
 // post-boot, and the disk/VFS tests) — used to isolate a boot hang by booting
 // with no test code in the path.
@@ -179,6 +185,29 @@ void kernel_init()
 	{
 		printf("Initializing USB (xHCI): ");
 		init_xHCI();
+	}
+
+	// NIC bring-up rides the same rules as xHCI: before task creation, so
+	// the MMIO mappings land in the kernel PML4's upper half and every
+	// task PML4 clones them at birth. Quietly a no-op when no NIC is
+	// attached — a netless boot is a configuration, not an error.
+	// STACK BEFORE DRIVER, deliberately: init_net_stack claims the seam's
+	// RX handler (and parses IP=/GW=/MASK=) before any NIC exists, so
+	// there is no boot window where a frame can arrive unclaimed — the
+	// rx_dropped_no_handler counter should only ever move in a build
+	// where someone unhooked the stack on purpose.
+	if (kEnableNet)
+	{
+		init_net_stack();
+		init_virtio_net();
+		// DHCP by default when a NIC exists and nobody typed IP= — the
+		// lease overwrites the static convention defaults when it lands
+		// (and if no server answers, those defaults keep working; the
+		// whole policy is argued in dhcp.h). The opening DISCOVER goes
+		// out right here; replies and retries ride the processSignals
+		// poll once the scheduler is up.
+		if (kNetDeviceCount > 0 && kNetIPString[0] == '\0')
+			dhcp_start(kNetDevices[0]);
 	}
     printf("SMP: Initializing ... ");
     kLimineSMPInfo = smp_request.response;
