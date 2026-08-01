@@ -119,6 +119,11 @@
 // aliases DEBUG_ALLOCATOR above; those two at least are the same subsystem.)
 #define DEBUG_SHUTDOWN (__uint128_t)1 << 25
 #define DEBUG_USB (__uint128_t)1 << 26
+// The networking arc's bit (NETWORK.md). Covers the NIC drivers and, as the
+// stack grows above them, the protocol layers — split into finer bits only
+// when one subsystem's chatter starts drowning another's (the DEBUG_PIPE
+// lesson: a bit earns independence when someone needs it alone).
+#define DEBUG_NET (__uint128_t)1 << 27
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
