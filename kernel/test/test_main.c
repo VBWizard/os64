@@ -36,6 +36,7 @@
 #include "driver/net/icmp.h"
 #include "driver/net/udp.h"
 #include "driver/net/dhcp.h"
+#include "driver/net/udp_conn.h"
 
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -2047,6 +2048,149 @@ static bool test_net_dhcp(void)
     return true;
 }
 
+// Phase 3 finale, exhibit A — the conversation object, judged deterministically.
+// Dials the ghost neighbor from the responder test (whose MAC that test
+// already taught our ARP cache — registration order is load-bearing), then
+// plays the peer's half by hand: frames injected at the seam, exactly as
+// the responder test pioneered. Covers the conn machinery no live network
+// can probe on demand: the connected-peer filter, the truncation contract,
+// and the queue running while a reader drains it.
+static bool test_net_udp_conn(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_udp_conn (no NIC)\n");
+        return true;
+    }
+    net_device_t *dev = kNetDevices[0];
+    static const uint8_t ghost_mac[NET_MAC_LEN] = {0x02, 0x64, 0x0E, 0x0A, 0x05, 0x99};
+    uint32_t ghost_ip = (kNetIPv4Address & kNetIPv4Netmask) | 99;
+
+    udp_conn_t *conn = udp_conn_dial(dev, ghost_ip, 5555);
+    if (conn == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - dial failed\n");
+        return false;
+    }
+
+    // Outbound: one datagram to the ghost (its MAC is cached; the write's
+    // ARP retry path stays cold). Just the plumbing, counted at UDP.
+    uint64_t udp_tx = kUdpStats.tx_sent;
+    if (udp_conn_write(conn, "knock knock", 11) != 11 || kUdpStats.tx_sent != udp_tx + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - write failed (udp tx=%lu)\n", kUdpStats.tx_sent);
+        udp_conn_close(conn);
+        return false;
+    }
+
+    // Build one inbound frame from the ghost: eth + ipv4 + udp, correct
+    // checksums, payload as given. Reused for all three injections below.
+    uint8_t f[128];
+    const char *msg1 = "os64 hears you";       // 14 bytes
+    #define CONN_FRAME(src_port, payload, plen) do {                          \
+        int n = 0;                                                            \
+        memcpy(f + n, dev->mac, NET_MAC_LEN);      n += NET_MAC_LEN;          \
+        memcpy(f + n, ghost_mac, NET_MAC_LEN);     n += NET_MAC_LEN;          \
+        net_write16(f + n, ETH_TYPE_IPV4);         n += 2;                    \
+        int ip_start = n;                                                     \
+        f[n++] = 0x45; f[n++] = 0x00;                                         \
+        net_write16(f + n, 20 + UDP_HDR_LEN + (plen)); n += 2;                \
+        net_write16(f + n, 0x0042);                n += 2;                    \
+        net_write16(f + n, 0x4000);                n += 2;                    \
+        f[n++] = 64; f[n++] = IPV4_PROTO_UDP;                                 \
+        int ip_ck = n; net_write16(f + n, 0);      n += 2;                    \
+        net_write32(f + n, ghost_ip);              n += 4;                    \
+        net_write32(f + n, kNetIPv4Address);       n += 4;                    \
+        net_write16(f + ip_ck, net_checksum(f + ip_start, 20));               \
+        net_write16(f + n, (src_port));            n += 2;                    \
+        net_write16(f + n, conn->local_port);      n += 2;                    \
+        net_write16(f + n, UDP_HDR_LEN + (plen));  n += 2;                    \
+        net_write16(f + n, 0);                     n += 2;  /* cksum 0 = none (IPv4-legal) */ \
+        memcpy(f + n, (void*)(payload), (plen));   n += (plen);               \
+        net_device_rx(dev, f, (uint16_t)n);                                   \
+    } while (0)
+
+    // In from the PEER: must queue and read back verbatim.
+    CONN_FRAME(5555, msg1, 14);
+    char buf[64];
+    long got = udp_conn_read(conn, buf, sizeof(buf));
+    if (got != 14 || memcmp(buf, msg1, 14) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - readback got %ld (delivered=%lu)\n",
+               got, conn->rx_delivered);
+        udp_conn_close(conn);
+        return false;
+    }
+
+    // In from a STRANGER (right IP, wrong port): the connected filter must
+    // drop it on its named counter and queue nothing.
+    uint64_t strangers = conn->rx_dropped_stranger;
+    CONN_FRAME(6666, "impostor", 8);
+    if (conn->rx_dropped_stranger != strangers + 1 || conn->count != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - stranger filter leaked (dropped=%lu count=%u)\n",
+               conn->rx_dropped_stranger, conn->count);
+        udp_conn_close(conn);
+        return false;
+    }
+
+    // Truncation contract: a 14-byte datagram read into an 8-byte buffer
+    // returns 8 and the tail DROPS — one datagram, one read, no carryover.
+    CONN_FRAME(5555, msg1, 14);
+    got = udp_conn_read(conn, buf, 8);
+    if (got != 8 || conn->count != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - truncation contract broken (got %ld, queued %u)\n",
+               got, conn->count);
+        udp_conn_close(conn);
+        return false;
+    }
+    #undef CONN_FRAME
+
+    udp_conn_close(conn);
+    printd(DEBUG_TESTS, "\tPASS: test_net_udp_conn (dial, write, filtered+truncated reads, hangup)\n");
+    return true;
+}
+
+// Phase 3 finale, exhibit B — ring 3 places a real call. Spawns
+// /bin/dialtest, which dials slirp's DNS (10.0.2.3:53) with os64_dial's
+// bang string, asks a genuine question, and BLOCKS in read until the
+// answer crosses two NATs and comes home — the full tower, syscall to
+// wire to park to wake, judged by one exit code. See dialtest.c for the
+// 0x0D1A16xx step-code autopsy table.
+static bool test_net_dial_ring3(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_dial_ring3 (no NIC)\n");
+        return true;
+    }
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_dial_ring3 (no root filesystem)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/dialtest", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - task_create failed\n");
+        return false;
+    }
+    scheduler_submit_new_task(task);
+
+    // DNS through slirp is normally milliseconds; 5s covers a resolver
+    // having a bad day. (A host with NO resolver at all fails here — that
+    // is a finding about the host, and the step code will say BAD_READ.)
+    for (int i = 0; i < 500 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - fixture still blocked after 5s "
+               "(udp tx=%lu rx=%lu)\n", kUdpStats.tx_sent, kUdpStats.rx_delivered);
+        return false;
+    }
+    if (task->retVal != 0x0D1A1600UL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - retVal=0x%lx, expected 0x0D1A1600 "
+               "(step codes in dialtest.c)\n", task->retVal);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_dial_ring3 (ring 3 dialed DNS, asked, was answered)\n");
+    return true;
+}
+
 // ── env tests ────────────────────────────────────────────────────────────────
 
 static bool test_env_create_empty(void)
@@ -2283,6 +2427,8 @@ static void register_builtin_tests(void)
     test_register("net_ping", test_net_ping, TEST_PHASE_POSTBOOT);
     test_register("net_echo_responder", test_net_echo_responder, TEST_PHASE_POSTBOOT);
     test_register("net_dhcp", test_net_dhcp, TEST_PHASE_POSTBOOT);
+    test_register("net_udp_conn", test_net_udp_conn, TEST_PHASE_POSTBOOT);
+    test_register("net_dial_ring3", test_net_dial_ring3, TEST_PHASE_POSTBOOT);
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
 }
 

@@ -26,6 +26,10 @@
 #include "CONFIG.h"        // TICKS_PER_SECOND — sleep()'s ms→ticks boundary
 #include "os64/ticks.h"    // os64_ticks_t — the ticks() out-struct (abi)
 #include "os64/memory.h"   // os64_memory_t — the memory() out-struct (abi)
+#include "os64/net.h"      // os64_netdest_t — net_dial's in-struct (abi)
+#include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
+#include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
+#include "driver/net/udp_conn.h"     // the object behind HANDLE_NET_UDP
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
@@ -93,6 +97,8 @@ static uint64_t syscall_ticks(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_memory(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -135,6 +141,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SLEEP,     "sleep",     syscall_sleep,     false, 0x00),  // arg0 = milliseconds (a value, no pointers)
 	SYSCALL_DEFINE(SYSCALL_TICKS,     "ticks",     syscall_ticks,     false, 0x01),  // arg0 = os64_ticks_t out ptr
 	SYSCALL_DEFINE(SYSCALL_MEMORY,    "memory",    syscall_memory,    false, 0x01),  // arg0 = os64_memory_t out ptr
+	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 };
 
 uint64_t _syscall_dispatch(
@@ -829,6 +836,29 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			return written;
 		}
 
+		case HANDLE_NET_UDP:
+		{
+			// One write = ONE datagram, atomic by protocol: an oversize
+			// write is an ERROR, never a fragmenting loop (os64/net.h
+			// states the contract; UDP_CONN_MAX_DGRAM is the physics).
+			// Kernel-bounce first for the same fault-discipline as pipes.
+			if (length > UDP_CONN_MAX_DGRAM)
+				return SYSCALL_RESULT_INVALID;
+
+			char *kbuf = kmalloc(length);
+			if (kbuf == NULL)
+				return SYSCALL_RESULT_INVALID;
+			if (!copy_user_buffer(user_buffer, kbuf, length))
+			{
+				kfree(kbuf);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+
+			long n = udp_conn_write((udp_conn_t *)h->object, kbuf, length);
+			kfree(kbuf);
+			return (n < 0) ? SYSCALL_RESULT_INVALID : (uint64_t)n;
+		}
+
 		case HANDLE_FILE:
 		{
 			// Ferry through a bounded kernel bounce buffer, chunk by chunk.
@@ -964,6 +994,24 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			}
 			break;
 
+		case HANDLE_NET_UDP:
+			// Blocks until one datagram arrives from the dialed peer, then
+			// returns exactly that datagram (short if the buffer is smaller;
+			// the tail drops — the truncation contract in os64/net.h).
+			// `want` is already min(length, READ_CHUNK_SIZE=4096), which
+			// exceeds UDP_CONN_MAX_DGRAM=1472, so no datagram is ever
+			// clipped by the bounce buffer — only by the CALLER's length.
+			got = udp_conn_read((udp_conn_t *)h->object, kbuf, want);
+			if (got == UDP_CONN_ERR_INTERRUPTED)
+			{
+				// Ctrl+C landed while blocked waiting for a packet — same
+				// rail as console and pipe reads: terminate, 130.
+				kfree(kbuf);
+				raise_terminating_signal_and_die(task, NULL);
+				__builtin_unreachable();
+			}
+			break;
+
 		case HANDLE_FILE:
 		{
 			// Never blocks (a file always knows its bytes) and returns SHORT at
@@ -1056,6 +1104,55 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	printd(DEBUG_PIPE, "pipe: task %s got handles r=%d w=%d\n", task->exename, rh, wh);
 	return 0;
+}
+
+// net_dial(dest) — open a network conversation and hand back a handle.
+//
+// The whole ratified API doctrine lands in this one handler: a TYPED STRUCT
+// crosses the boundary (never a dial string — libos64 parses those, ruling
+// #1), every field HOST-order (ruling #2), and what comes back is an
+// ordinary handle whose read/write ARE the datagram verbs (ruling #4) —
+// dispatched by the same switches that serve pipes and files, because a
+// conversation is just one more thing a handle can name.
+static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	os64_netdest_t dest;
+	if (!copy_user_buffer((const void *)arg0, &dest, sizeof(dest)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	// TCP is Phase 4: refused by NUMBER today so the day it exists, every
+	// caller's struct already means the right thing. Anything else is a
+	// typo. (No wildcard protocol — os64 says what it means, ruling #1.)
+	if (dest.protocol != OS64_NET_UDP || dest.ip == 0 || dest.port == 0)
+		return SYSCALL_RESULT_INVALID;
+
+	// Dial tone requires a line: no NIC, no conversation. (A netless boot
+	// is a configuration, not an error — but dialing on one is an error.)
+	if (kNetDeviceCount == 0)
+		return SYSCALL_RESULT_INVALID;
+
+	udp_conn_t *conn = udp_conn_dial(kNetDevices[0], dest.ip, dest.port);
+	if (conn == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	int h = handle_alloc(task, HANDLE_NET_UDP, conn);
+	if (h < 0)
+	{
+		udp_conn_close(conn);   // out of handle slots — hang up cleanly
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_NET, "net_dial: task %s -> %u.%u.%u.%u:%u = handle %d\n",
+	       task->exename, NET_IPV4_OCTETS(dest.ip), dest.port, h);
+	return (uint64_t)h;
 }
 
 // close(handle) — give up one handle.
@@ -1928,7 +2025,10 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// pipe ends, vfs_directory_t has no refcount, so sharing one would
 		// dangle the child's copy the moment the parent closes. Reject here,
 		// where the caller gets a clean error instead of a haunted handle.
-		if (h->type == HANDLE_DIR)
+		// Net handles are refused for the same refcount reason (udp_conn_t
+		// has a single owner by design) — a "hand the child my connection"
+		// story arrives with a refcount when a real consumer wants it.
+		if (h->type == HANDLE_DIR || h->type == HANDLE_NET_UDP)
 		{
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;

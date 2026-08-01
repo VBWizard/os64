@@ -40,10 +40,13 @@
 #define UDP_PORT_DHCP_SERVER 67
 #define UDP_PORT_DHCP_CLIENT 68
 
-// How many ports the KERNEL can have claimed at once. In-kernel consumers
-// are enumerable (DHCP; someday DNS-over-ctl? no — DNS is userland); the
-// syscall era resizes this thinking entirely, so small and honest for now.
-#define UDP_MAX_BINDINGS 8
+// How many ports can be claimed at once. The syscall era arrived (net_dial:
+// every dialed UDP handle binds an ephemeral port through this same table),
+// so the bound is no longer "enumerable in-kernel consumers" — it is DHCP
+// plus every open conversation in every task. 32 covers a whole shell
+// session of chatty tools; the day it doesn't, the counter that refuses
+// bind #33 says so loudly.
+#define UDP_MAX_BINDINGS 32
 
 typedef struct udp_stats
 {

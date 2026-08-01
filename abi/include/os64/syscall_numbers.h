@@ -63,6 +63,15 @@
 // sentence took Linux 22 years (linuxatemyram.com, MemAvailable, 2014).
 #define SYSCALL_MEMORY     27
 
+// net_dial(dest) — open a network conversation. arg0 = const os64_netdest_t*
+// (os64/net.h): WHERE (ip, host order — ruling #2: the kernel owns the wire),
+// WHICH DOOR (port), HOW (protocol). Returns a handle you read() and write()
+// like any other, or negative. The Plan 9 dial STRING ("udp!10.0.2.2!53")
+// never crosses this boundary — libos64's os64_dial() parses it into this
+// struct (ruling #1: kernel speaks structs, the library speaks strings).
+// v1 speaks UDP; TCP takes the same struct in Phase 4.
+#define SYSCALL_NET_DIAL   28
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

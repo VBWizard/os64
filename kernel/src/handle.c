@@ -16,6 +16,7 @@
 #include "memory/paging.h"    // kKernelPML4 (the already-in-kernel-context test)
 #include "memory/kmalloc.h"   // kfree (the f_path copy owned by HANDLE_FILE)
 #include "memory/vma.h"       // call_in_kernel_context
+#include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
 
 void handle_table_init(struct task *t)
 {
@@ -187,6 +188,13 @@ bool handle_close(struct task *t, int h)
 			break;
 		case HANDLE_DIR:
 			handle_dir_object_close(handle->object);
+			break;
+		case HANDLE_NET_UDP:
+			// Hang up: unbinds the ephemeral port and frees the object.
+			// Safe on any CR3 (everything it touches is kmalloc'd, upper
+			// half) and safe from handle_close_all at task exit (the
+			// owning thread has left any blocking read by then).
+			udp_conn_close((udp_conn_t *)handle->object);
 			break;
 		default:
 			// Console handles reference no object — nothing to release.

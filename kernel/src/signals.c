@@ -11,6 +11,7 @@
 #include "driver/system/usb/xhci.h"
 #include "driver/net/virtio_net.h"
 #include "driver/net/dhcp.h"
+#include "driver/net/udp_conn.h"
 
 extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
@@ -130,6 +131,15 @@ void processSignals()
 	// the wake fired. Re-evaluating the CONDITION (not a remembered edge) is
 	// what makes pipes lost-wakeup-free.
 	pipe_wake_if_ready();
+
+	// And for dialed network conversations: wake any reader whose datagram
+	// ring is non-empty. Placed AFTER virtio_net_poll above on purpose —
+	// a packet delivered this pass wakes its reader this same pass, so
+	// blocking-read latency is one scheduler pass, not two. (UDP conns
+	// have NO fast-path wake at all — their enqueue runs in RX context,
+	// which may not hold this lock — so this sweep is their only waker;
+	// see the context map in udp_conn.c.)
+	udp_conn_wake_if_ready();
 
 	//Release the lock
 	__sync_lock_release(&kSchedulerSwitchTasksLock);
