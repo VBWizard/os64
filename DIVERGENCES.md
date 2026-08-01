@@ -91,6 +91,18 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 
 ---
 
+## Networking (rulings ratified 2026-07-28; NETWORK.md carries the arguments)
+
+| Unix/Linux | os64 | Why | Recorded |
+|---|---|---|---|
+| `sockaddr` cast circus, address families, `connect(fd, (struct sockaddr*)&sa, ...)` | Kernel ABI: typed structs ONLY, no text at the syscall boundary; libos64 speaks Plan 9 dial strings — `os64_dial("tcp!10.0.2.2!80")`, protocol segment ALWAYS explicit (it's the verb: stream vs datagram), `net!` wildcard refused | The struct is the contract; the string is user-input syntax and user input is a library problem. The `!` is UUCP bang-path lineage via Plan 9 — ruled fitting by the resident hippie | NETWORK.md ruling #1 |
+| `htons()`/`ntohs()`/`htonl()`/`ntohl()` at every call site, forever | ABI is HOST-ORDER everywhere; the kernel owns the wire. The entire swap surface of the OS is four helpers in net_wire.h; htons never exists in libos64 | 1981's big-endian coin toss is not every application's problem; forgetting htons compiles clean and connects to port 20480 | NETWORK.md ruling #2, net_wire.h |
+| `listen()`/`accept()` trio: vestigial backlog int, sockaddr out-param, then `getpeername()` | A listener HANDLE whose read() yields one `os64_netconn_t {handle, peer_ip, peer_port}` — accept IS read; peer identity arrives with the connection | Berkeley's own poll() reports a pending connection as READABLE — its event API spent 40 years admitting accept is a read | NETWORK.md ruling #3 |
+| `sendto`/`recvfrom` per-packet addressing as UDP's front door | Dial a UDP peer once, then plain read/write on the handle; a recvfrom-equivalent arrives only when a real consumer demands it | Covers DHCP/DNS/ping cleanly; consumer-driven growth (the args-parser precedent) | NETWORK.md ruling #4 |
+| `/proc/net/*` text files (network state squatting in the process filesystem) | Syscall first (memory(out) pattern: typed struct, meanings fixed forever) for fixed-shape state; a real `/net` mount later (procfs template) for browsable tables. /proc stays processes-only, constitutionally | Numbers may change; meanings never do — and /proc's scope creep is exactly how Linux's happened | NETWORK.md ruling #5 |
+
+---
+
 ## The tree & filesystems
 
 | Unix/Linux | os64 | Why | Recorded |
