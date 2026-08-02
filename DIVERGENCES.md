@@ -29,6 +29,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `$?`, exit code 0 = success | Bourne 1977; last pipeline stage speaks for the job |
 | 128+signo death codes (130, 137) | Human-legible corpse tags, kept even though signal *bits* diverged |
 | `cd` as a builtin | Inherited cwd at spawn makes it structural, same as every shell since V6 |
+| The `-NUM` count form (`tail -40`, `head -20`, `grep -3`) | POSIX marks it OBSOLESCENT and it stays anyway, as an opt-in `numeric_alias` row in os64_args. The ambiguity POSIX cites — collisions with negative operands and with option bundling — does not exist in this grammar (bundles are letters; no program declares a digit as an option letter), so the objection is inherited, not earned. Decades of muscle memory is a real interface requirement in an OS with one daily user (args.h, 2026-08-01) |
 | cwd-first, then PATH walk; argv[0] stays as typed | V6 behavior, colon-separated PATH (V7's gift) |
 | Ctrl+letter = control codes; Ctrl+D = EOT = EOF | 1963 semantics, done properly (one-shot EOF, then normal reads) |
 | ELF, SysV x86-64 calling convention | Interop with the toolchain — a *specific reason*, per the philosophy |
