@@ -86,6 +86,14 @@ hobby-scale judgment calls — re-rank freely.
 | Console scroll runs with **interrupts off**: the renderer spinlock is held across a ~3MB full-screen `memmove`, so a scroll can delay that core's tick by a few hundred µs. Correctness beats the jitter (the console is not a hot path), but if it ever matters the fix is a scroll that does NOT hold the lock — not a lock that does not cover the scroll | Cleanup | S | if the console ever gets hot | `BasicRenderer.c` kRendererLock |
 | `handle_alloc`/`handle_close` take no lock — safe today because a task's handle table is touched only by that task's own syscalls (and by `spawn` while the child is still being built, before it is schedulable). Grows a lock the day handles are shared between threads of one task | Cleanup | S | when a task has >1 thread using handles | `handle.c` |
 
+## Userland utilities
+
+| Debt | Sev | Cost | Gate | Source |
+|---|---|---|---|---|
+| `tail`: a SHORT READ inside the backward block scan silently loses lines. If the fill loop ends with `filled < blockSize`, only the bytes that arrived are scanned but `blockEnd` still moves a whole block, so newlines in the unread tail are never counted — fewer lines printed than asked, no error. Needs an I/O error or a mid-read shrink to trigger. Fix = treat a short fill as an error, or rescan from `blockStart + filled` | Cleanup | XS | when a real short read is ever observed | `tail.c` find_tail_start |
+| `tail` reads no STDIN — `something \| tail` exits 2 instead of following the pipe. A pipe can't seek, so `-n` would need a keep-the-last-N ring instead of a backward scan; that is the actual work | Feature-gate | S | when a pipeline wants it | `tail.c` main |
+| `tail` computes "the last N lines" from the `stat` size taken BEFORE the open, so a file that grows in between is measured slightly stale. Self-corrects instantly under `-f`; harmless otherwise | Cleanup | XS | never, probably | `tail.c` main |
+
 ## GUI (all GRAPHICS.md "future work")
 
 | Debt | Sev | Cost | Gate | Source |
