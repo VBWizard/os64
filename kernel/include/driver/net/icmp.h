@@ -70,4 +70,12 @@ void icmp_input(net_device_t* dev, uint32_t src_ip, bool broadcast,
 int32_t icmp_send_echo_request(net_device_t* dev, uint32_t dst_ip,
                                uint16_t ident, uint16_t sequence);
 
+// The same, with a CALLER-SUPPLIED payload — what a dialed ICMP handle
+// (icmp_conn.c) sends when userland writes to it. The payload is opaque
+// to the kernel: the peer must echo it back byte for byte, so whatever a
+// program puts in comes home, which is how `ping` measures a round trip
+// (a timestamp in, the same timestamp out, subtract).
+int32_t icmp_send_echo(net_device_t* dev, uint32_t dst_ip, uint16_t ident,
+                       uint16_t sequence, const void* payload, uint16_t length);
+
 #endif // ICMP_H

@@ -513,14 +513,18 @@ void tcp_wake_if_ready(void)
 		// segment is acknowledged, when the handshake completes, or for
 		// death. (Same doctrine as pipes — a wake is a hint, never a
 		// promise, and both sleepers re-test after waking.)
-		if (c->reader != NULL && (c->rcv_count > 0 || c->rcv_fin || c->reset ||
-		                          c->state == TCP_CLOSED))
+		// The ISLEEP test is part of the condition (see the long note in
+		// icmp_conn.c): a waiter that registered but has not yet parked
+		// must stay registered, or its wake is silently dropped and it
+		// sleeps the whole backstop second.
+		if (c->reader != NULL && c->reader->threadState == THREAD_STATE_ISLEEP &&
+		    (c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
 		{
 			r = c->reader;
 			c->reader = NULL;
 		}
-		if (c->writer != NULL && (c->snd_len == 0 || c->reset ||
-		                          c->state == TCP_CLOSED))
+		if (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP &&
+		    (c->snd_len == 0 || c->reset || c->state == TCP_CLOSED))
 		{
 			w = c->writer;
 			c->writer = NULL;

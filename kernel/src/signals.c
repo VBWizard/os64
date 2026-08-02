@@ -13,6 +13,7 @@
 #include "driver/net/dhcp.h"
 #include "driver/net/udp_conn.h"
 #include "driver/net/tcp.h"
+#include "driver/net/icmp_conn.h"
 
 extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
@@ -152,6 +153,9 @@ void processSignals()
 	// writer wakes when its segment is acknowledged. Same level-triggered
 	// re-evaluation, same reason.
 	tcp_wake_if_ready();
+
+	// And echo conversations: a reader wakes when its reply lands.
+	icmp_conn_wake_if_ready();
 
 	//Release the lock
 	__sync_lock_release(&kSchedulerSwitchTasksLock);

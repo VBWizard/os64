@@ -1,0 +1,18 @@
+{
+  "//": "os64 project permissions. The three workflow commands (make, qemu, the QEMU monitor over telnet) are blanket-approved by Chris, 2026-08-01: 'There is *no* make, qemu-system-x86_64 or telnet that I wouldn't approve.' The rest are read-only inspection tools. Lives in settings.json (not settings.local.json) on purpose: this file is per-DIRECTORY, and the os64-net worktree started with an empty allowlist, which is what made the networking arc one long permission prompt.",
+  "permissions": {
+    "allow": [
+      "Bash(make*)",
+      "Bash(qemu-system-x86_64*)",
+      "Bash(telnet*)",
+      "Bash(x86_64-elf-objdump *)",
+      "Bash(x86_64-elf-readelf *)",
+      "Bash(x86_64-elf-nm *)",
+      "Bash(objdump *)",
+      "Bash(readelf *)",
+      "Bash(nm *)",
+      "Bash(xxd *)",
+      "Bash(mdir *)"
+    ]
+  }
+}

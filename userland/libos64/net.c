@@ -58,9 +58,18 @@ int64_t os64_dial(const char *dialstring)
 	if (bang - s == 3 && s[0] == 'u' && s[1] == 'd' && s[2] == 'p')
 		protocol = OS64_NET_UDP;
 	else if (bang - s == 3 && s[0] == 't' && s[1] == 'c' && s[2] == 'p')
-		protocol = OS64_NET_TCP;   // parses today, kernel refuses until Phase 4
+		protocol = OS64_NET_TCP;
+	else if (bang - s == 4 && s[0] == 'i' && s[1] == 'c' && s[2] == 'm' && s[3] == 'p')
+		protocol = OS64_NET_ICMP;
 	else
 		return -1;
+
+	// ICMP dial strings have TWO segments, not three ("icmp!10.0.2.2"),
+	// because echo has no ports — the kernel owns the identifier that
+	// stands in for one (see os64/net.h). Plan 9 would have called this
+	// segment a "service"; echo simply doesn't have one, and inventing a
+	// placeholder to keep the shape uniform would be ceremony.
+	bool no_service = (protocol == OS64_NET_ICMP);
 
 	// Segment 2: the address — dotted quad only, until the resolver
 	// library teaches this spot to read names.
@@ -69,10 +78,17 @@ int64_t os64_dial(const char *dialstring)
 	for (int octet = 0; octet < 4; octet++)
 	{
 		const char *seg_end = s;
+		// The last octet ends at the '!' before the service — or at the
+		// end of the string when there is no service segment (ICMP).
 		char stop = (octet < 3) ? '.' : '!';
 		while (*seg_end && *seg_end != stop)
 			seg_end++;
-		if (*seg_end != stop)
+		if (octet == 3 && no_service)
+		{
+			if (*seg_end != '\0')
+				return -1;   // "icmp!1.2.3.4!something" — a port we'd ignore
+		}
+		else if (*seg_end != stop)
 			return -1;
 
 		uint32_t value;
@@ -84,13 +100,17 @@ int64_t os64_dial(const char *dialstring)
 	}
 
 	// Segment 3: the service — numeric port until names ("!dns") earn a
-	// consumer. Runs to end of string; port 0 is not a door.
-	const char *end = s;
-	while (*end)
-		end++;
-	uint32_t port;
-	if (!parse_decimal_segment(s, end, 65535, &port) || port == 0)
-		return -1;
+	// consumer. Runs to end of string; port 0 is not a door. Absent
+	// entirely for ICMP, whose destination is a machine, not a door.
+	uint32_t port = 0;
+	if (!no_service)
+	{
+		const char *end = s;
+		while (*end)
+			end++;
+		if (!parse_decimal_segment(s, end, 65535, &port) || port == 0)
+			return -1;
+	}
 
 	os64_netdest_t dest = {
 		.ip = ip,

@@ -123,7 +123,12 @@
 // stack grows above them, the protocol layers — split into finer bits only
 // when one subsystem's chatter starts drowning another's (the DEBUG_PIPE
 // lesson: a bit earns independence when someone needs it alone).
-#define DEBUG_NET (__uint128_t)1 << 27
+// Bit 28, not 27: the userland branch minted DEBUG_DIAG at 27 in parallel
+// with this arc, and the two files merge without a textual conflict — so
+// the collision would have arrived silently and made "turn on net logging"
+// also turn on the scheduler flight recorder. Exactly the accident the
+// VFS/shutdown pair already taught this file once (2026-08-01).
+#define DEBUG_NET (__uint128_t)1 << 28
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127

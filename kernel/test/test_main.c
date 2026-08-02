@@ -39,6 +39,7 @@
 #include "driver/net/dhcp.h"
 #include "driver/net/udp_conn.h"
 #include "driver/net/tcp.h"
+#include "driver/net/icmp_conn.h"
 
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -2193,6 +2194,60 @@ static bool test_net_dial_ring3(void)
     return true;
 }
 
+// The ICMP handle — the mechanism `ping` is waiting on (utilities are
+// Chris's; the kernel plumbing is mine). Dials the gateway, sends a
+// payload carrying a tick stamp, and reads the echo back: proving the
+// identifier demux, the payload round trip, and the blocking read that
+// `ping` will time with os64_ticks(). Live against slirp, which answers
+// echo for its gateway address (test_net_ping already relies on that).
+static bool test_net_icmp_conn(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_icmp_conn (no NIC)\n");
+        return true;
+    }
+
+    icmp_conn_t *c = icmp_conn_dial(kNetDevices[0], kNetIPv4Gateway);
+    if (c == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - dial failed\n");
+        return false;
+    }
+
+    // The payload every ping since 1983 sends: a timestamp to subtract
+    // when it comes home, plus a recognizable pattern after it.
+    uint8_t out[32];
+    uint64_t stamp = kTicksSinceStart;
+    memcpy(out, &stamp, sizeof(stamp));
+    for (int i = 8; i < 32; i++)
+        out[i] = (uint8_t)(0x40 + i);
+
+    if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - write failed\n");
+        icmp_conn_close(c);
+        return false;
+    }
+
+    uint8_t in[64];
+    long got = icmp_conn_read(c, in, sizeof(in));
+    uint64_t rtt = kTicksSinceStart - stamp;
+    icmp_conn_close(c);
+
+    if (got != (long)sizeof(out)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u\n",
+               got, (uint32_t)sizeof(out));
+        return false;
+    }
+    // Byte-for-byte: an echo that alters the payload is not an echo.
+    if (memcmp(in, out, sizeof(out)) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - payload came back altered\n");
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks)\n",
+           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt);
+    return true;
+}
+
 // Phase 4, exhibit A — the RST path, which needs nothing but a closed
 // door. Dialing a port nobody listens on must FAIL FAST: slirp's host
 // side refuses, the refusal comes back as a TCP reset, and tcp_input's
@@ -2521,6 +2576,7 @@ static void register_builtin_tests(void)
     test_register("net_dhcp", test_net_dhcp, TEST_PHASE_POSTBOOT);
     test_register("net_udp_conn", test_net_udp_conn, TEST_PHASE_POSTBOOT);
     test_register("net_dial_ring3", test_net_dial_ring3, TEST_PHASE_POSTBOOT);
+    test_register("net_icmp_conn", test_net_icmp_conn, TEST_PHASE_POSTBOOT);
     test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_POSTBOOT);
     test_register("net_tcp_fetch_ring3", test_net_tcp_fetch_ring3, TEST_PHASE_POSTBOOT);
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);

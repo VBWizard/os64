@@ -16,14 +16,16 @@
 
 #include <stdint.h>
 
-#define OS64_NET_UDP 17   // datagrams: each write is one packet, each read one packet
-#define OS64_NET_TCP 6    // streams — Phase 4; dialing it today returns an error
+#define OS64_NET_UDP  17   // datagrams: each write is one packet, each read one packet
+#define OS64_NET_TCP  6    // streams: read/write bytes, like a pipe with a peer
+#define OS64_NET_ICMP 1    // echoes: write asks, read hears the answer come back
 
 typedef struct os64_netdest
 {
 	uint32_t ip;         // host order: NET destination address (10.0.2.2 == 0x0A000202)
 	uint16_t port;       // host order: which door (53 = DNS, 67 = DHCP...)
-	uint16_t protocol;   // OS64_NET_UDP / OS64_NET_TCP
+	                     // IGNORED for OS64_NET_ICMP — echo has no ports (below)
+	uint16_t protocol;   // OS64_NET_UDP / OS64_NET_TCP / OS64_NET_ICMP
 } os64_netdest_t;
 
 // The handle net_dial returns obeys the house read/write contract:
@@ -37,5 +39,26 @@ typedef struct os64_netdest
 // Datagrams from anyone OTHER than the dialed peer never reach the handle
 // (connected-UDP semantics, ruling #4 option (a)); a future recvfrom-style
 // call arrives only when a real consumer demands it (option (c)).
+//
+// ── ICMP: "udp!" with no doors ──────────────────────────────────────────
+// An ICMP handle (dial "icmp!10.0.2.2" — two segments, no port) sends and
+// receives ECHO, the pair `ping` is made of:
+//   write(h, buf, len)  — one echo request carrying `buf` as its payload
+//   read(h, buf, len)   — blocks for the matching reply, returns the
+//                         payload the peer echoed back to us
+//
+// Echo has no port numbers, so what identifies "my conversation" is the
+// ICMP IDENTIFIER field — a 16-bit number whose entire job is to let one
+// machine run several pings at once without mixing up the answers. That
+// is a port in all but name, so os64 treats it as one: the kernel assigns
+// it at dial time exactly the way it assigns an ephemeral port, and
+// replies carrying anyone else's identifier never reach your handle.
+// (This is also how ping stopped needing root on modern systems — an
+// identifier the kernel owns is a raw socket nobody can abuse.)
+//
+// The SEQUENCE number is likewise the kernel's, incremented per write. A
+// program that wants to match a specific reply — or measure a round trip —
+// puts its own marker in the PAYLOAD and reads it back, which is exactly
+// what every ping since 1983 has done with a timestamp.
 
 #endif // OS64_ABI_NET_H

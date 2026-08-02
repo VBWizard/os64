@@ -98,7 +98,14 @@ void udp_conn_wake_if_ready(void)
 	{
 		thread_t* w = NULL;
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
-		if (c->waiter != NULL && c->count > 0)
+		// The ISLEEP test belongs in the CONDITION, not just in the wake
+		// primitive: clearing the registration of a waiter that has not
+		// finished parking loses the wake entirely (the primitive only
+		// moves ISLEEP threads), and the sleeper then eats its full
+		// backstop second. See the long note in icmp_conn.c, where a
+		// measured 100-tick "round trip" made it visible.
+		if (c->waiter != NULL && c->count > 0 &&
+		    c->waiter->threadState == THREAD_STATE_ISLEEP)
 		{
 			w = c->waiter;
 			c->waiter = NULL;

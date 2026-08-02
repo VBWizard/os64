@@ -33,6 +33,7 @@
 #include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
 #include "driver/net/udp_conn.h"     // the object behind HANDLE_NET_UDP
 #include "driver/net/tcp.h"          // ...and HANDLE_NET_TCP
+#include "driver/net/icmp_conn.h"    // ...and HANDLE_NET_ICMP
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
@@ -939,6 +940,27 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			return written;
 		}
 
+		case HANDLE_NET_ICMP:
+		{
+			// One write = ONE echo request carrying these bytes. Same
+			// atomic-datagram contract as UDP; the payload comes home
+			// echoed, which is the whole mechanism `ping` measures with.
+			if (length > ICMP_CONN_MAX_PAYLOAD)
+				return SYSCALL_RESULT_INVALID;
+
+			char *kbuf = kmalloc(length);
+			if (kbuf == NULL)
+				return SYSCALL_RESULT_INVALID;
+			if (!copy_user_buffer(user_buffer, kbuf, length))
+			{
+				kfree(kbuf);
+				return SYSCALL_RESULT_BAD_USER_DATA;
+			}
+			long n = icmp_conn_write((icmp_conn_t *)h->object, kbuf, length);
+			kfree(kbuf);
+			return (n < 0) ? SYSCALL_RESULT_INVALID : (uint64_t)n;
+		}
+
 		case HANDLE_NET_UDP:
 		{
 			// One write = ONE datagram, atomic by protocol: an oversize
@@ -1104,6 +1126,20 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			}
 			break;
 
+		case HANDLE_NET_ICMP:
+			// Blocks until an echo reply carrying OUR identifier comes
+			// back, then returns the payload we sent, as the peer echoed
+			// it. (What `ping` does with those bytes — a timestamp,
+			// a pattern check — is `ping`'s business.)
+			got = icmp_conn_read((icmp_conn_t *)h->object, kbuf, want);
+			if (got == ICMP_CONN_ERR_INTERRUPTED)
+			{
+				kfree(kbuf);
+				raise_terminating_signal_and_die(task, NULL);
+				__builtin_unreachable();
+			}
+			break;
+
 		case HANDLE_NET_UDP:
 			// Blocks until one datagram arrives from the dialed peer, then
 			// returns exactly that datagram (short if the buffer is smaller;
@@ -1223,10 +1259,15 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_user_buffer((const void *)arg0, &dest, sizeof(dest)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
-	if (dest.ip == 0 || dest.port == 0)
+	if (dest.ip == 0)
 		return SYSCALL_RESULT_INVALID;
-	if (dest.protocol != OS64_NET_UDP && dest.protocol != OS64_NET_TCP)
+	if (dest.protocol != OS64_NET_UDP && dest.protocol != OS64_NET_TCP &&
+	    dest.protocol != OS64_NET_ICMP)
 		return SYSCALL_RESULT_INVALID;   // no wildcard: os64 says what it means
+	// A port of 0 is meaningless for the port protocols; ICMP has no ports
+	// at all (its identifier is kernel-assigned), so the field is ignored.
+	if (dest.port == 0 && dest.protocol != OS64_NET_ICMP)
+		return SYSCALL_RESULT_INVALID;
 
 	// Dial tone requires a line: no NIC, no conversation. (A netless boot
 	// is a configuration, not an error — but dialing on one is an error.)
@@ -1246,6 +1287,13 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		conn = tcp_conn_dial(kNetDevices[0], dest.ip, dest.port);
 		tag = HANDLE_NET_TCP;
 	}
+	else if (dest.protocol == OS64_NET_ICMP)
+	{
+		// Nothing to negotiate: echo has no handshake, so the dial only
+		// allocates the identifier that makes replies findable.
+		conn = icmp_conn_dial(kNetDevices[0], dest.ip);
+		tag = HANDLE_NET_ICMP;
+	}
 	else
 	{
 		conn = udp_conn_dial(kNetDevices[0], dest.ip, dest.port);
@@ -1258,14 +1306,16 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (h < 0)
 	{
 		// Out of handle slots — hang up cleanly on whichever we opened.
-		if (tag == HANDLE_NET_TCP) tcp_conn_close((tcp_conn_t *)conn);
-		else                       udp_conn_close((udp_conn_t *)conn);
+		if      (tag == HANDLE_NET_TCP)  tcp_conn_close((tcp_conn_t *)conn);
+		else if (tag == HANDLE_NET_ICMP) icmp_conn_close((icmp_conn_t *)conn);
+		else                             udp_conn_close((udp_conn_t *)conn);
 		return SYSCALL_RESULT_INVALID;
 	}
 
+	const char *proto_name = (dest.protocol == OS64_NET_TCP)  ? "tcp" :
+	                         (dest.protocol == OS64_NET_ICMP) ? "icmp" : "udp";
 	printd(DEBUG_NET, "net_dial: task %s -> %s!%u.%u.%u.%u!%u = handle %d\n",
-	       task->exename, dest.protocol == OS64_NET_TCP ? "tcp" : "udp",
-	       NET_IPV4_OCTETS(dest.ip), dest.port, h);
+	       task->exename, proto_name, NET_IPV4_OCTETS(dest.ip), dest.port, h);
 	return (uint64_t)h;
 }
 
@@ -2145,7 +2195,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// has a single owner by design) — a "hand the child my connection"
 		// story arrives with a refcount when a real consumer wants it.
 		if (h->type == HANDLE_DIR || h->type == HANDLE_NET_UDP ||
-		    h->type == HANDLE_NET_TCP)
+		    h->type == HANDLE_NET_TCP || h->type == HANDLE_NET_ICMP)
 		{
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;

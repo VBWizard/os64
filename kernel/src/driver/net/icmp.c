@@ -18,6 +18,7 @@
 #include "driver/net/net_checksum.h"
 #include "driver/net/ipv4.h"
 #include "driver/net/icmp.h"
+#include "driver/net/icmp_conn.h"
 
 icmp_stats_t kIcmpStats;
 
@@ -100,6 +101,14 @@ void icmp_input(net_device_t* dev, uint32_t src_ip, bool broadcast,
 			kIcmpStats.last_reply_src   = src_ip;
 			kIcmpStats.last_reply_ident = net_read16(p + 4);
 			kIcmpStats.last_reply_seq   = net_read16(p + 6);
+
+			// Route it to whoever asked. The identifier is the demux key
+			// (echo's stand-in for a port — see icmp_conn.h); a reply
+			// nobody dialed for lands nowhere, which is correct: an
+			// unsolicited echo reply is either a stale answer or someone
+			// else's business.
+			icmp_conn_deliver(src_ip, kIcmpStats.last_reply_ident,
+			                  p + ICMP_HDR_LEN, (uint16_t)(length - ICMP_HDR_LEN));
 			printd(DEBUG_NET, "icmp: reply from %u.%u.%u.%u (id %u seq %u, %u bytes)\n",
 			       NET_IPV4_OCTETS(src_ip), kIcmpStats.last_reply_ident,
 			       kIcmpStats.last_reply_seq, length);
@@ -114,6 +123,29 @@ void icmp_input(net_device_t* dev, uint32_t src_ip, bool broadcast,
 			       p[0], p[1], NET_IPV4_OCTETS(src_ip));
 			break;
 	}
+}
+
+int32_t icmp_send_echo(net_device_t* dev, uint32_t dst_ip, uint16_t ident,
+                       uint16_t sequence, const void* payload, uint16_t length)
+{
+	if (length > ICMP_MAX_MSG - ICMP_HDR_LEN)
+		return -1;   // over MTU: refused, not fragmented (the Phase 2 stance)
+
+	uint8_t msg[ICMP_MAX_MSG];
+	msg[0] = ICMP_TYPE_ECHO_REQUEST;
+	msg[1] = 0;
+	net_write16(msg + 2, 0);
+	net_write16(msg + 4, ident);
+	net_write16(msg + 6, sequence);
+	if (length)
+		memcpy(msg + ICMP_HDR_LEN, (void*)payload, length);
+	uint16_t total = (uint16_t)(ICMP_HDR_LEN + length);
+	net_write16(msg + 2, net_checksum(msg, total));
+
+	int32_t rc = ipv4_send(dev, dst_ip, IPV4_PROTO_ICMP, msg, total);
+	if (rc == 0)
+		kIcmpStats.echo_requests_sent++;
+	return rc;
 }
 
 int32_t icmp_send_echo_request(net_device_t* dev, uint32_t dst_ip,
