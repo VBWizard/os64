@@ -28,3 +28,9 @@ pci.ids
 # with `make compdb`)
 compile_commands.json
 .cache/
+
+# Claude Code: settings.json is the SHARED allowlist (make/qemu/telnet are
+# blanket-approved, plus read-only inspectors) and SHOULD travel — a fresh
+# worktree that starts with an empty allowlist re-prompts for every build.
+# settings.local.json is per-machine and must not.
+.claude/settings.local.json
