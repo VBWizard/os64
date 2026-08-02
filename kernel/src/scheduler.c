@@ -600,15 +600,31 @@ thread_t* scheduler_get_running_thread(uint64_t threadID)
 	return slot;
 }
 
-void debug_print_registers(uint64_t apic_id, char* prefix, bool unconditional)
+// Dump the saved interrupt-frame registers for one core.
+//
+// This used to take an `unconditional` flag that forced the dump out by
+// TEMPORARILY SETTING kDebugLevel |= DEBUG_SCHEDULER and restoring it after.
+// That was removed 2026-08-01, for three reasons, in ascending order of
+// severity:
+//
+//   1. It didn't work. The printd below requires DEBUG_SCHEDULER *and*
+//      DEBUG_EXTRA_DETAILED (printd's gate is all-bits-must-match); the
+//      flip set only the first, so the dump stayed silent regardless.
+//   2. kDebugLevel is GLOBAL and this kernel is SMP. Between the set and
+//      the restore, every other core's DEBUG_SCHEDULER printd escaped its
+//      gate — which is how stray scheduler banners turned up in a log
+//      whose owner had deliberately gated them off (Chris spotted them
+//      while tailing logd's file and correctly refused to believe printd
+//      was at fault).
+//   3. Two cores in that window can make it PERMANENT: A sets the bit, B
+//      saves a copy that already has it, A restores (clearing), B restores
+//      its copy (setting it forever).
+//
+// The lesson worth keeping: a debug flag that one core can flip on behalf
+// of all cores is not a debug flag, it is a race. If a message must always
+// print, give it a level that is always on — never mutate the gate.
+void debug_print_registers(uint64_t apic_id, char* prefix)
 {
-	__uint128_t savedDebugFlags;
-	if (unconditional)
-	{
-		savedDebugFlags = kDebugLevel;
-        kDebugLevel |= DEBUG_SCHEDULER;
-    }
-
     printd(DEBUG_SCHEDULER | DEBUG_EXTRA_DETAILED,"*\t%s: CR3=0x%016lx, CS=0x%04X, RIP=0x%016lx, SS=0x%04X, DS=0x%04X, RAX=0x%016lx, RBX=0x%016lx, RCX=0x%016lx, RDX=0x%016lx, RSI=0x%016lx, RDI=0x%016lx, RSP=0x%016lx, RBP=0x%016lx, FLAGS=0x%016lx\n",
             prefix,
 			mp_isrSavedCR3[apic_id],
@@ -625,10 +641,6 @@ void debug_print_registers(uint64_t apic_id, char* prefix, bool unconditional)
             mp_isrSavedRSP[apic_id],
             mp_isrSavedRBP[apic_id],
             mp_isrSavedRFlags[apic_id]);
-	if (unconditional)
-	{
-		kDebugLevel = savedDebugFlags;
-	}
 }
 
 void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
@@ -669,7 +681,7 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
         thread->regs.GS=mp_isrSavedGS[apic_id];
         thread->regs.CR3=mp_isrSavedCR3[apic_id];
     }
-    debug_print_registers(apic_id, "save (or not)", false);
+    debug_print_registers(apic_id, "save (or not)");
 }
 
 void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
@@ -737,7 +749,7 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
         mp_isrSavedCR3[apic_id] = thread->regs.CR3; 
 //        memcpy((uintptr_t*)((process_t*)task->process)->stackStart, (uintptr_t*)parent->stackStart, ((process_t*)task->process)->stackSize);
     }
-	debug_print_registers(apic_id, "load", false);
+	debug_print_registers(apic_id, "load");
 }
 
 void scheduler_add_to_queue(thread_t *queue, thread_t* thread)
@@ -992,7 +1004,7 @@ void scheduler_run_new_thread()
     if (threadToStop && threadToRun->threadID==threadToStop->threadID)
     {
         printd(DEBUG_SCHEDULER,"*No new thread to run, continuing with the current task\n");
-		debug_print_registers(apic_id, "continue2", false);
+		debug_print_registers(apic_id, "continue2");
         // Continue path resumes from the isr arrays WITHOUT a reload, so the
         // forced-syscall check must run here too (regs were just stored above,
         // so regs.CS is fresh for the ring-3 seatbelt).
@@ -1125,29 +1137,29 @@ void scheduler_do()
 		if (kTicksSinceStart - diagLastTick >= TICKS_PER_SECOND)
 		{
 			uint64_t tscMS = ((acctPassStart - diagLastTSC) * 1000UL) / kCPUCyclesPerSecond;
-			printd(DEBUG_BOOT,
-				"DIAG: ticks +%lu tsc +%lums | pass 0:%lu 1:%lu 2:%lu 3:%lu runq %lu | nudge u%lu p%lu trig %lu | ipi %lu icrmax %lu lockmax %lu | settle %lu to %lu (ap %lu) setmax %lu\n",
-				kTicksSinceStart - diagLastTick, tscMS,
-				kDiagPassCount[0] - dPass[0],
-				(kMPCoreCount > 1) ? kDiagPassCount[kCPUInfo[1].apicID] - dPass[1] : 0,
-				(kMPCoreCount > 2) ? kDiagPassCount[kCPUInfo[2].apicID] - dPass[2] : 0,
-				(kMPCoreCount > 3) ? kDiagPassCount[kCPUInfo[3].apicID] - dPass[3] : 0,
-				kDiagRunnableLen,
-				kDiagNudgeUnpinned - dNudgeU, kDiagNudgePinned - dNudgeP,
-				kDiagTriggerCalls - dTrig,
-				kDiagIPISends - dIPI, kDiagICRMaxSpins, kDiagLockMaxSpins,
-				kDiagSettleBroadcasts - dBcast, kDiagSettleTimeouts - dTO,
-				kDiagSettleLastLateAPIC, kDiagSettleMaxSpins);
-			printd(DEBUG_BOOT,
-				"DIAG2: vec/lvt 0:0x%02x/0x%05x 1:0x%02x/0x%05x 2:0x%02x/0x%05x 3:0x%02x/0x%05x\n",
-				kDiagLastVector[0], kDiagLVT[0],
-				(kMPCoreCount > 1) ? kDiagLastVector[kCPUInfo[1].apicID] : 0,
-				(kMPCoreCount > 1) ? kDiagLVT[kCPUInfo[1].apicID] : 0,
-				(kMPCoreCount > 2) ? kDiagLastVector[kCPUInfo[2].apicID] : 0,
-				(kMPCoreCount > 2) ? kDiagLVT[kCPUInfo[2].apicID] : 0,
-				(kMPCoreCount > 3) ? kDiagLastVector[kCPUInfo[3].apicID] : 0,
-				(kMPCoreCount > 3) ? kDiagLVT[kCPUInfo[3].apicID] : 0);
-			diagLastTick = kTicksSinceStart; diagLastTSC = acctPassStart;
+            printd(DEBUG_DIAG,
+                   "DIAG: ticks +%lu tsc +%lums | pass 0:%lu 1:%lu 2:%lu 3:%lu runq %lu | nudge u%lu p%lu trig %lu | ipi %lu icrmax %lu lockmax %lu | settle %lu to %lu (ap %lu) setmax %lu\n",
+                   kTicksSinceStart - diagLastTick, tscMS,
+                   kDiagPassCount[0] - dPass[0],
+                   (kMPCoreCount > 1) ? kDiagPassCount[kCPUInfo[1].apicID] - dPass[1] : 0,
+                   (kMPCoreCount > 2) ? kDiagPassCount[kCPUInfo[2].apicID] - dPass[2] : 0,
+                   (kMPCoreCount > 3) ? kDiagPassCount[kCPUInfo[3].apicID] - dPass[3] : 0,
+                   kDiagRunnableLen,
+                   kDiagNudgeUnpinned - dNudgeU, kDiagNudgePinned - dNudgeP,
+                   kDiagTriggerCalls - dTrig,
+                   kDiagIPISends - dIPI, kDiagICRMaxSpins, kDiagLockMaxSpins,
+                   kDiagSettleBroadcasts - dBcast, kDiagSettleTimeouts - dTO,
+                   kDiagSettleLastLateAPIC, kDiagSettleMaxSpins);
+            printd(DEBUG_DIAG,
+                   "DIAG2: vec/lvt 0:0x%02x/0x%05x 1:0x%02x/0x%05x 2:0x%02x/0x%05x 3:0x%02x/0x%05x\n",
+                   kDiagLastVector[0], kDiagLVT[0],
+                   (kMPCoreCount > 1) ? kDiagLastVector[kCPUInfo[1].apicID] : 0,
+                   (kMPCoreCount > 1) ? kDiagLVT[kCPUInfo[1].apicID] : 0,
+                   (kMPCoreCount > 2) ? kDiagLastVector[kCPUInfo[2].apicID] : 0,
+                   (kMPCoreCount > 2) ? kDiagLVT[kCPUInfo[2].apicID] : 0,
+                   (kMPCoreCount > 3) ? kDiagLastVector[kCPUInfo[3].apicID] : 0,
+                   (kMPCoreCount > 3) ? kDiagLVT[kCPUInfo[3].apicID] : 0);
+            diagLastTick = kTicksSinceStart; diagLastTSC = acctPassStart;
 			dNudgeU = kDiagNudgeUnpinned; dNudgeP = kDiagNudgePinned;
 			dTrig = kDiagTriggerCalls; dIPI = kDiagIPISends;
 			dBcast = kDiagSettleBroadcasts; dTO = kDiagSettleTimeouts;
@@ -1179,7 +1191,7 @@ void scheduler_do()
 	}
 	else
 	{
-		debug_print_registers(apic_id, "continue", true);
+		debug_print_registers(apic_id, "continue");
         printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   

@@ -49,7 +49,28 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     }
     uint64_t tick_count = kTicksSinceStart;
     uint8_t priority = (debug_level >> 126) & 0x3;  // Extract top 2 bits for priority
-    uint8_t category = __builtin_ctz(debug_level & 0x3FFFFFFFFFFFFFFF); // First category set
+    // Which category this line belongs to: the index of the LOWEST set
+    // category bit. Two traps, both fixed 2026-08-01 (Chris green-lit it
+    // while noting category isn't consumed yet — it's earmarked for
+    // printing the flag's name on each log line, which only works if the
+    // number is right):
+    //
+    //   * The old mask was a 64-bit literal against a __uint128_t, so
+    //     every bit above 63 was silently truncated away. DEBUG_SPECIAL
+    //     (bit 125) therefore masked to ZERO...
+    //   * ...and __builtin_ctz(0) is UNDEFINED BEHAVIOR. It happened to
+    //     return something plausible; that is the worst kind of working.
+    //
+    // Now: strip only the two PRIORITY bits (126/127), search the full
+    // 128, and guard the all-zero case explicitly.
+    __uint128_t category_bits = debug_level & ~(((__uint128_t)3) << 126);
+    uint8_t category = 0;
+    if (category_bits != 0)
+    {
+        uint64_t low = (uint64_t)category_bits;
+        category = low ? (uint8_t)__builtin_ctzll(low)
+                       : (uint8_t)(64 + __builtin_ctzll((uint64_t)(category_bits >> 64)));
+    }
 
     va_list args;
     va_start(args, fmt);
