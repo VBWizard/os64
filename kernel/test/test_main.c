@@ -2578,6 +2578,19 @@ static void test_run_phase(int phase, const char *label)
 
     printd(DEBUG_TESTS, "BUILT-IN TESTS: %u passed, %u failed\n", (unsigned int)passed, (unsigned int)failed);
 
+    // ONE summary line on the glass per phase — not the per-test chatter,
+    // which stays on serial where it can be forty lines long without
+    // eating the boot screen. This exists because success used to print
+    // NOTHING here: the display said "Running post-boot tests ..." and
+    // then moved on, so a suite that silently failed to run looked
+    // exactly like a suite that passed. Failures already print by name
+    // above (and panic); this is the other half of that honesty — the
+    // count is what proves the tests actually happened.
+    // (Chris caught it 2026-08-01, one slice after catching the same
+    // "assume it all went to plan" habit in the DNS fixture.)
+    printf("%s tests: %u passed, %u failed\n", label,
+           (unsigned int)passed, (unsigned int)failed);
+
     if (failed > 0) {
         // panic(), not a bare cli/hlt: panic force-drains the log buffer to
         // serial before halting.  The old halt stranded this message — and any

@@ -284,9 +284,8 @@ void kernel_init()
     if (kRunTests)
     {
         test_framework_init();
-        printf("Running pre-boot tests ... ");
-        test_run_preboot();
-        printf(" done\n");
+        printf("Running pre-boot tests ...\n");
+        test_run_preboot();   // prints its own "pre-boot tests: N passed, M failed"
     }
 
 	// BOOTMARK mile-markers (kernel.h) — PERMANENT instrumentation, gated by
