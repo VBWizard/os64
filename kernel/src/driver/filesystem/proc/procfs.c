@@ -741,9 +741,15 @@ static int proc_ctl_command(task_t *task, const char *word, size_t consumed)
 			return -1;
 		}
 
-		task->threads->signals.sigind |= kProcCtlVerbs[i].signal;
-		printd(DEBUG_SYSCALL, "proc: ctl '%s' -> task %lu (%s)\n",
-		       word, task->taskID, task->exename);
+		// Every thread, not just the first: a ctl verb aimed at a task is
+		// aimed at the whole task. Killing only the main thread left the
+		// workers running (and four cores hot) while the task showed as a
+		// zombie — see task_signal_all_threads.
+		task_signal_all_threads(task, kProcCtlVerbs[i].signal);
+		printd(DEBUG_SYSCALL | DEBUG_TASK, "proc: ctl '%s' -> task %lu (%s), %u thread%s signalled\n",
+		       word, task->taskID, task->exename,
+		       proc_task_thread_count(task),
+		       proc_task_thread_count(task) == 1 ? "" : "s");
 		return (int)consumed;
 	}
 	return -1;

@@ -63,16 +63,21 @@ bool console_intr_intercept(char ascii)
 	if (fg == NULL || fg->controllingShell)
 		return false;               // no owner yet, or the shell: stays data
 
-	thread_t *t = fg->threads;
-	if (t == NULL)
+	if (fg->threads == NULL)
 		return false;
 
-	// One word-OR — all an IRQ path is allowed to do. The victim dies at its
-	// own next syscall boundary (dispatcher check / blocking-loop checks in
-	// console_read and pipe.c), in its own context, through the normal
-	// task_exit path. If it is parked in ISLEEP, processSignals sees this bit
-	// and wakes it into that check within a scheduler pass (~10ms).
-	t->signals.sigind |= SIGINT;
+	// A word-OR per thread — still all an IRQ path is allowed to do, and a
+	// read-only walk of a chain whose nodes are published fully linked.
+	// EVERY thread, because Ctrl+C means "stop that program", and a
+	// program is now allowed to be more than one thread: signalling only
+	// the first left workers running after their parent had died (the
+	// `ctl kill` version of this bug was audible as fan noise, 2026-08-02).
+	//
+	// Each victim dies at its own next syscall boundary (dispatcher check /
+	// blocking-loop checks in console_read and pipe.c), in its own context,
+	// through the normal task_exit path. Any parked in ISLEEP are woken
+	// into that check by processSignals within a scheduler pass (~10ms).
+	task_signal_all_threads(fg, SIGINT);
 	return true;                    // consumed: the byte never enters the ring
 }
 

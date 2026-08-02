@@ -170,4 +170,25 @@
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
 	uintptr_t task_reserve_task_virt(task_t* task, size_t size);
+
+	// OR a signal bit into EVERY thread this task owns.
+	//
+	// A signal aimed at a task means the task — all of it. Every delivery
+	// site used to write `task->threads->signals.sigind |= sig`, which was
+	// complete when a task had exactly one thread and became a silent
+	// half-measure the day it could have several: `echo kill > /proc/N/ctl`
+	// retired the main thread and left four workers burning four cores
+	// (found 2026-08-02, audible as fan noise). The workers were never
+	// ignoring the signal — nobody had told them.
+	//
+	// Safe from IRQ context (Ctrl+C's path): it is a read-only walk of the
+	// taskNext chain plus one OR per thread, and new threads are fully
+	// linked before they are published, so a walker sees either the old
+	// chain or the complete new one.
+	void task_signal_all_threads(task_t* task, uint64_t signal);
+
+	// Bring down every thread of a dying task except the one dying. THE
+	// single control point for "exit means exit" — see the implementation
+	// for why marking alone is not enough on a BSPSCHED boot.
+	void task_terminate_sibling_threads(task_t* task, thread_t* self);
 	#endif

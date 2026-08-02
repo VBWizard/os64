@@ -101,6 +101,81 @@ void* task_alloc_aligned(task_t* task, size_t size)
 /// (Only ktask shares today; idle tasks stopped sharing on 2026-07-25 — see
 /// task_initialize. This counter is the COUNTER-DRAW half of that problem; the
 /// FIXED-CONSTANT half — TASK_ARGV_VIRT and friends — is what the split fixed.)
+// See task.h for why this exists and why it is IRQ-safe.
+void task_signal_all_threads(task_t* task, uint64_t signal)
+{
+	if (task == NULL)
+		return;
+	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
+		th->signals.sigind |= signal;
+}
+
+// Bring down every thread of a dying task EXCEPT the one doing the dying.
+//
+// This is the single control point Chris asked for: every route to a task's
+// death — ctl kill, Ctrl+C, SIGPIPE, the exit syscall, main simply
+// returning, the ring-3 segfault kill — funnels through task_exit, so one
+// fan-out here covers every path that exists and every path someone adds
+// later. The per-site signal fan-out (procfs ctl, console, SIGPIPE) is now
+// an OPTIMIZATION on top of this: it lets siblings notice in parallel
+// instead of serially after the main thread gets around to dying.
+//
+// TWO mechanisms, because marking alone is not enough:
+//
+//  1. THE MARK. SIGKILL, not SIGINT — a dying task is not a request. The
+//     scheduler's forced-syscall redirect (scheduler_sigint_forced_syscall)
+//     sees a terminating bit and rewrites the thread's RIP to the exit
+//     trampoline, so even a thread in a loop with no syscalls at all walks
+//     into its own exit. No cooperation required.
+//
+//  2. THE NUDGE, and this is the part that only matters on the boots we
+//     actually run. That redirect fires WHEN THE SCHEDULER RUNS ON THAT
+//     CORE — and under BSPSCHED the AP timers are masked, so the scheduler
+//     does not run on an AP spontaneously. A worker spinning on AP 5 would
+//     carry its death warrant forever, unpreempted, with the redirect
+//     armed and never firing. A scheduling IPI is an interrupt, so it
+//     lands even on a masked-timer core: the scheduler runs there, sees
+//     the bit, patches RIP, done. (Chris asked "how does this force a
+//     thread off a core?" — it doesn't, until something knocks.)
+void task_terminate_sibling_threads(task_t* task, thread_t* self)
+{
+	if (task == NULL)
+		return;
+
+	core_local_storage_t* cls = get_core_local_storage();
+	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+	uint32_t marked = 0;
+
+	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
+	{
+		if (th == self || th->exited)
+			continue;
+
+		th->signals.sigind |= SIGKILL;
+		marked++;
+		printd(DEBUG_TASK | DEBUG_THREAD,
+		       "task_exit: marking sibling thread 0x%08lx of %s (state %u, last ran on AP %lu) for termination\n",
+		       th->threadID, task->exename, (uint32_t)th->threadState,
+		       th->lastRunApicID);
+
+		// Knock on the core it was last seen on, unless that is this core
+		// (we are already inside the scheduler's reach) or the BSP (whose
+		// timer is never masked, so it will notice on its own next tick).
+		if (kSMPInitDone && th->lastRunApicID != own_apic &&
+		    th->lastRunApicID != BOOTSTRAP_PROCESSOR_ID)
+		{
+			printd(DEBUG_TASK | DEBUG_THREAD,
+			       "task_exit: nudging AP %lu so its scheduler can redirect thread 0x%08lx into the exit trampoline\n",
+			       th->lastRunApicID, th->threadID);
+			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+		}
+	}
+
+	if (marked)
+		printd(DEBUG_TASK, "task_exit: %s is taking %u sibling thread%s with it\n",
+		       task->exename, marked, marked == 1 ? "" : "s");
+}
+
 uintptr_t task_reserve_task_virt(task_t* task, size_t size)
 {
 	uintptr_t *counter = (task->pml4v == (uint64_t*)kKernelPML4v)
@@ -281,13 +356,44 @@ static void __attribute__((noinline)) task_exit_finish(void)
 		thread->retVal = task ? task->retVal : 0;
 	}
 
+	// ALREADY DYING? Then this is a sibling arriving through the exit
+	// trampoline, not the task's first death.
+	//
+	// The scheduler's forced-syscall redirect points a doomed thread at
+	// TASK_EXIT_TRAMPOLINE_VIRT, which calls the TASK exit syscall — so
+	// killing a four-worker hog sends five threads down this path, not one.
+	// Without this guard each of them would close the handle table again and
+	// re-enqueue an already-enqueued dead child, which is how a zombie list
+	// gets corrupted. A thread that finds its task already dead has exactly
+	// one job left: mark itself and get off the CPU.
+	if (task != NULL && task->exited)
+	{
+		printd(DEBUG_TASK | DEBUG_THREAD,
+		       "task_exit: thread 0x%08lx arrived after %s already died — retiring the thread only\n",
+		       thread ? thread->threadID : 0, task->exename);
+		scheduler_trigger(cls);
+		while (1==1)
+			__asm__("sti\nhlt\n");
+	}
+
 	if (task) {
+		// SIBLINGS FIRST, before the handles go. "Exit means exit" (Chris's
+		// ruling, 2026-08-02): when a task dies its threads die with it, and
+		// they must be TOLD before their handles are pulled out from under
+		// them — a worker mid-read on a pipe whose end just closed underneath
+		// it is a race, and telling it to die first makes the ordering
+		// honest. They will not all be gone by the time we return; each dies
+		// at its own next boundary, in its own context, which is the whole
+		// design (see task_terminate_sibling_threads).
+		task_terminate_sibling_threads(task, thread);
+
 		// Release every handle this task still holds — BEFORE it is enqueued as
 		// a dead child. For a pipe end this is the refcount that decides EOF /
 		// EPIPE, so death must give the ends back: a task that dies (or crashes)
 		// still holding the write end of a pipe would leave its reader blocked
 		// forever on an EOF that can never come. Dying is just another way of
 		// closing your handles.
+		printd(DEBUG_TASK, "task_exit: %s releasing its handles\n", task->exename);
 		handle_close_all(task);
 
 		task->exited = true;

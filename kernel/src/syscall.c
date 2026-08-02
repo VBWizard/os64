@@ -674,8 +674,9 @@ static void raise_sigpipe_and_die(task_t *task)
 {
 	if (task != NULL)
 	{
-		if (task->threads != NULL)
-			task->threads->signals.sigind |= SIGPIPE;
+		// All threads: SIGPIPE's default action is to terminate the TASK,
+		// so every thread has to learn it, not just the first one.
+		task_signal_all_threads(task, SIGPIPE);
 		task->retVal = TASK_EXIT_SIGPIPE;
 		printd(DEBUG_TASK, "SIGPIPE: task %s wrote to a pipe with no readers — terminating\n",
 			task->exename);
