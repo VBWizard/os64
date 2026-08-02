@@ -709,6 +709,40 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
     mp_isrSavedRDI[apic_id]=thread->regs.RDI;
     mp_isrSavedRSP[apic_id]=thread->regs.RSP;
     mp_isrSavedRBP[apic_id]=thread->regs.RBP;
+    // ── TF TRIPWIRE ────────────────────────────────────────────────────────
+    // RFLAGS.TF (bit 8) makes the CPU single-step: it executes ONE
+    // instruction after the iretq and raises #DB. Nothing in this kernel
+    // ever wants that — createThread sets 0x202 and no code path sets TF —
+    // so if it is set here, something corrupted a saved register frame.
+    //
+    // Catching it HERE, as the frame is loaded, is the whole point: by the
+    // time the CPU acts on it the evidence is gone and the report blames
+    // whatever instruction happened to be next (a #GP in task_idle_loop,
+    // 2026-08-01, which had done nothing wrong). This says WHOSE flags,
+    // on which core, with the actual value.
+    //
+    // We CLEAR it rather than letting it fire. A surviving core with a
+    // loud report is strictly more debuggable than a core parked forever
+    // in the exception panic's cli/hlt — and a parked core silently eats
+    // every thread the scheduler later hands it (that is what made `top`
+    // start, exit cleanly, and never draw a single character).
+    if (thread->regs.RFLAGS & 0x100)
+    {
+        static volatile bool tf_reported_on_screen = false;
+        task_t *tf_task = (task_t *)thread->ownerTask;
+        printd(DEBUG_BOOT, "TF TRIPWIRE: thread 0x%08x (%s) on AP %u had RFLAGS=0x%016lx "
+               "(TF set) — cleared before dispatch\n",
+               thread->threadID, tf_task ? tf_task->path : "?", (uint32_t)apic_id,
+               thread->regs.RFLAGS);
+        if (!tf_reported_on_screen)
+        {
+            tf_reported_on_screen = true;   // once per boot: the glass is not a log
+            printf("TF TRIPWIRE: thread 0x%08x (%s) on AP %u: RFLAGS=0x%016lx, TF cleared\n",
+                   thread->threadID, tf_task ? tf_task->path : "?", (uint32_t)apic_id,
+                   thread->regs.RFLAGS);
+        }
+        thread->regs.RFLAGS &= ~0x100UL;
+    }
     mp_isrSavedRFlags[apic_id]=thread->regs.RFLAGS;
     mp_isrSavedES[apic_id]=thread->regs.ES;
     mp_isrSavedFS[apic_id]=thread->regs.FS;

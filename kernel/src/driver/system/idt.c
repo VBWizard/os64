@@ -21,6 +21,20 @@ extern void double_fault_handler();
 extern void general_protection_fault_handler();
 extern void page_fault_handler();
 extern void machine_check_handler();
+// The vectors that had no gate until 2026-08-01 — see handler_errors.S for
+// why an empty gate is worse than a handler that only names the fault.
+extern void debug_exception_handler();
+extern void nmi_handler();
+extern void breakpoint_handler();
+extern void overflow_handler();
+extern void bound_range_handler();
+extern void device_not_available_handler();
+extern void invalid_tss_handler();
+extern void segment_not_present_handler();
+extern void stack_segment_handler();
+extern void x87_fpu_handler();
+extern void alignment_check_handler();
+extern void simd_fpu_handler();
 
 // Set an IDT entry
 void set_idt_entry(int vector, uint64_t handler, uint16_t selector, uint8_t type_attr) {
@@ -45,6 +59,22 @@ void initialize_idt() {
 	set_idt_entry(0x0D, (uint64_t)&general_protection_fault_handler, 0x28, 0x8E); // #GP
 	set_idt_entry(0x0E, (uint64_t)&page_fault_handler, 0x28, 0x8E); // #PF
 	set_idt_entry(0x12, (uint64_t)&machine_check_handler, 0x28, 0x8E); // #MC
+	// The rest of the CPU's exception range. Nothing here RECOVERS — they
+	// name the fault and panic, which is strictly better than the #GP an
+	// empty gate produces (that #GP names the IDT slot, not the problem,
+	// and blames whatever code was running when it happened).
+	set_idt_entry(0x01, (uint64_t)&debug_exception_handler, 0x28, 0x8E);      // #DB
+	set_idt_entry(0x02, (uint64_t)&nmi_handler, 0x28, 0x8E);                  // NMI
+	set_idt_entry(0x03, (uint64_t)&breakpoint_handler, 0x28, 0x8E);           // #BP
+	set_idt_entry(0x04, (uint64_t)&overflow_handler, 0x28, 0x8E);             // #OF
+	set_idt_entry(0x05, (uint64_t)&bound_range_handler, 0x28, 0x8E);          // #BR
+	set_idt_entry(0x07, (uint64_t)&device_not_available_handler, 0x28, 0x8E); // #NM
+	set_idt_entry(0x0A, (uint64_t)&invalid_tss_handler, 0x28, 0x8E);          // #TS
+	set_idt_entry(0x0B, (uint64_t)&segment_not_present_handler, 0x28, 0x8E);  // #NP
+	set_idt_entry(0x0C, (uint64_t)&stack_segment_handler, 0x28, 0x8E);        // #SS
+	set_idt_entry(0x10, (uint64_t)&x87_fpu_handler, 0x28, 0x8E);              // #MF
+	set_idt_entry(0x11, (uint64_t)&alignment_check_handler, 0x28, 0x8E);      // #AC
+	set_idt_entry(0x13, (uint64_t)&simd_fpu_handler, 0x28, 0x8E);             // #XM
 
     // Set IRQ handlers
     set_idt_entry(0x20, (uint64_t)&handler_irq0_asm, 0x28, 0x8E); // IRQ0 (PIT)
