@@ -17,6 +17,7 @@
 #include "memory/kmalloc.h"   // kfree (the f_path copy owned by HANDLE_FILE)
 #include "memory/vma.h"       // call_in_kernel_context
 #include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
+#include "driver/net/tcp.h"        // tcp_conn_close — HANDLE_NET_TCP's release
 
 void handle_table_init(struct task *t)
 {
@@ -188,6 +189,12 @@ bool handle_close(struct task *t, int h)
 			break;
 		case HANDLE_DIR:
 			handle_dir_object_close(handle->object);
+			break;
+		case HANDLE_NET_TCP:
+			// Orderly shutdown: sends FIN and DETACHES — the closing
+			// dance and TIME_WAIT finish in the background (tcp_poll),
+			// so closing a handle never blocks the program.
+			tcp_conn_close((tcp_conn_t *)handle->object);
 			break;
 		case HANDLE_NET_UDP:
 			// Hang up: unbinds the ephemeral port and frees the object.

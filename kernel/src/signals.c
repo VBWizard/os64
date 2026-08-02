@@ -12,6 +12,7 @@
 #include "driver/net/virtio_net.h"
 #include "driver/net/dhcp.h"
 #include "driver/net/udp_conn.h"
+#include "driver/net/tcp.h"
 
 extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
@@ -116,6 +117,12 @@ void processSignals()
 	// QUIET — resend, and eventually give up honestly.
 	dhcp_poll();
 
+	// TCP's clock: retransmission deadlines, connect timeouts, and the
+	// TIME_WAIT reaper. THIS is what makes the stream reliable — a stack
+	// with no timer is a stack that hangs the first time a packet is
+	// lost. Walks only live connections (usually none).
+	tcp_poll();
+
 	// Wake a blocked console reader if the keyboard driver has input. Done
 	// here — under the lock, AFTER the qISleep walk above — so its queue
 	// surgery (ISLEEP->RUNNABLE) can't corrupt that iteration. Level-triggered
@@ -140,6 +147,11 @@ void processSignals()
 	// which may not hold this lock — so this sweep is their only waker;
 	// see the context map in udp_conn.c.)
 	udp_conn_wake_if_ready();
+
+	// Same for TCP streams: a reader wakes for bytes, EOF, or death; a
+	// writer wakes when its segment is acknowledged. Same level-triggered
+	// re-evaluation, same reason.
+	tcp_wake_if_ready();
 
 	//Release the lock
 	__sync_lock_release(&kSchedulerSwitchTasksLock);

@@ -20,6 +20,7 @@
 #include "task.h"
 #include "scheduler.h"
 #include "time.h"
+#include "kernel.h"   // kTicksSinceStart — the TCP tests time their failures
 #include "driver/filesystem/vfs/vfs.h"
 #include "driver/filesystem/ext2/ext2_vfs.h"   // ext2_fops/ext2_dops (real-partition test)
 #include "ff.h"   // FR_OK/FR_EXIST — the dops->mkdir seam leaks FatFs codes
@@ -37,6 +38,7 @@
 #include "driver/net/udp.h"
 #include "driver/net/dhcp.h"
 #include "driver/net/udp_conn.h"
+#include "driver/net/tcp.h"
 
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -2191,6 +2193,96 @@ static bool test_net_dial_ring3(void)
     return true;
 }
 
+// Phase 4, exhibit A — the RST path, which needs nothing but a closed
+// door. Dialing a port nobody listens on must FAIL FAST: slirp's host
+// side refuses, the refusal comes back as a TCP reset, and tcp_input's
+// RST arm turns it into a failed dial. This is the deterministic half of
+// the TCP tests (no internet required) and it exercises the arm that a
+// happy-path fetch never touches. Port 9 is "discard" (RFC 863) — a
+// service nobody has run since the 1980s, which is exactly why it makes
+// a dependable closed door.
+static bool test_net_tcp_refused(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_refused (no NIC)\n");
+        return true;
+    }
+
+    uint64_t refused_before = kTcpStats.connections_refused;
+    uint64_t start = kTicksSinceStart;
+
+    tcp_conn_t *c = tcp_conn_dial(kNetDevices[0], kNetIPv4Gateway, 9);
+    uint64_t elapsed = kTicksSinceStart - start;
+
+    if (c != NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - dial to a closed port SUCCEEDED\n");
+        tcp_conn_close(c);
+        return false;
+    }
+    // A refusal must be an ANSWER (an RST), not the connect timeout —
+    // fast failure is the observable difference, and the timeout is 10s.
+    if (kTcpStats.connections_refused != refused_before + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - no RST counted "
+               "(refused=%lu timeouts=%lu resets=%lu, took %lu ticks)\n",
+               kTcpStats.connections_refused, kTcpStats.connect_timeouts,
+               kTcpStats.resets_received, elapsed);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_tcp_refused (closed port answered with RST in %lu ticks)\n",
+           elapsed);
+    return true;
+}
+
+// Phase 4, exhibit B — THE MILESTONE. Spawns /bin/fetchtest, which
+// resolves example.com over UDP, opens a TCP stream to it through slirp,
+// speaks HTTP, and reads the page to EOF. Everything in os64 that touches
+// a network is in the path: handshake, sequence arithmetic, ACKs, the
+// receive ring, the FIN that becomes read()'s 0. Needs working internet
+// on the host — the one test here that does, and it says so when it fails.
+// See fetchtest.c for the 0x0FE7C4xx step codes.
+static bool test_net_tcp_fetch_ring3(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_fetch_ring3 (no NIC)\n");
+        return true;
+    }
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_fetch_ring3 (no root filesystem)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/fetchtest", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - task_create failed\n");
+        return false;
+    }
+    scheduler_submit_new_task(task);
+
+    // DNS + a TCP round trip to the real internet: normally under a
+    // second, 15s of slack for a sleepy CDN or a retransmit or two.
+    for (int i = 0; i < 1500 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - fixture still running after 15s "
+               "(tcp opened=%lu refused=%lu timeouts=%lu retrans=%lu)\n",
+               kTcpStats.connections_opened, kTcpStats.connections_refused,
+               kTcpStats.connect_timeouts, kTcpStats.retransmits);
+        return false;
+    }
+    if (task->retVal != 0x0FE7C400UL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - retVal=0x%lx, expected 0x0FE7C400 "
+               "(step codes in fetchtest.c; needs host internet)\n", task->retVal);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_tcp_fetch_ring3 (fetched a real page from the real internet, "
+           "%lu segments in / %lu out, %lu retransmits)\n",
+           kTcpStats.segments_in, kTcpStats.segments_out, kTcpStats.retransmits);
+    return true;
+}
+
 // ── env tests ────────────────────────────────────────────────────────────────
 
 static bool test_env_create_empty(void)
@@ -2429,6 +2521,8 @@ static void register_builtin_tests(void)
     test_register("net_dhcp", test_net_dhcp, TEST_PHASE_POSTBOOT);
     test_register("net_udp_conn", test_net_udp_conn, TEST_PHASE_POSTBOOT);
     test_register("net_dial_ring3", test_net_dial_ring3, TEST_PHASE_POSTBOOT);
+    test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_POSTBOOT);
+    test_register("net_tcp_fetch_ring3", test_net_tcp_fetch_ring3, TEST_PHASE_POSTBOOT);
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
 }
 

@@ -32,6 +32,7 @@
 #include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
 #include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
 #include "driver/net/udp_conn.h"     // the object behind HANDLE_NET_UDP
+#include "driver/net/tcp.h"          // ...and HANDLE_NET_TCP
 
 // The monotonic tick counter (kernel.h) — read by sleep()'s deadline math
 // and handed to ring 3 by ticks().
@@ -899,6 +900,45 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			return written;
 		}
 
+		case HANDLE_NET_TCP:
+		{
+			// A stream write: no atomicity promise and no size limit —
+			// tcp_conn_write segments it and blocks until every byte is
+			// acknowledged. Bounce through kernel memory in MSS-ish
+			// chunks for the same fault discipline as every other write.
+			size_t written = 0;
+			while (written < length)
+			{
+				size_t this_chunk = length - written;
+				if (this_chunk > READ_CHUNK_SIZE)
+					this_chunk = READ_CHUNK_SIZE;
+
+				char *kbuf = kmalloc(this_chunk);
+				if (kbuf == NULL)
+					return written ? written : SYSCALL_RESULT_INVALID;
+				if (!copy_user_buffer(user_buffer + written, kbuf, this_chunk))
+				{
+					kfree(kbuf);
+					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
+				}
+
+				long n = tcp_conn_write((tcp_conn_t *)h->object, kbuf, this_chunk);
+				kfree(kbuf);
+
+				if (n == TCP_ERR_INTERRUPTED)
+				{
+					raise_terminating_signal_and_die(task, NULL);
+					__builtin_unreachable();
+				}
+				if (n < 0)
+					return written ? written : SYSCALL_RESULT_INVALID;
+				written += (size_t)n;
+				if ((size_t)n < this_chunk)
+					break;   // connection died mid-write: report progress
+			}
+			return written;
+		}
+
 		case HANDLE_NET_UDP:
 		{
 			// One write = ONE datagram, atomic by protocol: an oversize
@@ -1044,6 +1084,26 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			}
 			break;
 
+		case HANDLE_NET_TCP:
+			// A stream read: blocks for at least one byte, returns SHORT,
+			// and returns 0 at EOF once the peer's FIN drains — the exact
+			// contract a pipe read has, which is why `cat` over a socket
+			// would need no new code at all.
+			got = tcp_conn_read((tcp_conn_t *)h->object, kbuf, want);
+			if (got == TCP_ERR_INTERRUPTED)
+			{
+				kfree(kbuf);
+				raise_terminating_signal_and_die(task, NULL);
+				__builtin_unreachable();
+			}
+			if (got < 0)
+			{
+				// RST or a dead connection — distinct from EOF's clean 0.
+				kfree(kbuf);
+				return SYSCALL_RESULT_INVALID;
+			}
+			break;
+
 		case HANDLE_NET_UDP:
 			// Blocks until one datagram arrives from the dialed peer, then
 			// returns exactly that datagram (short if the buffer is smaller;
@@ -1163,30 +1223,49 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_user_buffer((const void *)arg0, &dest, sizeof(dest)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
-	// TCP is Phase 4: refused by NUMBER today so the day it exists, every
-	// caller's struct already means the right thing. Anything else is a
-	// typo. (No wildcard protocol — os64 says what it means, ruling #1.)
-	if (dest.protocol != OS64_NET_UDP || dest.ip == 0 || dest.port == 0)
+	if (dest.ip == 0 || dest.port == 0)
 		return SYSCALL_RESULT_INVALID;
+	if (dest.protocol != OS64_NET_UDP && dest.protocol != OS64_NET_TCP)
+		return SYSCALL_RESULT_INVALID;   // no wildcard: os64 says what it means
 
 	// Dial tone requires a line: no NIC, no conversation. (A netless boot
 	// is a configuration, not an error — but dialing on one is an error.)
 	if (kNetDeviceCount == 0)
 		return SYSCALL_RESULT_INVALID;
 
-	udp_conn_t *conn = udp_conn_dial(kNetDevices[0], dest.ip, dest.port);
+	// One syscall, two protocols, two object types behind two handle tags —
+	// and from the caller's side the difference shows up only in what
+	// read/write MEAN (datagrams vs bytes), exactly as ruling #1 intended
+	// when it made the protocol segment the verb of the call.
+	void *conn;
+	handle_type_t tag;
+	if (dest.protocol == OS64_NET_TCP)
+	{
+		// BLOCKS through the three-way handshake (or a refusal, or the
+		// connect timeout) — a dial that returns has a live stream.
+		conn = tcp_conn_dial(kNetDevices[0], dest.ip, dest.port);
+		tag = HANDLE_NET_TCP;
+	}
+	else
+	{
+		conn = udp_conn_dial(kNetDevices[0], dest.ip, dest.port);
+		tag = HANDLE_NET_UDP;
+	}
 	if (conn == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	int h = handle_alloc(task, HANDLE_NET_UDP, conn);
+	int h = handle_alloc(task, tag, conn);
 	if (h < 0)
 	{
-		udp_conn_close(conn);   // out of handle slots — hang up cleanly
+		// Out of handle slots — hang up cleanly on whichever we opened.
+		if (tag == HANDLE_NET_TCP) tcp_conn_close((tcp_conn_t *)conn);
+		else                       udp_conn_close((udp_conn_t *)conn);
 		return SYSCALL_RESULT_INVALID;
 	}
 
-	printd(DEBUG_NET, "net_dial: task %s -> %u.%u.%u.%u:%u = handle %d\n",
-	       task->exename, NET_IPV4_OCTETS(dest.ip), dest.port, h);
+	printd(DEBUG_NET, "net_dial: task %s -> %s!%u.%u.%u.%u!%u = handle %d\n",
+	       task->exename, dest.protocol == OS64_NET_TCP ? "tcp" : "udp",
+	       NET_IPV4_OCTETS(dest.ip), dest.port, h);
 	return (uint64_t)h;
 }
 
@@ -2065,7 +2144,8 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// Net handles are refused for the same refcount reason (udp_conn_t
 		// has a single owner by design) — a "hand the child my connection"
 		// story arrives with a refcount when a real consumer wants it.
-		if (h->type == HANDLE_DIR || h->type == HANDLE_NET_UDP)
+		if (h->type == HANDLE_DIR || h->type == HANDLE_NET_UDP ||
+		    h->type == HANDLE_NET_TCP)
 		{
 			kfree(p);
 			return SYSCALL_RESULT_INVALID;

@@ -21,6 +21,7 @@
 #include "driver/net/ipv4.h"
 #include "driver/net/icmp.h"
 #include "driver/net/udp.h"
+#include "driver/net/tcp.h"
 
 ipv4_stats_t kIPv4Stats;
 
@@ -171,12 +172,17 @@ void ipv4_input(net_device_t* dev, const void* pkt, uint16_t length)
 			// pseudo-header built from them — see udp.c.
 			udp_input(dev, src, dst, p + ihl, payload_len);
 			break;
+		case IPV4_PROTO_TCP:
+			// Same pseudo-header reason, same two addresses. (Phase 4
+			// filled this case; the default arm below is now reserved for
+			// protocols os64 genuinely doesn't speak.)
+			tcp_input(dev, src, dst, p + ihl, payload_len);
+			break;
 		default:
-			// TCP lands here until Phase 4 (UDP graduated to its own case
-			// in Phase 3) — visible on a counter, so a premature "why no
-			// TCP?" has its answer. (Chris caught this comment still
-			// claiming UDP during the 2026-08-01 review — comments rot
-			// one slice at a time.)
+			// Everything we don't speak — visible on a counter, so a
+			// premature "why no <protocol>?" has its answer. (Chris caught
+			// this comment still claiming UDP during the 2026-08-01
+			// review — comments rot one slice at a time.)
 			kIPv4Stats.rx_unknown_proto++;
 			printd(DEBUG_NET | DEBUG_DETAILED, "ipv4: protocol %u from %u.%u.%u.%u not yet spoken\n",
 			       p[9], NET_IPV4_OCTETS(src));
