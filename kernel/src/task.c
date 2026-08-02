@@ -779,12 +779,35 @@ static void task_setup_entry(task_t *task)
 task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID)
 {
 	uintptr_t mapPages;
-	bool isIdleTask = strnstr(path, "/idle",10);
-	bool isLogdTask = strnstr(path, "/logd",10);
-	bool isKWorkerTask = strnstr(path, "/kworker",10);
-	bool isGuiCompTask = strnstr(path, "/guicomp",10);
-	bool isGBounceTask = strnstr(path, "/gbounce",10);
-	bool isGKeysTask = strnstr(path, "/gkeys",10);
+	// The kernel's built-in tasks are recognized by the START of their path —
+	// they carry no ELF image, so a match means "skip the loader, this task's
+	// code is already compiled into the kernel."
+	//
+	// ANCHORED PREFIX, and both halves of that phrase were learned the hard
+	// way on 2026-08-01:
+	//
+	//   * These were strnstr() SUBSTRING searches, which match ANYWHERE in
+	//     the path — and "/bin/logd" contains "/logd". So the first userland
+	//     program ever named `logd` was silently mistaken for the kernel
+	//     daemon: no ELF loaded, no entry point, and the scheduler's iretq
+	//     into the resulting garbage selectors surfaced as a #GP naming a
+	//     task that had never run an instruction. The same trap was armed
+	//     for /bin/idle, /bin/kworker, /bin/guicomp, /bin/gbounce, /bin/gkeys.
+	//
+	//   * But an EXACT compare is too strict, because these names carry
+	//     suffixes: the idle tasks are "/idle0".."/idleN" and the kworker is
+	//     "/kworker1". Exact matching stopped recognizing them, task_create
+	//     tried to load them as ELF files, returned NULL, and the caller
+	//     dereferenced it — a NULL page fault three lines into the boot.
+	//
+	// Anchored prefix matching is the shape that was actually intended all
+	// along: it must match at position 0, and it may match a family.
+	bool isIdleTask    = (path != NULL && strncmp(path, "/idle", 5) == 0);
+	bool isLogdTask    = (path != NULL && strncmp(path, "/logd", 5) == 0);
+	bool isKWorkerTask = (path != NULL && strncmp(path, "/kworker", 8) == 0);
+	bool isGuiCompTask = (path != NULL && strncmp(path, "/guicomp", 8) == 0);
+	bool isGBounceTask = (path != NULL && strncmp(path, "/gbounce", 8) == 0);
+	bool isGKeysTask   = (path != NULL && strncmp(path, "/gkeys", 6) == 0);
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
 	bool loadedElfProgram = false;
