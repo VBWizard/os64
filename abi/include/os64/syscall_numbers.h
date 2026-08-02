@@ -108,6 +108,35 @@
 // grave). Fails only when the env block is full.
 #define SYSCALL_SETENV     30
 
+// klog_read(entries, max) — take up to `max` kernel log entries, oldest
+// first across every core, into an os64_logent_t array (os64/klog.h).
+// Returns the count taken (0 = nothing waiting right now, so the caller
+// sleeps; negative = refused). Entries are REMOVED from the kernel rings
+// by this call — reading is consuming, because the reader has taken
+// responsibility for them.
+//
+// Calling this CLAIMS the log: the kernel's own logd stops draining to
+// serial while a reader is live, which is the whole point (steady-state
+// logging moves off a 115200-baud wire and onto a file). The claim is a
+// heartbeat — a reader that dies or hangs loses it within seconds and the
+// kernel resumes serial by itself. Mechanism here, policy (where the
+// bytes go) in the daemon; see os64/klog.h for the argument.
+#define SYSCALL_KLOG_READ  31
+
+// sync(handle) — commit a written file to the device: the bytes AND the
+// directory entry that says how long the file now is. Returns 0, or
+// negative if the handle isn't a file or the filesystem can't sync.
+//
+// This exists because "I wrote it" and "anyone else can read it" are two
+// different claims on a FAT volume. FatFs holds the new length in memory
+// and writes the directory entry on sync or close, so a file being
+// appended to by a live process reads as EMPTY to every other program
+// until one of those happens — which is precisely how a log file looked
+// like nothing was being logged while the daemon wrote to it steadily.
+// Consumer-driven, like every syscall here: logd is the program that
+// needed durability, so durability got a name.
+#define SYSCALL_SYNC       32
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

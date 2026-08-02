@@ -68,4 +68,25 @@ bool logd_thread(bool daemon);
 // can keep producing; we want the backlog, not the future). Never sleeps,
 // never takes another lock — safe from any dying context.
 void logd_emergency_flush(void);
+
+// ── The ring-3 log sink (SYSCALL_KLOG_READ) ────────────────────────────────
+// Dequeue up to `max` entries, oldest-first across every core (the same
+// k-way TSC merge logd uses to print), into a caller-owned array. Returns
+// the count taken. Entries are CONSUMED — the caller has accepted
+// responsibility for them, which is exactly why the kernel may then stop
+// writing them to serial.
+uint32_t klog_dequeue(log_entry_t *out, uint32_t max);
+
+// How long a claim survives without a read before the kernel takes serial
+// logging back. Three seconds is far longer than any healthy daemon's poll
+// interval (~100ms) and far shorter than a human notices — and it covers
+// the HUNG daemon as well as the crashed one, which a task-liveness check
+// would not.
+#define LOG_SINK_TIMEOUT_TICKS (3 * TICKS_PER_SECOND)
+
+// Set by klog_dequeue on every call; read by logd_thread to decide whether
+// userland is still holding up its end. Not a lock — a heartbeat.
+extern volatile bool kLogSinkClaimed;
+extern volatile uint64_t kLogSinkLastRead;
+
 #endif // LOG_H

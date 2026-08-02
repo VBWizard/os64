@@ -15,6 +15,7 @@
 #include "memory/kmalloc.h"
 #include "memory/vma.h"   // call_in_kernel_context
 #include "log.h"
+#include "os64/klog.h"     // os64_logent_t — klog_read's out-struct (abi)
 #include "console.h"
 #include "handle.h"
 #include "pipe.h"
@@ -105,6 +106,10 @@ static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_sync(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -150,6 +155,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
 	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
 	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL (mask excludes it: NULL means unset)
+	SYSCALL_DEFINE(SYSCALL_KLOG_READ, "klog_read", syscall_klog_read, false, 0x01),  // arg0 = os64_logent_t[] out, arg1 = max entries
+	SYSCALL_DEFINE(SYSCALL_SYNC,      "sync",      syscall_sync,      false, 0x00),  // arg0 = handle (an int, not a pointer)
 };
 
 uint64_t _syscall_dispatch(
@@ -702,6 +709,20 @@ static void file_do_write(void *arg)
 	vfs_file_t *f = p->file;
 	p->result = (f->fops != NULL && f->fops->write != NULL)
 	                ? f->fops->write(f, p->buf, p->len) : -1;
+}
+
+// Commit a file's written bytes AND its directory entry to the device.
+// FatFs (like every FAT implementation) keeps the new length in its own
+// structures and only writes the directory entry on sync or close — so
+// until this runs, a file being appended to reads as ZERO BYTES to anyone
+// else, which is exactly how a live log file looked empty while the daemon
+// holding it was writing happily (Chris's screenshot, 2026-08-01).
+static void file_do_sync(void *arg)
+{
+	file_io_params_t *p = (file_io_params_t *)arg;
+	vfs_file_t *f = p->file;
+	p->result = (f->fops != NULL && f->fops->sync != NULL)
+	                ? f->fops->sync(f) : -1;
 }
 
 static void file_do_seek(void *arg)
@@ -2291,4 +2312,109 @@ static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// env_set fails only when the block is full — surface that honestly.
 	return env_set(task->env, key, val) ? 0 : SYSCALL_RESULT_INVALID;
+}
+
+// klog_read(entries, max) — hand kernel log entries to a userland log
+// daemon, oldest-first across every core. Returns the count taken; 0 means
+// "nothing right now", which is an ordinary answer, not an error.
+//
+// This is the mechanism half of the logging split: the kernel keeps the
+// rings and the merge order (both need locks and cross-core knowledge no
+// program should have), and userland decides where the bytes live. The
+// call also CLAIMS the log — see klog_dequeue and os64/klog.h for the
+// heartbeat that makes the claim safe to lose.
+#define KLOG_READ_MAX_BATCH 64
+static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	uint32_t want = (uint32_t)arg1;
+	if (want == 0)
+		return 0;
+	// Bound the batch: the kernel-side staging array below lives on this
+	// syscall's stack, and an unbounded `max` from ring 3 would be a user-
+	// controlled stack allocation — the exact shape of a stack-smash.
+	if (want > KLOG_READ_MAX_BATCH)
+		want = KLOG_READ_MAX_BATCH;
+
+	// Dequeue into KERNEL memory first, then copy out in one hop. Same
+	// discipline as every other read: klog_dequeue runs under the log
+	// work-lock, and touching user pages there could demand-page while
+	// holding it.
+	log_entry_t *staged = kmalloc(want * sizeof(log_entry_t));
+	if (staged == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	uint32_t got = klog_dequeue(staged, want);
+	if (got == 0)
+	{
+		kfree(staged);
+		return 0;   // nothing waiting — the daemon sleeps and asks again
+	}
+
+	// Translate to the ABI struct. The kernel's log_entry_t carries a TSC
+	// and internal padding that userland has no business depending on;
+	// this loop is the boundary where the internal shape stops mattering.
+	os64_logent_t *out = kmalloc(got * sizeof(os64_logent_t));
+	if (out == NULL)
+	{
+		kfree(staged);
+		return SYSCALL_RESULT_INVALID;   // NOTE: those entries are consumed
+		                                 // and lost — the one place this
+		                                 // path can drop, and it takes an
+		                                 // OOM to get there
+	}
+	for (uint32_t i = 0; i < got; i++)
+	{
+		out[i].ticks     = staged[i].ticks;
+		out[i].threadID  = staged[i].threadID;
+		out[i].core      = staged[i].core_id;
+		out[i].level     = staged[i].log_level;
+		out[i].category  = staged[i].category;
+		out[i].continued = staged[i].continued ? 1 : 0;
+		out[i].reserved[0] = out[i].reserved[1] = out[i].reserved[2] = 0;
+		memcpy(out[i].message, staged[i].message, OS64_LOG_MESSAGE_MAX);
+		out[i].message[OS64_LOG_MESSAGE_MAX - 1] = '\0';
+	}
+	kfree(staged);
+
+	bool ok = copy_to_user_buffer((void *)arg0, out, got * sizeof(os64_logent_t));
+	kfree(out);
+	return ok ? (uint64_t)got : SYSCALL_RESULT_BAD_USER_DATA;
+}
+
+// sync(handle) — make what a program has written VISIBLE and durable.
+// See the ABI header for why this is its own verb rather than something
+// write() does implicitly: syncing on every write would tax every file
+// writer in the system to serve the one program that actually needs its
+// bytes readable by others while it still holds the file open.
+static uint64_t syscall_sync(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	handle_t *h = handle_get(task, (int)(int64_t)arg0);
+	if (h == NULL || h->type != HANDLE_FILE)
+		return SYSCALL_RESULT_INVALID;   // pipes and consoles have nothing to commit
+
+	// Runs under kKernelPML4 like every other filesystem operation — the
+	// FAT layer's DMA mappings live there.
+	file_io_params_t *fp = kmalloc(sizeof(*fp));
+	if (fp == NULL)
+		return SYSCALL_RESULT_INVALID;
+	fp->file = (vfs_file_t *)h->object;
+	fp->buf = NULL;
+	fp->len = 0;
+	fp->result = -1;
+	call_in_kernel_context(file_do_sync, fp);
+
+	long rc = fp->result;
+	kfree(fp);
+	return (rc < 0) ? SYSCALL_RESULT_INVALID : 0;
 }

@@ -142,6 +142,15 @@ int64_t os64_pipe(int32_t h[2]);
 // void.
 int64_t os64_close(int32_t handle);
 
+// Commit a written file to the device — its bytes AND the directory entry
+// recording its new length. Until this (or a close) happens, a file you
+// are appending to reads as EMPTY to every other program, because that is
+// where FAT keeps the length. Returns 0, or negative for a handle that
+// isn't a file. A program that writes a file others read WHILE it holds
+// it open — a log daemon, a status file — needs this; a program that
+// writes and closes does not.
+int64_t os64_sync(int32_t handle);
+
 // Convenience: write a NUL-terminated string to the console (handle 1).
 int64_t os64_puts(const char *s);
 

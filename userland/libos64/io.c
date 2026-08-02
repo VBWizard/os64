@@ -212,3 +212,8 @@ int64_t os64_close(int32_t handle)
 {
     return (long)os64_syscall1(SYSCALL_CLOSE, (uint64_t)(int64_t)handle);
 }
+
+int64_t os64_sync(int32_t handle)
+{
+    return (long)os64_syscall1(SYSCALL_SYNC, (uint64_t)(int64_t)handle);
+}

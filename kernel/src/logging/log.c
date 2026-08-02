@@ -24,6 +24,20 @@ _Atomic uint32_t kLogDWorkLock = 0;
 // Which core currently holds kLogDWorkLock (0xFFFFFFFF = nobody) — purely
 // forensic, for the no-progress panic in log_store_entry.
 volatile uint32_t kLogDDrainerCore = 0xFFFFFFFF;
+// The ring-3 log sink's heartbeat (see log.h). Claimed by the first
+// klog_dequeue; kept alive by every one after it.
+volatile bool kLogSinkClaimed = false;
+volatile uint64_t kLogSinkLastRead = 0;
+
+// True while a userland log daemon is reading and hasn't gone quiet. The
+// staleness test is what makes the hand-off safe: a daemon that crashes,
+// hangs, or gets killed simply stops stamping, and serial comes back
+// without anyone having to notice or clean up.
+static bool log_sink_alive(void)
+{
+	return kLogSinkClaimed &&
+	       (kTicksSinceStart - kLogSinkLastRead) <= LOG_SINK_TIMEOUT_TICKS;
+}
 
 void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message)
 {
@@ -149,14 +163,92 @@ static void logd_drain_one(log_buffer_t *buffer)
     }
 }
 
+// ── The ring-3 sink's dequeue (SYSCALL_KLOG_READ) ──────────────────────────
+// The same oldest-first k-way merge logd_thread runs, except the entries
+// are COPIED OUT instead of printed. Taking kLogDWorkLock is what makes
+// that safe: only the lock holder advances tail pointers, so the kernel
+// daemon, the kworker drain, and this syscall can never disagree about
+// what has been consumed.
+uint32_t klog_dequeue(log_entry_t *out, uint32_t max)
+{
+    // Stamp the heartbeat FIRST — before any early return. A reader that
+    // finds the queues empty is still a live reader, and if an empty poll
+    // didn't count as a sign of life, a quiet system would hand serial
+    // logging back and forth every three seconds.
+    kLogSinkClaimed = true;
+    kLogSinkLastRead = kTicksSinceStart;
+
+    if (!kLoggingInitialized || out == NULL || max == 0)
+        return 0;
+
+    // Try-lock, never spin: this runs on a syscall from ring 3, and
+    // blocking a user process behind a drain that another core is already
+    // doing would trade a bounded wait for an unbounded one. Nothing is
+    // lost by returning 0 — the caller polls again in 100ms and the
+    // entries are still there.
+    if (__sync_lock_test_and_set(&kLogDWorkLock, 1))
+        return 0;
+    kLogDDrainerCore = get_core_local_storage()->apic_id;
+
+    uint32_t taken = 0;
+    while (taken < max)
+    {
+        int best_core = -1;
+        uint64_t best_tsc = UINT64_MAX;
+        for (int c = 0; c < kMPCoreCount; c++)
+        {
+            log_buffer_t *buf = &core_log_buffers[c];
+            if (!buf->entries || buf->head == buf->tail)
+                continue;
+            uint64_t t = buf->entries[buf->tail].tsc;
+            if (t < best_tsc) { best_tsc = t; best_core = c; }
+        }
+        if (best_core < 0)
+            break;   // every ring is empty
+
+        log_buffer_t *buf = &core_log_buffers[best_core];
+        out[taken++] = buf->entries[buf->tail];          // struct copy: the
+                                                         // caller owns it now
+        buf->entries[buf->tail].message[0] = '\0';
+        buf->tail = (buf->tail + 1) % buf->capacity;
+    }
+
+    kLogDDrainerCore = 0xFFFFFFFF;
+    __sync_lock_release(&kLogDWorkLock);
+    return taken;
+}
+
 bool logd_thread(bool daemon) {
     thread_t *self = get_core_local_storage()->currentThread;
     bool nonDaemonRunSuccess = false;
     static uint32_t drain_pass = 0;
+    static bool was_claimed = false;
 
     while (1) {
         int processed_logs = 0;
         bool backlog = false;
+
+        // HAND-OFF: while a userland log daemon is reading, the kernel
+        // does NOT drain to serial — those entries belong to the file now,
+        // and printing them too would both duplicate the log and pay the
+        // 115200-baud tax the hand-off exists to escape. The moment the
+        // sink goes quiet (crash, hang, kill), this test fails and serial
+        // draining resumes on the very next pass — which is why a dead log
+        // daemon's death is always visible SOMEWHERE.
+        if (log_sink_alive())
+        {
+            was_claimed = true;
+            if (!daemon)
+                return false;
+            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
+            continue;
+        }
+        if (was_claimed)
+        {
+            was_claimed = false;
+            kLogSinkClaimed = false;
+            serial_print_string("[logd] userland log sink went quiet — kernel resuming serial drain\n");
+        }
 
         // Try-lock: if another CPU is already flushing, skip this wakeup
         if (!__sync_lock_test_and_set(&kLogDWorkLock, 1))
