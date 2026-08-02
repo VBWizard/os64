@@ -88,12 +88,18 @@ char startTime[100] = {0};
 uint64_t lastTime = 0;
 task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
-// Boot TSC calibration window, seconds (TSCCAL= on the cmdline). Default 15:
-// ±1 tick of boundary slop across 1500 ticks is ±0.07%, and the continuous
-// recalibrator tightens it from there. Droppable ("TSCCAL=5") for anyone who
-// gets tired of waiting — the owner's own words — at the usual price: a
-// 5s window starts life at ±0.2% and leans harder on the recalibrator.
-int kTSCCalibrationSeconds = 15;
+// Boot TSC calibration window, seconds (TSCCAL= on the cmdline).
+//
+// Default 5 (was 15 until 2026-08-01). The accuracy argument for 15 was
+// real but small: ±1 tick of boundary slop across 1500 ticks is ±0.07%,
+// versus ±0.2% across 500. What tipped it is that the continuous
+// recalibrator erases that gap within seconds of boot, while the 15
+// seconds are paid IN FULL on every single boot, by a human, watching a
+// progress line — and this OS gets booted dozens of times an evening.
+// Ten seconds of somebody's life beats 0.13% of initial timer accuracy
+// that a background task is about to fix anyway. Raise it for a session
+// that genuinely needs a tight cold start: TSCCAL=15.
+int kTSCCalibrationSeconds = 5;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
 task_t* kKWorkerTask;
