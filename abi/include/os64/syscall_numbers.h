@@ -137,6 +137,33 @@
 // needed durability, so durability got a name.
 #define SYSCALL_SYNC       32
 
+// thread(entry, arg, exit_stub) — start a second line of execution inside
+// THIS task, sharing everything: the same address space, the same heap,
+// the same open handles. Returns a HANDLE, or negative.
+//
+// Reading that handle blocks until the thread finishes and yields its
+// return value (an int64_t); closing it means "I don't care what you
+// return." That is the whole API — no wait verb, no detach verb, no
+// thread-id-reuse hazard, because the handle model already means all
+// three (the same move the network listener makes: read IS the wait).
+//
+// exit_stub is a USERLAND address, supplied by libos64: the kernel seeds
+// it as the return address on the new thread's stack, so a thread
+// function that simply returns lands there and the stub calls
+// thread_exit with the value in RAX. It cannot be a kernel address —
+// ring 3 would fault the instant it tried to return into one.
+//
+// Threads share an address space, so they need NO copy-on-write; that is
+// fork's problem, and fork is the next customer for this same plumbing.
+#define SYSCALL_THREAD      33
+
+// thread_exit(retval) — end the CALLING thread only, recording retval for
+// whoever reads its handle. The task lives on while other threads run.
+// A program's main thread returning still ends the whole task (exit means
+// exit — Chris's ruling, 2026-08-02): threads do not keep a dead process
+// breathing.
+#define SYSCALL_THREAD_EXIT 34
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

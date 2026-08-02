@@ -16,6 +16,7 @@
 #include "memory/vma.h"   // call_in_kernel_context
 #include "log.h"
 #include "os64/klog.h"     // os64_logent_t — klog_read's out-struct (abi)
+#include "thread_join.h"   // the object behind HANDLE_THREAD
 #include "console.h"
 #include "handle.h"
 #include "pipe.h"
@@ -110,6 +111,10 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_sync(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -157,6 +162,12 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL (mask excludes it: NULL means unset)
 	SYSCALL_DEFINE(SYSCALL_KLOG_READ, "klog_read", syscall_klog_read, false, 0x01),  // arg0 = os64_logent_t[] out, arg1 = max entries
 	SYSCALL_DEFINE(SYSCALL_SYNC,      "sync",      syscall_sync,      false, 0x00),  // arg0 = handle (an int, not a pointer)
+	// arg0/arg2 are CODE addresses in the caller's own text, not buffers —
+	// they are not in the pointer mask because user_range_accessible checks
+	// data reachability, and thread_join_create validates the stack mapping
+	// it actually writes to.
+	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
+	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 };
 
 uint64_t _syscall_dispatch(
@@ -1034,6 +1045,30 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				__builtin_unreachable();
 			}
 			break;
+
+		case HANDLE_THREAD:
+		{
+			// Reading a thread blocks until it finishes and yields its
+			// return value — an int64_t, nothing more. A short buffer is
+			// a caller bug rather than a partial answer, because half a
+			// return value means nothing.
+			if (want < sizeof(int64_t))
+			{
+				kfree(kbuf);
+				return SYSCALL_RESULT_INVALID;
+			}
+			int64_t retval = 0;
+			long jr = thread_join_read((thread_join_t *)h->object, &retval);
+			if (jr == THREAD_JOIN_ERR_INTERRUPTED)
+			{
+				kfree(kbuf);
+				raise_terminating_signal_and_die(task, NULL);
+				__builtin_unreachable();
+			}
+			memcpy(kbuf, &retval, sizeof(retval));
+			got = (long)sizeof(retval);
+			break;
+		}
 
 		case HANDLE_FILE:
 		{
@@ -2382,6 +2417,99 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	bool ok = copy_to_user_buffer((void *)arg0, out, got * sizeof(os64_logent_t));
 	kfree(out);
 	return ok ? (uint64_t)got : SYSCALL_RESULT_BAD_USER_DATA;
+}
+
+// thread(entry, arg, exit_stub) — os64's first ring-3 threads.
+//
+// Everything the new thread needs already existed: createThread gives it
+// its own guarded user and kernel stacks at unique task-local addresses,
+// and the scheduler has always scheduled THREADS. All that was missing
+// was a way to ask. See os64/syscall_numbers.h for the API argument and
+// thread_join.h for why the handle points at a join object.
+static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// A null entry or exit stub is a caller bug, not a thread.
+	if (arg0 == 0 || arg2 == 0)
+	{
+		printd(DEBUG_THREAD, "syscall_thread: %s passed entry=0x%lx exit_stub=0x%lx — refused\n",
+		       task->exename, arg0, arg2);
+		return SYSCALL_RESULT_INVALID;
+	}
+	// Both must live in the caller's own (lower-half) address space. A
+	// ring-3 thread that starts executing in the kernel's half is the
+	// whole reason ring 3 exists.
+	if (arg0 >= kHHDMOffset || arg2 >= kHHDMOffset)
+	{
+		printd(DEBUG_THREAD, "syscall_thread: %s passed a non-user address (entry=0x%lx stub=0x%lx) — refused\n",
+		       task->exename, arg0, arg2);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2);
+	if (j == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	int h = handle_alloc(task, HANDLE_THREAD, j);
+	if (h < 0)
+	{
+		// Out of handle slots. The thread is ALREADY RUNNING — it was
+		// submitted to the scheduler inside thread_join_create — so this
+		// drops the handle's reference and lets it run detached rather
+		// than pretending it never started.
+		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; thread 0x%08lx runs detached\n",
+		       task->exename, j->threadID);
+		thread_join_close(j);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_THREAD, "syscall_thread: %s got handle %d for thread 0x%08lx\n",
+	       task->exename, h, j->threadID);
+	return (uint64_t)h;
+}
+
+// thread_exit(retval) — end THIS thread, leaving the task alive.
+static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = cls ? cls->currentThread : NULL;
+	task_t *task = cls ? cls->task : NULL;
+	if (self == NULL || task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	printd(DEBUG_THREAD, "syscall_thread_exit: thread 0x%08lx of %s exiting with %ld\n",
+	       self->threadID, task->exename, (int64_t)arg0);
+
+	// Publish the answer and drop the thread's reference BEFORE leaving the
+	// run queue: after the state change below this thread never executes
+	// another instruction, so anything left undone stays undone forever.
+	thread_join_finish(self->threadID, (int64_t)arg0);
+
+	// MARK, don't move. The scheduler takes the current thread off the CPU
+	// itself and, seeing `exited`, files it under ZOMBIE (scheduler.c's
+	// take-off-CPU branch). Doing the queue surgery here instead removed
+	// this thread from qRunning BEFORE the scheduler went looking for it,
+	// and it panicked: "Can't find thread with id 63 in running queue".
+	// The thread that is currently executing must still BE in the running
+	// queue when the scheduler takes over — that is how it finds itself.
+	self->retVal = (uint64_t)arg0;
+	self->exited = true;
+
+	// Off the run queue and never coming back: hand the core to someone
+	// else. scheduler_trigger does not return for a thread in this state.
+	scheduler_trigger(NULL);
+	while (1)
+		__asm__ volatile("hlt");   // unreachable; the scheduler owns us now
 }
 
 // sync(handle) — make what a program has written VISIBLE and durable.

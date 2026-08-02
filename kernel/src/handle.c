@@ -16,6 +16,7 @@
 #include "memory/paging.h"    // kKernelPML4 (the already-in-kernel-context test)
 #include "memory/kmalloc.h"   // kfree (the f_path copy owned by HANDLE_FILE)
 #include "memory/vma.h"       // call_in_kernel_context
+#include "thread_join.h"      // thread_join_close — HANDLE_THREAD's release
 
 void handle_table_init(struct task *t)
 {
@@ -187,6 +188,12 @@ bool handle_close(struct task *t, int h)
 			break;
 		case HANDLE_DIR:
 			handle_dir_object_close(handle->object);
+			break;
+		case HANDLE_THREAD:
+			// Detach: the thread keeps running if it is still going, and
+			// nobody will ever collect its answer. The join object frees
+			// itself when both references are gone.
+			thread_join_close((thread_join_t *)handle->object);
 			break;
 		default:
 			// Console handles reference no object — nothing to release.

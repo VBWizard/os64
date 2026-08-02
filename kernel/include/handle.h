@@ -31,6 +31,8 @@ typedef enum handle_type
 	HANDLE_PIPE_WRITE,     // object = pipe_t*, write end
 	HANDLE_FILE,           // object = vfs_file_t*, open file on the root fs
 	HANDLE_DIR,            // object = vfs_directory_t*, open directory (readdir)
+	HANDLE_THREAD,         // object = thread_join_t*, a thread you can wait on:
+	                       // read = block for its return value, close = detach
 } handle_type_t;
 
 typedef struct handle

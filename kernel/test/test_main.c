@@ -1707,6 +1707,56 @@ static bool test_ring3_memory(void)
     return true;
 }
 
+// os64's first ring-3 threads (2026-08-02). /bin/threadtest starts three
+// threads, hands each a different argument, joins all three by READING
+// their handles, checks every return value, and verifies that all three
+// wrote into the same global array — which is what proves they were
+// threads sharing one address space rather than three processes.
+//
+// The fixture is silent when it passes and chatty when it fails; the
+// verdict below is the only line a healthy boot prints. Step codes are
+// 0x1B2EADxx (see threadtest.c).
+#define THREAD_TEST_RETVAL 0x1B2EAD00UL
+
+static bool test_ring3_threads(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_threads (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/threadtest", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // Each worker burns ~2M iterations so the three genuinely overlap
+    // instead of finishing single-file — that spin is the point, and it is
+    // why this waits 5s rather than the usual 3.
+    for (int i = 0; i < 500 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - fixture still running after 5s "
+               "(a thread that never exits, or a join that never woke)\n");
+        return false;
+    }
+
+    if (task->retVal != THREAD_TEST_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - retVal=0x%lx, expected 0x%lx "
+               "(0x1B2EADxx names the failed step; see apps/threadtest/threadtest.c)\n",
+               task->retVal, (uint64_t)THREAD_TEST_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_threads (3 threads created, joined by handle, "
+           "return values correct, shared address space intact)\n");
+    return true;
+}
+
 // (A dedicated /bin/hello test lived here briefly during userland bring-up;
 // removed as redundant — ring3_syscall_smoke and ring3_exit_by_return already
 // cover load-run-exit at CPL 3, and the HELLO boot-flow launch exercises the
@@ -1943,6 +1993,7 @@ static void register_builtin_tests(void)
     test_register("ring3_stat", test_ring3_stat, TEST_PHASE_POSTBOOT);
     test_register("ring3_sleep", test_ring3_sleep, TEST_PHASE_POSTBOOT);
     test_register("ring3_memory", test_ring3_memory, TEST_PHASE_POSTBOOT);
+    test_register("ring3_threads", test_ring3_threads, TEST_PHASE_POSTBOOT);
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
 }
 

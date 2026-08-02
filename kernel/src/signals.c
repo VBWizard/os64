@@ -8,6 +8,7 @@
 #include "smp_core.h"
 #include "console.h"
 #include "pipe.h"
+#include "thread_join.h"
 #include "driver/system/usb/xhci.h"
 
 extern volatile int kSchedulerSwitchTasksLock;
@@ -116,6 +117,12 @@ void processSignals()
 	// the wake fired. Re-evaluating the CONDITION (not a remembered edge) is
 	// what makes pipes lost-wakeup-free.
 	pipe_wake_if_ready();
+
+	// And threads: wake anyone blocked reading a thread handle whose
+	// thread has finished. Same level-triggered discipline — the answer
+	// stays true once it exists, so a missed edge costs a tick, never a
+	// hang.
+	thread_join_wake_if_ready();
 
 	//Release the lock
 	__sync_lock_release(&kSchedulerSwitchTasksLock);
