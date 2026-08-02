@@ -335,17 +335,50 @@ static task_t *proc_find_task(uint64_t taskID)
 	return NULL;
 }
 
-// A task's threads. task_t carries a single `threads` pointer, and thread_t's
-// prev/next are the SCHEDULER QUEUE links — following them would walk whatever
-// queue the thread currently sits in, not the task's threads. So today a task
-// has exactly one thread and this returns it. When real multi-threading lands,
-// task_t needs its OWN thread chain (a field it does not have yet) and this is
-// the one function that has to learn about it.
+// A task's threads. thread_t's prev/next are the SCHEDULER QUEUE links —
+// following them walks whatever queue a thread currently sits in, not the
+// task's threads — so the chain here is `taskNext`, the per-task list added
+// when ring-3 threads landed (2026-08-02). This function's older comment
+// predicted exactly that ("when real multi-threading lands, task_t needs its
+// own thread chain and this is the one function that has to learn about it"),
+// and it was right: teaching this one walk is what made every thread in a
+// task visible to /proc, and therefore to top.
 static thread_t *proc_task_thread(task_t *t, uint64_t threadID)
 {
-	if (t == NULL || t->threads == NULL)
+	if (t == NULL)
 		return NULL;
-	return (t->threads->threadID == threadID) ? t->threads : NULL;
+	for (thread_t *th = t->threads; th != NULL; th = th->taskNext)
+		if (th->threadID == threadID)
+			return th;
+	return NULL;
+}
+
+// How many threads this task owns, and their combined CPU time.
+//
+// A process's CPU is the SUM of its threads — that is what every other
+// system reports (Linux's /proc/<pid>/stat aggregates the whole thread
+// group; times() and getrusage(RUSAGE_SELF) do the same), and it is why a
+// six-thread program legitimately reads 600%. Per-thread detail lives one
+// level down in /<id>/thread/<tid>, so a reader can have either view.
+//
+// Without this walk the numbers lie in a particularly confusing way: the
+// only visible thread would be the FIRST one, which in a typical worker
+// program is the one parked in join doing nothing — so a task burning six
+// cores reports 0%. (`hog &` did exactly that, 2026-08-02.)
+static uint32_t proc_task_thread_count(task_t *t)
+{
+	uint32_t n = 0;
+	for (thread_t *th = (t ? t->threads : NULL); th != NULL; th = th->taskNext)
+		n++;
+	return n;
+}
+
+static uint64_t proc_task_run_cycles(task_t *t)
+{
+	uint64_t cycles = 0;
+	for (thread_t *th = (t ? t->threads : NULL); th != NULL; th = th->taskNext)
+		cycles += th->runCycles;
+	return cycles;
 }
 
 // Copy a NUL-terminated string OUT OF A TASK'S ADDRESS SPACE into `out`.
@@ -496,7 +529,7 @@ static void proc_gen_task_status(proc_text_t *t, task_t *task)
 	// exists to answer without a debugger.
 	ptext_addf(t, "foreground\t%s\n", (kForegroundTask == task) ? "yes" : "no");
 	ptext_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
-	ptext_addf(t, "threads\t%u\n", th ? 1u : 0u);
+	ptext_addf(t, "threads\t%u\n", proc_task_thread_count(task));
 	ptext_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);
 	ptext_addf(t, "entry\t%p\n", (void *)task->entryPoint);
 	if (task->loadBias)
@@ -510,8 +543,12 @@ static void proc_gen_task_status(proc_text_t *t, task_t *task)
 	// Real CPU time, charged at context-switch boundaries (thread.h has the
 	// doctrine). `ticks` below is the old sampling counter — kept because
 	// removing a field is an ABI event, but runtime_us is the honest one.
-	ptext_addf(t, "runtime_us\t%lu\n",
-	           th ? proc_cycles_to_us(th->runCycles) : 0);
+	//
+	// SUMMED ACROSS THE TASK'S THREADS, which is what makes this number mean
+	// "what this program cost" rather than "what its first thread cost" —
+	// and on a threaded program those differ wildly, because the first
+	// thread is usually the one waiting.
+	ptext_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(proc_task_run_cycles(task)));
 	if (th != NULL)
 		ptext_addf(t, "ticks\t%lu\n", th->totalRunTicks);
 	// A live task has no exit status; saying "-" beats printing a zero that
@@ -1038,12 +1075,25 @@ static int proc_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 
 		case PROC_NODE_THREADDIR:
 		{
-			// One thread per task today — see proc_task_thread's note.
+			// Every thread the task owns, walked through taskNext (the
+			// per-task chain; prev/next belong to the run queues). h->index
+			// is the caller's position, so each readdir call advances one
+			// link — the list is short by nature and this keeps the handle
+			// stateless beyond a counter.
+			//
+			// A thread that exits between two readdir calls simply stops
+			// appearing; the walk re-runs from the head each time rather
+			// than caching a pointer that could be freed underneath it.
 			task_t *task = proc_find_task(h->path.taskID);
-			if (task == NULL || task->threads == NULL || h->index > 0)
+			if (task == NULL)
+				return 0;
+			thread_t *th = task->threads;
+			for (int skip = 0; skip < h->index && th != NULL; skip++)
+				th = th->taskNext;
+			if (th == NULL)
 				return 0;
 			entry->flags = OS64_DE_DIR;
-			snprintf(entry->name, OS64_DIRENT_NAME_MAX, "%lu", task->threads->threadID);
+			snprintf(entry->name, OS64_DIRENT_NAME_MAX, "%lu", th->threadID);
 			h->index++;
 			return 1;
 		}
