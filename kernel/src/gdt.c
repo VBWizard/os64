@@ -66,5 +66,11 @@ void init_GDT()
 
     load_gdt_and_jump(&kGDTr);
 
+    // Allocate every core's double-fault stack HERE, on the BSP, on a real
+    // kernel stack, with the allocator already up. tss_initialize_cpu must
+    // stay allocation-free because the APs call it on a 1 KB bootstrap
+    // stack (see tss.c).
+    tss_init_ist_stacks();
+
     tss_initialize_cpu(0);
 }

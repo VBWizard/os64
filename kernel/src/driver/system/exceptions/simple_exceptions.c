@@ -150,6 +150,26 @@ void handle_invalid_opcode(uint64_t rip) {
     exception_panic("Invalid opcode (#UD) occurred!", rip, 0xFFFFFFFFFFFFFFFF);
 }
 
+// A double fault means the CPU could not deliver some FIRST exception —
+// nearly always because the stack it had to push onto was unusable. So the
+// interesting evidence is not "a #DF happened", it is WHAT RSP and RFLAGS
+// were when it did: an RSP outside any stack region, or RFLAGS carrying
+// bits no kernel thread should have (TF, NT, IOPL≠0, AC), says the thread
+// was dispatched with a corrupt register frame rather than that it did
+// something wrong.
+void handle_double_fault_frame(uint64_t rip, uint64_t rsp, uint64_t rflags)
+{
+	core_local_storage_t *core = get_core_local_storage();
+	printf("\n>>> DOUBLE FAULT on AP %lu <<<\n", core ? core->apic_id : 0);
+	printf(">>> RIP=0x%016lx RSP=0x%016lx RFLAGS=0x%016lx <<<\n", rip, rsp, rflags);
+	// Name the usual suspects rather than making a reader decode bits.
+	if (rflags & 0x100)   printf(">>>   RFLAGS.TF set — single-step on a kernel thread <<<\n");
+	if (rflags & 0x4000)  printf(">>>   RFLAGS.NT set <<<\n");
+	if (rflags & 0x3000)  printf(">>>   RFLAGS.IOPL != 0 <<<\n");
+	if (rflags & 0x40000) printf(">>>   RFLAGS.AC set <<<\n");
+	exception_panic("Double Fault (#DF) — the first fault could not be delivered", rip, 0);
+}
+
 void handle_double_fault(uint64_t rip) {
     exception_panic("Double fault (#DF) occurred!", rip, 0xFFFFFFFFFFFFFFFF);
 }

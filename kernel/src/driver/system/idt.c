@@ -56,6 +56,14 @@ void initialize_idt() {
 	set_idt_entry(0x00, (uint64_t)&divide_by_zero_handler, 0x28, 0x8E); // #DE
 	set_idt_entry(0x06, (uint64_t)&invalid_opcode_handler, 0x28, 0x8E); // #UD
 	set_idt_entry(0x08, (uint64_t)&double_fault_handler, 0x28, 0x8E);
+	// #DF runs on IST1 — the per-core emergency stack tss_initialize_cpu
+	// allocates. This is the ONE gate that must never depend on the faulting
+	// code's RSP being sane, because a broken RSP is the most common reason
+	// to arrive here at all: #PF (can't push) → #DF (can't push) → triple
+	// fault, machine gone, nothing printed. With IST1 the CPU switches
+	// stacks on delivery and the handler actually runs, which turns a
+	// vanished window into a panic that names the thread and the core.
+	kIDT[0x08].ist = 1;
 	set_idt_entry(0x0D, (uint64_t)&general_protection_fault_handler, 0x28, 0x8E); // #GP
 	set_idt_entry(0x0E, (uint64_t)&page_fault_handler, 0x28, 0x8E); // #PF
 	set_idt_entry(0x12, (uint64_t)&machine_check_handler, 0x28, 0x8E); // #MC
