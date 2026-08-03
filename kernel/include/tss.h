@@ -39,6 +39,9 @@ typedef struct {
 } __attribute__((packed)) tss_t;
 
 void tss_initialize_cpu(uint32_t cpu_index);
+// Allocate every core's IST1 (double-fault) stack. BSP only, once, after the
+// allocator is up — see tss.c for why this cannot live in tss_initialize_cpu.
+void tss_init_ist_stacks(void);
 void tss_set_rsp0(uint32_t cpu_index, uint64_t rsp0);
 tss_t* tss_get_for_cpu(uint32_t cpu_index);
 uint16_t tss_selector_for_cpu(uint32_t cpu_index);

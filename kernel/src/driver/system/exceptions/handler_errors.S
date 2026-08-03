@@ -20,11 +20,21 @@ invalid_opcode_handler:
     call handle_invalid_opcode
     hlt
 
+# #DF arrives on IST1 (see idt.c) — a known-good per-core stack — so this
+# handler runs even when the faulting code's RSP was the problem.
+#
+# The frame layout matters here and was wrong before: #DF PUSHES AN ERROR
+# CODE (always zero), so [rsp] is that zero and RIP is at [rsp+8]. Reading
+# [rsp] reported a faulting instruction of 0x0 every time. The rest of the
+# frame is worth passing too — [rsp+32] is the RSP that was too broken to
+# push onto, which is the single most useful number in the whole event.
 .global double_fault_handler
 double_fault_handler:
     cli
-    mov rdi, [rsp]  # Get RIP
-    call handle_double_fault
+    mov rdi, [rsp+8]     # RIP that was executing
+    mov rsi, [rsp+32]    # RSP at the time — the likely culprit
+    mov rdx, [rsp+24]    # RFLAGS — garbage here means a corrupt frame
+    call handle_double_fault_frame
     hlt
 
 .global general_protection_fault_handler
