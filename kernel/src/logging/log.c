@@ -39,6 +39,58 @@ static bool log_sink_alive(void)
 	       (kTicksSinceStart - kLogSinkLastRead) <= LOG_SINK_TIMEOUT_TICKS;
 }
 
+// Has a userland sink EVER attached this boot? Distinct from kLogSinkClaimed,
+// which goes false again when a daemon dies: this one is a one-way latch, and
+// it is what ends the initial wait for good.
+static volatile bool kLogSinkEverClaimed = false;
+// Set when the wait is given up on (deadline or ring pressure). Also one-way:
+// having decided the daemon is not coming, the kernel does not re-decide every
+// pass and re-print the explanation.
+static volatile bool kLogSinkAwaitAbandoned = false;
+
+void log_note_sink_claimed(void)
+{
+	kLogSinkEverClaimed = true;
+}
+
+// Should the drainer stay silent because a log daemon is expected but has not
+// attached yet? See the LOG_SINK_AWAIT_* commentary in log.h for the why; this
+// is the where. Called once per drain pass, and it OWNS the two escape
+// hatches — including printing the reason, because a kernel that silently
+// stopped logging and silently started again is worse than either state.
+static bool log_awaiting_userland_sink(void)
+{
+	if (kLogdPath[0] == '\0' || kLogSinkEverClaimed || kLogSinkAwaitAbandoned)
+		return false;
+
+	// Hatch 1: it's been too long. The daemon isn't coming.
+	if (kTicksSinceStart > LOG_SINK_AWAIT_TIMEOUT_TICKS)
+	{
+		kLogSinkAwaitAbandoned = true;
+		serial_print_string("[logd] LOGD= was set but no userland sink attached in time — kernel draining to serial\n");
+		return false;
+	}
+
+	// Hatch 2: the rings are filling. This one outranks the deadline, because
+	// a full ring is where entries actually die. Checked against the loudest
+	// core, not the average — one core at capacity loses just as much.
+	for (int c = 0; c < kMPCoreCount; c++)
+	{
+		log_buffer_t *b = &core_log_buffers[c];
+		size_t used = (b->head >= b->tail)
+		            ? b->head - b->tail
+		            : b->capacity - b->tail + b->head;
+		if (b->capacity && (used * 100) / b->capacity >= LOG_SINK_AWAIT_HIGH_WATER_PCT)
+		{
+			kLogSinkAwaitAbandoned = true;
+			serial_print_string("[logd] log rings hit high water before a userland sink attached — kernel draining to serial\n");
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message)
 {
 	core_local_storage_t *cls = get_core_local_storage();
@@ -177,6 +229,10 @@ uint32_t klog_dequeue(log_entry_t *out, uint32_t max)
     // logging back and forth every three seconds.
     kLogSinkClaimed = true;
     kLogSinkLastRead = kTicksSinceStart;
+    // One-way latch: ends the LOGD= startup wait for good. From here on the
+    // ordinary heartbeat governs the hand-off, including a daemon that dies
+    // and one that is restarted by hand later.
+    log_note_sink_claimed();
 
     if (!kLoggingInitialized || out == NULL || max == 0)
         return 0;
@@ -238,6 +294,19 @@ bool logd_thread(bool daemon) {
         if (log_sink_alive())
         {
             was_claimed = true;
+            if (!daemon)
+                return false;
+            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
+            continue;
+        }
+
+        // The same hand-off, one step earlier: LOGD= says a daemon is coming,
+        // so don't spend the boot pushing bytes out a serial port that the
+        // file is about to own anyway. Deliberately placed AFTER the
+        // sink-alive test and BEFORE was_claimed's "resuming serial" notice,
+        // so this quiet stretch is never mistaken for a daemon that died.
+        if (log_awaiting_userland_sink())
+        {
             if (!daemon)
                 return false;
             sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);

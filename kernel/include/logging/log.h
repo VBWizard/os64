@@ -89,4 +89,33 @@ uint32_t klog_dequeue(log_entry_t *out, uint32_t max);
 extern volatile bool kLogSinkClaimed;
 extern volatile uint64_t kLogSinkLastRead;
 
+// ── Waiting for the ring-3 sink (the LOGD= cmdline flag) ───────────────────
+// When a log daemon is COMING but has not attached yet, draining to serial is
+// pure waste: those same entries are about to be claimed and written to a
+// file, and the serial copy costs a VM exit per byte for the loudest stretch
+// of the whole boot. So with LOGD= set, the kernel drainer holds its fire
+// from the first log line and lets the rings simply accumulate — they hold
+// ~56,000 entries per core, which is a great deal of boot.
+//
+// Two escape hatches, because "never drop a byte" outranks "boot fast":
+//
+//   DEADLINE — if the daemon never attaches (missing binary, unwritable path,
+//   crash on startup), waiting forever would mean a boot with NO log at all
+//   and no clue why. After this long, serial comes back and says so.
+//
+//   HIGH WATER — if the rings fill faster than the daemon arrives, serial
+//   comes back immediately regardless of the deadline. A full ring is the one
+//   thing that actually loses entries.
+//
+// Either hatch abandons the wait PERMANENTLY for the rest of the boot: once
+// the kernel has decided the daemon isn't coming, a late arrival still claims
+// the sink through the normal heartbeat path, and nothing is lost either way.
+#define LOG_SINK_AWAIT_TIMEOUT_TICKS (30 * TICKS_PER_SECOND)
+#define LOG_SINK_AWAIT_HIGH_WATER_PCT 75
+
+// The LOGD= path from the kernel commandline ("" = no userland sink expected).
+// Its mere presence is what arms the wait above — the kernel does not need to
+// know whether the daemon has been spawned yet, only that one is expected.
+extern char kLogdPath[128];
+
 #endif // LOG_H

@@ -33,6 +33,18 @@ bool kRunKeytest = false;
 // Launch /bin/husk (the shell) from the boot flow and keep the system up. This
 // is the real "launch the shell" path; the HELLO/KEYTEST temps fold into it.
 bool kRunHusk = false;
+// LOGD=<path>: the file a ring-3 log daemon should append the kernel log to.
+// Non-empty means TWO things, and both matter from the very first log line:
+// the kernel launches /bin/logd with this path as soon as a filesystem exists
+// (before the tests, which is the loud part), and until that daemon attaches
+// the kernel drainer stays OFF the serial port and simply lets the rings fill
+// (see LOG_SINK_AWAIT_* in log.h).
+//
+// It lives on the commandline rather than in a config file because os64 has
+// no configuration yet — and the kernel already launches /bin/husk and
+// kworker this way, so logd is not a new kind of citizen. When real config
+// arrives this becomes one line in a file and the flag can retire.
+char kLogdPath[128] = {0};
 // Panic ON PURPOSE right after the post-boot tests: the standing diagnostic
 // for the panic pipeline itself. A panic's dying-breath serial path (direct
 // write + logd emergency flush, see panic.c) is exactly the kind of code that
@@ -125,6 +137,7 @@ static cmdopt_t cmdopts[] = {
     {"HELLO", OPT_BOOL, &kRunHello, true, 0},
     {"KEYTEST", OPT_BOOL, &kRunKeytest, true, 0},
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
+    {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
     {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"NOUSB", OPT_BOOL, &kEnableUSB, false, 0},

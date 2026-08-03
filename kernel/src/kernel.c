@@ -337,6 +337,35 @@ void kernel_init()
 	// underneath it — this mount works even if no disk was found.
 	procfs_mount();
 
+	// ── The log daemon, as early as a log daemon can possibly start ──────────
+	// HERE, and not down with husk, is the whole point of the LOGD= flag. The
+	// expensive part of a DEBUG_DETAILED boot is everything BELOW this line —
+	// driver bring-up, the test suite, the shell — and a daemon started after
+	// all that would have automated away the typing while leaving the cost.
+	// This is the first instruction in the boot where a filesystem exists to
+	// exec from, so it is the earliest honest answer.
+	//
+	// Nothing is lost by starting late anyway: the kernel has been queueing
+	// into the per-core rings since boot and (with LOGD= set) deliberately not
+	// draining them to serial, so logd's first read collects the ENTIRE boot,
+	// first line included, and writes it to the file at memcpy speed.
+	if (kLogdPath[0] && kRootFilesystem != NULL)
+	{
+		printf("Launching /bin/logd -> %s ...\n", kLogdPath);
+		char *logdArgv[] = { "/bin/logd", kLogdPath };
+		task_t *logdTask = task_create("/bin/logd", 2, logdArgv, kKernelTask, false, THREAD_NO_AFFINITY);
+		if (logdTask)
+			scheduler_submit_new_task(logdTask);
+		else
+		{
+			// Say so on the glass: with LOGD= set the kernel is holding serial
+			// output back for a daemon that now cannot arrive, and the wait's
+			// own deadline is the only thing that will notice. Better to name
+			// it here than to leave a silent 30 seconds.
+			printf("  /bin/logd launch failed (not on the image?) — serial logging resumes shortly\n");
+		}
+	}
+
 	// TEMP (userland bring-up, remove when the shell exists): launch
 	// /bin/hello as a FIRST-CLASS scheduled application from the normal boot
 	// flow — task_create + scheduler_submit_new_task, then walk away. No test
