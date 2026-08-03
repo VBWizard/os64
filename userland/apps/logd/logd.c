@@ -28,6 +28,24 @@
 #define BATCH 64
 #define DEFAULT_PATH "/fat/os64.log"
 
+// One formatted line's worth of room. The kernel splits anything longer
+// across continuation entries, so this bounds a single entry, not a message.
+#define LINE_MAX 512
+
+// The batch is formatted into ONE buffer and written with ONE syscall.
+//
+// It used to be a write() per LINE, which at DEBUG_SCHEDULER|DEBUG_DETAILED
+// meant 64 syscalls per batch, each carrying a kernel bounce-buffer copy and
+// a full trip down the FAT write path for a few dozen bytes. That daemon cost
+// ~20% of a core; the bytes were never the problem, the boundary crossings
+// were.
+//
+// In BSS, NOT on the stack: 32KB would blow the 16KB user stack outright (see
+// the note on OS64_PRINTF_MAX in libos64/fmt.c). One process, one thread, so
+// a file-scope buffer needs no protection — if logd ever grows threads, this
+// becomes per-thread or it becomes a bug.
+static char gOut[BATCH * LINE_MAX];
+
 // Idle sleep between empty polls, milliseconds. Log lines are not
 // latency-critical (the kernel's own daemon batched at 2/second), and the
 // rings hold ~56,000 entries per core, so a tenth of a second of slack
@@ -61,6 +79,10 @@ int main(int argc, char **argv)
 
 	os64_printf("logd: appending kernel log to %s\n", path);
 
+	// When the file was last committed to disk, in ticks. See the sync
+	// discussion at the bottom of the loop.
+	uint64_t lastSync = t.ticks;
+
 	os64_logent_t batch[BATCH];
 	for (;;)
 	{
@@ -74,29 +96,53 @@ int main(int argc, char **argv)
 			continue;
 		}
 
+		size_t used = 0;
 		for (int64_t i = 0; i < got; i++)
 		{
+			size_t room = sizeof(gOut) - used;
+
 			// Continuation chunks are the tail of a long line that the
 			// kernel split across entries — they get NO prefix, or a
 			// 300-character message would sprout timestamps mid-sentence.
 			if (batch[i].continued)
-				n = os64_snprintf(line, sizeof(line), "%s", batch[i].message);
+				n = os64_snprintf(gOut + used, room, "%s", batch[i].message);
 			else
-				n = os64_snprintf(line, sizeof(line), "%lu (0x%04lx) AP%u: %s",
+				n = os64_snprintf(gOut + used, room, "%lu (0x%04lx) AP%u: %s",
 				                  batch[i].ticks, batch[i].threadID,
 				                  (uint32_t)batch[i].core, batch[i].message);
-			if (n > 0)
-				os64_write((int32_t)fd, line, (size_t)n);
+
+			if (n <= 0)
+				continue;
+			// snprintf returns the length it WANTED (C99), so a long entry
+			// reports more than it stored. Believing it would walk `used`
+			// past the end of the buffer and hand write() a length covering
+			// memory we never filled.
+			used += ((size_t)n < room) ? (size_t)n : (room > 0 ? room - 1 : 0);
 		}
 
-		// Commit the batch. Without this the file's LENGTH lives only in
-		// the filesystem's memory until the daemon exits, so `cat` on a
-		// live log prints nothing at all — the log looks broken while
-		// working perfectly (Chris found exactly this, five cats in a
-		// row, 2026-08-01). Syncing per BATCH rather than per line keeps
-		// the directory-entry writes proportional to traffic, not to
-		// line count.
-		os64_sync((int32_t)fd);
+		if (used > 0)
+			os64_write((int32_t)fd, gOut, used);
+
+		// Commit — but on a CLOCK, not on every batch.
+		//
+		// Some sync is mandatory: without it the file's LENGTH lives only in
+		// the filesystem's memory until the daemon exits, so `cat` on a live
+		// log prints nothing at all — the log looks broken while working
+		// perfectly (Chris found exactly this, five cats in a row,
+		// 2026-08-01). But each sync rewrites the directory entry, and under
+		// a DETAILED firehose the batches arrive fast enough that syncing
+		// every one turns metadata into the dominant cost.
+		//
+		// Once a second is the compromise: a reader is never more than a
+		// second behind, and the directory-entry writes are bounded by TIME
+		// instead of by traffic — the busier the log, the more the cost
+		// amortizes, which is exactly backwards from where it was.
+		os64_ticks(&t);
+		if (t.ticks - lastSync >= t.per_second)
+		{
+			os64_sync((int32_t)fd);
+			lastSync = t.ticks;
+		}
 	}
 
 	// Not reached: a log daemon has no natural end. It stops when the
