@@ -9,6 +9,7 @@
 #include "memcpy.h"
 #include "time.h"  // For time conversion functions
 #include "spinlock.h"  // ff_mutex_* reentrancy hooks (FF_FS_REENTRANT)
+#include "serial_logging.h"  // printd — the read-only-device refusal in disk_write
 
 extern uint64_t kSystemCurrentTime; // Your kernel's epoch time variable
 
@@ -94,6 +95,23 @@ DRESULT disk_write (
 
 	if (fs==NULL)
 		panic("fat disk_write: Cannot find vfs device for disk number %u\n",pdrv);
+
+	// A driver that never installed a write op is READ-ONLY, and saying so is
+	// the whole job here. Without this check the call below dispatches through
+	// a NULL function pointer — and because VA 0 is still mapped in os64, that
+	// does not fault cleanly: the CPU happily EXECUTES whatever bytes live at
+	// address 0 and runs off into hyperspace. That is precisely how the first
+	// boot with a /home partition on the AHCI disk died (2026-08-02): AHCI
+	// installs ops->read and not ops->write, kmalloc zeroes everything, and a
+	// single `echo > /home/proof.txt` took the machine down with RIP=0x3 and an
+	// unkillable #GP storm. RES_WRPRT is FatFs's own word for it — the write
+	// fails, the OS lives, and the message names the device.
+	if (fs->bops == NULL || fs->bops->write == NULL)
+	{
+		printd(DEBUG_VFS, "fat disk_write: device %u ('%s') has no write op — read-only device, refusing %u sector(s) at LBA %lu\n",
+		       pdrv, fs->block_device_info->block_device->name, count, (uint64_t)sector);
+		return RES_WRPRT;
+	}
 
 	// Propagate the driver's verdict (0 = success, like disk_read does).
 	// Swallowing it here told FatFs its metadata was safely on disk when the
