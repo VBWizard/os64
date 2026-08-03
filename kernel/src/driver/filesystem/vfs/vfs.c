@@ -336,6 +336,7 @@ static bool vfs_guid_already_mounted(const uint8_t *guid)
 static const char *kKnownPartGUIDs[] = {
 	"2f4fd02e-68b4-4c82-98bc-72467529b3fc",   // the os64 FAT partition
 	"1ec5f5ab-71b7-45cd-a7a4-05646e878e57",   // the os64 ext2 partition
+	"7a3c1d90-4e62-4f3b-9a55-0c6f2b8e41d7",   // the os64 data disk — /home
 };
 
 static bool vfs_guid_is_ours(const uint8_t *guid)
@@ -346,13 +347,58 @@ static bool vfs_guid_is_ours(const uint8_t *guid)
 	return false;
 }
 
-// Auto-mount every recognized, OS64-AUTHORED non-root partition at
-// "/<fstype>". Runs once at boot, after the root is claimed; partition
-// tables were already detected by vfs_mount_root_part's first pass.
+// Is a GPT partition name usable as a mount point?
+//
+// GPT has carried a 36-character partition name since 2016 (gpt.c already
+// converts it out of UTF-16 into partEntry_t.partName) and os64 never once
+// looked at it. It is the natural place for a mount point to live: the
+// partition is labelled at the moment it is created, the label travels WITH
+// the disk to any machine, and there is no /etc/fstab to write, parse, keep
+// in sync, or get wrong. Unix needs fstab because a mount point is a local
+// policy decision; here it is a property of the partition.
+//
+// The rules are deliberately strict — letters, digits, '_' and '-' only. A
+// mount prefix becomes the first component of every path on that filesystem,
+// so a name containing '/', '.', a space or a control character would either
+// break path resolution or forge a path that resolves somewhere else. Anything
+// that fails falls back to the filesystem type, which is what os64 always did.
+static bool vfs_partname_usable(const char *name)
+{
+	if (name == NULL || name[0] == '\0')
+		return false;
+
+	size_t len = 0;
+	for (const char *p = name; *p != '\0'; p++, len++)
+	{
+		// Leave room for the leading '/', a 2-digit dedupe suffix and the NUL.
+		if (len >= VFS_MOUNT_PREFIX_MAX - 4)
+			return false;
+		bool ok = (*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+		          (*p >= '0' && *p <= '9') || *p == '_' || *p == '-';
+		if (!ok)
+			return false;
+	}
+	return true;
+}
+
+// Is this mount prefix already claimed? The mount table IS the bookkeeping —
+// no per-filesystem counters to keep in step with it (the old code kept one
+// per fstype and had to hand a name BACK on mount failure).
+static bool vfs_prefix_in_use(const char *prefix)
+{
+	for (int i = 0; i < kMountCount; i++)
+		if (strcmp(kMountTable[i].prefix, prefix) == 0)
+			return true;
+	return false;
+}
+
+// Auto-mount every recognized, OS64-AUTHORED non-root partition at its GPT
+// partition NAME ("/home"), falling back to its filesystem type ("/fat",
+// "/ext2") when the name is missing or unusable. Runs once at boot, after the
+// root is claimed; partition tables were already detected by
+// vfs_mount_root_part's first pass.
 static void vfs_mount_secondary_partitions(void)
 {
-	int fatCount = 0, ext2Count = 0;
-
 	for (int idx = 0; idx < kBlockDeviceInfoCount; idx++)
 	{
 		if (kBlockDeviceInfo[idx].ATADeviceType != ATA_DEVICE_TYPE_SATA_HD &&
@@ -364,23 +410,27 @@ static void vfs_mount_secondary_partitions(void)
 		{
 			partEntry_t *part = kBlockDeviceInfo[idx].block_device->partition_table->parts[partno];
 
-			const char *baseName;
-			int *counter;
+			// fsName is what the FILESYSTEM is (for the messages, and the
+			// fallback mount point); baseName is what we'll actually mount it as.
+			const char *fsName;
 			vfs_file_operations_t fileOps;
 			vfs_directory_operations_t dirOps;
 			switch (part->filesystemType)
 			{
 				case FILESYSTEM_TYPE_FAT32:
-					baseName = "fat";  counter = &fatCount;
+					fsName = "fat";
 					fileOps = fat_fops;  dirOps = fat_dops;
 					break;
 				case FILESYSTEM_TYPE_EXT2:
-					baseName = "ext2"; counter = &ext2Count;
+					fsName = "ext2";
 					fileOps = ext2_fops; dirOps = ext2_dops;
 					break;
 				default:
 					continue;   // unrecognized/no filesystem — not mountable
 			}
+
+			const char *baseName = vfs_partname_usable(part->partName)
+			                       ? part->partName : fsName;
 
 			if (!vfs_guid_is_ours(part->uniquePartGUID))
 			{
@@ -400,32 +450,30 @@ static void vfs_mount_secondary_partitions(void)
 				continue;
 			}
 
-			// First of a type mounts bare ("/fat"); siblings get a number
-			// starting at 2 ("/fat2"), like device names always have.
+			// First claimant mounts bare ("/fat"); anyone who wants a name
+			// that's taken gets a number starting at 2 ("/fat2"), like device
+			// names always have. Two partitions CAN carry the same GPT name —
+			// nothing stops a disk from having two called "home" — so this has
+			// to hold for names exactly as it did for filesystem types.
 			char prefix[VFS_MOUNT_PREFIX_MAX];
-			(*counter)++;
-			if (*counter == 1)
-				sprintf(prefix, "/%s", baseName);
-			else
-				sprintf(prefix, "/%s%u", baseName, (unsigned)*counter);
+			sprintf(prefix, "/%s", baseName);
+			for (unsigned n = 2; n < 100 && vfs_prefix_in_use(prefix); n++)
+				sprintf(prefix, "/%s%u", baseName, n);
 
 			vfs_filesystem_t *fs = kRegisterFilesystem(prefix, &kBlockDeviceInfo[idx],
 			                                           partno, &fileOps, &dirOps);
 			if (fs != NULL)
 			{
-				printd(DEBUG_BOOT, "BOOT: mounted %s (device %u partition %u) at %s\n",
-				       baseName, idx, partno, prefix);
+				printd(DEBUG_BOOT, "BOOT: mounted %s (device %u partition %u, GPT name \"%s\") at %s\n",
+				       fsName, idx, partno, part->partName, prefix);
 				// Screen too (permanent): on real hardware the sweep meets
 				// partitions we didn't author — a Windows EFI partition, a
 				// recovery blob — and what got mounted WHERE is exactly the
 				// context a screen-only machine needs when something fails.
-				printf("mounted %s at %s\n", baseName, prefix);
+				printf("mounted %s at %s\n", fsName, prefix);
 			}
 			else
-			{
-				printf("mount of %s (device %u part %u) FAILED\n", baseName, idx, partno);
-				(*counter)--;   // mount failed — give the name back
-			}
+				printf("mount of %s (device %u part %u) FAILED\n", fsName, idx, partno);
 		}
 	}
 }

@@ -13,7 +13,7 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 
 # Define the base QEMU flags
 # -smp 2 
-QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 8 \
+QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 4 \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
 				  -d $(shell echo int,cpu_reset,pcall,guest_errors)
@@ -67,6 +67,41 @@ EXT2_SIZE_MB ?= 16
 EXT2_PARTUUID ?= 1ec5f5ab-71b7-45cd-a7a4-05646e878e57
 EXT2_TEST_IMAGE ?= $(CURDIR)/disk/ext2_test.img
 EXT2_STAGING ?= $(CURDIR)/disk/ext2_staging
+
+# ---- The data disk: /home ------------------------------------------------
+# A SEPARATE IMAGE FILE, and that is the entire point. Everything on
+# $(DISK_IMAGE) is rewritten from scratch on every build (rm + sgdisk +
+# mformat), so nothing written from INSIDE os64 can survive there — and it
+# can't simply be made persistent, because the binaries on it must be rebuilt.
+# A file the build creates ONCE and never touches again is the only shape that
+# is both writable from the OS and durable across `make`. It is wired in as an
+# ORDER-ONLY prerequisite (the `|` in the run targets below), which is exactly
+# make's word for "ensure it exists, never rebuild it".
+#
+# It costs the P5 nothing: only $(DISK_IMAGE) rides the ISO as a Limine
+# module, so this image adds zero bytes to the ISO and zero seconds to a
+# ramdisk boot. Which is why it's 64MB despite holding almost nothing — that
+# is the FAT32 floor documented above, and the space is free.
+#
+# 'home' is the GPT PARTITION NAME, and the kernel mounts partitions at
+# /<partition name> (see vfs_mount_secondary_partitions). No /etc/fstab to
+# invent: the partition says what it is called, and the mount believes it.
+DATA_IMAGE ?= $(CURDIR)/disk/os64_data.img
+DATA_SIZE_MB ?= 64
+DATA_PARTUUID ?= 7a3c1d90-4e62-4f3b-9a55-0c6f2b8e41d7
+# NVMe, and the reason is a bug this disk found on its very first boot:
+# **THE AHCI DRIVER CANNOT WRITE.** ahci.c installs ops->read and never
+# ops->write, so /home on a SATA disk mounts, lists and reads perfectly — and
+# the first `echo > /home/x` dispatches through a NULL function pointer into
+# mapped page zero, executes it, and takes the machine down with RIP=0x3.
+# (fat_glue.c's disk_write now refuses cleanly instead, but refusing is not
+# the same as having a home you can write to.)
+#
+# Switch this back to `ahci` the day the AHCI write path exists — the coverage
+# argument stands, and this disk is still the right way to get it: it was
+# genuinely useful that one boot found a hole years of NVMe-only testing never
+# went near.
+DATA_DISK_IF ?= nvme
 # Partition 2 starts right after partition 1: 2048 boot-gap sectors + the FAT
 # partition. Total image adds 2MB slack for the GPT structures.
 EXT2_START_SECTOR := $(shell echo $$((2048 + $(DISK_SIZE_MB) * 2048)))
@@ -81,8 +116,21 @@ QEMU_DRIVE_FLAGS = \
                   #-device ahci,id=ahci1 \
                   #-device ide-hd,drive=sata1,bus=ahci1.0
 
+# The data disk. Second controller, second disk — see DATA_DISK_IF above.
+# NOTE: this is deliberately NOT folded into QEMU_DRIVE_FLAGS, whose last live
+# line ends in a backslash followed by commented-out lines — anything appended
+# there is swallowed by the continuation.
+ifeq ($(DATA_DISK_IF),ahci)
+QEMU_DATA_FLAGS = -drive file=$(DATA_IMAGE),if=none,id=data1 \
+                  -device ahci,id=ahci0 \
+                  -device ide-hd,drive=data1,bus=ahci0.0
+else
+QEMU_DATA_FLAGS = -drive file=$(DATA_IMAGE),if=none,id=data1 \
+                  -device nvme,drive=data1,serial=data1-serial
+endif
+
 # Combine all flags
-QEMUFLAGS_ADD = $(QEMU_BASE_FLAGS) $(QEMU_DRIVE_FLAGS)
+QEMUFLAGS_ADD = $(QEMU_BASE_FLAGS) $(QEMU_DRIVE_FLAGS) $(QEMU_DATA_FLAGS)
 
 # Use the combined flags in your target
 $(call USER_VARIABLE,QEMUFLAGS,$(QEMUFLAGS_ADD))
@@ -128,14 +176,14 @@ $(USERLAND_BINS): userland ;
 
 # Local qemu: ~/src/qemu-9.2.0-rc0/build/
 .PHONY: run
-run: $(IMAGE_NAME).iso
+run: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS)
 
-debug: $(IMAGE_NAME).iso
+debug: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
@@ -143,7 +191,7 @@ debug: $(IMAGE_NAME).iso
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
 
 .PHONY: debug-hdd-eufi
-debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE)
+debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -151,7 +199,7 @@ debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE)
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
 
 .PHONY: run-uefi
-run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso
+run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -160,14 +208,14 @@ run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd
-run-hdd: $(IMAGE_NAME).hdd $(DISK_IMAGE)
+run-hdd: $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
-run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE)
+run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
 		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -243,7 +291,7 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURE
 	debugfs -w -f $(EXT2_STAGING)/debugfs_bins.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
 	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps)"
 
-$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt etc/husk.rc $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -253,9 +301,15 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/par
 	# Partition 1 (FAT root): same start, same size, same GUID as always —
 	# now explicitly bounded (+$(DISK_SIZE_MB)M) instead of "fill the image",
 	# because partition 2 lives after it.
-	sgdisk $(DISK_IMAGE) --new=1:2048:+$(DISK_SIZE_MB)M --typecode=1:0700 --change-name=1:"os64" --partition-guid=1:$(DISK_PARTUUID)
+	# The GPT NAMES ("fat", "ext2") are now load-bearing: os64 mounts each
+	# partition at /<partition name>. They were "os64" and "ext2test", which
+	# would have moved the mounts to /os64 and /ext2test — these spellings
+	# keep every path exactly where it has always been. (A VBox VDI that
+	# hasn't had `make vbox-sync` run against it still carries the old names
+	# and will mount at /os64 until it does.)
+	sgdisk $(DISK_IMAGE) --new=1:2048:+$(DISK_SIZE_MB)M --typecode=1:0700 --change-name=1:"fat" --partition-guid=1:$(DISK_PARTUUID)
 	# Partition 2 (ext2 test): 0:0 = next free spot, fill the remainder.
-	sgdisk $(DISK_IMAGE) --new=2:0:0 --typecode=2:8300 --change-name=2:"ext2test" --partition-guid=2:$(EXT2_PARTUUID)
+	sgdisk $(DISK_IMAGE) --new=2:0:0 --typecode=2:8300 --change-name=2:"ext2" --partition-guid=2:$(EXT2_PARTUUID)
 	# -T bounds the FAT filesystem to partition 1's sectors — mformat cannot
 	# be allowed to size itself from the file, which now extends past the
 	# partition and into ext2 territory.
@@ -271,7 +325,32 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/par
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(b) ::/bin/$(notdir $(b));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
+	# husk's startup script. It rides the FAT partition rather than root
+	# because the DEFAULT boot entry mounts ext2 as root, and ext2 is
+	# read-only by design here — /etc/husk.rc would not merely be awkward to
+	# update from inside the OS, it would be unwritable. On this boot it
+	# appears as /fat/husk.rc; on a FAT-root boot the same file is /husk.rc,
+	# which is why husk looks in both places.
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/husk.rc ::/husk.rc
 	@echo "  disk image rebuilt: $(words $(USERLAND_APPS)) apps ($(USERLAND_APPS))"
+
+# The data disk. NO PREREQUISITES, DELIBERATELY: this rule fires exactly once,
+# when the file does not exist, and never again — not when the kernel changes,
+# not when an app changes, not when this makefile changes. That is what makes
+# /home a place you can keep things.
+#
+# It is seeded with a husk.rc so there is something to edit on first boot; from
+# then on YOUR copy is the one that runs, because nothing here will overwrite
+# it. (etc/husk.rc is still copied fresh onto the FAT partition every build as
+# the fallback default — see the mcopy above.)
+$(DATA_IMAGE):
+	@mkdir -p "$$(dirname $(DATA_IMAGE))"
+	truncate -s $(shell echo $$(($(DATA_SIZE_MB) + 2)))M $(DATA_IMAGE)
+	# --change-name IS the mount point: os64 mounts this partition at /home.
+	sgdisk $(DATA_IMAGE) --new=1:2048:+$(DATA_SIZE_MB)M --typecode=1:0700 --change-name=1:"home" --partition-guid=1:$(DATA_PARTUUID)
+	mformat -F -T $(shell echo $$(($(DATA_SIZE_MB) * 2048))) -i $(DATA_IMAGE)@@$(DISK_OFFSET) ::
+	mcopy -o -i $(DATA_IMAGE)@@$(DISK_OFFSET) etc/husk.rc ::/husk.rc
+	@echo "  data disk CREATED at $(DATA_IMAGE) ($(DATA_SIZE_MB)MB, /home) — this happens once; only 'make distclean' removes it"
 
 # Compatibility aliases. disk-populate/disk-init now just mean "make sure the
 # image is current"; `disk` FORCES a fresh one (the old always-rebuild behavior,
@@ -393,3 +472,9 @@ clean:
 distclean: clean
 	$(MAKE) -C kernel distclean
 	rm -rf kernel-deps limine ovmf
+	# The data disk dies HERE and nowhere else. It is the only file in the tree
+	# holding things written from inside os64 — /home — and no ordinary build
+	# step may remove it. distclean says "back to a fresh clone", and that
+	# includes losing your home directory, so it is spelled out rather than
+	# folded into the rm above.
+	rm -f $(DATA_IMAGE)
