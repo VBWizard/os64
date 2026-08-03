@@ -201,12 +201,18 @@ bool test_vma_page_fault_resolved()
     vma_t *vma = vma_create(test_addr, test_addr + PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, NULL, 0);
     vma_add(task, vma);
 
-    uint64_t old_faults = kPageFaultCount;
+    // Unmapped before, mapped after — see the long note in
+    // test_vma_file_backed.c. The old form watched the GLOBAL fault counter
+    // for a delta of exactly one, which any concurrently running task
+    // (/bin/logd faulting in its own ELF, say) turns into a false failure.
+    uintptr_t before = paging_walk_paging_table((pt_entry_t *)task->pml4v, test_addr);
+    bool wasUnmapped = (before == 0 || before == 0xbadbadba);
 
     volatile uint32_t *ptr = (volatile uint32_t *)test_addr;
     *ptr = 0xBEEFCAFE; // Should trigger page fault and be resolved
 
-    bool ok = (kPageFaultCount == old_faults + 1);
+    uintptr_t after = paging_walk_paging_table((pt_entry_t *)task->pml4v, test_addr);
+    bool ok = wasUnmapped && (after != 0 && after != 0xbadbadba) && (*ptr == 0xBEEFCAFE);
 
     paging_unmap_page((pt_entry_t *)task->pml4v, test_addr);
     if (task->mmaps != NULL && vma->listItem != NULL) {
