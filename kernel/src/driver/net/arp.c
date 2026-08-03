@@ -72,6 +72,14 @@ static void arp_cache_insert(uint32_t ip, const uint8_t mac[NET_MAC_LEN])
 	spinlock_release_irqrestore(&s_cache_lock, irqflags);
 }
 
+void arp_cache_flush(void)
+{
+	uint64_t irqflags = spinlock_acquire_irqsave(&s_cache_lock);
+	for (int i = 0; i < ARP_CACHE_SIZE; i++)
+		s_cache[i].ip = 0;   // same "slot empty" convention expiry uses
+	spinlock_release_irqrestore(&s_cache_lock, irqflags);
+}
+
 bool arp_lookup(uint32_t ip, uint8_t mac_out[NET_MAC_LEN])
 {
 	bool hit = false;

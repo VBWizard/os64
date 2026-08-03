@@ -40,6 +40,7 @@
 #include "driver/net/udp_conn.h"
 #include "driver/net/tcp.h"
 #include "driver/net/icmp_conn.h"
+#include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
 
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
@@ -2113,7 +2114,7 @@ static bool test_net_udp_conn(void)
     // In from the PEER: must queue and read back verbatim.
     CONN_FRAME(5555, msg1, 14);
     char buf[64];
-    long got = udp_conn_read(conn, buf, sizeof(buf));
+    long got = udp_conn_read(conn, buf, sizeof(buf), 0);
     if (got != 14 || memcmp(buf, msg1, 14) != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - readback got %ld (delivered=%lu)\n",
                got, conn->rx_delivered);
@@ -2135,7 +2136,7 @@ static bool test_net_udp_conn(void)
     // Truncation contract: a 14-byte datagram read into an 8-byte buffer
     // returns 8 and the tail DROPS — one datagram, one read, no carryover.
     CONN_FRAME(5555, msg1, 14);
-    got = udp_conn_read(conn, buf, 8);
+    got = udp_conn_read(conn, buf, 8, 0);
     if (got != 8 || conn->count != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - truncation contract broken (got %ld, queued %u)\n",
                got, conn->count);
@@ -2144,8 +2145,23 @@ static bool test_net_udp_conn(void)
     }
     #undef CONN_FRAME
 
+    // The deadline contract (os64_read_for's kernel half): an EMPTY queue
+    // plus an expired deadline returns TIMEOUT — after actually waiting.
+    // Deterministic by construction: nothing sends to this ephemeral port.
+    // Budget: 10-tick deadline, elapsed must land in [10, 40] — the upper
+    // bound generous because the wake rides the sweep + backstop lattice.
+    uint64_t t0 = kTicksSinceStart;
+    got = udp_conn_read(conn, buf, sizeof(buf), kTicksSinceStart + 10);
+    uint64_t waited = kTicksSinceStart - t0;
+    if (got != UDP_CONN_ERR_TIMEOUT || waited < 10 || waited > 40) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - deadline read got %ld after %lu ticks "
+               "(want UDP_CONN_ERR_TIMEOUT in [10,40])\n", got, waited);
+        udp_conn_close(conn);
+        return false;
+    }
+
     udp_conn_close(conn);
-    printd(DEBUG_TESTS, "\tPASS: test_net_udp_conn (dial, write, filtered+truncated reads, hangup)\n");
+    printd(DEBUG_TESTS, "\tPASS: test_net_udp_conn (dial, write, filtered+truncated reads, deadline, hangup)\n");
     return true;
 }
 
@@ -2228,22 +2244,44 @@ static bool test_net_icmp_conn(void)
     }
 
     uint8_t in[64];
-    long got = icmp_conn_read(c, in, sizeof(in));
+    long got = icmp_conn_read(c, in, sizeof(in), 0);
     uint64_t rtt = kTicksSinceStart - stamp;
-    icmp_conn_close(c);
 
     if (got != (long)sizeof(out)) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u\n",
                got, (uint32_t)sizeof(out));
+        icmp_conn_close(c);
         return false;
     }
     // Byte-for-byte: an echo that alters the payload is not an echo.
     if (memcmp(in, out, sizeof(out)) != 0) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - payload came back altered\n");
+        icmp_conn_close(c);
         return false;
     }
 
-    printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks)\n",
+    // The once-a-minute regression, on demand: flush the ARP cache so this
+    // next echo starts from a cold neighbor table — exactly what the 60s
+    // lazy TTL does to a long-running ping. The write must RIDE OUT the
+    // re-resolution (the udp-style retry finally ported here), not fail.
+    // Found by Chris's `ping -n 3600`: echo #22 died the moment the boot-
+    // era gateway entry hit its TTL, and once a minute after that.
+    arp_cache_flush();
+    if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache write failed "
+               "(the 60s-TTL ping regression is back)\n");
+        icmp_conn_close(c);
+        return false;
+    }
+    got = icmp_conn_read(c, in, sizeof(in), 0);
+    icmp_conn_close(c);
+    if (got != (long)sizeof(out)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache echo read returned %ld\n", got);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks; "
+           "cold-cache echo survived the ARP re-ask)\n",
            got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt);
     return true;
 }
@@ -2266,12 +2304,20 @@ static bool test_net_tcp_refused(void)
     uint64_t refused_before = kTcpStats.connections_refused;
     uint64_t start = kTicksSinceStart;
 
-    tcp_conn_t *c = tcp_conn_dial(kNetDevices[0], kNetIPv4Gateway, 9);
+    int64_t why = 0;
+    tcp_conn_t *c = tcp_conn_dial(kNetDevices[0], kNetIPv4Gateway, 9, &why);
     uint64_t elapsed = kTicksSinceStart - start;
 
     if (c != NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - dial to a closed port SUCCEEDED\n");
         tcp_conn_close(c);
+        return false;
+    }
+    // The dial must not just fail — it must fail with the RIGHT STORY.
+    // A ping author staring at a bare -1 is how this assertion got here.
+    if (why != OS64_NET_ERR_REFUSED) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - failed with why=%ld, "
+               "want OS64_NET_ERR_REFUSED (%d)\n", why, OS64_NET_ERR_REFUSED);
         return false;
     }
     // A refusal must be an ANSWER (an RST), not the connect timeout —

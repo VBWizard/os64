@@ -41,8 +41,11 @@ static bool parse_decimal_segment(const char *s, const char *end,
 
 int64_t os64_dial(const char *dialstring)
 {
+	// Refusals are SPECIFIC (os64/net.h error table): a parser that answers
+	// every question with -1 forces the caller into a debugger to learn
+	// which segment it fumbled. The code names the segment.
 	if (dialstring == 0)
-		return -1;
+		return OS64_NET_ERR_BAD_STRING;
 
 	// Segment 1: the protocol — the verb of the whole call, always
 	// explicit. Matched by spelling, not by prefix: "u!..." is a typo,
@@ -52,7 +55,7 @@ int64_t os64_dial(const char *dialstring)
 	while (*bang && *bang != '!')
 		bang++;
 	if (*bang != '!')
-		return -1;
+		return OS64_NET_ERR_BAD_STRING;
 
 	uint16_t protocol;
 	if (bang - s == 3 && s[0] == 'u' && s[1] == 'd' && s[2] == 'p')
@@ -62,7 +65,7 @@ int64_t os64_dial(const char *dialstring)
 	else if (bang - s == 4 && s[0] == 'i' && s[1] == 'c' && s[2] == 'm' && s[3] == 'p')
 		protocol = OS64_NET_ICMP;
 	else
-		return -1;
+		return OS64_NET_ERR_BAD_STRING;
 
 	// ICMP dial strings have TWO segments, not three ("icmp!10.0.2.2"),
 	// because echo has no ports — the kernel owns the identifier that
@@ -86,14 +89,15 @@ int64_t os64_dial(const char *dialstring)
 		if (octet == 3 && no_service)
 		{
 			if (*seg_end != '\0')
-				return -1;   // "icmp!1.2.3.4!something" — a port we'd ignore
+				return OS64_NET_ERR_BAD_SERVICE;   // "icmp!1.2.3.4!something" —
+				                                   // a service echo doesn't have
 		}
 		else if (*seg_end != stop)
-			return -1;
+			return OS64_NET_ERR_BAD_ADDRESS;
 
 		uint32_t value;
 		if (!parse_decimal_segment(s, seg_end, 255, &value))
-			return -1;
+			return OS64_NET_ERR_BAD_ADDRESS;
 		ip = (ip << 8) | value;   // host order, per ruling #2 — it reads
 		                          // like an address in a debugger
 		s = seg_end + 1;
@@ -109,7 +113,7 @@ int64_t os64_dial(const char *dialstring)
 		while (*end)
 			end++;
 		if (!parse_decimal_segment(s, end, 65535, &port) || port == 0)
-			return -1;
+			return OS64_NET_ERR_BAD_SERVICE;   // port 0 is not a door
 	}
 
 	os64_netdest_t dest = {

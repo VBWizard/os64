@@ -65,6 +65,11 @@ void arp_input(net_device_t* dev, const void* pkt, uint16_t length);
 // exactly what ipv4_send does (see the first-packet note in ipv4.c).
 bool arp_lookup(uint32_t ip, uint8_t mac_out[NET_MAC_LEN]);
 
+// Empty the whole cache — every next send starts from a cold neighbor
+// table. What the tests use to make "the 60s TTL just expired" happen on
+// demand instead of once a minute; the future netstat-alike's flush verb.
+void arp_cache_flush(void);
+
 // Broadcast a who-has for `target_ip`. The answer arrives asynchronously
 // through arp_input into the cache; there is deliberately no blocking
 // resolve at this layer (RX context must never wait on the wire).

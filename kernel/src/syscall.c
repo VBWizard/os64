@@ -958,6 +958,10 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			}
 			long n = icmp_conn_write((icmp_conn_t *)h->object, kbuf, length);
 			kfree(kbuf);
+			// Unreachable neighbor = TIMEOUT (nobody answered ARP in 500ms)
+			// — distinct from a malformed write, same word read() uses.
+			if (n == ICMP_CONN_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 			return (n < 0) ? SYSCALL_RESULT_INVALID : (uint64_t)n;
 		}
 
@@ -981,6 +985,10 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 			long n = udp_conn_write((udp_conn_t *)h->object, kbuf, length);
 			kfree(kbuf);
+			// Same mapping as the ICMP case: an unreachable neighbor is
+			// TIMEOUT, not a generic refusal.
+			if (n == UDP_CONN_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 			return (n < 0) ? SYSCALL_RESULT_INVALID : (uint64_t)n;
 		}
 
@@ -1046,12 +1054,18 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg3;
 	(void)arg4;
 	(void)arg5;
 
 	void *user_buffer = (void*)arg1;
 	size_t length = (size_t)arg2;
+	// arg3 = read deadline in MILLISECONDS; 0 = block forever (the eternal
+	// contract, and what os64_read passes). This is ping's demand made
+	// syscall: "read, but I refuse to wait past X for an answer." NOTE the
+	// stub contract: os64_read/os64_read_for now ALWAYS set this register —
+	// it used to be ring-3 garbage the handler ignored, and reading garbage
+	// as a deadline would give every old binary a random patience.
+	uint64_t timeout_ms = arg3;
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
@@ -1064,6 +1078,22 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	if (length == 0)
 		return 0;
+
+	// Lower the deadline onto the tick clock once, here, so the conn code
+	// below thinks only in ticks. Rounded UP: a 1ms deadline is a short
+	// wait, never "already expired". Net handles only, and the boundary
+	// REFUSES the argument anywhere it would be silently ignored (the
+	// tripwire doctrine: a pipe read that accepts a timeout it doesn't
+	// honor is a lie with a delay) — pipes/console/files grow it the day
+	// a real consumer demands it there.
+	uint64_t deadline = 0;
+	if (timeout_ms != 0)
+	{
+		if (h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
+		    h->type != HANDLE_NET_ICMP)
+			return SYSCALL_RESULT_INVALID;
+		deadline = kTicksSinceStart + (timeout_ms + MS_PER_TICK - 1) / MS_PER_TICK;
+	}
 
 	size_t want = length < READ_CHUNK_SIZE ? length : READ_CHUNK_SIZE;
 	// The thread-owned bounce block (see syscall_io_scratch): no allocation,
@@ -1111,17 +1141,21 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// and returns 0 at EOF once the peer's FIN drains — the exact
 			// contract a pipe read has, which is why `cat` over a socket
 			// would need no new code at all.
-			got = tcp_conn_read((tcp_conn_t *)h->object, kbuf, want);
+			// (No kfree on ANY path here: kbuf is the thread-owned scratch,
+			// and worse, an INTERIOR pointer into it — the kfrees that used
+			// to sit on these exits were a fossil from when this buffer was
+			// a per-call kmalloc, armed to wild-free on the first Ctrl+C.)
+			got = tcp_conn_read((tcp_conn_t *)h->object, kbuf, want, deadline);
 			if (got == TCP_ERR_INTERRUPTED)
 			{
-				kfree(kbuf);
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
+			if (got == TCP_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 			if (got < 0)
 			{
 				// RST or a dead connection — distinct from EOF's clean 0.
-				kfree(kbuf);
 				return SYSCALL_RESULT_INVALID;
 			}
 			break;
@@ -1131,13 +1165,14 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// back, then returns the payload we sent, as the peer echoed
 			// it. (What `ping` does with those bytes — a timestamp,
 			// a pattern check — is `ping`'s business.)
-			got = icmp_conn_read((icmp_conn_t *)h->object, kbuf, want);
+			got = icmp_conn_read((icmp_conn_t *)h->object, kbuf, want, deadline);
 			if (got == ICMP_CONN_ERR_INTERRUPTED)
 			{
-				kfree(kbuf);
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
+			if (got == ICMP_CONN_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 			break;
 
 		case HANDLE_NET_UDP:
@@ -1147,15 +1182,16 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// `want` is already min(length, READ_CHUNK_SIZE=4096), which
 			// exceeds UDP_CONN_MAX_DGRAM=1472, so no datagram is ever
 			// clipped by the bounce buffer — only by the CALLER's length.
-			got = udp_conn_read((udp_conn_t *)h->object, kbuf, want);
+			got = udp_conn_read((udp_conn_t *)h->object, kbuf, want, deadline);
 			if (got == UDP_CONN_ERR_INTERRUPTED)
 			{
 				// Ctrl+C landed while blocked waiting for a packet — same
 				// rail as console and pipe reads: terminate, 130.
-				kfree(kbuf);
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
+			if (got == UDP_CONN_ERR_TIMEOUT)
+				return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 			break;
 
 		case HANDLE_FILE:
@@ -1259,20 +1295,25 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_user_buffer((const void *)arg0, &dest, sizeof(dest)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
+	// Refusals from here down are SPECIFIC (the OS64_NET_ERR_* table in
+	// os64/net.h): a caller who dialed and got "no" is owed the reason —
+	// a mangled struct, a netless boot, and a peer that said RST are three
+	// different next moves, and collapsing them into -1 turns every one
+	// of them into a debugging session.
 	if (dest.ip == 0)
-		return SYSCALL_RESULT_INVALID;
+		return (uint64_t)(int64_t)OS64_NET_ERR_BAD_DEST;
 	if (dest.protocol != OS64_NET_UDP && dest.protocol != OS64_NET_TCP &&
 	    dest.protocol != OS64_NET_ICMP)
-		return SYSCALL_RESULT_INVALID;   // no wildcard: os64 says what it means
+		return (uint64_t)(int64_t)OS64_NET_ERR_BAD_DEST;   // no wildcard: os64 says what it means
 	// A port of 0 is meaningless for the port protocols; ICMP has no ports
 	// at all (its identifier is kernel-assigned), so the field is ignored.
 	if (dest.port == 0 && dest.protocol != OS64_NET_ICMP)
-		return SYSCALL_RESULT_INVALID;
+		return (uint64_t)(int64_t)OS64_NET_ERR_BAD_DEST;
 
 	// Dial tone requires a line: no NIC, no conversation. (A netless boot
 	// is a configuration, not an error — but dialing on one is an error.)
 	if (kNetDeviceCount == 0)
-		return SYSCALL_RESULT_INVALID;
+		return (uint64_t)(int64_t)OS64_NET_ERR_NO_NIC;
 
 	// One syscall, two protocols, two object types behind two handle tags —
 	// and from the caller's side the difference shows up only in what
@@ -1280,11 +1321,15 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// when it made the protocol segment the verb of the call.
 	void *conn;
 	handle_type_t tag;
+	// UDP and ICMP dials touch no wire — their only way to fail is running
+	// out of something (memory, ports, identifiers). TCP actually converses,
+	// so its dial carries the extra answers (REFUSED/TIMEOUT) back in `why`.
+	int64_t why = OS64_NET_ERR_NO_RESOURCES;
 	if (dest.protocol == OS64_NET_TCP)
 	{
 		// BLOCKS through the three-way handshake (or a refusal, or the
 		// connect timeout) — a dial that returns has a live stream.
-		conn = tcp_conn_dial(kNetDevices[0], dest.ip, dest.port);
+		conn = tcp_conn_dial(kNetDevices[0], dest.ip, dest.port, &why);
 		tag = HANDLE_NET_TCP;
 	}
 	else if (dest.protocol == OS64_NET_ICMP)
@@ -1300,7 +1345,7 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		tag = HANDLE_NET_UDP;
 	}
 	if (conn == NULL)
-		return SYSCALL_RESULT_INVALID;
+		return (uint64_t)why;
 
 	int h = handle_alloc(task, tag, conn);
 	if (h < 0)
@@ -1309,7 +1354,7 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		if      (tag == HANDLE_NET_TCP)  tcp_conn_close((tcp_conn_t *)conn);
 		else if (tag == HANDLE_NET_ICMP) icmp_conn_close((icmp_conn_t *)conn);
 		else                             udp_conn_close((udp_conn_t *)conn);
-		return SYSCALL_RESULT_INVALID;
+		return (uint64_t)(int64_t)OS64_NET_ERR_NO_RESOURCES;
 	}
 
 	const char *proto_name = (dest.protocol == OS64_NET_TCP)  ? "tcp" :

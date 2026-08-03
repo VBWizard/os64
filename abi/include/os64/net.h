@@ -28,6 +28,40 @@ typedef struct os64_netdest
 	uint16_t protocol;   // OS64_NET_UDP / OS64_NET_TCP / OS64_NET_ICMP
 } os64_netdest_t;
 
+// ── Why a dial failed ───────────────────────────────────────────────────
+// dial returns a handle (>= 0) or exactly ONE of these. os64 has no errno —
+// the return value IS the reason, so every code answers the caller's next
+// question ("was my string mangled, or was the peer just not home?")
+// without a debugger. The first two are the syscall boundary's house-wide
+// verdicts, named here so a dialer can read them; the rest are dial's own.
+// Codes -3..-5 are the LIBRARY parser's (the kernel never sees text);
+// -6..-10 come up from the kernel.
+#define OS64_NET_ERR_INVALID       (-1)  // generic refusal (boundary-owned;
+                                         //  dial itself always says more below)
+#define OS64_NET_ERR_BAD_POINTER   (-2)  // the netdest pointer wasn't yours
+                                         //  (boundary user-range check)
+#define OS64_NET_ERR_BAD_STRING    (-3)  // parser: not a bang path, or the
+                                         //  protocol segment isn't udp/tcp/icmp
+#define OS64_NET_ERR_BAD_ADDRESS   (-4)  // parser: address isn't a dotted quad
+                                         //  (four octets, each 0-255)
+#define OS64_NET_ERR_BAD_SERVICE   (-5)  // parser: service missing / not
+                                         //  1-65535 — or PRESENT on icmp,
+                                         //  which has no doors
+#define OS64_NET_ERR_BAD_DEST      (-6)  // kernel: struct refused (ip 0,
+                                         //  unknown protocol, port 0)
+#define OS64_NET_ERR_NO_NIC        (-7)  // kernel: netless boot — dialing
+                                         //  with no line is the error, the
+                                         //  boot itself is a configuration
+#define OS64_NET_ERR_NO_RESOURCES  (-8)  // kernel: out of memory, ephemeral
+                                         //  ports, identifiers, or handles
+#define OS64_NET_ERR_REFUSED       (-9)  // kernel: TCP peer answered RST —
+                                         //  the machine is there, that door
+                                         //  is not open
+#define OS64_NET_ERR_TIMEOUT       (-10) // kernel: nobody answered in time —
+                                         //  a TCP handshake met silence, or
+                                         //  an os64_read_for() deadline
+                                         //  expired with nothing to show
+
 // The handle net_dial returns obeys the house read/write contract:
 //   write(h, buf, len)  — one call = ONE datagram (atomic; oversize is an
 //                         error, never a fragmenting loop)

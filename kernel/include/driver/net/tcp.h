@@ -109,6 +109,7 @@ typedef enum tcp_state
 // In-band sentinels (the pipe.c convention).
 #define TCP_ERR_INTERRUPTED (-3L)   // terminate signal landed
 #define TCP_ERR_RESET       (-4L)   // peer sent RST, or the connection died
+#define TCP_ERR_TIMEOUT     (-5L)   // caller's read deadline expired, no bytes
 
 typedef struct tcp_conn
 {
@@ -167,13 +168,20 @@ extern tcp_stats_t kTcpStats;
 
 // ── The API behind HANDLE_NET_TCP ───────────────────────────────────────────
 // Active open. BLOCKS until the handshake completes (task context only);
-// NULL on refusal, timeout, or no resources.
-tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_port);
+// NULL on refusal, timeout, or no resources. `why` (may be NULL if the
+// caller doesn't care) gets the specific OS64_NET_ERR_* on failure — a dial
+// that fails three different ways owes the caller three different answers
+// (REFUSED = RST, the door is closed; TIMEOUT = nobody answered at all;
+// NO_RESOURCES = our side couldn't even pick up the phone).
+tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_port,
+                          int64_t* why);
 
 // Stream read: blocks for at least one byte, returns SHORT (whatever is
 // available — the filter contract every os64 read follows), 0 at EOF after
-// the peer's FIN drains. Negative = interrupted or reset.
-long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len);
+// the peer's FIN drains. Negative = interrupted, reset, or deadline expiry
+// (`deadline` = absolute tick, 0 = forever; buffered bytes and EOF both
+// outrank an expired clock).
+long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline);
 
 // Stream write: blocks until every byte is acknowledged (v1 stop-and-wait),
 // returns the count written. Negative = interrupted or reset.

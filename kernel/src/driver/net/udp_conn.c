@@ -181,7 +181,7 @@ udp_conn_t* udp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 }
 
 // ── Read (blocking; task context only) ──────────────────────────────────────
-long udp_conn_read(udp_conn_t* c, void* buf, size_t len)
+long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 {
 	core_local_storage_t* cls = get_core_local_storage();
 	thread_t* self = cls->currentThread;
@@ -211,12 +211,28 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len)
 			return (long)n;
 		}
 
+		// Deadline check AFTER the data check, under the same lock: a
+		// datagram that arrived at the buzzer still counts (data outranks
+		// the clock), and an expired reader deregisters itself so the
+		// sweep never wakes someone who already gave up.
+		if (deadline != 0 && kTicksSinceStart >= deadline)
+		{
+			if (c->waiter == self)
+				c->waiter = NULL;
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return UDP_CONN_ERR_TIMEOUT;
+		}
+
 		// Nothing yet: register, drop the lock, park. The sweep may fire
 		// between the release and the sigaction — that's the race the
 		// backstop tick and the loop-and-retest exist to make harmless.
+		// Park until the backstop OR the caller's deadline, first to land.
 		c->waiter = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + UDP_CONN_BACKSTOP_TICKS, self);
+		uint64_t wake = kTicksSinceStart + UDP_CONN_BACKSTOP_TICKS;
+		if (deadline != 0 && deadline < wake)
+			wake = deadline;
+		sigaction(SIGSLEEP, NULL, wake, self);
 	}
 }
 
@@ -241,7 +257,10 @@ long udp_conn_write(udp_conn_t* c, const void* buf, size_t len)
 			return -1;
 		wait(10);
 	}
-	return -1;   // neighbor never answered ARP — the peer's problem is now the caller's
+	// Neighbor never answered ARP — the peer's problem is now the caller's,
+	// delivered as TIMEOUT (not a generic -1) so silence is tellable from
+	// a bad argument at every layer up to ring 3.
+	return UDP_CONN_ERR_TIMEOUT;
 }
 
 // ── Close ───────────────────────────────────────────────────────────────────

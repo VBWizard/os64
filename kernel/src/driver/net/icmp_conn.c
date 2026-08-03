@@ -19,6 +19,7 @@
 #include "smp_core.h"
 #include "signals.h"
 #include "scheduler.h"
+#include "time.h"            // wait() — the ARP-resolution retry nap in write
 #include "driver/net/net_device.h"
 #include "driver/net/net_wire.h"
 #include "driver/net/icmp.h"
@@ -93,11 +94,30 @@ long icmp_conn_write(icmp_conn_t* c, const void* buf, size_t len)
 	// icmp_send_echo carries OUR identifier and sequence; the payload is
 	// the caller's business (a timestamp, a pattern, whatever `ping`
 	// wants to recognize when it comes home).
-	int32_t rc = icmp_send_echo(c->dev, c->peer_ip, c->identifier, seq, buf, (uint16_t)len);
-	if (rc != 0)
-		return -1;
-	c->requests_sent++;
-	return (long)len;
+	//
+	// -2 = "next hop unresolved, ARP query just fired" — and unlike the
+	// RX-context responders, we are task context and may simply wait it
+	// out (the same loop udp_conn_write has had all along; this one shipped
+	// without it, and a long-running ping paid for the asymmetry ONCE PER
+	// MINUTE: the ARP cache's 60s lazy TTL expired the gateway entry, the
+	// next echo ate the first-packet drop, and write() failed for one
+	// beat. 500ms of retries is geological time for an ARP round trip.)
+	for (int tries = 0; tries < 50; tries++)
+	{
+		int32_t rc = icmp_send_echo(c->dev, c->peer_ip, c->identifier, seq,
+		                            buf, (uint16_t)len);
+		if (rc == 0)
+		{
+			c->requests_sent++;
+			return (long)len;
+		}
+		if (rc != -2)
+			return -1;
+		wait(10);
+	}
+	// Neighbor never answered ARP: nobody home at the next hop. TIMEOUT,
+	// not a generic -1 — the caller can tell silence from a bad argument.
+	return ICMP_CONN_ERR_TIMEOUT;
 }
 
 // RX context (inside the NIC poll): enqueue only, never wake directly —
@@ -134,7 +154,7 @@ void icmp_conn_deliver(uint32_t src_ip, uint16_t identifier,
 	spinlock_release_irqrestore(&c->lock, irqflags);
 }
 
-long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len)
+long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 {
 	core_local_storage_t* cls = get_core_local_storage();
 	thread_t* self = cls->currentThread;
@@ -156,14 +176,30 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len)
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return (long)n;
 		}
+		// Deadline check comes AFTER the data check, under the same lock:
+		// a reply that arrived at the buzzer is still a reply (data
+		// outranks the clock), and an expired waiter must deregister
+		// itself so the sweep never wakes a reader that already gave up.
+		if (deadline != 0 && kTicksSinceStart >= deadline)
+		{
+			if (c->waiter == self)
+				c->waiter = NULL;
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return ICMP_CONN_ERR_TIMEOUT;
+		}
 		c->waiter = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
-		// A ping that gets no answer must not park forever: the backstop
-		// wakes us every second so the caller's own loop can decide the
-		// request was lost. (Timeout policy belongs to `ping`, not here —
-		// the kernel moves packets and reports; the utility decides what
-		// silence MEANS.)
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TICKS_PER_SECOND, self);
+		// A ping that gets no answer must not park forever: park until the
+		// backstop OR the caller's deadline, whichever lands first. Timeout
+		// POLICY still belongs to `ping` (how long is too long, what to
+		// print) — what the kernel now provides is the mechanism, because
+		// a policy nobody can implement is just a comment. (It was: this
+		// paragraph used to end "the utility decides what silence MEANS"
+		// while offering the utility no way to act on the decision.)
+		uint64_t wake = kTicksSinceStart + TICKS_PER_SECOND;
+		if (deadline != 0 && deadline < wake)
+			wake = deadline;
+		sigaction(SIGSLEEP, NULL, wake, self);
 	}
 }
 

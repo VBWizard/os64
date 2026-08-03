@@ -59,7 +59,9 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
         exit_with(FAIL_OPEN);
 
     // 2. The four most famous bytes in systems programming.
-    uint64_t n = os64_syscall3(SYSCALL_READ, h, (uint64_t)buf, 4);
+    // read's arg3 is the DEADLINE now (os64_read_for) — raw stubs must say
+    // "0 = forever" explicitly, or r10's garbage becomes a random timeout.
+    uint64_t n = os64_syscall4(SYSCALL_READ, h, (uint64_t)buf, 4, 0);
     if (n != 4 || buf[0] != 0x7f || buf[1] != 'E' || buf[2] != 'L' || buf[3] != 'F')
         exit_with(FAIL_READ_MAGIC);
 
@@ -68,7 +70,7 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
         exit_with(FAIL_SEEK_SET);
 
     // 4. And the position must have actually moved: "ELF" without the 0x7f.
-    n = os64_syscall3(SYSCALL_READ, h, (uint64_t)buf, 3);
+    n = os64_syscall4(SYSCALL_READ, h, (uint64_t)buf, 3, 0);
     if (n != 3 || buf[0] != 'E' || buf[1] != 'L' || buf[2] != 'F')
         exit_with(FAIL_READ_AFTER);
 

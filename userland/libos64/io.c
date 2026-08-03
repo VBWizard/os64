@@ -15,8 +15,18 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
 
 int64_t os64_read(int32_t handle, void *buf, size_t len)
 {
-    return (long)os64_syscall3(SYSCALL_READ, (uint64_t)handle,
-                               (uint64_t)buf, (uint64_t)len);
+    // The explicit 0 is load-bearing: arg3 is the read DEADLINE now, and
+    // before this stub passed it deliberately, that register was ring-3
+    // garbage the kernel ignored. A rebuilt world always says "forever"
+    // out loud rather than leaving patience to whatever was in r10.
+    return (long)os64_syscall4(SYSCALL_READ, (uint64_t)handle,
+                               (uint64_t)buf, (uint64_t)len, 0);
+}
+
+int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms)
+{
+    return (long)os64_syscall4(SYSCALL_READ, (uint64_t)handle,
+                               (uint64_t)buf, (uint64_t)len, timeout_ms);
 }
 
 // The two line-reading gaits behind os64_readline (public contract in io.h).

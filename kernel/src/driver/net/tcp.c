@@ -20,6 +20,7 @@
 #include "signals.h"
 #include "scheduler.h"
 #include "time.h"
+#include "os64/net.h"        // OS64_NET_ERR_* — dial's why-it-failed vocabulary (abi)
 #include "driver/net/net_device.h"
 #include "driver/net/net_wire.h"
 #include "driver/net/net_checksum.h"
@@ -538,8 +539,13 @@ void tcp_wake_if_ready(void)
 }
 
 // ── Handle plumbing: dial, read, write, close ───────────────────────────────
-tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_port)
+tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_port,
+                          int64_t* why)
 {
+	// Pessimism as default: every early exit below is a resource problem
+	// unless the handshake itself says otherwise (reset/timeout at the end).
+	if (why) *why = OS64_NET_ERR_NO_RESOURCES;
+
 	tcp_conn_t* c = kmalloc(sizeof(*c));
 	if (c == NULL)
 		return NULL;
@@ -597,6 +603,11 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	{
 		if (!c->reset)
 			kTcpStats.connect_timeouts++;
+		// The two failures a caller can actually act on: REFUSED means the
+		// machine answered and said no (wrong port? service down?); TIMEOUT
+		// means silence (wrong address? unplugged? filtered?). This used to
+		// live only in a printd — the caller deserves it more than the log.
+		if (why) *why = c->reset ? OS64_NET_ERR_REFUSED : OS64_NET_ERR_TIMEOUT;
 		printd(DEBUG_NET, "tcp: dial to %u.%u.%u.%u:%u failed (%s)\n",
 		       NET_IPV4_OCTETS(peer_ip), peer_port,
 		       c->reset ? "refused" : "timed out");
@@ -607,7 +618,7 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	return c;
 }
 
-long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len)
+long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 {
 	core_local_storage_t* cls = get_core_local_storage();
 	thread_t* self = cls->currentThread;
@@ -643,10 +654,24 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len)
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return TCP_ERR_RESET;
 		}
+		// Deadline LAST: bytes, EOF, and death all outrank the clock —
+		// only pure silence times out. Expired readers deregister so the
+		// sweep never wakes someone who already gave up.
+		if (deadline != 0 && kTicksSinceStart >= deadline)
+		{
+			if (c->reader == self)
+				c->reader = NULL;
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return TCP_ERR_TIMEOUT;
+		}
 
 		c->reader = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TICKS_PER_SECOND, self);
+		// Park until the backstop or the caller's deadline, first to land.
+		uint64_t wake = kTicksSinceStart + TICKS_PER_SECOND;
+		if (deadline != 0 && deadline < wake)
+			wake = deadline;
+		sigaction(SIGSLEEP, NULL, wake, self);
 	}
 }
 

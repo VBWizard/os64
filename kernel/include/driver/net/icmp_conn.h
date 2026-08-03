@@ -33,6 +33,7 @@
 #define ICMP_CONN_QUEUE_SLOTS  4
 
 #define ICMP_CONN_ERR_INTERRUPTED (-3L)
+#define ICMP_CONN_ERR_TIMEOUT     (-4L)   // read deadline expired; the reply is not coming
 
 typedef struct icmp_conn
 {
@@ -59,7 +60,10 @@ icmp_conn_t* icmp_conn_dial(net_device_t* dev, uint32_t peer_ip);
 
 // Blocking read: one echoed payload, short if the buffer is smaller
 // (a datagram is a unit — the tail drops, same contract as UDP).
-long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len);
+// `deadline` (absolute tick, 0 = forever): expiry returns
+// ICMP_CONN_ERR_TIMEOUT — this is THE call ping wraps its patience
+// around, so silence finally has a return value.
+long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline);
 
 // Send one echo request carrying `buf`. Returns the byte count, or
 // negative (oversize, or the wire refused after ARP retries).

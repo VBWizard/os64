@@ -23,8 +23,11 @@
 //
 // Both return a HANDLE (>= 0) you use with the verbs you already know:
 // os64_write sends one datagram, os64_read blocks for one datagram from the
-// dialed peer, os64_close hangs up. Negative = refused (bad string, bad
-// struct, no NIC, no ports, TCP-before-Phase-4).
+// dialed peer, os64_close hangs up. Negative = refused, and the CODE SAYS
+// WHY — see the OS64_NET_ERR_* table in <os64/net.h>: the parser names the
+// segment it rejected (BAD_STRING / BAD_ADDRESS / BAD_SERVICE), the kernel
+// names its refusal (BAD_DEST / NO_NIC / NO_RESOURCES / REFUSED / TIMEOUT).
+// A program can print something a human can act on without a debugger.
 
 #include <stdint.h>
 #include "os64/net.h"   // os64_netdest_t + OS64_NET_UDP/TCP — the abi contract
