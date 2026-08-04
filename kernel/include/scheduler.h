@@ -26,6 +26,15 @@
 	extern volatile uint64_t kIdleTicks[MAX_CPUS];
 	extern volatile bool mp_inScheduler[MAX_CPUS];
 	extern volatile bool kSchedulerInitialized;
+	// The RIP each core last iretq'd to (scheduler.S stamps it just before
+	// the iretq). Debug breadcrumb only — it replaced the old R15 clobber.
+	extern volatile uint64_t mp_lastIretqRIP[MAX_CPUS];
+	// RFLAGS-tripwire evidence (see SCHEDULER_STRAY_WRITE.md and the
+	// definitions in scheduler.c): stray values impounded per core, a
+	// fire counter bumped by scheduler.S, and the reporter's high-water.
+	extern volatile uint64_t mp_rflagsTripValue[MAX_CPUS];
+	extern volatile uint64_t mp_rflagsTripCount;
+	extern volatile uint64_t mp_rflagsTripReported;
 	
 	void scheduler_init();
 	void scheduler_enable();

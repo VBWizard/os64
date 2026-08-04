@@ -127,6 +127,29 @@ void processSignals()
 	//Release the lock
 	__sync_lock_release(&kSchedulerSwitchTasksLock);
 
+	// RFLAGS-tripwire reporter (SCHEDULER_STRAY_WRITE.md): scheduler.S
+	// impounds any corrupt mp_isrSavedRFlags value it catches at the iretq
+	// and bumps mp_rflagsTripCount; this prints each new impound exactly
+	// once. AFTER the lock release on purpose — printing is slow and the
+	// evidence isn't going anywhere. DEBUG_EXCEPTIONS because that bit is
+	// always-on, and this line existing in a log is the entire point:
+	// the raw value names the writer (a .rodata pointer names a table, a
+	// .text pointer names a function, a stack address names a frame).
+	if (mp_rflagsTripCount != mp_rflagsTripReported)
+	{
+		mp_rflagsTripReported = mp_rflagsTripCount;
+		for (uint32_t core = 0; core < MAX_CPUS; core++)
+			if (mp_rflagsTripValue[core] != 0)
+			{
+				printd(DEBUG_EXCEPTIONS,
+					"RFLAGS TRIPWIRE: core %u had mp_isrSavedRFlags = 0x%016lx (sanitized to 0x202; see SCHEDULER_STRAY_WRITE.md)\n",
+					core, mp_rflagsTripValue[core]);
+				printf("RFLAGS TRIPWIRE: core %u caught the stray write! value 0x%016lx\n",
+					core, mp_rflagsTripValue[core]);
+				mp_rflagsTripValue[core] = 0;   // impound reported; re-arm the slot
+			}
+	}
+
 	printd(DEBUG_SIGNALS | DEBUG_DETAILED,"\tprocessSignals: Done processing signals\n");
 	//No need to act on "awoken" since processSignals() is called by the scheduler
 }

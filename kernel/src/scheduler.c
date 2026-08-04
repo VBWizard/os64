@@ -21,6 +21,26 @@ volatile uint64_t mp_isrSavedRAX[MAX_CPUS],mp_isrSavedRBX[MAX_CPUS],mp_isrSavedR
 				  mp_isrSavedR8[MAX_CPUS], mp_isrSavedR9[MAX_CPUS], mp_isrSavedR10[MAX_CPUS], mp_isrSavedR11[MAX_CPUS], mp_isrSavedR12[MAX_CPUS], 
 				  mp_isrSavedR13[MAX_CPUS], mp_isrSavedR14[MAX_CPUS], mp_isrSavedR15[MAX_CPUS];
 
+// The scheduler's exit breadcrumb: the RIP each core last iretq'd to, stamped
+// in scheduler.S right before the iretq. This used to ride in R15 itself —
+// which silently clobbered every resumed thread's real R15. Harmless at -O0
+// (the compiler almost never keeps a live value there), catastrophic the day
+// an -O2 build does. Same information, now in working storage where a halted
+// guest gives it up by name:  (gdb) p/x mp_lastIretqRIP[core]
+volatile uint64_t mp_lastIretqRIP[MAX_CPUS];
+
+// The RFLAGS tripwire's evidence lockers (SCHEDULER_STRAY_WRITE.md).
+// scheduler.S judges mp_isrSavedRFlags at the point of consumption — just
+// before the iretq, which is AFTER the proven-clean copy from the thread
+// struct and therefore inside the stray writer's window. A value with TF
+// set or any bit outside the legal RFLAGS mask is impounded here (the raw
+// qword IS the clue: a .rodata pointer names a table, a .text pointer names
+// a function, a stack address names a frame), counted, and sanitized so the
+// boot survives to report it. processSignals prints new impounds.
+volatile uint64_t mp_rflagsTripValue[MAX_CPUS];
+volatile uint64_t mp_rflagsTripCount;
+volatile uint64_t mp_rflagsTripReported;
+
 //List of all of the active tasks in the system.  Each task has one or more threads to be scheduled
 task_t *kTaskList;
 //List of all of the active threads in the system.  Use next & prev to access threads in the list
