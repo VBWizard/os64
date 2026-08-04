@@ -85,19 +85,29 @@ void tss_initialize_cpu(uint32_t cpu_index)
 
     // IST1: this core's double-fault stack, ALREADY ALLOCATED (see
     // tss_init_ist_stacks). Assignment only — no allocation, no logging,
-    // nothing that needs a stack. THIS FUNCTION RUNS ON AN AP'S 1 KB
-    // BOOTSTRAP STACK (smp_core.c hands it `tempStack + 1024 - 8` and calls
-    // straight into here), which is why the first version of this code —
-    // a kmalloc_aligned plus a printd whose format buffer alone is 2 KB —
-    // smashed straight past the bottom of that stack and scribbled on
-    // kernel memory. It corrupted neighbouring globals so effectively that
-    // it produced garbage scheduler stacks and wild segment selectors on
-    // unrelated cores, which is a very convincing impression of a
-    // mysterious pre-existing bug. Chris caught it in one move: stash the
-    // uncommitted work, 5 clean boots; restore it, 3 for 3 broken.
+    // nothing that needs a stack. THIS FUNCTION RUNS ON AN AP'S SHARED
+    // BOOTSTRAP STACK (smp_core.c hands it `tempStack + TEMP_STACK_SIZE - 8`
+    // and calls straight into here), which is why the first version of this
+    // code — a kmalloc_aligned plus a printd whose format buffer alone is
+    // 2 KB — smashed straight past the bottom of that stack (1 KB in those
+    // days) and scribbled on kernel memory. It corrupted neighbouring
+    // globals so effectively that it produced garbage scheduler stacks and
+    // wild segment selectors on unrelated cores, which is a very convincing
+    // impression of a mysterious pre-existing bug. Chris caught it in one
+    // move: stash the uncommitted work, 5 clean boots; restore it, 3 for 3
+    // broken.
     //
-    // The rule this leaves: anything running before init_core_local_storage
+    // The rule this left: anything running before init_core_local_storage
     // on an AP gets a 1 KB budget and no library calls.
+    //
+    // EPILOGUE (2026-08-03): the rest of ap_wakeup_entry never obeyed that
+    // rule — its OWN kmalloc + paging_map_pages + DETAILED printd chain
+    // overflowed the same 1 KB stack all along, and THAT was the weeks-long
+    // intermittent /idle #GP/#DB "stray write into mp_isrSavedRFlags"
+    // (SCHEDULER_STRAY_WRITE.md has the full autopsy). This comment was
+    // pointing at the culprit the entire time. tempStack is 32 KB with a
+    // canary strip now, so the budget is honest — but the discipline above
+    // is still the right instinct.
     tss->ist1 = kIstStackTop[cpu_index];
 
     tss_install_descriptor(cpu_index, tss);

@@ -70,7 +70,30 @@ uint32_t apic_in_service_vector(void)
 }
 uintptr_t stackVirtualAddress, stackPhysicalAddress;
 uintptr_t kMPEOIOffset = 0;
-uint8_t tempStack[1024];
+// The AP bootstrap stack. ONE, shared — safe because ap_wake_up_aps brings
+// APs through strictly one at a time (the coreInitialized handshake below).
+//
+// 32KB, and the size is a scar: this was 1KB for years, and ap_wakeup_entry
+// runs real C on it — kmalloc_aligned, paging_map_pages, and (under
+// DEBUG_DETAILED) a printd per page-table entry, whose varargs save area,
+// sprintf frame, and message buffer stack up fast. The overflow marched out
+// the bottom of the 1KB array and scribbled single qwords across the
+// mp_isrSaved* register arrays that link just below it in .bss — which
+// surfaced as the intermittent /idle #GP/#DB/#UD that went unexplained for
+// WEEKS, because the victim was whichever core's saved state the frames
+// happened to land on. tss.c had even documented this exact failure inside
+// tss_initialize_cpu and been cured locally — while this file kept feeding
+// the same 1KB stack to the rest of bring-up. Full forensics:
+// SCHEDULER_STRAY_WRITE.md ("2026-08-03: the culprit").
+//
+// The canary strip below is the tripwire that would have named this bug the
+// first week: 64 bytes of known pattern at the stack's floor, verified after
+// every AP handshake. A sparse frame can hop over one qword; it cannot miss
+// eight.
+#define TEMP_STACK_SIZE (32 * 1024)
+#define TEMP_STACK_CANARY 0x43414E4152592121ULL   // "CANARY!!" — legible in a hex dump
+#define TEMP_STACK_CANARY_QWORDS 8
+__attribute__((aligned(16))) uint8_t tempStack[TEMP_STACK_SIZE];
 uint32_t temp_apic_id;
 core_local_storage_t *tempCls;
 
@@ -231,7 +254,7 @@ void ap_wakeup_entry() {
         "mov es, ax\n"
         "mov fs, ax\n"
         "mov ss, ax\n"
-        :: "r" (kKernelPML4), "r" ((uint16_t)0x30), "r" (tempStack + 1024 - 8)
+        :: "r" (kKernelPML4), "r" ((uint16_t)0x30), "r" (tempStack + TEMP_STACK_SIZE - 8)
     );
 
     temp_apic_id = read_apic_id();
@@ -267,7 +290,14 @@ void ap_wakeup_entry() {
 }
 void ap_wake_up_aps() {
 	volatile core_local_storage_t *cls;
-    
+
+	// Arm the bootstrap-stack canary strip (see tempStack's comment): 64
+	// bytes of pattern at the stack's FLOOR, checked after every AP's
+	// handshake. Any AP whose bring-up frames reach the floor smashes the
+	// pattern before it can underflow into the .bss neighbors below.
+	for (int q = 0; q < TEMP_STACK_CANARY_QWORDS; q++)
+		((volatile uint64_t *)tempStack)[q] = TEMP_STACK_CANARY;
+
 	//TODO: Remve me!
 	//Temporary debugging statement
 	for (int coreToWake = 0; coreToWake < kMPCoreCount; coreToWake++) {
@@ -290,6 +320,16 @@ void ap_wake_up_aps() {
 			while (!cls->coreInitialized) {wait(10);}
 			if (kEnableBootmarks)
 				printf("BOOTMARK ap%u-initialized       tick=%lu tsc=%lu\n", apic_id, kTicksSinceStart, rdtsc());
+
+			// The AP is up and off the bootstrap stack — verify it never
+			// touched the floor. A smashed canary means bring-up came
+			// within 64 bytes of repeating the /idle stray-write saga
+			// (SCHEDULER_STRAY_WRITE.md), and that is a stop-the-line
+			// event, not a log line: the .bss below may already be dirty.
+			for (int q = 0; q < TEMP_STACK_CANARY_QWORDS; q++)
+				if (((volatile uint64_t *)tempStack)[q] != TEMP_STACK_CANARY)
+					panic("AP %u bring-up smashed the tempStack canary (qword %u = 0x%016lx) — grow TEMP_STACK_SIZE; see SCHEDULER_STRAY_WRITE.md\n",
+						apic_id, q, ((volatile uint64_t *)tempStack)[q]);
 			if (kBspSchedulerMode)
 			{
 				// Wake-on-work mode: park AP timers and kick each AP once so it can run its idle thread.

@@ -1,6 +1,16 @@
 # The stray write into `mp_isrSavedRFlags[]`
 
-**Status: OPEN.** The mechanism is proven, the culprit is not.
+**Status: SOLVED — fix applied 2026-08-03** (tempStack 32KB + a canary
+strip at its floor, verified after every AP handshake; Chris ratified the
+size-over-architecture route). The stray writer is
+**AP bring-up C code overflowing the shared 1KB `tempStack`**
+(`smp_core.c:73`), whose .bss placement sits a few hundred bytes ABOVE the
+`mp_isrSaved*` arrays — deep frames punch out the bottom of the stack and
+land in the per-core register arrays. See "2026-08-03: the culprit" at the
+end. Everything below this line is the original investigation, kept because
+its method was what cracked it.
+
+**Status (historical): OPEN.** The mechanism is proven, the culprit is not.
 
 If a tripwire fired and sent you here, read "What the tripwire means" at the
 bottom first, then come back for the story.
@@ -160,3 +170,71 @@ who wrote it. Resolve it. A `.rodata` pointer names a table; a `.text` pointer
 names a function; a stack address names a frame. The 2026-08-02 sighting was a
 pointer into the PCI device-name table. Two data points on different boots
 would likely be enough to name the culprit outright.
+
+---
+
+## 2026-08-03: the culprit — tempStack underflow during AP bring-up
+
+The predicted second data point arrived (double sighting: `/idle3` #GP
+EC=0x400 and `/idle6` #GP EC=0xf2c8, both at the iretq, same boot) and the
+guest was kept alive for forensics. What the frozen machine gave up:
+
+**The droppings.** `mp_isrSavedCS[3]` = `0x400`, `CS[4]` = `0x0`,
+`CS[6]` = `0xffffffff8004f2c8`, `RIP[6]` = `0xffffffff8004f1a8` — and both
+pointers resolve to **printd format strings in .rodata** ("\tSetting page
+table entry at 0x%016lx, index 0x%04x, ..." — paging.c's per-PTE DETAILED
+logger). The 2026-08-02 value was a PCI *name string* — also .rodata, also
+something that gets handed to printd. The corruption always looks like
+printd's argument neighborhood because it IS printd's argument neighborhood.
+
+**The fingerprint field.** `MAX_CPUS` is 24 but only 8 cores exist, so
+slots 8–23 of every array are written by NO legitimate code — yet they held
+droppings that persist forever (nothing overwrites a ghost slot):
+`RFlags[10]` = the same paging format-string pointer, then alternating
+16-byte pairs `{0x200, 0xc000000000000000}` marching through
+`RFlags[11..14]` and `RIP[8..11]`. That alternation is a **varargs register
+save area**: six GPR slots (level, fmt, args) followed by eight XMM spills
+all holding the same stale 128-bit value. Someone ran a varargs prologue
+with RSP pointing into these arrays.
+
+**The confession.** `tempStack` (the AP bootstrap stack, `smp_core.c:73`,
+**1,024 bytes, ONE shared global**) links at `0xffffffff800b3420` — a few
+hundred bytes ABOVE the victim corridor. Its residue still contained a
+coherent saved-RBP chain with return addresses resolving to:
+
+```
+ap_wakeup_entry (smp_core.c:245)        <- the AP's C entry, ON tempStack
+  kmalloc_aligned -> kmalloc_common
+  paging_map_pages (paging.c:348)
+    paging_map_page (paging.c:216/230)
+    allocator_unlock (allocator.c:34)
+```
+
+with physical page addresses and PTE flag values (0x023, 0x027, 0x1000) as
+frame arguments. The measured high-water of that chain alone is ~600 bytes;
+one DETAILED printd from the deep end (varargs save area ≈176B + sprintf
+frame + 256B message buffer + log_store_entry) busts 1KB, and the frames
+keep descending — out the bottom of tempStack and straight through
+`mp_lastIretqRIP`, `R15..R8`, `CS`, `RIP`, `RFlags`. Which qword gets hit
+depends on that boot's exact frame layout; which SLOT is active decides the
+mask (#GP from a selector slot, #DB from TF in a flags slot, #UD from a
+poisoned RIP slot).
+
+**Why it was intermittent, and why it got worse.** The overflow depth
+tracks logging volume during AP bring-up. Quiet boots stay inside 1KB;
+DEBUG_DETAILED eras (the PCI-name era on 8/2, the paging-PTE era during
+the logd DETAILED experiments) go deep. The bug's frequency followed the
+logging configuration all along — "one boot in three" was never chance,
+it was verbosity.
+
+**The fix (ratified by Chris, applied 2026-08-03):** `tempStack` grew to
+32KB (`TEMP_STACK_SIZE`, smp_core.c) — safe to share because
+`ap_wake_up_aps` serializes bring-up through the `coreInitialized`
+handshake — with a 64-byte canary strip (`TEMP_STACK_CANARY`, "CANARY!!"
+in a hex dump) at the stack's floor, armed before the first wake and
+verified after EVERY AP's handshake; a smashed strip is a panic naming
+this document, because the .bss below may already be dirty. The per-AP
+real-stack alternative (BSP pre-allocates, ~384KB for MAX_CPUS) was
+declined as architecture the problem doesn't need. The RFLAGS tripwire in
+scheduler.S stays regardless — defense-in-depth that names any FUTURE
+stray writer by value, built the same day this was caught.
