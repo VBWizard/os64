@@ -606,6 +606,217 @@ static int run_pipeline(char *stages[], int nstages, int background)
 	return status;
 }
 
+// ── one line, interpreted ───────────────────────────────────────────────────
+
+// Everything a line MEANS, in one place: $-expansion, the trailing `&`,
+// pipeline split, builtins, and finally run_pipeline. Interactive lines and
+// husk.rc lines both come through here, and that is the entire point — the
+// rc file is not a configuration format to be parsed, it IS the shell, so
+// anything that works at the prompt works there by construction and nothing
+// works in only one of the two places. Returns 1 when the line asks the
+// shell to exit, else 0; the line's status lands in *last_status ($?).
+static int run_line(char *line, int *last_status)
+{
+	char expanded[LINE_MAX + 512];  // headroom for expanded $CWD/$PATH values
+	char *stages[MAX_STAGES];
+
+	// $? is substituted BEFORE the line is split or tokenized, so it
+	// works anywhere on the line: `echo $?`, `cd $?` (weird, legal).
+	expand_line(line, expanded, sizeof(expanded), *last_status);
+
+	// A trailing `&` applies to the WHOLE line, not the last stage:
+	// `hello | upper &` backgrounds the pipeline, which is why this runs
+	// before split_pipeline rather than inside it.
+	int background = strip_background(expanded);
+	if (expanded[0] == '\0')
+		return 0;           // the line was nothing but an `&`
+
+	int nstages = split_pipeline(expanded, stages, MAX_STAGES);
+
+	// `exit` is a builtin because it touches the SHELL'S OWN state (its
+	// lifetime) — no separate program could ever do it. Checked WITHOUT
+	// parse(), which tokenizes in place and would eat the line before
+	// run_pipeline ever saw the arguments.
+	if (nstages == 1 && first_token_is(stages[0], "exit"))
+		return 1;
+
+	// `export` is a builtin by the same physics as cd: the environment
+	// copies DOWNWARD at spawn, never sideways or up, so an external
+	// export would set its own copy and take it to the grave. Flat
+	// model for now (no shell-variable tier — that arrives with husk
+	// programmability): export KEY=VALUE goes straight to the env,
+	// visible to every child spawned after. `export` alone lists the
+	// environment, same walk env(1) does.
+	if (nstages == 1 && first_token_is(stages[0], "export"))
+	{
+		char *eargv[ARGS_MAX];
+		int eargc = parse(stages[0], eargv, ARGS_MAX);
+		*last_status = 0;
+		if (eargc < 2)
+		{
+			// Bare `export`: list. The block is mapped right here in
+			// our address space — walking it costs no syscalls.
+			os64_envent_t e = { .index = 0 };
+			while (os64_env_next(&e) == 0)
+			{
+				os64_puts(e.key);
+				os64_puts("=");
+				os64_puts(e.value);
+				os64_puts("\n");
+			}
+		}
+		else
+		{
+			// KEY=VALUE required; split at the FIRST '=' (values may
+			// contain their own — TZ=EST5EDT,M3.2.0 has no '=' but a
+			// PATH-like list someday might).
+			char *eq = eargv[1];
+			while (*eq && *eq != '=')
+				eq++;
+			if (*eq != '=' || eq == eargv[1])
+			{
+				os64_puts("husk: export: expected KEY=VALUE\n");
+				*last_status = 1;
+			}
+			else
+			{
+				*eq = 0;   // split in place; parse() already owns the line
+				if (os64_setenv(eargv[1], eq + 1) != 0)
+				{
+					os64_puts("husk: export: failed (environment full?)\n");
+					*last_status = 1;
+				}
+			}
+		}
+		return 0;
+	}
+
+	// `unset` — export's undo, builtin by the same one-way valve.
+	// Unsetting the absent is success (idempotent since Bourne).
+	if (nstages == 1 && first_token_is(stages[0], "unset"))
+	{
+		char *uargv[ARGS_MAX];
+		int uargc = parse(stages[0], uargv, ARGS_MAX);
+		if (uargc < 2)
+		{
+			os64_puts("husk: unset: expected a KEY\n");
+			*last_status = 1;
+		}
+		else
+		{
+			*last_status = 0;
+			for (int u = 1; u < uargc; u++)
+				if (os64_unsetenv(uargv[u]) != 0)
+					*last_status = 1;
+		}
+		return 0;
+	}
+
+	// `cd` is THE canonical builtin — the textbook answer to "why must
+	// any command be built in?": an external cd would change ITS OWN
+	// cwd (a copy inherited at spawn) and take the change to its grave.
+	// Only the shell can move the shell. `cd` alone goes to the root —
+	// there's no $HOME to go home to yet.
+	if (nstages == 1 && first_token_is(stages[0], "cd"))
+	{
+		char *cargv[ARGS_MAX];
+		int cargc = parse(stages[0], cargv, ARGS_MAX);
+		const char *dest = (cargc > 1) ? cargv[1] : "/";
+		if (os64_chdir(dest) < 0)
+		{
+			os64_puts("husk: cd: no such directory: ");
+			os64_puts(dest);
+			os64_puts("\n");
+			*last_status = 1;    // builtins report through $? too
+		}
+		else
+			*last_status = 0;
+		return 0;
+	}
+
+	*last_status = run_pipeline(stages, nstages, background);
+	return 0;
+}
+
+// ── the rc file ─────────────────────────────────────────────────────────────
+// "rc" is runcom — "run commands" — Louis Pouzin's word from CTSS in the
+// early 1960s, and he coined "shell" for the same idea; both predate Unix by
+// most of a decade. The mechanism has never changed: a file of commands the
+// shell runs on itself at startup, exactly as if a very fast user had typed
+// them. etc/husk.rc (the build's copy) carries the full story.
+//
+// The search order is a persistence gradient, first hit wins:
+//   /home/husk.rc   YOUR copy — the data disk survives every build untouched
+//   /fat/husk.rc    the build's default, rewritten onto FAT every `make`
+//                   (root is ext2 and read-only by design, so the rc rides
+//                   the FAT partition where it stays editable from inside)
+//   /husk.rc        the same FAT file when a FAT-root boot mounts it as "/"
+//
+// HUSKRC is the login-shell distinction, enforced by the environment's
+// one-way valve: the first husk sets it BEFORE running the file, every
+// descendant inherits it and skips — so `husk` typed inside husk gets a
+// clean subshell instead of a second copy of every daemon the rc started.
+// (Unix split .profile from .cshrc over exactly this; the env flows only
+// downward, so one variable is the whole mechanism.)
+
+static int run_rc(int *last_status)
+{
+	static const char *rc_paths[] = { "/home/husk.rc", "/fat/husk.rc", "/husk.rc" };
+
+	if (os64_getenv("HUSKRC") != NULL)
+		return 0;                       // a subshell: the rc already ran upstream
+	os64_setenv("HUSKRC", "1");         // set BEFORE running, so rc children inherit it
+
+	int h = -1;
+	const char *found = NULL;
+	for (unsigned int i = 0; i < sizeof(rc_paths) / sizeof(rc_paths[0]); i++)
+	{
+		h = (int)os64_open(rc_paths[i], "r");
+		if (h >= 0) { found = rc_paths[i]; break; }
+	}
+	if (found == NULL)
+		return 0;                       // no rc anywhere: a plain boot, not an error
+
+	// A breadcrumb naming WHICH copy ran — when /home and /fat disagree,
+	// this line is how you find out which one the boot believed. It goes out
+	// as a serial BEACON, not a plain log line, because on a LOGD= boot the
+	// log lands in a file the outside world can't read until shutdown — and
+	// this particular line is exactly what an outside watcher (the QEMU
+	// verification harness, a human tailing the wire) needs mid-boot.
+	{
+		char msg[64];
+		int m = 0;
+		for (const char *s = "husk: rc: "; *s; s++) msg[m++] = *s;
+		for (const char *s = found; *s && m < (int)sizeof(msg) - 1; s++) msg[m++] = *s;
+		msg[m] = 0;
+		os64_serial_log(msg);
+	}
+
+	// One line at a time through the SAME interpreter the prompt uses —
+	// os64_readline strips the newline (CRLF included: a FAT file will meet
+	// a Windows editor sooner or later) and truncates an over-long line at
+	// LINE_MAX exactly as the prompt would have. Comments and blank lines
+	// are filtered here — they are file syntax, not shell syntax (a typed
+	// '#' at the prompt still means a program named '#', honestly not found).
+	char line[LINE_MAX];
+	int exiting = 0;
+	while (!exiting && os64_readline(h, line, sizeof(line)) == 1)
+	{
+		const char *s = line;
+		while (*s == ' ' || *s == '\t')
+			s++;
+		if (*s == '\0' || *s == '#')
+			continue;                   // blank or comment
+
+		// `exit` in an rc is honored — the file IS the shell, and a shell
+		// told to exit exits. An rc that ends this way makes husk a batch
+		// interpreter, which some boot someday will want on purpose.
+		exiting = run_line(line, last_status);
+	}
+	os64_close(h);
+	return exiting;
+}
+
 // ── the shell ───────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv, char **envp)
@@ -617,9 +828,16 @@ int main(int argc, char **argv, char **envp)
 	os64_debug_log("husk: started");
 
 	char line[LINE_MAX];
-	char expanded[LINE_MAX + 512];  // headroom for expanded $CWD/$PATH values
-	char *stages[MAX_STAGES];
 	int last_status = 0;            // $? — nothing has failed yet
+
+	// The rc runs after the banner and before the first prompt — its output
+	// (job announcements, error messages) lands where a fast typist's would.
+	if (run_rc(&last_status))
+	{
+		os64_write(1, "husk: bye\n", 10);
+		os64_debug_log("husk: exiting (rc said exit)");
+		return 0;
+	}
 
 	for (;;)
 	{
@@ -634,121 +852,8 @@ int main(int argc, char **argv, char **envp)
 		if (read_line(line, sizeof(line)) == 0)
 			continue;
 
-		// $? is substituted BEFORE the line is split or tokenized, so it
-		// works anywhere on the line: `echo $?`, `cd $?` (weird, legal).
-		expand_line(line, expanded, sizeof(expanded), last_status);
-
-		// A trailing `&` applies to the WHOLE line, not the last stage:
-		// `hello | upper &` backgrounds the pipeline, which is why this runs
-		// before split_pipeline rather than inside it.
-		int background = strip_background(expanded);
-		if (expanded[0] == '\0')
-			continue;           // the line was nothing but an `&`
-
-		int nstages = split_pipeline(expanded, stages, MAX_STAGES);
-
-		// `exit` is a builtin because it touches the SHELL'S OWN state (its
-		// lifetime) — no separate program could ever do it. Checked WITHOUT
-		// parse(), which tokenizes in place and would eat the line before
-		// run_pipeline ever saw the arguments.
-		if (nstages == 1 && first_token_is(stages[0], "exit"))
+		if (run_line(line, &last_status))
 			break;
-
-		// `export` is a builtin by the same physics as cd: the environment
-		// copies DOWNWARD at spawn, never sideways or up, so an external
-		// export would set its own copy and take it to the grave. Flat
-		// model for now (no shell-variable tier — that arrives with husk
-		// programmability): export KEY=VALUE goes straight to the env,
-		// visible to every child spawned after. `export` alone lists the
-		// environment, same walk env(1) does.
-		if (nstages == 1 && first_token_is(stages[0], "export"))
-		{
-			char *eargv[ARGS_MAX];
-			int eargc = parse(stages[0], eargv, ARGS_MAX);
-			last_status = 0;
-			if (eargc < 2)
-			{
-				// Bare `export`: list. The block is mapped right here in
-				// our address space — walking it costs no syscalls.
-				os64_envent_t e = { .index = 0 };
-				while (os64_env_next(&e) == 0)
-				{
-					os64_puts(e.key);
-					os64_puts("=");
-					os64_puts(e.value);
-					os64_puts("\n");
-				}
-			}
-			else
-			{
-				// KEY=VALUE required; split at the FIRST '=' (values may
-				// contain their own — TZ=EST5EDT,M3.2.0 has no '=' but a
-				// PATH-like list someday might).
-				char *eq = eargv[1];
-				while (*eq && *eq != '=')
-					eq++;
-				if (*eq != '=' || eq == eargv[1])
-				{
-					os64_puts("husk: export: expected KEY=VALUE\n");
-					last_status = 1;
-				}
-				else
-				{
-					*eq = 0;   // split in place; parse() already owns the line
-					if (os64_setenv(eargv[1], eq + 1) != 0)
-					{
-						os64_puts("husk: export: failed (environment full?)\n");
-						last_status = 1;
-					}
-				}
-			}
-			continue;
-		}
-
-		// `unset` — export's undo, builtin by the same one-way valve.
-		// Unsetting the absent is success (idempotent since Bourne).
-		if (nstages == 1 && first_token_is(stages[0], "unset"))
-		{
-			char *uargv[ARGS_MAX];
-			int uargc = parse(stages[0], uargv, ARGS_MAX);
-			if (uargc < 2)
-			{
-				os64_puts("husk: unset: expected a KEY\n");
-				last_status = 1;
-			}
-			else
-			{
-				last_status = 0;
-				for (int u = 1; u < uargc; u++)
-					if (os64_unsetenv(uargv[u]) != 0)
-						last_status = 1;
-			}
-			continue;
-		}
-
-		// `cd` is THE canonical builtin — the textbook answer to "why must
-		// any command be built in?": an external cd would change ITS OWN
-		// cwd (a copy inherited at spawn) and take the change to its grave.
-		// Only the shell can move the shell. `cd` alone goes to the root —
-		// there's no $HOME to go home to yet.
-		if (nstages == 1 && first_token_is(stages[0], "cd"))
-		{
-			char *cargv[ARGS_MAX];
-			int cargc = parse(stages[0], cargv, ARGS_MAX);
-			const char *dest = (cargc > 1) ? cargv[1] : "/";
-			if (os64_chdir(dest) < 0)
-			{
-				os64_puts("husk: cd: no such directory: ");
-				os64_puts(dest);
-				os64_puts("\n");
-				last_status = 1;    // builtins report through $? too
-			}
-			else
-				last_status = 0;
-			continue;
-		}
-
-		last_status = run_pipeline(stages, nstages, background);
 	}
 
 	os64_write(1, "husk: bye\n", 10);
