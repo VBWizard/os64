@@ -881,16 +881,16 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
         if (!thread->idleThread && !justBrowsing)
             thread->prioritizedTicksInRunnable+=(RUNNABLE_TICKS_INTERVAL-task->priority)+1;
 			if (!justBrowsing)
-				printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*\t%u-Thr 0x%08x (tsk 0x%08x-%s), pri=%i, oldt=%u, newt=%u (runt=%u)\n",
-					queEntryNum,
-					thread->threadID, 
-					task->taskID,
-					task->exename,
-					task->priority,
-					oldTicks,
-					thread->prioritizedTicksInRunnable, 
-					thread->totalRunTicks);
-			if (thread->prioritizedTicksInRunnable >= mostIdleTicks)
+                printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "*\t%u-Thr 0x%08x (tsk 0x%08x-%s), pri=%i, oldt=%u, newt=%u (runt=%u)\n",
+                       queEntryNum,
+                       thread->threadID,
+                       task->taskID,
+                       task->exename,
+                       task->priority,
+                       oldTicks,
+                       thread->prioritizedTicksInRunnable,
+                       thread->totalRunTicks);
+            if (thread->prioritizedTicksInRunnable >= mostIdleTicks)
 			{
 				if (scheduler_thread_can_run_on_core(thread, cls))
 				{
@@ -1051,7 +1051,7 @@ void scheduler_run_new_thread()
         scheduler_store_thread(cls, threadToStop);              //we're taking it off the cpu so save the registers
         scheduler_change_thread_queue_locked(threadToStop, threadToStopNewQueue);   //scheduler_do holds the queue lock
 	}
-	printd(DEBUG_SCHEDULER | DEBUG_DETAILED,"*Finding thread to run\n");
+	printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*Finding thread to run\n");
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
 	task_t* taskToRun = (task_t*)threadToRun->ownerTask;
 	

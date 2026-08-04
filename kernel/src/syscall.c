@@ -7,6 +7,8 @@
 #include "BasicRenderer.h"
 #include "panic.h"
 #include "printd.h"
+#include "serial_logging.h"   // serial_print_string — debug_log's SERIAL beacon flag
+#include "strings/sprintf.h"  // snprintf — stitches the beacon line for one wire write
 #include "scheduler.h"
 #include "smp_core.h"
 #include "task.h"
@@ -577,7 +579,6 @@ static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg1;
 	(void)arg2;
 	(void)arg3;
 	(void)arg4;
@@ -592,6 +593,19 @@ static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 
 	printd(DEBUG_APPLICATION,"[user] %s\n", kernel_buffer);
+
+	// arg1 = flags (see abi syscall_numbers.h). SERIAL: put the line on the
+	// wire NOW, directly — a beacon that no log claim can redirect. One
+	// stitched buffer, one call, so concurrent beacons from other cores
+	// interleave between lines rather than inside them. The ring copy above
+	// still happens: a beacon is a log line too ("never drop a byte" cuts
+	// both ways — the file must not be missing lines the wire showed).
+	if (arg1 & OS64_DEBUG_LOG_SERIAL)
+	{
+		char wire[MAX_LOG_MESSAGE_SIZE + 16];
+		snprintf(wire, sizeof(wire), "[user] %s\n", kernel_buffer);
+		serial_print_string(wire);
+	}
 	return 0;
 }
 
@@ -2548,6 +2562,22 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// controlled stack allocation — the exact shape of a stack-smash.
 	if (want > KLOG_READ_MAX_BATCH)
 		want = KLOG_READ_MAX_BATCH;
+
+	// ONE reader at a time. Reading consumes entries, so a second daemon
+	// wouldn't duplicate the log, it would deal it out — two files, each a
+	// random half. Refuse the latecomer loudly instead (it should print and
+	// exit); the claim lapses by heartbeat if the holder dies, so this can
+	// never wedge logging behind a corpse.
+	core_local_storage_t *ccls = get_core_local_storage();
+	task_t *ctask = ccls ? ccls->task : NULL;
+	if (ctask == NULL)
+		return SYSCALL_RESULT_INVALID;
+	if (!klog_sink_try_claim(ctask->taskID))
+	{
+		printd(DEBUG_SYSCALL, "klog_read: task %s (%lu) refused — the log sink is claimed by a live reader\n",
+		       ctask->exename, ctask->taskID);
+		return SYSCALL_RESULT_INVALID;
+	}
 
 	// Dequeue into KERNEL memory first, then copy out in one hop. Same
 	// discipline as every other read: klog_dequeue runs under the log

@@ -89,6 +89,14 @@ uint32_t klog_dequeue(log_entry_t *out, uint32_t max);
 extern volatile bool kLogSinkClaimed;
 extern volatile uint64_t kLogSinkLastRead;
 
+// The claim is EXCLUSIVE while its holder is alive: entries are consumed by
+// reading, so two concurrent readers would silently deal the log out between
+// two files. syscall_klog_read calls this before dequeuing; a refusal means
+// another daemon holds a live claim and the caller should say so and exit,
+// not retry. A stale claim (heartbeat past LOG_SINK_TIMEOUT_TICKS) lapses on
+// the next attempt, so daemon restarts need no hand-off ceremony.
+bool klog_sink_try_claim(uint64_t taskId);
+
 // ── Waiting for the ring-3 sink (the LOGD= cmdline flag) ───────────────────
 // When a log daemon is COMING but has not attached yet, draining to serial is
 // pure waste: those same entries are about to be claimed and written to a

@@ -186,9 +186,20 @@ int64_t os64_printat(uint32_t x, uint32_t y, const char *s);
 // control, not I/O, and it moved home to <os64/proc.h> the day its owner
 // went looking for it there and rolled his eyes. 🙄)
 
-// Diagnostic: print a string to the kernel serial log (prefixed "[user] ").
-// Distinct from os64_puts (which goes to the console) — this is for test
-// output an offscreen/headless run can capture.
+// Diagnostic: put a line in the kernel LOG (prefixed "[user] "). Distinct
+// from os64_puts (which goes to the console). Where the line ends up follows
+// the log itself: the serial wire on a plain boot, or a logd's FILE once a
+// daemon has claimed the log — which a headless harness can't read until
+// shutdown. If the line's whole job is to be seen from OUTSIDE, live, use
+// os64_serial_log below.
 void os64_debug_log(const char *s);
+
+// The beacon: same log line, but ALSO written directly to the serial wire,
+// immediately, no matter who has claimed the log — the same door panic()
+// uses. For the handful of markers a verification harness greps for while
+// the OS runs (husk's rc breadcrumb, a fixture's checkpoint). Not for
+// logging: every call costs a VM exit, which is the exact bill logd exists
+// to retire.
+void os64_serial_log(const char *s);
 
 #endif // OS64_IO_H

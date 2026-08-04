@@ -201,6 +201,20 @@
 // rmdir twin — and will never get one.
 #define SYSCALL_MKDIR 36
 
+// debug_log() FLAGS — arg1. Zero is the everyday call: the message goes to
+// the kernel log rings, tagged "[user]", and travels wherever the log
+// travels (serial drainer, or a claimed logd's file).
+//
+// SERIAL puts the line on the serial WIRE too, immediately and directly —
+// the same door panic() uses — regardless of who has claimed the log. This
+// exists because the log pipeline WORKING is what broke watching a live
+// boot from outside: once logd claims the log, every marker lands in a file
+// on a disk image the host can't read until shutdown. A verification
+// harness (or a human tailing the wire) needs a handful of beacons that
+// cannot be redirected. Use it for beacons, not for logging — every byte
+// here costs a VM exit, which is the exact bill logd exists to avoid.
+#define OS64_DEBUG_LOG_SERIAL  0x1
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

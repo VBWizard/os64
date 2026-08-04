@@ -39,6 +39,33 @@ static bool log_sink_alive(void)
 	       (kTicksSinceStart - kLogSinkLastRead) <= LOG_SINK_TIMEOUT_TICKS;
 }
 
+// WHICH task holds the live claim (0 = nobody). The heartbeat alone can't
+// tell two daemons apart: entries are CONSUMED by reading, so two readers
+// would each get a random half of the log — each file individually looking
+// plausible, jointly dropping nothing yet showing nobody everything. That
+// failure mode arrived the day husk.rc made "logd &" typeable while the
+// LOGD= cmdline flag was already launching one. Exclusivity with a loud
+// refusal (tripwires over silence) beats discovering it in two half-files.
+volatile uint64_t kLogSinkOwnerTask = 0;
+
+// Claim the sink for `taskId`, or refuse. The owner may always re-claim
+// (that IS the heartbeat); a stale claim (owner dead/hung past the timeout)
+// lapses right here, so a restarted-by-hand daemon walks in without any
+// cleanup step. The CAS settles the two-daemons-racing-at-boot case: one
+// wins, the other is told no.
+bool klog_sink_try_claim(uint64_t taskId)
+{
+	if (!log_sink_alive())
+		kLogSinkOwnerTask = 0;   // the previous claimant went quiet — lapsed
+
+	uint64_t current = kLogSinkOwnerTask;
+	if (current == taskId)
+		return true;
+	if (current != 0)
+		return false;            // a LIVE claim by somebody else: exclusive
+	return __sync_bool_compare_and_swap(&kLogSinkOwnerTask, 0, taskId);
+}
+
 // Has a userland sink EVER attached this boot? Distinct from kLogSinkClaimed,
 // which goes false again when a daemon dies: this one is a one-way latch, and
 // it is what ends the initial wait for good.

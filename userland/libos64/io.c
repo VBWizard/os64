@@ -171,9 +171,20 @@ int64_t os64_printat(uint32_t x, uint32_t y, const char *s)
                                   (uint64_t)s);
 }
 
+// flags = 0, EXPLICITLY: the kernel reads arg1 as the flags word now, and a
+// syscall1 stub would let whatever garbage ring 3 left in that register
+// randomly promote a log line to a serial beacon.
 void os64_debug_log(const char *s)
 {
-    os64_syscall1(SYSCALL_DEBUG_LOG, (uint64_t)s);
+    os64_syscall2(SYSCALL_DEBUG_LOG, (uint64_t)s, 0);
+}
+
+// The beacon variant: same log line, but ALSO written to the serial wire
+// immediately and directly, past any logd claim. See io.h for when this is
+// the right call (rarely).
+void os64_serial_log(const char *s)
+{
+    os64_syscall2(SYSCALL_DEBUG_LOG, (uint64_t)s, OS64_DEBUG_LOG_SERIAL);
 }
 
 int64_t os64_open(const char *path, const char *mode)

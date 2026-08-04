@@ -84,17 +84,29 @@ int main(int argc, char **argv)
 	uint64_t lastSync = t.ticks;
 
 	os64_logent_t batch[BATCH];
+	int attached = 0;   // has klog_read ever succeeded for THIS daemon?
 	for (;;)
 	{
 		int64_t got = os64_klog_read(batch, BATCH);
+		if (got < 0 && !attached)
+		{
+			// Refused before ever succeeding: another daemon holds the
+			// log claim (the kernel's sink is exclusive — two readers
+			// would each get a random half). A second logd idling here
+			// forever would just be a mystery process, so say why and go.
+			os64_printf("logd: the kernel log is already claimed by another reader — exiting\n");
+			os64_close((int32_t)fd);
+			return 1;
+		}
 		if (got <= 0)
 		{
-			// Nothing waiting (or refused — a refusal here means the
-			// kernel is unhappy, and sleeping is still the right move;
+			// Nothing waiting (or a refusal AFTER we attached — transient
+			// kernel unhappiness; sleeping is still the right move, and
 			// the kernel resumes serial by itself if we stay quiet).
 			os64_sleep(IDLE_SLEEP_MS);
 			continue;
 		}
+		attached = 1;
 
 		size_t used = 0;
 		for (int64_t i = 0; i < got; i++)
@@ -120,8 +132,36 @@ int main(int argc, char **argv)
 			used += ((size_t)n < room) ? (size_t)n : (room > 0 ? room - 1 : 0);
 		}
 
+		// A FAILED WRITE MUST END THIS DAEMON. It must not be swallowed.
+		//
+		// The kernel decides whether to drain to serial by watching whether
+		// anyone is READING the rings (klog_read stamps a heartbeat). So a
+		// logd that keeps reading while its writes fail is the worst possible
+		// citizen: it consumes entries, drops them on the floor, and keeps the
+		// kernel convinced the log is in good hands. Silent loss — the one
+		// thing "never drop a byte" actually forbids.
+		//
+		// Chris proved it inside five minutes on 2026-08-03 by turning on
+		// DETAILED *and* EXTRA_DETAILED and filling a 64MB /home to the byte
+		// (66,056,704 of them).
+		//
+		// So: say what happened on the console, and LEAVE. Stopping the reads
+		// lets the heartbeat go stale, and within LOG_SINK_TIMEOUT_TICKS the
+		// kernel announces the silence and takes serial back. The log survives
+		// on the wire instead of vanishing into a full disk.
 		if (used > 0)
-			os64_write((int32_t)fd, gOut, used);
+		{
+			int64_t wrote = os64_write((int32_t)fd, gOut, used);
+			if (wrote != (int64_t)used)
+			{
+				os64_printf("logd: write to %s failed (%ld of %lu bytes) — disk full?\n",
+				            path, (long)wrote, (unsigned long)used);
+				os64_printf("logd: releasing the log sink; the kernel resumes serial in a moment\n");
+				os64_sync((int32_t)fd);
+				os64_close((int32_t)fd);
+				return 1;
+			}
+		}
 
 		// Commit — but on a CLOCK, not on every batch.
 		//
