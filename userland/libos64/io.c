@@ -217,3 +217,26 @@ int64_t os64_sync(int32_t handle)
 {
     return (long)os64_syscall1(SYSCALL_SYNC, (uint64_t)(int64_t)handle);
 }
+
+// Remove a file or an empty directory. Relative paths resolve against the
+// cwd, like open's.
+//
+// Named for what actually happens rather than for the program that calls it:
+// the directory entry is unlinked and the storage follows — for directories
+// too, which is why os64 has no rmdir. Returns 0 on success, negative on
+// failure — a read-only filesystem (os64's ext2), a path that isn't there,
+// or a directory that isn't empty.
+int64_t os64_unlink(const char *path)
+{
+    return (long)os64_syscall1(SYSCALL_UNLINK, (uint64_t)path);
+}
+
+// Create a directory. Relative paths resolve against the cwd, like open's.
+//
+// One atomic call — the kernel owes us that much since 4.2BSD showed it was
+// possible. Returns 0 on success, negative on failure — a read-only
+// filesystem (os64's ext2), a missing parent, or a name already in use.
+int64_t os64_mkdir(const char *path)
+{
+    return (long)os64_syscall1(SYSCALL_MKDIR, (uint64_t)path);
+}

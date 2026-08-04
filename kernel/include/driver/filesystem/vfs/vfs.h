@@ -296,7 +296,17 @@ struct file_operations
 	int (*sync)(vfs_file_t* vfs_file);
     int (*close)(vfs_file_t* vfs_file);
 	int (*flush) (void *f);
-	int (*rm) (const char *filename);
+	// Delete a file. The path arrives fs-local — mount prefix already
+	// stripped — exactly like open's.
+	//
+	// The vfs_fs argument is not decoration: FatFs addresses volumes by
+	// number ("2:/os64.log"), so an rm with no filesystem cannot name the
+	// file it is being asked to delete. This slot sat in the struct from the
+	// beginning taking only a filename, which is why nothing ever implemented
+	// it. A filesystem with no write path simply leaves it NULL, and
+	// syscall_unlink reports read-only rather than dispatching through zero
+	// (see the same lesson in fat_glue.c's disk_write).
+	int (*rm) (const char *filename, vfs_filesystem_t* vfs_fs);
 	int (*initialize) (vfs_filesystem_t* device);
 	int (*uninitialize) (vfs_filesystem_t* device);
 };

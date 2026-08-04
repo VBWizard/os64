@@ -572,6 +572,37 @@ static int fat_stat(const char* path, os64_dirent_t* entry, vfs_filesystem_t* vf
 }
 
 // FAT filesystem operations
+// Delete a file. FatFs's f_unlink does the whole job — free the cluster
+// chain, clear the directory entry — so this is only path construction plus
+// an honest error code.
+//
+// Deliberately NOT gated on DISK_WRITING_ENABLED alongside .write below: a
+// build with writing compiled out should fail an rm loudly through the NULL
+// check in syscall_unlink, not quietly succeed at deleting nothing. It IS
+// left out of the read-only ext2 fops entirely, which is the same statement
+// made the honest way.
+static int fat_rm(const char* filename, vfs_filesystem_t* vfs_fs)
+{
+	char lPath[512];
+
+	if (filename == NULL || vfs_fs == NULL)
+		return -1;
+
+	strncpy(lPath, filename, sizeof(lPath) - 1);
+	lPath[sizeof(lPath) - 1] = '\0';
+	create_fat_path(lPath, vfs_fs);   // "N:" + path — FatFs addresses volumes by number
+
+	FRESULT res = f_unlink(lPath);
+	if (res != FR_OK)
+	{
+		printd(DEBUG_VFS, "fat_rm: f_unlink('%s') failed, FRESULT=%u\n", lPath, (uint32_t)res);
+		return -1;
+	}
+
+	printd(DEBUG_VFS, "fat_rm: deleted '%s'\n", lPath);
+	return 0;
+}
+
 vfs_file_operations_t fat_fops = {
 	.initialize = fat_initialize,
     .open  = fat_open,
@@ -583,6 +614,7 @@ vfs_file_operations_t fat_fops = {
 #ifdef DISK_WRITING_ENABLED
     .write = fat_write,
 #endif
+	.rm = fat_rm,
     .close = fat_close,
 	.seek = fat_seek,
 	.sync = fat_sync,

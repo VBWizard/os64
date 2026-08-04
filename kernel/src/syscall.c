@@ -91,6 +91,10 @@ static uint64_t syscall_getcwd(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_unlink(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_mkdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -152,6 +156,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_UNMAP,     "unmap",     syscall_unmap,     false, 0x01),  // arg0 = region base (user VA)
 	SYSCALL_DEFINE(SYSCALL_GETCWD,    "getcwd",    syscall_getcwd,    false, 0x01),  // arg0 = out buffer
 	SYSCALL_DEFINE(SYSCALL_CHDIR,     "chdir",     syscall_chdir,     false, 0x01),  // arg0 = path
+	SYSCALL_DEFINE(SYSCALL_UNLINK,    "unlink",    syscall_unlink,    false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_STAT,      "stat",      syscall_stat,      false, 0x03),  // arg0 = path, arg1 = dirent out ptr
 	SYSCALL_DEFINE(SYSCALL_REAP,      "reap",      syscall_reap,      false, 0x01),  // arg0 = exit-code out ptr
 	SYSCALL_DEFINE(SYSCALL_SLEEP,     "sleep",     syscall_sleep,     false, 0x00),  // arg0 = milliseconds (a value, no pointers)
@@ -168,6 +173,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	// it actually writes to.
 	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
+	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
 };
 
 uint64_t _syscall_dispatch(
@@ -1719,6 +1725,175 @@ static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// fits with room to spare.)
 	memcpy(task->cwd, p->path, sizeof(p->path));
 	printd(DEBUG_SYSCALL, "chdir: task %s: cwd = '%s'\n", task->exename, task->cwd);
+	kfree(p);
+	return 0;
+}
+
+// unlink's kernel-context half: one fops->rm. Deleting a file walks the
+// directory and rewrites the FAT, so it is disk I/O like every other path
+// operation here.
+typedef struct {
+	char path[TASK_MAX_PATH_LEN];  // full canonical path (kept for logging)
+	vfs_filesystem_t *fs;          // mount-resolved in task context
+	const char *fs_tail;           // fs-local remainder; points into path or
+	                               // at a static "/" — transient, never freed
+	volatile long result;
+} unlink_params_t;
+
+static void unlink_do(void *arg)
+{
+	unlink_params_t *p = (unlink_params_t *)arg;
+	// The NULL check is the read-only answer: ext2 never installs rm, and
+	// dispatching through a NULL fop would execute mapped page zero rather
+	// than fail (fat_glue.c's disk_write learned this the hard way).
+	p->result = (p->fs->fops != NULL && p->fs->fops->rm != NULL)
+	                ? p->fs->fops->rm(p->fs_tail, p->fs)
+	                : -1;
+}
+
+static uint64_t syscall_unlink(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	char raw[TASK_MAX_PATH_LEN];
+	if (!copy_user_string((const char *)arg0, raw, sizeof(raw)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	unlink_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// Relative paths resolve against the task's cwd, same as open — `rm
+	// notes.txt` has to mean the same file `cat notes.txt` just printed.
+	if (!resolve_user_path(task, raw, p->path, sizeof(p->path)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	p->fs_tail = NULL;
+	p->fs = vfs_resolve_mount(p->path, &p->fs_tail);
+	if (p->fs == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
+	// Refuse to delete a mount point itself. "/home" resolves to tail "/",
+	// which is the filesystem's ROOT — handing that to f_unlink is asking a
+	// driver to delete the volume it lives on. `rm /home` is a typo, always.
+	if (p->fs_tail == NULL || p->fs_tail[0] == '\0' ||
+	    (p->fs_tail[0] == '/' && p->fs_tail[1] == '\0'))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	p->result = -1;
+	call_in_kernel_context(unlink_do, p);
+
+	if (p->result != 0)
+	{
+		printd(DEBUG_SYSCALL, "unlink: task %s: could not delete '%s' (read-only fs, missing file, or non-empty directory)\n",
+		       task->exename, p->path);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_SYSCALL, "unlink: task %s: deleted '%s'\n", task->exename, p->path);
+	kfree(p);
+	return 0;
+}
+
+// mkdir's kernel-context half: one dops->mkdir. Creating a directory
+// allocates a cluster and writes two directory entries, so it is disk I/O
+// like every other path operation here. (mkdir lives in dops rather than
+// fops for the same reason stat does: directories are directory-entry
+// vocabulary.)
+typedef struct {
+	char path[TASK_MAX_PATH_LEN];  // full canonical path (kept for logging)
+	vfs_filesystem_t *fs;          // mount-resolved in task context
+	const char *fs_tail;           // fs-local remainder; points into path or
+	                               // at a static "/" — transient, never freed
+	volatile long result;
+} mkdir_params_t;
+
+static void mkdir_do(void *arg)
+{
+	mkdir_params_t *p = (mkdir_params_t *)arg;
+	// The NULL check is the read-only answer: ext2 never installs mkdir, and
+	// dispatching through a NULL dop would execute mapped page zero rather
+	// than fail (fat_glue.c's disk_write learned this the hard way).
+	// The cast: dops->mkdir takes char* because fat_mkdir copies-then-mangles
+	// its own scratch buffer; the tail itself is never written through.
+	p->result = (p->fs->dops != NULL && p->fs->dops->mkdir != NULL)
+	                ? p->fs->dops->mkdir((char *)p->fs_tail, p->fs)
+	                : -1;
+}
+
+static uint64_t syscall_mkdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	char raw[TASK_MAX_PATH_LEN];
+	if (!copy_user_string((const char *)arg0, raw, sizeof(raw)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	mkdir_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// Relative paths resolve against the task's cwd, same as open — `mkdir
+	// notes` has to make the directory `cd notes` will then enter.
+	if (!resolve_user_path(task, raw, p->path, sizeof(p->path)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	p->fs_tail = NULL;
+	p->fs = vfs_resolve_mount(p->path, &p->fs_tail);
+	if (p->fs == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
+	// Refuse to create a mount point itself. "/home" resolves to tail "/",
+	// which is the filesystem's ROOT — it already exists by definition, and
+	// handing "/" to f_mkdir is asking a driver to create the volume it
+	// lives on. `mkdir /fat` is a typo, always.
+	if (p->fs_tail == NULL || p->fs_tail[0] == '\0' ||
+	    (p->fs_tail[0] == '/' && p->fs_tail[1] == '\0'))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	p->result = -1;
+	call_in_kernel_context(mkdir_do, p);
+
+	if (p->result != 0)
+	{
+		printd(DEBUG_SYSCALL, "mkdir: task %s: could not create '%s' (read-only fs, missing parent, or name taken)\n",
+		       task->exename, p->path);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_SYSCALL, "mkdir: task %s: created '%s'\n", task->exename, p->path);
 	kfree(p);
 	return 0;
 }

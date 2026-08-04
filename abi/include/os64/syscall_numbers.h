@@ -164,6 +164,43 @@
 // breathing.
 #define SYSCALL_THREAD_EXIT 34
 
+// unlink(path) — remove a file OR an empty directory: os64's ONE removal
+// verb. Named unlink because that is what the operation honestly is — the
+// DIRECTORY ENTRY goes away and the storage follows — and that sentence is
+// just as true for a directory as for a file. The program that calls it is
+// free to be called rm.
+//
+// There is deliberately NO rmdir and never will be (ratified 2026-08-04,
+// the day rm -r shipped and proved the contract). This is Plan 9's shape —
+// one remove() for both — not POSIX's, whose unlink/rmdir split is a scar,
+// not a design: before 4.2BSD, rmdir(1) was a setuid-root program that
+// unlink()ed ".", then "..", then the entry itself, three raw steps a crash
+// could leave half-done, and when 4.2BSD made directory removal atomic it
+// kept the two verbs it had inherited. os64 declines the scar. Every
+// filesystem's rm op owes this same contract — FatFs's f_unlink grants it
+// natively; the future ext2 write driver will be built to it.
+//
+// Returns 0 on success. Refused, not half-done: a filesystem with no write
+// path (os64's ext2 is read-only by design), a path that isn't there, or a
+// directory that still has contents — emptying it first is the caller's
+// job, which is what rm -r's depth-first walk is.
+#define SYSCALL_UNLINK 35
+
+// mkdir(path) — create a directory. Returns 0, or negative: read-only
+// filesystem (ext2 by design), a parent that doesn't exist, or a name
+// already taken. One call, atomic, done.
+//
+// That last word is the whole history: Unix went its FIRST DECADE without
+// this syscall. V6/V7's mkdir(1) was a SETUID-ROOT PROGRAM that built a
+// directory out of three separate privileged steps — mknod(), then link()
+// for ".", then link() for ".." — and a crash (or a well-timed signal)
+// between them left a half-wired directory for fsck to untangle. 4.2BSD
+// (1983) finally made it one atomic kernel operation. os64 starts where
+// they landed. Removal is not mkdir's mirror here: unlink (above) is the
+// one removal verb for files AND empty directories, so mkdir needs no
+// rmdir twin — and will never get one.
+#define SYSCALL_MKDIR 36
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

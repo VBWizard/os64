@@ -151,6 +151,22 @@ int64_t os64_close(int32_t handle);
 // writes and closes does not.
 int64_t os64_sync(int32_t handle);
 
+// Remove a file OR an empty directory (relative paths resolve against the
+// cwd) — os64's one removal verb; there is no rmdir, by design (Plan 9's
+// remove(), not POSIX's split — see the ABI header for the history). 0 on
+// success, negative on failure: a read-only filesystem, no such path, or a
+// directory that still has contents. This is the call `rm` is built on —
+// its -r is just this verb applied depth-first.
+int64_t os64_unlink(const char *path);
+
+// Create a directory at `path` (relative paths resolve against the cwd).
+// 0 on success, negative on failure: a read-only filesystem (ext2, by
+// design), a parent that doesn't exist, or a name already taken. Atomic —
+// one call, unlike the three-step setuid dance early Unix made of it.
+// This is the call `mkdir` is built on; its undo is os64_unlink above —
+// the one removal verb covers empty directories, so no rmdir twin needed.
+int64_t os64_mkdir(const char *path);
+
 // Convenience: write a NUL-terminated string to the console (handle 1).
 int64_t os64_puts(const char *s);
 
