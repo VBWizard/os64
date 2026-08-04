@@ -147,7 +147,7 @@ off: no waiting on interrupt-delivered events, keep bodies short.
 | # | Name | Notes |
 |---|---|---|
 | 0 | `yield` | Genuine APIC self-IPI into the scheduler — same nesting/EOI semantics as the timer path. Returns immediately if nothing else is runnable |
-| 1 | `debug_log(msg)` | Copies a user string, prints `[user] ...` |
+| 1 | `debug_log(msg, flags)` | Copies a user string, logs `[user] ...`. flags bit `OS64_DEBUG_LOG_SERIAL` ALSO writes the line straight to the serial wire (panic's door) — an unredirectable beacon for harness markers, added the day a healthy logd claimed the log and starved the watching harness |
 | 2 | `exit(code)` | Stores task->retVal, `task_exit()`, never returns |
 | 3 | `write(handle, buf, len)` | Dispatches on the handle's tag: console, pipe write end (whole-or-block ≤ capacity; EPIPE ⇒ SIGPIPE terminate), or file (chunked, runs under kKernelPML4). Returns bytes written; partial progress reported over error |
 | 4 | `read(handle, buf, len)` | Dispatches on the tag: console keyboard (blocks), pipe read end (blocks; 0 = EOF = no writers left), or file (short near end, 0 AT end — same contract, zero file-awareness needed). Returns bytes read |
@@ -164,6 +164,19 @@ off: no waiting on interrupt-delivered events, keep bodies short.
 | 15 | `chdir(path)` | Resolve against cwd, CANONICALIZE (".."/"." collapse in vfs_canonicalize_path — the one place path hygiene happens), validate the target exists and is a directory via the real fs, store. Failure moves nothing. Children inherit cwd at spawn — which is why cd is a shell builtin, as it has been in every shell since the beginning |
 | 16–22 | *(reserved)* | The GUI block (window create/destroy/surface/present, event poll/wait, screen info) — numbers assigned in GRAPHICS.md before stat arrived; reserved means reserved |
 | 23 | `stat(path, entry_out)` | Fill one `os64_dirent_t` (the SAME struct readdir yields — stat is readdir for exactly one name; POSIX's separate `struct stat` is a fork os64 declines) for whatever `path` names, file or directory, without opening it. Resolves against cwd, routes through the mount table, per-fs via `dops->stat` (FAT: `f_stat`, root synthesized; ext2: inode resolve). 0 = filled; negative = nothing there. First consumer: husk's PATH search |
+| 24 | `reap(*code)` | The wait that doesn't wait: collect any one dead child NOW, or return 0 = "nobody has died" as an ordinary answer. Husk calls it at every prompt — a shell buries its own dead |
+| 25 | `sleep(ms)` | Park AT LEAST `ms` milliseconds; ms→ticks converts at the boundary, rounding UP to the live tick interval. `sleep(0)` = documented free yield. Returns 0, always (EINTR semantics wait on the SIGNALS.md ruling) |
+| 26 | `ticks(out)` | Fill `os64_ticks_t`: monotonic ticks since boot + the active tick rate. The stopwatch, not the calendar |
+| 27 | `memory(out)` | Fill `os64_memory_t`: one physical-memory snapshot under the allocator lock; every field's meaning fixed forever (see the header — that sentence took Linux 22 years) |
+| 28 | `printat(x, y, str)` | The widget plane: park a string at an absolute console cell — no cursor motion, no wrap, no scroll, clips at the edge. OUTSIDE the future VT stack by doctrine (the corner clock survives an F3) |
+| 29 | `time(out)` | Fill `os64_time_t`: UTC epoch seconds, configured zone offset, sub-second tick phase — one snapshot. The CALENDAR lives in libos64 (`<os64/date.h>`), exactly the split Unix landed on the third try |
+| 30 | `setenv(key, value)` | Set (NULL value = remove) one variable in the CALLER's env block. Visible to own getenv immediately, inherited by children spawned AFTER — env flows down at spawn, never sideways, which is why `export` is a husk builtin |
+| 31 | `klog_read(entries[], max)` | Consume up to `max` kernel log entries, oldest-first across every core. Reading CLAIMS the log (kernel serial drain stops) — claim is a heartbeat, lapses seconds after the reader dies, and EXCLUSIVE since 2026-08-04: a second live reader is refused (two readers = the log dealt randomly into two files) |
+| 32 | `sync(handle)` | Commit a written file: bytes AND the directory entry holding its length (FAT keeps length in memory until sync/close — an appended-to file reads EMPTY to everyone else until this). logd's syscall |
+| 33 | `thread(entry, arg, exit_stub)` | Second line of execution in THIS task (shared everything). Returns a HANDLE: read = join (blocks, yields the int64 return value), close = detach. No wait/detach verbs — the handle model already means all three |
+| 34 | `thread_exit(retval)` | End the CALLING thread, recording retval for whoever reads its handle. Main thread returning still ends the whole task (exit means exit — Chris's ruling, 2026-08-02) |
+| 35 | `unlink(path)` | os64's ONE removal verb: file or EMPTY directory (Plan 9's `remove()`, not POSIX's unlink/rmdir scar — ratified 2026-08-04, no rmdir ever). Refused, not half-done: read-only fs, missing path, non-empty directory. rm's `-r` is this verb depth-first |
+| 36 | `mkdir(path)` | Create a directory, one atomic call — what took Unix until 4.2BSD (V6's mkdir(1) was setuid-root mknod+2×link, a crash away from fsck). Mount-routed via `dops->mkdir`; refused on read-only fs, missing parent, name taken |
 
 **The environment block** (`abi/include/os64/env.h`): every task's env rides into
 its address space read-only at `TASK_ENV_VIRT` and reaches `main()` as the third

@@ -54,6 +54,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `/proc/meminfo` (text file, parsed with string code; "free" changed meaning when the page cache arrived; MemAvailable = 2014 errata for 1992 fields; linuxatemyram.com) | `memory(out)` syscall fills a typed struct: every field's meaning fixed FOREVER — `reclaimable` is the future page cache's seat (0 today, honestly), `available` = free+reclaimable summed BY THE KERNEL, `free + used == usable` is a live audit any program can check | Numbers may change; meanings never do. Userland never does column arithmetic | os64/memory.h, ABI |
 | `kill(2)` | Does not exist and never will. `echo kill > /proc/N/ctl` | kill(pid, SIGCONT) resumes a process — the name has lied since 1971; ctl is self-describing | PROC.md § ctl |
 | Unknown flags silently ignored (much of POSIX) | Unknown spawn flags / open modes / ctl verbs REFUSED | A silently dropped request "succeeded" and didn't | syscall.c boundaries |
+| `unlink(2)` + `rmdir(2)`, two removal verbs | ONE verb: `unlink` removes files AND empty directories; rmdir will never exist (ratified 2026-08-04) | POSIX's split is a pre-4.2BSD scar (setuid rmdir(1) hand-unlinking `.`, `..`, then the entry); Plan 9's `remove()` got it right | abi syscall_numbers.h #35, ABI #35 |
 
 ---
 
