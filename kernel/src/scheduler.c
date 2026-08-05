@@ -1031,13 +1031,13 @@ void scheduler_run_new_thread()
 		threadToStop=scheduler_get_running_thread(cls->threadID);
 
 		task_t *taskToStop = (task_t*)threadToStop->ownerTask;
-		printd(DEBUG_SCHEDULER,"*Found thread 0x%08x to take off CPU @0x%04x:0x%08x (exited=%u, retval=0x%08x).\n",
-				taskToStop->taskID, 
-				mp_isrSavedCS[apic_id],mp_isrSavedRIP[apic_id],
-				threadToStop->exited, 
-				threadToStop->retVal);
+        printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "*Found thread 0x%08x to take off CPU @0x%04x:0x%08x (exited=%u, retval=0x%08x).\n",
+               taskToStop->taskID,
+               mp_isrSavedCS[apic_id], mp_isrSavedRIP[apic_id],
+               threadToStop->exited,
+               threadToStop->retVal);
 
-		if (threadToStop->exited)
+        if (threadToStop->exited)
 		{
 			printd(DEBUG_SCHEDULER,"*Thread (0x%08x) ended, moving it to the zombie queue.\n",threadToStop->threadID);
 
@@ -1074,7 +1074,7 @@ void scheduler_run_new_thread()
     }
 	else
 	{
-        printd(DEBUG_SCHEDULER,"*Found thread to move to CPU (%x - %s)\n",threadToRun->threadID, taskToRun->exename);
+        printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "*Found thread to move to CPU (%x - %s)\n", threadToRun->threadID, taskToRun->exename);
         scheduler_change_thread_queue_locked(threadToRun, THREAD_STATE_RUNNING);    //queue lock held by scheduler_do
         scheduler_load_thread(cls, threadToRun);
         // The switch path: load just synced regs -> isr arrays, so the
@@ -1167,8 +1167,8 @@ void scheduler_do()
 	if (apic_id == 0)
 		tsc_recalibrate();
 
-    printd(DEBUG_SCHEDULER,"****************************** SCHEDULER *******************************\n");
-    printd(DEBUG_SCHEDULER,"scheduler: AP %u, current CR3 = 0x%08x\n",apic_id,getCR3());
+    printd(DEBUG_SCHEDULER,"***** SCHEDULER *****\n");
+    printd(DEBUG_SCHEDULER,"scheduler: AP %u\n",apic_id);
 #if SCHEDULER_DEBUG == 1
     uint64_t ticksBefore = rdtsc();
 #endif
@@ -1259,12 +1259,12 @@ void scheduler_do()
     printd(DEBUG_SCHEDULER, "*Scheduler: calls=%u, task switchs=%u, ticks since start=0x%08x\n", kSchedulerCallCount, kTaskSwitchCount, kTicksSinceStart);
     uint64_t diff = ticksAfter-ticksBefore;
     uint64_t timeInScheduler = (diff/kCPUCyclesPerSecond)*100;
-    printd(DEBUG_SCHEDULER,"%lu ticks expired (%lu CPU cycles)\n",timeInScheduler, diff);
+    printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "%lu ticks expired (%lu CPU cycles)\n", timeInScheduler, diff);
 #endif
     printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s\n", ((task_t *)(cls->task))->path);
-    printd(DEBUG_SCHEDULER,"**************************************************************************\n");
+    printd(DEBUG_SCHEDULER, "*********************\n");
 
-	// ── CPU-time accounting: the incoming thread's slice starts HERE ────────
+    // ── CPU-time accounting: the incoming thread's slice starts HERE ────────
 	// Covers both paths (switch and shortcut — a continued thread is still
 	// dispatched). Everything between acctPassStart and now was the
 	// scheduler's own time: it goes to this core's system bucket, which is

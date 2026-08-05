@@ -113,6 +113,10 @@ void init_os64_paging_tables();
 void paging_map_kernel_into_pml4(uintptr_t* pml4v);
 uintptr_t get_paging_table_page();
 uintptr_t get_paging_table_pageV();
+// The pool's odometer: pages the (never-refunding) bump pool has handed out.
+// Monotone by construction; the SLOPE under a workload is the diagnostic.
+uint64_t paging_pool_pages_used(void);
+extern uint64_t kPagingPagesCount;
 
 // Program PAT entry 7 = write-combining on THE CALLING CORE (IA32_PAT is
 // per-core and the SDM wants all cores uniform). BSP calls it before the

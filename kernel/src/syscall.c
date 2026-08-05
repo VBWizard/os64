@@ -2557,9 +2557,9 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	uint32_t want = (uint32_t)arg1;
 	if (want == 0)
 		return 0;
-	// Bound the batch: the kernel-side staging array below lives on this
-	// syscall's stack, and an unbounded `max` from ring 3 would be a user-
-	// controlled stack allocation — the exact shape of a stack-smash.
+	// Bound the batch: the singleton staging buffers below are sized for
+	// KLOG_READ_MAX_BATCH, and an unbounded `max` from ring 3 would run
+	// straight off their end.
 	if (want > KLOG_READ_MAX_BATCH)
 		want = KLOG_READ_MAX_BATCH;
 
@@ -2583,29 +2583,38 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// discipline as every other read: klog_dequeue runs under the log
 	// work-lock, and touching user pages there could demand-page while
 	// holding it.
-	log_entry_t *staged = kmalloc(want * sizeof(log_entry_t));
-	if (staged == NULL)
+	//
+	// SINGLETON staging buffers (2026-08-04, the paging-pool exhaustion
+	// hunt): this used to kmalloc/kfree BOTH arrays on EVERY call — and the
+	// draining daemon calls this in a tight loop, so under a DEBUG_SCHEDULER
+	// soak that was ~100 multi-page allocations a second feeding the
+	// allocator's address march (see the pool-sizing comment in paging.c).
+	// The exclusivity claim above is what makes a bare static safe: the CAS
+	// guarantees ONE reader at a time, ever, so these buffers have exactly
+	// one user by construction. Allocated once at max-batch size, kept for
+	// the life of the system — a daemon's working set, not a leak.
+	static log_entry_t *klogStaged = NULL;
+	static os64_logent_t *klogOut = NULL;
+	// Each buffer's init stands alone, and the refusal re-checks BOTH: a
+	// first call that wins one kmalloc and loses the other to OOM must not
+	// strand the loser NULL forever behind its partner's success (the retry
+	// path below would otherwise skip init and write through NULL).
+	if (klogStaged == NULL)
+		klogStaged = kmalloc(KLOG_READ_MAX_BATCH * sizeof(log_entry_t));
+	if (klogOut == NULL)
+		klogOut = kmalloc(KLOG_READ_MAX_BATCH * sizeof(os64_logent_t));
+	if (klogStaged == NULL || klogOut == NULL)
 		return SYSCALL_RESULT_INVALID;
+	log_entry_t *staged = klogStaged;
 
 	uint32_t got = klog_dequeue(staged, want);
 	if (got == 0)
-	{
-		kfree(staged);
 		return 0;   // nothing waiting — the daemon sleeps and asks again
-	}
 
 	// Translate to the ABI struct. The kernel's log_entry_t carries a TSC
 	// and internal padding that userland has no business depending on;
 	// this loop is the boundary where the internal shape stops mattering.
-	os64_logent_t *out = kmalloc(got * sizeof(os64_logent_t));
-	if (out == NULL)
-	{
-		kfree(staged);
-		return SYSCALL_RESULT_INVALID;   // NOTE: those entries are consumed
-		                                 // and lost — the one place this
-		                                 // path can drop, and it takes an
-		                                 // OOM to get there
-	}
+	os64_logent_t *out = klogOut;
 	for (uint32_t i = 0; i < got; i++)
 	{
 		out[i].ticks     = staged[i].ticks;
@@ -2618,10 +2627,8 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		memcpy(out[i].message, staged[i].message, OS64_LOG_MESSAGE_MAX);
 		out[i].message[OS64_LOG_MESSAGE_MAX - 1] = '\0';
 	}
-	kfree(staged);
 
 	bool ok = copy_to_user_buffer((void *)arg0, out, got * sizeof(os64_logent_t));
-	kfree(out);
 	return ok ? (uint64_t)got : SYSCALL_RESULT_BAD_USER_DATA;
 }
 

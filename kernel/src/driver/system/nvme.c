@@ -878,7 +878,20 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
 
         char* dmaBuffer = isWrite ? controller->dmaWriteBuffer : controller->dmaReadBuffer;
 
-        nvme_submission_queue_entry_t* cmd = kmalloc_aligned(sizeof(nvme_submission_queue_entry_t));
+        // The command lives on the STACK (2026-08-04, the paging-pool
+        // exhaustion hunt): nvme_submit_command COPIES the struct into the
+        // DMA-visible submission ring (subQueue[tail] = *cmd), so the heap
+        // allocation this used to do was pure ceremony — and expensive
+        // ceremony: one page-ALIGNED kmalloc/kfree per disk I/O, ~1,100/sec
+        // under a logd-on-ext2 soak, was the single largest driver of the
+        // allocator's address march (each aligned carve tours fresh
+        // territory whose lazy-HHDM mapping draws paging-pool pages that
+        // never come back). The memset stands in for kmalloc's
+        // zero-on-alloc, which was load-bearing for the fields not set
+        // below (cdw13-15, flags, metadata pointer).
+        nvme_submission_queue_entry_t cmdOnStack;
+        nvme_submission_queue_entry_t* cmd = &cmdOnStack;
+        memset(cmd, 0, sizeof(cmdOnStack));
         cmd->opc  = isWrite ? NVME_OPCODE_WRITE : NVME_OPCODE_READ;
         cmd->nsid = controller->nsid;
         cmd->prp1 = (uintptr_t)dmaBuffer;
@@ -936,7 +949,6 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
 
         if (prpCount > 2)
             free_prp_list(cmd->prp2, prpCount - 1);
-        kfree(cmd);
 
         userBufferOffset += transferLength;
         currentLBA += blockCount;
