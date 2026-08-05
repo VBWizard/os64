@@ -15,6 +15,7 @@
 // namespace, and the field drops straight into the IPv4 header's proto byte.
 
 #include <stdint.h>
+#include "os64/syscall_numbers.h"   // OS64_ERR_TIMEOUT — the alias below
 
 #define OS64_NET_UDP  17   // datagrams: each write is one packet, each read one packet
 #define OS64_NET_TCP  6    // streams: read/write bytes, like a pipe with a peer
@@ -57,10 +58,13 @@ typedef struct os64_netdest
 #define OS64_NET_ERR_REFUSED       (-9)  // kernel: TCP peer answered RST —
                                          //  the machine is there, that door
                                          //  is not open
-#define OS64_NET_ERR_TIMEOUT       (-10) // kernel: nobody answered in time —
-                                         //  a TCP handshake met silence, or
-                                         //  an os64_read_for() deadline
-                                         //  expired with nothing to show
+// kernel: nobody answered in time — a TCP handshake met silence, or an
+// os64_read_for() deadline expired with nothing to show. An ALIAS since
+// 2026-08-05: a timeout stopped being a network concept the day the console
+// learned one (top's poll for 'q'), so the value's true name lives with the
+// read contract in syscall_numbers.h and the dial table keeps this spelling
+// for its own readability.
+#define OS64_NET_ERR_TIMEOUT       OS64_ERR_TIMEOUT
 
 // The handle net_dial returns obeys the house read/write contract:
 //   write(h, buf, len)  — one call = ONE datagram (atomic; oversize is an

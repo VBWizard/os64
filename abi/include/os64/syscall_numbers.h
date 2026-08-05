@@ -38,6 +38,42 @@
 #define SYSCALL_STAT       23
 #define SYSCALL_REAP       24
 
+
+// ── read's patience: the 4th argument (ruled 2026-08-05) ────────────────────
+// read(handle, buf, len, timeout_ms) — arg3 says how long the call may WAIT
+// for a byte to exist, in milliseconds, and it means what it says:
+//
+//   0                 — wait ZERO ms: bytes if any are ready, OS64_ERR_TIMEOUT
+//                       if none, never a block. (The poll gait — what lets
+//                       top watch for 'q' between refreshes.)
+//   N                 — wait up to N ms, rounded UP to the tick like sleep();
+//                       OS64_ERR_TIMEOUT if the deadline passes byteless.
+//   OS64_WAIT_FOREVER — classic blocking read. libos64's plain os64_read
+//                       says this out loud; os64_read_for exposes the dial.
+//
+// Two pieces of history shaped this, one honored and one refused. Refused:
+// V7's O_NDELAY (1979) made an empty non-blocking read return 0 — the same 0
+// that means EOF — and that in-band lie festered for a decade until POSIX
+// invented O_NONBLOCK/EAGAIN as the apology. Here an empty wait returns
+// OS64_ERR_TIMEOUT, a verdict no other outcome shares, so "nothing yet" and
+// "nothing ever again" cannot be confused by construction. Also refused:
+// SO_RCVTIMEO's 0-means-forever, the wart tradition where the one honest
+// meaning of zero is unsayable. Honored: the poll()/select() tradition
+// (0 = now, forever spelled out), which is the family this call belongs to.
+//
+// The timeout is REFUSED (not silently ignored) on handles that don't honor
+// it — a pipe read that accepts a patience it won't keep is a lie with a
+// delay. The console honors it today; pipes and the net's conn handles grow
+// or carry it the day their consumers demand (the net branch already
+// speaks this contract on udp/tcp/icmp).
+#define OS64_WAIT_FOREVER  UINT64_C(0xFFFFFFFFFFFFFFFF)   // ((uint64_t)-1)
+
+// The empty-wait verdict: the deadline expired with nothing to show. Shares
+// its value with the net branch's OS64_NET_ERR_TIMEOUT (-10) on purpose —
+// when the branches merge, the net code aliases to THIS name, because a
+// timeout stopped being a network concept the day the console learned one.
+#define OS64_ERR_TIMEOUT   (-10)
+
 // sleep(ms) — park the calling thread for AT LEAST `ms` milliseconds.
 // The ABI speaks TIME; the kernel speaks ticks — the conversion happens at
 // the boundary, rounding UP to the ACTIVE scheduler interval (minimum one

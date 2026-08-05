@@ -34,8 +34,15 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len);
 int64_t os64_read(int32_t handle, void *buf, size_t len);
 
 // os64_read with a DEADLINE: identical contract, plus "I refuse to wait past
-// timeout_ms for the first byte/datagram". Expiry returns OS64_NET_ERR_TIMEOUT
-// (<os64/net.h>); 0 ms means block forever (== os64_read exactly).
+// timeout_ms for the first byte/datagram". Expiry returns OS64_ERR_TIMEOUT
+// (true name in <os64/syscall_numbers.h> with the full contract;
+// OS64_NET_ERR_TIMEOUT in the dial table is its alias). Since the ruling of
+// 2026-08-05, timeout_ms means what it says: 0 = wait ZERO ms (the poll
+// gait — data already arrived, or the verdict, never a block), N = deadline,
+// OS64_WAIT_FOREVER = block (== os64_read exactly). The original spelling
+// made 0 mean forever — SO_RCVTIMEO's wart, retired when the console
+// learned patience on the userland branch and zero's honest meaning was
+// finally needed (top polling for 'q').
 //
 // This is the deadline Unix never gave read() — 4.2BSD bolted select() on
 // beside it instead (1983); os64 puts the patience where the question is
@@ -43,9 +50,9 @@ int64_t os64_read(int32_t handle, void *buf, size_t len);
 //
 // Deadline granularity is the scheduler tick (10ms) — a timeout_ms of 1..10
 // is one tick of patience, not a microsecond fuse. Currently honored by NET
-// handles (udp/tcp/icmp); any other handle REFUSES a nonzero timeout rather
+// handles (udp/tcp/icmp); any other handle REFUSES a finite timeout rather
 // than silently ignoring it, until a real consumer earns it there.
-//     while ((n = os64_read_for(h, buf, sizeof buf, 1000)) != OS64_NET_ERR_TIMEOUT)
+//     while ((n = os64_read_for(h, buf, sizeof buf, 1000)) != OS64_ERR_TIMEOUT)
 //         { ...process reply... }        // ping's whole patience loop
 int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms);
 

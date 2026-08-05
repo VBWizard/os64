@@ -75,7 +75,7 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
     char buf[4];
     uint64_t h = os64_syscall2(SYSCALL_OPEN, (uint64_t)"hello", (uint64_t)"r");
     // (syscall4 with trailing 0: read's arg3 = deadline, 0 = block forever)
-    if (failed(h) || os64_syscall4(SYSCALL_READ, h, (uint64_t)buf, 4, 0) != 4 ||
+    if (failed(h) || os64_syscall4(SYSCALL_READ, h, (uint64_t)buf, 4, OS64_WAIT_FOREVER) != 4 ||
         buf[0] != 0x7f || buf[1] != 'E' || buf[2] != 'L' || buf[3] != 'F')
         exit_with(FAIL_REL_OPEN);
     os64_syscall1(SYSCALL_CLOSE, h);

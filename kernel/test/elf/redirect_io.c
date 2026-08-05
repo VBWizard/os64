@@ -73,7 +73,7 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
     if (failed(hIn))
         exit_with(FAIL_READ_BACK);
     // (syscall4 with trailing 0: read's arg3 = deadline, 0 = block forever)
-    if (os64_syscall4(SYSCALL_READ, hIn, (uint64_t)buf, 5, 0) != 5)
+    if (os64_syscall4(SYSCALL_READ, hIn, (uint64_t)buf, 5, OS64_WAIT_FOREVER) != 5)
         exit_with(FAIL_READ_BACK);
     os64_syscall1(SYSCALL_CLOSE, hIn);
     if (buf[0] != 'H' || buf[1] != 'e' || buf[2] != 'l' || buf[3] != 'l' || buf[4] != 'o')
@@ -98,7 +98,7 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
     hIn = os64_syscall2(SYSCALL_OPEN, (uint64_t)"/redir_t2.txt", (uint64_t)"r");
     if (failed(hIn))
         exit_with(FAIL_UPPER_OUTPUT);
-    if (os64_syscall4(SYSCALL_READ, hIn, (uint64_t)buf, 5, 0) != 5)
+    if (os64_syscall4(SYSCALL_READ, hIn, (uint64_t)buf, 5, OS64_WAIT_FOREVER) != 5)
         exit_with(FAIL_UPPER_OUTPUT);
     os64_syscall1(SYSCALL_CLOSE, hIn);
     if (buf[0] != 'H' || buf[1] != 'E' || buf[2] != 'L' || buf[3] != 'L' || buf[4] != 'O')

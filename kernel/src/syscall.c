@@ -1059,12 +1059,17 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	void *user_buffer = (void*)arg1;
 	size_t length = (size_t)arg2;
-	// arg3 = read deadline in MILLISECONDS; 0 = block forever (the eternal
-	// contract, and what os64_read passes). This is ping's demand made
-	// syscall: "read, but I refuse to wait past X for an answer." NOTE the
-	// stub contract: os64_read/os64_read_for now ALWAYS set this register —
-	// it used to be ring-3 garbage the handler ignored, and reading garbage
-	// as a deadline would give every old binary a random patience.
+	// arg3 = the read's PATIENCE in MILLISECONDS (contract at SYSCALL_READ in
+	// the abi header, ruled 2026-08-05): 0 = poll, N = deadline,
+	// OS64_WAIT_FOREVER = block — what os64_read passes. This began as
+	// ping's demand made syscall ("read, but I refuse to wait past X"); the
+	// original spelling made 0 mean forever, which was SO_RCVTIMEO's wart —
+	// zero's one honest meaning was unsayable — and the userland branch's
+	// console poll (top's 'q') forced the ruling both branches now share.
+	// NOTE the stub contract: os64_read/os64_read_for ALWAYS set this
+	// register — it used to be ring-3 garbage the handler ignored, and
+	// reading garbage as a deadline would give every old binary a random
+	// patience.
 	uint64_t timeout_ms = arg3;
 
 	core_local_storage_t *cls = get_core_local_storage();
@@ -1081,13 +1086,16 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// Lower the deadline onto the tick clock once, here, so the conn code
 	// below thinks only in ticks. Rounded UP: a 1ms deadline is a short
-	// wait, never "already expired". Net handles only, and the boundary
-	// REFUSES the argument anywhere it would be silently ignored (the
-	// tripwire doctrine: a pipe read that accepts a timeout it doesn't
-	// honor is a lie with a delay) — pipes/console/files grow it the day
-	// a real consumer demands it there.
+	// wait, never "already expired" — while 0ms stays exactly "already
+	// expired", which IS the poll gait (the conn loops check data before
+	// the clock, so a poll still drains whatever already arrived). Net
+	// handles only on this branch, and the boundary REFUSES the argument
+	// anywhere it would be silently ignored (the tripwire doctrine: a pipe
+	// read that accepts a timeout it doesn't honor is a lie with a delay) —
+	// the userland branch's console honors it now (top's 'q'); pipes/files
+	// grow it the day a real consumer demands it there.
 	uint64_t deadline = 0;
-	if (timeout_ms != 0)
+	if (timeout_ms != OS64_WAIT_FOREVER)
 	{
 		if (h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP)

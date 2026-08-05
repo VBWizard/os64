@@ -15,12 +15,15 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
 
 int64_t os64_read(int32_t handle, void *buf, size_t len)
 {
-    // The explicit 0 is load-bearing: arg3 is the read DEADLINE now, and
-    // before this stub passed it deliberately, that register was ring-3
-    // garbage the kernel ignored. A rebuilt world always says "forever"
-    // out loud rather than leaving patience to whatever was in r10.
+    // The explicit OS64_WAIT_FOREVER is load-bearing: arg3 is the read's
+    // PATIENCE (abi syscall_numbers.h, ruled 2026-08-05 — 0 now means POLL,
+    // not forever), and before this stub passed it deliberately, that
+    // register was ring-3 garbage the kernel ignored. A rebuilt world
+    // always states its patience out loud rather than leaving it to
+    // whatever was in r10.
     return (long)os64_syscall4(SYSCALL_READ, (uint64_t)handle,
-                               (uint64_t)buf, (uint64_t)len, 0);
+                               (uint64_t)buf, (uint64_t)len,
+                               OS64_WAIT_FOREVER);
 }
 
 int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms)
