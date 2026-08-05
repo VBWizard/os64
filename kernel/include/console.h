@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>   // uint64_t — console_read_deadline's tick deadline
 
 // The console: the READ side of stdin for text-mode userland (v1).
 //
@@ -22,12 +23,27 @@
 // the value never reaches ring 3.
 #define CONSOLE_READ_INTERRUPTED (-2L)
 
+// console_read_deadline returned because the deadline passed with no byte to
+// show. The read syscall translates this to OS64_ERR_TIMEOUT for ring 3;
+// like INTERRUPTED, the sentinel itself never leaves the kernel.
+#define CONSOLE_READ_TIMEOUT (-3L)
+
 // Block until at least one key is available, then copy up to `len` translated
 // ascii bytes into `buf` and return the count (>0). Unix terminal semantics:
 // a read returns as soon as there IS input, not only when `len` is filled.
 // Sleeps (zero CPU) while the buffer is empty; woken by console_wake_if_ready.
 // Returns CONSOLE_READ_INTERRUPTED if the caller has SIGINT pending.
 long console_read(char *buf, size_t len);
+
+// The same read with a patience limit: `deadline` is an ABSOLUTE kTicksSinceStart
+// value after which an empty wait gives up and returns CONSOLE_READ_TIMEOUT
+// (0 = no deadline — block forever; console_read is exactly that spelling).
+// A deadline already in the past is the POLL gait: one drain of whatever the
+// keyboard has translated, then the verdict, never a park. Pending EOF and
+// buffered bytes outrank the deadline — a poll that finds something delivers
+// it like any read. The ms→ticks conversion is the syscall boundary's job
+// (same doctrine as sleep(): the ABI speaks time, this file speaks ticks).
+long console_read_deadline(char *buf, size_t len, uint64_t deadline);
 
 // The line-discipline peek (the ISIG/VINTR seed): called by keyboard.c at the
 // delivery choke for every key-down, BEFORE the byte enters the console ring.

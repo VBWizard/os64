@@ -123,7 +123,8 @@ void tsc_recalibrate(void)
         // machine's clock is boot-subsystem news, and it must survive a
         // trimmed debug set — the first verification boot had it on
         // SCHEDULER and the recalibrator ran gagged for four minutes.
-        printd(DEBUG_BOOT, "tsc_recalibrate: %lu -> %lu cycles/sec (window %lus)\n",
+        // Now DEBUG_DIAG because DEBUG_BOOT isn't a catch-all either. 😏
+        printd(DEBUG_DIAG, "tsc_recalibrate: %lu -> %lu cycles/sec (window %lus)\n",
                kCPUCyclesPerSecond, newRate, dS);
         kCPUCyclesPerSecond = newRate;
     }

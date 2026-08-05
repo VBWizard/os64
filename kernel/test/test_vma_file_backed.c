@@ -4,6 +4,7 @@
 #include "memory/memcmp.h"
 #include "memory/memset.h"
 #include "memory/vma.h"
+#include "memory/paging.h"   // paging_walk_paging_table — "is this page mapped?"
 #include "exceptions.h"
 #include "smp_core.h"
 #include "vfs.h"
@@ -57,9 +58,25 @@ bool test_vma_file_backed_page_fault_resolved(void)
         TEST_FAIL("vma_file_backed_page_fault_resolved: Failed to create VMA");
     }
 
-    vma_add(get_core_local_storage()->task, vma);
+    task_t *task = get_core_local_storage()->task;
+    vma_add(task, vma);
 
-    uint64_t old_faults = kPageFaultCount;
+    // "Was the fault resolved?" is a question about THIS page, so ask it about
+    // this page: unmapped before the access, mapped after.
+    //
+    // It used to be asked of kPageFaultCount — ONE global counter bumped by
+    // every page fault on every core — with an assertion that it rose by
+    // EXACTLY ONE. That only holds on a machine where nothing else faults for
+    // the duration, which was true while the tests ran on an idle system and
+    // stopped being true the moment anything else was running: /bin/logd
+    // demand-paging its own ELF alongside the suite made the delta 2 or 3 and
+    // failed a test that was working perfectly. A test whose result depends on
+    // what OTHER cores are doing isn't testing what it claims to.
+    uintptr_t before = paging_walk_paging_table((pt_entry_t *)task->pml4v, test_addr);
+    if (before != 0 && before != 0xbadbadba) {
+        kRootFilesystem->fops->close(file);
+        TEST_FAIL("vma_file_backed_page_fault_resolved: page was already mapped — the read cannot fault");
+    }
 
     volatile uint8_t *ptr = (volatile uint8_t *)test_addr;
     uint8_t actual[16];
@@ -75,8 +92,9 @@ bool test_vma_file_backed_page_fault_resolved(void)
         TEST_FAIL("vma_file_backed_page_fault_resolved: Data mismatch");
     }
 
-    if (kPageFaultCount != old_faults + 1) {
-        TEST_FAIL("vma_file_backed_page_fault_resolved: Page fault not recorded");
+    uintptr_t after = paging_walk_paging_table((pt_entry_t *)task->pml4v, test_addr);
+    if (after == 0 || after == 0xbadbadba) {
+        TEST_FAIL("vma_file_backed_page_fault_resolved: page still unmapped — the fault was never resolved");
     }
 
     return true;

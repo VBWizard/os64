@@ -14,6 +14,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "pci_lookup.h"
+#include "msr.h"   // rdmsr64/wrmsr64 — pat_init_this_core programs IA32_PAT
 
 
 extern uintptr_t kKernelBaseAddressV;
@@ -176,7 +177,10 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPDPT present @ 0x%016lx\n",pdpt_page);
     } else {
         // Allocate new PDPT page
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPDPT not present - allocating it\n");
+	    // Pool-draw probe: plain DEBUG_PAGING (not DETAILED) so a soak can log
+	    // draws — rare events, ~640 lifetime — without the per-mapping spam.
+	    printd(DEBUG_PAGING, "PAGING: pool draw (PDPT) for VA 0x%016lx — %lu/%lu used\n",
+	           virtual_address, paging_pool_pages_used() + 1, kPagingPagesCount);
         uint64_t new_pdpt_phys = get_paging_table_page();
         pt_entry_t *new_pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pdpt_phys);
         memset(new_pdpt_page, 0, PAGE_SIZE);
@@ -195,7 +199,8 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
         pd_page = (pt_entry_t *)PHYS_TO_VIRT(pd_phys);
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPD present @ 0x%016lx\n", pd_page);
     } else {
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPD not present - allocating it\n");
+	    printd(DEBUG_PAGING, "PAGING: pool draw (PD) for VA 0x%016lx — %lu/%lu used\n",
+	           virtual_address, paging_pool_pages_used() + 1, kPagingPagesCount);
         // Allocate new PD page
         uint64_t new_pd_phys = get_paging_table_page();
         pt_entry_t *new_pd_page = (pt_entry_t *)PHYS_TO_VIRT(new_pd_phys);
@@ -216,11 +221,19 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPT present @ 0x%016lx\n", pt_page);
     } else {
         // Allocate new PT page
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPT not present - allocating it\n");
+	    printd(DEBUG_PAGING, "PAGING: pool draw (PT) for VA 0x%016lx — %lu/%lu used\n",
+	           virtual_address, paging_pool_pages_used() + 1, kPagingPagesCount);
         uint64_t new_pt_phys = get_paging_table_page();
         pt_entry_t *new_pt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pt_phys);
         memset(new_pt_page, 0, PAGE_SIZE);
-        if ((((uintptr_t)new_pt_page >> 32) & 0xFFFFFFFF) != 0xFFFF8000)
+        // Sanity: the pool page's VA must land in the HHDM window. The old
+        // form of this check compared bits 32-63 against 0xFFFF8000, which
+        // silently demanded phys < 4GB — false the moment the (honestly
+        // funded, ~20MB) pool lands above that line. Masking off the low 47
+        // bits (the physical part of an HHDM alias) and comparing what
+        // remains against kHHDMOffset asks the intended question at any
+        // physical address.
+        if (((uintptr_t)new_pt_page & ~(uintptr_t)0x7FFFFFFFFFFFULL) != kHHDMOffset)
 			panic("Bad page table entry address. (0x%016lx)  kHHDMOffset = 0x%016lx\n", new_pt_page, kHHDMOffset);
 		pd_page[PD_INDEX(virtual_address)] = new_pt_phys | tableRequiredFlags | PAGE_PRESENT;
         pt_page = new_pt_page;
@@ -414,6 +427,43 @@ uintptr_t get_paging_table_page()
 	return retVal;
 }
 
+// The pool's odometer (probe, 2026-08-04): how many pages has the bump
+// allocator handed out? Consumption here is MONOTONE — pages never come
+// back — so this number only climbs, and its SLOPE during a workload is the
+// diagnostic (the 640-page exhaustion hunt: allocator address-march ate one
+// pool page per 2MB of virgin territory toured). Reported once at
+// boot-complete and once a minute by the kernel park loop (shutdown.c).
+uint64_t paging_pool_pages_used(void)
+{
+	return (kPagingPagesCurrentPtr - kPagingPagesBaseAddressP) / PAGE_SIZE;
+}
+
+// Program PAT entry 7 = write-combining on this core (contract in paging.h;
+// the framebuffer's PAGE_WC mapping selects entry 7). IA32_PAT is 0x277:
+// eight one-byte entries, one per {PAT,PCD,PWT} index. We touch ONLY byte 7
+// — entries 0-6 keep their power-on values, so every existing mapping
+// (WB=0, PWT=1, PCD=2, PCD|PWT=3) means exactly what it always meant.
+//
+// The SDM's full memory-type-change liturgy (cache disable, wbinvd, TLB
+// flush, repeat) exists for REmapping pages a core has already cached under
+// the old type. Both call sites here run before this core has ever touched
+// the WC-tagged pages — the BSP before the kernel tables exist, each AP
+// during its own bring-up — so a wbinvd on either side of the write plus
+// the CR3 reload every core does moments later is the honest sufficient
+// version of the ceremony.
+#define IA32_PAT_MSR      0x277
+#define PAT_TYPE_WC       0x01ULL
+
+void pat_init_this_core(void)
+{
+	uint64_t pat = rdmsr64(IA32_PAT_MSR);
+	pat &= ~(0xFFULL << 56);              // clear entry 7 (default UC-)
+	pat |=  (PAT_TYPE_WC << 56);          // entry 7 = write-combining
+	__asm__ volatile("wbinvd" ::: "memory");
+	wrmsr64(IA32_PAT_MSR, pat);
+	__asm__ volatile("wbinvd" ::: "memory");
+}
+
 uintptr_t get_paging_table_pageV()
 {
 	uintptr_t retVal = get_paging_table_page();
@@ -460,18 +510,37 @@ void init_os64_paging_tables()
 	uint64_t rsp = 0;
 	uintptr_t physAddrLookup = 0;
 
-	uint64_t allocSize = kMaxPhysicalAddress / PAGE_SIZE;
-	// The pool formula above scales with physical RAM (one pool page per 16MB),
-	// but the ramdisk module's retro-map (below) consumes pool pages in
-	// proportion to the MODULE's size instead — one page table per 2MB mapped.
-	// A 512MB ramdisk would eat 256 pool pages (half the pool on an 8GB
-	// machine), so fund those page tables explicitly: PTs + a few extra for
-	// the PD/PDPT levels the mapping may also allocate.
+	// Fund "map every physical page once, at 4KB granularity" — for real this
+	// time. The old formula (kMaxPhysicalAddress / PAGE_SIZE, used as a BYTE
+	// size) was a unit collision: it yielded one pool page per 16MB of
+	// physical space, 8x short of the intent, and the shortfall went unnoticed
+	// for as long as nothing toured much address territory. Then the ext2
+	// write era arrived (2026-08-04): its scratch churn — 1KB kmalloc/kfree
+	// at ~1,100/sec — rode the allocator's next-fit address march (the carve
+	// path advances the wilderness block's start on every allocation, and its
+	// early array index wins the walk over every stranded hole), touring
+	// ~1MB/sec of virgin territory whose lazy-HHDM mappings drew one pool
+	// page per 2MB. 640 pages died in 809 seconds, and Chris called the march
+	// sight-unseen on a bet against the code. (The march itself is the
+	// allocator's to fix — hole-first walk order; this sizing just makes the
+	// pool honest regardless.)
+	//
+	// The math: one PT maps 512 pages (2MB), so PTs = maxphys/2MB; the
+	// PD/PDPT/PML4 levels above them are ~1/512th more each — round up
+	// generously with a flat slack term that also absorbs task-table churn
+	// (task page tables come from this pool too, and are not yet reclaimed
+	// at task death). On an 8GB guest this lands ~5,200 pages = ~20MB: real
+	// money in 1995, a rounding error today.
+	uint64_t poolPages = (kMaxPhysicalAddress / PAGE_SIZE) / 512   // PTs: map-once funded
+	                     + (kMaxPhysicalAddress / PAGE_SIZE) / (512 * 512) // PDs
+	                     + 64;                                     // PDPTs/PML4s + slack
+	// The ramdisk module's retro-map consumes pool pages in proportion to the
+	// MODULE's size — one page table per 2MB mapped — and the module isn't
+	// counted in kMaxPhysicalAddress's map-once budget, so fund it explicitly.
 	if (kRamdiskModuleSize > 0)
-		allocSize += ((kRamdiskModuleSize / (512 * PAGE_SIZE)) + 8) * PAGE_SIZE;
-	kPagingPagesCount = allocSize / PAGE_SIZE;
-	if (allocSize % PAGE_SIZE)
-		kPagingPagesCount++;
+		poolPages += (kRamdiskModuleSize / (512 * PAGE_SIZE)) + 8;
+	uint64_t allocSize = poolPages * PAGE_SIZE;
+	kPagingPagesCount = poolPages;
 	//Preallocate mapped pages for use when a new paging page is required by paging_map_page
 	kPagingPagesBaseAddressP = (uintptr_t)allocate_memory_aligned(allocSize);
 	kPagingPagesBaseAddressV = kPagingPagesBaseAddressP | kHHDMOffset;
@@ -553,7 +622,14 @@ void init_os64_paging_tables()
 	if (kFrameBuffer.buffer_size % PAGE_SIZE)
 		pagesToMap++;
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual framebuffer base (0x%016lx) to physical framebuffer base (0x%016lx), %u pages in new page tables\n", kFrameBuffer.base_address, physAddrLookup, pagesToMap);
-	paging_map_pages(pml4v, (uintptr_t)kFrameBuffer.base_address, physAddrLookup, pagesToMap, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	// WRITE-COMBINING since 2026-08-04 (was PAGE_PCD = full uncached): every
+	// store to the glass now batches into bursts instead of paying the
+	// uncached toll one write at a time. This is the other half of the
+	// shadow-buffer work — the shadow killed the VRAM READS, this kills the
+	// blit's store cost. See PAGE_WC in paging.h for the PAT plumbing and
+	// the fail-safe (a core without the PAT entry sees UC-, i.e. the old
+	// behavior).
+	paging_map_pages(pml4v, (uintptr_t)kFrameBuffer.base_address, physAddrLookup, pagesToMap, PAGE_PRESENT | PAGE_WRITE | PAGE_WC);
 
 	//Map the allocator struct array
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map memory status structures\n");

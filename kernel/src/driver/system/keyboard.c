@@ -398,6 +398,31 @@ void keyboard_handle_scancode(uint8_t scancode) {
     if (s_extended_pending) {
         keyboard_update_modifier_extended(code, !is_break);
         s_extended_pending = false;
+
+        // Arrow keys (extended make codes) become VT100 escape sequences on
+        // the input stream: ESC '[' A/B/C/D for Up/Down/Right/Left — the
+        // 1979 vocabulary every terminal since the VT100 has emitted, chosen
+        // for exactly that interop precedent (a future vim-over-serial reads
+        // these bytes unchanged; husk's history parser is merely their first
+        // customer). Until 2026-08-04 arrows were silently dropped here.
+        // Press-only: a release has no meaning on a character stream.
+        // (The xHCI keyboard's usage table owes the same three bytes for
+        // parity — its arrows are usages 0x4F-0x52 — when it next gets love.)
+        if (!is_break) {
+            char final = 0;
+            switch (code) {
+                case 0x48: final = 'A'; break;   // Up
+                case 0x50: final = 'B'; break;   // Down
+                case 0x4D: final = 'C'; break;   // Right
+                case 0x4B: final = 'D'; break;   // Left
+                default: break;
+            }
+            if (final != 0) {
+                keyboard_deliver_event(0x1B, code, s_modifiers, true);
+                keyboard_deliver_event('[',  code, s_modifiers, true);
+                keyboard_deliver_event(final, code, s_modifiers, true);
+            }
+        }
         return;
     }
 

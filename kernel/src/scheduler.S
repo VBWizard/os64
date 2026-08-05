@@ -3,6 +3,8 @@
 .code64
 .intel_syntax noprefix
 .extern mp_isrSavedCS, mp_isrSavedRIP, mp_isrSavedErrorCode, mp_isrSavedRAX, mp_isrSavedRBX, mp_isrSavedRCX, mp_isrSavedRDX
+.extern mp_lastIretqRIP
+.extern mp_rflagsTripValue, mp_rflagsTripCount
 .extern mp_isrSavedRSI, mp_isrSavedRDI, mp_isrSavedRBP, mp_isrSavedCR0, mp_isrSavedCR1, mp_isrSavedCR4, mp_isrSavedDS, mp_isrSavedES
 .extern mp_isrSavedR8, mp_isrSavedR9, mp_isrSavedR10, mp_isrSavedR11, mp_isrSavedR12, mp_isrSavedR13, mp_isrSavedR14, mp_isrSavedR15
 .extern mp_isrSavedFS, mp_isrSavedGS, mp_isrSavedSS, mp_isrSavedNumber, mp_isrSavedCR2, mp_isrSavedRSP, mp_isrSavedRFlags, mp_isrSavedStack
@@ -283,7 +285,7 @@ kernelProcess:
     
 	# Unconditionally set the IOPL bits of flags (TODO: Fix this)
     mov rbx, [mp_isrSavedRFlags + rax * 8]
-    or rbx, 0x3000              
+    or rbx, 0x3000
     mov [mp_isrSavedRFlags + rax * 8], rbx
 
     push rax
@@ -348,6 +350,31 @@ notCoreOneExiting:
 	# Yes these would still be on the stack if I didn't release them when saving the RSP last time the thread ran,
 	# but I'd rather keep the variables and stack in sync so my debug logging is never wrong
 	mov rbx, [mp_isrSavedRFlags + rax * 8]
+
+	# ── RFLAGS TRIPWIRE (SCHEDULER_STRAY_WRITE.md) ──────────────────────
+	# THIS read is the value the iretq actually consumes, so the judgment
+	# happens HERE — after this point the stray writer's window is two
+	# instructions wide instead of a whole dispatch. The thread structs
+	# were proven clean from a frozen guest; the corruption lands in the
+	# per-core slot, so anything with TF set or a bit outside the legal
+	# RFLAGS mask means the stray write JUST happened: impound the raw
+	# qword (it IS the clue — the 8/2 sighting decoded to a pointer into
+	# the PCI name table), bump the counter processSignals reports on,
+	# and sanitize so the boot SURVIVES to print the evidence instead of
+	# dying as a masked #DB/#GP/#UD. Legal mask 0x3D7ED7 = every defined
+	# RFLAGS bit except TF (the trap that single-stepped /idle2) and VM
+	# (impossible in long mode); 0x3000 = the IOPL bits OR'd in above.
+	# rcx already holds task state — borrowed via the stack (pop does not
+	# disturb the flags the AND just set).
+	push rcx
+	mov rcx, 0xFFFFFFFFFFC28128        # ~0x3D7ED7: TF, VM, reserved, 22+
+	and rcx, rbx
+	pop rcx
+	jz rflagsCleanForIretq
+	mov [mp_rflagsTripValue + rax * 8], rbx
+	lock inc qword ptr [mp_rflagsTripCount]
+	mov rbx, 0x3202                    # sane: IF + the IOPL bits, nothing else
+rflagsCleanForIretq:
 	push rbx
     mov rbx, [mp_isrSavedCS + rax * 8]
 	push rbx
@@ -362,8 +389,14 @@ notCoreOneExiting:
 invalidRIP:
 	nop
 overScheduleTestRIP:
-	mov r15, rbx
     pop rax
+	# Debug breadcrumb: the RIP this core is about to iretq to, by core.
+	# This was `mov r15, rbx` from the earliest days of the OS — fine while
+	# nothing used R15, but it clobbered every resumed thread's real R15
+	# (restored above from mp_isrSavedR15) and only -O0's register habits
+	# kept that from ever mattering. Working storage now: same breadcrumb,
+	# findable by name from gdb or the monitor, and R15 is a register again.
+	mov [mp_lastIretqRIP + rax * 8], rbx
 
 	mov bl, [mp_inScheduler + rax]
 	cmp bl,0

@@ -33,27 +33,36 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len);
 //     while ((n = os64_read(0, buf, sizeof buf)) > 0) { ...process n bytes... }
 int64_t os64_read(int32_t handle, void *buf, size_t len);
 
-// os64_read with a DEADLINE: identical contract, plus "I refuse to wait past
-// timeout_ms for the first byte/datagram". Expiry returns OS64_ERR_TIMEOUT
-// (true name in <os64/syscall_numbers.h> with the full contract;
-// OS64_NET_ERR_TIMEOUT in the dial table is its alias). Since the ruling of
-// 2026-08-05, timeout_ms means what it says: 0 = wait ZERO ms (the poll
-// gait — data already arrived, or the verdict, never a block), N = deadline,
-// OS64_WAIT_FOREVER = block (== os64_read exactly). The original spelling
-// made 0 mean forever — SO_RCVTIMEO's wart, retired when the console
-// learned patience on the userland branch and zero's honest meaning was
-// finally needed (top polling for 'q').
+// os64_read with a patience limit (the poll/deadline gait; full contract at
+// SYSCALL_READ in os64/syscall_numbers.h). timeout_ms means what it says:
+//   0                 — never blocks: bytes if some are ready, else
+//                       OS64_ERR_TIMEOUT immediately. This is how top
+//                       watches for 'q' between refreshes:
+//                           char c;
+//                           if (os64_read_for(0, &c, 1, 0) == 1 && c == 'q')
+//                               break;
+//   N                 — up to N ms, then OS64_ERR_TIMEOUT if still byteless:
+//                           while ((n = os64_read_for(h, buf, sizeof buf, 1000))
+//                                  != OS64_ERR_TIMEOUT)
+//                               { ...process reply... }   // ping's whole loop
+//   OS64_WAIT_FOREVER — identical to os64_read.
+// OS64_ERR_TIMEOUT is its own verdict, never 0 — an empty poll can never
+// impersonate end-of-input (the V7 O_NDELAY confusion, refused by design).
+// Its true name lives in <os64/syscall_numbers.h>; OS64_NET_ERR_TIMEOUT in
+// the dial table is an alias for the same value.
 //
 // This is the deadline Unix never gave read() — 4.2BSD bolted select() on
 // beside it instead (1983); os64 puts the patience where the question is
-// asked. Born as ping's demand: silence needed a return value.
+// asked. Born as ping's demand (silence needed a return value), and 0 meant
+// FOREVER for its first few weeks — SO_RCVTIMEO's wart — until the console
+// learned patience and top needed zero's honest meaning for its 'q' key.
 //
-// Deadline granularity is the scheduler tick (10ms) — a timeout_ms of 1..10
-// is one tick of patience, not a microsecond fuse. Currently honored by NET
-// handles (udp/tcp/icmp); any other handle REFUSES a finite timeout rather
-// than silently ignoring it, until a real consumer earns it there.
-//     while ((n = os64_read_for(h, buf, sizeof buf, 1000)) != OS64_ERR_TIMEOUT)
-//         { ...process reply... }        // ping's whole patience loop
+// Granularity is the scheduler tick (10ms), so a timeout_ms of 1..10 is one
+// tick of patience, not a microsecond fuse. HONORED BY: the console, and
+// dialed net handles (udp/tcp/icmp) — the two branches that grew this
+// independently, joined at the merge of 2026-08-05. Every other handle
+// REFUSES a finite patience (negative return) rather than silently
+// blocking, until a real consumer earns it there.
 int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms);
 
 // Read one LINE from `handle` into `buf` (cap bytes INCLUDING the
@@ -165,6 +174,31 @@ int64_t os64_pipe(int32_t h[2]);
 // void.
 int64_t os64_close(int32_t handle);
 
+// Commit a written file to the device — its bytes AND the directory entry
+// recording its new length. Until this (or a close) happens, a file you
+// are appending to reads as EMPTY to every other program, because that is
+// where FAT keeps the length. Returns 0, or negative for a handle that
+// isn't a file. A program that writes a file others read WHILE it holds
+// it open — a log daemon, a status file — needs this; a program that
+// writes and closes does not.
+int64_t os64_sync(int32_t handle);
+
+// Remove a file OR an empty directory (relative paths resolve against the
+// cwd) — os64's one removal verb; there is no rmdir, by design (Plan 9's
+// remove(), not POSIX's split — see the ABI header for the history). 0 on
+// success, negative on failure: a read-only filesystem, no such path, or a
+// directory that still has contents. This is the call `rm` is built on —
+// its -r is just this verb applied depth-first.
+int64_t os64_unlink(const char *path);
+
+// Create a directory at `path` (relative paths resolve against the cwd).
+// 0 on success, negative on failure: a read-only filesystem (ext2, by
+// design), a parent that doesn't exist, or a name already taken. Atomic —
+// one call, unlike the three-step setuid dance early Unix made of it.
+// This is the call `mkdir` is built on; its undo is os64_unlink above —
+// the one removal verb covers empty directories, so no rmdir twin needed.
+int64_t os64_mkdir(const char *path);
+
 // Convenience: write a NUL-terminated string to the console (handle 1).
 int64_t os64_puts(const char *s);
 
@@ -184,9 +218,20 @@ int64_t os64_printat(uint32_t x, uint32_t y, const char *s);
 // control, not I/O, and it moved home to <os64/proc.h> the day its owner
 // went looking for it there and rolled his eyes. 🙄)
 
-// Diagnostic: print a string to the kernel serial log (prefixed "[user] ").
-// Distinct from os64_puts (which goes to the console) — this is for test
-// output an offscreen/headless run can capture.
+// Diagnostic: put a line in the kernel LOG (prefixed "[user] "). Distinct
+// from os64_puts (which goes to the console). Where the line ends up follows
+// the log itself: the serial wire on a plain boot, or a logd's FILE once a
+// daemon has claimed the log — which a headless harness can't read until
+// shutdown. If the line's whole job is to be seen from OUTSIDE, live, use
+// os64_serial_log below.
 void os64_debug_log(const char *s);
+
+// The beacon: same log line, but ALSO written directly to the serial wire,
+// immediately, no matter who has claimed the log — the same door panic()
+// uses. For the handful of markers a verification harness greps for while
+// the OS runs (husk's rc breadcrumb, a fixture's checkpoint). Not for
+// logging: every call costs a VM exit, which is the exact bill logd exists
+// to retire.
+void os64_serial_log(const char *s);
 
 #endif // OS64_IO_H

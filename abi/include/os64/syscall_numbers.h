@@ -38,7 +38,6 @@
 #define SYSCALL_STAT       23
 #define SYSCALL_REAP       24
 
-
 // ── read's patience: the 4th argument (ruled 2026-08-05) ────────────────────
 // read(handle, buf, len, timeout_ms) — arg3 says how long the call may WAIT
 // for a byte to exist, in milliseconds, and it means what it says:
@@ -144,19 +143,135 @@
 // grave). Fails only when the env block is full.
 #define SYSCALL_SETENV     30
 
+// klog_read(entries, max) — take up to `max` kernel log entries, oldest
+// first across every core, into an os64_logent_t array (os64/klog.h).
+// Returns the count taken (0 = nothing waiting right now, so the caller
+// sleeps; negative = refused). Entries are REMOVED from the kernel rings
+// by this call — reading is consuming, because the reader has taken
+// responsibility for them.
+//
+// Calling this CLAIMS the log: the kernel's own logd stops draining to
+// serial while a reader is live, which is the whole point (steady-state
+// logging moves off a 115200-baud wire and onto a file). The claim is a
+// heartbeat — a reader that dies or hangs loses it within seconds and the
+// kernel resumes serial by itself. Mechanism here, policy (where the
+// bytes go) in the daemon; see os64/klog.h for the argument.
+#define SYSCALL_KLOG_READ  31
+
+// sync(handle) — commit a written file to the device: the bytes AND the
+// directory entry that says how long the file now is. Returns 0, or
+// negative if the handle isn't a file or the filesystem can't sync.
+//
+// This exists because "I wrote it" and "anyone else can read it" are two
+// different claims on a FAT volume. FatFs holds the new length in memory
+// and writes the directory entry on sync or close, so a file being
+// appended to by a live process reads as EMPTY to every other program
+// until one of those happens — which is precisely how a log file looked
+// like nothing was being logged while the daemon wrote to it steadily.
+// Consumer-driven, like every syscall here: logd is the program that
+// needed durability, so durability got a name.
+#define SYSCALL_SYNC       32
+
+// thread(entry, arg, exit_stub) — start a second line of execution inside
+// THIS task, sharing everything: the same address space, the same heap,
+// the same open handles. Returns a HANDLE, or negative.
+//
+// Reading that handle blocks until the thread finishes and yields its
+// return value (an int64_t); closing it means "I don't care what you
+// return." That is the whole API — no wait verb, no detach verb, no
+// thread-id-reuse hazard, because the handle model already means all
+// three (the same move the network listener makes: read IS the wait).
+//
+// exit_stub is a USERLAND address, supplied by libos64: the kernel seeds
+// it as the return address on the new thread's stack, so a thread
+// function that simply returns lands there and the stub calls
+// thread_exit with the value in RAX. It cannot be a kernel address —
+// ring 3 would fault the instant it tried to return into one.
+//
+// Threads share an address space, so they need NO copy-on-write; that is
+// fork's problem, and fork is the next customer for this same plumbing.
+#define SYSCALL_THREAD      33
+
+// thread_exit(retval) — end the CALLING thread only, recording retval for
+// whoever reads its handle. The task lives on while other threads run.
+// A program's main thread returning still ends the whole task (exit means
+// exit — Chris's ruling, 2026-08-02): threads do not keep a dead process
+// breathing.
+#define SYSCALL_THREAD_EXIT 34
+
+// unlink(path) — remove a file OR an empty directory: os64's ONE removal
+// verb. Named unlink because that is what the operation honestly is — the
+// DIRECTORY ENTRY goes away and the storage follows — and that sentence is
+// just as true for a directory as for a file. The program that calls it is
+// free to be called rm.
+//
+// There is deliberately NO rmdir and never will be (ratified 2026-08-04,
+// the day rm -r shipped and proved the contract). This is Plan 9's shape —
+// one remove() for both — not POSIX's, whose unlink/rmdir split is a scar,
+// not a design: before 4.2BSD, rmdir(1) was a setuid-root program that
+// unlink()ed ".", then "..", then the entry itself, three raw steps a crash
+// could leave half-done, and when 4.2BSD made directory removal atomic it
+// kept the two verbs it had inherited. os64 declines the scar. Every
+// filesystem's rm op owes this same contract — FatFs's f_unlink grants it
+// natively, and the ext2 write driver was built to it the same afternoon
+// the contract was ratified (2026-08-04: ext2_rm, promise kept).
+//
+// Returns 0 on success. Refused, not half-done: a read-only filesystem
+// (os64's ext2 ROOT mount stays read-only until ratified writable — the
+// driver itself writes since 2026-08-04), a path that isn't there, a file
+// or directory another handle holds OPEN (ext2 refuses rather than racing
+// the reader), or a directory that still has contents — emptying it first
+// is the caller's
+// job, which is what rm -r's depth-first walk is.
+#define SYSCALL_UNLINK 35
+
+// mkdir(path) — create a directory. Returns 0, or negative: read-only
+// filesystem (ext2 by design), a parent that doesn't exist, or a name
+// already taken. One call, atomic, done.
+//
+// That last word is the whole history: Unix went its FIRST DECADE without
+// this syscall. V6/V7's mkdir(1) was a SETUID-ROOT PROGRAM that built a
+// directory out of three separate privileged steps — mknod(), then link()
+// for ".", then link() for ".." — and a crash (or a well-timed signal)
+// between them left a half-wired directory for fsck to untangle. 4.2BSD
+// (1983) finally made it one atomic kernel operation. os64 starts where
+// they landed. Removal is not mkdir's mirror here: unlink (above) is the
+// one removal verb for files AND empty directories, so mkdir needs no
+// rmdir twin — and will never get one.
+#define SYSCALL_MKDIR 36
+
+// debug_log() FLAGS — arg1. Zero is the everyday call: the message goes to
+// the kernel log rings, tagged "[user]", and travels wherever the log
+// travels (serial drainer, or a claimed logd's file).
+//
+// SERIAL puts the line on the serial WIRE too, immediately and directly —
+// the same door panic() uses — regardless of who has claimed the log. This
+// exists because the log pipeline WORKING is what broke watching a live
+// boot from outside: once logd claims the log, every marker lands in a file
+// on a disk image the host can't read until shutdown. A verification
+// harness (or a human tailing the wire) needs a handful of beacons that
+// cannot be redirected. Use it for beacons, not for logging — every byte
+// here costs a VM exit, which is the exact bill logd exists to avoid.
+#define OS64_DEBUG_LOG_SERIAL  0x1
+
 // net_dial(dest) — open a network conversation. arg0 = const os64_netdest_t*
 // (os64/net.h): WHERE (ip, host order — ruling #2: the kernel owns the wire),
 // WHICH DOOR (port), HOW (protocol). Returns a handle you read() and write()
 // like any other, or negative. The Plan 9 dial STRING ("udp!10.0.2.2!53")
 // never crosses this boundary — libos64's os64_dial() parses it into this
 // struct (ruling #1: kernel speaks structs, the library speaks strings).
-// v1 speaks UDP; TCP takes the same struct in Phase 4.
-// (Historically 28 for a few uncommitted hours on the net branch — then the
-// userland branch minted printat/time/setenv at 28-30 in parallel, and the
-// merge ceded the numbers to the elder commits. Two branches, one registry:
-// the merge is where the registry gets reconciled, and this comment is the
-// scar that says so.)
-#define SYSCALL_NET_DIAL   31
+//
+// THE SCAR, now with two rings (2026-08-05). This call was 28 for a few
+// uncommitted hours, then 31 for the whole life of the net branch — and
+// BOTH times the userland branch had already minted those numbers in
+// parallel (printat/time/setenv at 28-30; klog_read/sync/thread at 31-33).
+// The rule both reconciliations followed, stated once so the third time is
+// cheap: TWO BRANCHES, ONE REGISTRY, and the merge cedes the numbers to the
+// ELDER commits. A syscall number is not a name — it is an index into a
+// table that ring 3 compiles against, so whoever shipped it first keeps it
+// and the newcomer moves. Renumbering the newcomer costs one rebuild;
+// renumbering the incumbent costs every binary ever built.
+#define SYSCALL_NET_DIAL   37
 
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.

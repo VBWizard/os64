@@ -62,6 +62,13 @@ it perform the privilege drop and stack switch natively, and it restores
 RFLAGS from the frame — so user tasks resume with IF=1. (The old
 `retfq`-based ring-3 path left user code running with interrupts off.)
 
+> **OPEN BUG — an unhealed scar.** Something writes 8 stray bytes into
+> `mp_isrSavedRFlags[core]` between `scheduler_load_thread` and the `iretq`.
+> The thread structures are clean; only the per-core array is hit. It has been
+> masquerading as an intermittent `#GP` on `/idle2` for weeks, and finally
+> confessed as a `#DB` on 2026-08-02 when `DR6.BS` named single-stepping as the
+> cause. Full forensics, method and next step: **`SCHEDULER_STRAY_WRITE.md`**.
+
 ## The core invariants (each one is a healed scar)
 
 1. **Read all five interrupt-frame fields BEFORE the CR3 switch.** The frame

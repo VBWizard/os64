@@ -29,11 +29,12 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `$?`, exit code 0 = success | Bourne 1977; last pipeline stage speaks for the job |
 | 128+signo death codes (130, 137) | Human-legible corpse tags, kept even though signal *bits* diverged |
 | `cd` as a builtin | Inherited cwd at spawn makes it structural, same as every shell since V6 |
+| The `-NUM` count form (`tail -40`, `head -20`, `grep -3`) | POSIX marks it OBSOLESCENT and it stays anyway, as an opt-in `numeric_alias` row in os64_args. The ambiguity POSIX cites — collisions with negative operands and with option bundling — does not exist in this grammar (bundles are letters; no program declares a digit as an option letter), so the objection is inherited, not earned. Decades of muscle memory is a real interface requirement in an OS with one daily user (args.h, 2026-08-01) |
 | cwd-first, then PATH walk; argv[0] stays as typed | V6 behavior, colon-separated PATH (V7's gift) |
 | Ctrl+letter = control codes; Ctrl+D = EOT = EOF | 1963 semantics, done properly (one-shot EOF, then normal reads) |
 | ELF, SysV x86-64 calling convention | Interop with the toolchain — a *specific reason*, per the philosophy |
 | Syscall args in RDI/RSI/RDX/R10/R8/R9 | Hardware forces R10-for-RCX; happens to match Linux |
-| ext2 on-disk format | FFS re-expressed; read-only by design (FAT keeps boot/interop forever) |
+| ext2 on-disk format | FFS re-expressed; FULL read/write since 2026-08-04, judged by the host's own e2fsck (`make fsck-ext2`); root stays mounted read-only until ratified (FAT keeps boot/interop forever) |
 
 ---
 
@@ -53,6 +54,10 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `/proc/meminfo` (text file, parsed with string code; "free" changed meaning when the page cache arrived; MemAvailable = 2014 errata for 1992 fields; linuxatemyram.com) | `memory(out)` syscall fills a typed struct: every field's meaning fixed FOREVER — `reclaimable` is the future page cache's seat (0 today, honestly), `available` = free+reclaimable summed BY THE KERNEL, `free + used == usable` is a live audit any program can check | Numbers may change; meanings never do. Userland never does column arithmetic | os64/memory.h, ABI |
 | `kill(2)` | Does not exist and never will. `echo kill > /proc/N/ctl` | kill(pid, SIGCONT) resumes a process — the name has lied since 1971; ctl is self-describing | PROC.md § ctl |
 | Unknown flags silently ignored (much of POSIX) | Unknown spawn flags / open modes / ctl verbs REFUSED | A silently dropped request "succeeded" and didn't | syscall.c boundaries |
+| `unlink(2)` + `rmdir(2)`, two removal verbs | ONE verb: `unlink` removes files AND empty directories; rmdir will never exist (ratified 2026-08-04) | POSIX's split is a pre-4.2BSD scar (setuid rmdir(1) hand-unlinking `.`, `..`, then the entry); Plan 9's `remove()` got it right | abi syscall_numbers.h #35, ABI #35 |
+| `unlink` of an open file succeeds (blocks freed at last close) | REFUSED while any handle holds the file/dir open (in-band busy) | Ruled 2026-08-04: zero recycled-blocks window, no orphan machinery; Unix's unlink-while-open trick gets built the day a consumer needs it — consumer-driven | ext2_internal.h (open-refcount doctrine) |
+| `fsync(2)` matters (write-back caches defer everything) | ext2 writes are FULL WRITE-THROUGH: data + inode committed before write() returns; `sync` is an already-kept promise | No block cache to flush, and a file being appended reads at true length to everyone immediately — honestly better than FAT's looks-empty-until-sync (which is why sync exists at all). A future block cache re-earns sync | ext2_write.c durability doctrine |
+| `O_NONBLOCK` open flag + `EAGAIN` errno; `SO_RCVTIMEO` where 0 = block forever | read() carries its patience as an argument: 0 = wait zero ms (poll), N = deadline, `OS64_WAIT_FOREVER` = block; empty wait returns `OS64_ERR_TIMEOUT`, its own verdict | Ruled 2026-08-05. V7's O_NDELAY let an empty read return EOF's 0 — a decade-long in-band lie POSIX had to apologize for with O_NONBLOCK/EAGAIN; and SO_RCVTIMEO's 0-means-forever makes zero's one honest meaning unsayable. os64 follows the poll()/select() tradition: zero means zero, forever is spelled out. Refused (not ignored) on handles that don't honor it | abi syscall_numbers.h #4 |
 
 ---
 

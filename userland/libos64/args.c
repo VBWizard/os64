@@ -41,6 +41,29 @@ static const os64_optspec_t *find_short(const os64_args_t *a, char c)
 	return NULL;
 }
 
+// Is this token the classic "-NUM" form — a '-' followed by at least one
+// digit and NOTHING but digits? "-40" yes; "-4x" no; "-" no. Deliberately
+// strict: a token that is ALMOST a number is a typo, and typos deserve the
+// normal unknown-option error rather than a silent reinterpretation.
+static int a_is_numeric_token(const char *tok)
+{
+	if (tok[0] != '-' || tok[1] == '\0')
+		return 0;
+	for (const char *p = tok + 1; *p != '\0'; p++)
+		if (*p < '0' || *p > '9')
+			return 0;
+	return 1;
+}
+
+// The one spec row (if any) that claimed the -NUM form.
+static const os64_optspec_t *find_numeric(const os64_args_t *a)
+{
+	for (int i = 0; i < a->nspecs; i++)
+		if (a->specs[i].numeric_alias && a->specs[i].takes_value)
+			return &a->specs[i];
+	return NULL;
+}
+
 static const os64_optspec_t *find_long(const os64_args_t *a, const char *name, size_t len)
 {
 	for (int i = 0; i < a->nspecs; i++)
@@ -98,6 +121,21 @@ int32_t os64_args_next(os64_args_t *a)
 		return OS64_ARG_END;
 
 	char *tok = a->argv[a->index];
+
+	// "-40": the classic count form, if a spec claimed it. Checked BEFORE
+	// the short-option path, which would otherwise hunt for an option
+	// letter '4' and fail. A program that did NOT claim it falls straight
+	// through and gets the old unknown-option error, unchanged.
+	if (!a->no_more_opts && a_is_numeric_token(tok))
+	{
+		const os64_optspec_t *spec = find_numeric(a);
+		if (spec != NULL)
+		{
+			a->index++;
+			a->value = tok + 1;   // the digits, without the '-'
+			return spec->letter;
+		}
+	}
 
 	// After "--", or for anything not option-shaped (including a lone "-",
 	// which conventionally names stdin): positional.
@@ -241,6 +279,11 @@ void os64_args_help(const os64_args_t *a, const char *usage)
 		else
 			os64_printf("  -%c    %-12s %s\n", s->letter, "",
 			            s->help ? s->help : "");
+		// An option that also answers to "-40" says so, on its own line —
+		// generated from the same table as everything else, so the help
+		// can't drift from what the parser accepts.
+		if (s->numeric_alias && s->takes_value)
+			os64_printf("  -NUM  %-12s %s\n", "", "same as the option above");
 	}
     os64_printf("  -help        display this help and exit\n");
 }

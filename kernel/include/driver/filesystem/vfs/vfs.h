@@ -296,7 +296,17 @@ struct file_operations
 	int (*sync)(vfs_file_t* vfs_file);
     int (*close)(vfs_file_t* vfs_file);
 	int (*flush) (void *f);
-	int (*rm) (const char *filename);
+	// Delete a file. The path arrives fs-local — mount prefix already
+	// stripped — exactly like open's.
+	//
+	// The vfs_fs argument is not decoration: FatFs addresses volumes by
+	// number ("2:/os64.log"), so an rm with no filesystem cannot name the
+	// file it is being asked to delete. This slot sat in the struct from the
+	// beginning taking only a filename, which is why nothing ever implemented
+	// it. A filesystem with no write path simply leaves it NULL, and
+	// syscall_unlink reports read-only rather than dispatching through zero
+	// (see the same lesson in fat_glue.c's disk_write).
+	int (*rm) (const char *filename, vfs_filesystem_t* vfs_fs);
 	int (*initialize) (vfs_filesystem_t* device);
 	int (*uninitialize) (vfs_filesystem_t* device);
 };
@@ -353,6 +363,23 @@ vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tai
 // Returns 1 = entry filled, 0 = no more (or dir isn't a mount root).
 // Pure kMountTable string scan — no disk I/O, safe from any CR3.
 int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry);
+
+// Does (device, partNo) back a mount whose filesystem can write? The
+// stray-write tripwire's question (block_verify_write_allowed): a disk write
+// is legitimate only if the MOUNTED filesystem over that partition installed
+// a write path — and the per-mount fops copy is the authority, because that
+// is where a read-only ext2 mount's write slot is NULL even though a
+// write-capable table exists elsewhere. Not mounted ⇒ false: nothing
+// legitimate writes to a partition no filesystem has claimed. Pure
+// kMountTable scan — no disk I/O, safe from any context/CR3.
+bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo);
+
+// The tripwire's second question, asked only while composing the panic
+// message: is (dev, partNo) mounted at all? Distinguishes "mounted
+// read-only" (a write aimed at a filesystem that refused the pen) from "not
+// mounted" (a write aimed at nothing — the classic misroute). Same pure
+// scan, same any-context safety.
+bool vfs_partition_mounted(block_device_info_t *dev, int partNo);
 
 // Resolve `path` against `cwd` into a CANONICAL absolute path in `out`:
 // relative paths are prefixed with cwd, "." disappears, ".." pops a component

@@ -76,6 +76,32 @@ static void pipe_wake_thread(thread_t *w)
 	scheduler_wake_isleep_thread(w);
 }
 
+// Take a registered waiter OUT of its slot — but only if it has actually
+// finished parking. Called under p->lock.
+//
+// THE TRAP THIS GUARDS (found on the net branch, 2026-08-01): there is a
+// window between a thread REGISTERING as waiter (under the lock) and it
+// actually reaching ISLEEP (the sigaction park runs after the lock drops).
+// The scheduler's wake primitive only moves parked threads — waking a thread
+// still in that window is a silent no-op. If the waker has ALSO cleared the
+// slot, the registration is gone, no later sweep can find the sleeper, and it
+// eats its full 1-second backstop. The signature is unmistakable once seen:
+// the net stack's first ICMP boot measured every echo at exactly 100 ticks of
+// "round trip" — that is TICKS_PER_SECOND, the backstop, not the network.
+// Leaving a not-yet-parked waiter REGISTERED instead costs one scheduler pass
+// (~10ms worst case): the next sweep re-tests the condition, finds the waiter
+// parked by then, and wakes it. This helper is what makes the "leave the
+// waiter slot set" promise above pipe_wake_thread actually TRUE — the old
+// code cleared the slot first and hoped.
+static thread_t *pipe_claim_parked_waiter(thread_t *volatile *slot)
+{
+	thread_t *t = *slot;
+	if (t == NULL || t->threadState != THREAD_STATE_ISLEEP)
+		return NULL;   // nobody, or mid-park: leave the registration for the sweep
+	*slot = NULL;
+	return t;
+}
+
 pipe_t *pipe_create(void)
 {
 	pipe_t *p = (pipe_t *)kmalloc(sizeof(pipe_t));
@@ -152,10 +178,9 @@ void pipe_close_read_end(pipe_t *p)
 		p->readers--;
 	// Last reader gone: any writer blocked for space is now writing into the
 	// void. Wake it so it can discover that and fail (SIGPIPE) rather than
-	// sleep forever waiting for a drain that will never come.
-	thread_t *w = (p->readers == 0) ? p->writeWaiter : NULL;
-	if (w)
-		p->writeWaiter = NULL;
+	// sleep forever waiting for a drain that will never come. (A writer still
+	// mid-park stays registered; the sweep's readers==0 arm delivers the news.)
+	thread_t *w = (p->readers == 0) ? pipe_claim_parked_waiter(&p->writeWaiter) : NULL;
 	uint32_t nr = p->readers, nw = p->writers;
 	spinlock_release_irqrestore(&p->lock, flags);
 
@@ -174,10 +199,9 @@ void pipe_close_write_end(pipe_t *p)
 		p->writers--;
 	// Last writer gone: THIS IS EOF. A reader blocked on an empty pipe must be
 	// woken to discover it — otherwise it waits forever for a byte that can
-	// never arrive. (The single most important wake in the whole file.)
-	thread_t *r = (p->writers == 0) ? p->readWaiter : NULL;
-	if (r)
-		p->readWaiter = NULL;
+	// never arrive. (The single most important wake in the whole file. A reader
+	// still mid-park stays registered; the sweep's writers==0 arm is its EOF.)
+	thread_t *r = (p->writers == 0) ? pipe_claim_parked_waiter(&p->readWaiter) : NULL;
 	uint32_t nr = p->readers, nw = p->writers;
 	spinlock_release_irqrestore(&p->lock, flags);
 
@@ -223,8 +247,8 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 			size_t left = p->count;
 
 			// We just freed space — a writer parked for room can proceed.
-			thread_t *w = p->writeWaiter;
-			p->writeWaiter = NULL;
+			// (One still mid-park stays registered for the sweep instead.)
+			thread_t *w = pipe_claim_parked_waiter(&p->writeWaiter);
 			spinlock_release_irqrestore(&p->lock, flags);
 
 			if (w)
@@ -317,8 +341,8 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 			size_t buffered = p->count;
 
 			// Bytes are in: a reader parked on an empty pipe can proceed.
-			thread_t *r = p->readWaiter;
-			p->readWaiter = NULL;
+			// (One still mid-park stays registered for the sweep instead.)
+			thread_t *r = pipe_claim_parked_waiter(&p->readWaiter);
 			spinlock_release_irqrestore(&p->lock, flags);
 
 			if (r)
@@ -401,22 +425,19 @@ void pipe_wake_if_ready(void)
 		uint64_t flags = spinlock_acquire_irqsave(&p->lock);
 
 		// A reader can proceed if there are bytes, OR if the last writer left
-		// (that is its EOF, and it must be woken to see it).
+		// (that is its EOF, and it must be woken to see it). The claim helper
+		// only takes a waiter that has FINISHED parking — one registered but
+		// not yet asleep stays in the slot for the next pass, because waking
+		// it now would silently do nothing and lose the registration.
 		thread_t *r = NULL;
-		if (p->readWaiter != NULL && (p->count > 0 || p->writers == 0))
-		{
-			r = p->readWaiter;
-			p->readWaiter = NULL;
-		}
+		if (p->count > 0 || p->writers == 0)
+			r = pipe_claim_parked_waiter(&p->readWaiter);
 
 		// A writer can proceed if there is any room, OR if the last reader left
 		// (that is its EPIPE, and it must be woken to see it).
 		thread_t *w = NULL;
-		if (p->writeWaiter != NULL && (p->count < PIPE_CAPACITY || p->readers == 0))
-		{
-			w = p->writeWaiter;
-			p->writeWaiter = NULL;
-		}
+		if (p->count < PIPE_CAPACITY || p->readers == 0)
+			w = pipe_claim_parked_waiter(&p->writeWaiter);
 
 		spinlock_release_irqrestore(&p->lock, flags);
 

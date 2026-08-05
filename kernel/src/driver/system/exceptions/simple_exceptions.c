@@ -178,6 +178,41 @@ void handle_general_protection_fault(uint64_t error_code, uint64_t rip) {
     exception_panic("General Protection Fault (#GP) occurred!", rip, error_code);
 }
 
+// Every CPU exception that had no gate until 2026-08-01. They share one
+// handler because the point isn't to RECOVER from them — it's to say which
+// one happened. An unpopulated gate makes the CPU raise #GP instead, whose
+// error code names the IDT slot it couldn't deliver; that is how a debug
+// exception spent an afternoon impersonating a protection fault in the
+// idle loop. A named panic costs nothing and answers the first question.
+static const char *exception_name(uint64_t vector)
+{
+    switch (vector)
+    {
+        case 1:  return "Debug Exception (#DB) — single-step or breakpoint";
+        case 2:  return "Non-Maskable Interrupt (NMI)";
+        case 3:  return "Breakpoint (#BP) — an int3 executed";
+        case 4:  return "Overflow (#OF)";
+        case 5:  return "BOUND Range Exceeded (#BR)";
+        case 7:  return "Device Not Available (#NM) — FPU/SSE used before CR0 setup";
+        case 10: return "Invalid TSS (#TS)";
+        case 11: return "Segment Not Present (#NP)";
+        case 12: return "Stack-Segment Fault (#SS)";
+        case 16: return "x87 Floating-Point Error (#MF)";
+        case 17: return "Alignment Check (#AC)";
+        case 19: return "SIMD Floating-Point Exception (#XM)";
+        default: return "Unexpected CPU exception";
+    }
+}
+
+void handle_unexpected_exception(uint64_t vector, uint64_t error_code, uint64_t rip)
+{
+    // The vector number goes in the banner too: a reader who doesn't have
+    // the Intel manual open still gets something greppable.
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s [vector %lu]", exception_name(vector), vector);
+    exception_panic(msg, rip, error_code);
+}
+
 
 static void log_page_fault_bits(uint64_t error_code)
 {

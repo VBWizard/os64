@@ -184,9 +184,20 @@ int64_t os64_printat(uint32_t x, uint32_t y, const char *s)
                                   (uint64_t)s);
 }
 
+// flags = 0, EXPLICITLY: the kernel reads arg1 as the flags word now, and a
+// syscall1 stub would let whatever garbage ring 3 left in that register
+// randomly promote a log line to a serial beacon.
 void os64_debug_log(const char *s)
 {
-    os64_syscall1(SYSCALL_DEBUG_LOG, (uint64_t)s);
+    os64_syscall2(SYSCALL_DEBUG_LOG, (uint64_t)s, 0);
+}
+
+// The beacon variant: same log line, but ALSO written to the serial wire
+// immediately and directly, past any logd claim. See io.h for when this is
+// the right call (rarely).
+void os64_serial_log(const char *s)
+{
+    os64_syscall2(SYSCALL_DEBUG_LOG, (uint64_t)s, OS64_DEBUG_LOG_SERIAL);
 }
 
 int64_t os64_open(const char *path, const char *mode)
@@ -224,4 +235,32 @@ int64_t os64_pipe(int32_t h[2])
 int64_t os64_close(int32_t handle)
 {
     return (long)os64_syscall1(SYSCALL_CLOSE, (uint64_t)(int64_t)handle);
+}
+
+int64_t os64_sync(int32_t handle)
+{
+    return (long)os64_syscall1(SYSCALL_SYNC, (uint64_t)(int64_t)handle);
+}
+
+// Remove a file or an empty directory. Relative paths resolve against the
+// cwd, like open's.
+//
+// Named for what actually happens rather than for the program that calls it:
+// the directory entry is unlinked and the storage follows — for directories
+// too, which is why os64 has no rmdir. Returns 0 on success, negative on
+// failure — a read-only filesystem (os64's ext2), a path that isn't there,
+// or a directory that isn't empty.
+int64_t os64_unlink(const char *path)
+{
+    return (long)os64_syscall1(SYSCALL_UNLINK, (uint64_t)path);
+}
+
+// Create a directory. Relative paths resolve against the cwd, like open's.
+//
+// One atomic call — the kernel owes us that much since 4.2BSD showed it was
+// possible. Returns 0 on success, negative on failure — a read-only
+// filesystem (os64's ext2), a missing parent, or a name already in use.
+int64_t os64_mkdir(const char *path)
+{
+    return (long)os64_syscall1(SYSCALL_MKDIR, (uint64_t)path);
 }

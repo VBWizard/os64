@@ -95,12 +95,18 @@ char startTime[100] = {0};
 uint64_t lastTime = 0;
 task_t* kKernelTask;
 uint64_t kCPUCyclesPerSecond;
-// Boot TSC calibration window, seconds (TSCCAL= on the cmdline). Default 15:
-// ±1 tick of boundary slop across 1500 ticks is ±0.07%, and the continuous
-// recalibrator tightens it from there. Droppable ("TSCCAL=5") for anyone who
-// gets tired of waiting — the owner's own words — at the usual price: a
-// 5s window starts life at ±0.2% and leans harder on the recalibrator.
-int kTSCCalibrationSeconds = 15;
+// Boot TSC calibration window, seconds (TSCCAL= on the cmdline).
+//
+// Default 5 (was 15 until 2026-08-01). The accuracy argument for 15 was
+// real but small: ±1 tick of boundary slop across 1500 ticks is ±0.07%,
+// versus ±0.2% across 500. What tipped it is that the continuous
+// recalibrator erases that gap within seconds of boot, while the 15
+// seconds are paid IN FULL on every single boot, by a human, watching a
+// progress line — and this OS gets booted dozens of times an evening.
+// Ten seconds of somebody's life beats 0.13% of initial timer accuracy
+// that a background task is about to fix anyway. Raise it for a session
+// that genuinely needs a tight cold start: TSCCAL=15.
+int kTSCCalibrationSeconds = 5;
 task_t* kIdleTasks[MAX_CPUS];
 task_t* kLogDTask;
 task_t* kKWorkerTask;
@@ -368,6 +374,35 @@ void kernel_init()
 	// underneath it — this mount works even if no disk was found.
 	procfs_mount();
 
+	// ── The log daemon, as early as a log daemon can possibly start ──────────
+	// HERE, and not down with husk, is the whole point of the LOGD= flag. The
+	// expensive part of a DEBUG_DETAILED boot is everything BELOW this line —
+	// driver bring-up, the test suite, the shell — and a daemon started after
+	// all that would have automated away the typing while leaving the cost.
+	// This is the first instruction in the boot where a filesystem exists to
+	// exec from, so it is the earliest honest answer.
+	//
+	// Nothing is lost by starting late anyway: the kernel has been queueing
+	// into the per-core rings since boot and (with LOGD= set) deliberately not
+	// draining them to serial, so logd's first read collects the ENTIRE boot,
+	// first line included, and writes it to the file at memcpy speed.
+	if (kLogdPath[0] && kRootFilesystem != NULL)
+	{
+		printf("Launching /bin/logd -> %s ...\n", kLogdPath);
+		char *logdArgv[] = { "/bin/logd", kLogdPath };
+		task_t *logdTask = task_create("/bin/logd", 2, logdArgv, kKernelTask, false, THREAD_NO_AFFINITY);
+		if (logdTask)
+			scheduler_submit_new_task(logdTask);
+		else
+		{
+			// Say so on the glass: with LOGD= set the kernel is holding serial
+			// output back for a daemon that now cannot arrive, and the wait's
+			// own deadline is the only thing that will notice. Better to name
+			// it here than to leave a silent 30 seconds.
+			printf("  /bin/logd launch failed (not on the image?) — serial logging resumes shortly\n");
+		}
+	}
+
 	// TEMP (userland bring-up, remove when the shell exists): launch
 	// /bin/hello as a FIRST-CLASS scheduled application from the normal boot
 	// flow — task_create + scheduler_submit_new_task, then walk away. No test
@@ -536,6 +571,11 @@ void kernel_main()
 	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
+	// PAT entry 7 = write-combining, BEFORE the kernel tables are built —
+	// init_os64_paging_tables maps the framebuffer PAGE_WC (PAT index 7),
+	// and the entry must mean WC before the first store lands through it.
+	// Each AP does the same for itself during bring-up (smp_core.c).
+	pat_init_this_core();
 	init_os64_paging_tables();
 	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
 	__asm__ volatile ("cli\nmov rsp, %0\nsti\n" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));

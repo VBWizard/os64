@@ -4,6 +4,7 @@
 
 #include "memory/kmalloc.h"
 #include "memory/memset.h"
+#include "memory/memcmp.h"
 #include "strcmp.h"
 #include "strlen.h"
 #include "memory/memcpy.h"
@@ -23,11 +24,10 @@
 #include "kernel.h"   // kTicksSinceStart — the TCP tests time their failures
 #include "driver/filesystem/vfs/vfs.h"
 #include "driver/filesystem/ext2/ext2_vfs.h"   // ext2_fops/ext2_dops (real-partition test)
-#include "ff.h"   // FR_OK/FR_EXIST — the dops->mkdir seam leaks FatFs codes
-                  // today (known wart); test_vfs_write_mkdir names them
 #include "shared_object.h"
 #include "env.h"
 #include "sprintf.h"
+#include "console.h"   // console_read_deadline — the read-patience test
 #include "driver/net/net_device.h"   // test_net_wire — the driver's first packets
 #include "driver/net/net_wire.h"     // Phase 2 stack tests build real wire bytes
 #include "driver/net/net_checksum.h"
@@ -42,6 +42,7 @@
 #include "driver/net/icmp_conn.h"
 #include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
 
+extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
 extern vfs_filesystem_t *kRootFilesystem;
@@ -216,12 +217,18 @@ bool test_vma_page_fault_resolved()
     vma_t *vma = vma_create(test_addr, test_addr + PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, NULL, 0);
     vma_add(task, vma);
 
-    uint64_t old_faults = kPageFaultCount;
+    // Unmapped before, mapped after — see the long note in
+    // test_vma_file_backed.c. The old form watched the GLOBAL fault counter
+    // for a delta of exactly one, which any concurrently running task
+    // (/bin/logd faulting in its own ELF, say) turns into a false failure.
+    uintptr_t before = paging_walk_paging_table((pt_entry_t *)task->pml4v, test_addr);
+    bool wasUnmapped = (before == 0 || before == 0xbadbadba);
 
     volatile uint32_t *ptr = (volatile uint32_t *)test_addr;
     *ptr = 0xBEEFCAFE; // Should trigger page fault and be resolved
 
-    bool ok = (kPageFaultCount == old_faults + 1);
+    uintptr_t after = paging_walk_paging_table((pt_entry_t *)task->pml4v, test_addr);
+    bool ok = wasUnmapped && (after != 0 && after != 0xbadbadba) && (*ptr == 0xBEEFCAFE);
 
     paging_unmap_page((pt_entry_t *)task->pml4v, test_addr);
     if (task->mmaps != NULL && vma->listItem != NULL) {
@@ -1560,14 +1567,20 @@ static bool test_vfs_write_mkdir(void)
         return false;
     }
 
-    // 2. mkdir. The dops->mkdir seam leaks raw FatFs codes today (a known
-    //    wart — no second filesystem implements mkdir yet to force the
-    //    neutral contract): FR_OK fresh, FR_EXIST on a persistent image
-    //    that's been through this test before. Both are success here.
+    // 2. mkdir. The seam speaks neutral 0/-1 as of 2026-08-04 (ext2 became
+    //    the second implementation, so the contract stopped being
+    //    theoretical and fat_mkdir's FRESULT leak was flattened; ff.h left
+    //    this file the same day). A persistent image that's been through
+    //    this test before reports -1 for the already-existing directory —
+    //    the stat fallback tells that apart from a real failure.
     int r = kRootFilesystem->dops->mkdir("/testdir", kRootFilesystem);
-    if (r != FR_OK && r != FR_EXIST) {
-        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - mkdir /testdir failed (%d)\n", r);
-        return false;
+    if (r != 0) {
+        os64_dirent_t de;
+        if (kRootFilesystem->dops->stat("/testdir", &de, kRootFilesystem) != 0
+            || !(de.flags & OS64_DE_DIR)) {
+            printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - mkdir /testdir failed (%d) and it doesn't already exist\n", r);
+            return false;
+        }
     }
 
     // 3. A file INSIDE the new directory — proves the directory is real.
@@ -1590,6 +1603,334 @@ static bool test_vfs_write_mkdir(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_vfs_write_mkdir (create/write/read-back, mkdir, nested file)\n");
+    return true;
+}
+
+// ── test_ext2_secondary_write ───────────────────────────────────────────────
+// The ext2 WRITE driver's proving ground (2026-08-04 — the day os64 wrote
+// its first ext2 byte). Runs against the WRITABLE SECONDARY ext2 mount
+// (/ext2), which exists only on FAT-root boots — the full-suite entry, per
+// the limine.conf doctrine. On the default ext2-root boot the root is
+// (deliberately) still read-only and there is no secondary ext2 mount, so
+// this SKIPs honestly. The other judge is host-side: `make fsck-ext2` after
+// this suite must stay green — e2fsck recomputes every structure this
+// driver maintains.
+static bool test_ext2_secondary_write(void)
+{
+    // Find the writable ext2 secondary in the mount table by its prefix
+    // (the GPT partition name is "ext2", authored by the build).
+    vfs_filesystem_t *fs = NULL;
+    for (int i = 0; i < kMountCount; i++)
+        if (strcmp(kMountTable[i].prefix, "/ext2") == 0)
+        {
+            fs = kMountTable[i].fs;
+            break;
+        }
+    if (fs == NULL || fs->fops == NULL || fs->fops->write == NULL)
+    {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_secondary_write (no writable /ext2 mount on this boot)\n");
+        return true;
+    }
+
+    static const char msg1[] = "Hello from the write era";        // 24 bytes
+    static const char msg2[] = "appended";                        // 8 bytes
+    static const char msg3[] = "truncated and rewritten";         // 23 bytes
+    char buf[64];
+    vfs_file_t *f = NULL;
+
+    // 1. Create, write, close, reopen, read back byte-exact.
+    if (fs->fops->open(&f, "/__wtest.txt", "c", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - create /__wtest.txt failed\n");
+        return false;
+    }
+    if (fs->fops->write(f, msg1, sizeof(msg1) - 1) != (int)(sizeof(msg1) - 1)) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - write to fresh file failed\n");
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->fops->open(&f, "/__wtest.txt", "r", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - reopen after create failed\n");
+        return false;
+    }
+    int n = fs->fops->read(f, buf, sizeof(buf));
+    fs->fops->close(f);
+    f = NULL;
+    if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - read-back mismatch (n=%d)\n", n);
+        return false;
+    }
+
+    // 2. Append; verify the concatenation and the stat'd size.
+    if (fs->fops->open(&f, "/__wtest.txt", "a", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - append open failed\n");
+        return false;
+    }
+    if (fs->fops->write(f, msg2, sizeof(msg2) - 1) != (int)(sizeof(msg2) - 1)) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - append write failed\n");
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);
+    f = NULL;
+    os64_dirent_t de;
+    if (fs->dops->stat("/__wtest.txt", &de, fs) != 0 ||
+        de.size != (sizeof(msg1) - 1) + (sizeof(msg2) - 1)) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - post-append size wrong (%lu)\n", de.size);
+        return false;
+    }
+
+    // 3. Truncate via "w": size drops to 0 territory, then rewrite.
+    if (fs->fops->open(&f, "/__wtest.txt", "w", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - truncating open failed\n");
+        return false;
+    }
+    if (fs->dops->stat("/__wtest.txt", &de, fs) != 0 || de.size != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - size not 0 after truncate (%lu)\n", de.size);
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->write(f, msg3, sizeof(msg3) - 1);
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->fops->open(&f, "/__wtest.txt", "r", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - reopen after truncate failed\n");
+        return false;
+    }
+    n = fs->fops->read(f, buf, sizeof(buf));
+    fs->fops->close(f);
+    f = NULL;
+    if (n != (int)(sizeof(msg3) - 1) || memcmp(buf, msg3, sizeof(msg3) - 1) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - post-truncate read-back mismatch (n=%d)\n", n);
+        return false;
+    }
+
+    // 4. Growth across the single-indirect boundary. At 1KB blocks the
+    //    direct blocks end at byte 12,287; a 16KB file forces the indirect
+    //    chain into existence. Self-describing 16-byte records, same idea
+    //    as pattern.bin.
+    if (fs->fops->open(&f, "/__wbig.bin", "c", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - create /__wbig.bin failed\n");
+        return false;
+    }
+    char rec[17];
+    for (uint32_t i = 0; i < 1024; i++) {
+        sprintf(rec, "%08u:os64wr\n", i);     // exactly 16 bytes
+        if (fs->fops->write(f, rec, 16) != 16) {
+            printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - pattern write failed at record %u\n", i);
+            fs->fops->close(f);
+            return false;
+        }
+    }
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->dops->stat("/__wbig.bin", &de, fs) != 0 || de.size != 16384) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - /__wbig.bin size %lu != 16384\n", de.size);
+        return false;
+    }
+    if (fs->fops->open(&f, "/__wbig.bin", "r", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - reopen /__wbig.bin failed\n");
+        return false;
+    }
+    // The record straddling the direct/indirect boundary (bytes 12272-12303
+    // cover 12287|12288) and the final record.
+    fs->fops->seek(f, 12272, SEEK_SET);
+    n = fs->fops->read(f, buf, 32);
+    sprintf(rec, "%08u:os64wr\n", 767u);      // record 767 = bytes 12272..12287
+    if (n != 32 || memcmp(buf, rec, 16) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - boundary record 767 mismatch\n");
+        fs->fops->close(f);
+        return false;
+    }
+    sprintf(rec, "%08u:os64wr\n", 768u);      // record 768 = first indirect bytes
+    if (memcmp(buf + 16, rec, 16) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - boundary record 768 mismatch\n");
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->seek(f, -16, SEEK_END);
+    n = fs->fops->read(f, buf, 16);
+    sprintf(rec, "%08u:os64wr\n", 1023u);
+    if (n != 16 || memcmp(buf, rec, 16) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - final record mismatch\n");
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);
+    f = NULL;
+
+    // 5. A hole: seek far past end, write one record; the gap reads zeros.
+    if (fs->fops->open(&f, "/__whole.bin", "c", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - create /__whole.bin failed\n");
+        return false;
+    }
+    fs->fops->seek(f, 20480, SEEK_SET);
+    sprintf(rec, "%08u:os64wr\n", 9999u);
+    fs->fops->write(f, rec, 16);
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->dops->stat("/__whole.bin", &de, fs) != 0 || de.size != 20496) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - hole-file size %lu != 20496\n", de.size);
+        return false;
+    }
+    if (fs->fops->open(&f, "/__whole.bin", "r", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - reopen /__whole.bin failed\n");
+        return false;
+    }
+    fs->fops->seek(f, 5000, SEEK_SET);
+    n = fs->fops->read(f, buf, 16);
+    bool zeros = (n == 16);
+    for (int i = 0; zeros && i < 16; i++)
+        if (buf[i] != 0)
+            zeros = false;
+    if (!zeros) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - hole did not read as zeros\n");
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->seek(f, 20480, SEEK_SET);
+    n = fs->fops->read(f, buf, 16);
+    fs->fops->close(f);
+    f = NULL;
+    if (n != 16 || memcmp(buf, rec, 16) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - post-hole record mismatch\n");
+        return false;
+    }
+
+    // 6. mkdir; a file inside proves it's a real directory; readdir sees the
+    //    file and (Plan 9 doctrine) no dot entries.
+    if (fs->dops->mkdir("/__wdir", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - mkdir /__wdir failed\n");
+        return false;
+    }
+    if (fs->fops->open(&f, "/__wdir/inner.txt", "c", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - create in new dir failed\n");
+        return false;
+    }
+    fs->fops->write(f, msg1, sizeof(msg1) - 1);
+    fs->fops->close(f);
+    f = NULL;
+    vfs_directory_t *d = NULL;
+    if (fs->dops->open(&d, "/__wdir", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - opendir /__wdir failed\n");
+        return false;
+    }
+    bool saw_inner = false, saw_dots = false;
+    while (fs->dops->read(d, &de) == 1) {
+        if (strcmp(de.name, "inner.txt") == 0)
+            saw_inner = true;
+        if (de.name[0] == '.' )
+            saw_dots = true;
+    }
+    fs->dops->close(d);
+    if (!saw_inner || saw_dots) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - dir listing wrong (inner=%d dots=%d)\n",
+               saw_inner, saw_dots);
+        return false;
+    }
+
+    // 7. The one removal verb, all four verdicts: non-empty dir refused,
+    //    nonexistent refused, file removed, then-empty dir removed.
+    if (fs->fops->rm("/__wdir", fs) == 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm of NON-empty dir succeeded (must refuse)\n");
+        return false;
+    }
+    if (fs->fops->rm("/__no_such_thing", fs) == 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm of nonexistent path succeeded\n");
+        return false;
+    }
+    if (fs->fops->rm("/__wdir/inner.txt", fs) != 0 ||
+        fs->dops->stat("/__wdir/inner.txt", &de, fs) == 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm file failed (or stat still sees it)\n");
+        return false;
+    }
+    if (fs->fops->rm("/__wdir", fs) != 0 ||
+        fs->dops->stat("/__wdir", &de, fs) == 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm empty dir failed (or stat still sees it)\n");
+        return false;
+    }
+
+    // 8. Ruling 5 on glass: rm and truncating-"w" both refuse a file that is
+    //    OPEN, then succeed once it's closed.
+    if (fs->fops->open(&f, "/__wtest.txt", "r", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - hold-open failed\n");
+        return false;
+    }
+    if (fs->fops->rm("/__wtest.txt", fs) == 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm of an OPEN file succeeded (must refuse)\n");
+        fs->fops->close(f);
+        return false;
+    }
+    vfs_file_t *f2 = NULL;
+    if (fs->fops->open(&f2, "/__wtest.txt", "w", fs) == 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - truncating open of an OPEN file succeeded\n");
+        fs->fops->close(f2);
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->fops->rm("/__wtest.txt", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm after close failed\n");
+        return false;
+    }
+
+    // 9. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
+    //    indirect chain, /__whole.bin a sparse map. e2fsck audits the wake.
+    if (fs->fops->rm("/__wbig.bin", fs) != 0 || fs->fops->rm("/__whole.bin", fs) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - cleanup rm failed\n");
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (create/append/truncate/indirect/hole/mkdir/rm/busy-refusal)\n");
+    return true;
+}
+
+// ── test_console_read_deadline ──────────────────────────────────────────────
+// The read-patience contract (ruled 2026-08-05), proved at the console layer:
+// a poll never parks, a timed read gives up on schedule. Deliberately
+// TOLERANT of a human typing during boot — a physical keyboard's queue can't
+// be asserted empty, so "a byte arrived" is always an acceptable outcome;
+// what the test refuses to accept is a poll that BLOCKS or a deadline that
+// doesn't expire. (Any byte this test happens to eat was typed before husk
+// existed to want it.)
+static bool test_console_read_deadline(void)
+{
+    char c;
+
+    // 1. The poll gait: deadline already now. Must return, byte or verdict,
+    //    without parking — bounded by one tick of scheduler jitter, not by
+    //    the console's one-second backstop nap.
+    uint64_t t0 = kTicksSinceStart;
+    long r = console_read_deadline(&c, 1, kTicksSinceStart);
+    uint64_t elapsed = kTicksSinceStart - t0;
+    if (r != CONSOLE_READ_TIMEOUT && r != 1) {
+        printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - poll returned %ld (want byte or timeout)\n", r);
+        return false;
+    }
+    if (elapsed > 2) {
+        printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - poll took %lu ticks (a poll must not wait)\n", elapsed);
+        return false;
+    }
+
+    // 2. The timed gait: 3 ticks of patience. On the quiet path the verdict
+    //    must land at the deadline — not early (patience is a promise) and
+    //    not a backstop-second late (the shortened nap must hold).
+    t0 = kTicksSinceStart;
+    r = console_read_deadline(&c, 1, kTicksSinceStart + 3);
+    elapsed = kTicksSinceStart - t0;
+    if (r == CONSOLE_READ_TIMEOUT) {
+        if (elapsed < 3 || elapsed > 20) {
+            printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - 3-tick patience expired after %lu ticks\n", elapsed);
+            return false;
+        }
+    } else if (r != 1) {
+        printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - timed read returned %ld\n", r);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_console_read_deadline (poll + 3-tick patience)\n");
     return true;
 }
 
@@ -1719,6 +2060,56 @@ static bool test_ring3_memory(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_ring3_memory (fields sane, books balance at rest/mid-allocation/post-unmap)\n");
+    return true;
+}
+
+// os64's first ring-3 threads (2026-08-02). /bin/threadtest starts three
+// threads, hands each a different argument, joins all three by READING
+// their handles, checks every return value, and verifies that all three
+// wrote into the same global array — which is what proves they were
+// threads sharing one address space rather than three processes.
+//
+// The fixture is silent when it passes and chatty when it fails; the
+// verdict below is the only line a healthy boot prints. Step codes are
+// 0x1B2EADxx (see threadtest.c).
+#define THREAD_TEST_RETVAL 0x1B2EAD00UL
+
+static bool test_ring3_threads(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_threads (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *task = task_create("/bin/threadtest", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - task_create returned NULL\n");
+        return false;
+    }
+
+    scheduler_submit_new_task(task);
+
+    // Each worker burns ~2M iterations so the three genuinely overlap
+    // instead of finishing single-file — that spin is the point, and it is
+    // why this waits 5s rather than the usual 3.
+    for (int i = 0; i < 500 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - fixture still running after 5s "
+               "(a thread that never exits, or a join that never woke)\n");
+        return false;
+    }
+
+    if (task->retVal != THREAD_TEST_RETVAL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - retVal=0x%lx, expected 0x%lx "
+               "(0x1B2EADxx names the failed step; see apps/threadtest/threadtest.c)\n",
+               task->retVal, (uint64_t)THREAD_TEST_RETVAL);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_threads (3 threads created, joined by handle, "
+           "return values correct, shared address space intact)\n");
     return true;
 }
 
@@ -2615,6 +3006,7 @@ static void register_builtin_tests(void)
     test_register("ring3_stat", test_ring3_stat, TEST_PHASE_POSTBOOT);
     test_register("ring3_sleep", test_ring3_sleep, TEST_PHASE_POSTBOOT);
     test_register("ring3_memory", test_ring3_memory, TEST_PHASE_POSTBOOT);
+    test_register("ring3_threads", test_ring3_threads, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
     test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);
     test_register("net_ping", test_net_ping, TEST_PHASE_POSTBOOT);
@@ -2626,6 +3018,8 @@ static void register_builtin_tests(void)
     test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_POSTBOOT);
     test_register("net_tcp_fetch_ring3", test_net_tcp_fetch_ring3, TEST_PHASE_POSTBOOT);
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
+    test_register("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT);
+    test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

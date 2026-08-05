@@ -29,14 +29,66 @@ volatile console_sink_fn kConsoleSink = NULL;
 // hold the lock, not a lock that doesn't cover the scroll.
 static spinlock_t kRendererLock = 0;
 
+// ── Blit throttle (2026-08-04, the console-speed slice, QEMU half) ──────────
+// A scroll used to end in a full shadow→glass blit — ~3MB — EVERY time. At
+// DEBUG_SCHEDULER volume that's thousands of blits a second painting frames
+// no eye can distinguish. The throttle: the SHADOW always updates instantly
+// (it is the truth), but the glass repaints at most once per BLIT_MIN_TICKS
+// (~30Hz). A burst of 100 scrolled lines = 3 blits instead of 100; the cost
+// is at most ~30ms of display lag, below human notice. While the glass is
+// behind (s_glassDirty), put_char skips its VRAM store too — those pixels
+// get repainted by the pending flush anyway. The flush itself rides
+// processSignals (renderer_flush_if_dirty below), so a burst's tail lands
+// within a tick of the burst ending. All throttle state is guarded by
+// kRendererLock (or by the panic path, which busts that lock first).
+static bool s_glassDirty = false;        // shadow is ahead of the glass
+static uint64_t s_lastBlitTick = 0;
+static bool s_throttleEnabled = true;    // false forever after a panic
+#define BLIT_MIN_TICKS 3                 // 3 ticks = ~30ms = ~30Hz max
+extern volatile uint64_t kTicksSinceStart;
+extern BasicRenderer kRenderer;
+
+// The one true blit, shared by scroll, the flush rider, and the panic path.
+static void renderer_blit_full(BasicRenderer *r)
+{
+	if (r->shadow == NULL)
+		return;
+	memcpy((unsigned int *)r->framebuffer->base_address, r->shadow,
+	       (size_t)r->framebuffer->height *
+	           r->framebuffer->pixels_per_scan_line * sizeof(unsigned int));
+	s_lastBlitTick = kTicksSinceStart;
+	s_glassDirty = false;
+}
+
 // Panic escape hatch. If a core dies (or faults) while holding the renderer
 // lock, the panic path must still reach the screen — a panic that deadlocks
 // on a console lock is a panic nobody ever reads. panic() busts the lock the
 // same way it detaches the GUI sink: nothing stands between a panic and the
 // framebuffer. Safe by construction because after this we are not coming back.
+//
+// THROTTLE OVERRIDE: the blit throttle above must die here too — a panic
+// message written to a shadow that never flushes is a panic nobody reads,
+// the same sin with a newer name. Disable throttling forever and force the
+// glass current, so every subsequent panic print lands immediately.
 void renderer_bust_lock(void)
 {
 	__sync_lock_release(&kRendererLock);
+	s_throttleEnabled = false;
+	renderer_blit_full(&kRenderer);
+}
+
+// The flush rider (called from processSignals): if a burst left the glass
+// behind and the throttle window has passed, push the finished frame. The
+// unlocked s_glassDirty peek is safe — a stale read costs one pass, and the
+// locked recheck decides for real.
+void renderer_flush_if_dirty(void)
+{
+	if (!s_glassDirty)
+		return;
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+	if (s_glassDirty && kTicksSinceStart - s_lastBlitTick >= BLIT_MIN_TICKS)
+		renderer_blit_full(&kRenderer);
+	spinlock_release_irqrestore(&kRendererLock, flags);
 }
 
 // NOTE: this file is the LEGACY text console — direct-to-framebuffer, no
@@ -73,8 +125,16 @@ void scroll_framebuffer_full(BasicRenderer *basicrenderer) {
         // in-place memmove that cost a quarter second per scroll on metal.
         memmove(basicrenderer->shadow, basicrenderer->shadow + (16 * pixels_per_scanline), copy_bytes);
         clear_bottom_lines(basicrenderer->shadow, pixels_per_scanline, width, height - 16, height);
-        memcpy(pixPtr, basicrenderer->shadow,
-               (size_t)height * pixels_per_scanline * sizeof(unsigned int));
+        // THROTTLED (see the doctrine above kRendererLock): blit only when
+        // the ~30Hz window allows; otherwise mark the glass dirty and let
+        // the processSignals rider deliver the finished frame. A log burst
+        // scrolls the shadow a hundred times and the glass thrice.
+        (void)pixPtr;
+        if (!s_throttleEnabled ||
+            kTicksSinceStart - s_lastBlitTick >= BLIT_MIN_TICKS)
+            renderer_blit_full(basicrenderer);
+        else
+            s_glassDirty = true;
         return;
     }
 
@@ -310,12 +370,16 @@ void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigne
 
             // One store to VRAM, one to the shadow (writes only, both) —
             // the mirror must stay pixel-true or the next scroll's blit
-            // would repaint the screen with stale glyphs.
+            // would repaint the screen with stale glyphs. EXCEPT while the
+            // glass is throttle-dirty: then the pending full blit will
+            // repaint every pixel anyway, so the VRAM store is skipped and
+            // a burst's glyph rendering costs shadow writes only.
             unsigned int px = ((*fontPtr & (0b10000000 >> (x - xOff))) > 0)
                                   ? basicrenderer->color
                                   : kFrameBufferBackgroundColor;
             size_t idx = x + (y * basicrenderer->framebuffer->pixels_per_scan_line);
-            *(pixPtr + idx) = px;
+            if (!s_glassDirty)
+                *(pixPtr + idx) = px;
             if (basicrenderer->shadow != NULL)
                 basicrenderer->shadow[idx] = px;
         }

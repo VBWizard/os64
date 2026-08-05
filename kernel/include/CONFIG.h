@@ -69,7 +69,13 @@
 #define DEBUG_ACPI (__uint128_t)1 << 8
 #define DEBUG_PAGING (__uint128_t)1 << 9
 #define DEBUG_ALLOCATOR (__uint128_t)1 << 10
-#define DEBUG_KMALLOC (__uint128_t)1 << 10
+// DELIBERATE ALIAS, spelled as one so it can never read as an accident:
+// kmalloc is built ON the allocator, so the two always want watching
+// together and separating them would spend a bit to gain nothing. Written
+// this way (rather than a second `1 << 10`) after a bit-collision scan
+// flagged it as a duplicate — the VFS/shutdown pair below WAS a real
+// accident, and the two cases should not look alike in the source.
+#define DEBUG_KMALLOC DEBUG_ALLOCATOR
 // The demand pager's own channel — same doctrine as DEBUG_TASKSWITCH below:
 // a RESOLVED page fault is not an exception, it's the pager doing its job on
 // purpose, and logging routine success on the always-on EXCEPTIONS bit buries
@@ -119,6 +125,7 @@
 // aliases DEBUG_ALLOCATOR above; those two at least are the same subsystem.)
 #define DEBUG_SHUTDOWN (__uint128_t)1 << 25
 #define DEBUG_USB (__uint128_t)1 << 26
+#define DEBUG_DIAG (__uint128_t)1 << 27
 // The networking arc's bit (NETWORK.md). Covers the NIC drivers and, as the
 // stack grows above them, the protocol layers — split into finer bits only
 // when one subsystem's chatter starts drowning another's (the DEBUG_PIPE
@@ -128,12 +135,22 @@
 // the collision would have arrived silently and made "turn on net logging"
 // also turn on the scheduler flight recorder. Exactly the accident the
 // VFS/shutdown pair already taught this file once (2026-08-01).
+// VINDICATED at the merge of 2026-08-05: 27 and 28 landed side by side with
+// nothing to resolve, which is what choosing the free bit BOUGHT.
 #define DEBUG_NET (__uint128_t)1 << 28
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
 #define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS)
 // | DEBUG_SPECIAL
+// The net branch's working default. DEBUG_SPECIAL is deliberately NOT here
+// (Chris's ruling at the merge, 2026-08-05): it exists to watch his text
+// utilities get scheduled in userland, and on THIS branch it printed 5,612
+// of 5,829 serial lines — 96% — burying the very DEBUG_NET output this
+// default exists to produce. That is exactly the "one subsystem's chatter
+// drowning another's" the DEBUG_NET bit comment warned about, arriving on
+// schedule. The bit still exists; a boot that wants it says so on the
+// cmdline, which is what cmdline overrides are for.
 #define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS | DEBUG_APPLICATION | DEBUG_NET)
 //#define DEBUG_OPTIONS DEBUG_MINIMAL_OPTIONS
 extern __uint128_t kDebugLevel;

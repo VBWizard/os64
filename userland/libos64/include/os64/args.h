@@ -62,6 +62,21 @@ typedef struct {
     // initializer ({'l', "long", 0, "text"}) keeps meaning what it meant.
     bool    *flag;         // takes_value==0: parse sets *flag = true when seen
     const char **value_out;   // takes_value==1: parse stores the value here
+    // OPT-IN: a bare "-NUM" token means THIS option, with NUM as its value.
+    // Requires takes_value. `tail -40 file` is the reason it exists, and
+    // muscle memory is the reason that reason is good enough: head, tail,
+    // GNU grep's context form and classic split all take it, and Chris has
+    // been typing it for decades.
+    //
+    // It cannot be ambiguous HERE even though POSIX (rightly) deprecated it
+    // in general: -NUM only collides with negative operands and with option
+    // bundling, and this grammar has neither — bundles are letters, and no
+    // program declares a digit as an option letter. So a '-' followed by
+    // ALL digits is a shape nothing else can claim, which is exactly what
+    // makes supporting it a nicety rather than a compromise.
+    //
+    // At most one spec row should set this; the first one wins.
+    bool numeric_alias;
 } os64_optspec_t;
 
 typedef struct {

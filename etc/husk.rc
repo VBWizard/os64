@@ -1,0 +1,37 @@
+# husk.rc — commands husk runs at startup, exactly as if you had typed them.
+#
+# The name is the oldest one in the system: "rc" is runcom, "run commands",
+# from CTSS in the early 1960s. Louis Pouzin wrote it, and coined the word
+# "shell" for the same idea — a decade before Unix had either.
+#
+# This file is the BUILD's copy: it lives at etc/husk.rc in the source tree
+# and is written onto the FAT partition as /fat/husk.rc on every image build.
+# You can edit /fat/husk.rc from inside the OS and it will take effect on the
+# next boot — but the next `make` puts this version back, so anything you want
+# to keep belongs here in the repo.
+#
+# Lines starting with # are comments. Blank lines are ignored. Everything else
+# is a husk command line with the full shell available: pipelines, redirection,
+# background (&), $?.
+
+# ── the logging daemon ──────────────────────────────────────────────────────
+# Uncommented, this hands logging off from the in-kernel logd to the ring-3
+# one, which appends to a file instead of pumping every byte out the serial
+# port. Measured on a DEBUG_SCHEDULER|DEBUG_DETAILED boot: ~60-100% of a core
+# in the kernel, ~20% here — the serial port was the expense, not the daemon.
+# Left commented so a plain build boots exactly as it always has — and NOTE:
+# the default boot entry already launches logd via the LOGD= cmdline flag
+# (earlier than any rc can, so the file gets the whole boot). The log claim
+# is exclusive: enable this only on a boot entry WITHOUT LOGD=, or the
+# second daemon will announce the conflict and exit.
+#logd /fat/os64.log &
+
+# ── personal config ─────────────────────────────────────────────────────────
+# The machine speaks GMT (kernel default since 2026-08-04); a timezone
+# belongs to the human, so it lives here. Classic V7 TZ format — offset
+# counts hours WEST of UTC (their little prank), and the DST rules ride
+# along; libos64's calendar honors both. The clock is the corner widget
+# (Chris's app) — started here, it inherits your TZ through the environment
+# like every other child of the rc.
+#export TZ=EST5EDT
+#clock &

@@ -53,7 +53,13 @@ void hardware_init()
     // taken here: DST is legislation, legislation lives in libos64's
     // calendar, and the kernel's own few displays (boot prints, the FAT
     // timestamp glue) stay honest-if-boring standard time year-round.
-    kTimeZone = -5;   // default: Eastern standard, as it always was
+    // Default: GMT. It was Eastern (-5) from the first OS until 2026-08-04,
+    // when timezone became PERSONAL config: the machine speaks UTC unless
+    // told otherwise (TZ= on the cmdline for the kernel's own displays), and
+    // a human's zone lives in their OWN husk.rc as `export TZ=...` — which
+    // is where Unix keeps it too, and for the same reason: the computer has
+    // a location, but the timezone belongs to whoever is looking at it.
+    kTimeZone = 0;
     if (kTZString[0])
     {
         const char *p = kTZString;

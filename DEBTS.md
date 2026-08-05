@@ -86,6 +86,29 @@ hobby-scale judgment calls — re-rank freely.
 | Console scroll runs with **interrupts off**: the renderer spinlock is held across a ~3MB full-screen `memmove`, so a scroll can delay that core's tick by a few hundred µs. Correctness beats the jitter (the console is not a hot path), but if it ever matters the fix is a scroll that does NOT hold the lock — not a lock that does not cover the scroll | Cleanup | S | if the console ever gets hot | `BasicRenderer.c` kRendererLock |
 | `handle_alloc`/`handle_close` take no lock — safe today because a task's handle table is touched only by that task's own syscalls (and by `spawn` while the child is still being built, before it is schedulable). Grows a lock the day handles are shared between threads of one task | Cleanup | S | when a task has >1 thread using handles | `handle.c` |
 
+## Threads (os64's first ring-3 threads, 2026-08-02)
+
+| Debt | Sev | Cost | Gate | Source |
+|---|---|---|---|---|
+| **No thread teardown.** An exited thread becomes a ZOMBIE and its user stack, kernel stack, and `thread_t` are never reclaimed — a program that creates threads in a LOOP leaks a megabyte-plus each time. Fine for the current shape (start N workers, join them, exit, and task teardown takes the address space); not fine the day something pools threads. Rides the same missing machinery as the standing task_destroy debt | Robustness | M | when any program creates threads repeatedly rather than once | `thread_join.c`, `syscall_thread_exit` |
+| **No locks, no atomics** — deliberate v1 (Chris's ruling): threads share everything, so the moment two of them touch one variable a mutex is needed, and a mutex designed before its first consumer is the wrong mutex. `threadtest` and `hog` share nothing by construction | Feature-gate | M | the first program with genuinely shared mutable state | `os64/thread.h` |
+| `thread_join_create` leaks the `thread_t` if the stack-mapping check fails (the only failure path after createThread). Cannot currently happen — the stack was just mapped — and fixing it properly needs the thread teardown above | Cleanup | XS | with thread teardown | `thread_join.c` |
+| No thread affinity control from ring 3: a program cannot say "put this one on its own core." The scheduler's own delegation handles the useful case today | Feature-gate | S | when a program has a reason to care | `syscall_thread` |
+
+## Kernel structure
+
+| Debt | Sev | Cost | Gate | Source |
+|---|---|---|---|---|
+| **`syscall.c` does too much work.** Chris's os32 principle (2026-08-02): the syscall file should DISPATCH — validate arguments, copy user memory, call the subsystem that owns the verb — with cases of five or ten lines, not implementations. os64 has drifted in layers: the newest syscalls already delegate (`net_dial`→`tcp_conn_dial`, `klog_read`→`klog_dequeue`, `thread`→`thread_join_create`), while the oldest carry their work inline (`read`/`write` own all the chunking and bounce-buffer discipline; `spawn` builds its own parameter block). The seam is obvious when it's worth cutting: boundary work stays at the door, verb work moves to the owning subsystem | Cleanup | L | explicitly LOW priority — "a working OS with more syscalls than its ancestor has earned a fat dispatcher" | `syscall.c` / os32 comparison |
+
+## Userland utilities
+
+| Debt | Sev | Cost | Gate | Source |
+|---|---|---|---|---|
+| `tail`: a SHORT READ inside the backward block scan silently loses lines. If the fill loop ends with `filled < blockSize`, only the bytes that arrived are scanned but `blockEnd` still moves a whole block, so newlines in the unread tail are never counted — fewer lines printed than asked, no error. Needs an I/O error or a mid-read shrink to trigger. Fix = treat a short fill as an error, or rescan from `blockStart + filled` | Cleanup | XS | when a real short read is ever observed | `tail.c` find_tail_start |
+| `tail` reads no STDIN — `something \| tail` exits 2 instead of following the pipe. A pipe can't seek, so `-n` would need a keep-the-last-N ring instead of a backward scan; that is the actual work | Feature-gate | S | when a pipeline wants it | `tail.c` main |
+| `tail` computes "the last N lines" from the `stat` size taken BEFORE the open, so a file that grows in between is measured slightly stale. Self-corrects instantly under `-f`; harmless otherwise | Cleanup | XS | never, probably | `tail.c` main |
+
 ## GUI (all GRAPHICS.md "future work")
 
 | Debt | Sev | Cost | Gate | Source |

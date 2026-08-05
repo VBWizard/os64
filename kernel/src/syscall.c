@@ -7,6 +7,8 @@
 #include "BasicRenderer.h"
 #include "panic.h"
 #include "printd.h"
+#include "serial_logging.h"   // serial_print_string — debug_log's SERIAL beacon flag
+#include "strings/sprintf.h"  // snprintf — stitches the beacon line for one wire write
 #include "scheduler.h"
 #include "smp_core.h"
 #include "task.h"
@@ -15,6 +17,8 @@
 #include "memory/kmalloc.h"
 #include "memory/vma.h"   // call_in_kernel_context
 #include "log.h"
+#include "os64/klog.h"     // os64_logent_t — klog_read's out-struct (abi)
+#include "thread_join.h"   // the object behind HANDLE_THREAD
 #include "console.h"
 #include "handle.h"
 #include "pipe.h"
@@ -95,6 +99,10 @@ static uint64_t syscall_getcwd(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_unlink(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_mkdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -110,6 +118,14 @@ static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_sync(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -150,6 +166,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_UNMAP,     "unmap",     syscall_unmap,     false, 0x01),  // arg0 = region base (user VA)
 	SYSCALL_DEFINE(SYSCALL_GETCWD,    "getcwd",    syscall_getcwd,    false, 0x01),  // arg0 = out buffer
 	SYSCALL_DEFINE(SYSCALL_CHDIR,     "chdir",     syscall_chdir,     false, 0x01),  // arg0 = path
+	SYSCALL_DEFINE(SYSCALL_UNLINK,    "unlink",    syscall_unlink,    false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_STAT,      "stat",      syscall_stat,      false, 0x03),  // arg0 = path, arg1 = dirent out ptr
 	SYSCALL_DEFINE(SYSCALL_REAP,      "reap",      syscall_reap,      false, 0x01),  // arg0 = exit-code out ptr
 	SYSCALL_DEFINE(SYSCALL_SLEEP,     "sleep",     syscall_sleep,     false, 0x00),  // arg0 = milliseconds (a value, no pointers)
@@ -158,6 +175,15 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_PRINTAT,   "printat",   syscall_printat,   false, 0x04),  // arg0 = x cell, arg1 = y cell, arg2 = string
 	SYSCALL_DEFINE(SYSCALL_TIME,      "time",      syscall_time,      false, 0x01),  // arg0 = os64_time_t out ptr
 	SYSCALL_DEFINE(SYSCALL_SETENV,    "setenv",    syscall_setenv,    false, 0x01),  // arg0 = key; arg1 = value OR NULL (mask excludes it: NULL means unset)
+	SYSCALL_DEFINE(SYSCALL_KLOG_READ, "klog_read", syscall_klog_read, false, 0x01),  // arg0 = os64_logent_t[] out, arg1 = max entries
+	SYSCALL_DEFINE(SYSCALL_SYNC,      "sync",      syscall_sync,      false, 0x00),  // arg0 = handle (an int, not a pointer)
+	// arg0/arg2 are CODE addresses in the caller's own text, not buffers —
+	// they are not in the pointer mask because user_range_accessible checks
+	// data reachability, and thread_join_create validates the stack mapping
+	// it actually writes to.
+	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
+	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
+	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 };
 
@@ -562,7 +588,6 @@ static uint64_t syscall_yield(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg1;
 	(void)arg2;
 	(void)arg3;
 	(void)arg4;
@@ -577,6 +602,19 @@ static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 
 	printd(DEBUG_APPLICATION,"[user] %s\n", kernel_buffer);
+
+	// arg1 = flags (see abi syscall_numbers.h). SERIAL: put the line on the
+	// wire NOW, directly — a beacon that no log claim can redirect. One
+	// stitched buffer, one call, so concurrent beacons from other cores
+	// interleave between lines rather than inside them. The ring copy above
+	// still happens: a beacon is a log line too ("never drop a byte" cuts
+	// both ways — the file must not be missing lines the wire showed).
+	if (arg1 & OS64_DEBUG_LOG_SERIAL)
+	{
+		char wire[MAX_LOG_MESSAGE_SIZE + 16];
+		snprintf(wire, sizeof(wire), "[user] %s\n", kernel_buffer);
+		serial_print_string(wire);
+	}
 	return 0;
 }
 
@@ -665,8 +703,9 @@ static void raise_sigpipe_and_die(task_t *task)
 {
 	if (task != NULL)
 	{
-		if (task->threads != NULL)
-			task->threads->signals.sigind |= SIGPIPE;
+		// All threads: SIGPIPE's default action is to terminate the TASK,
+		// so every thread has to learn it, not just the first one.
+		task_signal_all_threads(task, SIGPIPE);
 		task->retVal = TASK_EXIT_SIGPIPE;
 		printd(DEBUG_TASK, "SIGPIPE: task %s wrote to a pipe with no readers — terminating\n",
 			task->exename);
@@ -686,7 +725,7 @@ static void raise_sigpipe_and_die(task_t *task)
 // helper touches may live on the syscall's task-local kernel stack.
 // One page per hop for read() and file-write bounce buffers. (Defined here,
 // above BOTH read and write, because the file-write path below uses it too.)
-#define READ_CHUNK_SIZE 4096
+#define READ_CHUNK_SIZE  4096
 
 typedef struct {
 	vfs_file_t *file;
@@ -711,6 +750,20 @@ static void file_do_write(void *arg)
 	vfs_file_t *f = p->file;
 	p->result = (f->fops != NULL && f->fops->write != NULL)
 	                ? f->fops->write(f, p->buf, p->len) : -1;
+}
+
+// Commit a file's written bytes AND its directory entry to the device.
+// FatFs (like every FAT implementation) keeps the new length in its own
+// structures and only writes the directory entry on sync or close — so
+// until this runs, a file being appended to reads as ZERO BYTES to anyone
+// else, which is exactly how a live log file looked empty while the daemon
+// holding it was writing happily (Chris's screenshot, 2026-08-01).
+static void file_do_sync(void *arg)
+{
+	file_io_params_t *p = (file_io_params_t *)arg;
+	vfs_file_t *f = p->file;
+	p->result = (f->fops != NULL && f->fops->sync != NULL)
+	                ? f->fops->sync(f) : -1;
 }
 
 static void file_do_seek(void *arg)
@@ -1066,6 +1119,8 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// original spelling made 0 mean forever, which was SO_RCVTIMEO's wart —
 	// zero's one honest meaning was unsayable — and the userland branch's
 	// console poll (top's 'q') forced the ruling both branches now share.
+	// Writing the SAME contract into both branches on the same day is what
+	// made this merge reconcile code instead of law.
 	// NOTE the stub contract: os64_read/os64_read_for ALWAYS set this
 	// register — it used to be ring-3 garbage the handler ignored, and
 	// reading garbage as a deadline would give every old binary a random
@@ -1084,20 +1139,26 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (length == 0)
 		return 0;
 
-	// Lower the deadline onto the tick clock once, here, so the conn code
-	// below thinks only in ticks. Rounded UP: a 1ms deadline is a short
-	// wait, never "already expired" — while 0ms stays exactly "already
-	// expired", which IS the poll gait (the conn loops check data before
-	// the clock, so a poll still drains whatever already arrived). Net
-	// handles only on this branch, and the boundary REFUSES the argument
-	// anywhere it would be silently ignored (the tripwire doctrine: a pipe
-	// read that accepts a timeout it doesn't honor is a lie with a delay) —
-	// the userland branch's console honors it now (top's 'q'); pipes/files
-	// grow it the day a real consumer demands it there.
+	// Lower the deadline onto the tick clock once, here, so the console and
+	// conn code below think only in ticks (sleep()'s ms→ticks doctrine).
+	// Rounded UP: a 1ms deadline is a short wait, never "already expired" —
+	// while 0ms stays exactly "already expired", which IS the poll gait
+	// (every honoring path checks for data BEFORE the clock, so a poll still
+	// delivers whatever already arrived).
+	//
+	// THE HONOR ROLL, joined at the merge of 2026-08-05: the console (grown
+	// on the userland branch for top's 'q') AND the three dialed net handles
+	// (grown on the net branch for ping's patience). Two branches solved the
+	// same problem for different consumers in the same week; this list is
+	// where they meet. Everywhere else a finite timeout is REFUSED rather
+	// than silently ignored — the tripwire doctrine: a pipe read that accepts
+	// a patience it won't keep is a lie with a delay. Pipes and files grow it
+	// the day a real consumer demands it there.
 	uint64_t deadline = 0;
 	if (timeout_ms != OS64_WAIT_FOREVER)
 	{
-		if (h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
+		if (h->type != HANDLE_CONSOLE_IN &&
+		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP)
 			return SYSCALL_RESULT_INVALID;
 		deadline = kTicksSinceStart + (timeout_ms + MS_PER_TICK - 1) / MS_PER_TICK;
@@ -1116,15 +1177,24 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	switch (h->type)
 	{
 		case HANDLE_CONSOLE_IN:
-			// Blocks until >=1 byte is available (terminal semantics). The
+			// Blocks until >=1 byte is available (terminal semantics) — or
+			// until the caller's patience runs out, when there is any. The
 			// scratch is safe to hold across the block — it's THIS thread's.
-			got = console_read(kbuf, want);
+			got = console_read_deadline(kbuf, want, deadline);
 			if (got == CONSOLE_READ_INTERRUPTED)
 			{
 				// Ctrl+C landed while (or before) we were blocked on stdin.
 				// Default action: terminate. The sentinel never reaches ring 3.
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
+			}
+			if (got == CONSOLE_READ_TIMEOUT)
+			{
+				// The deadline expired byteless. The kernel sentinel stays
+				// kernel-side; ring 3 gets the ABI's named verdict — a value
+				// no other read outcome shares, so "nothing yet" can never
+				// impersonate EOF's 0 (the V7 O_NDELAY sin, refused).
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
 			}
 			break;
 
@@ -1201,6 +1271,38 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			if (got == UDP_CONN_ERR_TIMEOUT)
 				return (uint64_t)(int64_t)OS64_NET_ERR_TIMEOUT;
 			break;
+
+		case HANDLE_THREAD:
+		{
+			// Reading a thread blocks until it finishes and yields its
+			// return value — an int64_t, nothing more. A short buffer is
+			// a caller bug rather than a partial answer, because half a
+			// return value means nothing.
+			//
+			// THE TWO kfree(kbuf) CALLS THAT USED TO SIT ON THESE EXITS
+			// ARE GONE, removed at the merge of 2026-08-05 and worth the
+			// paragraph: kbuf is the THREAD-OWNED scratch block, and an
+			// INTERIOR pointer into it at that (the data area sits after
+			// the params struct), so freeing it hands the allocator an
+			// address it never issued. The net branch had already swept
+			// this exact fossil out of its own read cases — a leftover
+			// from when the bounce buffer was a per-call kmalloc — and
+			// left a comment saying so; userland's copy survived only
+			// because neither exit had ever been taken. A short buffer or
+			// a Ctrl+C on a thread read would have found it.
+			if (want < sizeof(int64_t))
+				return SYSCALL_RESULT_INVALID;
+			int64_t retval = 0;
+			long jr = thread_join_read((thread_join_t *)h->object, &retval);
+			if (jr == THREAD_JOIN_ERR_INTERRUPTED)
+			{
+				raise_terminating_signal_and_die(task, NULL);
+				__builtin_unreachable();
+			}
+			memcpy(kbuf, &retval, sizeof(retval));
+			got = (long)sizeof(retval);
+			break;
+		}
 
 		case HANDLE_FILE:
 		{
@@ -1945,6 +2047,175 @@ static uint64_t syscall_chdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return 0;
 }
 
+// unlink's kernel-context half: one fops->rm. Deleting a file walks the
+// directory and rewrites the FAT, so it is disk I/O like every other path
+// operation here.
+typedef struct {
+	char path[TASK_MAX_PATH_LEN];  // full canonical path (kept for logging)
+	vfs_filesystem_t *fs;          // mount-resolved in task context
+	const char *fs_tail;           // fs-local remainder; points into path or
+	                               // at a static "/" — transient, never freed
+	volatile long result;
+} unlink_params_t;
+
+static void unlink_do(void *arg)
+{
+	unlink_params_t *p = (unlink_params_t *)arg;
+	// The NULL check is the read-only answer: ext2 never installs rm, and
+	// dispatching through a NULL fop would execute mapped page zero rather
+	// than fail (fat_glue.c's disk_write learned this the hard way).
+	p->result = (p->fs->fops != NULL && p->fs->fops->rm != NULL)
+	                ? p->fs->fops->rm(p->fs_tail, p->fs)
+	                : -1;
+}
+
+static uint64_t syscall_unlink(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	char raw[TASK_MAX_PATH_LEN];
+	if (!copy_user_string((const char *)arg0, raw, sizeof(raw)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	unlink_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// Relative paths resolve against the task's cwd, same as open — `rm
+	// notes.txt` has to mean the same file `cat notes.txt` just printed.
+	if (!resolve_user_path(task, raw, p->path, sizeof(p->path)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	p->fs_tail = NULL;
+	p->fs = vfs_resolve_mount(p->path, &p->fs_tail);
+	if (p->fs == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
+	// Refuse to delete a mount point itself. "/home" resolves to tail "/",
+	// which is the filesystem's ROOT — handing that to f_unlink is asking a
+	// driver to delete the volume it lives on. `rm /home` is a typo, always.
+	if (p->fs_tail == NULL || p->fs_tail[0] == '\0' ||
+	    (p->fs_tail[0] == '/' && p->fs_tail[1] == '\0'))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	p->result = -1;
+	call_in_kernel_context(unlink_do, p);
+
+	if (p->result != 0)
+	{
+		printd(DEBUG_SYSCALL, "unlink: task %s: could not delete '%s' (read-only fs, missing file, or non-empty directory)\n",
+		       task->exename, p->path);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_SYSCALL, "unlink: task %s: deleted '%s'\n", task->exename, p->path);
+	kfree(p);
+	return 0;
+}
+
+// mkdir's kernel-context half: one dops->mkdir. Creating a directory
+// allocates a cluster and writes two directory entries, so it is disk I/O
+// like every other path operation here. (mkdir lives in dops rather than
+// fops for the same reason stat does: directories are directory-entry
+// vocabulary.)
+typedef struct {
+	char path[TASK_MAX_PATH_LEN];  // full canonical path (kept for logging)
+	vfs_filesystem_t *fs;          // mount-resolved in task context
+	const char *fs_tail;           // fs-local remainder; points into path or
+	                               // at a static "/" — transient, never freed
+	volatile long result;
+} mkdir_params_t;
+
+static void mkdir_do(void *arg)
+{
+	mkdir_params_t *p = (mkdir_params_t *)arg;
+	// The NULL check is the read-only answer: ext2 never installs mkdir, and
+	// dispatching through a NULL dop would execute mapped page zero rather
+	// than fail (fat_glue.c's disk_write learned this the hard way).
+	// The cast: dops->mkdir takes char* because fat_mkdir copies-then-mangles
+	// its own scratch buffer; the tail itself is never written through.
+	p->result = (p->fs->dops != NULL && p->fs->dops->mkdir != NULL)
+	                ? p->fs->dops->mkdir((char *)p->fs_tail, p->fs)
+	                : -1;
+}
+
+static uint64_t syscall_mkdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	char raw[TASK_MAX_PATH_LEN];
+	if (!copy_user_string((const char *)arg0, raw, sizeof(raw)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	mkdir_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// Relative paths resolve against the task's cwd, same as open — `mkdir
+	// notes` has to make the directory `cd notes` will then enter.
+	if (!resolve_user_path(task, raw, p->path, sizeof(p->path)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	p->fs_tail = NULL;
+	p->fs = vfs_resolve_mount(p->path, &p->fs_tail);
+	if (p->fs == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
+	// Refuse to create a mount point itself. "/home" resolves to tail "/",
+	// which is the filesystem's ROOT — it already exists by definition, and
+	// handing "/" to f_mkdir is asking a driver to create the volume it
+	// lives on. `mkdir /fat` is a typo, always.
+	if (p->fs_tail == NULL || p->fs_tail[0] == '\0' ||
+	    (p->fs_tail[0] == '/' && p->fs_tail[1] == '\0'))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	p->result = -1;
+	call_in_kernel_context(mkdir_do, p);
+
+	if (p->result != 0)
+	{
+		printd(DEBUG_SYSCALL, "mkdir: task %s: could not create '%s' (read-only fs, missing parent, or name taken)\n",
+		       task->exename, p->path);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_SYSCALL, "mkdir: task %s: created '%s'\n", task->exename, p->path);
+	kfree(p);
+	return 0;
+}
+
 // stat's kernel-context half: one dops->stat, into the HHDM params block.
 typedef struct {
 	char path[TASK_MAX_PATH_LEN];  // full canonical path (kept for logging)
@@ -2574,4 +2845,225 @@ static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// env_set fails only when the block is full — surface that honestly.
 	return env_set(task->env, key, val) ? 0 : SYSCALL_RESULT_INVALID;
+}
+
+// klog_read(entries, max) — hand kernel log entries to a userland log
+// daemon, oldest-first across every core. Returns the count taken; 0 means
+// "nothing right now", which is an ordinary answer, not an error.
+//
+// This is the mechanism half of the logging split: the kernel keeps the
+// rings and the merge order (both need locks and cross-core knowledge no
+// program should have), and userland decides where the bytes live. The
+// call also CLAIMS the log — see klog_dequeue and os64/klog.h for the
+// heartbeat that makes the claim safe to lose.
+#define KLOG_READ_MAX_BATCH 64
+static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	uint32_t want = (uint32_t)arg1;
+	if (want == 0)
+		return 0;
+	// Bound the batch: the singleton staging buffers below are sized for
+	// KLOG_READ_MAX_BATCH, and an unbounded `max` from ring 3 would run
+	// straight off their end.
+	if (want > KLOG_READ_MAX_BATCH)
+		want = KLOG_READ_MAX_BATCH;
+
+	// ONE reader at a time. Reading consumes entries, so a second daemon
+	// wouldn't duplicate the log, it would deal it out — two files, each a
+	// random half. Refuse the latecomer loudly instead (it should print and
+	// exit); the claim lapses by heartbeat if the holder dies, so this can
+	// never wedge logging behind a corpse.
+	core_local_storage_t *ccls = get_core_local_storage();
+	task_t *ctask = ccls ? ccls->task : NULL;
+	if (ctask == NULL)
+		return SYSCALL_RESULT_INVALID;
+	if (!klog_sink_try_claim(ctask->taskID))
+	{
+		printd(DEBUG_SYSCALL, "klog_read: task %s (%lu) refused — the log sink is claimed by a live reader\n",
+		       ctask->exename, ctask->taskID);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	// Dequeue into KERNEL memory first, then copy out in one hop. Same
+	// discipline as every other read: klog_dequeue runs under the log
+	// work-lock, and touching user pages there could demand-page while
+	// holding it.
+	//
+	// SINGLETON staging buffers (2026-08-04, the paging-pool exhaustion
+	// hunt): this used to kmalloc/kfree BOTH arrays on EVERY call — and the
+	// draining daemon calls this in a tight loop, so under a DEBUG_SCHEDULER
+	// soak that was ~100 multi-page allocations a second feeding the
+	// allocator's address march (see the pool-sizing comment in paging.c).
+	// The exclusivity claim above is what makes a bare static safe: the CAS
+	// guarantees ONE reader at a time, ever, so these buffers have exactly
+	// one user by construction. Allocated once at max-batch size, kept for
+	// the life of the system — a daemon's working set, not a leak.
+	static log_entry_t *klogStaged = NULL;
+	static os64_logent_t *klogOut = NULL;
+	// Each buffer's init stands alone, and the refusal re-checks BOTH: a
+	// first call that wins one kmalloc and loses the other to OOM must not
+	// strand the loser NULL forever behind its partner's success (the retry
+	// path below would otherwise skip init and write through NULL).
+	if (klogStaged == NULL)
+		klogStaged = kmalloc(KLOG_READ_MAX_BATCH * sizeof(log_entry_t));
+	if (klogOut == NULL)
+		klogOut = kmalloc(KLOG_READ_MAX_BATCH * sizeof(os64_logent_t));
+	if (klogStaged == NULL || klogOut == NULL)
+		return SYSCALL_RESULT_INVALID;
+	log_entry_t *staged = klogStaged;
+
+	uint32_t got = klog_dequeue(staged, want);
+	if (got == 0)
+		return 0;   // nothing waiting — the daemon sleeps and asks again
+
+	// Translate to the ABI struct. The kernel's log_entry_t carries a TSC
+	// and internal padding that userland has no business depending on;
+	// this loop is the boundary where the internal shape stops mattering.
+	os64_logent_t *out = klogOut;
+	for (uint32_t i = 0; i < got; i++)
+	{
+		out[i].ticks     = staged[i].ticks;
+		out[i].threadID  = staged[i].threadID;
+		out[i].core      = staged[i].core_id;
+		out[i].level     = staged[i].log_level;
+		out[i].category  = staged[i].category;
+		out[i].continued = staged[i].continued ? 1 : 0;
+		out[i].reserved[0] = out[i].reserved[1] = out[i].reserved[2] = 0;
+		memcpy(out[i].message, staged[i].message, OS64_LOG_MESSAGE_MAX);
+		out[i].message[OS64_LOG_MESSAGE_MAX - 1] = '\0';
+	}
+
+	bool ok = copy_to_user_buffer((void *)arg0, out, got * sizeof(os64_logent_t));
+	return ok ? (uint64_t)got : SYSCALL_RESULT_BAD_USER_DATA;
+}
+
+// thread(entry, arg, exit_stub) — os64's first ring-3 threads.
+//
+// Everything the new thread needs already existed: createThread gives it
+// its own guarded user and kernel stacks at unique task-local addresses,
+// and the scheduler has always scheduled THREADS. All that was missing
+// was a way to ask. See os64/syscall_numbers.h for the API argument and
+// thread_join.h for why the handle points at a join object.
+static uint64_t syscall_thread(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// A null entry or exit stub is a caller bug, not a thread.
+	if (arg0 == 0 || arg2 == 0)
+	{
+		printd(DEBUG_THREAD, "syscall_thread: %s passed entry=0x%lx exit_stub=0x%lx — refused\n",
+		       task->exename, arg0, arg2);
+		return SYSCALL_RESULT_INVALID;
+	}
+	// Both must live in the caller's own (lower-half) address space. A
+	// ring-3 thread that starts executing in the kernel's half is the
+	// whole reason ring 3 exists.
+	if (arg0 >= kHHDMOffset || arg2 >= kHHDMOffset)
+	{
+		printd(DEBUG_THREAD, "syscall_thread: %s passed a non-user address (entry=0x%lx stub=0x%lx) — refused\n",
+		       task->exename, arg0, arg2);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	thread_join_t *j = thread_join_create(task, arg0, arg1, arg2);
+	if (j == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	int h = handle_alloc(task, HANDLE_THREAD, j);
+	if (h < 0)
+	{
+		// Out of handle slots. The thread is ALREADY RUNNING — it was
+		// submitted to the scheduler inside thread_join_create — so this
+		// drops the handle's reference and lets it run detached rather
+		// than pretending it never started.
+		printd(DEBUG_THREAD, "syscall_thread: %s out of handles; thread 0x%08lx runs detached\n",
+		       task->exename, j->threadID);
+		thread_join_close(j);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_THREAD, "syscall_thread: %s got handle %d for thread 0x%08lx\n",
+	       task->exename, h, j->threadID);
+	return (uint64_t)h;
+}
+
+// thread_exit(retval) — end THIS thread, leaving the task alive.
+static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = cls ? cls->currentThread : NULL;
+	task_t *task = cls ? cls->task : NULL;
+	if (self == NULL || task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	printd(DEBUG_THREAD, "syscall_thread_exit: thread 0x%08lx of %s exiting with %ld\n",
+	       self->threadID, task->exename, (int64_t)arg0);
+
+	// Publish the answer and drop the thread's reference BEFORE leaving the
+	// run queue: after the state change below this thread never executes
+	// another instruction, so anything left undone stays undone forever.
+	thread_join_finish(self->threadID, (int64_t)arg0);
+
+	// MARK, don't move. The scheduler takes the current thread off the CPU
+	// itself and, seeing `exited`, files it under ZOMBIE (scheduler.c's
+	// take-off-CPU branch). Doing the queue surgery here instead removed
+	// this thread from qRunning BEFORE the scheduler went looking for it,
+	// and it panicked: "Can't find thread with id 63 in running queue".
+	// The thread that is currently executing must still BE in the running
+	// queue when the scheduler takes over — that is how it finds itself.
+	self->retVal = (uint64_t)arg0;
+	self->exited = true;
+
+	// Off the run queue and never coming back: hand the core to someone
+	// else. scheduler_trigger does not return for a thread in this state.
+	scheduler_trigger(NULL);
+	while (1)
+		__asm__ volatile("hlt");   // unreachable; the scheduler owns us now
+}
+
+// sync(handle) — make what a program has written VISIBLE and durable.
+// See the ABI header for why this is its own verb rather than something
+// write() does implicitly: syncing on every write would tax every file
+// writer in the system to serve the one program that actually needs its
+// bytes readable by others while it still holds the file open.
+static uint64_t syscall_sync(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	handle_t *h = handle_get(task, (int)(int64_t)arg0);
+	if (h == NULL || h->type != HANDLE_FILE)
+		return SYSCALL_RESULT_INVALID;   // pipes and consoles have nothing to commit
+
+	// Runs under kKernelPML4 like every other filesystem operation — the
+	// FAT layer's DMA mappings live there.
+	file_io_params_t *fp = kmalloc(sizeof(*fp));
+	if (fp == NULL)
+		return SYSCALL_RESULT_INVALID;
+	fp->file = (vfs_file_t *)h->object;
+	fp->buf = NULL;
+	fp->len = 0;
+	fp->result = -1;
+	call_in_kernel_context(file_do_sync, fp);
+
+	long rc = fp->result;
+	kfree(fp);
+	return (rc < 0) ? SYSCALL_RESULT_INVALID : 0;
 }

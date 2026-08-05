@@ -9,6 +9,7 @@
 #include "memcpy.h"
 #include "time.h"  // For time conversion functions
 #include "spinlock.h"  // ff_mutex_* reentrancy hooks (FF_FS_REENTRANT)
+#include "serial_logging.h"  // printd — the read-only-device refusal in disk_write
 
 extern uint64_t kSystemCurrentTime; // Your kernel's epoch time variable
 
@@ -94,6 +95,23 @@ DRESULT disk_write (
 
 	if (fs==NULL)
 		panic("fat disk_write: Cannot find vfs device for disk number %u\n",pdrv);
+
+	// A driver that never installed a write op is READ-ONLY, and saying so is
+	// the whole job here. Without this check the call below dispatches through
+	// a NULL function pointer — and because VA 0 is still mapped in os64, that
+	// does not fault cleanly: the CPU happily EXECUTES whatever bytes live at
+	// address 0 and runs off into hyperspace. That is precisely how the first
+	// boot with a /home partition on the AHCI disk died (2026-08-02): AHCI
+	// installs ops->read and not ops->write, kmalloc zeroes everything, and a
+	// single `echo > /home/proof.txt` took the machine down with RIP=0x3 and an
+	// unkillable #GP storm. RES_WRPRT is FatFs's own word for it — the write
+	// fails, the OS lives, and the message names the device.
+	if (fs->bops == NULL || fs->bops->write == NULL)
+	{
+		printd(DEBUG_VFS, "fat disk_write: device %u ('%s') has no write op — read-only device, refusing %u sector(s) at LBA %lu\n",
+		       pdrv, fs->block_device_info->block_device->name, count, (uint64_t)sector);
+		return RES_WRPRT;
+	}
 
 	// Propagate the driver's verdict (0 = success, like disk_read does).
 	// Swallowing it here told FatFs its metadata was safely on disk when the
@@ -369,10 +387,14 @@ static int fat_seek(vfs_file_t* vfs_file, long offset, int whence) {
 
 /// @brief Sync an open file to disk
 /// @param vfs_file The handle of the file to sync
-/// @return The status of the sync attempt
+/// @return 0 on success, -1 on failure (the seam's neutral vocabulary)
 static int fat_sync(vfs_file_t* vfs_file)
 {
-	return f_sync(vfs_file->handle);
+	// Normalize the FRESULT (2026-08-04). Returning it raw was a live bug:
+	// FRESULT errors are POSITIVE (FR_DISK_ERR == 1), and syscall_sync only
+	// treats rc < 0 as failure — so a FatFs sync error reported SUCCESS to
+	// ring 3. The seam speaks 0/-1; the FatFs dialect stays inside the glue.
+	return f_sync(vfs_file->handle) == FR_OK ? 0 : -1;
 }
 
 static char* fat_gets(vfs_file_t* vfs_file, char* buffer, int length)
@@ -518,7 +540,15 @@ static int fat_mkdir(char* path, vfs_filesystem_t* vfs_fs)
 	char lPath[255];
 	strncpy(lPath, path, 255);
 	create_fat_path(lPath, vfs_fs);
-	return f_mkdir(lPath);
+	// Normalized to the seam's 0/-1 (2026-08-04, the day ext2 became the
+	// second mkdir implementation and the neutral contract stopped being
+	// theoretical). The raw FRESULT used to leak through here — test_main.c
+	// had to include ff.h just to spell FR_EXIST. Failures are logged with
+	// the FatFs-native code before it's flattened, same as fat_rm.
+	FRESULT res = f_mkdir(lPath);
+	if (res != FR_OK)
+		printd(DEBUG_VFS, "fat_mkdir: f_mkdir('%s') failed, FRESULT=%u\n", lPath, res);
+	return res == FR_OK ? 0 : -1;
 }
 
 // stat is readdir for exactly one name (dops->stat in vfs.h): same FILINFO →
@@ -554,6 +584,37 @@ static int fat_stat(const char* path, os64_dirent_t* entry, vfs_filesystem_t* vf
 }
 
 // FAT filesystem operations
+// Delete a file. FatFs's f_unlink does the whole job — free the cluster
+// chain, clear the directory entry — so this is only path construction plus
+// an honest error code.
+//
+// Deliberately NOT gated on DISK_WRITING_ENABLED alongside .write below: a
+// build with writing compiled out should fail an rm loudly through the NULL
+// check in syscall_unlink, not quietly succeed at deleting nothing. It IS
+// left out of the read-only ext2 fops entirely, which is the same statement
+// made the honest way.
+static int fat_rm(const char* filename, vfs_filesystem_t* vfs_fs)
+{
+	char lPath[512];
+
+	if (filename == NULL || vfs_fs == NULL)
+		return -1;
+
+	strncpy(lPath, filename, sizeof(lPath) - 1);
+	lPath[sizeof(lPath) - 1] = '\0';
+	create_fat_path(lPath, vfs_fs);   // "N:" + path — FatFs addresses volumes by number
+
+	FRESULT res = f_unlink(lPath);
+	if (res != FR_OK)
+	{
+		printd(DEBUG_VFS, "fat_rm: f_unlink('%s') failed, FRESULT=%u\n", lPath, (uint32_t)res);
+		return -1;
+	}
+
+	printd(DEBUG_VFS, "fat_rm: deleted '%s'\n", lPath);
+	return 0;
+}
+
 vfs_file_operations_t fat_fops = {
 	.initialize = fat_initialize,
     .open  = fat_open,
@@ -565,6 +626,7 @@ vfs_file_operations_t fat_fops = {
 #ifdef DISK_WRITING_ENABLED
     .write = fat_write,
 #endif
+	.rm = fat_rm,
     .close = fat_close,
 	.seek = fat_seek,
 	.sync = fat_sync,

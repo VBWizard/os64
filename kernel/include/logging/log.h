@@ -68,4 +68,62 @@ bool logd_thread(bool daemon);
 // can keep producing; we want the backlog, not the future). Never sleeps,
 // never takes another lock — safe from any dying context.
 void logd_emergency_flush(void);
+
+// ── The ring-3 log sink (SYSCALL_KLOG_READ) ────────────────────────────────
+// Dequeue up to `max` entries, oldest-first across every core (the same
+// k-way TSC merge logd uses to print), into a caller-owned array. Returns
+// the count taken. Entries are CONSUMED — the caller has accepted
+// responsibility for them, which is exactly why the kernel may then stop
+// writing them to serial.
+uint32_t klog_dequeue(log_entry_t *out, uint32_t max);
+
+// How long a claim survives without a read before the kernel takes serial
+// logging back. Three seconds is far longer than any healthy daemon's poll
+// interval (~100ms) and far shorter than a human notices — and it covers
+// the HUNG daemon as well as the crashed one, which a task-liveness check
+// would not.
+#define LOG_SINK_TIMEOUT_TICKS (3 * TICKS_PER_SECOND)
+
+// Set by klog_dequeue on every call; read by logd_thread to decide whether
+// userland is still holding up its end. Not a lock — a heartbeat.
+extern volatile bool kLogSinkClaimed;
+extern volatile uint64_t kLogSinkLastRead;
+
+// The claim is EXCLUSIVE while its holder is alive: entries are consumed by
+// reading, so two concurrent readers would silently deal the log out between
+// two files. syscall_klog_read calls this before dequeuing; a refusal means
+// another daemon holds a live claim and the caller should say so and exit,
+// not retry. A stale claim (heartbeat past LOG_SINK_TIMEOUT_TICKS) lapses on
+// the next attempt, so daemon restarts need no hand-off ceremony.
+bool klog_sink_try_claim(uint64_t taskId);
+
+// ── Waiting for the ring-3 sink (the LOGD= cmdline flag) ───────────────────
+// When a log daemon is COMING but has not attached yet, draining to serial is
+// pure waste: those same entries are about to be claimed and written to a
+// file, and the serial copy costs a VM exit per byte for the loudest stretch
+// of the whole boot. So with LOGD= set, the kernel drainer holds its fire
+// from the first log line and lets the rings simply accumulate — they hold
+// ~56,000 entries per core, which is a great deal of boot.
+//
+// Two escape hatches, because "never drop a byte" outranks "boot fast":
+//
+//   DEADLINE — if the daemon never attaches (missing binary, unwritable path,
+//   crash on startup), waiting forever would mean a boot with NO log at all
+//   and no clue why. After this long, serial comes back and says so.
+//
+//   HIGH WATER — if the rings fill faster than the daemon arrives, serial
+//   comes back immediately regardless of the deadline. A full ring is the one
+//   thing that actually loses entries.
+//
+// Either hatch abandons the wait PERMANENTLY for the rest of the boot: once
+// the kernel has decided the daemon isn't coming, a late arrival still claims
+// the sink through the normal heartbeat path, and nothing is lost either way.
+#define LOG_SINK_AWAIT_TIMEOUT_TICKS (30 * TICKS_PER_SECOND)
+#define LOG_SINK_AWAIT_HIGH_WATER_PCT 75
+
+// The LOGD= path from the kernel commandline ("" = no userland sink expected).
+// Its mere presence is what arms the wait above — the kernel does not need to
+// know whether the daemon has been spawned yet, only that one is expected.
+extern char kLogdPath[128];
+
 #endif // LOG_H

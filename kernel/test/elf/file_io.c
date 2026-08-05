@@ -58,9 +58,10 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
     if (failed(h) || h < 3)
         exit_with(FAIL_OPEN);
 
-    // 2. The four most famous bytes in systems programming.
-    // read's arg3 is the DEADLINE now (os64_read_for) — raw stubs must say
-    // "0 = forever" explicitly, or r10's garbage becomes a random timeout.
+    // 2. The four most famous bytes in systems programming. Since the
+    //    read-patience ruling (2026-08-05), arg3 is the timeout and every
+    //    caller states it out loud — a raw 3-arg read leaves r10 garbage,
+    //    which the boundary now (correctly) refuses as a random patience.
     uint64_t n = os64_syscall4(SYSCALL_READ, h, (uint64_t)buf, 4, OS64_WAIT_FOREVER);
     if (n != 4 || buf[0] != 0x7f || buf[1] != 'E' || buf[2] != 'L' || buf[3] != 'F')
         exit_with(FAIL_READ_MAGIC);

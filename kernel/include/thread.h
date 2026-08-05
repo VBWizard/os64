@@ -64,7 +64,16 @@ typedef struct s_thread
 	uintptr_t esp0BaseV, esp0BaseP, esp0Size, esp3BaseV, esp3BaseP, esp3Size;
 	void* ownerTask;
 	struct s_thread *forkedThread;
+	// prev/next belong to the SCHEDULER's queues — a thread is on exactly
+	// one of them at a time, and those links are rewritten every time it
+	// moves. They are NOT a list of a task's threads.
 	struct s_thread *prev, *next;
+	// ...which is what this is (2026-08-02, os64's first ring-3 threads).
+	// task->threads heads a chain of every thread the task owns, linked
+	// through taskNext, so a task can have more than one without fighting
+	// the run queues for the same two pointers. NULL-terminated; the first
+	// thread (the one task_create builds) is always the head.
+	struct s_thread *taskNext;
 	signals_t signals;
 	// Per-thread syscall I/O bounce block, lazily kmalloc'd by syscall.c on the
 	// thread's first read()/write() and REUSED for every one after (it used to

@@ -109,9 +109,14 @@ long pipe_write(pipe_t *p, const char *buf, size_t len);
 // processSignals — the same discipline as console_wake_if_ready(). The fast
 // path (a reader/writer waking its counterpart directly) covers the common
 // case in microseconds; this sweep catches the one race it cannot: a waiter
-// that had registered but had not yet parked when the wake fired. Level-
-// triggered means no wake is ever lost — worst case it lands on the next pass
-// (~10ms), and the SIGSLEEP backstop (~1s) is the final net beneath that.
+// that had registered but had not yet parked when the wake fired. For that to
+// work, NO wake path may clear the slot of a waiter that is not yet ISLEEP —
+// the wake primitive only moves parked threads, so clear-then-wake on a
+// mid-park waiter loses the registration and the sleeper eats its full
+// backstop (see pipe_claim_parked_waiter in pipe.c; the net stack measured
+// this as echoes with an exactly-100-tick "RTT"). Level-triggered means no
+// wake is ever lost — worst case it lands on the next pass (~10ms), and the
+// SIGSLEEP backstop (~1s) is the final net beneath that.
 void pipe_wake_if_ready(void);
 
 // Dump every live pipe (buffered bytes, both refcounts, who is parked). Call it

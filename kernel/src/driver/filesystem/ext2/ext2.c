@@ -1,16 +1,19 @@
-// ext2.c — the os64 ext2 driver. READ-ONLY, by design, for now: the write
-// path (block/inode allocation, bitmap bookkeeping, metadata consistency) is
-// a separate slice with separate risks; reading is what unblocks an ext2
-// root and proves the on-disk format end to end.
+// ext2.c — the os64 ext2 driver's READ half: mount, path resolution, the
+// block map, file/dir reads, stat. The WRITE half (allocation, bitmap
+// bookkeeping, dirent surgery — everything that mutates the disk) lives next
+// door in ext2_write.c, added 2026-08-04, the day os64 wrote its first ext2
+// byte. The two halves share the private seam ext2_internal.h and map onto
+// the two op-table pairs: ext2_fops/ext2_dops (read-only — what the ROOT
+// mounts until writable-root is ratified) and ext2_rw_fops/ext2_rw_dops
+// (the superset secondary mounts get).
 //
-// The driver is verified against a filesystem os64 NEVER TOUCHED: partition 2
-// of the build image is formatted by the host's mkfs.ext2 and populated by
-// debugfs (see the GNUmakefile disk rule + tools/gen_ext2_testdata.py). If
-// this code reads that, it reads real ext2 — not our own private dialect of
-// it. (The previous content of this file was the original exploration sketch:
-// superblock dump + root-listing printf. It proved the appetite; this is the
-// meal. Its FILINFO-era helpers are superseded by the path/bmap machinery
-// below.)
+// The read half was verified against a filesystem os64 NEVER TOUCHED:
+// partition 2 of the build image is formatted by the host's mkfs.ext2 and
+// populated by debugfs (see the GNUmakefile disk rule +
+// tools/gen_ext2_testdata.py). If this code reads that, it reads real ext2 —
+// not our own private dialect of it. The write half is judged by the same
+// outside authority from the other side: after os64 writes, the host's
+// e2fsck -fn must stay green (make fsck-ext2).
 //
 // Lineage, because it matters to how this file is shaped: ext2 (Rémy Card,
 // 1993 — his copyright still heads our ext2_fs.h) is BSD FFS re-expressed:
@@ -19,67 +22,42 @@
 // added sits ON this skeleton, which is why a clean ext2 reader is the right
 // foundation and not a dead end.
 //
-// REENTRANCY: this driver takes NO locks, on purpose. After initialize, all
-// shared state (ext2_fs_t hanging off fs->fs_specific) is read-only; every
-// open file/directory gets its own handle object; every scratch buffer is
-// per-call. Concurrent reads serialize only at the block driver (the NVMe
-// ioLock), which is exactly where a read-only filesystem SHOULD serialize.
-// The FatFs volume locks exist because FatFs mutates a shared window buffer
-// on every call — we simply don't have one. (A block cache, when it comes,
-// brings shared mutable state and THEN this driver learns locking.)
+// LOCKING (the successor to the read-only era's proud "NO LOCKS by design" —
+// which predicted, correctly, that writes would end it):
+//   write_lock  — one writer at a time, held across the WHOLE body of every
+//                 write-shaped op. Same cost caveat as the FatFs volume
+//                 locks (fat_glue.c): the holder keeps interrupts off for
+//                 the whole transfer; graduates to a sleeping mutex when the
+//                 interruptible-syscall-bodies debt is paid.
+//   open_lock   — guards only the open-inode refcount table (the
+//                 rm-of-an-open-file refusal, ruled 2026-08-04); held for a
+//                 table scan, never across disk I/O.
+//   READS STAY LOCK-FREE. The argument: readers touch only geometry that is
+//   immutable after mount; writers mutate only the free-count fields of the
+//   cached sb/GDT, which no read path consumes; and every on-disk metadata
+//   update is a whole-block RMW serialized at the block driver (NVMe
+//   ioLock), so a concurrent reader sees the old block or the new block,
+//   never a torn one. The write ordering (ext2_write.c's doctrine) makes
+//   both states parse. Two benign races remain, commented at their sites:
+//   a dir handle's cached blockbuf can serve a just-deleted entry (stale
+//   listing), and a reader's cached size lags an appender (short read).
 
 #include "CONFIG.h"
-#include "driver/filesystem/ext2/ext2_fs.h"
 #include "kmalloc.h"
-#include "vfs.h"
 #include "ext2_vfs.h"
+#include "ext2_internal.h"
 #include "serial_logging.h"
 #include "memset.h"
 #include "memcpy.h"
 #include "memcmp.h"
 #include "strings.h"
 
-// i_mode high-nibble type codes. NOTE: deliberately NOT the E_EXT2_INODE_TYPE_T
-// enum in ext2_fs.h — that enum holds the DIRECTORY-ENTRY file_type codes
-// (1=file, 2=dir), which are a different namespace from i_mode's S_IF* bits.
-// Confusing the two reads every regular file as a socket.
-#define EXT2_S_IFMT   0xF000
-#define EXT2_S_IFREG  0x8000
-#define EXT2_S_IFDIR  0x4000
-
-// The one INCOMPAT feature we understand: dirents carry a file_type byte.
-// Anything else in the incompat set means the on-disk format has constructs
-// we would misparse — the superblock's own doc says refuse, so we refuse.
-#define EXT2_FEATURE_INCOMPAT_FILETYPE 0x0002
-
-// ── The per-mount context (fs->fs_specific) ─────────────────────────────────
-// Filled once by ext2_initialize_filesystem, read-only forever after.
-typedef struct {
-	ext2_super_block_t sb;        // cached superblock (the first 1024 bytes of it)
-	uint32_t block_size;          // bytes per fs block (1024 << s_log_block_size)
-	uint32_t sectors_per_block;   // fs block -> disk sectors
-	uint32_t inode_size;          // on-disk inode record size (128 or 256)
-	uint32_t groups_count;
-	ext2_group_desc_t *groups;    // the whole descriptor table, cached
-	uint32_t ptrs_per_block;      // block_size / 4 — the indirection fan-out
-} ext2_fs_t;
-
-// One open file OR directory. pos is bytes for files, and for directories the
-// byte offset of the NEXT dirent to deliver (dirents never cross a block
-// boundary — ext2 pads rec_len to the block end — so block-at-a-time works).
-typedef struct {
-	ext2_inode_t inode;           // copy of the on-disk inode (128-byte core)
-	uint32_t ino;
-	uint64_t pos;
-	uint64_t size;                // i_size (32-bit: files < 4GB, plenty for now)
-	uint8_t *blockbuf;            // directories: current block's contents
-	uint32_t blockbuf_index;      // which file-block blockbuf holds (~0 = none)
-} ext2_handle_t;
-
 // ── Block-level plumbing ────────────────────────────────────────────────────
+// (Shared with the write half via ext2_internal.h — the de-static'ing of
+// 2026-08-04. Contracts unchanged.)
 
-static int ext2_read_fs_block(vfs_filesystem_t *fs, ext2_fs_t *e,
-                              uint32_t block, void *buffer)
+int ext2_read_fs_block(vfs_filesystem_t *fs, ext2_fs_t *e,
+                       uint32_t block, void *buffer)
 {
 	uint64_t sector = fs->block_device_info->block_device->partition_table
 	                      ->parts[fs->partNumber]->partStartSector
@@ -89,10 +67,11 @@ static int ext2_read_fs_block(vfs_filesystem_t *fs, ext2_fs_t *e,
 	                           e->sectors_per_block);
 }
 
-// Read inode `ino` (1-based, per ext2) into *out. Locates the group, the
-// inode table, the block within it — three array lookups and one disk read.
-static int ext2_read_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
-                           uint32_t ino, ext2_inode_t *out)
+// Read inode `ino` (1-based, per ext2) into *out, through caller-owned block
+// scratch. Locates the group, the inode table, the block within it — three
+// array lookups and one disk read.
+int ext2_read_inode_buf(vfs_filesystem_t *fs, ext2_fs_t *e,
+                        uint32_t ino, ext2_inode_t *out, uint8_t *buf)
 {
 	if (ino == 0 || ino > e->sb.s_inodes_count)
 		return -1;
@@ -106,19 +85,27 @@ static int ext2_read_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 	uint32_t block    = e->groups[group].bg_inode_table + byte_off / e->block_size;
 	uint32_t in_block = byte_off % e->block_size;
 
-	uint8_t *buf = kmalloc(e->block_size);
-	if (buf == NULL)
-		return -1;
 	if (ext2_read_fs_block(fs, e, block, buf) != 0)
-	{
-		kfree(buf);
 		return -1;
-	}
 	// The on-disk record may be 256 bytes (modern mkfs default); the fields we
 	// speak are the classic first 128, which is sizeof(ext2_inode_t).
 	memcpy(out, buf + in_block, sizeof(ext2_inode_t));
-	kfree(buf);
 	return 0;
+}
+
+// The read paths' wrapper: per-call scratch, because THEY are lock-free by
+// doctrine and pay for it in allocations on purpose. The write half calls
+// _buf directly with its mount scratch (see the pool note in
+// ext2_internal.h).
+int ext2_read_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
+                    uint32_t ino, ext2_inode_t *out)
+{
+	uint8_t *buf = kmalloc(e->block_size);
+	if (buf == NULL)
+		return -1;
+	int rc = ext2_read_inode_buf(fs, e, ino, out, buf);
+	kfree(buf);
+	return rc;
 }
 
 // One entry of an indirect block: read the pointer block, pluck entry `idx`.
@@ -142,8 +129,9 @@ static uint32_t ext2_indirect_entry(vfs_filesystem_t *fs, ext2_fs_t *e,
 // The block map: file-relative block index -> on-disk block number (0 = hole,
 // which reads as zeros). This walk — 12 direct, then one, two, three levels
 // of indirection — IS the classic UNIX inode, unchanged since the 70s.
-static uint32_t ext2_bmap(vfs_filesystem_t *fs, ext2_fs_t *e,
-                          const ext2_inode_t *ino, uint32_t fblock)
+// (Its allocating twin, ext2_bmap_alloc, lives in ext2_write.c.)
+uint32_t ext2_bmap(vfs_filesystem_t *fs, ext2_fs_t *e,
+                   const ext2_inode_t *ino, uint32_t fblock)
 {
 	uint32_t ppb = e->ptrs_per_block;
 
@@ -178,9 +166,9 @@ static uint32_t ext2_bmap(vfs_filesystem_t *fs, ext2_fs_t *e,
 // data blocks — dir_index (hash trees) is a COMPAT feature layered over this
 // exact format, so linear works on any ext2 (we also pin ^dir_index on the
 // test image to keep the layout at its canonical simplest).
-static uint32_t ext2_dir_find(vfs_filesystem_t *fs, ext2_fs_t *e,
-                              const ext2_inode_t *dir_ino,
-                              const char *name, uint32_t len)
+uint32_t ext2_dir_find(vfs_filesystem_t *fs, ext2_fs_t *e,
+                       const ext2_inode_t *dir_ino,
+                       const char *name, uint32_t len)
 {
 	uint32_t found = 0;
 	uint8_t *buf = kmalloc(e->block_size);
@@ -218,8 +206,8 @@ static uint32_t ext2_dir_find(vfs_filesystem_t *fs, ext2_fs_t *e,
 // Walk an absolute path from the root inode (2 — inode numbering starts at
 // 1 and the root is famously #2, #1 being the bad-blocks inode). Fills *out
 // with the final inode; returns its number or 0.
-static uint32_t ext2_resolve_path(vfs_filesystem_t *fs, ext2_fs_t *e,
-                                  const char *path, ext2_inode_t *out)
+uint32_t ext2_resolve_path(vfs_filesystem_t *fs, ext2_fs_t *e,
+                           const char *path, ext2_inode_t *out)
 {
 	uint32_t ino = EXT2_ROOT_INO;
 	if (ext2_read_inode(fs, e, ino, out) != 0)
@@ -253,17 +241,84 @@ static uint32_t ext2_resolve_path(vfs_filesystem_t *fs, ext2_fs_t *e,
 	return ino;
 }
 
+// ── The open-inode refcount table ───────────────────────────────────────────
+// The rm-of-an-open-file refusal (ruled 2026-08-04; contract in
+// ext2_internal.h). Every open on EITHER op table passes through here, so a
+// writable mount's rm sees read-only handles too. The lock is held for a
+// 64-slot scan and nothing else.
+
+bool ext2_openref_register(ext2_fs_t *e, uint32_t ino)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&e->open_lock);
+	int free_slot = -1;
+	for (int i = 0; i < EXT2_OPEN_TABLE_SLOTS; i++)
+	{
+		if (e->open_refs[i].ino == ino)
+		{
+			e->open_refs[i].count++;
+			spinlock_release_irqrestore(&e->open_lock, flags);
+			return true;
+		}
+		if (e->open_refs[i].ino == 0 && free_slot < 0)
+			free_slot = i;
+	}
+	if (free_slot < 0)
+	{
+		// Table full: the open FAILS rather than existing invisibly to rm.
+		// 64 distinct open inodes on one mount means something is leaking
+		// handles anyway — say so where the leak's author will look.
+		spinlock_release_irqrestore(&e->open_lock, flags);
+		printd(DEBUG_VFS, "ext2: open-inode table full (%u slots) — refusing open of inode %u\n",
+		       EXT2_OPEN_TABLE_SLOTS, ino);
+		return false;
+	}
+	e->open_refs[free_slot].ino = ino;
+	e->open_refs[free_slot].count = 1;
+	spinlock_release_irqrestore(&e->open_lock, flags);
+	return true;
+}
+
+void ext2_openref_unregister(ext2_fs_t *e, uint32_t ino)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&e->open_lock);
+	for (int i = 0; i < EXT2_OPEN_TABLE_SLOTS; i++)
+	{
+		if (e->open_refs[i].ino == ino)
+		{
+			if (--e->open_refs[i].count == 0)
+				e->open_refs[i].ino = 0;
+			break;
+		}
+	}
+	spinlock_release_irqrestore(&e->open_lock, flags);
+}
+
+uint32_t ext2_openref_count(ext2_fs_t *e, uint32_t ino)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&e->open_lock);
+	uint32_t count = 0;
+	for (int i = 0; i < EXT2_OPEN_TABLE_SLOTS; i++)
+	{
+		if (e->open_refs[i].ino == ino)
+		{
+			count = e->open_refs[i].count;
+			break;
+		}
+	}
+	spinlock_release_irqrestore(&e->open_lock, flags);
+	return count;
+}
+
 // ── File operations ─────────────────────────────────────────────────────────
 
-static int ext2_open(vfs_file_t **vfs_file, const char *path, const char *mode,
-                     vfs_filesystem_t *vfs_fs)
+// The shared open core: resolve an EXISTING regular file, count it open,
+// build the handle. Both op tables' opens compose this — the read-only
+// table's open below adds nothing but the mode check; the writable table's
+// (ext2_open_rw, ext2_write.c) adds create/truncate/append around it.
+int ext2_open_existing(vfs_file_t **vfs_file, const char *path,
+                       vfs_filesystem_t *vfs_fs)
 {
 	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
-
-	// READ-ONLY driver: "r" is the entire mode vocabulary. Refusing "w"/"a"/
-	// "c" here — loudly, at open — beats writes that silently go nowhere.
-	if (mode == NULL || mode[0] != 'r' || mode[1] != '\0')
-		return -1;
 
 	ext2_handle_t probe;
 	uint32_t ino = ext2_resolve_path(vfs_fs, e, path, &probe.inode);
@@ -282,6 +337,16 @@ static int ext2_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		return -1;
 	}
 
+	// Count the inode as open BEFORE the handle exists — rm must never see a
+	// window where the handle lives but the refcount doesn't.
+	if (!ext2_openref_register(e, ino))
+	{
+		kfree(h);
+		kfree(*vfs_file);
+		*vfs_file = NULL;
+		return -1;
+	}
+
 	h->inode = probe.inode;
 	h->ino = ino;
 	h->pos = 0;
@@ -295,6 +360,17 @@ static int ext2_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	(*vfs_file)->fops = vfs_fs->fops;
 	(*vfs_file)->owner = vfs_fs;
 	return 0;
+}
+
+static int ext2_open(vfs_file_t **vfs_file, const char *path, const char *mode,
+                     vfs_filesystem_t *vfs_fs)
+{
+	// THE READ-ONLY TABLE's open: "r" is the entire mode vocabulary. Refusing
+	// "w"/"a"/"c" here — loudly, at open — beats writes that silently go
+	// nowhere.
+	if (mode == NULL || mode[0] != 'r' || mode[1] != '\0')
+		return -1;
+	return ext2_open_existing(vfs_file, path, vfs_fs);
 }
 
 static int ext2_read(vfs_file_t *vfs_file, void *buffer, size_t size)
@@ -371,6 +447,10 @@ static int ext2_tell(vfs_file_t *vfs_file)
 static int ext2_close(vfs_file_t *vfs_file)
 {
 	ext2_handle_t *h = (ext2_handle_t *)vfs_file->handle;
+	vfs_filesystem_t *fs = (vfs_filesystem_t *)vfs_file->owner;
+	ext2_openref_unregister((ext2_fs_t *)fs->fs_specific, h->ino);
+	// Nothing to flush: the write path is WRITE-THROUGH (every write commits
+	// data and inode before returning), so a close is pure bookkeeping.
 	if (h->blockbuf != NULL)
 		kfree(h->blockbuf);
 	kfree(h);
@@ -398,6 +478,17 @@ static int ext2_open_dir(vfs_directory_t **vfs_dir, const char *path,
 		if (h) kfree(h);
 		if (*vfs_dir) kfree(*vfs_dir);
 		if (bb) kfree(bb);
+		*vfs_dir = NULL;
+		return -1;
+	}
+
+	// Directories count as open too: rm of a directory somebody is listing
+	// is refused the same as rm of a file somebody is reading.
+	if (!ext2_openref_register(e, ino))
+	{
+		kfree(h);
+		kfree(*vfs_dir);
+		kfree(bb);
 		*vfs_dir = NULL;
 		return -1;
 	}
@@ -482,6 +573,8 @@ static int ext2_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 static int ext2_close_dir(vfs_directory_t *vfs_dir)
 {
 	ext2_handle_t *h = (ext2_handle_t *)vfs_dir->handle;
+	vfs_filesystem_t *fs = (vfs_filesystem_t *)vfs_dir->owner;
+	ext2_openref_unregister((ext2_fs_t *)fs->fs_specific, h->ino);
 	if (h->blockbuf != NULL)
 		kfree(h->blockbuf);
 	kfree(h);
@@ -578,6 +671,29 @@ int ext2_initialize_filesystem(vfs_filesystem_t *fs)
 		return -1;
 	}
 
+	// RO_COMPAT is the gentler tier: safe to READ regardless, but a WRITER
+	// that doesn't understand a bit must not write. Reads always proceed;
+	// unknown bits strip the write slots from THIS MOUNT's op tables (they
+	// are per-mount copies — kRegisterFilesystem clones them — so nulling
+	// here is exactly the NULL-slot-means-refusal doctrine, applied at mount
+	// time). The two bits we do support, and why they're safe, are documented
+	// at EXT2_SUPPORTED_RO_COMPAT in ext2_internal.h.
+	uint32_t ro_compat = (e->sb.s_rev_level >= EXT2_DYNAMIC_REV)
+	                         ? e->sb.s_feature_ro_compat : 0;
+	e->forced_ro = (ro_compat & ~(uint32_t)EXT2_SUPPORTED_RO_COMPAT) != 0;
+	if (e->forced_ro && fs->fops != NULL && fs->fops->write != NULL)
+	{
+		printd(DEBUG_VFS, "ext2: unknown ro_compat features 0x%08x — mounting READ-ONLY (writes stripped)\n",
+		       ro_compat);
+		fs->fops->write   = NULL;
+		fs->fops->sync    = NULL;
+		fs->fops->rm      = NULL;
+		fs->fops->fputs   = NULL;
+		fs->fops->fprintf = NULL;
+		if (fs->dops != NULL)
+			fs->dops->mkdir = NULL;
+	}
+
 	e->block_size        = EXT2_MIN_BLOCK_SIZE << e->sb.s_log_block_size;
 	e->sectors_per_block = e->block_size / DISK_SECTOR_SIZE;
 	e->ptrs_per_block    = e->block_size / sizeof(uint32_t);
@@ -608,18 +724,42 @@ int ext2_initialize_filesystem(vfs_filesystem_t *fs)
 		}
 	}
 
+	// The write-path scratch pool (doctrine in ext2_internal.h): allocated
+	// once here, handed out LIFO under write_lock forever after. Allocated
+	// even for read-only mounts — 8KB of insurance beats a NULL surprise if
+	// a mount is ever flipped writable in place.
+	for (size_t i = 0; i < sizeof(e->wr_scratch) / sizeof(e->wr_scratch[0]); i++)
+	{
+		e->wr_scratch[i] = kmalloc(e->block_size);
+		if (e->wr_scratch[i] == NULL)
+		{
+			for (size_t j = 0; j < i; j++)
+				kfree(e->wr_scratch[j]);
+			kfree(e->groups);
+			kfree(e);
+			return -1;
+		}
+	}
+	e->wr_scratch_used = 0;
+
 	fs->fs_specific = e;
 	fs->blockSize = (int)e->block_size;
 
-	printd(DEBUG_VFS, "ext2: mounted — %u blocks of %u bytes, %u inodes (%u bytes each), %u group(s)\n",
+	printd(DEBUG_VFS, "ext2: mounted %s — %u blocks of %u bytes, %u inodes (%u bytes each), %u group(s)\n",
+	       (fs->fops != NULL && fs->fops->write != NULL) ? "read-write" : "read-only",
 	       e->sb.s_blocks_count, e->block_size, e->sb.s_inodes_count,
 	       e->inode_size, e->groups_count);
 	return 0;
 }
 
-// ── The op tables ───────────────────────────────────────────────────────────
-// Write-shaped slots are deliberately NULL: this driver is read-only, and a
-// NULL here fails loudly at the call site instead of pretending.
+// ── The op tables (the READ-ONLY pair) ──────────────────────────────────────
+// Write-shaped slots are deliberately NULL: a NULL here is refused cleanly at
+// the syscall layer (the NULL-slot doctrine), so a mount registered with THIS
+// pair cannot write no matter what code exists elsewhere. The ROOT mounts
+// this pair until writable-root is ratified; secondary ext2 mounts get the
+// superset pair ext2_rw_fops/ext2_rw_dops (ext2_write.c). The stray-write
+// tripwire (block_device.c) consults the per-mount copy of exactly these
+// slots, so the read-only claim is enforced at the disk too.
 vfs_file_operations_t ext2_fops = {
 	.initialize = ext2_initialize_filesystem,
 	.open  = ext2_open,

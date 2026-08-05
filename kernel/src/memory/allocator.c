@@ -135,17 +135,28 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 {
 	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
 	{
-		//Don't allow page 0 to be allocated!!!
-		if (kMemoryStatus[cnt].startAddress > 0 && kMemoryStatus[cnt].in_use == false && 
-		//Either the requested block doesn't need to be aligned and the current status' size is big enough
-			( 
-				(page_aligned == false && kMemoryStatus[cnt].length >= requested_length)
-				||  ( round_up_to_nearest_page(requested_length) < kMemoryStatus[cnt].length)
-			)
-		)
+		memory_status_t *entry = &kMemoryStatus[cnt];
+
+		// Don't allow page 0 to be allocated.
+		if (entry->startAddress == 0 || entry->in_use)
+			continue;
+
+		if (!page_aligned)
 		{
-			return &kMemoryStatus[cnt];
+			if (entry->length >= requested_length)
+				return entry;
+			continue;
 		}
+
+		// An aligned allocation consumes the bytes before the next page boundary too;
+		// checking only requested_length can select a block that is actually too small.
+		if (requested_length > entry->length)
+			continue;
+		uint64_t alignment_padding = round_up_to_nearest_page(entry->startAddress) - entry->startAddress;
+
+		// Use <= so a block whose padding plus request exactly fills it is a valid fit.
+		if (alignment_padding <= entry->length - requested_length)
+			return entry;
 	}
 	return NULL;
 }
