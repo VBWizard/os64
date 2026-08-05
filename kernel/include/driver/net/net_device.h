@@ -81,6 +81,18 @@ typedef struct net_device
 	uint64_t rx_frames, rx_bytes;
 	uint64_t rx_dropped_no_handler;  // arrived before the stack claimed RX (see net_set_rx_handler)
 	uint64_t rx_dropped_too_big;     // frame exceeded NET_FRAME_MAX — counted, never truncated
+	// Frames the HARDWARE says arrived damaged: bad CRC, alignment error,
+	// symbol error — the wire lied, and we drop them exactly as the medium
+	// would have. Added 2026-08-05 by the e1000, and worth recording WHY:
+	// this field is the seam's charter paying out. virtio-net is software
+	// pretending to be a NIC, and software does not corrupt frames in
+	// flight, so for one whole driver the concept had no referent and the
+	// asymmetry with tx_errors looked like symmetry. The second
+	// implementation — real silicon with a real errors byte in every
+	// receive descriptor — is what made the hole visible. A seam proven
+	// against one driver is that driver's private wrapper; this is what
+	// the sentence meant.
+	uint64_t rx_errors;
 } net_device_t;
 
 // The STACK side of the seam: where inbound frames go. Phase 2's ethernet

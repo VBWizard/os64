@@ -44,6 +44,7 @@
 #include "ramdisk.h"
 #include "driver/system/usb/xhci.h"
 #include "driver/net/virtio_net.h"
+#include "driver/net/e1000.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
 #include "driver/net/dhcp.h"
@@ -225,6 +226,14 @@ void kernel_init()
 	{
 		init_net_stack();
 		init_virtio_net();
+		// The e1000 AFTER virtio, deliberately: registration order is
+		// device order, and kNetDevices[0] is the NIC the stack dials
+		// through. A machine offered both keeps the driver that has flown
+		// the most miles; a machine offered only an e1000 (VirtualBox's
+		// default adapter, `-device e1000` on QEMU) gets it as device 0
+		// and never notices the difference. That last clause is the whole
+		// point of the seam.
+		init_e1000();
 		// DHCP by default when a NIC exists and nobody typed IP= — the
 		// lease overwrites the static convention defaults when it lands
 		// (and if no server answers, those defaults keep working; the

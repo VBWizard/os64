@@ -10,6 +10,7 @@
 #include "pipe.h"
 #include "driver/system/usb/xhci.h"
 #include "driver/net/virtio_net.h"
+#include "driver/net/e1000.h"
 #include "driver/net/dhcp.h"
 #include "driver/net/udp_conn.h"
 #include "driver/net/tcp.h"
@@ -111,6 +112,13 @@ void processSignals()
 	// and two ring-index compares when idle; interrupt wiring is a future
 	// slice (NETWORK.md), and this path is what makes packets move today.
 	virtio_net_poll();
+	// Every registered NIC needs its own drainer — this is a per-DRIVER
+	// call, not a per-device one, and each is a guard branch away from free
+	// when its hardware is absent. (A generic "poll every net_device" verb
+	// through the seam is the obvious tidy-up; it waits for a third driver
+	// to make the abstraction pay, the same way the seam itself waited for
+	// a second one.)
+	e1000_poll();
 
 	// DHCP's retry timer rides the same pass (one state compare when the
 	// lease is settled). Delivery of DHCP replies happens inside the poll

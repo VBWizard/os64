@@ -56,6 +56,19 @@ implementation is just a wrapper (AHCI/NVMe learned us that).
 - **e1000/e1000e second.** The Intel 8254x manual is the classic teaching
   datasheet of osdev — for a learner's OS, the canonical real-hardware
   NIC programming model belongs in the tree. It also proves the seam.
+  **DONE 2026-08-05** (`e1000.c`, 82540EM + siblings): registers instead
+  of capabilities, a serial EEPROM instead of a feature handshake, RX/TX
+  descriptor rings instead of virtqueues — and the entire protocol stack
+  above it did not change by one line. The receipt: the same 29-test
+  post-boot suite that passes on virtio passes on the e1000, byte for
+  byte, DHCP lease through TCP RST handling. The seam's charter, paid.
+  It also collected a debt the first driver could not: `net_device_t`
+  grew `rx_errors`, because virtio is software and software does not
+  corrupt frames in flight — only real silicon has an errors byte in
+  every receive descriptor, and only a second implementation could have
+  found the asymmetry. (e1000e/82574L is deliberately NOT claimed: it is
+  a PCIe part with a different init dance, and it gets its own slice on
+  the day it has a reason — likely the same day interrupts do.)
 - **RX/TX are DMA rings** — descriptors pointing at buffers, device and
   driver chasing each other around a circle. Same instincts as NVMe
   submission/completion queues, new sport. Buffers come from the
