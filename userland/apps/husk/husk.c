@@ -46,11 +46,77 @@ static int utoa(unsigned long v, char *buf)
 
 static void prompt(void) { os64_write(1, "husk> ", 6); }
 
+// ── command history ─────────────────────────────────────────────────────────
+// A ring of the last HISTORY_DEPTH submitted lines, recalled with Up/Down.
+// The arrows arrive as VT100 escape sequences (ESC '[' A/B — the keyboard
+// driver speaks 1979's vocabulary since 2026-08-04, and this parser is its
+// first customer). Recall-only for now: a recalled line is edited with the
+// same backspace-and-type the live line uses; cursor movement WITHIN a line
+// (Left/Right) is a later luxury and those sequences are swallowed politely.
+//
+// The classic contract, same as every shell since csh grew `!!` and ksh put
+// arrows on it: Up walks backward through what you typed, Down walks
+// forward, and walking past the newest entry returns you to the line you
+// were composing when you started browsing (saved at first Up — losing the
+// half-typed line to a stray arrow is the beginner trap this dodges).
+// Duplicate suppression: a line identical to the previous entry is not
+// stored twice (spamming `free` all night = ONE entry, Chris = the consumer).
+#define HISTORY_DEPTH 32
+static char s_history[HISTORY_DEPTH][LINE_MAX];
+static int  s_hist_count = 0;    // entries stored (saturates at DEPTH)
+static int  s_hist_next  = 0;    // ring slot the NEXT submit writes
+
+static void history_store(const char *line)
+{
+	if (line[0] == '\0')
+		return;                  // empty lines are not history
+	if (s_hist_count > 0)
+	{
+		int last = (s_hist_next + HISTORY_DEPTH - 1) % HISTORY_DEPTH;
+		if (os64_streq(s_history[last], line))
+			return;              // same as the previous entry — once is enough
+	}
+	os64_strcopy(s_history[s_hist_next], LINE_MAX, line);
+	s_hist_next = (s_hist_next + 1) % HISTORY_DEPTH;
+	if (s_hist_count < HISTORY_DEPTH)
+		s_hist_count++;
+}
+
+// Entry `back` steps into the past (1 = most recent). NULL when out of range.
+static const char *history_get(int back)
+{
+	if (back < 1 || back > s_hist_count)
+		return NULL;
+	return s_history[(s_hist_next + HISTORY_DEPTH - back) % HISTORY_DEPTH];
+}
+
+// Swap the displayed line for `src`: rub out what's showing, echo the
+// replacement, and update the buffer — the whole visual of history recall.
+static void replace_line(char *buf, int *n, int cap, const char *src)
+{
+	while (*n > 0) { os64_write(1, "\b \b", 3); (*n)--; }
+	int len = 0;
+	while (src[len] != '\0' && len < cap - 1)
+	{
+		buf[len] = src[len];
+		len++;
+	}
+	buf[len] = '\0';
+	if (len > 0)
+		os64_write(1, buf, (size_t)len);
+	*n = len;
+}
+
 // Read one line from the console into buf (NUL-terminated), echoing as we go.
-// Returns the length. Handles Enter (submit) and Backspace (erase).
+// Returns the length. Handles Enter (submit), Backspace (erase), and
+// Up/Down history recall.
 static int read_line(char *buf, int cap)
 {
 	int n = 0;
+	int browse = 0;              // 0 = composing live; k = viewing history[k back]
+	char live[LINE_MAX];         // the half-typed line, parked during browsing
+	live[0] = '\0';
+
 	for (;;)
 	{
 		char c;
@@ -61,11 +127,13 @@ static int read_line(char *buf, int cap)
 		{
 			os64_write(1, "\n", 1);
 			buf[n] = 0;
+			history_store(buf);
 			return n;
 		}
 		if (c == 0x08 || c == 0x7f)          // backspace / delete
 		{
 			if (n > 0) { n--; os64_write(1, "\b \b", 3); }   // rub out one glyph
+			browse = 0;          // editing makes the recalled line YOURS now
 			continue;
 		}
 		if (c == 0x03)                       // ETX — Ctrl+C at the prompt
@@ -80,6 +148,41 @@ static int read_line(char *buf, int cap)
 			buf[0] = 0;
 			return 0;
 		}
+		if (c == 0x1B)                       // ESC — a VT100 sequence begins
+		{
+			// The keyboard delivers arrows as ESC '[' <final> in one burst;
+			// the two follow-up reads block only in the pathological case of
+			// a bare ESC from some future source, which no key produces today.
+			char seq[2];
+			if (os64_read(0, &seq[0], 1) != 1 || seq[0] != '[')
+				continue;        // lone ESC or unknown: swallow
+			if (os64_read(0, &seq[1], 1) != 1)
+				continue;
+
+			if (seq[1] == 'A')               // Up — one step further back
+			{
+				if (history_get(browse + 1) == NULL)
+					continue;    // no further past; nothing visibly changes
+				if (browse == 0)
+				{
+					buf[n] = '\0';           // park the half-typed line
+					os64_strcopy(live, LINE_MAX, buf);
+				}
+				browse++;
+				replace_line(buf, &n, cap, history_get(browse));
+			}
+			else if (seq[1] == 'B')          // Down — one step toward now
+			{
+				if (browse == 0)
+					continue;    // already composing; Down has nowhere to go
+				browse--;
+				replace_line(buf, &n, cap,
+				             browse == 0 ? live : history_get(browse));
+			}
+			// 'C'/'D' (Right/Left): cursor editing is a later luxury —
+			// swallowed so they never bury bytes in the command.
+			continue;
+		}
 		// Other control chords (Ctrl+A..Z now arrive as 0x01..0x1A) have no
 		// line-editing meaning yet — swallow them rather than burying
 		// invisible bytes in the command. Tab stays: it's typeable text.
@@ -89,6 +192,7 @@ static int read_line(char *buf, int cap)
 		{
 			buf[n++] = c;
 			os64_write(1, &c, 1);            // echo
+			browse = 0;          // typing makes the recalled line YOURS now
 		}
 	}
 }
