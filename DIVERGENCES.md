@@ -34,7 +34,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | Ctrl+letter = control codes; Ctrl+D = EOT = EOF | 1963 semantics, done properly (one-shot EOF, then normal reads) |
 | ELF, SysV x86-64 calling convention | Interop with the toolchain — a *specific reason*, per the philosophy |
 | Syscall args in RDI/RSI/RDX/R10/R8/R9 | Hardware forces R10-for-RCX; happens to match Linux |
-| ext2 on-disk format | FFS re-expressed; read-only by design (FAT keeps boot/interop forever) |
+| ext2 on-disk format | FFS re-expressed; FULL read/write since 2026-08-04, judged by the host's own e2fsck (`make fsck-ext2`); root stays mounted read-only until ratified (FAT keeps boot/interop forever) |
 
 ---
 
@@ -55,6 +55,8 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `kill(2)` | Does not exist and never will. `echo kill > /proc/N/ctl` | kill(pid, SIGCONT) resumes a process — the name has lied since 1971; ctl is self-describing | PROC.md § ctl |
 | Unknown flags silently ignored (much of POSIX) | Unknown spawn flags / open modes / ctl verbs REFUSED | A silently dropped request "succeeded" and didn't | syscall.c boundaries |
 | `unlink(2)` + `rmdir(2)`, two removal verbs | ONE verb: `unlink` removes files AND empty directories; rmdir will never exist (ratified 2026-08-04) | POSIX's split is a pre-4.2BSD scar (setuid rmdir(1) hand-unlinking `.`, `..`, then the entry); Plan 9's `remove()` got it right | abi syscall_numbers.h #35, ABI #35 |
+| `unlink` of an open file succeeds (blocks freed at last close) | REFUSED while any handle holds the file/dir open (in-band busy) | Ruled 2026-08-04: zero recycled-blocks window, no orphan machinery; Unix's unlink-while-open trick gets built the day a consumer needs it — consumer-driven | ext2_internal.h (open-refcount doctrine) |
+| `fsync(2)` matters (write-back caches defer everything) | ext2 writes are FULL WRITE-THROUGH: data + inode committed before write() returns; `sync` is an already-kept promise | No block cache to flush, and a file being appended reads at true length to everyone immediately — honestly better than FAT's looks-empty-until-sync (which is why sync exists at all). A future block cache re-earns sync | ext2_write.c durability doctrine |
 
 ---
 

@@ -63,7 +63,7 @@ DISK_PARTUUID ?= 2f4fd02e-68b4-4c82-98bc-72467529b3fc
 # The partition rides the same image (and therefore the ISO/ramdisk boots
 # too), right after the FAT partition. The FAT partition keeps DISK_SIZE_MB
 # and its GUID exactly as before — root mounting is untouched.
-EXT2_SIZE_MB ?= 16
+EXT2_SIZE_MB ?= 512
 EXT2_PARTUUID ?= 1ec5f5ab-71b7-45cd-a7a4-05646e878e57
 EXT2_TEST_IMAGE ?= $(CURDIR)/disk/ext2_test.img
 EXT2_STAGING ?= $(CURDIR)/disk/ext2_staging
@@ -362,6 +362,22 @@ disk-init disk-populate: $(DISK_IMAGE)
 disk:
 	rm -f $(DISK_IMAGE)
 	$(MAKE) $(DISK_IMAGE)
+
+# Judge what os64 wrote (the ext2 write driver's outside authority, since
+# 2026-08-04): pull the ext2 partition out of the disk image and run the
+# host's e2fsck over it, read-only, forced full pass. Run AFTER a QEMU
+# session that exercised ext2 writes — e2fsck independently recomputes every
+# structure the driver maintains (bitmaps, free counts, i_blocks including
+# indirect blocks, links_count, bg_used_dirs_count), so a green exit here is
+# the strongest single verdict the write path can earn.
+# The dd copy means the image itself is never touched; on a FAILING check
+# the extracted copy is left at /tmp/os64_fsck_ext2.img for the autopsy.
+.PHONY: fsck-ext2
+fsck-ext2:
+	@dd if=$(DISK_IMAGE) of=/tmp/os64_fsck_ext2.img bs=512 \
+	    skip=$(EXT2_START_SECTOR) count=$$(($(EXT2_SIZE_MB) * 2048)) status=none
+	e2fsck -fn /tmp/os64_fsck_ext2.img
+	@rm -f /tmp/os64_fsck_ext2.img
 
 # Refresh compile_commands.json — the per-file compiler flags VSCode's
 # IntelliSense runs on (see .vscode/c_cpp_properties.json). bear records the

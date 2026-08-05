@@ -44,12 +44,18 @@ void init_block()
 // borrowed: a write-capable path (FAT glue, NVMe) aimed at LBAs that were
 // never its to touch.
 //
-// The rule this enforces: a disk write is legitimate ONLY if it lands entirely
-// inside a partition whose filesystem has a write path — FAT, today. Writes to
-// an ext2 partition (read-only by design), to GPT headers/tables, or to
-// unpartitioned space have no legitimate author, so they panic on the spot:
-// the backtrace of the caller is worth infinitely more than a silently
-// corrupted root filesystem discovered three boots later.
+// The rule this enforces (upgraded 2026-08-04, the day ext2 learned to
+// write): a disk write is legitimate ONLY if it lands entirely inside a
+// partition whose MOUNTED filesystem installed a write path. The original
+// rule allowlisted FAT partitions by TYPE — correct while ext2 was read-only
+// by design, wrong the moment it wasn't. Asking the mount instead keeps
+// every old guarantee and adds a new one: a read-only ext2 mount (the root,
+// until it's ratified writable) still panics on any write aimed at it, GPT
+// headers/tables and unpartitioned space still panic, unmounted partitions
+// still panic — and the writable /ext2 secondary passes only because its
+// per-mount fops carry a real write op. The backtrace of the caller is worth
+// infinitely more than a silently corrupted root filesystem discovered three
+// boots later.
 //
 // Called from every bops->write implementation (NVMe, RAMDisk) BEFORE the
 // bytes move. Reads are never gated — this guards the disk, not the reader.
@@ -77,11 +83,11 @@ void block_verify_write_allowed(block_device_info_t* device, uint64_t sector, ui
 		// partLastLBA semantics, see gpt.c.)
 		if (sector >= part->partStartSector && last <= part->partEndSector)
 		{
-			if (part->filesystemType == FILESYSTEM_TYPE_FAT ||
-			    part->filesystemType == FILESYSTEM_TYPE_FAT32)
-				return;   // the one write path that's supposed to exist
-			panic("block write tripwire: write of %lu sector(s) at LBA %lu targets read-only partition %d ('%s', fs type %d) — no code is allowed to write there\n",
-			      count, sector, i, part->partName, part->filesystemType);
+			if (vfs_partition_mount_writable(device, i))
+				return;   // a mounted filesystem with a write path owns it
+			panic("block write tripwire: write of %lu sector(s) at LBA %lu targets partition %d ('%s', fs type %d) which is %s — no code is allowed to write there\n",
+			      count, sector, i, part->partName, part->filesystemType,
+			      vfs_partition_mounted(device, i) ? "mounted read-only" : "not mounted");
 		}
 	}
 

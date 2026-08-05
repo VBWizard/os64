@@ -392,6 +392,38 @@ static bool vfs_prefix_in_use(const char *prefix)
 	return false;
 }
 
+// The stray-write tripwire's oracle (contract in vfs.h): is the partition at
+// (dev, partNo) backed by a mount that installed a write path? The per-mount
+// fops COPY is deliberately the thing consulted — kRegisterFilesystem clones
+// the op tables per mount, so a read-only ext2 root and a writable /ext2
+// secondary give different answers for the same driver. Matching on the
+// device POINTER is sound: block_device_info_t objects are created once at
+// detection and never move; the fs stores the same pointer the block layer
+// hands to bops->write.
+bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo)
+{
+	for (int i = 0; i < kMountCount; i++)
+	{
+		vfs_filesystem_t *fs = kMountTable[i].fs;
+		if (fs == NULL || fs->block_device_info != dev || fs->partNumber != partNo)
+			continue;
+		return fs->fops != NULL && fs->fops->write != NULL;
+	}
+	return false;   // no mount claims it — nothing legitimate writes there
+}
+
+// The panic-message companion (contract in vfs.h): mounted at all?
+bool vfs_partition_mounted(block_device_info_t *dev, int partNo)
+{
+	for (int i = 0; i < kMountCount; i++)
+	{
+		vfs_filesystem_t *fs = kMountTable[i].fs;
+		if (fs != NULL && fs->block_device_info == dev && fs->partNumber == partNo)
+			return true;
+	}
+	return false;
+}
+
 // Auto-mount every recognized, OS64-AUTHORED non-root partition at its GPT
 // partition NAME ("/home"), falling back to its filesystem type ("/fat",
 // "/ext2") when the name is missing or unusable. Runs once at boot, after the
@@ -423,7 +455,15 @@ static void vfs_mount_secondary_partitions(void)
 					break;
 				case FILESYSTEM_TYPE_EXT2:
 					fsName = "ext2";
-					fileOps = ext2_fops; dirOps = ext2_dops;
+					// SECONDARY ext2 mounts get the WRITABLE pair (2026-08-04).
+					// The ROOT keeps the read-only pair (vfs_mount_root_part
+					// below) until writable-root is ratified — the shakedown
+					// happens here, on /ext2 and friends, where a write bug
+					// can't eat the filesystem the OS is standing on.
+					// ext2_initialize_filesystem may still strip the write
+					// slots if the disk's ro_compat features outrun us.
+					ext2_rw_tables_init();
+					fileOps = ext2_rw_fops; dirOps = ext2_rw_dops;
 					break;
 				default:
 					continue;   // unrecognized/no filesystem — not mountable

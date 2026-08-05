@@ -178,11 +178,15 @@
 // could leave half-done, and when 4.2BSD made directory removal atomic it
 // kept the two verbs it had inherited. os64 declines the scar. Every
 // filesystem's rm op owes this same contract — FatFs's f_unlink grants it
-// natively; the future ext2 write driver will be built to it.
+// natively, and the ext2 write driver was built to it the same afternoon
+// the contract was ratified (2026-08-04: ext2_rm, promise kept).
 //
-// Returns 0 on success. Refused, not half-done: a filesystem with no write
-// path (os64's ext2 is read-only by design), a path that isn't there, or a
-// directory that still has contents — emptying it first is the caller's
+// Returns 0 on success. Refused, not half-done: a read-only filesystem
+// (os64's ext2 ROOT mount stays read-only until ratified writable — the
+// driver itself writes since 2026-08-04), a path that isn't there, a file
+// or directory another handle holds OPEN (ext2 refuses rather than racing
+// the reader), or a directory that still has contents — emptying it first
+// is the caller's
 // job, which is what rm -r's depth-first walk is.
 #define SYSCALL_UNLINK 35
 

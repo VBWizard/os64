@@ -387,10 +387,14 @@ static int fat_seek(vfs_file_t* vfs_file, long offset, int whence) {
 
 /// @brief Sync an open file to disk
 /// @param vfs_file The handle of the file to sync
-/// @return The status of the sync attempt
+/// @return 0 on success, -1 on failure (the seam's neutral vocabulary)
 static int fat_sync(vfs_file_t* vfs_file)
 {
-	return f_sync(vfs_file->handle);
+	// Normalize the FRESULT (2026-08-04). Returning it raw was a live bug:
+	// FRESULT errors are POSITIVE (FR_DISK_ERR == 1), and syscall_sync only
+	// treats rc < 0 as failure — so a FatFs sync error reported SUCCESS to
+	// ring 3. The seam speaks 0/-1; the FatFs dialect stays inside the glue.
+	return f_sync(vfs_file->handle) == FR_OK ? 0 : -1;
 }
 
 static char* fat_gets(vfs_file_t* vfs_file, char* buffer, int length)
@@ -536,7 +540,15 @@ static int fat_mkdir(char* path, vfs_filesystem_t* vfs_fs)
 	char lPath[255];
 	strncpy(lPath, path, 255);
 	create_fat_path(lPath, vfs_fs);
-	return f_mkdir(lPath);
+	// Normalized to the seam's 0/-1 (2026-08-04, the day ext2 became the
+	// second mkdir implementation and the neutral contract stopped being
+	// theoretical). The raw FRESULT used to leak through here — test_main.c
+	// had to include ff.h just to spell FR_EXIST. Failures are logged with
+	// the FatFs-native code before it's flattened, same as fat_rm.
+	FRESULT res = f_mkdir(lPath);
+	if (res != FR_OK)
+		printd(DEBUG_VFS, "fat_mkdir: f_mkdir('%s') failed, FRESULT=%u\n", lPath, res);
+	return res == FR_OK ? 0 : -1;
 }
 
 // stat is readdir for exactly one name (dops->stat in vfs.h): same FILINFO →

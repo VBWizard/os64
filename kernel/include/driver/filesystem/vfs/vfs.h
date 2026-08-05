@@ -364,6 +364,23 @@ vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tai
 // Pure kMountTable string scan — no disk I/O, safe from any CR3.
 int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry);
 
+// Does (device, partNo) back a mount whose filesystem can write? The
+// stray-write tripwire's question (block_verify_write_allowed): a disk write
+// is legitimate only if the MOUNTED filesystem over that partition installed
+// a write path — and the per-mount fops copy is the authority, because that
+// is where a read-only ext2 mount's write slot is NULL even though a
+// write-capable table exists elsewhere. Not mounted ⇒ false: nothing
+// legitimate writes to a partition no filesystem has claimed. Pure
+// kMountTable scan — no disk I/O, safe from any context/CR3.
+bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo);
+
+// The tripwire's second question, asked only while composing the panic
+// message: is (dev, partNo) mounted at all? Distinguishes "mounted
+// read-only" (a write aimed at a filesystem that refused the pen) from "not
+// mounted" (a write aimed at nothing — the classic misroute). Same pure
+// scan, same any-context safety.
+bool vfs_partition_mounted(block_device_info_t *dev, int partNo);
+
 // Resolve `path` against `cwd` into a CANONICAL absolute path in `out`:
 // relative paths are prefixed with cwd, "." disappears, ".." pops a component
 // (".." at the root stays at the root, per tradition), duplicate slashes
