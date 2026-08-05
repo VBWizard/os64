@@ -3,6 +3,7 @@
 #include "smp_core.h"
 #include "smp_offsets.h"
 #include "x86_64.h"
+#include "memory/paging.h"   // pat_init_this_core — per-core WC PAT entry
 #include "CONFIG.h"
 #include "msr.h"
 #include "smp.h"
@@ -217,6 +218,12 @@ void ap_wakeup_after_stack_switch(uint64_t apic_id, uint64_t stackVirtualAddress
 	*((volatile uint32_t*)(kMPICRHigh)) = apic_id << 24;  // Set destination APIC ID
 	*((volatile uint32_t*) (kCPUInfo[apic_id].apic_tpr)) = 0x30;  // Correct TPR
 	__asm__ volatile ("mfence");  // Ensure memory writes complete
+
+	// PAT entry 7 = write-combining on THIS core, same as the BSP set before
+	// the kernel tables were built (kernel.c) — IA32_PAT is per-core and the
+	// SDM wants uniformity. Must happen before this core ever stores through
+	// the framebuffer's PAGE_WC mapping (the compositor runs on APs).
+	pat_init_this_core();
 
 	*((volatile uint32_t*)kCPUInfo[apic_id].apic_svr) |= 0x100; // Set bit 8 (Enable LAPIC)
 	//EOI to clear out the IRR as we don't know what is awaiting us when we enable the APIC/LVT otherwise

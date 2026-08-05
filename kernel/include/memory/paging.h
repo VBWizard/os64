@@ -21,7 +21,19 @@
 #define PAGE_PCD          (1ULL << 4)    // Cache disable
 #define PAGE_ACCESSED     (1ULL << 5)    // Accessed
 #define PAGE_DIRTY        (1ULL << 6)    // Dirty
+#define PAGE_PAT_4K       (1ULL << 7)    // PAT high bit (4KB PTEs; 2MB pages use bit 12)
 #define PAGE_GLOBAL       (1ULL << 8)    // Global page
+
+// WRITE-COMBINING page type (2026-08-04, the console-speed slice): the PTE
+// bits {PAT, PCD, PWT} select PAT entry 7, which pat_init_this_core()
+// programs to WC on every core. The framebuffer is the customer: WC batches
+// stores into burst writes — the memory type invented for framebuffers —
+// where the old PCD (uncached) mapping paid full price per store (~30MB/s,
+// the reason a 3MB scroll blit capped the console at ~10 lines/sec).
+// DELIBERATE FAIL-SAFE: PAT entry 7's power-on default is UC-, so a core
+// that somehow missed the MSR write sees exactly the old uncached behavior
+// — the worst case of this feature is its own absence.
+#define PAGE_WC           (PAGE_PAT_4K | PAGE_PCD | PAGE_PWT)
 #define PAGE_NO_EXECUTE   (1ULL << 63)   // No-execute
 
 #define PAGE_FLAGS_MASK 0xFFFUL
@@ -101,5 +113,11 @@ void init_os64_paging_tables();
 void paging_map_kernel_into_pml4(uintptr_t* pml4v);
 uintptr_t get_paging_table_page();
 uintptr_t get_paging_table_pageV();
+
+// Program PAT entry 7 = write-combining on THE CALLING CORE (IA32_PAT is
+// per-core and the SDM wants all cores uniform). BSP calls it before the
+// kernel page tables are built; each AP calls it during its own bring-up,
+// before it can ever touch the WC-tagged framebuffer. See PAGE_WC above.
+void pat_init_this_core(void);
 
 #endif // PAGING_H

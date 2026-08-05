@@ -534,6 +534,11 @@ void kernel_main()
 	paging_init();
 	printf("Initializing allocator, available memory is %Lu bytes\n",kAvailableMemory);
 	allocator_init();
+	// PAT entry 7 = write-combining, BEFORE the kernel tables are built —
+	// init_os64_paging_tables maps the framebuffer PAGE_WC (PAT index 7),
+	// and the entry must mean WC before the first store lands through it.
+	// Each AP does the same for itself during bring-up (smp_core.c).
+	pat_init_this_core();
 	init_os64_paging_tables();
 	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
 	__asm__ volatile ("cli\nmov rsp, %0\nsti\n" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));

@@ -14,6 +14,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "pci_lookup.h"
+#include "msr.h"   // rdmsr64/wrmsr64 — pat_init_this_core programs IA32_PAT
 
 
 extern uintptr_t kKernelBaseAddressV;
@@ -414,6 +415,32 @@ uintptr_t get_paging_table_page()
 	return retVal;
 }
 
+// Program PAT entry 7 = write-combining on this core (contract in paging.h;
+// the framebuffer's PAGE_WC mapping selects entry 7). IA32_PAT is 0x277:
+// eight one-byte entries, one per {PAT,PCD,PWT} index. We touch ONLY byte 7
+// — entries 0-6 keep their power-on values, so every existing mapping
+// (WB=0, PWT=1, PCD=2, PCD|PWT=3) means exactly what it always meant.
+//
+// The SDM's full memory-type-change liturgy (cache disable, wbinvd, TLB
+// flush, repeat) exists for REmapping pages a core has already cached under
+// the old type. Both call sites here run before this core has ever touched
+// the WC-tagged pages — the BSP before the kernel tables exist, each AP
+// during its own bring-up — so a wbinvd on either side of the write plus
+// the CR3 reload every core does moments later is the honest sufficient
+// version of the ceremony.
+#define IA32_PAT_MSR      0x277
+#define PAT_TYPE_WC       0x01ULL
+
+void pat_init_this_core(void)
+{
+	uint64_t pat = rdmsr64(IA32_PAT_MSR);
+	pat &= ~(0xFFULL << 56);              // clear entry 7 (default UC-)
+	pat |=  (PAT_TYPE_WC << 56);          // entry 7 = write-combining
+	__asm__ volatile("wbinvd" ::: "memory");
+	wrmsr64(IA32_PAT_MSR, pat);
+	__asm__ volatile("wbinvd" ::: "memory");
+}
+
 uintptr_t get_paging_table_pageV()
 {
 	uintptr_t retVal = get_paging_table_page();
@@ -553,7 +580,14 @@ void init_os64_paging_tables()
 	if (kFrameBuffer.buffer_size % PAGE_SIZE)
 		pagesToMap++;
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual framebuffer base (0x%016lx) to physical framebuffer base (0x%016lx), %u pages in new page tables\n", kFrameBuffer.base_address, physAddrLookup, pagesToMap);
-	paging_map_pages(pml4v, (uintptr_t)kFrameBuffer.base_address, physAddrLookup, pagesToMap, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	// WRITE-COMBINING since 2026-08-04 (was PAGE_PCD = full uncached): every
+	// store to the glass now batches into bursts instead of paying the
+	// uncached toll one write at a time. This is the other half of the
+	// shadow-buffer work — the shadow killed the VRAM READS, this kills the
+	// blit's store cost. See PAGE_WC in paging.h for the PAT plumbing and
+	// the fail-safe (a core without the PAT entry sees UC-, i.e. the old
+	// behavior).
+	paging_map_pages(pml4v, (uintptr_t)kFrameBuffer.base_address, physAddrLookup, pagesToMap, PAGE_PRESENT | PAGE_WRITE | PAGE_WC);
 
 	//Map the allocator struct array
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map memory status structures\n");

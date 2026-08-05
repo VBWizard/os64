@@ -102,6 +102,12 @@ void processSignals()
 	// (guard branch + one cached-RAM read); does nothing before USB init.
 	xhci_poll();
 
+	// Blit-throttle flush: if a console scroll burst left the glass behind
+	// its shadow (BasicRenderer's ~30Hz throttle), deliver the finished
+	// frame. Costs one branch when the glass is current — which is always,
+	// except mid-firehose, which is exactly when it earns its keep.
+	renderer_flush_if_dirty();
+
 	// Wake a blocked console reader if the keyboard driver has input. Done
 	// here — under the lock, AFTER the qISleep walk above — so its queue
 	// surgery (ISLEEP->RUNNABLE) can't corrupt that iteration. Level-triggered

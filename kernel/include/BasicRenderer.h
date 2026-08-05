@@ -89,5 +89,9 @@ int printf(const char *fmt, ...);
 void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff);
 void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor);
 void renderer_bust_lock(void);
+// Blit-throttle flush rider (processSignals): if a scroll burst left the
+// glass behind the shadow and the ~30Hz window has passed, push the frame.
+// Cheap no-op when the glass is current. See the doctrine in BasicRenderer.c.
+void renderer_flush_if_dirty(void);
 
 #endif
