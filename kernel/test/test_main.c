@@ -25,7 +25,9 @@
 #include "shared_object.h"
 #include "env.h"
 #include "sprintf.h"
+#include "console.h"   // console_read_deadline — the read-patience test
 
+extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
 extern vfs_filesystem_t *kRootFilesystem;
@@ -1870,6 +1872,53 @@ static bool test_ext2_secondary_write(void)
     return true;
 }
 
+// ── test_console_read_deadline ──────────────────────────────────────────────
+// The read-patience contract (ruled 2026-08-05), proved at the console layer:
+// a poll never parks, a timed read gives up on schedule. Deliberately
+// TOLERANT of a human typing during boot — a physical keyboard's queue can't
+// be asserted empty, so "a byte arrived" is always an acceptable outcome;
+// what the test refuses to accept is a poll that BLOCKS or a deadline that
+// doesn't expire. (Any byte this test happens to eat was typed before husk
+// existed to want it.)
+static bool test_console_read_deadline(void)
+{
+    char c;
+
+    // 1. The poll gait: deadline already now. Must return, byte or verdict,
+    //    without parking — bounded by one tick of scheduler jitter, not by
+    //    the console's one-second backstop nap.
+    uint64_t t0 = kTicksSinceStart;
+    long r = console_read_deadline(&c, 1, kTicksSinceStart);
+    uint64_t elapsed = kTicksSinceStart - t0;
+    if (r != CONSOLE_READ_TIMEOUT && r != 1) {
+        printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - poll returned %ld (want byte or timeout)\n", r);
+        return false;
+    }
+    if (elapsed > 2) {
+        printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - poll took %lu ticks (a poll must not wait)\n", elapsed);
+        return false;
+    }
+
+    // 2. The timed gait: 3 ticks of patience. On the quiet path the verdict
+    //    must land at the deadline — not early (patience is a promise) and
+    //    not a backstop-second late (the shortened nap must hold).
+    t0 = kTicksSinceStart;
+    r = console_read_deadline(&c, 1, kTicksSinceStart + 3);
+    elapsed = kTicksSinceStart - t0;
+    if (r == CONSOLE_READ_TIMEOUT) {
+        if (elapsed < 3 || elapsed > 20) {
+            printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - 3-tick patience expired after %lu ticks\n", elapsed);
+            return false;
+        }
+    } else if (r != 1) {
+        printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - timed read returned %ld\n", r);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_console_read_deadline (poll + 3-tick patience)\n");
+    return true;
+}
+
 // stat_test.c proves the stat syscall at CPL 3: file with size, directory,
 // the synthesized root entry, in-band absence, relative resolution, and
 // routing across the mount table. 0x57A7xxxx names the failed step.
@@ -2288,6 +2337,7 @@ static void register_builtin_tests(void)
     test_register("ring3_threads", test_ring3_threads, TEST_PHASE_POSTBOOT);
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
     test_register("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT);
+    test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

@@ -83,6 +83,12 @@ bool console_intr_intercept(char ascii)
 
 long console_read(char *buf, size_t len)
 {
+	// The classic blocking read is the no-deadline spelling of the timed one.
+	return console_read_deadline(buf, len, 0);
+}
+
+long console_read_deadline(char *buf, size_t len, uint64_t deadline)
+{
 	if (len == 0)
 		return 0;
 
@@ -122,7 +128,17 @@ long console_read(char *buf, size_t len)
 		// parking forever. Any bytes in the ring stay for the next reader; a
 		// dying task has no further use for them.
 		if (self->signals.sigind & SIGNALS_TERMINATING)
+		{
+			// Un-register on the way out (here and at every exit below): a
+			// reader that leaves the loop while kConsoleWaiter still names it
+			// can be spuriously woken out of some LATER unrelated sleep when
+			// a key arrives. The blocking read never met this — it only left
+			// with bytes or died — but the deadline path returns alive and
+			// empty-handed, which made the stale slot a live bug to have.
+			if (kConsoleWaiter == self)
+				kConsoleWaiter = NULL;
 			return CONSOLE_READ_INTERRUPTED;
+		}
 
 		// Drain whatever translated keys are queued (skip pure-modifier /
 		// non-glyph events — they have ascii == 0).
@@ -141,7 +157,22 @@ long console_read(char *buf, size_t len)
 		}
 
 		if (n > 0)
+		{
+			if (kConsoleWaiter == self)
+				kConsoleWaiter = NULL;
 			return (long)n;   // got input — return it (terminal semantics)
+		}
+
+		// Empty-handed and out of patience: the deadline verdict. Checked
+		// AFTER the drain, so a poll (deadline already past) still delivers
+		// anything that was waiting — the deadline caps the WAIT, never the
+		// read. >= makes a deadline of "now" the poll gait by construction.
+		if (deadline != 0 && kTicksSinceStart >= deadline)
+		{
+			if (kConsoleWaiter == self)
+				kConsoleWaiter = NULL;
+			return CONSOLE_READ_TIMEOUT;
+		}
 
 		// Nothing available: register as the waiter and sleep. SIGSLEEP parks
 		// us atomically (the scheduler performs RUNNING->ISLEEP when we are
@@ -149,8 +180,13 @@ long console_read(char *buf, size_t len)
 		// window). We resume here when woken — by a keypress via
 		// console_wake_if_ready, by processSignals on a pending SIGINT, or by
 		// the backstop — and loop back to the SIGINT check and the drain.
+		// A live deadline shortens the backstop nap so the timeout verdict
+		// lands on time, not up to a second late.
+		uint64_t wake = kTicksSinceStart + CONSOLE_READ_BACKSTOP_TICKS;
+		if (deadline != 0 && deadline < wake)
+			wake = deadline;
 		kConsoleWaiter = self;
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + CONSOLE_READ_BACKSTOP_TICKS, self);
+		sigaction(SIGSLEEP, NULL, wake, self);
 	}
 }
 

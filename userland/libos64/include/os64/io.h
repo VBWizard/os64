@@ -33,6 +33,22 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len);
 //     while ((n = os64_read(0, buf, sizeof buf)) > 0) { ...process n bytes... }
 int64_t os64_read(int32_t handle, void *buf, size_t len);
 
+// os64_read with a patience limit (the poll/deadline gait; full contract at
+// SYSCALL_READ in os64/syscall_numbers.h). timeout_ms means what it says:
+//   0                 — never blocks: bytes if some are ready, else
+//                       OS64_ERR_TIMEOUT immediately. This is how top
+//                       watches for 'q' between refreshes:
+//                           char c;
+//                           if (os64_read_for(0, &c, 1, 0) == 1 && c == 'q')
+//                               break;
+//   N                 — up to N ms, then OS64_ERR_TIMEOUT if still byteless.
+//   OS64_WAIT_FOREVER — identical to os64_read.
+// OS64_ERR_TIMEOUT is its own verdict, never 0 — an empty poll can never
+// impersonate end-of-input (the V7 O_NDELAY confusion, refused by design).
+// Handles that can't honor a finite patience REFUSE it (negative return)
+// rather than silently blocking; the console honors it today.
+int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms);
+
 // Read one LINE from `handle` into `buf` (cap bytes INCLUDING the
 // terminator): everything up to and including the next '\n', with the line
 // ending stripped — both '\n' and "\r\n", so a file that once passed through

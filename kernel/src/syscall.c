@@ -716,7 +716,7 @@ static void raise_sigpipe_and_die(task_t *task)
 // helper touches may live on the syscall's task-local kernel stack.
 // One page per hop for read() and file-write bounce buffers. (Defined here,
 // above BOTH read and write, because the file-write path below uses it too.)
-#define READ_CHUNK_SIZE 4096
+#define READ_CHUNK_SIZE  4096
 
 typedef struct {
 	vfs_file_t *file;
@@ -1007,12 +1007,19 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg3;
 	(void)arg4;
 	(void)arg5;
 
 	void *user_buffer = (void*)arg1;
 	size_t length = (size_t)arg2;
+	// arg3 is the read's PATIENCE in ms (contract at SYSCALL_READ in the abi
+	// header, ruled 2026-08-05): 0 = poll, N = deadline, OS64_WAIT_FOREVER =
+	// the classic block. Every libos64 stub sets this register deliberately —
+	// before the ruling it was ring-3 garbage the handler ignored, and
+	// reading garbage as a deadline would give every old binary a random
+	// patience. (Same lockstep the net branch's read_for made; the two
+	// branches speak one contract so the merge reconciles code, not law.)
+	uint64_t timeout_ms = arg3;
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
@@ -1025,6 +1032,22 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	if (length == 0)
 		return 0;
+
+	// Lower the deadline onto the tick clock once, here, so console code
+	// thinks only in ticks (sleep()'s ms→ticks doctrine). Rounded UP: a 1ms
+	// deadline is a short wait, never "already expired" — while 0ms stays
+	// exactly "already expired", which IS the poll gait. Only the console
+	// honors patience today; everywhere else a finite timeout is REFUSED
+	// rather than silently ignored (the tripwire doctrine: a pipe read that
+	// accepts a patience it won't keep is a lie with a delay). Pipes and
+	// files grow it the day a real consumer demands it there.
+	uint64_t deadline = 0;
+	if (timeout_ms != OS64_WAIT_FOREVER)
+	{
+		if (h->type != HANDLE_CONSOLE_IN)
+			return SYSCALL_RESULT_INVALID;
+		deadline = kTicksSinceStart + (timeout_ms + MS_PER_TICK - 1) / MS_PER_TICK;
+	}
 
 	size_t want = length < READ_CHUNK_SIZE ? length : READ_CHUNK_SIZE;
 	// The thread-owned bounce block (see syscall_io_scratch): no allocation,
@@ -1039,15 +1062,24 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	switch (h->type)
 	{
 		case HANDLE_CONSOLE_IN:
-			// Blocks until >=1 byte is available (terminal semantics). The
+			// Blocks until >=1 byte is available (terminal semantics) — or
+			// until the caller's patience runs out, when there is any. The
 			// scratch is safe to hold across the block — it's THIS thread's.
-			got = console_read(kbuf, want);
+			got = console_read_deadline(kbuf, want, deadline);
 			if (got == CONSOLE_READ_INTERRUPTED)
 			{
 				// Ctrl+C landed while (or before) we were blocked on stdin.
 				// Default action: terminate. The sentinel never reaches ring 3.
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
+			}
+			if (got == CONSOLE_READ_TIMEOUT)
+			{
+				// The deadline expired byteless. The kernel sentinel stays
+				// kernel-side; ring 3 gets the ABI's named verdict — a value
+				// no other read outcome shares, so "nothing yet" can never
+				// impersonate EOF's 0 (the V7 O_NDELAY sin, refused).
+				return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
 			}
 			break;
 
