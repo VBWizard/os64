@@ -481,6 +481,31 @@ void scheduler_remove_thread_from_queue(eThreadState queue, thread_t *thread)
     thread->next = thread->prev = NO_THREAD;
 }
 
+// Unlink a task from the kTaskList spine. Undertaker use (task.c burial
+// phase 1): after this, no NEW walker can reach the task. Deliberately does
+// NOT clear the corpse's own prev/next — procfs walks this list locklessly,
+// and a reader standing ON the corpse mid-walk must still be able to follow
+// its intact ->next back into the live list. The corpse's links go stale
+// harmlessly during its grace pass and die with it in task_destroy.
+void scheduler_remove_task(task_t *task)
+{
+	if (task == NULL || task == (task_t *)NO_TASK)
+		return;
+
+	uint64_t flags = scheduler_queues_lock();
+	task_t *prev = (task_t *)task->prev;
+	task_t *next = (task_t *)task->next;
+
+	if (kTaskList == task)
+		kTaskList = next;   // may be NO_TASK — same sentinel the append uses
+	else if (prev != NULL && prev != (task_t *)NO_TASK)
+		prev->next = next;
+
+	if (next != NULL && next != (task_t *)NO_TASK)
+		next->prev = prev;
+	scheduler_queues_unlock(flags);
+}
+
 void scheduler_reap_zombie_thread(thread_t *thread)
 {
     if (thread == NULL) {

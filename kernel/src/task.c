@@ -296,31 +296,217 @@ static void task_remove_dead_child(task_t *parent, task_t *child)
 	}
 }
 
+// ── The undertaker (kworker context ONLY) ───────────────────────────────────
+//
+// Ruling 2026-08-06: kworker is the undertaker, and it BURIES ONLY THE
+// COLLECTED — a corpse whose exit status someone has claimed (retValCollected
+// via wait/reap, autoReap by decree, or an orphan whose parent is dead or
+// gone). An uncollected child with a living parent stays a visible zombie
+// FOREVER, on purpose: that is the 1971 contract, a zombie IS an unclaimed
+// exit status, and hiding it would hide the parent's bug.
+//
+// Burial is TWO-PHASE, one kworker pass apart:
+//   pass N:   unlink the corpse from the deadChild list AND the kTaskList
+//             spine (scheduler_remove_task) and park it on kBurialList.
+//             From this instant no walker can newly reach it.
+//   pass N+1: task_destroy() actually frees everything.
+// The gap is a grace period for LOCKLESS kTaskList walkers (procfs follows
+// ->next with no lock, by design — see scheduler_submit_new_task's publish
+// comment): a walker standing ON the corpse when it is unlinked can still
+// follow its intact ->next out; by the time the memory is freed a full
+// kworker period later, any such walk has long finished. A reader parked
+// mid-walk for 2+ seconds is already a wedged reader with bigger problems.
+// (The grown-up fix — snapshot-under-lock or generation counts — is booked
+// in DEBTS.md; this discipline is correct until /proc grows teeth.)
+
+// Corpses between phase 1 and phase 2, linked through task->burialNext.
+// kworker-only (single consumer, single producer, same thread) — no lock.
+static task_t *kBurialList = NULL;
+
+// Every thread must be fully retired before burial: exited AND off the run
+// queues (ZOMBIE still counts — task_destroy dequeues it — but RUNNING or
+// RUNNABLE means a sibling is still walking to the trampoline; the corpse
+// keeps until the next sweep). "Exit means exit" kills siblings, but each
+// dies at its own next scheduling boundary — the undertaker must not race
+// the last one down.
+static bool task_threads_all_retired(task_t *t)
+{
+	for (thread_t *th = t->threads; th != NULL; th = th->taskNext) {
+		if (!th->exited)
+			return false;
+		if (th->threadState != THREAD_STATE_ZOMBIE &&
+		    th->threadState != THREAD_STATE_NONE)
+			return false;
+	}
+	return true;
+}
+
+// Free one guarded stack given its usable-base VA (esp0BaseV/esp3BaseV).
+// The whole thing — guards included — is ONE allocator extent
+// (task_alloc_guarded_stack): resolve the first USABLE page's physical
+// through the corpse's own tables, step back over the leading guard pages,
+// and free_memory() releases the entire extent (and HHDM-unmaps it — the
+// use-after-free tripwire now guards freed stacks too). No task-VA unmap:
+// nothing will ever load this CR3 again, and the page-table pages themselves
+// are pool-owned (bump allocator, can't free yet — the booked deferral).
+static void task_free_guarded_stack(task_t *t, uintptr_t stackBaseV)
+{
+	if (stackBaseV == 0 || t->pml4v == NULL)
+		return;
+	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)t->pml4v, stackBaseV);
+	if (phys == 0 || phys == 0xbadbadba)
+		return;
+	free_memory((phys & ~(uintptr_t)0xFFF) -
+	            (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE));
+}
+
+// THE ORPHANAGE (the night's second lesson, 2026-08-06): when a task is
+// buried, any children it left behind — LIVING and DEAD — are re-parented to
+// kKernelTask, the eternal parent. This is 1971's exact mechanism (orphans
+// go to PID 1) rediscovered empirically: the first burial run left ONE
+// permanent zombie, cwd_test's own child, whose parent was buried without
+// waiting on it. The corpse wasn't just leaked — it was UNREACHABLE, because
+// the sweep only walks living parents' deadChild lists, and its list died
+// with its parent (plus its parentTask pointer dangled at freed memory).
+// Since ktask never waits — it has no wait loop and never will — orphans are
+// simultaneously marked autoReap: collected by decree. That decree IS init's
+// wait-loop, translated: Unix buries orphans by making PID 1 wait for them;
+// os64 buries them by declaring the wait unnecessary. Same funeral, less
+// ceremony.
+static void task_reparent_orphans(task_t *dying)
+{
+	// Live children first: after this, a child that exits mid-burial
+	// enqueues itself on ktask's deadChild list, not the corpse's.
+	for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next) {
+		if (t->parentTask == dying) {
+			t->parentTask = kKernelTask;
+			t->autoReap = true;
+		}
+	}
+
+	// Then the dead: splice every unwaited grandcorpse onto ktask's list so
+	// the sweep can reach it again. (task_enqueue_dead_child routes by
+	// parentTask, so reparent-then-enqueue is the whole move.)
+	while (dying->deadChildHead != NULL) {
+		task_t *c = dying->deadChildHead;
+		dying->deadChildHead = c->deadChildNext;
+		c->deadChildNext = NULL;
+		c->parentTask = kKernelTask;
+		c->autoReap = true;
+		task_enqueue_dead_child(c);
+	}
+	dying->deadChildTail = NULL;
+}
+
+// Phase 2: the actual burial. Caller (kworker sweep) guarantees the corpse
+// is collected, all threads retired, and it has been OFF every public list
+// for a full kworker pass. Frees, in the cleanup notes' order, everything a
+// task exclusively owns TODAY:
+//   - per-thread: zombie-queue dequeue, kernel+user stacks (the 1MB+64KB
+//     that made every command a leak), syscall scratch, TID, thread_t
+//   - task: path, cwd, static elf_image_t (+ its still-open backing file —
+//     which also releases ext2's open-inode refcount, so rm stops being
+//     haunted by dead tasks' binaries), the struct itself
+// DEFERRED, documented, booked (docs/task_cleanup_notes.md is the map):
+//   - VMA backing pages + vma structs (CoW/fork sharing needs refcounts
+//     before freeing is safe), argv/env blobs (env is CoW-inherited by
+//     children), shared_objects dlist nodes, mmaps dlist
+//   - page-table pages (the paging pool is a bump allocator — pool free is
+//     its own slice)
+// A dynamic task's elf points INTO the shared_object cache (task.c sets
+// task->elf = main_so->image) — never freed here; the cache owns it.
+static void task_destroy(task_t *t)
+{
+	printd(DEBUG_TASK, "task_destroy: burying task 0x%08x (%s)\n",
+	       t->taskID, t->exename);
+
+	// Defensive second pass of the orphanage: a child racing its own exit on
+	// another core during the grace pass may have captured the old parentTask
+	// pointer and enqueued itself on this corpse AFTER phase 1's splice. Any
+	// such straggler gets rescued here, at the last instant the corpse's
+	// deadChild list is still readable.
+	task_reparent_orphans(t);
+
+	thread_t *th = t->threads;
+	while (th != NULL) {
+		thread_t *next = th->taskNext;
+		scheduler_reap_zombie_thread(th);   // no-op if already NONE
+		task_free_guarded_stack(t, th->esp0BaseV);
+		task_free_guarded_stack(t, th->esp3BaseV);
+		kfree(th->syscallIOScratch);
+		mark_TID_unused((uint32_t)th->threadID);
+		kfree(th);
+		th = next;
+	}
+	t->threads = NULL;
+
+	kfree(t->path);
+	kfree(t->cwd);
+
+	// Static ELF only: the loader kept the file open for file-backed demand
+	// paging, and with every thread retired no fault can ever need it again.
+	elf_image_t *image = (elf_image_t *)t->elf;
+	if (image != NULL && !image->is_dynamic) {
+		vfs_file_t *file = image->file;
+		if (file != NULL) {
+			vfs_file_operations_t *fops = file->fops;
+			if (fops == NULL && file->owner != NULL)
+				fops = ((vfs_filesystem_t *)file->owner)->fops;
+			if (fops != NULL && fops->close != NULL)
+				fops->close(file);
+		}
+		// elf_image_free's NULL-table no-op contract is real now — kfree
+		// grew its NULL guard the night this call first ran on a healthy
+		// static image (2026-08-06; see kfree's comment for the story).
+		elf_image_free(image);
+	}
+
+	kfree(t);
+}
+
 int task_reap_eligible_zombies(size_t max_to_reap)
 {
-	task_t *task = kTaskList;
 	size_t reaped = 0;
 
+	// Phase 2 FIRST: bury whatever last pass unlinked. These corpses have
+	// been invisible to every walker for a full kworker period.
+	task_t *corpse = kBurialList;
+	kBurialList = NULL;
+	while (corpse != NULL) {
+		task_t *next = corpse->burialNext;
+		task_destroy(corpse);
+		reaped++;
+		corpse = next;
+	}
+
+	// Phase 1: find newly collected corpses, unlink them from the deadChild
+	// list and the kTaskList spine, park them for next pass.
+	task_t *task = kTaskList;
 	while (task != NO_TASK && task != NULL && reaped < max_to_reap) {
 		task_t *child = task->deadChildHead;
 		while (child != NULL && reaped < max_to_reap) {
 			task_t *next_child = child->deadChildNext;
-			bool eligible = child->autoReap || task->exited || child->parentTask == NULL;
+			bool collected = child->retValCollected || child->autoReap ||
+			                 task->exited || child->parentTask == NULL;
 
-			if (eligible) {
+			if (collected && task_threads_all_retired(child)) {
 				printd(DEBUG_TASK | DEBUG_DETAILED,
-					"task_reap_eligible_zombies: reaping child task 0x%08x (%s), parent=0x%08x (%s), autoReap=%u, parentExited=%u\n",
+					"task_reap_eligible_zombies: unlinking child task 0x%08x (%s), parent=0x%08x (%s), collected=%u autoReap=%u parentExited=%u\n",
 					child->taskID,
 					child->exename,
 					task->taskID,
 					task->exename,
+					child->retValCollected,
 					child->autoReap,
 					task->exited);
 				task_remove_dead_child(task, child);
-				if (child->threads != NULL) {
-					scheduler_reap_zombie_thread(child->threads);
-				}
-				reaped++;
+				// The orphanage runs BEFORE the corpse leaves the public
+				// lists: its children (live and dead) move to ktask now, so
+				// no walker ever holds a parentTask aimed at a buried task.
+				task_reparent_orphans(child);
+				scheduler_remove_task(child);
+				child->burialNext = kBurialList;
+				kBurialList = child;
 			}
 
 			child = next_child;
@@ -449,25 +635,26 @@ void task_exit(void)
 // console_read.)
 #define TASK_WAIT_BACKSTOP_TICKS TICKS_PER_SECOND
 
-// Pop the first dead child matching targetPid (0 = any) off the parent's list,
-// or NULL if none match. Unlinks from the deadChild list; caller reaps.
-static task_t *task_pop_dead_child(task_t *parent, uint64_t targetPid)
+// Find the first dead child matching targetPid (0 = any) on the parent's
+// list, or NULL if none match. This used to be a POP — collectors unlinked
+// the corpse themselves — but that orphaned every collected corpse from the
+// reap machinery: off the deadChild list, kworker's sweep could never see it
+// again, and its task struct sat on kTaskList forever (the 49-zombie
+// graveyard, 2026-08-06). Now collectors only LOOK and mark; the corpse
+// stays enqueued, and the undertaker (task_reap_eligible_zombies, kworker
+// context, the only burial site) does all unlinking itself.
+static task_t *task_find_dead_child(task_t *parent, uint64_t targetPid)
 {
-	task_t *prev = NULL;
 	for (task_t *child = parent->deadChildHead; child != NULL; child = child->deadChildNext)
 	{
+		// A corpse can be collected exactly ONCE. It stays on this list until
+		// kworker's next sweep unlinks it (up to ~2s), and without this skip a
+		// shell's every-prompt reap poll would report the same "[1] Done" at
+		// every prompt until the undertaker caught up.
+		if (child->retValCollected)
+			continue;
 		if (targetPid == 0 || child->taskID == targetPid)
-		{
-			if (prev == NULL)
-				parent->deadChildHead = child->deadChildNext;
-			else
-				prev->deadChildNext = child->deadChildNext;
-			if (parent->deadChildTail == child)
-				parent->deadChildTail = prev;
-			child->deadChildNext = NULL;
 			return child;
-		}
-		prev = child;
 	}
 	return NULL;
 }
@@ -485,13 +672,13 @@ static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 	return NULL;
 }
 
-task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
+uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 {
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *parent = parentTask ? parentTask : (cls ? cls->task : NULL);
 
 	if (parent == NULL || parent->threads == NULL) {
-		return NULL;
+		return 0;
 	}
 
 	// The console changes hands HERE — the foreground task is by definition
@@ -511,17 +698,21 @@ task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	{
 		// Check FIRST: an already-dead matching child returns immediately, no
 		// sleep (the "don't wait if the child already ended" rule).
-		task_t *child = task_pop_dead_child(parent, targetPid);
+		task_t *child = task_find_dead_child(parent, targetPid);
 		if (child != NULL) {
+			// Copy EVERYTHING out before certifying: the moment
+			// retValCollected goes true, kworker's next sweep may unlink and
+			// free this struct — the certificate must be our LAST touch.
+			// (The thread dequeue that used to happen here moved into
+			// task_destroy: burial is one act, at one site, in one context.)
+			uint64_t endedPid = child->taskID;
 			if (exitCode != NULL) {
 				*exitCode = child->retVal;
 			}
-			if (child->threads != NULL) {
-				scheduler_reap_zombie_thread(child->threads);
-			}
+			child->retValCollected = true;
 			if (movesConsole)
 				kForegroundTask = parent;
-			return child;
+			return endedPid;
 		}
 
 		// No dead match. If there is no matching LIVE child either, there is
@@ -529,7 +720,7 @@ task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		if (task_find_live_child(parent, targetPid) == NULL) {
 			if (movesConsole)
 				kForegroundTask = parent;
-			return NULL;
+			return 0;
 		}
 
 		// Park until a child exits (woken by task_enqueue_dead_child) or the
@@ -545,26 +736,28 @@ task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 // "children exist but none are dead" is a normal answer here rather than a
 // reason to sleep; and no kForegroundTask movement, because reaping a
 // background corpse does not hand anyone the console.
-task_t* task_reap_any_dead(task_t* parentTask, uint64_t* exitCode)
+uint64_t task_reap_any_dead(task_t* parentTask, uint64_t* exitCode)
 {
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *parent = parentTask ? parentTask : (cls ? cls->task : NULL);
 
 	if (parent == NULL)
-		return NULL;
+		return 0;
 
 	// targetPid 0 = "the first of ANY child to have ended", the same wildcard
 	// task_wait uses — a shell polling for finished jobs does not care which.
-	task_t *child = task_pop_dead_child(parent, 0);
+	task_t *child = task_find_dead_child(parent, 0);
 	if (child == NULL)
-		return NULL;
+		return 0;
 
+	// Same copy-then-certify discipline as task_wait: after the certificate,
+	// this struct belongs to the undertaker.
+	uint64_t endedPid = child->taskID;
 	if (exitCode != NULL)
 		*exitCode = child->retVal;
-	if (child->threads != NULL)
-		scheduler_reap_zombie_thread(child->threads);
+	child->retValCollected = true;
 
-	return child;
+	return endedPid;
 }
 
 task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)

@@ -80,6 +80,24 @@
         struct task* deadChildNext;
         bool waitingForChild;
         bool autoReap;
+        // THE DEATH CERTIFICATE (ruling 2026-08-06: kworker buries only the
+        // COLLECTED). Set by whoever consumes the exit status — task_wait /
+        // task_reap_any_dead after copying retVal out — and ALWAYS as that
+        // consumer's LAST touch of this struct: setting it publishes "this
+        // corpse may be freed under you." Direct-poll consumers (the test
+        // harness reads exited/retVal off the struct itself) signal the same
+        // thing through autoReap after their last read. Until one of the two
+        // is set (or the parent is dead), the corpse stays a visible zombie —
+        // which is not a leak, it is the 1971 contract: a zombie IS an exit
+        // status nobody has claimed yet.
+        volatile bool retValCollected;
+        // Private link for the undertaker's two-phase burial list (task.c).
+        // NOT the deadChild chain and NOT the kTaskList spine: a corpse on
+        // THIS list has already been unlinked from both and is invisible to
+        // every walker; it waits here exactly one kworker pass (the grace
+        // period that protects lockless /proc walkers standing on it) before
+        // task_destroy frees it for real.
+        struct task* burialNext;
         // The one task Ctrl+C must never kill: husk sitting at its prompt.
         // Tagged by the kernel when it launches the shell (kernel.c). When the
         // controlling shell IS the foreground task, ETX (0x03) stays a DATA
@@ -151,21 +169,28 @@
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
 	void task_exit_with_retval(void);   // asm stub: captures RAX into task->retVal then calls task_exit
-	// Block until a child of parentTask exits, reap it, return it (its exit
-	// code via *exitCode). targetPid > 0 waits for that specific child;
-	// targetPid == 0 waits for the first of ANY child to end. Returns
-	// immediately if a matching child has already exited; returns NULL if no
-	// matching child exists at all.
-	task_t* task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode);
-	// task_wait's NON-BLOCKING half: reap the next already-dead child of
-	// parentTask and return it (exit code via *exitCode), or NULL if none has
-	// died — never sleeps, even when live children exist. This is what lets a
-	// shell collect background jobs at its prompt without hanging on the ones
-	// still running, and it is why `&` does not leak zombies the way os32's
-	// did: REPORTING a finished job and REAPING it are the same act.
+	// Block until a child of parentTask exits, collect it, and return its
+	// taskID (its exit code via *exitCode). targetPid > 0 waits for that
+	// specific child; targetPid == 0 waits for the first of ANY child to end.
+	// Returns immediately if a matching child has already exited; returns 0
+	// if no matching child exists at all.
+	//
+	// RETURNS AN ID, NOT A POINTER — deliberately (the cleanup notes called
+	// this the day task_destroy was first sketched): collecting marks the
+	// corpse retValCollected, which licenses kworker to FREE it on its next
+	// sweep. A returned pointer would be a dangling invitation; an ID is a
+	// fact that stays true forever.
+	uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode);
+	// task_wait's NON-BLOCKING half: collect the next already-dead child of
+	// parentTask and return its taskID (exit code via *exitCode), or 0 if
+	// none has died — never sleeps, even when live children exist. This is
+	// what lets a shell collect background jobs at its prompt without hanging
+	// on the ones still running, and it is why `&` does not leak zombies the
+	// way os32's did: REPORTING a finished job and COLLECTING it are the same
+	// act (and collecting is what licenses the burial).
 	// Does NOT touch kForegroundTask — collecting a background corpse is not
 	// a change of who owns the console.
-	task_t* task_reap_any_dead(task_t* parentTask, uint64_t* exitCode);
+	uint64_t task_reap_any_dead(task_t* parentTask, uint64_t* exitCode);
 	int task_reap_eligible_zombies(size_t max_to_reap);
 	void* task_alloc_aligned(task_t* task, size_t size);
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);

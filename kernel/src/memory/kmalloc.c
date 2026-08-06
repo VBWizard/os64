@@ -85,6 +85,16 @@ void *kmalloc_dma32_address(uint32_t address, uint64_t length)
 /// @return
 void kfree(void *address)
 {
+	// free(NULL) is a no-op — the C convention since forever, and a contract
+	// at least one caller (elf_image_free's "kfree of a never-populated table
+	// is a NULL no-op") had already assumed in writing. Before 2026-08-06 the
+	// assumption was false: NULL fell through the HHDM adjustment unchanged
+	// and free_memory(0) panicked "Can't find the index for 0x0". Nobody had
+	// ever hit it because elf_image_free only ran on malformed-ELF error
+	// paths — until the undertaker (task_destroy) made freeing a healthy
+	// static image's NULL dynamic/symtab tables an every-burial event.
+	if (address == NULL)
+		return;
 	uintptr_t physicalAddress = (uintptr_t)address > kHHDMOffset?(uintptr_t)address - kHHDMOffset:(uintptr_t)address;
     // Free the allocation (remove the HHDM offset from the address when freeing it)
 	printd(DEBUG_KMALLOC, "KMALLOC: Freeing address 0x%016lx (0x%016lx)\n",address, physicalAddress);

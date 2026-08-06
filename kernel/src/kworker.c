@@ -18,7 +18,9 @@ static bool kworker_run_maintenance(void)
 	int reaped = task_reap_eligible_zombies(KWORKER_REAP_BATCH_SIZE);
 
 	if (reaped > 0) {
-		printd(DEBUG_TASK | DEBUG_DETAILED, "KWORKER: reaped %u eligible zombie task(s)\n", reaped);
+		// "Buried" counts BOTH phases of the two-phase burial (task.c): a
+		// corpse unlinked this pass and one freed this pass each score 1.
+		printd(DEBUG_TASK | DEBUG_DETAILED, "KWORKER: buried/unlinked %u collected zombie task(s)\n", reaped);
 		did_work = true;
 	}
 

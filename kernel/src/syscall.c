@@ -2283,11 +2283,12 @@ static uint64_t syscall_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;
 
 	uint64_t exitCode = 0;
-	task_t *child = task_wait(parent, targetPid, &exitCode);
-	if (child == NULL)
+	// task_wait returns the ended child's ID, not a pointer — by the time we
+	// are back here the corpse is collected and kworker may bury it any tick.
+	uint64_t endedPid = task_wait(parent, targetPid, &exitCode);
+	if (endedPid == 0)
 		return SYSCALL_RESULT_INVALID;   // no such child
 
-	uint64_t endedPid = child->taskID;
 	if (user_code != NULL)
 	{
 		int code = (int)exitCode;
@@ -2325,11 +2326,11 @@ static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;
 
 	uint64_t exitCode = 0;
-	task_t *child = task_reap_any_dead(parent, &exitCode);
-	if (child == NULL)
+	// Same ID-not-pointer contract as wait: collecting licenses the burial.
+	uint64_t endedPid = task_reap_any_dead(parent, &exitCode);
+	if (endedPid == 0)
 		return 0;   // no finished children — the ordinary answer, not an error
 
-	uint64_t endedPid = child->taskID;
 	if (user_code != NULL)
 	{
 		int code = (int)exitCode;

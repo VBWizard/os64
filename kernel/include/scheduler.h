@@ -50,6 +50,9 @@
 	void scheduler_wake_isleep_thread(thread_t *w);
 	void scheduler_wake_isleep_thread_locked(thread_t *w);
 	void scheduler_reap_zombie_thread(thread_t *thread);
+	// Unlink a task from the kTaskList spine (undertaker burial phase 1 —
+	// see the walker-safety note at the definition).
+	void scheduler_remove_task(task_t *task);
 	void scheduler_trigger(core_local_storage_t *cls);
 	void scheduler_wake_isleep_task(task_t *task);
     bool in_scheduler_context(void);

@@ -83,8 +83,8 @@ typedef struct s_thread
 	// reads BLOCK while holding the buffer, and a sleeping thread's scratch
 	// must not be handed to whoever runs next on the core. Opaque here — the
 	// layout ([params][data]) is syscall.c's business (syscall_io_scratch()).
-	// Never freed: thread teardown doesn't exist yet (the task_destroy debt);
-	// this block rides along. FUTURE FORK WARNING: if fork ever copies
+	// Freed by task_destroy since 2026-08-06 (the undertaker buries it with
+	// the thread). FUTURE FORK WARNING: if fork ever copies
 	// thread_t wholesale, NULL this in the child or two threads will share
 	// one bounce buffer.
 	void *syscallIOScratch;
@@ -110,5 +110,8 @@ typedef struct s_thread
 
 thread_t* createThread(void* parentTask, bool kernelThread);
 uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtualStart, uint64_t requestedLength, bool isRing3Stack);
+// Return a thread ID to the pool (thread.c owns the TID bitmap). Called by
+// the undertaker (task_destroy) — a buried thread's ID is reusable.
+bool mark_TID_unused(uint32_t tid);
 
 #endif

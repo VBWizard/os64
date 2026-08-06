@@ -171,7 +171,12 @@ uint64_t get_status_index_for_requested_address(uint64_t address,uint64_t reques
 		)
 			return cnt;
 	}
-	panic("get_status_index_for_requested_address: Can't find the index!!! :-(\n");
+	// Say WHICH address died nameless — a panic that names its victim turns a
+	// bisect session into a single screendump read (learned the hard way the
+	// night the undertaker's first burial handed this exact panic an address
+	// it refused to identify, 2026-08-06).
+	panic("get_status_index_for_requested_address: Can't find the index for 0x%016lx (len=0x%lx, in_use=%u)!!! :-(\n",
+	      address, requested_length, in_use);
 	return 0;
 }
 

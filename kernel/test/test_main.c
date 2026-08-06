@@ -674,6 +674,26 @@ static bool test_vma_cow_write(void)
     return true;
 }
 
+// Spawn a test fixture: task_create with the corpse COLLECTED BY DECREE
+// (autoReap). Every fixture below reads exited/retVal by direct poll off the
+// task struct — nobody ever calls task_wait on them, and ktask (the parent)
+// has no wait loop. Without the decree each fixture would sit in the
+// graveyard as an unwaited zombie forever (the "16 zombies at boot" census,
+// 2026-08-06); with it, kworker buries them. TIMING CONTRACT: a fixture must
+// finish reading its child's struct within one kworker period (2s) of the
+// child's death — every poll loop here reads retVal microseconds after
+// `exited` flips, and the undertaker's two-phase burial adds another full
+// period of grace on top, so the margin is >4s against a µs consumer.
+// Deliberately NOT a blanket parent==ktask rule: husk/logd/kworker are also
+// ktask children, and kForegroundTask must never point at a buried shell.
+static task_t *test_spawn(char *path, int argc, char **argv, bool isKernelTask)
+{
+    task_t *t = task_create(path, argc, argv, kKernelTask, isKernelTask, THREAD_NO_AFFINITY);
+    if (t != NULL)
+        t->autoReap = true;
+    return t;
+}
+
 // Magic value serial_ping.S leaves in RAX before ret.
 #define ELF_TEST_RETVAL 0xE1F0CA11UL
 
@@ -686,7 +706,7 @@ static bool test_elf_loader(void)
 
     uint64_t faults_before = kPageFaultCount;
 
-    task_t *elf_task = task_create("/bin/test_elf", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+    task_t *elf_task = test_spawn("/bin/test_elf", 0, NULL, true);
     if (elf_task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - task_create returned NULL\n");
         return false;
@@ -744,7 +764,7 @@ static bool test_task_args(void)
     // argv==TASK_ARGV_VIRT, argv[0..2] == {"/bin/arg_echo","hello","world"},
     // argv[3]==NULL, and a non-empty env at TASK_ENV_VIRT.
     char *args[] = { "/bin/arg_echo", "hello", "world" };
-    task_t *task = task_create("/bin/arg_echo", 3, args, kKernelTask, true, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/arg_echo", 3, args, true);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_task_args - task_create returned NULL\n");
         return false;
@@ -794,14 +814,14 @@ static bool test_dynamic_linking(void)
         return true;
     }
 
-    task_t *task_a = task_create("/bin/dyn_consumer", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+    task_t *task_a = test_spawn("/bin/dyn_consumer", 0, NULL, true);
     if (task_a == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task A) returned NULL\n");
         return false;
     }
     scheduler_submit_new_task(task_a);
 
-    task_t *task_b = task_create("/bin/dyn_consumer", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+    task_t *task_b = test_spawn("/bin/dyn_consumer", 0, NULL, true);
     if (task_b == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task B) returned NULL\n");
         return false;
@@ -898,7 +918,7 @@ static bool test_ring3_syscall_smoke(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/syscall_smoke", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/syscall_smoke", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - task_create returned NULL\n");
         return false;
@@ -939,7 +959,7 @@ static bool test_ring3_exit_by_return(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/exit_by_return", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/exit_by_return", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - task_create returned NULL\n");
         return false;
@@ -977,7 +997,7 @@ static bool test_ring3_file_io(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/file_io", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/file_io", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io - task_create returned NULL\n");
         return false;
@@ -1018,8 +1038,8 @@ static bool test_ring3_file_io_concurrent(void)
         return true;
     }
 
-    task_t *a = task_create("/bin/file_io", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
-    task_t *b = task_create("/bin/file_io", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *a = test_spawn("/bin/file_io", 0, NULL, false);
+    task_t *b = test_spawn("/bin/file_io", 0, NULL, false);
     if (a == NULL || b == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io_concurrent - task_create returned NULL\n");
         return false;
@@ -1071,7 +1091,7 @@ static bool test_ring3_redirect_io(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/redirect_io", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/redirect_io", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_redirect_io - task_create returned NULL\n");
         return false;
@@ -1112,7 +1132,7 @@ static bool test_ring3_dir_list(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/dir_list", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/dir_list", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_dir_list - task_create returned NULL\n");
         return false;
@@ -1436,7 +1456,7 @@ static bool test_ring3_map_unmap(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/map_unmap", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/map_unmap", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_map_unmap - task_create returned NULL\n");
         return false;
@@ -1477,7 +1497,7 @@ static bool test_ring3_cwd(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/cwd_test", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/cwd_test", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_cwd - task_create returned NULL\n");
         return false;
@@ -1931,7 +1951,7 @@ static bool test_ring3_stat(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/stat_test", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/stat_test", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_stat - task_create returned NULL\n");
         return false;
@@ -1975,7 +1995,7 @@ static bool test_ring3_sleep(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/sleep_test", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/sleep_test", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_sleep - task_create returned NULL\n");
         return false;
@@ -2020,7 +2040,7 @@ static bool test_ring3_memory(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/memory_test", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/memory_test", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_memory - task_create returned NULL\n");
         return false;
@@ -2066,7 +2086,7 @@ static bool test_ring3_threads(void)
         return true;
     }
 
-    task_t *task = task_create("/bin/threadtest", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+    task_t *task = test_spawn("/bin/threadtest", 0, NULL, false);
     if (task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - task_create returned NULL\n");
         return false;
