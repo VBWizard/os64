@@ -232,6 +232,21 @@ static void paint_frame(void)
     os64_write(OS64_STDOUT, frame, frameLen);
 }
 
+static void compose_free_memory(uint64_t freeBytes)
+{
+    const uint64_t mb = 1024 * 1024;
+    const uint64_t gb = 1024 * mb;
+
+    if (freeBytes >= gb)
+    {
+        uint64_t whole = freeBytes / gb;
+        uint64_t tenths = ((freeBytes % gb) * 10) / gb;
+        framef("free %lu.%lu GB   ", whole, tenths);
+    }
+    else
+        framef("free %lu MB   ", freeBytes / mb);
+}
+
 static void compose_help(const top_view_t *view)
 {
     frame_reset();
@@ -670,6 +685,9 @@ int32_t topMain(const top_options_t *opts)
         readCores();
         os64_ticks(&tickNow);
 
+        os64_memory_t memory = {0};
+        bool haveMemory = os64_memory(&memory) == 0;
+
         // ── One clock to rule the division (Chris's ruling, 2026-07-30
         // small hours: "everything should be using the same clock").
         // Numerators (runtime_us, core columns) are LEDGER-clock (TSC→µs).
@@ -767,6 +785,11 @@ int32_t topMain(const top_options_t *opts)
             framef("os64 top - %02d:%02d:%02d   ", now.hour, now.minute, now.second);
         else
             framef("os64 top   ");
+
+        if (haveMemory)
+            compose_free_memory(memory.free);
+        else
+            framef("free n/a   ");
 
         char upBuf[24];
         uint64_t upUS = (tickNow.per_second > 0)
