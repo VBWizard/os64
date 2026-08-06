@@ -716,7 +716,7 @@ static void raise_sigpipe_and_die(task_t *task)
 // helper touches may live on the syscall's task-local kernel stack.
 // One page per hop for read() and file-write bounce buffers. (Defined here,
 // above BOTH read and write, because the file-write path below uses it too.)
-#define READ_CHUNK_SIZE  4096
+#define READ_CHUNK_SIZE  (1024 * 1024)
 
 typedef struct {
 	vfs_file_t *file;
