@@ -86,9 +86,23 @@ all: $(addprefix $(BIN)/,$(APPS)) $(BIN)/app_bases.gdb
 # expands at eval time, so dropping another .c into the folder is picked up
 # by the next make with no registration step — the same drop-it-and-it-builds
 # contract the app DIRECTORIES follow, now honored one level down.
+#
+# BASE ADDRESS IS A REAL BUILD INPUT. A newly added app can hash into an
+# occupied slot, making the allocator linear-probe one of the existing apps
+# to a new base. Make cannot see a changed command-line variable by itself:
+# without an explicit prerequisite it considers that existing binary current
+# and leaves two ELFs linked at the old address. Each app therefore depends on
+# a stamp whose NAME contains its assigned base. If probing changes the base,
+# the required filename changes, its new stamp is created, and only that app
+# relinks with the new --defsym. Old stamps are harmless historical crumbs and
+# disappear with `make clean` alongside the rest of OBJ.
 define APP_RULE
 APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard apps/$(1)/*.c))
-$(BIN)/$(1): $$(APP_OBJS_$(1)) $(RUNTIME_OBJS)
+APP_BASE_STAMP_$(1) := $(OBJ)/apps/$(1)/.base-$(APP_BASE_$(1))
+$$(APP_BASE_STAMP_$(1)):
+	@mkdir -p "$$(dir $$@)"
+	@touch "$$@"
+$(BIN)/$(1): $$(APP_OBJS_$(1)) $(RUNTIME_OBJS) $$(APP_BASE_STAMP_$(1))
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $(RUNTIME_OBJS)
 	@printf '  %-10s base %s\n' "$(1)" "$(APP_BASE_$(1))"

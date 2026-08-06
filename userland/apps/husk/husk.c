@@ -197,18 +197,47 @@ static int read_line(char *buf, int cap)
 	}
 }
 
-// Tokenize `line` in place on spaces into argv[]; NUL-terminates argv. argc.
+// Tokenize `line` in place into argv[], removing matching single or double
+// quotes. Quotes group spaces into one argument; the child receives only the
+// resulting bytes and never needs to know shell syntax existed.
 static int parse(char *line, char *argv[], int maxargs)
 {
 	int argc = 0;
-	char *p = line;
-	while (*p && argc < maxargs - 1)
+	char *readp = line;
+	char *writep = line;
+
+	while (*readp && argc < maxargs - 1)
 	{
-		while (*p == ' ') p++;               // skip leading spaces
-		if (!*p) break;
-		argv[argc++] = p;                    // token starts here
-		while (*p && *p != ' ') p++;         // to end of token
-		if (*p) *p++ = 0;                    // terminate it
+		while (*readp == ' ' || *readp == '\t') readp++;
+		if (!*readp) break;
+
+		argv[argc++] = writep;
+		char quote = 0;
+		while (*readp)
+		{
+			if (quote != 0)
+			{
+				if (*readp == quote)
+				{
+					quote = 0;
+					readp++;
+					continue;
+				}
+				*writep++ = *readp++;
+				continue;
+			}
+
+			if (*readp == '\'' || *readp == '"')
+			{
+				quote = *readp++;
+				continue;
+			}
+			if (*readp == ' ' || *readp == '\t')
+				break;
+			*writep++ = *readp++;
+		}
+		while (*readp == ' ' || *readp == '\t') readp++;
+		*writep++ = 0;
 	}
 	argv[argc] = 0;
 	return argc;
@@ -224,18 +253,29 @@ static int first_token_is(const char *s, const char *word)
 	return *word == 0 && (*s == 0 || *s == ' ');
 }
 
-// Split a line on '|' into stage strings, in place. Returns the stage count.
-// (No quoting, no escapes — a bare '|' is always a pipe. Quoting is a parser
-// feature and husk's parser is deliberately tiny.)
+// Split a line on unquoted '|' characters into stage strings, in place.
+// Quotes stay in the stage for parse() to remove later. Thus
+// `grep -E "AP2|AP3"` is one grep, while `cat f | grep AP3` is a pipeline.
 static int split_pipeline(char *line, char *stages[], int maxstages)
 {
 	int n = 0;
 	char *p = line;
+	char quote = 0;
 
 	stages[n++] = p;
 	while (*p && n < maxstages)
 	{
-		if (*p == '|')
+		if (quote != 0)
+		{
+			if (*p == quote)
+				quote = 0;
+			p++;
+		}
+		else if (*p == '\'' || *p == '"')
+		{
+			quote = *p++;
+		}
+		else if (*p == '|')
 		{
 			*p++ = 0;              // terminate the stage before the bar
 			stages[n++] = p;       // next stage starts after it
