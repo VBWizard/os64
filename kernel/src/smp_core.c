@@ -28,7 +28,7 @@ extern uint64_t kKernelPML4;
 extern uint64_t kKernelPML4v;
 extern uint64_t kHHDMOffset;
 extern uint64_t kMPLVTTimer;
-extern bool kBspSchedulerMode;
+extern bool kTicklessScheduler;
 bool kCLSInitialized = false;
 bool kSMPInitDone = false;
 
@@ -337,9 +337,9 @@ void ap_wake_up_aps() {
 				if (((volatile uint64_t *)tempStack)[q] != TEMP_STACK_CANARY)
 					panic("AP %u bring-up smashed the tempStack canary (qword %u = 0x%016lx) — grow TEMP_STACK_SIZE; see SCHEDULER_STRAY_WRITE.md\n",
 						apic_id, q, ((volatile uint64_t *)tempStack)[q]);
-			if (kBspSchedulerMode)
+			if (kTicklessScheduler)
 			{
-				// Wake-on-work mode: park AP timers and kick each AP once so it can run its idle thread.
+				// Tickless (wake-on-work): park AP timers and kick each AP once so it can run its idle thread.
 				send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 			}
 			else
@@ -356,7 +356,7 @@ void ap_enable_schedulers() {
         if (apic_id == BOOTSTRAP_PROCESSOR_ID) continue; // Skip BSP
         
         printd(DEBUG_SMP, "MP: Enabling scheduling on AP %u\n", apic_id);
-        if (kBspSchedulerMode)
+        if (kTicklessScheduler)
             send_ipi(apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
         else
             mp_enable_scheduling_vector(apic_id);
@@ -537,9 +537,9 @@ void enableAPScheduling_ISR()
 {
 	ap_configure_scheduler_timer();
 	core_local_storage_t *cls = get_core_local_storage();
-	if (kBspSchedulerMode && cls->apic_id != BOOTSTRAP_PROCESSOR_ID)
+	if (kTicklessScheduler && cls->apic_id != BOOTSTRAP_PROCESSOR_ID)
 	{
-		printd(DEBUG_SMP, "AP: enableAPScheduling_ISR: BSP scheduler mode active, leaving AP %u timer masked\n", cls->apic_id);
+		printd(DEBUG_SMP, "AP: enableAPScheduling_ISR: tickless mode active, leaving AP %u timer masked\n", cls->apic_id);
 		write_eoi();
 		return;
 	}
@@ -593,14 +593,14 @@ void mpDisableAP(int apic_id)
 // ── CPU-time settle-on-read ─────────────────────────────────────────────
 // The accounting charges at context-switch boundaries, which means a
 // core's books are only as fresh as its last scheduler pass — and a
-// monopolized or rarely-nudged core (BSPSCHED APs) settles in LUMPS: the
+// monopolized or rarely-nudged core (tickless APs) settles in LUMPS: the
 // top -l audit measured idle1 alternating 0% and 208% per refresh while
 // summing to a perfect 0.9984 over time. Correct books, quantized
 // delivery. The fix: before /proc renders CPU-time numbers, ask every
 // core to settle its own in-flight span — each using ITS OWN TSC (the
 // reader must never do cross-core TSC math; that is the desync landmine).
 // Mode-agnostic by construction (Chris's requirement): an IPI lands the
-// same under BSPSCHED or free-running, and the handler is core-local
+// same under tickless or periodic, and the handler is core-local
 // either way.
 
 volatile bool mp_acctSettleAck[MAX_CPUS];

@@ -7,7 +7,7 @@
 
 extern bool kOverrideFileLogging;
 extern bool kEnableSMP;
-extern bool kBspSchedulerMode;
+extern bool kTicklessScheduler;
 extern bool kEnableKWorker;
 extern bool kEnableGUI;
 extern bool kRunTests;
@@ -52,6 +52,14 @@ char kLogdPath[128] = {0};
 // so this flag makes it a one-boot test: boot with TESTPANIC, then check the
 // log ends with the banner, the flushed backlog, and the repeated message.
 bool kTestPanic = false;
+// SCHED=<mode>: scheduler mode selection. Absent means tickless — the default
+// needs no flag, that's the point (2026-08-05 ruling; the misnamed BSPSCHED
+// bool it replaces was removed the same day, no alias kept — all Limine
+// entries migrated in the same commit). Recognized values are interpreted
+// after the parse loop below; unknown values keep the tickless default and
+// say so, because a typo silently landing you in the legacy mode is exactly
+// the kind of quiet regression the default flip exists to prevent.
+static char kSchedParam[16] = {0};
 
 // -----------------------------------------------------------------------
 // Kernel command-line parser definitions
@@ -138,7 +146,7 @@ static cmdopt_t cmdopts[] = {
     {"KEYTEST", OPT_BOOL, &kRunKeytest, true, 0},
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
-    {"BSPSCHED", OPT_BOOL, &kBspSchedulerMode, true, 0},
+    {"SCHED", OPT_STRING, kSchedParam, 0, sizeof(kSchedParam)},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"NOUSB", OPT_BOOL, &kEnableUSB, false, 0},
     {"TESTPANIC", OPT_BOOL, &kTestPanic, true, 0},
@@ -220,5 +228,18 @@ void process_kernel_commandline(char *cmdline)
                 break;
             }
         }
+    }
+
+    // Interpret SCHED= now that the table pass has filled kSchedParam.
+    // "periodic" is the whole menu today; new policies slot in here as the
+    // tickless arc adds them (one-shot quanta, etc.). Deliberately NOT a
+    // table entry per value: the values share one destination variable and
+    // the unknown-value warning needs a home.
+    if (kSchedParam[0])
+    {
+        if (strcmp(kSchedParam, "periodic") == 0)
+            kTicklessScheduler = false;
+        else
+            printd(DEBUG_BOOT, "cmdline: unknown SCHED=%s ignored, staying tickless\n", kSchedParam);
     }
 }

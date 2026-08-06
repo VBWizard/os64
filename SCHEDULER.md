@@ -166,33 +166,43 @@ idle threads must always be present and runnable).
   siblings between passes; there is no intra-pass timeslicing beyond the
   pass cadence itself.
 
-## BSPSCHED mode (sharp edges)
+## Tickless mode — THE DEFAULT (sharp edges)
 
-`BSPSCHED` cmdline (kBspSchedulerMode) = "generic work stays on the BSP":
-AP LAPIC scheduler timers are left MASKED (`enableAPScheduling_ISR` bails
-for APs), and APs run only explicitly-pinned threads, woken by
-`scheduler_nudge_parked_aps` sending a manual-schedule IPI when a pinned
-thread becomes runnable. Consequences, learned the hard way:
+Tickless (`kTicklessScheduler`, default true since 2026-08-05; opt out with
+`SCHED=periodic`) is the park-and-nudge scheduler: AP LAPIC scheduler timers
+are left MASKED (`enableAPScheduling_ISR` bails for APs), and APs run only
+when woken by `scheduler_nudge_parked_aps` sending a manual-schedule IPI —
+pinned work nudges its designated core, unpinned work recruits the first
+idle one. The name is aspirational on purpose: the BSP still ticks at 100Hz
+and busy APs don't preempt yet; SCHEDULER_REDESIGN.md (net branch) is the
+path to earning it fully. Born as the misnamed `BSPSCHED` flag — misnamed
+because the BSP neither owned the nudging (any core nudges) nor the
+scheduling (every nudged core runs its own selection pass); flag retired,
+no alias, all boot entries migrated the same day. Consequences, learned the
+hard way:
 
-- A thread pinned to an AP under BSPSCHED is **never preempted there** — no
+- A thread pinned to an AP under tickless is **never preempted there** — no
   timer, no pass, nothing. A busy-spin wedges that core forever (observed:
   GUI compositor dark on core 1). Nudges are the only scheduling events.
 - Wake latency on APs is nudge-driven and bursty.
-- The GUI boot entries deliberately omit BSPSCHED, and `gui_start()`
-  refuses to pin the compositor when it's set.
+- The GUI boot entries carry an explicit `SCHED=periodic`, and `gui_start()`
+  refuses to pin the compositor under tickless.
+- `SCHED=periodic` is also the REPRO MODE for the open /idle2 stray write
+  (SCHEDULER_STRAY_WRITE.md) — the dedicated Limine entry at the bottom of
+  limine.conf must outlive that bug.
 
 **Is the GUI incompatibility fixable? Yes — it's a fossil, not physics.**
 The wedge dates from the compositor's tick-spin era, when it busy-waited
 between frames; with no AP timer to preempt it, the pin was fatal. Today's
 compositor hlt-waits (frame pass → `sti;hlt`), which is exactly the
-citizenship BSPSCHED wants from a pinned thread: input IRQs already route
+citizenship tickless wants from a pinned thread: input IRQs already route
 to its core on TPR-safe vectors and end the halt directly. One wake path is
 missing — a client on ANOTHER core publishing damage doesn't interrupt the
 halted compositor core, which would sit dark until the next input event.
 The fix (small, unbuilt): `gui_damage_add()` sends a nudge IPI at the
-compositor's core when that core is remote and parked. With it, BSPSCHED
+compositor's core when that core is remote and parked. With it, tickless
 keeps its long-parked idle cores AND gets a live GUI. Tradeoff to accept
-knowingly: under BSPSCHED a compositor bug that spins is still a wedged
+knowingly: under tickless a compositor bug that spins is still a wedged
 core with no preemption rescue — tolerable only because the compositor's
 whole design is "do a frame, halt." Until the damage-wake exists,
 `gui_start()`'s pin refusal stays.
@@ -205,7 +215,7 @@ whole design is "do a frame, halt." Until the damage-wake exists,
 | 0x7C / 0x7D | disable / enable AP scheduling | `disableAPScheduling_ISR` / `enableAPScheduling_ISR` (LVT timer mask/unmask + re-arm) |
 | 0x7E | IPI_TIMER_SCHEDULE | `_schedule_ap` — the periodic per-core timer vector |
 | 0x7F | IPI_AP_INITIALIZATION | `ap_initialization_handler` (per-core SYSCALL MSRs — STAR/LSTAR/SFMASK/EFER.SCE — CLS, timer calibration) |
-| 0x81 | IPI_MANUAL_SCHEDULE | `_schedule_ap` — `scheduler_trigger` self-IPI and BSPSCHED nudges |
+| 0x81 | IPI_MANUAL_SCHEDULE | `_schedule_ap` — `scheduler_trigger` self-IPI and tickless nudges |
 
 - **APs run with LAPIC TPR = 0x30** (set in `ap_wakeup_after_stack_switch`):
   every vector below 0x40 is silently held on APs — no fault, no log, the
@@ -231,7 +241,7 @@ never woken). Then `ap_wake_up_aps`, per AP: write the AP's Limine
 `goto_address` → AP runs `ap_wakeup_entry` (own CR3/GDT/TSS/IDT, real stack,
 CLS) → handshake on `coreAwoken` → init IPI (0x7F: MSRs + timer calibration)
 → handshake on `coreInitialized` → enable-scheduling IPI (or a single manual
-kick under BSPSCHED). Finally `kSMPInitDone = true`, which un-gates
+kick under tickless). Finally `kSMPInitDone = true`, which un-gates
 TLB-shootdown broadcasts.
 
 **MAX_CPUS is 24.** The 3900X (24 threads) sits exactly at the boundary —
@@ -260,7 +270,7 @@ Wake granularity is the BSP pass cadence (~10-30ms); don't build anything
 that needs finer.
 
 **Pin a thread to a core:** set `thread->mp_apic = <apic_id>` before it
-becomes runnable. Remember: under BSPSCHED it will be nudge-only and
+becomes runnable. Remember: under tickless it will be nudge-only and
 unpreemptable there; any IRQ it depends on must ride a vector ≥ 0x40 if the
 core is an AP.
 
@@ -345,7 +355,7 @@ priority class so the wall clock is unstealable no matter what a pass does.
 - **#PF/#GP immediately after the scheduler's CR3 switch:** a frame field
   read AFTER `mov cr3` (invariant 1).
 - **A core wedges hard with one thread and heartbeats stop, system otherwise
-  alive:** pinned thread busy-spinning on an AP under BSPSCHED (no timer =
+  alive:** pinned thread busy-spinning on an AP under tickless (no timer =
   no preemption), or a spin on a TSC deadline captured before a preemption
   (use kTicksSinceStart).
 - **Device interrupts silently never arrive, but only on APs:** vector
@@ -353,7 +363,7 @@ priority class so the wall clock is unstealable no matter what a pass does.
 - **A core stops taking scheduler interrupts entirely:** a handler path that
   missed its EOI.
 - **`send_ipi: ICR delivery-status stuck busy` panic:** the *target* core is
-  wedged (see BSPSCHED/TSC causes above) — the panic is the messenger.
+  wedged (see tickless/TSC causes above) — the panic is the messenger.
 - **`scheduler_store_thread: AP storing CS=0` panic:** the mp_isrSaved slot
   for that core was never populated — an entry path skipped the register
   save (historically: first pass on a fresh AP; `mp_CoreHasRunScheduledThread`
@@ -385,8 +395,8 @@ priority class so the wall clock is unstealable no matter what a pass does.
    find-then-run stays atomic). Requirement from Chris: DEBUG_DETAILED must
    be slow-but-honest, never a lockup.
 5. MAX_CPUS=24 vs. the 3900X boundary (above).
-6. BSPSCHED + GUI coexistence: needs only the damage-wake nudge IPI (see
-   the BSPSCHED section) — `gui_start()`'s pin refusal is tick-spin-era
+6. Tickless + GUI coexistence: needs only the damage-wake nudge IPI (see
+   the tickless section) — `gui_start()`'s pin refusal is tick-spin-era
    conservatism kept until that exists.
 7. Wall-clock hardening (the autopsy's structural fixes): early EOI via the
    prologue reorder, and/or IRQ0 above the scheduler's priority class.

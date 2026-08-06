@@ -11,7 +11,10 @@ extern uint64_t kTicksPerSecond;
 /// @brief Is kernel initialization complete?
 extern volatile bool kInitDone;
 extern bool kEnableSMP;
-extern bool kBspSchedulerMode;
+// true (the default) = tickless scheduling: idle AP timers masked, work wakes
+// cores via directed nudge IPIs. false = SCHED=periodic legacy mode (every
+// core ticks at 100Hz; diagnostic/repro only). See kernel.c for the ruling.
+extern bool kTicklessScheduler;
 extern bool kEnableKWorker;
 extern volatile uint64_t kSystemStartTime, kUptime;
 extern volatile uint64_t kSystemCurrentTime;

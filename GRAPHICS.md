@@ -110,13 +110,14 @@ adopted unconditionally at boot; IRQ12 only when `GUI` is set.
   TSCs under QEMU/WSL2 are desynchronized enough that a cycle target computed
   before a preemption could resume near-eternal. Never compare TSC values
   across a possible preemption.
-- **Scar #3:** `BSPSCHED` mode masks AP scheduler timers
-  (`enableAPScheduling_ISR`) — a thread pinned to an AP runs unpreemptable and
-  nudge-only. The compositor pins to core 1 for smoothness **except** under
-  `kBspSchedulerMode` (`gui_compositor_affinity()`), where it stays unpinned
-  on the BSP. The GUI boot entry deliberately omits `BSPSCHED`. (Fixable:
+- **Scar #3:** tickless mode (the DEFAULT since 2026-08-05; formerly the
+  `BSPSCHED` flag) masks AP scheduler timers (`enableAPScheduling_ISR`) — a
+  thread pinned to an AP runs unpreemptable and nudge-only. The compositor
+  pins to core 1 for smoothness **except** under `kTicklessScheduler`
+  (`gui_compositor_affinity()`), where it stays unpinned on the BSP. The GUI
+  boot entries carry an explicit `SCHED=periodic` for this reason. (Fixable:
   the hlt-wait compositor plus a damage-wake nudge IPI in `gui_damage_add`
-  would let the two coexist — see SCHEDULER.md's BSPSCHED section.)
+  would let the two coexist — see SCHEDULER.md's tickless section.)
 
 ## The userland boundary — full design (unbuilt; implement from this section)
 
@@ -357,7 +358,7 @@ the migration acceptance test.**
   line ~149 — find THAT fault.
 - **Compositor heartbeats stop, system alive:** thread wedged. Check (a) it
   isn't spinning on a stale TSC target (use ticks!), (b) it isn't pinned to an
-  AP under BSPSCHED, (c) qISleep wake delivery.
+  AP under tickless, (c) qISleep wake delivery.
 - **Cursor frozen but ball animating:** input events not reaching the queue —
   check IRQ12 routing (`IOAPIC: IRQ12 mapped...` in serial) and 8042 packet
   sync (`mouse: resync` spam = desync storm).

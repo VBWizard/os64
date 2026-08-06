@@ -130,7 +130,7 @@ void task_signal_all_threads(task_t* task, uint64_t signal)
 //
 //  2. THE NUDGE, and this is the part that only matters on the boots we
 //     actually run. That redirect fires WHEN THE SCHEDULER RUNS ON THAT
-//     CORE — and under BSPSCHED the AP timers are masked, so the scheduler
+//     CORE — and under tickless the AP timers are masked, so the scheduler
 //     does not run on an AP spontaneously. A worker spinning on AP 5 would
 //     carry its death warrant forever, unpreempted, with the redirect
 //     armed and never firing. A scheduling IPI is an interrupt, so it

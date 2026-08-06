@@ -483,7 +483,7 @@ static void proc_gen_cores(proc_text_t *t)
 {
 	// Settle-on-read: every core charges its in-flight span (locally, own
 	// TSC) before we render — so the books are never staler than this IPI
-	// round-trip, and BSPSCHED's lumpy settlement can't staircase a reader.
+	// round-trip, and tickless mode's lumpy settlement can't staircase a reader.
 	// Rate-limited inside (once per tick), so a top refresh pays once.
 	mpAcctSettleAll();
 

@@ -371,7 +371,7 @@ void nvme_wait_for_completion(nvme_controller_t* controller, bool adminQueue, vo
 // was already reading — on another core, or on the SAME core via preemption
 // while polling. Interleaved, both waiters capture the same CQ head slot; one
 // consumes it, the other spins into the timeout panic (seen ~50% of VBox
-// boots; QEMU's BSPSCHED entry masked it by squeezing threads onto the BSP).
+// boots; QEMU's tickless entry masked it by squeezing threads onto the BSP).
 //
 // The lock is irqsave so the holder cannot be preempted: a bare spinlock
 // could deadlock one core (holder preempted, fault-context IF=0 spinner

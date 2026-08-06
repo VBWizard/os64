@@ -37,7 +37,7 @@ extern struct Framebuffer kFrameBuffer;
 
 bool kEnableGUI = false;
 
-extern bool kBspSchedulerMode;
+extern bool kTicklessScheduler;
 
 // The compositor task, created by gui_start(). Kept for future use
 // (diagnostics, wake-on-damage once an IRQ-safe wake primitive exists).
@@ -397,13 +397,15 @@ bool guicomp_thread(bool daemon)
 
 // Pin the compositor to core 1 when we have one (kworker precedent): keeps
 // steady frame work off the BSP, which handles IRQ0/signals. EXCEPT in
-// BSP-scheduler mode: there the AP scheduler timers stay masked
+// tickless mode (the default): there the AP scheduler timers stay masked
 // (smp_core.c enableAPScheduling_ISR) — a thread pinned to an AP runs
 // un-preemptable and only when nudged, which wedged the compositor hard.
-// Under BSPSCHED everything stays on the BSP's normal scheduling.
+// Under tickless everything stays on the BSP's normal scheduling, which is
+// why the GUI boot entries run SCHED=periodic until the damage-wake nudge
+// (SCHEDULER.md) lets a pinned compositor and parked cores coexist.
 uint64_t gui_compositor_affinity(void)
 {
-	return (kMPCoreCount > 1 && !kBspSchedulerMode)
+	return (kMPCoreCount > 1 && !kTicklessScheduler)
 	           ? (uint64_t)kCPUInfo[1].apicID
 	           : THREAD_NO_AFFINITY;
 }

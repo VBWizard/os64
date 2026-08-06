@@ -77,12 +77,12 @@ uint64_t mp_ForkReturn[MAX_CPUS] = {false};
 
 extern pt_entry_t kKernelPML4v;
 extern uint64_t kHHDMOffset;
-extern bool kBspSchedulerMode;
+extern bool kTicklessScheduler;
 extern bool kSMPInitDone;
 
 #define VERIFY_QUEUE(q) if (q<0 || (q>THREAD_STATE_ISLEEP && q!=THREAD_STATE_ZOMBIE)) panic("VERIFY_QUEUE: Invalid state %u\n", q)
 
-// ── Queue-lock discipline (the BSPSCHED fan-out made this load-bearing) ─────
+// ── Queue-lock discipline (the tickless fan-out made this load-bearing) ─────
 //
 // kSchedulerSwitchTasksLock protects the scheduler's doubly-linked queues
 // (qRunning/qRunnable/qISleep/...) and the kTaskList spine. Two kinds of
@@ -172,7 +172,7 @@ static bool scheduler_thread_can_run_on_core(thread_t *thread, core_local_storag
 
 static void scheduler_nudge_parked_aps(thread_t *thread)
 {
-	if (!kBspSchedulerMode || !kSMPInitDone || thread == NULL || thread->idleThread) {
+	if (!kTicklessScheduler || !kSMPInitDone || thread == NULL || thread->idleThread) {
 		return;
 	}
 
@@ -210,7 +210,7 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 	// Cross-core reads here are safe: CLS and thread structs live in the
 	// shared upper half, and a stale read costs one wasted (or missed)
 	// nudge, self-healed by the next scheduler pass. KNOWN LIMIT, not new
-	// tonight: BSPSCHED APs don't preempt, so a compute-bound tenant owns
+	// tonight: tickless APs don't preempt, so a compute-bound tenant owns
 	// its core until it blocks or dies (kworker read 0% while a hog held
 	// its core — pre-existing nudge-only semantics; AP fairness is its own
 	// future slice).
@@ -219,9 +219,9 @@ static void scheduler_nudge_parked_aps(thread_t *thread)
 		uint32_t apic_id = kCPUInfo[i].apicID;
 		if (apic_id == BOOTSTRAP_PROCESSOR_ID || apic_id == current_apic_id)
 			continue;
-		// NOT gated on mp_schedulerEnabled, deliberately: under BSPSCHED the
+		// NOT gated on mp_schedulerEnabled, deliberately: under tickless the
 		// enable ISR leaves AP timers masked and never sets that flag, so
-		// requiring it excluded every core BSPSCHED itself parked — the
+		// requiring it excluded every core the tickless mode itself parked — the
 		// first fan-out test recruited exactly ONE core (kworker's, enabled
 		// by its pin) and left the rest asleep. _schedule_ap gates only on
 		// re-entry (mp_inScheduler), so a manual nudge is safe for a core
@@ -708,7 +708,7 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
 {
 	// Dispatch history for /proc (thread.h has the doctrine): cls is the
 	// TARGET core's storage, so this is correct even when the BSP loads a
-	// thread onto another core under BSPSCHED.
+	// thread onto another core under tickless scheduling.
 	thread->lastRunApicID = cls->apic_id;
 	//task_t* task = cls->currentThread->ownerTask;
 	//task_t* ownerTask = ((task_t*)cls->currentThread->ownerTask)->ownerTask;
@@ -949,7 +949,7 @@ void scheduler_trigger(core_local_storage_t *cls)
     // rescheduled on a DIFFERENT core. A stale cls here meant a migrated
     // thread hlt-waited on its OLD core's flag — which can legitimately be
     // set (that core mid-trigger for its own tenant), stranding us in hlt on
-    // a core whose timer may be masked (BSPSCHED). The core that resumed us
+    // a core whose timer may be masked (tickless). The core that resumed us
     // cleared its own flag at scheduler_do entry, so the fresh read exits
     // immediately.
     while (mp_waitingForScheduler[get_core_local_storage()->apic_id])
@@ -1148,7 +1148,7 @@ void scheduler_do()
 	// Charged at the switch boundary, not tick-sampled, so sub-tick slices
 	// are visible and nothing gets laundered into whoever the timer caught.
 	// Both rdtsc reads in every delta happen on THIS core (this function runs
-	// on the core being scheduled, even under BSPSCHED — the BSP only decides
+	// on the core being scheduled, even under tickless — the nudger only decides
 	// WHEN, the IPI makes each core run its own pass), so TSC desync between
 	// cores can never corrupt a delta. The ISR time between interrupt entry
 	// and this line rides on the outgoing thread — documented v1 honesty,

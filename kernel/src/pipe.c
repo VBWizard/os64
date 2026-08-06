@@ -70,7 +70,7 @@ static void pipe_wake_thread(thread_t *w)
 {
 	// The check-clear-relink now lives in the scheduler behind its queue
 	// lock: this wake runs in the WAKER's thread context, which since the
-	// BSPSCHED fan-out can be an AP executing in true parallel with the
+	// tickless fan-out can be an AP executing in true parallel with the
 	// BSP's tick pass over the same queues. The unlocked version of this
 	// relink is what corrupted the scheduler lists and wedged VBox.
 	scheduler_wake_isleep_thread(w);

@@ -55,7 +55,18 @@ extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 bool kEnableSMP = true;
-bool kBspSchedulerMode = false;
+// The scheduler mode, DEFAULT TRUE since 2026-08-05 (Chris's ruling, decision
+// recorded): tickless is the destination architecture (see SCHEDULER_REDESIGN
+// on the net branch) and this park-and-nudge mode is the road to it — idle AP
+// timers stay masked and work arrives by directed IPI. The name is deliberately
+// aspirational: the BSP still ticks at 100Hz and busy APs don't preempt yet;
+// the mode grows into its name phase by phase. This flag was born as the
+// misnamed BSPSCHED cmdline option (the BSP neither owned the nudging nor the
+// scheduling — any core nudges, every core self-schedules), retired same day.
+// SCHED=periodic is the only way off: the legacy every-core-100Hz mode, kept
+// as a diagnostic flashlight AND as the repro for the open /idle2 stray-write
+// (SCHEDULER_STRAY_WRITE.md) until that bug dies.
+bool kTicklessScheduler = true;
 bool kEnableKWorker = false;
 // Cleared by the NOUSB cmdline flag — skips xHCI bring-up entirely.
 bool kEnableUSB = true;
@@ -215,6 +226,12 @@ void kernel_init()
     kLimineSMPInfo = smp_request.response;
     init_SMP(kEnableSMP);
     printf("(%u core(s) initialized)\n", kMPCoreCount);
+    // Say which scheduler this boot got — the mode is a cmdline decision now
+    // (tickless default, SCHED=periodic opt-out), and a decision that changes
+    // how every core behaves should be readable on the glass, not inferred.
+    printf("Scheduler: %s\n", kTicklessScheduler
+           ? "tickless (park-and-nudge; SCHED=periodic for legacy)"
+           : "periodic (legacy 100Hz all-core; diagnostic mode)");
 
     init_signals();
 

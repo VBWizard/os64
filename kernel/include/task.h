@@ -189,6 +189,6 @@
 
 	// Bring down every thread of a dying task except the one dying. THE
 	// single control point for "exit means exit" — see the implementation
-	// for why marking alone is not enough on a BSPSCHED boot.
+	// for why marking alone is not enough on a tickless boot.
 	void task_terminate_sibling_threads(task_t* task, thread_t* self);
 	#endif
