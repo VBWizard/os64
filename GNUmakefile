@@ -212,6 +212,22 @@ run-net: $(IMAGE_NAME).iso
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_NET_FLAGS)
 
+# Same slirp harness, e1000 instead of virtio — the INTx doorbell's test
+# bench (2026-08-06). Boot this to see "e1000: interrupts live — INTx
+# GSI <n> -> vector 0x45 (probe-confirmed)" on the glass; run-net stays
+# virtio on purpose, as the polled-path regression twin. Same 10.0.2.x
+# world, same pcap.
+QEMU_E1000_FLAGS = -netdev user,id=n0 -device e1000,netdev=n0 \
+                   -object filter-dump,id=dump0,netdev=n0,file=net_capture.pcap
+
+.PHONY: run-e1000
+run-e1000: $(IMAGE_NAME).iso
+	qemu-system-x86_64 \
+		-machine q35 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		$(QEMUFLAGS) $(QEMU_E1000_FLAGS)
+
 # The REAL-internet variant: a host tap device instead of slirp, because
 # slirp cannot relay ICMP to the outside world (ping 8.8.8.8 dies in the
 # NAT). Boot the "/QEMU Boot (TAP net)" Limine entry — it carries the

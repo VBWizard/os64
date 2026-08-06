@@ -120,7 +120,28 @@ void processSignals()
 	// through the seam is the obvious tidy-up; it waits for a third driver
 	// to make the abstraction pay, the same way the seam itself waited for
 	// a second one.)
-	e1000_poll();
+	//
+	// Since 2026-08-06 the e1000 drain is DOORBELL-GATED when INTx is live:
+	// the ISR (vector 0x45) raises kE1000RxWork and this pass consumes it.
+	// Clear BEFORE draining — a packet that lands mid-drain re-raises the
+	// flag and schedules the next pass, instead of vanishing into a
+	// cleared-after window (the classic lost-wakeup shape, same reason the
+	// wake sweeps re-evaluate conditions instead of remembering edges).
+	// No confirmed wire = unconditional poll, yesterday's behavior exactly.
+	if (!kE1000UsesIntx || kE1000RxWork)
+	{
+		// If the ISR divorced the wire at runtime (shared line gone hostile
+		// — see storm breaker #2 in e1000.c), announce it exactly once. The
+		// fallback itself already happened in interrupt context; this is
+		// the no-silent-fallbacks receipt.
+		if (kE1000IntxDivorced)
+		{
+			kE1000IntxDivorced = false;
+			printf("e1000: INTx wire went hostile (stranger storm) — back to polling\n");
+		}
+		kE1000RxWork = false;
+		e1000_poll();
+	}
 
 	// DHCP's retry timer rides the same pass (one state compare when the
 	// lease is settled). Delivery of DHCP replies happens inside the poll

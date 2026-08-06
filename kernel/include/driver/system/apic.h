@@ -64,6 +64,15 @@ void remap_irq0_to_apic(uint32_t vector);
 // k*UsesLapic flag so its EOI path follows the routing.
 void ioapic_adopt_isa_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_id, volatile bool *uses_lapic_flag);
 
+// Route a GSI directly — the PCI INTx door (level-triggered/active-low is
+// PCI's dialect; ISA's is edge/high). No override lookup: the caller names
+// the IOAPIC input itself. Returns false when there is no IOAPIC.
+bool ioapic_route_gsi(uint8_t gsi, uint8_t vector, uint8_t dest_apic_id,
+                      bool level_triggered, bool active_low);
+
+// Mask a GSI's redirection entry — the probe loop's eraser (see apic.c).
+void ioapic_mask_gsi(uint8_t gsi);
+
 extern volatile bool kIRQ0UsesLapic;
 extern volatile bool kIRQ1UsesLapic;
 extern volatile bool kIRQ12UsesLapic;

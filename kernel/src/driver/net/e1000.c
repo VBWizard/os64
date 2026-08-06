@@ -94,6 +94,8 @@
 #include "time.h"            // wait(ms) — the init-time delays the datasheet demands
 #include "CONFIG.h"
 #include "driver/system/pci.h"
+#include "driver/system/apic.h"  // ioapic_route_gsi / ioapic_mask_gsi — the INTx door
+#include "smp.h"                 // kCPUInfo — the BSP's APIC ID targets the doorbell
 #include "driver/net/net_device.h"
 #include "driver/net/e1000.h"
 
@@ -138,8 +140,19 @@ static const e1000_model_t kE1000Models[] = {
 #define E1000_EECD    0x0010   // EEPROM/Flash Control & Data
 #define E1000_EERD    0x0014   // EEPROM Read — the keyhole
 #define E1000_ICR     0x00C0   // Interrupt Cause Read (reading it CLEARS it)
+#define E1000_ICS     0x00C8   // Interrupt Cause Set — fire a cause ON COMMAND.
+                               // The routing probe's whole trick: ask the card
+                               // to ring its own doorbell and see which IOAPIC
+                               // input hears it. Chipset-agnostic by design.
 #define E1000_IMS     0x00D0   // Interrupt Mask Set
 #define E1000_IMC     0x00D8   // Interrupt Mask Clear
+
+// The three causes we listen for (ICR/ICS/IMS share one bit layout).
+// TXDW is deliberately NOT here: transmit already reclaims its own
+// descriptors opportunistically, so a TX-done doorbell buys nothing yet.
+#define E1000_INT_LSC     0x04   // Link Status Change — cable events, and the probe's test bell
+#define E1000_INT_RXO     0x40   // Receiver Overrun — the no-silent-drops witness
+#define E1000_INT_RXT0    0x80   // Receiver Timer — a frame arrived (the whole point)
 #define E1000_RCTL    0x0100   // Receive Control
 #define E1000_TCTL    0x0400   // Transmit Control
 #define E1000_TIPG    0x0410   // Transmit Inter-Packet Gap
@@ -267,9 +280,44 @@ typedef struct
 	bool up;                       // rings live and receiver/transmitter enabled
 	spinlock_t lock;               // guards both rings' driver-side state
 	net_device_t netdev;
+
+	// INTx bookkeeping (all written by the ISR — single writer, aligned
+	// 32-bit stores, no lock needed; readers are diagnostics).
+	uint8_t  intx_gsi;                     // the IOAPIC input the probe confirmed
+	volatile uint32_t intx_fires;          // ICR != 0 — the doorbell was for us
+	volatile uint32_t intx_strangers;      // ICR == 0 — a shared line fired for someone else
+	volatile uint32_t intx_link_changes;   // LSC causes seen (cable events)
 } e1000_t;
 
 static e1000_t s_e1000;
+
+// The doorbell's two public flags, read by processSignals (signals.c):
+// UsesIntx false = the probe never confirmed a wire, poll unconditionally
+// (yesterday's behavior, never a dead NIC); true = drain only when RxWork
+// says the ISR heard something. RxWork is set in interrupt context and
+// consumed (cleared-then-drained, in that order, so a doorbell during the
+// drain schedules the next pass instead of being lost) in processSignals.
+volatile bool kE1000UsesIntx = false;
+volatile bool kE1000RxWork = false;
+
+// Set (once) when the ISR unilaterally abandons INTx — a shared line gone
+// hostile at runtime. processSignals announces it so the fallback is never
+// silent; the poll path is already unconditional again by the time anyone
+// reads this.
+volatile bool kE1000IntxDivorced = false;
+
+// Probe-window state, ISR-visible. The VBox lesson (2026-08-06 evening,
+// same day as the first wire): a candidate GSI can be a STORM — the line
+// reads asserted the instant it's unmasked (polarity model mismatch, or a
+// neighbor whose device model ignores PCI Interrupt Disable), vector 0x45
+// fires back-to-back forever, and the boot freezes mid-probe with the CPU
+// trapped in a polite argument with a wire. Defense in depth: the ISR
+// itself watches the stranger count during a probe window and MASKS the
+// candidate from interrupt context (one MMIO write, ISR-safe) once it's
+// clearly a storm, which un-wedges the CPU and lets the probe loop move on.
+static volatile int16_t  sProbeGsi = -1;        // candidate under probe, else -1
+static volatile uint32_t sProbeStrangerBase = 0;
+static volatile bool     sProbeStormed = false;
 
 // ── MMIO accessors ──────────────────────────────────────────────────────────
 // volatile at the single choke point so no call site can forget it. The
@@ -817,4 +865,251 @@ void init_e1000(void)
 		       s_e1000.netdev.link_up ? "up" : "down");
 	else
 		printf("e1000: device found but init failed (DEBUG_NET for details)\n");
+}
+
+// ── INTx: the doorbell (first wired 2026-08-06) ─────────────────────────────
+// Interrupts entered computing in 1956 (UNIVAC 1103A) because polling was
+// recognized as the machine wasting its life checking an empty mailbox.
+// Seventy years later this driver relives the exact realization: everything
+// below exists so a packet ANNOUNCES itself instead of waiting up to a
+// scheduler pass to be noticed.
+
+// The top half, in BSD's vocabulary: entered from handler_e1000_intx_asm
+// (vector 0x45). Microseconds, no locks — read ICR (the read itself acks
+// every pending cause AND deasserts the level-triggered line), tally what
+// happened, raise the work flag. The ring drain deliberately stays out of
+// interrupt context: the RX path transmits in direct response to arrivals
+// (ARP reply, echo reply) and takes the ring lock — top halves that take
+// protocol locks are how a NIC interrupt becomes a 2 a.m. deadlock hunt.
+void e1000_isr(void)
+{
+	e1000_t* e = &s_e1000;
+	if (!e->up)
+		return;
+
+	uint32_t icr = e1000_read32(e, E1000_ICR);
+	if (icr == 0)
+	{
+		// Shared-line etiquette: a level-triggered INTx line can be
+		// wire-OR'd by several cards, and ICR == 0 means this ring wasn't
+		// ours. Counted, never assumed away — a climbing stranger count is
+		// how we'd learn a neighbor moved onto our GSI.
+		e->intx_strangers++;
+
+		// Storm breaker #1 (probe window): if the candidate under probe is
+		// firing stranger interrupts back-to-back, it isn't our wire — it's
+		// a line that reads asserted the moment it's unmasked. Mask it RIGHT
+		// HERE, from interrupt context, because the probe loop can't run
+		// while we're re-entering forever. 64 strangers in one 2ms-ish probe
+		// window is decisive; a legitimate shared line ticks over in ones.
+		if (sProbeGsi >= 0 && (e->intx_strangers - sProbeStrangerBase) > 64)
+		{
+			ioapic_mask_gsi((uint8_t)sProbeGsi);
+			sProbeStormed = true;
+			sProbeGsi = -1;
+		}
+
+		// Storm breaker #2 (runtime divorce): a wire that probed clean can
+		// still turn hostile later (hotplugged neighbor, model quirk). If
+		// strangers utterly swamp genuine fires, stop trusting the doorbell:
+		// mask our GSI, flip back to unconditional polling, and let
+		// processSignals announce it. Never a dead NIC, never a wedged core.
+		else if (kE1000UsesIntx &&
+		         e->intx_strangers > (e->intx_fires * 16u) + 4096u)
+		{
+			ioapic_mask_gsi(e->intx_gsi);
+			e1000_write32(e, E1000_IMC, 0xFFFFFFFF);
+			kE1000UsesIntx = false;
+			kE1000IntxDivorced = true;
+			kE1000RxWork = true;   // hand the baton back to the poll cleanly
+		}
+		return;
+	}
+
+	e->intx_fires++;
+	if (icr & E1000_INT_LSC)
+	{
+		// Cable event: re-read reality rather than inferring it. One MMIO
+		// read; the counters and the seam's link_up tell the story.
+		e->intx_link_changes++;
+		e->netdev.link_up = (e1000_read32(e, E1000_STATUS) & STATUS_LU) != 0;
+	}
+
+	// Any confirmed cause raises the flag — RXT0 obviously, RXO because the
+	// drain is exactly what relieves an overrun, LSC harmlessly (one spare
+	// drain per cable event). processSignals consumes it.
+	kE1000RxWork = true;
+}
+
+// Adopt the wire. Called from kernel_init AFTER the platform switches to
+// APIC mode (init_e1000 runs long before that — rings at driver init,
+// doorbell at platform init, the keyboard's exact precedent).
+//
+// The routing problem: PCI INTx reaches the IOAPIC through chipset wiring
+// that ACPI describes only in AML (_PRT), and os64 has no AML interpreter.
+// The config-space interrupt_line byte is firmware's note about LEGACY-PIC
+// routing — a hint, not an answer. So instead of trusting anyone's map, we
+// PROBE: for each candidate IOAPIC input, route it to vector 0x45, ask the
+// card to ring its own doorbell (ICS — a register that exists on this 2002
+// chip as if it knew), and listen. The wire that answers is the truth, on
+// q35, PIIX3, or a motherboard neither of us has met.
+//
+// Probe safety: before touching any candidate we set PCI Interrupt Disable
+// (command bit 10, PCI 2.3) on every OTHER device, so a stranger with a
+// pending INTx can't storm a freshly-unmasked level line mid-probe. Nothing
+// else in os64 uses INTx today — every other driver polls — so the masks
+// simply make the de facto official at the source. The day a second driver
+// wants a doorbell, it clears its own bit the way we clear ours below.
+void e1000_enable_intx(void)
+{
+	e1000_t* e = &s_e1000;
+	if (!e->up)
+		return;
+
+	if (e->pci->interrupt_pin == 0)
+	{
+		// The device itself says it has no INTx pin. Config-space law, not
+		// a probe failure — stay polled, say so once.
+		printd(DEBUG_NET, "e1000: no INTx pin per config space — staying polled\n");
+		return;
+	}
+
+	// Silence every other device's INTx at the source (see header comment).
+	// READ-MODIFY-WRITE THE LIVE REGISTER, never the enumeration-time cache:
+	// drivers (NVMe, AHCI) set Bus Master Enable AFTER enumeration, so
+	// writing back the cached command word would strip their DMA mid-flight
+	// — the first boot of this code did exactly that, and the NVMe timed out
+	// its completion 7.5 seconds into an otherwise-perfect probe. Keeping
+	// only the low half also leaves the status word's RW1C bits untouched.
+	for (int i = 0; i < kPCIDeviceCount; i++)
+	{
+		pci_device_t* d = &kPCIDeviceHeaders[i];
+		if (d == e->pci)
+			continue;
+		uint32_t live = readPCIRegister(d->busNo, d->deviceNo, d->funcNo, 4) & 0xFFFF;
+		writePCIRegister(d->busNo, d->deviceNo, d->funcNo, 4, live | 0x400);
+	}
+	for (int i = 0; i < kPCIFunctionCount; i++)
+	{
+		pci_device_t* d = &kPCIDeviceFunctions[i];
+		if (d == e->pci)
+			continue;
+		uint32_t live = readPCIRegister(d->busNo, d->deviceNo, d->funcNo, 4) & 0xFFFF;
+		writePCIRegister(d->busNo, d->deviceNo, d->funcNo, 4, live | 0x400);
+	}
+	// And make sure OURS is enabled (bus mastering and memory space were set
+	// at init; Interrupt Disable clear is the third leg of the tripod).
+	uint32_t ourLive = readPCIRegister(e->pci->busNo, e->pci->deviceNo, e->pci->funcNo, 4) & 0xFFFF;
+	writePCIRegister(e->pci->busNo, e->pci->deviceNo, e->pci->funcNo, 4,
+	                 (ourLive | 0x6) & ~0x400u);
+
+	// Candidate IOAPIC inputs, most-likely first:
+	//   1. interrupt_line, if it names a plausible GSI (16-23 is where every
+	//      chipset we know parks PCI links; SeaBIOS on q35 writes the GSI
+	//      here, so on QEMU this usually hits on the first try),
+	//   2. the classic swizzle 16 + ((slot + pin - 1) & 3) — the barber-pole
+	//      pattern boards use so four neighbors don't pile on one line,
+	//   3. the full 16-23 sweep, because the probe makes guessing free,
+	//   4. interrupt_line even below 16 — PIIX3-era boards that really do
+	//      wire PCI onto ISA pins get one honest last chance.
+	uint8_t pin = e->pci->interrupt_pin;                    // 1=INTA .. 4=INTD
+	uint8_t candidates[13];
+	uint8_t candidateCount = 0;
+	if (e->pci->interrupt_line >= 16 && e->pci->interrupt_line <= 23)
+		candidates[candidateCount++] = e->pci->interrupt_line;
+	candidates[candidateCount++] = (uint8_t)(16 + ((e->pci->deviceNo + pin - 1) & 3));
+	for (uint8_t gsi = 16; gsi <= 23; gsi++)
+		candidates[candidateCount++] = gsi;
+	if (e->pci->interrupt_line > 2 && e->pci->interrupt_line < 16)
+		candidates[candidateCount++] = e->pci->interrupt_line;
+
+	uint8_t bspApicId = kCPUInfo[0].apicID;
+	bool confirmed = false;
+
+	for (uint8_t c = 0; c < candidateCount && !confirmed; c++)
+	{
+		uint8_t gsi = candidates[c];
+
+		// Skip a candidate we already tried (the list overlaps by design).
+		bool seen = false;
+		for (uint8_t p = 0; p < c; p++)
+			if (candidates[p] == gsi)
+				seen = true;
+		if (seen)
+			continue;
+
+		// Breadcrumb ON THE GLASS, before the unmask: if a candidate wedges
+		// anyway (a storm shape the breakers don't catch), the frozen screen
+		// names the culprit GSI instead of ending at the scheduler banner —
+		// which is exactly how the VBox hang presented before this line
+		// existed. One short line per candidate is cheap; a mystery isn't.
+		printf("e1000: probing GSI %u for the INTx wire...\n", gsi);
+
+		if (!ioapic_route_gsi(gsi, 0x45, bspApicId, true /*level*/, true /*active low*/))
+			return;   // no IOAPIC at all — polled it is
+
+		// Clean slate, then ring the test bell: unmask ONLY the link-status
+		// cause and fire it via ICS. If this GSI is our wire, the ISR runs
+		// within the settle window and the fire counter moves.
+		(void)e1000_read32(e, E1000_ICR);
+		uint32_t before = e->intx_fires;
+		sProbeStormed = false;
+		sProbeStrangerBase = e->intx_strangers;
+		sProbeGsi = (int16_t)gsi;               // arms storm breaker #1
+		e1000_write32(e, E1000_IMS, E1000_INT_LSC);
+		e1000_write32(e, E1000_ICS, E1000_INT_LSC);
+
+		// Settle window: a bounded PAUSE spin, deliberately CLOCKLESS. The
+		// old wait(2) here rode kTicksSinceStart — but a storming candidate
+		// starves IRQ0 (vector 0x45 outranks 0x20), the tick clock freezes,
+		// and wait() never returns: the whole boot hangs inside the probe.
+		// A pure iteration bound cannot be starved, only slowed — tens of
+		// milliseconds at worst, on any clock, under any storm.
+		for (volatile uint32_t spin = 0;
+		     spin < 20000000u && e->intx_fires == before && !sProbeStormed;
+		     spin++)
+			__asm__ volatile("pause");
+		sProbeGsi = -1;
+
+		if (e->intx_fires > before)
+		{
+			confirmed = true;
+			e->intx_gsi = gsi;
+		}
+		else
+		{
+			// Not our wire — silent, or a storm the ISR already masked. Mask
+			// the device side, drain any latent cause, and (re-)mask the
+			// IOAPIC side so the candidate isn't left aimed at us — on a
+			// level line, an unowned route is a future wedge.
+			e1000_write32(e, E1000_IMC, 0xFFFFFFFF);
+			(void)e1000_read32(e, E1000_ICR);
+			ioapic_mask_gsi(gsi);
+			if (sProbeStormed)
+				printf("e1000: GSI %u is a STORM (%u strangers) — masked and skipped\n",
+				       gsi, e->intx_strangers - sProbeStrangerBase);
+			else
+				printd(DEBUG_NET, "e1000: GSI %u stayed silent — not our wire\n", gsi);
+		}
+	}
+
+	if (!confirmed)
+	{
+		// Every candidate stayed silent. Yesterday's behavior, never a dead
+		// NIC: the poll keeps running unconditionally and packets still move.
+		e1000_write32(e, E1000_IMC, 0xFFFFFFFF);
+		(void)e1000_read32(e, E1000_ICR);
+		printf("e1000: INTx probe found no wire — staying polled\n");
+		return;
+	}
+
+	// The wire is real. Open for business: packet arrivals, overruns, and
+	// cable events ring the bell; everything else stays masked.
+	(void)e1000_read32(e, E1000_ICR);
+	e1000_write32(e, E1000_IMS, E1000_INT_RXT0 | E1000_INT_RXO | E1000_INT_LSC);
+	kE1000UsesIntx = true;
+
+	printd(DEBUG_NET, "e1000: INTx confirmed on GSI %u (probe fired %u, strangers %u)\n",
+	       e->intx_gsi, e->intx_fires, e->intx_strangers);
+	printf("e1000: interrupts live — INTx GSI %u -> vector 0x45 (probe-confirmed)\n", e->intx_gsi);
 }

@@ -50,6 +50,31 @@ void init_e1000(void);
 // microsecond round trips instead of scheduler-pass ones. When that day
 // comes, mind the house gotcha: AP-routed vectors must be >= 0x40 (the
 // AP TPR masks low vectors — already bitten once, already documented).
+//
+// THAT DAY CAME (2026-08-06, event-driven Phase 1): the INTx-plus-IOAPIC
+// half of the menu is now real — see e1000_enable_intx below. The
+// paragraph above stays because its reasoning was right: v1 WAS about the
+// seam, and the vector gotcha it warned about is honored (0x45). What
+// changed is only the poll's TRIGGER: with a confirmed wire, processSignals
+// drains on the ISR's say-so instead of on faith. No wire confirmed = the
+// unconditional poll, exactly as written above, forever the fallback.
 void e1000_poll(void);
+
+// Adopt the INTx wire (called from kernel_init AFTER the IMCR switches the
+// platform to APIC mode — init_e1000 runs long before that, so the rings
+// and the doorbell are separate phases, the keyboard's exact precedent).
+// Discovers the IOAPIC input EMPIRICALLY: routes a candidate GSI, asks the
+// card to ring its own doorbell (ICS register), and listens — chipset-
+// agnostic, no AML interpreter required. On success, packet arrivals /
+// overruns / link changes interrupt vector 0x45 on the BSP and
+// processSignals drains only when kE1000RxWork says there's work. On
+// silence, stays polled and says so — never a dead NIC.
+void e1000_enable_intx(void);
+
+// The doorbell flags processSignals reads (set/cleared as e1000.c documents;
+// the ISR itself, e1000_isr, is called only from handler_e1000_intx_asm).
+extern volatile bool kE1000UsesIntx;
+extern volatile bool kE1000RxWork;
+extern volatile bool kE1000IntxDivorced;   // runtime fallback happened; announce once
 
 #endif // E1000_H

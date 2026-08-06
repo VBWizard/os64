@@ -15,6 +15,7 @@ struct IDTPointer kIDTPtr;
 extern void handler_irq0_asm();
 extern void handler_irq1_asm();
 extern void handler_irq12_asm();
+extern void handler_e1000_intx_asm();
 extern void divide_by_zero_handler();
 extern void invalid_opcode_handler();
 extern void double_fault_handler();
@@ -96,6 +97,7 @@ void initialize_idt() {
     // must clear that bar. Same handlers; EOI logic is vector-agnostic.
     set_idt_entry(0x41, (uint64_t)&handler_irq1_asm, 0x28, 0x8E); // IRQ1 via IOAPIC
     set_idt_entry(0x4C, (uint64_t)&handler_irq12_asm, 0x28, 0x8E); // IRQ12 via IOAPIC
+    set_idt_entry(0x45, (uint64_t)&handler_e1000_intx_asm, 0x28, 0x8E); // e1000 INTx via IOAPIC (≥0x40, same TPR bar)
 
 	// SET MP handlers
 	set_idt_entry(IPI_INVALIDATE_TLB_VECTOR, (uint64_t)&vector123, 0x28, 0x8E);		// Invalidate TLB IPI

@@ -306,6 +306,16 @@ void kernel_init()
 		ioapic_adopt_isa_irq(12, 0x4C, inputIrqDest, &kIRQ12UsesLapic);
 	}
 
+	// The e1000's INTx doorbell rides the same platform moment: the rings
+	// came up back in init_e1000 (long before APIC mode existed), but a PCI
+	// interrupt needs the IOAPIC, so adoption waits until here — rings at
+	// driver init, doorbell at platform init, the keyboard's precedent one
+	// paragraph up. Routing is discovered by PROBE (the card can ring its
+	// own bell — see e1000_enable_intx), so this works on q35, PIIX3, or
+	// bare metal without an AML interpreter. No NIC, no IOAPIC, or a silent
+	// probe all degrade to the polled path — never a dead network.
+	e1000_enable_intx();
+
     // We need the cls->task to be populated for running tests, so ...
     // put the kernel task in the cls because it'll be the first task to start running
     get_core_local_storage()->task = kKernelTask;

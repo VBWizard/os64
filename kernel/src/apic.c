@@ -203,6 +203,55 @@ static bool ioapic_route_irq(uint8_t isa_irq, uint8_t vector, uint8_t dest_apic_
     return true;
 }
 
+// Program a redirection entry by GSI number DIRECTLY — no ISA override
+// lookup, because the caller isn't speaking ISA. This is the PCI INTx door:
+// PCI interrupt lines are level-triggered and active-low (the 1992 sharing
+// compromise — a level line can be wire-OR'd by several cards, an edge
+// can't), which is the exact opposite of ISA's edge/high default on both
+// counts, so the two bits ioapic_route_irq only sets when an ACPI override
+// demands them are simply parameters here. Callers who don't know their GSI
+// for certain (PCI without an AML interpreter never does) should route a
+// candidate, PROBE it — e1000's ICS register can fire a test interrupt on
+// command — and mask it again via ioapic_mask_gsi if the doorbell stays
+// silent.
+bool ioapic_route_gsi(uint8_t gsi, uint8_t vector, uint8_t dest_apic_id,
+                      bool level_triggered, bool active_low)
+{
+    if (!kIOAPICAddress)
+        return false;
+
+    uint32_t low_reg  = 0x10 + ((uint32_t)gsi * 2);
+    uint32_t high_reg = low_reg + 1;
+
+    uint32_t entry_low  = vector;                        // delivery mode fixed
+    uint32_t entry_high = ((uint32_t)dest_apic_id) << 24; // physical destination
+    if (active_low)
+        entry_low |= (1u << 13);
+    if (level_triggered)
+        entry_low |= (1u << 15);
+
+    ioapic_write(high_reg, entry_high);
+    ioapic_write(low_reg, entry_low);
+
+    printd(DEBUG_SMP, "IOAPIC: GSI %u routed to vector 0x%02x, dest APIC %u (%s, active %s)\n",
+           gsi, vector, dest_apic_id,
+           level_triggered ? "level" : "edge", active_low ? "low" : "high");
+    return true;
+}
+
+// Mask a GSI's redirection entry (bit 16). The probe loop's eraser: a
+// candidate GSI that turned out to be somebody else's wire must not be left
+// pointing at our vector, or that somebody's interrupts start arriving at a
+// handler that will shrug them off — and on a level-triggered line, an
+// unacknowledged shrug is a wedge.
+void ioapic_mask_gsi(uint8_t gsi)
+{
+    if (!kIOAPICAddress)
+        return;
+    uint32_t low_reg = 0x10 + ((uint32_t)gsi * 2);
+    ioapic_write(low_reg, (1u << 16));
+}
+
 // Move an ISA IRQ from the legacy PIC to the IOAPIC: program the redirection
 // entry (targeting dest_apic_id), mask the line on the PIC so it can't
 // double-deliver, and flip the handler's EOI-path flag (each IRQ's asm
