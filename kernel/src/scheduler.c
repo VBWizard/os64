@@ -1242,8 +1242,9 @@ void scheduler_do()
     {
 		printd(DEBUG_SCHEDULER, "Time to make the donuts. (switch threads)\n");
 		scheduler_run_new_thread();
-	}
-	else
+        printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s on core %u\n", ((task_t *)(cls->task))->path, cls->apic_id);
+    }
+    else
 	{
 		debug_print_registers(apic_id, "continue");
         printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
@@ -1261,7 +1262,6 @@ void scheduler_do()
     uint64_t timeInScheduler = (diff/kCPUCyclesPerSecond)*100;
     printd(DEBUG_SCHEDULER | DEBUG_DETAILED, "%lu ticks expired (%lu CPU cycles)\n", timeInScheduler, diff);
 #endif
-    printd(DEBUG_SPECIAL, "SCHEDULER: Now running %s\n", ((task_t *)(cls->task))->path);
     printd(DEBUG_SCHEDULER, "*********************\n");
 
     // ── CPU-time accounting: the incoming thread's slice starts HERE ────────
