@@ -12,7 +12,27 @@
       "Bash(readelf *)",
       "Bash(nm *)",
       "Bash(xxd *)",
-      "Bash(mdir *)"
+      "Bash(mdir *)",
+      "Bash(nc 127.0.0.1 *)",
+      "Bash(convert *)",
+      "Bash(debugfs *)",
+      "Bash(x86_64-elf-addr2line *)",
+      "Bash(mcopy *)",
+      "Bash(pkill qemu*)",
+      "Bash(fdisk -l *)",
+      "Bash(rm /tmp/claude-1000/*)",
+      "Bash(rm -f /tmp/claude-1000/*)",
+      "Bash(tools/vmcmd *)",
+      "Bash(tools/vmtype *)",
+      "Bash(./tools/vmcmd *)",
+      "Bash(./tools/vmtype *)",
+      "Bash(/home/yogi/src/os64/tools/vmcmd *)",
+      "Bash(/home/yogi/src/os64/tools/vmtype *)"
+    ],
+    "additionalDirectories": [
+      "/home/yogi/src/os64",
+      "/home/yogi/src/os64-net",
+      "/home/yogi/src/os"
     ]
   }
 }

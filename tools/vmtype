@@ -1,0 +1,61 @@
+#!/bin/bash
+# vmtype — type a line of text into the guest's keyboard via QEMU sendkey,
+# followed by Enter.
+#
+#   tools/vmtype <port> <text...>
+#   tools/vmtype 55556 echo hi
+#   tools/vmtype 55556 top
+#
+# Companion to vmcmd (same origin story — see its header): typing a command
+# into husk used to mean a dozen inline sendkey lines in a brace group,
+# which the permission evaluator's obfuscation heuristic prompted on every
+# time. Here the whole keystroke ballet lives inside the script; the command
+# line stays a clean stable prefix.
+#
+# Character map: QEMU sendkey wants key NAMES, not characters. Lowercase
+# letters and digits pass through; the punctuation husk actually needs is
+# mapped below. Uppercase/shifted symbols are not implemented — add a
+# shift-<key> mapping the day a fixture needs one.
+
+port="$1"
+shift
+text="$*"
+if [ -z "$port" ] || [ -z "$text" ]; then
+    echo "usage: vmtype <port> <text...>" >&2
+    exit 2
+fi
+
+keyname() {
+    case "$1" in
+        ' ') echo spc ;;
+        '.') echo dot ;;
+        '/') echo slash ;;
+        '-') echo minus ;;
+        '=') echo equal ;;
+        ',') echo comma ;;
+        ';') echo semicolon ;;
+        "'") echo apostrophe ;;
+        '\') echo backslash ;;
+        '[') echo bracket_left ;;
+        ']') echo bracket_right ;;
+        '`') echo grave_accent ;;
+        [a-z0-9]) echo "$1" ;;
+        *) return 1 ;;
+    esac
+}
+
+{
+    i=0
+    while [ "$i" -lt "${#text}" ]; do
+        ch="${text:$i:1}"
+        if key=$(keyname "$ch"); then
+            printf 'sendkey %s\n' "$key"
+        else
+            echo "vmtype: unmappable character '$ch' — skipped" >&2
+        fi
+        sleep 0.08   # pace the guest's keyboard ISR like human fingers would
+        i=$((i + 1))
+    done
+    printf 'sendkey ret\n'
+    sleep 0.3        # let the final keystroke land before the socket closes
+} | nc -q 1 127.0.0.1 "$port" > /dev/null
