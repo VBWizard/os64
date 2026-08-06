@@ -46,6 +46,13 @@ OBJ     := $(CURDIR)/obj
 RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c
 RUNTIME_OBJS := $(patsubst %,$(OBJ)/%.o,$(RUNTIME_SRCS))
 
+# more and less are two policies over one file-pager engine.  Keeping that
+# engine outside either app directory prevents the first useful slices from
+# quietly becoming two implementations while TTY-backed stdin waits its turn.
+PAGER_APPS := more less
+PAGER_SRC  := common/file_pager.c
+PAGER_OBJ  := $(OBJ)/$(PAGER_SRC).o
+
 # Every apps/<name>/ directory holding .c files is an app named <name>.
 # $(sort) both orders and DEDUPES — essential since apps went multi-file
 # (top was the first: top.c + topMain.c): the wildcard yields the directory
@@ -102,13 +109,14 @@ all: $(addprefix $(BIN)/,$(APPS)) $(BIN)/app_bases.gdb
 # disappear with `make clean` alongside the rest of OBJ.
 define APP_RULE
 APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard apps/$(1)/*.c))
+APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ))
 APP_BASE_STAMP_$(1) := $(OBJ)/apps/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
 	@touch "$$@"
-$(BIN)/$(1): $$(APP_OBJS_$(1)) $(RUNTIME_OBJS) $$(APP_BASE_STAMP_$(1))
+$(BIN)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(RUNTIME_OBJS) $$(APP_BASE_STAMP_$(1))
 	@mkdir -p "$(BIN)"
-	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $(RUNTIME_OBJS)
+	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(RUNTIME_OBJS)
 	@printf '  %-10s base %s\n' "$(1)" "$(APP_BASE_$(1))"
 endef
 $(foreach app,$(APPS),$(eval $(call APP_RULE,$(app))))
@@ -132,7 +140,8 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS))
 # stale against topMain.h edits — the EXACT bug class this makefile's -MMD
 # comment block memorializes, sneaking back through a side door.
 HEADER_DEPS := $(RUNTIME_OBJS:.o=.d) \
-               $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c))
+               $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c)) \
+               $(PAGER_OBJ:.o=.d)
 -include $(HEADER_DEPS)
 
 $(OBJ)/%.c.o: %.c
