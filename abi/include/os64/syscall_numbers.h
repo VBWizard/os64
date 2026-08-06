@@ -254,6 +254,25 @@
 // here costs a VM exit, which is the exact bill logd exists to avoid.
 #define OS64_DEBUG_LOG_SERIAL  0x1
 
+// net_dial(dest) — open a network conversation. arg0 = const os64_netdest_t*
+// (os64/net.h): WHERE (ip, host order — ruling #2: the kernel owns the wire),
+// WHICH DOOR (port), HOW (protocol). Returns a handle you read() and write()
+// like any other, or negative. The Plan 9 dial STRING ("udp!10.0.2.2!53")
+// never crosses this boundary — libos64's os64_dial() parses it into this
+// struct (ruling #1: kernel speaks structs, the library speaks strings).
+//
+// THE SCAR, now with two rings (2026-08-05). This call was 28 for a few
+// uncommitted hours, then 31 for the whole life of the net branch — and
+// BOTH times the userland branch had already minted those numbers in
+// parallel (printat/time/setenv at 28-30; klog_read/sync/thread at 31-33).
+// The rule both reconciliations followed, stated once so the third time is
+// cheap: TWO BRANCHES, ONE REGISTRY, and the merge cedes the numbers to the
+// ELDER commits. A syscall number is not a name — it is an index into a
+// table that ring 3 compiles against, so whoever shipped it first keeps it
+// and the newcomer moves. Renumbering the newcomer costs one rebuild;
+// renumbering the incumbent costs every binary ever built.
+#define SYSCALL_NET_DIAL   37
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

@@ -136,6 +136,17 @@ hobby-scale judgment calls — re-rank freely.
 | `--defsym` **must precede `-T`** on the ld command line or it is silently ignored and every app links at the `0x400000` fallback — builds fine, runs fine, and fails only in the debugger. Guarded by a comment at the flag; a build-time assert (entry == assigned base) would make it loud instead of documented | Robustness | XS | none | `userland/GNUmakefile` APP_RULE |
 | os64 FAT driver can't read a sub-FAT32-minimum volume: `mformat -F` forces FAT32, but <65525 clusters (~34MB) yields a malformed hybrid the driver misclassifies as FAT16 → every open fails. Currently worked around by the 64MB DISK_SIZE_MB floor. Fix = teach the driver FAT16 (or drop `-F` and let mformat pick), so the ramdisk can shrink below 64MB | Robustness | M | if the ramdisk ever needs to be <64MB | GNUmakefile disk target / fat driver |
 
+## Networking (the arc's booked honesty — NETWORK.md carries the arguments)
+
+| Debt | Sev | Cost | Gate | Source |
+|---|---|---|---|---|
+| **DHCP lease renewal** (T1/T2 timers) + RELEASE/DECLINE courtesies — v1 leases once and never renews; slirp/VBox leases are functionally eternal, a real LAN's are not | Feature-gate | M | before long uptimes on a real LAN (the P5) | dhcp.h policy note |
+| ARP cache miss DROPS the packet (counted, -2 to caller) after firing the query — the honest 1982 behavior. Fix = park one packet per neighbor, send on reply | Cleanup | S | when first-packet loss annoys a caller that can't retry-loop | ipv4.c ipv4_send |
+| IPv4 fragment REASSEMBLY — arrivals with MF/offset drop loudly (counted + logged). Modern DF-world paths rarely fragment; "rarely" is not "never" | Feature-gate | M | when something real fragments at us | ipv4.c fragment stance |
+| ICMP port-unreachable when UDP has no binding (how `traceroute` ends and `nc -u` probes learn) — currently counted-and-silent | Feature-gate | S | when a consumer needs the courtesy | udp.c rx_no_binding |
+| **virtio-net polls** (processSignals rider, the xhci_poll precedent) — NETWORK.md Phase 1 planned MSI-X from the start; polling shipped first because it made packets move the same day. Interrupts before throughput ever matters; mind the house rule (AP-routed vectors ≥ 0x40) | Feature-gate | M | before any throughput-sensitive consumer (TCP at real speeds) | virtio_net.c / NETWORK.md Phase 1 |
+| processSignals runs the device polls AND the whole inline protocol stack UNDER kSchedulerSwitchTasksLock — its hold time scales with traffic. Chris's ruling (2026-08-01): fine under BSPSCHED at current load (the beefy pass runs on the core that owns scheduling anyway); do NOT shrink the lock scope now — that cleanup lands WITH the net bottom-half thread (the MSI-X row above), when the polls move to a kworker and processSignals returns to sleepers + wake sweeps. Measure (DEBUG_NET cycle stamp) before any surgery | Cleanup | S | with the MSI-X / bottom-half work, pre-TCP-throughput | signals.c processSignals / 8/1 design conversation |
+
 ## Explicitly NOT debts (recorded so they aren't re-litigated)
 
 - **Shared kernel upper half** (every task PML4 → kernel's own tables,

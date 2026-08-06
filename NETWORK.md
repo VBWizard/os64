@@ -56,6 +56,19 @@ implementation is just a wrapper (AHCI/NVMe learned us that).
 - **e1000/e1000e second.** The Intel 8254x manual is the classic teaching
   datasheet of osdev — for a learner's OS, the canonical real-hardware
   NIC programming model belongs in the tree. It also proves the seam.
+  **DONE 2026-08-05** (`e1000.c`, 82540EM + siblings): registers instead
+  of capabilities, a serial EEPROM instead of a feature handshake, RX/TX
+  descriptor rings instead of virtqueues — and the entire protocol stack
+  above it did not change by one line. The receipt: the same 29-test
+  post-boot suite that passes on virtio passes on the e1000, byte for
+  byte, DHCP lease through TCP RST handling. The seam's charter, paid.
+  It also collected a debt the first driver could not: `net_device_t`
+  grew `rx_errors`, because virtio is software and software does not
+  corrupt frames in flight — only real silicon has an errors byte in
+  every receive descriptor, and only a second implementation could have
+  found the asymmetry. (e1000e/82574L is deliberately NOT claimed: it is
+  a PCIe part with a different init dance, and it gets its own slice on
+  the day it has a reason — likely the same day interrupts do.)
 - **RX/TX are DMA rings** — descriptors pointing at buffers, device and
   driver chasing each other around a circle. Same instincts as NVMe
   submission/completion queues, new sport. Buffers come from the
@@ -139,6 +152,18 @@ subtle about.
    parser, gloriously greppable, but text where we usually refuse text);
    (c) both, string layered in libos64 over the struct syscall.
    *Fable's lean: (c) — kernel speaks structs, library speaks strings.*
+   **RATIFIED (Chris, 2026-07-28): (c), with the string form being the
+   full Plan 9 bang path.** The kernel ABI is typed structs ONLY — no
+   text ever crosses the syscall boundary. libos64 owns
+   `os64_dial("tcp!10.0.2.2!80")` and the parser behind it. The
+   protocol segment is ALWAYS explicit (it's the verb of the call — a
+   TCP handle is a stream, a UDP handle is datagram-shaped, and the
+   caller must say which they mean); Plan 9's `net!` wildcard is
+   refused. When the DNS library lands, `tcp!google.com!80` is the same
+   shape with the middle segment resolved in the library — the format
+   never changes. (Ruled by a man with a silver beard and hair to the
+   middle of his back, which the bang path's UUCP ancestors would
+   recognize as jurisdictionally proper.)
 2. **Byte order in the ABI.** Berkeley makes every application call
    `htons()` forever. Proposal: **the ABI is host-order everywhere; the
    kernel owns the wire** and swaps at the packet boundary. Apps never
@@ -146,23 +171,45 @@ subtle about.
    memory(out) move applied to byte order — the kernel pre-answers the
    question. *Fable's lean: strongly yes; needs Chris's stamp because
    it's forever.*
+   **RATIFIED (Chris, 2026-07-28): host-order everywhere, kernel owns
+   the wire.** The swap surface is the four helpers in net_wire.h and
+   nothing else, ever. Recorded in DIVERGENCES.md § Networking.
 3. **The listen model.** (a) Berkeley trio (listen/accept loop);
    (b) a listener HANDLE whose read() yields a new connection handle —
    "accept is just read on a listener," which collapses the API and
    composes with a future poll/event story; (c) something Plan 9-flavored
    later. *Fable's lean: (b).*
+   **RATIFIED (Chris, 2026-07-28): (b).** The behavior is standard
+   accept (block until a connection, get a new handle, loop) — the only
+   divergence is the spelling, and Berkeley's own poll() reports a
+   pending connection as READABLE, admitting accept was always a read.
+   Concrete shape: one read on a listener yields one
+   `os64_netconn_t {handle, peer_ip, peer_port}` — which also retires
+   accept's sockaddr out-param and getpeername in one stroke. Blocks on
+   the house ISLEEP machinery, Ctrl+C-interruptible like every read.
 4. **UDP shape.** (a) Connected-style: bind a handle to a peer once,
    then plain read/write (matches the handle doctrine, covers DHCP/DNS/
    ping cleanly); (b) sendto-style per-packet addressing (needed for
    servers talking to many peers — but is that v1?); (c) start (a),
    add a recvfrom-equivalent syscall only when a real consumer demands
    it. *Fable's lean: (c) — consumer-driven, the args-parser precedent.*
+   **RATIFIED (Chris, 2026-07-28): (c).** Dial a UDP peer, read/write
+   the handle; per-packet addressing waits for the consumer that needs
+   it, and gets designed against that consumer's real shape.
 5. **Where does network state show?** /proc is constitutionally
    processes-only (his ruling, standing). Interface list, ARP cache,
    connection table — a future `/net` (very Plan 9), a syscall in the
    memory(out) style, or both-eventually? Not blocking before Phase 3;
    the ruling can wait until something wants to *display* it (probably
    Chris's own netstat-alike, name TBD).
+   **RATIFIED (Chris, 2026-07-28): both eventually, syscall first** —
+   it's the straightforward start (the memory(out) pattern already
+   exists: typed struct, meanings fixed forever) and the right home for
+   fixed-shape state (interfaces, counters). `/net` arrives when a
+   browser-shaped consumer (the netstat-alike) demands it, built on the
+   procfs template, and takes the variable-length tables (ARP cache,
+   connection table). /proc stays processes-only, as constitutionally
+   required.
 
 ## The real-hardware problem (Chris's stated worry, answered honestly)
 

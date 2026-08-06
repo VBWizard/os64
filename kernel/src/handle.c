@@ -16,7 +16,10 @@
 #include "memory/paging.h"    // kKernelPML4 (the already-in-kernel-context test)
 #include "memory/kmalloc.h"   // kfree (the f_path copy owned by HANDLE_FILE)
 #include "memory/vma.h"       // call_in_kernel_context
-#include "thread_join.h"      // thread_join_close — HANDLE_THREAD's release
+#include "thread_join.h"           // thread_join_close — HANDLE_THREAD's release
+#include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
+#include "driver/net/tcp.h"        // tcp_conn_close — HANDLE_NET_TCP's release
+#include "driver/net/icmp_conn.h"  // icmp_conn_close — HANDLE_NET_ICMP's release
 
 void handle_table_init(struct task *t)
 {
@@ -194,6 +197,22 @@ bool handle_close(struct task *t, int h)
 			// nobody will ever collect its answer. The join object frees
 			// itself when both references are gone.
 			thread_join_close((thread_join_t *)handle->object);
+			break;
+		case HANDLE_NET_TCP:
+			// Orderly shutdown: sends FIN and DETACHES — the closing
+			// dance and TIME_WAIT finish in the background (tcp_poll),
+			// so closing a handle never blocks the program.
+			tcp_conn_close((tcp_conn_t *)handle->object);
+			break;
+		case HANDLE_NET_ICMP:
+			icmp_conn_close((icmp_conn_t *)handle->object);
+			break;
+		case HANDLE_NET_UDP:
+			// Hang up: unbinds the ephemeral port and frees the object.
+			// Safe on any CR3 (everything it touches is kmalloc'd, upper
+			// half) and safe from handle_close_all at task exit (the
+			// owning thread has left any blocking read by then).
+			udp_conn_close((udp_conn_t *)handle->object);
 			break;
 		default:
 			// Console handles reference no object — nothing to release.

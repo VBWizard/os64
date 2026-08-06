@@ -33,6 +33,12 @@ typedef enum handle_type
 	HANDLE_DIR,            // object = vfs_directory_t*, open directory (readdir)
 	HANDLE_THREAD,         // object = thread_join_t*, a thread you can wait on:
 	                       // read = block for its return value, close = detach
+	HANDLE_NET_UDP,        // object = udp_conn_t*, a dialed UDP conversation
+	                       // (net_dial; read = one datagram, write = one datagram)
+	HANDLE_NET_TCP,        // object = tcp_conn_t*, a dialed TCP stream
+	                       // (net_dial; read/write are BYTES, like a pipe)
+	HANDLE_NET_ICMP,       // object = icmp_conn_t*, a dialed echo conversation
+	                       // (net_dial; write asks, read hears the answer)
 } handle_type_t;
 
 typedef struct handle

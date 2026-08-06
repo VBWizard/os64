@@ -190,6 +190,60 @@ debug: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 		-boot d \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
 
+# ── Network-attached variants ────────────────────────────────────────────────
+# Same run/debug, plus a virtio NIC on QEMU's user-mode NAT (guest 10.0.2.15,
+# gateway .2, DNS .3 — the convention the whole net stack's defaults match)
+# and a pcap of everything on the virtual wire (net_capture.pcap — the serial
+# log of the networking arc; read it with tcpdump/wireshark, or ask Fable).
+#
+# The net tests SKIP without a NIC, so anything network-shaped — debugging
+# /bin/dialtest, watching DHCP lease, chasing a checksum — MUST boot one of
+# THESE: under plain `make debug` the OS is netless, dialtest never spawns,
+# and a breakpoint in its main() waits forever for a program that never runs
+# (a lesson with a specific 2026-08-01 morning attached to it).
+QEMU_NET_FLAGS = -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+                 -object filter-dump,id=dump0,netdev=n0,file=net_capture.pcap
+
+.PHONY: run-net
+run-net: $(IMAGE_NAME).iso
+	qemu-system-x86_64 \
+		-machine q35 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		$(QEMUFLAGS) $(QEMU_NET_FLAGS)
+
+# The REAL-internet variant: a host tap device instead of slirp, because
+# slirp cannot relay ICMP to the outside world (ping 8.8.8.8 dies in the
+# NAT). Boot the "/QEMU Boot (TAP net)" Limine entry — it carries the
+# static IP=10.0.3.15 GW=10.0.3.1 the tap subnet expects.
+#
+# ONE-TIME HOST SETUP (needs sudo; survives until WSL restarts):
+#   sudo bash -c 'ip tuntap add dev tap0 mode tap user $(USER) && \
+#     ip addr add 10.0.3.1/24 dev tap0 && ip link set tap0 up && \
+#     sysctl -w net.ipv4.ip_forward=1 && \
+#     iptables -t nat -A POSTROUTING -s 10.0.3.0/24 -o eth0 -j MASQUERADE && \
+#     iptables -P FORWARD ACCEPT'
+#   (iptables: `sudo apt-get install -y iptables` if the distro lacks it)
+QEMU_TAP_FLAGS = -netdev tap,id=n0,ifname=tap0,script=no,downscript=no \
+                 -device virtio-net-pci,netdev=n0 \
+                 -object filter-dump,id=dump0,netdev=n0,file=net_capture.pcap
+
+.PHONY: run-tap
+run-tap: $(IMAGE_NAME).iso
+	qemu-system-x86_64 \
+		-machine q35 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		$(QEMUFLAGS) $(QEMU_TAP_FLAGS)
+
+.PHONY: debug-net
+debug-net: $(IMAGE_NAME).iso
+	qemu-system-x86_64 \
+		-machine q35 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		$(QEMUFLAGS) $(QEMUDEBUGFLAGS) $(QEMU_NET_FLAGS)
+
 .PHONY: debug-hdd-eufi
 debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \

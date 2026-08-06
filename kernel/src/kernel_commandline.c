@@ -12,6 +12,13 @@ extern bool kEnableKWorker;
 extern bool kEnableGUI;
 extern bool kRunTests;
 extern bool kEnableUSB;
+extern bool kEnableNet;
+// Static IPv4 configuration strings (ipv4.c owns them; empty = the 10.0.2.x
+// NAT-convention defaults shared by QEMU slirp and VirtualBox NAT). DHCP
+// supersedes all three in NETWORK.md Phase 3.
+extern char kNetIPString[];
+extern char kNetGWString[];
+extern char kNetMaskString[];
 extern char kRootPartUUID[];
 extern char kTZString[];
 extern int kTSCCalibrationSeconds;
@@ -149,6 +156,13 @@ static cmdopt_t cmdopts[] = {
     {"SCHED", OPT_STRING, kSchedParam, 0, sizeof(kSchedParam)},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     {"NOUSB", OPT_BOOL, &kEnableUSB, false, 0},
+    {"NONET", OPT_BOOL, &kEnableNet, false, 0},
+    {"DEBUG_NET", OPT_UINT128_OR, &kDebugLevel, DEBUG_NET, 0},
+    // Static IPv4 config, dotted-quad (e.g. IP=192.168.1.50). Parsed by
+    // ipv4_config_init; a malformed value falls back to the default.
+    {"IP", OPT_STRING, kNetIPString, 0, 20},
+    {"GW", OPT_STRING, kNetGWString, 0, 20},
+    {"MASK", OPT_STRING, kNetMaskString, 0, 20},
     {"TESTPANIC", OPT_BOOL, &kTestPanic, true, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
     {"GUI", OPT_BOOL, &kEnableGUI, true, 0},

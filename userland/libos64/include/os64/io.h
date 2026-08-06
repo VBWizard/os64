@@ -41,12 +41,28 @@ int64_t os64_read(int32_t handle, void *buf, size_t len);
 //                           char c;
 //                           if (os64_read_for(0, &c, 1, 0) == 1 && c == 'q')
 //                               break;
-//   N                 — up to N ms, then OS64_ERR_TIMEOUT if still byteless.
+//   N                 — up to N ms, then OS64_ERR_TIMEOUT if still byteless:
+//                           while ((n = os64_read_for(h, buf, sizeof buf, 1000))
+//                                  != OS64_ERR_TIMEOUT)
+//                               { ...process reply... }   // ping's whole loop
 //   OS64_WAIT_FOREVER — identical to os64_read.
 // OS64_ERR_TIMEOUT is its own verdict, never 0 — an empty poll can never
 // impersonate end-of-input (the V7 O_NDELAY confusion, refused by design).
-// Handles that can't honor a finite patience REFUSE it (negative return)
-// rather than silently blocking; the console honors it today.
+// Its true name lives in <os64/syscall_numbers.h>; OS64_NET_ERR_TIMEOUT in
+// the dial table is an alias for the same value.
+//
+// This is the deadline Unix never gave read() — 4.2BSD bolted select() on
+// beside it instead (1983); os64 puts the patience where the question is
+// asked. Born as ping's demand (silence needed a return value), and 0 meant
+// FOREVER for its first few weeks — SO_RCVTIMEO's wart — until the console
+// learned patience and top needed zero's honest meaning for its 'q' key.
+//
+// Granularity is the scheduler tick (10ms), so a timeout_ms of 1..10 is one
+// tick of patience, not a microsecond fuse. HONORED BY: the console, and
+// dialed net handles (udp/tcp/icmp) — the two branches that grew this
+// independently, joined at the merge of 2026-08-05. Every other handle
+// REFUSES a finite patience (negative return) rather than silently
+// blocking, until a real consumer earns it there.
 int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms);
 
 // Read one LINE from `handle` into `buf` (cap bytes INCLUDING the

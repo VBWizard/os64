@@ -8,6 +8,7 @@
 #include "strcmp.h"
 #include "strlen.h"
 #include "memory/memcpy.h"
+#include "memory/memcmp.h"
 #include "memory/vma.h"
 #include "memory/arena.h"
 #include "memory/task_arena.h"
@@ -20,12 +21,26 @@
 #include "task.h"
 #include "scheduler.h"
 #include "time.h"
+#include "kernel.h"   // kTicksSinceStart — the TCP tests time their failures
 #include "driver/filesystem/vfs/vfs.h"
 #include "driver/filesystem/ext2/ext2_vfs.h"   // ext2_fops/ext2_dops (real-partition test)
 #include "shared_object.h"
 #include "env.h"
 #include "sprintf.h"
 #include "console.h"   // console_read_deadline — the read-patience test
+#include "driver/net/net_device.h"   // test_net_wire — the driver's first packets
+#include "driver/net/net_wire.h"     // Phase 2 stack tests build real wire bytes
+#include "driver/net/net_checksum.h"
+#include "driver/net/ethernet.h"
+#include "driver/net/arp.h"
+#include "driver/net/ipv4.h"
+#include "driver/net/icmp.h"
+#include "driver/net/udp.h"
+#include "driver/net/dhcp.h"
+#include "driver/net/udp_conn.h"
+#include "driver/net/tcp.h"
+#include "driver/net/icmp_conn.h"
+#include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
 
 extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
@@ -2123,6 +2138,663 @@ static bool test_ring3_threads(void)
 // cover load-run-exit at CPL 3, and the HELLO boot-flow launch exercises the
 // real app path. /bin/hello stays on the image for that launch.)
 
+// ── net tests ────────────────────────────────────────────────────────────────
+
+// The driver's first round trip: hand-roll an ARP request ("who has
+// 10.0.2.2? tell 10.0.2.15"), transmit it raw through the seam, and wait
+// for the gateway's reply to come back up the RX path. This is a DRIVER
+// test, not a protocol test — the real ARP lives in the Phase 2 stack;
+// the hardcoded bytes here exist to prove TX-on-the-wire and RX-delivery
+// with zero stack code in the loop. The 10.0.2.x constants are the NAT
+// convention BOTH QEMU user-mode networking and VirtualBox NAT use
+// (guest 10.0.2.15, gateway 10.0.2.2), so the same test serves both.
+// (Historical note: in slice 1b this test predated the stack, so the
+// reply landed on rx_dropped_no_handler. Now that ethernet.c claims the
+// handler at boot, the reply is DELIVERED and counts in rx_frames — the
+// assertion below watches the SUM of both on purpose, so it was true in
+// both eras and stays a pure driver test either way.)
+static bool test_net_wire(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_wire (no NIC — QEMU: -netdev user,id=n0 -device virtio-net-pci,netdev=n0)\n");
+        return true;
+    }
+
+    net_device_t *dev = kNetDevices[0];
+    uint64_t seen_before = dev->rx_frames + dev->rx_dropped_no_handler;
+    uint64_t tx_before   = dev->tx_frames;
+
+    // Ethernet (14 bytes) + ARP (28 bytes) = 42, the minimum-famous frame.
+    // Network byte order is big-endian, so multi-byte fields are spelled
+    // out byte-at-a-time — no htons() exists here, and per the NETWORK.md
+    // ruling proposal, none ever will outside the kernel's wire layer.
+    uint8_t f[42];
+    int n = 0;
+    memset(f, 0xFF, 6);                 n += 6;   // eth dst: broadcast
+    memcpy(f + n, dev->mac, 6);         n += 6;   // eth src: us
+    f[n++] = 0x08; f[n++] = 0x06;                 // ethertype: ARP
+    f[n++] = 0x00; f[n++] = 0x01;                 // htype: ethernet
+    f[n++] = 0x08; f[n++] = 0x00;                 // ptype: IPv4
+    f[n++] = 6;    f[n++] = 4;                    // hlen, plen
+    f[n++] = 0x00; f[n++] = 0x01;                 // oper: request
+    memcpy(f + n, dev->mac, 6);         n += 6;   // sender MAC
+    f[n++] = 10; f[n++] = 0; f[n++] = 2; f[n++] = 15;  // sender IP
+    memset(f + n, 0x00, 6);             n += 6;   // target MAC: unknown (that's the question)
+    f[n++] = 10; f[n++] = 0; f[n++] = 2; f[n++] = 2;   // target IP: the gateway
+
+    int32_t rc = dev->ops->transmit(dev, f, sizeof(f));
+    if (rc != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_wire - transmit returned %d\n", rc);
+        return false;
+    }
+    if (dev->tx_frames != tx_before + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_wire - tx_frames did not advance\n");
+        return false;
+    }
+
+    // The reply crosses a NAT stack in the host process — microseconds.
+    // 2 seconds of patience is pure slack (the poll rides scheduler passes).
+    for (int i = 0; i < 200; i++) {
+        if (dev->rx_frames + dev->rx_dropped_no_handler > seen_before)
+            break;
+        wait(10);
+    }
+
+    if (dev->rx_frames + dev->rx_dropped_no_handler <= seen_before) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_wire - no frame came back within 2s "
+               "(tx=%lu txerr=%lu rx=%lu drop_nh=%lu drop_big=%lu)\n",
+               dev->tx_frames, dev->tx_errors, dev->rx_frames,
+               dev->rx_dropped_no_handler, dev->rx_dropped_too_big);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_wire (ARP request out, gateway reply counted at the seam)\n");
+    return true;
+}
+
+// Phase 2, exhibit A — the stack's OWN ARP earns an answer: fire a real
+// arp_send_request at the gateway, then watch the cache learn its MAC via
+// the full inbound path (virtio poll → eth demux → arp_input → cache).
+// The gateway may already be cached (the driver test above chats with it,
+// and slirp itself may have ARPed us) — that's a pass too: "resolvable"
+// is the property under test, not "was unresolved a moment ago".
+static bool test_net_arp(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_arp (no NIC)\n");
+        return true;
+    }
+    net_device_t *dev = kNetDevices[0];
+
+    uint8_t mac[NET_MAC_LEN];
+    if (!arp_lookup(kNetIPv4Gateway, mac)) {
+        arp_send_request(dev, kNetIPv4Gateway);
+        for (int i = 0; i < 200 && !arp_lookup(kNetIPv4Gateway, mac); i++)
+            wait(10);
+    }
+    if (!arp_lookup(kNetIPv4Gateway, mac)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_arp - gateway unresolved after 2s "
+               "(req_sent=%lu rep_rcvd=%lu learned=%lu malformed=%lu)\n",
+               kArpStats.requests_sent, kArpStats.replies_received,
+               kArpStats.learned, kArpStats.malformed);
+        return false;
+    }
+
+    // A resolved-to-nothing entry would mean we cached garbage.
+    bool nonzero = false;
+    for (int i = 0; i < NET_MAC_LEN; i++)
+        if (mac[i]) { nonzero = true; break; }
+    if (!nonzero) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_arp - cache returned an all-zero MAC\n");
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_arp (gateway %u.%u.%u.%u is at %02x:%02x:%02x:%02x:%02x:%02x)\n",
+           NET_IPV4_OCTETS(kNetIPv4Gateway), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return true;
+}
+
+// Phase 2, exhibit B — os64 pings the world: three echo requests to the
+// gateway, each one waited to completion (request built by icmp.c, wrapped
+// by ipv4.c, framed by ethernet.c, DMA'd by virtio_net.c — and the reply
+// climbing back up every one of those layers with checksums checked).
+// The identifier 0x6F34 is "o4" — os64's initials on the wire.
+static bool test_net_ping(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_ping (no NIC)\n");
+        return true;
+    }
+    net_device_t *dev = kNetDevices[0];
+
+    uint64_t got = kIcmpStats.echo_replies_received;
+    for (uint16_t seq = 1; seq <= 3; seq++) {
+        // -2 = "ARP still resolving, retry shortly" — the documented
+        // first-packet behavior (see ipv4_send). The retry loop IS the
+        // caller-side contract for it.
+        int32_t rc = -2;
+        for (int i = 0; i < 100 && rc == -2; i++) {
+            rc = icmp_send_echo_request(dev, kNetIPv4Gateway, 0x6F34, seq);
+            if (rc == -2)
+                wait(10);
+        }
+        if (rc != 0) {
+            printd(DEBUG_TESTS, "\tFAIL: test_net_ping - send seq %u returned %d\n", seq, rc);
+            return false;
+        }
+        for (int i = 0; i < 200 && kIcmpStats.echo_replies_received <= got; i++)
+            wait(10);
+        if (kIcmpStats.echo_replies_received <= got) {
+            printd(DEBUG_TESTS, "\tFAIL: test_net_ping - no reply to seq %u within 2s "
+                   "(sent=%lu rcvd=%lu bad_cksum=%lu ipv4_rx=%lu)\n",
+                   seq, kIcmpStats.echo_requests_sent, kIcmpStats.echo_replies_received,
+                   kIcmpStats.bad_checksum, kIPv4Stats.rx_delivered);
+            return false;
+        }
+        got = kIcmpStats.echo_replies_received;
+    }
+
+    if (kIcmpStats.last_reply_src != kNetIPv4Gateway ||
+        kIcmpStats.last_reply_ident != 0x6F34 || kIcmpStats.last_reply_seq != 3) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_ping - last reply identity wrong "
+               "(src=%u.%u.%u.%u id=0x%x seq=%u)\n",
+               NET_IPV4_OCTETS(kIcmpStats.last_reply_src),
+               kIcmpStats.last_reply_ident, kIcmpStats.last_reply_seq);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_ping (3 echoes to %u.%u.%u.%u, 3 replies, id/seq verified)\n",
+           NET_IPV4_OCTETS(kNetIPv4Gateway));
+    return true;
+}
+
+// Phase 2, exhibit C — the RESPONDER halves, which slirp cannot exercise
+// for us (user-mode NAT never pings the guest; hostfwd forwards only
+// TCP/UDP — so "host pings os64" awaits real hardware or a tap netdev).
+// Instead we impersonate a neighbor: hand-build the frames a real peer
+// would send and INJECT them at the seam via net_device_rx, exactly as a
+// driver would. The stack can't tell the difference — that's what a seam
+// is — and its answers go out on the REAL wire, so the pcap holds the
+// receipts: an ARP reply and an echo reply, addressed to a machine that
+// never existed. Delivery is synchronous (net_device_rx calls straight
+// up the stack), so there's nothing to wait for — inject, then look.
+static bool test_net_echo_responder(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_echo_responder (no NIC)\n");
+        return true;
+    }
+    net_device_t *dev = kNetDevices[0];
+
+    // The ghost: a locally-administered MAC (0x02 first octet = "nobody
+    // manufactured this") at .99 on our subnet.
+    static const uint8_t ghost_mac[NET_MAC_LEN] = {0x02, 0x64, 0x0E, 0x0A, 0x05, 0x99};
+    uint32_t ghost_ip = (kNetIPv4Address & kNetIPv4Netmask) | 99;
+
+    // ── Part 1: the ARP responder. The ghost broadcasts "who has os64's
+    // IP?" — the stack must learn the asker AND answer the question.
+    uint8_t f[64];
+    int n = 0;
+    memset(f + n, 0xFF, NET_MAC_LEN);           n += NET_MAC_LEN;   // eth dst: broadcast
+    memcpy(f + n, ghost_mac, NET_MAC_LEN);      n += NET_MAC_LEN;   // eth src: the ghost
+    net_write16(f + n, ETH_TYPE_ARP);           n += 2;
+    net_write16(f + n, 1);                      n += 2;             // htype ethernet
+    net_write16(f + n, ETH_TYPE_IPV4);          n += 2;             // ptype IPv4
+    f[n++] = NET_MAC_LEN; f[n++] = 4;                               // hlen, plen
+    net_write16(f + n, ARP_OPER_REQUEST);       n += 2;
+    memcpy(f + n, ghost_mac, NET_MAC_LEN);      n += NET_MAC_LEN;   // sender MAC
+    net_write32(f + n, ghost_ip);               n += 4;             // sender IP
+    memset(f + n, 0x00, NET_MAC_LEN);           n += NET_MAC_LEN;   // target MAC: the blank
+    net_write32(f + n, kNetIPv4Address);        n += 4;             // target IP: us
+
+    uint64_t arp_answers = kArpStats.replies_sent;
+    uint64_t tx_before   = dev->tx_frames;
+    net_device_rx(dev, f, (uint16_t)n);
+
+    if (kArpStats.replies_sent != arp_answers + 1 || dev->tx_frames <= tx_before) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_echo_responder - ARP request in, no reply out "
+               "(replies_sent=%lu malformed=%lu tx=%lu)\n",
+               kArpStats.replies_sent, kArpStats.malformed, dev->tx_frames);
+        return false;
+    }
+    uint8_t learned[NET_MAC_LEN];
+    if (!arp_lookup(ghost_ip, learned) || memcmp(learned, ghost_mac, NET_MAC_LEN) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_echo_responder - sender not learned from its question\n");
+        return false;
+    }
+
+    // ── Part 2: the ICMP echo responder — the arc's Phase 2 headline.
+    // The ghost pings us: 16 bytes of 'A'..'P' payload, id 0xBEEF seq 7.
+    n = 0;
+    memcpy(f + n, dev->mac, NET_MAC_LEN);       n += NET_MAC_LEN;   // eth dst: us, unicast
+    memcpy(f + n, ghost_mac, NET_MAC_LEN);      n += NET_MAC_LEN;
+    net_write16(f + n, ETH_TYPE_IPV4);          n += 2;
+    int ip_start = n;
+    f[n++] = 0x45; f[n++] = 0x00;                                   // v4 ihl5, tos
+    net_write16(f + n, 20 + ICMP_HDR_LEN + 16); n += 2;             // total length
+    net_write16(f + n, 0x0007);                 n += 2;             // ident (ghost's choice)
+    net_write16(f + n, 0x4000);                 n += 2;             // DF
+    f[n++] = 64; f[n++] = IPV4_PROTO_ICMP;                          // ttl, proto
+    int ip_cksum_at = n;
+    net_write16(f + n, 0);                      n += 2;             // checksum placeholder
+    net_write32(f + n, ghost_ip);               n += 4;
+    net_write32(f + n, kNetIPv4Address);        n += 4;
+    net_write16(f + ip_cksum_at, net_checksum(f + ip_start, 20));
+    int icmp_start = n;
+    f[n++] = ICMP_TYPE_ECHO_REQUEST; f[n++] = 0;
+    int icmp_cksum_at = n;
+    net_write16(f + n, 0);                      n += 2;
+    net_write16(f + n, 0xBEEF);                 n += 2;             // ident
+    net_write16(f + n, 7);                      n += 2;             // sequence
+    for (int i = 0; i < 16; i++)
+        f[n++] = (uint8_t)('A' + i);
+    net_write16(f + icmp_cksum_at, net_checksum(f + icmp_start, ICMP_HDR_LEN + 16));
+
+    uint64_t pings_seen = kIcmpStats.echo_requests_received;
+    uint64_t echoes_out = kIcmpStats.echo_replies_sent;
+    tx_before = dev->tx_frames;
+    net_device_rx(dev, f, (uint16_t)n);
+
+    if (kIcmpStats.echo_requests_received != pings_seen + 1 ||
+        kIcmpStats.echo_replies_sent != echoes_out + 1 || dev->tx_frames <= tx_before) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_echo_responder - ping in, no echo out "
+               "(req_rcvd=%lu rep_sent=%lu bad_cksum=%lu ipv4_trunc=%lu tx=%lu)\n",
+               kIcmpStats.echo_requests_received, kIcmpStats.echo_replies_sent,
+               kIcmpStats.bad_checksum, kIPv4Stats.rx_truncated, dev->tx_frames);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_echo_responder (ARP reply + echo reply sent to an injected neighbor)\n");
+    return true;
+}
+
+// Phase 3, exhibit A — the DHCP client's whole conversation, judged by its
+// results. dhcp_start fired a DISCOVER during kernel_init; by the time
+// postboot tests run, the lease should be BOUND and applied. This test
+// waits (briefly) for the state machine to settle and then audits the
+// books: state, the lease fields, the applied config, and — because every
+// packet of that conversation rode the new UDP layer — the UDP counters
+// double as the wire test for udp.c itself (checksummed DISCOVER/REQUEST
+// out from 0.0.0.0, OFFER/ACK demuxed to port 68 in).
+//
+// (A hand-rolled DISCOVER probe test lived here for one slice, verified
+// first-boot, then retired: the real client claims port 68 for the life
+// of the system — a port is a mailbox — and asserts everything the probe
+// did and more.)
+static bool test_net_dhcp(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_dhcp (no NIC)\n");
+        return true;
+    }
+
+    // The transaction usually settles in the first few scheduler passes;
+    // 5s covers all four 2s-spaced retries of a sleepy server.
+    for (int i = 0; i < 500 && kDhcpStats.state != DHCP_BOUND
+                            && kDhcpStats.state != DHCP_GAVE_UP; i++)
+        wait(10);
+
+    if (kDhcpStats.state != DHCP_BOUND) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dhcp - not BOUND (state=%u disc=%lu off=%lu req=%lu ack=%lu nak=%lu udp_rx=%lu bad_ck=%lu)\n",
+               (uint32_t)kDhcpStats.state, kDhcpStats.discovers_sent,
+               kDhcpStats.offers_received, kDhcpStats.requests_sent,
+               kDhcpStats.acks_received, kDhcpStats.naks_received,
+               kUdpStats.rx_delivered, kUdpStats.rx_bad_checksum);
+        return false;
+    }
+
+    // The lease must be real AND applied — a BOUND state whose config
+    // didn't stick would be the worst kind of green light.
+    if (kDhcpStats.lease_ip == 0 || kNetIPv4Address != kDhcpStats.lease_ip) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dhcp - lease %u.%u.%u.%u not applied (addr=%u.%u.%u.%u)\n",
+               NET_IPV4_OCTETS(kDhcpStats.lease_ip), NET_IPV4_OCTETS(kNetIPv4Address));
+        return false;
+    }
+    if (kDhcpStats.offers_received == 0 || kDhcpStats.acks_received == 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dhcp - BOUND without the conversation (off=%lu ack=%lu)\n",
+               kDhcpStats.offers_received, kDhcpStats.acks_received);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_dhcp (leased %u.%u.%u.%u/%u.%u.%u.%u gw %u.%u.%u.%u from %u.%u.%u.%u, %u s)\n",
+           NET_IPV4_OCTETS(kDhcpStats.lease_ip), NET_IPV4_OCTETS(kDhcpStats.lease_mask),
+           NET_IPV4_OCTETS(kDhcpStats.lease_gateway), NET_IPV4_OCTETS(kDhcpStats.lease_server),
+           kDhcpStats.lease_seconds);
+    return true;
+}
+
+// Phase 3 finale, exhibit A — the conversation object, judged deterministically.
+// Dials the ghost neighbor from the responder test (whose MAC that test
+// already taught our ARP cache — registration order is load-bearing), then
+// plays the peer's half by hand: frames injected at the seam, exactly as
+// the responder test pioneered. Covers the conn machinery no live network
+// can probe on demand: the connected-peer filter, the truncation contract,
+// and the queue running while a reader drains it.
+static bool test_net_udp_conn(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_udp_conn (no NIC)\n");
+        return true;
+    }
+    net_device_t *dev = kNetDevices[0];
+    static const uint8_t ghost_mac[NET_MAC_LEN] = {0x02, 0x64, 0x0E, 0x0A, 0x05, 0x99};
+    uint32_t ghost_ip = (kNetIPv4Address & kNetIPv4Netmask) | 99;
+
+    udp_conn_t *conn = udp_conn_dial(dev, ghost_ip, 5555);
+    if (conn == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - dial failed\n");
+        return false;
+    }
+
+    // Outbound: one datagram to the ghost (its MAC is cached; the write's
+    // ARP retry path stays cold). Just the plumbing, counted at UDP.
+    uint64_t udp_tx = kUdpStats.tx_sent;
+    if (udp_conn_write(conn, "knock knock", 11) != 11 || kUdpStats.tx_sent != udp_tx + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - write failed (udp tx=%lu)\n", kUdpStats.tx_sent);
+        udp_conn_close(conn);
+        return false;
+    }
+
+    // Build one inbound frame from the ghost: eth + ipv4 + udp, correct
+    // checksums, payload as given. Reused for all three injections below.
+    uint8_t f[128];
+    const char *msg1 = "os64 hears you";       // 14 bytes
+    #define CONN_FRAME(src_port, payload, plen) do {                          \
+        int n = 0;                                                            \
+        memcpy(f + n, dev->mac, NET_MAC_LEN);      n += NET_MAC_LEN;          \
+        memcpy(f + n, ghost_mac, NET_MAC_LEN);     n += NET_MAC_LEN;          \
+        net_write16(f + n, ETH_TYPE_IPV4);         n += 2;                    \
+        int ip_start = n;                                                     \
+        f[n++] = 0x45; f[n++] = 0x00;                                         \
+        net_write16(f + n, 20 + UDP_HDR_LEN + (plen)); n += 2;                \
+        net_write16(f + n, 0x0042);                n += 2;                    \
+        net_write16(f + n, 0x4000);                n += 2;                    \
+        f[n++] = 64; f[n++] = IPV4_PROTO_UDP;                                 \
+        int ip_ck = n; net_write16(f + n, 0);      n += 2;                    \
+        net_write32(f + n, ghost_ip);              n += 4;                    \
+        net_write32(f + n, kNetIPv4Address);       n += 4;                    \
+        net_write16(f + ip_ck, net_checksum(f + ip_start, 20));               \
+        net_write16(f + n, (src_port));            n += 2;                    \
+        net_write16(f + n, conn->local_port);      n += 2;                    \
+        net_write16(f + n, UDP_HDR_LEN + (plen));  n += 2;                    \
+        net_write16(f + n, 0);                     n += 2;  /* cksum 0 = none (IPv4-legal) */ \
+        memcpy(f + n, (void*)(payload), (plen));   n += (plen);               \
+        net_device_rx(dev, f, (uint16_t)n);                                   \
+    } while (0)
+
+    // In from the PEER: must queue and read back verbatim.
+    CONN_FRAME(5555, msg1, 14);
+    char buf[64];
+    long got = udp_conn_read(conn, buf, sizeof(buf), 0);
+    if (got != 14 || memcmp(buf, msg1, 14) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - readback got %ld (delivered=%lu)\n",
+               got, conn->rx_delivered);
+        udp_conn_close(conn);
+        return false;
+    }
+
+    // In from a STRANGER (right IP, wrong port): the connected filter must
+    // drop it on its named counter and queue nothing.
+    uint64_t strangers = conn->rx_dropped_stranger;
+    CONN_FRAME(6666, "impostor", 8);
+    if (conn->rx_dropped_stranger != strangers + 1 || conn->count != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - stranger filter leaked (dropped=%lu count=%u)\n",
+               conn->rx_dropped_stranger, conn->count);
+        udp_conn_close(conn);
+        return false;
+    }
+
+    // Truncation contract: a 14-byte datagram read into an 8-byte buffer
+    // returns 8 and the tail DROPS — one datagram, one read, no carryover.
+    CONN_FRAME(5555, msg1, 14);
+    got = udp_conn_read(conn, buf, 8, 0);
+    if (got != 8 || conn->count != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - truncation contract broken (got %ld, queued %u)\n",
+               got, conn->count);
+        udp_conn_close(conn);
+        return false;
+    }
+    #undef CONN_FRAME
+
+    // The deadline contract (os64_read_for's kernel half): an EMPTY queue
+    // plus an expired deadline returns TIMEOUT — after actually waiting.
+    // Deterministic by construction: nothing sends to this ephemeral port.
+    // Budget: 10-tick deadline, elapsed must land in [10, 40] — the upper
+    // bound generous because the wake rides the sweep + backstop lattice.
+    uint64_t t0 = kTicksSinceStart;
+    got = udp_conn_read(conn, buf, sizeof(buf), kTicksSinceStart + 10);
+    uint64_t waited = kTicksSinceStart - t0;
+    if (got != UDP_CONN_ERR_TIMEOUT || waited < 10 || waited > 40) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_udp_conn - deadline read got %ld after %lu ticks "
+               "(want UDP_CONN_ERR_TIMEOUT in [10,40])\n", got, waited);
+        udp_conn_close(conn);
+        return false;
+    }
+
+    udp_conn_close(conn);
+    printd(DEBUG_TESTS, "\tPASS: test_net_udp_conn (dial, write, filtered+truncated reads, deadline, hangup)\n");
+    return true;
+}
+
+// Phase 3 finale, exhibit B — ring 3 places a real call. Spawns
+// /bin/dialtest, which dials slirp's DNS (10.0.2.3:53) with os64_dial's
+// bang string, asks a genuine question, and BLOCKS in read until the
+// answer crosses two NATs and comes home — the full tower, syscall to
+// wire to park to wake, judged by one exit code. See dialtest.c for the
+// 0x0D1A16xx step-code autopsy table.
+static bool test_net_dial_ring3(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_dial_ring3 (no NIC)\n");
+        return true;
+    }
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_dial_ring3 (no root filesystem)\n");
+        return true;
+    }
+
+    task_t *task = test_spawn("/bin/dialtest", 0, NULL, false);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - task_create failed\n");
+        return false;
+    }
+    scheduler_submit_new_task(task);
+
+    // DNS through slirp is normally milliseconds; 5s covers a resolver
+    // having a bad day. (A host with NO resolver at all fails here — that
+    // is a finding about the host, and the step code will say BAD_READ.)
+    for (int i = 0; i < 500 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - fixture still blocked after 5s "
+               "(udp tx=%lu rx=%lu)\n", kUdpStats.tx_sent, kUdpStats.rx_delivered);
+        return false;
+    }
+    if (task->retVal != 0x0D1A1600UL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - retVal=0x%lx, expected 0x0D1A1600 "
+               "(step codes in dialtest.c)\n", task->retVal);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_dial_ring3 (ring 3 dialed DNS, asked, was answered)\n");
+    return true;
+}
+
+// The ICMP handle — the mechanism `ping` is waiting on (utilities are
+// Chris's; the kernel plumbing is mine). Dials the gateway, sends a
+// payload carrying a tick stamp, and reads the echo back: proving the
+// identifier demux, the payload round trip, and the blocking read that
+// `ping` will time with os64_ticks(). Live against slirp, which answers
+// echo for its gateway address (test_net_ping already relies on that).
+static bool test_net_icmp_conn(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_icmp_conn (no NIC)\n");
+        return true;
+    }
+
+    icmp_conn_t *c = icmp_conn_dial(kNetDevices[0], kNetIPv4Gateway);
+    if (c == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - dial failed\n");
+        return false;
+    }
+
+    // The payload every ping since 1983 sends: a timestamp to subtract
+    // when it comes home, plus a recognizable pattern after it.
+    uint8_t out[32];
+    uint64_t stamp = kTicksSinceStart;
+    memcpy(out, &stamp, sizeof(stamp));
+    for (int i = 8; i < 32; i++)
+        out[i] = (uint8_t)(0x40 + i);
+
+    if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - write failed\n");
+        icmp_conn_close(c);
+        return false;
+    }
+
+    uint8_t in[64];
+    long got = icmp_conn_read(c, in, sizeof(in), 0);
+    uint64_t rtt = kTicksSinceStart - stamp;
+
+    if (got != (long)sizeof(out)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - read returned %ld, expected %u\n",
+               got, (uint32_t)sizeof(out));
+        icmp_conn_close(c);
+        return false;
+    }
+    // Byte-for-byte: an echo that alters the payload is not an echo.
+    if (memcmp(in, out, sizeof(out)) != 0) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - payload came back altered\n");
+        icmp_conn_close(c);
+        return false;
+    }
+
+    // The once-a-minute regression, on demand: flush the ARP cache so this
+    // next echo starts from a cold neighbor table — exactly what the 60s
+    // lazy TTL does to a long-running ping. The write must RIDE OUT the
+    // re-resolution (the udp-style retry finally ported here), not fail.
+    // Found by Chris's `ping -n 3600`: echo #22 died the moment the boot-
+    // era gateway entry hit its TTL, and once a minute after that.
+    arp_cache_flush();
+    if (icmp_conn_write(c, out, sizeof(out)) != (long)sizeof(out)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache write failed "
+               "(the 60s-TTL ping regression is back)\n");
+        icmp_conn_close(c);
+        return false;
+    }
+    got = icmp_conn_read(c, in, sizeof(in), 0);
+    icmp_conn_close(c);
+    if (got != (long)sizeof(out)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_icmp_conn - cold-cache echo read returned %ld\n", got);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_icmp_conn (%ld bytes echoed by %u.%u.%u.%u in %lu ticks; "
+           "cold-cache echo survived the ARP re-ask)\n",
+           got, NET_IPV4_OCTETS(kNetIPv4Gateway), rtt);
+    return true;
+}
+
+// Phase 4, exhibit A — the RST path, which needs nothing but a closed
+// door. Dialing a port nobody listens on must FAIL FAST: slirp's host
+// side refuses, the refusal comes back as a TCP reset, and tcp_input's
+// RST arm turns it into a failed dial. This is the deterministic half of
+// the TCP tests (no internet required) and it exercises the arm that a
+// happy-path fetch never touches. Port 9 is "discard" (RFC 863) — a
+// service nobody has run since the 1980s, which is exactly why it makes
+// a dependable closed door.
+static bool test_net_tcp_refused(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_refused (no NIC)\n");
+        return true;
+    }
+
+    uint64_t refused_before = kTcpStats.connections_refused;
+    uint64_t start = kTicksSinceStart;
+
+    int64_t why = 0;
+    tcp_conn_t *c = tcp_conn_dial(kNetDevices[0], kNetIPv4Gateway, 9, &why);
+    uint64_t elapsed = kTicksSinceStart - start;
+
+    if (c != NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - dial to a closed port SUCCEEDED\n");
+        tcp_conn_close(c);
+        return false;
+    }
+    // The dial must not just fail — it must fail with the RIGHT STORY.
+    // A ping author staring at a bare -1 is how this assertion got here.
+    if (why != OS64_NET_ERR_REFUSED) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - failed with why=%ld, "
+               "want OS64_NET_ERR_REFUSED (%d)\n", why, OS64_NET_ERR_REFUSED);
+        return false;
+    }
+    // A refusal must be an ANSWER (an RST), not the connect timeout —
+    // fast failure is the observable difference, and the timeout is 10s.
+    if (kTcpStats.connections_refused != refused_before + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - no RST counted "
+               "(refused=%lu timeouts=%lu resets=%lu, took %lu ticks)\n",
+               kTcpStats.connections_refused, kTcpStats.connect_timeouts,
+               kTcpStats.resets_received, elapsed);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_tcp_refused (closed port answered with RST in %lu ticks)\n",
+           elapsed);
+    return true;
+}
+
+// Phase 4, exhibit B — THE MILESTONE. Spawns /bin/fetchtest, which
+// resolves example.com over UDP, opens a TCP stream to it through slirp,
+// speaks HTTP, and reads the page to EOF. Everything in os64 that touches
+// a network is in the path: handshake, sequence arithmetic, ACKs, the
+// receive ring, the FIN that becomes read()'s 0. Needs working internet
+// on the host — the one test here that does, and it says so when it fails.
+// See fetchtest.c for the 0x0FE7C4xx step codes.
+static bool test_net_tcp_fetch_ring3(void)
+{
+    if (kNetDeviceCount == 0) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_fetch_ring3 (no NIC)\n");
+        return true;
+    }
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_fetch_ring3 (no root filesystem)\n");
+        return true;
+    }
+
+    task_t *task = test_spawn("/bin/fetchtest", 0, NULL, false);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - task_create failed\n");
+        return false;
+    }
+    scheduler_submit_new_task(task);
+
+    // DNS + a TCP round trip to the real internet: normally under a
+    // second, 15s of slack for a sleepy CDN or a retransmit or two.
+    for (int i = 0; i < 1500 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - fixture still running after 15s "
+               "(tcp opened=%lu refused=%lu timeouts=%lu retrans=%lu)\n",
+               kTcpStats.connections_opened, kTcpStats.connections_refused,
+               kTcpStats.connect_timeouts, kTcpStats.retransmits);
+        return false;
+    }
+    if (task->retVal != 0x0FE7C400UL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - retVal=0x%lx, expected 0x0FE7C400 "
+               "(step codes in fetchtest.c; needs host internet)\n", task->retVal);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_tcp_fetch_ring3 (fetched a real page from the real internet, "
+           "%lu segments in / %lu out, %lu retransmits)\n",
+           kTcpStats.segments_in, kTcpStats.segments_out, kTcpStats.retransmits);
+    return true;
+}
+
 // ── env tests ────────────────────────────────────────────────────────────────
 
 static bool test_env_create_empty(void)
@@ -2355,6 +3027,16 @@ static void register_builtin_tests(void)
     test_register("ring3_sleep", test_ring3_sleep, TEST_PHASE_POSTBOOT);
     test_register("ring3_memory", test_ring3_memory, TEST_PHASE_POSTBOOT);
     test_register("ring3_threads", test_ring3_threads, TEST_PHASE_POSTBOOT);
+    test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
+    test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);
+    test_register("net_ping", test_net_ping, TEST_PHASE_POSTBOOT);
+    test_register("net_echo_responder", test_net_echo_responder, TEST_PHASE_POSTBOOT);
+    test_register("net_dhcp", test_net_dhcp, TEST_PHASE_POSTBOOT);
+    test_register("net_udp_conn", test_net_udp_conn, TEST_PHASE_POSTBOOT);
+    test_register("net_dial_ring3", test_net_dial_ring3, TEST_PHASE_POSTBOOT);
+    test_register("net_icmp_conn", test_net_icmp_conn, TEST_PHASE_POSTBOOT);
+    test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_POSTBOOT);
+    test_register("net_tcp_fetch_ring3", test_net_tcp_fetch_ring3, TEST_PHASE_POSTBOOT);
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
     test_register("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
@@ -2411,6 +3093,19 @@ static void test_run_phase(int phase, const char *label)
     }
 
     printd(DEBUG_TESTS, "BUILT-IN TESTS: %u passed, %u failed\n", (unsigned int)passed, (unsigned int)failed);
+
+    // ONE summary line on the glass per phase — not the per-test chatter,
+    // which stays on serial where it can be forty lines long without
+    // eating the boot screen. This exists because success used to print
+    // NOTHING here: the display said "Running post-boot tests ..." and
+    // then moved on, so a suite that silently failed to run looked
+    // exactly like a suite that passed. Failures already print by name
+    // above (and panic); this is the other half of that honesty — the
+    // count is what proves the tests actually happened.
+    // (Chris caught it 2026-08-01, one slice after catching the same
+    // "assume it all went to plan" habit in the DNS fixture.)
+    printf("%s tests: %u passed, %u failed\n", label,
+           (unsigned int)passed, (unsigned int)failed);
 
     if (failed > 0) {
         // panic(), not a bare cli/hlt: panic force-drains the log buffer to
