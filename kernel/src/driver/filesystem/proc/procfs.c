@@ -381,6 +381,57 @@ static uint64_t proc_task_run_cycles(task_t *t)
 	return cycles;
 }
 
+// The old `ticks` counter, summed the same way runtime_us is — the two
+// CPU-time fields in the status file must describe the same set of threads
+// or they contradict each other under load.
+static uint64_t proc_task_run_ticks(task_t *t)
+{
+	uint64_t ticks = 0;
+	for (thread_t *th = (t ? t->threads : NULL); th != NULL; th = th->taskNext)
+		ticks += th->totalRunTicks;
+	return ticks;
+}
+
+// Which thread SPEAKS for the task: the most alive one. The task status
+// file already sums CPU across all threads (the doctrine above), so the
+// per-thread fields alongside it (state, core) must describe the same
+// program — not whichever thread happens to sit first in the list. hog
+// proved the point on 2026-08-07: its launch thread sleeps forever on the
+// core it was born on while its worker burns a different core flat out,
+// and the first-thread report dressed a 100%-CPU task as "isleep, core 1".
+// Ranking: running > runnable > usleep (imminent work, Linux's D) >
+// isleep (parked) > stopped > zombie > none. First thread at the highest
+// rank wins a tie — stable, and ties above "runnable" are momentary.
+static int proc_state_rank(eThreadState s)
+{
+	switch (s)
+	{
+		case THREAD_STATE_RUNNING:  return 6;
+		case THREAD_STATE_RUNNABLE: return 5;
+		case THREAD_STATE_USLEEP:   return 4;
+		case THREAD_STATE_ISLEEP:   return 3;
+		case THREAD_STATE_STOPPED:  return 2;
+		case THREAD_STATE_ZOMBIE:   return 1;
+		default:                    return 0;
+	}
+}
+
+static thread_t *proc_task_liveliest_thread(task_t *t)
+{
+	thread_t *best = NULL;
+	int bestRank = -1;
+	for (thread_t *th = (t ? t->threads : NULL); th != NULL; th = th->taskNext)
+	{
+		int rank = proc_state_rank(th->threadState);
+		if (rank > bestRank)
+		{
+			best = th;
+			bestRank = rank;
+		}
+	}
+	return best;
+}
+
 // Copy a NUL-terminated string OUT OF A TASK'S ADDRESS SPACE into `out`.
 //
 // Necessary because a task_t field being kernel-readable does not make what it
@@ -512,7 +563,11 @@ static void proc_gen_cores(proc_text_t *t)
 
 static void proc_gen_task_status(proc_text_t *t, task_t *task)
 {
-	thread_t *th = task->threads;
+	// The liveliest thread represents the task (see the helper's doctrine) —
+	// its state and core answer "what is this PROGRAM doing, and where",
+	// consistent with the summed runtime_us/ticks below. Per-thread truth
+	// lives in /<id>/thread/<tid>/status for anyone who wants the roster.
+	thread_t *th = proc_task_liveliest_thread(task);
 
 	// Same settle as /proc/cores (rate-limited to once a tick): runtime_us
 	// below must not be a scheduler-pass stale on a monopolized core.
@@ -550,7 +605,7 @@ static void proc_gen_task_status(proc_text_t *t, task_t *task)
 	// thread is usually the one waiting.
 	ptext_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(proc_task_run_cycles(task)));
 	if (th != NULL)
-		ptext_addf(t, "ticks\t%lu\n", th->totalRunTicks);
+		ptext_addf(t, "ticks\t%lu\n", proc_task_run_ticks(task));
 	// A live task has no exit status; saying "-" beats printing a zero that
 	// looks like "exited successfully".
 	if (task->exited)

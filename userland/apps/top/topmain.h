@@ -19,10 +19,18 @@ typedef enum {
 } eTaskState;
 
 typedef struct topent {
-    uint64_t TID, PTID;
+    // Cache identity: tasks use their task ID; thread rows use the thread
+    // ID with the top bit set (thread and task IDs draw from different
+    // counters, so without the bit a collision would silently splice one
+    // row's runtime history onto the other's and invent a CPU% spike).
+    uint64_t key;
+    uint64_t TID, PTID;         // displayed IDs (thread rows: TID = thread ID,
+                                // PTID = owning task — the attach point)
     char Command[64];
     eTaskState State;
     bool KernelProc;
+    bool isThread;              // a /proc/<id>/thread/<tid> row, not a task
+    uint32_t threadCount;       // status "threads" — >1 marks an expandable row
     // CPU time (runtime_us from the status file — the boundary-charged
     // truth, not the sampled `ticks`). prev is last refresh's reading; the
     // delta over the measured interval is the CPU% column.
@@ -47,6 +55,9 @@ typedef struct {
                         //      the accounting's own checkout harness)
     bool perCore;       // -c  (one summary line per core — each core's books
                         //      against its own ledger interval)
+    bool showThreads;   // -t  (expand multi-threaded tasks into per-thread
+                        //      rows under their task; default is the honest
+                        //      aggregate — Chris's ruling, 2026-08-07)
 } top_options_t;
 
 int32_t topMain(const top_options_t *opts);

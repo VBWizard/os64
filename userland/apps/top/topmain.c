@@ -139,6 +139,7 @@ static bool handle_key(top_view_t *view, char c)
         case 'z': case 'Z': view->options.showZombies = !view->options.showZombies; return true;
         case 'a': case 'A': view->options.adaptiveUnits = !view->options.adaptiveUnits; return true;
         case 'c': case 'C': view->options.perCore = !view->options.perCore; return true;
+        case 't': case 'T': view->options.showThreads = !view->options.showThreads; return true;
         default: return false;
     }
 }
@@ -259,7 +260,8 @@ static void compose_help(const top_view_t *view)
     framef("  Esc        clear the active filter\n");
     framef("  z          show or hide zombies\n");
     framef("  a          fixed or adaptive time units\n");
-    framef("  c          machine or per-core accounting\n\n");
+    framef("  c          machine or per-core accounting\n");
+    framef("  t          expand multi-threaded tasks into thread rows\n\n");
     framef("  sort: %s %s   filter: %s\n",
            sort_name(view->sort), sort_direction(view),
            view->filter[0] ? view->filter : "(none)");
@@ -281,7 +283,7 @@ static void compose_footer(const top_view_t *view)
     if (view->filterEditing)
         framef("\nfilter: %s_   Enter apply  Esc cancel\n", view->filterEdit);
     else
-        framef("\nq quit  ? help  s sort  S reverse  / filter  z zombies  a units  c cores\n");
+        framef("\nq quit  ? help  s sort  S reverse  / filter  z zombies  a units  c cores  t threads\n");
 }
 
 // ── Small formatters ─────────────────────────────────────────────────────
@@ -483,7 +485,12 @@ static void sort_entries(top_entry_t **entries, uint32_t count,
 
 // One status file → one entry. key\tvalue per line (the /proc format
 // contract — Plan 9's tradition, PROC.md's law).
-static int32_t parseStatusFile(int32_t fileHandle, top_entry_t *entry)
+// Parses BOTH status shapes: a task's (/proc/<id>/status) and a thread's
+// (/proc/<id>/thread/<tid>/status). The key collision between them is why
+// the flag exists: in a thread file "task" names the OWNER (our PTID, the
+// attach point), while in a task file it IS the row's identity.
+static int32_t parseStatusFile(int32_t fileHandle, top_entry_t *entry,
+                               bool isThread)
 {
     char line[STATUS_LINE_SIZE];
     int64_t readResult;
@@ -500,6 +507,13 @@ static int32_t parseStatusFile(int32_t fileHandle, top_entry_t *entry)
             value++;
 
         if (os64_streq(line, "task"))
+        {
+            if (isThread)
+                entry->PTID = os64_atou(value);
+            else
+                entry->TID = os64_atou(value);
+        }
+        else if (os64_streq(line, "thread"))
             entry->TID = os64_atou(value);
         else if (os64_streq(line, "name"))
             os64_strcopy(entry->Command, sizeof(entry->Command), value);
@@ -509,6 +523,8 @@ static int32_t parseStatusFile(int32_t fileHandle, top_entry_t *entry)
             entry->PTID = os64_atou(value);
         else if (os64_streq(line, "kernel"))
             entry->KernelProc = os64_streq(value, "yes");
+        else if (os64_streq(line, "threads"))
+            entry->threadCount = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "core"))
             entry->core = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "runtime_us"))
@@ -563,7 +579,7 @@ static int32_t readCores(void)
 // Find the entry for a TID, or claim a slot: exact match first, then a
 // stale slot (its task vanished — reuse resets the delta history so a
 // recycled slot can't inherit a dead task's runtime), then a fresh one.
-static int64_t getTopEntryToUse(uint64_t tid, top_entry_t **out,
+static int64_t getTopEntryToUse(uint64_t key, top_entry_t **out,
                                 uint32_t *topEntryCount)
 {
     top_entry_t *stale = NULL;
@@ -571,7 +587,7 @@ static int64_t getTopEntryToUse(uint64_t tid, top_entry_t **out,
     *out = NULL;
     for (uint32_t idx = 0; idx < *topEntryCount; idx++)
     {
-        if (top_entries[idx].TID == tid)
+        if (top_entries[idx].key == key)
         {
             *out = &top_entries[idx];
             (*out)->lastIterationUsed = topIterationsExecuted;
@@ -585,7 +601,7 @@ static int64_t getTopEntryToUse(uint64_t tid, top_entry_t **out,
     if (stale != NULL)
     {
         os64_memset(stale, 0, sizeof(*stale));
-        stale->TID = tid;
+        stale->key = key;
         stale->lastIterationUsed = topIterationsExecuted;
         *out = stale;
         return 0;
@@ -595,13 +611,18 @@ static int64_t getTopEntryToUse(uint64_t tid, top_entry_t **out,
     {
         *out = &top_entries[*topEntryCount];
         os64_memset(*out, 0, sizeof(**out));
-        (*out)->TID = tid;
+        (*out)->key = key;
         (*out)->lastIterationUsed = topIterationsExecuted;
         (*topEntryCount)++;
         return 0;
     }
     return TOP_ERROR_NO_FREE_TOP_ENTRIES;
 }
+
+// The thread-key bit (topmain.h `key` doctrine): thread rows live in the
+// same entry pool as tasks — same delta history, same staleness reuse —
+// distinguished by the top bit of the cache key.
+#define TOP_THREAD_KEY (1ULL << 63)
 
 // ── The main loop ────────────────────────────────────────────────────────
 
@@ -645,6 +666,12 @@ int32_t topMain(const top_options_t *opts)
         uint32_t seen = 0, zombies = 0;
         top_entry_t *shown[MAX_ENTRIES];
         uint32_t shownCount = 0;
+        // Thread rows for this refresh (t view): gathered only for tasks
+        // that made the screen, attached to their parent at render time by
+        // PTID. They ride the same entry pool, so their CPU% deltas survive
+        // refreshes exactly like task rows' do.
+        top_entry_t *threadRows[MAX_ENTRIES];
+        uint32_t threadRowCount = 0;
 
         while (os64_readdir((int32_t)dirHandle, &dent) == 1)
         {
@@ -665,7 +692,8 @@ int32_t topMain(const top_options_t *opts)
             }
 
             e->runtimeUS = 0;
-            parseStatusFile((int32_t)sh, e);
+            e->threadCount = 0;
+            parseStatusFile((int32_t)sh, e, false);
             os64_close((int32_t)sh);
 
             seen++;
@@ -679,6 +707,45 @@ int32_t topMain(const top_options_t *opts)
                 continue;
             if (shownCount < MAX_ENTRIES)
                 shown[shownCount++] = e;
+
+            // A single-thread task IS its thread — the aggregate row says
+            // everything, so only multi-thread tasks earn an expansion.
+            if (!view.options.showThreads || e->threadCount < 2)
+                continue;
+
+            os64_snprintf(path, sizeof(path), "/proc/%s/thread", dent.name);
+            int64_t th = os64_opendir(path);
+            if (th < 0)
+                continue;
+            os64_dirent_t tdent;
+            while (os64_readdir((int32_t)th, &tdent) == 1)
+            {
+                char tpath[80];
+                os64_snprintf(tpath, sizeof(tpath), "/proc/%s/thread/%s/status",
+                              dent.name, tdent.name);
+                int64_t tsh = os64_open(tpath, NULL);
+                if (tsh < 0)
+                    continue;   // the thread exited mid-walk — fine
+
+                top_entry_t *te = NULL;
+                if (getTopEntryToUse(os64_atou(tdent.name) | TOP_THREAD_KEY,
+                                     &te, &topEntryCount) != 0)
+                {
+                    os64_close((int32_t)tsh);
+                    break;      // pool full: the task rows keep priority
+                }
+                te->runtimeUS = 0;
+                te->isThread = true;
+                // The thread file carries no name or kernel flag — the
+                // parent's are the truth for both.
+                os64_strcopy(te->Command, sizeof(te->Command), e->Command);
+                te->KernelProc = e->KernelProc;
+                parseStatusFile((int32_t)tsh, te, true);
+                os64_close((int32_t)tsh);
+                if (threadRowCount < MAX_ENTRIES)
+                    threadRows[threadRowCount++] = te;
+            }
+            os64_close((int32_t)th);
         }
         os64_close((int32_t)dirHandle);
 
@@ -736,6 +803,9 @@ int32_t topMain(const top_options_t *opts)
         for (uint32_t i = 0; i < shownCount; i++)
             if (shown[i]->runtimeUS < shown[i]->prevRuntimeUS)
                 shown[i]->prevRuntimeUS = shown[i]->runtimeUS;
+        for (uint32_t i = 0; i < threadRowCount; i++)
+            if (threadRows[i]->runtimeUS < threadRows[i]->prevRuntimeUS)
+                threadRows[i]->prevRuntimeUS = threadRows[i]->runtimeUS;
 
         sort_entries(shown, shownCount, &view);
 
@@ -936,6 +1006,32 @@ int32_t topMain(const top_options_t *opts)
 
             e->prevRuntimeUS = e->runtimeUS;
             e->havePrev = true;
+
+            // The task's threads, indented beneath it (t view). Their CPU%
+            // columns sum to the aggregate row's — same ledger, finer split.
+            for (uint32_t t = 0; t < threadRowCount; t++)
+            {
+                top_entry_t *tr = threadRows[t];
+                if (tr->PTID != e->TID)
+                    continue;
+
+                uint64_t tdUS = tr->havePrev ? tr->runtimeUS - tr->prevRuntimeUS : 0;
+                char tPct[16], tTime[24];
+                if (tr->havePrev && intervalUS > 0)
+                    fmt_pct_int(tPct, sizeof(tPct), tdUS, intervalUS);
+                else
+                    os64_strcopy(tPct, sizeof(tPct), "-");
+                fmt_time(tTime, sizeof(tTime), tr->runtimeUS,
+                         view.options.adaptiveUnits);
+
+                framef("%-6lu %-9s %1s %2u %6s %10s   - %s\n",
+                       tr->TID, state_name(tr->State),
+                       tr->KernelProc ? "k" : " ",
+                       tr->core, tPct, tTime, tr->Command);
+
+                tr->prevRuntimeUS = tr->runtimeUS;
+                tr->havePrev = true;
+            }
         }
 
         // Advance every task sampled this round, including rows hidden by the

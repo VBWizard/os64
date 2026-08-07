@@ -7,6 +7,7 @@ static bool optAdaptive = false;
 static bool optNoSummary = false;
 static bool optLog = false;
 static bool optPerCore = false;
+static bool optThreads = false;
 
 int main(int argc, char **argv)
 {
@@ -26,9 +27,11 @@ int main(int argc, char **argv)
          .flag = &optLog},
         {'c', "cores", false, "One summary line per core (each core's own books)",
          .flag = &optPerCore},
+        {'t', "threads", false, "Expand multi-threaded tasks into per-thread rows",
+         .flag = &optThreads},
     };
 
-    os64_args_init(&args, argc, argv, specs, 6);
+    os64_args_init(&args, argc, argv, specs, 7);
     args.about = "View the system's tasks and where the CPU time goes";
     int32_t nPositionals = os64_args_parse(&args, "top", &positional, 1);
     if (nPositionals == 0)
@@ -44,6 +47,7 @@ int main(int argc, char **argv)
         opts.noSummary = optNoSummary;
         opts.logLedger = optLog;
         opts.perCore = optPerCore;
+        opts.showThreads = optThreads;
         returnCode = topMain(&opts);
     }
     else if (nPositionals > 0)
