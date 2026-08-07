@@ -263,7 +263,25 @@
 */
 
 
-#define FF_FS_LOCK		0
+/* 16, RATIFIED 2026-08-07 (was the accidental default 0): rm/rename of an
+/  OPEN file now returns FR_LOCKED instead of silently freeing a cluster
+/  chain a live FIL keeps writing through — deleting os64.log under a
+/  running logd was a cross-link factory (the freed clusters get handed to
+/  the next file created, and logd's eventual close writes a file size over
+/  whatever reused the dirent slot). Matches ext2's refuse-while-open
+/  ruling (2026-08-04), decided on its own merits per the
+/  accidental-configs-carry-no-authority rule.
+/
+/  64, not 16: a spawned task's ELF stays open (demand paging) until the
+/  kworker's phase-2 burial — so ZOMBIES hold lock slots for up to a few
+/  seconds, and the test suite's ~20 spawns/second exhausted a 16-slot
+/  table mid-suite on the FAT-root boot (task_create returned NULL for
+/  four tests — first thing the guardrail ever caught, 2026-08-07, same
+/  hour it was enabled). 64 = comfortable headroom over suite peak; the
+/  cost is a ~1KB static table in ff.c. The REAL fix is booked in
+/  DEBTS.md: close image->file at zombie transition (no fault can need
+/  it once the last thread dies), which shrinks the window to zero. */
+#define FF_FS_LOCK		64
 /* The option FF_FS_LOCK switches file lock function to control duplicated file open
 /  and illegal operation to open objects. This option must be 0 when FF_FS_READONLY
 /  is 1.

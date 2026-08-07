@@ -22,6 +22,7 @@ hobby-scale judgment calls — re-rank freely.
 
 | Debt | Sev | Cost | Source |
 |---|---|---|---|
+| Zombie tasks hold their ELF's FAT lock slot until phase-2 burial (window = spawn rate × kworker cadence; FF_FS_LOCK=64 is headroom, not a cure) — close `image->file` at ZOMBIE transition instead, no fault can need it after the last thread dies | Robustness | S | ffconf.h FF_FS_LOCK comment, 2026-08-07 |
 | `mp_schedStack` mapped USER (`0x7`→`0x3`) — ring 3 can scribble kernel scheduler stacks | Hole | XS | ABI § Memory-protection #1 |
 | Enable **SMEP** (CR4, CPUID-gated) — blocks ring-0 exec of user pages | Robustness | S | ABI § Memory-protection #2 |
 | Allocator OOM: silent `cli; hlt` → panic naming size + largest free extent | Robustness | S | MEMORY #1 |
