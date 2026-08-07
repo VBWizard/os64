@@ -1922,8 +1922,14 @@ static bool test_ext2_secondary_write(void)
 // TOLERANT of a human typing during boot — a physical keyboard's queue can't
 // be asserted empty, so "a byte arrived" is always an acceptable outcome;
 // what the test refuses to accept is a poll that BLOCKS or a deadline that
-// doesn't expire. (Any byte this test happens to eat was typed before husk
-// existed to want it.)
+// doesn't expire.
+//
+// EVERY BYTE THIS PROBE CATCHES GOES BACK (console_unread). The first
+// version shrugged — "any byte this test eats was typed before husk existed
+// to want it" — and that shrug stole the first few characters of Chris's
+// type-ahead on every boot for weeks; the rc feature took the blame because
+// they shipped the same day. A probe that must consume to observe
+// un-consumes on the way out; type-ahead reaches the prompt intact.
 static bool test_console_read_deadline(void)
 {
     char c;
@@ -1934,6 +1940,8 @@ static bool test_console_read_deadline(void)
     uint64_t t0 = kTicksSinceStart;
     long r = console_read_deadline(&c, 1, kTicksSinceStart);
     uint64_t elapsed = kTicksSinceStart - t0;
+    if (r == 1)
+        console_unread(c);
     if (r != CONSOLE_READ_TIMEOUT && r != 1) {
         printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - poll returned %ld (want byte or timeout)\n", r);
         return false;
@@ -1946,9 +1954,13 @@ static bool test_console_read_deadline(void)
     // 2. The timed gait: 3 ticks of patience. On the quiet path the verdict
     //    must land at the deadline — not early (patience is a promise) and
     //    not a backstop-second late (the shortened nap must hold).
+    //    (If gait 1 put a byte back, this read returns it instantly — which
+    //    is the pushback contract working, and an acceptable outcome here.)
     t0 = kTicksSinceStart;
     r = console_read_deadline(&c, 1, kTicksSinceStart + 3);
     elapsed = kTicksSinceStart - t0;
+    if (r == 1)
+        console_unread(c);
     if (r == CONSOLE_READ_TIMEOUT) {
         if (elapsed < 3 || elapsed > 20) {
             printd(DEBUG_TESTS, "\tFAIL: console_read_deadline - 3-tick patience expired after %lu ticks\n", elapsed);
@@ -1959,7 +1971,7 @@ static bool test_console_read_deadline(void)
         return false;
     }
 
-    printd(DEBUG_TESTS, "\tPASS: test_console_read_deadline (poll + 3-tick patience)\n");
+    printd(DEBUG_TESTS, "\tPASS: test_console_read_deadline (poll + 3-tick patience; anything caught was put back)\n");
     return true;
 }
 

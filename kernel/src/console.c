@@ -39,6 +39,21 @@ static thread_t * volatile kConsoleWaiter = NULL;
 // console for normal reading (Ctrl+D ends cat, then husk's prompt reads on).
 static volatile bool kConsoleEOFPending = false;
 
+// The unread slot (console.h has the origin story): bytes a probe consumed
+// and returned, delivered LIFO ahead of the keyboard ring. Four is generous
+// — the only caller holds one byte at a time.
+#define CONSOLE_PUSHBACK_MAX 4
+static volatile char kConsolePushback[CONSOLE_PUSHBACK_MAX];
+static volatile int  kConsolePushbackCount = 0;
+
+bool console_unread(char c)
+{
+	if (kConsolePushbackCount >= CONSOLE_PUSHBACK_MAX)
+		return false;
+	kConsolePushback[kConsolePushbackCount++] = c;
+	return true;
+}
+
 // How long the reader sleeps before waking to re-check, as a BACKSTOP only.
 // A keypress normally wakes it far sooner via console_wake_if_ready (next
 // scheduler pass, ~10ms). The backstop just guarantees liveness — if a wake
@@ -139,6 +154,11 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 				kConsoleWaiter = NULL;
 			return CONSOLE_READ_INTERRUPTED;
 		}
+
+		// Pushed-back bytes first — console_unread's contract (console.h):
+		// what a probe returned must reach the next reader ahead of the ring.
+		while (n < len && kConsolePushbackCount > 0)
+			buf[n++] = kConsolePushback[--kConsolePushbackCount];
 
 		// Drain whatever translated keys are queued (skip pure-modifier /
 		// non-glyph events — they have ascii == 0).

@@ -45,6 +45,15 @@ long console_read(char *buf, size_t len);
 // (same doctrine as sleep(): the ABI speaks time, this file speaks ticks).
 long console_read_deadline(char *buf, size_t len, uint64_t deadline);
 
+// Put a byte BACK at the head of the console's input, to be delivered before
+// anything else. Born 2026-08-07 for exactly one caller: the read-patience
+// test reads the console during boot, and any type-ahead a human queued
+// before husk's first prompt was being eaten by the probe — weeks of "it
+// keeps losing my first three characters" traced to a test's shrug. A probe
+// that must consume to observe now un-consumes on the way out. Returns false
+// when the pushback slot is full (bounded, tiny — probes hold at most one).
+bool console_unread(char c);
+
 // The line-discipline peek (the ISIG/VINTR seed): called by keyboard.c at the
 // delivery choke for every key-down, BEFORE the byte enters the console ring.
 // Returns true if the byte was consumed as the interrupt character (ETX/0x03
