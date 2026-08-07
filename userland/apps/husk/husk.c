@@ -15,6 +15,14 @@
 // still just reads 0 and writes 1, none the wiser. A redirection beats a
 // pipe when both claim the same slot (`a | b < f`: b reads f, and a's pipe
 // simply sees its reader vanish — which is what SIGPIPE is for).
+// v4: THE CONTROL LINE (2026-08-06, "the whole basket"). `>>` appends where
+// `>` truncates (both are First Edition vocabulary, 1971 — and everyone
+// truncates at least one file they loved learning the difference). `;`
+// separates commands run in sequence; `&&` and `||` run the next command
+// only on success / only on failure — nearly free because $? already
+// existed, and they arrive in husk in the same order history added them
+// (; was Thompson's, && and || came with Bourne). And `time` becomes a
+// builtin PREFIX — see run_segment for why it can never be a utility.
 
 #include "os64/os64.h"
 
@@ -288,6 +296,79 @@ static int split_pipeline(char *line, char *stages[], int maxstages)
 	return n;
 }
 
+// Split a line on unquoted `;`, `&&`, and `||` into a COMMAND LIST, in
+// place. seps[i] records what connects cmds[i] to cmds[i+1]. Single `|`
+// (a pipe) and single `&` (background) are deliberately NOT separators —
+// the two-character operators are consumed here precisely so
+// split_pipeline never mistakes `||` for two pipes downstream.
+//
+// Splitting happens on the RAW line, BEFORE $-expansion, for a reason
+// with teeth: `false ; echo $?` must print 1, which means each command
+// expands at ITS OWN execution time, after its predecessor has updated
+// the status — one pre-expanded pass over the whole line would hand
+// every segment yesterday's $?.
+//
+// Returns the command count, or -1 when the line holds more than maxcmds
+// commands. Refusing is the tripwire rule: the first draft just stopped
+// scanning at the cap, which silently glued " ; ninth" onto command
+// eight as LITERAL ARGV TOKENS — a bounded parser must say so out loud
+// when the line outgrows it, never reinterpret the overflow as data.
+#define MAX_CMDS 8
+enum { SEP_SEQ, SEP_AND, SEP_OR };
+
+static int split_commands(char *line, char *cmds[], int seps[], int maxcmds)
+{
+	int n = 0;
+	char *p = line;
+	char quote = 0;
+
+	cmds[n++] = p;
+	while (*p)
+	{
+		if (quote != 0)
+		{
+			if (*p == quote)
+				quote = 0;
+			p++;
+		}
+		else if (*p == '\'' || *p == '"')
+		{
+			quote = *p++;
+		}
+		else if (*p == ';')
+		{
+			if (n >= maxcmds)
+				return -1;
+			*p++ = 0;
+			seps[n - 1] = SEP_SEQ;
+			cmds[n++] = p;
+		}
+		else if (p[0] == '&' && p[1] == '&')
+		{
+			if (n >= maxcmds)
+				return -1;
+			*p = 0;
+			p += 2;
+			seps[n - 1] = SEP_AND;
+			cmds[n++] = p;
+		}
+		else if (p[0] == '|' && p[1] == '|')
+		{
+			if (n >= maxcmds)
+				return -1;
+			*p = 0;
+			p += 2;
+			seps[n - 1] = SEP_OR;
+			cmds[n++] = p;
+		}
+		else
+		{
+			p++;
+		}
+	}
+	return n;
+}
+
 // Expand $-variables in a command line. Expansion happens here, in the
 // shell, before tokenization — so it works in front of every program ever
 // written, not just the ones that opted in (os32 put expansion in the
@@ -518,16 +599,21 @@ static void report_exit(long ended, int code)
 	os64_debug_log(msg);
 }
 
-// Pull `< file` / `> file` out of an already-parsed argv, compacting what
-// remains. Writes the filenames through the out-params (NULL = no redirect)
-// and returns 0, or -1 on a dangling operator (`upper <` with no filename).
+// Pull `< file` / `> file` / `>> file` out of an already-parsed argv,
+// compacting what remains. Writes the filenames through the out-params
+// (NULL = no redirect; *outAppend says which spelling won) and returns 0,
+// or -1 on a dangling operator (`upper <` with no filename).
 // The operators must be their own tokens — husk's parser splits on spaces
 // only, and that simplicity is a feature (`upper<f` is a program named
-// "upper<f", which is honest, if unhelpful).
-static int extract_redirections(char *cargv[], char **inFile, char **outFile)
+// "upper<f", which is honest, if unhelpful). Token-exact matching also
+// means `>>` needs no lexer priority over `>` — they arrive as different
+// whole tokens and can never shadow each other.
+static int extract_redirections(char *cargv[], char **inFile,
+                                char **outFile, int *outAppend)
 {
 	*inFile = NULL;
 	*outFile = NULL;
+	*outAppend = 0;
 
 	int w = 0;
 	for (int r = 0; cargv[r]; r++)
@@ -541,6 +627,13 @@ static int extract_redirections(char *cargv[], char **inFile, char **outFile)
 		{
 			if (!cargv[r + 1]) return -1;
 			*outFile = cargv[++r];
+			*outAppend = 0;       // last spelling wins: `> f ... >> g` appends to g
+		}
+		else if (str_eq(cargv[r], ">>"))
+		{
+			if (!cargv[r + 1]) return -1;
+			*outFile = cargv[++r];
+			*outAppend = 1;
 		}
 		else
 		{
@@ -630,15 +723,19 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		// `upper < in > out` runs upper with argc == 1, exactly as if the
 		// shell had been reading and writing the files itself.
 		char *inFile, *outFile;
-		if (extract_redirections(cargv, &inFile, &outFile) < 0)
+		int outAppend;
+		if (extract_redirections(cargv, &inFile, &outFile, &outAppend) < 0)
 		{
-			os64_puts("husk: bad redirection (expected `< file` or `> file`)\n");
+			os64_puts("husk: bad redirection (expected `< file`, `> file`, or `>> file`)\n");
 			status = 1;
 			break;
 		}
 
 		// Open redirect files BEFORE creating the pipe — if the file isn't
 		// there, we want to fail while there's nothing yet to unwind.
+		// `>>` opens "a": position at the end, create if absent — both
+		// filesystems already spoke append (FAT since its glue was born,
+		// ext2 since the write arc); the shell was the last one to learn.
 		int inRedir = -1, outRedir = -1;
 		if (inFile && (inRedir = (int)os64_open(inFile, "r")) < 0)
 		{
@@ -648,7 +745,7 @@ static int run_pipeline(char *stages[], int nstages, int background)
 			status = 1;
 			break;
 		}
-		if (outFile && (outRedir = (int)os64_open(outFile, "w")) < 0)
+		if (outFile && (outRedir = (int)os64_open(outFile, outAppend ? "a" : "w")) < 0)
 		{
 			os64_puts("husk: cannot create ");
 			os64_puts(outFile);
@@ -752,28 +849,41 @@ static int run_pipeline(char *stages[], int nstages, int background)
 
 // ── one line, interpreted ───────────────────────────────────────────────────
 
-// Everything a line MEANS, in one place: $-expansion, the trailing `&`,
-// pipeline split, builtins, and finally run_pipeline. Interactive lines and
-// husk.rc lines both come through here, and that is the entire point — the
-// rc file is not a configuration format to be parsed, it IS the shell, so
-// anything that works at the prompt works there by construction and nothing
-// works in only one of the two places. Returns 1 when the line asks the
-// shell to exit, else 0; the line's status lands in *last_status ($?).
-static int run_line(char *line, int *last_status)
+// Print `time`'s verdict: "time: 12.34s". The ruler is the 10ms tick, so
+// hundredths are exactly as honest as the clock gets — the microsecond
+// version arrives with the wall-clock-hardening arc, same as ping's.
+static void print_elapsed(unsigned long dticks, unsigned long per_second)
 {
-	char expanded[LINE_MAX + 512];  // headroom for expanded $CWD/$PATH values
+	unsigned long secs = 0, hundredths = 0;
+	if (per_second > 0)
+	{
+		secs = dticks / per_second;
+		hundredths = (dticks % per_second) * 100 / per_second;
+	}
+	os64_write(1, "time: ", 6);
+	put_num(secs);
+	os64_write(1, ".", 1);
+	if (hundredths < 10)
+		os64_write(1, "0", 1);
+	put_num(hundredths);
+	os64_write(1, "s\n", 2);
+}
+
+// Run one ALREADY-EXPANDED command: the trailing `&`, the pipeline split,
+// the builtins, and finally run_pipeline. Returns 1 when the command asks
+// the shell to exit, else 0; the status lands in *last_status ($?).
+static int run_expanded(char *expanded, int *last_status)
+{
 	char *stages[MAX_STAGES];
 
-	// $? is substituted BEFORE the line is split or tokenized, so it
-	// works anywhere on the line: `echo $?`, `cd $?` (weird, legal).
-	expand_line(line, expanded, sizeof(expanded), *last_status);
-
-	// A trailing `&` applies to the WHOLE line, not the last stage:
+	// A trailing `&` applies to its WHOLE command, not the last stage:
 	// `hello | upper &` backgrounds the pipeline, which is why this runs
-	// before split_pipeline rather than inside it.
+	// before split_pipeline rather than inside it. (And per COMMAND, not
+	// per line, since `;` arrived: `slow & ; fast` backgrounds slow and
+	// runs fast immediately — which is what anyone typing it meant.)
 	int background = strip_background(expanded);
 	if (expanded[0] == '\0')
-		return 0;           // the line was nothing but an `&`
+		return 0;           // the command was nothing but an `&`
 
 	int nstages = split_pipeline(expanded, stages, MAX_STAGES);
 
@@ -879,6 +989,93 @@ static int run_line(char *line, int *last_status)
 	}
 
 	*last_status = run_pipeline(stages, nstages, background);
+	return 0;
+}
+
+// Run one command from the list: $-expand it (HERE, per command, so
+// `false ; echo $?` prints 1 — see split_commands), honor a `time` prefix,
+// and hand the rest to run_expanded.
+//
+// `time` is a builtin by the vantage-point rule (the sharpened criterion:
+// a builtin is justified exactly when the command needs the shell's own
+// state or the shell's own POSITION). An external time can only measure
+// what it can spawn — one program. It structurally cannot time a pipeline,
+// a builtin, or a sequence; only the party standing at both ends of the
+// whole job — before dispatch, after the last reap — can. History ran the
+// experiment: V7 shipped /usr/bin/time, csh pulled it inside in 1978
+// because the external kept lying about pipelines, and POSIX finally made
+// `time` a reserved word prefixing a whole pipeline. Measurement lives
+// where orchestration lives. (os32 had both; its gut said the builtin
+// "felt more solid" — forty years of consensus arriving early.)
+static int run_segment(char *seg, int *last_status)
+{
+	char expanded[LINE_MAX + 512];  // headroom for expanded $CWD/$PATH values
+	expand_line(seg, expanded, sizeof(expanded), *last_status);
+
+	if (first_token_is(expanded, "time"))
+	{
+		char *rest = expanded;
+		while (*rest == ' ') rest++;         // the token itself
+		rest += 4;                            // "time"
+		while (*rest == ' ' || *rest == '\t') rest++;
+		if (*rest == '\0')
+		{
+			os64_puts("husk: time: nothing to time\n");
+			*last_status = 1;
+			return 0;
+		}
+
+		os64_ticks_t t0, t1;
+		os64_ticks(&t0);
+		int exiting = run_expanded(rest, last_status);
+		os64_ticks(&t1);
+		// Timing a `&` job measures the LAUNCH (~0.00s) — honest, if
+		// unenlightening; the job's own duration ends at "[1]+ Done",
+		// which no prefix can see. $? passes through untouched: time
+		// reports on the clock, never on the verdict.
+		print_elapsed((unsigned long)(t1.ticks - t0.ticks), t0.per_second);
+		return exiting;
+	}
+
+	return run_expanded(expanded, last_status);
+}
+
+// Everything a line MEANS, top level: split on `;` / `&&` / `||`, then run
+// each command in order with Bourne's short-circuit rules — `&&` runs its
+// right side only if the left succeeded, `||` only if it failed, `;`
+// unconditionally. A SKIPPED command leaves $? untouched, so
+// `false && a || b` runs b: the || tests false's status straight through
+// a's absence, exactly as every shell since 1977 has chained them.
+// Interactive lines and husk.rc lines both come through here, and that is
+// the entire point — the rc file is not a configuration format, it IS the
+// shell, so anything that works at the prompt works there by construction.
+// Returns 1 when any command asks the shell to exit (the rest of the line
+// dies with the shell — what could it print to?), else 0.
+static int run_line(char *line, int *last_status)
+{
+	char *cmds[MAX_CMDS];
+	int seps[MAX_CMDS];
+
+	int ncmds = split_commands(line, cmds, seps, MAX_CMDS);
+	if (ncmds < 0)
+	{
+		os64_puts("husk: too many commands on one line (limit 8)\n");
+		*last_status = 1;
+		return 0;
+	}
+
+	for (int i = 0; i < ncmds; i++)
+	{
+		if (i > 0)
+		{
+			if (seps[i - 1] == SEP_AND && *last_status != 0)
+				continue;
+			if (seps[i - 1] == SEP_OR && *last_status == 0)
+				continue;
+		}
+		if (run_segment(cmds[i], last_status))
+			return 1;
+	}
 	return 0;
 }
 
