@@ -107,11 +107,11 @@ static void print_counts(const wc_counts_t *counts, bool showLines,
                          bool showWords, bool showBytes, const char *name)
 {
     if (showLines)
-        os64_printf("%7lu", counts->lines);
+        os64_printf("%10lu", counts->lines);
     if (showWords)
-        os64_printf("%7lu", counts->words);
+        os64_printf("%10lu", counts->words);
     if (showBytes)
-        os64_printf("%7lu", counts->bytes);
+        os64_printf("%10lu", counts->bytes);
     if (name != NULL)
         os64_printf(" %s", name);
     os64_printf("\n");

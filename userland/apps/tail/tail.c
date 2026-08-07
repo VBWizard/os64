@@ -1,8 +1,17 @@
 #include "os64/os64.h"
 
 #define DEFAULT_TAIL_LINES 20
+#define STREAM_CHUNK_SIZE 32768
 
 static char buf[32768];
+
+typedef struct stream_chunk {
+    struct stream_chunk *previous;
+    struct stream_chunk *next;
+    size_t start;
+    size_t used;
+    char data[STREAM_CHUNK_SIZE];
+} stream_chunk_t;
 
 static int write_all(int32_t handle, const char *data, size_t len)
 {
@@ -100,6 +109,132 @@ static int print_tail(int32_t handle, uint64_t fileSize, uint64_t lineCount)
     return n < 0 ? -1 : 0;
 }
 
+static void free_stream_chunks(stream_chunk_t *first)
+{
+    while (first != NULL)
+    {
+        stream_chunk_t *next = first->next;
+        os64_unmap(first);
+        first = next;
+    }
+}
+
+static int discard_stream_line(stream_chunk_t **first, stream_chunk_t *last)
+{
+    stream_chunk_t *chunk = *first;
+
+    while (chunk != NULL)
+    {
+        for (size_t i = chunk->start; i < chunk->used; i++)
+        {
+            if (chunk->data[i] != '\n')
+                continue;
+
+            chunk->start = i + 1;
+            while (chunk != last && chunk->start == chunk->used)
+            {
+                stream_chunk_t *next = chunk->next;
+                next->previous = NULL;
+                os64_unmap(chunk);
+                chunk = next;
+            }
+            *first = chunk;
+            return 0;
+        }
+
+        if (chunk == last)
+            break;
+
+        stream_chunk_t *next = chunk->next;
+        next->previous = NULL;
+        os64_unmap(chunk);
+        chunk = next;
+        *first = chunk;
+    }
+
+    return -1;
+}
+
+static int print_stream_tail(int32_t handle, uint64_t lineCount)
+{
+    stream_chunk_t *first = NULL;
+    stream_chunk_t *last = NULL;
+    uint64_t retainedNewlines = 0;
+    bool lastWasNewline = false;
+    int result = -1;
+
+    if (lineCount == 0)
+    {
+        int64_t n;
+        while ((n = os64_read(handle, buf, sizeof(buf))) > 0)
+            ;
+        return n < 0 ? -1 : 0;
+    }
+
+    for (;;)
+    {
+        if (last == NULL || last->used == sizeof(last->data))
+        {
+            stream_chunk_t *chunk = os64_map(sizeof(*chunk));
+            if (chunk == NULL)
+                goto done;
+
+            chunk->previous = last;
+            if (last != NULL)
+                last->next = chunk;
+            else
+                first = chunk;
+            last = chunk;
+        }
+
+        int64_t n = os64_read(handle, last->data + last->used,
+                              sizeof(last->data) - last->used);
+        if (n < 0)
+            goto done;
+        if (n == 0)
+            break;
+
+        size_t oldUsed = last->used;
+        last->used += (size_t)n;
+
+        for (size_t i = oldUsed; i < last->used; i++)
+        {
+            lastWasNewline = last->data[i] == '\n';
+            if (!lastWasNewline)
+                continue;
+
+            retainedNewlines++;
+            if (retainedNewlines > lineCount)
+            {
+                if (discard_stream_line(&first, last) < 0)
+                    goto done;
+                retainedNewlines--;
+            }
+        }
+    }
+
+    // A final newline terminates the last real line; without one, the partial
+    // line after the newest delimiter is itself one of the requested lines.
+    if (last != NULL && !lastWasNewline && retainedNewlines == lineCount)
+    {
+        if (discard_stream_line(&first, last) < 0)
+            goto done;
+    }
+
+    for (stream_chunk_t *chunk = first; chunk != NULL; chunk = chunk->next)
+    {
+        if (write_all(OS64_STDOUT, chunk->data + chunk->start,
+                      chunk->used - chunk->start) < 0)
+            goto done;
+    }
+
+    result = 0;
+
+done:
+    free_stream_chunks(first);
+    return result;
+}
+
 static int refresh_file(int32_t *handle, const char *path, int64_t position)
 {
     int32_t replacement = (int32_t)os64_open(path, "r");
@@ -171,12 +306,13 @@ int main(int argc, char **argv)
 
     os64_args_init(&args, argc, argv, specs, 2);
     args.about = "Print the last lines of FILE to standard output.";
-    args.details = "With --follow, wait for and print data appended to FILE.";
+    args.details = "With no FILE, or when FILE is -, read standard input. "
+                   "With --follow, wait for and print data appended to FILE.";
 
-    int32_t parsed = os64_args_parse(&args, "tail [-f] [-n NUM] FILE", &fileToTail, 1);
+    int32_t parsed = os64_args_parse(&args, "tail [-f] [-n NUM] [FILE]", &fileToTail, 1);
     if (parsed == OS64_ARG_HELP)
         os64_exit(0);
-    if (parsed != 1)
+    if (parsed < 0)
         os64_exit(2);
 
     if (lineCountValue != NULL && !parse_line_count(lineCountValue, &lineCount))
@@ -185,7 +321,22 @@ int main(int argc, char **argv)
         os64_exit(2);
     }
 
-    if (os64_stat(fileToTail, &statEntry) < 0)
+    bool useStdin = parsed == 0 || os64_streq(fileToTail, "-");
+
+    if (useStdin && optFollow)
+    {
+        os64_hprintf(OS64_STDERR, "tail: --follow requires a file\n");
+        returnCode = 2;
+    }
+    else if (useStdin)
+    {
+        if (print_stream_tail(OS64_STDIN, lineCount) < 0)
+        {
+            os64_hprintf(OS64_STDERR, "tail: error reading standard input\n");
+            returnCode = 6;
+        }
+    }
+    else if (os64_stat(fileToTail, &statEntry) < 0)
     {
         os64_hprintf(OS64_STDERR, "tail: could not stat %s\n", fileToTail);
         returnCode = 3;
@@ -205,13 +356,15 @@ int main(int argc, char **argv)
         }
     }
 
-    if (!returnCode && print_tail(fileHandle, statEntry.size, lineCount) < 0)
+    if (!returnCode && !useStdin &&
+        print_tail(fileHandle, statEntry.size, lineCount) < 0)
     {
         os64_hprintf(OS64_STDERR, "tail: error reading %s\n", fileToTail);
         returnCode = 6;
     }
 
-    if (!returnCode && optFollow && follow_file(&fileHandle, fileToTail) < 0)
+    if (!returnCode && !useStdin && optFollow &&
+        follow_file(&fileHandle, fileToTail) < 0)
     {
         os64_hprintf(OS64_STDERR, "tail: error following %s\n", fileToTail);
         returnCode = 7;
