@@ -730,12 +730,17 @@ static bool test_elf_loader(void)
 
     scheduler_submit_new_task(elf_task);
 
-    // Poll until the task exits or we time out (~1 second at 100 ticks/sec).
-    for (int i = 0; i < 100 && !elf_task->exited; i++)
+    // Poll until the task exits or we time out. 5 seconds, not 1: the loop
+    // exits the moment the task does, so a healthy boot never feels the
+    // difference — but under SCHED=periodic with few cores a freshly
+    // spawned task can wait whole slices for its first dispatch, and this
+    // family's 1s deadline made elf_loader the suite's flakiest test
+    // (2-core periodic boots halted the OS on it; 4 cores passed).
+    for (int i = 0; i < 500 && !elf_task->exited; i++)
         wait(10);
 
     if (!elf_task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - task did not exit within 1 second\n");
+        printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - task did not exit within 5 seconds\n");
         return false;
     }
 
@@ -793,12 +798,13 @@ static bool test_task_args(void)
 
     scheduler_submit_new_task(task);
 
-    // Poll until the task exits or we time out (~1 second at 100 ticks/sec).
-    for (int i = 0; i < 100 && !task->exited; i++)
+    // Poll until the task exits or we time out (5s — the scheduling-delay
+    // headroom rationale lives in test_elf_loader).
+    for (int i = 0; i < 500 && !task->exited; i++)
         wait(10);
 
     if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_task_args - task did not exit within 1 second\n");
+        printd(DEBUG_TESTS, "\tFAIL: test_task_args - task did not exit within 5 seconds\n");
         return false;
     }
 
@@ -844,12 +850,13 @@ static bool test_dynamic_linking(void)
     }
     scheduler_submit_new_task(task_b);
 
-    // Poll until both tasks exit or we time out (~1 second at 100 ticks/sec).
-    for (int i = 0; i < 100 && (!task_a->exited || !task_b->exited); i++)
+    // Poll until both tasks exit or we time out (5s — the scheduling-delay
+    // headroom rationale lives in test_elf_loader).
+    for (int i = 0; i < 500 && (!task_a->exited || !task_b->exited); i++)
         wait(10);
 
     if (!task_a->exited || !task_b->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task(s) did not exit within 1 second\n");
+        printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task(s) did not exit within 5 seconds\n");
         return false;
     }
 
@@ -942,12 +949,13 @@ static bool test_ring3_syscall_smoke(void)
 
     scheduler_submit_new_task(task);
 
-    // Poll until the task exits or we time out (~1 second at 100 ticks/sec).
-    for (int i = 0; i < 100 && !task->exited; i++)
+    // Poll until the task exits or we time out (5s — the scheduling-delay
+    // headroom rationale lives in test_elf_loader).
+    for (int i = 0; i < 500 && !task->exited; i++)
         wait(10);
 
     if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - task did not exit within 1 second "
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - task did not exit within 5 seconds "
                "(likely died crossing ring 3 <-> ring 0; check STAR/GDT/sysret)\n");
         return false;
     }
@@ -983,11 +991,11 @@ static bool test_ring3_exit_by_return(void)
 
     scheduler_submit_new_task(task);
 
-    for (int i = 0; i < 100 && !task->exited; i++)
+    for (int i = 0; i < 500 && !task->exited; i++)   // 5s: headroom rationale in test_elf_loader
         wait(10);
 
     if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - task did not exit within 1 second "
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - task did not exit within 5 seconds "
                "(trampoline seed or mapping broken? see task_setup_ring3_exit_path)\n");
         return false;
     }
