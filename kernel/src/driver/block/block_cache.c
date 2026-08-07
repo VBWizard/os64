@@ -410,3 +410,10 @@ bool block_cache_is_active(void)
 {
 	return sEnabled && sDeviceCount > 0;
 }
+
+bool block_cache_covers(void *block_device_info)
+{
+	// No lock needed: sDevices only grows, and only during attach — by the
+	// time anyone asks, the registry is settled.
+	return sEnabled && bc_find_device(block_device_info) != NULL;
+}

@@ -3037,42 +3037,55 @@ static bool test_block_cache(void)
         return true;
     }
 
-    // ── Claim 1: second read of a binary is served warm ─────────────────────
-    block_cache_stats_t s0, s1, s2;
+    // The cache attaches to REAL disks only (NVMe/SATA) — so on a
+    // RAMDisk-root boot (the P5's self-contained ISO) it can be ACTIVE,
+    // interposed on the machine's internal drive, while the root this test
+    // reads from never touches it. Each claim therefore runs only when the
+    // cache covers the specific device it exercises; "active" alone asked
+    // the wrong question (the P5 found this, 2026-08-07: honest zero hits
+    // reported as a failure).
+    bool rootCovered = block_cache_covers(kRootFilesystem->block_device_info);
+
     char *chunk = kmalloc(65536);
     if (chunk == NULL)
         TEST_FAIL("kmalloc for read chunk failed");
 
-    for (int pass = 0; pass < 2; pass++)
+    // ── Claim 1: second read of a binary is served warm ─────────────────────
+    uint64_t missesCold = 0, missesWarm = 0, hitsWarm = 0;
+    if (rootCovered)
     {
-        block_cache_get_stats(pass == 0 ? &s0 : &s1);
-        vfs_file_t *f = NULL;
-        if (kRootFilesystem->fops->open(&f, "/bin/top", "r", kRootFilesystem) != 0 || f == NULL)
+        block_cache_stats_t s0, s1, s2;
+        for (int pass = 0; pass < 2; pass++)
+        {
+            block_cache_get_stats(pass == 0 ? &s0 : &s1);
+            vfs_file_t *f = NULL;
+            if (kRootFilesystem->fops->open(&f, "/bin/top", "r", kRootFilesystem) != 0 || f == NULL)
+            {
+                kfree(chunk);
+                TEST_FAIL("open /bin/top failed");
+            }
+            int n;
+            while ((n = f->fops->read(f, chunk, 65536)) > 0)
+                ;
+            f->fops->close(f);
+        }
+        block_cache_get_stats(&s2);
+
+        missesCold = s1.misses - s0.misses;
+        missesWarm = s2.misses - s1.misses;
+        hitsWarm   = s2.hits - s1.hits;
+        if (hitsWarm == 0)
         {
             kfree(chunk);
-            TEST_FAIL("open /bin/top failed");
+            TEST_FAIL("warm pass produced zero cache hits");
         }
-        int n;
-        while ((n = f->fops->read(f, chunk, 65536)) > 0)
-            ;
-        f->fops->close(f);
-    }
-    block_cache_get_stats(&s2);
-
-    uint64_t missesCold = s1.misses - s0.misses;
-    uint64_t missesWarm = s2.misses - s1.misses;
-    uint64_t hitsWarm   = s2.hits - s1.hits;
-    if (hitsWarm == 0)
-    {
-        kfree(chunk);
-        TEST_FAIL("warm pass produced zero cache hits");
-    }
-    if (missesWarm > missesCold / 2)
-    {
-        // The warm pass should be nearly all hits; logd traffic on the data
-        // disk can add a stray miss or two, hence /2 rather than zero.
-        kfree(chunk);
-        TEST_FAIL("warm pass missed nearly as much as the cold one");
+        if (missesWarm > missesCold / 2)
+        {
+            // The warm pass should be nearly all hits; logd traffic on the data
+            // disk can add a stray miss or two, hence /2 rather than zero.
+            kfree(chunk);
+            TEST_FAIL("warm pass missed nearly as much as the cold one");
+        }
     }
 
     // ── Claim 2: a write kills the lines it touches ──────────────────────────
@@ -3081,10 +3094,50 @@ static bool test_block_cache(void)
     // /home (the writable FAT data disk); skips gracefully if absent.
     const char *tail = NULL;
     vfs_filesystem_t *homefs = vfs_resolve_mount("/home/bctest.tmp", &tail);
-    if (homefs == NULL || homefs->fops->write == NULL)
+
+    // The parent directory must actually EXIST on whatever filesystem won
+    // the resolve: when no data disk is attached, "/home/..." falls through
+    // to the root fs, which may have no /home at all — a boot shape, not a
+    // bug (first seen on a bare FAT-root run, 2026-08-07). Probe it, so a
+    // create failure BELOW stays a real tripwire (it caught the FF_FS_LOCK
+    // table exhaustion the same day this probe was added).
+    bool homeParentExists = false;
+    if (homefs != NULL && homefs->fops->write != NULL)
+    {
+        char parent[64];
+        int lastSlash = -1;
+        int len = 0;
+        while (tail[len] != '\0' && len < 62)
+        {
+            parent[len] = tail[len];
+            if (tail[len] == '/')
+                lastSlash = len;
+            len++;
+        }
+        if (lastSlash <= 0)
+            homeParentExists = true;   // tail lives at the mount's root
+        else if (homefs->dops != NULL && homefs->dops->stat != NULL)
+        {
+            parent[lastSlash] = '\0';
+            os64_dirent_t pe;
+            homeParentExists =
+                homefs->dops->stat(parent, &pe, homefs) == 0 &&
+                (pe.flags & OS64_DE_DIR) != 0;
+        }
+    }
+
+    if (homefs == NULL || homefs->fops->write == NULL || !homeParentExists ||
+        !block_cache_covers(homefs->block_device_info))
     {
         kfree(chunk);
-        printd(DEBUG_TESTS, "\tPASS: test_block_cache (hit rate only — no writable /home for the coherence half; warm hits %lu)\n",
+        if (!rootCovered)
+        {
+            // Cache is interposed somewhere, just under neither filesystem
+            // this test can reach. Nothing exercised — say so, don't "pass".
+            printd(DEBUG_TESTS, "\tSKIP: test_block_cache (cache active but covers neither the root nor /home)\n");
+            return true;
+        }
+        printd(DEBUG_TESTS, "\tPASS: test_block_cache (hit rate only — no cached writable /home for the coherence half; warm hits %lu)\n",
                hitsWarm);
         return true;
     }

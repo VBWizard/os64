@@ -77,4 +77,11 @@ void block_cache_get_stats(block_cache_stats_t *out);
 // failure).
 bool block_cache_is_active(void);
 
+// True when the cache is enabled AND interposed on THIS device (pass the
+// block_device_info_t* — the universal arg0, typed void* here because the
+// struct is vfs.h's and anonymous). Active alone answers the wrong question
+// on a RAMDisk-root boot: the machine's internal disk is attached, the root
+// the caller reads from is not (first seen: P5, 2026-08-07).
+bool block_cache_covers(void *block_device_info);
+
 #endif // BLOCK_CACHE_H
