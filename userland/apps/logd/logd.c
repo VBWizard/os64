@@ -58,6 +58,18 @@ int main(int argc, char **argv)
 
 	// "a" = append: every write lands at the end, across restarts, so the
 	// file accumulates the machine's history rather than the last boot's.
+	//
+	// HELD OPEN ONLY WHILE BUSY (since 2026-08-07, the day FF_FS_LOCK
+	// landed): FatFs's lock control makes a write-open EXCLUSIVE, so a
+	// permanently-held log meant `cat os64.log` returned FR_LOCKED for the
+	// whole uptime — the log was unreadable precisely while it was most
+	// interesting. Now the file opens at the first batch of a busy streak
+	// and closes on the first EMPTY poll: under a firehose it stays open
+	// (batched economics preserved — see the sync discussion below), and
+	// on a quiet system it is closed within one idle poll of the last
+	// line, so readers get in. Bonus: rm'ing the log during a quiet
+	// moment now SUCCEEDS (nothing holds it) and the next streak simply
+	// recreates it — log rotation by accident of honesty.
 	int64_t fd = os64_open(path, "a");
 	if (fd < 0)
 	{
@@ -76,6 +88,10 @@ int main(int argc, char **argv)
 	                          t.ticks, t.per_second);
 	os64_write((int32_t)fd, line, (size_t)n);
 	os64_sync((int32_t)fd);   // the banner should be visible immediately
+	// Banner delivered and the path proven writable — release the file
+	// until there is something to say (the open-while-busy policy above).
+	os64_close((int32_t)fd);
+	fd = -1;
 
 	os64_printf("logd: appending kernel log to %s\n", path);
 
@@ -95,7 +111,8 @@ int main(int argc, char **argv)
 			// would each get a random half). A second logd idling here
 			// forever would just be a mystery process, so say why and go.
 			os64_printf("logd: the kernel log is already claimed by another reader — exiting\n");
-			os64_close((int32_t)fd);
+			if (fd >= 0)
+				os64_close((int32_t)fd);
 			return 1;
 		}
 		if (got <= 0)
@@ -103,6 +120,17 @@ int main(int argc, char **argv)
 			// Nothing waiting (or a refusal AFTER we attached — transient
 			// kernel unhappiness; sleeping is still the right move, and
 			// the kernel resumes serial by itself if we stay quiet).
+			//
+			// Going idle: commit and RELEASE the file (open-while-busy —
+			// see the fd comment at the top). The close carries the
+			// directory-entry commit with it, so the sync clock below
+			// only matters within a busy streak.
+			if (fd >= 0)
+			{
+				os64_sync((int32_t)fd);
+				os64_close((int32_t)fd);
+				fd = -1;
+			}
 			os64_sleep(IDLE_SLEEP_MS);
 			continue;
 		}
@@ -151,6 +179,22 @@ int main(int argc, char **argv)
 		// on the wire instead of vanishing into a full disk.
 		if (used > 0)
 		{
+			// First batch of a busy streak: take the file back (it was
+			// released at the last idle poll — open-while-busy policy).
+			// A failed OPEN gets the same treatment as a failed write:
+			// leave loudly so the kernel reclaims serial, never consume
+			// entries we can't land.
+			if (fd < 0)
+			{
+				fd = os64_open(path, "a");
+				if (fd < 0)
+				{
+					os64_printf("logd: cannot reopen %s — releasing the log sink\n", path);
+					return 1;
+				}
+				os64_ticks(&t);
+				lastSync = t.ticks;
+			}
 			int64_t wrote = os64_write((int32_t)fd, gOut, used);
 			if (wrote != (int64_t)used)
 			{
@@ -178,7 +222,7 @@ int main(int argc, char **argv)
 		// instead of by traffic — the busier the log, the more the cost
 		// amortizes, which is exactly backwards from where it was.
 		os64_ticks(&t);
-		if (t.ticks - lastSync >= t.per_second)
+		if (fd >= 0 && t.ticks - lastSync >= t.per_second)
 		{
 			os64_sync((int32_t)fd);
 			lastSync = t.ticks;
