@@ -42,6 +42,7 @@
 #include "driver/system/mouse.h"
 #include "block_device.h"
 #include "ramdisk.h"
+#include "driver/block/block_cache.h"   // the buffer cache — between the filesystems and the disks
 #include "driver/system/usb/xhci.h"
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
@@ -211,6 +212,16 @@ void kernel_init()
 		printf("Initializing NVME: ");
 		init_NVME();
 	}
+
+	// The buffer cache goes up AFTER the storage drivers have registered
+	// their devices and ops (it interposes on those ops in place) and
+	// BEFORE anything mounts (though mount order doesn't actually matter —
+	// every holder shares the driver's one ops struct). Chris's pattern,
+	// Thompson's 1975 idea: the cache lives between the filesystems and
+	// the disks, and neither side can tell it's there.
+	block_cache_init();
+	block_cache_attach_all();
+
 	detect_cpu();
 	// The pause has a NAME on the glass: a silent 15-second stare at a
 	// counter reads as a hang to anyone watching a boot.

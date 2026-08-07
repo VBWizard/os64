@@ -23,6 +23,8 @@ extern char kRootPartUUID[];
 extern char kTZString[];
 extern int kTSCCalibrationSeconds;
 extern int kMaxActiveCores;
+extern int kBlockCacheCapMB;      // block_cache.c — CACHE=<MB>
+extern bool kBlockCacheDisabled;  // block_cache.c — NOCACHE
 bool kEnableAHCI = true, kEnableNVME = true;
 // Off by default: the RAMDisk only activates when a boot entry passes BOTH
 // the os64_disk.img module and the RAMDISK flag (see ramdisk.h).
@@ -155,9 +157,18 @@ static cmdopt_t cmdopts[] = {
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
     {"SCHED", OPT_STRING, kSchedParam, 0, sizeof(kSchedParam)},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
+    // The buffer cache's two knobs (block_cache.h): CACHE=<MB> sizes the
+    // read-cache budget (default 64; 0 = off), NOCACHE is the diagnostic
+    // flashlight — same doctrine as SCHED=periodic, every new default keeps
+    // an honest off-switch.
+    {"CACHE", OPT_INT, &kBlockCacheCapMB, 0, 0},
+    {"NOCACHE", OPT_BOOL, &kBlockCacheDisabled, true, 0},
     {"NOUSB", OPT_BOOL, &kEnableUSB, false, 0},
     {"NONET", OPT_BOOL, &kEnableNet, false, 0},
     {"DEBUG_NET", OPT_UINT128_OR, &kDebugLevel, DEBUG_NET, 0},
+    // The NVMe command-stream histogram (nvme.c iostat) rides this level —
+    // boot with DEBUG_NVME, run the workload, read the log.
+    {"DEBUG_NVME", OPT_UINT128_OR, &kDebugLevel, DEBUG_NVME, 0},
     // Static IPv4 config, dotted-quad (e.g. IP=192.168.1.50). Parsed by
     // ipv4_config_init; a malformed value falls back to the default.
     {"IP", OPT_STRING, kNetIPString, 0, 20},

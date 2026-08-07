@@ -858,6 +858,44 @@ static void free_prp_list(uintptr_t listPage, uint32_t prpCount)
     kfree((void*)listPage); // last (or only) page
 }
 
+// ── Command-stream telemetry (2026-08-06 — the queue-depth court's
+// discovery phase). Before teaching the driver to keep multiple commands
+// in flight, MEASURE what the filesystems actually hand it: if writes
+// arrive one sector at a time (the 33KB/s copy's suspected shape), the fix
+// belongs a layer up before queue depth buys anything; if they arrive in
+// runs, pipelining pays immediately. Buckets are command sizes in BLOCKS.
+// A summary prints via printd(DEBUG_NVME) every 8192 commands — silent on
+// a normal boot, a histogram on a diagnostic one.
+typedef struct {
+	uint64_t cmds, blocks;
+	uint64_t sz1, sz2_8, sz9_127, sz128p;
+} nvme_iostat_t;
+nvme_iostat_t kNvmeReadStats = {0};
+nvme_iostat_t kNvmeWriteStats = {0};
+
+static void nvme_iostat_note(bool isWrite, uint32_t blockCount)
+{
+	nvme_iostat_t *s = isWrite ? &kNvmeWriteStats : &kNvmeReadStats;
+	s->cmds++;
+	s->blocks += blockCount;
+	if (blockCount <= 1)        s->sz1++;
+	else if (blockCount <= 8)   s->sz2_8++;
+	else if (blockCount <= 127) s->sz9_127++;
+	else                        s->sz128p++;
+
+	uint64_t total = kNvmeReadStats.cmds + kNvmeWriteStats.cmds;
+	if ((total & 8191) == 0)
+		printd(DEBUG_NVME,
+		       "NVME iostat: R %lu cmds/%lu blks [1:%lu 2-8:%lu 9-127:%lu 128+:%lu] "
+		       "W %lu cmds/%lu blks [1:%lu 2-8:%lu 9-127:%lu 128+:%lu]\n",
+		       kNvmeReadStats.cmds, kNvmeReadStats.blocks,
+		       kNvmeReadStats.sz1, kNvmeReadStats.sz2_8,
+		       kNvmeReadStats.sz9_127, kNvmeReadStats.sz128p,
+		       kNvmeWriteStats.cmds, kNvmeWriteStats.blocks,
+		       kNvmeWriteStats.sz1, kNvmeWriteStats.sz2_8,
+		       kNvmeWriteStats.sz9_127, kNvmeWriteStats.sz128p);
+}
+
 static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer, bool isWrite) {
     if (controller->maxBytesPerTransfer == 0)
         panic("nvme_do_io: controller->maxBytesPerTransfer = 0\n");
@@ -875,6 +913,8 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
         uint32_t prpCount = transferLength / PAGE_SIZE;
         if (transferLength % PAGE_SIZE)
             prpCount++;
+
+        nvme_iostat_note(isWrite, blockCount);
 
         char* dmaBuffer = isWrite ? controller->dmaWriteBuffer : controller->dmaReadBuffer;
 

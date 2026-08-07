@@ -24,6 +24,7 @@
 #include "kernel.h"   // kTicksSinceStart — the TCP tests time their failures
 #include "driver/filesystem/vfs/vfs.h"
 #include "driver/filesystem/ext2/ext2_vfs.h"   // ext2_fops/ext2_dops (real-partition test)
+#include "driver/block/block_cache.h"          // stats + is_active (buffer-cache test)
 #include "shared_object.h"
 #include "env.h"
 #include "sprintf.h"
@@ -2980,6 +2981,165 @@ static bool test_env_capacity_full(void)
     return true;
 }
 
+// SYSCALL_SYNC_ALL end to end — the ping.log story, run as a fixture: write
+// a file, DON'T close it, prove that after os64_sync_all() a fresh stat
+// reports the true length anyway. The fixture (synctest.c) carries the step
+// codes; 0x05CC0001 means the boot has no writable /home, which is a
+// configuration, not a failure.
+static bool test_ring3_sync_all(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_sync_all (no root filesystem)\n");
+        return true;
+    }
+
+    task_t *task = test_spawn("/bin/synctest", 0, NULL, false);
+    if (task == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sync_all - task_create failed\n");
+        return false;
+    }
+    scheduler_submit_new_task(task);
+
+    for (int i = 0; i < 500 && !task->exited; i++)
+        wait(10);
+
+    if (!task->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sync_all - fixture still running after 5s\n");
+        return false;
+    }
+    if (task->retVal == 0x05CC0001UL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ring3_sync_all (no writable mount at /home)\n");
+        return true;
+    }
+    if (task->retVal != 0x05CC0000UL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sync_all - retVal=0x%lx, expected 0x05CC0000 "
+               "(step codes in synctest.c)\n", task->retVal);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ring3_sync_all (an unclosed file told the truth after the broom)\n");
+    return true;
+}
+
+// The buffer cache, two claims tested (block_cache.h carries the design):
+// (1) HIT RATE — reading the same file twice serves the second pass mostly
+// from memory; (2) COHERENCE, the one that matters more — a write through
+// the shim INVALIDATES cached lines, so a reader can never be handed
+// yesterday's bytes. A cache that's fast and stale is a bug with good PR.
+static bool test_block_cache(void)
+{
+    if (!block_cache_is_active()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_block_cache (cache disabled or no cacheable device)\n");
+        return true;
+    }
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_block_cache (no root filesystem)\n");
+        return true;
+    }
+
+    // ── Claim 1: second read of a binary is served warm ─────────────────────
+    block_cache_stats_t s0, s1, s2;
+    char *chunk = kmalloc(65536);
+    if (chunk == NULL)
+        TEST_FAIL("kmalloc for read chunk failed");
+
+    for (int pass = 0; pass < 2; pass++)
+    {
+        block_cache_get_stats(pass == 0 ? &s0 : &s1);
+        vfs_file_t *f = NULL;
+        if (kRootFilesystem->fops->open(&f, "/bin/top", "r", kRootFilesystem) != 0 || f == NULL)
+        {
+            kfree(chunk);
+            TEST_FAIL("open /bin/top failed");
+        }
+        int n;
+        while ((n = f->fops->read(f, chunk, 65536)) > 0)
+            ;
+        f->fops->close(f);
+    }
+    block_cache_get_stats(&s2);
+
+    uint64_t missesCold = s1.misses - s0.misses;
+    uint64_t missesWarm = s2.misses - s1.misses;
+    uint64_t hitsWarm   = s2.hits - s1.hits;
+    if (hitsWarm == 0)
+    {
+        kfree(chunk);
+        TEST_FAIL("warm pass produced zero cache hits");
+    }
+    if (missesWarm > missesCold / 2)
+    {
+        // The warm pass should be nearly all hits; logd traffic on the data
+        // disk can add a stray miss or two, hence /2 rather than zero.
+        kfree(chunk);
+        TEST_FAIL("warm pass missed nearly as much as the cold one");
+    }
+
+    // ── Claim 2: a write kills the lines it touches ──────────────────────────
+    // Sequence: write A, read it (now cached), overwrite with B, read again.
+    // A stale cache serves A; a correct one re-fetches and serves B. Runs on
+    // /home (the writable FAT data disk); skips gracefully if absent.
+    const char *tail = NULL;
+    vfs_filesystem_t *homefs = vfs_resolve_mount("/home/bctest.tmp", &tail);
+    if (homefs == NULL || homefs->fops->write == NULL)
+    {
+        kfree(chunk);
+        printd(DEBUG_TESTS, "\tPASS: test_block_cache (hit rate only — no writable /home for the coherence half; warm hits %lu)\n",
+               hitsWarm);
+        return true;
+    }
+
+    static const char contentA[] = "the cache must never lie: A";
+    static const char contentB[] = "the cache must never lie: B";
+    vfs_file_t *w = NULL;
+
+    if (homefs->fops->open(&w, tail, "w", homefs) != 0 || w == NULL)
+    {
+        kfree(chunk);
+        TEST_FAIL("coherence: create failed");
+    }
+    w->fops->write(w, contentA, sizeof(contentA));
+    w->fops->close(w);
+
+    vfs_file_t *r = NULL;
+    if (homefs->fops->open(&r, tail, "r", homefs) != 0 || r == NULL)
+    {
+        kfree(chunk);
+        TEST_FAIL("coherence: first read-open failed");
+    }
+    r->fops->read(r, chunk, 256);
+    r->fops->close(r);
+
+    if (homefs->fops->open(&w, tail, "w", homefs) != 0 || w == NULL)
+    {
+        kfree(chunk);
+        TEST_FAIL("coherence: rewrite-open failed");
+    }
+    w->fops->write(w, contentB, sizeof(contentB));
+    w->fops->close(w);
+
+    if (homefs->fops->open(&r, tail, "r", homefs) != 0 || r == NULL)
+    {
+        kfree(chunk);
+        TEST_FAIL("coherence: second read-open failed");
+    }
+    int got = r->fops->read(r, chunk, 256);
+    r->fops->close(r);
+    if (homefs->fops->rm != NULL)
+        homefs->fops->rm(tail, homefs);   // tidy; failure is not a verdict
+
+    if (got < (int)sizeof(contentB) || memcmp(chunk, contentB, sizeof(contentB)) != 0)
+    {
+        kfree(chunk);
+        TEST_FAIL("coherence: read-after-write returned STALE data — invalidation broken");
+    }
+
+    kfree(chunk);
+    printd(DEBUG_TESTS, "\tPASS: test_block_cache (warm hits %lu, warm misses %lu vs cold %lu; write invalidation honest)\n",
+           hitsWarm, missesWarm, missesCold);
+    return true;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void register_builtin_tests(void)
@@ -3040,6 +3200,8 @@ static void register_builtin_tests(void)
     test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
     test_register("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
+    test_register("ring3_sync_all", test_ring3_sync_all, TEST_PHASE_POSTBOOT);
+    test_register("block_cache", test_block_cache, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)
