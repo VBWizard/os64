@@ -40,4 +40,30 @@ static inline void spinlock_release_irqrestore(spinlock_t *lock, uint64_t flags)
 		__asm__ volatile("sti" ::: "memory");
 }
 
+// ── The PLAIN variant: interrupts stay ON ────────────────────────────────────
+// For locks that are NEVER taken from an interrupt or fault path AND may be
+// held across real I/O. The irqsave variant above is WRONG for those: disk
+// completion paths read kTicksSinceStart, and a core that disables interrupts
+// around an NVMe wait freezes its own tick clock and times out against a
+// stopped watch (the e1000 probe learned the storm-flavored version of this
+// lesson the day it was born — 2026-08-06, twice in one day).
+//
+// The discipline is the mirror image of irqsave's: if ANY acquirer of a given
+// lock can run in interrupt context, every acquirer must use irqsave; a plain
+// lock's acquirers must ALL be task/kernel-thread context. First customer:
+// the VFS open-file registry (open/close/sync-all — syscall context only).
+// Note a preempted holder leaves waiters spinning through their quantum —
+// acceptable while critical sections are short and callers are rare; a
+// sleeping mutex is the upgrade path if that ever stops being true.
+static inline void spinlock_acquire(spinlock_t *lock)
+{
+	while (__sync_lock_test_and_set(lock, 1))
+		__builtin_ia32_pause();
+}
+
+static inline void spinlock_release(spinlock_t *lock)
+{
+	__sync_lock_release(lock);
+}
+
 #endif // SPINLOCK_H

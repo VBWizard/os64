@@ -14,8 +14,11 @@
 #
 # Character map: QEMU sendkey wants key NAMES, not characters. Lowercase
 # letters and digits pass through; the punctuation husk actually needs is
-# mapped below. Uppercase/shifted symbols are not implemented — add a
-# shift-<key> mapping the day a fixture needs one.
+# mapped below. Shifted symbols ride sendkey's shift-<key> chords — added
+# 2026-08-06 when `grep sync_all` silently typed "syncall" (underscore had
+# no mapping) and the sync(8) verification chased a phantom for a minute.
+# Uppercase letters remain unmapped: nothing in husk is case-sensitive
+# enough to have needed them yet.
 
 port="$1"
 shift
@@ -39,6 +42,19 @@ keyname() {
         '[') echo bracket_left ;;
         ']') echo bracket_right ;;
         '`') echo grave_accent ;;
+        '_') echo shift-minus ;;
+        '|') echo shift-backslash ;;
+        '>') echo shift-dot ;;
+        '<') echo shift-comma ;;
+        '"') echo shift-apostrophe ;;
+        ':') echo shift-semicolon ;;
+        '?') echo shift-slash ;;
+        '!') echo shift-1 ;;
+        '$') echo shift-4 ;;
+        '&') echo shift-7 ;;
+        '*') echo shift-8 ;;
+        '(') echo shift-9 ;;
+        ')') echo shift-0 ;;
         [a-z0-9]) echo "$1" ;;
         *) return 1 ;;
     esac

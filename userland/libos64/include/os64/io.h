@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>                // os64_linereader_t carries an eof flag
 #include "os64/syscall_numbers.h"   // OS64_SEEK_* — the seek() vocabulary
 #include "os64/dirent.h"            // os64_dirent_t — what readdir() delivers
 
@@ -102,6 +103,45 @@ int64_t os64_read_for(int32_t handle, void *buf, size_t len, uint64_t timeout_ms
 // whether it can seek; callers never care.
 int64_t os64_readline(int32_t handle, char *buf, size_t cap);
 
+// ── os64_linereader — buffered line reading for FILES (2026-08-06) ──────────
+//
+// os64_readline above is priced for SMALL files: its seek-back honesty costs
+// one backward seek per line, and its chunk is re-read from disk each call.
+// The day grep met a 46MB log, both bills came due at once — on FAT a
+// backward seek walks the cluster chain from the START of the file
+// (O(position) per line, O(n²) per file: 4,320 lines in sixty seconds, and
+// decelerating), and on ext2 the re-reads hammered the same disk blocks
+// hundreds of times each, because os64 has no page cache to absorb them.
+// One disease, two pathologies; the cure is the one Mike Lesk shipped in
+// 1976 as the portable I/O library (stdio to you): read big chunks ONCE,
+// forward only, dispense lines from memory, never seek.
+//
+// The contract is os64_readline's exactly — same 1/0/negative returns, same
+// \r\n handling, same truncate-and-consume rule for over-long lines — so a
+// readline loop converts by swapping the open and the call. The reader OWNS
+// its handle: it reads ahead, so the handle's position is meaningless to
+// anyone else; get lines from the reader or bytes from your own handle,
+// never both. For pipes/console keep os64_readline — bytewise is CORRECT
+// there, and 64KB of read-ahead would steal the next reader's input.
+//
+//     os64_linereader_t lr;
+//     if (os64_linereader_open(&lr, path) < 0) ...;
+//     while (os64_linereader_line(&lr, line, sizeof line) == 1)
+//         ...;
+//     os64_linereader_close(&lr);
+typedef struct {
+    int32_t handle;    // owned by the reader from open to close
+    char   *chunk;     // the read-ahead buffer (os64_map'd)
+    size_t  cap;       // its capacity
+    size_t  len;       // valid bytes currently in it
+    size_t  pos;       // consumption cursor into it
+    bool    eof;       // the underlying file has no more bytes
+} os64_linereader_t;
+
+int64_t os64_linereader_open(os64_linereader_t *lr, const char *path);
+int64_t os64_linereader_line(os64_linereader_t *lr, char *buf, size_t cap);
+void    os64_linereader_close(os64_linereader_t *lr);
+
 // Open the file at `path` (absolute, on the root filesystem) and return a
 // handle, or negative on error (no such file, bad mode, out of handles).
 // `mode` is a one-letter string:
@@ -182,6 +222,15 @@ int64_t os64_close(int32_t handle);
 // it open — a log daemon, a status file — needs this; a program that
 // writes and closes does not.
 int64_t os64_sync(int32_t handle);
+
+// Sync EVERYTHING: every open file of every task, on every mount — the
+// engine sync(1) is built on, doing since 1971 what os64_sync above does
+// for one handle. This is the only way to make ANOTHER program's still-open
+// file readable at true length (only the kernel can reach its handles);
+// the canonical customer is `cat ping.log` while ping is still running.
+// Returns the number of files synced (0 on an idle system is honest, not
+// an error), negative if any individual sync failed.
+int64_t os64_sync_all(void);
 
 // Remove a file OR an empty directory (relative paths resolve against the
 // cwd) — os64's one removal verb; there is no rmdir, by design (Plan 9's

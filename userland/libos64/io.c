@@ -242,6 +242,11 @@ int64_t os64_sync(int32_t handle)
     return (long)os64_syscall1(SYSCALL_SYNC, (uint64_t)(int64_t)handle);
 }
 
+int64_t os64_sync_all(void)
+{
+    return (int64_t)os64_syscall0(SYSCALL_SYNC_ALL);
+}
+
 // Remove a file or an empty directory. Relative paths resolve against the
 // cwd, like open's.
 //

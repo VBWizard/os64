@@ -43,7 +43,7 @@ BIN     := $(CURDIR)/bin
 OBJ     := $(CURDIR)/obj
 
 # libos64 objects + the launch stub link into every app.
-RUNTIME_SRCS := start/launch.S libos64/io.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c
+RUNTIME_SRCS := start/launch.S libos64/io.c libos64/linereader.c libos64/proc.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c
 RUNTIME_OBJS := $(patsubst %,$(OBJ)/%.o,$(RUNTIME_SRCS))
 
 # more and less are two policies over one file-pager engine.  Keeping that

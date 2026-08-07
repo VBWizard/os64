@@ -129,6 +129,8 @@ static uint64_t syscall_thread_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -185,6 +187,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
+	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
 };
 
 uint64_t _syscall_dispatch(
@@ -764,6 +767,15 @@ static void file_do_sync(void *arg)
 	vfs_file_t *f = p->file;
 	p->result = (f->fops != NULL && f->fops->sync != NULL)
 	                ? f->fops->sync(f) : -1;
+}
+
+// The sync(1) engine's kernel-context half: no handle, no file — the VFS
+// open-file registry walk reaches EVERY task's open files, which is the
+// entire point (only the kernel can sync a handle some other task holds).
+static void file_do_sync_all(void *arg)
+{
+	file_io_params_t *p = (file_io_params_t *)arg;
+	p->result = (long)vfs_sync_all();
 }
 
 static void file_do_seek(void *arg)
@@ -3067,4 +3079,33 @@ static uint64_t syscall_sync(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	long rc = fp->result;
 	kfree(fp);
 	return (rc < 0) ? SYSCALL_RESULT_INVALID : 0;
+}
+
+// SYSCALL_SYNC_ALL — sync(1)'s engine. Takes nothing, syncs every open file
+// on every mount via the VFS registry, returns the count synced (0 is an
+// honest answer on an idle system). Same kernel-context recipe as the
+// per-handle sync above, for the same reason: the FAT layer's DMA mappings
+// live under kKernelPML4.
+static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	file_io_params_t *fp = kmalloc(sizeof(*fp));
+	if (fp == NULL)
+		return SYSCALL_RESULT_INVALID;
+	fp->file = NULL;
+	fp->buf = NULL;
+	fp->len = 0;
+	fp->result = -1;
+	call_in_kernel_context(file_do_sync_all, fp);
+
+	long rc = fp->result;
+	kfree(fp);
+	return (rc < 0) ? SYSCALL_RESULT_INVALID : (uint64_t)rc;
 }

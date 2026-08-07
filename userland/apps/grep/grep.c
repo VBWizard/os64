@@ -131,6 +131,48 @@ static void grep_handle(int32_t handle, const char *path,
     }
 }
 
+// The FILE gait (2026-08-06): os64_linereader reads 64KB chunks forward and
+// never seeks, where os64_readline's per-line seek-back went quadratic on
+// FAT and re-read the same disk blocks by the hundreds on ext2 — the 46MB
+// os64.log took the pattern hunter from seconds-per-file to sixty seconds
+// per 4,320 lines before this. grep_handle above stays for STANDARD INPUT,
+// where byte-at-a-time is not slow-motion caution but CORRECTNESS: a chunk
+// read from a pipe would steal bytes belonging to whoever reads it next.
+static void grep_file(const char *path, grep_options_t *options)
+{
+    os64_linereader_t reader;
+    if (os64_linereader_open(&reader, path) < 0)
+    {
+        os64_hprintf(OS64_STDERR, "grep: cannot open '%s'\n", path);
+        options->error = true;
+        return;
+    }
+
+    char line[GREP_LINE_MAX];
+    uint64_t lineNumber = 0;
+    int64_t result;
+
+    while ((result = os64_linereader_line(&reader, line, sizeof(line))) == 1)
+    {
+        lineNumber++;
+        bool matched = line_matches(line, options);
+        if (options->invert)
+            matched = !matched;
+        if (matched)
+        {
+            options->found = true;
+            print_match(path, lineNumber, line, options);
+        }
+    }
+
+    if (result < 0)
+    {
+        os64_hprintf(OS64_STDERR, "grep: error reading '%s'\n", path);
+        options->error = true;
+    }
+    os64_linereader_close(&reader);
+}
+
 static void grep_path(const char *path, grep_options_t *options, uint32_t depth)
 {
     os64_dirent_t entry = {0};
@@ -143,15 +185,7 @@ static void grep_path(const char *path, grep_options_t *options, uint32_t depth)
 
     if ((entry.flags & OS64_DE_DIR) == 0)
     {
-        int32_t handle = (int32_t)os64_open(path, "r");
-        if (handle < 0)
-        {
-            os64_hprintf(OS64_STDERR, "grep: cannot open '%s'\n", path);
-            options->error = true;
-            return;
-        }
-        grep_handle(handle, path, options);
-        os64_close(handle);
+        grep_file(path, options);
         return;
     }
 

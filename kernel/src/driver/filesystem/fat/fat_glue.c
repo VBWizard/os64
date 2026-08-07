@@ -294,8 +294,10 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 	*vfs_file = kmalloc(sizeof(vfs_file_t));
 	if (fat_file == NULL || *vfs_file == NULL)
 	{
-		// NOTE: kfree(NULL) is NOT a no-op in this kernel — free_memory can't
-		// find address 0 and panics — so each free gets its own guard.
+		// NOTE: these guards predate 2026-08-06, when kfree(NULL) genuinely
+		// panicked (free_memory couldn't find address 0). kfree is a proper
+		// C-convention no-op on NULL now — the guards stay as harmless
+		// belt-and-suspenders, but new code need not copy them.
 		if (fat_file != NULL)
 			kfree(fat_file);
 		if (*vfs_file != NULL)
@@ -321,6 +323,12 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 	(*vfs_file)->f_path = (void*)path;
 	(*vfs_file)->fops = vfs_fs != NULL ? vfs_fs->fops : &fat_fops;
 	(*vfs_file)->owner = vfs_fs;
+
+	// Thread onto the VFS open-file registry — what lets sync(1) reach this
+	// file while it's still open. FAT is the registry's whole reason to
+	// exist: until f_sync/f_close, a written file's true length lives only
+	// in this FIL, and every fresh open reads the stale directory entry.
+	vfs_openfile_register(*vfs_file);
     return 0;
 }
 
@@ -350,6 +358,10 @@ static int fat_write(vfs_file_t* vfs_file, const void* buffer, size_t size) {
 // FAT close wrapper
 static int fat_close(vfs_file_t* vfs_file) {
     FIL* fat_file = (FIL*)vfs_file->handle;
+
+	// Off the open-file registry FIRST — a concurrent vfs_sync_all must
+	// never find a file whose FIL is about to be freed.
+	vfs_openfile_unregister(vfs_file);
 
     if (f_close(fat_file) != FR_OK) {
         return -1; // Error

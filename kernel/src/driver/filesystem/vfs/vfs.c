@@ -14,6 +14,7 @@
 #include "fat_glue.h"
 #include "serial_logging.h"
 #include "BasicRenderer.h"   // printf — mount-sweep lines belong on the glass too
+#include "spinlock.h"        // the PLAIN variant — the open-file registry's lock
 
 uint8_t kFatDiskNumber=0;
 
@@ -585,4 +586,75 @@ int vfs_mount_root_part(char* rootPartUUID)
 	// registered wins, the same rule the root scan applies.
 	vfs_mount_secondary_partitions();
 	return 0;
+}
+// ── The open-file registry (the sync(8) slice, 2026-08-06) ──────────────────
+// One global intrusive list of every open vfs_file, threaded through the
+// openNext/openPrev links in struct file. The fs glues call register at the
+// bottom of a successful open and unregister at the top of close; the only
+// walker is vfs_sync_all below. This exists because sync(1)'s whole job is
+// reaching OTHER tasks' open files — the kernel had no way to enumerate them
+// (the "ping.log reads empty while ping runs" mystery, solved the same
+// afternoon FAT's deferred directory-entry update was identified as 1977
+// working as designed).
+//
+// LOCK DISCIPLINE: kOpenFileLock is the PLAIN spinlock (interrupts stay on)
+// because the sync walk performs real disk I/O under it and disk completion
+// paths read the tick clock — see spinlock.h for the full argument. Nothing
+// here may ever be called from interrupt or fault context.
+static spinlock_t kOpenFileLock = 0;
+static vfs_file_t *kOpenFileHead = NULL;
+
+void vfs_openfile_register(vfs_file_t *file)
+{
+	if (file == NULL)
+		return;
+	spinlock_acquire(&kOpenFileLock);
+	file->openPrev = NULL;
+	file->openNext = kOpenFileHead;
+	if (kOpenFileHead != NULL)
+		kOpenFileHead->openPrev = file;
+	kOpenFileHead = file;
+	spinlock_release(&kOpenFileLock);
+}
+
+void vfs_openfile_unregister(vfs_file_t *file)
+{
+	if (file == NULL)
+		return;
+	spinlock_acquire(&kOpenFileLock);
+	// Unlinking a file that was never registered (both links NULL and not
+	// the head) is a harmless no-op rather than a corruption — glue close
+	// paths run on files from every era of caller.
+	if (file->openPrev != NULL)
+		file->openPrev->openNext = file->openNext;
+	else if (kOpenFileHead == file)
+		kOpenFileHead = file->openNext;
+	if (file->openNext != NULL)
+		file->openNext->openPrev = file->openPrev;
+	file->openNext = NULL;
+	file->openPrev = NULL;
+	spinlock_release(&kOpenFileLock);
+}
+
+int64_t vfs_sync_all(void)
+{
+	int64_t synced = 0;
+	bool anyFailed = false;
+
+	spinlock_acquire(&kOpenFileLock);
+	for (vfs_file_t *f = kOpenFileHead; f != NULL; f = f->openNext)
+	{
+		if (f->fops == NULL || f->fops->sync == NULL)
+			continue;   // read-only mount or a filesystem with nothing to say
+		if (f->fops->sync(f) < 0)
+			anyFailed = true;   // note it, keep sweeping — a broom does not
+			                    // stop at the first dusty corner
+		else
+			synced++;
+	}
+	spinlock_release(&kOpenFileLock);
+
+	printd(DEBUG_VFS, "vfs_sync_all: %ld file(s) synced%s\n",
+	       synced, anyFailed ? " (with failures)" : "");
+	return anyFailed ? -1 : synced;
 }

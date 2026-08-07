@@ -281,6 +281,15 @@ struct file
 	// directly (ELF loader etc.) never touch it.
 	int handleRefCount;
 	//arena_t* arena;
+
+	// OPEN-FILE REGISTRY links (vfs.c, since 2026-08-06 — the sync(8) slice).
+	// Every fs-glue open threads its file onto one global list; close unlinks
+	// it. This is the bookkeeping that lets vfs_sync_all() reach OTHER tasks'
+	// dirty files — the whole reason sync(1) can exist (a FAT file's true
+	// length lives only in the writer's FIL until someone syncs it; ask
+	// ping.log). Future customers: lsof, umount refusal counts.
+	vfs_file_t *openNext;
+	vfs_file_t *openPrev;
 };
 
 struct file_operations
@@ -363,6 +372,23 @@ vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tai
 // Returns 1 = entry filled, 0 = no more (or dir isn't a mount root).
 // Pure kMountTable string scan — no disk I/O, safe from any CR3.
 int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry);
+
+// ── The open-file registry (the sync(8) slice, 2026-08-06) ──────────────────
+// Called by each filesystem glue at the bottom of a successful open and the
+// top of close. Task/kernel-thread context ONLY (the registry lock is a
+// plain, interrupts-on spinlock — see spinlock.h for the discipline).
+void vfs_openfile_register(vfs_file_t *file);
+void vfs_openfile_unregister(vfs_file_t *file);
+
+// sync(1)'s engine: walk every registered open file and run its fops->sync.
+// Filesystems whose writes are already durable-and-visible (ext2's
+// write-through) have cheap or no-op syncs; FAT's f_sync is the one doing
+// real work (data flush + the directory-entry size update that makes a
+// still-open file's true length visible to fresh opens). Returns the number
+// of files synced, or negative if any individual sync reported failure —
+// after still attempting all the rest (a broom does not stop at the first
+// dusty corner).
+int64_t vfs_sync_all(void);
 
 // Does (device, partNo) back a mount whose filesystem can write? The
 // stray-write tripwire's question (block_verify_write_allowed): a disk write

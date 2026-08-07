@@ -273,6 +273,18 @@
 // renumbering the incumbent costs every binary ever built.
 #define SYSCALL_NET_DIAL   37
 
+// sync(1)'s engine (2026-08-06): walk the kernel's open-file registry and
+// run every open file's fops->sync. No arguments — the broom sweeps the
+// whole floor. Returns the count of files synced (0 is a legal, honest
+// answer on an idle system), negative if any individual sync failed after
+// the sweep still visited everyone. Exists because FAT defers a file's
+// directory-entry size until sync/close — a still-open ping.log reads as
+// empty to every fresh open until SOMEBODY syncs the writer's handle, and
+// only the kernel can reach another task's handles. sync(8) has meant
+// exactly this since First Edition Unix (1971); the operator's liturgy
+// ("sync; sync; sync") predates most filesystems it saved.
+#define SYSCALL_SYNC_ALL   38
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

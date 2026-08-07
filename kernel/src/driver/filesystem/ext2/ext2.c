@@ -359,6 +359,12 @@ int ext2_open_existing(vfs_file_t **vfs_file, const char *path,
 	                                      // pointer, caller's lifetime problem
 	(*vfs_file)->fops = vfs_fs->fops;
 	(*vfs_file)->owner = vfs_fs;
+
+	// VFS open-file registry (every open path — ro and rw — funnels through
+	// here, so this one call covers all four). ext2's sync is nearly free
+	// (write-through already committed everything), but a uniform registry
+	// is what lsof-shaped futures are built on.
+	vfs_openfile_register(*vfs_file);
 	return 0;
 }
 
@@ -448,6 +454,8 @@ static int ext2_close(vfs_file_t *vfs_file)
 {
 	ext2_handle_t *h = (ext2_handle_t *)vfs_file->handle;
 	vfs_filesystem_t *fs = (vfs_filesystem_t *)vfs_file->owner;
+	vfs_openfile_unregister(vfs_file);   // before any free — sync-all must
+	                                     // never walk onto a dying file
 	ext2_openref_unregister((ext2_fs_t *)fs->fs_specific, h->ino);
 	// Nothing to flush: the write path is WRITE-THROUGH (every write commits
 	// data and inode before returning), so a close is pure bookkeeping.
