@@ -530,6 +530,28 @@ static int fat_close_dir(vfs_directory_t* vfs_dir)
 
 // Fill one fs-neutral entry (see dops->read in vfs.h): FILINFO stays inside
 // this driver, translated here. Returns 1 = entry, 0 = end, <0 = error.
+// FAT's packed timestamp → epoch seconds (the dirent's mtime contract).
+// The format is MS-DOS 1.25's, unchanged since 1982: fdate = Y7/M4/D5 with
+// year counted from 1980, ftime = H5/M6/S5 with seconds HALVED (5 bits
+// couldn't hold 60, so FAT has never been able to remember an odd second).
+// Converted as-if-UTC via mktime_simple — FAT timestamps are wall-clock
+// local by spec and carry no zone, so honesty means "the numbers on the
+// label", not an invented conversion.
+static uint64_t fat_mtime_epoch(WORD fdate, WORD ftime)
+{
+	if (fdate == 0)
+		return 0;   // never stamped — 0 is the dirent's "no time to give"
+
+	struct tm t;
+	t.tm_year = ((fdate >> 9) & 0x7F) + 80;   // FAT's 1980 base → tm's 1900
+	t.tm_mon  = ((fdate >> 5) & 0x0F) - 1;    // 1-12 → 0-11
+	t.tm_mday =  fdate        & 0x1F;
+	t.tm_hour = (ftime >> 11) & 0x1F;
+	t.tm_min  = (ftime >> 5)  & 0x3F;
+	t.tm_sec  = (ftime & 0x1F) * 2;           // the halved seconds
+	return (uint64_t)mktime_simple(&t);
+}
+
 static int fat_read_dir(vfs_directory_t* vfs_dir, os64_dirent_t* entry)
 {
 	DIR* dir = vfs_dir->handle;
@@ -544,6 +566,7 @@ static int fat_read_dir(vfs_directory_t* vfs_dir, os64_dirent_t* entry)
 	entry->name[OS64_DIRENT_NAME_MAX] = '\0';
 	entry->size = (fi.fattrib & AM_DIR) ? 0 : (uint64_t)fi.fsize;
 	entry->flags = (fi.fattrib & AM_DIR) ? OS64_DE_DIR : 0;
+	entry->mtime = fat_mtime_epoch(fi.fdate, fi.ftime);
 	return 1;
 }
 
@@ -577,6 +600,7 @@ static int fat_stat(const char* path, os64_dirent_t* entry, vfs_filesystem_t* vf
 		entry->name[1] = '\0';
 		entry->size = 0;
 		entry->flags = OS64_DE_DIR;
+		entry->mtime = 0;   // the root has no dirent, so it truly has no time
 		return 0;
 	}
 
@@ -592,6 +616,7 @@ static int fat_stat(const char* path, os64_dirent_t* entry, vfs_filesystem_t* vf
 	entry->name[OS64_DIRENT_NAME_MAX] = '\0';
 	entry->size = (fi.fattrib & AM_DIR) ? 0 : (uint64_t)fi.fsize;
 	entry->flags = (fi.fattrib & AM_DIR) ? OS64_DE_DIR : 0;
+	entry->mtime = fat_mtime_epoch(fi.fdate, fi.ftime);
 	return 0;
 }
 

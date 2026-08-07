@@ -3135,8 +3135,45 @@ static bool test_block_cache(void)
     }
 
     kfree(chunk);
-    printd(DEBUG_TESTS, "\tPASS: test_block_cache (warm hits %lu, warm misses %lu vs cold %lu; write invalidation honest)\n",
-           hitsWarm, missesWarm, missesCold);
+    if (rootCovered)
+        printd(DEBUG_TESTS, "\tPASS: test_block_cache (warm hits %lu, warm misses %lu vs cold %lu; write invalidation honest)\n",
+               hitsWarm, missesWarm, missesCold);
+    else
+        printd(DEBUG_TESTS, "\tPASS: test_block_cache (coherence only — root device uncached; write invalidation honest)\n");
+    return true;
+}
+
+// The dirent's new mtime field (2026-08-06, "cp raised its hand"): stat a
+// binary the build just wrote and require its timestamp to land in the
+// plausible present. The window is deliberately wide (2017..2100) but a
+// packed-date conversion bug can't hit it — swap the month and day shifts,
+// misplace FAT's 1980 base, forget the halved seconds' field width, and
+// the result lands decades away. ext2's copy path is a straight epoch
+// assignment; this test's real target is the FAT calendar math.
+static bool test_dirent_mtime(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->dops == NULL ||
+        kRootFilesystem->dops->stat == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_dirent_mtime (no root stat op)\n");
+        return true;
+    }
+
+    os64_dirent_t e;
+    memset(&e, 0xAA, sizeof(e));   // poison: a fill site that skips mtime shows up
+    if (kRootFilesystem->dops->stat("/bin/top", &e, kRootFilesystem) != 0)
+        TEST_FAIL("stat /bin/top failed");
+
+    // 1,500,000,000 = mid-2017; 4,100,000,000 ≈ 2099. The build stamped
+    // this file with the HOST's clock minutes-to-days ago.
+    if (e.mtime < 1500000000ULL || e.mtime > 4100000000ULL)
+    {
+        printd(DEBUG_TESTS, "\tFAIL: test_dirent_mtime - mtime %lu is outside the plausible present\n",
+               e.mtime);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_dirent_mtime (/bin/top stamped %lu — the plausible present)\n",
+           e.mtime);
     return true;
 }
 
@@ -3202,6 +3239,7 @@ static void register_builtin_tests(void)
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register("ring3_sync_all", test_ring3_sync_all, TEST_PHASE_POSTBOOT);
     test_register("block_cache", test_block_cache, TEST_PHASE_POSTBOOT);
+    test_register("dirent_mtime", test_dirent_mtime, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

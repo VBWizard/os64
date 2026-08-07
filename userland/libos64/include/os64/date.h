@@ -53,6 +53,21 @@ void os64_date_from_epoch(int64_t epoch, os64_date_t *out);
 // so one TZ= on the kernel cmdline reaches everything husk ever launches.
 int64_t os64_date_now(os64_date_t *out, os64_time_t *raw);
 
+// os64_date_now for a moment that ISN'T now: convert any epoch (a dirent's
+// mtime is the founding customer) to local calendar fields under the SAME
+// timezone resolution as os64_date_now — env TZ first with full DST policy,
+// kernel's standard offset as the fallback. DST is evaluated at the moment
+// being converted, not at the moment of asking: a January file renders in
+// EST while your July prompt lives in EDT, which is the correct answer and
+// the reason this lives in the library once instead of in every utility
+// differently. Returns 0 (the fallback degrades to UTC if even the time
+// syscall declines, which is a boot-order curiosity, not a real day).
+//
+//     os64_dirent_t e;  os64_date_t d;
+//     os64_stat(path, &e);
+//     os64_localtime((int64_t)e.mtime, &d);   // d.year/d.month/d.day/...
+int64_t os64_localtime(int64_t epoch, os64_date_t *out);
+
 // ---- The TZ string, parsed -------------------------------------------------
 //
 // os64 adopts the classic TZ format (V7 Unix, 1979 — later POSIX), because

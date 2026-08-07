@@ -51,7 +51,9 @@
 #include <stdint.h>
 
 typedef struct {
-    char        letter;       // the short form: 'l' for -l (required, unique)
+    // The short form: 'l' for -l. Use '\0' for a deliberately long-only
+    // option such as --progress; a non-NULL name is then required.
+    char        letter;
     const char *name;         // the long form: "long" for --long (or NULL)
     bool     takes_value;  // option consumes a value (next token or =...)
     const char *help;         // one line, shown by os64_args_help

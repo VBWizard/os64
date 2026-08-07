@@ -573,6 +573,9 @@ static int ext2_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 		bool is_dir = (child.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
 		entry->flags = is_dir ? OS64_DE_DIR : 0;
 		entry->size  = is_dir ? 0 : child.i_size;
+		// ext2 stores epoch seconds natively — the one filesystem where the
+		// dirent's mtime contract is a straight copy, directories included.
+		entry->mtime = child.i_mtime;
 		return 1;
 	}
 	return 0;   // end of directory — and it stays that way
@@ -629,6 +632,7 @@ static int ext2_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *v
 	bool is_dir = (probe.inode.i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
 	entry->size = is_dir ? 0 : probe.inode.i_size;
 	entry->flags = is_dir ? OS64_DE_DIR : 0;
+	entry->mtime = probe.inode.i_mtime;   // native epoch seconds, straight copy
 	return 0;
 }
 

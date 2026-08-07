@@ -273,7 +273,10 @@ void os64_args_help(const os64_args_t *a, const char *usage)
 			continue;
 		// "  -l, --long   help text" — generated from the table, so the help
 		// and the parser can never disagree about what exists.
-		if (s->name != NULL)
+		if (s->letter == '\0')
+			os64_printf("      --%-12s %s\n", s->name,
+			            s->help ? s->help : "");
+		else if (s->name != NULL)
 			os64_printf("  -%c, --%-12s %s\n", s->letter, s->name,
 			            s->help ? s->help : "");
 		else
@@ -285,5 +288,5 @@ void os64_args_help(const os64_args_t *a, const char *usage)
 		if (s->numeric_alias && s->takes_value)
 			os64_printf("  -NUM  %-12s %s\n", "", "same as the option above");
 	}
-    os64_printf("  -help        display this help and exit\n");
+    os64_printf("  --help       display this help and exit\n");
 }

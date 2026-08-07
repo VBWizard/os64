@@ -9,7 +9,8 @@
 //
 // Build & run:
 //   gcc -I userland/libos64/include -I abi/include userland/libos64/fmt.c
-//       userland/libos64/args.c userland/libos64/env.c tools/test_fmt_host.c
+//       userland/libos64/args.c userland/libos64/env.c userland/libos64/str.c
+//       tools/test_fmt_host.c
 //       -o /tmp/os64_fmt_test     (one line)
 //   /tmp/os64_fmt_test
 
@@ -266,6 +267,17 @@ int main(void)
         char *argv7[] = { "prog", "oops", NULL };
         os64_args_init(&a, 2, argv7, pspecs, 3);
         EXPECT(os64_args_parse(&a, "prog", NULL, 0) == OS64_ARG_ERROR);
+
+        // A long-only option has no invented short spelling. cp's
+        // --progress is the first customer.
+        bool progress = false;
+        const os64_optspec_t longOnly[] = {
+            { '\0', "progress", 0, "show progress", .flag = &progress }
+        };
+        char *argv8[] = { "prog", "--progress", NULL };
+        os64_args_init(&a, 2, argv8, longOnly, 1);
+        EXPECT(os64_args_parse(&a, "prog [--progress]", NULL, 0) == 0 &&
+               progress == true);
     }
 
     if (failures == 0) {

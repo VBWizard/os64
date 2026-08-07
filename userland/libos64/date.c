@@ -299,6 +299,9 @@ int64_t os64_date_now(os64_date_t *out, os64_time_t *raw)
     // environment wins — offset and DST both. Anything else (unset, or
     // malformed — a broken TZ should give you standard time, not garbage)
     // falls back to the kernel's configured standard offset.
+    // os64_localtime below applies THE SAME policy to arbitrary moments —
+    // change one, change both, or "now" and "then" start disagreeing
+    // about what local means.
     const char *tzs = os64_getenv("TZ");
     os64_tz_t tz;
     if (tzs != NULL && os64_tz_parse(tzs, &tz) == 0)
@@ -308,5 +311,33 @@ int64_t os64_date_now(os64_date_t *out, os64_time_t *raw)
 
     if (raw != NULL)
         *raw = t;
+    return 0;
+}
+
+// os64_date_now for a moment that ISN'T now — the mtime renderer (born
+// 2026-08-06, hours after dirents learned what time it is; ls -l is the
+// first customer). SAME policy as os64_date_now, and the DST evaluation
+// happens AT THE MOMENT BEING CONVERTED: a January mtime renders in EST
+// while your July clock reads EDT — which is DST done right, and the whole
+// reason the library owns this instead of every app hand-rolling offsets.
+// The TZ-env path costs no syscall; the fallback costs one time() call to
+// learn the machine offset. Callers with thousands of entries can afford
+// either — a TZ parse is microseconds — and a cached-zone variant can join
+// the day a profile says so, not before.
+int64_t os64_localtime(int64_t epoch, os64_date_t *out)
+{
+    const char *tzs = os64_getenv("TZ");
+    os64_tz_t tz;
+    if (tzs != NULL && os64_tz_parse(tzs, &tz) == 0)
+    {
+        os64_date_from_epoch_tz(epoch, &tz, out);
+        return 0;
+    }
+
+    os64_time_t t;
+    if (os64_time(&t) == 0)
+        os64_date_from_epoch(epoch + (int64_t)t.tz_offset_minutes * 60, out);
+    else
+        os64_date_from_epoch(epoch, out);   // no zone anywhere: UTC, honestly
     return 0;
 }
