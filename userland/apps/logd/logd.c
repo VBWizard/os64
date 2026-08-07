@@ -181,15 +181,27 @@ int main(int argc, char **argv)
 		{
 			// First batch of a busy streak: take the file back (it was
 			// released at the last idle poll — open-while-busy policy).
-			// A failed OPEN gets the same treatment as a failed write:
-			// leave loudly so the kernel reclaims serial, never consume
-			// entries we can't land.
+			//
+			// WITH PATIENCE. FF_FS_LOCK makes opens exclusive both ways, so
+			// a reader mid-`wc` on a 50MB log holds the file for a few
+			// seconds — and the first version of this reopen treated that
+			// as fatal and died with a full batch in hand (found the same
+			// evening the policy landed: reading the log could assassinate
+			// the log daemon). A LOCKED open is transient; retry on the
+			// idle cadence for a bounded window and only then conclude the
+			// blocker is a wedge, confess the loss, and release the sink.
 			if (fd < 0)
 			{
-				fd = os64_open(path, "a");
+				for (int tries = 0; fd < 0 && tries < 50; tries++)
+				{
+					fd = os64_open(path, "a");
+					if (fd < 0)
+						os64_sleep(IDLE_SLEEP_MS);
+				}
 				if (fd < 0)
 				{
-					os64_printf("logd: cannot reopen %s — releasing the log sink\n", path);
+					os64_printf("logd: cannot reopen %s after 5s — releasing the log sink"
+					            " (%lu buffered bytes lost)\n", path, (unsigned long)used);
 					return 1;
 				}
 				os64_ticks(&t);
