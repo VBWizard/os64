@@ -1,5 +1,7 @@
 #include "kworker.h"
 
+#include "memory/allocator.h"
+
 #include "CONFIG.h"
 #include "kernel.h"
 #include "printd.h"
@@ -11,6 +13,11 @@
 
 #define KWORKER_SLEEP_TICKS (TICKS_PER_SECOND * 2)
 #define KWORKER_REAP_BATCH_SIZE 8
+// Allocator hygiene knobs: entries examined per visit (bounds the lock hold —
+// tens of microseconds, never a full-table sweep), and how many visits pass
+// between DEBUG_ALLOCATOR health lines (~10s at the 2s sleep cadence).
+#define KWORKER_ALLOC_MAINTAIN_BATCH 32
+#define KWORKER_ALLOC_REPORT_EVERY 5
 
 static bool kworker_run_maintenance(void)
 {
@@ -22,6 +29,18 @@ static bool kworker_run_maintenance(void)
 		// corpse unlinked this pass and one freed this pass each score 1.
 		printd(DEBUG_TASK | DEBUG_DETAILED, "KWORKER: buried/unlinked %u collected zombie task(s)\n", reaped);
 		did_work = true;
+	}
+
+	// Allocator table hygiene (allocator.h): coalesce holes the free-time
+	// merge couldn't (its neighbors were live then), compact when littered.
+	// Deliberately NOT counted as did_work — same reasoning as the log flush
+	// below: maintenance that reschedules itself as "work" never sleeps, and
+	// a bounded idempotent pass has nothing urgent to stay awake for.
+	static uint32_t alloc_report_countdown = KWORKER_ALLOC_REPORT_EVERY;
+	allocator_maintain(KWORKER_ALLOC_MAINTAIN_BATCH);
+	if (--alloc_report_countdown == 0) {
+		alloc_report_countdown = KWORKER_ALLOC_REPORT_EVERY;
+		allocator_debug_report();
 	}
 
 #if ENABLE_LOG_BUFFERING == 1

@@ -40,6 +40,8 @@ static inline uintptr_t round_up_to_nearest_page(uintptr_t addr) {
 
 void compact_memory_array() {
     size_t writeIndex = 0; // Where the next valid entry will be written
+	kAllocCompactions++;
+	kAllocZeroedEntries = 0;   // every dead entry dies in the sweep below
 	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Compacting memory status array\n");
 
     for (size_t i = 0; i < kMemoryStatusCurrentPtr; i++) 
@@ -71,51 +73,73 @@ void compact_memory_array() {
 bool merge_freed_block(uint64_t freedIndex) {
     memory_status_t *freedBlock = &kMemoryStatus[freedIndex];
 
-    // Scan for a parent block to merge into
-	memory_status_t* ours=&kMemoryStatus[freedIndex];
-    printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Looking for an entry to merge ours at index %u, address 0x%016lx, with\n", freedIndex, ours->startAddress);
+	// ONE scan collecting BOTH neighbors, then merge whatever was found.
+	// The old version returned after the FIRST merge, so a block freed
+	// between two free neighbors left two entries where one belonged —
+	// one of the three ingredients of the 2026-08-07 table explosion
+	// (see get_status_entry_for_first_available_address for the story).
+	memory_status_t *pred = NULL;   // free block ending exactly at ours
+	memory_status_t *succ = NULL;   // free block starting exactly past ours
+    printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Looking for entries to merge ours at index %u, address 0x%016lx, with\n", freedIndex, freedBlock->startAddress);
 	for (size_t idx = 0; idx < kMemoryStatusCurrentPtr; idx++) {
         if (idx == freedIndex) continue; // Skip the block being freed
 
         memory_status_t *candidate = &kMemoryStatus[idx];
 		if (candidate->startAddress == 0x0) continue;
-        // Check if the candidate is free and contiguous
-        if (!candidate->in_use && candidate->length > 0) {
-            // Merge freed block into candidate (preceding)
-            if (candidate->startAddress + candidate->length == freedBlock->startAddress) {
-				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: found a p candidate with start=0x%016lx, length=0x%016lx, in_use=%u\n", 
-						candidate->startAddress, candidate->length, candidate->in_use);
-                candidate->length += freedBlock->length;
+		if (candidate->in_use || candidate->length == 0) continue;
 
-                // Invalidate the freed block
-                freedBlock->startAddress = 0;
-                freedBlock->length = 0;
-                freedBlock->in_use = false;
-				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: Merged with candidate: start=0x%016lx, length=0x%016lx, in_use=%u\n", 
-						candidate->startAddress, candidate->length, candidate->in_use);
-                return true;
-            }
+        if (candidate->startAddress + candidate->length == freedBlock->startAddress)
+            pred = candidate;
+        else if (freedBlock->startAddress + freedBlock->length == candidate->startAddress)
+            succ = candidate;
 
-            // Merge candidate into freed block (following)
-            if (freedBlock->startAddress + freedBlock->length == candidate->startAddress) {
-				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: found an f candidate with start=0x%016lx, length=0x%016lx, in_use=%u\n", 
-						candidate->startAddress, candidate->length, candidate->in_use);
-                candidate->length += freedBlock->length;
-				//The found candidate followed our block to be freed, so its new address becomes our block's
-				candidate->startAddress = freedBlock->startAddress;
-
-                // Invalidate the freed block
-                freedBlock->startAddress = 0;
-                freedBlock->length = 0;
-                freedBlock->in_use = false;
-				printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: Merged with candidate: start=0x%016lx, length=0x%016lx, in_use=%u\n", 
-						candidate->startAddress, candidate->length, candidate->in_use);
-				return true;
-            }
-        }
+        if (pred && succ)
+            break;   // a block has at most one of each — done looking
     }
-	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\t allocator: Did not find a candidate to merge with\n");
-	return false;
+
+	if (pred == NULL && succ == NULL)
+	{
+		printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\t allocator: Did not find a candidate to merge with\n");
+		return false;
+	}
+
+	if (pred != NULL)
+	{
+		// Grow the preceding block over ours...
+		pred->length += freedBlock->length;
+		freedBlock->startAddress = 0;
+		freedBlock->length = 0;
+		freedBlock->in_use = false;
+		kAllocZeroedEntries++;
+		kAllocMerges++;
+		// ...and if a successor also touches, swallow it too: three entries
+		// become one, which is what "coalesce" was always supposed to mean.
+		if (succ != NULL)
+		{
+			pred->length += succ->length;
+			succ->startAddress = 0;
+			succ->length = 0;
+			succ->in_use = false;
+			kAllocZeroedEntries++;
+			kAllocMerges++;
+		}
+		printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: Merged into preceding block: start=0x%016lx, length=0x%016lx%s\n",
+				pred->startAddress, pred->length, succ ? " (successor swallowed too)" : "");
+	}
+	else
+	{
+		// Only a successor: it inherits our start and grows backward over us.
+		succ->length += freedBlock->length;
+		succ->startAddress = freedBlock->startAddress;
+		freedBlock->startAddress = 0;
+		freedBlock->length = 0;
+		freedBlock->in_use = false;
+		kAllocZeroedEntries++;
+		kAllocMerges++;
+		printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "\tallocator: Merged into following block: start=0x%016lx, length=0x%016lx\n",
+				succ->startAddress, succ->length);
+	}
+	return true;
 }
 
 //Identify whether any statuses allocate on the page passed.
@@ -127,12 +151,36 @@ bool physical_page_is_allocated_on(uintptr_t physical_page)
 	return false;
 }
 
-/// @brief Get the address of the first block of memory found that is greater than or equal to the length passed
-/// @param requestedLength 
-/// @param aligned 
-/// @return 
+// Maintenance/observability counters (allocator.h has the tour). All are
+// bumped under kMemoryStatusLock, so plain increments are safe.
+uint64_t kAllocExactFitHits = 0;   // a recycled hole was reused whole
+uint64_t kAllocSplits = 0;         // a fit carved a block (leftover entry born)
+uint64_t kAllocMerges = 0;         // free-time neighbor merges (either side)
+uint64_t kAllocCompactions = 0;    // compact_memory_array passes
+uint64_t kAllocZeroedEntries = 0;  // dead (length 0) entries awaiting compaction
+
+/// @brief Find a free block for the request: EXACT fit first, else first fit.
+/// @param requestedLength
+/// @param aligned
+/// @return
+///
+/// Why exact-first (2026-08-07, the "top slows down" autopsy): first-fit alone
+/// always carved fresh pieces off the big low-index donor block, while the
+/// identically-sized holes freed by steady churn (procfs open/close is the
+/// heaviest customer) accumulated behind it FOREVER — 12,819 free entries in a
+/// 12-minute soak, 9,020 of them one repeating size, and every kmalloc/kfree
+/// in the kernel scanning past all of them under an IRQs-off spinlock. Churn
+/// repeats the same sizes by nature, so preferring an exact-size hole recycles
+/// yesterday's free instead of minting a new one, and the table plateaus.
+/// Still ONE pass: remember the first adequate block as the fallback and keep
+/// looking for an exact hole. Honesty note: old first-fit stopped at the first
+/// adequate block; this scans to the end when no exact hole exists. That trade
+/// is the bargain: a full scan of the SMALL table this policy maintains costs
+/// less than the old early exit over the ever-growing one it caused.
 memory_status_t* get_status_entry_for_first_available_address(uint64_t requested_length, bool page_aligned)
 {
+	memory_status_t *firstFit = NULL;
+
 	for (uint64_t cnt = 0; cnt < kMemoryStatusCurrentPtr; cnt++)
 	{
 		memory_status_t *entry = &kMemoryStatus[cnt];
@@ -143,8 +191,13 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 
 		if (!page_aligned)
 		{
-			if (entry->length >= requested_length)
-				return entry;
+			if (entry->length == requested_length)
+			{
+				kAllocExactFitHits++;
+				return entry;      // the whole point: reuse, don't carve
+			}
+			if (firstFit == NULL && entry->length >= requested_length)
+				firstFit = entry;
 			continue;
 		}
 
@@ -154,11 +207,19 @@ memory_status_t* get_status_entry_for_first_available_address(uint64_t requested
 			continue;
 		uint64_t alignment_padding = round_up_to_nearest_page(entry->startAddress) - entry->startAddress;
 
-		// Use <= so a block whose padding plus request exactly fills it is a valid fit.
-		if (alignment_padding <= entry->length - requested_length)
+		// Already-aligned AND exactly sized: the aligned flavor of a perfect
+		// recycle (padding 0 means the == below is the whole block).
+		if (alignment_padding == 0 && entry->length == requested_length)
+		{
+			kAllocExactFitHits++;
 			return entry;
+		}
+
+		// Use <= so a block whose padding plus request exactly fills it is a valid fit.
+		if (firstFit == NULL && alignment_padding <= entry->length - requested_length)
+			firstFit = entry;
 	}
-	return NULL;
+	return firstFit;
 }
 
 uint64_t get_status_index_for_requested_address(uint64_t address,uint64_t requested_length, bool in_use)
@@ -260,6 +321,7 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 	}
 	else //memory available is > requested memory
 	{
+		kAllocSplits++;   // a carve mints at least one new table entry
 		found_block_original_length = memaddr->length;
 
 		//The starting address for the new Status entry, aligned if necessary.  THIS IS ONLY USED AS A RETURN VALUE FROM THIS METHOD
@@ -310,7 +372,12 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		retVal = use_address?requested_address:aligned_start;
 
 	}
-	printd(DEBUG_ALLOCATOR, "allocate_memory_at_address_internal: Allocated 0x%08x bytes at phys address 0x%08x (%s - %s)\n", aligned_length, use_address?requested_address:aligned_start,
+	// DETAILED since 2026-08-07: this fires on EVERY allocation, and plain
+	// DEBUG_ALLOCATOR now means the ~10s health line, not a per-call diary —
+	// Chris's first flag-on run exploded the log in minutes on this line
+	// (and the noise's own logd-buffer churn skewed the very free-hole
+	// numbers the health line exists to watch).
+	printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocate_memory_at_address_internal: Allocated 0x%08x bytes at phys address 0x%08x (%s - %s)\n", aligned_length, use_address?requested_address:aligned_start,
 			use_address?"requested address":"",page_aligned?"aligned":"");
 
 	//Keep the "allocated <=> HHDM-mapped" invariant: map the extent's pages at
@@ -362,9 +429,11 @@ uint64_t allocate_memory(uint64_t requested_length)
 	return allocate_memory_at_address_internal(0, requested_length, false, false);
 }
 
-//How many frees between compaction passes over the status array
-#define FREE_COMPACT_FREQUENCY 10
-static uint64_t kFreeCompactCounter = 0;
+//The free-path compaction BACKSTOP: normally the kworker's maintenance pass
+//(allocator_maintain) compacts on its own schedule and this never fires. It
+//exists for kworker-less boots, where dead entries would otherwise pile up
+//unbounded — the same disease the 2026-08-07 fix cured, via a second door.
+#define FREE_COMPACT_BACKSTOP_DEAD_ENTRIES 512
 
 uint64_t free_memory(uint64_t address)
 {
@@ -397,7 +466,12 @@ uint64_t free_memory(uint64_t address)
 		//may no longer refer to the freed entry — callers must not use it to
 		//index kMemoryStatus, only to detect failure.
 		merge_freed_block(statusIdx);
-		if (++kFreeCompactCounter % FREE_COMPACT_FREQUENCY == 0)
+		//Compaction is a KWORKER job now (allocator_maintain below) — the
+		//requestor stops paying an O(table) sweep every tenth free. This
+		//backstop stays for boots without a kworker (no KWORKER flag) and
+		//for the window before it starts: only when the DEAD-entry count
+		//says the table is actually littered does the free path sweep.
+		if (kAllocZeroedEntries >= FREE_COMPACT_BACKSTOP_DEAD_ENTRIES)
 			compact_memory_array();
 
 		allocator_unlock(irqflags);
@@ -492,4 +566,134 @@ void allocator_init()
 	//paging_map_pages((pt_entry_t*)kKernelPML4v, newAddress, newAddress - kHHDMOffset, mapSize, PAGE_PRESENT | PAGE_WRITE);
 	memcpy((void*)newAddress, kMemoryStatus, kMemoryStatusCurrentPtr * size);
 	kMemoryStatus = (memory_status_t*)newAddress;
+}
+
+// ── kworker-side maintenance + observability (2026-08-07) ────────────────────
+//
+// Chris's design question, answered in code: "could compaction be a kworker
+// job rather than costing each memory requestor time?" Yes — the LOCK still
+// exists (everything here rewrites kMemoryStatus, so it must be held), but
+// WHO pays moves: the hot alloc/free paths never sweep, and the kworker's
+// passes are BOUNDED (a cursor walks at most maxEntries per visit), so any
+// requestor unlucky enough to contend waits out a short pass, not a
+// full-table sweep. The free-path backstop above fires only on kworker-less
+// boots.
+
+extern __uint128_t kDebugLevel;   // printd's runtime gate — checked here so a
+                                  // disabled DEBUG_ALLOCATOR skips the WALK,
+                                  // not just the print
+
+// One bounded maintenance visit: try to coalesce free entries the free-time
+// merge missed (its two neighbors were live THEN — lifetimes interleave, so
+// mergeable pairs appear later), then compact when enough dead entries have
+// accumulated to be worth a sweep. Returns the number of merges performed.
+uint32_t allocator_maintain(uint32_t maxEntries)
+{
+	static uint64_t sCursor = 0;   // kworker-only caller — no reentrancy
+	uint32_t merges = 0;
+
+	uint64_t irqflags = allocator_lock();
+
+	if (kMemoryStatusCurrentPtr > 0)
+	{
+		if (sCursor >= kMemoryStatusCurrentPtr)
+			sCursor = 0;
+		uint64_t visits = maxEntries;
+		while (visits-- > 0)
+		{
+			memory_status_t *entry = &kMemoryStatus[sCursor];
+			if (!entry->in_use && entry->length > 0 && entry->startAddress != 0)
+				if (merge_freed_block(sCursor))
+					merges++;
+			if (++sCursor >= kMemoryStatusCurrentPtr)
+			{
+				sCursor = 0;
+				break;   // one full lap max per visit, even on tiny tables
+			}
+		}
+	}
+
+	// Compact on the kworker's schedule: cheaper thresholds than the free
+	// path's backstop, because HERE nobody's allocation is waiting on us
+	// (they'd only contend, briefly, on the lock).
+	if (kAllocZeroedEntries >= 64)
+		compact_memory_array();
+
+	allocator_unlock(irqflags);
+	return merges;
+}
+
+// The DEBUG_ALLOCATOR ledger line — the 2026-08-07 autopsy, self-service.
+// Designed to cost nothing when off: the kDebugLevel check gates the whole
+// walk, and the caller (kworker) invokes at a human cadence, not per-alloc.
+// One O(table) walk under the lock (same cost class as
+// allocator_memory_snapshot, which top polls every second) collecting the
+// counts and the top-4 free sizes — the exact shape that named first-fit
+// fragmentation the day pmemsave dragged the table out of a live guest.
+void allocator_debug_report(void)
+{
+	if (!(kDebugLevel & DEBUG_ALLOCATOR))
+		return;
+
+	// Top-4 free-hole sizes by count, gathered in one pass with a tiny
+	// insertion table — 16 tracked sizes is plenty for a health line, and
+	// a bounded tracker can't grow into its own version of the disease.
+	#define AR_TRACKED 16
+	uint64_t sizes[AR_TRACKED] = {0};
+	uint64_t counts[AR_TRACKED] = {0};
+	uint32_t tracked = 0;
+	uint64_t inUse = 0, freeCnt = 0, dead = 0;
+
+	uint64_t irqflags = allocator_lock();
+	uint64_t entries = kMemoryStatusCurrentPtr;
+	for (uint64_t i = 0; i < entries; i++)
+	{
+		memory_status_t *e = &kMemoryStatus[i];
+		if (e->length == 0) { dead++; continue; }
+		if (e->in_use) { inUse++; continue; }
+		freeCnt++;
+		for (uint32_t s = 0; s < AR_TRACKED; s++)
+		{
+			if (s == tracked && tracked < AR_TRACKED)
+			{
+				sizes[tracked] = e->length;
+				counts[tracked] = 1;
+				tracked++;
+				break;
+			}
+			if (sizes[s] == e->length)
+			{
+				counts[s]++;
+				break;
+			}
+		}
+	}
+	allocator_unlock(irqflags);
+
+	// Pick the top 4 by count (tiny N — selection is fine).
+	uint64_t topSize[4] = {0}, topCount[4] = {0};
+	for (uint32_t s = 0; s < tracked; s++)
+	{
+		for (int t = 0; t < 4; t++)
+			if (counts[s] > topCount[t])
+			{
+				for (int m = 3; m > t; m--)
+				{
+					topCount[m] = topCount[m-1];
+					topSize[m] = topSize[m-1];
+				}
+				topCount[t] = counts[s];
+				topSize[t] = sizes[s];
+				break;
+			}
+	}
+
+	printd(DEBUG_ALLOCATOR,
+	       "allocator: entries=%lu inuse=%lu free=%lu dead=%lu | exactfit=%lu splits=%lu merges=%lu compactions=%lu\n",
+	       entries, inUse, freeCnt, dead,
+	       kAllocExactFitHits, kAllocSplits, kAllocMerges, kAllocCompactions);
+	printd(DEBUG_ALLOCATOR,
+	       "allocator: top free holes: %lux%lu %lux%lu %lux%lu %lux%lu\n",
+	       topCount[0], topSize[0], topCount[1], topSize[1],
+	       topCount[2], topSize[2], topCount[3], topSize[3]);
 }

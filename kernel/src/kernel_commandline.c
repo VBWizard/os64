@@ -169,6 +169,11 @@ static cmdopt_t cmdopts[] = {
     // The NVMe command-stream histogram (nvme.c iostat) rides this level —
     // boot with DEBUG_NVME, run the workload, read the log.
     {"DEBUG_NVME", OPT_UINT128_OR, &kDebugLevel, DEBUG_NVME, 0},
+    // The allocator health line (kworker cadence, ~10s: table entry counts +
+    // exactfit/split/merge/compaction counters + top-4 free-hole sizes). The
+    // walk itself is gated on this bit, so the flag truly costs nothing when
+    // off — Chris's requirement the day the status table hit 12k entries.
+    {"DEBUG_ALLOCATOR", OPT_UINT128_OR, &kDebugLevel, DEBUG_ALLOCATOR, 0},
     // Static IPv4 config, dotted-quad (e.g. IP=192.168.1.50). Parsed by
     // ipv4_config_init; a malformed value falls back to the default.
     {"IP", OPT_STRING, kNetIPString, 0, 20},

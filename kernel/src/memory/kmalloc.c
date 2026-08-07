@@ -97,7 +97,9 @@ void kfree(void *address)
 		return;
 	uintptr_t physicalAddress = (uintptr_t)address > kHHDMOffset?(uintptr_t)address - kHHDMOffset:(uintptr_t)address;
     // Free the allocation (remove the HHDM offset from the address when freeing it)
-	printd(DEBUG_KMALLOC, "KMALLOC: Freeing address 0x%016lx (0x%016lx)\n",address, physicalAddress);
+	// DETAILED: per-free diary line — same demotion (and reason) as the
+	// per-allocation line in allocator.c; plain DEBUG_ALLOCATOR = health line.
+	printd(DEBUG_KMALLOC | DEBUG_DETAILED, "KMALLOC: Freeing address 0x%016lx (0x%016lx)\n",address, physicalAddress);
 
 	uint64_t idx = free_memory(physicalAddress);
 	if (idx==0xFFFFFFFF)
