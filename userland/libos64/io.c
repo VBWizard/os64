@@ -247,6 +247,21 @@ int64_t os64_sync_all(void)
     return (int64_t)os64_syscall0(SYSCALL_SYNC_ALL);
 }
 
+void os64_shutdown(void)
+{
+    // The explicit 0 is arg0 = the VERB, reserved on day one (0 = power
+    // off; see syscall_numbers.h). Passing it NOW is what lets a future
+    // reboot verb reuse this number safely — a no-arg call would leave
+    // ring-3 register garbage where the verb goes, and every binary built
+    // today would flip a coin between halt and reboot the day the kernel
+    // started reading it.
+    os64_syscall1(SYSCALL_SHUTDOWN, 0);
+    // The kernel never comes back from that call — but the compiler can't
+    // know it from a syscall stub, and noreturn is a promise we must keep
+    // even if the impossible happens.
+    for (;;) {}
+}
+
 // Remove a file or an empty directory. Relative paths resolve against the
 // cwd, like open's.
 //

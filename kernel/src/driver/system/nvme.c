@@ -1002,6 +1002,51 @@ void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length,
 }
 #endif
 
+// ── FLUSH CACHE (the shutdown slice, 2026-08-08) ─────────────────────────────
+// Commit the DRIVE's volatile write cache to media. The filesystems are
+// write-through and the block cache is update-in-place, but both of those
+// chains end at the drive's own RAM — Flush is the only command that ends at
+// the NAND. Same critical-section dance as nvme_do_io, minus the entire data
+// phase: NSID + opcode IS the whole command (NVMe 1.x §6.8 — no PRPs, no
+// LBAs; the drive flushes everything for that namespace).
+static void nvme_flush_controller(nvme_controller_t* controller)
+{
+    nvme_submission_queue_entry_t cmdOnStack;
+    nvme_submission_queue_entry_t* cmd = &cmdOnStack;
+    memset(cmd, 0, sizeof(cmdOnStack));
+    cmd->opc  = NVME_OPCODE_FLUSH;
+    cmd->nsid = controller->nsid;
+
+    uint64_t lockFlags = nvme_io_lock(controller);
+    cmd->cid = controller->cmdCID++;
+    nvme_submit_command(controller, cmd, false);
+
+    volatile nvme_completion_queue_entry_t* completionEntry =
+        (volatile nvme_completion_queue_entry_t*)&controller->cmdCompQueue[controller->cmdCompQueueHeadIndex];
+    nvme_wait_for_completion(controller, false, completionEntry, cmd);
+
+    // A flush error at shutdown is REPORTED, never panicked: the descent
+    // must reach "safe to turn off" regardless — a panic here would strand
+    // the operator less safe than the flush failure did.
+    if (completionEntry->status.status_code || completionEntry->status.status_code_type)
+        printd(DEBUG_NVME, "NVME: FLUSH failed (sct=%u sc=%u) — drive cache state unknown\n",
+               completionEntry->status.status_code_type, completionEntry->status.status_code);
+
+    controller->cmdCompQueueHeadIndex = (controller->cmdCompQueueHeadIndex + 1) % controller->queueDepth;
+    nvme_ring_doorbell(controller, 1, false, controller->cmdCompQueueHeadIndex);
+    nvme_io_unlock(controller, lockFlags);
+}
+
+// Every NVMe device in the block table gets the order. (AHCI's ATA FLUSH
+// CACHE 0xE7 twin rides the AHCI-write DEBTS row — no write path, no cache
+// to flush, no customer: the P5 has no SATA controller at all.)
+void nvme_flush_all(void)
+{
+    for (int i = 0; i < kBlockDeviceInfoCount; i++)
+        if (kBlockDeviceInfo[i].bus == BUS_NVME && kBlockDeviceInfo[i].block_extra_info != NULL)
+            nvme_flush_controller((nvme_controller_t*)kBlockDeviceInfo[i].block_extra_info);
+}
+
 void nvme_read_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer) {
     nvme_do_io(controller, LBA, length, buffer, false);
 }

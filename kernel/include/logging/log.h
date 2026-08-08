@@ -97,6 +97,18 @@ extern volatile uint64_t kLogSinkLastRead;
 // the next attempt, so daemon restarts need no hand-off ceremony.
 bool klog_sink_try_claim(uint64_t taskId);
 
+// ── The retire handshake (the shutdown slice, 2026-08-08) ──────────────────
+// shutdown_system() → klog_request_retire(): the next EMPTY klog_read
+// answers OS64_KLOG_RETIRED (klog.h) instead of 0, releasing the claim
+// kernel-side in the same breath — the daemon's contract is commit, close,
+// exit. klog_sink_is_claimed() is what shutdown polls to know the daemon
+// got the word (a bounded wait: a dead daemon's claim lapses by heartbeat,
+// so this can never wedge the descent).
+extern volatile bool kKlogRetireRequested;
+void klog_request_retire(void);
+void klog_sink_release(void);
+bool klog_sink_is_claimed(void);
+
 // ── Waiting for the ring-3 sink (the LOGD= cmdline flag) ───────────────────
 // When a log daemon is COMING but has not attached yet, draining to serial is
 // pure waste: those same entries are about to be claimed and written to a

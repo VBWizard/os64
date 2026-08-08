@@ -14,10 +14,12 @@
 // truncate-on-start would destroy it on exactly the boot you needed it.
 // (Rebuilding the image replaces the disk, which is the natural reset.)
 //
-// WHY NOT THE ROOT FILESYSTEM: root is ext2 here, and os64's ext2 is
-// read-only by design — so the default lands on /fat, which is where the
-// writable filesystem is mounted. Nothing about that is permanent; pass a
-// path and it goes there.
+// WHERE THE LOG BELONGS: /home — the persistent partition (the 2026-08-07
+// persistence doctrine: root is the system's to overwrite, /home is the
+// user's and survives builds and refreshes; a log that outlives the boot
+// it describes belongs on the surviving side). Root became writable the
+// same day, so the DEFAULT below is only the fallback for boots without
+// a /home; the boot entries all pass LOGD=/home/os64.log explicitly.
 //
 // KNOWN GAP: there is no mkdir syscall yet, so a path in a directory that
 // does not already exist will fail to open. Hence a file at the root of
@@ -104,6 +106,23 @@ int main(int argc, char **argv)
 	for (;;)
 	{
 		int64_t got = os64_klog_read(batch, BATCH);
+		if (got == OS64_KLOG_RETIRED)
+		{
+			// The system is going down and the rings are empty — this
+			// daemon has been handed every byte it will ever get (the
+			// kernel only speaks RETIRED on an empty poll, so nothing is
+			// left behind). Commit the file, close it, go home. The
+			// kernel's shutdown descent is watching the claim (released
+			// before we even saw this) and waits a grace period for this
+			// close to land before it syncs and flushes the disks.
+			os64_printf("logd: retired for shutdown — log committed\n");
+			if (fd >= 0)
+			{
+				os64_sync((int32_t)fd);
+				os64_close((int32_t)fd);
+			}
+			return 0;
+		}
 		if (got < 0 && !attached)
 		{
 			// Refused before ever succeeding: another daemon holds the

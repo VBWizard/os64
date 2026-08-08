@@ -60,6 +60,7 @@ extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch 
 extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
+extern bool kTestShutdown;  // SHUTDOWNTEST: run the full shutdown descent post-tests
 bool kEnableSMP = true;
 // The scheduler mode, DEFAULT TRUE since 2026-08-05 (Chris's ruling, decision
 // recorded): tickless is the destination architecture (see SCHEDULER_REDESIGN
@@ -506,6 +507,14 @@ void kernel_init()
 	if (kTestPanic)
 		panic("TESTPANIC: deliberate panic — if you can read this in the serial log, the panic pipeline works\n");
 
+	// The descent's own diagnostic (SHUTDOWNTEST, 2026-08-08 — same pattern
+	// as TESTPANIC): run the full shutdown after boot + tests, with logd
+	// live and files freshly written, so every step has real work to do.
+	// Under QEMU the poweroff port makes the process EXIT — a scriptable
+	// pass/fail for the whole pipeline.
+	if (kTestShutdown)
+		shutdown_system();
+
     // Launch the shell and park the kernel task so the scheduler keeps running
     // it (husk loops forever on read/spawn/wait). The kernel task is husk's
     // parent, so husk inherits its environment. (When husk becomes the real
@@ -549,7 +558,7 @@ void kernel_init()
 		}
 	}
 
-	shutdown();
+	kernel_park();
 }
 
 void parse_debug_level(__uint128_t value, uint64_t* high, uint64_t* low)

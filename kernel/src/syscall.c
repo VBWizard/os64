@@ -24,6 +24,7 @@
 #include "pipe.h"
 #include "signals.h"
 #include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
+#include "shutdown.h"   // shutdown_system — SYSCALL_SHUTDOWN's engine
 #include "allocator.h"  // free_memory — unmap returns pages at the choke point
 #include "dlist.h"      // dlist_remove (unmap drops the region's VMA node)
 #include "memory/mmap.h"   // MAP_ANONYMOUS (map()'s regions are anonymous)
@@ -131,6 +132,8 @@ static uint64_t syscall_net_dial(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -188,6 +191,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
+	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
 };
 
 uint64_t _syscall_dispatch(
@@ -2930,7 +2934,19 @@ static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	uint32_t got = klog_dequeue(staged, want);
 	if (got == 0)
+	{
+		// Shutdown's retire handshake (log.h): only an EMPTY poll may carry
+		// the farewell — every logged byte has already been handed over, so
+		// never-drop-a-byte holds to the end. Release the claim HERE, not in
+		// some later cleanup: shutdown_system is watching it to know the
+		// daemon has been told.
+		if (kKlogRetireRequested)
+		{
+			klog_sink_release();
+			return (uint64_t)OS64_KLOG_RETIRED;
+		}
 		return 0;   // nothing waiting — the daemon sleeps and asks again
+	}
 
 	// Translate to the ABI struct. The kernel's log_entry_t carries a TSC
 	// and internal padding that userland has no business depending on;
@@ -3108,4 +3124,14 @@ static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	long rc = fp->result;
 	kfree(fp);
 	return (rc < 0) ? SYSCALL_RESULT_INVALID : (uint64_t)rc;
+}
+
+// shutdown(8)'s engine — the contract and lineage live in syscall_numbers.h,
+// the ordered descent lives in shutdown.c. No arguments to validate, no
+// return to marshal: this call ends with the power, not with sysret.
+static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	shutdown_system();
 }

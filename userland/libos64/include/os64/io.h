@@ -232,6 +232,15 @@ int64_t os64_sync(int32_t handle);
 // an error), negative if any individual sync failed.
 int64_t os64_sync_all(void);
 
+// The system is going down: the kernel runs the entire descent — retires
+// the log daemon, syncs every open file everywhere (the os64_sync_all
+// above, done for the last time), flushes the drives' own volatile caches
+// (the tier no sync can reach — the reason "sync then power button" was
+// always a ritual rather than a guarantee), and powers off. Does not
+// return; there is nothing to come back to. See SYSCALL_SHUTDOWN in
+// syscall_numbers.h for the order and the lineage.
+void os64_shutdown(void) __attribute__((noreturn));
+
 // Remove a file OR an empty directory (relative paths resolve against the
 // cwd) — os64's one removal verb; there is no rmdir, by design (Plan 9's
 // remove(), not POSIX's split — see the ABI header for the history). 0 on

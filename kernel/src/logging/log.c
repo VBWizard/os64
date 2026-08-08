@@ -66,6 +66,33 @@ bool klog_sink_try_claim(uint64_t taskId)
 	return __sync_bool_compare_and_swap(&kLogSinkOwnerTask, 0, taskId);
 }
 
+// ── The retire handshake (2026-08-08, the shutdown slice) ────────────────────
+// shutdown_system() must not pull the power with log bytes still in the rings
+// or the log file still open. It cannot reach into a ring-3 daemon, but it
+// owns the one door the daemon knocks on every poll: klog_read. Setting this
+// flag makes the NEXT empty poll answer OS64_KLOG_RETIRED instead of 0 — the
+// daemon commits, closes, and exits; the claim is released kernel-side at the
+// same moment so shutdown can watch kLogSinkOwnerTask for the all-clear.
+// Never-drop-a-byte survives shutdown: RETIRED is only spoken when the
+// dequeue came back empty, so every logged byte precedes the farewell.
+volatile bool kKlogRetireRequested = false;
+
+void klog_request_retire(void)
+{
+	kKlogRetireRequested = true;
+}
+
+void klog_sink_release(void)
+{
+	kLogSinkOwnerTask = 0;
+	kLogSinkClaimed = false;
+}
+
+bool klog_sink_is_claimed(void)
+{
+	return log_sink_alive();
+}
+
 // Has a userland sink EVER attached this boot? Distinct from kLogSinkClaimed,
 // which goes false again when a daemon dies: this one is a one-way latch, and
 // it is what ends the initial wait for good.

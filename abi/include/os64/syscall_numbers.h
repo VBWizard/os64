@@ -285,6 +285,24 @@
 // ("sync; sync; sync") predates most filesystems it saved.
 #define SYSCALL_SYNC_ALL   38
 
+// shutdown(8) (2026-08-08 — the day the P5's writable root made the power
+// button a filesystem event). arg0 = the VERB, reserved from day one:
+// 0 = power off; every other value acts as 0 until it means something
+// (1 is spoken for by the future reboot — BSD's shutdown -r; System V
+// spelled the same idea `shutdown -i6`, which is all the argument anyone
+// needs for not taking design cues from System V). The library wrapper
+// passes 0 EXPLICITLY so no binary built today has register garbage where
+// the verb goes when the kernel starts reading it. Does not return. The kernel
+// runs the whole descent: retires the log daemon (final drain, file
+// closed), sync_all's every open file, FLUSH CACHEs the storage devices
+// (the drive's volatile cache is the one thing no fs-level sync reaches),
+// then powers off — or, on hardware whose ACPI we don't speak yet, prints
+// the 1995 liturgy ("It is now safe to turn off your computer") and parks.
+// This call retires the operator ritual sync(1) existed to serve: the
+// "sync; sync; sync" incantation was a human delay loop for the platters,
+// and this is the machine doing its own counting.
+#define SYSCALL_SHUTDOWN   39
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

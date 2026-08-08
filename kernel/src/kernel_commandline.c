@@ -61,6 +61,9 @@ char kLogdPath[128] = {0};
 // so this flag makes it a one-boot test: boot with TESTPANIC, then check the
 // log ends with the banner, the flushed backlog, and the repeated message.
 bool kTestPanic = false;
+// SHUTDOWNTEST's flag — same one-boot-diagnostic idea for the descent.
+bool kTestShutdown = false;
+extern char kTestsPolicyOverride[];
 // SCHED=<mode>: scheduler mode selection. Absent means tickless — the default
 // needs no flag, that's the point (2026-08-05 ruling; the misnamed BSPSCHED
 // bool it replaces was removed the same day, no alias kept — all Limine
@@ -174,12 +177,26 @@ static cmdopt_t cmdopts[] = {
     // walk itself is gated on this bit, so the flag truly costs nothing when
     // off — Chris's requirement the day the status table hit 12k entries.
     {"DEBUG_ALLOCATOR", OPT_UINT128_OR, &kDebugLevel, DEBUG_ALLOCATOR, 0},
+    // The SATA pair, born on the P5's first disk-root attempt (2026-08-08):
+    // every AHCI line was printd(DEBUG_AHCI) and the bit was in no default
+    // mask, so "did the driver see my disk" and "the driver never ran" both
+    // read as an empty grep. Bare metal diagnoses through these.
+    {"DEBUG_AHCI", OPT_UINT128_OR, &kDebugLevel, DEBUG_AHCI, 0},
+    {"DEBUG_HARDDRIVE", OPT_UINT128_OR, &kDebugLevel, DEBUG_HARDDRIVE, 0},
     // Static IPv4 config, dotted-quad (e.g. IP=192.168.1.50). Parsed by
     // ipv4_config_init; a malformed value falls back to the default.
     {"IP", OPT_STRING, kNetIPString, 0, 20},
     {"GW", OPT_STRING, kNetGWString, 0, 20},
     {"MASK", OPT_STRING, kNetMaskString, 0, 20},
     {"TESTPANIC", OPT_BOOL, &kTestPanic, true, 0},
+    // TESTS=panic|warn — one-boot override of every test's failure policy
+    // (test_framework.h owns the taxonomy: warn / remount-ro / panic, the
+    // ext2 s_errors trio reborn). Unset honors each test's registration.
+    {"TESTS", OPT_STRING, kTestsPolicyOverride, 0, 8},
+    // SHUTDOWNTEST — run the full shutdown descent after the post-boot
+    // tests (same diagnostic pattern as TESTPANIC): logd retire, sync_all,
+    // NVMe FLUSH, poweroff. Under QEMU the process exiting IS the pass.
+    {"SHUTDOWNTEST", OPT_BOOL, &kTestShutdown, true, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
     {"GUI", OPT_BOOL, &kEnableGUI, true, 0},
     {"DEBUG_GUI", OPT_UINT128_OR, &kDebugLevel, DEBUG_GUI, 0},

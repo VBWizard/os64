@@ -56,4 +56,16 @@ typedef struct os64_logent
 	char     message[OS64_LOG_MESSAGE_MAX];
 } os64_logent_t;
 
+// klog_read's return, beyond "count of entries": negative values are the
+// kernel talking ABOUT the claim rather than delivering entries.
+//
+// RETIRED (2026-08-08, the shutdown slice): the system is going down and the
+// rings are EMPTY — the daemon has been handed every byte it will ever get
+// (never-drop-a-byte holds to the end; this cannot be returned while entries
+// remain). The kernel has already released the sink claim by the time the
+// daemon reads this: the contract is commit the file, close it, and exit.
+// Any other negative value remains "refused — the sink is claimed by another
+// live reader" (exit without touching the file: it isn't yours).
+#define OS64_KLOG_RETIRED  ((int64_t)-2)
+
 #endif // OS64_ABI_KLOG_H

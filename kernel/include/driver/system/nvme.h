@@ -338,6 +338,9 @@ typedef struct {
 void init_NVME();
 size_t nvme_vfs_read_disk(block_device_info_t* device, uint64_t sector, void* buffer, uint64_t sector_count);
 void nvme_write_disk(nvme_controller_t* controller, uint64_t LBA, size_t length, void* buffer);
+// FLUSH CACHE on every NVMe device — shutdown's step 4 (see shutdown.c for
+// the descent; the drive's volatile cache is the tier no fs-level sync reaches).
+void nvme_flush_all(void);
 
 #endif // NVME_H
 
