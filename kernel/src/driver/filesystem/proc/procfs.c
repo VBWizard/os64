@@ -29,6 +29,7 @@
 
 #include "driver/filesystem/proc/procfs.h"
 #include "driver/filesystem/vfs/vfs.h"
+#include "driver/filesystem/vfs/synthfs.h"
 #include "kmalloc.h"
 #include "memcpy.h"
 #include "memset.h"
@@ -59,77 +60,11 @@ extern uintptr_t kHHDMOffset;
 // "un-synchronized snapshot" note in PROC.md.
 #define PROC_MAX_LIST_WALK 512
 
-// ── The growable text buffer ────────────────────────────────────────────────
-// Every /proc file is built by appending formatted lines into one of these,
-// then handed to the file handle as a fixed snapshot. Growth is
-// allocate-copy-free (kmalloc has no realloc), doubling each time — a status
-// file is a few hundred bytes and never reallocates; `maps` on a big task
-// might do it once.
-
-typedef struct
-{
-	char  *buf;
-	size_t len;   // bytes used, not counting the NUL
-	size_t cap;   // bytes allocated
-	bool   oom;   // a growth failed — the text is truncated, and says so
-} proc_text_t;
-
-static bool ptext_init(proc_text_t *t, size_t cap)
-{
-	t->buf = kmalloc(cap);
-	t->len = 0;
-	t->cap = cap;
-	t->oom = false;
-	return t->buf != NULL;
-}
-
-static bool ptext_grow(proc_text_t *t, size_t needed)
-{
-	size_t newcap = t->cap ? t->cap : 256;
-	while (newcap < needed)
-		newcap *= 2;
-
-	char *nb = kmalloc(newcap);
-	if (nb == NULL)
-	{
-		t->oom = true;
-		return false;
-	}
-	memcpy(nb, t->buf, t->len);
-	kfree(t->buf);
-	t->buf = nb;
-	t->cap = newcap;
-	return true;
-}
-
-// Append one formatted line. Deliberately renders into a bounded stack line
-// buffer first: snprintf tells us the true length, so the grow decision is
-// made with the real number rather than a guess.
-static void ptext_addf(proc_text_t *t, const char *fmt, ...)
-{
-	char line[512];
-	va_list args;
-
-	if (t->buf == NULL)
-		return;
-
-	va_start(args, fmt);
-	int n = vsnprintf(line, sizeof(line), fmt, args);
-	va_end(args);
-
-	if (n < 0)
-		return;
-	size_t want = (size_t)n;
-	if (want >= sizeof(line))
-		want = sizeof(line) - 1;   // truncated at the line buffer; still valid text
-
-	if (t->len + want + 1 > t->cap && !ptext_grow(t, t->len + want + 1))
-		return;
-
-	memcpy(t->buf + t->len, line, want);
-	t->len += want;
-	t->buf[t->len] = '\0';
-}
+// The growable text buffer, the path-component parsers, and the snapshot
+// file-handle life cycle all live in synthfs now (synthfs.h) — extracted
+// 2026-08-08 when sysfs became the second synthetic filesystem. What remains
+// here is what only procfs can know: the path grammar, the task lookup, the
+// generators, and ctl.
 
 // ── Path parsing ────────────────────────────────────────────────────────────
 // Paths arrive fs-local (the mount prefix is already stripped by
@@ -167,53 +102,6 @@ static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "
 static const char *kProcThreadFiles[] = { "status" };
 #define PROC_THREAD_FILE_COUNT (sizeof(kProcThreadFiles) / sizeof(kProcThreadFiles[0]))
 
-// Pull one '/'-delimited component out of `path` starting at *pos. Returns
-// false at end of string. The component is copied (bounded) into `out`.
-static bool proc_next_component(const char *path, size_t *pos, char *out, size_t outlen)
-{
-	while (path[*pos] == '/')
-		(*pos)++;
-	if (path[*pos] == '\0')
-		return false;
-
-	size_t n = 0;
-	while (path[*pos] != '\0' && path[*pos] != '/')
-	{
-		if (n + 1 < outlen)
-			out[n++] = path[*pos];
-		(*pos)++;
-	}
-	out[n] = '\0';
-	return true;
-}
-
-// Strict decimal parse — the whole component must be digits. "7x" is not task
-// 7, it is a name that does not exist, and saying so is cheaper than the
-// confusion of a permissive parse.
-static bool proc_parse_u64(const char *s, uint64_t *out)
-{
-	if (s[0] == '\0')
-		return false;
-
-	uint64_t v = 0;
-	for (size_t i = 0; s[i] != '\0'; i++)
-	{
-		if (s[i] < '0' || s[i] > '9')
-			return false;
-		v = v * 10 + (uint64_t)(s[i] - '0');
-	}
-	*out = v;
-	return true;
-}
-
-static bool proc_name_in(const char *name, const char **table, size_t count)
-{
-	for (size_t i = 0; i < count; i++)
-		if (strcmp(name, table[i]) == 0)
-			return true;
-	return false;
-}
-
 // Classify an fs-local path. Purely syntactic — whether the task actually
 // exists is a separate question, answered by proc_find_task at open time.
 static void proc_parse_path(const char *path, proc_path_t *out)
@@ -228,7 +116,7 @@ static void proc_parse_path(const char *path, proc_path_t *out)
 		return;
 
 	// Component 1: the task ID (absent = the /proc root itself).
-	if (!proc_next_component(path, &pos, comp, sizeof(comp)))
+	if (!synth_next_component(path, &pos, comp, sizeof(comp)))
 	{
 		out->type = PROC_NODE_ROOT;
 		return;
@@ -239,53 +127,53 @@ static void proc_parse_path(const char *path, proc_path_t *out)
 	{
 		strncpy(out->name, comp, PROC_NAME_MAX - 1);
 		// Nothing lives inside a file.
-		if (proc_next_component(path, &pos, comp, sizeof(comp)))
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = PROC_NODE_CORES_FILE;
 		return;
 	}
 
-	if (!proc_parse_u64(comp, &out->taskID))
+	if (!synth_parse_u64(comp, &out->taskID))
 		return;   // "/proc/notanumber" — no such entry
 
 	// Component 2: a task file, or the "thread" subdirectory.
-	if (!proc_next_component(path, &pos, comp, sizeof(comp)))
+	if (!synth_next_component(path, &pos, comp, sizeof(comp)))
 	{
 		out->type = PROC_NODE_TASK;
 		return;
 	}
 	if (strcmp(comp, "thread") != 0)
 	{
-		if (!proc_name_in(comp, kProcTaskFiles, PROC_TASK_FILE_COUNT))
+		if (!synth_name_in(comp, kProcTaskFiles, PROC_TASK_FILE_COUNT))
 			return;
 		strncpy(out->name, comp, PROC_NAME_MAX - 1);
 		// A trailing component after a file name means the path names
 		// something inside a file, which is not a thing.
-		if (proc_next_component(path, &pos, comp, sizeof(comp)))
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = PROC_NODE_TASK_FILE;
 		return;
 	}
 
 	// Component 3: the thread ID.
-	if (!proc_next_component(path, &pos, comp, sizeof(comp)))
+	if (!synth_next_component(path, &pos, comp, sizeof(comp)))
 	{
 		out->type = PROC_NODE_THREADDIR;
 		return;
 	}
-	if (!proc_parse_u64(comp, &out->threadID))
+	if (!synth_parse_u64(comp, &out->threadID))
 		return;
 
 	// Component 4: a thread file.
-	if (!proc_next_component(path, &pos, comp, sizeof(comp)))
+	if (!synth_next_component(path, &pos, comp, sizeof(comp)))
 	{
 		out->type = PROC_NODE_THREAD;
 		return;
 	}
-	if (!proc_name_in(comp, kProcThreadFiles, PROC_THREAD_FILE_COUNT))
+	if (!synth_name_in(comp, kProcThreadFiles, PROC_THREAD_FILE_COUNT))
 		return;
 	strncpy(out->name, comp, PROC_NAME_MAX - 1);
-	if (proc_next_component(path, &pos, comp, sizeof(comp)))
+	if (synth_next_component(path, &pos, comp, sizeof(comp)))
 		return;
 	out->type = PROC_NODE_THREAD_FILE;
 }
@@ -505,7 +393,7 @@ static const char *proc_handle_type_name(handle_type_t t)
 }
 
 // ── The file generators ─────────────────────────────────────────────────────
-// Each fills a proc_text_t with the whole file. They run once, at open, under
+// Each fills a synth_text_t with the whole file. They run once, at open, under
 // kKernelPML4 (open_do's kernel context) — so kernel structures are readable
 // and nothing here may touch a user pointer.
 
@@ -530,7 +418,7 @@ static uint64_t proc_cycles_to_us(uint64_t cycles)
 // slice stale); SUBTRACTING a remote TSC from a local rdtsc would not be,
 // which is why total comes from the core's own two stamps, never from
 // "now".
-static void proc_gen_cores(proc_text_t *t)
+static void proc_gen_cores(synth_text_t *t)
 {
 	// Settle-on-read: every core charges its in-flight span (locally, own
 	// TSC) before we render — so the books are never staler than this IPI
@@ -538,7 +426,7 @@ static void proc_gen_cores(proc_text_t *t)
 	// Rate-limited inside (once per tick), so a top refresh pays once.
 	mpAcctSettleAll();
 
-	ptext_addf(t, "core\ttotal_us\tbusy_us\tidle_us\tsched_us\n");
+	synth_text_addf(t, "core\ttotal_us\tbusy_us\tidle_us\tsched_us\n");
 	for (uint8_t i = 0; i < kMPCoreCount; i++)
 	{
 		core_local_storage_t *cls = get_core_local_storage_for_core(i);
@@ -555,13 +443,13 @@ static void proc_gen_cores(proc_text_t *t)
 		uint64_t accounted = idle + sched;
 		uint64_t busy = (total > accounted) ? total - accounted : 0;
 
-		ptext_addf(t, "%u\t%lu\t%lu\t%lu\t%lu\n", (unsigned)i,
+		synth_text_addf(t, "%u\t%lu\t%lu\t%lu\t%lu\n", (unsigned)i,
 		           proc_cycles_to_us(total), proc_cycles_to_us(busy),
 		           proc_cycles_to_us(idle),  proc_cycles_to_us(sched));
 	}
 }
 
-static void proc_gen_task_status(proc_text_t *t, task_t *task)
+static void proc_gen_task_status(synth_text_t *t, task_t *task)
 {
 	// The liveliest thread represents the task (see the helper's doctrine) —
 	// its state and core answer "what is this PROGRAM doing, and where",
@@ -573,28 +461,28 @@ static void proc_gen_task_status(proc_text_t *t, task_t *task)
 	// below must not be a scheduler-pass stale on a monopolized core.
 	mpAcctSettleAll();
 
-	ptext_addf(t, "task\t%lu\n", task->taskID);
-	ptext_addf(t, "name\t%s\n", task->exename[0] ? task->exename : "(none)");
-	ptext_addf(t, "state\t%s\n", th ? proc_state_name(th->threadState) : "none");
-	ptext_addf(t, "parent\t%lu\n",
+	synth_text_addf(t, "task\t%lu\n", task->taskID);
+	synth_text_addf(t, "name\t%s\n", task->exename[0] ? task->exename : "(none)");
+	synth_text_addf(t, "state\t%s\n", th ? proc_state_name(th->threadState) : "none");
+	synth_text_addf(t, "parent\t%lu\n",
 	           task->parentTask ? task->parentTask->taskID : 0);
-	ptext_addf(t, "kernel\t%s\n", task->kernelTask ? "yes" : "no");
+	synth_text_addf(t, "kernel\t%s\n", task->kernelTask ? "yes" : "no");
 	// The two console-ownership bits SIGINT.md introduced. Worth surfacing:
 	// "which task would Ctrl+C hit" is exactly the sort of question /proc
 	// exists to answer without a debugger.
-	ptext_addf(t, "foreground\t%s\n", (kForegroundTask == task) ? "yes" : "no");
-	ptext_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
-	ptext_addf(t, "threads\t%u\n", proc_task_thread_count(task));
-	ptext_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);
-	ptext_addf(t, "entry\t%p\n", (void *)task->entryPoint);
+	synth_text_addf(t, "foreground\t%s\n", (kForegroundTask == task) ? "yes" : "no");
+	synth_text_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
+	synth_text_addf(t, "threads\t%u\n", proc_task_thread_count(task));
+	synth_text_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);
+	synth_text_addf(t, "entry\t%p\n", (void *)task->entryPoint);
 	if (task->loadBias)
-		ptext_addf(t, "bias\t%p\n", (void *)task->loadBias);
-	ptext_addf(t, "faults\t%u minor %u major\n", task->minorFaults, task->majorFaults);
-	ptext_addf(t, "switches\t%u\n", task->cSwitches);
+		synth_text_addf(t, "bias\t%p\n", (void *)task->loadBias);
+	synth_text_addf(t, "faults\t%u minor %u major\n", task->minorFaults, task->majorFaults);
+	synth_text_addf(t, "switches\t%u\n", task->cSwitches);
 	// Where the task's thread last ran — the answer to "whose plate did
 	// this time come off", without which per-core arithmetic is guesswork.
 	if (th != NULL)
-		ptext_addf(t, "core\t%u\n", th->lastRunApicID);
+		synth_text_addf(t, "core\t%u\n", th->lastRunApicID);
 	// Real CPU time, charged at context-switch boundaries (thread.h has the
 	// doctrine). `ticks` below is the old sampling counter — kept because
 	// removing a field is an ABI event, but runtime_us is the honest one.
@@ -603,18 +491,18 @@ static void proc_gen_task_status(proc_text_t *t, task_t *task)
 	// "what this program cost" rather than "what its first thread cost" —
 	// and on a threaded program those differ wildly, because the first
 	// thread is usually the one waiting.
-	ptext_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(proc_task_run_cycles(task)));
+	synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(proc_task_run_cycles(task)));
 	if (th != NULL)
-		ptext_addf(t, "ticks\t%lu\n", proc_task_run_ticks(task));
+		synth_text_addf(t, "ticks\t%lu\n", proc_task_run_ticks(task));
 	// A live task has no exit status; saying "-" beats printing a zero that
 	// looks like "exited successfully".
 	if (task->exited)
-		ptext_addf(t, "exit\t%lu\n", task->retVal);
+		synth_text_addf(t, "exit\t%lu\n", task->retVal);
 	else
-		ptext_addf(t, "exit\t-\n");
+		synth_text_addf(t, "exit\t-\n");
 }
 
-static void proc_gen_cmdline(proc_text_t *t, task_t *task)
+static void proc_gen_cmdline(synth_text_t *t, task_t *task)
 {
 	// One argument per LINE, not NUL-separated (PROC.md): the unambiguity is
 	// the same and `cat` renders it correctly, which Linux's version does not.
@@ -623,7 +511,7 @@ static void proc_gen_cmdline(proc_text_t *t, task_t *task)
 		// argv[0] is not always populated for kernel-launched tasks; the
 		// executable name is still the honest answer to "what is this".
 		if (task->exename[0])
-			ptext_addf(t, "%s\n", task->exename);
+			synth_text_addf(t, "%s\n", task->exename);
 		return;
 	}
 	for (int i = 0; i < task->argc && i < PROC_MAX_LIST_WALK; i++)
@@ -632,16 +520,16 @@ static void proc_gen_cmdline(proc_text_t *t, task_t *task)
 		// translated, never dereferenced. See proc_copy_task_string.
 		char arg[TASK_MAX_PATH_LEN];
 		if (proc_copy_task_string(task, (uintptr_t)task->argv[i], arg, sizeof(arg)))
-			ptext_addf(t, "%s\n", arg);
+			synth_text_addf(t, "%s\n", arg);
 	}
 }
 
-static void proc_gen_cwd(proc_text_t *t, task_t *task)
+static void proc_gen_cwd(synth_text_t *t, task_t *task)
 {
-	ptext_addf(t, "%s\n", (task->cwd != NULL) ? task->cwd : "/");
+	synth_text_addf(t, "%s\n", (task->cwd != NULL) ? task->cwd : "/");
 }
 
-static void proc_gen_handles(proc_text_t *t, task_t *task)
+static void proc_gen_handles(synth_text_t *t, task_t *task)
 {
 	// "handle<TAB>type<TAB>detail" — the detail column is whatever the tag
 	// makes meaningful, and is simply absent for the console tags (they
@@ -658,13 +546,13 @@ static void proc_gen_handles(proc_text_t *t, task_t *task)
 			// f_path is the fs-local TAIL the mount router handed the driver,
 			// so it has lost its mount prefix — "/bin/ls" here could be on any
 			// mounted filesystem. Printing what we have beats printing nothing.
-			ptext_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
+			synth_text_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
 			           (f->f_path != NULL) ? f->f_path : "(unnamed)");
 		}
 		else if (h->type == HANDLE_DIR && h->object != NULL)
 		{
 			vfs_directory_t *d = (vfs_directory_t *)h->object;
-			ptext_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
+			synth_text_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
 			           (d->f_path != NULL) ? d->f_path : "(unnamed)");
 		}
 		else if (h->type == HANDLE_PIPE_READ || h->type == HANDLE_PIPE_WRITE)
@@ -672,16 +560,16 @@ static void proc_gen_handles(proc_text_t *t, task_t *task)
 			// The pipe's identity is its object pointer — two tasks showing the
 			// same value are the two ends of one pipeline, which is exactly what
 			// you want to see when a pipeline hangs.
-			ptext_addf(t, "%d\t%s\t%p\n", i, proc_handle_type_name(h->type), h->object);
+			synth_text_addf(t, "%d\t%s\t%p\n", i, proc_handle_type_name(h->type), h->object);
 		}
 		else
 		{
-			ptext_addf(t, "%d\t%s\n", i, proc_handle_type_name(h->type));
+			synth_text_addf(t, "%d\t%s\n", i, proc_handle_type_name(h->type));
 		}
 	}
 }
 
-static void proc_gen_maps(proc_text_t *t, task_t *task)
+static void proc_gen_maps(synth_text_t *t, task_t *task)
 {
 	// "start-end<TAB>prot<TAB>flags" — the address space as a table. NOT the
 	// memory itself: that is what the name `mem` is reserved for, the day a
@@ -704,7 +592,7 @@ static void proc_gen_maps(proc_text_t *t, task_t *task)
 		prot[2] = (v->prot & PROT_EXEC)  ? 'x' : '-';
 		prot[3] = '\0';
 
-		ptext_addf(t, "%p-%p\t%s\t%s%s%s\n",
+		synth_text_addf(t, "%p-%p\t%s\t%s%s%s\n",
 		           (void *)v->start, (void *)v->end, prot,
 		           (v->flags & MAP_SHARED) ? "shared" : "private",
 		           v->cow ? ",cow" : "",
@@ -712,13 +600,13 @@ static void proc_gen_maps(proc_text_t *t, task_t *task)
 	}
 }
 
-static void proc_gen_thread_status(proc_text_t *t, task_t *task, thread_t *th)
+static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 {
 	mpAcctSettleAll();   // same freshness contract as the task status file
 
-	ptext_addf(t, "thread\t%lu\n", th->threadID);
-	ptext_addf(t, "task\t%lu\n", task->taskID);
-	ptext_addf(t, "state\t%s\n", proc_state_name(th->threadState));
+	synth_text_addf(t, "thread\t%lu\n", th->threadID);
+	synth_text_addf(t, "task\t%lu\n", task->taskID);
+	synth_text_addf(t, "state\t%s\n", proc_state_name(th->threadState));
 	// mp_apic is the thread's PINNED AFFINITY, not the core it is running on —
 	// a distinction worth the extra word, because labelling it "core" printed
 	// 18446744073709551615 for every ordinary thread during bring-up (that is
@@ -727,17 +615,17 @@ static void proc_gen_thread_status(proc_text_t *t, task_t *task, thread_t *th)
 	// have to be found by scanning them; it joins this file when something
 	// needs it.
 	if (th->mp_apic == THREAD_NO_AFFINITY)
-		ptext_addf(t, "affinity\tany\n");
+		synth_text_addf(t, "affinity\tany\n");
 	else
-		ptext_addf(t, "affinity\t%lu\n", th->mp_apic);
-	ptext_addf(t, "idle\t%s\n", th->idleThread ? "yes" : "no");
-	ptext_addf(t, "core\t%u\n", th->lastRunApicID);   // last dispatched here
-	ptext_addf(t, "ring\t%u\n", (unsigned)(th->regs.CS & 3));
-	ptext_addf(t, "rip\t%p\n", (void *)th->regs.RIP);
-	ptext_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);
-	ptext_addf(t, "ticks\t%lu\n", th->totalRunTicks);
-	ptext_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(th->runCycles));
-	ptext_addf(t, "signals\t%p\n", (void *)th->signals.sigind);
+		synth_text_addf(t, "affinity\t%lu\n", th->mp_apic);
+	synth_text_addf(t, "idle\t%s\n", th->idleThread ? "yes" : "no");
+	synth_text_addf(t, "core\t%u\n", th->lastRunApicID);   // last dispatched here
+	synth_text_addf(t, "ring\t%u\n", (unsigned)(th->regs.CS & 3));
+	synth_text_addf(t, "rip\t%p\n", (void *)th->regs.RIP);
+	synth_text_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);
+	synth_text_addf(t, "ticks\t%lu\n", th->totalRunTicks);
+	synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(th->runCycles));
+	synth_text_addf(t, "signals\t%p\n", (void *)th->signals.sigind);
 }
 
 // ── ctl ─────────────────────────────────────────────────────────────────────
@@ -758,13 +646,13 @@ static const proc_ctl_verb_t kProcCtlVerbs[] = {
 };
 #define PROC_CTL_VERB_COUNT (sizeof(kProcCtlVerbs) / sizeof(kProcCtlVerbs[0]))
 
-static void proc_gen_ctl(proc_text_t *t, task_t *task)
+static void proc_gen_ctl(synth_text_t *t, task_t *task)
 {
 	(void)task;
 	// "word<TAB>effect" — same tabular shape as every other file here, so the
 	// same five-line parser reads it.
 	for (size_t i = 0; i < PROC_CTL_VERB_COUNT; i++)
-		ptext_addf(t, "%s\t%s\n", kProcCtlVerbs[i].word, kProcCtlVerbs[i].effect);
+		synth_text_addf(t, "%s\t%s\n", kProcCtlVerbs[i].word, kProcCtlVerbs[i].effect);
 }
 
 // A ctl write NEVER touches a scheduler queue — it ORs a pending-signal bit
@@ -814,11 +702,10 @@ static int proc_ctl_command(task_t *task, const char *word, size_t consumed)
 
 typedef struct
 {
-	char    *data;      // the snapshot (NULL only if generation failed outright)
-	size_t   size;
-	size_t   pos;
-	bool     is_ctl;    // writes to this handle are commands
-	uint64_t taskID;    // ctl's target, re-resolved at write time
+	synth_snapshot_t snap;  // MUST be first — the generic fops see only this
+	                        // head, and close frees the whole struct by it
+	bool     is_ctl;        // writes to this handle are commands
+	uint64_t taskID;        // ctl's target, re-resolved at write time
 } proc_file_handle_t;
 
 static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
@@ -861,8 +748,8 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	// Generate the whole file NOW, into a snapshot (PROC.md: an internally
 	// consistent file beats a fresh one — you can never read the first half of
 	// one task's status and the second half of its successor's).
-	proc_text_t text;
-	if (!ptext_init(&text, 512))
+	synth_text_t text;
+	if (!synth_text_init(&text, 512))
 		return -1;
 
 	if (pp.type == PROC_NODE_CORES_FILE)
@@ -885,47 +772,18 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		return -1;
 	}
 
-	if (text.oom)
-		ptext_addf(&text, "(truncated: out of memory)\n");
-
-	proc_file_handle_t *h = kmalloc(sizeof(proc_file_handle_t));
-	*vfs_file = kmalloc(sizeof(vfs_file_t));
-	if (h == NULL || *vfs_file == NULL)
-	{
-		if (h) kfree(h);
-		if (*vfs_file) kfree(*vfs_file);
-		if (text.buf) kfree(text.buf);
-		*vfs_file = NULL;
+	// The snapshot handle + vfs_file wiring is synthfs's job; the two fields
+	// past the snapshot head are ours.
+	proc_file_handle_t *h = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+	                                               sizeof(proc_file_handle_t),
+	                                               FILETYPE_PROCFILE);
+	                                               // ^ the enum's oldest fossil, finally true
+	if (h == NULL)
 		return -1;
-	}
 
-	h->data   = text.buf;
-	h->size   = text.len;
-	h->pos    = 0;
 	h->is_ctl = is_ctl;
 	h->taskID = pp.taskID;
-
-	(*vfs_file)->filetype = FILETYPE_PROCFILE;   // the enum's oldest fossil, finally true
-	(*vfs_file)->handle   = h;
-	(*vfs_file)->f_path   = (char *)path;   // caller's pointer, caller's lifetime
-	                                        // (the handle closer frees it — vfs.h)
-	(*vfs_file)->fops     = vfs_fs->fops;
-	(*vfs_file)->owner    = vfs_fs;
 	return 0;
-}
-
-static int proc_read(vfs_file_t *vfs_file, void *buffer, size_t size)
-{
-	proc_file_handle_t *h = (proc_file_handle_t *)vfs_file->handle;
-
-	if (h->data == NULL || h->pos >= h->size)
-		return 0;   // end of file — 0, like every other read in os64
-	if (size > h->size - h->pos)
-		size = h->size - h->pos;
-
-	memcpy(buffer, h->data + h->pos, size);
-	h->pos += size;
-	return (int)size;
 }
 
 // Writing to a /proc file is a COMMAND, not a store. Only ctl accepts one.
@@ -968,44 +826,6 @@ static int proc_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		return -1;   // the task is gone — the command has no target
 
 	return proc_ctl_command(task, word, size);
-}
-
-static int proc_seek(vfs_file_t *vfs_file, long offset, int whence)
-{
-	proc_file_handle_t *h = (proc_file_handle_t *)vfs_file->handle;
-	int64_t base;
-
-	switch (whence)
-	{
-		case SEEK_SET: base = 0; break;
-		case SEEK_CUR: base = (int64_t)h->pos; break;
-		case SEEK_END: base = (int64_t)h->size; break;
-		default: return -1;
-	}
-	int64_t target = base + offset;
-	if (target < 0)
-		return -1;
-	h->pos = (size_t)target;   // past-end is legal; reads there return 0
-	return 0;
-}
-
-static int proc_tell(vfs_file_t *vfs_file)
-{
-	return (int)((proc_file_handle_t *)vfs_file->handle)->pos;
-}
-
-static int proc_close(vfs_file_t *vfs_file)
-{
-	proc_file_handle_t *h = (proc_file_handle_t *)vfs_file->handle;
-
-	if (h != NULL)
-	{
-		if (h->data != NULL)
-			kfree(h->data);
-		kfree(h);
-	}
-	kfree(vfs_file);
-	return 0;
 }
 
 // ── Directory operations ────────────────────────────────────────────────────
@@ -1248,11 +1068,11 @@ static int proc_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *v
 
 vfs_file_operations_t proc_fops = {
 	.open  = proc_open,
-	.read  = proc_read,
-	.write = proc_write,
-	.seek  = proc_seek,
-	.tell  = proc_tell,
-	.close = proc_close,
+	.read  = synth_snapshot_read,    // the generic snapshot fops (synthfs.h):
+	.write = proc_write,             // only open and the ctl write are ours
+	.seek  = synth_snapshot_seek,
+	.tell  = synth_snapshot_tell,
+	.close = synth_snapshot_close,
 };
 
 vfs_directory_operations_t proc_dops = {
@@ -1266,53 +1086,8 @@ vfs_directory_operations_t proc_dops = {
 
 void procfs_mount(void)
 {
-	// kRegisterFilesystem cannot be used: it reaches through
-	// device->block_device->ops to copy block operations, and there is no
-	// block device here. So procfs builds its own vfs_filesystem_t and claims
-	// its prefix directly — which is all "mounting" has ever meant in this
-	// kernel (see the mount-table note in vfs.h).
-	if (kMountCount >= VFS_MAX_MOUNTS)
-	{
-		printd(DEBUG_BOOT, "BOOT: mount table full — /proc not mounted\n");
-		return;
-	}
-
-	vfs_filesystem_t *fs = kmalloc(sizeof(vfs_filesystem_t));
-	if (fs == NULL)
-	{
-		printd(DEBUG_BOOT, "BOOT: out of memory — /proc not mounted\n");
-		return;
-	}
-
-	fs->fops = kmalloc(sizeof(vfs_file_operations_t));
-	fs->dops = kmalloc(sizeof(vfs_directory_operations_t));
-	if (fs->fops == NULL || fs->dops == NULL)
-	{
-		if (fs->fops) kfree(fs->fops);
-		if (fs->dops) kfree(fs->dops);
-		kfree(fs);
-		printd(DEBUG_BOOT, "BOOT: out of memory — /proc not mounted\n");
-		return;
-	}
-	memcpy(fs->fops, &proc_fops, sizeof(vfs_file_operations_t));
-	memcpy(fs->dops, &proc_dops, sizeof(vfs_directory_operations_t));
-
-	// bops stays NULL — nothing under this filesystem ever reads a sector, and
-	// a NULL there is the honest statement of that. (Everything else in the
-	// struct is left zeroed by the allocator: no superblock, no block device,
-	// no partition number, because none of those things exist here.)
-
-	vfs_mount_entry_t *m = &kMountTable[kMountCount];
-	strncpy(m->prefix, "/proc", VFS_MOUNT_PREFIX_MAX - 1);
-	m->prefix[VFS_MOUNT_PREFIX_MAX - 1] = '\0';
-	m->prefix_len = strlen(m->prefix);
-	// part_guid stays all-zero: there is no partition. Mounting AFTER the
-	// auto-mount sweep keeps that zero out of the sweep's dedupe comparisons,
-	// where it could otherwise match a partition whose GUID failed to read.
-	memset(m->part_guid, 0, sizeof(m->part_guid));
-	m->fs = fs;
-	kMountCount++;
-
-	printd(DEBUG_BOOT, "BOOT: mounted /proc (synthetic — processes as files)\n");
-	printf("mounted proc at /proc\n");
+	// The whole mount dance (why kRegisterFilesystem cannot be used, why bops
+	// stays NULL, why the GUID stays zero) lives in synthfs_mount now — its
+	// comments carried the doctrine with it.
+	synthfs_mount("/proc", &proc_fops, &proc_dops, "processes as files");
 }

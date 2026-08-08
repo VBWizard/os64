@@ -59,7 +59,8 @@ typedef enum
 {
 	FILETYPE_FILE = 1,
 	FILETYPE_PIPE = 2,
-	FILETYPE_PROCFILE = 3
+	FILETYPE_PROCFILE = 3,
+	FILETYPE_SYSFILE = 4    // /sys — the machine as files (sysfs.c)
 } eFileType;
 
 enum whichDrive
