@@ -1087,11 +1087,13 @@ static int run_line(char *line, int *last_status)
 // them. etc/husk.rc (the build's copy) carries the full story.
 //
 // The search order is a persistence gradient, first hit wins:
-//   /home/husk.rc   YOUR copy — the data disk survives every build untouched
-//   /fat/husk.rc    the build's default, rewritten onto FAT every `make`
-//                   (root is ext2 and read-only by design, so the rc rides
-//                   the FAT partition where it stays editable from inside)
-//   /husk.rc        the same FAT file when a FAT-root boot mounts it as "/"
+//   /home/husk.rc   YOUR copy — its own partition, survives builds AND
+//                   root refreshes untouched (the persistence doctrine,
+//                   ruled 2026-08-07: root is the system's, /home is yours)
+//   /etc/husk.rc    the SYSTEM's copy on the writable ext2 root (the
+//                   curated tree finally has its /etc — same ratification)
+//   /fat/husk.rc    the lifeboat's copy, rewritten onto FAT every `make`
+//   /husk.rc        the same FAT file when a lifeboat boot mounts it as "/"
 //
 // HUSKRC is the login-shell distinction, enforced by the environment's
 // one-way valve: the first husk sets it BEFORE running the file, every
@@ -1102,7 +1104,7 @@ static int run_line(char *line, int *last_status)
 
 static int run_rc(int *last_status)
 {
-	static const char *rc_paths[] = { "/home/husk.rc", "/fat/husk.rc", "/husk.rc" };
+	static const char *rc_paths[] = { "/home/husk.rc", "/etc/husk.rc", "/fat/husk.rc", "/husk.rc" };
 
 	if (os64_getenv("HUSKRC") != NULL)
 		return 0;                       // a subshell: the rc already ran upstream

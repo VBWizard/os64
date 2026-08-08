@@ -63,7 +63,12 @@ DISK_PARTUUID ?= 2f4fd02e-68b4-4c82-98bc-72467529b3fc
 # The partition rides the same image (and therefore the ISO/ramdisk boots
 # too), right after the FAT partition. The FAT partition keeps DISK_SIZE_MB
 # and its GUID exactly as before — root mounting is untouched.
-EXT2_SIZE_MB ?= 512
+# 256, ruled 2026-08-07 with the writable-root ratification: half a gig was
+# headroom nobody used, and the WHOLE image is what Limine copies to RAM on a
+# ramdisk boot (~1s/32MB — the 30-second boot Chris timed was this number).
+# 256 still quadruples the old 64MB FAT ceiling that made "test something
+# BIG" a struggle, and halves the ramdisk toll.
+EXT2_SIZE_MB ?= 256
 EXT2_PARTUUID ?= 1ec5f5ab-71b7-45cd-a7a4-05646e878e57
 EXT2_TEST_IMAGE ?= $(CURDIR)/disk/ext2_test.img
 EXT2_STAGING ?= $(CURDIR)/disk/ext2_staging
@@ -337,7 +342,7 @@ userland:
 # ext2-ROOT boot (see the "/QEMU Boot (ext2 root)" Limine entry) finds the
 # same programs a FAT boot does. Rebuilds when the generator OR any binary
 # that rides it changes.
-$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt GNUmakefile
+$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -351,7 +356,11 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURE
 	# Second debugfs pass: the program payload. Generated here (not in the
 	# python script) because the bin list is THIS makefile's knowledge — same
 	# discovery as the FAT mcopy loop below, no per-app line to forget.
-	printf 'mkdir /bin\nmkdir /lib\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	# /etc and /tmp join /bin and /lib: the curated tree, now that root is
+	# writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
+	# /home/husk.rc (the user's, on its own partition) still wins the
+	# search; /fat/husk.rc remains the lifeboat's copy.
+	printf 'mkdir /bin\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
@@ -500,9 +509,13 @@ vbox-sync: $(DISK_IMAGE)
 # Real file prerequisites, so xorriso only repacks the 77MB ISO when something
 # on it actually changed (it used to depend on the phony disk-populate, which
 # guaranteed a full repack on every single make).
-$(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf
+$(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
 	@mkdir -p iso_root/boot
 	cp kernel/bin/$(IMAGE_NAME) iso_root/boot/
+	# The P5 refresh script rides at the ISO root: boot the target machine's
+	# Linux, mount the stick, `sudo bash <stick>/p5-refresh.sh <stick>` — the
+	# ISO carries its own installer (one-time setup lives in its header).
+	cp tools/p5-refresh.sh iso_root/
 	# The QEMU NVMe disk image rides along on the ISO as a Limine module so
 	# RAMDISK boot entries can mount it as root with no physical disk prep
 	# (see /RAMDisk Boot in limine.conf). Copied after disk-populate so the

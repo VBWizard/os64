@@ -184,12 +184,19 @@ make -C kernel test-elf
 - **FAT** (`fat/`): FAT12/16/32 support
 - **ext2** (`ext2/`): full read/write ext2 support since 2026-08-04 (ext2.c =
   read half, ext2_write.c = write half, ext2_internal.h = their private seam).
-  TWO op-table pairs: read-only (what the ROOT mounts — writable root not yet
-  ratified) and read-write (what secondary mounts like /ext2 get). Write
-  durability is FULL WRITE-THROUGH (sync is a no-op; unlike FAT, an appended
-  file reads at true length immediately). rm refuses files/dirs another
-  handle holds open (open-inode refcount, ruled 2026-08-04). Verified by the
-  in-OS test suite AND host `make fsck-ext2` (e2fsck must stay green).
+  ROOT IS WRITABLE (ratified 2026-08-07 after the write driver's shakedown on
+  secondary mounts) — every ext2 mount gets the read-write op tables; the
+  read-only pair survives as the forced_ro fallback for ro_compat features
+  beyond the driver. THE PERSISTENCE DOCTRINE (same ruling): root is the
+  SYSTEM's — the build rewrites the image, the P5 refresh script mirrors it,
+  nothing written there survives a rebuild; /home is the USER's — its own
+  partition/disk, never rebuilt, never --delete'd. The FAT partition is the
+  LIFEBOAT: own /bin, own husk.rc, own boot entry, for the day a stray write
+  eats root. Write durability is FULL WRITE-THROUGH (sync is a no-op; unlike
+  FAT, an appended file reads at true length immediately). rm refuses
+  files/dirs another handle holds open (open-inode refcount, ruled
+  2026-08-04). Verified by the in-OS test suite AND host `make fsck-ext2`
+  (e2fsck must stay green — with a writable root it is the constitution).
 - Root filesystem mounted via `ROOTPARTUUID`/`ROOT` kernel cmdline parameter;
   FAT32 or ext2 both work as root (see the "/QEMU Boot (ext2 root)" Limine entry)
 - **Mount table** (vfs.c/vfs.h, since 2026-07-19): multiple filesystems in one

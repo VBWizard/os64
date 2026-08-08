@@ -767,11 +767,15 @@ int ext2_initialize_filesystem(vfs_filesystem_t *fs)
 // ── The op tables (the READ-ONLY pair) ──────────────────────────────────────
 // Write-shaped slots are deliberately NULL: a NULL here is refused cleanly at
 // the syscall layer (the NULL-slot doctrine), so a mount registered with THIS
-// pair cannot write no matter what code exists elsewhere. The ROOT mounts
-// this pair until writable-root is ratified; secondary ext2 mounts get the
-// superset pair ext2_rw_fops/ext2_rw_dops (ext2_write.c). The stray-write
-// tripwire (block_device.c) consults the per-mount copy of exactly these
-// slots, so the read-only claim is enforced at the disk too.
+// pair cannot write no matter what code exists elsewhere. HISTORY: the ROOT
+// mounted this pair from 2026-07-19 (the day the OS got off FAT) until
+// 2026-08-07, when writable root was ratified after the write driver's
+// shakedown on secondary mounts — every ext2 mount now gets the superset
+// pair ext2_rw_fops/ext2_rw_dops (ext2_write.c). This pair REMAINS the
+// forced_ro fallback (ro_compat features beyond us strip mounts back to it)
+// and the honest vocabulary for any future mount that must not write. The
+// stray-write tripwire (block_device.c) consults the per-mount copy of
+// exactly these slots, so a read-only claim is enforced at the disk too.
 vfs_file_operations_t ext2_fops = {
 	.initialize = ext2_initialize_filesystem,
 	.open  = ext2_open,
