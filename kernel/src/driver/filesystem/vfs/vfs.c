@@ -413,6 +413,44 @@ bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo)
 	return false;   // no mount claims it — nothing legitimate writes there
 }
 
+// ── vfs_demote_all_mounts_readonly (TEST_RO's engine, 2026-08-08) ────────────
+// The errors=remount-ro descendant: when a write-path test fails, continuing
+// to write is how a bad driver compounds a bad day — but halting costs the
+// operator the live system they need for analysis. So: take the pens away,
+// keep the lights on. NULLing the write verbs on each mount's PRIVATE op-table
+// copies (kRegisterFilesystem clones them per mount — the same property the
+// stray-write tripwire builds on) makes every dispatch site refuse exactly the
+// way a born-read-only mount refuses: syscall_write/unlink/mkdir already
+// null-check these slots (ext2's forced_ro mounts ship NULLs from birth), the
+// block tripwire's vfs_partition_mount_writable() reads these same copies so
+// anything that DOES sneak a write past the fs layer panics by name, and logd
+// stops reading the rings when its writes fail (its own starve-the-file rule)
+// so the log rides serial again. Open files keep reading — their vfs_file_t
+// fops POINT at the mount's copy, so the demotion reaches them too.
+void vfs_demote_all_mounts_readonly(const char *why)
+{
+	int demoted = 0;
+	for (int i = 0; i < kMountCount; i++)
+	{
+		vfs_filesystem_t *fs = kMountTable[i].fs;
+		if (fs == NULL || fs->fops == NULL || fs->fops->write == NULL)
+			continue;
+		fs->fops->write   = NULL;
+		fs->fops->fputs   = NULL;
+		fs->fops->fprintf = NULL;
+		fs->fops->rm      = NULL;
+		if (fs->dops != NULL)
+			fs->dops->mkdir = NULL;
+		demoted++;
+		printf("VFS: '%s' demoted to READ-ONLY (%s)\n", kMountTable[i].prefix, why);
+		printd(DEBUG_VFS, "VFS: mount '%s' demoted to read-only: %s\n",
+		       kMountTable[i].prefix, why);
+	}
+	if (demoted > 0)
+		printf("VFS: %d mount(s) now read-only — analyze, then reboot to restore writes\n",
+		       demoted);
+}
+
 // The panic-message companion (contract in vfs.h): mounted at all?
 bool vfs_partition_mounted(block_device_info_t *dev, int partNo)
 {
@@ -456,15 +494,24 @@ static void vfs_mount_secondary_partitions(void)
 					break;
 				case FILESYSTEM_TYPE_EXT2:
 					fsName = "ext2";
-					// SECONDARY ext2 mounts get the WRITABLE pair (2026-08-04).
-					// The ROOT keeps the read-only pair (vfs_mount_root_part
-					// below) until writable-root is ratified — the shakedown
-					// happens here, on /ext2 and friends, where a write bug
-					// can't eat the filesystem the OS is standing on.
-					// ext2_initialize_filesystem may still strip the write
-					// slots if the disk's ro_compat features outrun us.
-					ext2_rw_tables_init();
-					fileOps = ext2_rw_fops; dirOps = ext2_rw_dops;
+					// Ext2 mounts get the WRITABLE pair (secondaries since
+					// 2026-08-04's shakedown; the root joined 2026-08-07 when
+					// writable-root was ratified). ext2_initialize_filesystem
+					// may still strip the write slots if the disk's ro_compat
+					// features outrun us — and a DEVICE whose driver cannot
+					// write demotes the mount the same way (2026-08-08: the
+					// P5's SATA disk, AHCI being read-only today).
+					if (kBlockDeviceInfo[idx].block_device->ops->write == NULL)
+					{
+						fileOps = ext2_fops; dirOps = ext2_dops;
+						printf("%s: device's driver cannot write — mounting READ-ONLY\n",
+						       vfs_partname_usable(part->partName) ? part->partName : fsName);
+					}
+					else
+					{
+						ext2_rw_tables_init();
+						fileOps = ext2_rw_fops; dirOps = ext2_rw_dops;
+					}
 					break;
 				default:
 					continue;   // unrecognized/no filesystem — not mountable
@@ -546,13 +593,54 @@ int vfs_mount_root_part(char* rootPartUUID)
 				{
 					case FILESYSTEM_TYPE_EXT2:
 						// The OS that got off FAT: root on a real ext2
-						// partition, read-only for now (the driver is
-						// read-only by design — see ext2.c).
-						fileOps = ext2_fops;
-						dirOps = ext2_dops;
-						printd(DEBUG_BOOT, "BOOT: Root filesystem found (ext2), mounting read-only\n");
+						// partition — WRITABLE, ratified 2026-08-07 after
+						// the write driver's shakedown tour on secondary
+						// mounts (2026-08-04 arc: first-boot green, e2fsck
+						// clean, refuse-while-open, full write-through).
+						// The seatbelts that made the ruling comfortable:
+						// the FAT lifeboat keeps its own /bin and boot
+						// entry for the day a stray write eats root, /home
+						// lives on its own partition so user data never
+						// shares fate with system space, and `make
+						// fsck-ext2` remains the constitution — e2fsck
+						// stays green or the write path is wrong.
+						// ext2_initialize_filesystem still strips the
+						// write slots if the disk's ro_compat features
+						// outrun the driver.
+						//
+						// A DEVICE that cannot write demotes the mount the
+						// same way ro_compat does (2026-08-08, the P5's
+						// SATA disk: the AHCI driver is read-only today).
+						// The filesystem's willingness means nothing on a
+						// disk the driver can't put bytes onto — mount
+						// read-only, say so on the glass, and the suite's
+						// write tests skip gracefully instead of failing
+						// against a wall. Retires when AHCI grows its
+						// write half.
+						if (kBlockDeviceInfo[idx].block_device->ops->write == NULL)
+						{
+							fileOps = ext2_fops;
+							dirOps = ext2_dops;
+							printf("root device's driver cannot write — ext2 root mounted READ-ONLY\n");
+							printd(DEBUG_BOOT, "BOOT: Root filesystem found (ext2), device write-less, mounting read-only\n");
+						}
+						else
+						{
+							ext2_rw_tables_init();
+							fileOps = ext2_rw_fops;
+							dirOps = ext2_rw_dops;
+							printd(DEBUG_BOOT, "BOOT: Root filesystem found (ext2), mounting read-write\n");
+						}
 						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps);
 						mounted = (kRootFilesystem != NULL);
+						// The glass line (2026-08-08): the SECONDARY mounts
+						// announce on the framebuffer, but the root — the
+						// biggest mount news of any boot — only spoke via
+						// printd, so a nolog boot (the P5's) mounted its
+						// root in total silence. Parity for the headliner.
+						if (mounted)
+							printf("mounted ext2 at / (root, %s)\n",
+							       (fileOps.write != NULL) ? "read-write" : "read-only");
 						break;
 					case FILESYSTEM_TYPE_FAT32:
 						fileOps = fat_fops;

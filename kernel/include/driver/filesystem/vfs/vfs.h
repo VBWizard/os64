@@ -400,6 +400,15 @@ int64_t vfs_sync_all(void);
 // kMountTable scan — no disk I/O, safe from any context/CR3.
 bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo);
 
+// TEST_RO's engine (2026-08-08): NULL the write verbs on every mount's
+// private op-table copies — every dispatch site then refuses exactly like a
+// born-read-only mount, the stray-write tripwire starts refusing at the
+// block layer, and the system stays up for analysis. errors=remount-ro,
+// os64 edition. One-way until reboot (the write tables' addresses aren't
+// kept anywhere to restore from — deliberately: a system that failed a
+// write test does not get its pens back by asking).
+void vfs_demote_all_mounts_readonly(const char *why);
+
 // The tripwire's second question, asked only while composing the panic
 // message: is (dev, partNo) mounted at all? Distinguishes "mounted
 // read-only" (a write aimed at a filesystem that refused the pen) from "not

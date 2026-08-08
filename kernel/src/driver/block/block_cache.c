@@ -389,8 +389,14 @@ void block_cache_attach_all(void)
 		// The interposition: swap the ops struct's FIELDS in place. Every
 		// holder of this ops pointer — filesystems mounted past or future,
 		// the partition scanner, anyone — now rides through the cache.
+		// The write shim only goes in where a write op EXISTS: the AHCI
+		// driver is read-only today (2026-08-08, the P5's SATA disk), and
+		// shimming its NULL would dress a write-less device as writable —
+		// with the first write jumping through orig_write to address zero.
+		// A NULL left alone stays the honest NULL-slot refusal.
 		info->block_device->ops->read  = bc_read_shim;
-		info->block_device->ops->write = bc_write_shim;
+		if (d->orig_write != NULL)
+			info->block_device->ops->write = bc_write_shim;
 
 		printd(DEBUG_BOOT, "blockcache: attached %s (%u-byte sectors, %u/line)\n",
 		       info->ATADeviceModel, info->sectorSize, d->line_sectors);

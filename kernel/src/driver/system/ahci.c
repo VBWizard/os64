@@ -573,6 +573,13 @@ bool init_AHCI()
 {
 	printd(DEBUG_AHCI, "AHCI: Initializing AHCI ...\n");
 	bool ahciDeviceFound = false;
+	// Glass-parity with NVMe's version line (2026-08-08, the P5's first
+	// disk-root attempt): on bare metal with no serial, the framebuffer is
+	// the only witness — "did AHCI see my disk" must not require a debug
+	// flag and a log file on the very disk in question. Count controllers
+	// and registered devices; the verdict prints below either way.
+	int ahciControllers = 0;
+	int devicesBefore = kBlockDeviceInfoCount;
 	// The device table/dlist setup moved into init_block() (kernel_init also
 	// calls it, before any storage driver); this call is now a no-op safety.
 	init_block();
@@ -588,15 +595,17 @@ bool init_AHCI()
     }
 
     for (int cnt = 0; cnt < kPCIDeviceCount; cnt++)
-        if (kPCIDeviceHeaders[cnt].class == 1 && kPCIDeviceHeaders[cnt].subClass == 6) 
+        if (kPCIDeviceHeaders[cnt].class == 1 && kPCIDeviceHeaders[cnt].subClass == 6)
         {
 			ahciDeviceFound = true;
+			ahciControllers++;
 			init_AHCI_device(cnt,false);
         }
     for (int cnt = 0; cnt < kPCIFunctionCount; cnt++)
-        if (kPCIDeviceFunctions[cnt].class == 1 && kPCIDeviceFunctions[cnt].subClass == 6) 
+        if (kPCIDeviceFunctions[cnt].class == 1 && kPCIDeviceFunctions[cnt].subClass == 6)
         {
 			ahciDeviceFound = true;
+			ahciControllers++;
 			init_AHCI_device(cnt,true);
   /*            memcpy(&kPCISATADevice, &kPCIDeviceFunctions[cnt], sizeof (pci_device_t));
             ahciDeviceFound = true;
@@ -622,9 +631,14 @@ bool init_AHCI()
         }
     if (!ahciDeviceFound) {
         printd(DEBUG_AHCI, "AHCI: No AHCI devices found.\n");
+        // The glass verdict, absence flavor: "no controller" and "controller
+        // but no disks" must be distinguishable on a screen with no log.
+        printf("AHCI: no controller found (PCI class 01.06 — check BIOS SATA mode if a disk should be here)\n");
         return false;
     }
 
+    printf("AHCI: %u controller(s), %u SATA device(s) registered\n",
+           ahciControllers, kBlockDeviceInfoCount - devicesBefore);
 
     return true;
 }
