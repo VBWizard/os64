@@ -8,6 +8,9 @@
 #include "io.h"
 #include "gui/input.h"
 #include "spinlock.h"
+#include "BasicRenderer.h"   // printf — the Ctrl+Alt+Del salute's answer
+
+extern volatile uint64_t kTicksSinceStart;
 
 // Keystrokes are generated from PS/2 set-1 scancodes (this file) and USB HID
 // boot reports (usb/xhci.c) — both feed keyboard_deliver_event, and land in
@@ -385,6 +388,25 @@ void keyboard_init(void) {
     outb(0x64, 0xAE); // Enable first port again (keyboard)
 }
 
+// ── Ctrl+Alt+Del (2026-08-08) ───────────────────────────────────────────────
+// The three-finger salute, caught by BOTH keyboard drivers (PS/2 here, xHCI
+// in its usage handler) and answered with a message instead of a mystery.
+// David Bradley wired this chord to reboot the IBM PC in 1981 as a five-
+// minute development shortcut ("I invented it, but Bill Gates made it
+// famous"); on os64 an unannounced reboot would throw away the descent we
+// just built, so v1 catches the chord and says what to do instead. When
+// reboot(1) lands (verb 1 of SYSCALL_SHUTDOWN, already reserved), this
+// becomes the polite reboot itself. Rate-limited: the chord held down must
+// not machine-gun the console.
+void keyboard_ctrl_alt_del(void)
+{
+    static uint64_t s_lastSaluteTick = 0;
+    if (kTicksSinceStart - s_lastSaluteTick < TICKS_PER_SECOND)
+        return;
+    s_lastSaluteTick = kTicksSinceStart;
+    printf("\nCtrl+Alt+Del: caught. os64 prefers a polite exit — type 'shutdown'. (reboot(1) is on the roadmap)\n");
+}
+
 // Entry point from IRQ1 after the raw byte is read from port 0x60.
 void keyboard_handle_scancode(uint8_t scancode) {
     if (scancode == 0xE0) {
@@ -409,6 +431,12 @@ void keyboard_handle_scancode(uint8_t scancode) {
         // (The xHCI keyboard's usage table owes the same three bytes for
         // parity — its arrows are usages 0x4F-0x52 — when it next gets love.)
         if (!is_break) {
+            // The three-finger salute: extended 0x53 is the dedicated Del key.
+            if (code == 0x53 &&
+                (s_modifiers & KEYBOARD_MOD_CTRL) && (s_modifiers & KEYBOARD_MOD_ALT)) {
+                keyboard_ctrl_alt_del();
+                return;
+            }
             char final = 0;
             switch (code) {
                 case 0x48: final = 'A'; break;   // Up
@@ -433,6 +461,14 @@ void keyboard_handle_scancode(uint8_t scancode) {
     }
 
     if (!is_break) {
+        // The salute's keypad spelling: plain 0x53 is keypad-Del ("."), and
+        // Ctrl+Alt makes it the same chord (both Dels counted since the
+        // 5150 — Bradley's handler read either).
+        if (code == 0x53 &&
+            (s_modifiers & KEYBOARD_MOD_CTRL) && (s_modifiers & KEYBOARD_MOD_ALT)) {
+            keyboard_ctrl_alt_del();
+            return;
+        }
         // Make code (including hardware typematic repeats). Emit on PRESS:
         // interactive consumers want to react when the key goes down, and
         // holding a key repeats for free. (This used to emit on release,

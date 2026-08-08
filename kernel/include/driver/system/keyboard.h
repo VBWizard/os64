@@ -32,6 +32,10 @@ void keyboard_handle_scancode(uint8_t scancode);
 // (spinlock-guarded — two producers now) and hands both edges to the GUI
 // input queue. `modifiers` is the KEYBOARD_MOD_* bitmask at press time.
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
+// The three-finger salute, shared by both keyboard drivers (PS/2 scancodes
+// and xHCI HID usages both land here). v1 answers with a message; becomes
+// the polite reboot when SYSCALL_SHUTDOWN verb 1 gets its meaning.
+void keyboard_ctrl_alt_del(void);
 bool keyboard_has_event(void);
 bool keyboard_pop_event(keyboard_event_t *event);
 
