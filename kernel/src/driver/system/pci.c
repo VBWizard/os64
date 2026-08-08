@@ -107,10 +107,11 @@ bool getDeviceHeader(pci_device_t* node, uint8_t bus, uint8_t slot, uint8_t func
                 node->command = value & 0xFFFF;
                 node->status = (value >> 16) & 0xFFFF;
                 break;
-            case 2: // Class, Subclass, ProgIF
+            case 2: // Class, Subclass, ProgIF, Revision
                 node->class = value >> 24;
                 node->subClass = (value >> 16) & 0xFF;
                 node->prog = (value >> 8) & 0xFF;
+                node->revisionID = value & 0xFF;   // silicon stepping — /sys reports it
                 node->class_dword = value;
                 break;
             case 3: // Header Type and Multifunction
@@ -178,6 +179,7 @@ bool getBridgeHeader(pci_bridge_t* node, uint8_t bus, uint8_t slot, uint8_t func
                 node->class=value >> 24;
                 node->subClass=(value & 0x00FF0000) >> 16;
                 node->prog=(value & 0x0000FF00) >> 8;
+                node->revisionID=value & 0xFF;   // same fill as the device header
                 break;
             case 3:
                 node->headerType=(value >> 16) & 0x7f;
@@ -267,7 +269,10 @@ void addDevice(pci_device_t* node)
 void addFunction(pci_device_t* node)
 {
     printd(DEBUG_PCI_DISCOVERY | DEBUG_DETAILED,"\t\t* Found function #%u on %02X:%02X:0, Ven# %04X Dev# %04X Cls# %02X, Sbcls 0x%04x MF=%u\n",kPCIFunctionCount, node->busNo, node->deviceNo, node->vendor, node->device, node->class, node->subClass, node->multiFunction);
-    memcpy(&kPCIDeviceFunctions[kPCIFunctionCount++],node,sizeof(pci_bridge_t));
+    // sizeof(pci_device_t), not sizeof(pci_bridge_t): node and the array slot
+    // are both pci_device_t. The bridge struct is packed and a different size,
+    // so the old copy truncated the tail of every saved function header.
+    memcpy(&kPCIDeviceFunctions[kPCIFunctionCount++],node,sizeof(pci_device_t));
 }
 
 void getDeviceName(uint32_t vendorID, uint32_t deviceID, char* deviceName)
@@ -315,9 +320,14 @@ int pci_get_device(uint32_t device_class, uint32_t device_subclass, pci_device_t
 			device_count++;
 		}
 	}
-	for (int idx = 0; idx < kPCIDeviceCount; idx++)
+	// kPCIFunctionCount, not kPCIDeviceCount: this loop walks the FUNCTIONS
+	// array, and the two counts are unrelated. The old bound under-scanned
+	// when functions outnumbered devices and read stale slots when devices
+	// outnumbered functions (every allocation is zeroed, so the stale slots
+	// were at least all-zero — matching only a 0xFF/0xFF wildcard probe).
+	for (int idx = 0; idx < kPCIFunctionCount; idx++)
 	{
-		if ((device_class == 0xFF || kPCIDeviceFunctions[idx].class == device_class) && 
+		if ((device_class == 0xFF || kPCIDeviceFunctions[idx].class == device_class) &&
 			(device_subclass == 0xFF || kPCIDeviceFunctions[idx].subClass == device_subclass))
 		{
 			memcpy(&devices[device_count], &kPCIDeviceFunctions[idx], sizeof(pci_device_t));
