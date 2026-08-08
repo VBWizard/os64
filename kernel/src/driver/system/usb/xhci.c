@@ -144,9 +144,13 @@ typedef struct {
 	uint64_t     reports_phys;
 	uint8_t      prev_report[8];  // previous HID state, for edge detection
 	uint8_t      mods;            // KEYBOARD_MOD_* state (caps is a latch)
+	uint8_t      rpt_usage;       // typematic candidate: last key pressed, 0 = none
+	uint64_t     rpt_next_tick;   // when it next repeats (hid_typematic_tick)
 } xhci_t;
 
 static xhci_t s_hc;
+
+extern volatile uint64_t kTicksSinceStart;   // the typematic clock
 
 #define KBD_INFLIGHT 8          // interrupt-IN TRBs kept queued at all times
 
@@ -382,8 +386,36 @@ static void hid_deliver_usage(uint8_t usage)
 		s_hc.mods ^= KEYBOARD_MOD_CAPS;
 		return;
 	}
+	// The three-finger salute, HID spelling: Delete Forward (0x4C) or keypad
+	// Del (0x63) with Ctrl+Alt. Same hook the PS/2 driver calls — one chord,
+	// two dialects (2026-08-08, the P5's corded keyboard).
+	if ((usage == 0x4C || usage == 0x63) &&
+	    (s_hc.mods & KEYBOARD_MOD_CTRL) && (s_hc.mods & KEYBOARD_MOD_ALT)) {
+		keyboard_ctrl_alt_del();
+		return;
+	}
+	// Arrows: the SAME three VT100 bytes the PS/2 path emits (ESC '[' A/B/C/D
+	// — see keyboard.c for the 1979 lineage). This was the parity debt that
+	// file's comment recorded; paid 2026-08-08, the day the P5's corded
+	// keyboard proved husk history worked everywhere except on real hardware.
+	{
+		char final = 0;
+		switch (usage) {
+			case 0x4F: final = 'C'; break;   // Right
+			case 0x50: final = 'D'; break;   // Left
+			case 0x51: final = 'B'; break;   // Down
+			case 0x52: final = 'A'; break;   // Up
+			default: break;
+		}
+		if (final != 0) {
+			keyboard_deliver_event(0x1B, usage, s_hc.mods, true);
+			keyboard_deliver_event('[',  usage, s_hc.mods, true);
+			keyboard_deliver_event(final, usage, s_hc.mods, true);
+			return;
+		}
+	}
 	if (usage >= sizeof(s_hid_base))
-		return;                                // arrows/F-keys/keypad: later
+		return;                                // F-keys/keypad: later
 	char c = s_hid_base[usage];
 	if (c == 0)
 		return;
@@ -409,6 +441,11 @@ static void hid_deliver_usage(uint8_t usage)
 	keyboard_deliver_event(c, usage, s_hc.mods, true);
 }
 
+// Typematic cadence (engine below, state in s_hc): half a second of grace,
+// then ~25 cps — the classic feel, done host-side because HID reports state.
+#define HID_TYPEMATIC_DELAY_TICKS  (TICKS_PER_SECOND / 2)   // 500ms to first repeat
+#define HID_TYPEMATIC_PERIOD_TICKS 4                        // then ~25 cps
+
 static void hid_process_report(const uint8_t *rep)
 {
 	// Phantom state: every slot 0x01 = rollover error, report is garbage.
@@ -424,10 +461,14 @@ static void hid_process_report(const uint8_t *rep)
 	s_hc.mods = mods;
 
 	// Edge detection: a usage present now but absent from the previous
-	// report is a key-DOWN — the only edge we emit, same as PS/2. (Auto-
-	// repeat is a keyboard-internal behavior in boot protocol; holding a
-	// key repeats the report with the same usage, which this filter
-	// correctly treats as "still down, nothing new".)
+	// report is a key-DOWN — the only edge we emit. NOTE, corrected
+	// 2026-08-08: this comment used to claim boot-protocol keyboards
+	// auto-repeat internally. They do not — that is PS/2 lore. A HID
+	// keyboard reports STATE, and repeat is the HOST's job (which is why
+	// holding a key did nothing on the P5: the report said "still down"
+	// and this filter correctly said "nothing new", and nobody anywhere
+	// was in charge of inventing the repeats). The typematic engine below
+	// (hid_typematic_tick) is that somebody now.
 	for (int i = 2; i < 8; i++) {
 		uint8_t u = rep[i];
 		if (u == 0)
@@ -436,10 +477,40 @@ static void hid_process_report(const uint8_t *rep)
 		for (int j = 2; j < 8; j++)
 			if (s_hc.prev_report[j] == u)
 				was_down = true;
-		if (!was_down)
+		if (!was_down) {
 			hid_deliver_usage(u);
+			// The LAST key pressed is the repeat candidate — classic
+			// typematic semantics since the 5150: press-and-hold J while
+			// holding K, and J is what repeats.
+			s_hc.rpt_usage = u;
+			s_hc.rpt_next_tick = kTicksSinceStart + HID_TYPEMATIC_DELAY_TICKS;
+		}
+	}
+	// If the candidate is no longer held, repeat ends with the key.
+	if (s_hc.rpt_usage != 0) {
+		bool still_down = false;
+		for (int i = 2; i < 8; i++)
+			if (rep[i] == s_hc.rpt_usage)
+				still_down = true;
+		if (!still_down)
+			s_hc.rpt_usage = 0;
 	}
 	memcpy(s_hc.prev_report, (void *)rep, 8);
+}
+
+// ── Software typematic (2026-08-08 — "holding down a key doesn't work") ─────
+// Called from xhci_poll (every scheduler pass, ~10ms): while the repeat
+// candidate stays held, re-deliver it on the classic cadence. Repeats flow
+// through hid_deliver_usage, so a held arrow repeats its whole VT100
+// sequence and a held Ctrl+letter repeats its control code — everything a
+// fresh press would do, which is the definition of typematic done at the
+// right layer.
+static void hid_typematic_tick(void)
+{
+	if (s_hc.rpt_usage == 0 || kTicksSinceStart < s_hc.rpt_next_tick)
+		return;
+	s_hc.rpt_next_tick = kTicksSinceStart + HID_TYPEMATIC_PERIOD_TICKS;
+	hid_deliver_usage(s_hc.rpt_usage);
 }
 
 // ── Transfer events (keyboard reports arriving) ─────────────────────────────
@@ -916,5 +987,6 @@ void xhci_poll(void)
 	if (__sync_lock_test_and_set(&s_poll_busy, 1) != 0)
 		return;
 	xhci_drain_events();
+	hid_typematic_tick();   // repeats ride the same ~10ms cadence as the drain
 	__sync_lock_release(&s_poll_busy);
 }
