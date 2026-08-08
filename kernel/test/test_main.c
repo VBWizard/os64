@@ -48,6 +48,11 @@ extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
 extern vfs_filesystem_t *kRootFilesystem;
 
+// The TESTS= cmdline knob (parsed in kernel_commandline.c, consumed in
+// test_run_phase): "panic" | "warn" override every test's registered
+// failure policy for one boot; empty honors the registrations.
+char kTestsPolicyOverride[8] = "";
+
 static test_case_t g_test_cases[TEST_MAX_CASES];
 static size_t g_test_case_count = 0;
 static bool g_framework_initialized = false;
@@ -55,7 +60,8 @@ static bool g_framework_initialized = false;
 bool test_vma_file_backed_page_fault_resolved(void);
 bool test_vma_partial_page_bss_zero_filled(void);
 
-bool test_register(const char *name, bool (*func)(void), int phase)
+bool test_register_policy(const char *name, bool (*func)(void), int phase,
+                          test_policy_t policy)
 {
     if (g_test_case_count >= TEST_MAX_CASES) {
         const char *test_name = name ? name : "<unnamed>";
@@ -66,8 +72,20 @@ bool test_register(const char *name, bool (*func)(void), int phase)
     g_test_cases[g_test_case_count].name = name;
     g_test_cases[g_test_case_count].func = func;
     g_test_cases[g_test_case_count].phase = phase;
+    g_test_cases[g_test_case_count].policy = policy;
     g_test_case_count++;
     return true;
+}
+
+bool test_register(const char *name, bool (*func)(void), int phase)
+{
+    // The phase carries the default severity: preboot tests guard kernel
+    // invariants (a failure impeaches the substrate — PANIC), postboot
+    // tests mostly judge content and behavior (a failure earns analysis,
+    // not a funeral — WARN). Tests that mean more say so via
+    // test_register_policy.
+    return test_register_policy(name, func, phase,
+        phase == TEST_PHASE_PREBOOT ? TEST_POLICY_PANIC : TEST_POLICY_WARN);
 }
 
 static bool test_kmalloc_not_null(void)
@@ -1184,38 +1202,60 @@ static bool test_ring3_dir_list(void)
 }
 
 // ── The ext2 real-partition test ─────────────────────────────────────────────
-// Partition 2 of the disk image is formatted by the HOST's mkfs.ext2 and
-// populated by debugfs (see the GNUmakefile disk rule): os64 never wrote a
-// byte of it. This test mounts it with the ext2 driver and reads it back —
-// the honest proof that we parse real ext2, not our own private dialect.
+// Two-way cross-implementation proof, one test:
+//
+//   READ half: content formatted by the HOST's mkfs.ext2 and populated by
+//   debugfs (see the GNUmakefile disk rule) — os64 never wrote a byte of it.
+//   Reading it back proves we parse real ext2, not our own private dialect;
+//   self-written files can never give that proof, because a driver wrong the
+//   same way in both directions reads itself back perfectly. These fixtures
+//   are PROMISED on build-authored images; on a live writable root they may
+//   have been tidied away, and that is the user USING the filesystem, not a
+//   failure (2026-08-08, the P5 root cleanup) — so the fixture checks gate
+//   on presence and skip loudly instead of failing.
+//
+//   WRITE half (same ruling: unless prior existence IS the point, a test
+//   puts its own files there): the test authors /etc/testdata itself through
+//   the mounted filesystem — a deep path and a pattern file sized from the
+//   LIVE block size to climb the whole indirection ladder, which exercises
+//   write-side block allocation through the single- and double-indirect
+//   regimes on every boot. The files STAY on disk deliberately: the next
+//   time Linux mounts this partition, e2fsck audits what os64 wrote. Linux
+//   writes/os64 reads; os64 writes/Linux checks. 🤝
 //
 // pattern.bin's 16-byte records are self-describing ("00001234:os64e2\n" =
-// record 1234 at byte 1234*16), so seeking into the direct, single-indirect,
-// and double-indirect regions and asking the record its own name catches any
-// off-by-one the block-map walk could commit. (Region math is documented in
-// tools/gen_ext2_testdata.py; block size is pinned to 1024 at mkfs time.)
+// record 1234 at byte 1234*16), so seeking into each mapping regime and
+// asking the record its own name catches any off-by-one the block-map walk
+// could commit. (Fixture-file region math is documented in
+// tools/gen_ext2_testdata.py; the fixture image pins block size 1024 at
+// mkfs time — one more reason the self-written file computes its own.)
 #define EXT2_PATTERN_RECORDS 98304UL
 #define EXT2_PATTERN_SIZE    (EXT2_PATTERN_RECORDS * 16)
+
+// Failures speak on the GLASS as well as the log — same doctrine as MT_FAIL
+// below (2026-08-08, the P5's first disk-root boot): a nolog bare-metal run
+// swallows the printd reason, and a halting failure whose cause is invisible
+// is a tripwire with a silencer. The macro emits both and returns false, so
+// it serves ext2_check_record and the test body alike.
+#define E2_FAIL(...) do { \
+        printf("FAIL ext2_real: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - " __VA_ARGS__); \
+        return false; \
+    } while (0)
 
 static bool ext2_check_record(vfs_filesystem_t *fs, vfs_file_t *f, uint64_t offset, const char *region)
 {
     char got[17], want[20];
 
-    if (fs->fops->seek(f, (long)offset, SEEK_SET) < 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2 - seek to %lu (%s region) failed\n", offset, region);
-        return false;
-    }
-    if (fs->fops->read(f, got, 16) != 16) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2 - read at %lu (%s region) short\n", offset, region);
-        return false;
-    }
+    if (fs->fops->seek(f, (long)offset, SEEK_SET) < 0)
+        E2_FAIL("seek to %lu (%s region) failed\n", offset, region);
+    if (fs->fops->read(f, got, 16) != 16)
+        E2_FAIL("read at %lu (%s region) short\n", offset, region);
     got[16] = '\0';
     sprintf(want, "%08lu:os64e2\n", (unsigned long)(offset / 16));
-    if (strncmp(got, want, 16) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2 - %s region record at %lu: got '%s', want '%s'\n",
-               region, offset, got, want);
-        return false;
-    }
+    if (strncmp(got, want, 16) != 0)
+        E2_FAIL("%s region record at %lu: got '%s', want '%s'\n",
+                region, offset, got, want);
     return true;
 }
 
@@ -1223,8 +1263,9 @@ static bool test_ext2_real_partition(void)
 {
     // Find the ext2 partition by detected filesystem type — the boot flow's
     // superblock probe (filesystem.c) marks it during storage init.
-    vfs_filesystem_t *fs = NULL;
-    for (int d = 0; d < kBlockDeviceInfoCount && fs == NULL; d++)
+    block_device_info_t *edev = NULL;
+    int epart = -1;
+    for (int d = 0; d < kBlockDeviceInfoCount && edev == NULL; d++)
     {
         block_device_info_t *dev = &kBlockDeviceInfo[d];
         if (dev->block_device == NULL || dev->block_device->partition_table == NULL)
@@ -1233,143 +1274,265 @@ static bool test_ext2_real_partition(void)
         {
             if (dev->block_device->partition_table->parts[p]->filesystemType != FILESYSTEM_TYPE_EXT2)
                 continue;
-            // Assemble a minimal filesystem object by hand, deliberately
-            // BYPASSING the mount table: this is the driver-level test, and
-            // driving the driver directly keeps it meaningful even now that
-            // the namespace also mounts this partition (test_mount_table
-            // covers the routed path). Read-only driver, no locks — a second
-            // ext2_fs_t on the same partition is harmless.
-            fs = kmalloc(sizeof(vfs_filesystem_t));
-            if (fs == NULL)
-                return false;
-            memset(fs, 0, sizeof(vfs_filesystem_t));
-            fs->partNumber = p;
-            fs->block_device_info = dev;
-            fs->bops = dev->block_device->ops;
-            fs->fops = &ext2_fops;
-            fs->dops = &ext2_dops;
+            edev = dev;
+            epart = p;
             break;
         }
     }
-    if (fs == NULL) {
+    if (edev == NULL) {
         printd(DEBUG_TESTS, "\tSKIP: test_ext2_real_partition (no ext2 partition detected)\n");
         return true;
     }
 
-    if (ext2_initialize_filesystem(fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - superblock/groups mount failed\n");
-        return false;
-    }
+    // ── Phase 1: self-provision /etc/testdata, through the MOUNTED
+    // filesystem. Writes must go through the live mount and nothing else:
+    // the write driver keeps allocation state (bitmaps, group counts) in its
+    // one instance, and a second write instance on the same partition would
+    // fight it over that state. The read-back below gets its own instance
+    // precisely because reading is the safe half.
+    vfs_filesystem_t *mfs = NULL;
+    for (int m = 0; m < kMountCount; m++)
+        if (kMountTable[m].fs != NULL &&
+            kMountTable[m].fs->block_device_info == edev &&
+            kMountTable[m].fs->partNumber == epart)
+        {
+            mfs = kMountTable[m].fs;
+            break;
+        }
 
-    // 1. A small file, byte-for-byte: content authored by Linux.
-    static const char hello_expect[] =
-        "Hello from a real ext2 filesystem — written by Linux, read by os64!\n";
     vfs_file_t *f = NULL;
+    uint64_t bs = 0, single_at = 0, double_at = 0, self_size = 0;
+    bool self_written = false;
+    static const char self_deep[] = "written by os64, verified by os64, audited by e2fsck\n";
+    if (mfs != NULL && mfs->fops->write != NULL)
+    {
+        // mkdir returns -1 for "already exists" and "failed" alike, so the
+        // chain is verified by opening the leaf afterward rather than by
+        // trusting the returns. ("w"-mode creation below is idempotent the
+        // same way — reruns truncate and rewrite, exercising that path free.)
+        static const char *dirs[] = { "/etc", "/etc/testdata",
+                                      "/etc/testdata/dir1", "/etc/testdata/dir1/dir2" };
+        char pathbuf[40];
+        for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+            sprintf(pathbuf, "%s", dirs[i]);   // mkdir wants a mutable path
+            mfs->dops->mkdir(pathbuf, mfs);
+        }
+        vfs_directory_t *dchk = NULL;
+        if (mfs->dops->open(&dchk, "/etc/testdata/dir1/dir2", mfs) != 0)
+            E2_FAIL("self-provision mkdir chain failed\n");
+        mfs->dops->close(dchk);
+
+        if (mfs->fops->open(&f, "/etc/testdata/dir1/dir2/deep.txt", "w", mfs) != 0)
+            E2_FAIL("self-provision create deep.txt failed\n");
+        int wn = mfs->fops->write(f, self_deep, sizeof(self_deep) - 1);
+        mfs->fops->close(f);
+        if (wn != (int)(sizeof(self_deep) - 1))
+            E2_FAIL("self-provision write deep.txt short (%d)\n", wn);
+
+        // Pattern-file geometry from the LIVE block size (the fixture image
+        // pins 1024, but a big root is 4096 and every boundary moves): 12
+        // direct pointers, then a single-indirect block of bs/4 pointers,
+        // then the double-indirect tree. Ending 4 blocks past the double-
+        // indirect boundary climbs the whole ladder — and keeps the total a
+        // multiple of the 4096-byte chunk for every legal bs (1024/2048/4096).
+        bs = (uint64_t)mfs->blockSize;
+        single_at = 12 * bs;
+        double_at = single_at + (bs / 4) * bs;
+        self_size = double_at + 4 * bs;
+        if (mfs->fops->open(&f, "/etc/testdata/pattern.bin", "w", mfs) != 0)
+            E2_FAIL("self-provision create pattern.bin failed\n");
+        char chunk[4096 + 1];   // +1: sprintf lands a NUL one past each record
+        for (uint64_t off = 0; off < self_size; off += 4096)
+        {
+            for (unsigned rec = 0; rec < 4096 / 16; rec++)
+                sprintf(chunk + rec * 16, "%08lu:os64e2\n", (unsigned long)(off / 16 + rec));
+            wn = mfs->fops->write(f, chunk, 4096);
+            if (wn != 4096) {
+                mfs->fops->close(f);
+                E2_FAIL("self-provision write pattern.bin short at %lu (%d)\n", off, wn);
+            }
+        }
+        mfs->fops->close(f);
+        self_written = true;
+        // The files STAY on disk on purpose: the next time Linux mounts
+        // this partition, e2fsck audits what os64 wrote — the reverse half
+        // of the cross-implementation handshake Phase 3 runs forward.
+    }
+    else
+    {
+        printf("note ext2_real: mount is read-only, self-provision skipped\n");
+        printd(DEBUG_TESTS, "\tNOTE: test_ext2_real_partition - read-only mount, self-provision skipped\n");
+    }
+
+    // ── Phase 2: an independent READ-ONLY driver instance, assembled by
+    // hand and deliberately BYPASSING the mount table: this is the
+    // driver-level test (test_mount_table covers the routed path), and
+    // reading Phase 1's files back through a second instance proves the
+    // bytes reached the media, not just the writer's own state. Built AFTER
+    // the writes so its superblock/group snapshot is current. Read-only, no
+    // locks — harmless beside the live mount precisely because it never writes.
+    vfs_filesystem_t *fs = kmalloc(sizeof(vfs_filesystem_t));
+    if (fs == NULL)
+        E2_FAIL("kmalloc of test fs object failed\n");
+    memset(fs, 0, sizeof(vfs_filesystem_t));
+    fs->partNumber = epart;
+    fs->block_device_info = edev;
+    fs->bops = edev->block_device->ops;
+    fs->fops = &ext2_fops;
+    fs->dops = &ext2_dops;
+    if (ext2_initialize_filesystem(fs) != 0)
+        E2_FAIL("superblock/groups mount failed\n");
+
+    // ── Phase 3: content authored by LINUX, read by os64 — each fixture
+    // gates on ITS OWN presence (2026-08-08 lesson #2, same morning as
+    // lesson #1: a human tidies with human granularity. The P5 cleanup took
+    // dir1 but spared hello.txt, and an all-or-nothing gate keyed on
+    // hello.txt marched straight into the missing directory). Absent = the
+    // user used the filesystem — note it, move on. PRESENT but wrong = the
+    // driver misreading a Linux-authored file = FAIL.
     char buf[128];
-    if (fs->fops->open(&f, "/hello.txt", "r", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - open /hello.txt failed\n");
-        return false;
-    }
-    int n = fs->fops->read(f, buf, sizeof(buf));
-    fs->fops->close(f);
-    if (n != (int)(sizeof(hello_expect) - 1) || strncmp(buf, hello_expect, sizeof(hello_expect) - 1) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - /hello.txt content mismatch (n=%d)\n", n);
-        return false;
-    }
-
-    // 2. Path resolution three directories deep.
-    if (fs->fops->open(&f, "/dir1/dir2/deep.txt", "r", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - open /dir1/dir2/deep.txt failed\n");
-        return false;
-    }
-    n = fs->fops->read(f, buf, sizeof(buf));
-    fs->fops->close(f);
-    if (n <= 0 || strncmp(buf, "the deep file", 13) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - deep.txt content mismatch\n");
-        return false;
-    }
-
-    // 3. The block-map workout: size via tell-at-end, then self-describing
-    //    records from each mapping regime.
-    if (fs->fops->open(&f, "/pattern.bin", "r", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - open /pattern.bin failed\n");
-        return false;
-    }
-    fs->fops->seek(f, 0, SEEK_END);
-    if ((uint64_t)fs->fops->tell(f) != EXT2_PATTERN_SIZE) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - pattern.bin size %d, want %lu\n",
-               fs->fops->tell(f), EXT2_PATTERN_SIZE);
+    int n;
+    bool fx_hello = false, fx_deep = false, fx_pattern = false;
+    if (fs->fops->open(&f, "/hello.txt", "r", fs) == 0)
+    {
+        fx_hello = true;
+        // 1. A small file, byte-for-byte.
+        static const char hello_expect[] =
+            "Hello from a real ext2 filesystem — written by Linux, read by os64!\n";
+        n = fs->fops->read(f, buf, sizeof(buf));
         fs->fops->close(f);
-        return false;
+        if (n != (int)(sizeof(hello_expect) - 1) || strncmp(buf, hello_expect, sizeof(hello_expect) - 1) != 0)
+            E2_FAIL("/hello.txt content mismatch (n=%d)\n", n);
     }
-    bool ok = ext2_check_record(fs, f, 0,                      "first")
-           && ext2_check_record(fs, f, 4096,                   "direct")
-           && ext2_check_record(fs, f, 100000,                 "single-indirect")
-           && ext2_check_record(fs, f, 1000000,                "double-indirect")
-           && ext2_check_record(fs, f, EXT2_PATTERN_SIZE - 16, "last");
-    fs->fops->close(f);
-    if (!ok)
-        return false;
+    if (fs->fops->open(&f, "/dir1/dir2/deep.txt", "r", fs) == 0)
+    {
+        fx_deep = true;
+        // 2. Path resolution three directories deep.
+        n = fs->fops->read(f, buf, sizeof(buf));
+        fs->fops->close(f);
+        if (n <= 0 || strncmp(buf, "the deep file", 13) != 0)
+            E2_FAIL("deep.txt content mismatch\n");
+    }
+    if (fs->fops->open(&f, "/pattern.bin", "r", fs) == 0)
+    {
+        fx_pattern = true;
+        // 3. The block-map workout at the FIXTURE's pinned 1KB geometry
+        //    (region math: tools/gen_ext2_testdata.py).
+        fs->fops->seek(f, 0, SEEK_END);
+        if ((uint64_t)fs->fops->tell(f) != EXT2_PATTERN_SIZE) {
+            int at = fs->fops->tell(f);
+            fs->fops->close(f);
+            E2_FAIL("pattern.bin size %d, want %lu\n", at, EXT2_PATTERN_SIZE);
+        }
+        bool ok = ext2_check_record(fs, f, 0,                      "first")
+               && ext2_check_record(fs, f, 4096,                   "direct")
+               && ext2_check_record(fs, f, 100000,                 "single-indirect")
+               && ext2_check_record(fs, f, 1000000,                "double-indirect")
+               && ext2_check_record(fs, f, EXT2_PATTERN_SIZE - 16, "last");
+        fs->fops->close(f);
+        if (!ok)
+            return false;
+    }
+    if (!fx_hello || !fx_deep || !fx_pattern)
+    {
+        printf("note ext2_real: absent mkfs fixtures skipped (hello=%d deep=%d pattern=%d)\n",
+               fx_hello, fx_deep, fx_pattern);
+        printd(DEBUG_TESTS, "\tNOTE: test_ext2_real_partition - absent mkfs fixtures skipped (hello=%d deep=%d pattern=%d)\n",
+               fx_hello, fx_deep, fx_pattern);
+    }
 
-    // 4. The root listing through the fs-neutral dirent seam — same contract
-    //    ls uses, different filesystem, zero caller changes. (lost+found is
-    //    mkfs's own droppings and proves the listing is real.)
-    vfs_directory_t *dir = NULL;
-    if (fs->dops->open(&dir, "/", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - opendir / failed\n");
-        return false;
+    // ── Phase 4: read back what Phase 1 wrote, through the independent
+    // instance, at the live geometry's regime boundaries.
+    if (self_written)
+    {
+        if (fs->fops->open(&f, "/etc/testdata/dir1/dir2/deep.txt", "r", fs) != 0)
+            E2_FAIL("read-back open self deep.txt failed\n");
+        n = fs->fops->read(f, buf, sizeof(buf));
+        fs->fops->close(f);
+        if (n != (int)(sizeof(self_deep) - 1) || strncmp(buf, self_deep, sizeof(self_deep) - 1) != 0)
+            E2_FAIL("self deep.txt read-back mismatch (n=%d)\n", n);
+
+        if (fs->fops->open(&f, "/etc/testdata/pattern.bin", "r", fs) != 0)
+            E2_FAIL("read-back open self pattern.bin failed\n");
+        fs->fops->seek(f, 0, SEEK_END);
+        if ((uint64_t)fs->fops->tell(f) != self_size) {
+            int at = fs->fops->tell(f);
+            fs->fops->close(f);
+            E2_FAIL("self pattern.bin size %d, want %lu\n", at, self_size);
+        }
+        bool ok = ext2_check_record(fs, f, 0,              "first")
+               && ext2_check_record(fs, f, bs,             "direct")
+               && ext2_check_record(fs, f, single_at,      "single-indirect")
+               && ext2_check_record(fs, f, double_at,      "double-indirect")
+               && ext2_check_record(fs, f, self_size - 16, "last");
+        fs->fops->close(f);
+        if (!ok)
+            return false;
     }
+
+    // ── Phase 5: the root listing through the fs-neutral dirent seam — same
+    // contract ls uses, different filesystem, zero caller changes. It must
+    // COMPLETE without error on ANY disk; specific names are only asserted
+    // where the phases above found or created them.
+    vfs_directory_t *dir = NULL;
+    if (fs->dops->open(&dir, "/", fs) != 0)
+        E2_FAIL("opendir / failed\n");
     os64_dirent_t de;
-    bool saw_hello = false, saw_pattern = false, saw_dir1 = false, saw_lf = false;
+    bool saw_hello = false, saw_etc = false;
     int r;
     while ((r = fs->dops->read(dir, &de)) == 1)
     {
         if (strncmp(de.name, "hello.txt", 10) == 0 && !(de.flags & OS64_DE_DIR))
             saw_hello = true;
-        if (strncmp(de.name, "pattern.bin", 12) == 0 && de.size == EXT2_PATTERN_SIZE)
-            saw_pattern = true;
-        if (strncmp(de.name, "dir1", 5) == 0 && (de.flags & OS64_DE_DIR))
-            saw_dir1 = true;
-        if (strncmp(de.name, "lost+found", 11) == 0 && (de.flags & OS64_DE_DIR))
-            saw_lf = true;
+        if (strncmp(de.name, "etc", 4) == 0 && (de.flags & OS64_DE_DIR))
+            saw_etc = true;
     }
     fs->dops->close(dir);
-    if (r != 0 || !saw_hello || !saw_pattern || !saw_dir1 || !saw_lf) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - root listing (r=%d hello=%d pattern=%d dir1=%d lost+found=%d)\n",
-               r, saw_hello, saw_pattern, saw_dir1, saw_lf);
-        return false;
-    }
+    if (r != 0)
+        E2_FAIL("root readdir error (%d)\n", r);
+    if (fx_hello && !saw_hello)
+        E2_FAIL("root listing missing hello.txt though it opened\n");
+    if (self_written && !saw_etc)
+        E2_FAIL("root listing missing /etc though Phase 1 just made it\n");
 
-    // 5. Absence must fail in-band, like everything else in this kernel.
-    if (fs->fops->open(&f, "/no/such/file", "r", fs) == 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ext2_real_partition - bogus path opened\n");
-        return false;
-    }
+    // ── Phase 6: absence must fail in-band, like everything else in this kernel.
+    if (fs->fops->open(&f, "/no/such/file", "r", fs) == 0)
+        E2_FAIL("bogus path opened\n");
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_real_partition (mkfs.ext2-authored: hello, deep path, "
-           "direct/single/double-indirect records, root listing, bogus path)\n");
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_real_partition (self-provision=%s [bs=%lu], "
+           "mkfs-fixtures=%d/3, root listing, bogus path)\n",
+           self_written ? "written+verified" : "skipped", bs,
+           fx_hello + fx_deep + fx_pattern);
     return true;
 }
+#undef E2_FAIL
 
 // The mount table: longest-prefix routing over the LIVE table built at boot.
 // Semantics first (boundaries, tails), then real I/O through whatever
 // secondary mounts this boot actually produced — "/ext2" when FAT is root,
 // "/fat" when ext2 is (both partitions carry known content, so either way
 // there is something to verify end to end).
+//
+// Failures speak on the GLASS as well as the log (2026-08-08): this test
+// failed on the P5's first disk-root boot, the entry's nolog swallowed the
+// printd reason, and a halting failure whose cause is invisible on bare
+// metal is a tripwire with a silencer. The macro emits both.
+#define MT_FAIL(...) do { \
+        printf("FAIL mount_table: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_mount_table - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+
 static bool test_mount_table(void)
 {
-    if (kMountCount < 1 || kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_mount_table - no mounts (count=%d)\n", kMountCount);
-        return false;
-    }
+    if (kMountCount < 1 || kRootFilesystem == NULL)
+        MT_FAIL("no mounts (count=%d)\n", kMountCount);
 
     // 1. The root always resolves, tail unchanged.
     const char *tail = NULL;
     vfs_filesystem_t *fs = vfs_resolve_mount("/", &tail);
-    if (fs != kRootFilesystem || strncmp(tail, "/", 2) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_mount_table - '/' did not resolve to root\n");
-        return false;
-    }
+    if (fs != kRootFilesystem || strncmp(tail, "/", 2) != 0)
+        MT_FAIL("'/' did not resolve to root\n");
 
     // 2. Every non-root entry: exact prefix → its fs with tail "/", a child
     //    path → tail with the prefix stripped, and a NON-boundary lookalike
@@ -1382,26 +1545,21 @@ static bool test_mount_table(void)
             continue;
 
         fs = vfs_resolve_mount(m->prefix, &tail);
-        if (fs != m->fs || strncmp(tail, "/", 2) != 0) {
-            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - '%s' exact match wrong (tail=%s)\n",
-                   m->prefix, tail ? tail : "NULL");
-            return false;
-        }
+        if (fs != m->fs || strncmp(tail, "/", 2) != 0)
+            MT_FAIL("'%s' exact match wrong (tail=%s)\n",
+                    m->prefix, tail ? tail : "NULL");
 
         sprintf(probe, "%s/x", m->prefix);
         fs = vfs_resolve_mount(probe, &tail);
-        if (fs != m->fs || strncmp(tail, "/x", 3) != 0) {
-            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - '%s' child tail wrong (tail=%s)\n",
-                   probe, tail ? tail : "NULL");
-            return false;
-        }
+        if (fs != m->fs || strncmp(tail, "/x", 3) != 0)
+            MT_FAIL("'%s' child tail wrong (tail=%s)\n",
+                    probe, tail ? tail : "NULL");
 
         sprintf(probe, "%szz", m->prefix);
         fs = vfs_resolve_mount(probe, &tail);
         if (fs == m->fs) {
-            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - '%s' matched prefix '%s' (boundary leak)\n",
-                   probe, m->prefix);
-            return false;
+            MT_FAIL("'%s' matched prefix '%s' (boundary leak)\n",
+                    probe, m->prefix);
         }
     }
 
@@ -1419,19 +1577,24 @@ static bool test_mount_table(void)
         vfs_directory_t *dir = NULL;
         fs = vfs_resolve_mount(m->prefix, &tail);
         if (fs->dops == NULL || fs->dops->open == NULL ||
-            fs->dops->open(&dir, tail, fs) != 0) {
-            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - opendir %s failed\n", m->prefix);
-            return false;
-        }
+            fs->dops->open(&dir, tail, fs) != 0)
+            MT_FAIL("opendir %s failed\n", m->prefix);
         os64_dirent_t de;
         int entries = 0;
-        while (fs->dops->read(dir, &de) == 1)
+        int rc;
+        while ((rc = fs->dops->read(dir, &de)) == 1)
             entries++;
         fs->dops->close(dir);
-        if (entries == 0) {
-            printd(DEBUG_TESTS, "\tFAIL: test_mount_table - %s listed empty\n", m->prefix);
-            return false;
-        }
+        if (rc < 0)
+            MT_FAIL("%s readdir error (%d)\n", m->prefix, rc);
+        // An EMPTY listing is not a failure: the P5's first disk-root boot
+        // (2026-08-08) brought a freshly-mkfs'd /home that had never held a
+        // file, and readdir never delivers "." / ".." — zero entries is
+        // exactly what a healthy newborn mount looks like. Emptiness is
+        // only suspicious where content is PROMISED, and the /ext2 and
+        // /fat probes below enforce precisely that.
+        printd(DEBUG_TESTS | DEBUG_DETAILED, "\tmount_table: %s listed %d entries\n",
+               m->prefix, entries);
 
         const char *file_probe = NULL;
         const char *expect = NULL;
@@ -1448,16 +1611,12 @@ static bool test_mount_table(void)
             char buf[64];
             fs = vfs_resolve_mount(file_probe, &tail);
             if (fs != m->fs ||
-                fs->fops->open(&f, tail, "r", fs) != 0) {
-                printd(DEBUG_TESTS, "\tFAIL: test_mount_table - open %s failed\n", file_probe);
-                return false;
-            }
+                fs->fops->open(&f, tail, "r", fs) != 0)
+                MT_FAIL("open %s failed\n", file_probe);
             int n = fs->fops->read(f, buf, sizeof(buf));
             fs->fops->close(f);
             if (n <= 0 || (expect != NULL && strncmp(buf, expect, strlen(expect)) != 0)) {
-                printd(DEBUG_TESTS, "\tFAIL: test_mount_table - %s content wrong (n=%d)\n",
-                       file_probe, n);
-                return false;
+                MT_FAIL("%s content wrong (n=%d)\n", file_probe, n);
             }
             verified++;
         }
@@ -1467,6 +1626,7 @@ static bool test_mount_table(void)
            kMountCount, verified);
     return true;
 }
+#undef MT_FAIL
 
 // map_unmap.c drives the heap primitive at CPL 3: anonymous regions demand-
 // paged and zeroed, guard-page separation, region independence, whole-region
@@ -1558,15 +1718,30 @@ static bool test_ring3_cwd(void)
 // at Chris's call, 2026-07-19; the legacy block and tests.c are gone. The
 // read half wasn't ported — file_io/dir_list/mount_table already cover reads
 // through the real syscall path.
+//
+// Groomed 2026-08-08 (the pre-"us" nvme-era draft finally tidied, at Chris's
+// call): write returns are CHECKED now (ignoring them was the exact bug that
+// ate that Friday), failures speak on the glass, and the litter moved off
+// the root — the old version planted /test2 and /testdir at "/" every boot,
+// which on a now-writable ext2 root is the test suite littering the very
+// disk the user keeps clean. Everything lives under /etc/testdata, per the
+// same-day self-provisioning ruling.
+#define VW_FAIL(...) do { \
+        printf("FAIL vfs_write_mkdir: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+
 static bool test_vfs_write_mkdir(void)
 {
     if (kRootFilesystem == NULL) {
         printd(DEBUG_TESTS, "\tSKIP: test_vfs_write_mkdir (no root filesystem mounted)\n");
         return true;
     }
-    // Writing needs a filesystem that writes AND a device that writes —
-    // ext2 is read-only by design, so this SKIPs on the ext2-root boots and
-    // runs for real on the FAT entry.
+    // Writing needs a filesystem that writes AND a device that writes. Since
+    // the 2026-08-07 ratification every ext2 mount is read-write, so this
+    // runs on BOTH root flavors now; the gate survives for forced_ro mounts
+    // and any future read-only filesystem.
     if (kRootFilesystem->fops->write == NULL || kRootFilesystem->bops->write == NULL) {
         printd(DEBUG_TESTS, "\tSKIP: test_vfs_write_mkdir (root filesystem is read-only)\n");
         return true;
@@ -1576,74 +1751,79 @@ static bool test_vfs_write_mkdir(void)
     static const char msg2[] = "Hello world from Chris too!\n";    // testVFS's originals
     char buf[64];
     vfs_file_t *f = NULL;
+    int n;
 
-    // 1. Create, write, read back at the root.
-    if (kRootFilesystem->fops->open(&f, "/test2", "c", kRootFilesystem) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - create /test2 failed\n");
-        return false;
+    // 0. The tidy corner. mkdir speaks 0/-1 with -1 covering both "exists"
+    //    and "failed" (the seam went fs-neutral 2026-08-04 when ext2 became
+    //    its second implementation and fat_mkdir's FRESULT leak was
+    //    flattened) — so each mkdir is verified by stat, which tells a
+    //    pre-existing directory apart from a real failure.
+    static const char *dirs[] = { "/etc", "/etc/testdata", "/etc/testdata/testdir" };
+    os64_dirent_t de;
+    for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        char pathbuf[32];
+        sprintf(pathbuf, "%s", dirs[i]);   // mkdir wants a mutable path
+        kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+        if (kRootFilesystem->dops->stat(dirs[i], &de, kRootFilesystem) != 0
+            || !(de.flags & OS64_DE_DIR))
+            VW_FAIL("mkdir %s failed and it doesn't already exist\n", dirs[i]);
     }
-    kRootFilesystem->fops->write(f, msg1, sizeof(msg1) - 1);
+
+    // 1. Create, write, read back.
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/test2", "c", kRootFilesystem) != 0)
+        VW_FAIL("create /etc/testdata/test2 failed\n");
+    n = kRootFilesystem->fops->write(f, msg1, sizeof(msg1) - 1);
     kRootFilesystem->fops->close(f);
     f = NULL;
-    if (kRootFilesystem->fops->open(&f, "/test2", "r", kRootFilesystem) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - reopen /test2 failed\n");
-        return false;
-    }
-    int n = kRootFilesystem->fops->read(f, buf, sizeof(buf));
-    kRootFilesystem->fops->close(f);
-    if (n != (int)(sizeof(msg1) - 1) || strncmp(buf, msg1, sizeof(msg1) - 1) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - /test2 read-back mismatch (n=%d)\n", n);
-        return false;
-    }
-
-    // 2. mkdir. The seam speaks neutral 0/-1 as of 2026-08-04 (ext2 became
-    //    the second implementation, so the contract stopped being
-    //    theoretical and fat_mkdir's FRESULT leak was flattened; ff.h left
-    //    this file the same day). A persistent image that's been through
-    //    this test before reports -1 for the already-existing directory —
-    //    the stat fallback tells that apart from a real failure.
-    int r = kRootFilesystem->dops->mkdir("/testdir", kRootFilesystem);
-    if (r != 0) {
-        os64_dirent_t de;
-        if (kRootFilesystem->dops->stat("/testdir", &de, kRootFilesystem) != 0
-            || !(de.flags & OS64_DE_DIR)) {
-            printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - mkdir /testdir failed (%d) and it doesn't already exist\n", r);
-            return false;
-        }
-    }
-
-    // 3. A file INSIDE the new directory — proves the directory is real.
-    if (kRootFilesystem->fops->open(&f, "/testdir/testfile", "c", kRootFilesystem) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - create /testdir/testfile failed\n");
-        return false;
-    }
-    kRootFilesystem->fops->write(f, msg2, sizeof(msg2) - 1);
-    kRootFilesystem->fops->close(f);
-    f = NULL;
-    if (kRootFilesystem->fops->open(&f, "/testdir/testfile", "r", kRootFilesystem) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - reopen /testdir/testfile failed\n");
-        return false;
-    }
+    if (n != (int)(sizeof(msg1) - 1))
+        VW_FAIL("write to test2 short (%d)\n", n);
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/test2", "r", kRootFilesystem) != 0)
+        VW_FAIL("reopen /etc/testdata/test2 failed\n");
     n = kRootFilesystem->fops->read(f, buf, sizeof(buf));
     kRootFilesystem->fops->close(f);
-    if (n != (int)(sizeof(msg2) - 1) || strncmp(buf, msg2, sizeof(msg2) - 1) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - /testdir/testfile read-back mismatch (n=%d)\n", n);
-        return false;
-    }
+    f = NULL;
+    if (n != (int)(sizeof(msg1) - 1) || strncmp(buf, msg1, sizeof(msg1) - 1) != 0)
+        VW_FAIL("test2 read-back mismatch (n=%d)\n", n);
 
-    printd(DEBUG_TESTS, "\tPASS: test_vfs_write_mkdir (create/write/read-back, mkdir, nested file)\n");
+    // 2. A file INSIDE the fresh directory — proves the mkdir made a real
+    //    directory, not just a listing entry.
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/testdir/testfile", "c", kRootFilesystem) != 0)
+        VW_FAIL("create /etc/testdata/testdir/testfile failed\n");
+    n = kRootFilesystem->fops->write(f, msg2, sizeof(msg2) - 1);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+    if (n != (int)(sizeof(msg2) - 1))
+        VW_FAIL("write to testdir/testfile short (%d)\n", n);
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/testdir/testfile", "r", kRootFilesystem) != 0)
+        VW_FAIL("reopen /etc/testdata/testdir/testfile failed\n");
+    n = kRootFilesystem->fops->read(f, buf, sizeof(buf));
+    kRootFilesystem->fops->close(f);
+    if (n != (int)(sizeof(msg2) - 1) || strncmp(buf, msg2, sizeof(msg2) - 1) != 0)
+        VW_FAIL("testdir/testfile read-back mismatch (n=%d)\n", n);
+
+    printd(DEBUG_TESTS, "\tPASS: test_vfs_write_mkdir (create/write/read-back, mkdir, nested file — under /etc/testdata)\n");
     return true;
 }
+#undef VW_FAIL
 
 // ── test_ext2_secondary_write ───────────────────────────────────────────────
 // The ext2 WRITE driver's proving ground (2026-08-04 — the day os64 wrote
 // its first ext2 byte). Runs against the WRITABLE SECONDARY ext2 mount
-// (/ext2), which exists only on FAT-root boots — the full-suite entry, per
-// the limine.conf doctrine. On the default ext2-root boot the root is
-// (deliberately) still read-only and there is no secondary ext2 mount, so
-// this SKIPs honestly. The other judge is host-side: `make fsck-ext2` after
-// this suite must stay green — e2fsck recomputes every structure this
-// driver maintains.
+// (/ext2), which exists only on FAT-root boots — on ext2-root boots the
+// ext2 partition IS the root (writable since the 2026-08-07 ratification;
+// its write path is exercised by test_vfs_write_mkdir and the ext2_real
+// self-provision phase) and there is no secondary to test, so this SKIPs
+// honestly. The other judge is host-side: `make fsck-ext2` after this suite
+// must stay green — e2fsck recomputes every structure this driver maintains.
+//
+// ES_FAIL reports on the glass AND the log (the 2026-08-08 silencer lesson)
+// but does NOT return — unlike its MT_/E2_/VW_ cousins — because half these
+// failure paths close an open handle before bailing; control flow stays
+// with the caller.
+#define ES_FAIL(...) do { \
+        printf("FAIL ext2_secondary_write: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - " __VA_ARGS__); \
+    } while (0)
 static bool test_ext2_secondary_write(void)
 {
     // Find the writable ext2 secondary in the mount table by its prefix
@@ -1669,35 +1849,35 @@ static bool test_ext2_secondary_write(void)
 
     // 1. Create, write, close, reopen, read back byte-exact.
     if (fs->fops->open(&f, "/__wtest.txt", "c", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - create /__wtest.txt failed\n");
+        ES_FAIL("create /__wtest.txt failed\n");
         return false;
     }
     if (fs->fops->write(f, msg1, sizeof(msg1) - 1) != (int)(sizeof(msg1) - 1)) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - write to fresh file failed\n");
+        ES_FAIL("write to fresh file failed\n");
         fs->fops->close(f);
         return false;
     }
     fs->fops->close(f);
     f = NULL;
     if (fs->fops->open(&f, "/__wtest.txt", "r", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - reopen after create failed\n");
+        ES_FAIL("reopen after create failed\n");
         return false;
     }
     int n = fs->fops->read(f, buf, sizeof(buf));
     fs->fops->close(f);
     f = NULL;
     if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - read-back mismatch (n=%d)\n", n);
+        ES_FAIL("read-back mismatch (n=%d)\n", n);
         return false;
     }
 
     // 2. Append; verify the concatenation and the stat'd size.
     if (fs->fops->open(&f, "/__wtest.txt", "a", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - append open failed\n");
+        ES_FAIL("append open failed\n");
         return false;
     }
     if (fs->fops->write(f, msg2, sizeof(msg2) - 1) != (int)(sizeof(msg2) - 1)) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - append write failed\n");
+        ES_FAIL("append write failed\n");
         fs->fops->close(f);
         return false;
     }
@@ -1706,17 +1886,17 @@ static bool test_ext2_secondary_write(void)
     os64_dirent_t de;
     if (fs->dops->stat("/__wtest.txt", &de, fs) != 0 ||
         de.size != (sizeof(msg1) - 1) + (sizeof(msg2) - 1)) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - post-append size wrong (%lu)\n", de.size);
+        ES_FAIL("post-append size wrong (%lu)\n", de.size);
         return false;
     }
 
     // 3. Truncate via "w": size drops to 0 territory, then rewrite.
     if (fs->fops->open(&f, "/__wtest.txt", "w", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - truncating open failed\n");
+        ES_FAIL("truncating open failed\n");
         return false;
     }
     if (fs->dops->stat("/__wtest.txt", &de, fs) != 0 || de.size != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - size not 0 after truncate (%lu)\n", de.size);
+        ES_FAIL("size not 0 after truncate (%lu)\n", de.size);
         fs->fops->close(f);
         return false;
     }
@@ -1724,14 +1904,14 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
     if (fs->fops->open(&f, "/__wtest.txt", "r", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - reopen after truncate failed\n");
+        ES_FAIL("reopen after truncate failed\n");
         return false;
     }
     n = fs->fops->read(f, buf, sizeof(buf));
     fs->fops->close(f);
     f = NULL;
     if (n != (int)(sizeof(msg3) - 1) || memcmp(buf, msg3, sizeof(msg3) - 1) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - post-truncate read-back mismatch (n=%d)\n", n);
+        ES_FAIL("post-truncate read-back mismatch (n=%d)\n", n);
         return false;
     }
 
@@ -1740,14 +1920,14 @@ static bool test_ext2_secondary_write(void)
     //    chain into existence. Self-describing 16-byte records, same idea
     //    as pattern.bin.
     if (fs->fops->open(&f, "/__wbig.bin", "c", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - create /__wbig.bin failed\n");
+        ES_FAIL("create /__wbig.bin failed\n");
         return false;
     }
     char rec[17];
     for (uint32_t i = 0; i < 1024; i++) {
         sprintf(rec, "%08u:os64wr\n", i);     // exactly 16 bytes
         if (fs->fops->write(f, rec, 16) != 16) {
-            printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - pattern write failed at record %u\n", i);
+            ES_FAIL("pattern write failed at record %u\n", i);
             fs->fops->close(f);
             return false;
         }
@@ -1755,11 +1935,11 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
     if (fs->dops->stat("/__wbig.bin", &de, fs) != 0 || de.size != 16384) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - /__wbig.bin size %lu != 16384\n", de.size);
+        ES_FAIL("/__wbig.bin size %lu != 16384\n", de.size);
         return false;
     }
     if (fs->fops->open(&f, "/__wbig.bin", "r", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - reopen /__wbig.bin failed\n");
+        ES_FAIL("reopen /__wbig.bin failed\n");
         return false;
     }
     // The record straddling the direct/indirect boundary (bytes 12272-12303
@@ -1768,13 +1948,13 @@ static bool test_ext2_secondary_write(void)
     n = fs->fops->read(f, buf, 32);
     sprintf(rec, "%08u:os64wr\n", 767u);      // record 767 = bytes 12272..12287
     if (n != 32 || memcmp(buf, rec, 16) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - boundary record 767 mismatch\n");
+        ES_FAIL("boundary record 767 mismatch\n");
         fs->fops->close(f);
         return false;
     }
     sprintf(rec, "%08u:os64wr\n", 768u);      // record 768 = first indirect bytes
     if (memcmp(buf + 16, rec, 16) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - boundary record 768 mismatch\n");
+        ES_FAIL("boundary record 768 mismatch\n");
         fs->fops->close(f);
         return false;
     }
@@ -1782,7 +1962,7 @@ static bool test_ext2_secondary_write(void)
     n = fs->fops->read(f, buf, 16);
     sprintf(rec, "%08u:os64wr\n", 1023u);
     if (n != 16 || memcmp(buf, rec, 16) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - final record mismatch\n");
+        ES_FAIL("final record mismatch\n");
         fs->fops->close(f);
         return false;
     }
@@ -1791,7 +1971,7 @@ static bool test_ext2_secondary_write(void)
 
     // 5. A hole: seek far past end, write one record; the gap reads zeros.
     if (fs->fops->open(&f, "/__whole.bin", "c", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - create /__whole.bin failed\n");
+        ES_FAIL("create /__whole.bin failed\n");
         return false;
     }
     fs->fops->seek(f, 20480, SEEK_SET);
@@ -1800,11 +1980,11 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
     if (fs->dops->stat("/__whole.bin", &de, fs) != 0 || de.size != 20496) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - hole-file size %lu != 20496\n", de.size);
+        ES_FAIL("hole-file size %lu != 20496\n", de.size);
         return false;
     }
     if (fs->fops->open(&f, "/__whole.bin", "r", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - reopen /__whole.bin failed\n");
+        ES_FAIL("reopen /__whole.bin failed\n");
         return false;
     }
     fs->fops->seek(f, 5000, SEEK_SET);
@@ -1814,7 +1994,7 @@ static bool test_ext2_secondary_write(void)
         if (buf[i] != 0)
             zeros = false;
     if (!zeros) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - hole did not read as zeros\n");
+        ES_FAIL("hole did not read as zeros\n");
         fs->fops->close(f);
         return false;
     }
@@ -1823,18 +2003,18 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
     if (n != 16 || memcmp(buf, rec, 16) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - post-hole record mismatch\n");
+        ES_FAIL("post-hole record mismatch\n");
         return false;
     }
 
     // 6. mkdir; a file inside proves it's a real directory; readdir sees the
     //    file and (Plan 9 doctrine) no dot entries.
     if (fs->dops->mkdir("/__wdir", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - mkdir /__wdir failed\n");
+        ES_FAIL("mkdir /__wdir failed\n");
         return false;
     }
     if (fs->fops->open(&f, "/__wdir/inner.txt", "c", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - create in new dir failed\n");
+        ES_FAIL("create in new dir failed\n");
         return false;
     }
     fs->fops->write(f, msg1, sizeof(msg1) - 1);
@@ -1842,7 +2022,7 @@ static bool test_ext2_secondary_write(void)
     f = NULL;
     vfs_directory_t *d = NULL;
     if (fs->dops->open(&d, "/__wdir", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - opendir /__wdir failed\n");
+        ES_FAIL("opendir /__wdir failed\n");
         return false;
     }
     bool saw_inner = false, saw_dots = false;
@@ -1854,7 +2034,7 @@ static bool test_ext2_secondary_write(void)
     }
     fs->dops->close(d);
     if (!saw_inner || saw_dots) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - dir listing wrong (inner=%d dots=%d)\n",
+        ES_FAIL("dir listing wrong (inner=%d dots=%d)\n",
                saw_inner, saw_dots);
         return false;
     }
@@ -1862,38 +2042,38 @@ static bool test_ext2_secondary_write(void)
     // 7. The one removal verb, all four verdicts: non-empty dir refused,
     //    nonexistent refused, file removed, then-empty dir removed.
     if (fs->fops->rm("/__wdir", fs) == 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm of NON-empty dir succeeded (must refuse)\n");
+        ES_FAIL("rm of NON-empty dir succeeded (must refuse)\n");
         return false;
     }
     if (fs->fops->rm("/__no_such_thing", fs) == 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm of nonexistent path succeeded\n");
+        ES_FAIL("rm of nonexistent path succeeded\n");
         return false;
     }
     if (fs->fops->rm("/__wdir/inner.txt", fs) != 0 ||
         fs->dops->stat("/__wdir/inner.txt", &de, fs) == 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm file failed (or stat still sees it)\n");
+        ES_FAIL("rm file failed (or stat still sees it)\n");
         return false;
     }
     if (fs->fops->rm("/__wdir", fs) != 0 ||
         fs->dops->stat("/__wdir", &de, fs) == 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm empty dir failed (or stat still sees it)\n");
+        ES_FAIL("rm empty dir failed (or stat still sees it)\n");
         return false;
     }
 
     // 8. Ruling 5 on glass: rm and truncating-"w" both refuse a file that is
     //    OPEN, then succeed once it's closed.
     if (fs->fops->open(&f, "/__wtest.txt", "r", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - hold-open failed\n");
+        ES_FAIL("hold-open failed\n");
         return false;
     }
     if (fs->fops->rm("/__wtest.txt", fs) == 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm of an OPEN file succeeded (must refuse)\n");
+        ES_FAIL("rm of an OPEN file succeeded (must refuse)\n");
         fs->fops->close(f);
         return false;
     }
     vfs_file_t *f2 = NULL;
     if (fs->fops->open(&f2, "/__wtest.txt", "w", fs) == 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - truncating open of an OPEN file succeeded\n");
+        ES_FAIL("truncating open of an OPEN file succeeded\n");
         fs->fops->close(f2);
         fs->fops->close(f);
         return false;
@@ -1901,20 +2081,21 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
     if (fs->fops->rm("/__wtest.txt", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - rm after close failed\n");
+        ES_FAIL("rm after close failed\n");
         return false;
     }
 
     // 9. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
     //    indirect chain, /__whole.bin a sparse map. e2fsck audits the wake.
     if (fs->fops->rm("/__wbig.bin", fs) != 0 || fs->fops->rm("/__whole.bin", fs) != 0) {
-        printd(DEBUG_TESTS, "\tFAIL: ext2_secondary_write - cleanup rm failed\n");
+        ES_FAIL("cleanup rm failed\n");
         return false;
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (create/append/truncate/indirect/hole/mkdir/rm/busy-refusal)\n");
     return true;
 }
+#undef ES_FAIL
 
 // ── test_console_read_deadline ──────────────────────────────────────────────
 // The read-patience contract (ruled 2026-08-05), proved at the console layer:
@@ -3307,11 +3488,16 @@ static void register_builtin_tests(void)
     test_register("net_icmp_conn", test_net_icmp_conn, TEST_PHASE_POSTBOOT);
     test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_POSTBOOT);
     test_register("net_tcp_fetch_ring3", test_net_tcp_fetch_ring3, TEST_PHASE_POSTBOOT);
-    test_register("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT);
-    test_register("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT);
+    // The write gauntlets carry TEST_POLICY_RO: a failure here impeaches the
+    // WRITE path while logd is actively appending to a disk — continuing to
+    // write compounds the damage, halting costs the analysis. Demote every
+    // mount to read-only and keep the lights on (the policy taxonomy lives
+    // in test_framework.h; the demotion engine in vfs.c).
+    test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register("ring3_sync_all", test_ring3_sync_all, TEST_PHASE_POSTBOOT);
-    test_register("block_cache", test_block_cache, TEST_PHASE_POSTBOOT);
+    test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("dirent_mtime", test_dirent_mtime, TEST_PHASE_POSTBOOT);
 }
 
@@ -3333,6 +3519,8 @@ static void test_run_phase(int phase, const char *label)
 
     size_t passed = 0;
     size_t failed = 0;
+    size_t failedPanic = 0;   // failures at TEST_POLICY_PANIC — halt after the phase
+    size_t failedRO = 0;      // failures at TEST_POLICY_RO — demote mounts after the phase
 
     printd(DEBUG_TESTS, "BUILT-IN TESTS: Running %s tests:\n", label);
     for (size_t index = 0; index < g_test_case_count; ++index)
@@ -3351,17 +3539,35 @@ static void test_run_phase(int phase, const char *label)
             printd(DEBUG_TESTS, "\tFAIL: %s\n", "Invalid test. Test function pointer is NULL");
         }
 
+        // The TESTS= cmdline knob (kernel_commandline.c) overrides every
+        // test's registered policy for this boot: "panic" restores the old
+        // halt-on-any-failure strictness, "warn" forces continue-always
+        // (bare-metal triage). Anything else (or unset) honors the
+        // registrations.
+        test_policy_t policy = test->policy;
+        if (strncmp(kTestsPolicyOverride, "panic", 6) == 0)
+            policy = TEST_POLICY_PANIC;
+        else if (strncmp(kTestsPolicyOverride, "warn", 5) == 0)
+            policy = TEST_POLICY_WARN;
+
         if (result) {
             ++passed;
             printd(DEBUG_TESTS, "\t[Test] %s... OK\n", name);
         } else {
             ++failed;
+            if (policy == TEST_POLICY_PANIC)
+                ++failedPanic;
+            else if (policy == TEST_POLICY_RO)
+                ++failedRO;
             printd(DEBUG_TESTS, "\t[Test] %s... FAIL\n", name);
             // PERMANENT screen print, not just serial: on a machine with no
             // COM port (the P5), a failure whose name only went to serial is
-            // a confession sealed in an envelope. The panic below halts the
-            // system anyway — the name must be readable on the glass.
-            printf("  FAIL: %s\n", name);
+            // a confession sealed in an envelope — and under WARN policy the
+            // glass line is the whole verdict, so it must carry the policy too.
+            printf("  FAIL: %s%s\n", name,
+                   policy == TEST_POLICY_PANIC ? " [halting]" :
+                   policy == TEST_POLICY_RO    ? " [demoting mounts to read-only]" :
+                                                 " [continuing]");
         }
     }
 
@@ -3380,13 +3586,19 @@ static void test_run_phase(int phase, const char *label)
     printf("%s tests: %u passed, %u failed\n", label,
            (unsigned int)passed, (unsigned int)failed);
 
-    if (failed > 0) {
+    // The verdicts, severest first (test_framework.h owns the taxonomy —
+    // ext2's s_errors trio reborn, ratified 2026-08-08: "a failed test means
+    // I want to do analysis, not stare at a panic"):
+    if (failedPanic > 0) {
         // panic(), not a bare cli/hlt: panic force-drains the log buffer to
         // serial before halting.  The old halt stranded this message — and any
         // test results logd hadn't drained yet — in the ring buffer forever.
-        panic("Test framework: %u %s test(s) failed. System halted.\n",
-              (unsigned int)failed, label);
+        panic("Test framework: %u %s test(s) failed at PANIC severity. System halted.\n",
+              (unsigned int)failedPanic, label);
     }
+    if (failedRO > 0)
+        vfs_demote_all_mounts_readonly("write-path test failure");
+    // WARN-only failures: already named on the glass above; the boot goes on.
 }
 
 void test_run_preboot(void)
