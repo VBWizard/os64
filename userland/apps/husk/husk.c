@@ -115,12 +115,32 @@ static void replace_line(char *buf, int *n, int cap, const char *src)
 	*n = len;
 }
 
+// Walk the visible cursor left by k cells. (The console's '\b' only MOVES —
+// erasure stays overprint, per the renderer contract.)
+static void caret_back(int k)
+{
+	static const char bs[8] = "\b\b\b\b\b\b\b\b";
+	while (k > 0)
+	{
+		int chunk = k > 8 ? 8 : k;
+		os64_write(1, bs, (size_t)chunk);
+		k -= chunk;
+	}
+}
+
 // Read one line from the console into buf (NUL-terminated), echoing as we go.
-// Returns the length. Handles Enter (submit), Backspace (erase), and
-// Up/Down history recall.
+// Returns the length. Handles Enter (submit), Backspace (erase before the
+// caret), Left/Right caret movement with mid-line insert (2026-08-08 — the
+// day the console grew a real cursor to make it visible), and Up/Down
+// history recall.
+//
+// KNOWN LIMIT, shared with history recall since birth: the renderer's '\b'
+// clamps at column 0, so editing a line that has WRAPPED misbehaves at the
+// wrap seam. A line that long deserves a script file anyway.
 static int read_line(char *buf, int cap)
 {
 	int n = 0;
+	int pos = 0;                 // the caret: insertion point, 0..n
 	int browse = 0;              // 0 = composing live; k = viewing history[k back]
 	char live[LINE_MAX];         // the half-typed line, parked during browsing
 	live[0] = '\0';
@@ -133,14 +153,29 @@ static int read_line(char *buf, int cap)
 
 		if (c == '\r' || c == '\n')
 		{
+			// Submit takes the WHOLE line no matter where the caret sits —
+			// it is already fully painted on screen.
 			os64_write(1, "\n", 1);
 			buf[n] = 0;
 			history_store(buf);
 			return n;
 		}
-		if (c == 0x08 || c == 0x7f)          // backspace / delete
+		if (c == 0x08 || c == 0x7f)          // backspace: delete BEFORE the caret
 		{
-			if (n > 0) { n--; os64_write(1, "\b \b", 3); }   // rub out one glyph
+			if (pos > 0)
+			{
+				for (int i = pos - 1; i < n - 1; i++)
+					buf[i] = buf[i + 1];
+				n--;
+				pos--;
+				// Step back, repaint the shifted tail over itself, blank the
+				// orphaned last glyph, then walk the caret home.
+				os64_write(1, "\b", 1);
+				if (pos < n)
+					os64_write(1, buf + pos, (size_t)(n - pos));
+				os64_write(1, " ", 1);
+				caret_back(n - pos + 1);
+			}
 			browse = 0;          // editing makes the recalled line YOURS now
 			continue;
 		}
@@ -171,6 +206,14 @@ static int read_line(char *buf, int cap)
 			{
 				if (history_get(browse + 1) == NULL)
 					continue;    // no further past; nothing visibly changes
+				// Browsing swaps the WHOLE line, and replace_line rubs out
+				// from the caret — so the caret goes to the end first
+				// (advancing over glyphs already on screen costs a re-echo).
+				if (pos < n)
+				{
+					os64_write(1, buf + pos, (size_t)(n - pos));
+					pos = n;
+				}
 				if (browse == 0)
 				{
 					buf[n] = '\0';           // park the half-typed line
@@ -178,17 +221,43 @@ static int read_line(char *buf, int cap)
 				}
 				browse++;
 				replace_line(buf, &n, cap, history_get(browse));
+				pos = n;
 			}
 			else if (seq[1] == 'B')          // Down — one step toward now
 			{
 				if (browse == 0)
 					continue;    // already composing; Down has nowhere to go
+				if (pos < n)
+				{
+					os64_write(1, buf + pos, (size_t)(n - pos));
+					pos = n;
+				}
 				browse--;
 				replace_line(buf, &n, cap,
 				             browse == 0 ? live : history_get(browse));
+				pos = n;
 			}
-			// 'C'/'D' (Right/Left): cursor editing is a later luxury —
-			// swallowed so they never bury bytes in the command.
+			else if (seq[1] == 'D')          // Left — caret one cell back
+			{
+				if (pos > 0)
+				{
+					pos--;
+					os64_write(1, "\b", 1);
+				}
+				// Pure movement is not editing: browse survives, so an Up
+				// after a stray Left still walks history from where it was.
+			}
+			else if (seq[1] == 'C')          // Right — caret one cell forward
+			{
+				if (pos < n)
+				{
+					// Re-echo the glyph under the caret: same pixels, and
+					// the console cursor advances one cell — movement by
+					// overprint, the only vocabulary the renderer needs.
+					os64_write(1, buf + pos, 1);
+					pos++;
+				}
+			}
 			continue;
 		}
 		// Other control chords (Ctrl+A..Z now arrive as 0x01..0x1A) have no
@@ -198,8 +267,18 @@ static int read_line(char *buf, int cap)
 			continue;
 		if (n < cap - 1)
 		{
-			buf[n++] = c;
-			os64_write(1, &c, 1);            // echo
+			// Insert AT the caret: shift the tail right, land the byte, then
+			// paint the new glyph plus the shifted tail and walk the caret
+			// back to rest just after the insertion. When the caret is at
+			// the end this degenerates to the classic echo — one write, no
+			// backspaces.
+			for (int i = n; i > pos; i--)
+				buf[i] = buf[i - 1];
+			buf[pos] = c;
+			n++;
+			pos++;
+			os64_write(1, buf + pos - 1, (size_t)(n - pos + 1));
+			caret_back(n - pos);
 			browse = 0;          // typing makes the recalled line YOURS now
 		}
 	}
