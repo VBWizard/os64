@@ -50,6 +50,7 @@
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
 #include "driver/net/dhcp.h"
 #include "driver/filesystem/proc/procfs.h"
+#include "driver/filesystem/sys/sysfs.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -412,6 +413,11 @@ void kernel_init()
 	// all-zero GUID out of the dedupe comparisons. It also needs no filesystem
 	// underneath it — this mount works even if no disk was found.
 	procfs_mount();
+
+	// /sys — the machine as files (sysfs.c has the doctrine): PCI discovery's
+	// results, readable at /sys/bus/pci. Same synthetic-mount rules as /proc
+	// (no GUID, no disk, mounted after the sweep for the same reason).
+	sysfs_mount();
 
 	// ── The log daemon, as early as a log daemon can possibly start ──────────
 	// HERE, and not down with husk, is the whole point of the LOGD= flag. The
