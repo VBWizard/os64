@@ -4,6 +4,7 @@
 
 #include "console.h"
 #include "driver/system/keyboard.h"
+#include "BasicRenderer.h"   // renderer_cursor_show/hide — the listening light
 #include "scheduler.h"
 #include "signals.h"
 #include "smp_core.h"
@@ -152,6 +153,7 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 			// empty-handed, which made the stale slot a live bug to have.
 			if (kConsoleWaiter == self)
 				kConsoleWaiter = NULL;
+			renderer_cursor_hide();
 			return CONSOLE_READ_INTERRUPTED;
 		}
 
@@ -168,7 +170,10 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 			if (ev.ascii == CONSOLE_EOT)
 			{
 				if (n == 0)
+				{
+					renderer_cursor_hide();
 					return 0;             // EOF right now: nothing precedes it
+				}
 				kConsoleEOFPending = true; // bytes first, EOF on the next read
 				break;
 			}
@@ -180,6 +185,10 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		{
 			if (kConsoleWaiter == self)
 				kConsoleWaiter = NULL;
+			// Hide before the caller echoes: print_n would hide it anyway,
+			// but a caller that DOESN'T echo must not leave a lit cursor
+			// claiming the machine is still listening.
+			renderer_cursor_hide();
 			return (long)n;   // got input — return it (terminal semantics)
 		}
 
@@ -191,6 +200,7 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		{
 			if (kConsoleWaiter == self)
 				kConsoleWaiter = NULL;
+			renderer_cursor_hide();
 			return CONSOLE_READ_TIMEOUT;
 		}
 
@@ -206,6 +216,12 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		if (deadline != 0 && deadline < wake)
 			wake = deadline;
 		kConsoleWaiter = self;
+		// About to park empty-handed: light the cursor. It sits at wherever
+		// the caller's last echo left the console cursor — mid-line during
+		// husk's editing, end of prompt otherwise — and every output path
+		// (and every exit above) puts it away. Show is idempotent, so the
+		// backstop re-loop costs a repaint at worst.
+		renderer_cursor_show();
 		sigaction(SIGSLEEP, NULL, wake, self);
 	}
 }

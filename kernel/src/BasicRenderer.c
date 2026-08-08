@@ -97,6 +97,107 @@ void renderer_flush_if_dirty(void)
 // window. The old half-finished shadow-buffer/MTRR experiments that lived
 // here were removed when the GUI's backbuffer superseded them.
 
+// ── The cursor (2026-08-08 — "need a cursor! :-)") ──────────────────────────
+// A solid underscore at the console cursor cell, shown by console_read while
+// a reader is parked awaiting keys and hidden the moment anything else needs
+// the glass. The discipline that keeps it honest with one flag and no timer:
+//
+//   - console_read SHOWS it before parking and HIDES it on every exit path,
+//     so it glows exactly while the machine is listening — the semantics a
+//     terminal cursor has had since the VT05 grew one in 1970.
+//   - EVERY print path HIDES it first (print_n's first act under the lock),
+//     because the cursor may be sitting mid-line over a real glyph during
+//     line editing, and output must never land on (or scroll away from
+//     under) a painted cursor.
+//   - Show SAVES the pixels it covers and hide RESTORES them — the cursor
+//     works over any cell content without the renderer needing to know what
+//     a "character" is. clear()/'\f' DROP the saved pixels instead of
+//     restoring (the screen they came from is gone).
+//
+// All state below is guarded by kRendererLock. No blink: blinking needs a
+// periodic agent, and the parked reader is by definition not running — a
+// steady underscore is the honest v1 (and what the VT05 shipped, for the
+// same reason).
+#define CURSOR_ROWS 2                       // bottom 2 pixel rows of the cell
+static bool s_cursorOn = false;
+static unsigned int s_cursorPX, s_cursorPY;              // cell origin, pixels
+static unsigned int s_cursorSave[CURSOR_ROWS * FONT_WIDTH];
+
+// Caller holds kRendererLock. Restore what the cursor covered.
+static void cursor_hide_locked(BasicRenderer *r)
+{
+	if (!s_cursorOn)
+		return;
+	s_cursorOn = false;
+	unsigned int *pixPtr = (unsigned int *)r->framebuffer->base_address;
+	unsigned int charH = r->psf1_font->psf1_header->charsize;
+	for (unsigned int row = 0; row < CURSOR_ROWS; row++)
+	{
+		unsigned int y = s_cursorPY + charH - CURSOR_ROWS + row;
+		for (unsigned int x = 0; x < FONT_WIDTH; x++)
+		{
+			if (s_cursorPX + x >= r->framebuffer->width || y >= r->framebuffer->height)
+				continue;
+			size_t idx = (s_cursorPX + x) + (size_t)y * r->framebuffer->pixels_per_scan_line;
+			unsigned int px = s_cursorSave[row * FONT_WIDTH + x];
+			if (!s_glassDirty)
+				*(pixPtr + idx) = px;
+			if (r->shadow != NULL)
+				r->shadow[idx] = px;
+		}
+	}
+}
+
+// Caller holds kRendererLock. Save the cell's true pixels, paint the bar.
+static void cursor_show_locked(BasicRenderer *r)
+{
+	if (s_cursorOn)
+		cursor_hide_locked(r);   // repaint at the CURRENT position
+	unsigned int *pixPtr = (unsigned int *)r->framebuffer->base_address;
+	unsigned int charH = r->psf1_font->psf1_header->charsize;
+	s_cursorPX = r->cursor_position.x;
+	s_cursorPY = r->cursor_position.y;
+	for (unsigned int row = 0; row < CURSOR_ROWS; row++)
+	{
+		unsigned int y = s_cursorPY + charH - CURSOR_ROWS + row;
+		for (unsigned int x = 0; x < FONT_WIDTH; x++)
+		{
+			if (s_cursorPX + x >= r->framebuffer->width || y >= r->framebuffer->height)
+				continue;
+			size_t idx = (s_cursorPX + x) + (size_t)y * r->framebuffer->pixels_per_scan_line;
+			// Save from the SHADOW when there is one — it is the truth even
+			// while the glass is throttle-dirty; VRAM is never read after boot.
+			s_cursorSave[row * FONT_WIDTH + x] =
+			    (r->shadow != NULL) ? r->shadow[idx] : *(pixPtr + idx);
+			if (!s_glassDirty)
+				*(pixPtr + idx) = r->color;
+			if (r->shadow != NULL)
+				r->shadow[idx] = r->color;
+		}
+	}
+	s_cursorOn = true;
+}
+
+// The console_read entry points (console.h): show while listening, hide when
+// anything else happens. GUI-diverted consoles paint their own cursor someday.
+void renderer_cursor_show(void)
+{
+	if (kConsoleSink)
+		return;
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+	cursor_show_locked(&kRenderer);
+	spinlock_release_irqrestore(&kRendererLock, flags);
+}
+
+void renderer_cursor_hide(void)
+{
+	if (kConsoleSink)
+		return;
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+	cursor_hide_locked(&kRenderer);
+	spinlock_release_irqrestore(&kRendererLock, flags);
+}
+
 void clear_bottom_lines(unsigned int *pixPtr, unsigned int pixels_per_scanline, unsigned int width, unsigned int start_line, unsigned int end_line) {
     // 32-bit fill, NOT memset: memset replicates a single byte, which only
     // painted the right color when all four background-color bytes happened
@@ -297,6 +398,9 @@ void print_n(const char* str, size_t length) {
     // one core's wrap/scroll relocate the cursor out from under the other's
     // next put_char). One print_n call == one atomic console write.
     uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+    // First act under the lock: the cursor gets out of the way (restoring the
+    // pixels it covered), so no glyph, wrap, or scroll ever lands on it.
+    cursor_hide_locked(basicrenderer);
     for (size_t i = 0; i < length; i++, chr++) {
         switch (*chr) {
             case '\n':
@@ -395,6 +499,10 @@ void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor)
     // Wiping the screen and homing the cursor is the most destructive thing the
     // renderer does — it must not land in the middle of another core's string.
     uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+
+    // The text cursor's saved pixels describe a screen that is about to stop
+    // existing — drop it, don't restore it.
+    s_cursorOn = false;
 
     for (int64_t y = 0; y < basicrenderer->framebuffer->height; y++)
     {

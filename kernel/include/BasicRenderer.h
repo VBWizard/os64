@@ -94,4 +94,12 @@ void renderer_bust_lock(void);
 // Cheap no-op when the glass is current. See the doctrine in BasicRenderer.c.
 void renderer_flush_if_dirty(void);
 
+// The text cursor (2026-08-08): a solid underscore at the console cursor
+// cell. console_read shows it before parking (glows while the machine
+// listens) and hides it on every exit; every print path hides it first
+// thing, so output never lands on a painted cursor. Save/restore of the
+// covered pixels lives in the renderer — callers never care what's under it.
+void renderer_cursor_show(void);
+void renderer_cursor_hide(void);
+
 #endif
