@@ -152,6 +152,13 @@
 		// stderr fields above are the OLD (unused) placeholders from the first
 		// OS — this array is the real thing.
 		handle_t handles[TASK_MAX_HANDLES];
+		// The controlling terminal (tty.h): which virtual terminal this task
+		// reads, writes, and answers Ctrl+C on. Inherited from the parent at
+		// task_create — a shell's children work its terminal, which is the
+		// whole 1970s meaning of "controlling" — and NULL means the system
+		// console, VT1 (task_tty() resolves; kernel threads created before
+		// tty_init simply stay NULL forever and that is correct).
+		struct tty *tty;
 		void *prev, *next;
     } task_t;
 

@@ -85,7 +85,37 @@ void get_cursor_pos(BasicRenderer *basicrenderer, unsigned int *x, unsigned int 
 void print_at(BasicRenderer *basicrenderer, unsigned int x, unsigned int y, const char *str);
 void print(const char *str);
 void print_n(const char* str, size_t length);
+// The legacy direct-to-framebuffer interpreter — print_n's old body. Two
+// customers remain: early boot (before tty_init builds the grids) and the
+// panic path (kTTYDirect — a dead system paints straight onto whatever
+// terminal is showing). Everything else goes print_n -> tty_write, where the
+// SAME control-byte semantics now live against a per-terminal grid.
+void print_n_direct(const char* str, size_t length);
 int printf(const char *fmt, ...);
+
+// ── The dumb-glass API (2026-08-08, the virtual-terminal slice) ─────────────
+// The renderer's demotion papers: tty.c owns the terminal LOGIC (cursor,
+// wrap, scroll, control bytes — against each tty's character grid), and the
+// renderer keeps only the PAINT. tty.c brackets its glass work in
+// begin/end (one atomic paint per tty_write, exactly the atomicity print_n's
+// whole-string lock always provided) and uses the _locked primitives between.
+uint32_t renderer_cols(void);   // glass geometry, in character cells
+uint32_t renderer_rows(void);
+// Acquire the renderer lock (irqsave) and hide the text cursor — the tty
+// layer's ticket to paint. Returns the saved flags for _end.
+uint64_t renderer_glass_begin(void);
+// Park the console cursor at a character cell (keeps the underscore cursor
+// and print_at-era snapshots honest), optionally relight it, release.
+void renderer_glass_end(uint64_t flags, uint32_t row, uint32_t col, bool show_cursor);
+// The primitives (caller holds the lock via renderer_glass_begin):
+void renderer_glass_putc_locked(char ch, uint32_t row, uint32_t col, uint32_t color);
+void renderer_glass_scroll_locked(void);   // one text line up (throttled blit)
+void renderer_glass_clear_locked(void);    // wipe to background
+// The repaint gait (focus switch / scrollback view): defer marks the glass
+// dirty so every putc lands in the shadow only; blit pushes the finished
+// frame in ONE memcpy. A terminal switch is a single blit, not 16k pokes.
+void renderer_glass_defer_locked(void);
+void renderer_glass_blit_locked(void);
 void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff);
 void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor);
 void renderer_bust_lock(void);

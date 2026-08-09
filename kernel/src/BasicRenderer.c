@@ -7,6 +7,7 @@
 #include "serial_logging.h"
 #include "spinlock.h"
 #include "kmalloc.h"   // renderer_attach_shadow — the console's RAM mirror
+#include "tty.h"       // print_n's router half: grids up -> bytes go to VT1
 
 extern BasicRenderer kRenderer;
 uint32_t kFrameBufferBackgroundColor;
@@ -377,9 +378,12 @@ int printf(const char *fmt, ...)
 	return printed;
 }
 
-// Length-bounded console output — the worker behind print().  Exists so the
-// write() syscall can push exact byte counts (which may legally contain NUL
-// bytes) through the same cursor/wrap/scroll logic instead of duplicating it.
+// Length-bounded console output — the worker behind print(). Since the
+// virtual-terminal slice this is a ROUTER: once tty_init has built the grids,
+// every printf/print lands in VT1's grid (the system console — the BSD
+// tradition: kernel messages have an address, and it is terminal one). The
+// direct interpreter below survives for its two remaining customers — early
+// boot and panic.
 void print_n(const char* str, size_t length) {
     // GUI console diversion (see kConsoleSink in BasicRenderer.h). Snapshot
     // the pointer once: panic may NULL it concurrently, and we must not call
@@ -390,6 +394,20 @@ void print_n(const char* str, size_t length) {
         return;
     }
 
+    if (kTTYReady && !kTTYDirect) {
+        tty_write(&kTTY[0], str, length);
+        return;
+    }
+
+    print_n_direct(str, length);
+}
+
+// The legacy direct-to-glass interpreter (contract in BasicRenderer.h). This
+// is the ancestral print_n body, byte for byte; tty.c's interpreter is its
+// grid-backed descendant and MUST keep these exact semantics (including the
+// one-cell '\t' quirk) — the two must never be allowed to drift, which is
+// why the tty version carries the same comments at the same decisions.
+void print_n_direct(const char* str, size_t length) {
     const char *chr = str;
     BasicRenderer *basicrenderer = &kRenderer;
 
@@ -489,6 +507,76 @@ void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigne
         }
         fontPtr++;
     }
+}
+
+// ── The dumb-glass API (2026-08-08 — the renderer's demotion papers) ────────
+// Contract in BasicRenderer.h: tty.c owns the terminal logic, these own the
+// paint. begin/end bracket one atomic glass session under kRendererLock —
+// the same whole-string atomicity print_n always enforced, now enforced by
+// the caller because the caller is the one who knows where a write ends.
+
+uint32_t renderer_cols(void)
+{
+	return kRenderer.framebuffer->width / FONT_WIDTH;
+}
+
+uint32_t renderer_rows(void)
+{
+	return kRenderer.framebuffer->height / FONT_HEIGHT;
+}
+
+uint64_t renderer_glass_begin(void)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
+	// First act, same as print_n's: the cursor gets out of the way
+	// (restoring the pixels it covered) before any glyph or scroll lands.
+	cursor_hide_locked(&kRenderer);
+	return flags;
+}
+
+void renderer_glass_end(uint64_t flags, uint32_t row, uint32_t col, bool show_cursor)
+{
+	// Park the pixel cursor at the tty's cell so the underscore cursor (and
+	// any get_cursor_pos snapshot) agrees with the grid about where we are.
+	kRenderer.cursor_position.x = col * FONT_WIDTH;
+	kRenderer.cursor_position.y = row * FONT_HEIGHT;
+	if (show_cursor)
+		cursor_show_locked(&kRenderer);
+	spinlock_release_irqrestore(&kRendererLock, flags);
+}
+
+void renderer_glass_putc_locked(char ch, uint32_t row, uint32_t col, uint32_t color)
+{
+	// The tty's per-cell color becomes the renderer color for this glyph —
+	// nothing else writes kRenderer.color at runtime (checked 2026-08-08),
+	// so there is nothing to save and restore.
+	kRenderer.color = color;
+	put_char(&kRenderer, ch, col * FONT_WIDTH, row * FONT_HEIGHT);
+}
+
+void renderer_glass_scroll_locked(void)
+{
+	scroll_framebuffer_full(&kRenderer);
+}
+
+void renderer_glass_clear_locked(void)
+{
+	clear_framebuffer_full(&kRenderer);
+}
+
+void renderer_glass_defer_locked(void)
+{
+	// Only meaningful with a shadow to defer INTO: pre-shadow, put_char
+	// writes VRAM directly and a "deferred" glyph would simply vanish.
+	// (Moot in practice — tty_init runs after renderer_attach_shadow —
+	// but a repaint must never be able to paint a black screen.)
+	if (kRenderer.shadow != NULL)
+		s_glassDirty = true;
+}
+
+void renderer_glass_blit_locked(void)
+{
+	renderer_blit_full(&kRenderer);
 }
 
 void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor)
