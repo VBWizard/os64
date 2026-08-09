@@ -456,6 +456,12 @@ static int split_commands(char *line, char *cmds[], int seps[], int maxcmds)
 // The vocabulary, in lookup order:
 //   $?     the last exit status (arrived with the Bourne shell, 1977; the
 //          Thompson shell could branch on a status but never let you SEE one)
+//   $$     the shell's own task ID (Bourne, 1977 — born so scripts could
+//          mint unique temp-file names: /tmp/sort$$ and friends). Expanded
+//          HERE, before any child exists, so `echo $$` prints HUSK's id no
+//          matter who echo is — expansion-time identity, the counterpart to
+//          /proc/self's open-time identity (that one names the opener,
+//          which is why `cat /proc/self/status` reports on cat)
 //   $CWD   the current directory, fetched LIVE from the kernel at expansion
 //          time. Unix's $PWD (csh's $cwd, 1978) is a shell-maintained COPY
 //          of kernel state, patched by hand on every cd and famous for
@@ -482,6 +488,14 @@ static void expand_line(const char *src, char *dst, int cap, int last_status)
 		{
 			char nb[20];
 			int k = utoa((unsigned long)(unsigned int)last_status, nb);
+			for (int j = 0; j < k && n < cap - 1; j++)
+				dst[n++] = nb[j];
+			src += 2;
+		}
+		else if (src[0] == '$' && src[1] == '$')
+		{
+			char nb[24];
+			int k = utoa((unsigned long)os64_getpid(), nb);
 			for (int j = 0; j < k && n < cap - 1; j++)
 				dst[n++] = nb[j];
 			src += 2;
