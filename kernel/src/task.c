@@ -30,16 +30,15 @@
 #include "kworker.h"
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
+#include "tty.h"   // per-tty foreground (task_wait) + the shell-departed hook
 
 extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
 extern uintptr_t kKernelPML4;
 
-// The foreground task (see task.h for the full doctrine). Starts NULL; the
-// kernel points it at husk at launch, and task_wait moves it to whichever
-// child the shell is blocked on. NULL means "nobody owns the console yet"
-// (early boot, test programs) and Ctrl+C stays an ordinary data byte.
-task_t * volatile kForegroundTask = NULL;
+// (kForegroundTask lived here 2026-07..2026-08-08. It is tty_t.fgTask now —
+// one per terminal — and NULL still means "nobody owns this console yet",
+// with Ctrl+C staying an ordinary data byte there. See task.h and tty.h.)
 
 // Shared virtual address bump pointer for all tasks that use kKernelPML4 directly.
 // Tasks sharing the same PML4 must draw from the same counter or their stack
@@ -583,6 +582,13 @@ static void __attribute__((noinline)) task_exit_finish(void)
 		handle_close_all(task);
 
 		task->exited = true;
+
+		// If the departed was a terminal's seated shell, the terminal goes
+		// dormant and posts its summons (tty.c) — the next keystroke there
+		// raises a fresh husk. Checked by tty.c against the SEAT (t->shell),
+		// so an ordinary child dying on a terminal changes nothing.
+		tty_shell_departed(task);
+
 		task_enqueue_dead_child(task);
 	}
 
@@ -687,11 +693,16 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// console. Restored to the shell on EVERY return path below: a Ctrl+C at
 	// the prompt after this wait must find the shell foreground again (where
 	// it is a harmless line-kill byte), never a stale pointer at a dead child.
+	//
+	// THE console is now THIS SHELL'S TERMINAL (task_tty): husk-on-tty2
+	// handing its console to a child moves tty2's foreground pointer and
+	// nobody else's — the Ctrl+C you type on tty1 cannot reach across.
+	tty_t *console = task_tty(parent);
 	bool movesConsole = parent->controllingShell;
 	if (movesConsole) {
 		task_t *fg = task_find_live_child(parent, targetPid);
 		if (fg != NULL)
-			kForegroundTask = fg;
+			console->fgTask = fg;
 	}
 
 	while (1==1)
@@ -711,7 +722,7 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			}
 			child->retValCollected = true;
 			if (movesConsole)
-				kForegroundTask = parent;
+				console->fgTask = parent;
 			return endedPid;
 		}
 
@@ -719,7 +730,7 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// nothing to wait for — fail rather than sleep forever.
 		if (task_find_live_child(parent, targetPid) == NULL) {
 			if (movesConsole)
-				kForegroundTask = parent;
+				console->fgTask = parent;
 			return 0;
 		}
 
@@ -734,7 +745,7 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 // The non-blocking half of task_wait (contract in task.h). Deliberately shares
 // task_wait's check-first block and NOTHING else: no live-child probe, because
 // "children exist but none are dead" is a normal answer here rather than a
-// reason to sleep; and no kForegroundTask movement, because reaping a
+// reason to sleep; and no foreground movement, because reaping a
 // background corpse does not hand anyone the console.
 uint64_t task_reap_any_dead(task_t* parentTask, uint64_t* exitCode)
 {
@@ -1238,6 +1249,11 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        newTask->stdin=parentTaskPtr->stdin;
        newTask->stdout=parentTaskPtr->stdout;
        newTask->stderr=parentTaskPtr->stderr;
+       // The controlling terminal rides the family line: a shell's children
+       // work its terminal (read its ring, print to its grid, answer its
+       // Ctrl+C). NULL inherits as NULL = the system console (task_tty).
+       // tty_seat_shell overrides this for the shells themselves.
+       newTask->tty=parentTaskPtr->tty;
        //Initialize the current working directory to parentTask's cwd
        newTask->cwd=(char*)kmalloc(PAGE_SIZE);
        if (parentTaskPtr!=NULL && parentTaskPtr->cwd)

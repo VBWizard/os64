@@ -38,6 +38,7 @@
 #include "serial_logging.h"
 #include "scheduler.h"
 #include "task.h"
+#include "tty.h"   // task_tty — the /proc tty + foreground fields
 #include "thread.h"
 #include "signals.h"
 #include "handle.h"
@@ -467,10 +468,14 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	synth_text_addf(t, "parent\t%lu\n",
 	           task->parentTask ? task->parentTask->taskID : 0);
 	synth_text_addf(t, "kernel\t%s\n", task->kernelTask ? "yes" : "no");
-	// The two console-ownership bits SIGINT.md introduced. Worth surfacing:
-	// "which task would Ctrl+C hit" is exactly the sort of question /proc
-	// exists to answer without a debugger.
-	synth_text_addf(t, "foreground\t%s\n", (kForegroundTask == task) ? "yes" : "no");
+	// The console-ownership bits SIGINT.md introduced, per-terminal since the
+	// VT slice. Worth surfacing: "which task would Ctrl+C hit, and on which
+	// terminal" is exactly the sort of question /proc exists to answer
+	// without a debugger. tty is 1-based here because that is what the
+	// Alt+F keys say (task_tty resolves the no-terminal default to tty1).
+	synth_text_addf(t, "tty\t%u\n", task_tty(task)->index + 1);
+	synth_text_addf(t, "foreground\t%s\n",
+	           (task_tty(task)->fgTask == task) ? "yes" : "no");
 	synth_text_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
 	synth_text_addf(t, "threads\t%u\n", proc_task_thread_count(task));
 	synth_text_addf(t, "heap\t%p-%p\n", (void *)task->heapStart, (void *)task->heapEnd);

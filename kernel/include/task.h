@@ -162,16 +162,13 @@
 		void *prev, *next;
     } task_t;
 
-	// The foreground task: the one task the console belongs to RIGHT NOW —
-	// by definition, "the task the controlling shell is currently blocked
-	// waiting on" (or the shell itself, between commands). One pointer
-	// because v1 has one console; becomes a per-tty_t field when virtual
-	// terminals arrive, exactly like kConsoleWaiter (console.c). Moved by
-	// task_wait — keying the transfer on WAIT, not spawn, means a future
-	// backgrounded (&) child correctly never takes the console. Read from
-	// the keyboard IRQ path (console_intr_intercept), which is why it is a
-	// single aligned pointer: x86-64 reads it atomically, no lock needed.
-	extern task_t * volatile kForegroundTask;
+	// (kForegroundTask, 2026-07..2026-08-08, promoted.) The foreground task
+	// — "the task the controlling shell is currently blocked waiting on" —
+	// lives in tty_t.fgTask now, one per terminal, exactly as its birth
+	// comment promised. Everything else about it survived the move: task_wait
+	// still moves it (keying the transfer on WAIT, not spawn, so a
+	// backgrounded (&) child never takes the console), and the keyboard IRQ
+	// path still reads it as a single aligned pointer, atomically, no lock.
 
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);

@@ -7,6 +7,7 @@
 #include "thread.h"
 #include "smp_core.h"
 #include "console.h"
+#include "tty.h"     // tty_summon_wake — rousting kworker for a knocked terminal
 #include "pipe.h"
 #include "thread_join.h"
 #include "BasicRenderer.h"   // renderer_flush_if_dirty — the blit-throttle rider
@@ -161,11 +162,18 @@ void processSignals()
 	// except mid-firehose, which is exactly when it earns its keep.
 	renderer_flush_if_dirty();
 
-	// Wake a blocked console reader if the keyboard driver has input. Done
-	// here — under the lock, AFTER the qISleep walk above — so its queue
-	// surgery (ISLEEP->RUNNABLE) can't corrupt that iteration. Level-triggered
-	// on keyboard_has_event(), which is what makes console_read lost-wakeup-free.
+	// Wake any blocked console reader whose terminal has input (one sweep
+	// over the tty fleet since VTs arrived). Done here — under the lock,
+	// AFTER the qISleep walk above — so its queue surgery (ISLEEP->RUNNABLE)
+	// can't corrupt that iteration. Level-triggered on the ring condition,
+	// which is what makes console_read lost-wakeup-free.
 	console_wake_if_ready();
+
+	// And if a keystroke knocked on a DORMANT terminal, roust kworker early
+	// to go play midwife (tty_summon_sweep spawns the shell in task context;
+	// kworker's own backstop nap is 2s — fine for burials, rude for a human
+	// standing at a dark terminal). Same wake idiom, same lock, same reasons.
+	tty_summon_wake();
 
 	// Same discipline, same reason, for pipes: wake any reader whose pipe has
 	// bytes (or whose last writer just left — that is its EOF), and any writer

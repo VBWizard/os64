@@ -10,6 +10,7 @@
 #include "serial_logging.h"
 #include "log.h"
 #include "gui/compositor.h"
+#include "tty.h"   // tty_emergency_direct — the terminals' escape hatch
 
 char sprintf_buf[2000];
 
@@ -64,6 +65,12 @@ void panic_no_shutdown(const char *format, ...)
     // A panic nobody can read is worse than a garbled one — bust the lock.
     renderer_bust_lock();
 
+    // And one layer above: force every print onto the legacy direct-to-glass
+    // path and bust the terminal locks too (a dead core may hold a tty grid
+    // lock the same way it may hold the renderer's). Panic text lands on
+    // whatever terminal is showing — exactly what you want from a dead system.
+    tty_emergency_direct();
+
     va_list args;
     va_start( args, format );
     vsprintf(sprintf_buf, format, args);
@@ -77,11 +84,12 @@ panicLoop:
 
 void __attribute__((noreturn, noinline))panic(const char *format, ...)
 {
-    // FIRST: detach the GUI console sink, then bust the renderer lock
-    // (see panic_no_shutdown for both — nothing stands between a panic and
-    // the framebuffer).
+    // FIRST: detach the GUI console sink, then bust the renderer lock, then
+    // force the terminals into direct mode (see panic_no_shutdown for all
+    // three — nothing stands between a panic and the framebuffer).
     gui_emergency_disable();
     renderer_bust_lock();
+    tty_emergency_direct();
 
     va_list args;
     va_start( args, format );

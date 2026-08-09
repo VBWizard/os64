@@ -29,6 +29,7 @@
 #include "test_framework.h"
 #include "panic.h"
 #include "task.h"
+#include "tty.h"   // tty_init + tty_seat_shell — the terminals rise at boot
 #include "scheduler.h"
 #include "x86_64.h"
 #include "smp_core.h"
@@ -521,27 +522,40 @@ void kernel_init()
 	if (kTestShutdown)
 		shutdown_system();
 
-    // Launch the shell and park the kernel task so the scheduler keeps running
-    // it (husk loops forever on read/spawn/wait). The kernel task is husk's
-    // parent, so husk inherits its environment. (When husk becomes the real
-    // init path this replaces the HELLO/KEYTEST temps entirely.)
+    // Launch the shells and park the kernel task so the scheduler keeps
+    // running it (husk loops forever on read/spawn/wait). The kernel task is
+    // husk's parent, so husk inherits its environment. (When husk becomes the
+    // real init path this replaces the HELLO/KEYTEST temps entirely.)
+    //
+    // TWO shells at boot — the os32 loadout, kept on purpose (eight
+    // terminals, TERMINAL_SHELL_COUNT=2): VT1 shares the system console with
+    // the kernel's own chatter, VT2 is all yours, and VT3-8 wait dark with a
+    // summons on the door (first keystroke raises a shell there — V6 read
+    // /etc/ttys at boot and hung a shell on every line; os64 hangs one the
+    // moment you knock). tty_seat_shell is the whole ceremony: Ctrl+C
+    // immunity (controllingShell — an ETX with the shell foreground stays a
+    // DATA byte, husk line-kills), the terminal of record, and foreground —
+    // all set BEFORE the task can run. (SIGINT.md)
     if (kRunHusk && kRootFilesystem != NULL)
     {
         printf("Launching /bin/husk (the shell) ...\n");
         task_t *huskTask = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
         if (huskTask)
         {
-            // Seat the shell at the console. controllingShell is Ctrl+C
-            // immunity (an ETX with the shell foreground stays a DATA byte —
-            // husk line-kills; it is never SIGINTed); kForegroundTask is who
-            // Ctrl+C aims at, and task_wait moves it to whichever child husk
-            // blocks on. Both set BEFORE the task can run. (SIGINT.md)
-            huskTask->controllingShell = true;
-            kForegroundTask = huskTask;
+            tty_seat_shell(&kTTY[0], huskTask);
             scheduler_submit_new_task(huskTask);
         }
         else
             printf("  /bin/husk launch failed (not on the image?)\n");
+
+        task_t *huskTask2 = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (huskTask2)
+        {
+            tty_seat_shell(&kTTY[1], huskTask2);
+            scheduler_submit_new_task(huskTask2);
+        }
+        // No lament if the second seat fails: a blank dormant VT2 still
+        // answers a knock like any other terminal.
     }
     
     // The GUI is strictly optional (DOS/Windows relationship): without the GUI
@@ -637,5 +651,14 @@ void kernel_main()
 	// READING VRAM (fine in QEMU's RAM framebuffer, ~2 lines/second on the
 	// P5's real write-combined VRAM; see scroll_framebuffer_full).
 	renderer_attach_shadow();
+	// And immediately raise the virtual terminals on top of it (tty.h for
+	// the doctrine): from this line on, every printf lands in VT1's grid —
+	// the system console — and the glass is a projection of whichever
+	// terminal is focused. Done HERE, right after the shadow, so the whole
+	// of kernel_init's boot spew is in the grid and survives an Alt+F2 away
+	// and back; the handful of lines above exist only as pixels.
+	tty_init();
+	printf("Virtual terminals: %u (Alt+F1..F%u or Alt+Arrows to switch; Shift+PgUp/PgDn for scrollback)\n",
+	       TTY_COUNT, TTY_COUNT);
 	kernel_init();
 }

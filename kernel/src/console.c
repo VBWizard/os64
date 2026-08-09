@@ -1,8 +1,19 @@
-// console.c — the blocking stdin read abstraction (the TTY seed). See
-// console.h for the layering. keyboard.c is the device; this owns the sleeping
-// reader and the wake discipline; the read syscall bridges it to ring 3.
+// console.c — the blocking stdin read abstraction (the TTY seed — and since
+// 2026-08-08, the TTY's read discipline, multiplied by eight). See console.h
+// for the layering. keyboard.c/xhci.c are the devices; tty.c owns the rings
+// and grids; THIS file owns the sleeping reader and the wake discipline, one
+// per terminal now; the read syscall bridges it to ring 3.
+//
+// THE MULTIPLICATION (each singleton's doctrine is unchanged — the comments
+// moved to tty.h with the fields): kConsoleWaiter, kConsoleEOFPending, and
+// kConsolePushback were born with comments promising to become per-tty_t
+// fields when virtual terminals arrived. They kept the promise. A reader now
+// reads ITS OWN terminal (task_tty — the controlling terminal, inherited at
+// creation), so husk on tty2 sleeps on tty2's ring while husk on tty1 echoes,
+// and neither can eat a keystroke the other was owed.
 
 #include "console.h"
+#include "tty.h"
 #include "driver/system/keyboard.h"
 #include "BasicRenderer.h"   // renderer_cursor_show/hide — the listening light
 #include "scheduler.h"
@@ -14,11 +25,6 @@
 #include "CONFIG.h"
 
 extern volatile uint64_t kTicksSinceStart;
-
-// The single thread currently blocked in console_read (NULL = none). One slot
-// because v1 has one console; this becomes a per-tty_t field when TTYs arrive
-// and each shell reads its own keyboard stream.
-static thread_t * volatile kConsoleWaiter = NULL;
 
 // ASCII EOT, "End of Transmission" — what the keyboard driver emits for
 // Ctrl+D (Ctrl+letter strips the letter to its 1963 control code). The console
@@ -33,25 +39,18 @@ static thread_t * volatile kConsoleWaiter = NULL;
 // into a signal, and that is the lineage being honored here, not imitated.
 #define CONSOLE_ETX 0x03
 
-// EOT can arrive after bytes have already been gathered in the same drain
-// ("abc<Ctrl+D>"). Terminal semantics: deliver the bytes NOW, deliver the EOF
-// on the NEXT read. One console in v1, so one flag; becomes per-tty_t later
-// alongside kConsoleWaiter. The EOF is one-shot — consuming it re-arms the
-// console for normal reading (Ctrl+D ends cat, then husk's prompt reads on).
-static volatile bool kConsoleEOFPending = false;
-
-// The unread slot (console.h has the origin story): bytes a probe consumed
-// and returned, delivered LIFO ahead of the keyboard ring. Four is generous
-// — the only caller holds one byte at a time.
+// The unread slot's depth (the slot itself lives in tty_t now; console.h has
+// the origin story). Four is generous — the only caller holds one byte at a
+// time, and each terminal gets its own four.
 #define CONSOLE_PUSHBACK_MAX 4
-static volatile char kConsolePushback[CONSOLE_PUSHBACK_MAX];
-static volatile int  kConsolePushbackCount = 0;
 
 bool console_unread(char c)
 {
-	if (kConsolePushbackCount >= CONSOLE_PUSHBACK_MAX)
+	core_local_storage_t *cls = get_core_local_storage();
+	tty_t *tty = task_tty(cls ? cls->task : NULL);
+	if (tty->pushbackCount >= CONSOLE_PUSHBACK_MAX)
 		return false;
-	kConsolePushback[kConsolePushbackCount++] = c;
+	tty->pushback[tty->pushbackCount++] = c;
 	return true;
 }
 
@@ -70,12 +69,22 @@ bool console_unread(char c)
 // at the keystroke. And why the SHELL gets the byte instead: Ctrl+C at an
 // idle prompt must never kill your shell — husk treats a data-byte 0x03 as
 // line-kill (echo ^C, fresh prompt), so the key always visibly DOES something.
+//
+// PER-TTY NOW: the keystroke happened on the FOCUSED terminal, so the victim
+// is the FOCUSED terminal's foreground task — a compile grinding away on
+// tty3 is perfectly safe from the Ctrl+C you type at tty1's prompt. (This is
+// what "the console belongs to somebody" always meant; there are just eight
+// consoles now, exactly as SIGINT.md prescribed.)
 bool console_intr_intercept(char ascii)
 {
 	if (ascii != CONSOLE_ETX)
 		return false;
 
-	task_t *fg = kForegroundTask;
+	tty_t *tty = kTTYFocused;
+	if (tty == NULL)
+		tty = &kTTY[0];
+
+	task_t *fg = tty->fgTask;
 	if (fg == NULL || fg->controllingShell)
 		return false;               // no owner yet, or the shell: stays data
 
@@ -108,15 +117,18 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 	if (len == 0)
 		return 0;
 
-	// An EOT from a previous drain is a promised EOF — deliver it first.
-	if (kConsoleEOFPending)
-	{
-		kConsoleEOFPending = false;
-		return 0;
-	}
-
 	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
+	// The terminal this reader answers to. NULL-safe all the way down —
+	// early-boot probes and kernel threads read the system console, VT1.
+	tty_t *tty = task_tty(cls->task);
+
+	// An EOT from a previous drain is a promised EOF — deliver it first.
+	if (tty->eofPending)
+	{
+		tty->eofPending = false;
+		return 0;
+	}
 
 	// A BACKGROUND job gets EOF instead of the keyboard — `cmd &` behaves as
 	// `cmd < /dev/null &`. Checked before the loop, not inside it: a background
@@ -124,15 +136,20 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 	// keystrokes the shell was owed. os32 had this hole and never noticed,
 	// because nothing anyone backgrounded there happened to read stdin.
 	//
-	// Keyed on backgroundJob (task.h) and NOT on kForegroundTask, deliberately:
-	// in `cat | upper` husk waits on the LAST stage, so `cat` is not the
-	// foreground task, and gating on that would hand the first stage of every
-	// console-reading pipeline an instant EOF.
+	// Keyed on backgroundJob (task.h) and NOT on the foreground pointer,
+	// deliberately: in `cat | upper` husk waits on the LAST stage, so `cat`
+	// is not the foreground task, and gating on that would hand the first
+	// stage of every console-reading pipeline an instant EOF.
 	//
 	// Writes stay untouched — a background job still prints to the screen,
 	// which was always the useful half of the bargain.
 	if (cls->task != NULL && cls->task->backgroundJob)
 		return 0;
+
+	// The listening light is only honest on the terminal the glass is
+	// showing: a reader parked on a background terminal must never light
+	// (or douse) the cursor the FOCUSED terminal's reader owns. Focus can
+	// move while we sleep; re-checked at every touch.
 
 	size_t n = 0;
 	for (;;)
@@ -146,35 +163,37 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		if (self->signals.sigind & SIGNALS_TERMINATING)
 		{
 			// Un-register on the way out (here and at every exit below): a
-			// reader that leaves the loop while kConsoleWaiter still names it
+			// reader that leaves the loop while the waiter slot still names it
 			// can be spuriously woken out of some LATER unrelated sleep when
 			// a key arrives. The blocking read never met this — it only left
 			// with bytes or died — but the deadline path returns alive and
 			// empty-handed, which made the stale slot a live bug to have.
-			if (kConsoleWaiter == self)
-				kConsoleWaiter = NULL;
-			renderer_cursor_hide();
+			if (tty->waiter == self)
+				tty->waiter = NULL;
+			if (kTTYFocused == tty)
+				renderer_cursor_hide();
 			return CONSOLE_READ_INTERRUPTED;
 		}
 
 		// Pushed-back bytes first — console_unread's contract (console.h):
 		// what a probe returned must reach the next reader ahead of the ring.
-		while (n < len && kConsolePushbackCount > 0)
-			buf[n++] = kConsolePushback[--kConsolePushbackCount];
+		while (n < len && tty->pushbackCount > 0)
+			buf[n++] = tty->pushback[--tty->pushbackCount];
 
-		// Drain whatever translated keys are queued (skip pure-modifier /
-		// non-glyph events — they have ascii == 0).
+		// Drain whatever translated keys are queued on OUR terminal (skip
+		// pure-modifier / non-glyph events — they have ascii == 0).
 		keyboard_event_t ev;
-		while (n < len && keyboard_pop_event(&ev))
+		while (n < len && tty_input_pop(tty, &ev))
 		{
 			if (ev.ascii == CONSOLE_EOT)
 			{
 				if (n == 0)
 				{
-					renderer_cursor_hide();
+					if (kTTYFocused == tty)
+						renderer_cursor_hide();
 					return 0;             // EOF right now: nothing precedes it
 				}
-				kConsoleEOFPending = true; // bytes first, EOF on the next read
+				tty->eofPending = true;   // bytes first, EOF on the next read
 				break;
 			}
 			if (ev.ascii)
@@ -183,12 +202,13 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 
 		if (n > 0)
 		{
-			if (kConsoleWaiter == self)
-				kConsoleWaiter = NULL;
-			// Hide before the caller echoes: print_n would hide it anyway,
-			// but a caller that DOESN'T echo must not leave a lit cursor
-			// claiming the machine is still listening.
-			renderer_cursor_hide();
+			if (tty->waiter == self)
+				tty->waiter = NULL;
+			// Hide before the caller echoes: the print path would hide it
+			// anyway, but a caller that DOESN'T echo must not leave a lit
+			// cursor claiming the machine is still listening.
+			if (kTTYFocused == tty)
+				renderer_cursor_hide();
 			return (long)n;   // got input — return it (terminal semantics)
 		}
 
@@ -198,49 +218,64 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		// read. >= makes a deadline of "now" the poll gait by construction.
 		if (deadline != 0 && kTicksSinceStart >= deadline)
 		{
-			if (kConsoleWaiter == self)
-				kConsoleWaiter = NULL;
-			renderer_cursor_hide();
+			if (tty->waiter == self)
+				tty->waiter = NULL;
+			if (kTTYFocused == tty)
+				renderer_cursor_hide();
 			return CONSOLE_READ_TIMEOUT;
 		}
 
-		// Nothing available: register as the waiter and sleep. SIGSLEEP parks
-		// us atomically (the scheduler performs RUNNING->ISLEEP when we are
-		// genuinely off-CPU, so there is no "runnable while still executing"
-		// window). We resume here when woken — by a keypress via
-		// console_wake_if_ready, by processSignals on a pending SIGINT, or by
-		// the backstop — and loop back to the SIGINT check and the drain.
-		// A live deadline shortens the backstop nap so the timeout verdict
-		// lands on time, not up to a second late.
+		// Nothing available: register as OUR terminal's waiter and sleep.
+		// SIGSLEEP parks us atomically (the scheduler performs
+		// RUNNING->ISLEEP when we are genuinely off-CPU, so there is no
+		// "runnable while still executing" window). We resume here when
+		// woken — by a keypress via console_wake_if_ready, by processSignals
+		// on a pending SIGINT, or by the backstop — and loop back to the
+		// SIGINT check and the drain. A live deadline shortens the backstop
+		// nap so the timeout verdict lands on time, not up to a second late.
 		uint64_t wake = kTicksSinceStart + CONSOLE_READ_BACKSTOP_TICKS;
 		if (deadline != 0 && deadline < wake)
 			wake = deadline;
-		kConsoleWaiter = self;
-		// About to park empty-handed: light the cursor. It sits at wherever
-		// the caller's last echo left the console cursor — mid-line during
-		// husk's editing, end of prompt otherwise — and every output path
-		// (and every exit above) puts it away. Show is idempotent, so the
-		// backstop re-loop costs a repaint at worst.
-		renderer_cursor_show();
+		tty->waiter = self;
+		// About to park empty-handed: light the cursor — but only if OUR
+		// terminal is the one on the glass. It sits at wherever the caller's
+		// last echo left the console cursor — mid-line during husk's
+		// editing, end of prompt otherwise — and every output path (and
+		// every exit above) puts it away. Show is idempotent, so the
+		// backstop re-loop costs a repaint at worst. A reader parked on a
+		// background terminal gets its light when the terminal gets the
+		// glass (tty_focus relights it from the repaint).
+		if (kTTYFocused == tty)
+			renderer_cursor_show();
 		sigaction(SIGSLEEP, NULL, wake, self);
 	}
 }
 
 void console_wake_if_ready(void)
 {
-	thread_t *w = kConsoleWaiter;
-	// Only wake a reader that is actually parked (ISLEEP). If it is still
-	// RUNNING (mid-registration), leave the waiter set and catch it next pass
-	// once it has parked — this is what makes the path lost-wakeup-free.
-	if (w != NULL && w->threadState == THREAD_STATE_ISLEEP && keyboard_has_event())
+	// One sweep over the fleet: wake any terminal's reader whose ring has
+	// input. Only the FOCUSED terminal ever receives new keystrokes, but a
+	// reader may have parked on a terminal that had type-ahead queued, and
+	// the backstop discipline is per-terminal — the sweep stays level-
+	// triggered on the CONDITION (ring non-empty), which is what keeps every
+	// one of these paths lost-wakeup-free.
+	for (uint32_t i = 0; i < TTY_COUNT; i++)
 	{
-		kConsoleWaiter = NULL;
-		w->signals.sigind &= ~SIGSLEEP;     // cancel the backstop sleep
-		w->signals.sigdata[SIGSLEEP] = 0;
-		// _locked: our only caller is processSignals, which holds the
-		// scheduler queue lock across this wake (that's what makes the
-		// ISLEEP check above trustworthy). The public variant would
-		// re-acquire the lock and self-deadlock.
-		scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
+		tty_t *t = &kTTY[i];
+		thread_t *w = t->waiter;
+		// Only wake a reader that is actually parked (ISLEEP). If it is
+		// still RUNNING (mid-registration), leave the waiter set and catch
+		// it next pass once it has parked.
+		if (w != NULL && w->threadState == THREAD_STATE_ISLEEP && tty_input_has(t))
+		{
+			t->waiter = NULL;
+			w->signals.sigind &= ~SIGSLEEP;     // cancel the backstop sleep
+			w->signals.sigdata[SIGSLEEP] = 0;
+			// _locked: our only caller is processSignals, which holds the
+			// scheduler queue lock across this wake (that's what makes the
+			// ISLEEP check above trustworthy). The public variant would
+			// re-acquire the lock and self-deadlock.
+			scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
+		}
 	}
 }

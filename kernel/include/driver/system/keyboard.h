@@ -4,6 +4,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+// Depth of each terminal's input event ring (the ring itself lives in tty_t
+// since the virtual-terminal slice — one per terminal, so type-ahead stays
+// with its terminal; the size stays here because the coin is minted here).
 #define KEYBOARD_BUFFER_SIZE 128
 
 // Modifier bitmask carried in GUI input events (and used internally by the
@@ -36,8 +39,8 @@ void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, boo
 // and xHCI HID usages both land here). v1 answers with a message; becomes
 // the polite reboot when SYSCALL_SHUTDOWN verb 1 gets its meaning.
 void keyboard_ctrl_alt_del(void);
-bool keyboard_has_event(void);
-bool keyboard_pop_event(keyboard_event_t *event);
+// (keyboard_has_event / keyboard_pop_event moved to tty.h as
+// tty_input_has / tty_input_pop when the ring went per-terminal.)
 
 // Shared 8042 IRQ dispatch: drains the controller's output buffer and routes
 // each byte by origin — status bit 5 set = AUX (mouse) byte, else keyboard.

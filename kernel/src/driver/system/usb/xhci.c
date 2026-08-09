@@ -24,6 +24,7 @@
 #include "time.h"
 #include "driver/system/pci.h"
 #include "driver/system/keyboard.h"
+#include "tty.h"             // VT chords: Alt+F#, Alt+arrows, Shift+PgUp/PgDn
 #include "driver/system/usb/xhci.h"
 
 extern pci_device_t* kPCIDeviceHeaders;
@@ -393,6 +394,22 @@ static void hid_deliver_usage(uint8_t usage)
 	    (s_hc.mods & KEYBOARD_MOD_CTRL) && (s_hc.mods & KEYBOARD_MOD_ALT)) {
 		keyboard_ctrl_alt_del();
 		return;
+	}
+	// Virtual-terminal chords, HID spelling — same policy hooks as the PS/2
+	// driver, consumed before anything can reach an input ring. F1-F8 are
+	// usages 0x3A..0x41; PgUp/PgDn are 0x4B/0x4E; arrows checked here for
+	// Alt BEFORE the VT100 burst below (Alt+Left switches terminals, never
+	// leaks an ESC [ D). Held chords ride the typematic engine like any key
+	// — a held Alt+Right walks the terminal ring at 25 cps, which is a
+	// feature if you squint.
+	if (s_hc.mods & KEYBOARD_MOD_ALT) {
+		if (usage >= 0x3A && usage <= 0x41) { tty_focus(usage - 0x3A); return; }
+		if (usage == 0x50) { tty_focus_step(-1); return; }   // Alt+Left
+		if (usage == 0x4F) { tty_focus_step(+1); return; }   // Alt+Right
+	}
+	if (s_hc.mods & KEYBOARD_MOD_SHIFT) {
+		if (usage == 0x4B) { tty_view_scroll(+1); return; }  // Shift+PgUp
+		if (usage == 0x4E) { tty_view_scroll(-1); return; }  // Shift+PgDn
 	}
 	// Arrows: the SAME three VT100 bytes the PS/2 path emits (ESC '[' A/B/C/D
 	// — see keyboard.c for the 1979 lineage). This was the parity debt that

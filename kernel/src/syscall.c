@@ -20,6 +20,7 @@
 #include "os64/klog.h"     // os64_logent_t — klog_read's out-struct (abi)
 #include "thread_join.h"   // the object behind HANDLE_THREAD
 #include "console.h"
+#include "tty.h"     // console writes land on the CALLER's terminal now
 #include "handle.h"
 #include "pipe.h"
 #include "signals.h"
@@ -872,6 +873,14 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		{
 			// Ferry through a bounded kernel chunk so an arbitrary user length
 			// never maps to unbounded kernel stack use.
+			//
+			// The bytes go to the CALLER'S terminal (task_tty — the
+			// controlling terminal, inherited at creation): husk-on-tty2's
+			// children print to tty2's grid, on the glass only while tty2 is
+			// focused. This is the seam the handle contract promised — the
+			// program still just writes handle 1 and never asks what's
+			// behind it; the routing grew, the contract didn't move.
+			tty_t *tty = task_tty(task);
 			char chunk[WRITE_CHUNK_SIZE];
 			size_t copied = 0;
 			while (copied < length)
@@ -887,7 +896,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 					return copied ? copied : SYSCALL_RESULT_BAD_USER_DATA;
 				}
 
-				print_n(chunk, this_chunk);
+				tty_write(tty, chunk, this_chunk);
 				copied += this_chunk;
 			}
 			return copied;

@@ -9,6 +9,7 @@
 #include "smp_core.h"
 #include "task.h"
 #include "thread.h"
+#include "tty.h"     // the midwife half of the job: shells for knocked terminals
 #include "logging/log.h"
 
 #define KWORKER_SLEEP_TICKS (TICKS_PER_SECOND * 2)
@@ -28,6 +29,15 @@ static bool kworker_run_maintenance(void)
 		// "Buried" counts BOTH phases of the two-phase burial (task.c): a
 		// corpse unlinked this pass and one freed this pass each score 1.
 		printd(DEBUG_TASK | DEBUG_DETAILED, "KWORKER: buried/unlinked %u collected zombie task(s)\n", reaped);
+		did_work = true;
+	}
+
+	// The midwife half of the job (2026-08-08, the virtual-terminal slice):
+	// a keystroke knocked on a dormant terminal — deliver it a shell. Runs
+	// here and only here because spawning means loading an ELF from disk:
+	// task context, never an IRQ. The undertaker and the midwife turn out to
+	// be the same worker, which any small town could have told us.
+	if (tty_summon_sweep()) {
 		did_work = true;
 	}
 

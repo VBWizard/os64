@@ -1,6 +1,7 @@
 #include "driver/system/keyboard.h"
 #include "driver/system/mouse.h"
 #include "console.h"
+#include "tty.h"             // the input rings live per-tty now; chords switch them
 #include <stddef.h>
 #include "memset.h"
 #include "CONFIG.h"
@@ -13,16 +14,15 @@
 extern volatile uint64_t kTicksSinceStart;
 
 // Keystrokes are generated from PS/2 set-1 scancodes (this file) and USB HID
-// boot reports (usb/xhci.c) — both feed keyboard_deliver_event, and land in
-// one ring buffer other subsystems poll without blocking the producers.
-// When the GUI is active, key-down AND key-up events are additionally injected
-// into the unified GUI input queue (gui/input.h).
+// boot reports (usb/xhci.c) — both feed keyboard_deliver_event. Since the
+// virtual-terminal slice the ring lives in tty_t (one per terminal, so
+// type-ahead stays with its terminal); this driver just translates and
+// delivers, blind to which terminal is focused — the same way it stays blind
+// to tasks and signals. When the GUI is active, key-down AND key-up events
+// are additionally injected into the unified GUI input queue (gui/input.h).
 
 #define KEYBOARD_MAX_SCANCODE 128
 
-static keyboard_event_t s_event_buffer[KEYBOARD_BUFFER_SIZE];
-static volatile size_t s_event_head;
-static volatile size_t s_event_tail;
 static uint8_t s_modifiers;
 static bool s_extended_pending;
 static bool s_key_state[KEYBOARD_MAX_SCANCODE];
@@ -169,19 +169,9 @@ static const char s_scancode_shift_map[KEYBOARD_MAX_SCANCODE] = {
     [0x53] = '.',
 };
 
-// Ring buffer helper: wrap a cursor to the next slot.
-static inline size_t advance_index(size_t index) {
-    return (index + 1u) % KEYBOARD_BUFFER_SIZE;
-}
-
-// Two producers can reach the event ring now — the PS/2 IRQ path and the
-// USB HID poll (xhci.c) — so the push is guarded. (The ring was born
-// lock-free single-producer; the lock arrived with the second keyboard
-// century. The consumer side, console_read, needs no lock: one consumer,
-// and head/tail stay single-writer per side.)
-static spinlock_t s_deliver_lock = 0;
-
 // Record a completed keystroke and apply local debug toggling shortcuts.
+// The push itself (ring choice, dormant-terminal summons, producer locking)
+// lives in tty_input_event — the driver's job ends at "here is a keystroke".
 static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers) {
     if (ascii == 0) {
         return;
@@ -208,21 +198,7 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
         .alt = (modifiers & KEYBOARD_MOD_ALT) != 0,
     };
 
-    uint64_t flags = spinlock_acquire_irqsave(&s_deliver_lock);
-
-    size_t head = s_event_head;
-    size_t next_head = advance_index(head);
-
-    if (next_head == s_event_tail) {
-        // Buffer is full: keep existing keystrokes and drop this one.
-        spinlock_release_irqrestore(&s_deliver_lock, flags);
-        return;
-    }
-
-    s_event_buffer[head] = event;
-    s_event_head = next_head;
-
-    spinlock_release_irqrestore(&s_deliver_lock, flags);
+    tty_input_event(&event);
 }
 
 // THE delivery choke: every keyboard — 1981's 8042 or this decade's USB
@@ -375,8 +351,6 @@ static void keyboard_update_modifier_extended(uint8_t scancode, bool pressed) {
 
 // Prepare keyboard state before IRQs are enabled.
 void keyboard_init(void) {
-    s_event_head = 0;
-    s_event_tail = 0;
     s_modifiers = 0;
     s_extended_pending = false;
     memset((void*)s_key_state, 0, sizeof(s_key_state));
@@ -437,6 +411,22 @@ void keyboard_handle_scancode(uint8_t scancode) {
                 keyboard_ctrl_alt_del();
                 return;
             }
+            // Virtual-terminal chords, extended block (checked BEFORE the
+            // arrow burst below — Alt+Left must switch terminals, not leak
+            // an ESC [ D onto somebody's input stream). A chord is a command
+            // to the terminal STACK, not an input byte; it is consumed here
+            // the same way Ctrl+Alt+Del is. Policy lives in tty.c — this
+            // driver just recognizes the knock. (Alt+arrow cycling is the
+            // os32 heritage gait, Alt+A/Alt+D's grandchild; Shift+PgUp is
+            // scrollback's chord since the Linux 0.x console.)
+            if (s_modifiers & KEYBOARD_MOD_ALT) {
+                if (code == 0x4B) { tty_focus_step(-1); return; }   // Alt+Left
+                if (code == 0x4D) { tty_focus_step(+1); return; }   // Alt+Right
+            }
+            if (s_modifiers & KEYBOARD_MOD_SHIFT) {
+                if (code == 0x49) { tty_view_scroll(+1); return; }  // Shift+PgUp
+                if (code == 0x51) { tty_view_scroll(-1); return; }  // Shift+PgDn
+            }
             char final = 0;
             switch (code) {
                 case 0x48: final = 'A'; break;   // Up
@@ -467,6 +457,16 @@ void keyboard_handle_scancode(uint8_t scancode) {
         if (code == 0x53 &&
             (s_modifiers & KEYBOARD_MOD_CTRL) && (s_modifiers & KEYBOARD_MOD_ALT)) {
             keyboard_ctrl_alt_del();
+            return;
+        }
+        // Alt+F1..F8: direct-select a virtual terminal (the Linux console's
+        // chord since 1991, on the loadout os32 shipped — eight terminals).
+        // F1-F8 are 0x3B..0x42; bare F-keys stay silent on the input stream
+        // (no ASCII, same as always), so the F-row remains free for future
+        // full-screen apps to claim.
+        if (code >= 0x3B && code <= 0x42 &&
+            (s_modifiers & KEYBOARD_MOD_ALT)) {
+            tty_focus(code - 0x3B);
             return;
         }
         // Make code (including hardware typematic repeats). Emit on PRESS:
@@ -509,22 +509,6 @@ void ps2_handle_irq(void) {
     }
 }
 
-// Quick check for queued keystrokes.
-bool keyboard_has_event(void) {
-    return s_event_head != s_event_tail;
-}
-
-// Pop the oldest keystroke; returns false when the buffer is empty.
-bool keyboard_pop_event(keyboard_event_t *event) {
-    if (event == NULL) {
-        return false;
-    }
-
-    if (s_event_head == s_event_tail) {
-        return false;
-    }
-
-    *event = s_event_buffer[s_event_tail];
-    s_event_tail = advance_index(s_event_tail);
-    return true;
-}
+// (keyboard_has_event / keyboard_pop_event retired 2026-08-08: the event
+// ring moved into tty_t — one per terminal — and the consumer-side API went
+// with it. See tty_input_has / tty_input_pop in tty.h.)
