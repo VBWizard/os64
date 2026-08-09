@@ -72,9 +72,21 @@ bool kEnableSMP = true;
 // the mode grows into its name phase by phase. This flag was born as the
 // misnamed BSPSCHED cmdline option (the BSP neither owned the nudging nor the
 // scheduling — any core nudges, every core self-schedules), retired same day.
-// SCHED=periodic is the only way off: the legacy every-core-100Hz mode, kept
-// as a diagnostic flashlight AND as the repro for the open /idle2 stray-write
-// (SCHEDULER_STRAY_WRITE.md) until that bug dies.
+// SCHED=periodic is the only way off: the legacy every-core-100Hz mode. Its
+// original second job — being the repro for the /idle2 stray-write — ENDED
+// 2026-08-03 when that bug was solved (tempStack overflow; the doc now reads
+// SOLVED). It has since inherited a better one, and this is the note that says
+// so: periodic is the ONLY mode that drives the AP timer-interrupt path hard,
+// and as of 2026-08-09 that path is throwing random-looking exceptions again
+// (Chris, testing GUI and periodic non-GUI — NOT the old stray write, which is
+// dead). That matters far beyond periodic itself: the planned AP preemption
+// backstop re-enters the SAME handle_mp_isr -> save -> iretq path, just at a
+// lower rate. A rare backstop would not create that bug, it would INHERIT it —
+// and a fault once an hour is far worse to chase than one every boot. So
+// periodic is not legacy baggage to be parked; it is the fast reproducer for
+// the path the next scheduler slice is built on. Retire it as a MODE ANYTHING
+// DEPENDS ON (the GUI entries' SCHED=periodic workaround dies with the
+// backstop) — keep it forever as the flashlight.
 bool kTicklessScheduler = true;
 bool kEnableKWorker = false;
 // Cleared by the NOUSB cmdline flag — skips xHCI bring-up entirely.
@@ -368,14 +380,32 @@ void kernel_init()
 	#endif
 	BOOTMARK("logd+kworker-created");
 
-	if (kEnableKWorker && kMPCoreCount > 1)
+	// THE UNDERTAKER RUNS ANYWHERE (2026-08-09, Chris's ruling: "no reason for
+	// it to be pinned at all"). It used to be nailed to kCPUInfo[1], and that
+	// pin turned a runaway user program into an OS-WIDE outage: under tickless
+	// an AP does not preempt, so any syscall-free task landing on core 1 owned
+	// that core forever, kworker went RUNNABLE-and-never-running, and since it
+	// is the only undertaker NOTHING anywhere got buried — every task that
+	// exited on every terminal became a permanent zombie until reboot. Caught
+	// by `watch` piling up corpses; reproduced in QEMU with kworker reading
+	// 0:00.0 CPU on a core a spinner held. Unpinned, the damage is bounded to
+	// the one core the hog stole. (That is a MITIGATION, not the cure: the
+	// cure is an AP preemption backstop so no core can be owned forever —
+	// see the tickless note in scheduler.c's nudge loop.)
+	//
+	// The kMPCoreCount > 1 guard went with it, and it was load-bearing in the
+	// worst way: it existed ONLY because core 1 had to exist to be pinned to,
+	// which meant a `nosmp` or single-core boot got NO kworker — and therefore
+	// no burial at all, permanently, on exactly the machines least able to
+	// spare the memory. logd (just above) has always been NO_AFFINITY; the
+	// undertaker is a daemon like any other and is now spelled that way.
+	if (kEnableKWorker)
 	{
-	    kKWorkerTask = task_create("/kworker1", 0, NULL, kKernelTask, true, kCPUInfo[1].apicID);
+	    kKWorkerTask = task_create("/kworker", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
 	    kKWorkerTask->threads->regs.RDI = 1;
 	    kKWorkerTask->autoReap = true;
 	    printd(DEBUG_TASK | DEBUG_DETAILED,
-	    	"kernel_init: enabling /kworker1 on APIC %u (task=0x%08x, thread=0x%08x)\n",
-	    	kCPUInfo[1].apicID,
+	    	"kernel_init: enabling /kworker (unpinned; task=0x%08x, thread=0x%08x)\n",
 	    	kKWorkerTask->taskID,
 	    	kKWorkerTask->threads->threadID);
 	    scheduler_submit_new_task(kKWorkerTask);
