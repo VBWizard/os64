@@ -470,6 +470,20 @@ static int split_commands(char *line, char *cmds[], int seps[], int maxcmds)
 //   $NAME  the env block (os64_getenv). An unset name expands to nothing —
 //          Bourne's rule; a literal "$NOPE" in the output helps nobody.
 // A '$' that starts no name ($ alone, "$5", "$/") stays a literal '$'.
+//
+// QUOTING (2026-08-09, the day `watch` made it matter): SINGLE quotes suppress
+// expansion, DOUBLE quotes do not. That is Bourne's 1977 split, and it is the
+// entire reason a shell needs two quote characters instead of one — '' hands
+// the bytes through untouched, "" groups words while still letting the shell
+// speak. Before this, expansion walked the line quote-blind and '$CWD' meant
+// exactly what "$CWD" meant, which is a difference nobody misses until a
+// program takes a COMMAND LINE as an argument: `watch 'echo $CWD'` has to
+// deliver a live $CWD for the inner shell to expand on every tick, not this
+// shell's directory frozen at the moment you pressed return.
+//
+// The quote characters themselves are COPIED THROUGH, never removed. Removal
+// is parse()'s job two stages later, and split_pipeline() sits in between
+// still needing them to tell `grep "a|b"` from a real pipeline.
 static int is_name_start(char c)
 {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
@@ -482,9 +496,28 @@ static int is_name_char(char c)
 static void expand_line(const char *src, char *dst, int cap, int last_status)
 {
 	int n = 0;
+	char quote = 0;              // 0, '\'' or '"' — which quote we are inside
+
 	while (*src && n < cap - 1)
 	{
-		if (src[0] == '$' && src[1] == '?')
+		// Quote bookkeeping first, so every test below can simply ask
+		// "are we inside single quotes?" and be done with it.
+		if (quote == 0 && (*src == '\'' || *src == '"'))
+		{
+			quote = *src;
+			dst[n++] = *src++;
+			continue;
+		}
+		if (quote != 0 && *src == quote)
+		{
+			quote = 0;
+			dst[n++] = *src++;
+			continue;
+		}
+
+		if (quote == '\'')
+			dst[n++] = *src++;   // inside '': the shell is deaf, on purpose
+		else if (src[0] == '$' && src[1] == '?')
 		{
 			char nb[20];
 			int k = utoa((unsigned long)(unsigned int)last_status, nb);
@@ -1253,11 +1286,95 @@ static int run_rc(int *last_status)
 	return exiting;
 }
 
+// ── -c: one command line, from argv ─────────────────────────────────────────
+// `husk -c "ps -e | grep husk"` — run ONE line and exit with its status.
+//
+// This is the seam that lets a PROGRAM own a command line without owning a
+// parser. watch(1) is the consumer that asked for it: it has to re-run
+// `ps -e | grep husk` every couple of seconds, and the only honest way to
+// learn what that string means is to hand it back to the thing whose language
+// it is. A command line is not a string — its meaning depends on cwd, env,
+// PATH and $?, which is to say on SHELL STATE — so whoever interprets one has
+// to be a shell. Unix reached that conclusion twice and never revisited it:
+// system(3) is defined as "hand this string to the command processor", and
+// popen(3) is sh -c with a pipe on it. Even the C standard declined to own a
+// parser. (The counter-example is instructive too: make decides per recipe
+// line whether it contains a metacharacter and skips the shell if not — a
+// half-parser that has been quietly disagreeing with the real one for forty
+// years.)
+//
+// Nothing architectural changes here, which is the point. run_line() has
+// always been the single choke point, and the rc file already proved husk can
+// execute lines nobody typed; -c adds only a third SOURCE for the string —
+// keyboard, file, argv — in front of the one interpreter. The rc comment
+// above called this shot: "an rc that ends this way makes husk a batch
+// interpreter, which some boot someday will want on purpose."
+//
+// Non-interactive policy, all deliberate: no banner, no rc, no prompt, no
+// history, no job table — and the exit status is the LINE's, because a caller
+// that re-runs a command needs to know whether it worked. The rc is skipped
+// outright rather than by the HUSKRC valve: -c is not a login shell and
+// should not claim to be one.
+static int run_command_argument(const char *command)
+{
+	char line[LINE_MAX];
+	int last_status = 0;
+	int i = 0;
+
+	// Copy before running. run_line tokenizes IN PLACE — it punches NULs into
+	// the separators — and the argv block is the kernel's, sized by whoever
+	// spawned us rather than by anything husk chose. Refuse an over-long line
+	// out loud instead of silently running the first 255 bytes of it, which
+	// is the failure mode that turns `> important` into a truncated file.
+	while (command[i] != '\0' && i < LINE_MAX - 1)
+	{
+		line[i] = command[i];
+		i++;
+	}
+	line[i] = '\0';
+	if (command[i] != '\0')
+	{
+		os64_puts("husk: -c line too long (limit 255)\n");
+		return 2;
+	}
+
+	os64_debug_log("husk: -c (one line, non-interactive)");
+	run_line(line, &last_status);   // `exit` in a -c line just ends it early
+	return last_status;
+}
+
 // ── the shell ───────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv, char **envp)
 {
-	(void)argc; (void)argv; (void)envp;
+	(void)envp;
+
+	// The only flag husk has, and the only one it should ever have:
+	// everything else this shell does, it does because you typed it.
+	const char *command = NULL;
+	const os64_optspec_t specs[] = {
+		{'c', "command", true, "run one command line and exit with its status",
+		 .value_out = &command}
+	};
+	os64_args_t args = {0};
+	os64_args_init(&args, argc, argv, specs, 1);
+	args.about = "husk — the os64 shell.";
+	args.details = "With no arguments husk is interactive: it runs its rc file, "
+	               "then prompts. With -c it runs one line and exits with that "
+	               "line's status — which is how a program borrows the shell's "
+	               "language without borrowing its parser.";
+	// NO positionals: `husk script.rc` is a door that is closed, and closed
+	// LOUDLY (parse prints the help) rather than by ignoring the argument.
+	// Running a named script is a real future feature, and when it arrives it
+	// will be this same run_line fed from a file — exactly as the rc already
+	// is. The kernel launches husk with argc 0 and argv NULL, which walks
+	// straight out of the parse loop on the first index check.
+	int32_t parsed = os64_args_parse(&args, "husk [-c \"command line\"]", NULL, 0);
+	if (parsed == OS64_ARG_HELP) return 0;
+	if (parsed < 0) return 2;
+
+	if (command != NULL)
+		return run_command_argument(command);
 
 	os64_write(1, "husk — the os64 shell. `exit` to quit.\n",
 	           sizeof("husk — the os64 shell. `exit` to quit.\n") - 1);
