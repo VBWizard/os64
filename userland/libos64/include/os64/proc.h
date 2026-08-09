@@ -128,6 +128,13 @@ int64_t os64_wait(int64_t pid, int32_t *exit_code);
 //         /* one finished job */;
 int64_t os64_reap(int32_t *exit_code);
 
+// Who am I? The calling task's ID — one syscall, one register, cannot fail.
+// V1 Unix answered this in 1971 and nobody has improved on the answer. The
+// namespace spelling of the same fact is /proc/self (open-time identity:
+// whoever OPENS it is the self); this call is expansion-time identity —
+// what husk's $$ freezes into a command line before any child exists.
+uint64_t os64_getpid(void);
+
 // Sleep for AT LEAST `ms` milliseconds — the thread genuinely parks, zero
 // CPU. The floor is the kernel's scheduler tick (1000/per_second ms — ask
 // os64_ticks); requests round UP to it, and the rounding tracks the ACTIVE

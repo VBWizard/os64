@@ -58,6 +58,11 @@ int64_t os64_reap(int32_t *exit_code)
     return (long)os64_syscall1(SYSCALL_REAP, (uint64_t)exit_code);
 }
 
+uint64_t os64_getpid(void)
+{
+    return os64_syscall0(SYSCALL_GETPID);
+}
+
 int64_t os64_sleep(uint64_t ms)
 {
     return (long)os64_syscall1(SYSCALL_SLEEP, ms);

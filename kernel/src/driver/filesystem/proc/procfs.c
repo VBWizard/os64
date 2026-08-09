@@ -103,8 +103,10 @@ static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "
 static const char *kProcThreadFiles[] = { "status" };
 #define PROC_THREAD_FILE_COUNT (sizeof(kProcThreadFiles) / sizeof(kProcThreadFiles[0]))
 
-// Classify an fs-local path. Purely syntactic — whether the task actually
-// exists is a separate question, answered by proc_find_task at open time.
+// Classify an fs-local path. Purely syntactic, with ONE deliberate
+// exception: "self" resolves to the calling task's ID (below) — whether the
+// task actually exists is still a separate question, answered by
+// proc_find_task at open time.
 static void proc_parse_path(const char *path, proc_path_t *out)
 {
 	char comp[PROC_NAME_MAX];
@@ -134,7 +136,23 @@ static void proc_parse_path(const char *path, proc_path_t *out)
 		return;
 	}
 
-	if (!synth_parse_u64(comp, &out->taskID))
+	// "/proc/self" — the caller's own entry, by name. Linux needs a magic
+	// per-opener symlink for this; os64 needs six lines, because this parse
+	// already runs in the OPENER's syscall context and identity is one CLS
+	// read away. Open-time semantics, embraced: `cat /proc/self/status`
+	// names CAT, not your shell — the opener is the self, which is exactly
+	// why husk's $$ (expansion-time, the shell's own pid frozen into the
+	// argv) is the other spelling and both exist. Deliberately ABSENT from
+	// the root listing: `ls /proc` is a census of real tasks, and an alias
+	// that answers differently for every asker has no business in a census.
+	if (strcmp(comp, "self") == 0)
+	{
+		core_local_storage_t *cls = get_core_local_storage();
+		if (cls == NULL || cls->task == NULL)
+			return;   // no identity, no entry (early boot has no self)
+		out->taskID = cls->task->taskID;
+	}
+	else if (!synth_parse_u64(comp, &out->taskID))
 		return;   // "/proc/notanumber" — no such entry
 
 	// Component 2: a task file, or the "thread" subdirectory.

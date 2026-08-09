@@ -303,6 +303,20 @@
 // and this is the machine doing its own counting.
 #define SYSCALL_SHUTDOWN   39
 
+// getpid() (2026-08-09 — the night after the terminals, because "which tty
+// am I on?" starts with "who am I?"). Returns the calling task's ID in RAX;
+// takes nothing, cannot fail. One of the oldest questions in Unix — V1 had
+// getpid in 1971, before pipes, before /tmp — and the answer belongs in a
+// register because the asker is already standing in the kernel's doorway.
+//
+// Identity has TWO spellings on os64, on purpose, answering at two different
+// moments: this syscall is the PRIMITIVE (and what husk's $$ freezes into a
+// command line at expansion time, before any child exists), while
+// /proc/self is the NAMESPACE spelling, resolved at open time to whoever
+// does the opening — which is why `echo $$` names your shell and
+// `cat /proc/self/status` names cat. Both honest; different clocks.
+#define SYSCALL_GETPID     40
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //
