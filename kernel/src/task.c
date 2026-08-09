@@ -506,6 +506,19 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 				scheduler_remove_task(child);
 				child->burialNext = kBurialList;
 				kBurialList = child;
+				// AN UNLINK IS WORK (fixed 2026-08-09; kworker.c always said
+				// so — "buried/unlinked", both phases score 1 — but this
+				// counter only ever saw phase 2). Without it a pass that
+				// found nothing but FRESH corpses returned zero, kworker read
+				// that as an idle pass, and slept its full 2s backstop nap
+				// BETWEEN the two phases of its own burial. Burial latency
+				// was therefore two naps, not one, and `watch -n 3 ps` could
+				// still see the previous run's corpse — which is exactly how
+				// this was caught. Counting here also gives max_to_reap an
+				// honest job: a pass now does at most that many burial
+				// OPERATIONS of either kind, alternating unlink and free
+				// batches under load while never once sleeping on work.
+				reaped++;
 			}
 
 			child = next_child;
