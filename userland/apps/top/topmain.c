@@ -238,7 +238,7 @@ static void compose_free_memory(uint64_t freeBytes)
     const uint64_t mb = 1024 * 1024;
     const uint64_t gb = 1024 * mb;
 
-    if (freeBytes >= gb)
+    if (freeBytes >= gb * 32)
     {
         uint64_t whole = freeBytes / gb;
         uint64_t tenths = ((freeBytes % gb) * 10) / gb;
@@ -399,31 +399,6 @@ static void fmt_time(char *buf, size_t cap, uint64_t us, bool adaptive)
                       us / 1000000, (us % 1000000) / 100000);
 }
 
-static const char *state_name(eTaskState s)
-{
-    switch (s)
-    {
-        case THREAD_STATE_RUNNING:  return "running";
-        case THREAD_STATE_RUNNABLE: return "runnable";
-        case THREAD_STATE_STOPPED:  return "stopped";
-        case THREAD_STATE_USLEEP:   return "usleep";
-        case THREAD_STATE_ISLEEP:   return "isleep";
-        case THREAD_STATE_ZOMBIE:   return "zombie";
-        default:                    return "?";
-    }
-}
-
-static eTaskState state_from_name(const char *state)
-{
-    if (os64_streq(state, "running"))  return THREAD_STATE_RUNNING;
-    if (os64_streq(state, "runnable")) return THREAD_STATE_RUNNABLE;
-    if (os64_streq(state, "stopped"))  return THREAD_STATE_STOPPED;
-    if (os64_streq(state, "usleep"))   return THREAD_STATE_USLEEP;
-    if (os64_streq(state, "isleep"))   return THREAD_STATE_ISLEEP;
-    if (os64_streq(state, "zombie"))   return THREAD_STATE_ZOMBIE;
-    return THREAD_STATE_NONE;
-}
-
 static int32_t compare_entries(const top_entry_t *a, const top_entry_t *b,
                                const top_view_t *view)
 {
@@ -481,57 +456,16 @@ static void sort_entries(top_entry_t **entries, uint32_t count,
     }
 }
 
-// ── /proc parsing ────────────────────────────────────────────────────────
-
-// One status file → one entry. key\tvalue per line (the /proc format
-// contract — Plan 9's tradition, PROC.md's law).
-// Parses BOTH status shapes: a task's (/proc/<id>/status) and a thread's
-// (/proc/<id>/thread/<tid>/status). The key collision between them is why
-// the flag exists: in a thread file "task" names the OWNER (our PTID, the
-// attach point), while in a task file it IS the row's identity.
-static int32_t parseStatusFile(int32_t fileHandle, top_entry_t *entry,
-                               bool isThread)
+static void import_task(top_entry_t *entry, const os64_proc_info_t *task)
 {
-    char line[STATUS_LINE_SIZE];
-    int64_t readResult;
-
-    while ((readResult = os64_readline(fileHandle, line, sizeof(line))) == 1)
-    {
-        char *value = line;
-        while (*value != '\0' && *value != ' ' && *value != '\t')
-            value++;
-        if (*value == '\0')
-            continue;
-        *value++ = '\0';
-        while (*value == ' ' || *value == '\t')
-            value++;
-
-        if (os64_streq(line, "task"))
-        {
-            if (isThread)
-                entry->PTID = os64_atou(value);
-            else
-                entry->TID = os64_atou(value);
-        }
-        else if (os64_streq(line, "thread"))
-            entry->TID = os64_atou(value);
-        else if (os64_streq(line, "name"))
-            os64_strcopy(entry->Command, sizeof(entry->Command), value);
-        else if (os64_streq(line, "state"))
-            entry->State = state_from_name(value);
-        else if (os64_streq(line, "parent"))
-            entry->PTID = os64_atou(value);
-        else if (os64_streq(line, "kernel"))
-            entry->KernelProc = os64_streq(value, "yes");
-        else if (os64_streq(line, "threads"))
-            entry->threadCount = (uint32_t)os64_atou(value);
-        else if (os64_streq(line, "core"))
-            entry->core = (uint32_t)os64_atou(value);
-        else if (os64_streq(line, "runtime_us"))
-            entry->runtimeUS = os64_atou(value);
-    }
-
-    return readResult < 0 ? (int32_t)readResult : 0;
+    entry->TID = task->pid;
+    entry->PTID = task->ppid;
+    entry->State = task->state;
+    entry->KernelProc = task->kernel;
+    entry->threadCount = task->threads;
+    entry->core = task->core;
+    entry->runtimeUS = task->runtime_us;
+    os64_strcopy(entry->Command, sizeof(entry->Command), task->name);
 }
 
 // /proc/cores → coresNow[]. First line is the header (starts with "core");
@@ -678,26 +612,23 @@ int32_t topMain(const top_options_t *opts)
             if (dent.name[0] < '0' || dent.name[0] > '9')
                 continue;   // "cores" and any future non-task names
 
-            char path[64];
-            os64_snprintf(path, sizeof(path), "/proc/%s/status", dent.name);
-            int64_t sh = os64_open(path, NULL);
-            if (sh < 0)
+            uint64_t pid = os64_atou(dent.name);
+            os64_proc_info_t taskInfo;
+            if (os64_proc_read(pid, &taskInfo) < 0)
                 continue;   // the task died between readdir and open — fine
 
             top_entry_t *e = NULL;
-            if (getTopEntryToUse(os64_atou(dent.name), &e, &topEntryCount) != 0)
+            if (getTopEntryToUse(pid, &e, &topEntryCount) != 0)
             {
-                os64_close((int32_t)sh);
                 continue;   // table full: count what we can, drop the rest
             }
 
             e->runtimeUS = 0;
             e->threadCount = 0;
-            parseStatusFile((int32_t)sh, e, false);
-            os64_close((int32_t)sh);
+            import_task(e, &taskInfo);
 
             seen++;
-            if (e->State == THREAD_STATE_ZOMBIE)
+            if (e->State == OS64_PROC_ZOMBIE)
             {
                 zombies++;
                 if (!view.options.showZombies)
@@ -713,25 +644,23 @@ int32_t topMain(const top_options_t *opts)
             if (!view.options.showThreads || e->threadCount < 2)
                 continue;
 
-            os64_snprintf(path, sizeof(path), "/proc/%s/thread", dent.name);
-            int64_t th = os64_opendir(path);
+            char threadPath[64];
+            os64_snprintf(threadPath, sizeof(threadPath), "/proc/%s/thread", dent.name);
+            int64_t th = os64_opendir(threadPath);
             if (th < 0)
                 continue;
             os64_dirent_t tdent;
             while (os64_readdir((int32_t)th, &tdent) == 1)
             {
-                char tpath[80];
-                os64_snprintf(tpath, sizeof(tpath), "/proc/%s/thread/%s/status",
-                              dent.name, tdent.name);
-                int64_t tsh = os64_open(tpath, NULL);
-                if (tsh < 0)
+                uint64_t tid = os64_atou(tdent.name);
+                os64_thread_info_t threadInfo;
+                if (os64_proc_read_thread(pid, tid, &threadInfo) < 0)
                     continue;   // the thread exited mid-walk — fine
 
                 top_entry_t *te = NULL;
-                if (getTopEntryToUse(os64_atou(tdent.name) | TOP_THREAD_KEY,
+                if (getTopEntryToUse(tid | TOP_THREAD_KEY,
                                      &te, &topEntryCount) != 0)
                 {
-                    os64_close((int32_t)tsh);
                     break;      // pool full: the task rows keep priority
                 }
                 te->runtimeUS = 0;
@@ -740,8 +669,11 @@ int32_t topMain(const top_options_t *opts)
                 // parent's are the truth for both.
                 os64_strcopy(te->Command, sizeof(te->Command), e->Command);
                 te->KernelProc = e->KernelProc;
-                parseStatusFile((int32_t)tsh, te, true);
-                os64_close((int32_t)tsh);
+                te->TID = threadInfo.tid;
+                te->PTID = threadInfo.pid;
+                te->State = threadInfo.state;
+                te->core = threadInfo.core;
+                te->runtimeUS = threadInfo.runtime_us;
                 if (threadRowCount < MAX_ENTRIES)
                     threadRows[threadRowCount++] = te;
             }
@@ -840,7 +772,7 @@ int32_t topMain(const top_options_t *opts)
                 top_entry_t *e = shown[i];
                 os64_snprintf(lbuf, sizeof(lbuf),
                               "toplog tid=%lu name=%s state=%s run_us=%lu d_us=%lu",
-                              e->TID, e->Command, state_name(e->State),
+                              e->TID, e->Command, os64_proc_state_name(e->State),
                               e->runtimeUS,
                               e->havePrev ? e->runtimeUS - e->prevRuntimeUS : 0);
                 os64_debug_log(lbuf);
@@ -1000,7 +932,7 @@ int32_t topMain(const top_options_t *opts)
             fmt_time(timeBuf, sizeof(timeBuf), e->runtimeUS, view.options.adaptiveUnits);
 
             framef("%-6lu %-9s %1s %2u %6s %10s  %s\n",
-                   e->TID, state_name(e->State),
+                   e->TID, os64_proc_state_name(e->State),
                    e->KernelProc ? "k" : " ",
                    e->core, pctBuf, timeBuf, e->Command);
 
@@ -1025,7 +957,7 @@ int32_t topMain(const top_options_t *opts)
                          view.options.adaptiveUnits);
 
                 framef("%-6lu %-9s %1s %2u %6s %10s   - %s\n",
-                       tr->TID, state_name(tr->State),
+                       tr->TID, os64_proc_state_name(tr->State),
                        tr->KernelProc ? "k" : " ",
                        tr->core, tPct, tTime, tr->Command);
 

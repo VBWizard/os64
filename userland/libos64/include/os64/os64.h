@@ -17,6 +17,7 @@
                       // 30 years nobody should have to remember what 0 means
 #include "os64/io.h"
 #include "os64/proc.h"
+#include "os64/procfs.h" // typed readers for the text /proc task reports
 #include "os64/fmt.h"    // os64_printf/snprintf — columns without counting bytes
 #include "os64/args.h"   // the arg parser (see its header for the anti-getopt case)
 #include "os64/mem.h"    // os64_map/os64_unmap — the wall malloc builds on

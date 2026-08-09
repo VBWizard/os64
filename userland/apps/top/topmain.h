@@ -8,16 +8,6 @@
 #define TOP_ERROR_CANNOT_READ_STATUS_FILE 4
 #define TOP_ERROR_IN_GETTOPENTRYTOUSE 5
 
-typedef enum {
-    THREAD_STATE_NONE,
-    THREAD_STATE_RUNNING,
-    THREAD_STATE_RUNNABLE,
-    THREAD_STATE_STOPPED,
-    THREAD_STATE_USLEEP,
-    THREAD_STATE_ISLEEP,
-    THREAD_STATE_ZOMBIE
-} eTaskState;
-
 typedef struct topent {
     // Cache identity: tasks use their task ID; thread rows use the thread
     // ID with the top bit set (thread and task IDs draw from different
@@ -27,7 +17,7 @@ typedef struct topent {
     uint64_t TID, PTID;         // displayed IDs (thread rows: TID = thread ID,
                                 // PTID = owning task — the attach point)
     char Command[64];
-    eTaskState State;
+    os64_proc_state_t State;
     bool KernelProc;
     bool isThread;              // a /proc/<id>/thread/<tid> row, not a task
     uint32_t threadCount;       // status "threads" — >1 marks an expandable row
