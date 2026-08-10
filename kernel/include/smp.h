@@ -88,13 +88,12 @@ typedef struct
 	uint64_t acctZeroTSC;          // this core's meter epoch (first pass)
 	uint64_t acctLastDispatchTSC;  // when the current thread got the core
 	uint64_t acctSchedCycles;      // cycles spent inside scheduler passes
-} core_local_storage_t;
-
+} __attribute__((aligned(64))) core_local_storage_t;
 
 extern cpu_t *kCPUInfo;
 extern volatile uintptr_t kMPApicBase;
 extern int kLocalAPICTimerSpeed[MAX_CPUS];
-extern volatile core_local_storage_t* kCoreLocalStorage;
+extern volatile core_local_storage_t kCoreLocalStorage[MAX_CPUS];
 extern volatile uint8_t kMPCoreCount;
 extern uintptr_t kMPICRLow;
 extern uintptr_t kMPICRHigh;

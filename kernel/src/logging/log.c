@@ -440,7 +440,8 @@ bool logd_thread(bool daemon) {
                         " AP%d=%lu/%lu", c, (unsigned long)used, (unsigned long)b->capacity);
                 }
                 snprintf(stats + pos, sizeof(stats) - pos, "\n");
-                serial_print_string(stats);
+                // This needs to be controlled by a config setting ... was useful when testing logd issues, isn't now
+                //serial_print_string(stats);
             }
 
             kLogDDrainerCore = 0xFFFFFFFF;

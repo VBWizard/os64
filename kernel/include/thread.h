@@ -53,7 +53,22 @@ typedef struct s_thread
 {
 	uint64_t threadID;
 	uint64_t mp_apic;
+	// THE TWO HALVES OF DYING (split 2026-08-09; they were one flag, and the
+	// seam cost a day). `exited` means RETIRED — nothing left to run, the
+	// scheduler may file this thread under ZOMBIE and never wake it again.
+	// `exiting` means ON ITS WAY OUT — still executing the teardown, must NOT
+	// be redirected down the exit trampoline a second time, and must NOT be
+	// zombied yet.
+	//
+	// One flag served both meanings until threads arrived (2026-08-02), and
+	// before that they WERE the same event: one thread per task, so
+	// thread-death and task-death happened together. The threads slice split
+	// the event in two and left the flag whole, which opened a window in
+	// task_exit_finish — see the long note there. Setting `exited` early is
+	// the bug; it tells the scheduler "safe to zombie" while the thread still
+	// has the entire task teardown ahead of it.
 	volatile bool exited;
+	volatile bool exiting;
 	bool idleThread, execDontSaveRegisters;
 	volatile uint64_t retVal;
 	thread_context_t regs;

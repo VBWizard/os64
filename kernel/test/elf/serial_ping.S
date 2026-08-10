@@ -46,4 +46,5 @@ page2_func:
     out dx, al
 
     mov rax, 0xE1F0CA11     // return value captured by task_exit_with_retval
+exit:
     ret

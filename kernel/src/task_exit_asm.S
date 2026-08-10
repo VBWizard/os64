@@ -14,11 +14,13 @@
 .globl task_exit_with_retval
 .type  task_exit_with_retval, @function
 task_exit_with_retval:
+    cli
     mov  rcx, rax                                   // rcx = ELF's return value
     mov  rax, gs:[0]                                // rax = CLS self-pointer
     mov  rax, [rax + CLS_CURRENTTHREAD_OFFSET]      // rax = currentThread
     mov  rax, [rax + THREAD_OWNERTASK_OFFSET]       // rax = ownerTask (task_t*)
     mov  [rax + TASK_RETVAL_OFFSET], rcx            // task->retVal = return value
+    sti
     jmp  task_exit
 
 // void call_in_kernel_context(void (*func)(void*), void *arg)

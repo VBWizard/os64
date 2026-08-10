@@ -722,10 +722,35 @@ static bool test_vma_cow_write(void)
 // ktask children, and kForegroundTask must never point at a buried shell.
 static task_t *test_spawn(char *path, int argc, char **argv, bool isKernelTask)
 {
-    task_t *t = task_create(path, argc, argv, kKernelTask, isKernelTask, THREAD_NO_AFFINITY);
+    // autoReap is NOT set here — and that is the whole fix (2026-08-09).
+    //
+    // It used to be set at BIRTH, which handed kworker a licence to free this
+    // struct the instant the child died, while the fixture below was still
+    // polling `exited` and `retVal` off it. os64 zeroes every allocation, so a
+    // struct freed and recycled mid-poll reads `exited == 0` — indistinguishable
+    // from "the child never finished". That is what "task did not exit within 5
+    // seconds" actually meant, on a kernel that was working perfectly: measured
+    // 2026-08-09, 8 of 10 periodic boots failed at least one spawn test, and on
+    // the SAME boots the identical fixtures passed through os64_wait in ring 3.
+    // Weeks of "periodic is unstable" was this.
+    //
+    // The comment on the death certificate in task.h had the protocol right all
+    // along: "Direct-poll consumers signal the same thing through autoReap
+    // AFTER their last read." So: spawn here, read freely (an uncollected
+    // corpse with no waiting parent is invisible to kworker's sweep, so nothing
+    // can free it), and call test_release() when finished. Every caller MUST
+    // release on EVERY exit path or the corpse becomes a permanent zombie —
+    // the one hazard this trades for, and a loud one, since `ps` shows it.
+    return task_create(path, argc, argv, kKernelTask, isKernelTask, THREAD_NO_AFFINITY);
+}
+
+// The other half of test_spawn: the fixture's last act, releasing the corpse
+// for burial now that nothing will read it again. Safe on NULL so error paths
+// can call it unconditionally.
+static void test_release(task_t *t)
+{
     if (t != NULL)
         t->autoReap = true;
-    return t;
 }
 
 // Magic value serial_ping.S leaves in RAX before ret.
@@ -757,85 +782,41 @@ static bool test_elf_loader(void)
     for (int i = 0; i < 500 && !elf_task->exited; i++)
         wait(10);
 
+    // SINGLE EXIT from here down, so the corpse is released exactly once on
+    // every path (2026-08-09). A `return` that skipped test_release() would
+    // strand an uncollected zombie for the life of the boot — visible in `ps`,
+    // which is the loud failure this shape trades for the silent one it
+    // replaces.
+    bool ok = false;
+
     if (!elf_task->exited) {
         printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - task did not exit within 5 seconds\n");
-        return false;
     }
-
     // The test ELF spans two pages: _start on page 1 (0x400000) and page2_func
     // on page 2 (0x401000).  At least two demand-page faults must have fired —
     // one per page.  This catches any regression of the vma->loaded-per-VMA bug
     // where the second fault in the same VMA would panic instead of mapping.
-    if (kPageFaultCount < faults_before + 2) {
+    //
+    // THIS is why elf_loader keeps a kernel seat while its ring-3 half moved to
+    // /bin/testrun: kPageFaultCount is a kernel global, and no program can see
+    // it. The exit-code half is testrun's now; the demand-paging half is this.
+    else if (kPageFaultCount < faults_before + 2) {
         printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - expected >=2 page faults, got %lu\n",
                kPageFaultCount - faults_before);
-        return false;
     }
-
-    if (elf_task->retVal != ELF_TEST_RETVAL) {
+    else if (elf_task->retVal != ELF_TEST_RETVAL) {
         printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - retVal=0x%lx, expected 0x%lx\n",
                elf_task->retVal, ELF_TEST_RETVAL);
-        return false;
+    }
+    else {
+        printd(DEBUG_TESTS, "\tPASS: test_elf_loader (demand-paged, retVal correct, exited cleanly)\n");
+        ok = true;
     }
 
-    printd(DEBUG_TESTS, "\tPASS: test_elf_loader (demand-paged, retVal correct, exited cleanly)\n");
-    return true;
+    test_release(elf_task);   // last touch — kworker may bury it after this
+    return ok;
 }
 
-// Success sentinel arg_echo.c returns after verifying argc/argv/env.  A failure
-// instead returns 0xE00000xx identifying exactly which invariant broke — see
-// kernel/test/elf/arg_echo.c.
-#define ARG_ECHO_RETVAL 0x00A11600DUL
-
-// Regression test for argument/environment passing.  Guards two fixes made
-// together: task_setup_entry() must latch RDI/RSI/RDX AFTER argc/argv/env are
-// populated (not before, when they are still zero), and task_create()'s argv
-// construction must copy the strings into the task's own blob with
-// TASK_ARGV_VIRT-relative pointers (rather than dangling into caller memory).
-static bool test_task_args(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_task_args (no root filesystem mounted)\n");
-        return true;
-    }
-
-    // Launch /bin/arg_echo with a known argv.  The fixture asserts argc==3,
-    // argv==TASK_ARGV_VIRT, argv[0..2] == {"/bin/arg_echo","hello","world"},
-    // argv[3]==NULL, and a non-empty env at TASK_ENV_VIRT.
-    char *args[] = { "/bin/arg_echo", "hello", "world" };
-    task_t *task = test_spawn("/bin/arg_echo", 3, args, true);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_task_args - task_create returned NULL\n");
-        return false;
-    }
-
-    // Seed one environment variable so the fixture can confirm env *content*
-    // (not just the pointer) flowed through.  env is already mapped at
-    // TASK_ENV_VIRT, so writing the shared page is visible to the task.
-    env_set(task->env, "OSTEST", "1");
-
-    scheduler_submit_new_task(task);
-
-    // Poll until the task exits or we time out (5s — the scheduling-delay
-    // headroom rationale lives in test_elf_loader).
-    for (int i = 0; i < 500 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_task_args - task did not exit within 5 seconds\n");
-        return false;
-    }
-
-    if (task->retVal != ARG_ECHO_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_task_args - retVal=0x%lx, expected 0x%lx "
-               "(0xE00000xx identifies the failed check)\n",
-               task->retVal, ARG_ECHO_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_task_args (argc/argv/env delivered correctly)\n");
-    return true;
-}
 
 // dyn_consumer.c calls shlib_add(2,3) twice and packs both results:
 //   call 1: shlib_counter 42 -> 43 (this task's newly-privatized copy), returns 2+3+43=48
@@ -864,6 +845,7 @@ static bool test_dynamic_linking(void)
     task_t *task_b = test_spawn("/bin/dyn_consumer", 0, NULL, true);
     if (task_b == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task B) returned NULL\n");
+        test_release(task_a);
         return false;
     }
     scheduler_submit_new_task(task_b);
@@ -873,20 +855,33 @@ static bool test_dynamic_linking(void)
     for (int i = 0; i < 500 && (!task_a->exited || !task_b->exited); i++)
         wait(10);
 
-    if (!task_a->exited || !task_b->exited) {
+    // Read everything the STRUCTS hold before releasing them — after
+    // test_release() below, kworker may free both at any moment, and a
+    // recycled struct reads as zeros (2026-08-09; see test_spawn). The
+    // registry checks further down touch no task struct at all, which is
+    // exactly why this test could keep its kernel seat while its ring-3 half
+    // moved to /bin/testrun: shared_object_load_or_get's cache-hit identity
+    // is kernel-internal and invisible from userland.
+    bool both_exited = task_a->exited && task_b->exited;
+    uint64_t retval_a = task_a->retVal;
+    uint64_t retval_b = task_b->retVal;
+    test_release(task_a);
+    test_release(task_b);
+
+    if (!both_exited) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task(s) did not exit within 5 seconds\n");
         return false;
     }
 
-    if (task_a->retVal != DYN_CONSUMER_EXPECTED_PACKED) {
+    if (retval_a != DYN_CONSUMER_EXPECTED_PACKED) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task A retVal=0x%lx, expected 0x%lx\n",
-               task_a->retVal, (uint64_t)DYN_CONSUMER_EXPECTED_PACKED);
+               retval_a, (uint64_t)DYN_CONSUMER_EXPECTED_PACKED);
         return false;
     }
 
-    if (task_b->retVal != DYN_CONSUMER_EXPECTED_PACKED) {
+    if (retval_b != DYN_CONSUMER_EXPECTED_PACKED) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task B retVal=0x%lx, expected 0x%lx (CoW isolation broken?)\n",
-               task_b->retVal, (uint64_t)DYN_CONSUMER_EXPECTED_PACKED);
+               retval_b, (uint64_t)DYN_CONSUMER_EXPECTED_PACKED);
         return false;
     }
 
@@ -943,263 +938,6 @@ static bool test_dynamic_linking(void)
     return true;
 }
 
-// ── ring-3 / syscall tests ───────────────────────────────────────────────────
-// These are the first tests to launch a task with isKernelTask=false — actual
-// CPL 3 execution, crossing back and forth through syscall_Enter/sysretq.
-// Everything before them ran ELF fixtures at ring 0.
-
-// Success sentinel syscall_smoke.c exits with after yield + write + explicit
-// exit all succeed.  Failures exit with 0xE51Cxxxx codes identifying the step.
-#define SYSCALL_SMOKE_RETVAL 0x0005E00DUL
-
-static bool test_ring3_syscall_smoke(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_syscall_smoke (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/syscall_smoke", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    // Poll until the task exits or we time out (5s — the scheduling-delay
-    // headroom rationale lives in test_elf_loader).
-    for (int i = 0; i < 500 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - task did not exit within 5 seconds "
-               "(likely died crossing ring 3 <-> ring 0; check STAR/GDT/sysret)\n");
-        return false;
-    }
-
-    if (task->retVal != SYSCALL_SMOKE_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_syscall_smoke - retVal=0x%lx, expected 0x%lx "
-               "(0xE51Cxxxx identifies the failed step)\n",
-               task->retVal, (uint64_t)SYSCALL_SMOKE_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_syscall_smoke (ring3 launch, yield, write, explicit exit)\n");
-    return true;
-}
-
-// exit_by_return.c just `return`s this from _start; it can only reach retVal
-// via the seeded user-stack return address -> ring-3 exit trampoline ->
-// SYSCALL_EXIT chain, so this asserts that whole path.
-#define EXIT_BY_RETURN_MAGIC 0x2E7BEA57UL
-
-static bool test_ring3_exit_by_return(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_exit_by_return (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/exit_by_return", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    for (int i = 0; i < 500 && !task->exited; i++)   // 5s: headroom rationale in test_elf_loader
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - task did not exit within 5 seconds "
-               "(trampoline seed or mapping broken? see task_setup_ring3_exit_path)\n");
-        return false;
-    }
-
-    if (task->retVal != EXIT_BY_RETURN_MAGIC) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_exit_by_return - retVal=0x%lx, expected 0x%lx\n",
-               task->retVal, (uint64_t)EXIT_BY_RETURN_MAGIC);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_exit_by_return (ret -> trampoline -> exit syscall)\n");
-    return true;
-}
-// file_io.c walks the whole file-handle lifecycle at CPL 3: open /bin/hello,
-// read+verify the ELF magic, seek (SET and END), open a bogus path (must fail
-// in-band), close, double-close (must fail).  0xF11Exxxx identifies the step.
-#define FILE_IO_RETVAL 0x0F11E60DUL
-
-static bool test_ring3_file_io(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_file_io (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/file_io", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    // File I/O is real disk I/O through call_in_kernel_context — allow 2s.
-    for (int i = 0; i < 200 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io - task did not exit within 2 seconds "
-               "(open/read/seek wedged? check the call_in_kernel_context paths)\n");
-        return false;
-    }
-
-    if (task->retVal != FILE_IO_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io - retVal=0x%lx, expected 0x%lx "
-               "(0xF11Exxxx identifies the failed step; see test/elf/file_io.c)\n",
-               task->retVal, (uint64_t)FILE_IO_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_file_io (open, read, seek SET/END, bogus open, close, double-close)\n");
-    return true;
-}
-
-// Two file_io fixtures at ONCE: the FatFs reentrancy regression. Before the
-// ff_mutex hooks (FF_FS_REENTRANT), two cores inside f_open/f_read on the same
-// volume shared the FATFS sector-window buffer unsynchronized — open() from
-// ring 3 made that trivially reachable. Both tasks open the same file, read,
-// seek, and close concurrently; both must come back bit-perfect.
-static bool test_ring3_file_io_concurrent(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_file_io_concurrent (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *a = test_spawn("/bin/file_io", 0, NULL, false);
-    task_t *b = test_spawn("/bin/file_io", 0, NULL, false);
-    if (a == NULL || b == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io_concurrent - task_create returned NULL\n");
-        return false;
-    }
-
-    // Submit back-to-back so their lifetimes overlap as much as the scheduler
-    // allows (with 8 cores they genuinely run simultaneously).
-    scheduler_submit_new_task(a);
-    scheduler_submit_new_task(b);
-
-    for (int i = 0; i < 300 && !(a->exited && b->exited); i++)
-        wait(10);
-
-    if (!a->exited || !b->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io_concurrent - task(s) did not exit within 3 seconds "
-               "(a=%d b=%d; deadlock in the FAT volume lock?)\n", a->exited, b->exited);
-        return false;
-    }
-
-    if (a->retVal != FILE_IO_RETVAL || b->retVal != FILE_IO_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_file_io_concurrent - retVals 0x%lx / 0x%lx, expected 0x%lx "
-               "(one task saw corrupted data => reentrancy regression)\n",
-               a->retVal, b->retVal, (uint64_t)FILE_IO_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_file_io_concurrent (two tasks, same volume+file, simultaneous)\n");
-    return true;
-}
-
-// redirect_io.c proves file redirection through spawn: a child's stdout/stdin
-// pointed at files, the parent closing its handle copies while the child still
-// writes (the handleRefCount test — before it, that close freed the FIL under
-// the child), and the full `upper < in > out` shape.  0x2ED1xxxx names the step.
-#define REDIRECT_IO_RETVAL 0x2ED1600DUL
-
-static bool test_ring3_redirect_io(void)
-{
-    // The fixture CREATES files on the root filesystem — on a read-only root
-    // (ext2) there is nothing to create them on. Skipping is the honest
-    // verdict: the write path isn't broken, it's absent by design. The FAT
-    // boot entry runs this for real.
-    if (kRootFilesystem != NULL && kRootFilesystem->fops->write == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_redirect_io (root filesystem is read-only)\n");
-        return true;
-    }
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_redirect_io (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/redirect_io", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_redirect_io - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    // The fixture spawns and reaps two children of its own — allow 3s.
-    for (int i = 0; i < 300 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_redirect_io - task did not exit within 3 seconds "
-               "(child wedged on a dead file handle? refcount regression?)\n");
-        return false;
-    }
-
-    if (task->retVal != REDIRECT_IO_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_redirect_io - retVal=0x%lx, expected 0x%lx "
-               "(0x2ED1xxxx identifies the failed step; see test/elf/redirect_io.c)\n",
-               task->retVal, (uint64_t)REDIRECT_IO_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_redirect_io (child stdout->file, early parent close, upper < in > out)\n");
-    return true;
-}
-
-// dir_list.c walks /bin and / through open(path,"d") + readdir at CPL 3:
-// entry names/sizes/DIR flags, sticky end-of-directory, type safety (readdir
-// on a file handle refuses), bogus paths, close semantics. 0x0D12xxxx codes.
-#define DIR_LIST_RETVAL 0x0D12600DUL
-
-static bool test_ring3_dir_list(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_dir_list (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/dir_list", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_dir_list - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    for (int i = 0; i < 200 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_dir_list - task did not exit within 2 seconds\n");
-        return false;
-    }
-
-    if (task->retVal != DIR_LIST_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_dir_list - retVal=0x%lx, expected 0x%lx "
-               "(0x0D12xxxx identifies the failed step; see test/elf/dir_list.c)\n",
-               task->retVal, (uint64_t)DIR_LIST_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_dir_list (readdir /bin + /, flags, sticky EOF, type safety)\n");
-    return true;
-}
 
 // ── The ext2 real-partition test ─────────────────────────────────────────────
 // Two-way cross-implementation proof, one test:
@@ -1628,86 +1366,6 @@ static bool test_mount_table(void)
 }
 #undef MT_FAIL
 
-// map_unmap.c drives the heap primitive at CPL 3: anonymous regions demand-
-// paged and zeroed, guard-page separation, region independence, whole-region
-// unmap with strict base validation. 0x3A9xxxxx names the failed step.
-#define MAP_UNMAP_RETVAL 0x03A9600DUL
-
-static bool test_ring3_map_unmap(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_map_unmap (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/map_unmap", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_map_unmap - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    for (int i = 0; i < 200 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_map_unmap - task did not exit within 2 seconds "
-               "(fault storm in the demand pager? unmap freed a live page?)\n");
-        return false;
-    }
-
-    if (task->retVal != MAP_UNMAP_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_map_unmap - retVal=0x%lx, expected 0x%lx "
-               "(0x3A9xxxxx identifies the failed step; see test/elf/map_unmap.c)\n",
-               task->retVal, (uint64_t)MAP_UNMAP_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_map_unmap (zeroed demand pages, guard gap, independence, strict unmap)\n");
-    return true;
-}
-
-// cwd_test.c proves kernel-owned "here" at CPL 3: getcwd/chdir, canonical
-// ".." collapse, relative open AND relative spawn resolving against cwd, a
-// failed chdir moving nothing, and inheritance via a self-spawned child that
-// verifies where it was born. 0x0C3Dxxxx names the failed step.
-#define CWD_TEST_RETVAL 0x0C3D600DUL
-
-static bool test_ring3_cwd(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_cwd (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/cwd_test", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_cwd - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    // Spawns and reaps a child of its own — allow 3s.
-    for (int i = 0; i < 300 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_cwd - task did not exit within 3 seconds\n");
-        return false;
-    }
-
-    if (task->retVal != CWD_TEST_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_cwd - retVal=0x%lx, expected 0x%lx "
-               "(0x0C3Dxxxx identifies the failed step; see test/elf/cwd_test.c)\n",
-               task->retVal, (uint64_t)CWD_TEST_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_cwd (getcwd/chdir, canonicalization, relative open+spawn, inheritance)\n");
-    return true;
-}
 
 // The root-filesystem WRITE path, properly inside the framework at last:
 // create/write/read-back a file, mkdir, create/write/read-back inside the new
@@ -2156,184 +1814,6 @@ static bool test_console_read_deadline(void)
     return true;
 }
 
-// stat_test.c proves the stat syscall at CPL 3: file with size, directory,
-// the synthesized root entry, in-band absence, relative resolution, and
-// routing across the mount table. 0x57A7xxxx names the failed step.
-#define STAT_TEST_RETVAL 0x57A7600DUL
-
-static bool test_ring3_stat(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_stat (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/stat_test", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_stat - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    // Six stats, all disk I/O through call_in_kernel_context — allow 2s.
-    for (int i = 0; i < 200 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_stat - task did not exit within 2 seconds\n");
-        return false;
-    }
-
-    if (task->retVal != STAT_TEST_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_stat - retVal=0x%lx, expected 0x%lx "
-               "(0x57A7xxxx identifies the failed step; see test/elf/stat_test.c)\n",
-               task->retVal, (uint64_t)STAT_TEST_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_stat (file, dir, root, absence, relative, cross-mount)\n");
-    return true;
-}
-
-// sleep_test.c drives sleep(ms) + ticks(out) at CPL 3: the 2012 SIGSLEEP
-// machinery's first ring-3 customer. It measures its own nap with the ticks
-// syscall at the reported rate (so the assertion survives any future
-// TICKS_PER_SECOND), proves sleep(0) is a yield and not a nap, and checks
-// the stopwatch only runs forward. 0x51EExxxx names the failed step.
-// Ctrl+C-interrupts-the-nap is deliberately NOT here — it's interactive,
-// verified by hand like the rest of the SIGINT family.
-#define SLEEP_TEST_RETVAL 0x51EE600DUL
-
-static bool test_ring3_sleep(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_sleep (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/sleep_test", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sleep - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    // The fixture sleeps 200ms on purpose; give it 3s so a loaded suite
-    // never flakes the timeout while a genuine never-wakes bug still fails.
-    for (int i = 0; i < 300 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sleep - task did not exit within 3 seconds "
-               "(a sleeper processSignals never woke? deadline math off by an epoch?)\n");
-        return false;
-    }
-
-    if (task->retVal != SLEEP_TEST_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sleep - retVal=0x%lx, expected 0x%lx "
-               "(0x51EExxxx identifies the failed step; see test/elf/sleep_test.c)\n",
-               task->retVal, (uint64_t)SLEEP_TEST_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_sleep (parked >= request at reported rate, sleep(0) yields, monotonic)\n");
-    return true;
-}
-
-// Runs /bin/memory_test: the memory() syscall picture is sane AND the books
-// balance — free + used == usable, exactly, at rest, mid-allocation, and
-// after unmap (the fixture maps/touches/unmaps 256KB to watch the needle
-// move). A failure here with FAIL_BOOKS_* means the allocator's extent
-// ledger dropped or double-counted something: a real accounting bug, not a
-// test problem. 0xF3EExxxx names the failed step ("FREE GOOD" when whole).
-#define MEMORY_TEST_RETVAL 0xF3EE600DUL
-
-static bool test_ring3_memory(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_memory (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/memory_test", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_memory - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    // 64 demand-paged touches plus six syscalls: instant. 3s is pure slack.
-    for (int i = 0; i < 300 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_memory - task did not exit within 3 seconds\n");
-        return false;
-    }
-
-    if (task->retVal != MEMORY_TEST_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_memory - retVal=0x%lx, expected 0x%lx "
-               "(0xF3EExxxx identifies the failed step; see test/elf/memory_test.c)\n",
-               task->retVal, (uint64_t)MEMORY_TEST_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_memory (fields sane, books balance at rest/mid-allocation/post-unmap)\n");
-    return true;
-}
-
-// os64's first ring-3 threads (2026-08-02). /bin/threadtest starts three
-// threads, hands each a different argument, joins all three by READING
-// their handles, checks every return value, and verifies that all three
-// wrote into the same global array — which is what proves they were
-// threads sharing one address space rather than three processes.
-//
-// The fixture is silent when it passes and chatty when it fails; the
-// verdict below is the only line a healthy boot prints. Step codes are
-// 0x1B2EADxx (see threadtest.c).
-#define THREAD_TEST_RETVAL 0x1B2EAD00UL
-
-static bool test_ring3_threads(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_threads (no root filesystem mounted)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/threadtest", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - task_create returned NULL\n");
-        return false;
-    }
-
-    scheduler_submit_new_task(task);
-
-    // Each worker burns ~2M iterations so the three genuinely overlap
-    // instead of finishing single-file — that spin is the point, and it is
-    // why this waits 5s rather than the usual 3.
-    for (int i = 0; i < 500 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - fixture still running after 5s "
-               "(a thread that never exits, or a join that never woke)\n");
-        return false;
-    }
-
-    if (task->retVal != THREAD_TEST_RETVAL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_threads - retVal=0x%lx, expected 0x%lx "
-               "(0x1B2EADxx names the failed step; see apps/threadtest/threadtest.c)\n",
-               task->retVal, (uint64_t)THREAD_TEST_RETVAL);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_threads (3 threads created, joined by handle, "
-           "return values correct, shared address space intact)\n");
-    return true;
-}
 
 // (A dedicated /bin/hello test lived here briefly during userland bring-up;
 // removed as redundant — ring3_syscall_smoke and ring3_exit_by_return already
@@ -2778,50 +2258,6 @@ static bool test_net_udp_conn(void)
     return true;
 }
 
-// Phase 3 finale, exhibit B — ring 3 places a real call. Spawns
-// /bin/dialtest, which dials slirp's DNS (10.0.2.3:53) with os64_dial's
-// bang string, asks a genuine question, and BLOCKS in read until the
-// answer crosses two NATs and comes home — the full tower, syscall to
-// wire to park to wake, judged by one exit code. See dialtest.c for the
-// 0x0D1A16xx step-code autopsy table.
-static bool test_net_dial_ring3(void)
-{
-    if (kNetDeviceCount == 0) {
-        printd(DEBUG_TESTS, "\tSKIP: test_net_dial_ring3 (no NIC)\n");
-        return true;
-    }
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_net_dial_ring3 (no root filesystem)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/dialtest", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - task_create failed\n");
-        return false;
-    }
-    scheduler_submit_new_task(task);
-
-    // DNS through slirp is normally milliseconds; 5s covers a resolver
-    // having a bad day. (A host with NO resolver at all fails here — that
-    // is a finding about the host, and the step code will say BAD_READ.)
-    for (int i = 0; i < 500 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - fixture still blocked after 5s "
-               "(udp tx=%lu rx=%lu)\n", kUdpStats.tx_sent, kUdpStats.rx_delivered);
-        return false;
-    }
-    if (task->retVal != 0x0D1A1600UL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_dial_ring3 - retVal=0x%lx, expected 0x0D1A1600 "
-               "(step codes in dialtest.c)\n", task->retVal);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_net_dial_ring3 (ring 3 dialed DNS, asked, was answered)\n");
-    return true;
-}
 
 // The ICMP handle — the mechanism `ping` is waiting on (utilities are
 // Chris's; the kernel plumbing is mine). Dials the gateway, sends a
@@ -2948,54 +2384,6 @@ static bool test_net_tcp_refused(void)
     return true;
 }
 
-// Phase 4, exhibit B — THE MILESTONE. Spawns /bin/fetchtest, which
-// resolves example.com over UDP, opens a TCP stream to it through slirp,
-// speaks HTTP, and reads the page to EOF. Everything in os64 that touches
-// a network is in the path: handshake, sequence arithmetic, ACKs, the
-// receive ring, the FIN that becomes read()'s 0. Needs working internet
-// on the host — the one test here that does, and it says so when it fails.
-// See fetchtest.c for the 0x0FE7C4xx step codes.
-static bool test_net_tcp_fetch_ring3(void)
-{
-    if (kNetDeviceCount == 0) {
-        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_fetch_ring3 (no NIC)\n");
-        return true;
-    }
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_fetch_ring3 (no root filesystem)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/fetchtest", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - task_create failed\n");
-        return false;
-    }
-    scheduler_submit_new_task(task);
-
-    // DNS + a TCP round trip to the real internet: normally under a
-    // second, 15s of slack for a sleepy CDN or a retransmit or two.
-    for (int i = 0; i < 1500 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - fixture still running after 15s "
-               "(tcp opened=%lu refused=%lu timeouts=%lu retrans=%lu)\n",
-               kTcpStats.connections_opened, kTcpStats.connections_refused,
-               kTcpStats.connect_timeouts, kTcpStats.retransmits);
-        return false;
-    }
-    if (task->retVal != 0x0FE7C400UL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_fetch_ring3 - retVal=0x%lx, expected 0x0FE7C400 "
-               "(step codes in fetchtest.c; needs host internet)\n", task->retVal);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_net_tcp_fetch_ring3 (fetched a real page from the real internet, "
-           "%lu segments in / %lu out, %lu retransmits)\n",
-           kTcpStats.segments_in, kTcpStats.segments_out, kTcpStats.retransmits);
-    return true;
-}
 
 // ── env tests ────────────────────────────────────────────────────────────────
 
@@ -3182,45 +2570,6 @@ static bool test_env_capacity_full(void)
     return true;
 }
 
-// SYSCALL_SYNC_ALL end to end — the ping.log story, run as a fixture: write
-// a file, DON'T close it, prove that after os64_sync_all() a fresh stat
-// reports the true length anyway. The fixture (synctest.c) carries the step
-// codes; 0x05CC0001 means the boot has no writable /home, which is a
-// configuration, not a failure.
-static bool test_ring3_sync_all(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_sync_all (no root filesystem)\n");
-        return true;
-    }
-
-    task_t *task = test_spawn("/bin/synctest", 0, NULL, false);
-    if (task == NULL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sync_all - task_create failed\n");
-        return false;
-    }
-    scheduler_submit_new_task(task);
-
-    for (int i = 0; i < 500 && !task->exited; i++)
-        wait(10);
-
-    if (!task->exited) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sync_all - fixture still running after 5s\n");
-        return false;
-    }
-    if (task->retVal == 0x05CC0001UL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_ring3_sync_all (no writable mount at /home)\n");
-        return true;
-    }
-    if (task->retVal != 0x05CC0000UL) {
-        printd(DEBUG_TESTS, "\tFAIL: test_ring3_sync_all - retVal=0x%lx, expected 0x05CC0000 "
-               "(step codes in synctest.c)\n", task->retVal);
-        return false;
-    }
-
-    printd(DEBUG_TESTS, "\tPASS: test_ring3_sync_all (an unclosed file told the truth after the broom)\n");
-    return true;
-}
 
 // The buffer cache, two claims tested (block_cache.h carries the design):
 // (1) HIT RATE — reading the same file twice serves the second pass mostly
@@ -3462,32 +2811,17 @@ static void register_builtin_tests(void)
     test_register("vma_file_backed_page_fault_resolved", test_vma_file_backed_page_fault_resolved, TEST_PHASE_POSTBOOT);
     test_register("vma_partial_page_bss_zero_filled", test_vma_partial_page_bss_zero_filled, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
-    test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
-    test_register("ring3_syscall_smoke", test_ring3_syscall_smoke, TEST_PHASE_POSTBOOT);
-    test_register("ring3_exit_by_return", test_ring3_exit_by_return, TEST_PHASE_POSTBOOT);
-    test_register("ring3_file_io", test_ring3_file_io, TEST_PHASE_POSTBOOT);
-    test_register("ring3_file_io_concurrent", test_ring3_file_io_concurrent, TEST_PHASE_POSTBOOT);
-    test_register("ring3_redirect_io", test_ring3_redirect_io, TEST_PHASE_POSTBOOT);
-    test_register("ring3_dir_list", test_ring3_dir_list, TEST_PHASE_POSTBOOT);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
-    test_register("ring3_map_unmap", test_ring3_map_unmap, TEST_PHASE_POSTBOOT);
-    test_register("ring3_cwd", test_ring3_cwd, TEST_PHASE_POSTBOOT);
-    test_register("ring3_stat", test_ring3_stat, TEST_PHASE_POSTBOOT);
-    test_register("ring3_sleep", test_ring3_sleep, TEST_PHASE_POSTBOOT);
-    test_register("ring3_memory", test_ring3_memory, TEST_PHASE_POSTBOOT);
-    test_register("ring3_threads", test_ring3_threads, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
     test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);
     test_register("net_ping", test_net_ping, TEST_PHASE_POSTBOOT);
     test_register("net_echo_responder", test_net_echo_responder, TEST_PHASE_POSTBOOT);
     test_register("net_dhcp", test_net_dhcp, TEST_PHASE_POSTBOOT);
     test_register("net_udp_conn", test_net_udp_conn, TEST_PHASE_POSTBOOT);
-    test_register("net_dial_ring3", test_net_dial_ring3, TEST_PHASE_POSTBOOT);
     test_register("net_icmp_conn", test_net_icmp_conn, TEST_PHASE_POSTBOOT);
     test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_POSTBOOT);
-    test_register("net_tcp_fetch_ring3", test_net_tcp_fetch_ring3, TEST_PHASE_POSTBOOT);
     // The write gauntlets carry TEST_POLICY_RO: a failure here impeaches the
     // WRITE path while logd is actively appending to a disk — continuing to
     // write compounds the damage, halting costs the analysis. Demote every
@@ -3496,7 +2830,6 @@ static void register_builtin_tests(void)
     test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
-    test_register("ring3_sync_all", test_ring3_sync_all, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("dirent_mtime", test_dirent_mtime, TEST_PHASE_POSTBOOT);
 }

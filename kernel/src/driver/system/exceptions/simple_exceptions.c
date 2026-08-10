@@ -14,6 +14,13 @@
 #include "memory/vma.h"
 #include "kmalloc.h"
 #include "allocator.h"
+
+// The per-core interrupt-frame save arrays, filled by the scheduler ISR
+// prologue (scheduler.S) BEFORE it switches CR3 — so at panic time this is the
+// RSP the interrupted code was actually standing on. Printed by
+// exception_panic because a double fault is nearly always the stack, and the
+// one thing the old panic never told you was which stack.
+extern uint64_t mp_isrSavedRSP[];
 #include "shared_object.h"
 
 uint64_t gLastFaultRbp = 0;
@@ -123,6 +130,47 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     if (error_code != 0xFFFFFFFFFFFFFFFF) {
         EXCEPTION_PRINT(">>> Error Code: 0x%lx <<<                          \n", error_code);
     }
+
+    // CR2 + CR3 + the interrupted RSP, ALWAYS, for every exception (added
+    // 2026-08-09). Not decoration — these three are what turn an unexplainable
+    // #DF into a diagnosis, and their absence cost a full day.
+    //
+    // The story: a reproducible double fault against /bin/hog printed a task
+    // name and a faulting instruction, and nothing else. Everything that
+    // actually mattered had to be dug out of the QEMU monitor by hand — CR2
+    // said 0x1023bf98, CR3 said kKernelPML4 was live, and the two together
+    // said "this core faulted touching a task-local stack from inside the
+    // kernel address space", which IS the bug, in one line. The kernel knew
+    // all three at panic time and simply never said so.
+    //
+    // CR2 is the address that faulted (meaningful for #PF and, as above, for
+    // the first fault behind a #DF). CR3 names the address space it faulted
+    // IN — the pair is what makes "unmapped" mean something. RSP is the third
+    // leg: a #DF is nearly always the stack, so print the stack.
+    // INTEL SYNTAX — destination first. This file compiles under -masm=intel
+    // like the rest of the kernel, so `mov %0, cr3` READS cr3 into %0. The
+    // AT&T spelling (`mov %%cr3, %0`) means the exact OPPOSITE here: it WRITES
+    // %0 into cr3. I shipped that inverted version for about an hour on
+    // 2026-08-09, and it stored a garbage register into CR2 and then into CR3
+    // — zeroing the address space, so the next instruction FETCH page-faulted,
+    // which page-faulted again delivering it, and the machine triple-faulted.
+    // A diagnostic that destroyed the evidence it was added to collect. The
+    // idiom to copy lives in handle.c:129 and syscall.c:228.
+    uint64_t cr2_val, cr3_val;
+    __asm__ volatile("mov %0, cr2" : "=r"(cr2_val));
+    __asm__ volatile("mov %0, cr3" : "=r"(cr3_val));
+    // CR2 IS LABELLED, NOT BARE — it is the page-fault address register, and
+    // the CPU only updates it on a #PF. On a #GP (or #UD, or #DF) it still
+    // holds whatever the LAST page fault left there, which reads as a
+    // confident-looking number that means nothing. Chris distrusted exactly
+    // that on the first #GP this printed, and was right to; an unlabelled
+    // field that lies costs more than the field that tells the truth (the
+    // DEBUG_TASKSWITCH doctrine, applied to a panic line). Kept rather than
+    // suppressed because for the #PF case it is THE datum.
+    EXCEPTION_PRINT(">>> CR2: 0x%016lx (page-fault address; STALE unless this is a #PF)  CR3: 0x%016lx <<<\n",
+                    cr2_val, cr3_val);
+    EXCEPTION_PRINT(">>> Interrupted RSP: 0x%016lx <<<      \n",
+                    mp_isrSavedRSP[core->apic_id]);
     if (core->currentThread) {
 		task_t *task = (task_t*)core->currentThread->ownerTask;
 
@@ -295,7 +343,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     // junk, ->task is junk, and vma_lookup faults on the junk pointer — the
     // handler then re-enters itself until the stack dies in a triple fault,
     // taking the diagnosable panic below with it.
-    task_t *task = kCoreLocalStorage ? get_core_local_storage()->task : NULL;
+    task_t *task = kCLSInitialized ? get_core_local_storage()->task : NULL;
     if (!task)
     {
         log_page_fault_bits(error_code);

@@ -220,6 +220,7 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 	newThread->regs.RFLAGS = 0x202;  //Interrupts enabled, reserved bit 1 set
 
 	newThread->exited = false;
+	newThread->exiting = false;
 	newThread->next=NO_THREAD;
 	return newThread;
 }

@@ -880,10 +880,17 @@ void scheduler_wake_isleep_task(task_t *task) {
     // trigger stays OUTSIDE the lock: it hlt-waits for a scheduler pass that
     // needs this very lock, so triggering while holding it is a guaranteed
     // self-deadlock.
+    // Delegate to the helper that already gets this exactly right (above):
+    // ISLEEP test + SIGSLEEP cancel + relink as ONE act under the lock. The
+    // cancel MUST live in here rather than in the caller, and it must be
+    // conditional on the thread having actually parked — cancelling a backstop
+    // for a thread that is still mid-park destroys the only retry the waiter
+    // has, and it lands in ISLEEP with no flag and no deadline: asleep for
+    // good. task_enqueue_dead_child used to do exactly that (see its comment,
+    // 2026-08-09). Leaving a not-yet-parked thread untouched is the whole
+    // trick: its own SIGSLEEP deadline fires a tick later and it re-checks.
     uint64_t flags = scheduler_queues_lock();
-    if (task->threads->threadState == THREAD_STATE_ISLEEP) {
-        scheduler_change_thread_queue_locked(task->threads, THREAD_STATE_RUNNABLE);
-    }
+    scheduler_wake_isleep_thread_locked(task->threads);
     task->threads->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
     scheduler_queues_unlock(flags);
     scheduler_trigger(NULL);
@@ -1012,7 +1019,11 @@ static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
 
 	if (!(thread->signals.sigind & SIGNALS_TERMINATING))
 		return;
-	if (thread->exited || thread->idleThread)
+	// `exiting` too (2026-08-09): a thread already inside task_exit_finish has
+	// not set `exited` yet — that is now published only at the very end — so
+	// testing `exited` alone would redirect a dying thread down the exit
+	// trampoline a SECOND time, mid-teardown. See thread.h for the split.
+	if (thread->exited || thread->exiting || thread->idleThread)
 		return;
 	if (task == NULL || task->kernelTask)
 		return;
@@ -1272,7 +1283,7 @@ void scheduler_do()
     else
 	{
 		debug_print_registers(apic_id, "continue");
-        printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
+//        printd(DEBUG_SCHEDULER,"*Shortcut! No new thread to run, continuing with 0x%016lx-%s\n", cls->currentThread->threadID, ((task_t*)cls->currentThread->ownerTask)->exename);
 	}
 	__sync_lock_release(&kSchedulerSwitchTasksLock);   
     kSchedulerCallCount++;

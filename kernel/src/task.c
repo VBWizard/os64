@@ -147,7 +147,10 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
 	{
-		if (th == self || th->exited)
+		// `exiting` as well as `exited`: a sibling already walking its own
+		// teardown needs no second SIGKILL and no second nudge (2026-08-09,
+		// when the two halves of dying were split — see thread.h).
+		if (th == self || th->exited || th->exiting)
 			continue;
 
 		th->signals.sigind |= SIGKILL;
@@ -256,15 +259,34 @@ static void task_enqueue_dead_child(task_t *child)
 
 	if (parent->waitingForChild) {
 		parent->waitingForChild = false;
-		// Clear the backstop SIGSLEEP so the woken parent doesn't get parked
-		// straight back to ISLEEP by the scheduler (which re-sleeps any thread
-		// whose SIGSLEEP is still set). Then wake it to re-check its children.
-		// The wake is unconditional on ANY child death; task_wait's own scan
-		// decides whether THIS death matches what the parent is waiting for.
-		if (parent->threads != NULL) {
-			parent->threads->signals.sigind &= ~SIGSLEEP;
-			parent->threads->signals.sigdata[SIGSLEEP] = 0;
-		}
+		// Wake the parent to re-check its children. The wake is unconditional
+		// on ANY child death; task_wait's own scan decides whether THIS death
+		// matches what the parent is waiting for.
+		//
+		// THE BACKSTOP IS NOT OURS TO CANCEL (fixed 2026-08-09; this cost a
+		// shell). Until today these three lines cleared the parent's SIGSLEEP
+		// and its deadline right here, BEFORE attempting the wake, reasoning
+		// that a woken parent still carrying SIGSLEEP would be parked straight
+		// back to ISLEEP. True — but the wake it handed off to only lands on a
+		// thread that has ALREADY parked, and sigaction(SIGSLEEP) does not
+		// park: it sets the flag and asks for a scheduler pass, so there is a
+		// wide window where the parent is mid-park and the wake is a silent
+		// no-op. Cancel the backstop inside that window and the parent lands in
+		// ISLEEP with no flag and no deadline — nothing left to fire, asleep
+		// forever, holding a corpse nobody can bury (kworker only walks
+		// deadChild lists reachable from a live parent). Symptom: `tail -f`
+		// looked frozen; it had exited, and husk never woke to say so. Same
+		// bug, same day, failed the elf_loader post-boot test under periodic —
+		// that test waits on a child too. Periodic just splits the window far
+		// more often than tickless does; it is not a periodic-only bug.
+		//
+		// scheduler_wake_isleep_task now delegates to the helper that has had
+		// this right all along (scheduler_wake_isleep_thread_locked): the
+		// ISLEEP test, the SIGSLEEP cancel and the relink are ONE atomic act
+		// under the queue lock, and a thread that has not parked yet is left
+		// completely untouched — so its backstop survives to fire a tick later
+		// and re-run the scan. Worst case the parent notices one second late
+		// instead of never, which is precisely what a backstop is for.
 		scheduler_wake_isleep_task(parent);
 	}
 }
@@ -548,9 +570,34 @@ static void __attribute__((noinline)) task_exit_finish(void)
 
 	// task->retVal was already written by task_exit_with_retval (asm) before
 	// any C code ran or any stack switch occurred.  We just propagate it to
-	// thread->retVal and mark both as exited.
+	// thread->retVal here.
+	//
+	// `exiting`, NOT `exited` — and this ordering is the whole fix (2026-08-09,
+	// Chris ran it to ground). `exited` is what the scheduler's take-off-CPU
+	// branch reads to file a thread under ZOMBIE, and a zombie is never
+	// scheduled again. Setting it HERE announced "safe to bury me" while this
+	// thread still had the entire task teardown in front of it: siblings to
+	// mark, every handle to close (VFS closes, disk I/O — a wide window), and
+	// only THEN `task->exited = true`. One timer tick anywhere in that stretch
+	// and the scheduler zombied the thread mid-teardown; it never ran again,
+	// so task->exited stayed false FOREVER. The task was dead to the scheduler
+	// and alive to everyone waiting on it.
+	//
+	// Symptoms this produced: elf_loader "task did not exit within 5 seconds"
+	// on ~30% of SCHED=periodic boots, permanent Z corpses in `ps`, and a
+	// debugger that could never step into task_terminate_sibling_threads
+	// because the thread was already zombied before it got there. Invisible
+	// under tickless for the reason everything else is: an AP that never
+	// preempts runs this path to completion atomically. It is NOT a periodic
+	// bug — periodic just rolls the dice 100 times a second.
+	//
+	// `exiting` carries the other half of the old flag's meaning: "already on
+	// the way out", which is what the forced-syscall redirect and the sibling
+	// sweep actually want to know. `exited` is now set exactly once, in the
+	// breath before scheduler_trigger, matching the pattern SYSCALL_THREAD_EXIT
+	// already got right ("MARK, don't move" — syscall.c).
 	if (thread) {
-		thread->exited = true;
+		thread->exiting = true;
 		thread->retVal = task ? task->retVal : 0;
 	}
 
@@ -569,6 +616,11 @@ static void __attribute__((noinline)) task_exit_finish(void)
 		printd(DEBUG_TASK | DEBUG_THREAD,
 		       "task_exit: thread 0x%08lx arrived after %s already died — retiring the thread only\n",
 		       thread ? thread->threadID : 0, task->exename);
+		// This thread genuinely IS retired now — "mark itself and get off the
+		// CPU" is the whole job on this path, so `exited` is true the instant
+		// before the trigger, which is exactly where it belongs.
+		if (thread)
+			thread->exited = true;
 		scheduler_trigger(cls);
 		while (1==1)
 			__asm__("sti\nhlt\n");
@@ -604,6 +656,19 @@ static void __attribute__((noinline)) task_exit_finish(void)
 
 		task_enqueue_dead_child(task);
 	}
+
+	// RETIRED — and not one instruction sooner. Every consumer of this task's
+	// death has now been served (siblings told, handles closed, task->exited
+	// published, corpse enqueued), so there is genuinely nothing left for this
+	// thread to run and the scheduler may file it under ZOMBIE.
+	//
+	// This assignment is deliberately the LAST thing before the trigger, with
+	// nothing preemptible between them, because `exited` is a one-way door:
+	// the take-off-CPU branch in scheduler.c reads it and a zombie is never
+	// scheduled again. Anything placed between this line and the trigger would
+	// re-open the exact window that cost us the day.
+	if (thread)
+		thread->exited = true;
 
 	// Enter the scheduler via its normal APIC-IPI path; it sees the exited
 	// flags set above and moves this thread to the zombie queue.  A dead
