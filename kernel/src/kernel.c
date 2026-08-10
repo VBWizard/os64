@@ -303,7 +303,10 @@ void kernel_init()
 
 	ap_initialization_handler();
 
-	remap_irq0_to_apic(0x20);
+	// Route the PIT through the IOAPIC at the PROMOTED vector, not its legacy
+	// 0x20 — the clock has to be able to preempt a scheduler pass or it loses
+	// every tick that lands in one (see IRQ0_APIC_VECTOR in smp_core.h).
+	remap_irq0_to_apic(IRQ0_APIC_VECTOR);
 
 	// Keyboard IRQ1 rides the IOAPIC too — unconditionally, GUI or not.
 	// remap_irq0_to_apic just switched the IMCR to APIC mode, which cuts the
