@@ -16,6 +16,7 @@
 .extern scheduler_do
 .extern mp_timesEnteringScheduler
 .extern mp_inScheduler
+.extern panic_no_shutdown
 
 .globl _write_eoi
 .type _write_eoi, @function
@@ -104,6 +105,24 @@ _schedule_ap:
     # yield).  scheduler_yield and its software `int` are gone — every entry
     # is a real LAPIC interrupt now — but the guard-before-sti ordering stays:
     # it is correct for any entry path, present or future.
+    #
+    # WHAT THAT COMMENT DID NOT KNOW (learned 2026-08-10, SCHEDULER_REENTRANCY.md):
+    # the APIC in-service bit shields this vector for the pass, but the shield
+    # EXPIRES AT THE EOI — which used to sit three instructions before the
+    # iretq, with IF=1 and the guard already dropped.  Every scheduler
+    # interrupt that went pending during the pass delivered exactly there, as
+    # a FULL nested entry that captured "mid-exit, on the scheduler stack" as
+    # the outgoing thread's saved state; when another core later dispatched
+    # that thread, two cores ran on one scheduler stack and scribbled each
+    # other into pointers full of program text.  The exit is now cli-bracketed
+    # from frame-build through iretq (see scheduler_continue_2).
+    #
+    # And the shield never covered a HIGHER-priority vector: the scheduling
+    # IPI was 0x81 (priority class 8) against this timer's 0x7E (class 7), so
+    # a nudge from another core walked straight in mid-pass.  Both scheduler
+    # entry vectors now live in class 7, where the hardware holds the second
+    # one pending instead of delivering it.  The software guard below is the
+    # backstop, not the primary defense.
     push rbx                            # Save original RBX value
 
     mov rbx, rax                        # Put the original RAX value in RBX
@@ -111,8 +130,21 @@ _schedule_ap:
 	mov rax, [gs:CLS_APIC_ID_OFFSET]		# apic_id — offset auto-generated from CLS struct via asm-offsets.h
 
     push rbx                            # Save original RAX value
-    lea rbx, [rsp + 16]                 # Adjust rsp to reflect state *before* push rbx and before any changes
-	mov [temp_rsp + rax * 8], rbx
+
+	# NOTHING ABOVE THE GUARD CHECK MAY WRITE A GLOBAL (2026-08-10, see
+	# SCHEDULER_REENTRANCY.md).  The temp_rsp store used to live RIGHT HERE,
+	# two instructions above the guard test — so a nested entry that the guard
+	# was about to bounce "harmlessly" had already overwritten the OUTER
+	# entry's saved frame pointer on its way through the door.  The outer pass
+	# then copied the WRONG frame's RIP/CS/RFLAGS/RSP/SS into mp_isrSaved* and
+	# handed that garbage to a thread as its resume state.  A frozen guest
+	# caught it in the act: temp_rsp[1] provably held 0x40013f98 at the lea and
+	# read back 0x1011bfa8 twenty instructions later.  The store now happens
+	# below the guard (see not_in_scheduler_continue), where RSP is already the
+	# exact frame base and no scratch register or lea is needed at all.
+	#
+	# The bounce path below is therefore DATA-CLEAN: it touches only its own
+	# stack, _write_eoi, and iretq.
 
 	# Verify we aren't in the scheduler ISR already.  If so then we can't continue.  Do this as early as possible
 	mov bl, [mp_inScheduler + rax]
@@ -126,24 +158,39 @@ already_in_scheduler_exit:
 	iretq
 
 not_in_scheduler_continue:
-    # Tag AP as 'in scheduler'
+    # Tag AP as 'in scheduler'.  This is the FIRST global written on this path,
+    # and it happens with interrupts still off (IDT gate type 0x8E clears IF on
+    # entry), so the guard is up before anything can observe a half-built state.
 	mov byte ptr [mp_inScheduler + rax], 1
 
-	# Guard flag is up — a nested scheduler entry now exits via the
-	# already_in_scheduler path, so it is safe to take interrupts again.
-	sti
-
-	# If the BSP is running the scheduler, do the signal check
-	cmp rax, 0
-	jne over_check_signals
-	call _check_signals
-over_check_signals:
+	# Unwind the two entry pushes and record the frame base, ALL under the
+	# guard.  Register state on arrival here: RAX = apic_id, RBX = the
+	# interrupted thread's RAX, and the interrupted thread's RBX is one push
+	# deep on the stack.  Saving RAX's copy first frees RBX; popping the
+	# second leaves RSP pointing at the CPU-pushed interrupt frame EXACTLY —
+	# which is what temp_rsp wants, with no lea and no scratch register.
 	mov [mp_isrSavedRAX + rax * 8], rbx # Save original RAX value in the array
 
     # Restore RBX value from when we entered the routine
-    pop rbx 
-	
+    pop rbx
+
     mov [mp_isrSavedRBX + rax * 8], rbx # Save original EBX value in the array
+
+	# The frame pointer, written where a bounce can no longer reach it.
+	mov [temp_rsp + rax * 8], rsp
+
+	# Guard flag is up and every global this entry owns is written — a nested
+	# scheduler entry now exits via the already_in_scheduler path WITHOUT
+	# touching a byte of our state, so it is safe to take interrupts again.
+	sti
+
+	# If the BSP is running the scheduler, do the signal check.  This runs a
+	# whole C function (processSignals) with IF=1 and the guard up; that is
+	# only tolerable because the bounce path is data-clean as of 2026-08-10.
+	cmp rax, 0
+	jne over_check_signals
+	call _check_signals              # preserves RAX (apic_id) and RBX — leave it that way
+over_check_signals:
 
     mov rbx, cr3
     mov [mp_isrSavedCR3 + rax * 8], rbx # Save CR3 in the array
@@ -190,6 +237,43 @@ over_check_signals:
 	mov rbx, [rbx + 32]
 	mov [mp_isrSavedSS + rax * 8], rbx
 
+	# STACK FIRST, THEN ADDRESS SPACE (hoisted here 2026-08-09 — this closes a
+	# reproducible #DF).
+	#
+	# RSP still points at the interrupted thread's RSP0 kernel stack, which
+	# task_alloc_guarded_stack put at a TASK-LOCAL, lower-half VA (thread.c —
+	# its own comment says the stack "is NOT mapped in kKernelPML4"). The
+	# instant the CR3 below lands, that stack ceases to exist in the active
+	# address space, and it stays gone until OverSaveRegisters reloaded RSP
+	# some 45 instructions later.
+	#
+	# Interrupts are ON in that gap (the `sti` after the mp_inScheduler guard,
+	# above). The guard makes a nested scheduler entry EXIT harmlessly — but it
+	# guards SOFTWARE, and the CPU pushes a 5-QWORD frame before the handler's
+	# first instruction runs. With RSP dead that push #PFs, #PF carries no IST
+	# (only #DF does, idt.c), so delivering it faults on the same corpse and the
+	# machine takes a #DF instead. mp_inScheduler never gets read.
+	#
+	# Proof it was this: two separate #DFs, both CR2=0x1023bf98 (the task-local
+	# RSP0 stack) with CR3=kKernelPML4 live — and in the same captures, cores
+	# whose frames happened to land on the per-core SCHEDULER stack
+	# (0xffff800005f85f98) survived the identical situation. Same event, one
+	# stack kernel-visible, one not.
+	#
+	# The scheduler stacks are HHDM/upper-half and therefore valid under EVERY
+	# CR3 — which is exactly why this line can move ABOVE the switch and not the
+	# other way around. Every temp_rsp dereference is already done (they must
+	# happen under the task's CR3, see above), and nothing between here and
+	# scheduler_do touches the stack, so the move is pure win: a nested
+	# interrupt now pushes onto the scheduler stack, below the outer handler's
+	# data, and iretq's straight back out.
+	#
+	# Frequency, not immunity, is why tickless never showed this: a compute-
+	# bound AP that takes no timer ticks barely enters this window at all. The
+	# planned AP preemption backstop WILL create that traffic — this had to
+	# land first.
+	mov rsp, [mp_schedStack + rax * 8]
+
     mov rbx, kKernelPML4
     mov cr3, rbx
 
@@ -234,9 +318,11 @@ dontSkipRegisters:
 OverSaveRegisters:
     # Keep track of how many times we've entered the scheduler
     inc qword ptr [mp_timesEnteringScheduler + rax*8]
-    
-    # Load the scheduler stack pointer
-    mov rsp, [mp_schedStack + rax * 8]
+
+    # (The scheduler stack was loaded BEFORE the CR3 switch above — see the
+    # long note there. It used to happen here, which left ~45 instructions
+    # running with interrupts on and RSP pointing at a stack the active address
+    # space no longer contained.)
 overSetESP:
 
     # push RAX which has the apic_id, so that it is available when we get back from scheduling
@@ -307,6 +393,29 @@ overRestoreCR3:
 # (I expected to not have to push SS:RSP for a same-priv-level return but I
 # have to anyways — long mode always pushes/pops all 5, so save/restore stays
 # symmetric.)
+    # ── THE EXIT IS ATOMIC FROM HERE TO THE IRETQ (2026-08-10) ──────────
+    # Everything below builds the 5-QWORD frame the iretq consumes, then
+    # releases BOTH shields: _write_eoi drops the APIC's in-service hold and
+    # the store to mp_inScheduler drops the software guard.  With IF=1 that
+    # left a three-instruction landing strip for every scheduler interrupt
+    # that had gone pending during the pass — a full nested entry that saved
+    # this half-built exit as the outgoing thread's state.  That was THE
+    # magnet (SCHEDULER_REENTRANCY.md); the whole corruption zoo hung off it.
+    #
+    # cli here, and not one sti before the iretq: the iretq restores the
+    # resumed thread's own IF from the frame, atomically, so a tick that
+    # went pending during the pass now delivers AFTER the return — into a
+    # fresh scheduler entry with a clean frame, which is the correct meaning
+    # of "a tick was pending."
+    #
+    # WHY NOT cli FOR THE WHOLE PASS (asked and answered, do not resurrect):
+    # the LAPIC's IRR holds exactly ONE pending instance per vector, so a
+    # long IF=0 span collapses every tick that lands inside it into one.  A
+    # full-pass CLI was tried historically and lost clock ticks in bulk.
+    # This window is about a dozen instructions; the clock only notices if
+    # the host stalls INSIDE it for more than two tick periods.
+    cli
+
     mov rbx, [mp_isrSavedSS + rax * 8]
     push rbx
 	mov rbx, [mp_isrSavedRSP + rax * 8]
@@ -404,7 +513,24 @@ overScheduleTestRIP:
 	jmp scheduler_continue_2
 scheduler_halt_and_catch_a_coffee2:
 	# If you got here then mp_inScheduler should have been true, BUT it was false!  Illogical.  Find it and fix it!
-	jmp scheduler_halt_and_catch_a_coffee2
+	#
+	# It used to spin here forever, silently — and after the cli above that
+	# would be a mute hard hang, the worst possible ending for a tripwire.
+	# Say so instead.  panic_no_shutdown, NOT panic: reaching this label means
+	# the scheduler's own state is provably corrupt (somebody cleared a guard
+	# that only we may clear), and the orderly-shutdown path would ask that
+	# same broken machinery to walk itself to the door.  Print and halt.
+	#
+	# Calling C from raw asm, three requirements: RDI/RSI are the SysV
+	# argument registers (apic_id becomes the %u), RSP must be 16-byte aligned
+	# at the call — free to clobber, since nothing here returns — and AL must
+	# carry the count of vector registers used by a varargs call, which is 0.
+	mov rsi, rax                       # apic_id → the format's %u
+	lea rdi, [rip + hcf2_panic_msg]
+	and rsp, -16                       # SysV alignment; we never come back
+	xor eax, eax                       # varargs: zero vector regs used
+	call panic_no_shutdown
+	jmp scheduler_halt_and_catch_a_coffee2   # unreachable; the old behavior if panic ever returns
 scheduler_continue_2:
 
 	mov rbx, [mp_isrSavedRBX + rax * 8]
@@ -427,3 +553,8 @@ temp_rsp:
 	.rept 24
 	.quad 8
 	.endr
+
+# The coffee trap's dying words (scheduler_halt_and_catch_a_coffee2).  Written
+# out here rather than inline so the exit path stays readable.
+hcf2_panic_msg:
+	.asciz "SCHEDULER: core %u reached the iretq with mp_inScheduler ALREADY CLEAR — the guard was dropped by someone who does not own it. Scheduler state is not trustworthy; halting. See SCHEDULER_REENTRANCY.md.\n"

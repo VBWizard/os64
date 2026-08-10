@@ -86,7 +86,8 @@ void initialize_idt() {
 	set_idt_entry(0x13, (uint64_t)&simd_fpu_handler, 0x28, 0x8E);             // #XM
 
     // Set IRQ handlers
-    set_idt_entry(0x20, (uint64_t)&handler_irq0_asm, 0x28, 0x8E); // IRQ0 (PIT)
+    set_idt_entry(0x20, (uint64_t)&handler_irq0_asm, 0x28, 0x8E); // IRQ0 (PIT) — legacy PIC vector, live until remap_irq0_to_apic() switches us to the IOAPIC
+    set_idt_entry(IRQ0_APIC_VECTOR, (uint64_t)&handler_irq0_asm, 0x28, 0x8E); // IRQ0 via IOAPIC, promoted to the top of the priority map (see smp_core.h)
     set_idt_entry(0x21, (uint64_t)&handler_irq1_asm, 0x28, 0x8E); // IRQ1 (Keyboard), legacy-PIC vector
     set_idt_entry(0x2C, (uint64_t)&handler_irq12_asm, 0x28, 0x8E); // IRQ12 (PS/2 mouse), legacy-PIC vector
 
@@ -106,7 +107,7 @@ void initialize_idt() {
 	set_idt_entry(IPI_ENABLE_SCHEDULING_VECTOR, (uint64_t)&vector125, 0x28, 0x8E);		// AP Enable IPI
 	set_idt_entry(IPI_TIMER_SCHEDULE_VECTOR, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// AP Scheduler (timer ISR)
 	set_idt_entry(IPI_AP_INITIALIZATION_VECTOR, (uint64_t)&vector127, 0x28, 0x8E);		// AP Initialization IPI
-	set_idt_entry(IPI_MANUAL_SCHEDULE_VECTOR, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// Scheduling IPI (calls same method as the vector158 AP Scheduler)
+	set_idt_entry(IPI_MANUAL_SCHEDULE_VECTOR, (uint64_t)&_schedule_ap, 0x28, 0x8E);		// Scheduling IPI — same handler as the timer vector above, and deliberately in the SAME LAPIC priority class (see smp_core.h)
 
     // Load IDT
     asm volatile ("lidt %0" : : "m" (kIDTPtr));
