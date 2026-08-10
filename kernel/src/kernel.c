@@ -61,6 +61,7 @@ extern bool kEnableRamdisk;
 extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch block below
 extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
+extern bool kRunTestrun; // launch /bin/testrun, the ring-3 half of the suite
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestShutdown;  // SHUTDOWNTEST: run the full shutdown descent post-tests
 bool kEnableSMP = true;
@@ -591,6 +592,33 @@ void kernel_init()
         // answers a knock like any other terminal.
     }
     
+    // The ring-3 half of the suite (TESTRUN, 2026-08-10). It lives out here and
+    // not in test_run_postboot() for the reason it was extracted in the first
+    // place: these fixtures test whether a PROGRAM runs, exits, and hands back
+    // the right code, and the only honest way to ask that is from a program.
+    // It has to come AFTER the husk block — testrun's own output goes to the
+    // console, and the terminals are seated up there.
+    //
+    // autoReap is set deliberately, and it is the OPPOSITE of the rule the
+    // in-kernel fixtures follow: those poll `exited`/`retVal` off the corpse,
+    // so kworker must not bury it out from under them (test_main.c's
+    // test_spawn/test_release, 2026-08-09). Nothing here reads testrun's
+    // corpse — the verdict comes back on the wire from testrun itself — so
+    // handing kworker the licence immediately is right, and skipping it would
+    // leave a permanent zombie that `ps` would report forever.
+    if (kRunTestrun && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/testrun (ring-3 test suite) ...\n");
+        task_t *testrunTask = task_create("/bin/testrun", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (testrunTask)
+        {
+            testrunTask->autoReap = true;
+            scheduler_submit_new_task(testrunTask);
+        }
+        else
+            printf("  /bin/testrun launch failed (not on the image?)\n");
+    }
+
     // The GUI is strictly optional (DOS/Windows relationship): without the GUI
     // cmdline flag we run tests and shut down exactly as before. With it, the
     // desktop owns the machine — start the compositor and park the kernel task

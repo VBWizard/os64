@@ -42,6 +42,16 @@ bool kRunKeytest = false;
 // Launch /bin/husk (the shell) from the boot flow and keep the system up. This
 // is the real "launch the shell" path; the HELLO/KEYTEST temps fold into it.
 bool kRunHusk = false;
+// TESTRUN: launch /bin/testrun (the ring-3 half of the suite) once the boot
+// flow is done. The in-kernel suite can only test what the kernel can see;
+// the fixtures that answer "does a program actually run, exit, and hand back
+// the right code" had to become a PROGRAM, so they moved out here. Off by
+// default and flag-gated like TESTPANIC/SHUTDOWNTEST — it spawns and waits on
+// a dozen fixtures, which is not something an interactive boot should pay for.
+// Its verdict line ("TESTRUN: N passed, M failed, K skipped") goes to the
+// serial wire via klog, so an unattended A/B run can grep it — which is the
+// entire reason the A/B harness limine entry exists.
+bool kRunTestrun = false;
 // LOGD=<path>: the file a ring-3 log daemon should append the kernel log to.
 // Non-empty means TWO things, and both matter from the very first log line:
 // the kernel launches /bin/logd with this path as soon as a filesystem exists
@@ -157,6 +167,7 @@ static cmdopt_t cmdopts[] = {
     {"HELLO", OPT_BOOL, &kRunHello, true, 0},
     {"KEYTEST", OPT_BOOL, &kRunKeytest, true, 0},
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
+    {"TESTRUN", OPT_BOOL, &kRunTestrun, true, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
     {"SCHED", OPT_STRING, kSchedParam, 0, sizeof(kSchedParam)},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
