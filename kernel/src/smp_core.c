@@ -47,7 +47,7 @@ volatile uint64_t kDiagSettleMaxSpins = 0;
 volatile uint64_t kDiagSettleLastLateAPIC = 0;
 // Sampled by every scheduler pass ON ITS OWN CORE (LAPIC is core-local):
 // which vector is actually in service (names the interrupt that drove the
-// pass — timer 0x7E vs manual 0x81 vs something unexpected), and the LVT
+// pass — timer 0x7E vs manual 0x7A vs something unexpected), and the LVT
 // timer register (is the mask bit REALLY set on this implementation?).
 volatile uint32_t kDiagLastVector[MAX_CPUS] = {0};
 volatile uint32_t kDiagLVT[MAX_CPUS] = {0};
@@ -675,16 +675,55 @@ void mpAcctSettleAll(void)
         send_ipi(apic_id, IPI_ACCT_SETTLE_VECTOR, 0, 1, 0);
     }
 
-    // Bounded wait for the acks: a wedged core must cost us staleness,
-    // never a hang — its books just stay one settle behind, which is
-    // exactly the pre-IPI status quo for that core.
+    // NEVER WAIT FOR AN INTERRUPT-DELIVERED ANSWER WITH INTERRUPTS OFF.
+    // (2026-08-10, diagnosed from a guest Chris paused mid-freeze — four cores,
+    // every one accounted for.)
+    //
+    // The ack below can only arrive by the target SERVICING acct_settle_ISR.
+    // If we spin for it with IF=0, we have asked for a message we have
+    // forbidden ourselves to receive. And every caller of this function is in
+    // procfs — i.e. inside a syscall — where SFMASK (smp_core.c ~line 461,
+    // bit 9 = IF) masks interrupts for the WHOLE syscall. So the wait was
+    // ALWAYS running interrupts-off.
+    //
+    // With two cores reading /proc at once (one `top` refresh overlapping
+    // another, which is the normal case, not the rare one) it is a textbook
+    // mutual deadlock: core A clears B's ack and spins, core B clears A's ack
+    // and spins, and NEITHER can take the other's IPI. The frozen guest showed
+    // it exactly — CPU0 and CPU3 both parked at this loop with IF=0,
+    // mp_acctSettleAck[0] and [3] both false, each waiting on the other. The
+    // machine only recovered because the spin was BOUNDED: ~10-20 seconds of
+    // every core wedged (CPU1 and CPU2 piled up behind the scheduler lock),
+    // and then life resumed as if nothing happened. The bound was the only
+    // thing standing between this and a dead OS.
+    //
+    // The fix is not a bigger bound or a cleverer wait — it is to notice that
+    // this function ALREADY documents the correct fallback: "a wedged core
+    // must cost us staleness, never a hang." So when we cannot receive the
+    // ack, we do not ask for it. The IPIs above still went out; the remote
+    // cores still settle as soon as they next take an interrupt; the reader
+    // just renders books that are one settle-round old — which is precisely
+    // the freshness proc_gen_cores already accepts for its other fields
+    // ("worst case one slice stale", procfs.c).
+    //
+    // `flags` is the CALLER's RFLAGS, captured above before our own cli.
+    if (!(flags & 0x200))
+        return;                                         // IF was off — send-and-go
+
+    // Interrupts were on, so an ack can actually reach us: bounded wait, and
+    // the bound is a SAFETY NET, not a budget. A core that answers at all
+    // answers in microseconds; anything longer means it is busy with IF=0
+    // (a syscall of its own), and waiting out its syscall buys staleness we
+    // already said we would rather have. The old 2,000,000 was sized as if
+    // spinning were free — under an emulator that traps pause loops it is
+    // tens of seconds.
     for (int i = 0; i < kMPCoreCount; i++)
     {
         uint32_t apic_id = kCPUInfo[i].apicID;
         if (apic_id == self)
             continue;
         uint64_t spins = 0;
-        while (!mp_acctSettleAck[apic_id] && ++spins < 2000000UL)
+        while (!mp_acctSettleAck[apic_id] && ++spins < 50000UL)
             __builtin_ia32_pause();
         if (spins > kDiagSettleMaxSpins)                // TEMP DIAG
             kDiagSettleMaxSpins = spins;                // TEMP DIAG
