@@ -304,9 +304,10 @@ void kernel_init()
 
 	ap_initialization_handler();
 
-	// Route the PIT through the IOAPIC at the PROMOTED vector, not its legacy
-	// 0x20 — the clock has to be able to preempt a scheduler pass or it loses
-	// every tick that lands in one (see IRQ0_APIC_VECTOR in smp_core.h).
+	// Route the PIT through the IOAPIC. The vector is named rather than
+	// hard-coded because moving it is a live question, not a settled one — the
+	// constant carries the whole story of the 2026-08-10 attempt and why it
+	// came back (see IRQ0_APIC_VECTOR in smp_core.h).
 	remap_irq0_to_apic(IRQ0_APIC_VECTOR);
 
 	// Keyboard IRQ1 rides the IOAPIC too — unconditionally, GUI or not.

@@ -34,33 +34,54 @@
 // ≥0x40 REQUIRED: AP TPR is 0x30, lower vectors silently never fire there.
 #define IPI_ACCT_SETTLE_VECTOR 0x82
 
-// THE WALL CLOCK OUTRANKS EVERYTHING (2026-08-10).
+// IRQ0's vector, and the headstone of an attempt to move it (2026-08-10).
 //
-// The LAPIC decides who may preempt whom by PRIORITY CLASS = vector >> 4, and
-// IRQ0 spent os64's whole life at its legacy PC/AT vector 0x20 — class 2,
-// nearly the LOWEST thing in the machine. That is an inversion of the original
-// design, not an inheritance of it: on the 8259, IRQ0 was priority ZERO, the
-// highest interrupt in the PC/AT, deliberately, because timekeeping must never
-// be starved. The APIC changed priority from a wire position to a function of
-// the vector number, IRQ0 kept 0x20 out of inertia, and the system clock was
-// silently demoted to the bottom.
+// TRIED AND REVERTED THE SAME DAY. Do not re-promote this without reading the
+// whole note — the idea is sound, the measurement was real, and it still broke
+// a supported hypervisor outright.
 //
-// The cost was real and measured: a scheduler pass holds ISR class 7, so IRQ0
-// at class 2 could not be delivered for the ENTIRE pass, and the LAPIC's IRR
-// holds exactly ONE pending instance per vector — so every tick that landed in
-// a long pass after the first was simply lost. Chris measured ~30 seconds of
-// skew against the host clock in a few minutes of periodic-mode soak, and the
-// same lost ticks made `top` (which refreshes on tick counts) visibly sluggish.
+// THE ARGUMENT FOR MOVING IT: LAPIC delivery is arbitrated by priority CLASS
+// (vector >> 4), so 0x20 puts the wall clock at class 2 — nearly the lowest
+// thing in the machine. That is an inversion of the original design rather than
+// an inheritance of it: on the 8259 IRQ0 was priority ZERO, the highest
+// interrupt in the PC/AT, deliberately, because timekeeping must never be
+// starved. The APIC turned priority into a function of the vector number, IRQ0
+// kept its legacy vector out of inertia, and the clock was silently demoted.
+// The cost is measurable: a scheduler pass holds ISR class 7, so IRQ0 cannot be
+// delivered for the whole pass, and the IRR holds exactly ONE pending instance
+// per vector — every tick landing in a long pass after the first is destroyed,
+// not delayed. Chris measured ~30s of skew in minutes of periodic-mode soak.
 //
-// 0xE0 = class 14: above every device IRQ and every IPI we route, below the
-// spurious vector. Safe at that height precisely because handler_irq0_timer.S
-// is a true micro-handler — three `lock inc`s on globals nobody else owns, no
-// locks, no subsystem state — so it can nest into anything that is not `cli`,
-// and it cannot nest into itself (same vector, ISR bit).
+// WHAT HAPPENED WHEN IT MOVED TO 0xE0 (class 14): QEMU was fine — 24+19 green,
+// clock healthy, e1000 INTx probe confirmed on GSI 20. VBox froze at boot. The
+// e1000's INTx probe reported EVERY candidate GSI silent, on both emulated card
+// models, and the OS then wedged at scheduler start. A DIRECTLOG boot produced
+// the decisive reading: kTicksSinceStart climbed normally to 560, and then all
+// nine "GSI n stayed silent" lines carry the SAME timestamp, 597, across ~4.5
+// seconds of wall clock. The clock did not merely slow — it STOPPED, and with
+// it every other interrupt.
 //
-// NOTE: the IDT keeps its entry at 0x20 as well. Before remap_irq0_to_apic()
-// runs, IRQ0 still arrives from the legacy PIC at 0x20.
-#define IRQ0_APIC_VECTOR 0xE0
+// That signature is one specific hardware state: a LAPIC ISR bit that is set
+// and never cleared. With a class-14 bit stuck, PPR pins at 0xE0 and everything
+// below is blocked forever — the NIC at class 4, the scheduler at class 7, and
+// IRQ0 itself (a vector cannot re-deliver while its own ISR bit is set). One
+// condition, every symptom.
+//
+// THE LESSON, and the reason this note is long: the promotion almost certainly
+// did not CREATE that stuck bit — it made an old one lethal. At class 2 a stuck
+// ISR bit blocks almost nothing and hides indefinitely; at class 14 it stops the
+// machine. See the DEBTS row on the EOI window in ioapic_adopt_isa_irq for one
+// mechanism that can strand exactly such a bit, found by inspection during this
+// hunt (it does not by itself explain why 0x20 survives, so it is a lead, not a
+// verdict). Proving the cause needs one reading: LAPIC ISR (0x100..0x170) on a
+// wedged guest, looking for a set bit at the promoted vector.
+//
+// THE REAL FIX is not a different vector. Nothing high enough to outrank the
+// scheduler's class 7 can avoid outranking devices at class 4, so this whole
+// class of hazard is inherent to promoting an interrupt-counted clock. Stop
+// COUNTING interrupts and READ a counter (TSC/HPET clocksource) — the DEBTS row
+// carries the argument — and IRQ0's priority stops mattering at all.
+#define IRQ0_APIC_VECTOR 0x20
 void mpAcctSettleAll(void);
 #define ENABLE_TIMER(val) (val & ~(1U << APIC_LVT_MASK_BIT))
 #define DISABLE_TIMER(val) (val | (1U << APIC_LVT_MASK_BIT))

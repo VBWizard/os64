@@ -144,8 +144,8 @@ uint32_t apicGetHZ() {
     // The 32 here is a DON'T-CARE vector, not IRQ0: this is a one-shot armed
     // with a count of 0xFFFFFFFF that we stop long before it could expire, so
     // the handler is never entered. It reads as "vector 0x20" purely by
-    // coincidence of the decimal literal — noted 2026-08-10 when IRQ0 moved off
-    // 0x20 (see IRQ0_APIC_VECTOR) and this line briefly looked load-bearing.
+    // coincidence of the decimal literal — noted 2026-08-10, when an attempt to
+    // move IRQ0 off 0x20 briefly made this line look load-bearing. It isn't.
     apicWriteRegister(APIC_REGISTER_LVT_TIMER, (32 | APIC_TIMER_MODE_ONESHOT) & ~0x10000);
     // Tell APIC timer to use divider 16
     apicWriteRegister(APIC_REGISTER_TIMER_DIV, 0x11);

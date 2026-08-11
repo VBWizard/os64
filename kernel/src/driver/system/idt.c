@@ -86,8 +86,13 @@ void initialize_idt() {
 	set_idt_entry(0x13, (uint64_t)&simd_fpu_handler, 0x28, 0x8E);             // #XM
 
     // Set IRQ handlers
-    set_idt_entry(0x20, (uint64_t)&handler_irq0_asm, 0x28, 0x8E); // IRQ0 (PIT) — legacy PIC vector, live until remap_irq0_to_apic() switches us to the IOAPIC
-    set_idt_entry(IRQ0_APIC_VECTOR, (uint64_t)&handler_irq0_asm, 0x28, 0x8E); // IRQ0 via IOAPIC, promoted to the top of the priority map (see smp_core.h)
+    // IRQ0 (PIT). One entry covers both delivery paths today because
+    // IRQ0_APIC_VECTOR is 0x20: the legacy PIC vector before
+    // remap_irq0_to_apic() runs, and the IOAPIC vector after. If that constant
+    // ever moves off 0x20 again (see its headstone in smp_core.h — it was tried
+    // and reverted 2026-08-10), a SECOND entry is required here, because the
+    // legacy PIC path still needs 0x20 during early boot.
+    set_idt_entry(IRQ0_APIC_VECTOR, (uint64_t)&handler_irq0_asm, 0x28, 0x8E);
     set_idt_entry(0x21, (uint64_t)&handler_irq1_asm, 0x28, 0x8E); // IRQ1 (Keyboard), legacy-PIC vector
     set_idt_entry(0x2C, (uint64_t)&handler_irq12_asm, 0x28, 0x8E); // IRQ12 (PS/2 mouse), legacy-PIC vector
 

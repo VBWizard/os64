@@ -194,13 +194,33 @@ definition the highest — so properly-nested handlers always clear their own.
 The scheduler's shield can only be stolen by something delivered *below* its
 class, which the LAPIC will not do.
 
-### Follow-on — SHIPPED 2026-08-10, same day: promote IRQ0
-**Result:** the clock no longer loses ticks to scheduler passes, and Chris's
-8-minute periodic soak (top + 4 hogs) ran with zero pauses and zero crashes.
-Residual loss is ~2% (≈6s over 290s) and is NOT a priority problem — it is
-IF=0 windows, dominated by SFMASK clearing IF for the whole of every syscall.
-Booked in DEBTS.md with both candidate cures (lost-tick compensation vs. a
-read-a-counter clocksource). The original reasoning follows.
+### Follow-on — TRIED AND REVERTED 2026-08-10: promote IRQ0
+**Do not re-attempt from this section alone** — the argument below is sound and
+the outcome was still a frozen hypervisor. The authoritative postmortem is the
+`IRQ0_APIC_VECTOR` headstone in `kernel/include/smp_core.h`; the DEBTS row
+carries the remaining work.
+
+**What happened:** promoted 0x20 (class 2) → 0xE0 (class 14). QEMU was perfect —
+24+19 green both modes, healthy clock, e1000 INTx confirmed on GSI 20. **VBox
+froze at boot**: the e1000 probe reported every candidate GSI silent, on both
+emulated card models, and the OS wedged at scheduler start. A DIRECTLOG boot
+gave the decisive reading — `kTicksSinceStart` climbed normally to 560, then all
+nine "GSI n stayed silent" lines carried the SAME timestamp, 597, across ~4.5
+seconds of wall clock. The clock did not slow; it STOPPED, and every other
+interrupt with it. That is the signature of a **stuck LAPIC ISR bit**: at class
+14 it pins PPR and blocks the NIC (class 4), the scheduler (class 7), and IRQ0
+itself. Almost certainly not a bug the promotion created — one it made lethal,
+since a stranded bit at class 2 blocks nothing anyone would notice.
+
+**The transferable lesson:** raising an interrupt's priority does not merely
+speed it up, it changes what a pre-existing fault can reach. And no vector high
+enough to outrank the scheduler's class 7 can avoid outranking devices at class
+4, so this hazard is inherent to promoting an interrupt-COUNTED clock. The
+answer is to stop counting interrupts and read a counter.
+
+The good half of this section — the diagnosis of why ticks are lost at all —
+remains correct and is why the DEBTS row still exists. The original reasoning
+follows.
 
 
 The clock is class 2 — nearly the lowest-priority thing in the machine — so
