@@ -20,6 +20,7 @@ extern volatile uint64_t kUptime;
 extern volatile uint64_t kTicksSinceStart;
 extern volatile bool kFBInitDone;
 extern bool kOverrideFileLogging;
+extern bool kDirectLog;   // DIRECTLOG: bypass the queues, write COM1 polled (kernel_commandline.c)
 extern bool kEnableSMP;
 extern volatile bool kSchedulerInitialized;
 
@@ -78,7 +79,12 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
     va_end(args);
 
 #if ENABLE_LOG_BUFFERING == 1
-    if (kLoggingInitialized)
+    // kDirectLog (DIRECTLOG on the cmdline) forces the `else` branch below for
+    // the whole boot — see kernel_commandline.c for why that branch is worth
+    // having as a MODE and not just as a bootstrap leftover: logd is a task, so
+    // the queue cannot drain until the scheduler runs, and a boot that dies
+    // before then takes its own explanation with it.
+    if (kLoggingInitialized && !kDirectLog)
     {
 		size_t msg_len = strlen(print_buf);
 		size_t offset = 0;

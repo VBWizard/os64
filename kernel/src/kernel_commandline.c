@@ -52,6 +52,26 @@ bool kRunHusk = false;
 // serial wire via klog, so an unattended A/B run can grep it — which is the
 // entire reason the A/B harness limine entry exists.
 bool kRunTestrun = false;
+// DIRECTLOG: printd writes STRAIGHT to COM1 with the polled writer, bypassing
+// the per-core queues entirely.
+//
+// The queues are the right design and stay the default — but they have one
+// blind spot, and it is precisely the spot you need a log most. The backlog is
+// drained by logd, and logd is a TASK: it cannot run until the scheduler does.
+// So a boot that dies at or before scheduler start emits only the handful of
+// lines written before kLoggingInitialized flipped, and then goes silent
+// forever. That is not a hypothetical — it is exactly what a VBox boot freezing
+// after the pre-boot tests looks like (2026-08-10): five lines at timestamp 0,
+// ending mid-init, twice, with the real story never reaching the wire.
+//
+// This flag makes the pre-init bootstrap path — which already existed, as the
+// `else` branch below kLoggingInitialized — available for the whole boot. It is
+// SLOW on purpose: polled 16550 writes at 115200 baud, no batching, the calling
+// core spinning on THRE for every byte. That is a terrible way to run an OS and
+// a superb way to debug one, because a line that reached the wire cannot be lost
+// by whatever dies next. Never a default; reach for it when the machine stops
+// talking.
+bool kDirectLog = false;
 // LOGD=<path>: the file a ring-3 log daemon should append the kernel log to.
 // Non-empty means TWO things, and both matter from the very first log line:
 // the kernel launches /bin/logd with this path as soon as a filesystem exists
@@ -168,6 +188,7 @@ static cmdopt_t cmdopts[] = {
     {"KEYTEST", OPT_BOOL, &kRunKeytest, true, 0},
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"TESTRUN", OPT_BOOL, &kRunTestrun, true, 0},
+    {"DIRECTLOG", OPT_BOOL, &kDirectLog, true, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
     {"SCHED", OPT_STRING, kSchedParam, 0, sizeof(kSchedParam)},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
