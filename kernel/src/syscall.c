@@ -1361,6 +1361,39 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (got <= 0)
 		return 0;   // EOF (pipe) or nothing (console)
 
+	// THE TRUST BOUNDARY (added 2026-08-10). Every case above got `want` as its
+	// limit and handed back a count, and until now the only thing asked of that
+	// count was that it not be negative. It is about to become the LENGTH OF A
+	// WRITE INTO RING-3 MEMORY — so a driver that returns more than it was given
+	// does not produce a wrong answer, it produces a buffer overrun in whatever
+	// called read(), which for the common `char line[N]` idiom means somebody's
+	// stack. The count also over-reads kbuf on the way out, so the bytes doing
+	// the smashing are whatever happened to be in the bounce block.
+	//
+	// This is NOT the "clamp everything, everywhere" reflex — it is the one
+	// place where an integer returned by arbitrary filesystem code turns into a
+	// memory write in another privilege level, and the house has already been
+	// bitten by exactly this class once: nvme_vfs_write_disk was `void` behind a
+	// (void*) cast, returning whatever RAX held, and the fingerprint it left is
+	// still in SUCCESSION.md ("Root filesystem disk test failed: 4294967291").
+	// Every filesystem in the tree is audited clean today (synthfs clamps to its
+	// remaining bytes, and userland's readline is airtight); this makes the next
+	// one that isn't a bounded short read instead of a stack smash.
+	//
+	// Clamped rather than fatal ON PURPOSE: the clamp already makes it safe, and
+	// turning a survivable driver bug into a dead machine inside read() — the
+	// syscall EVERYTHING uses — is a bad trade. It is loud instead. If Chris
+	// would rather this panic, it is a one-line change.
+	if ((size_t)got > want)
+	{
+		printd(DEBUG_VFS | DEBUG_SYSCALL,
+		       "read: HANDLE TYPE %d RETURNED %ld BYTES FOR A %lu-BYTE REQUEST — "
+		       "driver contract violated, clamping (this would have overrun the "
+		       "caller's buffer)\n",
+		       (int)h->type, got, (unsigned long)want);
+		got = (long)want;
+	}
+
 	if (!copy_to_user_buffer(user_buffer, kbuf, (size_t)got))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
