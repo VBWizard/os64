@@ -67,11 +67,17 @@ typedef struct
 	uintptr_t kernel_interrupt_stack_base;  // Upper-half kernel stack for CR3 switching
 	uintptr_t kernel_interrupt_stack_top;   // Top of kernel interrupt stack
 
-	// cikc = call_in_kernel_context (vma.c context switching scratch space)
-	void (*cikc_saved_func)(void*);
-	void *cikc_saved_arg;
-	uint64_t cikc_saved_cr3;
-	uint64_t cikc_saved_rsp;
+	// (Here lay cikc_saved_func/arg/cr3/rsp — the old C call_in_kernel_context's
+	// per-CORE scratch, deleted 2026-08-10 with zero references left in the tree.
+	// They are worth a headstone rather than a silent removal, because the reason
+	// they had to die is a rule: per-CORE scratch cannot hold per-THREAD state
+	// across anything a thread can be preempted inside. A thread that stashed its
+	// CR3/RSP here and then resumed on a DIFFERENT core would restore whatever the
+	// last user of that core's slot had left. The asm rewrite (task_exit_asm.S)
+	// fixed this by keeping CR3 and RSP in callee-saved r14/r15, which the
+	// scheduler saves and restores PER THREAD, so they migrate with their owner.
+	// If you ever need scratch across a context switch again: registers the
+	// scheduler preserves, or the thread struct — never CLS.)
 
 	// syscall_Enter's stash for the user RSP between "SYSCALL landed" and "we're
 	// on the kernel stack" (syscall.S).  GS-relative so the entry stub never has
