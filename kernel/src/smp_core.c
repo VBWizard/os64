@@ -10,6 +10,8 @@
 #include "gdt.h"
 #include <stdint.h>
 #include "serial_logging.h"
+#include "sprintf.h"   // snprintf — the settle tripwire's line formatter
+#include "exception_report.h"   // exception_wire_lock — the tripwire narrates atomically
 #include "kmalloc.h"
 #include "kernel.h"
 #include "time.h"
@@ -645,6 +647,63 @@ void acct_settle_ISR(void)
     write_eoi();
 }
 
+// ── The settle-loop tripwire (2026-08-11) ──────────────────────────────────
+//
+// Born from a real corpse: a soak crash where kCPUInfo[i].apicID read
+// 0xfeb80000 — an e1000 BAR address, not a core number — and the ack-clear
+// below dutifully computed mp_acctSettleAck + 0xfeb80000, which wraps to
+// 0x000000007ec63c30 and page-faulted. Same wrapped 0x7ec6xxxx address in a
+// crash one build earlier, so the poisoning RECURS; what we never got to see
+// is WHAT the rest of the table looked like at that moment, because the wild
+// write faulted first and took the evidence with it.
+//
+// So: validate before indexing, and when the poison IS there, dump the entire
+// kCPUInfo block before panicking. The dump is the actual product — a BAR
+// table, packet bytes, and allocator metadata all look completely different
+// in hex, and that fingerprint names the writer. Tripwires over silence.
+//
+// Every line goes DIRECT to the wire (printf reaches the glass): the heap is
+// by hypothesis corrupt, so nothing here may touch a log queue or allocate.
+#define SETTLE_TRIP_EMIT(fmt, ...) do { \
+        char _st_line[160]; \
+        snprintf(_st_line, sizeof(_st_line), fmt, ##__VA_ARGS__); \
+        printf("%s", _st_line); \
+        serial_print_string(_st_line); \
+    } while (0)
+
+static void __attribute__((noreturn)) settle_tripwire(int i, uint32_t apic_id)
+{
+    // One narrator per report (exception_report.h): the table dump below is
+    // ~30 lines of evidence, and a concurrent fault report braiding through
+    // it would cost exactly the fingerprint this tripwire exists to capture.
+    // The panic() at the end re-enters the lock and abandons it — no unlock
+    // juggling needed on a path that never returns.
+    exception_wire_lock();
+
+    SETTLE_TRIP_EMIT("\n>>> SETTLE TRIPWIRE: kCPUInfo[%d].apicID = 0x%08x — not a core, the table is poisoned <<<\n",
+                     i, apic_id);
+    SETTLE_TRIP_EMIT(">>> kCPUInfo=%p  kMPCoreCount=%u  MAX_CPUS=%u <<<\n",
+                     (void *)kCPUInfo, kMPCoreCount, MAX_CPUS);
+
+    // The whole table, entry by entry, 15 qwords each (sizeof(cpu_t)==120).
+    // Sanity-check the base pointer first — if kCPUInfo ITSELF is bent, say
+    // so instead of faulting mid-dump and truncating the report.
+    if (((uintptr_t)kCPUInfo >> 47) != 0x1FFFF) {
+        SETTLE_TRIP_EMIT(">>> kCPUInfo pointer is not a kernel address — the POINTER is what got hit <<<\n");
+    } else {
+        for (int e = 0; e < kMPCoreCount; e++) {
+            const uint64_t *q = (const uint64_t *)&kCPUInfo[e];
+            SETTLE_TRIP_EMIT("  [%d] %016lx %016lx %016lx %016lx\n", e, q[0], q[1], q[2], q[3]);
+            SETTLE_TRIP_EMIT("      %016lx %016lx %016lx %016lx\n", q[4], q[5], q[6], q[7]);
+            SETTLE_TRIP_EMIT("      %016lx %016lx %016lx %016lx\n", q[8], q[9], q[10], q[11]);
+            SETTLE_TRIP_EMIT("      %016lx %016lx %016lx\n", q[12], q[13], q[14]);
+        }
+    }
+
+    panic("settle tripwire: kCPUInfo poisoned (see table dump above) — the wild ack-write was refused\n");
+    __builtin_unreachable();
+}
+
 void mpAcctSettleAll(void)
 {
     // Rate limit: books fresher than one tick are fresh enough. A top
@@ -669,6 +728,11 @@ void mpAcctSettleAll(void)
     for (int i = 0; i < kMPCoreCount; i++)
     {
         uint32_t apic_id = kCPUInfo[i].apicID;
+        // The tripwire (see settle_tripwire above): a poisoned table entry
+        // must produce a table dump, not a wild byte-write at whatever
+        // address the poison happens to wrap to.
+        if (apic_id >= MAX_CPUS)
+            settle_tripwire(i, apic_id);
         if (apic_id == self)
             continue;
         mp_acctSettleAck[apic_id] = false;

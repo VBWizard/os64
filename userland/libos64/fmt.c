@@ -156,6 +156,48 @@ int32_t os64_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
 				const char *s = va_arg(args, const char *);
 				if (s == NULL)
 					s = "(null)";
+				// ── The poisoned-pointer tripwire (2026-08-11) ──────────
+				//
+				// Born from a soak mystery: twice, hours apart, a %s here
+				// arrived holding a SMALL INTEGER (3, then 4) instead of a
+				// string pointer — at a call site whose disassembly provably
+				// loads valid pointers three instructions before the call.
+				// Something outside this program is corrupting either an
+				// argument register or the vararg spill slot, and a plain
+				// segfault report cannot say WHICH. This can: it prints the
+				// va machinery's actual state — how far the register walk
+				// got and what all six spill slots hold — then substitutes a
+				// visible marker and KEEPS GOING, so every occurrence yields
+				// an autopsy instead of a corpse and the program survives to
+				// be struck again.
+				//
+				// 0x10000 is a safe poison floor: no legitimate string lives
+				// below 64KB in any os64 process (images load at 0x04400000,
+				// stacks higher still). Remove the whole block when the
+				// corruptor is caught and shot.
+				if ((uintptr_t)s < 0x10000)
+				{
+					// x86-64 SysV va_list innards: one struct, gp_offset is
+					// how many bytes of the 48-byte GPR save area (rdi, rsi,
+					// rdx, rcx, r8, r9 — in that order) have been consumed.
+					// Our va_arg already ran, so the poisoned slot is at
+					// gp_offset - 8.
+					typedef struct {
+						unsigned int gp_offset, fp_offset;
+						void *overflow_arg_area, *reg_save_area;
+					} va_tag_t;
+					const va_tag_t *tag = (const va_tag_t *)args;
+					const uint64_t *save = (const uint64_t *)tag->reg_save_area;
+					os64_printf("\n[fmt tripwire] %%s pointer POISONED: 0x%lx (fmt \"%s\")\n",
+					            (uint64_t)(uintptr_t)s, fmt);
+					os64_printf("[fmt tripwire] gp_offset=%u (poisoned slot at %u)\n",
+					            tag->gp_offset, tag->gp_offset - 8);
+					os64_printf("[fmt tripwire] save area: rdi=%016lx rsi=%016lx rdx=%016lx\n",
+					            save[0], save[1], save[2]);
+					os64_printf("[fmt tripwire]            rcx=%016lx r8 =%016lx r9 =%016lx\n",
+					            save[3], save[4], save[5]);
+					s = "(POISONED-PTR)";
+				}
 				size_t len = 0;
 				while (s[len])
 					len++;
