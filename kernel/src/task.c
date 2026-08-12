@@ -560,9 +560,44 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 // access locals through the old task-stack rbp, which is not mapped after the
 // CR3 switch. noinline is mandatory (inlining would defeat the whole point).
 // Never returns.
-static void __attribute__((noinline)) task_exit_finish(void)
+// ── THE STACK-COLLISION FIX (2026-08-12): teardown split from the last breath ─
+//
+// task_exit used to switch onto the CURRENT CORE's kernel interrupt stack
+// FIRST and then run the entire teardown there — siblings, tty, and
+// handle_close_all with its honest disk I/O. A blocking close SLEEPS the
+// thread mid-teardown; the wake requeues it RUNNABLE; and whichever core
+// dispatches it next resumes the teardown STILL STANDING ON THE ORIGINAL
+// CORE'S INTERRUPT STACK — while that core hands the very same stack to its
+// next exiting task. Two live contexts, one fixed stack, each stomping the
+// other's frames at deterministic offsets.
+//
+// That collision was THE stack poisoner (hunted 2026-08-11/12): top's %s
+// pointer arriving as 3-then-4, mpAcctSettleAll's loop index reading -29874,
+// the "kCPUInfo BAR poisoning" that was never the table, the 0x7ec6xxxx
+// wrapped-write fatals — all one bug. Convicted by frozen-guest forensics on
+// Chris's farm: CPU5 caught live, executing this very teardown with RSP
+// inside CORE 0's interrupt stack while CLS[5] named its own, and the
+// stomped settle frame six lines below it on the same page.
+//
+// The cure is structural: teardown is ORDINARY SYSCALL WORK and now runs as
+// exactly that — on the thread's own kernel stack (which lives in the task's
+// address space and travels with the thread through any sleep/wake/migration,
+// like every other syscall's), under the task's CR3 (the shared upper half
+// carries every kernel structure teardown touches). Only the LAST BREATH —
+// zombie mark, scheduler trigger, halt — needs to outlive the task's address
+// space, and THAT is all the per-core interrupt stack carries now: a handful
+// of non-blocking, interrupts-disabled instructions with no window to
+// migrate in and nothing worth stomping.
+
+/// @brief Phase 1 of dying: everything blockable, in ordinary syscall context.
+///
+/// Runs on the calling thread's OWN kernel stack under the TASK's CR3 — it
+/// may sleep in the VFS and wake on another core like any read() does, and
+/// that is now safe by construction. Returns normally; task_exit then takes
+/// the last breath. (This is the body that used to be task_exit_finish,
+/// minus the finale.)
+static void __attribute__((noinline)) task_exit_teardown(void)
 {
-	// GS-based, valid regardless of RSP/CR3; frame is now on the kernel stack.
 	core_local_storage_t *cls = get_core_local_storage();
 
 	thread_t *thread = cls ? cls->currentThread : NULL;
@@ -616,14 +651,10 @@ static void __attribute__((noinline)) task_exit_finish(void)
 		printd(DEBUG_TASK | DEBUG_THREAD,
 		       "task_exit: thread 0x%08lx arrived after %s already died — retiring the thread only\n",
 		       thread ? thread->threadID : 0, task->exename);
-		// This thread genuinely IS retired now — "mark itself and get off the
-		// CPU" is the whole job on this path, so `exited` is true the instant
-		// before the trigger, which is exactly where it belongs.
-		if (thread)
-			thread->exited = true;
-		scheduler_trigger(cls);
-		while (1==1)
-			__asm__("sti\nhlt\n");
+		// Nothing left to tear down — return to task_exit, whose last breath
+		// marks `exited` and gets off the CPU. (This used to trigger and halt
+		// right here; the finale is one shared doorway now.)
+		return;
 	}
 
 	if (task) {
@@ -657,23 +688,40 @@ static void __attribute__((noinline)) task_exit_finish(void)
 		task_enqueue_dead_child(task);
 	}
 
+	// Teardown complete. `exited` is NOT set here anymore — it is the last
+	// breath's job (task_exit_last_breath), the one-way door armed only after
+	// this thread has left the task's stack for good.
+}
+
+/// @brief Phase 2 of dying: the last breath, on the per-core interrupt stack.
+///
+/// Runs with interrupts DISABLED, under the kernel CR3, and does exactly
+/// three non-blocking things: arm the one-way door (`exited` — the
+/// take-off-CPU branch in scheduler.c reads it and a zombie is never
+/// scheduled again), trigger the scheduler, and halt until it takes the
+/// corpse. NOTHING blockable is permitted on this stack — the stack belongs
+/// to the CORE, not the thread, and a context that sleeps here wakes on some
+/// other core still holding it. That was the stack poisoner; see the fix
+/// note above task_exit_teardown.
+static void __attribute__((noreturn, noinline)) task_exit_last_breath(void)
+{
+	// GS-based, valid regardless of RSP/CR3; frame is now on the kernel stack.
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *thread = cls ? cls->currentThread : NULL;
+
 	// RETIRED — and not one instruction sooner. Every consumer of this task's
-	// death has now been served (siblings told, handles closed, task->exited
-	// published, corpse enqueued), so there is genuinely nothing left for this
-	// thread to run and the scheduler may file it under ZOMBIE.
-	//
-	// This assignment is deliberately the LAST thing before the trigger, with
-	// nothing preemptible between them, because `exited` is a one-way door:
-	// the take-off-CPU branch in scheduler.c reads it and a zombie is never
-	// scheduled again. Anything placed between this line and the trigger would
-	// re-open the exact window that cost us the day.
+	// death has been served by the teardown (siblings told, handles closed,
+	// task->exited published, corpse enqueued), so there is genuinely nothing
+	// left for this thread to run and the scheduler may file it under ZOMBIE.
 	if (thread)
 		thread->exited = true;
 
 	// Enter the scheduler via its normal APIC-IPI path; it sees the exited
-	// flags set above and moves this thread to the zombie queue.  A dead
+	// flag set above and moves this thread to the zombie queue.  A dead
 	// thread is never rescheduled, so trigger's wait-loop (and the belt-and-
 	// suspenders hlt loop below) should never actually run to completion.
+	// The sti in the loop is the FIRST moment interrupts come back on — with
+	// the door already armed, the scheduler's next visit is the burial.
 	scheduler_trigger(cls);
 
 	while (1==1)
@@ -684,13 +732,26 @@ static void __attribute__((noinline)) task_exit_finish(void)
 
 void task_exit(void)
 {
+	// PHASE 1 — the whole blockable teardown, in ordinary syscall context on
+	// this thread's own kernel stack. It may sleep in the VFS and resume on
+	// any core; its stack travels with it, like every other syscall's.
+	task_exit_teardown();
+
+	// PHASE 2 — leave the task behind. Interrupts OFF before we so much as
+	// READ which core we are on: a preemption between choosing this core's
+	// interrupt stack and standing on it would let the thread migrate and
+	// stand on the WRONG core's stack — a one-instruction revival of the very
+	// bug this split fixes. They stay off until the last breath's final
+	// sti/hlt, by which point the one-way door is armed.
+	__asm__ volatile("cli");
+
 	core_local_storage_t *cls = get_core_local_storage();
 
-	// We're on the task's stack with the task's CR3 loaded; that stack lives at a
-	// task-local lower-half VA that is NOT mapped in kKernelPML4. Read the kernel
-	// interrupt stack top from CLS (via GS, valid under any CR3) while the task
-	// CR3 is still loaded, and 16-align it so the `call` below keeps the SysV
-	// stack alignment (rsp%16==8 at the callee's entry).
+	// We're on the task-side stack with the task's CR3 loaded; that stack
+	// lives at a task-local lower-half VA that is NOT mapped in kKernelPML4.
+	// Read the kernel interrupt stack top from CLS (via GS, valid under any
+	// CR3) while the task CR3 is still loaded, and 16-align it so the `call`
+	// below keeps the SysV stack alignment (rsp%16==8 at the callee's entry).
 	uintptr_t kernel_rsp = (cls->kernel_interrupt_stack_top - 16) & ~(uintptr_t)0xF;
 
 	// Switch RSP to the kernel stack, switch CR3 to kKernelPML4, then IMMEDIATELY
@@ -698,7 +759,7 @@ void task_exit(void)
 	// at -O0 rbp still points at the old task stack after the switch, so any C
 	// statement here would read/write an unmapped (or wrong) physical page. The
 	// `call` touches no C local — it pushes the return address onto the
-	// already-switched kernel stack, and task_exit_finish() builds its frame
+	// already-switched kernel stack, and task_exit_last_breath() builds its frame
 	// there. The callee is passed as an operand (indirect call) so we don't lean
 	// on an assembler symbol name. Never returns.
 	__asm__ volatile(
@@ -706,7 +767,7 @@ void task_exit(void)
 		"mov cr3, %1\n\t"
 		"call %2\n\t"
 		:
-		: "r"(kernel_rsp), "r"((uint64_t)kKernelPML4), "r"(task_exit_finish)
+		: "r"(kernel_rsp), "r"((uint64_t)kKernelPML4), "r"(task_exit_last_breath)
 		: "memory");
 
 	__builtin_unreachable();
