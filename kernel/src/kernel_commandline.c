@@ -72,6 +72,22 @@ bool kRunTestrun = false;
 // by whatever dies next. Never a default; reach for it when the machine stops
 // talking.
 bool kDirectLog = false;
+// NOTRACE: the kill switch on symbolized fault reports (stack_trace.c).
+//
+// ON by default, because a crash that names its own call chain is worth far
+// more than the few KB per program it costs. Off-switchable from day one for
+// one reason, and it is a good one (Chris's requirement, and I would have asked
+// for it): a crash reporter that can itself fault is the WORST possible bug —
+// it converts a diagnosable segfault into a triple fault with no output at all,
+// leaving you strictly worse off than printing nothing. Until the walker has
+// earned trust on real hardware, `NOTRACE` gets the machine back to the old
+// behavior without a rebuild.
+//
+// It gates the COST as well as the risk: with NOTRACE set, elf_load never reads
+// .symtab/.strtab at all, so a program pays nothing — no parse, no memory, no
+// walker. Same doctrine as SCHED=periodic and NOCACHE: every new mechanism
+// keeps its flashlight and its off switch.
+bool kEnableStackTrace = true;
 // LOGD=<path>: the file a ring-3 log daemon should append the kernel log to.
 // Non-empty means TWO things, and both matter from the very first log line:
 // the kernel launches /bin/logd with this path as soon as a filesystem exists
@@ -189,6 +205,7 @@ static cmdopt_t cmdopts[] = {
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"TESTRUN", OPT_BOOL, &kRunTestrun, true, 0},
     {"DIRECTLOG", OPT_BOOL, &kDirectLog, true, 0},
+    {"NOTRACE", OPT_BOOL, &kEnableStackTrace, false, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
     {"SCHED", OPT_STRING, kSchedParam, 0, sizeof(kSchedParam)},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},

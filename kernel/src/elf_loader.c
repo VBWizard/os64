@@ -1,5 +1,6 @@
 #include "elf_loader.h"
 #include "serial_logging.h"   // printd (elf_can_load traces why a spawn was refused)
+#include <stdbool.h>
 
 #include "CONFIG.h"
 #include "memory/kmalloc.h"
@@ -7,6 +8,9 @@
 #include "memory/mmap.h"
 #include "memory/vma.h"
 #include "paging.h"
+
+// NOTRACE's reach: when stack traces are off, no image pays for .symtab.
+extern bool kEnableStackTrace;
 
 /// @brief Align value down to the nearest page boundary.
 static inline uint64_t align_down(uint64_t value)
@@ -422,6 +426,8 @@ void elf_image_free(elf_image_t *image)
     }
     kfree(image->shdrs);
     kfree(image->shstrtab);
+    kfree(image->tracesyms);
+    kfree(image->tracestr);
     kfree(image->dynamic);
     kfree(image->symtab);
     kfree(image->strtab);
@@ -487,6 +493,10 @@ int elf_parse_image(vfs_file_t *file, elf_image_t **out_image,
     image->jmprel = NULL;
     image->jmprel_count = 0;
     image->needed_count = 0;
+    image->tracesyms = NULL;
+    image->tracesym_count = 0;
+    image->tracestr = NULL;
+    image->tracestr_size = 0;
 
     if (ehdr.e_shnum > 0 && ehdr.e_shentsize == sizeof(Elf64_Shdr)) {
         size_t shdr_bytes = ehdr.e_shnum * sizeof(Elf64_Shdr);
@@ -518,6 +528,48 @@ int elf_parse_image(vfs_file_t *file, elf_image_t **out_image,
                         kfree(shstrtab);
                     }
                 }
+            }
+        }
+
+        // .symtab + its string table, for naming addresses when this program
+        // faults (stack_trace.c). Both are OPTIONAL in every sense: a stripped
+        // binary has no SHT_SYMTAB, NOTRACE skips the work entirely, and any
+        // failure here leaves the pointers NULL and simply costs the program
+        // its names — never its load. A missing symbol table must not be a
+        // reason a program refuses to run.
+        if (kEnableStackTrace) {
+            for (Elf64_Half i = 0; i < ehdr.e_shnum; i++) {
+                if (shdrs[i].sh_type != SHT_SYMTAB || shdrs[i].sh_size == 0) {
+                    continue;
+                }
+                // sh_link names the SHT_STRTAB these symbols index into — the
+                // one thing that must be right, since a symbol name is an
+                // offset into it and nothing else can supply that.
+                if (shdrs[i].sh_link == SHN_UNDEF || shdrs[i].sh_link >= ehdr.e_shnum) {
+                    break;
+                }
+                Elf64_Shdr *symsec = &shdrs[i];
+                Elf64_Shdr *strsec = &shdrs[shdrs[i].sh_link];
+                if (strsec->sh_type != SHT_STRTAB || strsec->sh_size == 0 ||
+                    symsec->sh_entsize != sizeof(Elf64_Sym)) {
+                    break;
+                }
+
+                Elf64_Sym *syms = kmalloc(symsec->sh_size);
+                char *strs = kmalloc(strsec->sh_size);
+                if (syms != NULL && strs != NULL &&
+                    elf_read_at(file, symsec->sh_offset, syms, symsec->sh_size) &&
+                    elf_read_at(file, strsec->sh_offset, strs, strsec->sh_size)) {
+                    image->tracesyms = syms;
+                    image->tracesym_count = symsec->sh_size / sizeof(Elf64_Sym);
+                    image->tracestr = strs;
+                    image->tracestr_size = strsec->sh_size;
+                } else {
+                    // kfree(NULL) PANICS in os64 — guard both, every time.
+                    if (syms != NULL) kfree(syms);
+                    if (strs != NULL) kfree(strs);
+                }
+                break;   // one .symtab per image; ELF allows no more
             }
         }
     }

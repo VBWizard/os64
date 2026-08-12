@@ -37,6 +37,23 @@ typedef struct {
 
     char *needed[ELF_MAX_NEEDED];  // DT_NEEDED names, pointing into strtab
     size_t needed_count;
+
+    // FULL symbol table, for naming addresses in a fault report (stack_trace.c).
+    // DELIBERATELY SEPARATE from symtab/strtab above: those are the DYNAMIC
+    // tables (.dynsym/.dynstr, reached through DT_SYMTAB) and exist only to
+    // RESOLVE relocations — a static binary has none of them, and a static
+    // binary is exactly what every os64 program is today. These come from the
+    // section headers (.symtab and its SHT_STRTAB link) and exist only to turn
+    // an address back into a name.
+    //
+    // Read at LOAD time, never at fault time: the crash path may touch no
+    // filesystem (a trace that reads the disk deadlocks on its own cause when
+    // the disk is what died). Populated only when kEnableStackTrace is set, so
+    // NOTRACE costs a program exactly nothing.
+    Elf64_Sym *tracesyms;      // .symtab entries
+    size_t tracesym_count;
+    char *tracestr;            // the .strtab those entries name into
+    size_t tracestr_size;
 } elf_image_t;
 
 // One PT_LOAD segment's page-aligned placement within a dynamically-linked

@@ -58,6 +58,15 @@
 
 #define DEBUG_EVERYTHING ((__uint128_t)0xFFFFFFFFFFFFFFFFULL | ((__uint128_t)0xFFFFFFFFFFFFFFFFULL << 64))
 #define DEBUG_NOTHING 0x0000000000000000
+// DEBUG_EXCEPTIONS IS PERMANENTLY ON, and that is a ruling, not an accident
+// (Chris, 2026-08-10: "I can't imagine running without it"). It is a member of
+// DEBUG_MINIMAL_OPTIONS below, so EVERY configuration carries it — there is no
+// supported build where a fault goes unlogged. Two consequences worth knowing
+// before you touch it: other subsystems have deliberately borrowed this bit for
+// must-never-be-silent messages precisely because it is always lit (see the
+// note further down), and a fault report may therefore be written as a printd
+// without hedging about whether anyone will see it. If you ever make this
+// optional you are not saving a bit, you are making crashes invisible.
 #define DEBUG_EXCEPTIONS 1 << 0
 #define DEBUG_BOOT 1 << 1
 #define DEBUG_SMP 1 << 2
