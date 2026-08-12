@@ -131,6 +131,27 @@ bool kTestNmiProbe = false;
 // Kernel-mode and no VMA on purpose: that is the exact path a wild kernel
 // pointer takes, and the one Chris's soak fault took.
 bool kTestPageFault = false;
+// TESTGP: raise a deliberate #GP (a non-canonical dereference) right after the
+// post-boot tests — fourth member of the TESTPANIC family.
+//
+// It exists to prove the one specific thing the unified exception path was
+// built for: that a #GP reports ITS OWN registers. Under the old stubs, only
+// #PF captured registers, and every other vector printed whatever the last
+// page fault left behind — a bug that survived precisely because nobody ever
+// raised a #GP on purpose and checked. The test plants signature values in
+// RAX and R15 before faulting; if the report shows them, the capture is real.
+bool kTestGPFault = false;
+// EXCOLD: wire the pre-2026-08-11 per-vector exception stubs and reporters
+// instead of the unified path (exception_entry.S + exception_report.c).
+//
+// The fallback is a RUNTIME switch rather than a git revert for one reason: if
+// the new path is broken, the plausible failure mode is a fault inside the
+// fault reporter — no output at all — which is exactly when you cannot afford
+// a rebuild cycle to get a machine that talks. Boot EXCOLD, compare, diagnose.
+// Same doctrine as SCHED=periodic, NOCACHE, NOTRACE: every new mechanism keeps
+// its off switch until it has earned trust on real hardware. The old stubs and
+// this flag retire together when that day comes.
+bool kUseOldExceptions = false;
 extern char kTestsPolicyOverride[];
 // SCHED=<mode>: scheduler mode selection. Absent means tickless — the default
 // needs no flag, that's the point (2026-08-05 ruling; the misnamed BSPSCHED
@@ -262,6 +283,8 @@ static cmdopt_t cmdopts[] = {
     {"TESTPANIC", OPT_BOOL, &kTestPanic, true, 0},
     {"NMIPROBE", OPT_BOOL, &kTestNmiProbe, true, 0},
     {"TESTPF", OPT_BOOL, &kTestPageFault, true, 0},
+    {"TESTGP", OPT_BOOL, &kTestGPFault, true, 0},
+    {"EXCOLD", OPT_BOOL, &kUseOldExceptions, true, 0},
     // TESTS=panic|warn — one-boot override of every test's failure policy
     // (test_framework.h owns the taxonomy: warn / remount-ro / panic, the
     // ext2 s_errors trio reborn). Unset honors each test's registration.

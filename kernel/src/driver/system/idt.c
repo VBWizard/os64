@@ -16,6 +16,16 @@ extern void handler_irq0_asm();
 extern void handler_irq1_asm();
 extern void handler_irq12_asm();
 extern void handler_e1000_intx_asm();
+// The unified exception path (2026-08-11): one prologue for all 32 vectors
+// (exception_entry.S), one reporter (exception_report.c). The table holds the
+// 32 stub addresses so the wiring below is a loop, not thirty-two lines each
+// of which is a chance to typo a vector number.
+extern uint64_t kExceptionStubs[32];
+// EXCOLD on the cmdline wires the old per-vector stubs below instead — the
+// runtime fallback for the day the new path turns out to be the thing that is
+// broken. See kUseOldExceptions' comment in kernel_commandline.c. Safe to
+// consult here because process_kernel_commandline runs before hardware_init.
+extern bool kUseOldExceptions;
 extern void divide_by_zero_handler();
 extern void invalid_opcode_handler();
 extern void double_fault_handler();
@@ -53,10 +63,58 @@ void initialize_idt() {
     kIDTPtr.limit = sizeof(kIDT) - 1;
     kIDTPtr.base = (uint64_t)&kIDT;
 
-	// IDT Entries for all major exceptions, all using 0x8E (Interrupt Gate)
-	set_idt_entry(0x00, (uint64_t)&divide_by_zero_handler, 0x28, 0x8E); // #DE
-	set_idt_entry(0x06, (uint64_t)&invalid_opcode_handler, 0x28, 0x8E); // #UD
-	set_idt_entry(0x08, (uint64_t)&double_fault_handler, 0x28, 0x8E);
+	if (!kUseOldExceptions)
+	{
+		// THE UNIFIED PATH (default since 2026-08-11): every exception vector
+		// gets the shared prologue from exception_entry.S, which captures the
+		// full register set into a per-core, on-stack context and hands it to
+		// exception_dispatch. One capture, one reporter, no vector can report
+		// differently from its neighbours. All 32 vectors, including the ones
+		// nobody has ever seen — an unpopulated gate surfaces as a #GP that
+		// names the IDT slot instead of the real fault.
+		//
+		// Vector 2 is skipped ON PURPOSE: NMI is an instrument here, not a
+		// fault (nmi_probe.c fires them at wedged cores and needs them to
+		// RESUME), so it keeps its own stub and IST — wired below, common to
+		// both paths.
+		for (int v = 0; v < 32; v++)
+		{
+			if (v == 2)
+				continue;
+			set_idt_entry(v, kExceptionStubs[v], 0x28, 0x8E);
+		}
+	}
+	else
+	{
+		// EXCOLD: the pre-unification wiring, kept bootable so a broken new
+		// path can be diagnosed by comparison instead of by rebuild. These
+		// stubs and this branch retire together once the unified path has
+		// earned its keep on real hardware.
+		//
+		// IDT Entries for all major exceptions, all using 0x8E (Interrupt Gate)
+		set_idt_entry(0x00, (uint64_t)&divide_by_zero_handler, 0x28, 0x8E); // #DE
+		set_idt_entry(0x06, (uint64_t)&invalid_opcode_handler, 0x28, 0x8E); // #UD
+		set_idt_entry(0x08, (uint64_t)&double_fault_handler, 0x28, 0x8E);
+		set_idt_entry(0x0D, (uint64_t)&general_protection_fault_handler, 0x28, 0x8E); // #GP
+		set_idt_entry(0x0E, (uint64_t)&page_fault_handler, 0x28, 0x8E); // #PF
+		set_idt_entry(0x12, (uint64_t)&machine_check_handler, 0x28, 0x8E); // #MC
+		// The rest of the CPU's exception range. Nothing here RECOVERS — they
+		// name the fault and panic, which is strictly better than the #GP an
+		// empty gate produces (that #GP names the IDT slot, not the problem,
+		// and blames whatever code was running when it happened).
+		set_idt_entry(0x01, (uint64_t)&debug_exception_handler, 0x28, 0x8E);      // #DB
+		set_idt_entry(0x03, (uint64_t)&breakpoint_handler, 0x28, 0x8E);           // #BP
+		set_idt_entry(0x04, (uint64_t)&overflow_handler, 0x28, 0x8E);             // #OF
+		set_idt_entry(0x05, (uint64_t)&bound_range_handler, 0x28, 0x8E);          // #BR
+		set_idt_entry(0x07, (uint64_t)&device_not_available_handler, 0x28, 0x8E); // #NM
+		set_idt_entry(0x0A, (uint64_t)&invalid_tss_handler, 0x28, 0x8E);          // #TS
+		set_idt_entry(0x0B, (uint64_t)&segment_not_present_handler, 0x28, 0x8E);  // #NP
+		set_idt_entry(0x0C, (uint64_t)&stack_segment_handler, 0x28, 0x8E);        // #SS
+		set_idt_entry(0x10, (uint64_t)&x87_fpu_handler, 0x28, 0x8E);              // #MF
+		set_idt_entry(0x11, (uint64_t)&alignment_check_handler, 0x28, 0x8E);      // #AC
+		set_idt_entry(0x13, (uint64_t)&simd_fpu_handler, 0x28, 0x8E);             // #XM
+	}
+
 	// #DF runs on IST1 — the per-core emergency stack tss_initialize_cpu
 	// allocates. This is the ONE gate that must never depend on the faulting
 	// code's RSP being sane, because a broken RSP is the most common reason
@@ -64,33 +122,19 @@ void initialize_idt() {
 	// fault, machine gone, nothing printed. With IST1 the CPU switches
 	// stacks on delivery and the handler actually runs, which turns a
 	// vanished window into a panic that names the thread and the core.
+	// Set OUTSIDE the branch above: whichever stub owns the gate, the stack
+	// switch is not optional.
 	kIDT[0x08].ist = 1;
-	set_idt_entry(0x0D, (uint64_t)&general_protection_fault_handler, 0x28, 0x8E); // #GP
-	set_idt_entry(0x0E, (uint64_t)&page_fault_handler, 0x28, 0x8E); // #PF
-	set_idt_entry(0x12, (uint64_t)&machine_check_handler, 0x28, 0x8E); // #MC
-	// The rest of the CPU's exception range. Nothing here RECOVERS — they
-	// name the fault and panic, which is strictly better than the #GP an
-	// empty gate produces (that #GP names the IDT slot, not the problem,
-	// and blames whatever code was running when it happened).
-	set_idt_entry(0x01, (uint64_t)&debug_exception_handler, 0x28, 0x8E);      // #DB
+
+	// NMI (vector 2) — common to both paths, and NOT part of the unified
+	// sweep. It runs on IST2, its own per-core stack, allocated alongside the
+	// #DF stacks in tss_init_ist_stacks. Unlike every other gate here, vector
+	// 2 is an INSTRUMENT as well as a fault: nmi_probe.c fires NMIs at cores
+	// that have stopped taking maskable interrupts, and one very good reason
+	// for a core to be in that state is that its stack is what broke. A probe
+	// that borrows the patient's stack cannot diagnose a stack problem.
 	set_idt_entry(0x02, (uint64_t)&nmi_handler, 0x28, 0x8E);                  // NMI
-	// NMI runs on IST2 — its own per-core stack, allocated alongside the #DF
-	// stacks in tss_init_ist_stacks. Unlike every other gate here, vector 2 is
-	// an INSTRUMENT as well as a fault: nmi_probe.c fires NMIs at cores that
-	// have stopped taking maskable interrupts, and one very good reason for a
-	// core to be in that state is that its stack is what broke. A probe that
-	// borrows the patient's stack cannot diagnose a stack problem.
 	kIDT[0x02].ist = 2;
-	set_idt_entry(0x03, (uint64_t)&breakpoint_handler, 0x28, 0x8E);           // #BP
-	set_idt_entry(0x04, (uint64_t)&overflow_handler, 0x28, 0x8E);             // #OF
-	set_idt_entry(0x05, (uint64_t)&bound_range_handler, 0x28, 0x8E);          // #BR
-	set_idt_entry(0x07, (uint64_t)&device_not_available_handler, 0x28, 0x8E); // #NM
-	set_idt_entry(0x0A, (uint64_t)&invalid_tss_handler, 0x28, 0x8E);          // #TS
-	set_idt_entry(0x0B, (uint64_t)&segment_not_present_handler, 0x28, 0x8E);  // #NP
-	set_idt_entry(0x0C, (uint64_t)&stack_segment_handler, 0x28, 0x8E);        // #SS
-	set_idt_entry(0x10, (uint64_t)&x87_fpu_handler, 0x28, 0x8E);              // #MF
-	set_idt_entry(0x11, (uint64_t)&alignment_check_handler, 0x28, 0x8E);      // #AC
-	set_idt_entry(0x13, (uint64_t)&simd_fpu_handler, 0x28, 0x8E);             // #XM
 
     // Set IRQ handlers
     // IRQ0 (PIT). One entry covers both delivery paths today because

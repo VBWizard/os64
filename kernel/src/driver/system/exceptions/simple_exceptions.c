@@ -13,6 +13,10 @@
 #include "memory/paging.h"
 #include "memory/memcpy.h"
 #include "exceptions.h"
+#include "exception_report.h"   // the unified path's context + reporter — the
+                                // demand pager below serves BOTH paths, and
+                                // asks exception_current_context() which one
+                                // owns a fatal fault (see page_fault_panic)
 #include "memory/vma.h"
 #include "kmalloc.h"
 #include "allocator.h"
@@ -524,6 +528,20 @@ static void page_fault_decode(char *out, size_t len, uint64_t error_code)
 static void __attribute__((noreturn)) page_fault_panic(const char *why, uint64_t cr2,
                                                        uint64_t error_code, uint64_t rip)
 {
+	// THE SEAM BETWEEN THE TWO REPORTING PATHS (2026-08-11). The demand pager
+	// is shared — duplicating ~250 lines of paging policy so each path could
+	// own a copy would be a bug factory — so this door asks which path the
+	// fault ARRIVED through. The unified prologue (exception_entry.S)
+	// registered a per-core context on entry; the old EXCOLD stubs never do.
+	// A registered context means the full capture exists: report from it.
+	exception_context_t *ctx = exception_current_context();
+	if (ctx != NULL) {
+		// exception_report prints the faulting address and the decoded error
+		// bits itself for vector 14 — `why` carries only the pager's verdict.
+		exception_report(ctx, why);
+		while (1) { __asm__ volatile("cli\nhlt\n"); }
+	}
+
 	char bits[96];
 	char msg[256];
 
@@ -574,12 +592,24 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 
 	// The registers the program died holding — same argument as the kernel
 	// panic path: CR2 names the address, the registers name the pointer.
-	dump_fault_registers(false);  // the OS survives this — ordinary log, in order
+	// Same seam as page_fault_panic: a registered context means the unified
+	// prologue captured this exception's own registers — use them, and hand
+	// the walker the frame pointer from the same instant. Otherwise fall back
+	// to the globals the old #PF stub maintains.
+	exception_context_t *ctx = exception_current_context();
+	if (ctx != NULL) {
+		exception_report_registers(ctx, false);  // the OS survives this — ordinary log, in order
 
-	// And the call chain. gLastFaultRbp is captured by the #PF stub before it
-	// calls us (handler_errors.S), which is the only reason a trace is possible
-	// this far from the fault. NOTRACE disables everything below.
-	stack_trace_user(task, rip, gLastFaultRbp);
+		// And the call chain. NOTRACE disables everything inside.
+		stack_trace_user(task, rip, ctx->rbp);
+	} else {
+		dump_fault_registers(false);  // the OS survives this — ordinary log, in order
+
+		// And the call chain. gLastFaultRbp is captured by the #PF stub before it
+		// calls us (handler_errors.S), which is the only reason a trace is possible
+		// this far from the fault. NOTRACE disables everything below.
+		stack_trace_user(task, rip, gLastFaultRbp);
+	}
 
 	task->retVal = 139;   // 128 + SIGSEGV(11)
 	task_exit();

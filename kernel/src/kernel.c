@@ -66,6 +66,7 @@ extern bool kRunTestrun; // launch /bin/testrun, the ring-3 half of the suite
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
+extern bool kTestGPFault;   // TESTGP: deliberate non-canonical-pointer #GP post-tests
 extern bool kTestShutdown;  // SHUTDOWNTEST: run the full shutdown descent post-tests
 bool kEnableSMP = true;
 // The scheduler mode, DEFAULT TRUE since 2026-08-05 (Chris's ruling, decision
@@ -565,6 +566,23 @@ void kernel_init()
 		// removable — the whole point is that the store actually executes.
 		volatile uint64_t *wild = (volatile uint64_t *)0xffff8f00deadb000ULL;
 		*wild = 0x5157434544414544ULL;
+	}
+
+	// The standing #GP diagnostic (TESTGP — see kTestGPFault's comment in
+	// kernel_commandline.c). A NON-CANONICAL dereference, which is a #GP, not
+	// a #PF — the CPU rejects the address before paging ever sees it. The
+	// signatures are the test: under the old stubs a #GP printed the LAST PAGE
+	// FAULT's registers, so a report showing RAX=0xdead00000000beef and
+	// R15=0x4750323032363038 ("GP202608" — this test's mark) proves the
+	// capture belongs to THIS exception. Registers loaded in the same asm
+	// block as the fault so no compiler decision can separate them.
+	if (kTestGPFault)
+	{
+		__asm__ volatile(
+			"mov r15, 0x4750323032363038\n\t"   // "GP202608" — the signature
+			"mov rax, 0xdead00000000beef\n\t"    // non-canonical on purpose
+			"mov [rax], r15\n\t"
+			::: "rax", "r15", "memory");
 	}
 
 	// The standing panic-pipeline diagnostic (see kTestPanic's comment in
