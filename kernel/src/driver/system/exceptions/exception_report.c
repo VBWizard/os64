@@ -19,6 +19,7 @@
 #include "smp.h"
 #include "smp_core.h"
 #include "msr.h"        // rdmsr64 — the GS_BASE sanity check
+#include "driver/system/x86_64.h"   // rdtsc — the wire lock's barge timer
 #include "paging.h"
 #include "serial_logging.h"
 #include "logging/log.h"
@@ -30,6 +31,98 @@
 
 extern uintptr_t kKernelPML4v;
 extern bool kLoggingInitialized;
+extern uint64_t kCPUCyclesPerSecond;
+
+// ── The wire lock ────────────────────────────────────────────────────────────
+//
+// Two cores faulted at once on 2026-08-11 (two tops, two APs) and their
+// reports interleaved CHARACTER BY CHARACTER on COM1 — forty lines of two
+// reports braided into confetti. The direct polled write remains the right
+// transport for a dying report (no queues, no daemon dependencies); it just
+// needs exactly one narrator at a time.
+//
+// Three properties, each one load-bearing, each one paid for the same night:
+//
+// - REENTRANT PER CORE. The same soak proved the reporter can itself fault
+//   mid-report (a poisoned currentThread #GP'd in the excepting-task block).
+//   The nested report must not self-deadlock on the lock its parent holds;
+//   it re-enters and prints interleaved with its parent — which is correct,
+//   because both are this core's one story, told in the order it happened.
+//
+// - BOUNDED ACQUIRE. A core that dies holding the lock (triple fault, wedge)
+//   must not silence every other core forever. A full report at polled-serial
+//   speed is ~300ms, so after ~3 seconds the holder is dead, not slow: the
+//   waiter BARGES, says so, and speaks. Braided output over a corpse beats
+//   silence.
+//
+// - RELEASED BEFORE EVERY HALT. A report ends, the wire frees — the cli/hlt
+//   at the end of a fatal path must never be reached holding it.
+#define WIRE_FREE 0xFFFFFFFFu
+static volatile uint32_t kWireOwner = WIRE_FREE;
+static volatile uint32_t kWireDepth = 0;
+
+static uint32_t wire_self(void)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	// 0xFE: the pre-CLS early-boot pseudo-identity. One core, no contention.
+	return (cls != NULL) ? (uint32_t)cls->apic_id : 0xFEu;
+}
+
+void exception_wire_lock(void)
+{
+	uint32_t self = wire_self();
+	if (kWireOwner == self) {          // only self can have set this — safe test
+		kWireDepth++;
+		return;
+	}
+
+	uint64_t start = rdtsc();
+	// 3 seconds of TSC; if calibration hasn't run yet (early boot), a plain
+	// large cycle count lands in the same order of magnitude.
+	uint64_t bound = kCPUCyclesPerSecond ? kCPUCyclesPerSecond * 3 : 10000000000UL;
+	bool barged = false;
+
+	while (!__sync_bool_compare_and_swap(&kWireOwner, WIRE_FREE, self)) {
+		__builtin_ia32_pause();
+		if (rdtsc() - start > bound) {
+			// The holder is dead. Take the wire by force — and if two
+			// waiters barge together the last write wins and both speak,
+			// which is the degraded mode we accept over any silent one.
+			kWireOwner = self;
+			barged = true;
+			break;
+		}
+	}
+	kWireDepth = 1;
+
+	if (barged) {
+		printf("\n(wire lock barged after timeout — a prior reporter died holding it)\n");
+		serial_print_string("\n(wire lock barged after timeout — a prior reporter died holding it)\n");
+	}
+}
+
+void exception_wire_unlock(void)
+{
+	uint32_t self = wire_self();
+	if (kWireOwner != self)
+		return;                        // never held, or barged away — do no harm
+	if (kWireDepth > 0)
+		kWireDepth--;
+	if (kWireDepth == 0)
+		kWireOwner = WIRE_FREE;
+}
+
+void exception_wire_abandon(void)
+{
+	// The terminal release: this narrator is about to cli/hlt forever, and a
+	// plain unlock can't free a NESTED hold (panic from inside a locked
+	// report leaves depth > 1). Story over — free the wire unconditionally
+	// so the next core speaks immediately instead of barging past a corpse.
+	if (kWireOwner == wire_self()) {
+		kWireDepth = 0;
+		kWireOwner = WIRE_FREE;
+	}
+}
 
 // How much stack to show, and how deep to walk. Both bounded because a
 // corrupted frame must produce a SHORT report, not an endless one.
@@ -167,6 +260,9 @@ static void exc_walk_chain(const exception_context_t *ctx, bool dying)
 // ring-3 segfault report needs exactly this block under its own headline.
 void exception_report_registers(const exception_context_t *ctx, bool dying)
 {
+	// Reentrant, so this costs nothing under exception_report's own lock and
+	// buys atomicity when user_fault_kill calls us standalone.
+	exception_wire_lock();
 	EXC_EMIT(dying, ">>> RIP 0x%016lx  CS 0x%04lx  RFLAGS 0x%016lx (IF=%lu) <<<\n",
 	         ctx->rip, ctx->cs, ctx->rflags, (ctx->rflags >> 9) & 1);
 	EXC_EMIT(dying, ">>> RSP 0x%016lx  SS 0x%04lx  RBP 0x%016lx <<<\n",
@@ -200,6 +296,7 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 		         sane ? "in kCoreLocalStorage — ok"
 		              : "*** OUTSIDE kCoreLocalStorage — GS IS WRONG ***");
 	}
+	exception_wire_unlock();
 }
 
 void exception_report(const exception_context_t *ctx, const char *why)
@@ -221,6 +318,9 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	// Fatal for everything except a resolved #PF, and a resolved #PF never
 	// reaches this function — so anything being reported here is dying.
 	const bool dying = true;
+
+	// One narrator per report — see the wire lock's header comment.
+	exception_wire_lock();
 
 	if (why != NULL) {
 		EXC_EMIT(dying, "\n>>> EXCEPTION: %s — %s <<<\n",
@@ -253,14 +353,51 @@ void exception_report(const exception_context_t *ctx, const char *why)
 
 	exception_report_registers(ctx, dying);
 
-	if (cls != NULL && cls->currentThread != NULL) {
-		task_t *task = (task_t *)cls->currentThread->ownerTask;
-		if (task != NULL) {
-			EXC_EMIT(dying, ">>> Excepting task: %s (id %lu) <<<\n",
-			         task->exename[0] ? task->exename : "(unnamed)", task->taskID);
+	// CONVICTED OF FAULTING MID-REPORT (2026-08-11 soak): this block read
+	// cls->currentThread->ownerTask through a POISONED currentThread and
+	// #GP'd — the nested-report machinery saved the evidence, but rule one
+	// is NEVER FAULT WHILE REPORTING. Every pointer on this path is now
+	// treated as hostile, and an unreadable one is REPORTED rather than
+	// dereferenced: a poisoned thread pointer is not a nuisance to step
+	// around, it is a finding about the fault — often the headline finding.
+	// (exc_readable wants 8-aligned addresses; the &~7 masks check the
+	// containing qword, which is the same page.)
+	{
+		thread_t *thread = (cls != NULL) ? cls->currentThread : NULL;
+		if (thread == NULL) {
+			EXC_EMIT(dying, ">>> No current task (core likely idle) <<<\n");
+		} else if (!exc_readable((uint64_t)&thread->ownerTask & ~7UL)) {
+			EXC_EMIT(dying, ">>> Excepting task: UNREADABLE — currentThread 0x%016lx is POISONED <<<\n",
+			         (uint64_t)thread);
+		} else {
+			task_t *task = (task_t *)thread->ownerTask;
+			if (task == NULL) {
+				EXC_EMIT(dying, ">>> Excepting task: (thread 0x%016lx has no owner task) <<<\n",
+				         (uint64_t)thread);
+			} else if (!exc_readable((uint64_t)&task->taskID & ~7UL) ||
+			           !exc_readable((uint64_t)task->exename & ~7UL)) {
+				EXC_EMIT(dying, ">>> Excepting task: UNREADABLE — ownerTask 0x%016lx is POISONED (thread 0x%016lx) <<<\n",
+				         (uint64_t)task, (uint64_t)thread);
+			} else {
+				// exename copied BOUNDED, each byte's page proven readable,
+				// NUL forced — a garbage name must yield a short string,
+				// never a strlen walking off the mapped world inside %s.
+				char name[32];
+				size_t n = 0;
+				while (n < sizeof(name) - 1) {
+					uint64_t a = (uint64_t)&task->exename[n];
+					if (!exc_readable(a & ~7UL))
+						break;
+					char c = task->exename[n];
+					if (c == '\0')
+						break;
+					name[n++] = c;
+				}
+				name[n] = '\0';
+				EXC_EMIT(dying, ">>> Excepting task: %s (id %lu) <<<\n",
+				         n ? name : "(unnamed)", task->taskID);
+			}
 		}
-	} else {
-		EXC_EMIT(dying, ">>> No current task (core likely idle) <<<\n");
 	}
 
 	// A window of the interrupted stack. When the frame chain is garbage —
@@ -287,6 +424,10 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	if (kLoggingInitialized) {
 		logd_thread(false);
 	}
+
+	// The story ends here — free the wire BEFORE the caller halts, or the
+	// next core's report spends three seconds waiting to barge past a corpse.
+	exception_wire_unlock();
 }
 
 // ── Dispatch ────────────────────────────────────────────────────────────────

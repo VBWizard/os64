@@ -18,6 +18,7 @@
 #include "scheduler.h"
 #include "paging.h"
 #include "driver/system/x86_64.h"   // rdtsc
+#include "exception_report.h"       // exception_wire_lock — one narrator per report
 #include "serial_logging.h"
 #include "sprintf.h"
 #include "video.h"
@@ -281,6 +282,12 @@ static void probe_report(const nmi_probe_snapshot_t *s)
 	char line[200];
 	const nmi_regs_t *r = &s->regs;
 
+	// One narrator per report (exception_report.h): a probe dump racing a
+	// fault report on another core must not braid with it. Per-REPORT, not
+	// per-sweep — a sweep can spend seconds in timeouts, and holding the wire
+	// that long would push a dying core's report into the barge path.
+	exception_wire_lock();
+
 	sprintf(line, "core %u: RIP=%016lx CS=%04lx RFLAGS=%016lx (IF=%lu) RSP=%016lx SS=%04lx\n",
 	        s->apic_id, s->frame.rip, s->frame.cs, s->frame.rflags,
 	        (s->frame.rflags >> 9) & 1, s->frame.rsp, s->frame.ss);
@@ -318,6 +325,8 @@ static void probe_report(const nmi_probe_snapshot_t *s)
 	probe_emit(line);
 
 	probe_walk_stack(s);
+
+	exception_wire_unlock();
 }
 
 bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks)

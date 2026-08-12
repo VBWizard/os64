@@ -84,4 +84,16 @@ void exception_report_registers(const exception_context_t *ctx, bool dying);
 // fatal fault. Set on dispatch entry, cleared when a resolved fault returns.
 exception_context_t *exception_current_context(void);
 
+// The wire lock: exactly one core narrates at a time. Take it around a WHOLE
+// multi-line report (fault reports, panics, probe dumps), release when the
+// story ends — and always release before halting, so the next core can speak.
+// Reentrant per core (a reporter that faults mid-report must not self-
+// deadlock) and bounded (a corpse holding it gets barged after ~3s). Shared
+// by BOTH exception paths and panic() on purpose: there is only one wire.
+void exception_wire_lock(void);
+void exception_wire_unlock(void);
+// For paths that halt forever after their last line (panic): free the wire
+// unconditionally, whatever the nesting depth. A dead core holds no locks.
+void exception_wire_abandon(void);
+
 #endif // EXCEPTION_REPORT_H

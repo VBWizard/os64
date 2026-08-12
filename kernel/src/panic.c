@@ -11,7 +11,11 @@
 #include "log.h"
 #include "gui/compositor.h"
 #include "tty.h"   // tty_emergency_direct — the terminals' escape hatch
+#include "exception_report.h"   // exception_wire_lock — one narrator per report
 
+// SHARED between every panicking core — which is why both panic entry points
+// take the wire lock BEFORE formatting into it: without that, two concurrent
+// panics don't just braid on the wire, they overwrite each other's MESSAGE.
 char sprintf_buf[2000];
 
 // Shared body of panic/panic_no_shutdown: get the message onto EVERY sink in
@@ -71,11 +75,19 @@ void panic_no_shutdown(const char *format, ...)
     // whatever terminal is showing — exactly what you want from a dead system.
     tty_emergency_direct();
 
+    // The wire lock guards BOTH the shared sprintf_buf and the output order.
+    // Bounded + reentrant (exception_report.c), so a panic from inside a
+    // locked report self-nests, and a dead holder gets barged, never waited
+    // on forever. Abandoned (not merely unlocked) after the last line: this
+    // core halts forever, and a dead core holds no locks.
+    exception_wire_lock();
+
     va_list args;
     va_start( args, format );
     vsprintf(sprintf_buf, format, args);
     va_end(args);
     panic_broadcast((uintptr_t)__builtin_return_address(0), sprintf_buf);
+    exception_wire_abandon();
 panicLoop:
     __asm__("cli\nhlt\n");
     goto panicLoop;
@@ -91,11 +103,16 @@ void __attribute__((noreturn, noinline))panic(const char *format, ...)
     renderer_bust_lock();
     tty_emergency_direct();
 
+    // Same wire-lock discipline as panic_no_shutdown above: taken before the
+    // shared buffer, abandoned after the last line.
+    exception_wire_lock();
+
     va_list args;
     va_start( args, format );
     vsprintf(sprintf_buf, format, args);
     va_end(args);
     panic_broadcast((uintptr_t)__builtin_return_address(0), sprintf_buf);
+    exception_wire_abandon();
 #if SHUTOFF_ON_PANIC == 1
     shutdown();
 #endif

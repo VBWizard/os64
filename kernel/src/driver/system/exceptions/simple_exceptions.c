@@ -335,6 +335,11 @@ void dump_fault_registers(bool direct)
 void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     core_local_storage_t* core = get_core_local_storage();
 
+    // One narrator per report (exception_report.h) — without this, two cores
+    // faulting together braid their reports character-by-character on COM1,
+    // which is how the 2026-08-11 soak turned two clean reports into confetti.
+    exception_wire_lock();
+
     EXCEPTION_PRINT("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);
     EXCEPTION_PRINT(">>> AP %lu (Thread 0x%08x) <<<                        \n", core->apic_id, core->threadID);
     EXCEPTION_PRINT(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
@@ -417,6 +422,10 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
 	if (kLoggingInitialized) {
 		logd_thread(false);
 	}
+
+	// Free the wire BEFORE halting — the next core's report must not have to
+	// barge past this one's corpse.
+	exception_wire_unlock();
 
 	while (1) { __asm__ volatile ("cli\nhlt\n"); }
 }
@@ -573,6 +582,12 @@ static void __attribute__((noreturn)) page_fault_panic(const char *why, uint64_t
 static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *why,
     uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
+	// One narrator per report (exception_report.h). Ring-3 kills are the most
+	// COMMON concurrent reporters — two tops segfaulting on two cores is
+	// exactly what braided the 2026-08-11 soak log — and this whole report,
+	// headline through call chain, must land on the wire as one story.
+	exception_wire_lock();
+
 	// The headline, on EVERY sink. DEBUG_EXCEPTIONS is permanently on (see
 	// CONFIG.h), so the printd is not a hedge — it is the copy a script greps.
 	// The direct serial write is the copy that survives the session.
@@ -610,6 +625,9 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 		// this far from the fault. NOTRACE disables everything below.
 		stack_trace_user(task, rip, gLastFaultRbp);
 	}
+
+	// Report told — free the wire BEFORE task_exit, which never returns.
+	exception_wire_unlock();
 
 	task->retVal = 139;   // 128 + SIGSEGV(11)
 	task_exit();
