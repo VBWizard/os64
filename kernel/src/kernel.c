@@ -15,6 +15,7 @@
 #include "gdt.h"
 #include "idt.h"
 #include "tss.h"
+#include "nmi_probe.h"
 #include "pci.h"
 #include "ahci.h"
 #include "ata.h"
@@ -63,6 +64,7 @@ extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kRunTestrun; // launch /bin/testrun, the ring-3 half of the suite
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
+extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
 extern bool kTestShutdown;  // SHUTDOWNTEST: run the full shutdown descent post-tests
 bool kEnableSMP = true;
@@ -542,6 +544,14 @@ void kernel_init()
 	// else; its read half was long since covered by the ring-3 fixtures.
 	// Removed 2026-07-19 with tests.c itself — the day the framework
 	// finished eating its ancestor.)
+
+	// The standing NMI-probe diagnostic (NMIPROBE — see kTestNmiProbe's comment
+	// in kernel_commandline.c). Runs BEFORE the panic test below, because a
+	// panic ends the boot and this must actually get to run. Every core should
+	// answer and resume; the machine carrying on normally afterwards is half of
+	// what this proves.
+	if (kTestNmiProbe)
+		nmi_probe_sweep();
 
 	// The standing fatal-page-fault diagnostic (TESTPF). A wild KERNEL pointer,
 	// which is the exact shape of the fault this report exists to explain — an

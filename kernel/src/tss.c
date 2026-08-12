@@ -20,6 +20,14 @@
 // gate with no stack switch: exactly as fragile as before, never worse.
 static uint64_t kIstStackTop[MAX_CPUS];
 
+// IST2: the NMI stack, same idea, different customer. The NMI probe
+// (nmi_probe.c) exists to interrogate a core that has stopped responding —
+// and one very good reason for a core to stop responding is that its stack is
+// the thing that broke. An instrument that borrows the patient's stack cannot
+// measure a stack problem, so NMI gets its own page per core exactly as #DF
+// does. Linux puts #DF, NMI and #MC on IST slots for precisely this reason.
+static uint64_t kNmiStackTop[MAX_CPUS];
+
 // ── Why exception handlers need a stack of their own ────────────────────────
 //
 // Every handler used to run on whatever RSP the faulting code had. That is
@@ -44,9 +52,14 @@ void tss_init_ist_stacks(void)
 		void *p = kmalloc_aligned(IST_STACK_SIZE);
 		// Stacks grow DOWN: point at the top, 16-byte aligned.
 		kIstStackTop[i] = p ? (((uint64_t)p + IST_STACK_SIZE - 16) & ~0xFULL) : 0;
+
+		void *n = kmalloc_aligned(IST_STACK_SIZE);
+		kNmiStackTop[i] = n ? (((uint64_t)n + IST_STACK_SIZE - 16) & ~0xFULL) : 0;
 	}
 	printd(DEBUG_BOOT, "tss: allocated %u double-fault (IST1) stacks, CPU0's at 0x%016lx\n",
 	       (uint32_t)MAX_CPUS, kIstStackTop[0]);
+	printd(DEBUG_BOOT, "tss: allocated %u NMI (IST2) stacks, CPU0's at 0x%016lx\n",
+	       (uint32_t)MAX_CPUS, kNmiStackTop[0]);
 }
 
 extern uintptr_t kKernelStack;
@@ -109,6 +122,10 @@ void tss_initialize_cpu(uint32_t cpu_index)
     // canary strip now, so the budget is honest — but the discipline above
     // is still the right instinct.
     tss->ist1 = kIstStackTop[cpu_index];
+    // IST2: this core's NMI stack. Same rules as IST1 — assignment only, no
+    // allocation and no logging, because this function still runs on an AP's
+    // bootstrap stack.
+    tss->ist2 = kNmiStackTop[cpu_index];
 
     tss_install_descriptor(cpu_index, tss);
 

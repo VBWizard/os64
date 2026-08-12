@@ -109,6 +109,14 @@ char kLogdPath[128] = {0};
 bool kTestPanic = false;
 // SHUTDOWNTEST's flag — same one-boot-diagnostic idea for the descent.
 bool kTestShutdown = false;
+// NMIPROBE: sweep every other core with a diagnostic NMI right after the
+// post-boot tests. Same one-boot-diagnostic pattern as TESTPANIC, and for the
+// same reason — the NMI probe (nmi_probe.c) only ever runs when something has
+// already gone wrong, which is exactly the kind of code that rots unnoticed.
+// On a HEALTHY machine every core answers in microseconds and goes straight
+// back to what it was doing, so a clean sweep here proves the whole path:
+// delivery, the IST2 stack switch, capture, and above all the resume.
+bool kTestNmiProbe = false;
 // TESTPF: dereference a deliberately unmapped KERNEL address right after the
 // post-boot tests, to exercise the fatal page-fault report itself.
 //
@@ -252,6 +260,7 @@ static cmdopt_t cmdopts[] = {
     {"GW", OPT_STRING, kNetGWString, 0, 20},
     {"MASK", OPT_STRING, kNetMaskString, 0, 20},
     {"TESTPANIC", OPT_BOOL, &kTestPanic, true, 0},
+    {"NMIPROBE", OPT_BOOL, &kTestNmiProbe, true, 0},
     {"TESTPF", OPT_BOOL, &kTestPageFault, true, 0},
     // TESTS=panic|warn — one-boot override of every test's failure policy
     // (test_framework.h owns the taxonomy: warn / remount-ro / panic, the

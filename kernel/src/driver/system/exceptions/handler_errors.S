@@ -194,4 +194,99 @@ EXC_NOERR 16, x87_fpu_handler                  # #MF
 EXC_ERR   17, alignment_check_handler          # #AC
 EXC_NOERR 19, simd_fpu_handler                 # #XM
 
-EXC_NOERR 2,  nmi_handler                      # NMI
+# ── NMI (vector 2): the one exception that is also an INSTRUMENT ────────────
+#
+# Every other vector above names a fault and stops. NMI is different: it is the
+# only way to reach a core that has stopped taking maskable interrupts, so this
+# gate does double duty. If the core was asked a question (nmi_probe_capture
+# returns true) it answers and RESUMES, untouched. If this is a genuine
+# hardware NMI — parity error, watchdog — it falls through to exactly the panic
+# path it has always had. The request word in nmi_probe.c is what tells the two
+# apart, and getting that backwards would mean silently swallowing the one
+# class of NMI that means the machine is on fire.
+#
+# This gate runs on IST2 (idt.c) — its own per-core stack — because a core
+# worth probing may be wedged BY its stack, and an instrument must not depend
+# on the health of the thing it is measuring.
+#
+# NOTE: no `cli` here, unlike every handler above. The interrupt gate already
+# cleared IF on delivery, and the hardware blocks further NMIs until our
+# `iretq`. Adding one would be noise pretending to be caution.
+
+# The saved-register block, pushed low-address-last so it lands in memory as
+# nmi_regs_t reads it: rflags lowest, then r15..r8, rbp, rdi, rsi, rdx, rcx,
+# rbx, rax ascending. Deliberately the same layout the #PF stub established for
+# fault_regs_t — one convention, not two.
+#
+# CHANGE EITHER MACRO AND YOU MUST CHANGE nmi_regs_t IN nmi_probe.h.
+.macro NMI_PUSH_REGS
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+    pushf
+.endm
+
+.macro NMI_POP_REGS
+    popf
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+.endm
+
+.global nmi_handler
+nmi_handler:
+    NMI_PUSH_REGS
+
+    mov rdi, rsp            # nmi_regs_t*  — the 16 qwords just pushed
+    lea rsi, [rsp + 128]    # nmi_frame_t* — RIP, CS, RFLAGS, RSP, SS
+
+    # SysV wants RSP 16-byte aligned at the call. Rather than reason about the
+    # residue the CPU's own pre-push alignment leaves us with, force it — and
+    # keep the way back in RBX, whose real value is already safe on the stack
+    # two dozen bytes below.
+    mov rbx, rsp
+    and rsp, -16
+    call nmi_probe_capture
+    mov rsp, rbx
+
+    test al, al
+    jz .nmi_real_hardware_fault
+
+    # Ours. Put the core back exactly as we found it and leave.
+    NMI_POP_REGS
+    iretq
+
+.nmi_real_hardware_fault:
+    # Not ours. Unwind our block so the frame is where the shared reporter
+    # expects it, then take the road every unclaimed vector takes.
+    NMI_POP_REGS
+    cli
+    mov rdi, 2              # which exception
+    xor rsi, rsi            # NMI pushes no error code
+    mov rdx, [rsp]          # faulting RIP (top of frame)
+    call handle_unexpected_exception
+    hlt

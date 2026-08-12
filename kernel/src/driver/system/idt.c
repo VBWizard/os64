@@ -74,6 +74,13 @@ void initialize_idt() {
 	// and blames whatever code was running when it happened).
 	set_idt_entry(0x01, (uint64_t)&debug_exception_handler, 0x28, 0x8E);      // #DB
 	set_idt_entry(0x02, (uint64_t)&nmi_handler, 0x28, 0x8E);                  // NMI
+	// NMI runs on IST2 — its own per-core stack, allocated alongside the #DF
+	// stacks in tss_init_ist_stacks. Unlike every other gate here, vector 2 is
+	// an INSTRUMENT as well as a fault: nmi_probe.c fires NMIs at cores that
+	// have stopped taking maskable interrupts, and one very good reason for a
+	// core to be in that state is that its stack is what broke. A probe that
+	// borrows the patient's stack cannot diagnose a stack problem.
+	kIDT[0x02].ist = 2;
 	set_idt_entry(0x03, (uint64_t)&breakpoint_handler, 0x28, 0x8E);           // #BP
 	set_idt_entry(0x04, (uint64_t)&overflow_handler, 0x28, 0x8E);             // #OF
 	set_idt_entry(0x05, (uint64_t)&bound_range_handler, 0x28, 0x8E);          // #BR
