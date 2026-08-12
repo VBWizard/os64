@@ -754,6 +754,33 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
     mp_isrSavedRDI[apic_id]=thread->regs.RDI;
     mp_isrSavedRSP[apic_id]=thread->regs.RSP;
     mp_isrSavedRBP[apic_id]=thread->regs.RBP;
+    // ── BORROWED-STACK TRIPWIRE (2026-08-12, the stack poisoner's headstone) ─
+    // A context about to be dispatched whose saved RSP lies inside ANY core's
+    // per-core scratch stack was PARKED THERE — it slept or was preempted
+    // while standing on a stack that is bolted to a core and re-issued to
+    // that core's next dying thread / cikc call. Resuming it puts two live
+    // contexts on one stack, silently stomping each other's frames at
+    // deterministic offsets: that was the poisoner that forged top's %s
+    // pointers (3, 4), the settle loop's -29874 index, and the 0x7ec6xxxx
+    // wrapped-write fatals. The exit path was cured by the teardown split
+    // (task.c); this tripwire stands guard over every door we HAVEN'T found
+    // — the cikc-hosted disk closes (handle.c) and shared-object page reads
+    // are the known suspects. Unlike the TF tripwire below, there is no safe
+    // "clear and continue": a collided stack cannot be un-collided, so the
+    // only honest move is a loud stop that NAMES the door.
+    {
+        int scratch_owner = kernel_scratch_stack_owner(thread->regs.RSP);
+        if (scratch_owner >= 0)
+        {
+            task_t *bs_task = (task_t *)thread->ownerTask;
+            panic("BORROWED-STACK TRIPWIRE: thread 0x%08x (%s) was parked on core %d's scratch stack "
+                  "(saved RSP 0x%016lx) and core %u tried to resume it — a call_in_kernel_context or "
+                  "exit-path function BLOCKED on a borrowed stack; the call chain in this thread's "
+                  "frames names the door\n",
+                  thread->threadID, bs_task ? bs_task->exename : "?", scratch_owner,
+                  thread->regs.RSP, (uint32_t)apic_id);
+        }
+    }
     // ── TF TRIPWIRE ────────────────────────────────────────────────────────
     // RFLAGS.TF (bit 8) makes the CPU single-step: it executes ONE
     // instruction after the iretq and raises #DB. Nothing in this kernel

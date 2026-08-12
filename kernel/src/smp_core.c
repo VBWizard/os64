@@ -178,6 +178,29 @@ static inline void set_gs_base(uint64_t base) {
 	kCLSInitialized = true;
 }
 
+/// @brief Which core's scratch ("kernel interrupt") stack contains `rsp`? -1 = none.
+///
+/// The dispatch tripwire's oracle (scheduler_load_thread). The per-core
+/// scratch stack is bolted to its core — it hosts task_exit's last breath and
+/// call_in_kernel_context's borrowed frames — and a context PARKED on one is
+/// a time bomb: while it sleeps, the owning core re-issues the same stack to
+/// its next customer, and whichever core later resumes the sleeper puts two
+/// live contexts on one stack. That collision was the stack poisoner
+/// (2026-08-11/12); the exit path is cured, and this oracle exists to catch
+/// any door we haven't found — the cikc-hosted disk closes are the known
+/// remaining suspects.
+int kernel_scratch_stack_owner(uintptr_t rsp)
+{
+    for (int c = 0; c < kMPCoreCount; c++) {
+        volatile core_local_storage_t *cls = &kCoreLocalStorage[c];
+        if (cls->kernel_interrupt_stack_base != 0 &&
+            rsp >= cls->kernel_interrupt_stack_base &&
+            rsp <  cls->kernel_interrupt_stack_top)
+            return c;
+    }
+    return -1;
+}
+
 void init_core_local_storage(unsigned apic_id)
 {
 

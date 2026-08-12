@@ -83,6 +83,10 @@
 // carries the argument — and IRQ0's priority stops mattering at all.
 #define IRQ0_APIC_VECTOR 0x20
 void mpAcctSettleAll(void);
+// Which core's scratch ("kernel interrupt") stack contains rsp? -1 = none.
+// The dispatch tripwire's oracle — see the definition's comment for the
+// stack-poisoner story it guards against.
+int kernel_scratch_stack_owner(uintptr_t rsp);
 #define ENABLE_TIMER(val) (val & ~(1U << APIC_LVT_MASK_BIT))
 #define DISABLE_TIMER(val) (val | (1U << APIC_LVT_MASK_BIT))
 
