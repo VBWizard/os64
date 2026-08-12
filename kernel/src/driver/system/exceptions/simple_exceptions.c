@@ -6,7 +6,9 @@
 #include "sprintf.h"
 #include "smp_core.h"
 #include "task.h"
+#include "stack_trace.h"   // symbolized ring-3 call chains (NOTRACE-gated)
 #include "CONFIG.h"
+#include "msr.h"        // rdmsr64 — GS_BASE in the fault report
 #include "log.h"
 #include "memory/paging.h"
 #include "memory/memcpy.h"
@@ -25,6 +27,18 @@ extern uint64_t mp_isrSavedRSP[];
 
 uint64_t gLastFaultRbp = 0;
 uint64_t gLastFaultRsp = 0;
+// Address of the 16 registers the #PF stub pushed (handler_errors.S). NULL
+// until the first page fault, and only ever written by that stub.
+uint64_t gLastFaultRegs = 0;
+
+// The pushed block, low address first: pushf landed last so it sits lowest,
+// then r15..rax ascending, because push walks DOWN. Change either this struct
+// or the stub's push order and you must change both.
+typedef struct {
+	uint64_t rflags;
+	uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+	uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
+} fault_regs_t;
 uint64_t gLastFaultErrorCode = 0;
 bool kTestingPageFaults = false;
 uint64_t kTestingPageFaultResumeRip = 0;
@@ -45,66 +59,45 @@ static bool address_is_mapped(uint64_t address)
 	return (pte & PAGE_PRESENT) != 0;
 }
 
-//NOTE: Won't work with userland RIPs. Will need to modify to accept the CR3 for non-kernel processes once we have a userland
-void dump_stack_trace(uint64_t rip)
+/// @brief Is this address readable RIGHT NOW, in whatever address space we are in?
+///
+/// address_is_mapped() asks kKernelPML4v, and for kernel pointers that is the
+/// right question. It is the WRONG question for anything on a task's RSP0
+/// stack — task_alloc_guarded_stack puts those at TASK-LOCAL lower-half VAs
+/// that are deliberately absent from the kernel's tables (CLAUDE.md says so in
+/// as many words). A fault frame lives on exactly such a stack, so asking the
+/// kernel oracle about it answers "unmapped" while the CPU is standing on it
+/// and pushing to it — which is precisely the wrong answer, and it cost this
+/// function its first RSP line.
+///
+/// So: kernel tables first, then the CURRENT task's. Both are consulted
+/// because a fault can arrive from either side of the boundary.
+static bool fault_address_readable(uint64_t address)
 {
-	printf("Stack trace (most recent call first):\n");
-	printf("  [0] RIP=0x%016lx\n", rip);
-	printf("  Captured RSP=0x%016lx RBP=0x%016lx\n", gLastFaultRsp, gLastFaultRbp);
-
-	if (gLastFaultErrorCode & (1ull << 2)) {
-		printf("  <fault originated from user mode>\n");
+	if (!is_canonical_address(address)) {
+		return false;
 	}
-
-	uint64_t rbp = gLastFaultRbp;
-	if (rbp == 0) {
-		printf("  <no frame pointer captured>\n");
-		return;
+	if (address_is_mapped(address)) {
+		return true;
 	}
-
-	if (!is_canonical_address(rbp)) {
-		printf("  <frame pointer 0x%016lx non-canonical>\n", rbp);
-		return;
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *t = (cls != NULL) ? (task_t *)cls->task : NULL;
+	if (t == NULL || t->pml4v == 0) {
+		return false;
 	}
-
-	if (!address_is_mapped(rbp) || !address_is_mapped(rbp + sizeof(uint64_t))) {
-		printf("  <frame pointer 0x%016lx unmapped>\n", rbp);
-		return;
-	}
-
-	const uint32_t max_frames = 16;
-	for (uint32_t frame = 1; frame < max_frames; frame++) {
-		uint64_t *frame_ptr = (uint64_t*)rbp;
-		uint64_t next_rbp = frame_ptr[0];
-		uint64_t return_address = frame_ptr[1];
-
-		if (!is_canonical_address(return_address)) {
-			printf("  [%u] <non-canonical return address 0x%016lx>\n", frame, return_address);
-			break;
-		}
-
-		printf("  [%u] RIP=0x%016lx\n", frame, return_address);
-
-		if (next_rbp == 0) {
-			break;
-		}
-		if (next_rbp <= rbp) {
-			printf("  <next frame pointer 0x%016lx not higher than current 0x%016lx>\n", next_rbp, rbp);
-			break;
-		}
-		if (!is_canonical_address(next_rbp)) {
-			printf("  <next frame pointer 0x%016lx non-canonical>\n", next_rbp);
-			break;
-		}
-		if (!address_is_mapped(next_rbp) || !address_is_mapped(next_rbp + sizeof(uint64_t))) {
-			printf("  <next frame pointer 0x%016lx unmapped>\n", next_rbp);
-			break;
-		}
-
-		rbp = next_rbp;
-	}
+	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)t->pml4v, address);
+	return phys != 0 && phys != 0xbadbadba;
 }
 
+// ── Where a fault report goes ───────────────────────────────────────────────
+//
+// These two macros live ABOVE every reporter in this file deliberately: they
+// used to sit halfway down it, which is how dump_stack_trace and
+// log_page_fault_bits — the two most diagnostic parts of a kernel page-fault
+// report — ended up as bare printf calls that reached the framebuffer and
+// NOTHING else. Not the wire, not the log. Anything above them physically
+// could not use them.
+//
 // Emit a line to BOTH the screen and the serial port.  Exceptions must be
 // diagnosable from either — a #GP that only ever appears on the framebuffer
 // is invisible to headless/CI runs.  Serial output goes DIRECTLY through
@@ -119,6 +112,221 @@ void dump_stack_trace(uint64_t rip)
         snprintf(_exc_line, sizeof(_exc_line), fmt, ##__VA_ARGS__); \
         serial_print_string(_exc_line); \
     } while (0)
+
+// `direct` now means exactly ONE thing: THIS CORE IS DYING. A panic must not
+// depend on logd being alive to drain a queue, so it writes polled serial and
+// nothing else. Everything else — a ring-3 segfault, a page-fault diagnosis, a
+// stack trace — goes to ALL THREE sinks: the glass, the wire, and (only when a
+// userland daemon owns it) the LOGD= file.
+//
+// THE RULING THAT CHANGED THIS (Chris, 2026-08-11): a fault report belongs on
+// the wire unconditionally — "it's cheap and it's permanent, and it's viewable
+// outside of the session." He hit the old behaviour the hard way the same day:
+// an exception in processSignals whose only surviving line was a RIP, because
+// the LOGD= file received only the printd lines while the decoded bits and the
+// stack trace went to the framebuffer of an emulator he then closed. A report
+// you have to survive long enough to go read is not a report.
+//
+// The old split's stated reason was real, but it was solved backwards. Mixing
+// direct and queued lines in ONE report scrambled it, because direct lines land
+// instantly and queued ones land whenever logd next runs — so the register dump
+// could print before its own headline. The cure is not to queue everything; it
+// is to send every line to every sink IN THE SAME ORDER, after which each sink
+// independently holds a correctly-ordered, complete report.
+//
+// The printd copy is added only when it lands somewhere OTHER than this same
+// wire — see log_printd_reaches_serial(). Without that test the whole report
+// prints twice on COM1 in the no-LOGD case, which is the default case.
+#define FAULT_PRINT(direct, fmt, ...) do { \
+        if (direct) { EXCEPTION_PRINT(fmt, ##__VA_ARGS__); } \
+        else { \
+            printf(fmt, ##__VA_ARGS__); \
+            char _flt_line[512]; \
+            snprintf(_flt_line, sizeof(_flt_line), fmt, ##__VA_ARGS__); \
+            serial_print_string(_flt_line); \
+            if (!log_printd_reaches_serial()) \
+                printd(DEBUG_EXCEPTIONS, "%s", _flt_line); \
+        } \
+    } while (0)
+
+//NOTE: Won't work with userland RIPs. Will need to modify to accept the CR3 for non-kernel processes once we have a userland
+//
+// `direct` has the same meaning as everywhere else in this file: this core is
+// dying, so write the wire and do not touch a log queue. It became a parameter
+// on 2026-08-11 when this walk moved INSIDE exception_panic — a report that is
+// half direct and half queued arrives out of order, which is the whole reason
+// FAULT_PRINT takes the flag at all.
+void dump_stack_trace(uint64_t rip, bool direct)
+{
+	FAULT_PRINT(direct, "Stack trace (most recent call first):\n");
+	FAULT_PRINT(direct, "  [0] RIP=0x%016lx\n", rip);
+	FAULT_PRINT(direct, "  Captured RSP=0x%016lx RBP=0x%016lx\n", gLastFaultRsp, gLastFaultRbp);
+
+	if (gLastFaultErrorCode & (1ull << 2)) {
+		FAULT_PRINT(direct, "  <fault originated from user mode>\n");
+	}
+
+	uint64_t rbp = gLastFaultRbp;
+	if (rbp == 0) {
+		// TRUE, and now meaningful rather than dead code: only the #PF stub
+		// captures RBP, and every other stub CLEARS it on entry (see
+		// handler_errors.S). Before that, a #GP printed the last page fault's
+		// frame pointer and walked a stack that had nothing to do with it.
+		FAULT_PRINT(direct, "  <no frame pointer captured for this exception>\n");
+		return;
+	}
+
+	if (!is_canonical_address(rbp)) {
+		FAULT_PRINT(direct, "  <frame pointer 0x%016lx non-canonical>\n", rbp);
+		return;
+	}
+
+	if (!address_is_mapped(rbp) || !address_is_mapped(rbp + sizeof(uint64_t))) {
+		FAULT_PRINT(direct, "  <frame pointer 0x%016lx unmapped>\n", rbp);
+		return;
+	}
+
+	const uint32_t max_frames = 16;
+	for (uint32_t frame = 1; frame < max_frames; frame++) {
+		uint64_t *frame_ptr = (uint64_t*)rbp;
+		uint64_t next_rbp = frame_ptr[0];
+		uint64_t return_address = frame_ptr[1];
+
+		if (!is_canonical_address(return_address)) {
+			FAULT_PRINT(direct, "  [%u] <non-canonical return address 0x%016lx>\n", frame, return_address);
+			break;
+		}
+
+		FAULT_PRINT(direct, "  [%u] RIP=0x%016lx\n", frame, return_address);
+
+		if (next_rbp == 0) {
+			break;
+		}
+		if (next_rbp <= rbp) {
+			FAULT_PRINT(direct, "  <next frame pointer 0x%016lx not higher than current 0x%016lx>\n", next_rbp, rbp);
+			break;
+		}
+		if (!is_canonical_address(next_rbp)) {
+			FAULT_PRINT(direct, "  <next frame pointer 0x%016lx non-canonical>\n", next_rbp);
+			break;
+		}
+		if (!address_is_mapped(next_rbp) || !address_is_mapped(next_rbp + sizeof(uint64_t))) {
+			FAULT_PRINT(direct, "  <next frame pointer 0x%016lx unmapped>\n", next_rbp);
+			break;
+		}
+
+		rbp = next_rbp;
+	}
+}
+
+// The interrupted register set, and optionally the stack under it.
+//
+// Registers are UNCONDITIONAL: they are free (already pushed), they are always
+// safe (the block is on the stack we are standing on), and they answer
+// questions no other field can — which register held the bad pointer, and
+// whether it looks like data, a small integer, or copied program text. That
+// last one is not hypothetical: this OS has twice been debugged by noticing a
+// pointer whose bytes decoded as x86 instructions.
+//
+// The STACK DUMP is gated behind DEBUG_DETAILED, and Chris called that right.
+// It is bounded and every line is mapped-checked, so it cannot fault — but it
+// is long, and a wall of qwords is exactly the noise that makes people stop
+// reading crash reports. Ask for it when you want it.
+void dump_fault_registers(bool direct)
+{
+	if (gLastFaultRegs == 0) {
+		return;   // no fault has been through the capturing stub yet
+	}
+	const fault_regs_t *r = (const fault_regs_t *)gLastFaultRegs;
+
+	FAULT_PRINT(direct, ">>> RAX 0x%016lx  RBX 0x%016lx  RCX 0x%016lx  RDX 0x%016lx <<<\n",
+	                r->rax, r->rbx, r->rcx, r->rdx);
+	FAULT_PRINT(direct, ">>> RSI 0x%016lx  RDI 0x%016lx  RBP 0x%016lx <<<\n",
+	                r->rsi, r->rdi, r->rbp);
+
+	// RSP, CS, SS and the TRUE RFLAGS — none of which are in the pushed block.
+	//
+	// RSP is not pushable (push saves everything except the thing doing the
+	// pushing), so it has to come from the CPU's own fault frame, which
+	// gLastFaultRsp points at: [+0]=error code, +8=RIP, +16=CS, +24=RFLAGS,
+	// +32=RSP, +40=SS. That layout is guaranteed because LONG MODE ALWAYS
+	// PUSHES ALL FIVE QWORDS — even ring0->ring0, unlike 32-bit — which is a
+	// fact this codebase paid for twice (see the interrupt-frame rule in
+	// CLAUDE.md; reading RSP by arithmetic instead of from the +32 FIELD is
+	// how you get a byte-shifted value, because the CPU aligns RSP to 16
+	// before pushing).
+	//
+	// And the RFLAGS here is the INTERRUPTED code's, which the pushf in the
+	// stub is not: the stub does `cli` first, so its copy always reads IF=0
+	// no matter what the faulting code was running with. A flags register that
+	// lies about interrupt state is worse than no flags register — printing
+	// the frame's copy is the whole point.
+	if (gLastFaultRsp != 0 && fault_address_readable(gLastFaultRsp) &&
+	    fault_address_readable(gLastFaultRsp + 40)) {
+		const volatile uint64_t *f = (const volatile uint64_t *)gLastFaultRsp;
+		FAULT_PRINT(direct, ">>> RSP 0x%016lx  CS 0x%04lx  SS 0x%04lx  RFLAGS 0x%08lx (interrupted) <<<\n",
+		                f[4], f[2] & 0xFFFF, f[5] & 0xFFFF, f[3]);
+	} else {
+		FAULT_PRINT(direct, ">>> RSP <fault frame at 0x%016lx unreadable> <<<\n", gLastFaultRsp);
+	}
+
+	// GS, and ONLY GS, of the segment registers (Chris's call, 2026-08-10).
+	//
+	// DS/ES/FS are flat and base-ignored in long mode — their selectors say
+	// nothing and would be four columns of noise. CS and SS earn their place
+	// above because the RPL bits name the ring. GS earns its place for a reason
+	// specific to this kernel: get_core_local_storage() IS `mov rax, [gs:0]`,
+	// so GS is the core-local pointer, and a wrong GS makes every single cls->
+	// read return garbage. That is not a hypothetical failure mode here — it is
+	// the shape of the corruption family this OS spent weeks on.
+	//
+	// The SELECTOR is the useless half; in long mode the base comes from
+	// IA32_GS_BASE, so that MSR is what gets printed. And because os64 uses
+	// SWAPGS NOWHERE (verified — the base is written once per core at bring-up
+	// in smp_core.c and never swapped), this value has one correct answer at
+	// all times, in ring 0 and ring 3 alike: it must point into the
+	// kCoreLocalStorage array. So we do not merely print it, we CHECK it — a
+	// number a reader has to validate by hand is a number that gets skimmed
+	// past. If this ever says WRONG, stop reading the rest of the report and
+	// believe this line first.
+	{
+		uint64_t gs_base = rdmsr64(IA32_GS_BASE);
+		uint64_t cls_lo = (uint64_t)&kCoreLocalStorage[0];
+		uint64_t cls_hi = (uint64_t)&kCoreLocalStorage[MAX_CPUS];
+		bool sane = (gs_base >= cls_lo && gs_base < cls_hi);
+		FAULT_PRINT(direct, ">>> GS_BASE 0x%016lx  (%s) <<<\n",
+		                gs_base,
+		                sane ? "in kCoreLocalStorage — ok"
+		                     : "*** OUTSIDE kCoreLocalStorage — GS IS WRONG ***");
+	}
+	FAULT_PRINT(direct, ">>> R8  0x%016lx  R9  0x%016lx  R10 0x%016lx  R11 0x%016lx <<<\n",
+	                r->r8, r->r9, r->r10, r->r11);
+	FAULT_PRINT(direct, ">>> R12 0x%016lx  R13 0x%016lx  R14 0x%016lx  R15 0x%016lx <<<\n",
+	                r->r12, r->r13, r->r14, r->r15);
+
+	if ((kDebugLevel & DEBUG_DETAILED) != DEBUG_DETAILED) {
+		return;
+	}
+
+	// Sixteen qwords of stack, two per line, each PROVEN mapped before it is
+	// read. Same rule as the ring-3 walker: a diagnostic that faults turns a
+	// readable panic into a #DF, which is a strictly worse day.
+	uint64_t sp = gLastFaultRsp;
+	if (sp == 0 || !is_canonical_address(sp)) {
+		return;
+	}
+	FAULT_PRINT(direct, ">>> Stack at 0x%016lx: <<<\n", sp);
+	for (int i = 0; i < 16; i += 2) {
+		uint64_t a = sp + (uint64_t)i * 8;
+		if (!fault_address_readable(a) || !fault_address_readable(a + 8)) {
+			FAULT_PRINT(direct, ">>>   +0x%02x: <unmapped — stopping> <<<\n", i * 8);
+			break;
+		}
+		FAULT_PRINT(direct, ">>>   +0x%02x: 0x%016lx  0x%016lx <<<\n",
+		                i * 8, *(volatile uint64_t *)a, *(volatile uint64_t *)(a + 8));
+	}
+}
+
 
 void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     core_local_storage_t* core = get_core_local_storage();
@@ -171,6 +379,25 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
                     cr2_val, cr3_val);
     EXCEPTION_PRINT(">>> Interrupted RSP: 0x%016lx <<<      \n",
                     mp_isrSavedRSP[core->apic_id]);
+
+    // The register set the fault interrupted. Free (already pushed by the
+    // stub), always safe, and frequently the whole answer — CR2 says WHAT
+    // address died, the registers say WHICH POINTER carried it there.
+    dump_fault_registers(true);   // panic: direct, no daemon dependency
+
+    // The call chain, for EVERY exception rather than only #PF (2026-08-11,
+    // Chris: "all exception paths should print the same thing to the same
+    // places"). It used to be called by hand from the three fatal page-fault
+    // sites, which is why a #GP report had no chain at all and a #PF report
+    // printed one BEFORE its own headline.
+    //
+    // Honest for every vector because of the companion change in
+    // handler_errors.S: only the #PF stub captures a frame pointer, and every
+    // other stub now CLEARS it, so this prints a real walk after a #PF and
+    // "<no frame pointer captured for this exception>" after anything else —
+    // instead of confidently walking the last page fault's stack.
+    dump_stack_trace(rip, true);
+
     if (core->currentThread) {
 		task_t *task = (task_t*)core->currentThread->ownerTask;
 
@@ -208,13 +435,16 @@ void handle_invalid_opcode(uint64_t rip) {
 void handle_double_fault_frame(uint64_t rip, uint64_t rsp, uint64_t rflags)
 {
 	core_local_storage_t *core = get_core_local_storage();
-	printf("\n>>> DOUBLE FAULT on AP %lu <<<\n", core ? core->apic_id : 0);
-	printf(">>> RIP=0x%016lx RSP=0x%016lx RFLAGS=0x%016lx <<<\n", rip, rsp, rflags);
+	// EXCEPTION_PRINT, not FAULT_PRINT: a #DF is as dying as it gets. The wire
+	// copy is the only one that can be trusted to survive, and touching a log
+	// queue here risks a lock this core may already hold.
+	EXCEPTION_PRINT("\n>>> DOUBLE FAULT on AP %lu <<<\n", core ? core->apic_id : 0);
+	EXCEPTION_PRINT(">>> RIP=0x%016lx RSP=0x%016lx RFLAGS=0x%016lx <<<\n", rip, rsp, rflags);
 	// Name the usual suspects rather than making a reader decode bits.
-	if (rflags & 0x100)   printf(">>>   RFLAGS.TF set — single-step on a kernel thread <<<\n");
-	if (rflags & 0x4000)  printf(">>>   RFLAGS.NT set <<<\n");
-	if (rflags & 0x3000)  printf(">>>   RFLAGS.IOPL != 0 <<<\n");
-	if (rflags & 0x40000) printf(">>>   RFLAGS.AC set <<<\n");
+	if (rflags & 0x100)   EXCEPTION_PRINT(">>>   RFLAGS.TF set — single-step on a kernel thread <<<\n");
+	if (rflags & 0x4000)  EXCEPTION_PRINT(">>>   RFLAGS.NT set <<<\n");
+	if (rflags & 0x3000)  EXCEPTION_PRINT(">>>   RFLAGS.IOPL != 0 <<<\n");
+	if (rflags & 0x40000) EXCEPTION_PRINT(">>>   RFLAGS.AC set <<<\n");
 	exception_panic("Double Fault (#DF) — the first fault could not be delivered", rip, 0);
 }
 
@@ -262,31 +492,54 @@ void handle_unexpected_exception(uint64_t vector, uint64_t error_code, uint64_t 
 }
 
 
-static void log_page_fault_bits(uint64_t error_code)
+/// @brief Decode a #PF error code into the bracketed form both fault reports use.
+///
+/// ONE spelling of these five bits, shared by the ring-3 segfault report
+/// (user_fault_kill) and the ring-0 panic (page_fault_panic). They used to be
+/// two: a bracketed one-liner for segfaults and a multi-line bullet list for
+/// panics, so the same fault described itself two different ways depending on
+/// which side of the privilege boundary it happened on.
+static void page_fault_decode(char *out, size_t len, uint64_t error_code)
 {
-	const struct {
-		uint64_t mask;
-		const char *label;
-	} bit_info[] = {
-		{1ull << 0, "Present (bit 0)"},
-		{1ull << 1, "Write (bit 1)"},
-		{1ull << 2, "User (bit 2)"},
-		{1ull << 3, "Reserved bit violation (bit 3)"},
-		{1ull << 4, "Instruction fetch (bit 4)"},
-	};
-
-	bool any = false;
-	for (size_t i = 0; i < sizeof(bit_info) / sizeof(bit_info[0]); i++) {
-		if (error_code & bit_info[i].mask) {
-			printf("  %s\n", bit_info[i].label);
-			any = true;
-		}
-	}
-
-	if (!any) {
-		printf("  No recognized fault bits set.\n");
-	}
+	snprintf(out, len, "%s, %s, %s%s%s",
+	         (error_code & 0x1) ? "protection violation" : "page not present",
+	         (error_code & 0x2) ? "write" : "read",
+	         (error_code & 0x4) ? "user mode" : "kernel mode",
+	         (error_code & 0x8) ? ", reserved bit set" : "",
+	         (error_code & 0x10) ? ", instruction fetch" : "");
 }
+
+/// @brief The single door every FATAL page fault leaves by.
+///
+/// Before this existed the eight fatal exits in handle_page_fault each called
+/// panic() directly, which meant a kernel #PF got a bespoke, thinner report
+/// than any other exception: no register dump (the bitter irony being that the
+/// #PF stub is the ONLY one that captures registers), no AP/thread line, no
+/// CR3, no interrupted RSP. Chris caught it on a live #PF during a VT soak:
+/// "in the end ... its a #PF. Can we make this error consistent with others?"
+///
+/// So it is a #PF first and a reason second — the vector names the event, the
+/// `why` qualifies it, and exception_panic prints exactly what #GP, #UD, #DE
+/// and #MC print.
+static void __attribute__((noreturn)) page_fault_panic(const char *why, uint64_t cr2,
+                                                       uint64_t error_code, uint64_t rip)
+{
+	char bits[96];
+	char msg[256];
+
+	page_fault_decode(bits, sizeof(bits), error_code);
+	snprintf(msg, sizeof(msg), "Page fault (#PF) — %s: address 0x%016lx [%s]",
+	         why, cr2, bits);
+
+	exception_panic(msg, rip, error_code);
+	__builtin_unreachable();
+}
+
+// (Here lay log_page_fault_bits, which printed the same five error-code bits as
+// a multi-line bullet list — "  Write (bit 1)" — while the ring-3 segfault
+// report printed them as a bracketed one-liner. Same fault, two descriptions,
+// chosen by which side of the privilege boundary it happened on. Retired
+// 2026-08-11 in favour of page_fault_decode, which both reports now share.)
 
 // A user-mode fault the demand pager can't resolve is the APP's bug, not the
 // kernel's: kill the task, keep the OS.  This is the segmentation fault, and
@@ -302,10 +555,31 @@ static void log_page_fault_bits(uint64_t error_code)
 static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *why,
     uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
-	printf("\nSegmentation fault: task %lu, %s at 0x%016lx (RIP=0x%016lx, error=0x%lx)\n",
-	       task->taskID, why, cr2, rip, error_code);
-	printd(DEBUG_EXCEPTIONS, "Segmentation fault: task %lu, %s CR2=0x%016lx RIP=0x%016lx error=0x%lx\n",
-	       task->taskID, why, cr2, rip, error_code);
+	// The headline, on EVERY sink. DEBUG_EXCEPTIONS is permanently on (see
+	// CONFIG.h), so the printd is not a hedge — it is the copy a script greps.
+	// The direct serial write is the copy that survives the session.
+	FAULT_PRINT(false, "\nSegmentation fault: %s (task %lu, %s)\n",
+	       task->exename[0] ? task->exename : "(unnamed)", task->taskID, why);
+
+	// The error code decoded, because "error=0x7" is a number and "write to a
+	// present page from user mode" is a diagnosis. These five bits answer the
+	// first three questions anyone asks: was it a read or a write, was the
+	// page there at all, and was it us or the kernel.
+	{
+		char bits[96];
+		page_fault_decode(bits, sizeof(bits), error_code);
+		FAULT_PRINT(false, "  address 0x%016lx  RIP 0x%016lx  error 0x%lx [%s]\n",
+		            cr2, rip, error_code, bits);
+	}
+
+	// The registers the program died holding — same argument as the kernel
+	// panic path: CR2 names the address, the registers name the pointer.
+	dump_fault_registers(false);  // the OS survives this — ordinary log, in order
+
+	// And the call chain. gLastFaultRbp is captured by the #PF stub before it
+	// calls us (handler_errors.S), which is the only reason a trace is possible
+	// this far from the fault. NOTRACE disables everything below.
+	stack_trace_user(task, rip, gLastFaultRbp);
 
 	task->retVal = 139;   // 128 + SIGSEGV(11)
 	task_exit();
@@ -346,10 +620,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     task_t *task = kCLSInitialized ? get_core_local_storage()->task : NULL;
     if (!task)
     {
-        log_page_fault_bits(error_code);
-        dump_stack_trace(rip);
-        panic("Page fault with no task context (early boot?): RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx",
-              rip, cr2, error_code);
+        page_fault_panic("no task context (early boot?)", cr2, error_code, rip);
     }
     vma_t *vma = vma_lookup(task, cr2);
     if (!vma)
@@ -361,17 +632,20 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // precisely so a bad user pointer can never fault down here in ring 0.)
         if (error_code & 0x4)
             user_fault_kill(task, "access to unmapped address", cr2, error_code, rip);
-        printd(DEBUG_EXCEPTIONS, "No VMA found for address 0x%016lx.\n", cr2);
-        log_page_fault_bits(error_code);
-        dump_stack_trace(rip);
         // A fault in the HHDM range is the lazy-HHDM tripwire firing (see
         // paging.h): physical memory is only HHDM-mapped while allocated, so
         // this is a use-after-free, a wild physical-address dereference, or
         // memory that never came from the allocator (e.g. MMIO that needs an
         // explicit mapping). Say so, rather than the generic no-VMA message.
         if (kHHDMMaintenanceEnabled && cr2 >= kHHDMOffset && cr2 < kHHDMOffset + 0x1000000000000UL)
-            panic("Paging exception: HHDM access to unallocated physical address 0x%016lx — use-after-free or wild pointer?", cr2 - kHHDMOffset);
-        panic("Paging exception: Invalid memory access with no VMA\n");
+        {
+            char hhdm[128];
+            snprintf(hhdm, sizeof(hhdm),
+                     "HHDM access to unallocated physical 0x%016lx — use-after-free or wild pointer?",
+                     cr2 - kHHDMOffset);
+            page_fault_panic(hhdm, cr2, error_code, rip);
+        }
+        page_fault_panic("no VMA covers this address", cr2, error_code, rip);
     }
 
     // Per-fault detail: rides DETAILED so the base demand-paging channel
@@ -394,13 +668,15 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // duplicate the content, then remap writable so the faulting store can retry.
         uintptr_t old_phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, aligned);
         if (!old_phys || old_phys == 0xbadbadba)
-            panic("CoW fault: page table walk did not find the original page");
+            page_fault_panic("CoW fault — page table walk did not find the original page",
+                             cr2, error_code, rip);
 
         // kmalloc_aligned guarantees the page is accessible via HHDM in kKernelPML4.
         // allocate_memory_aligned() does not make that guarantee.
         void *new_virt = kmalloc_aligned(PAGE_SIZE);
         if (!new_virt)
-            panic("CoW fault: failed to allocate replacement page");
+            page_fault_panic("CoW fault — failed to allocate replacement page",
+                             cr2, error_code, rip);
         uintptr_t new_phys = (uintptr_t)new_virt - kHHDMOffset;
 
         // Copy the old page's content via HHDM — the source physical page is
@@ -439,13 +715,8 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // tables lacking PAGE_USER lands here too (that exact fault, error
         // 0x15, is how ring-3 bring-up found the paging_map_page U/S bug),
         // and a wrong message sends the reader hunting in the wrong place.
-        printd(DEBUG_EXCEPTIONS, "Protection violation at RIP=0x%016lx, CR2=0x%016lx\n", rip, cr2);
-        log_page_fault_bits(error_code);
-        dump_stack_trace(rip);
-        panic("Paging exception: protection violation (%s access, %s mode, error=0x%lx) on a present non-CoW page",
-              (error_code & 0x10) ? "instruction-fetch" : ((error_code & 0x2) ? "write" : "read"),
-              (error_code & 0x4) ? "user" : "supervisor",
-              error_code);
+        page_fault_panic("protection violation on a present non-CoW page",
+                         cr2, error_code, rip);
     }
 
     // Demand page fault: page is not present yet.
@@ -469,7 +740,8 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
 
         uintptr_t phys = shared_object_resolve_page(so, page_idx);
         if (!phys)
-            panic("Failed to resolve shared-object page during fault resolution");
+            page_fault_panic("failed to resolve a shared-object page",
+                             cr2, error_code, rip);
 
         paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, PAGE_PRESENT | PAGE_USER);
         kPageFaultCount++;
@@ -480,7 +752,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     // VMA's backing (static executables, anonymous memory).
     uintptr_t phys = vma_resolve_backing_page(vma, cr2);
     if (!phys)
-        panic("Failed to resolve page during fault resolution");
+        page_fault_panic("failed to resolve the page", cr2, error_code, rip);
 
     // Map the page into task's address space
     uint64_t flags = PAGE_PRESENT | PAGE_USER;

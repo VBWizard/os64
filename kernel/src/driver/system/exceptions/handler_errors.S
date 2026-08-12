@@ -4,11 +4,40 @@
 
 .extern gLastFaultRbp
 .extern gLastFaultRsp
+.extern gLastFaultRegs
 .extern kTestingPageFaults
+
+# ── The stale-capture problem, and the macro that ends it ───────────────────
+#
+# gLastFaultRegs / gLastFaultRbp / gLastFaultRsp are written by ONE stub in this
+# file: page_fault_handler. Every other exception funnels into exception_panic,
+# which prints them as "the register set the fault interrupted" — so a #GP
+# reported whatever the LAST PAGE FAULT left behind, under a label saying it was
+# current. Demand paging means a page fault has always just happened, so the
+# `gLastFaultRegs == 0` guard in dump_fault_registers never once fired.
+#
+# That is the exact failure the CR2 comment in exception_panic warns about — a
+# confident-looking field that means nothing — living two functions away from
+# the warning. Chris found the missing half of it on a live #PF: the one handler
+# that DOES capture registers had a report that never printed them.
+#
+# Until every stub captures for real (the follow-on: normalize the frame with a
+# dummy error code and give them all one shared prologue), the honest thing is
+# to say nothing rather than to lie. This clears the three globals so the
+# existing guards report "not captured for this exception" — which is true.
+#
+# rax is free: every user of this macro is about to hand its own values to C.
+.macro CLEAR_STALE_FAULT_CAPTURE
+    xor rax, rax
+    mov qword ptr [rip + gLastFaultRegs], rax
+    mov qword ptr [rip + gLastFaultRbp], rax
+    mov qword ptr [rip + gLastFaultRsp], rax
+.endm
 
 .global divide_by_zero_handler
 divide_by_zero_handler:
     cli
+    CLEAR_STALE_FAULT_CAPTURE
     mov rdi, [rsp]  # Get faulting RIP from the stack
     call handle_divide_by_zero
     hlt
@@ -16,6 +45,7 @@ divide_by_zero_handler:
 .global invalid_opcode_handler
 invalid_opcode_handler:
     cli
+    CLEAR_STALE_FAULT_CAPTURE
     mov rdi, [rsp]  # Get RIP
     call handle_invalid_opcode
     hlt
@@ -31,6 +61,7 @@ invalid_opcode_handler:
 .global double_fault_handler
 double_fault_handler:
     cli
+    CLEAR_STALE_FAULT_CAPTURE
     mov rdi, [rsp+8]     # RIP that was executing
     mov rsi, [rsp+32]    # RSP at the time — the likely culprit
     mov rdx, [rsp+24]    # RFLAGS — garbage here means a corrupt frame
@@ -40,6 +71,7 @@ double_fault_handler:
 .global general_protection_fault_handler
 general_protection_fault_handler:
     cli
+    CLEAR_STALE_FAULT_CAPTURE
     pop rdi   # Get error code
     pop rsi   # Get RIP (next on stack)
     call handle_general_protection_fault
@@ -69,6 +101,14 @@ page_fault_handler:
     mov qword ptr [rip + gLastFaultRsp], rax
     mov rax, [rsp + 72]
     mov qword ptr [rip + gLastFaultRbp], rax
+
+    # The 16 qwords just pushed ARE the interrupted register set — the handler
+    # has always had them and simply never told C where they were, so every
+    # fault report so far has been RIP and CR2 and guesswork. RSP points at the
+    # pushf result, with r15..rax ascending above it (see fault_regs_t).
+    # Captured AFTER the two above so this stays a pure addition to a sequence
+    # whose offsets are already load-bearing.
+    mov qword ptr [rip + gLastFaultRegs], rsp
 
     mov rsi, [rsp + 128]     # Error code
     mov rdx, [rsp + 136]     # Faulting RIP
@@ -101,6 +141,7 @@ page_fault_handler:
 .global machine_check_handler
 machine_check_handler:
     cli
+    CLEAR_STALE_FAULT_CAPTURE
     mov rdi, [rsp]  # Get RIP
     call handle_machine_check
     hlt
@@ -121,6 +162,7 @@ machine_check_handler:
 .global \name
 \name:
     cli
+    CLEAR_STALE_FAULT_CAPTURE
     mov rdi, \vec           # which exception
     xor rsi, rsi            # no error code for this one
     mov rdx, [rsp]          # faulting RIP (top of frame)
@@ -132,6 +174,7 @@ machine_check_handler:
 .global \name
 \name:
     cli
+    CLEAR_STALE_FAULT_CAPTURE
     mov rdi, \vec
     pop rsi                 # error code the CPU pushed
     mov rdx, [rsp]          # ...RIP is next
@@ -140,7 +183,6 @@ machine_check_handler:
 .endm
 
 EXC_NOERR 1,  debug_exception_handler          # #DB — single-step / breakpoints
-EXC_NOERR 2,  nmi_handler                      # NMI
 EXC_NOERR 3,  breakpoint_handler               # #BP — int3
 EXC_NOERR 4,  overflow_handler                 # #OF
 EXC_NOERR 5,  bound_range_handler              # #BR
@@ -151,3 +193,5 @@ EXC_ERR   12, stack_segment_handler            # #SS
 EXC_NOERR 16, x87_fpu_handler                  # #MF
 EXC_ERR   17, alignment_check_handler          # #AC
 EXC_NOERR 19, simd_fpu_handler                 # #XM
+
+EXC_NOERR 2,  nmi_handler                      # NMI

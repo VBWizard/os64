@@ -109,6 +109,20 @@ char kLogdPath[128] = {0};
 bool kTestPanic = false;
 // SHUTDOWNTEST's flag — same one-boot-diagnostic idea for the descent.
 bool kTestShutdown = false;
+// TESTPF: dereference a deliberately unmapped KERNEL address right after the
+// post-boot tests, to exercise the fatal page-fault report itself.
+//
+// Third member of the TESTPANIC family, and it exists for the same reason as
+// the other two: this code path only ever runs when something has already gone
+// badly wrong, which is precisely the kind of code that regresses in silence.
+// It earned its place the day it was written — the fatal #PF report had been
+// quietly thinner than every other exception's for as long as it had existed
+// (no registers, no AP/thread, no CR3), and nobody noticed until a real fault
+// during a VT soak put the two side by side.
+//
+// Kernel-mode and no VMA on purpose: that is the exact path a wild kernel
+// pointer takes, and the one Chris's soak fault took.
+bool kTestPageFault = false;
 extern char kTestsPolicyOverride[];
 // SCHED=<mode>: scheduler mode selection. Absent means tickless — the default
 // needs no flag, that's the point (2026-08-05 ruling; the misnamed BSPSCHED
@@ -238,6 +252,7 @@ static cmdopt_t cmdopts[] = {
     {"GW", OPT_STRING, kNetGWString, 0, 20},
     {"MASK", OPT_STRING, kNetMaskString, 0, 20},
     {"TESTPANIC", OPT_BOOL, &kTestPanic, true, 0},
+    {"TESTPF", OPT_BOOL, &kTestPageFault, true, 0},
     // TESTS=panic|warn — one-boot override of every test's failure policy
     // (test_framework.h owns the taxonomy: warn / remount-ro / panic, the
     // ext2 s_errors trio reborn). Unset honors each test's registration.

@@ -63,6 +63,7 @@ extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kRunTestrun; // launch /bin/testrun, the ring-3 half of the suite
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
+extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
 extern bool kTestShutdown;  // SHUTDOWNTEST: run the full shutdown descent post-tests
 bool kEnableSMP = true;
 // The scheduler mode, DEFAULT TRUE since 2026-08-05 (Chris's ruling, decision
@@ -541,6 +542,20 @@ void kernel_init()
 	// else; its read half was long since covered by the ring-3 fixtures.
 	// Removed 2026-07-19 with tests.c itself — the day the framework
 	// finished eating its ancestor.)
+
+	// The standing fatal-page-fault diagnostic (TESTPF). A wild KERNEL pointer,
+	// which is the exact shape of the fault this report exists to explain — an
+	// upper-half address no VMA covers, touched from ring 0. The report that
+	// comes out should be indistinguishable in structure from a #GP's: banner,
+	// AP/thread, faulting RIP, error code, CR2/CR3, interrupted RSP, the full
+	// register set, and a call chain.
+	if (kTestPageFault)
+	{
+		// volatile so the compiler cannot decide a store nobody reads is
+		// removable — the whole point is that the store actually executes.
+		volatile uint64_t *wild = (volatile uint64_t *)0xffff8f00deadb000ULL;
+		*wild = 0x5157434544414544ULL;
+	}
 
 	// The standing panic-pipeline diagnostic (see kTestPanic's comment in
 	// kernel_commandline.c). Placed HERE, after the full boot + test flow, so
