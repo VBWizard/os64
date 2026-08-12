@@ -107,6 +107,30 @@ void log_note_sink_claimed(void)
 	kLogSinkEverClaimed = true;
 }
 
+// See log.h for who asks and why. Deliberately NOT "is logd running" — the
+// question is strictly "will printd's bytes come out of COM1?", because the
+// only caller is deciding whether its own direct serial write would be
+// duplicated.
+//
+// SIDE-EFFECT FREE, and that is a requirement rather than a nicety: the pure
+// condition is spelled out again here instead of calling
+// log_awaiting_userland_sink(), which owns the two escape hatches and both
+// SETS a flag and prints. A fault reporter must be able to ask this question
+// without changing the answer for everybody else.
+bool log_printd_reaches_serial(void)
+{
+	// A daemon owns the log: printd goes to its file, never to the wire.
+	if (kLogSinkEverClaimed)
+		return false;
+	// LOGD= was requested and we are still holding the drainer off the wire
+	// waiting for it. Entries queue now and reach the file when it attaches.
+	if (kLogdPath[0] != '\0' && !kLogSinkAwaitAbandoned)
+		return false;
+	// Nobody is coming (or nobody was asked): the kernel drainer is putting
+	// printd straight onto COM1.
+	return true;
+}
+
 // Should the drainer stay silent because a log daemon is expected but has not
 // attached yet? See the LOG_SINK_AWAIT_* commentary in log.h for the why; this
 // is the where. Called once per drain pass, and it OWNS the two escape

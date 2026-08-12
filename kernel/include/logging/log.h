@@ -60,6 +60,22 @@ void dump_log_buffer(uint16_t core);
 void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message);
 bool logd_thread(bool daemon);
 
+/// @brief Will printd output come out of the SERIAL PORT right now?
+///
+/// The exception reporter is the customer, and the question it is really
+/// asking is "would a printd copy of this line be a SECOND copy on the wire?"
+/// It writes serial directly (a fault report must survive the session), so it
+/// adds the printd copy only when that copy goes somewhere ELSE — a LOGD= file
+/// — rather than back onto the same wire.
+///
+/// Three states, only one of which is "yes": a daemon has claimed the log (no
+/// — printd goes to its file), LOGD= was set and we are still holding the
+/// drainer off the wire waiting (no — it queues, then reaches the file), or
+/// nobody is coming (YES — the kernel drainer writes COM1 itself).
+///
+/// Guaranteed side-effect free — see the implementation for why that matters.
+bool log_printd_reaches_serial(void);
+
 // PANIC-ONLY: drain every core's queue to serial, right now, on THIS core.
 // Busts kLogDWorkLock after a bounded grace wait (the holder may be halted or
 // wedged — a possibly-garbled line beats a silently lost one, the
