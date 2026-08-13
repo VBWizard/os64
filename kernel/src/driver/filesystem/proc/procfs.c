@@ -10,7 +10,6 @@
 // The namespace (see PROC.md for why each name is what it is):
 //
 //   /proc/                      one entry per live task, named by decimal ID
-//   /proc/cores                 CPU time per core: total/busy/idle/sched µs
 //   /proc/<id>/status           state, parent, timing, fault counts
 //   /proc/<id>/cmdline          argv, one argument per line
 //   /proc/<id>/cwd              the task's current directory
@@ -46,10 +45,9 @@
 #include "memory/paging.h"
 #include "CONFIG.h"
 #include "BasicRenderer.h"   // printf — the mount line belongs on the glass too
-#include "smp.h"             // core_local_storage_t + kMPCoreCount (/proc/cores)
-#include "smp_core.h"        // get_core_local_storage_for_core
+#include "smp.h"             // core_local_storage_t (/proc/self's identity read)
+#include "smp_core.h"        // mpAcctSettleAll — the status files' freshness contract
 
-extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
 extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
 
 extern uint64_t kTicksSinceStart;
@@ -81,7 +79,9 @@ typedef enum
 	PROC_NODE_THREADDIR,     // /<id>/thread
 	PROC_NODE_THREAD,        // /<id>/thread/<tid>
 	PROC_NODE_THREAD_FILE,   // /<id>/thread/<tid>/<name>
-	PROC_NODE_CORES_FILE,    // /cores — the machine's CPU-time ledger
+	// /cores lived here 2026-08-07..08-12, then moved to /sys/cpu/<n>/time:
+	// a machine fact never belonged at a process-tree address (the exact
+	// silting Linux spent a decade regretting — see sysfs.c's header).
 } proc_node_type_t;
 
 #define PROC_NAME_MAX 32
@@ -124,18 +124,6 @@ static void proc_parse_path(const char *path, proc_path_t *out)
 		out->type = PROC_NODE_ROOT;
 		return;
 	}
-	// The one non-numeric name at the root: the per-core CPU-time ledger.
-	// Checked before the numeric parse so it can never shadow a task ID.
-	if (strcmp(comp, "cores") == 0)
-	{
-		strncpy(out->name, comp, PROC_NAME_MAX - 1);
-		// Nothing lives inside a file.
-		if (synth_next_component(path, &pos, comp, sizeof(comp)))
-			return;
-		out->type = PROC_NODE_CORES_FILE;
-		return;
-	}
-
 	// "/proc/self" — the caller's own entry, by name. Linux needs a magic
 	// per-opener symlink for this; os64 needs six lines, because this parse
 	// already runs in the OPENER's syscall context and identity is one CLS
@@ -425,48 +413,8 @@ static uint64_t proc_cycles_to_us(uint64_t cycles)
 	return per_us ? cycles / per_us : 0;
 }
 
-// /proc/cores — the machine's CPU-time ledger, one row per core. Header
-// line first, then tab-separated columns, so a reader can parse by name
-// today and survive new columns tomorrow.
-//
-// busy is DERIVED (total - idle - sched): the accounting charges threads,
-// the idle thread among them, and the scheduler's own passes; what the
-// three don't explain is genuinely unaccounted (early boot, ISR time —
-// documented v1 honesty). All values are written only by each core's own
-// scheduler pass — reading them cross-core here is safe (worst case one
-// slice stale); SUBTRACTING a remote TSC from a local rdtsc would not be,
-// which is why total comes from the core's own two stamps, never from
-// "now".
-static void proc_gen_cores(synth_text_t *t)
-{
-	// Settle-on-read: every core charges its in-flight span (locally, own
-	// TSC) before we render — so the books are never staler than this IPI
-	// round-trip, and tickless mode's lumpy settlement can't staircase a reader.
-	// Rate-limited inside (once per tick), so a top refresh pays once.
-	mpAcctSettleAll();
-
-	synth_text_addf(t, "core\ttotal_us\tbusy_us\tidle_us\tsched_us\n");
-	for (uint8_t i = 0; i < kMPCoreCount; i++)
-	{
-		core_local_storage_t *cls = get_core_local_storage_for_core(i);
-		if (cls == NULL)
-			continue;
-
-		uint64_t total = (cls->acctLastDispatchTSC > cls->acctZeroTSC)
-		                 ? cls->acctLastDispatchTSC - cls->acctZeroTSC : 0;
-		uint64_t sched = cls->acctSchedCycles;
-		uint64_t idle  = 0;
-		if (kIdleTasks[i] != NULL && kIdleTasks[i]->threads != NULL)
-			idle = kIdleTasks[i]->threads->runCycles;
-
-		uint64_t accounted = idle + sched;
-		uint64_t busy = (total > accounted) ? total - accounted : 0;
-
-		synth_text_addf(t, "%u\t%lu\t%lu\t%lu\t%lu\n", (unsigned)i,
-		           proc_cycles_to_us(total), proc_cycles_to_us(busy),
-		           proc_cycles_to_us(idle),  proc_cycles_to_us(sched));
-	}
-}
+// The per-core CPU-time ledger lived here as proc_gen_cores until 2026-08-12;
+// it is sys_gen_cpu_time now (sysfs.c), one file per core under /sys/cpu.
 
 static void proc_gen_task_status(synth_text_t *t, task_t *task)
 {
@@ -476,8 +424,8 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	// lives in /<id>/thread/<tid>/status for anyone who wants the roster.
 	thread_t *th = proc_task_liveliest_thread(task);
 
-	// Same settle as /proc/cores (rate-limited to once a tick): runtime_us
-	// below must not be a scheduler-pass stale on a monopolized core.
+	// Same settle as /sys/cpu/<n>/time (rate-limited to once a tick):
+	// runtime_us below must not be a scheduler-pass stale on a monopolized core.
 	mpAcctSettleAll();
 
 	synth_text_addf(t, "task\t%lu\n", task->taskID);
@@ -743,25 +691,19 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		return -1;
 
 	proc_parse_path(path, &pp);
-	if (pp.type != PROC_NODE_TASK_FILE && pp.type != PROC_NODE_THREAD_FILE &&
-	    pp.type != PROC_NODE_CORES_FILE)
+	if (pp.type != PROC_NODE_TASK_FILE && pp.type != PROC_NODE_THREAD_FILE)
 		return -1;   // directories go through dops; everything else is not a file
 
-	// /cores belongs to the machine, not to any task — no lookup to do.
-	task_t *task = NULL;
+	task_t *task = proc_find_task(pp.taskID);
 	thread_t *th = NULL;
-	if (pp.type != PROC_NODE_CORES_FILE)
-	{
-		task = proc_find_task(pp.taskID);
-		if (task == NULL)
-			return -1;
+	if (task == NULL)
+		return -1;
 
-		if (pp.type == PROC_NODE_THREAD_FILE)
-		{
-			th = proc_task_thread(task, pp.threadID);
-			if (th == NULL)
-				return -1;
-		}
+	if (pp.type == PROC_NODE_THREAD_FILE)
+	{
+		th = proc_task_thread(task, pp.threadID);
+		if (th == NULL)
+			return -1;
 	}
 
 	bool is_ctl = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "ctl") == 0);
@@ -775,11 +717,7 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	if (!synth_text_init(&text, 512))
 		return -1;
 
-	if (pp.type == PROC_NODE_CORES_FILE)
-	{
-		proc_gen_cores(&text);
-	}
-	else if (pp.type == PROC_NODE_THREAD_FILE)
+	if (pp.type == PROC_NODE_THREAD_FILE)
 	{
 		proc_gen_thread_status(&text, task, th);
 	}
@@ -918,17 +856,6 @@ static int proc_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 	{
 		case PROC_NODE_ROOT:
 		{
-			// The machine's own file first, then the tasks — `ls /proc`
-			// leads with the ledger. index doubles as the "cores emitted"
-			// flag; the task walk below uses the ID cursor, not index.
-			if (h->index == 0)
-			{
-				h->index = 1;
-				strncpy(entry->name, "cores", OS64_DIRENT_NAME_MAX);
-				entry->size = 0;
-				return 1;
-			}
-
 			// Walk kTaskList for the lowest visible task ID greater than the
 			// last one we handed out. Cursor-by-ID rather than by index: the
 			// list can grow between calls (a spawn), and an index would then
@@ -1040,10 +967,6 @@ static int proc_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *v
 		case PROC_NODE_ROOT:
 			entry->flags = OS64_DE_DIR;
 			strncpy(entry->name, "proc", OS64_DIRENT_NAME_MAX);
-			return 0;
-
-		case PROC_NODE_CORES_FILE:
-			strncpy(entry->name, "cores", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case PROC_NODE_TASK:

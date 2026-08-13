@@ -6,9 +6,11 @@
 //
 // Built 2026-08-11, for a Bosgame P5 that ran thirteen hours with core 2
 // silently struck off the roster: top showed its idle thread frozen at
-// 4397.0s and /proc/cores called it "parked", and every other instrument we
-// owned reached that core through a maskable interrupt it was no longer
-// taking. There was no way to ask it a question. Now there is.
+// 4397.0s and the CPU ledger (then /proc/cores, /sys/cpu since 08-12) called
+// it "parked", and every other instrument we owned reached that core through
+// a maskable interrupt it was no longer taking. There was no way to ask it a
+// question. Now there is — and since the /sys/cpu slice, a way to ask from a
+// LIVE shell: write "probe" to /sys/cpu/<n>/probe, read the answer back.
 
 #include <stddef.h>
 
@@ -194,7 +196,8 @@ static const char *probe_sym_for_address(uint64_t addr, uint64_t *off)
 	return NULL;
 }
 
-static void probe_print_frame_line(int level, uint64_t addr, const char *tag)
+static void probe_print_frame_line(nmi_probe_line_fn emit, void *ctx,
+                                   int level, uint64_t addr, const char *tag)
 {
 	char line[160];
 	uint64_t off = 0;
@@ -205,7 +208,7 @@ static void probe_print_frame_line(int level, uint64_t addr, const char *tag)
 	} else {
 		sprintf(line, "  %2d) 0x%016lx  <no name>%s\n", level, addr, tag);
 	}
-	probe_emit(line);
+	emit(ctx, line);
 }
 
 /// @brief Walk the RBP chain of a stopped core, from the asker's side.
@@ -214,18 +217,19 @@ static void probe_print_frame_line(int level, uint64_t addr, const char *tag)
 /// the reason a corrupted stack yields a SHORT trace rather than an infinite
 /// one. The monotonicity test does most of the work: stacks grow down, so each
 /// caller's frame must sit ABOVE its callee's.
-static void probe_walk_stack(const nmi_probe_snapshot_t *s)
+static void probe_walk_stack(nmi_probe_line_fn emit, void *ctx,
+                             const nmi_probe_snapshot_t *s)
 {
 	char line[160];
 
 	// Ring 3 has no kernel chain to walk, and saying so is a real answer.
 	if ((s->frame.cs & 3) != 0) {
-		probe_emit("  (core was in ring 3 — no kernel call chain; see CS/RIP above)\n");
+		emit(ctx, "  (core was in ring 3 — no kernel call chain; see CS/RIP above)\n");
 		return;
 	}
 
-	probe_emit("  Call chain (most recent first):\n");
-	probe_print_frame_line(1, s->frame.rip, "   <-- stopped here");
+	emit(ctx, "  Call chain (most recent first):\n");
+	probe_print_frame_line(emit, ctx, 1, s->frame.rip, "   <-- stopped here");
 
 	int level = 2;
 	uint64_t frame = s->regs.rbp;
@@ -235,13 +239,13 @@ static void probe_walk_stack(const nmi_probe_snapshot_t *s)
 
 		if (!probe_read_u64(frame, &saved_rbp) ||
 		    !probe_read_u64(frame + 8, &ret)) {
-			probe_emit("  ... (chain broke here — frame not readable)\n");
+			emit(ctx, "  ... (chain broke here — frame not readable)\n");
 			break;
 		}
 		if (ret == 0) {
 			break;   // a clean chain terminates
 		}
-		probe_print_frame_line(level, ret, "");
+		probe_print_frame_line(emit, ctx, level, ret, "");
 
 		// A ZERO saved RBP is the floor, not a fault: the thread launch stub
 		// pushes it deliberately so the chain has somewhere to stop. The first
@@ -251,7 +255,7 @@ static void probe_walk_stack(const nmi_probe_snapshot_t *s)
 			break;
 		}
 		if (saved_rbp <= frame) {
-			probe_emit("  ... (chain broke here — frame pointer not monotonic)\n");
+			emit(ctx, "  ... (chain broke here — frame pointer not monotonic)\n");
 			break;
 		}
 		frame = saved_rbp;
@@ -261,71 +265,92 @@ static void probe_walk_stack(const nmi_probe_snapshot_t *s)
 	// The raw stack window. When the RBP chain is garbage — which is exactly
 	// the case a corrupting bug produces — these words are often the only
 	// evidence left, and they cost sixteen validated reads.
-	probe_emit("  Stack words at RSP:\n");
+	emit(ctx, "  Stack words at RSP:\n");
 	for (int i = 0; i < PROBE_STACK_WORDS; i += 2) {
 		uint64_t a = 0, b = 0;
 		uint64_t va = s->frame.rsp + (uint64_t)i * 8;
 		bool oka = probe_read_u64(va, &a);
 		bool okb = probe_read_u64(va + 8, &b);
 		if (!oka && !okb) {
-			probe_emit("    (stack not readable from here)\n");
+			emit(ctx, "    (stack not readable from here)\n");
 			break;
 		}
 		sprintf(line, "    +0x%02x  %016lx  %016lx\n", i * 8,
 		        oka ? a : 0UL, okb ? b : 0UL);
-		probe_emit(line);
+		emit(ctx, line);
 	}
 }
 
-static void probe_report(const nmi_probe_snapshot_t *s)
+// THE formatter — every rendering of a snapshot, wire or file, comes through
+// here (nmi_probe.h explains the seam). No locks and no sinks: the emitter
+// decides where lines go, and its caller decides who may speak.
+void nmi_probe_render(const nmi_probe_snapshot_t *s, nmi_probe_line_fn emit, void *ctx)
 {
 	char line[200];
 	const nmi_regs_t *r = &s->regs;
 
-	// One narrator per report (exception_report.h): a probe dump racing a
-	// fault report on another core must not braid with it. Per-REPORT, not
-	// per-sweep — a sweep can spend seconds in timeouts, and holding the wire
-	// that long would push a dying core's report into the barge path.
-	exception_wire_lock();
-
 	sprintf(line, "core %u: RIP=%016lx CS=%04lx RFLAGS=%016lx (IF=%lu) RSP=%016lx SS=%04lx\n",
 	        s->apic_id, s->frame.rip, s->frame.cs, s->frame.rflags,
 	        (s->frame.rflags >> 9) & 1, s->frame.rsp, s->frame.ss);
-	probe_emit(line);
+	emit(ctx, line);
 
 	sprintf(line, "  RAX=%016lx RBX=%016lx RCX=%016lx RDX=%016lx\n",
 	        r->rax, r->rbx, r->rcx, r->rdx);
-	probe_emit(line);
+	emit(ctx, line);
 	sprintf(line, "  RSI=%016lx RDI=%016lx RBP=%016lx\n", r->rsi, r->rdi, r->rbp);
-	probe_emit(line);
+	emit(ctx, line);
 	sprintf(line, "  R8 =%016lx R9 =%016lx R10=%016lx R11=%016lx\n",
 	        r->r8, r->r9, r->r10, r->r11);
-	probe_emit(line);
+	emit(ctx, line);
 	sprintf(line, "  R12=%016lx R13=%016lx R14=%016lx R15=%016lx\n",
 	        r->r12, r->r13, r->r14, r->r15);
-	probe_emit(line);
+	emit(ctx, line);
 	sprintf(line, "  CR0=%016lx CR2=%016lx CR3=%016lx CR4=%016lx\n",
 	        s->cr0, s->cr2, s->cr3, s->cr4);
-	probe_emit(line);
+	emit(ctx, line);
 
 	// The scheduler's opinion of this core, and the three bits that can each
 	// remove it from service on their own.
 	sprintf(line, "  sched: inScheduler=%u enabled=%u settleAck=%u lastIretqRIP=%016lx\n",
 	        s->inScheduler, s->schedulerEnabled, s->settleAck, s->lastIretqRIP);
-	probe_emit(line);
+	emit(ctx, line);
 	sprintf(line, "  thread=%016lx task=%016lx lastDispatchTSC=%lu (now %lu)\n",
 	        s->currentThread, s->currentTask, s->acctLastDispatchTSC, s->tsc);
-	probe_emit(line);
+	emit(ctx, line);
 
 	// The LAPIC. An in-service vector here with nothing progressing is the
 	// whole answer: an interrupt that never got its EOI blocks everything at
 	// or below its priority class until the core is reset.
 	sprintf(line, "  lapic: inService=0x%02x TPR=0x%02x PPR=0x%02x LVTtimer=0x%08x\n",
 	        s->apicInServiceVector, s->apicTPR, s->apicPPR, s->apicLVTTimer);
-	probe_emit(line);
+	emit(ctx, line);
 
-	probe_walk_stack(s);
+	probe_walk_stack(emit, ctx, s);
+}
 
+// The wire emitter: printd only. The one caller that wants glass too is the
+// boot sweep's summary line, and it uses probe_emit directly — a full dump
+// aimed at the glass would scroll the boot away on an 8-core machine, and a
+// human at a shell gets the dump by reading /sys/cpu/<n>/probe instead.
+static void probe_line_to_wire(void *ctx, const char *line)
+{
+	(void)ctx;
+	printd(DEBUG_EXCEPTIONS, "%s", line);
+}
+
+void nmi_probe_report_wire(uint32_t apic_id)
+{
+	const nmi_probe_snapshot_t *s = nmi_probe_last(apic_id);
+	if (s == NULL) {
+		return;
+	}
+
+	// One narrator per report (exception_report.h): a probe dump racing a
+	// fault report on another core must not braid with it. Per-REPORT, not
+	// per-sweep — a sweep can spend seconds in timeouts, and holding the wire
+	// that long would push a dying core's report into the barge path.
+	exception_wire_lock();
+	nmi_probe_render(s, probe_line_to_wire, NULL);
 	exception_wire_unlock();
 }
 
@@ -371,7 +396,8 @@ bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks)
 		return false;
 	}
 
-	probe_report(&kNmiSnapshot[apic_id]);
+	// The answer is in the snapshot slot. Rendering is the caller's job —
+	// see the header note on why the three callers want three different sinks.
 	return true;
 }
 
@@ -394,9 +420,25 @@ void nmi_probe_sweep(void)
 		if (apic_id == self || apic_id >= MAX_CPUS) {
 			continue;
 		}
-		nmi_probe_core(apic_id, 10);
+		if (!nmi_probe_core(apic_id, 10)) {
+			continue;   // the timeout verdict has already printed itself
+		}
+
+		// One line per answering core — enough to prove the mechanism and
+		// read the roster bits at a glance. The first cut of this sweep
+		// full-dumped ~20 lines per core, which on an 8-core P5 scrolled the
+		// entire boot off the glass; the dumps now wait in the snapshot
+		// slots for whoever reads /sys/cpu/<n>/probe.
+		const nmi_probe_snapshot_t *s = nmi_probe_last(apic_id);
+		if (s == NULL) {
+			continue;
+		}
+		sprintf(line, "core %u: alive — RIP=%016lx ring%lu inSched=%u ack=%u enabled=%u inService=0x%02x\n",
+		        apic_id, s->frame.rip, s->frame.cs & 3, s->inScheduler,
+		        s->settleAck, s->schedulerEnabled, s->apicInServiceVector);
+		probe_emit(line);
 	}
-	probe_emit("── end of sweep ────────────────────────────────────────────\n");
+	probe_emit("── end of sweep — full snapshots: /sys/cpu/<n>/probe ───────\n");
 }
 
 const nmi_probe_snapshot_t *nmi_probe_last(uint32_t apic_id)

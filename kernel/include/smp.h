@@ -88,7 +88,7 @@ typedef struct
 
 	// acct = CPU-time accounting (scheduler_do's switch-boundary charging).
 	// All three are written ONLY by this core, inside its own scheduler
-	// pass; /proc/cores reads them cross-core, which is safe for the values
+	// pass; /sys/cpu/<n>/time reads them cross-core, which is safe for the values
 	// (worst case one slice stale) as long as no reader ever SUBTRACTS a
 	// remote TSC reading from a local one.
 	uint64_t acctZeroTSC;          // this core's meter epoch (first pass)

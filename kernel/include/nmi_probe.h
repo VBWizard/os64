@@ -120,13 +120,36 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame);
 
 // Fire an NMI at one core and wait — WITH INTERRUPTS ENABLED — for its answer.
 // Returns false on timeout, which is not a failure but a verdict: a core that
-// will not answer an NMI is off the bus or in SMM.
+// will not answer an NMI is off the bus or in SMM (the verdict line prints
+// itself). On success the answer sits in the snapshot slot — RENDERING IS THE
+// CALLER'S JOB (nmi_probe_render / nmi_probe_report_wire below), because the
+// three callers want three different things: the boot sweep wants one summary
+// line, /sys/cpu/<n>/probe wants the full text in a file, and a live wedge
+// hunt wants it on the wire.
 bool nmi_probe_core(uint32_t apic_id, uint32_t timeout_ticks);
 
-// Probe every core but this one and print what came back.
+// Probe every core but this one and print a ONE-LINE liveness summary per
+// core (glass + wire). The full dumps stay in the snapshot slots, readable
+// afterward at /sys/cpu/<n>/probe — a boot self-test's job is to prove the
+// mechanism works, not to scroll eight cores' register files past the
+// bootloader logo.
 void nmi_probe_sweep(void);
 
 // The last snapshot taken for a core, or NULL if it has never answered.
 const nmi_probe_snapshot_t *nmi_probe_last(uint32_t apic_id);
+
+// Render a snapshot as text, one line at a time, through a caller-supplied
+// emitter — THE formatting lives here and only here, so the wire report and
+// the /sys/cpu/<n>/probe file can never drift apart. The emitter gets each
+// finished line (NUL-terminated, newline included) plus the caller's context.
+// Takes no lock: locking is sink policy, and only sinks know their sinks.
+typedef void (*nmi_probe_line_fn)(void *ctx, const char *line);
+void nmi_probe_render(const nmi_probe_snapshot_t *s, nmi_probe_line_fn emit, void *ctx);
+
+// Render a core's last snapshot to the WIRE (printd → logd file + COM1),
+// under the exception wire lock. This is the crash-insurance copy the /sys
+// probe trigger writes the moment an answer lands: if the machine dies before
+// anyone reads the file, the answer still exists somewhere permanent.
+void nmi_probe_report_wire(uint32_t apic_id);
 
 #endif // NMI_PROBE_H

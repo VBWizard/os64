@@ -4,7 +4,8 @@
 // heckling in the old temporaryAtoi comments — wound it.
 //
 // The measurement doctrine (PROC.md "cores"): runtime_us in each status
-// file and the /proc/cores ledger are BOUNDARY-CHARGED microsecond
+// file and the /sys/cpu/<n>/time ledger (né /proc/cores, moved 2026-08-12
+// when the machine's facts went to /sys) are BOUNDARY-CHARGED microsecond
 // counters. top never computes time itself — it snapshots the counters,
 // waits, snapshots again, and divides deltas. The interval is measured
 // with os64_ticks (never assumed from the delay: sleep rounds up, screens
@@ -468,45 +469,45 @@ static void import_task(top_entry_t *entry, const os64_proc_info_t *task)
     os64_strcopy(entry->Command, sizeof(entry->Command), task->name);
 }
 
-// /proc/cores → coresNow[]. First line is the header (starts with "core");
-// data rows are tab-separated: id total busy idle sched, all µs.
+// /sys/cpu/<n>/time → coresNow[] — one file per core, "key: value" lines in
+// fixed order: total_us, busy_us, idle_us, sched_us. The first core whose
+// file won't open is the end of the machine, so the loop needs no /sys/cpu/
+// count read. (One open per core where /proc/cores was one for the table;
+// the kernel's settle-on-read is rate-limited to once a tick, so the sweep
+// still pays for exactly one settle.)
 static int32_t readCores(void)
 {
     char line[STATUS_LINE_SIZE];
-    int64_t h = os64_open("/proc/cores", NULL);
-    if (h < 0)
-        return -1;
+    char path[32];
 
     coreCount = 0;
-    while (os64_readline((int32_t)h, line, sizeof(line)) == 1 &&
-           coreCount < MAX_CORES)
+    for (int32_t core = 0; core < MAX_CORES; core++)
     {
-        if (line[0] < '0' || line[0] > '9')
-            continue;   // the header row
+        os64_snprintf(path, sizeof(path), "/sys/cpu/%d/time", core);
+        int64_t h = os64_open(path, NULL);
+        if (h < 0)
+            break;
 
-        const char *p = line;
-        uint64_t v[5] = {0};
-        for (int32_t f = 0; f < 5; f++)
+        // Values arrive in the ledger's fixed order; the keys hold no
+        // digits, so "first digit run on the line" is the whole parse.
+        uint64_t v[4] = {0};
+        int32_t f = 0;
+        while (f < 4 && os64_readline((int32_t)h, line, sizeof(line)) == 1)
         {
+            const char *p = line;
             while (*p != '\0' && (*p < '0' || *p > '9'))
                 p++;
-            v[f] = os64_atou(p);
-            while (*p >= '0' && *p <= '9')
-                p++;
+            v[f++] = os64_atou(p);
         }
-        // v[0] is the core id; rows arrive in order, but trust the id.
-        if (v[0] < MAX_CORES)
-        {
-            coresNow[v[0]].total = v[1];
-            coresNow[v[0]].busy  = v[2];
-            coresNow[v[0]].idle  = v[3];
-            coresNow[v[0]].sched = v[4];
-            if ((int32_t)v[0] + 1 > coreCount)
-                coreCount = (int32_t)v[0] + 1;
-        }
+        os64_close((int32_t)h);
+
+        coresNow[core].total = v[0];
+        coresNow[core].busy  = v[1];
+        coresNow[core].idle  = v[2];
+        coresNow[core].sched = v[3];
+        coreCount = core + 1;
     }
-    os64_close((int32_t)h);
-    return 0;
+    return coreCount > 0 ? 0 : -1;
 }
 
 // ── Entry cache ──────────────────────────────────────────────────────────
@@ -610,7 +611,7 @@ int32_t topMain(const top_options_t *opts)
         while (os64_readdir((int32_t)dirHandle, &dent) == 1)
         {
             if (dent.name[0] < '0' || dent.name[0] > '9')
-                continue;   // "cores" and any future non-task names
+                continue;   // any future non-task names ("cores" until 8/12)
 
             uint64_t pid = os64_atou(dent.name);
             os64_proc_info_t taskInfo;

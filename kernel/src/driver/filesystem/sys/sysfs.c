@@ -12,7 +12,7 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        one entry: "bus"
+//   /sys/                        two entries: "bus", "cpu"
 //   /sys/bus/                    one entry: "pci"
 //   /sys/bus/pci/                one file per discovered function, named
 //                                bus:dev.fn in hex — "00:1f.3", lspci's
@@ -20,12 +20,33 @@
 //                                enumerates a single PCI segment, and the
 //                                filename grows the day the scan does)
 //   /sys/bus/pci/00:1f.3         the function, one "key: value" fact per line
+//   /sys/cpu/                    the processors: "count", then one directory
+//                                per core, named by core number
+//   /sys/cpu/count               how many cores the scheduler runs, bare
+//   /sys/cpu/<n>/time            the core's CPU-time ledger (was /proc/cores
+//                                until 2026-08-12 — a machine fact wearing a
+//                                process-tree address; top(1) followed it here)
+//   /sys/cpu/<n>/state           the roster bits that can strike a core off
+//                                the schedule — READ, side-effect free, no NMI
+//   /sys/cpu/<n>/probe           WRITE "probe": fire a diagnostic NMI at the
+//                                core.  READ: the last snapshot, rendered.
 //
-// Every file is TEXT. The values are the enumeration's saved headers —
+// Every file is TEXT. The PCI values are the enumeration's saved headers —
 // kPCIDeviceHeaders / kPCIDeviceFunctions / kPCIBridgeHeaders, written once
 // by init_PCI before the scheduler exists and never touched again, which is
-// why every read here is lock-free and safe: the snapshot machinery copies
-// from arrays that cannot change.
+// why every PCI read here is lock-free and safe: the snapshot machinery
+// copies from arrays that cannot change. The cpu values are the scheduler's
+// per-core globals — shared-upper-half, readable from any core under any
+// CR3, each written only by its own core (worst case one slice stale).
+//
+// READS ARE SIDE-EFFECT FREE; THE GUN IS BEHIND A WRITE (ruled 2026-08-11,
+// with Linux's own precedent — /sys/power/state suspends on write, cpu*/online
+// offlines on write). `cat` must always be safe to aim at anything under
+// /sys, because the person most likely to be cat-ing around in here is
+// diagnosing a machine that is already half-broken. The single exception a
+// purist might count: reading cpu/<n>/time settles the accounting first
+// (a rate-limited IPI round /proc/cores always did) — bookkeeping, not
+// state anyone can observe changing.
 //
 // The deliberately-deferred structure (ruled 2026-08-08): no devices/ or
 // drivers/ subdirectories, no symlinks, no per-attribute files. One readable
@@ -46,12 +67,23 @@
 #include "driver/filesystem/vfs/synthfs.h"
 #include "driver/system/pci.h"
 #include "driver/system/pci_lookup.h"
+#include "driver/system/x86_64.h"   // rdtsc — cpu/<n>/state stamps its own read
 #include "kmalloc.h"
 #include "memset.h"
 #include "strings/strings.h"
 #include "sprintf.h"
 #include "serial_logging.h"
+#include "scheduler.h"              // mp_inScheduler, mp_lastIretqRIP
+#include "smp.h"                    // core_local_storage_t, kMPCoreCount
+#include "smp_core.h"               // get_core_local_storage_for_core, mpAcctSettleAll
+#include "task.h"                   // task_t — kIdleTasks' element type
+#include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "CONFIG.h"
+
+extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
+extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
+extern volatile bool mp_acctSettleAck[MAX_CPUS];
+extern bool mp_schedulerEnabled[MAX_CPUS];
 
 // ── The unified PCI view ────────────────────────────────────────────────────
 // init_PCI files what it finds into three arrays: kPCIDeviceHeaders
@@ -194,7 +226,7 @@ static bool sys_pci_find(uint32_t key, sys_pci_view_t *v)
 
 // ── Path parsing ────────────────────────────────────────────────────────────
 // Paths arrive fs-local (mount prefix stripped): "/", "/bus", "/bus/pci",
-// "/bus/pci/00:1f.3".
+// "/bus/pci/00:1f.3", "/cpu", "/cpu/count", "/cpu/2", "/cpu/2/probe".
 
 typedef enum
 {
@@ -203,15 +235,25 @@ typedef enum
 	SYS_NODE_BUSDIR,     // /bus
 	SYS_NODE_PCIDIR,     // /bus/pci
 	SYS_NODE_PCIFILE,    // /bus/pci/<bus:dev.fn>
+	SYS_NODE_CPUDIR,     // /cpu
+	SYS_NODE_CPUCOUNT,   // /cpu/count
+	SYS_NODE_CPUCORE,    // /cpu/<n>
+	SYS_NODE_CPUFILE,    // /cpu/<n>/{time,state,probe}
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
+
+// The files a core directory offers, in listing order (most-read first, the
+// same doctrine as /proc's file table).
+static const char *kSysCpuFiles[] = { "time", "state", "probe" };
+#define SYS_CPU_FILE_COUNT (sizeof(kSysCpuFiles) / sizeof(kSysCpuFiles[0]))
 
 typedef struct
 {
 	sys_node_type_t type;
 	uint32_t pci_key;               // PCIFILE: which function
-	char     name[SYS_NAME_MAX];    // PCIFILE: the leaf name as given
+	uint32_t cpu;                   // CPUCORE/CPUFILE: which core
+	char     name[SYS_NAME_MAX];    // *FILE: the leaf name as given
 } sys_path_t;
 
 static void sys_parse_path(const char *path, sys_path_t *out)
@@ -230,6 +272,43 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		out->type = SYS_NODE_ROOT;
 		return;
 	}
+
+	if (strcmp(comp, "cpu") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
+		{
+			out->type = SYS_NODE_CPUDIR;
+			return;
+		}
+		if (strcmp(comp, "count") == 0)
+		{
+			// Nothing lives inside a file.
+			if (synth_next_component(path, &pos, comp, sizeof(comp)))
+				return;
+			out->type = SYS_NODE_CPUCOUNT;
+			return;
+		}
+		// A core directory is a strict decimal core number, and only for a
+		// core that exists — "/cpu/9" on an 8-core machine is a name that
+		// does not exist, same as a task ID /proc never issued.
+		uint64_t n;
+		if (!synth_parse_u64(comp, &n) || n >= kMPCoreCount)
+			return;
+		out->cpu = (uint32_t)n;
+		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
+		{
+			out->type = SYS_NODE_CPUCORE;
+			return;
+		}
+		if (!synth_name_in(comp, kSysCpuFiles, SYS_CPU_FILE_COUNT))
+			return;
+		strncpy(out->name, comp, SYS_NAME_MAX - 1);
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_CPUFILE;
+		return;
+	}
+
 	if (strcmp(comp, "bus") != 0)
 		return;
 
@@ -299,44 +378,243 @@ static void sys_gen_pci_device(synth_text_t *t, const sys_pci_view_t *v)
 	                pci_get_device_by_vendor_device_id(v->vendor, v->device));
 }
 
+// ── The cpu generators ──────────────────────────────────────────────────────
+// Core numbers here are APIC IDs — the standing house convention
+// (kCoreLocalStorage, kIdleTasks and the mp_* arrays are all indexed by it,
+// and init_SMP brings cores up 0..kMPCoreCount-1 contiguous). If discontiguous
+// APIC IDs ever arrive, every one of those arrays learns together.
+
+// TSC cycles → microseconds, at the read boundary. Raw cycles never leave
+// the kernel (the ABI speaks TIME — same doctrine as sleep's milliseconds):
+// userland gets µs, and the TSC rate stays a kernel implementation detail.
+static uint64_t sys_cycles_to_us(uint64_t cycles)
+{
+	uint64_t per_us = kCPUCyclesPerSecond / 1000000;
+	return per_us ? cycles / per_us : 0;
+}
+
+static void sys_gen_cpu_count(synth_text_t *t)
+{
+	// Bare number, newline — the filename already says what it counts, and
+	// a script wants the value, not a parse (Linux's cpu*/online files set
+	// the precedent).
+	synth_text_addf(t, "%u\n", (unsigned)kMPCoreCount);
+}
+
+// cpu/<n>/time — one core's slice of the CPU-time ledger (/proc/cores' whole
+// table until 2026-08-12, split per-core when it moved to the machine's tree).
+//
+// busy is DERIVED (total - idle - sched): the accounting charges threads,
+// the idle thread among them, and the scheduler's own passes; what the
+// three don't explain is genuinely unaccounted (early boot, ISR time —
+// documented v1 honesty). All values are written only by each core's own
+// scheduler pass — reading them cross-core here is safe (worst case one
+// slice stale); SUBTRACTING a remote TSC from a local rdtsc would not be,
+// which is why total comes from the core's own two stamps, never from
+// "now".
+static void sys_gen_cpu_time(synth_text_t *t, uint32_t core)
+{
+	// Settle-on-read: every core charges its in-flight span (locally, own
+	// TSC) before we render — so the books are never staler than this IPI
+	// round-trip, and tickless mode's lumpy settlement can't staircase a
+	// reader. Rate-limited inside (once per tick), so top's sweep across
+	// all N core files pays once.
+	mpAcctSettleAll();
+
+	core_local_storage_t *cls = get_core_local_storage_for_core(core);
+	if (cls == NULL)
+		return;
+
+	uint64_t total = (cls->acctLastDispatchTSC > cls->acctZeroTSC)
+	                 ? cls->acctLastDispatchTSC - cls->acctZeroTSC : 0;
+	uint64_t sched = cls->acctSchedCycles;
+	uint64_t idle  = 0;
+	if (kIdleTasks[core] != NULL && kIdleTasks[core]->threads != NULL)
+		idle = kIdleTasks[core]->threads->runCycles;
+
+	uint64_t accounted = idle + sched;
+	uint64_t busy = (total > accounted) ? total - accounted : 0;
+
+	synth_text_addf(t, "total_us: %lu\n", sys_cycles_to_us(total));
+	synth_text_addf(t, "busy_us: %lu\n",  sys_cycles_to_us(busy));
+	synth_text_addf(t, "idle_us: %lu\n",  sys_cycles_to_us(idle));
+	synth_text_addf(t, "sched_us: %lu\n", sys_cycles_to_us(sched));
+}
+
+// cpu/<n>/state — the roster bits, raw. This file exists because of a core
+// that spent thirteen hours struck off the P5's schedule while every
+// instrument we owned needed that core's cooperation to say so (2026-08-11).
+// These are plain globals in the shared upper half: reading them cross-core
+// is free, always safe, and needs nothing from the core being asked — the
+// NMI answers WHY a core is stuck; this file answers WHETHER, for the price
+// of a cat.
+//
+// DELIBERATELY NO SETTLE, no IPI, no side effects of any kind: the machinery
+// a settle rides is exactly the machinery this file exists to diagnose, and
+// the reader most likely to be here is standing over a half-broken machine.
+//
+// NO LAPIC FIELDS, and that is physics, not laziness: LAPIC registers are
+// core-local MMIO — the same address read here answers about the ASKING
+// core (nmi_probe.c documents the rule). The target's LAPIC truth is only
+// capturable standing on the target, which is the probe file's job.
+static void sys_gen_cpu_state(synth_text_t *t, uint32_t core)
+{
+	core_local_storage_t *cls = get_core_local_storage_for_core(core);
+
+	synth_text_addf(t, "core: %u\n", core);
+	// The three bits that can each strike a core off the roster alone
+	// (nmi_probe.h walks through the three disappearances in_scheduler
+	// causes). in_scheduler STUCK at 1 was the leading hypothesis for the
+	// P5 wedge — this line is that hypothesis testable in four keystrokes.
+	synth_text_addf(t, "in_scheduler: %u\n", mp_inScheduler[core] ? 1 : 0);
+	synth_text_addf(t, "settle_ack: %u\n", mp_acctSettleAck[core] ? 1 : 0);
+	synth_text_addf(t, "scheduler_enabled: %u\n", mp_schedulerEnabled[core] ? 1 : 0);
+	synth_text_addf(t, "last_iretq_rip: 0x%016lx\n", mp_lastIretqRIP[core]);
+	if (cls != NULL)
+	{
+		synth_text_addf(t, "current_thread: 0x%016lx\n", (uint64_t)cls->currentThread);
+		synth_text_addf(t, "current_task: 0x%016lx\n", (uint64_t)cls->task);
+		// The core's own last bookkeeping stamp, raw TSC. Frozen across two
+		// reads = the core has stopped keeping books ("parked" in top's
+		// vocabulary). Compare successive reads of THIS field, not against
+		// the asker's clock — remote-TSC arithmetic is the trap the time
+		// generator's comment warns about.
+		synth_text_addf(t, "last_settle_tsc: %lu\n", cls->acctLastDispatchTSC);
+	}
+}
+
+// cpu/<n>/probe (READ) — the last NMI snapshot, rendered through the same
+// formatter the wire report uses (nmi_probe_render — one formatter, zero
+// drift). Reading never fires anything: no snapshot is an answer too.
+static void sys_cpu_probe_line(void *ctx, const char *line)
+{
+	synth_text_addf((synth_text_t *)ctx, "%s", line);
+}
+
+static void sys_gen_cpu_probe(synth_text_t *t, uint32_t core)
+{
+	const nmi_probe_snapshot_t *s = nmi_probe_last(core);
+	if (s == NULL)
+	{
+		synth_text_addf(t, "no snapshot for core %u — write \"probe\" here to fire a diagnostic NMI\n", core);
+		return;
+	}
+	nmi_probe_render(s, sys_cpu_probe_line, t);
+}
+
 // ── File operations ─────────────────────────────────────────────────────────
+
+// The open file object. Everything except the probe trigger is served by the
+// bare snapshot; the probe file carries two more fields so a write knows its
+// target (same embed-the-head pattern as procfs's ctl handle).
+typedef struct
+{
+	synth_snapshot_t snap;   // MUST be first — the generic fops see only this
+	                         // head, and close frees the whole struct by it
+	bool     is_probe;       // writes to this handle fire the NMI
+	uint32_t core;           // ...at this core
+} sys_file_handle_t;
 
 static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
                     vfs_filesystem_t *vfs_fs)
 {
 	sys_path_t sp;
 
-	// /sys is read-only, whole. Rejecting the write modes at the boundary
-	// beats a write that silently goes nowhere.
-	if (mode == NULL || mode[0] != 'r' || mode[1] != '\0')
-		return -1;
-
 	sys_parse_path(path, &sp);
-	if (sp.type != SYS_NODE_PCIFILE)
-		return -1;   // directories go through dops; everything else is not a file
+
+	// /sys is read-only EXCEPT cpu/<n>/probe, the one node that is a trigger
+	// (reads side-effect free, the gun behind a write — the header's ruling).
+	// Rejecting the write modes at the boundary beats a write that silently
+	// goes nowhere.
+	bool is_probe = (sp.type == SYS_NODE_CPUFILE && strcmp(sp.name, "probe") == 0);
+	if (mode == NULL || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
+		return -1;
+	if (mode[0] == 'w' && !is_probe)
+		return -1;
 
 	sys_pci_view_t v;
-	if (!sys_pci_find(sp.pci_key, &v))
-		return -1;
+	if (sp.type == SYS_NODE_PCIFILE)
+	{
+		if (!sys_pci_find(sp.pci_key, &v))
+			return -1;
+	}
+	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE)
+		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
 	if (!synth_text_init(&text, 512))
 		return -1;
 
-	sys_gen_pci_device(&text, &v);
+	if (sp.type == SYS_NODE_PCIFILE)
+		sys_gen_pci_device(&text, &v);
+	else if (sp.type == SYS_NODE_CPUCOUNT)
+		sys_gen_cpu_count(&text);
+	else if (strcmp(sp.name, "time") == 0)
+		sys_gen_cpu_time(&text, sp.cpu);
+	else if (strcmp(sp.name, "state") == 0)
+		sys_gen_cpu_state(&text, sp.cpu);
+	else   // probe — a "w" open still renders the snapshot; harmless to read
+		sys_gen_cpu_probe(&text, sp.cpu);
 
-	if (synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
-	                           sizeof(synth_snapshot_t), FILETYPE_SYSFILE) == NULL)
+	sys_file_handle_t *h = synth_snapshot_publish(vfs_file, &text, path, vfs_fs,
+	                                              sizeof(sys_file_handle_t),
+	                                              FILETYPE_SYSFILE);
+	if (h == NULL)
 		return -1;
+
+	h->is_probe = is_probe;
+	h->core     = sp.cpu;
 	return 0;
 }
 
-// /sys takes no commands — a write here is always a caller's mistake, and
-// -1 at the fops layer is louder than a write that "succeeds" into nothing.
+// Writing to /sys is a COMMAND aimed at the machine, accepted at exactly one
+// node: cpu/<n>/probe. Same contract as /proc's ctl — first whitespace-
+// delimited word is the command, the whole write reports as consumed on
+// success (a partial write would make `echo` retry the tail, exactly wrong
+// for a command). Everywhere else, -1 at the fops layer is louder than a
+// write that "succeeds" into nothing.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 {
-	(void)vfs_file; (void)buffer; (void)size;
-	return -1;
+	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
+	char word[SYS_NAME_MAX];
+	size_t i = 0, n = 0;
+
+	if (h == NULL || !h->is_probe || buffer == NULL || size == 0)
+		return -1;
+
+	const char *b = (const char *)buffer;
+
+	while (i < size && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r'))
+		i++;
+	while (i < size && b[i] != ' ' && b[i] != '\t' && b[i] != '\n' && b[i] != '\r')
+	{
+		if (n + 1 < sizeof(word))
+			word[n++] = b[i];
+		i++;
+	}
+	word[n] = '\0';
+
+	if (n == 0)
+		return (int)size;   // whitespace only — consumed, nothing commanded
+
+	// A one-word vocabulary, checked anyway: `echo probe` is a person aiming
+	// an NMI on purpose; a stray byte stream landing here by accident is not.
+	if (strcmp(word, "probe") != 0)
+		return -1;
+
+	// Fire and wait — interrupts enabled, wall-clock bound, all of it
+	// nmi_probe_core's own doctrine. False covers both the self-probe
+	// refusal and the timeout verdict; each prints its own line, and -1
+	// tells the shell the knock got no answer.
+	if (!nmi_probe_core(h->core, 10))
+		return -1;
+
+	// Crash insurance, the moment the answer lands: the full report goes to
+	// the WIRE now (permanent, greppable, survives the machine), and the
+	// reader gets the same text from this file at leisure. The glass is
+	// spared — whoever fired this is about to cat the answer anyway.
+	nmi_probe_report_wire(h->core);
+	return (int)size;
 }
 
 // ── Directory operations ────────────────────────────────────────────────────
@@ -356,7 +634,8 @@ static int sys_open_dir(vfs_directory_t **vfs_dir, const char *path,
 	sys_parse_path(path, &sp);
 
 	if (sp.type != SYS_NODE_ROOT && sp.type != SYS_NODE_BUSDIR &&
-	    sp.type != SYS_NODE_PCIDIR)
+	    sp.type != SYS_NODE_PCIDIR && sp.type != SYS_NODE_CPUDIR &&
+	    sp.type != SYS_NODE_CPUCORE)
 		return -1;
 
 	sys_dir_handle_t *h = kmalloc(sizeof(sys_dir_handle_t));
@@ -391,11 +670,44 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 	{
 		case SYS_NODE_ROOT:
 		{
+			static const char *kSysRootDirs[] = { "bus", "cpu" };
+			if (h->index < 2)
+			{
+				entry->flags = OS64_DE_DIR;
+				strncpy(entry->name, kSysRootDirs[h->index], OS64_DIRENT_NAME_MAX);
+				h->index++;
+				return 1;
+			}
+			return 0;
+		}
+
+		case SYS_NODE_CPUDIR:
+		{
+			// "count" first (the file a script reads before iterating), then
+			// one directory per core. index 0 = count, 1..N = core index+1.
 			if (h->index == 0)
 			{
 				h->index = 1;
+				strncpy(entry->name, "count", OS64_DIRENT_NAME_MAX);
+				return 1;
+			}
+			int core = h->index - 1;
+			if (core < (int)kMPCoreCount)
+			{
+				h->index++;
 				entry->flags = OS64_DE_DIR;
-				strncpy(entry->name, "bus", OS64_DIRENT_NAME_MAX);
+				snprintf(entry->name, OS64_DIRENT_NAME_MAX, "%u", (unsigned)core);
+				return 1;
+			}
+			return 0;
+		}
+
+		case SYS_NODE_CPUCORE:
+		{
+			if (h->index < (int)SYS_CPU_FILE_COUNT)
+			{
+				strncpy(entry->name, kSysCpuFiles[h->index], OS64_DIRENT_NAME_MAX);
+				h->index++;
 				return 1;
 			}
 			return 0;
@@ -492,6 +804,24 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, sp.name, OS64_DIRENT_NAME_MAX);
 			return 0;
 		}
+
+		case SYS_NODE_CPUDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "cpu", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_CPUCOUNT:
+			strncpy(entry->name, "count", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_CPUCORE:
+			entry->flags = OS64_DE_DIR;
+			snprintf(entry->name, OS64_DIRENT_NAME_MAX, "%u", (unsigned)sp.cpu);
+			return 0;
+
+		case SYS_NODE_CPUFILE:
+			strncpy(entry->name, sp.name, OS64_DIRENT_NAME_MAX);
+			return 0;
 
 		default:
 			return -1;
