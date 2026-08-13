@@ -433,12 +433,22 @@ void keyboard_handle_scancode(uint8_t scancode) {
                 case 0x50: final = 'B'; break;   // Down
                 case 0x4D: final = 'C'; break;   // Right
                 case 0x4B: final = 'D'; break;   // Left
+                case 0x47: final = 'H'; break;   // Home
+                case 0x4F: final = 'F'; break;   // End
                 default: break;
             }
             if (final != 0) {
                 keyboard_deliver_event(0x1B, code, s_modifiers, true);
                 keyboard_deliver_event('[',  code, s_modifiers, true);
                 keyboard_deliver_event(final, code, s_modifiers, true);
+                return;
+            }
+            if (code == 0x49 || code == 0x51) {  // Page Up / Page Down
+                keyboard_deliver_event(0x1B, code, s_modifiers, true);
+                keyboard_deliver_event('[',  code, s_modifiers, true);
+                keyboard_deliver_event(code == 0x49 ? '5' : '6', code,
+                                       s_modifiers, true);
+                keyboard_deliver_event('~', code, s_modifiers, true);
             }
         }
         return;

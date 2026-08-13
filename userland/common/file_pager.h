@@ -20,6 +20,10 @@ typedef struct {
 // Standard-input documents arrive with controlling TTY support later.
 int file_pager_run(const file_pager_options_t *options);
 
+// Use the controlling terminal's live height, reserving its bottom row for
+// the pager prompt. Falls back when /proc/self/tty is unavailable.
+uint32_t file_pager_default_lines(uint32_t fallback);
+
 // Strict positive decimal parser shared by both command-line veneers.
 bool file_pager_parse_lines(const char *text, uint32_t *lines);
 

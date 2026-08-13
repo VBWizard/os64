@@ -422,12 +422,22 @@ static void hid_deliver_usage(uint8_t usage)
 			case 0x50: final = 'D'; break;   // Left
 			case 0x51: final = 'B'; break;   // Down
 			case 0x52: final = 'A'; break;   // Up
+			case 0x4A: final = 'H'; break;   // Home
+			case 0x4D: final = 'F'; break;   // End
 			default: break;
 		}
 		if (final != 0) {
 			keyboard_deliver_event(0x1B, usage, s_hc.mods, true);
 			keyboard_deliver_event('[',  usage, s_hc.mods, true);
 			keyboard_deliver_event(final, usage, s_hc.mods, true);
+			return;
+		}
+		if (usage == 0x4B || usage == 0x4E) { // Page Up / Page Down
+			keyboard_deliver_event(0x1B, usage, s_hc.mods, true);
+			keyboard_deliver_event('[',  usage, s_hc.mods, true);
+			keyboard_deliver_event(usage == 0x4B ? '5' : '6', usage,
+			                       s_hc.mods, true);
+			keyboard_deliver_event('~', usage, s_hc.mods, true);
 			return;
 		}
 	}

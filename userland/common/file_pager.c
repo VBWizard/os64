@@ -6,6 +6,14 @@
 
 static char read_buffer[PAGER_READ_SIZE];
 
+uint32_t file_pager_default_lines(uint32_t fallback)
+{
+    os64_tty_info_t tty;
+    if (os64_tty_read(&tty) == 0 && tty.rows > 1)
+        return tty.rows - 1;       // the last row belongs to the prompt
+    return fallback;
+}
+
 bool file_pager_parse_lines(const char *text, uint32_t *lines)
 {
     if (text == NULL || *text == '\0')
@@ -48,6 +56,53 @@ static void erase_prompt(void)
     os64_write(OS64_STDOUT, "\r", 1);
 }
 
+static void show_help(const file_pager_options_t *options)
+{
+    write_all("\f", 1);
+    os64_printf("%s key commands\n\n", options->program);
+    os64_puts("  Space, f, Page Down   forward one page\n"
+              "  Enter, j, Down        forward one line\n");
+    if (options->mode == FILE_PAGER_LESS)
+        os64_puts("  b, Page Up            backward one page\n"
+                  "  k, Up                 backward one line\n"
+                  "  g, Home               jump to the beginning\n"
+                  "  G, End                jump to the end\n");
+    os64_puts("  h                     show this help\n"
+              "  q                     quit\n\n"
+              "Press any key to return.");
+    char ignored;
+    os64_read(OS64_STDIN, &ignored, 1);
+}
+
+// Decode the terminal sequences emitted by both keyboard drivers. Return the
+// pager's existing character vocabulary so navigation policy stays below.
+static char read_key(void)
+{
+    char c;
+    if (os64_read(OS64_STDIN, &c, 1) <= 0)
+        return 'q';
+    if (c != 27)
+        return c;
+
+    char bracket;
+    if (os64_read(OS64_STDIN, &bracket, 1) != 1 || bracket != '[')
+        return 0;
+    char final;
+    if (os64_read(OS64_STDIN, &final, 1) != 1)
+        return 0;
+    if (final == 'A') return 'k';
+    if (final == 'B') return 'j';
+    if (final == 'H') return 'g';
+    if (final == 'F') return 'G';
+    if (final == '5' || final == '6')
+    {
+        char tilde;
+        if (os64_read(OS64_STDIN, &tilde, 1) == 1 && tilde == '~')
+            return final == '5' ? 'b' : ' ';
+    }
+    return 0;
+}
+
 static char prompt(const file_pager_options_t *options, uint64_t line,
                    uint64_t total)
 {
@@ -61,27 +116,11 @@ static char prompt(const file_pager_options_t *options, uint64_t line,
 
     for (;;)
     {
-        char c;
-        int64_t n = os64_read(OS64_STDIN, &c, 1);
-        if (n <= 0)
-            return 'q';
-        if (c == 27)
-        {
-            // Arrow keys arrive as ESC '[' final. Consume a complete sequence
-            // synchronously; a lone Escape is simply ignored in this slice.
-            char sequence[2];
-            if (os64_read(OS64_STDIN, sequence, 2) == 2 && sequence[0] == '[')
-            {
-                if (sequence[1] == 'A') c = 'k';
-                else if (sequence[1] == 'B') c = 'j';
-                else continue;
-            }
-            else
-                continue;
-        }
+        char c = read_key();
         if (c == ' ' || c == 'f' || c == 'F' || c == 'b' || c == 'B' ||
             c == 'j' || c == 'J' || c == 'k' || c == 'K' || c == 'g' ||
-            c == 'G' || c == 'q' || c == 'Q' || c == '\n' || c == '\r')
+            c == 'G' || c == 'h' || c == 'H' || c == 'q' || c == 'Q' ||
+            c == '\n' || c == '\r')
         {
             erase_prompt();
             return c;
@@ -200,12 +239,15 @@ int file_pager_run(const file_pager_options_t *options)
     uint64_t total = count_lines(data, entry.size);
     uint64_t first = 0;
     bool first_paint = true;
+    bool force_clear = false;
 
     while (first < total)
     {
         int shown = paint(data, entry.size, first, options->page_lines,
-                          options->mode == FILE_PAGER_LESS || first_paint);
+                          options->mode == FILE_PAGER_LESS || first_paint ||
+                          force_clear);
         first_paint = false;
+        force_clear = false;
         if (shown < 0)
         {
             os64_unmap(data);
@@ -218,6 +260,12 @@ int file_pager_run(const file_pager_options_t *options)
         char key = prompt(options, first + (uint64_t)shown, total);
         if (key == 'q' || key == 'Q')
             break;
+        if (key == 'h' || key == 'H')
+        {
+            show_help(options);
+            force_clear = true;
+            continue;
+        }
 
         uint64_t step = (key == '\n' || key == '\r' || key == 'j' || key == 'J' ||
                          key == 'k' || key == 'K')

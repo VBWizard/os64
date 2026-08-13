@@ -14,7 +14,7 @@ int main(int argc, char **argv)
     };
     os64_args_init(&args, argc, argv, specs, 1);
     args.about = "Page through a named text file.";
-    args.details = "Space advances a page, Enter advances one line, and q quits. Standard input paging awaits controlling TTY support.";
+    args.details = "Space or Page Down advances a page, Enter advances one line, h shows help, and q quits. Standard input paging awaits controlling TTY support.";
 
     int32_t parsed = os64_args_parse(&args, "more [-i LINES] FILE", &path, 1);
     if (parsed == OS64_ARG_HELP)
@@ -26,7 +26,7 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    uint32_t lines = DEFAULT_PAGE_LINES;
+    uint32_t lines = file_pager_default_lines(DEFAULT_PAGE_LINES);
     if (interval != NULL && !file_pager_parse_lines(interval, &lines))
     {
         os64_hprintf(OS64_STDERR, "more: invalid interval: %s\n", interval);
