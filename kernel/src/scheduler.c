@@ -550,6 +550,7 @@ void scheduler_change_thread_queue_locked(thread_t* thread, eThreadState newStat
 	    if (newState==THREAD_STATE_RUNNABLE)
 	    {
 	        thread->prioritizedTicksInRunnable=0;
+	        thread->runnableSinceTick=kTicksSinceStart;   // cache-home rule's clock starts
 	        scheduler_nudge_parked_aps(thread);
 	    }
 	    else if (newState==THREAD_STATE_RUNNING)
@@ -958,6 +959,30 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 			{
 				if (scheduler_thread_can_run_on_core(thread, cls))
 				{
+					// ── The cache-home rule (2026-08-13, thread.h doctrine) ──
+					// A thread that last ran on ANOTHER core is cache-warm
+					// there and cache-cold here: pass it over until it has
+					// waited SCHED_MIGRATION_COST_TICKS of wall clock, the
+					// point where waiting longer costs more than migrating.
+					// Exempt: idle threads (per-core by construction), never-
+					// dispatched threads (runCycles==0 — cold everywhere, so
+					// migration is free), and of course this core's own. A
+					// pinned thread is unaffected: can_run_on_core already
+					// confines it to its pin, where it is always home. The
+					// hog-starvation case is bounded twice over — its home
+					// core's lease expires within SCHED_BACKSTOP_MS, and any
+					// foreign core may take it after the threshold.
+					if (!thread->idleThread && thread->runCycles != 0 &&
+					    thread->lastRunApicID != cls->apic_id &&
+					    (kTicksSinceStart - thread->runnableSinceTick) < SCHED_MIGRATION_COST_TICKS)
+					{
+						printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+						       "*\t\tfindTaskToRun: thread 0x%08x is cache-warm on APIC %u, not migrating yet\n",
+						       thread->threadID, thread->lastRunApicID);
+						queEntryNum++;
+						queue=queue->next;
+						continue;
+					}
 					if (thread->mp_apic != THREAD_NO_AFFINITY && !thread->idleThread)
 						printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
 							"scheduler_find_thread_to_run: APIC %u selecting pinned thread 0x%08x for APIC %u\n",

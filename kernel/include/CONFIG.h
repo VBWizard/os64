@@ -63,6 +63,16 @@
 // 2026-08-13).
 #define SCHED_BACKSTOP_MS 50
 
+// The cache-home rule (scheduler_find_thread_to_run): a runnable thread whose
+// last dispatch was on ANOTHER core is passed over — its caches are warm
+// there, cold here — unless it has been waiting in qRunnable at least this
+// many wall-clock ticks (at TICKS_PER_SECOND=100, 3 ticks = 30ms), at which
+// point waiting longer costs more than migrating cold. Linux calls the same
+// idea sched_migration_cost; ULE gets it structurally from per-CPU queues.
+// Never-dispatched threads are exempt (cold everywhere = migration is free),
+// as are idle threads (per-core by construction).
+#define SCHED_MIGRATION_COST_TICKS 3
+
 // Framebuffer related
 #define FRAMEBUFFER_FONT "zap-ext-light16.psf"
 

@@ -110,7 +110,19 @@ typedef struct s_thread
 	// human summing per-core books can tell whose plate the time came off
 	// — the question that broke Chris's idle0 arithmetic the night the
 	// accounting converged (kworker's 0.5% was on core 1 all along).
+	// Since 2026-08-13 it is also load-bearing: the cache-home rule in
+	// scheduler_find_thread_to_run reads it as "where this thread's caches
+	// are warm" and keeps the thread there until waiting beats migrating.
 	uint32_t lastRunApicID;
+	// When this thread last ENTERED qRunnable (kTicksSinceStart units),
+	// stamped by scheduler_change_thread_queue_locked under the queue lock.
+	// The cache-home rule's other operand: a thread warm on another core is
+	// skipped by foreign cores until (now - runnableSinceTick) crosses
+	// SCHED_MIGRATION_COST_TICKS — wall-clock, deliberately NOT the aging
+	// currency (prioritizedTicksInRunnable grows per-pass, and pass rate
+	// varies with core count and backstop activity; a threshold in it would
+	// mean a different real duration on every machine).
+	uint64_t runnableSinceTick;
 	// CPU time actually spent running, in TSC cycles — charged at context-
 	// switch boundaries by scheduler_do (NOT tick-sampled: a thread that
 	// runs 2ms slices between ticks is invisible to sampling but not to
