@@ -160,7 +160,7 @@
 // drowning another's" the DEBUG_NET bit comment warned about, arriving on
 // schedule. The bit still exists; a boot that wants it says so on the
 // cmdline, which is what cmdline overrides are for.
-#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS | DEBUG_APPLICATION | DEBUG_NET)
+#define DEBUG_OPTIONS (__uint128_t)(DEBUG_MINIMAL_OPTIONS | DEBUG_APPLICATION | DEBUG_NET | DEBUG_DETAILED)
 //#define DEBUG_OPTIONS DEBUG_MINIMAL_OPTIONS
 extern __uint128_t kDebugLevel;
 
