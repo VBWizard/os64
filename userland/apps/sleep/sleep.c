@@ -2,10 +2,9 @@
 
 #include "os64/os64.h"
 
-#define USAGE "sleep [-M] NUMBER[SUFFIX]..."
+#define USAGE "sleep NUMBER[SUFFIX]..."
 
-static bool add_duration(const char *text, bool milliseconds_default,
-                         uint64_t *total_ms)
+static bool add_duration(const char *text, uint64_t *total_ms)
 {
     if (text == NULL || *text == '\0')
         return false;
@@ -51,9 +50,18 @@ static bool add_duration(const char *text, bool milliseconds_default,
     uint64_t unit_ms;
     switch (*p)
     {
-    case '\0': unit_ms = milliseconds_default ? 1 : 1000; break;
+    case '\0': unit_ms = 1000; break;
     case 's':  unit_ms = 1000;     p++; break;
-    case 'm':  unit_ms = 60000;    p++; break;
+    case 'm':
+        p++;
+        if (*p == 's')
+        {
+            unit_ms = 1;
+            p++;
+        }
+        else
+            unit_ms = 60000;
+        break;
     case 'h':  unit_ms = 3600000;  p++; break;
     case 'd':  unit_ms = 86400000; p++; break;
     default: return false;
@@ -85,16 +93,11 @@ static bool add_duration(const char *text, bool milliseconds_default,
 
 int main(int argc, char **argv)
 {
-    bool milliseconds = false;
-    const os64_optspec_t specs[] = {
-        {'M', "milliseconds", false,
-         "interpret unsuffixed numbers as milliseconds", .flag = &milliseconds}
-    };
     os64_args_t args = {0};
-    os64_args_init(&args, argc, argv, specs, 1);
+    os64_args_init(&args, argc, argv, NULL, 0);
     args.about = "Suspend execution for the combined duration of all operands.";
-    args.details = "Suffixes: s seconds, m minutes, h hours, d days. "
-                   "With no suffix, NUMBER is seconds unless -M is used.";
+    args.details = "Suffixes: ms milliseconds, s seconds, m minutes, h hours, "
+                   "d days. With no suffix, NUMBER is seconds.";
 
     const char *durations[argc > 0 ? argc : 1];
     int operands = 0;
@@ -105,11 +108,6 @@ int main(int argc, char **argv)
         {
             os64_args_help(&args, USAGE);
             return 0;
-        }
-        if (result == 'M')
-        {
-            milliseconds = true;
-            continue;
         }
         if (result == OS64_ARG_POSITIONAL)
         {
@@ -130,7 +128,7 @@ int main(int argc, char **argv)
     uint64_t total_ms = 0;
     for (int i = 0; i < operands; i++)
     {
-        if (!add_duration(durations[i], milliseconds, &total_ms))
+        if (!add_duration(durations[i], &total_ms))
         {
             os64_hprintf(OS64_STDERR,
                          "sleep: invalid duration '%s'\n", durations[i]);
