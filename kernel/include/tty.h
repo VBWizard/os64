@@ -128,8 +128,17 @@ void tty_init(void);
 // The terminal interpreter: bytes into t's grid, mirrored to the glass iff
 // t is focused (and the view isn't scrolled back, and the GUI hasn't taken
 // the console, and no panic forced direct mode). One call = one atomic
-// paint, same contract print_n always had.
+// paint, same contract print_n always had — EXCEPT during a scroll burst:
+// the first scroll marks the glass stale and hands rendering to the repaint
+// rider below, so a flood costs the glass ~30Hz grid repaints instead of a
+// 3MB shadow memmove per line (the frozen-cat fix, 2026-08-13; the doctrine
+// comment above tty.c's s_glassStale tells the whole story).
 void tty_write(tty_t *t, const char *bytes, size_t length);
+
+// The repaint rider — tty layer's half of the ~30Hz glass discipline,
+// called from processSignals beside renderer_flush_if_dirty. If a write
+// burst left the glass stale, repaints the focused terminal from its grid.
+void tty_flush_if_dirty(void);
 
 // ── Input (called by tty.c's producers and console.c's consumer) ───────────
 // Deliver a translated keystroke to the FOCUSED tty. A dormant tty swallows

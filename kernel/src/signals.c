@@ -162,6 +162,13 @@ void processSignals()
 	// except mid-firehose, which is exactly when it earns its keep.
 	renderer_flush_if_dirty();
 
+	// The tty layer's half of the same discipline: a focused-VT scroll burst
+	// defers the glass entirely (no per-line memmove — the frozen-cat fix),
+	// and this rider repaints from the grid at the same ~30Hz. Ordered after
+	// renderer_flush_if_dirty so a frame both riders touch settles in one
+	// pass. Costs one branch when nothing is stale.
+	tty_flush_if_dirty();
+
 	// Wake any blocked console reader whose terminal has input (one sweep
 	// over the tty fleet since VTs arrived). Done here — under the lock,
 	// AFTER the qISleep walk above — so its queue surgery (ISLEEP->RUNNABLE)

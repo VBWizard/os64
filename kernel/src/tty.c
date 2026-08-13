@@ -29,6 +29,42 @@ tty_t * volatile kTTYFocused = &kTTY[0];
 volatile bool kTTYReady = false;
 volatile bool kTTYDirect = false;
 
+extern volatile uint64_t kTicksSinceStart;
+
+// ── Deferred glass (2026-08-13, the frozen-cat fix) ─────────────────────────
+// A focused-VT SCROLL no longer drags the glass along line by line. The old
+// way called renderer_glass_scroll_locked() — a ~3MB shadow memmove — once
+// PER SCROLLED LINE, inside tty_write's irqsave t->lock. `cat` on a big log
+// meant minutes of memmoves with interrupts off on the writing core; and
+// under tickless scheduling that core is often the BSP, the only core taking
+// timer ticks, so kTicksSinceStart FROZE machine-wide for the whole write
+// chunk: the blit throttle's window never opened (no repaints), the keyboard
+// IRQ never landed (no Alt+F#), sleeps stalled. One writer, whole machine
+// held hostage. Meanwhile the same flood on an UNFOCUSED terminal was
+// instant, because a grid scroll is a ring-pointer walk. The asymmetry was
+// the diagnosis: the grid is the truth, so let the glass be a THROTTLED VIEW.
+//
+// The mechanism: the first scroll of a write burst marks the glass STALE and
+// stops mirroring (grid-only from there — the cheap path). The rider below
+// (tty_flush_if_dirty, riding processSignals exactly like the renderer's
+// blit throttle) repaints the visible window FROM THE GRID at most once per
+// TTY_REPAINT_MIN_TICKS. A ten-thousand-line flood now costs the glass a
+// handful of full repaints (~3k glyphs into cached shadow RAM + one blit
+// each) instead of ten thousand 3MB memmoves. Per-character output that
+// never scrolls — prompt echo, line editing, the cursor dance — still lands
+// on the glass immediately; only scrolls defer.
+//
+// s_glassStale is written under the FOCUSED tty's lock (writers) and cleared
+// by any full repaint (tty_repaint_locked, which every clearer runs under
+// some t->lock). A focus switch can race a writer's set with its clear —
+// benign by design: a lost clear costs one redundant repaint; a lost set is
+// re-set by the flood's very next scroll. The rider re-checks under the
+// focused tty's lock before repainting, so it never paints a half-written
+// line.
+static volatile bool s_glassStale = false;
+static uint64_t s_glassRepaintTick = 0;
+#define TTY_REPAINT_MIN_TICKS 3   // ~30Hz, matching the renderer's BLIT_MIN_TICKS
+
 // ── Grid geometry helpers ───────────────────────────────────────────────────
 // The grid is a RING of total_lines lines; screen_top is the ring index of
 // the live screen's row 0. Lines "above" screen_top (going backwards through
@@ -65,7 +101,13 @@ tty_t *task_tty(struct task *t)
 // deliberate quirk and all — '\t' advances one cell, not a tab stop), applied
 // to the GRID first and mirrored to the glass only when `glass` says this
 // tty is the one on stage. The grid is the truth; the glass is a projection.
-static void tty_putc_locked(tty_t *t, char ch, bool glass)
+//
+// `glass` is BY REFERENCE because a scroll retires it mid-write: the first
+// scroll marks the glass stale and hands the rest of the burst to the
+// repaint rider (see the deferred-glass doctrine above the statics). The
+// caller must keep releasing the renderer lock it acquired even after the
+// flag drops — the flag says "stop painting", not "you never held the lock".
+static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 {
 	switch (ch)
 	{
@@ -95,7 +137,10 @@ static void tty_putc_locked(tty_t *t, char ch, bool glass)
 				tty_clear_line(t, tty_row_line(t, r));
 			t->cur_row = 0;
 			t->cur_col = 0;
-			if (glass)
+			// '\f' stays IMMEDIATE (one-shot wipe, not a per-line cost):
+			// clear(1) deserves its instant blank page, and a form feed in
+			// the middle of a flood resets the fall-behind anyway.
+			if (*glass)
 				renderer_glass_clear_locked();
 			break;
 		default:
@@ -103,7 +148,7 @@ static void tty_putc_locked(tty_t *t, char ch, bool glass)
 			tty_cell_t *cell = &tty_line(t, tty_row_line(t, t->cur_row))[t->cur_col];
 			cell->ch = ch;
 			cell->color = t->color;
-			if (glass)
+			if (*glass)
 				renderer_glass_putc_locked(ch, t->cur_row, t->cur_col, t->color);
 			t->cur_col++;
 			break;
@@ -126,8 +171,14 @@ static void tty_putc_locked(tty_t *t, char ch, bool glass)
 			t->hist_lines++;
 		tty_clear_line(t, tty_row_line(t, t->rows - 1));
 		t->cur_row = t->rows - 1;
-		if (glass)
-			renderer_glass_scroll_locked();
+		// THE deferral point: no glass scroll, no 3MB memmove. Mark the
+		// glass stale, stop mirroring for the rest of this write, and let
+		// tty_flush_if_dirty repaint from the grid on its ~30Hz clock.
+		if (*glass)
+		{
+			s_glassStale = true;
+			*glass = false;
+		}
 	}
 }
 
@@ -155,6 +206,13 @@ static void tty_repaint_locked(tty_t *t)
 		}
 	}
 	renderer_glass_blit_locked();
+
+	// A full repaint IS the glass catching up — whatever staleness a write
+	// burst left behind is now painted. Clearing here (under the caller's
+	// t->lock) covers every repaint door: the rider, a focus switch, a
+	// scrollback view move, a history snap.
+	s_glassStale = false;
+	s_glassRepaintTick = kTicksSinceStart;
 
 	// Relight the listening light only when it is honest: a parked reader,
 	// the live screen (a cursor has no business in the scrollback), and a
@@ -188,28 +246,61 @@ void tty_write(tty_t *t, const char *bytes, size_t length)
 	}
 
 	uint64_t tflags = spinlock_acquire_irqsave(&t->lock);
-	bool glass = (kTTYFocused == t && t->view_offset == 0);
+	// While the glass is stale a repaint is already owed — skip per-char
+	// mirroring entirely and let the rider deliver these bytes with the
+	// rest (mid-flood, this is the common case and the whole win: the
+	// writer never touches the renderer at all).
+	bool glass = (kTTYFocused == t && t->view_offset == 0 && !s_glassStale);
+	bool glass_lock_held = false;
 	uint64_t rflags = 0;
 	if (glass)
 	{
 		rflags = renderer_glass_begin();
+		glass_lock_held = true;
 		// Re-check under the renderer lock: a focus switch on another core
 		// publishes kTTYFocused before it repaints, so losing this race means
 		// painting into a frame the switch is about to replace — skip the
 		// glass, keep the grid (the repaint will show these bytes anyway).
 		if (kTTYFocused != t)
-		{
-			renderer_glass_end(rflags, t->cur_row, t->cur_col, false);
 			glass = false;
-		}
 	}
 
+	// tty_putc_locked may retire `glass` at the first scroll (deferred-glass
+	// doctrine) — that changes who paints, not who holds the renderer lock,
+	// which is why the release below keys off glass_lock_held instead.
 	for (size_t i = 0; i < length; i++)
-		tty_putc_locked(t, bytes[i], glass);
+		tty_putc_locked(t, bytes[i], &glass);
 
-	if (glass)
+	if (glass_lock_held)
 		renderer_glass_end(rflags, t->cur_row, t->cur_col, false);
 	spinlock_release_irqrestore(&t->lock, tflags);
+}
+
+// The repaint rider (called from processSignals, right beside the renderer's
+// renderer_flush_if_dirty — same gait, one layer up): if a write burst left
+// the glass stale and the ~30Hz window has passed, repaint the focused
+// terminal from its grid. The unlocked s_glassStale peek is safe for the
+// same reason the renderer's is — a stale read costs one pass, and the
+// locked re-check decides for real. Lock order matches every other door:
+// t->lock outside, renderer lock inside (tty_repaint_locked takes it).
+void tty_flush_if_dirty(void)
+{
+	if (!s_glassStale || !kTTYReady || kTTYDirect)
+		return;
+	if (kTicksSinceStart - s_glassRepaintTick < TTY_REPAINT_MIN_TICKS)
+		return;
+
+	tty_t *t = kTTYFocused;
+	if (t == NULL || t->cells == NULL)
+		return;
+
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	// Re-check under the lock; repaint only the terminal that is still on
+	// stage AND showing the present (a scrollback viewer's screen must not
+	// snap forward because a background flood is writing history).
+	if (s_glassStale && kTTYFocused == t && t->view_offset == 0)
+		tty_repaint_locked(t);   // clears s_glassStale itself
+	spinlock_release_irqrestore(&t->lock, flags);
 }
 
 // ── Input ───────────────────────────────────────────────────────────────────
