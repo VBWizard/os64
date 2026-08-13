@@ -39,6 +39,13 @@ uintptr_t kLimineRSDP = 0;
 uint64_t kLimineRSDPVersion = 0;
 uintptr_t kKernelBaseAddressP = 0;
 uintptr_t kKernelBaseAddressV = 0;
+// The kernel's own ELF file, as Limine loaded it. Stashed into plain globals
+// HERE, pre-CR3-switch, because kernelFileResponse itself sits in bootloader
+// memory only Limine's tables can reach; the BLOB stays readable because
+// init_os64_paging_tables re-maps it (font/PCI-ID recipe). symbols_init()
+// walks it for .symtab — the names behind every symbolized kernel report.
+uint64_t kKernelFileAddress = 0;
+uint64_t kKernelFileSize = 0;
 
 __attribute__((used, section(".limine_requests")))
 volatile LIMINE_BASE_REVISION(3);
@@ -134,6 +141,8 @@ void limine_boot_entry_point(void) {
 	kLimineRSDPVersion = rsdp_request.response->revision;
 	rsdp_response = rsdp_request.response;
 	strncpy(kKernelCommandline, kernelFileResponse->kernel_file->cmdline, 512);
+	kKernelFileAddress = (uint64_t)kernelFileResponse->kernel_file->address;
+	kKernelFileSize = kernelFileResponse->kernel_file->size;
 	struct limine_file* pciIdsFile = getFile(module_request.response, "pci_devices.bin");
 	kPCIIdsCount = pciIdsFile->size/sizeof(pci_device_id_t);
 	kPCIIdsData = (pci_device_id_t*)pciIdsFile->address;

@@ -21,6 +21,7 @@
 #include "paging.h"
 #include "driver/system/x86_64.h"   // rdtsc
 #include "exception_report.h"       // exception_wire_lock — one narrator per report
+#include "symbols.h"                // kernel .symtab names for the report lines
 #include "serial_logging.h"
 #include "sprintf.h"
 #include "video.h"
@@ -181,19 +182,15 @@ static void probe_emit(const char *line)
 	printd(DEBUG_EXCEPTIONS, "%s", line);
 }
 
-/// @brief Name a kernel address. THE SEAM for kernel symbolization.
-///
-/// Returns NULL today, so every address renders as raw hex. The next slice
-/// fills this in: main.c:132 already holds Limine's kernel-file response (we
-/// use it only for the cmdline), and the linked kernel retains .symtab and
-/// .strtab — so `scheduler_do+0x1a4` is a table walk over a buffer we already
-/// have a pointer to, reusing sym_for_address()'s shape from stack_trace.c.
-/// file:line needs a DWARF .debug_line state machine and is its own slice.
+/// @brief Name a kernel address. The seam kernel symbolization was built to
+/// fill (2026-08-12, one day after it was left here returning NULL): the
+/// names come from the kernel's own .symtab via Limine's kernel-file blob
+/// (symbols.c), and the lookup is lock-free and allocation-free — legal on
+/// this path under any CR3. NULL still means "print hex", so a stripped or
+/// symbols-less boot degrades to exactly the old report.
 static const char *probe_sym_for_address(uint64_t addr, uint64_t *off)
 {
-	(void)addr;
-	(void)off;
-	return NULL;
+	return symbols_for_address(addr, off);
 }
 
 static void probe_print_frame_line(nmi_probe_line_fn emit, void *ctx,
@@ -405,7 +402,9 @@ void nmi_probe_sweep(void)
 {
 	core_local_storage_t *cls = get_core_local_storage();
 	uint32_t self = cls ? (uint32_t)cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
-	char line[120];
+	// 200: the summary line carries a symbol name now, and the longest name
+	// in the kernel is 55 bytes (test_page_fault_does_not_panic_...).
+	char line[200];
 
 	if (!kSMPInitDone) {
 		probe_emit("nmi_probe: SMP is not up — nothing to sweep\n");
@@ -433,9 +432,17 @@ void nmi_probe_sweep(void)
 		if (s == NULL) {
 			continue;
 		}
-		sprintf(line, "core %u: alive — RIP=%016lx ring%lu inSched=%u ack=%u enabled=%u inService=0x%02x\n",
-		        apic_id, s->frame.rip, s->frame.cs & 3, s->inScheduler,
-		        s->settleAck, s->schedulerEnabled, s->apicInServiceVector);
+		uint64_t off = 0;
+		const char *name = probe_sym_for_address(s->frame.rip, &off);
+		if (name != NULL) {
+			sprintf(line, "core %u: alive — %s+0x%lx ring%lu inSched=%u ack=%u enabled=%u inService=0x%02x\n",
+			        apic_id, name, off, s->frame.cs & 3, s->inScheduler,
+			        s->settleAck, s->schedulerEnabled, s->apicInServiceVector);
+		} else {
+			sprintf(line, "core %u: alive — RIP=%016lx ring%lu inSched=%u ack=%u enabled=%u inService=0x%02x\n",
+			        apic_id, s->frame.rip, s->frame.cs & 3, s->inScheduler,
+			        s->settleAck, s->schedulerEnabled, s->apicInServiceVector);
+		}
 		probe_emit(line);
 	}
 	probe_emit("── end of sweep — full snapshots: /sys/cpu/<n>/probe ───────\n");

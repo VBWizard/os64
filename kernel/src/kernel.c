@@ -16,6 +16,7 @@
 #include "idt.h"
 #include "tss.h"
 #include "nmi_probe.h"
+#include "symbols.h"
 #include "pci.h"
 #include "ahci.h"
 #include "ata.h"
@@ -186,6 +187,12 @@ void create_kernel_task()
 }
 void kernel_init()
 {
+	// Symbols first: everything after this line panics with NAMES. Needs only
+	// kmalloc and the kernel-file mapping init_os64_paging_tables carried
+	// over, both long since ready; failure is announced and costs nothing
+	// but hex addresses (symbols.h has the doctrine).
+	symbols_init();
+
 	printf("Initializing ACPI\n");
 	acpiFindTables();
 	if (kPCIBaseAddress)

@@ -23,6 +23,8 @@ extern pci_device_id_t *kPCIIdsData;
 extern uint32_t kPCIIdsCount;
 extern void* kRamdiskModuleAddress;
 extern uint64_t kRamdiskModuleSize;
+extern uint64_t kKernelFileAddress;   // the kernel's own ELF file (main.c) —
+extern uint64_t kKernelFileSize;      // symbols_init reads .symtab from it
 extern struct limine_smp_response *kLimineSMPInfo;
 extern void mpSendInvTLB();  // smp_core.c — TLB-shootdown IPI to the other cores
 uintptr_t kKernelPageMappings[KERNEL_PAGE_COUNT][2]={0};
@@ -648,6 +650,25 @@ void init_os64_paging_tables()
 		pagesToMap++;
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual PCIID data (0x%016lx) to physical PCIID data (0x%016lx), %u pages in new page tables\n", kPCIIdsData, physAddrLookup, pagesToMap);
 	paging_map_pages(pml4v, (uintptr_t)kPCIIdsData, physAddrLookup, pagesToMap, PAGE_PRESENT | PAGE_WRITE);
+
+	//Map the kernel's own ELF file (Limine's kernel_file — same recipe as the
+	//font and PCI-ID modules: physically contiguous, memmap type KERNEL_AND_
+	//MODULES keeps the allocator away, so re-mapping it at Limine's VA keeps
+	//kKernelFileAddress valid for the life of the kernel). symbols_init()
+	//walks its .symtab for the names behind symbolized kernel reports, and
+	//the mapping STAYS afterward on purpose: .debug_line lives in the same
+	//blob, and the file:line slice will want it. READ-ONLY — nothing ever
+	//has business writing the kernel's own file image.
+	if (kKernelFileAddress != 0)
+	{
+		printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map kernel ELF file (for .symtab)\n");
+		physAddrLookup = paging_walk_paging_table((pt_entry_t*)kKernelPML4v, (uintptr_t)kKernelFileAddress);
+		pagesToMap = kKernelFileSize / PAGE_SIZE;
+		if (kKernelFileSize % PAGE_SIZE)
+			pagesToMap++;
+		printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual kernel file (0x%016lx) to physical kernel file (0x%016lx), %u pages in new page tables\n", kKernelFileAddress, physAddrLookup, pagesToMap);
+		paging_map_pages(pml4v, (uintptr_t)kKernelFileAddress, physAddrLookup, pagesToMap, PAGE_PRESENT);
+	}
 
 	//Map the RAMDisk module if the boot entry passed one (same recipe as the
 	//font and PCI-ID modules above: Limine loaded it physically contiguous

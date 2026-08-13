@@ -21,6 +21,7 @@
 #include "msr.h"        // rdmsr64 — the GS_BASE sanity check
 #include "driver/system/x86_64.h"   // rdtsc — the wire lock's barge timer
 #include "paging.h"
+#include "symbols.h"    // kernel .symtab names for the call chain
 #include "serial_logging.h"
 #include "logging/log.h"
 #include "sprintf.h"
@@ -210,6 +211,21 @@ static void exc_decode_pf(char *out, size_t len, uint64_t error_code)
 	         (error_code & 0x10) ? ", instruction fetch" : "");
 }
 
+/// @brief One chain line, named when the kernel's symbol table knows the
+/// address. symbols_for_address is lock-free and allocation-free (symbols.h's
+/// contract), so it is legal here even while dying; NULL — a user address, a
+/// stripped kernel, symbols_init never ran — falls back to the exact hex line
+/// this reporter printed before symbols existed.
+static void exc_emit_frame(bool dying, int level, uint64_t addr, const char *tag)
+{
+	uint64_t off = 0;
+	const char *name = symbols_for_address(addr, &off);
+	if (name != NULL)
+		EXC_EMIT(dying, "  %2d) %s+0x%lx  (0x%016lx)%s\n", level, name, off, addr, tag);
+	else
+		EXC_EMIT(dying, "  %2d) 0x%016lx  <no name>%s\n", level, addr, tag);
+}
+
 /// @brief Walk the frame chain from the CAPTURED rbp — never a global.
 ///
 /// Presumed hostile, every frame re-validated. The monotonicity test does most
@@ -218,7 +234,7 @@ static void exc_decode_pf(char *out, size_t len, uint64_t error_code)
 static void exc_walk_chain(const exception_context_t *ctx, bool dying)
 {
 	EXC_EMIT(dying, "  Call chain (most recent first):\n");
-	EXC_EMIT(dying, "   1) 0x%016lx   <-- faulted here\n", ctx->rip);
+	exc_emit_frame(dying, 1, ctx->rip, "   <-- faulted here");
 
 	// Ring 3 has no kernel chain to walk from here, and saying so beats
 	// walking a lower-half frame pointer through the kernel's page tables.
@@ -239,7 +255,7 @@ static void exc_walk_chain(const exception_context_t *ctx, bool dying)
 		if (ret == 0) {
 			return;   // a clean chain terminates
 		}
-		EXC_EMIT(dying, "  %2d) 0x%016lx\n", level, ret);
+		exc_emit_frame(dying, level, ret, "");
 
 		if (saved_rbp == 0) {
 			return;   // the launch stub's floor — also clean
