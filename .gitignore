@@ -34,3 +34,4 @@ compile_commands.json
 # worktree that starts with an empty allowlist re-prompts for every build.
 # settings.local.json is per-machine and must not.
 .claude/settings.local.json
+net_capture.pcap
