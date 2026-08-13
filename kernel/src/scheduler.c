@@ -122,6 +122,11 @@ volatile uint64_t kDiagTriggerCalls = 0;
 volatile uint64_t kDiagLockMaxSpins = 0;
 volatile uint64_t kDiagPassCount[MAX_CPUS] = {0};
 volatile uint64_t kDiagRunnableLen = 0;
+// Lease expiries per core: passes on a tickless AP driven by the backstop's
+// one-shot timer (vector 0x7E) rather than a nudge. NOT a diag temp — this is
+// the observable the backstop test asserts on (a preempted hog = a nonzero,
+// growing count on its core), and the counter /sys/cpu can surface someday.
+volatile uint64_t kSchedBackstopFires[MAX_CPUS] = {0};
 extern volatile uint64_t kDiagIPISends, kDiagICRMaxSpins, kDiagSettleBroadcasts,
 	kDiagSettleTimeouts, kDiagSettleMaxSpins, kDiagSettleLastLateAPIC;
 extern volatile uint32_t kDiagLastVector[MAX_CPUS], kDiagLVT[MAX_CPUS];
@@ -994,7 +999,15 @@ void scheduler_trigger(core_local_storage_t *cls)
     mp_schedulerEnabled[cls->apic_id] = true;
 
 	//Since we're calling a different vector than the APIC timer does, we need to reset the timer count
-    mp_restart_apic_timer_count();
+	// — but NOT on an AP whose timer is the backstop lease: that count is
+	// the periodic 10ms value, and writing it to an UNMASKED one-shot LVT
+	// would arm a rogue 10ms lease. The pass this trigger provokes re-grants
+	// the real lease at its dispatch tail; nothing needs pre-arming here.
+	// (Backstop off = LVT still masked = the write stays the harmless phase
+	// reset it always was, so old tickless behavior is preserved exactly.)
+	if (!(kTicklessScheduler && kSchedBackstopEnabled &&
+	      cls->apic_id != BOOTSTRAP_PROCESSOR_ID))
+		mp_restart_apic_timer_count();
     send_ipi(cls->apic_id, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
     // Wait until the ISR has run and cleared mp_waitingForScheduler.
     // Using a checked loop rather than a bare sti;hlt because the ISR may
@@ -1241,6 +1254,14 @@ void scheduler_do()
 	kDiagLastVector[apic_id] = apic_in_service_vector();
 	kDiagLVT[apic_id] = read_apic_register(kMPApicBase + 0x320);
 
+	// A timer-vector pass on a tickless AP is a lease expiry — the backstop
+	// preempting whoever ran past SCHED_BACKSTOP_MS without re-entering the
+	// scheduler. Counted for the test suite and for anyone diagnosing "who
+	// is interrupting my pinned core" (the answer is: its own lease).
+	if (kTicklessScheduler && apic_id != BOOTSTRAP_PROCESSOR_ID &&
+	    kDiagLastVector[apic_id] == IPI_TIMER_SCHEDULE_VECTOR)
+		kSchedBackstopFires[apic_id]++;
+
 	// ── TEMP DIAG: the once-per-second report, BSP pass only ────────────
 	// ticks vs TSC-milliseconds answers "is the tick clock starving?";
 	// the rest answers "who is spending the time?". Values are deltas
@@ -1336,4 +1357,26 @@ void scheduler_do()
 	uint64_t acctPassEnd = rdtsc();
 	cls->acctSchedCycles += acctPassEnd - acctPassStart;
 	cls->acctLastDispatchTSC = acctPassEnd;
+
+	// ── The preemption lease (smp_core.c doctrine block) ────────────────────
+	// EVERY dispatch door funnels through this tail — switch, shortcut,
+	// nudge-driven, lease-expiry-driven — so this is the one place the lease
+	// is granted or revoked. Non-idle dispatch on a tickless AP: arm the
+	// one-shot deadline; idle dispatch: stop the timer, return the core to
+	// true silence. The BSP keeps its 100Hz heartbeat (timekeeping lives
+	// there); periodic mode never reaches here with a masked timer at all.
+	// IF may be 1 here (the pass runs interruptible by design — see
+	// SCHEDULER_REENTRANCY.md); that is safe: the LAPIC writes are each
+	// atomic, an interrupt between them at worst delays the arming count
+	// write (which is deliberately last), and a nested pass is barred by
+	// mp_inScheduler regardless.
+	if (kTicklessScheduler && kSchedBackstopEnabled &&
+	    apic_id != BOOTSTRAP_PROCESSOR_ID)
+	{
+		thread_t *dispatched = cls->currentThread;
+		if (dispatched != NULL && dispatched != NO_THREAD && !dispatched->idleThread)
+			sched_backstop_arm(cls);
+		else
+			sched_backstop_disarm();
+	}
 }

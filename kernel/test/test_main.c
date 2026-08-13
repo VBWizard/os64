@@ -18,6 +18,10 @@
 #include "dlist.h"
 #include <stdint.h>
 #include "smp_core.h"
+#include "smp.h"       // kCPUInfo/kMPCoreCount — the backstop test picks its AP
+#include "signals.h"   // SIGKILL — delivered to the hog by a backstop pass
+#include "CONFIG.h"    // the backstop test's windows are denominated in
+                       // leases (kSchedBackstopMS), never in milliseconds
 #include "task.h"
 #include "scheduler.h"
 #include "time.h"
@@ -47,6 +51,11 @@ extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
 extern task_t *kKernelTask;
 extern vfs_filesystem_t *kRootFilesystem;
+// The backstop test's witnesses (scheduler.c / smp.h / kernel.c).
+extern volatile uint64_t kSchedBackstopFires[];
+extern bool kSchedBackstopEnabled;
+extern bool kTicklessScheduler;
+extern int  kSchedBackstopMS;
 
 // The TESTS= cmdline knob (parsed in kernel_commandline.c, consumed in
 // test_run_phase): "panic" | "warn" override every test's registered
@@ -2804,6 +2813,84 @@ static bool test_dirent_mtime(void)
     return true;
 }
 
+// The preemption backstop, end to end (2026-08-13; the 08-09 starvation debt's
+// funeral). Pin a syscall-free ring-3 hog (/bin/hog) to an AP, watch that
+// core's lease expiries tick up for half a second, then SIGKILL it — a signal
+// that only a scheduler pass can deliver to a thread that never enters the
+// kernel. Pre-backstop, both halves fail on tickless: the core takes zero
+// passes once the hog lands, and the kill bit is never read. NOBACKSTOP
+// boots (and periodic mode, and single-core) SKIP honestly.
+static bool test_backstop_preemption(void)
+{
+    if (!kTicklessScheduler || !kSchedBackstopEnabled) {
+        printd(DEBUG_TESTS, "\tSKIP: test_backstop_preemption (backstop not active this boot)\n");
+        return true;
+    }
+    if (kMPCoreCount < 2) {
+        printd(DEBUG_TESTS, "\tSKIP: test_backstop_preemption (needs an AP)\n");
+        return true;
+    }
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_backstop_preemption (no root filesystem mounted)\n");
+        return true;
+    }
+
+    uint32_t ap = kCPUInfo[1].apicID;
+    uint64_t fires_before = kSchedBackstopFires[ap];
+
+    // Ring 3 and PINNED: the exact starvation shape. An unpinned hog would
+    // still prove the lease, but the pin removes any doubt about WHOSE
+    // counter must move.
+    task_t *hog = task_create("/bin/hog", 0, NULL, kKernelTask, false, ap);
+    if (hog == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - task_create returned NULL\n");
+        return false;
+    }
+    scheduler_submit_new_task(hog);
+
+    // Let it burn for TEN LEASES — denominated in the LIVE knob
+    // (kSchedBackstopMS: BACKSTOP=<ms> boots included), not in milliseconds,
+    // so the window tracks exactly what it measures (Chris's catch,
+    // 2026-08-13: a 500ms literal only held ten leases by coincidence of the
+    // 50ms default; raise the lease and a literal window would fail a
+    // healthy backstop). The assertion wants only 3 of the ~10, so a
+    // wheezing nested-VM boot still passes while a dead backstop (0 fires)
+    // still fails. wait() is ms-denominated and rounds UP to a whole tick,
+    // so on a coarser-tick build this window can only stretch — which makes
+    // the assertion safer, never tighter.
+    for (int i = 0; i < 10; i++)
+        wait(kSchedBackstopMS);
+
+    uint64_t expiries = kSchedBackstopFires[ap] - fires_before;
+
+    // Now the kill. No syscall will ever carry it home — only the pass the
+    // next lease expiry forces. Forty leases of patience (2s at the 50ms
+    // default), same denomination as above.
+    task_signal_all_threads(hog, SIGKILL);
+    for (int i = 0; i < 40 && !hog->exited; i++)
+        wait(kSchedBackstopMS);
+
+    // SINGLE EXIT from here down (the test_release discipline — see
+    // test_elf_loader's note on the corpse protocol).
+    bool ok = false;
+
+    if (expiries < 3) {
+        printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - only %lu lease expiries on APIC %u in 500ms (wanted >=3)\n",
+               expiries, ap);
+    }
+    else if (!hog->exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - SIGKILL never reached the hog (no pass delivered it?)\n");
+    }
+    else {
+        printd(DEBUG_TESTS, "\tPASS: test_backstop_preemption (%lu lease expiries on APIC %u, SIGKILL landed)\n",
+               expiries, ap);
+        ok = true;
+    }
+
+    test_release(hog);
+    return ok;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void register_builtin_tests(void)
@@ -2856,6 +2943,7 @@ static void register_builtin_tests(void)
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("dirent_mtime", test_dirent_mtime, TEST_PHASE_POSTBOOT);
+    test_register("backstop_preemption", test_backstop_preemption, TEST_PHASE_POSTBOOT);
 }
 
 void test_framework_init(void)

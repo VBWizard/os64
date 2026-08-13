@@ -94,6 +94,23 @@ bool kEnableSMP = true;
 // DEPENDS ON (the GUI entries' SCHED=periodic workaround dies with the
 // backstop) — keep it forever as the flashlight.
 bool kTicklessScheduler = true;
+// The AP preemption backstop the block above foretold (2026-08-13): under
+// tickless, every non-idle dispatch on an AP arms a one-shot LAPIC lease;
+// idle dispatch disarms it. Kills the tickless-AP starvation debt (a
+// syscall-free hog could hold a core forever, starving pinned kworker and
+// Ctrl+C's forced-syscall redirect). NOBACKSTOP on the cmdline restores the
+// pre-backstop tickless exactly — the flashlight rule, same as
+// SCHED=periodic/NOCACHE/NOTRACE. Meaningless outside tickless mode.
+bool kSchedBackstopEnabled = true;
+// The lease length, milliseconds. SCHED_BACKSTOP_MS (CONFIG.h) is the
+// compiled DEFAULT; BACKSTOP=<ms> on the cmdline overrides it per boot —
+// compile-time default, boot-time policy (his call, 2026-08-13, after the
+// GUI shakedown: 50 is plenty for shell work, but the compositor sharing
+// its core at 50ms granularity animates like a slideshow — at 10ms it is
+// smooth. The GUI entries pass BACKSTOP=10; everything else rides the
+// default). Validated after parse: 1..1000 or it snaps back to the default,
+// loudly — a typo must not land you at a 0ms lease (= a disarmed timer).
+int kSchedBackstopMS = SCHED_BACKSTOP_MS;
 bool kEnableKWorker = false;
 // Cleared by the NOUSB cmdline flag — skips xHCI bring-up entirely.
 bool kEnableUSB = true;
@@ -305,9 +322,18 @@ void kernel_init()
     // Say which scheduler this boot got — the mode is a cmdline decision now
     // (tickless default, SCHED=periodic opt-out), and a decision that changes
     // how every core behaves should be readable on the glass, not inferred.
-    printf("Scheduler: %s\n", kTicklessScheduler
-           ? "tickless (park-and-nudge; SCHED=periodic for legacy)"
-           : "periodic (legacy 100Hz all-core; diagnostic mode)");
+    // The banner tells the whole scheduling truth for this boot: mode, and —
+    // under tickless — the lease length actually in force (BACKSTOP=<ms>
+    // overrides the default, so the number must come from the variable, not
+    // the constant; a human comparing GUI smoothness across boots reads it
+    // here instead of guessing which cmdline won).
+    if (!kTicklessScheduler)
+        printf("Scheduler: periodic (legacy 100Hz all-core; diagnostic mode)\n");
+    else if (kSchedBackstopEnabled)
+        printf("Scheduler: tickless (park-and-nudge; %dms backstop lease; SCHED=periodic for legacy)\n",
+               kSchedBackstopMS);
+    else
+        printf("Scheduler: tickless (park-and-nudge; NOBACKSTOP — hogs are immortal; SCHED=periodic for legacy)\n");
 
     init_signals();
 

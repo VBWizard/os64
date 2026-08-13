@@ -44,6 +44,25 @@
 #define MP_SCHEDULER_RUNS_PER_SECOND 100
 #define SCHEDULER_DEBUG 1
 
+// ── Tickless preemption backstop (2026-08-13) ───────────────────────────────
+// Under tickless scheduling an AP's LAPIC timer is normally silent — but a
+// dispatched non-idle thread now carries a LEASE: a one-shot timer armed at
+// dispatch for this many milliseconds. A thread that syscalls or blocks first
+// re-enters the scheduler on its own and the lease is re-granted to whoever
+// is dispatched next; a syscall-free hog gets preempted when the lease
+// expires. Idle dispatch disarms the timer entirely, so an idle core stays
+// truly tickless — the lease is a property of the DISPATCH, not of the clock
+// (the periodic/deadline distinction; every mature scheduler converged here).
+// 50ms = 20Hz worst-case interrupt load on a busy core, and the ceiling on
+// Ctrl+C latency for a hog that never syscalls.
+//
+// This is the compiled DEFAULT; the live value is kSchedBackstopMS
+// (kernel.c), overridable per boot with BACKSTOP=<ms> — the GUI entries
+// pass 10, where a compositor sharing its core at 50ms granularity
+// animates like a slideshow but at 10ms is smooth (his shakedown,
+// 2026-08-13).
+#define SCHED_BACKSTOP_MS 50
+
 // Framebuffer related
 #define FRAMEBUFFER_FONT "zap-ext-light16.psf"
 

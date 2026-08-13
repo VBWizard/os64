@@ -232,6 +232,13 @@ static cmdopt_t cmdopts[] = {
     {"nolog", OPT_UINT128_CLEAR, &kDebugLevel, 0, 0},
     {"alllog", OPT_UINT128_OR, &kDebugLevel, DEBUG_EVERYTHING, 0},
     {"nosmp", OPT_BOOL, &kEnableSMP, false, 0},
+    // NOBACKSTOP: disarm the tickless AP preemption lease (kernel.c doctrine
+    // block) — restores the pre-2026-08-13 park-and-nudge tickless exactly.
+    {"NOBACKSTOP", OPT_BOOL, &kSchedBackstopEnabled, false, 0},
+    // BACKSTOP=<ms>: the lease length for this boot (default SCHED_BACKSTOP_MS
+    // = 50; GUI entries pass 10 for smooth animation). Validated after the
+    // parse loop — out-of-range snaps back to the default, loudly.
+    {"BACKSTOP", OPT_INT, &kSchedBackstopMS, 0, 0},
     // Cap the number of cores init_SMP brings up (0 = use them all). The
     // uncapped cores are never woken — they stay parked in Limine's AP loop.
     {"MAXCORES", OPT_INT, &kMaxActiveCores, 0, 0},
@@ -384,5 +391,18 @@ void process_kernel_commandline(char *cmdline)
             kTicklessScheduler = false;
         else
             printd(DEBUG_BOOT, "cmdline: unknown SCHED=%s ignored, staying tickless\n", kSchedParam);
+    }
+
+    // Validate BACKSTOP= the same way: a lease outside 1..1000ms is a typo,
+    // not a policy. 0 (or parse_decimal's -1 for garbage) would arm a
+    // zero-count timer — which SDM-stops it, silently recreating the
+    // starvation bug behind a flag that LOOKS like it enabled something.
+    // Snap back to the default and say so; NOBACKSTOP is the honest way to
+    // turn the lease off.
+    if (kSchedBackstopMS < 1 || kSchedBackstopMS > 1000)
+    {
+        printd(DEBUG_BOOT, "cmdline: BACKSTOP=%d out of range (1..1000ms), using default %dms\n",
+               kSchedBackstopMS, SCHED_BACKSTOP_MS);
+        kSchedBackstopMS = SCHED_BACKSTOP_MS;
     }
 }

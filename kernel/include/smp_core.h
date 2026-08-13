@@ -103,6 +103,13 @@ void send_ipi_int(uint32_t apic_id, uint32_t vector, uint32_t delivery_mode, uin
 void ap_wake_up_aps();
 void ap_enable_schedulers();
 
+// The tickless preemption lease (smp_core.c doctrine): arm a one-shot LAPIC
+// deadline for the dispatched thread / stop the timer for an idle dispatch.
+// Core-local by nature — call only for the core you are standing on, from
+// scheduler_do's dispatch tail.
+void sched_backstop_arm(core_local_storage_t *cls);
+void sched_backstop_disarm(void);
+
 static inline core_local_storage_t* get_core_local_storage(void)
 {
     core_local_storage_t *cls;

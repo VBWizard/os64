@@ -15,6 +15,9 @@ extern bool kEnableSMP;
 // cores via directed nudge IPIs. false = SCHED=periodic legacy mode (every
 // core ticks at 100Hz; diagnostic/repro only). See kernel.c for the ruling.
 extern bool kTicklessScheduler;
+extern bool kSchedBackstopEnabled;   // NOBACKSTOP clears it (kernel.c doctrine)
+extern int  kSchedBackstopMS;        // lease ms: SCHED_BACKSTOP_MS default,
+                                     // BACKSTOP=<ms> per boot (validated 1..1000)
 extern bool kEnableKWorker;
 extern volatile uint64_t kSystemStartTime, kUptime;
 extern volatile uint64_t kSystemCurrentTime;

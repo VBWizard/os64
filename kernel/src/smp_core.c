@@ -567,6 +567,50 @@ void testAPTimerTickISR()
     write_eoi();
 }
 
+// ── The tickless preemption lease (2026-08-13) ──────────────────────────────
+// Under tickless the AP LAPIC timer is not a clock, it is a DEADLINE: every
+// non-idle dispatch arms it one-shot for SCHED_BACKSTOP_MS, and an idle
+// dispatch stops it cold. A well-behaved thread re-enters the scheduler
+// (syscall, block, yield) before the lease expires and the next dispatch
+// re-grants it; a syscall-free hog gets exactly one interrupt, at expiry,
+// which runs the pass that preempts it. There is no tick — an idle core
+// takes ZERO timer interrupts, which is the whole point of tickless and the
+// property periodic mode can never have. Both functions run on the core
+// they arm (LAPIC registers are core-local); the callers are scheduler_do's
+// dispatch tail and nobody else.
+void sched_backstop_arm(core_local_storage_t *cls)
+{
+    // Divide config FIRST, every arm: apicTicksPerSecond is denominated in
+    // divide-by-16 counts (calibration writes 0x3 before measuring), so the
+    // consuming timer must divide by 16 too. This cannot ride bring-up: a
+    // tickless AP never receives IPI_ENABLE_SCHEDULING_VECTOR, so
+    // ap_configure_scheduler_timer never runs here and the reset-default
+    // divisor would eat the count ~16x fast — measured, not theorized: the
+    // backstop's first flight fired 152 "50ms" leases in 500ms. Per-arm is
+    // one cheap MMIO write and self-heals anything else that touches DCR.
+    write_apic_register(kMPApicBase + APIC_TIMER_DIVIDE_CONFIG, 0x3);
+    // One-shot: vector alone — mode bits clear, mask clear. The count write
+    // stays LAST — it is THE arming action (same SDM discipline
+    // enableAPScheduling_ISR documents: LVT writes may disarm, so arm after
+    // the mode is final).
+    uint32_t lvt = IPI_TIMER_SCHEDULE_VECTOR;   // vector, one-shot, unmasked
+    write_apic_register(kMPApicBase + APIC_LVT_TIMER, lvt);
+    // kSchedBackstopMS, not the constant: BACKSTOP=<ms> sets boot policy
+    // (validated 1..1000 in kernel_commandline.c — never 0, which would
+    // SDM-stop the timer and silently resurrect the starvation bug).
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT,
+                        (uint32_t)((cls->apicTicksPerSecond * (uint64_t)kSchedBackstopMS) / 1000));
+}
+
+void sched_backstop_disarm(void)
+{
+    // SDM 11.5.4: writing 0 to the initial-count register stops the timer.
+    // The LVT can stay unmasked — a stopped timer fires nothing, and the next
+    // arm rewrites the LVT anyway. A fire that races this disarm delivers one
+    // spurious pass to an idle core, which the pass handles like any nudge.
+    write_apic_register(kMPApicBase + APIC_TIMER_INIT_COUNT, 0);
+}
+
 void enableAPScheduling_ISR()
 {
 	ap_configure_scheduler_timer();
