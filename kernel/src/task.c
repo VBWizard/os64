@@ -2,6 +2,7 @@
 #include "env.h"
 #include "CONFIG.h"
 #include "kmalloc.h"
+#include "memory/arena.h"   // per-task table arenas (PAGING_ARENA.md)
 #include "thread.h"
 #include "serial_logging.h"
 #include "paging.h"
@@ -482,6 +483,15 @@ static void task_destroy(task_t *t)
 		elf_image_free(image);
 	}
 
+	// The whole address space back in one motion: PML4 and every PDPT/PD/PT
+	// this task ever drew (PAGING_ARENA.md). Safe HERE because phase 2 runs a
+	// full kworker period after phase 1 unlinked the corpse — no core has
+	// this CR3 loaded and no walker can reach these tables. And the kfrees
+	// inside HHDM-unmap the pages, so anything that touches this dead map
+	// afterwards faults loudly: the use-after-free tripwire, now standing
+	// guard over page tables too. (NULL for ktask — arena_destroy no-ops.)
+	arena_destroy((arena_t *)t->tableArena);
+
 	kfree(t);
 }
 
@@ -910,6 +920,61 @@ uint64_t task_reap_any_dead(task_t* parentTask, uint64_t* exitCode)
 	return endedPid;
 }
 
+/// @brief Whose arena funds a table page under `pml4v`? (paging.h's seam.)
+///
+/// Lives HERE and not in paging.c because the answer is task knowledge: the
+/// paging layer hands us the (normalized, HHDM) pml4 a map call is building
+/// under, and we match it against what this core's current task knows —
+/// itself, or the child it is mid-way through building. Resolution happens
+/// per MAP CALL, never cached across one, so a creator that blocks mid-build
+/// and lets another task fault on this core can never mis-route that task's
+/// draws: the fault's map call re-asks, and cls->task has changed.
+///
+/// Every miss returns NULL = the pool. That is the safe default by
+/// construction: a pool page is merely never refunded (a leak we lived with
+/// for the pool's whole life), while a wrong ARENA would free a live table
+/// with its owner at burial. Unknown → pool, always.
+struct arena *paging_table_arena_for(pt_entry_t *pml4v)
+{
+	if ((uintptr_t)pml4v == kKernelPML4v)
+		return NULL;                       // kernel tables: the eternal pool
+	if (!kCLSInitialized)
+		return NULL;                       // pre-CLS boot: pool
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *current = (cls != NULL) ? (task_t *)cls->task : NULL;
+	if (current == NULL)
+		return NULL;
+
+	// The child this task is building right now (task_create's bracket) —
+	// checked FIRST because during a build, the child's pml4 is the one
+	// being mapped into, and it is not cls->task's own.
+	if (current->pta_buildingChildArena != NULL &&
+	    current->pta_buildingChildPml4v == (uint64_t *)pml4v)
+		return current->pta_buildingChildArena;
+
+	// The current task's own address space — demand faults, mmap, new
+	// threads' stacks. ktask lands here with tableArena == NULL, which
+	// routes it to the pool: exactly right, its tables are the kernel's.
+	if (current->pml4v == (uint64_t *)pml4v)
+		return current->tableArena;
+
+	return NULL;                           // someone else's pml4: pool, safely
+}
+
+/// @brief Close the creator's child-building bracket (every task_create exit).
+static void task_table_bracket_close(void)
+{
+	if (!kCLSInitialized)
+		return;
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *creator = (cls != NULL) ? (task_t *)cls->task : NULL;
+	if (creator != NULL) {
+		creator->pta_buildingChildPml4v = NULL;
+		creator->pta_buildingChildArena = NULL;
+	}
+}
+
 task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
 {
     printd(DEBUG_TASK,"task_initialize: Initializing task\n");
@@ -973,9 +1038,24 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	}
 	else
 	{
-		// Allocate new PML4 for this task
-		newTask->pml4v = (uintptr_t*)get_paging_table_pageV();
-		newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v & ~(kHHDMOffset));
+		// THIS TASK'S TABLES DIE WITH IT (PAGING_ARENA.md): the PML4 and every
+		// PDPT/PD/PT drawn while mapping this address space come from a
+		// per-task arena, returned wholesale at burial. The pool serves only
+		// the kernel's own (eternal) tables now — which is what made its
+		// sizing deterministic and ended the watch(1) bleed-out. 16KB covers
+		// a typical task's dozen tables without growth; the arena chains more
+		// when demand paging tours wider.
+		newTask->tableArena = arena_create(16 * PAGE_SIZE);
+		if (newTask->tableArena == NULL)
+			panic("task_initialize: cannot allocate a table arena for a new task\n");
+
+		// Allocate new PML4 for this task — the arena's first page. kmalloc
+		// backing means the HHDM math (virt - kHHDMOffset) is exact, same as
+		// the argv/env blobs already rely on.
+		newTask->pml4v = (uintptr_t*)arena_alloc_aligned(newTask->tableArena, PAGE_SIZE, PAGE_SIZE);
+		if (newTask->pml4v == NULL)
+			panic("task_initialize: table arena could not fund a PML4\n");
+		newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v - kHHDMOffset);
 
 		// Clear the new PML4
 		memset(newTask->pml4v, 0, PAGE_SIZE);
@@ -990,6 +1070,23 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		newTask->taskMemoryNextVirt = kernelTask ? KERNEL_TASK_MEMORY_BASE : USER_TASK_MEMORY_BASE;
 		printd(DEBUG_TASK | DEBUG_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s%s task (shared upper-half)\n",
 			newTask->pml4, idleTask ? "idle " : "", kernelTask ? "kernel" : "user");
+
+		// Open the creator's bracket BEFORE createThread below maps the new
+		// task's stacks: from here until task_create's exit, table draws for
+		// THIS pml4 route to THIS arena (paging_table_arena_for). It rides
+		// the creator's task struct — not CLS — because the ELF load can
+		// block and resume on another core, and the bracket must follow the
+		// creator there. Pre-CLS creations (boot-time idles) simply skip it:
+		// their draws fall to the pool, and a task that never dies is exactly
+		// what the pool is for.
+		if (kCLSInitialized) {
+			core_local_storage_t *cls = get_core_local_storage();
+			task_t *creator = (cls != NULL) ? (task_t *)cls->task : NULL;
+			if (creator != NULL) {
+				creator->pta_buildingChildPml4v = newTask->pml4v;
+				creator->pta_buildingChildArena = newTask->tableArena;
+			}
+		}
 	}
 
 	newTask->threads = createThread((void*)newTask, kernelTask);
@@ -1367,6 +1464,12 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 			// (typo, not-a-program) never get this far.
 			printd(DEBUG_TASK, "task_create: ELF load failed for %s after its header validated "
 				"(truncated or malformed image?) — not spawning\n", newTask->path);
+			// The bracket must not outlive the build it belongs to — with it
+			// left open, the creator's NEXT child would draw tables into
+			// THIS orphan's arena. (newTask itself still leaks here — struct,
+			// stacks, and now its arena — the mid-construction unwind is the
+			// booked DEBTS row; one row, one funeral, all of it together.)
+			task_table_bracket_close();
 			return NULL;
 		}
 		// NOTE: entry registers (RDI/RSI/RDX) are latched later, after argc/argv
@@ -1499,6 +1602,11 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		kDebugTaskLoadedBias = newTask->loadBias;
 		debug_task_loaded();
 	}
+
+	// The child's tables are fully built — close the creator's bracket. From
+	// here on, draws for this pml4 happen only when the CHILD itself faults,
+	// and route through its own cls->task (paging_table_arena_for).
+	task_table_bracket_close();
 
 	return newTask;
 }

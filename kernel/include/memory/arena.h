@@ -8,11 +8,20 @@
 /// Arena allocator for fast, bulk-freeable allocations.
 /// All allocations from an arena are freed together when the arena is destroyed.
 /// Individual allocations cannot be freed - this is by design.
+///
+/// GROWABLE since 2026-08-12 (the paging-arena work): when the current buffer
+/// cannot satisfy an allocation, the arena chains a fresh kmalloc block and
+/// carries on — the arena_t a caller holds is the arena's IDENTITY, not its
+/// storage, and stays valid across growth. Earlier, full blocks ride the
+/// `next` chain so arena_destroy can return every byte. The first customer is
+/// task page tables, whose count is unknowable at task birth (demand paging
+/// draws PTs for as long as the task keeps touring new address space).
 
 typedef struct arena {
-    uint8_t *buffer;      // Base of allocated buffer
-    size_t capacity;      // Total capacity in bytes
-    size_t offset;        // Current allocation offset (next free byte)
+    uint8_t *buffer;      // Base of the CURRENT (hot) buffer
+    size_t capacity;      // Current buffer's capacity in bytes
+    size_t offset;        // Allocation offset into the current buffer
+    struct arena *next;   // Chain of FULL earlier blocks (freed by destroy)
 } arena_t;
 
 /// @brief Create a new arena with the specified capacity

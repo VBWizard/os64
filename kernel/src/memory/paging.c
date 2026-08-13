@@ -1,6 +1,7 @@
 #include "paging.h"
 #include "CONFIG.h"
 #include "kmalloc.h"
+#include "memory/arena.h"   // arena_alloc_aligned — task table pages (PAGING_ARENA.md)
 #include "allocator.h"
 #include "memmap.h"
 #include "BasicRenderer.h"
@@ -146,6 +147,35 @@ uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address)
 	return paging_walk_paging_table_keep_flags(pml4, virtual_address, false);
 }
 
+/// @brief Fund one table page from `source` (a task's arena) or the pool.
+///
+/// The ONE place map-time table pages come from since the paging-arena work
+/// (PAGING_ARENA.md): a task's tables ride its arena and die with it at
+/// burial; the kernel's ride the pool and are eternal. Returns the PHYSICAL
+/// address either way — arena memory is kmalloc-backed, so the HHDM math
+/// (virt - kHHDMOffset) is exact, and both sources hand back zeroed pages.
+///
+/// An arena that returns NULL could not GROW — that is kmalloc out of memory,
+/// the same class of catastrophe as pool exhaustion, and it gets the same
+/// loud death rather than a quiet fallback that would strand this task's
+/// tables in two owners' books.
+static uintptr_t draw_table_page(struct arena *source, const char *level, uint64_t va)
+{
+    if (source != NULL) {
+        void *page = arena_alloc_aligned(source, PAGE_SIZE, PAGE_SIZE);
+        if (page == NULL)
+            panic("draw_table_page: task table arena could not grow (kmalloc OOM) mapping VA 0x%016lx\n", va);
+        printd(DEBUG_PAGING | DEBUG_DETAILED, "PAGING: arena draw (%s) for VA 0x%016lx\n", level, va);
+        return (uintptr_t)page - kHHDMOffset;
+    }
+    // Pool-draw probe: plain DEBUG_PAGING (not DETAILED) so a soak can log
+    // draws — rare events now that task tables ride arenas — without the
+    // per-mapping spam.
+    printd(DEBUG_PAGING, "PAGING: pool draw (%s) for VA 0x%016lx — %lu/%lu used\n",
+           level, va, paging_pool_pages_used() + 1, kPagingPagesCount);
+    return get_paging_table_page();
+}
+
 void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
     // Align addresses to 4 KB boundaries
     physical_address &= PAGE_ADDRESS_MASK;
@@ -167,6 +197,12 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
 
     printd(DEBUG_PAGING | DEBUG_DETAILED, "PAGING: Map 0x%016lx to 0x%016lx flags 0x%08lx\n", physical_address, virtual_address, flags);
 
+    // Whose money funds new table pages under THIS pml4? Resolved ONCE per
+    // call (not per level): a task pml4 names its arena, the kernel pml4
+    // (and anything unrecognized) names the pool. See the seam's contract in
+    // paging.h and the design's charter in PAGING_ARENA.md.
+    struct arena *tableSource = paging_table_arena_for(pml4v);
+
     // Step 1: Traverse or allocate the PDPT table
     pt_entry_t *pdpt_page;
     uint64_t pml4e = pml4v[PML4_INDEX(virtual_address)];
@@ -179,11 +215,7 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPDPT present @ 0x%016lx\n",pdpt_page);
     } else {
         // Allocate new PDPT page
-	    // Pool-draw probe: plain DEBUG_PAGING (not DETAILED) so a soak can log
-	    // draws — rare events, ~640 lifetime — without the per-mapping spam.
-	    printd(DEBUG_PAGING, "PAGING: pool draw (PDPT) for VA 0x%016lx — %lu/%lu used\n",
-	           virtual_address, paging_pool_pages_used() + 1, kPagingPagesCount);
-        uint64_t new_pdpt_phys = get_paging_table_page();
+        uint64_t new_pdpt_phys = draw_table_page(tableSource, "PDPT", virtual_address);
         pt_entry_t *new_pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pdpt_phys);
         memset(new_pdpt_page, 0, PAGE_SIZE);
         pml4v[PML4_INDEX(virtual_address)] = new_pdpt_phys | tableRequiredFlags | PAGE_PRESENT;
@@ -201,10 +233,8 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
         pd_page = (pt_entry_t *)PHYS_TO_VIRT(pd_phys);
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPD present @ 0x%016lx\n", pd_page);
     } else {
-	    printd(DEBUG_PAGING, "PAGING: pool draw (PD) for VA 0x%016lx — %lu/%lu used\n",
-	           virtual_address, paging_pool_pages_used() + 1, kPagingPagesCount);
         // Allocate new PD page
-        uint64_t new_pd_phys = get_paging_table_page();
+        uint64_t new_pd_phys = draw_table_page(tableSource, "PD", virtual_address);
         pt_entry_t *new_pd_page = (pt_entry_t *)PHYS_TO_VIRT(new_pd_phys);
         memset(new_pd_page, 0, PAGE_SIZE);
         pdpt_page[PDPT_INDEX(virtual_address)] = new_pd_phys | tableRequiredFlags | PAGE_PRESENT;
@@ -223,9 +253,7 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
 	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPT present @ 0x%016lx\n", pt_page);
     } else {
         // Allocate new PT page
-	    printd(DEBUG_PAGING, "PAGING: pool draw (PT) for VA 0x%016lx — %lu/%lu used\n",
-	           virtual_address, paging_pool_pages_used() + 1, kPagingPagesCount);
-        uint64_t new_pt_phys = get_paging_table_page();
+        uint64_t new_pt_phys = draw_table_page(tableSource, "PT", virtual_address);
         pt_entry_t *new_pt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pt_phys);
         memset(new_pt_page, 0, PAGE_SIZE);
         // Sanity: the pool page's VA must land in the HHDM window. The old

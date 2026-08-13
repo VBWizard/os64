@@ -417,29 +417,53 @@ static bool test_arena_reset(void)
     return true;
 }
 
-static bool test_arena_exhaustion(void)
+// Exhaustion is no longer a failure — it is a GROWTH trigger (2026-08-12,
+// the paging-arena work; arena.h carries the contract). This test asserted
+// NULL-on-exhaustion for the old fixed arena and correctly panicked the boot
+// the moment growth landed; now it asserts the things growth must actually
+// guarantee — the new allocation lands, the OLD block's data survives on the
+// chain, and reset/destroy return the chain without incident.
+static bool test_arena_growth(void)
 {
     arena_t *arena = arena_create(100);
     if (arena == NULL) {
         TEST_FAIL("arena_create returned NULL");
     }
 
-    // Allocate up to capacity
-    void *ptr1 = arena_alloc(arena, 100);
+    // Fill the birth capacity exactly, and stamp it — growth must not lose it.
+    uint8_t *ptr1 = arena_alloc(arena, 100);
     if (ptr1 == NULL) {
         TEST_FAIL("arena_alloc failed for exact capacity");
     }
+    ptr1[0] = 0xA5;
+    ptr1[99] = 0x5A;
 
-    // Should fail now - arena exhausted
-    void *ptr2 = arena_alloc(arena, 1);
-    if (ptr2 != NULL) {
-        TEST_FAIL("arena_alloc should return NULL when exhausted");
+    // Past capacity: the arena must GROW, not refuse.
+    uint8_t *ptr2 = arena_alloc(arena, 200);
+    if (ptr2 == NULL) {
+        TEST_FAIL("arena_alloc should GROW when exhausted, not return NULL");
+    }
+    if (arena->next == NULL) {
+        TEST_FAIL("growth should chain the retired block on arena->next");
+    }
+    if (ptr1[0] != 0xA5 || ptr1[99] != 0x5A) {
+        TEST_FAIL("growth must not disturb the retired block's contents");
+    }
+    ptr2[199] = 0xEE;   // the grown block must actually be writable memory
+
+    // Aligned growth too — the table-page pattern (4KB at 4KB).
+    void *ptr3 = arena_alloc_aligned(arena, 4096, 4096);
+    if (ptr3 == NULL || ((uintptr_t)ptr3 & 0xFFF) != 0) {
+        TEST_FAIL("arena_alloc_aligned across growth returned NULL or misaligned");
     }
 
-    // Reset and try again
+    // Reset returns the chain and starts over at birth size.
     arena_reset(arena);
-    void *ptr3 = arena_alloc(arena, 50);
-    if (ptr3 == NULL) {
+    if (arena->next != NULL) {
+        TEST_FAIL("arena_reset should free the growth chain");
+    }
+    void *ptr4 = arena_alloc(arena, 50);
+    if (ptr4 == NULL) {
         TEST_FAIL("arena_alloc failed after reset");
     }
 
@@ -2791,7 +2815,7 @@ static void register_builtin_tests(void)
     test_register("arena_basic_alloc", test_arena_basic_alloc, TEST_PHASE_PREBOOT);
     test_register("arena_aligned_alloc", test_arena_aligned_alloc, TEST_PHASE_PREBOOT);
     test_register("arena_reset", test_arena_reset, TEST_PHASE_PREBOOT);
-    test_register("arena_exhaustion", test_arena_exhaustion, TEST_PHASE_PREBOOT);
+    test_register("arena_growth", test_arena_growth, TEST_PHASE_PREBOOT);
     test_register("vma_insert_and_lookup", test_vma_insert_and_lookup, TEST_PHASE_PREBOOT);
     test_register("vma_page_fault_resolved", test_vma_page_fault_resolved, TEST_PHASE_PREBOOT);
     test_register("vma_cow_write", test_vma_cow_write, TEST_PHASE_PREBOOT);

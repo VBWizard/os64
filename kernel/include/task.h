@@ -58,6 +58,10 @@
 		int64_t ru_nivcsw;       /* involuntary context switches */
 	};
 
+    // The table-page arena (memory/arena.h) — forward-declared so task.h
+    // stays include-light; only task.c and paging.c touch the real type.
+    struct arena;
+
     //NOTE: If you need access to any of the struct members, add a #DEFINE to asm-offsets.c and
     //      a constant will be created in asm-offsets.c at compile time.
     typedef struct task
@@ -144,6 +148,21 @@
         uintptr_t *stackInitialPage;
         uint32_t minorFaults, majorFaults, cSwitches;
 		uint64_t* pml4, *pml4v;
+		// Every table page of THIS address space — the PML4 and each PDPT/PD/
+		// PT — comes from here and dies with it (arena_destroy at burial, see
+		// PAGING_ARENA.md). NULL for ktask, whose tables ARE the kernel's and
+		// come from the eternal pool. Kernel-side arena_t on purpose, never a
+		// task_arena_t: page tables are the one thing ring 3 must never see.
+		struct arena *tableArena;
+		// The creator's traveling bracket (pta_ = paging_table_arena): while
+		// THIS task is building a child, these name the child's pml4/arena so
+		// paging_table_arena_for() can route the child's table draws (stacks,
+		// argv, env, trampoline) to the child's arena. On the CREATOR because
+		// the creator can block (ELF I/O) and resume on another core — a
+		// per-core scratch would be left behind; the task struct travels.
+		// Set in task_initialize, cleared at task_create's every exit.
+		uint64_t *pta_buildingChildPml4v;
+		struct arena *pta_buildingChildArena;
 		uintptr_t taskMemoryNextVirt;  // Next available virtual address for task-specific allocations
 		dlist_t* shared_objects;       // shared_object_t* this task depends on (dynamic linking, bookkeeping only — see shared_object.c)
 		// The per-task handle table (handle.h). Handles 0/1/2 are stdin/stdout/

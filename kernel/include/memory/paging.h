@@ -118,6 +118,24 @@ uintptr_t get_paging_table_pageV();
 uint64_t paging_pool_pages_used(void);
 extern uint64_t kPagingPagesCount;
 
+// ── Who funds a table page? (the paging-arena seam, 2026-08-12) ────────────
+//
+// Task page tables no longer come from the pool — they come from the owning
+// task's tableArena and die with it (PAGING_ARENA.md is the charter). The
+// paging layer doesn't know tasks, so it ASKS: given the pml4 a map call is
+// building under, whose arena (if any) should fund new PDPT/PD/PT pages?
+//
+// IMPLEMENTED IN task.c — the task layer owns the pml4→arena knowledge:
+//   kernel PML4            → NULL (the pool; kernel tables are eternal)
+//   the CURRENT task's     → its tableArena (demand faults, mmap, threads)
+//   a child being BUILT by
+//   the current task       → the child's arena (task_create's bracket)
+//   anything else          → NULL (pool — a safe leak, never a corruption)
+//
+// Called once per paging_map_page with the NORMALIZED (HHDM) pml4v.
+struct arena;
+struct arena *paging_table_arena_for(pt_entry_t *pml4v);
+
 // Program PAT entry 7 = write-combining on THE CALLING CORE (IA32_PAT is
 // per-core and the SDM wants all cores uniform). BSP calls it before the
 // kernel page tables are built; each AP calls it during its own bring-up,
