@@ -97,7 +97,7 @@ typedef struct
 // The file names a task directory offers, in listing order. The order is the
 // order `ls /proc/7` prints, so it is arranged most-useful-first rather than
 // alphabetically.
-static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "maps", "ctl" };
+static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "maps", "tty", "ctl" };
 #define PROC_TASK_FILE_COUNT (sizeof(kProcTaskFiles) / sizeof(kProcTaskFiles[0]))
 
 static const char *kProcThreadFiles[] = { "status" };
@@ -500,6 +500,34 @@ static void proc_gen_cwd(synth_text_t *t, task_t *task)
 	synth_text_addf(t, "%s\n", (task->cwd != NULL) ? task->cwd : "/");
 }
 
+// /proc/<pid>/tty — the CONTROLLING TERMINAL's geometry and state, reached
+// through /proc/self so a program (or a human at a shell) asks about ITS
+// terminal without knowing any handle. This is os64's answer to Unix's
+// TIOCGWINSZ ioctl (4.3BSD's winsize-on-the-fd), reshaped as a file per the
+// house doctrine: reads of state are files, actions are ctl verbs, only
+// hot-path or binary-shaped things earn syscalls — and a program reads its
+// geometry once at startup or per redraw, never in a loop. Same key<TAB>value
+// grammar as status, so the same five-line parser reads it. Generated fresh
+// per open: the day GUI terminal windows resize, this file is already right.
+static void proc_gen_tty(synth_text_t *t, task_t *task)
+{
+	tty_t *tty = task_tty(task);
+
+	synth_text_addf(t, "tty\t%u\n", tty->index + 1);   // 1-based, as Alt+F says
+	synth_text_addf(t, "rows\t%u\n", tty->rows);
+	synth_text_addf(t, "cols\t%u\n", tty->cols);
+	// Whether the glass is currently showing this terminal — an app can skip
+	// expensive redraw work while nobody is looking (and a human debugging
+	// "why is my output not on screen" gets the answer in one cat).
+	synth_text_addf(t, "focused\t%s\n", (kTTYFocused == tty) ? "yes" : "no");
+	synth_text_addf(t, "state\t%s\n", (tty->state == TTY_LIVE) ? "live" : "dormant");
+	// How much history Shift+PgUp can reach right now — a pager that knows
+	// the terminal already holds N lines can choose not to repeat them.
+	synth_text_addf(t, "scrollback\t%u\n", tty->hist_lines);
+	synth_text_addf(t, "fg_task\t%lu\n",
+	           tty->fgTask ? ((task_t *)tty->fgTask)->taskID : 0);
+}
+
 static void proc_gen_handles(synth_text_t *t, task_t *task)
 {
 	// "handle<TAB>type<TAB>detail" — the detail column is whatever the tag
@@ -726,6 +754,7 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	else if (strcmp(pp.name, "cwd") == 0)      proc_gen_cwd(&text, task);
 	else if (strcmp(pp.name, "handles") == 0)  proc_gen_handles(&text, task);
 	else if (strcmp(pp.name, "maps") == 0)     proc_gen_maps(&text, task);
+	else if (strcmp(pp.name, "tty") == 0)      proc_gen_tty(&text, task);
 	else if (is_ctl)                           proc_gen_ctl(&text, task);
 	else
 	{

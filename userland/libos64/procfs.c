@@ -203,3 +203,34 @@ int32_t os64_proc_threads(uint64_t pid, os64_thread_info_t *out, size_t capacity
     os64_close(directory);
     return (int32_t)count;
 }
+
+// The controlling-terminal reader — /proc/self/tty through the same
+// ignore-unknown-keys parser as everything else here, so the kernel can grow
+// the file new lines without breaking a single existing binary. "self" does
+// the process-relativity: no PID, no handle, just "my terminal".
+int32_t os64_tty_read(os64_tty_info_t *out)
+{
+    char line[PROC_LINE_MAX];
+    os64_memset(out, 0, sizeof(*out));
+
+    int32_t h = (int32_t)os64_open("/proc/self/tty", NULL);
+    if (h < 0)
+        return -1;
+
+    int64_t result;
+    while ((result = os64_readline(h, line, sizeof(line))) == 1)
+    {
+        char *value = split_value(line);
+        if (value == NULL)
+            continue;
+        if (os64_streq(line, "tty"))             out->tty = (uint32_t)os64_atou(value);
+        else if (os64_streq(line, "rows"))       out->rows = (uint32_t)os64_atou(value);
+        else if (os64_streq(line, "cols"))       out->cols = (uint32_t)os64_atou(value);
+        else if (os64_streq(line, "focused"))    out->focused = os64_streq(value, "yes");
+        else if (os64_streq(line, "state"))      out->live = os64_streq(value, "live");
+        else if (os64_streq(line, "scrollback")) out->scrollback = (uint32_t)os64_atou(value);
+        else if (os64_streq(line, "fg_task"))    out->fg_task = os64_atou(value);
+    }
+    os64_close(h);
+    return result < 0 ? -1 : 0;
+}
