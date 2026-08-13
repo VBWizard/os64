@@ -136,10 +136,16 @@ bool nmi_probe_capture(nmi_regs_t *regs, nmi_frame_t *frame)
 // the machine.
 // ───────────────────────────────────────────────────────────────────────────
 
-static bool is_canonical(uint64_t address)
+// Kernel-half only — not merely canonical. The lower half is refused even
+// though a garbage RBP pointing there might WALK successfully (the vestigial
+// low identity window is mapped in kKernelPML4): a lower-half VA means
+// something different under every task CR3, so reading one through the
+// current CR3 answers a question nobody asked. Everything this walker
+// legitimately reads — kernel stacks (HHDM VAs), kernel .data/.bss, the
+// image — lives in the upper half, which every PML4 shares.
+static bool is_kernel_half(uint64_t address)
 {
-	uint64_t upper = address >> 47;
-	return upper == 0 || upper == 0x1FFFF;
+	return (address >> 47) == 0x1FFFF;
 }
 
 /// @brief Read one qword of KERNEL memory, safely, for the stack walk.
@@ -153,16 +159,29 @@ static bool is_canonical(uint64_t address)
 /// Kernel tables only, and that is a deliberate limit rather than an oversight:
 /// a core wedged in RING 3 is a different (and much easier) problem, and the
 /// report says so from CS rather than guessing through a lower-half VA.
+///
+/// THE READ GOES THROUGH THE ORIGINAL VA, NOT THE HHDM ALIAS — and that
+/// distinction cost us a kernel #PF on 2026-08-12 (cat, task 2961, walking a
+/// garbage RBP chain into .rodata). The first cut of this function walked the
+/// kernel tables and then read `phys | kHHDMOffset`, the pattern task-memory
+/// readers use. But lazy HHDM maps a physical page exactly while the ALLOCATOR
+/// owns it — and the kernel image's own pages (text, .rodata, .data, .bss) are
+/// Limine-loaded, never allocator-owned, so their aliases are deliberately
+/// absent. Proving a VA mapped is NOT proof its alias is: for image-backed
+/// VAs the walk succeeds and the alias read faults. The original VA needs no
+/// such favor — the walk just proved it present in kKernelPML4, and the upper
+/// half is shared into every task PML4, so it reads correctly under any CR3.
+/// exc_walk_chain (exception_report.c) always did it this way; now both do.
 static bool probe_read_u64(uint64_t va, uint64_t *out)
 {
-	if (out == NULL || (va & 7) != 0 || !is_canonical(va)) {
+	if (out == NULL || (va & 7) != 0 || !is_kernel_half(va)) {
 		return false;
 	}
 	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)kKernelPML4v, va);
 	if (phys == 0 || phys == 0xbadbadba) {
 		return false;
 	}
-	*out = *(volatile uint64_t *)((phys & ~0xFFFULL) | (va & 0xFFF) | kHHDMOffset);
+	*out = *(volatile uint64_t *)va;
 	return true;
 }
 

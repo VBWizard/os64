@@ -148,10 +148,17 @@ void exception_wire_abandon(void)
             printd(DEBUG_EXCEPTIONS, "%s", _exc_line); \
     } while (0)
 
-static bool exc_canonical(uint64_t address)
+// Kernel-half only, not merely canonical (tightened 2026-08-13 alongside the
+// probe_read_u64 alias fix in nmi_probe.c — see the essay there). The check
+// gates a walk of kKernelPML4 followed by a dereference through the FAULT-TIME
+// CR3, and those two only describe the same memory in the shared upper half.
+// A garbage RBP pointing at a lower-half VA could pass the walk (the vestigial
+// low identity window is mapped in kKernelPML4) and then read whatever the
+// faulting task maps there — or nothing. Ring-0 chains never legitimately
+// leave the upper half, so refusing the lower half loses no real frames.
+static bool exc_kernel_half(uint64_t address)
 {
-	uint64_t upper = address >> 47;
-	return upper == 0 || upper == 0x1FFFF;
+	return (address >> 47) == 0x1FFFF;
 }
 
 /// @brief Is this kernel address safe to dereference RIGHT NOW?
@@ -162,7 +169,7 @@ static bool exc_canonical(uint64_t address)
 /// here, every time — not once at the top.
 static bool exc_readable(uint64_t address)
 {
-	if (!exc_canonical(address) || (address & 7) != 0) {
+	if (!exc_kernel_half(address) || (address & 7) != 0) {
 		return false;
 	}
 	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)kKernelPML4v, address);
