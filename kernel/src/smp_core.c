@@ -526,9 +526,18 @@ void ap_configure_scheduler_timer()
 {
 	core_local_storage_t *cls = get_core_local_storage();
     //NOTE: Configured to be disabled
-    // Set divide configuration to 1
-	// Set divide configuration - divisor = 16, same as when we established the frequency earlier
-    //write_apic_register(kMPApicBase + APIC_TIMER_DIVIDE_CONFIG, 0x3);
+    // Divide configuration: divisor = 16, matching the divisor the BSP's
+    // calibration measured under (ap_get_timer_ticks_per_interval writes the
+    // same 0x3 before counting). THIS WRITE WAS COMMENTED OUT until
+    // 2026-08-13, and since only the BSP calibrates (7/11 change) every AP's
+    // divide register sat at its reset default while consuming a count
+    // denominated in divide-by-16 units — AP timers ran ~16x fast. Periodic
+    // mode carried that silently (~1600Hz AP passes instead of 100); the
+    // backstop's first flight measured it (152 lease expiries in 500ms where
+    // 50ms leases predict 10) and this line came back from the dead. The
+    // counts are core-local state but the crystal is shared: every core must
+    // interpret the BSP's ticks-per-second under the BSP's divisor.
+    write_apic_register(kMPApicBase + APIC_TIMER_DIVIDE_CONFIG, 0x3);
     uint32_t lvtValue;
 
     // Set the interrupt vector to 0x7E
