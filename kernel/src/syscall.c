@@ -53,7 +53,7 @@ extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator
 
 // spawn: cap on argv length. A command line's worth of args is plenty; the
 // per-arg length cap is task.c's TASK_MAX_PATH_LEN (the blob it builds uses
-// fixed-size slots of that width).
+// dynamically sized slots up to width).
 #define SPAWN_MAX_ARGS 512
 
 #define SYSCALL_RESULT_INVALID UINT64_C(0xFFFFFFFFFFFFFFFF)
