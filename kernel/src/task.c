@@ -9,6 +9,7 @@
 #include "paging.h"
 #include "gdt.h"
 #include "strcpy.h"
+#include "strlen.h"   // packed argv blob measures each argument before copying
 #include "strstr.h"
 #include "time.h"
 #include "memcpy.h"
@@ -1996,32 +1997,74 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	//Argument handling.
 	//Every task has at least argv[0] (its own path), so if the caller passed no
 	//arguments we synthesize argc=1 with argv[0]=path.  We build a single blob:
-	//   [ (argc+1) pointer slots, NULL-terminated ][ argc fixed-size string slots ]
+	//   [ (argc+1) pointer slots, NULL-terminated ][ the strings, PACKED ]
 	//and map it at TASK_ARGV_VIRT.  Two things matter for correctness:
-	//  1. Each string is copied into the blob's OWN slots (never left pointing at
+	//  1. Each string is copied into the blob's OWN storage (never left pointing at
 	//     the caller's argv memory, which the old code did — corrupting the caller
 	//     and handing the program dangling pointers).
 	//  2. The pointer slots hold TASK-space addresses (TASK_ARGV_VIRT + offset), not
 	//     kernel addresses, so the program sees a self-consistent argv inside its
 	//     own address space once the blob is mapped.
+	//
+	// PACKED, since 2026-08-13. This used to give every argument a fixed
+	// TASK_MAX_PATH_LEN slot, so `cat` (four bytes) reserved 128 and a 44-entry
+	// glob reserved 5.6KB to hold 660 bytes. Strings now sit end to end, each
+	// costing strlen+1, exactly the way a real execve argv block is laid out.
+	// That is what makes the 512-argument / 256-byte ceiling FREE: those are
+	// caps now, not reservations, so an ordinary two-argument command still
+	// allocates a couple of hundred bytes and maps a single page. Wildcards are
+	// what forced the question — `cat /tmp/*` has to survive a busy directory.
 	int effectiveArgc = (argc > 0) ? argc : 1;
 	newTask->argc = effectiveArgc;
 
-	size_t argvPtrBytes  = (size_t)(effectiveArgc + 1) * sizeof(char*);
-	size_t argvStrBytes  = (size_t)effectiveArgc * TASK_MAX_PATH_LEN;
+	size_t argvPtrBytes = (size_t)(effectiveArgc + 1) * sizeof(char*);
+
+	// Measure first, then allocate exactly what the strings need (each capped
+	// at TASK_MAX_PATH_LEN including its NUL, matching the copy below).
+	size_t argvStrBytes = 0;
+	for (int cnt = 0; cnt < effectiveArgc; cnt++)
+	{
+		const char *src = (argc > 0) ? argv[cnt] : path;
+		size_t len = strlen(src);
+		if (len > TASK_MAX_PATH_LEN - 1)
+			len = TASK_MAX_PATH_LEN - 1;
+		argvStrBytes += len + 1;
+	}
 	size_t argvBlobBytes = argvPtrBytes + argvStrBytes;
+
+	// THE GUARD THAT DID NOT EXIST. The blob is mapped at a FIXED address whose
+	// neighbour is also fixed, so an oversized blob does not fail an allocation
+	// — paging_map_pages cheerfully maps it straight over TASK_ENV_VIRT, and the
+	// child's environment silently becomes the tail of its own argv. Nothing
+	// checked this while the ceiling was 32 args; raising it to 512 without the
+	// check would have turned a distant theoretical into a live footgun. Refuse
+	// loudly instead, naming the number, and let the caller report "cannot run".
+	if (argvBlobBytes > TASK_ARGV_MAX_BYTES)
+	{
+		printd(DEBUG_TASK, "task_create: argv blob for %s is %lu bytes, over the %lu-byte "
+			"window between TASK_ARGV_VIRT and TASK_ENV_VIRT (%d arguments) — refusing to spawn\n",
+			newTask->path, argvBlobBytes, (uint64_t)TASK_ARGV_MAX_BYTES, effectiveArgc);
+		task_table_bracket_close();
+		return NULL;
+	}
 
 	newTask->argv = (char**)kmalloc_aligned(argvBlobBytes);
 	char *argvStrBase = (char*)newTask->argv + argvPtrBytes;   // kernel view of the string area
+	size_t argvStrUsed = 0;                                    // running cursor — the packing
 	for (int cnt = 0; cnt < effectiveArgc; cnt++)
 	{
 		//Source string: caller-provided argv[cnt], or the path for the implicit argv[0].
 		const char *src = (argc > 0) ? argv[cnt] : path;
-		char *dst = argvStrBase + ((size_t)cnt * TASK_MAX_PATH_LEN);
-		strncpy(dst, src, TASK_MAX_PATH_LEN);
-		dst[TASK_MAX_PATH_LEN - 1] = '\0';                     // strncpy won't NUL-terminate an over-long src
+		size_t len = strlen(src);
+		if (len > TASK_MAX_PATH_LEN - 1)
+			len = TASK_MAX_PATH_LEN - 1;
+
+		char *dst = argvStrBase + argvStrUsed;
+		memcpy(dst, src, len);
+		dst[len] = '\0';                                       // truncation is explicit, not strncpy's silence
 		//Store the address the PROGRAM will use (its own TASK_ARGV_VIRT view).
-		newTask->argv[cnt] = (char*)(uintptr_t)(TASK_ARGV_VIRT + argvPtrBytes + ((size_t)cnt * TASK_MAX_PATH_LEN));
+		newTask->argv[cnt] = (char*)(uintptr_t)(TASK_ARGV_VIRT + argvPtrBytes + argvStrUsed);
+		argvStrUsed += len + 1;
 	}
 	newTask->argv[effectiveArgc] = NULL;                       // argv[argc] == NULL (convention)
 

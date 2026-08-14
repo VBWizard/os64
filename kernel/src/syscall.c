@@ -54,7 +54,7 @@ extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator
 // spawn: cap on argv length. A command line's worth of args is plenty; the
 // per-arg length cap is task.c's TASK_MAX_PATH_LEN (the blob it builds uses
 // fixed-size slots of that width).
-#define SPAWN_MAX_ARGS 32
+#define SPAWN_MAX_ARGS 512
 
 #define SYSCALL_RESULT_INVALID UINT64_C(0xFFFFFFFFFFFFFFFF)
 #define SYSCALL_RESULT_BAD_USER_DATA UINT64_C(0xFFFFFFFFFFFFFFFE)
@@ -2363,8 +2363,33 @@ static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // kernel space: fills kargv[] (<= SPAWN_MAX_ARGS, NULL-terminated) with
 // pointers into strbuf, each string copied from user space. Returns argc, or
 // -1 on a bad user pointer. NULL user_argv means "no args" (argc 0).
+// Count the entries in a user argv[] without touching the strings — reads only
+// the pointer array, stopping at the NULL terminator or SPAWN_MAX_ARGS.
+// Returns the count, or -1 on a bad user pointer.
+//
+// Exists so the spawn block can be sized to the ACTUAL argument count instead
+// of the maximum. With SPAWN_MAX_ARGS at 512 and TASK_MAX_PATH_LEN at 256, a
+// fixed worst-case block would be 128KB kmalloc'd AND ZEROED on every spawn —
+// on `pwd`, on every prompt. Measured first, an ordinary command's block is a
+// few hundred bytes: cheaper than the 4KB the fixed 32-argument version cost.
+static int count_user_argv(char *const *user_argv)
+{
+	if (user_argv == NULL)
+		return 0;
+
+	for (int argc = 0; argc < SPAWN_MAX_ARGS; argc++)
+	{
+		char *uptr = NULL;
+		if (!copy_user_buffer(&user_argv[argc], &uptr, sizeof(char *)))
+			return -1;
+		if (uptr == NULL)
+			return argc;
+	}
+	return SPAWN_MAX_ARGS;
+}
+
 static int marshal_user_argv(char *const *user_argv, char *kargv[],
-                             char *strbuf, size_t strbuf_len)
+                             char *strbuf, size_t strbuf_len, int max_args)
 {
 	if (user_argv == NULL)
 	{
@@ -2374,7 +2399,14 @@ static int marshal_user_argv(char *const *user_argv, char *kargv[],
 
 	size_t used = 0;
 	int argc = 0;
-	for (argc = 0; argc < SPAWN_MAX_ARGS; argc++)
+	// Bounded by max_args, NOT by SPAWN_MAX_ARGS: the caller sized kargv[] from
+	// a COUNT PASS over this same user memory, and userland can modify its own
+	// argv between the two passes (another thread, or a deliberately hostile
+	// program). Trusting the second walk to agree with the first would let a
+	// racing user drive writes past the end of the allocated pointer array —
+	// a kernel heap overflow from ring 3. The count is the contract; this walk
+	// stops there and the string buffer's own `avail` check covers the rest.
+	for (argc = 0; argc < max_args; argc++)
 	{
 		// Read user_argv[argc] — a user-space char* — into the kernel.
 		char *uptr = NULL;
@@ -2410,8 +2442,13 @@ static int marshal_user_argv(char *const *user_argv, char *kargv[],
 typedef struct {
 	char   path[TASK_MAX_PATH_LEN];
 	int    argc;
-	char  *argv[SPAWN_MAX_ARGS + 1];
-	char   argvstrs[SPAWN_MAX_ARGS * TASK_MAX_PATH_LEN];
+	// Both point into `tail` below, which is sized at allocation time to the
+	// ACTUAL argument count (see count_user_argv). These were fixed arrays
+	// until 2026-08-13; at the 512-argument ceiling that shell globbing needs,
+	// a fixed worst case would have been ~135KB allocated and zeroed on every
+	// single spawn. Sized to fit, `pwd` costs a few hundred bytes.
+	char **argv;
+	char  *argvstrs;
 	task_t *parent;
 	// Redirection for the child's slots 0/1/2, RESOLVED from the parent's
 	// handle numbers before we leave the caller's context (handle tables are
@@ -2421,6 +2458,10 @@ typedef struct {
 	void  *redirObject[3];
 	bool   background;                    // OS64_SPAWN_BACKGROUND (`&`)
 	volatile long result;                 // child pid, or -1 on failure
+	// [ (argc+1) pointer slots ][ argc * TASK_MAX_PATH_LEN bytes of strings ].
+	// One allocation, so the whole thing stays HHDM-contiguous and reachable
+	// from kKernelPML4 exactly as the comment above requires.
+	char   tail[];
 } spawn_params_t;
 
 // Runs under kKernelPML4 (via call_in_kernel_context), because task_create
@@ -2515,9 +2556,19 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if ((flags & ~(uint64_t)OS64_SPAWN_BACKGROUND) != 0)
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
-	spawn_params_t *p = kmalloc(sizeof(*p));
+	// Size the block to the arguments actually present. The count pass reads
+	// only the user's pointer array; the strings are copied once, below.
+	int argcHint = count_user_argv(user_argv);
+	if (argcHint < 0)
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	size_t argvPtrBytes = (size_t)(argcHint + 1) * sizeof(char *);
+	size_t argvStrBytes = (size_t)argcHint * TASK_MAX_PATH_LEN;
+
+	spawn_params_t *p = kmalloc(sizeof(*p) + argvPtrBytes + argvStrBytes);
 	if (p == NULL)
 		return SYSCALL_RESULT_INVALID;
+	p->argv     = (char **)p->tail;
+	p->argvstrs = p->tail + argvPtrBytes;
 	p->background = (flags & OS64_SPAWN_BACKGROUND) != 0;
 
 	// Marshal path + argv from user space into the HHDM block (runs on the
@@ -2527,7 +2578,7 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		kfree(p);
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
-	int argc = marshal_user_argv(user_argv, p->argv, p->argvstrs, sizeof(p->argvstrs));
+	int argc = marshal_user_argv(user_argv, p->argv, p->argvstrs, argvStrBytes, argcHint);
 	if (argc < 0)
 	{
 		kfree(p);

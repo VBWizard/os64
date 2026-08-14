@@ -27,9 +27,15 @@
 
 #include <stdint.h>
 
-// Must match kernel/include/task.h.
+// Must match kernel/include/task.h. TASK_ENV_VIRT moved 0x6f006000 ->
+// 0x6f100000 on 2026-08-13 when the fixed-VA block was re-laid to give argv a
+// 1MB window (shell globbing raised the argument ceiling to 512). ARGV did NOT
+// move — it is the address a program can actually observe, so its neighbours
+// were the ones that gave ground. This fixture is precisely what catches a
+// mismatch between these two files, which is why it now runs on every boot
+// (test_task_args) and not only from the ring-3 suite.
 #define TASK_ARGV_VIRT 0x6f000000UL
-#define TASK_ENV_VIRT  0x6f006000UL
+#define TASK_ENV_VIRT  0x6f100000UL
 
 // Success sentinel and per-check failure codes.
 #define ARG_ECHO_OK        0x00A11600DUL   // "ALL GOOD"

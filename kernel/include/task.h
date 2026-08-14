@@ -14,14 +14,47 @@
 // TASK_STRUCT_VADDR removed - task_t now lives in kernel heap, no fixed mapping needed
 #define TASK_HEAP_START 0x70000000
 #define TASK_HEAP_END   0x00007FFFFFFFFFFF
+// ── THE FIXED TASK-VA BLOCK (re-laid 2026-08-13 for wildcards) ──────────────
+//
+// Three blobs live at addresses the ABI promises: argv, the environment, and
+// the ring-3 exit trampoline. They sit between the shared-library window
+// (TASK_SHLIB_VIRT_END == TASK_ARGV_VIRT — argv cannot grow DOWNWARD) and
+// TASK_HEAP_START, which leaves 16MB. Almost none of it was being used.
+//
+// The old layout put ENV only 0x6000 (24KB) above ARGV, which was ample while
+// spawn allowed 32 arguments of 128 bytes. Raising that ceiling for shell
+// globbing (`cat /tmp/*` must not die on the 33rd file) makes 24KB far too
+// tight — and NOTHING CHECKED IT. A blob that outgrew the gap would have been
+// mapped straight over TASK_ENV_VIRT by paging_map_pages, and the child's
+// environment would silently become the tail of its own argv. That guard now
+// exists (task.c, TASK_ARGV_MAX_BYTES); this layout gives it room to never
+// fire.
+//
+// ARGV STAYS AT 0x6f000000 on purpose: it is the one address a program can
+// observe directly (arg_echo asserts on it), so the window grows upward and
+// its neighbours move instead.
+//
+//   0x6f000000  argv blob        1MB window  (strings PACKED, so a two-arg
+//                                             command still maps one page)
+//   0x6f100000  environment      64KB window (one page today; env.h allows
+//                                             multi-page growth someday)
+//   0x6f110000  exit trampoline  one page, read-only + user
+//   ...         (~15MB unused)
+//   0x70000000  TASK_HEAP_START
 #define TASK_ARGV_VIRT 0x6f000000
-//Virtual address of the environment pointers
-#define TASK_ENVP_VIRT 0x6f010000
-#define TASK_ENV_VIRT 0x6f006000
+// The most the argv blob may occupy before it would collide with the
+// environment. Enforced in task_create — see the packing comment there.
+#define TASK_ARGV_MAX_BYTES 0x100000
+#define TASK_ENV_VIRT 0x6f100000
+#define TASK_ENV_MAX_BYTES 0x10000
 //Virtual address of the ring-3 exit trampoline page (read-only+exec, user).
 //Seeded as _start's return address so a plain `ret` becomes an exit syscall.
 //See task_setup_ring3_exit_path() and the template in task_exit_asm.S.
-#define TASK_EXIT_TRAMPOLINE_VIRT 0x6f020000
+#define TASK_EXIT_TRAMPOLINE_VIRT 0x6f110000
+// (TASK_ENVP_VIRT, an "environment pointers" address at 0x6f010000, was
+// deleted here 2026-08-13: defined since the first OS, referenced by nothing
+// in the kernel or userland, and sitting squarely in the middle of the window
+// argv needed. A constant nobody reads is not an ABI, it is furniture.)
 // Task-specific memory allocation base addresses (lower half)
 #define USER_TASK_MEMORY_BASE   0x10000000  // 256MB - for user task allocations
 #define KERNEL_TASK_MEMORY_BASE 0x40000000  // 1GB - for kernel task allocations
@@ -32,7 +65,13 @@
 #define TASK_ENVIRONMENT_MAX_ENTRIES 1024
 #define TASK_ENVIRONMENT_MAX_SIZE TASK_ENVIRONMENT_MAX_ENTRIES * TASK_MAX_ARG_LEN
 #define TASK_ENVIRONMENT_DATA_OFFSET (TASK_ENVIRONMENT_MAX_ENTRIES * sizeof(uintptr_t))
-#define TASK_MAX_PATH_LEN 128
+// Longest single path/argument the kernel will carry, NUL included. Raised
+// 128 -> 256 on 2026-08-13 (Chris: "even the path max length makes me kind of
+// nervous"). Costs nothing per task now that the argv blob packs its strings
+// end to end — this is a CAP, no longer a per-argument reservation. It is
+// still the width of the fixed `raw[]`/`path[]` scratch buffers in syscall.c's
+// path handlers, which live on an 80KB kernel stack, so doubling them is noise.
+#define TASK_MAX_PATH_LEN 256
 
 	struct timeval {
 		uint64_t	tv_sec;		/* seconds */

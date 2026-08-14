@@ -1005,6 +1005,71 @@ static bool test_dynamic_linking(void)
 }
 
 
+// ── Argument delivery (2026-08-13) ───────────────────────────────────────────
+//
+// /bin/arg_echo has existed since ring-3 bring-up and checks the whole startup
+// contract end to end — argc in RDI, argv in RSI at TASK_ARGV_VIRT, env in RDX
+// at TASK_ENV_VIRT, the argv strings actually copied into the task's own blob,
+// the NULL terminator, and the ELF loader's partial-page BSS zero-fill — with a
+// distinct 0xE00000xx code per broken invariant so a failure names itself.
+//
+// It was only ever run from /bin/testrun, the RING-3 suite, which lives behind
+// its own Limine entry. So on an ordinary boot, argument processing had NO
+// coverage at all: you could break argv and every normal boot would stay green.
+// Chris asked for that gap to be closed (2026-08-13) the same evening the argv
+// blob was about to be re-laid — packed strings, new fixed VAs, a 512-argument
+// ceiling — which is exactly the change that would have broken it silently.
+//
+// Cheap: one spawn, no filesystem writes, and it fails with a number that says
+// which invariant died rather than "the task exited wrong".
+#define ARG_ECHO_OK 0x0A11600DUL
+static bool test_task_args(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_task_args (no root filesystem mounted)\n");
+        return true;
+    }
+
+    // The exact argv the fixture asserts on — it checks argv[1]/argv[2] by
+    // content, so these strings are part of the contract, not decoration.
+    char *args[] = { "/bin/arg_echo", "hello", "world" };
+
+    task_t *t = test_spawn("/bin/arg_echo", 3, args, false);
+    if (t == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_args - task_create returned NULL\n");
+        return false;
+    }
+    scheduler_submit_new_task(t);
+
+    for (int i = 0; i < 500 && !t->exited; i++)
+        wait(10);
+
+    // Read before releasing — after test_release the undertaker may free the
+    // struct at any moment (2026-08-09; see test_spawn).
+    bool exited = t->exited;
+    uint64_t retval = t->retVal;
+    test_release(t);
+
+    if (!exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_args - arg_echo did not exit within 5 seconds\n");
+        return false;
+    }
+    if (retval != ARG_ECHO_OK) {
+        printd(DEBUG_TESTS,
+               "\tFAIL: test_task_args - arg_echo returned 0x%lx, expected 0x%lx. "
+               "The code names the broken invariant (arg_echo.c): 1=argc 2=argv address "
+               "3=argv NULLs 4=argv terminator 5..7=argv[0..2] contents 8=env address "
+               "9=env empty A=.data init B=.bss zero-fill\n",
+               retval, (uint64_t)ARG_ECHO_OK);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_task_args (argc/argv/env delivered at the ABI addresses, "
+                        "strings copied, BSS zero-filled)\n");
+    return true;
+}
+
+
 // ── The task-teardown leak test (2026-08-13) ─────────────────────────────────
 //
 // THE PROOF. Task teardown does not reclaim everything — the VMA backing pages
@@ -3137,6 +3202,7 @@ static void register_builtin_tests(void)
     test_register("vma_partial_page_bss_zero_filled", test_vma_partial_page_bss_zero_filled, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
+    test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_POSTBOOT);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
