@@ -27,7 +27,7 @@
 #include "os64/os64.h"
 
 #define LINE_MAX 256
-#define ARGS_MAX 16
+#define ARGS_MAX 512        // raised from 16 for globbing; matches the kernel SPAWN_MAX_ARGS ceiling
 #define MAX_STAGES 4          // a | b | c | d is plenty of rope for now
 
 // ── tiny freestanding helpers (no libc) ─────────────────────────────────────
@@ -284,21 +284,271 @@ static int read_line(char *buf, int cap)
 	}
 }
 
+// ── WILDCARDS (2026-08-13) ──────────────────────────────────────────────────
+//
+// THE SHELL EXPANDS THEM, NOT THE PROGRAMS. This is the 1971 decision, and it
+// is the whole reason `cat /tmp/*` can work at all: CP/M and MS-DOS made every
+// program expand its own wildcards, so each one reimplemented the rules and
+// they disagreed with each other — COPY understood *.TXT, some other tool
+// didn't. Unix put it in the shell exactly once. Consequence here: cat, head,
+// ls, grep and wc needed ZERO changes to gain wildcard support. They simply
+// receive more argv entries and never learn that '*' exists.
+//
+// Expansion happens inside parse() on purpose, because parse() is the only
+// place that still knows which characters were QUOTED. It strips quotes as it
+// goes, so by the time anyone holds argv[] a '*' from `"*"` is indistinguishable
+// from a bare one — and `echo "*"` must print an asterisk, not the directory.
+//
+// v1 globs the LAST path component only: /tmp/* yes, /*/foo no (booked, not
+// hidden). No special case for leading dots either — that rule exists because
+// Unix hides dotfiles, and os64 has no hidden-file convention to protect
+// (husk.rc, not .huskrc). Inheriting the exception without the reason would be
+// exactly the jargon this project declines.
+#define GLOB_POOL_BYTES  (512 * 256)   // the 512x256 ceiling, in BSS: demand-paged, so untouched pages cost nothing
+#define GLOB_PATH_MAX    256
+
+static char   s_glob_pool[GLOB_POOL_BYTES];
+static size_t s_glob_used;
+
+// Byte-order compare, for sorting matches. libos64 offers os64_streq, which
+// answers equality but not order — kept local here alongside husk's other
+// freestanding helpers rather than growing the library for one caller.
+static int glob_strcmp(const char *a, const char *b)
+{
+	while (*a != '\0' && *a == *b) { a++; b++; }
+	return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+static bool glob_has_meta(const char *s)
+{
+	for (; *s; s++)
+		if (*s == '*' || *s == '?' || *s == '[')
+			return true;
+	return false;
+}
+
+// V7 pattern match: '*' any run, '?' one character, [abc] [a-z] [!a-z] sets.
+// Recursive on '*' — the classic formulation, and the recursion depth is
+// bounded by the number of '*' in the pattern, not by the name length.
+static bool glob_match(const char *p, const char *n)
+{
+	while (*p)
+	{
+		if (*p == '*')
+		{
+			p++;
+			if (*p == '\0')
+				return true;                  // trailing '*' takes the rest
+			for (const char *t = n; ; t++)
+			{
+				if (glob_match(p, t))
+					return true;
+				if (*t == '\0')
+					return false;
+			}
+		}
+		if (*n == '\0')
+			return false;
+		if (*p == '?')
+		{
+			p++; n++;
+			continue;
+		}
+		if (*p == '[')
+		{
+			const char *q = p + 1;
+			bool negate = (*q == '!' || *q == '^');
+			if (negate)
+				q++;
+			bool hit = false;
+			bool first = true;
+			// `first` lets a ']' immediately after '[' (or after '!') be a
+			// literal member, the way every shell since the Bourne shell does.
+			while (*q != '\0' && (*q != ']' || first))
+			{
+				first = false;
+				if (q[1] == '-' && q[2] != '\0' && q[2] != ']')
+				{
+					if ((unsigned char)*n >= (unsigned char)q[0] &&
+					    (unsigned char)*n <= (unsigned char)q[2])
+						hit = true;
+					q += 3;
+				}
+				else
+				{
+					if (*n == *q)
+						hit = true;
+					q++;
+				}
+			}
+			if (*q != ']')
+				return false;                 // unterminated class matches nothing
+			if (hit == negate)
+				return false;
+			p = q + 1;
+			n++;
+			continue;
+		}
+		if (*p != *n)
+			return false;
+		p++; n++;
+	}
+	return *n == '\0';
+}
+
+// Copy `s` into the expansion pool and return the stored pointer, or NULL if
+// the pool is full. The pool cannot be the line buffer: parse() tokenizes in
+// place, and one token can become many arguments.
+static char *glob_pool_add(const char *dirPrefix, const char *name)
+{
+	size_t plen = dirPrefix ? os64_strlen(dirPrefix) : 0;
+	size_t nlen = os64_strlen(name);
+	if (s_glob_used + plen + nlen + 1 > sizeof(s_glob_pool))
+		return NULL;
+
+	char *out = s_glob_pool + s_glob_used;
+	for (size_t i = 0; i < plen; i++)
+		out[i] = dirPrefix[i];
+	for (size_t i = 0; i <= nlen; i++)       // <= copies the NUL
+		out[plen + i] = name[i];
+	s_glob_used += plen + nlen + 1;
+	return out;
+}
+
+// Expand one metacharacter-bearing token into argv[] starting at `argc`,
+// returning the new argc, or -1 on failure (message already printed).
+// Matches are inserted in sorted order — Unix has guaranteed sorted glob
+// results since the beginning, which is why `*` is reproducible.
+static int glob_expand(const char *token, char *argv[], int argc, int maxargs)
+{
+	// Split into the directory to read and the pattern to match. Only the last
+	// component may contain metacharacters (see the v1 note above).
+	char dirPath[GLOB_PATH_MAX];
+	char dirPrefix[GLOB_PATH_MAX];           // exactly as typed, re-attached to each match
+	const char *pattern = token;
+	const char *slash = 0;
+	for (const char *s = token; *s; s++)
+		if (*s == '/')
+			slash = s;
+
+	if (slash != 0)
+	{
+		size_t plen = (size_t)(slash - token) + 1;   // include the '/'
+		if (plen >= sizeof(dirPrefix))
+		{
+			os64_hprintf(OS64_STDERR, "husk: pattern too long: %s\n", token);
+			return -1;
+		}
+		for (size_t i = 0; i < plen; i++)
+			dirPrefix[i] = token[i];
+		dirPrefix[plen] = '\0';
+		// "/x" -> dir "/", otherwise drop the trailing slash for opendir.
+		os64_strcopy(dirPath, sizeof(dirPath), dirPrefix);
+		if (plen > 1)
+			dirPath[plen - 1] = '\0';
+		pattern = slash + 1;
+	}
+	else
+	{
+		// No directory in the token: read the current directory, and attach no
+		// prefix so `cat *` yields bare names exactly as typed.
+		dirPrefix[0] = '\0';
+		if (os64_getcwd(dirPath, sizeof(dirPath)) < 0)
+		{
+			os64_hprintf(OS64_STDERR, "husk: cannot read the current directory\n");
+			return -1;
+		}
+	}
+
+	// A trailing-slash-only pattern ("/tmp/") has nothing to match.
+	if (*pattern == '\0')
+	{
+		os64_hprintf(OS64_STDERR, "husk: no match: %s\n", token);
+		return -1;
+	}
+
+	int64_t d = os64_opendir(dirPath);
+	if (d < 0)
+	{
+		os64_hprintf(OS64_STDERR, "husk: cannot read directory %s\n", dirPath);
+		return -1;
+	}
+
+	int first = argc;                        // matches from THIS token sort among themselves
+	os64_dirent_t e;
+	while (os64_readdir((int32_t)d, &e) == 1)
+	{
+		if (!glob_match(pattern, e.name))
+			continue;
+
+		if (argc >= maxargs - 1)
+		{
+			os64_close((int32_t)d);
+			os64_hprintf(OS64_STDERR,
+				"husk: %s expands past the %d-argument limit\n", token, maxargs - 1);
+			return -1;
+		}
+
+		char *stored = glob_pool_add(dirPrefix, e.name);
+		if (stored == 0)
+		{
+			os64_close((int32_t)d);
+			os64_hprintf(OS64_STDERR, "husk: too much expanded text for %s\n", token);
+			return -1;
+		}
+
+		// Insertion sort into this token's own run.
+		int at = argc;
+		while (at > first && glob_strcmp(argv[at - 1], stored) > 0)
+		{
+			argv[at] = argv[at - 1];
+			at--;
+		}
+		argv[at] = stored;
+		argc++;
+	}
+	os64_close((int32_t)d);
+
+	if (argc == first)
+	{
+		// CHRIS'S RULING (2026-08-13): a pattern that matches nothing REFUSES
+		// the command rather than being passed through literally. csh/zsh/fish
+		// behavior, not Bourne's — and the honest one here: handing `cat` a
+		// filename of "*.xyz" produces a confusing complaint about a file
+		// nobody meant, where this says exactly what went wrong. It is also
+		// the house tripwire doctrine: fail loudly at the boundary.
+		os64_hprintf(OS64_STDERR, "husk: no match: %s\n", token);
+		return -1;
+	}
+	return argc;
+}
+
 // Tokenize `line` in place into argv[], removing matching single or double
 // quotes. Quotes group spaces into one argument; the child receives only the
 // resulting bytes and never needs to know shell syntax existed.
+//
+// Returns argc, or -1 if a wildcard matched nothing (the message is printed by
+// glob_expand; callers must treat <0 as "already reported, do not run").
 static int parse(char *line, char *argv[], int maxargs)
 {
 	int argc = 0;
 	char *readp = line;
 	char *writep = line;
 
+	// One command line's worth of expansions. Safe to reset per call: every
+	// caller parses a stage, spawns it (which copies the strings into the
+	// kernel), and only then parses the next.
+	s_glob_used = 0;
+
 	while (*readp && argc < maxargs - 1)
 	{
 		while (*readp == ' ' || *readp == '\t') readp++;
 		if (!*readp) break;
 
-		argv[argc++] = writep;
+		char *token = writep;
+		// Tracked HERE and nowhere else: this is the only point in husk that
+		// still knows a '*' arrived unquoted. `echo "*"` must print a star.
+		bool unquotedMeta = false;
 		char quote = 0;
 		while (*readp)
 		{
@@ -321,10 +571,22 @@ static int parse(char *line, char *argv[], int maxargs)
 			}
 			if (*readp == ' ' || *readp == '\t')
 				break;
+			if (*readp == '*' || *readp == '?' || *readp == '[')
+				unquotedMeta = true;
 			*writep++ = *readp++;
 		}
 		while (*readp == ' ' || *readp == '\t') readp++;
 		*writep++ = 0;
+
+		if (unquotedMeta && glob_has_meta(token))
+		{
+			int expanded = glob_expand(token, argv, argc, maxargs);
+			if (expanded < 0)
+				return -1;               // no match / overflow — already reported
+			argc = expanded;
+		}
+		else
+			argv[argc++] = token;
 	}
 	argv[argc] = 0;
 	return argc;
@@ -838,7 +1100,17 @@ static int run_pipeline(char *stages[], int nstages, int background)
 	for (int i = 0; i < nstages; i++)
 	{
 		char *cargv[ARGS_MAX];
-		if (parse(stages[i], cargv, ARGS_MAX) == 0)
+		int cargc = parse(stages[i], cargv, ARGS_MAX);
+		if (cargc < 0)
+		{
+			// A wildcard matched nothing (or overflowed): glob_expand has
+			// already said exactly what and why. Refusing the whole line is
+			// the ruling — a pattern that matched nothing never becomes a
+			// filename here.
+			status = 1;
+			break;
+		}
+		if (cargc == 0)
 		{
 			os64_puts("husk: empty command in pipeline\n");
 			status = 1;
@@ -1031,6 +1303,11 @@ static int run_expanded(char *expanded, int *last_status)
 	{
 		char *eargv[ARGS_MAX];
 		int eargc = parse(stages[0], eargv, ARGS_MAX);
+		if (eargc < 0)
+		{
+			*last_status = 1;   // glob already reported; do NOT fall into "list"
+			return 1;
+		}
 		*last_status = 0;
 		if (eargc < 2)
 		{
@@ -1077,6 +1354,11 @@ static int run_expanded(char *expanded, int *last_status)
 	{
 		char *uargv[ARGS_MAX];
 		int uargc = parse(stages[0], uargv, ARGS_MAX);
+		if (uargc < 0)
+		{
+			*last_status = 1;   // glob already reported; not an "expected a KEY" error
+			return 1;
+		}
 		if (uargc < 2)
 		{
 			os64_puts("husk: unset: expected a KEY\n");
@@ -1101,6 +1383,14 @@ static int run_expanded(char *expanded, int *last_status)
 	{
 		char *cargv[ARGS_MAX];
 		int cargc = parse(stages[0], cargv, ARGS_MAX);
+		if (cargc < 0)
+		{
+			// A failed glob must NOT fall through to the bare-`cd` default:
+			// `cd /nomatch*` would silently take you to / , which is the most
+			// alarming thing a shell can do quietly.
+			*last_status = 1;
+			return 1;
+		}
 		const char *dest = (cargc > 1) ? cargv[1] : "/";
 		if (os64_chdir(dest) < 0)
 		{
