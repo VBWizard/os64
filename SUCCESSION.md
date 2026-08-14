@@ -129,8 +129,16 @@ timeout 240 qemu-system-x86_64 -machine q35 -cdrom os64_kernel.iso -boot d \
   -m 8g -no-reboot -smp 8 -serial file:$SCRATCH/qemu_com1.log \
   -monitor telnet:127.0.0.1:55556,server,nowait \
   -drive file=disk/os64.img,format=raw,if=none,id=nvme1 \
-  -device nvme,drive=nvme1,serial=nvme1-serial
+  -device nvme,drive=nvme1,serial=nvme1-serial \
+  -drive file=disk/os64_data.img,format=raw,if=none,id=data1 \
+  -device nvme,drive=data1,serial=data1-serial
 ```
+
+- BOTH disks, always. `os64_data.img` carries the GPT-named `home` partition
+  that auto-mounts at /home — the USER's disk under the persistence doctrine,
+  and where `LOGD=/home/os64.log` sinks. Boot without it and logd loudly
+  reports it cannot open its sink (learned 2026-08-14, when this recipe still
+  predated the data disk and Chris spotted the on-screen complaint).
 
 - ALWAYS under `timeout` — a QEMU you fail to kill orphans and haunts later
   runs (and `pkill -f qemu` will kill YOUR OWN shell unless you write the
