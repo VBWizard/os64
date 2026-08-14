@@ -888,16 +888,47 @@ static bool test_dynamic_linking(void)
     for (int i = 0; i < 500 && (!task_a->exited || !task_b->exited); i++)
         wait(10);
 
-    // Read everything the STRUCTS hold before releasing them — after
-    // test_release() below, kworker may free both at any moment, and a
-    // recycled struct reads as zeros (2026-08-09; see test_spawn). The
-    // registry checks further down touch no task struct at all, which is
-    // exactly why this test could keep its kernel seat while its ring-3 half
-    // moved to /bin/testrun: shared_object_load_or_get's cache-hit identity
-    // is kernel-internal and invisible from userland.
+    // EVERYTHING THE CORPSES CAN TELL US, GATHERED BEFORE THEY ARE RELEASED.
+    // After test_release() the undertaker may bury either task at any moment,
+    // and a recycled struct reads as zeros (2026-08-09; see test_spawn).
+    //
+    // This block used to be just the two retVals, on the reasoning — stated in
+    // the old comment here — that "the registry checks further down touch no
+    // task struct at all." That was not true, and had not been since burial
+    // learned to free page tables: the physical-sharing check below walks
+    // task_a->pml4v and task_b->pml4v, and arena_destroy hands those tables
+    // back at burial. It survived on timing alone (burial is ≥2 kworker
+    // periods away; the checks take microseconds) — a use-after-free that
+    // never lost the race.
+    //
+    // The refcount checks joined it here for a second reason, 2026-08-13:
+    // burial now RELEASES a task's reference (shared_object_release), so a
+    // refcount read after test_release would be measuring how fast kworker is,
+    // not whether dynamic linking works. Reading before the release makes the
+    // expected values — 3 and 2 — hard guarantees again rather than lucky
+    // ones, because nothing can be buried until autoReap is set.
     bool both_exited = task_a->exited && task_b->exited;
     uint64_t retval_a = task_a->retVal;
     uint64_t retval_b = task_b->retVal;
+
+    // Registry state, captured live. (These lookups each take a reference that
+    // is never released — deliberate: the test holds the registry's objects
+    // warm for the rest of the boot, and the expected counts below include
+    // them by name.)
+    shared_object_t *exe_so = shared_object_load_or_get("/bin/dyn_consumer");
+    shared_object_t *so     = shared_object_load_or_get("/lib/libtest.so");
+    uint32_t exe_refcount   = (exe_so != NULL) ? exe_so->refcount : 0;
+    uint32_t lib_refcount   = (so != NULL) ? so->refcount : 0;
+    bool dep_scope_ok       = (exe_so != NULL && so != NULL &&
+                               exe_so->dep_count == 1 && exe_so->deps[0] == so);
+
+    // The physical-sharing walk, also while the tables are still standing.
+    uintptr_t code_phys_a = 0, code_phys_b = 0;
+    if (so != NULL) {
+        code_phys_a = paging_walk_paging_table((pt_entry_t *)task_a->pml4v, so->load_bias);
+        code_phys_b = paging_walk_paging_table((pt_entry_t *)task_b->pml4v, so->load_bias);
+    }
+
     test_release(task_a);
     test_release(task_b);
 
@@ -922,35 +953,38 @@ static bool test_dynamic_linking(void)
     // (cache-hit path, not a fresh load each time). shared_object_load_or_get
     // bumps refcount on every call — direct lookups AND the internal
     // recursive loads of DT_NEEDED dependencies. The main executable is
-    // requested once per task_create plus once here: A + B + this call = 3.
-    shared_object_t *exe_so = shared_object_load_or_get("/bin/dyn_consumer");
+    // requested once per task_create plus once above: A + B + this test = 3.
+    // (Both tasks are still unburied at capture time, so neither has released
+    // its edge yet — that is exactly what capturing before test_release buys.)
     if (exe_so == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - dyn_consumer not found in registry after both tasks ran\n");
         return false;
     }
-    if (exe_so->refcount != 3) {
+    if (exe_refcount != 3) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - dyn_consumer refcount=%u, expected 3 (task A + task B + this lookup)\n",
-               exe_so->refcount);
+               exe_refcount);
         return false;
     }
 
     // libtest.so, by contrast, is loaded as dyn_consumer's DT_NEEDED
     // dependency exactly ONCE — the second task_create cache-hits the
     // already-loaded executable and never re-walks its deps — so: that one
-    // dependency edge + this lookup = 2. It must also be exactly the object
-    // dyn_consumer's own dependency scope points at (per-object symbol
-    // resolution — see shared_object.h's deps[]).
-    shared_object_t *so = shared_object_load_or_get("/lib/libtest.so");
+    // dependency edge + this lookup = 2. THIS ASYMMETRY IS LOAD-BEARING: it is
+    // why the undertaker releases one edge on the main image rather than one
+    // per entry in task->shared_objects, which would drive this very count
+    // negative on the second burial (see shared_object.h's pairing rule).
+    // It must also be exactly the object dyn_consumer's own dependency scope
+    // points at (per-object symbol resolution — see shared_object.h's deps[]).
     if (so == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - libtest.so not found in registry after both tasks ran\n");
         return false;
     }
-    if (so->refcount != 2) {
+    if (lib_refcount != 2) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - libtest.so refcount=%u, expected 2 (dyn_consumer's dep edge + this lookup)\n",
-               so->refcount);
+               lib_refcount);
         return false;
     }
-    if (exe_so->dep_count != 1 || exe_so->deps[0] != so) {
+    if (!dep_scope_ok) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - dyn_consumer's dependency scope doesn't point at the registry's libtest.so\n");
         return false;
     }
@@ -958,9 +992,8 @@ static bool test_dynamic_linking(void)
     // Task A and task B must share the SAME physical page backing
     // libtest.so's code segment — proving true cross-task physical sharing,
     // not silently-duplicated per-task copies — even though their .data
-    // pages have since diverged via CoW.
-    uintptr_t code_phys_a = paging_walk_paging_table((pt_entry_t *)task_a->pml4v, so->load_bias);
-    uintptr_t code_phys_b = paging_walk_paging_table((pt_entry_t *)task_b->pml4v, so->load_bias);
+    // pages have since diverged via CoW. (Walked above, while both address
+    // spaces were still standing.)
     if (code_phys_a == 0 || code_phys_a == 0xbadbadba || code_phys_a != code_phys_b) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - libtest.so code page not physically shared (A=0x%lx, B=0x%lx)\n",
                code_phys_a, code_phys_b);
@@ -968,6 +1001,187 @@ static bool test_dynamic_linking(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_dynamic_linking (symbol resolution, relocation, CoW isolation, and physical sharing all correct)\n");
+    return true;
+}
+
+
+// ── The task-teardown leak test (2026-08-13) ─────────────────────────────────
+//
+// THE PROOF. Task teardown does not reclaim everything — the VMA backing pages
+// wait on the page-refcount ruling, on purpose (task.c's deferral ledger). So
+// this test cannot assert "a task costs nothing". What it CAN assert, and does,
+// is the stronger useful thing:
+//
+//     every byte a spawn→exit→burial cycle consumes is either given back,
+//     or counted.
+//
+//   allocator bytes lost over one cycle  ==  bytes that cycle BOOKED as deferred
+//
+// An unknown leak — one nobody declared — breaks that equality by exactly its
+// own size, and the failure message names the number. When the refcount ruling
+// lands and the pages start coming back, both sides fall to zero together and
+// this test keeps passing without a line changing. It measures the INVARIANT,
+// not today's implementation.
+//
+// WHY POST-BOOT (Chris, 2026-08-13): "that's probably the only time there will
+// just be one core running everything. Low complexity, nice and quiet." Exactly
+// right, and it's the only such window that exists. The scheduler is up (burial
+// needs kworker) but husk has not started, so nothing else is spawning, exiting,
+// or churning the allocator underneath the measurement. Once the shell is live
+// this becomes unmeasurable without heroics.
+//
+// THE WARM-UP ITERATION IS NOT A FUDGE. The first run of any program pays
+// one-time costs that are caches, not leaks: block-cache lines for the binary,
+// ext2 inode structures, the allocator's own status-table growth. Those are
+// paid once and never again, so counting them as a per-task leak would be a
+// lie in the other direction. Iteration 1 pays them; iterations 2..N measure
+// the steady state, which is the number that actually tells you whether tasks
+// accumulate.
+#define TEARDOWN_LEAK_WARMUP_CYCLES    1
+#define TEARDOWN_LEAK_MEASURED_CYCLES  2
+#define EXIT_BY_RETURN_MAGIC           0x2E7BEA57UL
+
+// Wait until the undertaker is idle: no completed burial for a settle window.
+// Two kworker periods (2s each) plus slack, because burial is two-phase and a
+// corpse unlinked in pass N is not freed until pass N+1 — a shorter window can
+// see the gap BETWEEN a corpse's two phases and call it quiet.
+//
+// This runs before any measurement so the graveyard is empty when the clock
+// starts: earlier tests (dynamic_linking releases two corpses immediately
+// before this one) would otherwise be buried inside our window, and their
+// frees would land in our arithmetic as memory we appeared to reclaim.
+static bool teardown_leak_wait_quiet(void)
+{
+    uint64_t last = kTaskBurialCount;
+    int quiet_ms = 0;
+
+    for (int i = 0; i < 400 && quiet_ms < 5000; i++) {
+        wait(50);
+        if (kTaskBurialCount != last) {
+            last = kTaskBurialCount;
+            quiet_ms = 0;      // someone was buried — restart the settle
+        } else {
+            quiet_ms += 50;
+        }
+    }
+    return quiet_ms >= 5000;
+}
+
+// One complete cycle: spawn a ring-3 fixture, let it exit, release the corpse,
+// and WAIT FOR THE FUNERAL — not for the death. The distinction is the whole
+// point: at exit time nothing has been freed yet, and a snapshot taken then
+// would measure the corpse, not the cleanup.
+//
+// /bin/exit_by_return is the fixture on purpose: it is ring 3, so it exercises
+// every allocation this arc newly frees — the argv blob, the env blob, and the
+// exit trampoline page (which is the very mechanism it was written to test).
+// A ring-0 fixture would silently skip the trampoline and prove less.
+static bool teardown_leak_one_cycle(void)
+{
+    uint64_t burials_before = kTaskBurialCount;
+
+    task_t *t = test_spawn("/bin/exit_by_return", 0, NULL, false);
+    if (t == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - task_create returned NULL\n");
+        return false;
+    }
+    scheduler_submit_new_task(t);
+
+    for (int i = 0; i < 500 && !t->exited; i++)
+        wait(10);
+
+    // Read the struct BEFORE releasing it — after test_release the undertaker
+    // may free it at any moment and a recycled struct reads as zeros (the
+    // 2026-08-09 lesson; see test_spawn).
+    bool exited = t->exited;
+    uint64_t retval = t->retVal;
+    test_release(t);
+
+    if (!exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - fixture did not exit within 5 seconds\n");
+        return false;
+    }
+    if (retval != EXIT_BY_RETURN_MAGIC) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - fixture retVal=0x%lx, expected 0x%lx\n",
+               retval, (uint64_t)EXIT_BY_RETURN_MAGIC);
+        return false;
+    }
+
+    // Now the funeral. Polling the census beats sleeping a guessed interval:
+    // exact when the machine is fast, patient when it is slow. 15s ceiling is
+    // ~7 kworker periods — if burial hasn't happened by then it isn't going to,
+    // and that is itself the bug.
+    for (int i = 0; i < 1500 && kTaskBurialCount == burials_before; i++)
+        wait(10);
+
+    if (kTaskBurialCount == burials_before) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - no burial completed within 15 seconds "
+                            "(corpse stuck: uncollected, or a thread never retired?)\n");
+        return false;
+    }
+    return true;
+}
+
+static bool test_task_teardown_leak(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (no root filesystem mounted)\n");
+        return true;
+    }
+
+    if (!teardown_leak_wait_quiet()) {
+        // Not a failure of teardown — a failure to get a quiet window, which
+        // makes any number we produce meaningless. Say which it is: a test
+        // that can't measure must not report a verdict it didn't earn.
+        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (undertaker never went quiet — "
+                            "burials still completing after 20s, cannot measure cleanly)\n");
+        return true;
+    }
+
+    for (int i = 0; i < TEARDOWN_LEAK_WARMUP_CYCLES; i++) {
+        if (!teardown_leak_one_cycle())
+            return false;
+    }
+
+    uint64_t free_before = 0, free_after = 0;
+    allocator_memory_snapshot(&free_before, NULL, NULL);
+    uint64_t booked_before = kTaskDeferredReclaimBytes;
+
+    for (int i = 0; i < TEARDOWN_LEAK_MEASURED_CYCLES; i++) {
+        if (!teardown_leak_one_cycle())
+            return false;
+    }
+
+    allocator_memory_snapshot(&free_after, NULL, NULL);
+    uint64_t booked = kTaskDeferredReclaimBytes - booked_before;
+
+    // Signed on purpose: free memory going UP across the window is not a leak,
+    // it is the allocator having coalesced or some cache having shrunk, and
+    // reading that as a colossal unsigned "loss" would be the classic
+    // wraparound bug dressed as a test failure.
+    int64_t lost = (int64_t)free_before - (int64_t)free_after;
+    int64_t unexplained = lost - (int64_t)booked;
+
+    printd(DEBUG_TESTS,
+           "\ttask_teardown_leak: %d cycles — free %lu -> %lu (lost %ld bytes), "
+           "booked deferred %lu bytes, unexplained %ld\n",
+           TEARDOWN_LEAK_MEASURED_CYCLES, free_before, free_after, lost, booked, unexplained);
+
+    if (unexplained != 0) {
+        printd(DEBUG_TESTS,
+               "\tFAIL: test_task_teardown_leak - %ld bytes per %d cycles are unaccounted for "
+               "(%ld bytes/task). Every byte a task consumes must be reclaimed at burial or "
+               "booked into kTaskDeferredReclaimBytes; this is neither. Something allocated "
+               "in task_create (or on the task's behalf) has no matching free in task_destroy.\n",
+               unexplained, TEARDOWN_LEAK_MEASURED_CYCLES,
+               unexplained / TEARDOWN_LEAK_MEASURED_CYCLES);
+        return false;
+    }
+
+    printd(DEBUG_TESTS,
+           "\tPASS: test_task_teardown_leak (every byte accounted: %lu reclaimed-or-booked, "
+           "0 unexplained over %d cycles)\n",
+           booked, TEARDOWN_LEAK_MEASURED_CYCLES);
     return true;
 }
 
@@ -2923,6 +3137,7 @@ static void register_builtin_tests(void)
     test_register("vma_partial_page_bss_zero_filled", test_vma_partial_page_bss_zero_filled, TEST_PHASE_POSTBOOT);
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
+    test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_POSTBOOT);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);

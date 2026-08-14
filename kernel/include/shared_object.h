@@ -95,6 +95,36 @@ extern dlist_t *kLoadedSharedObjects;
 /// exhausted or a DT_NEEDED dependency can't be loaded.
 shared_object_t *shared_object_load_or_get(const char *path);
 
+/// @brief Drop ONE reference on `so`. Decrements refcount under the registry
+/// lock and does NOTHING else — the object stays loaded, its page_phys[]
+/// cache stays warm, its deps keep their edges, and it is never unregistered.
+///
+/// WHY UNLOAD IS NOT PART OF THIS (Chris's ruling, 2026-08-13): until today
+/// refcount only ever went UP, which made it a tally of "times anyone ever
+/// asked for this object" rather than a count of live holders — useful for
+/// nothing, and a number that could never become useful, since the moment a
+/// task was buried the count was permanently wrong. Decrementing makes it
+/// TRUE again: refcount is now (live task edges) + (dep edges from loaded
+/// objects) + (direct lookups nobody released). Whether a zero refcount
+/// should trigger an actual unload — dropping the registry node, the cached
+/// pages, the still-open backing file — is a RETENTION policy, and it is
+/// deliberately a separate slice, the same split already ruled for the block
+/// read cache: correctness now, eviction when there is a reason to evict. At
+/// this size of OS a warm library sitting at refcount 0 is a feature.
+///
+/// PAIRING RULE — read this before adding a call site. task_create takes
+/// exactly ONE reference per dynamically-linked task: a single
+/// shared_object_load_or_get() on the MAIN image (elf_resolve_dynamic_
+/// dependencies). Dependencies are referenced ONCE, system-wide, when they
+/// are first loaded recursively — NOT once per task. But
+/// task_map_shared_object_closure puts the WHOLE closure on
+/// task->shared_objects, so that list is NOT a list of references this task
+/// owns. Releasing once per list node would drive every dependency's count
+/// negative on the second burial. The undertaker therefore releases exactly
+/// one edge, on the object whose image is task->elf. (Underflow is reported
+/// loudly rather than silently clamped — see the implementation.)
+void shared_object_release(shared_object_t *so);
+
 /// @brief Resolve (or return the already-cached) physical page backing
 /// `page_idx` of `so`. Called from the page-fault path (simple_exceptions.c)
 /// when a task first touches a page of a library or dynamically-linked

@@ -189,6 +189,22 @@
 	// backgrounded (&) child never takes the console), and the keyboard IRQ
 	// path still reads it as a single aligned pointer, atomically, no lock.
 
+	// THE DEFERRAL LEDGER (task.c, 2026-08-13). Cumulative bytes/pages of VMA
+	// backing memory the undertaker has knowingly NOT reclaimed since boot —
+	// the single remaining task-teardown deferral, awaiting the page-refcount
+	// ruling. Every burial that leaves anything behind also announces it on
+	// DEBUG_TASK. Read by the post-boot leak test, which asserts that a
+	// spawn→exit→burial cycle's allocator delta equals exactly what was booked
+	// here: everything else reclaimed is provable, and any byte beyond this is
+	// an unknown leak. See the long comment at the definition for why this is
+	// a live counter rather than a line in DEBTS.md.
+	extern uint64_t kTaskDeferredReclaimBytes;
+	extern uint64_t kTaskDeferredReclaimPages;
+	// Completed burials since boot — the undertaker's census, and the leak
+	// test's clock (a cycle is done when the funeral is, not when the task
+	// exited). Incremented as task_destroy's very last act.
+	extern uint64_t kTaskBurialCount;
+
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
 	void task_exit_with_retval(void);   // asm stub: captures RAX into task->retVal then calls task_exit

@@ -5,6 +5,7 @@
 #include "memory/arena.h"   // per-task table arenas (PAGING_ARENA.md)
 #include "thread.h"
 #include "serial_logging.h"
+#include "spinlock.h"   // kDeadChildLock — the graveyard lock (deadChild lists)
 #include "paging.h"
 #include "gdt.h"
 #include "strcpy.h"
@@ -242,12 +243,62 @@ void task_idle_loop()
 	}
 }
 
-static void task_enqueue_dead_child(task_t *child)
+// ── THE GRAVEYARD LOCK (2026-08-13) ─────────────────────────────────────────
+//
+// Guards every deadChild list in the system: the head/tail pointers on each
+// parent AND the deadChildNext links that chain them.
+//
+// WHY IT EXISTS — a race that leaked whole tasks. The append below was
+// unlocked, and it is a read-modify-write on shared state:
+//
+//     if (parent->deadChildTail != NULL)          <-- read the tail
+//         parent->deadChildTail->deadChildNext = child;
+//     parent->deadChildTail = child;              <-- write the tail
+//
+// Two siblings exiting on two cores at the same instant both read the SAME
+// tail, both write that tail's ->deadChildNext (the second overwrite silently
+// discards the first), and both store their own ->deadChildTail (last writer
+// wins). One child ends up on NO list at all. It is not a zombie — a zombie is
+// reachable and deliberate — it is INVISIBLE: kworker's sweep only ever walks
+// these lists, so an unlisted corpse can never be examined, never be collected,
+// never be buried. Every byte it owns leaks for the rest of the boot.
+//
+// Found 2026-08-13 by the task-cleanup arc, in test_dynamic_linking: it spawns
+// two tasks that exit on the same tick on different APs, and it lost one of
+// them to this roughly half the time — for as long as the test has existed.
+// The symptom was pure absence, which is why it survived so long: no panic, no
+// error, just one task quietly missing from a list nobody prints.
+//
+// SCOPE: one global lock, not one per task. Contention is nil (task deaths are
+// rare; the sweep runs every 2s), and per-task locks would need an ordering
+// discipline the instant the orphanage touches TWO parents' lists in one
+// motion — a deadlock source bought for no measurable gain.
+//
+// IRQSAVE: nothing here is reached from an interrupt handler, but a core
+// preempted while holding a plain lock would make every other core spin for a
+// full timeslice, and CLAUDE.md's rule for shared scheduler-adjacent state is
+// interrupts-off. Critical sections here are a handful of pointer writes plus,
+// in the sweep, a bounded list walk.
+//
+// LOCK ORDER: kDeadChildLock may be taken BEFORE a scheduler queue lock (the
+// sweep calls scheduler_remove_task while holding it), never after. Nothing in
+// scheduler.c touches a deadChild list — they are private to task.c, which is
+// what makes that ordering safe by construction rather than by convention. The
+// one place that WOULD have inverted it is the parent-wake below, and that is
+// deliberately performed after the release.
+static spinlock_t kDeadChildLock = 0;
+
+// The list append, caller holding kDeadChildLock. Returns true if the parent
+// was waiting and must be woken — the wake itself happens OUTSIDE the lock
+// (see the wrapper), because scheduler_wake_isleep_task takes scheduler queue
+// locks and doing that from inside this one is the one lock inversion this
+// design has to avoid.
+static bool task_enqueue_dead_child_locked(task_t *child)
 {
 	task_t *parent = child->parentTask;
 
 	if (parent == NULL) {
-		return;
+		return false;
 	}
 
 	child->deadChildNext = NULL;
@@ -258,8 +309,26 @@ static void task_enqueue_dead_child(task_t *child)
 	}
 	parent->deadChildTail = child;
 
-	if (parent->waitingForChild) {
-		parent->waitingForChild = false;
+	if (!parent->waitingForChild) {
+		return false;
+	}
+	parent->waitingForChild = false;
+	return true;
+}
+
+static void task_enqueue_dead_child(task_t *child)
+{
+	task_t *parent = child->parentTask;
+
+	if (parent == NULL) {
+		return;
+	}
+
+	uint64_t flags = spinlock_acquire_irqsave(&kDeadChildLock);
+	bool wake_parent = task_enqueue_dead_child_locked(child);
+	spinlock_release_irqrestore(&kDeadChildLock, flags);
+
+	if (wake_parent) {
 		// Wake the parent to re-check its children. The wake is unconditional
 		// on ANY child death; task_wait's own scan decides whether THIS death
 		// matches what the parent is waiting for.
@@ -292,7 +361,10 @@ static void task_enqueue_dead_child(task_t *child)
 	}
 }
 
-static void task_remove_dead_child(task_t *parent, task_t *child)
+// Unlink one corpse from its parent's dead list. CALLER HOLDS kDeadChildLock —
+// its only caller is the undertaker's phase-1 scan, which holds the lock across
+// the whole walk (see task_reap_eligible_zombies).
+static void task_remove_dead_child_locked(task_t *parent, task_t *child)
 {
 	task_t *prev = NULL;
 	task_t *curr = parent ? parent->deadChildHead : NULL;
@@ -382,6 +454,209 @@ static void task_free_guarded_stack(task_t *t, uintptr_t stackBaseV)
 	            (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE));
 }
 
+// ── THE DEFERRAL LEDGER (2026-08-13) ───────────────────────────────────────
+//
+// What burial knowingly leaves behind, COUNTED rather than merely admitted.
+//
+// The VMA backing pages — the physical frames a demand fault resolved — are
+// the one thing task_destroy still does not reclaim. Freeing them needs a
+// ruling this arc deliberately did not make: a frame under a MAP_SHARED_LIBRARY
+// VMA may belong to the shared_object page cache (so->page_phys[]) rather than
+// to the dying task, and telling those apart in every future case — once fork
+// and real CoW exist — is the page-refcount conversation, booked to that arc.
+// Chris's ruling, 2026-08-13: leave the pages. But do not leave the fact quiet.
+//
+// So every burial walks its own VMAs, counts the frames that are actually
+// resident, books them here, and SAYS SO on DEBUG_TASK. Three reasons this is
+// a counter and a log line rather than one more sentence in DEBTS.md:
+//
+//   1. The number MOVES. When malloc lands in userland its arenas will ride
+//      syscall_map's VMAs — exactly the VMAs this walk covers — so the
+//      deferral will grow on its own and report itself, with nobody having to
+//      remember to update a document. A doc records what we knew once; this
+//      reports what is true now.
+//   2. It is the PROOF INSTRUMENT. Task teardown cannot be shown to reclaim
+//      everything, because on purpose it doesn't. But it can be shown to
+//      reclaim everything it CLAIMS to: the post-boot leak test asserts that a
+//      spawn→exit→burial cycle's allocator delta equals exactly the bytes
+//      booked here. Any other byte is an unknown leak, and the test names it.
+//      "No zero, but proof of how well we did" — that is this number.
+//   3. "Never drop a byte" has a weaker sibling worth honouring: when you
+//      cannot give a byte back yet, at least know how many there are.
+//
+// Cumulative since boot; read by the leak test, and printed per-burial below.
+uint64_t kTaskDeferredReclaimBytes = 0;
+uint64_t kTaskDeferredReclaimPages = 0;
+
+// Completed phase-2 burials since boot. Primarily the leak test's clock: a
+// spawn→exit→release cycle isn't finished when the task exits, it's finished
+// when the undertaker has actually freed it, which is up to two kworker
+// periods later. Polling this is exact where sleeping a guessed interval is
+// a guess — and it makes the test wait exactly as long as the machine needs
+// rather than as long as the author feared. Also, plainly, a census: how many
+// funerals this boot has held.
+uint64_t kTaskBurialCount = 0;
+
+// Release one corpse's VMA apparatus.
+//
+// Counts the still-resident backing frames (the booked deferral, returned to
+// the caller) and frees the BOOKKEEPING — every vma_t and its dlist node, then
+// the dlist_t itself. That split is the scope line: the structs are pure
+// kernel-side records, unshared and unambiguously this task's, so they go now;
+// the frames wait for the refcount ruling.
+//
+// Doing both halves in ONE walk is deliberate. The day the ruling lands,
+// "count it" becomes "free it" on a single line — inside a loop that already
+// exists, already visits exactly the right pages, and already runs at the one
+// moment when the corpse's page tables are still intact but no core can load
+// them. Whoever pays that debt should have to write almost nothing.
+//
+// Does this frame belong to the shared_object page cache rather than to the
+// dying task? THE OWNERSHIP QUESTION, answered — and it turns out not to need
+// refcounts at all today.
+//
+// os64 has exactly one page-sharing mechanism: the per-library page cache in
+// shared_object.c. A MAP_SHARED_LIBRARY VMA's frames come from
+// shared_object_resolve_page, which records each one in so->page_phys[] — an
+// authoritative OWNERSHIP REGISTRY, which is strictly better than a count,
+// because "is this frame the cache's?" is one array lookup with nothing to get
+// wrong. A frame in such a VMA that is NOT the cache's is this task's own
+// CoW-privatized copy (simple_exceptions.c's CoW branch allocated it when the
+// task first wrote to a writable segment), and that one IS the task's.
+//
+// Used here only to keep the deferral ledger HONEST: cache frames are retained
+// by design and were never this task's to give back, so booking them as
+// "deferred reclaim" would inflate the number with memory that is not leaking.
+// dyn_consumer showed this immediately — 4 pages booked, several of them the
+// cache's. But writing it now does double duty: when the page-refcount ruling
+// lands, THIS is the guard the reclaim needs, already written and already
+// exercised by test_dynamic_linking's two tasks on every boot.
+//
+// The honest limit: this is complete only while the cache is the sole sharer.
+// Real fork() with CoW would introduce task-to-task sharing that no registry
+// records, and THAT is the case the refcount ruling exists for.
+static bool task_frame_is_shared_object_cache(vma_t *vma, uintptr_t va, uintptr_t phys)
+{
+	if (vma == NULL || !(vma->flags & MAP_SHARED_LIBRARY) || vma->file == NULL)
+		return false;
+
+	shared_object_t *so = (shared_object_t *)vma->file;
+	if (so->page_phys == NULL || va < so->load_bias)
+		return false;
+
+	size_t idx = (va - so->load_bias) / PAGE_SIZE;
+	if (idx >= so->total_pages)
+		return false;
+
+	return so->page_phys[idx] == phys;
+}
+
+// MUST run before arena_destroy: the page-table walk needs the tables.
+// `shared_bytes_out` receives the frames that belong to the shared_object
+// cache — reported, but deliberately NOT booked as a deferral, because they
+// are a warm cache and not a leak.
+static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
+{
+	uint64_t deferred_bytes = 0;
+	uint64_t shared_bytes = 0;
+
+	if (t->mmaps == NULL) {
+		*shared_bytes_out = 0;
+		return 0;
+	}
+
+	dlist_node_t *node = t->mmaps->head;
+	while (node != NULL) {
+		dlist_node_t *next = node->next;
+		vma_t *vma = (vma_t *)node->data;
+
+		if (vma != NULL && t->pml4v != NULL) {
+			// Count only what is REALLY there. Demand paging's other half:
+			// a page the program never touched has no PTE, was never
+			// allocated, and is not a leak — so the honest deferral is the
+			// resident set, not the mapped span. (Same reasoning, and the
+			// same walk, as syscall_unmap's reclaim loop.)
+			for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE) {
+				uintptr_t phys = paging_walk_paging_table((pt_entry_t *)t->pml4v, va);
+				if (phys == 0 || phys == 0xbadbadba)
+					continue;
+				phys &= ~(uintptr_t)0xFFF;   // walks can carry flag bits
+
+				// The cache's frame, not ours: shared with every other task
+				// mapping this library, retained on purpose. Not a leak, so
+				// not booked as one.
+				if (task_frame_is_shared_object_cache(vma, va, phys)) {
+					shared_bytes += PAGE_SIZE;
+					continue;
+				}
+
+				// ← THE ONE LINE. This frame IS the task's — anonymous, its
+				//   own file-backed copy, or a CoW-privatized library page.
+				//   When the page-refcount ruling lands, free_memory(phys)
+				//   goes right here; the guard above is already written and
+				//   already right for everything that exists today.
+				deferred_bytes += PAGE_SIZE;
+				kTaskDeferredReclaimPages++;
+			}
+		}
+
+		// The bookkeeping IS ours, unconditionally: vma_create kmallocs a
+		// fresh vma_t per task even for a shared library (task_map_shared_
+		// object makes its own), and dlist_add kmallocs the node. Nothing
+		// else points at either once the task is off every public list.
+		vma_destroy(vma);
+		kfree(node);
+		node = next;
+	}
+
+	kfree(t->mmaps);
+	t->mmaps = NULL;
+
+	kTaskDeferredReclaimBytes += deferred_bytes;
+	*shared_bytes_out = shared_bytes;
+	return deferred_bytes;
+}
+
+// Release one corpse's shared-object apparatus: drop the single reference
+// task_create took, then free the list that recorded the closure.
+//
+// THE COUNT AND THE LIST ARE NOT THE SAME SHAPE — the trap this function
+// exists to avoid. task_create references exactly one object (the main image,
+// via elf_resolve_dynamic_dependencies); dependencies are referenced once
+// system-wide at first load, not once per task. But the LIST holds the whole
+// closure, because every task must map the full dependency closure for the
+// shared relocated pages to be valid in its address space. So the list has N
+// entries and this task owns 1 edge. Releasing per-node would drive every
+// library's count negative on the second burial — libtest.so, whose only
+// reference is dyn_consumer's dep edge, would go under the moment the second
+// dyn_consumer task was buried.
+//
+// The one edge is identified by IDENTITY, not by list position: the main
+// image is the object whose ->image is what task_create stored in task->elf
+// (see elf_resolve_dynamic_dependencies). It happens to be the list head
+// today — task_map_shared_object_closure adds it before recursing — but
+// depending on that would be depending on a traversal order nobody promised.
+static void task_release_shared_objects(task_t *t)
+{
+	if (t->shared_objects == NULL)
+		return;
+
+	dlist_node_t *node = t->shared_objects->head;
+	while (node != NULL) {
+		dlist_node_t *next = node->next;
+		shared_object_t *so = (shared_object_t *)node->data;
+
+		if (so != NULL && t->elf != NULL && so->image == (elf_image_t *)t->elf)
+			shared_object_release(so);
+
+		kfree(node);
+		node = next;
+	}
+
+	kfree(t->shared_objects);
+	t->shared_objects = NULL;
+}
+
 // THE ORPHANAGE (the night's second lesson, 2026-08-06): when a task is
 // buried, any children it left behind — LIVING and DEAD — are re-parented to
 // kKernelTask, the eternal parent. This is 1971's exact mechanism (orphans
@@ -395,7 +670,11 @@ static void task_free_guarded_stack(task_t *t, uintptr_t stackBaseV)
 // wait-loop, translated: Unix buries orphans by making PID 1 wait for them;
 // os64 buries them by declaring the wait unnecessary. Same funeral, less
 // ceremony.
-static void task_reparent_orphans(task_t *dying)
+// CALLER HOLDS kDeadChildLock. This touches TWO parents' lists in one motion —
+// the dying task's and ktask's — which is precisely why the graveyard lock is
+// global rather than per-task: a per-task lock would need an acquisition
+// ordering here, and an ordering is a deadlock waiting for its first mistake.
+static void task_reparent_orphans_locked(task_t *dying)
 {
 	// Live children first: after this, a child that exits mid-burial
 	// enqueues itself on ktask's deadChild list, not the corpse's.
@@ -407,7 +686,7 @@ static void task_reparent_orphans(task_t *dying)
 	}
 
 	// Then the dead: splice every unwaited grandcorpse onto ktask's list so
-	// the sweep can reach it again. (task_enqueue_dead_child routes by
+	// the sweep can reach it again. (task_enqueue_dead_child_locked routes by
 	// parentTask, so reparent-then-enqueue is the whole move.)
 	while (dying->deadChildHead != NULL) {
 		task_t *c = dying->deadChildHead;
@@ -415,9 +694,23 @@ static void task_reparent_orphans(task_t *dying)
 		c->deadChildNext = NULL;
 		c->parentTask = kKernelTask;
 		c->autoReap = true;
-		task_enqueue_dead_child(c);
+		// Return value deliberately ignored: the new parent is ALWAYS
+		// kKernelTask, which has no wait loop and never will (see the decree
+		// above), so waitingForChild is never set on it and there is never a
+		// deferred wake to perform. If ktask ever learns to wait, this must
+		// grow the same wake-after-unlock treatment as the wrapper.
+		(void)task_enqueue_dead_child_locked(c);
 	}
 	dying->deadChildTail = NULL;
+}
+
+// The lock-taking wrapper, for callers outside the undertaker's phase-1 scan
+// (task_destroy's defensive second pass).
+static void task_reparent_orphans(task_t *dying)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&kDeadChildLock);
+	task_reparent_orphans_locked(dying);
+	spinlock_release_irqrestore(&kDeadChildLock, flags);
 }
 
 // Phase 2: the actual burial. Caller (kworker sweep) guarantees the corpse
@@ -429,14 +722,22 @@ static void task_reparent_orphans(task_t *dying)
 //   - task: path, cwd, static elf_image_t (+ its still-open backing file —
 //     which also releases ext2's open-inode refcount, so rm stops being
 //     haunted by dead tasks' binaries), the struct itself
-// DEFERRED, documented, booked (docs/task_cleanup_notes.md is the map):
-//   - VMA backing pages + vma structs (CoW/fork sharing needs refcounts
-//     before freeing is safe), argv/env blobs (env is CoW-inherited by
-//     children), shared_objects dlist nodes, mmaps dlist
-//   - page-table pages (the paging pool is a bump allocator — pool free is
-//     its own slice)
+//   - (2026-08-13) the argv blob, the env blob, the ring-3 exit trampoline
+//     page, every vma_t and mmaps/shared_objects dlist node, and one
+//     shared_object reference for a dynamic task
+//   - (2026-08-13, arena) every page table this address space ever drew —
+//     arena_destroy below. The paging pool's bump allocator no longer has
+//     anything to do with a task's tables; that deferral is PAID.
+// STILL DEFERRED — exactly one thing, and it is COUNTED, not merely admitted:
+//   - VMA backing pages. A frame under a MAP_SHARED_LIBRARY VMA may be the
+//     shared_object page cache's rather than this task's, and deciding that
+//     in general (once fork/CoW exist) is the page-refcount ruling, booked to
+//     that arc. Every burial books its resident frames into
+//     kTaskDeferredReclaimBytes and prints the tally — see the deferral
+//     ledger above, and the post-boot leak test that asserts against it.
 // A dynamic task's elf points INTO the shared_object cache (task.c sets
-// task->elf = main_so->image) — never freed here; the cache owns it.
+// task->elf = main_so->image) — never freed here; the cache owns it. What IS
+// dropped for a dynamic task is the reference, not the image.
 static void task_destroy(task_t *t)
 {
 	printd(DEBUG_TASK, "task_destroy: burying task 0x%08x (%s)\n",
@@ -465,6 +766,50 @@ static void task_destroy(task_t *t)
 	kfree(t->path);
 	kfree(t->cwd);
 
+	// The argv blob: ONE kmalloc_aligned extent holding the pointer array and
+	// every argument string, built fresh per task and COPIED from the caller's
+	// argv (task_create's blob comment explains why copying was the fix). No
+	// task has ever shared it with another — unlike the env blob's reputation,
+	// which is examined next door. Its task-side mapping at TASK_ARGV_VIRT
+	// needs no unmap: the tables die whole, a few lines down.
+	kfree(t->argv);
+
+	// The env blob. THE ROW SAID THIS WAS THE DRAGON — "env is CoW-inherited
+	// by children", which would make freeing it a cross-task use-after-free
+	// the moment a parent died first. It isn't, and never has been:
+	// env_inherit() (env.c) does a plain memcpy into a fresh kmalloc_aligned
+	// block, and env.h says so in writing — "The copy is independent... CoW
+	// optimisation is a future enhancement." Every task's environment is
+	// exclusively its own. Verified before freeing, 2026-08-13, because a
+	// wrong answer here is the nastiest bug class in the book; if env_inherit
+	// ever DOES grow real CoW, this kfree becomes a refcount and this comment
+	// becomes the reason someone knew to look.
+	kfree(t->env);
+
+	// The ring-3 exit trampoline page — one kmalloc_aligned page per user
+	// task, mapped read-only at TASK_EXIT_TRAMPOLINE_VIRT by
+	// task_setup_ring3_exit_path, whose kernel-side pointer was a LOCAL that
+	// went out of scope the instant it was mapped. Nothing had ever freed it:
+	// 4KB per ring-3 command since the trampoline was written, on no ledger,
+	// in no notes doc, found 2026-08-13 while auditing what else the tables
+	// still held. Recovered the way task_free_guarded_stack recovers a stack —
+	// ask the corpse's own page tables where it went. Kernel tasks never had
+	// one; the walk finds nothing and we skip.
+	if (t->pml4v != NULL) {
+		uintptr_t tramp_phys = paging_walk_paging_table((pt_entry_t *)t->pml4v,
+		                                                TASK_EXIT_TRAMPOLINE_VIRT);
+		if (tramp_phys != 0 && tramp_phys != 0xbadbadba)
+			free_memory(tramp_phys & ~(uintptr_t)0xFFF);
+	}
+
+	// The VMA apparatus (structs + lists now; backing frames counted, not
+	// freed — the one remaining deferral) and the shared-object edge. BOTH
+	// must precede arena_destroy: each walks the corpse's page tables or its
+	// elf pointer, and arena_destroy takes the tables away.
+	uint64_t shared_retained = 0;
+	uint64_t deferred = task_release_vmas(t, &shared_retained);
+	task_release_shared_objects(t);
+
 	// Static ELF only: the loader kept the file open for file-backed demand
 	// paging, and with every thread retired no fault can ever need it again.
 	elf_image_t *image = (elf_image_t *)t->elf;
@@ -492,7 +837,47 @@ static void task_destroy(task_t *t)
 	// guard over page tables too. (NULL for ktask — arena_destroy no-ops.)
 	arena_destroy((arena_t *)t->tableArena);
 
+	// THE DEFERRAL, ANNOUNCED (Chris's ruling, 2026-08-13: "announce the
+	// deferrals even louder... that way they stay visible"). One line per
+	// burial that leaves anything behind, on DEBUG_TASK — the same channel as
+	// the burial line itself, so a reader following a task's death sees what
+	// was recovered and what wasn't, together, without grepping a doc.
+	//
+	// Silence here is the good outcome and it is a real signal: a task that
+	// touched no VMA page (every kernel thread, and any program that faulted
+	// nothing in) books nothing and says nothing. The day this line starts
+	// appearing for tasks it never used to — or the byte count starts
+	// climbing per command — something new is riding the VMAs, which is
+	// exactly what will happen when userland malloc lands.
+	if (deferred > 0) {
+		printd(DEBUG_TASK,
+		       "task_destroy: DEFERRED RECLAIM %lu bytes (%lu pages) of VMA backing "
+		       "for task 0x%08x (%s) — awaiting the page-refcount ruling; "
+		       "%lu bytes booked since boot\n",
+		       deferred, deferred / PAGE_SIZE, t->taskID, t->exename,
+		       kTaskDeferredReclaimBytes);
+	}
+
+	// The cache's share, reported separately and deliberately NOT booked: those
+	// frames are shared with every other task mapping the same library and are
+	// retained by design. Saying so on its own line stops the next reader from
+	// "fixing" a leak that is actually a warm cache — and, on a dynamic task,
+	// shows the ownership guard doing its job.
+	if (shared_retained > 0) {
+		printd(DEBUG_TASK,
+		       "task_destroy: %lu bytes (%lu pages) of task 0x%08x (%s) belong to the "
+		       "shared-object page cache — retained, not leaked, never this task's to free\n",
+		       shared_retained, shared_retained / PAGE_SIZE, t->taskID, t->exename);
+	}
+
 	kfree(t);
+
+	// Last act of the funeral, after the final free: everything this corpse
+	// owned is now either returned or booked. The leak test waits on this
+	// edge, so it must not move earlier — a watcher that woke on it while
+	// kfree(t) was still pending would snapshot the allocator one task struct
+	// too soon and report a leak that was about to not exist.
+	kTaskBurialCount++;
 }
 
 int task_reap_eligible_zombies(size_t max_to_reap)
@@ -512,6 +897,19 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 
 	// Phase 1: find newly collected corpses, unlink them from the deadChild
 	// list and the kTaskList spine, park them for next pass.
+	//
+	// UNDER THE GRAVEYARD LOCK, for the whole scan. Held across the entire walk
+	// rather than re-taken per corpse because unlinking mutates the very links
+	// the walk is following: a lock dropped mid-iteration would let a task exit
+	// on another core and append to the list we are standing in. The section is
+	// bounded (kTaskList is dozens of entries) and calls nothing that can
+	// block. printd is safe here — it is per-core and lock-free (serial_
+	// logging.c); scheduler_remove_task is safe because the lock order is
+	// kDeadChildLock → scheduler queue lock and NOTHING in scheduler.c ever
+	// touches a deadChild list, so the reverse order does not exist to collide
+	// with. The one call that WOULD have inverted it — the parent wake — is in
+	// task_enqueue_dead_child, deliberately after its release.
+	uint64_t sweep_flags = spinlock_acquire_irqsave(&kDeadChildLock);
 	task_t *task = kTaskList;
 	while (task != NO_TASK && task != NULL && reaped < max_to_reap) {
 		task_t *child = task->deadChildHead;
@@ -519,6 +917,34 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 			task_t *next_child = child->deadChildNext;
 			bool collected = child->retValCollected || child->autoReap ||
 			                 task->exited || child->parentTask == NULL;
+
+			// A COLLECTED CORPSE THAT CANNOT BE BURIED IS SILENT TODAY, and
+			// that silence is why a stuck one is so hard to see: the sweep
+			// steps over it every 2s forever, and the only evidence is a `ps`
+			// nobody happens to run. Nothing in the log ever says "I looked at
+			// this corpse and refused it." Say it.
+			//
+			// Collected-but-not-retired is the only case reported: the exit
+			// status has been claimed, so someone is DONE with this task and it
+			// should be on its way out, yet a thread is still on a run queue.
+			// An UNcollected zombie, by contrast, is the 1971 contract working
+			// as designed and deserves no noise. (Added 2026-08-13 chasing
+			// exactly such a corpse — a second dyn_consumer that exited, was
+			// released, then sat in the graveyard for the rest of the boot
+			// without one line of log to its name.)
+			if (collected && !task_threads_all_retired(child)) {
+				for (thread_t *th = child->threads; th != NULL; th = th->taskNext) {
+					if (!th->exited || (th->threadState != THREAD_STATE_ZOMBIE &&
+					                    th->threadState != THREAD_STATE_NONE)) {
+						printd(DEBUG_TASK,
+							"task_reap_eligible_zombies: task 0x%08x (%s) COLLECTED BUT NOT BURIABLE — "
+							"thread 0x%08x exited=%u state=%u (needs exited=1 and ZOMBIE/NONE); retrying next sweep\n",
+							child->taskID, child->exename,
+							(uint32_t)th->threadID, (unsigned)th->exited,
+							(unsigned)th->threadState);
+					}
+				}
+			}
 
 			if (collected && task_threads_all_retired(child)) {
 				printd(DEBUG_TASK | DEBUG_DETAILED,
@@ -530,11 +956,11 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 					child->retValCollected,
 					child->autoReap,
 					task->exited);
-				task_remove_dead_child(task, child);
+				task_remove_dead_child_locked(task, child);
 				// The orphanage runs BEFORE the corpse leaves the public
 				// lists: its children (live and dead) move to ktask now, so
 				// no walker ever holds a parentTask aimed at a buried task.
-				task_reparent_orphans(child);
+				task_reparent_orphans_locked(child);
 				scheduler_remove_task(child);
 				child->burialNext = kBurialList;
 				kBurialList = child;
@@ -557,6 +983,7 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 		}
 		task = task->next;
 	}
+	spinlock_release_irqrestore(&kDeadChildLock, sweep_flags);
 
 	return (int)reaped;
 }
@@ -798,6 +1225,9 @@ void task_exit(void)
 // graveyard, 2026-08-06). Now collectors only LOOK and mark; the corpse
 // stays enqueued, and the undertaker (task_reap_eligible_zombies, kworker
 // context, the only burial site) does all unlinking itself.
+// CALLER HOLDS kDeadChildLock, and must keep holding it until it has finished
+// with the returned corpse — the pointer is only guaranteed to stay valid for
+// as long as the undertaker is locked out.
 static task_t *task_find_dead_child(task_t *parent, uint64_t targetPid)
 {
 	for (task_t *child = parent->deadChildHead; child != NULL; child = child->deadChildNext)
@@ -858,18 +1288,37 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	{
 		// Check FIRST: an already-dead matching child returns immediately, no
 		// sleep (the "don't wait if the child already ended" rule).
+		//
+		// UNDER THE GRAVEYARD LOCK: the walk follows deadChildNext links that a
+		// sibling exiting on another core rewrites, and the find→copy→certify
+		// sequence has to be indivisible against the undertaker. Setting
+		// retValCollected is what LICENSES the sweep to unlink and free this
+		// struct, so doing it while the sweep holds the same lock is what makes
+		// "the certificate is our last touch" true rather than merely likely.
+		uint64_t lock_flags = spinlock_acquire_irqsave(&kDeadChildLock);
 		task_t *child = task_find_dead_child(parent, targetPid);
+		uint64_t endedPid = 0;
+		uint64_t endedRetVal = 0;
 		if (child != NULL) {
 			// Copy EVERYTHING out before certifying: the moment
 			// retValCollected goes true, kworker's next sweep may unlink and
 			// free this struct — the certificate must be our LAST touch.
 			// (The thread dequeue that used to happen here moved into
 			// task_destroy: burial is one act, at one site, in one context.)
-			uint64_t endedPid = child->taskID;
-			if (exitCode != NULL) {
-				*exitCode = child->retVal;
-			}
+			endedPid = child->taskID;
+			endedRetVal = child->retVal;
 			child->retValCollected = true;
+		}
+		spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
+
+		if (endedPid != 0) {
+			// DELIBERATELY AFTER THE RELEASE. *exitCode is the caller's
+			// pointer, and a store to it can take a page fault; a fault with
+			// interrupts disabled while holding a spinlock is how a machine
+			// stops answering. Nothing that can fault belongs inside this lock.
+			if (exitCode != NULL) {
+				*exitCode = endedRetVal;
+			}
 			if (movesConsole)
 				console->fgTask = parent;
 			return endedPid;
@@ -906,16 +1355,28 @@ uint64_t task_reap_any_dead(task_t* parentTask, uint64_t* exitCode)
 
 	// targetPid 0 = "the first of ANY child to have ended", the same wildcard
 	// task_wait uses — a shell polling for finished jobs does not care which.
+	//
+	// Same graveyard-lock discipline as task_wait: the find→copy→certify
+	// sequence is indivisible against the undertaker, and the caller's
+	// *exitCode store — which can fault — happens after the release.
+	uint64_t lock_flags = spinlock_acquire_irqsave(&kDeadChildLock);
 	task_t *child = task_find_dead_child(parent, 0);
-	if (child == NULL)
+	uint64_t endedPid = 0;
+	uint64_t endedRetVal = 0;
+	if (child != NULL) {
+		// Same copy-then-certify discipline as task_wait: after the
+		// certificate, this struct belongs to the undertaker.
+		endedPid = child->taskID;
+		endedRetVal = child->retVal;
+		child->retValCollected = true;
+	}
+	spinlock_release_irqrestore(&kDeadChildLock, lock_flags);
+
+	if (endedPid == 0)
 		return 0;
 
-	// Same copy-then-certify discipline as task_wait: after the certificate,
-	// this struct belongs to the undertaker.
-	uint64_t endedPid = child->taskID;
 	if (exitCode != NULL)
-		*exitCode = child->retVal;
-	child->retValCollected = true;
+		*exitCode = endedRetVal;
 
 	return endedPid;
 }

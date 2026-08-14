@@ -311,6 +311,13 @@ static cmdopt_t cmdopts[] = {
     // fault. Add DEBUG_DETAILED for the per-fault VMA lookup detail.
     // Resolved faults are NOT on DEBUG_EXCEPTIONS anymore — opt in here.
     {"DEBUG_DEMAND_PAGING", OPT_UINT128_OR, &kDebugLevel, DEBUG_DEMAND_PAGING, 0},
+    // Task lifecycle: creation, the undertaker's burials, and — since
+    // 2026-08-13 — the DEFERRED RECLAIM announcement, one line per burial that
+    // leaves VMA backing pages behind for the page-refcount ruling. That last
+    // one is why this switch exists at all: the channel had no way to be turned
+    // on for a single boot, so the loudest thing on it could not be heard
+    // without recompiling. Add DEBUG_DETAILED for per-release refcount lines.
+    {"DEBUG_TASK", OPT_UINT128_OR, &kDebugLevel, DEBUG_TASK, 0},
     {"LOGFILE", OPT_BOOL, &kOverrideFileLogging, true, 0},
     {"ROOT", OPT_STRING, kRootPartUUID, 0, 64},
     // Older boot entries (VBox/Bosgame in limine.conf) still use the long

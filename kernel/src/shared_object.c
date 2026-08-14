@@ -7,6 +7,7 @@
 #include "memory/vma.h"
 #include "paging.h"
 #include "panic.h"
+#include "serial_logging.h"   // printd + DEBUG_TASK (shared_object_release's ledger reporting)
 #include "sprintf.h"
 #include "strings/strcmp.h"
 #include "strings/strcpy.h"
@@ -414,4 +415,40 @@ shared_object_t *shared_object_load_or_get(const char *path)
     shared_object_t *so = shared_object_load_or_get_locked(path);
     registry_unlock();
     return so;
+}
+
+// The counterpart of the reference every shared_object_load_or_get() takes.
+// See the header for the PAIRING RULE — the short version is that a task owns
+// exactly one edge (on its main image), not one per entry in its
+// shared_objects list, so the undertaker calls this exactly once per buried
+// dynamic task.
+//
+// Deliberately does not unload: see the header for why retention is its own
+// slice. This function's whole job is keeping the number honest.
+void shared_object_release(shared_object_t *so)
+{
+    if (so == NULL) {
+        return;
+    }
+
+    registry_lock();
+    if (so->refcount > 0) {
+        so->refcount--;
+        printd(DEBUG_TASK | DEBUG_DETAILED,
+               "shared_object_release: %s refcount now %u\n",
+               so->path, so->refcount);
+    } else {
+        // A release with no matching reference. LOUD rather than silent (the
+        // house rule) but not a panic: this runs inside the undertaker, and
+        // killing the machine during a funeral turns a bookkeeping bug into
+        // an unbootable system. The count is already wrong by the time we get
+        // here; saying so is the useful act. If this ever prints, the pairing
+        // rule in shared_object.h has been broken by a new call site — start
+        // there.
+        printd(DEBUG_TASK,
+               "shared_object_release: REFCOUNT UNDERFLOW on %s — a release with no "
+               "matching reference (see the pairing rule in shared_object.h)\n",
+               so->path);
+    }
+    registry_unlock();
 }
