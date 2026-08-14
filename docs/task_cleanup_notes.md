@@ -1,5 +1,42 @@
 # Task Cleanup Implementation Notes
 
+> **STATUS, 2026-08-13.** Everything below was the ORIGINAL PLAN, written before
+> `task_destroy` existed. Most of it is now done; read this header first, because
+> the plan below no longer describes the code.
+>
+> **Reclaimed at burial today:** per-thread stacks, thread_t, TID, syscall
+> scratch; path, cwd; the static `elf_image_t` and its open backing file; the
+> argv blob; the env blob; the ring-3 exit trampoline page; every `vma_t` and
+> every mmaps/shared_objects dlist node; one `shared_object` reference; and —
+> since the paging arena — the PML4 and every page table this address space ever
+> drew, in one `arena_destroy`. Section 5 below ("Page Tables — NOT YET
+> IMPLEMENTED") is obsolete: the pool's bump allocator has nothing to do with a
+> task's tables anymore.
+>
+> **Still deferred — exactly one thing:** the VMA BACKING PAGES (section 3's
+> physical frames). Not because they are hard to free, but because ownership is
+> a ruling: a frame under a `MAP_SHARED_LIBRARY` VMA may belong to the
+> shared_object page cache. That guard is already written
+> (`task_frame_is_shared_object_cache`, task.c) and already exercised on every
+> boot; what is missing is the general answer for the day `fork` introduces
+> task-to-task sharing no registry records. Booked to the fork/CoW arc.
+>
+> **It is counted, not merely admitted.** Every burial walks its VMAs, books the
+> genuinely-task-owned resident frames into `kTaskDeferredReclaimBytes`, and says
+> so on DEBUG_TASK. The post-boot `task_teardown_leak` test asserts that a
+> spawn→exit→burial cycle's allocator delta equals exactly what was booked — so
+> every byte is either given back or counted, and anything else is an unknown
+> leak the test names and fails on.
+>
+> **Two corrections this doc got wrong, worth keeping visible:**
+> 1. The env blob was long believed CoW-shared with children. It is not, and
+>    never was — `env_inherit` does a plain memcpy. A wrong answer there would
+>    have been a cross-task use-after-free, so it was verified in the code
+>    before anything was freed.
+> 2. The list of leaks was incomplete: the ring-3 exit trampoline page appears
+>    nowhere below and was leaking 4KB per user command since it was written.
+>    If you are auditing, do not trust a list — walk the page tables.
+
 ## Resources That Need Cleanup When a Task Exits
 
 ### 1. Thread Resources
@@ -27,12 +64,16 @@
 - `elf->shstrtab` - section header string table (kmalloc)
 - `elf->file` - file handle - need to close
 
-### 5. Page Tables (NOT YET IMPLEMENTED)
+### 5. Page Tables (DONE 2026-08-13 — see the status header)
 - PML4 page
 - PDPT pages (lower-half only)
 - PD pages (lower-half only)
 - PT pages (lower-half only)
-- Note: Paging page pool uses bump allocator, doesn't support freeing yet
+- ~~Note: Paging page pool uses bump allocator, doesn't support freeing yet~~
+  Superseded: each task's tables come from its own arena (`task->tableArena`),
+  and `arena_destroy` at burial returns all of them at once. The pool's bump
+  allocator was never the obstacle it looked like — the answer was to stop
+  drawing task tables from the pool at all. See PAGING_ARENA.md.
 
 ### 6. Scheduler/Task List
 - Remove from `kTaskList` via `scheduler_remove_task()`
