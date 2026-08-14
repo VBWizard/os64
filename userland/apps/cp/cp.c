@@ -3,8 +3,8 @@
 #include "os64/os64.h"
 
 #define CP_BUFFER_SIZE  (1024 * 1024)
-#define CP_PATH_MAX     128
-#define CP_MAX_OPERANDS 32
+#define CP_PATH_MAX     256
+#define CP_MAX_OPERANDS 512
 // Three standard handles + ten open source directories + a source and
 // destination file = fifteen of the task's sixteen handle slots.
 #define CP_MAX_DEPTH    10

@@ -16,9 +16,18 @@ typedef struct {
     file_pager_mode_t mode;
 } file_pager_options_t;
 
+typedef enum {
+    FILE_PAGER_RESULT_DONE,
+    FILE_PAGER_RESULT_ERROR,
+    FILE_PAGER_RESULT_QUIT,
+    FILE_PAGER_RESULT_NEXT,
+    FILE_PAGER_RESULT_PREVIOUS
+} file_pager_result_t;
+
 // Page one explicitly named regular file while stdin remains the keyboard.
-// Standard-input documents arrive with controlling TTY support later.
-int file_pager_run(const file_pager_options_t *options);
+// Standard-input documents arrive with controlling TTY support later. The
+// result tells the command-line veneer whether to change files or quit all.
+file_pager_result_t file_pager_run(const file_pager_options_t *options);
 
 // Use the controlling terminal's live height, reserving its bottom row for
 // the pager prompt. Falls back when /proc/self/tty is unavailable.

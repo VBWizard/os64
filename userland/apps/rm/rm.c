@@ -1,6 +1,6 @@
 #include "os64/os64.h"
 
-#define RM_PATH_MAX 128
+#define RM_PATH_MAX 256
 // A task has 16 handle slots, with 0/1/2 occupied by its console handles.
 // Recursive removal holds one parent directory handle open per level. Stop
 // with our honest depth error while 12 are open, leaving the thirteenth free

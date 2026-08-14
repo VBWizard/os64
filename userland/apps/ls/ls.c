@@ -2,6 +2,7 @@
 
 #define MAX_DIR_ENTRIES 512
 #define LS_PATH_MAX 512
+#define LS_MAX_PATHS 512
 // GNU/POSIX ls's "six months" display boundary: half an average Gregorian
 // year. Recent files show HH:MM; older and future-dated files show the year.
 #define LS_RECENT_SECONDS (31556952 / 2)
@@ -199,7 +200,7 @@ int main(int argc, char **argv)
     bool sortSize = false;
     bool fullTime = false;
     os64_args_t args = {0};
-    const char *path = NULL;
+    const char *paths[LS_MAX_PATHS] = {0};
     const os64_optspec_t specs[] = {
         {'l', "long", false, "one entry per line with size and modification time",
          .flag = &longMode},
@@ -214,11 +215,11 @@ int main(int argc, char **argv)
     };
 
     os64_args_init(&args, argc, argv, specs, 5);
-    args.about = "List a directory or file.";
+    args.about = "List directories or files.";
     args.details = "When both -t and -S are present, -t takes precedence.";
 
     int32_t positionals = os64_args_parse(
-        &args, "ls [-lhSt] [--full-time] [PATH]", &path, 1);
+        &args, "ls [-lhSt] [--full-time] [PATH ...]", paths, LS_MAX_PATHS);
     if (positionals == OS64_ARG_HELP)
         return 0;
     if (positionals < 0)
@@ -228,52 +229,71 @@ int main(int argc, char **argv)
         longMode = true;
 
     char cwd[LS_PATH_MAX];
-    if (path == NULL)
+    if (positionals == 0)
     {
         if (os64_getcwd(cwd, sizeof(cwd)) < 0)
         {
             os64_hprintf(OS64_STDERR, "ls: cannot get current directory\n");
             return 1;
         }
-        path = cwd;
-    }
-
-    os64_dirent_t statEntry = {0};
-    if (os64_stat(path, &statEntry) < 0)
-    {
-        os64_hprintf(OS64_STDERR, "ls: cannot stat '%s'\n", path);
-        return 1;
+        paths[0] = cwd;
+        positionals = 1;
     }
 
     os64_time_t now = {0};
     if (longMode)
         os64_time(&now);   // failure leaves epoch 0: safely choose year form
 
-    if ((statEntry.flags & OS64_DE_DIR) == 0)
-    {
-        print_entry(&statEntry, longMode, humanReadable, fullTime, now.epoch);
-        if (!longMode)
-            os64_printf("\n");
-        return 0;
-    }
-
-    int32_t entryCount = 0;
-    if (get_directory_listing(path, dirEntries, &entryCount) != 0)
-        return 1;
-
     ls_sort_t sort = sortTime ? LS_SORT_TIME :
                      sortSize ? LS_SORT_SIZE : LS_SORT_DIRECTORY;
-    sort_entries(dirEntries, entryCount, sort);
-
-    for (int32_t i = 0; i < entryCount; i++)
+    int32_t returnCode = 0;
+    bool printedOperand = false;
+    for (int32_t operand = 0; operand < positionals; operand++)
     {
-        print_entry(&dirEntries[i], longMode, humanReadable,
-                    fullTime, now.epoch);
-        if (!longMode && (i + 1) % 5 == 0)
-            os64_printf("\n");
-    }
-    if (!longMode && entryCount % 5 != 0)
-        os64_printf("\n");
+        const char *path = paths[operand];
+        os64_dirent_t statEntry = {0};
+        if (os64_stat(path, &statEntry) < 0)
+        {
+            os64_hprintf(OS64_STDERR, "ls: cannot stat '%s'\n", path);
+            returnCode = 1;
+            continue;
+        }
 
-    return 0;
+        if ((statEntry.flags & OS64_DE_DIR) == 0)
+        {
+            print_entry(&statEntry, longMode, humanReadable, fullTime, now.epoch);
+            if (!longMode)
+                os64_printf("\n");
+            printedOperand = true;
+            continue;
+        }
+
+        if (positionals > 1)
+        {
+            if (printedOperand)
+                os64_printf("\n");
+            os64_printf("%s:\n", path);
+        }
+
+        int32_t entryCount = 0;
+        if (get_directory_listing(path, dirEntries, &entryCount) != 0)
+        {
+            returnCode = 1;
+            printedOperand = true;
+            continue;
+        }
+        sort_entries(dirEntries, entryCount, sort);
+
+        for (int32_t i = 0; i < entryCount; i++)
+        {
+            print_entry(&dirEntries[i], longMode, humanReadable,
+                        fullTime, now.epoch);
+            if (!longMode && (i + 1) % 5 == 0)
+                os64_printf("\n");
+        }
+        if (!longMode && entryCount % 5 != 0)
+            os64_printf("\n");
+        printedOperand = true;
+    }
+    return returnCode;
 }

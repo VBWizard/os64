@@ -2,7 +2,7 @@
 
 #include "os64/os64.h"
 
-#define KILL_MAX_PIDS 32
+#define KILL_MAX_PIDS 512
 #define KILL_PATH_MAX 64
 
 typedef struct {

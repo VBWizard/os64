@@ -70,7 +70,8 @@ static void show_help(const file_pager_options_t *options)
                   "  G, End                jump to the end\n"
                   "  /pattern              search forward\n"
                   "  ?pattern              search backward\n"
-                  "  n / N                 repeat / reverse search\n");
+                  "  n / N                 repeat / reverse search\n"
+                  "  :n / :p               next / previous file\n");
     os64_puts("  h                     show this help\n"
               "  q                     quit\n\n"
               "Press any key to return.");
@@ -125,6 +126,21 @@ static char prompt(const file_pager_options_t *options, uint64_t line,
     for (;;)
     {
         char c = read_key();
+        if (options->mode == FILE_PAGER_LESS && c == ':')
+        {
+            char command = read_key();
+            if (command == 'n')
+            {
+                erase_prompt();
+                return ']';
+            }
+            if (command == 'p')
+            {
+                erase_prompt();
+                return '[';
+            }
+            continue;
+        }
         bool search_key = options->mode == FILE_PAGER_LESS &&
             (c == '/' || c == '?' || c == 'n' || c == 'N');
         if (c == ' ' || c == 'f' || c == 'F' || c == 'b' || c == 'B' ||
@@ -362,7 +378,8 @@ static uint64_t context_first_line(const char *data, uint64_t size,
 
 static int paint(const char *data, uint64_t size, uint64_t first,
                  uint32_t row_count, uint32_t cols, bool clear_screen,
-                 uint64_t match_line, uint64_t start_override)
+                 bool terminate_ragged_line, uint64_t match_line,
+                 uint64_t start_override)
 {
     uint64_t start = start_override != UINT64_MAX
         ? start_override : offset_for_line(data, size, first);
@@ -388,7 +405,8 @@ static int paint(const char *data, uint64_t size, uint64_t first,
             return -1;
         if (end > cursor && write_all(data + cursor, (size_t)(end - cursor)) < 0)
             return -1;
-        if (end == size && data[end - 1] != '\n' && write_all("\n", 1) < 0)
+        if (terminate_ragged_line && end == size && data[end - 1] != '\n' &&
+            write_all("\n", 1) < 0)
             return -1;
         rows += needed;
         lines++;
@@ -400,20 +418,20 @@ static int paint(const char *data, uint64_t size, uint64_t first,
     return (int)lines;
 }
 
-int file_pager_run(const file_pager_options_t *options)
+file_pager_result_t file_pager_run(const file_pager_options_t *options)
 {
     os64_dirent_t entry = {0};
     if (os64_stat(options->path, &entry) < 0)
     {
         os64_hprintf(OS64_STDERR, "%s: cannot access %s\n",
                      options->program, options->path);
-        return 1;
+        return FILE_PAGER_RESULT_ERROR;
     }
     if (entry.flags & OS64_DE_DIR)
     {
         os64_hprintf(OS64_STDERR, "%s: %s is a directory\n",
                      options->program, options->path);
-        return 1;
+        return FILE_PAGER_RESULT_ERROR;
     }
 
     int32_t handle = (int32_t)os64_open(options->path, "r");
@@ -421,7 +439,7 @@ int file_pager_run(const file_pager_options_t *options)
     {
         os64_hprintf(OS64_STDERR, "%s: cannot open %s\n",
                      options->program, options->path);
-        return 1;
+        return FILE_PAGER_RESULT_ERROR;
     }
 
     char *data = NULL;
@@ -431,7 +449,7 @@ int file_pager_run(const file_pager_options_t *options)
     {
         os64_hprintf(OS64_STDERR, "%s: error reading %s\n",
                      options->program, options->path);
-        return 1;
+        return FILE_PAGER_RESULT_ERROR;
     }
 
     uint64_t total = count_lines(data, entry.size);
@@ -440,7 +458,6 @@ int file_pager_run(const file_pager_options_t *options)
     if (os64_tty_read(&tty) == 0 && tty.cols != 0)
         cols = tty.cols;
     uint64_t first = 0;
-    bool first_paint = true;
     bool force_clear = false;
     char pattern[PAGER_SEARCH_MAX] = {0};
     bool search_forward = true;
@@ -451,14 +468,14 @@ int file_pager_run(const file_pager_options_t *options)
     while (first < total)
     {
         int shown = paint(data, entry.size, first, options->page_lines, cols,
-                          options->mode == FILE_PAGER_LESS || first_paint ||
-                          force_clear, match_line, viewport_offset);
-        first_paint = false;
+                          options->mode == FILE_PAGER_LESS || force_clear,
+                          options->mode == FILE_PAGER_LESS, match_line,
+                          viewport_offset);
         force_clear = false;
         if (shown < 0)
         {
             os64_unmap(data);
-            return 1;
+            return FILE_PAGER_RESULT_ERROR;
         }
         bool at_end = first + (uint64_t)shown >= total;
         if (at_end && options->mode == FILE_PAGER_MORE)
@@ -468,7 +485,20 @@ int file_pager_run(const file_pager_options_t *options)
                           match_offset != UINT64_MAX ? pattern : NULL,
                           match_line);
         if (key == 'q' || key == 'Q')
-            break;
+        {
+            os64_unmap(data);
+            return FILE_PAGER_RESULT_QUIT;
+        }
+        if (key == ']')
+        {
+            os64_unmap(data);
+            return FILE_PAGER_RESULT_NEXT;
+        }
+        if (key == '[')
+        {
+            os64_unmap(data);
+            return FILE_PAGER_RESULT_PREVIOUS;
+        }
         if (key == 'h' || key == 'H')
         {
             show_help(options);
@@ -557,5 +587,6 @@ int file_pager_run(const file_pager_options_t *options)
     }
 
     os64_unmap(data);
-    return 0;
+    return options->mode == FILE_PAGER_MORE
+        ? FILE_PAGER_RESULT_NEXT : FILE_PAGER_RESULT_DONE;
 }

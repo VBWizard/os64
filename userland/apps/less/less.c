@@ -2,10 +2,11 @@
 #include "../../common/file_pager.h"
 
 #define DEFAULT_PAGE_LINES 24
+#define LESS_MAX_FILES 512
 
 int main(int argc, char **argv)
 {
-    const char *path = NULL;
+    const char *paths[LESS_MAX_FILES] = {0};
     const char *interval = NULL;
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
@@ -13,13 +14,14 @@ int main(int argc, char **argv)
          .value_out = &interval}
     };
     os64_args_init(&args, argc, argv, specs, 1);
-    args.about = "Browse a named text file forward and backward.";
-    args.details = "Press h while browsing for the complete key list. Standard input paging awaits controlling TTY support.";
+    args.about = "Browse named text files forward and backward.";
+    args.details = "Use :n and :p to change files. Press h for the complete key list. Standard input paging awaits controlling TTY support.";
 
-    int32_t parsed = os64_args_parse(&args, "less [-i LINES] FILE", &path, 1);
+    int32_t parsed = os64_args_parse(&args, "less [-i LINES] FILE ...",
+                                     paths, LESS_MAX_FILES);
     if (parsed == OS64_ARG_HELP)
         return 0;
-    if (parsed != 1)
+    if (parsed < 1)
     {
         if (parsed == 0)
             os64_hprintf(OS64_STDERR, "less: standard input paging requires TTY support; pass a file\n");
@@ -32,6 +34,25 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "less: invalid interval: %s\n", interval);
         return 2;
     }
-    file_pager_options_t options = {"less", path, lines, FILE_PAGER_LESS};
-    return file_pager_run(&options);
+    int32_t returnCode = 0;
+    int32_t current = 0;
+    while (current >= 0 && current < parsed)
+    {
+        file_pager_options_t options = {
+            "less", paths[current], lines, FILE_PAGER_LESS
+        };
+        file_pager_result_t result = file_pager_run(&options);
+        if (result == FILE_PAGER_RESULT_QUIT)
+            break;
+        if (result == FILE_PAGER_RESULT_PREVIOUS)
+        {
+            if (current > 0)
+                current--;
+            continue;
+        }
+        if (result == FILE_PAGER_RESULT_ERROR)
+            returnCode = 1;
+        current++;
+    }
+    return returnCode;
 }

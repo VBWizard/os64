@@ -2,6 +2,7 @@
 
 #define DEFAULT_HEAD_LINES 20
 #define HEAD_BUF_SIZE 32768
+#define HEAD_MAX_FILES 512
 
 static char buf[HEAD_BUF_SIZE];
 
@@ -81,8 +82,7 @@ int main(int argc, char **argv)
 {
     uint64_t lineCount = DEFAULT_HEAD_LINES;
     const char *lineCountValue = NULL;
-    const char *fileToHead = NULL;
-    int64_t fileHandle = OS64_STDIN;
+    const char *files[HEAD_MAX_FILES] = {0};
     int32_t returnCode = 0;
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
@@ -91,11 +91,11 @@ int main(int argc, char **argv)
     };
 
     os64_args_init(&args, argc, argv, specs, 1);
-    args.about = "Print the first lines of FILE to standard output.";
-    args.details = "With no FILE, or when FILE is -, read standard input.";
+    args.about = "Print the first lines of each FILE to standard output.";
+    args.details = "With no FILE, or when FILE is -, read standard input. Multiple inputs are labeled.";
 
-    int32_t parsed = os64_args_parse(&args, "head [-n NUM] [FILE]",
-                                     &fileToHead, 1);
+    int32_t parsed = os64_args_parse(&args, "head [-n NUM] [FILE ...]",
+                                     files, HEAD_MAX_FILES);
     if (parsed == OS64_ARG_HELP)
         os64_exit(0);
     if (parsed < 0)
@@ -108,41 +108,55 @@ int main(int argc, char **argv)
         os64_exit(2);
     }
 
-    bool useStdin = parsed == 0 || os64_streq(fileToHead, "-");
-    if (!useStdin)
+    int32_t inputCount = parsed == 0 ? 1 : parsed;
+    for (int32_t i = 0; i < inputCount; i++)
     {
-        os64_dirent_t entry;
-        if (os64_stat(fileToHead, &entry) < 0)
+        const char *path = parsed == 0 ? NULL : files[i];
+        bool useStdin = path == NULL || os64_streq(path, "-");
+        const char *label = useStdin ? "standard input" : path;
+        int32_t fileHandle = OS64_STDIN;
+
+        if (inputCount > 1)
         {
-            os64_hprintf(OS64_STDERR, "head: could not stat %s\n", fileToHead);
-            returnCode = 3;
+            if (i != 0)
+                os64_printf("\n");
+            os64_printf("==> %s <==\n", label);
         }
-        else if (entry.flags & OS64_DE_DIR)
+
+        if (!useStdin)
         {
-            os64_hprintf(OS64_STDERR, "head: cannot read a directory: %s\n",
-                         fileToHead);
-            returnCode = 4;
-        }
-        else
-        {
-            fileHandle = os64_open(fileToHead, "r");
+            os64_dirent_t entry = {0};
+            if (os64_stat(path, &entry) < 0)
+            {
+                os64_hprintf(OS64_STDERR, "head: could not stat %s\n", path);
+                returnCode = 1;
+                continue;
+            }
+            if (entry.flags & OS64_DE_DIR)
+            {
+                os64_hprintf(OS64_STDERR, "head: cannot read a directory: %s\n",
+                             path);
+                returnCode = 1;
+                continue;
+            }
+            fileHandle = (int32_t)os64_open(path, "r");
             if (fileHandle < 0)
             {
-                os64_hprintf(OS64_STDERR, "head: unable to open %s\n", fileToHead);
-                returnCode = 5;
+                os64_hprintf(OS64_STDERR, "head: unable to open %s\n", path);
+                returnCode = 1;
+                continue;
             }
         }
-    }
 
-    if (!returnCode && print_head(fileHandle, lineCount) < 0)
-    {
-        os64_hprintf(OS64_STDERR, "head: error reading %s\n",
-                     useStdin ? "standard input" : fileToHead);
-        returnCode = 6;
-    }
+        if (print_head(fileHandle, lineCount) < 0)
+        {
+            os64_hprintf(OS64_STDERR, "head: error reading %s\n", label);
+            returnCode = 1;
+        }
 
-    if (!useStdin && fileHandle >= 0)
-        os64_close(fileHandle);
+        if (!useStdin)
+            os64_close(fileHandle);
+    }
 
     os64_exit(returnCode);
 }

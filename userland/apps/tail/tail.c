@@ -2,6 +2,7 @@
 
 #define DEFAULT_TAIL_LINES 20
 #define STREAM_CHUNK_SIZE 32768
+#define TAIL_MAX_FILES 512
 
 static char buf[32768];
 
@@ -235,55 +236,70 @@ done:
     return result;
 }
 
-static int refresh_file(int32_t *handle, const char *path, int64_t position)
+static int follow_read(const char *path, uint64_t *position)
 {
-    int32_t replacement = (int32_t)os64_open(path, "r");
-    if (replacement < 0)
+    int32_t handle = (int32_t)os64_open(path, "r");
+    if (handle < 0)
         return -1;
 
-    if (os64_seek(replacement, position, OS64_SEEK_SET) < 0)
+    if (os64_seek(handle, (int64_t)*position, OS64_SEEK_SET) < 0)
     {
-        os64_close(replacement);
+        os64_close(handle);
         return -1;
     }
 
-    os64_close(*handle);
-    *handle = replacement;
-    return 0;
+    int64_t n;
+    bool writeFailed = false;
+    while ((n = os64_read(handle, buf, sizeof(buf))) > 0)
+    {
+        if (write_all(OS64_STDOUT, buf, (size_t)n) < 0)
+        {
+            writeFailed = true;
+            break;
+        }
+        *position += (uint64_t)n;
+    }
+    int result = n < 0 || writeFailed ? -1 : 0;
+    if (os64_close(handle) < 0)
+        result = -1;
+    return result;
 }
 
-static int follow_file(int32_t *handle, const char *path)
+static int follow_files(const char *files[], uint64_t positions[],
+                        bool active[], int32_t fileCount, int32_t lastOutput)
 {
     for (;;)
     {
-        int64_t n = os64_read(*handle, buf, sizeof(buf));
-        if (n < 0)
-            return -1;
-        if (n > 0)
+        for (int32_t i = 0; i < fileCount; i++)
         {
-            if (write_all(OS64_STDOUT, buf, (size_t)n) < 0)
+            if (!active[i])
+                continue;
+
+            os64_dirent_t entry = {0};
+            if (os64_stat(files[i], &entry) < 0 ||
+                (entry.flags & OS64_DE_DIR) != 0)
+            {
+                os64_hprintf(OS64_STDERR,
+                             "tail: cannot continue following %s\n", files[i]);
                 return -1;
-            continue;
-        }
-
-        os64_dirent_t entry;
-        int64_t position = os64_seek(*handle, 0, OS64_SEEK_CUR);
-        if (position < 0 || os64_stat(path, &entry) < 0)
-            return -1;
-
-        if (entry.flags & OS64_DE_DIR)
-            return -1;
-
-        if (entry.size != (uint64_t)position)
-        {
-            int64_t resumeAt = entry.size < (uint64_t)position ? 0 : position;
-            if (refresh_file(handle, path, resumeAt) < 0)
-                return -1;
-            if (resumeAt == 0)
+            }
+            if (entry.size < positions[i])
+            {
+                if (fileCount > 1 && lastOutput != i)
+                    os64_printf("\n==> %s <==\n", files[i]);
                 os64_printf("*** file truncated ***\n");
-            continue;
-        }
+                positions[i] = 0;
+                lastOutput = i;
+            }
+            if (entry.size == positions[i])
+                continue;
 
+            if (fileCount > 1 && lastOutput != i)
+                os64_printf("\n==> %s <==\n", files[i]);
+            if (follow_read(files[i], &positions[i]) < 0)
+                return -1;
+            lastOutput = i;
+        }
         os64_sleep(100);
     }
 }
@@ -294,9 +310,9 @@ int main(int argc, char **argv)
     bool optFollow = false;
     uint64_t lineCount = DEFAULT_TAIL_LINES;
     const char *lineCountValue = NULL;
-    const char *fileToTail = NULL;
-    int32_t fileHandle = -1;
-    os64_dirent_t statEntry;
+    const char *files[TAIL_MAX_FILES] = {0};
+    uint64_t followPositions[TAIL_MAX_FILES] = {0};
+    bool followActive[TAIL_MAX_FILES] = {0};
     os64_args_t args = {0};
     const os64_optspec_t specs[] = {
         {'f', "follow", false, "stay attached and print data appended to FILE", .flag = &optFollow},
@@ -305,11 +321,12 @@ int main(int argc, char **argv)
     };
 
     os64_args_init(&args, argc, argv, specs, 2);
-    args.about = "Print the last lines of FILE to standard output.";
+    args.about = "Print the last lines of each FILE to standard output.";
     args.details = "With no FILE, or when FILE is -, read standard input. "
                    "With --follow, wait for and print data appended to FILE.";
 
-    int32_t parsed = os64_args_parse(&args, "tail [-f] [-n NUM] [FILE]", &fileToTail, 1);
+    int32_t parsed = os64_args_parse(&args, "tail [-f] [-n NUM] [FILE ...]",
+                                     files, TAIL_MAX_FILES);
     if (parsed == OS64_ARG_HELP)
         os64_exit(0);
     if (parsed < 0)
@@ -321,57 +338,91 @@ int main(int argc, char **argv)
         os64_exit(2);
     }
 
-    bool useStdin = parsed == 0 || os64_streq(fileToTail, "-");
+    int32_t inputCount = parsed == 0 ? 1 : parsed;
+    int32_t activeFollowers = 0;
+    int32_t lastOutput = -1;
+    for (int32_t i = 0; i < inputCount; i++)
+    {
+        const char *path = parsed == 0 ? NULL : files[i];
+        bool useStdin = path == NULL || os64_streq(path, "-");
+        const char *label = useStdin ? "standard input" : path;
 
-    if (useStdin && optFollow)
-    {
-        os64_hprintf(OS64_STDERR, "tail: --follow requires a file\n");
-        returnCode = 2;
-    }
-    else if (useStdin)
-    {
-        if (print_stream_tail(OS64_STDIN, lineCount) < 0)
+        if (inputCount > 1)
         {
-            os64_hprintf(OS64_STDERR, "tail: error reading standard input\n");
-            returnCode = 6;
+            if (i != 0)
+                os64_printf("\n");
+            os64_printf("==> %s <==\n", label);
         }
-    }
-    else if (os64_stat(fileToTail, &statEntry) < 0)
-    {
-        os64_hprintf(OS64_STDERR, "tail: could not stat %s\n", fileToTail);
-        returnCode = 3;
-    }
-    else if (statEntry.flags & OS64_DE_DIR)
-    {
-        os64_hprintf(OS64_STDERR, "tail: cannot read a directory: %s\n", fileToTail);
-        returnCode = 4;
-    }
-    else
-    {
-        fileHandle = (int32_t)os64_open(fileToTail, "r");
+
+        if (useStdin)
+        {
+            if (optFollow)
+            {
+                os64_hprintf(OS64_STDERR,
+                             "tail: cannot follow standard input\n");
+                returnCode = 1;
+                continue;
+            }
+            if (print_stream_tail(OS64_STDIN, lineCount) < 0)
+            {
+                os64_hprintf(OS64_STDERR,
+                             "tail: error reading standard input\n");
+                returnCode = 1;
+            }
+            lastOutput = i;
+            continue;
+        }
+
+        os64_dirent_t statEntry = {0};
+        if (os64_stat(path, &statEntry) < 0)
+        {
+            os64_hprintf(OS64_STDERR, "tail: could not stat %s\n", path);
+            returnCode = 1;
+            continue;
+        }
+        if (statEntry.flags & OS64_DE_DIR)
+        {
+            os64_hprintf(OS64_STDERR,
+                         "tail: cannot read a directory: %s\n", path);
+            returnCode = 1;
+            continue;
+        }
+
+        int32_t fileHandle = (int32_t)os64_open(path, "r");
         if (fileHandle < 0)
         {
-            os64_hprintf(OS64_STDERR, "tail: unable to open %s\n", fileToTail);
-            returnCode = 5;
+            os64_hprintf(OS64_STDERR, "tail: unable to open %s\n", path);
+            returnCode = 1;
+            continue;
+        }
+        if (print_tail(fileHandle, statEntry.size, lineCount) < 0)
+        {
+            os64_hprintf(OS64_STDERR, "tail: error reading %s\n", path);
+            returnCode = 1;
+        }
+        int64_t position = os64_seek(fileHandle, 0, OS64_SEEK_CUR);
+        if (os64_close(fileHandle) < 0 || position < 0)
+        {
+            os64_hprintf(OS64_STDERR, "tail: error closing %s\n", path);
+            returnCode = 1;
+            continue;
+        }
+        lastOutput = i;
+        if (optFollow)
+        {
+            followPositions[i] = (uint64_t)position;
+            followActive[i] = true;
+            activeFollowers++;
         }
     }
 
-    if (!returnCode && !useStdin &&
-        print_tail(fileHandle, statEntry.size, lineCount) < 0)
+    if (optFollow && activeFollowers > 0 &&
+        follow_files(files, followPositions, followActive,
+                     inputCount, lastOutput) < 0)
     {
-        os64_hprintf(OS64_STDERR, "tail: error reading %s\n", fileToTail);
-        returnCode = 6;
+        os64_hprintf(OS64_STDERR, "tail: follow failed\n");
+        returnCode = 1;
     }
-
-    if (!returnCode && !useStdin && optFollow &&
-        follow_file(&fileHandle, fileToTail) < 0)
-    {
-        os64_hprintf(OS64_STDERR, "tail: error following %s\n", fileToTail);
-        returnCode = 7;
-    }
-
-    if (fileHandle >= 0)
-        os64_close(fileHandle);
 
     os64_exit(returnCode);
 }

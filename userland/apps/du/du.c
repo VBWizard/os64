@@ -2,8 +2,8 @@
 
 #include "os64/os64.h"
 
-#define DU_PATH_MAX       128
-#define DU_MAX_OPERANDS   32
+#define DU_PATH_MAX       256
+#define DU_MAX_OPERANDS   512
 // A task owns sixteen handles. Standard input/output/error plus twelve open
 // directory ancestors leaves one honest spare instead of failing mysteriously.
 #define DU_MAX_TREE_DEPTH 12

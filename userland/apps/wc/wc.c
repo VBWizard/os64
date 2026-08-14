@@ -3,7 +3,7 @@
 #include "os64/os64.h"
 
 #define WC_BUF_SIZE (1024 * 1024)
-#define WC_MAX_FILES 128
+#define WC_MAX_FILES 512
 
 typedef struct {
     uint64_t lines;

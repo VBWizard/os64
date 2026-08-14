@@ -4,7 +4,7 @@
 
 #define GREP_LINE_MAX 4096
 #define GREP_PATH_MAX 512
-#define GREP_MAX_FILES 128
+#define GREP_MAX_FILES 512
 // 16 task handles, three standard handles, and one spare for honest failure.
 #define GREP_MAX_DEPTH 11
 
