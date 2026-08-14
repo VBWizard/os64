@@ -2951,13 +2951,67 @@ static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;      // the empty key names nothing
 
 	if (arg1 == 0)
-		return env_unset(task->env, key) ? 0 : SYSCALL_RESULT_INVALID;
+	{
+		uint64_t irq = spinlock_acquire_irqsave(&kTaskEnvLock);
+		bool ok = env_unset(task->env, key);
+		spinlock_release_irqrestore(&kTaskEnvLock, irq);
+		return ok ? 0 : SYSCALL_RESULT_INVALID;
+	}
 
 	if (!copy_user_string((const char *)arg1, val, sizeof(val)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
-	// env_set fails only when the block is full — surface that honestly.
-	return env_set(task->env, key, val) ? 0 : SYSCALL_RESULT_INVALID;
+	// The whole mutate path holds kTaskEnvLock: growth SWAPS task->env for a
+	// bigger block, and env_inherit (a sibling thread spawning) must never
+	// memcpy a block that's being freed under it.
+	uint64_t irq = spinlock_acquire_irqsave(&kTaskEnvLock);
+	bool ok = env_set(task->env, key, val);
+	if (!ok)
+	{
+		// Full block. GROW AND RETRY (2026-08-14): double the block, capped at
+		// the fixed-VA window task.h reserves for it — the same window
+		// task_setup_entry maps below TASK_EXIT_TRAMPOLINE_VIRT. At the 64KB
+		// ceiling env_grow returns NULL and the refusal below is honest AND
+		// final, which is what SYSCALL_RESULT_INVALID meant here all along.
+		envpage_t *bigger = env_grow(task->env, TASK_ENV_MAX_BYTES / PAGE_SIZE);
+		if (bigger != NULL)
+		{
+			// Swap the task's read-only window over the new block. Only tasks
+			// that run an ELF image have the window mapped (task_setup_entry);
+			// probe rather than guess. The window's VA never changes, so
+			// userland pointers into the environment stay valid as ADDRESSES —
+			// content shifting under them is the documented setenv semantic
+			// (proc.h: a set invalidates prior getenv/env_next results).
+			envpage_t *old = task->env;
+			if (task->pml4v != NULL)
+			{
+				uintptr_t mapped = paging_walk_paging_table((pt_entry_t *)task->pml4v, TASK_ENV_VIRT);
+				if (mapped != 0 && mapped != 0xbadbadba)
+				{
+					// Unmap the OLD page count, map the NEW one — both fit the
+					// 2MB page table the argv blob already forced into being,
+					// so no table allocation happens under this lock.
+					paging_unmap_pages((pt_entry_t *)task->pml4v, TASK_ENV_VIRT,
+					                   (size_t)old->page_count * PAGE_SIZE);
+					paging_map_pages((pt_entry_t *)task->pml4v, TASK_ENV_VIRT,
+					                 (uintptr_t)bigger - kHHDMOffset,
+					                 bigger->page_count, PAGE_PRESENT | PAGE_USER);
+				}
+			}
+			task->env = bigger;
+			// Freeing the old block rides the HHDM-unmap TLB shootdown, which
+			// also flushes any sibling core's stale window translation. The
+			// beat between remap and shootdown is benign: a stale entry still
+			// points at the old block, whose bytes are an intact snapshot
+			// until this kfree.
+			kfree(old);
+			ok = env_set(task->env, key, val);
+		}
+	}
+	spinlock_release_irqrestore(&kTaskEnvLock, irq);
+
+	// A false here now means the 64KB ceiling itself (or OOM) — surface it.
+	return ok ? 0 : SYSCALL_RESULT_INVALID;
 }
 
 // klog_read(entries, max) — hand kernel log entries to a userland log

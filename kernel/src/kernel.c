@@ -166,14 +166,11 @@ task_t parentTask = {0};
 /// This is done manually whereas every other task in the system is created by calling the task_create method in task.c.
 void create_kernel_task()
 {
-	//The structure of the environment as as follows:
-	//*Addr 0: 
-	//	Room for 512 8 byte pointers to the environment strings
-	//*Addr 4096:
-	//	Room for 512 more 8 byte pointers to the remaining environment strings
-	//*Addr 8192:
-	//  1024 environment strings @ 512 bytes each
-	//TODO: Change this to be MMAP'd
+	// The environment is an envpage_t (abi/include/os64/env.h): one packed
+	// key\0val\0 block, born one page and grown on demand by setenv up to
+	// TASK_ENV_MAX_BYTES. (A comment here used to describe a 1024-pointer-slot
+	// layout from the pre-envpage design — that structure never existed in
+	// os64; the constants describing it left task.h 2026-08-14.)
 	parentTask.env = env_create();
 	// Where husk (and anything else consulting the environment) looks for
 	// programs — colon-separated, walked by userland PATH search. Every task

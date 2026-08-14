@@ -5,6 +5,10 @@
 #include "strcmp.h"
 #include "strlen.h"
 
+// The env-swap lock (declared in env.h — see the doctrine there). Zero is
+// the unlocked state, same as every spinlock in the tree.
+spinlock_t kTaskEnvLock = 0;
+
 envpage_t *env_create(void)
 {
     envpage_t *env = kmalloc_aligned(PAGE_SIZE);
@@ -26,6 +30,27 @@ envpage_t *env_inherit(const envpage_t *parent)
         return NULL;
     memcpy(env, parent, size);
     return env;
+}
+
+envpage_t *env_grow(const envpage_t *env, uint32_t max_pages)
+{
+    if (!env || env->page_count >= max_pages)
+        return NULL;                        // already at the ceiling — the honest refusal
+
+    uint32_t new_pages = env->page_count * 2;
+    if (new_pages > max_pages)
+        new_pages = max_pages;
+
+    envpage_t *bigger = kmalloc_aligned((size_t)new_pages * PAGE_SIZE);
+    if (!bigger)
+        return NULL;
+
+    // Copy header + live data; the allocator's choke-point zeroing already
+    // cleared the new tail, so the "data[data_end..end] is zeroed" contract
+    // holds without another memset.
+    memcpy(bigger, env, ENV_HEADER_SIZE + env->data_end);
+    bigger->page_count = new_pages;
+    return bigger;
 }
 
 const char *env_get(const envpage_t *env, const char *key)

@@ -12,6 +12,7 @@ STATTEST_OUTPUT ?= ../../bin/stat_test
 SLEEPTEST_OUTPUT ?= ../../bin/sleep_test
 MEMTEST_OUTPUT ?= ../../bin/memory_test
 HOG_OUTPUT ?= ../../bin/hog
+ENVFILL_OUTPUT ?= ../../bin/env_fill
 LIBTEST ?= ../../bin/libtest.so
 
 CC ?= x86_64-elf-gcc
@@ -56,7 +57,7 @@ ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -mno-mmx -m
 OBJS := serial_ping.o
 
 .PHONY: all
-all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT) $(REDIR_OUTPUT) $(DIRLIST_OUTPUT) $(MAPUNMAP_OUTPUT) $(CWDTEST_OUTPUT) $(STATTEST_OUTPUT) $(SLEEPTEST_OUTPUT) $(MEMTEST_OUTPUT) $(HOG_OUTPUT)
+all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT) $(REDIR_OUTPUT) $(DIRLIST_OUTPUT) $(MAPUNMAP_OUTPUT) $(CWDTEST_OUTPUT) $(STATTEST_OUTPUT) $(SLEEPTEST_OUTPUT) $(MEMTEST_OUTPUT) $(HOG_OUTPUT) $(ENVFILL_OUTPUT)
 
 $(OUTPUT): $(OBJS)
 	@mkdir -p "$$(dirname $@)"
@@ -150,6 +151,13 @@ $(HOG_OUTPUT): hog.o
 	$(LD) $(LDFLAGS) -o $@ hog.o
 
 hog.o: hog.c
+	$(CC) $(ARG_CFLAGS) -c $< -o $@
+
+$(ENVFILL_OUTPUT): env_fill.o
+	@mkdir -p "$$(dirname $@)"
+	$(LD) $(LDFLAGS) -o $@ env_fill.o
+
+env_fill.o: env_fill.c
 	$(CC) $(ARG_CFLAGS) -c $< -o $@
 
 $(DYN_OUTPUT): dyn_consumer.o $(LIBTEST)

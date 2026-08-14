@@ -1070,6 +1070,61 @@ static bool test_task_args(void)
 }
 
 
+// ── Environment growth (2026-08-14) ──────────────────────────────────────────
+//
+// The env block is born one page and grows on demand: when setenv fills it,
+// syscall_setenv swaps a doubled block under the task's fixed TASK_ENV_VIRT
+// window, up to the TASK_ENV_MAX_BYTES (64KB) ceiling. The dangerous moving
+// parts are the mid-run REMAP of the task's own read-only window and the
+// grow-copy chain preserving every pair — so the coverage is a ring-3 fixture
+// (/bin/env_fill) that fills ~11KB (two growth events), reads every pair back
+// through the remapped window, drives the block to the ceiling and demands an
+// honest refusal, then proves the refusal corrupted nothing. Distinct
+// 0xE27Fxxxx codes name the invariant that broke.
+#define ENV_FILL_OK 0x0E27600DUL
+static bool test_env_growth(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_env_growth (no root filesystem mounted)\n");
+        return true;
+    }
+
+    task_t *t = test_spawn("/bin/env_fill", 0, NULL, false);
+    if (t == NULL) {
+        printd(DEBUG_TESTS, "\tFAIL: test_env_growth - task_create returned NULL\n");
+        return false;
+    }
+    scheduler_submit_new_task(t);
+
+    // ~1000 setenv syscalls; generous 10s before calling it hung.
+    for (int i = 0; i < 1000 && !t->exited; i++)
+        wait(10);
+
+    bool exited = t->exited;
+    uint64_t retval = t->retVal;
+    test_release(t);
+
+    if (!exited) {
+        printd(DEBUG_TESTS, "\tFAIL: test_env_growth - env_fill did not exit within 10 seconds\n");
+        return false;
+    }
+    if (retval != ENV_FILL_OK) {
+        printd(DEBUG_TESTS,
+               "\tFAIL: test_env_growth - env_fill returned 0x%lx, expected 0x%lx. "
+               "The code names the broken invariant (env_fill.c): 1=env ABI address "
+               "2=fill-phase set failed 3=no growth 4=readback 5=PATH lost "
+               "6=64KB ceiling never refused 7=refusal corrupted data "
+               "8=replace-at-full 9=unset-frees-room\n",
+               retval, (uint64_t)ENV_FILL_OK);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_env_growth (block grew under the fixed window, pairs "
+                        "survived the copies, 64KB ceiling refused honestly)\n");
+    return true;
+}
+
+
 // ── The task-teardown leak test (2026-08-13) ─────────────────────────────────
 //
 // THE PROOF. Task teardown does not reclaim everything — the VMA backing pages
@@ -3203,6 +3258,7 @@ static void register_builtin_tests(void)
     test_register("elf_loader", test_elf_loader, TEST_PHASE_POSTBOOT);
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
     test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
+    test_register("env_growth", test_env_growth, TEST_PHASE_POSTBOOT);
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_POSTBOOT);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);

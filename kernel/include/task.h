@@ -36,8 +36,8 @@
 //
 //   0x6f000000  argv blob        1MB window  (strings PACKED, so a two-arg
 //                                             command still maps one page)
-//   0x6f100000  environment      64KB window (one page today; env.h allows
-//                                             multi-page growth someday)
+//   0x6f100000  environment      64KB window (born one page; setenv grows it
+//                                             on demand, doubling to this cap)
 //   0x6f110000  exit trampoline  one page, read-only + user
 //   ...         (~15MB unused)
 //   0x70000000  TASK_HEAP_START
@@ -46,6 +46,12 @@
 // environment. Enforced in task_create — see the packing comment there.
 #define TASK_ARGV_MAX_BYTES 0x100000
 #define TASK_ENV_VIRT 0x6f100000
+// The env block's growth ceiling — the fixed-VA window between TASK_ENV_VIRT
+// and the exit trampoline. ENFORCED since 2026-08-14: env_grow (env.c) caps
+// growth here when setenv fills the block, and task_setup_entry panics if a
+// bigger block ever reaches its map site (the backstop). Before growth
+// existed this constant guarded nothing; now it is the number that makes
+// "your environment is full" mean 64KB instead of one page.
 #define TASK_ENV_MAX_BYTES 0x10000
 //Virtual address of the ring-3 exit trampoline page (read-only+exec, user).
 //Seeded as _start's return address so a plain `ret` becomes an exit syscall.
@@ -61,10 +67,12 @@
 #define STDIN (void*)0
 #define STDOUT (void*)1
 #define STDERR (void*)2
-#define TASK_MAX_ARG_LEN 512
-#define TASK_ENVIRONMENT_MAX_ENTRIES 1024
-#define TASK_ENVIRONMENT_MAX_SIZE TASK_ENVIRONMENT_MAX_ENTRIES * TASK_MAX_ARG_LEN
-#define TASK_ENVIRONMENT_DATA_OFFSET (TASK_ENVIRONMENT_MAX_ENTRIES * sizeof(uintptr_t))
+// (TASK_MAX_ARG_LEN and the three TASK_ENVIRONMENT_* constants were deleted
+// here 2026-08-14: they described the pre-envpage environment layout — 1024
+// pointer slots followed by fixed 512-byte strings — that envpage_t's packed
+// key\0val\0 block replaced. Referenced by nothing; same species of furniture
+// as TASK_ENVP_VIRT above, removed the same week. The REAL env sizing lives
+// in env.h (ENV_DATA_CAPACITY) and TASK_ENV_MAX_BYTES above.)
 // Longest single path/argument the kernel will carry, NUL included. Raised
 // 128 -> 256 on 2026-08-13 (Chris: "even the path max length makes me kind of
 // nervous"). Costs nothing per task now that the argv blob packs its strings

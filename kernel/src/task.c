@@ -1774,6 +1774,16 @@ static void task_setup_entry(task_t *task)
 
 	// env → RDX  (map env page(s) read-only into task's address space first)
 	if (task->env != NULL) {
+		// THE BACKSTOP for the fixed-VA layout: env_grow caps growth at
+		// TASK_ENV_MAX_BYTES, so a block that arrives here bigger than the
+		// window can only mean someone grew an environment without honoring
+		// the cap — and mapping it would silently pave the exit trampoline
+		// at TASK_EXIT_TRAMPOLINE_VIRT, the argv-overrun bug's twin. Panic
+		// with the numbers instead (tripwires over silence).
+		if ((uint64_t)task->env->page_count * PAGE_SIZE > TASK_ENV_MAX_BYTES)
+			panic("task_setup_entry: env block for %s is %u pages, over the %lu-byte "
+			      "window before the exit trampoline — env_grow's cap was bypassed\n",
+			      task->exename, task->env->page_count, (uint64_t)TASK_ENV_MAX_BYTES);
 		uintptr_t env_phys = (uintptr_t)task->env - kHHDMOffset;
 		paging_map_pages(task->pml4v, TASK_ENV_VIRT, env_phys,
 		                 task->env->page_count,
@@ -2083,7 +2093,14 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// Inherit the parent's environment.  env_inherit makes a full independent copy
 	// so parent and child can diverge freely.  True CoW (sharing the physical page
 	// until first write) is a future optimisation.
-	newTask->env = env_inherit(parentTaskPtr->env);
+	// Under kTaskEnvLock since env growth (2026-08-14): a sibling thread of the
+	// parent could setenv mid-spawn, and growth SWAPS AND FREES the parent's
+	// block — without the lock this memcpy can chase a freed pointer.
+	{
+		uint64_t envIrq = spinlock_acquire_irqsave(&kTaskEnvLock);
+		newTask->env = env_inherit(parentTaskPtr->env);
+		spinlock_release_irqrestore(&kTaskEnvLock, envIrq);
+	}
 
 	// Now that argc/argv are built and mapped (TASK_ARGV_VIRT) and env is
 	// inherited, latch the ELF entry registers: RDI=argc, RSI=argv, RDX=env.

@@ -3,10 +3,16 @@
 
 // The os64 environment block — kernel↔userland ABI, like syscall_numbers.h.
 //
-// Every task's environment lives in one (or more, someday) read-only pages
-// the kernel maps at TASK_ENV_VIRT and hands to main() as its third argument
-// (launch.S preserves the kernel-set RDI/RSI/RDX = argc/argv/env registers).
-// Both sides walk the SAME layout, so the layout lives here, outside both.
+// Every task's environment lives in one or more read-only pages the kernel
+// maps at TASK_ENV_VIRT and hands to main() as its third argument (launch.S
+// preserves the kernel-set RDI/RSI/RDX = argc/argv/env registers). Both
+// sides walk the SAME layout, so the layout lives here, outside both.
+//
+// The block is born one page and GROWS when setenv fills it (2026-08-14):
+// the kernel swaps a doubled block under the same TASK_ENV_VIRT window, up
+// to a 64KB ceiling — after which setenv fails for real. Userland never
+// notices a growth beyond page_count changing: the address is stable, and a
+// setenv already invalidated prior getenv/env_next results (proc.h).
 //
 // This is deliberately NOT os32's array of evenly-lengthed strings, and NOT
 // POSIX's char **environ of "KEY=VALUE" strings that every getenv() has to
