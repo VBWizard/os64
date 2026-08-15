@@ -176,6 +176,90 @@ static uintptr_t draw_table_page(struct arena *source, const char *level, uint64
     return get_paging_table_page();
 }
 
+/// @brief One level of the map walk: return the next-level table, creating it
+/// atomically if absent.
+///
+/// CONCURRENCY (2026-08-15 — the burn's second catch). paging_map_page has no
+/// lock, and for two years never needed one: every intermediate table under
+/// the kernel PML4 was built at boot, on one core, so concurrent callers only
+/// ever stored LEAF entries — different 8-byte slots, no conflict. The first
+/// workload that made two cores create the SAME missing intermediate
+/// simultaneously (concurrent per-I/O kmalloc_dma PRP-list allocations
+/// landing above 4GB — identity space no boot had ever touched) hit the
+/// textbook lost update: both saw not-present, both drew a fresh table, both
+/// stored, last store won, and the loser's freshly-written PTE sat in an
+/// orphaned table no walk would ever reach. kmalloc_dma then memset a VA it
+/// had "just mapped" and died on a not-present #PF (QEMU burn: CR2
+/// 0x100c80000, every intermediate present, PT[128] == 0 — read from the
+/// halted guest's own tables via the monitor).
+///
+/// The fix is CAS, deliberately NOT a lock: draw_table_page can kmalloc (an
+/// arena grows on demand), kmalloc takes kMemoryStatusLock, and the
+/// allocator's HHDM choke points call back into paging while HOLDING that
+/// lock — a create-lock here is an ABBA deadlock with a fuse timed to the
+/// first concurrent workload. Losing the install CAS orphans the drawn page:
+/// an arena page dies with its task at burial anyway, and a pool page is a
+/// one-page leak on an event rare enough to be a log line (two cores racing
+/// to create the SAME entry). Announced when it happens, never silent.
+///
+/// The present-entry flag merge is a CAS loop for the same reason: two cores
+/// OR-ing different rights (one WRITE, one USER) through a plain
+/// read-modify-write could drop one of them. WRITE ONLY IF IT CHANGES
+/// (2026-08-14) is preserved exactly: an entry that already carries the
+/// needed rights is never stored to — it would dirty the most contended
+/// cache line in the machine on every walk, storm any hardware watchpoint
+/// armed on the entry (the #DB triple-fault that taught us), and destroy the
+/// forensic meaning of "who last wrote this entry?".
+static pt_entry_t *paging_walk_or_create_level(pt_entry_t *table, uint64_t idx,
+                                               uint64_t tableRequiredFlags,
+                                               struct arena *tableSource,
+                                               const char *level, uint64_t va)
+{
+    uint64_t entry = table[idx];
+
+    while (1) {
+        if (entry & PAGE_PRESENT) {
+            uint64_t updated = (entry & ~0xFFFULL) | ((entry | tableRequiredFlags) & 0xFFFULL);
+            if (updated == entry)
+                return (pt_entry_t *)PHYS_TO_VIRT(entry & ~0xFFFULL);
+            uint64_t witnessed = __sync_val_compare_and_swap(&table[idx], entry, updated);
+            if (witnessed == entry)
+                return (pt_entry_t *)PHYS_TO_VIRT(updated & ~0xFFFULL);
+            entry = witnessed;   // someone else moved it — re-evaluate from their value
+            continue;
+        }
+
+        // Absent: draw, zero, THEN publish — a table must never be reachable
+        // before it is blank. The CAS is the publication.
+        uint64_t new_phys = draw_table_page(tableSource, level, va);
+        pt_entry_t *new_page = (pt_entry_t *)PHYS_TO_VIRT(new_phys);
+        // Sanity: the drawn page's VA must land in the HHDM window. The old
+        // form of this check compared bits 32-63 against 0xFFFF8000, which
+        // silently demanded phys < 4GB — false the moment the (honestly
+        // funded, ~20MB) pool lands above that line. Masking off the low 47
+        // bits (the physical part of an HHDM alias) and comparing what
+        // remains against kHHDMOffset asks the intended question at any
+        // physical address.
+        if (((uintptr_t)new_page & ~(uintptr_t)0x7FFFFFFFFFFFULL) != kHHDMOffset)
+            panic("Bad page table page address. (0x%016lx)  kHHDMOffset = 0x%016lx\n", new_page, kHHDMOffset);
+        memset(new_page, 0, PAGE_SIZE);
+
+        uint64_t desired = new_phys | tableRequiredFlags | PAGE_PRESENT;
+        uint64_t witnessed = __sync_val_compare_and_swap(&table[idx], entry, desired);
+        if (witnessed == entry)
+            return new_page;
+
+        // Lost the creation race: adopt the winner's table and loop — their
+        // entry may still need our required flags OR'd in, which the present
+        // branch above handles. Our drawn page is orphaned (see the block
+        // comment for why that beats a deadlock-prone lock).
+        printd(DEBUG_PAGING,
+               "PAGING: %s creation race at VA 0x%016lx — winner's table adopted, %s page 0x%016lx orphaned\n",
+               level, va, tableSource ? "arena" : "pool", new_phys);
+        entry = witnessed;
+    }
+}
+
 void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
     // Align addresses to 4 KB boundaries
     physical_address &= PAGE_ADDRESS_MASK;
@@ -203,71 +287,22 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
     // paging.h and the design's charter in PAGING_ARENA.md.
     struct arena *tableSource = paging_table_arena_for(pml4v);
 
-    // Step 1: Traverse or allocate the PDPT table
-    pt_entry_t *pdpt_page;
-    uint64_t pml4e = pml4v[PML4_INDEX(virtual_address)];
+    // Steps 1-3: walk (or atomically create) the three intermediate levels.
+    // Each used to be an open-coded block here; the lost-update race between
+    // two creators of the same missing table, the CAS that fixes it, and the
+    // preserved WRITE-ONLY-IF-IT-CHANGES discipline (2026-08-14) are all
+    // documented once, on paging_walk_or_create_level above.
+    pt_entry_t *pdpt_page = paging_walk_or_create_level(pml4v, PML4_INDEX(virtual_address),
+                                                        tableRequiredFlags, tableSource,
+                                                        "PDPT", virtual_address);
 
-    if (pml4e & PAGE_PRESENT) {
-        // Combine existing flags with new flags
-        pml4v[PML4_INDEX(virtual_address)] = (pml4e & ~0xFFF) | ((pml4e | tableRequiredFlags) & 0xFFF);
-        uint64_t pdpt_phys = pml4v[PML4_INDEX(virtual_address)] & ~0xFFF;
-        pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(pdpt_phys);
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPDPT present @ 0x%016lx\n",pdpt_page);
-    } else {
-        // Allocate new PDPT page
-        uint64_t new_pdpt_phys = draw_table_page(tableSource, "PDPT", virtual_address);
-        pt_entry_t *new_pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pdpt_phys);
-        memset(new_pdpt_page, 0, PAGE_SIZE);
-        pml4v[PML4_INDEX(virtual_address)] = new_pdpt_phys | tableRequiredFlags | PAGE_PRESENT;
-        pdpt_page = new_pdpt_page;
-    }
+    pt_entry_t *pd_page = paging_walk_or_create_level(pdpt_page, PDPT_INDEX(virtual_address),
+                                                      tableRequiredFlags, tableSource,
+                                                      "PD", virtual_address);
 
-    // Step 2: Traverse or allocate the PD table
-    pt_entry_t *pd_page;
-    uint64_t pdpt_entry = pdpt_page[PDPT_INDEX(virtual_address)];
-
-    if (pdpt_entry & PAGE_PRESENT) {
-        // Combine existing flags with new flags
-        pdpt_page[PDPT_INDEX(virtual_address)] = (pdpt_entry & ~0xFFF) | ((pdpt_entry | tableRequiredFlags) & 0xFFF);
-        uint64_t pd_phys = pdpt_page[PDPT_INDEX(virtual_address)] & ~0xFFF;
-        pd_page = (pt_entry_t *)PHYS_TO_VIRT(pd_phys);
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPD present @ 0x%016lx\n", pd_page);
-    } else {
-        // Allocate new PD page
-        uint64_t new_pd_phys = draw_table_page(tableSource, "PD", virtual_address);
-        pt_entry_t *new_pd_page = (pt_entry_t *)PHYS_TO_VIRT(new_pd_phys);
-        memset(new_pd_page, 0, PAGE_SIZE);
-        pdpt_page[PDPT_INDEX(virtual_address)] = new_pd_phys | tableRequiredFlags | PAGE_PRESENT;
-        pd_page = new_pd_page;
-    }
-
-    // Step 3: Traverse or allocate the PT table
-    pt_entry_t *pt_page;
-    uint64_t pd_entry = pd_page[PD_INDEX(virtual_address)];
-
-    if (pd_entry & PAGE_PRESENT) {
-       // Combine existing flags with new flags
-        pd_page[PD_INDEX(virtual_address)] = (pd_entry & ~0xFFF) | ((pd_entry | tableRequiredFlags) & 0xFFF);
-        uint64_t pt_phys = pd_page[PD_INDEX(virtual_address)] & ~0xFFF;
-        pt_page = (pt_entry_t *)PHYS_TO_VIRT(pt_phys);
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPT present @ 0x%016lx\n", pt_page);
-    } else {
-        // Allocate new PT page
-        uint64_t new_pt_phys = draw_table_page(tableSource, "PT", virtual_address);
-        pt_entry_t *new_pt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pt_phys);
-        memset(new_pt_page, 0, PAGE_SIZE);
-        // Sanity: the pool page's VA must land in the HHDM window. The old
-        // form of this check compared bits 32-63 against 0xFFFF8000, which
-        // silently demanded phys < 4GB — false the moment the (honestly
-        // funded, ~20MB) pool lands above that line. Masking off the low 47
-        // bits (the physical part of an HHDM alias) and comparing what
-        // remains against kHHDMOffset asks the intended question at any
-        // physical address.
-        if (((uintptr_t)new_pt_page & ~(uintptr_t)0x7FFFFFFFFFFFULL) != kHHDMOffset)
-			panic("Bad page table entry address. (0x%016lx)  kHHDMOffset = 0x%016lx\n", new_pt_page, kHHDMOffset);
-		pd_page[PD_INDEX(virtual_address)] = new_pt_phys | tableRequiredFlags | PAGE_PRESENT;
-        pt_page = new_pt_page;
-    }
+    pt_entry_t *pt_page = paging_walk_or_create_level(pd_page, PD_INDEX(virtual_address),
+                                                      tableRequiredFlags, tableSource,
+                                                      "PT", virtual_address);
 
 	uint16_t finalFlags =  flags | PAGE_PRESENT;
     printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tSetting page table entry at 0x%016lx, index 0x%04x, to 0x%016lx, flags 0x%08x\n", pt_page, PT_INDEX(virtual_address), physical_address, finalFlags);
