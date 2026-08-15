@@ -13,7 +13,7 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 
 # Define the base QEMU flags
 # -smp 2 
-QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 4 \
+QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 8 \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
 				  -d $(shell echo int,cpu_reset,pcall,guest_errors)
@@ -161,7 +161,7 @@ USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
 
 # Kernel-side ring-3 test fixtures that also ride the image.
 KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
-                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test hog env_fill libtest.so)
+                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test hog env_fill glutton libtest.so)
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
 
 
@@ -534,8 +534,11 @@ $(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		iso_root -o $(IMAGE_NAME).iso > /dev/null
 	./limine/limine bios-install $(IMAGE_NAME).iso > /dev/null
-	@rm -f /mnt/c/temp/os64_kernel.iso
-	@cp -v os64_kernel.iso /mnt/c/temp
+# WORKTREE-LOCAL (scribble-hunt): the c:/temp copy is disabled so hunt builds
+# stop clobbering the main tree's ISO out from under Chris's VBox/P5 boots.
+# RESTORE these two lines before merging back.
+#	@rm -f /mnt/c/temp/os64_kernel.iso
+#	@cp -v os64_kernel.iso /mnt/c/temp
 
 $(IMAGE_NAME).hdd: limine/limine kernel
 #	@rm -f $(IMAGE_NAME).hdd

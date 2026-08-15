@@ -236,17 +236,16 @@
 	// backgrounded (&) child never takes the console), and the keyboard IRQ
 	// path still reads it as a single aligned pointer, atomically, no lock.
 
-	// THE DEFERRAL LEDGER (task.c, 2026-08-13). Cumulative bytes/pages of VMA
-	// backing memory the undertaker has knowingly NOT reclaimed since boot —
-	// the single remaining task-teardown deferral, awaiting the page-refcount
-	// ruling. Every burial that leaves anything behind also announces it on
-	// DEBUG_TASK. Read by the post-boot leak test, which asserts that a
-	// spawn→exit→burial cycle's allocator delta equals exactly what was booked
-	// here: everything else reclaimed is provable, and any byte beyond this is
-	// an unknown leak. See the long comment at the definition for why this is
-	// a live counter rather than a line in DEBTS.md.
-	extern uint64_t kTaskDeferredReclaimBytes;
-	extern uint64_t kTaskDeferredReclaimPages;
+	// THE RECLAIM LEDGER (task.c; the 2026-08-13 deferral ledger, PAID
+	// 2026-08-15). Cumulative bytes/pages of VMA backing memory the
+	// undertaker has freed at burial since boot. Every burial that gives
+	// anything back announces it on DEBUG_TASK. The post-boot leak test
+	// reads these to prove the free path actually ran, and asserts a
+	// spawn→exit→burial cycle's allocator delta is ZERO — every byte a task
+	// consumed comes back when it dies. See the long comment at the
+	// definition for the deferral's story and why it ended.
+	extern uint64_t kTaskVmaReclaimedBytes;
+	extern uint64_t kTaskVmaReclaimedPages;
 	// Completed burials since boot — the undertaker's census, and the leak
 	// test's clock (a cycle is done when the funeral is, not when the task
 	// exited). Incremented as task_destroy's very last act.
