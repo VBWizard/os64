@@ -726,6 +726,24 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
         thread->regs.RDI=mp_isrSavedRDI[apic_id];
         thread->regs.RSP=mp_isrSavedRSP[apic_id];
         thread->regs.RBP=mp_isrSavedRBP[apic_id];
+        // R8-R15 joined the save set 2026-08-14. The asm prologue has always
+        // captured them into the per-core arrays, but nothing carried them
+        // into thread->regs — so a thread resuming on a DIFFERENT core ran
+        // with whatever R8-R15 the previous tenant of that core left behind.
+        // Two consequences, both observed in the hog -n 6 crash frames: a
+        // migrated thread computes on a stranger's registers, and ring 3
+        // inherits raw kernel pointers (R10 held a kernel text address in a
+        // user segfault report — an info leak on top of the corruption).
+        // Same-core resumes were accidentally correct, which is why this
+        // survived every single-core test since SMP bring-up.
+        thread->regs.R8=mp_isrSavedR8[apic_id];
+        thread->regs.R9=mp_isrSavedR9[apic_id];
+        thread->regs.R10=mp_isrSavedR10[apic_id];
+        thread->regs.R11=mp_isrSavedR11[apic_id];
+        thread->regs.R12=mp_isrSavedR12[apic_id];
+        thread->regs.R13=mp_isrSavedR13[apic_id];
+        thread->regs.R14=mp_isrSavedR14[apic_id];
+        thread->regs.R15=mp_isrSavedR15[apic_id];
         thread->regs.RFLAGS=mp_isrSavedRFlags[apic_id];
         thread->regs.ES=mp_isrSavedES[apic_id];
         thread->regs.FS=mp_isrSavedFS[apic_id];
@@ -760,6 +778,17 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
     mp_isrSavedRDI[apic_id]=thread->regs.RDI;
     mp_isrSavedRSP[apic_id]=thread->regs.RSP;
     mp_isrSavedRBP[apic_id]=thread->regs.RBP;
+    // The restore half of the R8-R15 fix (see scheduler_store_thread): the
+    // asm epilogue loads R8-R15 from these arrays, so without this a
+    // dispatched thread received the core's previous tenant's values.
+    mp_isrSavedR8[apic_id]=thread->regs.R8;
+    mp_isrSavedR9[apic_id]=thread->regs.R9;
+    mp_isrSavedR10[apic_id]=thread->regs.R10;
+    mp_isrSavedR11[apic_id]=thread->regs.R11;
+    mp_isrSavedR12[apic_id]=thread->regs.R12;
+    mp_isrSavedR13[apic_id]=thread->regs.R13;
+    mp_isrSavedR14[apic_id]=thread->regs.R14;
+    mp_isrSavedR15[apic_id]=thread->regs.R15;
     // ── BORROWED-STACK TRIPWIRE (2026-08-12, the stack poisoner's headstone) ─
     // A context about to be dispatched whose saved RSP lies inside ANY core's
     // per-core scratch stack was PARKED THERE — it slept or was preempted
