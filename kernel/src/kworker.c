@@ -1,6 +1,7 @@
 #include "kworker.h"
 
 #include "memory/allocator.h"
+#include "memory/paging.h"   // paging_sentinel_check — the burial/compaction brackets
 
 #include "CONFIG.h"
 #include "kernel.h"
@@ -25,6 +26,8 @@ static bool kworker_run_maintenance(void)
 	bool did_work = false;
 	int reaped = task_reap_eligible_zombies(KWORKER_REAP_BATCH_SIZE);
 
+	paging_sentinel_check("kworker: after zombie reap");
+
 	if (reaped > 0) {
 		// "Buried" counts BOTH phases of the two-phase burial (task.c): a
 		// corpse unlinked this pass and one freed this pass each score 1.
@@ -47,7 +50,13 @@ static bool kworker_run_maintenance(void)
 	// below: maintenance that reschedules itself as "work" never sleeps, and
 	// a bounded idempotent pass has nothing urgent to stay awake for.
 	static uint32_t alloc_report_countdown = KWORKER_ALLOC_REPORT_EVERY;
+	// The other bracket (2026-08-14): compaction REWRITES the allocator's
+	// bookkeeping, and a merge that swallowed a live block would hand somebody
+	// else's memory out — page tables included. Cheap to ask, and it runs on
+	// exactly the cadence the suspect workload generates.
+	paging_sentinel_check("kworker: before allocator_maintain");
 	allocator_maintain(KWORKER_ALLOC_MAINTAIN_BATCH);
+	paging_sentinel_check("kworker: after allocator_maintain");
 	if (--alloc_report_countdown == 0) {
 		alloc_report_countdown = KWORKER_ALLOC_REPORT_EVERY;
 		allocator_debug_report();

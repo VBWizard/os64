@@ -615,6 +615,45 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 	if (ctx != NULL) {
 		exception_report_registers(ctx, false);  // the OS survives this — ordinary log, in order
 
+		// SEGFAULT FORENSICS (born as the hog -n 6 stampede hunt's TEMP DIAG,
+		// 2026-08-14; promoted to permanent at the 2026-08-15 review — three
+		// lines per segfault, and exactly the three that discriminate the
+		// hard theories). A fault frame that contradicts itself — push-rbp
+		// at RIP but a read fault at an unrelated address — means frame and
+		// CR2 are not the same instant. What settles it: the CR3 actually
+		// loaded vs the task the core believes it runs, which thread the
+		// scheduler thinks is here, and whether the frame's own RSP/RIP/CR2
+		// translate under this task's tables. If CR3 belongs to someone
+		// else, it is a resume/migration mix-up wearing a segfault's clothes.
+		{
+			uint64_t liveCr3;
+			__asm__ volatile("mov %0, cr3" : "=r"(liveCr3));
+			core_local_storage_t *dcls = get_core_local_storage();
+			thread_t *dthr = (dcls != NULL) ? dcls->currentThread : NULL;
+			uintptr_t rspPhys = task->pml4v ? paging_walk_paging_table((pt_entry_t *)task->pml4v, ctx->rsp) : 0;
+			uintptr_t ripPhys = task->pml4v ? paging_walk_paging_table((pt_entry_t *)task->pml4v, ctx->rip) : 0;
+			uintptr_t cr2Phys = task->pml4v ? paging_walk_paging_table((pt_entry_t *)task->pml4v, cr2) : 0;
+			FAULT_PRINT(false, "  forensics: live CR3 0x%016lx  task->pml4 0x%016lx  cls->task %lu  thread 0x%08x\n",
+			            liveCr3, (uint64_t)(uintptr_t)task->pml4, task->taskID,
+			            dthr ? dthr->threadID : 0);
+			FAULT_PRINT(false, "  forensics: walk(task): rsp->0x%016lx  rip->0x%016lx  cr2->0x%016lx  [0xbadbadba = unmapped]\n",
+			            rspPhys, ripPhys, cr2Phys);
+			// The smoking gun for the scribbled-text theory: the bytes the
+			// CPU actually executed, read through the task's own walk + HHDM.
+			// If RIP symbolizes to a known function but these bytes aren't
+			// that function's prologue, the text frame was overwritten at
+			// runtime (freed-and-reallocated, or a stray write) — the fault
+			// frame was honest and the on-disk disassembly was the lie.
+			if (ripPhys != 0 && ripPhys != 0xbadbadba)
+			{
+				uint8_t *code = (uint8_t *)(((ripPhys & ~(uintptr_t)0xFFF) | kHHDMOffset)
+				                            + (ctx->rip & 0xFFF));
+				FAULT_PRINT(false, "  forensics: bytes at RIP: %02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x\n",
+				            code[0], code[1], code[2], code[3], code[4], code[5], code[6], code[7],
+				            code[8], code[9], code[10], code[11], code[12], code[13], code[14], code[15]);
+			}
+		}
+
 		// And the call chain. NOTRACE disables everything inside.
 		stack_trace_user(task, rip, ctx->rbp);
 	} else {

@@ -262,8 +262,68 @@ void update_existing_status_entry(memory_status_t* entry, uint64_t address, uint
 	entry->in_use = in_use;
 }
 
+// How full the table has ever been. The SLOPE of this under a workload is the
+// diagnostic — a table that climbs steadily is a fragmentation problem wearing
+// a countdown timer.
+uint64_t kMemoryStatusHighWater = 0;
+
 memory_status_t* make_new_status_entry(uint64_t address, uint64_t length, bool in_use)
 {
+	// THE GUARD THAT WAS NEVER HERE (2026-08-15).
+	//
+	// This function appended an entry and incremented the index, forever, with
+	// no bound of any kind. INITIAL_MEMORY_STATUS_COUNT (CONFIG.h) sizes the
+	// table at allocator_init and nothing has ever grown it or checked it — the
+	// word INITIAL was carrying the whole plan.
+	//
+	// What that costs, in full: when the table fills, the next entry is written
+	// PAST THE END, into whatever allocation follows it in physical memory. On
+	// the P5 that neighbour is the paging pool, whose very first page is the
+	// KERNEL'S OWN PML4 — so entry number 100,001 landed on PML4[0] and cleared
+	// its flag bits, unmapping the entire lower half of the kernel address
+	// space in one store. The machine kept running (kernel text and the HHDM
+	// live in the upper half) until the next disk write touched the NVMe DMA
+	// bounce buffer at its low identity address, and died there, four levels
+	// and a whole subsystem away from the actual bug.
+	//
+	// The tell was the timing: it happened between 5200 and 5800 seconds into
+	// EVERY run of the same workload (`watch -n 1 "ps -ef"` — a husk and a ps
+	// created and buried every second). That is not a race, it is a monotonic
+	// overrun reaching a fixed wall at a fixed rate. Chris called "it's being
+	// re-allocated" off the zeroes on the screen, and a hardware watchpoint on
+	// PML4[0] named this function on the first hit.
+	//
+	// So: PANIC at the wall, never write past it. This guard is deliberately
+	// panic-ONLY (2026-08-15 review find): its first cut compacted here, but
+	// the carve path (allocate_memory_at_address_internal) holds `memaddr` —
+	// a raw pointer INTO kMemoryStatus — across its calls to this function,
+	// and compaction RELOCATES entries, so the carve's fixup would then write
+	// through a dangling pointer onto an arbitrary row: handing out memory
+	// somebody owns, the exact crime this guard exists to prevent. The
+	// compact-with-headroom pass now runs at the TOP of the carve, before
+	// any pointer into the table is taken; by the time execution reaches
+	// here, a full table means compaction already failed to help.
+	if (kMemoryStatusCurrentPtr >= INITIAL_MEMORY_STATUS_COUNT)
+		panic("allocator: memory status table is full (%lu of %u entries). The next "
+		      "entry would be written PAST THE END of the table, over whatever "
+		      "allocation follows it. Raise INITIAL_MEMORY_STATUS_COUNT, or find "
+		      "what is fragmenting memory this badly.\n",
+		      (uint64_t)kMemoryStatusCurrentPtr, INITIAL_MEMORY_STATUS_COUNT);
+
+	// Announce the approach, once per 10% crossed, so the wall is visible long
+	// before it is hit — the whole point of a high-water mark is that somebody
+	// sees the climb.
+	if (kMemoryStatusCurrentPtr > kMemoryStatusHighWater)
+	{
+		uint64_t tenth = INITIAL_MEMORY_STATUS_COUNT / 10;
+		if (tenth != 0 &&
+		    (kMemoryStatusCurrentPtr / tenth) > (kMemoryStatusHighWater / tenth))
+			printd(DEBUG_ALLOCATOR, "allocator: status table high-water %lu of %u entries (%lu%%)\n",
+			       (uint64_t)kMemoryStatusCurrentPtr, INITIAL_MEMORY_STATUS_COUNT,
+			       (uint64_t)(kMemoryStatusCurrentPtr * 100 / INITIAL_MEMORY_STATUS_COUNT));
+		kMemoryStatusHighWater = kMemoryStatusCurrentPtr;
+	}
+
 	kMemoryStatus[kMemoryStatusCurrentPtr].startAddress = address;
 	kMemoryStatus[kMemoryStatusCurrentPtr].length = length;
 	kMemoryStatus[kMemoryStatusCurrentPtr].in_use = in_use;
@@ -274,6 +334,23 @@ memory_status_t* make_new_status_entry(uint64_t address, uint64_t length, bool i
 uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_t requested_length, bool use_address, bool page_aligned)
 {
 	uint64_t irqflags = allocator_lock();
+
+	// THE TABLE-FULL GUARD'S COMPACTION LIVES HERE, NOT AT MINT TIME
+	// (2026-08-15 review find). A carve mints up to TWO new entries (the
+	// allocation, plus a block-before split) while holding `memaddr` — a raw
+	// pointer INTO kMemoryStatus — across the mints, then writes the leftover
+	// fixup through it. Compacting inside make_new_status_entry relocates the
+	// entry memaddr names and that fixup rewrites an arbitrary row. So the
+	// recovery attempt runs NOW, before any pointer into the table exists;
+	// the guard at mint time is a panic-only backstop that can no longer
+	// corrupt what it protects. Headroom of 2 = this function's worst case.
+	if (kMemoryStatusCurrentPtr + 2 >= INITIAL_MEMORY_STATUS_COUNT)
+	{
+		printd(DEBUG_ALLOCATOR, "allocator: status table full (%lu entries) — compacting before the carve\n",
+		       (uint64_t)kMemoryStatusCurrentPtr);
+		compact_memory_array();
+	}
+
 	memory_status_t* memaddr;
 	uint64_t retVal = 0;
 	uint64_t found_block_original_length = 0;
@@ -443,14 +520,48 @@ uint64_t free_memory(uint64_t address)
 	memory_status_t *status_entry = &kMemoryStatus[statusIdx];
 	if (status_entry != NULL)
 	{
+		// THE EXACT-BASE TRIPWIRE (2026-08-14, the scribbled-text hunt). The
+		// lookup above matches by CONTAINMENT: any address INSIDE a live
+		// extent finds that extent, so a stray or stale free — a page-table
+		// walk that resolved to somebody else's frame, a double-free of an
+		// address that was reallocated in the interim — silently released the
+		// ENTIRE innocent extent, whose frames the allocator then re-issued
+		// and zeroed under their living owner. That is how a running task's
+		// TEXT page turns into garbage instructions mid-run (hog -n 6, task
+		// 55, three simultaneous impossible segfaults). Every legitimate
+		// caller in the tree frees the extent BASE it was handed: kfree, the
+		// guarded-stack free, the trampoline free, unmap's per-page extents.
+		// A mid-extent free can only be the bug class above — refuse loudly,
+		// naming the address, the extent it landed inside, and its owner-shape.
+		//
+		// TWO legal shapes, not one (the first cut of this tripwire wedged
+		// boot at NVMe init by rejecting the second): an ALIGNED allocation's
+		// extent is recorded from the UNALIGNED carve start, while the caller
+		// is handed the rounded-up address — the allocator's own carve comment
+		// says so in as many words. So a free of either the extent base OR its
+		// first page boundary is a caller returning exactly what it was given;
+		// anything else landed mid-extent through arithmetic or staleness.
+		if (address != status_entry->startAddress &&
+		    address != round_up_to_nearest_page(status_entry->startAddress))
+			panic("free_memory: 0x%016lx is INSIDE extent 0x%016lx (len 0x%lx) but is neither its base "
+			      "nor its aligned base — stray or stale free; refusing to release the extent\n",
+			      address, status_entry->startAddress, status_entry->length);
 		printd(DEBUG_ALLOCATOR | DEBUG_DETAILED, "allocator: Found block to free, address = 0x%016lx, length=0x%016lx\n", status_entry->startAddress, status_entry->length);
 		status_entry->in_use = false;
-		//NOTE: If poison-on-free is ever wanted, the memset below is now safe —
-		//the extent is guaranteed HHDM-mapped until the unmap call after it.
-		//Left disabled: it also poisons pages still mapped (and possibly live)
-		//in task address spaces, which is the point of the tripwire but should
-		//be turned on deliberately, not as a side effect of this change.
-//		memset((void*)(status_entry->startAddress + kHHDMOffset), 0xFE, status_entry->length);
+		// POISON-ON-FREE, enabled 2026-08-14 for the scribbled-text hunt and
+		// kept on by ruling (Chris, 2026-08-15) as a CONFIG.h knob — see
+		// ALLOCATOR_POISON_ON_FREE there for the what and the why. Its first
+		// out-of-guest catch came the day of the ruling: a remote qISleep
+		// walk stepped through a stale ->next into a wall of 0xFE and knew
+		// INSTANTLY it was reading a freed thread_t. Runtime-gated on
+		// kHHDMMaintenanceEnabled EXACTLY like the zero-on-allocate choke
+		// point above: before maintenance is live the HHDM alias is not
+		// guaranteed mapped, and the first ungated build wedged at tick 8
+		// poisoning an early-boot free.
+#if ALLOCATOR_POISON_ON_FREE
+		if (kHHDMMaintenanceEnabled)
+			memset((void*)(status_entry->startAddress + kHHDMOffset), 0xFE, status_entry->length);
+#endif
 
 		//Drop the HHDM mapping of every page this extent fully owns (partial
 		//boundary pages that may host live neighbouring allocations stay

@@ -8,6 +8,7 @@
 #include "memory/memset.h"
 #include "CONFIG.h"
 #include "serial_logging.h"
+#include "strings/sprintf.h"   // snprintf — paging_report_walk's direct-to-wire copy
 #include "memcpy.h"
 #include "panic.h"
 #include "printd.h"
@@ -54,6 +55,256 @@ static inline pt_entry_t table_entry(uint64_t physical_address, uint64_t flags) 
 #define PDPT_INDEX(addr)  (((addr) >> 30) & 0x1FF)
 #define PD_INDEX(addr)    (((addr) >> 21) & 0x1FF)
 #define PT_INDEX(addr)    (((addr) >> 12) & 0x1FF)
+
+// ── "Where did my mapping go?" (2026-08-14) ─────────────────────────────────
+//
+// A four-level post-mortem for ONE virtual address, written the day the NVMe
+// DMA bounce buffer's identity mapping vanished on the P5 — twice, with two
+// DIFFERENT wrong answers: present-but-read-only the first time, walk-fails-
+// entirely the second. One wrong value is a bug. Two different wrong values in
+// the same slot means the slot is not exclusively a page table any more.
+//
+// "The mapping is gone" is a symptom. These lines are the evidence:
+//
+//   - the entry at EVERY level, so a zeroed leaf (somebody wrote data over the
+//     page table) is distinguishable from a rewritten PDE (the table itself was
+//     replaced) and from damage higher up;
+//   - the PHYSICAL page each table lives in, so it can be compared against
+//     whatever the caller recorded when the mapping was healthy;
+//   - whether the leaf table sits inside the paging pool, which is the only
+//     place a kernel table is ever supposed to come from; and
+//   - the first words OF the leaf table. If a page table's contents read as
+//     ASCII text, then some other owner is using that page as a data buffer,
+//     and that one line is the entire answer.
+//
+// Prints direct (screen AND wire), like a dying report: every caller is about
+// to panic, and a diagnostic that depends on logd being alive is a diagnostic
+// that goes missing exactly when it is needed.
+#define WALK_EMIT(fmt, ...) do { \
+        printf(fmt, ##__VA_ARGS__); \
+        char _w[256]; \
+        snprintf(_w, sizeof(_w), fmt, ##__VA_ARGS__); \
+        serial_print_string(_w); \
+    } while (0)
+
+#define WALK_LEVEL(name, entry) \
+        WALK_EMIT("  %-5s[%3lu] = 0x%016lx  (present=%lu write=%lu user=%lu, next table phys 0x%012lx)\n", \
+                  name, (uint64_t)idx, (uint64_t)(entry), \
+                  (uint64_t)((entry) & PAGE_PRESENT ? 1 : 0), \
+                  (uint64_t)((entry) & PAGE_WRITE   ? 1 : 0), \
+                  (uint64_t)((entry) & PAGE_USER    ? 1 : 0), \
+                  (uint64_t)((entry) & ~0xFFFULL))
+
+// ── Mapping sentinels (2026-08-14) ──────────────────────────────────────────
+//
+// The tripwire in nvme.c catches the DMA buffer's mapping already broken, but
+// only at the next disk I/O — which can be a long way from whoever broke it.
+// These sentinels close that gap: register a mapping that must NEVER change,
+// then call the check at the phase boundaries of anything suspected. The first
+// checkpoint to see the damage names the phase, and with `watch -n 1 "ps -ef"`
+// running (two task lifecycles a SECOND — a husk to parse, a ps to run, each
+// with a fresh PML4, a fresh table arena, and a burial that frees all of it)
+// the answer arrives in one boot instead of one evening.
+//
+// Deliberately NOT a debug-gated feature: the check is a couple of page-table
+// walks at events that happen a few times a second, and a hunt instrument that
+// only runs when you remembered to ask for it is one that misses the one run
+// that mattered.
+#define PAGING_MAX_SENTINELS 8
+
+typedef struct {
+	uintptr_t   va;
+	const char *name;
+	uint64_t    pte;        // what the leaf entry said when it was healthy
+	uintptr_t   ptPage;     // and which physical page the leaf table lived in
+	bool        armed;
+} paging_sentinel_t;
+
+static paging_sentinel_t kSentinels[PAGING_MAX_SENTINELS];
+static int kSentinelCount = 0;
+
+void paging_sentinel_add(uintptr_t va, const char *name)
+{
+	if (kSentinelCount >= PAGING_MAX_SENTINELS)
+		return;
+	paging_sentinel_t *s = &kSentinels[kSentinelCount];
+	s->va     = va & ~(uintptr_t)0xFFF;
+	s->name   = name;
+	s->pte    = (uint64_t)paging_walk_paging_table_keep_flags((pt_entry_t *)kKernelPML4v, s->va, true);
+	s->ptPage = paging_leaf_table_phys((pt_entry_t *)kKernelPML4v, s->va);
+	s->armed  = true;
+	kSentinelCount++;
+	printd(DEBUG_PAGING, "PAGING: sentinel armed on %s, VA 0x%016lx (pte 0x%016lx, leaf table phys 0x%012lx)\n",
+	       name, s->va, s->pte, (uint64_t)s->ptPage);
+}
+
+void paging_sentinel_check(const char *where)
+{
+	for (int i = 0; i < kSentinelCount; i++) {
+		paging_sentinel_t *s = &kSentinels[i];
+		if (!s->armed)
+			continue;
+
+		uint64_t now = (uint64_t)paging_walk_paging_table_keep_flags((pt_entry_t *)kKernelPML4v, s->va, true);
+		if (now == s->pte)
+			continue;
+
+		// Disarm FIRST: paging_report_walk and panic() both map and print, and
+		// a sentinel that re-fires inside its own report writes a loop, not a
+		// diagnosis.
+		s->armed = false;
+
+		printf("\n>>> MAPPING SENTINEL BROKEN at [%s] <<<\n", where);
+		printf(">>> %s: VA 0x%016lx entry was 0x%016lx at arm time, is 0x%016lx now <<<\n",
+		       s->name, s->va, s->pte, now);
+		serial_print_string("\n>>> MAPPING SENTINEL BROKEN <<<\n");
+
+		paging_report_walk((pt_entry_t *)kKernelPML4v, s->va, s->name);
+
+		uintptr_t ptNow = paging_leaf_table_phys((pt_entry_t *)kKernelPML4v, s->va);
+		printf(">>> leaf page table was at phys 0x%012lx when armed, is 0x%012lx now — %s <<<\n",
+		       (uint64_t)s->ptPage, (uint64_t)ptNow,
+		       (ptNow == s->ptPage) ? "SAME PAGE (contents rewritten in place)"
+		                            : "DIFFERENT PAGE (the table was replaced or lost)");
+
+		panic("Mapping sentinel '%s' broken at [%s] — see the walk above. The phase "
+		      "named in the brackets is the one that did it.\n", s->name, where);
+	}
+}
+
+/// @brief Fill out[0..3] with the ADDRESSES of the four entries that map `va`
+///        — PML4E, PDPTE, PDE, PTE — so a caller can watch the ENTIRE CHAIN
+///        rather than guessing which level will be attacked.
+///
+/// Written 2026-08-14, the night a watchpoint aimed at the leaf PTE watched
+/// the wrong eight bytes: the P5's corruption zeroed the flag bits of
+/// PML4[0] itself, four levels up, unmapping the whole lower half of the
+/// kernel address space in a single store. Four levels, four debug registers
+/// — the hardware budget happens to be exactly the size of the question.
+///
+/// Returns the number of levels resolved (4 when the whole chain exists);
+/// entries beyond that are left zero.
+int paging_walk_entry_addresses(pt_entry_t *pml4v, uint64_t va, uintptr_t out[4])
+{
+	for (int i = 0; i < 4; i++)
+		out[i] = 0;
+
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+
+	out[0] = (uintptr_t)&pml4v[PML4_INDEX(va)];
+	uint64_t e = pml4v[PML4_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 1;
+
+	pt_entry_t *pdpt = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	out[1] = (uintptr_t)&pdpt[PDPT_INDEX(va)];
+	e = pdpt[PDPT_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 2;
+
+	pt_entry_t *pd = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	out[2] = (uintptr_t)&pd[PD_INDEX(va)];
+	e = pd[PD_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 3;
+
+	pt_entry_t *pt = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	out[3] = (uintptr_t)&pt[PT_INDEX(va)];
+	return 4;
+}
+
+/// @brief Return the ADDRESS OF THE PAGE TABLE ENTRY that maps `va` — that is,
+///        the eight bytes a watchpoint should be aimed at to catch whoever
+///        rewrites this mapping. Zero if the walk dies before the leaf.
+///
+/// The returned address is the HHDM alias of the leaf table plus the entry's
+/// index. That is the ONLY alias the pool is mapped through
+/// (kPagingPagesBaseAddressV is `phys | kHHDMOffset`), so a single watchpoint
+/// covers every legitimate route to these bytes — see watchpoint.h's limit 2
+/// for why that sentence had to be checked rather than assumed.
+uintptr_t paging_pte_address(pt_entry_t *pml4v, uint64_t va)
+{
+	uintptr_t ptPhys = paging_leaf_table_phys(pml4v, va);
+	if (ptPhys == 0)
+		return 0;
+	return (uintptr_t)PHYS_TO_VIRT(ptPhys) + (PT_INDEX(va) * sizeof(uint64_t));
+}
+
+/// @brief Return the physical page holding the LEAF page table for `va`, or 0
+///        if the walk dies before reaching it. Recorded while a mapping is
+///        healthy, it turns a later failure into a was/is comparison.
+uintptr_t paging_leaf_table_phys(pt_entry_t *pml4v, uint64_t va)
+{
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+
+	uint64_t e = pml4v[PML4_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 0;
+	pt_entry_t *pdpt = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+
+	e = pdpt[PDPT_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 0;
+	pt_entry_t *pd = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+
+	e = pd[PD_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 0;
+	return (uintptr_t)(e & ~0xFFFULL);
+}
+
+void paging_report_walk(pt_entry_t *pml4v, uint64_t va, const char *what)
+{
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+
+	WALK_EMIT("PAGE TABLE WALK for %s, VA 0x%016lx (pml4 at 0x%016lx):\n",
+	          what, va, (uint64_t)(uintptr_t)pml4v);
+
+	uint64_t idx = PML4_INDEX(va);
+	uint64_t e = pml4v[idx];
+	WALK_LEVEL("PML4", e);
+	if (!(e & PAGE_PRESENT)) { WALK_EMIT("  ...PML4 entry absent — nothing below it exists.\n"); return; }
+
+	pt_entry_t *pdpt = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	idx = PDPT_INDEX(va);
+	e = pdpt[idx];
+	WALK_LEVEL("PDPT", e);
+	if (!(e & PAGE_PRESENT)) { WALK_EMIT("  ...PDPT entry absent — the 1GB region is unmapped.\n"); return; }
+
+	pt_entry_t *pd = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	idx = PD_INDEX(va);
+	e = pd[idx];
+	WALK_LEVEL("PD", e);
+	if (!(e & PAGE_PRESENT)) { WALK_EMIT("  ...PD entry absent — the 2MB region is unmapped.\n"); return; }
+
+	uintptr_t ptPhys = (uintptr_t)(e & ~0xFFFULL);
+	pt_entry_t *pt = (pt_entry_t *)PHYS_TO_VIRT(ptPhys);
+	idx = PT_INDEX(va);
+	e = pt[idx];
+	WALK_LEVEL("PT", e);
+
+	// Provenance: kernel tables come from the pool and nowhere else.
+	uintptr_t poolEnd = kPagingPagesBaseAddressP + (kPagingPagesCount * PAGE_SIZE);
+	WALK_EMIT("  leaf table phys 0x%012lx — pool is [0x%012lx,0x%012lx) => %s\n",
+	          (uint64_t)ptPhys, (uint64_t)kPagingPagesBaseAddressP, (uint64_t)poolEnd,
+	          (ptPhys >= kPagingPagesBaseAddressP && ptPhys < poolEnd)
+	              ? "INSIDE the pool (expected for a kernel table)"
+	              : "*** OUTSIDE THE POOL — this is not a pool-drawn kernel table ***");
+
+	// And the smoking gun, if there is one: does this "page table" read as text?
+	WALK_EMIT("  leaf table head: 0x%016lx 0x%016lx 0x%016lx 0x%016lx\n",
+	          pt[0], pt[1], pt[2], pt[3]);
+	{
+		char ascii[33];
+		const unsigned char *raw = (const unsigned char *)pt;
+		int printable = 0;
+		for (int i = 0; i < 32; i++) {
+			unsigned char c = raw[i];
+			ascii[i] = (c >= 0x20 && c < 0x7F) ? (char)c : '.';
+			if (ascii[i] != '.') printable++;
+		}
+		ascii[32] = '\0';
+		WALK_EMIT("  leaf table as text: \"%s\"%s\n", ascii,
+		          printable > 20 ? "   <<< THAT IS DATA, NOT A PAGE TABLE" : "");
+	}
+}
 
 void validatePagingHierarchy(uintptr_t address) {
     uintptr_t* pml4 = (uintptr_t*)kKernelPML4v;
@@ -176,6 +427,90 @@ static uintptr_t draw_table_page(struct arena *source, const char *level, uint64
     return get_paging_table_page();
 }
 
+/// @brief One level of the map walk: return the next-level table, creating it
+/// atomically if absent.
+///
+/// CONCURRENCY (2026-08-15 — the burn's second catch). paging_map_page has no
+/// lock, and for two years never needed one: every intermediate table under
+/// the kernel PML4 was built at boot, on one core, so concurrent callers only
+/// ever stored LEAF entries — different 8-byte slots, no conflict. The first
+/// workload that made two cores create the SAME missing intermediate
+/// simultaneously (concurrent per-I/O kmalloc_dma PRP-list allocations
+/// landing above 4GB — identity space no boot had ever touched) hit the
+/// textbook lost update: both saw not-present, both drew a fresh table, both
+/// stored, last store won, and the loser's freshly-written PTE sat in an
+/// orphaned table no walk would ever reach. kmalloc_dma then memset a VA it
+/// had "just mapped" and died on a not-present #PF (QEMU burn: CR2
+/// 0x100c80000, every intermediate present, PT[128] == 0 — read from the
+/// halted guest's own tables via the monitor).
+///
+/// The fix is CAS, deliberately NOT a lock: draw_table_page can kmalloc (an
+/// arena grows on demand), kmalloc takes kMemoryStatusLock, and the
+/// allocator's HHDM choke points call back into paging while HOLDING that
+/// lock — a create-lock here is an ABBA deadlock with a fuse timed to the
+/// first concurrent workload. Losing the install CAS orphans the drawn page:
+/// an arena page dies with its task at burial anyway, and a pool page is a
+/// one-page leak on an event rare enough to be a log line (two cores racing
+/// to create the SAME entry). Announced when it happens, never silent.
+///
+/// The present-entry flag merge is a CAS loop for the same reason: two cores
+/// OR-ing different rights (one WRITE, one USER) through a plain
+/// read-modify-write could drop one of them. WRITE ONLY IF IT CHANGES
+/// (2026-08-14) is preserved exactly: an entry that already carries the
+/// needed rights is never stored to — it would dirty the most contended
+/// cache line in the machine on every walk, storm any hardware watchpoint
+/// armed on the entry (the #DB triple-fault that taught us), and destroy the
+/// forensic meaning of "who last wrote this entry?".
+static pt_entry_t *paging_walk_or_create_level(pt_entry_t *table, uint64_t idx,
+                                               uint64_t tableRequiredFlags,
+                                               struct arena *tableSource,
+                                               const char *level, uint64_t va)
+{
+    uint64_t entry = table[idx];
+
+    while (1) {
+        if (entry & PAGE_PRESENT) {
+            uint64_t updated = (entry & ~0xFFFULL) | ((entry | tableRequiredFlags) & 0xFFFULL);
+            if (updated == entry)
+                return (pt_entry_t *)PHYS_TO_VIRT(entry & ~0xFFFULL);
+            uint64_t witnessed = __sync_val_compare_and_swap(&table[idx], entry, updated);
+            if (witnessed == entry)
+                return (pt_entry_t *)PHYS_TO_VIRT(updated & ~0xFFFULL);
+            entry = witnessed;   // someone else moved it — re-evaluate from their value
+            continue;
+        }
+
+        // Absent: draw, zero, THEN publish — a table must never be reachable
+        // before it is blank. The CAS is the publication.
+        uint64_t new_phys = draw_table_page(tableSource, level, va);
+        pt_entry_t *new_page = (pt_entry_t *)PHYS_TO_VIRT(new_phys);
+        // Sanity: the drawn page's VA must land in the HHDM window. The old
+        // form of this check compared bits 32-63 against 0xFFFF8000, which
+        // silently demanded phys < 4GB — false the moment the (honestly
+        // funded, ~20MB) pool lands above that line. Masking off the low 47
+        // bits (the physical part of an HHDM alias) and comparing what
+        // remains against kHHDMOffset asks the intended question at any
+        // physical address.
+        if (((uintptr_t)new_page & ~(uintptr_t)0x7FFFFFFFFFFFULL) != kHHDMOffset)
+            panic("Bad page table page address. (0x%016lx)  kHHDMOffset = 0x%016lx\n", new_page, kHHDMOffset);
+        memset(new_page, 0, PAGE_SIZE);
+
+        uint64_t desired = new_phys | tableRequiredFlags | PAGE_PRESENT;
+        uint64_t witnessed = __sync_val_compare_and_swap(&table[idx], entry, desired);
+        if (witnessed == entry)
+            return new_page;
+
+        // Lost the creation race: adopt the winner's table and loop — their
+        // entry may still need our required flags OR'd in, which the present
+        // branch above handles. Our drawn page is orphaned (see the block
+        // comment for why that beats a deadlock-prone lock).
+        printd(DEBUG_PAGING,
+               "PAGING: %s creation race at VA 0x%016lx — winner's table adopted, %s page 0x%016lx orphaned\n",
+               level, va, tableSource ? "arena" : "pool", new_phys);
+        entry = witnessed;
+    }
+}
+
 void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
     // Align addresses to 4 KB boundaries
     physical_address &= PAGE_ADDRESS_MASK;
@@ -203,71 +538,22 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
     // paging.h and the design's charter in PAGING_ARENA.md.
     struct arena *tableSource = paging_table_arena_for(pml4v);
 
-    // Step 1: Traverse or allocate the PDPT table
-    pt_entry_t *pdpt_page;
-    uint64_t pml4e = pml4v[PML4_INDEX(virtual_address)];
+    // Steps 1-3: walk (or atomically create) the three intermediate levels.
+    // Each used to be an open-coded block here; the lost-update race between
+    // two creators of the same missing table, the CAS that fixes it, and the
+    // preserved WRITE-ONLY-IF-IT-CHANGES discipline (2026-08-14) are all
+    // documented once, on paging_walk_or_create_level above.
+    pt_entry_t *pdpt_page = paging_walk_or_create_level(pml4v, PML4_INDEX(virtual_address),
+                                                        tableRequiredFlags, tableSource,
+                                                        "PDPT", virtual_address);
 
-    if (pml4e & PAGE_PRESENT) {
-        // Combine existing flags with new flags
-        pml4v[PML4_INDEX(virtual_address)] = (pml4e & ~0xFFF) | ((pml4e | tableRequiredFlags) & 0xFFF);
-        uint64_t pdpt_phys = pml4v[PML4_INDEX(virtual_address)] & ~0xFFF;
-        pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(pdpt_phys);
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPDPT present @ 0x%016lx\n",pdpt_page);
-    } else {
-        // Allocate new PDPT page
-        uint64_t new_pdpt_phys = draw_table_page(tableSource, "PDPT", virtual_address);
-        pt_entry_t *new_pdpt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pdpt_phys);
-        memset(new_pdpt_page, 0, PAGE_SIZE);
-        pml4v[PML4_INDEX(virtual_address)] = new_pdpt_phys | tableRequiredFlags | PAGE_PRESENT;
-        pdpt_page = new_pdpt_page;
-    }
+    pt_entry_t *pd_page = paging_walk_or_create_level(pdpt_page, PDPT_INDEX(virtual_address),
+                                                      tableRequiredFlags, tableSource,
+                                                      "PD", virtual_address);
 
-    // Step 2: Traverse or allocate the PD table
-    pt_entry_t *pd_page;
-    uint64_t pdpt_entry = pdpt_page[PDPT_INDEX(virtual_address)];
-
-    if (pdpt_entry & PAGE_PRESENT) {
-        // Combine existing flags with new flags
-        pdpt_page[PDPT_INDEX(virtual_address)] = (pdpt_entry & ~0xFFF) | ((pdpt_entry | tableRequiredFlags) & 0xFFF);
-        uint64_t pd_phys = pdpt_page[PDPT_INDEX(virtual_address)] & ~0xFFF;
-        pd_page = (pt_entry_t *)PHYS_TO_VIRT(pd_phys);
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPD present @ 0x%016lx\n", pd_page);
-    } else {
-        // Allocate new PD page
-        uint64_t new_pd_phys = draw_table_page(tableSource, "PD", virtual_address);
-        pt_entry_t *new_pd_page = (pt_entry_t *)PHYS_TO_VIRT(new_pd_phys);
-        memset(new_pd_page, 0, PAGE_SIZE);
-        pdpt_page[PDPT_INDEX(virtual_address)] = new_pd_phys | tableRequiredFlags | PAGE_PRESENT;
-        pd_page = new_pd_page;
-    }
-
-    // Step 3: Traverse or allocate the PT table
-    pt_entry_t *pt_page;
-    uint64_t pd_entry = pd_page[PD_INDEX(virtual_address)];
-
-    if (pd_entry & PAGE_PRESENT) {
-       // Combine existing flags with new flags
-        pd_page[PD_INDEX(virtual_address)] = (pd_entry & ~0xFFF) | ((pd_entry | tableRequiredFlags) & 0xFFF);
-        uint64_t pt_phys = pd_page[PD_INDEX(virtual_address)] & ~0xFFF;
-        pt_page = (pt_entry_t *)PHYS_TO_VIRT(pt_phys);
-	    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tPT present @ 0x%016lx\n", pt_page);
-    } else {
-        // Allocate new PT page
-        uint64_t new_pt_phys = draw_table_page(tableSource, "PT", virtual_address);
-        pt_entry_t *new_pt_page = (pt_entry_t *)PHYS_TO_VIRT(new_pt_phys);
-        memset(new_pt_page, 0, PAGE_SIZE);
-        // Sanity: the pool page's VA must land in the HHDM window. The old
-        // form of this check compared bits 32-63 against 0xFFFF8000, which
-        // silently demanded phys < 4GB — false the moment the (honestly
-        // funded, ~20MB) pool lands above that line. Masking off the low 47
-        // bits (the physical part of an HHDM alias) and comparing what
-        // remains against kHHDMOffset asks the intended question at any
-        // physical address.
-        if (((uintptr_t)new_pt_page & ~(uintptr_t)0x7FFFFFFFFFFFULL) != kHHDMOffset)
-			panic("Bad page table entry address. (0x%016lx)  kHHDMOffset = 0x%016lx\n", new_pt_page, kHHDMOffset);
-		pd_page[PD_INDEX(virtual_address)] = new_pt_phys | tableRequiredFlags | PAGE_PRESENT;
-        pt_page = new_pt_page;
-    }
+    pt_entry_t *pt_page = paging_walk_or_create_level(pd_page, PD_INDEX(virtual_address),
+                                                      tableRequiredFlags, tableSource,
+                                                      "PT", virtual_address);
 
 	uint16_t finalFlags =  flags | PAGE_PRESENT;
     printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tSetting page table entry at 0x%016lx, index 0x%04x, to 0x%016lx, flags 0x%08x\n", pt_page, PT_INDEX(virtual_address), physical_address, finalFlags);

@@ -19,6 +19,14 @@
 #define KERNEL_PAGED_BASE_ADDRESS 0xFFFFFFFF80000000
 #define INITIAL_MEMORY_STATUS_COUNT 100000
 #define KERNEL_STACK_SIZE 20 * PAGE_SIZE
+// Poison every freed extent with 0xFE through its HHDM alias (allocator.c,
+// free_memory). A use-after-free then reads as unmistakable 0xFE bytes —
+// executing one faults fast and RECOGNIZABLY — instead of zeroed-then-
+// recycled data masquerading as valid. Born as scribbled-text hunt
+// instrumentation (2026-08-14); kept ON by ruling (Chris, 2026-08-15): the
+// tripwire culture pays for its memsets. Set to 0 for a build that skips
+// the per-free memset cost.
+#define ALLOCATOR_POISON_ON_FREE 1
 
 //Signal related
 #define SIGNAL_PROCESS_TICK_FREQUENCY 1 //20 MS if TICKS_PER_SECOND = 100 (1 tick every 10 MS)

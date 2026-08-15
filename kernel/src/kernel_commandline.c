@@ -131,6 +131,16 @@ bool kTestNmiProbe = false;
 // Kernel-mode and no VMA on purpose: that is the exact path a wild kernel
 // pointer takes, and the one Chris's soak fault took.
 bool kTestPageFault = false;
+// TESTWATCH: arm a hardware watchpoint on a bait variable and store to it,
+// twice — once in TRACE mode (report and keep running) and once in HALT mode.
+// Fifth member of the TESTPANIC family; proves DR programming, the #DB path,
+// slot attribution, the named report, and above all that a traced hit RESUMES.
+bool kTestWatchpoint = false;
+// WATCHDMA: arm a hardware watchpoint on each NVMe controller's write DMA
+// bounce buffer PAGE TABLE ENTRY (nvme.c). Born 2026-08-14 for the P5
+// corruption, and general on purpose: any mapping that must never change can
+// be watched the same way with WATCH=<addr> instead.
+bool kWatchDMA = false;
 // TESTGP: raise a deliberate #GP (a non-canonical dereference) right after the
 // post-boot tests — fourth member of the TESTPANIC family.
 //
@@ -161,6 +171,7 @@ extern char kTestsPolicyOverride[];
 // say so, because a typo silently landing you in the legacy mode is exactly
 // the kind of quiet regression the default flip exists to prevent.
 static char kSchedParam[16] = {0};
+extern char kWatchSpec[128];   // watchpoint.c owns it; the table below fills it
 
 // -----------------------------------------------------------------------
 // Kernel command-line parser definitions
@@ -258,6 +269,11 @@ static cmdopt_t cmdopts[] = {
     {"NOTRACE", OPT_BOOL, &kEnableStackTrace, false, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
     {"SCHED", OPT_STRING, kSchedParam, 0, sizeof(kSchedParam)},
+    // WATCH=<hexaddr>[:len[:kind[:action]]] — arm a hardware watchpoint at
+    // boot. One string rather than four flags because a watchpoint is one
+    // idea; the grammar (and its defaults: 8 bytes, on write, halt on hit)
+    // lives with the parser in watchpoint.c.
+    {"WATCH", OPT_STRING, kWatchSpec, 0, sizeof(kWatchSpec)},
     {"NOTESTS", OPT_BOOL, &kRunTests, false, 0},
     // The buffer cache's two knobs (block_cache.h): CACHE=<MB> sizes the
     // read-cache budget (default 64; 0 = off), NOCACHE is the diagnostic
@@ -291,6 +307,8 @@ static cmdopt_t cmdopts[] = {
     {"NMIPROBE", OPT_BOOL, &kTestNmiProbe, true, 0},
     {"TESTPF", OPT_BOOL, &kTestPageFault, true, 0},
     {"TESTGP", OPT_BOOL, &kTestGPFault, true, 0},
+    {"TESTWATCH", OPT_BOOL, &kTestWatchpoint, true, 0},
+    {"WATCHDMA", OPT_BOOL, &kWatchDMA, true, 0},
     {"EXCOLD", OPT_BOOL, &kUseOldExceptions, true, 0},
     // TESTS=panic|warn — one-boot override of every test's failure policy
     // (test_framework.h owns the taxonomy: warn / remount-ro / panic, the
@@ -311,12 +329,13 @@ static cmdopt_t cmdopts[] = {
     // fault. Add DEBUG_DETAILED for the per-fault VMA lookup detail.
     // Resolved faults are NOT on DEBUG_EXCEPTIONS anymore — opt in here.
     {"DEBUG_DEMAND_PAGING", OPT_UINT128_OR, &kDebugLevel, DEBUG_DEMAND_PAGING, 0},
-    // Task lifecycle: creation, the undertaker's burials, and — since
-    // 2026-08-13 — the DEFERRED RECLAIM announcement, one line per burial that
-    // leaves VMA backing pages behind for the page-refcount ruling. That last
-    // one is why this switch exists at all: the channel had no way to be turned
-    // on for a single boot, so the loudest thing on it could not be heard
-    // without recompiling. Add DEBUG_DETAILED for per-release refcount lines.
+    // Task lifecycle: creation, the undertaker's burials, and the per-burial
+    // VMA-backing announcement — born 2026-08-13 as the DEFERRED RECLAIM line
+    // (pages counted, not freed), reworded 2026-08-15 when the deferral was
+    // paid (pages freed, reclaim announced). That announcement is why this
+    // switch exists at all: the channel had no way to be turned on for a
+    // single boot, so the loudest thing on it could not be heard without
+    // recompiling. Add DEBUG_DETAILED for per-release refcount lines.
     {"DEBUG_TASK", OPT_UINT128_OR, &kDebugLevel, DEBUG_TASK, 0},
     {"LOGFILE", OPT_BOOL, &kOverrideFileLogging, true, 0},
     {"ROOT", OPT_STRING, kRootPartUUID, 0, 64},

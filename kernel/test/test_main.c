@@ -1125,23 +1125,36 @@ static bool test_env_growth(void)
 }
 
 
-// ── The task-teardown leak test (2026-08-13) ─────────────────────────────────
+// ── The task-teardown leak test (2026-08-13; sharpened 2026-08-15) ──────────
 //
-// THE PROOF. Task teardown does not reclaim everything — the VMA backing pages
-// wait on the page-refcount ruling, on purpose (task.c's deferral ledger). So
-// this test cannot assert "a task costs nothing". What it CAN assert, and does,
-// is the stronger useful thing:
+// THE PROOF, now at full strength. As written on 8/13, teardown deliberately
+// did not reclaim the VMA backing pages (the deferral ledger), so the test
+// asserted the strongest thing then true: every byte a cycle consumed was
+// either given back or COUNTED as deferred. The 8/13 comment here predicted:
+// "when the refcount ruling lands and the pages start coming back, both
+// sides fall to zero together and this test keeps passing without a line
+// changing." The deferral was paid 2026-08-15 (the P5 status-table overrun
+// was its bill — see task.c's ledger comment), both sides did fall to zero,
+// and the test DID keep passing — but a zero-equals-zero pass is weaker than
+// what is now true, so the assertion grew teeth the same day:
 //
-//     every byte a spawn→exit→burial cycle consumes is either given back,
-//     or counted.
+//     a spawn→exit→burial cycle costs NOTHING — allocator delta == 0 —
+//     and the reclaim provably RAN: the undertaker freed at least the
+//     fixture's guaranteed-per-task resident set, every cycle.
 //
-//   allocator bytes lost over one cycle  ==  bytes that cycle BOOKED as deferred
+// The second clause is the regression guard the first can't provide: a
+// demand-paging break that faulted nothing in would make the delta zero
+// vacuously. Requiring kTaskVmaReclaimedBytes to climb by the fixture's
+// floor proves pages were resident AND came back.
 //
-// An unknown leak — one nobody declared — breaks that equality by exactly its
-// own size, and the failure message names the number. When the refcount ruling
-// lands and the pages start coming back, both sides fall to zero together and
-// this test keeps passing without a line changing. It measures the INVARIANT,
-// not today's implementation.
+// The fixture matched the claim the same day (Chris's requirement: "a real
+// program with real multiple text pages, bss, heap pages"): /bin/glutton
+// deliberately touches ~4 text pages, a dirtied .data page, 4 .bss pages,
+// and a 4-page mapped heap region it never unmaps — then exits with all of
+// it resident, making burial do a real program's worth of work. The asserted
+// floor counts only data+bss+heap (9 pages): those stay per-task under any
+// future design, while text pages may one day be shared via the page cache —
+// the executables-through-the-page-cache arc must not break this test.
 //
 // WHY POST-BOOT (Chris, 2026-08-13): "that's probably the only time there will
 // just be one core running everything. Low complexity, nice and quiet." Exactly
@@ -1159,7 +1172,10 @@ static bool test_env_growth(void)
 // accumulate.
 #define TEARDOWN_LEAK_WARMUP_CYCLES    1
 #define TEARDOWN_LEAK_MEASURED_CYCLES  2
-#define EXIT_BY_RETURN_MAGIC           0x2E7BEA57UL
+#define GLUTTON_MAGIC                  0x0FEA57EDUL   // "FEASTED" (glutton.c)
+// The reclaim floor per cycle: glutton's data(1) + bss(4) + heap(4) pages.
+// Deliberately excludes its ~4 text pages — see the header comment.
+#define GLUTTON_MIN_RECLAIM_PER_CYCLE  (9UL * 4096UL)
 
 // Wait until the undertaker is idle: no completed burial for a settle window.
 // Two kworker periods (2s each) plus slack, because burial is two-phase and a
@@ -1192,15 +1208,18 @@ static bool teardown_leak_wait_quiet(void)
 // point: at exit time nothing has been freed yet, and a snapshot taken then
 // would measure the corpse, not the cleanup.
 //
-// /bin/exit_by_return is the fixture on purpose: it is ring 3, so it exercises
-// every allocation this arc newly frees — the argv blob, the env blob, and the
-// exit trampoline page (which is the very mechanism it was written to test).
-// A ring-0 fixture would silently skip the trampoline and prove less.
+// /bin/glutton is the fixture on purpose (since 2026-08-15; exit_by_return
+// before that). It is ring 3, so it exercises every allocation burial frees —
+// argv blob, env blob, exit trampoline page — AND it deliberately exits with
+// a real program's resident set still mapped: multiple text pages, a dirtied
+// .data page, four .bss pages, and a four-page heap region it never unmaps.
+// exit_by_return proved the trampoline with a one-page footprint; a reclaim
+// test needs a corpse with meat on it.
 static bool teardown_leak_one_cycle(void)
 {
     uint64_t burials_before = kTaskBurialCount;
 
-    task_t *t = test_spawn("/bin/exit_by_return", 0, NULL, false);
+    task_t *t = test_spawn("/bin/glutton", 0, NULL, false);
     if (t == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - task_create returned NULL\n");
         return false;
@@ -1221,9 +1240,11 @@ static bool teardown_leak_one_cycle(void)
         printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - fixture did not exit within 5 seconds\n");
         return false;
     }
-    if (retval != EXIT_BY_RETURN_MAGIC) {
-        printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - fixture retVal=0x%lx, expected 0x%lx\n",
-               retval, (uint64_t)EXIT_BY_RETURN_MAGIC);
+    if (retval != GLUTTON_MAGIC) {
+        printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - fixture retVal=0x%lx, expected 0x%lx. "
+               "glutton.c names the broken step: 1=bss not zero 2=map failed "
+               "3=heap not zero 4=data initializer wrong 5=readback\n",
+               retval, (uint64_t)GLUTTON_MAGIC);
         return false;
     }
 
@@ -1265,43 +1286,67 @@ static bool test_task_teardown_leak(void)
 
     uint64_t free_before = 0, free_after = 0;
     allocator_memory_snapshot(&free_before, NULL, NULL);
-    uint64_t booked_before = kTaskDeferredReclaimBytes;
+    uint64_t reclaimed_before = kTaskVmaReclaimedBytes;
 
     for (int i = 0; i < TEARDOWN_LEAK_MEASURED_CYCLES; i++) {
         if (!teardown_leak_one_cycle())
             return false;
     }
 
+    // (A TEMP DIAG surviving-extent differ lived here during the
+    // scribbled-text hunt, 2026-08-14/15. Its finest hour: it photographed
+    // the pre-reclaim leak as two 4KB extents whose first bytes were
+    // `55 48 89 e5...` — a function prologue, the fixture's own leaked text
+    // page. Removed after the deferral was paid; the two clauses below are
+    // the permanent instrument.)
+
     allocator_memory_snapshot(&free_after, NULL, NULL);
-    uint64_t booked = kTaskDeferredReclaimBytes - booked_before;
+    uint64_t reclaimed = kTaskVmaReclaimedBytes - reclaimed_before;
 
     // Signed on purpose: free memory going UP across the window is not a leak,
     // it is the allocator having coalesced or some cache having shrunk, and
     // reading that as a colossal unsigned "loss" would be the classic
     // wraparound bug dressed as a test failure.
     int64_t lost = (int64_t)free_before - (int64_t)free_after;
-    int64_t unexplained = lost - (int64_t)booked;
 
     printd(DEBUG_TESTS,
            "\ttask_teardown_leak: %d cycles — free %lu -> %lu (lost %ld bytes), "
-           "booked deferred %lu bytes, unexplained %ld\n",
-           TEARDOWN_LEAK_MEASURED_CYCLES, free_before, free_after, lost, booked, unexplained);
+           "VMA backing reclaimed %lu bytes\n",
+           TEARDOWN_LEAK_MEASURED_CYCLES, free_before, free_after, lost, reclaimed);
 
-    if (unexplained != 0) {
+    // Clause 1: a cycle costs nothing. Since the deferral was paid
+    // (2026-08-15) there is no legitimate remainder to subtract — any loss at
+    // all is an undeclared leak.
+    if (lost != 0) {
         printd(DEBUG_TESTS,
-               "\tFAIL: test_task_teardown_leak - %ld bytes per %d cycles are unaccounted for "
-               "(%ld bytes/task). Every byte a task consumes must be reclaimed at burial or "
-               "booked into kTaskDeferredReclaimBytes; this is neither. Something allocated "
-               "in task_create (or on the task's behalf) has no matching free in task_destroy.\n",
-               unexplained, TEARDOWN_LEAK_MEASURED_CYCLES,
-               unexplained / TEARDOWN_LEAK_MEASURED_CYCLES);
+               "\tFAIL: test_task_teardown_leak - %ld bytes per %d cycles leaked "
+               "(%ld bytes/task). Since 2026-08-15 burial reclaims EVERYTHING a task "
+               "owned; something allocated in task_create (or on the task's behalf) "
+               "has no matching free in task_destroy.\n",
+               lost, TEARDOWN_LEAK_MEASURED_CYCLES,
+               lost / TEARDOWN_LEAK_MEASURED_CYCLES);
+        return false;
+    }
+
+    // Clause 2: the reclaim provably RAN. A zero delta alone could mean the
+    // fixture faulted nothing in (a demand-paging break passing vacuously);
+    // glutton guarantees at least data+bss+heap resident per cycle, so the
+    // undertaker must have freed at least that much.
+    uint64_t reclaim_floor =
+        GLUTTON_MIN_RECLAIM_PER_CYCLE * TEARDOWN_LEAK_MEASURED_CYCLES;
+    if (reclaimed < reclaim_floor) {
+        printd(DEBUG_TESTS,
+               "\tFAIL: test_task_teardown_leak - reclaim ran short: %lu bytes freed "
+               "over %d cycles, floor is %lu (glutton's data+bss+heap). Either demand "
+               "paging faulted nothing in, or burial's walk missed resident frames.\n",
+               reclaimed, TEARDOWN_LEAK_MEASURED_CYCLES, reclaim_floor);
         return false;
     }
 
     printd(DEBUG_TESTS,
-           "\tPASS: test_task_teardown_leak (every byte accounted: %lu reclaimed-or-booked, "
-           "0 unexplained over %d cycles)\n",
-           booked, TEARDOWN_LEAK_MEASURED_CYCLES);
+           "\tPASS: test_task_teardown_leak (a task costs nothing: 0 bytes lost, "
+           "%lu bytes of VMA backing reclaimed over %d cycles)\n",
+           reclaimed, TEARDOWN_LEAK_MEASURED_CYCLES);
     return true;
 }
 

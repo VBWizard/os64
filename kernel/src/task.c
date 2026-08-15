@@ -450,44 +450,65 @@ static void task_free_guarded_stack(task_t *t, uintptr_t stackBaseV)
 		return;
 	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)t->pml4v, stackBaseV);
 	if (phys == 0 || phys == 0xbadbadba)
+	{
+		// A corpse whose stack VA no longer resolves is NEWS, not noise: either
+		// the tables were torn before this walk (ordering bug) or the PTE was
+		// never there (creation bug) — and the extent this free would have
+		// released now leaks. Say so on the always-on channel; a silent return
+		// here hid whatever it hid for free (2026-08-14, scribbled-text hunt).
+		printd(DEBUG_EXCEPTIONS,
+		       "task_free_guarded_stack: %s (task %lu) stack VA 0x%016lx does not resolve "
+		       "(walk=0x%lx) — skipping the free, extent LEAKS\n",
+		       t->exename, t->taskID, (uint64_t)stackBaseV, (uint64_t)phys);
 		return;
+	}
+	// The -16KB step-back trusts the PTE to name OUR stack frame. Since the
+	// exact-base tripwire (allocator.c, same day), a stale/foreign PTE here
+	// can no longer silently release an innocent extent: unless the computed
+	// address is EXACTLY some extent's base, free_memory panics and names it.
 	free_memory((phys & ~(uintptr_t)0xFFF) -
 	            (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE));
 }
 
-// ── THE DEFERRAL LEDGER (2026-08-13) ───────────────────────────────────────
+// ── THE DEFERRAL LEDGER (2026-08-13) — PAID IN FULL (2026-08-15) ───────────
 //
-// What burial knowingly leaves behind, COUNTED rather than merely admitted.
+// For two days this ledger COUNTED what burial knowingly left behind: the VMA
+// backing pages — the physical frames a demand fault resolved — booked per
+// burial into kTaskDeferredReclaimBytes, announced on DEBUG_TASK, awaiting a
+// page-refcount ruling that would answer "is this frame really the task's?"
 //
-// The VMA backing pages — the physical frames a demand fault resolved — are
-// the one thing task_destroy still does not reclaim. Freeing them needs a
-// ruling this arc deliberately did not make: a frame under a MAP_SHARED_LIBRARY
-// VMA may belong to the shared_object page cache (so->page_phys[]) rather than
-// to the dying task, and telling those apart in every future case — once fork
-// and real CoW exist — is the page-refcount conversation, booked to that arc.
-// Chris's ruling, 2026-08-13: leave the pages. But do not leave the fact quiet.
+// The bill arrived 2026-08-14, on the P5, wearing a disguise. `watch -n 1
+// "ps -ef"` buried two tasks a second; each left ~10 booked pages; each
+// leaked page pinned one in_use row in the allocator's status table forever
+// (rows owned by dead tasks can never merge, and compaction only drops empty
+// ones). Every allocator operation is O(rows), so the machine slowed as the
+// ghosts accumulated — and at ~5,500 seconds the then-unchecked table walked
+// off its own end onto the kernel PML4. The logd #PF, the watchpoint
+// subsystem, and three P5 crash photos all trace back to this one counter
+// refusing to stay small.
 //
-// So every burial walks its own VMAs, counts the frames that are actually
-// resident, books them here, and SAYS SO on DEBUG_TASK. Three reasons this is
-// a counter and a log line rather than one more sentence in DEBTS.md:
+// Chris's ruling, 2026-08-15, reversing 2026-08-13: FREE THE FRAMES. The
+// ownership question the deferral waited on is answerable without refcounts
+// for the OS as it exists: os64 has exactly ONE page-sharing mechanism (the
+// shared_object per-library page cache), it keeps an authoritative registry
+// (so->page_phys[]), and the burial walk already consults it —
+// task_frame_is_shared_object_cache below. A resident frame is either the
+// cache's (retained; never the task's to free) or the task's (freed, one
+// line below that guard). Real fork() with task-to-task CoW of anonymous
+// pages is the day a registry stops being enough — THAT is when the
+// page-refcount arc gets un-shelved, and the guard is where its answer
+// slots in.
 //
-//   1. The number MOVES. When malloc lands in userland its arenas will ride
-//      syscall_map's VMAs — exactly the VMAs this walk covers — so the
-//      deferral will grow on its own and report itself, with nobody having to
-//      remember to update a document. A doc records what we knew once; this
-//      reports what is true now.
-//   2. It is the PROOF INSTRUMENT. Task teardown cannot be shown to reclaim
-//      everything, because on purpose it doesn't. But it can be shown to
-//      reclaim everything it CLAIMS to: the post-boot leak test asserts that a
-//      spawn→exit→burial cycle's allocator delta equals exactly the bytes
-//      booked here. Any other byte is an unknown leak, and the test names it.
-//      "No zero, but proof of how well we did" — that is this number.
-//   3. "Never drop a byte" has a weaker sibling worth honouring: when you
-//      cannot give a byte back yet, at least know how many there are.
+// What survives of the ledger: the counters (renamed to say what is now
+// true) and the proof discipline. The post-boot leak test now asserts a
+// spawn→exit→burial cycle's allocator delta is ZERO — every byte a task
+// consumed comes back when it dies. No booked remainder, no unexplained
+// remainder: the strongest claim teardown has ever made, and the test that
+// used to certify "we counted the leak" now certifies there isn't one.
 //
-// Cumulative since boot; read by the leak test, and printed per-burial below.
-uint64_t kTaskDeferredReclaimBytes = 0;
-uint64_t kTaskDeferredReclaimPages = 0;
+// Cumulative since boot; read by the leak test, printed per-burial below.
+uint64_t kTaskVmaReclaimedBytes = 0;
+uint64_t kTaskVmaReclaimedPages = 0;
 
 // Completed phase-2 burials since boot. Primarily the leak test's clock: a
 // spawn→exit→release cycle isn't finished when the task exits, it's finished
@@ -498,19 +519,19 @@ uint64_t kTaskDeferredReclaimPages = 0;
 // funerals this boot has held.
 uint64_t kTaskBurialCount = 0;
 
-// Release one corpse's VMA apparatus.
+// Release one corpse's VMA apparatus — ALL of it, frames included (2026-08-15).
 //
-// Counts the still-resident backing frames (the booked deferral, returned to
-// the caller) and frees the BOOKKEEPING — every vma_t and its dlist node, then
-// the dlist_t itself. That split is the scope line: the structs are pure
-// kernel-side records, unshared and unambiguously this task's, so they go now;
-// the frames wait for the refcount ruling.
+// One walk, two jobs: free the still-resident backing frames (each classified
+// against the shared-object cache registry first), and free the BOOKKEEPING —
+// every vma_t and its dlist node, then the dlist_t itself.
 //
-// Doing both halves in ONE walk is deliberate. The day the ruling lands,
-// "count it" becomes "free it" on a single line — inside a loop that already
-// exists, already visits exactly the right pages, and already runs at the one
-// moment when the corpse's page tables are still intact but no core can load
-// them. Whoever pays that debt should have to write almost nothing.
+// The 8/13 version of this function only COUNTED the frames, and its comment
+// promised that "the day the ruling lands, 'count it' becomes 'free it' on a
+// single line — inside a loop that already exists, already visits exactly the
+// right pages, and already runs at the one moment when the corpse's page
+// tables are still intact but no core can load them." That day was
+// 2026-08-15, and it was one line. The loop, the walk, and the guard were
+// already right.
 //
 // Does this frame belong to the shared_object page cache rather than to the
 // dying task? THE OWNERSHIP QUESTION, answered — and it turns out not to need
@@ -525,13 +546,12 @@ uint64_t kTaskBurialCount = 0;
 // CoW-privatized copy (simple_exceptions.c's CoW branch allocated it when the
 // task first wrote to a writable segment), and that one IS the task's.
 //
-// Used here only to keep the deferral ledger HONEST: cache frames are retained
-// by design and were never this task's to give back, so booking them as
-// "deferred reclaim" would inflate the number with memory that is not leaking.
-// dyn_consumer showed this immediately — 4 pages booked, several of them the
-// cache's. But writing it now does double duty: when the page-refcount ruling
-// lands, THIS is the guard the reclaim needs, already written and already
-// exercised by test_dynamic_linking's two tasks on every boot.
+// Since 2026-08-15 this is the RECLAIM GUARD — the one check standing between
+// free_memory() and a frame every other task mapping this library still uses.
+// It was written 8/13 merely to keep the (then-)deferral ledger honest —
+// dyn_consumer showed why immediately: 4 pages resident, several of them the
+// cache's — which means it was already exercised by test_dynamic_linking's
+// two tasks on every boot before the first real free ever depended on it.
 //
 // The honest limit: this is complete only while the cache is the sole sharer.
 // Real fork() with CoW would introduce task-to-task sharing that no registry
@@ -554,11 +574,12 @@ static bool task_frame_is_shared_object_cache(vma_t *vma, uintptr_t va, uintptr_
 
 // MUST run before arena_destroy: the page-table walk needs the tables.
 // `shared_bytes_out` receives the frames that belong to the shared_object
-// cache — reported, but deliberately NOT booked as a deferral, because they
-// are a warm cache and not a leak.
+// cache — reported, but deliberately NOT freed, because they are a warm
+// cache shared with every other task mapping the library, not a leak.
+// Returns the bytes actually reclaimed.
 static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 {
-	uint64_t deferred_bytes = 0;
+	uint64_t reclaimed_bytes = 0;
 	uint64_t shared_bytes = 0;
 
 	if (t->mmaps == NULL) {
@@ -572,11 +593,11 @@ static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 		vma_t *vma = (vma_t *)node->data;
 
 		if (vma != NULL && t->pml4v != NULL) {
-			// Count only what is REALLY there. Demand paging's other half:
+			// Free only what is REALLY there. Demand paging's other half:
 			// a page the program never touched has no PTE, was never
-			// allocated, and is not a leak — so the honest deferral is the
-			// resident set, not the mapped span. (Same reasoning, and the
-			// same walk, as syscall_unmap's reclaim loop.)
+			// allocated, and has nothing to give back — so the reclaim is
+			// the resident set, not the mapped span. (Same reasoning, and
+			// the same walk, as syscall_unmap's reclaim loop.)
 			for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE) {
 				uintptr_t phys = paging_walk_paging_table((pt_entry_t *)t->pml4v, va);
 				if (phys == 0 || phys == 0xbadbadba)
@@ -591,13 +612,23 @@ static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 					continue;
 				}
 
-				// ← THE ONE LINE. This frame IS the task's — anonymous, its
-				//   own file-backed copy, or a CoW-privatized library page.
-				//   When the page-refcount ruling lands, free_memory(phys)
-				//   goes right here; the guard above is already written and
-				//   already right for everything that exists today.
-				deferred_bytes += PAGE_SIZE;
-				kTaskDeferredReclaimPages++;
+				// THE ONE LINE — landed 2026-08-15, exactly where the 8/13
+				// comment said it would go. This frame IS the task's:
+				// anonymous, its own file-backed copy, or a CoW-privatized
+				// library page — and the task is dead. free_memory() is the
+				// correct closer for BOTH provenances (anonymous frames come
+				// from allocate_memory_aligned, file-backed/CoW frames from
+				// kmalloc_aligned — kfree is the same call with the HHDM
+				// offset subtracted), and every fault allocated exactly one
+				// PAGE_SIZE extent, so `phys` is an extent base and the
+				// allocator's exact-base tripwire agrees. Same call, same
+				// walk-then-free shape as syscall_unmap's reclaim loop. No
+				// task-VA unmap needed: no core can ever load this CR3
+				// again, and arena_destroy takes the tables whole, right
+				// after this walk.
+				free_memory(phys);
+				reclaimed_bytes += PAGE_SIZE;
+				kTaskVmaReclaimedPages++;
 			}
 		}
 
@@ -613,9 +644,9 @@ static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 	kfree(t->mmaps);
 	t->mmaps = NULL;
 
-	kTaskDeferredReclaimBytes += deferred_bytes;
+	kTaskVmaReclaimedBytes += reclaimed_bytes;
 	*shared_bytes_out = shared_bytes;
-	return deferred_bytes;
+	return reclaimed_bytes;
 }
 
 // Release one corpse's shared-object apparatus: drop the single reference
@@ -729,13 +760,14 @@ static void task_reparent_orphans(task_t *dying)
 //   - (2026-08-13, arena) every page table this address space ever drew —
 //     arena_destroy below. The paging pool's bump allocator no longer has
 //     anything to do with a task's tables; that deferral is PAID.
-// STILL DEFERRED — exactly one thing, and it is COUNTED, not merely admitted:
-//   - VMA backing pages. A frame under a MAP_SHARED_LIBRARY VMA may be the
-//     shared_object page cache's rather than this task's, and deciding that
-//     in general (once fork/CoW exist) is the page-refcount ruling, booked to
-//     that arc. Every burial books its resident frames into
-//     kTaskDeferredReclaimBytes and prints the tally — see the deferral
-//     ledger above, and the post-boot leak test that asserts against it.
+//   - (2026-08-15) the VMA backing pages — the last deferral, PAID. Every
+//     resident frame that is genuinely the task's (the shared-object cache's
+//     registry is the arbiter — see task_frame_is_shared_object_cache) is
+//     freed in task_release_vmas' walk, and the reclaim is announced per
+//     burial. Nothing a task owns outlives its funeral anymore; the leak
+//     test now asserts the allocator delta of a full cycle is ZERO. The
+//     page-refcount conversation stays booked to the fork/CoW arc — that is
+//     the day ownership stops being answerable by registry lookup.
 // A dynamic task's elf points INTO the shared_object cache (task.c sets
 // task->elf = main_so->image) — never freed here; the cache owns it. What IS
 // dropped for a dynamic task is the reference, not the image.
@@ -803,12 +835,12 @@ static void task_destroy(task_t *t)
 			free_memory(tramp_phys & ~(uintptr_t)0xFFF);
 	}
 
-	// The VMA apparatus (structs + lists now; backing frames counted, not
-	// freed — the one remaining deferral) and the shared-object edge. BOTH
-	// must precede arena_destroy: each walks the corpse's page tables or its
-	// elf pointer, and arena_destroy takes the tables away.
+	// The VMA apparatus — structs, lists, AND backing frames, the whole thing
+	// since 2026-08-15 — and the shared-object edge. BOTH must precede
+	// arena_destroy: each walks the corpse's page tables or its elf pointer,
+	// and arena_destroy takes the tables away.
 	uint64_t shared_retained = 0;
-	uint64_t deferred = task_release_vmas(t, &shared_retained);
+	uint64_t reclaimed = task_release_vmas(t, &shared_retained);
 	task_release_shared_objects(t);
 
 	// Static ELF only: the loader kept the file open for file-backed demand
@@ -836,27 +868,32 @@ static void task_destroy(task_t *t)
 	// inside HHDM-unmap the pages, so anything that touches this dead map
 	// afterwards faults loudly: the use-after-free tripwire, now standing
 	// guard over page tables too. (NULL for ktask — arena_destroy no-ops.)
+	// SENTINEL BRACKET around the one call that FREES page tables. If a burial
+	// is handing a live table back to the allocator, these two checkpoints are
+	// the narrowest possible window around the crime: clean before, broken
+	// after, in the same burial. (2026-08-14 — Chris's read of the P5 photo:
+	// `watch -n 1 "ps -ef"` means a husk AND a ps are created and buried every
+	// second, which is by far the heaviest page-table churn in the system.)
+	paging_sentinel_check("task_destroy: before arena_destroy");
 	arena_destroy((arena_t *)t->tableArena);
+	paging_sentinel_check("task_destroy: after arena_destroy");
 
-	// THE DEFERRAL, ANNOUNCED (Chris's ruling, 2026-08-13: "announce the
-	// deferrals even louder... that way they stay visible"). One line per
-	// burial that leaves anything behind, on DEBUG_TASK — the same channel as
-	// the burial line itself, so a reader following a task's death sees what
-	// was recovered and what wasn't, together, without grepping a doc.
+	// THE RECLAIM, ANNOUNCED. The deferral's announcement (Chris's ruling,
+	// 2026-08-13: "announce the deferrals even louder... that way they stay
+	// visible") survives its payment (2026-08-15) with the verb changed: one
+	// line per burial that gave anything back, on DEBUG_TASK — the same
+	// channel as the burial line itself, so a reader following a task's
+	// death sees what it owned and that it all came home, together.
 	//
-	// Silence here is the good outcome and it is a real signal: a task that
-	// touched no VMA page (every kernel thread, and any program that faulted
-	// nothing in) books nothing and says nothing. The day this line starts
-	// appearing for tasks it never used to — or the byte count starts
-	// climbing per command — something new is riding the VMAs, which is
-	// exactly what will happen when userland malloc lands.
-	if (deferred > 0) {
+	// Silence here is still a real signal: a task that touched no VMA page
+	// (every kernel thread, and any program that faulted nothing in)
+	// reclaims nothing and says nothing.
+	if (reclaimed > 0) {
 		printd(DEBUG_TASK,
-		       "task_destroy: DEFERRED RECLAIM %lu bytes (%lu pages) of VMA backing "
-		       "for task 0x%08x (%s) — awaiting the page-refcount ruling; "
-		       "%lu bytes booked since boot\n",
-		       deferred, deferred / PAGE_SIZE, t->taskID, t->exename,
-		       kTaskDeferredReclaimBytes);
+		       "task_destroy: reclaimed %lu bytes (%lu pages) of VMA backing "
+		       "for task 0x%08x (%s); %lu bytes reclaimed since boot\n",
+		       reclaimed, reclaimed / PAGE_SIZE, t->taskID, t->exename,
+		       kTaskVmaReclaimedBytes);
 	}
 
 	// The cache's share, reported separately and deliberately NOT booked: those
@@ -2128,6 +2165,11 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// here on, draws for this pml4 happen only when the CHILD itself faults,
 	// and route through its own cls->task (paging_table_arena_for).
 	task_table_bracket_close();
+
+	// The other end of the lifecycle: if BUILDING an address space is what
+	// damages the kernel's, this catches it one task-create later instead of
+	// one disk-write later.
+	paging_sentinel_check("task_create: child fully built");
 
 	return newTask;
 }

@@ -263,6 +263,15 @@ typedef struct {
 	uint32_t maxBytesPerTransfer;
 	uint32_t cmdQID;
 	char* dmaReadBuffer, *dmaWriteBuffer;
+	// The bounce buffers' page-table entries as they read the moment
+	// kmalloc_dma handed them over, kept so every I/O can ask whether they
+	// still say the same thing. See nvme_dma_tripwire_* in nvme.c for the
+	// #PF that earned them (2026-08-14).
+	uint64_t dmaReadPteAtInit, dmaWritePteAtInit;
+	// And the PHYSICAL page the leaf page table lived in at that moment. A
+	// mapping that later fails answers a sharper question with this: was the
+	// table REPLACED (different page), or was its content rewritten in place?
+	uintptr_t dmaReadPtPageAtInit, dmaWritePtPageAtInit;
 	// Serializes the ENTIRE submit→complete→copy critical section for the
 	// I/O queue (see nvme_do_io). The driver is strictly one-command-at-a-
 	// time by design; without this lock, a page-fault-path disk read (file-
@@ -344,3 +353,7 @@ void nvme_flush_all(void);
 
 #endif // NVME_H
 
+
+// WATCHDMA (nvme.c): arm the hardware watchpoint chain on the DMA buffer's
+// page-table entries. Called post-boot — see the function's comment for why.
+void nvme_watch_dma_chain(void);

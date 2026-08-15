@@ -107,6 +107,24 @@ void paging_hhdm_map_range(uintptr_t phys_start, uint64_t length);
 /// to the other cores when anything was actually unmapped.
 void paging_hhdm_unmap_range(uintptr_t phys_start, uint64_t length);
 uintptr_t paging_walk_paging_table_keep_flags(pt_entry_t* pml4, uint64_t virtual_address, bool keepPageFlags);
+
+// The four-level post-mortem for one VA, and the leaf-table address a healthy
+// caller records so a later failure can be reported as was/is. Both print or
+// answer for whatever pml4 they are handed. See the essay in paging.c.
+void paging_report_walk(pt_entry_t *pml4v, uint64_t va, const char *what);
+uintptr_t paging_leaf_table_phys(pt_entry_t *pml4v, uint64_t va);
+// The address OF the page table entry that maps `va` — what you aim a
+// hardware watchpoint at to catch whoever rewrites a mapping.
+uintptr_t paging_pte_address(pt_entry_t *pml4v, uint64_t va);
+// The addresses of ALL FOUR entries that map `va` (PML4E, PDPTE, PDE, PTE):
+// watch the whole chain, because the attack may land at any level.
+int paging_walk_entry_addresses(pt_entry_t *pml4v, uint64_t va, uintptr_t out[4]);
+
+// Mapping sentinels: register a kernel mapping that must never change, then
+// check it at the phase boundaries of anything under suspicion. The first
+// checkpoint to see the damage names the phase that caused it. See paging.c.
+void paging_sentinel_add(uintptr_t va, const char *name);
+void paging_sentinel_check(const char *where);
 uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address);
 void validatePagingHierarchy(uintptr_t address);
 void init_os64_paging_tables();

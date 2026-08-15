@@ -13,6 +13,7 @@ SLEEPTEST_OUTPUT ?= ../../bin/sleep_test
 MEMTEST_OUTPUT ?= ../../bin/memory_test
 HOG_OUTPUT ?= ../../bin/hog
 ENVFILL_OUTPUT ?= ../../bin/env_fill
+GLUTTON_OUTPUT ?= ../../bin/glutton
 LIBTEST ?= ../../bin/libtest.so
 
 CC ?= x86_64-elf-gcc
@@ -57,7 +58,7 @@ ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -mno-mmx -m
 OBJS := serial_ping.o
 
 .PHONY: all
-all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT) $(REDIR_OUTPUT) $(DIRLIST_OUTPUT) $(MAPUNMAP_OUTPUT) $(CWDTEST_OUTPUT) $(STATTEST_OUTPUT) $(SLEEPTEST_OUTPUT) $(MEMTEST_OUTPUT) $(HOG_OUTPUT) $(ENVFILL_OUTPUT)
+all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT) $(REDIR_OUTPUT) $(DIRLIST_OUTPUT) $(MAPUNMAP_OUTPUT) $(CWDTEST_OUTPUT) $(STATTEST_OUTPUT) $(SLEEPTEST_OUTPUT) $(MEMTEST_OUTPUT) $(HOG_OUTPUT) $(ENVFILL_OUTPUT) $(GLUTTON_OUTPUT)
 
 $(OUTPUT): $(OBJS)
 	@mkdir -p "$$(dirname $@)"
@@ -158,6 +159,15 @@ $(ENVFILL_OUTPUT): env_fill.o
 	$(LD) $(LDFLAGS) -o $@ env_fill.o
 
 env_fill.o: env_fill.c
+	$(CC) $(ARG_CFLAGS) -c $< -o $@
+
+# glutton deliberately spans multiple text pages (aligned-function fat), so
+# it's the one fixture whose binary size is a feature, not an accident.
+$(GLUTTON_OUTPUT): glutton.o
+	@mkdir -p "$$(dirname $@)"
+	$(LD) $(LDFLAGS) -o $@ glutton.o
+
+glutton.o: glutton.c
 	$(CC) $(ARG_CFLAGS) -c $< -o $@
 
 $(DYN_OUTPUT): dyn_consumer.o $(LIBTEST)

@@ -11,6 +11,7 @@
 #include "log.h"
 #include "gui/compositor.h"
 #include "tty.h"   // tty_emergency_direct — the terminals' escape hatch
+#include "smp_core.h"   // mpFreezeOtherCores — stop the other cores before speaking
 #include "exception_report.h"   // exception_wire_lock — one narrator per report
 
 // SHARED between every panicking core — which is why both panic entry points
@@ -61,6 +62,16 @@ void panic_no_shutdown(const char *format, ...)
     // FIRST: detach the GUI console sink so everything below renders raw on
     // the framebuffer — the GUI (or the lock some thread died holding) can
     // never stand between a panic and the screen.
+    // FIRST: stop every other core. Only the panicking core halts by itself;
+    // the rest keep scheduling, and tty_emergency_direct() below then routes
+    // THEIR output straight to the physical console — so a `watch` running on
+    // another VT repaints over the panic before it can be read. Not
+    // hypothetical: Chris photographed exactly that on the P5 (a
+    // `watch ps -ef --forest` from VT2 landing on VT1 in the last frame before
+    // the screen froze). On hardware with no serial capture, the glass is the
+    // only record there will ever be.
+    mpFreezeOtherCores();
+
     gui_emergency_disable();
 
     // Same reasoning, one layer down: if we faulted while holding the renderer
@@ -99,6 +110,16 @@ void __attribute__((noreturn, noinline))panic(const char *format, ...)
     // FIRST: detach the GUI console sink, then bust the renderer lock, then
     // force the terminals into direct mode (see panic_no_shutdown for all
     // three — nothing stands between a panic and the framebuffer).
+    // FIRST: stop every other core. Only the panicking core halts by itself;
+    // the rest keep scheduling, and tty_emergency_direct() below then routes
+    // THEIR output straight to the physical console — so a `watch` running on
+    // another VT repaints over the panic before it can be read. Not
+    // hypothetical: Chris photographed exactly that on the P5 (a
+    // `watch ps -ef --forest` from VT2 landing on VT1 in the last frame before
+    // the screen froze). On hardware with no serial capture, the glass is the
+    // only record there will ever be.
+    mpFreezeOtherCores();
+
     gui_emergency_disable();
     renderer_bust_lock();
     tty_emergency_direct();

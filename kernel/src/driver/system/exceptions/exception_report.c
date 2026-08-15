@@ -29,6 +29,11 @@
 #include "CONFIG.h"
 #include "task.h"
 #include "thread.h"
+#include "BasicRenderer.h"      // the glass: bust the lock, kill the throttle, home the cursor
+#include "gui/compositor.h"     // gui_emergency_disable — same escape hatch panic() uses
+#include "tty.h"                // tty_emergency_direct — ditto, one layer up
+#include "io.h"                 // inb — the pager reads the 8042 by hand (IF=0, no IRQs)
+#include "watchpoint.h"         // the #DB seam: which watchpoint fired, and does it resume
 
 extern uintptr_t kKernelPML4v;
 extern bool kLoggingInitialized;
@@ -130,6 +135,110 @@ void exception_wire_abandon(void)
 #define EXC_STACK_WORDS   16
 #define EXC_MAX_FRAMES    24
 
+// ── Taking the glass (2026-08-14, from a photograph of the P5) ──────────────
+//
+// THE BUG THIS ENDS. page_fault_panic() reports through exception_report() and
+// then cli/hlt's on the spot — it never calls panic(), so it never ran panic()'s
+// takeover sequence: GUI sink detached, renderer lock busted, terminals forced
+// direct. Two of those three merely protect against a dead lock holder. The
+// third is load-bearing every single time, and nobody noticed until Chris
+// photographed a #PF report on the P5 that stopped at the bottom pixel row of
+// the panel with its call chain missing.
+//
+// renderer_bust_lock() also DISABLES THE BLIT THROTTLE. The throttle
+// (BasicRenderer.c, 2026-08-04) holds the glass to ~30Hz: an ordinary putc
+// writes VRAM directly while the glass is clean, but a SCROLL writes the shadow
+// only and defers the blit until kTicksSinceStart - s_lastBlitTick >= 3. A
+// fatal report runs with interrupts OFF — the fault arrived through an
+// interrupt gate — so kTicksSinceStart is FROZEN and that condition can never
+// become true again. Every line the report prints before the screen fills is
+// visible; every line from the first scroll onward lands in a shadow buffer no
+// eye will ever see. The report was complete. The glass was never told.
+//
+// So a dying report takes the machine's output devices exactly the way panic()
+// does, and then homes the cursor: starting at row 0 gives the report the whole
+// panel instead of the handful of rows left under a running top(1), which on a
+// normal screen means it never has to scroll at all.
+// Set by the dispatcher around a report that is going to RESUME (a TRACE-mode
+// watchpoint) — PER CORE, because the first cut was a single global and a
+// concurrent fatal report on another core could read it true and skip its own
+// takeover (2026-08-15 review find). Everything in a dying report's takeover
+// is destructive FOREVER — GUI sink detached, blit throttle killed, terminals
+// routed direct, locks force-released while the (deliberately un-frozen)
+// other cores may hold them — so a report the machine survives must do NONE
+// of it. A resuming report goes to the serial wire and the log only, never
+// the glass: partly because the takeover can't be undone, and partly because
+// printf through the LIVE console path can deadlock on a tty or renderer
+// lock the interrupted core itself holds. Trace mode is a logger by charter
+// (WATCHPOINTS.md); the wire is where a logger's output belongs.
+static bool kExcResumingCore[MAX_CPUS];
+
+// Whether EXC_EMIT mirrors to the framebuffer. A static, but serialized by
+// the wire lock (one narrator at a time): exception_report clears it for a
+// resuming report and restores it before releasing the wire, so the direct
+// exception_report_registers callers (ring-3 segfault reports) always see it
+// true.
+static bool kExcEmitToGlass = true;
+
+static void exc_take_the_glass(void)
+{
+	gui_emergency_disable();   // the compositor never stands between us and the screen
+	renderer_bust_lock();      // busts the lock AND kills the throttle: scrolls blit now
+	tty_emergency_direct();    // terminals route straight to the legacy console
+	clear(&kRenderer, 0xff000080, true);   // the blue of video.c, cursor home
+}
+
+// ── The pager ───────────────────────────────────────────────────────────────
+//
+// Insurance for the reports that still overflow: 24 frames of call chain plus
+// 8 lines of stack window plus the registers can outrun a small panel, and the
+// whole point of the work above is that a human gets to READ this.
+//
+// Paced by hand because nothing else is running: IF=0 means no keyboard IRQ and
+// no timer tick, so the wait polls the 8042's two ports directly (the same pair
+// keyboard.c's handler reads) and races them against the TSC. A key advances
+// immediately; if the keyboard is USB and the firmware isn't emulating an 8042,
+// the clock advances it anyway, so the report can never strand itself waiting
+// for a keystroke that no hardware will deliver.
+#define EXC_PAGE_SECONDS 10
+
+static uint32_t kExcPagerRow;    // lines emitted since the last pause
+static uint32_t kExcPagerRows;   // panel height in text rows; 0 = pager off
+
+static void exc_pager_begin(void)
+{
+	kExcPagerRow = 0;
+	kExcPagerRows = renderer_rows();
+}
+
+// One emitted line. Every EXC_EMIT in this file prints exactly one line, so
+// counting calls counts rows; a future multi-line emit would page early, which
+// is harmless (a short page), never late (a lost page).
+static void exc_pager_line(void)
+{
+	if (kExcPagerRows == 0 || ++kExcPagerRow < kExcPagerRows - 1)
+		return;
+	kExcPagerRow = 0;
+
+	printf("-- more -- (press a key, or wait %u seconds) ", EXC_PAGE_SECONDS);
+
+	uint64_t start = rdtsc();
+	uint64_t bound = kCPUCyclesPerSecond
+	                     ? kCPUCyclesPerSecond * EXC_PAGE_SECONDS
+	                     : 3000000000UL * EXC_PAGE_SECONDS;   // uncalibrated: same order
+	while (rdtsc() - start < bound) {
+		if (inb(0x64) & 0x01) {     // 8042 output buffer full: a key is waiting
+			(void)inb(0x60);        // consume the scancode so it can't queue up
+			break;
+		}
+		__builtin_ia32_pause();
+	}
+
+	// Wipe the prompt so the next page starts on a clean line ('\r' is honored
+	// by the renderer; the spaces are the erase, same trick husk's backspace uses).
+	printf("\r                                                             \r");
+}
+
 // ── Sinks ───────────────────────────────────────────────────────────────────
 //
 // An exception report goes to the wire ALWAYS (Chris, 2026-08-11: "it's cheap
@@ -140,7 +249,10 @@ void exception_wire_abandon(void)
 // `dying` selects wire-only: a panicking core must not depend on logd being
 // alive to drain a queue, and must not touch a queue lock it may itself hold.
 #define EXC_EMIT(dying, fmt, ...) do { \
-        printf(fmt, ##__VA_ARGS__); \
+        if (kExcEmitToGlass) { \
+            printf(fmt, ##__VA_ARGS__); \
+            if (dying) exc_pager_line(); \
+        } \
         char _exc_line[512]; \
         snprintf(_exc_line, sizeof(_exc_line), fmt, ##__VA_ARGS__); \
         serial_print_string(_exc_line); \
@@ -338,12 +450,31 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	__asm__ volatile("mov %0, cr3" : "=r"(cr3));
 	__asm__ volatile("mov %0, cr4" : "=r"(cr4));
 
-	// Fatal for everything except a resolved #PF, and a resolved #PF never
-	// reaches this function — so anything being reported here is dying.
-	const bool dying = true;
-
 	// One narrator per report — see the wire lock's header comment.
 	exception_wire_lock();
+
+	// Dying — or resuming? A TRACE-mode watchpoint hit is the one report the
+	// machine survives (dispatcher sets the per-core flag around the call).
+	// Resuming means: no takeover (every part of it is forever), no glass
+	// (printf through the live console path can deadlock on a lock the
+	// interrupted core itself holds), no pager (nothing may park a running
+	// core at IF=0 for ten seconds a page). Serial wire always; and with
+	// `dying` false, EXC_EMIT's printd copy carries the report into the log
+	// file when logd holds the sink. Read under the wire lock; per-core, so
+	// a concurrent fatal report on another core is unaffected.
+	uint32_t excCore = (cls != NULL && cls->apic_id < MAX_CPUS)
+	                       ? (uint32_t)cls->apic_id : 0;
+	const bool resuming = kExcResumingCore[excCore];
+	const bool dying = !resuming;
+	kExcEmitToGlass = !resuming;
+
+	if (!resuming) {
+		// AFTER the wire lock, so exactly one dying core wipes the panel and
+		// the second one's report braids onto the first's screen instead of
+		// erasing it.
+		exc_take_the_glass();
+		exc_pager_begin();
+	}
 
 	if (why != NULL) {
 		EXC_EMIT(dying, "\n>>> EXCEPTION: %s — %s <<<\n",
@@ -448,6 +579,10 @@ void exception_report(const exception_context_t *ctx, const char *why)
 		logd_thread(false);
 	}
 
+	// Restore the glass mirror for the next narrator (a resuming report
+	// turned it off; direct exception_report_registers callers rely on it).
+	kExcEmitToGlass = true;
+
 	// The story ends here — free the wire BEFORE the caller halts, or the
 	// next core's report spends three seconds waiting to barge past a corpse.
 	exception_wire_unlock();
@@ -511,9 +646,50 @@ void exception_dispatch(exception_context_t *ctx)
 		return;   // resolved — the prologue's iretq retries the instruction
 	}
 
+	// A debug exception MIGHT be one of ours (watchpoint.c). If it is, the
+	// report leads with which watchpoint fired and what was done to it, and a
+	// TRACE-mode watchpoint RESUMES afterwards — the only non-#PF vector that
+	// is allowed to return, and only because a data watchpoint is a trap: the
+	// access already completed, so there is nothing to retry and nothing
+	// broken to return to. (2026-08-14, the P5 page-table hunt.)
+	if (ctx->vector == 1) {
+		char why[192];
+		bool keepRunning = false;
+		if (watchpoint_describe_hit(why, sizeof(why), &keepRunning)) {
+			// A TRACE hit is about to RESUME, so it must neither freeze the
+			// machine nor touch the glass at all — the takeover is forever,
+			// and printing through the live console can deadlock on a lock
+			// this very core was holding when the trap fired. The per-core
+			// flag routes its report wire-and-log-only (exception_report).
+			kExcResumingCore[core] = keepRunning;
+			if (!keepRunning)
+				mpFreezeOtherCores();
+			exception_report(ctx, why);
+			kExcResumingCore[core] = false;
+			if (keepRunning) {
+				kCurrentCtx[core] = prev;
+				return;
+			}
+			// Halt mode: the story is told, and telling it twice (by falling
+			// into the generic report below) would only bury the headline.
+			while (1) {
+				__asm__ volatile("cli\nhlt\n");
+			}
+		}
+		// Not one of ours — a stray debug trap. Fall through and report it
+		// generically rather than swallowing it.
+	}
+
 	// Everything else is fatal. One report, then stop: the scheduler's state
 	// is not trustworthy after an unhandled exception, and an orderly shutdown
 	// would ask that same machinery to walk itself to the door.
+	//
+	// The other cores stop FIRST (2026-08-14, Chris: "if I leave top up the
+	// screen gets wiped every second"). Only the reporting core halts by
+	// itself; the rest keep scheduling, so a shell repainting elsewhere can
+	// scribble over the report before it is read. On hardware with no serial
+	// capture that report is the only record there will ever be.
+	mpFreezeOtherCores();
 	exception_report(ctx, NULL);
 	while (1) {
 		__asm__ volatile("cli\nhlt\n");

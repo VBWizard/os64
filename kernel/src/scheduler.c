@@ -726,6 +726,24 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
         thread->regs.RDI=mp_isrSavedRDI[apic_id];
         thread->regs.RSP=mp_isrSavedRSP[apic_id];
         thread->regs.RBP=mp_isrSavedRBP[apic_id];
+        // R8-R15 joined the save set 2026-08-14. The asm prologue has always
+        // captured them into the per-core arrays, but nothing carried them
+        // into thread->regs — so a thread resuming on a DIFFERENT core ran
+        // with whatever R8-R15 the previous tenant of that core left behind.
+        // Two consequences, both observed in the hog -n 6 crash frames: a
+        // migrated thread computes on a stranger's registers, and ring 3
+        // inherits raw kernel pointers (R10 held a kernel text address in a
+        // user segfault report — an info leak on top of the corruption).
+        // Same-core resumes were accidentally correct, which is why this
+        // survived every single-core test since SMP bring-up.
+        thread->regs.R8=mp_isrSavedR8[apic_id];
+        thread->regs.R9=mp_isrSavedR9[apic_id];
+        thread->regs.R10=mp_isrSavedR10[apic_id];
+        thread->regs.R11=mp_isrSavedR11[apic_id];
+        thread->regs.R12=mp_isrSavedR12[apic_id];
+        thread->regs.R13=mp_isrSavedR13[apic_id];
+        thread->regs.R14=mp_isrSavedR14[apic_id];
+        thread->regs.R15=mp_isrSavedR15[apic_id];
         thread->regs.RFLAGS=mp_isrSavedRFlags[apic_id];
         thread->regs.ES=mp_isrSavedES[apic_id];
         thread->regs.FS=mp_isrSavedFS[apic_id];
@@ -760,6 +778,17 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
     mp_isrSavedRDI[apic_id]=thread->regs.RDI;
     mp_isrSavedRSP[apic_id]=thread->regs.RSP;
     mp_isrSavedRBP[apic_id]=thread->regs.RBP;
+    // The restore half of the R8-R15 fix (see scheduler_store_thread): the
+    // asm epilogue loads R8-R15 from these arrays, so without this a
+    // dispatched thread received the core's previous tenant's values.
+    mp_isrSavedR8[apic_id]=thread->regs.R8;
+    mp_isrSavedR9[apic_id]=thread->regs.R9;
+    mp_isrSavedR10[apic_id]=thread->regs.R10;
+    mp_isrSavedR11[apic_id]=thread->regs.R11;
+    mp_isrSavedR12[apic_id]=thread->regs.R12;
+    mp_isrSavedR13[apic_id]=thread->regs.R13;
+    mp_isrSavedR14[apic_id]=thread->regs.R14;
+    mp_isrSavedR15[apic_id]=thread->regs.R15;
     // ── BORROWED-STACK TRIPWIRE (2026-08-12, the stack poisoner's headstone) ─
     // A context about to be dispatched whose saved RSP lies inside ANY core's
     // per-core scratch stack was PARKED THERE — it slept or was preempted
@@ -935,6 +964,19 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
     task_t *task;
     thread_t *thread, *threadToRun = NO_THREAD;
     thread_t *queue=qRunnable;
+    // The best thread the cache-home veto skipped this pass (and its aging),
+    // kept as a fallback. THE RULE (2026-08-14, born from Chris's P5 burn-in):
+    // cache-home is a preference among cores that HAVE work — idling is not
+    // preferable to anything. If the veto-respecting winner below turns out
+    // to be the idle thread, we take this one instead. Without it the veto
+    // is a livelock: a preempted thread's requeue RESETS runnableSinceTick
+    // and fires the idle-core nudge in the same breath, so the nudged core
+    // always inspects a zero-ticks-warm thread, declines, and sleeps through
+    // the whole migratable window (its timer is parked — nobody re-checks).
+    // hog -n 4 on 4 cores ran a full night at 75%: two threads trading one
+    // core at 50% each while a core idled six inches away.
+    thread_t *warmSkipped = NO_THREAD;
+    uint32_t warmSkippedTicks = 0;
     
     int queEntryNum = 0;
     while (queue!=NO_NEXT)
@@ -968,10 +1010,16 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 					// dispatched threads (runCycles==0 — cold everywhere, so
 					// migration is free), and of course this core's own. A
 					// pinned thread is unaffected: can_run_on_core already
-					// confines it to its pin, where it is always home. The
-					// hog-starvation case is bounded twice over — its home
-					// core's lease expires within SCHED_BACKSTOP_MS, and any
-					// foreign core may take it after the threshold.
+					// confines it to its pin, where it is always home. And
+					// the veto is a PREFERENCE, not a refusal: every thread
+					// it skips is remembered as warmSkipped, and if this
+					// pass would otherwise hand the core its idle thread,
+					// the fallback below wins — an idle core takes warm
+					// work over doing nothing (the doctrine at warmSkipped's
+					// declaration; the old claim here that "any foreign core
+					// may take it after the threshold" was true only if a
+					// foreign core happened to LOOK during the window, which
+					// a parked idle core never did).
 					if (!thread->idleThread && thread->runCycles != 0 &&
 					    thread->lastRunApicID != cls->apic_id &&
 					    (kTicksSinceStart - thread->runnableSinceTick) < SCHED_MIGRATION_COST_TICKS)
@@ -979,6 +1027,11 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 						printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 						       "*\t\tfindTaskToRun: thread 0x%08x is cache-warm on APIC %u, not migrating yet\n",
 						       thread->threadID, thread->lastRunApicID);
+						if (thread->prioritizedTicksInRunnable >= warmSkippedTicks)
+						{
+							warmSkipped = thread;
+							warmSkippedTicks = thread->prioritizedTicksInRunnable;
+						}
 						queEntryNum++;
 						queue=queue->next;
 						continue;
@@ -999,6 +1052,21 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
         queue=queue->next;
     }
 	kDiagRunnableLen = queEntryNum;                    // TEMP DIAG
+
+	// The idle-core exemption: if honoring the cache-home veto left this core
+	// with only its idle thread while real work sat skipped-as-warm, take the
+	// work. warmSkipped already passed scheduler_thread_can_run_on_core (the
+	// veto check is nested inside that gate), so affinity is respected.
+	// Busy cores are untouched — they only reach here with a real tenant
+	// selected, so the veto still prevents needless migration between them.
+	if (warmSkipped != NO_THREAD &&
+	    (threadToRun == NO_THREAD || threadToRun->idleThread))
+	{
+		printd(DEBUG_SCHEDULER | DEBUG_DETAILED,
+		       "scheduler_find_thread_to_run: APIC %u idle — taking cache-warm thread 0x%08x from APIC %u rather than idling\n",
+		       cls->apic_id, warmSkipped->threadID, warmSkipped->lastRunApicID);
+		threadToRun = warmSkipped;
+	}
 
 	if (threadToRun == NO_THREAD && !justBrowsing)
 		panic("scheduler_find_thread_to_run: No runnable threads found\n");

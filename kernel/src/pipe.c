@@ -129,15 +129,24 @@ pipe_t *pipe_create(void)
 }
 
 // Free only when BOTH ends are gone. Called with no lock held.
-static void pipe_destroy_if_orphaned(pipe_t *p)
+// Tear the pipe down. Reached by exactly ONE caller per pipe — the closer
+// whose decrement completed the 0/0 state, decided INSIDE the same critical
+// section as the decrement (see the doctrine at the close functions). This
+// used to be pipe_destroy_if_orphaned(), which re-took the lock and re-tested
+// the counts on its own — and that gap between "my decrement" and "my test"
+// was THE SCRIBBLED-TEXT BUG (2026-08-14): the last reader-close and last
+// writer-close racing on two cores could BOTH observe 0/0 and BOTH run the
+// kfrees below. Worse, a closer preempted in that gap (six hogs on four cores
+// stretch a microsecond window into seconds) came back and freed a 64KB ring
+// address that had since been recycled into a block-cache LINE — an
+// exact-base free of somebody else's live extent, invisible to every
+// tripwire. The allocator then carved the line into fresh demand-load frames
+// while the cache's stale data pointer kept refilling raw disk blocks over
+// them: running programs' text, overwritten mid-run, three "impossible"
+// segfaults at a time (hog task 55 and task 85, both post-mortemed to this
+// line). One decision, one destroyer, no gap.
+static void pipe_destroy(pipe_t *p)
 {
-	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
-	bool orphaned = (p->readers == 0 && p->writers == 0);
-	spinlock_release_irqrestore(&p->lock, flags);
-
-	if (!orphaned)
-		return;
-
 	pipe_list_remove(p);
 	printd(DEBUG_PIPE, "pipe_destroy: pipe 0x%016lx (both ends closed)\n", (uintptr_t)p);
 	kfree(p->buffer);
@@ -174,14 +183,25 @@ void pipe_ref_write_end(pipe_t *p)
 void pipe_close_read_end(pipe_t *p)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+	// THE DESTRUCTION DECISION LIVES IN THIS CRITICAL SECTION, fused to the
+	// decrement. The lock serializes the two final closes, so exactly one of
+	// them observes both counts at zero AS A RESULT OF ITS OWN DECREMENT —
+	// and only that one destroys. Deciding in a separate lock acquisition
+	// (the old pipe_destroy_if_orphaned) let both final closers see 0/0 and
+	// double-free the ring; see the funeral notice at pipe_destroy().
+	bool didDecrement = false;
 	if (p->readers > 0)
+	{
 		p->readers--;
+		didDecrement = true;
+	}
 	// Last reader gone: any writer blocked for space is now writing into the
 	// void. Wake it so it can discover that and fail (SIGPIPE) rather than
 	// sleep forever waiting for a drain that will never come. (A writer still
 	// mid-park stays registered; the sweep's readers==0 arm delivers the news.)
 	thread_t *w = (p->readers == 0) ? pipe_claim_parked_waiter(&p->writeWaiter) : NULL;
 	uint32_t nr = p->readers, nw = p->writers;
+	bool shouldDestroy = didDecrement && nr == 0 && nw == 0;
 	spinlock_release_irqrestore(&p->lock, flags);
 
 	printd(DEBUG_PIPE, "pipe_close_read: pipe 0x%016lx readers=%u writers=%u%s\n",
@@ -189,20 +209,28 @@ void pipe_close_read_end(pipe_t *p)
 		(nr == 0) ? "  <-- LAST READER GONE: writers now face EPIPE" : "");
 
 	pipe_wake_thread(w);
-	pipe_destroy_if_orphaned(p);
+	if (shouldDestroy)
+		pipe_destroy(p);
 }
 
 void pipe_close_write_end(pipe_t *p)
 {
 	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+	// Same fused decrement-and-decide as pipe_close_read_end — the doctrine
+	// and the scar are documented there and at pipe_destroy().
+	bool didDecrement = false;
 	if (p->writers > 0)
+	{
 		p->writers--;
+		didDecrement = true;
+	}
 	// Last writer gone: THIS IS EOF. A reader blocked on an empty pipe must be
 	// woken to discover it — otherwise it waits forever for a byte that can
 	// never arrive. (The single most important wake in the whole file. A reader
 	// still mid-park stays registered; the sweep's writers==0 arm is its EOF.)
 	thread_t *r = (p->writers == 0) ? pipe_claim_parked_waiter(&p->readWaiter) : NULL;
 	uint32_t nr = p->readers, nw = p->writers;
+	bool shouldDestroy = didDecrement && nr == 0 && nw == 0;
 	spinlock_release_irqrestore(&p->lock, flags);
 
 	printd(DEBUG_PIPE, "pipe_close_write: pipe 0x%016lx readers=%u writers=%u%s\n",
@@ -210,7 +238,8 @@ void pipe_close_write_end(pipe_t *p)
 		(nw == 0) ? "  <-- LAST WRITER GONE: this is EOF for the reader" : "");
 
 	pipe_wake_thread(r);
-	pipe_destroy_if_orphaned(p);
+	if (shouldDestroy)
+		pipe_destroy(p);
 }
 
 long pipe_read(pipe_t *p, char *buf, size_t len)

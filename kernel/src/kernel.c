@@ -17,6 +17,7 @@
 #include "tss.h"
 #include "nmi_probe.h"
 #include "symbols.h"
+#include "watchpoint.h"   // watchpoint_init — WATCH= arms before the drivers come up
 #include "pci.h"
 #include "ahci.h"
 #include "ata.h"
@@ -68,6 +69,7 @@ extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipe
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
 extern bool kTestGPFault;   // TESTGP: deliberate non-canonical-pointer #GP post-tests
+extern bool kTestWatchpoint; // TESTWATCH: prove the hardware-watchpoint path post-tests
 extern bool kTestShutdown;  // SHUTDOWNTEST: run the full shutdown descent post-tests
 bool kEnableSMP = true;
 // The scheduler mode, DEFAULT TRUE since 2026-08-05 (Chris's ruling, decision
@@ -206,6 +208,14 @@ void kernel_init()
 	// over, both long since ready; failure is announced and costs nothing
 	// but hex addresses (symbols.h has the doctrine).
 	symbols_init();
+
+	// Debug registers next, and deliberately THIS early: a WATCH= on the
+	// commandline exists to catch something that happens during boot as
+	// readily as something that happens an hour in, and every subsystem
+	// initialized below this line is a subsystem a watchpoint can now watch.
+	// (Symbols first, though — a call chain of bare hex addresses is a riddle,
+	// not a report.)
+	watchpoint_init();
 
 	printf("Initializing ACPI\n");
 	acpiFindTables();
@@ -584,6 +594,49 @@ void kernel_init()
 	if (kTestNmiProbe)
 		nmi_probe_sweep();
 
+	// WATCHDMA's arming point: after every boot-time mapping is done, so the
+	// watchpoints see only writes that boot did not make. (nvme.c explains why
+	// this cannot happen at controller init.)
+	nvme_watch_dma_chain();
+
+	// The standing WATCHPOINT diagnostic (TESTWATCH — watchpoint.h). Newest
+	// member of the TESTPANIC family, and it earns its place for the family's
+	// usual reason: a watchpoint only ever runs when something has already
+	// gone wrong, so without a standing test it would rot silently and be
+	// broken on the one night it mattered.
+	//
+	// It proves the WHOLE chain in one boot: DR7 programming, the trap
+	// reaching the unified #DB path, the hit being attributed to the right
+	// slot, the report naming the watchpoint, and — the part that is easy to
+	// get wrong and impossible to notice — TRACE mode actually RESUMING. Two
+	// hits are expected: one trace (the machine keeps going) and then a halt.
+	if (kTestWatchpoint)
+	{
+		static volatile uint64_t watchBait = 0;
+
+		printf("TESTWATCH: arming a trace watchpoint on the bait at 0x%016lx\n",
+		       (uintptr_t)&watchBait);
+		int slot = watchpoint_arm((uintptr_t)&watchBait, 8, WATCH_WRITE, WATCH_TRACE,
+		                          "TESTWATCH bait (trace)");
+		if (slot >= 0) {
+			// Should report and CONTINUE — if the machine stops here, resume
+			// is broken, which is the single most important thing this proves.
+			watchBait = 0x5741544348454431ULL;   // "WATCHED1"
+			printf("TESTWATCH: survived the trace hit — resume works\n");
+			watchpoint_disarm(slot);
+
+			// Now the same store under a HALT watchpoint: the machine should
+			// stop here with a full report and never reach the line below.
+			slot = watchpoint_arm((uintptr_t)&watchBait, 8, WATCH_WRITE, WATCH_HALT,
+			                      "TESTWATCH bait (halt)");
+			if (slot >= 0) {
+				watchBait = 0x5741544348454432ULL;   // "WATCHED2"
+				printf("TESTWATCH: *** STILL RUNNING after a HALT watchpoint — "
+				       "the watchpoint did NOT fire ***\n");
+			}
+		}
+	}
+
 	// The standing fatal-page-fault diagnostic (TESTPF). A wild KERNEL pointer,
 	// which is the exact shape of the fault this report exists to explain — an
 	// upper-half address no VMA covers, touched from ring 0. The report that
@@ -647,9 +700,23 @@ void kernel_init()
     if (kRunHusk && kRootFilesystem != NULL)
     {
         printf("Launching /bin/husk (the shell) ...\n");
+        // autoReap: COLLECTED BY DECREE, because ktask never waits (it has no
+        // wait loop and never will — see task_reparent_orphans' decree for the
+        // same reasoning on init's orphans). Without this, exiting a boot
+        // shell leaves an IMMORTAL ZOMBIE: retValCollected never (no waiter),
+        // autoReap false, parent alive forever — the corpse fails the
+        // undertaker's collected test on every sweep until reboot. Found
+        // 2026-08-15 on the P5 as "15 zombies kworker won't touch," ~1.1MB of
+        // stacks each; Chris proved the mechanism live (a NESTED husk exits
+        // clean — its parent waits; only ktask's children stuck), and the
+        // guest-side graveyard census matched. The testrun launch below had
+        // carried this exact flag, with a comment PREDICTING this exact bug,
+        // since 2026-08-10. The shell's exit status goes to no one; that is
+        // the licence.
         task_t *huskTask = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
         if (huskTask)
         {
+            huskTask->autoReap = true;
             tty_seat_shell(&kTTY[0], huskTask);
             scheduler_submit_new_task(huskTask);
         }
@@ -659,6 +726,7 @@ void kernel_init()
         task_t *huskTask2 = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
         if (huskTask2)
         {
+            huskTask2->autoReap = true;   // same decree as VT1's shell above
             tty_seat_shell(&kTTY[1], huskTask2);
             scheduler_submit_new_task(huskTask2);
         }
