@@ -700,9 +700,23 @@ void kernel_init()
     if (kRunHusk && kRootFilesystem != NULL)
     {
         printf("Launching /bin/husk (the shell) ...\n");
+        // autoReap: COLLECTED BY DECREE, because ktask never waits (it has no
+        // wait loop and never will — see task_reparent_orphans' decree for the
+        // same reasoning on init's orphans). Without this, exiting a boot
+        // shell leaves an IMMORTAL ZOMBIE: retValCollected never (no waiter),
+        // autoReap false, parent alive forever — the corpse fails the
+        // undertaker's collected test on every sweep until reboot. Found
+        // 2026-08-15 on the P5 as "15 zombies kworker won't touch," ~1.1MB of
+        // stacks each; Chris proved the mechanism live (a NESTED husk exits
+        // clean — its parent waits; only ktask's children stuck), and the
+        // guest-side graveyard census matched. The testrun launch below had
+        // carried this exact flag, with a comment PREDICTING this exact bug,
+        // since 2026-08-10. The shell's exit status goes to no one; that is
+        // the licence.
         task_t *huskTask = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
         if (huskTask)
         {
+            huskTask->autoReap = true;
             tty_seat_shell(&kTTY[0], huskTask);
             scheduler_submit_new_task(huskTask);
         }
@@ -712,6 +726,7 @@ void kernel_init()
         task_t *huskTask2 = task_create("/bin/husk", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
         if (huskTask2)
         {
+            huskTask2->autoReap = true;   // same decree as VT1's shell above
             tty_seat_shell(&kTTY[1], huskTask2);
             scheduler_submit_new_task(huskTask2);
         }

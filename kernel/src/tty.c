@@ -527,6 +527,13 @@ bool tty_summon_sweep(void)
 			continue;
 		}
 
+		// autoReap: COLLECTED BY DECREE — ktask is this shell's parent and
+		// ktask never waits, so without the decree every `exit` on a summoned
+		// shell mints an immortal zombie holding ~1.1MB of stacks until
+		// reboot. THE 2026-08-15 P5 FIND: Chris's "15 zombies kworker won't
+		// touch" were fifteen of exactly these — one per shell he had ever
+		// exited that boot. Full story at the boot-husk launch in kernel.c.
+		shell->autoReap = true;
 		tty_seat_shell(t, shell);
 		scheduler_submit_new_task(shell);
 		printd(DEBUG_TASK, "tty: summoned %s onto tty%u\n",
