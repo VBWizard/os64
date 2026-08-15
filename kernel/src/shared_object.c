@@ -434,7 +434,7 @@ void shared_object_release(shared_object_t *so)
     registry_lock();
     if (so->refcount > 0) {
         so->refcount--;
-        printd(DEBUG_TASK | DEBUG_DETAILED,
+        printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
                "shared_object_release: %s refcount now %u\n",
                so->path, so->refcount);
     } else {

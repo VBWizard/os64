@@ -87,7 +87,7 @@ void* task_alloc_aligned(task_t* task, size_t size)
 	// Map pages into task's PML4
 	paging_map_pages(task->pml4v, virt, phys, page_count, PAGE_PRESENT | PAGE_WRITE);
 
-	printd(DEBUG_TASK | DEBUG_DETAILED, "task_alloc_aligned: Allocated %lu bytes (phys=0x%lx, virt=0x%lx) for task %s\n",
+	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_alloc_aligned: Allocated %lu bytes (phys=0x%lx, virt=0x%lx) for task %s\n",
 		aligned_size, phys, virt, task->exename);
 
 	return (void*)virt;
@@ -177,7 +177,8 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 	}
 
 	if (marked)
-		printd(DEBUG_TASK, "task_exit: %s is taking %u sibling thread%s with it\n",
+		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+	       "task_exit: %s is taking %u sibling thread%s with it\n",
 		       task->exename, marked, marked == 1 ? "" : "s");
 }
 
@@ -228,7 +229,7 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 
 	paging_map_pages(task->pml4v, virt_stack_start, phys_stack_start, stack_page_count, flags);
 
-	printd(DEBUG_TASK | DEBUG_DETAILED, "task_alloc_guarded_stack: Allocated %lu byte %s stack at virt=0x%lx (phys=0x%lx), guards: 0x%lx-0x%lx and 0x%lx-0x%lx\n",
+	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_alloc_guarded_stack: Allocated %lu byte %s stack at virt=0x%lx (phys=0x%lx), guards: 0x%lx-0x%lx and 0x%lx-0x%lx\n",
 		stackSize, isRing3 ? "user" : "kernel", virt_stack_start, phys_stack_start,
 		virt_base, virt_stack_start,
 		virt_stack_start + stackSize, virt_base + aligned_size);
@@ -773,7 +774,13 @@ static void task_reparent_orphans(task_t *dying)
 // dropped for a dynamic task is the reference, not the image.
 static void task_destroy(task_t *t)
 {
-	printd(DEBUG_TASK, "task_destroy: burying task 0x%08x (%s)\n",
+	// The burial line rides the forensics tier since the DEBUG_TASK tiering
+	// (2026-08-15): under `watch` churn it fires twice a second forever, and
+	// the reclaim announcement below carries the burial's headline anyway.
+	// Plain DEBUG_TASK is the heartbeat tier now — rare, high-signal lines
+	// only (reclaims, retained-cache, the not-buriable warning, refusals).
+	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+	       "task_destroy: burying task 0x%08x (%s)\n",
 	       t->taskID, t->exename);
 
 	// Defensive second pass of the orphanage: a child racing its own exit on
@@ -985,7 +992,7 @@ int task_reap_eligible_zombies(size_t max_to_reap)
 			}
 
 			if (collected && task_threads_all_retired(child)) {
-				printd(DEBUG_TASK | DEBUG_DETAILED,
+				printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 					"task_reap_eligible_zombies: unlinking child task 0x%08x (%s), parent=0x%08x (%s), collected=%u autoReap=%u parentExited=%u\n",
 					child->taskID,
 					child->exename,
@@ -1149,7 +1156,8 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 		// still holding the write end of a pipe would leave its reader blocked
 		// forever on an EOF that can never come. Dying is just another way of
 		// closing your handles.
-		printd(DEBUG_TASK, "task_exit: %s releasing its handles\n", task->exename);
+		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+		       "task_exit: %s releasing its handles\n", task->exename);
 		handle_close_all(task);
 
 		task->exited = true;
@@ -1476,10 +1484,12 @@ static void task_table_bracket_close(void)
 
 task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
 {
-    printd(DEBUG_TASK,"task_initialize: Initializing task\n");
+    printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+           "task_initialize: Initializing task\n");
 
 	task_t* newTask = kmalloc_aligned(sizeof(task_t));
-    printd(DEBUG_TASK,"task_initialize: Malloc'd 0x%016x for new task\n",newTask);
+    printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+           "task_initialize: Malloc'd 0x%016x for new task\n",newTask);
 
     // (Idle tasks used to inherit their parent's PML4 here — see the address
     // space note below for why that had to stop.)
@@ -1533,7 +1543,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		newTask->pml4v = (uint64_t*)kKernelPML4v;
 		newTask->pml4 = (uint64_t*)kKernelPML4;
 		newTask->taskMemoryNextVirt = KERNEL_TASK_MEMORY_BASE;
-		printd(DEBUG_TASK | DEBUG_DETAILED, "task_initialize: ktask using kKernelPML4 directly\n");
+		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_initialize: ktask using kKernelPML4 directly\n");
 	}
 	else
 	{
@@ -1567,7 +1577,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 		}
 
 		newTask->taskMemoryNextVirt = kernelTask ? KERNEL_TASK_MEMORY_BASE : USER_TASK_MEMORY_BASE;
-		printd(DEBUG_TASK | DEBUG_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s%s task (shared upper-half)\n",
+		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s%s task (shared upper-half)\n",
 			newTask->pml4, idleTask ? "idle " : "", kernelTask ? "kernel" : "user");
 
 		// Open the creator's bracket BEFORE createThread below maps the new
@@ -1591,7 +1601,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	newTask->threads = createThread((void*)newTask, kernelTask);
 	newTask->threads->idleThread = idleTask;
 	newTask->threads->mp_apic = pinnedAPICId;
-	printd(DEBUG_TASK | DEBUG_DETAILED,
+	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 		"task_initialize: thread 0x%08x affinity set to %s0x%08lx\n",
 		newTask->threads->threadID,
 		pinnedAPICId == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
@@ -1895,8 +1905,9 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
     newTask->path=kmalloc(TASK_MAX_PATH_LEN); 
 	strncpy(newTask->path,path,TASK_MAX_PATH_LEN);
 
-	    printd(DEBUG_TASK,"task_create: Creating %s task for %s\n",isKernelTask?"kernel":"user",newTask->path);
-	printd(DEBUG_TASK | DEBUG_DETAILED,
+	    printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+	           "task_create: Creating %s task for %s\n",isKernelTask?"kernel":"user",newTask->path);
+	printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 		"task_create: path=%s pinnedAPICID=%s0x%08lx idle=%u logd=%u kworker=%u guicomp=%u\n",
 		newTask->path,
 		pinnedAPICID == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "",
