@@ -33,6 +33,17 @@
 // span locally so /proc reads never see books more than an IPI old.
 // ≥0x40 REQUIRED: AP TPR is 0x30, lower vectors silently never fire there.
 #define IPI_ACCT_SETTLE_VECTOR 0x82
+// "Re-read the watchpoint table onto your own debug registers" (watchpoint.c).
+// DR0-3/DR7 are per-CPU, so arming a watchpoint has to reach every core or it
+// only watches one eighth of an eight-core machine. Same ≥0x40 rule as above.
+#define IPI_WATCHPOINT_SYNC_VECTOR 0x83
+// "Stop where you are, forever." Sent by a core that is about to report a
+// FATAL exception and halt. Without it only the reporting core stops and the
+// other seven keep scheduling — so a shell repainting on another core scribbles
+// over the report before a human can read it. On real hardware that report is
+// often the ONLY record (no serial capture), which makes this the difference
+// between a diagnosis and a photograph of a screen that already moved on.
+#define IPI_FREEZE_VECTOR 0x84
 
 // IRQ0's vector, and the headstone of an attempt to move it (2026-08-10).
 //
@@ -83,6 +94,9 @@
 // carries the argument — and IRQ0's priority stops mattering at all.
 #define IRQ0_APIC_VECTOR 0x20
 void mpAcctSettleAll(void);
+// Permanently stop every other core — the full stop that precedes a fatal
+// exception report. See IPI_FREEZE_VECTOR above for why a report needs it.
+void mpFreezeOtherCores(void);
 // Which core's scratch ("kernel interrupt") stack contains rsp? -1 = none.
 // The dispatch tripwire's oracle — see the definition's comment for the
 // stack-poisoner story it guards against.

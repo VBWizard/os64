@@ -17,6 +17,7 @@
 #include "tss.h"
 #include "nmi_probe.h"
 #include "symbols.h"
+#include "watchpoint.h"   // watchpoint_init — WATCH= arms before the drivers come up
 #include "pci.h"
 #include "ahci.h"
 #include "ata.h"
@@ -68,6 +69,7 @@ extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipe
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
 extern bool kTestGPFault;   // TESTGP: deliberate non-canonical-pointer #GP post-tests
+extern bool kTestWatchpoint; // TESTWATCH: prove the hardware-watchpoint path post-tests
 extern bool kTestShutdown;  // SHUTDOWNTEST: run the full shutdown descent post-tests
 bool kEnableSMP = true;
 // The scheduler mode, DEFAULT TRUE since 2026-08-05 (Chris's ruling, decision
@@ -206,6 +208,14 @@ void kernel_init()
 	// over, both long since ready; failure is announced and costs nothing
 	// but hex addresses (symbols.h has the doctrine).
 	symbols_init();
+
+	// Debug registers next, and deliberately THIS early: a WATCH= on the
+	// commandline exists to catch something that happens during boot as
+	// readily as something that happens an hour in, and every subsystem
+	// initialized below this line is a subsystem a watchpoint can now watch.
+	// (Symbols first, though — a call chain of bare hex addresses is a riddle,
+	// not a report.)
+	watchpoint_init();
 
 	printf("Initializing ACPI\n");
 	acpiFindTables();

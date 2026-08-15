@@ -4,6 +4,7 @@
 #include "smp_offsets.h"
 #include "x86_64.h"
 #include "memory/paging.h"   // pat_init_this_core — per-core WC PAT entry
+#include "watchpoint.h"      // watchpoint_sync_this_core — DRs are per-CPU too
 #include "CONFIG.h"
 #include "msr.h"
 #include "smp.h"
@@ -249,6 +250,13 @@ void ap_wakeup_after_stack_switch(uint64_t apic_id, uint64_t stackVirtualAddress
 	// SDM wants uniformity. Must happen before this core ever stores through
 	// the framebuffer's PAGE_WC mapping (the compositor runs on APs).
 	pat_init_this_core();
+
+	// And this core's debug registers, from the same global table every other
+	// core is running: DR0-3/DR7 are per-CPU, so a core that came up after a
+	// watchpoint was armed would otherwise be the one blind spot in the
+	// machine — and the corruption always happens on the core you weren't
+	// watching. (watchpoint.h, limit 3.)
+	watchpoint_sync_this_core();
 
 	*((volatile uint32_t*)kCPUInfo[apic_id].apic_svr) |= 0x100; // Set bit 8 (Enable LAPIC)
 	//EOI to clear out the IRR as we don't know what is awaiting us when we enable the APIC/LVT otherwise
@@ -902,6 +910,35 @@ void disableApicTimerInterrupt() {
     uint32_t val = read_apic_register(APIC_LVT_TIMER); // Use the read function
     val |= (1U << APIC_LVT_MASK_BIT);  // Set the mask bit to disable
     write_apic_register(APIC_LVT_TIMER, val);
+}
+
+// The freeze IPI's C half. Acknowledges the interrupt so the LAPIC's ISR bit
+// does not stay set (a stuck ISR bit is its own catastrophe — see the IRQ0
+// headstone in smp_core.h), then returns to the stub's hlt loop and never
+// leaves it. Nothing else: a core about to stop forever must not take a lock,
+// touch the scheduler, or print — the core that sent this is mid-report and
+// owns the wire.
+void freeze_core_ISR(void)
+{
+    write_eoi();
+}
+
+// Stop every OTHER core, permanently. Called by a core that is about to print
+// a fatal report and halt: without it the report is a race against whatever
+// those cores repaint next, and on hardware with no serial capture the screen
+// IS the record. Fire-and-forget by design — there is no acknowledgement to
+// wait for, and a core too wedged to take the IPI was never going to overwrite
+// anything anyway.
+void mpFreezeOtherCores(void)
+{
+    if (!kSMPInitDone)
+        return;
+    uint32_t self = read_apic_id();
+    for (int i = 0; i < (int)kMPCoreCount; i++) {
+        uint32_t apic_id = (uint32_t)kCPUInfo[i].apicID;
+        if (apic_id != self)
+            send_ipi(apic_id, IPI_FREEZE_VECTOR, 0, 1, 0);
+    }
 }
 
 void inv_tlb_ISR()
