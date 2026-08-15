@@ -236,16 +236,20 @@ done:
     return result;
 }
 
+#define ERROR_FOLLOW_READ_HANDLE_LESS_THAN_ZERO -2
+#define ERROR_FOLLOW_READ_SEEK_ERROR -3
+#define ERROR_FOLLOW_READ_CLOSE_HANDLE_LESS_THAN_ZERO -4
+
 static int follow_read(const char *path, uint64_t *position)
 {
     int32_t handle = (int32_t)os64_open(path, "r");
     if (handle < 0)
-        return -1;
+        return ERROR_FOLLOW_READ_HANDLE_LESS_THAN_ZERO;
 
     if (os64_seek(handle, (int64_t)*position, OS64_SEEK_SET) < 0)
     {
         os64_close(handle);
-        return -1;
+        return ERROR_FOLLOW_READ_SEEK_ERROR;
     }
 
     int64_t n;
@@ -261,7 +265,7 @@ static int follow_read(const char *path, uint64_t *position)
     }
     int result = n < 0 || writeFailed ? -1 : 0;
     if (os64_close(handle) < 0)
-        result = -1;
+        result = ERROR_FOLLOW_READ_CLOSE_HANDLE_LESS_THAN_ZERO;
     return result;
 }
 
@@ -296,8 +300,9 @@ static int follow_files(const char *files[], uint64_t positions[],
 
             if (fileCount > 1 && lastOutput != i)
                 os64_printf("\n==> %s <==\n", files[i]);
-            if (follow_read(files[i], &positions[i]) < 0)
-                return -1;
+            int follow_read_return = 0;
+            if ((follow_read_return = follow_read(files[i], &positions[i])) < 0)
+                return follow_read_return;
             lastOutput = i;
         }
         os64_sleep(100);
@@ -416,11 +421,12 @@ int main(int argc, char **argv)
         }
     }
 
-    if (optFollow && activeFollowers > 0 &&
-        follow_files(files, followPositions, followActive,
-                     inputCount, lastOutput) < 0)
+    int follow_files_result = 0;
+    if (optFollow && activeFollowers > 0)
+        if ((follow_files_result=follow_files(files, followPositions, followActive,
+                     inputCount, lastOutput)) < 0)
     {
-        os64_hprintf(OS64_STDERR, "tail: follow failed\n");
+        os64_hprintf(OS64_STDERR, "tail: follow failed (%d)\n", follow_files_result);
         returnCode = 1;
     }
 
