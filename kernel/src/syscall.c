@@ -119,6 +119,8 @@ static uint64_t syscall_printat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_set_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_setenv(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_klog_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -196,6 +198,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
 	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
 	SYSCALL_DEFINE(SYSCALL_GETPID,    "getpid",    syscall_getpid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register)
+	SYSCALL_DEFINE(SYSCALL_SET_TIME,  "set_time",  syscall_set_time,  false, 0x00),  // arg0 = UTC epoch bits; monotonic clock is untouched
 };
 
 uint64_t _syscall_dispatch(
@@ -2922,6 +2925,20 @@ static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	if (!copy_to_user_buffer(user_out, &t, sizeof(t)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
+	return 0;
+}
+
+// set_time(epoch) — adjust only the wall clock. An aligned 64-bit store is
+// atomic on x86-64 and serializes cleanly with IRQ0's locked increment. We
+// preserve the current sub-second phase: the date utility accepts whole
+// seconds, and retaining phase avoids racing IRQ0 over a second shared word.
+// Uptime and every duration remain on kTicksSinceStart and cannot jump.
+static uint64_t syscall_set_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	__atomic_store_n(&kSystemCurrentTime, arg0, __ATOMIC_SEQ_CST);
 	return 0;
 }
 

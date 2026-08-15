@@ -317,6 +317,13 @@
 // `cat /proc/self/status` names cat. Both honest; different clocks.
 #define SYSCALL_GETPID     40
 
+// set_time(epoch) — replace the running kernel's UTC wall-clock counter.
+// The monotonic ticks clock remains untouched, so intervals and uptime never
+// jump when an operator corrects the calendar. This sets the in-memory clock,
+// not the battery-backed RTC; persistence belongs to a future hwclock tool.
+// Returns 0. The int64 epoch rides in arg0 as its two's-complement bits.
+#define SYSCALL_SET_TIME   41
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //
