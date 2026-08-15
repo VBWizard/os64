@@ -450,7 +450,22 @@ static void task_free_guarded_stack(task_t *t, uintptr_t stackBaseV)
 		return;
 	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)t->pml4v, stackBaseV);
 	if (phys == 0 || phys == 0xbadbadba)
+	{
+		// A corpse whose stack VA no longer resolves is NEWS, not noise: either
+		// the tables were torn before this walk (ordering bug) or the PTE was
+		// never there (creation bug) — and the extent this free would have
+		// released now leaks. Say so on the always-on channel; a silent return
+		// here hid whatever it hid for free (2026-08-14, scribbled-text hunt).
+		printd(DEBUG_EXCEPTIONS,
+		       "task_free_guarded_stack: %s (task %lu) stack VA 0x%016lx does not resolve "
+		       "(walk=0x%lx) — skipping the free, extent LEAKS\n",
+		       t->exename, t->taskID, (uint64_t)stackBaseV, (uint64_t)phys);
 		return;
+	}
+	// The -16KB step-back trusts the PTE to name OUR stack frame. Since the
+	// exact-base tripwire (allocator.c, same day), a stale/foreign PTE here
+	// can no longer silently release an innocent extent: unless the computed
+	// address is EXACTLY some extent's base, free_memory panics and names it.
 	free_memory((phys & ~(uintptr_t)0xFFF) -
 	            (THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE));
 }
