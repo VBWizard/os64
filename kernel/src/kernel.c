@@ -594,6 +594,49 @@ void kernel_init()
 	if (kTestNmiProbe)
 		nmi_probe_sweep();
 
+	// WATCHDMA's arming point: after every boot-time mapping is done, so the
+	// watchpoints see only writes that boot did not make. (nvme.c explains why
+	// this cannot happen at controller init.)
+	nvme_watch_dma_chain();
+
+	// The standing WATCHPOINT diagnostic (TESTWATCH — watchpoint.h). Newest
+	// member of the TESTPANIC family, and it earns its place for the family's
+	// usual reason: a watchpoint only ever runs when something has already
+	// gone wrong, so without a standing test it would rot silently and be
+	// broken on the one night it mattered.
+	//
+	// It proves the WHOLE chain in one boot: DR7 programming, the trap
+	// reaching the unified #DB path, the hit being attributed to the right
+	// slot, the report naming the watchpoint, and — the part that is easy to
+	// get wrong and impossible to notice — TRACE mode actually RESUMING. Two
+	// hits are expected: one trace (the machine keeps going) and then a halt.
+	if (kTestWatchpoint)
+	{
+		static volatile uint64_t watchBait = 0;
+
+		printf("TESTWATCH: arming a trace watchpoint on the bait at 0x%016lx\n",
+		       (uintptr_t)&watchBait);
+		int slot = watchpoint_arm((uintptr_t)&watchBait, 8, WATCH_WRITE, WATCH_TRACE,
+		                          "TESTWATCH bait (trace)");
+		if (slot >= 0) {
+			// Should report and CONTINUE — if the machine stops here, resume
+			// is broken, which is the single most important thing this proves.
+			watchBait = 0x5741544348454431ULL;   // "WATCHED1"
+			printf("TESTWATCH: survived the trace hit — resume works\n");
+			watchpoint_disarm(slot);
+
+			// Now the same store under a HALT watchpoint: the machine should
+			// stop here with a full report and never reach the line below.
+			slot = watchpoint_arm((uintptr_t)&watchBait, 8, WATCH_WRITE, WATCH_HALT,
+			                      "TESTWATCH bait (halt)");
+			if (slot >= 0) {
+				watchBait = 0x5741544348454432ULL;   // "WATCHED2"
+				printf("TESTWATCH: *** STILL RUNNING after a HALT watchpoint — "
+				       "the watchpoint did NOT fire ***\n");
+			}
+		}
+	}
+
 	// The standing fatal-page-fault diagnostic (TESTPF). A wild KERNEL pointer,
 	// which is the exact shape of the fault this report exists to explain — an
 	// upper-half address no VMA covers, touched from ring 0. The report that

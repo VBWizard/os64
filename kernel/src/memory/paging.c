@@ -8,6 +8,7 @@
 #include "memory/memset.h"
 #include "CONFIG.h"
 #include "serial_logging.h"
+#include "strings/sprintf.h"   // snprintf — paging_report_walk's direct-to-wire copy
 #include "memcpy.h"
 #include "panic.h"
 #include "printd.h"
@@ -54,6 +55,256 @@ static inline pt_entry_t table_entry(uint64_t physical_address, uint64_t flags) 
 #define PDPT_INDEX(addr)  (((addr) >> 30) & 0x1FF)
 #define PD_INDEX(addr)    (((addr) >> 21) & 0x1FF)
 #define PT_INDEX(addr)    (((addr) >> 12) & 0x1FF)
+
+// ── "Where did my mapping go?" (2026-08-14) ─────────────────────────────────
+//
+// A four-level post-mortem for ONE virtual address, written the day the NVMe
+// DMA bounce buffer's identity mapping vanished on the P5 — twice, with two
+// DIFFERENT wrong answers: present-but-read-only the first time, walk-fails-
+// entirely the second. One wrong value is a bug. Two different wrong values in
+// the same slot means the slot is not exclusively a page table any more.
+//
+// "The mapping is gone" is a symptom. These lines are the evidence:
+//
+//   - the entry at EVERY level, so a zeroed leaf (somebody wrote data over the
+//     page table) is distinguishable from a rewritten PDE (the table itself was
+//     replaced) and from damage higher up;
+//   - the PHYSICAL page each table lives in, so it can be compared against
+//     whatever the caller recorded when the mapping was healthy;
+//   - whether the leaf table sits inside the paging pool, which is the only
+//     place a kernel table is ever supposed to come from; and
+//   - the first words OF the leaf table. If a page table's contents read as
+//     ASCII text, then some other owner is using that page as a data buffer,
+//     and that one line is the entire answer.
+//
+// Prints direct (screen AND wire), like a dying report: every caller is about
+// to panic, and a diagnostic that depends on logd being alive is a diagnostic
+// that goes missing exactly when it is needed.
+#define WALK_EMIT(fmt, ...) do { \
+        printf(fmt, ##__VA_ARGS__); \
+        char _w[256]; \
+        snprintf(_w, sizeof(_w), fmt, ##__VA_ARGS__); \
+        serial_print_string(_w); \
+    } while (0)
+
+#define WALK_LEVEL(name, entry) \
+        WALK_EMIT("  %-5s[%3lu] = 0x%016lx  (present=%lu write=%lu user=%lu, next table phys 0x%012lx)\n", \
+                  name, (uint64_t)idx, (uint64_t)(entry), \
+                  (uint64_t)((entry) & PAGE_PRESENT ? 1 : 0), \
+                  (uint64_t)((entry) & PAGE_WRITE   ? 1 : 0), \
+                  (uint64_t)((entry) & PAGE_USER    ? 1 : 0), \
+                  (uint64_t)((entry) & ~0xFFFULL))
+
+// ── Mapping sentinels (2026-08-14) ──────────────────────────────────────────
+//
+// The tripwire in nvme.c catches the DMA buffer's mapping already broken, but
+// only at the next disk I/O — which can be a long way from whoever broke it.
+// These sentinels close that gap: register a mapping that must NEVER change,
+// then call the check at the phase boundaries of anything suspected. The first
+// checkpoint to see the damage names the phase, and with `watch -n 1 "ps -ef"`
+// running (two task lifecycles a SECOND — a husk to parse, a ps to run, each
+// with a fresh PML4, a fresh table arena, and a burial that frees all of it)
+// the answer arrives in one boot instead of one evening.
+//
+// Deliberately NOT a debug-gated feature: the check is a couple of page-table
+// walks at events that happen a few times a second, and a hunt instrument that
+// only runs when you remembered to ask for it is one that misses the one run
+// that mattered.
+#define PAGING_MAX_SENTINELS 8
+
+typedef struct {
+	uintptr_t   va;
+	const char *name;
+	uint64_t    pte;        // what the leaf entry said when it was healthy
+	uintptr_t   ptPage;     // and which physical page the leaf table lived in
+	bool        armed;
+} paging_sentinel_t;
+
+static paging_sentinel_t kSentinels[PAGING_MAX_SENTINELS];
+static int kSentinelCount = 0;
+
+void paging_sentinel_add(uintptr_t va, const char *name)
+{
+	if (kSentinelCount >= PAGING_MAX_SENTINELS)
+		return;
+	paging_sentinel_t *s = &kSentinels[kSentinelCount];
+	s->va     = va & ~(uintptr_t)0xFFF;
+	s->name   = name;
+	s->pte    = (uint64_t)paging_walk_paging_table_keep_flags((pt_entry_t *)kKernelPML4v, s->va, true);
+	s->ptPage = paging_leaf_table_phys((pt_entry_t *)kKernelPML4v, s->va);
+	s->armed  = true;
+	kSentinelCount++;
+	printd(DEBUG_PAGING, "PAGING: sentinel armed on %s, VA 0x%016lx (pte 0x%016lx, leaf table phys 0x%012lx)\n",
+	       name, s->va, s->pte, (uint64_t)s->ptPage);
+}
+
+void paging_sentinel_check(const char *where)
+{
+	for (int i = 0; i < kSentinelCount; i++) {
+		paging_sentinel_t *s = &kSentinels[i];
+		if (!s->armed)
+			continue;
+
+		uint64_t now = (uint64_t)paging_walk_paging_table_keep_flags((pt_entry_t *)kKernelPML4v, s->va, true);
+		if (now == s->pte)
+			continue;
+
+		// Disarm FIRST: paging_report_walk and panic() both map and print, and
+		// a sentinel that re-fires inside its own report writes a loop, not a
+		// diagnosis.
+		s->armed = false;
+
+		printf("\n>>> MAPPING SENTINEL BROKEN at [%s] <<<\n", where);
+		printf(">>> %s: VA 0x%016lx entry was 0x%016lx at arm time, is 0x%016lx now <<<\n",
+		       s->name, s->va, s->pte, now);
+		serial_print_string("\n>>> MAPPING SENTINEL BROKEN <<<\n");
+
+		paging_report_walk((pt_entry_t *)kKernelPML4v, s->va, s->name);
+
+		uintptr_t ptNow = paging_leaf_table_phys((pt_entry_t *)kKernelPML4v, s->va);
+		printf(">>> leaf page table was at phys 0x%012lx when armed, is 0x%012lx now — %s <<<\n",
+		       (uint64_t)s->ptPage, (uint64_t)ptNow,
+		       (ptNow == s->ptPage) ? "SAME PAGE (contents rewritten in place)"
+		                            : "DIFFERENT PAGE (the table was replaced or lost)");
+
+		panic("Mapping sentinel '%s' broken at [%s] — see the walk above. The phase "
+		      "named in the brackets is the one that did it.\n", s->name, where);
+	}
+}
+
+/// @brief Fill out[0..3] with the ADDRESSES of the four entries that map `va`
+///        — PML4E, PDPTE, PDE, PTE — so a caller can watch the ENTIRE CHAIN
+///        rather than guessing which level will be attacked.
+///
+/// Written 2026-08-14, the night a watchpoint aimed at the leaf PTE watched
+/// the wrong eight bytes: the P5's corruption zeroed the flag bits of
+/// PML4[0] itself, four levels up, unmapping the whole lower half of the
+/// kernel address space in a single store. Four levels, four debug registers
+/// — the hardware budget happens to be exactly the size of the question.
+///
+/// Returns the number of levels resolved (4 when the whole chain exists);
+/// entries beyond that are left zero.
+int paging_walk_entry_addresses(pt_entry_t *pml4v, uint64_t va, uintptr_t out[4])
+{
+	for (int i = 0; i < 4; i++)
+		out[i] = 0;
+
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+
+	out[0] = (uintptr_t)&pml4v[PML4_INDEX(va)];
+	uint64_t e = pml4v[PML4_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 1;
+
+	pt_entry_t *pdpt = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	out[1] = (uintptr_t)&pdpt[PDPT_INDEX(va)];
+	e = pdpt[PDPT_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 2;
+
+	pt_entry_t *pd = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	out[2] = (uintptr_t)&pd[PD_INDEX(va)];
+	e = pd[PD_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 3;
+
+	pt_entry_t *pt = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	out[3] = (uintptr_t)&pt[PT_INDEX(va)];
+	return 4;
+}
+
+/// @brief Return the ADDRESS OF THE PAGE TABLE ENTRY that maps `va` — that is,
+///        the eight bytes a watchpoint should be aimed at to catch whoever
+///        rewrites this mapping. Zero if the walk dies before the leaf.
+///
+/// The returned address is the HHDM alias of the leaf table plus the entry's
+/// index. That is the ONLY alias the pool is mapped through
+/// (kPagingPagesBaseAddressV is `phys | kHHDMOffset`), so a single watchpoint
+/// covers every legitimate route to these bytes — see watchpoint.h's limit 2
+/// for why that sentence had to be checked rather than assumed.
+uintptr_t paging_pte_address(pt_entry_t *pml4v, uint64_t va)
+{
+	uintptr_t ptPhys = paging_leaf_table_phys(pml4v, va);
+	if (ptPhys == 0)
+		return 0;
+	return (uintptr_t)PHYS_TO_VIRT(ptPhys) + (PT_INDEX(va) * sizeof(uint64_t));
+}
+
+/// @brief Return the physical page holding the LEAF page table for `va`, or 0
+///        if the walk dies before reaching it. Recorded while a mapping is
+///        healthy, it turns a later failure into a was/is comparison.
+uintptr_t paging_leaf_table_phys(pt_entry_t *pml4v, uint64_t va)
+{
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+
+	uint64_t e = pml4v[PML4_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 0;
+	pt_entry_t *pdpt = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+
+	e = pdpt[PDPT_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 0;
+	pt_entry_t *pd = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+
+	e = pd[PD_INDEX(va)];
+	if (!(e & PAGE_PRESENT)) return 0;
+	return (uintptr_t)(e & ~0xFFFULL);
+}
+
+void paging_report_walk(pt_entry_t *pml4v, uint64_t va, const char *what)
+{
+	if ((uintptr_t)pml4v < kHHDMOffset)
+		pml4v = (pt_entry_t *)((uintptr_t)pml4v | kHHDMOffset);
+
+	WALK_EMIT("PAGE TABLE WALK for %s, VA 0x%016lx (pml4 at 0x%016lx):\n",
+	          what, va, (uint64_t)(uintptr_t)pml4v);
+
+	uint64_t idx = PML4_INDEX(va);
+	uint64_t e = pml4v[idx];
+	WALK_LEVEL("PML4", e);
+	if (!(e & PAGE_PRESENT)) { WALK_EMIT("  ...PML4 entry absent — nothing below it exists.\n"); return; }
+
+	pt_entry_t *pdpt = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	idx = PDPT_INDEX(va);
+	e = pdpt[idx];
+	WALK_LEVEL("PDPT", e);
+	if (!(e & PAGE_PRESENT)) { WALK_EMIT("  ...PDPT entry absent — the 1GB region is unmapped.\n"); return; }
+
+	pt_entry_t *pd = (pt_entry_t *)PHYS_TO_VIRT(e & ~0xFFFULL);
+	idx = PD_INDEX(va);
+	e = pd[idx];
+	WALK_LEVEL("PD", e);
+	if (!(e & PAGE_PRESENT)) { WALK_EMIT("  ...PD entry absent — the 2MB region is unmapped.\n"); return; }
+
+	uintptr_t ptPhys = (uintptr_t)(e & ~0xFFFULL);
+	pt_entry_t *pt = (pt_entry_t *)PHYS_TO_VIRT(ptPhys);
+	idx = PT_INDEX(va);
+	e = pt[idx];
+	WALK_LEVEL("PT", e);
+
+	// Provenance: kernel tables come from the pool and nowhere else.
+	uintptr_t poolEnd = kPagingPagesBaseAddressP + (kPagingPagesCount * PAGE_SIZE);
+	WALK_EMIT("  leaf table phys 0x%012lx — pool is [0x%012lx,0x%012lx) => %s\n",
+	          (uint64_t)ptPhys, (uint64_t)kPagingPagesBaseAddressP, (uint64_t)poolEnd,
+	          (ptPhys >= kPagingPagesBaseAddressP && ptPhys < poolEnd)
+	              ? "INSIDE the pool (expected for a kernel table)"
+	              : "*** OUTSIDE THE POOL — this is not a pool-drawn kernel table ***");
+
+	// And the smoking gun, if there is one: does this "page table" read as text?
+	WALK_EMIT("  leaf table head: 0x%016lx 0x%016lx 0x%016lx 0x%016lx\n",
+	          pt[0], pt[1], pt[2], pt[3]);
+	{
+		char ascii[33];
+		const unsigned char *raw = (const unsigned char *)pt;
+		int printable = 0;
+		for (int i = 0; i < 32; i++) {
+			unsigned char c = raw[i];
+			ascii[i] = (c >= 0x20 && c < 0x7F) ? (char)c : '.';
+			if (ascii[i] != '.') printable++;
+		}
+		ascii[32] = '\0';
+		WALK_EMIT("  leaf table as text: \"%s\"%s\n", ascii,
+		          printable > 20 ? "   <<< THAT IS DATA, NOT A PAGE TABLE" : "");
+	}
+}
 
 void validatePagingHierarchy(uintptr_t address) {
     uintptr_t* pml4 = (uintptr_t*)kKernelPML4v;

@@ -19,9 +19,93 @@
 #include "smp_core.h"
 #include "kernel.h"
 #include "driver/system/x86_64.h"
+#include "watchpoint.h"   // WATCHDMA — the hardware aimed at the DMA buffer's PTE
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
+extern bool kWatchDMA;   // WATCHDMA cmdline flag (kernel_commandline.c)
+// The buffer whose page-table chain WATCHDMA watches: the first controller's
+// write bounce buffer. Both controllers' buffers sit under the same PML4E and
+// PDPTE (they are low identity mappings), so watching one covers the shared
+// upper levels, and four debug registers is the whole hardware budget anyway.
+char *kNvmeWatchTarget = NULL;
+
+// ── The DMA bounce buffers' tripwire (2026-08-14) ───────────────────────────
+//
+// THE FAULT THAT BOUGHT THIS. A #PF on the P5, kernel mode, error 0x3
+// ("present, protection violation, write"), inside memcpy, storing to
+// 0x00000000098a7000 — which is dmaWriteBuffer. kmalloc_dma hands back a
+// PHYSICAL address and identity-maps it PRESENT|WRITE|PCD; that single mapping
+// is the only reason the pointer the driver carries around is dereferenceable
+// at all. The buffer is allocated once at controller init, never freed, and
+// nothing in this tree ever re-maps or downgrades that VA — so a page that
+// reports present-but-not-writable is not a paging decision anybody made. It is
+// somebody else's entries, or somebody else's write, landing in the page table
+// that owns ours.
+//
+// The old symptom was a bare #PF inside memcpy, with the call chain to be
+// reconstructed from register archaeology. The new symptom names the crime one
+// instruction before it happens: which buffer, what its entry said at init,
+// what it says now. Loud beats silent, and early beats post-mortem
+// (SUCCESSION.md, rule 5).
+//
+// Cost is two page-table walks per I/O — four dependent loads each, in front of
+// a transfer that is about to go to a disk. First page and last page, because
+// the signature being hunted (a page-table page handed to a second owner)
+// rewrites a whole region's worth of entries at once and either end catches it.
+static uint64_t nvme_dma_pte(uintptr_t va)
+{
+	return (uint64_t)paging_walk_paging_table_keep_flags(
+	    (pt_entry_t *)kKernelPML4v, va & ~(uintptr_t)0xFFF, true);
+}
+
+static void nvme_dma_tripwire_check(const char *which, uintptr_t base,
+                                    size_t length, uint64_t atInit,
+                                    uintptr_t ptPageAtInit)
+{
+	uintptr_t pages[2];
+	pages[0] = base & ~(uintptr_t)0xFFF;
+	pages[1] = (base + (length ? length - 1 : 0)) & ~(uintptr_t)0xFFF;
+
+	for (int i = 0; i < 2; i++) {
+		uint64_t pte = nvme_dma_pte(pages[i]);
+		if ((pte & PAGE_PRESENT) && (pte & PAGE_WRITE))
+			continue;                      // still present, still ours to write
+
+		// 0xbadbadba is the walk's "no such mapping" sentinel, not an entry —
+		// decoding its bits as flags prints nonsense (it reads as write=1),
+		// so say which of the two answers this is before saying anything else.
+		bool walked = (pte != 0xbadbadba);
+
+		printf("\n");
+		if (walked) {
+			printf(">>> NVMe %s DMA buffer 0x%016lx: page 0x%016lx entry is 0x%016lx "
+			       "(present=%u write=%u user=%u), was 0x%016lx at controller init <<<\n",
+			       which, base, pages[i], pte,
+			       (unsigned)((pte & PAGE_PRESENT) != 0),
+			       (unsigned)((pte & PAGE_WRITE) != 0),
+			       (unsigned)((pte & PAGE_USER) != 0), atInit);
+		} else {
+			printf(">>> NVMe %s DMA buffer 0x%016lx: page 0x%016lx HAS NO MAPPING AT ALL "
+			       "(the walk died above the leaf); its entry was 0x%016lx at controller init <<<\n",
+			       which, base, pages[i], atInit);
+		}
+
+		// The evidence, before the halt: every level, the leaf table's identity
+		// and provenance, and whether that "page table" is really data now.
+		paging_report_walk((pt_entry_t *)kKernelPML4v, pages[i], which);
+
+		uintptr_t ptNow = paging_leaf_table_phys((pt_entry_t *)kKernelPML4v, pages[i]);
+		printf(">>> leaf page table was at phys 0x%012lx at init, is at 0x%012lx now — %s <<<\n",
+		       (uint64_t)ptPageAtInit, (uint64_t)ptNow,
+		       (ptNow == ptPageAtInit) ? "SAME PAGE (its contents were rewritten in place)"
+		                               : "DIFFERENT PAGE (the table itself was replaced or lost)");
+
+		panic("NVMe %s DMA buffer 0x%016lx lost its mapping at page 0x%016lx. "
+		      "The kernel's page tables were rewritten under a live identity "
+		      "mapping — see the walk above.\n", which, base, pages[i]);
+	}
+}
 
 int kNVMEControllerCount = 0;
 uint16_t initialCMDValue;
@@ -798,6 +882,51 @@ void nvme_identify(nvme_controller_t* controller)
 	controller->dmaReadBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
 	controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
 
+	// Arm the tripwire: photograph both buffers' page-table entries while they
+	// are known good, so every later I/O has something truthful to compare
+	// against and a report can say "was X, is Y" instead of only "is Y".
+	controller->dmaReadPteAtInit  = nvme_dma_pte((uintptr_t)controller->dmaReadBuffer);
+	controller->dmaWritePteAtInit = nvme_dma_pte((uintptr_t)controller->dmaWriteBuffer);
+	controller->dmaReadPtPageAtInit  = paging_leaf_table_phys((pt_entry_t *)kKernelPML4v,
+	                                       (uintptr_t)controller->dmaReadBuffer);
+	controller->dmaWritePtPageAtInit = paging_leaf_table_phys((pt_entry_t *)kKernelPML4v,
+	                                       (uintptr_t)controller->dmaWriteBuffer);
+
+	// And hand the same two pages to the paging sentinels, so the damage is
+	// noticed at the next task lifecycle boundary rather than waiting for the
+	// next disk I/O to walk into it. Same evidence, hours earlier.
+	paging_sentinel_add((uintptr_t)controller->dmaWriteBuffer, "NVMe write DMA buffer");
+	paging_sentinel_add((uintptr_t)controller->dmaReadBuffer,  "NVMe read DMA buffer");
+
+	// WATCHDMA remembers its target here but ARMS LATE, from kernel_init's
+	// post-boot block (nvme_watch_dma_chain below). Arming at this point would
+	// catch BOOT doing lawful work: ktask maps its argv at TASK_ARGV_VIRT
+	// through the kernel's OWN PML4, which legitimately ORs PAGE_USER into
+	// PML4[0] (0x…23 -> 0x…27). A halting watchpoint on that lawful write is a
+	// triple fault during boot — which is exactly how this comment got written.
+	if (kWatchDMA && kNvmeWatchTarget == NULL)
+		kNvmeWatchTarget = controller->dmaWriteBuffer;
+	// The BEFORE picture, so a later failure has something to be compared to by
+	// a human reading a photograph of a dead machine. Gated: it is eight lines
+	// per controller, and it is exactly the eight lines you want on the boot
+	// that precedes the crash.
+	if (kDebugLevel & DEBUG_NVME)
+		paging_report_walk((pt_entry_t *)kKernelPML4v,
+		                   (uintptr_t)controller->dmaWriteBuffer,
+		                   "write DMA buffer (armed)");
+	// (A probe that lived here on 2026-08-14 walked the same page's HHDM alias
+	// to ask whether the two aliases share tables — if they did, the
+	// allocator's unmap-on-free would take the identity mapping down with it.
+	// They do NOT: identity walks PML4[0]→0x34e000→0x34f000→0x3f8000 while the
+	// HHDM alias walks PML4[256]→0x34b000→0x34c000→0x3f7000, distinct at every
+	// level. Recorded here so nobody re-runs that experiment. Note in passing
+	// that the identity alias carries PCD and the HHDM alias does not — one
+	// physical page, two memory types, which x86 frowns on and we get away
+	// with because the DMA buffer is only ever touched through the identity VA.)
+	printd(DEBUG_NVME, "NVME: DMA bounce buffers armed — read 0x%016lx (pte 0x%016lx), write 0x%016lx (pte 0x%016lx)\n",
+	       (uintptr_t)controller->dmaReadBuffer, controller->dmaReadPteAtInit,
+	       (uintptr_t)controller->dmaWriteBuffer, controller->dmaWritePteAtInit);
+
 	//controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
 	printd(DEBUG_NVME, "NVME: Device found, model: %s, max bytes per PRP = %u\n", controller->deviceName, controller->maxBytesPerTransfer);
 
@@ -917,6 +1046,18 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
         nvme_iostat_note(isWrite, blockCount);
 
         char* dmaBuffer = isWrite ? controller->dmaWriteBuffer : controller->dmaReadBuffer;
+
+        // Before ANY use of it — the write path is about to memcpy INTO this
+        // buffer, and the read path is about to let the controller DMA into it,
+        // which is the worse of the two to get wrong: a device writing a page
+        // we no longer own corrupts in silence, where the memcpy at least
+        // faults. Both directions ask the same question.
+        nvme_dma_tripwire_check(isWrite ? "write" : "read", (uintptr_t)dmaBuffer,
+                                transferLength,
+                                isWrite ? controller->dmaWritePteAtInit
+                                        : controller->dmaReadPteAtInit,
+                                isWrite ? controller->dmaWritePtPageAtInit
+                                        : controller->dmaReadPtPageAtInit);
 
         // The command lives on the STACK (2026-08-04, the paging-pool
         // exhaustion hunt): nvme_submit_command COPIES the struct into the
@@ -1209,4 +1350,32 @@ void init_NVME()
 		if (kPCIDeviceFunctions[idx].class == 0x1 && kPCIDeviceFunctions[idx].subClass == 0x8)
 			nvme_init_device(&kPCIDeviceFunctions[idx]);
 
+}
+
+// WATCHDMA's second half: arm a hardware watchpoint on EVERY level of the page
+// table chain that maps the write DMA bounce buffer. Called from kernel_init
+// AFTER the post-boot tests, because boot itself legitimately rewrites the
+// upper levels (ktask's argv mapping ORs PAGE_USER into PML4[0]) and a halting
+// watchpoint armed before that stops the machine for a lawful change.
+//
+// After boot those entries are stable: paging_map_page only writes an entry
+// when the value actually CHANGES (2026-08-14), so every remaining write to
+// one of these eight-byte slots is, by construction, something new.
+void nvme_watch_dma_chain(void)
+{
+	if (!kWatchDMA || kNvmeWatchTarget == NULL)
+		return;
+
+	static const char *levelName[4] = {
+		"DMA buffer's PML4 entry", "DMA buffer's PDPT entry",
+		"DMA buffer's PD entry",   "DMA buffer's PT entry" };
+
+	uintptr_t entries[4];
+	int levels = paging_walk_entry_addresses((pt_entry_t *)kKernelPML4v,
+	                                         (uintptr_t)kNvmeWatchTarget, entries);
+	printf("WATCHDMA: watching the whole chain for DMA buffer 0x%016lx\n",
+	       (uintptr_t)kNvmeWatchTarget);
+	for (int i = 0; i < levels; i++)
+		if (entries[i] != 0)
+			watchpoint_arm(entries[i], 8, WATCH_WRITE, WATCH_HALT, levelName[i]);
 }

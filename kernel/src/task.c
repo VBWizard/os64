@@ -868,13 +868,22 @@ static void task_destroy(task_t *t)
 	// inside HHDM-unmap the pages, so anything that touches this dead map
 	// afterwards faults loudly: the use-after-free tripwire, now standing
 	// guard over page tables too. (NULL for ktask — arena_destroy no-ops.)
+	// SENTINEL BRACKET around the one call that FREES page tables. If a burial
+	// is handing a live table back to the allocator, these two checkpoints are
+	// the narrowest possible window around the crime: clean before, broken
+	// after, in the same burial. (2026-08-14 — Chris's read of the P5 photo:
+	// `watch -n 1 "ps -ef"` means a husk AND a ps are created and buried every
+	// second, which is by far the heaviest page-table churn in the system.)
+	paging_sentinel_check("task_destroy: before arena_destroy");
 	arena_destroy((arena_t *)t->tableArena);
+	paging_sentinel_check("task_destroy: after arena_destroy");
 
-	// THE DEFERRAL, ANNOUNCED (Chris's ruling, 2026-08-13: "announce the
-	// deferrals even louder... that way they stay visible"). One line per
-	// burial that leaves anything behind, on DEBUG_TASK — the same channel as
-	// the burial line itself, so a reader following a task's death sees what
-	// was recovered and what wasn't, together, without grepping a doc.
+	// THE RECLAIM, ANNOUNCED. The deferral's announcement (Chris's ruling,
+	// 2026-08-13: "announce the deferrals even louder... that way they stay
+	// visible") survives its payment (2026-08-15) with the verb changed: one
+	// line per burial that gave anything back, on DEBUG_TASK — the same
+	// channel as the burial line itself, so a reader following a task's
+	// death sees what it owned and that it all came home, together.
 	//
 	// Silence here is still a real signal: a task that touched no VMA page
 	// (every kernel thread, and any program that faulted nothing in)
@@ -2156,6 +2165,11 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// here on, draws for this pml4 happen only when the CHILD itself faults,
 	// and route through its own cls->task (paging_table_arena_for).
 	task_table_bracket_close();
+
+	// The other end of the lifecycle: if BUILDING an address space is what
+	// damages the kernel's, this catches it one task-create later instead of
+	// one disk-write later.
+	paging_sentinel_check("task_create: child fully built");
 
 	return newTask;
 }
