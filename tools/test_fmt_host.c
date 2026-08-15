@@ -1,15 +1,17 @@
-// test_fmt_host.c — HOST-side unit test for libos64's fmt.c and args.c.
+// test_fmt_host.c — HOST-side unit test for libos64's pure library pieces.
 //
-// Those two files are pure computation (no syscalls, no allocation), so they
+// These files are pure computation (no syscalls, no allocation), so they
 // compile with plain host gcc and can be checked the strongest possible way:
 // os64_vsnprintf diffed against the host C library's snprintf on a battery
-// of cases, and the arg parser walked through its whole grammar. Runs in
+// of cases, the arg parser walked through its whole grammar, and the calendar
+// and strftime paths are checked against known instants. Runs in
 // seconds at build time on the machine you're sitting at — no QEMU needed to
 // catch a %-8s regression.
 //
 // Build & run:
 //   gcc -I userland/libos64/include -I abi/include userland/libos64/fmt.c
 //       userland/libos64/args.c userland/libos64/env.c userland/libos64/str.c
+//       userland/libos64/date.c
 //       tools/test_fmt_host.c
 //       -o /tmp/os64_fmt_test     (one line)
 //   /tmp/os64_fmt_test
@@ -21,6 +23,7 @@
 #include "os64/args.h"
 #include "os64/env.h"     // the ABI env block — os64_getenv walks it
 #include "os64/proc.h"    // os64_getenv declaration
+#include "os64/date.h"
 
 // env.c's global, normally stored by launch.S before main; the test sets it
 // to a hand-built block.
@@ -280,10 +283,65 @@ int main(void)
                progress == true);
     }
 
+    {   // ── calendar + strftime: known answers, inverse, and bounds ─────────
+        os64_date_t leap;
+        os64_date_from_epoch(951782400, &leap);   // 2000-02-29 00:00:00Z
+        EXPECT(leap.year == 2000 && leap.month == 2 && leap.day == 29);
+        EXPECT(leap.weekday == 2 && leap.utc_offset_minutes == 0);
+        EXPECT(strcmp(leap.zone, "UTC") == 0);
+
+        char rendered[256];
+        size_t n = os64_strftime(rendered, sizeof(rendered),
+            "%a %A %b %B %F %T %I %p %j %u %w %y %z %Z %%", &leap);
+        EXPECT(n != 0);
+        EXPECT(strcmp(rendered,
+            "Tue Tuesday Feb February 2000-02-29 00:00:00 12 AM 060 2 2 00 +0000 UTC %") == 0);
+
+        int64_t epoch = 0;
+        EXPECT(os64_date_to_epoch(&leap, &epoch) == 0 && epoch == 951782400);
+        leap.year = 2001;                         // 2001 had no February 29
+        EXPECT(os64_date_to_epoch(&leap, &epoch) < 0);
+
+        char tiny[4];
+        EXPECT(os64_strftime(tiny, sizeof(tiny), "abcdef", &leap) == 0);
+        EXPECT(strcmp(tiny, "abc") == 0);
+    }
+
+    {   // Local inverse conversion rejects the DST spring gap.
+        static unsigned char raw[sizeof(os64_env_block_t) + 32];
+        os64_env_block_t *blk = (os64_env_block_t *)raw;
+        const char pairs[] = "TZ\0EST5EDT\0";
+        memcpy(blk->data, pairs, sizeof(pairs));
+        blk->page_count = 1;
+        blk->count = 1;
+        blk->data_end = sizeof(pairs) - 1;
+        __os64_env = blk;
+
+        os64_date_t local = {
+            .year = 2026, .month = 3, .day = 8,
+            .hour = 3, .minute = 0, .second = 0
+        };
+        int64_t epoch;
+        EXPECT(os64_mktime(&local, &epoch) == 0 && epoch == 1772953200);
+        local.hour = 2;                           // 02:00..02:59 never occurs
+        EXPECT(os64_mktime(&local, &epoch) < 0);
+
+        os64_date_from_epoch_tz(1772953200,
+            &(os64_tz_t){
+                .std_name = "EST", .dst_name = "EDT",
+                .std_offset_min = -300, .dst_offset_min = -240, .has_dst = 1,
+                .dst_start = {3, 2, 0, 120}, .dst_end = {11, 1, 0, 120}
+            }, &local);
+        char zone[32];
+        EXPECT(os64_strftime(zone, sizeof(zone), "%T %z %Z", &local) != 0);
+        EXPECT(strcmp(zone, "03:00:00 -0400 EDT") == 0);
+        __os64_env = NULL;
+    }
+
     if (failures == 0) {
-        printf("fmt+args host tests: ALL PASS\n");
+        printf("libos64 host tests: ALL PASS\n");
         return 0;
     }
-    printf("fmt+args host tests: %d FAILURES\n", failures);
+    printf("libos64 host tests: %d FAILURES\n", failures);
     return 1;
 }

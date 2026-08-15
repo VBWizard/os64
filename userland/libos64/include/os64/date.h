@@ -12,6 +12,7 @@
 // like a human).
 
 #include <stdint.h>
+#include <stddef.h>
 #include "os64/time.h"   // os64_time_t — the raw syscall struct (abi)
 
 // A moment on the civil calendar, fields counted the way people count them:
@@ -25,6 +26,8 @@ typedef struct {
     int32_t minute;    // 0..59
     int32_t second;    // 0..59
     int32_t weekday;   // 0..6, 0 = Sunday
+    int32_t utc_offset_minutes; // minutes east of UTC for %z
+    char    zone[8];            // display name for %Z ("UTC", "EST", ...)
 } os64_date_t;
 
 // The raw syscall: fill *t with the kernel's snapshot (UTC epoch, tz offset
@@ -33,12 +36,34 @@ typedef struct {
 // tenths) or UTC itself; use os64_date_now() when you just want the wall.
 int64_t os64_time(os64_time_t *t);
 
+// Set the kernel's UTC wall clock. This changes the running system clock but
+// deliberately does not write the battery-backed RTC; that is a separate
+// hardware-policy operation. The monotonic ticks clock is never affected.
+int64_t os64_set_time(int64_t epoch);
+
 // Break an epoch (seconds since 1970-01-01 UTC — ANY epoch, not just now)
 // into calendar fields. Pure math, no syscall: feed it epoch + tz*60 for
 // local time, or the raw epoch for UTC, or a file's timestamp when stat
 // learns to deliver one. Handles pre-1970 epochs correctly (negative
 // seconds are the past, not an error — RTC batteries die).
 void os64_date_from_epoch(int64_t epoch, os64_date_t *out);
+
+// The inverse conversion: validate human-counted calendar fields and turn
+// them into a UTC epoch. The offset/zone/weekday fields are ignored. Returns
+// 0 and fills *epoch, or negative for an impossible date.
+int64_t os64_date_to_epoch(const os64_date_t *date, int64_t *epoch);
+
+// Interpret calendar fields as LOCAL time under the same TZ policy as
+// os64_date_now/os64_localtime. Nonexistent DST times are rejected; when the
+// fall transition repeats an hour, standard time wins deterministically.
+int64_t os64_mktime(const os64_date_t *date, int64_t *epoch);
+
+// Format an os64_date_t with the standard strftime vocabulary used by the
+// utilities. Supported conversions: a A b B c d e F H I j m M n p S t T u
+// w x X y Y z Z and %. Returns bytes written (not including NUL), or 0 if
+// the output does not fit. No locale is installed yet, so names are English.
+size_t os64_strftime(char *buffer, size_t capacity, const char *format,
+                     const os64_date_t *date);
 
 // The everyday call: "what does the wall clock say, right here?" — one
 // syscall, timezone applied, calendar broken out. Returns 0, or negative if

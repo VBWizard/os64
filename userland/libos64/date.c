@@ -16,9 +16,27 @@
 #include "os64/syscall_numbers.h"
 #include <stddef.h>
 
+static void date_set_zone(os64_date_t *date, int32_t offset, const char *name)
+{
+    date->utc_offset_minutes = offset;
+    size_t i = 0;
+    if (name != NULL) {
+        while (name[i] != '\0' && i + 1 < sizeof(date->zone)) {
+            date->zone[i] = name[i];
+            i++;
+        }
+    }
+    date->zone[i] = '\0';
+}
+
 int64_t os64_time(os64_time_t *t)
 {
     return (int64_t)os64_syscall1(SYSCALL_TIME, (uint64_t)t);
+}
+
+int64_t os64_set_time(int64_t epoch)
+{
+    return (int64_t)os64_syscall1(SYSCALL_SET_TIME, (uint64_t)epoch);
 }
 
 void os64_date_from_epoch(int64_t epoch, os64_date_t *out)
@@ -60,6 +78,7 @@ void os64_date_from_epoch(int64_t epoch, os64_date_t *out)
     out->year  = (int32_t)(y + (m <= 2));   // Jan/Feb belong to the NEXT civil year
     out->month = (int32_t)m;
     out->day   = (int32_t)d;
+    date_set_zone(out, 0, "UTC");
 }
 
 // ---- The TZ engine ---------------------------------------------------------
@@ -77,6 +96,35 @@ static int64_t days_from_civil(int32_t y, int32_t m, int32_t d)
                               + d - 1);                                  // [0, 365]
     uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;                // [0, 146096]
     return era * 146097 + (int64_t)doe - 719468;
+}
+
+static int32_t days_in_month(int32_t year, int32_t month)
+{
+    static const int32_t days[12] =
+        { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    if (month < 1 || month > 12)
+        return 0;
+    if (month == 2 && year % 4 == 0 &&
+        (year % 100 != 0 || year % 400 == 0))
+        return 29;
+    return days[month - 1];
+}
+
+int64_t os64_date_to_epoch(const os64_date_t *date, int64_t *epoch)
+{
+    if (date == NULL || epoch == NULL ||
+        date->month < 1 || date->month > 12 ||
+        date->day < 1 || date->day > days_in_month(date->year, date->month) ||
+        date->hour < 0 || date->hour > 23 ||
+        date->minute < 0 || date->minute > 59 ||
+        date->second < 0 || date->second > 59)
+        return -1;
+
+    *epoch = days_from_civil(date->year, date->month, date->day) * 86400
+             + (int64_t)date->hour * 3600
+             + (int64_t)date->minute * 60
+             + date->second;
+    return 0;
 }
 
 static int32_t is_letter(char c)
@@ -284,8 +332,10 @@ int32_t os64_tz_offset_at(const os64_tz_t *tz, int64_t epoch)
 void os64_date_from_epoch_tz(int64_t epoch, const os64_tz_t *tz,
                              os64_date_t *out)
 {
-    os64_date_from_epoch(
-        epoch + (int64_t)os64_tz_offset_at(tz, epoch) * 60, out);
+    int32_t daylight = os64_tz_dst_at(tz, epoch);
+    int32_t offset = daylight ? tz->dst_offset_min : tz->std_offset_min;
+    os64_date_from_epoch(epoch + (int64_t)offset * 60, out);
+    date_set_zone(out, offset, daylight ? tz->dst_name : tz->std_name);
 }
 
 int64_t os64_date_now(os64_date_t *out, os64_time_t *raw)
@@ -306,8 +356,11 @@ int64_t os64_date_now(os64_date_t *out, os64_time_t *raw)
     os64_tz_t tz;
     if (tzs != NULL && os64_tz_parse(tzs, &tz) == 0)
         os64_date_from_epoch_tz(t.epoch, &tz, out);
-    else
+    else {
         os64_date_from_epoch(t.epoch + (int64_t)t.tz_offset_minutes * 60, out);
+        date_set_zone(out, t.tz_offset_minutes,
+                      t.tz_offset_minutes == 0 ? "UTC" : "");
+    }
 
     if (raw != NULL)
         *raw = t;
@@ -335,9 +388,212 @@ int64_t os64_localtime(int64_t epoch, os64_date_t *out)
     }
 
     os64_time_t t;
-    if (os64_time(&t) == 0)
+    if (os64_time(&t) == 0) {
         os64_date_from_epoch(epoch + (int64_t)t.tz_offset_minutes * 60, out);
-    else
+        date_set_zone(out, t.tz_offset_minutes,
+                      t.tz_offset_minutes == 0 ? "UTC" : "");
+    } else
         os64_date_from_epoch(epoch, out);   // no zone anywhere: UTC, honestly
     return 0;
+}
+
+static int32_t same_civil_time(const os64_date_t *a, const os64_date_t *b)
+{
+    return a->year == b->year && a->month == b->month && a->day == b->day &&
+           a->hour == b->hour && a->minute == b->minute &&
+           a->second == b->second;
+}
+
+int64_t os64_mktime(const os64_date_t *date, int64_t *epoch)
+{
+    int64_t naive;
+    if (os64_date_to_epoch(date, &naive) != 0 || epoch == NULL)
+        return -1;
+
+    const char *tzs = os64_getenv("TZ");
+    os64_tz_t tz;
+    if (tzs != NULL && os64_tz_parse(tzs, &tz) == 0) {
+        // Try standard first so the repeated fall-back hour has one stable
+        // interpretation. Then try daylight; a spring-forward gap matches
+        // neither candidate and is correctly rejected.
+        int32_t offsets[2] = { tz.std_offset_min, tz.dst_offset_min };
+        int32_t count = tz.has_dst ? 2 : 1;
+        for (int32_t i = 0; i < count; i++) {
+            int64_t candidate = naive - (int64_t)offsets[i] * 60;
+            if (os64_tz_offset_at(&tz, candidate) != offsets[i])
+                continue;
+            os64_date_t check;
+            os64_date_from_epoch_tz(candidate, &tz, &check);
+            if (same_civil_time(date, &check)) {
+                *epoch = candidate;
+                return 0;
+            }
+        }
+        return -1;
+    }
+
+    os64_time_t now;
+    int32_t offset = os64_time(&now) == 0 ? now.tz_offset_minutes : 0;
+    *epoch = naive - (int64_t)offset * 60;
+    return 0;
+}
+
+// ---- strftime -------------------------------------------------------------
+
+typedef struct {
+    char *buffer;
+    size_t capacity;
+    size_t length;
+} date_writer_t;
+
+static void writer_char(date_writer_t *writer, char c)
+{
+    if (writer->capacity > 0 && writer->length + 1 < writer->capacity)
+        writer->buffer[writer->length] = c;
+    writer->length++;
+}
+
+static void writer_text(date_writer_t *writer, const char *text)
+{
+    while (*text != '\0')
+        writer_char(writer, *text++);
+}
+
+static void writer_uint(date_writer_t *writer, uint64_t value,
+                        int32_t width, char pad)
+{
+    char digits[24];
+    int32_t count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+    while (count < width) {
+        writer_char(writer, pad);
+        width--;
+    }
+    while (count > 0)
+        writer_char(writer, digits[--count]);
+}
+
+static void writer_year(date_writer_t *writer, int32_t year)
+{
+    int64_t wide = year;
+    if (wide < 0) {
+        writer_char(writer, '-');
+        wide = -wide;
+    }
+    writer_uint(writer, (uint64_t)wide, 4, '0');
+}
+
+static void date_format(date_writer_t *writer, const char *format,
+                        const os64_date_t *date)
+{
+    static const char *const short_weekdays[7] =
+        { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    static const char *const long_weekdays[7] =
+        { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    static const char *const short_months[12] =
+        { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+    static const char *const long_months[12] =
+        { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+
+    while (*format != '\0') {
+        if (*format != '%') {
+            writer_char(writer, *format++);
+            continue;
+        }
+        format++;
+        char conversion = *format;
+        if (conversion == '\0') {
+            writer_char(writer, '%');
+            break;
+        }
+        format++;
+
+        switch (conversion) {
+        case 'a':
+            writer_text(writer, date->weekday >= 0 && date->weekday < 7
+                                  ? short_weekdays[date->weekday] : "???");
+            break;
+        case 'A':
+            writer_text(writer, date->weekday >= 0 && date->weekday < 7
+                                  ? long_weekdays[date->weekday] : "???");
+            break;
+        case 'b':
+            writer_text(writer, date->month >= 1 && date->month <= 12
+                                  ? short_months[date->month - 1] : "???");
+            break;
+        case 'B':
+            writer_text(writer, date->month >= 1 && date->month <= 12
+                                  ? long_months[date->month - 1] : "???");
+            break;
+        case 'c': date_format(writer, "%a %b %e %H:%M:%S %Y", date); break;
+        case 'd': writer_uint(writer, (uint32_t)date->day, 2, '0'); break;
+        case 'e': writer_uint(writer, (uint32_t)date->day, 2, ' '); break;
+        case 'F': date_format(writer, "%Y-%m-%d", date); break;
+        case 'H': writer_uint(writer, (uint32_t)date->hour, 2, '0'); break;
+        case 'I': {
+            int32_t hour = date->hour % 12;
+            writer_uint(writer, (uint32_t)(hour == 0 ? 12 : hour), 2, '0');
+            break;
+        }
+        case 'j': {
+            int64_t day = days_from_civil(date->year, date->month, date->day)
+                          - days_from_civil(date->year, 1, 1) + 1;
+            writer_uint(writer, (uint64_t)day, 3, '0');
+            break;
+        }
+        case 'm': writer_uint(writer, (uint32_t)date->month, 2, '0'); break;
+        case 'M': writer_uint(writer, (uint32_t)date->minute, 2, '0'); break;
+        case 'n': writer_char(writer, '\n'); break;
+        case 'p': writer_text(writer, date->hour < 12 ? "AM" : "PM"); break;
+        case 'S': writer_uint(writer, (uint32_t)date->second, 2, '0'); break;
+        case 't': writer_char(writer, '\t'); break;
+        case 'T': date_format(writer, "%H:%M:%S", date); break;
+        case 'u': writer_uint(writer, date->weekday == 0 ? 7u : (uint32_t)date->weekday, 1, '0'); break;
+        case 'w': writer_uint(writer, (uint32_t)date->weekday, 1, '0'); break;
+        case 'x': date_format(writer, "%m/%d/%y", date); break;
+        case 'X': date_format(writer, "%H:%M:%S", date); break;
+        case 'y': {
+            int32_t year = date->year % 100;
+            if (year < 0)
+                year = -year;
+            writer_uint(writer, (uint32_t)year, 2, '0');
+            break;
+        }
+        case 'Y': writer_year(writer, date->year); break;
+        case 'z': {
+            int32_t offset = date->utc_offset_minutes;
+            writer_char(writer, offset < 0 ? '-' : '+');
+            int64_t absolute = offset;
+            if (absolute < 0)
+                absolute = -absolute;
+            writer_uint(writer, (uint64_t)(absolute / 60), 2, '0');
+            writer_uint(writer, (uint64_t)(absolute % 60), 2, '0');
+            break;
+        }
+        case 'Z': writer_text(writer, date->zone); break;
+        case '%': writer_char(writer, '%'); break;
+        default:
+            // Preserve an extension we do not know instead of silently
+            // deleting it; callers can spot the unsupported conversion.
+            writer_char(writer, '%');
+            writer_char(writer, conversion);
+            break;
+        }
+    }
+}
+
+size_t os64_strftime(char *buffer, size_t capacity, const char *format,
+                     const os64_date_t *date)
+{
+    if (buffer == NULL || capacity == 0 || format == NULL || date == NULL)
+        return 0;
+
+    date_writer_t writer = { .buffer = buffer, .capacity = capacity, .length = 0 };
+    date_format(&writer, format, date);
+    size_t end = writer.length < capacity ? writer.length : capacity - 1;
+    buffer[end] = '\0';
+    return writer.length < capacity ? writer.length : 0;
 }
