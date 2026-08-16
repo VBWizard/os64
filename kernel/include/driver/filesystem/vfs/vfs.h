@@ -291,6 +291,22 @@ struct file
 	// ping.log). Future customers: lsof, umount refusal counts.
 	vfs_file_t *openNext;
 	vfs_file_t *openPrev;
+
+	// THE POSITION LOCK (2026-08-15). An open file carries ONE seek position,
+	// so "seek here, then read" is only atomic if nobody re-seeks in between —
+	// and the demand pager does exactly that pair, from any core, for any
+	// thread that touches an unresolved page. The day a task grew a second
+	// thread, two of them could fault on two different code pages at once and
+	// each receive the OTHER's file offset: a page of perfectly valid machine
+	// code from the wrong part of the binary, executed, with the crash landing
+	// somewhere unrelated and unrepeatable.
+	//
+	// Zero = unlocked, and every allocation in this kernel is zeroed at the
+	// choke point, so existing creators need no change. Taken ONLY around
+	// seek+read pairs on a file that more than one thread can reach; the
+	// dynamic-linking path solved the identical problem first with
+	// shared_object_t's io_lock, and this is the same lock one layer down.
+	volatile uint64_t pos_lock;
 };
 
 struct file_operations

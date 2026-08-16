@@ -29,12 +29,41 @@ typedef struct {
 // This function runs in kernel context (kKernelPML4 loaded)
 static void kernel_read_file(kernel_read_params_t *params)
 {
-    if (params->fops->seek(params->file, (long)params->file_offset, SEEK_SET) < 0) {
-        params->result = -1;
-        return;
-    }
+    // SEEK AND READ ARE ONE OPERATION, and this is the only place in the
+    // demand pager that says so.
+    //
+    // A vfs_file_t owns a single position. Two threads of one task faulting on
+    // two different pages of their own executable both land here on different
+    // cores, and without this lock they interleave as
+    //   T1 seek(0x3000) | T2 seek(0x9000) | T1 read -> gets 0x9000's bytes
+    // so a code page is filled with real, valid machine code from the WRONG
+    // part of the binary. Execution then wanders off and dies somewhere with
+    // no relationship to the bug — the fault we chased on 2026-08-15 reported
+    // a read of 0xffffffffffffff8a from an instruction that performs no read
+    // at all, which is exactly what "the bytes under RIP are not the code you
+    // think" looks like from the other end.
+    //
+    // Found by malloctest's threaded heap test: the FIRST workload in os64's
+    // life where several threads of one task executed enough distinct code to
+    // fault pages in simultaneously (threadtest's workers share one tiny
+    // loop). Proof it is the pager and not the heap: pre-faulting the text on
+    // the main thread makes 8 threads run clean, cold text faults 7 times.
+    //
+    // The dynamic path already knew: shared_object_t::io_lock guards the same
+    // pair for shared objects, with the same one-line comment. This is that
+    // lock for everybody else.
+    //
+    // Spin, do not sleep: os64's storage I/O is polled, ext2 already holds
+    // irqsave spinlocks across whole operations, and this pair is short.
+    while (__sync_lock_test_and_set(&params->file->pos_lock, 1))
+        __asm__ volatile("pause");
 
-    params->result = params->fops->read(params->file, params->buffer, params->size);
+    if (params->fops->seek(params->file, (long)params->file_offset, SEEK_SET) < 0)
+        params->result = -1;
+    else
+        params->result = params->fops->read(params->file, params->buffer, params->size);
+
+    __sync_lock_release(&params->file->pos_lock);
 }
 
 // call_in_kernel_context() is a NAKED asm trampoline in task_exit_asm.S.
