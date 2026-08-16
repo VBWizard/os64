@@ -151,6 +151,64 @@ bool physical_page_is_allocated_on(uintptr_t physical_page)
 	return false;
 }
 
+// Copy len bytes from physical memory through the HHDM alias, ATOMICALLY with
+// respect to this allocator's frees (PR #26, Codex's P1). The reader's problem:
+// anything that resolves a task VA to a physical page and then memcpy's through
+// `phys | kHHDMOffset` (procfs reading a task's heap report) races the owner
+// unmapping that region from another core — free_memory() HHDM-unmaps the
+// alias at the choke point, and losing the race turns a /proc read into a
+// ring-0 fault on the lazy-HHDM tripwire: a user program panicking the kernel
+// with good timing. Under kMemoryStatusLock no free can proceed, so the check
+// and the copy see one consistent world: verify every page of the range lies
+// inside a live extent, copy, release. A stale-but-reallocated page can still
+// yield NONSENSE bytes (the caller's magic/seqlock validation owns that); it
+// can never yield a fault.
+//
+// The per-page check is a RANGE test, not physical_page_is_allocated_on above —
+// that helper answers "does an extent START here?", which is false for every
+// interior page of a multi-page allocation.
+//
+// RULES FOR CALLERS: this holds the allocator's own interrupts-off lock across
+// the memcpy, so len must stay small (a page or so per call) and nothing on
+// this path may allocate, free, or fault. The read-cache's hit-copy-under-lock
+// precedent applies: microseconds, bounded, honest.
+bool allocator_copy_from_phys(void *dst, uintptr_t phys, size_t len)
+{
+	if (dst == NULL || len == 0)
+		return false;
+
+	uint64_t flags = allocator_lock();
+
+	uintptr_t first = phys & ~(uintptr_t)0xFFF;
+	uintptr_t last  = (phys + len - 1) & ~(uintptr_t)0xFFF;
+	for (uintptr_t page = first; page <= last; page += PAGE_SIZE)
+	{
+		bool covered = false;
+		for (uint64_t i = 0; i < kMemoryStatusCurrentPtr; i++)
+		{
+			if (!kMemoryStatus[i].in_use)
+				continue;
+			uintptr_t s = kMemoryStatus[i].startAddress & ~(uintptr_t)0xFFF;
+			uintptr_t e = round_up_to_nearest_page(kMemoryStatus[i].startAddress
+			                                       + kMemoryStatus[i].length);
+			if (page >= s && page < e)
+			{
+				covered = true;
+				break;
+			}
+		}
+		if (!covered)
+		{
+			allocator_unlock(flags);
+			return false;   // freed (or never allocated) — the caller says "unreadable"
+		}
+	}
+
+	memcpy(dst, (const void *)(phys | kHHDMOffset), len);
+	allocator_unlock(flags);
+	return true;
+}
+
 // Maintenance/observability counters (allocator.h has the tour). All are
 // bumped under kMemoryStatusLock, so plain increments are safe.
 uint64_t kAllocExactFitHits = 0;   // a recycled hole was reused whole

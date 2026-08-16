@@ -43,6 +43,7 @@
 #include "handle.h"
 #include "memory/vma.h"
 #include "memory/paging.h"
+#include "memory/allocator.h"   // allocator_copy_from_phys — the fault-proof HHDM read
 #include "CONFIG.h"
 #include "BasicRenderer.h"   // printf — the mount line belongs on the glass too
 #include "smp.h"             // core_local_storage_t (/proc/self's identity read)
@@ -627,7 +628,14 @@ static bool proc_copy_task_bytes(task_t *task, uintptr_t task_va,
 		if (chunk > len - done)
 			chunk = len - done;
 
-		memcpy(dst + done, (const void *)((phys | kHHDMOffset) + offset), chunk);
+		// Verify-and-copy under the allocator's lock (PR #26, Codex's P1):
+		// a raw memcpy through the HHDM alias here raced a concurrent
+		// os64_unmap on another thread of the target task — free_memory
+		// HHDM-unmaps at the choke point, and losing the race was a ring-0
+		// fault on the lazy-HHDM tripwire. A user program must not be able
+		// to panic the kernel by unmapping memory it told us to read.
+		if (!allocator_copy_from_phys(dst + done, phys + offset, chunk))
+			return false;   // freed mid-read — "unreadable" is the honest answer
 		done += chunk;
 	}
 	return true;

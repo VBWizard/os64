@@ -19,6 +19,13 @@ extern uint64_t kMemoryStatusCurrentPtr;
 extern memory_status_t *kMemoryStatus;
 
 bool physical_page_is_allocated_on(uintptr_t physical_page_start);
+
+// Verify-then-copy from physical memory via the HHDM alias, atomic against
+// frees (the whole range must lie inside live extents, checked and copied
+// under kMemoryStatusLock). False = some page is not allocator-live; the
+// caller reports "unreadable" instead of the kernel taking the lazy-HHDM
+// tripwire fault. Keep len page-sized per call — the lock is interrupts-off.
+bool allocator_copy_from_phys(void *dst, uintptr_t phys, size_t len);
 uint64_t allocate_memory_at_address(uint64_t address, uint64_t requested_length, bool use_address);
 uint64_t allocate_memory_aligned(uint64_t requested_length);
 uint64_t allocate_memory(uint64_t requested_length);
