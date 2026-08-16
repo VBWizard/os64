@@ -13,6 +13,23 @@ style preference: WSL2 lives behind a NAT of its own, so a listener there
 is not reachable from the P5 without port-proxy incantations, and the whole
 point of the P5 dialing OUT was to keep NAT out of the story entirely.
 
+BUT THE FILES LIVE IN WSL2, which looks like a contradiction and is not.
+Windows can read WSL2's filesystem directly over \\wsl$, so the listener
+runs as a Windows process (reachable on the LAN) while serving the build
+tree in place (no copy, no mirror, no staging directory). From a WSL2
+shell, invoking the Windows interpreter does both at once:
+
+    cd /mnt/c/temp     # a Windows-visible cwd; python.exe cannot use a Linux one
+    python3.exe '\\wsl$\<distro>\home\<you>\src\os64-8125\tools\os64serve.py' \
+                '\\wsl$\<distro>\home\<you>\src\os64-8125\userland\bin'
+
+`wsl -l` names the distro. Verified 2026-08-16 serving userland/bin to the
+P5 with zero files copied anywhere.
+
+Windows will likely prompt about the firewall the first time Python binds —
+say yes, or the P5's connections are dropped before this program ever sees
+them. (The symptom is a client that says "timed out", not "refused".)
+
 THE PROTOCOL (RTL8125.md), deliberately 1971-shaped:
 
     client -> server:   GET <name>\\n
