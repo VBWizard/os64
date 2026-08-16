@@ -2624,6 +2624,44 @@ static bool test_console_read_deadline(void)
 // handler at boot, the reply is DELIVERED and counts in rx_frames — the
 // assertion below watches the SUM of both on purpose, so it was true in
 // both eras and stays a pure driver test either way.)
+// ── When is a network test's world actually present? ────────────────────────
+//
+// The net tests were written against QEMU's slirp, which is a whole
+// pretend internet in a process: it answers ARP, hands out DHCP leases,
+// replies to pings, and hosts a gateway at 10.0.2.2. Every one of those is
+// an ASSUMPTION, and on 2026-08-16 the P5 met a network where none of them
+// hold — an isolated segment with one peer, no DHCP server, and no gateway
+// at all. Four tests went red and stayed red on every boot.
+//
+// That is worse than it sounds. A suite with permanently-failing lines is a
+// suite people stop reading, and this session proved twice over that the
+// suite is what catches things (test_vfs_rename failed the instant a ruling
+// changed, which is exactly what it was for). Red lines that mean "your
+// network is different" drown the red lines that mean "you broke it".
+//
+// So these two predicates let a test say I CANNOT RUN HERE instead of I
+// FAILED. The distinction is the whole point: a skip is honest, a failure
+// is a claim about the code.
+//
+// A gateway is expected only when this boot actually has one: either the
+// cmdline named it (GW=), or no static IP was given at all, in which case
+// we are in the DHCP/NAT world where the convention default is real. A
+// boot with IP= and no GW= — the P5's build segment — has a gateway
+// address that is pure convention, and nothing lives there.
+static bool net_test_has_gateway(void)
+{
+    return kNetGWString[0] != '\0' || kNetIPString[0] == '\0';
+}
+
+// DHCP is expected only when nobody configured the address by hand. IP= on
+// the cmdline SUPPRESSES the DISCOVER outright (kernel.c), so a static boot
+// failing a DHCP test is the test misreading a deliberate configuration as
+// a malfunction.
+static bool net_test_expects_dhcp(void)
+{
+    return kNetIPString[0] == '\0';
+}
+
 static bool test_net_wire(void)
 {
     if (kNetDeviceCount == 0) {
@@ -2631,6 +2669,10 @@ static bool test_net_wire(void)
         return true;
     }
 
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_wire (no gateway on this segment — nothing would answer the ARP)\n");
+        return true;
+    }
     net_device_t *dev = kNetDevices[0];
     uint64_t seen_before = dev->rx_frames + dev->rx_dropped_no_handler;
     uint64_t tx_before   = dev->tx_frames;
@@ -2649,9 +2691,13 @@ static bool test_net_wire(void)
     f[n++] = 6;    f[n++] = 4;                    // hlen, plen
     f[n++] = 0x00; f[n++] = 0x01;                 // oper: request
     memcpy(f + n, dev->mac, 6);         n += 6;   // sender MAC
-    f[n++] = 10; f[n++] = 0; f[n++] = 2; f[n++] = 15;  // sender IP
-    memset(f + n, 0x00, 6);             n += 6;   // target MAC: unknown (that's the question)
-    f[n++] = 10; f[n++] = 0; f[n++] = 2; f[n++] = 2;   // target IP: the gateway
+    // OUR address and OUR gateway, not slirp's. These were hardcoded as
+    // 10.0.2.15 and 10.0.2.2 until the P5 booted on a real segment and the
+    // test spent every boot asking a machine that does not exist to
+    // identify itself.
+    net_write32(f + n, kNetIPv4Address);   n += 4;   // sender IP
+    memset(f + n, 0x00, 6);                n += 6;   // target MAC: the question
+    net_write32(f + n, kNetIPv4Gateway);   n += 4;   // target IP: the gateway
 
     int32_t rc = dev->ops->transmit(dev, f, sizeof(f));
     if (rc != 0) {
@@ -2695,6 +2741,10 @@ static bool test_net_arp(void)
         printd(DEBUG_TESTS, "\tSKIP: test_net_arp (no NIC)\n");
         return true;
     }
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_arp (no gateway on this segment to resolve)\n");
+        return true;
+    }
     net_device_t *dev = kNetDevices[0];
 
     uint8_t mac[NET_MAC_LEN];
@@ -2734,6 +2784,10 @@ static bool test_net_ping(void)
 {
     if (kNetDeviceCount == 0) {
         printd(DEBUG_TESTS, "\tSKIP: test_net_ping (no NIC)\n");
+        return true;
+    }
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_ping (no gateway on this segment to ping)\n");
         return true;
     }
     net_device_t *dev = kNetDevices[0];
@@ -2898,6 +2952,10 @@ static bool test_net_dhcp(void)
         printd(DEBUG_TESTS, "\tSKIP: test_net_dhcp (no NIC)\n");
         return true;
     }
+    if (!net_test_expects_dhcp()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_dhcp (IP= was given, so the DISCOVER was never sent)\n");
+        return true;
+    }
 
     // The transaction usually settles in the first few scheduler passes;
     // 5s covers all four 2s-spaced retries of a sleepy server.
@@ -3060,6 +3118,10 @@ static bool test_net_icmp_conn(void)
         printd(DEBUG_TESTS, "\tSKIP: test_net_icmp_conn (no NIC)\n");
         return true;
     }
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_icmp_conn (no gateway on this segment to echo — this one BLOCKS waiting for the reply)\n");
+        return true;
+    }
 
     icmp_conn_t *c = icmp_conn_dial(kNetDevices[0], kNetIPv4Gateway);
     if (c == NULL) {
@@ -3136,6 +3198,10 @@ static bool test_net_tcp_refused(void)
 {
     if (kNetDeviceCount == 0) {
         printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_refused (no NIC)\n");
+        return true;
+    }
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_refused (no gateway on this segment to refuse the connection)\n");
         return true;
     }
 
