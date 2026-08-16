@@ -1191,6 +1191,18 @@ void *os64_realloc(void *ptr, size_t size)
 	if (need < HEAP_MIN_BLOCK)
 		need = HEAP_MIN_BLOCK;
 
+	// malloc's overflow guard, which this path was missing until review
+	// (PR #26, Codex): a size near SIZE_MAX wraps the header addition to a
+	// tiny `need`, and realloc(p, SIZE_MAX) then "succeeds" as a shrink —
+	// handing back a non-NULL pointer for a request it did not honor, to a
+	// caller about to write past everything. Refuse, original untouched.
+	if (need < size)
+	{
+		report_end();
+		heap_unlock();
+		return NULL;
+	}
+
 	// A dedicated block already owns a whole region; if the request still
 	// fits inside it, there is nothing to do at all.
 	if ((block_flags(b) & HEAP_DEDICATED) && size <= old_payload)

@@ -369,6 +369,17 @@ static void t_realloc(void)
 
     void *from_null = os64_realloc(NULL, 32);
     CHECK(from_null != NULL, "realloc(NULL, n) should malloc");
+
+    // Overflow: a size that wraps the header addition must be REFUSED, not
+    // quietly served (PR #26, Codex's catch): realloc(p, SIZE_MAX) wrapped
+    // to need=48 and "succeeded" as an in-place shrink — a non-NULL answer
+    // to a request the heap did not honor.
+    char *keep = os64_malloc(64);
+    memset(keep, 'K', 64);
+    CHECK(os64_realloc(keep, SIZE_MAX) == NULL, "realloc(p, SIZE_MAX) was not refused");
+    CHECK(keep[0] == 'K' && keep[63] == 'K', "a refused realloc damaged the original");
+    os64_free(keep);
+
     CHECK(os64_realloc(moved, 0) == NULL, "realloc(p, 0) should free and return NULL");
     os64_free(from_null);
     os64_free(blocker);
