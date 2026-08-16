@@ -777,6 +777,21 @@ static void task_reparent_orphans(task_t *dying)
 // A dynamic task's elf points INTO the shared_object cache (task.c sets
 // task->elf = main_so->image) — never freed here; the cache owns it. What IS
 // dropped for a dynamic task is the reference, not the image.
+// The burial's file-close hop (see the essay at its call site below). Closing
+// a file is disk work, and disk work belongs in the kernel address space —
+// kworker has its own PML4, and the storage drivers' DMA buffers are mapped
+// in kKernelPML4 alone.
+typedef struct {
+	vfs_file_t *file;
+	vfs_file_operations_t *fops;
+} burial_close_params_t;
+
+static void burial_close_in_kernel_context(void *arg)
+{
+	burial_close_params_t *p = (burial_close_params_t *)arg;
+	p->fops->close(p->file);
+}
+
 static void task_destroy(task_t *t)
 {
 	// The burial line rides the forensics tier since the DEBUG_TASK tiering
@@ -857,6 +872,27 @@ static void task_destroy(task_t *t)
 
 	// Static ELF only: the loader kept the file open for file-backed demand
 	// paging, and with every thread retired no fault can ever need it again.
+	//
+	// THE CLOSE HOPS TO KERNEL CONTEXT (2026-08-16). This call site used to
+	// invoke fops->close directly, from kworker's own address space, and got
+	// away with it for as long as closing a file was pure bookkeeping. It
+	// stopped being pure the day ext2 learned to reap orphaned inodes at last
+	// close: that does real disk I/O, and NVMe's DMA bounce buffers come from
+	// kmalloc_dma, which identity-maps them at a LOWER-HALF address in
+	// kKernelPML4 only. Lower-half mappings are per-task, so from kworker's
+	// PML4 that buffer simply is not there — memcpy into it, #PF, dead
+	// undertaker (found by Chris, 2026-08-16: kill(1) on a task whose binary
+	// had just been replaced).
+	//
+	// The house rule already existed and this site was outside it: "every
+	// file-I/O path goes through call_in_kernel_context" (shutdown.c). The
+	// hazard was never ext2-specific either — FatFs's f_close can write dirty
+	// sectors too, so this was a loaded gun aimed at any FAT-root boot that
+	// happened to bury a task at the wrong moment.
+	//
+	// Params are KMALLOC'd, never a stack local: the continuation runs under
+	// kKernelPML4, which does not map this task's stack (the scar shutdown.c
+	// carries for the same mistake).
 	elf_image_t *image = (elf_image_t *)t->elf;
 	if (image != NULL && !image->is_dynamic) {
 		vfs_file_t *file = image->file;
@@ -864,8 +900,20 @@ static void task_destroy(task_t *t)
 			vfs_file_operations_t *fops = file->fops;
 			if (fops == NULL && file->owner != NULL)
 				fops = ((vfs_filesystem_t *)file->owner)->fops;
-			if (fops != NULL && fops->close != NULL)
-				fops->close(file);
+			if (fops != NULL && fops->close != NULL) {
+				burial_close_params_t *p = kmalloc(sizeof(*p));
+				if (p != NULL) {
+					p->file = file;
+					p->fops = fops;
+					call_in_kernel_context(burial_close_in_kernel_context, p);
+					kfree(p);
+				} else {
+					// Out of memory at burial time: say so rather than
+					// closing from the wrong address space and faulting.
+					printd(DEBUG_TASK, "task_destroy: no memory to close task 0x%08x's image — file left open\n",
+					       t->taskID);
+				}
+			}
 		}
 		// elf_image_free's NULL-table no-op contract is real now — kfree
 		// grew its NULL guard the night this call first ran on a healthy
