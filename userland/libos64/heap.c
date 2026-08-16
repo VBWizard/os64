@@ -487,6 +487,8 @@ static heap_region_t *region_of(const void *p)
 static heap_region_t *region_map(uint64_t bytes, uint64_t flags)
 {
 	bytes = align_up(bytes, HEAP_PAGE);
+	if (bytes == 0)
+		return NULL;   // the page-rounding itself wrapped — refuse, don't map(0)
 
 	void *base = os64_map((size_t)bytes);
 	if (base == NULL)
@@ -827,6 +829,16 @@ uint64_t os64_heap_verify(void)
 static void *malloc_dedicated(uint64_t size)
 {
 	uint64_t want = sizeof(heap_dedicated_t) + size;
+
+	// The SECOND overflow door (PR #26, round two — Codex again): malloc's
+	// guard checks size + the 16-byte block header, so a size within
+	// sizeof(heap_dedicated_t) of SIZE_MAX sails past it and wraps THIS
+	// addition instead — want=32, one page mapped, ~4KB handed back for a
+	// request of nearly 2^64. The lesson generalizes: every addition a
+	// caller's size reaches needs its own guard, not a guard upstream that
+	// checked a different sum.
+	if (want < size)
+		return NULL;
 
 	heap_region_t *r = region_map(want, HEAP_REGION_DEDICATED);
 	if (r == NULL)

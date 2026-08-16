@@ -441,6 +441,23 @@ static void t_big_and_giveback(void)
     uint64_t regions_before = gReport->regions;
     uint64_t unmaps_before  = gReport->calls_unmap;
 
+    // PR #26 round two: sizes that survive malloc's size+header guard but
+    // wrap the DEDICATED-REGION addition must be refused, not served one
+    // page for a request of nearly 2^64. And realloc's fallback rides
+    // malloc, so it must refuse the same sizes with the original intact.
+    CHECK(os64_malloc(SIZE_MAX - 31) == NULL, "malloc(SIZE_MAX-31) was not refused");
+    CHECK(os64_malloc(SIZE_MAX - 64) == NULL, "malloc(SIZE_MAX-64) was not refused");
+    CHECK(os64_malloc(SIZE_MAX - 5000) == NULL, "malloc(SIZE_MAX-5000) was not refused");
+    {
+        char *keep = os64_malloc(64);
+        memset(keep, 'K', 64);
+        CHECK(os64_realloc(keep, SIZE_MAX - 31) == NULL,
+              "realloc(p, SIZE_MAX-31) was not refused");
+        CHECK(keep[0] == 'K' && keep[63] == 'K',
+              "a refused realloc damaged the original");
+        os64_free(keep);
+    }
+
     // At or above the threshold: its own region, and its free is one unmap.
     void *big = os64_malloc(256 * 1024);
     CHECK(big != NULL, "big malloc returned NULL");
