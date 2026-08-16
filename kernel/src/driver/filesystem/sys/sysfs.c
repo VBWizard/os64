@@ -12,7 +12,7 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        two entries: "bus", "cpu"
+//   /sys/                        three entries: "bus", "cpu", "cache"
 //   /sys/bus/                    one entry: "pci"
 //   /sys/bus/pci/                one file per discovered function, named
 //                                bus:dev.fn in hex — "00:1f.3", lspci's
@@ -78,6 +78,7 @@
 #include "smp_core.h"               // get_core_local_storage_for_core, mpAcctSettleAll
 #include "task.h"                   // task_t — kIdleTasks' element type
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
+#include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
 #include "CONFIG.h"
 
 extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
@@ -239,6 +240,7 @@ typedef enum
 	SYS_NODE_CPUCOUNT,   // /cpu/count
 	SYS_NODE_CPUCORE,    // /cpu/<n>
 	SYS_NODE_CPUFILE,    // /cpu/<n>/{time,state,probe}
+	SYS_NODE_CACHEFILE,  // /cache — the block cache's own numbers (2026-08-16)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -306,6 +308,15 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CPUFILE;
+		return;
+	}
+
+	if (strcmp(comp, "cache") == 0)
+	{
+		// Nothing lives inside a file.
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_CACHEFILE;
 		return;
 	}
 
@@ -399,6 +410,47 @@ static void sys_gen_cpu_count(synth_text_t *t)
 	// a script wants the value, not a parse (Linux's cpu*/online files set
 	// the precedent).
 	synth_text_addf(t, "%u\n", (unsigned)kMPCoreCount);
+}
+
+// /sys/cache — the block cache confesses its size and its effectiveness
+// (2026-08-16, born of a morning where 36MB of post-soak "missing" memory had
+// to be INFERRED to be cache warm-up; a file beats an inference). Same
+// doctrine as os64/memory.h: the interesting ratios are pre-computed, so
+// nobody does column arithmetic on a report.
+static void sys_gen_cache(synth_text_t *t)
+{
+	block_cache_stats_t s;
+	block_cache_get_stats(&s);
+
+	synth_text_addf(t, "state: %s\n",
+	                kBlockCacheDisabled ? "disabled" : "enabled");
+
+	// WHAT the cache fronts, named — NVMe/SATA only, RAMDisk deliberately
+	// skipped (the 8/6 ruling: caching RAM in RAM is rent paid on a thing
+	// you own). This line exists because of the day frozen stats sent a
+	// perfectly healthy RAMDisk boot on a bug hunt (2026-08-16): a watch
+	// loop loading executables off an uncached root leaves no tracks in the
+	// numbers below, and the file itself should say why.
+	if (block_cache_device_count() == 0)
+		synth_text_addf(t, "devices: none (nothing cacheable found)\n");
+	for (int i = 0; i < block_cache_device_count(); i++)
+		synth_text_addf(t, "device.%d: %s\n", i, block_cache_device_model(i));
+
+	synth_text_addf(t, "bytes: %lu\n", s.bytes_cached);
+	synth_text_addf(t, "capacity: %lu\n",
+	                (uint64_t)kBlockCacheCapMB * 1024u * 1024u);
+	synth_text_addf(t, "hits: %lu\n", s.hits);
+	synth_text_addf(t, "misses: %lu\n", s.misses);
+	if (s.hits + s.misses > 0)
+		synth_text_addf(t, "hit_pct: %lu\n",
+		                (s.hits * 100) / (s.hits + s.misses));
+	else
+		synth_text_addf(t, "hit_pct: 0\n");
+	synth_text_addf(t, "fills: %lu\n", s.fills);
+	synth_text_addf(t, "evictions: %lu\n", s.evictions);
+	synth_text_addf(t, "updates: %lu\n", s.updates);
+	synth_text_addf(t, "bypass_edge: %lu\n", s.bypass_edge);
+	synth_text_addf(t, "discarded_races: %lu\n", s.discarded_races);
 }
 
 // cpu/<n>/time — one core's slice of the CPU-time ledger (/proc/cores' whole
@@ -538,7 +590,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		if (!sys_pci_find(sp.pci_key, &v))
 			return -1;
 	}
-	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE)
+	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE
+	         && sp.type != SYS_NODE_CACHEFILE)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -547,6 +600,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	if (sp.type == SYS_NODE_PCIFILE)
 		sys_gen_pci_device(&text, &v);
+	else if (sp.type == SYS_NODE_CACHEFILE)
+		sys_gen_cache(&text);
 	else if (sp.type == SYS_NODE_CPUCOUNT)
 		sys_gen_cpu_count(&text);
 	else if (strcmp(sp.name, "time") == 0)
@@ -670,11 +725,19 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 	{
 		case SYS_NODE_ROOT:
 		{
+			// Two directories, then the cache file — a root that lists what
+			// a path can reach, nothing hidden (the /proc/self lesson).
 			static const char *kSysRootDirs[] = { "bus", "cpu" };
 			if (h->index < 2)
 			{
 				entry->flags = OS64_DE_DIR;
 				strncpy(entry->name, kSysRootDirs[h->index], OS64_DIRENT_NAME_MAX);
+				h->index++;
+				return 1;
+			}
+			if (h->index == 2)
+			{
+				strncpy(entry->name, "cache", OS64_DIRENT_NAME_MAX);
 				h->index++;
 				return 1;
 			}
@@ -804,6 +867,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, sp.name, OS64_DIRENT_NAME_MAX);
 			return 0;
 		}
+
+		case SYS_NODE_CACHEFILE:
+			strncpy(entry->name, "cache", OS64_DIRENT_NAME_MAX);
+			return 0;
 
 		case SYS_NODE_CPUDIR:
 			entry->flags = OS64_DE_DIR;

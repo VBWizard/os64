@@ -412,6 +412,20 @@ void block_cache_get_stats(block_cache_stats_t *out)
 	spinlock_release(&sLock);
 }
 
+// No lock, same argument as block_cache_covers: sDevices only grows, and only
+// during attach — by the time anyone reads /sys/cache the roster is final.
+int block_cache_device_count(void)
+{
+	return sDeviceCount;
+}
+
+const char *block_cache_device_model(int i)
+{
+	if (i < 0 || i >= sDeviceCount || sDevices[i].dev == NULL)
+		return NULL;
+	return sDevices[i].dev->ATADeviceModel;
+}
+
 bool block_cache_is_active(void)
 {
 	return sEnabled && sDeviceCount > 0;
