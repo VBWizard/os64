@@ -279,6 +279,15 @@ static void t_calloc(void)
         uint64_t cm = gReport->calls_malloc;
         uint64_t cr = gReport->calls_realloc;
 
+        // PR #26 round four: malloc's own overflow refusal was the last
+        // uncounted exit — found by the reviewer applying round three's
+        // commit message to round three's blind spot.
+        CHECK(os64_malloc(SIZE_MAX) == NULL, "malloc(SIZE_MAX) was not refused");
+        CHECK(gReport->calls_malloc == cm + 1,
+              "the overflow-refused malloc did not count (%lu, want %lu)",
+              (unsigned long)gReport->calls_malloc, (unsigned long)(cm + 1));
+        cm = gReport->calls_malloc;   // rebase for the calloc checks below
+
         CHECK(os64_calloc((size_t)-1 / 2, 4) == NULL, "calloc overflow not refused");
         CHECK(os64_calloc(1, SIZE_MAX - 5000) == NULL, "calloc of a huge size not refused");
         CHECK(gReport->calls_calloc == cc + 2,

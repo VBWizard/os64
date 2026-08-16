@@ -869,12 +869,22 @@ void *os64_malloc(size_t size)
 	uint64_t need = align_up((uint64_t)size + sizeof(heap_block_t), HEAP_ALIGN);
 	if (need < HEAP_MIN_BLOCK)
 		need = HEAP_MIN_BLOCK;
-	if (need < size)            // overflow of the addition above
-		return NULL;
 
 	heap_lock();
 	report_begin();
 	gReport.calls_malloc++;
+
+	// Overflow of the addition above — refused AFTER the tally (PR #26,
+	// round four): the round-three commit preached "failed calls count as
+	// themselves" while malloc's own front door still returned before its
+	// counter. The last uncounted exit in the family, closed by the
+	// reviewer grading that commit against its own thesis.
+	if (need < size)
+	{
+		report_end();
+		heap_unlock();
+		return NULL;
+	}
 
 	if (gCheckAlways)
 		heap_verify_locked();
