@@ -18,6 +18,7 @@
                                 // asks exception_current_context() which one
                                 // owns a fatal fault (see page_fault_panic)
 #include "memory/vma.h"
+#include "memory/mmap.h"   // MAP_ANONYMOUS — the twin-resolve loser frees by its VMA's allocator
 #include "kmalloc.h"
 #include "allocator.h"
 
@@ -47,6 +48,41 @@ uint64_t gLastFaultErrorCode = 0;
 bool kTestingPageFaults = false;
 uint64_t kTestingPageFaultResumeRip = 0;
 volatile uint64_t kPageFaultCount;
+
+// ── The twin-resolve publish lock (2026-08-16) ──────────────────────────────
+//
+// Two threads of one task faulting on the SAME not-yet-present page both used
+// to resolve it independently: both allocated a frame, both filled it
+// identically, both mapped it — and the second paging_map_page overwrote the
+// first's PTE, orphaning the loser's frame in a page reachable from no table,
+// which the burial-time VMA reclaim (it walks the tables) could never free.
+// Booked in DEBTS the day the pager's seek/read race was fixed next door
+// (2026-08-15); paid here.
+//
+// The shape is deliberately NOT shared_object.c's per-page CAS slot — a plain
+// VMA has no page array to CAS into. Instead: resolve WITHOUT the lock (both
+// racers may do redundant work — rare, and never wrong, since both frames are
+// filled from the same source), then PUBLISH under this lock: re-walk the
+// table, and the racer who finds the page already present frees its own frame
+// instead of mapping over the winner's. No I/O and no allocation ever happens
+// with this lock held (paging_map_page can draw a table page, which takes
+// kMemoryStatusLock — that nests publish→memory, and nothing takes them in
+// the other order), so the spin is bounded by a map, not a disk.
+//
+// One global lock, not per-task: the critical section is a walk plus at most
+// one map, and a lock that small doesn't earn a per-task field.
+static volatile uint32_t sPagePublishLock;
+
+static inline void page_publish_lock(void)
+{
+	while (__sync_lock_test_and_set(&sPagePublishLock, 1))
+		__asm__ volatile("pause");
+}
+
+static inline void page_publish_unlock(void)
+{
+	__sync_lock_release(&sPagePublishLock);
+}
 
 static bool is_canonical_address(uint64_t address)
 {
@@ -791,7 +827,29 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         uint64_t cow_flags = PAGE_PRESENT | PAGE_USER | PAGE_WRITE;
         if (!(vma->prot & PROT_EXEC))
             cow_flags |= PAGE_NO_EXECUTE;
+
+        // The static branch's twin-resolve race lives here too (two threads
+        // storing to the same CoW page at once: both copy, both remap, the
+        // loser's copy leaks). Same cure: publish under the lock, and the
+        // racer who finds the page ALREADY WRITABLE discards its copy.
+        page_publish_lock();
+        uintptr_t now = paging_walk_paging_table_keep_flags(
+                            (pt_entry_t *)task->pml4v, aligned, true);
+        if (now != 0xbadbadba && (now & PAGE_WRITE))
+        {
+            page_publish_unlock();
+            kfree(new_virt);
+            // Our TLB may still hold the shared page's read-only entry;
+            // drop it so the retried store sees the winner's mapping.
+            __asm__ volatile("invlpg [%0]" :: "r"(aligned) : "memory");
+            printd(DEBUG_DEMAND_PAGING,
+                   "CoW twin at 0x%016lx: winner already privatised, our copy discarded\n",
+                   aligned);
+            kPageFaultCount++;
+            return;
+        }
         paging_map_page((pt_entry_t *)task->pml4v, aligned, new_phys, cow_flags);
+        page_publish_unlock();
 
         // paging_map_page does not flush the TLB on map (only on unmap), so we
         // must invalidate this entry explicitly or the CPU retries against the
@@ -877,7 +935,32 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     if (!(vma->prot & PROT_EXEC))
         flags |= PAGE_NO_EXECUTE;
 
+    // Publish under the lock; the twin-resolve loser frees instead of
+    // leaking (see sPagePublishLock's block comment for the whole story).
+    page_publish_lock();
+    uintptr_t already = paging_walk_paging_table_keep_flags(
+                            (pt_entry_t *)task->pml4v, aligned, true);
+    if (already != 0xbadbadba && (already & PAGE_PRESENT))
+    {
+        page_publish_unlock();
+        // Another thread resolved this page while we were resolving it. Our
+        // frame holds an identical copy; give it back BY ITS OWN ALLOCATOR —
+        // the same fork vma_resolve_backing_page allocates on: anonymous
+        // pages come from the physical allocator, file-backed from kmalloc.
+        // (Freed OUTSIDE the publish lock: both frees take kMemoryStatusLock,
+        // and holding two locks where one will do is how ABBAs are born.)
+        if ((vma->flags & MAP_ANONYMOUS) || vma->file == NULL)
+            free_memory(phys);
+        else
+            kfree((void *)(phys | kHHDMOffset));
+        printd(DEBUG_DEMAND_PAGING,
+               "Twin resolve at 0x%016lx: winner already published, our frame 0x%016lx freed\n",
+               aligned, phys);
+        kPageFaultCount++;
+        return;   // retry the access against the winner's mapping
+    }
     paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
+    page_publish_unlock();
 
     printd(DEBUG_DEMAND_PAGING, "Mapped page at 0x%016lx with flags 0x%lx\n", aligned, flags);
 
