@@ -432,11 +432,25 @@ static void hid_deliver_usage(uint8_t usage)
 			keyboard_deliver_event(final, usage, s_hc.mods, true);
 			return;
 		}
-		if (usage == 0x4B || usage == 0x4E) { // Page Up / Page Down
+		// The digit-parameter family, HID spelling — Insert=2, Delete=3,
+		// PgUp=5, PgDn=6, xterm's vocabulary, mirroring keyboard.c's PS/2
+		// switch. Delete and Insert joined 2026-08-16 (PR #26): the PS/2
+		// side learned them for husk's editor, and the reviewer presented
+		// this file's old parity IOU for payment on behalf of the one
+		// machine that has no PS/2 port to fall back on — the P5, whose
+		// corded keyboard is exactly who Delete-at-the-prompt was for.
+		char param = 0;
+		switch (usage) {
+			case 0x49: param = '2'; break;   // Insert
+			case 0x4C: param = '3'; break;   // Delete (the salute case exits above)
+			case 0x4B: param = '5'; break;   // Page Up
+			case 0x4E: param = '6'; break;   // Page Down
+			default: break;
+		}
+		if (param != 0) {
 			keyboard_deliver_event(0x1B, usage, s_hc.mods, true);
 			keyboard_deliver_event('[',  usage, s_hc.mods, true);
-			keyboard_deliver_event(usage == 0x4B ? '5' : '6', usage,
-			                       s_hc.mods, true);
+			keyboard_deliver_event(param, usage, s_hc.mods, true);
 			keyboard_deliver_event('~', usage, s_hc.mods, true);
 			return;
 		}
