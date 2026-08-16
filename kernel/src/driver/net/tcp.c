@@ -366,6 +366,24 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					uint16_t take = data_len < room ? data_len : room;
 					tcp_rcv_store(c, data, take);
 					c->rcv_nxt += take;
+					// The receive-path trace, and the reason it is
+					// permanent rather than a debugging leftover: this
+					// stack moves ~1.7 KB/s on a 100BASE-TX link (measured
+					// on the P5, 2026-08-16, with ZERO retransmits — so
+					// nothing is being lost, the sender is simply not
+					// being let go). Throughput on a healthy connection is
+					// window over round-trip, and every term of that is on
+					// this line. One boot with DEBUG_NET and a transfer
+					// answers "where did the window go" without anybody
+					// having to theorize about it first.
+					//
+					// took < len says our buffer was too small for the
+					// segment. win == 0 says we just told the sender to
+					// stop, and the next TCPWIN line says how long it took
+					// us to take that back.
+					printd(DEBUG_NET, "TCPRX t=%lu len=%u room=%u took=%u buf=%u win=%u\n",
+					       kTicksSinceStart, data_len, room, take,
+					       c->rcv_count, tcp_window(c));
 					tcp_ack(c);          // acknowledge immediately: simple,
 					                     // and the peer's window depends on it
 				}
@@ -470,6 +488,11 @@ void tcp_poll(void)
 		    (c->state == TCP_ESTABLISHED || c->state == TCP_FIN_WAIT_1 ||
 		     c->state == TCP_FIN_WAIT_2))
 		{
+			// Paired with TCPRX above: the gap between the tick that
+			// advertised zero and the tick that reopens is the stall, in
+			// ticks, measured rather than guessed.
+			printd(DEBUG_NET, "TCPWIN t=%lu reopening buf=%u win=%u\n",
+			       kTicksSinceStart, c->rcv_count, tcp_window(c));
 			tcp_ack(c);
 		}
 
