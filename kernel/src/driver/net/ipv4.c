@@ -18,6 +18,8 @@
 #include "driver/net/net_checksum.h"
 #include "driver/net/ethernet.h"
 #include "driver/net/arp.h"
+#include "spinlock.h"
+#include "kernel.h"   // kTicksSinceStart — the waiting room's expiry clock
 #include "driver/net/ipv4.h"
 #include "driver/net/icmp.h"
 #include "driver/net/udp.h"
@@ -197,6 +199,124 @@ int32_t ipv4_send(net_device_t* dev, uint32_t dst_ip, uint8_t protocol,
 	return ipv4_send_from(dev, kNetIPv4Address, dst_ip, protocol, payload, length);
 }
 
+// ── The ARP waiting room ────────────────────────────────────────────────────
+//
+// One packet per neighbor, held only until its MAC arrives. Deliberately
+// tiny: this is not a queue, it is the fix for FIRST-packet loss. A second
+// packet to the same unresolved neighbor replaces the first, because by the
+// time two are outstanding the sender is a protocol with its own
+// retransmission and does not need us inventing a second one underneath it.
+//
+// Bounded four ways on purpose — an unbounded holding area for packets
+// addressed to a machine that may not exist is a memory leak with a network
+// interface: at most IPV4_PENDING_MAX neighbors, one packet each, MTU-sized,
+// and every slot expires.
+#define IPV4_PENDING_MAX      4
+#define IPV4_PENDING_TTL_TICKS (3 * TICKS_PER_SECOND)
+
+typedef struct
+{
+	uint32_t next_hop;    // 0 = free slot
+	uint32_t src_ip;
+	uint32_t dst_ip;
+	uint64_t stamp;       // parked at; expires so a silent neighbor cannot leak
+	uint16_t length;
+	uint8_t  protocol;
+	uint8_t  payload[NET_FRAME_MAX];
+} ipv4_pending_t;
+
+static ipv4_pending_t s_pending[IPV4_PENDING_MAX];
+static spinlock_t s_pending_lock;
+
+// Hold `payload` until next_hop resolves. Returns 0 — accepted for delivery.
+static int32_t ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
+                                 uint32_t src_ip, uint32_t dst_ip,
+                                 uint8_t protocol, const void* payload,
+                                 uint16_t length)
+{
+	(void)dev;
+	if (length > sizeof(((ipv4_pending_t*)0)->payload))
+	{
+		kIPv4Stats.tx_awaiting_arp++;
+		return -2;   // too big to hold; the old behavior, honestly reported
+	}
+
+	uint64_t flags = spinlock_acquire_irqsave(&s_pending_lock);
+
+	// Pick a slot: ours if this neighbor already has one (replace — see
+	// above), else a free one, else the oldest expired one. Expiry is lazy
+	// like the ARP cache's, and for the same reason: a stale entry costs
+	// nothing sitting there, it only matters when someone needs the space.
+	int slot = -1, freeSlot = -1, oldest = -1;
+	for (int i = 0; i < IPV4_PENDING_MAX; i++)
+	{
+		if (s_pending[i].next_hop == next_hop) { slot = i; break; }
+		if (s_pending[i].next_hop == 0 && freeSlot < 0) freeSlot = i;
+		if (s_pending[i].next_hop != 0 &&
+		    kTicksSinceStart - s_pending[i].stamp > IPV4_PENDING_TTL_TICKS &&
+		    oldest < 0)
+			oldest = i;
+	}
+	if (slot < 0) slot = (freeSlot >= 0) ? freeSlot : oldest;
+	if (slot < 0)
+	{
+		// Every slot holds a live wait for a different neighbor. Refuse
+		// rather than evict someone else's packet, and count it — the
+		// caller gets exactly the answer it used to get.
+		spinlock_release_irqrestore(&s_pending_lock, flags);
+		kIPv4Stats.tx_awaiting_arp++;
+		return -2;
+	}
+
+	s_pending[slot].next_hop = next_hop;
+	s_pending[slot].src_ip   = src_ip;
+	s_pending[slot].dst_ip   = dst_ip;
+	s_pending[slot].protocol = protocol;
+	s_pending[slot].length   = length;
+	s_pending[slot].stamp    = kTicksSinceStart;
+	memcpy(s_pending[slot].payload, payload, length);
+
+	spinlock_release_irqrestore(&s_pending_lock, flags);
+	kIPv4Stats.tx_parked_for_arp++;
+	return 0;   // accepted for delivery
+}
+
+// A MAC just arrived. Called from arp.c the moment the cache learns one —
+// including from an unsolicited reply or a neighbor's own request, since
+// any of those teaches us what we were waiting for.
+//
+// The slot is CLAIMED AND RELEASED BEFORE the send: ipv4_send_from will
+// look up ARP again (a hit now), and re-entering the park path while
+// holding its own lock would be a deadlock rather than a bug report.
+void ipv4_arp_resolved(net_device_t* dev, uint32_t ip)
+{
+	ipv4_pending_t held;
+	bool have = false;
+
+	uint64_t flags = spinlock_acquire_irqsave(&s_pending_lock);
+	for (int i = 0; i < IPV4_PENDING_MAX; i++)
+	{
+		if (s_pending[i].next_hop != ip)
+			continue;
+		if (kTicksSinceStart - s_pending[i].stamp <= IPV4_PENDING_TTL_TICKS)
+		{
+			held = s_pending[i];
+			have = true;
+		}
+		s_pending[i].next_hop = 0;   // claimed (or expired) either way
+		break;
+	}
+	spinlock_release_irqrestore(&s_pending_lock, flags);
+
+	if (!have)
+		return;
+
+	printd(DEBUG_NET, "ipv4: ARP for %u.%u.%u.%u resolved — releasing the packet it was holding\n",
+	       NET_IPV4_OCTETS(ip));
+	ipv4_send_from(dev, held.src_ip, held.dst_ip, held.protocol,
+	               held.payload, held.length);
+}
+
 int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                        uint8_t protocol, const void* payload, uint16_t length)
 {
@@ -223,16 +343,30 @@ int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		uint32_t next_hop = on_link ? dst_ip : kNetIPv4Gateway;
 		if (!arp_lookup(next_hop, next_hop_mac))
 		{
-			// Cache miss: fire the ARP query and DROP this packet — the
-			// honest 1982 behavior (early BSD did exactly this, and "why
-			// does the first ping always fail?" was a generation's intro
-			// to ARP). The upgrade — park one packet per neighbor and
-			// send it when the reply lands — is a booked DEBT; callers
-			// today treat -2 as "retry shortly", which is also exactly
-			// what ping-style callers do anyway.
+			// Cache miss. This USED to fire the query and drop the packet
+			// — the honest 1982 behavior, and the reason "why does the
+			// first ping always fail?" was a generation's introduction to
+			// ARP. The DEBTS row that booked the upgrade named the exact
+			// condition that would justify paying it: "when first-packet
+			// loss annoys a caller that can't retry-loop."
+			//
+			// That caller arrived on 2026-08-16. os64get opens ONE TCP
+			// CONNECTION PER FILE, and a dropped SYN does not look like a
+			// dropped packet to whoever is watching — it looks like a ten
+			// second hang and then "cannot reach the host", because
+			// tcp_conn_dial has nothing to retransmit yet and simply waits
+			// out its handshake timeout. Refreshing fifty binaries would
+			// meet an expired cache over and over.
+			//
+			// So we PARK it: one packet per neighbor, sent the moment the
+			// reply lands (ipv4_arp_resolved, called from arp.c). Success
+			// is the honest answer to the caller — the packet is accepted
+			// for delivery, and if ARP never answers it is dropped exactly
+			// like any other packet the wire ate, which every protocol
+			// above here already copes with.
 			arp_send_request(dev, next_hop);
-			kIPv4Stats.tx_awaiting_arp++;
-			return -2;
+			return ipv4_park_pending(dev, next_hop, src_ip, dst_ip,
+			                         protocol, payload, length);
 		}
 	}
 

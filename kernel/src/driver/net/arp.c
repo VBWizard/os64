@@ -160,7 +160,15 @@ void arp_input(net_device_t* dev, const void* pkt, uint16_t length)
 	// is an "ARP probe" (RFC 5227, duplicate-address detection): a machine
 	// asking about an address while claiming none. Nothing to learn there.
 	if (sender_ip != 0)
+	{
 		arp_cache_insert(sender_ip, smac);
+		// And release anything IPv4 was holding for this neighbor. Placed
+		// HERE rather than only in the reply path because any frame that
+		// teaches us a MAC is good enough — a neighbor broadcasting its
+		// own question answers ours by accident, and refusing to notice
+		// would leave a packet parked with the address already in hand.
+		ipv4_arp_resolved(dev, sender_ip);
+	}
 
 	if (oper == ARP_OPER_REQUEST)
 	{
