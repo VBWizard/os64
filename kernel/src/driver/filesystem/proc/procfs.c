@@ -657,11 +657,26 @@ static void proc_gen_heap(synth_text_t *t, task_t *task)
 		return;
 	}
 
-	if (!proc_copy_task_bytes(task, task->heapReportVirt, &r, sizeof(r)))
+	// SEQLOCK READ (PR #26, Codex's catch): the copy is byte-sequential and
+	// `generation` sits at offset 16, long before the counters — so a single
+	// pass can capture an EVEN generation and then counters a writer is
+	// already mutating: a mixed snapshot stamped "torn no", complete with a
+	// false "audit BROKEN". The classic cure: copy TWICE and accept only when
+	// both generations match and are even — equality across the second copy's
+	// generation read brackets the first copy's entire window. A heap busy
+	// enough to defeat four attempts is reported torn, never guessed at.
+	os64_heap_report_t check;
+	bool stable = false;
+	for (int attempt = 0; attempt < 4 && !stable; attempt++)
 	{
-		synth_text_addf(t, "heap\tunreadable\n");
-		synth_text_addf(t, "report_at\t%p\n", (void *)task->heapReportVirt);
-		return;
+		if (!proc_copy_task_bytes(task, task->heapReportVirt, &r, sizeof(r)) ||
+		    !proc_copy_task_bytes(task, task->heapReportVirt, &check, sizeof(check)))
+		{
+			synth_text_addf(t, "heap\tunreadable\n");
+			synth_text_addf(t, "report_at\t%p\n", (void *)task->heapReportVirt);
+			return;
+		}
+		stable = ((r.generation & 1) == 0) && (check.generation == r.generation);
 	}
 
 	if (r.magic != OS64_HEAP_REPORT_MAGIC || r.version != OS64_HEAP_REPORT_VERSION)
@@ -676,10 +691,10 @@ static void proc_gen_heap(synth_text_t *t, task_t *task)
 		return;
 	}
 
-	// The report is a photograph of a moving thing. An odd generation means
-	// malloc was mid-update when we read it, so the numbers below may not all
-	// be from the same instant — said out loud rather than hidden.
-	synth_text_addf(t, "torn\t%s\n", (r.generation & 1) ? "yes" : "no");
+	// The report is a photograph of a moving thing. `torn no` now means the
+	// seqlock read above PROVED the numbers coexisted; anything less honest
+	// says so out loud rather than hiding it.
+	synth_text_addf(t, "torn\t%s\n", stable ? "no" : "yes");
 	synth_text_addf(t, "generation\t%lu\n", r.generation);
 
 	synth_text_addf(t, "regions\t%lu\n", r.regions);
@@ -699,7 +714,7 @@ static void proc_gen_heap(synth_text_t *t, task_t *task)
 	uint64_t accounted = r.bytes_live + r.bytes_free + r.bytes_overhead + r.bytes_virgin;
 	if (accounted == r.bytes_mapped)
 		synth_text_addf(t, "audit\tok\n");
-	else if (r.generation & 1)
+	else if (!stable)
 		synth_text_addf(t, "audit\ttorn (off by %ld)\n",
 		                (int64_t)accounted - (int64_t)r.bytes_mapped);
 	else
