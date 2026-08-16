@@ -571,6 +571,21 @@ static void t_crimes(void)
     EXPECT_DEATH(0xCA9A12ED, os64_free(a));
     (void)b;
 
+    // Round eight's crime, deliberately LAST among the mallocs: realloc's
+    // grow-in-place absorbing a STOMPED free neighbour — the one absorption
+    // path that skipped the canary and would have walked corrupted list
+    // links into free_list_remove. The stomped block stays ON the free list
+    // after the death (the longjmp exits before removal), poisoning every
+    // later malloc's first-fit walk — which is why no allocation may follow.
+    {
+        char *g1 = os64_malloc(64);
+        char *g2 = os64_malloc(64);
+        CHECK(g2 == g1 + 80, "expected g2 carved directly above g1");
+        os64_free(g2);                 // a free neighbour, ripe for absorption
+        memset(g1 + 64, 0xCC, 16);     // overrun g1: g2's header is now garbage
+        EXPECT_DEATH(0xCA9A12ED, os64_realloc(g1, 96));
+    }
+
     // NOTE for whoever reads this output: the complaints printed by this
     // function are the POINT, and so is the "books do not balance" line from
     // the verify below. Each EXPECT_DEATH longjmps out of the middle of a

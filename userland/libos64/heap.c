@@ -1365,6 +1365,17 @@ void *os64_realloc(void *ptr, size_t size)
 		if (block_size(next) != 0 && !block_in_use(next)
 		    && old_size + block_size(next) >= need)
 		{
+			// The one absorption path that skipped the canary (PR #26, round
+			// eight): free() checks its merge partner, first-fit checks every
+			// block it walks, the shrink path checks its tail's neighbour —
+			// and this branch walked a stomped block's list links straight
+			// into free_list_remove (an arbitrary write through corrupted
+			// prev/next) and then ERASED the evidence with block_set. The
+			// os32 silent-skip sin, wearing realloc's coat. Same crime, same
+			// sentence as everywhere else.
+			if (!block_canary_ok(next))
+				heap_die("the block above this one has a bad canary", ptr,
+				         next->canary, HEAP_EXIT_CANARIED);
 			free_list_remove((heap_free_t *)next);
 			// Absorbing a free neighbour means absorbing its poison and its
 			// list links: whatever this block was, it is dirty now. (The free
