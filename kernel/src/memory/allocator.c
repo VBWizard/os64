@@ -151,62 +151,101 @@ bool physical_page_is_allocated_on(uintptr_t physical_page)
 	return false;
 }
 
-// Copy len bytes from physical memory through the HHDM alias, ATOMICALLY with
-// respect to this allocator's frees (PR #26, Codex's P1). The reader's problem:
-// anything that resolves a task VA to a physical page and then memcpy's through
-// `phys | kHHDMOffset` (procfs reading a task's heap report) races the owner
-// unmapping that region from another core — free_memory() HHDM-unmaps the
-// alias at the choke point, and losing the race turns a /proc read into a
-// ring-0 fault on the lazy-HHDM tripwire: a user program panicking the kernel
-// with good timing. Under kMemoryStatusLock no free can proceed, so the check
-// and the copy see one consistent world: verify every page of the range lies
-// inside a live extent, copy, release. A stale-but-reallocated page can still
-// yield NONSENSE bytes (the caller's magic/seqlock validation owns that); it
-// can never yield a fault.
-//
-// The per-page check is a RANGE test, not physical_page_is_allocated_on above —
+// Is this physical page inside a LIVE allocator extent? Caller holds
+// kMemoryStatusLock. A RANGE test, not physical_page_is_allocated_on above —
 // that helper answers "does an extent START here?", which is false for every
-// interior page of a multi-page allocation.
-//
-// RULES FOR CALLERS: this holds the allocator's own interrupts-off lock across
-// the memcpy, so len must stay small (a page or so per call) and nothing on
-// this path may allocate, free, or fault. The read-cache's hit-copy-under-lock
-// precedent applies: microseconds, bounded, honest.
-bool allocator_copy_from_phys(void *dst, uintptr_t phys, size_t len)
+// interior page of a multi-page allocation. A page that passes is
+// HHDM-mapped and safe to dereference; whether its CONTENTS are current is
+// the caller's validation problem (magic words, seqlocks), never a fault.
+static bool phys_page_live_locked(uintptr_t page)
 {
-	if (dst == NULL || len == 0)
-		return false;
+	for (uint64_t i = 0; i < kMemoryStatusCurrentPtr; i++)
+	{
+		if (!kMemoryStatus[i].in_use)
+			continue;
+		uintptr_t s = kMemoryStatus[i].startAddress & ~(uintptr_t)0xFFF;
+		uintptr_t e = round_up_to_nearest_page(kMemoryStatus[i].startAddress
+		                                       + kMemoryStatus[i].length);
+		if (page >= s && page < e)
+			return true;
+	}
+	return false;
+}
 
+// Copy len bytes OUT OF A TASK'S ADDRESS SPACE, fault-proof (PR #26, rounds
+// two and seven). The whole journey — walking the task's page tables AND the
+// final data copy — happens under kMemoryStatusLock, with EVERY page
+// liveness-verified before it is dereferenced:
+//
+//   Round two's race: the task unmaps the DATA region from another thread
+//   mid-copy; free_memory HHDM-unmaps the alias and a raw memcpy faults
+//   ring 0. Cured by verifying the leaf page under the lock.
+//
+//   Round seven's race, one level up: phase-2 burial's arena_destroy frees
+//   the task's PAGE TABLES mid-walk. The arena is kmalloc-backed, so the
+//   table pages themselves stay HHDM-mapped as recycled garbage — but a
+//   GARBAGE table entry points anywhere, and dereferencing the next level
+//   through `garbage | kHHDMOffset` can hit genuinely unmapped territory:
+//   the fault is one hop removed, not absent. Cured by verifying every
+//   table page too, so a wild "next level" fails the range test instead of
+//   being followed. Garbage that happens to land in live extents copies
+//   garbage BYTES — which the caller's magic/version/seqlock validation
+//   exists to reject. Nonsense is survivable; faults are not.
+//
+// Large pages (PS) where a table should be are refused rather than decoded:
+// task address spaces are built 4K-only, so a PS bit here IS garbage.
+//
+// RULES FOR CALLERS: len must stay within one source page (chunk per page),
+// the lock is interrupts-off and held across the walk + memcpy, and nothing
+// on this path may allocate, free, or fault. Microseconds, bounded, honest.
+bool allocator_copy_from_task_va(void *pml4v, uintptr_t va,
+                                 void *dst, size_t len)
+{
+	// void* for the same reason block_cache_covers takes one: keeping
+	// paging.h's types out of allocator.h's face. It IS a pt_entry_t*.
+	if (dst == NULL || len == 0 || pml4v == NULL)
+		return false;
+	if (((va & (uintptr_t)0xFFF) + len) > PAGE_SIZE)
+		return false;   // caller must chunk per page — see RULES above
+
+	// The four level indexes, spelled the way paging.c spells them privately
+	// (its PML4_INDEX family is file-local; four shifts don't earn a header
+	// migration): bits 39/30/21/12, nine bits each — the 4-level contract.
+	uint64_t idx[4] = { (va >> 39) & 0x1FF, (va >> 30) & 0x1FF,
+	                    (va >> 21) & 0x1FF, (va >> 12) & 0x1FF };
+	uintptr_t table_virt = (uintptr_t)pml4v;
+	if (table_virt < kHHDMOffset)
+		table_virt |= kHHDMOffset;
+
+	bool ok = false;
 	uint64_t flags = allocator_lock();
 
-	uintptr_t first = phys & ~(uintptr_t)0xFFF;
-	uintptr_t last  = (phys + len - 1) & ~(uintptr_t)0xFFF;
-	for (uintptr_t page = first; page <= last; page += PAGE_SIZE)
+	uint64_t entry = 0;
+	for (int level = 0; level < 4; level++)
 	{
-		bool covered = false;
-		for (uint64_t i = 0; i < kMemoryStatusCurrentPtr; i++)
-		{
-			if (!kMemoryStatus[i].in_use)
-				continue;
-			uintptr_t s = kMemoryStatus[i].startAddress & ~(uintptr_t)0xFFF;
-			uintptr_t e = round_up_to_nearest_page(kMemoryStatus[i].startAddress
-			                                       + kMemoryStatus[i].length);
-			if (page >= s && page < e)
-			{
-				covered = true;
-				break;
-			}
-		}
-		if (!covered)
-		{
-			allocator_unlock(flags);
-			return false;   // freed (or never allocated) — the caller says "unreadable"
-		}
+		uintptr_t table_phys = (table_virt - kHHDMOffset) & ~(uintptr_t)0xFFF;
+		if (!phys_page_live_locked(table_phys))
+			goto out;                       // a freed table — burial won the race
+		entry = ((pt_entry_t *)table_virt)[idx[level]];
+		if (!(entry & PAGE_PRESENT))
+			goto out;                       // honestly unmapped (or garbage saying so)
+		if (level < 3 && (entry & (1ULL << 7)))
+			goto out;                       // PS bit in a task walk = garbage; refuse
+		// Strip flags AND bit 63 (NX rides on leaves now) to get the next hop.
+		table_virt = ((entry & ~0xFFFULL) & 0x0000FFFFFFFFFFFFULL) | kHHDMOffset;
 	}
 
-	memcpy(dst, (const void *)(phys | kHHDMOffset), len);
+	{
+		uintptr_t data_phys = (entry & ~0xFFFULL) & 0x0000FFFFFFFFFFFFULL;
+		if (!phys_page_live_locked(data_phys))
+			goto out;                       // the round-two race, caught at the leaf
+		memcpy(dst, (const void *)((data_phys | kHHDMOffset) + (va & (uintptr_t)0xFFF)), len);
+		ok = true;
+	}
+
+out:
 	allocator_unlock(flags);
-	return true;
+	return ok;
 }
 
 // Maintenance/observability counters (allocator.h has the tour). All are

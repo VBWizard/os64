@@ -43,7 +43,7 @@
 #include "handle.h"
 #include "memory/vma.h"
 #include "memory/paging.h"
-#include "memory/allocator.h"   // allocator_copy_from_phys — the fault-proof HHDM read
+#include "memory/allocator.h"   // allocator_copy_from_task_va — the fault-proof task read
 #include "CONFIG.h"
 #include "BasicRenderer.h"   // printf — the mount line belongs on the glass too
 #include "smp.h"             // core_local_storage_t (/proc/self's identity read)
@@ -356,16 +356,27 @@ static bool proc_copy_task_string(task_t *task, uintptr_t task_va,
 	if (task == NULL || task->pml4v == NULL || task_va == 0)
 		return false;
 
+	// Page-sized chunks through the fault-proof reader (PR #26, round seven
+	// — this copier had the same walk-vs-burial window as its heap sibling
+	// since birth, booked in DEBTS and paid the day the ruling arrived):
+	// copy what a page offers, scan for the terminator, stop at NUL or at
+	// the first unreadable page — truncated but honest, as it always was.
 	while (n + 1 < outlen)
 	{
-		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, task_va + n);
-		if (phys == 0 || phys == 0xbadbadba)
-			break;   // unmapped — the string ends here, truncated but honest
+		uintptr_t va = task_va + n;
+		size_t want = PAGE_SIZE - (size_t)(va & 0xFFF);
+		if (want > outlen - 1 - n)
+			want = outlen - 1 - n;
 
-		char c = *(const volatile char *)(phys | kHHDMOffset);
-		if (c == '\0')
-			break;
-		out[n++] = c;
+		if (!allocator_copy_from_task_va(task->pml4v, va, out + n, want))
+			break;   // unmapped or mid-burial — the string ends here
+
+		size_t k = 0;
+		while (k < want && out[n + k] != '\0')
+			k++;
+		n += k;
+		if (k < want)
+			break;   // found the NUL inside this chunk
 	}
 	out[n] = '\0';
 	return n > 0;
@@ -601,12 +612,19 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 	}
 }
 
-// Copy `len` bytes OUT OF A TASK'S ADDRESS SPACE — the fixed-length sibling of
-// proc_copy_task_string, and the same technique for the same reason: walk the
-// TASK's page tables, read through the HHDM alias. Per-page, because a struct
-// that straddles a page boundary must be correct for free rather than by luck,
-// and because an untouched (demand-paged) page must end the copy honestly
-// instead of faulting the kernel.
+// Copy `len` bytes OUT OF A TASK'S ADDRESS SPACE — the fixed-length sibling
+// of proc_copy_task_string. Per-page, because a struct that straddles a page
+// boundary must be correct for free rather than by luck, and because an
+// untouched (demand-paged) page must end the copy honestly.
+//
+// The walk AND the copy both live inside allocator_copy_from_task_va now
+// (PR #26, rounds two and seven): a concurrent os64_unmap could fault the
+// copy, and a concurrent phase-2 BURIAL could fault the walk itself — the
+// arena's recycled table pages hold garbage entries that point anywhere, and
+// following one through the HHDM is a ring-0 fault one hop removed. Every
+// page, table or leaf, is liveness-verified under the allocator's lock
+// before it is touched. A user program must not be able to panic the kernel
+// by unmapping — or by dying — while we read what it told us to read.
 static bool proc_copy_task_bytes(task_t *task, uintptr_t task_va,
                                  void *out, size_t len)
 {
@@ -619,23 +637,13 @@ static bool proc_copy_task_bytes(task_t *task, uintptr_t task_va,
 	while (done < len)
 	{
 		uintptr_t va = task_va + done;
-		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va & ~0xFFFUL);
-		if (phys == 0 || phys == 0xbadbadba)
-			return false;   // never touched, or not this task's — say nothing
-
 		size_t offset = (size_t)(va & 0xFFF);
 		size_t chunk = 0x1000 - offset;
 		if (chunk > len - done)
 			chunk = len - done;
 
-		// Verify-and-copy under the allocator's lock (PR #26, Codex's P1):
-		// a raw memcpy through the HHDM alias here raced a concurrent
-		// os64_unmap on another thread of the target task — free_memory
-		// HHDM-unmaps at the choke point, and losing the race was a ring-0
-		// fault on the lazy-HHDM tripwire. A user program must not be able
-		// to panic the kernel by unmapping memory it told us to read.
-		if (!allocator_copy_from_phys(dst + done, phys + offset, chunk))
-			return false;   // freed mid-read — "unreadable" is the honest answer
+		if (!allocator_copy_from_task_va(task->pml4v, va, dst + done, chunk))
+			return false;   // unmapped, freed, or buried — "unreadable" is honest
 		done += chunk;
 	}
 	return true;
