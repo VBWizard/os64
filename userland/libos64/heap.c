@@ -875,7 +875,17 @@ static void *malloc_dedicated(uint64_t size)
 	return block_payload(&d->block);
 }
 
-void *os64_malloc(size_t size)
+// THE ONE ALLOCATION ENGINE, and the caller names the public column its
+// attempt lands in (PR #26, round six). calloc used to let malloc count the
+// attempt and RECLASSIFY it afterwards — and a /proc reader in that window
+// saw a public calloc recorded as a malloc, in a perfectly stable,
+// even-generation snapshot: the seqlock cannot defend numbers that were
+// misfiled inside one honest transaction. So the reclassify pattern dies
+// entirely: every public entry passes the counter it answers to, the tally
+// happens inside the engine's own report transaction, and `counter == NULL`
+// means an INTERNAL allocation performed on behalf of an already-counted
+// public call (realloc's fallback) — nothing ticks, nothing needs un-ticking.
+static void *heap_alloc(size_t size, uint64_t *counter)
 {
 	if (!gInited)
 		os64_heap_init();
@@ -889,7 +899,8 @@ void *os64_malloc(size_t size)
 
 	heap_lock();
 	report_begin();
-	gReport.calls_malloc++;
+	if (counter != NULL)
+		(*counter)++;
 
 	// Overflow of the addition above — refused AFTER the tally (PR #26,
 	// round four): the round-three commit preached "failed calls count as
@@ -977,6 +988,11 @@ void *os64_malloc(size_t size)
 	return out;
 }
 
+void *os64_malloc(size_t size)
+{
+	return heap_alloc(size, &gReport.calls_malloc);
+}
+
 // ── free ────────────────────────────────────────────────────────────────────
 
 // Validate a caller's pointer down to the bone, then hand back its block.
@@ -1031,7 +1047,10 @@ static void block_poison(heap_block_t *b)
 		os64_memset(start, HEAP_POISON, (size_t)(end - start));
 }
 
-void os64_free(void *ptr)
+// The release engine, heap_alloc's mirror: the caller names its column
+// (calls_free for the public door, calls_realloc for realloc(p,0)'s edge,
+// NULL for an internal release an already-counted call performs itself).
+static void heap_release(void *ptr, uint64_t *counter)
 {
 	if (ptr == NULL)
 		return;      // as it has been since V7 — free(NULL) is a no-op, and
@@ -1046,7 +1065,8 @@ void os64_free(void *ptr)
 
 	heap_lock();
 	report_begin();
-	gReport.calls_free++;
+	if (counter != NULL)
+		(*counter)++;
 
 	if (gCheckAlways)
 		heap_verify_locked();
@@ -1148,6 +1168,11 @@ void os64_free(void *ptr)
 	heap_unlock();
 }
 
+void os64_free(void *ptr)
+{
+	heap_release(ptr, &gReport.calls_free);
+}
+
 // ── calloc ──────────────────────────────────────────────────────────────────
 
 void *os64_calloc(size_t count, size_t size)
@@ -1170,21 +1195,13 @@ void *os64_calloc(size_t count, size_t size)
 	}
 
 	size_t total = count * size;
-	void *p = os64_malloc(total);
+	// The engine counts this attempt as a CALLOC from the first instant —
+	// success or failure — inside its own report transaction. No reclassify,
+	// no window where a /proc reader sees a public calloc filed under malloc
+	// (PR #26, round six: the reclassify pattern's retirement).
+	void *p = heap_alloc(total, &gReport.calls_calloc);
 	if (p == NULL)
-	{
-		// The failed attempt sits in malloc's counter; reclassify it as OURS
-		// — the caller called calloc, and under memory pressure the split
-		// between the two columns is precisely what a reader is there to
-		// learn (same round-three finding as above).
-		heap_lock();
-		report_begin();
-		gReport.calls_calloc++;
-		gReport.calls_malloc--;
-		report_end();
-		heap_unlock();
 		return NULL;
-	}
 
 	// The os64 dividend: memory carved from a region's virgin frontier has
 	// never been written by anybody — and the kernel guarantees every page of
@@ -1223,12 +1240,6 @@ void *os64_calloc(size_t count, size_t size)
 	if (dirty)
 		os64_memset(p, 0, total);
 
-	heap_lock();
-	report_begin();            // even a counter shuffle honours the shutter
-	gReport.calls_calloc++;
-	gReport.calls_malloc--;    // it was counted by the malloc above
-	report_end();
-	heap_unlock();
 	return p;
 }
 
@@ -1238,31 +1249,18 @@ void *os64_realloc(void *ptr, size_t size)
 {
 	if (ptr == NULL)
 	{
-		// realloc(NULL, n) IS malloc(n) — but the CALLER called realloc,
-		// and public calls count as themselves (PR #26, rounds three
-		// through five — the doctrine's last two doors close here).
-		// Reclassified even on failure: malloc counted the attempt.
-		void *p = os64_malloc(size);
-		heap_lock();
-		report_begin();
-		gReport.calls_realloc++;
-		gReport.calls_malloc--;
-		report_end();
-		heap_unlock();
-		return p;
+		// realloc(NULL, n) IS malloc(n) — but the CALLER called realloc, and
+		// public calls count as themselves (PR #26, rounds three through
+		// six): the engine tallies calls_realloc directly, in one
+		// transaction, success or failure.
+		return heap_alloc(size, &gReport.calls_realloc);
 	}
 
 	if (size == 0)
 	{
-		// And realloc(p, 0) is a free wearing realloc's coat — same
-		// reclassification, same reason.
-		os64_free(ptr);
-		heap_lock();
-		report_begin();
-		gReport.calls_realloc++;
-		gReport.calls_free--;
-		report_end();
-		heap_unlock();
+		// And realloc(p, 0) is a free wearing realloc's coat — the release
+		// engine counts it under realloc's own column the same way.
+		heap_release(ptr, &gReport.calls_realloc);
 		return NULL;
 	}
 
@@ -1392,33 +1390,19 @@ void *os64_realloc(void *ptr, size_t size)
 	report_end();
 	heap_unlock();
 
-	// The honest fallback: a new block, a copy, and the old one released.
-	void *fresh = os64_malloc(size);
+	// The honest fallback: a new block, a copy, and the old one released —
+	// both through the engines' INTERNAL door (counter = NULL): this realloc
+	// already counted itself at entry, and its private alloc and release are
+	// nobody's public calls. The un-counting shuffles this used to do (and
+	// the reader-visible windows between them) retired with the reclassify
+	// pattern (PR #26, round six).
+	void *fresh = heap_alloc(size, NULL);
 	if (fresh == NULL)
-	{
-		// calloc's round-three finding has a sibling here (caught in the
-		// same pass, for once before the reviewer did): the failed internal
-		// malloc was tallied as a PUBLIC malloc call, though the caller
-		// called realloc — which calls_realloc already counted at entry.
-		// Un-count the internal attempt; the failure stays visible in the
-		// realloc column where it belongs.
-		heap_lock();
-		report_begin();
-		gReport.calls_malloc--;
-		report_end();
-		heap_unlock();
 		return NULL;    // the original is untouched — the caller still owns it
-	}
 
 	uint64_t copy = (old_payload < size) ? old_payload : (uint64_t)size;
 	os64_memcpy(fresh, ptr, (size_t)copy);
-	os64_free(ptr);
+	heap_release(ptr, NULL);
 
-	heap_lock();
-	report_begin();           // same shutter honesty as calloc's shuffle
-	gReport.calls_malloc--;   // the malloc above belongs to this realloc
-	gReport.calls_free--;
-	report_end();
-	heap_unlock();
 	return fresh;
 }
