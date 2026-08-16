@@ -139,6 +139,8 @@ static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_heap_report(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -199,6 +201,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
 	SYSCALL_DEFINE(SYSCALL_GETPID,    "getpid",    syscall_getpid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register)
 	SYSCALL_DEFINE(SYSCALL_SET_TIME,  "set_time",  syscall_set_time,  false, 0x00),  // arg0 = UTC epoch bits; monotonic clock is untouched
+	SYSCALL_DEFINE(SYSCALL_HEAP_REPORT, "heap_report", syscall_heap_report, false, 0x01),  // arg0 = user VA of an os64_heap_report_t (0 withdraws)
 };
 
 uint64_t _syscall_dispatch(
@@ -3314,4 +3317,36 @@ static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
 	core_local_storage_t *cls = get_core_local_storage();
 	return (cls != NULL && cls->task != NULL) ? cls->task->taskID : 0;
+}
+
+// heap_report(ptr) — "my heap's report card lives here."
+//
+// The kernel does nothing with the address but REMEMBER it. Nobody reads it
+// until somebody opens /proc/<id>/heap, and that reader (procfs.c) walks this
+// task's own page tables to get at it — never a bare dereference, because a
+// user VA means nothing under any other CR3 and means something WRONG under
+// the vestigial low identity window (the bug that once made husk's cmdline
+// report "/idle7"; see proc_copy_task_string's comment for the whole story).
+//
+// The dispatcher has already range-checked arg0 as a user pointer (mask 0x01),
+// so all that remains is the alignment the struct's uint64 fields require.
+static uint64_t syscall_heap_report(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	if ((arg0 & 0x7) != 0)
+		return SYSCALL_RESULT_INVALID;   // an 8-aligned struct, or nothing
+
+	task->heapReportVirt = (uintptr_t)arg0;
+
+	printd(DEBUG_SYSCALL, "heap_report: task %s publishes its heap report at 0x%016lx\n",
+	       task->exename, (uint64_t)arg0);
+	return 0;
 }

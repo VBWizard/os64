@@ -324,6 +324,22 @@
 // Returns 0. The int64 epoch rides in arg0 as its two's-complement bits.
 #define SYSCALL_SET_TIME   41
 
+// heap_report(ptr) — "my heap's report card lives HERE, read it whenever you
+// like." arg0 is a user VA holding an os64_heap_report_t (abi/os64/heap.h);
+// 0 withdraws the registration. Returns 0, or negative for a pointer the
+// kernel won't take.
+//
+// The kernel stores the address and does NOTHING with it until somebody opens
+// /proc/<pid>/heap — then procfs walks the TASK's page tables and reads the
+// struct through the HHDM, the same technique that reads a task's argv. It is
+// the only place in os64 where a ring-3 subsystem contributes the CONTENT of
+// a kernel-rendered file, and it exists because a heap's shape is known only
+// to the allocator that owns it (see abi/os64/heap.h for the three routes
+// considered and why this one won).
+//
+// One call, once, from libos64's own init — no application ever calls this.
+#define SYSCALL_HEAP_REPORT 42
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

@@ -47,6 +47,7 @@
 #include "BasicRenderer.h"   // printf — the mount line belongs on the glass too
 #include "smp.h"             // core_local_storage_t (/proc/self's identity read)
 #include "smp_core.h"        // mpAcctSettleAll — the status files' freshness contract
+#include "os64/heap.h"       // os64_heap_report_t — what ring 3 publishes for /proc/<id>/heap
 
 extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
 
@@ -97,7 +98,7 @@ typedef struct
 // The file names a task directory offers, in listing order. The order is the
 // order `ls /proc/7` prints, so it is arranged most-useful-first rather than
 // alphabetically.
-static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "maps", "tty", "ctl" };
+static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "maps", "heap", "tty", "ctl" };
 #define PROC_TASK_FILE_COUNT (sizeof(kProcTaskFiles) / sizeof(kProcTaskFiles[0]))
 
 static const char *kProcThreadFiles[] = { "status" };
@@ -599,6 +600,147 @@ static void proc_gen_maps(synth_text_t *t, task_t *task)
 	}
 }
 
+// Copy `len` bytes OUT OF A TASK'S ADDRESS SPACE — the fixed-length sibling of
+// proc_copy_task_string, and the same technique for the same reason: walk the
+// TASK's page tables, read through the HHDM alias. Per-page, because a struct
+// that straddles a page boundary must be correct for free rather than by luck,
+// and because an untouched (demand-paged) page must end the copy honestly
+// instead of faulting the kernel.
+static bool proc_copy_task_bytes(task_t *task, uintptr_t task_va,
+                                 void *out, size_t len)
+{
+	uint8_t *dst = (uint8_t *)out;
+	size_t done = 0;
+
+	if (out == NULL || len == 0 || task == NULL || task->pml4v == NULL || task_va == 0)
+		return false;
+
+	while (done < len)
+	{
+		uintptr_t va = task_va + done;
+		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va & ~0xFFFUL);
+		if (phys == 0 || phys == 0xbadbadba)
+			return false;   // never touched, or not this task's — say nothing
+
+		size_t offset = (size_t)(va & 0xFFF);
+		size_t chunk = 0x1000 - offset;
+		if (chunk > len - done)
+			chunk = len - done;
+
+		memcpy(dst + done, (const void *)((phys | kHHDMOffset) + offset), chunk);
+		done += chunk;
+	}
+	return true;
+}
+
+// /proc/<id>/heap — the userland allocator's own numbers, rendered by the
+// kernel (SYSCALL_HEAP_REPORT, 2026-08-15).
+//
+// THE ONLY FILE IN /proc WHOSE CONTENT COMES FROM RING 3. A heap's shape —
+// how many blocks are live, how fragmented the free space is, how many
+// regions have gone home to the kernel — is known only to the allocator that
+// owns it, and that allocator is libos64's malloc. So malloc publishes the
+// address of one struct at startup and the kernel renders the file: procfs
+// keeps the pen, the format, and the key<TAB>value grammar every other file
+// here uses, and the application writes not one line of it.
+//
+// A program with no libos64 heap (a raw fixture, a foreign binary) says so
+// plainly rather than pretending to have an empty heap.
+static void proc_gen_heap(synth_text_t *t, task_t *task)
+{
+	os64_heap_report_t r;
+
+	if (task->heapReportVirt == 0)
+	{
+		synth_text_addf(t, "heap\tnone\n");
+		synth_text_addf(t, "why\tthis task never registered one (no libos64 malloc)\n");
+		return;
+	}
+
+	if (!proc_copy_task_bytes(task, task->heapReportVirt, &r, sizeof(r)))
+	{
+		synth_text_addf(t, "heap\tunreadable\n");
+		synth_text_addf(t, "report_at\t%p\n", (void *)task->heapReportVirt);
+		return;
+	}
+
+	if (r.magic != OS64_HEAP_REPORT_MAGIC || r.version != OS64_HEAP_REPORT_VERSION)
+	{
+		// Registered, but what is there is not (or is no longer) a report this
+		// kernel knows how to read. Print what was found instead of numbers
+		// invented from it — a file that guesses is worse than one that admits.
+		synth_text_addf(t, "heap\tunrecognized\n");
+		synth_text_addf(t, "report_at\t%p\n", (void *)task->heapReportVirt);
+		synth_text_addf(t, "magic\t%p\n", (void *)r.magic);
+		synth_text_addf(t, "version\t%u\n", r.version);
+		return;
+	}
+
+	// The report is a photograph of a moving thing. An odd generation means
+	// malloc was mid-update when we read it, so the numbers below may not all
+	// be from the same instant — said out loud rather than hidden.
+	synth_text_addf(t, "torn\t%s\n", (r.generation & 1) ? "yes" : "no");
+	synth_text_addf(t, "generation\t%lu\n", r.generation);
+
+	synth_text_addf(t, "regions\t%lu\n", r.regions);
+	synth_text_addf(t, "pools\t%lu\n", r.region_pools);
+	synth_text_addf(t, "dedicated\t%lu\n", r.region_dedicated);
+	synth_text_addf(t, "mapped\t%lu\n", r.bytes_mapped);
+	synth_text_addf(t, "live\t%lu\n", r.bytes_live);
+	synth_text_addf(t, "free\t%lu\n", r.bytes_free);
+	synth_text_addf(t, "overhead\t%lu\n", r.bytes_overhead);
+	synth_text_addf(t, "virgin\t%lu\n", r.bytes_virgin);
+
+	// The audit identity, CHECKED here rather than merely printed: every
+	// mapped byte must be live, free, overhead, or never-carved. A torn read
+	// can break it innocently, so a torn snapshot says so instead of crying
+	// wolf. (os64/memory.h does the same for the physical allocator: a report
+	// that can catch its own author lying is worth four extra lines.)
+	uint64_t accounted = r.bytes_live + r.bytes_free + r.bytes_overhead + r.bytes_virgin;
+	if (accounted == r.bytes_mapped)
+		synth_text_addf(t, "audit\tok\n");
+	else if (r.generation & 1)
+		synth_text_addf(t, "audit\ttorn (off by %ld)\n",
+		                (int64_t)accounted - (int64_t)r.bytes_mapped);
+	else
+		synth_text_addf(t, "audit\tBROKEN (off by %ld)\n",
+		                (int64_t)accounted - (int64_t)r.bytes_mapped);
+	synth_text_addf(t, "blocks_live\t%lu\n", r.blocks_live);
+	synth_text_addf(t, "blocks_free\t%lu\n", r.blocks_free);
+	synth_text_addf(t, "largest_free\t%lu\n", r.largest_free);
+	synth_text_addf(t, "high_water\t%lu\n", r.high_water);
+
+	// Fragmentation, pre-computed so nobody does Linux-style column
+	// arithmetic on a report (the doctrine os64/memory.h opens with): the
+	// percentage of free bytes NOT in the single largest free block. 0% means
+	// the free space is one contiguous piece; 90% means it is confetti.
+	if (r.bytes_free > 0 && r.bytes_free >= r.largest_free)
+		synth_text_addf(t, "fragmentation_pct\t%lu\n",
+		                ((r.bytes_free - r.largest_free) * 100) / r.bytes_free);
+	else
+		synth_text_addf(t, "fragmentation_pct\t0\n");
+
+	synth_text_addf(t, "calls_malloc\t%lu\n", r.calls_malloc);
+	synth_text_addf(t, "calls_free\t%lu\n", r.calls_free);
+	synth_text_addf(t, "calls_calloc\t%lu\n", r.calls_calloc);
+	synth_text_addf(t, "calls_realloc\t%lu\n", r.calls_realloc);
+	synth_text_addf(t, "regions_taken\t%lu\n", r.calls_map);
+	synth_text_addf(t, "regions_returned\t%lu\n", r.calls_unmap);
+
+	// The live-block histogram, one line per non-empty bucket, keyed by the
+	// bucket's floor: "live.64  12" = twelve live blocks whose payload
+	// capacity is 64..127 bytes. Empty buckets are omitted — a file nobody
+	// has to scroll past zeros to read.
+	for (uint32_t i = 0; i < OS64_HEAP_CLASSES; i++)
+	{
+		if (r.live_by_class[i] == 0)
+			continue;
+		synth_text_addf(t, "live.%lu\t%lu\n",
+		                (uint64_t)1 << (i + OS64_HEAP_CLASS_MIN_SHIFT),
+		                r.live_by_class[i]);
+	}
+}
+
 static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 {
 	mpAcctSettleAll();   // same freshness contract as the task status file
@@ -754,6 +896,7 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	else if (strcmp(pp.name, "cwd") == 0)      proc_gen_cwd(&text, task);
 	else if (strcmp(pp.name, "handles") == 0)  proc_gen_handles(&text, task);
 	else if (strcmp(pp.name, "maps") == 0)     proc_gen_maps(&text, task);
+	else if (strcmp(pp.name, "heap") == 0)     proc_gen_heap(&text, task);
 	else if (strcmp(pp.name, "tty") == 0)      proc_gen_tty(&text, task);
 	else if (is_ctl)                           proc_gen_ctl(&text, task);
 	else

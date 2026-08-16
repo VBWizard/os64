@@ -123,6 +123,14 @@
         volatile uint64_t retVal;
         //signals_t signals;
         uint64_t heapStart, heapEnd;
+        // WHERE THIS TASK'S malloc PUBLISHES ITS REPORT (SYSCALL_HEAP_REPORT,
+        // 2026-08-15). A USER virtual address, valid only under this task's own
+        // page tables — the kernel stores it and touches it in exactly one
+        // place, procfs's /proc/<id>/heap generator, which reads it the
+        // documented way (walk the task's tables, read through the HHDM). 0 =
+        // this task has no libos64 heap, which is the honest answer for a raw
+        // fixture or a binary from another world. NEVER dereference it directly.
+        uintptr_t heapReportVirt;
         short priority;           //-20=highest, 20=lowest
         void* exitHandler[TASK_MAX_EXIT_HANDLERS];
         struct task* parentTask;
