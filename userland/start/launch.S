@@ -38,6 +38,20 @@ _start:
     xor rbp, rbp                // terminate the frame-pointer chain (ABI: the
                                 // outermost frame has rbp = 0)
 
+    // THE ALIGNMENT DEBT, PAID (PR #26 round four — Codex, reading the ABI
+    // more carefully than the ABI's own comment below did). The kernel
+    // enters _start with rsp%16 == 8 (thread.c: stack top minus the
+    // traditional 6-qword margin minus the seeded return slot) — a
+    // deliberate POST-CALL shape, so the exit-trampoline address at [rsp]
+    // behaves like a caller's return address. But _start then CALLS into C,
+    // and SysV wants each call SITE at rsp%16 == 0 so the callee lands at
+    // %16 == 8. From a %8 start, every call out of here entered its callee
+    // one qword out of phase — since the first app ever ran, masked only by
+    // -mno-sse (no movaps to fault). One qword restores the phase; the
+    // seeded slot stays untouched above us, and launch never `ret`s — main's
+    // return becomes os64_exit below.
+    sub rsp, 8
+
     // RDI/RSI/RDX arrive holding argc/argv/envp (kernel-set — see above),
     // which ARE main's first three SysV arguments. Pass them through
     // untouched.
@@ -56,9 +70,9 @@ _start:
     //
     // main's three arguments have to survive the call, and RDI/RSI/RDX are
     // caller-saved — so park them in RBX/R12/R13, which the SysV ABI makes
-    // the CALLEE's job to preserve. (Doing this with pushes would work too
-    // and would change the stack alignment main is entered with; the
-    // register parking changes nothing at all.)
+    // the CALLEE's job to preserve. (Registers rather than pushes so the
+    // alignment established above stays established — three pushes would
+    // flip the phase and hand main a misaligned frame all over again.)
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
