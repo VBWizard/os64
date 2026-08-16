@@ -58,9 +58,9 @@ static void prompt(void) { os64_write(1, "husk> ", 6); }
 // A ring of the last HISTORY_DEPTH submitted lines, recalled with Up/Down.
 // The arrows arrive as VT100 escape sequences (ESC '[' A/B — the keyboard
 // driver speaks 1979's vocabulary since 2026-08-04, and this parser is its
-// first customer). Recall-only for now: a recalled line is edited with the
-// same backspace-and-type the live line uses; cursor movement WITHIN a line
-// (Left/Right) is a later luxury and those sequences are swallowed politely.
+// first customer). A recalled line is edited exactly like a live one: the
+// caret moves (Left/Right/Home/End, since 2026-08-08 and -16), and the first
+// EDIT — not mere movement — makes the recalled line yours (browse resets).
 //
 // The classic contract, same as every shell since csh grew `!!` and ksh put
 // arrows on it: Up walks backward through what you typed, Down walks
@@ -128,11 +128,48 @@ static void caret_back(int k)
 	}
 }
 
+// Overprint k cells with blanks, advancing the cursor — caret_back's other
+// half, and together they are the renderer's entire erase vocabulary.
+static void blank_forward(int k)
+{
+	static const char sp[8] = "        ";
+	while (k > 0)
+	{
+		int chunk = k > 8 ? 8 : k;
+		os64_write(1, sp, (size_t)chunk);
+		k -= chunk;
+	}
+}
+
+// THE ONE DELETION ENGINE: remove buf[start, start+count) and leave the caret
+// at the seam. Every erase gesture is this with different arithmetic —
+// Backspace (start=pos-1, count=1), Delete (start=pos, count=1), Ctrl+U
+// (start=0, count=pos), Ctrl+K (start=pos, count=n-pos), Ctrl+W (start=word,
+// count=pos-word) — which is why the repaint lives here once instead of five
+// times: walk the caret to the seam, shift the tail over the corpse, repaint
+// the shifted tail, blank the orphaned cells, walk home.
+static void edit_delete(char *buf, int *n, int *pos, int start, int count)
+{
+	caret_back(*pos - start);
+	for (int i = start; i < *n - count; i++)
+		buf[i] = buf[i + count];
+	*n -= count;
+	*pos = start;
+	if (*pos < *n)
+		os64_write(1, buf + *pos, (size_t)(*n - *pos));
+	blank_forward(count);
+	caret_back(*n - *pos + count);
+}
+
 // Read one line from the console into buf (NUL-terminated), echoing as we go.
 // Returns the length. Handles Enter (submit), Backspace (erase before the
 // caret), Left/Right caret movement with mid-line insert (2026-08-08 — the
-// day the console grew a real cursor to make it visible), and Up/Down
-// history recall.
+// day the console grew a real cursor to make it visible), Up/Down history
+// recall, and — since 2026-08-16 — Delete (erase AT the caret), Home/End,
+// and the control chords every terminal has answered to since the ASR-33
+// era gave way to CRTs: Ctrl+A/E (home/end, emacs's spelling), Ctrl+U (kill
+// to start — V7's line-kill, promoted from @), Ctrl+K (kill to end), and
+// Ctrl+W (word erase — 4BSD's werase, the one Bill Joy typed).
 //
 // KNOWN LIMIT, shared with history recall since birth: the renderer's '\b'
 // clamps at column 0, so editing a line that has WRAPPED misbehaves at the
@@ -163,19 +200,7 @@ static int read_line(char *buf, int cap)
 		if (c == 0x08 || c == 0x7f)          // backspace: delete BEFORE the caret
 		{
 			if (pos > 0)
-			{
-				for (int i = pos - 1; i < n - 1; i++)
-					buf[i] = buf[i + 1];
-				n--;
-				pos--;
-				// Step back, repaint the shifted tail over itself, blank the
-				// orphaned last glyph, then walk the caret home.
-				os64_write(1, "\b", 1);
-				if (pos < n)
-					os64_write(1, buf + pos, (size_t)(n - pos));
-				os64_write(1, " ", 1);
-				caret_back(n - pos + 1);
-			}
+				edit_delete(buf, &n, &pos, pos - 1, 1);
 			browse = 0;          // editing makes the recalled line YOURS now
 			continue;
 		}
@@ -201,6 +226,22 @@ static int read_line(char *buf, int cap)
 				continue;        // lone ESC or unknown: swallow
 			if (os64_read(0, &seq[1], 1) != 1)
 				continue;
+
+			// The digit-parameter family: ESC [ <n> ~ (Delete=3, Insert=2,
+			// PgUp=5, PgDn=6 — xterm's vocabulary for the keys the VT100
+			// lacked). The trailing '~' must be CONSUMED even for sequences
+			// we ignore: before 2026-08-16 this parser swallowed the digit
+			// and let the '~' fall through as a printable, so PgUp at the
+			// prompt quietly typed a tilde into the command.
+			char param = 0;
+			if (seq[1] >= '0' && seq[1] <= '9')
+			{
+				param = seq[1];
+				char tilde;
+				if (os64_read(0, &tilde, 1) != 1 || tilde != '~')
+					continue;    // malformed burst: swallow what we saw
+				seq[1] = '~';
+			}
 
 			if (seq[1] == 'A')               // Up — one step further back
 			{
@@ -258,11 +299,81 @@ static int read_line(char *buf, int cap)
 					pos++;
 				}
 			}
+			else if (seq[1] == 'H')          // Home — caret to column one
+			{
+				caret_back(pos);
+				pos = 0;
+				// Movement, not editing: browse survives, same as Left/Right.
+			}
+			else if (seq[1] == 'F')          // End — caret past the last glyph
+			{
+				if (pos < n)
+				{
+					os64_write(1, buf + pos, (size_t)(n - pos));
+					pos = n;
+				}
+			}
+			else if (seq[1] == '~' && param == '3')   // Delete — erase AT the caret
+			{
+				if (pos < n)
+					edit_delete(buf, &n, &pos, pos, 1);
+				browse = 0;      // editing makes the recalled line YOURS now
+			}
+			// Other '~' sequences (Insert, PgUp, PgDn) have no line-editing
+			// meaning: swallowed whole, tilde and all.
 			continue;
 		}
-		// Other control chords (Ctrl+A..Z now arrive as 0x01..0x1A) have no
-		// line-editing meaning yet — swallow them rather than burying
-		// invisible bytes in the command. Tab stays: it's typeable text.
+		// The line-editing control chords (Ctrl+letter arrives as 0x01..0x1A
+		// — the 1963 design working as designed). The kill chords are older
+		// than the arrow keys they now live beside: V7's tty driver already
+		// had a line-kill character, and 4BSD added word-erase.
+		if (c == 0x01)                       // Ctrl+A — home (emacs's spelling)
+		{
+			caret_back(pos);
+			pos = 0;
+			continue;                        // movement: browse survives
+		}
+		if (c == 0x05)                       // Ctrl+E — end
+		{
+			if (pos < n)
+			{
+				os64_write(1, buf + pos, (size_t)(n - pos));
+				pos = n;
+			}
+			continue;
+		}
+		if (c == 0x15)                       // Ctrl+U — kill to start of line
+		{
+			if (pos > 0)
+				edit_delete(buf, &n, &pos, 0, pos);
+			browse = 0;
+			continue;
+		}
+		if (c == 0x0B)                       // Ctrl+K — kill to end of line
+		{
+			if (pos < n)
+				edit_delete(buf, &n, &pos, pos, n - pos);
+			browse = 0;
+			continue;
+		}
+		if (c == 0x17)                       // Ctrl+W — erase the word before the caret
+		{
+			// The classic gait: step over any spaces behind the caret, then
+			// over the word itself — so a caret resting after "ls  " kills
+			// "ls  ", not nothing.
+			int j = pos;
+			while (j > 0 && buf[j - 1] == ' ')
+				j--;
+			while (j > 0 && buf[j - 1] != ' ')
+				j--;
+			if (j < pos)
+				edit_delete(buf, &n, &pos, j, pos - j);
+			browse = 0;
+			continue;
+		}
+		// Any other control chord has no line-editing meaning yet — swallow
+		// it rather than burying invisible bytes in the command. Tab stays:
+		// it's typeable text.
 		if ((unsigned char)c < 0x20 && c != '\t')
 			continue;
 		if (n < cap - 1)
