@@ -272,16 +272,29 @@ make -C kernel test-elf
 
 **Kernel Command Line:**
 - Parsed in `kernel/src/kernel_commandline.c`
+- **CASE IS SIGNIFICANT.** The parser matches token names with `strcmp` and
+  never folds case, so a flag spelled wrong matches nothing and is silently
+  ignored — the boot proceeds as if you had passed nothing. The table is
+  MIXED: a few early flags are lowercase (`nolog`, `alllog`, `nosmp`),
+  everything since is uppercase. Copy the spelling from the table, not from
+  memory. (Cost of learning this the hard way, 2026-08-16: the `/No AHCI` and
+  `/No NVME` boot entries had been passing lowercase `noahci`/`nonvme` and
+  disabling nothing at all. Any new flag added anywhere gets checked against
+  the table the same day.)
 - Common options:
-  - `ROOTPARTUUID=<uuid>`: Mount partition as root
-  - `nosmp`: Disable multicore support
+  - `ROOTPARTUUID=<uuid>` / `ROOT=<uuid>`: Mount partition as root
+  - `nosmp`: Disable multicore support (lowercase — legacy)
   - `MAXCORES=<n>`: Cap how many cores init_SMP brings up (0/absent = all;
     capped-off cores stay parked in Limine's AP loop)
-  - `noahci`: Disable AHCI driver
-  - `nonvme`: Disable NVMe driver
+  - `NOAHCI`: Disable AHCI driver
+  - `NONVME`: Disable NVMe driver
+  - `NONET`: Disable networking entirely (there is no per-NIC off switch)
   - `RAMDISK`: Register the `os64_disk.img` Limine module as a RAM-backed
     block device (see `/RAMDisk Boot` in limine.conf)
-  - `nolog` / `noseriallog` / `alllog`: Control logging
+  - `nolog` / `alllog`: Control logging (both lowercase — legacy)
+  - `noseriallog`: **not implemented** — the token appears in limine.conf and
+    used to be documented here as real, but nothing in the kernel handles it.
+    Booked in DEBTS.md.
 
 ### Logging and Debugging
 
