@@ -26,5 +26,6 @@
 #include "os64/klog_read.h"  // os64_klog_read — the kernel log, for the log daemon
 #include "os64/thread.h"     // os64_thread — a second line of execution
 #include "os64/dial.h"       // os64_dial("udp!10.0.2.2!53") — the network in one call
+#include "os64/crc32.h"      // os64_crc32 — telling a good transfer from a plausible one
 
 #endif // OS64_H
