@@ -325,7 +325,23 @@ static uint32_t heap_class_of(uint64_t payload_bytes)
 // generation: odd while the numbers are in motion, even when they agree with
 // each other. The kernel prints "torn yes" if it catches an odd one, rather
 // than publishing a set of figures that never coexisted.
-static inline void report_begin(void) { gReport.generation++; }
+//
+// THE FENCES ARE THE SEQLOCK (PR #26, round five). The shutter only works if
+// the odd store lands BEFORE any data store and the even store lands AFTER
+// every one of them — and plain stores to distinct fields give the compiler
+// no reason to keep that order at -O2 (today's -g build preserves program
+// order by accident, which is the -O0-masked bug class CLAUDE.md warns
+// about by name). A release fence is the compiler barrier that pins the
+// order; on x86 it costs zero instructions, because TSO already keeps
+// stores visible in program order — the hardware was never the problem,
+// the optimizer was. The kernel-side reader is naturally ordered: its
+// copies go through memcpy calls (opaque, compiler-barriered) and x86
+// preserves load order too.
+static inline void report_begin(void)
+{
+	gReport.generation++;                        // odd: the shutter opens...
+	__atomic_thread_fence(__ATOMIC_RELEASE);     // ...before any number moves
+}
 
 // Overhead is DERIVED rather than accumulated, because it is exactly
 // derivable: one header per block that exists, plus each region's fixed
@@ -341,7 +357,8 @@ static inline void report_end(void)
 	      (gReport.blocks_live + gReport.blocks_free) * sizeof(heap_block_t)
 	    + gReport.region_pools * (sizeof(heap_pool_t) + sizeof(heap_block_t))
 	    + gReport.region_dedicated * (sizeof(heap_dedicated_t) - sizeof(heap_block_t));
-	gReport.generation++;
+	__atomic_thread_fence(__ATOMIC_RELEASE);     // every number has landed...
+	gReport.generation++;                        // ...then the shutter closes
 }
 
 // ── Free list ───────────────────────────────────────────────────────────────
@@ -1017,7 +1034,12 @@ static void block_poison(heap_block_t *b)
 void os64_free(void *ptr)
 {
 	if (ptr == NULL)
-		return;      // as it has been since V7 — free(NULL) is a no-op
+		return;      // as it has been since V7 — free(NULL) is a no-op, and
+		             // DELIBERATELY uncounted: the count-as-yourself doctrine
+		             // covers calls that attempt an operation (including ones
+		             // that fail); a contractual no-op attempts nothing, and a
+		             // calls_free that ticked without a block changing hands
+		             // would make the malloc/free delta lie about live blocks.
 
 	if (!gInited)
 		os64_heap_init();
@@ -1215,11 +1237,32 @@ void *os64_calloc(size_t count, size_t size)
 void *os64_realloc(void *ptr, size_t size)
 {
 	if (ptr == NULL)
-		return os64_malloc(size);
+	{
+		// realloc(NULL, n) IS malloc(n) — but the CALLER called realloc,
+		// and public calls count as themselves (PR #26, rounds three
+		// through five — the doctrine's last two doors close here).
+		// Reclassified even on failure: malloc counted the attempt.
+		void *p = os64_malloc(size);
+		heap_lock();
+		report_begin();
+		gReport.calls_realloc++;
+		gReport.calls_malloc--;
+		report_end();
+		heap_unlock();
+		return p;
+	}
 
 	if (size == 0)
 	{
+		// And realloc(p, 0) is a free wearing realloc's coat — same
+		// reclassification, same reason.
 		os64_free(ptr);
+		heap_lock();
+		report_begin();
+		gReport.calls_realloc++;
+		gReport.calls_free--;
+		report_end();
+		heap_unlock();
 		return NULL;
 	}
 

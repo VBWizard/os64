@@ -307,6 +307,20 @@ static void t_calloc(void)
               "a failed realloc fallback leaked into the malloc column (%lu, want %lu)",
               (unsigned long)gReport->calls_malloc, (unsigned long)(cm + 1));
         os64_free(rk);
+
+        // PR #26 round five: the realloc EDGES count as realloc too —
+        // realloc(NULL,n) is malloc in realloc's coat, realloc(p,0) is free
+        // in the same coat, and both were walking straight past the tally.
+        cr = gReport->calls_realloc;
+        cm = gReport->calls_malloc;
+        uint64_t cf = gReport->calls_free;
+        void *edge = os64_realloc(NULL, 32);
+        CHECK(edge != NULL, "realloc(NULL, 32) failed");
+        CHECK(gReport->calls_realloc == cr + 1 && gReport->calls_malloc == cm,
+              "realloc(NULL,n) did not count as exactly one realloc");
+        CHECK(os64_realloc(edge, 0) == NULL, "realloc(p, 0) should free and return NULL");
+        CHECK(gReport->calls_realloc == cr + 2 && gReport->calls_free == cf,
+              "realloc(p,0) did not count as exactly one realloc");
     }
 }
 
