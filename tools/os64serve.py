@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""os64serve.py - the other end of os64get. Run this on the build PC.
+r"""os64serve.py - the other end of os64get. Run this on the build PC.
 
 It is a VALET, not a daemon: you start it when you want to refresh the P5
 and you stop it with Ctrl-C when you are done. It has no config file, no
@@ -32,9 +32,9 @@ them. (The symptom is a client that says "timed out", not "refused".)
 
 THE PROTOCOL (RTL8125.md), deliberately 1971-shaped:
 
-    client -> server:   GET <name>\\n
-    server -> client:   OK <length-decimal> <crc32-hex8>\\n  then <length> bytes
-                   or:  NO <reason>\\n
+    client -> server:   GET <name>\n
+    server -> client:   OK <length-decimal> <crc32-hex8>\n  then <length> bytes
+                   or:  NO <reason>\n
 
 One connection per file. ASCII where a human might read it, binary only
 where a machine must. You can drive it by hand with telnet, which matters
