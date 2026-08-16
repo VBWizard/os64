@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <cpuid.h>   // __get_cpuid — the EFER.NXE gate reads 0x80000001
 #include "smp_core.h"
 #include "smp_offsets.h"
 #include "x86_64.h"
@@ -481,7 +482,22 @@ void ap_initialization_handler() {
 	//environment leaves EFER with LME/LMA/NXE only; without SCE, `syscall`
 	//raises #UD no matter how carefully STAR/LSTAR/SFMASK were programmed.
 	//Per-core like the rest of this block (EFER is a per-core MSR).
-	wrmsr64(EFER_MSR, rdmsr64(EFER_MSR) | EFER_SCE);
+	//
+	//EFER.NXE joins it (2026-08-16, the NX arc): Limine does set NXE per its
+	//spec, but ring-3 no-execute now DEPENDS on that bit — page-table bit 63
+	//is RESERVED when NXE is off, so a single NX PTE under NXE=0 is a
+	//reserved-bit #PF on the next access. A guarantee this load-bearing gets
+	//set by the party relying on it, not inherited as a bootloader's habit.
+	//CPUID-gated (0x80000001 EDX bit 20): a CPU without NX gets no NXE and,
+	//by the same gate in paging_map_page's callers... no NX bits either —
+	//every post-2003 x86-64 has it, but the gate costs three lines.
+	{
+		uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+		uint64_t efer = rdmsr64(EFER_MSR) | EFER_SCE;
+		if (__get_cpuid(0x80000001, &eax, &ebx, &ecx, &edx) && (edx & (1u << 20)))
+			efer |= EFER_NXE;
+		wrmsr64(EFER_MSR, efer);
+	}
 
 	//LSTAR MSR
 	//Format: 63..0 = Entry point to the kernel's system call method

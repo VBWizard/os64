@@ -11,6 +11,9 @@
 
 // EFER bits os64 cares about
 #define EFER_SCE (1ULL << 0)   // SYSCALL/SYSRET enable — without it, `syscall` is #UD
+#define EFER_NXE (1ULL << 11)  // No-Execute enable — makes PTE bit 63 mean NX
+                               // instead of RESERVED (a stray NX bit under
+                               // NXE=0 is a reserved-bit #PF on next access)
 
 uint64_t rdmsr64(unsigned index);
 void wrmsr64(unsigned index, uint64_t val);
