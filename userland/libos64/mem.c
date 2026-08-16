@@ -24,3 +24,11 @@ int64_t os64_memory(os64_memory_t *out)
 {
     return (int64_t)os64_syscall1(SYSCALL_MEMORY, (uint64_t)out);
 }
+
+int64_t os64_heap_publish(const os64_heap_report_t *report)
+{
+    // One call, once, from os64_heap_init. The kernel only STORES the
+    // address here; it reads the struct through this task's page tables at
+    // the moment somebody opens /proc/<pid>/heap, and never otherwise.
+    return (int64_t)os64_syscall1(SYSCALL_HEAP_REPORT, (uint64_t)report);
+}

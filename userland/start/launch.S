@@ -23,6 +23,7 @@
 
 .extern main
 .extern __os64_env
+.extern os64_runtime_init
 .global _start
 .type _start, @function
 
@@ -48,6 +49,23 @@ _start:
     // entry) and RDI/RSI/RDX stay untouched for main.
     lea rax, [rip + __os64_env]
     mov [rax], rdx
+
+    // Stand the LIBRARY up before the PROGRAM runs (os64/runtime.h): today
+    // that means the heap registers its report with the kernel, so
+    // /proc/<pid>/heap is honest from this instruction onward.
+    //
+    // main's three arguments have to survive the call, and RDI/RSI/RDX are
+    // caller-saved — so park them in RBX/R12/R13, which the SysV ABI makes
+    // the CALLEE's job to preserve. (Doing this with pushes would work too
+    // and would change the stack alignment main is entered with; the
+    // register parking changes nothing at all.)
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call os64_runtime_init
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
 
     call main
 

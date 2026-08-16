@@ -55,6 +55,15 @@ typedef struct {
 
 static char *const argv_arg_echo[] = { "/bin/arg_echo", "hello", "world", NULL };
 
+// The two heap fixtures that PASS BY DYING: each commits a deliberate heap
+// crime and the pass code is the badge the allocator kills with. A crime that
+// failed to kill would report the program's own exit code instead — which is
+// exactly the failure worth catching, since a tripwire nobody tests is a
+// tripwire nobody knows is disconnected.
+static char *const argv_malloc_threads[]    = { "/bin/malloctest", "threads", "4", NULL };
+static char *const argv_malloc_doublefree[] = { "/bin/malloctest", "doublefree", NULL };
+static char *const argv_malloc_stomp[]      = { "/bin/malloctest", "stomp", NULL };
+
 static const fixture_t kFixtures[] = {
     { "/bin/syscall_smoke",   NULL, 0x0005E00D,  0,          "the syscall floor: write/exit from ring 3" },
     { "/bin/exit_by_return",  NULL, 0x2E7BEA57,  0,          "returning from _start reaches retVal" },
@@ -68,6 +77,10 @@ static const fixture_t kFixtures[] = {
     { "/bin/sleep_test",      NULL, 0x51EE600D,  0,          "sleep parks at least as long as asked" },
     { "/bin/memory_test",     NULL, 0xF3EE600D,  0,          "the memory syscall's snapshot" },
     { "/bin/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
+    { "/bin/malloctest",      NULL, 0x0A110C00,  0,          "the heap: split, coalesce, recycle, give-back, /proc/<pid>/heap" },
+    { "/bin/malloctest",      argv_malloc_threads,    0x0A110C10, 0, "four threads, one heap: the lock, and cross-thread frees" },
+    { "/bin/malloctest",      argv_malloc_doublefree, 0xF12EEBAD, 0, "a double free kills the program (it must)" },
+    { "/bin/malloctest",      argv_malloc_stomp,      0xCA9A12ED, 0, "a stomped canary kills the program (it must)" },
     { "/bin/test_elf",        NULL, 0xE1F0CA11,  0,          "a demand-paged static ELF runs and exits" },
     { "/bin/dyn_consumer",    NULL, 0x00300031,  0,          "a dynamically-linked binary resolves and runs" },
     // synctest reports 0x05CC0001 when the boot has no writable /home. That
