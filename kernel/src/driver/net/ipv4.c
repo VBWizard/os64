@@ -228,18 +228,17 @@ typedef struct
 static ipv4_pending_t s_pending[IPV4_PENDING_MAX];
 static spinlock_t s_pending_lock;
 
-// Hold `payload` until next_hop resolves. Returns 0 — accepted for delivery.
-static int32_t ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
-                                 uint32_t src_ip, uint32_t dst_ip,
-                                 uint8_t protocol, const void* payload,
-                                 uint16_t length)
+// Hold `payload` until next_hop resolves. The CALLER IS STILL TOLD -2 —
+// see the essay at the call site. Best effort: silently declines to hold
+// what it cannot (oversized, or every slot busy with another neighbor).
+static void ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
+                              uint32_t src_ip, uint32_t dst_ip,
+                              uint8_t protocol, const void* payload,
+                              uint16_t length)
 {
 	(void)dev;
 	if (length > sizeof(((ipv4_pending_t*)0)->payload))
-	{
-		kIPv4Stats.tx_awaiting_arp++;
-		return -2;   // too big to hold; the old behavior, honestly reported
-	}
+		return;   // too big to hold; the caller is told -2 either way
 
 	uint64_t flags = spinlock_acquire_irqsave(&s_pending_lock);
 
@@ -263,9 +262,10 @@ static int32_t ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
 		// Every slot holds a live wait for a different neighbor. Refuse
 		// rather than evict someone else's packet, and count it — the
 		// caller gets exactly the answer it used to get.
+		// Every slot holds a live wait for a different neighbor. Give up
+		// on holding this one rather than evicting somebody else's.
 		spinlock_release_irqrestore(&s_pending_lock, flags);
-		kIPv4Stats.tx_awaiting_arp++;
-		return -2;
+		return;
 	}
 
 	s_pending[slot].next_hop = next_hop;
@@ -278,7 +278,6 @@ static int32_t ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
 
 	spinlock_release_irqrestore(&s_pending_lock, flags);
 	kIPv4Stats.tx_parked_for_arp++;
-	return 0;   // accepted for delivery
 }
 
 // A MAC just arrived. Called from arp.c the moment the cache learns one —
@@ -364,9 +363,36 @@ int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			// for delivery, and if ARP never answers it is dropped exactly
 			// like any other packet the wire ate, which every protocol
 			// above here already copes with.
+			// AND WE STILL RETURN -2, which is the whole trick. The
+			// first version of this returned SUCCESS on the theory that
+			// "accepted for delivery" is the honest answer and every
+			// caller should carry its own timeout — which is how real
+			// stacks behave, and which BROKE THIS OS within one boot.
+			// Callers here had been written against the old contract and
+			// used -2 as "no route, stop now"; told success instead, they
+			// sailed past the point where they used to give up and sat
+			// waiting for replies that were never coming. A test suite
+			// that used to fail fast hung instead.
+			//
+			// So the parking is a BONUS, not a promise. Nobody's contract
+			// changes: every existing caller sees exactly what it saw
+			// before and behaves exactly as it did. The packet simply also
+			// gets a second chance it never used to get — and TCP, which
+			// ignores this return value entirely (tcp.c's tcp_send), is
+			// the one that needed it, because a dropped SYN is not a
+			// dropped packet to a human: it is a ten second hang and then
+			// "cannot reach the host".
+			//
+			// The cost is a possible DUPLICATE when a retrying caller and
+			// the released packet both go out. ICMP and UDP are defined to
+			// tolerate duplicates, TCP discards them by sequence number,
+			// and a duplicate on the first packet after an idle gap is a
+			// far smaller thing than either a hang or a lost connection.
 			arp_send_request(dev, next_hop);
-			return ipv4_park_pending(dev, next_hop, src_ip, dst_ip,
-			                         protocol, payload, length);
+			ipv4_park_pending(dev, next_hop, src_ip, dst_ip,
+			                  protocol, payload, length);
+			kIPv4Stats.tx_awaiting_arp++;
+			return -2;
 		}
 	}
 
