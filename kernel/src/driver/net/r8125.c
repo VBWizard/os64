@@ -93,6 +93,35 @@ extern bool kEnableR8125;
 #define R8125_ISR0_8125   0x3C   // [8125-SPECIFIC] 32-bit interrupt status (UNCONFIRMED)
 #define R8125_TPPOLL_8125 0x90   // [8125-SPECIFIC] 16-bit transmit doorbell (UNCONFIRMED)
 
+// THE RECEIVE GATE — the prime suspect for a driver that transmits happily
+// and receives nothing, which is exactly what the P5 reported on its first
+// bring-up (tx=5, rx=0, drop_nh=0: net_device_rx was never even called).
+//
+// The 8168/8125 generations carry a MISC register with an RXDV_GATED_EN bit
+// that gates the PHY's receive-data-valid signal. Gated, the MAC transmits
+// perfectly and hears nothing — the asymmetry is the whole tell. Linux's
+// r8169 has a dedicated rtl_disable_rxdvgate() and calls it while starting
+// this generation's hardware, because the part can come out of reset with
+// the gate closed. Nothing in our bring-up ever opened it.
+//
+// MEASURED ON THE P5, 2026-08-16: MISC reads 0x0000003f both before and
+// after, so on THIS board the gate was never shut and clearing it was a
+// no-op. The hypothesis was wrong — recorded rather than quietly deleted,
+// because a plausible theory that the hardware refuted is worth more to the
+// next reader than a clean file that pretends it was never entertained.
+//
+// The code STAYS. Linux's reference driver opens this gate while starting
+// the generation, which means some board or some reset path does come up
+// gated; ours simply is not one of them today. It costs one read-modify-
+// write at init and it reports what it saw, which is exactly how we learned
+// it was innocent.
+//
+// [8125-SPECIFIC] (UNCONFIRMED as to bit and register — all we have measured
+// is that this address reads 0x3f on an RTL8125B, which is consistent with
+// bit 19 being clear but does not prove the field is where we think it is).
+#define R8125_MISC        0xF0        // [8125-SPECIFIC] 32-bit (UNCONFIRMED)
+#define R8125_RXDV_GATED  (1u << 19)  // 1 = receive gated OFF
+
 // PHYstatus bits [8169-family]. The 8125 adds a 2500Mbps indication that
 // this driver does not decode: the ratified topology is a gigabit switch,
 // so 1000/full is the expected and desired answer, and a link this driver
@@ -393,10 +422,35 @@ static bool r8125_setup_rings(r8125_t* r)
 	// heard of virtual memory. Low half first, then high — the order does
 	// not matter to a stopped engine, but writing the pair as a pair keeps
 	// the next reader from wondering whether it did.
-	r8125_write32(r, R8125_RDSAR_LOW,  (uint32_t)(r->rx_phys & 0xFFFFFFFF));
-	r8125_write32(r, R8125_RDSAR_HIGH, (uint32_t)(r->rx_phys >> 32));
-	r8125_write32(r, R8125_TNPDS_LOW,  (uint32_t)(r->tx_phys & 0xFFFFFFFF));
+	// HIGH BEFORE LOW, and it is not a stylistic preference. Linux's r8169
+	// writes the pair in that order under a comment calling it a "magic
+	// spell" — the LOW write is what LATCHES the pair, so a HIGH written
+	// afterwards may never be taken. The first version of this function had
+	// it backwards (2026-08-16), which on the P5 left transmit working and
+	// receive stone dead: our physical addresses are below 4GB so the HIGH
+	// half is zero either way, but "the value happens to be harmless" and
+	// "the register was programmed" are different claims, and only one of
+	// them survives a machine that lays its rings out differently.
 	r8125_write32(r, R8125_TNPDS_HIGH, (uint32_t)(r->tx_phys >> 32));
+	r8125_write32(r, R8125_TNPDS_LOW,  (uint32_t)(r->tx_phys & 0xFFFFFFFF));
+	r8125_write32(r, R8125_RDSAR_HIGH, (uint32_t)(r->rx_phys >> 32));
+	r8125_write32(r, R8125_RDSAR_LOW,  (uint32_t)(r->rx_phys & 0xFFFFFFFF));
+
+	// And read them back. These are plain read/write registers with no
+	// hardware-owned bits, so a mismatch here is unambiguous — it means the
+	// descriptor base the chip is walking is NOT the ring we built, which
+	// would explain a receive path that never sees a thing.
+	uint32_t rx_lo = r8125_read32(r, R8125_RDSAR_LOW);
+	uint32_t tx_lo = r8125_read32(r, R8125_TNPDS_LOW);
+	if (rx_lo != (uint32_t)(r->rx_phys & 0xFFFFFFFF) ||
+	    tx_lo != (uint32_t)(r->tx_phys & 0xFFFFFFFF))
+	{
+		printf("r8125: descriptor bases did NOT stick — rx wrote 0x%08x read 0x%08x, tx wrote 0x%08x read 0x%08x\n",
+		       (uint32_t)(r->rx_phys & 0xFFFFFFFF), rx_lo,
+		       (uint32_t)(r->tx_phys & 0xFFFFFFFF), tx_lo);
+		return false;
+	}
+	printf("r8125: descriptor bases confirmed (rx 0x%08x, tx 0x%08x)\n", rx_lo, tx_lo);
 
 	printd(DEBUG_NET, "r8125: rings rx phys 0x%lx tx phys 0x%lx (%u/%u descs, %u-byte buffers)\n",
 	       r->rx_phys, r->tx_phys, R8125_RX_DESCS, R8125_TX_DESCS, R8125_BUF_SIZE);
@@ -677,6 +731,21 @@ static bool r8125_init_device(pci_device_t* dev)
 	// wedges that line for its rightful owner too.
 	r8125_write32(r, R8125_IMR0_8125, 0);
 	r8125_write32(r, R8125_ISR0_8125, 0xFFFFFFFF);   // clear anything pending
+
+	// OPEN THE RECEIVE GATE. See R8125_RXDV_GATED above: this generation can
+	// come out of reset with receive gated, which presents exactly as the
+	// P5's first bring-up did — transmit fine, not one frame in. Read-modify
+	// -write so we clear only this bit and leave the rest of MISC alone,
+	// whatever else lives there on this part.
+	// (Measured innocent on the P5 — see R8125_RXDV_GATED. Kept because the
+	// reference driver does it and another board may yet come up gated.)
+	uint32_t misc_before = r8125_read32(r, R8125_MISC);
+	r8125_write32(r, R8125_MISC, misc_before & ~R8125_RXDV_GATED);
+	uint32_t misc_after = r8125_read32(r, R8125_MISC);
+	printf("r8125: rx gate: MISC 0x%08x -> 0x%08x (RXDV_GATED %s)\n",
+	       misc_before, misc_after,
+	       (misc_after & R8125_RXDV_GATED) ? "STILL SET — receive will stay dead"
+	                                       : "clear");
 
 	// Engines on, THEN relock the config space.
 	r8125_write8(r, R8125_CHIPCMD, R8125_CMD_TX_ENABLE | R8125_CMD_RX_ENABLE);
