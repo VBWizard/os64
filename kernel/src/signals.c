@@ -14,6 +14,7 @@
 #include "driver/system/usb/xhci.h"
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
+#include "driver/net/r8125.h"
 #include "driver/net/dhcp.h"
 #include "driver/net/udp_conn.h"
 #include "driver/net/tcp.h"
@@ -143,6 +144,13 @@ void processSignals()
 		kE1000RxWork = false;
 		e1000_poll();
 	}
+
+	// And the RTL8125's drainer. Wired in from its FIRST slice, before it
+	// has any rings to drain, precisely so that adding them needs no
+	// scheduler surgery later — same economics as the two calls above: one
+	// guard branch away from free when the hardware is absent, which on
+	// every machine here except the P5 is always.
+	r8125_poll();
 
 	// DHCP's retry timer rides the same pass (one state compare when the
 	// lease is settled). Delivery of DHCP replies happens inside the poll

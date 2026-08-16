@@ -13,6 +13,7 @@ extern bool kEnableGUI;
 extern bool kRunTests;
 extern bool kEnableUSB;
 extern bool kEnableNet;
+extern bool kEnableR8125;
 // Static IPv4 configuration strings (ipv4.c owns them; empty = the 10.0.2.x
 // NAT-convention defaults shared by QEMU slirp and VirtualBox NAT). DHCP
 // supersedes all three in NETWORK.md Phase 3.
@@ -283,6 +284,10 @@ static cmdopt_t cmdopts[] = {
     {"NOCACHE", OPT_BOOL, &kBlockCacheDisabled, true, 0},
     {"NOUSB", OPT_BOOL, &kEnableUSB, false, 0},
     {"NONET", OPT_BOOL, &kEnableNet, false, 0},
+    // The RTL8125 flashlight, sibling of NOAHCI/NONVME. UPPERCASE because
+    // this table is matched with strcmp and folds no case — the lesson
+    // three dead boot entries taught on 2026-08-16 (commit 642eb9f).
+    {"NOR8125", OPT_BOOL, &kEnableR8125, false, 0},
     {"DEBUG_NET", OPT_UINT128_OR, &kDebugLevel, DEBUG_NET, 0},
     // The NVMe command-stream histogram (nvme.c iostat) rides this level —
     // boot with DEBUG_NVME, run the workload, read the log.
