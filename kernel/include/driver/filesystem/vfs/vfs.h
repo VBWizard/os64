@@ -373,6 +373,29 @@ struct file_operations
 	// Returns 0 on success, negative on refusal.
 	int (*rename) (const char *oldpath, const char *newpath, vfs_filesystem_t* vfs_fs);
 	int (*initialize) (vfs_filesystem_t* device);
+	// "You are now reachable by path." Called by kRegisterFilesystem AFTER
+	// the mount table entry exists — the moment that separates a filesystem
+	// being READ into memory from a filesystem being MOUNTED.
+	//
+	// This slot exists because that distinction turned out to be load-bearing
+	// and nothing had ever needed to notice it. `initialize` runs BEFORE the
+	// mount table is claimed, so a filesystem that WRITES during initialize
+	// writes to a partition the kernel does not yet consider mounted — which
+	// the block-layer stray-write tripwire correctly panics on, and did
+	// (2026-08-16: ext2's orphan replay, the first mount-time write os64 has
+	// ever had). Two rules fall out, and they are the whole point of the slot:
+	//
+	//   initialize: READ what you need in order to decide whether to mount.
+	//   mounted:    WRITE whatever mounting obliges you to do.
+	//
+	// The second reason is independent of the tripwire: a mount can still
+	// FAIL after initialize succeeds (a full mount table), and work done in
+	// initialize would already have touched the disk of a filesystem that
+	// never became reachable by any path.
+	//
+	// Return value is advisory — the mount has already happened and will not
+	// be undone. Report trouble; do not expect to veto.
+	int (*mounted) (vfs_filesystem_t* fs);
 	int (*uninitialize) (vfs_filesystem_t* device);
 };
 

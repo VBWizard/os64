@@ -293,9 +293,15 @@ int64_t os64_unlink(const char *path)
 // Returns 0 on success, negative on refusal: a read-only filesystem, a
 // source that isn't there, the two paths on DIFFERENT filesystems (that's a
 // copy, not a rename — do it in userland), a destination that is a directory
-// or that a directory would replace, either side held open by another
-// handle, or a directory renamed into its own descendant. See SYSCALL_RENAME
-// in the ABI header for why each of those refuses instead of surprising you.
+// or that a directory would replace, an open DIRECTORY on either side, or a
+// directory renamed into its own descendant. See SYSCALL_RENAME in the ABI
+// header for why each of those refuses instead of surprising you.
+//
+// Open FILES are explicitly fine on both sides. Renaming a file somebody is
+// reading does not disturb them (a reader holds an inode, not a name), and
+// REPLACING a file somebody is reading leaves their copy alive and nameless
+// until they close it — which is how a program's own binary can be replaced
+// underneath it while it runs.
 int64_t os64_rename(const char *oldpath, const char *newpath)
 {
     return (long)os64_syscall2(SYSCALL_RENAME, (uint64_t)oldpath, (uint64_t)newpath);

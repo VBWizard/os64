@@ -257,8 +257,10 @@ int64_t os64_unlink(const char *path);
 // resolving, so the write-a-temp-then-put-it-in-place recipe is actually
 // safe. Refuses (negative) rather than surprising you: read-only filesystem,
 // missing source, cross-filesystem, a directory on either side of a
-// replacement, either side open elsewhere, or a directory moved into its own
-// descendant. This is the call `mv` is built on — within one filesystem.
+// replacement, an open DIRECTORY on either side, or a directory moved into
+// its own descendant. Open FILES are fine on both sides — replacing one that
+// is being read (or RUN) leaves the reader's copy alive until it closes.
+// This is the call `mv` is built on — within one filesystem.
 int64_t os64_rename(const char *oldpath, const char *newpath);
 
 // Create a directory at `path` (relative paths resolve against the cwd).

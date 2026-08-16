@@ -202,6 +202,13 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 	m->fs = fs;
 	kMountCount++;
 
+	// The filesystem is reachable by path as of the line above — and ONLY as
+	// of that line does the block layer agree this partition is mounted. Any
+	// driver work that has to WRITE belongs here rather than in initialize;
+	// see fops->mounted in vfs.h for the panic that taught us the difference.
+	if (fs->fops->mounted != NULL)
+		fs->fops->mounted(fs);
+
     return fs;
 }
 

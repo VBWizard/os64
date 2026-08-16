@@ -368,10 +368,14 @@
 //   - Replacement is FILE-ONTO-FILE only. A directory is never replaced,
 //     and a directory is never renamed onto an existing name. A silent
 //     rmdir hiding inside a rename is a surprise with no upside.
-//   - Either side OPEN is refused, on the filesystems that can tell (ext2
-//     counts open inodes). A handle holding a file is a claim on it;
-//     renaming out from under a reader is the same violation as deleting
-//     out from under one.
+//   - An open DIRECTORY on either side is refused (its reader is mid-walk
+//     through the very blocks a move re-parents). Open FILES are fine in
+//     both roles, which is the whole point of the orphan work of
+//     2026-08-16: a reader holds an INODE, not a name, so it neither
+//     notices nor cares that its file was renamed — and when its file is
+//     the one being REPLACED, that displaced inode survives, nameless,
+//     until the last handle closes. This is what lets a refresh put a new
+//     /bin/husk in place while husk is running.
 //   - A directory may not be renamed into its own descendant. `mv a a/b/c`
 //     detaches the subtree into a ring nothing points at — one of the few
 //     things a rename can do that fsck cannot quietly repair.

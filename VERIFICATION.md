@@ -147,6 +147,47 @@ in `kernel/test/`. Adding one: register in the appropriate phase, keep it
 silent on success, TEST_FAIL (= panic) on failure. No doc or watcher
 updates needed — the greps above are count-agnostic by design.
 
+## The orphan-recovery procedure (a test the suite structurally cannot run)
+
+The ext2 orphan chain — an inode whose last NAME is gone while a handle
+still holds it open — is what lets a running program's binary be replaced
+underneath it. `test_ext2_orphan` covers the normal life cycle and MEASURES
+the free counters to prove nothing leaks. It cannot cover the half that
+matters most, because that half requires the machine to DIE: an orphan
+outstanding at a power cut must be reclaimed by the next mount.
+
+That one is a two-boot procedure, done by hand (2026-08-16 — and it caught a
+real bug the first time it ran, the mount-time write panic below):
+
+```bash
+# Boot 1 — make an orphan, then pull the plug.
+#   A RUNNING PROGRAM holds its own binary open (tasks keep image->file for
+#   demand paging), which is both the easiest holder to arrange and the exact
+#   scenario the feature exists for. NOTE: `tail -f` does NOT work as the
+#   holder — it opens and closes on every poll (tail.c follow_read), so the
+#   file is shut at the moment you rename over it and no orphan is created.
+husk> sleep 900 &
+husk> cp /bin/echo /newsleep
+husk> mv /newsleep /bin/sleep          # replaces the RUNNING sleep's binary
+
+kill -9 $(pgrep -f 'qem[u]-system')    # a power cut: no descent, no sync
+
+# The orphan is now on disk. e2fsck -f deliberately does NOT process the
+# orphan list (it leaves them to the normal passes), so it reports them as
+# bitmap differences — that IS the confirmation, not a failure:
+make fsck-ext2      # expect: "Inode bitmap differences: -58" and its blocks
+
+# Boot 2 — same disk, NO rebuild in between (make rewrites the root image and
+# would erase the very thing under test).
+#   Expect on the glass, just before the mount line:
+#     ext2: reaped 1 orphaned inode(s) left by the previous mount
+
+husk> shutdown
+make fsck-ext2      # expect: clean. The recovery has to satisfy e2fsck, not
+                    # us — which is the whole reason the list lives on disk in
+                    # s_last_orphan instead of in kernel memory.
+```
+
 ## Driving the GUI headlessly (mouse, keys, screenshots)
 
 The QEMU monitor (telnet :55555) is a full remote control. From a script:
@@ -192,6 +233,16 @@ until it has seen at least QEMU + one of the other two.
 
 - **Shell/QEMU dies with exit 144 mid-script:** your own pkill self-match —
   bracket trick above.
+- **"block write tripwire: ... partition N which is not mounted" during
+  boot, on a partition that is plainly being mounted right then:** a
+  filesystem driver wrote from `fops->initialize`. That runs BEFORE
+  `kRegisterFilesystem` claims the mount-table entry, so `vfs_partition_mounted`
+  correctly says no. Move the write to `fops->mounted`, which exists for
+  exactly this (see vfs.h). Cost of learning it: ext2's orphan replay,
+  2026-08-16, the first mount-time write os64 ever had.
+- **A crash test that proves nothing because the "holder" wasn't holding:**
+  check that your chosen program keeps the file open CONTINUOUSLY. `tail -f`
+  does not (it reopens per poll). A running program's own binary does.
 - **Boot lands in the wrong Limine entry:** default_entry edit didn't make
   it into the ISO (forgot the rebuild) or the menu timeout raced you.
 - **Serial log stays empty for ages under WSL2:** the slow-walk, not a

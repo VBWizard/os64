@@ -379,8 +379,53 @@ struct ext2_super_block {
 	uint32_t	s_feature_compat; 	/* compatible feature set */
 	uint32_t	s_feature_incompat; 	/* incompatible feature set */
 	uint32_t	s_feature_ro_compat; 	/* readonly-compatible feature set */
-	uint32_t	s_reserved[230];	/* Padding to the end of the block */
+	/*
+	 * Named through s_last_orphan (2026-08-16, the orphan-list slice).
+	 * These lived inside s_reserved as anonymous padding until something
+	 * needed to WRITE one of them, and the one that did is s_last_orphan at
+	 * offset 0xE8 — the head of the on-disk list of inodes whose last NAME
+	 * is gone but whose last HANDLE is not (see ext2_write.c's orphan
+	 * chain). Everything between here and there is named rather than
+	 * skipped, because "s_reserved[32]" is a magic number wearing an
+	 * array's clothes, and the next person to need a field would have had
+	 * to count the offsets a second time.
+	 *
+	 * The journal fields are named but NOT honored: os64 has no journal.
+	 * Naming them costs nothing and stops the padding from lying about
+	 * where s_last_orphan begins.
+	 */
+	uint8_t		s_uuid[16];		/* 128-bit filesystem identifier */
+	char		s_volume_name[16];	/* volume name */
+	char		s_last_mounted[64];	/* directory where last mounted */
+	uint32_t	s_algorithm_usage_bitmap; /* compression (never ours) */
+	uint8_t		s_prealloc_blocks;	/* # blocks to preallocate for files */
+	uint8_t		s_prealloc_dir_blocks;	/* # to preallocate for directories */
+	uint16_t	s_padding1;
+	uint8_t		s_journal_uuid[16];	/* ext3: uuid of the journal superblock */
+	uint32_t	s_journal_inum;		/* ext3: inode number of the journal file */
+	uint32_t	s_journal_dev;		/* ext3: device number of the journal */
+	/*
+	 * THE ORPHAN LIST HEAD — inode number, or 0 for "the list is empty".
+	 * Each inode on the chain stores the NEXT one's number in its i_dtime
+	 * field, which is free real estate precisely because a still-referenced
+	 * inode has no deletion time yet. e2fsck knows this field by heart and
+	 * will clear a leftover chain itself, which is exactly why we use the
+	 * real thing instead of inventing a private list: the verification for
+	 * an otherwise invisible feature comes from a judge we did not write.
+	 */
+	uint32_t	s_last_orphan;		/* head of the list of inodes to delete */
+	uint32_t	s_reserved[197];	/* Padding to the end of the block */
 };
+
+/*
+ * A superblock that is not exactly 1024 bytes is a superblock whose field
+ * offsets have silently moved — and every one of them is a DISK offset, not
+ * a C convenience. Fail the BUILD, not the first mount.
+ */
+_Static_assert(sizeof(struct ext2_super_block) == 1024,
+               "ext2 superblock must be exactly 1024 bytes on disk");
+_Static_assert(__builtin_offsetof(struct ext2_super_block, s_last_orphan) == 0xE8,
+               "ext2 s_last_orphan must sit at offset 0xE8");
 
 /*
  * Codes for operating systems

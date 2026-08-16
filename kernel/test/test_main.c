@@ -2025,25 +2025,47 @@ static bool test_vfs_rename(void)
         || !(de.flags & OS64_DE_DIR))
         RN_FAIL("refused rename damaged the destination directory rn2\n");
 
-    // 6. Open elsewhere = busy (ext2's open-inode refcount; ruling 5, the
-    //    same one that makes rm refuse). FAT keeps no such count.
+    // 6. An open SOURCE is NOT a refusal — revised 2026-08-16 with the orphan
+    //    slice. This step originally asserted the opposite, and it FAILED the
+    //    first boot after the rule changed, which is exactly what a test that
+    //    encodes a ruling is for. The rule it encodes now: an ext2 handle
+    //    holds an INODE NUMBER, not a path, so a reader cannot tell that its
+    //    file was renamed and has nothing to be protected from. The reader
+    //    must keep reading, through the rename, without interruption.
+    //    (Directories still refuse — a directory handle is mid-walk. The
+    //    open-DESTINATION half of the ruling is test_ext2_orphan's job.)
     if (is_ext2) {
         vfs_file_t *held = NULL;
         if (kRootFilesystem->fops->open(&held, "/etc/testdata/rn/f", "r", kRootFilesystem) != 0)
             RN_FAIL("could not open rn/f to hold it\n");
-        int rc = kRootFilesystem->fops->rename("/etc/testdata/rn/f",
-                                               "/etc/testdata/rn/g", kRootFilesystem);
-        kRootFilesystem->fops->close(held);
-        if (rc == 0)
-            RN_FAIL("renamed a file that another handle held OPEN\n");
-        if (kRootFilesystem->dops->stat("/etc/testdata/rn/f", &de, kRootFilesystem) != 0)
-            RN_FAIL("busy-refused rename consumed the source anyway\n");
-        // ...and once the handle is gone the same rename must work, or the
-        // refusal is a leak rather than a rule.
         if (kRootFilesystem->fops->rename("/etc/testdata/rn/f",
-                                          "/etc/testdata/rn/g", kRootFilesystem) != 0)
-            RN_FAIL("rename still refused after the holding handle closed\n");
+                                          "/etc/testdata/rn/g", kRootFilesystem) != 0) {
+            kRootFilesystem->fops->close(held);
+            RN_FAIL("refused to rename a file that was merely OPEN — a reader holds an inode, not a name\n");
+        }
+        // The holder reads on, oblivious, from the same inode under its new name.
+        n = kRootFilesystem->fops->read(held, buf, sizeof(buf));
+        kRootFilesystem->fops->close(held);
+        if (n != (int)(sizeof(omega) - 1) || memcmp(buf, omega, sizeof(omega) - 1) != 0)
+            RN_FAIL("the held handle lost its bytes across a rename of its own file (n=%d)\n", n);
+        if (kRootFilesystem->dops->stat("/etc/testdata/rn/f", &de, kRootFilesystem) == 0)
+            RN_FAIL("old name rn/f still resolves after renaming an open file\n");
+        if (kRootFilesystem->dops->stat("/etc/testdata/rn/g", &de, kRootFilesystem) != 0)
+            RN_FAIL("new name rn/g missing after renaming an open file\n");
         kRootFilesystem->fops->rm("/etc/testdata/rn/g", kRootFilesystem);
+
+        // A DIRECTORY held open still refuses to move: its reader is walking
+        // the very blocks whose context the move changes.
+        vfs_directory_t *heldDir = NULL;
+        if (kRootFilesystem->dops->open(&heldDir, "/etc/testdata/rn2", kRootFilesystem) == 0) {
+            int rcDir = kRootFilesystem->fops->rename("/etc/testdata/rn2",
+                                                      "/etc/testdata/rn2moved", kRootFilesystem);
+            kRootFilesystem->dops->close(heldDir);
+            if (rcDir == 0)
+                RN_FAIL("moved a directory that another handle was reading\n");
+            if (kRootFilesystem->dops->stat("/etc/testdata/rn2", &de, kRootFilesystem) != 0)
+                RN_FAIL("busy-refused directory rename consumed the source anyway\n");
+        }
     } else {
         kRootFilesystem->fops->rm("/etc/testdata/rn/f", kRootFilesystem);
     }
@@ -2078,11 +2100,158 @@ static bool test_vfs_rename(void)
     kRootFilesystem->fops->rm("/etc/testdata/rn/sub", kRootFilesystem);
     kRootFilesystem->fops->rm("/etc/testdata/rn", kRootFilesystem);
 
-    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: plain, atomic replace, move, directory move, %u refusals)\n",
+    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: plain, atomic replace, move, directory move, open-source survives, %u refusals)\n",
            is_ext2 ? "ext2" : "FAT", is_ext2 ? 4u : 2u);
     return true;
 }
 #undef RN_FAIL
+
+// ── test_ext2_orphan ────────────────────────────────────────────────────────
+// The orphan chain's proving ground (2026-08-16). This test exists because
+// THE FEATURE IS INVISIBLE: unlinking a file somebody still has open looks,
+// from every outside angle, exactly like unlinking a file nobody has open.
+// The difference is entirely in whether the storage came back — so this
+// MEASURES the free counters rather than trusting that a teardown ran.
+//
+// Three claims, in order of how much it would hurt to get wrong:
+//
+//   1. THE READER KEEPS READING. A handle held across the replacement still
+//      returns the OLD bytes. That is the whole point: a running /bin/husk
+//      must keep demand-paging its own image after os64get has put a new one
+//      at that name.
+//   2. NOTHING LEAKS. Free inodes and free blocks return to EXACTLY their
+//      starting values once the handle closes. Not "roughly", not "did not
+//      grow" — equal. A leak here is silent forever and compounds once per
+//      upgrade, which is precisely what an in-memory orphan list would have
+//      risked and why the list is on disk.
+//   3. THE NEW NAME IS THE NEW FILE, the instant the rename returns, even
+//      though the displaced storage lives on a while longer.
+//
+// Deliberately NOT covered here: crash recovery. The mount-time replay can
+// only be exercised by dying and rebooting, which no in-boot test can do —
+// that one is a harness procedure (VERIFICATION.md), driven by ORPHANCRASH.
+#define OR_FAIL(...) do { \
+        printf("FAIL ext2_orphan: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_orphan - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+
+static bool test_ext2_orphan(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+        kRootFilesystem->fops->write == NULL || kRootFilesystem->fops->rename == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (root not writable)\n");
+        return true;
+    }
+    // ext2 only: FAT has no inode to orphan and no open-inode count. The
+    // op-table identity is the discriminator (same idiom as test_vfs_rename).
+    if (kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (root is not ext2)\n");
+        return true;
+    }
+
+    static const char oldBytes[] = "THE-OLD-BINARY";
+    static const char newBytes[] = "THE-NEW-BINARY";
+    char buf[64];
+    os64_dirent_t de;
+
+    static const char *dirs[] = { "/etc", "/etc/testdata", "/etc/testdata/orph" };
+    for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        char pathbuf[40];
+        sprintf(pathbuf, "%s", dirs[i]);
+        kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+        if (kRootFilesystem->dops->stat(dirs[i], &de, kRootFilesystem) != 0
+            || !(de.flags & OS64_DE_DIR))
+            OR_FAIL("provision: %s is not a directory\n", dirs[i]);
+    }
+    kRootFilesystem->fops->rm("/etc/testdata/orph/victim", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/orph/replacement", kRootFilesystem);
+
+    // THE BASELINE, taken after that cleanup so a previous boot's leftovers
+    // cannot masquerade as this run's leak.
+    uint32_t inodes0 = ext2_free_inodes(kRootFilesystem);
+    uint32_t blocks0 = ext2_free_blocks(kRootFilesystem);
+    if (inodes0 == 0 || blocks0 == 0)
+        OR_FAIL("free-space accessors returned 0 — wrong filesystem, or a broken accessor\n");
+
+    // The victim: the file standing in for a running program's binary.
+    vfs_file_t *f = NULL;
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/victim", "c", kRootFilesystem) != 0)
+        OR_FAIL("could not create the victim\n");
+    kRootFilesystem->fops->write(f, oldBytes, sizeof(oldBytes) - 1);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+
+    // Its replacement, staged under another name exactly the way os64get will.
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/replacement", "c", kRootFilesystem) != 0)
+        OR_FAIL("could not create the replacement\n");
+    kRootFilesystem->fops->write(f, newBytes, sizeof(newBytes) - 1);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+
+    // NOW HOLD THE VICTIM OPEN — this handle is the running program.
+    vfs_file_t *held = NULL;
+    if (kRootFilesystem->fops->open(&held, "/etc/testdata/orph/victim", "r", kRootFilesystem) != 0)
+        OR_FAIL("could not open the victim to hold it\n");
+
+    // The replacement lands on the victim's name while that handle is live.
+    // Before 2026-08-16 this refused outright.
+    if (kRootFilesystem->fops->rename("/etc/testdata/orph/replacement",
+                                      "/etc/testdata/orph/victim", kRootFilesystem) != 0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("rename onto an OPEN destination was refused — the orphan path never ran\n");
+    }
+
+    // CLAIM 1: the holder still reads the OLD bytes. Its inode has no name
+    // any more; it does not care, and must not.
+    int n = kRootFilesystem->fops->read(held, buf, sizeof(buf));
+    if (n != (int)(sizeof(oldBytes) - 1) || memcmp(buf, oldBytes, sizeof(oldBytes) - 1) != 0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("the held handle stopped reading its own bytes (n=%d) — the orphan died early\n", n);
+    }
+
+    // CLAIM 3: the NAME already resolves to the new file, and the staging
+    // name is gone.
+    n = rn_slurp("/etc/testdata/orph/victim", buf, sizeof(buf));
+    if (n != (int)(sizeof(newBytes) - 1) || memcmp(buf, newBytes, sizeof(newBytes) - 1) != 0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("the victim's NAME does not hold the new bytes (n=%d)\n", n);
+    }
+    if (kRootFilesystem->dops->stat("/etc/testdata/orph/replacement", &de, kRootFilesystem) == 0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("the staged name survived the rename\n");
+    }
+
+    // The orphan's storage must still be OUT. Without this check, a rename
+    // that simply freed the inode too early could pass Claim 1 on luck (the
+    // blocks would not have been overwritten yet).
+    if (ext2_free_inodes(kRootFilesystem) == inodes0 &&
+        ext2_free_blocks(kRootFilesystem) == blocks0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("free space is already back at baseline while the handle is OPEN — nothing was orphaned\n");
+    }
+
+    // The program exits. THIS is the moment the storage comes back.
+    kRootFilesystem->fops->close(held);
+    held = NULL;
+
+    // CLAIM 2: exactly what was taken, given back. Drop the surviving name
+    // too, so the net against baseline must be zero on both counters.
+    kRootFilesystem->fops->rm("/etc/testdata/orph/victim", kRootFilesystem);
+    uint32_t inodes1 = ext2_free_inodes(kRootFilesystem);
+    uint32_t blocks1 = ext2_free_blocks(kRootFilesystem);
+    if (inodes1 != inodes0)
+        OR_FAIL("INODE LEAK: %u free before, %u after (%d lost)\n",
+                inodes0, inodes1, (int)inodes0 - (int)inodes1);
+    if (blocks1 != blocks0)
+        OR_FAIL("BLOCK LEAK: %u free before, %u after (%d lost)\n",
+                blocks0, blocks1, (int)blocks0 - (int)blocks1);
+
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (reader survived the replacement; %u inodes / %u blocks returned exactly)\n",
+           inodes0, blocks0);
+    return true;
+}
+#undef OR_FAIL
 
 // ── test_ext2_secondary_write ───────────────────────────────────────────────
 // The ext2 WRITE driver's proving ground (2026-08-04 — the day os64 wrote
@@ -3530,6 +3699,7 @@ static void register_builtin_tests(void)
     // in test_framework.h; the demotion engine in vfs.c).
     test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("vfs_rename", test_vfs_rename, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("ext2_orphan", test_ext2_orphan, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
