@@ -276,7 +276,14 @@ int main(int argc, char **argv)
         crc = os64_crc32_update(crc, buf, (size_t)n);
         got += (uint64_t)n;
 
-        if (!quiet && (got % (64 * 1024) < (uint64_t)n || got == expectLen))
+        // Progress every 4KB, not every 64KB. The first version updated so
+        // rarely that Chris watched a 146KB transfer sit on one line for
+        // fifty seconds and concluded it had frozen — which, at the speeds
+        // this stack currently manages, was an entirely reasonable reading.
+        // A progress meter exists to distinguish "slow" from "dead", and one
+        // that updates less often than a human's patience runs out is doing
+        // the opposite of its job.
+        if (!quiet && (got % 4096 < (uint64_t)n || got == expectLen))
             os64_printf("\r%s: %lu/%lu bytes", dest,
                         (unsigned long)got, (unsigned long)expectLen);
     }
