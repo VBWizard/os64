@@ -700,6 +700,7 @@ int ext2_initialize_filesystem(vfs_filesystem_t *fs)
 		fs->fops->write   = NULL;
 		fs->fops->sync    = NULL;
 		fs->fops->rm      = NULL;
+		fs->fops->rename  = NULL;
 		fs->fops->fputs   = NULL;
 		fs->fops->fprintf = NULL;
 		if (fs->dops != NULL)

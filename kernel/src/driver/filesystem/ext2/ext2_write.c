@@ -1199,6 +1199,73 @@ static uint32_t ext2_dir_remove(vfs_filesystem_t *fs, ext2_fs_t *e,
 	return removed;
 }
 
+// Point an EXISTING directory entry at a different inode, in place. The
+// name, its length, and the entry's rec_len are all unchanged — only the
+// inode number (and the file_type byte that shadows it) move.
+//
+// This is the primitive that makes atomic replacement possible, and it is
+// worth being explicit about WHY it is atomic: a directory entry's inode
+// number is four bytes inside one block, and we publish the change by
+// writing that whole block. A reader either sees the block before or after;
+// there is no third state in which the name exists but points nowhere. That
+// single block write is the instant at which "refresh.part" becomes
+// "refresh" — everything else rename does is bookkeeping around it.
+//
+// Deliberately does NOT write the directory's inode back (unlike
+// ext2_dir_insert, which must, because it may have grown the directory).
+// The caller owns the parent inode struct here and often has its own
+// link-count arithmetic to fold into the same write; two writers of one
+// in-memory inode is how you lose one of the two updates.
+//
+// Returns 0 on success, -1 if the name isn't there or the write failed.
+static int ext2_dir_repoint(vfs_filesystem_t *fs, ext2_fs_t *e,
+                            ext2_inode_t *dir, const char *name, uint32_t len,
+                            uint32_t new_ino, uint8_t file_type)
+{
+	// Same feature gate ext2_dir_insert applies: without FILETYPE the byte
+	// is reserved-zero and writing a type into it would be a small lie on
+	// disk that fsck is entitled to complain about.
+	uint32_t incompat = (e->sb.s_rev_level >= EXT2_DYNAMIC_REV)
+	                        ? e->sb.s_feature_incompat : 0;
+	if (!(incompat & EXT2_FEATURE_INCOMPAT_FILETYPE))
+		file_type = 0;
+
+	uint8_t *buf = wr_scratch_get(e);
+	if (buf == NULL)
+		return -1;
+
+	int rc = -1;
+	uint32_t dir_blocks = dir->i_size / e->block_size;
+	for (uint32_t fb = 0; fb < dir_blocks && rc != 0; fb++)
+	{
+		uint32_t disk_block = ext2_bmap(fs, e, dir, fb);
+		if (disk_block == 0)
+			continue;
+		if (ext2_read_fs_block(fs, e, disk_block, buf) != 0)
+			break;
+
+		uint32_t pos = 0;
+		while (pos < e->block_size)
+		{
+			ext2_dir_entry_2_t *de = (ext2_dir_entry_2_t *)(buf + pos);
+			if (de->rec_len == 0)
+				break;   // corrupt block — try the next one
+			if (de->inode != 0 && de->name_len == len &&
+			    memcmp(de->name, name, len) == 0)
+			{
+				de->inode = new_ino;
+				de->file_type = file_type;
+				rc = (ext2_write_fs_block(fs, e, disk_block, buf) == 0) ? 0 : -1;
+				break;
+			}
+			pos += de->rec_len;
+		}
+	}
+
+	wr_scratch_put(e, buf);
+	return rc;
+}
+
 // Is this directory empty? Only "." and ".." may hold live inodes.
 static bool ext2_dir_is_empty(vfs_filesystem_t *fs, ext2_fs_t *e,
                               const ext2_inode_t *dir)
@@ -1454,6 +1521,304 @@ refuse:
 	return -1;
 }
 
+// ── rename ──────────────────────────────────────────────────────────────────
+
+// Is `maybe_ancestor` at or above `start_dir` in the tree? Walks ".." upward
+// from start_dir (INCLUSIVE of start_dir itself) until the root, whose ".."
+// points at the root.
+//
+// This exists for exactly one move: `mv a a/b/c`. Renaming a directory into
+// its own descendant detaches the whole subtree into a ring that nothing in
+// the tree points at — the classic filesystem loop, and one of the few
+// things a rename can do that e2fsck cannot silently repair (it reattaches
+// the wreckage under lost+found and the human works out what happened).
+// Unix has refused this since 4.2BSD gave us rename at all; so do we.
+//
+// Refuses on ANY doubt — an unreadable inode or a pathological depth both
+// return true (i.e. "treat as ancestor, refuse the move"). A rename we
+// decline costs a puzzled user one error; a loop we create costs a fsck.
+static bool ext2_is_ancestor(vfs_filesystem_t *fs, ext2_fs_t *e,
+                             uint32_t maybe_ancestor, uint32_t start_dir)
+{
+	uint32_t cur = start_dir;
+	for (uint32_t hops = 0; hops < 4096; hops++)
+	{
+		if (cur == maybe_ancestor)
+			return true;
+		ext2_inode_t node;
+		if (ext2_read_inode(fs, e, cur, &node) != 0)
+			return true;   // can't prove it safe — refuse
+		uint32_t up = ext2_dir_find(fs, e, &node, "..", 2);
+		if (up == 0 || up == cur)
+			return false;  // reached the root: its ".." is itself
+		cur = up;
+	}
+	return true;   // absurd depth, or a loop already on disk — refuse
+}
+
+// os64's rename verb (fops->rename): give a file a different name, possibly
+// in a different directory of the SAME filesystem (syscall_rename refuses
+// cross-mount before we ever see it).
+//
+// THE RULING (Chris, 2026-08-16) is ATOMIC REPLACE: if the destination name
+// already holds a regular file, it is replaced, and at no instant does the
+// destination name fail to resolve. That guarantee is the entire reason
+// rename(2) was invented — 4.2BSD added it because the link-then-unlink
+// idiom everyone was using had a window in the middle, and every "write a
+// new version safely" recipe since (editors, package managers, and now
+// os64get) is built on closing it.
+//
+// The two refusals that survive the replacement rule are ext2_rm's rulings,
+// not new inventions:
+//   - the destination is a DIRECTORY, or the source is a directory and the
+//     destination exists at all. Replacement is file-onto-file ONLY; a
+//     rename that quietly removes a directory, or swaps a directory in
+//     where a file was, is a surprise with no upside.
+//   - either side is OPEN. The open-inode refcount says somebody is holding
+//     this thing; renaming out from under a reader is the same violation as
+//     deleting out from under one (ruling 5, 2026-08-04).
+// Symlinks, devices and the other exotic modes are refused outright, for
+// the same reason ext2_rm refuses them: we do not know their storage rules
+// well enough to move them safely.
+//
+// ORDER OF OPERATIONS, and why the link count goes UP before it goes down:
+//
+//   1. src.i_links_count++            (count 2, names 1 — over by one)
+//   2. publish the new name           (count 2, names 2 — consistent)
+//   3. remove the old name            (count 2, names 1 — over by one)
+//   4. src.i_links_count--            (count 1, names 1 — consistent)
+//
+// A crash at any point leaves the link count EQUAL TO OR GREATER THAN the
+// number of names, never less. That direction is the safe one: an inode
+// with a spare link is a thing e2fsck notices and corrects, while an inode
+// with a missing link is a live file the allocator is entitled to hand out
+// from under you. e2fsck staying green is the constitution for a writable
+// root, so the two extra inode writes are cheap insurance.
+static int ext2_rename(const char *oldpath, const char *newpath,
+                       vfs_filesystem_t *vfs_fs)
+{
+	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
+
+	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+
+	// Resolve both ends. split_path also refuses "." and ".." leaves and
+	// verifies each parent really is a directory, so those cases never
+	// reach the surgery below.
+	ext2_inode_t old_parent, new_parent_storage;
+	const char *old_name, *new_name;
+	uint32_t old_len, new_len;
+
+	uint32_t old_parent_ino = ext2_split_path(vfs_fs, e, oldpath, &old_parent,
+	                                          &old_name, &old_len);
+	if (old_parent_ino == 0)
+		goto refuse;
+	uint32_t new_parent_ino = ext2_split_path(vfs_fs, e, newpath, &new_parent_storage,
+	                                          &new_name, &new_len);
+	if (new_parent_ino == 0)
+		goto refuse;
+
+	// ONE in-memory inode per on-disk inode. When both names live in the
+	// same directory, `old_parent` and `new_parent_storage` are two copies
+	// of the same thing, and writing one then the other silently discards
+	// whichever update went first (dir_insert's size growth, say, undone by
+	// dir_remove's stale copy). Alias instead of copying.
+	bool same_parent = (old_parent_ino == new_parent_ino);
+	ext2_inode_t *np = same_parent ? &old_parent : &new_parent_storage;
+
+	uint32_t src_ino = ext2_dir_find(vfs_fs, e, &old_parent, old_name, old_len);
+	if (src_ino == 0)
+		goto refuse;   // nothing by that name
+
+	ext2_inode_t src;
+	if (ext2_read_inode(vfs_fs, e, src_ino, &src) != 0)
+		goto refuse;
+
+	uint32_t src_kind = src.i_mode & EXT2_S_IFMT;
+	if (src_kind != EXT2_S_IFREG && src_kind != EXT2_S_IFDIR)
+	{
+		printd(DEBUG_VFS, "ext2: refusing rename of '%s' — inode %u is neither file nor directory (mode 0x%04x)\n",
+		       oldpath, src_ino, src.i_mode);
+		goto refuse;
+	}
+
+	if (ext2_openref_count(e, src_ino) > 0)
+	{
+		printd(DEBUG_VFS, "ext2: refusing rename of '%s' (inode %u) — open elsewhere (busy)\n",
+		       oldpath, src_ino);
+		goto refuse;
+	}
+
+	// rename("a", "a"): the caller asked for a state the disk is already in.
+	// Succeed without touching anything — doing the surgery would mean
+	// removing the only name for an inode we just published under itself.
+	if (same_parent && old_len == new_len &&
+	    memcmp(old_name, new_name, old_len) == 0)
+	{
+		spinlock_release_irqrestore(&e->write_lock, lock_flags);
+		return 0;
+	}
+
+	bool src_is_dir = (src_kind == EXT2_S_IFDIR);
+
+	// The destination, if anything is already there.
+	ext2_inode_t dst;
+	bool replacing = false;
+	uint32_t dst_ino = ext2_dir_find(vfs_fs, e, np, new_name, new_len);
+	if (dst_ino != 0)
+	{
+		// Both names already denote the same inode — a hard link, which os64
+		// cannot create but a disk written elsewhere can carry. The request
+		// is already satisfied; removing the old name would DROP a link the
+		// caller never asked to lose.
+		if (dst_ino == src_ino)
+		{
+			spinlock_release_irqrestore(&e->write_lock, lock_flags);
+			return 0;
+		}
+		if (ext2_read_inode(vfs_fs, e, dst_ino, &dst) != 0)
+			goto refuse;
+		if ((dst.i_mode & EXT2_S_IFMT) != EXT2_S_IFREG || src_is_dir)
+		{
+			printd(DEBUG_VFS, "ext2: refusing rename onto '%s' — replacement is file-onto-file only (dest mode 0x%04x, source mode 0x%04x)\n",
+			       newpath, dst.i_mode, src.i_mode);
+			goto refuse;
+		}
+		if (ext2_openref_count(e, dst_ino) > 0)
+		{
+			printd(DEBUG_VFS, "ext2: refusing rename onto '%s' (inode %u) — open elsewhere (busy)\n",
+			       newpath, dst_ino);
+			goto refuse;
+		}
+		replacing = true;
+	}
+
+	// `mv a a/b` — see ext2_is_ancestor. Only a directory can loop, and only
+	// when it is actually changing parents.
+	if (src_is_dir && !same_parent &&
+	    ext2_is_ancestor(vfs_fs, e, src_ino, new_parent_ino))
+	{
+		printd(DEBUG_VFS, "ext2: refusing rename of '%s' into its own descendant '%s'\n",
+		       oldpath, newpath);
+		goto refuse;
+	}
+
+	uint32_t now = (uint32_t)kSystemCurrentTime;
+	uint8_t file_type = src_is_dir ? EXT2_FT_DIR : EXT2_FT_REG_FILE;
+
+	// ── Step 1: over-count, so every later crash window is the safe kind ──
+	src.i_links_count++;
+	src.i_ctime = now;
+	if (ext2_write_inode_disk(vfs_fs, e, src_ino, &src) != 0)
+		goto refuse;
+
+	// ── Step 2: publish the new name. THIS is the atomic moment ──────────
+	if (replacing)
+	{
+		// One block write swings the existing entry onto our inode. The
+		// replaced inode is now nameless but still counted — step 6 collects
+		// it, and a crash before that leaves e2fsck an unreferenced inode to
+		// reclaim, never a live file with no link.
+		if (ext2_dir_repoint(vfs_fs, e, np, new_name, new_len,
+		                     src_ino, file_type) != 0)
+			goto unwind;
+		np->i_mtime = now;
+		ext2_write_inode_disk(vfs_fs, e, new_parent_ino, np);
+	}
+	else
+	{
+		// A directory arriving in a new parent brings a ".." that will point
+		// at it — bump BEFORE dir_insert, which writes the parent inode as
+		// part of its own work (mkdir does exactly this).
+		if (src_is_dir && !same_parent)
+			np->i_links_count++;
+		if (ext2_dir_insert(vfs_fs, e, new_parent_ino, np, new_name, new_len,
+		                    src_ino, file_type) != 0)
+		{
+			if (src_is_dir && !same_parent)
+				np->i_links_count--;
+			goto unwind;
+		}
+	}
+
+	// ── Step 3: the old name goes away ───────────────────────────────────
+	if (ext2_dir_remove(vfs_fs, e, old_parent_ino, &old_parent,
+	                    old_name, old_len) == 0)
+	{
+		// The new name is already published and the link count already says
+		// two names, so the filesystem is CONSISTENT — it just has one more
+		// name than the caller wanted. Refusing to unwind here is deliberate:
+		// un-publishing would reopen the very window this design exists to
+		// close. Say so loudly and report failure honestly.
+		printd(DEBUG_VFS, "ext2: rename '%s' -> '%s': new name published but OLD NAME COULD NOT BE REMOVED — both names now exist (inode %u)\n",
+		       oldpath, newpath, src_ino);
+		spinlock_release_irqrestore(&e->write_lock, lock_flags);
+		return -1;
+	}
+
+	old_parent.i_mtime = now;
+	if (src_is_dir && !same_parent && old_parent.i_links_count > 0)
+		old_parent.i_links_count--;   // the moved dir's ".." left this parent
+	ext2_write_inode_disk(vfs_fs, e, old_parent_ino, &old_parent);
+
+	// ── Step 4: the moved directory's ".." follows it ────────────────────
+	// Done after the name surgery because it is the one piece of state that
+	// is wrong-but-harmless in between: a directory whose ".." names its old
+	// parent is still reachable, still walkable, and fsck's to correct.
+	if (src_is_dir && !same_parent)
+	{
+		if (ext2_dir_repoint(vfs_fs, e, &src, "..", 2,
+		                     new_parent_ino, EXT2_FT_DIR) != 0)
+			printd(DEBUG_VFS, "ext2: rename '%s' -> '%s': moved directory's '..' still names inode %u\n",
+			       oldpath, newpath, old_parent_ino);
+	}
+
+	// ── Step 5: give back the transient link ─────────────────────────────
+	src.i_links_count--;
+	src.i_ctime = now;
+	ext2_write_inode_disk(vfs_fs, e, src_ino, &src);
+
+	// ── Step 6: collect whatever we replaced ─────────────────────────────
+	// Same teardown as ext2_rm's regular-file branch, and for the same
+	// reason it respects a count above one: the disk can carry hard links
+	// this OS cannot make, and freeing a still-linked inode is corruption
+	// wearing a tidy-up's clothes.
+	if (replacing)
+	{
+		if (dst.i_links_count > 1)
+		{
+			dst.i_links_count--;
+			dst.i_ctime = now;
+			ext2_write_inode_disk(vfs_fs, e, dst_ino, &dst);
+		}
+		else
+		{
+			ext2_inode_t old = dst;
+			memset(dst.i_block, 0, sizeof(dst.i_block));
+			dst.i_links_count = 0;
+			dst.i_size = 0;
+			dst.i_blocks = 0;
+			dst.i_dtime = now;
+			ext2_write_inode_disk(vfs_fs, e, dst_ino, &dst);
+			ext2_free_inode_blocks(vfs_fs, e, &old);
+			ext2_free_inode(vfs_fs, e, dst_ino, false);
+		}
+	}
+
+	printd(DEBUG_VFS, "ext2: renamed '%s' -> '%s' (inode %u%s)\n",
+	       oldpath, newpath, src_ino, replacing ? ", replaced" : "");
+	spinlock_release_irqrestore(&e->write_lock, lock_flags);
+	return 0;
+
+unwind:
+	// The new name never got published; take back the link we lent.
+	src.i_links_count--;
+	ext2_write_inode_disk(vfs_fs, e, src_ino, &src);
+
+refuse:
+	spinlock_release_irqrestore(&e->write_lock, lock_flags);
+	return -1;
+}
+
 // ── The write-capable op tables ─────────────────────────────────────────────
 // The RW pair: every read slot aliases the read half's functions (via the
 // RO tables — same function pointers, one implementation); the write slots
@@ -1477,6 +1842,7 @@ void ext2_rw_tables_init(void)
 	ext2_rw_fops.fputs   = ext2_fputs;
 	ext2_rw_fops.fprintf = ext2_fprintf;
 	ext2_rw_fops.rm      = ext2_rm;      // the one removal verb
+	ext2_rw_fops.rename  = ext2_rename;  // ...and the one renaming verb
 
 	ext2_rw_dops = ext2_dops;
 	ext2_rw_dops.mkdir   = ext2_mkdir;

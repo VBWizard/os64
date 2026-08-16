@@ -105,6 +105,8 @@ static uint64_t syscall_unlink(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_mkdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -196,6 +198,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
+	SYSCALL_DEFINE(SYSCALL_RENAME,      "rename",      syscall_rename,      false, 0x03),  // arg0 = old path, arg1 = new path
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
 	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
@@ -2279,6 +2282,119 @@ static uint64_t syscall_mkdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 
 	printd(DEBUG_SYSCALL, "mkdir: task %s: created '%s'\n", task->exename, p->path);
+	kfree(p);
+	return 0;
+}
+
+// rename's kernel-context half: one fops->rename. Both paths are already
+// canonical and mount-resolved, and both were proven to belong to the SAME
+// filesystem in task context — the driver below is handed two fs-local
+// tails and never has to wonder whether they're on the same volume.
+typedef struct {
+	char oldpath[TASK_MAX_PATH_LEN];   // full canonical paths (kept for logging)
+	char newpath[TASK_MAX_PATH_LEN];
+	vfs_filesystem_t *fs;              // the one filesystem BOTH paths live on
+	const char *old_tail;              // fs-local remainders; point into the
+	const char *new_tail;              //   buffers above — transient, never freed
+	volatile long result;
+} rename_params_t;
+
+static void rename_do(void *arg)
+{
+	rename_params_t *p = (rename_params_t *)arg;
+	// The NULL check is the read-only answer: a filesystem with no write
+	// path leaves this slot NULL, and dispatching through it would execute
+	// mapped page zero rather than fail (fat_glue.c's disk_write, again).
+	p->result = (p->fs->fops != NULL && p->fs->fops->rename != NULL)
+	                ? p->fs->fops->rename(p->old_tail, p->new_tail, p->fs)
+	                : -1;
+}
+
+// rename(oldpath, newpath) — see the contract over SYSCALL_RENAME in
+// syscall_numbers.h. This half owns exactly three jobs: get both strings
+// safely out of user space, resolve both against the task's cwd and the
+// mount table, and refuse the two cases no filesystem driver should ever be
+// asked about (a cross-mount rename, and a mount point as either end).
+static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	char raw_old[TASK_MAX_PATH_LEN];
+	char raw_new[TASK_MAX_PATH_LEN];
+	if (!copy_user_string((const char *)arg0, raw_old, sizeof(raw_old)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	if (!copy_user_string((const char *)arg1, raw_new, sizeof(raw_new)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	rename_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// Relative paths resolve against the task's cwd, same as open and unlink
+	// — `mv notes.txt old.txt` has to mean the files `ls` just listed.
+	if (!resolve_user_path(task, raw_old, p->oldpath, sizeof(p->oldpath)) ||
+	    !resolve_user_path(task, raw_new, p->newpath, sizeof(p->newpath)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	p->old_tail = NULL;
+	p->new_tail = NULL;
+	p->fs = vfs_resolve_mount(p->oldpath, &p->old_tail);
+	vfs_filesystem_t *new_fs = vfs_resolve_mount(p->newpath, &p->new_tail);
+	if (p->fs == NULL || new_fs == NULL)
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
+	// THE CROSS-MOUNT REFUSAL. Two paths on two filesystems have nothing in
+	// common but the namespace they're spelled in; there is no directory
+	// entry to move, only bytes to copy. Refusing here (rather than letting
+	// a driver discover it) is what keeps every fops->rename implementation
+	// free of the question. `mv` across mounts is copy-then-unlink, in
+	// userland, where a half-finished copy can be reasoned about.
+	if (new_fs != p->fs)
+	{
+		printd(DEBUG_SYSCALL, "rename: task %s: '%s' and '%s' are on different filesystems — refused (copy, don't rename)\n",
+		       task->exename, p->oldpath, p->newpath);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	// Refuse a mount point as either end, for the reason syscall_unlink
+	// gives: "/home" resolves to the tail "/", which is the filesystem's
+	// ROOT. Handing that to a driver is asking it to rename the volume it
+	// lives on out of existence.
+	if (p->old_tail == NULL || p->old_tail[0] == '\0' ||
+	    (p->old_tail[0] == '/' && p->old_tail[1] == '\0') ||
+	    p->new_tail == NULL || p->new_tail[0] == '\0' ||
+	    (p->new_tail[0] == '/' && p->new_tail[1] == '\0'))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	p->result = -1;
+	call_in_kernel_context(rename_do, p);
+
+	if (p->result != 0)
+	{
+		printd(DEBUG_SYSCALL, "rename: task %s: could not rename '%s' -> '%s' (read-only fs, missing source, open handle, or a refused replacement)\n",
+		       task->exename, p->oldpath, p->newpath);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_SYSCALL, "rename: task %s: '%s' -> '%s'\n",
+	       task->exename, p->oldpath, p->newpath);
 	kfree(p);
 	return 0;
 }

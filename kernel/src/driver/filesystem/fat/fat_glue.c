@@ -652,6 +652,84 @@ static int fat_rm(const char* filename, vfs_filesystem_t* vfs_fs)
 	return 0;
 }
 
+// Rename a file — and the place where FAT's age shows.
+//
+// The seam (vfs.h fops->rename) promises ATOMIC REPLACE: the destination
+// name never fails to resolve, even for an instant. ext2 can honor that,
+// because one directory-block write swings a name onto a different inode.
+// FAT CANNOT, and this function is where we say so instead of pretending:
+//
+//   - FatFs's f_rename refuses outright when the destination exists
+//     (FR_EXIST) — there is no repoint-in-place primitive to reach for.
+//   - So an existing destination is REMOVED FIRST, and between that unlink
+//     and the rename that follows there is a real window in which neither
+//     name resolves. A crash inside it loses the old file and does not
+//     gain the new one.
+//
+// That is not a bug to be fixed here; it is what FAT is. The filesystem has
+// no concept of a file identity separate from its directory entry — that
+// idea IS the inode, and it is exactly what Ken Thompson's 1969 filesystem
+// had and MS-DOS's 1981 one did not. A DEBTS row carries it so the
+// difference stays visible, and root is ext2 precisely so the guarantee
+// that matters lives where it can actually be kept. The lifeboat is allowed
+// to be a lifeboat; it is not allowed to lie about its seaworthiness.
+static int fat_rename(const char* oldpath, const char* newpath, vfs_filesystem_t* vfs_fs)
+{
+	char lOld[512], lNew[512];
+
+	if (oldpath == NULL || newpath == NULL || vfs_fs == NULL)
+		return -1;
+
+	strncpy(lOld, oldpath, sizeof(lOld) - 1);
+	lOld[sizeof(lOld) - 1] = '\0';
+	create_fat_path(lOld, vfs_fs);   // "N:" + path — FatFs addresses volumes by number
+
+	strncpy(lNew, newpath, sizeof(lNew) - 1);
+	lNew[sizeof(lNew) - 1] = '\0';
+	create_fat_path(lNew, vfs_fs);
+
+	// Is something already sitting on the destination name? f_stat answers
+	// without opening (an open would take a handle we would then have to be
+	// careful to close on every path out of here).
+	FILINFO fi;
+	FRESULT st = f_stat(lNew, &fi);
+	if (st == FR_OK)
+	{
+		// Directories are never replaced — the seam's ruling, and here it is
+		// also self-preservation: f_unlink on a non-empty directory fails,
+		// and on an empty one it would silently remove a directory the
+		// caller only meant to rename onto.
+		if (fi.fattrib & AM_DIR)
+		{
+			printd(DEBUG_VFS, "fat_rename: refusing to replace directory '%s'\n", lNew);
+			return -1;
+		}
+		FRESULT del = f_unlink(lNew);
+		if (del != FR_OK)
+		{
+			printd(DEBUG_VFS, "fat_rename: could not clear destination '%s', FRESULT=%u\n",
+			       lNew, (uint32_t)del);
+			return -1;
+		}
+		// THE WINDOW IS OPEN HERE. Announced, not hidden — if a rename ever
+		// dies in this gap, the log says exactly which two names were in
+		// flight when it happened.
+		printd(DEBUG_VFS, "fat_rename: destination '%s' removed (FAT has no atomic replace — window open)\n",
+		       lNew);
+	}
+
+	FRESULT res = f_rename(lOld, lNew);
+	if (res != FR_OK)
+	{
+		printd(DEBUG_VFS, "fat_rename: f_rename('%s' -> '%s') failed, FRESULT=%u\n",
+		       lOld, lNew, (uint32_t)res);
+		return -1;
+	}
+
+	printd(DEBUG_VFS, "fat_rename: renamed '%s' -> '%s'\n", lOld, lNew);
+	return 0;
+}
+
 vfs_file_operations_t fat_fops = {
 	.initialize = fat_initialize,
     .open  = fat_open,
@@ -664,6 +742,7 @@ vfs_file_operations_t fat_fops = {
     .write = fat_write,
 #endif
 	.rm = fat_rm,
+	.rename = fat_rename,
     .close = fat_close,
 	.seek = fat_seek,
 	.sync = fat_sync,

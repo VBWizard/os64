@@ -1876,6 +1876,214 @@ static bool test_vfs_write_mkdir(void)
 }
 #undef VW_FAIL
 
+// ── test_vfs_rename ─────────────────────────────────────────────────────────
+// rename's proving ground (2026-08-16, the day the verb was built — os64get
+// demanded it, per the consumer-driven rule). Runs against the ROOT
+// filesystem on both root flavors, littering only under /etc/testdata and
+// cleaning up after itself, per the self-provisioning ruling.
+//
+// What it actually proves, in order of how much it would hurt to get wrong:
+//
+//   1. ATOMIC REPLACE (the 2026-08-16 ruling). Renaming onto an existing
+//      file leaves the DESTINATION NAME holding the SOURCE'S BYTES. This is
+//      the assertion the whole feature exists for — if it ever fails, the
+//      write-a-temp-then-publish recipe is a lie and os64get can eat a good
+//      file.
+//   2. A directory MOVE keeps its contents reachable through the new path.
+//      That single read proves both halves of the surgery: the new parent's
+//      entry AND the moved directory's rewritten "..".
+//   3. Every refusal refuses AND LEAVES THE SOURCE INTACT. A refusal that
+//      half-happened is worse than no refusal at all.
+//
+// The ext2-only steps are gated on the op table rather than a filesystem-type
+// field (there isn't one): a mount whose rename IS ext2's is ext2's. FAT gets
+// the shared assertions and is spared the two it cannot answer — the
+// open-handle refusal (FAT keeps no open-inode count) and the loop refusal
+// (which on FAT would mean deliberately asking the lifeboat to corrupt
+// itself to see whether it declines).
+#define RN_FAIL(...) do { \
+        printf("FAIL vfs_rename: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_vfs_rename - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+
+// Read a whole small file back; returns the byte count, or -1 if it wouldn't
+// even open. (A local helper because this test reads back nine times and the
+// open/read/close triple is noise at that density.)
+static int rn_slurp(const char *path, char *buf, int cap)
+{
+    vfs_file_t *f = NULL;
+    if (kRootFilesystem->fops->open(&f, path, "r", kRootFilesystem) != 0)
+        return -1;
+    int n = kRootFilesystem->fops->read(f, buf, (size_t)cap);
+    kRootFilesystem->fops->close(f);
+    return n;
+}
+
+// Create a file holding exactly `text`. Returns true on success.
+static bool rn_plant(const char *path, const char *text, int len)
+{
+    vfs_file_t *f = NULL;
+    if (kRootFilesystem->fops->open(&f, path, "c", kRootFilesystem) != 0)
+        return false;
+    int n = kRootFilesystem->fops->write(f, text, (size_t)len);
+    kRootFilesystem->fops->close(f);
+    return n == len;
+}
+
+static bool test_vfs_rename(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_vfs_rename (no root filesystem mounted)\n");
+        return true;
+    }
+    if (kRootFilesystem->fops->write == NULL || kRootFilesystem->bops->write == NULL ||
+        kRootFilesystem->fops->rename == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_vfs_rename (root filesystem is read-only or has no rename)\n");
+        return true;
+    }
+
+    // A mount whose rename IS ext2's rename is an ext2 mount. See the header
+    // comment for why this stands in for a filesystem-type field.
+    bool is_ext2 = (kRootFilesystem->fops->rename == ext2_rw_fops.rename);
+
+    static const char alpha[] = "ALPHA";   // 5 bytes — the bytes that must survive
+    static const char omega[] = "OMEGA";   // 5 bytes — the bytes that must be replaced
+    char buf[32];
+    os64_dirent_t de;
+    int n;
+
+    // 0. Provision. mkdir speaks 0/-1 with -1 covering "already exists", so
+    //    stat is the judge — same discipline as test_vfs_write_mkdir.
+    static const char *dirs[] = { "/etc", "/etc/testdata",
+                                  "/etc/testdata/rn", "/etc/testdata/rn2" };
+    for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        char pathbuf[40];
+        sprintf(pathbuf, "%s", dirs[i]);   // mkdir wants a mutable path
+        kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+        if (kRootFilesystem->dops->stat(dirs[i], &de, kRootFilesystem) != 0
+            || !(de.flags & OS64_DE_DIR))
+            RN_FAIL("provision: %s is not a directory\n", dirs[i]);
+    }
+    // Start from a known floor — a previous boot's leftovers would make
+    // "already exists" failures read as rename bugs.
+    kRootFilesystem->fops->rm("/etc/testdata/rn/a", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/rn/b", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/rn/c", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/rn/f", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/rn2/c", kRootFilesystem);
+
+    // 1. The plain rename, one directory. Old name gone, new name holds the
+    //    bytes.
+    if (!rn_plant("/etc/testdata/rn/a", alpha, sizeof(alpha) - 1))
+        RN_FAIL("could not plant rn/a\n");
+    if (kRootFilesystem->fops->rename("/etc/testdata/rn/a", "/etc/testdata/rn/b",
+                                      kRootFilesystem) != 0)
+        RN_FAIL("plain rename a -> b failed\n");
+    if (kRootFilesystem->dops->stat("/etc/testdata/rn/a", &de, kRootFilesystem) == 0)
+        RN_FAIL("old name rn/a still resolves after rename\n");
+    n = rn_slurp("/etc/testdata/rn/b", buf, sizeof(buf));
+    if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
+        RN_FAIL("rn/b read-back mismatch after rename (n=%d)\n", n);
+
+    // 2. THE RULING: atomic replace. rn/c exists and holds OMEGA; renaming
+    //    b onto it must leave c holding ALPHA — the source's bytes under the
+    //    destination's name, with no third state in between.
+    if (!rn_plant("/etc/testdata/rn/c", omega, sizeof(omega) - 1))
+        RN_FAIL("could not plant rn/c\n");
+    if (kRootFilesystem->fops->rename("/etc/testdata/rn/b", "/etc/testdata/rn/c",
+                                      kRootFilesystem) != 0)
+        RN_FAIL("replacing rename b -> c failed (the ruling says it must succeed)\n");
+    if (kRootFilesystem->dops->stat("/etc/testdata/rn/b", &de, kRootFilesystem) == 0)
+        RN_FAIL("source rn/b survived a replacing rename\n");
+    n = rn_slurp("/etc/testdata/rn/c", buf, sizeof(buf));
+    if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
+        RN_FAIL("replace left the WRONG bytes under rn/c (n=%d) — atomic replace is broken\n", n);
+
+    // 3. Move to a different directory, same filesystem.
+    if (kRootFilesystem->fops->rename("/etc/testdata/rn/c", "/etc/testdata/rn2/c",
+                                      kRootFilesystem) != 0)
+        RN_FAIL("cross-directory rename failed\n");
+    n = rn_slurp("/etc/testdata/rn2/c", buf, sizeof(buf));
+    if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
+        RN_FAIL("rn2/c read-back mismatch after move (n=%d)\n", n);
+
+    // 4. A source that isn't there is a refusal, not a silent success.
+    if (kRootFilesystem->fops->rename("/etc/testdata/rn/nothing_here",
+                                      "/etc/testdata/rn/x", kRootFilesystem) == 0)
+        RN_FAIL("rename of a nonexistent source reported success\n");
+
+    // 5. A directory is never replaced — and the source must survive the no.
+    if (!rn_plant("/etc/testdata/rn/f", omega, sizeof(omega) - 1))
+        RN_FAIL("could not plant rn/f\n");
+    if (kRootFilesystem->fops->rename("/etc/testdata/rn/f", "/etc/testdata/rn2",
+                                      kRootFilesystem) == 0)
+        RN_FAIL("rename replaced a DIRECTORY — the ruling forbids it\n");
+    if (kRootFilesystem->dops->stat("/etc/testdata/rn/f", &de, kRootFilesystem) != 0)
+        RN_FAIL("refused rename still consumed the source rn/f\n");
+    if (kRootFilesystem->dops->stat("/etc/testdata/rn2", &de, kRootFilesystem) != 0
+        || !(de.flags & OS64_DE_DIR))
+        RN_FAIL("refused rename damaged the destination directory rn2\n");
+
+    // 6. Open elsewhere = busy (ext2's open-inode refcount; ruling 5, the
+    //    same one that makes rm refuse). FAT keeps no such count.
+    if (is_ext2) {
+        vfs_file_t *held = NULL;
+        if (kRootFilesystem->fops->open(&held, "/etc/testdata/rn/f", "r", kRootFilesystem) != 0)
+            RN_FAIL("could not open rn/f to hold it\n");
+        int rc = kRootFilesystem->fops->rename("/etc/testdata/rn/f",
+                                               "/etc/testdata/rn/g", kRootFilesystem);
+        kRootFilesystem->fops->close(held);
+        if (rc == 0)
+            RN_FAIL("renamed a file that another handle held OPEN\n");
+        if (kRootFilesystem->dops->stat("/etc/testdata/rn/f", &de, kRootFilesystem) != 0)
+            RN_FAIL("busy-refused rename consumed the source anyway\n");
+        // ...and once the handle is gone the same rename must work, or the
+        // refusal is a leak rather than a rule.
+        if (kRootFilesystem->fops->rename("/etc/testdata/rn/f",
+                                          "/etc/testdata/rn/g", kRootFilesystem) != 0)
+            RN_FAIL("rename still refused after the holding handle closed\n");
+        kRootFilesystem->fops->rm("/etc/testdata/rn/g", kRootFilesystem);
+    } else {
+        kRootFilesystem->fops->rm("/etc/testdata/rn/f", kRootFilesystem);
+    }
+
+    // 7. Move a whole DIRECTORY, and prove its contents came with it. One
+    //    read through the new path exercises the new parent's entry and the
+    //    moved directory's rewritten ".." at the same time.
+    if (kRootFilesystem->fops->rename("/etc/testdata/rn2", "/etc/testdata/rn/sub",
+                                      kRootFilesystem) != 0)
+        RN_FAIL("directory rename rn2 -> rn/sub failed\n");
+    if (kRootFilesystem->dops->stat("/etc/testdata/rn/sub", &de, kRootFilesystem) != 0
+        || !(de.flags & OS64_DE_DIR))
+        RN_FAIL("moved directory is not a directory at its new path\n");
+    n = rn_slurp("/etc/testdata/rn/sub/c", buf, sizeof(buf));
+    if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
+        RN_FAIL("moved directory's contents unreachable at the new path (n=%d)\n", n);
+
+    // 8. A directory may not move into its own descendant. Attempted on ext2
+    //    only — on FAT this would be asking the lifeboat to corrupt itself to
+    //    see whether it says no.
+    if (is_ext2) {
+        if (kRootFilesystem->fops->rename("/etc/testdata/rn", "/etc/testdata/rn/sub/loop",
+                                          kRootFilesystem) == 0)
+            RN_FAIL("renamed a directory into its own descendant — that's a detached loop\n");
+        if (kRootFilesystem->dops->stat("/etc/testdata/rn/sub/c", &de, kRootFilesystem) != 0)
+            RN_FAIL("the refused loop rename damaged the tree\n");
+    }
+
+    // Tidy the corner: put rn2 back where the next boot expects to find
+    // nothing, and take the litter with us.
+    kRootFilesystem->fops->rm("/etc/testdata/rn/sub/c", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/rn/sub", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/rn", kRootFilesystem);
+
+    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: plain, atomic replace, move, directory move, %u refusals)\n",
+           is_ext2 ? "ext2" : "FAT", is_ext2 ? 4u : 2u);
+    return true;
+}
+#undef RN_FAIL
+
 // ── test_ext2_secondary_write ───────────────────────────────────────────────
 // The ext2 WRITE driver's proving ground (2026-08-04 — the day os64 wrote
 // its first ext2 byte). Runs against the WRITABLE SECONDARY ext2 mount
@@ -3321,6 +3529,7 @@ static void register_builtin_tests(void)
     // mount to read-only and keep the lights on (the policy taxonomy lives
     // in test_framework.h; the demotion engine in vfs.c).
     test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("vfs_rename", test_vfs_rename, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);

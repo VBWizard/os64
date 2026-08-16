@@ -275,6 +275,32 @@ int64_t os64_unlink(const char *path)
     return (long)os64_syscall1(SYSCALL_UNLINK, (uint64_t)path);
 }
 
+// Give a file a different name, possibly in a different directory of the
+// same filesystem. Relative paths resolve against the cwd, like open's.
+//
+// The guarantee worth knowing: replacing an existing regular file happens in
+// ONE motion — `newpath` never stops resolving, not even for an instant.
+// That is what makes the safe-publish recipe work:
+//
+//     h = os64_open("report.part", "w");   ...write, verify...
+//     os64_rename("report.part", "report");
+//
+// A crash anywhere in that sequence leaves either the old `report` intact or
+// the new one complete, never a half-written impostor wearing the name. Unix
+// had no such call for its first decade (link-then-unlink, with the window
+// in the middle); 4.2BSD added rename(2) to close it, and this is that.
+//
+// Returns 0 on success, negative on refusal: a read-only filesystem, a
+// source that isn't there, the two paths on DIFFERENT filesystems (that's a
+// copy, not a rename — do it in userland), a destination that is a directory
+// or that a directory would replace, either side held open by another
+// handle, or a directory renamed into its own descendant. See SYSCALL_RENAME
+// in the ABI header for why each of those refuses instead of surprising you.
+int64_t os64_rename(const char *oldpath, const char *newpath)
+{
+    return (long)os64_syscall2(SYSCALL_RENAME, (uint64_t)oldpath, (uint64_t)newpath);
+}
+
 // Create a directory. Relative paths resolve against the cwd, like open's.
 //
 // One atomic call — the kernel owes us that much since 4.2BSD showed it was

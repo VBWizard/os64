@@ -333,6 +333,45 @@ struct file_operations
 	// syscall_unlink reports read-only rather than dispatching through zero
 	// (see the same lesson in fat_glue.c's disk_write).
 	int (*rm) (const char *filename, vfs_filesystem_t* vfs_fs);
+	// Give a file a different name. BOTH paths arrive fs-local (mount
+	// prefix already stripped) and BOTH belong to THIS filesystem —
+	// syscall_rename refuses a cross-mount rename before dispatching here,
+	// because moving bytes between two filesystems is a copy, not a rename,
+	// and it belongs in userland where a partial copy can be cleaned up.
+	// (Unix draws the same line and calls it EXDEV; ours is the same line
+	// drawn for the same reason.)
+	//
+	// THE RULING (Chris, 2026-08-16): an existing REGULAR destination is
+	// REPLACED, and the replacement is the point. rename(2) exists at all
+	// because 4.2BSD could not make link+unlink atomic, and every safe
+	// "write a new version of this file" idiom since — write to a temp
+	// name, verify it, put it in place — rests on there being no instant
+	// at which the destination does not exist. os64get is that idiom's
+	// first customer here.
+	//
+	// Two refusals survive the replacement rule, both inherited from
+	// ext2_rm's ruling rather than invented here:
+	//   - the destination is a DIRECTORY (empty or not). Directories are
+	//     not interchangeable with files, and a silent rmdir hiding inside
+	//     a rename is exactly the surprise this house does not ship.
+	//   - either side is OPEN (the open-inode refcount). A handle holding
+	//     a file is a claim on it; renaming out from under a reader is the
+	//     same violation as deleting out from under one.
+	//
+	// ATOMICITY IS THE FILESYSTEM'S TO GRANT, not this seam's to promise.
+	// ext2 gets it honestly (one directory-block write publishes the new
+	// name; the old name's removal and the doomed inode's teardown follow).
+	// FAT cannot: FatFs's f_rename refuses an existing destination outright,
+	// so fat_rename must remove-then-rename and there IS a window. That is
+	// stated at the FAT implementation and booked in DEBTS rather than
+	// papered over — the lifeboat is allowed to be a lifeboat, but not
+	// allowed to lie about it.
+	//
+	// A filesystem with no write path leaves this NULL and syscall_rename
+	// reports read-only rather than dispatching through zero (the same
+	// lesson fat_glue.c's disk_write taught the hard way).
+	// Returns 0 on success, negative on refusal.
+	int (*rename) (const char *oldpath, const char *newpath, vfs_filesystem_t* vfs_fs);
 	int (*initialize) (vfs_filesystem_t* device);
 	int (*uninitialize) (vfs_filesystem_t* device);
 };

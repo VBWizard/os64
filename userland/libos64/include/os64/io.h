@@ -249,6 +249,18 @@ void os64_shutdown(void) __attribute__((noreturn));
 // its -r is just this verb applied depth-first.
 int64_t os64_unlink(const char *path);
 
+// Rename `oldpath` to `newpath` (relative paths resolve against the cwd).
+// Both must live on the SAME filesystem — moving between mounts is a copy,
+// and belongs in userland where a half-finished one can be cleaned up.
+//
+// Replacing an existing regular file is ATOMIC: `newpath` never stops
+// resolving, so the write-a-temp-then-put-it-in-place recipe is actually
+// safe. Refuses (negative) rather than surprising you: read-only filesystem,
+// missing source, cross-filesystem, a directory on either side of a
+// replacement, either side open elsewhere, or a directory moved into its own
+// descendant. This is the call `mv` is built on — within one filesystem.
+int64_t os64_rename(const char *oldpath, const char *newpath);
+
 // Create a directory at `path` (relative paths resolve against the cwd).
 // 0 on success, negative on failure: a read-only filesystem (ext2, by
 // design), a parent that doesn't exist, or a name already taken. Atomic —

@@ -340,6 +340,51 @@
 // One call, once, from libos64's own init — no application ever calls this.
 #define SYSCALL_HEAP_REPORT 42
 
+// rename(oldpath, newpath) — give a file a different name, possibly in a
+// different directory. Returns 0, or negative on refusal.
+//
+// THE GUARANTEE, and the only reason this call exists as a call: if
+// `newpath` already names a regular file, it is REPLACED, and there is no
+// instant at which `newpath` fails to resolve. That is the whole point.
+// Unix went its first decade without rename(2) — you wrote link(new, old)
+// then unlink(old), two steps, and a crash between them left you with two
+// names or none. 4.2BSD (1983) added rename precisely to close that window,
+// and every safe "publish a new version of this file" recipe since is built
+// on it: write to a temporary name, verify what you wrote, then put it in
+// place in one motion. os64get is this call's first customer, and the
+// reason it was built: a transfer that fails must leave the previous file
+// exactly where it was, not a truncated impostor wearing its name.
+//
+// os64 keeps the atomicity and declines the rest of POSIX's rename, which
+// accumulated a great deal (EXDEV, directory-onto-empty-directory
+// replacement, the ".."-and-link-count corner cases). The rules here are
+// four, and each one refuses rather than surprising you:
+//
+//   - CROSS-FILESYSTEM renames are refused. Moving bytes between two
+//     filesystems is a COPY, and a copy that fails halfway needs cleaning
+//     up — which is userland's job, where the policy (retry? keep the
+//     partial? prompt?) can actually be decided. Unix draws this same line
+//     and calls it EXDEV; ours is the same line for the same reason.
+//   - Replacement is FILE-ONTO-FILE only. A directory is never replaced,
+//     and a directory is never renamed onto an existing name. A silent
+//     rmdir hiding inside a rename is a surprise with no upside.
+//   - Either side OPEN is refused, on the filesystems that can tell (ext2
+//     counts open inodes). A handle holding a file is a claim on it;
+//     renaming out from under a reader is the same violation as deleting
+//     out from under one.
+//   - A directory may not be renamed into its own descendant. `mv a a/b/c`
+//     detaches the subtree into a ring nothing points at — one of the few
+//     things a rename can do that fsck cannot quietly repair.
+//
+// ATOMICITY IS THE FILESYSTEM'S TO GRANT. ext2 keeps the promise honestly
+// (one directory-block write swings the name onto the new inode). FAT
+// cannot — it has no file identity separate from the directory entry, which
+// is exactly the idea the inode was and MS-DOS's 1981 filesystem was not —
+// so on FAT an existing destination is removed first and a real window
+// exists. Booked in DEBTS; root is ext2 precisely so the guarantee lives
+// where it can be kept.
+#define SYSCALL_RENAME 43
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //
