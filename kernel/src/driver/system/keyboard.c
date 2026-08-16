@@ -443,11 +443,24 @@ void keyboard_handle_scancode(uint8_t scancode) {
                 keyboard_deliver_event(final, code, s_modifiers, true);
                 return;
             }
-            if (code == 0x49 || code == 0x51) {  // Page Up / Page Down
+            // The digit-parameter family: ESC [ <n> ~ — the vocabulary xterm
+            // standardized for the keys the VT100 didn't have. Delete is 3
+            // (2026-08-16 — until then a plain Del press emitted NOTHING;
+            // only the Ctrl+Alt salute ever saw the key), Insert is 2
+            // (emitted for parity: standard bytes cost one line, and keytest
+            // can already show them), PgUp/PgDn are 5/6 as before.
+            char param = 0;
+            switch (code) {
+                case 0x52: param = '2'; break;   // Insert
+                case 0x53: param = '3'; break;   // Delete (salute handled above)
+                case 0x49: param = '5'; break;   // Page Up
+                case 0x51: param = '6'; break;   // Page Down
+                default: break;
+            }
+            if (param != 0) {
                 keyboard_deliver_event(0x1B, code, s_modifiers, true);
                 keyboard_deliver_event('[',  code, s_modifiers, true);
-                keyboard_deliver_event(code == 0x49 ? '5' : '6', code,
-                                       s_modifiers, true);
+                keyboard_deliver_event(param, code, s_modifiers, true);
                 keyboard_deliver_event('~', code, s_modifiers, true);
             }
         }
