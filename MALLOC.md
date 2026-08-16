@@ -97,29 +97,112 @@ then, out loud. v1 declines.)
    any region the moment it empties. The toy outdoes the classic,
    structurally.
 
-## OPEN decisions (yours, at the keyboard)
+## BUILT — 2026-08-15 (Opus, at Chris's direction)
 
-- **What is a region?** (a) fixed-size pools carved by malloc (simple
-  ledger; big requests need a special case anyway); (b) pools for small +
-  one-region-per-big-allocation (the classic threshold trick — big frees
-  give back instantly); (c) one pool, grab another when full, don't think
-  about it. (b) is the textbook answer; (c) is the get-it-running answer.
-- **free(garbage) religion.** os32: silent return. os64 kernel: kfree
-  panics. The userland heap picks its own: silent / loud print / kill the
-  process. House wind blows toward loud.
-- **Alignment guarantee.** SysV wants 16-byte alignment for anything that
-  might hold long double/SSE someday. Costs a little header padding math;
-  decide before the header layout freezes it.
-- **calloc trap, decided or dodged:** FRESH pages from map() arrive zeroed
-  (kernel guarantee) — but a REUSED block carries its previous tenant's
-  bytes. If calloc exists, it must memset on reuse and may skip it on
-  fresh. If calloc doesn't exist yet, note it so nobody assumes.
-- **realloc**: exists at all? grow-in-place using a free successor (the
-  boundary tags make the check cheap) or always alloc-copy-free?
-- **Locks: none needed today** — os64 tasks are single-threaded. The day
-  tasks grow threads, this heap needs a mutex or per-thread arenas. Write
-  that assumption down in the file header so future-you knows it was a
-  decision, not an oversight.
+The heap exists: `userland/libos64/heap.c`, `<os64/mem.h>` for its face,
+`tools/test_heap_host.c` for its unit tests, `/bin/malloctest` for its
+in-OS proof, `/proc/<pid>/heap` for its self-portrait. Every RATIFIED
+decision above was built as written; the OPEN list below was ruled on the
+day and each ruling is recorded there. What the engine actually is:
+
+- **Boundary tags with Doug Lea's refinement.** Knuth's footer is carried
+  only by FREE blocks; an in-use block pays a 16-byte header and nothing
+  else, because a `PREV_FREE` bit in the successor's header says whether
+  looking below is even worth it. Merge forward, merge backward, merge
+  both — all O(1), all at free time.
+- **A virgin frontier per pool.** New blocks are carved off untouched
+  region space before the free list is consulted for growth, which is what
+  makes `calloc` free for first-touch allocations: those pages are the
+  kernel's own zeros and nobody has written to them since.
+- **The give-back, as promised.** A pool whose last live block is freed is
+  handed back with `unmap` — from the middle of the heap, which brk cannot
+  do. The PRIMORDIAL pool is exempt: a malloc/free loop would otherwise
+  map and unmap a megabyte per iteration, and region addresses are never
+  reused, so that churn spends address space for nothing.
+- **The audit identity** (abi/os64/heap.h): mapped == live + free +
+  overhead + virgin, checked by procfs on every read, printed as `audit
+  ok` / `audit BROKEN`. The allocator's books can catch their own author.
+
+### Threads and the heap (asked and answered, 2026-08-15)
+
+**Threads share the task's address space, so they share ONE heap.** The
+heap's state is ordinary process globals — every thread of a task sees the
+same region ledger, the same free list, the same pools. Nothing is
+inherited or copied at thread creation, and a block allocated by one thread
+may be freed by any other. (A SPAWNED PROCESS is the opposite: its own
+address space, its own libos64 data, its own heap, sharing nothing.)
+
+That makes malloc the first genuine consumer of shared mutable state in
+os64 userland, which is why the heap carries its own lock. `malloctest
+threads N` is the proof: N threads hammering the shared pools, verifying
+their own stamps, and deliberately freeing each other's blocks through an
+atomic handoff table.
+
+Writing that test immediately crashed the OS — and **the heap was
+innocent.** See MEMORY.md's fingerprint: the kernel's demand pager did
+`seek` then `read` on a `vfs_file_t` whose position all threads share, so
+two threads faulting on different code pages each got the other's file
+offset and executed a page of valid machine code from the wrong part of the
+binary. malloc was simply the first workload in this OS's life that made
+several threads of one task execute enough distinct code to fault pages in
+simultaneously. Fixed in the kernel (`pos_lock`); the heap test now runs
+clean with 8 threads on cold text.
+
+### The bug this design caught on its first day
+
+The frontier carver needed to know whether the block below it was free, and
+the first version asked the obvious question the wrong way: it read the 8
+bytes underneath as the predecessor's footer. An IN-USE block has no
+footer — those bytes are the program's data. A program whose last word
+happened to spell a plausible block size would hand itself a boundary tag
+that lied, and the next `free()` would merge backwards into live memory.
+
+The 20,000-round host soak never saw it (its stamp bytes never spelled a
+plausible size). `malloctest churn` on the real OS hit it in under a
+minute — and the canary caught it, killed the program, and named the crime
+("the block below this one is not the free block its tag claims") instead
+of letting it corrupt anything. The fix is that the frontier's header
+carries `PREV_FREE` like every other block's, maintained by the free path;
+the regression test is `t_frontier_tag`, which fails against the old code
+with the identical message. **Tripwires over silence, paid off inside one
+afternoon.**
+
+## OPEN decisions — RULED 2026-08-15
+
+- **What is a region?** RULED **(b)**: pools for small allocations, one
+  dedicated region per allocation of 128KB or more. The threshold and the
+  1MB pool size are named constants (`HEAP_BIG_BYTES`, `HEAP_POOL_BYTES`).
+  The argument that decided it: big blocks are exactly where a first-fit
+  list fragments worst, and exactly where the kernel already has the
+  perfect answer — an independent region that `free` hands straight back.
+- **free(garbage) religion.** RULED: **kill the process.** ("Yes, killing
+  tasks is absolutely the right way to go on free(garbage)!") A wild free,
+  a double free, a misaligned pointer, or a stomped canary prints the crime
+  to stderr AND the serial wire, then exits with a badge that spells it:
+  `0xF12EEBAD` ("FREE BAD") or `0xCA9A12ED` ("CANARIED"). A corrupted heap
+  has already lost; continuing only moves the crash somewhere less
+  informative.
+- **Alignment guarantee.** RULED: **16 bytes**, always. The header is
+  16 bytes, so a 16-aligned block yields a 16-aligned payload with no
+  padding math at all. SSE is still #UD at ring 3, but a malloc ABI is
+  forever and the FPU-state slice will land some day.
+- **calloc trap.** RULED as designed: fresh pages arrive zeroed and are
+  handed over WITHOUT a memset; a recycled block carries a `HEAP_DIRTY`
+  bit and gets the memset it deserves. Blocks carved off a pool's virgin
+  frontier count as fresh, which is most of what a starting program does —
+  so os64's zeroed-region guarantee shows up as calloc being free.
+- **realloc**: exists, and grows in place when the successor is free
+  (boundary tags make it one load), shrinks in place always, and falls back
+  to allocate-copy-free otherwise. `realloc(NULL, n)` is `malloc`;
+  `realloc(p, 0)` frees and returns NULL.
+- **Locks: NEEDED NOW — this line was overtaken by events.** os64 grew
+  real ring-3 threads on 2026-08-02, and threads share one address space
+  and therefore one heap. malloc is the first genuine consumer of shared
+  mutable state in os64 userland (DEBTS' thread rows predicted it would
+  be), so the heap carries its own lock: test-and-set, a short `pause`
+  spin, then `os64_yield`. Deliberately NOT a general mutex — that gets
+  designed when a PROGRAM needs one, not retrofitted from a library's
+  dozens-of-instructions critical section.
 
 ## House rules that apply
 

@@ -162,8 +162,9 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 
 | Convention elsewhere | os64 | Why | Recorded |
 |---|---|---|---|
-| `free(NULL)` is a no-op | `kfree(NULL)` PANICS | It's a wild pointer's favorite disguise | CLAUDE.md fingerprints |
-| malloc returns dirty memory | EVERY allocation zeroed at the allocator choke point | One choke point, no "uninitialized" bug class | CLAUDE.md |
+| `free(NULL)` is a no-op | `kfree(NULL)` PANICS **in the kernel**; userland `os64_free(NULL)` IS a no-op, as it has been since V7 | Kernel-side, NULL is a wild pointer's favorite disguise; ring-3 side, refusing it would only make every caller write the same `if` | CLAUDE.md fingerprints / MALLOC.md |
+| malloc returns dirty memory | **Kernel:** EVERY allocation zeroed at the allocator choke point. **Userland (2026-08-15):** a fresh block is kernel-zeroed and a RECYCLED one holds 0xA5 poison — `os64_malloc` promises neither, `os64_calloc` promises zero and skips the memset when the memory is provably virgin | One kernel choke point kills the "uninitialized" bug class; at ring 3, poison catches use-after-free (a tripwire beats a favor), and the zeroed-region guarantee makes calloc free on first touch | CLAUDE.md / MALLOC.md |
+| Heap statistics need LD_PRELOAD or a debug build | `cat /proc/<pid>/heap` — malloc publishes one struct, the kernel renders the file, `watch` makes it a live profiler | The allocator is the only thing that knows its own shape; a report is cheaper than an interposition mechanism | abi/os64/heap.h, PROC.md |
 | Eager full direct map (Linux) | Lazy HHDM: mapped exactly while allocated; freed memory FAULTS on touch | A designed use-after-free tripwire | CLAUDE.md § HHDM |
 | KPTI (unshared kernel half) | Shared U/S-protected kernel upper half | Deliberate for os64's threat model: we run our own binaries | DEBTS not-debts |
 | Log rings drop-and-count | NEVER drop a byte; buffers grow; panics write serial direct + emergency flush | Chris's motto, load-bearing | SUCCESSION #4 |

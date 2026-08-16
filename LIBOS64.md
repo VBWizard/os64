@@ -60,7 +60,8 @@ umbrella that pulled the world into every TU.
 |---|---|
 | `<os64/io.h>` | raw `read`/`write`/`open`/`close`/`seek`/`stat`/`getdir` on handles |
 | `<os64/stdio.h>` | buffered `FILE*` layer: `fopen`/`fread`/`fwrite`/`printf`/`fprintf`/`getline` |
-| `<os64/mem.h>` | `malloc`/`free`/`realloc`, `mmap` |
+| `<os64/mem.h>` | `os64_map`/`os64_unmap` (os64's anonymous mmap) and the heap on top of them: `os64_malloc`/`free`/`calloc`/`realloc`, `os64_heap_verify` — engine in `heap.c`, design in MALLOC.md |
+| `<os64/runtime.h>` | `os64_runtime_init` — what `launch` stands up before `main` (today: the heap) |
 | `<os64/str.h>` | str*/mem* primitives |
 | `<os64/proc.h>` | `spawn`, `fork`, `exec*`, `waitpid`, `exit`, `kill`, `getcwd`/`chdir` |
 | `<os64/pipe.h>` | `pipe`, `dup`/`dup2` |
@@ -115,9 +116,14 @@ only to render an error for printing.
 
 ## Startup and shutdown
 
-`launch` (crt0-equivalent) sets up argv/envp and the heap, runs ELF
+`launch` (crt0-equivalent) sets up argv/envp, calls `os64_runtime_init`
+(`<os64/runtime.h>` — the library's own startup, which today stands up the
+heap and registers its `/proc/<pid>/heap` report), will run ELF
 constructors, calls `main`, and converts its return into the `exit`
-syscall. libos64's own init/teardown ride ELF
+syscall. **Register discipline in that stub:** argc/argv/envp arrive in
+RDI/RSI/RDX and those are caller-saved, so they are parked in RBX/R12/R13
+across the init call — not pushed, because pushing would change the stack
+alignment `main` is entered with. libos64's own init/teardown ride ELF
 `__attribute__((constructor))`/`(destructor)` — as libChrisOS did, which was
 already right — registering an at-exit cleanup that closes tracked handles
 and tears down malloc. The kernel's ring-3 exit trampoline stays as a

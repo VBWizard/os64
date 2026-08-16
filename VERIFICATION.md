@@ -10,6 +10,15 @@ here, because your scratchpad dies with your session.*
 
 ## The ladder
 
+0. **It passes on the HOST, if it can** — anything that is pure computation
+   over memory (fmt, args, env, the calendar, and since 2026-08-15 the whole
+   userland heap) gets a plain-gcc unit test that runs in milliseconds:
+   `tools/test_fmt_host.c`, `tools/test_heap_host.c` (each carries its own
+   build line in its header comment). Do not spend a QEMU boot on what a
+   host test catches — but do not MISTAKE a green host run for verification
+   either: the heap's first real bug was found by rung 4 minutes after the
+   host soak passed clean, because the host's fake memory never spelled the
+   byte pattern that broke it.
 1. **It builds** — necessary, meaningless alone.
 2. **It boots** — serial log reaches the idle/GUI state with no panic.
 3. **Tests are green** — pre-boot, post-boot, VFS (counts below).

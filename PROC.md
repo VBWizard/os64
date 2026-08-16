@@ -44,6 +44,7 @@ table, it gets its own mount with its own name, and this file stays untouched.
 /proc/<id>/cwd              the task's current directory
 /proc/<id>/handles          the handle table, one row per open handle
 /proc/<id>/maps             the address space, one row per VMA
+/proc/<id>/heap             the userland allocator's own numbers (see below)
 /proc/<id>/ctl              WRITE: control. READ: the accepted vocabulary.
 /proc/<id>/thread/          one entry per thread of this task
 /proc/<id>/thread/<tid>/status
@@ -100,6 +101,41 @@ NUL-separated `cmdline` is famously hostile to `cat`, and its only virtue —
 unambiguity for arguments containing spaces — is delivered just as well by a
 newline, which `cat` renders correctly. os64 takes the virtue and leaves the
 hostility.
+
+## `heap` — the one file whose content comes from ring 3 (2026-08-15)
+
+Every other file here is written by the kernel about things the kernel owns.
+A heap is different: the kernel can see a task's REGIONS (that is `maps`),
+but only the allocator inside the program knows how those regions are carved
+— how many blocks are live, how fragmented the free space is, how many
+regions have already gone home. That knowledge lives at ring 3.
+
+Three ways were weighed. Sniffing a magic word out of the task's first
+anonymous region needs no new syscall but produces numbers with no
+provenance ("jenky", ruled from the floor). Having each program print its own
+heap would put the format in userland's hands, which is exactly backwards
+from every other file in this tree. So: **the allocator publishes the ADDRESS
+of one struct** (`SYSCALL_HEAP_REPORT`, `abi/include/os64/heap.h`) and
+**procfs renders the file** — kernel keeps the pen, the grammar, and the
+`key<TAB>value` shape; the application writes nothing, because libos64's own
+init does the publishing before `main` ever runs. A program that never calls
+malloc still has an honest, empty heap file.
+
+Two things make it more than a stat dump:
+
+- **`torn`** — the report is a photograph of a moving thing. malloc bumps a
+  generation counter to ODD while it mutates and back to EVEN after, so a
+  reader that catches it mid-update SAYS SO instead of publishing figures
+  that never coexisted.
+- **`audit`** — every mapped byte must be live, free, overhead, or virgin
+  (never carved). procfs checks that identity on every read and prints
+  `audit ok` / `audit BROKEN`. The same instinct as `os64_memory`'s
+  `free + used == usable`: a report that can catch its own author lying is
+  worth the four extra lines.
+
+And because it is a file, `watch -n 1 "cat /proc/53/heap"` is a live heap
+profiler assembled from tools that already existed. No production allocator
+gives you that without LD_PRELOAD gymnastics.
 
 ## `ctl` — control is a write
 

@@ -177,6 +177,12 @@ off: no waiting on interrupt-delivered events, keep bodies short.
 | 34 | `thread_exit(retval)` | End the CALLING thread, recording retval for whoever reads its handle. Main thread returning still ends the whole task (exit means exit — Chris's ruling, 2026-08-02) |
 | 35 | `unlink(path)` | os64's ONE removal verb: file or EMPTY directory (Plan 9's `remove()`, not POSIX's unlink/rmdir scar — ratified 2026-08-04, no rmdir ever). Refused, not half-done: read-only fs, missing path, non-empty directory. rm's `-r` is this verb depth-first |
 | 36 | `mkdir(path)` | Create a directory, one atomic call — what took Unix until 4.2BSD (V6's mkdir(1) was setuid-root mknod+2×link, a crash away from fsck). Mount-routed via `dops->mkdir`; refused on read-only fs, missing parent, name taken |
+| 37 | `net_dial(dest)` | Open a network conversation described by an `os64_netdest_t`; returns a handle that read/write/close speak to like any other. The verb is Plan 9's `dial`, kept because it says what it does |
+| 38 | `sync_all()` | The broom: commit every open file's bytes AND directory entries. No arguments, because "everything" needs none |
+| 39 | `shutdown(verb)` | The ordered descent — retire logd, sync everything, FLUSH CACHE the drives, power off. Does not return. 0 = power off; 1 is reserved for reboot |
+| 40 | `getpid()` | Who am I. V1 had it in 1971, before pipes; the answer belongs in a register because the asker is already in the kernel's doorway. (`/proc/self` is the other spelling, resolved at open time) |
+| 41 | `set_time(epoch)` | Replace the running UTC wall clock. The monotonic tick clock is untouched, so intervals never jump when an operator corrects the calendar |
+| 42 | `heap_report(ptr)` | Where the CALLER's malloc publishes its `os64_heap_report_t` (abi/os64/heap.h); 0 withdraws it. The kernel only remembers the address — procfs reads it through the task's own page tables when somebody opens `/proc/<id>/heap`. The one place a ring-3 subsystem supplies the CONTENT of a kernel-rendered file, because a heap's shape is known only to the allocator that owns it |
 
 **The environment block** (`abi/include/os64/env.h`): every task's env rides into
 its address space read-only at `TASK_ENV_VIRT` and reaches `main()` as the third

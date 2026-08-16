@@ -534,11 +534,8 @@ $(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		iso_root -o $(IMAGE_NAME).iso > /dev/null
 	./limine/limine bios-install $(IMAGE_NAME).iso > /dev/null
-# WORKTREE-LOCAL (scribble-hunt): the c:/temp copy is disabled so hunt builds
-# stop clobbering the main tree's ISO out from under Chris's VBox/P5 boots.
-# RESTORE these two lines before merging back.
-#	@rm -f /mnt/c/temp/os64_kernel.iso
-#	@cp -v os64_kernel.iso /mnt/c/temp
+	@rm -f /mnt/c/temp/os64_kernel.iso
+	@cp -v os64_kernel.iso /mnt/c/temp
 
 $(IMAGE_NAME).hdd: limine/limine kernel
 #	@rm -f $(IMAGE_NAME).hdd

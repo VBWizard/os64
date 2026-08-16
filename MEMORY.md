@@ -167,6 +167,24 @@ GRAPHICS.md).
 
 ## Failure fingerprints (symptom → cause)
 
+- **A multithreaded program dies with a segfault at an absurd address
+  (`0xffffffffffffff8a`), and the fault reporter's "bytes at RIP" DO NOT
+  MATCH what `objdump` shows at that address:** the demand pager filled a
+  page from the wrong file offset. `seek(file, offset)` then `read(file,
+  ...)` is only atomic if nobody re-seeks in between, and a `vfs_file_t`
+  holds ONE position — so two threads of one task faulting on two
+  different pages of their own executable each received the other's
+  offset, and a code page came back full of real, valid machine code from
+  elsewhere in the binary. Execution then wandered off and died with no
+  relationship to the actual bug. **Fixed 2026-08-15** by `pos_lock` in
+  `vfs_file_t`, taken around the seek+read pair in `kernel_read_file`
+  (vma.c) — the same lock `shared_object_t::io_lock` already held for the
+  dynamic-linking path, one layer down. Diagnostic that isolates it in one
+  run: pre-fault the text on the main thread before starting the threads
+  (`WARMUP=1 malloctest threads 8`) — if the crashes vanish, it is the
+  pager, not the workload. **The general rule this leaves behind: a file
+  position is per-handle state, and any seek+read pair on a handle more
+  than one thread can reach must be atomic.**
 - **Page fault panic "use-after-free or wild pointer?" on an HHDM
   address:** exactly what it says — something touched freed or
   never-allocated RAM through the alias. Recent frees of that range are
