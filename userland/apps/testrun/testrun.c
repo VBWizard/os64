@@ -55,14 +55,19 @@ typedef struct {
 
 static char *const argv_arg_echo[] = { "/bin/arg_echo", "hello", "world", NULL };
 
-// The two heap fixtures that PASS BY DYING: each commits a deliberate heap
-// crime and the pass code is the badge the allocator kills with. A crime that
+// The crime fixtures that PASS BY DYING: each commits a deliberate offense
+// and the pass code is the badge the enforcement kills with. A crime that
 // failed to kill would report the program's own exit code instead — which is
 // exactly the failure worth catching, since a tripwire nobody tests is a
 // tripwire nobody knows is disconnected.
 static char *const argv_malloc_threads[]    = { "/bin/malloctest", "threads", "4", NULL };
 static char *const argv_malloc_doublefree[] = { "/bin/malloctest", "doublefree", NULL };
 static char *const argv_malloc_stomp[]      = { "/bin/malloctest", "stomp", NULL };
+
+// The W^X pair (2026-08-16): both die by the segfault kill, 139. A survivor
+// exits 0x0BAD and the mismatch names the disconnected tripwire.
+static char *const argv_nx_stack[] = { "/bin/nx_test", "stack", NULL };
+static char *const argv_nx_text[]  = { "/bin/nx_test", "text",  NULL };
 
 static const fixture_t kFixtures[] = {
     { "/bin/syscall_smoke",   NULL, 0x0005E00D,  0,          "the syscall floor: write/exit from ring 3" },
@@ -81,6 +86,8 @@ static const fixture_t kFixtures[] = {
     { "/bin/malloctest",      argv_malloc_threads,    0x0A110C10, 0, "four threads, one heap: the lock, and cross-thread frees" },
     { "/bin/malloctest",      argv_malloc_doublefree, 0xF12EEBAD, 0, "a double free kills the program (it must)" },
     { "/bin/malloctest",      argv_malloc_stomp,      0xCA9A12ED, 0, "a stomped canary kills the program (it must)" },
+    { "/bin/nx_test",         argv_nx_stack, 139, 0,         "executing the stack kills the program (NX works)" },
+    { "/bin/nx_test",         argv_nx_text,  139, 0,         "writing to .text kills the program (W^X works)" },
     { "/bin/test_elf",        NULL, 0xE1F0CA11,  0,          "a demand-paged static ELF runs and exits" },
     { "/bin/dyn_consumer",    NULL, 0x00300031,  0,          "a dynamically-linked binary resolves and runs" },
     // synctest reports 0x05CC0001 when the boot has no writable /home. That

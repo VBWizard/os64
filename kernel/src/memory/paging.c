@@ -555,8 +555,16 @@ void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physi
                                                       tableRequiredFlags, tableSource,
                                                       "PT", virtual_address);
 
-	uint16_t finalFlags =  flags | PAGE_PRESENT;
-    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tSetting page table entry at 0x%016lx, index 0x%04x, to 0x%016lx, flags 0x%08x\n", pt_page, PT_INDEX(virtual_address), physical_address, finalFlags);
+    // uint64_t, NOT uint16_t — this was the NX guillotine (found 2026-08-16).
+    // PAGE_NO_EXECUTE is bit 63, and for the whole life of this kernel the
+    // flags funneled through a uint16_t here, so every caller who ever asked
+    // for NX had it silently truncated at the ONE choke point every PTE write
+    // passes through. The truncation was also quietly protecting sloppy
+    // address-extraction masks elsewhere from ever meeting a bit-63 PTE — two
+    // bugs holding hands. Sixteen bits was never right anyway: PAT (bit 7)
+    // fit, but the architecture's PTE has meaningful bits at 52-62 and 63.
+    uint64_t finalFlags = flags | PAGE_PRESENT;
+    printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "\tSetting page table entry at 0x%016lx, index 0x%04x, to 0x%016lx, flags 0x%016lx\n", pt_page, PT_INDEX(virtual_address), physical_address, finalFlags);
     // Step 4: Map the final page in the PT table
     pt_page[PT_INDEX(virtual_address)] = physical_address | finalFlags;
 }

@@ -72,6 +72,14 @@ void block_cache_attach_all(void);
 // Live counters, for tests and the curious.
 void block_cache_get_stats(block_cache_stats_t *out);
 
+// What the cache actually fronts, for /sys/cache's `device` lines — NVMe and
+// SATA only; a RAMDisk is deliberately uncached (caching RAM in RAM is rent
+// paid on a thing you own). Exposed so the report can EXPLAIN a quiet cache:
+// a watch loop loading executables off an uncached root leaves no tracks
+// here, and that must be readable from the file, not deduced from source.
+int block_cache_device_count(void);
+const char *block_cache_device_model(int i);   // NULL when i is out of range
+
 // True when the cache is enabled AND interposed on at least one device —
 // the tests' SKIP question (a NOCACHE boot is a configuration, not a
 // failure).

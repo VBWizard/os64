@@ -224,7 +224,12 @@ void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3)
 
 	uint64_t flags = PAGE_PRESENT | PAGE_WRITE;
 	if (isRing3) {
-		flags |= PAGE_USER;
+		// NX (2026-08-16): a ring-3 stack is data. Smashed-stack shellcode
+		// has been the canonical exploit since the Morris worm; declining to
+		// execute the stack costs one bit. (Kernel stacks stay NX-less for
+		// now — kernel-side W^X is its own booked arc, and a stray NX bit
+		// under any core that missed EFER.NXE is a reserved-bit #PF.)
+		flags |= PAGE_USER | PAGE_NO_EXECUTE;
 	}
 
 	paging_map_pages(task->pml4v, virt_stack_start, phys_stack_start, stack_page_count, flags);
@@ -1834,7 +1839,7 @@ static void task_setup_entry(task_t *task)
 		uintptr_t env_phys = (uintptr_t)task->env - kHHDMOffset;
 		paging_map_pages(task->pml4v, TASK_ENV_VIRT, env_phys,
 		                 task->env->page_count,
-		                 PAGE_PRESENT | PAGE_USER);
+		                 PAGE_PRESENT | PAGE_USER | PAGE_NO_EXECUTE);   // env is data
 		task->threads->regs.RDX = TASK_ENV_VIRT;
 	} else {
 		task->threads->regs.RDX = 0;
@@ -2134,7 +2139,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	//moment the program dereferences argv.
 	mapPages = (argvBlobBytes + PAGE_SIZE - 1) / PAGE_SIZE;
 	uintptr_t argvPhys = (uintptr_t)newTask->argv - kHHDMOffset;
-	paging_map_pages(newTask->pml4v, TASK_ARGV_VIRT, argvPhys, mapPages, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+	paging_map_pages(newTask->pml4v, TASK_ARGV_VIRT, argvPhys, mapPages, PAGE_PRESENT | PAGE_WRITE | PAGE_USER | PAGE_NO_EXECUTE);   // argv is data
 
 	newTask->kernelTask=isKernelTask;
 
