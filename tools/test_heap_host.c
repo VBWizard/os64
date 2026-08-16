@@ -571,6 +571,16 @@ static void t_crimes(void)
     EXPECT_DEATH(0xCA9A12ED, os64_free(a));
     (void)b;
 
+    // Round nine's crime: flip ONLY the dedicated bit. The canary is
+    // role-tied now, so a forged HEAP_DEDICATED — which once sent free()
+    // down the dedicated branch and unmapped the whole POOL out from under
+    // every live neighbour — fails authentication like any other stomp.
+    {
+        char *solo = os64_malloc(64);
+        ((uint64_t *)(solo - 16))[0] ^= 0x8;   // the one-bit forgery
+        EXPECT_DEATH(0xCA9A12ED, os64_free(solo));
+    }
+
     // Round eight's crime, deliberately LAST among the mallocs: realloc's
     // grow-in-place absorbing a STOMPED free neighbour — the one absorption
     // path that skipped the canary and would have walked corrupted list

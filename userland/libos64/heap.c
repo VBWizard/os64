@@ -84,6 +84,8 @@
 #define HEAP_CANARY_LIVE   0x05CA9A12ABCDEF01ULL
 #define HEAP_CANARY_FREE   0x0DEADCA9A12F1EEDULL
 #define HEAP_CANARY_MIX    0x9E3779B97F4A7C15ULL   // golden ratio, 64-bit
+#define HEAP_CANARY_SOLO   0x0DED1CA7ED000B10ULL   // "DEDICATED", squint — the
+                                                   // role-tied term (round nine)
 
 // Poison. A freed body is filled with this so a use-after-free reads
 // obviously-wrong data LOUDLY instead of working by luck — the ring-3 sibling
@@ -249,23 +251,36 @@ static inline bool block_in_use(const heap_block_t *b)
 	return (b->size_flags & HEAP_IN_USE) != 0;
 }
 
+// ROLE-TIED as well as address- and size-tied (PR #26, round nine): the
+// canary authenticates every STABLE fact about a block — where it is, how
+// big it is, whether it is live, and whether it owns a whole region. It
+// deliberately excludes the two MUTABLE flags (PREV_FREE changes when a
+// neighbour changes state, DIRTY when a block joins the free list — both
+// legitimately flip without a block_set). HEAP_DEDICATED never changes for
+// the life of a block, and leaving it unauthenticated meant a one-bit
+// forgery passed the canary and sent free() down the dedicated branch —
+// unmapping an entire POOL, live neighbours and all, on the word of a
+// stomped bit.
 static inline uint64_t heap_canary_for(const heap_block_t *b, uint64_t size,
-                                       bool in_use)
+                                       bool in_use, bool dedicated)
 {
 	return (in_use ? HEAP_CANARY_LIVE : HEAP_CANARY_FREE)
 	     ^ (uint64_t)(uintptr_t)b
-	     ^ (size * HEAP_CANARY_MIX);
+	     ^ (size * HEAP_CANARY_MIX)
+	     ^ (dedicated ? HEAP_CANARY_SOLO : 0);
 }
 
 static inline void block_set(heap_block_t *b, uint64_t size, uint64_t flags)
 {
 	b->size_flags = size | (flags & HEAP_FLAG_MASK);
-	b->canary = heap_canary_for(b, size, (flags & HEAP_IN_USE) != 0);
+	b->canary = heap_canary_for(b, size, (flags & HEAP_IN_USE) != 0,
+	                            (flags & HEAP_DEDICATED) != 0);
 }
 
 static inline bool block_canary_ok(const heap_block_t *b)
 {
-	return b->canary == heap_canary_for(b, block_size(b), block_in_use(b));
+	return b->canary == heap_canary_for(b, block_size(b), block_in_use(b),
+	                                    (b->size_flags & HEAP_DEDICATED) != 0);
 }
 
 static inline void *block_payload(heap_block_t *b)
@@ -1023,7 +1038,8 @@ static heap_block_t *block_from_user_pointer(void *ptr, heap_region_t **region_o
 		// A freed block's canary uses the FREE seed. If THAT is what we are
 		// looking at, this is a double free and deserves to be named as one
 		// rather than reported as generic corruption.
-		if (b->canary == heap_canary_for(b, block_size(b), false))
+		if (b->canary == heap_canary_for(b, block_size(b), false,
+		                                 (b->size_flags & HEAP_DEDICATED) != 0))
 			heap_die("free of a block that is already free (double free)",
 			         ptr, b->canary, HEAP_EXIT_FREE_BAD);
 
