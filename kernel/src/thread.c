@@ -99,7 +99,7 @@ uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtua
     }
 	uint64_t flags = PAGE_PRESENT | PAGE_WRITE;
 	if (isRing3Stack)
-		flags |= PAGE_USER;
+		flags |= PAGE_USER | PAGE_NO_EXECUTE;   // a stack holds data; NX since 2026-08-16
 
 	uint64_t pagesToMap = requestedLength / PAGE_SIZE;
 	if (requestedLength % PAGE_SIZE)

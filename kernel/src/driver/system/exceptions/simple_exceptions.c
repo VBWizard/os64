@@ -718,7 +718,19 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // kernel bug, and the syscall copy helpers pre-validate user ranges
         // precisely so a bad user pointer can never fault down here in ring 0.)
         if (error_code & 0x4)
-            user_fault_kill(task, "access to unmapped address", cr2, error_code, rip);
+            user_fault_kill(task,
+                // No VMA does NOT always mean unmapped: eagerly-mapped memory
+                // (stacks, argv, env) has PTEs but no VMA, so a PRESENT fault
+                // down here is a protection kill, not a wild pointer — and an
+                // NX fetch deserves its own name (the first nx_test run was
+                // reported as "access to unmapped address", which misnames
+                // the crime: the page was right there, honestly refusing).
+                !(error_code & 0x1)
+                    ? "access to unmapped address"
+                    : ((error_code & 0x10)
+                        ? "no-execute violation (instruction fetch from data memory)"
+                        : "protection violation on eagerly-mapped memory"),
+                cr2, error_code, rip);
         // A fault in the HHDM range is the lazy-HHDM tripwire firing (see
         // paging.h): physical memory is only HHDM-mapped while allocated, so
         // this is a use-after-free, a wild physical-address dereference, or
@@ -773,7 +785,12 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
                PAGE_SIZE);
 
         // Remap the virtual address to the new private page, now writable.
+        // The private copy keeps the VMA's execute verdict: a CoW'd DATA page
+        // must not come back executable just because this remap forgot to ask
+        // (2026-08-16, with the NX arc).
         uint64_t cow_flags = PAGE_PRESENT | PAGE_USER | PAGE_WRITE;
+        if (!(vma->prot & PROT_EXEC))
+            cow_flags |= PAGE_NO_EXECUTE;
         paging_map_page((pt_entry_t *)task->pml4v, aligned, new_phys, cow_flags);
 
         // paging_map_page does not flush the TLB on map (only on unmap), so we
@@ -792,8 +809,14 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // Ring-3 protection violation on a non-CoW page (write to read-only
         // data, jump into no-exec, etc.): the app's bug — segfault the task.
         // Ring-0 violations fall through to the diagnosing panic below.
+        // Error bit 4 (I/D) marks an instruction fetch — under NXE that is
+        // the NX bit doing its job, and the kill names it (2026-08-16).
         if (error_code & 0x4)
-            user_fault_kill(task, "protection violation", cr2, error_code, rip);
+            user_fault_kill(task,
+                (error_code & 0x10)
+                    ? "no-execute violation (instruction fetch from data memory)"
+                    : "protection violation",
+                cr2, error_code, rip);
 
         // Page is present but the access was denied and this VMA is not CoW.
         // This is a genuine protection violation, not a recoverable fault.
@@ -845,6 +868,14 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     uint64_t flags = PAGE_PRESENT | PAGE_USER;
     if (vma->prot & PROT_WRITE)
         flags |= PAGE_WRITE;
+    // NX for everything the VMA doesn't declare executable (2026-08-16): the
+    // ELF loader has recorded honest per-segment prot from PF_X since birth,
+    // and anonymous VMAs (heap, os64_map regions) never claim it — but the
+    // bit went nowhere until paging_map_page's uint16_t truncation was found
+    // and fixed. This is the W^X half a demand-paged mapping gets for free:
+    // the leaf is written exactly once, here, with the right answer.
+    if (!(vma->prot & PROT_EXEC))
+        flags |= PAGE_NO_EXECUTE;
 
     paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, flags);
 

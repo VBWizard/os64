@@ -55,6 +55,11 @@ typedef struct {
 
 static char *const argv_arg_echo[] = { "/bin/arg_echo", "hello", "world", NULL };
 
+// The W^X pair (2026-08-16): both PASS BY DYING with the segfault kill, 139.
+// A survivor exits 0x0BAD and the mismatch names the disconnected tripwire.
+static char *const argv_nx_stack[] = { "/bin/nx_test", "stack", NULL };
+static char *const argv_nx_text[]  = { "/bin/nx_test", "text",  NULL };
+
 static const fixture_t kFixtures[] = {
     { "/bin/syscall_smoke",   NULL, 0x0005E00D,  0,          "the syscall floor: write/exit from ring 3" },
     { "/bin/exit_by_return",  NULL, 0x2E7BEA57,  0,          "returning from _start reaches retVal" },
@@ -68,6 +73,8 @@ static const fixture_t kFixtures[] = {
     { "/bin/sleep_test",      NULL, 0x51EE600D,  0,          "sleep parks at least as long as asked" },
     { "/bin/memory_test",     NULL, 0xF3EE600D,  0,          "the memory syscall's snapshot" },
     { "/bin/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
+    { "/bin/nx_test",         argv_nx_stack, 139, 0,         "executing the stack kills the program (NX works)" },
+    { "/bin/nx_test",         argv_nx_text,  139, 0,         "writing to .text kills the program (W^X works)" },
     { "/bin/test_elf",        NULL, 0xE1F0CA11,  0,          "a demand-paged static ELF runs and exits" },
     { "/bin/dyn_consumer",    NULL, 0x00300031,  0,          "a dynamically-linked binary resolves and runs" },
     // synctest reports 0x05CC0001 when the boot has no writable /home. That

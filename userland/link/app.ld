@@ -26,7 +26,18 @@ SECTIONS
         *(.text*)
     }
 
+    /* PAGE-ALIGN EACH PERMISSION CHANGE (2026-08-16, the NX arc). Without
+     * these, ld folds text+rodata+data into ONE RWX LOAD segment (the
+     * "RWX permissions" warning every build printed) — and since the kernel
+     * derives page protections from segment flags, every byte of every app
+     * was writable AND executable. With the boundaries aligned, ld emits
+     * separate LOAD segments (text R+X, rodata R, data/bss R+W), the loader's
+     * honest PF_X-to-PROT_EXEC mapping finally has something to say, and the
+     * fixed PTE bit 63 makes it stick. The cost is up to a page of padding
+     * per boundary in the file — the price of W^X, at 1971 prices. */
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .rodata : { *(.rodata*) }
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
     .data   : { *(.data*) }
     .bss    : {
         *(.bss*)
