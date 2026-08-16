@@ -1120,13 +1120,39 @@ void os64_free(void *ptr)
 
 void *os64_calloc(size_t count, size_t size)
 {
+	if (!gInited)
+		os64_heap_init();
+
 	if (count != 0 && size > (size_t)-1 / count)
-		return NULL;    // the multiply would wrap: refuse, don't truncate
+	{
+		// The multiply would wrap: refuse, don't truncate. And COUNT the
+		// refusal (PR #26, round three): malloc and realloc tally their
+		// failures, so a calloc that leaves no trace makes /proc's counters
+		// go blind at exactly the moment callers start passing absurd sizes.
+		heap_lock();
+		report_begin();
+		gReport.calls_calloc++;
+		report_end();
+		heap_unlock();
+		return NULL;
+	}
 
 	size_t total = count * size;
 	void *p = os64_malloc(total);
 	if (p == NULL)
+	{
+		// The failed attempt sits in malloc's counter; reclassify it as OURS
+		// — the caller called calloc, and under memory pressure the split
+		// between the two columns is precisely what a reader is there to
+		// learn (same round-three finding as above).
+		heap_lock();
+		report_begin();
+		gReport.calls_calloc++;
+		gReport.calls_malloc--;
+		report_end();
+		heap_unlock();
 		return NULL;
+	}
 
 	// The os64 dividend: memory carved from a region's virgin frontier has
 	// never been written by anybody — and the kernel guarantees every page of
@@ -1316,7 +1342,20 @@ void *os64_realloc(void *ptr, size_t size)
 	// The honest fallback: a new block, a copy, and the old one released.
 	void *fresh = os64_malloc(size);
 	if (fresh == NULL)
+	{
+		// calloc's round-three finding has a sibling here (caught in the
+		// same pass, for once before the reviewer did): the failed internal
+		// malloc was tallied as a PUBLIC malloc call, though the caller
+		// called realloc — which calls_realloc already counted at entry.
+		// Un-count the internal attempt; the failure stays visible in the
+		// realloc column where it belongs.
+		heap_lock();
+		report_begin();
+		gReport.calls_malloc--;
+		report_end();
+		heap_unlock();
 		return NULL;    // the original is untouched — the caller still owns it
+	}
 
 	uint64_t copy = (old_payload < size) ? old_payload : (uint64_t)size;
 	os64_memcpy(fresh, ptr, (size_t)copy);

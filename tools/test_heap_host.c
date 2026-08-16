@@ -269,7 +269,36 @@ static void t_calloc(void)
     CHECK(nonzero == 0, "calloc of recycled memory returned %d non-zero bytes", nonzero);
     os64_free(q);
 
-    CHECK(os64_calloc((size_t)-1 / 2, 4) == NULL, "calloc overflow not refused");
+    // PR #26 round three: FAILED calls must count, and count as THEMSELVES —
+    // malloc and realloc tally their failures, so calloc's refusals must not
+    // vanish (overflow path) or masquerade as malloc calls (internal-malloc
+    // failure path). Realloc's fallback had the sibling disease: its failed
+    // internal malloc leaked into the public malloc column.
+    {
+        uint64_t cc = gReport->calls_calloc;
+        uint64_t cm = gReport->calls_malloc;
+        uint64_t cr = gReport->calls_realloc;
+
+        CHECK(os64_calloc((size_t)-1 / 2, 4) == NULL, "calloc overflow not refused");
+        CHECK(os64_calloc(1, SIZE_MAX - 5000) == NULL, "calloc of a huge size not refused");
+        CHECK(gReport->calls_calloc == cc + 2,
+              "failed callocs did not count as callocs (%lu, want %lu)",
+              (unsigned long)gReport->calls_calloc, (unsigned long)(cc + 2));
+        CHECK(gReport->calls_malloc == cm,
+              "a failed calloc leaked into the malloc column (%lu, want %lu)",
+              (unsigned long)gReport->calls_malloc, (unsigned long)cm);
+
+        char *rk = os64_malloc(64);            // cm+1, legitimately
+        CHECK(rk != NULL, "setup allocation failed");
+        CHECK(os64_realloc(rk, SIZE_MAX - 5000) == NULL,
+              "realloc's failing fallback was not refused");
+        CHECK(gReport->calls_realloc == cr + 1,
+              "the failed realloc did not count as a realloc");
+        CHECK(gReport->calls_malloc == cm + 1,
+              "a failed realloc fallback leaked into the malloc column (%lu, want %lu)",
+              (unsigned long)gReport->calls_malloc, (unsigned long)(cm + 1));
+        os64_free(rk);
+    }
 }
 
 // CALLOC MUST NEVER HAND BACK A PREDECESSOR'S BYTES — the regression for the
