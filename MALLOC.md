@@ -167,6 +167,24 @@ the regression test is `t_frontier_tag`, which fails against the old code
 with the identical message. **Tripwires over silence, paid off inside one
 afternoon.**
 
+### The bug the give-back complained about (2026-08-16, review round)
+
+`realloc`'s shrink-in-place was the ONE maker of free blocks whose
+successor's state nothing guaranteed — the shrinking block was live, so the
+block above it could already be free, and the first version inserted its
+tail right against it. Two adjacent free blocks pass every tag check, so
+the damage was visible only downstream: first-fit refusing requests the
+pair's sum could serve, and the give-back check finding an emptied pool's
+survivors unmerged — "region empty but its free space did not merge", ~30
+times per mallochavoc run, the allocator accusing itself of a bigger bug
+than the one it had. The fix teaches the shrink path free()'s own forward
+merge (and free()'s 0xA5 paint, which the tail was also skipping); the
+verifier gains an adjacent-free tripwire so the invariant can never again
+be violated silently; `t_shrink_coalesce` pins it. Found by Fable's review
+of the code plus Chris's tester making the complaint loud — the boundary
+tags flexing again: the design's own tripwire caught the design's own bug,
+it just filed the report under the wrong crime.
+
 ## OPEN decisions — RULED 2026-08-15
 
 - **What is a region?** RULED **(b)**: pools for small allocations, one

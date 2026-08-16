@@ -375,6 +375,56 @@ static void t_realloc(void)
     CHECK(os64_heap_verify() == 0, "heap does not verify after the realloc battery");
 }
 
+// SHRINK MUST COALESCE ITS TAIL — the regression for the bug mallochavoc's
+// give-back complaints exposed (2026-08-16, ~30 "region empty but its free
+// space did not merge" lines per run). realloc's shrink is the ONE maker of
+// free blocks whose successor's state is not structurally guaranteed: the
+// shrinking block was LIVE, so the block above it may be free, and the first
+// version inserted the tail right against it. Two adjacent free blocks pass
+// every tag check — honest sizes, honest canaries, consistent bits — which is
+// also why the verifier grew an adjacent-free tripwire in the same fix. This
+// test fails against the old code twice over: the verifier now names the
+// crime, and the combined-request malloc lands elsewhere.
+static void t_shrink_coalesce(void)
+{
+    // A live block with a FREE successor: a, b, guard — then free b.
+    char *a = os64_malloc(4096);
+    char *b = os64_malloc(256);
+    char *guard = os64_malloc(64);       // keeps b away from the frontier
+    CHECK(a && b && guard, "setup allocation failed");
+    os64_free(b);
+
+    uint64_t free_blocks_before = gReport->blocks_free;
+
+    // Shrink a in place: the tail lands directly against free b and must
+    // absorb it — one free block afterwards, not two.
+    char *s = os64_realloc(a, 64);
+    CHECK(s == a, "realloc moved the block while shrinking");
+    CHECK(gReport->blocks_free == free_blocks_before,
+          "shrink left %lu free blocks, want %lu (tail did not absorb its free neighbour)",
+          (unsigned long)gReport->blocks_free, (unsigned long)free_blocks_before);
+    CHECK(os64_heap_verify() == 0, "adjacent free blocks after a shrink");
+
+    // The abandoned bytes read as poison, exactly as free() would have left
+    // them — a use-after-shrink must not find its old data intact.
+    int poisoned = 1;
+    for (int i = 96; i < 200; i++)          // past the tail's header and links
+        if ((uint8_t)a[i] != 0xA5)
+            poisoned = 0;
+    CHECK(poisoned, "the shrink's tail was not poisoned");
+
+    // And the merged block serves a request neither piece could alone:
+    // a's old span (4112) minus its kept 80 plus b's 272 = 4304 bytes of
+    // block. The payload lands just past the kept block's header+payload.
+    char *big = os64_malloc(4200);
+    CHECK(big == a + 80, "the merged tail was not reused for the combined request");
+
+    os64_free(big);
+    os64_free(guard);
+    os64_free(a);
+    CHECK(os64_heap_verify() == 0, "heap does not verify after the cleanup");
+}
+
 static void t_big_and_giveback(void)
 {
     uint64_t regions_before = gReport->regions;
@@ -541,6 +591,7 @@ int main(void)
     t_calloc_never_leaks_predecessor();
     t_poison();
     t_realloc();
+    t_shrink_coalesce();
     t_big_and_giveback();
     t_soak();
     t_crimes();     // last: it leaves the heap deliberately corrupted

@@ -764,6 +764,17 @@ static uint64_t heap_verify_locked(void)
 				              b, block_flags(b));
 				problems++;
 			}
+			// Two free neighbours is the invariant coalescing EXISTS to keep,
+			// and it is invisible to every tag check above: both blocks carry
+			// honest sizes, honest canaries, and consistent bits. It needs its
+			// own tripwire — the realloc-shrink bug lived exactly here for a
+			// day, detectable only as a downstream give-back complaint.
+			if (prev_was_free && !block_in_use(b))
+			{
+				heap_complain("two adjacent free blocks (a merge was missed)",
+				              b, block_size(b));
+				problems++;
+			}
 			if (!block_in_use(b))
 			{
 				uint64_t footer = *(uint64_t *)((char *)b + size - sizeof(uint64_t));
@@ -1111,6 +1122,12 @@ void *os64_calloc(size_t count, size_t size)
 	// for first-touch allocations, which is most of what a starting program
 	// does. Recycled memory carries its predecessor's bytes (and this heap's
 	// 0xA5 poison), so it gets the memset it deserves.
+	//
+	// Read WITHOUT the lock, deliberately: a LIVE block's DIRTY bit never
+	// changes (only its PREV_FREE bit moves, under the lock, when a neighbour
+	// changes state), and an aligned 64-bit load is atomic on x86-64 — so the
+	// one bit this decision rests on is stable even while the word around it
+	// isn't.
 	heap_block_t *b = payload_block(p);
 	bool dirty = (block_flags(b) & HEAP_DIRTY) != 0;
 
@@ -1137,8 +1154,10 @@ void *os64_calloc(size_t count, size_t size)
 		os64_memset(p, 0, total);
 
 	heap_lock();
+	report_begin();            // even a counter shuffle honours the shutter
 	gReport.calls_calloc++;
 	gReport.calls_malloc--;    // it was counted by the malloc above
+	report_end();
 	heap_unlock();
 	return p;
 }
@@ -1194,6 +1213,34 @@ void *os64_realloc(void *ptr, size_t size)
 				block_set(b, need, block_flags(b));
 				heap_block_t *tail = block_next(b);
 				block_set(tail, rest, HEAP_DIRTY);
+
+				// THE TAIL'S NEIGHBOUR MAY ALREADY BE FREE — because b was
+				// LIVE, so nothing ever guaranteed the block above it wasn't.
+				// (Every OTHER maker of free blocks gets that guarantee
+				// structurally: a split parent came off the free list, so its
+				// successor was in use by the coalescing invariant; free()
+				// merges forward itself.) Skip this merge and the heap holds
+				// two adjacent free blocks — legal to every tag check, but
+				// first-fit refuses requests their sum could serve, free()'s
+				// single forward merge only ever repairs half of it, and when
+				// such a pool empties, the give-back check finds the survivors
+				// unmerged and complains "region empty but its free space did
+				// not merge" while keeping a region that should have gone
+				// home. Found 2026-08-16 by exactly that complaint, ~30 times
+				// per mallochavoc run.
+				heap_block_t *succ = block_next(tail);
+				if (block_size(succ) != 0 && !block_in_use(succ))
+				{
+					if (!block_canary_ok(succ))
+						heap_die("the block above this one has a bad canary",
+						         ptr, succ->canary, HEAP_EXIT_CANARIED);
+					free_list_remove((heap_free_t *)succ);
+					block_set(tail, rest + block_size(succ), HEAP_DIRTY);
+				}
+				// The caller's abandoned bytes get the same paint free() would
+				// have given them — a use-after-shrink reads 0xA5, not stale
+				// data that works by luck.
+				block_poison(tail);
 				block_write_footer(tail);
 
 				heap_block_t *after = block_next(tail);
@@ -1252,8 +1299,10 @@ void *os64_realloc(void *ptr, size_t size)
 	os64_free(ptr);
 
 	heap_lock();
+	report_begin();           // same shutter honesty as calloc's shuffle
 	gReport.calls_malloc--;   // the malloc above belongs to this realloc
 	gReport.calls_free--;
+	report_end();
 	heap_unlock();
 	return fresh;
 }

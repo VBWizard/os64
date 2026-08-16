@@ -35,9 +35,12 @@
 #define OS64_HEAP_REPORT_MAGIC    0x4845415052505421ULL   // "HEAPRPT!"
 #define OS64_HEAP_REPORT_VERSION  1
 
-// Live-block histogram: bucket i counts blocks whose REQUESTED size falls in
-// [2^(i+4), 2^(i+5)) — 16..31, 32..63, ... The last bucket is everything
-// bigger and says so. A first-fit heap has no size classes (Chris's 7/19
+// Live-block histogram: bucket i counts blocks whose PAYLOAD CAPACITY falls
+// in [2^(i+4), 2^(i+5)) — 16..31, 32..63, ... The last bucket is everything
+// bigger and says so. Capacity, not the asked-for size, on purpose: capacity
+// is what the heap actually committed, and it is recoverable from the header
+// at free time, so the count that goes up and the count that comes down are
+// computed the same way and can never drift. A first-fit heap has no size classes (Chris's 7/19
 // ruling — bins were "OVERHEAD for this OS"), but a histogram costs one
 // shift per call and answers the question bins would have answered:
 // "what shape is this program's appetite?"
