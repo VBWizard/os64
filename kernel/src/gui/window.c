@@ -92,7 +92,12 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 	w->title[GUI_WINDOW_TITLE_MAX - 1] = '\0';
 
 	link_on_top(w);
-	s_focused = w;
+	// START_UNFOCUSED declines the focus grab a new window normally gets —
+	// unless nothing holds focus yet, because SOMETHING must (an all-
+	// declining boot would leave keys routing to NULL). See the flag's
+	// comment in window.h for the no-mouse race that earned it.
+	if (!(flags & GUI_WINDOW_START_UNFOCUSED) || s_focused == NULL)
+		s_focused = w;
 	gui_damage_add_locked(w->frame);
 
 	printd(DEBUG_GUI, "wm: created window %u '%s' at (%d,%d) %dx%d\n",

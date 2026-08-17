@@ -6,6 +6,7 @@
 
 #include "gui/gui_client.h"
 #include "gui/gui_demos.h"
+#include "gui/window.h"   // GUI_WINDOW_START_UNFOCUSED — decline the boot focus race
 #include "gui/surface.h"
 
 #include "CONFIG.h"
@@ -27,7 +28,7 @@ bool gkeys_thread(bool daemon)
 	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
 
-	int64_t win = gui_window_create("keys", 620, 100, 330, 180, 0);
+	int64_t win = gui_window_create("keys", 620, 100, 330, 180, GUI_WINDOW_START_UNFOCUSED);
 	if (win <= 0) {
 		printd(DEBUG_GUI, "gkeys: window create failed (%ld)\n", win);
 		return false;

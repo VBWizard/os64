@@ -17,9 +17,18 @@
 #include "printd.h"
 #include "spinlock.h"
 
-// 64x18 characters at 8x16 px/glyph = 512x288 content.
-#define CON_COLS 64
-#define CON_ROWS 18
+// 96x30 characters at 8x16 px/glyph = 768x480 content. Was 64x18 from
+// bring-up — sized to prove text could flow, not to work in — until the
+// first day somebody ran `top` at a husk> prompt in here (2026-08-17) and
+// met a viewport smaller than the report. 96x30 comfortably holds an
+// 80x25's worth of anything with margin, still fits 1024x768 alongside
+// the demo windows, and costs under 3KB of grid. The REAL sizing story —
+// the console telling its tenant how big it is, per window, resizable —
+// is the pty seam's job (DEBTS: the terminal app's row); this is the good
+// default until then. These metrics graduate to the theme table when it
+// exists.
+#define CON_COLS 96
+#define CON_ROWS 30
 #define CON_BG   0xff101418
 #define CON_FG   0xffd0d4c8
 
@@ -90,7 +99,9 @@ void gui_console_start(void)
 {
 	int32_t w = CON_COLS * 8 + 2;                       // + borders
 	int32_t h = CON_ROWS * 16 + 20 + 1;                 // + titlebar + border
-	s_win = gui_window_create("console", 24, 330, (uint32_t)w, (uint32_t)h, 0);
+	// (24, 240): the taller grid still clears the bottom edge at 768, and
+	// what it now overlaps (the demo windows) is draggable by design.
+	s_win = gui_window_create("console", 24, 240, (uint32_t)w, (uint32_t)h, 0);
 	if (s_win <= 0) {
 		printd(DEBUG_GUI, "console: window create failed (%ld)\n", s_win);
 		return;

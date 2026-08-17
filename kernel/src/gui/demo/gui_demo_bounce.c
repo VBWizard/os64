@@ -8,6 +8,7 @@
 
 #include "gui/gui_client.h"
 #include "gui/gui_demos.h"
+#include "gui/window.h"   // GUI_WINDOW_START_UNFOCUSED — decline the boot focus race
 #include "gui/surface.h"
 
 #include "CONFIG.h"
@@ -45,7 +46,7 @@ bool gbounce_thread(bool daemon)
 	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
 
-	int64_t win = gui_window_create("bounce", 660, 430, 300, 220, 0);
+	int64_t win = gui_window_create("bounce", 660, 430, 300, 220, GUI_WINDOW_START_UNFOCUSED);
 	if (win <= 0) {
 		printd(DEBUG_GUI, "gbounce: window create failed (%ld)\n", win);
 		return false;

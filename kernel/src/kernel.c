@@ -770,14 +770,20 @@ void kernel_init()
 	{
 		printf("Starting GUI ...\n");
 		gui_start();
-		// Park with a periodic status line: once the console window attaches
-		// (kConsoleSink), these printfs flow into the desktop — living proof
-		// the print_n diversion works end to end.
+		// Park quietly. This loop used to printf a status line onto the
+		// glass every pass — bring-up scaffolding, "living proof the
+		// print_n diversion works end to end" — and it served exactly until
+		// the day a real shell moved into the console window (2026-08-17,
+		// the first `ls` at a husk> prompt inside the GUI), at which point
+		// proof-of-life became somebody typing over your prompt every five
+		// seconds. The heartbeat survives on the SERIAL wire under
+		// DEBUG_GUI, where a wedged-kernel-task diagnosis actually goes
+		// looking for it; the glass belongs to the user now.
 		uint64_t statusCount = 0;
 		while (1)
 		{
 			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
-			printf("os64: up %lu ticks, GUI running (status #%lu)\n", kTicksSinceStart, ++statusCount);
+			printd(DEBUG_GUI, "os64: up %lu ticks, GUI running (status #%lu)\n", kTicksSinceStart, ++statusCount);
 		}
 	}
 

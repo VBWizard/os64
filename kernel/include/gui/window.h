@@ -22,6 +22,14 @@
 
 // flags
 #define GUI_WINDOW_NO_DECORATIONS (1u << 0)   // reserved; not yet honored
+// Created on top of the z-order but WITHOUT stealing focus (unless nothing
+// holds it yet — somebody must). Born 2026-08-17, the day the P5 booted the
+// GUI with no mouse: which window got focus at boot was a RACE between the
+// compositor's thread (hello, console) and the demo tasks, and on a machine
+// with no pointer the loser is stuck wherever the race left it. The demos
+// wear this flag so the shell's console deterministically ends up focused —
+// the thing you TYPE at is the thing that should be listening first.
+#define GUI_WINDOW_START_UNFOCUSED (1u << 1)
 
 typedef struct window
 {
