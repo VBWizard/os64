@@ -20,6 +20,8 @@
 #include "task.h"       // task_t.taskID — what a window's owner IS
 #include "memory/paging.h"     // the canvas mapping (surface pivot)
 #include "memory/allocator.h"  // allocate_memory_aligned / free_memory — task canvas pages
+#include "signals.h"    // SIGSLEEP / SIGNALS_TERMINATING — event_wait's park and its exit
+#include "kernel.h"     // kTicksSinceStart — the park's backstop deadline
 
 extern struct Framebuffer kFrameBuffer;
 extern uintptr_t kHHDMOffset;
@@ -358,6 +360,73 @@ int64_t gui_screen_info(uint32_t *width, uint32_t *height)
 	if (height)
 		*height = kFrameBuffer.height;
 	return 0;
+}
+
+// Future syscall: SYSCALL_GUI_EVENT_WAIT (22), user_ptr_mask 0b10 — the
+// blocking poll, and the LAST piece of the migration order on purpose:
+// everything else worked without it, so it shipped when the plumbing could
+// be its whole slice.
+//
+// The gait is console_read's, ported: drain → return if got → register as
+// the window's waiter → park on a SIGSLEEP backstop → re-loop on wake. The
+// wake is EDGE-triggered (wm_deliver_event aims at the waiter the moment it
+// pushes) with the backstop as the lost-race net: if the deliverer's wake
+// finds us still mid-park (not yet ISLEEP), scheduler_wake_isleep_thread
+// deliberately leaves us alone — cancelling a not-yet-parked thread's
+// backstop is how task_enqueue_dead_child once put a thread to sleep
+// forever — and the backstop deadline re-runs the drain a moment later.
+// A pending TERMINATE outranks the wait, checked every pass (the kill
+// machinery wakes sleepers; this check is how a woken waiter LEAVES).
+#define GUI_EVENT_WAIT_BACKSTOP_TICKS (TICKS_PER_SECOND / 4)
+
+int64_t gui_event_wait(int64_t handle, input_event_t *out)
+{
+	if (!out)
+		return GUI_ERR_BAD_ARGS;
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *self = (cls != NULL) ? cls->currentThread : NULL;
+	if (self == NULL)
+		return GUI_ERR_BAD_ARGS;   // no thread context — nothing to park
+
+	for (;;) {
+		int64_t err;
+		uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+
+		// The window is re-looked-up EVERY pass: it can die while we sleep
+		// (our own task's exit sweep is the usual killer), and a handle is
+		// only ever as fresh as the last time the lock said so.
+		window_t *win = handle_lookup_owned(handle, &err);
+		if (!win) {
+			spinlock_release_irqrestore(&kGuiLock, irqflags);
+			return err;
+		}
+
+		if (self->signals.sigind & SIGNALS_TERMINATING) {
+			// Un-register on the way out — console_read's scar: a stale
+			// waiter slot is a spurious wake out of some LATER unrelated
+			// sleep.
+			if (win->waiter == self)
+				win->waiter = NULL;
+			spinlock_release_irqrestore(&kGuiLock, irqflags);
+			return GUI_ERR_INTERRUPTED;
+		}
+
+		if (wm_pop_event(win, out)) {
+			if (win->waiter == self)
+				win->waiter = NULL;
+			spinlock_release_irqrestore(&kGuiLock, irqflags);
+			return 1;
+		}
+
+		// Empty-handed: register and park. Registration happens in the SAME
+		// critical section as the failed pop, so a deliverer either pushed
+		// before our pop (we returned above) or will see our registration.
+		win->waiter = self;
+		spinlock_release_irqrestore(&kGuiLock, irqflags);
+
+		sigaction(SIGSLEEP, NULL,
+		          kTicksSinceStart + GUI_EVENT_WAIT_BACKSTOP_TICKS, self);
+	}
 }
 
 // The task-exit sweep — contract in compositor.h. NOT a client call and

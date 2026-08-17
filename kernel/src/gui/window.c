@@ -14,6 +14,7 @@
 #include "kmalloc.h"
 #include "memset.h"
 #include "printd.h"
+#include "scheduler.h"   // scheduler_wake_isleep_thread — event_wait's alarm bell
 #include "strcpy.h"
 
 // Z-order list. s_top is frontmost (first hit-tested), s_bottom is nearest
@@ -173,6 +174,17 @@ void wm_deliver_event(window_t *w, const input_event_t *ev)
 		return;   // queue full: drop-newest, same policy as the input ring
 	w->events[w->evt_head] = *ev;
 	w->evt_head = next;
+
+	// Aim a wake at a parked event_wait-er. Runs in the COMPOSITOR's thread
+	// context under kGuiLock (never an ISR — invariant 4 holds), and the
+	// wake takes only the scheduler queue lock inside, no trigger: the
+	// woken thread runs on the next scheduler pass, which is the latency
+	// the design already accepted. A waiter still mid-park is deliberately
+	// left alone (the wake API's own rule) — its backstop re-runs the drain
+	// moments later. The slot is NOT cleared here: the waiter owns its
+	// registration, and a redundant wake at worst re-checks an empty queue.
+	if (w->waiter != NULL)
+		scheduler_wake_isleep_thread(w->waiter);
 }
 
 bool wm_pop_event(window_t *w, input_event_t *out)

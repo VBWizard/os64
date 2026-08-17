@@ -157,6 +157,8 @@ static uint64_t syscall_gui_event_poll(uint64_t arg0, uint64_t arg1, uint64_t ar
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_screen_info(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_event_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -232,6 +234,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_PUBLISH,     "gui_window_publish",     syscall_gui_window_publish,     false, 0x00),  // arg1 = rect_t in OR NULL (nullable — handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
+	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x02),  // arg1 = input_event_t out; BLOCKS (like read)
 };
 
 uint64_t _syscall_dispatch(
@@ -3603,4 +3606,23 @@ static uint64_t syscall_gui_screen_info(uint64_t arg0, uint64_t arg1, uint64_t a
 	if (arg1 != 0 && !copy_to_user_buffer((void *)arg1, &h, sizeof(h)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return 0;
+}
+
+static uint64_t syscall_gui_event_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 == 0)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+
+	// Blocks inside the handler exactly the way read() does — sleeping in a
+	// syscall on the caller's CR3 is long-established ground. Same
+	// copy-out-after-pop rule as poll: the event left the queue either way,
+	// and a caller with an unmapped buffer has larger problems than one
+	// dropped keystroke.
+	input_event_t ev;
+	int64_t rc = gui_event_wait((int64_t)arg0, &ev);
+	if (rc == 1 && !copy_to_user_buffer((void *)arg1, &ev, sizeof(ev)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)rc;
 }

@@ -15,7 +15,6 @@
 #define KEYS_INK       OS64_GUI_COLOR_BLACK
 #define KEYS_ACCENT    0xff2a62b8
 #define LINE_MAX       36           // chars that fit the 330px-wide content
-#define FRAME_MS_POLL  16           // ~60Hz event-poll cadence
 
 int main(int argc, char **argv)
 {
@@ -50,14 +49,18 @@ int main(int argc, char **argv)
     size_t line_len = 0;
     char status[LINE_MAX + 1] = {0};
 
-    os64_frame_clock_t clock;
-    os64_frame_clock_init(&clock);
-
+    // The event_wait loop (migration step 5's first customer): BLOCK until
+    // the compositor delivers, then drain whatever else queued behind it
+    // with poll, repaint once for the batch. No cadence, no polling — this
+    // app's runtime_us stops while nobody types, which is the whole point.
     for (;;) {
-        bool dirty = false;
-
         os64_gui_event_t ev;
-        while (os64_gui_event_poll(win, &ev) == 1) {
+        int64_t rc = os64_gui_event_wait(win, &ev);
+        if (rc != 1)
+            return rc == OS64_GUI_ERR_INTERRUPTED ? 0 : 1;
+
+        bool dirty = false;
+        do {
             switch (ev.type) {
             case OS64_GUI_EVENT_KEY_DOWN:
                 if (ev.key.ascii == '\b') {
@@ -85,10 +88,11 @@ int main(int argc, char **argv)
             default:
                 break;
             }
-        }
+        } while (os64_gui_event_poll(win, &ev) == 1);   // drain the batch
 
         if (dirty) {
-            // Repaint the two text lines (typed input + last click).
+            // Repaint the two text lines (typed input + last click) — once
+            // per BATCH, not once per event.
             os64_gui_rect_t text_area = {0, 40, (int32_t)s->width, 48};
             os64_draw_fill_rect(s, text_area, KEYS_BG);
             os64_draw_text(s, 10, 44, line, line_len, KEYS_INK, KEYS_BG);
@@ -96,9 +100,5 @@ int main(int argc, char **argv)
                            KEYS_ACCENT, KEYS_BG);
             os64_draw_publish(&ctx, &text_area);
         }
-
-        // ~60Hz poll cadence is plenty for an echo box; the clock keeps it
-        // honest whatever the scheduler's tick turns out to be.
-        os64_frame_wait(&clock, FRAME_MS_POLL);
     }
 }

@@ -1,6 +1,6 @@
 // os64/gui.h — the GUI boundary, as ring 3 sees it (L0 of LIBDRAW.md).
 //
-// Everything that crosses syscalls 16-21 is defined HERE for userland: the
+// Everything that crosses syscalls 16-22 is defined HERE for userland: the
 // three structs (rect, surface, input event), the window flags, the error
 // values, the color constants, and thin inline wrappers over the raw
 // syscalls. The kernel keeps its own headers (gui/gui_types.h, gui/input.h
@@ -31,6 +31,7 @@
 #define OS64_GUI_ERR_BAD_ARGS        (-3)
 #define OS64_GUI_ERR_NOT_RUNNING     (-4)   // boot without the GUI flag — treat as SKIP
 #define OS64_GUI_ERR_NOT_OWNER       (-5)   // exists, and is none of your business
+#define OS64_GUI_ERR_INTERRUPTED     (-6)   // a blocking wait cut short by termination
 
 // ── Window flags ────────────────────────────────────────────────────────────
 #define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // reserved; not yet honored
@@ -143,6 +144,18 @@ static inline int64_t os64_gui_screen_info(uint32_t *width, uint32_t *height)
 {
     return (int64_t)os64_syscall2(SYSCALL_GUI_SCREEN_INFO,
                                   (uint64_t)width, (uint64_t)height);
+}
+
+// Block until an event arrives (1 = copied out), the window dies
+// (INVALID_HANDLE), or the caller is being killed (INTERRUPTED). The idle
+// answer to a poll loop: an app that waits costs NOTHING until somebody
+// types at it — no cadence, no polling, just sleep until the compositor
+// says otherwise.
+static inline int64_t os64_gui_event_wait(int64_t handle,
+                                          os64_gui_event_t *out)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_EVENT_WAIT,
+                                  (uint64_t)handle, (uint64_t)out);
 }
 
 // ── The layout lock, this side ──────────────────────────────────────────────

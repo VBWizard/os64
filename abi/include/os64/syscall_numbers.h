@@ -412,7 +412,7 @@
 #define SYSCALL_HANDLE_CONSOLE_OUT  1
 #define SYSCALL_HANDLE_CONSOLE_ERR  2
 
-// --- GUI syscalls (16-21 LIVE since 2026-08-17; 22 still reserved) ---------
+// --- GUI syscalls (16-22, ALL LIVE since 2026-08-17) -----------------------
 // The userland boundary of GRAPHICS.md, dispatch rows in syscall.c. The
 // kernel's own GUI clients (guicomp, the console, the demos) keep calling
 // gui_client.h functions directly — these rows exist for ring 3, where every
@@ -430,6 +430,6 @@
 #define SYSCALL_GUI_WINDOW_PUBLISH      19
 #define SYSCALL_GUI_EVENT_POLL          20
 #define SYSCALL_GUI_SCREEN_INFO         21
-#define SYSCALL_GUI_EVENT_WAIT          22   // blocking poll — ships LAST (migration step 5)
+#define SYSCALL_GUI_EVENT_WAIT          22   // blocking poll — shipped LAST, as planned (step 5)
 
 #endif

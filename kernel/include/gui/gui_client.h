@@ -20,6 +20,11 @@
 // on purpose: "no such window" and "exists, and is none of your business"
 // are different answers, and only the first should tempt a caller to retry.
 #define GUI_ERR_NOT_OWNER       (-5)
+// A blocking wait was cut short because the CALLER is being terminated —
+// console_read's rule, worn by gui_event_wait: a pending kill outranks the
+// wait. The dying task rarely sees this value (the syscall boundary
+// finishes the job), but an ABI never lies about why it returned.
+#define GUI_ERR_INTERRUPTED     (-6)
 
 // Create a window (frame includes decorations). Returns a handle > 0.
 int64_t gui_window_create(const char *title, int32_t x, int32_t y,
@@ -41,6 +46,12 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage);
 // Poll the window's event queue. 1 = event copied out, 0 = queue empty.
 // Mouse coordinates in events are CONTENT-local.
 int64_t gui_event_poll(int64_t handle, input_event_t *out);
+
+// Block until an event arrives on the window (1 = event copied out), the
+// window dies under us (GUI_ERR_INVALID_HANDLE), or the caller is being
+// terminated (GUI_ERR_INTERRUPTED). The idle answer to a poll loop: an app
+// that waits costs NOTHING until somebody types at it.
+int64_t gui_event_wait(int64_t handle, input_event_t *out);
 
 int64_t gui_screen_info(uint32_t *width, uint32_t *height);
 

@@ -74,6 +74,17 @@ typedef struct window
     // owning app thread pops them via gui_event_poll(). Drop-newest on full.
     input_event_t events[GUI_WINDOW_EVENTS_MAX];
     uint32_t  evt_head, evt_tail;
+
+    // The thread parked in gui_event_wait on this window, or NULL. Owned by
+    // the WAITER (it registers and unregisters itself, console_read's
+    // discipline — a stale slot is a spurious wake later); the deliverer
+    // only reads it to aim a wake. Owner-checked windows mean the waiter is
+    // always a thread of the owning task, which is what makes teardown
+    // safe: a task's windows die in its own exit path, before its threads
+    // do, so the slot can never outlive the thread it names.
+    // (struct s_thread is thread_t's tag — forward-declared so this header
+    // stays free of kernel includes, same bargain compositor.h struck.)
+    struct s_thread *waiter;
 } window_t;
 
 // Create a window whose FRAME is `frame` (content is automatically inset by
