@@ -309,7 +309,7 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR,
                      "os64get: CHECKSUM MISMATCH for %s — got %08x, expected %08x. "
                      "%s left in place; %s NOT installed.\n",
-                     name, actual, expectCrc, dest, dest);
+                     name, actual, expectCrc, partPath, dest);
         return GET_CORRUPT;
     }
 
