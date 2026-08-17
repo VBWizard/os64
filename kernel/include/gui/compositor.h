@@ -42,6 +42,13 @@ void gui_emergency_disable(void);
 // without a clean exit. Idempotent — the second call finds nothing — and a
 // free no-op when the GUI is off or the task never made a window. Takes
 // kGuiLock; GUI state is upper-half, so this is safe under any CR3.
-void gui_task_destroy_windows(uint64_t taskID);
+//
+// Takes the TASK, not just its id, since the surface pivot: a task-backed
+// canvas is mapped in the dying task's own page tables, and giving those
+// pages back (nothing else records them — they are deliberately not VMAs)
+// needs the pml4v to unmap from. Must therefore run while the address
+// space is still intact — which both call sites already guarantee.
+struct task;
+void gui_task_destroy_windows(struct task *t);
 
 #endif // GUI_COMPOSITOR_H

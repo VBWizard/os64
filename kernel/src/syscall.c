@@ -3538,14 +3538,10 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
 	if (rc != 0)
 		return (uint64_t)rc;
 
-	// Until the surface pivot (migration step 3), the canvas lives at a
-	// kernel VA a ring-3 caller can neither dereference nor deserves to
-	// see, so it gets the true geometry and a NULL pixel pointer — "you
-	// cannot draw yet", said truthfully, instead of a kernel address that
-	// is both useless and a layout leak. The pivot replaces this NULL with
-	// a task VA and deletes exactly this one line.
-	s.pixels = NULL;
-
+	// The surface pivot delivered: gui_window_get_surface answers per
+	// window flavor, and for a ring-3 caller's (task-backed) window that
+	// is the TASK's own VA for the canvas — a pointer it can finally draw
+	// through. (This is where a NULL stood between steps 2 and 3.)
 	if (!copy_to_user_buffer((void *)arg1, &s, sizeof(s)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return 0;

@@ -113,6 +113,16 @@ void wm_destroy(window_t *w)
 	unlink_window(w);
 	if (s_focused == w)
 		s_focused = s_top;
+	// If focus just moved, the inheriting window's titlebar changes color —
+	// damage it, or only the slice under the dead window's frame repaints.
+	// wm_raise always knew this; this path never did, and nobody noticed
+	// until 2026-08-17 because no window had ever DIED holding focus: the
+	// first ring-3 client exiting mid-focus left the console wearing half a
+	// gray titlebar and half a blue one, split exactly at the dead window's
+	// old edge — a screenshot's worth of exactly where damage tracking
+	// stopped.
+	if (s_focused != NULL && s_focused != w)
+		gui_damage_add_locked(s_focused->frame);
 	surface_free(&w->canvas);
 	surface_free(&w->content);
 	kfree(w);

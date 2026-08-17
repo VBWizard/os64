@@ -799,8 +799,10 @@ static void task_destroy(task_t *t)
 	// already swept this task's windows (task_exit_teardown), but burial is
 	// the LAST gate before its pages are freed, and any future path that
 	// buries without a clean exit must not leave a window compositing freed
-	// memory. Idempotent — finds nothing when exit already did the job.
-	gui_task_destroy_windows(t->taskID);
+	// memory. Idempotent — finds nothing when exit already did the job, and
+	// it runs BEFORE the thread/page teardown below because a pivoted
+	// canvas unmaps through this task's still-intact page tables.
+	gui_task_destroy_windows(t);
 
 	thread_t *th = t->threads;
 	while (th != NULL) {
@@ -1171,8 +1173,10 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 		// and this hook standing before the teardown is what keeps the
 		// lazy-HHDM tripwire silent on that day. GUI state is upper-half, so
 		// taking kGuiLock under the task's CR3 is safe; a free no-op when the
-		// GUI is off or the task owned nothing.
-		gui_task_destroy_windows(task->taskID);
+		// GUI is off or the task owned nothing. Takes the TASK because a
+		// pivoted canvas is unmapped from these very page tables — which is
+		// also why this must stay AHEAD of the address-space teardown.
+		gui_task_destroy_windows(task);
 
 		// Release every handle this task still holds — BEFORE it is enqueued as
 		// a dead child. For a pipe end this is the refcount that decides EOF /

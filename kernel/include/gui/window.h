@@ -57,9 +57,18 @@ typedef struct window
     // hands this out; gui_window_publish snapshots the damage rect
     // canvas→content under kGuiLock, so the compositor only ever sees
     // finished frames (GRAPHICS.md "Atomic frames" — snapshot-on-publish).
-    // Under userland these pages become task-mapped shared memory; the
-    // content surface stays kernel-side either way.
+    // TWO FLAVORS since the surface pivot (2026-08-17):
+    //   kernel-backed (canvas_task_phys == 0): pixels is a kmalloc buffer,
+    //     surface_free's to release — the kernel-thread clients' world.
+    //   task-backed: pixels is the KERNEL's HHDM alias of task-owned pages
+    //     that are ALSO mapped into the owning task's address space at
+    //     canvas_task_va (USER|WRITE|NO_EXECUTE, eagerly backed). The task
+    //     draws through its VA, publish snapshots through the alias — the
+    //     same physical memory, one copy, zero pixels crossing the ring.
     surface_t canvas;
+    uint64_t  canvas_task_phys;   // 0 = kernel-backed; else the extent base
+    uintptr_t canvas_task_va;     // where the OWNER task sees the canvas
+    uint32_t  canvas_pages;       // extent length, for the unmap
 
     // Per-window event queue: the compositor pushes routed events, the
     // owning app thread pops them via gui_event_poll(). Drop-newest on full.

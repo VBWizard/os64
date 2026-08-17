@@ -20,10 +20,12 @@
 //   a probe that hard-codes today's titlebar height would start failing
 //   the moment customization works, which is backwards.
 //
-// Until the surface pivot (step 3), get_surface reports true geometry and
-// a NULL pixel pointer — "you cannot draw yet", said truthfully. This
-// probe asserts that NULL: the day the pivot lands, this assertion fails,
-// and updating it to assert a usable task VA is part of that step's work.
+// Between steps 2 and 3 this probe asserted a NULL canvas ("you cannot
+// draw yet"); since the surface pivot it asserts the opposite — a usable,
+// LOWER-HALF pointer — and then uses it: a checkerboard drawn from ring 3,
+// published, and held on screen for a few seconds before the exit sweep
+// demonstrates the cleanup. The first userland pixels in os64's history
+// go through this loop.
 //
 // Exit codes name the failing step, per the house fixture convention.
 // On a boot without GUI, every check downgrades to a SKIP (exit 0) — the
@@ -90,7 +92,7 @@ int main(int argc, char **argv)
     }
     os64_printf("gfxprobe: window handle %ld\n", (long)win);
 
-    // 18: get_surface — geometry out, and (pre-pivot) a NULL canvas.
+    // 18: get_surface — geometry out, and (post-pivot) a REAL canvas.
     probe_surface_t surf = {0xDEADBEEF, 0, 0, 0};
     rc = (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_GET_SURFACE,
                                 (uint64_t)win, (uint64_t)&surf);
@@ -99,10 +101,12 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "gfxprobe: get_surface rc=%ld\n", (long)rc);
         return PROBE_GET_SURFACE;
     }
-    // Loose on purpose (chrome metrics are the future theme table's), but
-    // the content must be smaller than the frame, non-empty, and pre-pivot
-    // the pixel pointer must be NULL — a kernel VA here is a leak.
-    if (surf.pixels != 0 || surf.width == 0 || surf.width > 220 ||
+    // Loose on the geometry (chrome metrics are the future theme table's),
+    // strict on the pointer: it must exist, and it must be a LOWER-HALF
+    // address — a kernel-half pointer here would be the exact leak the
+    // pre-pivot NULL existed to prevent.
+    if (surf.pixels == 0 || surf.pixels >= (1ULL << 47) ||
+        surf.width == 0 || surf.width > 220 ||
         surf.height == 0 || surf.height > 140 || surf.pitch_px < surf.width)
     {
         os64_hprintf(OS64_STDERR,
@@ -111,15 +115,28 @@ int main(int argc, char **argv)
                      surf.pitch_px);
         return PROBE_SURFACE_SHAPE;
     }
-    os64_printf("gfxprobe: content %ux%u, canvas withheld until the pivot — correct\n",
-                surf.width, surf.height);
+    os64_printf("gfxprobe: content %ux%u, canvas at 0x%lx — ring 3 can draw\n",
+                surf.width, surf.height, (unsigned long)surf.pixels);
 
-    // 19: publish — NULL damage (whole content), then a sub-rect. The
-    // canvas is zeroed at create, so this paints an honest black body.
+    // THE FIRST USERLAND PIXELS: a checkerboard, drawn straight through
+    // the mapped canvas, then published whole. Eager backing means every
+    // one of these stores lands in real, already-allocated pages — no
+    // demand faults mid-scanline.
+    uint32_t *px = (uint32_t *)surf.pixels;
+    for (uint32_t yy = 0; yy < surf.height; yy++)
+        for (uint32_t xx = 0; xx < surf.width; xx++)
+            px[yy * surf.pitch_px + xx] =
+                (((xx / 16) + (yy / 16)) & 1) ? 0xFFD9822B : 0xFF20242C;
+
+    // 19: publish — NULL damage (whole content), then a sub-rect redraw of
+    // one square, proving the damage-bounded path snapshots correctly too.
     rc = (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_PUBLISH, (uint64_t)win, 0);
     if (rc == 0)
     {
-        int32_t rect[4] = {2, 2, 10, 10};   // rect_t: x, y, w, h
+        for (uint32_t yy = 16; yy < 32 && yy < surf.height; yy++)
+            for (uint32_t xx = 16; xx < 32 && xx < surf.width; xx++)
+                px[yy * surf.pitch_px + xx] = 0xFF4FA3D1;
+        int32_t rect[4] = {16, 16, 16, 16};   // rect_t: x, y, w, h
         rc = (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_PUBLISH,
                                     (uint64_t)win, (uint64_t)rect);
     }
@@ -158,8 +175,12 @@ int main(int argc, char **argv)
         os64_printf("gfxprobe: another task's window refused us — fence holds\n");
     }
 
-    // And out — WITHOUT destroying our window. The exit sweep's first real
-    // customer: watch it vanish, and watch DEBUG_GUI name the reaping.
-    os64_printf("gfxprobe: all rows answered; exiting with the window open (the sweep's turn)\n");
+    // Hold the checkerboard on screen long enough for a human (or a
+    // screendump) to admire the first ring-3 pixels, then leave WITHOUT
+    // destroying the window: the exit sweep now has real task-backed
+    // canvas pages to give back, not just bookkeeping — the pivot's
+    // teardown path getting its own first customer.
+    os64_printf("gfxprobe: checkerboard published — 4 seconds to look, then the sweep's turn\n");
+    os64_sleep(4000);
     return PROBE_OK;
 }
