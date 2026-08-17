@@ -12,18 +12,40 @@
 
 #include "driver/net/r8125_ring.h"
 
+// Compiler fence, NOT a hardware one — and that distinction is the whole
+// comment. x86's TSO already keeps stores in program order as far as the
+// bus (and therefore the DMA engine) is concerned; the only party free to
+// reorder them is the COMPILER, because these descriptors are plain memory
+// to it. Without this, nothing forbids sinking the buffer memcpy or the
+// addr/opts2 stores PAST the opts1 store that flips OWN — handing the
+// device a descriptor whose contents arrive after the permission to read
+// them. Masked at -O0, live at -O2: the exact "one rebuild away" fingerprint
+// CLAUDE.md warns about, on the one machine with no debugger attached.
+// An empty asm with a memory clobber is portable to the host harness's gcc,
+// which keeps this file's no-kernel-headers contract intact.
+static inline void r8125_ring_compiler_fence(void)
+{
+	__asm__ volatile("" ::: "memory");
+}
+
 // Every write to opts1 goes through here, and that is the entire reason it
 // exists: EOR shares the word with OWN and the length, so any rewrite that
 // forgets it silently converts "wrap at the end of the ring" into "keep
 // walking into whatever memory comes next". A DMA engine given that
 // permission does not fail an assertion — it corrupts something unrelated,
 // somewhere else, later. One choke point, one place to be right.
+//
+// The store itself is the OWNERSHIP HANDOFF, so it is fenced and volatile:
+// the fence pins every prior plain store (buffer bytes, addr, opts2) below
+// it, and volatile stops the compiler eliding or duplicating the store that
+// a bus master is watching for.
 static inline void r8125_set_opts1(r8125_desc_t* ring, uint16_t count,
                                    uint16_t index, uint32_t value)
 {
 	if (index == (uint16_t)(count - 1))
 		value |= R8125_DESC_EOR;
-	ring[index].opts1 = value;
+	r8125_ring_compiler_fence();
+	*(volatile uint32_t*)&ring[index].opts1 = value;
 }
 
 void r8125_ring_init_rx(r8125_desc_t* ring, uint16_t count,
@@ -57,9 +79,16 @@ void r8125_ring_init_tx(r8125_desc_t* ring, uint16_t count,
 bool r8125_rx_ready(const r8125_desc_t* ring, uint16_t cursor,
                     uint16_t* length_out, bool* damaged_out)
 {
-	uint32_t opts1 = ring[cursor].opts1;
+	// The mirror of set_opts1's discipline: volatile, because the DEVICE
+	// writes this word and a compiler that proved "nothing in this program
+	// stores here" would be entitled to reuse a stale read. The fence pins
+	// the caller's subsequent reads of the BUFFER after this load — seeing
+	// OWN clear is the permission to look at the bytes, so the look must
+	// not be hoisted above the permission.
+	uint32_t opts1 = *(const volatile uint32_t*)&ring[cursor].opts1;
 	if (opts1 & R8125_DESC_OWN)
 		return false;   // still the device's — nothing has arrived here yet
+	r8125_ring_compiler_fence();
 
 	*length_out  = (uint16_t)(opts1 & R8125_DESC_LEN_MASK);
 	*damaged_out = (opts1 & R8125_RX_ERRORS) != 0;
@@ -104,7 +133,10 @@ uint16_t r8125_tx_reap(const r8125_desc_t* ring, uint16_t count,
 	uint16_t reclaimed = 0;
 	while (*tx_clean != tx_next)
 	{
-		if (ring[*tx_clean].opts1 & R8125_DESC_OWN)
+		// Volatile for the same reason as rx_ready: OWN is cleared by the
+		// device, and this loop polls it. No fence needed here — reclaiming
+		// only moves an index; nobody reads the buffer behind it.
+		if (*(const volatile uint32_t*)&ring[*tx_clean].opts1 & R8125_DESC_OWN)
 			break;      // the device has not finished this one; stop here
 		*tx_clean = r8125_ring_next(*tx_clean, count);
 		reclaimed++;
