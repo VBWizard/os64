@@ -1374,13 +1374,21 @@ static int ext2_orphan_add(vfs_filesystem_t *fs, ext2_fs_t *e,
 // Unchain `ino`. Singly linked, so removal walks from the head — which
 // costs nothing real: the list is empty almost always and holds one entry
 // the rest of the time. Bounded against a corrupt chain rather than trusted.
+//
+// The bound matches ext2_orphan_replay's 4096, NOT the open-table size,
+// because the chain's length is not actually bounded by open handles: a
+// reap that fails (read error, close racing rm — see ext2_rm) leaves its
+// inode chained with nobody left to close it, and those stragglers
+// accumulate until the next mount replays them. A walk bound smaller than
+// replay's would start refusing legitimate removals exactly when the chain
+// is at its unhealthiest, compounding the pile-up it should be draining.
 static int ext2_orphan_remove(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t ino)
 {
 	uint32_t cur = e->sb.s_last_orphan;
 	uint32_t prev = 0;
 	ext2_inode_t node;
 
-	for (uint32_t hops = 0; cur != 0 && hops < EXT2_OPEN_TABLE_SLOTS + 8; hops++)
+	for (uint32_t hops = 0; cur != 0 && hops < 4096; hops++)
 	{
 		if (ext2_read_inode(fs, e, cur, &node) != 0)
 			return -1;
@@ -1546,6 +1554,15 @@ static int ext2_rm(const char *filename, vfs_filesystem_t *vfs_fs)
 			       name, child_ino);
 			goto refuse;
 		}
+		// THE RACE THIS TOLERATES, on purpose: the holder can close between
+		// this count read and ext2_orphan_add below (the close path never
+		// takes write_lock just to close). Its reap then finds either a
+		// still-nonzero links_count or no chain entry yet, does nothing, and
+		// the inode we chain a moment later has nobody left to close it. The
+		// cost is storage stranded until the NEXT MOUNT's replay — bounded,
+		// self-healing, and announced when it happens. Closing the window
+		// for real would mean holding open_lock across directory-block I/O,
+		// which inverts the lock order everything else here lives by.
 		orphan_it = true;
 	}
 
