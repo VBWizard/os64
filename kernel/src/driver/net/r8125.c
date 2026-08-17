@@ -399,6 +399,16 @@ static bool r8125_setup_rings(r8125_t* r)
 	r->tx_buf_phys = allocate_memory_aligned((uint64_t)R8125_TX_DESCS * R8125_BUF_SIZE);
 	if (r->rx_phys == 0 || r->tx_phys == 0 || r->rx_buf_phys == 0 || r->tx_buf_phys == 0)
 	{
+		// Give back whatever DID land before refusing. A one-time init
+		// path, so the leak would be small — but "small" and "counted"
+		// are different claims, and the lazy-HHDM tripwire means a leaked
+		// page here would sit mapped forever, muddying the very
+		// use-after-free diagnostics it exists to sharpen.
+		if (r->rx_phys)     free_memory(r->rx_phys);
+		if (r->tx_phys)     free_memory(r->tx_phys);
+		if (r->rx_buf_phys) free_memory(r->rx_buf_phys);
+		if (r->tx_buf_phys) free_memory(r->tx_buf_phys);
+		r->rx_phys = r->tx_phys = r->rx_buf_phys = r->tx_buf_phys = 0;
 		printf("r8125: out of memory building the rings\n");
 		return false;
 	}
