@@ -1,4 +1,4 @@
-// xhci.c — xHCI controller + USB HID boot-protocol keyboard, v1.
+// xhci.c — xHCI controller + USB HID boot-protocol keyboard and mouse.
 // The design rationale and v1 limits live in xhci.h; this file is the
 // machine. Register/TRB layouts follow the xHCI 1.x specification;
 // section references below are to that spec.
@@ -24,6 +24,7 @@
 #include "time.h"
 #include "driver/system/pci.h"
 #include "driver/system/keyboard.h"
+#include "gui/input.h"
 #include "tty.h"             // VT chords: Alt+F#, Alt+arrows, Shift+PgUp/PgDn
 #include "driver/system/usb/xhci.h"
 
@@ -109,8 +110,38 @@ typedef struct {
 	uint32_t    cycle;       // our current producer cycle state (1 or 0)
 } xhci_ring_t;
 
-// The one-and-only controller/keyboard state. One of each in v1 — the
-// P5 has one xHCI and this driver exists to feed it one keyboard.
+typedef enum {
+	HID_NONE = 0,
+	HID_KEYBOARD,
+	HID_MOUSE,
+} hid_kind_t;
+
+// One HID device attached directly to a root port. Boot keyboards and boot
+// mice use the same xHCI machinery; only their fixed report decoders differ.
+typedef struct {
+	bool         present;
+	hid_kind_t   kind;
+	uint32_t     port;
+	uint32_t     speed;
+	uint32_t     slot;
+	uint32_t     dci;
+	xhci_ring_t  ep0;
+	xhci_ring_t  intr;
+	uint8_t     *dev_ctx;
+	uint8_t     *input_ctx;
+	uint64_t     input_ctx_phys;
+	uint8_t     *reports;
+	uint64_t     reports_phys;
+
+	// Boot-keyboard state. Unused (and zero) for a mouse.
+	uint8_t      prev_report[8];
+	uint8_t      mods;
+	uint8_t      rpt_usage;
+	uint64_t     rpt_next_tick;
+} xhci_hid_t;
+
+// One controller. The P5 may place its keyboard and mouse on different xHCI
+// controllers, so initialized controllers remain live and are all polled.
 typedef struct {
 	bool         present;         // controller found and running
 	uint8_t     *cap;             // MMIO: capability base (HHDM-aliased)
@@ -132,28 +163,28 @@ typedef struct {
 	volatile uint8_t  cmd_cc;
 	volatile uint32_t cmd_slot;   // slot id byte from the completion
 
-	// the keyboard, once found
-	bool         kbd_present;
-	uint32_t     kbd_slot;
-	uint32_t     kbd_dci;         // interrupt-IN endpoint's device context index
-	xhci_ring_t  ep0;             // control transfer ring
-	xhci_ring_t  intr;            // interrupt-IN transfer ring
-	uint8_t     *dev_ctx;         // output device context (controller-owned)
-	uint8_t     *input_ctx;       // input context (we fill, commands consume)
-	uint64_t     input_ctx_phys;
-	uint8_t     *reports;         // 8-byte report buffers, one per in-flight TRB
-	uint64_t     reports_phys;
-	uint8_t      prev_report[8];  // previous HID state, for edge detection
-	uint8_t      mods;            // KEYBOARD_MOD_* state (caps is a latch)
-	uint8_t      rpt_usage;       // typematic candidate: last key pressed, 0 = none
-	uint64_t     rpt_next_tick;   // when it next repeats (hid_typematic_tick)
+	xhci_hid_t   keyboard;
+	xhci_hid_t   mouse;
+
+	// EP0 completion currently awaited during boot-time enumeration.
+	volatile uint32_t control_slot;
+	volatile bool     xfer_done;
+	volatile uint8_t  xfer_cc;
 } xhci_t;
 
-static xhci_t s_hc;
+#define MAX_XHCI_CONTROLLERS 8
+#define HID_INFLIGHT 8
+#define HID_REPORT_BYTES 8
+
+static xhci_t s_controllers[MAX_XHCI_CONTROLLERS];
+static uint32_t s_controller_count;
+static bool s_keyboard_claimed;
+static bool s_mouse_claimed;
+// Active controller while boot-time setup runs, or while xhci_poll owns its
+// global serialization lock. It is never changed concurrently.
+static xhci_t *s_hc;
 
 extern volatile uint64_t kTicksSinceStart;   // the typematic clock
-
-#define KBD_INFLIGHT 8          // interrupt-IN TRBs kept queued at all times
 
 // ── MMIO accessors ──────────────────────────────────────────────────────────
 
@@ -225,16 +256,16 @@ static uint32_t xhci_drain_events(void)
 	uint32_t handled = 0;
 
 	for (;;) {
-		xhci_trb_t *ev = &s_hc.evt[s_hc.evt_dequeue];
+		xhci_trb_t *ev = &s_hc->evt[s_hc->evt_dequeue];
 		uint32_t control = ev->control;
-		if ((control & TRB_CYCLE) != (s_hc.evt_cycle ? TRB_CYCLE : 0))
+		if ((control & TRB_CYCLE) != (s_hc->evt_cycle ? TRB_CYCLE : 0))
 			break;   // controller hasn't written this slot yet
 
 		switch (TRB_GET_TYPE(control)) {
 			case TRB_EV_CMD_COMPLETE:
-				s_hc.cmd_cc = (uint8_t)TRB_CC(ev->status);
-				s_hc.cmd_slot = (control >> 24) & 0xFF;
-				s_hc.cmd_done = true;
+				s_hc->cmd_cc = (uint8_t)TRB_CC(ev->status);
+				s_hc->cmd_slot = (control >> 24) & 0xFF;
+				s_hc->cmd_done = true;
 				break;
 			case TRB_EV_TRANSFER:
 				xhci_handle_transfer_event(ev);
@@ -250,10 +281,10 @@ static uint32_t xhci_drain_events(void)
 				break;
 		}
 
-		s_hc.evt_dequeue++;
-		if (s_hc.evt_dequeue == RING_TRBS) {
-			s_hc.evt_dequeue = 0;
-			s_hc.evt_cycle ^= 1;
+		s_hc->evt_dequeue++;
+		if (s_hc->evt_dequeue == RING_TRBS) {
+			s_hc->evt_dequeue = 0;
+			s_hc->evt_cycle ^= 1;
 		}
 		handled++;
 	}
@@ -261,8 +292,8 @@ static uint32_t xhci_drain_events(void)
 	if (handled > 0) {
 		// Tell the controller where our dequeue pointer is now (EHB set to
 		// clear the busy flag — harmless in polling mode, required form).
-		uint64_t erdp = s_hc.evt_phys + s_hc.evt_dequeue * sizeof(xhci_trb_t);
-		mmio_w64(s_hc.rt, XHCI_IR0_ERDP, erdp | (1u << 3));
+		uint64_t erdp = s_hc->evt_phys + s_hc->evt_dequeue * sizeof(xhci_trb_t);
+		mmio_w64(s_hc->rt, XHCI_IR0_ERDP, erdp | (1u << 3));
 	}
 	return handled;
 }
@@ -275,14 +306,14 @@ static uint32_t xhci_drain_events(void)
 // (TRB_CC_SUCCESS == 1) or 0 on timeout.
 static uint8_t xhci_run_command(uint64_t param, uint32_t status, uint32_t control)
 {
-	s_hc.cmd_done = false;
-	ring_push(&s_hc.cmd, param, status, control);
-	mmio_w32((uint8_t *)s_hc.db, 0, 0);   // doorbell 0, target 0 = command ring
+	s_hc->cmd_done = false;
+	ring_push(&s_hc->cmd, param, status, control);
+	mmio_w32((uint8_t *)s_hc->db, 0, 0);   // doorbell 0, target 0 = command ring
 
 	for (int spin = 0; spin < 1000; spin++) {
 		xhci_drain_events();
-		if (s_hc.cmd_done)
-			return s_hc.cmd_cc;
+		if (s_hc->cmd_done)
+			return s_hc->cmd_cc;
 		wait(1);
 	}
 	printd(DEBUG_USB, "xhci: command timed out (control=0x%08x)\n", control);
@@ -294,10 +325,8 @@ static uint8_t xhci_run_command(uint64_t param, uint32_t status, uint32_t contro
 
 // One GET/SET request. `data` NULL for no-data-stage requests. Direction
 // is encoded in bmRequestType bit 7 (IN = device-to-host).
-static volatile bool s_xfer_done;
-static volatile uint8_t s_xfer_cc;
-
-static bool xhci_control_request(uint8_t bmRequestType, uint8_t bRequest,
+static bool xhci_control_request(xhci_hid_t *dev,
+                                 uint8_t bmRequestType, uint8_t bRequest,
                                  uint16_t wValue, uint16_t wIndex,
                                  void *data, uint16_t wLength)
 {
@@ -309,7 +338,7 @@ static bool xhci_control_request(uint8_t bmRequestType, uint8_t bRequest,
 	                 ((uint64_t)wValue << 16) | ((uint64_t)wIndex << 32) |
 	                 ((uint64_t)wLength << 48);
 	uint32_t trt = (wLength == 0) ? 0 : (dir_in ? 3 : 2);
-	ring_push(&s_hc.ep0, setup, 8, TRB_TYPE(TRB_SETUP) | TRB_IDT | (trt << 16));
+	ring_push(&dev->ep0, setup, 8, TRB_TYPE(TRB_SETUP) | TRB_IDT | (trt << 16));
 
 	// Data stage (bounced through an HHDM scratch buffer — caller's buffer
 	// may be anywhere; DMA needs a physical address we control).
@@ -320,23 +349,26 @@ static bool xhci_control_request(uint8_t bmRequestType, uint8_t bRequest,
 			return false;
 		if (!dir_in)
 			memcpy(bounce, data, wLength);
-		ring_push(&s_hc.ep0, virt_to_phys(bounce), wLength,
+		ring_push(&dev->ep0, virt_to_phys(bounce), wLength,
 		          TRB_TYPE(TRB_DATA) | (dir_in ? (1u << 16) : 0));
 	}
 
 	// Status stage: direction opposite the data stage (or IN when no data).
 	// IOC — this is the completion we wait for.
 	uint32_t status_dir = (wLength == 0 || !dir_in) ? (1u << 16) : 0;
-	s_xfer_done = false;
-	ring_push(&s_hc.ep0, 0, 0, TRB_TYPE(TRB_STATUS) | status_dir | TRB_IOC);
+	s_hc->control_slot = dev->slot;
+	s_hc->xfer_done = false;
+	s_hc->xfer_cc = 0;
+	ring_push(&dev->ep0, 0, 0, TRB_TYPE(TRB_STATUS) | status_dir | TRB_IOC);
 
-	mmio_w32((uint8_t *)s_hc.db, 4 * s_hc.kbd_slot, 1);   // doorbell: slot, DCI 1 = EP0
+	mmio_w32((uint8_t *)s_hc->db, 4 * dev->slot, 1);   // doorbell: slot, DCI 1 = EP0
 
 	bool ok = false;
 	for (int spin = 0; spin < 1000; spin++) {
 		xhci_drain_events();
-		if (s_xfer_done) {
-			ok = (s_xfer_cc == TRB_CC_SUCCESS || s_xfer_cc == TRB_CC_SHORT_PACKET);
+		if (s_hc->xfer_done) {
+			ok = (s_hc->xfer_cc == TRB_CC_SUCCESS ||
+			      s_hc->xfer_cc == TRB_CC_SHORT_PACKET);
 			break;
 		}
 		wait(1);
@@ -349,8 +381,8 @@ static bool xhci_control_request(uint8_t bmRequestType, uint8_t bRequest,
 	if (!ok)
 	{
 		printd(DEBUG_USB, "xhci: control req 0x%02x/0x%02x failed (cc=%u)\n",
-		       bmRequestType, bRequest, s_xfer_cc);
-		printf("xhci: ctrl req %02x/%02x failed cc=%u\n", bmRequestType, bRequest, s_xfer_cc);   // TEMP (P5 bring-up)
+		       bmRequestType, bRequest, s_hc->xfer_cc);
+		printf("xhci: ctrl req %02x/%02x failed cc=%u\n", bmRequestType, bRequest, s_hc->xfer_cc);   // TEMP (P5 bring-up)
 	}
 	return ok;
 }
@@ -381,17 +413,17 @@ static const char s_hid_shift[0x39] = {
 	[0x33]=':',[0x34]='"',[0x35]='~',[0x36]='<',[0x37]='>',[0x38]='?',
 };
 
-static void hid_deliver_usage(uint8_t usage)
+static void hid_deliver_usage(xhci_hid_t *kbd, uint8_t usage)
 {
 	if (usage == 0x39) {                      // Caps Lock: a latch, not a key
-		s_hc.mods ^= KEYBOARD_MOD_CAPS;
+		kbd->mods ^= KEYBOARD_MOD_CAPS;
 		return;
 	}
 	// The three-finger salute, HID spelling: Delete Forward (0x4C) or keypad
 	// Del (0x63) with Ctrl+Alt. Same hook the PS/2 driver calls — one chord,
 	// two dialects (2026-08-08, the P5's corded keyboard).
 	if ((usage == 0x4C || usage == 0x63) &&
-	    (s_hc.mods & KEYBOARD_MOD_CTRL) && (s_hc.mods & KEYBOARD_MOD_ALT)) {
+	    (kbd->mods & KEYBOARD_MOD_CTRL) && (kbd->mods & KEYBOARD_MOD_ALT)) {
 		keyboard_ctrl_alt_del();
 		return;
 	}
@@ -402,12 +434,12 @@ static void hid_deliver_usage(uint8_t usage)
 	// leaks an ESC [ D). Held chords ride the typematic engine like any key
 	// — a held Alt+Right walks the terminal ring at 25 cps, which is a
 	// feature if you squint.
-	if (s_hc.mods & KEYBOARD_MOD_ALT) {
+	if (kbd->mods & KEYBOARD_MOD_ALT) {
 		if (usage >= 0x3A && usage <= 0x41) { tty_focus(usage - 0x3A); return; }
 		if (usage == 0x50) { tty_focus_step(-1); return; }   // Alt+Left
 		if (usage == 0x4F) { tty_focus_step(+1); return; }   // Alt+Right
 	}
-	if (s_hc.mods & KEYBOARD_MOD_SHIFT) {
+	if (kbd->mods & KEYBOARD_MOD_SHIFT) {
 		if (usage == 0x4B) { tty_view_scroll(+1); return; }  // Shift+PgUp
 		if (usage == 0x4E) { tty_view_scroll(-1); return; }  // Shift+PgDn
 	}
@@ -427,9 +459,9 @@ static void hid_deliver_usage(uint8_t usage)
 			default: break;
 		}
 		if (final != 0) {
-			keyboard_deliver_event(0x1B, usage, s_hc.mods, true);
-			keyboard_deliver_event('[',  usage, s_hc.mods, true);
-			keyboard_deliver_event(final, usage, s_hc.mods, true);
+			keyboard_deliver_event(0x1B, usage, kbd->mods, true);
+			keyboard_deliver_event('[',  usage, kbd->mods, true);
+			keyboard_deliver_event(final, usage, kbd->mods, true);
 			return;
 		}
 		// The digit-parameter family, HID spelling — Insert=2, Delete=3,
@@ -448,10 +480,10 @@ static void hid_deliver_usage(uint8_t usage)
 			default: break;
 		}
 		if (param != 0) {
-			keyboard_deliver_event(0x1B, usage, s_hc.mods, true);
-			keyboard_deliver_event('[',  usage, s_hc.mods, true);
-			keyboard_deliver_event(param, usage, s_hc.mods, true);
-			keyboard_deliver_event('~', usage, s_hc.mods, true);
+			keyboard_deliver_event(0x1B, usage, kbd->mods, true);
+			keyboard_deliver_event('[',  usage, kbd->mods, true);
+			keyboard_deliver_event(param, usage, kbd->mods, true);
+			keyboard_deliver_event('~', usage, kbd->mods, true);
 			return;
 		}
 	}
@@ -461,9 +493,9 @@ static void hid_deliver_usage(uint8_t usage)
 	if (c == 0)
 		return;
 
-	bool shift = (s_hc.mods & KEYBOARD_MOD_SHIFT) != 0;
-	bool caps  = (s_hc.mods & KEYBOARD_MOD_CAPS) != 0;
-	bool ctrl  = (s_hc.mods & KEYBOARD_MOD_CTRL) != 0;
+	bool shift = (kbd->mods & KEYBOARD_MOD_SHIFT) != 0;
+	bool caps  = (kbd->mods & KEYBOARD_MOD_CAPS) != 0;
+	bool ctrl  = (kbd->mods & KEYBOARD_MOD_CTRL) != 0;
 
 	if (c >= 'a' && c <= 'z') {
 		if (ctrl) {
@@ -479,15 +511,15 @@ static void hid_deliver_usage(uint8_t usage)
 	// it except the GUI's key-code passthrough, which is source-agnostic.
 	printd(DEBUG_USB | DEBUG_DETAILED, "xhci: key usage 0x%02x -> 0x%02x\n",
 	       usage, (uint8_t)c);
-	keyboard_deliver_event(c, usage, s_hc.mods, true);
+	keyboard_deliver_event(c, usage, kbd->mods, true);
 }
 
-// Typematic cadence (engine below, state in s_hc): half a second of grace,
+// Typematic cadence (engine below, state in the keyboard device): half a second of grace,
 // then ~25 cps — the classic feel, done host-side because HID reports state.
 #define HID_TYPEMATIC_DELAY_TICKS  (TICKS_PER_SECOND / 2)   // 500ms to first repeat
 #define HID_TYPEMATIC_PERIOD_TICKS 4                        // then ~25 cps
 
-static void hid_process_report(const uint8_t *rep)
+static void hid_process_keyboard_report(xhci_hid_t *kbd, const uint8_t *rep)
 {
 	// Phantom state: every slot 0x01 = rollover error, report is garbage.
 	if (rep[2] == 0x01 && rep[3] == 0x01 && rep[4] == 0x01)
@@ -495,11 +527,11 @@ static void hid_process_report(const uint8_t *rep)
 
 	// HID modifier bits: LCtrl,LShift,LAlt,LGui,RCtrl,RShift,RAlt,RGui.
 	uint8_t m = rep[0];
-	uint8_t mods = (uint8_t)(s_hc.mods & KEYBOARD_MOD_CAPS);   // caps latch survives
+	uint8_t mods = (uint8_t)(kbd->mods & KEYBOARD_MOD_CAPS);   // caps latch survives
 	if (m & 0x11) mods |= KEYBOARD_MOD_CTRL;
 	if (m & 0x22) mods |= KEYBOARD_MOD_SHIFT;
 	if (m & 0x44) mods |= KEYBOARD_MOD_ALT;
-	s_hc.mods = mods;
+	kbd->mods = mods;
 
 	// Edge detection: a usage present now but absent from the previous
 	// report is a key-DOWN — the only edge we emit. NOTE, corrected
@@ -516,27 +548,34 @@ static void hid_process_report(const uint8_t *rep)
 			continue;
 		bool was_down = false;
 		for (int j = 2; j < 8; j++)
-			if (s_hc.prev_report[j] == u)
+			if (kbd->prev_report[j] == u)
 				was_down = true;
 		if (!was_down) {
-			hid_deliver_usage(u);
+			hid_deliver_usage(kbd, u);
 			// The LAST key pressed is the repeat candidate — classic
 			// typematic semantics since the 5150: press-and-hold J while
 			// holding K, and J is what repeats.
-			s_hc.rpt_usage = u;
-			s_hc.rpt_next_tick = kTicksSinceStart + HID_TYPEMATIC_DELAY_TICKS;
+			kbd->rpt_usage = u;
+			kbd->rpt_next_tick = kTicksSinceStart + HID_TYPEMATIC_DELAY_TICKS;
 		}
 	}
 	// If the candidate is no longer held, repeat ends with the key.
-	if (s_hc.rpt_usage != 0) {
+	if (kbd->rpt_usage != 0) {
 		bool still_down = false;
 		for (int i = 2; i < 8; i++)
-			if (rep[i] == s_hc.rpt_usage)
+			if (rep[i] == kbd->rpt_usage)
 				still_down = true;
 		if (!still_down)
-			s_hc.rpt_usage = 0;
+			kbd->rpt_usage = 0;
 	}
-	memcpy(s_hc.prev_report, (void *)rep, 8);
+	memcpy(kbd->prev_report, (void *)rep, 8);
+}
+
+// HID boot mouse report: buttons, signed X, signed Y. HID Y is already in
+// screen orientation (positive is down), unlike the PS/2 packet decoder.
+static void hid_process_mouse_report(const uint8_t *rep)
+{
+	input_inject_mouse((int8_t)rep[1], (int8_t)rep[2], rep[0] & 0x07);
 }
 
 // ── Software typematic (2026-08-08 — "holding down a key doesn't work") ─────
@@ -546,21 +585,23 @@ static void hid_process_report(const uint8_t *rep)
 // sequence and a held Ctrl+letter repeats its control code — everything a
 // fresh press would do, which is the definition of typematic done at the
 // right layer.
-static void hid_typematic_tick(void)
+static void hid_typematic_tick(xhci_hid_t *kbd)
 {
-	if (s_hc.rpt_usage == 0 || kTicksSinceStart < s_hc.rpt_next_tick)
+	if (!kbd->present || kbd->rpt_usage == 0 ||
+	    kTicksSinceStart < kbd->rpt_next_tick)
 		return;
-	s_hc.rpt_next_tick = kTicksSinceStart + HID_TYPEMATIC_PERIOD_TICKS;
-	hid_deliver_usage(s_hc.rpt_usage);
+	kbd->rpt_next_tick = kTicksSinceStart + HID_TYPEMATIC_PERIOD_TICKS;
+	hid_deliver_usage(kbd, kbd->rpt_usage);
 }
 
-// ── Transfer events (keyboard reports arriving) ─────────────────────────────
+// ── Transfer events (keyboard/mouse reports arriving) ────────────────────────
 
-static void xhci_arm_report_trb(uint32_t buf_index)
+static void xhci_arm_report_trb(xhci_hid_t *dev, uint32_t buf_index)
 {
-	uint64_t buf_phys = s_hc.reports_phys + buf_index * 8;
-	ring_push(&s_hc.intr, buf_phys, 8, TRB_TYPE(TRB_NORMAL) | TRB_IOC);
-	mmio_w32((uint8_t *)s_hc.db, 4 * s_hc.kbd_slot, s_hc.kbd_dci);
+	uint64_t buf_phys = dev->reports_phys + buf_index * HID_REPORT_BYTES;
+	ring_push(&dev->intr, buf_phys, HID_REPORT_BYTES,
+	          TRB_TYPE(TRB_NORMAL) | TRB_IOC);
+	mmio_w32((uint8_t *)s_hc->db, 4 * dev->slot, dev->dci);
 }
 
 static void xhci_handle_transfer_event(xhci_trb_t *ev)
@@ -569,34 +610,52 @@ static void xhci_handle_transfer_event(xhci_trb_t *ev)
 	uint32_t dci  = (ev->control >> 16) & 0x1F;
 	uint8_t  cc   = (uint8_t)TRB_CC(ev->status);
 
-	// EP0 completions during boot-time control transfers.
-	if (s_hc.kbd_present == false || dci == 1) {
-		s_xfer_cc = cc;
-		s_xfer_done = true;
+	// EP0 completions during boot-time control transfers. Match the slot as
+	// well as DCI: another already-live HID endpoint may complete meanwhile.
+	if (dci == 1 && slot == s_hc->control_slot) {
+		s_hc->xfer_cc = cc;
+		s_hc->xfer_done = true;
 		return;
 	}
 
-	if (slot != s_hc.kbd_slot || dci != s_hc.kbd_dci)
-		return;   // not ours (v1 has no other endpoints, but be exact)
+	xhci_hid_t *dev = NULL;
+	if (s_hc->keyboard.present && slot == s_hc->keyboard.slot &&
+	    dci == s_hc->keyboard.dci)
+		dev = &s_hc->keyboard;
+	else if (s_hc->mouse.present && slot == s_hc->mouse.slot &&
+	         dci == s_hc->mouse.dci)
+		dev = &s_hc->mouse;
+	if (dev == NULL)
+		return;
 
 	if (cc != TRB_CC_SUCCESS && cc != TRB_CC_SHORT_PACKET) {
-		printd(DEBUG_USB, "xhci: keyboard transfer error cc=%u\n", cc);
+		printd(DEBUG_USB, "xhci: HID %s transfer error cc=%u\n",
+		       dev->kind == HID_KEYBOARD ? "keyboard" : "mouse", cc);
 		return;   // deliberately NOT re-armed: a dead endpoint stays quiet
 	}
 
 	// Which report buffer completed? The event's param is the TRB's
 	// physical address; the TRB's param is the buffer's physical address.
 	uint64_t trb_phys = ev->param;
-	uint32_t trb_index = (uint32_t)((trb_phys - s_hc.intr.phys) / sizeof(xhci_trb_t));
+	uint32_t trb_index = (uint32_t)((trb_phys - dev->intr.phys) / sizeof(xhci_trb_t));
 	if (trb_index >= RING_TRBS - 1)
 		return;
-	uint64_t buf_phys = s_hc.intr.trb[trb_index].param;
-	uint32_t buf_index = (uint32_t)((buf_phys - s_hc.reports_phys) / 8);
-	if (buf_index >= KBD_INFLIGHT)
+	uint64_t buf_phys = dev->intr.trb[trb_index].param;
+	uint32_t buf_index = (uint32_t)((buf_phys - dev->reports_phys) /
+	                                HID_REPORT_BYTES);
+	if (buf_index >= HID_INFLIGHT)
 		return;
 
-	hid_process_report(s_hc.reports + buf_index * 8);
-	xhci_arm_report_trb(buf_index);   // hand the same buffer back
+	uint32_t residual = ev->status & 0xFFFFFF;
+	if (residual <= HID_REPORT_BYTES) {
+		uint32_t actual = HID_REPORT_BYTES - residual;
+		const uint8_t *report = dev->reports + buf_index * HID_REPORT_BYTES;
+		if (dev->kind == HID_KEYBOARD && actual >= 8)
+			hid_process_keyboard_report(dev, report);
+		else if (dev->kind == HID_MOUSE && actual >= 3)
+			hid_process_mouse_report(report);
+	}
+	xhci_arm_report_trb(dev, buf_index);   // hand the same buffer back
 }
 
 // ── Device enumeration (boot-time) ──────────────────────────────────────────
@@ -604,49 +663,54 @@ static void xhci_handle_transfer_event(xhci_trb_t *ev)
 // Write one endpoint/slot context field set. `ctx` points at the START of
 // the input context; index 0 = input control, 1 = slot, 2 = EP0 (DCI 1),
 // DCI n lives at index n+1. Context size honors HCCPARAMS1.CSZ.
-static uint32_t *ictx(uint32_t index)
+static uint32_t *ictx(xhci_hid_t *dev, uint32_t index)
 {
-	return (uint32_t *)(s_hc.input_ctx + index * s_hc.ctx_size);
+	return (uint32_t *)(dev->input_ctx + index * s_hc->ctx_size);
 }
 
-static bool xhci_setup_keyboard(uint32_t port, uint32_t speed)
+static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 {
+	xhci_hid_t candidate;
+	memset(&candidate, 0, sizeof(candidate));
+	candidate.port = port;
+	candidate.speed = speed;
+
 	// 1. A slot for the device.
 	if (xhci_run_command(0, 0, TRB_TYPE(TRB_ENABLE_SLOT)) != TRB_CC_SUCCESS)
 		return false;
-	uint32_t slot = s_hc.cmd_slot;
+	uint32_t slot = s_hc->cmd_slot;
 	if (slot == 0)
 		return false;
-	s_hc.kbd_slot = slot;
+	candidate.slot = slot;
 
 	// 2. Output device context — the controller's copy of the truth.
-	s_hc.dev_ctx = kmalloc_aligned(PAGE_SIZE);
-	if (s_hc.dev_ctx == NULL)
+	candidate.dev_ctx = kmalloc_aligned(PAGE_SIZE);
+	if (candidate.dev_ctx == NULL)
 		return false;
-	s_hc.dcbaa[slot] = virt_to_phys(s_hc.dev_ctx);
+	s_hc->dcbaa[slot] = virt_to_phys(candidate.dev_ctx);
 
 	// 3. EP0 transfer ring + input context for Address Device.
-	if (!ring_init(&s_hc.ep0))
+	if (!ring_init(&candidate.ep0))
 		return false;
-	s_hc.input_ctx = kmalloc_aligned(PAGE_SIZE);
-	if (s_hc.input_ctx == NULL)
+	candidate.input_ctx = kmalloc_aligned(PAGE_SIZE);
+	if (candidate.input_ctx == NULL)
 		return false;
-	s_hc.input_ctx_phys = virt_to_phys(s_hc.input_ctx);
+	candidate.input_ctx_phys = virt_to_phys(candidate.input_ctx);
 
 	// Default EP0 max packet by speed (LS/FS 8, HS 64, SS 512); corrected
 	// from the device descriptor below if the device disagrees.
 	uint32_t mps0 = (speed == 3) ? 64 : (speed == 4) ? 512 : 8;
 
-	memset(s_hc.input_ctx, 0, PAGE_SIZE);
-	ictx(0)[1] = 0x3;                                  // add slot + EP0 contexts
-	ictx(1)[0] = (1u << 27) | (speed << 20);           // context entries=1, speed
-	ictx(1)[1] = (port << 16);                         // root hub port (1-based)
-	ictx(2)[1] = (4u << 3) | (3u << 1) | (mps0 << 16); // EP type 4 (control), CErr 3
-	ictx(2)[2] = (uint32_t)(s_hc.ep0.phys | 1);        // TR dequeue | DCS
-	ictx(2)[3] = (uint32_t)(s_hc.ep0.phys >> 32);
-	ictx(2)[4] = 8;                                    // average TRB length
+	memset(candidate.input_ctx, 0, PAGE_SIZE);
+	ictx(&candidate, 0)[1] = 0x3;                                  // add slot + EP0 contexts
+	ictx(&candidate, 1)[0] = (1u << 27) | (speed << 20);           // context entries=1, speed
+	ictx(&candidate, 1)[1] = (port << 16);                         // root hub port (1-based)
+	ictx(&candidate, 2)[1] = (4u << 3) | (3u << 1) | (mps0 << 16); // EP type 4 (control), CErr 3
+	ictx(&candidate, 2)[2] = (uint32_t)(candidate.ep0.phys | 1);   // TR dequeue | DCS
+	ictx(&candidate, 2)[3] = (uint32_t)(candidate.ep0.phys >> 32);
+	ictx(&candidate, 2)[4] = 8;                                   // average TRB length
 
-	if (xhci_run_command(s_hc.input_ctx_phys, 0,
+	if (xhci_run_command(candidate.input_ctx_phys, 0,
 	        TRB_TYPE(TRB_ADDRESS_DEVICE) | (slot << 24)) != TRB_CC_SUCCESS) {
 		printd(DEBUG_USB, "xhci: Address Device failed\n");
 		printf("xhci: Address Device failed\n");   // TEMP (P5 bring-up)
@@ -656,38 +720,56 @@ static bool xhci_setup_keyboard(uint32_t port, uint32_t speed)
 	// 4. Device descriptor — and the real bMaxPacketSize0.
 	uint8_t desc[18];
 	memset(desc, 0, sizeof(desc));
-	if (!xhci_control_request(0x80, 6 /*GET_DESCRIPTOR*/, 0x0100, 0, desc, 8))
+	if (!xhci_control_request(&candidate, 0x80, 6 /*GET_DESCRIPTOR*/, 0x0100, 0, desc, 8))
 		return false;
 	uint32_t real_mps0 = (speed == 4) ? (1u << desc[7]) : desc[7];
 	if (real_mps0 != mps0 && real_mps0 != 0) {
-		ictx(0)[1] = 0x2;                              // touch only EP0
-		ictx(2)[1] = (4u << 3) | (3u << 1) | (real_mps0 << 16);
-		xhci_run_command(s_hc.input_ctx_phys, 0,
+		ictx(&candidate, 0)[1] = 0x2;                              // touch only EP0
+		ictx(&candidate, 2)[1] = (4u << 3) | (3u << 1) | (real_mps0 << 16);
+		xhci_run_command(candidate.input_ctx_phys, 0,
 		    TRB_TYPE(TRB_EVALUATE_CONTEXT) | (slot << 24));
 	}
 
-	// 5. Configuration descriptor: find the HID boot keyboard interface
-	//    and its interrupt-IN endpoint.
+	// 5. Configuration descriptor: find a HID boot keyboard (protocol 1) or
+	//    boot mouse (protocol 2) that this controller does not already own.
 	uint8_t cfg[256];
 	memset(cfg, 0, sizeof(cfg));
-	if (!xhci_control_request(0x80, 6, 0x0200, 0, cfg, 9))
+	if (!xhci_control_request(&candidate, 0x80, 6, 0x0200, 0, cfg, 9))
 		return false;
 	uint16_t total = (uint16_t)(cfg[2] | (cfg[3] << 8));
 	if (total > sizeof(cfg))
 		total = sizeof(cfg);
-	if (!xhci_control_request(0x80, 6, 0x0200, 0, cfg, total))
+	if (!xhci_control_request(&candidate, 0x80, 6, 0x0200, 0, cfg, total))
 		return false;
 
 	uint8_t config_value = cfg[5];
-	int32_t iface = -1;
+	int32_t iface_num = -1;
+	bool matching_iface = false;
 	uint32_t ep_addr = 0, ep_mps = 0, ep_interval = 0;
 	for (uint16_t off = 0; off + 1 < total && cfg[off] != 0; off += cfg[off]) {
 		uint8_t len = cfg[off], type = cfg[off + 1];
-		if (type == 4 && cfg[off + 5] == 3 && cfg[off + 6] == 1 && cfg[off + 7] == 1)
-			iface = cfg[off + 2];                       // HID / boot / keyboard
-		else if (type == 4)
-			iface = -1;                                 // some other interface began
-		else if (type == 5 && iface >= 0 && (cfg[off + 2] & 0x80) &&
+		if (type == 4 && len >= 9) {
+			// v1 binds one HID interface per physical device. Once its
+			// interrupt endpoint is known, do not let a later interface on a
+			// composite receiver overwrite candidate.kind while ep_addr still
+			// names the first interface's endpoint.
+			if (ep_addr != 0)
+				break;
+			matching_iface = false;
+			if (cfg[off + 5] == 3 && cfg[off + 6] == 1) {
+				uint8_t protocol = cfg[off + 7];
+				if (protocol == 1 && !s_keyboard_claimed) {
+					candidate.kind = HID_KEYBOARD;
+					matching_iface = true;
+				} else if (protocol == 2 && !s_mouse_claimed) {
+					candidate.kind = HID_MOUSE;
+					matching_iface = true;
+				}
+				if (matching_iface)
+					iface_num = cfg[off + 2];
+			}
+		} else if (type == 5 && len >= 7 && matching_iface &&
+		         (cfg[off + 2] & 0x80) &&
 		         (cfg[off + 3] & 0x3) == 3 && ep_addr == 0) {
 			ep_addr = cfg[off + 2] & 0xF;
 			ep_mps = (uint32_t)(cfg[off + 4] | (cfg[off + 5] << 8)) & 0x7FF;
@@ -696,28 +778,33 @@ static bool xhci_setup_keyboard(uint32_t port, uint32_t speed)
 		if (len == 0)
 			break;
 	}
-	if (iface < 0 && ep_addr == 0) {
-		printd(DEBUG_USB, "xhci: device on port %u is not a boot keyboard\n", port);
-		printf("xhci: port %u device is not a boot keyboard\n", port);   // TEMP (P5 bring-up)
+	if (candidate.kind == HID_NONE) {
+		printd(DEBUG_USB, "xhci: device on port %u has no wanted boot HID interface\n", port);
 		return false;
 	}
 	if (ep_addr == 0) {
-		printd(DEBUG_USB, "xhci: boot keyboard with no interrupt-IN endpoint?\n");
+		printd(DEBUG_USB, "xhci: boot HID on port %u has no interrupt-IN endpoint\n", port);
 		return false;
 	}
 
 	// 6. Configure + boot protocol + idle.
-	if (!xhci_control_request(0x00, 9 /*SET_CONFIGURATION*/, config_value, 0, NULL, 0))
+	if (!xhci_control_request(&candidate, 0x00, 9 /*SET_CONFIGURATION*/,
+	                          config_value, 0, NULL, 0))
 		return false;
-	// Recover the interface number if the endpoint was found after the
-	// iface field got reset by a following interface descriptor.
-	uint16_t iface_num = (iface >= 0) ? (uint16_t)iface : 0;
-	xhci_control_request(0x21, 0x0B /*SET_PROTOCOL*/, 0 /*boot*/, iface_num, NULL, 0);
-	xhci_control_request(0x21, 0x0A /*SET_IDLE*/, 0, iface_num, NULL, 0);
+	// A STALL leaves EP0 halted. In particular, VBox's emulated USB mouse
+	// stalls SET_PROTOCOL but still sends the conventional mouse report layout.
+	// Do not follow that failure with SET_IDLE: it can only time out on the
+	// halted endpoint and used to turn one immediate cc=6 into a long boot pause.
+	bool boot_protocol = xhci_control_request(&candidate, 0x21,
+	                          0x0B /*SET_PROTOCOL*/, 0 /*boot*/,
+	                          (uint16_t)iface_num, NULL, 0);
+	if (boot_protocol && candidate.kind == HID_KEYBOARD)
+		xhci_control_request(&candidate, 0x21, 0x0A /*SET_IDLE*/, 0,
+		                     (uint16_t)iface_num, NULL, 0);
 
 	// 7. The interrupt-IN endpoint: DCI = ep*2+1 for IN.
 	uint32_t dci = ep_addr * 2 + 1;
-	if (!ring_init(&s_hc.intr))
+	if (!ring_init(&candidate.intr))
 		return false;
 
 	// xHCI interval field is in 125us frames, log2-encoded. LS/FS devices
@@ -733,18 +820,18 @@ static bool xhci_setup_keyboard(uint32_t port, uint32_t speed)
 		interval = ep_interval ? ep_interval - 1 : 3;
 	}
 
-	memset(s_hc.input_ctx, 0, PAGE_SIZE);
-	ictx(0)[1] = 0x1 | (1u << dci);                    // slot + this endpoint
-	ictx(1)[0] = (dci << 27) | (speed << 20);          // context entries = max DCI
-	ictx(1)[1] = (port << 16);
-	uint32_t *ep = ictx(dci + 1);
+	memset(candidate.input_ctx, 0, PAGE_SIZE);
+	ictx(&candidate, 0)[1] = 0x1 | (1u << dci);                    // slot + this endpoint
+	ictx(&candidate, 1)[0] = (dci << 27) | (speed << 20);          // context entries = max DCI
+	ictx(&candidate, 1)[1] = (port << 16);
+	uint32_t *ep = ictx(&candidate, dci + 1);
 	ep[0] = interval << 16;
 	ep[1] = (7u << 3) | (3u << 1) | (ep_mps << 16);    // type 7: interrupt IN, CErr 3
-	ep[2] = (uint32_t)(s_hc.intr.phys | 1);            // TR dequeue | DCS
-	ep[3] = (uint32_t)(s_hc.intr.phys >> 32);
-	ep[4] = (8u << 16) | 8;                            // max ESIT | avg TRB len
+	ep[2] = (uint32_t)(candidate.intr.phys | 1);        // TR dequeue | DCS
+	ep[3] = (uint32_t)(candidate.intr.phys >> 32);
+	ep[4] = (ep_mps << 16) | HID_REPORT_BYTES;          // max ESIT | avg TRB len
 
-	if (xhci_run_command(s_hc.input_ctx_phys, 0,
+	if (xhci_run_command(candidate.input_ctx_phys, 0,
 	        TRB_TYPE(TRB_CONFIG_ENDPOINT) | (slot << 24)) != TRB_CC_SUCCESS) {
 		printd(DEBUG_USB, "xhci: Configure Endpoint failed\n");
 		printf("xhci: Configure Endpoint failed\n");   // TEMP (P5 bring-up)
@@ -752,19 +839,27 @@ static bool xhci_setup_keyboard(uint32_t port, uint32_t speed)
 	}
 
 	// 8. Report buffers + the standing army of in-flight TRBs.
-	s_hc.reports = kmalloc_aligned(PAGE_SIZE);
-	if (s_hc.reports == NULL)
+	candidate.reports = kmalloc_aligned(PAGE_SIZE);
+	if (candidate.reports == NULL)
 		return false;
-	s_hc.reports_phys = virt_to_phys(s_hc.reports);
-	s_hc.kbd_dci = dci;
-	s_hc.kbd_present = true;
-	for (uint32_t i = 0; i < KBD_INFLIGHT; i++)
-		xhci_arm_report_trb(i);
+	candidate.reports_phys = virt_to_phys(candidate.reports);
+	candidate.dci = dci;
+	candidate.present = true;
+	xhci_hid_t *dev = candidate.kind == HID_KEYBOARD ?
+	                  &s_hc->keyboard : &s_hc->mouse;
+	*dev = candidate;
+	if (dev->kind == HID_KEYBOARD)
+		s_keyboard_claimed = true;
+	else
+		s_mouse_claimed = true;
+	for (uint32_t i = 0; i < HID_INFLIGHT; i++)
+		xhci_arm_report_trb(dev, i);
 
-	printf("USB keyboard: port %u slot %u ep %u (interval %u)\n",
-	       port, slot, ep_addr, interval);
-	printd(DEBUG_USB, "xhci: keyboard live — port %u slot %u dci %u mps %u\n",
-	       port, slot, dci, ep_mps);
+	const char *kind = dev->kind == HID_KEYBOARD ? "keyboard" : "mouse";
+	printf("USB %s: port %u slot %u ep %u (interval %u)\n",
+	       kind, port, slot, ep_addr, interval);
+	printd(DEBUG_USB, "xhci: %s live — port %u slot %u dci %u mps %u\n",
+	       kind, port, slot, dci, ep_mps);
 	return true;
 }
 
@@ -791,10 +886,10 @@ static bool xhci_init_controller(pci_device_t *dev)
 	paging_map_pages((pt_entry_t *)kKernelPML4v, kHHDMOffset + map_base,
 	                 map_base, 0x10000 / PAGE_SIZE,
 	                 PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
-	s_hc.cap = (uint8_t *)(kHHDMOffset + bar);
+	s_hc->cap = (uint8_t *)(kHHDMOffset + bar);
 
-	uint8_t caplength = *(volatile uint8_t *)(s_hc.cap + XHCI_CAP_CAPLENGTH);
-	s_hc.op = s_hc.cap + caplength;
+	uint8_t caplength = *(volatile uint8_t *)(s_hc->cap + XHCI_CAP_CAPLENGTH);
+	s_hc->op = s_hc->cap + caplength;
 
 	// BIOS LEGACY HANDOFF — real hardware only, and mandatory there. On real
 	// machines the firmware owns the controller at boot (its SMM code is what
@@ -804,15 +899,15 @@ static bool xhci_init_controller(pci_device_t *dev)
 	// port weirdness. QEMU/VBox have no BIOS in the loop (no such capability
 	// advertised), so this walk simply finds nothing there.
 	{
-		uint32_t hcc = mmio_r32(s_hc.cap, XHCI_CAP_HCCPARAMS1);
+		uint32_t hcc = mmio_r32(s_hc->cap, XHCI_CAP_HCCPARAMS1);
 		uint32_t xecp = (hcc >> 16) & 0xFFFF;   // in 32-bit dwords from cap base
 		while (xecp != 0) {
-			uint32_t cap_hdr = mmio_r32(s_hc.cap, xecp * 4);
+			uint32_t cap_hdr = mmio_r32(s_hc->cap, xecp * 4);
 			if ((cap_hdr & 0xFF) == 1) {         // USB Legacy Support
 				// Bit 24 = OS Owned semaphore; bit 16 = BIOS Owned.
-				mmio_w32(s_hc.cap, xecp * 4, cap_hdr | (1u << 24));
+				mmio_w32(s_hc->cap, xecp * 4, cap_hdr | (1u << 24));
 				for (int i = 0; i < 1000; i++) {
-					cap_hdr = mmio_r32(s_hc.cap, xecp * 4);
+					cap_hdr = mmio_r32(s_hc->cap, xecp * 4);
 					if ((cap_hdr & (1u << 16)) == 0)
 						break;
 					wait(1);
@@ -823,37 +918,37 @@ static bool xhci_init_controller(pci_device_t *dev)
 					printd(DEBUG_USB, "xhci: legacy handoff complete (OS owns the controller)\n");
 				// Silence firmware's SMI sources for good measure (USBLEGCTLSTS,
 				// the next dword): clear every SMI enable, ack pending bits.
-				uint32_t ctlsts = mmio_r32(s_hc.cap, xecp * 4 + 4);
-				mmio_w32(s_hc.cap, xecp * 4 + 4, ctlsts & 0xE0000000u);
+				uint32_t ctlsts = mmio_r32(s_hc->cap, xecp * 4 + 4);
+				mmio_w32(s_hc->cap, xecp * 4 + 4, ctlsts & 0xE0000000u);
 				break;
 			}
 			uint32_t next = (cap_hdr >> 8) & 0xFF;
 			xecp = next ? xecp + next : 0;
 		}
 	}
-	s_hc.rt = s_hc.cap + (mmio_r32(s_hc.cap, XHCI_CAP_RTSOFF) & ~0x1Fu);
-	s_hc.db = (uint32_t *)(s_hc.cap + (mmio_r32(s_hc.cap, XHCI_CAP_DBOFF) & ~0x3u));
+	s_hc->rt = s_hc->cap + (mmio_r32(s_hc->cap, XHCI_CAP_RTSOFF) & ~0x1Fu);
+	s_hc->db = (uint32_t *)(s_hc->cap + (mmio_r32(s_hc->cap, XHCI_CAP_DBOFF) & ~0x3u));
 
-	uint32_t hcs1 = mmio_r32(s_hc.cap, XHCI_CAP_HCSPARAMS1);
-	uint32_t hcc1 = mmio_r32(s_hc.cap, XHCI_CAP_HCCPARAMS1);
+	uint32_t hcs1 = mmio_r32(s_hc->cap, XHCI_CAP_HCSPARAMS1);
+	uint32_t hcc1 = mmio_r32(s_hc->cap, XHCI_CAP_HCCPARAMS1);
 	uint32_t max_slots = hcs1 & 0xFF;
-	s_hc.max_ports = (hcs1 >> 24) & 0xFF;
-	s_hc.ctx_size = (hcc1 & (1u << 2)) ? 64 : 32;   // QEMU: 32. Real HW: often 64.
+	s_hc->max_ports = (hcs1 >> 24) & 0xFF;
+	s_hc->ctx_size = (hcc1 & (1u << 2)) ? 64 : 32;   // QEMU: 32. Real HW: often 64.
 
 	printd(DEBUG_USB, "xhci: BAR 0x%lx, %u ports, %u slots, %u-byte contexts\n",
-	       bar, s_hc.max_ports, max_slots, s_hc.ctx_size);
+	       bar, s_hc->max_ports, max_slots, s_hc->ctx_size);
 
 	// Halt (if running), then reset, then wait for Controller Not Ready
 	// to clear — the spec's mandatory sequence.
-	mmio_w32(s_hc.op, XHCI_OP_USBCMD, mmio_r32(s_hc.op, XHCI_OP_USBCMD) & ~USBCMD_RS);
-	for (int i = 0; i < 100 && !(mmio_r32(s_hc.op, XHCI_OP_USBSTS) & USBSTS_HCH); i++)
+	mmio_w32(s_hc->op, XHCI_OP_USBCMD, mmio_r32(s_hc->op, XHCI_OP_USBCMD) & ~USBCMD_RS);
+	for (int i = 0; i < 100 && !(mmio_r32(s_hc->op, XHCI_OP_USBSTS) & USBSTS_HCH); i++)
 		wait(1);
-	mmio_w32(s_hc.op, XHCI_OP_USBCMD, USBCMD_HCRST);
-	for (int i = 0; i < 500 && (mmio_r32(s_hc.op, XHCI_OP_USBCMD) & USBCMD_HCRST); i++)
+	mmio_w32(s_hc->op, XHCI_OP_USBCMD, USBCMD_HCRST);
+	for (int i = 0; i < 500 && (mmio_r32(s_hc->op, XHCI_OP_USBCMD) & USBCMD_HCRST); i++)
 		wait(1);
-	for (int i = 0; i < 500 && (mmio_r32(s_hc.op, XHCI_OP_USBSTS) & USBSTS_CNR); i++)
+	for (int i = 0; i < 500 && (mmio_r32(s_hc->op, XHCI_OP_USBSTS) & USBSTS_CNR); i++)
 		wait(1);
-	if (mmio_r32(s_hc.op, XHCI_OP_USBSTS) & USBSTS_CNR) {
+	if (mmio_r32(s_hc->op, XHCI_OP_USBSTS) & USBSTS_CNR) {
 		printd(DEBUG_USB, "xhci: controller stuck in reset\n");
 		printf("xhci: controller stuck in reset\n");   // TEMP (P5 bring-up)
 		return false;
@@ -861,10 +956,10 @@ static bool xhci_init_controller(pci_device_t *dev)
 
 	// DCBAA (+ scratchpads, if the controller demands them — QEMU wants 0,
 	// real silicon usually wants a few; refusing = undefined behavior).
-	s_hc.dcbaa = kmalloc_aligned(PAGE_SIZE);
-	if (s_hc.dcbaa == NULL)
+	s_hc->dcbaa = kmalloc_aligned(PAGE_SIZE);
+	if (s_hc->dcbaa == NULL)
 		return false;
-	uint32_t hcs2 = mmio_r32(s_hc.cap, XHCI_CAP_HCSPARAMS2);
+	uint32_t hcs2 = mmio_r32(s_hc->cap, XHCI_CAP_HCSPARAMS2);
 	uint32_t n_scratch = (((hcs2 >> 21) & 0x1F) << 5) | ((hcs2 >> 27) & 0x1F);
 	if (n_scratch > 0) {
 		uint64_t *spb_array = kmalloc_aligned(PAGE_SIZE);
@@ -876,35 +971,35 @@ static bool xhci_init_controller(pci_device_t *dev)
 				return false;
 			spb_array[i] = virt_to_phys(page);
 		}
-		s_hc.dcbaa[0] = virt_to_phys(spb_array);
+		s_hc->dcbaa[0] = virt_to_phys(spb_array);
 		printd(DEBUG_USB, "xhci: %u scratchpad pages granted\n", n_scratch);
 	}
-	mmio_w64(s_hc.op, XHCI_OP_DCBAAP, virt_to_phys(s_hc.dcbaa));
+	mmio_w64(s_hc->op, XHCI_OP_DCBAAP, virt_to_phys(s_hc->dcbaa));
 
 	// Command ring + event ring (interrupter 0, interrupts left DISABLED —
 	// we poll; see xhci.h for why that's a decision and not a shortcut).
-	if (!ring_init(&s_hc.cmd))
+	if (!ring_init(&s_hc->cmd))
 		return false;
-	mmio_w64(s_hc.op, XHCI_OP_CRCR, s_hc.cmd.phys | 1);   // | RCS
+	mmio_w64(s_hc->op, XHCI_OP_CRCR, s_hc->cmd.phys | 1);   // | RCS
 
-	s_hc.evt = kmalloc_aligned(PAGE_SIZE);
-	if (s_hc.evt == NULL)
+	s_hc->evt = kmalloc_aligned(PAGE_SIZE);
+	if (s_hc->evt == NULL)
 		return false;
-	s_hc.evt_phys = virt_to_phys(s_hc.evt);
-	s_hc.evt_cycle = 1;
+	s_hc->evt_phys = virt_to_phys(s_hc->evt);
+	s_hc->evt_cycle = 1;
 	uint64_t *erst = kmalloc_aligned(PAGE_SIZE);   // segment table (1 entry)
 	if (erst == NULL)
 		return false;
-	erst[0] = s_hc.evt_phys;
+	erst[0] = s_hc->evt_phys;
 	erst[1] = RING_TRBS;                            // segment size in TRBs
-	mmio_w32(s_hc.rt, XHCI_IR0_ERSTSZ, 1);
-	mmio_w64(s_hc.rt, XHCI_IR0_ERDP, s_hc.evt_phys);
-	mmio_w64(s_hc.rt, XHCI_IR0_ERSTBA, virt_to_phys(erst));
+	mmio_w32(s_hc->rt, XHCI_IR0_ERSTSZ, 1);
+	mmio_w64(s_hc->rt, XHCI_IR0_ERDP, s_hc->evt_phys);
+	mmio_w64(s_hc->rt, XHCI_IR0_ERSTBA, virt_to_phys(erst));
 
-	mmio_w32(s_hc.op, XHCI_OP_CONFIG, max_slots < 16 ? max_slots : 16);
-	mmio_w32(s_hc.op, XHCI_OP_USBCMD, USBCMD_RS);   // run
+	mmio_w32(s_hc->op, XHCI_OP_CONFIG, max_slots < 16 ? max_slots : 16);
+	mmio_w32(s_hc->op, XHCI_OP_USBCMD, USBCMD_RS);   // run
 
-	s_hc.present = true;
+	s_hc->present = true;
 	return true;
 }
 
@@ -915,18 +1010,18 @@ static void xhci_scan_ports(void)
 	// an unpowered port can't even assert "connected", so: power every dark
 	// port first, then give attach detection a beat before scanning.
 	bool powered_any = false;
-	for (uint32_t port = 1; port <= s_hc.max_ports; port++) {
-		uint32_t sc = mmio_r32(s_hc.op, XHCI_OP_PORTSC(port));
+	for (uint32_t port = 1; port <= s_hc->max_ports; port++) {
+		uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
 		if (!(sc & PORTSC_PP)) {
-			mmio_w32(s_hc.op, XHCI_OP_PORTSC(port), PORTSC_PP);
+			mmio_w32(s_hc->op, XHCI_OP_PORTSC(port), PORTSC_PP);
 			powered_any = true;
 		}
 	}
 	if (powered_any)
 		wait(100);   // spec allows 100ms from power-on to connect detection
 
-	for (uint32_t port = 1; port <= s_hc.max_ports; port++) {
-		uint32_t sc = mmio_r32(s_hc.op, XHCI_OP_PORTSC(port));
+	for (uint32_t port = 1; port <= s_hc->max_ports; port++) {
+		uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
 		if (sc & (PORTSC_CCS | (1u << 17)))   // connected, or connect-change
 			printf("xhci: port %u portsc=0x%08x\n", port, sc);   // TEMP (P5 bring-up)
 		if (!(sc & PORTSC_CCS))
@@ -936,9 +1031,9 @@ static void xhci_scan_ports(void)
 		// Writing PP|PR only: RW1C bits ignore written zeros, so nothing
 		// gets acknowledged by accident.
 		if (!(sc & PORTSC_PED)) {
-			mmio_w32(s_hc.op, XHCI_OP_PORTSC(port), PORTSC_PP | PORTSC_PR);
+			mmio_w32(s_hc->op, XHCI_OP_PORTSC(port), PORTSC_PP | PORTSC_PR);
 			for (int i = 0; i < 200; i++) {
-				sc = mmio_r32(s_hc.op, XHCI_OP_PORTSC(port));
+				sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
 				if ((sc & PORTSC_PED) && !(sc & PORTSC_PR))
 					break;
 				wait(1);
@@ -952,14 +1047,16 @@ static void xhci_scan_ports(void)
 
 		uint32_t speed = PORTSC_SPEED(sc);
 		printd(DEBUG_USB, "xhci: port %u enabled, speed %u\n", port, speed);
-		if (xhci_setup_keyboard(port, speed))
-			return;   // first keyboard wins (v1)
+		xhci_setup_hid(port, speed);
+		if (s_keyboard_claimed && s_mouse_claimed)
+			return;   // both input classes are now live, possibly across HCs
 
-		// Not a keyboard (or setup failed): leave the slot as-is and keep
+		// Not a wanted HID device (or setup failed): leave the slot as-is and keep
 		// scanning. v1 doesn't disable-slot on failure — boot-time only,
 		// nothing leaks that matters, and the code stays readable.
 	}
-	printd(DEBUG_USB, "xhci: no boot-protocol keyboard found on root ports\n");
+	if (!s_hc->keyboard.present && !s_hc->mouse.present)
+		printd(DEBUG_USB, "xhci: no boot-protocol keyboard or mouse found on root ports\n");
 }
 
 void init_xHCI(void)
@@ -987,13 +1084,13 @@ void init_xHCI(void)
 		return;
 	}
 
-	// Bring controllers up one at a time until a keyboard appears. A
-	// controller tried-and-passed-over stays running with its (small, boot-
-	// time) ring allocations orphaned — deliberate: it generates no events
-	// while its ports sit untouched, and un-initializing xHCI cleanly is a
-	// slice nobody needs yet. s_hc always describes the LAST controller
-	// brought up, which is the one with the keyboard when we break.
+	// Keep every controller that owns a supported input device. This matters
+	// on the P5, where physical USB ports may belong to different controllers.
+	// Controllers with no supported root-port device remain running but need
+	// no polling; their small boot-time allocations are deliberately orphaned.
 	for (int c = 0; c < nctrl; c++) {
+		if (s_controller_count >= MAX_XHCI_CONTROLLERS)
+			break;
 		// Introduced by NAME, courtesy of the OS's own PCI id database
 		// (pci_devices.bin + getDeviceNameP — Chris's discovery layer doing
 		// the honors, not anyone's memory).
@@ -1001,16 +1098,22 @@ void init_xHCI(void)
 		printf("xhci: controller %u/%u at %02x:%02x.%u — %s\n", c + 1, nctrl,
 		       ctrls[c]->busNo, ctrls[c]->deviceNo, ctrls[c]->funcNo,
 		       getDeviceNameP(ctrls[c], devname));   // TEMP (P5 bring-up)
-		memset(&s_hc, 0, sizeof(s_hc));
+		s_hc = &s_controllers[s_controller_count];
+		memset(s_hc, 0, sizeof(*s_hc));
 		if (!xhci_init_controller(ctrls[c])) {
 			printf("xhci: bring-up failed on this controller\n");
 			continue;
 		}
 		xhci_scan_ports();
-		if (s_hc.kbd_present)
+		if (s_hc->keyboard.present || s_hc->mouse.present) {
+			s_controller_count++;
+		}
+		if (s_keyboard_claimed && s_mouse_claimed)
 			break;
 	}
-	printf("%s\n", s_hc.kbd_present ? "keyboard attached" : "no USB keyboard");
+	printf("USB input: %s, %s\n",
+	       s_keyboard_claimed ? "keyboard attached" : "no keyboard",
+	       s_mouse_claimed ? "mouse attached" : "no mouse");
 }
 
 void xhci_poll(void)
@@ -1023,11 +1126,14 @@ void xhci_poll(void)
 	// just skips — the winner drains everything anyway.
 	static volatile uint32_t s_poll_busy = 0;
 
-	if (!s_hc.present || !s_hc.kbd_present)
+	if (s_controller_count == 0)
 		return;
 	if (__sync_lock_test_and_set(&s_poll_busy, 1) != 0)
 		return;
-	xhci_drain_events();
-	hid_typematic_tick();   // repeats ride the same ~10ms cadence as the drain
+	for (uint32_t i = 0; i < s_controller_count; i++) {
+		s_hc = &s_controllers[i];
+		xhci_drain_events();
+		hid_typematic_tick(&s_hc->keyboard);
+	}
 	__sync_lock_release(&s_poll_busy);
 }

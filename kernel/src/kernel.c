@@ -283,7 +283,7 @@ void kernel_init()
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 
 	// USB last among the bus drivers: the P5 has no PS/2 port, so this is
-	// where its keyboard comes from. Runs BEFORE task creation on purpose —
+	// where its keyboard and mouse come from. Runs BEFORE task creation on purpose —
 	// the xHCI MMIO mapping lands in the kernel PML4's upper half and every
 	// task PML4 clones those entries at birth (see xhci.c).
 	if (kEnableUSB)
