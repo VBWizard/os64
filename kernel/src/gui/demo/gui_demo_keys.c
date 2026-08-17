@@ -39,7 +39,7 @@ bool gkeys_thread(bool daemon)
 	surface_fill_rect(&content, all, KEYS_BG);
 	const char prompt[] = "click me, then type:";
 	surface_draw_text(&content, 10, 10, prompt, sizeof(prompt) - 1, KEYS_ACCENT, KEYS_BG);
-	gui_window_present(win, NULL);
+	gui_window_publish(win, NULL);
 
 	char line[LINE_MAX + 1] = {0};
 	size_t line_len = 0;
@@ -87,7 +87,7 @@ bool gkeys_thread(bool daemon)
 			while (status[status_len])
 				status_len++;
 			surface_draw_text(&content, 10, 68, status, status_len, KEYS_ACCENT, KEYS_BG);
-			gui_window_present(win, &text_area);
+			gui_window_publish(win, &text_area);
 		}
 
 		sigaction(SIGSLEEP, NULL, kTicksSinceStart + 1, self);

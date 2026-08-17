@@ -28,7 +28,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 int64_t gui_window_destroy(int64_t handle);
 
 // Get the window's drawable CANVAS (the client-owned back buffer). Draw at
-// will — nothing shows until present() snapshots your damage rect into the
+// will — nothing shows until publish() snapshots your damage rect into the
 // compositor-side content surface (atomic frames: the screen only ever
 // shows finished frames). Under userland the canvas pages become a
 // shared-memory mapping; the snapshot semantics stay identical.
@@ -36,7 +36,7 @@ int64_t gui_window_get_surface(int64_t handle, surface_t *out);
 
 // Publish content changes: `damage` in CONTENT coordinates (NULL = all).
 // The compositor picks it up on its next frame.
-int64_t gui_window_present(int64_t handle, const rect_t *damage);
+int64_t gui_window_publish(int64_t handle, const rect_t *damage);
 
 // Poll the window's event queue. 1 = event copied out, 0 = queue empty.
 // Mouse coordinates in events are CONTENT-local.

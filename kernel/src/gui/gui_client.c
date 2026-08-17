@@ -123,7 +123,7 @@ int64_t gui_window_destroy(int64_t handle)
 // Future syscall: SYSCALL_GUI_WINDOW_GET_SURFACE (18), user_ptr_mask 0b10
 // (out-struct). Hands out the window's CANVAS — the client-owned back
 // buffer; the compositor never reads it (it composites `content`, which
-// present() snapshots into — see window.h). Under userland this call maps
+// publish() snapshots into — see window.h). Under userland this call maps
 // the canvas pages into the task's address space and returns the task VA.
 int64_t gui_window_get_surface(int64_t handle, surface_t *out)
 {
@@ -141,9 +141,11 @@ int64_t gui_window_get_surface(int64_t handle, surface_t *out)
 	return 0;
 }
 
-// Future syscall: SYSCALL_GUI_WINDOW_PRESENT (19), user_ptr_mask 0b10
-// (damage rect, NULL allowed).
-int64_t gui_window_present(int64_t handle, const rect_t *damage)
+// Future syscall: SYSCALL_GUI_WINDOW_PUBLISH (19) — renamed from "present"
+// at design review ("present" doubles as an adjective and is swapchain
+// jargon besides). Damage rect is NULLABLE, so it stays OUT of the
+// user_ptr_mask (the SETENV precedent) and the handler validates its copy.
+int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 {
 	int64_t err;
 	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);

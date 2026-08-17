@@ -324,7 +324,7 @@ bool guicomp_thread(bool daemon)
 		                  GUI_COLOR_BLACK, GUI_COLOR_LIGHT_GRAY);
 		surface_draw_text(&s, 12, 40, msg2, sizeof(msg2) - 1,
 		                  GUI_COLOR_DARK_GRAY, GUI_COLOR_LIGHT_GRAY);
-		gui_window_present(hello, NULL);
+		gui_window_publish(hello, NULL);
 	}
 
 	// The console window: from here on, printf/print_n output lands in the

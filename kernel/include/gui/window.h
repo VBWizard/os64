@@ -46,7 +46,7 @@ typedef struct window
     rect_t    frame;      // screen rect INCLUDING decorations
     surface_t content;    // what the COMPOSITOR composites (the front buffer)
     // The client's drawing target (the back buffer). gui_window_get_surface
-    // hands this out; gui_window_present snapshots the damage rect
+    // hands this out; gui_window_publish snapshots the damage rect
     // canvas→content under kGuiLock, so the compositor only ever sees
     // finished frames (GRAPHICS.md "Atomic frames" — snapshot-on-publish).
     // Under userland these pages become task-mapped shared memory; the
@@ -91,7 +91,7 @@ bool wm_pop_event(window_t *w, input_event_t *out);
 void wm_composite(surface_t *backbuffer, rect_t damage);
 
 // Where the content area sits on screen (for event coordinate translation
-// and present-rect mapping).
+// and publish-rect mapping).
 static inline rect_t wm_content_rect_on_screen(const window_t *w)
 {
     return (rect_t){

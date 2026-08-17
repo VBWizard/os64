@@ -20,6 +20,8 @@
 #include "os64/klog.h"     // os64_logent_t — klog_read's out-struct (abi)
 #include "thread_join.h"   // the object behind HANDLE_THREAD
 #include "console.h"
+#include "gui/gui_client.h"   // the GUI client API rows 16-21 dispatch into
+#include "gui/window.h"       // GUI_WINDOW_TITLE_MAX — the title copy's bound
 #include "tty.h"     // console writes land on the CALLER's terminal now
 #include "handle.h"
 #include "pipe.h"
@@ -143,6 +145,18 @@ static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_heap_report(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_destroy(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_event_poll(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_screen_info(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -205,6 +219,19 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GETPID,    "getpid",    syscall_getpid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register)
 	SYSCALL_DEFINE(SYSCALL_SET_TIME,  "set_time",  syscall_set_time,  false, 0x00),  // arg0 = UTC epoch bits; monotonic clock is untouched
 	SYSCALL_DEFINE(SYSCALL_HEAP_REPORT, "heap_report", syscall_heap_report, false, 0x01),  // arg0 = user VA of an os64_heap_report_t (0 withdraws)
+	// ── GUI (16-21): GRAPHICS.md's userland boundary, live 2026-08-17.
+	// Ownership (migration step 1) went in BEFORE these doors opened: every
+	// handle below is checked against its owner inside gui_client.c, so a
+	// task can never touch a window it did not create. 22 (event_wait) ships
+	// LAST with the block/wake plumbing (migration step 5). Nullable
+	// pointers stay OUT of the masks per the SETENV precedent — their
+	// handlers validate the copy instead.
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_CREATE,      "gui_window_create",      syscall_gui_window_create,      false, 0x01),  // arg0 = title string
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_DESTROY,     "gui_window_destroy",     syscall_gui_window_destroy,     false, 0x00),  // arg0 = handle (a number, not a pointer)
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_SURFACE, "gui_window_get_surface", syscall_gui_window_get_surface, false, 0x02),  // arg1 = surface_t out
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_PUBLISH,     "gui_window_publish",     syscall_gui_window_publish,     false, 0x00),  // arg1 = rect_t in OR NULL (nullable — handler validates)
+	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
+	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 };
 
 uint64_t _syscall_dispatch(
@@ -3464,5 +3491,120 @@ static uint64_t syscall_heap_report(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	printd(DEBUG_SYSCALL, "heap_report: task %s publishes its heap report at 0x%016lx\n",
 	       task->exename, (uint64_t)arg0);
+	return 0;
+}
+
+// ── The GUI rows (16-21) — GRAPHICS.md's userland boundary, step 2 ──────────
+// Thin translation shims, deliberately: copy what crosses the ring boundary,
+// then call the SAME gui_client.h functions the kernel's own clients
+// (guicomp, the console, the demos) call directly — ownership checks,
+// locking, and every piece of real logic live there, written once. Handlers
+// run under the caller's CR3 like every row in this table
+// (needs_cr3_switch=false): GUI state is upper-half and visible from any
+// address space, and the user pointers being copied are lower-half and
+// visible only from THIS one.
+
+static uint64_t syscall_gui_window_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	// arg0 = title (mask 0x01), arg1/arg2 = x/y (signed), arg3/arg4 = w/h,
+	// arg5 = flags. A title longer than the window's own field is REFUSED,
+	// not truncated — the same convention every string crossing this
+	// boundary follows (a silently shortened name "succeeded" and didn't).
+	char title[GUI_WINDOW_TITLE_MAX];
+	if (!copy_user_string((const char *)arg0, title, sizeof(title)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+
+	return (uint64_t)gui_window_create(title, (int32_t)arg1, (int32_t)arg2,
+	                                   (uint32_t)arg3, (uint32_t)arg4, arg5);
+}
+
+static uint64_t syscall_gui_window_destroy(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	return (uint64_t)gui_window_destroy((int64_t)arg0);
+}
+
+static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 == 0)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+
+	surface_t s;
+	int64_t rc = gui_window_get_surface((int64_t)arg0, &s);
+	if (rc != 0)
+		return (uint64_t)rc;
+
+	// Until the surface pivot (migration step 3), the canvas lives at a
+	// kernel VA a ring-3 caller can neither dereference nor deserves to
+	// see, so it gets the true geometry and a NULL pixel pointer — "you
+	// cannot draw yet", said truthfully, instead of a kernel address that
+	// is both useless and a layout leak. The pivot replaces this NULL with
+	// a task VA and deletes exactly this one line.
+	s.pixels = NULL;
+
+	if (!copy_to_user_buffer((void *)arg1, &s, sizeof(s)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return 0;
+}
+
+static uint64_t syscall_gui_window_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	// The damage rect is NULLABLE (NULL = the whole content), so arg1 stays
+	// out of the dispatcher's pointer mask — the SETENV precedent — and the
+	// copy below is the validation for the non-NULL case.
+	rect_t local;
+	const rect_t *damage = NULL;
+	if (arg1 != 0) {
+		if (!copy_user_buffer((const void *)arg1, &local, sizeof(local)))
+			return (uint64_t)GUI_ERR_BAD_ARGS;
+		damage = &local;
+	}
+
+	return (uint64_t)gui_window_publish((int64_t)arg0, damage);
+}
+
+static uint64_t syscall_gui_event_poll(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 == 0)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+
+	// Popped into a kernel local FIRST, copied out only on success — the
+	// queue must never lose an event to a bad destination pointer... which
+	// is why the copy failing after a successful pop still returns
+	// BAD_ARGS: the event is gone either way, and pretending otherwise
+	// would be worse. A caller handing in an unmapped buffer has larger
+	// problems than one dropped keystroke.
+	input_event_t ev;
+	int64_t rc = gui_event_poll((int64_t)arg0, &ev);
+	if (rc == 1 && !copy_to_user_buffer((void *)arg1, &ev, sizeof(ev)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return (uint64_t)rc;
+}
+
+static uint64_t syscall_gui_screen_info(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	// Both out-pointers are nullable — ask for either dimension or both —
+	// so neither sits in the mask; each copy validates its own target.
+	uint32_t w = 0, h = 0;
+	int64_t rc = gui_screen_info(&w, &h);
+	if (rc != 0)
+		return (uint64_t)rc;
+
+	if (arg0 != 0 && !copy_to_user_buffer((void *)arg0, &w, sizeof(w)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	if (arg1 != 0 && !copy_to_user_buffer((void *)arg1, &h, sizeof(h)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return 0;
 }

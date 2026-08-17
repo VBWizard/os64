@@ -98,7 +98,7 @@ void gui_console_start(void)
 	gui_window_get_surface(s_win, &s_content);
 	surface_fill_rect(&s_content,
 	                  (rect_t){0, 0, (int32_t)s_content.width, (int32_t)s_content.height}, CON_BG);
-	gui_window_present(s_win, NULL);
+	gui_window_publish(s_win, NULL);
 
 	// Flip the diversion on LAST — from here, every print_n lands in the grid.
 	kConsoleSink = gui_console_sink;
@@ -126,5 +126,5 @@ void gui_console_render_if_dirty(void)
 	s_dirty = false;
 	spinlock_release_irqrestore(&s_con_lock, flags);
 
-	gui_window_present(s_win, NULL);
+	gui_window_publish(s_win, NULL);
 }

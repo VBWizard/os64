@@ -412,17 +412,24 @@
 #define SYSCALL_HANDLE_CONSOLE_OUT  1
 #define SYSCALL_HANDLE_CONSOLE_ERR  2
 
-// --- GUI syscalls: RESERVED, not yet in the dispatch table -----------------
-// The GUI client API (kernel gui/gui_client.h) is kernel-direct today; when
-// userland GUI apps arrive these numbers go live — see GRAPHICS.md "The
-// userland boundary" for the full design (16-21 defined there, 22 =
-// gui_event_wait reserved).
+// --- GUI syscalls (16-21 LIVE since 2026-08-17; 22 still reserved) ---------
+// The userland boundary of GRAPHICS.md, dispatch rows in syscall.c. The
+// kernel's own GUI clients (guicomp, the console, the demos) keep calling
+// gui_client.h functions directly — these rows exist for ring 3, where every
+// argument is a register a task filled and every handle is checked against
+// its OWNER (a task can never touch a window it did not create;
+// GUI_ERR_NOT_OWNER). Until the surface pivot (migration step 3),
+// GET_SURFACE reports geometry but a NULL pixel pointer to ring-3 callers —
+// the canvas VA only becomes a task VA at the pivot, and handing out a
+// kernel address in the meantime would be a truthless answer AND a layout
+// leak. PUBLISH was born PRESENT; renamed at design review ("present"
+// doubles as an adjective, and is swapchain jargon besides).
 #define SYSCALL_GUI_WINDOW_CREATE       16
 #define SYSCALL_GUI_WINDOW_DESTROY      17
 #define SYSCALL_GUI_WINDOW_GET_SURFACE  18
-#define SYSCALL_GUI_WINDOW_PRESENT      19
+#define SYSCALL_GUI_WINDOW_PUBLISH      19
 #define SYSCALL_GUI_EVENT_POLL          20
 #define SYSCALL_GUI_SCREEN_INFO         21
-#define SYSCALL_GUI_EVENT_WAIT          22
+#define SYSCALL_GUI_EVENT_WAIT          22   // blocking poll — ships LAST (migration step 5)
 
 #endif
