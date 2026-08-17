@@ -24,6 +24,22 @@
 extern struct Framebuffer kFrameBuffer;
 extern uintptr_t kHHDMOffset;
 
+// ── The ABI layout lock (kernel side) ───────────────────────────────────────
+// abi/include/os64/gui.h defines ring 3's view of rect_t / surface_t /
+// input_event_t and asserts these SAME numbers on its side. The two headers
+// never include each other (the kernel's stay kernel-clean, the ABI's stays
+// freestanding); these literals are the handshake. If either definition
+// drifts — a field added, a type widened — one of the two builds refuses,
+// which is the ext2-superblock trick applied to a syscall boundary: layouts
+// two parties must agree on get a tripwire, not trust.
+_Static_assert(sizeof(rect_t) == 16, "rect_t drifted from the GUI ABI (os64/gui.h)");
+_Static_assert(sizeof(surface_t) == 24, "surface_t drifted from the GUI ABI (os64/gui.h)");
+_Static_assert(sizeof(input_event_t) == 32, "input_event_t drifted from the GUI ABI (os64/gui.h)");
+_Static_assert(__builtin_offsetof(input_event_t, key) == 4,
+               "input_event_t union moved — GUI ABI break");
+_Static_assert(__builtin_offsetof(input_event_t, tick) == 24,
+               "input_event_t tick moved — GUI ABI break");
+
 // Handle table: handle = index + 1, so 0 is never a valid handle. 32 windows
 // is plenty until real userland apps exist. Guarded by kGuiLock.
 #define GUI_MAX_WINDOWS 32

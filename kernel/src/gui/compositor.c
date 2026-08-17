@@ -429,14 +429,41 @@ void gui_start(void)
 		affinity == THREAD_NO_AFFINITY ? "THREAD_NO_AFFINITY/" : "APIC ",
 		affinity);
 
-	// Demo apps. Unpinned — they're ordinary clients and can run anywhere;
-	// their window calls synchronize through kGuiLock like anyone else's.
-	task_t *demo;
-	demo = task_create("/gbounce", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
-	demo->threads->regs.RDI = 1;
-	scheduler_submit_new_task(demo);
-
-	demo = task_create("/gkeys", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
-	demo->threads->regs.RDI = 1;
-	scheduler_submit_new_task(demo);
+	// Demo apps — RING-3 ELFs since migration step 4 (2026-08-17). The
+	// kernel-thread originals (gui/demo/) were GRAPHICS.md's placeholder
+	// clients, and porting them to userland on libdraw was the stated
+	// acceptance test for the whole boundary; the ports pass, so the boot
+	// spawns the real thing now. What that buys, in kill(1) terms: these
+	// are ordinary tasks — heap, /proc row, the syscall-boundary terminate
+	// checkpoint ~100x a second, and an exit sweep for their windows — so
+	// the experiment that discovered a kernel-thread ball cannot be shot
+	// (Chris, 2026-08-17) now ends with a dead ball and a reclaimed window.
+	// autoReap because ktask never waits (the husk-launch decree, task.c).
+	// A launch failure is a report, not a boot failure: a disk image
+	// without the demos is a valid image. The kernel-thread demo code
+	// stays in the tree as the reference the ports were checked against;
+	// nothing spawns it anymore.
+	// (Non-const strings because task_create's path parameter predates
+	// const-correctness — it does not modify them.)
+	static char demo_bounce[] = "/bin/gbounce";
+	static char demo_keys[]   = "/bin/gkeys";
+	char *demos[] = { demo_bounce, demo_keys };
+	for (unsigned i = 0; i < sizeof(demos) / sizeof(demos[0]); i++) {
+		task_t *demo = task_create(demos[i], 0, NULL, kKernelTask, false,
+		                           THREAD_NO_AFFINITY);
+		if (demo == NULL) {
+			// BOTH sinks, deliberately: printf is FRAMEBUFFER-ONLY (the
+			// panic-pipeline scar), so a glass-only complaint vanishes the
+			// moment the desktop paints over it — which on the P5 cost a
+			// reboot and a log search that found nothing (2026-08-17, the
+			// first GUI boot against a root that predated the ring-3
+			// demos). The wire copy is unconditional: a missing binary at
+			// boot is exactly the fact a log exists to keep.
+			printf("gui_start: %s launch failed (not on the image?)\n", demos[i]);
+			printd(DEBUG_BOOT, "gui_start: %s launch failed (not on the image?)\n", demos[i]);
+			continue;
+		}
+		demo->autoReap = true;
+		scheduler_submit_new_task(demo);
+	}
 }

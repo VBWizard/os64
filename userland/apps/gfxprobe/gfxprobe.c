@@ -44,21 +44,13 @@
 #define PROBE_POLL          7
 #define PROBE_OWNERSHIP     8   // the fence FAILED — worth a loud noise
 
-// The GUI error values (gui_client.h). Mirrored here rather than included:
-// the kernel header drags in kernel types, and the ABI-published gui.h that
-// will own these numbers arrives with libos64gfx (migration step 4).
-#define GUI_ERR_NOT_RUNNING (-4)
-#define GUI_ERR_NOT_OWNER   (-5)
-
-// Layout mirror of the kernel's surface_t (gui_types.h): pointer + three
-// uint32s. The rows froze this shape when they went live; libos64gfx's ABI
-// header formalizes it at step 4.
-typedef struct {
-    uint64_t pixels;
-    uint32_t width;
-    uint32_t height;
-    uint32_t pitch_px;
-} probe_surface_t;
+// Step 4 delivered the ABI header this probe used to mirror by hand —
+// os64/gui.h owns the error values and the boundary structs now (and both
+// sides of the boundary carry _Static_asserts pinning the layouts). The
+// probe keeps calling the RAW syscalls on purpose: it tests the boundary,
+// not the wrappers.
+#define GUI_ERR_NOT_RUNNING OS64_GUI_ERR_NOT_RUNNING
+#define GUI_ERR_NOT_OWNER   OS64_GUI_ERR_NOT_OWNER
 
 int main(int argc, char **argv)
 {
@@ -93,7 +85,7 @@ int main(int argc, char **argv)
     os64_printf("gfxprobe: window handle %ld\n", (long)win);
 
     // 18: get_surface — geometry out, and (post-pivot) a REAL canvas.
-    probe_surface_t surf = {0xDEADBEEF, 0, 0, 0};
+    os64_gui_surface_t surf = {(uint32_t *)0xDEADBEEF, 0, 0, 0};
     rc = (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_GET_SURFACE,
                                 (uint64_t)win, (uint64_t)&surf);
     if (rc != 0)
@@ -105,7 +97,7 @@ int main(int argc, char **argv)
     // strict on the pointer: it must exist, and it must be a LOWER-HALF
     // address — a kernel-half pointer here would be the exact leak the
     // pre-pivot NULL existed to prevent.
-    if (surf.pixels == 0 || surf.pixels >= (1ULL << 47) ||
+    if (surf.pixels == 0 || (uint64_t)surf.pixels >= (1ULL << 47) ||
         surf.width == 0 || surf.width > 220 ||
         surf.height == 0 || surf.height > 140 || surf.pitch_px < surf.width)
     {
