@@ -12,6 +12,7 @@ extern bool kEnableKWorker;
 extern bool kEnableGUI;
 extern bool kRunTests;
 extern bool kEnableUSB;
+extern bool kUSBQuiet;
 extern bool kEnableNet;
 // Static IPv4 configuration strings (ipv4.c owns them; empty = the 10.0.2.x
 // NAT-convention defaults shared by QEMU slirp and VirtualBox NAT). DHCP
@@ -282,6 +283,10 @@ static cmdopt_t cmdopts[] = {
     {"CACHE", OPT_INT, &kBlockCacheCapMB, 0, 0},
     {"NOCACHE", OPT_BOOL, &kBlockCacheDisabled, true, 0},
     {"NOUSB", OPT_BOOL, &kEnableUSB, false, 0},
+    // UPPERCASE, like every flag since the 642eb9f lesson. Opt-in 2.4GHz
+    // hygiene — see kUSBQuiet's declaration (kernel.c) for the two burn
+    // scars that made this a flashlight instead of a default.
+    {"USBQUIET", OPT_BOOL, &kUSBQuiet, true, 0},
     {"NONET", OPT_BOOL, &kEnableNet, false, 0},
     {"DEBUG_NET", OPT_UINT128_OR, &kDebugLevel, DEBUG_NET, 0},
     // The NVMe command-stream histogram (nvme.c iostat) rides this level —

@@ -116,6 +116,19 @@ int kSchedBackstopMS = SCHED_BACKSTOP_MS;
 bool kEnableKWorker = false;
 // Cleared by the NOUSB cmdline flag — skips xHCI bring-up entirely.
 bool kEnableUSB = true;
+// Set by USBQUIET: unpower the ports of idle xHCI controllers after
+// enumeration, to hush the 2.4GHz hash USB3 signaling radiates at wireless
+// dongles (the Intel 2012 whitepaper problem; measured on the P5 as a
+// 10-feet-under-Windows / 6-inches-under-os64 mouse). DEFAULT OFF, and the
+// caution is twice-earned: the per-port version browned out both dongles
+// (a USB3 connector is TWO xHCI ports sharing VBUS, and the "empty" twin
+// got doused), and on the P5's AMD Rembrandt platform — FIVE controllers:
+// two USB3.1 (1022:161d/161e), one USB2-only (161f), two USB4-side
+// (15d6/15d7) — a connector's twins may live on DIFFERENT controllers, so
+// even whole-idle-controller dousing can cut a live connector's power.
+// Until the Supported Protocol capability walk can prove which ports are
+// safe, this stays an opt-in flashlight, the NOCACHE/NOBACKSTOP pattern.
+bool kUSBQuiet = false;
 // Cleared by the NONET cmdline flag — skips NIC bring-up (NETWORK.md arc).
 bool kEnableNet = true;
 // Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,

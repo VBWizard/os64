@@ -33,6 +33,7 @@ extern pci_device_t* kPCIDeviceFunctions;
 extern uint8_t kPCIDeviceCount, kPCIFunctionCount;
 extern uintptr_t kHHDMOffset;
 extern uintptr_t kKernelPML4v;
+extern bool kUSBQuiet;   // USBQUIET — the opt-in 2.4GHz hygiene flashlight
 
 // ── Register offsets (xHCI spec ch. 5) ──────────────────────────────────────
 
@@ -1003,6 +1004,60 @@ static bool xhci_init_controller(pci_device_t *dev)
 	return true;
 }
 
+// Cut power to every port with NOTHING CONNECTED, once enumeration is done.
+//
+// The scan above powers every dark port (it has to — an unpowered port
+// cannot even assert "connected"), but a powered EMPTY port never goes
+// quiet: it sits in link-training/polling forever, and SuperSpeed
+// signaling radiates broadband hash straight across the 2.4GHz band —
+// Intel wrote the canonical whitepaper on USB3 ports jamming wireless
+// receivers back in 2012, and it is why Logitech ships extension cradles.
+// Windows hides this by parking idle links in low-power states; os64 has
+// no link power management yet, so the honest v1 move is to stop lighting
+// ports nobody is using. MEASURED CAUSE (the P5, 2026-08-17): the same
+// wireless mouse dongle reached 10 feet under Windows and 6 inches under
+// os64, same physical port — the difference was every other port on the
+// machine shouting next to it.
+//
+// WHOLE CONTROLLERS ONLY, and the restriction is a burn scar hours old:
+// the first version of this pass doused every CCS=0 port everywhere, and
+// the P5 answered with both dongles enumerating ("attached") and then
+// going deaf at any distance. The suspected mechanism: one physical USB3
+// CONNECTOR is TWO xHCI ports — a USB2 protocol port and a USB3 protocol
+// port, PAIRED, sharing the connector's VBUS. A full-speed dongle lives
+// on the USB2 twin; its USB3 twin reads empty; dousing the "empty" twin
+// cuts the CONNECTOR's power and browns out the device that just
+// enumerated — invisible on QEMU, whose twins are not electrically
+// paired. Discriminating pairing from genuine emptiness needs the
+// Supported Protocol capability walk (a later slice), so v1 keeps the
+// blunt-but-safe rule: a controller with ANY connected port is left
+// entirely alone, and only controllers with NOTHING anywhere go dark —
+// which were the loudest nuisance regardless (every port empty and
+// shouting). Writing 0 to PORTSC is safe here: PP=0 is the point, the
+// RW1C change bits ignore written zeros, and PED only acts on ones.
+static void xhci_unpower_empty_ports(void)
+{
+	for (uint32_t port = 1; port <= s_hc->max_ports; port++) {
+		uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
+		if (sc & PORTSC_CCS) {
+			printd(DEBUG_USB, "xhci: controller has connected port(s) — leaving all its ports powered\n");
+			return;
+		}
+	}
+
+	uint32_t doused = 0;
+	for (uint32_t port = 1; port <= s_hc->max_ports; port++) {
+		uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
+		if (sc & PORTSC_PP) {
+			mmio_w32(s_hc->op, XHCI_OP_PORTSC(port), 0);
+			doused++;
+		}
+	}
+	if (doused > 0)
+		printd(DEBUG_USB, "xhci: idle controller — %u port(s) unpowered (2.4GHz hygiene)\n",
+		       doused);
+}
+
 static void xhci_scan_ports(void)
 {
 	// Real root hubs frequently power up with ports OFF (PP=0) — a state a
@@ -1105,6 +1160,13 @@ void init_xHCI(void)
 			continue;
 		}
 		xhci_scan_ports();
+		// The hygiene pass runs ONLY under USBQUIET (kernel.c has the two
+		// burn scars — paired-VBUS twins, possibly ACROSS controllers on
+		// this AMD platform). When enabled, every scanned controller gets
+		// the pass, kept or not — an idle controller is all empty powered
+		// ports, the loudest radio nuisance of the lot.
+		if (kUSBQuiet)
+			xhci_unpower_empty_ports();
 		if (s_hc->keyboard.present || s_hc->mouse.present) {
 			s_controller_count++;
 		}
