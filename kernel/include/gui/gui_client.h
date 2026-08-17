@@ -16,6 +16,10 @@
 #define GUI_ERR_NO_RESOURCES    (-2)
 #define GUI_ERR_BAD_ARGS        (-3)
 #define GUI_ERR_NOT_RUNNING     (-4)
+// Handle exists but belongs to another task. Distinct from INVALID_HANDLE
+// on purpose: "no such window" and "exists, and is none of your business"
+// are different answers, and only the first should tempt a caller to retry.
+#define GUI_ERR_NOT_OWNER       (-5)
 
 // Create a window (frame includes decorations). Returns a handle > 0.
 int64_t gui_window_create(const char *title, int32_t x, int32_t y,

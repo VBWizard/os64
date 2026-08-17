@@ -31,6 +31,16 @@ typedef struct window
 
     uint32_t  id;
     uint32_t  flags;
+
+    // The task that created this window through the client API (task.h
+    // taskID), stamped by gui_window_create. Ownership is a CLIENT-API
+    // concept: gui_client.c enforces it on every handle lookup and
+    // gui_task_destroy_windows sweeps by it on task exit — the wm_* layer
+    // never reads it (mechanism here, policy at the boundary). Kernel
+    // daemons (guicomp's hello window, the console) own theirs the same
+    // way; they simply never exit.
+    uint64_t  owner;
+
     char      title[GUI_WINDOW_TITLE_MAX];
 
     rect_t    frame;      // screen rect INCLUDING decorations

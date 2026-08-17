@@ -176,6 +176,7 @@ hobby-scale judgment calls — re-rank freely.
 | Runtime resolution switching (only `framebuffers[0]` used) | Feature-gate | M | UX | GRAPHICS #8 |
 | Verify SIGSLEEP wake latency holds under load (fixed to ~1 tick; unverified at load) | Cleanup | S | none | GRAPHICS #10 |
 | **libdraw/libui** userland graphics library — port surface.c primitives to ring-3 (L1) + the widget model (L2, grown app-driven); embedded PSF1 font; cadence-agnostic frame loop | Feature-gate | M–L | after GUI syscalls 16-22 land in the dispatch table + libos64 scaffolding | LIBDRAW.md |
+| **The terminal app needs a pty-shaped seam** — a userland program owning another program's stdio (husk's stdin/stdout wired to a GUI window instead of a VT). No such kernel object exists: tty binding is task↔VT only. Unix hit this wall in the '70s and invented the pty (a pipe that lies about being a terminal — why `script`, Emacs shell-mode, and every terminal emulator since work); os64's shape will be its own, likely a handle pair with one tty-shaped end. Same machinery the pipes-into-pagers `/dev/tty` problem wants (Chris's "not now", 2026-08-13) — one design serves both. Booked at GUI-toolkit arc start, BEFORE coding, per the known-debt rule | Feature-gate | M | GUI toolkit Phase D (design) / Phase E (the terminal is the consumer) | GRAPHICS.md phases 2026-08-17; tickless-backstop candy list |
 
 ## Build system
 

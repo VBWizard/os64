@@ -795,6 +795,13 @@ static void task_destroy(task_t *t)
 	// deadChild list is still readable.
 	task_reparent_orphans(t);
 
+	// Belt-and-suspenders for the window ownership rule: the exit path
+	// already swept this task's windows (task_exit_teardown), but burial is
+	// the LAST gate before its pages are freed, and any future path that
+	// buries without a clean exit must not leave a window compositing freed
+	// memory. Idempotent — finds nothing when exit already did the job.
+	gui_task_destroy_windows(t->taskID);
+
 	thread_t *th = t->threads;
 	while (th != NULL) {
 		thread_t *next = th->taskNext;
@@ -1154,6 +1161,18 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 		// at its own next boundary, in its own context, which is the whole
 		// design (see task_terminate_sibling_threads).
 		task_terminate_sibling_threads(task, thread);
+
+		// Windows first, then handles, both before pages: any window this
+		// task created through the GUI client API dies with it — GRAPHICS.md's
+		// ownership rule, "windows die before pages, always, on every exit
+		// path". Today a window's surfaces are kernel-side kmallocs and this
+		// ordering is merely tidy; after the surface pivot (migration step 3)
+		// the canvas will be task-owned pages mapped in THIS address space,
+		// and this hook standing before the teardown is what keeps the
+		// lazy-HHDM tripwire silent on that day. GUI state is upper-half, so
+		// taking kGuiLock under the task's CR3 is safe; a free no-op when the
+		// GUI is off or the task owned nothing.
+		gui_task_destroy_windows(task->taskID);
 
 		// Release every handle this task still holds — BEFORE it is enqueued as
 		// a dead child. For a pipe end this is the refcount that decides EOF /

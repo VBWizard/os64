@@ -34,4 +34,14 @@ void gui_damage_add(rect_t screen_rect);
 // panic text renders raw on the framebuffer. Safe from ANY context.
 void gui_emergency_disable(void);
 
+// Task-lifecycle hook: destroy every window the dying task still owns,
+// BEFORE its pages are torn down — GRAPHICS.md's ownership rule, "windows
+// die before pages, always, on every exit path". Called from task.c's exit
+// teardown (windows vanish when the app dies, not when it is buried) and
+// again from task_destroy as belt-and-suspenders for any path that buries
+// without a clean exit. Idempotent — the second call finds nothing — and a
+// free no-op when the GUI is off or the task never made a window. Takes
+// kGuiLock; GUI state is upper-half, so this is safe under any CR3.
+void gui_task_destroy_windows(uint64_t taskID);
+
 #endif // GUI_COMPOSITOR_H
