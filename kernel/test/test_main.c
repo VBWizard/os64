@@ -2129,7 +2129,7 @@ static bool test_vfs_rename(void)
 //
 // Deliberately NOT covered here: crash recovery. The mount-time replay can
 // only be exercised by dying and rebooting, which no in-boot test can do —
-// that one is a harness procedure (VERIFICATION.md), driven by ORPHANCRASH.
+// that one is a hand-driven, two-boot harness procedure (VERIFICATION.md).
 #define OR_FAIL(...) do { \
         printf("FAIL ext2_orphan: " __VA_ARGS__); \
         printd(DEBUG_TESTS, "\tFAIL: test_ext2_orphan - " __VA_ARGS__); \

@@ -259,11 +259,11 @@ static void ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
 	if (slot < 0) slot = (freeSlot >= 0) ? freeSlot : oldest;
 	if (slot < 0)
 	{
-		// Every slot holds a live wait for a different neighbor. Refuse
-		// rather than evict someone else's packet, and count it — the
-		// caller gets exactly the answer it used to get.
 		// Every slot holds a live wait for a different neighbor. Give up
-		// on holding this one rather than evicting somebody else's.
+		// on holding this one rather than evicting somebody else's — the
+		// caller was told -2 either way, so it loses nothing it ever had.
+		// (No counter here: tx_awaiting_arp is bumped at the call site,
+		// parked or not; tx_parked_for_arp only counts an actual hold.)
 		spinlock_release_irqrestore(&s_pending_lock, flags);
 		return;
 	}
