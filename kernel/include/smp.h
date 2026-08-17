@@ -94,6 +94,23 @@ typedef struct
 	uint64_t acctZeroTSC;          // this core's meter epoch (first pass)
 	uint64_t acctLastDispatchTSC;  // when the current thread got the core
 	uint64_t acctSchedCycles;      // cycles spent inside scheduler passes
+
+	// acctCurrentHalted: the CURRENT thread is parked in an sti;hlt of its
+	// own making (the compositor's idle idiom — the one thread that idles
+	// OUTSIDE the scheduler's view). While raised, every charge site
+	// redirects this core's span to acctIdleThread instead of the current
+	// thread: halted time is idle time, whoever's rbp it happens under.
+	// Raised by mpAcctHaltBegin (under cli, after settling the real work),
+	// dropped by mpAcctHaltEnd AND by every dispatch (a switched-in thread
+	// is never halted). Born 2026-08-17, the day top showed guicomp at 95%
+	// of a core while its flush counter proved it doing nothing — hlt-in-
+	// task bills as work unless the books are told otherwise.
+	bool acctCurrentHalted;
+	// This core's idle THREAD — the halted spans' rightful owner. Set once
+	// at idle-task creation (kernel_init); both fields are only ever read
+	// and written by charge code running ON this core, so the same-core-TSC
+	// discipline the meters live by is preserved automatically.
+	thread_t *acctIdleThread;
 } __attribute__((aligned(64))) core_local_storage_t;
 
 extern cpu_t *kCPUInfo;

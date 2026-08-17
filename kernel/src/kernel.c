@@ -430,6 +430,12 @@ void kernel_init()
 			sprintf(idleTaskName, "/idle%u",cnt);
 			kIdleTasks[cnt] = task_create(idleTaskName, 0, NULL, kKernelTask, true, kCPUInfo[cnt].apicID);
 			scheduler_submit_new_task(kIdleTasks[cnt]);
+			// Hand each core's CLS its idle THREAD — the target the
+			// accounting charge sites redirect to while acctCurrentHalted
+			// is up (smp.h has the doctrine). Set here, once, before the
+			// scheduler ever runs a pass.
+			get_core_local_storage_for_core(cnt)->acctIdleThread =
+				kIdleTasks[cnt]->threads;
 		}
 
 	BOOTMARK("idle-tasks-created");
