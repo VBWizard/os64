@@ -75,6 +75,28 @@ static uint32_t tcp_initial_seq(uint32_t peer_ip, uint16_t peer_port, uint16_t l
 static uint16_t tcp_window(tcp_conn_t* c)
 {
 	uint32_t free_space = TCP_RCV_BUF - c->rcv_count;
+
+	// SILLY WINDOW SYNDROME, RECEIVER SIDE (RFC 1122 4.2.3.3), and the
+	// single most expensive line in this file until 2026-08-16.
+	//
+	// A window smaller than one segment is worse than no window at all. A
+	// correct sender will not split a segment to squeeze into it (that is
+	// its half of the same rule), so it waits — and we, seeing a NON-ZERO
+	// window, never considered ourselves stalled and never sent the update
+	// that would have freed it. Both sides waited politely until the
+	// sender's persist timer fired.
+	//
+	// The P5 measured the cost exactly: six segments would fill the buffer,
+	// the window would land on 873 bytes, and then FIVE SECONDS of silence
+	// before the sender probed again. ~7.3KB per 5s = the 1.7 KB/s that
+	// made a 100BASE-TX link perform like a 1993 modem.
+	//
+	// Rounding a useless window down to zero is what makes it honest: zero
+	// means "stop, I will tell you when", which is a promise the code below
+	// actually keeps. 873 meant "go ahead" while nothing could.
+	if (free_space < TCP_MSS)
+		return 0;
+
 	return (uint16_t)(free_space > 0xFFFF ? 0xFFFF : free_space);
 }
 
@@ -662,6 +684,21 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 				((uint8_t*)buf)[i] = c->rcv_buf[(c->rcv_head + i) % TCP_RCV_BUF];
 			c->rcv_head = (c->rcv_head + n) % TCP_RCV_BUF;
 			c->rcv_count -= n;
+
+			// AND TELL THEM, NOW. Draining the buffer is the event that
+			// makes the sender's data welcome again; nobody else is going
+			// to mention it on our behalf. Before this, the only window
+			// update lived in tcp_poll, so the best case was a scheduler
+			// pass of silence and the WORST case was forever — because
+			// that path only ran when we had advertised exactly zero, and
+			// a window of 873 is not zero.
+			//
+			// Gated on actually having been stalled, so a reader keeping
+			// up with a slow sender does not put an extra ACK on the wire
+			// for every read it performs.
+			if (c->zero_window && tcp_window(c) >= TCP_MSS)
+				tcp_ack(c);
+
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return (long)n;
 		}
