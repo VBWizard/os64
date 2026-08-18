@@ -1603,12 +1603,11 @@ static int ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 	{
 		// Restore the replayable map to the caller; orphan_add will persist it
 		// before relinking the inode so a later mount can finish the release.
-		// If a parent-pointer write failed after its child became free, block
-		// reuse must stop until that replay occurs.
-		if (release_rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK)
-			vfs_demote_all_mounts_readonly("ext2 indirect release parent write failed");
+		// Propagate the special result too: if a parent-pointer write failed
+		// after its child became free, the caller must persist this map BEFORE
+		// publishing read-only state, then stop block reuse until replay.
 		*node = old;
-		return -1;
+		return release_rc;
 	}
 	return ext2_free_inode(fs, e, ino, is_dir);
 }
@@ -2308,10 +2307,24 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 		}
 		else
 		{
-			if (ext2_inode_release(vfs_fs, e, dst_ino, &dst) != 0 &&
-			    ext2_orphan_add(vfs_fs, e, dst_ino, &dst) != 0)
-				printd(DEBUG_VFS, "ext2: rename '%s' -> '%s': displaced inode %u could not be released or orphaned — run e2fsck\n",
-				       oldpath, newpath, dst_ino);
+			int release_rc = ext2_inode_release(vfs_fs, e, dst_ino, &dst);
+			if (release_rc != 0)
+			{
+				// The retry map must reach disk while writes are still permitted.
+				// Demoting first turns orphan_add's inode/superblock writes into a
+				// block-layer panic and loses the recovery path this map provides.
+				int orphan_rc = ext2_orphan_add(vfs_fs, e, dst_ino, &dst);
+				if (orphan_rc != 0)
+					printd(DEBUG_VFS, "ext2: rename '%s' -> '%s': displaced inode %u could not be released or orphaned — run e2fsck\n",
+					       oldpath, newpath, dst_ino);
+
+				if (release_rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK)
+				{
+					printf("ext2: inode %u retry map %s after indirect release failure — forcing mount read-only\n",
+					       dst_ino, orphan_rc == 0 ? "persisted" : "could not be persisted");
+					vfs_demote_mount_readonly(vfs_fs);
+				}
+			}
 		}
 	}
 

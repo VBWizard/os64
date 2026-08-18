@@ -2208,6 +2208,8 @@ static bool test_ext2_orphan(void)
     }
     kRootFilesystem->fops->rm("/etc/testdata/orph/victim", kRootFilesystem);
     kRootFilesystem->fops->rm("/etc/testdata/orph/replacement", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/orph/retry_victim", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/orph/retry_replacement", kRootFilesystem);
 
     // THE BASELINE, taken after that cleanup so a previous boot's leftovers
     // cannot masquerade as this run's leak.
@@ -2354,7 +2356,70 @@ static bool test_ext2_orphan(void)
         OR_FAIL("BLOCK LEAK: %u free before, %u after (%d lost)\n",
                 blocks0, blocks1, (int)blocks0 - (int)blocks1);
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent block/inode count reconciliation; %u inodes / %u blocks returned exactly)\n",
+    // Closed-destination rename failure: freeing twelve direct blocks costs
+    // writes 8..43, freeing the indirect child costs 44..46, and write 47 is
+    // the parent-pointer clear. Fail that clear after its child is already
+    // free. The retry inode + orphan-head writes MUST be allowed to land as
+    // writes 48 and 49 before the mount publishes read-only state.
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/retry_victim", "c",
+                                    kRootFilesystem) != 0)
+        OR_FAIL("could not create the closed retry victim\n");
+    orphan_data = kmalloc((size_t)kRootFilesystem->blockSize);
+    if (orphan_data == NULL) {
+        kRootFilesystem->fops->close(f);
+        OR_FAIL("could not allocate the closed retry fixture\n");
+    }
+    memset(orphan_data, 0x5A, (size_t)kRootFilesystem->blockSize);
+    for (uint32_t i = 0; i < orphan_data_blocks; i++) {
+        int wrote = kRootFilesystem->fops->write(
+            f, orphan_data, (size_t)kRootFilesystem->blockSize);
+        if (wrote != kRootFilesystem->blockSize) {
+            kRootFilesystem->fops->close(f);
+            kfree(orphan_data);
+            OR_FAIL("could not write closed retry fixture block %u (wrote %d)\n", i, wrote);
+        }
+    }
+    kfree(orphan_data);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/retry_replacement", "c",
+                                    kRootFilesystem) != 0)
+        OR_FAIL("could not create the closed retry replacement\n");
+    kRootFilesystem->fops->write(f, newBytes, sizeof(newBytes) - 1);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+
+    vfs_filesystem_t shadow = *kRootFilesystem;
+    vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
+    shadow.fops = &shadow_fops;
+    shadow.dops = &shadow_dops;
+
+    if (!orphan_test_fail_write(kRootFilesystem, 47))
+        OR_FAIL("could not install the closed-rename release fault seam\n");
+    int rename_rc = shadow.fops->rename("/etc/testdata/orph/retry_replacement",
+                                        "/etc/testdata/orph/retry_victim", &shadow);
+    injected_writes = orphan_test_restore_write(kRootFilesystem);
+    if (rename_rc != 0)
+        OR_FAIL("closed replacement rename failed before reaching recoverable teardown\n");
+    if (injected_writes != 49)
+        OR_FAIL("failed closed rename made %u metadata writes, expected 49 (failed parent clear, retry inode, orphan head)\n",
+                injected_writes);
+    if (!shadow.read_only)
+        OR_FAIL("closed rename parent-clear failure did not demote its mount\n");
+    if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
+        OR_FAIL("private fault-test demotion escaped onto the real root mount\n");
+
+    // The real mount stands in for the reboot: it shares the durable orphan
+    // chain but was not demoted by the private fault fixture.
+    kRootFilesystem->fops->mounted(kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/orph/retry_victim", kRootFilesystem);
+    if (ext2_free_inodes(kRootFilesystem) != inodes0 ||
+        ext2_free_blocks(kRootFilesystem) != blocks0)
+        OR_FAIL("closed-rename retry replay did not return all storage to baseline\n");
+
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent counts + retry-map-before-demotion; %u inodes / %u blocks returned exactly)\n",
            inodes0, blocks0);
     return true;
 }

@@ -524,7 +524,7 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 	r8125_write16(r, R8125_TPPOLL_8125, R8125_TPPOLL_NPQ);
 
 	r->netdev.tx_frames++;
-	r->netdev.tx_bytes += on_wire;
+	r->netdev.tx_bytes += length;
 	spinlock_release_irqrestore(&r->lock, flags);
 	return 0;
 }
