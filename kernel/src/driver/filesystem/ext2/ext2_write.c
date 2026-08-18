@@ -1407,14 +1407,20 @@ static bool ext2_dir_is_empty(vfs_filesystem_t *fs, ext2_fs_t *e,
 static int ext2_orphan_add(vfs_filesystem_t *fs, ext2_fs_t *e,
                            uint32_t ino, ext2_inode_t *node)
 {
+	uint32_t old_head = e->sb.s_last_orphan;
 	node->i_links_count = 0;
-	node->i_dtime = e->sb.s_last_orphan;   // 0 terminates the chain
+	node->i_dtime = old_head;   // 0 terminates the chain
 	if (ext2_write_inode_disk(fs, e, ino, node) != 0)
 		return -1;
 
 	e->sb.s_last_orphan = ino;
 	if (ext2_sb_writeback(fs, e) != 0)
+	{
+		// The disk still names old_head. Keep the cache saying the same thing
+		// so close/replay cannot walk a candidate that was never published.
+		e->sb.s_last_orphan = old_head;
 		return -1;
+	}
 
 	printd(DEBUG_VFS, "ext2: inode %u orphaned (name gone, %u handle(s) still open)\n",
 	       ino, ext2_openref_count(e, ino));

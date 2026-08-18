@@ -137,6 +137,11 @@ extern bool kEnableR8125;
 #define R8125_CMD_RX_ENABLE 0x08
 #define R8125_CMD_TX_ENABLE 0x04
 
+// PCI command bits. Memory decoding is needed to reach the MMIO reset;
+// bus mastering stays OFF until that reset has stopped any stale DMA engine.
+#define R8125_PCI_COMMAND_MEMORY 0x02
+#define R8125_PCI_COMMAND_MASTER 0x04
+
 // Cfg9346 [8169-family]: the config registers are write-locked until you
 // say the magic word. A 1990s EEPROM-interface register still standing
 // guard over the config space of a 2020s 2.5GbE part — the lock exists
@@ -599,15 +604,17 @@ static bool r8125_init_device(pci_device_t* dev)
 	printf("r8125: found 10ec:8125 at %02x:%02x.%u\n",
 	       dev->busNo, dev->deviceNo, dev->funcNo);
 
-	// Memory space + bus mastering, by LIVE read-modify-write of the command
-	// register — never the cached enum copy. That is the ruling from a848273:
+	// Enable memory decoding but actively DISABLE bus mastering, by a LIVE
+	// read-modify-write of the command register — never the cached enum copy.
+	// That is the ruling from a848273:
 	// the cached word can be stale, and writing a stale command word back is
-	// how you strip a neighbour's DMA mid-flight. Bus mastering is what will
-	// legalize the rings' DMA in the next slice; without it the cruellest
-	// failure mode in this file becomes available, where every register reads
-	// back exactly as written and not one frame ever moves.
+	// how you strip a neighbour's DMA mid-flight. Firmware may have left this
+	// device's engines running with descriptor addresses from the previous
+	// boot, so allowing it to master the bus before reset would let stale DMA
+	// scribble over the new kernel while these bring-up beacons run.
 	uint32_t live = readPCIRegister(dev->busNo, dev->deviceNo, dev->funcNo, 4) & 0xFFFF;
-	writePCIRegister(dev->busNo, dev->deviceNo, dev->funcNo, 4, live | 0x6);
+	writePCIRegister(dev->busNo, dev->deviceNo, dev->funcNo, 4,
+	                 (live | R8125_PCI_COMMAND_MEMORY) & ~R8125_PCI_COMMAND_MASTER);
 
 	uint64_t bar_phys = r8125_bar_phys(dev, R8125_BAR);
 	if (bar_phys == 0)
@@ -692,6 +699,14 @@ static bool r8125_init_device(pci_device_t* dev)
 		return false;
 	}
 	printf("r8125: soft reset complete\n");
+
+	// Reset has stopped the old engines and erased their stale descriptor
+	// state. DMA is safe to authorize now, before setup installs our new ring
+	// addresses. Re-read the live word so no intervening config change is
+	// overwritten with the snapshot taken before the MMIO probing above.
+	live = readPCIRegister(dev->busNo, dev->deviceNo, dev->funcNo, 4) & 0xFFFF;
+	writePCIRegister(dev->busNo, dev->deviceNo, dev->funcNo, 4,
+	                 live | R8125_PCI_COMMAND_MEMORY | R8125_PCI_COMMAND_MASTER);
 
 	// ── Rings ───────────────────────────────────────────────────────────
 	if (!r8125_setup_rings(r))
