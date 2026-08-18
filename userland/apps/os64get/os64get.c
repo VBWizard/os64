@@ -152,7 +152,15 @@ int main(int argc, char **argv)
     // ── Ask ─────────────────────────────────────────────────────────────
     char request[GET_PATH_MAX];
     int32_t reqlen = os64_snprintf(request, sizeof(request), "GET %s\n", name);
-    if (reqlen <= 0 || os64_write((int32_t)conn, request, (size_t)reqlen) != reqlen)
+    if (reqlen < 0 || (size_t)reqlen >= sizeof(request))
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: could not create request, file name too long\n");
+        os64_close((int32_t)conn);
+        return GET_REQUEST_FAILED;
+    }
+
+    if (os64_write((int32_t)conn, request, (size_t)reqlen) != reqlen)
     {
         os64_hprintf(OS64_STDERR, "os64get: could not send the request\n");
         os64_close((int32_t)conn);

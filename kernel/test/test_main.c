@@ -2127,9 +2127,51 @@ static bool test_vfs_rename(void)
 //   3. THE NEW NAME IS THE NEW FILE, the instant the rename returns, even
 //      though the displaced storage lives on a while longer.
 //
-// Deliberately NOT covered here: crash recovery. The mount-time replay can
-// only be exercised by dying and rebooting, which no in-boot test can do —
-// that one is a hand-driven, two-boot harness procedure (VERIFICATION.md).
+// The real power-loss case remains a hand-driven two-boot procedure
+// (VERIFICATION.md), but the failure half of mount replay IS exercised here:
+// this mount owns a private copy of its block-operation table, so the test can
+// fail one chosen metadata write, restore the real callback immediately, and
+// ask fops->mounted to perform the same replay a boot performs.
+
+// ext2_orphan test's block-write fault seam. These globals belong exclusively
+// to test_ext2_orphan and are live only around its synchronous close/replay
+// calls; ext2's write_lock keeps another writer on this mount from entering
+// while the chosen operation is in flight.
+static size_t (*sOrphanRealWrite)(void *, uint64_t, const void *, uint64_t);
+static uint32_t sOrphanWriteCount;
+static uint32_t sOrphanFailWrite;
+
+static size_t orphan_test_write(void *device, uint64_t sector,
+                                const void *buffer, uint64_t sector_count)
+{
+    sOrphanWriteCount++;
+    if (sOrphanWriteCount == sOrphanFailWrite)
+        return 1;
+    return sOrphanRealWrite(device, sector, buffer, sector_count);
+}
+
+static bool orphan_test_fail_write(vfs_filesystem_t *fs, uint32_t nth)
+{
+    if (fs == NULL || fs->bops == NULL || fs->bops->write == NULL ||
+        sOrphanRealWrite != NULL || nth == 0)
+        return false;
+    sOrphanRealWrite = fs->bops->write;
+    sOrphanWriteCount = 0;
+    sOrphanFailWrite = nth;
+    fs->bops->write = orphan_test_write;
+    return true;
+}
+
+static uint32_t orphan_test_restore_write(vfs_filesystem_t *fs)
+{
+    uint32_t writes = sOrphanWriteCount;
+    fs->bops->write = sOrphanRealWrite;
+    sOrphanRealWrite = NULL;
+    sOrphanWriteCount = 0;
+    sOrphanFailWrite = 0;
+    return writes;
+}
+
 #define OR_FAIL(...) do { \
         printf("FAIL ext2_orphan: " __VA_ARGS__); \
         printd(DEBUG_TESTS, "\tFAIL: test_ext2_orphan - " __VA_ARGS__); \
@@ -2231,9 +2273,53 @@ static bool test_ext2_orphan(void)
         OR_FAIL("free space is already back at baseline while the handle is OPEN — nothing was orphaned\n");
     }
 
-    // The program exits. THIS is the moment the storage comes back.
+    // The program exits. Fail release's inode-table write AFTER the orphan
+    // head was removed (write 1 is that superblock update; write 2 is the
+    // inode rewrite). The close path must put the untouched inode back on the
+    // orphan chain instead of freeing through an uncommitted dereference.
+    uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
+    uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
+    if (!orphan_test_fail_write(kRootFilesystem, 2)) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("could not install the release-write fault seam\n");
+    }
     kRootFilesystem->fops->close(held);
     held = NULL;
+    uint32_t injected_writes = orphan_test_restore_write(kRootFilesystem);
+    if (injected_writes != 4)
+        OR_FAIL("failed release made %u metadata writes, expected 4 (remove, fail, restore inode, restore head)\n",
+                injected_writes);
+    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks)
+        OR_FAIL("failed last-close release changed free space instead of retaining the orphan\n");
+
+    // Now exercise MOUNT REPLAY itself. For this one-block file, write 6 is
+    // the inode-bitmap update: head removal, inode dereference, block bitmap,
+    // group descriptor, superblock, then inode bitmap. Its injected failure
+    // occurs after the data block was returned but before the inode was. The
+    // replay must restore the zero-block inode to the orphan chain and must
+    // NOT call it reaped.
+    if (kRootFilesystem->fops->mounted == NULL)
+        OR_FAIL("ext2 mount table has no replay callback\n");
+    if (!orphan_test_fail_write(kRootFilesystem, 6))
+        OR_FAIL("could not install the replay-write fault seam\n");
+    kRootFilesystem->fops->mounted(kRootFilesystem);
+    injected_writes = orphan_test_restore_write(kRootFilesystem);
+    if (injected_writes != 8)
+        OR_FAIL("failed mount replay made %u metadata writes, expected 8 including orphan restoration\n",
+                injected_writes);
+    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes)
+        OR_FAIL("failed mount replay freed the orphan inode despite its bitmap-write error\n");
+    if (ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
+        OR_FAIL("failed mount replay did not preserve the completed block release\n");
+
+    // A clean retry is the next boot in miniature. It must find the restored
+    // orphan, free its inode (there are no blocks left to double-free), and
+    // remove it from the chain.
+    kRootFilesystem->fops->mounted(kRootFilesystem);
+    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1 ||
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
+        OR_FAIL("clean mount replay did not finish the retained orphan\n");
 
     // CLAIM 2: exactly what was taken, given back. Drop the surviving name
     // too, so the net against baseline must be zero on both counters.
@@ -2247,7 +2333,7 @@ static bool test_ext2_orphan(void)
         OR_FAIL("BLOCK LEAK: %u free before, %u after (%d lost)\n",
                 blocks0, blocks1, (int)blocks0 - (int)blocks1);
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (reader survived the replacement; %u inodes / %u blocks returned exactly)\n",
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (reader survived; failed close + failed replay retained the orphan; %u inodes / %u blocks returned exactly)\n",
            inodes0, blocks0);
     return true;
 }

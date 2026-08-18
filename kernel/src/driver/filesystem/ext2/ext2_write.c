@@ -1399,7 +1399,12 @@ static int ext2_orphan_remove(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t ino)
 			if (prev == 0)
 			{
 				e->sb.s_last_orphan = next;
-				return ext2_sb_writeback(fs, e);
+				if (ext2_sb_writeback(fs, e) == 0)
+					return 0;
+				// The disk still names `cur`; keep the RAM cache saying the
+				// same thing so a later retry does not forget the orphan.
+				e->sb.s_last_orphan = cur;
+				return -1;
 			}
 			ext2_inode_t prev_node;
 			if (ext2_read_inode(fs, e, prev, &prev_node) != 0)
@@ -1417,8 +1422,8 @@ static int ext2_orphan_remove(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t ino)
 // holds the file. Factored out because the orphan path needs the identical
 // sequence at a completely different moment, and two copies of "free an
 // inode" is how one of them quietly stops matching the other.
-static void ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
-                               uint32_t ino, ext2_inode_t *node)
+static int ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
+                              uint32_t ino, ext2_inode_t *node)
 {
 	bool is_dir = (node->i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
 	ext2_inode_t old = *node;
@@ -1428,10 +1433,16 @@ static void ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 	node->i_size = 0;
 	node->i_blocks = 0;
 	node->i_dtime = (uint32_t)kSystemCurrentTime;   // a REAL deletion time now
-	ext2_write_inode_disk(fs, e, ino, node);
+	if (ext2_write_inode_disk(fs, e, ino, node) != 0)
+	{
+		// Nothing was dereferenced on disk, so the caller may safely put the
+		// original inode (including its orphan next-pointer) back on the list.
+		*node = old;
+		return -1;
+	}
 
 	ext2_free_inode_blocks(fs, e, &old);
-	ext2_free_inode(fs, e, ino, is_dir);
+	return ext2_free_inode(fs, e, ino, is_dir);
 }
 
 // Last handle on `ino` just closed. If it is a pending orphan, this is the
@@ -1457,7 +1468,15 @@ void ext2_orphan_reap_if_pending(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t in
 	if (ext2_orphan_remove(fs, e, ino) != 0)
 		goto done;   // not on the chain — leave it for fsck rather than guess
 
-	ext2_inode_release(fs, e, ino, &node);
+	if (ext2_inode_release(fs, e, ino, &node) != 0)
+	{
+		// ext2_orphan_remove made the inode unreachable from the chain.
+		// Re-add it in add's safe order (inode next-pointer, then head) so a
+		// later mount can finish the release instead of leaking it silently.
+		if (ext2_orphan_add(fs, e, ino, &node) != 0)
+			printf("ext2: failed to restore orphaned inode %u after release error — run e2fsck\n", ino);
+		goto done;
+	}
 	printd(DEBUG_VFS, "ext2: orphaned inode %u reaped at last close\n", ino);
 
 done:
@@ -1499,9 +1518,18 @@ void ext2_orphan_replay(vfs_filesystem_t *fs, ext2_fs_t *e)
 		// mid-replay never re-walks an inode we already freed.
 		e->sb.s_last_orphan = node.i_dtime;
 		if (ext2_sb_writeback(fs, e) != 0)
+		{
+			// Writeback failed, so the on-disk head is still `ino`.
+			e->sb.s_last_orphan = ino;
 			break;
+		}
 
-		ext2_inode_release(fs, e, ino, &node);
+		if (ext2_inode_release(fs, e, ino, &node) != 0)
+		{
+			if (ext2_orphan_add(fs, e, ino, &node) != 0)
+				printf("ext2: failed to restore orphaned inode %u during replay — run e2fsck\n", ino);
+			break;
+		}
 		reaped++;
 	}
 
@@ -2047,7 +2075,10 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 		}
 		else
 		{
-			ext2_inode_release(vfs_fs, e, dst_ino, &dst);
+			if (ext2_inode_release(vfs_fs, e, dst_ino, &dst) != 0 &&
+			    ext2_orphan_add(vfs_fs, e, dst_ino, &dst) != 0)
+				printd(DEBUG_VFS, "ext2: rename '%s' -> '%s': displaced inode %u could not be released or orphaned — run e2fsck\n",
+				       oldpath, newpath, dst_ino);
 		}
 	}
 

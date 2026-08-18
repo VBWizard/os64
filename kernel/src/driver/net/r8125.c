@@ -565,8 +565,6 @@ void r8125_poll(void)
 		else
 		{
 			const uint8_t* buf = r->rx_buf + (uint64_t)r->rx_cursor * R8125_BUF_SIZE;
-			r->netdev.rx_frames++;
-			r->netdev.rx_bytes += length;
 			// Up through the SEAM, never straight to the stack: net_device_rx
 			// is where the counters, a future pcap tap, and the eventual
 			// kworker hand-off live (net_device.h says so explicitly).

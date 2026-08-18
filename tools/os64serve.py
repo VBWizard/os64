@@ -58,6 +58,7 @@ LAN and then forget it is running.
 import argparse
 import os
 import socket
+import stat
 import sys
 import zlib
 
@@ -80,6 +81,46 @@ def is_safe_name(name):
     if os.path.basename(name) != name:      # catches drive letters, oddities
         return False
     return True
+
+
+def read_served_file(directory, name):
+    """Read one regular, non-symlink file from the serving directory.
+
+    Open before inspecting so that the file we validate is also the file we
+    read.  O_NOFOLLOW rejects a final-component symlink atomically where the
+    host provides it.  The descriptor/directory-entry identity check supplies
+    the same protection on hosts without O_NOFOLLOW (notably Windows) and
+    catches a replacement racing the open.
+    """
+    path = os.path.join(directory, name)
+    flags = (os.O_RDONLY
+             | getattr(os, "O_BINARY", 0)
+             | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0))
+
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+
+    try:
+        opened = os.fstat(fd)
+        entry = os.stat(path, follow_symlinks=False)
+        if (not stat.S_ISREG(opened.st_mode)
+                or not stat.S_ISREG(entry.st_mode)
+                or not os.path.samestat(opened, entry)):
+            return None
+
+        file_obj = os.fdopen(fd, "rb")
+        fd = None                 # file_obj owns the descriptor from here
+        with file_obj:
+            return file_obj.read()
+    except OSError:
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def serve_one(conn, addr, directory):
@@ -112,21 +153,18 @@ def serve_one(conn, addr, directory):
             conn.sendall(b"NO name must be a single path component\n")
             return
 
-        path = os.path.join(directory, name)
-        if not os.path.isfile(path):
-            print(f"  {addr[0]}: no such file: {name}")
+        data = read_served_file(directory, name)
+        if data is None:
+            print(f"  {addr[0]}: no such file or refused file: {name}")
             conn.sendall(b"NO no such file\n")
             return
 
-        # Read it once, whole: checksum and length must describe the SAME
+        # Read it once, whole: checksum and length describe the SAME
         # bytes we are about to send. Computing the CRC in one pass and then
         # streaming the file from disk in another would leave a window where
         # an edit between the two makes the header a lie - and the client
         # would then reject a transfer that was perfectly intact, which is
         # the most confusing failure available.
-        with open(path, "rb") as f:
-            data = f.read()
-
         crc = zlib.crc32(data) & 0xFFFFFFFF
         header = f"OK {len(data)} {crc:08x}\n".encode("ascii")
         conn.sendall(header)
@@ -150,7 +188,7 @@ def main():
                     help="address to listen on (default: everything)")
     args = ap.parse_args()
 
-    directory = os.path.abspath(args.directory)
+    directory = os.path.realpath(args.directory)
     if not os.path.isdir(directory):
         print(f"os64serve: {directory} is not a directory", file=sys.stderr)
         return 2
