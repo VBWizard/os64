@@ -95,6 +95,17 @@ bool r8125_rx_ready(const r8125_desc_t* ring, uint16_t cursor,
 	return true;
 }
 
+bool r8125_rx_strip_fcs(uint16_t descriptor_length, uint16_t buffer_size,
+                        uint16_t* frame_length_out)
+{
+	if (descriptor_length < R8125_RX_FCS_LEN ||
+	    descriptor_length > buffer_size)
+		return false;
+
+	*frame_length_out = (uint16_t)(descriptor_length - R8125_RX_FCS_LEN);
+	return true;
+}
+
 void r8125_rx_refill(r8125_desc_t* ring, uint16_t count, uint16_t index,
                      uint64_t buf_phys, uint32_t buf_size)
 {

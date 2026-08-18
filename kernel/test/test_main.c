@@ -2273,62 +2273,46 @@ static bool test_ext2_orphan(void)
         OR_FAIL("free space is already back at baseline while the handle is OPEN — nothing was orphaned\n");
     }
 
-    // The program exits. Fail release's inode-table write AFTER the orphan
-    // head was removed (write 1 is that superblock update; write 2 is the
-    // inode rewrite). The close path must put the untouched inode back on the
-    // orphan chain instead of freeing through an uncommitted dereference.
+    // The program exits. Fail its first block-bitmap release. The orphan must
+    // remain durably linked throughout teardown; write 2 persists the still-
+    // complete retry map, and neither allocation counter may move.
     uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
     uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
-    if (!orphan_test_fail_write(kRootFilesystem, 2)) {
+    if (!orphan_test_fail_write(kRootFilesystem, 1)) {
         kRootFilesystem->fops->close(held);
         OR_FAIL("could not install the release-write fault seam\n");
     }
     kRootFilesystem->fops->close(held);
     held = NULL;
     uint32_t injected_writes = orphan_test_restore_write(kRootFilesystem);
-    if (injected_writes != 4)
-        OR_FAIL("failed release made %u metadata writes, expected 4 (remove, fail, restore inode, restore head)\n",
+    if (injected_writes != 2)
+        OR_FAIL("failed release made %u metadata writes, expected 2 (failed block bitmap, persisted retry map)\n",
                 injected_writes);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
         ext2_free_blocks(kRootFilesystem) != orphan_blocks)
         OR_FAIL("failed last-close release changed free space instead of retaining the orphan\n");
 
-    // Now exercise MOUNT REPLAY itself. First fail the data-block bitmap
-    // update (write 3: head removal, inode dereference, block bitmap). The
-    // release must propagate that failure and restore an orphan inode that
-    // still names the allocated block, so the next replay can safely retry.
+    // Now exercise MOUNT REPLAY itself. Let block release complete, persist
+    // the zero map, then fail the inode bitmap (write 5: block bitmap, group
+    // descriptor, superblock, inode, inode bitmap). The orphan head must
+    // STILL name this zero-block inode; unlinking is the final step now.
     if (kRootFilesystem->fops->mounted == NULL)
         OR_FAIL("ext2 mount table has no replay callback\n");
-    if (!orphan_test_fail_write(kRootFilesystem, 3))
-        OR_FAIL("could not install the block-release fault seam\n");
-    kRootFilesystem->fops->mounted(kRootFilesystem);
-    injected_writes = orphan_test_restore_write(kRootFilesystem);
-    if (injected_writes != 5)
-        OR_FAIL("failed block release made %u metadata writes, expected 5 including orphan restoration\n",
-                injected_writes);
-    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
-        ext2_free_blocks(kRootFilesystem) != orphan_blocks)
-        OR_FAIL("failed block release changed free space instead of retaining the complete orphan\n");
-
-    // Then fail the inode-bitmap update after block release succeeds (write
-    // 6: head removal, inode dereference, block bitmap, group descriptor,
-    // superblock, inode bitmap). The restored orphan now has a zero block map,
-    // preventing the clean retry from double-freeing the completed release.
-    if (!orphan_test_fail_write(kRootFilesystem, 6))
+    if (!orphan_test_fail_write(kRootFilesystem, 5))
         OR_FAIL("could not install the replay-write fault seam\n");
     kRootFilesystem->fops->mounted(kRootFilesystem);
     injected_writes = orphan_test_restore_write(kRootFilesystem);
-    if (injected_writes != 8)
-        OR_FAIL("failed mount replay made %u metadata writes, expected 8 including orphan restoration\n",
+    if (injected_writes != 5)
+        OR_FAIL("failed mount replay made %u metadata writes, expected 5 with orphan still linked\n",
                 injected_writes);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes)
         OR_FAIL("failed mount replay freed the orphan inode despite its bitmap-write error\n");
     if (ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
         OR_FAIL("failed mount replay did not preserve the completed block release\n");
 
-    // A clean retry is the next boot in miniature. It must find the restored
-    // orphan, free its inode (there are no blocks left to double-free), and
-    // remove it from the chain.
+    // A clean retry is the next boot in miniature. It must find the STILL-
+    // LINKED orphan, idempotently finish its inode release, and only then
+    // remove the durable chain record.
     kRootFilesystem->fops->mounted(kRootFilesystem);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1 ||
         ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)

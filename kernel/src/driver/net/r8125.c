@@ -556,11 +556,13 @@ void r8125_poll(void)
 	for (uint16_t drained = 0; drained < R8125_RX_DESCS; drained++)
 	{
 		uint16_t length;
+		uint16_t frame_length;
 		bool damaged;
 		if (!r8125_rx_ready(r->rx, r->rx_cursor, &length, &damaged))
 			break;   // the device still owns this one — nothing more has landed
 
-		if (damaged || length == 0 || length > R8125_BUF_SIZE)
+		if (damaged ||
+		    !r8125_rx_strip_fcs(length, R8125_BUF_SIZE, &frame_length))
 		{
 			// The wire lied, or the hardware says it did. Drop it exactly as
 			// the medium would have, and COUNT it — a lying link should be
@@ -577,7 +579,7 @@ void r8125_poll(void)
 			// frames by TRANSMITTING (ARP reply, echo reply), and that path
 			// takes this very lock.
 			spinlock_release_irqrestore(&r->lock, flags);
-			net_device_rx(&r->netdev, buf, length);
+			net_device_rx(&r->netdev, buf, frame_length);
 			flags = spinlock_acquire_irqsave(&r->lock);
 		}
 

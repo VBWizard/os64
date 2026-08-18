@@ -144,6 +144,25 @@ static void test_rx_reports_damage(void)
 	}
 }
 
+static void test_rx_strips_fcs_and_rejects_invalid_lengths(void)
+{
+	uint16_t frame_length = 0xFFFF;
+
+	CHECK(r8125_rx_strip_fcs(68, BUF_SIZE, &frame_length),
+	      "rejected a valid receive length");
+	CHECK(frame_length == 64,
+	      "did not strip the four-byte FCS: got %u, expected 64", frame_length);
+
+	frame_length = 0xFFFF;
+	CHECK(!r8125_rx_strip_fcs(R8125_RX_FCS_LEN - 1, BUF_SIZE, &frame_length),
+	      "accepted a descriptor shorter than its FCS");
+	CHECK(frame_length == 0xFFFF,
+	      "changed the output length after rejecting an undersized descriptor");
+
+	CHECK(!r8125_rx_strip_fcs(BUF_SIZE + 1, BUF_SIZE, &frame_length),
+	      "accepted a descriptor longer than its DMA buffer");
+}
+
 // THE WRAP TEST, and the reason EOR gets checked every time: drive a full
 // lap plus change through the ring, refilling as we go, and demand the
 // invariant survives the last descriptor being rewritten repeatedly.
@@ -293,6 +312,7 @@ int main(void)
 	test_rx_not_ready_while_device_owns_it();
 	test_rx_delivers_then_refills();
 	test_rx_reports_damage();
+	test_rx_strips_fcs_and_rejects_invalid_lengths();
 	test_rx_wraps_without_losing_eor();
 
 	test_tx_init_keeps_the_ring_ours();

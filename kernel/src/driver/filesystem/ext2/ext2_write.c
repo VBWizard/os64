@@ -335,6 +335,15 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 	int rc = -1;
 	if (ext2_read_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) == 0)
 	{
+		// Replay may revisit a block whose bitmap update completed just before
+		// power failed. Treat an already-clear bit as a completed free: mount
+		// replay runs before this filesystem can allocate, so it cannot yet
+		// denote somebody else's new block.
+		if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
+		{
+			rc = 0;
+			goto out;
+		}
 		bm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
 		if (ext2_write_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) == 0)
 		{
@@ -345,6 +354,7 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 			rc = 0;
 		}
 	}
+out:
 	wr_scratch_put(e, bm);
 	return rc;
 }
@@ -424,6 +434,13 @@ int ext2_free_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 	int rc = -1;
 	if (ext2_read_fs_block(fs, e, e->groups[g].bg_inode_bitmap, bm) == 0)
 	{
+		// Same replay rule as blocks: an orphan may have reached this bitmap
+		// write before a crash but not the final chain unlink.
+		if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
+		{
+			rc = 0;
+			goto out;
+		}
 		bm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
 		if (ext2_write_fs_block(fs, e, e->groups[g].bg_inode_bitmap, bm) == 0)
 		{
@@ -436,6 +453,7 @@ int ext2_free_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 			rc = 0;
 		}
 	}
+out:
 	wr_scratch_put(e, bm);
 	return rc;
 }
@@ -1508,6 +1526,81 @@ static int ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 	return ext2_free_inode(fs, e, ino, is_dir);
 }
 
+// Release an inode that is STILL ON the orphan chain. This ordering is the
+// crash-safe half of the list's contract:
+//
+//   1. release its blocks while the inode still records the retry map;
+//   2. persist the completed zero map while i_dtime still names the successor;
+//   3. free the inode bitmap bit (idempotent if replay repeats it);
+//   4. LAST, unlink the orphan from the durable chain.
+//
+// A crash before step 4 therefore leaves a record mount replay can revisit.
+// Bitmap frees are idempotent specifically so a crash between a completed
+// bitmap write and the next metadata write is safe to replay.
+static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
+                               uint32_t ino, ext2_inode_t *node)
+{
+	bool is_dir = (node->i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
+	ext2_inode_t remaining = *node;
+
+	if (ext2_free_inode_blocks(fs, e, &remaining) != 0)
+	{
+		// Some earlier entries may already be free. Persist the pruned map so
+		// normal operation cannot reuse them while this orphan waits for a
+		// later close/mount retry.
+		if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
+		{
+			printf("ext2: could not persist orphan %u release progress — forcing filesystems read-only\n", ino);
+			vfs_demote_all_mounts_readonly("ext2 orphan release progress write failed");
+		}
+		*node = remaining;
+		return -1;
+	}
+
+	remaining.i_links_count = 0;
+	remaining.i_size = 0;
+	remaining.i_blocks = 0;
+	// Do NOT replace i_dtime with a deletion timestamp yet: while the inode
+	// is linked, that field is the durable pointer to the next orphan.
+	if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
+	{
+		// Blocks are now reusable but the disk inode may still name them. Stop
+		// all further allocation; after reboot, replay runs before allocation
+		// and the idempotent frees safely finish this inode.
+		printf("ext2: could not persist completed orphan %u block release — forcing filesystems read-only\n", ino);
+		vfs_demote_all_mounts_readonly("ext2 orphan completion write failed");
+		return -1;
+	}
+	*node = remaining;
+
+	// Free while still linked. If power fails after the bitmap lands, replay
+	// sees the intact inode-table record, observes an already-free bit, and
+	// continues to the final unlink before any allocation is permitted.
+	if (ext2_free_inode(fs, e, ino, is_dir) != 0)
+		return -1;
+
+	if (ext2_orphan_remove(fs, e, ino) != 0)
+	{
+		// The chain may still name an inode whose bitmap bit is free. That is
+		// replay-safe but not safe for continued allocation in this mount.
+		printf("ext2: could not unlink released orphan %u — forcing filesystems read-only\n", ino);
+		vfs_demote_all_mounts_readonly("ext2 orphan final unlink failed");
+		return -1;
+	}
+
+	// Now that no chain entry needs i_dtime as a successor pointer, give the
+	// freed inode its real deletion timestamp. write_lock still excludes an
+	// allocator from reusing this inode until the table update is complete.
+	remaining.i_dtime = (uint32_t)kSystemCurrentTime;
+	if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
+	{
+		printf("ext2: could not stamp released orphan %u with its deletion time — run e2fsck\n", ino);
+		return -1;
+	}
+	*node = remaining;
+	return 0;
+}
+
 // Last handle on `ino` just closed. If it is a pending orphan, this is the
 // moment its storage goes back. Called from ext2_close OUTSIDE open_lock:
 // taking write_lock while holding open_lock would invert the order every
@@ -1528,18 +1621,8 @@ void ext2_orphan_reap_if_pending(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t in
 	// already gone reaches zero links while still being open.
 	if (node.i_links_count != 0)
 		goto done;
-	if (ext2_orphan_remove(fs, e, ino) != 0)
-		goto done;   // not on the chain — leave it for fsck rather than guess
-
-	if (ext2_inode_release(fs, e, ino, &node) != 0)
-	{
-		// ext2_orphan_remove made the inode unreachable from the chain.
-		// Re-add it in add's safe order (inode next-pointer, then head) so a
-		// later mount can finish the release instead of leaking it silently.
-		if (ext2_orphan_add(fs, e, ino, &node) != 0)
-			printf("ext2: failed to restore orphaned inode %u after release error — run e2fsck\n", ino);
+	if (ext2_orphan_release(fs, e, ino, &node) != 0)
 		goto done;
-	}
 	printd(DEBUG_VFS, "ext2: orphaned inode %u reaped at last close\n", ino);
 
 done:
@@ -1577,22 +1660,8 @@ void ext2_orphan_replay(vfs_filesystem_t *fs, ext2_fs_t *e)
 		if (ext2_read_inode(fs, e, ino, &node) != 0)
 			break;
 
-		// Unchain FIRST (the head moves to our successor), so a crash
-		// mid-replay never re-walks an inode we already freed.
-		e->sb.s_last_orphan = node.i_dtime;
-		if (ext2_sb_writeback(fs, e) != 0)
-		{
-			// Writeback failed, so the on-disk head is still `ino`.
-			e->sb.s_last_orphan = ino;
+		if (ext2_orphan_release(fs, e, ino, &node) != 0)
 			break;
-		}
-
-		if (ext2_inode_release(fs, e, ino, &node) != 0)
-		{
-			if (ext2_orphan_add(fs, e, ino, &node) != 0)
-				printf("ext2: failed to restore orphaned inode %u during replay — run e2fsck\n", ino);
-			break;
-		}
 		reaped++;
 	}
 

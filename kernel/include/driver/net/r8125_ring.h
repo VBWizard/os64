@@ -63,6 +63,11 @@ typedef struct
 // for what we are asking it to send.
 #define R8125_DESC_LEN_MASK 0x3FFFu
 
+// RTL8125 receive descriptors include the Ethernet frame check sequence in
+// the reported byte count. The network-device seam, like the rest of the
+// stack, deals in frame lengths without those trailing CRC bytes.
+#define R8125_RX_FCS_LEN 4u
+
 // Receive error bits [8169-family] — UNCONFIRMED for the 8125's descriptor
 // and treated accordingly: a descriptor carrying ANY of them is counted as
 // an rx_error and dropped rather than delivered. That is the safe direction
@@ -97,6 +102,13 @@ void r8125_ring_init_tx(r8125_desc_t* ring, uint16_t count,
 // frame right now can simply not advance.
 bool r8125_rx_ready(const r8125_desc_t* ring, uint16_t cursor,
                     uint16_t* length_out, bool* damaged_out);
+
+// Validate the device-reported receive length and convert it to the length
+// expected by the network stack. Returns false rather than underflowing if
+// the descriptor is shorter than its included FCS, or larger than the DMA
+// buffer that received it.
+bool r8125_rx_strip_fcs(uint16_t descriptor_length, uint16_t buffer_size,
+                        uint16_t* frame_length_out);
 
 // Hand descriptor `index` back to the device, empty. Preserves EOR.
 void r8125_rx_refill(r8125_desc_t* ring, uint16_t count, uint16_t index,
