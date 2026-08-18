@@ -233,9 +233,11 @@ int main(int argc, char **argv)
 
     // ── Receive into <dest>.part ────────────────────────────────────────
     char partPath[GET_PATH_MAX];
-    if (os64_snprintf(partPath, sizeof(partPath), "%s.part", dest) < 0)
+    int32_t pathlen = os64_snprintf(partPath, sizeof(partPath), "%s.part", dest);
+    if (pathlen < 0 || (size_t)pathlen >= sizeof(partPath))
     {
-        os64_hprintf(OS64_STDERR, "os64get: destination name too long\n");
+        os64_hprintf(OS64_STDERR,
+                     "os64get: destination path is too long to append '.part'\n");
         os64_close((int32_t)conn);
         return GET_WRITE_FAILED;
     }
@@ -299,6 +301,15 @@ int main(int argc, char **argv)
         os64_printf("\n");
 
     os64_close((int32_t)conn);
+
+    if (status == GET_OK && os64_sync((int32_t)out) < 0)
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: could not commit %s; %s NOT installed\n",
+                     partPath, dest);
+        status = GET_WRITE_FAILED;
+    }
+
     os64_close((int32_t)out);
 
     if (status != GET_OK)
