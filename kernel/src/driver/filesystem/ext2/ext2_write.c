@@ -595,37 +595,87 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 // (dereference-then-free, the doctrine's second rule). depth counts pointer
 // levels: 0 = data block, 1..3 = indirect. Recursion is bounded by ext2's
 // own geometry — three levels, ever.
-static void ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
-                            uint32_t block, uint32_t depth)
+static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
+                           uint32_t block, uint32_t depth,
+                           uint32_t *freed)
 {
 	if (block == 0)
-		return;
+		return 0;
 
 	if (depth > 0)
 	{
 		uint32_t *buf = (uint32_t *)wr_scratch_get(e);
-		if (buf != NULL)
+		if (buf == NULL)
+			return -1;
+		if (ext2_read_fs_block(fs, e, block, buf) != 0)
 		{
-			if (ext2_read_fs_block(fs, e, block, buf) == 0)
-				for (uint32_t i = 0; i < e->ptrs_per_block; i++)
-					ext2_free_chain(fs, e, buf[i], depth - 1);
 			wr_scratch_put(e, (uint8_t *)buf);
+			return -1;
 		}
-		// buf == NULL: the children leak rather than dangle — the map is
-		// already severed, so a leak is the worst case by construction.
+
+		for (uint32_t i = 0; i < e->ptrs_per_block; i++)
+		{
+			uint32_t child = buf[i];
+			if (child == 0)
+				continue;
+
+			// Make the removal durable before freeing the child. If the child
+			// cannot be released, put its pointer back so an orphan retry still
+			// has a complete map of every allocation that remains live.
+			buf[i] = 0;
+			if (ext2_write_fs_block(fs, e, block, buf) != 0)
+			{
+				buf[i] = child;
+				wr_scratch_put(e, (uint8_t *)buf);
+				return -1;
+			}
+			if (ext2_free_chain(fs, e, child, depth - 1, freed) != 0)
+			{
+				buf[i] = child;
+				if (ext2_write_fs_block(fs, e, block, buf) != 0)
+					printf("ext2: failed to restore indirect block %u entry %u after release error — run e2fsck\n",
+					       block, i);
+				wr_scratch_put(e, (uint8_t *)buf);
+				return -1;
+			}
+		}
+		wr_scratch_put(e, (uint8_t *)buf);
 	}
-	ext2_free_block(fs, e, block);
+	if (ext2_free_block(fs, e, block) != 0)
+		return -1;
+	(*freed)++;
+	return 0;
 }
 
-// Free all blocks named by `old` (a pre-truncate copy of the inode).
-static void ext2_free_inode_blocks(vfs_filesystem_t *fs, ext2_fs_t *e,
-                                   const ext2_inode_t *old)
+// Free all blocks named by `old` (a pre-truncate copy of the inode). On an
+// error, `old` is pruned to name exactly the failed and unvisited allocations
+// so an orphan caller can write it back and safely retry without pointing at
+// anything this pass already freed.
+static int ext2_free_inode_blocks(vfs_filesystem_t *fs, ext2_fs_t *e,
+                                  ext2_inode_t *old)
 {
+	uint32_t freed = 0;
 	for (uint32_t i = 0; i < EXT2_NDIR_BLOCKS; i++)
-		ext2_free_chain(fs, e, old->i_block[i], 0);
-	ext2_free_chain(fs, e, old->i_block[EXT2_IND_BLOCK],  1);
-	ext2_free_chain(fs, e, old->i_block[EXT2_DIND_BLOCK], 2);
-	ext2_free_chain(fs, e, old->i_block[EXT2_TIND_BLOCK], 3);
+	{
+		if (ext2_free_chain(fs, e, old->i_block[i], 0, &freed) != 0)
+			goto failed;
+		old->i_block[i] = 0;
+	}
+	for (uint32_t depth = 1; depth <= 3; depth++)
+	{
+		uint32_t slot = EXT2_IND_BLOCK + depth - 1;
+		if (ext2_free_chain(fs, e, old->i_block[slot], depth, &freed) != 0)
+			goto failed;
+		old->i_block[slot] = 0;
+	}
+	old->i_blocks = 0;
+	return 0;
+
+failed:
+	uint64_t released_sectors = (uint64_t)freed * e->sectors_per_block;
+	old->i_blocks = released_sectors < old->i_blocks
+	                    ? old->i_blocks - (uint32_t)released_sectors : 0;
+	return -1;
 }
 
 // ── Path splitting and directory surgery ────────────────────────────────────
@@ -1441,7 +1491,14 @@ static int ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 		return -1;
 	}
 
-	ext2_free_inode_blocks(fs, e, &old);
+	if (ext2_free_inode_blocks(fs, e, &old) != 0)
+	{
+		// `old` now contains only allocations that remain live. Restore that
+		// retry map to the caller; orphan_add will persist it before relinking
+		// the inode, so a later mount can finish rather than leak the blocks.
+		*node = old;
+		return -1;
+	}
 	return ext2_free_inode(fs, e, ino, is_dir);
 }
 

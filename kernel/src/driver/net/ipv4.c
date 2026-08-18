@@ -229,16 +229,16 @@ static ipv4_pending_t s_pending[IPV4_PENDING_MAX];
 static spinlock_t s_pending_lock;
 
 // Hold `payload` until next_hop resolves. The CALLER IS STILL TOLD -2 —
-// see the essay at the call site. Best effort: silently declines to hold
-// what it cannot (oversized, or every slot busy with another neighbor).
-static void ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
+// see the essay at the call site. Best effort: false means it could not hold
+// the packet (oversized, or every slot busy with another neighbor).
+static bool ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
                               uint32_t src_ip, uint32_t dst_ip,
                               uint8_t protocol, const void* payload,
                               uint16_t length)
 {
 	(void)dev;
 	if (length > sizeof(((ipv4_pending_t*)0)->payload))
-		return;   // too big to hold; the caller is told -2 either way
+		return false;   // too big to hold; the caller is told -2 either way
 
 	uint64_t flags = spinlock_acquire_irqsave(&s_pending_lock);
 
@@ -262,10 +262,8 @@ static void ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
 		// Every slot holds a live wait for a different neighbor. Give up
 		// on holding this one rather than evicting somebody else's — the
 		// caller was told -2 either way, so it loses nothing it ever had.
-		// (No counter here: tx_awaiting_arp is bumped at the call site,
-		// parked or not; tx_parked_for_arp only counts an actual hold.)
 		spinlock_release_irqrestore(&s_pending_lock, flags);
-		return;
+		return false;
 	}
 
 	s_pending[slot].next_hop = next_hop;
@@ -278,6 +276,7 @@ static void ipv4_park_pending(net_device_t* dev, uint32_t next_hop,
 
 	spinlock_release_irqrestore(&s_pending_lock, flags);
 	kIPv4Stats.tx_parked_for_arp++;
+	return true;
 }
 
 // A MAC just arrived. Called from arp.c the moment the cache learns one —
@@ -388,10 +387,11 @@ int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			// tolerate duplicates, TCP discards them by sequence number,
 			// and a duplicate on the first packet after an idle gap is a
 			// far smaller thing than either a hang or a lost connection.
+			bool parked = ipv4_park_pending(dev, next_hop, src_ip, dst_ip,
+			                                protocol, payload, length);
 			arp_send_request(dev, next_hop);
-			ipv4_park_pending(dev, next_hop, src_ip, dst_ip,
-			                  protocol, payload, length);
-			kIPv4Stats.tx_awaiting_arp++;
+			if (!parked)
+				kIPv4Stats.tx_awaiting_arp++;
 			return -2;
 		}
 	}

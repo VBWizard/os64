@@ -74,7 +74,7 @@ def is_safe_name(name):
     eventually. A name with no separator in it at all cannot leave the
     directory, whatever it contains.
     """
-    if not name or name in (".", ".."):
+    if not name or name in (".", "..") or "\x00" in name:
         return False
     if "/" in name or "\\" in name:
         return False

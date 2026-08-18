@@ -2293,14 +2293,27 @@ static bool test_ext2_orphan(void)
         ext2_free_blocks(kRootFilesystem) != orphan_blocks)
         OR_FAIL("failed last-close release changed free space instead of retaining the orphan\n");
 
-    // Now exercise MOUNT REPLAY itself. For this one-block file, write 6 is
-    // the inode-bitmap update: head removal, inode dereference, block bitmap,
-    // group descriptor, superblock, then inode bitmap. Its injected failure
-    // occurs after the data block was returned but before the inode was. The
-    // replay must restore the zero-block inode to the orphan chain and must
-    // NOT call it reaped.
+    // Now exercise MOUNT REPLAY itself. First fail the data-block bitmap
+    // update (write 3: head removal, inode dereference, block bitmap). The
+    // release must propagate that failure and restore an orphan inode that
+    // still names the allocated block, so the next replay can safely retry.
     if (kRootFilesystem->fops->mounted == NULL)
         OR_FAIL("ext2 mount table has no replay callback\n");
+    if (!orphan_test_fail_write(kRootFilesystem, 3))
+        OR_FAIL("could not install the block-release fault seam\n");
+    kRootFilesystem->fops->mounted(kRootFilesystem);
+    injected_writes = orphan_test_restore_write(kRootFilesystem);
+    if (injected_writes != 5)
+        OR_FAIL("failed block release made %u metadata writes, expected 5 including orphan restoration\n",
+                injected_writes);
+    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks)
+        OR_FAIL("failed block release changed free space instead of retaining the complete orphan\n");
+
+    // Then fail the inode-bitmap update after block release succeeds (write
+    // 6: head removal, inode dereference, block bitmap, group descriptor,
+    // superblock, inode bitmap). The restored orphan now has a zero block map,
+    // preventing the clean retry from double-freeing the completed release.
     if (!orphan_test_fail_write(kRootFilesystem, 6))
         OR_FAIL("could not install the replay-write fault seam\n");
     kRootFilesystem->fops->mounted(kRootFilesystem);
@@ -2696,6 +2709,102 @@ static bool test_console_read_deadline(void)
 // real app path. /bin/hello stays on the image for that launch.)
 
 // ── net tests ────────────────────────────────────────────────────────────────
+
+typedef struct arp_pending_order_state
+{
+    uint32_t next_hop;
+    uint8_t peer_mac[NET_MAC_LEN];
+    uint32_t arp_frames;
+    uint32_t ipv4_frames;
+    bool reply_injected;
+} arp_pending_order_state_t;
+
+// Model the shortest possible ARP round trip: the reply arrives from inside
+// the fake NIC's transmit callback, before arp_send_request can return. This
+// deterministically exercises the SMP window where another core may process a
+// reply immediately after the request reaches the wire.
+static int32_t arp_pending_order_transmit(net_device_t *dev, const void *frame,
+                                          uint16_t length)
+{
+    arp_pending_order_state_t *state = (arp_pending_order_state_t*)dev->driver_data;
+    const uint8_t *bytes = (const uint8_t*)frame;
+
+    if (length < ETH_HDR_LEN)
+        return -1;
+
+    uint16_t ethertype = net_read16(bytes + 12);
+    if (ethertype == ETH_TYPE_IPV4) {
+        state->ipv4_frames++;
+        return 0;
+    }
+    if (ethertype != ETH_TYPE_ARP || state->reply_injected)
+        return 0;
+
+    state->arp_frames++;
+    state->reply_injected = true;
+
+    uint8_t reply[ARP_PKT_LEN];
+    net_write16(reply + 0, 1);
+    net_write16(reply + 2, ETH_TYPE_IPV4);
+    reply[4] = NET_MAC_LEN;
+    reply[5] = 4;
+    net_write16(reply + 6, ARP_OPER_REPLY);
+    memcpy(reply + 8, state->peer_mac, NET_MAC_LEN);
+    net_write32(reply + 14, state->next_hop);
+    memcpy(reply + 18, dev->mac, NET_MAC_LEN);
+    net_write32(reply + 24, kNetIPv4Address);
+    arp_input(dev, reply, sizeof(reply));
+    return 0;
+}
+
+static bool test_net_arp_pending_order(void)
+{
+    arp_pending_order_state_t state = {
+        .next_hop = kNetIPv4Gateway,
+        .peer_mac = {0x02, 0x00, 0x00, 0x00, 0x00, 0x02},
+    };
+    net_operations_t ops = { .transmit = arp_pending_order_transmit };
+    net_device_t dev = {
+        .mac = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01},
+        .mtu = 1500,
+        .link_up = true,
+        .ops = &ops,
+        .driver_data = &state,
+    };
+    const uint8_t payload[] = {0x52, 0x41, 0x43, 0x45};
+
+    // Force the miss that enters the waiting room. The fake reply teaches the
+    // cache synchronously; flush afterward so this isolated test cannot make
+    // the real-wire ARP tests pass on synthetic evidence.
+    arp_cache_flush();
+    uint64_t parked_before = kIPv4Stats.tx_parked_for_arp;
+    uint64_t dropped_before = kIPv4Stats.tx_awaiting_arp;
+    int32_t rc = ipv4_send_from(&dev, kNetIPv4Address, kNetIPv4Gateway,
+                                IPV4_PROTO_UDP, payload, sizeof(payload));
+    bool released_in_time = state.ipv4_frames == 1;
+    bool accounting_ok = kIPv4Stats.tx_parked_for_arp == parked_before + 1 &&
+                         kIPv4Stats.tx_awaiting_arp == dropped_before;
+
+    // Under the buggy send-then-park ordering the reply has already gone by,
+    // leaving a packet behind. Release it solely to keep a failing test from
+    // contaminating later tests; the verdict above records whether it was late.
+    if (!released_in_time)
+        ipv4_arp_resolved(&dev, state.next_hop);
+    arp_cache_flush();
+
+    if (rc != -2 || state.arp_frames != 1 || !released_in_time || !accounting_ok) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_arp_pending_order - rc=%d arp=%u "
+               "ipv4_before_cleanup=%u parked_delta=%lu dropped_delta=%lu\n",
+               rc, state.arp_frames, released_in_time ? 1U : 0U,
+               kIPv4Stats.tx_parked_for_arp - parked_before,
+               kIPv4Stats.tx_awaiting_arp - dropped_before);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_arp_pending_order (synchronous ARP reply released "
+           "parked IPv4 packet; parked=1 dropped=0)\n");
+    return true;
+}
 
 // The driver's first round trip: hand-roll an ARP request ("who has
 // 10.0.2.2? tell 10.0.2.15"), transmit it raw through the seam, and wait
@@ -3836,6 +3945,7 @@ static void register_builtin_tests(void)
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_POSTBOOT);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
+    test_register("net_arp_pending_order", test_net_arp_pending_order, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
     test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);
     test_register("net_ping", test_net_ping, TEST_PHASE_POSTBOOT);
