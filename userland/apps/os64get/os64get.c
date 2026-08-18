@@ -59,9 +59,12 @@
 #define GET_CHUNK     4096
 #define GET_PATH_MAX  256
 
-// Parse a decimal from [s, end). Returns false on empty or non-digit —
-// refusal rather than a guess, because a malformed length is exactly the
-// case where guessing writes a file of the wrong size.
+// Parse a decimal from [s, end). Returns false on empty, on a non-digit, or
+// on a value too large for 64 bits — refusal rather than a guess, because a
+// malformed length is exactly the case where guessing writes a file of the
+// wrong size. The overflow arm is not pedantry: "18446744073709551616" wraps
+// to 0, and a zero length paired with the empty-file CRC would let a hostile
+// or broken server publish an EMPTY file over a good one and call it verified.
 static bool parse_u64(const char *s, const char *end, uint64_t *out)
 {
     if (s >= end)
@@ -71,7 +74,13 @@ static bool parse_u64(const char *s, const char *end, uint64_t *out)
     {
         if (*s < '0' || *s > '9')
             return false;
-        v = v * 10 + (uint64_t)(*s - '0');
+        uint64_t digit = (uint64_t)(*s - '0');
+        // Ask BEFORE multiplying — once it has wrapped there is nothing left
+        // to detect. (UINT64_MAX - digit) / 10 is the largest value that can
+        // still absorb one more digit.
+        if (v > (UINT64_MAX - digit) / 10)
+            return false;
+        v = v * 10 + digit;
         s++;
     }
     *out = v;

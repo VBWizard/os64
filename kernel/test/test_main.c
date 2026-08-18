@@ -2254,8 +2254,20 @@ static bool test_ext2_orphan(void)
     f = NULL;
 
     // NOW HOLD THE VICTIM OPEN — this handle is the running program.
+    // Hold it through a PRIVATE copy of the mount. A last-close release that
+    // stops half-done now demotes the mount it ran on (a bitmap bit already
+    // clear means the allocator could hand that storage to a live file), and
+    // ext2_close demotes whatever mount the HANDLE was opened on — so this
+    // copy takes the hit and the rest of the suite keeps its writable root.
+    // Same trick, same reason, as test_ext2_readonly_demotion.
+    vfs_filesystem_t reap_mount = *kRootFilesystem;
+    vfs_file_operations_t reap_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t reap_dops = *kRootFilesystem->dops;
+    reap_mount.fops = &reap_fops;
+    reap_mount.dops = &reap_dops;
+
     vfs_file_t *held = NULL;
-    if (kRootFilesystem->fops->open(&held, "/etc/testdata/orph/victim", "r", kRootFilesystem) != 0)
+    if (reap_mount.fops->open(&held, "/etc/testdata/orph/victim", "r", &reap_mount) != 0)
         OR_FAIL("could not open the victim to hold it\n");
 
     // The replacement lands on the victim's name while that handle is live.
@@ -2314,6 +2326,15 @@ static bool test_ext2_orphan(void)
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
         ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
         OR_FAIL("failed last-close release did not leave exactly one bitmap-completed block for replay\n");
+    // THE AMBIGUOUS FREE, asserted: that block's bitmap bit is clear on disk
+    // while the retry map still names it, so the allocator must be stopped
+    // until replay — and only AFTER write 3 put the map somewhere replay can
+    // find it. A generic "the free failed" would have left this mount taking
+    // allocations that replay would later hand back to the free pool.
+    if (!reap_mount.read_only)
+        OR_FAIL("half-completed last-close block release did not demote its mount\n");
+    if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
+        OR_FAIL("last-close demotion escaped onto the real root mount\n");
 
     // Now exercise MOUNT REPLAY itself, including the new indirect ordering.
     // Reconciliation of the first direct block costs two writes; the eleven
@@ -2325,11 +2346,26 @@ static bool test_ext2_orphan(void)
         OR_FAIL("ext2 mount table has no replay callback\n");
     if (!orphan_test_fail_write(kRootFilesystem, 45))
         OR_FAIL("could not install the replay-write fault seam\n");
-    kRootFilesystem->fops->mounted(kRootFilesystem);
+    // Another private mount, for the same reason and a sharper hazard: write 44
+    // freed the inode BITMAP BIT, so that inode NUMBER is allocatable while the
+    // orphan chain still names it for teardown. Hand it to a new file and the
+    // next replay releases that file's storage. This replay must therefore end
+    // with the mount demoted, not merely with an error returned.
+    vfs_filesystem_t replay_mount = *kRootFilesystem;
+    vfs_file_operations_t replay_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t replay_dops = *kRootFilesystem->dops;
+    replay_mount.fops = &replay_fops;
+    replay_mount.dops = &replay_dops;
+
+    replay_mount.fops->mounted(&replay_mount);
     injected_writes = orphan_test_restore_write(kRootFilesystem);
     if (injected_writes != 45)
         OR_FAIL("failed indirect replay made %u metadata writes, expected 45 with orphan still linked\n",
                 injected_writes);
+    if (!replay_mount.read_only)
+        OR_FAIL("half-completed orphan inode free did not demote its mount\n");
+    if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
+        OR_FAIL("replay demotion escaped onto the real root mount\n");
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1)
         OR_FAIL("failed mount replay did not leave exactly one bitmap-completed inode for retry\n");
     if (ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks + 1)
@@ -2419,7 +2455,7 @@ static bool test_ext2_orphan(void)
         ext2_free_blocks(kRootFilesystem) != blocks0)
         OR_FAIL("closed-rename retry replay did not return all storage to baseline\n");
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent counts + retry-map-before-demotion; %u inodes / %u blocks returned exactly)\n",
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent counts + half-completed block/inode frees demote + retry-map-before-demotion; %u inodes / %u blocks returned exactly)\n",
            inodes0, blocks0);
     return true;
 }

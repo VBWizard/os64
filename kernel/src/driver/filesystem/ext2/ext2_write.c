@@ -369,6 +369,44 @@ uint32_t ext2_alloc_block(vfs_filesystem_t *fs, ext2_fs_t *e,
 	return 0;   // filesystem full — the caller turns this into a short write
 }
 
+// ── The free path's result vocabulary ───────────────────────────────────────
+// A failed release is not one fact but two, and the difference decides whether
+// this mount may keep allocating:
+//
+//   EXT2_FREE_FAILED       nothing on disk changed. The retry map names
+//                          storage the bitmap still calls USED, so no
+//                          allocator can hand it to a live file; replay simply
+//                          tries again at the next mount. Recoverable, quiet.
+//
+//   ..._NAMES_FREE_BLOCK   the dangerous half. A bitmap bit is already CLEAR —
+//   ..._NAMES_FREE_INODE   that block or inode is allocatable RIGHT NOW — while
+//                          a durable record still names it for release. Let one
+//                          allocation land in that window and replay hands a
+//                          live file's storage back to the free pool.
+//
+// The reusable results carry a caller obligation, in this order: persist the
+// retry record FIRST (writes are still permitted), THEN demote the mount.
+// Demoting first turns the record's own write into a block-tripwire panic and
+// costs the very recovery path the record exists to provide.
+enum
+{
+	EXT2_FREE_FAILED = -1,
+	// A child release landed but clearing its durable parent pointer did not,
+	// or a block's bitmap write landed while a count ledger writeback did not.
+	EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK = -2,
+	// The inode's bitmap bit is clear while its counts — or the orphan chain
+	// entry that still names it — say otherwise.
+	EXT2_FREE_RETRY_MAP_NAMES_FREE_INODE = -3
+};
+
+// Both reusable results answer the caller's only question the same way, and
+// asking it by name beats two comparisons that must never drift apart.
+static inline bool ext2_free_left_storage_reusable(int rc)
+{
+	return rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK ||
+	       rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_INODE;
+}
+
 // Free one block: bitmap bit off, counts up. Most callers have already
 // removed every reference. Orphan replay deliberately retains its retry map
 // until the free is durable; write_lock (or pre-allocation mount replay)
@@ -388,15 +426,18 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 	uint8_t *bm = wr_scratch_get(e);
 	if (bm == NULL)
 		return -1;
-	int rc = -1;
+	int rc = EXT2_FREE_FAILED;
 	if (ext2_read_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) == 0)
 	{
 		// Replay may revisit a block whose bitmap update completed just before
 		// power failed. It is already free, but the two count ledgers may still
 		// describe it as allocated; repair both before declaring completion.
+		// A reconcile that ITSELF fails leaves the caller's retry map naming a
+		// block the bitmap calls free — the reusable window, not a clean miss.
 		if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
 		{
-			rc = ext2_reconcile_free_block_counts(fs, e, g, bm);
+			rc = ext2_reconcile_free_block_counts(fs, e, g, bm) == 0
+			         ? 0 : EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
 			goto out;
 		}
 		bm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
@@ -404,9 +445,13 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 		{
 			e->groups[g].bg_free_blocks_count++;
 			e->sb.s_free_blocks_count++;
-			if (ext2_gd_writeback(fs, e, g) == 0 &&
-			    ext2_sb_writeback(fs, e) == 0)
-				rc = 0;
+			// PAST THE POINT OF NO RETURN. That bitmap write published this
+			// block to every allocator on the filesystem; a count writeback
+			// failing now cannot be reported as "nothing happened", because
+			// the caller's retry map still names a block anyone may take.
+			rc = (ext2_gd_writeback(fs, e, g) == 0 &&
+			      ext2_sb_writeback(fs, e) == 0)
+			         ? 0 : EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
 		}
 	}
 out:
@@ -486,14 +531,15 @@ int ext2_free_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 	uint8_t *bm = wr_scratch_get(e);
 	if (bm == NULL)
 		return -1;
-	int rc = -1;
+	int rc = EXT2_FREE_FAILED;
 	if (ext2_read_fs_block(fs, e, e->groups[g].bg_inode_bitmap, bm) == 0)
 	{
 		// Same replay rule as blocks: an orphan may have reached this bitmap
 		// write before a crash but not either count ledger or final chain unlink.
 		if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
 		{
-			rc = ext2_reconcile_free_inode_counts(fs, e, g, bm);
+			rc = ext2_reconcile_free_inode_counts(fs, e, g, bm) == 0
+			         ? 0 : EXT2_FREE_RETRY_MAP_NAMES_FREE_INODE;
 			goto out;
 		}
 		bm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
@@ -503,9 +549,13 @@ int ext2_free_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 			e->sb.s_free_inodes_count++;
 			if (is_dir && e->groups[g].bg_used_dirs_count > 0)
 				e->groups[g].bg_used_dirs_count--;
-			if (ext2_gd_writeback(fs, e, g) == 0 &&
-			    ext2_sb_writeback(fs, e) == 0)
-				rc = 0;
+			// Same point of no return as the block path, and worse if ignored:
+			// this inode NUMBER is allocatable now, while the orphan chain may
+			// still name it for teardown. A stale count is not the hazard —
+			// a later replay releasing the new file that got this number is.
+			rc = (ext2_gd_writeback(fs, e, g) == 0 &&
+			      ext2_sb_writeback(fs, e) == 0)
+			         ? 0 : EXT2_FREE_RETRY_MAP_NAMES_FREE_INODE;
 		}
 	}
 out:
@@ -668,14 +718,10 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 // bitmap release is idempotent. depth counts pointer levels: 0 = data block,
 // 1..3 = indirect. Recursion is bounded by ext2's own geometry — three
 // levels, ever.
-enum
-{
-	EXT2_FREE_FAILED = -1,
-	// A child release landed but clearing its durable parent pointer did not.
-	// Replay is safe; continued allocation in this mount is not.
-	EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK = -2
-};
-
+//
+// Results are the free path's shared vocabulary (declared above ext2_free_block,
+// which is where the reusable window opens): 0, EXT2_FREE_FAILED, or one of the
+// EXT2_FREE_RETRY_MAP_NAMES_FREE_* results the caller must persist-then-demote on.
 static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
                            uint32_t block, uint32_t depth,
                            uint32_t *freed)
@@ -722,8 +768,14 @@ static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
 		}
 		wr_scratch_put(e, (uint8_t *)buf);
 	}
-	if (ext2_free_block(fs, e, block) != 0)
-		return -1;
+	// Propagate the result verbatim. A bitmap write that landed while a count
+	// ledger did not leaves THIS block reusable although the retry map (the
+	// inode's i_block entry, or a parent pointer above us) still names it —
+	// exactly the condition the sentinel exists to carry to a caller that can
+	// persist the record and stop the allocator.
+	int free_rc = ext2_free_block(fs, e, block);
+	if (free_rc != 0)
+		return free_rc;
 	(*freed)++;
 	return 0;
 }
@@ -1609,6 +1661,9 @@ static int ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 		*node = old;
 		return release_rc;
 	}
+	// Propagated for the same reason: if this clears the inode's bitmap bit but
+	// not its ledgers, the caller must orphan the record BEFORE demoting, and
+	// it can only know to demote if the reusable result reaches it.
 	return ext2_free_inode(fs, e, ino, is_dir);
 }
 
@@ -1637,13 +1692,23 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 		// stop allocation in this mount after the record is safely on disk.
 		if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
 		{
-			printf("ext2: could not persist orphan %u release progress — forcing filesystems read-only\n", ino);
-			vfs_demote_all_mounts_readonly("ext2 orphan release progress write failed");
+			// Scope note (all four demotions in this function): the ambiguity
+			// lives in THIS filesystem's bitmaps and only this filesystem's
+			// allocator can act on it, so the pens come away from this mount.
+			// Halting healthy sibling mounts — /home, the FAT lifeboat — would
+			// protect nothing and take away the disks an operator analyzes with.
+			// (Same scope the closed-rename path chose for the same hazard.)
+			printf("ext2: could not persist orphan %u release progress — demoting its mount to read-only\n", ino);
+			vfs_demote_mount_readonly(fs);
 		}
-		else if (release_rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK)
+		else if (ext2_free_left_storage_reusable(release_rc))
 		{
-			printf("ext2: orphan %u retry map retains a released indirect child — forcing filesystems read-only\n", ino);
-			vfs_demote_all_mounts_readonly("ext2 orphan indirect parent write failed");
+			// The map is safely on disk; NOW stop the allocator. Any reusable
+			// result qualifies, not just the parent-pointer one: a block whose
+			// bitmap write landed while its count writeback did not is every
+			// bit as allocatable as one whose parent still points at it.
+			printf("ext2: orphan %u retry map names storage the bitmap already calls free — demoting its mount to read-only\n", ino);
+			vfs_demote_mount_readonly(fs);
 		}
 		*node = remaining;
 		return -1;
@@ -1659,8 +1724,8 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 		// Blocks are now reusable but the disk inode may still name them. Stop
 		// all further allocation; after reboot, replay runs before allocation
 		// and the idempotent frees safely finish this inode.
-		printf("ext2: could not persist completed orphan %u block release — forcing filesystems read-only\n", ino);
-		vfs_demote_all_mounts_readonly("ext2 orphan completion write failed");
+		printf("ext2: could not persist completed orphan %u block release — demoting its mount to read-only\n", ino);
+		vfs_demote_mount_readonly(fs);
 		return -1;
 	}
 	*node = remaining;
@@ -1668,15 +1733,30 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 	// Free while still linked. If power fails after the bitmap lands, replay
 	// sees the intact inode-table record, observes an already-free bit, and
 	// continues to the final unlink before any allocation is permitted.
-	if (ext2_free_inode(fs, e, ino, is_dir) != 0)
+	int inode_rc = ext2_free_inode(fs, e, ino, is_dir);
+	if (inode_rc != 0)
+	{
+		// A CLEAN failure is the benign one: the bit is still set, so this
+		// inode number is nobody's to take, the chain still names it, and the
+		// next mount finishes the job. The reusable result is the dangerous
+		// twin and the one this branch exists for — the bitmap already calls
+		// the inode free while the chain still names it for teardown, so an
+		// allocator handing that number to a new file would arrange for replay
+		// to release the NEW file's storage. Stop allocation until replay.
+		if (ext2_free_left_storage_reusable(inode_rc))
+		{
+			printf("ext2: orphan %u freed its inode bitmap bit but not its ledgers — demoting its mount to read-only\n", ino);
+			vfs_demote_mount_readonly(fs);
+		}
 		return -1;
+	}
 
 	if (ext2_orphan_remove(fs, e, ino) != 0)
 	{
 		// The chain may still name an inode whose bitmap bit is free. That is
 		// replay-safe but not safe for continued allocation in this mount.
-		printf("ext2: could not unlink released orphan %u — forcing filesystems read-only\n", ino);
-		vfs_demote_all_mounts_readonly("ext2 orphan final unlink failed");
+		printf("ext2: could not unlink released orphan %u — demoting its mount to read-only\n", ino);
+		vfs_demote_mount_readonly(fs);
 		return -1;
 	}
 
@@ -2318,9 +2398,12 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 					printd(DEBUG_VFS, "ext2: rename '%s' -> '%s': displaced inode %u could not be released or orphaned — run e2fsck\n",
 					       oldpath, newpath, dst_ino);
 
-				if (release_rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK)
+				// Every reusable result, not just the indirect-parent one: a
+				// half-completed block OR inode free leaves storage the orphan
+				// record still names sitting in the allocator's free pool.
+				if (ext2_free_left_storage_reusable(release_rc))
 				{
-					printf("ext2: inode %u retry map %s after indirect release failure — forcing mount read-only\n",
+					printf("ext2: inode %u retry map %s after a partial release — forcing mount read-only\n",
 					       dst_ino, orphan_rc == 0 ? "persisted" : "could not be persisted");
 					vfs_demote_mount_readonly(vfs_fs);
 				}
