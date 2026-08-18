@@ -258,6 +258,10 @@ struct vfs_filesystem
 	uint8_t major;
 	uint8_t minor;
 	uint8_t fatDiskNumber;
+	// The mount-level authority for runtime demotion. Function slots are also
+	// stripped for fast syscall refusal, but retained/saved callbacks must
+	// independently honor this state before performing any mutation.
+	bool read_only;
 	void* fs_specific;
 };
 
@@ -478,6 +482,10 @@ int64_t vfs_sync_all(void);
 // legitimate writes to a partition no filesystem has claimed. Pure
 // kMountTable scan — no disk I/O, safe from any context/CR3.
 bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo);
+
+// Demote one mount in place. Public so focused tests can exercise the exact
+// transition on a private mount-table copy without disabling the running OS.
+void vfs_demote_mount_readonly(vfs_filesystem_t *fs);
 
 // TEST_RO's engine (2026-08-08): NULL the write verbs on every mount's
 // private op-table copies — every dispatch site then refuses exactly like a

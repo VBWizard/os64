@@ -1012,6 +1012,11 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (fs->read_only)
+	{
+		spinlock_release_irqrestore(&e->write_lock, lock_flags);
+		return -1;
+	}
 
 	// FRESH-INODE DISCIPLINE: re-read the inode from disk before mutating.
 	// Two handles appending to one file serialize here — each sees the
@@ -1219,12 +1224,19 @@ static int ext2_open_rw(vfs_file_t **vfs_file, const char *path, const char *mod
 
 		case 'a':
 		{
+			if (vfs_fs->read_only)
+				return -1;
 			if (ext2_open_existing(vfs_file, path, vfs_fs) != 0)
 			{
 				// Absent: create it, then open the now-existing file. (A
 				// concurrent rm between the unlock and the reopen makes the
 				// reopen fail — correct, just unlucky.)
 				uint64_t flags = spinlock_acquire_irqsave(&e->write_lock);
+				if (vfs_fs->read_only)
+				{
+					spinlock_release_irqrestore(&e->write_lock, flags);
+					return -1;
+				}
 				uint32_t ino = ext2_create_file(vfs_fs, e, path);
 				spinlock_release_irqrestore(&e->write_lock, flags);
 				if (ino == 0)
@@ -1241,6 +1253,11 @@ static int ext2_open_rw(vfs_file_t **vfs_file, const char *path, const char *mod
 		case 'c':
 		{
 			uint64_t flags = spinlock_acquire_irqsave(&e->write_lock);
+			if (vfs_fs->read_only)
+			{
+				spinlock_release_irqrestore(&e->write_lock, flags);
+				return -1;
+			}
 
 			ext2_inode_t node;
 			uint32_t ino = ext2_resolve_path(vfs_fs, e, path, &node);
@@ -1689,6 +1706,8 @@ void ext2_orphan_reap_if_pending(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t in
 		return;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (fs->read_only)
+		goto done;
 
 	ext2_inode_t node;
 	if (ext2_read_inode(fs, e, ino, &node) != 0)
@@ -1717,7 +1736,7 @@ void ext2_orphan_replay(vfs_filesystem_t *fs, ext2_fs_t *e)
 	if (e->sb.s_last_orphan == 0)
 		return;
 
-	if (e->forced_ro || fs->fops == NULL || fs->fops->write == NULL)
+	if (e->forced_ro || fs->read_only || fs->fops == NULL || fs->fops->write == NULL)
 	{
 		// We can see the debt and cannot pay it. Say so — an unannounced
 		// leak on a read-only mount is still a leak.
@@ -1756,6 +1775,8 @@ static int ext2_rm(const char *filename, vfs_filesystem_t *vfs_fs)
 	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (vfs_fs->read_only)
+		goto refuse;
 
 	// Resolve parent + leaf, then the child through the parent — we need
 	// all three for the dirent surgery.
@@ -1895,6 +1916,8 @@ static int ext2_mkdir(char *path, vfs_filesystem_t *vfs_fs)
 	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (vfs_fs->read_only)
+		goto refuse;
 
 	ext2_inode_t parent;
 	const char *name;
@@ -2077,6 +2100,8 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (vfs_fs->read_only)
+		goto refuse;
 
 	// Resolve both ends. split_path also refuses "." and ".." leaves and
 	// verifies each parent really is a directory, so those cases never

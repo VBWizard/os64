@@ -712,6 +712,7 @@ int ext2_initialize_filesystem(vfs_filesystem_t *fs)
 	e->forced_ro = (ro_compat & ~(uint32_t)EXT2_SUPPORTED_RO_COMPAT) != 0;
 	if (e->forced_ro && fs->fops != NULL && fs->fops->write != NULL)
 	{
+		fs->read_only = true;
 		printd(DEBUG_VFS, "ext2: unknown ro_compat features 0x%08x — mounting READ-ONLY (writes stripped)\n",
 		       ro_compat);
 		fs->fops->write   = NULL;

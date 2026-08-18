@@ -2360,6 +2360,120 @@ static bool test_ext2_orphan(void)
 }
 #undef OR_FAIL
 
+// A runtime demotion must be stronger than clearing the obvious operation
+// slots: ext2_open_rw remains installed so reads can still be opened, and a
+// callback or open handle may have retained a pre-demotion function pointer.
+// Exercise a PRIVATE mount copy so the real test boot keeps its writable root.
+static bool test_ext2_readonly_demotion(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+        kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_readonly_demotion (root is not writable ext2)\n");
+        return true;
+    }
+
+    static const char guard_path[] = "/etc/testdata/ro_guard";
+    static const char created_path[] = "/etc/testdata/ro_created";
+    static const char renamed_path[] = "/etc/testdata/ro_renamed";
+    char mkdir_path[] = "/etc/testdata/ro_dir";
+    static const char guard_bytes[] = "READ-ONLY-GUARD";
+    os64_dirent_t de;
+    bool ok = true;
+
+#define ROD_FAIL(...) do { \
+        printf("FAIL ext2_readonly_demotion: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_readonly_demotion - " __VA_ARGS__); \
+        ok = false; \
+    } while (0)
+
+    kRootFilesystem->fops->rm(guard_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(created_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(renamed_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(mkdir_path, kRootFilesystem);
+
+    vfs_file_t *file = NULL;
+    if (kRootFilesystem->fops->open(&file, guard_path, "c", kRootFilesystem) != 0 ||
+        kRootFilesystem->fops->write(file, guard_bytes, sizeof(guard_bytes) - 1) !=
+            (int)(sizeof(guard_bytes) - 1)) {
+        if (file != NULL)
+            kRootFilesystem->fops->close(file);
+        ROD_FAIL("could not provision guard file\n");
+        return false;
+    }
+    kRootFilesystem->fops->close(file);
+
+    vfs_filesystem_t shadow = *kRootFilesystem;
+    vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
+    shadow.fops = &shadow_fops;
+    shadow.dops = &shadow_dops;
+
+    int (*saved_open)(vfs_file_t **, const char *, const char *, vfs_filesystem_t *) = shadow_fops.open;
+    int (*saved_write)(vfs_file_t *, const void *, size_t) = shadow_fops.write;
+    int (*saved_rm)(const char *, vfs_filesystem_t *) = shadow_fops.rm;
+    int (*saved_rename)(const char *, const char *, vfs_filesystem_t *) = shadow_fops.rename;
+    int (*saved_mkdir)(char *, vfs_filesystem_t *) = shadow_dops.mkdir;
+
+    vfs_demote_mount_readonly(&shadow);
+    if (!shadow.read_only || shadow.fops->write != NULL ||
+        shadow.fops->sync != NULL || shadow.fops->flush != NULL ||
+        shadow.fops->rm != NULL || shadow.fops->rename != NULL ||
+        shadow.dops->mkdir != NULL)
+        ROD_FAIL("demotion left a direct mutating operation slot installed\n");
+
+    // Read-only open remains useful after demotion.
+    file = NULL;
+    if (shadow.fops->open == NULL ||
+        shadow.fops->open(&file, guard_path, "r", &shadow) != 0) {
+        ROD_FAIL("demotion blocked an ordinary read open\n");
+    } else {
+        if (saved_write(file, "X", 1) >= 0)
+            ROD_FAIL("retained write callback wrote through a demoted mount\n");
+        shadow.fops->close(file);
+    }
+
+    const char modes[] = { 'w', 'c', 'a' };
+    for (unsigned i = 0; i < sizeof(modes); i++) {
+        char mode[2] = { modes[i], '\0' };
+        file = NULL;
+        if (saved_open(&file, guard_path, mode, &shadow) == 0) {
+            ROD_FAIL("retained open callback accepted mode '%c' after demotion\n", modes[i]);
+            shadow.fops->close(file);
+        }
+    }
+    file = NULL;
+    if (saved_open(&file, created_path, "c", &shadow) == 0) {
+        ROD_FAIL("retained open callback created a file after demotion\n");
+        shadow.fops->close(file);
+    }
+    if (saved_mkdir(mkdir_path, &shadow) == 0)
+        ROD_FAIL("retained mkdir callback mutated a demoted mount\n");
+    if (saved_rename(guard_path, renamed_path, &shadow) == 0)
+        ROD_FAIL("retained rename callback mutated a demoted mount\n");
+    if (saved_rm(guard_path, &shadow) == 0)
+        ROD_FAIL("retained rm callback mutated a demoted mount\n");
+
+    char contents[32];
+    int n = rn_slurp(guard_path, contents, sizeof(contents));
+    if (n != (int)(sizeof(guard_bytes) - 1) ||
+        memcmp(contents, guard_bytes, sizeof(guard_bytes) - 1) != 0)
+        ROD_FAIL("guard file changed despite read-only demotion (n=%d)\n", n);
+    if (kRootFilesystem->dops->stat(created_path, &de, kRootFilesystem) == 0 ||
+        kRootFilesystem->dops->stat(renamed_path, &de, kRootFilesystem) == 0 ||
+        kRootFilesystem->dops->stat(mkdir_path, &de, kRootFilesystem) == 0)
+        ROD_FAIL("a refused create, rename, or mkdir left a namespace entry\n");
+
+    kRootFilesystem->fops->rm(guard_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(created_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(renamed_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(mkdir_path, kRootFilesystem);
+
+    if (ok)
+        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/truncate/append/write/rm/rename/mkdir refused)\n");
+    return ok;
+#undef ROD_FAIL
+}
+
 // ── test_ext2_secondary_write ───────────────────────────────────────────────
 // The ext2 WRITE driver's proving ground (2026-08-04 — the day os64 wrote
 // its first ext2 byte). Runs against the WRITABLE SECONDARY ext2 mount
@@ -3970,6 +4084,7 @@ static void register_builtin_tests(void)
     test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("vfs_rename", test_vfs_rename, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_orphan", test_ext2_orphan, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("ext2_readonly_demotion", test_ext2_readonly_demotion, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
