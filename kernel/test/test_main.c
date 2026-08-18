@@ -2216,11 +2216,31 @@ static bool test_ext2_orphan(void)
     if (inodes0 == 0 || blocks0 == 0)
         OR_FAIL("free-space accessors returned 0 — wrong filesystem, or a broken accessor\n");
 
-    // The victim: the file standing in for a running program's binary.
+    // The victim: the file standing in for a running program's binary. Make
+    // it thirteen blocks so its map crosses the twelve direct slots and the
+    // orphan teardown MUST visit an indirect block. The first bytes remain
+    // distinctive for the held-reader assertion below.
     vfs_file_t *f = NULL;
     if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/victim", "c", kRootFilesystem) != 0)
         OR_FAIL("could not create the victim\n");
-    kRootFilesystem->fops->write(f, oldBytes, sizeof(oldBytes) - 1);
+    uint32_t orphan_data_blocks = 13;
+    uint8_t *orphan_data = kmalloc((size_t)kRootFilesystem->blockSize);
+    if (orphan_data == NULL) {
+        kRootFilesystem->fops->close(f);
+        OR_FAIL("could not allocate the indirect-block fixture\n");
+    }
+    memset(orphan_data, 0xA5, (size_t)kRootFilesystem->blockSize);
+    memcpy(orphan_data, oldBytes, sizeof(oldBytes) - 1);
+    for (uint32_t i = 0; i < orphan_data_blocks; i++) {
+        int wrote = kRootFilesystem->fops->write(
+            f, orphan_data, (size_t)kRootFilesystem->blockSize);
+        if (wrote != kRootFilesystem->blockSize) {
+            kRootFilesystem->fops->close(f);
+            kfree(orphan_data);
+            OR_FAIL("could not write indirect-block fixture block %u (wrote %d)\n", i, wrote);
+        }
+    }
+    kfree(orphan_data);
     kRootFilesystem->fops->close(f);
     f = NULL;
 
@@ -2247,7 +2267,7 @@ static bool test_ext2_orphan(void)
     // CLAIM 1: the holder still reads the OLD bytes. Its inode has no name
     // any more; it does not care, and must not.
     int n = kRootFilesystem->fops->read(held, buf, sizeof(buf));
-    if (n != (int)(sizeof(oldBytes) - 1) || memcmp(buf, oldBytes, sizeof(oldBytes) - 1) != 0) {
+    if (n < (int)(sizeof(oldBytes) - 1) || memcmp(buf, oldBytes, sizeof(oldBytes) - 1) != 0) {
         kRootFilesystem->fops->close(held);
         OR_FAIL("the held handle stopped reading its own bytes (n=%d) — the orphan died early\n", n);
     }
@@ -2273,49 +2293,53 @@ static bool test_ext2_orphan(void)
         OR_FAIL("free space is already back at baseline while the handle is OPEN — nothing was orphaned\n");
     }
 
-    // The program exits. Fail its first block-bitmap release. The orphan must
-    // remain durably linked throughout teardown; write 2 persists the still-
-    // complete retry map, and neither allocation counter may move.
+    // The program exits. Let its first block-bitmap release land, then fail
+    // the following group-descriptor count at write 2. Write 3 persists the
+    // retry map. The next replay must see the already-clear bit and reconcile
+    // both count ledgers without counting that block twice.
     uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
     uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
-    if (!orphan_test_fail_write(kRootFilesystem, 1)) {
+    if (!orphan_test_fail_write(kRootFilesystem, 2)) {
         kRootFilesystem->fops->close(held);
         OR_FAIL("could not install the release-write fault seam\n");
     }
     kRootFilesystem->fops->close(held);
     held = NULL;
     uint32_t injected_writes = orphan_test_restore_write(kRootFilesystem);
-    if (injected_writes != 2)
-        OR_FAIL("failed release made %u metadata writes, expected 2 (failed block bitmap, persisted retry map)\n",
+    if (injected_writes != 3)
+        OR_FAIL("failed release made %u metadata writes, expected 3 (bitmap, failed GDT, retry inode)\n",
                 injected_writes);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
-        ext2_free_blocks(kRootFilesystem) != orphan_blocks)
-        OR_FAIL("failed last-close release changed free space instead of retaining the orphan\n");
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
+        OR_FAIL("failed last-close release did not leave exactly one bitmap-completed block for replay\n");
 
-    // Now exercise MOUNT REPLAY itself. Let block release complete, persist
-    // the zero map, then fail the inode bitmap (write 5: block bitmap, group
-    // descriptor, superblock, inode, inode bitmap). The orphan head must
-    // STILL name this zero-block inode; unlinking is the final step now.
+    // Now exercise MOUNT REPLAY itself, including the new indirect ordering.
+    // Reconciliation of the first direct block costs two writes; the eleven
+    // remaining direct children bring the count to 35. The indirect child is
+    // 36..38, its parent-pointer clear is 39, and its root release is 40..42.
+    // The zero map is write 43 and the inode bitmap is 44; fail its GDT count
+    // at write 45. A clean retry must reconcile the already-free inode too.
     if (kRootFilesystem->fops->mounted == NULL)
         OR_FAIL("ext2 mount table has no replay callback\n");
-    if (!orphan_test_fail_write(kRootFilesystem, 5))
+    if (!orphan_test_fail_write(kRootFilesystem, 45))
         OR_FAIL("could not install the replay-write fault seam\n");
     kRootFilesystem->fops->mounted(kRootFilesystem);
     injected_writes = orphan_test_restore_write(kRootFilesystem);
-    if (injected_writes != 5)
-        OR_FAIL("failed mount replay made %u metadata writes, expected 5 with orphan still linked\n",
+    if (injected_writes != 45)
+        OR_FAIL("failed indirect replay made %u metadata writes, expected 45 with orphan still linked\n",
                 injected_writes);
-    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes)
-        OR_FAIL("failed mount replay freed the orphan inode despite its bitmap-write error\n");
-    if (ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
-        OR_FAIL("failed mount replay did not preserve the completed block release\n");
+    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1)
+        OR_FAIL("failed mount replay did not leave exactly one bitmap-completed inode for retry\n");
+    if (ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks + 1)
+        OR_FAIL("failed indirect replay freed %u blocks, expected %u data blocks plus indirect root\n",
+                ext2_free_blocks(kRootFilesystem) - orphan_blocks, orphan_data_blocks);
 
     // A clean retry is the next boot in miniature. It must find the STILL-
     // LINKED orphan, idempotently finish its inode release, and only then
     // remove the durable chain record.
     kRootFilesystem->fops->mounted(kRootFilesystem);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1 ||
-        ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks + 1)
         OR_FAIL("clean mount replay did not finish the retained orphan\n");
 
     // CLAIM 2: exactly what was taken, given back. Drop the surviving name
@@ -2330,7 +2354,7 @@ static bool test_ext2_orphan(void)
         OR_FAIL("BLOCK LEAK: %u free before, %u after (%d lost)\n",
                 blocks0, blocks1, (int)blocks0 - (int)blocks1);
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (reader survived; failed close + failed replay retained the orphan; %u inodes / %u blocks returned exactly)\n",
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent block/inode count reconciliation; %u inodes / %u blocks returned exactly)\n",
            inodes0, blocks0);
     return true;
 }

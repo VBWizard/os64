@@ -202,6 +202,60 @@ int ext2_gd_writeback(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t group)
 	return ext2_write_fs_block(fs, e, disk_block, src) == 0 ? 0 : -1;
 }
 
+// Count zero bits in the meaningful part of an allocation bitmap. Bits past
+// the final partial group are filesystem padding, not free objects.
+static uint32_t ext2_bitmap_free_count(const uint8_t *bitmap, uint32_t bits)
+{
+	uint32_t free = 0;
+	for (uint32_t bit = 0; bit < bits; bit++)
+		if (!(bitmap[bit / 8] & (uint8_t)(1u << (bit % 8))))
+			free++;
+	return free;
+}
+
+// An idempotent replay can find the bitmap bit already clear after a crash
+// interrupted the following GDT/superblock writes. Rebuild this group's count
+// from the authoritative bitmap, rebuild the global total from the corrected
+// group table, and ALWAYS write both ledgers: RAM may already contain the
+// right values after a transient I/O failure while disk still does not.
+static int ext2_reconcile_free_block_counts(vfs_filesystem_t *fs, ext2_fs_t *e,
+                                             uint32_t g, const uint8_t *bitmap)
+{
+	uint32_t base = e->sb.s_first_data_block + g * e->sb.s_blocks_per_group;
+	uint32_t span = e->sb.s_blocks_count - base;
+	if (span > e->sb.s_blocks_per_group)
+		span = e->sb.s_blocks_per_group;
+	e->groups[g].bg_free_blocks_count = (uint16_t)ext2_bitmap_free_count(bitmap, span);
+
+	uint64_t total = 0;
+	for (uint32_t i = 0; i < e->groups_count; i++)
+		total += e->groups[i].bg_free_blocks_count;
+	e->sb.s_free_blocks_count = (uint32_t)total;
+
+	if (ext2_gd_writeback(fs, e, g) != 0)
+		return -1;
+	return ext2_sb_writeback(fs, e);
+}
+
+static int ext2_reconcile_free_inode_counts(vfs_filesystem_t *fs, ext2_fs_t *e,
+                                             uint32_t g, const uint8_t *bitmap)
+{
+	uint32_t base = g * e->sb.s_inodes_per_group;
+	uint32_t span = e->sb.s_inodes_count - base;
+	if (span > e->sb.s_inodes_per_group)
+		span = e->sb.s_inodes_per_group;
+	e->groups[g].bg_free_inodes_count = (uint16_t)ext2_bitmap_free_count(bitmap, span);
+
+	uint64_t total = 0;
+	for (uint32_t i = 0; i < e->groups_count; i++)
+		total += e->groups[i].bg_free_inodes_count;
+	e->sb.s_free_inodes_count = (uint32_t)total;
+
+	if (ext2_gd_writeback(fs, e, g) != 0)
+		return -1;
+	return ext2_sb_writeback(fs, e);
+}
+
 // ── The allocators ──────────────────────────────────────────────────────────
 // Goal-directed, FFS-style: data blocks want the group their inode lives in,
 // new inodes want their parent directory's group — locality was the entire
@@ -315,9 +369,11 @@ uint32_t ext2_alloc_block(vfs_filesystem_t *fs, ext2_fs_t *e,
 	return 0;   // filesystem full — the caller turns this into a short write
 }
 
-// Free one block: bitmap bit off, counts up. The caller has already removed
-// every reference (dereference-then-free) — this is the last step, so a
-// crash before it leaks the block and a crash after it is a completed free.
+// Free one block: bitmap bit off, counts up. Most callers have already
+// removed every reference. Orphan replay deliberately retains its retry map
+// until the free is durable; write_lock (or pre-allocation mount replay)
+// prevents reuse in that interval, and an already-clear bit makes repeating
+// the release after a crash harmless.
 int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 {
 	if (block < e->sb.s_first_data_block || block >= e->sb.s_blocks_count)
@@ -336,12 +392,11 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 	if (ext2_read_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) == 0)
 	{
 		// Replay may revisit a block whose bitmap update completed just before
-		// power failed. Treat an already-clear bit as a completed free: mount
-		// replay runs before this filesystem can allocate, so it cannot yet
-		// denote somebody else's new block.
+		// power failed. It is already free, but the two count ledgers may still
+		// describe it as allocated; repair both before declaring completion.
 		if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
 		{
-			rc = 0;
+			rc = ext2_reconcile_free_block_counts(fs, e, g, bm);
 			goto out;
 		}
 		bm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
@@ -349,9 +404,9 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 		{
 			e->groups[g].bg_free_blocks_count++;
 			e->sb.s_free_blocks_count++;
-			ext2_gd_writeback(fs, e, g);
-			ext2_sb_writeback(fs, e);
-			rc = 0;
+			if (ext2_gd_writeback(fs, e, g) == 0 &&
+			    ext2_sb_writeback(fs, e) == 0)
+				rc = 0;
 		}
 	}
 out:
@@ -435,10 +490,10 @@ int ext2_free_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 	if (ext2_read_fs_block(fs, e, e->groups[g].bg_inode_bitmap, bm) == 0)
 	{
 		// Same replay rule as blocks: an orphan may have reached this bitmap
-		// write before a crash but not the final chain unlink.
+		// write before a crash but not either count ledger or final chain unlink.
 		if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
 		{
-			rc = 0;
+			rc = ext2_reconcile_free_inode_counts(fs, e, g, bm);
 			goto out;
 		}
 		bm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
@@ -448,9 +503,9 @@ int ext2_free_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 			e->sb.s_free_inodes_count++;
 			if (is_dir && e->groups[g].bg_used_dirs_count > 0)
 				e->groups[g].bg_used_dirs_count--;
-			ext2_gd_writeback(fs, e, g);
-			ext2_sb_writeback(fs, e);
-			rc = 0;
+			if (ext2_gd_writeback(fs, e, g) == 0 &&
+			    ext2_sb_writeback(fs, e) == 0)
+				rc = 0;
 		}
 	}
 out:
@@ -606,13 +661,21 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 
 // ── Truncation ──────────────────────────────────────────────────────────────
 
-// Free every block an (already-dereferenced) block map names: the indirect
-// chains bottom-up, then the chain roots, then nothing — the map came to us
-// as a COPY made before the inode was rewritten with a zeroed map, so by the
-// time these frees run, nothing on disk references any of it
-// (dereference-then-free, the doctrine's second rule). depth counts pointer
-// levels: 0 = data block, 1..3 = indirect. Recursion is bounded by ext2's
-// own geometry — three levels, ever.
+// Free every block a retry map names: indirect chains bottom-up, then their
+// roots. Within a chain, each parent pointer remains durable until its child
+// or subtree has been released; only then is the entry cleared. A crash in
+// between therefore leaves replay a path to the already-free child, whose
+// bitmap release is idempotent. depth counts pointer levels: 0 = data block,
+// 1..3 = indirect. Recursion is bounded by ext2's own geometry — three
+// levels, ever.
+enum
+{
+	EXT2_FREE_FAILED = -1,
+	// A child release landed but clearing its durable parent pointer did not.
+	// Replay is safe; continued allocation in this mount is not.
+	EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK = -2
+};
+
 static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
                            uint32_t block, uint32_t depth,
                            uint32_t *freed)
@@ -637,24 +700,24 @@ static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
 			if (child == 0)
 				continue;
 
-			// Make the removal durable before freeing the child. If the child
-			// cannot be released, put its pointer back so an orphan retry still
-			// has a complete map of every allocation that remains live.
+			// Keep the durable pointer until the release completes. If power
+			// fails after the bitmap write but before the parent update, mount
+			// replay follows this same pointer and repeats the idempotent free.
+			int child_rc = ext2_free_chain(fs, e, child, depth - 1, freed);
+			if (child_rc != 0)
+			{
+				wr_scratch_put(e, (uint8_t *)buf);
+				return child_rc;
+			}
 			buf[i] = 0;
 			if (ext2_write_fs_block(fs, e, block, buf) != 0)
 			{
+				// The on-disk entry still contains child. Mirror that in the
+				// scratch image before returning; the inode retry map retains
+				// this indirect root and will safely revisit the child.
 				buf[i] = child;
 				wr_scratch_put(e, (uint8_t *)buf);
-				return -1;
-			}
-			if (ext2_free_chain(fs, e, child, depth - 1, freed) != 0)
-			{
-				buf[i] = child;
-				if (ext2_write_fs_block(fs, e, block, buf) != 0)
-					printf("ext2: failed to restore indirect block %u entry %u after release error — run e2fsck\n",
-					       block, i);
-				wr_scratch_put(e, (uint8_t *)buf);
-				return -1;
+				return EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
 			}
 		}
 		wr_scratch_put(e, (uint8_t *)buf);
@@ -666,23 +729,26 @@ static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
 }
 
 // Free all blocks named by `old` (a pre-truncate copy of the inode). On an
-// error, `old` is pruned to name exactly the failed and unvisited allocations
-// so an orphan caller can write it back and safely retry without pointing at
-// anything this pass already freed.
+// error, `old` remains a replayable map. Completed top-level entries are
+// pruned; an indirect root may deliberately remain and lead replay through
+// an already-free child if its parent-pointer update failed.
 static int ext2_free_inode_blocks(vfs_filesystem_t *fs, ext2_fs_t *e,
                                   ext2_inode_t *old)
 {
 	uint32_t freed = 0;
+	int rc = EXT2_FREE_FAILED;
 	for (uint32_t i = 0; i < EXT2_NDIR_BLOCKS; i++)
 	{
-		if (ext2_free_chain(fs, e, old->i_block[i], 0, &freed) != 0)
+		rc = ext2_free_chain(fs, e, old->i_block[i], 0, &freed);
+		if (rc != 0)
 			goto failed;
 		old->i_block[i] = 0;
 	}
 	for (uint32_t depth = 1; depth <= 3; depth++)
 	{
 		uint32_t slot = EXT2_IND_BLOCK + depth - 1;
-		if (ext2_free_chain(fs, e, old->i_block[slot], depth, &freed) != 0)
+		rc = ext2_free_chain(fs, e, old->i_block[slot], depth, &freed);
+		if (rc != 0)
 			goto failed;
 		old->i_block[slot] = 0;
 	}
@@ -693,7 +759,7 @@ failed:
 	uint64_t released_sectors = (uint64_t)freed * e->sectors_per_block;
 	old->i_blocks = released_sectors < old->i_blocks
 	                    ? old->i_blocks - (uint32_t)released_sectors : 0;
-	return -1;
+	return rc;
 }
 
 // ── Path splitting and directory surgery ────────────────────────────────────
@@ -1515,11 +1581,15 @@ static int ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 		return -1;
 	}
 
-	if (ext2_free_inode_blocks(fs, e, &old) != 0)
+	int release_rc = ext2_free_inode_blocks(fs, e, &old);
+	if (release_rc != 0)
 	{
-		// `old` now contains only allocations that remain live. Restore that
-		// retry map to the caller; orphan_add will persist it before relinking
-		// the inode, so a later mount can finish rather than leak the blocks.
+		// Restore the replayable map to the caller; orphan_add will persist it
+		// before relinking the inode so a later mount can finish the release.
+		// If a parent-pointer write failed after its child became free, block
+		// reuse must stop until that replay occurs.
+		if (release_rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK)
+			vfs_demote_all_mounts_readonly("ext2 indirect release parent write failed");
 		*node = old;
 		return -1;
 	}
@@ -1543,15 +1613,21 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 	bool is_dir = (node->i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
 	ext2_inode_t remaining = *node;
 
-	if (ext2_free_inode_blocks(fs, e, &remaining) != 0)
+	int release_rc = ext2_free_inode_blocks(fs, e, &remaining);
+	if (release_rc != 0)
 	{
-		// Some earlier entries may already be free. Persist the pruned map so
-		// normal operation cannot reuse them while this orphan waits for a
-		// later close/mount retry.
+		// Persist the replayable map for a later close/mount retry. If it still
+		// reaches an already-free child because the parent-pointer write failed,
+		// stop allocation in this mount after the record is safely on disk.
 		if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
 		{
 			printf("ext2: could not persist orphan %u release progress — forcing filesystems read-only\n", ino);
 			vfs_demote_all_mounts_readonly("ext2 orphan release progress write failed");
+		}
+		else if (release_rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK)
+		{
+			printf("ext2: orphan %u retry map retains a released indirect child — forcing filesystems read-only\n", ino);
+			vfs_demote_all_mounts_readonly("ext2 orphan indirect parent write failed");
 		}
 		*node = remaining;
 		return -1;
