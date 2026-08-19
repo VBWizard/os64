@@ -34,14 +34,18 @@ char *kNvmeWatchTarget = NULL;
 //
 // THE FAULT THAT BOUGHT THIS. A #PF on the P5, kernel mode, error 0x3
 // ("present, protection violation, write"), inside memcpy, storing to
-// 0x00000000098a7000 — which is dmaWriteBuffer. kmalloc_dma hands back a
-// PHYSICAL address and identity-maps it PRESENT|WRITE|PCD; that single mapping
-// is the only reason the pointer the driver carries around is dereferenceable
-// at all. The buffer is allocated once at controller init, never freed, and
-// nothing in this tree ever re-maps or downgrades that VA — so a page that
-// reports present-but-not-writable is not a paging decision anybody made. It is
-// somebody else's entries, or somebody else's write, landing in the page table
-// that owns ours.
+// 0x00000000098a7000 — which was dmaWriteBuffer, back when kmalloc_dma handed
+// out PHYSICAL addresses and identity-mapped them PRESENT|WRITE|PCD; that
+// single mapping was the only reason the pointer was dereferenceable at all.
+// (Since 2026-08-19 the pointer is an HHDM alias and the load-bearing mapping
+// is the allocator's lazy-HHDM entry — a mapping with the same property this
+// tripwire exists to defend: the buffer lives for the controller's whole
+// life, nothing ever legitimately re-maps or downgrades it.) A page that
+// reports present-but-not-writable is not a paging decision anybody made. It
+// is somebody else's entries, or somebody else's write, landing in the page
+// table that owns ours — the P5's was eventually caught doing exactly that
+// (the status-table overrun, 2026-08-15), and the tripwire stays armed for
+// the next one.
 //
 // The old symptom was a bare #PF inside memcpy, with the call chain to be
 // reconstructed from register archaeology. The new symptom names the crime one
@@ -510,43 +514,55 @@ printf("2 ");
     // Calculate queue sizes
     size_t subQueueSize = controller->queueDepth * sizeof(nvme_submission_queue_entry_t);
     size_t compQueueSize = controller->queueDepth * sizeof(nvme_completion_queue_entry_t);
-    controller->admSubQueue = kmalloc_dma(subQueueSize);
+    // Each allocation yields TWO addresses now (kmalloc_dma's HHDM contract,
+    // 2026-08-19): the struct keeps the VIRTUAL pointer the driver indexes
+    // through, and the phys locals below feed the ASQ/ACQ registers — the
+    // only consumers of the physical address, all in this function.
+    uintptr_t admSubQueuePhys, cmdSubQueuePhys, admCompQueuePhys, cmdCompQueuePhys;
+    controller->admSubQueue = kmalloc_dma(subQueueSize, &admSubQueuePhys);
     if (!controller->admSubQueue) panic("Failed to allocate memory for admin submission queue\n");
 printf("2 ");
-    controller->cmdSubQueue = kmalloc_dma(subQueueSize);
+    controller->cmdSubQueue = kmalloc_dma(subQueueSize, &cmdSubQueuePhys);
 //	kDebugLevel &= ~(DEBUG_PAGING);
     if (!controller->cmdSubQueue) panic("Failed to allocate memory for command submission queue\n");
 
 printf("3 ");
-    controller->admCompQueue = kmalloc_dma(compQueueSize);
+    controller->admCompQueue = kmalloc_dma(compQueueSize, &admCompQueuePhys);
     if (!controller->admCompQueue) panic("Failed to allocate memory for admin completion queue\n");
 
 printf("4 ");
-    controller->cmdCompQueue = kmalloc_dma(compQueueSize);
+    controller->cmdCompQueue = kmalloc_dma(compQueueSize, &cmdCompQueuePhys);
     if (!controller->cmdCompQueue) panic("Failed to allocate memory for command completion queue\n");
+    (void)cmdSubQueuePhys; (void)cmdCompQueuePhys;   // the IO-queue pair is
+    // re-created with fresh allocations in create_io_queues — these two
+    // command-queue allocations are legacy warm-up the controller never sees.
 
     // Ensure queue alignment based on CAP.DSTRD
     uint64_t cap = controller->registers->cap;
     uint32_t dstrd = (cap >> 32) & 0xF; // Doorbell Stride
     size_t alignment = (1 << (12 + dstrd)); // Alignment required (e.g., 16 KB for DSTRD=2)
 
-    if ((uintptr_t)controller->admSubQueue % alignment != 0) {
-        panic("Admin submission queue address 0x%016lx is not aligned to %lu bytes\n", 
-              (uintptr_t)controller->admSubQueue, alignment);
+    // Alignment is a PHYSICAL requirement — it is the device that dereferences
+    // this address. (The HHDM alias shares the low bits, but check the number
+    // the hardware will actually be handed.)
+    if (admSubQueuePhys % alignment != 0) {
+        panic("Admin submission queue phys 0x%016lx is not aligned to %lu bytes\n",
+              admSubQueuePhys, alignment);
     }
 printf("5 ");
-    if ((uintptr_t)controller->admCompQueue % alignment != 0) {
-        panic("Admin completion queue address 0x%016lx is not aligned to %lu bytes\n", 
-              (uintptr_t)controller->admCompQueue, alignment);
+    if (admCompQueuePhys % alignment != 0) {
+        panic("Admin completion queue phys 0x%016lx is not aligned to %lu bytes\n",
+              admCompQueuePhys, alignment);
     }
 
 printf("6 ");
 
-    // Set ASQ (Admin Submission Queue) base address
+    // Set ASQ (Admin Submission Queue) base address — the PHYSICAL address;
+    // the VA in the struct is the kernel's business, never the device's.
     volatile uint32_t* asq_low = (volatile uint32_t*)&controller->registers->asq;
     volatile uint32_t* asq_high = asq_low + 1;
-    *asq_low = (uint32_t)((uintptr_t)controller->admSubQueue & 0xFFFFFFFF);
-    *asq_high = (uint32_t)((uintptr_t)controller->admSubQueue >> 32);
+    *asq_low = (uint32_t)(admSubQueuePhys & 0xFFFFFFFF);
+    *asq_high = (uint32_t)(admSubQueuePhys >> 32);
 
 printf("7 ");
     wait(50); // Ensure write completion
@@ -554,7 +570,7 @@ printf("8 ");
 
     // Verify ASQ write
     uint64_t verify_asq = ((uint64_t)*asq_high << 32) | *asq_low;
-    if (verify_asq != (uintptr_t)controller->admSubQueue) {
+    if (verify_asq != admSubQueuePhys) {
         panic("ASQ write failed. Read back value: 0x%016lx\n", verify_asq);
     } else {
         printd(DEBUG_NVME | DEBUG_DETAILED, "ASQ successfully set to: 0x%016lx\n", verify_asq);
@@ -564,8 +580,8 @@ printf("9 ");
     // Set ACQ (Admin Completion Queue) base address
     volatile uint32_t* acq_low = (volatile uint32_t*)&controller->registers->acq;
     volatile uint32_t* acq_high = acq_low + 1;
-    *acq_low = (uint32_t)((uintptr_t)controller->admCompQueue & 0xFFFFFFFF);
-    *acq_high = (uint32_t)((uintptr_t)controller->admCompQueue >> 32);
+    *acq_low = (uint32_t)(admCompQueuePhys & 0xFFFFFFFF);
+    *acq_high = (uint32_t)(admCompQueuePhys >> 32);
 	printd(DEBUG_NVME | DEBUG_DETAILED, "ACQ successfully set to: 0x%016lx\n", (uintptr_t)*acq_high << 32 | *acq_low);
 
 printf("10)\n");
@@ -590,7 +606,12 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
 	cmd->nsid = 0x0;
     cmd->cid = controller->adminCID++;
 	uint32_t mallocSize = sizeof(nvme_completion_queue_entry_t) * controller->queueDepth;
-    cmd->prp1 = (uintptr_t)kmalloc_dma(mallocSize);         // Physical address of CQ buffer
+    // One allocation, two addresses: the device gets the PHYS in prp1, the
+    // driver keeps the VA for the struct pointer below. (These used to be the
+    // same number — the identity-map era; see kmalloc_dma.)
+    uintptr_t ioCompQueuePhys;
+    void *ioCompQueueVa = kmalloc_dma(mallocSize, &ioCompQueuePhys);
+    cmd->prp1 = ioCompQueuePhys;                            // Physical address of CQ buffer
     cmd->cdw10 = controller->cmdQID | ((controller->queueDepth - 1)<<16); // CQ ID = 1, Queue Size = QUEUE_DEPTH - 1
     cmd->cdw11 = 0x1;                 // Interrupts disabled, Physically Contiguous
     // Submit command to Admin SQ
@@ -604,8 +625,8 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
 		panic("Queue completion status != 0!!! (0x%08x\n",completionEntry->status.status_code);
 	}
 	
-	controller->cmdCompQueue = (volatile nvme_completion_queue_entry_t*)cmd->prp1;
-    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Command Completion Queue successfully created at 0x%016lx\n",cmd->prp1);
+	controller->cmdCompQueue = (volatile nvme_completion_queue_entry_t*)ioCompQueueVa;
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Command Completion Queue successfully created at phys 0x%016lx\n",cmd->prp1);
 
     // Step 2: Create I/O Submission Queue
     memset(cmd, 0, sizeof(nvme_submission_queue_entry_t));
@@ -613,7 +634,9 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
 	cmd->nsid = 0x0;
     cmd->cid =  controller->adminCID++;
 	mallocSize = sizeof(nvme_submission_queue_entry_t) * controller->queueDepth;
-    cmd->prp1 = (uintptr_t)kmalloc_dma(mallocSize);         // Physical address of SQ buffer
+    uintptr_t ioSubQueuePhys;
+    void *ioSubQueueVa = kmalloc_dma(mallocSize, &ioSubQueuePhys);
+    cmd->prp1 = ioSubQueuePhys;                             // Physical address of SQ buffer
     cmd->cdw10 = ((controller->queueDepth - 1) << 16) | 1; //Queue Size = QUEUE_DEPTH - 1,  SQ ID = 1
     cmd->cdw11 = 0x00010001;          // Priority = 0 (high), PC=1
 
@@ -629,8 +652,8 @@ void nvme_init_cmd_queues(nvme_controller_t* controller)
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 	__asm__ volatile("mfence" ::: "memory");
 
-	controller->cmdSubQueue = (void*)cmd->prp1;
-    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Command Submission Queue successfully created at 0x%016lx\n",cmd->prp1);
+	controller->cmdSubQueue = ioSubQueueVa;
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Command Submission Queue successfully created at phys 0x%016lx\n",cmd->prp1);
 	kfree(cmd);
 }
 
@@ -795,12 +818,13 @@ void nvme_identify(nvme_controller_t* controller)
 {
 	nvme_submission_queue_entry_t* command = kmalloc(sizeof(nvme_submission_queue_entry_t));
 
-	nvmeIdentifyInfo = kmalloc_dma(PAGE_SIZE);
+	uintptr_t identifyPhys;
+	nvmeIdentifyInfo = kmalloc_dma(PAGE_SIZE, &identifyPhys);
 
 	//List of Active Namespace IDs:
 	command->opc = NVME_ADMIN_IDENTIFY;
 	command->nsid = 0x0;
-	command->prp1 = (uintptr_t)nvmeIdentifyInfo;
+	command->prp1 = identifyPhys;
 	command->cid = controller->adminCID++;
 	command->cdw10 = 2; // number of namespaces
 	nvme_submit_command(controller, command, true);
@@ -817,16 +841,20 @@ void nvme_identify(nvme_controller_t* controller)
 	}
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 
-	controller->nsid = *(uint32_t*)command->prp1;
+	// Read the RESULT through the kernel's pointer, not through prp1: prp1 is
+	// the device's (physical) address now, and dereferencing it as a VA was
+	// only ever legal in the identity-map era.
+	controller->nsid = *(uint32_t*)nvmeIdentifyInfo;
 	printd(DEBUG_NVME | DEBUG_DETAILED, "Number of namespaces: 0x%08x\n", controller->nsid);
 	kfree(nvmeIdentifyInfo);
 	nvmeIdentifyInfo = NULL;
 
-	char* buffer = kmalloc_dma(PAGE_SIZE);
+	uintptr_t bufferPhys;
+	char* buffer = kmalloc_dma(PAGE_SIZE, &bufferPhys);
 
 	//Identify Namespace Data Structure:
 	command->nsid = controller->nsid;
-	command->prp1 = (uintptr_t)buffer;
+	command->prp1 = bufferPhys;
 	command->cid = controller->adminCID++;
 	command->cdw10 = 0; // Identify Namespace Data Structure
 	nvme_submit_command(controller, command, true);
@@ -841,7 +869,7 @@ void nvme_identify(nvme_controller_t* controller)
 	}
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 
-	nvme_namespace_data_t* idData = (nvme_namespace_data_t*)command->prp1;
+	nvme_namespace_data_t* idData = (nvme_namespace_data_t*)buffer;
 	printd(DEBUG_NVME | DEBUG_DETAILED, "Namespace Size: %lu logical blocks\n", idData->namespaceSize);
 	printd(DEBUG_NVME | DEBUG_DETAILED, "Namespace Capacity: %lu logical blocks\n", idData->namespaceCapacity);
 	printd(DEBUG_NVME | DEBUG_DETAILED, "Namespace Utilization: %lu logical blocks\n", idData->namespaceUtilization);
@@ -874,13 +902,18 @@ void nvme_identify(nvme_controller_t* controller)
 	}
 	nvme_ring_doorbell(controller, 0, false, ++controller->admCompQueueHeadIndex);
 
-	nvme_identify_controller_t* cData = (nvme_identify_controller_t*)command->prp1;
+	nvme_identify_controller_t* cData = (nvme_identify_controller_t*)buffer;
 	nvme_parse_model_name(cData->mn, controller->deviceName);
 	controller->maxBytesPerTransfer = calculate_mdts(cData->mdts);
 	printd(DEBUG_NVME, "NVME: Identified max bytes per NVME transfer: 0x%08x bytes\n", controller->maxBytesPerTransfer);
 	//kDebugLevel |= DEBUG_KMALLOC | DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED;
-	controller->dmaReadBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
-	controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
+	// Both addresses persist in the struct (e1000's shape): the VA is what
+	// every memcpy and tripwire walk uses; the PHYS is what each I/O writes
+	// into prp1/prp2. They stopped being the same number on 2026-08-19.
+	controller->dmaReadBuffer = kmalloc_dma(controller->maxBytesPerTransfer,
+	                                        &controller->dmaReadBufferPhys);
+	controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer,
+	                                         &controller->dmaWriteBufferPhys);
 
 	// Arm the tripwire: photograph both buffers' page-table entries while they
 	// are known good, so every later I/O has something truthful to compare
@@ -927,7 +960,6 @@ void nvme_identify(nvme_controller_t* controller)
 	       (uintptr_t)controller->dmaReadBuffer, controller->dmaReadPteAtInit,
 	       (uintptr_t)controller->dmaWriteBuffer, controller->dmaWritePteAtInit);
 
-	//controller->dmaWriteBuffer = kmalloc_dma(controller->maxBytesPerTransfer);
 	printd(DEBUG_NVME, "NVME: Device found, model: %s, max bytes per PRP = %u\n", controller->deviceName, controller->maxBytesPerTransfer);
 
 	kfree(buffer);
@@ -942,8 +974,14 @@ static uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
 {
     const uint32_t entries_per_page = PAGE_SIZE / sizeof(uintptr_t); // 512
 
-    uintptr_t firstListPage = (uintptr_t)kmalloc_dma(PAGE_SIZE);
-    uintptr_t* currentPage  = (uintptr_t*)firstListPage;
+    // Two worlds per list page, kept explicitly apart: the kernel FILLS the
+    // page through its HHDM pointer, the ENTRIES it fills in (data addresses
+    // and chain pointers alike) are physical, because the device is the only
+    // reader of the list's contents. startAddress is physical on arrival —
+    // the caller passes the bounce buffer's phys, and PRP arithmetic never
+    // leaves that world.
+    uintptr_t firstListPhys;
+    uintptr_t* currentPage = kmalloc_dma(PAGE_SIZE, &firstListPhys);
     uint32_t remaining = prpCount;
 
     while (remaining > 0) {
@@ -961,13 +999,14 @@ static uintptr_t setup_prp_list(uintptr_t startAddress, uint32_t prpCount)
                 startAddress += PAGE_SIZE;
             }
             remaining -= entries_per_page - 1;
-            uintptr_t* nextPage = (uintptr_t*)kmalloc_dma(PAGE_SIZE);
-            currentPage[entries_per_page - 1] = (uintptr_t)nextPage;
-            currentPage = nextPage;
+            uintptr_t nextPagePhys;
+            uintptr_t* nextPage = kmalloc_dma(PAGE_SIZE, &nextPagePhys);
+            currentPage[entries_per_page - 1] = nextPagePhys;   // the DEVICE walks this
+            currentPage = nextPage;                             // the KERNEL walks this
         }
     }
 
-    return firstListPage;
+    return firstListPhys;
 }
 
 // Walk and free every page in a chained PRP list.  prpCount must match the
@@ -977,14 +1016,19 @@ static void free_prp_list(uintptr_t listPage, uint32_t prpCount)
     const uint32_t entries_per_page = PAGE_SIZE / sizeof(uintptr_t);
     uint32_t remaining = prpCount;
 
+    // listPage arrives PHYSICAL (it is cmd->prp2, the device's copy), and so
+    // is every chain pointer stored in the pages — so each hop converts to
+    // the HHDM alias to read the chain and to hand kfree an honest pointer.
+    // (The identity era let this function conflate the two; its kfree also
+    // leaked an identity MAPPING per page per I/O, forever. No more.)
     while (remaining > entries_per_page) {
-        uintptr_t* page = (uintptr_t*)listPage;
-        uintptr_t nextPage = page[entries_per_page - 1]; // chain pointer
-        kfree((void*)listPage);
-        listPage = nextPage;
+        uintptr_t* page = (uintptr_t*)(listPage + kHHDMOffset);
+        uintptr_t nextPagePhys = page[entries_per_page - 1]; // chain pointer (phys)
+        kfree(page);
+        listPage = nextPagePhys;
         remaining -= entries_per_page - 1;
     }
-    kfree((void*)listPage); // last (or only) page
+    kfree((void*)(listPage + kHHDMOffset)); // last (or only) page
 }
 
 // ── Command-stream telemetry (2026-08-06 — the queue-depth court's
@@ -1075,7 +1119,11 @@ static void nvme_do_io(nvme_controller_t* controller, uint64_t LBA, size_t lengt
         memset(cmd, 0, sizeof(cmdOnStack));
         cmd->opc  = isWrite ? NVME_OPCODE_WRITE : NVME_OPCODE_READ;
         cmd->nsid = controller->nsid;
-        cmd->prp1 = (uintptr_t)dmaBuffer;
+        // The device gets the PHYSICAL buffer address; dmaBuffer (the VA) is
+        // for the memcpys below. PRP arithmetic stays pure phys — page 2 of
+        // the buffer is phys+4096 no matter where the kernel sees it.
+        cmd->prp1 = isWrite ? controller->dmaWriteBufferPhys
+                            : controller->dmaReadBufferPhys;
 
         if (prpCount == 2)
             cmd->prp2 = cmd->prp1 + PAGE_SIZE;

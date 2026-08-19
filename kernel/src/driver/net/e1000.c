@@ -606,13 +606,18 @@ void e1000_poll(void)
 // needs and a kernel pointer we can write through. Page alignment more than
 // satisfies the manual's 16-byte descriptor-base requirement.
 //
-// Note what we do NOT use: kmalloc_dma. It identity-maps whatever physical
-// page it gets, which means a high physical address becomes a high VIRTUAL
-// address in kernel territory — a real hazard that now has its own row in
-// DEBTS.md. The 8254x takes full 64-bit descriptor and buffer addresses
-// (that is what RDBAH/TDBAH are for), so nothing here needs a low-memory
-// guarantee; we simply take the allocator's word and hand over the physical
-// address, which is the only address the device ever sees.
+// HISTORY NOTE: this ring construction refused kmalloc_dma when it was
+// written (2026-08-06) because kmalloc_dma then IDENTITY-mapped its pages —
+// a high physical address became a high virtual address in kernel territory,
+// a hazard this comment named and DEBTS booked. That refusal WON the
+// argument: on 2026-08-19 kmalloc_dma itself adopted exactly this doctrine
+// (HHDM pointer for the kernel, physical handed back separately for the
+// device), so the two styles are now the same style. This code keeps its
+// explicit spelling as the original of the species. The 8254x takes full
+// 64-bit descriptor and buffer addresses (that is what RDBAH/TDBAH are for),
+// so nothing here needs a low-memory guarantee; we simply take the
+// allocator's word and hand over the physical address, which is the only
+// address the device ever sees.
 static bool e1000_setup_rx(e1000_t* e)
 {
 	e->rx_phys = allocate_memory_aligned(E1000_RX_DESCS * sizeof(e1000_rx_desc_t));

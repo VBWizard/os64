@@ -665,6 +665,13 @@ page tables exactly while the allocator considers it allocated.**
   note it IS kernel-visible via HHDM while allocated, so the temporary-mapping
   technique above is no longer strictly required for reading/writing task
   pages from the kernel (it remains valid, just redundant)
+- `kmalloc_dma(length, &phys)`: For memory a DEVICE will read or write
+  (descriptor rings, bounce buffers, PRP lists). Returns the HHDM pointer the
+  KERNEL uses; writes the physical address — the only address the device ever
+  sees — to `*phys`. Page-aligned, zeroed, ordinary write-back cacheable (x86
+  DMA is coherent), freed with plain `kfree(va)`. It IDENTITY-MAPPED until
+  2026-08-19 — never resurrect that: the phys-as-pointer convenience leaked
+  unmapped-on-free writable mappings and collided high phys with kernel VAs
 
 **Converting addresses**:
 - Physical to HHDM: `phys | kHHDMOffset` (valid iff the memory is currently allocated)

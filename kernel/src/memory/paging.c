@@ -146,7 +146,20 @@ void paging_sentinel_check(const char *where)
 			continue;
 
 		uint64_t now = (uint64_t)paging_walk_paging_table_keep_flags((pt_entry_t *)kKernelPML4v, s->va, true);
-		if (now == s->pte)
+		// Compare what CORRUPTION changes (phys, P/W/U/NX...), not what the
+		// CPU and benign re-maps change: ACCESSED and DIRTY (bits 5-6) are
+		// volatile by design. The hardware sets them on any touch, and —
+		// since the sentinels moved onto HHDM aliases (the kmalloc_dma
+		// conversion, 2026-08-19) — a NEIGHBOURING allocation whose
+		// byte-granular extent shares a boundary page re-stores this PTE
+		// fresh through paging_hhdm_map_range ("the mapping is idempotent"
+		// — in translation, not in A/D). First false-fire: the NVMe read
+		// buffer's sentinel, minutes into the first post-conversion boot,
+		// entry 0x...063 at arm vs a legitimately re-stored 0x...003.
+		// A REAL free still fires loudly: the HHDM unmap makes the walk
+		// return not-present, which no mask forgives.
+		const uint64_t kPteADBits = 0x60;   // ACCESSED | DIRTY
+		if ((now & ~kPteADBits) == (s->pte & ~kPteADBits))
 			continue;
 
 		// Disarm FIRST: paging_report_walk and panic() both map and print, and
@@ -443,6 +456,11 @@ static uintptr_t draw_table_page(struct arena *source, const char *level, uint64
 /// had "just mapped" and died on a not-present #PF (QEMU burn: CR2
 /// 0x100c80000, every intermediate present, PT[128] == 0 — read from the
 /// halted guest's own tables via the monitor).
+///
+/// (The workload that FOUND the race retired 2026-08-19 — kmalloc_dma no
+/// longer creates identity mappings at all — but the race it found is
+/// permanent: lazy-HHDM range creation draws intermediate tables from
+/// concurrent contexts every day. The CAS stays load-bearing.)
 ///
 /// The fix is CAS, deliberately NOT a lock: draw_table_page can kmalloc (an
 /// arena grows on demand), kmalloc takes kMemoryStatusLock, and the

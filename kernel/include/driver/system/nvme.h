@@ -263,10 +263,20 @@ typedef struct {
 	uint32_t maxBytesPerTransfer;
 	uint32_t cmdQID;
 	char* dmaReadBuffer, *dmaWriteBuffer;
+	// The bounce buffers' PHYSICAL addresses — what prp1/prp2 are built from
+	// on every I/O. Since 2026-08-19 (kmalloc_dma's HHDM conversion) the
+	// pointer above is an HHDM VA the device has never heard of; the device
+	// speaks only these.
+	uintptr_t dmaReadBufferPhys, dmaWriteBufferPhys;
 	// The bounce buffers' page-table entries as they read the moment
 	// kmalloc_dma handed them over, kept so every I/O can ask whether they
 	// still say the same thing. See nvme_dma_tripwire_* in nvme.c for the
-	// #PF that earned them (2026-08-14).
+	// #PF that earned them (2026-08-14). (Post-HHDM-conversion these guard
+	// the HHDM leaf entries — the mapping the driver's pointers now depend
+	// on — and the move UPGRADED the tripwire: a real free unmaps the alias,
+	// so use-after-free now reads as entry-gone instead of silently working
+	// through a stale identity mapping. The comparisons ignore the volatile
+	// A/D bits; the first boot after the conversion taught that lesson.)
 	uint64_t dmaReadPteAtInit, dmaWritePteAtInit;
 	// And the PHYSICAL page the leaf page table lived in at that moment. A
 	// mapping that later fails answers a sharper question with this: was the
