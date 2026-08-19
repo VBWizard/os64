@@ -196,34 +196,58 @@ bool wm_pop_event(window_t *w, input_event_t *out)
 	return true;
 }
 
-// Draw one window's chrome + content into the backbuffer. The primitives
-// clip to the backbuffer, and painting a window that only PARTIALLY
-// intersects the damage is still correct — backbuffer pixels outside the
-// damage simply get rewritten with what they already showed.
-static void composite_one(surface_t *backbuffer, const window_t *w)
+// Draw one window's chrome + content into the damaged part of the backbuffer.
+//
+// STRICTLY INSIDE `damage` — that is the contract, and it is load-bearing.
+// This function used to paint the window's WHOLE frame and lean on a comment
+// that said stray pixels were harmless because "backbuffer pixels outside the
+// damage simply get rewritten with what they already showed." That was true
+// only while a frame carried exactly ONE damage rect. The moment damage became
+// a LIST (2026-08-18), painting outside rect i landed inside rect j — already
+// composited in correct z-order, not yet flushed — so a lower window's repaint
+// erased a higher window's pixels there and rect j pushed the wreckage to the
+// glass. It showed up on the P5 as the console's background bleeding into
+// gbounce: on raise, and as a trail behind the ball that appeared ONLY while
+// the mouse moved over the console (a cursor rect over the console is exactly
+// what makes the console repaint). Chris found it in an hour.
+//
+// The view makes the contract structural rather than remembered: pass the
+// damage rect, draw in its coordinates, and the clipping in surface.c cannot
+// be talked out of it. It is also a straight win — a 25x25 ball no longer
+// repaints an entire 768x480 console underneath it.
+static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damage)
 {
+	surface_t view = surface_view(backbuffer, damage);
 	bool focused = (w == s_focused);
-	rect_t f = w->frame;
+	// Frame in VIEW coordinates; everything below is drawn in that space.
+	rect_t f = {w->frame.x - damage.x, w->frame.y - damage.y,
+	            w->frame.w, w->frame.h};
 
 	// Border around everything (the titlebar overwrites the top edge).
-	surface_draw_rect(backbuffer, f,
+	surface_draw_rect(&view, f,
 	                  focused ? WINDOW_BORDER_FOCUSED : WINDOW_BORDER_UNFOCUSED);
 
 	// Titlebar with centered-ish title text (8px/glyph, 16px tall font).
 	rect_t bar = {f.x + GUI_BORDER_WIDTH, f.y + GUI_BORDER_WIDTH,
 	              f.w - 2 * GUI_BORDER_WIDTH, GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH};
 	uint32_t bar_color = focused ? WINDOW_TITLEBAR_FOCUSED : WINDOW_TITLEBAR_UNFOCUSED;
-	surface_fill_rect(backbuffer, bar, bar_color);
+	surface_fill_rect(&view, bar, bar_color);
 
 	size_t title_len = 0;
 	while (w->title[title_len] && title_len < GUI_WINDOW_TITLE_MAX - 1)
 		title_len++;
-	surface_draw_text(backbuffer, bar.x + 6, bar.y + (bar.h - 16) / 2,
+	// Text clips per glyph cell against the view, so a titlebar sliced down
+	// the middle by a damage rect draws its half-glyph and stops.
+	surface_draw_text(&view, bar.x + 6, bar.y + (bar.h - 16) / 2,
 	                  w->title, title_len, GUI_COLOR_WHITE, bar_color);
 
-	// Client content.
+	// Client content. Blit the WHOLE content rect at its view-space position
+	// and let surface_blit clip both ends: it already mirrors destination
+	// clipping back into the source origin, so the visible sliver comes from
+	// the right pixels without any arithmetic here.
 	rect_t content_screen = wm_content_rect_on_screen(w);
-	surface_blit(backbuffer, content_screen.x, content_screen.y, &w->content,
+	surface_blit(&view, content_screen.x - damage.x, content_screen.y - damage.y,
+	             &w->content,
 	             (rect_t){0, 0, (int32_t)w->content.width, (int32_t)w->content.height});
 }
 
@@ -234,5 +258,5 @@ void wm_composite(surface_t *backbuffer, rect_t damage)
 	rect_t overlap;
 	for (window_t *w = s_bottom; w; w = w->above)
 		if (rect_intersect(w->frame, damage, &overlap))
-			composite_one(backbuffer, w);
+			composite_one(backbuffer, w, damage);
 }

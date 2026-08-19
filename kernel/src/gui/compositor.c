@@ -51,10 +51,66 @@ task_t *kGuiCompTask = NULL;
 // ---------------------------------------------------------------------------
 spinlock_t kGuiLock = 0;   // shared with window.c / gui_client.c via gui_internal.h
 
-// Damage accumulator, v1: one union rect. Worst case this over-redraws the
-// bounding box of two small distant rects; upgrading to a small rect LIST is
-// a drop-in change confined to gui_damage_add + the frame loop.
-static rect_t kPendingDamage;   // empty (w==0) means "no damage"
+// ---------------------------------------------------------------------------
+// Damage accumulator, v2: a small rect LIST (2026-08-18).
+//
+// v1 kept ONE union rect, and the P5 shakedown priced that choice: a bouncing
+// ball in one corner unioned with a cursor in the other produced a near-
+// fullscreen rectangle, recomposited and pushed through the uncached
+// framebuffer ~100 times a second. The screen was mostly unchanged; we paid
+// retail for it anyway. Two small rects should cost two small rects.
+//
+// The design is deliberately the cheap one — a fixed array plus a merge
+// heuristic, NOT region algebra. Regions (X11's, Cairo's) split rectangles on
+// overlap to keep an exact non-overlapping cover, and they are the right
+// answer when you have thousands; here the whole population is "one ball, one
+// cursor, one console line, sometimes a dragged window", and an exact cover
+// would cost more to maintain than the overdraw it saves.
+//
+// Two rules keep it honest:
+//   1. MERGE WHEN MERGING IS CHEAP. Union two entries only if the union wastes
+//      no more than DAMAGE_MERGE_SLACK pixels beyond their own areas — so
+//      touching/overlapping rects collapse (and overlapping ones MUST, or the
+//      overlap composites twice) while distant ones stay apart. Without this,
+//      a list degenerates into a list of near-duplicates.
+//   2. OVERFLOW FALLS BACK TO v1. When the list is full and nothing merges
+//      cheaply, collapse everything into one union rect. Worst case is exactly
+//      today's behavior — never a wrong screen, only a slower one.
+//
+// Entries may still overlap (rule 1 tolerates SLACK, and merging is
+// pairwise-greedy with NO re-merge pass: a rect that bridges into entry i can
+// grow it until it swallows entry j whole, and nothing goes back to notice).
+// So the overlap is not strictly slack-bounded — the swallowed-entry case
+// composites and UC-flushes a duplicate of j's whole area. It is WASTE, never
+// wrongness: both passes composite identical bytes in identical z-order, so
+// the glass cannot disagree with itself. The geometry that triggers it (a
+// late rect bridging two established ones) is rare at this population size;
+// if it ever shows in the flush counter, the fix is a containment sweep after
+// a merge grows an entry, not a redesign. (Honesty upgrade from review,
+// 2026-08-19 — the first version of this comment claimed the slack bound.)
+// ---------------------------------------------------------------------------
+#define DAMAGE_MAX_RECTS   8
+// One 8x16 glyph cell (128 px) of tolerated waste per merge: generous enough
+// that a scrolling console line's per-glyph damage collapses into one row
+// rect, tight enough that opposite corners of a 1024x768 screen never do.
+#define DAMAGE_MERGE_SLACK 128
+
+static rect_t   kPendingDamage[DAMAGE_MAX_RECTS];
+static uint32_t kPendingDamageCount;   // 0 means "no damage"
+
+static inline int64_t rect_area(rect_t r)
+{
+	return rect_is_empty(r) ? 0 : (int64_t)r.w * (int64_t)r.h;
+}
+
+// Would unioning these two waste little enough to be worth one composite?
+// Overlapping rects always qualify: their union is never bigger than the sum
+// of their areas, so the test below passes by construction — which is what
+// guarantees the list never composites the same pixel twice for free.
+static inline bool damage_merge_is_cheap(rect_t a, rect_t b)
+{
+	return rect_area(rect_union(a, b)) <= rect_area(a) + rect_area(b) + DAMAGE_MERGE_SLACK;
+}
 
 // The canonical screen image (scene + cursor). Compositor-thread-only.
 static surface_t kBackbuffer;
@@ -133,7 +189,32 @@ static inline rect_t cursor_rect(void)
 
 void gui_damage_add_locked(rect_t screen_rect)
 {
-	kPendingDamage = rect_union(kPendingDamage, screen_rect);
+	if (rect_is_empty(screen_rect))
+		return;
+
+	// Merge into the first entry where merging is cheap. First-fit, not
+	// best-fit: the list is at most DAMAGE_MAX_RECTS long and the common case
+	// is one or two entries, so hunting for the optimal partner would cost
+	// more than the overdraw it saves.
+	for (uint32_t i = 0; i < kPendingDamageCount; i++) {
+		if (damage_merge_is_cheap(kPendingDamage[i], screen_rect)) {
+			kPendingDamage[i] = rect_union(kPendingDamage[i], screen_rect);
+			return;
+		}
+	}
+
+	if (kPendingDamageCount < DAMAGE_MAX_RECTS) {
+		kPendingDamage[kPendingDamageCount++] = screen_rect;
+		return;
+	}
+
+	// Full, and nothing merged cheaply — fall back to v1: one union rect for
+	// the whole frame. Over-redraws, never under-redraws.
+	rect_t all = screen_rect;
+	for (uint32_t i = 0; i < kPendingDamageCount; i++)
+		all = rect_union(all, kPendingDamage[i]);
+	kPendingDamage[0] = all;
+	kPendingDamageCount = 1;
 }
 
 void gui_damage_add(rect_t screen_rect)
@@ -197,13 +278,18 @@ static rect_t composite_locked(rect_t damage)
 	// Layer 1: windows, bottom-up by z-order.
 	wm_composite(&kBackbuffer, damage);
 
-	// Cursor last. Drawing the FULL cursor (not clipped to damage) is safe:
-	// any backbuffer pixels outside the damage already showed the cursor on
-	// screen, so backbuffer and framebuffer stay in agreement.
+	// Cursor last, and clipped to this rect like everything else. The old code
+	// drew the FULL cursor art on the argument that stray pixels were harmless
+	// (the cursor is topmost, so anywhere it paints is somewhere it really is).
+	// That argument still holds — but "writes stay inside the damage rect" is
+	// now a contract the whole multi-rect frame depends on, and a layer that
+	// keeps its own private exemption is how the next person gets bitten.
 	rect_t overlap;
-	if (rect_intersect(cursor_rect(), damage, &overlap))
-		surface_blit_masked(&kBackbuffer, s_cursor_x, s_cursor_y,
+	if (rect_intersect(cursor_rect(), damage, &overlap)) {
+		surface_t view = surface_view(&kBackbuffer, damage);
+		surface_blit_masked(&view, s_cursor_x - damage.x, s_cursor_y - damage.y,
 		                    s_cursor_pixels, s_cursor_mask, CURSOR_W, CURSOR_H);
+	}
 
 	return damage;
 }
@@ -347,20 +433,30 @@ bool guicomp_thread(bool daemon)
 		while (input_pop(&ev))
 			route_event_locked(&ev);
 
-		rect_t damage = kPendingDamage;
-		kPendingDamage = (rect_t){0, 0, 0, 0};
-		if (!rect_is_empty(damage))
-			damage = composite_locked(damage);
+		// Take the whole damage list in one hold and reset it, so clients
+		// publishing during this frame's flush accumulate into the NEXT
+		// frame instead of racing the one being drawn.
+		rect_t damage[DAMAGE_MAX_RECTS];
+		uint32_t damage_count = kPendingDamageCount;
+		for (uint32_t i = 0; i < damage_count; i++)
+			damage[i] = composite_locked(kPendingDamage[i]);
+		kPendingDamageCount = 0;
 
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 
 		// -------- Flush to the (slow, uncached) framebuffer, lock-free -----
-		if (!rect_is_empty(damage)) {
-			surface_flush_rect(&kBackbuffer, damage);
+		// One flush per surviving rect. composite_locked clipped each to the
+		// screen and may have emptied it entirely; those are skipped here
+		// rather than filtered above, so the indices keep matching.
+		for (uint32_t i = 0; i < damage_count; i++) {
+			if (rect_is_empty(damage[i]))
+				continue;
+			surface_flush_rect(&kBackbuffer, damage[i]);
 			flushes++;
 			printd(DEBUG_GUI | DEBUG_DETAILED,
-				"guicomp: composited %dx%d at (%d,%d), tick %lu\n",
-				damage.w, damage.h, damage.x, damage.y, kTicksSinceStart);
+				"guicomp: composited %dx%d at (%d,%d) [rect %u/%u], tick %lu\n",
+				damage[i].w, damage[i].h, damage[i].x, damage[i].y,
+				i + 1, damage_count, kTicksSinceStart);
 		}
 
 		if (kTicksSinceStart - last_heartbeat_tick >= TICKS_PER_SECOND) {
@@ -385,8 +481,11 @@ bool guicomp_thread(bool daemon)
 		// means a pending IRQ is delivered exactly AT the hlt — waking it —
 		// never before it.
 		//
-		// (kPendingDamage is read unlocked here as a wake HINT only; a torn
-		// read at worst wakes us early or costs one timer period.)
+		// (kPendingDamageCount is read unlocked here as a wake HINT only; a
+		// torn read at worst wakes us early or costs one timer period. Reading
+		// the COUNT rather than a rect is what makes that claim cheap: it is a
+		// single aligned word, so "0 or not 0" is the only question a racing
+		// reader can get wrong, and it can only get it wrong for one pass.)
 		// The accounting bookends around the nap (smp_core.h): without
 		// them, hlt time bills as run time — this thread is the one idler
 		// the scheduler cannot see, and top spent a day showing it at 95%
@@ -394,7 +493,7 @@ bool guicomp_thread(bool daemon)
 		// frame's real work onto us and routes the nap to the idle thread;
 		// End settles the nap and takes the meter back.
 		__asm__ volatile("cli" ::: "memory");
-		if (!input_pending() && rect_is_empty(kPendingDamage)) {
+		if (!input_pending() && kPendingDamageCount == 0) {
 			mpAcctHaltBegin();
 			__asm__ volatile("sti\n\thlt" ::: "memory");
 			mpAcctHaltEnd();

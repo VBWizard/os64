@@ -47,4 +47,27 @@ void surface_draw_text(surface_t *dst, int32_t x, int32_t y,
 // hardware framebuffer. The single point where pixels leave RAM.
 void surface_flush_rect(const surface_t *back, rect_t r);
 
+// A VIEW onto part of a surface: same pixels, same pitch, origin moved to the
+// rect's top-left and bounds shrunk to the rect. Free — no allocation, no copy,
+// just arithmetic — and it converts a rule everyone must REMEMBER into one the
+// code cannot break: since every primitive above clips against its
+// DESTINATION's bounds, drawing into a view physically cannot write outside
+// the rect. Translate your coordinates into view space and stop thinking about
+// clipping. (`r` must already lie within `s` — the compositor clips damage to
+// the screen before it gets here.)
+//
+// This is what makes multi-rect damage safe: a frame composites several rects
+// before flushing any of them, so a paint that strays outside the rect it was
+// asked for would corrupt a sibling rect that is already correct. See the
+// contract note on composite_one in window.c for the bug that taught us.
+static inline surface_t surface_view(surface_t *s, rect_t r)
+{
+    return (surface_t){
+        .pixels   = s->pixels + (size_t)r.y * s->pitch_px + r.x,
+        .width    = (uint32_t)r.w,
+        .height   = (uint32_t)r.h,
+        .pitch_px = s->pitch_px,
+    };
+}
+
 #endif // GUI_SURFACE_H
