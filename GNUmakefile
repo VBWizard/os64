@@ -85,14 +85,23 @@ EXT2_STAGING ?= $(CURDIR)/disk/ext2_staging
 #
 # It costs the P5 nothing: only $(DISK_IMAGE) rides the ISO as a Limine
 # module, so this image adds zero bytes to the ISO and zero seconds to a
-# ramdisk boot. Which is why it's 64MB despite holding almost nothing — that
-# is the FAT32 floor documented above, and the space is free.
+# ramdisk boot.
+#
+# SIZE: 1GB since 2026-08-18, and the old 64MB needs explaining because its
+# reason evaporated twice over. 64MB was the FAT32 FLOOR — the smallest
+# filesystem mkfs would make — chosen when /home held a husk.rc and nothing
+# else. Then /home became where LOGD= writes, and a single os64.log had
+# already reached 16MB; then /home became ext2, which has no floor at all.
+# So the size is now chosen by what the partition is FOR: holding logs across
+# many boots without the operator thinking about it. The file is sparse
+# (truncate + mkfs writes metadata only), so an empty 1GB /home costs a few
+# tens of MB of real disk and nothing on the ISO.
 #
 # 'home' is the GPT PARTITION NAME, and the kernel mounts partitions at
 # /<partition name> (see vfs_mount_secondary_partitions). No /etc/fstab to
 # invent: the partition says what it is called, and the mount believes it.
 DATA_IMAGE ?= $(CURDIR)/disk/os64_data.img
-DATA_SIZE_MB ?= 64
+DATA_SIZE_MB ?= 1024
 DATA_PARTUUID ?= 7a3c1d90-4e62-4f3b-9a55-0c6f2b8e41d7
 # NVMe, and the reason is a bug this disk found on its very first boot:
 # **THE AHCI DRIVER CANNOT WRITE.** ahci.c installs ops->read and never
@@ -360,7 +369,7 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURE
 	# writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
@@ -426,10 +435,31 @@ $(DATA_IMAGE):
 	@mkdir -p "$$(dirname $(DATA_IMAGE))"
 	truncate -s $(shell echo $$(($(DATA_SIZE_MB) + 2)))M $(DATA_IMAGE)
 	# --change-name IS the mount point: os64 mounts this partition at /home.
-	sgdisk $(DATA_IMAGE) --new=1:2048:+$(DATA_SIZE_MB)M --typecode=1:0700 --change-name=1:"home" --partition-guid=1:$(DATA_PARTUUID)
-	mformat -F -T $(shell echo $$(($(DATA_SIZE_MB) * 2048))) -i $(DATA_IMAGE)@@$(DISK_OFFSET) ::
-	mcopy -o -i $(DATA_IMAGE)@@$(DISK_OFFSET) etc/husk.rc ::/husk.rc
-	@echo "  data disk CREATED at $(DATA_IMAGE) ($(DATA_SIZE_MB)MB, /home) — this happens once; only 'make distclean' removes it"
+	# typecode 8300 (Linux filesystem) since /home became ext2 — the mount
+	# router recognizes filesystems by probing, not by GPT type, but a
+	# partition table that lies about its contents is a trap for host tools.
+	sgdisk $(DATA_IMAGE) --new=1:2048:+$(DATA_SIZE_MB)M --typecode=1:8300 --change-name=1:"home" --partition-guid=1:$(DATA_PARTUUID)
+	# EXT2, NOT FAT (converted 2026-08-18). The P5 has run both root and
+	# /home on ext2 for a while; QEMU was still handing /home a FAT32
+	# partition, which meant the test rig could reproduce an entire class of
+	# failure the real machine cannot have — and did, twice in one evening:
+	#
+	#   * FatFs's FF_FS_LOCK makes a write-open EXCLUSIVE, so logd holding
+	#     the log file starved `tail`, which reported "follow failed (-2)";
+	#   * and when tail won the race instead, logd could not reopen for five
+	#     seconds, gave up, and released the log sink.
+	#
+	# (see DEBTS: "tail -f killed logd via FF_FS_LOCK write-exclusion")
+	#
+	# ext2 has no such exclusion and is full write-through, so an appended
+	# file reads at true length immediately — which is what makes tailing a
+	# live log work at all. Same geometry as the root image (-b 1024,
+	# ^dir_index) so the driver meets one layout everywhere.
+	mkfs.ext2 -F -q -b 1024 -L OS64HOME -O ^dir_index -E offset=$(DISK_OFFSET) $(DATA_IMAGE) $(DATA_SIZE_MB)M
+	@mkdir -p $(EXT2_STAGING)
+	printf 'cd /\nwrite etc/husk.rc husk.rc\n' > $(EXT2_STAGING)/debugfs_home.cmds
+	debugfs -w -f $(EXT2_STAGING)/debugfs_home.cmds "$(DATA_IMAGE)?offset=$(DISK_OFFSET)" > /dev/null 2>&1
+	@echo "  data disk CREATED at $(DATA_IMAGE) ($(DATA_SIZE_MB)MB, /home, ext2) — this happens once; only 'make distclean' removes it"
 
 # Compatibility aliases. disk-populate/disk-init now just mean "make sure the
 # image is current"; `disk` FORCES a fresh one (the old always-rebuild behavior,
