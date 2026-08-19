@@ -35,6 +35,7 @@
 #include "os64/ticks.h"    // os64_ticks_t — the ticks() out-struct (abi)
 #include "os64/memory.h"   // os64_memory_t — the memory() out-struct (abi)
 #include "os64/time.h"     // os64_time_t — the time() out-struct (abi)
+#include "os64/pty.h"      // os64_pty_header_t/_cell_t — pty_snapshot's out-structs (abi)
 #include "env.h"           // env_set/env_unset — setenv() mutates the task's env block
 #include "os64/net.h"      // os64_netdest_t — net_dial's in-struct (abi)
 #include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
@@ -86,6 +87,10 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -215,6 +220,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
 	SYSCALL_DEFINE(SYSCALL_RENAME,      "rename",      syscall_rename,      false, 0x03),  // arg0 = old path, arg1 = new path
+	SYSCALL_DEFINE(SYSCALL_PTY_CREATE,   "pty_create",   syscall_pty_create,   false, 0x00),  // args: cols, rows — values, no pointers
+	SYSCALL_DEFINE(SYSCALL_PTY_SNAPSHOT, "pty_snapshot", syscall_pty_snapshot, false, 0x02),  // arg1 = header out; arg2 = cells out, NULLABLE (max_cells 0 = header-only probe — handler validates)
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
 	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
@@ -944,6 +951,31 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			return copied;
 		}
 
+		case HANDLE_PTY_MASTER:
+		{
+			// Keystrokes INTO the window (PTY.md): same bounded ferry as the
+			// console case above, delivered to pty_master_write — which runs
+			// the 0x03 intercept against the SLAVE (SIGINT aims at the
+			// program in the window, never the terminal holding the master)
+			// and rings the slave's input for its console_read.
+			tty_t *slave = (tty_t *)h->object;
+			char chunk[WRITE_CHUNK_SIZE];
+			size_t copied = 0;
+			while (copied < length)
+			{
+				size_t this_chunk = length - copied;
+				if (this_chunk > sizeof(chunk))
+					this_chunk = sizeof(chunk);
+
+				if (!copy_user_buffer(user_buffer + copied, chunk, this_chunk))
+					return copied ? copied : SYSCALL_RESULT_BAD_USER_DATA;
+
+				pty_master_write(slave, chunk, this_chunk);
+				copied += this_chunk;
+			}
+			return copied;
+		}
+
 		case HANDLE_PIPE_WRITE:
 		{
 			pipe_t *p = (pipe_t *)h->object;
@@ -1265,6 +1297,15 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			}
 			break;
 
+		case HANDLE_PTY_MASTER:
+			// The teaching error PTY.md promised: GRID mode has no byte
+			// stream — the screen comes out through pty_snapshot. read()
+			// takes on meaning when the STREAM flavor arrives (its gate is
+			// TCP listen(); its customer is telnetd).
+			printd(DEBUG_SYSCALL,
+			       "read(pty master): GRID mode has no byte stream — use pty_snapshot\n");
+			return SYSCALL_RESULT_INVALID;
+
 		case HANDLE_PIPE_READ:
 			// Blocks until >=1 byte is available, OR the last writer closes —
 			// which returns 0, and 0 is EOF. (EOF is the absence of writers.)
@@ -1481,6 +1522,130 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	printd(DEBUG_PIPE, "pipe: task %s got handles r=%d w=%d\n", task->exename, rh, wh);
 	return 0;
+}
+
+// The cell layouts must be the SAME BYTES — pty_snapshot memcpys grid rows
+// straight into the ABI struct. Pinned the ext2-superblock way: change either
+// side and the build stops here instead of the terminal rendering confetti.
+_Static_assert(sizeof(tty_cell_t) == sizeof(os64_pty_cell_t),
+               "pty cell ABI drifted from tty_cell_t (size)");
+_Static_assert(__builtin_offsetof(tty_cell_t, color) ==
+               __builtin_offsetof(os64_pty_cell_t, color),
+               "pty cell ABI drifted from tty_cell_t (color offset)");
+
+// pty_create(cols, rows) -> master handle. The pipe handler above is this
+// function's template; the difference is one object and one end — a pty has
+// no slave handle at all (PTY.md: the slave is named THROUGH the master at
+// spawn, and by task->tty everywhere else).
+static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	tty_t *slave = pty_create_slave((uint32_t)arg0, (uint32_t)arg1);
+	if (slave == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	int mh = handle_alloc(task, HANDLE_PTY_MASTER, slave);
+	if (mh < 0)
+	{
+		// Out of handles: a never-seated slave with a closed master is
+		// exactly the burial condition — close does the whole unwind.
+		pty_master_close(slave);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	printd(DEBUG_SYSCALL, "pty_create: task %s got master %d (pty%u, %ux%u)\n",
+	       task->exename, mh, slave->index, slave->cols, slave->rows);
+	return (uint64_t)mh;
+}
+
+// pty_snapshot(master, header out, cells out, max_cells) -> cells copied.
+// max_cells == 0 is the cheap poll: header only (generation + HUNGUP), no
+// cell traffic — what a terminal calls at frame cadence. The full copy goes
+// through a kernel scratch, NOT straight to user memory: the linearization
+// walks the grid under t->lock (irqsave), and touching user memory there
+// could demand-page inside a spinlock — the same discipline pipe read/write
+// document at length.
+static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	handle_t *h = handle_get(task, (int)(int64_t)arg0);
+	if (h == NULL || h->type != HANDLE_PTY_MASTER)
+		return SYSCALL_RESULT_INVALID;
+	tty_t *t = (tty_t *)h->object;
+
+	uint32_t maxCells = (uint32_t)arg3;
+	uint32_t want = t->cols * t->rows;
+	uint32_t ncells = (maxCells < want) ? maxCells : want;
+	if (ncells > 0 && arg2 == 0)
+		return SYSCALL_RESULT_BAD_USER_DATA;   // asked for cells, gave no bucket
+
+	os64_pty_cell_t *scratch = NULL;
+	if (ncells > 0)
+	{
+		scratch = kmalloc((size_t)ncells * sizeof(*scratch));
+		if (scratch == NULL)
+			return SYSCALL_RESULT_INVALID;
+	}
+
+	os64_pty_header_t hdr;
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+	hdr.cols       = t->cols;
+	hdr.rows       = t->rows;
+	hdr.cur_row    = t->cur_row;
+	hdr.cur_col    = t->cur_col;
+	hdr.generation = t->generation;
+	hdr.flags      = (t->everSeated && t->seats <= 0) ? OS64_PTY_HUNGUP : 0;
+	hdr._reserved  = 0;
+	if (ncells > 0)
+	{
+		// Linearize the LIVE screen out of the scrollback ring: visual row r
+		// lives at ring line (screen_top + r) % total_lines. The copy is
+		// legal as one memcpy per row because the static asserts above pin
+		// the two cell layouts together.
+		uint32_t copied = 0;
+		for (uint32_t r = 0; r < t->rows && copied < ncells; r++)
+		{
+			uint32_t line = (t->screen_top + r) % t->total_lines;
+			const tty_cell_t *src = &t->cells[(size_t)line * t->cols];
+			uint32_t n = t->cols;
+			if (copied + n > ncells)
+				n = ncells - copied;
+			memcpy(&scratch[copied], src, (size_t)n * sizeof(tty_cell_t));
+			copied += n;
+		}
+		ncells = copied;
+	}
+	spinlock_release_irqrestore(&t->lock, flags);
+
+	if (!copy_to_user_buffer((void *)arg1, &hdr, sizeof(hdr)))
+	{
+		if (scratch != NULL)
+			kfree(scratch);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	if (ncells > 0)
+	{
+		bool ok = copy_to_user_buffer((void *)arg2, scratch,
+		                              (size_t)ncells * sizeof(os64_pty_cell_t));
+		kfree(scratch);
+		if (!ok)
+			return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	return ncells;
 }
 
 // net_dial(dest) — open a network conversation and hand back a handle.
@@ -2608,6 +2773,10 @@ typedef struct {
 	// means "leave the child's default" — i.e. the console.
 	handle_type_t redirType[3];
 	void  *redirObject[3];
+	// OS64_SPAWN_SET_TTY (PTY.md): the pty slave to seat the child on, or
+	// NULL for plain inheritance. Resolved from the master handle in the
+	// caller's context, like the redirections — same reasoning, same seam.
+	tty_t *ttySlave;
 	bool   background;                    // OS64_SPAWN_BACKGROUND (`&`)
 	volatile long result;                 // child pid, or -1 on failure
 	// [ (argc+1) pointer slots ][ argc * TASK_MAX_PATH_LEN bytes of strings ].
@@ -2644,6 +2813,20 @@ static void spawn_do_create(void *arg)
 	// closes. Latent while nothing backgrounded can spawn; the day husk runs
 	// scripts, this line is where the ruling lands.
 	child->backgroundJob = p->background;
+
+	// Seat on a pty slave (PTY.md), BEFORE submission like everything else
+	// here: the child must never run an instruction on the wrong terminal.
+	// tty_seat_shell is the SAME seat the knock-summon gives a husk on a VT
+	// — controlling shell, terminal of record, foreground, lights on — which
+	// is deliberate: the seated child is the session, that is what seating
+	// means, so seat a shell. The seat bookkeeping swaps the inherited
+	// terminal's pty reference (taken in task_create) for the slave's.
+	if (p->ttySlave != NULL)
+	{
+		tty_pty_unref((tty_t *)child->tty);
+		tty_seat_shell(p->ttySlave, child);
+		tty_pty_ref(p->ttySlave);
+	}
 
 	// Apply redirection BEFORE the child is submitted to the scheduler — the
 	// child must never get a single instruction of CPU with the wrong handles
@@ -2705,7 +2888,11 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// kernel silently drops is a request that appeared to succeed and didn't,
 	// the same reasoning that rejects unknown open() modes.
 	uint64_t flags = arg5;
-	if ((flags & ~(uint64_t)OS64_SPAWN_BACKGROUND) != 0)
+	// The LOW 32 bits are flags; the HIGH 32 carry SET_TTY's master handle
+	// (syscall_numbers.h says why one register carries both). Only unknown
+	// LOW bits are a caller bug — the high half is data, judged below.
+	if ((flags & 0xFFFFFFFFull &
+	     ~(uint64_t)(OS64_SPAWN_BACKGROUND | OS64_SPAWN_SET_TTY)) != 0)
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
 	// Size the block to the arguments actually present. The count pass reads
@@ -2791,6 +2978,21 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 		p->redirType[slot] = h->type;
 		p->redirObject[slot] = h->object;
+	}
+
+	// Resolve the SET_TTY master the same way, in the caller's context, where
+	// the caller's handle table is in scope (PTY.md's seat).
+	p->ttySlave = NULL;
+	if (flags & OS64_SPAWN_SET_TTY)
+	{
+		int mh = (int)(flags >> OS64_SPAWN_TTY_SHIFT);
+		handle_t *h = (p->parent != NULL) ? handle_get(p->parent, mh) : NULL;
+		if (h == NULL || h->type != HANDLE_PTY_MASTER)
+		{
+			kfree(p);
+			return SYSCALL_RESULT_INVALID;   // not a master you hold
+		}
+		p->ttySlave = (tty_t *)h->object;
 	}
 
 	// task_create runs under kKernelPML4 so its disk I/O sees the DMA mappings.

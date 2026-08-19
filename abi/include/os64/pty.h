@@ -1,0 +1,88 @@
+// os64/pty.h — the pseudo-terminal ABI (PTY.md, ratified 2026-08-19).
+//
+// A pty is a kernel tty with no keyboard and no glass: the MASTER handle's
+// holder stands where they stood. GRID mode (v1): the kernel's one terminal
+// interpreter fills the slave's grid exactly as it fills a VT's, and the
+// master's holder copies the interpreted screen out with pty_snapshot —
+// grid in, keys out, which is the whole job of a terminal window. STREAM
+// mode is reserved (the byte-ring flavor telnetd will want; its gate is TCP
+// listen() — see PTY.md's fork ruling and the future-customer principle).
+//
+// No /dev names anywhere: masters are handles, slaves are a task's
+// controlling terminal (task->tty). A future devfs is a naming layer over
+// this, never a redesign.
+//
+// The verbs:
+//   create   — SYSCALL_PTY_CREATE(cols, rows) -> master handle
+//   seat     — spawn with OS64_SPAWN_SET_TTY | (master << OS64_SPAWN_TTY_SHIFT)
+//   keys in  — plain write(master, bytes): each byte becomes a keystroke on
+//              the slave; 0x03 runs the slave's Ctrl+C intercept and aims
+//              SIGINT at the SLAVE's foreground (the program in the window),
+//              never at the master's holder
+//   screen   — SYSCALL_PTY_SNAPSHOT: header + interpreted cells, gated by a
+//              generation counter so a frame-cadence poll is near-free
+//   read()   — reserved for STREAM mode; in GRID mode it refuses (a grid is
+//              not a stream, and pretending would teach the wrong lesson)
+
+#ifndef OS64_PTY_H
+#define OS64_PTY_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include "os64/syscall_numbers.h"
+#include "os64/syscall.h"
+
+// ── the snapshot ────────────────────────────────────────────────────────────
+
+// Snapshot flags.
+#define OS64_PTY_HUNGUP 0x1   // the slave SEATED tasks once and now seats none
+                              // — the session ended; a slave nothing has sat
+                              // on yet is merely young, not hung up
+
+typedef struct os64_pty_header
+{
+	uint32_t cols, rows;          // the live screen's geometry
+	uint32_t cur_row, cur_col;    // cursor, in that screen
+	uint64_t generation;          // bumps on every grid write — poll THIS
+	uint32_t flags;               // OS64_PTY_*
+	uint32_t _reserved;
+} os64_pty_header_t;
+
+// One interpreted cell — layout pinned to the kernel's tty_cell_t (the
+// kernel static-asserts the match, the ext2-superblock trick): the glyph, 3
+// pad bytes, the XRGB color it was written in.
+typedef struct os64_pty_cell
+{
+	char     ch;                  // 0 = never written (render as blank)
+	char     _pad[3];
+	uint32_t color;
+} os64_pty_cell_t;
+
+_Static_assert(sizeof(os64_pty_cell_t) == 8, "pty cell ABI: 8 bytes");
+_Static_assert(sizeof(os64_pty_header_t) == 32, "pty header ABI: 32 bytes");
+
+// ── the calls ───────────────────────────────────────────────────────────────
+
+// Create a GRID-mode pty sized cols x rows. Returns the master handle
+// (>= 0), or a negative syscall error. Close it with os64_close like any
+// handle; keystrokes go in with plain os64_write on it.
+static inline int64_t os64_pty_create(uint32_t cols, uint32_t rows)
+{
+	return (int64_t)os64_syscall2(SYSCALL_PTY_CREATE, cols, rows);
+}
+
+// Copy the slave's live screen: header always, cells up to max_cells (size
+// the buffer from a header-only probe, or just cols*rows once known).
+// max_cells == 0 is the cheap poll: header only, no cell copy — compare
+// header.generation against the last one you rendered.
+// Returns cells copied (0 for a header-only probe), or a negative error.
+static inline int64_t os64_pty_snapshot(int64_t master,
+                                        os64_pty_header_t *hdr,
+                                        os64_pty_cell_t *cells,
+                                        uint32_t max_cells)
+{
+	return (int64_t)os64_syscall4(SYSCALL_PTY_SNAPSHOT, (uint64_t)master,
+	                              (uint64_t)hdr, (uint64_t)cells, max_cells);
+}
+
+#endif // OS64_PTY_H

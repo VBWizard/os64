@@ -107,7 +107,36 @@ typedef struct tty
 	// ── The summons (dormant ttys only) ─────────────────────────────────────
 	volatile tty_state_t state;
 	volatile bool spawnRequested;      // set by a keystroke, served by kworker
+
+	// ── Change tracking (all ttys; PTY.md's snapshot poll reads it) ─────────
+	// Bumped on every grid mutation. A pty master's holder polls this at
+	// frame cadence and copies cells only when it moved; VTs carry it too
+	// because the counter is free and a future dirty-aware consumer (the
+	// client-notification seam) will want it everywhere.
+	volatile uint64_t generation;
+
+	// ── The pty fields (PTY.md, 2026-08-19) — zero for the kTTY[] fleet ────
+	// A pty slave is THIS STRUCT with no keyboard and no glass: the master's
+	// holder stands where they stood. is_pty gates the handful of places
+	// that must not treat one like a VT (naming, the focus/summon iterators
+	// never see them — they walk kTTY[] only — and repaint can't happen: a
+	// pty is never kTTYFocused).
+	bool is_pty;
+	uint8_t pty_mode;                  // PTY_MODE_* — GRID today, STREAM reserved
+	// Seats = tasks whose ->tty this is (the child and everything it spawns,
+	// via task_create's inheritance). everSeated arms HUNGUP: a slave that
+	// EMPTIED is hung up; one nothing has sat on yet is merely young.
+	volatile int32_t seats;
+	volatile bool everSeated;
+	volatile bool masterClosed;        // the terminal side hung up its handle
+	struct tty *next_pty;              // the registry chain (kPtyList)
 } tty_t;
+
+// PTY.md's mode seam: the flavor is decided at ONE choke point (tty_write),
+// which is what makes STREAM an addition and never a rewrite. GRID is v1;
+// STREAM's gate is TCP listen() and its customer is telnetd.
+#define PTY_MODE_GRID   0
+#define PTY_MODE_STREAM 1   // reserved — bytes to a ring instead of the grid
 
 extern tty_t kTTY[TTY_COUNT];
 extern tty_t * volatile kTTYFocused;   // whose grid the glass is showing
@@ -147,6 +176,11 @@ void tty_flush_if_dirty(void);
 void tty_input_event(const keyboard_event_t *ev);
 bool tty_input_has(tty_t *t);
 bool tty_input_pop(tty_t *t, keyboard_event_t *ev);
+// The ring push alone, aimed at a SPECIFIC tty — the keyboard path above
+// wraps it with focus/knock/scrollback policy; a pty master's write is a
+// producer with no such ceremony (the terminal app already decided whose
+// keystrokes these are).
+void tty_input_push(tty_t *t, const keyboard_event_t *ev);
 
 // ── Focus (called from the keyboard drivers' chord intercepts) ─────────────
 void tty_focus(uint32_t index);        // Alt+F1..F8 — direct select
@@ -174,5 +208,34 @@ bool tty_summon_sweep(void);
 // which is exactly what you want from a dead system.
 void tty_emergency_direct(void);
 extern volatile bool kTTYDirect;
+
+// ── The pty family (PTY.md; mechanism here, the syscall skin in syscall.c) ──
+// Create a GRID-mode slave: a live tty_t with its own grid + scrollback
+// ring, registered on kPtyList (NEVER in kTTY[] — the VT iterators stay
+// blind to ptys by construction). Returns NULL on allocation failure.
+tty_t *pty_create_slave(uint32_t cols, uint32_t rows);
+
+// The master's write half: bytes become synthesized key events into the
+// slave's input ring — after 0x03 runs the per-tty interrupt intercept
+// against the SLAVE (a windowed Ctrl+C aims at the slave's foreground, not
+// the terminal app's). Returns bytes accepted.
+int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length);
+
+// Seat references: every task whose ->tty is this pty holds one (taken at
+// inheritance in task_create and at spawn's explicit seating; dropped in
+// task teardown). The slave frees itself when the master is closed AND the
+// seats are empty — whichever happens last does the burial.
+void tty_pty_ref(tty_t *t);          // no-op unless t->is_pty
+void tty_pty_unref(tty_t *t);        // no-op unless t->is_pty
+void pty_master_close(tty_t *slave); // the handle-table close hook
+
+// console_wake_if_ready's pty leg: wake any slave's parked reader whose ring
+// has input. Lives here because the registry walk needs the (private) list
+// lock. Caller holds the scheduler queue lock (processSignals context).
+void tty_pty_wake_readers(void);
+
+// The registry head (walks require the private list lock — use the sweep
+// above; exported for diagnostics only).
+extern tty_t * volatile kPtyList;
 
 #endif // TTY_H

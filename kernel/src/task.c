@@ -1196,6 +1196,11 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 		// so an ordinary child dying on a terminal changes nothing.
 		tty_shell_departed(task);
 
+		// Return the pty seat inheritance took (no-op for VTs). AFTER the
+		// shell-departed hook: that one still reads task->tty, and the seat
+		// count going to zero is what arms the master's HUNGUP flag.
+		tty_pty_unref((tty_t *)task->tty);
+
 		task_enqueue_dead_child(task);
 	}
 
@@ -2044,6 +2049,10 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        // Ctrl+C). NULL inherits as NULL = the system console (task_tty).
        // tty_seat_shell overrides this for the shells themselves.
        newTask->tty=parentTaskPtr->tty;
+       // A pty terminal is COUNTED (PTY.md's seats): inheritance takes one,
+       // teardown returns it, and the slave is buried only when the master
+       // is closed AND the last seat empties. No-op for the kTTY[] fleet.
+       tty_pty_ref((tty_t *)newTask->tty);
        //Initialize the current working directory to parentTask's cwd
        newTask->cwd=(char*)kmalloc(PAGE_SIZE);
        if (parentTaskPtr!=NULL && parentTaskPtr->cwd)

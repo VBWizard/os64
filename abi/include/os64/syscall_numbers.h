@@ -397,6 +397,27 @@
 // screen, which was always the useful half.
 #define OS64_SPAWN_BACKGROUND  0x1
 
+// SET_TTY seats the child on a pty slave (PTY.md, 2026-08-19): the child's
+// controlling terminal becomes the slave of the master handle carried in the
+// HIGH 32 BITS of this same flags word. Packed rather than given its own
+// argument because spawn's six registers were already spoken for — and a
+// handle is a small int, the flags word had 62 idle bits, and one register
+// carrying "how to spawn" is honest about what both values are. The child is
+// seated as the slave's SHELL (tty_seat_shell: controlling shell, foreground,
+// lights on), so seat a shell — that is what sessions are. Low-bit flags and
+// the handle never collide: bits 1..31 stay flags, 32..63 stay the handle.
+#define OS64_SPAWN_SET_TTY     0x2
+#define OS64_SPAWN_TTY_SHIFT   32
+
+// The pty family (PTY.md — ratified 2026-08-19). pty_create(cols, rows)
+// returns a MASTER handle; the slave is a kernel tty the master names at
+// spawn (above) and tasks name as their controlling terminal. GRID mode:
+// write(master) injects keystrokes (0x03 runs the slave's Ctrl+C intercept),
+// pty_snapshot copies the interpreted screen out; read(master) is reserved
+// for the STREAM mode whose customer (telnetd) waits on TCP listen().
+#define SYSCALL_PTY_CREATE   44
+#define SYSCALL_PTY_SNAPSHOT 45
+
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the
 // kernel VFS's internal SEEK_* so no translation layer is needed.
