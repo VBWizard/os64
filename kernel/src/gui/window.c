@@ -97,9 +97,21 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 	// unless nothing holds focus yet, because SOMETHING must (an all-
 	// declining boot would leave keys routing to NULL). See the flag's
 	// comment in window.h for the no-mouse race that earned it.
+	//
+	// TITLEBARS REPAINT ON FOCUS CHANGE — the rule with three doors, and
+	// this was the last to learn it (2026-08-19, Chris's find). wm_raise
+	// always damaged the dethroned window; wm_destroy learned it 8/17 when
+	// the first window to DIE holding focus left a half-gray, half-blue
+	// titlebar; and this door — focus stolen AT BIRTH — hid until the first
+	// focus-taking window was ever born onto a live desktop with a focused
+	// window standing visible: `gclock &` typed inside gterm, whose titlebar
+	// then kept wearing the focused blue in front of an eyewitness.
+	window_t *old_focus = s_focused;
 	if (!(flags & GUI_WINDOW_START_UNFOCUSED) || s_focused == NULL)
 		s_focused = w;
 	gui_damage_add_locked(w->frame);
+	if (s_focused == w && old_focus != NULL && old_focus != w)
+		gui_damage_add_locked(old_focus->frame);
 
 	printd(DEBUG_GUI, "wm: created window %u '%s' at (%d,%d) %dx%d\n",
 		w->id, w->title, frame.x, frame.y, frame.w, frame.h);
