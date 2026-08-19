@@ -33,6 +33,13 @@
 // per this many passes (quiet passes always print) — the heartbeat must
 // survive sustained load without becoming its own flood.
 #define LOGD_STATS_EVERY 64
+// How long a producer waits on a full ring before concluding that nothing is
+// draining it and taking the oldest entry's slot (log_store_entry). The old
+// value was 2,000,000,000 spins ending in a PANIC; the outcome is survivable
+// now, so patience can be measured in microseconds instead of eons. A drainer
+// that is merely SLOW resets this every entry it takes, so it only expires
+// when nothing is moving at all.
+#define LOG_FULL_PATIENCE_SPINS 100000
 typedef struct log_entry {
     uint64_t ticks;     // kTicksSinceStart at log time — used for display
     uint64_t tsc;       // RDTSC at log time — used for cross-core sort order
@@ -47,6 +54,11 @@ typedef struct log_entry {
 
 typedef struct log_buffer {
     log_entry_t *entries;
+    // Entries overwritten because this ring was full and nothing could drain
+    // it (see log_store_entry). Counted rather than merely lost: a gap you can
+    // measure is a different animal from a gap you can only suspect, and
+    // /sys/log will report this per core.
+    uint64_t lost;
     size_t head;
     size_t tail;
     size_t capacity;
@@ -55,9 +67,54 @@ typedef struct log_buffer {
 
 extern log_buffer_t core_log_buffers[MAX_CPUS];
 extern bool kLoggingInitialized;
+
+// The format SERIAL renders with (the escapes are documented in
+// <os64/klog_format.h>). Serial's config channel is the kernel cmdline —
+// LOGFMT= — because nothing else exists before a filesystem does; the FILE's
+// format is logd's business and comes from /etc/logd.conf. They are allowed
+// to differ, and usually should: serial is where you debug, the file is where
+// you read. Defaults to the layout os64 has always printed.
+extern const char *kLogFormat;
+
+// Does the active serial format actually ask for a wall clock (%d or %t)?
+// Answered ONCE when the format is chosen, never per line: printd runs in
+// interrupt context on every core, and the epoch→calendar breakdown is real
+// arithmetic that `classic` has no use for.
+extern bool kLogFormatWantsClock;
+
+// LOGFMT= named a format that does not exist. Recorded at parse time (when
+// nothing can print yet) and reported once there is a console to report on.
+extern bool kLogFormatBad;
+
+// Adopt a format by NAME ("classic", "daily", "full"). Returns false and
+// changes nothing if the name is unknown — the caller says so loudly and
+// keeps what it had, because the log is the instrument you diagnose the
+// mistake WITH. Literal format strings are deliberately not accepted here:
+// the kernel cmdline is space-tokenized, so a layout with spaces in it
+// cannot survive the trip. Those belong in /etc/logd.conf, which logd reads.
+bool log_set_format_by_name(const char *name);
+
+// Fill `out` (an os64_logtime_t) from the system clock, for %d/%t. Declared
+// void* to keep <os64/klog_format.h> out of this header's dependents.
+void log_wallclock_now(void *out);
 void logging_queueing_init();
 void dump_log_buffer(uint16_t core);
 void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message);
+
+// The pre-allocator log. Everything printd emits before allocator_init() has
+// nowhere to live — the per-core rings are kmalloc'd — so those lines went to
+// serial and existed nowhere else, which on a machine with no serial port (the
+// P5) meant they existed nowhere at all. This is a small BSS ring that holds
+// them until logging_queueing_init() can pour them into the real rings.
+//
+// ONE ring, not one per core, because this window is strictly pre-SMP: the APs
+// have not been started and cannot log. And it FILLS ONCE AND STOPS rather
+// than wrapping — its job is the BEGINNING of the story (the boot banner, the
+// commandline), the opposite of the main rings' job, which is the recent past.
+// A circular early buffer would faithfully overwrite the very lines it exists
+// to rescue the first time somebody turned on a chatty debug flag.
+void log_store_early(uint16_t core, uint64_t ticks, uint8_t priority,
+                     uint8_t category, const char *message);
 bool logd_thread(bool daemon);
 
 /// @brief Will printd output come out of the SERIAL PORT right now?
@@ -153,5 +210,10 @@ bool klog_sink_is_claimed(void);
 // Its mere presence is what arms the wait above — the kernel does not need to
 // know whether the daemon has been spawned yet, only that one is expected.
 extern char kLogdPath[128];
+// LOGFMT=<name> — serial's format, applied once in kernel_main. See its
+// comment in kernel_commandline.c for why this channel takes names only.
+extern char kLogFormatName[16];
+// SERIAL=on|off — overrules init_serial's probe (see kernel_commandline.c).
+extern char kSerialOverride[8];
 
 #endif // LOG_H
