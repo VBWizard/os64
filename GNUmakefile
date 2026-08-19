@@ -12,11 +12,18 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # $(call USER_VARIABLE,QEMUFLAGS,-m 8g -smp 2 -no-reboot -serial file:qemu_com1.log -monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
 
 # Define the base QEMU flags
-# -smp 2 
-QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 8 \
+# -smp 2
+# -machine q35 lives HERE, not per-target, since 2026-08-18: it is the single
+# most load-bearing flag in the set (os64's PCI config path is ECAM-only, and
+# QEMU's default i440FX board has no MCFG — a boot without q35 triple-faults
+# seconds in, silently if LOGD= is holding serial). It was spelled in every
+# target individually, so anyone rebuilding an invocation from these
+# variables — as the headless harness does — inherited everything EXCEPT the
+# flag that mattered. See VERIFICATION.md's headless section for the scar.
+QEMU_BASE_FLAGS = -machine q35 -m 8g -no-reboot -smp 8 \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
-				  -d $(shell echo int,cpu_reset,pcall,guest_errors)
+				 # -d $(shell echo int,cpu_reset,pcall,guest_errors)
 #				  -D qemu_debug.log 
 
 # Disk image configuration.
@@ -192,14 +199,12 @@ $(USERLAND_BINS): userland ;
 .PHONY: run
 run: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS)
 
 debug: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
@@ -221,7 +226,6 @@ QEMU_NET_FLAGS = -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
 .PHONY: run-net
 run-net: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_NET_FLAGS)
@@ -237,7 +241,6 @@ QEMU_E1000_FLAGS = -netdev user,id=n0 -device e1000,netdev=n0 \
 .PHONY: run-e1000
 run-e1000: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_E1000_FLAGS)
@@ -261,7 +264,6 @@ QEMU_TAP_FLAGS = -netdev tap,id=n0,ifname=tap0,script=no,downscript=no \
 .PHONY: run-tap
 run-tap: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_TAP_FLAGS)
@@ -269,7 +271,6 @@ run-tap: $(IMAGE_NAME).iso
 .PHONY: debug-net
 debug-net: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS) $(QEMU_NET_FLAGS)
@@ -277,7 +278,6 @@ debug-net: $(IMAGE_NAME).iso
 .PHONY: debug-hdd-eufi
 debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
@@ -285,7 +285,6 @@ debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DAT
 .PHONY: run-uefi
 run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
@@ -294,14 +293,12 @@ run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso | $(DATA_IMAGE)
 .PHONY: run-hdd
 run-hdd: $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
 run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
@@ -482,11 +479,17 @@ disk:
 # The dd copy means the image itself is never touched; on a FAILING check
 # the extracted copy is left at /tmp/os64_fsck_ext2.img for the autopsy.
 .PHONY: fsck-ext2
-fsck-ext2:
+# /home joined the constitution 2026-08-18, the day it became ext2: a green
+# e2fsck on root alone stopped being the whole verdict the moment a second
+# ext2 filesystem started taking the write driver's traffic (and logd makes
+# /home the BUSIER of the two). The data image is checked in place via
+# e2fsprogs' ?offset= syntax — no gigabyte copy, and -fn never writes.
+fsck-ext2: | $(DATA_IMAGE)
 	@dd if=$(DISK_IMAGE) of=/tmp/os64_fsck_ext2.img bs=512 \
 	    skip=$(EXT2_START_SECTOR) count=$$(($(EXT2_SIZE_MB) * 2048)) status=none
 	e2fsck -fn /tmp/os64_fsck_ext2.img
 	@rm -f /tmp/os64_fsck_ext2.img
+	e2fsck -fn "$(DATA_IMAGE)?offset=$(DISK_OFFSET)"
 
 # Refresh compile_commands.json — the per-file compiler flags VSCode's
 # IntelliSense runs on (see .vscode/c_cpp_properties.json). bear records the
