@@ -73,7 +73,7 @@ uint64_t tscGetCyclesPerSecond(uint32_t seconds)
     uint64_t cyclesDiff;
     wait(seconds * 1000);
     cyclesDiff=(rdtsc()-cyclesBefore) / seconds;
-    printd(DEBUG_EXCEPTIONS,"tscGetCyclesPerSecond: TSC cycles per second = %lu (%us window)\n",cyclesDiff,seconds);
+    printd(DEBUG_SYSTEM, "tscGetCyclesPerSecond: TSC cycles per second = %lu (%us window)\n", cyclesDiff, seconds);
     return cyclesDiff;
 }
 
