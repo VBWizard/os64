@@ -838,6 +838,14 @@ void kernel_main()
 	kLogFormatBad = (kLogFormatName[0] != '\0' && !log_set_format_by_name(kLogFormatName));
 	hardware_init();
 	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
+	// A SERIAL= value that is neither 'on' nor 'off' (values are
+	// case-sensitive, like every token this cmdline parses) must not be
+	// swallowed: this is the one flag whose silent failure costs the wire
+	// itself. Same pattern as kLogFormatBad above — the verdict is parked
+	// here and reported beside the serial banner below, once the glass
+	// exists to carry it. (Declared outside the ENABLE_COM1 guard because
+	// the banner that reads it prints unconditionally.)
+	bool serialOverrideBad = false;
 #ifdef ENABLE_COM1
 	// KEEP THE ANSWER. This return value was discarded for the whole life of
 	// the project, and the probe behind it never actually tested anything
@@ -850,7 +858,10 @@ void kernel_main()
 	else if (strcmp(kSerialOverride, "off") == 0)
 		kSerialPresent = false;
 	else
+	{
 		kSerialPresent = serialProbed;
+		serialOverrideBad = (kSerialOverride[0] != '\0');
+	}
 #endif
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
 
@@ -862,9 +873,19 @@ void kernel_main()
 	// Say the verdict on the GLASS. On a machine with no UART this is the only
 	// place it can be said, and it is the sentence that explains why serial is
 	// quiet and where the log went instead.
+	// "(forced by SERIAL=)" only when the override actually took: a garbage
+	// value falls back to the probe, and claiming it was forced would be the
+	// banner lying about who decided.
 	printf("Serial port (COM1): %s%s\n",
 	       kSerialPresent ? "present" : "ABSENT — kernel log retained in memory, not drained",
-	       kSerialOverride[0] ? " (forced by SERIAL=)" : "");
+	       (kSerialOverride[0] && !serialOverrideBad) ? " (forced by SERIAL=)" : "");
+	if (serialOverrideBad)
+	{
+		printf("SERIAL=%s is neither 'on' nor 'off' (case matters) — trusting the probe\n",
+		       kSerialOverride);
+		printd(DEBUG_BOOT, "SERIAL=%s is neither 'on' nor 'off' (case matters) — trusting the probe\n",
+		       kSerialOverride);
+	}
 	printf("Commandline: %s (debug level 0x%016lx%016lx)\n",kKernelCommandline, high, low);
     // The '\n' is not decoration: without it the next entry appends to this
     // line's tail, which is why every serial log for years read

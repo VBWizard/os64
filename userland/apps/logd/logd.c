@@ -414,6 +414,32 @@ int main(int argc, char **argv)
 			os64_printf("logd: %s is writable again — resuming, %lu held byte(s) first "
 			            "(the kernel hands the log sink back on the next read)\n",
 			            path, (unsigned long)used);
+			// "Held byte(s) FIRST" is a load-bearing word: the flush must
+			// happen BEFORE the next klog_read, because gOut is sized for one
+			// batch with headroom, not two — a held batch plus a fresh one can
+			// overrun it, and the renderer truncates silently past the end, so
+			// the tail of the new batch would be consumed from the rings and
+			// never written. Exactly the silent loss this policy forbids
+			// (found in review, 2026-08-18: the first version printed the
+			// promise and skipped the flush).
+			if (used > 0)
+			{
+				int64_t flushed = os64_write((int32_t)fd, gOut, used);
+				if (flushed != (int64_t)used)
+				{
+					// Same policy as the main write path below: the file
+					// OPENED but the disk refused the bytes — that is not a
+					// blocker to wait out, it is a failed write, and a failed
+					// write ends the daemon loudly.
+					os64_printf("logd: write to %s failed (%ld of %lu bytes) — disk full?\n",
+					            path, (long)flushed, (unsigned long)used);
+					os64_printf("logd: releasing the log sink; the kernel resumes serial in a moment\n");
+					os64_sync((int32_t)fd);
+					os64_close((int32_t)fd);
+					return 1;
+				}
+				used = 0;
+			}
 			os64_ticks(&t);
 			lastSync = t.ticks;
 		}

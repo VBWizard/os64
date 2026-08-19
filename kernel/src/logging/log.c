@@ -347,6 +347,17 @@ void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t ca
             //truly nothing is moving.
             else if (++idleSpins > LOG_FULL_PATIENCE_SPINS)
             {
+                //This bump is UNLOCKED on purpose — do not "fix" it with
+                //kLogDWorkLock: this path runs in interrupt context, possibly
+                //ON TOP of the drainer it would be waiting for, and that is a
+                //deadlock. The race it buys was traced (2026-08-18 review): a
+                //drainer waking in this same instant advances tail too, both
+                //sides read T and store T+1, and one update is lost. Worst
+                //case is `lost` overcounting by one — the entry was in fact
+                //drained — never corruption: this producer writes entries at
+                //HEAD, and the full-ring gap slot keeps the slot being
+                //drained and the slot being written apart. A CAS would close
+                //the overcount if the number ever needs to be exact.
                 buffer->tail = (buffer->tail + 1) % buffer->capacity;
                 buffer->lost++;
                 break;
