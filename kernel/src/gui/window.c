@@ -260,3 +260,36 @@ void wm_composite(surface_t *backbuffer, rect_t damage)
 		if (rect_intersect(w->frame, damage, &overlap))
 			composite_one(backbuffer, w, damage);
 }
+
+// Occlusion, the cheap half (2026-08-18). Painter's algorithm draws a covered
+// window and then draws over it: correct, and entirely wasted work — plus a
+// flush of uncached pixels that cannot possibly change. This answers the one
+// question that lets publish skip both.
+//
+// DELIBERATELY the simple test: is this rect inside ONE window above me? Two
+// windows that JOINTLY cover it read as visible here and still get composited.
+// Doing better means subtracting a real region (X11/Cairo territory) and
+// maintaining it as windows move — a bigger idea, its own slice, and one this
+// z-list can't answer in a walk. The common desktop shape is one window over
+// another, which is exactly what this catches.
+//
+// Note it takes no view on WINDOW opacity, because os64 has none yet: every
+// window is fully opaque (the X byte in XRGB is reserved for the translucency
+// row that hasn't landed). The day alpha exists, this function is where it
+// must be taught to stop trusting a covering frame — a window you can see
+// through occludes nothing.
+bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect)
+{
+	if (rect_is_empty(screen_rect))
+		return true;   // nothing to draw is trivially invisible
+
+	for (const window_t *above = w->above; above; above = above->above) {
+		rect_t covered;
+		// Fully inside means: the intersection IS the rect itself.
+		if (rect_intersect(above->frame, screen_rect, &covered) &&
+		    covered.x == screen_rect.x && covered.y == screen_rect.y &&
+		    covered.w == screen_rect.w && covered.h == screen_rect.h)
+			return true;
+	}
+	return false;
+}

@@ -326,7 +326,29 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage)
 	rect_t screen_damage = (rect_t){content_screen.x + local.x,
 	                                content_screen.y + local.y,
 	                                local.w, local.h};
+
+	// Occlusion (2026-08-18): if none of this rect can reach the glass, stop
+	// here — no damage, so no composite and no uncached flush of pixels that
+	// cannot change.
+	//
+	// The SNAPSHOT above still happened, and that is exactly why this check
+	// comes last. `content` holds the client's finished frame, so when the
+	// covering window moves away the newly uncovered region is damaged by the
+	// MOVE and recomposites from an up-to-date snapshot. Skipping the snapshot
+	// as well would save a memcpy and show a stale frame on reveal — the
+	// classic occlusion bug, and not one worth reinventing.
+	//
+	// This is the compositor-side half only. The CLIENT still draws and
+	// publishes at full rate into a canvas nobody can see; teaching it to idle
+	// needs a publish acknowledgment it can wait on — Wayland's frame-callback
+	// insight, and the reason X11's VisibilityNotify never worked (it asked
+	// applications to volunteer, and they didn't). That half rides libui; see
+	// the occlusion row in DEBTS.
+	bool hidden = wm_rect_is_occluded(win, screen_damage);
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
+
+	if (hidden)
+		return 0;
 
 	// Separate acquisition inside — kGuiLock is not recursive.
 	gui_damage_add(screen_damage);

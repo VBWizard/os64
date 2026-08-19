@@ -118,6 +118,11 @@ bool wm_pop_event(window_t *w, input_event_t *out);
 // above are the compositor's business, not ours.
 void wm_composite(surface_t *backbuffer, rect_t damage);
 
+// Is this screen rect completely hidden behind some window ABOVE `w`? The
+// only question publish needs to ask before spending a composite and a slow
+// uncached flush on pixels nobody can see. Caller holds kGuiLock.
+bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
+
 // Where the content area sits on screen (for event coordinate translation
 // and publish-rect mapping).
 static inline rect_t wm_content_rect_on_screen(const window_t *w)
