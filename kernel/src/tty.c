@@ -7,6 +7,10 @@
 
 #include "tty.h"
 #include "BasicRenderer.h"     // the glass: renderer_glass_* primitives
+#include "gui/compositor.h"    // gui_vt8_seated/gui_vt8_focus_gained — the
+                               // VT8 handoff (policy stays HERE, per the
+                               // keyboard driver's doctrine; the compositor
+                               // only answers "am I seated?")
 #include "kmalloc.h"
 #include "memset.h"
 #include "strings/sprintf.h"
@@ -188,6 +192,15 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 // switch costs one memcpy on the glass instead of sixteen thousand pokes.
 static void tty_repaint_locked(tty_t *t)
 {
+	// VT8's GRID is not what VT8 shows when the compositor is seated there —
+	// the backbuffer is (the VT8 chapter). This guard is the belt under every
+	// repaint door (the stale-glass rider, the scrollback view, any future
+	// caller): whatever path decides "repaint the focused terminal" while the
+	// GUI owns it, the answer is the compositor's, delivered via
+	// gui_vt8_focus_gained in tty_focus — never a grid blit over the desktop.
+	if (t == &kTTY[7] && gui_vt8_seated())
+		return;
+
 	uint64_t rflags = renderer_glass_begin();
 	renderer_glass_defer_locked();
 
@@ -228,15 +241,13 @@ void tty_write(tty_t *t, const char *bytes, size_t length)
 	if (t == NULL || bytes == NULL || length == 0)
 		return;
 
-	// GUI diversion first, same as print_n always did: when the compositor
-	// owns the console, ALL console bytes flow to its window. (The day GUI
-	// terminal windows become tty sinks, this line is where they plug in.)
-	console_sink_fn sink = kConsoleSink;
-	if (sink)
-	{
-		sink(bytes, length);
-		return;
-	}
+	// (The kConsoleSink diversion stood here until the VT8 chapter,
+	// 2026-08-19 — and note what it did: it caught bytes BEFORE the grid, so
+	// during GUI mode a tty's own history was never written. Retiring it is
+	// what makes Alt+F1 show the whole story instead of a grid with a hole
+	// where the GUI session was. The day GUI terminal windows become tty
+	// sinks, that is Phase E's pty seam — per-tty plumbing, not a global
+	// hijack.)
 
 	// Not ready (early boot) or post-panic: the legacy direct-to-glass path.
 	if (!kTTYReady || kTTYDirect || t->cells == NULL)
@@ -397,8 +408,18 @@ void tty_focus(uint32_t index)
 	// renderer lock first re-checks this pointer and stands down (see the
 	// re-check in tty_write) — so the repaint below always paints last.
 	kTTYFocused = next;
-	tty_repaint_locked(next);
+	// Focus landing on the SEATED VT8 hands the glass to the compositor
+	// instead of blitting a (deliberately unused) grid over its desktop.
+	// The handoff is one lock-free store — this function runs in the
+	// keyboard IRQ, where GUI locks are off-limits (invariant 4) — made
+	// after the release below so no GUI-side reader ever waits on a tty
+	// lock.
+	bool gui_target = (next == &kTTY[7] && gui_vt8_seated());
+	if (!gui_target)
+		tty_repaint_locked(next);
 	spinlock_release_irqrestore(&next->lock, flags);
+	if (gui_target)
+		gui_vt8_focus_gained();
 }
 
 void tty_focus_step(int dir)

@@ -8,10 +8,15 @@
 #include "spinlock.h"
 #include "kmalloc.h"   // renderer_attach_shadow — the console's RAM mirror
 #include "tty.h"       // print_n's router half: grids up -> bytes go to VT1
+#include "gui/compositor.h"  // gui_owns_glass — "is the iron the GUI's right now?"
 
 extern BasicRenderer kRenderer;
 uint32_t kFrameBufferBackgroundColor;
-volatile console_sink_fn kConsoleSink = NULL;
+// (kConsoleSink lived here from the first GUI console until the VT8 chapter
+// retired it, 2026-08-19: a diversion at the bottom of this renderer that
+// caught the tty layer's glass paints in a net and fed them to a ring-0
+// window. Glass ownership is VT focus now — gui_owns_glass() — and the only
+// question this file asks is whether the iron is currently the GUI's.)
 
 // The console cursor is shared mutable state, and as of husk it has more than
 // one writer: the kernel task paints the uptime clock while a user task echoes
@@ -183,7 +188,9 @@ static void cursor_show_locked(BasicRenderer *r)
 // anything else happens. GUI-diverted consoles paint their own cursor someday.
 void renderer_cursor_show(void)
 {
-	if (kConsoleSink)
+	// The desktop is not ours to blink on: a husk parked in console_read on
+	// VT1 must not paint its cursor over the GUI's frame.
+	if (gui_owns_glass())
 		return;
 	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
 	cursor_show_locked(&kRenderer);
@@ -192,7 +199,7 @@ void renderer_cursor_show(void)
 
 void renderer_cursor_hide(void)
 {
-	if (kConsoleSink)
+	if (gui_owns_glass())
 		return;
 	uint64_t flags = spinlock_acquire_irqsave(&kRendererLock);
 	cursor_hide_locked(&kRenderer);
@@ -340,9 +347,9 @@ void get_cursor_pos(BasicRenderer *basicrenderer, unsigned int* x, unsigned int*
 // corner should be truncated, never allowed to reflow the console.
 void print_at(BasicRenderer *basicrenderer, unsigned int x, unsigned int y, const char *str)
 {
-	// If the GUI owns the console, the raw framebuffer is not ours to scribble
+	// If the GUI owns the glass, the raw framebuffer is not ours to scribble
 	// on — the compositor would just overpaint us (or we would tear its frame).
-	if (kConsoleSink)
+	if (gui_owns_glass())
 		return;
 
 	const unsigned int charHeight = basicrenderer->psf1_font->psf1_header->charsize;
@@ -385,15 +392,10 @@ int printf(const char *fmt, ...)
 // direct interpreter below survives for its two remaining customers — early
 // boot and panic.
 void print_n(const char* str, size_t length) {
-    // GUI console diversion (see kConsoleSink in BasicRenderer.h). Snapshot
-    // the pointer once: panic may NULL it concurrently, and we must not call
-    // through a pointer we haven't checked.
-    console_sink_fn sink = kConsoleSink;
-    if (sink) {
-        sink(str, length);
-        return;
-    }
-
+    // (The kConsoleSink diversion stood here until 2026-08-19. Nothing
+    // replaces it: with the GUI on VT8, these bytes belong in VT1's grid
+    // below — visible the moment anyone switches — and tty_write's own
+    // focused-check keeps them off a glass the compositor owns.)
     if (kTTYReady && !kTTYDirect) {
         tty_write(&kTTY[0], str, length);
         return;

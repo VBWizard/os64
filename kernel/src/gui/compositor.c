@@ -16,9 +16,8 @@
 #include "gui/window.h"
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
-#include "gui/console_window.h"
 
-#include "BasicRenderer.h"   // kConsoleSink, for gui_emergency_disable
+#include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 
 #include "CONFIG.h"
 #include "kernel.h"
@@ -50,6 +49,31 @@ task_t *kGuiCompTask = NULL;
 // only the flush to the slow uncached framebuffer runs after release.
 // ---------------------------------------------------------------------------
 spinlock_t kGuiLock = 0;   // shared with window.c / gui_client.c via gui_internal.h
+
+// ── VT8 glass ownership (Phase B, 2026-08-19 — GRAPHICS.md's VT8 chapter) ───
+// The GUI is VT8's seated shell, not the framebuffer's owner-by-force. One
+// predicate gates every flush: the compositor paints the IRON only while VT8
+// is the focused terminal AND the compositor is seated there. Without the GUI
+// cmdline flag VT8 is an ordinary text terminal — dormant, husk-on-knock —
+// and this predicate stays false for the machine's whole life (ruling 2).
+//
+// Compositing into the RAM backbuffer continues while a text VT holds the
+// glass: it is cheap, it keeps window state current, and it is what makes
+// switching back ONE full-screen damage add instead of a scene rebuild — the
+// backbuffer is VT8's grid, and this is its repaint-from-state.
+static volatile bool s_gui_seated = false;
+
+bool gui_vt8_seated(void)
+{
+	return s_gui_seated;
+}
+
+bool gui_owns_glass(void)
+{
+	return s_gui_seated && kTTYFocused == &kTTY[7];
+}
+
+// (gui_vt8_focus_gained lives below kBackbuffer's declaration.)
 
 // ---------------------------------------------------------------------------
 // Damage accumulator, v2: a small rect LIST (2026-08-18).
@@ -114,6 +138,21 @@ static inline bool damage_merge_is_cheap(rect_t a, rect_t b)
 
 // The canonical screen image (scene + cursor). Compositor-thread-only.
 static surface_t kBackbuffer;
+
+// tty_focus calls this instead of a grid repaint when focus lands on the
+// seated VT8. It runs in the SWITCHER's context — usually the keyboard IRQ —
+// and GUI code never runs in ISR context (invariant 4; gui_damage_add's own
+// header says NOT from IRQ handlers). So this is ONE STORE to a flag, the
+// same lock-free shape as gui_emergency_disable: the compositor's frame loop
+// converts it into full-screen damage under its own lock. The keystroke's
+// interrupt is what ends the compositor's hlt, so the repaint follows within
+// a frame anyway.
+static volatile bool s_glass_regained = false;
+
+void gui_vt8_focus_gained(void)
+{
+	s_glass_regained = true;
+}
 
 // The desktop: bottom layer of the scene, painted once at startup. Windows
 // (M5) stack on top of it, the cursor on top of everything.
@@ -226,10 +265,12 @@ void gui_damage_add(rect_t screen_rect)
 
 void gui_emergency_disable(void)
 {
-	// One store, no locks: panic() calls this first so its output takes the
-	// direct-to-framebuffer path even if the GUI is mid-composite (or the
-	// GUI is what died). The desktop gets scribbled over — intentionally.
-	kConsoleSink = NULL;
+	// One store, no locks — the doctrine survives the sink it used to serve:
+	// panic() calls this first so the compositor stops flushing and cannot
+	// overpaint the dying words (tty_emergency_direct handles the grid side;
+	// panic text then goes straight at the iron). The desktop gets scribbled
+	// over — intentionally.
+	s_gui_seated = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -413,9 +454,11 @@ bool guicomp_thread(bool daemon)
 		gui_window_publish(hello, NULL);
 	}
 
-	// The console window: from here on, printf/print_n output lands in the
-	// desktop instead of scribbling on the framebuffer under our windows.
-	gui_console_start();
+	// (The ring-0 console window started here from M5 until the VT8 chapter
+	// retired it, 2026-08-19 — ruled: no ring-0-rendered windows. printf and
+	// print_n land in VT1's grid now, one Alt+F1 away; Phase E's terminal is
+	// the ring-3 heir. git history of gui/console_window.c has the grid-to-
+	// pixels reference loop.)
 
 	uint64_t frames = 0, flushes = 0;
 	uint64_t last_heartbeat_tick = kTicksSinceStart;
@@ -423,15 +466,22 @@ bool guicomp_thread(bool daemon)
 	while (1) {
 		frames++;
 
-		// -------- Console grid → pixels (own lock; must NOT hold kGuiLock) --
-		gui_console_render_if_dirty();
-
 		// -------- Drain input, route events, recomposite (one lock hold) ---
 		uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
 
 		input_event_t ev;
 		while (input_pop(&ev))
 			route_event_locked(&ev);
+
+		// A VT switch landed on us since last frame: the whole backbuffer is
+		// owed to the glass (it kept compositing while a text VT held the
+		// iron — see the seated-predicate comment). Convert the ISR's one-
+		// store flag into ordinary damage here, under our own lock.
+		if (s_glass_regained) {
+			s_glass_regained = false;
+			gui_damage_add_locked((rect_t){0, 0, (int32_t)kBackbuffer.width,
+			                               (int32_t)kBackbuffer.height});
+		}
 
 		// Take the whole damage list in one hold and reset it, so clients
 		// publishing during this frame's flush accumulate into the NEXT
@@ -448,6 +498,12 @@ bool guicomp_thread(bool daemon)
 		// One flush per surviving rect. composite_locked clipped each to the
 		// screen and may have emptied it entirely; those are skipped here
 		// rather than filtered above, so the indices keep matching.
+		//
+		// AND ONLY WHILE VT8 OWNS THE IRON (the VT8 chapter's one gate): with
+		// a text terminal focused, the frame above still landed in the
+		// backbuffer — current state, zero VRAM cost — and the return switch
+		// pays one full-screen flush for all of it.
+		if (gui_owns_glass())
 		for (uint32_t i = 0; i < damage_count; i++) {
 			if (rect_is_empty(damage[i]))
 				continue;
@@ -493,7 +549,7 @@ bool guicomp_thread(bool daemon)
 		// frame's real work onto us and routes the nap to the idle thread;
 		// End settles the nap and takes the meter back.
 		__asm__ volatile("cli" ::: "memory");
-		if (!input_pending() && kPendingDamageCount == 0) {
+		if (!input_pending() && kPendingDamageCount == 0 && !s_glass_regained) {
 			mpAcctHaltBegin();
 			__asm__ volatile("sti\n\thlt" ::: "memory");
 			mpAcctHaltEnd();
@@ -573,4 +629,14 @@ void gui_start(void)
 		demo->autoReap = true;
 		scheduler_submit_new_task(demo);
 	}
+
+	// Seat VT8 and take the stage (the VT8 chapter, 2026-08-19). TTY_LIVE is
+	// what tells the knock-summon this terminal already has a shell — ours —
+	// so a stray keystroke can never hang a husk on the GUI's VT. The focus
+	// comes LAST: every boot printf after this line lands silently in VT1's
+	// grid (print_n's fallback), waiting under Alt+F1, instead of scribbling
+	// over the desktop the compositor is about to paint.
+	kTTY[7].state = TTY_LIVE;
+	s_gui_seated = true;
+	tty_focus(7);
 }

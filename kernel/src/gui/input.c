@@ -8,6 +8,7 @@
 
 #include "gui/input.h"
 #include "gui/gui_types.h"
+#include "gui/compositor.h"   // gui_owns_glass — mouse routing (VT8 chapter)
 
 #include "CONFIG.h"
 #include "kernel.h"
@@ -77,6 +78,13 @@ void input_inject_key(char ascii, uint8_t scancode, uint8_t modifiers, bool pres
 void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
 {
 	if (!s_active)
+		return;
+
+	// Text VTs take no mouse (ruled 2026-08-19): while a text terminal holds
+	// the glass, motion and clicks go nowhere — the cursor should not creep
+	// invisibly, and there is no consumer. The gpm-lineage selection feature
+	// (booked in the VT8 chapter) is what will want these routed someday.
+	if (!gui_owns_glass())
 		return;
 
 	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);

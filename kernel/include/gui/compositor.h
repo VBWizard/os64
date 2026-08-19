@@ -30,9 +30,24 @@ bool guicomp_thread(bool daemon);
 // from any thread context (takes the GUI lock); NOT from IRQ handlers.
 void gui_damage_add(rect_t screen_rect);
 
-// Panic path: kill the console diversion with a single lock-free store so
-// panic text renders raw on the framebuffer. Safe from ANY context.
+// Panic path: unseat the compositor with a single lock-free store so its
+// flushes stop and panic text renders raw on the framebuffer. Safe from ANY
+// context.
 void gui_emergency_disable(void);
+
+// ── VT8 glass ownership (the VT8 chapter in GRAPHICS.md, 2026-08-19) ────────
+// True once gui_start has seated the compositor as VT8's shell. Stays false
+// for the machine's whole life on a boot without the GUI flag — VT8 is then
+// an ordinary text terminal.
+bool gui_vt8_seated(void);
+// The one predicate everything paints by: seated AND VT8 focused. tty.c's
+// projection and keyboard.c's input fork read it; the compositor's flush
+// loop is gated on it.
+bool gui_owns_glass(void);
+// tty_focus's handoff INTO the GUI: one lock-free store (safe from the
+// keyboard IRQ, where VT switches happen); the compositor converts it to a
+// full-screen repaint on its next frame.
+void gui_vt8_focus_gained(void);
 
 // Task-lifecycle hook: destroy every window the dying task still owns,
 // BEFORE its pages are torn down — GRAPHICS.md's ownership rule, "windows

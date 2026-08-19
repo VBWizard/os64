@@ -110,14 +110,18 @@ adopted unconditionally at boot; IRQ12 only when `GUI` is set.
   TSCs under QEMU/WSL2 are desynchronized enough that a cycle target computed
   before a preemption could resume near-eternal. Never compare TSC values
   across a possible preemption.
-- **Scar #3:** tickless mode (the DEFAULT since 2026-08-05; formerly the
-  `BSPSCHED` flag) masks AP scheduler timers (`enableAPScheduling_ISR`) — a
-  thread pinned to an AP runs unpreemptable and nudge-only. The compositor
-  pins to core 1 for smoothness **except** under `kTicklessScheduler`
-  (`gui_compositor_affinity()`), where it stays unpinned on the BSP. The GUI
-  boot entries carry an explicit `SCHED=periodic` for this reason. (Fixable:
-  the hlt-wait compositor plus a damage-wake nudge IPI in `gui_damage_add`
-  would let the two coexist — see SCHEDULER.md's tickless section.)
+- **Scar #3 — the acute half HEALED (2026-08-13, the backstop arc):**
+  tickless mode (the DEFAULT since 2026-08-05; formerly the `BSPSCHED` flag)
+  masks AP scheduler timers, which for a while made a pinned thread
+  unpreemptable and nudge-only — the GUI boot entries carried an explicit
+  `SCHED=periodic` while that was true. The preemption LEASE ended it: every
+  non-idle AP dispatch arms a one-shot deadline, and the GUI entries dropped
+  the workaround and run the default scheduler with `BACKSTOP=10` (verified
+  2026-08-13 — GUI on tickless, no workaround, butter). STILL OPEN, the
+  chronic half: `gui_compositor_affinity()` still declines the core-1 pin
+  under `kTicklessScheduler`, and damage publication still has no wake IPI —
+  the compositor's hlt-wait wakes on input IRQs and the backstop cadence, not
+  on a publish. Both live in the DEBTS tickless-GUI row.
 
 ## The userland boundary — full design (unbuilt; implement from this section)
 
@@ -312,6 +316,165 @@ the migration acceptance test.**
    identical on-screen behavior + the non-GUI regression greps still pass.
 5. `gui_event_wait` (22) — last only because everything else works without
    it, not because anything still blocks it.
+
+## VT8 — the GUI gets a terminal of its own (Phase B design — RATIFIED)
+
+Status: design chapter written 2026-08-19; the four open questions RULED by
+Chris the same night (see RULED below) — implementation authorized in the
+migration order at the bottom. Chris's founding ruling (2026-08-17): the GUI
+stays a cmdline option, and the compositor binds **VT8** — the X-on-tty7
+lineage, done one better. When X11 wanted the glass it climbed onto a virtual
+terminal like everybody else: `startx` seated the server on tty7, the text
+consoles kept their lives on tty1–6, and Ctrl+Alt+F1 was always there when
+the shiny thing wedged. os64 gives the GUI a VT of its OWN instead of a
+diversion bolted under someone else's — which is an honest description of
+what we have today.
+
+### Today's arrangement is bigamy (the autopsy)
+
+Two subsystems both believe they own the glass, and three pieces of tape
+keep them from noticing each other:
+
+1. **The tty layer thinks it owns the glass.** Grids are truth, the glass is
+   a projection of `kTTYFocused` (tty.h's founding doctrine), `tty_focus`
+   repaints-from-state. All still true in GUI mode — nobody told it.
+2. **The compositor also owns the glass** — it paints the desktop over
+   whatever was there and flushes damage forever after.
+3. **`kConsoleSink` is the tape**: a diversion at the BOTTOM of the renderer
+   (print_n's last stop) that reroutes the tty layer's glass paints into the
+   GUI console window. The tty layer keeps projecting; the projection lands
+   in a 96×30 window instead of on the iron. Nobody designed the consequence:
+   the console window is a VT VIEWER by accident — switch "focused" VTs while
+   in GUI mode and the window obediently shows the new grid, because the
+   whole projection pipeline is being caught in its net.
+4. **Input is delivered TWICE.** `keyboard_deliver_event` pushes key-downs
+   into the tty ring (husk reads them) AND both edges into the GUI input
+   queue (windows read them). Typing at a focused GUI window also types into
+   the shell: "wake upkill -9 57" (2026-08-17, live, during Step 5 testing —
+   the kill command half-eaten by gkeys). The comedy is the design flaw
+   wearing a funny hat.
+
+The panic paths, to their credit, already do the right thing and must keep
+doing it: `gui_emergency_disable` (one store, `kConsoleSink = NULL`) and
+`tty_emergency_direct` (`kTTYDirect = true` + lock-busting) both mean "all
+diversions off, print straight at the iron, no locks between a panic and its
+reader."
+
+### The design: glass ownership IS VT focus
+
+One owner variable, and it already exists: `kTTYFocused`.
+
+- **VT1–7 stay text** — grids, scrollback, knock-summon, per-tty fgTask,
+  everything tty.h built. Untouched.
+- **VT8 is the GUI's seat.** `kTTY[7]` goes `TTY_LIVE` when `gui_start()`
+  runs (the compositor is its "shell", seated exactly like husk is seated on
+  a text VT). Its grid stays allocated but unused — dark glass behind the
+  desktop. A boot with the `GUI` flag focuses VT8 after `gui_start`; without
+  the flag VT8 is dormant like any unseated VT.
+- **The compositor flushes ONLY while VT8 is focused AND seated.** One
+  predicate — `gui_owns_glass()` ≡ (`kTTYFocused == &kTTY[7]` && the
+  compositor is VT8's seated shell) — gates the flush loop. The second
+  clause is ruling 2's: without the GUI flag, VT8 is an ordinary text
+  terminal and the predicate is simply false forever.
+  Compositing into the RAM backbuffer continues regardless (it is cheap, it
+  is RAM, and it keeps window state current); only the UC flush is fenced.
+  Switching back is therefore one full-screen damage add: instant, correct,
+  repaint-from-state — the same move `tty_focus` makes for a text grid,
+  because the backbuffer IS the GUI's grid.
+- **Switching**: `tty_focus(7)` hands the glass to the compositor (publish
+  owner, add full-screen damage, wake the compositor); `tty_focus(0..6)`
+  from VT8 repaints the target grid over the desktop. Policy stays in tty.c
+  where the chords already land; the compositor exposes two calls
+  (`gui_glass_gained()` / nothing on loss — the flush gate handles it).
+- **`kConsoleSink` RETIRES.** Boot spew and printf already land in VT1's
+  grid; with ownership honest, the renderer's glass paints simply don't
+  happen while VT8 is focused (the tty layer's own focused-check does this —
+  it never paints an unfocused grid). The three sink call sites in
+  BasicRenderer.c and the hook in console_window.c are deleted. Kernel log
+  lives on VT1, the GUI lives on VT8, Alt+Left away when you want dmesg —
+  precisely the Linux console / X division of labor.
+- **The console window RETIRES with the sink** (ruled 2026-08-19 — no
+  ring-0-rendered windows, period). The original draft proposed keeping it
+  as an honest VT1 viewer; the ruling chose the cleaner cut: the GUI screen
+  hosts no shell until Phase E's terminal, and husk is one Alt+F1 away —
+  the startx-era workflow, accepted by name. Phase E's terminal keeps the
+  viewer's intended shape anyway (grid in, keys out, source swapped to a
+  pty slave), just in ring 3 where it always belonged.
+- **Input routing follows the glass — dual delivery dies.**
+  `keyboard_deliver_event` forks on ownership: VT8 focused → GUI input queue
+  only; text VT focused → tty path only. The chords are consumed BEFORE the
+  fork (Alt+arrows must work from either world; they are commands to the
+  terminal stack, same doctrine as Ctrl+Alt+Del). The mouse already goes
+  only to the GUI queue; on text VTs its events drop (gpm is a non-goal).
+- **Emergency paths unchanged in spirit**: both hatches stay one-store.
+  `gui_emergency_disable`'s store becomes the ownership override
+  (`kTTYDirect = true` already bypasses every projection, GUI included, once
+  the sink is gone — the two hatches may collapse into one; audit during
+  migration step 4).
+
+### Migration order — COLLAPSED IN THE BUILDING (2026-08-19, same night)
+
+Steps 1–3 were planned as separate landings and turned out to be ONE atom:
+the sink diverts at the BOTTOM of the renderer, so the moment focus honestly
+moves to VT8 the console window's feed dies (it was VT1-focused paints), and
+a switch to VT1 with the sink alive would paint the text VT into a window on
+the desktop being left. Discovered before the first line was written; built
+and tested as one coherent change. A fourth sink site turned up in tty_write
+itself — one that caught bytes BEFORE the grid, meaning GUI-mode output never
+reached VT1's history at all; retiring it is what makes Alt+F1 show the whole
+story instead of a grid with a hole where the GUI session was.
+
+**Acceptance, all run headless in QEMU the same night (screendumps in the
+session record):**
+- GUI boot: desktop up, console window gone, demos live.
+- Alt+F1: full-screen VT1 with the COMPLETE boot story (both test suites
+  24/24 on this kernel) and a live husk prompt.
+- Alt+F8: desktop restored in one repaint — with the ball moved, proving the
+  backbuffer kept compositing while the text VT held the iron.
+- The comedy inverted: "ok" typed on VT1 is on husk's line; "stray" typed on
+  the desktop is NOT.
+- Alt+F2 on dormant VT2: knock-summons a fresh husk.
+- Non-GUI boot: 24/24, and Alt+F8 lands on "os64 virtual terminal 8 — press
+  any key to summon a shell" → husk. Ruling 2, verified.
+
+**Still owed (step 4's audit):** TESTPANIC from GUI mode (the emergency path
+changed shape: seated-flag store instead of sink-NULL — same one-store
+doctrine, not yet exercised); mouse click-to-focus re-check on real input
+(the gate passes events while VT8 owns the glass — structural, not yet
+clicked); P5 and VBox passes; GRAPHICS.md layer map gains VT8.
+
+### RULED — Chris, 2026-08-19
+
+- **Chord set: what exists stands.** Alt+Left/Right cycles, Alt+F1..F8
+  direct-selects (both already in the tree — the F-row chord landed after
+  this worktree's fork point). The tests fire on ALT regardless of Ctrl, so
+  the Ctrl+Alt muscle-memory spellings work as a superset. Under VT8 both
+  chords are consumed BEFORE the input-routing fork, so they work
+  identically from the GUI and from any text VT — which means GUI apps can
+  never claim Alt+arrows or Alt+F1..F8 for themselves. If that ever pinches,
+  the GUI-side fork can demand Ctrl+Alt explicitly (X11's convention, and a
+  natural theme-table knob); not built until someone pinches.
+- **VT8 without the GUI flag is just a terminal.** No reservation, no
+  special case: dormant like any unseated VT, first keystroke summons a
+  husk, eight text terminals total. The consequence for the design: the
+  glass-owner predicate is NOT merely "focus == VT8" — it is "focus == VT8
+  AND the compositor is seated there." `gui_start()` seats it (state
+  `TTY_LIVE`, the compositor as its shell), which is also, for free, what
+  stops the knock-summon from hanging a husk on the GUI's terminal.
+- **The console window RETIRES — no VT1 viewer.** Ruled with the general
+  principle: no ring-0-rendered windows at all (the demo windows already
+  died in Phase A; the console window is the last one). Boot messages stay
+  on VT1 — automatic, the grid is truth — and husk is one Alt+F1 away,
+  which is exactly the startx-era workflow. NAMED CONSEQUENCE, accepted:
+  between migration step 3 and Phase E's terminal, the GUI screen itself
+  hosts no shell. (Related future feature, Chris's, parked for its own
+  conversation: boot-time `printf` output is GLASS-ONLY — the tick-0 log
+  catches every `printd` but not printf's lines — and he wants some of that
+  moved or echoed into the log so it can't scroll out of existence.)
+- **Mouse on text VTs: dropped, booked.** Events go nowhere for now.
+  Wishlist, its own feature later: mouse selection copy/paste on text VTs —
+  gpm's lineage (1994, Alessandro Rubini) — which will want those events
+  routed after all. The fork's text-VT arm is where they'd land.
 
 ## Testing / debugging
 

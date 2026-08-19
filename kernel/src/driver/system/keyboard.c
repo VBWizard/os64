@@ -8,6 +8,7 @@
 #include "printd.h"
 #include "io.h"
 #include "gui/input.h"
+#include "gui/compositor.h"  // gui_owns_glass — the input-routing fork (VT8 chapter)
 #include "spinlock.h"
 #include "BasicRenderer.h"   // printf — the Ctrl+Alt+Del salute's answer
 
@@ -204,20 +205,34 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
 // THE delivery choke: every keyboard — 1981's 8042 or this decade's USB
 // HID — hands its translated keystrokes here, and everything downstream
 // (the console ring husk reads, the GUI input queue) is source-blind.
-// Key-downs enter the console ring; both edges reach the GUI (chords and
-// modifier-drags need releases).
 //
-// One byte gets a veto first: console_intr_intercept may CONSUME an ETX
-// (Ctrl+C -> 0x03) as the terminal interrupt character instead of letting it
-// enter the ring as data. The POLICY (who is foreground, who gets SIGINT)
-// lives entirely in console.c — this file stays a device driver and includes
-// no task or signal headers, exactly the layering SIGINT.md prescribes.
+// INPUT FOLLOWS THE GLASS (the VT8 chapter, 2026-08-19). Until then every
+// keystroke was delivered TWICE — into the focused tty's ring AND the GUI
+// queue — which is how typing at a gkeys window also typed into husk
+// ("wake upkill -9 57", 2026-08-17: a kill command half-eaten by the window
+// it was aimed past). Now exactly one world receives: the one whose pixels
+// you are looking at. The VT-switch chords are immune to the fork by
+// position — keyboard_handle_scancode consumes them before delivery, so
+// Alt+F1..F8 and Alt+arrows work identically from either side.
+//
+// GUI side gets BOTH edges (chords and modifier-drags need releases); the
+// text side keeps its press-only console discipline, with one byte vetoed
+// first: console_intr_intercept may CONSUME an ETX (Ctrl+C -> 0x03) as the
+// terminal interrupt character instead of letting it enter the ring as data.
+// On the GUI side Ctrl+C is an ordinary event to the focused window — a
+// terminal's interrupt character belongs to terminals. The POLICY (who is
+// foreground, who gets SIGINT) lives entirely in console.c — this file stays
+// a device driver, exactly the layering SIGINT.md prescribes; gui_owns_glass
+// is a routing predicate, not policy, same standing as tty_input_event.
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
+    if (gui_owns_glass()) {
+        input_inject_key(ascii, scancode, modifiers, pressed);
+        return;
+    }
     if (pressed) {
         if (!console_intr_intercept(ascii))
             keyboard_emit_event(scancode, ascii, modifiers);
     }
-    input_inject_key(ascii, scancode, modifiers, pressed);
 }
 
 // Decide whether Caps Lock should affect this character.
