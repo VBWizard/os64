@@ -55,7 +55,22 @@ image is a real file target now, so an unchanged tree rebuilds nothing (~0.1s)
 and `make run` just launches QEMU.
 
 Default QEMU config: 8GB RAM, `-smp 8`, serial → `qemu_com1.log`, monitor
-on telnet 127.0.0.1:55555, NVMe disk from `disk/os64.img`.
+on telnet 127.0.0.1:55555, NVMe disk from `disk/os64.img`, plus the data disk
+`disk/os64_data.img` (ext2, mounted at `/home`, where `LOGD=` writes).
+
+**WHEN THE LOG ITSELF IS THE SUSPECT, read `/sys/log` before theorizing.** It
+reports the sink (userland daemon / kernel-to-serial / retained-in-memory),
+whether a serial port exists at all, the active format, and per-core
+`used`/`lost`. On 2026-08-18 an hour went into "something must be stuck in the
+per-core buffers" when every ring was empty and `printd` was discarding at the
+filter — `cat /sys/log` answers that in one line. Second instrument, for a
+guest that has already stopped talking: the QEMU monitor. `info registers -a`
+showed all eight cores halted in `task_idle_loop` (which killed the
+stuck-buffer theory outright), and `x/2xg <symbol>` against addresses from
+`nm kernel/bin/os64_kernel` read `kDebugLevel` straight out of the running
+machine. Symbols are trustworthy as long as the binary has not been rebuilt
+since the guest booted — check `stat` on `kernel/bin/os64_kernel` against the
+QEMU process start time before believing an address.
 
 ## Headless QEMU (the agent's mode)
 
