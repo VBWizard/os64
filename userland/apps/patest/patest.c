@@ -28,23 +28,23 @@ int main(int argc, char **argv, char **envp)
     for (int i = 0; i < 20; i++) {
         char line[32];
         os64_snprintf(line, sizeof line, "[patest %d]", i);
-        if (os64_printat(95, 2, line) != 0)
+        if (os64_screen_printat(95, 2, line) != 0)
             failures++;
         os64_sleep(100);
     }
 
     // 3: park a long string 8 cells from wherever the right edge is —
     // if it wraps or reflows the console, the eyeball test fails loudly.
-    if (os64_printat(120, 3, "EDGE-CLIP-TEST-SHOULD-TRUNCATE") != 0)
+    if (os64_screen_printat(120, 3, "EDGE-CLIP-TEST-SHOULD-TRUNCATE") != 0)
         failures++;
 
     // 4: the boundary must say no. Both calls should return negative
     // in-band statuses, and the OS should not so much as flinch.
-    if (os64_printat(100000, 0, "never") == 0) {
+    if (os64_screen_printat(100000, 0, "never") == 0) {
         os64_puts("patest: FAIL — absurd x accepted\n");
         failures++;
     }
-    if (os64_printat(0, 5, (const char *)0xdeadbeef000) == 0) {
+    if (os64_screen_printat(0, 5, (const char *)0xdeadbeef000) == 0) {
         os64_puts("patest: FAIL — wild pointer accepted\n");
         failures++;
     }

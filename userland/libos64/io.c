@@ -178,7 +178,10 @@ int64_t os64_puts(const char *s)
     return os64_write(SYSCALL_HANDLE_CONSOLE_OUT, s, os64_strlen(s));
 }
 
-int64_t os64_printat(uint32_t x, uint32_t y, const char *s)
+// The screen layer's one verb (see io.h for the doctrine and the rename
+// story). The SYSCALL number and its "printat" table name stay — the wire
+// is stable; only the identifier learned to say which layer it addresses.
+int64_t os64_screen_printat(uint32_t x, uint32_t y, const char *s)
 {
     return (int64_t)os64_syscall3(SYSCALL_PRINTAT, (uint64_t)x, (uint64_t)y,
                                   (uint64_t)s);

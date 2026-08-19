@@ -99,7 +99,13 @@
 #define SYSCALL_MEMORY     27
 
 // printat(x, y, str) — park a string at an absolute character CELL on the
-// physical console, without touching the console cursor: the WIDGET PLANE.
+// physical console, without touching the console cursor: the WIDGET PLANE
+// (known since 2026-08-19 as the SCREEN LAYER — libui claimed the word
+// "widget" for ring-3 UI, and the ptys proved this doctrine from the other
+// side the same week: a clock in a gterm session landed on the text VTs,
+// exactly as the "it does not travel" paragraph below always said. The
+// userland identifier is os64_screen_printat now; this syscall's number and
+// table name are wire-stable and keep their birth name).
 //
 // This is deliberately NOT a console write and NOT cursor addressing. A
 // status widget (the uptime clock in the top-right corner) parks glyphs at

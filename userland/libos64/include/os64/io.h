@@ -273,16 +273,23 @@ int64_t os64_mkdir(const char *path);
 int64_t os64_puts(const char *s);
 
 // Park a string at an absolute character cell (x, y) on the PHYSICAL console
-// — the widget plane, for status widgets like clock's corner readout. This is
+// — the SCREEN LAYER (née "the widget plane": renamed 2026-08-19 when libui
+// claimed the word widget for something else, and the day the layer's whole
+// doctrine got proven from the other side — a clock started inside a gterm
+// session showed up on the text VTs and nowhere near the window, exactly as
+// designed and exactly as surprising as an undocumented-at-the-call-site
+// design always is; the identifier carries the doctrine now). This is
 // NOT a console write: no cursor motion, no wrap, no scroll, and the string
 // clips at the screen edge instead of reflowing anybody's prompt. It draws on
-// the machine's actual glass, outside the (future) virtual-terminal stack —
-// a VT switch won't disturb it, and it deliberately doesn't exist over a
-// remote session. Terminal content (full-screen repaints, anything that
-// should survive a pipe) is the escape-sequence slice's job, not this.
-// Last writer to a cell wins; widgets that share a corner deserve each other.
+// the machine's actual glass, outside the virtual-terminal stack —
+// a VT switch won't disturb it, it deliberately doesn't exist over a
+// remote session OR inside a pty window (sessions show session output; the
+// machine's glass shows the machine's), and the GUI owning the iron
+// suppresses it entirely. Terminal content (full-screen repaints, anything
+// that should survive a pipe) is the escape-sequence slice's job, not this.
+// Last writer to a cell wins; overlays that share a corner deserve each other.
 // Returns 0, or negative (bad coordinates / unreadable string).
-int64_t os64_printat(uint32_t x, uint32_t y, const char *s);
+int64_t os64_screen_printat(uint32_t x, uint32_t y, const char *s);
 
 // (os64_exit lived here for one glorious scaffolding week — exit is process
 // control, not I/O, and it moved home to <os64/proc.h> the day its owner
