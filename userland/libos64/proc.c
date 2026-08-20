@@ -33,19 +33,33 @@ int64_t os64_spawn(const char *path, char *const argv[])
 
 int64_t os64_spawn_redirected(const char *path, char *const argv[],
                            int32_t in, int32_t out, int32_t err,
-                           uint32_t flags)
+                           uint64_t flags)
 {
     // All six argument registers are spoken for now: arg5 carries OS64_SPAWN_*
     // (it used to be a zero the kernel ignored). The dispatcher only
     // pointer-checks the args the table's mask marks, which is just path and
     // argv — flags is a value, not a pointer, and must not be range-checked.
+    // (Widened to 64 bits with PTY.md: SET_TTY's master handle rides the
+    // high half of the same word — see syscall_numbers.h for why.)
     return (long)os64_syscall6(SYSCALL_SPAWN,
                                (uint64_t)path,
                                (uint64_t)argv,
                                (uint64_t)(int64_t)in,
                                (uint64_t)(int64_t)out,
                                (uint64_t)(int64_t)err,
-                               (uint64_t)flags);
+                               flags);
+}
+
+int64_t os64_spawn_seated(const char *path, char *const argv[], int64_t master)
+{
+    // Seat the child on the master's pty slave (PTY.md): it becomes the
+    // slave's SHELL — controlling terminal, foreground, the works — and its
+    // console handles route there without one line of pty-awareness in the
+    // child. No redirections: slots 0/1/2 stay "the console", which IS the
+    // slave now. Same trick pipelines pull, one seam over.
+    return os64_spawn_redirected(path, argv, -1, -1, -1,
+                                 OS64_SPAWN_SET_TTY |
+                                 ((uint64_t)(uint32_t)master << OS64_SPAWN_TTY_SHIFT));
 }
 
 int64_t os64_wait(int64_t pid, int32_t *exit_code)

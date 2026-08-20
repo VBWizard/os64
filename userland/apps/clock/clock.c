@@ -20,7 +20,11 @@ int main(int argc, char **argv)
             // Do the work here
             os64_snprintf(displayedDate, 40, "%02d/%02d/%04d %02d:%02d:%02d",
                         now.month, now.day, now.year, now.hour, now.minute, now.second);
-            os64_printat(95, 0, displayedDate);
+            // The SCREEN layer, on purpose (io.h's doctrine): one clock on
+            // the machine's glass serves every text VT, and it deliberately
+            // does not follow sessions into pty windows — this is the iron's
+            // clock; the desktop's will be gclock.
+            os64_screen_printat(95, 0, displayedDate);
             os64_sleep(100); //Might make this a parameter some  day.
         }
     }

@@ -7,6 +7,11 @@
 
 #include "tty.h"
 #include "BasicRenderer.h"     // the glass: renderer_glass_* primitives
+#include "console.h"           // console_intr_intercept_tty — the master's 0x03
+#include "gui/compositor.h"    // gui_vt8_seated/gui_vt8_focus_gained — the
+                               // VT8 handoff (policy stays HERE, per the
+                               // keyboard driver's doctrine; the compositor
+                               // only answers "am I seated?")
 #include "kmalloc.h"
 #include "memset.h"
 #include "strings/sprintf.h"
@@ -188,6 +193,15 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 // switch costs one memcpy on the glass instead of sixteen thousand pokes.
 static void tty_repaint_locked(tty_t *t)
 {
+	// VT8's GRID is not what VT8 shows when the compositor is seated there —
+	// the backbuffer is (the VT8 chapter). This guard is the belt under every
+	// repaint door (the stale-glass rider, the scrollback view, any future
+	// caller): whatever path decides "repaint the focused terminal" while the
+	// GUI owns it, the answer is the compositor's, delivered via
+	// gui_vt8_focus_gained in tty_focus — never a grid blit over the desktop.
+	if (t == &kTTY[7] && gui_vt8_seated())
+		return;
+
 	uint64_t rflags = renderer_glass_begin();
 	renderer_glass_defer_locked();
 
@@ -228,15 +242,13 @@ void tty_write(tty_t *t, const char *bytes, size_t length)
 	if (t == NULL || bytes == NULL || length == 0)
 		return;
 
-	// GUI diversion first, same as print_n always did: when the compositor
-	// owns the console, ALL console bytes flow to its window. (The day GUI
-	// terminal windows become tty sinks, this line is where they plug in.)
-	console_sink_fn sink = kConsoleSink;
-	if (sink)
-	{
-		sink(bytes, length);
-		return;
-	}
+	// (The kConsoleSink diversion stood here until the VT8 chapter,
+	// 2026-08-19 — and note what it did: it caught bytes BEFORE the grid, so
+	// during GUI mode a tty's own history was never written. Retiring it is
+	// what makes Alt+F1 show the whole story instead of a grid with a hole
+	// where the GUI session was. The day GUI terminal windows become tty
+	// sinks, that is Phase E's pty seam — per-tty plumbing, not a global
+	// hijack.)
 
 	// Not ready (early boot) or post-panic: the legacy direct-to-glass path.
 	if (!kTTYReady || kTTYDirect || t->cells == NULL)
@@ -270,6 +282,13 @@ void tty_write(tty_t *t, const char *bytes, size_t length)
 	// which is why the release below keys off glass_lock_held instead.
 	for (size_t i = 0; i < length; i++)
 		tty_putc_locked(t, bytes[i], &glass);
+
+	// Change tracking (PTY.md): one bump per WRITE, not per character — a
+	// snapshot poll cares that the grid moved, not how many times. Every
+	// grid-mutating path funnels through this function, which is what makes
+	// one line here the whole discipline (the predicted fingerprint — "frozen
+	// grid, child alive" — is a mutation door that skipped this file).
+	t->generation++;
 
 	if (glass_lock_held)
 		renderer_glass_end(rflags, t->cur_row, t->cur_col, false);
@@ -335,9 +354,18 @@ void tty_input_event(const keyboard_event_t *ev)
 		spinlock_release_irqrestore(&t->lock, flags);
 	}
 
-	// Push into THIS tty's ring. Producers lock (PS/2 IRQ, xHCI poll, and
-	// typematic can interleave); the consumer side stays lock-free — one
-	// reader per tty, the same single-consumer contract the global ring had.
+	// Push into THIS tty's ring.
+	tty_input_push(t, ev);
+}
+
+// The ring push alone — the choke both producers share: the keyboard path
+// above (focus/knock/scrollback policy applied first) and a pty master's
+// write (no ceremony — the terminal app already decided whose keys these
+// are). Producers lock (PS/2 IRQ, xHCI poll, typematic, and now a master
+// writer can interleave); the consumer side stays lock-free — one reader
+// per tty, the same single-consumer contract the global ring had.
+void tty_input_push(tty_t *t, const keyboard_event_t *ev)
+{
 	uint64_t flags = spinlock_acquire_irqsave(&t->ring_lock);
 	size_t head = t->ring_head;
 	size_t next = (head + 1u) % KEYBOARD_BUFFER_SIZE;
@@ -397,8 +425,18 @@ void tty_focus(uint32_t index)
 	// renderer lock first re-checks this pointer and stands down (see the
 	// re-check in tty_write) — so the repaint below always paints last.
 	kTTYFocused = next;
-	tty_repaint_locked(next);
+	// Focus landing on the SEATED VT8 hands the glass to the compositor
+	// instead of blitting a (deliberately unused) grid over its desktop.
+	// The handoff is one lock-free store — this function runs in the
+	// keyboard IRQ, where GUI locks are off-limits (invariant 4) — made
+	// after the release below so no GUI-side reader ever waits on a tty
+	// lock.
+	bool gui_target = (next == &kTTY[7] && gui_vt8_seated());
+	if (!gui_target)
+		tty_repaint_locked(next);
 	spinlock_release_irqrestore(&next->lock, flags);
+	if (gui_target)
+		gui_vt8_focus_gained();
 }
 
 void tty_focus_step(int dir)
@@ -541,6 +579,175 @@ bool tty_summon_sweep(void)
 		spawned = true;
 	}
 	return spawned;
+}
+
+// ── The pty family (PTY.md, 2026-08-19) ─────────────────────────────────────
+// A pty slave is a tty_t with no keyboard and no glass. It is NEVER in
+// kTTY[] — the focus walker, the knock-summon sweep, and Alt+F's bounds
+// check stay blind to ptys by construction, and a pty can never become
+// kTTYFocused, which is what makes every repaint door irrelevant to it.
+// What a slave DOES share is everything that matters: the grid and the one
+// terminal interpreter (tty_write neither knows nor cares), the input ring
+// console_read drains, and the multiplied singletons — fgTask so Ctrl+C
+// aims correctly, EOF, the waiter, the seat.
+
+tty_t * volatile kPtyList = NULL;
+static spinlock_t kPtyListLock = 0;
+static uint32_t kPtyNextIndex = 0;
+
+tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
+{
+	// Bounds are sanity, not policy: a 1-cell terminal is a caller bug, and
+	// a giant one is a kmalloc grenade. 512x256 is far past any real window.
+	if (cols < 2 || rows < 2 || cols > 512 || rows > 256)
+		return NULL;
+
+	tty_t *t = kmalloc(sizeof(tty_t));   // zeroed at the allocator choke point
+	if (t == NULL)
+		return NULL;
+	t->cols = cols;
+	t->rows = rows;
+	t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
+	t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
+	if (t->cells == NULL)
+	{
+		kfree(t);
+		return NULL;
+	}
+	t->color   = 0xffffffff;
+	t->is_pty  = true;
+	t->pty_mode = PTY_MODE_GRID;
+	t->state   = TTY_LIVE;   // born attended — its master IS the human
+
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	t->index = kPtyNextIndex++;
+	t->next_pty = kPtyList;
+	kPtyList = t;
+	spinlock_release_irqrestore(&kPtyListLock, flags);
+	return t;
+}
+
+int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
+{
+	if (slave == NULL || !slave->is_pty || bytes == NULL)
+		return -1;
+
+	for (size_t i = 0; i < length; i++)
+	{
+		char c = bytes[i];
+		// The interrupt character runs the per-tty intercept against the
+		// SLAVE — a Ctrl+C typed at a terminal window aims at the program
+		// running INSIDE it, exactly as a Ctrl+C on VT3 aims at VT3's
+		// foreground. Consumed means it never enters the ring, same as the
+		// keyboard path. (STREAM mode will want a raw pass-through flag;
+		// that rides the mode, per the design.)
+		if (console_intr_intercept_tty(slave, c))
+			continue;
+
+		// Bytes become synthesized key events: ascii set, no scancode, no
+		// modifiers — which is exactly what forwarding a printable key
+		// produces, and all console_read ever looks at.
+		keyboard_event_t ev = {0};
+		ev.ascii = c;
+		tty_input_push(slave, &ev);
+	}
+	// The parked reader (if any) wakes via console_wake_if_ready's sweep on
+	// the next scheduler pass (~10ms) — typing-speed latency, and the same
+	// level-triggered lost-wakeup-free discipline every reader lives by.
+	return (int64_t)length;
+}
+
+// ── Seats and burial ────────────────────────────────────────────────────────
+// Every task whose ->tty is a pty holds one seat: taken at inheritance
+// (task_create) and at spawn's explicit seating, dropped in task teardown.
+// The slave is buried when the master is CLOSED and the seats are EMPTY —
+// whichever happens last does it. The race between a last unref and a
+// master close is settled by the unlink: burial happens inside the list
+// lock, and only the caller who actually finds the node on the list frees
+// it — the loser finds it already gone and walks away.
+
+static void pty_maybe_bury(tty_t *t)
+{
+	if (!t->masterClosed || t->seats > 0)
+		return;
+
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	// Re-check under the lock (the flags may have moved), then unlink; a
+	// node not found was buried by the racing caller.
+	if (!t->masterClosed || t->seats > 0)
+	{
+		spinlock_release_irqrestore(&kPtyListLock, flags);
+		return;
+	}
+	tty_t * volatile *link = &kPtyList;
+	bool found = false;
+	while (*link != NULL)
+	{
+		if (*link == t)
+		{
+			*link = t->next_pty;
+			found = true;
+			break;
+		}
+		link = &(*link)->next_pty;
+	}
+	spinlock_release_irqrestore(&kPtyListLock, flags);
+
+	if (found)
+	{
+		kfree(t->cells);
+		kfree(t);
+	}
+}
+
+void tty_pty_ref(tty_t *t)
+{
+	if (t == NULL || !t->is_pty)
+		return;
+	__sync_fetch_and_add(&t->seats, 1);
+	t->everSeated = true;   // arms HUNGUP: emptied is hung up, young is not
+}
+
+void tty_pty_unref(tty_t *t)
+{
+	if (t == NULL || !t->is_pty)
+		return;
+	if (__sync_sub_and_fetch(&t->seats, 1) <= 0)
+		pty_maybe_bury(t);
+}
+
+void pty_master_close(tty_t *slave)
+{
+	if (slave == NULL || !slave->is_pty)
+		return;
+	slave->masterClosed = true;
+	pty_maybe_bury(slave);
+}
+
+// console_wake_if_ready's pty leg — the same wake idiom as its VT loop,
+// duplicated here rather than exported because the WALK needs kPtyListLock
+// (private to this file, and staying that way): a node mid-walk could
+// otherwise be buried under our feet. Caller context is processSignals with
+// the scheduler queue lock held — that is what makes the ISLEEP check
+// trustworthy and why the _locked queue-change variant is the right one.
+// Lock order established here: queue lock, THEN kPtyListLock, never reversed
+// (creation and burial take the list lock alone; burial frees only after
+// releasing it).
+void tty_pty_wake_readers(void)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&kPtyListLock);
+	for (tty_t *t = kPtyList; t != NULL; t = t->next_pty)
+	{
+		thread_t *w = t->waiter;
+		if (w != NULL && w->threadState == THREAD_STATE_ISLEEP && tty_input_has(t))
+		{
+			t->waiter = NULL;
+			w->signals.sigind &= ~SIGSLEEP;     // cancel the backstop sleep
+			w->signals.sigdata[SIGSLEEP] = 0;
+			scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
+		}
+	}
+	spinlock_release_irqrestore(&kPtyListLock, flags);
 }
 
 // ── Panic escape hatch ──────────────────────────────────────────────────────

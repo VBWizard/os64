@@ -12,6 +12,7 @@ extern bool kEnableKWorker;
 extern bool kEnableGUI;
 extern bool kRunTests;
 extern bool kEnableUSB;
+extern bool kUSBQuiet;
 extern bool kEnableNet;
 extern bool kEnableR8125;
 // Static IPv4 configuration strings (ipv4.c owns them; empty = the 10.0.2.x
@@ -310,6 +311,10 @@ static cmdopt_t cmdopts[] = {
     {"CACHE", OPT_INT, &kBlockCacheCapMB, 0, 0},
     {"NOCACHE", OPT_BOOL, &kBlockCacheDisabled, true, 0},
     {"NOUSB", OPT_BOOL, &kEnableUSB, false, 0},
+    // UPPERCASE, like every flag since the 642eb9f lesson. Opt-in 2.4GHz
+    // hygiene — see kUSBQuiet's declaration (kernel.c) for the two burn
+    // scars that made this a flashlight instead of a default.
+    {"USBQUIET", OPT_BOOL, &kUSBQuiet, true, 0},
     {"NONET", OPT_BOOL, &kEnableNet, false, 0},
     // The RTL8125 flashlight, sibling of NOAHCI/NONVME. UPPERCASE because
     // this table is matched with strcmp and folds no case — the lesson

@@ -62,6 +62,11 @@ bool console_unread(char c);
 // tasks and signals. IRQ-safe on purpose: the raise is one word-OR; the
 // actual kill happens later, at the victim's own syscall boundary.
 bool console_intr_intercept(char ascii);
+// The tty-scoped core (PTY.md): a pty master's write asks on behalf of its
+// SLAVE — the keystroke "happened" on the terminal that window represents.
+// The focused-terminal spelling above is now a wrapper over this.
+struct tty;
+bool console_intr_intercept_tty(struct tty *tty, char ascii);
 
 // Called from processSignals (scheduler context, every pass). If a reader is
 // asleep in console_read AND the keyboard driver has input, wake the reader.

@@ -1330,7 +1330,15 @@ void scheduler_do()
 	uint64_t acctPassStart = rdtsc();
 	if (cls->acctLastDispatchTSC != 0 &&
 	    cls->currentThread != NULL && cls->currentThread != NO_THREAD)
-		cls->currentThread->runCycles += acctPassStart - cls->acctLastDispatchTSC;
+	{
+		// Halted current = idle wearing a task's name; the span goes to
+		// this core's idle thread (smp.h acctCurrentHalted — the fix for
+		// top billing the compositor 95% of a core for sleeping).
+		thread_t *acctTarget = (cls->acctCurrentHalted && cls->acctIdleThread != NULL)
+		                           ? cls->acctIdleThread
+		                           : cls->currentThread;
+		acctTarget->runCycles += acctPassStart - cls->acctLastDispatchTSC;
+	}
 	if (cls->acctZeroTSC == 0)
 		cls->acctZeroTSC = acctPassStart;   // this core's meter starts now
 
@@ -1455,6 +1463,10 @@ void scheduler_do()
 	uint64_t acctPassEnd = rdtsc();
 	cls->acctSchedCycles += acctPassEnd - acctPassStart;
 	cls->acctLastDispatchTSC = acctPassEnd;
+	// A dispatched thread is by definition not halted: every dispatch —
+	// switch or shortcut — drops the halted flag. The compositor re-raises
+	// it per nap; nobody else ever sets it.
+	cls->acctCurrentHalted = false;
 
 	// ── The preemption lease (smp_core.c doctrine block) ────────────────────
 	// EVERY dispatch door funnels through this tail — switch, shortcut,

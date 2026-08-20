@@ -8,6 +8,7 @@
 #include "printd.h"
 #include "io.h"
 #include "gui/input.h"
+#include "gui/compositor.h"  // gui_owns_glass — the input-routing fork (VT8 chapter)
 #include "spinlock.h"
 #include "BasicRenderer.h"   // printf — the Ctrl+Alt+Del salute's answer
 
@@ -226,20 +227,59 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
 // THE delivery choke: every keyboard — 1981's 8042 or this decade's USB
 // HID — hands its translated keystrokes here, and everything downstream
 // (the console ring husk reads, the GUI input queue) is source-blind.
-// Key-downs enter the console ring; both edges reach the GUI (chords and
-// modifier-drags need releases).
 //
-// One byte gets a veto first: console_intr_intercept may CONSUME an ETX
-// (Ctrl+C -> 0x03) as the terminal interrupt character instead of letting it
-// enter the ring as data. The POLICY (who is foreground, who gets SIGINT)
-// lives entirely in console.c — this file stays a device driver and includes
-// no task or signal headers, exactly the layering SIGINT.md prescribes.
+// INPUT FOLLOWS THE GLASS (the VT8 chapter, 2026-08-19). Until then every
+// keystroke was delivered TWICE — into the focused tty's ring AND the GUI
+// queue — which is how typing at a gkeys window also typed into husk
+// ("wake upkill -9 57", 2026-08-17: a kill command half-eaten by the window
+// it was aimed past). Now exactly one world receives: the one whose pixels
+// you are looking at. The VT-switch chords are immune to the fork by
+// position — keyboard_handle_scancode consumes them before delivery, so
+// Alt+F1..F8 and Alt+arrows work identically from either side.
+//
+// GUI side gets BOTH edges (chords and modifier-drags need releases); the
+// text side keeps its press-only console discipline, with one byte vetoed
+// first: console_intr_intercept may CONSUME an ETX (Ctrl+C -> 0x03) as the
+// terminal interrupt character instead of letting it enter the ring as data.
+// On the GUI side Ctrl+C is an ordinary event to the focused window — a
+// terminal's interrupt character belongs to terminals. The POLICY (who is
+// foreground, who gets SIGINT) lives entirely in console.c — this file stays
+// a device driver, exactly the layering SIGINT.md prescribes; gui_owns_glass
+// is a routing predicate, not policy, same standing as tty_input_event.
+// Last modifier state seen by the choke below — the mouse path's window into
+// the keyboard (see keyboard_current_modifiers in the header for why it is
+// sampled HERE and not from s_modifiers). Written from IRQ context, read from
+// IRQ context; a single byte, so `volatile` and natural atomicity are the
+// whole synchronization story.
+static volatile uint8_t s_liveModifiers;
+
+uint8_t keyboard_current_modifiers(void) {
+    return s_liveModifiers;
+}
+
+// The PS/2 half of the publication (see the forward declaration above the
+// updaters). Defined down here so it sits beside the other half.
+static void keyboard_publish_modifiers(void) {
+    s_liveModifiers = s_modifiers;
+}
+
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
+    // The USB half. The xHCI HID path carries its own modifier byte and never
+    // touches this file's s_modifiers, so the choke is the only place that
+    // sees it — and for the PS/2 path this simply re-publishes the value
+    // keyboard_publish_modifiers just wrote. Sampled BEFORE the routing fork,
+    // because a chord can be pressed while the GUI holds the glass and
+    // released after a switch to a text VT.
+    s_liveModifiers = modifiers;
+
+    if (gui_owns_glass()) {
+        input_inject_key(ascii, scancode, modifiers, pressed);
+        return;
+    }
     if (pressed) {
         if (!console_intr_intercept(ascii))
             keyboard_emit_event(scancode, ascii, modifiers);
     }
-    input_inject_key(ascii, scancode, modifiers, pressed);
 }
 
 // Decide whether Caps Lock should affect this character.
@@ -309,6 +349,15 @@ static char keyboard_translate_scancode(uint8_t scancode) {
     return base;
 }
 
+// Publish the PS/2 driver's modifier state to the shared snapshot. Called
+// from BOTH modifier updaters, because sampling at keyboard_deliver_event
+// alone has a hole: the extended path updates s_modifiers and then returns
+// without delivering anything for a key that is not an arrow or a named
+// editing key — so holding Right Alt would change the driver's mind and never
+// tell anybody. A modifier is state, and state has to be published where it
+// CHANGES, not where the next unrelated event happens to pass by.
+static void keyboard_publish_modifiers(void);
+
 // Update latch-style modifiers for non-extended keys.
 static void keyboard_update_modifier(uint8_t scancode, bool pressed) {
     switch (scancode) {
@@ -347,6 +396,7 @@ static void keyboard_update_modifier(uint8_t scancode, bool pressed) {
         default:
             break;
     }
+    keyboard_publish_modifiers();
 }
 
 // Extended scancodes provide right-side modifiers.
@@ -369,6 +419,7 @@ static void keyboard_update_modifier_extended(uint8_t scancode, bool pressed) {
         default:
             break;
     }
+    keyboard_publish_modifiers();
 }
 
 // Prepare keyboard state before IRQs are enabled.

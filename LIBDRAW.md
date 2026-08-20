@@ -8,6 +8,22 @@ library this links beside). Design settled 2026-07-10. Naming — `libdraw`
 for the drawing core, `libui` for the toolkit — deliberately echoes Plan 9's
 `libdraw`: minimalist lineage, zero Win32 baggage.*
 
+## Start here: the three exemplars (2026-08-19)
+
+Writing a new GUI app? Copy a TESTED one — exemplars over templates, because
+a template nobody runs rots while an exemplar is verified by every build.
+One of each mode, all in `userland/apps/`:
+
+| App | Mode | Copy it when... |
+|---|---|---|
+| **glogo** | immediate (libdraw) | you repaint most of the window anyway: animation, custom drawing. YOU are the painter — clear, draw everything, publish, every frame. Its numbered steps [1]-[9] are the whole liturgy, including the frame clock done right (dt-scaled state, boundary-anchored cadence). xlogo's heir, and exactly as ambitious. |
+| **gclock** | retained (libui) | furniture that mostly sits still: labels, buttons, panels. Describe widgets once; then change state → mark dirty → `os64_ui_paint()`. Also the model for TIME-driven UIs (`os64_ui_run` blocks on events; a ticking app runs the paint loop itself). Chris's — the first user-authored g-app, and it found a window-manager bug before it could tell time. |
+| **gterm** | hybrid (libdraw, one full-bleed surface) | the window IS one custom-drawn thing (a grid, a canvas, a plot). No widgets to retain, no frame-clear ceremony beyond your own — and a documented example of choosing libdraw over libui on purpose. |
+
+(uiprobe exercises libui's whole contract — dispatch, grab, theme — and is
+worth reading, but it is a FIXTURE: it proves the toolkit, where gclock
+teaches the app author.)
+
 ## What this is
 
 The library that turns os64's raw window surface into something a person

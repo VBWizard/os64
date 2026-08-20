@@ -75,12 +75,16 @@ bool console_unread(char c)
 // tty3 is perfectly safe from the Ctrl+C you type at tty1's prompt. (This is
 // what "the console belongs to somebody" always meant; there are just eight
 // consoles now, exactly as SIGINT.md prescribed.)
-bool console_intr_intercept(char ascii)
+// The tty-scoped core (split 2026-08-19 for ptys, PTY.md): a pty master's
+// write runs this against the SLAVE — the keystroke "happened" on the
+// terminal that window represents, so the victim is THAT terminal's
+// foreground, exactly as a VT's Ctrl+C aims at the VT's own. The policy
+// below is unchanged; only who asks moved.
+bool console_intr_intercept_tty(tty_t *tty, char ascii)
 {
 	if (ascii != CONSOLE_ETX)
 		return false;
 
-	tty_t *tty = kTTYFocused;
 	if (tty == NULL)
 		tty = &kTTY[0];
 
@@ -104,6 +108,12 @@ bool console_intr_intercept(char ascii)
 	// into that check by processSignals within a scheduler pass (~10ms).
 	task_signal_all_threads(fg, SIGINT);
 	return true;                    // consumed: the byte never enters the ring
+}
+
+// The keyboard's spelling: the keystroke happened on the FOCUSED terminal.
+bool console_intr_intercept(char ascii)
+{
+	return console_intr_intercept_tty(kTTYFocused, ascii);
 }
 
 long console_read(char *buf, size_t len)
@@ -278,4 +288,12 @@ void console_wake_if_ready(void)
 			scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
 		}
 	}
+
+	// The pty leg (PTY.md): a reader parked on a slave must wake on the
+	// master's injected input, not on its one-second backstop — found in
+	// design review before it could be a bug. Lives in tty.c because the
+	// walk must hold the registry lock (a node mid-walk could otherwise be
+	// buried under our feet — a parked reader's own slave is seat-pinned,
+	// but the nodes we walk THROUGH to reach it are not).
+	tty_pty_wake_readers();
 }

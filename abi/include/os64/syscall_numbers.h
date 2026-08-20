@@ -99,7 +99,13 @@
 #define SYSCALL_MEMORY     27
 
 // printat(x, y, str) — park a string at an absolute character CELL on the
-// physical console, without touching the console cursor: the WIDGET PLANE.
+// physical console, without touching the console cursor: the WIDGET PLANE
+// (known since 2026-08-19 as the SCREEN LAYER — libui claimed the word
+// "widget" for ring-3 UI, and the ptys proved this doctrine from the other
+// side the same week: a clock in a gterm session landed on the text VTs,
+// exactly as the "it does not travel" paragraph below always said. The
+// userland identifier is os64_screen_printat now; this syscall's number and
+// table name are wire-stable and keep their birth name).
 //
 // This is deliberately NOT a console write and NOT cursor addressing. A
 // status widget (the uptime clock in the top-right corner) parks glyphs at
@@ -389,10 +395,11 @@
 // where it can be kept.
 #define SYSCALL_RENAME 43
 
-// 44 and 45 are RESERVED for the pty pair (PTY_CREATE / PTY_SNAPSHOT) living
-// on the gui branch — claimed there before this file was written, and left
-// vacant here so the merge is a text join and not an ABI renumbering. Do not
-// fill them; the next free number on THIS branch is 47.
+// 44 and 45 belong to the pty pair (PTY_CREATE / PTY_SNAPSHOT, defined with
+// the GUI block below) — they were claimed on the gui branch first and this
+// file RESERVED them sight-unseen, which is why the 2026-08-20 merge was a
+// text join and not an ABI renumbering. The reservation trick is worth
+// keeping: a branch that claims numbers writes them down in BOTH worlds.
 
 // tty_handle() -> a handle on the CALLER'S controlling terminal, whatever
 // handle 0 has become. No arguments: the answer is a property of who is
@@ -436,6 +443,27 @@
 // screen, which was always the useful half.
 #define OS64_SPAWN_BACKGROUND  0x1
 
+// SET_TTY seats the child on a pty slave (PTY.md, 2026-08-19): the child's
+// controlling terminal becomes the slave of the master handle carried in the
+// HIGH 32 BITS of this same flags word. Packed rather than given its own
+// argument because spawn's six registers were already spoken for — and a
+// handle is a small int, the flags word had 62 idle bits, and one register
+// carrying "how to spawn" is honest about what both values are. The child is
+// seated as the slave's SHELL (tty_seat_shell: controlling shell, foreground,
+// lights on), so seat a shell — that is what sessions are. Low-bit flags and
+// the handle never collide: bits 1..31 stay flags, 32..63 stay the handle.
+#define OS64_SPAWN_SET_TTY     0x2
+#define OS64_SPAWN_TTY_SHIFT   32
+
+// The pty family (PTY.md — ratified 2026-08-19). pty_create(cols, rows)
+// returns a MASTER handle; the slave is a kernel tty the master names at
+// spawn (above) and tasks name as their controlling terminal. GRID mode:
+// write(master) injects keystrokes (0x03 runs the slave's Ctrl+C intercept),
+// pty_snapshot copies the interpreted screen out; read(master) is reserved
+// for the STREAM mode whose customer (telnetd) waits on TCP listen().
+#define SYSCALL_PTY_CREATE   44
+#define SYSCALL_PTY_SNAPSHOT 45
+
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the
 // kernel VFS's internal SEEK_* so no translation layer is needed.
@@ -451,17 +479,24 @@
 #define SYSCALL_HANDLE_CONSOLE_OUT  1
 #define SYSCALL_HANDLE_CONSOLE_ERR  2
 
-// --- GUI syscalls: RESERVED, not yet in the dispatch table -----------------
-// The GUI client API (kernel gui/gui_client.h) is kernel-direct today; when
-// userland GUI apps arrive these numbers go live — see GRAPHICS.md "The
-// userland boundary" for the full design (16-21 defined there, 22 =
-// gui_event_wait reserved).
+// --- GUI syscalls (16-22, ALL LIVE since 2026-08-17) -----------------------
+// The userland boundary of GRAPHICS.md, dispatch rows in syscall.c. The
+// kernel's own GUI clients (guicomp, the console, the demos) keep calling
+// gui_client.h functions directly — these rows exist for ring 3, where every
+// argument is a register a task filled and every handle is checked against
+// its OWNER (a task can never touch a window it did not create;
+// GUI_ERR_NOT_OWNER). Until the surface pivot (migration step 3),
+// GET_SURFACE reports geometry but a NULL pixel pointer to ring-3 callers —
+// the canvas VA only becomes a task VA at the pivot, and handing out a
+// kernel address in the meantime would be a truthless answer AND a layout
+// leak. PUBLISH was born PRESENT; renamed at design review ("present"
+// doubles as an adjective, and is swapchain jargon besides).
 #define SYSCALL_GUI_WINDOW_CREATE       16
 #define SYSCALL_GUI_WINDOW_DESTROY      17
 #define SYSCALL_GUI_WINDOW_GET_SURFACE  18
-#define SYSCALL_GUI_WINDOW_PRESENT      19
+#define SYSCALL_GUI_WINDOW_PUBLISH      19
 #define SYSCALL_GUI_EVENT_POLL          20
 #define SYSCALL_GUI_SCREEN_INFO         21
-#define SYSCALL_GUI_EVENT_WAIT          22
+#define SYSCALL_GUI_EVENT_WAIT          22   // blocking poll — shipped LAST, as planned (step 5)
 
 #endif

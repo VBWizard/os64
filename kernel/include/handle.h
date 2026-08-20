@@ -39,6 +39,10 @@ typedef enum handle_type
 	                       // (net_dial; read/write are BYTES, like a pipe)
 	HANDLE_NET_ICMP,       // object = icmp_conn_t*, a dialed echo conversation
 	                       // (net_dial; write asks, read hears the answer)
+	HANDLE_PTY_MASTER,     // object = tty_t*, the SLAVE this master fronts
+	                       // (PTY.md: write = keystrokes in, pty_snapshot =
+	                       // the interpreted screen out; read is reserved
+	                       // for the STREAM flavor)
 } handle_type_t;
 
 typedef struct handle

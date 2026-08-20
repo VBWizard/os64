@@ -104,7 +104,14 @@ int64_t os64_spawn(const char *path, char *const argv[]);
 // the only thing that ever wants it.
 int64_t os64_spawn_redirected(const char *path, char *const argv[],
                            int32_t in, int32_t out, int32_t err,
-                           uint32_t flags);
+                           uint64_t flags);
+
+// Seat the child on a pty slave (PTY.md): `master` is a handle from
+// os64_pty_create, and the child becomes that slave's shell — controlling
+// terminal, foreground, its console handles routed there — with zero
+// pty-awareness in the child. The terminal's whole job becomes: write
+// keystrokes to the master, snapshot the screen out.
+int64_t os64_spawn_seated(const char *path, char *const argv[], int64_t master);
 
 // Wait for a child to exit and reap it. pid > 0 waits for that specific child;
 // pid == 0 waits for the first of any child to end. Returns the pid that
