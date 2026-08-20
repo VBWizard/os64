@@ -1,6 +1,8 @@
 #ifndef IO_H
 #define	IO_H
 
+#include <stdbool.h>   // for kSerialPresent, declared at the bottom
+
 /* 
  * File:   io.h
  * Author: http://git.musl-libc.org/cgit/musl/tree/arch/i386/bits/io.h
@@ -96,7 +98,11 @@ static __inline void insl(unsigned short __port, const void *__buf, unsigned lon
 		      : "+D" (__buf), "+c" (__n)
 		      : "d" (__port));
 }
-#endif	/* IO_H */
-
+// True when a real UART answered the loopback probe (or SERIAL= forced it).
+// Everything that writes to COM1 checks this: on a machine with no serial
+// port, a "write" is a byte deleted, and the log drainer must not aim there.
+extern bool kSerialPresent;
 int init_serial(int port);
 void write_serial(int port, char a);
+
+#endif	/* IO_H */

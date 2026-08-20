@@ -104,7 +104,7 @@ void processSignals()
 		qSleep = nextSleeper;
 	}
 
-	// Drain the USB keyboard BEFORE the console wake check below, so a HID
+	// Drain USB input BEFORE the console wake check below, so a keyboard HID
 	// report that just completed becomes a ring event the same pass its
 	// reader wakes for. Polling here rides the exact liveness path the PS/2
 	// wake uses — no interrupt wiring, ~one-pass latency. Cheap when idle

@@ -13,6 +13,7 @@
 #include "x86_64.h"
 #include "log.h"
 #include "strlen.h"
+#include "os64/klog_format.h"   // the ONE renderer, shared with logd
 
 #define MAX_FIRST_MESSAGE_SIZE MAX_LOG_MESSAGE_SIZE - 10 // Leave space for prefix and null terminator
 
@@ -23,6 +24,36 @@ extern bool kOverrideFileLogging;
 extern bool kDirectLog;   // DIRECTLOG: bypass the queues, write COM1 polled (kernel_commandline.c)
 extern bool kEnableSMP;
 extern volatile bool kSchedulerInitialized;
+
+// printd's two direct-to-serial paths, rendered in one place. Serial takes its
+// format from the kernel cmdline (LOGFMT=) because that is the only config
+// channel that exists before a filesystem does — logd reads /etc/logd.conf for
+// the file's format, and the two are deliberately allowed to differ.
+//
+// The wall clock is computed only when the active format actually asks for it
+// (kLogFormatWantsClock). This function runs in interrupt context on every
+// core, so paying for an epoch→calendar breakdown that `classic` never prints
+// would be a tax on the common path for a field nobody rendered.
+static void printd_emit_serial(uint64_t tick_count, uint64_t threadID,
+                               uint16_t core, uint8_t priority, uint8_t category,
+                               const char *message)
+{
+	os64_logline_t line = {
+		.ticks         = tick_count,
+		.threadID      = threadID,
+		.core          = core,
+		.level         = priority,
+		.category      = category,
+		.message       = message,
+		.category_name = os64_logcat_name(category),
+	};
+	os64_logtime_t now = {0};
+	if (kLogFormatWantsClock)
+		log_wallclock_now(&now);
+	char out[2048];
+	os64_logfmt_render(out, sizeof(out), kLogFormat, &line, &now);
+	serial_print_string(out);
+}
 
 void printd(__uint128_t debug_level, const char *fmt, ...) {
     // Formatting scratch buffer. MUST be a local (per-call, per-stack) and never
@@ -108,17 +139,26 @@ void printd(__uint128_t debug_level, const char *fmt, ...) {
         }
     }
 	else
-	//TODO: FIX ME!  Worst case of duplicate code EVER
-	//  Temporary justification is that the code it duplicates is hidden inside an #else which means it's disabled
-	//  if this code is enabled. :-(
 	{
-    	char print_buf2[2048];
-        sprintf(print_buf2, "%lu (0x%04lx) AP%u: %s", tick_count, threadID, core, print_buf);
-    	serial_print_string(print_buf2);
+		// Before the rings exist, park a copy in the pre-allocator BSS log so
+		// these lines can reach the FILE too — on the P5 there is no serial
+		// port, so "it went to the wire" means it went nowhere. DIRECTLOG is
+		// excluded on purpose: it exists to bypass every queue for a boot that
+		// dies early, and a bypass that quietly buffered would not be one.
+		// The !kLoggingInitialized half is belt-and-braces: reaching this arm
+		// with the rings already up means DIRECTLOG, and storing then would
+		// fill a buffer whose one drainer has already run.
+		if (!kLoggingInitialized && !kDirectLog)
+			log_store_early(core, tick_count, priority, category, print_buf);
+
+		// (The "Worst case of duplicate code EVER" TODO that lived here is
+		// PAID, 2026-08-18: both arms and the two drainers now render through
+		// the one formatter in <os64/klog_format.h>. There were FOUR copies of
+		// this layout — here, the #else below, log.c's drainer, and logd's
+		// file writer — which is a drift waiting for its first edit.)
+		printd_emit_serial(tick_count, threadID, core, priority, category, print_buf);
 	}
 #else
-    char print_buf2[2048];
-    sprintf(print_buf2, "%lu (0x%04lx) AP%u: %s", tick_count, threadID, core, print_buf);
-    serial_print_string(print_buf2);
+	printd_emit_serial(tick_count, threadID, core, priority, category, print_buf);
 #endif
 }

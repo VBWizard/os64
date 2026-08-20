@@ -1,5 +1,8 @@
 #include "log.h"
+#include "os64/klog_format.h"   // the ONE renderer, shared with logd
 #include "serial_logging.h"
+#include "strings/strcmp.h"
+#include "time.h"               // gmtime — %d/%t's calendar arithmetic
 #include "io.h"
 #include "panic.h"
 #include "kernel.h"
@@ -16,8 +19,95 @@
 
 extern task_t* kLogDTask;
 extern volatile uint64_t kTicksSinceStart;
+// ── the category-name tripwire ──────────────────────────────────────────────
+// %g renders a name from a table in <os64/klog_format.h>, because logd has to
+// print it too and cannot include CONFIG.h. Two files holding one truth is
+// exactly how a log comes to label SCHEDULER lines "NET", so the build checks
+// them against each other. Move a DEBUG_* bit without updating the table and
+// this stops the compile with the flag's name in the message.
+#define LOGCAT_CHECK(flag, idx) \
+	_Static_assert((flag) == ((__uint128_t)1 << (idx)), \
+	               #flag " changed bit position — update os64_logcat_name() in abi/include/os64/klog_format.h");
+LOGCAT_CHECK(DEBUG_EXCEPTIONS,    OS64_LOGCAT_EXCEPTIONS)
+LOGCAT_CHECK(DEBUG_BOOT,          OS64_LOGCAT_BOOT)
+LOGCAT_CHECK(DEBUG_SMP,           OS64_LOGCAT_SMP)
+LOGCAT_CHECK(DEBUG_PCI_DISCOVERY, OS64_LOGCAT_PCI_DISCOVERY)
+LOGCAT_CHECK(DEBUG_PCI,           OS64_LOGCAT_PCI)
+LOGCAT_CHECK(DEBUG_HARDDRIVE,     OS64_LOGCAT_HARDDRIVE)
+LOGCAT_CHECK(DEBUG_AHCI,          OS64_LOGCAT_AHCI)
+LOGCAT_CHECK(DEBUG_MEMMAP,        OS64_LOGCAT_MEMMAP)
+LOGCAT_CHECK(DEBUG_ACPI,          OS64_LOGCAT_ACPI)
+LOGCAT_CHECK(DEBUG_PAGING,        OS64_LOGCAT_PAGING)
+LOGCAT_CHECK(DEBUG_ALLOCATOR,     OS64_LOGCAT_ALLOCATOR)
+LOGCAT_CHECK(DEBUG_DEMAND_PAGING, OS64_LOGCAT_DEMAND_PAGING)
+LOGCAT_CHECK(DEBUG_NVME,          OS64_LOGCAT_NVME)
+LOGCAT_CHECK(DEBUG_VFS,           OS64_LOGCAT_VFS)
+LOGCAT_CHECK(DEBUG_THREAD,        OS64_LOGCAT_THREAD)
+LOGCAT_CHECK(DEBUG_TASK,          OS64_LOGCAT_TASK)
+LOGCAT_CHECK(DEBUG_SCHEDULER,     OS64_LOGCAT_SCHEDULER)
+LOGCAT_CHECK(DEBUG_SIGNALS,       OS64_LOGCAT_SIGNALS)
+LOGCAT_CHECK(DEBUG_LOGGING,       OS64_LOGCAT_LOGGING)
+LOGCAT_CHECK(DEBUG_TESTS,         OS64_LOGCAT_TESTS)
+LOGCAT_CHECK(DEBUG_SYSCALL,       OS64_LOGCAT_SYSCALL)
+LOGCAT_CHECK(DEBUG_GUI,           OS64_LOGCAT_GUI)
+LOGCAT_CHECK(DEBUG_APPLICATION,   OS64_LOGCAT_APPLICATION)
+LOGCAT_CHECK(DEBUG_TASKSWITCH,    OS64_LOGCAT_TASKSWITCH)
+LOGCAT_CHECK(DEBUG_PIPE,          OS64_LOGCAT_PIPE)
+LOGCAT_CHECK(DEBUG_SHUTDOWN,      OS64_LOGCAT_SHUTDOWN)
+LOGCAT_CHECK(DEBUG_USB,           OS64_LOGCAT_USB)
+LOGCAT_CHECK(DEBUG_DIAG,          OS64_LOGCAT_DIAG)
+LOGCAT_CHECK(DEBUG_NET,           OS64_LOGCAT_NET)
+LOGCAT_CHECK(DEBUG_SYSTEM,        OS64_LOGCAT_SYSTEM)
+LOGCAT_CHECK(DEBUG_SPECIAL,       OS64_LOGCAT_SPECIAL)
+
 log_buffer_t core_log_buffers[MAX_CPUS];
 bool kLoggingInitialized = false;
+// Serial's line format (see log.h). CLASSIC by default, so a boot that passes
+// no LOGFMT= prints exactly what os64 has always printed — a format change
+// must never be able to cost someone the view they know.
+const char *kLogFormat = OS64_LOGFMT_CLASSIC;
+bool kLogFormatWantsClock = false;   // classic asks for no clock
+// LOGFMT= named something we don't have. Set before there is any way to say
+// so; reported in kernel_main once serial and the framebuffer exist.
+bool kLogFormatBad = false;
+
+bool log_set_format_by_name(const char *name)
+{
+	// The name table lives in <os64/klog_format.h> so logd resolves "daily"
+	// through the identical code — see os64_logfmt_by_name's comment.
+	const char *fmt = os64_logfmt_by_name(name);
+	if (fmt == NULL)
+		return false;
+	kLogFormat = fmt;
+	kLogFormatWantsClock = os64_logfmt_uses_clock(kLogFormat) != 0;
+	return true;
+}
+
+void log_wallclock_now(void *out)
+{
+	os64_logtime_t *t = (os64_logtime_t *)out;
+	// kSystemCurrentTime is seconds since the epoch, set from the RTC during
+	// hardware_init. Zero means we are earlier than that — the first boot
+	// lines genuinely predate the clock — and .valid = 0 makes the renderer
+	// print placeholders instead of a confident 1970.
+	if (kSystemCurrentTime == 0) {
+		t->valid = 0;
+		return;
+	}
+	time_t now = (time_t)kSystemCurrentTime;
+	struct tm tm;
+	gmtime(&now, &tm);
+	t->year  = (uint16_t)(tm.tm_year + 1900);   // tm_year is years since 1900
+	t->mon   = (uint8_t)(tm.tm_mon + 1);        // tm_mon is 0-based
+	t->day   = (uint8_t)tm.tm_mday;
+	t->hour  = (uint8_t)tm.tm_hour;
+	t->min   = (uint8_t)tm.tm_min;
+	t->sec   = (uint8_t)tm.tm_sec;
+	t->valid = 1;
+	// UTC, deliberately: the system clock is UTC by ruling (2026-08-08), and a
+	// timezone is a human's display preference. logd applies TZ for the FILE
+	// because it has an environment to read one from; serial has neither.
+}
 extern struct limine_smp_response *kLimineSMPInfo;
 // Ensures only one logd worker processes the buffers at a time
 _Atomic uint32_t kLogDWorkLock = 0;
@@ -234,14 +324,99 @@ void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t ca
                 lastTail = buffer->tail;
                 idleSpins = 0;
             }
-            //ZERO progress for an eon means the drainer can never run again —
-            //e.g. it lives on THIS core and we are spinning above it in
-            //interrupt context. A loud forensic panic beats a silent wedge.
-            else if (++idleSpins > 2000000000UL)
-                panic("log_store_entry: core %u queue full with NO drain progress (drainer=core %u, head=%lu tail=%lu)\n",
-                      core, kLogDDrainerCore, (unsigned long)buffer->head, (unsigned long)buffer->tail);
+            //NO progress means nobody is draining and nobody can: the sink is
+            //gone and serial either isn't there (the P5 has no UART at all) or
+            //can't keep up. This used to PANIC after two billion spins — an
+            //eon of frozen machine, then a dead one, to protect a logging
+            //rule. The ruling (2026-08-18): "never drop a byte is
+            //ASPIRATIONAL". Growth is impossible here, so the choice is not
+            //WHETHER to lose lines but WHICH, and a panic loses all of them
+            //plus the machine. So: keep the newest. Drop the oldest entry,
+            //count it, and let the write proceed.
+            //
+            //Which end to keep is the whole question, and it is answered
+            //differently one buffer over: the pre-allocator BSS log keeps the
+            //FIRST lines (its job is the start of the boot), and these rings
+            //keep the LAST (their job is the recent past, and the last line
+            //before a freeze is the one you came for). Two policies because
+            //two questions.
+            //
+            //The patience threshold is small now that the outcome is
+            //survivable rather than fatal — a slow-but-progressing drainer
+            //resets it on every entry it takes, so this only expires when
+            //truly nothing is moving.
+            else if (++idleSpins > LOG_FULL_PATIENCE_SPINS)
+            {
+                //This bump is UNLOCKED on purpose — do not "fix" it with
+                //kLogDWorkLock: this path runs in interrupt context, possibly
+                //ON TOP of the drainer it would be waiting for, and that is a
+                //deadlock. The race it buys was traced (2026-08-18 review): a
+                //drainer waking in this same instant advances tail too, both
+                //sides read T and store T+1, and one update is lost. Worst
+                //case is `lost` overcounting by one — the entry was in fact
+                //drained — never corruption: this producer writes entries at
+                //HEAD, and the full-ring gap slot keeps the slot being
+                //drained and the slot being written apart. A CAS would close
+                //the overcount if the number ever needs to be exact.
+                buffer->tail = (buffer->tail + 1) % buffer->capacity;
+                buffer->lost++;
+                break;
+            }
         }
     }
+}
+
+// ── the pre-allocator log (see log.h for the why) ───────────────────────────
+// 64 entries is ~20KB of BSS and about fifteen times what a default boot puts
+// here (four lines). The margin is for a boot that turns on a chatty flag
+// early; past it we keep the first 64 and count the rest, because the first
+// lines of a boot are the ones this buffer exists for.
+#define EARLY_LOG_ENTRIES 64
+static log_entry_t kEarlyEntries[EARLY_LOG_ENTRIES];
+static uint32_t kEarlyCount = 0;
+static uint32_t kEarlyLost  = 0;
+
+void log_store_early(uint16_t core, uint64_t ticks, uint8_t priority,
+                     uint8_t category, const char *message)
+{
+	if (kEarlyCount >= EARLY_LOG_ENTRIES) {
+		kEarlyLost++;
+		return;
+	}
+	log_entry_t *e = &kEarlyEntries[kEarlyCount++];
+	e->ticks = ticks;
+	__asm__ volatile("rdtsc" : "=a"(*(uint32_t*)&e->tsc), "=d"(*((uint32_t*)&e->tsc + 1)));
+	e->core_id   = core;
+	e->log_level = priority;
+	e->category  = category;
+	e->continued = false;
+	e->threadID  = 0;   // pre-scheduler: there is no thread to name yet
+	snprintf(e->message, MAX_LOG_MESSAGE_SIZE, "%s", message);
+	e->message[MAX_LOG_MESSAGE_SIZE - 1] = '\0';
+}
+
+// Pour the early ring into the real one. Called by logging_queueing_init AFTER
+// the buffers exist and BEFORE kLoggingInitialized goes true, so no concurrent
+// writer can be walking these entries — and in any case this is still the BSP
+// alone.
+static void log_drain_early_into_rings(void)
+{
+	log_buffer_t *b = &core_log_buffers[0];
+	for (uint32_t i = 0; i < kEarlyCount; i++) {
+		b->entries[b->head] = kEarlyEntries[i];        // struct copy
+		b->head = (b->head + 1) % b->capacity;
+	}
+	if (kEarlyLost > 0) {
+		// Say it IN THE LOG, at the point of the hole, so a reader of the file
+		// sees the gap rather than inferring it from a boot that starts oddly.
+		log_entry_t *e = &b->entries[b->head];
+		memset(e, 0, sizeof(*e));
+		e->ticks = kEarlyEntries[EARLY_LOG_ENTRIES - 1].ticks;
+		snprintf(e->message, MAX_LOG_MESSAGE_SIZE,
+		         "*** %u early boot line(s) reached serial but not this file "
+		         "(pre-allocator buffer full) ***\n", kEarlyLost);
+		b->head = (b->head + 1) % b->capacity;
+	}
 }
 
 void logging_queueing_init() {
@@ -253,7 +428,20 @@ void logging_queueing_init() {
         core_log_buffers[i].tail = 0;  // Initialize tail pointer
         core_log_buffers[i].lock = 0;  // Initialize lock
     }
+	// The boot's first lines, which have been waiting in BSS since before
+	// there was an allocator, take their place at the head of core 0's ring —
+	// in order, with their original ticks and TSC, so the k-way merge that
+	// feeds logd puts them exactly where they belong: first.
+	log_drain_early_into_rings();
 	kLoggingInitialized = true;
+
+	// The legend the retired attach banner used to carry. Ticks are the unit
+	// every log line is stamped in, and "%k" means nothing without the rate —
+	// so state it once, in the log, on DEBUG_BOOT (which survives even the
+	// Ctrl+~ suppression, precisely so a suppressed machine still explains
+	// itself).
+	printd(DEBUG_BOOT, "log: %d ring(s) x %d MB, %d ticks/sec\n",
+	       (int)kLimineSMPInfo->cpu_count, LOG_BUFFER_SIZE_MB, TICKS_PER_SECOND);
 }
 
 // Print one entry from a buffer and advance its tail.
@@ -267,15 +455,25 @@ static void logd_drain_one(log_buffer_t *buffer)
     char print_buf2[MAX_LOG_MESSAGE_SIZE + 256];
     log_entry_t *entry = &buffer->entries[buffer->tail];
 
-    if (!entry->continued)
-        snprintf(print_buf2, sizeof(print_buf2),
-                 "%lu (0x%04lx) AP%u: %s",
-                 entry->ticks,
-                 entry->threadID,
-                 entry->core_id,
-                 entry->message);
-    else
+    // A continuation chunk gets NO prefix — it is the tail of a line that was
+    // already introduced, and re-stamping it would break the line in half.
+    if (!entry->continued) {
+        os64_logline_t line = {
+            .ticks         = entry->ticks,
+            .threadID      = entry->threadID,
+            .core          = entry->core_id,
+            .level         = entry->log_level,
+            .category      = entry->category,
+            .message       = entry->message,
+            .category_name = os64_logcat_name(entry->category),
+        };
+        os64_logtime_t now = {0};
+        if (kLogFormatWantsClock)
+            log_wallclock_now(&now);
+        os64_logfmt_render(print_buf2, sizeof(print_buf2), kLogFormat, &line, &now);
+    } else {
         snprintf(print_buf2, sizeof(print_buf2), "%s", entry->message);
+    }
 
     serial_print_string(print_buf2);
     entry->message[0] = '\0';
@@ -305,6 +503,20 @@ uint32_t klog_dequeue(log_entry_t *out, uint32_t max)
     // finds the queues empty is still a live reader, and if an empty poll
     // didn't count as a sign of life, a quiet system would hand serial
     // logging back and forth every three seconds.
+    // A RE-attach — a daemon claiming the log after a previous one died — is
+    // worth a line; a FIRST attach is not (the boot banner already separates
+    // boots, and logd's own "===== attached =====" was retired for saying the
+    // same thing twice). Only the kernel can tell these apart: a restarted
+    // logd is a brand-new process whose "have I attached yet?" is always no.
+    //
+    // The notice is stored DIRECTLY rather than through printd, on purpose —
+    // it must not be filterable by kDebugLevel. It is the counterpart of
+    // "userland log sink went quiet" and the pair reads as one story.
+    if (!kLogSinkClaimed && kLogSinkEverClaimed)
+        log_store_entry(get_core_local_storage()->apic_id, kTicksSinceStart, 0,
+                        OS64_LOGCAT_LOGGING, false,
+                        "[logd] userland log sink re-attached — kernel off the wire again\n");
+
     kLogSinkClaimed = true;
     kLogSinkLastRead = kTicksSinceStart;
     // One-way latch: ends the LOGD= startup wait for good. From here on the
@@ -395,6 +607,37 @@ bool logd_thread(bool daemon) {
             was_claimed = false;
             kLogSinkClaimed = false;
             serial_print_string("[logd] userland log sink went quiet — kernel resuming serial drain\n");
+        }
+
+        // NO SERIAL PORT = NO DRAINING. Draining means CONSUMING: entries are
+        // removed from the rings on the way out. Aim that at a UART which does
+        // not exist and the kernel is not logging, it is shredding — as fast
+        // as it can, exactly when the log daemon has just died and the log is
+        // the only evidence of why. That is the P5's situation permanently:
+        // no serial port at all (found 2026-08-18, when the probe that was
+        // supposed to detect this turned out never to have worked).
+        //
+        // So we retain instead. The rings hold the recent past, circular, and
+        // a logd restarted by hand recovers everything still in them —
+        // "at least if I can manage to restart the ring 3 logd, we haven't
+        // lost everything" (Chris's ruling, and the reason the ring-full path
+        // above overwrites rather than panics: without that, retention here
+        // would fill the rings and kill the machine).
+        if (!kSerialPresent)
+        {
+            static bool saidSo = false;
+            if (!saidSo)
+            {
+                saidSo = true;
+                // printf, not printd: this must reach the GLASS, which on a
+                // serial-less machine is the only place anything can be said.
+                printf("[logd] no serial port on this machine — kernel log RETAINED in memory, "
+                       "not drained (restart a log daemon to collect it)\n");
+            }
+            if (!daemon)
+                return false;
+            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
+            continue;
         }
 
         // Try-lock: if another CPU is already flushing, skip this wakeup

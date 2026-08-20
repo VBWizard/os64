@@ -80,7 +80,10 @@
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
 #include "CONFIG.h"
+#include "logging/log.h"   // /sys/log — ring stats and sink state
+#include "io.h"             // kSerialPresent
 
+extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
 extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
 extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
 extern volatile bool mp_acctSettleAck[MAX_CPUS];
@@ -241,6 +244,7 @@ typedef enum
 	SYS_NODE_CPUCORE,    // /cpu/<n>
 	SYS_NODE_CPUFILE,    // /cpu/<n>/{time,state,probe}
 	SYS_NODE_CACHEFILE,  // /cache — the block cache's own numbers (2026-08-16)
+	SYS_NODE_LOGFILE,    // /log — the kernel log rings' own numbers (2026-08-18)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -317,6 +321,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CACHEFILE;
+		return;
+	}
+
+	if (strcmp(comp, "log") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_LOGFILE;
 		return;
 	}
 
@@ -417,6 +429,63 @@ static void sys_gen_cpu_count(synth_text_t *t)
 // to be INFERRED to be cache warm-up; a file beats an inference). Same
 // doctrine as os64/memory.h: the interesting ratios are pre-computed, so
 // nobody does column arithmetic on a report.
+// /sys/log — what the kernel log rings are doing right now.
+//
+// The customer arrived before the file did (2026-08-18): the rings learned to
+// overwrite their oldest entries instead of panicking, and a loss you cannot
+// COUNT is a loss you cannot argue about. Then a debugging session spent an
+// hour on "is something stuck in the buffers?" that this file answers in one
+// `cat` — head, tail, and lost per core, plus whether anyone is draining them.
+//
+// READS ARE SIDE-EFFECT FREE (the /sys ruling): every value below is a plain
+// load of a word another core owns. Worst case a head/tail pair is one entry
+// stale, which is the honest amount of stale for a number describing a moving
+// ring — and far better than taking the drain lock to read statistics, which
+// would let `cat` stall a producer.
+static void sys_gen_log(synth_text_t *t)
+{
+	// WHO IS DRAINING — the question every other number depends on.
+	if (kLogSinkClaimed)
+		synth_text_addf(t, "sink: userland (last read at tick %lu, now %lu)\n",
+		                (uint64_t)kLogSinkLastRead, (uint64_t)kTicksSinceStart);
+	else if (!kSerialPresent)
+		synth_text_addf(t, "sink: NONE — no serial port, log RETAINED in memory\n");
+	else
+		synth_text_addf(t, "sink: kernel drainer -> serial\n");
+
+	synth_text_addf(t, "serial: %s\n", kSerialPresent ? "present" : "absent");
+	synth_text_addf(t, "format: %s\n", kLogFormat);
+	synth_text_addf(t, "ticks_per_second: %d\n", TICKS_PER_SECOND);
+
+	uint64_t used_total = 0, cap_total = 0, lost_total = 0;
+	for (int c = 0; c < kMPCoreCount; c++)
+	{
+		log_buffer_t *b = &core_log_buffers[c];
+		if (b->capacity == 0)
+			continue;
+		size_t head = b->head, tail = b->tail;   // one load each, in this order
+		uint64_t used = (head >= tail) ? (head - tail)
+		                               : (b->capacity - tail + head);
+		used_total += used;
+		cap_total  += b->capacity;
+		lost_total += b->lost;
+		synth_text_addf(t, "core.%d: used %lu of %lu (%lu%%), lost %lu\n",
+		                c, used, (uint64_t)b->capacity,
+		                b->capacity ? (used * 100) / b->capacity : 0,
+		                b->lost);
+	}
+	synth_text_addf(t, "total: used %lu of %lu entries, lost %lu\n",
+	                used_total, cap_total, lost_total);
+	// The line that turns "hours and hours?" into a number: entries times the
+	// per-entry size is the real memory this subsystem is holding.
+	synth_text_addf(t, "bytes: %lu of %lu\n",
+	                used_total * (uint64_t)sizeof(log_entry_t),
+	                cap_total * (uint64_t)sizeof(log_entry_t));
+	if (lost_total > 0)
+		synth_text_addf(t, "NOTE: %lu entries were overwritten before anything "
+		                   "could drain them\n", lost_total);
+}
+
 static void sys_gen_cache(synth_text_t *t)
 {
 	block_cache_stats_t s;
@@ -591,7 +660,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 			return -1;
 	}
 	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE
-	         && sp.type != SYS_NODE_CACHEFILE)
+	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_LOGFILE)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -602,6 +671,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_pci_device(&text, &v);
 	else if (sp.type == SYS_NODE_CACHEFILE)
 		sys_gen_cache(&text);
+	else if (sp.type == SYS_NODE_LOGFILE)
+		sys_gen_log(&text);
 	else if (sp.type == SYS_NODE_CPUCOUNT)
 		sys_gen_cpu_count(&text);
 	else if (strcmp(sp.name, "time") == 0)
@@ -741,6 +812,12 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 				h->index++;
 				return 1;
 			}
+			if (h->index == 3)
+			{
+				strncpy(entry->name, "log", OS64_DIRENT_NAME_MAX);
+				h->index++;
+				return 1;
+			}
 			return 0;
 		}
 
@@ -870,6 +947,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_CACHEFILE:
 			strncpy(entry->name, "cache", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_LOGFILE:
+			strncpy(entry->name, "log", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_CPUDIR:

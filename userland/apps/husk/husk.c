@@ -29,6 +29,12 @@
 #define LINE_MAX 256
 #define ARGS_MAX 512        // raised from 16 for globbing; matches the kernel SPAWN_MAX_ARGS ceiling
 #define MAX_STAGES 4          // a | b | c | d is plenty of rope for now
+#define TASK_NAME_MAX 64      // lifecycle log identity; basename, always bounded
+
+typedef struct {
+	long tid;
+	char name[TASK_NAME_MAX];
+} launched_task_t;
 
 // ── tiny freestanding helpers (no libc) ─────────────────────────────────────
 
@@ -935,6 +941,41 @@ static void expand_line(const char *src, char *dst, int cap, int last_status)
 	dst[n] = 0;
 }
 
+// ── child lifecycle trace ───────────────────────────────────────────────────
+// Husk knows more than wait() ever can: at spawn time it has both the task ID
+// and the command name. Keep that pair together until reap so DEBUG_APPLICATION
+// gets matching bookends — especially for pipelines, where a row of bare task
+// numbers is otherwise a logic puzzle. os64_debug_log supplies the debug-level
+// gate; when application logging is off, these calls cost no log output.
+static void launched_task_set(launched_task_t *task, long tid,
+                              const char *path)
+{
+	const char *name = path;
+	for (const char *p = path; *p != '\0'; p++)
+		if (*p == '/' && p[1] != '\0')
+			name = p + 1;
+
+	task->tid = tid;
+	os64_strcopy(task->name, sizeof(task->name), name);
+}
+
+static void report_start(const launched_task_t *task)
+{
+	char msg[128];
+	os64_snprintf(msg, sizeof(msg), "husk: task %lu (%s) started",
+	              (unsigned long)task->tid, task->name);
+	os64_debug_log(msg);
+}
+
+static void report_exit(const launched_task_t *task, int code)
+{
+	char msg[160];
+	os64_snprintf(msg, sizeof(msg), "husk: task %lu (%s) exited code %lu",
+	              (unsigned long)task->tid, task->name,
+	              (unsigned long)(unsigned int)code);
+	os64_debug_log(msg);
+}
+
 // ── background jobs ─────────────────────────────────────────────────────────
 // `cmd &` — the Thompson shell grew this in 1973, and os32's kshell had it too
 // (fork, skip the waitpid, never speak of the child again). os64 keeps the
@@ -949,9 +990,9 @@ static void expand_line(const char *src, char *dst, int cap, int last_status)
 typedef struct {
 	int  used;
 	int  jobNum;                 // husk-local, small, what a human says out loud
-	long pids[MAX_STAGES];       // every stage — `a | b &` is ONE job
+	launched_task_t tasks[MAX_STAGES]; // every stage — `a | b &` is ONE job
 	int  remaining;              // stages not yet collected
-	long reportPid;              // the LAST stage's pid: the job's public identity
+	long reportTid;              // the LAST stage's task: the job's public identity
 	int  lastCode;               // and its exit code — the pipeline's answer
 } job_t;
 
@@ -965,16 +1006,16 @@ static void put_num(unsigned long v)
 	os64_write(1, b, (unsigned)k);
 }
 
-// "[1] 57" — job number and task number both, on purpose. In bash the pid is
+// "[1] 57" — job number and task number both, on purpose. In bash the PID is
 // noise because you kill a job by `%1`; os64 has no such notation, so the TASK
 // NUMBER is the handle you actually use: `echo kill > /proc/57/ctl`. Printing
 // it is load-bearing here, not decoration.
-static void job_announce(int jobNum, long pid)
+static void job_announce(int jobNum, long tid)
 {
 	os64_write(1, "[", 1);
 	put_num((unsigned long)jobNum);
 	os64_write(1, "] ", 2);
-	put_num((unsigned long)pid);
+	put_num((unsigned long)tid);
 	os64_write(1, "\n", 1);
 }
 
@@ -983,7 +1024,7 @@ static void job_report_done(const job_t *j)
 	os64_write(1, "[", 1);
 	put_num((unsigned long)j->jobNum);
 	os64_write(1, "]+ ", 3);
-	put_num((unsigned long)j->reportPid);
+	put_num((unsigned long)j->reportTid);
 	// Bourne's distinction, and a useful one: a job that FAILED should not read
 	// the same as one that succeeded from across the room.
 	if (j->lastCode == 0)
@@ -999,7 +1040,7 @@ static void job_report_done(const job_t *j)
 // Register a launched background pipeline. Returns the job number, or 0 if the
 // table is full (the job still RUNS — it just goes untracked, which is os32's
 // behavior and an honest fallback rather than a refusal to launch).
-static int job_add(const long *pids, int npids)
+static int job_add(const launched_task_t *tasks, int taskCount)
 {
 	for (int i = 0; i < MAX_JOBS; i++)
 	{
@@ -1007,11 +1048,13 @@ static int job_add(const long *pids, int npids)
 			continue;
 		gJobs[i].used      = 1;
 		gJobs[i].jobNum    = gNextJobNum++;
-		gJobs[i].remaining = npids;
+		gJobs[i].remaining = taskCount;
 		gJobs[i].lastCode  = 0;
-		for (int k = 0; k < npids; k++)
-			gJobs[i].pids[k] = pids[k];
-		gJobs[i].reportPid = pids[npids - 1];   // the last stage speaks for the job
+		for (int k = 0; k < MAX_STAGES; k++)
+			gJobs[i].tasks[k].tid = -1;
+		for (int k = 0; k < taskCount; k++)
+			gJobs[i].tasks[k] = tasks[k];
+		gJobs[i].reportTid = tasks[taskCount - 1].tid; // last stage speaks for the job
 		return gJobs[i].jobNum;
 	}
 	return 0;
@@ -1019,8 +1062,8 @@ static int job_add(const long *pids, int npids)
 
 // A child just came back from reap(). If it belongs to a tracked job, count it
 // off; when the job's last stage is collected, announce it. Returns 1 if the
-// pid was ours to account for.
-static int job_note_reaped(long pid, int code)
+// task was ours to account for.
+static int job_note_reaped(long tid, int code)
 {
 	for (int i = 0; i < MAX_JOBS; i++)
 	{
@@ -1028,10 +1071,11 @@ static int job_note_reaped(long pid, int code)
 			continue;
 		for (int k = 0; k < MAX_STAGES; k++)
 		{
-			if (gJobs[i].pids[k] != pid)
+			if (gJobs[i].tasks[k].tid != tid)
 				continue;
-			gJobs[i].pids[k] = -1;             // collected
-			if (pid == gJobs[i].reportPid)
+			report_exit(&gJobs[i].tasks[k], code);
+			gJobs[i].tasks[k].tid = -1;        // collected
+			if (tid == gJobs[i].reportTid)
 				gJobs[i].lastCode = code;      // the pipeline's status is its last stage's
 			if (--gJobs[i].remaining == 0)
 			{
@@ -1052,10 +1096,10 @@ static void jobs_poll(void)
 	for (;;)
 	{
 		int code = 0;
-		long pid = os64_reap(&code);
-		if (pid <= 0)
+		long tid = os64_reap(&code);
+		if (tid <= 0)
 			break;              // 0 = nobody has died; that is the usual answer
-		job_note_reaped(pid, code);
+		job_note_reaped(tid, code);
 	}
 }
 
@@ -1081,21 +1125,6 @@ static int strip_background(char *line)
 		n--;
 	line[n] = '\0';
 	return 1;
-}
-
-// Report a reaped child to the serial log: "husk: pid <p> exited code <c>".
-static void report_exit(long ended, int code)
-{
-	char msg[64];
-	char nb[20];
-	int m = 0;
-
-	for (const char *s = "husk: pid "; *s; s++) msg[m++] = *s;
-	{ int k = utoa((unsigned long)ended, nb); for (int j = 0; j < k; j++) msg[m++] = nb[j]; }
-	for (const char *s = " exited code "; *s; s++) msg[m++] = *s;
-	{ int k = utoa((unsigned long)(unsigned int)code, nb); for (int j = 0; j < k; j++) msg[m++] = nb[j]; }
-	msg[m] = 0;
-	os64_debug_log(msg);
 }
 
 // Pull `< file` / `> file` / `>> file` out of an already-parsed argv,
@@ -1203,8 +1232,8 @@ static const char *resolve_command(const char *cmd, char *buf, int cap)
 // child already holds its own reference, so closing ours takes nothing from it.
 static int run_pipeline(char *stages[], int nstages, int background)
 {
-	long pids[MAX_STAGES];
-	int npids = 0;
+	launched_task_t tasks[MAX_STAGES];
+	int taskCount = 0;
 	int prev_read = -1;         // read end of the pipe from the PREVIOUS stage
 	int status = 0;             // what $? will remember of this line
 
@@ -1290,7 +1319,7 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		// kernel has to know before the child's first instruction: a background
 		// job's read of handle 0 returns EOF instead of competing with husk for
 		// the keyboard. Output is untouched — it still prints to the screen.
-		long pid = os64_spawn_redirected(prog, cargv, in, out, -1,
+		long tid = os64_spawn_redirected(prog, cargv, in, out, -1,
 		                                 background ? OS64_SPAWN_BACKGROUND : 0);
 
 		// Hand-off done — drop husk's copies of EVERYTHING it just passed
@@ -1302,7 +1331,7 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		if (inRedir >= 0)     os64_close(inRedir);
 		if (outRedir >= 0)    os64_close(outRedir);
 
-		if (pid < 0)
+		if (tid < 0)
 		{
 			os64_puts("husk: cannot run ");
 			os64_puts(cargv[0]);
@@ -1312,7 +1341,9 @@ static int run_pipeline(char *stages[], int nstages, int background)
 			break;
 		}
 
-		pids[npids++] = pid;
+		launched_task_set(&tasks[taskCount], tid, prog);
+		report_start(&tasks[taskCount]);
+		taskCount++;
 		prev_read = p[0];       // this stage's output becomes the next one's input
 	}
 
@@ -1324,11 +1355,11 @@ static int run_pipeline(char *stages[], int nstages, int background)
 	// prompt. The corpses are collected later by jobs_poll(). $? is 0 — the
 	// LAUNCH succeeded; the job's own status arrives with "[1]+ 57 Done", which
 	// is the only honest answer when the thing hasn't finished yet.
-	if (background && npids > 0)
+	if (background && taskCount > 0)
 	{
-		int jobNum = job_add(pids, npids);
+		int jobNum = job_add(tasks, taskCount);
 		if (jobNum > 0)
-			job_announce(jobNum, pids[npids - 1]);
+			job_announce(jobNum, tasks[taskCount - 1].tid);
 		return status;
 	}
 
@@ -1336,11 +1367,12 @@ static int run_pipeline(char *stages[], int nstages, int background)
 	// of a pipeline; stage 2 is already chewing on stage 1's first bytes long
 	// before stage 1 finishes. We just collect the corpses in order.
 	int interrupted = 0;
-	for (int i = 0; i < npids; i++)
+	for (int i = 0; i < taskCount; i++)
 	{
 		int code = 0;
-		long ended = os64_wait(pids[i], &code);
-		report_exit(ended, code);
+		long ended = os64_wait(tasks[i].tid, &code);
+		if (ended > 0)
+			report_exit(&tasks[i], code);
 		if (code == 130)        // 128 + SIGINT: died by Ctrl+C
 			interrupted = 1;
 		status = code;          // reaped in launch order, so the last stage wins

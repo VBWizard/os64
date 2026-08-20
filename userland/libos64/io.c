@@ -232,6 +232,11 @@ int64_t os64_pipe(int32_t h[2])
     return (long)os64_syscall1(SYSCALL_PIPE, (uint64_t)h);
 }
 
+int64_t os64_tty_handle(void)
+{
+    return (int64_t)os64_syscall0(SYSCALL_TTY_HANDLE);
+}
+
 int64_t os64_close(int32_t handle)
 {
     return (long)os64_syscall1(SYSCALL_CLOSE, (uint64_t)(int64_t)handle);

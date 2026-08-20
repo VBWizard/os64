@@ -230,8 +230,10 @@ void kernel_init()
 	}
 
 	init_GDT();
-	
-	logging_queueing_init();
+
+	// (logging_queueing_init() used to live here. It moved up into
+	// kernel_main, next to the kernel stack, so the rings exist before the
+	// boot has anything interesting to say — see the block comment there.)
 
 
 	printf("Initializing PCI: ");
@@ -288,7 +290,7 @@ void kernel_init()
 	printf("Detected cpu: %s\n", &kcpuInfo.brand_name);
 
 	// USB last among the bus drivers: the P5 has no PS/2 port, so this is
-	// where its keyboard comes from. Runs BEFORE task creation on purpose —
+	// where its keyboard and mouse come from. Runs BEFORE task creation on purpose —
 	// the xHCI MMIO mapping lands in the kernel PML4's upper half and every
 	// task PML4 clones those entries at birth (see xhci.c).
 	if (kEnableUSB)
@@ -528,8 +530,14 @@ void kernel_init()
 	if (kLogdPath[0] && kRootFilesystem != NULL)
 	{
 		printf("Launching /bin/logd -> %s ...\n", kLogdPath);
-		char *logdArgv[] = { "/bin/logd", kLogdPath };
-		task_t *logdTask = task_create("/bin/logd", 2, logdArgv, kKernelTask, false, THREAD_NO_AFFINITY);
+		// argv[2], when present, is the format name LOGFMT= gave SERIAL. It is
+		// the bottom rung of the file's format gradient (logd's own comment
+		// carries the whole ladder): a config file outranks it, but with no
+		// config file at all, one LOGFMT= sets both sinks — which is what
+		// somebody who only wants one knob means by turning that knob.
+		char *logdArgv[] = { "/bin/logd", kLogdPath, kLogFormatName };
+		int logdArgc = (kLogFormatName[0] != '\0' && !kLogFormatBad) ? 3 : 2;
+		task_t *logdTask = task_create("/bin/logd", logdArgc, logdArgv, kKernelTask, false, THREAD_NO_AFFINITY);
 		if (logdTask)
 			scheduler_submit_new_task(logdTask);
 		else
@@ -834,10 +842,40 @@ void kernel_main()
 		cmdline_scratch[sizeof(cmdline_scratch) - 1] = '\0';
 		process_kernel_commandline(cmdline_scratch);
 	}
+
+	// Adopt LOGFMT= IMMEDIATELY — before hardware_init, before the banner,
+	// before anything has been logged at all — so the whole boot renders in
+	// one format instead of switching partway down. Nothing can be said about
+	// a bad name yet (no serial, no framebuffer), so the verdict is parked in
+	// kLogFormatBad and reported a few lines below, once there is somewhere
+	// to report it to.
+	kLogFormatBad = (kLogFormatName[0] != '\0' && !log_set_format_by_name(kLogFormatName));
 	hardware_init();
 	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
+	// A SERIAL= value that is neither 'on' nor 'off' (values are
+	// case-sensitive, like every token this cmdline parses) must not be
+	// swallowed: this is the one flag whose silent failure costs the wire
+	// itself. Same pattern as kLogFormatBad above — the verdict is parked
+	// here and reported beside the serial banner below, once the glass
+	// exists to carry it. (Declared outside the ENABLE_COM1 guard because
+	// the banner that reads it prints unconditionally.)
+	bool serialOverrideBad = false;
 #ifdef ENABLE_COM1
-	init_serial(0x3f8);
+	// KEEP THE ANSWER. This return value was discarded for the whole life of
+	// the project, and the probe behind it never actually tested anything
+	// (fixed 2026-08-18) — so the kernel could not tell a machine with a
+	// serial port from one without, and cheerfully "drained" the log into a
+	// UART that wasn't there. SERIAL=on|off overrules the probe either way.
+	bool serialProbed = (init_serial(0x3f8) == 0);
+	if (strcmp(kSerialOverride, "on") == 0)
+		kSerialPresent = true;
+	else if (strcmp(kSerialOverride, "off") == 0)
+		kSerialPresent = false;
+	else
+	{
+		kSerialPresent = serialProbed;
+		serialOverrideBad = (kSerialOverride[0] != '\0');
+	}
 #endif
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
 
@@ -846,8 +884,43 @@ void kernel_main()
 	printf(	"***** OS64 - system booting at %s *****\n", startTime);
 	uint64_t high, low;
 	parse_debug_level(kDebugLevel, &high, &low);
+	// Say the verdict on the GLASS. On a machine with no UART this is the only
+	// place it can be said, and it is the sentence that explains why serial is
+	// quiet and where the log went instead.
+	// "(forced by SERIAL=)" only when the override actually took: a garbage
+	// value falls back to the probe, and claiming it was forced would be the
+	// banner lying about who decided.
+	printf("Serial port (COM1): %s%s\n",
+	       kSerialPresent ? "present" : "ABSENT — kernel log retained in memory, not drained",
+	       (kSerialOverride[0] && !serialOverrideBad) ? " (forced by SERIAL=)" : "");
+	if (serialOverrideBad)
+	{
+		printf("SERIAL=%s is neither 'on' nor 'off' (case matters) — trusting the probe\n",
+		       kSerialOverride);
+		printd(DEBUG_BOOT, "SERIAL=%s is neither 'on' nor 'off' (case matters) — trusting the probe\n",
+		       kSerialOverride);
+	}
 	printf("Commandline: %s (debug level 0x%016lx%016lx)\n",kKernelCommandline, high, low);
-    printd(DEBUG_BOOT, "Commandline: %s", kKernelCommandline);
+    // The '\n' is not decoration: without it the next entry appends to this
+    // line's tail, which is why every serial log for years read
+    // "...LOGD=/home/os64.log2 (0x0000) AP0: DEBUG_OPTIONS ...". Caught while
+    // the log format was under the microscope, 2026-08-18.
+    printd(DEBUG_BOOT, "Commandline: %s\n", kKernelCommandline);
+
+	// The COMPLAINT about a bad LOGFMT= waits until here, where serial and the
+	// framebuffer both exist to carry it — but the format itself was adopted
+	// far earlier (right after the commandline was parsed), so the log is one
+	// format from its first line rather than switching a few lines in. An
+	// unknown name keeps `classic` and says so on both the glass and the wire:
+	// a format is the instrument you read every other failure through, so a
+	// silent fallback would be the one lie that hides all the others.
+	if (kLogFormatBad)
+	{
+		printf("LOGFMT=%s is not a known format (classic, daily, full) — keeping classic\n",
+		       kLogFormatName);
+		printd(DEBUG_BOOT, "LOGFMT=%s is not a known format (classic, daily, full) — keeping classic\n",
+		       kLogFormatName);
+	}
     log_debug_level(kDebugLevel);
     printf("Parsing memory map ... %u entries\n",memmap_response->entry_count);
 	memmap_init(memmap_response->entries, memmap_response->entry_count);
@@ -864,6 +937,28 @@ void kernel_main()
 	kKernelStack = (uintptr_t)kmalloc_aligned(KERNEL_STACK_SIZE);
 	__asm__ volatile ("cli\nmov rsp, %0\nsti\n" : : "r" (kKernelStack + KERNEL_STACK_SIZE - 8));
 	printf("Kernel stack initialized, 0x%x bytes\n", KERNEL_STACK_SIZE);
+
+	// The log rings, as early as they can possibly exist (moved here from
+	// kernel_init 2026-08-18). They need exactly two things — kmalloc, which
+	// the line above just proved, and kLimineSMPInfo->cpu_count, which
+	// main.c set before kernel_main was ever called — and every printd
+	// BEFORE this point takes printd's `else` branch: formatted straight
+	// onto COM1 and stored nowhere, so it can never reach logd's file.
+	//
+	// That cost the whole boot story. Measured 2026-08-18 on an ext2 LOGD=
+	// boot: the file's earliest entry was tick 129, while the banner,
+	// commandline, symbols, ACPI, TSS, SMP bring-up and PCI enumeration
+	// existed ONLY on the serial log — invisible on a machine like the P5
+	// that has no serial port at all. Sitting down here bought nothing:
+	// ACPI and the GDT do not care whether logging is queued, and a boot
+	// that dies before the scheduler still has DIRECTLOG (kDirectLog) to
+	// bypass the queues entirely.
+	//
+	// Everything above this line is still serial-only, and that residue is
+	// now four lines — the banner, the commandline, and the debug level —
+	// because they print before the allocator exists.
+	logging_queueing_init();
+
 	// kmalloc works now — give the console its RAM shadow so scrolling stops
 	// READING VRAM (fine in QEMU's RAM framebuffer, ~2 lines/second on the
 	// P5's real write-combined VRAM; see scroll_framebuffer_full).

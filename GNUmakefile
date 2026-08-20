@@ -12,11 +12,18 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # $(call USER_VARIABLE,QEMUFLAGS,-m 8g -smp 2 -no-reboot -serial file:qemu_com1.log -monitor "$(shell echo telnet:127.0.0.1:55555,server,nowait)" -d "$(shell echo int,cpu_reset,pcall,guest_errors)")
 
 # Define the base QEMU flags
-# -smp 2 
-QEMU_BASE_FLAGS = -m 8g -no-reboot -smp 8 \
+# -smp 2
+# -machine q35 lives HERE, not per-target, since 2026-08-18: it is the single
+# most load-bearing flag in the set (os64's PCI config path is ECAM-only, and
+# QEMU's default i440FX board has no MCFG — a boot without q35 triple-faults
+# seconds in, silently if LOGD= is holding serial). It was spelled in every
+# target individually, so anyone rebuilding an invocation from these
+# variables — as the headless harness does — inherited everything EXCEPT the
+# flag that mattered. See VERIFICATION.md's headless section for the scar.
+QEMU_BASE_FLAGS = -machine q35 -m 8g -no-reboot -smp 8 \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
-				  -d $(shell echo int,cpu_reset,pcall,guest_errors)
+				 # -d $(shell echo int,cpu_reset,pcall,guest_errors)
 #				  -D qemu_debug.log 
 
 # Disk image configuration.
@@ -85,14 +92,23 @@ EXT2_STAGING ?= $(CURDIR)/disk/ext2_staging
 #
 # It costs the P5 nothing: only $(DISK_IMAGE) rides the ISO as a Limine
 # module, so this image adds zero bytes to the ISO and zero seconds to a
-# ramdisk boot. Which is why it's 64MB despite holding almost nothing — that
-# is the FAT32 floor documented above, and the space is free.
+# ramdisk boot.
+#
+# SIZE: 1GB since 2026-08-18, and the old 64MB needs explaining because its
+# reason evaporated twice over. 64MB was the FAT32 FLOOR — the smallest
+# filesystem mkfs would make — chosen when /home held a husk.rc and nothing
+# else. Then /home became where LOGD= writes, and a single os64.log had
+# already reached 16MB; then /home became ext2, which has no floor at all.
+# So the size is now chosen by what the partition is FOR: holding logs across
+# many boots without the operator thinking about it. The file is sparse
+# (truncate + mkfs writes metadata only), so an empty 1GB /home costs a few
+# tens of MB of real disk and nothing on the ISO.
 #
 # 'home' is the GPT PARTITION NAME, and the kernel mounts partitions at
 # /<partition name> (see vfs_mount_secondary_partitions). No /etc/fstab to
 # invent: the partition says what it is called, and the mount believes it.
 DATA_IMAGE ?= $(CURDIR)/disk/os64_data.img
-DATA_SIZE_MB ?= 64
+DATA_SIZE_MB ?= 1024
 DATA_PARTUUID ?= 7a3c1d90-4e62-4f3b-9a55-0c6f2b8e41d7
 # NVMe, and the reason is a bug this disk found on its very first boot:
 # **THE AHCI DRIVER CANNOT WRITE.** ahci.c installs ops->read and never
@@ -183,14 +199,12 @@ $(USERLAND_BINS): userland ;
 .PHONY: run
 run: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS)
 
 debug: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
@@ -212,7 +226,6 @@ QEMU_NET_FLAGS = -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
 .PHONY: run-net
 run-net: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_NET_FLAGS)
@@ -228,7 +241,6 @@ QEMU_E1000_FLAGS = -netdev user,id=n0 -device e1000,netdev=n0 \
 .PHONY: run-e1000
 run-e1000: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_E1000_FLAGS)
@@ -252,7 +264,6 @@ QEMU_TAP_FLAGS = -netdev tap,id=n0,ifname=tap0,script=no,downscript=no \
 .PHONY: run-tap
 run-tap: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_TAP_FLAGS)
@@ -260,7 +271,6 @@ run-tap: $(IMAGE_NAME).iso
 .PHONY: debug-net
 debug-net: $(IMAGE_NAME).iso
 	qemu-system-x86_64 \
-		-machine q35 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS) $(QEMU_NET_FLAGS)
@@ -268,7 +278,6 @@ debug-net: $(IMAGE_NAME).iso
 .PHONY: debug-hdd-eufi
 debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS) $(QEMUDEBUGFLAGS)
@@ -276,7 +285,6 @@ debug-hdd-eufi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DAT
 .PHONY: run-uefi
 run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
@@ -285,14 +293,12 @@ run-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).iso | $(DATA_IMAGE)
 .PHONY: run-hdd
 run-hdd: $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
 
 .PHONY: run-hdd-uefi
 run-hdd-uefi: ovmf/ovmf-code-x86_64.fd $(IMAGE_NAME).hdd $(DISK_IMAGE) | $(DATA_IMAGE)
 	qemu-system-x86_64 \
-		-machine q35 \
 		-drive if=pflash,unit=0,format=raw,file=ovmf/ovmf-code-x86_64.fd,readonly=on \
 		-hda $(IMAGE_NAME).hdd \
 		$(QEMUFLAGS)
@@ -360,7 +366,7 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURE
 	# writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
@@ -426,10 +432,31 @@ $(DATA_IMAGE):
 	@mkdir -p "$$(dirname $(DATA_IMAGE))"
 	truncate -s $(shell echo $$(($(DATA_SIZE_MB) + 2)))M $(DATA_IMAGE)
 	# --change-name IS the mount point: os64 mounts this partition at /home.
-	sgdisk $(DATA_IMAGE) --new=1:2048:+$(DATA_SIZE_MB)M --typecode=1:0700 --change-name=1:"home" --partition-guid=1:$(DATA_PARTUUID)
-	mformat -F -T $(shell echo $$(($(DATA_SIZE_MB) * 2048))) -i $(DATA_IMAGE)@@$(DISK_OFFSET) ::
-	mcopy -o -i $(DATA_IMAGE)@@$(DISK_OFFSET) etc/husk.rc ::/husk.rc
-	@echo "  data disk CREATED at $(DATA_IMAGE) ($(DATA_SIZE_MB)MB, /home) — this happens once; only 'make distclean' removes it"
+	# typecode 8300 (Linux filesystem) since /home became ext2 — the mount
+	# router recognizes filesystems by probing, not by GPT type, but a
+	# partition table that lies about its contents is a trap for host tools.
+	sgdisk $(DATA_IMAGE) --new=1:2048:+$(DATA_SIZE_MB)M --typecode=1:8300 --change-name=1:"home" --partition-guid=1:$(DATA_PARTUUID)
+	# EXT2, NOT FAT (converted 2026-08-18). The P5 has run both root and
+	# /home on ext2 for a while; QEMU was still handing /home a FAT32
+	# partition, which meant the test rig could reproduce an entire class of
+	# failure the real machine cannot have — and did, twice in one evening:
+	#
+	#   * FatFs's FF_FS_LOCK makes a write-open EXCLUSIVE, so logd holding
+	#     the log file starved `tail`, which reported "follow failed (-2)";
+	#   * and when tail won the race instead, logd could not reopen for five
+	#     seconds, gave up, and released the log sink.
+	#
+	# (see DEBTS: "tail -f killed logd via FF_FS_LOCK write-exclusion")
+	#
+	# ext2 has no such exclusion and is full write-through, so an appended
+	# file reads at true length immediately — which is what makes tailing a
+	# live log work at all. Same geometry as the root image (-b 1024,
+	# ^dir_index) so the driver meets one layout everywhere.
+	mkfs.ext2 -F -q -b 1024 -L OS64HOME -O ^dir_index -E offset=$(DISK_OFFSET) $(DATA_IMAGE) $(DATA_SIZE_MB)M
+	@mkdir -p $(EXT2_STAGING)
+	printf 'cd /\nwrite etc/husk.rc husk.rc\n' > $(EXT2_STAGING)/debugfs_home.cmds
+	debugfs -w -f $(EXT2_STAGING)/debugfs_home.cmds "$(DATA_IMAGE)?offset=$(DISK_OFFSET)" > /dev/null 2>&1
+	@echo "  data disk CREATED at $(DATA_IMAGE) ($(DATA_SIZE_MB)MB, /home, ext2) — this happens once; only 'make distclean' removes it"
 
 # Compatibility aliases. disk-populate/disk-init now just mean "make sure the
 # image is current"; `disk` FORCES a fresh one (the old always-rebuild behavior,
@@ -452,11 +479,17 @@ disk:
 # The dd copy means the image itself is never touched; on a FAILING check
 # the extracted copy is left at /tmp/os64_fsck_ext2.img for the autopsy.
 .PHONY: fsck-ext2
-fsck-ext2:
+# /home joined the constitution 2026-08-18, the day it became ext2: a green
+# e2fsck on root alone stopped being the whole verdict the moment a second
+# ext2 filesystem started taking the write driver's traffic (and logd makes
+# /home the BUSIER of the two). The data image is checked in place via
+# e2fsprogs' ?offset= syntax — no gigabyte copy, and -fn never writes.
+fsck-ext2: | $(DATA_IMAGE)
 	@dd if=$(DISK_IMAGE) of=/tmp/os64_fsck_ext2.img bs=512 \
 	    skip=$(EXT2_START_SECTOR) count=$$(($(EXT2_SIZE_MB) * 2048)) status=none
 	e2fsck -fn /tmp/os64_fsck_ext2.img
 	@rm -f /tmp/os64_fsck_ext2.img
+	e2fsck -fn "$(DATA_IMAGE)?offset=$(DISK_OFFSET)"
 
 # Refresh compile_commands.json — the per-file compiler flags VSCode's
 # IntelliSense runs on (see .vscode/c_cpp_properties.json). bear records the

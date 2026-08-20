@@ -55,26 +55,68 @@ image is a real file target now, so an unchanged tree rebuilds nothing (~0.1s)
 and `make run` just launches QEMU.
 
 Default QEMU config: 8GB RAM, `-smp 8`, serial → `qemu_com1.log`, monitor
-on telnet 127.0.0.1:55555, NVMe disk from `disk/os64.img`.
+on telnet 127.0.0.1:55555, NVMe disk from `disk/os64.img`, plus the data disk
+`disk/os64_data.img` (ext2, mounted at `/home`, where `LOGD=` writes).
+
+**WHEN THE LOG ITSELF IS THE SUSPECT, read `/sys/log` before theorizing.** It
+reports the sink (userland daemon / kernel-to-serial / retained-in-memory),
+whether a serial port exists at all, the active format, and per-core
+`used`/`lost`. On 2026-08-18 an hour went into "something must be stuck in the
+per-core buffers" when every ring was empty and `printd` was discarding at the
+filter — `cat /sys/log` answers that in one line. Second instrument, for a
+guest that has already stopped talking: the QEMU monitor. `info registers -a`
+showed all eight cores halted in `task_idle_loop` (which killed the
+stuck-buffer theory outright), and `x/2xg <symbol>` against addresses from
+`nm kernel/bin/os64_kernel` read `kDebugLevel` straight out of the running
+machine. Symbols are trustworthy as long as the binary has not been rebuilt
+since the guest booted — check `stat` on `kernel/bin/os64_kernel` against the
+QEMU process start time before believing an address.
 
 ## Headless QEMU (the agent's mode)
 
 A windowed QEMU steals the human's keyboard focus mid-typing. Agent runs
 are headless, with serial going somewhere session-private:
 
+The blessed invocation — copy it whole, then adjust paths:
+
 ```bash
+# Copy the disk images first: the human's own QEMU holds exclusive write
+# locks on disk/*.img (even -snapshot can't share them), and an agent boot
+# should never write the human's /home image anyway.
+cp --sparse=always disk/os64.img disk/os64_data.img "$SCRATCH/"
+
 qemu-system-x86_64 -machine q35 -cdrom os64_kernel.iso -boot d \
-  <QEMU_BASE_FLAGS + disk flags, lifted VERBATIM from the run target> \
+  -m 8g -no-reboot -smp 8 \
   -display none -serial file:$SCRATCH/run_com1.log \
-  -monitor telnet:127.0.0.1:55555,server,nowait   # keep monitor if driving input/screenshots; -monitor none otherwise
+  -monitor telnet:127.0.0.1:55556,server,nowait \
+  -drive file=$SCRATCH/os64.img,format=raw,if=none,id=nvme1 \
+  -device nvme,drive=nvme1,serial=nvme1-serial \
+  -drive file=$SCRATCH/os64_data.img,format=raw,if=none,id=data1 \
+  -device nvme,drive=data1,serial=data1-serial
 ```
 
+Monitor port **55556** — 55555 is the human's, per the ratified split. Keep
+the monitor if driving input/screenshots; `-monitor none` otherwise.
+
 **Lift the flags from the `run` target verbatim — never reconstruct them
-from memory.** `-machine q35` in particular is load-bearing: os64 targets
-q35 exclusively, and QEMU's default i440FX board #GP-panic-loops within a
-few ticks of boot (right after the DEBUG_OPTIONS banner, before ACPI —
-see the harness fingerprints). A hand-typed flag set that "looks right"
-cost a real debugging detour on 2026-07-11.
+from memory.** `-machine q35` in particular is load-bearing: os64's PCI
+config path is ECAM-only (`kPCIBaseAddress` from MCFG), and QEMU's default
+i440FX board has no MCFG — the base stays zero and the first runtime PCI
+read page-faults at VA 0x1000 (bus 0/dev 0/func 1 against a zero base).
+A hand-typed flag set that "looks right" cost a real debugging detour on
+2026-07-11 — **and again on 2026-08-18**, when the flags were rebuilt from
+`QEMU_BASE_FLAGS`, which at the time did not carry `-machine q35` (it does
+now; every target inherits it). The 8/18 autopsy, for the next fingerprint
+match: on i440FX the guest triple-faults **3–65 seconds in, silently** —
+the #PF lands while the faulting core's GS base is 0, `exception_dispatch`'s
+GS:0 CLS load reads still-mapped page 0 (IVT garbage, `f000ff53f000ff53`),
+and the #GP spiral exhausts two stacks into a triple fault. With `LOGD=` on
+the cmdline the kernel is holding serial for a daemon that never attaches,
+so the serial log shows only the four pre-ring lines and *nothing else* —
+a wedge and a working quiet boot look identical from the wire. **A headless
+default-entry boot that dies with a four-line serial log and no panic text:
+check the machine type FIRST, then `-d cpu_reset` for the triple fault,
+then `-d int` for the cascade.**
 
 Offer `-vnc :0` instead of `-display none` if the human wants to peek.
 

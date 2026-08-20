@@ -177,17 +177,39 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
         return;
     }
 
-    if (ascii == '~') {
+    // CTRL+~ suppresses/restores the debug level. The chord is load-bearing:
+    // this was a BARE '~' until 2026-08-18, which meant a character people
+    // legitimately type — in a shell line, a filename, quill — silently
+    // reconfigured kernel logging, and then went on to be delivered to the
+    // program as well, so nothing on screen looked different. Chris hit it by
+    // accident while tailing the log with DEBUG_SCHEDULER|DEBUG_DETAILED on:
+    // the log went quiet, logd sat at 1%, the rings read empty, and it took a
+    // monitor dump of kDebugLevel (0x3 = exactly DEBUG_BOOT|DEBUG_EXCEPTIONS)
+    // to find that the machine was fine and simply doing as it was told.
+    //
+    // And it ANNOUNCES ITSELF ON THE GLASS, not only through printd. The
+    // original notice went to the log — the very thing it had just switched
+    // off. It was in fact the last line in Chris's file, and it still didn't
+    // help: the final line of a log that stops updating is indistinguishable
+    // from a log that stopped updating. A control whose whole job is silence
+    // has to speak through a channel it does not control.
+    if (ascii == '~' && (modifiers & KEYBOARD_MOD_CTRL)) {
         if (!s_debug_suppressed) {
-            printd(DEBUG_BOOT, "keyboard: debug level suppressed via `~`\n");
             s_saved_debug_level = kDebugLevel;
             kDebugLevel = DEBUG_BOOT | DEBUG_EXCEPTIONS;
             s_debug_suppressed = true;
+            printf("keyboard: debug logging SUPPRESSED (Ctrl+~ again to restore)\n");
+            printd(DEBUG_BOOT, "keyboard: debug level suppressed via Ctrl+~\n");
         } else {
             kDebugLevel = s_saved_debug_level;
             s_debug_suppressed = false;
-            printd(DEBUG_BOOT, "keyboard: debug level restored via `~`\n");
+            printf("keyboard: debug logging restored (Ctrl+~)\n");
+            printd(DEBUG_BOOT, "keyboard: debug level restored via Ctrl+~\n");
         }
+        // Swallow it. A chord that ALSO types its character into whatever has
+        // focus is how you end up with stray '~' in a command line every time
+        // you toggle — and the old bare-key version did exactly that.
+        return;
     }
 
     keyboard_event_t event = {

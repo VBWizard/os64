@@ -184,6 +184,7 @@
 // VINDICATED at the merge of 2026-08-05: 27 and 28 landed side by side with
 // nothing to resolve, which is what choosing the free bit BOUGHT.
 #define DEBUG_NET (__uint128_t)1 << 28
+#define DEBUG_SYSTEM (__uint128_t)1 << 29
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127

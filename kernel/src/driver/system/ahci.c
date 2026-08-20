@@ -33,6 +33,10 @@ HBA_MEM* ahciABAR;
 uintptr_t* ahciDiskBuffer;
 HBA_MEM *kABARs;
 char* kAHCIBuffer = NULL;
+// Its physical twin — what the PRDT entries are built from. Separate numbers
+// since kmalloc_dma's HHDM conversion (2026-08-19): the VA above is for the
+// driver's memset/memcpy, the phys below is the only address the HBA sees.
+uintptr_t kAHCIBufferPhys = 0;
 uint64_t kAHCIPortRemapBase = AHCI_PORT_BASE_REMAP_ADDRESS; //probably only need 0xA000
 
 
@@ -680,7 +684,7 @@ int ahci_lba_read(block_device_info_t* device, uint64_t sector, void* buffer, ui
 	size_t remaining_sectors = sector_count;
 
 	if (kAHCIBuffer == NULL)
-		kAHCIBuffer = kmalloc_dma(AHCI_READ_BUFFER_SIZE);
+		kAHCIBuffer = kmalloc_dma(AHCI_READ_BUFFER_SIZE, &kAHCIBufferPhys);
 
 	if (sector_count == 0)
 		panic("ahci_lba-read: Attempt to read a sector_count of 0\n");
@@ -718,9 +722,10 @@ int ahci_lba_read(block_device_info_t* device, uint64_t sector, void* buffer, ui
 			: remaining_sectors;
 		size_t chunk_size = chunk_sectors * 512;
 
-		// Set base address to kAHCIBuffer + offset
+		// Set base address to the buffer's PHYSICAL address + offset — the
+		// HBA dereferences this, so the HHDM VA would aim it at nonsense.
 		cmdtbl->prdt_entry[i].dba_64 =
-			(uint64_t)( (uint8_t*)kAHCIBuffer + offset_bytes );
+			(uint64_t)( kAHCIBufferPhys + offset_bytes );
 		// dbc is byte count minus one
 		cmdtbl->prdt_entry[i].dbc = (uint32_t)(chunk_size - 1);
 

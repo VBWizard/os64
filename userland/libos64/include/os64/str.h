@@ -67,6 +67,39 @@ int64_t os64_atoi(const char *s);
 // negate a tick count.
 uint64_t os64_atou(const char *s);
 
+// The HEX sibling, and the one /proc's ADDRESSES want: every %p the kernel
+// prints is zero-padded hex with no 0x prefix (sprintf.c), so os64_atou would
+// read "0000000070000000" as seventy million decimal and be quietly, ruinously
+// wrong — it does not fail, it succeeds at another number. Accepts an optional
+// 0x/0X, consumes [0-9a-fA-F], stops at the first character that is not one.
+//
+// It takes the ENDPTR that os64_atoi's comment above promised to a future
+// caller ("a full-diagnosis parser can join it, consumer-driven"): if `end` is
+// non-NULL it is set to where parsing stopped. That is strtol's one genuinely
+// good idea, and it is what makes TWO numbers in one string a non-problem —
+// you never split, you parse in place and step over the delimiter:
+//
+//     const char *p;
+//     uint64_t lo = os64_xtou(text, &p);      // p lands on the '-'
+//     uint64_t hi = os64_xtou(p + 1, NULL);
+//
+// No digits consumed is reported by *end coming back EQUAL to `s` — the
+// distinction atoi has never been able to make. Like its decimal siblings it
+// wraps rather than complaining if you feed it more than 16 digits; a value
+// that long is a corrupt file, not an arithmetic question.
+uint64_t os64_xtou(const char *s, const char **end);
+
+// Parse the "<hex>-<hex>" range that /proc prints for any span of address
+// space — `heap` in status (heapStart-heapEnd) and every line of `maps`
+// (procfs.c). Returns true only if both halves carried at least one digit and
+// a '-' separated them; on false, *lo and *hi are untouched, because a parser
+// that half-fills its outputs on failure is how a caller ends up subtracting
+// a stale number from a fresh one and believing the result.
+//
+// Either output may be NULL if you only want the other. The SIZE of a range
+// is hi - lo — the first number is the low end, in both files.
+bool os64_parse_range(const char *s, uint64_t *lo, uint64_t *hi);
+
 // Copy `n` bytes. No overlap handling (that is memmove's job, and nothing has
 // asked for one yet).
 void *os64_memcpy(void *dst, const void *src, size_t n);

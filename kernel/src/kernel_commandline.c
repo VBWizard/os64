@@ -101,6 +101,31 @@ bool kEnableStackTrace = true;
 // kworker this way, so logd is not a new kind of citizen. When real config
 // arrives this becomes one line in a file and the flag can retire.
 char kLogdPath[128] = {0};
+// LOGFMT=<name>: how SERIAL renders a log line — "classic" (the layout os64
+// has always printed, and still the default), "daily", or "full". The
+// vocabulary is shared with /etc/logd.conf, which sets the same thing for the
+// FILE; the two sinks are configured independently on purpose, because serial
+// is where you debug (every raw field earns its place) and the file is what
+// you read afterwards (a wall clock does).
+//
+// NAMES ONLY here, and that is a property of the channel rather than a
+// limitation of the formatter: the commandline is split on spaces, so a
+// literal layout like "%t (%k,%c): %m" could never survive the trip. Literal
+// format strings belong in the config file, which has lines instead of
+// tokens. Serial is configured HERE because when serial matters — a boot that
+// dies before a filesystem — the config file is not reachable yet, and the
+// cmdline is the only channel that exists that early. (Compare LOGD= above,
+// whose comment predicted exactly this: "when real config arrives this
+// becomes one line in a file and the flag can retire." Half of that came
+// true; this half cannot, and now we know why.)
+char kLogFormatName[16] = {0};
+// SERIAL=on|off — override the UART probe. The probe (init_serial's loopback
+// test) decides by default, and everything about serial logging now hangs off
+// its verdict, so there has to be a way to overrule it: a probe that wrongly
+// says "absent" would cost you serial logging on the one machine where you
+// were watching it, and a probe that wrongly says "present" resurrects the
+// shredder. Absent = trust the probe.
+char kSerialOverride[8] = {0};
 // Panic ON PURPOSE right after the post-boot tests: the standing diagnostic
 // for the panic pipeline itself. A panic's dying-breath serial path (direct
 // write + logd emergency flush, see panic.c) is exactly the kind of code that
@@ -269,6 +294,8 @@ static cmdopt_t cmdopts[] = {
     {"DIRECTLOG", OPT_BOOL, &kDirectLog, true, 0},
     {"NOTRACE", OPT_BOOL, &kEnableStackTrace, false, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},
+    {"LOGFMT", OPT_STRING, kLogFormatName, 0, sizeof(kLogFormatName)},
+    {"SERIAL", OPT_STRING, kSerialOverride, 0, sizeof(kSerialOverride)},
     {"SCHED", OPT_STRING, kSchedParam, 0, sizeof(kSchedParam)},
     // WATCH=<hexaddr>[:len[:kind[:action]]] — arm a hardware watchpoint at
     // boot. One string rather than four flags because a watchpoint is one

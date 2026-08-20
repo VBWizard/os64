@@ -190,20 +190,27 @@ make -C kernel test-elf
   beyond the driver. THE PERSISTENCE DOCTRINE (same ruling): root is the
   SYSTEM's — the build rewrites the image, the P5 refresh script mirrors it,
   nothing written there survives a rebuild; /home is the USER's — its own
-  partition/disk, never rebuilt, never --delete'd. The FAT partition is the
-  LIFEBOAT: own /bin, own husk.rc, own boot entry, for the day a stray write
-  eats root. Write durability is FULL WRITE-THROUGH (sync is a no-op; unlike
-  FAT, an appended file reads at true length immediately). Removing OR
-  renaming an open REGULAR file is allowed since 2026-08-16 — the name goes
-  at once, the storage at LAST CLOSE, via ext2's on-disk orphan chain
-  (`s_last_orphan`; a mount replays whatever a crash left, and says so).
-  That is what lets a running program's binary be replaced underneath it.
-  Open DIRECTORIES still refuse. (The blanket refusal ruled 2026-08-04 was
-  explicitly consumer-driven; the consumer was `os64 refresh` replacing
-  /bin/husk while husk runs.) NOTE for anyone adding code that closes a
-  file: a close can now do real disk I/O, so it must run in KERNEL context
-  (see `fops->mounted` in vfs.h and the burial close in task.c).
-  Verified by the in-OS test suite AND host `make fsck-ext2`
+  partition/disk, never rebuilt, never --delete'd. **/home is ext2 too since
+  2026-08-18, and 1GB** (it was a 64MB FAT32 partition in QEMU long after the
+  P5 had moved, so the test rig could reproduce failures the real machine
+  could not: FatFs's exclusive write-open starved `tail` against logd, and
+  starved logd against `tail` until logd released the log sink. The 64MB was
+  the FAT32 floor, an obsolete reason once the floor was gone and /home became
+  where LOGD= writes — 20 minutes of DEBUG_SCHEDULER|DETAILED is 136MB. The
+  image is SPARSE: an empty 1GB /home costs under a megabyte of host disk).
+  The FAT partition is the LIFEBOAT: own /bin, own husk.rc, own boot entry,
+  for the day a stray write eats root. Write durability is FULL WRITE-THROUGH
+  (sync is a no-op; unlike FAT, an appended file reads at true length
+  immediately). Removing OR renaming an open REGULAR file is allowed since
+  2026-08-16 — the name goes at once, the storage at LAST CLOSE, via ext2's
+  on-disk orphan chain (`s_last_orphan`; a mount replays whatever a crash
+  left, and says so). That is what lets a running program's binary be
+  replaced underneath it. Open DIRECTORIES still refuse. (The blanket refusal
+  ruled 2026-08-04 was explicitly consumer-driven; the consumer was `os64
+  refresh` replacing /bin/husk while husk runs.) NOTE for anyone adding code
+  that closes a file: a close can now do real disk I/O, so it must run in
+  KERNEL context (see `fops->mounted` in vfs.h and the burial close in
+  task.c). Verified by the in-OS test suite AND host `make fsck-ext2`
   (e2fsck must stay green — with a writable root it is the constitution).
 - Root filesystem mounted via `ROOTPARTUUID`/`ROOT` kernel cmdline parameter;
   FAT32 or ext2 both work as root (see the "/QEMU Boot (ext2 root)" Limine entry)
@@ -300,6 +307,16 @@ make -C kernel test-elf
   - `RAMDISK`: Register the `os64_disk.img` Limine module as a RAM-backed
     block device (see `/RAMDisk Boot` in limine.conf)
   - `nolog` / `alllog`: Control logging (both lowercase — legacy)
+  - `LOGD=<path>`: launch `/bin/logd` to append the kernel log to a file, and
+    hold the kernel drainer off serial until it attaches
+  - `LOGFMT=<name>`: how SERIAL renders a line — `classic` (the default and
+    the layout os64 has always printed), `daily`, or `full`. NAMES ONLY: the
+    cmdline is space-tokenized, so a literal layout can't survive the trip —
+    those go in `/etc/logd.conf`, which configures the FILE independently
+  - `SERIAL=on|off`: overrule `init_serial`'s loopback probe. Absent = trust
+    the probe. Everything about serial logging hangs off its verdict, so a
+    misjudging probe must not be able to cost you the wire (or resurrect the
+    drain-into-a-missing-UART bug on a machine that has one)
   - `noseriallog`: **not implemented** — the token appears in limine.conf and
     used to be documented here as real, but nothing in the kernel handles it.
     Booked in DEBTS.md.
@@ -319,6 +336,62 @@ make -C kernel test-elf
 **Debug Macros:**
 - Use `printd(DEBUG_SUBSYSTEM, ...)` for conditional logging
 - Example: `printd(DEBUG_SCHEDULER, "Switching to task %lu\n", task->taskID);`
+
+**Where a log line goes (the whole pipeline, 2026-08-18):**
+
+1. `printd` filters on `kDebugLevel`, then stores a `log_entry_t` into the
+   CURRENT CORE's ring (`core_log_buffers[]`, 16MB each, kmalloc'd by
+   `logging_queueing_init()` — which runs in `kernel_main` right after the
+   kernel stack, as early as kmalloc allows).
+2. Anything printed BEFORE that (the banner, commandline, debug level — about
+   four lines, all pre-allocator) goes to a 64-entry BSS ring
+   (`log_store_early`) and is poured into core 0's ring at logging init. **The
+   log therefore starts at tick 0.** That early ring FILLS ONCE AND STOPS; the
+   main rings OVERWRITE OLDEST. Opposite policies on purpose: the early buffer
+   holds the beginning of the story, the rings hold the recent past.
+3. A ring-3 daemon (`/bin/logd`, launched by `LOGD=<path>`) claims the log by
+   calling `klog_read`; the kernel then stays OFF the wire and the entries
+   become the daemon's file. Reading IS the claim, and it is a heartbeat — a
+   daemon that dies or hangs loses it within `LOG_SINK_TIMEOUT_TICKS`.
+4. With no daemon, the kernel drainer writes serial itself — **unless there is
+   no serial port** (`kSerialPresent`, set by `init_serial`'s loopback probe,
+   overridable with `SERIAL=on|off`). On a machine with no UART (the P5),
+   draining would DESTROY entries, so the rings retain instead and a restarted
+   logd recovers them.
+5. A full ring with nothing draining **overwrites its oldest entry and counts
+   it** (`buffer->lost`). It never panics. "Never drop a byte" is aspirational
+   (Chris's ruling): growth is impossible at that moment, so the choice is
+   which lines to lose, and a panic loses all of them plus the machine.
+6. Panics bypass all of it: direct polled serial write + `logd_emergency_flush()`.
+
+**Line format — ONE renderer, TWO configs.** `abi/include/os64/klog_format.h`
+holds the only copy of the layout logic (it used to be spelled in four places
+across the ring 0/3 boundary). Escapes: `%d` date, `%t` time, `%k` ticks, `%c`
+core, `%T` thread, `%g` category name, `%l` level, `%m` message, `%%`.
+- SERIAL's format comes from `LOGFMT=<name>` on the cmdline — the only config
+  channel that exists before a filesystem does.
+- The FILE's format comes from **`/etc/logd.conf`**, os64's first config file:
+  `key = value`, `#` comments. Search order is a persistence gradient, first
+  hit wins — `/home/logd.conf`, `/etc/logd.conf`, inherited `LOGFMT=`,
+  `classic` — the same ladder husk climbs for husk.rc. A name (`classic`,
+  `daily`, `full`) or a literal layout both work; an unknown name, unknown
+  escape, or a format with no `%m` is refused loudly and `classic` is kept.
+- `%g`'s names live in the ABI header because logd cannot include `CONFIG.h`;
+  `log.c` STATIC-ASSERTS every `DEBUG_*` bit against that table, so renumbering
+  a flag stops the build instead of mislabeling the log.
+
+**`/sys/log`** reports it all live: sink state, serial presence, active format,
+and per-core `used`/`lost`. Read it FIRST when the log misbehaves — it answers
+"is something stuck in the buffers?" in one `cat`.
+
+**Failure fingerprints (logging):**
+
+| Symptom | Cause |
+|---|---|
+| Log goes quiet, `/sys/log` shows every ring EMPTY, logd idle, serial silent | `kDebugLevel` was suppressed — `Ctrl+~` toggles it to `DEBUG_BOOT\|DEBUG_EXCEPTIONS` and back (it was a BARE `~` until 2026-08-18 and got hit by accident). The notice prints to the glass now, and `s_debug_suppressed`/`s_saved_debug_level` hold the state |
+| A `/etc/logd.conf` setting does nothing | Missing the `key = ` (writing only the value is the natural mistake), or the file is past the reader's 8KB cap. logd complains on the console AND at the top of the log file |
+| Replayed boot lines all share one timestamp | Fixed 2026-08-18: logd derives each line's clock from its ticks, not from drain time. If it returns, `logd_clock_for` is where |
+| `tail`: "follow failed (-2)", or logd releasing the sink mid-session | FatFs makes a write-open EXCLUSIVE. Only happens on FAT — `/home` is ext2 now on both the P5 and QEMU |
 
 ### Testing
 
@@ -600,6 +673,13 @@ page tables exactly while the allocator considers it allocated.**
   note it IS kernel-visible via HHDM while allocated, so the temporary-mapping
   technique above is no longer strictly required for reading/writing task
   pages from the kernel (it remains valid, just redundant)
+- `kmalloc_dma(length, &phys)`: For memory a DEVICE will read or write
+  (descriptor rings, bounce buffers, PRP lists). Returns the HHDM pointer the
+  KERNEL uses; writes the physical address — the only address the device ever
+  sees — to `*phys`. Page-aligned, zeroed, ordinary write-back cacheable (x86
+  DMA is coherent), freed with plain `kfree(va)`. It IDENTITY-MAPPED until
+  2026-08-19 — never resurrect that: the phys-as-pointer convenience leaked
+  unmapped-on-free writable mappings and collided high phys with kernel VAs
 
 **Converting addresses**:
 - Physical to HHDM: `phys | kHHDMOffset` (valid iff the memory is currently allocated)
