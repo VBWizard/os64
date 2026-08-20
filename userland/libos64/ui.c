@@ -44,9 +44,24 @@ static void theme_defaults(os64_ui_theme_t *t)
 	t->button_border       = OS64_GUI_COLOR_DARK_GRAY;
 	t->button_fg           = OS64_GUI_COLOR_WHITE;
 
+	// The text family: gkeys' warm paper, ink on it, and the house blue
+	// inverted for selection — the look every editor since Bravo settled on.
+	t->text_bg             = 0xfff4f2eau;   // warm paper white
+	t->text_fg             = OS64_GUI_COLOR_BLACK;
+	t->text_sel_bg         = 0xff2a62b8u;   // the house blue
+	t->text_sel_fg         = OS64_GUI_COLOR_WHITE;
+	t->text_caret          = OS64_GUI_COLOR_BLACK;
+	t->field_bg            = OS64_GUI_COLOR_WHITE;
+	t->field_fg            = OS64_GUI_COLOR_BLACK;
+	t->field_border        = OS64_GUI_COLOR_DARK_GRAY;
+	t->field_border_focus  = 0xff2a62b8u;   // "your keys land here"
+	t->scroll_track        = 0xffd8d6ceu;
+	t->scroll_thumb        = 0xff8a8880u;
+
 	t->pad      = 8;
 	t->gap      = 8;
 	t->button_h = 24;
+	t->scroll_w = 14;
 
 	t->font_w = 8;    // the embedded PSF1 face (font_psf1.h)
 	t->font_h = 16;
@@ -74,9 +89,21 @@ static const theme_key_t kThemeKeys[] = {
 	THEME_ROW("button.face.pressed", THEME_COLOR,  button_face_pressed),
 	THEME_ROW("button.border",       THEME_COLOR,  button_border),
 	THEME_ROW("button.fg",           THEME_COLOR,  button_fg),
+	THEME_ROW("text.bg",             THEME_COLOR,  text_bg),
+	THEME_ROW("text.fg",             THEME_COLOR,  text_fg),
+	THEME_ROW("text.sel.bg",         THEME_COLOR,  text_sel_bg),
+	THEME_ROW("text.sel.fg",         THEME_COLOR,  text_sel_fg),
+	THEME_ROW("text.caret",          THEME_COLOR,  text_caret),
+	THEME_ROW("field.bg",            THEME_COLOR,  field_bg),
+	THEME_ROW("field.fg",            THEME_COLOR,  field_fg),
+	THEME_ROW("field.border",        THEME_COLOR,  field_border),
+	THEME_ROW("field.border.focus",  THEME_COLOR,  field_border_focus),
+	THEME_ROW("scroll.track",        THEME_COLOR,  scroll_track),
+	THEME_ROW("scroll.thumb",        THEME_COLOR,  scroll_thumb),
 	THEME_ROW("pad",                 THEME_METRIC, pad),
 	THEME_ROW("gap",                 THEME_METRIC, gap),
 	THEME_ROW("button.h",            THEME_METRIC, button_h),
+	THEME_ROW("scroll.w",            THEME_METRIC, scroll_w),
 	THEME_ROW("font.w",              THEME_METRIC, font_w),
 	THEME_ROW("font.h",              THEME_METRIC, font_h),
 };
@@ -259,6 +286,23 @@ void os64_ui_set_root(os64_ui_t *ui, os64_ui_widget_t *root)
 {
 	ui->root = root;
 	os64_ui_mark_dirty(ui, root);
+}
+
+void os64_ui_set_focus(os64_ui_t *ui, os64_ui_widget_t *w)
+{
+	if (ui->focus == w)
+		return;
+	// Both ends repaint: the old widget's caret has to DISAPPEAR, which no
+	// amount of painting the new one can accomplish.
+	if (ui->focus) {
+		ui->focus->focused = false;
+		os64_ui_mark_dirty(ui, ui->focus);
+	}
+	ui->focus = w;
+	if (w) {
+		w->focused = true;
+		os64_ui_mark_dirty(ui, w);
+	}
 }
 
 // ── hit testing ─────────────────────────────────────────────────────────────

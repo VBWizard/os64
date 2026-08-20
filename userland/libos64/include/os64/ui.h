@@ -64,10 +64,24 @@ typedef struct os64_ui_theme
     uint32_t button_border;
     uint32_t button_fg;
 
+    // The text family (textview + textfield, born with scribe 2026-08-20).
+    uint32_t text_bg;            // the paper
+    uint32_t text_fg;            // the ink
+    uint32_t text_sel_bg;        // selection highlight
+    uint32_t text_sel_fg;
+    uint32_t text_caret;         // the insertion caret
+    uint32_t field_bg;
+    uint32_t field_fg;
+    uint32_t field_border;
+    uint32_t field_border_focus; // the border that says "your keys land here"
+    uint32_t scroll_track;
+    uint32_t scroll_thumb;
+
     // Metrics (pixels).
     int32_t  pad;        // inner padding: panel edges, button text inset
     int32_t  gap;        // spacing between stacked children
     int32_t  button_h;   // stock button height
+    int32_t  scroll_w;   // scrollbar width
 
     // Font cell (the one embedded PSF1 face — a slot, so the day a second
     // face exists it arrives through the table like everything else).
@@ -106,6 +120,9 @@ struct os64_ui_widget
     os64_gui_rect_t bounds;      // content-local, assigned by app or layout
     bool hidden;                 // skipped by paint AND hit-test
     bool pressed;                // button state (owned by button's event fn)
+    bool focused;                // mirror of (ui->focus == this) — maintained
+                                 // by os64_ui_set_focus so PAINT can know,
+                                 // since paint deliberately never sees the ui
 
     const char *text;            // label/button caption (app-owned storage)
 
@@ -186,5 +203,138 @@ void os64_ui_button(os64_ui_widget_t *w, const char *text,
 extern const os64_ui_class_t os64_ui_panel_class;
 extern const os64_ui_class_t os64_ui_label_class;
 extern const os64_ui_class_t os64_ui_button_class;
+
+// Move key focus. Maintains each widget's `focused` mirror and dirties both
+// ends so carets appear and disappear honestly. NULL blurs. Widgets that
+// WANT focus call this from their own BUTTON_DOWN handling; nothing focuses
+// by accident.
+void os64_ui_set_focus(os64_ui_t *ui, os64_ui_widget_t *w);
+
+// ── Stateful widgets (scribe's demands, 2026-08-20) ─────────────────────────
+// THE CONTAINER PATTERN: a widget kind that needs state beyond the base
+// struct EMBEDS os64_ui_widget_t as its FIRST member and hands libui the
+// address of that member — paint/event cast back to the container. The app
+// still owns the whole struct (retained-lite's rule survives); libui still
+// only ever threads the base. This is the shape every future stateful
+// widget follows.
+
+// ── ui_scrollbar — vertical, proportional ───────────────────────────────────
+// Units are the APP's (scribe uses lines): `total` things exist, `visible`
+// fit the companion view, `pos` is the first visible one. The thumb is the
+// proportion made pixel; dragging it, or clicking the track above/below
+// (page jumps), moves pos and fires on_scroll. total <= visible = full
+// thumb, nothing to do — a scrollbar that vanishes would reflow its
+// neighbour, and v1 does not reflow.
+typedef struct os64_ui_scrollbar os64_ui_scrollbar_t;
+struct os64_ui_scrollbar
+{
+    os64_ui_widget_t w;          // MUST be first (container pattern)
+    int64_t total, visible, pos;
+    void (*on_scroll)(os64_ui_scrollbar_t *sb, void *user);
+    void *scroll_user;
+    int32_t drag_grab;           // px into the thumb where the press landed; -1 idle
+};
+
+void os64_ui_scrollbar(os64_ui_scrollbar_t *sb,
+                       void (*on_scroll)(os64_ui_scrollbar_t *, void *),
+                       void *user);
+// Update the three numbers and repaint. Clamps pos into [0, total-visible].
+void os64_ui_scrollbar_set(os64_ui_t *ui, os64_ui_scrollbar_t *sb,
+                           int64_t total, int64_t visible, int64_t pos);
+
+// ── ui_textfield — one line of editable text ────────────────────────────────
+// Born for Save As; really the FORM control every dialog after it needs.
+// Storage is the APP's (buf/cap, NUL-kept). Click focuses and places the
+// caret; printable keys insert; Backspace/Delete, Left/Right/Home/End move
+// and erase; Enter fires on_submit, Esc fires on_cancel. Long content
+// scrolls horizontally to keep the caret in view.
+typedef struct os64_ui_textfield os64_ui_textfield_t;
+struct os64_ui_textfield
+{
+    os64_ui_widget_t w;          // MUST be first
+    char  *buf;                  // app-owned, NUL-terminated
+    size_t cap;                  // bytes including the NUL
+    size_t len, cursor;
+    size_t first;                // first visible byte (horizontal scroll)
+    void (*on_submit)(os64_ui_textfield_t *tf, void *user);
+    void (*on_cancel)(os64_ui_textfield_t *tf, void *user);
+    void *edit_user;
+    uint8_t seq;                 // VT100 burst parser state (see ui_text.c)
+};
+
+void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
+                       void (*on_submit)(os64_ui_textfield_t *, void *),
+                       void (*on_cancel)(os64_ui_textfield_t *, void *),
+                       void *user);
+// Replace the content (truncated to cap-1) and put the caret at its end.
+void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
+                           const char *text);
+
+// ── ui_textview — a viewport over a text buffer ─────────────────────────────
+// THE PLAIN-TEXT RENDERER (SCRIBE.md's format seam): one model+view pair
+// among possible several. The view owns the viewport, cursor, and
+// selection; the MODEL is the app's, handed in behind this vtable — which
+// is what lets a future log viewer bring a read-only buffer and get
+// scrolling, selection, and search-jump for free.
+typedef struct os64_ui_textbuf
+{
+    void *user;
+    size_t (*line_count)(void *user);                 // always >= 1
+    const char *(*line)(void *user, size_t idx, size_t *len);
+
+    // Editing — ALL NULL for a read-only buffer (the view then refuses
+    // edits and is a viewer). Column values are BYTE indexes into the line.
+    bool (*insert)(void *user, size_t line, size_t col, const char *s, size_t n);
+    bool (*erase)(void *user, size_t line, size_t col, size_t n);   // within one line
+    bool (*split)(void *user, size_t line, size_t col);             // Enter
+    bool (*join)(void *user, size_t line);            // line absorbs line+1
+    // Remove whole lines [first, first+count). Exists so deleting a large
+    // selection is one memmove of the line table, not count joins — the
+    // difference between O(n) and O(n^2) on a select-all in a big log.
+    bool (*erase_lines)(void *user, size_t first, size_t count);
+} os64_ui_textbuf_t;
+
+typedef struct os64_ui_textview os64_ui_textview_t;
+struct os64_ui_textview
+{
+    os64_ui_widget_t w;          // MUST be first
+    const os64_ui_textbuf_t *buf;
+
+    size_t  top;                 // first visible line
+    int64_t left;                // first visible VISUAL column (tabs expand)
+    size_t  cur_line, cur_col;   // caret; cur_col is a BYTE index
+    bool    sel;                 // selection live?
+    size_t  sel_line, sel_col;   // the anchor (byte index)
+    int64_t goal_vcol;           // remembered column for Up/Down runs
+
+    void (*on_change)(os64_ui_textview_t *tv, void *user);  // buffer edited
+    void (*on_view)(os64_ui_textview_t *tv, void *user);    // viewport moved
+    void *view_user;
+    uint8_t seq;                 // VT100 burst parser state
+};
+
+void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
+                      void (*on_change)(os64_ui_textview_t *, void *),
+                      void (*on_view)(os64_ui_textview_t *, void *),
+                      void *user);
+// Rows/columns that fit the current bounds under this theme.
+int32_t os64_ui_textview_rows(const os64_ui_textview_t *tv,
+                              const os64_ui_theme_t *t);
+int32_t os64_ui_textview_cols(const os64_ui_textview_t *tv,
+                              const os64_ui_theme_t *t);
+// Scroll so `top` is the first visible line (clamped); fires on_view.
+void os64_ui_textview_scroll_to(os64_ui_t *ui, os64_ui_textview_t *tv,
+                                size_t top);
+// Place the caret (clamped), optionally keeping/starting a selection from
+// the current anchor, and scroll it into view. The search-jump primitive.
+void os64_ui_textview_goto(os64_ui_t *ui, os64_ui_textview_t *tv,
+                           size_t line, size_t col, bool select);
+// Select [sl,sc) .. [el,ec), caret at the end, scrolled into view.
+void os64_ui_textview_select(os64_ui_t *ui, os64_ui_textview_t *tv,
+                             size_t sl, size_t sc, size_t el, size_t ec);
+
+extern const os64_ui_class_t os64_ui_scrollbar_class;
+extern const os64_ui_class_t os64_ui_textfield_class;
+extern const os64_ui_class_t os64_ui_textview_class;
 
 #endif // OS64_UI_H
