@@ -296,6 +296,11 @@ make -C kernel test-elf
   - `NOAHCI`: Disable AHCI driver
   - `NONVME`: Disable NVMe driver
   - `NONET`: Disable networking entirely (there is no per-NIC off switch)
+  - `USBQUIET`: Opt-in 2.4GHz hygiene — unpower idle xHCI controllers'
+    ports after enumeration (USB3 signaling jams wireless dongles; Intel's
+    2012 whitepaper). Default OFF: connector USB2/USB3 twins share VBUS —
+    possibly ACROSS controllers on AMD Rembrandt — and dousing a twin
+    browns out the dongle (two P5 burns learned this). See kUSBQuiet
   - `RAMDISK`: Register the `os64_disk.img` Limine module as a RAM-backed
     block device (see `/RAMDisk Boot` in limine.conf)
   - `nolog` / `alllog`: Control logging (both lowercase — legacy)

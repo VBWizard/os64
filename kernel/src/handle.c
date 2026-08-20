@@ -15,6 +15,7 @@
 #include "CONFIG.h"
 #include "memory/paging.h"    // kKernelPML4 (the already-in-kernel-context test)
 #include "memory/kmalloc.h"   // kfree (the f_path copy owned by HANDLE_FILE)
+#include "tty.h"              // pty_master_close (HANDLE_PTY_MASTER's hangup)
 #include "memory/vma.h"       // call_in_kernel_context
 #include "thread_join.h"           // thread_join_close — HANDLE_THREAD's release
 #include "driver/net/udp_conn.h"   // udp_conn_close — HANDLE_NET_UDP's release
@@ -206,6 +207,13 @@ bool handle_close(struct task *t, int h)
 			break;
 		case HANDLE_NET_ICMP:
 			icmp_conn_close((icmp_conn_t *)handle->object);
+			break;
+		case HANDLE_PTY_MASTER:
+			// The terminal side hung up. The slave is buried only when the
+			// SEATS are also empty (PTY.md's lifetime rule) — a child still
+			// running writes into a grid nobody watches, which GRID mode
+			// makes benign by construction.
+			pty_master_close((tty_t *)handle->object);
 			break;
 		case HANDLE_NET_UDP:
 			// Hang up: unbinds the ephemeral port and frees the object.

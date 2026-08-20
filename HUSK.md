@@ -91,6 +91,62 @@ Everything else is a real program in `/bin` — zero feature duplication.
   the seam that lets a program (watch(1) asked first) own a command line
   without owning a parser.
 
+## Booked: a scripting language (a FEATURE, not a debt)
+
+Chris, 2026-08-19: he wants to write complex husk scripts eventually, and he
+wants them not to look like gobbledygook — "looking at you, Bash." Booked here
+rather than in DEBTS on his instruction: nothing is broken and husk does its
+present job well. This is a thing to BUILD, not a thing to repay.
+
+**The sins to avoid, named** — they are separable, and only some are inherent
+to being a shell:
+
+1. `[` is a program pretending to be syntax, whose closing `]` is an argument
+   it checks for.
+2. **Unquoted `$x` word-splits and globs.** `rm $files` and `rm "$files"`
+   differ; `[ -n $x ]` silently becomes `[ -n ]` when x is empty. The dialect
+   that survives is "quote everything, always" — a rule you follow to defeat
+   a feature nobody asked for. This is the deepest one.
+3. Four conditional dialects — `test`, `[ ]`, `[[ ]]`, `(( ))` — each with
+   different operators and quoting rules.
+4. Reversed-word terminators (`fi`, `esac` — Algol 68 by way of Bourne, an
+   Algol man), except loops end in `done`, so it is not even consistently
+   strange.
+5. `-eq` vs `=` vs `==`; numeric and string comparison spelled incompatibly.
+
+**What husk already has and must keep**: exit status as the condition — what
+makes every program in the system a predicate, and the thing that makes a
+shell a shell — plus pipelines, `&&`/`||`, and `;`.
+
+**The prior art to steal from**: `rc` (Tom Duff, Plan 9, 1990) — the same
+exercise with the same motivation, and the paper says so out loud. Four ideas:
+
+- **Variables are LISTS, not strings.** `files = (a.txt b.txt)`; `rm $files`
+  is always two arguments with no quoting decision, because there is nothing
+  to re-split. `$#x` counts, `$x(1)` indexes. This one change deletes the
+  entire quoting-discipline burden that sin 2 creates.
+- `{ }` blocks everywhere — no `fi`, no `esac`, no `done`.
+- One quoting rule: single quotes, `''` for a literal quote. Quoting becomes
+  about literal characters, never about defending yourself from the shell.
+- Conditions are commands: `if (test -n $GUI) { gterm & }`.
+
+Its one wart, not worth inheriting: `if not { }` for else.
+
+**THE DECISION THAT CANNOT WAIT: strings or lists.** Everything else here can
+be added incrementally; the variable model cannot. It reaches expansion,
+assignment, and argv construction, and today husk has one rc file and almost
+no scripts — this is the cheapest the choice will ever be. After a few hundred
+lines of husk scripts exist it is effectively permanent. Staying string-shaped
+forever is a legitimate answer; defaulting into it is not.
+
+**Open question for Chris before anything is drafted**: how big do husk
+scripts actually get? "A better rc file and the occasional five-liner" and "I
+want to write real programs in this" point at different languages, and every
+other decision hangs off that one.
+
+Next step when it comes up: a design chapter here, ratified before a line of
+code — the pattern PTY.md and GRAPHICS.md's VT8 chapter both earned.
+
 ## Known limits, stated plainly
 
 - Editing a line that has WRAPPED misbehaves at the wrap seam — the

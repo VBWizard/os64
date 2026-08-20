@@ -795,6 +795,15 @@ static void task_destroy(task_t *t)
 	// deadChild list is still readable.
 	task_reparent_orphans(t);
 
+	// Belt-and-suspenders for the window ownership rule: the exit path
+	// already swept this task's windows (task_exit_teardown), but burial is
+	// the LAST gate before its pages are freed, and any future path that
+	// buries without a clean exit must not leave a window compositing freed
+	// memory. Idempotent — finds nothing when exit already did the job, and
+	// it runs BEFORE the thread/page teardown below because a pivoted
+	// canvas unmaps through this task's still-intact page tables.
+	gui_task_destroy_windows(t);
+
 	thread_t *th = t->threads;
 	while (th != NULL) {
 		thread_t *next = th->taskNext;
@@ -1155,6 +1164,20 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 		// design (see task_terminate_sibling_threads).
 		task_terminate_sibling_threads(task, thread);
 
+		// Windows first, then handles, both before pages: any window this
+		// task created through the GUI client API dies with it — GRAPHICS.md's
+		// ownership rule, "windows die before pages, always, on every exit
+		// path". Today a window's surfaces are kernel-side kmallocs and this
+		// ordering is merely tidy; after the surface pivot (migration step 3)
+		// the canvas will be task-owned pages mapped in THIS address space,
+		// and this hook standing before the teardown is what keeps the
+		// lazy-HHDM tripwire silent on that day. GUI state is upper-half, so
+		// taking kGuiLock under the task's CR3 is safe; a free no-op when the
+		// GUI is off or the task owned nothing. Takes the TASK because a
+		// pivoted canvas is unmapped from these very page tables — which is
+		// also why this must stay AHEAD of the address-space teardown.
+		gui_task_destroy_windows(task);
+
 		// Release every handle this task still holds — BEFORE it is enqueued as
 		// a dead child. For a pipe end this is the refcount that decides EOF /
 		// EPIPE, so death must give the ends back: a task that dies (or crashes)
@@ -1172,6 +1195,11 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 		// raises a fresh husk. Checked by tty.c against the SEAT (t->shell),
 		// so an ordinary child dying on a terminal changes nothing.
 		tty_shell_departed(task);
+
+		// Return the pty seat inheritance took (no-op for VTs). AFTER the
+		// shell-departed hook: that one still reads task->tty, and the seat
+		// count going to zero is what arms the master's HUNGUP flag.
+		tty_pty_unref((tty_t *)task->tty);
 
 		task_enqueue_dead_child(task);
 	}
@@ -2021,6 +2049,10 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
        // Ctrl+C). NULL inherits as NULL = the system console (task_tty).
        // tty_seat_shell overrides this for the shells themselves.
        newTask->tty=parentTaskPtr->tty;
+       // A pty terminal is COUNTED (PTY.md's seats): inheritance takes one,
+       // teardown returns it, and the slave is buried only when the master
+       // is closed AND the last seat empties. No-op for the kTTY[] fleet.
+       tty_pty_ref((tty_t *)newTask->tty);
        //Initialize the current working directory to parentTask's cwd
        newTask->cwd=(char*)kmalloc(PAGE_SIZE);
        if (parentTaskPtr!=NULL && parentTaskPtr->cwd)

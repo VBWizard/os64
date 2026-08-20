@@ -219,6 +219,39 @@ exec 3>&-
 - Mouse scale is 1:1 with pixels under QEMU's PS/2 emulation; position is
   clamped by the input layer.
 
+### Modifier drags need QMP, not the monitor (2026-08-19)
+
+**HMP `sendkey` cannot express a held key.** It presses and releases as one
+unit, so "hold Ctrl+Alt, then drag the mouse" — the whole Ctrl+Alt window
+gesture — is not testable with it. `sendkey ctrl-alt <hold_ms>` looks like the
+answer and is a trap: measured against a raw-scancode log in the guest, plain
+`sendkey ctrl-alt` delivered `1d 38 b8 9d` (both keys, correctly), while
+`sendkey ctrl-alt 8000` delivered `1d` and **nothing else** — the Alt make code
+never reached the guest at all. An hour went into the kernel looking for a bug
+that was in the harness, which is the reason this section exists.
+
+The answer is QMP's `input-send-event`, where every edge is its own event.
+Add `-qmp tcp:127.0.0.1:55557,server,nowait` to the QEMU line and speak JSON:
+
+```python
+q.cmd("qmp_capabilities")
+q.key("ctrl", True); q.key("alt", True)      # held, for real
+q.btn("right", True)
+q.drag(90, 70)                                # steps of <=120px per packet
+q.shot("/path/band.ppm")                      # QMP screendump, same as HMP
+q.btn("right", False); q.key("alt", False); q.key("ctrl", False)
+```
+
+`tools/guidrive.py` is that client (~90 lines: key/tap/btn/move/drag/shot over
+a QMP socket) plus a `main` that execs a driver script with `q` in scope, so a
+gesture test is a dozen readable lines. Boot with the monitor for the Limine
+menu and the final `quit`, and hand the running guest to the driver.
+
+**The lesson generalizes past QEMU:** when an input test fails, prove what the
+GUEST received before theorizing about what it did with it. One `printd` of the
+raw scancode in `keyboard_handle_scancode` settled a question three layers of
+plausible reasoning had not.
+
 ## Platform matrix — what each catches that the others can't
 
 | Platform | Uniquely catches | Notes |

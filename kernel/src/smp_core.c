@@ -722,9 +722,44 @@ static void acct_settle_local(void)
     if (cls->acctLastDispatchTSC != 0 &&
         cls->currentThread != NULL && cls->currentThread != NO_THREAD)
     {
-        cls->currentThread->runCycles += now - cls->acctLastDispatchTSC;
+        // A halted "current" thread is idle wearing a task's name — its
+        // span belongs to this core's idle thread (smp.h acctCurrentHalted).
+        thread_t *target = (cls->acctCurrentHalted && cls->acctIdleThread != NULL)
+                               ? cls->acctIdleThread
+                               : cls->currentThread;
+        target->runCycles += now - cls->acctLastDispatchTSC;
         cls->acctLastDispatchTSC = now;
     }
+}
+
+// The compositor's hlt-wait bookends (smp.h has the field doctrine).
+//
+// Begin: called UNDER CLI, immediately before sti;hlt — settle first, so
+// everything up to this instant (the real compositing work) lands on the
+// caller, THEN raise the flag so the nap ahead lands on idle.
+//
+// End: called after hlt returns, interrupts live again — wrapped in its own
+// cli window. Settles whatever span is open (if no dispatch intervened,
+// that span is the nap → flag still up → charged to idle; if the scheduler
+// ran meanwhile, dispatch already cleared the flag and charged the nap, and
+// this settle just charges the caller's genuine post-wake work), then drops
+// the flag. Idempotent when already down.
+void mpAcctHaltBegin(void)
+{
+    acct_settle_local();
+    core_local_storage_t *cls = get_core_local_storage();
+    if (cls != NULL)
+        cls->acctCurrentHalted = true;
+}
+
+void mpAcctHaltEnd(void)
+{
+    __asm__ volatile("cli" ::: "memory");
+    acct_settle_local();
+    core_local_storage_t *cls = get_core_local_storage();
+    if (cls != NULL)
+        cls->acctCurrentHalted = false;
+    __asm__ volatile("sti" ::: "memory");
 }
 
 void acct_settle_ISR(void)

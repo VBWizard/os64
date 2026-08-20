@@ -22,6 +22,15 @@ typedef enum input_event_type
     INPUT_EVENT_MOUSE_MOVE,
     INPUT_EVENT_MOUSE_BUTTON_DOWN,
     INPUT_EVENT_MOUSE_BUTTON_UP,
+    // Not an INPUT event by origin — the window system synthesizes this one
+    // and delivers it straight to a window's queue when its content area
+    // changes size. It rides this ring's TYPE space (never the ring itself)
+    // because an app already has exactly one place it learns things: its
+    // event queue. Geometry news on its own channel would mean every app
+    // grows a second thing to poll. X11 made the same call — ConfigureNotify
+    // is an ordinary event, not a signal — and it is why an event loop is a
+    // loop instead of a switchboard.
+    INPUT_EVENT_WINDOW_RESIZE,
 } input_event_type_t;
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
@@ -45,7 +54,17 @@ typedef struct input_event
             int16_t dx, dy;     // raw motion delta this packet
             uint8_t buttons;    // current button state bitmask
             uint8_t button;     // for BUTTON_DOWN/UP: which button changed
+            uint8_t modifiers;  // keyboard_modifiers_t bitmask at event time
+                                // (2026-08-19) — the pointer's view of the
+                                // keyboard, so a Ctrl+Alt drag can be
+                                // recognized from a mouse packet alone
+                                // instead of the compositor keeping its own
+                                // shadow copy of modifier state and drifting
+                                // out of sync with it after a VT switch.
         } mouse;
+        struct {
+            int32_t w, h;       // the NEW content size, in pixels
+        } resize;
     };
     uint64_t tick;  // kTicksSinceStart at enqueue, for input latency debugging
 } input_event_t;

@@ -94,6 +94,13 @@
 // carries the argument — and IRQ0's priority stops mattering at all.
 #define IRQ0_APIC_VECTOR 0x20
 void mpAcctSettleAll(void);
+// The hlt-wait accounting bookends (smp.h's acctCurrentHalted doctrine):
+// Begin under cli right before sti;hlt — settles the caller's real work,
+// then routes the coming nap to this core's idle thread; End after the hlt
+// returns — settles the nap, drops the flag. For the compositor's idle
+// idiom, the one thread that halts outside the scheduler's view.
+void mpAcctHaltBegin(void);
+void mpAcctHaltEnd(void);
 // Permanently stop every other core — the full stop that precedes a fatal
 // exception report. See IPI_FREEZE_VECTOR above for why a report needs it.
 void mpFreezeOtherCores(void);

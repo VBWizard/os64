@@ -8,6 +8,7 @@
 
 #include "gui/gui_client.h"
 #include "gui/gui_demos.h"
+#include "gui/window.h"   // GUI_WINDOW_START_UNFOCUSED — decline the boot focus race
 #include "gui/surface.h"
 
 #include "CONFIG.h"
@@ -45,7 +46,7 @@ bool gbounce_thread(bool daemon)
 	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = cls->currentThread;
 
-	int64_t win = gui_window_create("bounce", 660, 430, 300, 220, 0);
+	int64_t win = gui_window_create("bounce", 660, 430, 300, 220, GUI_WINDOW_START_UNFOCUSED);
 	if (win <= 0) {
 		printd(DEBUG_GUI, "gbounce: window create failed (%ld)\n", win);
 		return false;
@@ -55,7 +56,7 @@ bool gbounce_thread(bool daemon)
 
 	surface_fill_rect(&content,
 	                  (rect_t){0, 0, (int32_t)content.width, (int32_t)content.height}, BALL_BG);
-	gui_window_present(win, NULL);
+	gui_window_publish(win, NULL);
 
 	int32_t x = BALL_R + 5, y = BALL_R + 5;
 	int32_t vx = 7, vy = 5;
@@ -76,7 +77,7 @@ bool gbounce_thread(bool daemon)
 
 		// Publish exactly what changed: old spot ∪ new spot.
 		rect_t damage = rect_union(old_spot, ball_rect(x, y));
-		gui_window_present(win, &damage);
+		gui_window_publish(win, &damage);
 
 		// Stay polite: drain our event queue even though we ignore it (a
 		// full queue would just drop events, but this is what real apps do).

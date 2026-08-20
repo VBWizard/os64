@@ -408,6 +408,7 @@ static const char *proc_handle_type_name(handle_type_t t)
 		case HANDLE_PIPE_WRITE:  return "pipe-write";
 		case HANDLE_FILE:        return "file";
 		case HANDLE_DIR:         return "dir";
+		case HANDLE_PTY_MASTER:  return "pty-master";
 		default:                 return "none";
 	}
 }
@@ -452,7 +453,13 @@ static void proc_gen_task_status(synth_text_t *t, task_t *task)
 	// terminal" is exactly the sort of question /proc exists to answer
 	// without a debugger. tty is 1-based here because that is what the
 	// Alt+F keys say (task_tty resolves the no-terminal default to tty1).
-	synth_text_addf(t, "tty\t%u\n", task_tty(task)->index + 1);
+	// A pty says so by name — "pty0", 0-based, its own namespace (PTY.md):
+	// there is no Alt+F key to agree with, and the master's holder knows
+	// its ptys by creation order.
+	if (task_tty(task)->is_pty)
+		synth_text_addf(t, "tty\tpty%u\n", task_tty(task)->index);
+	else
+		synth_text_addf(t, "tty\t%u\n", task_tty(task)->index + 1);
 	synth_text_addf(t, "foreground\t%s\n",
 	           (task_tty(task)->fgTask == task) ? "yes" : "no");
 	synth_text_addf(t, "shell\t%s\n", task->controllingShell ? "yes" : "no");
@@ -526,7 +533,10 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 {
 	tty_t *tty = task_tty(task);
 
-	synth_text_addf(t, "tty\t%u\n", tty->index + 1);   // 1-based, as Alt+F says
+	if (tty->is_pty)
+		synth_text_addf(t, "tty\tpty%u\n", tty->index);   // its own namespace (PTY.md)
+	else
+		synth_text_addf(t, "tty\t%u\n", tty->index + 1);   // 1-based, as Alt+F says
 	synth_text_addf(t, "rows\t%u\n", tty->rows);
 	synth_text_addf(t, "cols\t%u\n", tty->cols);
 	// Whether the glass is currently showing this terminal — an app can skip

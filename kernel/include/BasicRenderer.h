@@ -60,16 +60,11 @@ void renderer_attach_shadow(void);
 
 extern BasicRenderer kRenderer;
 
-// When non-NULL, print_n() diverts all console bytes to the GUI console
-// window (kernel/src/gui/console_window.c) instead of drawing directly on
-// the framebuffer. ONE seam covers everything: printf/print/panic and the
-// WRITE syscall all funnel through print_n. A plain volatile pointer, not a
-// lock — panic() must be able to kill the diversion with a single store
-// from ANY context (gui_emergency_disable), after which text falls back to
-// the direct-to-framebuffer path and scribbles over the desktop (which is
-// exactly what you want from a dead system).
-typedef void (*console_sink_fn)(const char *bytes, size_t length);
-extern volatile console_sink_fn kConsoleSink;
+// (kConsoleSink was declared here 2026-07 → 2026-08-19: a function pointer
+// that diverted every print_n byte into the ring-0 GUI console window. The
+// VT8 chapter retired both — glass ownership is VT focus now, asked via
+// gui_owns_glass(), and the single-store-from-any-context panic property the
+// pointer provided lives on in gui_emergency_disable's seated flag.)
 
 // Glyph cell size for the built-in PSF1 console font. These were bare 8s and
 // 16s scattered through the renderer; naming them means a font change breaks

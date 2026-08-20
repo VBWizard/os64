@@ -35,6 +35,18 @@ void keyboard_handle_scancode(uint8_t scancode);
 // (spinlock-guarded — two producers now) and hands both edges to the GUI
 // input queue. `modifiers` is the KEYBOARD_MOD_* bitmask at press time.
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed);
+
+// The modifier bitmask as of the last key event that reached the choke above.
+// Read by the MOUSE path (input.c) so a mouse event can carry the keyboard
+// state that was true when it happened — Ctrl+Alt+drag needs to know whether
+// the chord is held, and a pointer packet has no idea by itself.
+//
+// Snapshotted in keyboard_deliver_event rather than read out of the PS/2
+// driver's own s_modifiers, because that variable belongs to ONE of the two
+// keyboard drivers: the xHCI HID path carries its own modifier byte and never
+// touches it. Sampling at the shared choke makes the answer source-blind by
+// construction, which is the same reason the choke exists at all.
+uint8_t keyboard_current_modifiers(void);
 // The three-finger salute, shared by both keyboard drivers (PS/2 scancodes
 // and xHCI HID usages both land here). v1 answers with a message; becomes
 // the polite reboot when SYSCALL_SHUTDOWN verb 1 gets its meaning.
