@@ -100,9 +100,15 @@ uint64_t os64_xtou(const char *s, const char **end);
 // is hi - lo — the first number is the low end, in both files.
 bool os64_parse_range(const char *s, uint64_t *lo, uint64_t *hi);
 
-// Copy `n` bytes. No overlap handling (that is memmove's job, and nothing has
-// asked for one yet).
+// Copy `n` bytes. No overlap handling (that is memmove's job, below).
 void *os64_memcpy(void *dst, const void *src, size_t n);
+
+// Copy `n` bytes between REGIONS THAT MAY OVERLAP — the editor's verb
+// (scribe was the consumer that finally asked, 2026-08-20: inserting a
+// character into a line is a rightward shuffle of everything after it, and
+// deleting one is the same shuffle leftward). Direction is picked from the
+// pointers, the classic way.
+void *os64_memmove(void *dst, const void *src, size_t n);
 
 // Fill `n` bytes with `c`.
 void *os64_memset(void *dst, int c, size_t n);

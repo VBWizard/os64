@@ -59,6 +59,23 @@ void *os64_memcpy(void *dst, const void *src, size_t n)
     return dst;
 }
 
+void *os64_memmove(void *dst, const void *src, size_t n)
+{
+    unsigned char *d = (unsigned char *)dst;
+    const unsigned char *s = (const unsigned char *)src;
+
+    // dst below src: copy forward. dst above: copy backward, so the bytes
+    // not yet read are never the bytes already written. Equal: nothing to do.
+    if (d < s) {
+        for (size_t i = 0; i < n; i++)
+            d[i] = s[i];
+    } else if (d > s) {
+        for (size_t i = n; i > 0; i--)
+            d[i - 1] = s[i - 1];
+    }
+    return dst;
+}
+
 void *os64_memset(void *dst, int c, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;
