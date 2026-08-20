@@ -87,6 +87,7 @@
 #include "serial_logging.h"
 #include "BasicRenderer.h"   // printf — framebuffer boot lines only
 #include "strings/strcpy.h"
+#include "strings/sprintf.h"   // snprintf — netdev.location, "02:00.0"
 #include "memcpy.h"
 #include "memset.h"
 #include "spinlock.h"
@@ -178,8 +179,21 @@ static const e1000_model_t kE1000Models[] = {
 #define CTRL_VME      (1u << 30)   // VLAN mode enable — we want this OFF
 #define CTRL_PHY_RST  (1u << 31)
 
-// STATUS bits
+// STATUS bits. The register comment above has said "link up, speed, duplex"
+// since this file was written, but only link-up was ever decoded — so the
+// e1000 reported "link up" while the r8125 reported "link 100/full", and
+// /sys/net could not print a speed for it at all (Chris spotted the asymmetry
+// 2026-08-20). The other two bits were always right here.
+#define STATUS_FD     (1u << 0)    // full duplex
 #define STATUS_LU     (1u << 1)    // link up
+#define STATUS_SPEED_MASK  (3u << 6)   // bits 7:6 — the negotiated speed
+#define STATUS_SPEED_SHIFT 6
+// 00=10Mb/s, 01=100Mb/s, 10 and 11 both=1000Mb/s. The duplicated 1000
+// encoding is not a typo: the 8254x reserved 11 and hardware in the field
+// reports it, so both map to gigabit rather than to "unknown".
+#define STATUS_SPEED_10    0u
+#define STATUS_SPEED_100   1u
+#define STATUS_SPEED_1000  2u
 
 // EERD bits — the EEPROM keyhole's protocol (82540/82541/82545 layout).
 // NOTE the generational trap: on 82571 and later, DONE moved to bit 1 and
@@ -718,6 +732,30 @@ static bool e1000_setup_tx(e1000_t* e)
 	return true;
 }
 
+// Decode STATUS's speed/duplex into the seam's fields. Split out because the
+// link is read in TWO places — here at bring-up and again in the link-change
+// path — and a decode that lives at only one of them is how a NIC ends up
+// reporting the speed it had at boot forever after.
+//
+// Speed is only meaningful while the link is UP: with no carrier the field
+// holds whatever the last negotiation left, and printing that as fact is
+// worse than admitting ignorance. So a down link reports 0 (= unknown),
+// which callers render as nothing at all.
+static void e1000_read_link_mode(e1000_t* e, uint32_t status)
+{
+	if (!(status & STATUS_LU))
+	{
+		e->netdev.link_mbps  = 0;
+		e->netdev.full_duplex = false;
+		return;
+	}
+
+	uint32_t code = (status & STATUS_SPEED_MASK) >> STATUS_SPEED_SHIFT;
+	e->netdev.link_mbps = (code == STATUS_SPEED_10)  ? 10 :
+	                      (code == STATUS_SPEED_100) ? 100 : 1000;
+	e->netdev.full_duplex = (status & STATUS_FD) != 0;
+}
+
 // ── Bring-up ────────────────────────────────────────────────────────────────
 static bool e1000_init_device(pci_device_t* dev, const char* model)
 {
@@ -812,11 +850,20 @@ static bool e1000_init_device(pci_device_t* dev, const char* model)
 	// not a driver failure.
 	uint32_t status = e1000_read32(e, E1000_STATUS);
 	e->netdev.link_up = (status & STATUS_LU) != 0;
+	e1000_read_link_mode(e, status);
 
 	strcpy(e->netdev.name, "e1000_0");
 	e->netdev.mtu = 1500;
 	e->netdev.ops = &s_e1000_ops;
 	e->netdev.driver_data = e;
+
+	// The part and where it sits, for /sys/net/<card>. `model` points into
+	// kE1000Models[], which is static storage — the lifetime net_device.h
+	// asks for. The location is lspci's spelling so the two trees read
+	// against each other.
+	e->netdev.model = model;
+	snprintf(e->netdev.location, sizeof(e->netdev.location), "%02x:%02x.%u",
+	         dev->busNo, dev->deviceNo, dev->funcNo);
 
 	printd(DEBUG_NET, "e1000: rings up (rx %u, tx %u), link %s, STATUS 0x%08x\n",
 	       E1000_RX_DESCS, E1000_TX_DESCS, e->netdev.link_up ? "UP" : "down", status);
@@ -862,12 +909,26 @@ void init_e1000(void)
 	}
 
 	if (e1000_init_device(found, model))
-		printf("e1000 (%s): %02x:%02x:%02x:%02x:%02x:%02x (rx/tx rings %u/%u, link %s)\n",
-		       model,
-		       s_e1000.netdev.mac[0], s_e1000.netdev.mac[1], s_e1000.netdev.mac[2],
-		       s_e1000.netdev.mac[3], s_e1000.netdev.mac[4], s_e1000.netdev.mac[5],
-		       E1000_RX_DESCS, E1000_TX_DESCS,
-		       s_e1000.netdev.link_up ? "up" : "down");
+	{
+		// Speed/duplex when the link is up, matching what the r8125 line has
+		// always said — the asymmetry Chris caught 2026-08-20. A down link
+		// says only "down": the speed field is meaningless without carrier,
+		// and printing a stale negotiation as fact is worse than silence.
+		if (s_e1000.netdev.link_up)
+			printf("e1000 (%s): %02x:%02x:%02x:%02x:%02x:%02x (rx/tx rings %u/%u, link up %u/%s)\n",
+			       model,
+			       s_e1000.netdev.mac[0], s_e1000.netdev.mac[1], s_e1000.netdev.mac[2],
+			       s_e1000.netdev.mac[3], s_e1000.netdev.mac[4], s_e1000.netdev.mac[5],
+			       E1000_RX_DESCS, E1000_TX_DESCS,
+			       s_e1000.netdev.link_mbps,
+			       s_e1000.netdev.full_duplex ? "full" : "half");
+		else
+			printf("e1000 (%s): %02x:%02x:%02x:%02x:%02x:%02x (rx/tx rings %u/%u, link down)\n",
+			       model,
+			       s_e1000.netdev.mac[0], s_e1000.netdev.mac[1], s_e1000.netdev.mac[2],
+			       s_e1000.netdev.mac[3], s_e1000.netdev.mac[4], s_e1000.netdev.mac[5],
+			       E1000_RX_DESCS, E1000_TX_DESCS);
+	}
 	else
 		printf("e1000: device found but init failed (DEBUG_NET for details)\n");
 }
@@ -936,8 +997,15 @@ void e1000_isr(void)
 	{
 		// Cable event: re-read reality rather than inferring it. One MMIO
 		// read; the counters and the seam's link_up tell the story.
+		//
+		// SPEED IS RE-DECODED HERE TOO, from the same read — replugging into
+		// a different switch port renegotiates, and a /sys/net that kept
+		// reporting the speed this card had at boot would be confidently
+		// wrong for the rest of the session.
 		e->intx_link_changes++;
-		e->netdev.link_up = (e1000_read32(e, E1000_STATUS) & STATUS_LU) != 0;
+		uint32_t st = e1000_read32(e, E1000_STATUS);
+		e->netdev.link_up = (st & STATUS_LU) != 0;
+		e1000_read_link_mode(e, st);
 	}
 
 	// Any confirmed cause raises the flag — RXT0 obviously, RXO because the
@@ -1048,14 +1116,22 @@ void e1000_enable_intx(void)
 		// names the culprit GSI instead of ending at the scheduler banner —
 		// which is exactly how the VBox hang presented before this line
 		// existed. One short line per candidate is cheap; a mystery isn't.
-		// TO THE WIRE, NOT THE GLASS (2026-08-20). This line was born on the
-		// glass because a VBox hang inside this probe ended the boot at the
-		// scheduler banner with no clue which GSI ate it. It still does that
-		// job — a hang leaves it in the serial log, which every machine that
-		// runs this now has (the P5 included, over the very NIC arc that made
-		// this cleanup possible). What it no longer does is print one line per
-		// candidate on every healthy boot.
-		printd(DEBUG_NET, "e1000: probing GSI %u for the INTx wire...\n", gsi);
+		// STAYS ON THE GLASS, and this line is the reason the rule has an
+		// exception. It was demoted to the log for about an hour on
+		// 2026-08-20, during the boot-noise cleanup, with the reasoning "a
+		// hang still leaves it in the serial log, which every machine has
+		// now". THAT REASONING IS WRONG, and it cost the very next
+		// investigation: when a boot stalls in this probe under QEMU, logd
+		// never attaches, the kernel drainer is holding fire waiting for it,
+		// and the ring is never drained — so the log has NOTHING and the
+		// screen stops at the scheduler banner with no clue which GSI ate it.
+		// That is the precise failure the original author put this line here
+		// to prevent, and it happened again within the hour.
+		//
+		// A beacon whose whole job is to survive a hang cannot live behind a
+		// buffer that a hang prevents from flushing. One line per candidate
+		// on a healthy boot is the price, and it is worth it.
+		printf("e1000: probing GSI %u for the INTx wire...\n", gsi);
 
 		if (!ioapic_route_gsi(gsi, 0x45, bspApicId, true /*level*/, true /*active low*/))
 			return;   // no IOAPIC at all — polled it is

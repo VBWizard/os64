@@ -67,6 +67,35 @@ typedef struct net_device
 	uint16_t mtu;               // largest PAYLOAD the link carries (1500 for ethernet)
 	bool link_up;               // best-effort; drivers update it when the hardware says so
 
+	// HOW FAST, and IN BOTH DIRECTIONS AT ONCE? Same story as rx_errors
+	// below, one driver later: the r8125 decoded speed and duplex for its own
+	// boot line and kept them private, so the concept lived in one driver's
+	// struct and the seam never learned it. The e1000 reads the very same
+	// facts out of STATUS bits 7:6 and 0 — and /sys/net wants to print them
+	// for ANY card, which is what made the omission visible (Chris, 2026-08-20:
+	// "the e1000 doesn't list the link speed anywhere"). A fact two drivers
+	// both have is a seam fact.
+	//
+	// ZERO MEANS UNKNOWN, and it is a legitimate answer, not a failure: an
+	// 8125 negotiating 2.5GbE reports through a field this driver only partly
+	// decodes, and virtio-net is software with no wire to have a speed at all.
+	// Callers print nothing rather than guessing — the same contract model and
+	// location keep.
+	uint32_t link_mbps;         // 10 / 100 / 1000 / 2500 …, 0 = not known
+	bool full_duplex;           // meaningless unless link_mbps is nonzero
+
+	// WHAT THIS CARD ACTUALLY IS, for /sys/net/<card> (2026-08-20). The name
+	// above is the stack's handle for it; these two are the hardware's own
+	// answer, and they are what a person reads to check that the driver that
+	// bound is the driver they meant. BOTH OPTIONAL: a driver that leaves
+	// them empty simply omits those lines, which is honest for a device that
+	// has no such identity (virtio-net is a contract, not a part number).
+	// `model` points at a string literal or a driver-owned buffer that
+	// outlives the device — never at a stack local.
+	const char* model;          // "RTL8125B", "82540EM" — the part, not the family
+	char location[16];          // "02:00.0" — lspci's spelling, so /sys/net and
+	                            // /sys/bus/pci can be read against each other
+
 	net_operations_t* ops;      // the driver's verbs (transmit)
 	void* driver_data;          // the driver's private world (rings, BARs, locks) —
 	                            // the seam never looks inside, same job as

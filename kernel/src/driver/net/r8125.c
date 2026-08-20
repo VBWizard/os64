@@ -43,6 +43,7 @@
 #include "spinlock.h"
 #include "memcpy.h"
 #include "memset.h"
+#include "strings/sprintf.h"   // snprintf — netdev.location, "02:00.0"
 
 // kPCIDeviceHeaders / kPCIDeviceFunctions and their counts come from pci.h —
 // declared there, so NOT re-declared here. (Re-declaring them by hand is how
@@ -206,8 +207,9 @@ typedef struct
 	// machine and is it up. Set on the way past by the reporters below.
 	const char* model;        // "RTL8125B" — from the TxConfig hardware version
 	uint8_t bus, slot, func;  // where it lives on the PCI tree
-	const char* speed;        // "1000"/"100"/"10"/"?" — decoded from PHYstatus
-	bool full_duplex;
+	// (speed/duplex used to live here as strings; they are seam fields now —
+	//  net_device_t's link_mbps/full_duplex — so /sys/net can print them for
+	//  any card instead of only this driver's own boot line.)
 
 	// The rings, and both addresses for each: the PHYSICAL one the device
 	// is given, and the HHDM alias we dereference. They are the same memory
@@ -385,13 +387,22 @@ static void r8125_report_link(r8125_t* r)
 		return;
 	}
 
-	const char* speed = (phy & R8125_PHY_1000M) ? "1000" :
-	                    (phy & R8125_PHY_100M)  ? "100"  :
-	                    (phy & R8125_PHY_10M)   ? "10"   : "?";
-	r->speed = speed;
-	r->full_duplex = (phy & R8125_PHY_FULLDUP) != 0;
-	printd(DEBUG_NET, "r8125: link %s/%s (PHYstatus 0x%02x)\n",
-	       speed, r->full_duplex ? "full" : "half", phy);
+	// ON THE SEAM, not in this driver's private struct (2026-08-20). These
+	// lived here as a string for the boot line only, which is exactly why
+	// /sys/net could show a speed for no card at all — the fact existed, one
+	// layer too low for anyone else to read. Numeric now, because "1000" as
+	// text was a rendering decision masquerading as a value.
+	//
+	// 0 = unknown, and this part can genuinely reach it: an 8125 negotiating
+	// 2.5GbE sets a bit this driver does not decode (see the header), so the
+	// honest answer is "I don't know" and the raw PHYstatus below is what
+	// explains it.
+	r->netdev.link_mbps = (phy & R8125_PHY_1000M) ? 1000 :
+	                      (phy & R8125_PHY_100M)  ? 100  :
+	                      (phy & R8125_PHY_10M)   ? 10   : 0;
+	r->netdev.full_duplex = (phy & R8125_PHY_FULLDUP) != 0;
+	printd(DEBUG_NET, "r8125: link %u/%s (PHYstatus 0x%02x)\n",
+	       r->netdev.link_mbps, r->netdev.full_duplex ? "full" : "half", phy);
 	// The raw byte rides along on purpose: this is a 2.5GbE part reporting
 	// through a register whose speed encoding this driver only partly
 	// decodes, so if it ever negotiates something we cannot name, the number
@@ -818,6 +829,13 @@ static bool r8125_init_device(pci_device_t* dev)
 	r->netdev.name[3] = '2'; r->netdev.name[4] = '5'; r->netdev.name[5] = '0';
 	r->netdev.name[6] = '\0';
 
+	// The hardware's own answer, for /sys/net/<card>. Both were already in
+	// hand for the summary line; the seam gets them too so a reader can check
+	// this entry against /sys/bus/pci without going to the source.
+	r->netdev.model = r->model;
+	snprintf(r->netdev.location, sizeof(r->netdev.location), "%02x:%02x.%u",
+	         r->bus, r->slot, r->func);
+
 	// NOW it may join the seam. The earlier slice deliberately withheld
 	// this: a net_device in kNetDevices is a promise the stack believes —
 	// ARP hands it frames, dhcp_start dials through it — and registering a
@@ -845,12 +863,12 @@ static bool r8125_init_device(pci_device_t* dev)
 	// the P5 negotiated 100/full rather than gigabit on its first light, and
 	// that one word is what said "look at the cable, not the driver".
 	if (r->netdev.link_up)
-		printf("r8125: %s at %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link %s/%s\n",
+		printf("r8125: %s at %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link %u/%s\n",
 		       r->model ? r->model : "RTL8125",
 		       r->bus, r->slot, r->func,
 		       r->netdev.mac[0], r->netdev.mac[1], r->netdev.mac[2],
 		       r->netdev.mac[3], r->netdev.mac[4], r->netdev.mac[5],
-		       r->speed ? r->speed : "?", r->full_duplex ? "full" : "half");
+		       r->netdev.link_mbps, r->netdev.full_duplex ? "full" : "half");
 	else
 		printf("r8125: %s at %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link DOWN\n",
 		       r->model ? r->model : "RTL8125",

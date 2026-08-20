@@ -12,7 +12,8 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        five entries: "bus", "cpu", "cache", "gui", "log"
+//   /sys/                        six entries: "bus", "cpu", "net", "cache",
+//                                "gui", "log"
 //   /sys/bus/                    one entry: "pci"
 //   /sys/bus/pci/                one file per discovered function, named
 //                                bus:dev.fn in hex — "00:1f.3", lspci's
@@ -30,6 +31,18 @@
 //                                the schedule — READ, side-effect free, no NMI
 //   /sys/cpu/<n>/probe           WRITE "probe": fire a diagnostic NMI at the
 //                                core.  READ: the last snapshot, rendered.
+//   /sys/net/                    the networking view: "ip", "dhcp", then one
+//                                file per REGISTERED NIC, named as the driver
+//                                registered it ("r8125_0") — never by index,
+//                                which would renumber if probe order changed
+//   /sys/net/ip                  the machine's address. MACHINE-wide and it
+//                                says so: os64 is single-homed (one
+//                                kNetIPv4Address, up to NET_MAX_DEVICES cards)
+//   /sys/net/dhcp                how that address was come by — state, lease,
+//                                and the conversation's counters
+//   /sys/net/<card>              one NIC: model/location (both optional),
+//                                mac, mtu, link, whether it carries the
+//                                address, and the traffic counters
 //
 // Every file is TEXT. The PCI values are the enumeration's saved headers —
 // kPCIDeviceHeaders / kPCIDeviceFunctions / kPCIBridgeHeaders, written once
@@ -79,6 +92,10 @@
 #include "task.h"                   // task_t — kIdleTasks' element type
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
+#include "driver/net/net_device.h"      // /sys/net — kNetDevices, the registered NICs
+#include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
+#include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
+#include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
 #include "gui/compositor.h"             // /sys/gui — kEnableGUI, seat, census
 #include "video.h"                      // kFrameBuffer — the resolution it reports
 #include "CONFIG.h"
@@ -248,6 +265,10 @@ typedef enum
 	SYS_NODE_CACHEFILE,  // /cache — the block cache's own numbers (2026-08-16)
 	SYS_NODE_LOGFILE,    // /log — the kernel log rings' own numbers (2026-08-18)
 	SYS_NODE_GUIFILE,    // /gui — is there a desktop, and what does it cost
+	SYS_NODE_NETDIR,     // /net — the networking view (2026-08-20)
+	SYS_NODE_NETIP,      // /net/ip — the machine's address, and it is ONE
+	SYS_NODE_NETDHCP,    // /net/dhcp — how that address was come by
+	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -262,6 +283,7 @@ typedef struct
 	sys_node_type_t type;
 	uint32_t pci_key;               // PCIFILE: which function
 	uint32_t cpu;                   // CPUCORE/CPUFILE: which core
+	uint32_t net;                   // NETCARD: index into kNetDevices
 	char     name[SYS_NAME_MAX];    // *FILE: the leaf name as given
 } sys_path_t;
 
@@ -340,6 +362,42 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_GUIFILE;
+		return;
+	}
+
+	if (strcmp(comp, "net") == 0)
+	{
+		if (!synth_next_component(path, &pos, comp, sizeof(comp)))
+		{
+			out->type = SYS_NODE_NETDIR;
+			return;
+		}
+		bool is_ip   = (strcmp(comp, "ip") == 0);
+		bool is_dhcp = (strcmp(comp, "dhcp") == 0);
+		if (is_ip || is_dhcp)
+		{
+			// Decide BEFORE the lookahead: synth_next_component writes into
+			// `comp`, so testing it afterwards would be reading the wrong
+			// component (or a leftover one).
+			if (synth_next_component(path, &pos, comp, sizeof(comp)))
+				return;   // nothing lives inside a file
+			out->type = is_ip ? SYS_NODE_NETIP : SYS_NODE_NETDHCP;
+			return;
+		}
+		// A card is addressed by the name the DRIVER registered ("r8125_0"),
+		// not by an index — the index is an implementation detail of
+		// kNetDevices and would renumber if probe order ever changed. Only a
+		// name that is actually registered exists, same rule as /cpu/<n>.
+		for (uint32_t i = 0; i < NET_MAX_DEVICES; i++)
+		{
+			if (kNetDevices[i] == NULL || strcmp(kNetDevices[i]->name, comp) != 0)
+				continue;
+			if (synth_next_component(path, &pos, comp, sizeof(comp)))
+				return;
+			out->net  = i;
+			out->type = SYS_NODE_NETCARD;
+			return;
+		}
 		return;
 	}
 
@@ -583,6 +641,163 @@ static void sys_gen_gui(synth_text_t *t)
 	                2ull * kFrameBuffer.width * kFrameBuffer.height * 4);
 }
 
+// ── /sys/net (2026-08-20) ───────────────────────────────────────────────────
+//
+// Chris asked for "a sys entry for what any currently enabled NIC's network
+// settings are", and the interesting part turned out to be the shape rather
+// than the data. os64 registers up to NET_MAX_DEVICES cards but has exactly
+// ONE address: kNetIPv4Address/Gateway/Netmask are globals and s_dhcp is a
+// single client bound to a single device. So a per-card `ip` file would be a
+// LIE IN THE FILESYSTEM — four cards each appearing to own an address that
+// only one of them carries.
+//
+// Hence the split. `<card>` holds what is genuinely per-card (identity, link,
+// counters); `ip` holds the machine's addressing and says out loud that it is
+// machine-wide; `dhcp` holds how that address was come by. The day addressing
+// becomes per-interface, `ip` grows a column or moves into the card files and
+// nothing else has to change.
+//
+// THE TWO TRADITIONS, since this had to pick one. Linux splits the same facts
+// across /sys/class/net/<if> (link only — MAC, MTU, operstate) and rtnetlink
+// (the addresses, reachable by ioctl and `ip addr` but NOT by cat), with DHCP
+// nowhere in the kernel at all. That split is chronology, not design:
+// rtnetlink predates sysfs, so the addresses never moved. Plan 9 put the whole
+// stack in the filesystem — /net/ipifc/<n>/status hands you device, MTU and
+// every address in one read. os64 already follows Plan 9 for /proc, and this
+// follows it here: everything about the network is readable with cat.
+//
+// One place per QUESTION, not per object: a NIC also appears under
+// /sys/bus/pci, because "what is on the bus" and "what does networking look
+// like" are different questions. That is why `location` is printed in lspci's
+// spelling — so the two entries can be read against each other. It is
+// deliberately NOT a second device tree; the header's 2026-08-08 ruling (no
+// devices/, no symlinks) is what keeps os64 out of sysfs's three-views-of-one-
+// device maze.
+
+// net/ip — the machine's addressing. Machine-wide, and it says so.
+static void sys_gen_net_ip(synth_text_t *t)
+{
+	synth_text_addf(t, "address: %u.%u.%u.%u\n", NET_IPV4_OCTETS(kNetIPv4Address));
+	synth_text_addf(t, "netmask: %u.%u.%u.%u\n", NET_IPV4_OCTETS(kNetIPv4Netmask));
+	synth_text_addf(t, "gateway: %u.%u.%u.%u\n", NET_IPV4_OCTETS(kNetIPv4Gateway));
+
+	// Where it came from, in the words the boot line uses. DHCP_BOUND is the
+	// only state that means "the network gave us this"; everything else means
+	// the cmdline's IP=/GW=/MASK= (or their built-in defaults) are in force.
+	synth_text_addf(t, "source: %s\n",
+	                kDhcpStats.state == DHCP_BOUND ? "dhcp" : "static");
+
+	// SINGLE-HOMED, stated rather than implied. A reader with two cards
+	// installed will otherwise reasonably wonder which one this belongs to —
+	// and the honest answer is "the machine", until addressing goes
+	// per-interface. Naming the card that carries it costs one line and saves
+	// that question.
+	synth_text_addf(t, "scope: machine (os64 is single-homed: one address, %u NIC slot(s))\n",
+	                (unsigned)NET_MAX_DEVICES);
+}
+
+// net/dhcp — how the address above was come by, and whether it is still a
+// conversation. Renewal is a booked debt (dhcp.h), so a BOUND lease here is
+// held until reboot no matter what lease_seconds says; the file reports the
+// number honestly rather than implying a timer that does not exist.
+static void sys_gen_net_dhcp(synth_text_t *t)
+{
+	static const char *kStateNames[] = {
+		"IDLE", "SELECTING", "REQUESTING", "BOUND", "GAVE_UP"
+	};
+	unsigned s = (unsigned)kDhcpStats.state;
+	synth_text_addf(t, "state: %s\n",
+	                s < (sizeof(kStateNames) / sizeof(kStateNames[0]))
+	                    ? kStateNames[s] : "?");
+
+	if (kDhcpStats.state == DHCP_IDLE)
+	{
+		// Same courtesy /sys/gui pays: a "no" that names the reason instead
+		// of sending its reader to the source.
+		synth_text_addf(t, "reason: never started (no NIC, or IP= chose static)\n");
+	}
+
+	if (kDhcpStats.state == DHCP_BOUND)
+	{
+		synth_text_addf(t, "lease: %u.%u.%u.%u/%u.%u.%u.%u\n",
+		                NET_IPV4_OCTETS(kDhcpStats.lease_ip),
+		                NET_IPV4_OCTETS(kDhcpStats.lease_mask));
+		synth_text_addf(t, "gateway: %u.%u.%u.%u\n",
+		                NET_IPV4_OCTETS(kDhcpStats.lease_gateway));
+		// The server is the address to dial on the P5's segment: under ICS
+		// the machine sharing its connection IS the DHCP server and the
+		// gateway, which is why the lifeboat entry tells you to read it.
+		synth_text_addf(t, "server: %u.%u.%u.%u\n",
+		                NET_IPV4_OCTETS(kDhcpStats.lease_server));
+		synth_text_addf(t, "lease_seconds: %u (recorded; renewal is a DEBT)\n",
+		                kDhcpStats.lease_seconds);
+	}
+
+	// The conversation itself, which is what you read when the state is not
+	// the one you wanted: sent vs received tells you whether the wire is
+	// carrying, and `ignored` is the tell for a second DHCP server or a
+	// stale transaction answering late.
+	synth_text_addf(t, "discovers_sent: %lu\n", kDhcpStats.discovers_sent);
+	synth_text_addf(t, "offers_received: %lu\n", kDhcpStats.offers_received);
+	synth_text_addf(t, "requests_sent: %lu\n", kDhcpStats.requests_sent);
+	synth_text_addf(t, "acks_received: %lu\n", kDhcpStats.acks_received);
+	synth_text_addf(t, "naks_received: %lu\n", kDhcpStats.naks_received);
+	synth_text_addf(t, "ignored: %lu\n", kDhcpStats.ignored);
+}
+
+// net/<card> — one registered NIC: what it is, whether the wire is good, and
+// what has actually moved through it.
+static void sys_gen_net_card(synth_text_t *t, uint32_t index)
+{
+	net_device_t *d = kNetDevices[index];
+	if (d == NULL)
+		return;
+
+	synth_text_addf(t, "name: %s\n", d->name);
+	// Both optional by contract (net_device.h): a device with no part number
+	// omits the line rather than inventing one. virtio-net is a contract, not
+	// a chip, and saying so by silence is more honest than "unknown".
+	if (d->model != NULL)
+		synth_text_addf(t, "model: %s\n", d->model);
+	if (d->location[0] != '\0')
+		synth_text_addf(t, "location: %s\n", d->location);
+
+	synth_text_addf(t, "mac: %02x:%02x:%02x:%02x:%02x:%02x\n",
+	                d->mac[0], d->mac[1], d->mac[2], d->mac[3], d->mac[4], d->mac[5]);
+	synth_text_addf(t, "mtu: %u\n", d->mtu);
+	// Speed/duplex when the card knows them (link_mbps 0 = unknown: virtio has
+	// no wire, and an 8125 at 2.5GbE reports through a bit its driver does not
+	// decode). Same silence-over-guessing contract as model and location — and
+	// the whole reason those fields moved onto the seam, since until 2026-08-20
+	// the e1000 knew its speed and had nowhere to say it.
+	if (d->link_up && d->link_mbps != 0)
+		synth_text_addf(t, "link: up, %u/%s\n", d->link_mbps,
+		                d->full_duplex ? "full" : "half");
+	else
+		synth_text_addf(t, "link: %s\n", d->link_up ? "up" : "down");
+
+	// Does this card carry the machine's one address? kNetDevices[0] does:
+	// syscall dial hands it to tcp/udp/icmp_conn_dial, and kernel_init hands
+	// it to dhcp_start — "kNetDevices[0] is the NIC the stack dials", in
+	// kernel.c's own words. That makes registration ORDER load-bearing, which
+	// is exactly the sort of thing a person deserves to read rather than
+	// deduce, especially on a machine with two cards in it.
+	synth_text_addf(t, "carries_address: %s\n", index == 0 ? "yes" : "no");
+
+	synth_text_addf(t, "tx_frames: %lu\n", d->tx_frames);
+	synth_text_addf(t, "tx_bytes: %lu\n", d->tx_bytes);
+	synth_text_addf(t, "tx_errors: %lu\n", d->tx_errors);
+	synth_text_addf(t, "rx_frames: %lu\n", d->rx_frames);
+	synth_text_addf(t, "rx_bytes: %lu\n", d->rx_bytes);
+	synth_text_addf(t, "rx_errors: %lu\n", d->rx_errors);
+	// TWO drop reasons, kept apart because they accuse different things:
+	// no-handler means frames arrived before the stack claimed RX (a boot
+	// ordering story), too-big means the wire carried something longer than
+	// NET_FRAME_MAX (counted, never truncated — net_device.h's rule).
+	synth_text_addf(t, "rx_dropped_no_handler: %lu\n", d->rx_dropped_no_handler);
+	synth_text_addf(t, "rx_dropped_too_big: %lu\n", d->rx_dropped_too_big);
+}
+
 // cpu/<n>/time — one core's slice of the CPU-time ledger (/proc/cores' whole
 // table until 2026-08-12, split per-core when it moved to the machine's tree).
 //
@@ -722,7 +937,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	}
 	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE
 	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_LOGFILE
-	         && sp.type != SYS_NODE_GUIFILE)
+	         && sp.type != SYS_NODE_GUIFILE && sp.type != SYS_NODE_NETIP
+	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETCARD)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -737,6 +953,12 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_log(&text);
 	else if (sp.type == SYS_NODE_GUIFILE)
 		sys_gen_gui(&text);
+	else if (sp.type == SYS_NODE_NETIP)
+		sys_gen_net_ip(&text);
+	else if (sp.type == SYS_NODE_NETDHCP)
+		sys_gen_net_dhcp(&text);
+	else if (sp.type == SYS_NODE_NETCARD)
+		sys_gen_net_card(&text, sp.net);
 	else if (sp.type == SYS_NODE_CPUCOUNT)
 		sys_gen_cpu_count(&text);
 	else if (strcmp(sp.name, "time") == 0)
@@ -825,7 +1047,7 @@ static int sys_open_dir(vfs_directory_t **vfs_dir, const char *path,
 
 	if (sp.type != SYS_NODE_ROOT && sp.type != SYS_NODE_BUSDIR &&
 	    sp.type != SYS_NODE_PCIDIR && sp.type != SYS_NODE_CPUDIR &&
-	    sp.type != SYS_NODE_CPUCORE)
+	    sp.type != SYS_NODE_CPUCORE && sp.type != SYS_NODE_NETDIR)
 		return -1;
 
 	sys_dir_handle_t *h = kmalloc(sizeof(sys_dir_handle_t));
@@ -860,20 +1082,28 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 	{
 		case SYS_NODE_ROOT:
 		{
-			// Two directories, then the root files — a root that lists what
+			// Directories first, then the root files — a root that lists what
 			// a path can reach, nothing hidden (the /proc/self lesson).
-			static const char *kSysRootDirs[] = { "bus", "cpu" };
+			// COUNTED, never a literal: "net" joined this table 2026-08-20
+			// and the hardcoded `2` that used to sit in both tests below was
+			// how a new entry silently fails to list. (The same class of bug
+			// as the "log" entry that went missing from a merge in August —
+			// a listing that drops a name reads exactly like a name that
+			// does not exist.)
+			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
 			static const char *kSysRootFiles[] = { "cache", "gui", "log" };
-			if (h->index < 2)
+			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
+			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
+			if (h->index < kDirCount)
 			{
 				entry->flags = OS64_DE_DIR;
 				strncpy(entry->name, kSysRootDirs[h->index], OS64_DIRENT_NAME_MAX);
 				h->index++;
 				return 1;
 			}
-			if (h->index < 2 + (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0])))
+			if (h->index < kDirCount + kFileCount)
 			{
-				strncpy(entry->name, kSysRootFiles[h->index - 2], OS64_DIRENT_NAME_MAX);
+				strncpy(entry->name, kSysRootFiles[h->index - kDirCount], OS64_DIRENT_NAME_MAX);
 				h->index++;
 				return 1;
 			}
@@ -919,6 +1149,33 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 				h->index = 1;
 				entry->flags = OS64_DE_DIR;
 				strncpy(entry->name, "pci", OS64_DIRENT_NAME_MAX);
+				return 1;
+			}
+			return 0;
+		}
+
+		case SYS_NODE_NETDIR:
+		{
+			// The machine's two facts first — a reader asking "what are my
+			// network settings" wants `ip` before a card roster — then one
+			// file per REGISTERED card, in registration order, which is the
+			// order that decides who carries the address.
+			static const char *kSysNetFiles[] = { "ip", "dhcp" };
+			const int kNetFileCount = (int)(sizeof(kSysNetFiles) / sizeof(kSysNetFiles[0]));
+			if (h->index < kNetFileCount)
+			{
+				strncpy(entry->name, kSysNetFiles[h->index], OS64_DIRENT_NAME_MAX);
+				h->index++;
+				return 1;
+			}
+			// Skip empty slots rather than stopping at the first one: the
+			// table is a fixed array and nothing promises it is packed.
+			for (int i = h->index - kNetFileCount; i < NET_MAX_DEVICES; i++)
+			{
+				if (kNetDevices[i] == NULL)
+					continue;
+				h->index = kNetFileCount + i + 1;
+				strncpy(entry->name, kNetDevices[i]->name, OS64_DIRENT_NAME_MAX);
 				return 1;
 			}
 			return 0;
@@ -1032,6 +1289,34 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_CPUFILE:
 			strncpy(entry->name, sp.name, OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		// The net nodes. MISSING THESE IS WHY `ls /sys/net` answered "could
+		// not stat" on its first outing (2026-08-20, found by Chris on VBox):
+		// the parser, opendir and readdir all knew about /sys/net, but stat
+		// did not, and ls stats a path before it lists it. Four doors, and a
+		// node has to be let through EVERY one — the `default: return -1`
+		// below is a closed door by design, which is right, and is exactly
+		// why a new node type has to be walked through this switch too.
+		case SYS_NODE_NETDIR:
+			entry->flags = OS64_DE_DIR;
+			strncpy(entry->name, "net", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_NETIP:
+			strncpy(entry->name, "ip", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_NETDHCP:
+			strncpy(entry->name, "dhcp", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_NETCARD:
+			// The parser already proved this index names a registered card;
+			// re-read it rather than trusting a stale copy of the name.
+			if (kNetDevices[sp.net] == NULL)
+				return -1;
+			strncpy(entry->name, kNetDevices[sp.net]->name, OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		default:
