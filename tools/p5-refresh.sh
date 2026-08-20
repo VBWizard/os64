@@ -42,10 +42,12 @@
 #    ...and thereafter, after every new burn: same command. That's the
 #    whole refresh.
 #
-# The Limine entry: see the commented "/Bosgame Boot (disk root)" template
-# in limine.conf — uncomment it (it uses the canonical ROOT GUID above, so
-# it needs no editing) and it boots the P5 from its own disk, skipping the
-# RAMDisk module load entirely.
+# The Limine entry: "/Bosgame GUI" (desktop) and "/Bosgame Boot - no GUI"
+# (text) in limine.conf both boot the P5 from its own disk, skipping the
+# RAMDisk module load entirely. They use the canonical ROOT GUID above, so
+# they need no editing. (Both were once one commented-out "/Bosgame Boot
+# (disk root)" template you had to uncomment; the surgery below is what made
+# them real, and the 2026-08-20 limine.conf walk gave them their names.)
 
 set -euo pipefail
 

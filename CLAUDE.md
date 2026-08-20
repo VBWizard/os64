@@ -295,7 +295,11 @@ make -C kernel test-elf
   memory. (Cost of learning this the hard way, 2026-08-16: the `/No AHCI` and
   `/No NVME` boot entries had been passing lowercase `noahci`/`nonvme` and
   disabling nothing at all. Any new flag added anywhere gets checked against
-  the table the same day.)
+  the table the same day. Those two entries no longer exist — the 2026-08-20
+  limine.conf walk retired every entry that carried a single bare token and
+  no `ROOT=`, since none of them ever mounted a root or reached husk. The
+  TOKENS are unaffected: press `e` at the Limine menu and add `NOAHCI` to any
+  entry, which is the right home for a one-token variation.)
 - Common options:
   - `ROOTPARTUUID=<uuid>` / `ROOT=<uuid>`: Mount partition as root
   - `nosmp`: Disable multicore support (lowercase — legacy)
