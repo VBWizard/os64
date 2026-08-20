@@ -346,9 +346,11 @@ int sbuf_save(sbuf_t *b, const char *path, char *err, size_t errcap)
 		os64_snprintf(err, errcap, "cannot write %s", path);
 		return -1;
 	}
-	// Field-by-field, not a struct initializer: zeroing the 64KB chunk via
-	// `= { ... }` makes GCC call memset, a symbol this freestanding world
-	// doesn't link. Only these three fields are live before first use.
+	// Field-by-field, not a struct initializer: the `= { ... }` spelling
+	// makes GCC memset the whole 64KB chunk (the call this line originally
+	// couldn't even LINK — str.c carries the compiler's four now), and
+	// zeroing 65536 bytes to initialize three is waste either way. Only
+	// these fields are live before first use.
 	sbuf_writer_t wr;
 	wr.fd = (int32_t)fd;
 	wr.fill = 0;

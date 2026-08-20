@@ -76,6 +76,43 @@ void *os64_memmove(void *dst, const void *src, size_t n)
     return dst;
 }
 
+// ── the compiler's four ─────────────────────────────────────────────────────
+// GCC's freestanding contract (documented, and non-negotiable): even under
+// -ffreestanding the compiler may emit CALLS to memcpy, memmove, memset,
+// and memcmp whenever it likes — a struct assignment, a big initializer, an
+// array copy. scribe's save writer found the hole (a 64KB `= { ... }`
+// emitted a memset call this world didn't link). These four exist to honor
+// that contract, NOT as API: os64 code says os64_memset and friends; the
+// bare names are for code the compiler writes on our behalf.
+
+void *memset(void *dst, int c, size_t n)
+{
+    return os64_memset(dst, c, n);
+}
+
+void *memcpy(void *dst, const void *src, size_t n)
+{
+    return os64_memcpy(dst, src, n);
+}
+
+void *memmove(void *dst, const void *src, size_t n)
+{
+    return os64_memmove(dst, src, n);
+}
+
+int memcmp(const void *a, const void *b, size_t n)
+{
+    // No os64_ twin yet — nothing human has asked for one (the streq family
+    // covers strings). The compiler is memcmp's only client today, so the
+    // body lives here until a real consumer promotes it.
+    const unsigned char *pa = a, *pb = b;
+    for (size_t i = 0; i < n; i++) {
+        if (pa[i] != pb[i])
+            return pa[i] < pb[i] ? -1 : 1;
+    }
+    return 0;
+}
+
 void *os64_memset(void *dst, int c, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;
