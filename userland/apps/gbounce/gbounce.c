@@ -112,6 +112,37 @@ int main(int argc, char **argv)
         // a full queue drops events, and this is what real apps do.
         os64_gui_event_t ev;
         while (os64_gui_event_poll(win, &ev) == 1)
-            ;
+        {
+            if (ev.type != OS64_GUI_EVENT_WINDOW_RESIZE)
+                continue;
+
+            // The walls moved. This is the smallest complete example of what
+            // a resize costs an app that owns its own frame loop: re-read the
+            // geometry, re-derive whatever was computed FROM the geometry,
+            // and repaint the whole thing once.
+            os64_draw_ctx_refresh(&ctx);
+            min_x = BALL_R;
+            max_x = (int32_t)s->width - 1 - BALL_R;
+            min_y = BALL_R;
+            max_y = (int32_t)s->height - 1 - BALL_R;
+
+            // A shrink can leave the ball outside the new room. Put it back
+            // rather than letting the bounce test do it, which would send it
+            // travelling the wrong way for one frame from a position that was
+            // never legal.
+            if (x_mpx < (int64_t)min_x * 1000) x_mpx = (int64_t)min_x * 1000;
+            if (x_mpx > (int64_t)max_x * 1000) x_mpx = (int64_t)max_x * 1000;
+            if (y_mpx < (int64_t)min_y * 1000) y_mpx = (int64_t)min_y * 1000;
+            if (y_mpx > (int64_t)max_y * 1000) y_mpx = (int64_t)max_y * 1000;
+
+            // Repaint everything: the strip a grow exposed is background the
+            // window system filled, not ours, and the next frame's damage
+            // rect only covers where the ball is.
+            os64_draw_fill_rect(s, (os64_gui_rect_t){0, 0, (int32_t)s->width,
+                                (int32_t)s->height}, BALL_BG);
+            draw_ball(s, (int32_t)(x_mpx / 1000), (int32_t)(y_mpx / 1000),
+                      BALL_COLOR);
+            os64_draw_publish(&ctx, NULL);
+        }
     }
 }

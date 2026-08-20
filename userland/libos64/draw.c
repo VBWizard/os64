@@ -128,6 +128,14 @@ int64_t os64_draw_ctx_init(os64_draw_ctx_t *ctx, int64_t win)
     return 0;
 }
 
+int64_t os64_draw_ctx_refresh(os64_draw_ctx_t *ctx)
+{
+    // Deliberately NOT os64_draw_ctx_init: that one also resets fg/bg and the
+    // pen, which would silently undo an app's palette every time somebody
+    // dragged a corner.
+    return os64_gui_window_get_surface(ctx->win, &ctx->surf);
+}
+
 void os64_draw_ctx_text(os64_draw_ctx_t *ctx, const char *str)
 {
     ctx->pen_x = os64_draw_text(&ctx->surf, ctx->pen_x, ctx->pen_y,

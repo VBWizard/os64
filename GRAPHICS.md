@@ -25,7 +25,8 @@ client API.
 | 2. Window system | `gui/window.{h,c}` | `window_t`, z-order list, chrome (titlebar/border), hit-testing, per-window event queues |
 | 3. Compositor | `gui/compositor.c` | The `/guicomp` daemon: frame loop = drain input → route → recomposite damage → flush; cursor; drag state machine |
 | 4. Client API | `gui/gui_client.{h,c}` | Handle-based, **syscall-shaped** functions apps call; the future userland boundary |
-| — | `gui/console_window.{h,c}` | print_n's sink → text grid → rendered like any window |
+| — | VT8 seat | `gui_owns_glass()` (compositor.c) — the GUI is VT8's seated shell, and that predicate gates every flush. See the VT8 chapter below |
+| — | ~~`gui/console_window.{h,c}`~~ | RETIRED 2026-08-19 with `kConsoleSink`; boot output lives in VT1's grid, and the shell-in-a-window is ring-3 `gterm` |
 
 ## The core invariants (break these and you get flicker/corruption)
 
@@ -476,6 +477,93 @@ clicked); P5 and VBox passes; GRAPHICS.md layer map gains VT8.
   gpm's lineage (1994, Alessandro Rubini) — which will want those events
   routed after all. The fork's text-VT arm is where they'd land.
 
+## Window resize — the capacity reservation (built 2026-08-19)
+
+Chris picked the shape from a board of five: **Ctrl+Alt+right-drag resizes,
+Ctrl+Alt+left-drag moves, anywhere in the window, with a rubber band.** The
+alternatives (a Mac-1984 corner grip, a Windows-3.x eight-zone border, a
+NeXT-style bottom resize bar) all wanted chrome; this one wants none, which is
+why the entire slice touches `composite_one` not at all.
+
+### Why the pointer never moves — and why that is the whole design
+
+The dangerous version of resize is the obvious one: reallocate the canvas,
+remap it, tell the app to re-fetch. That means the compositor thread mutating
+ANOTHER TASK's page tables and unmapping a live user VA, which needs a
+cross-core TLB shootdown — and until every core's TLB drops the entry, the
+owner can write through a stale one into pages the allocator has already given
+away. Silent corruption, not a fault; the lazy-HHDM tripwire would never see
+it, because the pages are legitimately mapped to somebody else.
+
+So the canvas is **reserved at capacity and never re-pointed**:
+
+- Capacity is the screen (`wm_canvas_capacity_for` — or the window, if it was
+  created larger; the client API allows up to 4096 a side). ONE function, used
+  by both allocators, because a canvas smaller than the content snapshotted
+  into it is a buffer overrun with a view of the desktop.
+- `pitch_px` is the capacity's width, **for the window's whole life**. A pixel
+  lives at `y * pitch_px + x` forever, so a resize relocates nothing: the image
+  the app already drew is still exactly where it left it.
+- Both stores get it — the task-backed canvas AND the kernel-side content — so
+  `wm_resize` is two size fields, a fill of whatever growing exposed, a damage
+  union, and an event. It **allocates nothing and cannot fail.**
+- The price is standing memory, **measured** at 1024x768: a windowed task
+  costs 7,616,144 bytes against a windowless one's 1,306,808, so a window is
+  6,309,336 — two capacity surfaces (2 × 3,145,728) plus ~17KB of page tables
+  and bookkeeping. The same window under content-sized allocation carried
+  ~474KB of surfaces. Note that only HALF is visible from `/proc`: the
+  task-side canvas lands in the heap range (it is what bumps `heapEnd` first,
+  so a fresh GUI app's heap starts at exactly `0x70000000 + capacity + one
+  guard page`), while the kernel-side `content` surface is `kmalloc`'d and
+  appears nowhere a process can see. Lazy commit is possible and still
+  shootdown-free, since the mapped region is always a prefix of the
+  reservation — booked in DEBTS with the reason it wasn't taken.
+
+**The ABI consequence, stated once:** `pitch_px != width` on a canvas. Every
+libdraw primitive already addressed rows through pitch (`surface_row`), so
+nothing in userland changed; the stale claim was a comment in `os64/gui.h`
+promising they were equal, and that comment is now the explanation of why they
+are not.
+
+### The gesture
+
+- The chord is BOTH modifiers, so a plain Ctrl-click or Alt-click still reaches
+  the app. Ctrl+Alt rather than plain Alt because Alt belongs to the terminal
+  stack (Alt+arrows, Alt+F1..F8 switch VTs and are consumed before any of
+  this) — the VT8 chapter's ruling named Ctrl+Alt as the escape hatch, and
+  this is the day it was needed.
+- The quadrant the press lands in picks the edges that follow the pointer
+  (mwm's rule): grab the left half and the left edge moves, so the opposite
+  corner stays pinned.
+- **The band is twm's 1987 wireframe, and not for nostalgia:** the app receives
+  exactly ONE resize event per gesture instead of one per mouse packet, so a
+  program that repaints slowly cannot be dragged into a repaint storm. Opaque
+  (live) resize is the natural upgrade — same commit, called from the MOVE arm
+  instead of the UP arm. The band damages four thin strips per frame rather
+  than the rectangle it encloses, which is what took `DAMAGE_MAX_RECTS` from 8
+  to 16 (eight band edges plus a cursor overflowed the list into the
+  full-screen union fallback the damage-list work exists to avoid).
+- `wm_clamp_frame` is shared by the preview and the commit, so the outline can
+  never promise a size the window then refuses.
+
+### What the slice found on the way
+
+- **A use-after-free older than resize.** The drag state held a raw `window_t*`
+  and nothing cleared it when a window died, so a task exiting while the user
+  held its titlebar left the next MOUSE_MOVE calling `wm_move` on freed memory.
+  Never hit by accident because nothing had ever died mid-gesture. `wm_destroy`
+  now calls `gui_grab_release` first.
+- **Modifier state was published in the wrong place.** The first version
+  sampled the modifier bitmask in `keyboard_deliver_event`, which misses every
+  modifier change that produces no delivered event — the extended path updates
+  the state and returns without delivering for any key that is not an arrow or
+  a named editing key, so holding Right Alt would change the driver's mind and
+  tell nobody. State is published where it CHANGES now
+  (`keyboard_publish_modifiers`), with the choke still covering the xHCI path.
+- Mouse events carry `modifiers` (input.h, ABI-compatible — the union had 20
+  bytes and was using 14), because a compositor keeping its own shadow copy of
+  modifier state would drift out of sync across a VT switch.
+
 ## Testing / debugging
 
 - `DEBUG_GUI` (CONFIG.h bit 21; also a cmdline token) gates all GUI printd's:
@@ -498,7 +586,9 @@ clicked); P5 and VBox passes; GRAPHICS.md layer map gains VT8.
    measuring first — dirty-rect flushes are already small.
 4. Damage rect LIST instead of single union (confined to `gui_damage_add_locked`
    + the frame loop).
-5. Window resize, close buttons, minimize; `GUI_WINDOW_NO_DECORATIONS` honor.
+5. ~~Window resize~~ **BUILT 2026-08-19 (see the resize chapter above)**; close
+   buttons, minimize, `GUI_WINDOW_NO_DECORATIONS` honor — all still open, all
+   chrome features.
 6. Mouse wheel + 5-button (IntelliMouse magic sample-rate handshake).
 7. Alpha translucency (X byte in XRGB is reserved for it; `surface_blit_masked`
    already does shaped blits).

@@ -131,6 +131,14 @@ struct os64_ui
     os64_ui_widget_t *focus;     // key events go here (NULL = dropped)
     os64_gui_rect_t  dirty;      // union of everything needing repaint
     bool             any_dirty;
+
+    // Called after the window changed size, once libui has refreshed the draw
+    // context and stretched `root` to the new content area — the app's cue to
+    // re-run whatever layout it used in the first place (libui cannot know:
+    // layout is a call the app makes, not a policy libui holds). NULL is the
+    // honest default for a fixed-layout window; everything still repaints,
+    // the widgets just stay where the app put them.
+    void (*on_resize)(os64_ui_t *ui);
 };
 
 // Bind a UI to a window's draw context and load the theme. root may be set

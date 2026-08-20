@@ -224,7 +224,32 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
 // foreground, who gets SIGINT) lives entirely in console.c — this file stays
 // a device driver, exactly the layering SIGINT.md prescribes; gui_owns_glass
 // is a routing predicate, not policy, same standing as tty_input_event.
+// Last modifier state seen by the choke below — the mouse path's window into
+// the keyboard (see keyboard_current_modifiers in the header for why it is
+// sampled HERE and not from s_modifiers). Written from IRQ context, read from
+// IRQ context; a single byte, so `volatile` and natural atomicity are the
+// whole synchronization story.
+static volatile uint8_t s_liveModifiers;
+
+uint8_t keyboard_current_modifiers(void) {
+    return s_liveModifiers;
+}
+
+// The PS/2 half of the publication (see the forward declaration above the
+// updaters). Defined down here so it sits beside the other half.
+static void keyboard_publish_modifiers(void) {
+    s_liveModifiers = s_modifiers;
+}
+
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
+    // The USB half. The xHCI HID path carries its own modifier byte and never
+    // touches this file's s_modifiers, so the choke is the only place that
+    // sees it — and for the PS/2 path this simply re-publishes the value
+    // keyboard_publish_modifiers just wrote. Sampled BEFORE the routing fork,
+    // because a chord can be pressed while the GUI holds the glass and
+    // released after a switch to a text VT.
+    s_liveModifiers = modifiers;
+
     if (gui_owns_glass()) {
         input_inject_key(ascii, scancode, modifiers, pressed);
         return;
@@ -302,6 +327,15 @@ static char keyboard_translate_scancode(uint8_t scancode) {
     return base;
 }
 
+// Publish the PS/2 driver's modifier state to the shared snapshot. Called
+// from BOTH modifier updaters, because sampling at keyboard_deliver_event
+// alone has a hole: the extended path updates s_modifiers and then returns
+// without delivering anything for a key that is not an arrow or a named
+// editing key — so holding Right Alt would change the driver's mind and never
+// tell anybody. A modifier is state, and state has to be published where it
+// CHANGES, not where the next unrelated event happens to pass by.
+static void keyboard_publish_modifiers(void);
+
 // Update latch-style modifiers for non-extended keys.
 static void keyboard_update_modifier(uint8_t scancode, bool pressed) {
     switch (scancode) {
@@ -340,6 +374,7 @@ static void keyboard_update_modifier(uint8_t scancode, bool pressed) {
         default:
             break;
     }
+    keyboard_publish_modifiers();
 }
 
 // Extended scancodes provide right-side modifiers.
@@ -362,6 +397,7 @@ static void keyboard_update_modifier_extended(uint8_t scancode, bool pressed) {
         default:
             break;
     }
+    keyboard_publish_modifiers();
 }
 
 // Prepare keyboard state before IRQs are enabled.

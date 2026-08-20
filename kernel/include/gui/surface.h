@@ -1,6 +1,7 @@
 #ifndef GUI_SURFACE_H
 #define GUI_SURFACE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include "gui/gui_types.h"
 
@@ -16,6 +17,28 @@
 // allocation failure. Failure must be handled by the caller — never panic
 // over a window that couldn't be created.
 int surface_init(surface_t *s, uint32_t w, uint32_t h);
+
+// The same, but backed by a cap_w × cap_h buffer while REPORTING w × h — the
+// surface is its capacity's pitch and its own size at once. Born for resizable
+// window canvases (2026-08-19): reserving the pitch at capacity is what lets a
+// window change size without the buffer moving, without a single pixel being
+// relocated, and — for a task-mapped canvas — without the kernel ever having
+// to unmap a page out from under a running app.
+//
+// The size may later be changed within the capacity by surface_set_size();
+// pitch_px stays at cap_w for the surface's whole life, which is precisely the
+// property that makes pixels[y * pitch_px + x] a stable address.
+int surface_init_capacity(surface_t *s, uint32_t w, uint32_t h,
+                          uint32_t cap_w, uint32_t cap_h);
+
+// Re-report a capacity-backed surface at a new size. Pure bookkeeping: no
+// allocation, no copy, no pixel moves. The caller is responsible for painting
+// any newly exposed area (it holds whatever was last there) and for not
+// exceeding the capacity it asked for — assert-shaped, so a caller that gets
+// it wrong is refused with false rather than quietly walking off the buffer.
+bool surface_set_size(surface_t *s, uint32_t w, uint32_t h,
+                      uint32_t cap_w, uint32_t cap_h);
+
 void surface_free(surface_t *s);
 
 // Fill r (clipped) with a solid color.

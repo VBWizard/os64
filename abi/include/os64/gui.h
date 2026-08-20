@@ -64,7 +64,20 @@ typedef struct os64_gui_surface
     uint32_t *pixels;    // your mapped canvas — draw here, then publish
     uint32_t width;      // in pixels
     uint32_t height;
-    uint32_t pitch_px;   // pixels per row (== width for canvases)
+    // Pixels per row — and NOT the same thing as width. A canvas is mapped at
+    // its CAPACITY (see below), so pitch_px is the capacity's width and stays
+    // put for the window's whole life while width/height move with the
+    // window. Always address a pixel as pixels[y * pitch_px + x]; a canvas
+    // whose pitch you assumed was its width draws a beautiful diagonal
+    // staircase the first time somebody resizes it.
+    //
+    // WHY IT WORKS THIS WAY (the resize contract, 2026-08-19): the canvas is
+    // reserved and mapped ONCE at capacity, so a resize never moves your
+    // pointer and never relocates a pixel — the image you already drew is
+    // still exactly where you left it, and the kernel never has to unmap a
+    // page out from under a running app. That is the whole reason resizing
+    // is cheap here instead of a lifetime problem.
+    uint32_t pitch_px;
 } os64_gui_surface_t;
 
 // Input event types (input.h's values, verbatim).
@@ -73,6 +86,19 @@ typedef struct os64_gui_surface
 #define OS64_GUI_EVENT_MOUSE_MOVE        3
 #define OS64_GUI_EVENT_MOUSE_BUTTON_DOWN 4
 #define OS64_GUI_EVENT_MOUSE_BUTTON_UP   5
+// Your content area changed size. Re-fetch geometry with
+// os64_gui_window_get_surface (the POINTER is unchanged — only width/height
+// move) and repaint the whole thing: the newly exposed strip holds the
+// window's background color, not your pixels.
+#define OS64_GUI_EVENT_WINDOW_RESIZE     6
+
+// Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
+// key events and — since resize — by mouse events too.
+#define OS64_GUI_MOD_SHIFT (1u << 0)
+#define OS64_GUI_MOD_CTRL  (1u << 1)
+#define OS64_GUI_MOD_ALT   (1u << 2)
+#define OS64_GUI_MOD_CAPS  (1u << 3)
+#define OS64_GUI_MOD_NUM   (1u << 4)
 
 typedef struct os64_gui_event
 {
@@ -88,7 +114,11 @@ typedef struct os64_gui_event
             int16_t dx, dy;     // raw motion delta
             uint8_t buttons;    // current button state bitmask
             uint8_t button;     // which button changed (DOWN/UP)
+            uint8_t modifiers;  // OS64_GUI_MOD_* at event time
         } mouse;
+        struct {
+            int32_t w, h;       // the NEW content size
+        } resize;
     };
     uint64_t tick;              // kTicksSinceStart at enqueue
 } os64_gui_event_t;

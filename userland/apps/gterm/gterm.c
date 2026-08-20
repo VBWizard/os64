@@ -168,6 +168,21 @@ int main(int argc, char **argv)
 		{
 			if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii != 0)
 				os64_write((int32_t)master, &ev.key.ascii, 1);
+			else if (ev.type == OS64_GUI_EVENT_WINDOW_RESIZE)
+			{
+				// The WINDOW resizes; the GRID does not — not yet. The pty's
+				// cell array is fixed at creation, so a bigger window gets
+				// letterboxed in background and a smaller one clips its right
+				// and bottom edges away (every primitive clips, so this is
+				// safe — just partial). Teaching the pty its new size, and
+				// the program inside it, is the other half: grid realloc plus
+				// a notification, which is SIGWINCH's entire job description
+				// and PTY.md's booked "Resize" row. Its own slice, because a
+				// terminal that LIES about its size is worse than one that
+				// lets you see the seam.
+				os64_draw_ctx_refresh(&ctx);
+				rendered_gen = ~(uint64_t)0;   // force a repaint next pass
+			}
 		}
 		if (erc < 0)
 		{

@@ -252,6 +252,7 @@ void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 	ui->root = ui->grab = ui->focus = (os64_ui_widget_t *)0;
 	ui->any_dirty = false;
 	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
+	ui->on_resize = (void (*)(os64_ui_t *))0;
 }
 
 void os64_ui_set_root(os64_ui_t *ui, os64_ui_widget_t *root)
@@ -316,6 +317,38 @@ bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 	case OS64_GUI_EVENT_KEY_UP: {
 		os64_ui_widget_t *w = ui->focus;
 		return (w && w->cls->event) ? w->cls->event(w, ui, ev) : false;
+	}
+	case OS64_GUI_EVENT_WINDOW_RESIZE: {
+		// The window grew or shrank. libui does the three things every app
+		// would otherwise have to remember, in the order they have to happen:
+		//
+		//   1. refresh the draw context, or every primitive keeps clipping to
+		//      the old bounds and the new strip stays blank;
+		//   2. stretch the root to the whole content area, because "the root
+		//      IS the window" is the model every one of these trees assumes;
+		//   3. hand the app its re-layout callback, since the layout call was
+		//      the APP's (os64_ui_stack_vertical is a function you call, not a
+		//      mode you set) and libui has no way to guess which one.
+		//
+		// Then mark the ENTIRE surface dirty rather than unioning bounds: on a
+		// shrink the vacated area belongs to nobody's widget, and on a grow the
+		// newly exposed strip holds the window's background — neither is
+		// reachable from any widget rect, so a bounds-union repaint would
+		// leave visible litter exactly where the eye is already looking.
+		os64_draw_ctx_refresh(ui->ctx);
+		// Rootless is legal (os64_ui_init leaves root NULL, and the sibling
+		// cases above all tolerate it) — refresh the context and leave; there
+		// is no tree to stretch and nothing of ours to repaint.
+		if (!ui->root)
+			return true;
+		ui->root->bounds = (os64_gui_rect_t){0, 0,
+		                                     (int32_t)ui->ctx->surf.width,
+		                                     (int32_t)ui->ctx->surf.height};
+		if (ui->on_resize)
+			ui->on_resize(ui);
+		ui->dirty = ui->root->bounds;
+		ui->any_dirty = true;
+		return true;
 	}
 	default:
 		return false;

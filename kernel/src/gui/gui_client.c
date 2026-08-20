@@ -143,11 +143,20 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	bool pivot = (task != NULL && !task->kernelTask &&
 	              content_w >= 8 && content_h >= 8);
 
+	// The extent is sized to the CAPACITY, not to today's window — the
+	// reservation that makes resize free (window.h's canvas_cap_w comment has
+	// the full argument). wm_create applies the identical rule to its own
+	// stores a few lines below; both call the one helper so they cannot
+	// drift apart, which matters because a canvas smaller than the content it
+	// is snapshotted into would be a buffer overrun with a view of the screen.
+	uint32_t cap_w = 0, cap_h = 0;
+	wm_canvas_capacity_for(content_w, content_h, &cap_w, &cap_h);
+
 	uint64_t canvas_phys = 0;
 	uintptr_t canvas_va = 0;
 	uint64_t canvas_bytes = 0;
 	if (pivot) {
-		canvas_bytes = ((uint64_t)content_w * (uint64_t)content_h * 4 +
+		canvas_bytes = ((uint64_t)cap_w * (uint64_t)cap_h * 4 +
 		                PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
 		canvas_phys = allocate_memory_aligned(canvas_bytes);
 		if (canvas_phys == 0)
@@ -196,7 +205,10 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		win->canvas.pixels   = (uint32_t *)(canvas_phys | kHHDMOffset);
 		win->canvas.width    = win->content.width;
 		win->canvas.height   = win->content.height;
-		win->canvas.pitch_px = win->content.width;
+		// The RESERVATION's width, matching the extent that was just mapped
+		// — and the number the client will address rows by for this window's
+		// whole life, resizes included.
+		win->canvas.pitch_px = win->canvas_cap_w;
 		win->canvas_task_phys = canvas_phys;
 		win->canvas_task_va   = canvas_va;
 		win->canvas_pages     = (uint32_t)(canvas_bytes / PAGE_SIZE);
@@ -204,9 +216,13 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		// black; wm_create filled content with its initial color. Match
 		// them, exactly as the kmalloc canvas was matched, so a client's
 		// first PARTIAL publish doesn't snapshot a mismatched border
-		// around its damage rect.
-		memcpy(win->canvas.pixels, win->content.pixels,
-		       (size_t)win->content.width * win->content.height * 4);
+		// around its damage rect. Row-wise now that both surfaces are
+		// capacity-backed: the rows are contiguous only up to `width`, and
+		// beyond it lies reservation nobody has drawn in yet.
+		for (uint32_t row = 0; row < win->content.height; row++)
+			memcpy(win->canvas.pixels + (size_t)row * win->canvas.pitch_px,
+			       win->content.pixels + (size_t)row * win->content.pitch_px,
+			       (size_t)win->content.width * 4);
 	}
 
 	s_handles[handle - 1] = win;

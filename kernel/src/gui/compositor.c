@@ -18,6 +18,7 @@
 #include "gui/gui_internal.h"
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
+#include "driver/system/keyboard.h"   // KEYBOARD_MOD_* — the Ctrl+Alt gestures
 
 #include "CONFIG.h"
 #include "kernel.h"
@@ -113,7 +114,16 @@ bool gui_owns_glass(void)
 // a merge grows an entry, not a redesign. (Honesty upgrade from review,
 // 2026-08-19 — the first version of this comment claimed the slack bound.)
 // ---------------------------------------------------------------------------
-#define DAMAGE_MAX_RECTS   8
+// Sixteen since the rubber band (2026-08-19). An interactive resize adds the
+// four edges of the OLD outline and the four of the NEW one every time the
+// mouse moves — eight thin rects that deliberately do not merge with each
+// other (their unions are the whole window's area, which is exactly what the
+// slack rule is there to refuse). At the old ceiling of eight, adding the
+// cursor's rect on top tipped every band frame into the union fallback and a
+// full-screen composite, which is the precise cost the list was built to
+// avoid. The population argument in the comment above is unchanged; the
+// population simply grew a member.
+#define DAMAGE_MAX_RECTS   16
 // One 8x16 glyph cell (128 px) of tolerated waste per merge: generous enough
 // that a scrolling console line's per-glyph damage collapses into one row
 // rect, tight enough that opposite corners of a 1024x768 screen never do.
@@ -263,6 +273,18 @@ void gui_damage_add(rect_t screen_rect)
 	spinlock_release_irqrestore(&kGuiLock, flags);
 }
 
+void gui_census(uint32_t *windows, uint64_t *surface_bytes)
+{
+	*windows = 0;
+	*surface_bytes = 0;
+	if (!kEnableGUI)
+		return;   // no compositor, no z-list, nothing to lock
+
+	uint64_t flags = spinlock_acquire_irqsave(&kGuiLock);
+	wm_census_locked(windows, surface_bytes);
+	spinlock_release_irqrestore(&kGuiLock, flags);
+}
+
 void gui_emergency_disable(void)
 {
 	// One store, no locks — the doctrine survives the sink it used to serve:
@@ -307,6 +329,12 @@ static void paint_desktop(void)
 // caller flushes AFTER releasing it. This is the only writer of the
 // backbuffer.
 // ---------------------------------------------------------------------------
+// The rubber band lives with the gesture state that drives it (below), but it
+// is a SCENE LAYER and has to be drawn from here — hence the one forward
+// declaration. It sits above the windows and below the cursor: an outline you
+// could lose the pointer inside would be a poor tool.
+static void band_composite(surface_t *backbuffer, rect_t damage);
+
 static rect_t composite_locked(rect_t damage)
 {
 	rect_t screen = {0, 0, (int32_t)kBackbuffer.width, (int32_t)kBackbuffer.height};
@@ -318,6 +346,10 @@ static rect_t composite_locked(rect_t damage)
 
 	// Layer 1: windows, bottom-up by z-order.
 	wm_composite(&kBackbuffer, damage);
+
+	// Layer 2: the interactive-resize outline, when one is up. No-op
+	// otherwise, and the check is one pointer compare per damage rect.
+	band_composite(&kBackbuffer, damage);
 
 	// Cursor last, and clipped to this rect like everything else. The old code
 	// drew the FULL cursor art on the argument that stray pixels were harmless
@@ -343,6 +375,167 @@ static rect_t composite_locked(rect_t damage)
 static window_t *s_drag_window = NULL;
 static int32_t s_drag_dx, s_drag_dy;   // grab offset: cursor minus frame origin
 
+// ── Interactive resize: the Ctrl+Alt gesture and its rubber band ────────────
+//
+// THE GESTURE (ruled 2026-08-19). Ctrl+Alt held: left-drag moves the window,
+// right-drag resizes it — anywhere in the window, no handle to hit. This is
+// fvwm's bargain, and before fvwm it was uwm's and mwm's: the pointer plus a
+// modifier is a complete window-management vocabulary, so the chrome does not
+// have to grow targets for it. os64 gets three things out of choosing it
+// first: no chrome change at all (composite_one is untouched), no 1-pixel
+// border to hit (the border stays a hairline because nobody has to grab it),
+// and it still works on a window dragged half off the screen — the case
+// corner grips famously cannot reach. Ctrl+Alt rather than plain Alt because
+// Alt belongs to the terminal stack here (Alt+arrows, Alt+F1..F8 switch VTs
+// and are consumed before any of this); GRAPHICS.md's VT8 ruling named
+// Ctrl+Alt as the escape hatch for exactly this day.
+//
+// THE BAND. A resize shows a wireframe outline and a live size readout; the
+// window itself does not change until the button comes up. That is twm's
+// 1987 look, and the reason to start there is not nostalgia: the app receives
+// exactly ONE resize event per gesture instead of one per mouse packet, so a
+// program that repaints slowly cannot be dragged into a repaint storm it will
+// never catch up with. Opaque (live) resize is the natural upgrade once
+// somebody wants it — it is the same commit, just called from the MOVE arm
+// instead of the UP arm.
+//
+// The readout reports CONTENT size, not frame size: the client area is what
+// an app actually gets, and for a terminal it is the number that matters.
+static window_t *s_band_window = NULL;   // the window being rubber-banded
+static rect_t    s_band_rect;            // the outline, screen coords, as drawn
+static rect_t    s_band_origin;          // its frame when the gesture began
+static int32_t   s_band_anchor_x, s_band_anchor_y;   // where the press landed
+// Which edges follow the pointer, chosen from the quadrant the press landed
+// in: grab the left half and the LEFT edge moves (so the right edge stays
+// pinned), grab the top half and the top edge moves. mwm's rule, and the one
+// that makes "drag toward the corner you grabbed" mean what it looks like.
+static bool      s_band_west, s_band_north;
+
+#define BAND_THICKNESS   2
+#define BAND_COLOR       GUI_COLOR_WHITE
+// The top strip of the outline is damaged this tall rather than
+// BAND_THICKNESS tall, because the size readout is drawn inside it.
+#define BAND_LABEL_STRIP 24
+
+// Minimal unsigned-to-decimal, because the band needs a string and the
+// kernel's formatter writes to the log rather than to a buffer. Returns the
+// length written; the caller sizes `out` (a 32-bit pixel count is 10 digits).
+static size_t band_utoa(uint32_t v, char *out)
+{
+	char tmp[12];
+	size_t n = 0;
+	do {
+		tmp[n++] = (char)('0' + (v % 10));
+		v /= 10;
+	} while (v != 0);
+	for (size_t i = 0; i < n; i++)
+		out[i] = tmp[n - 1 - i];
+	return n;
+}
+
+// Damage the four edges of an outline instead of the rectangle it encloses.
+// The whole point of the band is that it costs four thin strips per frame
+// rather than one window-sized recomposite; unioning them here would hand
+// back exactly the cost we are avoiding.
+static void band_damage_locked(rect_t b)
+{
+	if (rect_is_empty(b))
+		return;
+	gui_damage_add_locked((rect_t){b.x, b.y, b.w, BAND_LABEL_STRIP});
+	gui_damage_add_locked((rect_t){b.x, b.y + b.h - BAND_THICKNESS, b.w, BAND_THICKNESS});
+	gui_damage_add_locked((rect_t){b.x, b.y, BAND_THICKNESS, b.h});
+	gui_damage_add_locked((rect_t){b.x + b.w - BAND_THICKNESS, b.y, BAND_THICKNESS, b.h});
+}
+
+// Draw the band into the damaged region. Same contract as composite_one:
+// everything is done in VIEW coordinates so surface.c's clipping makes
+// "writes stay inside the damage rect" structural rather than remembered.
+static void band_composite(surface_t *backbuffer, rect_t damage)
+{
+	if (s_band_window == NULL)
+		return;
+
+	surface_t view = surface_view(backbuffer, damage);
+	rect_t b = {s_band_rect.x - damage.x, s_band_rect.y - damage.y,
+	            s_band_rect.w, s_band_rect.h};
+
+	for (int32_t i = 0; i < BAND_THICKNESS; i++)
+		surface_draw_rect(&view,
+		                  (rect_t){b.x + i, b.y + i, b.w - 2 * i, b.h - 2 * i},
+		                  BAND_COLOR);
+
+	// "640x480" — the CONTENT the client will be handed, derived with the
+	// same chrome inset wm_resize will apply to the frame we commit.
+	char label[24];
+	size_t len = 0;
+	int32_t content_w = s_band_rect.w - 2 * GUI_BORDER_WIDTH;
+	int32_t content_h = s_band_rect.h - GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH;
+	if (content_w < 0) content_w = 0;
+	if (content_h < 0) content_h = 0;
+	len += band_utoa((uint32_t)content_w, label + len);
+	label[len++] = 'x';
+	len += band_utoa((uint32_t)content_h, label + len);
+	surface_draw_text(&view, b.x + BAND_THICKNESS + 4, b.y + BAND_THICKNESS + 3,
+	                  label, len, GUI_COLOR_WHITE, GUI_COLOR_BLACK);
+}
+
+// Recompute the outline from the current cursor position and republish the
+// damage. Called on every MOUSE_MOVE while a band is up.
+static void band_track_locked(int32_t x, int32_t y)
+{
+	int32_t dx = x - s_band_anchor_x;
+	int32_t dy = y - s_band_anchor_y;
+
+	rect_t f = s_band_origin;
+	// A west/north edge moving means the ORIGIN moves and the extent shrinks
+	// by the same amount — the opposite corner stays exactly where it is,
+	// which is the entire visual promise of grabbing a corner.
+	if (s_band_west) {
+		f.x += dx;
+		f.w -= dx;
+	} else {
+		f.w += dx;
+	}
+	if (s_band_north) {
+		f.y += dy;
+		f.h -= dy;
+	} else {
+		f.h += dy;
+	}
+
+	// Preview EXACTLY what the commit will do — same function, so the outline
+	// cannot promise a size wm_resize would then clamp away.
+	rect_t clamped = wm_clamp_frame(s_band_window, f);
+	// Clamping shrinks from the far edge; when the near edge is the one
+	// moving, re-pin the far edge so the window grows out of the corner the
+	// user grabbed instead of sliding.
+	if (s_band_west)
+		clamped.x = s_band_origin.x + s_band_origin.w - clamped.w;
+	if (s_band_north)
+		clamped.y = s_band_origin.y + s_band_origin.h - clamped.h;
+
+	if (clamped.x == s_band_rect.x && clamped.y == s_band_rect.y &&
+	    clamped.w == s_band_rect.w && clamped.h == s_band_rect.h)
+		return;   // sub-pixel wobble inside a clamp: nothing to redraw
+
+	band_damage_locked(s_band_rect);   // erase where it was
+	s_band_rect = clamped;
+	band_damage_locked(s_band_rect);   // draw where it is
+}
+
+void gui_grab_release(const struct window *w)
+{
+	// Called from wm_destroy under kGuiLock — the one moment a dying window
+	// can un-name itself before its memory goes back. Compare only; never
+	// dereference (the caller is mid-teardown).
+	if (s_drag_window == (const window_t *)w)
+		s_drag_window = NULL;
+	if (s_band_window == (const window_t *)w) {
+		band_damage_locked(s_band_rect);   // erase the orphaned outline
+		s_band_window = NULL;
+	}
+}
+
 // Deliver a mouse event to the window IF the point is inside its content
 // area (chrome clicks are the window system's business, not the client's).
 static void deliver_mouse_to_window(window_t *w, input_event_t ev)
@@ -353,6 +546,16 @@ static void deliver_mouse_to_window(window_t *w, input_event_t ev)
 	ev.mouse.x -= content.x;
 	ev.mouse.y -= content.y;
 	wm_deliver_event(w, &ev);
+}
+
+// Is the window-management chord held? BOTH modifiers, so a plain Ctrl-click
+// or Alt-click still reaches the app underneath — the chord has to be
+// deliberate, because it overrides whatever the window itself wanted the
+// click to mean.
+static inline bool wm_chord_held(const input_event_t *ev)
+{
+	const uint8_t both = KEYBOARD_MOD_CTRL | KEYBOARD_MOD_ALT;
+	return (ev->mouse.modifiers & both) == both;
 }
 
 static void route_event_locked(const input_event_t *ev)
@@ -367,7 +570,12 @@ static void route_event_locked(const input_event_t *ev)
 		moved = rect_union(moved, cursor_rect());
 		gui_damage_add_locked(moved);
 
-		if (s_drag_window)
+		// A gesture in progress OWNS the pointer: no hit-testing, no delivery
+		// to whatever the cursor happens to sweep across. Losing this is how
+		// a drag ends up half-delivered to three different windows.
+		if (s_band_window)
+			band_track_locked(ev->mouse.x, ev->mouse.y);
+		else if (s_drag_window)
 			wm_move(s_drag_window,
 			        ev->mouse.x - s_drag_dx, ev->mouse.y - s_drag_dy);
 		else {
@@ -378,10 +586,44 @@ static void route_event_locked(const input_event_t *ev)
 		break;
 	}
 	case INPUT_EVENT_MOUSE_BUTTON_DOWN: {
+		if (s_band_window || s_drag_window)
+			break;   // a second button during a gesture is not a new gesture
+
 		window_t *w = wm_topmost_at(ev->mouse.x, ev->mouse.y);
 		if (!w)
 			break;   // desktop click: nothing to do (yet)
+		// The modifiers are logged because a chord that does not fire looks
+		// exactly like a chord that was never held — this line is the
+		// difference between those two, and it costs one printd per click.
+		printd(DEBUG_GUI, "guicomp: button %u down on window %u at (%d,%d), mods 0x%02x\n",
+			ev->mouse.button, w->id, ev->mouse.x, ev->mouse.y, ev->mouse.modifiers);
 		wm_raise(w);
+
+		// The chord's two verbs (see the gesture comment above the band
+		// state): left moves, right resizes, anywhere in the window.
+		if (wm_chord_held(ev)) {
+			if (ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
+				s_drag_window = w;
+				s_drag_dx = ev->mouse.x - w->frame.x;
+				s_drag_dy = ev->mouse.y - w->frame.y;
+			} else if (ev->mouse.button == INPUT_MOUSE_BUTTON_RIGHT) {
+				s_band_window = w;
+				s_band_origin = w->frame;
+				s_band_rect   = w->frame;
+				s_band_anchor_x = ev->mouse.x;
+				s_band_anchor_y = ev->mouse.y;
+				// The quadrant picks the edges: grabbing in the left half
+				// moves the left edge, the top half moves the top edge.
+				s_band_west  = (ev->mouse.x - w->frame.x) < w->frame.w / 2;
+				s_band_north = (ev->mouse.y - w->frame.y) < w->frame.h / 2;
+				band_damage_locked(s_band_rect);   // paint the initial outline
+				printd(DEBUG_GUI, "guicomp: band resize on window %u from %dx%d (%s%s corner)\n",
+					w->id, w->frame.w, w->frame.h,
+					s_band_north ? "N" : "S", s_band_west ? "W" : "E");
+			}
+			break;
+		}
+
 		if (ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT &&
 		    wm_point_in_titlebar(w, ev->mouse.x, ev->mouse.y)) {
 			// Grab for dragging; remember where in the frame we grabbed so
@@ -395,6 +637,22 @@ static void route_event_locked(const input_event_t *ev)
 		break;
 	}
 	case INPUT_EVENT_MOUSE_BUTTON_UP: {
+		// The band commits on release — one wm_resize, therefore one resize
+		// event for the app, no matter how far the pointer travelled. The
+		// chord is deliberately NOT re-checked here: the gesture belongs to
+		// the button that started it, so letting go of Ctrl+Alt mid-drag
+		// finishes the resize instead of abandoning a window at whatever size
+		// the outline happened to be. (Every WM that got this wrong taught
+		// its users to release the mouse first, which is not a lesson worth
+		// teaching.)
+		if (s_band_window && ev->mouse.button == INPUT_MOUSE_BUTTON_RIGHT) {
+			window_t *w = s_band_window;
+			rect_t final = s_band_rect;
+			band_damage_locked(s_band_rect);   // erase the outline
+			s_band_window = NULL;
+			wm_resize(w, final);
+			break;
+		}
 		if (s_drag_window && ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
 			s_drag_window = NULL;
 			break;
@@ -406,6 +664,10 @@ static void route_event_locked(const input_event_t *ev)
 	}
 	case INPUT_EVENT_KEY_DOWN:
 	case INPUT_EVENT_KEY_UP: {
+		printd(DEBUG_GUI | DEBUG_DETAILED,
+			"guicomp: key %s sc 0x%02x ascii 0x%02x mods 0x%02x\n",
+			ev->type == INPUT_EVENT_KEY_DOWN ? "down" : "up  ",
+			ev->key.scancode, (uint8_t)ev->key.ascii, ev->key.modifiers);
 		window_t *focus = wm_focused();
 		if (focus)
 			wm_deliver_event(focus, ev);

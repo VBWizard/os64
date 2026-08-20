@@ -9,6 +9,8 @@
 #include "gui/input.h"
 #include "gui/gui_types.h"
 #include "gui/compositor.h"   // gui_owns_glass — mouse routing (VT8 chapter)
+#include "driver/system/keyboard.h"   // keyboard_current_modifiers — the pointer's
+                                      // view of the keyboard (Ctrl+Alt+drag)
 
 #include "CONFIG.h"
 #include "kernel.h"
@@ -87,6 +89,13 @@ void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
 	if (!gui_owns_glass())
 		return;
 
+	// The keyboard state that was true when this packet arrived. Sampled ONCE
+	// for the whole packet so the move and the button edges it may also carry
+	// agree with each other — a chord that is released mid-packet must not
+	// produce a move that thinks it was held and a button-up that thinks it
+	// was not (that disagreement is exactly how a modifier-drag gets stuck).
+	uint8_t modifiers = keyboard_current_modifiers();
+
 	uint64_t flags = spinlock_acquire_irqsave(&s_input_lock);
 
 	// Integrate motion and clamp to the screen. PS/2 y is positive-up;
@@ -103,7 +112,8 @@ void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
 		input_event_t ev = {
 			.type = INPUT_EVENT_MOUSE_MOVE,
 			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dx = dx, .dy = dy,
-			           .buttons = buttons, .button = 0 },
+			           .buttons = buttons, .button = 0,
+			           .modifiers = modifiers },
 		};
 		enqueue_locked(&ev);
 	}
@@ -119,7 +129,8 @@ void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
 			.type = (buttons & mask) ? INPUT_EVENT_MOUSE_BUTTON_DOWN
 			                         : INPUT_EVENT_MOUSE_BUTTON_UP,
 			.mouse = { .x = s_mouse_x, .y = s_mouse_y, .dx = 0, .dy = 0,
-			           .buttons = buttons, .button = b },
+			           .buttons = buttons, .button = b,
+			           .modifiers = modifiers },
 		};
 		enqueue_locked(&ev);
 	}

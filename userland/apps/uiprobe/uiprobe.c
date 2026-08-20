@@ -57,6 +57,16 @@ static void on_quit(os64_ui_widget_t *w, void *user)
 	gRunning = false;
 }
 
+// The whole app-side cost of being resizable: re-run the layout you already
+// ran once at startup. By the time this is called libui has refreshed the
+// draw context and stretched the root to the new content area, so all that is
+// left is the arrangement — which was the app's call to make in the first
+// place, and stays the app's call.
+static void on_resize(os64_ui_t *ui)
+{
+	os64_ui_stack_vertical(ui, &gRoot);
+}
+
 int main(int argc, char **argv)
 {
 	(void)argc; (void)argv;
@@ -78,6 +88,7 @@ int main(int argc, char **argv)
 	}
 
 	os64_ui_init(&gUi, &ctx);
+	gUi.on_resize = on_resize;   // Ctrl+Alt+right-drag re-stacks the buttons
 
 	os64_ui_panel(&gRoot);
 	gRoot.bounds = (os64_gui_rect_t){0, 0, (int32_t)ctx.surf.width,

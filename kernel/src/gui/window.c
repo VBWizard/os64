@@ -11,11 +11,15 @@
 #include "gui/compositor.h"
 
 #include "CONFIG.h"
+#include "kernel.h"      // kTicksSinceStart — the stamp on a synthesized event
 #include "kmalloc.h"
 #include "memset.h"
 #include "printd.h"
 #include "scheduler.h"   // scheduler_wake_isleep_thread — event_wait's alarm bell
 #include "strcpy.h"
+#include "video.h"       // kFrameBuffer — the screen IS the canvas capacity
+
+extern struct Framebuffer kFrameBuffer;
 
 // Z-order list. s_top is frontmost (first hit-tested), s_bottom is nearest
 // the desktop (first composited). Both NULL when no windows exist.
@@ -69,14 +73,25 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 		return NULL;
 	memset(w, 0, sizeof(window_t));
 
-	if (surface_init(&w->content, (uint32_t)content_w, (uint32_t)content_h) != 0) {
+	// Both stores are reserved at CAPACITY and report the content size — the
+	// reservation that makes resize free of allocation, of pixel motion, and
+	// (for the task-backed canvas gui_window_create swaps in below) of any
+	// need to unmap a live user page. See canvas_cap_w's comment in window.h.
+	uint32_t cap_w, cap_h;
+	wm_canvas_capacity_for(content_w, content_h, &cap_w, &cap_h);
+	w->canvas_cap_w = cap_w;
+	w->canvas_cap_h = cap_h;
+
+	if (surface_init_capacity(&w->content, (uint32_t)content_w, (uint32_t)content_h,
+	                          cap_w, cap_h) != 0) {
 		kfree(w);
 		return NULL;
 	}
 	// The client-facing back buffer (see window.h). Filled identically to
 	// content so a client's first PARTIAL present doesn't snapshot garbage
 	// around its damage rect.
-	if (surface_init(&w->canvas, (uint32_t)content_w, (uint32_t)content_h) != 0) {
+	if (surface_init_capacity(&w->canvas, (uint32_t)content_w, (uint32_t)content_h,
+	                          cap_w, cap_h) != 0) {
 		surface_free(&w->content);
 		kfree(w);
 		return NULL;
@@ -120,6 +135,12 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 
 void wm_destroy(window_t *w)
 {
+	// FIRST: whatever the compositor is holding this window BY — a titlebar
+	// drag, a Ctrl+Alt gesture, a rubber band — stops naming it now, while the
+	// pointer is still valid to compare. See gui_grab_release's comment for
+	// the use-after-free this closes.
+	gui_grab_release(w);
+
 	gui_damage_add_locked(w->frame);   // repaint what the window covered
 	if (s_focused == w)
 		s_focused = w->below ? w->below : s_top;
@@ -172,6 +193,161 @@ void wm_move(window_t *w, int32_t x, int32_t y)
 	w->frame.x = x;
 	w->frame.y = y;
 	gui_damage_add_locked(rect_union(old, w->frame));
+}
+
+// The client API's own ceiling, mirrored: a window may be CREATED bigger than
+// the screen (up to 4096 a side), so capacity can never simply be "the
+// screen" — it is the screen or the window, whichever is larger.
+#define WINDOW_CAP_MAX 4096u
+
+void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
+                            uint32_t *cap_w, uint32_t *cap_h)
+{
+	uint32_t cw = kFrameBuffer.width;
+	uint32_t ch = kFrameBuffer.height;
+
+	// Never smaller than what the window already is, or the surface it is
+	// asked to hold would not fit its own reservation.
+	if (content_w > 0 && (uint32_t)content_w > cw)
+		cw = (uint32_t)content_w;
+	if (content_h > 0 && (uint32_t)content_h > ch)
+		ch = (uint32_t)content_h;
+
+	if (cw > WINDOW_CAP_MAX)
+		cw = WINDOW_CAP_MAX;
+	if (ch > WINDOW_CAP_MAX)
+		ch = WINDOW_CAP_MAX;
+
+	*cap_w = cw;
+	*cap_h = ch;
+}
+
+rect_t wm_clamp_frame(const window_t *w, rect_t frame)
+{
+	// Frame in, content out — the same inset wm_create applies, so the two
+	// can never disagree about where the client area begins.
+	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
+	int32_t content_h = frame.h - GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH;
+
+	// Clamp into [minimum, reservation]. Clamping rather than refusing is
+	// deliberate: this is driven by a mouse, and a drag that runs past a
+	// limit should STOP at the limit, not abandon the whole gesture.
+	if (content_w < GUI_WINDOW_MIN_CONTENT_W)
+		content_w = GUI_WINDOW_MIN_CONTENT_W;
+	if (content_h < GUI_WINDOW_MIN_CONTENT_H)
+		content_h = GUI_WINDOW_MIN_CONTENT_H;
+	if ((uint32_t)content_w > w->canvas_cap_w)
+		content_w = (int32_t)w->canvas_cap_w;
+	if ((uint32_t)content_h > w->canvas_cap_h)
+		content_h = (int32_t)w->canvas_cap_h;
+
+	// Re-derive the frame from the clamped content so the chrome the
+	// compositor draws and the surface the client draws stay the same window.
+	frame.w = content_w + 2 * GUI_BORDER_WIDTH;
+	frame.h = content_h + GUI_TITLEBAR_HEIGHT + GUI_BORDER_WIDTH;
+	return frame;
+}
+
+bool wm_resize(window_t *w, rect_t frame)
+{
+	// The SAME clamp the rubber band previewed with — one function, so what
+	// the user let go of is what they get. (When these were two copies of the
+	// arithmetic they would have agreed right up until the first time one of
+	// them changed.)
+	frame = wm_clamp_frame(w, frame);
+	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
+	int32_t content_h = frame.h - GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH;
+
+	uint32_t old_cw = w->content.width;
+	uint32_t old_ch = w->content.height;
+	rect_t old_frame = w->frame;
+
+	if (frame.x == old_frame.x && frame.y == old_frame.y &&
+	    (uint32_t)content_w == old_cw && (uint32_t)content_h == old_ch)
+		return false;   // a gesture that ended where it started
+
+	// The resize itself: two size fields. No allocation, no copy, no pixel
+	// relocation — the reservation already holds every pixel either surface
+	// will ever address, at offsets that do not move because pitch does not
+	// move. A false here would mean the capacity bookkeeping had gone wrong;
+	// leave the window exactly as it was and say so.
+	if (!surface_set_size(&w->content, (uint32_t)content_w, (uint32_t)content_h,
+	                      w->canvas_cap_w, w->canvas_cap_h) ||
+	    !surface_set_size(&w->canvas, (uint32_t)content_w, (uint32_t)content_h,
+	                      w->canvas_cap_w, w->canvas_cap_h)) {
+		printd(DEBUG_GUI, "wm: window %u resize to %dx%d refused by its own capacity %ux%u\n",
+			w->id, content_w, content_h, w->canvas_cap_w, w->canvas_cap_h);
+		surface_set_size(&w->content, old_cw, old_ch, w->canvas_cap_w, w->canvas_cap_h);
+		surface_set_size(&w->canvas, old_cw, old_ch, w->canvas_cap_w, w->canvas_cap_h);
+		return false;
+	}
+
+	// Paint what growing newly exposed. Those pixels are whatever the buffer
+	// last held there — zeroes on a first grow, an older frame's picture on a
+	// second — and the client cannot fix them until it processes the resize
+	// event below. BOTH surfaces get it for the same reason wm_create fills
+	// both: content is what the compositor shows in the meantime, and canvas
+	// is what a PARTIAL publish would otherwise snapshot garbage from.
+	rect_t grown[2];
+	int grown_count = 0;
+	if ((uint32_t)content_w > old_cw)
+		grown[grown_count++] = (rect_t){(int32_t)old_cw, 0,
+		                                content_w - (int32_t)old_cw, content_h};
+	if ((uint32_t)content_h > old_ch)
+		grown[grown_count++] = (rect_t){0, (int32_t)old_ch,
+		                                content_w, content_h - (int32_t)old_ch};
+	for (int i = 0; i < grown_count; i++) {
+		surface_fill_rect(&w->content, grown[i], WINDOW_CONTENT_INITIAL);
+		surface_fill_rect(&w->canvas, grown[i], WINDOW_CONTENT_INITIAL);
+	}
+
+	w->frame = frame;
+	gui_damage_add_locked(rect_union(old_frame, w->frame));
+
+	// Tell the owner. This is the ONLY way an app finds out — there is no
+	// polling interface for geometry, deliberately (see the event type's
+	// comment in input.h). An app that ignores it keeps drawing a correct
+	// picture at the wrong size, which is a bug with a very obvious shape.
+	input_event_t ev = {
+		.type = INPUT_EVENT_WINDOW_RESIZE,
+		.resize = { .w = content_w, .h = content_h },
+		.tick = kTicksSinceStart,
+	};
+	wm_deliver_event(w, &ev);
+
+	printd(DEBUG_GUI, "wm: window %u resized to %dx%d content at (%d,%d)\n",
+		w->id, content_w, content_h, frame.x, frame.y);
+	return true;
+}
+
+void wm_census_locked(uint32_t *count, uint64_t *surface_bytes)
+{
+	uint32_t n = 0;
+	uint64_t bytes = 0;
+
+	for (const window_t *w = s_bottom; w; w = w->above) {
+		n++;
+		uint64_t cap_bytes = (uint64_t)w->canvas_cap_w * w->canvas_cap_h * 4;
+		// content is always kmalloc'd at capacity...
+		bytes += cap_bytes;
+		// ...and the canvas is either the same kind of buffer (kernel-backed
+		// windows) or a page-rounded task extent, which is the number that
+		// actually left the physical allocator.
+		bytes += (w->canvas_task_phys != 0)
+		             ? (uint64_t)w->canvas_pages * PAGE_SIZE
+		             : cap_bytes;
+	}
+
+	*count = n;
+	*surface_bytes = bytes;
+}
+
+window_t *wm_window_by_id(uint32_t id)
+{
+	for (window_t *w = s_bottom; w; w = w->above)
+		if (w->id == id)
+			return w;
+	return NULL;
 }
 
 window_t *wm_focused(void)

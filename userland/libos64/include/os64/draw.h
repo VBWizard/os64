@@ -66,6 +66,19 @@ typedef struct os64_draw_ctx
 // house ink-on-paper defaults. Returns 0 or a negative OS64_GUI_ERR_*.
 int64_t os64_draw_ctx_init(os64_draw_ctx_t *ctx, int64_t win);
 
+// Re-fetch the window's geometry after an OS64_GUI_EVENT_WINDOW_RESIZE.
+// Cheap and total: the canvas POINTER and its pitch never change (the kernel
+// reserved both at capacity — see os64_gui_surface_t.pitch_px), so this
+// updates width and height and nothing else. Colors and the text pen survive,
+// because a resize is news about the window, not about the app's drawing
+// state.
+//
+// Call it BEFORE repainting, not after: every primitive clips to
+// ctx->surf.width/height, so repainting a grown window with the old numbers
+// leaves the new strip untouched — a symptom that looks like a damage bug
+// and isn't one.
+int64_t os64_draw_ctx_refresh(os64_draw_ctx_t *ctx);
+
 static inline void os64_draw_ctx_colors(os64_draw_ctx_t *ctx,
                                         uint32_t fg, uint32_t bg)
 {
