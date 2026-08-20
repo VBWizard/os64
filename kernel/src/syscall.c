@@ -143,6 +143,8 @@ static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_heap_report(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_tty_handle(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 
 // NOTE: syscall.S marshals the syscall registers straight into
 // _syscall_dispatch()'s C arguments — there is deliberately no C-level entry
@@ -205,6 +207,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GETPID,    "getpid",    syscall_getpid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register)
 	SYSCALL_DEFINE(SYSCALL_SET_TIME,  "set_time",  syscall_set_time,  false, 0x00),  // arg0 = UTC epoch bits; monotonic clock is untouched
 	SYSCALL_DEFINE(SYSCALL_HEAP_REPORT, "heap_report", syscall_heap_report, false, 0x01),  // arg0 = user VA of an os64_heap_report_t (0 withdraws)
+	SYSCALL_DEFINE(SYSCALL_TTY_HANDLE, "tty_handle", syscall_tty_handle, false, 0x00),  // no args — the answer is a property of the ASKER
 };
 
 uint64_t _syscall_dispatch(
@@ -3433,6 +3436,49 @@ static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
 	core_local_storage_t *cls = get_core_local_storage();
 	return (cls != NULL && cls->task != NULL) ? cls->task->taskID : 0;
+}
+
+// tty_handle() — "a handle on MY terminal, whatever handle 0 became."
+//
+// The pagers' door (full contract at SYSCALL_TTY_HANDLE in the ABI header).
+// `ps | less` needs its DOCUMENT from the pipe on handle 0 and its KEYS from
+// the terminal; redirection can only point one slot at one thing, so the
+// terminal needs a second name. Unix spells that name /dev/tty; os64 spells
+// it as a verb until a devfs exists to make the name honest.
+//
+// Sibling of getpid above, and the resemblance is the point: both answer a
+// question about the CALLER, take no arguments, and cannot fail for any
+// reason except the handle table being full. There is no tty to look up here
+// — a HANDLE_CONSOLE_IN carries no object, and the read path resolves
+// task_tty(caller) at every read (console.c). That late binding is what makes
+// one tag serve a VT and a pty slave alike: the handle means "my terminal",
+// so a pager inside a terminal WINDOW reads the slave without one line of
+// special case. Minting a second reference is therefore just handle_alloc();
+// the hard part was true before this call existed.
+//
+// Not exclusive, and deliberately so: the caller now shares one input ring
+// with whoever else holds a console handle on the same terminal. That is the
+// same ring handle 0 has always read, and the same competition `cat | cat`
+// could already arrange — the doorway is new, the room is not.
+static uint64_t syscall_tty_handle(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// handle_alloc starts its search at slot 3, so this can never land on a
+	// standard stream and silently redirect the caller's own stdin.
+	int h = handle_alloc(task, HANDLE_CONSOLE_IN, NULL);
+	if (h < 0)
+		return SYSCALL_RESULT_INVALID;   // table full — the only failure there is
+
+	printd(DEBUG_SYSCALL, "tty_handle: task %s got handle %d on tty %u\n",
+	       task->exename, h, task_tty(task) ? task_tty(task)->index + 1 : 1);
+	return (uint64_t)h;
 }
 
 // heap_report(ptr) — "my heap's report card lives here."

@@ -208,6 +208,40 @@ int64_t os64_stat(const char *path, os64_dirent_t *entry);
 // common way a hand-written shell hangs.
 int64_t os64_pipe(int32_t h[2]);
 
+// A handle on YOUR controlling terminal — whatever handle 0 has become.
+// Returns the handle (>= 3), or negative if the handle table is full.
+//
+// This is the answer to the oldest question a pipeline asks: `ps | less` puts
+// a pipe on the pager's handle 0, but a pager needs its DOCUMENT from that
+// pipe and its KEYS from the terminal, and redirection can only aim one slot
+// at one thing. Unix opens /dev/tty for this; os64 asks for it directly, and
+// a devfs later makes /dev/tty a NAME for this call rather than a rival to it.
+//
+//     int64_t keys = os64_tty_handle();
+//     if (keys < 0) keys = OS64_STDIN;     // no room; stdin is the fallback
+//     char c;
+//     os64_read(keys, &c, 1);              // the next key typed at MY terminal
+//
+// Ask for it unconditionally rather than only when stdin looks redirected:
+// when stdin already IS the terminal, this handle reads the very same input,
+// so the behavior is identical and you skip needing an isatty() you don't have.
+//
+// WHAT IT IS: a second reference to one shared input ring, not a private copy.
+// A byte read here is gone from handle 0 if handle 0 is the terminal too.
+// Reads are ordinary reads — blocking, SHORT (you get what's available, not a
+// filled buffer), 0 at Ctrl+D, and os64_read_for's timeout works on it. Ctrl+C
+// never arrives as a byte; it becomes a signal aimed at the terminal's
+// foreground task. A background job reads EOF here just as it does on handle 0.
+//
+// WHICH terminal: yours, resolved at every read. On a virtual terminal that is
+// the keyboard while your VT holds the glass — type at another VT and you hear
+// nothing, which is the same rule stdin has always followed. Inside a terminal
+// window it is that window's pty slave, fed by the terminal app. Your program
+// cannot tell the difference and has no reason to want to.
+//
+// Close it with os64_close like any handle.
+int64_t os64_tty_handle(void);
+
 // Give up a handle. For a pipe end this is SIGNALLING, not bookkeeping:
 // dropping the last write end is what delivers end-of-input to the reader, and
 // dropping the last read end is what kills a writer that is producing into the

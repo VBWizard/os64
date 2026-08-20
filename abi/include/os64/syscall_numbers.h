@@ -385,6 +385,41 @@
 // where it can be kept.
 #define SYSCALL_RENAME 43
 
+// 44 and 45 are RESERVED for the pty pair (PTY_CREATE / PTY_SNAPSHOT) living
+// on the gui branch — claimed there before this file was written, and left
+// vacant here so the merge is a text join and not an ABI renumbering. Do not
+// fill them; the next free number on THIS branch is 47.
+
+// tty_handle() -> a handle on the CALLER'S controlling terminal, whatever
+// handle 0 has become. No arguments: the answer is a property of who is
+// asking. Returns the new handle (>= 3), or negative if the table is full.
+//
+// THE PROBLEM IT SOLVES, which every Unix has had since pipes existed:
+// `ps | less` gives the pager a pipe on handle 0, and a pager needs its
+// DOCUMENT from that pipe and its KEYS from the terminal — two sources, one
+// slot. Unix answers by opening the magic path /dev/tty. os64 answers with a
+// verb, because a /dev name with no devfs behind it is a filesystem's promise
+// made by something that isn't one; when a devfs exists, /dev/tty becomes a
+// NAME for this call and not a replacement of it.
+//
+// WHY IT IS THREE LINES OF KERNEL: a console handle carries no object
+// (handle.h). The read path resolves task_tty(caller) at every read, so the
+// handle means "my terminal" and never "terminal number four" — which is why
+// one tag serves the VT fleet and a pty slave identically, and why a pager
+// inside gterm reaches the slave with no special case anywhere. Minting a
+// second one is handle_alloc(); everything else was already true.
+//
+// WHAT YOU GET is a second reference to ONE shared input ring, not a copy of
+// it: a byte read through this handle is gone from handle 0 if handle 0 is
+// also the terminal. Reads are ordinary reads — blocking, short (terminal
+// semantics), 0 at Ctrl+D, and eligible for read()'s timeout. Ctrl+C never
+// arrives as a byte; it is a signal aimed at the terminal's foreground task.
+// A background job (`ps | less &`) reads EOF here exactly as it does on
+// handle 0 — the console's background rule is keyed on the TASK, not the
+// slot, so backgrounding cannot be used to steal the shell's keystrokes.
+// Close it with close() like any handle.
+#define SYSCALL_TTY_HANDLE 46
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //
