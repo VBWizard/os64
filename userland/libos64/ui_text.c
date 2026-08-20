@@ -138,23 +138,36 @@ static size_t byte_of(const char *s, size_t len, int64_t vcol)
 
 // ── ui_scrollbar ────────────────────────────────────────────────────────────
 
-// Thumb geometry, shared by paint and event so the pixels you grab are the
-// pixels that were drawn (the wm_clamp_frame lesson, one layer up).
-static void scrollbar_thumb(const os64_ui_scrollbar_t *sb,
-                            int32_t *ty, int32_t *th)
+// Thumb geometry along the LONG axis (y for the classic bar, x when
+// `horizontal` — one function, axis chosen once, so the two orientations
+// can never drift). Shared by paint and event so the pixels you grab are
+// the pixels that were drawn (the wm_clamp_frame lesson, one layer up).
+static int32_t scrollbar_span(const os64_ui_scrollbar_t *sb)
 {
-	int32_t h = sb->w.bounds.h;
+	return sb->horizontal ? sb->w.bounds.w : sb->w.bounds.h;
+}
+
+static int32_t scrollbar_origin(const os64_ui_scrollbar_t *sb)
+{
+	return sb->horizontal ? sb->w.bounds.x : sb->w.bounds.y;
+}
+
+static void scrollbar_thumb(const os64_ui_scrollbar_t *sb,
+                            int32_t *tpos, int32_t *tlen)
+{
+	int32_t span = scrollbar_span(sb);
 	if (sb->total <= 0 || sb->visible <= 0 || sb->visible >= sb->total) {
-		*ty = sb->w.bounds.y;
-		*th = h;
+		*tpos = scrollbar_origin(sb);
+		*tlen = span;
 		return;
 	}
-	int64_t t = (int64_t)h * sb->visible / sb->total;
-	if (t < 16) t = 16;          // a thumb you can't hit isn't a thumb
-	if (t > h)  t = h;
+	int64_t t = (int64_t)span * sb->visible / sb->total;
+	if (t < 16)   t = 16;        // a thumb you can't hit isn't a thumb
+	if (t > span) t = span;
 	int64_t range = sb->total - sb->visible;
-	*th = (int32_t)t;
-	*ty = sb->w.bounds.y + (int32_t)((int64_t)(h - *th) * sb->pos / range);
+	*tlen = (int32_t)t;
+	*tpos = scrollbar_origin(sb) +
+	        (int32_t)((int64_t)(span - *tlen) * sb->pos / range);
 }
 
 static void scrollbar_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
@@ -162,9 +175,11 @@ static void scrollbar_paint(os64_ui_widget_t *w, os64_draw_ctx_t *ctx,
 {
 	os64_ui_scrollbar_t *sb = (os64_ui_scrollbar_t *)w;
 	os64_draw_fill_rect(&ctx->surf, w->bounds, t->scroll_track);
-	int32_t ty, th;
-	scrollbar_thumb(sb, &ty, &th);
-	os64_gui_rect_t thumb = { w->bounds.x + 2, ty, w->bounds.w - 4, th };
+	int32_t tpos, tlen;
+	scrollbar_thumb(sb, &tpos, &tlen);
+	os64_gui_rect_t thumb = sb->horizontal
+	    ? (os64_gui_rect_t){ tpos, w->bounds.y + 2, tlen, w->bounds.h - 4 }
+	    : (os64_gui_rect_t){ w->bounds.x + 2, tpos, w->bounds.w - 4, tlen };
 	os64_draw_fill_rect(&ctx->surf, thumb, t->scroll_thumb);
 }
 
@@ -188,33 +203,37 @@ static bool scrollbar_event(os64_ui_widget_t *w, os64_ui_t *ui,
 {
 	os64_ui_scrollbar_t *sb = (os64_ui_scrollbar_t *)w;
 
+	// The pointer's coordinate along the long axis — the only place the
+	// event handler cares which orientation it is.
+	int32_t m = sb->horizontal ? ev->mouse.x : ev->mouse.y;
+
 	switch (ev->type) {
 	case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
 		if (sb->total <= sb->visible)
 			return true;   // full thumb: nothing to move, but the click is ours
-		int32_t ty, th;
-		scrollbar_thumb(sb, &ty, &th);
-		if (ev->mouse.y >= ty && ev->mouse.y < ty + th) {
-			sb->drag_grab = ev->mouse.y - ty;      // ride the thumb
+		int32_t tpos, tlen;
+		scrollbar_thumb(sb, &tpos, &tlen);
+		if (m >= tpos && m < tpos + tlen) {
+			sb->drag_grab = m - tpos;              // ride the thumb
 		} else {
 			// Track click: a page jump toward the click — every scrollbar
 			// since the Star has meant this.
-			scrollbar_moved(sb, ui, ev->mouse.y < ty ? sb->pos - sb->visible
-			                                         : sb->pos + sb->visible);
+			scrollbar_moved(sb, ui, m < tpos ? sb->pos - sb->visible
+			                                 : sb->pos + sb->visible);
 		}
 		return true;
 	}
 	case OS64_GUI_EVENT_MOUSE_MOVE: {
 		if (sb->drag_grab < 0)
 			return true;
-		int32_t ty, th;
-		scrollbar_thumb(sb, &ty, &th);
-		int32_t span = w->bounds.h - th;
-		if (span <= 0)
+		int32_t tpos, tlen;
+		scrollbar_thumb(sb, &tpos, &tlen);
+		int32_t travel = scrollbar_span(sb) - tlen;
+		if (travel <= 0)
 			return true;
 		int64_t range = sb->total - sb->visible;
-		int64_t top_px = ev->mouse.y - sb->drag_grab - w->bounds.y;
-		scrollbar_moved(sb, ui, top_px * range / span);
+		int64_t at_px = m - sb->drag_grab - scrollbar_origin(sb);
+		scrollbar_moved(sb, ui, at_px * range / travel);
 		return true;
 	}
 	case OS64_GUI_EVENT_MOUSE_BUTTON_UP:
@@ -832,6 +851,23 @@ void os64_ui_textview(os64_ui_textview_t *tv, const os64_ui_textbuf_t *buf,
 	tv->on_change = on_change;
 	tv->on_view = on_view;
 	tv->view_user = user;
+}
+
+int64_t os64_ui_text_vcols(const char *s, size_t len)
+{
+	return vcol_of(s, len, len);
+}
+
+void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
+                                  int64_t left)
+{
+	if (left < 0)
+		left = 0;
+	if (left == tv->left)
+		return;
+	tv->left = left;
+	tv_fire_view(tv);
+	os64_ui_mark_dirty(ui, &tv->w);
 }
 
 void os64_ui_textview_scroll_to(os64_ui_t *ui, os64_ui_textview_t *tv,

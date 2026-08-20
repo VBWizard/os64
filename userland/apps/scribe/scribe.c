@@ -47,7 +47,13 @@ typedef struct
     os64_ui_widget_t mode_label;    // names what the field means right now
     os64_ui_textfield_t field;
     os64_ui_textview_t view;
-    os64_ui_scrollbar_t scroll;
+    os64_ui_scrollbar_t scroll;     // vertical: lines
+    os64_ui_scrollbar_t hscroll;    // horizontal: visual columns (no wrap yet)
+    int64_t max_vcols;              // the widest line's visual width — the
+                                    // h-bar's `total`. Grows as edits widen
+                                    // lines; only a reload shrinks it (a bar
+                                    // briefly roomier than the text beats
+                                    // re-measuring a 136MB log per keystroke)
 
     char path[SCRIBE_PATH_MAX];     // empty = unnamed buffer
     char status_text[SCRIBE_STATUS_MAX];
@@ -111,13 +117,17 @@ static void layout(os64_ui_t *ui)
         y += bh + t->gap;
     }
 
-    int32_t body_h = H - y - pad;
+    int32_t body_h = H - y - pad - t->scroll_w - 2;
     if (body_h < t->font_h)
         body_h = t->font_h;
-    g.view.w.bounds   = (os64_gui_rect_t){ pad, y,
-                                           W - 2 * pad - t->scroll_w - 2, body_h };
-    g.scroll.w.bounds = (os64_gui_rect_t){ W - pad - t->scroll_w, y,
-                                           t->scroll_w, body_h };
+    int32_t body_w = W - 2 * pad - t->scroll_w - 2;
+    g.view.w.bounds    = (os64_gui_rect_t){ pad, y, body_w, body_h };
+    g.scroll.w.bounds  = (os64_gui_rect_t){ W - pad - t->scroll_w, y,
+                                            t->scroll_w, body_h };
+    // The horizontal bar under the text, stopping short of the vertical
+    // bar's column — the classic empty corner, left empty on purpose.
+    g.hscroll.w.bounds = (os64_gui_rect_t){ pad, y + body_h + 2,
+                                            body_w, t->scroll_w };
 }
 
 static void on_resize(os64_ui_t *ui)
@@ -139,13 +149,34 @@ static void relayout_all(void)
 static void sync_scrollbar(void)
 {
     int32_t rows = os64_ui_textview_rows(&g.view, &g.ui.theme);
+    int32_t cols = os64_ui_textview_cols(&g.view, &g.ui.theme);
     os64_ui_scrollbar_set(&g.ui, &g.scroll, (int64_t)g.buf.count,
                           rows, (int64_t)g.view.top);
+    os64_ui_scrollbar_set(&g.ui, &g.hscroll, g.max_vcols, cols, g.view.left);
+}
+
+// One pass over the whole buffer for the widest line — load-time only.
+static void measure_widest(void)
+{
+    g.max_vcols = 0;
+    for (size_t i = 0; i < g.buf.count; i++) {
+        size_t len;
+        const char *ln = g.textbuf.line(g.textbuf.user, i, &len);
+        int64_t v = os64_ui_text_vcols(ln, len);
+        if (v > g.max_vcols)
+            g.max_vcols = v;
+    }
 }
 
 static void view_changed(os64_ui_textview_t *tv, void *user)
 {
-    (void)tv; (void)user;
+    (void)user;
+    // Only the cursor's line can have widened; measure it, never the file.
+    size_t len;
+    const char *ln = g.textbuf.line(g.textbuf.user, tv->cur_line, &len);
+    int64_t v = os64_ui_text_vcols(ln, len);
+    if (v > g.max_vcols)
+        g.max_vcols = v;
     status_refresh();       // dirty star + line count stay honest
     sync_scrollbar();
 }
@@ -160,6 +191,12 @@ static void scrolled(os64_ui_scrollbar_t *sb, void *user)
 {
     (void)user;
     os64_ui_textview_scroll_to(&g.ui, &g.view, (size_t)sb->pos);
+}
+
+static void hscrolled(os64_ui_scrollbar_t *sb, void *user)
+{
+    (void)user;
+    os64_ui_textview_scroll_left(&g.ui, &g.view, sb->pos);
 }
 
 // ── the entry field's modes ─────────────────────────────────────────────────
@@ -195,6 +232,7 @@ static void do_load(const char *path)
     g.view.left = 0;
     g.view.cur_line = g.view.cur_col = 0;
     g.view.sel = false;
+    measure_widest();
     leave_mode();
     if (rc == 1)
         status_show("new file - Save creates it");
@@ -379,6 +417,8 @@ int main(int argc, char **argv)
                       field_submit, field_cancel, NULL);
     os64_ui_textview(&g.view, &g.textbuf, view_changed, view_moved, NULL);
     os64_ui_scrollbar(&g.scroll, scrolled, NULL);
+    os64_ui_scrollbar(&g.hscroll, hscrolled, NULL);
+    g.hscroll.horizontal = true;
 
     os64_ui_add_child(&g.root, &g.status);
     os64_ui_add_child(&g.root, &g.btn_open);
@@ -388,6 +428,7 @@ int main(int argc, char **argv)
     os64_ui_add_child(&g.root, &g.field.w);
     os64_ui_add_child(&g.root, &g.view.w);
     os64_ui_add_child(&g.root, &g.scroll.w);
+    os64_ui_add_child(&g.root, &g.hscroll.w);
 
     layout(&g.ui);
     os64_ui_set_root(&g.ui, &g.root);

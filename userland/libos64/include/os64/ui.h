@@ -233,6 +233,10 @@ struct os64_ui_scrollbar
     void (*on_scroll)(os64_ui_scrollbar_t *sb, void *user);
     void *scroll_user;
     int32_t drag_grab;           // px into the thumb where the press landed; -1 idle
+    bool horizontal;             // set after init for a bottom-edge bar; the
+                                 // thumb, drag, and page-jumps all follow the
+                                 // long axis (Chris's first-test verdict:
+                                 // no-wrap without one was the only gap)
 };
 
 void os64_ui_scrollbar(os64_ui_scrollbar_t *sb,
@@ -325,6 +329,14 @@ int32_t os64_ui_textview_cols(const os64_ui_textview_t *tv,
 // Scroll so `top` is the first visible line (clamped); fires on_view.
 void os64_ui_textview_scroll_to(os64_ui_t *ui, os64_ui_textview_t *tv,
                                 size_t top);
+// Scroll horizontally so `left` is the first visible VISUAL column
+// (clamped at 0; the right edge is the app's knowledge — it tracks the
+// widest line, the view doesn't). Fires on_view.
+void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
+                                  int64_t left);
+// A line's width in VISUAL columns (tabs expanded to their 8-stop) — the
+// number a horizontal scrollbar's `total` is made of.
+int64_t os64_ui_text_vcols(const char *s, size_t len);
 // Place the caret (clamped), optionally keeping/starting a selection from
 // the current anchor, and scroll it into view. The search-jump primitive.
 void os64_ui_textview_goto(os64_ui_t *ui, os64_ui_textview_t *tv,
