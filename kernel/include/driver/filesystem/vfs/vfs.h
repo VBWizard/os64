@@ -487,6 +487,24 @@ bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo);
 // transition on a private mount-table copy without disabling the running OS.
 void vfs_demote_mount_readonly(vfs_filesystem_t *fs);
 
+// ── THE DRILL FLAG (2026-08-20) ─────────────────────────────────────────────
+// Set while a test is DELIBERATELY inducing a failure that would otherwise
+// shout at the operator. The fault-injection tests drive real demotion paths
+// on a CLONED mount struct (see test_main.c) precisely so the damage lands on
+// a throwaway copy — but the alarms those paths raise are written for a human
+// watching a real filesystem get taken away, and printing five of them on
+// every healthy boot is how an alarm stops meaning anything.
+//
+// So: while this is true, an alarm goes to the LOG; otherwise it goes to the
+// GLASS. It never suppresses the message, only chooses the audience — a REAL
+// demotion still lands on screen, which is the entire reason it exists.
+//
+// Same shape and same reason as kTestingPageFaults (exceptions.h), which
+// keeps the deliberate-#PF tests from tripping the fatal-fault reporter.
+// Chris's ruling, 2026-08-20: "The test messages need to go to the log. Real
+// ext2 messages can stay on the screen."
+extern bool kTestingExpectedNoise;
+
 // TEST_RO's engine (2026-08-08): NULL the write verbs on every mount's
 // private op-table copies — every dispatch site then refuses exactly like a
 // born-read-only mount, the stray-write tripwire starts refusing at the

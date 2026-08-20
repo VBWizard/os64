@@ -2260,6 +2260,12 @@ static bool test_ext2_orphan(void)
     // ext2_close demotes whatever mount the HANDLE was opened on — so this
     // copy takes the hit and the rest of the suite keeps its writable root.
     // Same trick, same reason, as test_ext2_readonly_demotion.
+    // DECLARE THE DRILL. Everything below deliberately drives a real
+    // demotion path, and the alarms it raises are written for an operator
+    // watching a real disk get taken away. This routes them to the log for
+    // the duration; a REAL demotion still reaches the glass. The runner
+    // clears the flag when this test returns, however it returns (vfs.h).
+    kTestingExpectedNoise = true;
     vfs_filesystem_t reap_mount = *kRootFilesystem;
     vfs_file_operations_t reap_fops = *kRootFilesystem->fops;
     vfs_directory_operations_t reap_dops = *kRootFilesystem->dops;
@@ -2351,6 +2357,7 @@ static bool test_ext2_orphan(void)
     // orphan chain still names it for teardown. Hand it to a new file and the
     // next replay releases that file's storage. This replay must therefore end
     // with the mount demoted, not merely with an error returned.
+    kTestingExpectedNoise = true;   // drill: this replay MUST end demoted
     vfs_filesystem_t replay_mount = *kRootFilesystem;
     vfs_file_operations_t replay_fops = *kRootFilesystem->fops;
     vfs_directory_operations_t replay_dops = *kRootFilesystem->dops;
@@ -2426,6 +2433,7 @@ static bool test_ext2_orphan(void)
     kRootFilesystem->fops->close(f);
     f = NULL;
 
+    kTestingExpectedNoise = true;   // drill: the shadow mount takes the hit
     vfs_filesystem_t shadow = *kRootFilesystem;
     vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
     vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
@@ -2503,6 +2511,7 @@ static bool test_ext2_readonly_demotion(void)
     }
     kRootFilesystem->fops->close(file);
 
+    kTestingExpectedNoise = true;   // drill: the shadow mount takes the hit
     vfs_filesystem_t shadow = *kRootFilesystem;
     vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
     vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
@@ -2829,17 +2838,33 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 8. Ruling 5 on glass: rm and truncating-"w" both refuse a file that is
-    //    OPEN, then succeed once it's closed.
+    // 8. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
+    //
+    //    Ruling 5 made rm refuse ANY open file, and this step asserted
+    //    exactly that. The orphan slice superseded it: an open REGULAR file
+    //    is unlinked NOW and its storage released at LAST CLOSE, through
+    //    ext2's on-disk orphan chain. That revision is the entire reason
+    //    `os64 refresh` can replace /bin/husk while husk is running.
+    //
+    //    What SURVIVES of ruling 5, both asserted below: a truncating "w"
+    //    open of an open file still refuses (the reader would watch its
+    //    blocks recycle underneath it), and an open DIRECTORY still refuses
+    //    to be removed — nobody has asked, and a handle mid-walk through a
+    //    directory's blocks is a harder promise to keep.
+    //
+    //    WHY THIS WAS WRONG FOR FOUR DAYS (fixed 2026-08-20): the test only
+    //    runs where /ext2 is a writable SECONDARY mount — i.e. a FAT-root
+    //    boot — and the arc that changed the rule was verified on ext2 root,
+    //    where this whole test skips. Booting "/QEMU Boot (FAT root + full
+    //    test suite)" before blessing a kernel change is not ceremony; this
+    //    is the failure it exists to catch.
     if (fs->fops->open(&f, "/__wtest.txt", "r", fs) != 0) {
         ES_FAIL("hold-open failed\n");
         return false;
     }
-    if (fs->fops->rm("/__wtest.txt", fs) == 0) {
-        ES_FAIL("rm of an OPEN file succeeded (must refuse)\n");
-        fs->fops->close(f);
-        return false;
-    }
+
+    // Ruling 5's surviving half, checked BEFORE the rm below — afterwards
+    // there is no name left to open.
     vfs_file_t *f2 = NULL;
     if (fs->fops->open(&f2, "/__wtest.txt", "w", fs) == 0) {
         ES_FAIL("truncating open of an OPEN file succeeded\n");
@@ -2847,10 +2872,55 @@ static bool test_ext2_secondary_write(void)
         fs->fops->close(f);
         return false;
     }
-    fs->fops->close(f);
-    f = NULL;
+
+    // The NAME goes now...
     if (fs->fops->rm("/__wtest.txt", fs) != 0) {
-        ES_FAIL("rm after close failed\n");
+        ES_FAIL("rm of an OPEN regular file refused (must orphan it)\n");
+        fs->fops->close(f);
+        return false;
+    }
+    if (fs->dops->stat("/__wtest.txt", &de, fs) == 0) {
+        ES_FAIL("orphaned file still answers to its name\n");
+        fs->fops->close(f);
+        return false;
+    }
+
+    // ...and the STORAGE stays until the last holder lets go. This read is
+    // the whole point of the orphan chain: a program whose binary was just
+    // replaced keeps executing the bytes it already opened.
+    n = fs->fops->read(f, buf, sizeof(buf));
+    if (n != (int)(sizeof(msg3) - 1) || memcmp(buf, msg3, sizeof(msg3) - 1) != 0) {
+        ES_FAIL("orphan unreadable through its open handle (n=%d)\n", n);
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);          // last close — the reap happens HERE
+    f = NULL;
+
+    // And the name is gone for good: nothing left for a second rm to find.
+    if (fs->fops->rm("/__wtest.txt", fs) == 0) {
+        ES_FAIL("rm of an already-orphaned name succeeded\n");
+        return false;
+    }
+
+    // Ruling 5's other survivor, which nothing covered before: the
+    // assertion this replaces was busy testing a rule that no longer exists.
+    if (fs->dops->mkdir("/__wdir2", fs) != 0) {
+        ES_FAIL("mkdir /__wdir2 failed\n");
+        return false;
+    }
+    if (fs->dops->open(&d, "/__wdir2", fs) != 0) {
+        ES_FAIL("opendir /__wdir2 failed\n");
+        return false;
+    }
+    if (fs->fops->rm("/__wdir2", fs) == 0) {
+        ES_FAIL("rm of an OPEN directory succeeded (must refuse)\n");
+        fs->dops->close(d);
+        return false;
+    }
+    fs->dops->close(d);
+    if (fs->fops->rm("/__wdir2", fs) != 0) {
+        ES_FAIL("rm of /__wdir2 after close failed\n");
         return false;
     }
 
@@ -2861,7 +2931,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (create/append/truncate/indirect/hole/mkdir/rm/busy-refusal)\n");
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
     return true;
 }
 #undef ES_FAIL
@@ -4230,6 +4300,16 @@ static void test_run_phase(int phase, const char *label)
         } else {
             printd(DEBUG_TESTS, "\tFAIL: %s\n", "Invalid test. Test function pointer is NULL");
         }
+
+        // THE DRILL FLAG IS CLEARED HERE, BY THE RUNNER, ON PURPOSE (2026-08-20).
+        // A fault-injection test raises it before inducing an alarm (vfs.h says
+        // what it does), and those tests are full of early `return false` paths
+        // — hand-clearing it at each one is exactly the kind of bookkeeping that
+        // stays right for a month and then silently swallows a REAL demotion
+        // warning for the rest of the project's life. The runner owns the reset
+        // so no test can leak it, and a test that forgets to clear it is simply
+        // not a bug that can exist.
+        kTestingExpectedNoise = false;
 
         // The TESTS= cmdline knob (kernel_commandline.c) overrides every
         // test's registered policy for this boot: "panic" restores the old

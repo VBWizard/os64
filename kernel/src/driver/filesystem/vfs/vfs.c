@@ -437,6 +437,12 @@ bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo)
 // stops reading the rings when its writes fail (its own starve-the-file rule)
 // so the log rides serial again. Open files keep reading — their vfs_file_t
 // fops POINT at the mount's copy, so the demotion reaches them too.
+// The drill flag — see vfs.h for what it does and why it is not a mute
+// switch. Plain bool, written only by the test thread between tests and read
+// only when an alarm is already being raised; there is no race worth a lock
+// here, and taking one inside a failure path would be its own hazard.
+bool kTestingExpectedNoise = false;
+
 void vfs_demote_mount_readonly(vfs_filesystem_t *fs)
 {
 	if (fs == NULL)

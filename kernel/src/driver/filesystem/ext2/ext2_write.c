@@ -55,6 +55,37 @@
 #include "strings/sprintf.h"   // vsnprintf — ext2_fprintf's formatter
 #include "kernel.h"    // kSystemCurrentTime — epoch seconds for timestamps
 
+// ── EXT2_ALARM: the operator's line, and who gets to hear it ────────────────
+// Every message this file sends to the SCREEN says some version of "this
+// filesystem is now ambiguous and I am taking the pens away". That belongs on
+// the glass — it is the loudest thing os64 can say about a disk short of a
+// panic, and a human needs to see it happen.
+//
+// It also belongs on the glass only when it is TRUE. The fault-injection
+// tests drive these exact paths on a cloned mount every single boot, and five
+// read-only demotion warnings under a green 27/0 test run taught exactly the
+// wrong lesson: that the scariest line os64 prints is background noise. (It
+// worked, too — they were ignored for days before Chris asked what they were.)
+//
+// So the audience is chosen, never the message: log during a drill, glass for
+// real. One macro rather than nine hand-written if/elses, because this is a
+// mechanical repeat and a divergent copy is how one site quietly keeps
+// shouting. kTestingExpectedNoise lives in vfs.h with the fuller story.
+//
+// DEBUG_TESTS, and the category is load-bearing — NOT DEBUG_VFS, which was
+// the obvious first choice and was WRONG. printd's filter is
+// `(kDebugLevel & flags) != flags`: ALL requested bits must be lit, not any.
+// DEBUG_VFS (bit 13) is not in the default level, so routing a drill line
+// there would have SUPPRESSED it on an ordinary boot — the exact thing this
+// macro promises not to do. DEBUG_TESTS (bit 19) IS on by default, and is
+// also the truer label: the line exists because a test induced it.
+#define EXT2_ALARM(...) do {                       \
+        if (kTestingExpectedNoise)                 \
+            printd(DEBUG_TESTS, __VA_ARGS__);      \
+        else                                       \
+            printf(__VA_ARGS__);                   \
+    } while (0)
+
 // ── The scratch pool ────────────────────────────────────────────────────────
 // LIFO get/put over the mount's preallocated buffers (rationale + sizing in
 // ext2_internal.h). Callers here all hold write_lock, so the pool needs no
@@ -1698,7 +1729,7 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 			// Halting healthy sibling mounts — /home, the FAT lifeboat — would
 			// protect nothing and take away the disks an operator analyzes with.
 			// (Same scope the closed-rename path chose for the same hazard.)
-			printf("ext2: could not persist orphan %u release progress — demoting its mount to read-only\n", ino);
+			EXT2_ALARM("ext2: could not persist orphan %u release progress — demoting its mount to read-only\n", ino);
 			vfs_demote_mount_readonly(fs);
 		}
 		else if (ext2_free_left_storage_reusable(release_rc))
@@ -1707,7 +1738,7 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 			// result qualifies, not just the parent-pointer one: a block whose
 			// bitmap write landed while its count writeback did not is every
 			// bit as allocatable as one whose parent still points at it.
-			printf("ext2: orphan %u retry map names storage the bitmap already calls free — demoting its mount to read-only\n", ino);
+			EXT2_ALARM("ext2: orphan %u retry map names storage the bitmap already calls free — demoting its mount to read-only\n", ino);
 			vfs_demote_mount_readonly(fs);
 		}
 		*node = remaining;
@@ -1724,7 +1755,7 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 		// Blocks are now reusable but the disk inode may still name them. Stop
 		// all further allocation; after reboot, replay runs before allocation
 		// and the idempotent frees safely finish this inode.
-		printf("ext2: could not persist completed orphan %u block release — demoting its mount to read-only\n", ino);
+		EXT2_ALARM("ext2: could not persist completed orphan %u block release — demoting its mount to read-only\n", ino);
 		vfs_demote_mount_readonly(fs);
 		return -1;
 	}
@@ -1745,7 +1776,7 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 		// to release the NEW file's storage. Stop allocation until replay.
 		if (ext2_free_left_storage_reusable(inode_rc))
 		{
-			printf("ext2: orphan %u freed its inode bitmap bit but not its ledgers — demoting its mount to read-only\n", ino);
+			EXT2_ALARM("ext2: orphan %u freed its inode bitmap bit but not its ledgers — demoting its mount to read-only\n", ino);
 			vfs_demote_mount_readonly(fs);
 		}
 		return -1;
@@ -1755,7 +1786,7 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 	{
 		// The chain may still name an inode whose bitmap bit is free. That is
 		// replay-safe but not safe for continued allocation in this mount.
-		printf("ext2: could not unlink released orphan %u — demoting its mount to read-only\n", ino);
+		EXT2_ALARM("ext2: could not unlink released orphan %u — demoting its mount to read-only\n", ino);
 		vfs_demote_mount_readonly(fs);
 		return -1;
 	}
@@ -1766,7 +1797,7 @@ static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
 	remaining.i_dtime = (uint32_t)kSystemCurrentTime;
 	if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
 	{
-		printf("ext2: could not stamp released orphan %u with its deletion time — run e2fsck\n", ino);
+		EXT2_ALARM("ext2: could not stamp released orphan %u with its deletion time — run e2fsck\n", ino);
 		return -1;
 	}
 	*node = remaining;
@@ -1819,7 +1850,7 @@ void ext2_orphan_replay(vfs_filesystem_t *fs, ext2_fs_t *e)
 	{
 		// We can see the debt and cannot pay it. Say so — an unannounced
 		// leak on a read-only mount is still a leak.
-		printf("ext2: orphaned inode(s) from a previous mount, but this mount is READ-ONLY — run e2fsck\n");
+		EXT2_ALARM("ext2: orphaned inode(s) from a previous mount, but this mount is READ-ONLY — run e2fsck\n");
 		return;
 	}
 
@@ -1842,7 +1873,7 @@ void ext2_orphan_replay(vfs_filesystem_t *fs, ext2_fs_t *e)
 	spinlock_release_irqrestore(&e->write_lock, lock_flags);
 
 	if (reaped > 0)
-		printf("ext2: reaped %u orphaned inode(s) left by the previous mount\n", reaped);
+		EXT2_ALARM("ext2: reaped %u orphaned inode(s) left by the previous mount\n", reaped);
 }
 
 // os64's ONE removal verb (fops->rm): a file OR an empty directory. The
@@ -2403,7 +2434,7 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 				// record still names sitting in the allocator's free pool.
 				if (ext2_free_left_storage_reusable(release_rc))
 				{
-					printf("ext2: inode %u retry map %s after a partial release — forcing mount read-only\n",
+					EXT2_ALARM("ext2: inode %u retry map %s after a partial release — forcing mount read-only\n",
 					       dst_ino, orphan_rc == 0 ? "persisted" : "could not be persisted");
 					vfs_demote_mount_readonly(vfs_fs);
 				}
