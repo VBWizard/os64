@@ -798,9 +798,14 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
     // deterministic offsets: that was the poisoner that forged top's %s
     // pointers (3, 4), the settle loop's -29874 index, and the 0x7ec6xxxx
     // wrapped-write fatals. The exit path was cured by the teardown split
-    // (task.c); this tripwire stands guard over every door we HAVEN'T found
-    // — the cikc-hosted disk closes (handle.c) and shared-object page reads
-    // are the known suspects. Unlike the TF tripwire below, there is no safe
+    // (task.c); this tripwire stands guard over every door we HAVEN'T found.
+    // The cikc-hosted disk closes were the standing suspects, and one of them
+    // was guilty: the burial close (task.c) borrowed the scratch stack from
+    // kworker with interrupts ON, so a scheduling IPI could park it here.
+    // call_in_kernel_context masks interrupts across the borrow now
+    // (task_exit_asm.S, 2026-08-20) — every borrower, not just that one.
+    // The tripwire stays anyway: it is the proof, not the cure, and the next
+    // door will not announce itself either. Unlike the TF tripwire below, there is no safe
     // "clear and continue": a collided stack cannot be un-collided, so the
     // only honest move is a loud stop that NAMES the door.
     {

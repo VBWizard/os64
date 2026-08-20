@@ -35,6 +35,37 @@ task_exit_with_retval:
 // switch: task CR3/RSP and func/arg live in callee-saved registers (which func
 // preserves per the SysV ABI), and the ONE piece of per-core state we need,
 // kernel_interrupt_stack_top, is read from CLS via GS (valid under any CR3/RSP).
+//
+// IT IS ALSO IRQSAVE, AND THAT IS LOAD-BEARING (2026-08-20, PR #27 round 9).
+// The stack we borrow is BOLTED TO THE CORE: the same per-core scratch stack
+// task_exit's last breath stands on, re-issued to that core's next customer.
+// So a context must never be PARKED while standing on it — park two contexts
+// on one stack and they stomp each other's frames at deterministic offsets.
+// That was the stack poisoner of 2026-08-11/12, and scheduler_load_thread's
+// BORROWED-STACK TRIPWIRE (via kernel_scratch_stack_owner) panics rather than
+// resume such a thread — the tripwire's own comment names "the cikc-hosted
+// disk closes" as a suspected open door. This `cli` is that door closing.
+//
+// Most callers were already safe BY ACCIDENT, not by design: syscall bodies
+// enter with IF=0 (SFMASK clears it, smp_core.c), and the shared-object page
+// read runs from a #PF whose 0x8E gate did the same. But task_destroy's burial
+// close (task.c) is reached from KWORKER — an ordinary kernel thread,
+// dispatched with RFLAGS=0x202 — so it borrowed this stack with interrupts
+// ON. One scheduling IPI (vector IPI_TIMER_SCHEDULE_VECTOR, an 0x8E gate with
+// no IST, so it pushes onto whatever stack is current) during fops->close and
+// kworker is parked on the scratch stack; the next core to resume it panics.
+// Timing-dependent, and likeliest exactly when close does real disk I/O —
+// which is precisely what ext2's orphan reaping made it do.
+//
+// Masking here rather than at the call site is deliberate: the hazard belongs
+// to the BORROWING, so the borrower owns the guard and no future caller has to
+// remember. It costs nothing where IF was already 0, and it is safe for the
+// callees: NVMe's completion wait POLLS against an rdtsc deadline under an
+// irqsave ioLock (nvme_wait_for_completion says so in writing — it must not
+// depend on ticks precisely because it already runs with IF=0), and nothing on
+// the filesystem/block close path sleeps, yields, or does a bare `sti`.
+// RFLAGS is saved on the CALLER's stack, so the caller's IF — whatever it was
+// — is what comes back.
 .globl call_in_kernel_context
 .type  call_in_kernel_context, @function
 call_in_kernel_context:
@@ -43,6 +74,8 @@ call_in_kernel_context:
     push r13
     push r14
     push r15
+    pushfq                                          // caller's RFLAGS (IF included)
+    cli                                             // nothing may park us on the borrowed stack
     mov  r12, rdi                                   // r12 = func
     mov  r13, rsi                                   // r13 = arg
     mov  r14, cr3                                   // r14 = task CR3   (survives call)
@@ -64,9 +97,12 @@ call_in_kernel_context:
     call r12
 
     // Restore task CR3 and task RSP, then unwind and return to the caller (whose
-    // return address is on the task stack we just restored).
+    // return address is on the task stack we just restored). r15 was captured
+    // AFTER the pushfq, so the restored RSP points straight at the saved RFLAGS
+    // — popfq hands the caller back its own IF, and preemption resumes there.
     mov  cr3, r14
     mov  rsp, r15
+    popfq                                           // caller's IF back, exactly as found
     pop  r15
     pop  r14
     pop  r13
