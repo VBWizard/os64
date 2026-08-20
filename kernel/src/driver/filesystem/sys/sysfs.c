@@ -79,6 +79,8 @@
 #include "task.h"                   // task_t — kIdleTasks' element type
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
+#include "gui/compositor.h"             // /sys/gui — kEnableGUI, seat, census
+#include "video.h"                      // kFrameBuffer — the resolution it reports
 #include "CONFIG.h"
 
 extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
@@ -241,6 +243,7 @@ typedef enum
 	SYS_NODE_CPUCORE,    // /cpu/<n>
 	SYS_NODE_CPUFILE,    // /cpu/<n>/{time,state,probe}
 	SYS_NODE_CACHEFILE,  // /cache — the block cache's own numbers (2026-08-16)
+	SYS_NODE_GUIFILE,    // /gui — is there a desktop, and what does it cost
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -317,6 +320,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_CACHEFILE;
+		return;
+	}
+
+	if (strcmp(comp, "gui") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_GUIFILE;
 		return;
 	}
 
@@ -451,6 +462,56 @@ static void sys_gen_cache(synth_text_t *t)
 	synth_text_addf(t, "updates: %lu\n", s.updates);
 	synth_text_addf(t, "bypass_edge: %lu\n", s.bypass_edge);
 	synth_text_addf(t, "discarded_races: %lu\n", s.discarded_races);
+}
+
+// /sys/gui — is there a desktop on this boot, and what is it costing?
+//
+// Born 2026-08-19 from Chris's question: husk.rc unconditionally started
+// gterm, and a text boot answered with a complaint. A startup file wants to
+// ASK before it launches — X11 has published that fact in the environment
+// since 1987 (DISPLAY), and os64 publishes it as a FILE instead, because a
+// file tells the truth at read time while an inherited variable freezes at
+// spawn. Today the GUI is a boot-time cmdline flag and cannot change under a
+// running system, so both would work; the file is what stays honest if that
+// ever stops being true.
+//
+// `running` comes first and is the whole answer for a script; everything
+// below it is for a human with a question. The byte counts are here because
+// a window is the one object in os64 that spends memory in TWO worlds — a
+// task-mapped canvas and a kernel-side content surface — and /proc can only
+// ever show the first (see wm_census_locked's comment for the afternoon that
+// taught us).
+static void sys_gen_gui(synth_text_t *t)
+{
+	synth_text_addf(t, "running: %s\n", kEnableGUI ? "yes" : "no");
+	if (!kEnableGUI)
+	{
+		// Say WHY, and say how — a file that reports a "no" without naming
+		// the switch that makes it "yes" sends its reader to the source.
+		synth_text_addf(t, "reason: no GUI flag on the kernel commandline\n");
+		return;
+	}
+
+	synth_text_addf(t, "resolution: %ux%u\n",
+	                kFrameBuffer.width, kFrameBuffer.height);
+	// The two halves of glass ownership, separately, because they fail
+	// separately: seated says the compositor holds VT8's seat, owns_glass
+	// says VT8 is also the terminal you are looking at. A desktop that is
+	// seated but not showing is an Alt+F8 away, and that is a different
+	// problem from one that never started.
+	synth_text_addf(t, "seated: %s\n", gui_vt8_seated() ? "yes" : "no");
+	synth_text_addf(t, "owns_glass: %s\n", gui_owns_glass() ? "yes" : "no");
+
+	uint32_t windows = 0;
+	uint64_t surface_bytes = 0;
+	gui_census(&windows, &surface_bytes);
+	synth_text_addf(t, "windows: %u\n", windows);
+	synth_text_addf(t, "window_bytes: %lu\n", surface_bytes);
+	// What one more window would cost, so the number above is predictive and
+	// not merely historical: both stores are reserved at the screen's size
+	// (GRAPHICS.md's capacity reservation), so this scales with resolution.
+	synth_text_addf(t, "bytes_per_window: %lu\n",
+	                2ull * kFrameBuffer.width * kFrameBuffer.height * 4);
 }
 
 // cpu/<n>/time — one core's slice of the CPU-time ledger (/proc/cores' whole
@@ -591,7 +652,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 			return -1;
 	}
 	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE
-	         && sp.type != SYS_NODE_CACHEFILE)
+	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_GUIFILE)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -602,6 +663,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_pci_device(&text, &v);
 	else if (sp.type == SYS_NODE_CACHEFILE)
 		sys_gen_cache(&text);
+	else if (sp.type == SYS_NODE_GUIFILE)
+		sys_gen_gui(&text);
 	else if (sp.type == SYS_NODE_CPUCOUNT)
 		sys_gen_cpu_count(&text);
 	else if (strcmp(sp.name, "time") == 0)
@@ -728,6 +791,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// Two directories, then the cache file — a root that lists what
 			// a path can reach, nothing hidden (the /proc/self lesson).
 			static const char *kSysRootDirs[] = { "bus", "cpu" };
+			static const char *kSysRootFiles[] = { "cache", "gui" };
 			if (h->index < 2)
 			{
 				entry->flags = OS64_DE_DIR;
@@ -735,9 +799,9 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 				h->index++;
 				return 1;
 			}
-			if (h->index == 2)
+			if (h->index < 2 + (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0])))
 			{
-				strncpy(entry->name, "cache", OS64_DIRENT_NAME_MAX);
+				strncpy(entry->name, kSysRootFiles[h->index - 2], OS64_DIRENT_NAME_MAX);
 				h->index++;
 				return 1;
 			}
@@ -867,6 +931,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, sp.name, OS64_DIRENT_NAME_MAX);
 			return 0;
 		}
+
+		case SYS_NODE_GUIFILE:
+			strncpy(entry->name, "gui", OS64_DIRENT_NAME_MAX);
+			return 0;
 
 		case SYS_NODE_CACHEFILE:
 			strncpy(entry->name, "cache", OS64_DIRENT_NAME_MAX);
