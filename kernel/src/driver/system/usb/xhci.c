@@ -318,7 +318,11 @@ static uint8_t xhci_run_command(uint64_t param, uint32_t status, uint32_t contro
 		wait(1);
 	}
 	printd(DEBUG_USB, "xhci: command timed out (control=0x%08x)\n", control);
-	printf("xhci: command timeout (0x%08x)\n", control);   // TEMP (P5 bring-up, serial-less)
+	printf("xhci: command timeout (0x%08x)\n", control);   // stays on the glass: a failure is what it's for
+	// (This tag used to read "TEMP — P5 bring-up, serial-less". The P5 was
+	// mute when these were written; it has a wire now, over the very NIC arc
+	// that prompted this cleanup. The NARRATION went to the log 2026-08-20;
+	// the FAILURES stayed here, which is what they were really for.)
 	return 0;
 }
 
@@ -383,7 +387,7 @@ static bool xhci_control_request(xhci_hid_t *dev,
 	{
 		printd(DEBUG_USB, "xhci: control req 0x%02x/0x%02x failed (cc=%u)\n",
 		       bmRequestType, bRequest, s_hc->xfer_cc);
-		printf("xhci: ctrl req %02x/%02x failed cc=%u\n", bmRequestType, bRequest, s_hc->xfer_cc);   // TEMP (P5 bring-up)
+		printf("xhci: ctrl req %02x/%02x failed cc=%u\n", bmRequestType, bRequest, s_hc->xfer_cc);   // stays on the glass: a failure is what it's for
 	}
 	return ok;
 }
@@ -714,7 +718,7 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	if (xhci_run_command(candidate.input_ctx_phys, 0,
 	        TRB_TYPE(TRB_ADDRESS_DEVICE) | (slot << 24)) != TRB_CC_SUCCESS) {
 		printd(DEBUG_USB, "xhci: Address Device failed\n");
-		printf("xhci: Address Device failed\n");   // TEMP (P5 bring-up)
+		printf("xhci: Address Device failed\n");   // stays on the glass: a failure is what it's for
 		return false;
 	}
 
@@ -835,7 +839,7 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 	if (xhci_run_command(candidate.input_ctx_phys, 0,
 	        TRB_TYPE(TRB_CONFIG_ENDPOINT) | (slot << 24)) != TRB_CC_SUCCESS) {
 		printd(DEBUG_USB, "xhci: Configure Endpoint failed\n");
-		printf("xhci: Configure Endpoint failed\n");   // TEMP (P5 bring-up)
+		printf("xhci: Configure Endpoint failed\n");   // stays on the glass: a failure is what it's for
 		return false;
 	}
 
@@ -857,7 +861,10 @@ static bool xhci_setup_hid(uint32_t port, uint32_t speed)
 		xhci_arm_report_trb(dev, i);
 
 	const char *kind = dev->kind == HID_KEYBOARD ? "keyboard" : "mouse";
-	printf("USB %s: port %u slot %u ep %u (interval %u)\n",
+	// The per-device topology (which port, which slot, which endpoint) is
+	// diagnosis, not news — init_xHCI's closing "USB input:" line already
+	// tells the glass what you can type on. To the log, 2026-08-20.
+	printd(DEBUG_USB, "USB %s: port %u slot %u ep %u (interval %u)\n",
 	       kind, port, slot, ep_addr, interval);
 	printd(DEBUG_USB, "xhci: %s live — port %u slot %u dci %u mps %u\n",
 	       kind, port, slot, dci, ep_mps);
@@ -951,7 +958,7 @@ static bool xhci_init_controller(pci_device_t *dev)
 		wait(1);
 	if (mmio_r32(s_hc->op, XHCI_OP_USBSTS) & USBSTS_CNR) {
 		printd(DEBUG_USB, "xhci: controller stuck in reset\n");
-		printf("xhci: controller stuck in reset\n");   // TEMP (P5 bring-up)
+		printf("xhci: controller stuck in reset\n");   // stays on the glass: a failure is what it's for
 		return false;
 	}
 
@@ -1078,7 +1085,9 @@ static void xhci_scan_ports(void)
 	for (uint32_t port = 1; port <= s_hc->max_ports; port++) {
 		uint32_t sc = mmio_r32(s_hc->op, XHCI_OP_PORTSC(port));
 		if (sc & (PORTSC_CCS | (1u << 17)))   // connected, or connect-change
-			printf("xhci: port %u portsc=0x%08x\n", port, sc);   // TEMP (P5 bring-up)
+			// One line PER PORT on a machine with a dozen of them was the
+			// single loudest thing on the boot screen. To the log (2026-08-20).
+			printd(DEBUG_USB, "xhci: port %u portsc=0x%08x\n", port, sc);
 		if (!(sc & PORTSC_CCS))
 			continue;
 
@@ -1096,7 +1105,7 @@ static void xhci_scan_ports(void)
 		}
 		if (!(sc & PORTSC_PED)) {
 			printd(DEBUG_USB, "xhci: port %u connected but wouldn't enable\n", port);
-			printf("xhci: port %u stuck (connected, not enabled)\n", port);   // TEMP (P5 bring-up)
+			printf("xhci: port %u stuck (connected, not enabled)\n", port);   // stays on the glass: a failure is what it's for
 			continue;
 		}
 
@@ -1152,7 +1161,7 @@ void init_xHCI(void)
 		char devname[256];
 		printf("xhci: controller %u/%u at %02x:%02x.%u — %s\n", c + 1, nctrl,
 		       ctrls[c]->busNo, ctrls[c]->deviceNo, ctrls[c]->funcNo,
-		       getDeviceNameP(ctrls[c], devname));   // TEMP (P5 bring-up)
+		       getDeviceNameP(ctrls[c], devname));   // stays on the glass: a failure is what it's for
 		s_hc = &s_controllers[s_controller_count];
 		memset(s_hc, 0, sizeof(*s_hc));
 		if (!xhci_init_controller(ctrls[c])) {

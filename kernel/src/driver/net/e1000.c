@@ -1048,7 +1048,14 @@ void e1000_enable_intx(void)
 		// names the culprit GSI instead of ending at the scheduler banner —
 		// which is exactly how the VBox hang presented before this line
 		// existed. One short line per candidate is cheap; a mystery isn't.
-		printf("e1000: probing GSI %u for the INTx wire...\n", gsi);
+		// TO THE WIRE, NOT THE GLASS (2026-08-20). This line was born on the
+		// glass because a VBox hang inside this probe ended the boot at the
+		// scheduler banner with no clue which GSI ate it. It still does that
+		// job — a hang leaves it in the serial log, which every machine that
+		// runs this now has (the P5 included, over the very NIC arc that made
+		// this cleanup possible). What it no longer does is print one line per
+		// candidate on every healthy boot.
+		printd(DEBUG_NET, "e1000: probing GSI %u for the INTx wire...\n", gsi);
 
 		if (!ioapic_route_gsi(gsi, 0x45, bspApicId, true /*level*/, true /*active low*/))
 			return;   // no IOAPIC at all — polled it is
@@ -1104,7 +1111,7 @@ void e1000_enable_intx(void)
 		// NIC: the poll keeps running unconditionally and packets still move.
 		e1000_write32(e, E1000_IMC, 0xFFFFFFFF);
 		(void)e1000_read32(e, E1000_ICR);
-		printf("e1000: INTx probe found no wire — staying polled\n");
+		printd(DEBUG_NET, "e1000: INTx probe found no wire — staying polled\n");
 		return;
 	}
 
@@ -1116,5 +1123,5 @@ void e1000_enable_intx(void)
 
 	printd(DEBUG_NET, "e1000: INTx confirmed on GSI %u (probe fired %u, strangers %u)\n",
 	       e->intx_gsi, e->intx_fires, e->intx_strangers);
-	printf("e1000: interrupts live — INTx GSI %u -> vector 0x45 (probe-confirmed)\n", e->intx_gsi);
+	printd(DEBUG_NET, "e1000: interrupts live — INTx GSI %u -> vector 0x45 (probe-confirmed)\n", e->intx_gsi);
 }

@@ -196,6 +196,19 @@ typedef struct
 	net_device_t netdev;
 	bool present;
 
+	// IDENTITY, kept for the ONE line bring-up prints on success (2026-08-20).
+	// The bring-up used to narrate itself to the GLASS in eleven lines —
+	// right when this chip met this code on exactly one machine in the world
+	// and every step had to say what it did. That debt is paid: the P5 boots
+	// it daily, and it has a serial wire now (the very wire this driver
+	// carries). So the narration moved to the log and these fields let the
+	// screen answer the only question a healthy boot asks — WHAT is this
+	// machine and is it up. Set on the way past by the reporters below.
+	const char* model;        // "RTL8125B" — from the TxConfig hardware version
+	uint8_t bus, slot, func;  // where it lives on the PCI tree
+	const char* speed;        // "1000"/"100"/"10"/"?" — decoded from PHYstatus
+	bool full_duplex;
+
 	// The rings, and both addresses for each: the PHYSICAL one the device
 	// is given, and the HHDM alias we dereference. They are the same memory
 	// — allocate_memory_aligned hands back page-aligned physical memory that
@@ -310,7 +323,8 @@ static void r8125_report_version(r8125_t* r)
 	// that costs an afternoon later.
 	const char* model = (id == 0x641) ? "RTL8125B" :
 	                    (id == 0x608) ? "RTL8125A" : "unrecognized";
-	printf("r8125: chip id 0x%03x (%s), TxConfig reads 0x%08x\n", id, model, txcfg);
+	r->model = model;
+	printd(DEBUG_NET, "r8125: chip id 0x%03x (%s), TxConfig reads 0x%08x\n", id, model, txcfg);
 }
 
 // ── BAR mapping ─────────────────────────────────────────────────────────────
@@ -374,8 +388,10 @@ static void r8125_report_link(r8125_t* r)
 	const char* speed = (phy & R8125_PHY_1000M) ? "1000" :
 	                    (phy & R8125_PHY_100M)  ? "100"  :
 	                    (phy & R8125_PHY_10M)   ? "10"   : "?";
-	printf("r8125: link %s/%s (PHYstatus 0x%02x)\n",
-	       speed, (phy & R8125_PHY_FULLDUP) ? "full" : "half", phy);
+	r->speed = speed;
+	r->full_duplex = (phy & R8125_PHY_FULLDUP) != 0;
+	printd(DEBUG_NET, "r8125: link %s/%s (PHYstatus 0x%02x)\n",
+	       speed, r->full_duplex ? "full" : "half", phy);
 	// The raw byte rides along on purpose: this is a 2.5GbE part reporting
 	// through a register whose speed encoding this driver only partly
 	// decodes, so if it ever negotiates something we cannot name, the number
@@ -465,7 +481,7 @@ static bool r8125_setup_rings(r8125_t* r)
 		       (uint32_t)(r->tx_phys & 0xFFFFFFFF), tx_lo);
 		return false;
 	}
-	printf("r8125: descriptor bases confirmed (rx 0x%08x, tx 0x%08x)\n", rx_lo, tx_lo);
+	printd(DEBUG_NET, "r8125: descriptor bases confirmed (rx 0x%08x, tx 0x%08x)\n", rx_lo, tx_lo);
 
 	printd(DEBUG_NET, "r8125: rings rx phys 0x%lx tx phys 0x%lx (%u/%u descs, %u-byte buffers)\n",
 	       r->rx_phys, r->tx_phys, R8125_RX_DESCS, R8125_TX_DESCS, R8125_BUF_SIZE);
@@ -602,8 +618,10 @@ static bool r8125_init_device(pci_device_t* dev)
 	r->pci = dev;
 
 	// BEACON 1: found. Bus/device/function, so a P5 boot can be compared
-	// against its own lspci output without guessing.
-	printf("r8125: found 10ec:8125 at %02x:%02x.%u\n",
+	// against its own lspci output without guessing. Kept for the summary
+	// line at the end of bring-up, which is where the glass hears about it.
+	r->bus = dev->busNo; r->slot = dev->deviceNo; r->func = dev->funcNo;
+	printd(DEBUG_NET, "r8125: found 10ec:8125 at %02x:%02x.%u\n",
 	       dev->busNo, dev->deviceNo, dev->funcNo);
 
 	// Enable memory decoding but actively DISABLE bus mastering, by a LIVE
@@ -631,7 +649,7 @@ static bool r8125_init_device(pci_device_t* dev)
 	r->regs = r8125_map_regs(bar_phys);
 
 	// BEACON 2: mapped.
-	printf("r8125: BAR%u phys 0x%lx mapped at HHDM\n", R8125_BAR, bar_phys);
+	printd(DEBUG_NET, "r8125: BAR%u phys 0x%lx mapped at HHDM\n", R8125_BAR, bar_phys);
 
 	// BEACON 3: the MAC. This is the first read that proves the register
 	// window is genuinely the chip's and not a mis-mapped page: a plausible
@@ -654,7 +672,7 @@ static bool r8125_init_device(pci_device_t* dev)
 		return false;
 	}
 
-	printf("r8125: MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+	printd(DEBUG_NET, "r8125: MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
 	       r->netdev.mac[0], r->netdev.mac[1], r->netdev.mac[2],
 	       r->netdev.mac[3], r->netdev.mac[4], r->netdev.mac[5]);
 
@@ -700,7 +718,7 @@ static bool r8125_init_device(pci_device_t* dev)
 		printf("r8125: chip did not clear its reset bit — refusing to program a chip that is not listening\n");
 		return false;
 	}
-	printf("r8125: soft reset complete\n");
+	printd(DEBUG_NET, "r8125: soft reset complete\n");
 
 	// Reset has stopped the old engines and erased their stale descriptor
 	// state. DMA is safe to authorize now, before setup installs our new ring
@@ -713,7 +731,7 @@ static bool r8125_init_device(pci_device_t* dev)
 	// ── Rings ───────────────────────────────────────────────────────────
 	if (!r8125_setup_rings(r))
 		return false;
-	printf("r8125: rings built (%u rx / %u tx descriptors)\n",
+	printd(DEBUG_NET, "r8125: rings built (%u rx / %u tx descriptors)\n",
 	       R8125_RX_DESCS, R8125_TX_DESCS);
 
 	// ── Configuration ───────────────────────────────────────────────────
@@ -767,10 +785,16 @@ static bool r8125_init_device(pci_device_t* dev)
 	uint32_t misc_before = r8125_read32(r, R8125_MISC);
 	r8125_write32(r, R8125_MISC, misc_before & ~R8125_RXDV_GATED);
 	uint32_t misc_after = r8125_read32(r, R8125_MISC);
-	printf("r8125: rx gate: MISC 0x%08x -> 0x%08x (RXDV_GATED %s)\n",
-	       misc_before, misc_after,
-	       (misc_after & R8125_RXDV_GATED) ? "STILL SET — receive will stay dead"
-	                                       : "clear");
+	// Only the BAD outcome earns the glass. A gate that opened (or was never
+	// shut, which is the P5's answer every time) is bring-up narration; a gate
+	// that stayed shut means receive is dead and the operator needs to know
+	// now, not after wondering why nothing arrives.
+	if (misc_after & R8125_RXDV_GATED)
+		printf("r8125: rx gate STILL SET after clearing it (MISC 0x%08x -> 0x%08x) — receive will stay dead\n",
+		       misc_before, misc_after);
+	else
+		printd(DEBUG_NET, "r8125: rx gate: MISC 0x%08x -> 0x%08x (RXDV_GATED clear)\n",
+		       misc_before, misc_after);
 
 	// Engines on, THEN relock the config space.
 	r8125_write8(r, R8125_CHIPCMD, R8125_CMD_TX_ENABLE | R8125_CMD_RX_ENABLE);
@@ -785,7 +809,7 @@ static bool r8125_init_device(pci_device_t* dev)
 		printf("r8125: engines did not start (ChipCmd reads 0x%02x, wanted Tx|Rx set)\n", cmd);
 		return false;
 	}
-	printf("r8125: tx/rx enabled (ChipCmd 0x%02x)\n", cmd);
+	printd(DEBUG_NET, "r8125: tx/rx enabled (ChipCmd 0x%02x)\n", cmd);
 
 	r->netdev.ops = &s_r8125_ops;
 	r->netdev.mtu = 1500;
@@ -811,11 +835,29 @@ static bool r8125_init_device(pci_device_t* dev)
 		return false;
 	}
 
-	printf("r8125: registered as %s — %02x:%02x:%02x:%02x:%02x:%02x, link %s\n",
-	       r->netdev.name,
-	       r->netdev.mac[0], r->netdev.mac[1], r->netdev.mac[2],
-	       r->netdev.mac[3], r->netdev.mac[4], r->netdev.mac[5],
-	       r->netdev.link_up ? "up" : "down");
+	// THE ONE LINE THE GLASS GETS (2026-08-20). Everything above this point
+	// now narrates to the log; what survives here is what a human watching a
+	// healthy machine come up actually wants: which chip, where it lives, who
+	// it is, and whether the wire is good. A down link still says so — that
+	// is a fact about this boot, not chatter — and every failure above kept
+	// its printf, so a bring-up that stops still explains itself on screen.
+	// Speed/duplex ride along because they have already earned their place:
+	// the P5 negotiated 100/full rather than gigabit on its first light, and
+	// that one word is what said "look at the cable, not the driver".
+	if (r->netdev.link_up)
+		printf("r8125: %s at %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link %s/%s\n",
+		       r->model ? r->model : "RTL8125",
+		       r->bus, r->slot, r->func,
+		       r->netdev.mac[0], r->netdev.mac[1], r->netdev.mac[2],
+		       r->netdev.mac[3], r->netdev.mac[4], r->netdev.mac[5],
+		       r->speed ? r->speed : "?", r->full_duplex ? "full" : "half");
+	else
+		printf("r8125: %s at %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link DOWN\n",
+		       r->model ? r->model : "RTL8125",
+		       r->bus, r->slot, r->func,
+		       r->netdev.mac[0], r->netdev.mac[1], r->netdev.mac[2],
+		       r->netdev.mac[3], r->netdev.mac[4], r->netdev.mac[5]);
+	printd(DEBUG_NET, "r8125: registered as %s\n", r->netdev.name);
 	return true;
 }
 
