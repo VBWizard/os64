@@ -51,10 +51,19 @@
 // Ruling of 2026-08-04: rm (or a truncating "w" open) of a file another
 // handle holds open is REFUSED, not raced. Every open — file or directory,
 // read or write mode, on either op table — registers its inode here; every
-// close deregisters. rm checks the count and answers "busy"; a "w" open
-// checks BEFORE registering itself. The alternative (Unix's unlink-while-
-// open, blocks freed at last close) is real machinery for a consumer that
-// doesn't exist yet; it can be built the day one does.
+// close deregisters. A "w" open checks BEFORE registering itself.
+//
+// WHAT THE COUNT MEANS CHANGED 2026-08-16, and the old comment here said the
+// alternative "can be built the day a consumer does" — so here is that day.
+// The consumer was replacing /bin/husk over the network while husk runs.
+// Now:
+//   - an open DIRECTORY still refuses removal or a move (its reader is
+//     mid-walk through the blocks in question);
+//   - an open regular FILE does not refuse. Its NAME goes immediately and
+//     its storage waits for the last close, on the on-disk orphan chain
+//     (ext2_write.c). The count is what tells those two moments apart, and
+//     ext2_openref_unregister reporting the zero-transition is what fires
+//     the reap.
 #define EXT2_OPEN_TABLE_SLOTS 64
 
 typedef struct {
@@ -155,8 +164,22 @@ int      ext2_read_inode_buf(vfs_filesystem_t *fs, ext2_fs_t *e,
 // one). Returns false only when the table is full — the open FAILS then,
 // loudly, rather than silently escaping the rm protection.
 bool     ext2_openref_register(ext2_fs_t *e, uint32_t ino);
-void     ext2_openref_unregister(ext2_fs_t *e, uint32_t ino);
+// TRUE = that was the LAST handle, and the caller then owes the orphan chain
+// a look (ext2_orphan_reap_if_pending) — which must happen OUTSIDE open_lock.
+bool     ext2_openref_unregister(ext2_fs_t *e, uint32_t ino);
 uint32_t ext2_openref_count(ext2_fs_t *e, uint32_t ino);
+
+// ── The orphan chain (ext2_write.c) ─────────────────────────────────────────
+// Inodes whose last NAME is gone while a handle still holds them open — what
+// lets a running program be replaced on disk. The list lives ON DISK in the
+// superblock's s_last_orphan; see the essay above ext2_orphan_add for why
+// that matters more than the convenience of an in-memory one.
+// Last close just happened: if `ino` is a pending orphan, free it now.
+void ext2_orphan_reap_if_pending(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t ino);
+// Mount time: reclaim whatever the previous mount died still holding open.
+// Announces on the glass when it finds anything — a silent recovery would
+// look exactly like a boot where nothing had ever gone wrong.
+void ext2_orphan_replay(vfs_filesystem_t *fs, ext2_fs_t *e);
 
 // ── Write substrate (ext2_write.c) ──────────────────────────────────────────
 // The block-level primitives every write-shaped op composes. All return

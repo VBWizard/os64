@@ -68,7 +68,13 @@ typedef struct ipv4_stats
 	uint64_t rx_not_for_us;        // unicast to someone else's address
 	uint64_t rx_unknown_proto;     // protocol we don't parse yet
 	uint64_t tx_sent;
-	uint64_t tx_awaiting_arp;      // dropped: next hop unresolved, ARP query fired
+	uint64_t tx_awaiting_arp;      // DROPPED: next hop unresolved and no room to hold it
+	// PARKED: next hop unresolved, packet held in the ARP waiting room
+	// and released when the reply landed (ipv4.c). The pair reads as a
+	// score: parked is the fix working, awaiting is it running out of
+	// room — and they were ONE counter until 2026-08-16, when the
+	// difference between "delayed" and "lost" started mattering.
+	uint64_t tx_parked_for_arp;
 	uint64_t tx_too_big;           // payload over MTU (we refuse; we never fragment)
 	uint64_t tx_errors;            // lower layer refused
 } ipv4_stats_t;
@@ -81,6 +87,12 @@ void ipv4_config_init(void);
 // Inbound IPv4 packet, ethernet header already stripped. RX-handler
 // context: quick, no sleeping.
 void ipv4_input(net_device_t* dev, const void* pkt, uint16_t length);
+
+// A neighbor's MAC just became known — release whatever packet was waiting
+// on it. Called by arp.c the instant the cache learns an address, from any
+// source (a reply to our question, or a neighbor asking one of its own).
+// Cheap and silent when nothing was waiting, which is nearly always.
+void ipv4_arp_resolved(net_device_t* dev, uint32_t ip);
 
 // Wrap `payload` in an IPv4 header and send it toward dst_ip. Handles the
 // host routing decision (on-link vs gateway) and ARP resolution. Returns

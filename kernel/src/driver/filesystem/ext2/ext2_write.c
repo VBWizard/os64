@@ -202,6 +202,60 @@ int ext2_gd_writeback(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t group)
 	return ext2_write_fs_block(fs, e, disk_block, src) == 0 ? 0 : -1;
 }
 
+// Count zero bits in the meaningful part of an allocation bitmap. Bits past
+// the final partial group are filesystem padding, not free objects.
+static uint32_t ext2_bitmap_free_count(const uint8_t *bitmap, uint32_t bits)
+{
+	uint32_t free = 0;
+	for (uint32_t bit = 0; bit < bits; bit++)
+		if (!(bitmap[bit / 8] & (uint8_t)(1u << (bit % 8))))
+			free++;
+	return free;
+}
+
+// An idempotent replay can find the bitmap bit already clear after a crash
+// interrupted the following GDT/superblock writes. Rebuild this group's count
+// from the authoritative bitmap, rebuild the global total from the corrected
+// group table, and ALWAYS write both ledgers: RAM may already contain the
+// right values after a transient I/O failure while disk still does not.
+static int ext2_reconcile_free_block_counts(vfs_filesystem_t *fs, ext2_fs_t *e,
+                                             uint32_t g, const uint8_t *bitmap)
+{
+	uint32_t base = e->sb.s_first_data_block + g * e->sb.s_blocks_per_group;
+	uint32_t span = e->sb.s_blocks_count - base;
+	if (span > e->sb.s_blocks_per_group)
+		span = e->sb.s_blocks_per_group;
+	e->groups[g].bg_free_blocks_count = (uint16_t)ext2_bitmap_free_count(bitmap, span);
+
+	uint64_t total = 0;
+	for (uint32_t i = 0; i < e->groups_count; i++)
+		total += e->groups[i].bg_free_blocks_count;
+	e->sb.s_free_blocks_count = (uint32_t)total;
+
+	if (ext2_gd_writeback(fs, e, g) != 0)
+		return -1;
+	return ext2_sb_writeback(fs, e);
+}
+
+static int ext2_reconcile_free_inode_counts(vfs_filesystem_t *fs, ext2_fs_t *e,
+                                             uint32_t g, const uint8_t *bitmap)
+{
+	uint32_t base = g * e->sb.s_inodes_per_group;
+	uint32_t span = e->sb.s_inodes_count - base;
+	if (span > e->sb.s_inodes_per_group)
+		span = e->sb.s_inodes_per_group;
+	e->groups[g].bg_free_inodes_count = (uint16_t)ext2_bitmap_free_count(bitmap, span);
+
+	uint64_t total = 0;
+	for (uint32_t i = 0; i < e->groups_count; i++)
+		total += e->groups[i].bg_free_inodes_count;
+	e->sb.s_free_inodes_count = (uint32_t)total;
+
+	if (ext2_gd_writeback(fs, e, g) != 0)
+		return -1;
+	return ext2_sb_writeback(fs, e);
+}
+
 // ── The allocators ──────────────────────────────────────────────────────────
 // Goal-directed, FFS-style: data blocks want the group their inode lives in,
 // new inodes want their parent directory's group — locality was the entire
@@ -315,9 +369,49 @@ uint32_t ext2_alloc_block(vfs_filesystem_t *fs, ext2_fs_t *e,
 	return 0;   // filesystem full — the caller turns this into a short write
 }
 
-// Free one block: bitmap bit off, counts up. The caller has already removed
-// every reference (dereference-then-free) — this is the last step, so a
-// crash before it leaks the block and a crash after it is a completed free.
+// ── The free path's result vocabulary ───────────────────────────────────────
+// A failed release is not one fact but two, and the difference decides whether
+// this mount may keep allocating:
+//
+//   EXT2_FREE_FAILED       nothing on disk changed. The retry map names
+//                          storage the bitmap still calls USED, so no
+//                          allocator can hand it to a live file; replay simply
+//                          tries again at the next mount. Recoverable, quiet.
+//
+//   ..._NAMES_FREE_BLOCK   the dangerous half. A bitmap bit is already CLEAR —
+//   ..._NAMES_FREE_INODE   that block or inode is allocatable RIGHT NOW — while
+//                          a durable record still names it for release. Let one
+//                          allocation land in that window and replay hands a
+//                          live file's storage back to the free pool.
+//
+// The reusable results carry a caller obligation, in this order: persist the
+// retry record FIRST (writes are still permitted), THEN demote the mount.
+// Demoting first turns the record's own write into a block-tripwire panic and
+// costs the very recovery path the record exists to provide.
+enum
+{
+	EXT2_FREE_FAILED = -1,
+	// A child release landed but clearing its durable parent pointer did not,
+	// or a block's bitmap write landed while a count ledger writeback did not.
+	EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK = -2,
+	// The inode's bitmap bit is clear while its counts — or the orphan chain
+	// entry that still names it — say otherwise.
+	EXT2_FREE_RETRY_MAP_NAMES_FREE_INODE = -3
+};
+
+// Both reusable results answer the caller's only question the same way, and
+// asking it by name beats two comparisons that must never drift apart.
+static inline bool ext2_free_left_storage_reusable(int rc)
+{
+	return rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK ||
+	       rc == EXT2_FREE_RETRY_MAP_NAMES_FREE_INODE;
+}
+
+// Free one block: bitmap bit off, counts up. Most callers have already
+// removed every reference. Orphan replay deliberately retains its retry map
+// until the free is durable; write_lock (or pre-allocation mount replay)
+// prevents reuse in that interval, and an already-clear bit makes repeating
+// the release after a crash harmless.
 int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 {
 	if (block < e->sb.s_first_data_block || block >= e->sb.s_blocks_count)
@@ -332,19 +426,35 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block)
 	uint8_t *bm = wr_scratch_get(e);
 	if (bm == NULL)
 		return -1;
-	int rc = -1;
+	int rc = EXT2_FREE_FAILED;
 	if (ext2_read_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) == 0)
 	{
+		// Replay may revisit a block whose bitmap update completed just before
+		// power failed. It is already free, but the two count ledgers may still
+		// describe it as allocated; repair both before declaring completion.
+		// A reconcile that ITSELF fails leaves the caller's retry map naming a
+		// block the bitmap calls free — the reusable window, not a clean miss.
+		if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
+		{
+			rc = ext2_reconcile_free_block_counts(fs, e, g, bm) == 0
+			         ? 0 : EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
+			goto out;
+		}
 		bm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
 		if (ext2_write_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) == 0)
 		{
 			e->groups[g].bg_free_blocks_count++;
 			e->sb.s_free_blocks_count++;
-			ext2_gd_writeback(fs, e, g);
-			ext2_sb_writeback(fs, e);
-			rc = 0;
+			// PAST THE POINT OF NO RETURN. That bitmap write published this
+			// block to every allocator on the filesystem; a count writeback
+			// failing now cannot be reported as "nothing happened", because
+			// the caller's retry map still names a block anyone may take.
+			rc = (ext2_gd_writeback(fs, e, g) == 0 &&
+			      ext2_sb_writeback(fs, e) == 0)
+			         ? 0 : EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
 		}
 	}
+out:
 	wr_scratch_put(e, bm);
 	return rc;
 }
@@ -421,9 +531,17 @@ int ext2_free_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 	uint8_t *bm = wr_scratch_get(e);
 	if (bm == NULL)
 		return -1;
-	int rc = -1;
+	int rc = EXT2_FREE_FAILED;
 	if (ext2_read_fs_block(fs, e, e->groups[g].bg_inode_bitmap, bm) == 0)
 	{
+		// Same replay rule as blocks: an orphan may have reached this bitmap
+		// write before a crash but not either count ledger or final chain unlink.
+		if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
+		{
+			rc = ext2_reconcile_free_inode_counts(fs, e, g, bm) == 0
+			         ? 0 : EXT2_FREE_RETRY_MAP_NAMES_FREE_INODE;
+			goto out;
+		}
 		bm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
 		if (ext2_write_fs_block(fs, e, e->groups[g].bg_inode_bitmap, bm) == 0)
 		{
@@ -431,11 +549,16 @@ int ext2_free_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
 			e->sb.s_free_inodes_count++;
 			if (is_dir && e->groups[g].bg_used_dirs_count > 0)
 				e->groups[g].bg_used_dirs_count--;
-			ext2_gd_writeback(fs, e, g);
-			ext2_sb_writeback(fs, e);
-			rc = 0;
+			// Same point of no return as the block path, and worse if ignored:
+			// this inode NUMBER is allocatable now, while the orphan chain may
+			// still name it for teardown. A stale count is not the hazard —
+			// a later replay releasing the new file that got this number is.
+			rc = (ext2_gd_writeback(fs, e, g) == 0 &&
+			      ext2_sb_writeback(fs, e) == 0)
+			         ? 0 : EXT2_FREE_RETRY_MAP_NAMES_FREE_INODE;
 		}
 	}
+out:
 	wr_scratch_put(e, bm);
 	return rc;
 }
@@ -588,44 +711,107 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 
 // ── Truncation ──────────────────────────────────────────────────────────────
 
-// Free every block an (already-dereferenced) block map names: the indirect
-// chains bottom-up, then the chain roots, then nothing — the map came to us
-// as a COPY made before the inode was rewritten with a zeroed map, so by the
-// time these frees run, nothing on disk references any of it
-// (dereference-then-free, the doctrine's second rule). depth counts pointer
-// levels: 0 = data block, 1..3 = indirect. Recursion is bounded by ext2's
-// own geometry — three levels, ever.
-static void ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
-                            uint32_t block, uint32_t depth)
+// Free every block a retry map names: indirect chains bottom-up, then their
+// roots. Within a chain, each parent pointer remains durable until its child
+// or subtree has been released; only then is the entry cleared. A crash in
+// between therefore leaves replay a path to the already-free child, whose
+// bitmap release is idempotent. depth counts pointer levels: 0 = data block,
+// 1..3 = indirect. Recursion is bounded by ext2's own geometry — three
+// levels, ever.
+//
+// Results are the free path's shared vocabulary (declared above ext2_free_block,
+// which is where the reusable window opens): 0, EXT2_FREE_FAILED, or one of the
+// EXT2_FREE_RETRY_MAP_NAMES_FREE_* results the caller must persist-then-demote on.
+static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
+                           uint32_t block, uint32_t depth,
+                           uint32_t *freed)
 {
 	if (block == 0)
-		return;
+		return 0;
 
 	if (depth > 0)
 	{
 		uint32_t *buf = (uint32_t *)wr_scratch_get(e);
-		if (buf != NULL)
+		if (buf == NULL)
+			return -1;
+		if (ext2_read_fs_block(fs, e, block, buf) != 0)
 		{
-			if (ext2_read_fs_block(fs, e, block, buf) == 0)
-				for (uint32_t i = 0; i < e->ptrs_per_block; i++)
-					ext2_free_chain(fs, e, buf[i], depth - 1);
 			wr_scratch_put(e, (uint8_t *)buf);
+			return -1;
 		}
-		// buf == NULL: the children leak rather than dangle — the map is
-		// already severed, so a leak is the worst case by construction.
+
+		for (uint32_t i = 0; i < e->ptrs_per_block; i++)
+		{
+			uint32_t child = buf[i];
+			if (child == 0)
+				continue;
+
+			// Keep the durable pointer until the release completes. If power
+			// fails after the bitmap write but before the parent update, mount
+			// replay follows this same pointer and repeats the idempotent free.
+			int child_rc = ext2_free_chain(fs, e, child, depth - 1, freed);
+			if (child_rc != 0)
+			{
+				wr_scratch_put(e, (uint8_t *)buf);
+				return child_rc;
+			}
+			buf[i] = 0;
+			if (ext2_write_fs_block(fs, e, block, buf) != 0)
+			{
+				// The on-disk entry still contains child. Mirror that in the
+				// scratch image before returning; the inode retry map retains
+				// this indirect root and will safely revisit the child.
+				buf[i] = child;
+				wr_scratch_put(e, (uint8_t *)buf);
+				return EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
+			}
+		}
+		wr_scratch_put(e, (uint8_t *)buf);
 	}
-	ext2_free_block(fs, e, block);
+	// Propagate the result verbatim. A bitmap write that landed while a count
+	// ledger did not leaves THIS block reusable although the retry map (the
+	// inode's i_block entry, or a parent pointer above us) still names it —
+	// exactly the condition the sentinel exists to carry to a caller that can
+	// persist the record and stop the allocator.
+	int free_rc = ext2_free_block(fs, e, block);
+	if (free_rc != 0)
+		return free_rc;
+	(*freed)++;
+	return 0;
 }
 
-// Free all blocks named by `old` (a pre-truncate copy of the inode).
-static void ext2_free_inode_blocks(vfs_filesystem_t *fs, ext2_fs_t *e,
-                                   const ext2_inode_t *old)
+// Free all blocks named by `old` (a pre-truncate copy of the inode). On an
+// error, `old` remains a replayable map. Completed top-level entries are
+// pruned; an indirect root may deliberately remain and lead replay through
+// an already-free child if its parent-pointer update failed.
+static int ext2_free_inode_blocks(vfs_filesystem_t *fs, ext2_fs_t *e,
+                                  ext2_inode_t *old)
 {
+	uint32_t freed = 0;
+	int rc = EXT2_FREE_FAILED;
 	for (uint32_t i = 0; i < EXT2_NDIR_BLOCKS; i++)
-		ext2_free_chain(fs, e, old->i_block[i], 0);
-	ext2_free_chain(fs, e, old->i_block[EXT2_IND_BLOCK],  1);
-	ext2_free_chain(fs, e, old->i_block[EXT2_DIND_BLOCK], 2);
-	ext2_free_chain(fs, e, old->i_block[EXT2_TIND_BLOCK], 3);
+	{
+		rc = ext2_free_chain(fs, e, old->i_block[i], 0, &freed);
+		if (rc != 0)
+			goto failed;
+		old->i_block[i] = 0;
+	}
+	for (uint32_t depth = 1; depth <= 3; depth++)
+	{
+		uint32_t slot = EXT2_IND_BLOCK + depth - 1;
+		rc = ext2_free_chain(fs, e, old->i_block[slot], depth, &freed);
+		if (rc != 0)
+			goto failed;
+		old->i_block[slot] = 0;
+	}
+	old->i_blocks = 0;
+	return 0;
+
+failed:
+	uint64_t released_sectors = (uint64_t)freed * e->sectors_per_block;
+	old->i_blocks = released_sectors < old->i_blocks
+	                    ? old->i_blocks - (uint32_t)released_sectors : 0;
+	return rc;
 }
 
 // ── Path splitting and directory surgery ────────────────────────────────────
@@ -878,6 +1064,11 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (fs->read_only)
+	{
+		spinlock_release_irqrestore(&e->write_lock, lock_flags);
+		return -1;
+	}
 
 	// FRESH-INODE DISCIPLINE: re-read the inode from disk before mutating.
 	// Two handles appending to one file serialize here — each sees the
@@ -1085,12 +1276,19 @@ static int ext2_open_rw(vfs_file_t **vfs_file, const char *path, const char *mod
 
 		case 'a':
 		{
+			if (vfs_fs->read_only)
+				return -1;
 			if (ext2_open_existing(vfs_file, path, vfs_fs) != 0)
 			{
 				// Absent: create it, then open the now-existing file. (A
 				// concurrent rm between the unlock and the reopen makes the
 				// reopen fail — correct, just unlucky.)
 				uint64_t flags = spinlock_acquire_irqsave(&e->write_lock);
+				if (vfs_fs->read_only)
+				{
+					spinlock_release_irqrestore(&e->write_lock, flags);
+					return -1;
+				}
 				uint32_t ino = ext2_create_file(vfs_fs, e, path);
 				spinlock_release_irqrestore(&e->write_lock, flags);
 				if (ino == 0)
@@ -1107,6 +1305,11 @@ static int ext2_open_rw(vfs_file_t **vfs_file, const char *path, const char *mod
 		case 'c':
 		{
 			uint64_t flags = spinlock_acquire_irqsave(&e->write_lock);
+			if (vfs_fs->read_only)
+			{
+				spinlock_release_irqrestore(&e->write_lock, flags);
+				return -1;
+			}
 
 			ext2_inode_t node;
 			uint32_t ino = ext2_resolve_path(vfs_fs, e, path, &node);
@@ -1306,6 +1509,342 @@ static bool ext2_dir_is_empty(vfs_filesystem_t *fs, ext2_fs_t *e,
 	return empty;
 }
 
+// ── The orphan list: inodes with no name and a handle ───────────────────────
+//
+// THE PROBLEM, stated once. A directory entry and a file are different
+// things — that separation IS the inode, and it is the idea MS-DOS's
+// filesystem did not have. So "delete this name" and "destroy this file"
+// are different operations, and when a program still holds the file open,
+// only the first one is safe. Until 2026-08-16 os64 sidestepped this by
+// REFUSING (ruling 5, 2026-08-04: rm declines a busy file), which is honest
+// and costs nothing right up until the thing you need to replace is the
+// program that is running — /bin/husk, upgrading itself over the wire.
+//
+// THE FIX is the one Unix has had since the beginning: remove the NAME
+// immediately, and let the FILE die at last close. Between those two
+// moments the inode is an orphan — unreachable by any path, still perfectly
+// readable through the handle keeping it alive. `os64 refresh` replaces
+// husk's binary, the running husk keeps demand-paging the old image out of
+// an inode with no name, and the new one is there at the next boot.
+//
+// THE CRASH QUESTION, and why this list is ON DISK. An orphan is a live
+// allocation nothing points to; lose the record and you have leaked an
+// inode and its blocks. An in-memory list would be simpler and would work
+// perfectly until the machine lost power mid-window — and this feature is
+// INVISIBLE, so the leak would accumulate silently, which is exactly the
+// failure this house refuses to ship. ext2 already solved it: the
+// superblock's s_last_orphan holds the head of a chain, each orphan storing
+// the next one's inode number in i_dtime (free real estate — a file that
+// still has a reader has no deletion time yet). Two things fall out:
+//
+//   1. WE replay the chain at mount and reclaim whatever a crash left.
+//   2. e2fsck knows this field by heart and will clear a chain itself.
+//
+// (2) is the whole reason to use the real format instead of inventing a
+// private list: it hands an otherwise unverifiable feature an independent
+// judge. If this code is wrong, e2fsck says so, in words we did not write.
+//
+// SCOPE: regular files only. An open DIRECTORY still refuses removal — a
+// directory handle is mid-walk through blocks, its parent's link count is
+// in play, and no consumer has asked. The line is drawn where the demand is.
+
+// Chain `ino` onto the orphan list. The caller has already removed its last
+// NAME and holds write_lock; `node` is its inode, which this finishes
+// (links_count 0) and writes.
+//
+// ORDER: the inode goes down FIRST carrying its next-pointer, THEN the
+// superblock head that reaches it. A crash between the two leaves an inode
+// off the list — one leaked inode e2fsck reclaims. The other order would
+// leave the HEAD pointing at an inode whose i_dtime is not yet a next
+// pointer: a chain into garbage, which is a worse thing to hand fsck.
+static int ext2_orphan_add(vfs_filesystem_t *fs, ext2_fs_t *e,
+                           uint32_t ino, ext2_inode_t *node)
+{
+	uint32_t old_head = e->sb.s_last_orphan;
+	node->i_links_count = 0;
+	node->i_dtime = old_head;   // 0 terminates the chain
+	if (ext2_write_inode_disk(fs, e, ino, node) != 0)
+		return -1;
+
+	e->sb.s_last_orphan = ino;
+	if (ext2_sb_writeback(fs, e) != 0)
+	{
+		// The disk still names old_head. Keep the cache saying the same thing
+		// so close/replay cannot walk a candidate that was never published.
+		e->sb.s_last_orphan = old_head;
+		return -1;
+	}
+
+	printd(DEBUG_VFS, "ext2: inode %u orphaned (name gone, %u handle(s) still open)\n",
+	       ino, ext2_openref_count(e, ino));
+	return 0;
+}
+
+// Unchain `ino`. Singly linked, so removal walks from the head — which
+// costs nothing real: the list is empty almost always and holds one entry
+// the rest of the time. Bounded against a corrupt chain rather than trusted.
+//
+// The bound matches ext2_orphan_replay's 4096, NOT the open-table size,
+// because the chain's length is not actually bounded by open handles: a
+// reap that fails (read error, close racing rm — see ext2_rm) leaves its
+// inode chained with nobody left to close it, and those stragglers
+// accumulate until the next mount replays them. A walk bound smaller than
+// replay's would start refusing legitimate removals exactly when the chain
+// is at its unhealthiest, compounding the pile-up it should be draining.
+static int ext2_orphan_remove(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t ino)
+{
+	uint32_t cur = e->sb.s_last_orphan;
+	uint32_t prev = 0;
+	ext2_inode_t node;
+
+	for (uint32_t hops = 0; cur != 0 && hops < 4096; hops++)
+	{
+		if (ext2_read_inode(fs, e, cur, &node) != 0)
+			return -1;
+		uint32_t next = node.i_dtime;
+
+		if (cur == ino)
+		{
+			if (prev == 0)
+			{
+				e->sb.s_last_orphan = next;
+				if (ext2_sb_writeback(fs, e) == 0)
+					return 0;
+				// The disk still names `cur`; keep the RAM cache saying the
+				// same thing so a later retry does not forget the orphan.
+				e->sb.s_last_orphan = cur;
+				return -1;
+			}
+			ext2_inode_t prev_node;
+			if (ext2_read_inode(fs, e, prev, &prev_node) != 0)
+				return -1;
+			prev_node.i_dtime = next;
+			return ext2_write_inode_disk(fs, e, prev, &prev_node);
+		}
+		prev = cur;
+		cur = next;
+	}
+	return -1;   // not on the list (or the chain is nonsense)
+}
+
+// Destroy an inode's storage: the teardown ext2_rm does inline when nobody
+// holds the file. Factored out because the orphan path needs the identical
+// sequence at a completely different moment, and two copies of "free an
+// inode" is how one of them quietly stops matching the other.
+static int ext2_inode_release(vfs_filesystem_t *fs, ext2_fs_t *e,
+                              uint32_t ino, ext2_inode_t *node)
+{
+	bool is_dir = (node->i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
+	ext2_inode_t old = *node;
+
+	memset(node->i_block, 0, sizeof(node->i_block));
+	node->i_links_count = 0;
+	node->i_size = 0;
+	node->i_blocks = 0;
+	node->i_dtime = (uint32_t)kSystemCurrentTime;   // a REAL deletion time now
+	if (ext2_write_inode_disk(fs, e, ino, node) != 0)
+	{
+		// Nothing was dereferenced on disk, so the caller may safely put the
+		// original inode (including its orphan next-pointer) back on the list.
+		*node = old;
+		return -1;
+	}
+
+	int release_rc = ext2_free_inode_blocks(fs, e, &old);
+	if (release_rc != 0)
+	{
+		// Restore the replayable map to the caller; orphan_add will persist it
+		// before relinking the inode so a later mount can finish the release.
+		// Propagate the special result too: if a parent-pointer write failed
+		// after its child became free, the caller must persist this map BEFORE
+		// publishing read-only state, then stop block reuse until replay.
+		*node = old;
+		return release_rc;
+	}
+	// Propagated for the same reason: if this clears the inode's bitmap bit but
+	// not its ledgers, the caller must orphan the record BEFORE demoting, and
+	// it can only know to demote if the reusable result reaches it.
+	return ext2_free_inode(fs, e, ino, is_dir);
+}
+
+// Release an inode that is STILL ON the orphan chain. This ordering is the
+// crash-safe half of the list's contract:
+//
+//   1. release its blocks while the inode still records the retry map;
+//   2. persist the completed zero map while i_dtime still names the successor;
+//   3. free the inode bitmap bit (idempotent if replay repeats it);
+//   4. LAST, unlink the orphan from the durable chain.
+//
+// A crash before step 4 therefore leaves a record mount replay can revisit.
+// Bitmap frees are idempotent specifically so a crash between a completed
+// bitmap write and the next metadata write is safe to replay.
+static int ext2_orphan_release(vfs_filesystem_t *fs, ext2_fs_t *e,
+                               uint32_t ino, ext2_inode_t *node)
+{
+	bool is_dir = (node->i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR;
+	ext2_inode_t remaining = *node;
+
+	int release_rc = ext2_free_inode_blocks(fs, e, &remaining);
+	if (release_rc != 0)
+	{
+		// Persist the replayable map for a later close/mount retry. If it still
+		// reaches an already-free child because the parent-pointer write failed,
+		// stop allocation in this mount after the record is safely on disk.
+		if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
+		{
+			// Scope note (all four demotions in this function): the ambiguity
+			// lives in THIS filesystem's bitmaps and only this filesystem's
+			// allocator can act on it, so the pens come away from this mount.
+			// Halting healthy sibling mounts — /home, the FAT lifeboat — would
+			// protect nothing and take away the disks an operator analyzes with.
+			// (Same scope the closed-rename path chose for the same hazard.)
+			printf("ext2: could not persist orphan %u release progress — demoting its mount to read-only\n", ino);
+			vfs_demote_mount_readonly(fs);
+		}
+		else if (ext2_free_left_storage_reusable(release_rc))
+		{
+			// The map is safely on disk; NOW stop the allocator. Any reusable
+			// result qualifies, not just the parent-pointer one: a block whose
+			// bitmap write landed while its count writeback did not is every
+			// bit as allocatable as one whose parent still points at it.
+			printf("ext2: orphan %u retry map names storage the bitmap already calls free — demoting its mount to read-only\n", ino);
+			vfs_demote_mount_readonly(fs);
+		}
+		*node = remaining;
+		return -1;
+	}
+
+	remaining.i_links_count = 0;
+	remaining.i_size = 0;
+	remaining.i_blocks = 0;
+	// Do NOT replace i_dtime with a deletion timestamp yet: while the inode
+	// is linked, that field is the durable pointer to the next orphan.
+	if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
+	{
+		// Blocks are now reusable but the disk inode may still name them. Stop
+		// all further allocation; after reboot, replay runs before allocation
+		// and the idempotent frees safely finish this inode.
+		printf("ext2: could not persist completed orphan %u block release — demoting its mount to read-only\n", ino);
+		vfs_demote_mount_readonly(fs);
+		return -1;
+	}
+	*node = remaining;
+
+	// Free while still linked. If power fails after the bitmap lands, replay
+	// sees the intact inode-table record, observes an already-free bit, and
+	// continues to the final unlink before any allocation is permitted.
+	int inode_rc = ext2_free_inode(fs, e, ino, is_dir);
+	if (inode_rc != 0)
+	{
+		// A CLEAN failure is the benign one: the bit is still set, so this
+		// inode number is nobody's to take, the chain still names it, and the
+		// next mount finishes the job. The reusable result is the dangerous
+		// twin and the one this branch exists for — the bitmap already calls
+		// the inode free while the chain still names it for teardown, so an
+		// allocator handing that number to a new file would arrange for replay
+		// to release the NEW file's storage. Stop allocation until replay.
+		if (ext2_free_left_storage_reusable(inode_rc))
+		{
+			printf("ext2: orphan %u freed its inode bitmap bit but not its ledgers — demoting its mount to read-only\n", ino);
+			vfs_demote_mount_readonly(fs);
+		}
+		return -1;
+	}
+
+	if (ext2_orphan_remove(fs, e, ino) != 0)
+	{
+		// The chain may still name an inode whose bitmap bit is free. That is
+		// replay-safe but not safe for continued allocation in this mount.
+		printf("ext2: could not unlink released orphan %u — demoting its mount to read-only\n", ino);
+		vfs_demote_mount_readonly(fs);
+		return -1;
+	}
+
+	// Now that no chain entry needs i_dtime as a successor pointer, give the
+	// freed inode its real deletion timestamp. write_lock still excludes an
+	// allocator from reusing this inode until the table update is complete.
+	remaining.i_dtime = (uint32_t)kSystemCurrentTime;
+	if (ext2_write_inode_disk(fs, e, ino, &remaining) != 0)
+	{
+		printf("ext2: could not stamp released orphan %u with its deletion time — run e2fsck\n", ino);
+		return -1;
+	}
+	*node = remaining;
+	return 0;
+}
+
+// Last handle on `ino` just closed. If it is a pending orphan, this is the
+// moment its storage goes back. Called from ext2_close OUTSIDE open_lock:
+// taking write_lock while holding open_lock would invert the order every
+// other path here uses.
+void ext2_orphan_reap_if_pending(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t ino)
+{
+	// The cheap no: an empty list is the overwhelmingly common case, and it
+	// costs one compare rather than a lock and a disk read.
+	if (e->sb.s_last_orphan == 0)
+		return;
+
+	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (fs->read_only)
+		goto done;
+
+	ext2_inode_t node;
+	if (ext2_read_inode(fs, e, ino, &node) != 0)
+		goto done;
+	// A live inode is not ours to collect. Only something whose last name is
+	// already gone reaches zero links while still being open.
+	if (node.i_links_count != 0)
+		goto done;
+	if (ext2_orphan_release(fs, e, ino, &node) != 0)
+		goto done;
+	printd(DEBUG_VFS, "ext2: orphaned inode %u reaped at last close\n", ino);
+
+done:
+	spinlock_release_irqrestore(&e->write_lock, lock_flags);
+}
+
+// Mount-time replay: whatever the last mount was still holding open when it
+// died. Runs before anything can open a file, so no handle can exist for
+// these; every one of them is storage nobody will ever reach again.
+//
+// SPEAKS WHEN IT FINDS ANYTHING. A silent reclaim would make the one event
+// that proves this whole mechanism works — a crash, recovered — look exactly
+// like a boot where nothing happened.
+void ext2_orphan_replay(vfs_filesystem_t *fs, ext2_fs_t *e)
+{
+	if (e->sb.s_last_orphan == 0)
+		return;
+
+	if (e->forced_ro || fs->read_only || fs->fops == NULL || fs->fops->write == NULL)
+	{
+		// We can see the debt and cannot pay it. Say so — an unannounced
+		// leak on a read-only mount is still a leak.
+		printf("ext2: orphaned inode(s) from a previous mount, but this mount is READ-ONLY — run e2fsck\n");
+		return;
+	}
+
+	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+
+	uint32_t reaped = 0;
+	// Bounded: a corrupt chain must not become an infinite mount.
+	while (e->sb.s_last_orphan != 0 && reaped < 4096)
+	{
+		uint32_t ino = e->sb.s_last_orphan;
+		ext2_inode_t node;
+		if (ext2_read_inode(fs, e, ino, &node) != 0)
+			break;
+
+		if (ext2_orphan_release(fs, e, ino, &node) != 0)
+			break;
+		reaped++;
+	}
+
+	spinlock_release_irqrestore(&e->write_lock, lock_flags);
+
+	if (reaped > 0)
+		printf("ext2: reaped %u orphaned inode(s) left by the previous mount\n", reaped);
+}
+
 // os64's ONE removal verb (fops->rm): a file OR an empty directory. The
 // ABI comment over SYSCALL_UNLINK promised this driver would be built to
 // that contract the morning it was ratified; here it is, same afternoon.
@@ -1315,6 +1854,8 @@ static int ext2_rm(const char *filename, vfs_filesystem_t *vfs_fs)
 	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (vfs_fs->read_only)
+		goto refuse;
 
 	// Resolve parent + leaf, then the child through the parent — we need
 	// all three for the dirent surgery.
@@ -1333,14 +1874,32 @@ static int ext2_rm(const char *filename, vfs_filesystem_t *vfs_fs)
 	if (ext2_read_inode(vfs_fs, e, child_ino, &child) != 0)
 		goto refuse;
 
-	// Ruling 5: refuse while open — a file being read, a directory being
-	// listed. The refusal is the whole design; there is no unlink-while-open
-	// deferral until a consumer demands one.
+	// Ruling 5 (2026-08-04) refused ANY open target. That refusal was right
+	// for two years' worth of consumers and wrong for the first one that
+	// mattered: replacing a running program. Since 2026-08-16 an open
+	// REGULAR file is unlinked from its parent and ORPHANED — the name goes
+	// now, the storage goes at last close (see the orphan section above).
+	// An open DIRECTORY still refuses: nobody has asked, and a handle
+	// mid-walk through a directory's blocks is a harder promise to keep.
+	bool orphan_it = false;
 	if (ext2_openref_count(e, child_ino) > 0)
 	{
-		printd(DEBUG_VFS, "ext2: refusing rm of '%s' (inode %u) — open elsewhere (busy)\n",
-		       name, child_ino);
-		goto refuse;
+		if ((child.i_mode & EXT2_S_IFMT) != EXT2_S_IFREG)
+		{
+			printd(DEBUG_VFS, "ext2: refusing rm of '%s' (inode %u) — open elsewhere and not a regular file (busy)\n",
+			       name, child_ino);
+			goto refuse;
+		}
+		// THE RACE THIS TOLERATES, on purpose: the holder can close between
+		// this count read and ext2_orphan_add below (the close path never
+		// takes write_lock just to close). Its reap then finds either a
+		// still-nonzero links_count or no chain entry yet, does nothing, and
+		// the inode we chain a moment later has nobody left to close it. The
+		// cost is storage stranded until the NEXT MOUNT's replay — bounded,
+		// self-healing, and announced when it happens. Closing the window
+		// for real would mean holding open_lock across directory-block I/O,
+		// which inverts the lock order everything else here lives by.
+		orphan_it = true;
 	}
 
 	uint32_t kind = child.i_mode & EXT2_S_IFMT;
@@ -1383,6 +1942,14 @@ static int ext2_rm(const char *filename, vfs_filesystem_t *vfs_fs)
 			child.i_links_count--;
 			child.i_ctime = (uint32_t)kSystemCurrentTime;
 			ext2_write_inode_disk(vfs_fs, e, child_ino, &child);
+		}
+		else if (orphan_it)
+		{
+			// The name is gone but a reader is still here. Park the inode on
+			// the orphan chain; ext2_close reaps it when the last handle
+			// goes, and a mount after a crash reaps it instead.
+			if (ext2_orphan_add(vfs_fs, e, child_ino, &child) != 0)
+				goto refuse;
 		}
 		else
 		{
@@ -1428,6 +1995,8 @@ static int ext2_mkdir(char *path, vfs_filesystem_t *vfs_fs)
 	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (vfs_fs->read_only)
+		goto refuse;
 
 	ext2_inode_t parent;
 	const char *name;
@@ -1568,15 +2137,25 @@ static bool ext2_is_ancestor(vfs_filesystem_t *fs, ext2_fs_t *e,
 // new version safely" recipe since (editors, package managers, and now
 // os64get) is built on closing it.
 //
-// The two refusals that survive the replacement rule are ext2_rm's rulings,
-// not new inventions:
+// OPEN FILES, revised 2026-08-16 (the orphan slice, same afternoon):
+//   - an open SOURCE is fine, and the original refusal here was simply
+//     stricter than the facts. An ext2 handle holds an INODE NUMBER, not a
+//     path (ext2_handle_t), so a reader is entirely unaffected by what its
+//     file is called; renaming out from under one changes nothing it can
+//     observe. The rule was inherited from rm, where it was load-bearing,
+//     and repeated here where it never was. Directories still refuse, since
+//     a directory handle IS mid-walk through the thing being moved.
+//   - an open DESTINATION is the interesting one: it gets REPLACED, and its
+//     displaced inode goes on the orphan chain instead of being freed, so
+//     the program still reading it keeps reading it. That is what lets
+//     `os64 refresh` put a new /bin/husk in place while husk is running.
+//
+// The refusals that survive:
 //   - the destination is a DIRECTORY, or the source is a directory and the
 //     destination exists at all. Replacement is file-onto-file ONLY; a
 //     rename that quietly removes a directory, or swaps a directory in
 //     where a file was, is a surprise with no upside.
-//   - either side is OPEN. The open-inode refcount says somebody is holding
-//     this thing; renaming out from under a reader is the same violation as
-//     deleting out from under one (ruling 5, 2026-08-04).
+//   - an open DIRECTORY on either side (see above).
 // Symlinks, devices and the other exotic modes are refused outright, for
 // the same reason ext2_rm refuses them: we do not know their storage rules
 // well enough to move them safely.
@@ -1600,6 +2179,8 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
+	if (vfs_fs->read_only)
+		goto refuse;
 
 	// Resolve both ends. split_path also refuses "." and ".." leaves and
 	// verifies each parent really is a directory, so those cases never
@@ -1641,9 +2222,13 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 		goto refuse;
 	}
 
-	if (ext2_openref_count(e, src_ino) > 0)
+	// An open SOURCE is only a problem for a DIRECTORY. A file's reader holds
+	// an inode number, not a name (ext2_handle_t), so it cannot tell that its
+	// file was renamed and has nothing to be protected from; a directory's
+	// reader is walking the very blocks a move rearranges the context of.
+	if (src_kind == EXT2_S_IFDIR && ext2_openref_count(e, src_ino) > 0)
 	{
-		printd(DEBUG_VFS, "ext2: refusing rename of '%s' (inode %u) — open elsewhere (busy)\n",
+		printd(DEBUG_VFS, "ext2: refusing rename of directory '%s' (inode %u) — open elsewhere (busy)\n",
 		       oldpath, src_ino);
 		goto refuse;
 	}
@@ -1663,6 +2248,7 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 	// The destination, if anything is already there.
 	ext2_inode_t dst;
 	bool replacing = false;
+	bool dst_open = false;   // ...and is somebody still reading what we displace?
 	uint32_t dst_ino = ext2_dir_find(vfs_fs, e, np, new_name, new_len);
 	if (dst_ino != 0)
 	{
@@ -1683,12 +2269,10 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 			       newpath, dst.i_mode, src.i_mode);
 			goto refuse;
 		}
-		if (ext2_openref_count(e, dst_ino) > 0)
-		{
-			printd(DEBUG_VFS, "ext2: refusing rename onto '%s' (inode %u) — open elsewhere (busy)\n",
-			       newpath, dst_ino);
-			goto refuse;
-		}
+		// An open DESTINATION is no longer a refusal — it is the whole point.
+		// Note it now; step 6 sends the displaced inode to the orphan chain
+		// instead of freeing it, so whoever is reading it keeps reading it.
+		dst_open = ext2_openref_count(e, dst_ino) > 0;
 		replacing = true;
 	}
 
@@ -1790,17 +2374,40 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 			dst.i_ctime = now;
 			ext2_write_inode_disk(vfs_fs, e, dst_ino, &dst);
 		}
+		else if (dst_open)
+		{
+			// THE UPGRADE-IN-PLACE CASE. Its last name just became ours, but
+			// a program is still reading it — most likely running it. Park it
+			// on the orphan chain: the pages it is demand-paging stay exactly
+			// where they are, and the storage comes back at last close (or at
+			// the next mount, if the machine dies first).
+			if (ext2_orphan_add(vfs_fs, e, dst_ino, &dst) != 0)
+				printd(DEBUG_VFS, "ext2: rename '%s' -> '%s': displaced inode %u could NOT be orphaned — it will need e2fsck\n",
+				       oldpath, newpath, dst_ino);
+		}
 		else
 		{
-			ext2_inode_t old = dst;
-			memset(dst.i_block, 0, sizeof(dst.i_block));
-			dst.i_links_count = 0;
-			dst.i_size = 0;
-			dst.i_blocks = 0;
-			dst.i_dtime = now;
-			ext2_write_inode_disk(vfs_fs, e, dst_ino, &dst);
-			ext2_free_inode_blocks(vfs_fs, e, &old);
-			ext2_free_inode(vfs_fs, e, dst_ino, false);
+			int release_rc = ext2_inode_release(vfs_fs, e, dst_ino, &dst);
+			if (release_rc != 0)
+			{
+				// The retry map must reach disk while writes are still permitted.
+				// Demoting first turns orphan_add's inode/superblock writes into a
+				// block-layer panic and loses the recovery path this map provides.
+				int orphan_rc = ext2_orphan_add(vfs_fs, e, dst_ino, &dst);
+				if (orphan_rc != 0)
+					printd(DEBUG_VFS, "ext2: rename '%s' -> '%s': displaced inode %u could not be released or orphaned — run e2fsck\n",
+					       oldpath, newpath, dst_ino);
+
+				// Every reusable result, not just the indirect-parent one: a
+				// half-completed block OR inode free leaves storage the orphan
+				// record still names sitting in the allocator's free pool.
+				if (ext2_free_left_storage_reusable(release_rc))
+				{
+					printf("ext2: inode %u retry map %s after a partial release — forcing mount read-only\n",
+					       dst_ino, orphan_rc == 0 ? "persisted" : "could not be persisted");
+					vfs_demote_mount_readonly(vfs_fs);
+				}
+			}
 		}
 	}
 

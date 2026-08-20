@@ -75,6 +75,28 @@ static uint32_t tcp_initial_seq(uint32_t peer_ip, uint16_t peer_port, uint16_t l
 static uint16_t tcp_window(tcp_conn_t* c)
 {
 	uint32_t free_space = TCP_RCV_BUF - c->rcv_count;
+
+	// SILLY WINDOW SYNDROME, RECEIVER SIDE (RFC 1122 4.2.3.3), and the
+	// single most expensive line in this file until 2026-08-16.
+	//
+	// A window smaller than one segment is worse than no window at all. A
+	// correct sender will not split a segment to squeeze into it (that is
+	// its half of the same rule), so it waits — and we, seeing a NON-ZERO
+	// window, never considered ourselves stalled and never sent the update
+	// that would have freed it. Both sides waited politely until the
+	// sender's persist timer fired.
+	//
+	// The P5 measured the cost exactly: six segments would fill the buffer,
+	// the window would land on 873 bytes, and then FIVE SECONDS of silence
+	// before the sender probed again. ~7.3KB per 5s = the 1.7 KB/s that
+	// made a 100BASE-TX link perform like a 1993 modem.
+	//
+	// Rounding a useless window down to zero is what makes it honest: zero
+	// means "stop, I will tell you when", which is a promise the code below
+	// actually keeps. 873 meant "go ahead" while nothing could.
+	if (free_space < TCP_MSS)
+		return 0;
+
 	return (uint16_t)(free_space > 0xFFFF ? 0xFFFF : free_space);
 }
 
@@ -366,6 +388,24 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					uint16_t take = data_len < room ? data_len : room;
 					tcp_rcv_store(c, data, take);
 					c->rcv_nxt += take;
+					// The receive-path trace, and the reason it is
+					// permanent rather than a debugging leftover: this
+					// stack moves ~1.7 KB/s on a 100BASE-TX link (measured
+					// on the P5, 2026-08-16, with ZERO retransmits — so
+					// nothing is being lost, the sender is simply not
+					// being let go). Throughput on a healthy connection is
+					// window over round-trip, and every term of that is on
+					// this line. One boot with DEBUG_NET and a transfer
+					// answers "where did the window go" without anybody
+					// having to theorize about it first.
+					//
+					// took < len says our buffer was too small for the
+					// segment. win == 0 says we just told the sender to
+					// stop, and the next TCPWIN line says how long it took
+					// us to take that back.
+					printd(DEBUG_NET, "TCPRX t=%lu len=%u room=%u took=%u buf=%u win=%u\n",
+					       kTicksSinceStart, data_len, room, take,
+					       c->rcv_count, tcp_window(c));
 					tcp_ack(c);          // acknowledge immediately: simple,
 					                     // and the peer's window depends on it
 				}
@@ -470,6 +510,11 @@ void tcp_poll(void)
 		    (c->state == TCP_ESTABLISHED || c->state == TCP_FIN_WAIT_1 ||
 		     c->state == TCP_FIN_WAIT_2))
 		{
+			// Paired with TCPRX above: the gap between the tick that
+			// advertised zero and the tick that reopens is the stall, in
+			// ticks, measured rather than guessed.
+			printd(DEBUG_NET, "TCPWIN t=%lu reopening buf=%u win=%u\n",
+			       kTicksSinceStart, c->rcv_count, tcp_window(c));
 			tcp_ack(c);
 		}
 
@@ -639,6 +684,21 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 				((uint8_t*)buf)[i] = c->rcv_buf[(c->rcv_head + i) % TCP_RCV_BUF];
 			c->rcv_head = (c->rcv_head + n) % TCP_RCV_BUF;
 			c->rcv_count -= n;
+
+			// AND TELL THEM, NOW. Draining the buffer is the event that
+			// makes the sender's data welcome again; nobody else is going
+			// to mention it on our behalf. Before this, the only window
+			// update lived in tcp_poll, so the best case was a scheduler
+			// pass of silence and the WORST case was forever — because
+			// that path only ran when we had advertised exactly zero, and
+			// a window of 873 is not zero.
+			//
+			// Gated on actually having been stalled, so a reader keeping
+			// up with a slow sender does not put an extra ACK on the wire
+			// for every read it performs.
+			if (c->zero_window && tcp_window(c) >= TCP_MSS)
+				tcp_ack(c);
+
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return (long)n;
 		}

@@ -278,19 +278,29 @@ bool ext2_openref_register(ext2_fs_t *e, uint32_t ino)
 	return true;
 }
 
-void ext2_openref_unregister(ext2_fs_t *e, uint32_t ino)
+// Returns TRUE when this was the LAST handle on the inode — the caller's cue
+// to check the orphan chain. Deliberately reports rather than acts: reaping
+// needs write_lock, and taking write_lock under open_lock would invert the
+// order every other path in the driver uses. The caller does the reap after
+// this returns and the lock is gone.
+bool ext2_openref_unregister(ext2_fs_t *e, uint32_t ino)
 {
+	bool last = false;
 	uint64_t flags = spinlock_acquire_irqsave(&e->open_lock);
 	for (int i = 0; i < EXT2_OPEN_TABLE_SLOTS; i++)
 	{
 		if (e->open_refs[i].ino == ino)
 		{
 			if (--e->open_refs[i].count == 0)
+			{
 				e->open_refs[i].ino = 0;
+				last = true;
+			}
 			break;
 		}
 	}
 	spinlock_release_irqrestore(&e->open_lock, flags);
+	return last;
 }
 
 uint32_t ext2_openref_count(ext2_fs_t *e, uint32_t ino)
@@ -456,9 +466,16 @@ static int ext2_close(vfs_file_t *vfs_file)
 	vfs_filesystem_t *fs = (vfs_filesystem_t *)vfs_file->owner;
 	vfs_openfile_unregister(vfs_file);   // before any free — sync-all must
 	                                     // never walk onto a dying file
-	ext2_openref_unregister((ext2_fs_t *)fs->fs_specific, h->ino);
-	// Nothing to flush: the write path is WRITE-THROUGH (every write commits
-	// data and inode before returning), so a close is pure bookkeeping.
+	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
+	uint32_t closing_ino = h->ino;
+	bool was_last = ext2_openref_unregister(e, closing_ino);
+	// If that was the last handle AND this inode's name is already gone, its
+	// storage has been waiting on exactly this moment. (Cheap when the orphan
+	// list is empty, which is nearly always — see ext2_orphan_reap_if_pending.)
+	if (was_last)
+		ext2_orphan_reap_if_pending(fs, e, closing_ino);
+	// Nothing else to flush: the write path is WRITE-THROUGH (every write
+	// commits data and inode before returning), so a close is pure bookkeeping.
 	if (h->blockbuf != NULL)
 		kfree(h->blockbuf);
 	kfree(h);
@@ -695,6 +712,7 @@ int ext2_initialize_filesystem(vfs_filesystem_t *fs)
 	e->forced_ro = (ro_compat & ~(uint32_t)EXT2_SUPPORTED_RO_COMPAT) != 0;
 	if (e->forced_ro && fs->fops != NULL && fs->fops->write != NULL)
 	{
+		fs->read_only = true;
 		printd(DEBUG_VFS, "ext2: unknown ro_compat features 0x%08x — mounting READ-ONLY (writes stripped)\n",
 		       ro_compat);
 		fs->fops->write   = NULL;
@@ -762,7 +780,49 @@ int ext2_initialize_filesystem(vfs_filesystem_t *fs)
 	       (fs->fops != NULL && fs->fops->write != NULL) ? "read-write" : "read-only",
 	       e->sb.s_blocks_count, e->block_size, e->sb.s_inodes_count,
 	       e->inode_size, e->groups_count);
+
 	return 0;
+}
+
+// fops->mounted — see the contract in vfs.h. Everything ext2 does at mount
+// time that WRITES lives here, which today is exactly one thing: reclaim the
+// inodes the previous mount was still holding open when it died.
+//
+// It sits here rather than at the bottom of initialize (where it was first
+// written, and where it panicked the stray-write tripwire on its first boot)
+// because until kRegisterFilesystem claims the mount table entry, the block
+// layer does not consider this partition mounted — and it is right not to.
+static int ext2_mounted(vfs_filesystem_t *fs)
+{
+	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
+	if (e == NULL)
+		return -1;
+	// Nothing can hold a handle yet — no path routed here until a moment
+	// ago — so every orphan the chain names is certainly unreachable.
+	ext2_orphan_replay(fs, e);
+	return 0;
+}
+
+// ── Free-space accessors (ext2_vfs.h) ───────────────────────────────────────
+// The guard is not defensive clutter: these take a vfs_filesystem_t, and the
+// caller may well be holding a FAT mount (the test suite iterates mounts).
+// fs_specific means something different to every driver, so "is this one
+// ours?" has to be answered before it is dereferenced — and the honest
+// answer for someone else's mount is zero, not a fault.
+uint32_t ext2_free_inodes(vfs_filesystem_t *fs)
+{
+	if (fs == NULL || fs->fs_specific == NULL || fs->fops == NULL ||
+	    (fs->fops->open != ext2_fops.open && fs->fops->open != ext2_rw_fops.open))
+		return 0;
+	return ((ext2_fs_t *)fs->fs_specific)->sb.s_free_inodes_count;
+}
+
+uint32_t ext2_free_blocks(vfs_filesystem_t *fs)
+{
+	if (fs == NULL || fs->fs_specific == NULL || fs->fops == NULL ||
+	    (fs->fops->open != ext2_fops.open && fs->fops->open != ext2_rw_fops.open))
+		return 0;
+	return ((ext2_fs_t *)fs->fs_specific)->sb.s_free_blocks_count;
 }
 
 // ── The op tables (the READ-ONLY pair) ──────────────────────────────────────
@@ -779,6 +839,11 @@ int ext2_initialize_filesystem(vfs_filesystem_t *fs)
 // exactly these slots, so a read-only claim is enforced at the disk too.
 vfs_file_operations_t ext2_fops = {
 	.initialize = ext2_initialize_filesystem,
+	// Present on the READ-ONLY table too, on purpose: a read-only mount
+	// cannot reclaim an orphan, but it can still SAY there is one to reclaim,
+	// and a silent leak is the failure this whole mechanism exists to avoid.
+	// (The RW table inherits this slot — ext2_rw_tables_init copies from here.)
+	.mounted = ext2_mounted,
 	.open  = ext2_open,
 	.read  = ext2_read,
 	.seek  = ext2_seek,

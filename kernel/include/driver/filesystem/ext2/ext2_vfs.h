@@ -27,4 +27,14 @@ extern vfs_file_operations_t ext2_rw_fops;
 extern vfs_directory_operations_t ext2_rw_dops;
 void ext2_rw_tables_init(void);
 
+// Free-space counters, straight off the mounted superblock. Public because
+// "did this operation give back exactly what it took?" is a question that
+// cannot be answered from outside the driver otherwise — and the orphan
+// chain (inodes freed at LAST CLOSE rather than at unlink) is invisible by
+// construction, so its test measures instead of trusting. `df` and a future
+// /sys entry are the other obvious customers. Both return 0 for a mount that
+// is not ext2, which is a safe answer to ask of any filesystem.
+uint32_t ext2_free_inodes(vfs_filesystem_t *fs);
+uint32_t ext2_free_blocks(vfs_filesystem_t *fs);
+
 #endif

@@ -2025,25 +2025,47 @@ static bool test_vfs_rename(void)
         || !(de.flags & OS64_DE_DIR))
         RN_FAIL("refused rename damaged the destination directory rn2\n");
 
-    // 6. Open elsewhere = busy (ext2's open-inode refcount; ruling 5, the
-    //    same one that makes rm refuse). FAT keeps no such count.
+    // 6. An open SOURCE is NOT a refusal — revised 2026-08-16 with the orphan
+    //    slice. This step originally asserted the opposite, and it FAILED the
+    //    first boot after the rule changed, which is exactly what a test that
+    //    encodes a ruling is for. The rule it encodes now: an ext2 handle
+    //    holds an INODE NUMBER, not a path, so a reader cannot tell that its
+    //    file was renamed and has nothing to be protected from. The reader
+    //    must keep reading, through the rename, without interruption.
+    //    (Directories still refuse — a directory handle is mid-walk. The
+    //    open-DESTINATION half of the ruling is test_ext2_orphan's job.)
     if (is_ext2) {
         vfs_file_t *held = NULL;
         if (kRootFilesystem->fops->open(&held, "/etc/testdata/rn/f", "r", kRootFilesystem) != 0)
             RN_FAIL("could not open rn/f to hold it\n");
-        int rc = kRootFilesystem->fops->rename("/etc/testdata/rn/f",
-                                               "/etc/testdata/rn/g", kRootFilesystem);
-        kRootFilesystem->fops->close(held);
-        if (rc == 0)
-            RN_FAIL("renamed a file that another handle held OPEN\n");
-        if (kRootFilesystem->dops->stat("/etc/testdata/rn/f", &de, kRootFilesystem) != 0)
-            RN_FAIL("busy-refused rename consumed the source anyway\n");
-        // ...and once the handle is gone the same rename must work, or the
-        // refusal is a leak rather than a rule.
         if (kRootFilesystem->fops->rename("/etc/testdata/rn/f",
-                                          "/etc/testdata/rn/g", kRootFilesystem) != 0)
-            RN_FAIL("rename still refused after the holding handle closed\n");
+                                          "/etc/testdata/rn/g", kRootFilesystem) != 0) {
+            kRootFilesystem->fops->close(held);
+            RN_FAIL("refused to rename a file that was merely OPEN — a reader holds an inode, not a name\n");
+        }
+        // The holder reads on, oblivious, from the same inode under its new name.
+        n = kRootFilesystem->fops->read(held, buf, sizeof(buf));
+        kRootFilesystem->fops->close(held);
+        if (n != (int)(sizeof(omega) - 1) || memcmp(buf, omega, sizeof(omega) - 1) != 0)
+            RN_FAIL("the held handle lost its bytes across a rename of its own file (n=%d)\n", n);
+        if (kRootFilesystem->dops->stat("/etc/testdata/rn/f", &de, kRootFilesystem) == 0)
+            RN_FAIL("old name rn/f still resolves after renaming an open file\n");
+        if (kRootFilesystem->dops->stat("/etc/testdata/rn/g", &de, kRootFilesystem) != 0)
+            RN_FAIL("new name rn/g missing after renaming an open file\n");
         kRootFilesystem->fops->rm("/etc/testdata/rn/g", kRootFilesystem);
+
+        // A DIRECTORY held open still refuses to move: its reader is walking
+        // the very blocks whose context the move changes.
+        vfs_directory_t *heldDir = NULL;
+        if (kRootFilesystem->dops->open(&heldDir, "/etc/testdata/rn2", kRootFilesystem) == 0) {
+            int rcDir = kRootFilesystem->fops->rename("/etc/testdata/rn2",
+                                                      "/etc/testdata/rn2moved", kRootFilesystem);
+            kRootFilesystem->dops->close(heldDir);
+            if (rcDir == 0)
+                RN_FAIL("moved a directory that another handle was reading\n");
+            if (kRootFilesystem->dops->stat("/etc/testdata/rn2", &de, kRootFilesystem) != 0)
+                RN_FAIL("busy-refused directory rename consumed the source anyway\n");
+        }
     } else {
         kRootFilesystem->fops->rm("/etc/testdata/rn/f", kRootFilesystem);
     }
@@ -2078,11 +2100,480 @@ static bool test_vfs_rename(void)
     kRootFilesystem->fops->rm("/etc/testdata/rn/sub", kRootFilesystem);
     kRootFilesystem->fops->rm("/etc/testdata/rn", kRootFilesystem);
 
-    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: plain, atomic replace, move, directory move, %u refusals)\n",
+    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: plain, atomic replace, move, directory move, open-source survives, %u refusals)\n",
            is_ext2 ? "ext2" : "FAT", is_ext2 ? 4u : 2u);
     return true;
 }
 #undef RN_FAIL
+
+// ── test_ext2_orphan ────────────────────────────────────────────────────────
+// The orphan chain's proving ground (2026-08-16). This test exists because
+// THE FEATURE IS INVISIBLE: unlinking a file somebody still has open looks,
+// from every outside angle, exactly like unlinking a file nobody has open.
+// The difference is entirely in whether the storage came back — so this
+// MEASURES the free counters rather than trusting that a teardown ran.
+//
+// Three claims, in order of how much it would hurt to get wrong:
+//
+//   1. THE READER KEEPS READING. A handle held across the replacement still
+//      returns the OLD bytes. That is the whole point: a running /bin/husk
+//      must keep demand-paging its own image after os64get has put a new one
+//      at that name.
+//   2. NOTHING LEAKS. Free inodes and free blocks return to EXACTLY their
+//      starting values once the handle closes. Not "roughly", not "did not
+//      grow" — equal. A leak here is silent forever and compounds once per
+//      upgrade, which is precisely what an in-memory orphan list would have
+//      risked and why the list is on disk.
+//   3. THE NEW NAME IS THE NEW FILE, the instant the rename returns, even
+//      though the displaced storage lives on a while longer.
+//
+// The real power-loss case remains a hand-driven two-boot procedure
+// (VERIFICATION.md), but the failure half of mount replay IS exercised here:
+// this mount owns a private copy of its block-operation table, so the test can
+// fail one chosen metadata write, restore the real callback immediately, and
+// ask fops->mounted to perform the same replay a boot performs.
+
+// ext2_orphan test's block-write fault seam. These globals belong exclusively
+// to test_ext2_orphan and are live only around its synchronous close/replay
+// calls; ext2's write_lock keeps another writer on this mount from entering
+// while the chosen operation is in flight.
+static size_t (*sOrphanRealWrite)(void *, uint64_t, const void *, uint64_t);
+static uint32_t sOrphanWriteCount;
+static uint32_t sOrphanFailWrite;
+
+static size_t orphan_test_write(void *device, uint64_t sector,
+                                const void *buffer, uint64_t sector_count)
+{
+    sOrphanWriteCount++;
+    if (sOrphanWriteCount == sOrphanFailWrite)
+        return 1;
+    return sOrphanRealWrite(device, sector, buffer, sector_count);
+}
+
+static bool orphan_test_fail_write(vfs_filesystem_t *fs, uint32_t nth)
+{
+    if (fs == NULL || fs->bops == NULL || fs->bops->write == NULL ||
+        sOrphanRealWrite != NULL || nth == 0)
+        return false;
+    sOrphanRealWrite = fs->bops->write;
+    sOrphanWriteCount = 0;
+    sOrphanFailWrite = nth;
+    fs->bops->write = orphan_test_write;
+    return true;
+}
+
+static uint32_t orphan_test_restore_write(vfs_filesystem_t *fs)
+{
+    uint32_t writes = sOrphanWriteCount;
+    fs->bops->write = sOrphanRealWrite;
+    sOrphanRealWrite = NULL;
+    sOrphanWriteCount = 0;
+    sOrphanFailWrite = 0;
+    return writes;
+}
+
+#define OR_FAIL(...) do { \
+        printf("FAIL ext2_orphan: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_orphan - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+
+static bool test_ext2_orphan(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+        kRootFilesystem->fops->write == NULL || kRootFilesystem->fops->rename == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (root not writable)\n");
+        return true;
+    }
+    // ext2 only: FAT has no inode to orphan and no open-inode count. The
+    // op-table identity is the discriminator (same idiom as test_vfs_rename).
+    if (kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_orphan (root is not ext2)\n");
+        return true;
+    }
+
+    static const char oldBytes[] = "THE-OLD-BINARY";
+    static const char newBytes[] = "THE-NEW-BINARY";
+    char buf[64];
+    os64_dirent_t de;
+
+    static const char *dirs[] = { "/etc", "/etc/testdata", "/etc/testdata/orph" };
+    for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        char pathbuf[40];
+        sprintf(pathbuf, "%s", dirs[i]);
+        kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+        if (kRootFilesystem->dops->stat(dirs[i], &de, kRootFilesystem) != 0
+            || !(de.flags & OS64_DE_DIR))
+            OR_FAIL("provision: %s is not a directory\n", dirs[i]);
+    }
+    kRootFilesystem->fops->rm("/etc/testdata/orph/victim", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/orph/replacement", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/orph/retry_victim", kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/orph/retry_replacement", kRootFilesystem);
+
+    // THE BASELINE, taken after that cleanup so a previous boot's leftovers
+    // cannot masquerade as this run's leak.
+    uint32_t inodes0 = ext2_free_inodes(kRootFilesystem);
+    uint32_t blocks0 = ext2_free_blocks(kRootFilesystem);
+    if (inodes0 == 0 || blocks0 == 0)
+        OR_FAIL("free-space accessors returned 0 — wrong filesystem, or a broken accessor\n");
+
+    // The victim: the file standing in for a running program's binary. Make
+    // it thirteen blocks so its map crosses the twelve direct slots and the
+    // orphan teardown MUST visit an indirect block. The first bytes remain
+    // distinctive for the held-reader assertion below.
+    vfs_file_t *f = NULL;
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/victim", "c", kRootFilesystem) != 0)
+        OR_FAIL("could not create the victim\n");
+    uint32_t orphan_data_blocks = 13;
+    uint8_t *orphan_data = kmalloc((size_t)kRootFilesystem->blockSize);
+    if (orphan_data == NULL) {
+        kRootFilesystem->fops->close(f);
+        OR_FAIL("could not allocate the indirect-block fixture\n");
+    }
+    memset(orphan_data, 0xA5, (size_t)kRootFilesystem->blockSize);
+    memcpy(orphan_data, oldBytes, sizeof(oldBytes) - 1);
+    for (uint32_t i = 0; i < orphan_data_blocks; i++) {
+        int wrote = kRootFilesystem->fops->write(
+            f, orphan_data, (size_t)kRootFilesystem->blockSize);
+        if (wrote != kRootFilesystem->blockSize) {
+            kRootFilesystem->fops->close(f);
+            kfree(orphan_data);
+            OR_FAIL("could not write indirect-block fixture block %u (wrote %d)\n", i, wrote);
+        }
+    }
+    kfree(orphan_data);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+
+    // Its replacement, staged under another name exactly the way os64get will.
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/replacement", "c", kRootFilesystem) != 0)
+        OR_FAIL("could not create the replacement\n");
+    kRootFilesystem->fops->write(f, newBytes, sizeof(newBytes) - 1);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+
+    // NOW HOLD THE VICTIM OPEN — this handle is the running program.
+    // Hold it through a PRIVATE copy of the mount. A last-close release that
+    // stops half-done now demotes the mount it ran on (a bitmap bit already
+    // clear means the allocator could hand that storage to a live file), and
+    // ext2_close demotes whatever mount the HANDLE was opened on — so this
+    // copy takes the hit and the rest of the suite keeps its writable root.
+    // Same trick, same reason, as test_ext2_readonly_demotion.
+    vfs_filesystem_t reap_mount = *kRootFilesystem;
+    vfs_file_operations_t reap_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t reap_dops = *kRootFilesystem->dops;
+    reap_mount.fops = &reap_fops;
+    reap_mount.dops = &reap_dops;
+
+    vfs_file_t *held = NULL;
+    if (reap_mount.fops->open(&held, "/etc/testdata/orph/victim", "r", &reap_mount) != 0)
+        OR_FAIL("could not open the victim to hold it\n");
+
+    // The replacement lands on the victim's name while that handle is live.
+    // Before 2026-08-16 this refused outright.
+    if (kRootFilesystem->fops->rename("/etc/testdata/orph/replacement",
+                                      "/etc/testdata/orph/victim", kRootFilesystem) != 0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("rename onto an OPEN destination was refused — the orphan path never ran\n");
+    }
+
+    // CLAIM 1: the holder still reads the OLD bytes. Its inode has no name
+    // any more; it does not care, and must not.
+    int n = kRootFilesystem->fops->read(held, buf, sizeof(buf));
+    if (n < (int)(sizeof(oldBytes) - 1) || memcmp(buf, oldBytes, sizeof(oldBytes) - 1) != 0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("the held handle stopped reading its own bytes (n=%d) — the orphan died early\n", n);
+    }
+
+    // CLAIM 3: the NAME already resolves to the new file, and the staging
+    // name is gone.
+    n = rn_slurp("/etc/testdata/orph/victim", buf, sizeof(buf));
+    if (n != (int)(sizeof(newBytes) - 1) || memcmp(buf, newBytes, sizeof(newBytes) - 1) != 0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("the victim's NAME does not hold the new bytes (n=%d)\n", n);
+    }
+    if (kRootFilesystem->dops->stat("/etc/testdata/orph/replacement", &de, kRootFilesystem) == 0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("the staged name survived the rename\n");
+    }
+
+    // The orphan's storage must still be OUT. Without this check, a rename
+    // that simply freed the inode too early could pass Claim 1 on luck (the
+    // blocks would not have been overwritten yet).
+    if (ext2_free_inodes(kRootFilesystem) == inodes0 &&
+        ext2_free_blocks(kRootFilesystem) == blocks0) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("free space is already back at baseline while the handle is OPEN — nothing was orphaned\n");
+    }
+
+    // The program exits. Let its first block-bitmap release land, then fail
+    // the following group-descriptor count at write 2. Write 3 persists the
+    // retry map. The next replay must see the already-clear bit and reconcile
+    // both count ledgers without counting that block twice.
+    uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
+    uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
+    if (!orphan_test_fail_write(kRootFilesystem, 2)) {
+        kRootFilesystem->fops->close(held);
+        OR_FAIL("could not install the release-write fault seam\n");
+    }
+    kRootFilesystem->fops->close(held);
+    held = NULL;
+    uint32_t injected_writes = orphan_test_restore_write(kRootFilesystem);
+    if (injected_writes != 3)
+        OR_FAIL("failed release made %u metadata writes, expected 3 (bitmap, failed GDT, retry inode)\n",
+                injected_writes);
+    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
+        OR_FAIL("failed last-close release did not leave exactly one bitmap-completed block for replay\n");
+    // THE AMBIGUOUS FREE, asserted: that block's bitmap bit is clear on disk
+    // while the retry map still names it, so the allocator must be stopped
+    // until replay — and only AFTER write 3 put the map somewhere replay can
+    // find it. A generic "the free failed" would have left this mount taking
+    // allocations that replay would later hand back to the free pool.
+    if (!reap_mount.read_only)
+        OR_FAIL("half-completed last-close block release did not demote its mount\n");
+    if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
+        OR_FAIL("last-close demotion escaped onto the real root mount\n");
+
+    // Now exercise MOUNT REPLAY itself, including the new indirect ordering.
+    // Reconciliation of the first direct block costs two writes; the eleven
+    // remaining direct children bring the count to 35. The indirect child is
+    // 36..38, its parent-pointer clear is 39, and its root release is 40..42.
+    // The zero map is write 43 and the inode bitmap is 44; fail its GDT count
+    // at write 45. A clean retry must reconcile the already-free inode too.
+    if (kRootFilesystem->fops->mounted == NULL)
+        OR_FAIL("ext2 mount table has no replay callback\n");
+    if (!orphan_test_fail_write(kRootFilesystem, 45))
+        OR_FAIL("could not install the replay-write fault seam\n");
+    // Another private mount, for the same reason and a sharper hazard: write 44
+    // freed the inode BITMAP BIT, so that inode NUMBER is allocatable while the
+    // orphan chain still names it for teardown. Hand it to a new file and the
+    // next replay releases that file's storage. This replay must therefore end
+    // with the mount demoted, not merely with an error returned.
+    vfs_filesystem_t replay_mount = *kRootFilesystem;
+    vfs_file_operations_t replay_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t replay_dops = *kRootFilesystem->dops;
+    replay_mount.fops = &replay_fops;
+    replay_mount.dops = &replay_dops;
+
+    replay_mount.fops->mounted(&replay_mount);
+    injected_writes = orphan_test_restore_write(kRootFilesystem);
+    if (injected_writes != 45)
+        OR_FAIL("failed indirect replay made %u metadata writes, expected 45 with orphan still linked\n",
+                injected_writes);
+    if (!replay_mount.read_only)
+        OR_FAIL("half-completed orphan inode free did not demote its mount\n");
+    if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
+        OR_FAIL("replay demotion escaped onto the real root mount\n");
+    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1)
+        OR_FAIL("failed mount replay did not leave exactly one bitmap-completed inode for retry\n");
+    if (ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks + 1)
+        OR_FAIL("failed indirect replay freed %u blocks, expected %u data blocks plus indirect root\n",
+                ext2_free_blocks(kRootFilesystem) - orphan_blocks, orphan_data_blocks);
+
+    // A clean retry is the next boot in miniature. It must find the STILL-
+    // LINKED orphan, idempotently finish its inode release, and only then
+    // remove the durable chain record.
+    kRootFilesystem->fops->mounted(kRootFilesystem);
+    if (ext2_free_inodes(kRootFilesystem) != orphan_inodes + 1 ||
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks + 1)
+        OR_FAIL("clean mount replay did not finish the retained orphan\n");
+
+    // CLAIM 2: exactly what was taken, given back. Drop the surviving name
+    // too, so the net against baseline must be zero on both counters.
+    kRootFilesystem->fops->rm("/etc/testdata/orph/victim", kRootFilesystem);
+    uint32_t inodes1 = ext2_free_inodes(kRootFilesystem);
+    uint32_t blocks1 = ext2_free_blocks(kRootFilesystem);
+    if (inodes1 != inodes0)
+        OR_FAIL("INODE LEAK: %u free before, %u after (%d lost)\n",
+                inodes0, inodes1, (int)inodes0 - (int)inodes1);
+    if (blocks1 != blocks0)
+        OR_FAIL("BLOCK LEAK: %u free before, %u after (%d lost)\n",
+                blocks0, blocks1, (int)blocks0 - (int)blocks1);
+
+    // Closed-destination rename failure: freeing twelve direct blocks costs
+    // writes 8..43, freeing the indirect child costs 44..46, and write 47 is
+    // the parent-pointer clear. Fail that clear after its child is already
+    // free. The retry inode + orphan-head writes MUST be allowed to land as
+    // writes 48 and 49 before the mount publishes read-only state.
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/retry_victim", "c",
+                                    kRootFilesystem) != 0)
+        OR_FAIL("could not create the closed retry victim\n");
+    orphan_data = kmalloc((size_t)kRootFilesystem->blockSize);
+    if (orphan_data == NULL) {
+        kRootFilesystem->fops->close(f);
+        OR_FAIL("could not allocate the closed retry fixture\n");
+    }
+    memset(orphan_data, 0x5A, (size_t)kRootFilesystem->blockSize);
+    for (uint32_t i = 0; i < orphan_data_blocks; i++) {
+        int wrote = kRootFilesystem->fops->write(
+            f, orphan_data, (size_t)kRootFilesystem->blockSize);
+        if (wrote != kRootFilesystem->blockSize) {
+            kRootFilesystem->fops->close(f);
+            kfree(orphan_data);
+            OR_FAIL("could not write closed retry fixture block %u (wrote %d)\n", i, wrote);
+        }
+    }
+    kfree(orphan_data);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+
+    if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/retry_replacement", "c",
+                                    kRootFilesystem) != 0)
+        OR_FAIL("could not create the closed retry replacement\n");
+    kRootFilesystem->fops->write(f, newBytes, sizeof(newBytes) - 1);
+    kRootFilesystem->fops->close(f);
+    f = NULL;
+
+    vfs_filesystem_t shadow = *kRootFilesystem;
+    vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
+    shadow.fops = &shadow_fops;
+    shadow.dops = &shadow_dops;
+
+    if (!orphan_test_fail_write(kRootFilesystem, 47))
+        OR_FAIL("could not install the closed-rename release fault seam\n");
+    int rename_rc = shadow.fops->rename("/etc/testdata/orph/retry_replacement",
+                                        "/etc/testdata/orph/retry_victim", &shadow);
+    injected_writes = orphan_test_restore_write(kRootFilesystem);
+    if (rename_rc != 0)
+        OR_FAIL("closed replacement rename failed before reaching recoverable teardown\n");
+    if (injected_writes != 49)
+        OR_FAIL("failed closed rename made %u metadata writes, expected 49 (failed parent clear, retry inode, orphan head)\n",
+                injected_writes);
+    if (!shadow.read_only)
+        OR_FAIL("closed rename parent-clear failure did not demote its mount\n");
+    if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
+        OR_FAIL("private fault-test demotion escaped onto the real root mount\n");
+
+    // The real mount stands in for the reboot: it shares the durable orphan
+    // chain but was not demoted by the private fault fixture.
+    kRootFilesystem->fops->mounted(kRootFilesystem);
+    kRootFilesystem->fops->rm("/etc/testdata/orph/retry_victim", kRootFilesystem);
+    if (ext2_free_inodes(kRootFilesystem) != inodes0 ||
+        ext2_free_blocks(kRootFilesystem) != blocks0)
+        OR_FAIL("closed-rename retry replay did not return all storage to baseline\n");
+
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_orphan (indirect ordering + idempotent counts + half-completed block/inode frees demote + retry-map-before-demotion; %u inodes / %u blocks returned exactly)\n",
+           inodes0, blocks0);
+    return true;
+}
+#undef OR_FAIL
+
+// A runtime demotion must be stronger than clearing the obvious operation
+// slots: ext2_open_rw remains installed so reads can still be opened, and a
+// callback or open handle may have retained a pre-demotion function pointer.
+// Exercise a PRIVATE mount copy so the real test boot keeps its writable root.
+static bool test_ext2_readonly_demotion(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+        kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_readonly_demotion (root is not writable ext2)\n");
+        return true;
+    }
+
+    static const char guard_path[] = "/etc/testdata/ro_guard";
+    static const char created_path[] = "/etc/testdata/ro_created";
+    static const char renamed_path[] = "/etc/testdata/ro_renamed";
+    char mkdir_path[] = "/etc/testdata/ro_dir";
+    static const char guard_bytes[] = "READ-ONLY-GUARD";
+    os64_dirent_t de;
+    bool ok = true;
+
+#define ROD_FAIL(...) do { \
+        printf("FAIL ext2_readonly_demotion: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_readonly_demotion - " __VA_ARGS__); \
+        ok = false; \
+    } while (0)
+
+    kRootFilesystem->fops->rm(guard_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(created_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(renamed_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(mkdir_path, kRootFilesystem);
+
+    vfs_file_t *file = NULL;
+    if (kRootFilesystem->fops->open(&file, guard_path, "c", kRootFilesystem) != 0 ||
+        kRootFilesystem->fops->write(file, guard_bytes, sizeof(guard_bytes) - 1) !=
+            (int)(sizeof(guard_bytes) - 1)) {
+        if (file != NULL)
+            kRootFilesystem->fops->close(file);
+        ROD_FAIL("could not provision guard file\n");
+        return false;
+    }
+    kRootFilesystem->fops->close(file);
+
+    vfs_filesystem_t shadow = *kRootFilesystem;
+    vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
+    shadow.fops = &shadow_fops;
+    shadow.dops = &shadow_dops;
+
+    int (*saved_open)(vfs_file_t **, const char *, const char *, vfs_filesystem_t *) = shadow_fops.open;
+    int (*saved_write)(vfs_file_t *, const void *, size_t) = shadow_fops.write;
+    int (*saved_rm)(const char *, vfs_filesystem_t *) = shadow_fops.rm;
+    int (*saved_rename)(const char *, const char *, vfs_filesystem_t *) = shadow_fops.rename;
+    int (*saved_mkdir)(char *, vfs_filesystem_t *) = shadow_dops.mkdir;
+
+    vfs_demote_mount_readonly(&shadow);
+    if (!shadow.read_only || shadow.fops->write != NULL ||
+        shadow.fops->sync != NULL || shadow.fops->flush != NULL ||
+        shadow.fops->rm != NULL || shadow.fops->rename != NULL ||
+        shadow.dops->mkdir != NULL)
+        ROD_FAIL("demotion left a direct mutating operation slot installed\n");
+
+    // Read-only open remains useful after demotion.
+    file = NULL;
+    if (shadow.fops->open == NULL ||
+        shadow.fops->open(&file, guard_path, "r", &shadow) != 0) {
+        ROD_FAIL("demotion blocked an ordinary read open\n");
+    } else {
+        if (saved_write(file, "X", 1) >= 0)
+            ROD_FAIL("retained write callback wrote through a demoted mount\n");
+        shadow.fops->close(file);
+    }
+
+    const char modes[] = { 'w', 'c', 'a' };
+    for (unsigned i = 0; i < sizeof(modes); i++) {
+        char mode[2] = { modes[i], '\0' };
+        file = NULL;
+        if (saved_open(&file, guard_path, mode, &shadow) == 0) {
+            ROD_FAIL("retained open callback accepted mode '%c' after demotion\n", modes[i]);
+            shadow.fops->close(file);
+        }
+    }
+    file = NULL;
+    if (saved_open(&file, created_path, "c", &shadow) == 0) {
+        ROD_FAIL("retained open callback created a file after demotion\n");
+        shadow.fops->close(file);
+    }
+    if (saved_mkdir(mkdir_path, &shadow) == 0)
+        ROD_FAIL("retained mkdir callback mutated a demoted mount\n");
+    if (saved_rename(guard_path, renamed_path, &shadow) == 0)
+        ROD_FAIL("retained rename callback mutated a demoted mount\n");
+    if (saved_rm(guard_path, &shadow) == 0)
+        ROD_FAIL("retained rm callback mutated a demoted mount\n");
+
+    char contents[32];
+    int n = rn_slurp(guard_path, contents, sizeof(contents));
+    if (n != (int)(sizeof(guard_bytes) - 1) ||
+        memcmp(contents, guard_bytes, sizeof(guard_bytes) - 1) != 0)
+        ROD_FAIL("guard file changed despite read-only demotion (n=%d)\n", n);
+    if (kRootFilesystem->dops->stat(created_path, &de, kRootFilesystem) == 0 ||
+        kRootFilesystem->dops->stat(renamed_path, &de, kRootFilesystem) == 0 ||
+        kRootFilesystem->dops->stat(mkdir_path, &de, kRootFilesystem) == 0)
+        ROD_FAIL("a refused create, rename, or mkdir left a namespace entry\n");
+
+    kRootFilesystem->fops->rm(guard_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(created_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(renamed_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(mkdir_path, kRootFilesystem);
+
+    if (ok)
+        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/truncate/append/write/rm/rename/mkdir refused)\n");
+    return ok;
+#undef ROD_FAIL
+}
 
 // ── test_ext2_secondary_write ───────────────────────────────────────────────
 // The ext2 WRITE driver's proving ground (2026-08-04 — the day os64 wrote
@@ -2442,6 +2933,102 @@ static bool test_console_read_deadline(void)
 
 // ── net tests ────────────────────────────────────────────────────────────────
 
+typedef struct arp_pending_order_state
+{
+    uint32_t next_hop;
+    uint8_t peer_mac[NET_MAC_LEN];
+    uint32_t arp_frames;
+    uint32_t ipv4_frames;
+    bool reply_injected;
+} arp_pending_order_state_t;
+
+// Model the shortest possible ARP round trip: the reply arrives from inside
+// the fake NIC's transmit callback, before arp_send_request can return. This
+// deterministically exercises the SMP window where another core may process a
+// reply immediately after the request reaches the wire.
+static int32_t arp_pending_order_transmit(net_device_t *dev, const void *frame,
+                                          uint16_t length)
+{
+    arp_pending_order_state_t *state = (arp_pending_order_state_t*)dev->driver_data;
+    const uint8_t *bytes = (const uint8_t*)frame;
+
+    if (length < ETH_HDR_LEN)
+        return -1;
+
+    uint16_t ethertype = net_read16(bytes + 12);
+    if (ethertype == ETH_TYPE_IPV4) {
+        state->ipv4_frames++;
+        return 0;
+    }
+    if (ethertype != ETH_TYPE_ARP || state->reply_injected)
+        return 0;
+
+    state->arp_frames++;
+    state->reply_injected = true;
+
+    uint8_t reply[ARP_PKT_LEN];
+    net_write16(reply + 0, 1);
+    net_write16(reply + 2, ETH_TYPE_IPV4);
+    reply[4] = NET_MAC_LEN;
+    reply[5] = 4;
+    net_write16(reply + 6, ARP_OPER_REPLY);
+    memcpy(reply + 8, state->peer_mac, NET_MAC_LEN);
+    net_write32(reply + 14, state->next_hop);
+    memcpy(reply + 18, dev->mac, NET_MAC_LEN);
+    net_write32(reply + 24, kNetIPv4Address);
+    arp_input(dev, reply, sizeof(reply));
+    return 0;
+}
+
+static bool test_net_arp_pending_order(void)
+{
+    arp_pending_order_state_t state = {
+        .next_hop = kNetIPv4Gateway,
+        .peer_mac = {0x02, 0x00, 0x00, 0x00, 0x00, 0x02},
+    };
+    net_operations_t ops = { .transmit = arp_pending_order_transmit };
+    net_device_t dev = {
+        .mac = {0x02, 0x00, 0x00, 0x00, 0x00, 0x01},
+        .mtu = 1500,
+        .link_up = true,
+        .ops = &ops,
+        .driver_data = &state,
+    };
+    const uint8_t payload[] = {0x52, 0x41, 0x43, 0x45};
+
+    // Force the miss that enters the waiting room. The fake reply teaches the
+    // cache synchronously; flush afterward so this isolated test cannot make
+    // the real-wire ARP tests pass on synthetic evidence.
+    arp_cache_flush();
+    uint64_t parked_before = kIPv4Stats.tx_parked_for_arp;
+    uint64_t dropped_before = kIPv4Stats.tx_awaiting_arp;
+    int32_t rc = ipv4_send_from(&dev, kNetIPv4Address, kNetIPv4Gateway,
+                                IPV4_PROTO_UDP, payload, sizeof(payload));
+    bool released_in_time = state.ipv4_frames == 1;
+    bool accounting_ok = kIPv4Stats.tx_parked_for_arp == parked_before + 1 &&
+                         kIPv4Stats.tx_awaiting_arp == dropped_before;
+
+    // Under the buggy send-then-park ordering the reply has already gone by,
+    // leaving a packet behind. Release it solely to keep a failing test from
+    // contaminating later tests; the verdict above records whether it was late.
+    if (!released_in_time)
+        ipv4_arp_resolved(&dev, state.next_hop);
+    arp_cache_flush();
+
+    if (rc != -2 || state.arp_frames != 1 || !released_in_time || !accounting_ok) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_arp_pending_order - rc=%d arp=%u "
+               "ipv4_before_cleanup=%u parked_delta=%lu dropped_delta=%lu\n",
+               rc, state.arp_frames, released_in_time ? 1U : 0U,
+               kIPv4Stats.tx_parked_for_arp - parked_before,
+               kIPv4Stats.tx_awaiting_arp - dropped_before);
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_net_arp_pending_order (synchronous ARP reply released "
+           "parked IPv4 packet; parked=1 dropped=0)\n");
+    return true;
+}
+
 // The driver's first round trip: hand-roll an ARP request ("who has
 // 10.0.2.2? tell 10.0.2.15"), transmit it raw through the seam, and wait
 // for the gateway's reply to come back up the RX path. This is a DRIVER
@@ -2455,6 +3042,44 @@ static bool test_console_read_deadline(void)
 // handler at boot, the reply is DELIVERED and counts in rx_frames — the
 // assertion below watches the SUM of both on purpose, so it was true in
 // both eras and stays a pure driver test either way.)
+// ── When is a network test's world actually present? ────────────────────────
+//
+// The net tests were written against QEMU's slirp, which is a whole
+// pretend internet in a process: it answers ARP, hands out DHCP leases,
+// replies to pings, and hosts a gateway at 10.0.2.2. Every one of those is
+// an ASSUMPTION, and on 2026-08-16 the P5 met a network where none of them
+// hold — an isolated segment with one peer, no DHCP server, and no gateway
+// at all. Four tests went red and stayed red on every boot.
+//
+// That is worse than it sounds. A suite with permanently-failing lines is a
+// suite people stop reading, and this session proved twice over that the
+// suite is what catches things (test_vfs_rename failed the instant a ruling
+// changed, which is exactly what it was for). Red lines that mean "your
+// network is different" drown the red lines that mean "you broke it".
+//
+// So these two predicates let a test say I CANNOT RUN HERE instead of I
+// FAILED. The distinction is the whole point: a skip is honest, a failure
+// is a claim about the code.
+//
+// A gateway is expected only when this boot actually has one: either the
+// cmdline named it (GW=), or no static IP was given at all, in which case
+// we are in the DHCP/NAT world where the convention default is real. A
+// boot with IP= and no GW= — the P5's build segment — has a gateway
+// address that is pure convention, and nothing lives there.
+static bool net_test_has_gateway(void)
+{
+    return kNetGWString[0] != '\0' || kNetIPString[0] == '\0';
+}
+
+// DHCP is expected only when nobody configured the address by hand. IP= on
+// the cmdline SUPPRESSES the DISCOVER outright (kernel.c), so a static boot
+// failing a DHCP test is the test misreading a deliberate configuration as
+// a malfunction.
+static bool net_test_expects_dhcp(void)
+{
+    return kNetIPString[0] == '\0';
+}
+
 static bool test_net_wire(void)
 {
     if (kNetDeviceCount == 0) {
@@ -2462,6 +3087,10 @@ static bool test_net_wire(void)
         return true;
     }
 
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_wire (no gateway on this segment — nothing would answer the ARP)\n");
+        return true;
+    }
     net_device_t *dev = kNetDevices[0];
     uint64_t seen_before = dev->rx_frames + dev->rx_dropped_no_handler;
     uint64_t tx_before   = dev->tx_frames;
@@ -2480,9 +3109,13 @@ static bool test_net_wire(void)
     f[n++] = 6;    f[n++] = 4;                    // hlen, plen
     f[n++] = 0x00; f[n++] = 0x01;                 // oper: request
     memcpy(f + n, dev->mac, 6);         n += 6;   // sender MAC
-    f[n++] = 10; f[n++] = 0; f[n++] = 2; f[n++] = 15;  // sender IP
-    memset(f + n, 0x00, 6);             n += 6;   // target MAC: unknown (that's the question)
-    f[n++] = 10; f[n++] = 0; f[n++] = 2; f[n++] = 2;   // target IP: the gateway
+    // OUR address and OUR gateway, not slirp's. These were hardcoded as
+    // 10.0.2.15 and 10.0.2.2 until the P5 booted on a real segment and the
+    // test spent every boot asking a machine that does not exist to
+    // identify itself.
+    net_write32(f + n, kNetIPv4Address);   n += 4;   // sender IP
+    memset(f + n, 0x00, 6);                n += 6;   // target MAC: the question
+    net_write32(f + n, kNetIPv4Gateway);   n += 4;   // target IP: the gateway
 
     int32_t rc = dev->ops->transmit(dev, f, sizeof(f));
     if (rc != 0) {
@@ -2526,6 +3159,10 @@ static bool test_net_arp(void)
         printd(DEBUG_TESTS, "\tSKIP: test_net_arp (no NIC)\n");
         return true;
     }
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_arp (no gateway on this segment to resolve)\n");
+        return true;
+    }
     net_device_t *dev = kNetDevices[0];
 
     uint8_t mac[NET_MAC_LEN];
@@ -2565,6 +3202,10 @@ static bool test_net_ping(void)
 {
     if (kNetDeviceCount == 0) {
         printd(DEBUG_TESTS, "\tSKIP: test_net_ping (no NIC)\n");
+        return true;
+    }
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_ping (no gateway on this segment to ping)\n");
         return true;
     }
     net_device_t *dev = kNetDevices[0];
@@ -2729,6 +3370,10 @@ static bool test_net_dhcp(void)
         printd(DEBUG_TESTS, "\tSKIP: test_net_dhcp (no NIC)\n");
         return true;
     }
+    if (!net_test_expects_dhcp()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_dhcp (IP= was given, so the DISCOVER was never sent)\n");
+        return true;
+    }
 
     // The transaction usually settles in the first few scheduler passes;
     // 5s covers all four 2s-spaced retries of a sleepy server.
@@ -2891,6 +3536,10 @@ static bool test_net_icmp_conn(void)
         printd(DEBUG_TESTS, "\tSKIP: test_net_icmp_conn (no NIC)\n");
         return true;
     }
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_icmp_conn (no gateway on this segment to echo — this one BLOCKS waiting for the reply)\n");
+        return true;
+    }
 
     icmp_conn_t *c = icmp_conn_dial(kNetDevices[0], kNetIPv4Gateway);
     if (c == NULL) {
@@ -2967,6 +3616,10 @@ static bool test_net_tcp_refused(void)
 {
     if (kNetDeviceCount == 0) {
         printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_refused (no NIC)\n");
+        return true;
+    }
+    if (!net_test_has_gateway()) {
+        printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_refused (no gateway on this segment to refuse the connection)\n");
         return true;
     }
 
@@ -3515,6 +4168,7 @@ static void register_builtin_tests(void)
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_POSTBOOT);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
+    test_register("net_arp_pending_order", test_net_arp_pending_order, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
     test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);
     test_register("net_ping", test_net_ping, TEST_PHASE_POSTBOOT);
@@ -3530,6 +4184,8 @@ static void register_builtin_tests(void)
     // in test_framework.h; the demotion engine in vfs.c).
     test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("vfs_rename", test_vfs_rename, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("ext2_orphan", test_ext2_orphan, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("ext2_readonly_demotion", test_ext2_readonly_demotion, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);

@@ -155,6 +155,7 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 
     fs->fops = kmalloc(sizeof(vfs_file_operations_t));
     memcpy(fs->fops, fileOps,sizeof(vfs_file_operations_t));
+	fs->read_only = fs->fops->write == NULL;
 	fs->dops = kmalloc(sizeof(vfs_directory_operations_t));
 	memcpy(fs->dops, dirOps, sizeof(vfs_directory_operations_t));
     fs->bops = kmalloc(sizeof(block_operations_t));
@@ -184,6 +185,8 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 			return NULL;
 		}
 	}
+	// initialize may strip write slots after inspecting on-disk features.
+	fs->read_only = fs->read_only || fs->fops->write == NULL;
 
 	// Claim the prefix in the mount table — this is the moment the filesystem
 	// becomes reachable by path.
@@ -201,6 +204,13 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 	       device->block_device->partition_table->parts[partNo]->uniquePartGUID, 16);
 	m->fs = fs;
 	kMountCount++;
+
+	// The filesystem is reachable by path as of the line above — and ONLY as
+	// of that line does the block layer agree this partition is mounted. Any
+	// driver work that has to WRITE belongs here rather than in initialize;
+	// see fops->mounted in vfs.h for the panic that taught us the difference.
+	if (fs->fops->mounted != NULL)
+		fs->fops->mounted(fs);
 
     return fs;
 }
@@ -408,7 +418,7 @@ bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo)
 		vfs_filesystem_t *fs = kMountTable[i].fs;
 		if (fs == NULL || fs->block_device_info != dev || fs->partNumber != partNo)
 			continue;
-		return fs->fops != NULL && fs->fops->write != NULL;
+		return !fs->read_only && fs->fops != NULL && fs->fops->write != NULL;
 	}
 	return false;   // no mount claims it — nothing legitimate writes there
 }
@@ -427,6 +437,28 @@ bool vfs_partition_mount_writable(block_device_info_t *dev, int partNo)
 // stops reading the rings when its writes fail (its own starve-the-file rule)
 // so the log rides serial again. Open files keep reading — their vfs_file_t
 // fops POINT at the mount's copy, so the demotion reaches them too.
+void vfs_demote_mount_readonly(vfs_filesystem_t *fs)
+{
+	if (fs == NULL)
+		return;
+
+	// Publish the state FIRST. A callback retained before its slot is cleared
+	// must see the demotion when it reaches its filesystem's write lock.
+	fs->read_only = true;
+	if (fs->fops != NULL)
+	{
+		fs->fops->write   = NULL;
+		fs->fops->sync    = NULL;
+		fs->fops->flush   = NULL;
+		fs->fops->fputs   = NULL;
+		fs->fops->fprintf = NULL;
+		fs->fops->rm      = NULL;
+		fs->fops->rename  = NULL;
+	}
+	if (fs->dops != NULL)
+		fs->dops->mkdir = NULL;
+}
+
 void vfs_demote_all_mounts_readonly(const char *why)
 {
 	int demoted = 0;
@@ -435,12 +467,7 @@ void vfs_demote_all_mounts_readonly(const char *why)
 		vfs_filesystem_t *fs = kMountTable[i].fs;
 		if (fs == NULL || fs->fops == NULL || fs->fops->write == NULL)
 			continue;
-		fs->fops->write   = NULL;
-		fs->fops->fputs   = NULL;
-		fs->fops->fprintf = NULL;
-		fs->fops->rm      = NULL;
-		if (fs->dops != NULL)
-			fs->dops->mkdir = NULL;
+		vfs_demote_mount_readonly(fs);
 		demoted++;
 		printf("VFS: '%s' demoted to READ-ONLY (%s)\n", kMountTable[i].prefix, why);
 		printd(DEBUG_VFS, "VFS: mount '%s' demoted to read-only: %s\n",

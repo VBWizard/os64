@@ -50,6 +50,7 @@
 #include "driver/system/usb/xhci.h"
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
+#include "driver/net/r8125.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
 #include "driver/net/dhcp.h"
@@ -131,6 +132,10 @@ bool kEnableUSB = true;
 bool kUSBQuiet = false;
 // Cleared by the NONET cmdline flag — skips NIC bring-up (NETWORK.md arc).
 bool kEnableNet = true;
+// Cleared by NOR8125 — skips RTL8125 bring-up. The P5 is the only machine
+// here that has one, so this flag exists for the day that machine needs to
+// boot WITHOUT its NIC in order to diagnose something else.
+bool kEnableR8125 = true;
 // Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,
 // post-boot, and the disk/VFS tests) — used to isolate a boot hang by booting
 // with no test code in the path.
@@ -328,6 +333,15 @@ void kernel_init()
 		// and never notices the difference. That last clause is the whole
 		// point of the seam.
 		init_e1000();
+		// And the RTL8125, last for the same reason the e1000 came second:
+		// registration order is device order and the stack dials through
+		// kNetDevices[0]. On the P5 — the only machine in this house that
+		// HAS one — it will be the sole NIC and therefore device 0 anyway.
+		// Everywhere else this call finds nothing and returns, which is what
+		// keeps every existing QEMU boot byte-for-byte as green as before it
+		// existed. (It registers nothing with the seam until it can actually
+		// transmit — see the closing comment in r8125_init_device.)
+		init_r8125();
 		// DHCP by default when a NIC exists and nobody typed IP= — the
 		// lease overwrites the static convention defaults when it lands
 		// (and if no server answers, those defaults keep working; the

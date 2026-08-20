@@ -199,10 +199,18 @@ make -C kernel test-elf
   where LOGD= writes — 20 minutes of DEBUG_SCHEDULER|DETAILED is 136MB. The
   image is SPARSE: an empty 1GB /home costs under a megabyte of host disk).
   The FAT partition is the LIFEBOAT: own /bin, own husk.rc, own boot entry,
-  for the day a stray write eats root. Write durability is FULL WRITE-THROUGH (sync is a no-op; unlike
-  FAT, an appended file reads at true length immediately). rm refuses
-  files/dirs another handle holds open (open-inode refcount, ruled
-  2026-08-04). Verified by the in-OS test suite AND host `make fsck-ext2`
+  for the day a stray write eats root. Write durability is FULL WRITE-THROUGH
+  (sync is a no-op; unlike FAT, an appended file reads at true length
+  immediately). Removing OR renaming an open REGULAR file is allowed since
+  2026-08-16 — the name goes at once, the storage at LAST CLOSE, via ext2's
+  on-disk orphan chain (`s_last_orphan`; a mount replays whatever a crash
+  left, and says so). That is what lets a running program's binary be
+  replaced underneath it. Open DIRECTORIES still refuse. (The blanket refusal
+  ruled 2026-08-04 was explicitly consumer-driven; the consumer was `os64
+  refresh` replacing /bin/husk while husk runs.) NOTE for anyone adding code
+  that closes a file: a close can now do real disk I/O, so it must run in
+  KERNEL context (see `fops->mounted` in vfs.h and the burial close in
+  task.c). Verified by the in-OS test suite AND host `make fsck-ext2`
   (e2fsck must stay green — with a writable root it is the constitution).
 - Root filesystem mounted via `ROOTPARTUUID`/`ROOT` kernel cmdline parameter;
   FAT32 or ext2 both work as root (see the "/QEMU Boot (ext2 root)" Limine entry)

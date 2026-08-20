@@ -189,8 +189,12 @@ static inline void set_gs_base(uint64_t base) {
 /// its next customer, and whichever core later resumes the sleeper puts two
 /// live contexts on one stack. That collision was the stack poisoner
 /// (2026-08-11/12); the exit path is cured, and this oracle exists to catch
-/// any door we haven't found — the cikc-hosted disk closes are the known
-/// remaining suspects.
+/// any door we haven't found. The cikc-hosted disk closes were the named
+/// suspects for eight days and the suspicion was CORRECT: task_destroy's
+/// burial close reached call_in_kernel_context from kworker with IF=1, so a
+/// scheduling IPI could park kworker right here (found in review, 2026-08-20).
+/// That door is shut — the trampoline is irqsave now (task_exit_asm.S) — but
+/// the oracle stays: it is cheap, and it earned its keep once already.
 int kernel_scratch_stack_owner(uintptr_t rsp)
 {
     for (int c = 0; c < kMPCoreCount; c++) {
