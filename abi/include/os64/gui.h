@@ -37,6 +37,15 @@
 #define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // reserved; not yet honored
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 
+// The window title's capacity, NUL included (gui/window.h's value, verbatim
+// — window.c static-asserts the two stay equal). This is ABI because the
+// boundary REFUSES an over-long title with BAD_ARGS rather than truncating
+// it — the house convention for every string crossing ring 3 — which makes
+// fitting the title the APP's job and this number the app's business.
+// (Discovered the honest way, 2026-08-21: `scribe /fat/boot/limine/
+// limine.conf` put the whole path in its title and got -3 at the door.)
+#define OS64_GUI_TITLE_MAX 32
+
 // ── The shared palette (gui_types.h's values, verbatim) ─────────────────────
 #define OS64_GUI_COLOR_BLACK      0xff000000u
 #define OS64_GUI_COLOR_WHITE      0xffffffffu

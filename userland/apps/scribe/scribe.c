@@ -536,9 +536,27 @@ int main(int argc, char **argv)
 {
     const char *arg_path = (argc > 1) ? argv[1] : NULL;
 
-    char title[SCRIBE_PATH_MAX + 16];
+    // The window title gets the file's NAME, not its path — partly Bravo
+    // manners, mostly the ABI: a title longer than OS64_GUI_TITLE_MAX is
+    // REFUSED at the boundary (never truncated — the house convention for
+    // strings crossing ring 3), and "scribe - /fat/boot/limine/limine.conf"
+    // was the day-one casualty: the first deep path typed at husk earned
+    // "window create failed (-3)" before the file was ever opened
+    // (2026-08-21, the HD-boot evening). The full path lives in the status
+    // line, where it always did. snprintf clamps a still-too-long basename
+    // into the field rather than bouncing the window — scribe's own title
+    // is scribe's to shorten.
+    const char *base = arg_path;
+    if (base != NULL) {
+        for (const char *p = arg_path; *p; p++)
+            if (*p == '/')
+                base = p + 1;
+        if (*base == '\0')
+            base = arg_path;   // trailing slash — show the path, let open fail loudly
+    }
+    char title[OS64_GUI_TITLE_MAX];
     os64_snprintf(title, sizeof(title), "scribe%s%s",
-                  arg_path ? " - " : "", arg_path ? arg_path : "");
+                  base ? " - " : "", base ? base : "");
 
     g.win = os64_gui_window_create(title, 140, 90, 640, 440, 0);
     if (g.win == OS64_GUI_ERR_NOT_RUNNING) {

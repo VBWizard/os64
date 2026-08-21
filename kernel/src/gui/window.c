@@ -7,6 +7,12 @@
 
 #include "gui/window.h"
 #include "gui/gui_internal.h"
+#include "os64/gui.h"    // OS64_GUI_TITLE_MAX — the ABI's copy of the title
+                         // capacity, pinned to ours by the assert below (the
+                         // log.c/klog_format.h precedent: renumbering stops
+                         // the build instead of lying to ring 3)
+_Static_assert(GUI_WINDOW_TITLE_MAX == OS64_GUI_TITLE_MAX,
+               "gui/window.h and abi os64/gui.h disagree on the title capacity");
 #include "gui/surface.h"
 #include "gui/compositor.h"
 
