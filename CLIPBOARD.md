@@ -61,12 +61,70 @@ The kernel does NOT keep "a clipboard buffer." It keeps **snarf entries**:
   arrive, they ride the seat instead of forcing a second clipboard —
   X11's second-system mistake, declined in advance.
 
+## Slice 1 rulings (2026-08-21, at the top of the build)
+
+Three questions the design left open, decided before the first line:
+
+1. **A pending copy whose writer DIES is sealed anyway.** The handle closer
+   cannot tell "returned normally" from "was killed", and a killed
+   `grep > somefile` leaves a partial file on disk without anyone finding it
+   surprising. The clipboard does not invent a rule the rest of the tree
+   doesn't have. (The alternative — mark handles abnormal during task
+   teardown — is real work for a case where the user can just copy again.)
+2. **Hitting the ceiling POISONS the copy.** The write that would cross 16MB
+   is refused, every later write on that handle is refused too, and the seal
+   publishes NOTHING — so the previous snarf survives untouched. A truncated
+   paste that *looks* complete is exactly the failure "tripwires over
+   silence" exists to prevent. And the refusal is LOUD ON THE GLASS, not
+   only in the write's return value: whether the user finds out must not
+   depend on the writing tool having good manners about return codes.
+   (`cat` does check, as it happens, so the harness run printed both.)
+3. **`snarf_entry_t` in the kernel, `/sys/clipboard` as the face.** Plan 9's
+   word kept where only kernel code sees it — a hat tip, not a user-facing
+   name.
+
+And the home question, asked properly and answered: **/sys, not /dev.** Plan
+9 kept snarf at `/dev/snarf`, but *their* /dev is the service namespace
+(cons, draw, mouse, time — servers exposing interfaces). os64's /dev is the
+narrower Unix reading, and devfs.c's own comment excludes us: "there is no
+position, no snapshot, and no buffer — a device answers from its nature, not
+from stored bytes." The clipboard is stored bytes with a length and a
+position. /sys needed only its scope widened (hardware → machine state that
+is not a process), which is a comment edit; /dev would have needed a
+doctrine repealed. The day /dev grows into a service namespace, revisit.
+
 ## The consumers, in ratified order
 
 1. **Kernel + `/sys/clipboard`** — the entry store, the synthetic file
    (sysfs grows its first WRITABLE file; /proc's ctl files are the
    precedent), tests, and libos64's `os64_clip_copy()` / `os64_clip_paste()`
    wrapping the file for apps that want a function instead of a path.
+   **BUILT 2026-08-21** — `kernel/src/clipboard.c` (the store),
+   `sysfs.c` (the node), `userland/libos64/clip.c` + `<os64/clip.h>`.
+   Implementation notes worth keeping:
+   - A reader points the synthfs snapshot head STRAIGHT AT the entry's
+     immutable bytes and holds a reference — zero copy, even at 16MB — so
+     read/seek/tell are the generic snapshot fops, unmodified. Only `close`
+     is the clipboard's own, because it must release the reference (and,
+     on the write side, seal). One overridden fop, not four.
+   - `stat` reports the entry's real length: `ls -l /sys` shows the
+     clipboard as the only node with a size, and `os64_clip_length()` asks
+     the question without reading the bytes.
+   - Mode `"a"` is refused by sysfs's existing one-character mode test, so
+     `>>` fails at open with husk's "cannot create" — the loud refusal the
+     design asked for, at no cost.
+   - Harness-verified end to end: `ls /sys` lists it; `echo ... >` then
+     `cat` round-trips; `grep Root /home/os64.log >` copies 23,440 bytes of
+     pipeline output and `wc` agrees to the byte; a 4,915,924-byte copy
+     exercises the doubling growth; an 18.75MB copy is refused on the glass
+     with the previous snarf intact; `>>` refused; `e2fsck` clean on both
+     root and /home afterwards.
+   - **Chris's acceptance test, and the right way to test a ceiling: an
+     INFINITE SOURCE.** `cp /dev/zero /sys/clipboard` — it accepted exactly
+     16,777,216 bytes, refused the next write, and the clipboard still held
+     the copy of `/husk.rc` he had put there beforehand. Two of the OS's
+     own synthetic filesystems, one pouring into the other, and the limit
+     held the line without a person having to construct a big file first.
 2. **scribe** — Ctrl+C / Ctrl+X / Ctrl+V against the selection machinery
    that is already there. The first customer, and the moment "highlighting
    has nothing to DO yet" stops being true.

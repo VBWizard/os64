@@ -3,17 +3,30 @@
 // The second synthetic filesystem (procfs was the first; the shared guts —
 // text buffer, snapshot handles, mount dance — live in synthfs, extracted
 // the day this file was born). Where /proc renders the scheduler's view of
-// the world and stays processes-ONLY, Plan 9 style, /sys renders the
-// HARDWARE's — starting with what PCI discovery found at boot. The split is
-// deliberate lineage: Linux built sysfs for its 2.6 driver model precisely
-// because /proc had silted up with kernel state that was never a process;
-// os64 gets to draw the line on day one instead of spending a decade
-// dredging.
+// the world and stays processes-ONLY, Plan 9 style, /sys renders MACHINE
+// STATE THAT IS NOT A PROCESS — starting with what PCI discovery found at
+// boot. The split is deliberate lineage: Linux built sysfs for its 2.6
+// driver model precisely because /proc had silted up with kernel state that
+// was never a process; os64 gets to draw the line on day one instead of
+// spending a decade dredging.
+//
+// That sentence used to say "renders the HARDWARE's view", and it was true
+// until 2026-08-21, when /sys/clipboard arrived and it stopped being true.
+// Amended rather than stretched: a clipboard is system state and belongs
+// under /sys, but it is not hardware, and the alternative homes were worse.
+// /proc is processes only (ruling #7 of SUCCESSION.md). /dev — where Plan 9
+// actually kept snarf — is os64's NARROWER Unix-shaped /dev, whose own
+// devfs.c says "there is no position, no snapshot, and no buffer: a device
+// answers from its nature, not from stored bytes"; the clipboard is stored
+// bytes with a length and a position, so filing it there would have made
+// that comment a lie on arrival. The day /dev grows into a Plan 9-style
+// SERVICE namespace (mouse, draw), snarf's cousins live there and this gets
+// revisited. See CLIPBOARD.md.
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        six entries: "bus", "cpu", "net", "cache",
-//                                "gui", "log"
+//   /sys/                        seven entries: "bus", "cpu", "net", "cache",
+//                                "gui", "log", "clipboard"
 //   /sys/bus/                    one entry: "pci"
 //   /sys/bus/pci/                one file per discovered function, named
 //                                bus:dev.fn in hex — "00:1f.3", lspci's
@@ -43,6 +56,16 @@
 //   /sys/net/<card>              one NIC: model/location (both optional),
 //                                mac, mtu, link, whether it carries the
 //                                address, and the traffic counters
+//   /sys/clipboard               THE system clipboard, read AND write:
+//                                `... > /sys/clipboard` copies, `cat` pastes.
+//                                Two firsts for /sys, both worth naming: it
+//                                is the only node with DURABLE content (every
+//                                other file is generated fresh at open), and
+//                                the only write that STORES instead of
+//                                COMMANDS (cpu/<n>/probe fires a gun; this
+//                                keeps your bytes). The standing rule is
+//                                untouched — reading it changes nothing.
+//                                Store and rulings: clipboard.c, CLIPBOARD.md
 //
 // Every file is TEXT. The PCI values are the enumeration's saved headers —
 // kPCIDeviceHeaders / kPCIDeviceFunctions / kPCIBridgeHeaders, written once
@@ -101,6 +124,7 @@
 #include "CONFIG.h"
 #include "logging/log.h"   // /sys/log — ring stats and sink state
 #include "io.h"             // kSerialPresent
+#include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
 extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
@@ -269,6 +293,7 @@ typedef enum
 	SYS_NODE_NETIP,      // /net/ip — the machine's address, and it is ONE
 	SYS_NODE_NETDHCP,    // /net/dhcp — how that address was come by
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
+	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -362,6 +387,17 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_GUIFILE;
+		return;
+	}
+
+	if (strcmp(comp, "clipboard") == 0)
+	{
+		// A file, and a file it stays: history, when it comes, arrives BESIDE
+		// this name and never inside it (CLIPBOARD.md). Consumers must never
+		// find a directory where a file used to be.
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_CLIPFILE;
 		return;
 	}
 
@@ -901,15 +937,33 @@ static void sys_gen_cpu_probe(synth_text_t *t, uint32_t core)
 
 // ── File operations ─────────────────────────────────────────────────────────
 
-// The open file object. Everything except the probe trigger is served by the
-// bare snapshot; the probe file carries two more fields so a write knows its
-// target (same embed-the-head pattern as procfs's ctl handle).
+// What an open handle IS, when it is not just a rendered snapshot. Everything
+// except these two is served by the bare snapshot; the probe file carries its
+// target, and the clipboard carries the entry it is reading or the copy it is
+// accumulating (same embed-the-head pattern as procfs's ctl handle).
+typedef enum
+{
+	SYS_HANDLE_SNAPSHOT = 0,   // the ordinary case: text generated at open
+	SYS_HANDLE_CLIPREAD,       // /sys/clipboard opened "r" — holds a ref
+	SYS_HANDLE_CLIPWRITE,      // /sys/clipboard opened "w" — holds a pending
+} sys_handle_kind_t;
+
 typedef struct
 {
 	synth_snapshot_t snap;   // MUST be first — the generic fops see only this
 	                         // head, and close frees the whole struct by it
 	bool     is_probe;       // writes to this handle fire the NMI
 	uint32_t core;           // ...at this core
+
+	// The clipboard's private state. A CLIPREAD handle points snap.data
+	// straight AT the entry's immutable bytes — zero copy, even at 16MB — and
+	// the generic read/seek/tell then work unmodified, because an immutable
+	// ref-held entry is exactly what a snapshot is. Only close differs: it
+	// must release the reference instead of kfree'ing the bytes out from
+	// under the store (see sys_close).
+	sys_handle_kind_t kind;
+	snarf_entry_t    *entry;     // CLIPREAD: the entry this handle is reading
+	snarf_pending_t  *pending;   // CLIPWRITE: the copy being accumulated
 } sys_file_handle_t;
 
 static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
@@ -919,15 +973,72 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	sys_parse_path(path, &sp);
 
-	// /sys is read-only EXCEPT cpu/<n>/probe, the one node that is a trigger
-	// (reads side-effect free, the gun behind a write — the header's ruling).
-	// Rejecting the write modes at the boundary beats a write that silently
-	// goes nowhere.
+	// /sys is read-only EXCEPT two nodes: cpu/<n>/probe, the trigger (reads
+	// side-effect free, the gun behind a write — the header's ruling), and
+	// clipboard, the one node that STORES what you write. Rejecting the write
+	// modes at the boundary beats a write that silently goes nowhere.
+	//
+	// Mode "a" is REFUSED here along with everything else that is not exactly
+	// "r" or "w", and for the clipboard that refusal is deliberate rather than
+	// incidental: entries are immutable, and appending to one needs a consumer
+	// to justify it (CLIPBOARD.md). The single-character test does the work.
 	bool is_probe = (sp.type == SYS_NODE_CPUFILE && strcmp(sp.name, "probe") == 0);
+	bool is_clip  = (sp.type == SYS_NODE_CLIPFILE);
 	if (mode == NULL || mode[1] != '\0' || (mode[0] != 'r' && mode[0] != 'w'))
 		return -1;
-	if (mode[0] == 'w' && !is_probe)
+	if (mode[0] == 'w' && !is_probe && !is_clip)
 		return -1;
+
+	// The clipboard is served from the store, not from generated text, so it
+	// leaves the generator ladder below entirely. Both directions publish a
+	// handle with NO snapshot buffer of their own: the reader borrows the
+	// entry's bytes, the writer has nothing to read yet.
+	if (is_clip)
+	{
+		synth_text_t empty = { 0 };   // no allocation: publish takes it as-is
+
+		snarf_entry_t   *entry   = NULL;
+		snarf_pending_t *pending = NULL;
+
+		if (mode[0] == 'w')
+		{
+			pending = clipboard_begin();
+			if (pending == NULL)
+				return -1;
+		}
+		else
+		{
+			// NULL is not a failure — it is an empty clipboard, which reads
+			// as an empty file. `cat /sys/clipboard` before anyone has ever
+			// copied prints nothing and exits 0, exactly like an empty file.
+			entry = clipboard_acquire();
+		}
+
+		sys_file_handle_t *ch = synth_snapshot_publish(vfs_file, &empty, path, vfs_fs,
+		                                              sizeof(sys_file_handle_t),
+		                                              FILETYPE_SYSFILE);
+		if (ch == NULL)
+		{
+			// Publish failed after we had already taken the store's word for
+			// it — hand both back rather than leaking an entry reference.
+			if (pending != NULL)
+				clipboard_seal(pending);
+			clipboard_release(entry);
+			return -1;
+		}
+
+		ch->kind    = (mode[0] == 'w') ? SYS_HANDLE_CLIPWRITE : SYS_HANDLE_CLIPREAD;
+		ch->entry   = entry;
+		ch->pending = pending;
+		if (entry != NULL)
+		{
+			// Point the snapshot head at the entry's immutable bytes. Nothing
+			// is copied; the reference taken above is what keeps them alive.
+			ch->snap.data = (char *)entry->bytes;
+			ch->snap.size = entry->length;
+		}
+		return 0;
+	}
 
 	sys_pci_view_t v;
 	if (sp.type == SYS_NODE_PCIFILE)
@@ -979,19 +1090,35 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	return 0;
 }
 
-// Writing to /sys is a COMMAND aimed at the machine, accepted at exactly one
-// node: cpu/<n>/probe. Same contract as /proc's ctl — first whitespace-
-// delimited word is the command, the whole write reports as consumed on
-// success (a partial write would make `echo` retry the tail, exactly wrong
-// for a command). Everywhere else, -1 at the fops layer is louder than a
-// write that "succeeds" into nothing.
+// Writing to /sys means one of exactly two things, and they are different in
+// kind. cpu/<n>/probe is a COMMAND aimed at the machine — same contract as
+// /proc's ctl, first whitespace-delimited word is the verb, the whole write
+// reports as consumed on success (a partial write would make `echo` retry the
+// tail, exactly wrong for a command). clipboard is CONTENT — every byte is
+// kept, and the accumulated copy is sealed at close. Everywhere else, -1 at
+// the fops layer is louder than a write that "succeeds" into nothing.
 static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 {
 	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
 	char word[SYS_NAME_MAX];
 	size_t i = 0, n = 0;
 
-	if (h == NULL || !h->is_probe || buffer == NULL || size == 0)
+	if (h == NULL || buffer == NULL)
+		return -1;
+
+	if (h->kind == SYS_HANDLE_CLIPWRITE)
+	{
+		if (size == 0)
+			return 0;   // nothing offered, nothing refused
+		// A refusal (over the ceiling, or out of memory) has already poisoned
+		// the copy and said so on the glass; -1 here is for the tools that do
+		// check, and the poison is for the ones that don't.
+		if (clipboard_append(h->pending, buffer, size) < 0)
+			return -1;
+		return (int)size;
+	}
+
+	if (!h->is_probe || size == 0)
 		return -1;
 
 	const char *b = (const char *)buffer;
@@ -1027,6 +1154,41 @@ static int sys_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	// spared — whoever fired this is about to cat the answer anyway.
 	nmi_probe_report_wire(h->core);
 	return (int)size;
+}
+
+// Close is the ONE file op the clipboard has to have its own version of. Read,
+// seek and tell are the generic snapshot ones unchanged, because a ref-held
+// immutable entry IS a snapshot — that is the whole reason the entries are
+// refcounted instead of copied. But the generic close frees snap.data, and
+// those bytes belong to the store, not to this handle.
+//
+// It is also where a copy becomes visible to everyone else: the seal happens
+// HERE, which is what makes "a multi-write copy is one snarf" true.
+static int sys_close(vfs_file_t *vfs_file)
+{
+	sys_file_handle_t *h = (sys_file_handle_t *)vfs_file->handle;
+
+	if (h != NULL)
+	{
+		if (h->kind == SYS_HANDLE_CLIPWRITE)
+		{
+			// Publishes, or discards a poisoned copy. Either way the pending
+			// is freed and the handle owns nothing afterwards.
+			clipboard_seal(h->pending);
+			h->pending = NULL;
+		}
+		else if (h->kind == SYS_HANDLE_CLIPREAD)
+		{
+			// Disown the borrowed bytes BEFORE the generic close sees them,
+			// then drop the reference that was keeping them alive.
+			h->snap.data = NULL;
+			h->snap.size = 0;
+			clipboard_release(h->entry);
+			h->entry = NULL;
+		}
+	}
+
+	return synth_snapshot_close(vfs_file);   // frees the handle and the vfs_file
 }
 
 // ── Directory operations ────────────────────────────────────────────────────
@@ -1091,7 +1253,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "cache", "gui", "log" };
+			static const char *kSysRootFiles[] = { "cache", "gui", "log", "clipboard" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -1103,7 +1265,14 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			}
 			if (h->index < kDirCount + kFileCount)
 			{
-				strncpy(entry->name, kSysRootFiles[h->index - kDirCount], OS64_DIRENT_NAME_MAX);
+				const char *name = kSysRootFiles[h->index - kDirCount];
+				strncpy(entry->name, name, OS64_DIRENT_NAME_MAX);
+				// Size 0 for the generated files — their content does not
+				// exist until something opens them. The clipboard is the
+				// exception BECAUSE its content is durable: `ls -l /sys` can
+				// honestly say how much is on the clipboard right now.
+				if (strcmp(name, "clipboard") == 0)
+					entry->size = clipboard_length();
 				h->index++;
 				return 1;
 			}
@@ -1273,6 +1442,14 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 			strncpy(entry->name, "log", OS64_DIRENT_NAME_MAX);
 			return 0;
 
+		// The clipboard reports its REAL length here (the only /sys node that
+		// can), which is how userland sizes a paste before reading one — and
+		// how `ls -l /sys` stops lying about the one file that has content.
+		case SYS_NODE_CLIPFILE:
+			strncpy(entry->name, "clipboard", OS64_DIRENT_NAME_MAX);
+			entry->size = clipboard_length();
+			return 0;
+
 		case SYS_NODE_CPUDIR:
 			entry->flags = OS64_DE_DIR;
 			strncpy(entry->name, "cpu", OS64_DIRENT_NAME_MAX);
@@ -1330,7 +1507,7 @@ vfs_file_operations_t sys_fops = {
 	.write = sys_write,
 	.seek  = synth_snapshot_seek,
 	.tell  = synth_snapshot_tell,
-	.close = synth_snapshot_close,
+	.close = sys_close,              // snapshot close + the clipboard's seal
 };
 
 vfs_directory_operations_t sys_dops = {

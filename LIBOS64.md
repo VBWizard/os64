@@ -67,6 +67,7 @@ umbrella that pulled the world into every TU.
 | `<os64/pipe.h>` | `pipe`, `dup`/`dup2` |
 | `<os64/opt.h>` | the `CommandLineOption` getopt-style parser (kept from libChrisOS — it was good) |
 | `<os64/time.h>` | `time`, `sleep`, `gettime` |
+| `<os64/clip.h>` | `os64_clip_copy`/`paste`/`length` — the system clipboard. NO syscall behind it: it is open/read/write/close on `/sys/clipboard`, and a program that spells that out longhand gets the identical clipboard (CLIPBOARD.md) |
 | `<os64.h>` | includes all of the above for quick programs |
 
 ## The unified handle model

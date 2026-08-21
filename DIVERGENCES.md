@@ -118,6 +118,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | /usr split, /sbin, /usr/local sediment | /bin holds ALL executables; /lib, /etc, /home, /tmp, /dev later; NO /usr ever | The /usr split was Ken and Dennis's 1971 disk shortage (a full RK05), not a design | SUCCESSION #7 |
 | fstab + mount(2) | Mount table auto-mounts recognized partitions at "/<fstype>", longest-prefix routed, GUID-deduped, foreign partitions allowlisted OUT | Boots self-describing; Windows-safety by construction | vfs.c, CLAUDE.md |
 | Path hygiene scattered everywhere | ONE canonicalization point (`vfs_canonicalize_path`, at chdir/open); cwd stored canonical, kernel-owned | Path hygiene happens in exactly one place | ABI #15 |
+| A clipboard is a windowing-system API (X11 selections, Win32 `OpenClipboard`) with TWO buffers — PRIMARY and CLIPBOARD | ONE buffer, and it is a FILE: `/sys/clipboard`. `cmd > /sys/clipboard` copies, `cat /sys/clipboard` pastes. No new syscall, no GUI dependency — a headless text VT has the same clipboard the desktop does | Content belongs in the byte-stream world, where pipes and redirection already work; forty years of X11 users pasting the wrong buffer is the argument against two. **Convergence with Plan 9**, which served snarf as `/dev/snarf` for the same reason — os64 files it under /sys because its /dev is the narrower Unix-shaped one (stateless devices), not Plan 9's service namespace | CLIPBOARD.md, sysfs.c |
 
 ---
 
