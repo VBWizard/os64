@@ -126,12 +126,82 @@ static uint32_t ext2_indirect_entry(vfs_filesystem_t *fs, ext2_fs_t *e,
 	return entry;
 }
 
+// ── The block-map cursor ────────────────────────────────────────────────────
+// Doctrine, the measurement behind it, and the one-slot-per-LEVEL rule are in
+// ext2_internal.h. Here is the machinery.
+
+void ext2_bmap_cache_init(ext2_bmap_cache_t *c)
+{
+	for (int i = 0; i < EXT2_BMAP_LEVELS; i++)
+	{
+		c->buf[i]  = NULL;           // allocated LAZILY — see _entry_at below
+		c->held[i] = 0;              // 0 = empty; never a real indirect block
+	}
+}
+
+void ext2_bmap_cache_free(ext2_bmap_cache_t *c)
+{
+	for (int i = 0; i < EXT2_BMAP_LEVELS; i++)
+		if (c->buf[i] != NULL)       // kfree(NULL) PANICS in os64 — guard it
+		{
+			kfree(c->buf[i]);
+			c->buf[i] = NULL;
+		}
+}
+
+// One entry out of one pointer block, through the cursor's slot for `level`.
+// Falls back to the allocate-read-free path when there is no cursor (every
+// pre-existing caller) or when that level's buffer could not be allocated.
+static uint32_t ext2_indirect_entry_at(vfs_filesystem_t *fs, ext2_fs_t *e,
+                                       ext2_bmap_cache_t *c, int level,
+                                       uint32_t ind_block, uint32_t idx)
+{
+	if (ind_block == 0)
+		return 0;   // a hole in the map is a hole in the file
+	if (idx >= e->ptrs_per_block)
+		return 0;
+
+	if (c == NULL)
+		return ext2_indirect_entry(fs, e, ind_block, idx);
+
+	// LAZY, and the laziness is the point: a read that never leaves the 12
+	// direct blocks reaches this function zero times and must not pay for
+	// buffers nobody will look at. A level's buffer is born the first time
+	// that level is actually walked — so a small file costs exactly what it
+	// did before this cursor existed, and a deep one pays three allocations
+	// for the whole read instead of two per block.
+	if (c->buf[level] == NULL)
+	{
+		c->buf[level]  = kmalloc(e->block_size);
+		c->held[level] = 0;
+		if (c->buf[level] == NULL)
+			return ext2_indirect_entry(fs, e, ind_block, idx);   // short on
+			                             // memory: slow again, never broken
+	}
+
+	if (c->held[level] != ind_block)
+	{
+		// Invalidate BEFORE the read: a failed read must not leave the slot
+		// claiming to hold a block whose contents are now anybody's guess.
+		c->held[level] = 0;
+		if (ext2_read_fs_block(fs, e, ind_block, c->buf[level]) != 0)
+			return 0;
+		c->held[level] = ind_block;
+	}
+
+	return ((uint32_t *)c->buf[level])[idx];
+}
+
 // The block map: file-relative block index -> on-disk block number (0 = hole,
 // which reads as zeros). This walk — 12 direct, then one, two, three levels
 // of indirection — IS the classic UNIX inode, unchanged since the 70s.
 // (Its allocating twin, ext2_bmap_alloc, lives in ext2_write.c.)
-uint32_t ext2_bmap(vfs_filesystem_t *fs, ext2_fs_t *e,
-                   const ext2_inode_t *ino, uint32_t fblock)
+//
+// `c` may be NULL, and ext2_bmap below passes exactly that — so the six
+// callers that predate the cursor keep their old behavior to the byte.
+uint32_t ext2_bmap_cached(vfs_filesystem_t *fs, ext2_fs_t *e,
+                          const ext2_inode_t *ino, uint32_t fblock,
+                          ext2_bmap_cache_t *c)
 {
 	uint32_t ppb = e->ptrs_per_block;
 
@@ -139,24 +209,36 @@ uint32_t ext2_bmap(vfs_filesystem_t *fs, ext2_fs_t *e,
 		return ino->i_block[fblock];
 	fblock -= EXT2_NDIR_BLOCKS;
 
+	// Level 0 is whichever pointer block the inode names directly, level 1
+	// what that one names, and so on. A sequential read holds level 0 for the
+	// whole indirect region and turns level 1 over once every ppb blocks.
 	if (fblock < ppb)
-		return ext2_indirect_entry(fs, e, ino->i_block[EXT2_IND_BLOCK], fblock);
+		return ext2_indirect_entry_at(fs, e, c, 0,
+		                              ino->i_block[EXT2_IND_BLOCK], fblock);
 	fblock -= ppb;
 
 	if (fblock < (uint64_t)ppb * ppb)
 	{
-		uint32_t l1 = ext2_indirect_entry(fs, e, ino->i_block[EXT2_DIND_BLOCK],
-		                                  fblock / ppb);
-		return ext2_indirect_entry(fs, e, l1, fblock % ppb);
+		uint32_t l1 = ext2_indirect_entry_at(fs, e, c, 0,
+		                                     ino->i_block[EXT2_DIND_BLOCK],
+		                                     fblock / ppb);
+		return ext2_indirect_entry_at(fs, e, c, 1, l1, fblock % ppb);
 	}
 	fblock -= ppb * ppb;
 
 	// Triple indirection: 10 more lines to never think about file size again
 	// (at 1KB blocks this reaches ~16GB; at 4KB, ~4TB).
-	uint32_t l1 = ext2_indirect_entry(fs, e, ino->i_block[EXT2_TIND_BLOCK],
-	                                  fblock / (ppb * ppb));
-	uint32_t l2 = ext2_indirect_entry(fs, e, l1, (fblock / ppb) % ppb);
-	return ext2_indirect_entry(fs, e, l2, fblock % ppb);
+	uint32_t l1 = ext2_indirect_entry_at(fs, e, c, 0,
+	                                     ino->i_block[EXT2_TIND_BLOCK],
+	                                     fblock / (ppb * ppb));
+	uint32_t l2 = ext2_indirect_entry_at(fs, e, c, 1, l1, (fblock / ppb) % ppb);
+	return ext2_indirect_entry_at(fs, e, c, 2, l2, fblock % ppb);
+}
+
+uint32_t ext2_bmap(vfs_filesystem_t *fs, ext2_fs_t *e,
+                   const ext2_inode_t *ino, uint32_t fblock)
+{
+	return ext2_bmap_cached(fs, e, ino, fblock, NULL);
 }
 
 // ── Path resolution ─────────────────────────────────────────────────────────
@@ -404,6 +486,14 @@ static int ext2_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 	if (scratch == NULL)
 		return -1;
 
+	// THE HOT LOOP'S CURSOR (ext2_internal.h has the measurement). Allocated
+	// ONCE per read call, not once per block-map lookup — which is the whole
+	// point: a 1MB read is a thousand blocks, and this turns ~2,000
+	// allocate-read-free round trips into three allocations and a handful of
+	// pointer-block reads.
+	ext2_bmap_cache_t bmc;
+	ext2_bmap_cache_init(&bmc);   // buffers appear only if the walk needs them
+
 	size_t done = 0;
 	while (done < size)
 	{
@@ -413,7 +503,7 @@ static int ext2_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 		if (chunk > size - done)
 			chunk = size - done;
 
-		uint32_t disk_block = ext2_bmap(fs, e, &h->inode, fblock);
+		uint32_t disk_block = ext2_bmap_cached(fs, e, &h->inode, fblock, &bmc);
 		if (disk_block == 0)
 		{
 			// A hole: unwritten space inside the file's extent reads as
@@ -424,6 +514,7 @@ static int ext2_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 		{
 			if (ext2_read_fs_block(fs, e, disk_block, scratch) != 0)
 			{
+				ext2_bmap_cache_free(&bmc);
 				kfree(scratch);
 				return done ? (int)done : -1;
 			}
@@ -432,6 +523,7 @@ static int ext2_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 		done += chunk;
 		h->pos += chunk;
 	}
+	ext2_bmap_cache_free(&bmc);
 	kfree(scratch);
 	return (int)done;
 }

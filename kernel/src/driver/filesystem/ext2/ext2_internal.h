@@ -135,6 +135,58 @@ typedef struct {
 	uint32_t blockbuf_index;      // which file-block blockbuf holds (~0 = none)
 } ext2_handle_t;
 
+// ── The block-map cursor (2026-08-20, the cp-to-/dev/null measurement) ──────
+//
+// ext2_bmap re-walks the indirect chain from scratch for EVERY file block,
+// and each level of that walk used to kmalloc a block, read it, and kfree it.
+// For sequential reading that is pure waste twice over, and it was measured
+// rather than guessed: `cp /pattern2.bin /dev/null` on a 24MB file (24,576
+// blocks of 1KB) issued 73,848 block-cache requests — a 3.00x READ
+// AMPLIFICATION — and ~49,000 kmalloc/kfree pairs, each one a full linear
+// scan of kMemoryStatus under the interrupts-off allocator spinlock. With the
+// cache 100% warm and the disk untouched (zero misses) it still ran at
+// 7.5 MiB/s: 129us per kilobyte, none of it the disk's fault.
+//
+// The waste is that consecutive file blocks share their pointer blocks — 256
+// of them at 1KB blocks — so the walk re-reads the same indirect block 255
+// times out of 256. This cursor holds one scratch buffer PER LEVEL and
+// remembers which fs block each currently holds.
+//
+// ONE SLOT PER LEVEL, not one slot: a double-indirect walk touches the DIND
+// block and then the level-2 block it points at, so a single shared slot
+// would have the two evicting each other on every single lookup and hit
+// exactly never. That mistake is the whole reason this is an array.
+//
+// Block 0 is the "empty" sentinel: ext2 never uses block 0 as an indirect
+// pointer (a zero pointer IS the definition of a hole), so it can never
+// collide with a real cached block.
+//
+// LIFETIME AND STALENESS: a cursor is scoped to ONE read call and freed at
+// its end, deliberately. The read paths are lock-free by doctrine, so a
+// writer changing this file's block map mid-read is already racing at the
+// data level; per-call scope keeps the window exactly as wide as one read()
+// and no wider, which is why the cursor does not live in ext2_handle_t.
+#define EXT2_BMAP_LEVELS 3
+
+typedef struct
+{
+	uint8_t  *buf[EXT2_BMAP_LEVELS];    // one block-sized scratch per level
+	uint32_t  held[EXT2_BMAP_LEVELS];   // fs block in buf[i]; 0 = empty
+} ext2_bmap_cache_t;
+
+// Arm a cursor. Cannot fail and allocates nothing: each level's buffer is
+// born LAZILY, the first time the walk actually reaches that level. A read
+// that stays inside the 12 direct blocks therefore costs exactly what it did
+// before this cursor existed — which is the difference between making big
+// reads faster and making small ones pay for it.
+//
+// If that lazy allocation ever fails, the walk falls back to the old
+// allocate-per-lookup path for that level: short on memory means slow again,
+// never broken. Always pair with _free (kfree(NULL) panics in os64; _free
+// guards, so calling it on a cursor that never allocated is fine).
+void ext2_bmap_cache_init(ext2_bmap_cache_t *c);
+void ext2_bmap_cache_free(ext2_bmap_cache_t *c);
+
 // ── Shared read-side helpers (ext2.c) ───────────────────────────────────────
 // De-static'd for the write half; contracts unchanged — see their bodies.
 int      ext2_read_fs_block(vfs_filesystem_t *fs, ext2_fs_t *e,
@@ -143,6 +195,12 @@ int      ext2_read_inode(vfs_filesystem_t *fs, ext2_fs_t *e,
                          uint32_t ino, ext2_inode_t *out);
 uint32_t ext2_bmap(vfs_filesystem_t *fs, ext2_fs_t *e,
                    const ext2_inode_t *ino, uint32_t fblock);
+// The same walk, with a cursor. `c` may be NULL — that is exactly what
+// ext2_bmap passes, which is why every existing caller keeps its old
+// behavior to the byte.
+uint32_t ext2_bmap_cached(vfs_filesystem_t *fs, ext2_fs_t *e,
+                          const ext2_inode_t *ino, uint32_t fblock,
+                          ext2_bmap_cache_t *c);
 uint32_t ext2_dir_find(vfs_filesystem_t *fs, ext2_fs_t *e,
                        const ext2_inode_t *dir_ino,
                        const char *name, uint32_t len);
