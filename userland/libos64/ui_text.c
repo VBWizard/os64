@@ -22,9 +22,13 @@
 // read the same bytes off a serial line.
 //
 // A REAL Esc press is distinguishable by its scancode: the burst's ESC
-// carries the extended key's code, the Esc key carries 0x01. That one fact
-// is what lets a textfield have both an escape-sequence parser and a
-// working Cancel key.
+// carries the extended key's code, the Esc key carries its own. That one
+// fact is what lets a textfield have both an escape-sequence parser and a
+// working Cancel key. ONE KEY, TWO DIALECTS (the keyboard_ctrl_alt_del
+// precedent): the PS/2 driver stamps make-code 0x01, the xHCI HID driver
+// stamps usage 0x29 — a check that knows only one of them ships a Cancel
+// key that works in QEMU and dies on the P5 (found 2026-08-21, the same
+// day the Ctrl+Alt chord taught the same lesson one layer down).
 //
 // Parser state lives in the WIDGET (one byte), not in a static — two
 // focused widgets never decode concurrently, but statics in a library are
@@ -44,7 +48,17 @@ typedef enum
 #define SEQ_CSI    2     // saw ESC [
 #define SEQ_DIGIT  10    // 10 + d after ESC [ <d>
 
-#define SC_ESC_KEY 0x01  // the Esc KEY's scancode — the burst never uses it
+#define SC_ESC_PS2 0x01  // the Esc KEY's PS/2 make-code — the burst never uses it
+#define SC_ESC_HID 0x29  // the Esc KEY's HID usage (the P5's USB keyboard)
+
+// Public (ui.h): apps that answer Esc ahead of widget dispatch — scribe's
+// help page is customer one — need the same two-dialect answer, not a copy
+// of one dialect.
+bool os64_ui_key_is_esc(const os64_gui_event_t *ev)
+{
+	return ev->key.ascii == 0x1b &&
+	       (ev->key.scancode == SC_ESC_PS2 || ev->key.scancode == SC_ESC_HID);
+}
 
 static ui_key_t decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch)
 {
@@ -85,7 +99,7 @@ static ui_key_t decode_key(uint8_t *seq, const os64_gui_event_t *ev, char *ch)
 	}
 
 	if (a == 0x1b) {
-		if (ev->key.scancode == SC_ESC_KEY)
+		if (os64_ui_key_is_esc(ev))
 			return K_ESC;          // the actual key, not a burst
 		*seq = SEQ_ESC;
 		return K_NONE;

@@ -337,6 +337,14 @@ void os64_ui_textview_scroll_left(os64_ui_t *ui, os64_ui_textview_t *tv,
 // A line's width in VISUAL columns (tabs expanded to their 8-stop) — the
 // number a horizontal scrollbar's `total` is made of.
 int64_t os64_ui_text_vcols(const char *s, size_t len);
+// Is this key event the REAL Esc key (not the ESC byte that opens a VT100
+// burst)? The burst's ESC is stamped with the extended key's code; the Esc
+// key carries its own — which is a DIALECT: PS/2 make-code 0x01 or HID
+// usage 0x29, depending on which keyboard driver fed the compositor. Apps
+// answering Esc themselves (ahead of widget dispatch) must use this, not a
+// raw scancode compare — a check that knows one dialect works in QEMU and
+// dies on the P5 (2026-08-21, the chord-publish day's ring-3 echo).
+bool os64_ui_key_is_esc(const os64_gui_event_t *ev);
 // Place the caret (clamped), optionally keeping/starting a selection from
 // the current anchor, and scroll it into view. The search-jump primitive.
 void os64_ui_textview_goto(os64_ui_t *ui, os64_ui_textview_t *tv,
