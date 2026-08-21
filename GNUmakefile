@@ -376,7 +376,7 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURE
 	debugfs -w -f $(EXT2_STAGING)/debugfs_bins.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
 	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps)"
 
-$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt etc/husk.rc $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt etc/husk.rc limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -417,6 +417,33 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/par
 	# appears as /fat/husk.rc; on a FAT-root boot the same file is /husk.rc,
 	# which is why husk looks in both places.
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/husk.rc ::/husk.rc
+	# ── The HD-boot payload (2026-08-21) ─────────────────────────────────
+	# Kernel + boot modules + the HD-boot menu ride the FAT partition at
+	# /boot, so p5-refresh.sh's ordinary mirror makes the P5's lifeboat a
+	# complete boot volume — Limine installed on the machine's ESP (one-time
+	# setup in p5-refresh.sh's header) finds this conf and boots this
+	# kernel, and a running os64 can update BOTH through /fat. ISO and QEMU
+	# boots never see any of it: Limine prefers its own boot volume's conf
+	# (proven by decoy in both firmwares — see limine-hd.conf's header).
+	# ~4.3MB against the partition's ~54MB of headroom.
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/boot > /dev/null 2>&1
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/boot/limine > /dev/null 2>&1
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/EFI > /dev/null 2>&1
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/EFI/BOOT > /dev/null 2>&1
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/$(IMAGE_NAME) ::/boot/os64_kernel
+	$(foreach e,$(wildcard external/*),\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(e) ::/boot/$(notdir $(e));)
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) limine-hd.conf ::/boot/limine/limine.conf
+	# Limine's own EFI app rides too — the lifeboat is a complete BOOT
+	# VOLUME: one firmware NVRAM entry pointing here ("ESP" is a convention,
+	# not a law — UEFI boots an EFI app from any FAT partition an entry
+	# names) and Limine boots from this partition, finds the conf above ON
+	# its own volume (the only place Limine 8.7 looks — the cross-volume
+	# search the first design assumed does not exist; found by rehearsal,
+	# 2026-08-21), and loads the kernel beside it. The Windows ESP is never
+	# touched, and a running os64 can update kernel, menu, AND bootloader
+	# through /fat.
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) limine/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	@echo "  disk image rebuilt: $(words $(USERLAND_APPS)) apps ($(USERLAND_APPS))"
 
 # The data disk. NO PREREQUISITES, DELIBERATELY: this rule fires exactly once,

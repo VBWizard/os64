@@ -42,6 +42,58 @@
 #    ...and thereafter, after every new burn: same command. That's the
 #    whole refresh.
 #
+# ── HD BOOT, one-time (2026-08-21) — retire the thumb drive ─────────────────
+#
+# The mirror above already delivers a COMPLETE boot volume: since 2026-08-21
+# the FAT lifeboat carries /boot/os64_kernel, the font/pci modules, the
+# HD-boot menu at /boot/limine/limine.conf (limine-hd.conf in the repo), and
+# Limine's own EFI app at /EFI/BOOT/BOOTX64.EFI. Limine IS the bootloader —
+# no GRUB anywhere, and the Windows ESP is NEVER touched: UEFI boots an EFI
+# app from any FAT partition an NVRAM entry names ("ESP" is a convention,
+# not a law), and Limine 8.7 reads its conf from its own boot volume — which
+# is now the lifeboat. (Rehearsed end-to-end in QEMU/OVMF, including the
+# instructive failure: parking Limine on a conf-less ESP and hoping for a
+# cross-volume conf search earns "[config file not found]" — that search
+# does not exist. Everything on one volume is the design, not a shortcut.)
+#
+# 5. Retype the lifeboat as an EFI System Partition. This is the step that
+#    matters, and the 2026-08-21 install on the P5 proved every part of it
+#    the hard way:
+#      sudo sgdisk -t <lifeboat-#>:EF00 /dev/<internal-disk>
+#    Only the TYPE GUID changes — the PARTUUID the kernel mounts by, the
+#    GPT name, and the filesystem are untouched (so step 2's canonical GUID
+#    and this script's find_real_part still work, and Windows ignores the
+#    extra ESP entirely). The old typecode 0700 was fine for the OS and
+#    fatal for booting: the P5's AMI firmware VALIDATES NVRAM boot entries
+#    against partition type and silently DELETES, at every boot, any entry
+#    pointing at a non-ESP partition. Three perfectly-formed efibootmgr
+#    entries died that way before the pattern was clear.
+#
+# 6. Do NOT bother with efibootmgr at all — the same firmware that launders
+#    foreign entries AUTO-DISCOVERS \EFI\BOOT\BOOTX64.EFI on any ESP-typed
+#    partition and mints its own entry for it (label "UEFI OS"), which,
+#    being its own child, it never deletes. Make it the default in the
+#    firmware's OWN setup UI (F2/Del): Boot tab -> the nested
+#    "UEFI Hard Disk / NVME BBS Priorities" submenu (the top-level Boot
+#    Option list shows device CLASSES; the submenu picks each class's
+#    representative) -> put "UEFI OS" at #1, then the NVMe class itself at
+#    Boot Option #1. Settings made in the firmware's own UI are the one
+#    thing it respects. (The one-shot boot-menu key — F7-ish — lists
+#    "UEFI OS" too, for trying before committing.)
+#    CAUTION: if Windows uses BitLocker/device encryption (check with
+#    `manage-bde -status` in Windows), chainloading changes the measured
+#    boot path and Windows may ask for its recovery key once — have it
+#    handy before the first try, or boot Windows only via the firmware menu.
+#    (limine-hd.conf's /Windows entry chainloads bootmgfw.efi by the ESP's
+#    explicit PARTUUID — chainload_next walks DEVICES, not partitions, and
+#    could not see a Windows ESP on the same disk; learned live.)
+#
+# 7. Thereafter a kernel update needs no Linux and no stick at all: from a
+#    RUNNING os64, fetch the new kernel over the NIC onto /fat/boot/
+#    (os64get), reboot. The OS updates itself — kernel, menu, even the
+#    bootloader, all through /fat. This script remains the full-payload
+#    refresh (new apps, /bin, fixtures) and the recovery path.
+#
 # The Limine entry: "/Bosgame GUI" (desktop) and "/Bosgame Boot - no GUI"
 # (text) in limine.conf both boot the P5 from its own disk, skipping the
 # RAMDisk module load entirely. They use the canonical ROOT GUID above, so

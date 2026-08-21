@@ -193,6 +193,36 @@ void nvme_enable_features(uint8_t bus, uint8_t device, uint8_t function)
 	wait(25);
 }
 
+// Disable the controller and wait for CSTS.RDY to clear — and nothing more
+// (nvme_reset_controller below is the disable-AND-re-enable dance; this is
+// only its first half). Needed since 2026-08-21, the day os64 first booted
+// FROM its NVMe disk: UEFI firmware that loaded the bootloader and kernel
+// through this controller hands it over ENABLED, with the firmware's own
+// admin queues live. The admin queue registers (AQA/ASQ/ACQ) are writable
+// ONLY while CC.EN=0 (NVMe spec 3.1.5+) — program them into an enabled
+// controller and the writes are dropped, the re-enable resurrects the
+// firmware's stale queue addresses, and the first admin command answers
+// with status 0x2 (Invalid Field), which is exactly the panic the OVMF
+// rehearsal produced. Every pre-HD-boot path (SeaBIOS, or UEFI booting the
+// ISO through AHCI) handed the controller over disabled, which is why this
+// gap could hide for the driver's whole life.
+static void nvme_disable_controller(nvme_controller_t* controller) {
+    uint32_t currentDelay = 0;
+    uint32_t intervalDelay = controller->defaultTimeout / 20;
+
+    if (!(controller->registers->cc & 0x1) && !(controller->registers->csts & 0x1))
+        return;   // already disabled and settled — the pre-HD-boot normal
+
+    printd(DEBUG_NVME, "NVMe: controller handed over ENABLED (firmware booted from it) — disabling before admin queue setup\n");
+    controller->registers->cc &= ~(0x1);
+    while ((controller->registers->csts & 0x1) && currentDelay < controller->defaultTimeout) {
+        wait(intervalDelay);
+        currentDelay += intervalDelay;
+    }
+    if (currentDelay >= controller->defaultTimeout)
+        panic("NVMe: CSTS RDY did not clear on pre-init disable\n");
+}
+
 bool nvme_reset_controller(nvme_controller_t* controller) {
 uint32_t currentDelay = 0;
 uint32_t intervalDelay = controller->defaultTimeout / 20;
@@ -491,8 +521,14 @@ static void nvme_io_unlock(nvme_controller_t* controller, uint64_t flags)
 
 void nvme_init_admin_queues(nvme_controller_t* controller)
 {
-    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initializing all queues to the max (0x%04x) entries (0x%016lx bytes for submission queues)\n", 
+    printd(DEBUG_NVME | DEBUG_DETAILED, "NVME: Initializing all queues to the max (0x%04x) entries (0x%016lx bytes for submission queues)\n",
            controller->maxQueueEntries, controller->maxQueueEntries * sizeof(nvme_submission_queue_entry_t));
+
+    // The registers this function programs (AQA/ASQ/ACQ) are writable only
+    // while CC.EN=0 — a firmware that booted from this controller leaves it
+    // enabled, so make the state true before writing (see
+    // nvme_disable_controller's comment for the whole story).
+    nvme_disable_controller(controller);
 
 printf("  (1 ");
     // Set AQA (Admin Queue Attributes) register
