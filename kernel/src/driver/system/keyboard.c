@@ -263,6 +263,14 @@ static void keyboard_publish_modifiers(void) {
     s_liveModifiers = s_modifiers;
 }
 
+// The USB half of the publication (declared in keyboard.h — see the comment
+// there for why the HID driver must publish at its own change point).
+// Deliberately trivial: the HID driver owns its modifier byte entirely; this
+// is only the hand-off to the shared snapshot.
+void keyboard_publish_hid_modifiers(uint8_t modifiers) {
+    s_liveModifiers = modifiers;
+}
+
 void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, bool pressed) {
     // The USB half. The xHCI HID path carries its own modifier byte and never
     // touches this file's s_modifiers, so the choke is the only place that

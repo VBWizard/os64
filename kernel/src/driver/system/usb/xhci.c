@@ -422,6 +422,7 @@ static void hid_deliver_usage(xhci_hid_t *kbd, uint8_t usage)
 {
 	if (usage == 0x39) {                      // Caps Lock: a latch, not a key
 		kbd->mods ^= KEYBOARD_MOD_CAPS;
+		keyboard_publish_hid_modifiers(kbd->mods);   // the latch is modifier state too
 		return;
 	}
 	// The three-finger salute, HID spelling: Delete Forward (0x4C) or keypad
@@ -526,6 +527,13 @@ static void hid_deliver_usage(xhci_hid_t *kbd, uint8_t usage)
 
 static void hid_process_keyboard_report(xhci_hid_t *kbd, const uint8_t *rep)
 {
+	// The raw report, before any interpretation — the line that tells you
+	// whether a modifier the guest never acted on was the device's fault or
+	// ours (it earned its keep on day one: see the chord-publish comment
+	// below).
+	printd(DEBUG_USB, "xhci: kbd report m=0x%02x keys %02x %02x %02x %02x %02x %02x\n",
+	       rep[0], rep[2], rep[3], rep[4], rep[5], rep[6], rep[7]);
+
 	// Phantom state: every slot 0x01 = rollover error, report is garbage.
 	if (rep[2] == 0x01 && rep[3] == 0x01 && rep[4] == 0x01)
 		return;
@@ -537,6 +545,12 @@ static void hid_process_keyboard_report(xhci_hid_t *kbd, const uint8_t *rep)
 	if (m & 0x22) mods |= KEYBOARD_MOD_SHIFT;
 	if (m & 0x44) mods |= KEYBOARD_MOD_ALT;
 	kbd->mods = mods;
+	// Publish to the shared snapshot NOW, not at the next keyboard_deliver_event.
+	// A modifier-only report (Ctrl+Alt held, no key usages) delivers no event at
+	// all, and the mouse path samples keyboard_current_modifiers() to decide
+	// whether the window-management chord is held — without this line the chord
+	// was invisible on USB keyboards (worked in QEMU's PS/2, dead on the P5).
+	keyboard_publish_hid_modifiers(mods);
 
 	// Edge detection: a usage present now but absent from the previous
 	// report is a key-DOWN — the only edge we emit. NOTE, corrected
