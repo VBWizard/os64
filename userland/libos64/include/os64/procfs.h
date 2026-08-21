@@ -33,6 +33,7 @@ typedef struct {
     uint32_t core;
     uint32_t threads;
     os64_proc_state_t state;
+    uint64_t heap;
     bool kernel;
     bool foreground;
     bool shell;

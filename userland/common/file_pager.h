@@ -11,7 +11,7 @@ typedef enum {
 
 typedef struct {
     const char *program;
-    const char *path;
+    const char *path;             // NULL = read the document from stdin
     uint32_t page_lines;
     file_pager_mode_t mode;
 } file_pager_options_t;
@@ -24,9 +24,9 @@ typedef enum {
     FILE_PAGER_RESULT_PREVIOUS
 } file_pager_result_t;
 
-// Page one explicitly named regular file while stdin remains the keyboard.
-// Standard-input documents arrive with controlling TTY support later. The
-// result tells the command-line veneer whether to change files or quit all.
+// Page one named file, or stdin when path is NULL.  Keys always come from a
+// separately minted controlling-terminal handle, so a pipe can remain the
+// document on stdin without competing with navigation input.
 file_pager_result_t file_pager_run(const file_pager_options_t *options);
 
 // Use the controlling terminal's live height, reserving its bottom row for

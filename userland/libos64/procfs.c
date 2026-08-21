@@ -98,12 +98,50 @@ static int read_task_status(uint64_t pid, os64_proc_info_t *info)
     return result < 0 ? -1 : 0;
 }
 
+static uint64_t get_heap_value(uint64_t pid)
+{
+    // Need to retrieve the mapped and virgin values, then
+    // subtract virgin from mapped, and return that value
+
+    char path[PROC_PATH_MAX];
+    char line[PROC_LINE_MAX];
+    int64_t result;
+    uint64_t mappedValue = 0, virginValue = 0;
+
+    os64_snprintf(path, sizeof(path), "/proc/%lu/heap", pid);
+    int32_t h = (int32_t)os64_open(path, NULL);
+    if (h < 0)
+        return 0;   // task died mid-scan, or no such file: "no heap to report"
+                    // — never a sentinel, this function's return type is a size
+
+    while ((result = os64_readline(h, line, sizeof(line))) == 1)
+    {
+        char *value = split_value(line);
+        if (value == NULL)
+            continue;
+        if (os64_streq(line, "mapped"))
+            mappedValue = os64_atou(value);
+        else if (os64_streq(line, "virgin"))
+            virginValue = os64_atou(value);
+        if (mappedValue > 0 && virginValue > 0)
+            break;
+    }
+
+    // Close BEFORE returning: this runs once per task per refresh, and with
+    // TASK_MAX_HANDLES at 16 a leaked handle here starves top's entire scan
+    // (read_task_status's open fails → every row vanishes) within one screen.
+    os64_close(h);
+
+    return mappedValue - virginValue;
+}
+
 int32_t os64_proc_read(uint64_t pid, os64_proc_info_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
     if (read_task_status(pid, out) < 0)
         return -1;
     read_command(pid, out);
+    out->heap = get_heap_value(pid);
     return 0;
 }
 

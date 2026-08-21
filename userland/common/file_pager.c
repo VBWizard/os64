@@ -6,6 +6,7 @@
 #define PAGER_SEARCH_MAX 256
 
 static char read_buffer[PAGER_READ_SIZE];
+static int32_t key_handle = OS64_STDIN;
 
 uint32_t file_pager_default_lines(uint32_t fallback)
 {
@@ -76,7 +77,7 @@ static void show_help(const file_pager_options_t *options)
               "  q                     quit\n\n"
               "Press any key to return.");
     char ignored;
-    os64_read(OS64_STDIN, &ignored, 1);
+    os64_read(key_handle, &ignored, 1);
 }
 
 // Decode the terminal sequences emitted by both keyboard drivers. Return the
@@ -84,16 +85,16 @@ static void show_help(const file_pager_options_t *options)
 static char read_key(void)
 {
     char c;
-    if (os64_read(OS64_STDIN, &c, 1) <= 0)
+    if (os64_read(key_handle, &c, 1) <= 0)
         return 'q';
     if (c != 27)
         return c;
 
     char bracket;
-    if (os64_read(OS64_STDIN, &bracket, 1) != 1 || bracket != '[')
+    if (os64_read(key_handle, &bracket, 1) != 1 || bracket != '[')
         return 0;
     char final;
-    if (os64_read(OS64_STDIN, &final, 1) != 1)
+    if (os64_read(key_handle, &final, 1) != 1)
         return 0;
     if (final == 'A') return 'k';
     if (final == 'B') return 'j';
@@ -102,7 +103,7 @@ static char read_key(void)
     if (final == '5' || final == '6')
     {
         char tilde;
-        if (os64_read(OS64_STDIN, &tilde, 1) == 1 && tilde == '~')
+        if (os64_read(key_handle, &tilde, 1) == 1 && tilde == '~')
             return final == '5' ? 'b' : ' ';
     }
     return 0;
@@ -154,31 +155,62 @@ static char prompt(const file_pager_options_t *options, uint64_t line,
     }
 }
 
-static int load_file(int32_t handle, uint64_t size, char **data_out)
+static int load_document(int32_t handle, uint64_t expected_size,
+                         char **data_out, uint64_t *size_out)
 {
-    if (size >= SIZE_MAX)
+    if (expected_size >= SIZE_MAX)
         return -1;
-    char *data = os64_map((size_t)size + 1);
+    size_t capacity = expected_size != 0
+        ? (size_t)expected_size + 1 : PAGER_READ_SIZE;
+    char *data = os64_malloc(capacity);
     if (data == NULL)
         return -1;
 
     uint64_t used = 0;
-    while (used < size)
+    for (;;)
     {
-        size_t request = size - used > sizeof(read_buffer)
-            ? sizeof(read_buffer) : (size_t)(size - used);
-        int64_t n = os64_read(handle, read_buffer, request);
-        if (n <= 0)
+        int64_t n = os64_read(handle, read_buffer, sizeof(read_buffer));
+        if (n < 0)
         {
-            os64_unmap(data);
+            os64_free(data);
             return -1;
+        }
+        if (n == 0)
+            break;
+        if ((uint64_t)n > SIZE_MAX - (size_t)used - 1)
+        {
+            os64_free(data);
+            return -1;
+        }
+        size_t needed = (size_t)used + (size_t)n + 1;
+        if (needed > capacity)
+        {
+            size_t grown = capacity;
+            while (grown < needed)
+            {
+                if (grown > SIZE_MAX / 2)
+                {
+                    grown = needed;
+                    break;
+                }
+                grown *= 2;
+            }
+            char *replacement = os64_realloc(data, grown);
+            if (replacement == NULL)
+            {
+                os64_free(data);
+                return -1;
+            }
+            data = replacement;
+            capacity = grown;
         }
         for (int64_t i = 0; i < n; i++)
             data[used + (uint64_t)i] = read_buffer[i];
         used += (uint64_t)n;
     }
-    data[size] = '\0';
+    data[used] = '\0';
     *data_out = data;
+    *size_out = used;
     return 0;
 }
 
@@ -213,7 +245,7 @@ static int read_search_pattern(char direction, char *pattern, size_t capacity)
     for (;;)
     {
         char c;
-        if (os64_read(OS64_STDIN, &c, 1) <= 0)
+        if (os64_read(key_handle, &c, 1) <= 0)
             return -1;
         if (c == '\n' || c == '\r')
         {
@@ -303,7 +335,7 @@ static void search_failed(const char *pattern)
 {
     os64_printf("\rPattern not found: %s", pattern);
     char ignored;
-    os64_read(OS64_STDIN, &ignored, 1);
+    os64_read(key_handle, &ignored, 1);
     erase_prompt();
 }
 
@@ -418,41 +450,51 @@ static int paint(const char *data, uint64_t size, uint64_t first,
     return (int)lines;
 }
 
-file_pager_result_t file_pager_run(const file_pager_options_t *options)
+static file_pager_result_t run_document(const file_pager_options_t *options)
 {
+    const char *source_name = options->path != NULL
+        ? options->path : "standard input";
     os64_dirent_t entry = {0};
-    if (os64_stat(options->path, &entry) < 0)
+    int32_t handle = OS64_STDIN;
+    uint64_t expected_size = 0;
+    if (options->path != NULL && os64_stat(options->path, &entry) < 0)
     {
         os64_hprintf(OS64_STDERR, "%s: cannot access %s\n",
                      options->program, options->path);
         return FILE_PAGER_RESULT_ERROR;
     }
-    if (entry.flags & OS64_DE_DIR)
+    if (options->path != NULL && (entry.flags & OS64_DE_DIR))
     {
         os64_hprintf(OS64_STDERR, "%s: %s is a directory\n",
                      options->program, options->path);
         return FILE_PAGER_RESULT_ERROR;
     }
 
-    int32_t handle = (int32_t)os64_open(options->path, "r");
-    if (handle < 0)
+    if (options->path != NULL)
     {
-        os64_hprintf(OS64_STDERR, "%s: cannot open %s\n",
-                     options->program, options->path);
-        return FILE_PAGER_RESULT_ERROR;
+        handle = (int32_t)os64_open(options->path, "r");
+        if (handle < 0)
+        {
+            os64_hprintf(OS64_STDERR, "%s: cannot open %s\n",
+                         options->program, options->path);
+            return FILE_PAGER_RESULT_ERROR;
+        }
+        expected_size = entry.size;
     }
 
     char *data = NULL;
-    int loaded = load_file(handle, entry.size, &data);
-    os64_close(handle);
+    uint64_t document_size = 0;
+    int loaded = load_document(handle, expected_size, &data, &document_size);
+    if (options->path != NULL)
+        os64_close(handle);
     if (loaded < 0)
     {
         os64_hprintf(OS64_STDERR, "%s: error reading %s\n",
-                     options->program, options->path);
+                     options->program, source_name);
         return FILE_PAGER_RESULT_ERROR;
     }
 
-    uint64_t total = count_lines(data, entry.size);
+    uint64_t total = count_lines(data, document_size);
     os64_tty_info_t tty = {0};
     uint32_t cols = 80;
     if (os64_tty_read(&tty) == 0 && tty.cols != 0)
@@ -467,14 +509,14 @@ file_pager_result_t file_pager_run(const file_pager_options_t *options)
 
     while (first < total)
     {
-        int shown = paint(data, entry.size, first, options->page_lines, cols,
+        int shown = paint(data, document_size, first, options->page_lines, cols,
                           options->mode == FILE_PAGER_LESS || force_clear,
                           options->mode == FILE_PAGER_LESS, match_line,
                           viewport_offset);
         force_clear = false;
         if (shown < 0)
         {
-            os64_unmap(data);
+            os64_free(data);
             return FILE_PAGER_RESULT_ERROR;
         }
         bool at_end = first + (uint64_t)shown >= total;
@@ -486,17 +528,17 @@ file_pager_result_t file_pager_run(const file_pager_options_t *options)
                           match_line);
         if (key == 'q' || key == 'Q')
         {
-            os64_unmap(data);
+            os64_free(data);
             return FILE_PAGER_RESULT_QUIT;
         }
         if (key == ']')
         {
-            os64_unmap(data);
+            os64_free(data);
             return FILE_PAGER_RESULT_NEXT;
         }
         if (key == '[')
         {
-            os64_unmap(data);
+            os64_free(data);
             return FILE_PAGER_RESULT_PREVIOUS;
         }
         if (key == 'h' || key == 'H')
@@ -527,16 +569,16 @@ file_pager_result_t file_pager_run(const file_pager_options_t *options)
             uint64_t start;
             if (key == '/' || key == '?')
                 start = direction
-                    ? offset_for_line(data, entry.size, first)
-                    : offset_for_line(data, entry.size,
+                    ? offset_for_line(data, document_size, first)
+                    : offset_for_line(data, document_size,
                                       first + (uint64_t)shown);
             else if (direction)
-                start = match_offset < entry.size ? match_offset + 1 : entry.size;
+                start = match_offset < document_size ? match_offset + 1 : document_size;
             else
                 start = match_offset;
 
             uint64_t found;
-            if (search_data(data, entry.size, pattern, direction, start, &found))
+            if (search_data(data, document_size, pattern, direction, start, &found))
             {
                 uint64_t found_line;
                 if (match_offset == UINT64_MAX)
@@ -549,7 +591,7 @@ file_pager_result_t file_pager_run(const file_pager_options_t *options)
                         newlines_between(data, found, match_offset);
                 match_offset = found;
                 match_line = found_line;
-                first = context_first_line(data, entry.size, match_offset,
+                first = context_first_line(data, document_size, match_offset,
                                            match_line, cols,
                                            options->page_lines,
                                            &viewport_offset);
@@ -586,7 +628,25 @@ file_pager_result_t file_pager_run(const file_pager_options_t *options)
         }
     }
 
-    os64_unmap(data);
+    os64_free(data);
     return options->mode == FILE_PAGER_MORE
         ? FILE_PAGER_RESULT_NEXT : FILE_PAGER_RESULT_DONE;
+}
+
+file_pager_result_t file_pager_run(const file_pager_options_t *options)
+{
+    int64_t tty = os64_tty_handle();
+    if (tty < 0)
+    {
+        os64_hprintf(OS64_STDERR,
+                     "%s: cannot open controlling terminal for keys\n",
+                     options->program);
+        return FILE_PAGER_RESULT_ERROR;
+    }
+
+    key_handle = (int32_t)tty;
+    file_pager_result_t result = run_document(options);
+    os64_close(key_handle);
+    key_handle = OS64_STDIN;
+    return result;
 }
