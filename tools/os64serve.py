@@ -3,10 +3,14 @@ r"""os64serve.py - the other end of os64get. Run this on the build PC.
 
 It is a VALET, not a daemon: you start it when you want to refresh the P5
 and you stop it with Ctrl-C when you are done. It has no config file, no
-install step, no service registration, and it serves exactly one directory
-that you name on the command line.
+install step, no service registration, and it serves exactly the
+directories you name on the command line — one or several, searched in the
+order given, first hit wins (grown from one on 2026-08-21, the day the
+KERNEL started traveling this way: userland/bin carries the apps,
+kernel/bin carries os64_kernel, and a kernel refresh should not require
+copying binaries between them).
 
-    python3 os64serve.py [directory] [--port 6464]
+    python3 os64serve.py [directory ...] [--port 6464]
 
 Run it on the WINDOWS side of the build PC, not inside WSL2. That is not a
 style preference: WSL2 lives behind a NAT of its own, so a listener there
@@ -20,8 +24,9 @@ tree in place (no copy, no mirror, no staging directory). From a WSL2
 shell, invoking the Windows interpreter does both at once:
 
     cd /mnt/c/temp     # a Windows-visible cwd; python.exe cannot use a Linux one
-    python3.exe '\\wsl$\<distro>\home\<you>\src\os64-8125\tools\os64serve.py' \
-                '\\wsl$\<distro>\home\<you>\src\os64-8125\userland\bin'
+    python3.exe '\\wsl$\<distro>\home\<you>\src\os64\tools\os64serve.py' \
+                '\\wsl$\<distro>\home\<you>\src\os64\userland\bin' \
+                '\\wsl$\<distro>\home\<you>\src\os64\kernel\bin'
 
 `wsl -l` names the distro. Verified 2026-08-16 serving userland/bin to the
 P5 with zero files copied anywhere.
@@ -49,7 +54,7 @@ neither end has to be told which flavour the other meant.
 SECURITY, stated honestly: there is none. No authentication, no encryption,
 and the only access control is the one rule below - the requested name must
 be a single path component with no separators and no "..", so the serving
-directory is the entire namespace. That is adequate for an isolated
+directories are the entire namespace. That is adequate for an isolated
 two-node build segment with no gateway, which is what this was designed
 for, and it is NOT adequate for anything else. Do not run it on your home
 LAN and then forget it is running.
@@ -123,7 +128,19 @@ def read_served_file(directory, name):
             os.close(fd)
 
 
-def serve_one(conn, addr, directory):
+def read_served_file_multi(directories, name):
+    """The name is looked up in each directory in command-line order; the
+    first that has it wins. Order-as-priority instead of a collision error,
+    because the two real lots (userland/bin, kernel/bin) share no names
+    today — and if they ever do, the operator's ordering IS the decision."""
+    for directory in directories:
+        data = read_served_file(directory, name)
+        if data is not None:
+            return data
+    return None
+
+
+def serve_one(conn, addr, directories):
     conn.settimeout(30)
     try:
         # Read the request line one byte at a time. A stream has no message
@@ -153,7 +170,7 @@ def serve_one(conn, addr, directory):
             conn.sendall(b"NO name must be a single path component\n")
             return
 
-        data = read_served_file(directory, name)
+        data = read_served_file_multi(directories, name)
         if data is None:
             print(f"  {addr[0]}: no such file or refused file: {name}")
             conn.sendall(b"NO no such file\n")
@@ -181,17 +198,19 @@ def serve_one(conn, addr, directory):
 
 def main():
     ap = argparse.ArgumentParser(description="Serve files to os64get.")
-    ap.add_argument("directory", nargs="?", default=".",
-                    help="directory to serve (default: the current one)")
+    ap.add_argument("directories", nargs="*", default=["."],
+                    help="directories to serve, searched in order, first hit "
+                         "wins (default: the current one)")
     ap.add_argument("--port", type=int, default=6464)
     ap.add_argument("--bind", default="0.0.0.0",
                     help="address to listen on (default: everything)")
     args = ap.parse_args()
 
-    directory = os.path.realpath(args.directory)
-    if not os.path.isdir(directory):
-        print(f"os64serve: {directory} is not a directory", file=sys.stderr)
-        return 2
+    directories = [os.path.realpath(d) for d in (args.directories or ["."])]
+    for directory in directories:
+        if not os.path.isdir(directory):
+            print(f"os64serve: {directory} is not a directory", file=sys.stderr)
+            return 2
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     # So a Ctrl-C and an immediate restart does not hit TIME_WAIT and refuse
@@ -200,12 +219,14 @@ def main():
     s.bind((args.bind, args.port))
     s.listen(4)
 
-    print(f"os64serve: serving {directory} on {args.bind}:{args.port}")
+    print(f"os64serve: serving on {args.bind}:{args.port}, first hit wins:")
+    for directory in directories:
+        print(f"           {directory}")
     print("           Ctrl-C to stop.  (Windows may ask about the firewall - say yes.)")
     try:
         while True:
             conn, addr = s.accept()
-            serve_one(conn, addr, directory)
+            serve_one(conn, addr, directories)
     except KeyboardInterrupt:
         print("\nos64serve: stopped.")
     finally:

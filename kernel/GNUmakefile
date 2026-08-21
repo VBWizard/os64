@@ -166,9 +166,19 @@ cc-runtime-x86_64/cc-runtime.a: cc-runtime/*
 		CPPFLAGS='-isystem ../freestnd-c-hdrs-0bsd -DCC_RUNTIME_NO_FLOAT'
 
 # Link rules for the final executable.
+#
+# The build stamp is generated AT LINK TIME, not compiled into kernel.c —
+# __DATE__ in a source file only refreshes when THAT file recompiles, so a
+# stamp there would lie on every build that didn't touch it. A one-line
+# buildstamp.c regenerated on every link is the honest version: the banner's
+# "built <stamp>" always names THIS binary. Born 2026-08-21, the night the
+# first kernel traveled to the P5 over the wire and needed to prove on the
+# glass that the transfer took.
 bin/$(OUTPUT): GNUmakefile linker.ld $(OBJ) cc-runtime-x86_64/cc-runtime.a
 	@mkdir -p "$$(dirname $@)"
-	$(LD) $(OBJ) cc-runtime-x86_64/cc-runtime.a $(LDFLAGS) -o $@
+	@printf 'const char kBuildStamp[] = "%s";\n' "$$(date -u '+%Y-%m-%d %H:%M:%S')" > obj/buildstamp.c
+	@$(CC) $(CFLAGS) -c obj/buildstamp.c -o obj/buildstamp.c.o
+	$(LD) $(OBJ) obj/buildstamp.c.o cc-runtime-x86_64/cc-runtime.a $(LDFLAGS) -o $@
 # Include header dependencies.
 -include $(HEADER_DEPS)
 

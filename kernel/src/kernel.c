@@ -60,6 +60,10 @@
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
+extern const char kBuildStamp[];   // minted at LINK time (kernel/GNUmakefile's
+                                   // buildstamp.c) — names THIS binary, so the
+                                   // banner proves which kernel actually booted
+                                   // (the net-delivered-kernel receipt)
 extern bool kEnableAHCI;
 extern bool kEnableNVME;
 extern bool kEnableRamdisk;
@@ -912,8 +916,12 @@ void kernel_main()
 	kKernelPML4v = kHHDMOffset + kKernelPML4;
 
  	init_video(framebuffer_request.response->framebuffers[0], limine_module_response);
-	printd(DEBUG_BOOT, "***** OS64 - system booting at %s *****\n", startTime);
-	printf(	"***** OS64 - system booting at %s *****\n", startTime);
+	// The build stamp rides the banner so the FIRST line on the glass names
+	// which kernel this is — the receipt for a kernel that arrived over the
+	// wire (os64get -> /fat/boot -> reboot), and the instant answer to "did
+	// my new build actually boot?" ever after.
+	printd(DEBUG_BOOT, "***** OS64 (built %s) - system booting at %s *****\n", kBuildStamp, startTime);
+	printf(	"***** OS64 (built %s) - system booting at %s *****\n", kBuildStamp, startTime);
 	uint64_t high, low;
 	parse_debug_level(kDebugLevel, &high, &low);
 	// Say the verdict on the GLASS. On a machine with no UART this is the only
