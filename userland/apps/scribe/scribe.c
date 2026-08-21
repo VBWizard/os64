@@ -62,9 +62,84 @@ typedef struct
 
     field_mode_t mode;
     bool running;
+
+    // The help document (Ctrl+G): a READ-ONLY buffer swapped into the same
+    // textview — the format seam's first second tenant, arrived early: a
+    // vtable with NULL editing ops makes the editor a viewer, and the help
+    // page is the proof the log viewer will stand on.
+    bool help_active;
+    size_t  saved_top, saved_cur_line, saved_cur_col;
+    int64_t saved_left, saved_max_vcols;
+    bool    saved_sel;
+    size_t  saved_sel_line, saved_sel_col;
 } scribe_t;
 
 static scribe_t g;
+
+// ── the help document ───────────────────────────────────────────────────────
+// Chris's commissioning order, quoted: "it has to have all of the normal
+// stuff, *including credits to the author*." Sir, yes sir.
+
+static const char *kHelpLines[] = {
+    "scribe - the os64 text editor",
+    "",
+    "The screen is the document (Bravo, Xerox PARC, 1974).",
+    "Click to place the caret. Type. What you see is the file.",
+    "",
+    "KEYS",
+    "  arrows, Home, End, PgUp, PgDn   move (Shift extends the selection)",
+    "  click / drag                    place the caret / select",
+    "  Backspace, Delete               erase (a selection, if one is lit)",
+    "  Enter                           split the line",
+    "  Ctrl+S                          save",
+    "  Ctrl+F                          find (Enter = next hit, wraps)",
+    "  Ctrl+O                          open another file",
+    "  Ctrl+G                          this page (Esc or ^G returns)",
+    "  Ctrl+Q                          quit",
+    "",
+    "THE ENTRY FIELD",
+    "  Open, Save As, and find share one field below the buttons; the",
+    "  label names what it currently means. Enter acts, Esc cancels.",
+    "",
+    "NOTES",
+    "  No word wrap yet - long lines scroll horizontally (the bar below).",
+    "  A * after the filename means unsaved changes.",
+    "  A file larger than memory is refused, with both numbers.",
+    "",
+    "CREDITS",
+    "  scribe was designed and written by Claude Fable 5, who grew the",
+    "  toolkit it stands on - textview, scrollbar, textfield - so that",
+    "  the NEXT app costs less than this one did.",
+    "  Built for Chris. Built for os64: our OS.",
+    "",
+    "  Lineage: ed begat quill; Bravo begat scribe.",
+};
+#define HELP_LINE_COUNT (sizeof(kHelpLines) / sizeof(kHelpLines[0]))
+
+static size_t help_line_count(void *user)
+{
+    (void)user;
+    return HELP_LINE_COUNT;
+}
+
+static const char *help_line(void *user, size_t idx, size_t *len)
+{
+    (void)user;
+    if (idx >= HELP_LINE_COUNT) {
+        *len = 0;
+        return "";
+    }
+    *len = os64_strlen(kHelpLines[idx]);
+    return kHelpLines[idx];
+}
+
+// Editing ops all NULL: the textview refuses edits and becomes a viewer —
+// no special case anywhere, which is the entire point of the vtable.
+static const os64_ui_textbuf_t kHelpBuf = {
+    .user = NULL,
+    .line_count = help_line_count,
+    .line = help_line,
+};
 
 // ── status line ─────────────────────────────────────────────────────────────
 
@@ -79,7 +154,10 @@ static void status_refresh(void)
     // ASCII dash on purpose: these strings render through the 8x16 PSF face,
     // where a UTF-8 em-dash is three glyphs of mojibake (the FILE's bytes may
     // be anything — that's honest; scribe's own chrome must not be).
-    os64_snprintf(g.status_text, sizeof(g.status_text), "%s%s - %lu lines",
+    // The ^G hint lives here permanently — the startup hint vanished with
+    // the first file load and took discoverability with it (his find).
+    os64_snprintf(g.status_text, sizeof(g.status_text),
+                  "%s%s - %lu lines  (^G help)",
                   g.path[0] ? g.path : "(unnamed)",
                   g.buf.dirty ? " *" : "",
                   (unsigned long)g.buf.count);
@@ -150,8 +228,10 @@ static void sync_scrollbar(void)
 {
     int32_t rows = os64_ui_textview_rows(&g.view, &g.ui.theme);
     int32_t cols = os64_ui_textview_cols(&g.view, &g.ui.theme);
-    os64_ui_scrollbar_set(&g.ui, &g.scroll, (int64_t)g.buf.count,
-                          rows, (int64_t)g.view.top);
+    // Count through the view's OWN vtable, not g.buf directly — the help
+    // page swaps a different document in, and the bars must follow it.
+    int64_t count = (int64_t)g.view.buf->line_count(g.view.buf->user);
+    os64_ui_scrollbar_set(&g.ui, &g.scroll, count, rows, (int64_t)g.view.top);
     os64_ui_scrollbar_set(&g.ui, &g.hscroll, g.max_vcols, cols, g.view.left);
 }
 
@@ -201,8 +281,73 @@ static void hscrolled(os64_ui_scrollbar_t *sb, void *user)
 
 // ── the entry field's modes ─────────────────────────────────────────────────
 
+static void leave_mode(void);   // defined with its twin below; help_toggle
+                                // closes the field when the help page opens
+
+// Leave the help page, restoring the document's viewport and selection
+// exactly as they were — help is a detour, not a destination.
+static void help_leave(void)
+{
+    if (!g.help_active)
+        return;
+    g.help_active = false;
+    g.view.buf = &g.textbuf;
+    g.view.top = g.saved_top;
+    g.view.left = g.saved_left;
+    g.view.cur_line = g.saved_cur_line;
+    g.view.cur_col = g.saved_cur_col;
+    g.view.sel = g.saved_sel;
+    g.view.sel_line = g.saved_sel_line;
+    g.view.sel_col = g.saved_sel_col;
+    g.max_vcols = g.saved_max_vcols;
+    status_refresh();
+    sync_scrollbar();
+    os64_ui_mark_dirty(&g.ui, &g.view.w);
+}
+
+static void help_toggle(void)
+{
+    if (g.help_active) {
+        help_leave();
+        return;
+    }
+    // The entry field closes when help opens — a find executed against a
+    // document the eyes can't see (the view holds the help page) would jump
+    // the viewport somewhere invisible, and restoring on leave would then
+    // silently discard the jump. One document on stage at a time.
+    if (g.mode != MODE_NONE)
+        leave_mode();
+    g.saved_top = g.view.top;
+    g.saved_left = g.view.left;
+    g.saved_cur_line = g.view.cur_line;
+    g.saved_cur_col = g.view.cur_col;
+    g.saved_sel = g.view.sel;
+    g.saved_sel_line = g.view.sel_line;
+    g.saved_sel_col = g.view.sel_col;
+    g.saved_max_vcols = g.max_vcols;
+
+    g.help_active = true;
+    g.view.buf = &kHelpBuf;
+    g.view.top = 0;
+    g.view.left = 0;
+    g.view.cur_line = g.view.cur_col = 0;
+    g.view.sel = false;
+    // Measure the help page's own widest line for the horizontal bar.
+    g.max_vcols = 0;
+    for (size_t i = 0; i < HELP_LINE_COUNT; i++) {
+        int64_t v = os64_ui_text_vcols(kHelpLines[i],
+                                       os64_strlen(kHelpLines[i]));
+        if (v > g.max_vcols)
+            g.max_vcols = v;
+    }
+    status_show("help - Esc or ^G returns");
+    sync_scrollbar();
+    os64_ui_mark_dirty(&g.ui, &g.view.w);
+}
+
 static void enter_mode(field_mode_t m, const char *label, const char *prefill)
 {
+    help_leave();   // a file verb always means the DOCUMENT, never the help
     g.mode = m;
     g.mode_label.text = label;
     os64_ui_textfield_set(&g.ui, &g.field, prefill);
@@ -330,6 +475,7 @@ static void click_open(os64_ui_widget_t *w, void *user)
 static void click_save(os64_ui_widget_t *w, void *user)
 {
     (void)w; (void)user;
+    help_leave();   // Save means the document, wherever the eyes were
     if (g.path[0])
         do_save(g.path);
     else
@@ -349,10 +495,24 @@ static void click_saveas(os64_ui_widget_t *w, void *user)
 
 static bool app_shortcut(const os64_gui_event_t *ev)
 {
-    if (ev->type != OS64_GUI_EVENT_KEY_DOWN ||
-        !(ev->key.modifiers & OS64_GUI_MOD_CTRL))
+    if (ev->type != OS64_GUI_EVENT_KEY_DOWN)
+        return false;
+    // Esc leaves the help page from anywhere — before the widgets see it,
+    // because the textview would spend it on clearing a selection instead.
+    // os64_ui_key_is_esc, never a raw scancode compare: the Esc key speaks
+    // two dialects (PS/2 0x01, HID 0x29) and a burst's ESC byte speaks
+    // neither — the library predicate knows all of that so apps don't.
+    if (g.help_active && os64_ui_key_is_esc(ev)) {
+        help_leave();
+        return true;
+    }
+    if (!(ev->key.modifiers & OS64_GUI_MOD_CTRL))
         return false;
     switch (ev->key.ascii) {
+    case 0x07:  // Ctrl+G — the guide (his commissioning order: a help
+                // screen "with all the normal stuff, including credits")
+        help_toggle();
+        return true;
     case 0x13:  // Ctrl+S
         click_save(NULL, NULL);
         return true;
@@ -437,7 +597,7 @@ int main(int argc, char **argv)
     if (arg_path)
         do_load(arg_path);
     else
-        status_show("(unnamed) - ^S save  ^F find  ^O open  ^Q quit");
+        status_show("(unnamed) - ^G help  ^S save  ^F find  ^O open  ^Q quit");
     sync_scrollbar();
 
     // The canonical loop, with the app's shortcut check ahead of dispatch —
