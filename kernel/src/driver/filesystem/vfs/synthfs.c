@@ -216,7 +216,13 @@ bool synthfs_mount(const char *prefix,
 {
 	if (kMountCount >= VFS_MAX_MOUNTS)
 	{
-		printd(DEBUG_BOOT, "BOOT: mount table full — %s not mounted\n", prefix);
+		// ON THE GLASS, not just the log. A synthetic filesystem that fails to
+		// mount leaves no wreckage to find later — /proc simply is not there,
+		// and every symptom points somewhere else. This is the one moment
+		// anybody can be told (vfs.h, THE CEILING).
+		printd(DEBUG_BOOT, "BOOT: mount table full (%u) — %s not mounted\n",
+		       VFS_MAX_MOUNTS, prefix);
+		printf("MOUNT TABLE FULL (%u) — %s NOT mounted\n", VFS_MAX_MOUNTS, prefix);
 		return false;
 	}
 

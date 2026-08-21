@@ -56,6 +56,7 @@
 #include "driver/net/dhcp.h"
 #include "driver/filesystem/proc/procfs.h"
 #include "driver/filesystem/sys/sysfs.h"
+#include "driver/filesystem/dev/devfs.h"
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -533,6 +534,12 @@ void kernel_init()
 	// results, readable at /sys/bus/pci. Same synthetic-mount rules as /proc
 	// (no GUID, no disk, mounted after the sweep for the same reason).
 	sysfs_mount();
+
+	// /dev — the kernel's objects as files (devfs.c has the doctrine): null,
+	// zero, full, and tty. Same synthetic-mount rules as /proc and /sys (no
+	// GUID, no disk, mounted after the sweep for the same reason), and the
+	// third leg of the promise in SUCCESSION.md's curated-tree list.
+	devfs_mount();
 
 	// ── The log daemon, as early as a log daemon can possibly start ──────────
 	// HERE, and not down with husk, is the whole point of the LOGD= flag. The

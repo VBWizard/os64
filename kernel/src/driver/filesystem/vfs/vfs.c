@@ -192,8 +192,12 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 	// becomes reachable by path.
 	if (kMountCount >= VFS_MAX_MOUNTS)
 	{
+		// Same reasoning as synthfs_mount's copy: a partition that failed to
+		// mount is an absence, and an absence needs someone to announce it
+		// (vfs.h, THE CEILING).
 		printd(DEBUG_BOOT, "BOOT: mount table full (%u), %s not mounted\n",
 		       VFS_MAX_MOUNTS, mountPoint);
+		printf("MOUNT TABLE FULL (%u) — %s NOT mounted\n", VFS_MAX_MOUNTS, mountPoint);
 		return NULL;
 	}
 	vfs_mount_entry_t *m = &kMountTable[kMountCount];

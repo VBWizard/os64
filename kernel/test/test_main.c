@@ -1778,6 +1778,169 @@ static bool test_mount_table(void)
 }
 #undef MT_FAIL
 
+// ── /dev — the devices answer for themselves (2026-08-20) ────────────────────
+// The interactive half of this is easy (`cat /dev/null`, `cp x /dev/full`) and
+// was done by hand the day devfs landed. This test exists for the half a shell
+// CANNOT do: /dev/zero is an ENDLESS faucet, so there is no husk incantation
+// that reads a bounded piece of it — `cat` would run until the heat death, and
+// `head -n` waits for a newline that a stream of NULs never contains.
+//
+// Everything here goes through the VFS the way a syscall would (resolve the
+// mount, dispatch through the fs's own op tables), so the routing is under
+// test alongside the devices themselves.
+#define DEV_FAIL(...) do { \
+        printf("FAIL devfs: " __VA_ARGS__); \
+        printd(DEBUG_TESTS, "\tFAIL: test_devfs - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+
+// Open one /dev node through the mount table, exactly as syscall_open would.
+static vfs_file_t *devtest_open(const char *path, const char *mode)
+{
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(path, &tail);
+    vfs_file_t *f = NULL;
+
+    if (fs == NULL || fs->fops == NULL || fs->fops->open == NULL)
+        return NULL;
+    if (fs->fops->open(&f, tail, mode, fs) != 0)
+        return NULL;
+    return f;
+}
+
+static bool test_devfs(void)
+{
+    const char *tail = NULL;
+    vfs_filesystem_t *devfs = vfs_resolve_mount("/dev", &tail);
+    unsigned char buf[64];
+
+    if (devfs == NULL || strncmp(tail, "/", 2) != 0)
+        DEV_FAIL("/dev did not resolve to a mount\n");
+    if (devfs == kRootFilesystem)
+        DEV_FAIL("/dev resolved to the ROOT fs — the mount never claimed its prefix\n");
+
+    // ── /dev/null: empty on read, bottomless on write ───────────────────────
+    vfs_file_t *f = devtest_open("/dev/null", "r");
+    if (f == NULL)
+        DEV_FAIL("open /dev/null failed\n");
+    memset(buf, 0xAA, sizeof(buf));
+    int got = f->fops->read(f, buf, sizeof(buf));
+    if (got != 0)
+        DEV_FAIL("/dev/null read returned %d, expected 0 (EOF)\n", got);
+    // The buffer must be UNTOUCHED: a read that returns 0 has written nothing,
+    // and a caller that trusts the count would otherwise get 64 bytes of a
+    // lie it never asked for.
+    for (size_t i = 0; i < sizeof(buf); i++)
+        if (buf[i] != 0xAA)
+            DEV_FAIL("/dev/null read scribbled on the buffer at %u\n", (unsigned)i);
+    f->fops->close(f);
+
+    f = devtest_open("/dev/null", "w");
+    if (f == NULL)
+        DEV_FAIL("open /dev/null for write failed\n");
+    got = f->fops->write(f, "swallow this", 12);
+    if (got != 12)
+        DEV_FAIL("/dev/null write returned %d, expected 12 (whole count)\n", got);
+    f->fops->close(f);
+
+    // ── /dev/zero: the faucet, and the reason this test exists ──────────────
+    f = devtest_open("/dev/zero", "r");
+    if (f == NULL)
+        DEV_FAIL("open /dev/zero failed\n");
+    for (int round = 0; round < 3; round++)
+    {
+        memset(buf, 0xAA, sizeof(buf));
+        got = f->fops->read(f, buf, sizeof(buf));
+        if (got != (int)sizeof(buf))
+            DEV_FAIL("/dev/zero read %d returned %d, expected %u — a faucet "
+                     "never runs short and never reaches EOF\n",
+                     round, got, (unsigned)sizeof(buf));
+        for (size_t i = 0; i < sizeof(buf); i++)
+            if (buf[i] != 0x00)
+                DEV_FAIL("/dev/zero delivered 0x%02x at offset %u\n",
+                         buf[i], (unsigned)i);
+    }
+    // Reading zero bytes is not EOF, it is a request for nothing — and it must
+    // not be confused with the end of a stream that has no end.
+    got = f->fops->read(f, buf, 0);
+    if (got != 0)
+        DEV_FAIL("/dev/zero zero-length read returned %d, expected 0\n", got);
+    f->fops->close(f);
+
+    // ── /dev/full: reads like zero, refuses every write ─────────────────────
+    f = devtest_open("/dev/full", "r");
+    if (f == NULL)
+        DEV_FAIL("open /dev/full failed\n");
+    memset(buf, 0xAA, sizeof(buf));
+    got = f->fops->read(f, buf, sizeof(buf));
+    if (got != (int)sizeof(buf) || buf[0] != 0 || buf[sizeof(buf) - 1] != 0)
+        DEV_FAIL("/dev/full read returned %d — it reads as zeros, like Linux's\n", got);
+    f->fops->close(f);
+
+    f = devtest_open("/dev/full", "w");
+    if (f == NULL)
+        DEV_FAIL("open /dev/full for write failed — the OPEN succeeds, the "
+                 "WRITE is what fails\n");
+    got = f->fops->write(f, "no room", 7);
+    if (got >= 0)
+        DEV_FAIL("/dev/full write returned %d — os64's one write that must "
+                 "always fail just succeeded\n", got);
+    f->fops->close(f);
+
+    // ── Paths that must NOT exist ───────────────────────────────────────────
+    // A permissive parser is how "/dev/nul" quietly becomes the void and a
+    // typo'd redirect eats output forever.
+    if (devtest_open("/dev/nul", "r") != NULL)
+        DEV_FAIL("/dev/nul opened — the name match is not exact\n");
+    if (devtest_open("/dev/null/x", "r") != NULL)
+        DEV_FAIL("/dev/null/x opened — a trailing component was ignored\n");
+    if (devtest_open("/dev/tty", "r") != NULL)
+        DEV_FAIL("/dev/tty opened as a FILE — it is a handle alias answered by "
+                 "syscall_open, and this layer must refuse it (devfs.h)\n");
+
+    // ── The listing names every resident ────────────────────────────────────
+    // A directory that drops a name reads exactly like a name that does not
+    // exist (sysfs learned this on 2026-08-20, five days of "net is missing").
+    vfs_directory_t *dir = NULL;
+    if (devfs->dops == NULL || devfs->dops->open == NULL ||
+        devfs->dops->open(&dir, "/", devfs) != 0)
+        DEV_FAIL("opendir /dev failed\n");
+    bool saw_null = false, saw_zero = false, saw_full = false, saw_tty = false;
+    os64_dirent_t de;
+    int rc, entries = 0;
+    while ((rc = devfs->dops->read(dir, &de)) == 1)
+    {
+        entries++;
+        if (strcmp(de.name, "null") == 0) saw_null = true;
+        else if (strcmp(de.name, "zero") == 0) saw_zero = true;
+        else if (strcmp(de.name, "full") == 0) saw_full = true;
+        else if (strcmp(de.name, "tty")  == 0) saw_tty  = true;
+    }
+    devfs->dops->close(dir);
+    if (rc < 0)
+        DEV_FAIL("/dev readdir error (%d)\n", rc);
+    if (!saw_null || !saw_zero || !saw_full || !saw_tty)
+        DEV_FAIL("/dev listing missing a resident (null=%d zero=%d full=%d tty=%d)\n",
+                 saw_null, saw_zero, saw_full, saw_tty);
+    printd(DEBUG_TESTS | DEBUG_DETAILED, "\tdevfs: /dev listed %d entries\n", entries);
+
+    // stat answers for the directory itself and for one resident.
+    if (devfs->dops->stat == NULL)
+        DEV_FAIL("/dev has no stat\n");
+    memset(&de, 0, sizeof(de));
+    if (devfs->dops->stat("/", &de, devfs) != 0 || !(de.flags & OS64_DE_DIR))
+        DEV_FAIL("stat /dev did not report a directory\n");
+    memset(&de, 0, sizeof(de));
+    if (devfs->dops->stat("/zero", &de, devfs) != 0 || strcmp(de.name, "zero") != 0)
+        DEV_FAIL("stat /dev/zero failed\n");
+    memset(&de, 0, sizeof(de));
+    if (devfs->dops->stat("/nope", &de, devfs) == 0)
+        DEV_FAIL("stat /dev/nope succeeded — a name that does not exist\n");
+
+    return true;
+}
+#undef DEV_FAIL
+
 
 // The root-filesystem WRITE path, properly inside the framework at last:
 // create/write/read-back a file, mkdir, create/write/read-back inside the new
@@ -1801,6 +1964,7 @@ static bool test_mount_table(void)
         printd(DEBUG_TESTS, "\tFAIL: test_vfs_write_mkdir - " __VA_ARGS__); \
         return false; \
     } while (0)
+
 
 static bool test_vfs_write_mkdir(void)
 {
@@ -4238,6 +4402,7 @@ static void register_builtin_tests(void)
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_POSTBOOT);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
+    test_register("devfs", test_devfs, TEST_PHASE_POSTBOOT);
     test_register("net_arp_pending_order", test_net_arp_pending_order, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
     test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);

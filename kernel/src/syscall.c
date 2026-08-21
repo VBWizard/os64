@@ -24,6 +24,7 @@
 #include "gui/window.h"       // GUI_WINDOW_TITLE_MAX — the title copy's bound
 #include "tty.h"     // console writes land on the CALLER's terminal now
 #include "handle.h"
+#include "driver/filesystem/dev/devfs.h"   // devfs_handle_alias — the /dev/tty door
 #include "pipe.h"
 #include "signals.h"
 #include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
@@ -1913,6 +1914,34 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	{
 		kfree(p);
 		return SYSCALL_RESULT_INVALID;   // nothing mounted yet
+	}
+
+	// THE HANDLE ALIAS (devfs, 2026-08-20). One path in the whole namespace —
+	// /dev/tty — names a HANDLE KIND rather than a byte container, and it is
+	// answered here, before any filesystem is asked to open anything.
+	//
+	// It has to happen at this layer: a console handle carries no object and
+	// late-binds to task_tty(caller) at every read, and the read itself
+	// BLOCKS. A fops->read could not do it — HANDLE_FILE reads run through
+	// call_in_kernel_context on the core's interrupt stack, and sleeping there
+	// is how this kernel gets corrupted (the stack poisoner caught exactly
+	// that on 2026-08-13). Answering at open costs one branch and reuses the
+	// entire console path downstream: Ctrl+C, EOF, tty focus, all unchanged.
+	//
+	// This is the promise the comment at syscall_tty_handle made — the verb
+	// came first because a pager needed it before a devfs existed, and the
+	// name now NAMES the verb instead of rivalling it. Both spellings mint the
+	// same handle; only one of them can be written in husk.rc.
+	handle_type_t alias_type;
+	if (devfs_handle_alias(p->fs, tail, p->mode, &alias_type))
+	{
+		kfree(p);
+		int ah = handle_alloc(task, alias_type, NULL);
+		if (ah < 0)
+			return SYSCALL_RESULT_INVALID;   // table full — the only failure here
+		printd(DEBUG_SYSCALL, "open: task %s: '%s' aliased to handle %d\n",
+		       task->exename, path, ah);
+		return (uint64_t)ah;
 	}
 
 	size_t plen = 0;

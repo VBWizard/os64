@@ -60,7 +60,8 @@ typedef enum
 	FILETYPE_FILE = 1,
 	FILETYPE_PIPE = 2,
 	FILETYPE_PROCFILE = 3,
-	FILETYPE_SYSFILE = 4    // /sys — the machine as files (sysfs.c)
+	FILETYPE_SYSFILE = 4,   // /sys — the machine as files (sysfs.c)
+	FILETYPE_DEVFILE = 5    // /dev — the kernel's objects as files (devfs.c)
 } eFileType;
 
 enum whichDrive
@@ -422,7 +423,22 @@ extern vfs_filesystem_t* kRootFilesystem;
 // kRootFilesystem remains the "/" entry's fs, kept as a convenient alias
 // because half the kernel gates on "is a root mounted yet?".
 
-#define VFS_MAX_MOUNTS 8
+// THE CEILING (raised 8 → 16 on 2026-08-20, when /dev arrived). Eight was
+// never a considered number, and a normal boot had quietly climbed to six or
+// seven: "/", "/home", the "/fat" lifeboat, "/proc", "/sys", "/dev", plus
+// whatever the secondary-partition sweep finds ("/ext2", "/fat2"… when twins
+// appear). Nothing is sized by this but the table itself — no packed struct,
+// no on-disk record, nothing the ABI can see — so the whole cost of doubling
+// it is ~512 bytes of BSS, and the whole benefit is that the next subsystem
+// to want a mount does not have to think about it.
+//
+// The failure this replaces was worse than the limit: a full table used to
+// fail as a printd(DEBUG_BOOT) line and an ignored return value, which on a
+// normal boot means /proc silently does not exist and NOTHING says so. Both
+// mount paths now put that on the glass (see kRegisterFilesystem and
+// synthfs_mount) — tripwires over silence, and a mount that did not happen is
+// exactly the kind of absence that reads as a bug somewhere else entirely.
+#define VFS_MAX_MOUNTS 16
 #define VFS_MOUNT_PREFIX_MAX 32
 
 typedef struct {
