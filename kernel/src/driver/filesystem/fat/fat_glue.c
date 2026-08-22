@@ -284,6 +284,7 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 	// the far side of a syscall. ("c" predates "w" here and is byte-identical
 	// to it; kept for the existing callers/tests.)
     if (strcmp(mode, "r") == 0) fat_mode = FA_READ;
+    else if (strcmp(mode, "u") == 0) fat_mode = FA_READ | FA_WRITE;
     else if (strcmp(mode, "w") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
     else if (strcmp(mode, "a") == 0) fat_mode = FA_WRITE | FA_OPEN_APPEND;
 	else if (strcmp(mode, "c") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
@@ -373,24 +374,36 @@ static int fat_close(vfs_file_t* vfs_file) {
 
 static int fat_seek(vfs_file_t* vfs_file, long offset, int whence) {
     FIL* fat_file = (FIL*)vfs_file->handle;
-    FSIZE_t new_pos;
+    uint64_t base;
 
     // Calculate the new position based on whence
     switch (whence) {
         case SEEK_SET:
-            new_pos = offset;
+            base = 0;
             break;
         case SEEK_CUR:
-            new_pos = f_tell(fat_file) + offset;
+            base = f_tell(fat_file);
             break;
         case SEEK_END:
-            new_pos = f_size(fat_file) + offset;
+            base = f_size(fat_file);
             break;
         default:
             return -1; // Invalid whence
     }
 
-    if (f_lseek(fat_file, new_pos) != FR_OK) {
+    // Avoid unsigned wrap: a negative displacement before byte zero must not
+    // become a giant exFAT offset. The public position range is int64_t.
+    if (base > INT64_MAX)
+        return -1;
+    int64_t signed_base = (int64_t)base;
+    if ((offset > 0 && signed_base > INT64_MAX - offset) ||
+        (offset < 0 && signed_base < INT64_MIN - offset))
+        return -1;
+    int64_t target = signed_base + offset;
+    if (target < 0)
+        return -1;
+
+    if (f_lseek(fat_file, (FSIZE_t)target) != FR_OK) {
         return -1; // Seek failed
     }
 
@@ -419,9 +432,10 @@ static int fat_puts(vfs_file_t* vfs_file, char* buffer)
 	return f_puts(buffer, vfs_file->handle);
 }
 
-static int fat_tell(vfs_file_t* vfs_file)
+static int64_t fat_tell(vfs_file_t* vfs_file)
 {
-	return f_tell((FIL*)vfs_file->handle);
+	FSIZE_t position = f_tell((FIL*)vfs_file->handle);
+	return position <= INT64_MAX ? (int64_t)position : -1;
 }
 
 // Format with the KERNEL's printf engine, then hand FatFs finished bytes.

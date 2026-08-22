@@ -442,7 +442,7 @@ int ext2_open_existing(vfs_file_t **vfs_file, const char *path,
 	h->inode = probe.inode;
 	h->ino = ino;
 	h->pos = 0;
-	h->size = probe.inode.i_size;
+	h->size = ext2_regular_file_size(&probe.inode);
 	h->blockbuf = NULL;
 	h->blockbuf_index = (uint32_t)~0u;
 
@@ -536,10 +536,19 @@ static int ext2_seek(vfs_file_t *vfs_file, long offset, int whence)
 	switch (whence)
 	{
 		case SEEK_SET: base = 0; break;
-		case SEEK_CUR: base = (int64_t)h->pos; break;
-		case SEEK_END: base = (int64_t)h->size; break;
+		case SEEK_CUR:
+			if (h->pos > INT64_MAX) return -1;
+			base = (int64_t)h->pos;
+			break;
+		case SEEK_END:
+			if (h->size > INT64_MAX) return -1;
+			base = (int64_t)h->size;
+			break;
 		default: return -1;
 	}
+	if ((offset > 0 && base > INT64_MAX - offset) ||
+	    (offset < 0 && base < INT64_MIN - offset))
+		return -1;
 	int64_t target = base + offset;
 	if (target < 0)
 		return -1;
@@ -547,9 +556,10 @@ static int ext2_seek(vfs_file_t *vfs_file, long offset, int whence)
 	return 0;
 }
 
-static int ext2_tell(vfs_file_t *vfs_file)
+static int64_t ext2_tell(vfs_file_t *vfs_file)
 {
-	return (int)((ext2_handle_t *)vfs_file->handle)->pos;
+	uint64_t position = ((ext2_handle_t *)vfs_file->handle)->pos;
+	return position <= INT64_MAX ? (int64_t)position : -1;
 }
 
 static int ext2_close(vfs_file_t *vfs_file)

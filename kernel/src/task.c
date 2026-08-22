@@ -2252,6 +2252,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	//non-canonical high bits into the PTE and faults with a reserved-bit #PF (0x8) the
 	//moment the program dereferences argv.
 	mapPages = (argvBlobBytes + PAGE_SIZE - 1) / PAGE_SIZE;
+	newTask->argvPages = (uint32_t)mapPages;   // /proc maps draws [argv] from this
 	uintptr_t argvPhys = (uintptr_t)newTask->argv - kHHDMOffset;
 	paging_map_pages(newTask->pml4v, TASK_ARGV_VIRT, argvPhys, mapPages, PAGE_PRESENT | PAGE_WRITE | PAGE_USER | PAGE_NO_EXECUTE);   // argv is data
 

@@ -53,6 +53,13 @@ PAGER_APPS := more less
 PAGER_SRC  := common/file_pager.c
 PAGER_OBJ  := $(OBJ)/$(PAGER_SRC).o
 
+# The hex editor's window/cache/undo engine is presentation-independent. A
+# future GUI links this same object and supplies pixels where hexedit supplies
+# terminal rows.
+HEX_BUFFER_APPS := hexedit
+HEX_BUFFER_SRC  := common/hex_buffer.c
+HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
+
 # Every apps/<name>/ directory holding .c files is an app named <name>.
 # $(sort) both orders and DEDUPES — essential since apps went multi-file
 # (top was the first: top.c + topMain.c): the wildcard yields the directory
@@ -109,7 +116,8 @@ all: $(addprefix $(BIN)/,$(APPS)) $(BIN)/app_bases.gdb
 # disappear with `make clean` alongside the rest of OBJ.
 define APP_RULE
 APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard apps/$(1)/*.c))
-APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ))
+APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
+                       $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ))
 APP_BASE_STAMP_$(1) := $(OBJ)/apps/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
@@ -141,7 +149,7 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS))
 # comment block memorializes, sneaking back through a side door.
 HEADER_DEPS := $(RUNTIME_OBJS:.o=.d) \
                $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c)) \
-               $(PAGER_OBJ:.o=.d)
+               $(PAGER_OBJ:.o=.d) $(HEX_BUFFER_OBJ:.o=.d)
 -include $(HEADER_DEPS)
 
 $(OBJ)/%.c.o: %.c

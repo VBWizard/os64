@@ -38,8 +38,8 @@
 //   the province of mkfs/fsck/resize.
 //
 //   LARGE_FILE (0x2): files > 2GB keep size high bits in i_dir_acl. Safe
-//   because we never CREATE one (growth is capped at 2GB-1, see ext2_write)
-//   and never MANGLE one (write-mode open refuses a file with i_dir_acl set).
+//   because we never CREATE or EXTEND one (growth is capped at 2GB-1), while
+//   in-place overwrites preserve both size words unchanged (see ext2_write).
 //
 // Any OTHER ro_compat bit means the disk relies on bookkeeping we don't
 // maintain — the mount is forced read-only (write slots nulled in the
@@ -130,10 +130,18 @@ typedef struct {
 	ext2_inode_t inode;           // copy of the on-disk inode (128-byte core)
 	uint32_t ino;
 	uint64_t pos;
-	uint64_t size;                // i_size (32-bit: files < 4GB, plenty for now)
+	uint64_t size;                // i_size low + i_dir_acl high for regular files
 	uint8_t *blockbuf;            // directories: current block's contents
 	uint32_t blockbuf_index;      // which file-block blockbuf holds (~0 = none)
 } ext2_handle_t;
+
+// ext2 rev 1 stores a regular file's size high word in i_dir_acl. Directories
+// still use that field as ACL metadata, so callers use this only after proving
+// S_IFREG (the file open/read/write paths do exactly that).
+static inline uint64_t ext2_regular_file_size(const ext2_inode_t *inode)
+{
+	return (uint64_t)inode->i_size | ((uint64_t)inode->i_dir_acl << 32);
+}
 
 // ── The block-map cursor (2026-08-20, the cp-to-/dev/null measurement) ──────
 //

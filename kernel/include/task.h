@@ -187,6 +187,11 @@
         uint64_t loadBias;
         int argc;
         char** argv;
+        // How many pages the argv blob occupies at TASK_ARGV_VIRT — kept so
+        // /proc/<id>/maps can draw the [argv] row with its true extent
+        // (2026-08-22). The env block carries its own page_count; this is
+        // the one region whose size was computed, used, and forgotten.
+        uint32_t argvPages;
         struct rusage usage;
         void* stdin, *stdout, *stderr;        //standard input/output/error pointers
         dlist_t* mmaps;
