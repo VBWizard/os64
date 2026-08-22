@@ -9,6 +9,7 @@
 #define	ACPI_H
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>   // acpi_poweroff's verdict
 
 typedef struct RSDPDescriptor {
  char Signature[8];
@@ -59,6 +60,22 @@ enum eAddressSpace
     FunctionalFixedHardware = 0x7F
 };
 
+// ACPI's Generic Address Structure: TWELVE BYTES, and it must be packed to
+// say so. Without the attribute the uint64_t aligns to 8 and the struct is
+// SIXTEEN — and because the FADT embeds these by value, every field after the
+// first one drifts four bytes, with each further GAS adding four more.
+//
+// This was wrong from the day the header was written and cost a full evening
+// on 2026-08-21, because the damage is invisible until you read a late field:
+//   - X_Dsdt (four bytes adrift) read as 0x0000200100000000 under QEMU —
+//     thirty-two terabytes, mapped and dereferenced, hanging the boot;
+//   - X_PM1aControlBlock (sixteen adrift, two GAS's worth) read as nothing on
+//     the P5, whose UEFI firmware — like most modern firmware — zeroes the
+//     legacy 32-bit PM1a_CNT field and puts the truth ONLY in the extended
+//     one. "FADT names no PM1a control block" was this, not a machine
+//     without ACPI soft-off.
+// The static assert below is the part that matters going forward: a layout
+// this silent should fail at BUILD time, not at power-off time.
 typedef struct GenericAddressStructure_s
 {
   uint8_t AddressSpace;
@@ -66,7 +83,11 @@ typedef struct GenericAddressStructure_s
   uint8_t BitOffset;
   uint8_t AccessSize;
   uint64_t Address;
-} GenericAddressStructure_t;
+} __attribute__((packed)) GenericAddressStructure_t;
+
+_Static_assert(sizeof(GenericAddressStructure_t) == 12,
+               "ACPI Generic Address Structure must be 12 bytes — an unpacked "
+               "one silently shifts every FADT field after ResetReg");
 
 typedef struct FADT_s
 {
@@ -136,6 +157,16 @@ typedef struct FADT_s
     GenericAddressStructure_t X_GPE1Block;
 } __attribute__((packed)) acpiFADT_t;
 
+// The offsets that matter, checked against the spec's own numbers. These are
+// the two the S5 path reads, and both of them were wrong for years behind an
+// unpacked GenericAddressStructure_t (see its comment).
+_Static_assert(__builtin_offsetof(acpiFADT_t, PM1aControlBlock) == 64,
+               "FADT: PM1a_CNT_BLK belongs at offset 64");
+_Static_assert(__builtin_offsetof(acpiFADT_t, X_Dsdt) == 140,
+               "FADT: X_DSDT belongs at offset 140");
+_Static_assert(__builtin_offsetof(acpiFADT_t, X_PM1aControlBlock) == 172,
+               "FADT: X_PM1a_CNT_BLK belongs at offset 172");
+
 // Simplified MCFG Table Entry
 typedef struct {
     uint64_t base_address;        // PCI configuration space base address
@@ -204,5 +235,26 @@ typedef struct {
 
 extern uintptr_t kPCIBaseAddress;
 void acpiFindTables();
+
+// ── S5: the machine actually going dark (2026-08-21) ────────────────────────
+// The hypervisor poweroff ports (0x604, 0x4004) are decoded by QEMU and VBox
+// and by nothing else, so on real iron the descent could only ever park with
+// the 1995 liturgy on screen. This is the real mechanism: ACPI's soft-off.
+//
+// Parsed AT BOOT, fired AT SHUTDOWN, deliberately — the boot moment is when
+// the ACPI tables are known-mapped and the machine is healthy, and the
+// shutdown moment is the worst possible time to be walking firmware tables
+// for the first time. acpi_prepare_s5() caches four numbers; acpi_poweroff()
+// spends them.
+//
+// It is NOT an AML interpreter: \_S5 is found by scanning the DSDT for the
+// name and reading the small package that follows. The full interpreter is a
+// someday project (Chris, 2026-08-21: "when we need more of the DSDT").
+void acpi_prepare_s5(void);
+
+// Ask the machine to power off. Returns FALSE if it could not even try (no
+// FADT, no \_S5, no PM1a control block) — the caller then falls back. On
+// success it does not return, because the machine is off.
+bool acpi_poweroff(void);
 
 #endif	/* ACPI_H */
