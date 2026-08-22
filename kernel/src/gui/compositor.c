@@ -523,6 +523,27 @@ static void band_track_locked(int32_t x, int32_t y)
 	band_damage_locked(s_band_rect);   // draw where it is
 }
 
+// THE IMPLICIT POINTER GRAB (2026-08-21). While a button is down on a
+// client's content area, that client owns the pointer: every move and the
+// release go to IT, wherever the cursor has wandered to.
+//
+// The WM's own gestures had this from birth (s_drag_window, s_band_window,
+// and the comment above them says why: "a gesture in progress OWNS the
+// pointer... losing this is how a drag ends up half-delivered to three
+// different windows"). Clients did not, and hit-testing every event is not
+// the same promise: a drag-select that leaves the window lost its tail, and
+// the BUTTON_UP that ends the gesture was delivered to whatever happened to
+// be under the cursor — a phantom release for a stranger, and no release at
+// all for the app that was mid-drag. scribe wore that as a quirk for a day;
+// gterm's select-is-copy would have worn it as "the copy sometimes doesn't
+// happen", which is worse because it is silent.
+//
+// X11 named this in 1987 — the IMPLICIT PASSIVE GRAB: a button press grabs
+// the pointer for the client until the last button comes up. Every window
+// system since has one, because every window system without one grew this
+// same bug.
+static window_t *s_pointer_window = NULL;
+
 void gui_grab_release(const struct window *w)
 {
 	// Called from wm_destroy under kGuiLock — the one moment a dying window
@@ -530,22 +551,31 @@ void gui_grab_release(const struct window *w)
 	// dereference (the caller is mid-teardown).
 	if (s_drag_window == (const window_t *)w)
 		s_drag_window = NULL;
+	if (s_pointer_window == (const window_t *)w)
+		s_pointer_window = NULL;   // a window that dies mid-drag lets go
 	if (s_band_window == (const window_t *)w) {
 		band_damage_locked(s_band_rect);   // erase the orphaned outline
 		s_band_window = NULL;
 	}
 }
 
-// Deliver a mouse event to the window IF the point is inside its content
-// area (chrome clicks are the window system's business, not the client's).
-static void deliver_mouse_to_window(window_t *w, input_event_t ev)
+// Deliver a mouse event to a window, in ITS coordinates. `require_inside`
+// is the difference between routing and grabbing: a hit-tested event must
+// land in the content area (chrome clicks are the window system's business,
+// not the client's), while a GRABBED event is delivered wherever the pointer
+// has got to — including coordinates outside the window, which is exactly
+// what an app tracking a drag past its own edge needs to see. Returns
+// whether the client got it.
+static bool deliver_mouse_to_window(window_t *w, input_event_t ev,
+                                    bool require_inside)
 {
 	rect_t content = wm_content_rect_on_screen(w);
-	if (!rect_contains_point(content, ev.mouse.x, ev.mouse.y))
-		return;
+	if (require_inside && !rect_contains_point(content, ev.mouse.x, ev.mouse.y))
+		return false;
 	ev.mouse.x -= content.x;
 	ev.mouse.y -= content.y;
 	wm_deliver_event(w, &ev);
+	return true;
 }
 
 // Is the window-management chord held? BOTH modifiers, so a plain Ctrl-click
@@ -578,10 +608,12 @@ static void route_event_locked(const input_event_t *ev)
 		else if (s_drag_window)
 			wm_move(s_drag_window,
 			        ev->mouse.x - s_drag_dx, ev->mouse.y - s_drag_dy);
+		else if (s_pointer_window)
+			deliver_mouse_to_window(s_pointer_window, *ev, false);
 		else {
 			window_t *under = wm_topmost_at(ev->mouse.x, ev->mouse.y);
 			if (under)
-				deliver_mouse_to_window(under, *ev);
+				deliver_mouse_to_window(under, *ev, true);
 		}
 		break;
 	}
@@ -631,8 +663,12 @@ static void route_event_locked(const input_event_t *ev)
 			s_drag_window = w;
 			s_drag_dx = ev->mouse.x - w->frame.x;
 			s_drag_dy = ev->mouse.y - w->frame.y;
-		} else {
-			deliver_mouse_to_window(w, *ev);
+		} else if (deliver_mouse_to_window(w, *ev, true)) {
+			// It landed in the client's own area, so the grab begins here —
+			// and only here: a press on chrome belongs to the window system,
+			// and grabbing for it would hand the client a release it never
+			// asked for.
+			s_pointer_window = w;
 		}
 		break;
 	}
@@ -657,9 +693,18 @@ static void route_event_locked(const input_event_t *ev)
 			s_drag_window = NULL;
 			break;
 		}
+		if (s_pointer_window) {
+			// The grab holder gets its release even if the cursor left the
+			// window — that release is the END of its gesture, and an app
+			// that never hears it is an app stuck mid-drag forever.
+			deliver_mouse_to_window(s_pointer_window, *ev, false);
+			if (ev->mouse.buttons == 0)
+				s_pointer_window = NULL;   // last button up: the grab ends
+			break;
+		}
 		window_t *under = wm_topmost_at(ev->mouse.x, ev->mouse.y);
 		if (under)
-			deliver_mouse_to_window(under, *ev);
+			deliver_mouse_to_window(under, *ev, true);
 		break;
 	}
 	case INPUT_EVENT_KEY_DOWN:

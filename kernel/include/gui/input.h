@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "os64/gui.h"   // the ring-3 names these constants must keep matching
+
 // Unified input event queue — layer 2 of the GUI.
 //
 // One ring carries keyboard AND mouse events in arrival order, so the
@@ -34,10 +36,18 @@ typedef enum input_event_type
 } input_event_type_t;
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
-// BUTTON_DOWN/UP events).
+// BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in
+// every mouse event — so os64/gui.h publishes the same three under their
+// public names and the static-asserts below stop the two copies from ever
+// drifting apart (the log.c/klog_format.h precedent: a mismatch stops the
+// build instead of lying to a client).
 #define INPUT_MOUSE_BUTTON_LEFT   0
 #define INPUT_MOUSE_BUTTON_RIGHT  1
 #define INPUT_MOUSE_BUTTON_MIDDLE 2
+
+_Static_assert(INPUT_MOUSE_BUTTON_LEFT   == OS64_GUI_MOUSE_LEFT,   "mouse button ABI: left");
+_Static_assert(INPUT_MOUSE_BUTTON_RIGHT  == OS64_GUI_MOUSE_RIGHT,  "mouse button ABI: right");
+_Static_assert(INPUT_MOUSE_BUTTON_MIDDLE == OS64_GUI_MOUSE_MIDDLE, "mouse button ABI: middle");
 
 typedef struct input_event
 {

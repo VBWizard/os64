@@ -109,6 +109,16 @@ typedef struct os64_gui_surface
 #define OS64_GUI_MOD_CAPS  (1u << 3)
 #define OS64_GUI_MOD_NUM   (1u << 4)
 
+// Mouse buttons: bit positions in `mouse.buttons`, and the value carried in
+// `mouse.button` on DOWN/UP. These crossed the boundary from the day mouse
+// events did — the number was in every event and its MEANING was kernel-only
+// (gui/input.h), so a client comparing `button == 1` was writing a magic
+// number and hoping. gterm's right-click paste is the consumer that asked
+// (2026-08-21); the kernel static-asserts the two copies agree.
+#define OS64_GUI_MOUSE_LEFT   0
+#define OS64_GUI_MOUSE_RIGHT  1
+#define OS64_GUI_MOUSE_MIDDLE 2
+
 typedef struct os64_gui_event
 {
     uint8_t type;
