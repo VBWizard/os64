@@ -417,15 +417,16 @@ int main(int argc, char **argv)
     const os64_optspec_t specs[] = {
         {'R', "recursive", false, "copy directories recursively",
          .flag = &options.recursive},
+        {'r', "recursive", false, "copy directories recursively",
+         .flag = &options.recursive},
         {'i', "interactive", false, "ask before overwriting a file",
          .flag = &options.interactive},
         {'v', "verbose", false, "print each copy operation",
          .flag = &options.verbose},
-        {'\0', "progress", false, "show per-file copy progress",
-         .flag = &options.progress}
-    };
+        {'p', "progress", false, "show per-file copy progress",
+         .flag = &options.progress}};
 
-    os64_args_init(&args, argc, argv, specs, 4);
+    os64_args_init(&args, argc, argv, specs, 5);
     args.about = "Copy files and directory trees.";
     args.details = "Multiple SOURCE operands require DEST to be a directory.";
 
