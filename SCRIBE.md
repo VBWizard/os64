@@ -28,11 +28,14 @@ memorability grounds. The author of quill remembers quills.)
 
 Open, edit, save, scroll, select. Explicitly OUT of v1, each with a reason:
 
-- **Clipboard** — not cut from the dream, cut INTO its own arc. Cross-app
-  copy/paste is a system seam (an owner, a fetch protocol, a "who holds the
-  selection" ruling — X11 spent a decade litigating this and gtk still has
-  the scars), and gterm wants paste the day it exists. Designed as its own
-  chapter once scribe runs; in-app cut/copy/paste lands THEN, riding it.
+- ~~**Clipboard**~~ — LANDED 2026-08-21, exactly as this line predicted:
+  cut into its own arc (CLIPBOARD.md), designed once scribe ran, and then
+  in-app cut/copy/paste rode it in. Ctrl+C/X/V; the mechanism is libui's
+  (`os64_ui_textview_copy/cut/paste`), the keys are scribe's. The system
+  seam this paragraph worried about turned out to be one FILE —
+  `/sys/clipboard` — which is why there was no fetch protocol to design and
+  no "who holds the selection" to litigate: nobody holds it, the kernel
+  keeps the bytes, and husk shares the same clipboard scribe does.
 - **Undo** — booked for slice two. It wants the buffer's edit operations to
   be journaled, so the v1 buffer API is shaped not to fight it (operations
   go through three choke points — see below — which is exactly where a
@@ -131,7 +134,11 @@ let textview become the only way scribe knows how to fill a window.
 
 ## Slice two (booked, in rough order)
 
-Undo (journal at the choke points) → clipboard integration when the
-clipboard arc lands → regex/case-fold search options → streamed read-only
-big-file backend → file picker control → word wrap → other document formats
-(the seam above). Each its own conversation.
+Undo (journal at the choke points) → ~~clipboard integration~~ (DONE
+2026-08-21) → regex/case-fold search options → streamed read-only big-file
+backend → file picker control → word wrap → other document formats (the seam
+above). Each its own conversation.
+
+Undo is now the head of this queue, and the clipboard sharpened its case: a
+318KB paste is 4,629 lines of change that a single Ctrl+Z ought to take
+back, and the three choke points are still where the journal attaches.

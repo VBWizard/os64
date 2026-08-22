@@ -734,9 +734,23 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 		// Bytes become synthesized key events: ascii set, no scancode, no
 		// modifiers — which is exactly what forwarding a printable key
 		// produces, and all console_read ever looks at.
+		//
+		// THE REFUSING PUSH, and a SHORT RETURN when it refuses (2026-08-22).
+		// This loop used to call the dropping push and return `length`
+		// whatever happened — which was fine for keystrokes (a human types
+		// slower than any reader drains) and a lie for a PASTE: gterm's
+		// right-click writes a whole snarf in one call, the ring holds
+		// KEYBOARD_BUFFER_SIZE-1 events, nothing drains it mid-loop, and
+		// every byte past the first ~127 vanished while the write reported
+		// success. The text console's paste (vt_select.c) never had this
+		// hole because it was built on tty_input_push_if_room from day one;
+		// this is the same door getting the same lock. A master that wants
+		// all of its bytes in now loops on the short count like any writer
+		// to a full pipe — never drop a byte, just take longer.
 		keyboard_event_t ev = {0};
 		ev.ascii = c;
-		tty_input_push(slave, &ev);
+		if (!tty_input_push_if_room(slave, &ev))
+			return (int64_t)i;      // accepted this many; the rest is the caller's to resend
 	}
 	// The parked reader (if any) wakes via console_wake_if_ready's sweep on
 	// the next scheduler pass (~10ms) — typing-speed latency, and the same

@@ -983,8 +983,16 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				if (!copy_user_buffer(user_buffer + copied, chunk, this_chunk))
 					return copied ? copied : SYSCALL_RESULT_BAD_USER_DATA;
 
-				pty_master_write(slave, chunk, this_chunk);
-				copied += this_chunk;
+				// The master's write can stop SHORT when the slave's ring is
+				// full (tty.h) — report how far it really got, exactly as a
+				// pipe writer would. Pretending otherwise is how a paste lost
+				// everything past its first 127 bytes until 2026-08-22.
+				int64_t took = pty_master_write(slave, chunk, this_chunk);
+				if (took < 0)
+					return copied ? (int64_t)copied : took;
+				copied += (size_t)took;
+				if ((size_t)took < this_chunk)
+					break;
 			}
 			return copied;
 		}

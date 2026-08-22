@@ -91,6 +91,7 @@ static const char *kHelpLines[] = {
     "  click / drag                    place the caret / select",
     "  Backspace, Delete               erase (a selection, if one is lit)",
     "  Enter                           split the line",
+    "  Ctrl+C, Ctrl+X, Ctrl+V          copy, cut, paste",
     "  Ctrl+S                          save",
     "  Ctrl+F                          find (Enter = next hit, wraps)",
     "  Ctrl+O                          open another file",
@@ -100,6 +101,18 @@ static const char *kHelpLines[] = {
     "THE ENTRY FIELD",
     "  Open, Save As, and find share one field below the buttons; the",
     "  label names what it currently means. Enter acts, Esc cancels.",
+    "  Ctrl+V pastes into it too - one line's worth, since it is one line.",
+    "",
+    "THE CLIPBOARD IS A FILE",
+    "  Copy and cut write /sys/clipboard; paste reads it. It is the",
+    "  SYSTEM's one clipboard, so husk shares it:",
+    "",
+    "      grep panic /home/os64.log > /sys/clipboard    (copy)",
+    "      cat /sys/clipboard                            (paste)",
+    "",
+    "  Text copied here pastes into a pipeline, and vice versa. You can",
+    "  copy from this help page too - a page you cannot edit is still a",
+    "  page worth quoting.",
     "",
     "NOTES",
     "  No word wrap yet - long lines scroll horizontally (the bar below).",
@@ -509,6 +522,56 @@ static bool app_shortcut(const os64_gui_event_t *ev)
     if (!(ev->key.modifiers & OS64_GUI_MOD_CTRL))
         return false;
     switch (ev->key.ascii) {
+    // The clipboard trio. libui owns the mechanism (it knows the selection
+    // and the buffer); scribe owns the KEYS, same as every other shortcut
+    // here — a toolkit that claimed Ctrl+C would be a toolkit a terminal
+    // widget has to fight. The clipboard itself is /sys/clipboard, the
+    // system's one snarf buffer, which is why what leaves here also arrives
+    // in `cat /sys/clipboard` (CLIPBOARD.md).
+    case 0x03: {  // Ctrl+C — copy
+        if (g.mode != MODE_NONE)
+            return false;           // the field owns the keyboard right now
+        int64_t n = os64_ui_textview_copy(&g.view);
+        char msg[SCRIBE_STATUS_MAX];
+        if (n > 0) {
+            os64_snprintf(msg, sizeof(msg), "copied %ld bytes  (^G help)",
+                          (long)n);
+            status_show(msg);
+        } else if (n < 0) {
+            // The kernel already said WHY on the console (a copy over the
+            // clipboard's ceiling announces itself there); this line is so
+            // the person watching the window knows nothing was copied.
+            status_show("copy refused - clipboard unchanged");
+        } else {
+            status_show("nothing selected");
+        }
+        return true;
+    }
+    case 0x18: {  // Ctrl+X — cut (copy first; a failed copy cuts nothing)
+        if (g.mode != MODE_NONE)
+            return false;
+        if (os64_ui_textview_cut(&g.ui, &g.view))
+            status_show("cut  (^G help)");
+        else
+            status_show("nothing cut");
+        return true;
+    }
+    case 0x16:  // Ctrl+V — paste
+        if (g.mode != MODE_NONE) {
+            // A path or a search term, pasted into the field it belongs in.
+            os64_ui_textfield_paste(&g.ui, &g.field);
+            return true;
+        }
+        if (os64_ui_textview_paste(&g.ui, &g.view)) {
+            // A multi-line paste can widen lines the on_change hook never
+            // looks at — it measures the CARET's line, which is right for a
+            // keystroke and not enough for a block of text. One honest pass.
+            measure_widest();
+            sync_scrollbar();
+            os64_ui_mark_dirty(&g.ui, &g.view.w);
+        }
+        return true;
+
     case 0x07:  // Ctrl+G — the guide (his commissioning order: a help
                 // screen "with all the normal stuff, including credits")
         help_toggle();

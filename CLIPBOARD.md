@@ -127,10 +127,76 @@ doctrine repealed. The day /dev grows into a service namespace, revisit.
      held the line without a person having to construct a big file first.
 2. **scribe** — Ctrl+C / Ctrl+X / Ctrl+V against the selection machinery
    that is already there. The first customer, and the moment "highlighting
-   has nothing to DO yet" stops being true.
+   has nothing to DO yet" stops being true. **BUILT 2026-08-21**, same day
+   as slice 1:
+   - **The mechanism went into libui, the BINDING stayed in the app.**
+     `os64_ui_textview_copy/cut/paste` (ui_text.c) know the selection and
+     the buffer; scribe's own shortcut table knows which keys mean them,
+     exactly like Ctrl+S. A toolkit that claimed Ctrl+C would be a toolkit
+     the eventual terminal widget has to fight for its SIGINT.
+   - **Cut copies FIRST and believes the answer**: if the clipboard refuses
+     the copy, nothing is deleted. It is the only operation in the editor
+     that could lose work, so it doesn't.
+   - **Copy works on a READ-ONLY view** — the help page is quotable, and so
+     is any future log viewer. Paste refuses there, as it must.
+   - Both directions STREAM through the open handle: copy writes line by
+     line (the newline between lines is manufactured by the copy, since the
+     model holds lines and not terminators), paste reads 512 bytes at a time
+     and inserts one RUN per line instead of one call per byte. libui
+     allocates nothing, and a 16MB snarf never exists twice.
+   - `os64_ui_textfield_paste` came along for the ride: a path or a search
+     term pasted into the entry field. One line, said out loud — a field is
+     one line. No field COPY (a textfield has no selection model; inventing
+     one is a different slice with its own consumer).
+   - CR is dropped on paste, alone or as half a CRLF: a buffer holds LINES,
+     and a carriage return inside one is a fossil of a file format.
+   - Verified by driving the GUI: three lines selected in scribe → "copied
+     157 bytes" → `cat /sys/clipboard` on VT1 printed them; `echo PASTED
+     FROM HUSK > /sys/clipboard` → Ctrl+V put it in the document (37→38
+     lines, dirty star); Ctrl+X took it back out and husk read it again;
+     Ctrl+V into the Open field took the line and not the newline; Ctrl+C
+     on the help page copied 31 bytes and Ctrl+V there did nothing. A
+     318,398-byte paste (the whole boot log) landed 4,629 lines in under
+     six seconds. Suite 24+28 green, no faults.
 3. **gterm** — drag-select in the terminal grid writes the snarf
    (select-IS-copy, the PRIMARY gesture); right-click pastes into the pty
    master as if typed. The daily driver gets the daily gestures.
+   **BUILT 2026-08-21.** The gesture is gpm's (Alessandro Rubini, 1994) and
+   xterm's before it, arriving in os64 the same day the clipboard did.
+   - **A prerequisite the slice exposed, and paid**: the compositor had no
+     pointer grab for client windows, so a drag that left the window lost
+     its tail AND its button-up. Fixed in the compositor, where it belongs —
+     see GRAPHICS.md § The implicit pointer grab. It cured a scribe bug of
+     the same shape that Chris had already met and filed under "quirk".
+   - **RULING (his, asked before the code): a pasted newline RUNS the line.**
+     No bracketed paste. His words: "I am a smart guy. If I want to run
+     multiple lines I copy multiple lines. If I want to review first, I
+     review before copy or copy one line at a time, no newline." xterm's
+     ESC[200~ wrapper (2002) exists to let a shell second-guess its user;
+     os64 declines, and the DIVERGENCES row records it.
+   - **Trailing blanks are not text.** A terminal row is padded to the full
+     width with spaces nobody typed; the copy trims them per row, joins rows
+     with `\n`, and ends without one — so a one-row copy pastes inline and
+     lands on the command line *without* running.
+   - **The highlight shows exactly what the copy will contain**: the same
+     trim decides which cells invert, so the lit region hugs the text
+     instead of running a white bar to the right margin. Inverse video, no
+     theme colors, no agreement needed with whatever the program painted.
+   - Wrapped long lines copy as TWO lines — the pty cell is `{glyph, color}`
+     with no wrap bit. Named, not fixed: a bit nobody has asked for.
+   - Selection is the VISIBLE GRID only (a pty has no scrollback yet — when
+     gterm grows one, the anchor/end pair becomes scrollback coordinates and
+     nothing else here changes). It dies on any keystroke, and when the grid
+     generation moves, because a highlight is a claim about WHICH TEXT you
+     have and those coordinates would now name something else.
+   - Harness-verified by driving the mouse: single-row drag → `wc` says 25
+     bytes, no padding, no newline; right-click → the line lands on husk's
+     prompt un-run, and Enter proves it was really typed; a two-line snarf
+     pasted → both commands executed (ruling A, demonstrated); a drag out of
+     the window and released on the DESKTOP still published (the grab);
+     multi-row copy round-trips through `cat /sys/clipboard` with its column
+     alignment intact; scribe's cross-edge drag now scrolls and selects, and
+     Ctrl+C took 2,011 bytes of it. Suite 24+28 green, no faults.
 4. **The text VTs** — the deep slice, and the headline wish: highlighting
    on a text console auto-copies, right-click pastes into the console
    input ring. Needs three new things, all with named homes: the input

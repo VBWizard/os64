@@ -273,6 +273,14 @@ void os64_ui_textfield(os64_ui_textfield_t *tf, char *buf, size_t cap,
 // Replace the content (truncated to cap-1) and put the caret at its end.
 void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
                            const char *text);
+// Insert the system clipboard at the caret. A field is ONE line, so it takes
+// the clipboard's first line and stops there — said out loud rather than
+// discovered: pasting a two-line snarf into an Open box gets you line one,
+// not a mangled path. Returns bytes inserted (0 = nothing to paste, or full).
+// There is deliberately no field COPY: a textfield has no selection model,
+// and inventing one to feed the clipboard is a different slice with its own
+// consumer. (CLIPBOARD.md)
+size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf);
 
 // ── ui_textview — a viewport over a text buffer ─────────────────────────────
 // THE PLAIN-TEXT RENDERER (SCRIBE.md's format seam): one model+view pair
@@ -352,6 +360,36 @@ void os64_ui_textview_goto(os64_ui_t *ui, os64_ui_textview_t *tv,
 // Select [sl,sc) .. [el,ec), caret at the end, scrolled into view.
 void os64_ui_textview_select(os64_ui_t *ui, os64_ui_textview_t *tv,
                              size_t sl, size_t sc, size_t el, size_t ec);
+
+// ── the system clipboard (CLIPBOARD.md) ─────────────────────────────────────
+// THE MECHANISM LIVES HERE; THE BINDING IS THE APP'S. libui does not claim
+// Ctrl+C — a terminal widget would want that key for SIGINT, and a library
+// that decides such things for its host is a library you fight. scribe calls
+// these from its own shortcut table, like it does Ctrl+S; the next consumer
+// picks its own keys and gets the same three verbs.
+//
+// The clipboard these speak to is the SYSTEM's one snarf buffer — the same
+// bytes `cat /sys/clipboard` prints, so text copied here pastes into a shell
+// pipeline and vice versa. That is the entire point of it being a file.
+
+// Write the selection to the clipboard. Returns bytes copied, 0 when nothing
+// is selected, negative if the clipboard refused it (over its ceiling, say).
+// Works on a READ-ONLY view: a viewer that can't be edited can still be
+// quoted, which is most of what a help page or a log viewer is for.
+int64_t os64_ui_textview_copy(const os64_ui_textview_t *tv);
+
+// Copy the selection, then delete it. Refuses on a read-only view, and —
+// deliberately — refuses if the COPY failed: text is never destroyed on
+// behalf of a clipboard that did not take it.
+bool os64_ui_textview_cut(os64_ui_t *ui, os64_ui_textview_t *tv);
+
+// Insert the clipboard at the caret, replacing any selection (Bravo's
+// manners, and everyone's since). Newlines split lines; a CR is dropped as
+// the line-ending fossil it is, because a buffer holds LINES, not
+// terminators. Streams straight from the file — a large paste costs no
+// intermediate copy of itself. False = read-only view, or empty clipboard
+// (which changes nothing, selection included).
+bool os64_ui_textview_paste(os64_ui_t *ui, os64_ui_textview_t *tv);
 
 extern const os64_ui_class_t os64_ui_scrollbar_class;
 extern const os64_ui_class_t os64_ui_textfield_class;

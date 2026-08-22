@@ -10,6 +10,8 @@
 
 #include "os64/ui.h"
 #include "os64/str.h"
+#include "os64/io.h"     // the clipboard is a FILE — open/read/write/close
+#include "os64/clip.h"   // ...at OS64_CLIPBOARD_PATH
 
 // ── decoding the keyboard's 1979 vocabulary ─────────────────────────────────
 //
@@ -430,6 +432,82 @@ void os64_ui_textfield_set(os64_ui_t *ui, os64_ui_textfield_t *tf,
 	tf->cursor = tf->len;
 	tf->first = 0;
 	os64_ui_mark_dirty(ui, &tf->w);
+}
+
+// ── the system clipboard, at the widget's edge ──────────────────────────────
+// Everything below talks to /sys/clipboard the same way husk does: it is a
+// FILE, opened for "w" to copy and "r" to paste (CLIPBOARD.md). No syscall,
+// no special case, and text that leaves scribe this way arrives intact in
+// `cat /sys/clipboard` — which is the whole reason the clipboard was built
+// as a file rather than as a windowing-system API.
+//
+// libui allocates nothing here, same as everywhere else in this library: the
+// copy streams line by line into the open handle, and the paste streams the
+// other way through one stack chunk. A 16MB snarf never exists twice.
+
+// The clipboard's own doctrine says a multi-write copy is ONE snarf, sealed
+// at close — so a partial write is not a partial clipboard, it is a copy that
+// never publishes. That lets this be a plain loop with an honest bool.
+static bool clip_write_all(int32_t h, const void *bytes, size_t n, int64_t *total)
+{
+	const uint8_t *p = (const uint8_t *)bytes;
+	size_t sent = 0;
+
+	while (sent < n) {
+		int64_t w = os64_write(h, p + sent, n - sent);
+		if (w <= 0)
+			return false;
+		sent += (size_t)w;
+	}
+	*total += (int64_t)n;
+	return true;
+}
+
+size_t os64_ui_textfield_paste(os64_ui_t *ui, os64_ui_textfield_t *tf)
+{
+	int64_t h = os64_open(OS64_CLIPBOARD_PATH, "r");
+	if (h < 0)
+		return 0;
+
+	// One line's worth is all a one-line control can honestly hold, so read
+	// only as much as could possibly fit and stop at the first newline.
+	char chunk[256];
+	size_t added = 0;
+
+	for (;;) {
+		size_t room = (tf->len + 1 < tf->cap) ? (tf->cap - 1 - tf->len) : 0;
+		if (room == 0)
+			break;
+		size_t want = room < sizeof(chunk) ? room : sizeof(chunk);
+
+		int64_t n = os64_read((int32_t)h, chunk, want);
+		if (n <= 0)
+			break;
+
+		size_t run = 0;
+		while (run < (size_t)n && chunk[run] != '\n' && chunk[run] != '\r')
+			run++;
+
+		if (run > 0) {
+			// +1 rides the NUL, exactly as the K_CHAR path does.
+			os64_memmove(tf->buf + tf->cursor + run, tf->buf + tf->cursor,
+			             tf->len - tf->cursor + 1);
+			for (size_t i = 0; i < run; i++)
+				tf->buf[tf->cursor + i] = chunk[i];
+			tf->cursor += run;
+			tf->len += run;
+			added += run;
+		}
+		if (run < (size_t)n)
+			break;   // hit the line ending — a field takes line one, and says so
+	}
+
+	os64_close((int32_t)h);
+	if (added > 0) {
+		field_keep_caret_visible(tf, &ui->theme);
+		os64_ui_mark_dirty(ui, &tf->w);
+	}
+	return added;
 }
 
 // ── ui_textview ─────────────────────────────────────────────────────────────
@@ -931,4 +1009,127 @@ void os64_ui_textview_select(os64_ui_t *ui, os64_ui_textview_t *tv,
 	tv->sel_line = sl;
 	tv->sel_col = sc;
 	os64_ui_textview_goto(ui, tv, el, ec, true);
+}
+
+// ── copy / cut / paste (ui.h carries the doctrine) ──────────────────────────
+
+int64_t os64_ui_textview_copy(const os64_ui_textview_t *tv)
+{
+	size_t sl, sc, el, ec;
+	if (!tv_sel_range(tv, &sl, &sc, &el, &ec))
+		return 0;
+
+	int64_t h = os64_open(OS64_CLIPBOARD_PATH, "w");
+	if (h < 0)
+		return h;
+
+	// The newline between lines is MANUFACTURED here, and that is the honest
+	// shape: the model holds lines, not terminators (scribe_buf.h), so the
+	// separator is the copy's business — one between lines, none after the
+	// last, which is what makes a within-one-line copy paste back inline.
+	int64_t total = 0;
+	bool ok = true;
+
+	for (size_t li = sl; li <= el && ok; li++) {
+		size_t len;
+		const char *ln = tv_line(tv, li, &len);
+		size_t from = (li == sl) ? sc : 0;
+		size_t to   = (li == el) ? ec : len;
+
+		if (from > len) from = len;
+		if (to > len)   to = len;
+		if (to > from)
+			ok = clip_write_all((int32_t)h, ln + from, to - from, &total);
+		if (ok && li < el)
+			ok = clip_write_all((int32_t)h, "\n", 1, &total);
+	}
+
+	// Close is the SEAL — or, if a write was refused, the discard that leaves
+	// the previous snarf standing. Either way it is the same call.
+	os64_close((int32_t)h);
+	return ok ? total : -1;
+}
+
+bool os64_ui_textview_cut(os64_ui_t *ui, os64_ui_textview_t *tv)
+{
+	if (!tv_editable(tv))
+		return false;
+
+	// Copy FIRST and believe its answer. A cut that deleted the text and then
+	// discovered the clipboard wouldn't take it would be the only operation in
+	// this editor that can lose work — so it doesn't exist.
+	if (os64_ui_textview_copy(tv) <= 0)
+		return false;
+
+	if (!tv_delete_selection(tv))
+		return false;
+	if (tv->on_change)
+		tv->on_change(tv, tv->view_user);
+	tv_ensure_visible(ui, tv);
+	return true;
+}
+
+bool os64_ui_textview_paste(os64_ui_t *ui, os64_ui_textview_t *tv)
+{
+	if (!tv_editable(tv))
+		return false;
+
+	int64_t h = os64_open(OS64_CLIPBOARD_PATH, "r");
+	if (h < 0)
+		return false;
+
+	// Ask the length before touching the document: an empty clipboard must
+	// not eat a selection. (seek to the end IS the question — os64's seek
+	// returns the new position.) The handle holds one entry for its whole
+	// life, so this length and the bytes below cannot disagree.
+	int64_t length = os64_seek((int32_t)h, 0, OS64_SEEK_END);
+	if (length <= 0 || os64_seek((int32_t)h, 0, OS64_SEEK_SET) < 0) {
+		os64_close((int32_t)h);
+		return false;
+	}
+
+	bool changed = tv_delete_selection(tv);
+	char chunk[512];
+	int64_t n;
+
+	while ((n = os64_read((int32_t)h, chunk, sizeof(chunk))) > 0) {
+		size_t i = 0;
+		while (i < (size_t)n) {
+			// ONE insert per RUN of ordinary bytes, never one per byte: the
+			// line's tail moves once instead of once per character, which is
+			// the difference between a paste and a coffee break.
+			size_t run = i;
+			while (run < (size_t)n && chunk[run] != '\n' && chunk[run] != '\r')
+				run++;
+			if (run > i) {
+				tv->buf->insert(tv->buf->user, tv->cur_line, tv->cur_col,
+				                chunk + i, run - i);
+				tv->cur_col += run - i;
+				changed = true;
+			}
+			i = run;
+
+			// CR is dropped, alone or as half of a CRLF: a buffer holds lines,
+			// and a carriage return inside one is a fossil of a file format,
+			// not a character anybody meant to type. (A lone CR therefore
+			// joins its neighbours — old-Mac line endings are not a format
+			// os64 has ever claimed to read.)
+			while (i < (size_t)n && chunk[i] == '\r')
+				i++;
+			if (i < (size_t)n && chunk[i] == '\n') {
+				tv->buf->split(tv->buf->user, tv->cur_line, tv->cur_col);
+				tv->cur_line++;
+				tv->cur_col = 0;
+				changed = true;
+				i++;
+			}
+		}
+	}
+
+	os64_close((int32_t)h);
+
+	if (changed && tv->on_change)
+		tv->on_change(tv, tv->view_user);
+	tv_ensure_visible(ui, tv);
+	return changed;
 }
