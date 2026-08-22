@@ -765,6 +765,15 @@ static void sys_gen_net_dhcp(synth_text_t *t)
 		// gateway, which is why the lifeboat entry tells you to read it.
 		synth_text_addf(t, "server: %u.%u.%u.%u\n",
 		                NET_IPV4_OCTETS(kDhcpStats.lease_server));
+		// The name server the lease offered (option 6). READ BY SOFTWARE,
+		// not just by people: libos64's resolver takes its server from this
+		// line when /etc/net.conf names none — so the key and the shape are
+		// a contract. "none" when the lease was silent.
+		if (kDhcpStats.lease_dns != 0)
+			synth_text_addf(t, "dns: %u.%u.%u.%u\n",
+			                NET_IPV4_OCTETS(kDhcpStats.lease_dns));
+		else
+			synth_text_addf(t, "dns: none\n");
 		synth_text_addf(t, "lease_seconds: %u (recorded; renewal is a DEBT)\n",
 		                kDhcpStats.lease_seconds);
 	}

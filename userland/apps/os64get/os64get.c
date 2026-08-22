@@ -476,6 +476,8 @@ int main(int argc, char **argv)
             (conn == OS64_NET_ERR_NO_NIC)       ? "no network interface on this boot" :
             (conn == OS64_NET_ERR_BAD_ADDRESS)  ? "that host is not a dotted quad" :
             (conn == OS64_NET_ERR_NO_RESOURCES) ? "out of handles or ports" :
+            (conn == OS64_NET_ERR_NO_SUCH_HOST) ? "no such host — not in /home/hosts, /etc/hosts, or DNS" :
+            (conn == OS64_NET_ERR_NO_RESOLVER)  ? "that is a name, and there is no name server to ask (see /etc/net.conf)" :
                                                   "refused";
         os64_hprintf(OS64_STDERR, "os64get: cannot reach %s:%d — %s\n", host, GET_PORT, why);
         return GET_DIAL_FAILED;

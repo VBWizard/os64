@@ -105,7 +105,11 @@ static void print_offset(const char *prefix, int64_t offset)
 static const char *dial_error(int64_t result)
 {
     if (result == OS64_NET_ERR_BAD_ADDRESS)
-        return "server must be a dotted IPv4 address";
+        return "server must be a dotted IPv4 address or a name";
+    if (result == OS64_NET_ERR_NO_SUCH_HOST)
+        return "no such host (not in the hosts files or DNS)";
+    if (result == OS64_NET_ERR_NO_RESOLVER)
+        return "a name, but no name server to ask (see /etc/net.conf)";
     if (result == OS64_NET_ERR_NO_NIC)
         return "no network interface is available";
     if (result == OS64_NET_ERR_NO_RESOURCES)
