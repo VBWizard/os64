@@ -320,7 +320,7 @@ struct file_operations
     int (*read)(vfs_file_t* vfs_file, void* buffer, size_t size);
 	char* (*fgets)(vfs_file_t* vfs_file, char* buffer, int length);
 	int (*fputs)(vfs_file_t* vfs_file, char* buffer);
-	int (*tell)(vfs_file_t* vfs_file);
+	int64_t (*tell)(vfs_file_t* vfs_file);
 	int (*fprintf)(vfs_file_t* vfs_file, const char* fmt, ...);
     int (*write)(vfs_file_t* vfs_file, const void* buffer, size_t size);
     int (*seek)(vfs_file_t* vfs_file, long offset, int whence);

@@ -145,7 +145,8 @@ void    os64_linereader_close(os64_linereader_t *lr);
 // Open the file at `path` (absolute, on the root filesystem) and return a
 // handle, or negative on error (no such file, bad mode, out of handles).
 // `mode` is a one-letter string:
-//   "r"  read what exists            "a"  append to what exists
+//   "r"  read what exists            "u"  update what exists (read/write)
+//   "a"  append to what exists
 //   "w"/"c"  create (or truncate) for writing
 // Pass NULL for "r" — reading is what almost every open is.
 //

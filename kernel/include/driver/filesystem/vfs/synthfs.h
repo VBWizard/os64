@@ -87,7 +87,7 @@ void *synth_snapshot_publish(vfs_file_t **vfs_file, synth_text_t *text,
 
 int synth_snapshot_read(vfs_file_t *vfs_file, void *buffer, size_t size);
 int synth_snapshot_seek(vfs_file_t *vfs_file, long offset, int whence);
-int synth_snapshot_tell(vfs_file_t *vfs_file);
+int64_t synth_snapshot_tell(vfs_file_t *vfs_file);
 int synth_snapshot_close(vfs_file_t *vfs_file);
 
 // ── Mounting ────────────────────────────────────────────────────────────────

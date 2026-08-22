@@ -181,6 +181,9 @@ int synth_snapshot_seek(vfs_file_t *vfs_file, long offset, int whence)
 		case SEEK_END: base = (int64_t)h->size; break;
 		default: return -1;
 	}
+	if ((offset > 0 && base > INT64_MAX - offset) ||
+	    (offset < 0 && base < INT64_MIN - offset))
+		return -1;
 	int64_t target = base + offset;
 	if (target < 0)
 		return -1;
@@ -188,9 +191,9 @@ int synth_snapshot_seek(vfs_file_t *vfs_file, long offset, int whence)
 	return 0;
 }
 
-int synth_snapshot_tell(vfs_file_t *vfs_file)
+int64_t synth_snapshot_tell(vfs_file_t *vfs_file)
 {
-	return (int)((synth_snapshot_t *)vfs_file->handle)->pos;
+	return (int64_t)((synth_snapshot_t *)vfs_file->handle)->pos;
 }
 
 int synth_snapshot_close(vfs_file_t *vfs_file)

@@ -121,7 +121,8 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	dev_node_t node = dev_parse_path(path);
 
 	if (mode == NULL || mode[1] != '\0' ||
-	    (mode[0] != 'r' && mode[0] != 'w' && mode[0] != 'a' && mode[0] != 'c'))
+	    (mode[0] != 'r' && mode[0] != 'w' && mode[0] != 'a' &&
+	     mode[0] != 'c' && mode[0] != 'u'))
 		return -1;
 
 	// ROOT is a directory (dops), NONE does not exist, and TTY never gets
@@ -228,7 +229,7 @@ static int dev_seek(vfs_file_t *vfs_file, long offset, int whence)
 	return 0;
 }
 
-static int dev_tell(vfs_file_t *vfs_file)
+static int64_t dev_tell(vfs_file_t *vfs_file)
 {
 	(void)vfs_file;
 	return 0;

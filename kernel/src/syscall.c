@@ -1773,7 +1773,7 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // with HANDLE lifetime, not syscall lifetime. handle_file_object_close frees
 // it when the handle dies; this block itself dies with the syscall.
 typedef struct {
-	char        mode[4];      // "r"/"w"/"a"/"c"/"d" — validated before we get here
+	char        mode[4];      // "r"/"u"/"w"/"a"/"c"/"d" — validated before we get here
 	char       *path_copy;    // kmalloc'd, becomes f_path, outlives the syscall
 	vfs_filesystem_t *fs;     // mount-resolved BEFORE kernel context (pure
 	                          // string matching); path_copy is the fs-local
@@ -1843,7 +1843,8 @@ static void readdir_do(void *arg)
 // open(path, mode) — open a file on the root filesystem, return a handle
 // (>= 3, the standard streams are never displaced), or a SYSCALL_RESULT_*
 // sentinel. mode is a 1-letter string, validated HERE at the boundary:
-//   "r" read existing   "w"/"c" create-or-truncate for writing   "a" append
+//   "r" read existing   "u" update existing without truncation
+//   "w"/"c" create-or-truncate for writing   "a" append
 // NULL mode means "r". The handle then plugs into read/write/seek/close —
 // and into spawn's redirection slots, where `upper < file` falls out for free.
 static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -1896,7 +1897,7 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// and then can't read, which is a miserable thing to debug from ring 3.
 	// ("d" = directory, for readdir — see open_do.)
 	if (p->mode[1] != '\0' ||
-	    (p->mode[0] != 'r' && p->mode[0] != 'w' &&
+	    (p->mode[0] != 'r' && p->mode[0] != 'u' && p->mode[0] != 'w' &&
 	     p->mode[0] != 'a' && p->mode[0] != 'c' && p->mode[0] != 'd'))
 	{
 		kfree(p);

@@ -1081,11 +1081,11 @@ static uint32_t ext2_create_file(vfs_filesystem_t *fs, ext2_fs_t *e,
 
 // ── write / sync / fputs / fprintf ──────────────────────────────────────────
 
-// The 2GB-1 growth cap: classic ext2 keeps a regular file's size in a
-// 32-bit field read as signed by half the world's tools; past it lies
-// RO_COMPAT_LARGE_FILE bookkeeping we deliberately don't maintain (see
-// ext2_internal.h). The day os64 wants a >2GB file, this constant and the
-// i_dir_acl handling around it are the whole shopping list.
+// The 2GB-1 GROWTH cap: creating/extending a large file requires updating the
+// superblock's RO_COMPAT_LARGE_FILE bookkeeping, which this writer does not
+// yet own. Existing large files are nevertheless fully readable and may be
+// overwritten in place: their high size word stays untouched, and no growth
+// bookkeeping is involved. hexedit is the first consumer of that distinction.
 #define EXT2_MAX_FILE_SIZE 0x7FFFFFFFu
 
 static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
@@ -1117,26 +1117,33 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 			return -1;
 		}
 	}
-	h->size = h->inode.i_size;
+	h->size = ext2_regular_file_size(&h->inode);
 
-	// A LARGE_FILE file (size high bits in i_dir_acl) is refused whole — we
-	// don't maintain that bookkeeping, so we don't touch its inode.
-	if (h->inode.i_dir_acl != 0)
+	// Past the growth cap, overwrite only. Crossing EOF would require changing
+	// the high size word and feature bookkeeping; touching existing allocated
+	// bytes (or allocating into an existing sparse hole) does not.
+	if (h->size > EXT2_MAX_FILE_SIZE)
 	{
-		spinlock_release_irqrestore(&e->write_lock, lock_flags);
-		printd(DEBUG_VFS, "ext2: inode %u is a >2GB (large_file) file — refusing write\n", h->ino);
-		return -1;
+		if (h->pos >= h->size)
+		{
+			spinlock_release_irqrestore(&e->write_lock, lock_flags);
+			return -1;
+		}
+		if (size > h->size - h->pos)
+			size = h->size - h->pos;
 	}
-
-	// Clamp to the growth cap; writing SOME bytes and reporting a short
-	// count is the "device full" shape the syscall layer already speaks.
-	if (h->pos >= EXT2_MAX_FILE_SIZE)
+	else
 	{
-		spinlock_release_irqrestore(&e->write_lock, lock_flags);
-		return -1;
+		// Clamp ordinary growth to the legacy-safe ceiling. A short write is
+		// the existing "device full" shape at the syscall boundary.
+		if (h->pos >= EXT2_MAX_FILE_SIZE)
+		{
+			spinlock_release_irqrestore(&e->write_lock, lock_flags);
+			return -1;
+		}
+		if (size > EXT2_MAX_FILE_SIZE - h->pos)
+			size = EXT2_MAX_FILE_SIZE - h->pos;
 	}
-	if (size > EXT2_MAX_FILE_SIZE - h->pos)
-		size = EXT2_MAX_FILE_SIZE - h->pos;
 
 	// Data blocks want the inode's own group — FFS locality.
 	uint32_t goal_group = (h->ino - 1) / e->sb.s_inodes_per_group;
@@ -1203,12 +1210,12 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	// DID land are durable and accounted.
 	if (done > 0 || h->inode.i_blocks != 0)
 	{
-		if (h->pos > h->inode.i_size)
+		if (h->pos > h->size)
 			h->inode.i_size = (uint32_t)h->pos;
 		h->inode.i_mtime = (uint32_t)kSystemCurrentTime;
 		if (ext2_write_inode_disk(fs, e, h->ino, &h->inode) != 0)
 			io_error = true;
-		h->size = h->inode.i_size;
+		h->size = ext2_regular_file_size(&h->inode);
 	}
 
 	spinlock_release_irqrestore(&e->write_lock, lock_flags);
@@ -1255,6 +1262,7 @@ static int ext2_fprintf(vfs_file_t *vfs_file, const char *fmt, ...)
 // ── The writable open ───────────────────────────────────────────────────────
 // The full mode vocabulary, matching the FAT glue's semantics exactly:
 //   "r"      — existing file, read (delegates to the shared open core)
+//   "u"      — existing file, read/write without truncating it
 //   "a"      — append: open at end, CREATING the file if absent
 //   "w"/"c"  — create-or-truncate ("c" predates "w" and is byte-identical;
 //              kept for existing callers, same as FAT)
@@ -1303,6 +1311,7 @@ static int ext2_open_rw(vfs_file_t **vfs_file, const char *path, const char *mod
 	switch (mode[0])
 	{
 		case 'r':
+		case 'u':
 			return ext2_open_existing(vfs_file, path, vfs_fs);
 
 		case 'a':
