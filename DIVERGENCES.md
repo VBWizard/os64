@@ -24,6 +24,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `fork` AND `exec`, both first-class | Alongside spawn. Good names, good ideas (LIBOS64 § process model) |
 | Handles 0/1/2 = in/out/err | The contract every filter is written against |
 | The single-rooted tree | Without the sediment — see the tree section below |
+| `#!` on line one, handled by the KERNEL's exec — and `$1`..`$9`, `$*`, `$#` in husk | Ritchie's V8 (1980) put `#!` in exec() so the loader answers "what runs this file" and every program, not just the shell, can run a script. os64 does it in task_create (elf_loader.h): one level, an absolute interpreter, one optional argument, V7/BSD semantics. No filename extensions, ever — the file says what it is on its first line (Chris, 2026-08-22). The positional sigil is `$` because husk already expands `$CWD`/`$NAME` with it; `%1` was DOS's and a second sigil would be the wart |
 | Small tools composed by pipes | The whole userland doctrine |
 | `\|` `<` `>` `&` shell notation | `<` predates `\|` by two years; `&` is Thompson 1973 |
 | `$?`, exit code 0 = success | Bourne 1977; last pipeline stage speaks for the job |

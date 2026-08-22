@@ -118,4 +118,24 @@ bool elf_is_dynamic(const char *path);
 // to do, meaning ring 3 could take the OS down with a fat-fingered filename.
 bool elf_can_load(const char *path);
 
+// ── #! — the other kind of executable (2026-08-22) ──────────────────────────
+// A file whose first two bytes are "#!" is not a program; it NAMES one. Line
+// one is `#!<interpreter> [one argument]`, and running the file means running
+// the interpreter with the file's path appended to its arguments. Dennis
+// Ritchie put this in V8's exec() in 1980 (4.2BSD carried it to the world) so
+// that the LOADER would know, and any program — a shell, make, cron, a GUI
+// launcher — could run a script without sniffing it. That is why it lives
+// here beside elf_can_load and not in husk: this is the one place in the
+// system that opens a file in order to run it. No filename extensions, ever;
+// the file says what it is on its first line.
+//
+// Returns true and fills `interp` (the absolute path after "#!") and `arg`
+// (the rest of the line, trimmed, possibly empty — ONE argument, V7/BSD
+// semantics, not a re-split shell line) when `path` begins with "#!". False
+// for anything else, including an unreadable file — the caller then goes on
+// to ask elf_can_load, which says its own "no".
+#define EXEC_SHEBANG_LINE_MAX 256
+bool exec_read_shebang(const char *path, char *interp, size_t interp_cap,
+                       char *arg, size_t arg_cap);
+
 #endif

@@ -872,6 +872,17 @@ static int is_name_char(char c)
 	return is_name_start(c) || (c >= '0' && c <= '9');
 }
 
+// ── positional parameters (2026-08-22) ──────────────────────────────────────
+// A script's arguments: $0 is the script's path, $1..$9 its arguments, $* all
+// of them space-joined, $# how many. Empty when unset, as a Bourne shell
+// would (and as an interactive husk always is — these exist for scripts).
+// The sigil is `$`, because husk already expands $CWD and $NAME with it and a
+// second sigil would be the wart: Chris's ruling, and his DOS reflex (%1)
+// lost to his own "I always hated having to surround a variable with %%".
+static const char *g_script_path = NULL;   // $0 — non-NULL means script mode
+static char **g_params = NULL;             // $1.. — argv slice, kernel-owned
+static int g_nparams = 0;                  // $#
+
 static void expand_line(const char *src, char *dst, int cap, int last_status)
 {
 	int n = 0;
@@ -908,6 +919,39 @@ static void expand_line(const char *src, char *dst, int cap, int last_status)
 		{
 			char nb[24];
 			int k = utoa((unsigned long)os64_getpid(), nb);
+			for (int j = 0; j < k && n < cap - 1; j++)
+				dst[n++] = nb[j];
+			src += 2;
+		}
+		else if (src[0] == '$' && src[1] >= '0' && src[1] <= '9')
+		{
+			// $0..$9 — ONE digit, Bourne's rule (${10} is a door that stays
+			// closed until someone writes a script with ten arguments).
+			int idx = src[1] - '0';
+			const char *v = NULL;
+			if (idx == 0)
+				v = g_script_path;
+			else if (idx <= g_nparams)
+				v = g_params[idx - 1];
+			for (; v && *v && n < cap - 1; v++)
+				dst[n++] = *v;
+			src += 2;
+		}
+		else if (src[0] == '$' && src[1] == '*')
+		{
+			for (int i = 0; i < g_nparams; i++)
+			{
+				if (i > 0 && n < cap - 1)
+					dst[n++] = ' ';
+				for (const char *v = g_params[i]; *v && n < cap - 1; v++)
+					dst[n++] = *v;
+			}
+			src += 2;
+		}
+		else if (src[0] == '$' && src[1] == '#')
+		{
+			char nb[20];
+			int k = utoa((unsigned long)g_nparams, nb);
 			for (int j = 0; j < k && n < cap - 1; j++)
 				dst[n++] = nb[j];
 			src += 2;
@@ -1776,11 +1820,66 @@ static int run_command_argument(const char *command)
 	return last_status;
 }
 
+// ── a script: a file of lines, with arguments ──────────────────────────────
+// `husk FILE [args...]` — the third SOURCE for run_line after the keyboard
+// and the rc, and the one the rc comment promised ("this same run_line fed
+// from a file"). Nobody types that spelling, though: the kernel does, when
+// a file whose first line is `#!/bin/husk` is spawned (elf_loader.h — the
+// loader rewrites the request to `/bin/husk FILE args...`). So `get cp`
+// works from the prompt because /bin/get says on line one who runs it, and
+// husk here receives its own path as $0 and `cp` as $1.
+//
+// Same policy as -c: no banner, no rc, no prompt, no job table, and the exit
+// status is the LAST LINE's — a script is a program and a program answers.
+// The `#!` line is skipped by the same test that skips an rc comment; a
+// script is an rc with arguments, which is what Thompson's sh scripts were
+// in 1973 before Bourne gave them $1.
+static int run_script(const char *path, char **params, int nparams)
+{
+	int h = (int)os64_open(path, "r");
+	if (h < 0)
+	{
+		os64_puts("husk: cannot open script ");
+		os64_puts(path);
+		os64_puts("\n");
+		return 2;
+	}
+
+	g_script_path = path;
+	g_params = params;
+	g_nparams = nparams;
+
+	os64_debug_log("husk: running a script");
+
+	char line[LINE_MAX];
+	int last_status = 0;
+	int exiting = 0;
+	while (!exiting && os64_readline(h, line, sizeof(line)) == 1)
+	{
+		const char *s = line;
+		while (*s == ' ' || *s == '\t')
+			s++;
+		if (*s == '\0' || *s == '#')
+			continue;                   // blank, comment — and the #! line itself
+		exiting = run_line(line, &last_status);   // `exit` ends the script
+	}
+	os64_close(h);
+	return last_status;
+}
+
 // ── the shell ───────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv, char **envp)
 {
 	(void)envp;
+
+	// A first argument that is not an option is a SCRIPT, and everything
+	// after it belongs to the script — so `husk /bin/get -v cp` hands `-v`
+	// to the script, not to this parser. That is sh(1)'s rule (the file
+	// stops option parsing), and it is checked by hand here for exactly that
+	// reason: the args parser would otherwise claim `-v` as husk's own.
+	if (argc >= 2 && argv[1] != NULL && argv[1][0] != '-')
+		return run_script(argv[1], argv + 2, argc - 2);
 
 	// The only flag husk has, and the only one it should ever have:
 	// everything else this shell does, it does because you typed it.
@@ -1796,13 +1895,13 @@ int main(int argc, char **argv, char **envp)
 	               "then prompts. With -c it runs one line and exits with that "
 	               "line's status — which is how a program borrows the shell's "
 	               "language without borrowing its parser.";
-	// NO positionals: `husk script.rc` is a door that is closed, and closed
-	// LOUDLY (parse prints the help) rather than by ignoring the argument.
-	// Running a named script is a real future feature, and when it arrives it
-	// will be this same run_line fed from a file — exactly as the rc already
-	// is. The kernel launches husk with argc 0 and argv NULL, which walks
-	// straight out of the parse loop on the first index check.
-	int32_t parsed = os64_args_parse(&args, "husk [-c \"command line\"]", NULL, 0);
+	// No positionals HERE: a script operand was taken above, before this
+	// parser ever saw the line (the door the old comment here said was
+	// closed opened on 2026-08-22, as that comment predicted: "this same
+	// run_line fed from a file"). The kernel launches husk with argc 0 and
+	// argv NULL, which walks straight out of the parse loop on the first
+	// index check.
+	int32_t parsed = os64_args_parse(&args, "husk [-c \"command line\"] | husk FILE [args...]", NULL, 0);
 	if (parsed == OS64_ARG_HELP) return 0;
 	if (parsed < 0) return 2;
 
