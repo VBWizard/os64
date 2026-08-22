@@ -65,10 +65,65 @@ IRQ1/IRQ12 → ps2_handle_irq (keyboard.c): drain 8042, dispatch on status bit 5
 input.c: one ring (irqsave spinlock), tracks cursor position (clamped) and
          diffs button state into discrete DOWN/UP events
 compositor: drains per frame; routes under kGuiLock:
-   clicks → hit-test top-down → raise+focus; titlebar+left = drag grab
-   moves  → cursor damage; drag → wm_move; else deliver content-local to window
+   MOUSE, and the GUI does NOT own the glass → vt_select.c (the text VT)
+   clicks → hit-test top-down → raise+focus; titlebar+left = drag grab;
+            a click landing in a client's CONTENT starts the pointer grab
+   moves  → cursor damage; WM drag → wm_move; pointer grab → its owner;
+            else hit-test and deliver content-local to the window under it
    keys   → focused window
 ```
+
+### The input fork (2026-08-21)
+
+Mouse events belong to whoever holds the glass. `input_inject_mouse` used to
+DROP them whenever a text VT was focused ("there is no consumer" — true until
+this date); it now enqueues unconditionally, and the fork happens at the far
+end of the ring, in `route_event_locked`, which is the only place that knows
+who holds the glass at drain time. With VT8 up they route to windows; with a
+text terminal up they route to **vt_select.c**, where they become gpm's old
+gesture — select-to-copy, right-click-to-paste, and a pointer that is one
+inverted character cell.
+
+Keys are NOT forked here and never were: the keyboard driver routes those at
+its own end, tty by tty. Only the pointer had nowhere to go.
+
+Two consequences worth knowing:
+- **No new thread.** The compositor already drains the ring every frame
+  whether or not it owns the glass (it composites into the backbuffer always,
+  and flushes only when the glass is its). The console overlay is painted in
+  the same frame pass, in the branch where the flush would have gone.
+- **Painting happens with kGuiLock RELEASED.** `vtsel_paint()` takes the tty
+  lock and then the renderer lock; reaching those while holding the
+  compositor's would invent a lock order nothing else in the system has. So
+  events move state under the lock and the world is touched outside it.
+
+### The implicit pointer grab (2026-08-21)
+
+**While a button is down on a client's content area, that client owns the
+pointer**: every move and the release go to it, wherever the cursor has got
+to — including coordinates outside its own window, which is exactly what an
+app tracking a drag past its edge needs to see. `s_pointer_window` in
+compositor.c; released when the last button comes up, and by
+`gui_grab_release()` if the window dies mid-gesture.
+
+The WM's own gestures always had this (`s_drag_window`, `s_band_window`, and
+the comment above them says why). Clients did not, and hit-testing every
+event is a different promise: a drag-select that left the window lost its
+tail, and the BUTTON_UP that ends a gesture went to whatever happened to be
+underneath — a phantom release for a stranger, none at all for the app
+mid-drag. scribe wore that as a quirk for a day (Chris hit it and filed it
+under "quirk"); gterm's select-is-copy would have worn it as "the copy
+sometimes doesn't happen", which is worse for being silent.
+
+X11 named this in 1987 — the **implicit passive grab**. Every window system
+has one, because every window system without one grows this same bug.
+
+Note the two delivery rules that fall out of it: a hit-tested event must land
+inside the content area (chrome belongs to the window system), while a
+GRABBED event is delivered unconditionally, in the window's coordinates,
+negative values and all. The grab starts ONLY on a press that reached the
+client — a press on chrome would otherwise hand it a release it never asked
+for.
 
 ### IRQ routing — the IMCR story (important history)
 

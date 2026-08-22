@@ -209,6 +209,12 @@
 // nothing to resolve, which is what choosing the free bit BOUGHT.
 #define DEBUG_NET (__uint128_t)1 << 28
 #define DEBUG_SYSTEM (__uint128_t)1 << 29
+// The system clipboard (clipboard.c). It rode DEBUG_VFS while /sys/clipboard
+// was its only door — honest then, since every byte arrived through the
+// filesystem. The text-console selection (vt_select.c) snarfs without a file
+// anywhere in sight, so the bit is earned: CONFIG.h, klog_format.h's %g
+// table and log.c's static asserts move together, always.
+#define DEBUG_CLIPBOARD (__uint128_t)1 << 30
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127

@@ -480,7 +480,15 @@ void print(const char* str) {
     print_n(str, strlen(str));
 }
 
-void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff)
+// The glyph blitter, with BOTH colors named. put_char is this with the
+// console's one background color, which is what it always used; the explicit
+// form exists because a cell sometimes needs its own background — inverse
+// video for a text-console selection is the first customer (vt_select.c,
+// 2026-08-21), and gpm's highlight on the Linux console was exactly this
+// operation. Any future per-cell attribute lands here too.
+static void put_char_colors(BasicRenderer *basicrenderer, char chr,
+                            unsigned int xOff, unsigned int yOff,
+                            uint32_t fg, uint32_t bg)
 {
     unsigned int *pixPtr = (unsigned int *)basicrenderer->framebuffer->base_address;
     char *fontPtr = (char *)basicrenderer->psf1_font->glyph_buffer + (chr * basicrenderer->psf1_font->psf1_header->charsize);
@@ -499,8 +507,8 @@ void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigne
             // repaint every pixel anyway, so the VRAM store is skipped and
             // a burst's glyph rendering costs shadow writes only.
             unsigned int px = ((*fontPtr & (0b10000000 >> (x - xOff))) > 0)
-                                  ? basicrenderer->color
-                                  : kFrameBufferBackgroundColor;
+                                  ? fg
+                                  : bg;
             size_t idx = x + (y * basicrenderer->framebuffer->pixels_per_scan_line);
             if (!s_glassDirty)
                 *(pixPtr + idx) = px;
@@ -509,6 +517,12 @@ void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigne
         }
         fontPtr++;
     }
+}
+
+void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff)
+{
+    put_char_colors(basicrenderer, chr, xOff, yOff,
+                    basicrenderer->color, kFrameBufferBackgroundColor);
 }
 
 // ── The dumb-glass API (2026-08-08 — the renderer's demotion papers) ────────
@@ -554,6 +568,15 @@ void renderer_glass_putc_locked(char ch, uint32_t row, uint32_t col, uint32_t co
 	// so there is nothing to save and restore.
 	kRenderer.color = color;
 	put_char(&kRenderer, ch, col * FONT_WIDTH, row * FONT_HEIGHT);
+}
+
+void renderer_glass_putc_bg_locked(char ch, uint32_t row, uint32_t col,
+                                   uint32_t fg, uint32_t bg)
+{
+	// Same contract as the putc above, with the background named. Does NOT
+	// touch kRenderer.color: an overlay is a temporary lie about one cell,
+	// and the tty's idea of the current write color must survive it intact.
+	put_char_colors(&kRenderer, ch, col * FONT_WIDTH, row * FONT_HEIGHT, fg, bg);
 }
 
 void renderer_glass_scroll_locked(void)

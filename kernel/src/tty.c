@@ -90,6 +90,20 @@ static inline uint32_t tty_row_line(tty_t *t, uint32_t row)
 	return (t->screen_top + row) % t->total_lines;
 }
 
+// The cells of a VISIBLE screen row, honoring the scrollback view — the ring
+// math the repaint below has always done, named once so a second reader can
+// have it without copying it. (vt_select.c is that reader: a mouse selection
+// on a text console has to know which glyphs are under the pointer, and a
+// duplicated `(screen_top + total_lines - view_offset + r) % total_lines`
+// would be a second place to get the scrollback wrong.) Caller holds t->lock.
+tty_cell_t *tty_visible_line(tty_t *t, uint32_t screen_row)
+{
+	if (t == NULL || t->cells == NULL || screen_row >= t->rows)
+		return NULL;
+	uint32_t top = (t->screen_top + t->total_lines - t->view_offset) % t->total_lines;
+	return tty_line(t, (top + screen_row) % t->total_lines);
+}
+
 static void tty_clear_line(tty_t *t, uint32_t ring_line)
 {
 	memset(tty_line(t, ring_line), 0, (size_t)t->cols * sizeof(tty_cell_t));
@@ -206,11 +220,9 @@ static void tty_repaint_locked(tty_t *t)
 	uint64_t rflags = renderer_glass_begin();
 	renderer_glass_defer_locked();
 
-	// Top visible ring line: the live screen top, backed up view_offset lines.
-	uint32_t top = (t->screen_top + t->total_lines - t->view_offset) % t->total_lines;
 	for (uint32_t r = 0; r < t->rows; r++)
 	{
-		tty_cell_t *line = tty_line(t, (top + r) % t->total_lines);
+		tty_cell_t *line = tty_visible_line(t, r);   // the ring math, once
 		for (uint32_t c = 0; c < t->cols; c++)
 		{
 			// A never-written cell paints as a space — full coverage means
@@ -379,6 +391,32 @@ void tty_input_push(tty_t *t, const keyboard_event_t *ev)
 	t->ring[head] = *ev;
 	t->ring_head = next;
 	spinlock_release_irqrestore(&t->ring_lock, flags);
+}
+
+// The same push, but it REFUSES a full ring instead of dropping the byte —
+// for a producer that can come back later. The clipboard paste (vt_select.c)
+// is the first: a snarf can be far bigger than this ring, so it is fed in
+// installments across frames rather than truncated at the first full moment.
+// "Never drop a byte" is answerable here in a way the keyboard's own path
+// cannot answer it: a human's keystroke has nowhere to wait, a pasted byte
+// does.
+//
+// The full test is conservative by construction: the single consumer only
+// ever advances ring_tail, so a stale read can make the ring look fuller than
+// it is (we come back next frame) and never emptier.
+bool tty_input_push_if_room(tty_t *t, const keyboard_event_t *ev)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&t->ring_lock);
+	size_t head = t->ring_head;
+	size_t next = (head + 1u) % KEYBOARD_BUFFER_SIZE;
+	if (next == t->ring_tail) {
+		spinlock_release_irqrestore(&t->ring_lock, flags);
+		return false;
+	}
+	t->ring[head] = *ev;
+	t->ring_head = next;
+	spinlock_release_irqrestore(&t->ring_lock, flags);
+	return true;
 }
 
 bool tty_input_has(tty_t *t)

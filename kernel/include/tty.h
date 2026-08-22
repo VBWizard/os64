@@ -147,6 +147,11 @@ extern volatile bool kTTYReady;        // false until tty_init: printf paints
 // threads created before tty_init): no tty means the system console, VT1.
 tty_t *task_tty(struct task *t);
 
+// The cells of a VISIBLE screen row (0..rows-1), honoring the scrollback
+// view; NULL if the row is out of range. THE one place that knows how the
+// ring, screen_top and view_offset combine. Caller holds t->lock.
+tty_cell_t *tty_visible_line(tty_t *t, uint32_t screen_row);
+
 // Build the grids and take over the console. Call once kmalloc is up —
 // right after renderer_attach_shadow, so nearly all boot spew lands in VT1's
 // grid. (The handful of pre-init lines exist only as pixels; the first
@@ -181,6 +186,10 @@ bool tty_input_pop(tty_t *t, keyboard_event_t *ev);
 // producer with no such ceremony (the terminal app already decided whose
 // keystrokes these are).
 void tty_input_push(tty_t *t, const keyboard_event_t *ev);
+// The same, refusing a full ring instead of dropping the event — for a
+// producer that can come back later (the clipboard paste feeds a snarf in
+// across frames rather than truncating it). Returns false when full.
+bool tty_input_push_if_room(tty_t *t, const keyboard_event_t *ev);
 
 // ── Focus (called from the keyboard drivers' chord intercepts) ─────────────
 void tty_focus(uint32_t index);        // Alt+F1..F8 — direct select
@@ -218,7 +227,10 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows);
 // The master's write half: bytes become synthesized key events into the
 // slave's input ring — after 0x03 runs the per-tty interrupt intercept
 // against the SLAVE (a windowed Ctrl+C aims at the slave's foreground, not
-// the terminal app's). Returns bytes accepted.
+// the terminal app's). Returns bytes accepted — and that number is HONEST
+// (since 2026-08-22): the slave's input ring is small, and when it fills the
+// write stops there and says how far it got, pipe-style. Zero is not an
+// error, it is "come back later". A consumed 0x03 counts as accepted.
 int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length);
 
 // Seat references: every task whose ->tty is this pty holds one (taken at

@@ -139,6 +139,55 @@ doctrine repealed. The day /dev grows into a service namespace, revisit.
    lineage, Alessandro Rubini, 1994), grid **cell-inversion** for the
    highlight, and **injection** into console input. Details designed at
    the top of that slice, not here.
+   **BUILT 2026-08-21** — `kernel/src/vt_select.c`. All three promised
+   pieces, plus one nobody had listed: a text-mode **mouse pointer**, which
+   is gpm's own answer — invert the character cell under it. No bitmap
+   cursor, no theme, works on any glass that can paint a character.
+   - **Chris asked the right question first: "shouldn't this be a mouse
+     daemon?"** On Linux it was one, and the reason is worth keeping: the
+     mouse arrived as a character device with no in-kernel consumer, so gpm
+     read `/dev/mouse` in userland and handed the selection BACK through
+     `ioctl(TIOCLINUX)` — the highlight and the paste were always kernel
+     code. os64 already holds all three pieces on this side: the PS/2
+     driver, the console's cell grid, the clipboard. A daemon here would
+     mean inventing a `/dev/mouse` to export events and a control path to
+     feed them straight back — two new ABIs to carry data out of the kernel
+     and return it unchanged. The seam stays open if selection POLICY ever
+     wants to live in userland (word/line modes were gpm's real value-add).
+   - **No new thread, either.** The compositor already drains the one input
+     ring every frame whether or not it owns the glass, so the text-VT arm
+     is a ROUTING decision in `route_event_locked`, not a second input path.
+     Events move state under kGuiLock; painting, copying and pasting all
+     happen in the frame pass with that lock released — because painting
+     takes the tty and renderer locks, and reaching those while holding the
+     compositor's would invent a lock order nothing else in the system has.
+   - **The overlay knows it is a lie.** It remembers which rows it inverted
+     and repaints them from the grid next frame. If the terminal repainted
+     itself first (its `generation` moved, or the scrollback view scrolled),
+     the lie was already overwritten by the truth — so the selection is
+     dropped rather than "restored" as stale glyphs over new output.
+   - **The paste never drops a byte.** The console input ring is small and a
+     snarf can be large, so the paste is fed in installments across frames
+     (`tty_input_push_if_room`, new — it refuses a full ring instead of
+     dropping, which the keyboard's own path cannot do: a keystroke has
+     nowhere to wait, a pasted byte does). The entry stays REFERENCE-HELD
+     while it dribbles — the refcounted-entry design from slice 1 earning
+     its keep, since a copy elsewhere mid-paste cannot pull the bytes away.
+   - Two supporting bits: `renderer_glass_putc_bg_locked` (a cell with its
+     own background — put_char grew a two-color form) and
+     `tty_visible_line` (the ring+scrollback math, named once instead of
+     copied into a second reader).
+   - **DEBUG_CLIPBOARD (bit 30, "CLIP") is earned here** — the promise in
+     clipboard.c's header, kept: this consumer snarfs with no file in sight,
+     so the bit went into CONFIG.h, klog_format.h's %g table and log.c's
+     static asserts in one change.
+   - Verified by driving the mouse on VT1: the pointer appears as an
+     inverted cell and survives a flood of output under it; a drag lights
+     the line in inverse video hugging the text; release copies it
+     (`wc` says 41 bytes, exact, no padding, no newline); right-click types
+     it back onto husk's command line; and then — the arc's closing move —
+     **that same snarf pasted into gterm in the GUI.** Text console to
+     window system, one buffer, no protocol. Suite 24+28 green, no faults.
 
 ## Deliberately not in v1
 

@@ -104,6 +104,13 @@ uint64_t renderer_glass_begin(void);
 void renderer_glass_end(uint64_t flags, uint32_t row, uint32_t col, bool show_cursor);
 // The primitives (caller holds the lock via renderer_glass_begin):
 void renderer_glass_putc_locked(char ch, uint32_t row, uint32_t col, uint32_t color);
+// The same, with the cell's BACKGROUND named too — for an overlay that has to
+// paint one cell differently from the console's one background color.
+// Inverse video (swap the two) is the text-console selection's highlight and
+// its mouse pointer; see vt_select.c. Leaves kRenderer.color untouched.
+void renderer_glass_putc_bg_locked(char ch, uint32_t row, uint32_t col,
+                                   uint32_t fg, uint32_t bg);
+extern uint32_t kFrameBufferBackgroundColor;   // the console's one background
 void renderer_glass_scroll_locked(void);   // one text line up (throttled blit)
 void renderer_glass_clear_locked(void);    // wipe to background
 // The repaint gait (focus switch / scrollback view): defer marks the glass

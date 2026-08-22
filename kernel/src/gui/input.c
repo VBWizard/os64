@@ -82,12 +82,12 @@ void input_inject_mouse(int16_t dx, int16_t dy, uint8_t buttons)
 	if (!s_active)
 		return;
 
-	// Text VTs take no mouse (ruled 2026-08-19): while a text terminal holds
-	// the glass, motion and clicks go nowhere — the cursor should not creep
-	// invisibly, and there is no consumer. The gpm-lineage selection feature
-	// (booked in the VT8 chapter) is what will want these routed someday.
-	if (!gui_owns_glass())
-		return;
+	// Text VTs took no mouse from 2026-08-19 until 2026-08-21, and the reason
+	// given was "there is no consumer". THERE IS ONE NOW: vt_select.c, the
+	// gpm-lineage console selection this comment promised. Events are
+	// enqueued unconditionally; the compositor decides at the far end of the
+	// ring whether they belong to a window or to the focused terminal, which
+	// is the only place that knows who holds the glass at drain time.
 
 	// The keyboard state that was true when this packet arrived. Sampled ONCE
 	// for the whole packet so the move and the button edges it may also carry

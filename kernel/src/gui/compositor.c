@@ -18,6 +18,7 @@
 #include "gui/gui_internal.h"
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
+#include "vt_select.h"       // the other side of the input fork: console mouse selection
 #include "driver/system/keyboard.h"   // KEYBOARD_MOD_* — the Ctrl+Alt gestures
 
 #include "CONFIG.h"
@@ -590,6 +591,24 @@ static inline bool wm_chord_held(const input_event_t *ev)
 
 static void route_event_locked(const input_event_t *ev)
 {
+	// THE INPUT FORK (2026-08-21). Mouse events belong to whoever holds the
+	// glass: the window system when VT8 is up, the focused TEXT TERMINAL
+	// otherwise — where they become gpm's old gesture, select-to-copy and
+	// right-click-to-paste (vt_select.c). Keys are NOT forked here: the
+	// keyboard driver routes those at its own end, tty by tty, and always
+	// did. Only the pointer had nowhere to go.
+	if (!gui_owns_glass()) {
+		switch (ev->type) {
+		case INPUT_EVENT_MOUSE_MOVE:
+		case INPUT_EVENT_MOUSE_BUTTON_DOWN:
+		case INPUT_EVENT_MOUSE_BUTTON_UP:
+			vtsel_mouse_event(ev);   // state only; painting waits for the frame
+			return;
+		default:
+			break;
+		}
+	}
+
 	switch (ev->type) {
 	case INPUT_EVENT_MOUSE_MOVE: {
 		// Damage where the cursor WAS and where it lands; the recomposite
@@ -786,6 +805,16 @@ bool guicomp_thread(bool daemon)
 		// store flag into ordinary damage here, under our own lock.
 		if (s_glass_regained) {
 			s_glass_regained = false;
+			// Whatever the console overlay had painted is gone with the VT
+			// switch's repaint; it must not try to restore cells that now
+			// belong to the desktop.
+			vtsel_forget();
+			// And a client grab that straddled the time away is stale: the
+			// button that started it came up on a text console, where the
+			// release went to vt_select and never reached us. Without this,
+			// the first release after the return would land on a window
+			// that finished its gesture a VT switch ago.
+			s_pointer_window = NULL;
 			gui_damage_add_locked((rect_t){0, 0, (int32_t)kBackbuffer.width,
 			                               (int32_t)kBackbuffer.height});
 		}
@@ -810,6 +839,14 @@ bool guicomp_thread(bool daemon)
 		// a text terminal focused, the frame above still landed in the
 		// backbuffer — current state, zero VRAM cost — and the return switch
 		// pays one full-screen flush for all of it.
+		// The other side of the fork: with a text terminal on the iron, this
+		// frame's job is the console's mouse overlay instead of a flush.
+		// OUTSIDE kGuiLock, deliberately — vtsel_paint takes the tty and
+		// renderer locks, and reaching those while holding ours would invent
+		// a lock order nothing else in the system has.
+		if (!gui_owns_glass())
+			vtsel_paint();
+
 		if (gui_owns_glass())
 		for (uint32_t i = 0; i < damage_count; i++) {
 			if (rect_is_empty(damage[i]))
