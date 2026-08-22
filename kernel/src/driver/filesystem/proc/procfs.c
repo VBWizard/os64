@@ -42,6 +42,7 @@
 #include "signals.h"
 #include "handle.h"
 #include "memory/vma.h"
+#include "memory/mmap.h"   // MAP_ANONYMOUS — maps tells a file-backed VMA from an anonymous one
 #include "memory/paging.h"
 #include "memory/allocator.h"   // allocator_copy_from_task_va — the fault-proof task read
 #include "CONFIG.h"
@@ -99,7 +100,7 @@ typedef struct
 // The file names a task directory offers, in listing order. The order is the
 // order `ls /proc/7` prints, so it is arranged most-useful-first rather than
 // alphabetically.
-static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "maps", "heap", "tty", "ctl" };
+static const char *kProcTaskFiles[] = { "status", "cmdline", "cwd", "handles", "maps", "mem", "heap", "tty", "ctl" };
 #define PROC_TASK_FILE_COUNT (sizeof(kProcTaskFiles) / sizeof(kProcTaskFiles[0]))
 
 static const char *kProcThreadFiles[] = { "status" };
@@ -591,35 +592,183 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 	}
 }
 
+// ── maps: the WHOLE address space, not just the VMAs (2026-08-22) ──────────
+// "start-end<TAB>prot<TAB>flags<TAB>what" — one row per region, sorted by
+// address. Until today this walked task->mmaps only, which is the ELF
+// segments and whatever malloc mapped: honest about VMAs and silent about
+// everything else the kernel had put in the task's address space by hand —
+// the stacks, their guard pages, argv, the environment, the exit trampoline.
+// A debugger reading `??` at an address that is plainly a stack deserves a
+// map that says so. Chris's ask ("all known task memory ranges... and what
+// the region is mapped to"), the day after hexedit learned to read maps.
+//
+// The fourth column is WHAT the region is: a full path for a file-backed
+// VMA (the binary, a shared object), or a bracketed name for the kernel's
+// own furniture — [heap] [stack:<tid>] [kstack:<tid>] [guard] [argv] [env]
+// [exit] [anon]. The bracket vocabulary is Linux's (its maps says [heap] and
+// [stack]), kept on merit: Plan 9's `segment` file said Text/Data/Stack in
+// words, and brackets read better beside a path.
+//
+// Guards are LISTED, with prot `---`: they are deliberate holes, and a map
+// that hides deliberate holes is a map that lies a little — for a debugger,
+// "the fault was in [guard]" IS the stack-overflow diagnosis. [kstack] rows
+// are the thread's ring-0 stack, mapped in this address space but
+// supervisor-only; the prot column cannot say "supervisor", so the name does.
+//
+// The regions come from three places and are sorted at the end: the VMA
+// list; three fixed windows (TASK_ARGV_VIRT, TASK_ENV_VIRT,
+// TASK_EXIT_TRAMPOLINE_VIRT — sizes from argvPages, env->page_count, and one
+// page); and per thread, the two guarded stacks (esp3BaseV/esp0BaseV with
+// the constant sizes thread.h hands task_alloc_guarded_stack, and
+// THREAD_STACK_GUARD_PAGE_COUNT pages either side). A kernel task's threads
+// have no ring-3 stack (esp3BaseV == 0) and are skipped.
+
+typedef struct
+{
+	uintptr_t start, end;
+	char prot[4];
+	const char *flags;          // "private", "shared,cow", ... — static strings
+	char what[TASK_MAX_PATH_LEN];
+} proc_map_row_t;
+
+// The full path of a file-backed VMA: the mount's prefix plus the file's
+// fs-local path (which is absolute within its mount — "/bin/cat" under the
+// root, "/boot/x" under /fat). The owner filesystem is matched back to its
+// mount entry by pointer; a file with no owner (should not exist) or an
+// unmatched one prints its local path bare rather than nothing.
+static void proc_map_file_path(const vma_t *v, char *out, size_t cap)
+{
+	const vfs_file_t *f = (const vfs_file_t *)v->file;
+	const char *local = (f != NULL && f->f_path != NULL) ? f->f_path : "?";
+	const char *prefix = "";
+	if (f != NULL)
+		for (int i = 0; i < kMountCount; i++)
+			if (kMountTable[i].fs == (vfs_filesystem_t *)f->owner && kMountTable[i].prefix_len > 1)
+			{
+				prefix = kMountTable[i].prefix;
+				break;
+			}
+	snprintf(out, cap, "%s%s", prefix, local);
+}
+
+static void proc_map_row(proc_map_row_t *r, uintptr_t start, uintptr_t end,
+                         const char *prot, const char *flags, const char *what)
+{
+	r->start = start;
+	r->end = end;
+	for (int i = 0; i < 3; i++) r->prot[i] = prot[i];
+	r->prot[3] = '\0';
+	r->flags = flags;
+	snprintf(r->what, sizeof(r->what), "%s", what);
+}
+
 static void proc_gen_maps(synth_text_t *t, task_t *task)
 {
-	// "start-end<TAB>prot<TAB>flags" — the address space as a table. NOT the
-	// memory itself: that is what the name `mem` is reserved for, the day a
-	// debugger wants Killian's original file back (PROC.md).
-	if (task->mmaps == NULL)
-		return;
+	// Count first, then allocate exactly: VMAs (capped by the walk guard) +
+	// 3 fixed windows + 6 rows per thread (two stacks, two guards each).
+	size_t vmaCount = 0;
+	if (task->mmaps != NULL)
+		for (dlist_node_t *n = task->mmaps->head; n != NULL && vmaCount < PROC_MAX_LIST_WALK; n = n->next)
+			vmaCount++;
+	size_t threadCount = 0;
+	for (thread_t *th = task->threads; th != NULL && threadCount < PROC_MAX_LIST_WALK; th = th->taskNext)
+		threadCount++;
 
-	int guard = 0;
-	for (dlist_node_t *n = task->mmaps->head;
-	     n != NULL && guard < PROC_MAX_LIST_WALK;
-	     n = n->next, guard++)
+	size_t cap = vmaCount + 3 + threadCount * 6;
+	proc_map_row_t *rows = kmalloc(cap * sizeof(proc_map_row_t));
+	if (rows == NULL)
 	{
-		vma_t *v = (vma_t *)n->data;
-		if (v == NULL)
-			continue;
-
-		char prot[4];
-		prot[0] = (v->prot & PROT_READ)  ? 'r' : '-';
-		prot[1] = (v->prot & PROT_WRITE) ? 'w' : '-';
-		prot[2] = (v->prot & PROT_EXEC)  ? 'x' : '-';
-		prot[3] = '\0';
-
-		synth_text_addf(t, "%p-%p\t%s\t%s%s%s\n",
-		           (void *)v->start, (void *)v->end, prot,
-		           (v->flags & MAP_SHARED) ? "shared" : "private",
-		           v->cow ? ",cow" : "",
-		           (v->flags & MAP_SHARED_LIBRARY) ? ",lib" : "");
+		synth_text_addf(t, "(out of memory)\n");
+		return;
 	}
+	size_t count = 0;
+
+	// 1. The VMAs — what the task mapped, or had mapped for it by the loader.
+	if (task->mmaps != NULL)
+	{
+		size_t walked = 0;
+		for (dlist_node_t *n = task->mmaps->head; n != NULL && walked < vmaCount; n = n->next, walked++)
+		{
+			vma_t *v = (vma_t *)n->data;
+			if (v == NULL)
+				continue;
+			char prot[4];
+			prot[0] = (v->prot & PROT_READ)  ? 'r' : '-';
+			prot[1] = (v->prot & PROT_WRITE) ? 'w' : '-';
+			prot[2] = (v->prot & PROT_EXEC)  ? 'x' : '-';
+			prot[3] = '\0';
+			const char *flags =
+				(v->flags & MAP_SHARED) ? (v->cow ? "shared,cow" : "shared")
+				: (v->flags & MAP_SHARED_LIBRARY) ? (v->cow ? "private,cow,lib" : "private,lib")
+				: (v->cow ? "private,cow" : "private");
+
+			proc_map_row_t *r = &rows[count++];
+			if (!(v->flags & MAP_ANONYMOUS) && v->file != NULL)
+			{
+				proc_map_row(r, v->start, v->end, prot, flags, "");
+				proc_map_file_path(v, r->what, sizeof(r->what));
+			}
+			else
+				proc_map_row(r, v->start, v->end, prot, flags,
+				             (v->start >= TASK_HEAP_START && v->end <= TASK_HEAP_END) ? "[heap]" : "[anon]");
+		}
+	}
+
+	// 2. The fixed windows the kernel maps by hand at task creation.
+	if (task->argvPages != 0)
+		proc_map_row(&rows[count++], TASK_ARGV_VIRT,
+		             TASK_ARGV_VIRT + (uintptr_t)task->argvPages * PAGE_SIZE, "rw-", "private", "[argv]");
+	if (task->env != NULL && task->env->page_count != 0)
+		proc_map_row(&rows[count++], TASK_ENV_VIRT,
+		             TASK_ENV_VIRT + (uintptr_t)task->env->page_count * PAGE_SIZE, "rw-", "private", "[env]");
+	proc_map_row(&rows[count++], TASK_EXIT_TRAMPOLINE_VIRT,
+	             TASK_EXIT_TRAMPOLINE_VIRT + PAGE_SIZE, "r-x", "private", "[exit]");
+
+	// 3. Per thread: the ring-3 stack, the ring-0 stack, and their guards.
+	{
+		size_t walked = 0;
+		const uintptr_t guardBytes = (uintptr_t)THREAD_STACK_GUARD_PAGE_COUNT * PAGE_SIZE;
+		for (thread_t *th = task->threads; th != NULL && walked < threadCount; th = th->taskNext, walked++)
+		{
+			char name[32];
+			if (th->esp3BaseV != 0)
+			{
+				uintptr_t s = th->esp3BaseV, e = s + THREAD_USER_STACK_SIZE;
+				snprintf(name, sizeof(name), "[stack:%lu]", (unsigned long)th->threadID);
+				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
+				proc_map_row(&rows[count++], s, e, "rw-", "private", name);
+				proc_map_row(&rows[count++], e, e + guardBytes, "---", "private", "[guard]");
+			}
+			if (th->esp0BaseV != 0)
+			{
+				uintptr_t s = th->esp0BaseV, e = s + THREAD_KERNEL_STACK_SIZE;
+				snprintf(name, sizeof(name), "[kstack:%lu]", (unsigned long)th->threadID);
+				proc_map_row(&rows[count++], s - guardBytes, s, "---", "private", "[guard]");
+				proc_map_row(&rows[count++], s, e, "rw-", "private", name);
+				proc_map_row(&rows[count++], e, e + guardBytes, "---", "private", "[guard]");
+			}
+		}
+	}
+
+	// Sort by start — a dozen or two rows; insertion sort is the honest size.
+	for (size_t i = 1; i < count; i++)
+	{
+		proc_map_row_t key = rows[i];
+		size_t j = i;
+		while (j > 0 && rows[j - 1].start > key.start)
+		{
+			rows[j] = rows[j - 1];
+			j--;
+		}
+		rows[j] = key;
+	}
+
+	for (size_t i = 0; i < count; i++)
+		synth_text_addf(t, "%p-%p\t%s\t%s\t%s\n",
+		                (void *)rows[i].start, (void *)rows[i].end,
+		                rows[i].prot, rows[i].flags, rows[i].what);
+
+	kfree(rows);
 }
 
 // Copy `len` bytes OUT OF A TASK'S ADDRESS SPACE — the fixed-length sibling
@@ -887,8 +1036,129 @@ typedef struct
 	synth_snapshot_t snap;  // MUST be first — the generic fops see only this
 	                        // head, and close frees the whole struct by it
 	bool     is_ctl;        // writes to this handle are commands
-	uint64_t taskID;        // ctl's target, re-resolved at write time
+	bool     is_mem;        // reads come from the task's address space, live
+	uint64_t mem_pos;       // mem's cursor: a virtual address in the task
+	uint64_t taskID;        // ctl's/mem's target, re-resolved at every use
 } proc_file_handle_t;
+
+// ── /proc/<id>/mem — the bytes themselves (2026-08-22) ─────────────────────
+// Killian's original file, the one `maps` said it was NOT: the task's address
+// space as a seekable stream, where offset N is virtual address N. Plan 9
+// had no ptrace at all — acid, its debugger, worked entirely through
+// /proc/n/mem, /proc/n/regs and /proc/n/ctl — and that is where this is
+// going: `regs` and `ctl stop/start` are the next two files, and a hex editor
+// pointed at this one is the first debugger os64 has.
+//
+// READ-ONLY, BY CONTRACT, TODAY. Chris's ruling: the open refuses every mode
+// but "r" (the boundary gate in proc_open already does), not merely "the
+// client promises not to write". When the debugger arrives with an int3 in
+// its hand the write path gets built, and the thing that must be written
+// down beside it THEN is this: a kernel write through the HHDM ignores every
+// protection the task's own page table carries — read-only, no-execute, all
+// of it — because those flags live in the TASK's mapping and the kernel is
+// writing through its own. That is exactly what a breakpoint needs (text is
+// read-only to its owner by design) and exactly why the node stays read-only
+// until one is needed.
+//
+// SECURITY, stated the way os64serve.py states it: there is none, and there
+// cannot be yet — os64 has no users, so every task is already root and this
+// adds no privilege a program did not have in principle. The day a second
+// user exists, this file needs an owner check before anything else does
+// (Linux's /proc/pid/mem went a decade with writes disabled because the
+// check was wrong, enabled them in 2011, and Mempodipper rooted machines
+// through it within months). Gate: "when there is a second user".
+//
+// WHAT A READ RETURNS. Per page, through allocator_copy_from_task_va — the
+// liveness-verified copy that a concurrent unmap or a dying task cannot turn
+// into a ring-0 fault. The copy stops at the first page that is not PRESENT
+// and reports the bytes before it: a short read is "the mapping ended here".
+// A request whose FIRST byte is unmapped is an ERROR, not zero bytes (his
+// ruling) — zero would read as end-of-file on a file that has no end. Pages a
+// task owns but has never touched (demand-paged, in a VMA with no PTE yet)
+// are "unmapped" to this v1; the map says they exist and a read says they
+// don't, which a hex editor shows as ??. Populating them on the reader's
+// behalf is v2, booked — "depending on whether ?? is annoying".
+//
+// The stream has no end. SEEK_END is refused (there is nothing to measure
+// from); SEEK_SET/SEEK_CUR land anywhere in 0..INT64_MAX and the walk
+// answers for whether anything is there.
+static int proc_mem_read(proc_file_handle_t *h, void *buffer, size_t size)
+{
+	if (buffer == NULL || size == 0)
+		return 0;
+
+	// Re-resolve, never trust a pointer across calls (the ctl write's rule).
+	task_t *task = proc_find_task(h->taskID);
+	if (task == NULL || task->pml4v == NULL)
+		return -1;
+
+	uint8_t *dst = (uint8_t *)buffer;
+	size_t done = 0;
+	while (done < size)
+	{
+		uintptr_t va = (uintptr_t)h->mem_pos + done;
+		if (va < (uintptr_t)h->mem_pos)
+			break;                                  // wrapped the address space
+		size_t in_page = (size_t)(va & (PAGE_SIZE - 1));
+		size_t chunk = PAGE_SIZE - in_page;
+		if (chunk > size - done)
+			chunk = size - done;
+		if (!allocator_copy_from_task_va(task->pml4v, va, dst + done, chunk))
+			break;                                  // the mapping ends here
+		done += chunk;
+	}
+
+	if (done == 0)
+		return -1;                                  // nothing there at all: an error, not EOF
+	h->mem_pos += done;
+	return (int)done;
+}
+
+static int proc_mem_seek(proc_file_handle_t *h, long offset, int whence)
+{
+	int64_t base;
+	switch (whence)
+	{
+		case SEEK_SET: base = 0; break;
+		case SEEK_CUR: base = (int64_t)h->mem_pos; break;
+		case SEEK_END: return -1;                   // an address space has no end
+		default:       return -1;
+	}
+	if ((offset > 0 && base > INT64_MAX - offset) ||
+	    (offset < 0 && base < INT64_MIN - offset))
+		return -1;
+	int64_t target = base + offset;
+	if (target < 0)
+		return -1;
+	h->mem_pos = (uint64_t)target;
+	return 0;
+}
+
+// The per-file dispatch: mem is LIVE, everything else is a snapshot taken at
+// open. One fops table, two kinds of file, and the flag decides.
+static int proc_read(vfs_file_t *vfs_file, void *buffer, size_t size)
+{
+	proc_file_handle_t *h = (proc_file_handle_t *)vfs_file->handle;
+	if (h->is_mem)
+		return proc_mem_read(h, buffer, size);
+	return synth_snapshot_read(vfs_file, buffer, size);
+}
+
+static int proc_seek(vfs_file_t *vfs_file, long offset, int whence)
+{
+	proc_file_handle_t *h = (proc_file_handle_t *)vfs_file->handle;
+	if (h->is_mem)
+		return proc_mem_seek(h, offset, whence);
+	return synth_snapshot_seek(vfs_file, offset, whence);
+}
+
+static int64_t proc_tell(vfs_file_t *vfs_file)
+{
+	proc_file_handle_t *h = (proc_file_handle_t *)vfs_file->handle;
+	if (h->is_mem)
+		return h->mem_pos <= INT64_MAX ? (int64_t)h->mem_pos : -1;
+	return synth_snapshot_tell(vfs_file);
+}
 
 static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
                      vfs_filesystem_t *vfs_fs)
@@ -918,8 +1188,9 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	}
 
 	bool is_ctl = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "ctl") == 0);
+	bool is_mem = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "mem") == 0);
 	if (mode[0] == 'w' && !is_ctl)
-		return -1;   // only ctl accepts a write, ever
+		return -1;   // only ctl accepts a write, ever — mem included (see it)
 
 	// Generate the whole file NOW, into a snapshot (PROC.md: an internally
 	// consistent file beats a fresh one — you can never read the first half of
@@ -937,6 +1208,7 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	else if (strcmp(pp.name, "cwd") == 0)      proc_gen_cwd(&text, task);
 	else if (strcmp(pp.name, "handles") == 0)  proc_gen_handles(&text, task);
 	else if (strcmp(pp.name, "maps") == 0)     proc_gen_maps(&text, task);
+	else if (is_mem)                           { /* no snapshot: mem is read live */ }
 	else if (strcmp(pp.name, "heap") == 0)     proc_gen_heap(&text, task);
 	else if (strcmp(pp.name, "tty") == 0)      proc_gen_tty(&text, task);
 	else if (is_ctl)                           proc_gen_ctl(&text, task);
@@ -956,6 +1228,8 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		return -1;
 
 	h->is_ctl = is_ctl;
+	h->is_mem = is_mem;
+	h->mem_pos = 0;
 	h->taskID = pp.taskID;
 	return 0;
 }
@@ -1227,11 +1501,11 @@ static int proc_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *v
 
 vfs_file_operations_t proc_fops = {
 	.open  = proc_open,
-	.read  = synth_snapshot_read,    // the generic snapshot fops (synthfs.h):
-	.write = proc_write,             // only open and the ctl write are ours
-	.seek  = synth_snapshot_seek,
-	.tell  = synth_snapshot_tell,
-	.close = synth_snapshot_close,
+	.read  = proc_read,              // dispatch: mem is live, the rest are
+	.write = proc_write,             // snapshots via synthfs (see proc_read);
+	.seek  = proc_seek,              // only the ctl write is a store
+	.tell  = proc_tell,
+	.close = synth_snapshot_close,   // mem's empty snapshot frees the same way
 };
 
 vfs_directory_operations_t proc_dops = {

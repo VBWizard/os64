@@ -43,7 +43,12 @@ table, it gets its own mount with its own name, and this file stays untouched.
 /proc/<id>/cmdline          argv, one argument per line
 /proc/<id>/cwd              the task's current directory
 /proc/<id>/handles          the handle table, one row per open handle
-/proc/<id>/maps             the address space, one row per VMA
+/proc/<id>/maps             the address space, one row per REGION (VMAs and the kernel's own
+                            furniture alike — stacks, guards, argv, env, the exit trampoline),
+                            sorted by address: start-end  prot  flags  what. `what` is a full
+                            path for a file-backed region, else [heap] [stack:tid] [kstack:tid]
+                            [guard] [argv] [env] [exit] [anon] (since 2026-08-22; procfs.c § maps)
+/proc/<id>/mem              the bytes themselves — offset N is virtual address N (read-only)
 /proc/<id>/heap             the userland allocator's own numbers (see below)
 /proc/<id>/ctl              WRITE: control. READ: the accepted vocabulary.
 /proc/<id>/thread/          one entry per thread of this task
@@ -57,12 +62,38 @@ space, handles, cwd and environment; a **thread** owns registers, a stack, a
 state and a core. So the task directory holds what the task owns, the thread
 directory holds what the thread owns, and neither lies about the other.
 
-**Why `maps` and not `mem`.** `maps` is a *description of* the address space,
-not the address space. Killian's `/proc/n/mem` was the bytes themselves —
-seekable, readable, the thing that killed `ptrace`. That name stays reserved
-for the day os64 has a debugger to want it, because a `mem` that hands you a
-table of ranges instead of memory would be a name that lies, and the house
-doctrine on names that lie is settled (see `DEBUG_TASKSWITCH`).
+**`maps` and `mem` are two files because they are two things.** `maps` is a
+*description of* the address space, not the address space. `mem` (since
+2026-08-22) is Killian's original file — the bytes themselves, seekable,
+readable, offset N = virtual address N, the thing that killed `ptrace` — and
+it arrived the way the paragraph that used to sit here said it would: "the
+day os64 has a debugger to want it". The debugger is a hex editor, and the
+first thing anyone did with `mem` was `hexedit /proc/<id>/mem`.
+
+Its contract, in full (procfs.c carries the long form): **read-only, by
+contract** — the open refuses every mode but `r`, a ruling, not a courtesy,
+until a debugger arrives needing to write an `int3` (and the day it does, the
+fact that a kernel write through the HHDM bypasses every protection in the
+task's own page table gets written down beside it). A read stops at the first
+page that is not present and returns what came before; a request whose first
+byte is unmapped is an **error**, not an empty read — an address space has no
+end-of-file to mistake it for. `SEEK_END` is refused for the same reason.
+Pages a task owns but has never touched read as unmapped in this v1; `maps`
+says they exist, `mem` says they don't, and a hex editor paints `??`.
+Populating them on the reader's behalf is booked. **Security: none, and none
+possible yet** — os64 has no users, so every task is already root; the day a
+second user exists, this file needs an owner check before anything else does.
+Next two files in the Plan 9 trio: `regs` (the saved frame, meaningful only
+when stopped) and `ctl stop`/`start` — the job-control debt, paid under its
+better name.
+
+`hexedit /proc/<id>/mem` recognizes this pairing directly: it opens the
+currently read-only `mem` contract correctly, snapshots the sibling `maps`,
+starts at the first mapping, prints that mapping's permissions in the header,
+uses `[` / `]` for previous/next mapping, and bounds a search to the current
+mapping. `m` refreshes both the maps snapshot and the cached memory window.
+The bytes remain authoritative — a stale map never turns a failed `mem` read
+into invented data; it still paints `??`.
 
 **No `.` and no `..`** — the same rule the rest of the tree follows: they are
 not directory content, and `readdir` never delivers them.
