@@ -358,17 +358,19 @@ int main(int argc, char **argv)
     const char *operands[4] = {0};
     bool quiet = false;
     bool noArchive = false;
+    bool force = false;
     const os64_optspec_t specs[] = {
         {'q', "quiet", false, "no progress, just the exit code", .flag = &quiet},
         {'n', "no-archive", false, "install only; keep no archive copy", .flag = &noArchive},
+        {'f', "force", false, "fetch even if DEST already matches the server's length and CRC", .flag = &force},
     };
 
-    os64_args_init(&args, argc, argv, specs, 2);
+    os64_args_init(&args, argc, argv, specs, 3);
     args.about = "Fetch a file over the network, archive it, and install it only if it is intact.";
     args.details = "DEST defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
                    "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename.";
 
-    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] HOST NAME [DEST]", operands, 4);
+    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] [-f] HOST NAME [DEST]", operands, 4);
     if (count == OS64_ARG_HELP)
         return GET_OK;
     if (count < 2)
@@ -563,6 +565,47 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "os64get: malformed OK line '%s'\n", header);
         os64_close((int32_t)conn);
         return GET_BAD_HEADER;
+    }
+
+    // ── Already have it? (2026-08-22) ───────────────────────────────────
+    // The header carries the length and CRC BEFORE the bytes, so the file
+    // already at DEST can be measured against it right now — and if both
+    // agree, the transfer is declined before it starts, not after. That is
+    // HTTP's If-None-Match / 304 (1997) and the entire reason rsync exists:
+    // the cheapest byte to move is the one you already have, and on the
+    // RTL8125 a kernel you already hold is four seconds you don't spend.
+    // LENGTH AND CRC, both: a CRC alone is a one-in-four-billion lie, the
+    // pair is not. Unchanged is SUCCESS (exit 0, one quiet line) — a future
+    // --all over twenty files wants "unchanged" to be a yes — and it leaves
+    // no archive entry, because nothing landed. -f fetches regardless (a
+    // re-archive under today's date is the honest reason to want that).
+    // Hanging up on the valet mid-sentence costs it nothing: serve_one logs
+    // the broken send and takes the next call. (Chris's idea, the stronger
+    // form of it.)
+    if (!force)
+    {
+        int64_t have = os64_open(dest, "r");
+        if (have >= 0)
+        {
+            uint64_t hlen = 0;
+            uint32_t hcrc = os64_crc32_begin();
+            uint8_t hbuf[GET_CHUNK];
+            int64_t hn;
+            while ((hn = os64_read((int32_t)have, hbuf, sizeof(hbuf))) > 0)
+            {
+                hcrc = os64_crc32_update(hcrc, hbuf, (size_t)hn);
+                hlen += (uint64_t)hn;
+            }
+            os64_close((int32_t)have);
+            if (hn == 0 && hlen == expectLen && os64_crc32_end(hcrc) == expectCrc)
+            {
+                os64_close((int32_t)conn);
+                if (!quiet)
+                    os64_printf("%s: unchanged (%lu bytes, crc %08x) — not fetched\n",
+                                dest, (unsigned long)expectLen, expectCrc);
+                return GET_OK;
+            }
+        }
     }
 
     // ── Receive into <target>.part ──────────────────────────────────────
