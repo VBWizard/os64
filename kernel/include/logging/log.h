@@ -181,6 +181,12 @@ extern volatile bool kKlogRetireRequested;
 void klog_request_retire(void);
 void klog_sink_release(void);
 bool klog_sink_is_claimed(void);
+// WHICH task holds the sink (0 = nobody). The shutdown ladder reads it to
+// exempt the log daemon from its SIGTERM sweep — the daemon has to outlive
+// the sweep so the exits it is about to witness reach the log, and the CLAIM
+// is the fact that identifies it. Never match on the name "logd": the path
+// is a cmdline argument, and a daemon is what it does, not what it is called.
+extern volatile uint64_t kLogSinkOwnerTask;
 
 // ── Waiting for the ring-3 sink (the LOGD= cmdline flag) ───────────────────
 // When a log daemon is COMING but has not attached yet, draining to serial is

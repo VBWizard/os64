@@ -112,6 +112,40 @@ void task_signal_all_threads(task_t* task, uint64_t signal)
 		th->signals.sigind |= signal;
 }
 
+// Raise `signal` on every thread of a task AND knock on the cores they were
+// last seen running on. The knock is the whole difference between this and
+// task_signal_all_threads, and it is the lesson task_terminate_sibling_threads
+// wrote down below: marking a thread only matters WHEN THE SCHEDULER NEXT RUNS
+// ON ITS CORE, and under tickless an AP with a spinning thread has its timer
+// masked — the mark would sit there unread forever. A scheduling IPI is an
+// interrupt, so it lands anyway.
+//
+// For senders who are not the victim: the hangup sweep (tty_shell_departed)
+// and the shutdown ladder both aim at tasks that may be parked or spinning
+// anywhere in the machine.
+void task_signal_and_nudge(task_t* task, uint64_t signal)
+{
+	if (task == NULL)
+		return;
+
+	core_local_storage_t* cls = get_core_local_storage();
+	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
+
+	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
+	{
+		if (th->exited || th->exiting)
+			continue;
+
+		th->signals.sigind |= signal;
+
+		// Same exemptions as the sibling sweep: this core is already inside
+		// the scheduler's reach, and the BSP's timer is never masked.
+		if (kSMPInitDone && th->lastRunApicID != own_apic &&
+		    th->lastRunApicID != BOOTSTRAP_PROCESSOR_ID)
+			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
+	}
+}
+
 // Bring down every thread of a dying task EXCEPT the one doing the dying.
 //
 // This is the single control point Chris asked for: every route to a task's

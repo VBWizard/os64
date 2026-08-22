@@ -77,6 +77,7 @@ extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-t
 extern bool kTestGPFault;   // TESTGP: deliberate non-canonical-pointer #GP post-tests
 extern bool kTestWatchpoint; // TESTWATCH: prove the hardware-watchpoint path post-tests
 extern bool kTestShutdown;  // SHUTDOWNTEST: run the full shutdown descent post-tests
+extern bool kTestReboot;    // REBOOTTEST: the same descent, ending in a reset
 bool kEnableSMP = true;
 // The scheduler mode, DEFAULT TRUE since 2026-08-05 (Chris's ruling, decision
 // recorded): tickless is the destination architecture (see SCHEDULER_REDESIGN
@@ -737,7 +738,9 @@ void kernel_init()
 	// Under QEMU the poweroff port makes the process EXIT — a scriptable
 	// pass/fail for the whole pipeline.
 	if (kTestShutdown)
-		shutdown_system();
+		shutdown_system(OS64_SHUTDOWN_POWEROFF);
+	if (kTestReboot)
+		shutdown_system(OS64_SHUTDOWN_REBOOT);
 
     // Launch the shells and park the kernel task so the scheduler keeps
     // running it (husk loops forever on read/spawn/wait). The kernel task is

@@ -292,22 +292,45 @@
 #define SYSCALL_SYNC_ALL   38
 
 // shutdown(8) (2026-08-08 — the day the P5's writable root made the power
-// button a filesystem event). arg0 = the VERB, reserved from day one:
-// 0 = power off; every other value acts as 0 until it means something
-// (1 is spoken for by the future reboot — BSD's shutdown -r; System V
-// spelled the same idea `shutdown -i6`, which is all the argument anyone
-// needs for not taking design cues from System V). The library wrapper
-// passes 0 EXPLICITLY so no binary built today has register garbage where
-// the verb goes when the kernel starts reading it. Does not return. The kernel
-// runs the whole descent: retires the log daemon (final drain, file
+// button a filesystem event). arg0 = the VERB: 0 = power off, 1 = REBOOT
+// (BSD's shutdown -r; System V spelled the same idea `shutdown -i6`, which
+// is all the argument anyone needs for not taking design cues from System
+// V). Verb 1 went from reserved to real on 2026-08-21 — and the day it did,
+// every binary already built passed the right register, because the wrapper
+// has passed 0 EXPLICITLY since day one instead of leaving ring-3 garbage
+// where the verb goes. AN UNKNOWN VERB IS REFUSED, not rounded down: this
+// call never returns, which makes it the worst possible moment to be
+// charitable about input. Does not return. The kernel runs the whole
+// descent: asks every task to stop (SIGTERM, a grace period, then SIGKILL
+// for whoever ignored it), retires the log daemon (final drain, file
 // closed), sync_all's every open file, FLUSH CACHEs the storage devices
 // (the drive's volatile cache is the one thing no fs-level sync reaches),
-// then powers off — or, on hardware whose ACPI we don't speak yet, prints
-// the 1995 liturgy ("It is now safe to turn off your computer") and parks.
+// then powers off or resets — or, on hardware whose ACPI we don't speak
+// yet, prints the 1995 liturgy ("It is now safe to turn off your computer")
+// and parks. The termination ladder runs FIRST, before the daemon retires,
+// so the exits it causes are in the log it leaves behind.
 // This call retires the operator ritual sync(1) existed to serve: the
 // "sync; sync; sync" incantation was a human delay loop for the platters,
 // and this is the machine doing its own counting.
 #define SYSCALL_SHUTDOWN   39
+
+// The verbs, defined ONCE and here — this header is the ABI, and the kernel's
+// descent, the library wrapper and the utility all read these same names
+// rather than three copies of "0 means off". (Chris asked for exactly this
+// the day the reboot verb landed: a shared enum, not a duplicated one.)
+//
+// Wrapped in the assembler guard because THIS HEADER IS INCLUDED FROM .S
+// FILES — syscall.S, task_exit_asm.S and launch.S all pull it in for the
+// numbers, and GAS's preprocessor would choke on a typedef. Plain #defines
+// would have been safe unguarded; the guard is what buys C a real TYPE
+// without taking that away from assembly. (dirent.h's precedent, same trick.)
+#ifndef __ASSEMBLER__
+typedef enum os64_shutdown_mode
+{
+    OS64_SHUTDOWN_POWEROFF = 0,   // stop the machine
+    OS64_SHUTDOWN_REBOOT   = 1,   // stop it and start it again
+} os64_shutdown_mode_t;
+#endif
 
 // getpid() (2026-08-09 — the night after the terminals, because "which tty
 // am I on?" starts with "who am I?"). Returns the calling task's ID in RAX;

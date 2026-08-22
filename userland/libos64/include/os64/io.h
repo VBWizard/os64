@@ -273,7 +273,18 @@ int64_t os64_sync_all(void);
 // always a ritual rather than a guarantee), and powers off. Does not
 // return; there is nothing to come back to. See SYSCALL_SHUTDOWN in
 // syscall_numbers.h for the order and the lineage.
-void os64_shutdown(void) __attribute__((noreturn));
+// `mode` is OS64_SHUTDOWN_POWEROFF or OS64_SHUTDOWN_REBOOT
+// (<os64/syscall_numbers.h>, shared with the kernel so neither side owns a
+// private copy of what "1" means). ONE call, because the two endings share
+// every step but the last instruction — a separate reboot() would be a second
+// name for the same descent.
+//
+// NOTE for anything that wants to be polite about it: the kernel's ladder is
+// SIGTERM → grace → SIGKILL, and the grace is short (SHUTDOWN_GRACE_MS,
+// CONFIG.h) because by the time this call is made the decision is already
+// taken. A countdown for the HUMAN — "going down in 30 seconds" — belongs in
+// the utility, above this call, where a person can still stop it.
+void os64_shutdown(os64_shutdown_mode_t mode) __attribute__((noreturn));
 
 // Remove a file OR an empty directory (relative paths resolve against the
 // cwd) — os64's one removal verb; there is no rmdir, by design (Plan 9's

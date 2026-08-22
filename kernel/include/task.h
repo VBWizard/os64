@@ -304,6 +304,11 @@
 	// linked before they are published, so a walker sees either the old
 	// chain or the complete new one.
 	void task_signal_all_threads(task_t* task, uint64_t signal);
+	// The same, plus a scheduling IPI to the cores the threads last ran on —
+	// for a sender who is NOT the victim (the hangup sweep, the shutdown
+	// ladder). Without the knock, a thread spinning on a tickless AP would
+	// carry the mark unread. See the comment on the definition.
+	void task_signal_and_nudge(task_t* task, uint64_t signal);
 
 	// Bring down every thread of a dying task except the one dying. THE
 	// single control point for "exit means exit" — see the implementation

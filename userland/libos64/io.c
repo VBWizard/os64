@@ -255,15 +255,14 @@ int64_t os64_sync_all(void)
     return (int64_t)os64_syscall0(SYSCALL_SYNC_ALL);
 }
 
-void os64_shutdown(void)
+void os64_shutdown(os64_shutdown_mode_t mode)
 {
-    // The explicit 0 is arg0 = the VERB, reserved on day one (0 = power
-    // off; see syscall_numbers.h). Passing it NOW is what lets a future
-    // reboot verb reuse this number safely — a no-arg call would leave
-    // ring-3 register garbage where the verb goes, and every binary built
-    // today would flip a coin between halt and reboot the day the kernel
-    // started reading it.
-    os64_syscall1(SYSCALL_SHUTDOWN, 0);
+    // The explicit 0 is arg0 = the VERB (0 = power off; see
+    // syscall_numbers.h). Passing it explicitly was foresight when this was
+    // written and it PAID on 2026-08-21: verb 1 became real that day, and
+    // every binary already built kept halting instead of flipping a coin,
+    // because none of them ever left register garbage where the verb goes.
+    os64_syscall1(SYSCALL_SHUTDOWN, (uint64_t)mode);
     // The kernel never comes back from that call — but the compiler can't
     // know it from a syscall stub, and noreturn is a promise we must keep
     // even if the impossible happens.

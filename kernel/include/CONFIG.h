@@ -71,6 +71,30 @@
 // 2026-08-13).
 #define SCHED_BACKSTOP_MS 50
 
+// ── Shutdown's termination ladder (2026-08-21) ──────────────────────────────
+// How long the descent waits between "please stop" (SIGTERM) and "stop"
+// (SIGKILL). MILLISECONDS, not ticks, because milliseconds are the human unit
+// and TICKS_PER_SECOND is a dial that has moved before — a grace expressed in
+// ticks silently changes meaning the day the tick rate does.
+//
+// WHY THIS IS A DIAL AT ALL (Chris's question, and it is the right one): no
+// fixed number is "always enough", so the honest thing is to name the number
+// and say what it depends on. TODAY it is generous to the point of academic —
+// ring 3 cannot catch a signal yet, so a SIGTERM'd task dies at its very next
+// checkpoint (its next syscall, or the scheduler's forced redirect), which is
+// microseconds away. The wait is really "how long until every task reaches a
+// checkpoint", and 2 seconds is enormous for that.
+//
+// The day it starts to MATTER is the day userland signal delivery lands (see
+// its DEBTS row): a handler that flushes a file before exiting can take real
+// time on slow media, and then this number is a genuine policy choice. If it
+// ever needs to vary per boot, the pattern is already here — SCHED_BACKSTOP_MS
+// keeps its compiled default and takes BACKSTOP=<ms> from the cmdline; the
+// same shape fits, and the operator-facing version of the question (an app's
+// `--wait 60`) probably wants to arrive as a syscall argument rather than a
+// boot flag, since it is the operator's policy and not the machine's.
+#define SHUTDOWN_GRACE_MS 2000
+
 // The cache-home rule (scheduler_find_thread_to_run): a runnable thread whose
 // last dispatch was on ANOTHER core is passed over — its caches are warm
 // there, cold here — unless it has been waiting in qRunnable at least this
@@ -188,7 +212,7 @@
 #define DEBUG_SPECIAL (__uint128_t)1 << 125
 #define DEBUG_DETAILED (__uint128_t)1 << 126
 #define DEBUG_EXTRA_DETAILED (__uint128_t)1 << 127
-#define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS)
+#define DEBUG_MINIMAL_OPTIONS (__uint128_t)(DEBUG_EXCEPTIONS | DEBUG_BOOT | DEBUG_TESTS | DEBUG_SHUTDOWN)
 // | DEBUG_SPECIAL
 // The net branch's working default. DEBUG_SPECIAL is deliberately NOT here
 // (Chris's ruling at the merge, 2026-08-05): it exists to watch his text

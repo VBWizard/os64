@@ -23,6 +23,7 @@
 #include "smp_core.h"
 #include "kernel.h"
 #include "printd.h"
+#include "shutdown.h"          // kShuttingDown — the hangup sweep stands down mid-descent
 #include "CONFIG.h"
 
 extern BasicRenderer kRenderer;
@@ -503,6 +504,54 @@ void tty_shell_departed(struct task *task)
 	t->spawnRequested = false;
 	t->state = TTY_DORMANT;
 
+	// ── THE HANGUP (2026-08-21) ─────────────────────────────────────────────
+	// Everything still seated on this terminal gets SIGHUP. The name is
+	// literal: a modem dropping carrier, which is what "the line went away"
+	// meant when the mechanism was invented.
+	//
+	// This is the piece people expect to be "parent death kills the child",
+	// and it never was — Unix orphans a child and lets it run, which is the
+	// only reason a daemon can exist. What actually ends a shell's leftovers
+	// is the terminal going away, and `nohup` (PWB, 1979) exists solely to
+	// opt out of it. Chris met the gap the honest way: `gterm &` from VT1,
+	// exit husk, and the window kept running with nothing to reach it.
+	//
+	// RULED (his, 2026-08-21): children die by default, window-owning tasks
+	// included — "soon we'll have a launcher and most things will be started
+	// from the GUI itself", so a window's life will not depend on the
+	// terminal that happened to launch it for much longer. The opt-out is
+	// what `nohup`/`disown` are FOR, and they get built when someone wants
+	// one; this is the mechanism they would opt out of.
+	// ...EXCEPT during a shutdown. The descent's ladder has already asked
+	// every task to stop, in a deliberate order; this shell is dying BECAUSE
+	// of that. Hanging up here would fire a second, unordered wave of
+	// terminations at whatever is left — and on 2026-08-21 the P5 proved what
+	// "whatever is left" includes: the shutdown task itself, mid-descent,
+	// killed by the hangup its own SIGTERM caused. The machine stayed up with
+	// its undertaker shot. (shutdown.h carries the full story.)
+	uint32_t hung = 0;
+	if (kShuttingDown)
+		goto announce;
+
+	for (task_t *victim = kTaskList;
+	     victim != NULL && victim != (task_t *)NO_TASK;
+	     victim = victim->next)
+	{
+		if (victim == task || victim->tty != (void *)t)
+			continue;
+		if (victim == kKernelTask || victim->exited)
+			continue;
+
+		task_signal_and_nudge(victim, SIGHUP);
+		hung++;
+		printd(DEBUG_TASK, "SIGHUP: tty%u hung up on task %s\n",
+		       (unsigned)t->index + 1, victim->exename);
+	}
+	if (hung)
+		printd(DEBUG_TASK, "tty%u: shell departed, %u task%s hung up\n",
+		       (unsigned)t->index + 1, hung, hung == 1 ? "" : "s");
+
+announce:
 	// The 1971 logout, os64 dialect: the shell is gone, the line is quiet,
 	// and the next knock summons a fresh one (getty, on demand).
 	static const char msg[] =

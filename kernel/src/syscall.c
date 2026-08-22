@@ -746,13 +746,22 @@ static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 		thread = cls ? cls->currentThread : NULL;
 	}
 
-	bool killed = (thread != NULL) && (thread->signals.sigind & SIGKILL);
+	// WHICH signal killed it, in precedence order — the uncatchable one first,
+	// then the two that name an ending world, then the keyboard's. The corpse
+	// wears one tag and it should be the most specific true one.
+	uintptr_t pending = (thread != NULL) ? thread->signals.sigind : 0;
+	const char *why = "SIGINT";
+	uint64_t code = SIGNALS_EXIT_SIGINT;
+
+	if (pending & SIGKILL)      { why = "SIGKILL"; code = SIGNALS_EXIT_SIGKILL; }
+	else if (pending & SIGTERM) { why = "SIGTERM"; code = SIGNALS_EXIT_SIGTERM; }
+	else if (pending & SIGHUP)  { why = "SIGHUP";  code = SIGNALS_EXIT_SIGHUP;  }
 
 	if (task != NULL)
 	{
-		task->retVal = killed ? SIGNALS_EXIT_SIGKILL : SIGNALS_EXIT_SIGINT;
+		task->retVal = code;
 		printd(DEBUG_TASK, "%s: task %s terminating (exit %lu)\n",
-			killed ? "SIGKILL" : "SIGINT", task->exename, task->retVal);
+			why, task->exename, task->retVal);
 	}
 
 	task_exit();
@@ -3682,8 +3691,15 @@ static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
-	shutdown_system();
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	// arg0 picks the door: 0 = power off, 1 = reboot. Anything else is
+	// REFUSED rather than guessed — an unknown mode on a call that never
+	// returns is the worst possible moment to be charitable about input.
+	if (arg0 != OS64_SHUTDOWN_POWEROFF && arg0 != OS64_SHUTDOWN_REBOOT)
+		return SYSCALL_RESULT_INVALID;
+
+	shutdown_system((os64_shutdown_mode_t)arg0);
 }
 
 // getpid() — contract and lineage in syscall_numbers.h. The caller IS the

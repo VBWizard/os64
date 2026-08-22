@@ -15,6 +15,7 @@
 #include "scheduler.h"    // scheduler_trigger — yielding while logd drains
 #include "smp_core.h"     // get_core_local_storage — scheduler_trigger wants the CLS
 #include "driver/system/nvme.h"   // nvme_flush_all — the drive's volatile cache
+#include "driver/system/acpi.h"   // acpi_poweroff — the real soft-off, S5
 
 int usedCount=0;
 extern volatile uint64_t kSystemCurrentTime;
@@ -31,19 +32,19 @@ void kernel_park(void)
 	uint64_t memInUse=0;
     uint64_t lastTime = 0;
     char heartbeat[2] = "*";
-    printd(DEBUG_SHUTDOWN, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
+    printd(DEBUG_BOOT | DEBUG_DETAILED, "BOOT END: Status of memory status (%u entries):\n",kMemoryStatusCurrentPtr);
 	for (uint64_t cnt=0;cnt<kMemoryStatusCurrentPtr;cnt++)
 	{
-		printd(DEBUG_SHUTDOWN, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n",kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use?"in use":"not in use");
-		if (kMemoryStatus[cnt].in_use)
+        printd(DEBUG_BOOT | DEBUG_DETAILED, "\tMemory at 0x%016Lx for 0x%016Lx (%Lu) bytes is %s\n", kMemoryStatus[cnt].startAddress, kMemoryStatus[cnt].length, kMemoryStatus[cnt].length, kMemoryStatus[cnt].in_use ? "in use" : "not in use");
+        if (kMemoryStatus[cnt].in_use)
 		{
 			usedCount++;
 			memInUse+=kMemoryStatus[cnt].length;
 		}
 	}
-	printd(DEBUG_SHUTDOWN, "Found %u memory in use at shutdown\n", memInUse);
-	printd(DEBUG_SHUTDOWN, "Found %u memory status entries,  %u in use\n", kMemoryStatusCurrentPtr, usedCount);
-	// This used to say "Idling for now until we have a userland to run!" — and
+    printd(DEBUG_BOOT | DEBUG_DETAILED, "Found %u memory in use at shutdown\n", memInUse);
+    printd(DEBUG_BOOT | DEBUG_DETAILED, "Found %u memory status entries,  %u in use\n", kMemoryStatusCurrentPtr, usedCount);
+    // This used to say "Idling for now until we have a userland to run!" — and
 	// as of husk, that is no longer true. The kernel task doesn't idle here
 	// waiting for a userland; it parks here BECAUSE the userland is running.
 	// The scheduler keeps husk (and whatever husk spawns) on the CPUs while
@@ -147,6 +148,9 @@ void kernel_park(void)
 // power cycle by definition — kernel .bss is mapped under every CR3.
 static int64_t sh_synced;
 
+// See shutdown.h: the descent's "stand down" sign for the hangup sweep.
+volatile bool kShuttingDown = false;
+
 static void shutdown_sync_all_in_kernel_context(void *arg)
 {
 	(void)arg;
@@ -163,12 +167,170 @@ static void shutdown_flush_in_kernel_context(void *arg)
 	nvme_flush_all();
 }
 
-void shutdown_system(void)
+// ── The termination ladder (2026-08-21) ─────────────────────────────────────
+// SIGTERM, wait, SIGKILL. Every init system that ever powered a machine down
+// has this shape, for the same reason: a program asked to stop can close its
+// files, finish its line, and leave a clean exit code, while a program shot in
+// the head leaves whatever it left. The grace period is the entire negotiation.
+//
+// Who is exempt, and why each one:
+//   - EVERY KERNEL TASK (`t->kernelTask`), which is the important one and the
+//     one the first draft got wrong. The first flight asked NINETEEN tasks to
+//     stop and had to kill twelve — because kTaskList is not a list of
+//     programs, it is a list of TASKS: the per-core IDLE tasks are on it, so
+//     is kworker, so is the compositor. SIGKILLing the idle task of a core
+//     leaves that core's scheduler with nothing to run at the exact moment
+//     the descent still needs CPU to sync and flush. A shutdown that has to
+//     shoot the machine's own scaffolding to proceed is not an orderly one.
+//     Ring 3 is the whole audience here: a kernel task IS the machine, and
+//     the machine stops when the power does.
+//   - the CALLER: it is running this descent; it dies at the poweroff.
+//   - the LOG DAEMON: it has its own retirement handshake two steps below,
+//     and it must outlive this sweep so the exits it is about to witness
+//     actually reach the log. Identified by its SINK CLAIM, never by name —
+//     kLogSinkOwnerTask is the fact, "logd" is a spelling.
+//
+// The order matters: the ladder runs BEFORE logd retires, so every "task X
+// terminating (exit 143)" line lands in the file. That is the whole reason
+// this is step 2 and not step 4.
+// The dial lives in CONFIG.h, in milliseconds; ticks are this file's problem.
+#define SHUTDOWN_GRACE_TICKS ((SHUTDOWN_GRACE_MS) / (MS_PER_TICK))
+
+static bool shutdown_task_is_exempt(const task_t *t, const task_t *self)
 {
+	if (t == NULL || t == self || t == kKernelTask)
+		return true;
+	if (t->kernelTask)
+		return true;      // idle tasks, kworker, the compositor — scaffolding
+	if (t->exited)
+		return true;
+	return (kLogSinkOwnerTask != 0 && t->taskID == kLogSinkOwnerTask);
+}
+
+static void shutdown_terminate_tasks(void)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *self = cls ? cls->task : NULL;
+	uint32_t asked = 0;
+
+	for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+	{
+		if (shutdown_task_is_exempt(t, self))
+			continue;
+		task_signal_and_nudge(t, SIGTERM);
+		asked++;
+		printd(DEBUG_SHUTDOWN, "[shutdown] SIGTERM -> %s (task %lu)\n",
+		       t->exename, t->taskID);
+	}
+
+	if (asked == 0)
+	{
+		printf("  no tasks to stop\n");
+		return;
+	}
+	printf("  asked %u task%s to stop\n", asked, asked == 1 ? "" : "s");
+
+	// Yield while they go. Ending EARLY when the last one is gone is the
+	// point of watching rather than sleeping — a quiet machine should not
+	// wait out a timeout it has already satisfied.
+	// TWO limits on this wait, not one. The tick deadline is the POLICY; the
+	// spin cap is the SEATBELT, and it exists because a wait whose only exit
+	// is a clock is a wait that never ends if the clock stops.
+	//
+	// This loop is where the P5 froze — reliably enough to notice, randomly
+	// enough to be maddening: "asked 4 tasks to stop" and then nothing, ever
+	// (Chris, 2026-08-21). Whatever stalls kTicksSinceStart there (a descent
+	// running where the timer that advances it does not) is worth finding on
+	// its own, but the descent must not be the thing that hangs while we look
+	// — a machine that will not power off is worse than one that powers off
+	// impolitely. The cap is enormous compared to the real wait (millions of
+	// yields against the couple of hundred a 2-second grace takes), so it can
+	// only ever fire when the clock is genuinely not moving.
+	uint64_t started  = kTicksSinceStart;
+	uint64_t deadline = started + SHUTDOWN_GRACE_TICKS;
+	uint64_t spins    = 0;
+	const uint64_t maxSpins = 20000000ULL;
+	uint32_t alive = 0;
+	bool clockStalled = false;
+
+	while (kTicksSinceStart < deadline)
+	{
+		alive = 0;
+		for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+			if (!shutdown_task_is_exempt(t, self))
+				alive++;
+		if (alive == 0)
+			break;
+		if (++spins > maxSpins)
+		{
+			clockStalled = true;
+			break;
+		}
+		scheduler_trigger(cls);
+	}
+
+	if (clockStalled)
+		printf("  (the tick clock did not advance during the grace — "
+		       "proceeding anyway)\n");
+
+	// The elapsed time is REPORTED, not assumed. The grace is a ceiling of
+	// SHUTDOWN_GRACE_MS, and how much of it actually gets spent is a fact
+	// about the machine — one worth seeing rather than inferring, because
+	// "that felt longer than two seconds" is not something anybody should
+	// have to settle by stopwatch (his question, 2026-08-21).
+	uint64_t spentMs = (kTicksSinceStart - started) * MS_PER_TICK;
+
+	if (alive == 0)
+	{
+		printf("  all stopped cleanly (%lu ms)\n", (unsigned long)spentMs);
+		return;
+	}
+
+	// The grace ran out. SIGKILL is not a request, and the survivors are
+	// named on the wire — a program that had to be killed at shutdown is
+	// worth knowing about tomorrow.
+	uint32_t killed = 0;
+	for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+	{
+		if (shutdown_task_is_exempt(t, self))
+			continue;
+		printd(DEBUG_SHUTDOWN, "[shutdown] SIGKILL -> %s (task %lu): "
+		       "did not stop within %u ticks\n",
+		       t->exename, t->taskID, SHUTDOWN_GRACE_TICKS);
+		task_signal_and_nudge(t, SIGKILL);
+		killed++;
+	}
+	printf("  %u task%s did not stop within %lu ms; killed\n",
+	       killed, killed == 1 ? "" : "s", (unsigned long)spentMs);
+
+	// A short second grace so the kills actually land before the disks go.
+	// SAME SEATBELT as the grace loop above, for the same reason: this waits
+	// on the same clock, and a clock that stalled fifteen lines ago is still
+	// stalled here. (The first draft capped the grace wait and left this one
+	// bare — found in review, 2026-08-22.)
+	uint64_t settle = kTicksSinceStart + TICKS_PER_SECOND / 2;
+	spins = 0;
+	while (kTicksSinceStart < settle && ++spins <= maxSpins)
+		scheduler_trigger(cls);
+}
+
+void shutdown_system(os64_shutdown_mode_t mode)
+{
+	// 0. Raise the sign BEFORE anything is signalled. From here on, a shell
+	//    exiting is a consequence of this descent and must not start a hangup
+	//    cascade — one of whose victims would be this very task (shutdown.h).
+	kShuttingDown = true;
+
 	// 1. Announce — glass and wire both (the wire directly: logd is about to
 	//    be retired, and this line must survive even if the descent wedges).
 	printf("\nThe system is going down NOW!\n");
-	serial_print_string("[shutdown] descent started\n");
+	serial_print_string(mode == OS64_SHUTDOWN_REBOOT
+	                    ? "[shutdown] descent started (reboot)\n"
+	                    : "[shutdown] descent started\n");
+
+	// 2. Ask every program to stop, then insist. Before logd retires, so the
+	//    exits make the log.
+	shutdown_terminate_tasks();
 
 	// 2. Retire the log daemon. Set the flag, then keep yielding so the
 	//    daemon (a ring-3 task) gets CPU to hear the answer, commit, and
@@ -205,14 +367,60 @@ void shutdown_system(void)
 	call_in_kernel_context(shutdown_flush_in_kernel_context, NULL);
 	printf("  storage caches flushed\n");
 
-	// 5. Out. Interrupts off first — nothing below wants preemption. The
-	//    hypervisor poweroff ports are harmless no-ops where they don't
-	//    apply (nothing decodes them on bare metal), so try both, then say
-	//    the eleven words every PC user over forty can recite from memory.
+	// 5. Out. Interrupts off first — nothing below wants preemption.
 	__asm__ volatile("cli");
+
+	if (mode == OS64_SHUTDOWN_REBOOT)
+	{
+		serial_print_string("[shutdown] descent complete, rebooting\n");
+
+		// Three doors, weakest side effect first. 0xCF9 is the ICH/PCH reset
+		// control register every chipset since the late 90s decodes: bit 1
+		// arms it, bit 2 pulls the reset, and bit 3 asks for a FULL (cold)
+		// reset — we ask for warm, which is faster and enough. QEMU decodes
+		// it too. 0x64 is the 8042's pulse-output line, the PC's original
+		// reset: the keyboard controller was wired to the CPU's RESET pin
+		// because in 1984 there was nowhere else to put it, and the trick
+		// outlived the reason by forty years.
+		outb(0xCF9, 0x02);      // arm
+		outb(0xCF9, 0x06);      // reset (warm)
+		outb(0x64, 0xFE);       // 8042 pulse — the 1984 fallback
+
+		// Still here? Then nothing decoded either port. A TRIPLE FAULT is the
+		// last door and it always opens: load a null IDT and raise an
+		// interrupt, and the CPU resets because it has no other choice. Ugly
+		// on purpose — this is the "your firmware ignored two standard reset
+		// paths" branch, not the normal one.
+		struct { uint16_t limit; uint64_t base; } __attribute__((packed)) nullIdt = { 0, 0 };
+		__asm__ volatile("lidt %0; int3" :: "m"(nullIdt));
+		__builtin_unreachable();
+	}
+
+	//    THREE DOORS, most standard first.
 	serial_print_string("[shutdown] descent complete, powering off\n");
+
+	//    The hypervisor ports first. They are decoded by QEMU and VBox and by
+	//    nothing else, so on a physical machine these two lines are a pair of
+	//    no-ops costing nothing — and under a hypervisor they are instant and
+	//    proven, which keeps the harness's behaviour exactly as it was.
 	outw(0x604, 0x2000);    // QEMU (q35 ACPI PM1a)
 	outw(0x4004, 0x3400);   // VirtualBox
+
+	//    Then ACPI soft-off: the real mechanism, and the only one a physical
+	//    machine has ever decoded. The numbers were read out of the DSDT at
+	//    boot (acpi.h); this spends them. Added 2026-08-21, the day the P5
+	//    reached "It is now safe to turn off your computer" and then sat
+	//    there being perfectly safe to turn off, by hand, forever.
+	//
+	//    ORDER NOTE: this is second ONLY because it is the unproven one — the
+	//    hypervisor path has years of flights behind it and this has none, so
+	//    it goes where a failure costs nothing that was working before. If it
+	//    proves itself on iron, it earns first place.
+	acpi_poweroff();
+
+	//    Still here: say the eleven words every PC user over forty can
+	//    recite from memory, and mean them — after the steps above, the
+	//    machine really is safe to switch off.
 	printf("\nIt is now safe to turn off your computer.\n");
 	while (true)
 		__asm__ volatile("hlt");

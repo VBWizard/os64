@@ -136,6 +136,14 @@ char kSerialOverride[8] = {0};
 bool kTestPanic = false;
 // SHUTDOWNTEST's flag — same one-boot-diagnostic idea for the descent.
 bool kTestShutdown = false;
+// REBOOTTEST: the same descent, ending in a RESET instead of a poweroff.
+// Exists for the same reason SHUTDOWNTEST does — the ending is the one step
+// that cannot be exercised by an ordinary boot — and for one more: the reset
+// path is the part most likely to differ between a hypervisor and real iron
+// (0xCF9 → 8042 pulse → triple fault, in that order), so it needs a way to be
+// proven on a MACHINE without waiting for a userland `reboot` to exist. Under
+// QEMU, drop the -no-reboot flag and a pass looks like a second boot banner.
+bool kTestReboot = false;
 // NMIPROBE: sweep every other core with a diagnostic NMI right after the
 // post-boot tests. Same one-boot-diagnostic pattern as TESTPANIC, and for the
 // same reason — the NMI probe (nmi_probe.c) only ever runs when something has
@@ -355,6 +363,7 @@ static cmdopt_t cmdopts[] = {
     // tests (same diagnostic pattern as TESTPANIC): logd retire, sync_all,
     // NVMe FLUSH, poweroff. Under QEMU the process exiting IS the pass.
     {"SHUTDOWNTEST", OPT_BOOL, &kTestShutdown, true, 0},
+    {"REBOOTTEST", OPT_BOOL, &kTestReboot, true, 0},
     {"KWORKER", OPT_BOOL, &kEnableKWorker, true, 0},
     {"GUI", OPT_BOOL, &kEnableGUI, true, 0},
     {"DEBUG_GUI", OPT_UINT128_OR, &kDebugLevel, DEBUG_GUI, 0},
