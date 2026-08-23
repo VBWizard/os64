@@ -727,9 +727,23 @@ static int parse(char *line, char *argv[], int maxargs)
 		char quote = 0;
 		while (*readp)
 		{
+			// THE QUOTE STATE MACHINE ANSWERS ONLY TO TYPED QUOTES, in both
+			// directions. A substituted quote byte is inert here: it neither
+			// opens a region nor closes one, and falls through to the copy
+			// below as the ordinary character it is.
+			//
+			// This settles the divergence the first version of this fix left
+			// standing (and flagged for a ruling): parse() used to process
+			// quotes inside a value, so `$x` holding `"a b"` arrived as one
+			// argument. That grouping cannot be kept, because it IS the
+			// escape — an expanded quote that can close a region can end the
+			// author's quoting early, and a `>` the author had safely quoted
+			// becomes a token of its own and redirects. Real shells do not
+			// re-scan expansion results for quotes for exactly this reason.
+			// (Codex review, 2026-08-23.)
 			if (quote != 0)
 			{
-				if (*readp == quote)
+				if (*readp == quote && !byte_is_expanded(readp))
 				{
 					quote = 0;
 					readp++;
@@ -740,7 +754,7 @@ static int parse(char *line, char *argv[], int maxargs)
 				continue;
 			}
 
-			if (*readp == '\'' || *readp == '"')
+			if ((*readp == '\'' || *readp == '"') && !byte_is_expanded(readp))
 			{
 				quote = *readp++;
 				continue;
@@ -793,7 +807,15 @@ static int split_pipeline(char *line, char *stages[], int maxstages)
 	{
 		if (quote != 0)
 		{
-			if (*p == quote)
+			// CLOSING is guarded exactly like opening, and the first cut of
+			// this fix guarded only one of them — which left the hole intact
+			// in mirror image. `echo "$1|touch /home/pwn"` with $1 holding a
+			// single `"` let the SUBSTITUTED quote close the AUTHOR'S quote,
+			// after which the `|` the author had safely quoted stood in the
+			// open and split a pipeline. Data could not create syntax any
+			// more, so it created it by DESTROYING the quoting around it.
+			// (Codex review, 2026-08-23 — a second look at the first fix.)
+			if (*p == quote && !byte_is_expanded(p))
 				quote = 0;
 			p++;
 		}
