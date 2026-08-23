@@ -96,10 +96,33 @@
 #define GET_WRITE_FAILED   9
 #define GET_PUBLISH_FAILED 10  // downloaded fine, could not put it in place
 #define GET_ARCHIVE_FAILED 11  // could not make or keep the archive copy
+// Not a failure and not an install: the file already on disk is byte-for-byte
+// what the server offered, so nothing was fetched and nothing was staged. It
+// never escapes main (which reports it and exits 0) — it exists so the commit
+// phase knows there is no `.part` waiting for it.
+#define GET_UNCHANGED      12
 
 #define GET_PORT      6464
 #define GET_CHUNK     4096
 #define GET_PATH_MAX  256
+
+// -a holds the server's whole catalogue in memory before fetching any of it,
+// so that a list too long to hold fails BEFORE the system is half-replaced.
+// 256 names is comfortably past the 66 the payload has today and past the 443
+// app slots app_bases.py can hand out; the table is static (16KB of .bss),
+// which is why it can afford to be generous.
+#define GET_NAME_MAX  64
+#define GET_MAX_LIST  256
+
+// One line of the server's catalogue. The length and crc are not decoration:
+// they are what lets -a decide a file is unchanged WITHOUT dialing for it (see
+// local_matches), which is the difference between a refresh that re-fetches
+// 86 files and one that fetches the three that changed.
+typedef struct {
+    char     name[GET_NAME_MAX];
+    uint64_t length;
+    uint32_t crc;
+} get_entry_t;
 
 // ── The config ──────────────────────────────────────────────────────────
 // A small fixed table, because the whole install map is six lines and a
@@ -352,44 +375,107 @@ static bool parse_hex32(const char *s, const char *end, uint32_t *out)
     return true;
 }
 
-int main(int argc, char **argv)
+// ── DO WE ALREADY HAVE IT? ──────────────────────────────────────────────
+//
+// Read the file at `path` and say whether it is byte-for-byte what the server
+// is offering. LENGTH AND CRC, both: a CRC alone is a one-in-four-billion lie,
+// the pair is not.
+//
+// This is FABLE'S FEATURE (branch fable/dns-and-scripts, 2026-08-22, from an
+// idea of Chris's), lifted onto this branch when Chris noticed it missing after
+// the -a work landed — it had never been merged here, so it was not lost, just
+// somewhere else. His comment there put the case better than I would:
+//
+//     "That is HTTP's If-None-Match / 304 (1997) and the entire reason rsync
+//      exists: the cheapest byte to move is the one you already have, and on
+//      the RTL8125 a kernel you already hold is four seconds you don't spend."
+//
+// And, presciently: "a future --all over twenty files wants 'unchanged' to be
+// a yes". That future arrived the same day; see the two callers below.
+static bool local_matches(const char *path, uint64_t wantLen, uint32_t wantCrc)
 {
-    os64_args_t args = {0};
-    const char *operands[4] = {0};
-    bool quiet = false;
-    bool noArchive = false;
-    const os64_optspec_t specs[] = {
-        {'q', "quiet", false, "no progress, just the exit code", .flag = &quiet},
-        {'n', "no-archive", false, "install only; keep no archive copy", .flag = &noArchive},
-    };
+    int64_t have = os64_open(path, "r");
+    if (have < 0)
+        return false;                  // nothing there — everything to fetch
 
-    os64_args_init(&args, argc, argv, specs, 2);
-    args.about = "Fetch a file over the network, archive it, and install it only if it is intact.";
-    args.details = "DEST defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
-                   "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename.";
-
-    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] HOST NAME [DEST]", operands, 4);
-    if (count == OS64_ARG_HELP)
-        return GET_OK;
-    if (count < 2)
+    uint64_t len = 0;
+    uint32_t crc = os64_crc32_begin();
+    uint8_t buf[GET_CHUNK];
+    int64_t n;
+    while ((n = os64_read((int32_t)have, buf, sizeof(buf))) > 0)
     {
-        if (count != OS64_ARG_ERROR)
-            os64_hprintf(OS64_STDERR, "os64get: need a HOST and a NAME\n");
-        return GET_USAGE;
+        crc = os64_crc32_update(crc, buf, (size_t)n);
+        len += (uint64_t)n;
     }
+    os64_close((int32_t)have);
 
-    const char *host = operands[0];
-    const char *name = operands[1];
+    // n == 0 is a clean end-of-file; a negative n is a read error, and an
+    // unreadable local file is emphatically not a reason to skip the download.
+    return n == 0 && len == wantLen && os64_crc32_end(crc) == wantCrc;
+}
 
-    // ── Where it goes ───────────────────────────────────────────────────
-    static conf_t conf;   // static: two 16-entry tables are too fat for the stack
-    conf_load(&conf);
+// Why a dial failed, in the words of someone standing at the other machine.
+//
+// One copy, used by BOTH the single-file fetch and the LIST that -a opens
+// with. It was two copies for about an hour on 2026-08-22, and the LIST one
+// said only "cannot reach HOST:PORT" — which cost real time during the very
+// first -a test, because the true answer was "no network interface on this
+// boot" (a QEMU launched without a NIC) and the generic message sent the
+// search toward the server, the firewall and the routing instead. A
+// diagnostic that omits the diagnosis is worse than none: it looks like it
+// tried.
+static const char *dial_reason(int64_t err)
+{
+    // The dial error codes are specific on purpose (os64/net.h) — a refusal
+    // and a timeout mean very different things to whoever is standing at the
+    // other machine, and printing "failed" for both wastes their next ten
+    // minutes.
+    return (err == OS64_NET_ERR_REFUSED)      ? "connection refused — is the server running?" :
+           (err == OS64_NET_ERR_TIMEOUT)      ? "timed out — is the host reachable?" :
+           (err == OS64_NET_ERR_NO_NIC)       ? "no network interface on this boot" :
+           (err == OS64_NET_ERR_BAD_ADDRESS)  ? "that host is not a dotted quad" :
+           (err == OS64_NET_ERR_NO_RESOURCES) ? "out of handles or ports" :
+                                                "refused";
+}
 
+// ── ONE FILE, FETCHED AND STAGED (but NOT installed) ────────────────────
+//
+// Everything from "where does it go" to "a verified copy is sitting beside it
+// as <dest>.part" — and then it stops. Publishing is stage_commit's job,
+// deliberately separated on 2026-08-22 (Chris's call, the day the payload
+// reached 86 files):
+//
+//   "if this fails halfway through, it could get ugly. What about holding off
+//    on moving all of the files into place until all 86 are transferred?"
+//
+// He is right, and the reason is worth stating plainly. Installing as you go
+// means the window in which the machine is running half the old system and
+// half the new one is the WHOLE TRANSFER — every second of network time, with
+// a torn system as the outcome of any interruption. Staging everything first
+// shrinks that window to the time it takes to rename 86 directory entries, and
+// changes the failure mode completely: a transfer that dies at file 40 now
+// leaves a system that is entirely, correctly the OLD one.
+//
+// It is not atomicity and this comment will not pretend otherwise — 86 renames
+// can still be interrupted at rename 40. But the window goes from tens of
+// seconds of network to milliseconds of metadata, and — the part that matters
+// more — every failure that CAN be detected is detected before anything is
+// published at all.
+//
+// `destOverride` is the command line's final word (NULL to let the conf route
+// it). `archiveDir` is the ONE dated directory the whole run shares, so a
+// refresh reads as a single install in the archive rather than 86 of them.
+// `outDest` receives the resolved destination path so the caller can later
+// commit or discard this file without re-deriving the routing.
+static int fetch_stage(const char *host, const char *name, const char *destOverride,
+                       const conf_t *conf, const char *archiveDir, bool quiet, bool force,
+                       char *outDest, size_t outDestCap)
+{
     char dest[GET_PATH_MAX];
-    if (count >= 3)
+    if (destOverride != NULL)
     {
         // The command line's word is final.
-        if (!join_path(dest, sizeof(dest), NULL, operands[2]))
+        if (!join_path(dest, sizeof(dest), NULL, destOverride))
         {
             os64_hprintf(OS64_STDERR, "os64get: destination path too long\n");
             return GET_USAGE;
@@ -397,60 +483,59 @@ int main(int argc, char **argv)
     }
     else
     {
-        const char *dir = conf_route(&conf, name);
+        const char *dir = conf_route(conf, name);
         if (!join_path(dest, sizeof(dest), dir, name))
         {
             os64_hprintf(OS64_STDERR, "os64get: destination path too long\n");
             return GET_USAGE;
         }
-        if (dir == NULL && conf.path != NULL && conf.anyRule)
+        if (dir == NULL && conf->path != NULL && conf->anyRule)
             // A conf exists and routes things, just not THIS thing — say
             // so, because "it went to the cwd" is a surprise worth a line.
             os64_hprintf(OS64_STDERR, "os64get: %s has no rule for '%s'; installing in the current directory\n",
-                         conf.path, name);
+                         conf->path, name);
+    }
+
+    // Hand the resolved destination back BEFORE anything can fail: the caller
+    // needs it to sweep up a half-staged file just as much as to commit a
+    // whole one, and a routing decision should be made exactly once.
+    // os64_strcopy returns the length the source WANTED, so >= cap is the
+    // truncation test (str.h's contract, and the reason strlcpy's semantics
+    // were kept when its name was not).
+    if (outDest != NULL && os64_strcopy(outDest, outDestCap, dest) >= outDestCap)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: destination path too long\n");
+        return GET_USAGE;
     }
 
     // ── Where it is kept ────────────────────────────────────────────────
-    // The archive path is decided NOW, before the wire, so one run's files
-    // share a second — and so a missing /home fails loudly before a single
-    // byte is fetched rather than after the last one.
+    // The dated directory was made by the caller (one per RUN, not one per
+    // file); this is just its name plus ours.
     char archiveFile[GET_PATH_MAX];
-    bool archiving = !noArchive && conf.archive[0] != '\0';
-    if (archiving)
+    bool archiving = archiveDir != NULL;
+    if (archiving && !join_path(archiveFile, sizeof(archiveFile), archiveDir, name))
     {
-        os64_time_t now;
-        os64_date_t d;
-        if (os64_time(&now) < 0)
-        {
-            os64_hprintf(OS64_STDERR, "os64get: cannot read the clock for the archive path\n");
-            return GET_ARCHIVE_FAILED;
-        }
-        os64_date_from_epoch(now.epoch, &d);   // UTC: the system clock's tongue (the clock ruling)
-
-        char archiveDir[GET_PATH_MAX];
-        int32_t n = os64_snprintf(archiveDir, sizeof(archiveDir), "%s/%04d-%02d-%02d/%02d%02d%02d",
-                                  conf.archive, d.year, d.month, d.day, d.hour, d.minute, d.second);
-        if (n <= 0 || (size_t)n >= sizeof(archiveDir) ||
-            !join_path(archiveFile, sizeof(archiveFile), archiveDir, name))
-        {
-            os64_hprintf(OS64_STDERR, "os64get: archive path too long\n");
-            return GET_ARCHIVE_FAILED;
-        }
-        if (!ensure_dir(archiveDir))
-        {
-            os64_hprintf(OS64_STDERR, "os64get: cannot create archive directory %s "
-                         "(is %s mounted? pass -n to install without archiving)\n",
-                         archiveDir, conf.archive);
-            return GET_ARCHIVE_FAILED;
-        }
+        os64_hprintf(OS64_STDERR, "os64get: archive path too long\n");
+        return GET_ARCHIVE_FAILED;
     }
 
-    // The file the wire is written into. With an archive, that is the
-    // archive copy; without one, the destination itself. Either way it is
-    // a .part beside its final name.
-    const char *wireTarget = archiving ? archiveFile : dest;
+    // THE WIRE ALWAYS LANDS BESIDE ITS DESTINATION (2026-08-22, second pass).
+    //
+    // It used to land in the ARCHIVE, which was then copied to the
+    // destination — the archive as master, the install as its verified copy.
+    // That reads well and it is the wrong way round for a MULTI-FILE refresh,
+    // because it puts a full cross-filesystem copy (/home/archive -> /bin, a
+    // different partition) inside the commit step. Committing 86 files would
+    // then mean 86 copies of real data, and the whole point of committing at
+    // the end is that the commit be as close to instantaneous as the
+    // filesystem allows.
+    //
+    // Flipped: the wire is verified into `<dest>.part`, the archive is taken
+    // as a verified copy OF that, and committing is one rename inside one
+    // directory — no data moves at all. Both copies are still checksummed
+    // against the wire, which is the property that actually mattered.
     char partPath[GET_PATH_MAX];
-    int32_t pathlen = os64_snprintf(partPath, sizeof(partPath), "%s.part", wireTarget);
+    int32_t pathlen = os64_snprintf(partPath, sizeof(partPath), "%s.part", dest);
     if (pathlen < 0 || (size_t)pathlen >= sizeof(partPath))
     {
         os64_hprintf(OS64_STDERR, "os64get: path is too long to append '.part'\n");
@@ -466,18 +551,8 @@ int main(int argc, char **argv)
     int64_t conn = os64_dial(dialstring);
     if (conn < 0)
     {
-        // The dial error codes are specific on purpose (os64/net.h) — a
-        // refusal and a timeout mean very different things to whoever is
-        // standing at the other machine, and printing "failed" for both
-        // wastes their next ten minutes.
-        const char *why =
-            (conn == OS64_NET_ERR_REFUSED)      ? "connection refused — is the server running?" :
-            (conn == OS64_NET_ERR_TIMEOUT)      ? "timed out — is the host reachable?" :
-            (conn == OS64_NET_ERR_NO_NIC)       ? "no network interface on this boot" :
-            (conn == OS64_NET_ERR_BAD_ADDRESS)  ? "that host is not a dotted quad" :
-            (conn == OS64_NET_ERR_NO_RESOURCES) ? "out of handles or ports" :
-                                                  "refused";
-        os64_hprintf(OS64_STDERR, "os64get: cannot reach %s:%d — %s\n", host, GET_PORT, why);
+        os64_hprintf(OS64_STDERR, "os64get: cannot reach %s:%d — %s\n",
+                     host, GET_PORT, dial_reason(conn));
         return GET_DIAL_FAILED;
     }
 
@@ -561,6 +636,28 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "os64get: malformed OK line '%s'\n", header);
         os64_close((int32_t)conn);
         return GET_BAD_HEADER;
+    }
+
+    // ── ALREADY HAVE IT? ────────────────────────────────────────────────
+    // The header names the length and the CRC, so the file already at DEST
+    // can be measured against it right HERE — the transfer is declined before
+    // it starts rather than after. Hanging up on the valet mid-sentence costs
+    // it nothing: serve_one logs the broken send and takes the next call.
+    //
+    // Unchanged is SUCCESS and leaves NO archive entry, because nothing
+    // landed. -f fetches regardless (a re-archive under today's date is the
+    // honest reason to want that).
+    //
+    // `-a` normally settles this from the LIST manifest without dialing at
+    // all, so this path is what the SINGLE-file fetch uses — and the backstop
+    // for anything -a could not decide in advance.
+    if (!force && local_matches(dest, expectLen, expectCrc))
+    {
+        os64_close((int32_t)conn);
+        if (!quiet)
+            os64_printf("%s: unchanged (%lu bytes, crc %08x) — not fetched\n",
+                        dest, (unsigned long)expectLen, expectCrc);
+        return GET_UNCHANGED;
     }
 
     // ── Receive into <target>.part ──────────────────────────────────────
@@ -654,68 +751,444 @@ int main(int argc, char **argv)
         return GET_CORRUPT;
     }
 
-    // One motion. Before this call the old file is whole; after it, the new
-    // one is. There is no instant in between, which is what makes pointing
-    // this at /bin a reasonable thing to do rather than a brave one.
-    if (os64_rename(partPath, wireTarget) < 0)
+    // ── Keep a copy, before anything is published ───────────────────────
+    // The archive is a verified copy OF the staged file (the disk gets no
+    // more trust than the wire: it is read back and checksummed again). It is
+    // written now, while nothing is committed, so that a run which never
+    // commits leaves the archive as untouched as the system — see
+    // stage_discard, which removes it if this file's run is abandoned.
+    if (archiving)
     {
-        os64_hprintf(OS64_STDERR,
-                     "os64get: %s verified but could not be renamed to %s "
-                     "(read-only filesystem, or a directory in the way?)\n",
-                     partPath, wireTarget);
-        return archiving ? GET_ARCHIVE_FAILED : GET_PUBLISH_FAILED;
-    }
+        char archivePart[GET_PATH_MAX];
+        int rc = GET_OK;
+        if (os64_snprintf(archivePart, sizeof(archivePart), "%s.part", archiveFile) >= (int32_t)sizeof(archivePart))
+            rc = GET_WRITE_FAILED;
+        else
+            rc = copy_verified(partPath, archivePart, expectLen, expectCrc);
 
-    if (!archiving)
-    {
-        if (!quiet)
-            os64_printf("%s: %lu bytes, crc %08x, verified and installed\n",
-                        dest, (unsigned long)expectLen, actual);
-        return GET_OK;
-    }
+        if (rc == GET_OK && os64_rename(archivePart, archiveFile) < 0)
+        {
+            os64_hprintf(OS64_STDERR,
+                         "os64get: could not rename %s to %s (read-only filesystem?)\n",
+                         archivePart, archiveFile);
+            rc = GET_ARCHIVE_FAILED;
+        }
 
-    // ── Install FROM the archive ────────────────────────────────────────
-    // The archive copy is sealed. Now the same dance beside the destination:
-    // copy (checksummed — the disk gets no more trust than the wire), sync,
-    // rename. A failure here takes the archive copy with it: the archive
-    // records what landed, and this did not.
-    char destPart[GET_PATH_MAX];
-    int rc = GET_OK;
-    if (os64_snprintf(destPart, sizeof(destPart), "%s.part", dest) >= (int32_t)sizeof(destPart))
-        rc = GET_WRITE_FAILED;
-    else
-        rc = copy_verified(archiveFile, destPart, expectLen, expectCrc);
-
-    if (rc == GET_OK && os64_rename(destPart, dest) < 0)
-    {
-        os64_hprintf(OS64_STDERR,
-                     "os64get: %s verified but could not be renamed to %s "
-                     "(read-only filesystem, or a directory in the way?)\n",
-                     destPart, dest);
-        rc = GET_PUBLISH_FAILED;
-    }
-
-    if (rc != GET_OK)
-    {
-        if (rc == GET_CORRUPT)
-            os64_hprintf(OS64_STDERR, "os64get: the copy of %s to %s did not verify — %s NOT installed\n",
-                         archiveFile, destPart, dest);
-        else if (rc == GET_WRITE_FAILED)
-            os64_hprintf(OS64_STDERR, "os64get: cannot write %s (disk full, or the directory missing?) — %s NOT installed\n",
-                         destPart, dest);
-        else if (rc == GET_ARCHIVE_FAILED)
-            os64_hprintf(OS64_STDERR, "os64get: cannot read back %s — %s NOT installed\n",
-                         archiveFile, dest);
-        // The rule: only a successful install earns an archive entry. The
-        // dated directories stay (they may hold a sibling that did land).
-        if (os64_unlink(archiveFile) < 0)
-            os64_hprintf(OS64_STDERR, "os64get: (and %s could not be removed — remove it by hand)\n",
-                         archiveFile);
-        return rc;
+        if (rc != GET_OK)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: could not archive %s — %s NOT installed\n",
+                         name, dest);
+            if (os64_unlink(partPath) < 0)
+                os64_hprintf(OS64_STDERR, "os64get: (and %s could not be removed — remove it by hand)\n",
+                             partPath);
+            return rc;
+        }
     }
 
     if (!quiet)
-        os64_printf("%s: %lu bytes, crc %08x, verified and installed (kept at %s)\n",
-                    dest, (unsigned long)expectLen, actual, archiveFile);
+        os64_printf("%s: %lu bytes, crc %08x, verified%s\n",
+                    dest, (unsigned long)expectLen, actual,
+                    archiving ? " and kept" : "");
     return GET_OK;
+}
+
+// ── COMMIT, AND ABANDON ─────────────────────────────────────────────────
+//
+// The two halves of the second phase. Staging leaves a verified `<dest>.part`
+// beside every destination; these either publish it or sweep it away.
+//
+// commit is ONE rename inside ONE directory: no data moves, nothing is read,
+// and before the call the old file is whole while after it the new one is —
+// there is no instant in between. That is what makes pointing this at /bin a
+// reasonable thing to do rather than a brave one, and it is why an 86-file
+// refresh can now flip the whole system over in the time it takes to write 86
+// directory entries instead of the time it takes to cross a network.
+static int stage_commit(const char *dest)
+{
+    char partPath[GET_PATH_MAX];
+    if (os64_snprintf(partPath, sizeof(partPath), "%s.part", dest) >= (int32_t)sizeof(partPath))
+        return GET_WRITE_FAILED;
+
+    if (os64_rename(partPath, dest) < 0)
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: %s verified but could not be renamed to %s "
+                     "(read-only filesystem, or a directory in the way?)\n",
+                     partPath, dest);
+        return GET_PUBLISH_FAILED;
+    }
+    return GET_OK;
+}
+
+// Undo a staged file: the .part goes, and so does its archive entry. The rule
+// the archive has always followed — only a successful install earns an entry —
+// applies to an abandoned refresh exactly as it applied to a single failed
+// file. The dated directory itself stays; it costs nothing and an empty one is
+// its own small record that a refresh was attempted and thrown away.
+static void stage_discard(const char *dest, const char *archiveDir, const char *name)
+{
+    char path[GET_PATH_MAX];
+
+    if (os64_snprintf(path, sizeof(path), "%s.part", dest) < (int32_t)sizeof(path))
+        os64_unlink(path);   // may not exist (this file may never have staged) — fine
+
+    if (archiveDir != NULL && join_path(path, sizeof(path), archiveDir, name))
+        os64_unlink(path);
+}
+
+// ── ASKING WHAT THE VALET HAS (the LIST verb, 2026-08-22) ───────────────
+//
+// One connection, one question:
+//
+//     client -> server:  LIST\n
+//     server -> client:  <name> <length> <crc32hex>\n   (one per file)
+//                        .\n
+//
+// A lone "." ends it, which is SMTP's terminator from 1982 and readable by a
+// human driving the protocol with telnet — the property RTL8125.md insists on
+// for every verb here, because a protocol you can type is one you can debug at
+// 1am on a machine with no tooling.
+//
+// The length and crc are not used to decide anything yet; they are here
+// because they cost the server nothing, they let this side print an honest
+// "66 files, 3.4MB" before committing to the transfer, and they are exactly
+// what a future "skip the ones I already have" would need. (Deliberately NOT
+// implemented today: the whole payload is under 4MB and the wire does 392KB/s,
+// so the entire refresh is ten seconds. Booked, not built.)
+//
+// Returns the number of names read, or -1. Names beyond `max` are refused
+// loudly rather than silently dropped — a refresh that quietly skips the tail
+// of the system is worse than one that fails.
+static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
+                          uint64_t *totalBytes)
+{
+    char dialstring[GET_PATH_MAX];
+    os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%d", host, GET_PORT);
+
+    int64_t conn = os64_dial(dialstring);
+    if (conn < 0)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: cannot reach %s:%d to ask what it has — %s\n",
+                     host, GET_PORT, dial_reason(conn));
+        return -1;
+    }
+
+    if (os64_write((int32_t)conn, "LIST\n", 5) != 5)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: could not send LIST\n");
+        os64_close((int32_t)conn);
+        return -1;
+    }
+
+    int32_t count = 0;
+    *totalBytes = 0;
+    for (;;)
+    {
+        // Byte at a time to the newline, for the same reason the header
+        // reader above does it: a stream has no message boundaries, and
+        // reading ahead would swallow the next line.
+        char line[GET_NAME_MAX + 64];
+        size_t len = 0;
+        for (;;)
+        {
+            char c;
+            int64_t n = os64_read((int32_t)conn, &c, 1);
+            if (n != 1)
+            {
+                os64_hprintf(OS64_STDERR, "os64get: the server hung up in the middle of its list\n");
+                os64_close((int32_t)conn);
+                return -1;
+            }
+            if (c == '\n')
+                break;
+            if (len + 1 < sizeof(line))
+                line[len++] = c;
+        }
+        line[len] = '\0';
+
+        if (len == 1 && line[0] == '.')
+            break;                       // the terminator: a complete list
+
+        if (len > 3 && line[0] == 'N' && line[1] == 'O' && line[2] == ' ')
+        {
+            os64_hprintf(OS64_STDERR, "os64get: the server refused LIST — %s\n", line + 3);
+            os64_close((int32_t)conn);
+            return -1;
+        }
+
+        // "<name> <length> <crc>" — split at the first space; a server that
+        // sends a bare name still works, which keeps the verb typeable.
+        size_t sp = 0;
+        while (sp < len && line[sp] != ' ')
+            sp++;
+        if (sp == 0 || sp >= GET_NAME_MAX)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: unusable name in the server's list\n");
+            os64_close((int32_t)conn);
+            return -1;
+        }
+        if (count >= max)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: the server offers more than %ld files — "
+                                      "this build cannot hold the whole list, so nothing was fetched\n",
+                         (long)max);
+            os64_close((int32_t)conn);
+            return -1;
+        }
+        os64_memcpy(entries[count].name, line, sp);
+        entries[count].name[sp] = '\0';
+        entries[count].length = 0;
+        entries[count].crc = 0;
+
+        // "<name> <length> <crc>". A server that sends only the name still
+        // works — the entry simply carries no length/crc, and the unchanged
+        // check for it falls back to the per-file header test after dialing.
+        if (sp < len)
+        {
+            const char *p = line + sp + 1;
+            const char *q = p;
+            while (*q != '\0' && *q != ' ')
+                q++;
+            if (parse_u64(p, q, &entries[count].length))
+                *totalBytes += entries[count].length;
+            if (*q == ' ')
+                parse_hex32(q + 1, q + 1 + os64_strlen(q + 1), &entries[count].crc);
+        }
+        count++;
+    }
+
+    os64_close((int32_t)conn);
+    return count;
+}
+
+int main(int argc, char **argv)
+{
+    os64_args_t args = {0};
+    const char *operands[4] = {0};
+    bool quiet = false;
+    bool noArchive = false;
+    bool all = false;
+    bool force = false;
+    const os64_optspec_t specs[] = {
+        {'q', "quiet", false, "no progress, just the exit code", .flag = &quiet},
+        {'n', "no-archive", false, "install only; keep no archive copy", .flag = &noArchive},
+        {'a', "all", false, "fetch EVERY file the server offers, routing each by the conf", .flag = &all},
+        {'f', "force", false, "fetch even files already identical on disk", .flag = &force},
+    };
+
+    os64_args_init(&args, argc, argv, specs, 4);
+    args.about = "Fetch a file over the network, archive it, and install it only if it is intact.";
+    args.details = "DEST defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
+                   "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename. "
+                   "With -a, asks the server what it has and fetches all of it — the whole-system refresh.";
+
+    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] HOST NAME [DEST]  |  os64get -a [-q] [-n] HOST",
+                                    operands, 4);
+    if (count == OS64_ARG_HELP)
+        return GET_OK;
+    if (count < 1 || (!all && count < 2))
+    {
+        if (count != OS64_ARG_ERROR)
+            os64_hprintf(OS64_STDERR, all ? "os64get: need a HOST\n"
+                                          : "os64get: need a HOST and a NAME\n");
+        return GET_USAGE;
+    }
+    if (all && count > 1)
+    {
+        // -a routes every file by the conf, so a DEST would have to mean
+        // "put all 66 files in one directory", which is never what anyone
+        // means. Refuse rather than guess (the house rule: tripwires over
+        // silence).
+        os64_hprintf(OS64_STDERR, "os64get: -a fetches everything and lets the conf place it — "
+                                  "no NAME or DEST goes with it\n");
+        return GET_USAGE;
+    }
+
+    const char *host = operands[0];
+
+    // ── Where things go ─────────────────────────────────────────────────
+    static conf_t conf;   // static: two 16-entry tables are too fat for the stack
+    conf_load(&conf);
+
+    // ── The archive directory: ONE per run ──────────────────────────────
+    // Decided here, before the wire, so that a missing /home fails loudly
+    // before a single byte is fetched rather than after the last one — and so
+    // that every file of a refresh lands in the same dated folder, which is
+    // what makes the archive readable as "this is the system as of then".
+    char archiveDir[GET_PATH_MAX];
+    bool archiving = !noArchive && conf.archive[0] != '\0';
+    if (archiving)
+    {
+        os64_time_t now;
+        os64_date_t d;
+        if (os64_time(&now) < 0)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: cannot read the clock for the archive path\n");
+            return GET_ARCHIVE_FAILED;
+        }
+        os64_date_from_epoch(now.epoch, &d);   // UTC: the system clock's tongue (the clock ruling)
+
+        int32_t n = os64_snprintf(archiveDir, sizeof(archiveDir), "%s/%04d-%02d-%02d/%02d%02d%02d",
+                                  conf.archive, d.year, d.month, d.day, d.hour, d.minute, d.second);
+        if (n <= 0 || (size_t)n >= sizeof(archiveDir))
+        {
+            os64_hprintf(OS64_STDERR, "os64get: archive path too long\n");
+            return GET_ARCHIVE_FAILED;
+        }
+        if (!ensure_dir(archiveDir))
+        {
+            os64_hprintf(OS64_STDERR, "os64get: cannot create archive directory %s "
+                         "(is %s mounted? pass -n to install without archiving)\n",
+                         archiveDir, conf.archive);
+            return GET_ARCHIVE_FAILED;
+        }
+    }
+
+    if (!all)
+    {
+        // One file: stage and commit in the same breath. There is nothing to
+        // hold back FOR — the two-phase dance below exists to keep a
+        // MULTI-file refresh from tearing, and a single file has no siblings
+        // to be inconsistent with.
+        char dest[GET_PATH_MAX] = {0};
+        int rc = fetch_stage(host, operands[1], count >= 3 ? operands[2] : NULL,
+                             &conf, archiving ? archiveDir : NULL, quiet, force,
+                             dest, sizeof(dest));
+        if (rc == GET_UNCHANGED)
+            return GET_OK;   // nothing fetched, nothing staged, nothing to say
+        if (rc != GET_OK)
+        {
+            if (dest[0] != '\0')
+                stage_discard(dest, archiving ? archiveDir : NULL, operands[1]);
+            return rc;
+        }
+        rc = stage_commit(dest);
+        if (rc != GET_OK)
+            stage_discard(dest, archiving ? archiveDir : NULL, operands[1]);
+        else if (!quiet)
+            os64_printf("%s: installed\n", dest);
+        return rc;
+    }
+
+    // ── The whole system, in one command ────────────────────────────────
+    static get_entry_t entries[GET_MAX_LIST];   // static: far too fat for a stack
+    uint64_t totalBytes = 0;
+    int32_t n = fetch_list(host, entries, GET_MAX_LIST, &totalBytes);
+    if (n < 0)
+        return GET_DIAL_FAILED;
+    if (n == 0)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: the server offers nothing — is it serving the right directories?\n");
+        return GET_OK;
+    }
+
+    if (!quiet)
+        os64_printf("os64get: %ld files, %lu bytes, from %s\n",
+                    (long)n, (unsigned long)totalBytes, host);
+
+    // ── PHASE ONE: fetch everything, install nothing ────────────────────
+    //
+    // Every file is attempted even after one fails, so that ONE run tells you
+    // everything that is wrong rather than making you discover the problems
+    // one reboot at a time. Nothing is published while this loop runs: each
+    // file ends up as a verified `<dest>.part` beside where it will go.
+    static char dests[GET_MAX_LIST][GET_PATH_MAX];   // static: 64KB, far too fat for a stack
+    static bool staged[GET_MAX_LIST];
+    int32_t failed = 0, unchanged = 0;
+    for (int32_t i = 0; i < n; i++)
+    {
+        dests[i][0] = '\0';
+        staged[i] = false;
+
+        // THE MANIFEST DECIDES FIRST. LIST already told us every file's length
+        // and CRC, so a file we already hold is settled WITHOUT DIALING AT ALL
+        // — no connection, no header, no bytes. That is the whole point of
+        // putting the sizes in the catalogue, and it turns the second refresh
+        // of an unchanged tree from 86 transfers into 86 local checksums.
+        // (fetch_stage still carries the same test against the header, for the
+        // single-file case and for any server that lists bare names.)
+        if (!force && entries[i].length != 0)
+        {
+            const char *dir = conf_route(&conf, entries[i].name);
+            char probe[GET_PATH_MAX];
+            if (join_path(probe, sizeof(probe), dir, entries[i].name) &&
+                local_matches(probe, entries[i].length, entries[i].crc))
+            {
+                unchanged++;
+                if (!quiet)
+                    os64_printf("[%ld/%ld] %s — unchanged\n", (long)(i + 1), (long)n, entries[i].name);
+                continue;
+            }
+        }
+
+        if (!quiet)
+            os64_printf("[%ld/%ld] %s\n", (long)(i + 1), (long)n, entries[i].name);
+        int rc = fetch_stage(host, entries[i].name, NULL, &conf,
+                             archiving ? archiveDir : NULL, quiet, force,
+                             dests[i], sizeof(dests[i]));
+        if (rc == GET_OK)
+            staged[i] = true;
+        else if (rc == GET_UNCHANGED)
+            unchanged++;          // the header settled what the manifest could not
+        else
+        {
+            failed++;
+            os64_hprintf(OS64_STDERR, "os64get: %s FAILED (%d)\n", entries[i].name, rc);
+        }
+    }
+
+    // ── THE DECISION ────────────────────────────────────────────────────
+    // All or nothing. A system that is 40/86 new is not a system anybody can
+    // reason about — least of all the person who has to fix it, on the
+    // machine that just half-updated, with the old tools half gone.
+    if (failed != 0)
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: %ld of %ld files did not arrive — INSTALLING NOTHING. "
+                     "The system is untouched; fix the problem and run it again.\n",
+                     (long)failed, (long)n);
+        for (int32_t i = 0; i < n; i++)
+            if (dests[i][0] != '\0')
+                stage_discard(dests[i], archiving ? archiveDir : NULL, entries[i].name);
+        return GET_CORRUPT;
+    }
+
+    // ── PHASE TWO: publish, as fast as the filesystem can ───────────────
+    //
+    // Renames only, one per file, each inside a single directory: no data
+    // moves and nothing is read. This is the whole window in which the
+    // machine is part-old and part-new, and it is now measured in directory
+    // writes rather than in network seconds.
+    //
+    // A failure HERE is different in kind from a failure above, and is
+    // handled differently: we are already committed, and un-renaming the
+    // files that succeeded would just be a second half-installed system
+    // arrived at the long way round. So each failure is reported and the rest
+    // still go in — finishing is strictly better than stopping, and the exit
+    // code says plainly that something needs a human.
+    int32_t installed = 0, unpublished = 0;
+    for (int32_t i = 0; i < n; i++)
+    {
+        if (!staged[i])
+            continue;              // unchanged: there is no .part to publish
+        if (stage_commit(dests[i]) == GET_OK)
+            installed++;
+        else
+        {
+            unpublished++;
+            os64_hprintf(OS64_STDERR, "os64get: %s could not be published — it is staged at %s.part\n",
+                         dests[i], dests[i]);
+        }
+    }
+
+    os64_printf("os64get: %ld installed, %ld unchanged%s%s%s\n",
+                (long)installed, (long)unchanged,
+                archiving && installed ? ", kept at " : "",
+                archiving && installed ? archiveDir : "",
+                unpublished ? " — SOME FILES COULD NOT BE PUBLISHED (see above)" : "");
+    if (!quiet && installed > 0)
+        os64_printf("os64get: a replaced /lib/libos64.so serves the OLD code until reboot "
+                    "(the loader keeps it resident) — reboot to finish.\n");
+
+    return unpublished == 0 ? GET_OK : GET_PUBLISH_FAILED;
 }

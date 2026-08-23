@@ -41,6 +41,16 @@ THE PROTOCOL (RTL8125.md), deliberately 1971-shaped:
     server -> client:   OK <length-decimal> <crc32-hex8>\n  then <length> bytes
                    or:  NO <reason>\n
 
+    client -> server:   LIST\n
+    server -> client:   <name> <length-decimal> <crc32-hex8>\n   (one per file)
+                        .\n
+
+LIST arrived 2026-08-22, when libos64 became a shared object and the payload
+became 66 files: `os64get -a HOST` asks what the valet has and fetches all of
+it, routing each file by /etc/os64get.conf. The lone "." terminator is SMTP's,
+from 1982 - and it is still the right answer for a line protocol a human might
+drive by hand.
+
 One connection per file. ASCII where a human might read it, binary only
 where a machine must. You can drive it by hand with telnet, which matters
 more than it sounds: a protocol you can type is a protocol you can debug
@@ -159,9 +169,50 @@ def serve_one(conn, addr, directories):
                 return
 
         line = request.decode("utf-8", "replace").strip()
+
+        # LIST - "what have you got?" (2026-08-22). The day libos64 became a
+        # shared object the payload became 66 files, and one invocation per
+        # file stopped being a workable way to update a real machine. The
+        # SERVER is the authority on what it has; a hand-maintained list on
+        # the client would be stale the first time an app was added.
+        #
+        #     client -> server:  LIST\n
+        #     server -> client:  <name> <length> <crc32hex>\n   (one per file)
+        #                        .\n
+        #
+        # A lone "." ends it - SMTP's terminator since 1982, and still the
+        # right answer for a line protocol a human might type by hand.
+        #
+        # Same first-hit-wins order as GET, and the same safety rules, so
+        # every name in the list is a name GET will actually serve: listing a
+        # file the client then cannot fetch would be a lie with a delay on it.
+        if line == "LIST":
+            seen = set()
+            entries = []
+            for directory in directories:
+                try:
+                    for entry in sorted(os.listdir(directory)):
+                        if entry in seen or not is_safe_name(entry):
+                            continue
+                        full = os.path.join(directory, entry)
+                        if not os.path.isfile(full):
+                            continue
+                        seen.add(entry)
+                        data = read_served_file_multi(directories, entry)
+                        if data is None:
+                            continue
+                        entries.append((entry, len(data), zlib.crc32(data) & 0xFFFFFFFF))
+                except OSError as exc:
+                    print(f"  {addr[0]}: cannot list {directory}: {exc}")
+            body = "".join(f"{n} {ln} {c:08x}\n" for n, ln, c in entries) + ".\n"
+            conn.sendall(body.encode("ascii"))
+            total = sum(ln for _, ln, _ in entries)
+            print(f"  {addr[0]}: listed {len(entries)} files ({total} bytes)")
+            return
+
         if not line.startswith("GET "):
             print(f"  {addr[0]}: not a GET: {line!r}")
-            conn.sendall(b"NO expected GET <name>\n")
+            conn.sendall(b"NO expected GET <name> or LIST\n")
             return
 
         name = line[4:].strip()
