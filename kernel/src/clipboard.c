@@ -130,6 +130,19 @@ poison:
 	return -1;
 }
 
+void clipboard_discard(snarf_pending_t *pending)
+{
+	if (pending == NULL)
+		return;
+
+	printd(DEBUG_CLIPBOARD, "CLIPBOARD: discarding an unpublished copy of %lu bytes; "
+	       "the previous snarf survives\n", (unsigned long)pending->length);
+
+	if (pending->bytes != NULL)
+		kfree(pending->bytes);   // kfree(NULL) PANICS in os64 — always guard
+	kfree(pending);
+}
+
 void clipboard_seal(snarf_pending_t *pending)
 {
 	if (pending == NULL)

@@ -1030,8 +1030,14 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		{
 			// Publish failed after we had already taken the store's word for
 			// it — hand both back rather than leaking an entry reference.
-			if (pending != NULL)
-				clipboard_seal(pending);
+			//
+			// DISCARD, not seal. The open is about to fail, so the caller
+			// never gets a handle and never writes a byte; sealing here would
+			// publish the empty pending as the newest snarf and throw away
+			// whatever the user had copied — an allocation failure inside a
+			// failed `open("/sys/clipboard","w")` erasing the clipboard is a
+			// bad trade for anyone. (Codex review, 2026-08-22.)
+			clipboard_discard(pending);
 			clipboard_release(entry);
 			return -1;
 		}
