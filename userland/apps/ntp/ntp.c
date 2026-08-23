@@ -163,11 +163,19 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    char dial_string[80];
+    // Sized from the NAME LIMIT now that the second segment may be a name:
+    // "udp!" + up to OS64_RESOLVE_NAME_MAX (253, DNS's own ceiling) + "!123"
+    // + NUL. The old 80 bytes were chosen when only a dotted quad could stand
+    // here, and they refused every hostname over 71 characters — with the
+    // resolver sitting right there, willing and able. A limit inherited from
+    // the previous version of a feature is the quietest kind of wrong.
+    // (Codex review, 2026-08-23.)
+    char dial_string[OS64_RESOLVE_NAME_MAX + 16];
     int32_t dial_length = os64_snprintf(dial_string, sizeof(dial_string),
                                         "udp!%s!%d", server, NTP_PORT);
     if (dial_length < 0 || (size_t)dial_length >= sizeof(dial_string)) {
-        os64_hprintf(OS64_STDERR, "ntp: server address is too long\n");
+        os64_hprintf(OS64_STDERR, "ntp: server name is too long (limit %d)\n",
+                     OS64_RESOLVE_NAME_MAX);
         return 2;
     }
 
