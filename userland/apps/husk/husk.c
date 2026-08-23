@@ -689,6 +689,24 @@ static bool byte_is_expanded(const char *p)
 	return s_expmask[p - s_expbase] != 0;
 }
 
+// Is this token entirely the author's own typing? Only such a token may be an
+// operator. Two sources of NOT-typed bytes exist, and both are the outside
+// world: a $-expansion (the mask above) and a GLOB result, which is a
+// filename — the filesystem's text, not the shell's. Glob results live in
+// their own pool rather than in the expanded line, so they are recognized by
+// address rather than by mask.
+static bool token_is_typed(const char *t)
+{
+	if (t == NULL)
+		return false;
+	if (t >= s_glob_pool && t < s_glob_pool + sizeof(s_glob_pool))
+		return false;                       // a filename the glob found
+	for (const char *p = t; *p != '\0'; p++)
+		if (byte_is_expanded(p))
+			return false;                   // any substituted byte disqualifies it
+	return true;
+}
+
 // parse() compacts tokens leftward IN PLACE; the mask has to travel with the
 // bytes or it would describe the pre-compaction line. Destination is always
 // at or left of the source, and the scan is left to right, so a moved flag
@@ -1310,12 +1328,20 @@ static int extract_redirections(char *cargv[], char **inFile,
 	int w = 0;
 	for (int r = 0; cargv[r]; r++)
 	{
-		// A token that came out of an expansion is a FILENAME or an argument,
-		// never an operator: `echo $1` with $1 = "> passwd" prints it, the way
-		// every shell since 1977 has. The first byte settles it — these
-		// operators are whole tokens, so a token that begins in substituted
-		// text is substituted text.
-		if (byte_is_expanded(cargv[r]))
+		// A token is an OPERATOR only if the author typed every byte of it.
+		// `echo $1` with $1 = "> passwd" prints it, the way every shell since
+		// 1977 has.
+		//
+		// EVERY byte, and not just the first — checking only the first left
+		// two ways in, both found by re-reading this fix as its own reviewer
+		// (2026-08-23). `>$x` with $x = ">" is one token that husk would
+		// normally treat as a literal (its operators are token-exact, so
+		// `>foo` is an argument), and the substitution turned it into the
+		// APPEND operator: data creating syntax by completing it. And a
+		// GLOB result is data too — it comes from the filesystem, which is
+		// the outside world by another door — so a file innocently named ">"
+		// made `echo *` redirect into whatever filename sorted after it.
+		if (!token_is_typed(cargv[r]))
 		{
 			cargv[w++] = cargv[r];
 			continue;
