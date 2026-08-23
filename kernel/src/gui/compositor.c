@@ -336,6 +336,10 @@ static void paint_desktop(void)
 // declaration. It sits above the windows and below the cursor: an outline you
 // could lose the pointer inside would be a poor tool.
 static void band_composite(surface_t *backbuffer, rect_t damage);
+// Same arrangement for the Alt+Tab strip, and the same reason. Like the band
+// it is compositor-owned pixels rather than a window: no window_t, no owner,
+// no event queue, not in the z-list, not hit-tested.
+static void switcher_composite(surface_t *backbuffer, rect_t damage);
 
 static rect_t composite_locked(rect_t damage)
 {
@@ -352,6 +356,11 @@ static rect_t composite_locked(rect_t damage)
 	// Layer 2: the interactive-resize outline, when one is up. No-op
 	// otherwise, and the check is one pointer compare per damage rect.
 	band_composite(&kBackbuffer, damage);
+
+	// Layer 3: the Alt+Tab strip. Above the band because it is the more modal
+	// of the two — though in practice they cannot coexist, one needing a
+	// Ctrl+Alt mouse drag and the other Alt held on the keyboard.
+	switcher_composite(&kBackbuffer, damage);
 
 	// Cursor last, and clipped to this rect like everything else. The old code
 	// drew the FULL cursor art on the argument that stray pixels were harmless
@@ -396,8 +405,23 @@ static uint64_t s_titlebar_click_tick = 0;
 // The shape is the 1990 one (Windows 3.0 introduced it; every WM since has
 // kept it because it is right): while Alt is HELD, each Tab steps one window
 // further down the MOST-RECENTLY-FOCUSED order as it stood WHEN THE HOLD
-// BEGAN, and the window stepped to is raised at once — the raise IS the
-// feedback, no switcher popup needed at this size. Release Alt and the hold
+// BEGAN, and a STRIP of window titles shows where the step has landed.
+//
+// THE FIRST VERSION HAD NO STRIP, and raised each window as it was stepped
+// to — the raise WAS the feedback, on the argument that at this size nothing
+// more was needed. It cost one rule that had to go: "stepping onto a
+// minimized window restores it, and it stays restored if the walk moves on."
+// Chris, the first afternoon minimize existed: "I minimized everything, and
+// the only way back to the gterm I was on was to Alt+Tab through a bunch of
+// things, which brought them all back up." Walking past a window is not a
+// request to un-hide it, and with raise-as-feedback there was no way to say
+// so — showing you where you were REQUIRED disturbing the scene.
+//
+// A visible list is the other way, and it is what every desktop grew for
+// exactly this reason: Windows 3.1's (1992) was a box of icons. os64's is a
+// box of TITLES, because os64 windows have no icons and a title is what they
+// have. With the strip up, the scene can hold still — see
+// switcher_composite. Release Alt and the hold
 // ends; the next hold starts from the new order, which makes a quick Alt+Tab
 // a toggle between the two most recent windows, exactly the case people
 // reach for. (Recency, not z-order: the first version walked the stack, and
@@ -419,57 +443,263 @@ static uint64_t s_titlebar_click_tick = 0;
 // holds; past that the cycle simply covers the top sixteen, which is more
 // windows than this desktop has ever shown at once.
 
+// THE SNAPSHOT is taken once, at the first Tab, and holds everything the
+// strip needs to draw itself: ids, titles, and which entries were minimized.
+// Not pointers — a window can die mid-hold (its task exits), and an id lets
+// wm_window_by_id answer NULL for the dead where a pointer would answer with
+// freed memory (the exact bug the resize slice found in the drag state).
+//
+// Copying the TITLES too, rather than reading them back through the window
+// on every repaint, is the same argument one level up: the draw path then
+// dereferences nothing at all, and the picture the user is choosing from
+// cannot reflow under their hand halfway through a walk. Nothing in the
+// scene is allowed to change during a hold anyway, so a live re-read could
+// only ever differ from the snapshot by being wrong.
 static bool     s_alttab_active = false;
 static uint32_t s_alttab_ring[ALTTAB_RING_MAX];
+static char     s_alttab_titles[ALTTAB_RING_MAX][GUI_WINDOW_TITLE_MAX];
+static uint8_t  s_alttab_title_len[ALTTAB_RING_MAX];
+static bool     s_alttab_dim[ALTTAB_RING_MAX];   // minimized when the hold began
 static size_t   s_alttab_count = 0;
 static size_t   s_alttab_step  = 0;
+
+// Set when Escape cancelled a hold, so the router can swallow that same
+// Escape's release edge (see the cancel arm in route_event_locked).
+static bool     s_alttab_eat_esc_up = false;
+
+// The strip's pixels, computed once per hold by switcher_layout_locked.
+static bool     s_alttab_shown = false;
+static rect_t   s_alttab_strip = {0, 0, 0, 0};
+static int32_t  s_alttab_row_w = 0;
+static int32_t  s_alttab_chars = 0;   // characters that fit in one row
+
+// Strip geometry. The boot PSF1 font is 8x16, which sets every number here.
+#define SWITCHER_PAD      8    // left/right breathing room inside a row
+#define SWITCHER_ROW_H    24   // pitch: a 16px glyph cell with 4px above and below
+#define SWITCHER_ROW_GAP  1    // see switcher_composite — the separator IS this gap
+#define SWITCHER_BORDER   4    // strip frame around the column of rows
+#define SWITCHER_MARGIN   16   // smallest gap the strip keeps from a screen edge
+#define SWITCHER_ROW_MIN_W (8 * 8 + 2 * SWITCHER_PAD)   // eight characters, floor
+
+// Size and centre the strip for the ring currently snapshotted.
+//
+// THE LIST IS VERTICAL, one window per row (ruled 2026-08-23 by Chris, who
+// asked what was in the boxes and thereby found the answer). The horizontal
+// row of tiles every desktop shows works because those tiles hold ICONS:
+// square, small, sixteen across a screen without complaint. os64 has no
+// icons — a window has a TITLE, and titles are wide and variable-length,
+// which is the one shape a horizontal strip handles worst. The arithmetic
+// is brutal: sixteen windows sharing 1024 pixels leaves 61 per cell, which
+// at 8 pixels a glyph is FIVE CHARACTERS — "gterm", "scrib", "bounc" — and
+// it gets worse the more descriptive the titles become, which is exactly
+// the direction they are heading. The same sixteen rows stacked cost 384
+// pixels of height, fit inside 640x480 with room to spare, and show all 32
+// characters at a comfortable width.
+//
+// The lineage agrees. The vertical list of window titles is the older and
+// specifically Unix answer — twm's window menu (1987), then fvwm's
+// WindowList (1993) — arrived at by people who likewise had no icons to
+// show; even Microsoft's pre-icon Task List (Alt+Esc, Windows 3.0) was a
+// vertical list box, and went horizontal only once there were icons for it.
+//
+// ROWS ARE UNIFORM WIDTH, not sized to their own titles: surface_draw_text
+// paints an OPAQUE background per glyph, so a title allowed to run past its
+// row would repaint the frame beside it. Clipping to a character count
+// computed from the row width makes the spill impossible rather than merely
+// unlikely.
+static void switcher_layout_locked(void)
+{
+	int32_t screen_w = (int32_t)kBackbuffer.width;
+	int32_t screen_h = (int32_t)kBackbuffer.height;
+
+	int32_t longest = 0;
+	for (size_t i = 0; i < s_alttab_count; i++)
+		if ((int32_t)s_alttab_title_len[i] > longest)
+			longest = (int32_t)s_alttab_title_len[i];
+
+	int32_t row_w = 8 * longest + 2 * SWITCHER_PAD;
+	if (row_w < SWITCHER_ROW_MIN_W)
+		row_w = SWITCHER_ROW_MIN_W;
+
+	// A full-width row on a very narrow framebuffer: clip the titles rather
+	// than run off the glass. (32 characters plus padding is 272px, so this
+	// only bites below a 320-wide screen — the clamp is the belt to that
+	// pair of suspenders.)
+	int32_t available_w = screen_w - 2 * SWITCHER_BORDER - 2 * SWITCHER_MARGIN;
+	if (row_w > available_w)
+		row_w = available_w;
+
+	s_alttab_row_w = row_w;
+	s_alttab_chars = (row_w - 2 * SWITCHER_PAD) / 8;
+	if (s_alttab_chars < 0)
+		s_alttab_chars = 0;
+
+	// Height: rows at SWITCHER_ROW_H pitch, the last one ending flush with
+	// the frame (hence the one subtracted gap — a trailing separator would
+	// read as lopsided padding).
+	s_alttab_strip.w = row_w + 2 * SWITCHER_BORDER;
+	s_alttab_strip.h = SWITCHER_ROW_H * (int32_t)s_alttab_count
+	                 - SWITCHER_ROW_GAP + 2 * SWITCHER_BORDER;
+	s_alttab_strip.x = (screen_w - s_alttab_strip.w) / 2;
+	s_alttab_strip.y = (screen_h - s_alttab_strip.h) / 2;
+	if (s_alttab_strip.x < 0)
+		s_alttab_strip.x = 0;
+	if (s_alttab_strip.y < 0)
+		s_alttab_strip.y = 0;
+}
+
+// Republish the whole strip. The rubber band damages its four thin edges
+// because it is window-sized and moves on every mouse packet; the strip is
+// small, moves once per keystroke, and repaints its highlight in the MIDDLE
+// of itself — so the union is both simpler and cheaper than the bookkeeping
+// that would avoid it.
+static void switcher_damage_locked(void)
+{
+	if (s_alttab_shown)
+		gui_damage_add_locked(s_alttab_strip);
+}
+
+// Draw the strip into the damaged region. Same contract as band_composite:
+// everything in VIEW coordinates, so surface.c's clipping makes "writes stay
+// inside the damage rect" structural rather than remembered.
+static void switcher_composite(surface_t *backbuffer, rect_t damage)
+{
+	if (!s_alttab_shown)
+		return;
+
+	surface_t view = surface_view(backbuffer, damage);
+	int32_t sx = s_alttab_strip.x - damage.x;
+	int32_t sy = s_alttab_strip.y - damage.y;
+
+	// Frame: a filled slab in the unfocused border colour with the focused
+	// border colour outlining it — the same two greys the chrome uses to say
+	// "this one is live", one level up from a window.
+	surface_fill_rect(&view, (rect_t){sx, sy, s_alttab_strip.w, s_alttab_strip.h},
+	                  WINDOW_BORDER_UNFOCUSED);
+	surface_draw_rect(&view, (rect_t){sx, sy, s_alttab_strip.w, s_alttab_strip.h},
+	                  WINDOW_BORDER_FOCUSED);
+
+	// NO SEPARATOR LINES. Each row is a tile laid on the dark slab and one
+	// pixel shorter than its pitch, so the frame itself shows through between
+	// them: the gap IS the separator. It costs no colour, no extra draw and
+	// no decision about how dark a divider should be, and it makes the
+	// highlighted row read as a raised tile rather than a painted stripe —
+	// which still works when two adjacent rows are the same grey.
+	for (size_t i = 0; i < s_alttab_count; i++) {
+		rect_t row = {sx + SWITCHER_BORDER,
+		              sy + SWITCHER_BORDER + (int32_t)i * SWITCHER_ROW_H,
+		              s_alttab_row_w, SWITCHER_ROW_H - SWITCHER_ROW_GAP};
+		uint32_t bg = (i == s_alttab_step) ? WINDOW_TITLEBAR_FOCUSED
+		                                   : WINDOW_TITLEBAR_UNFOCUSED;
+		surface_fill_rect(&view, row, bg);
+
+		// A MINIMIZED WINDOW IS IN THE RING AND DRAWN DIM. That is the whole
+		// point of the slice: "bring back the one I hid" has to be a visible
+		// choice rather than a guess, and dim-but-present says both halves —
+		// it is here, and it is not on the glass.
+		int32_t len = (int32_t)s_alttab_title_len[i];
+		if (len > s_alttab_chars)
+			len = s_alttab_chars;
+		if (len > 0)
+			surface_draw_text(&view, row.x + SWITCHER_PAD,
+			                  row.y + (SWITCHER_ROW_H - SWITCHER_ROW_GAP - 16) / 2,
+			                  s_alttab_titles[i], (size_t)len,
+			                  // LIGHT grey, not GUI_COLOR_GRAY: the dim title
+			                  // has to stay legible on BOTH row colours, and
+			                  // its worst case is the one that matters most —
+			                  // a minimized window that is also the highlighted
+			                  // one, i.e. the window you are in the act of
+			                  // choosing to bring back. 0x808080 on the
+			                  // focused blue was muddy; this reads clearly and
+			                  // is still obviously not white.
+			                  s_alttab_dim[i] ? GUI_COLOR_LIGHT_GRAY : GUI_COLOR_WHITE,
+			                  bg);
+	}
+}
+
+// Take the snapshot the strip draws from: recency order, titles, dim flags.
+static void alttab_snapshot_locked(void)
+{
+	s_alttab_count = wm_recency_ids(s_alttab_ring, ALTTAB_RING_MAX);
+	for (size_t i = 0; i < s_alttab_count; i++) {
+		window_t *w = wm_window_by_id(s_alttab_ring[i]);
+		size_t n = 0;
+		if (w != NULL) {
+			while (n < GUI_WINDOW_TITLE_MAX && w->title[n] != '\0') {
+				s_alttab_titles[i][n] = w->title[n];
+				n++;
+			}
+			s_alttab_dim[i] = wm_is_hidden(w);
+		} else {
+			s_alttab_dim[i] = false;   // cannot happen: the ids came from the live list
+		}
+		s_alttab_title_len[i] = (uint8_t)n;
+	}
+}
 
 static void alttab_step_locked(bool backwards)
 {
 	if (!s_alttab_active) {
-		s_alttab_count = wm_recency_ids(s_alttab_ring, ALTTAB_RING_MAX);
+		alttab_snapshot_locked();
 		s_alttab_step = 0;
 		s_alttab_active = true;
+		if (s_alttab_count >= 2) {
+			switcher_layout_locked();
+			s_alttab_shown = true;
+		}
 	}
 	if (s_alttab_count < 2)
 		return;   // nothing to cycle between; the hold still starts, harmlessly
 	s_alttab_step = backwards
 		? (s_alttab_step + s_alttab_count - 1) % s_alttab_count
 		: (s_alttab_step + 1) % s_alttab_count;
-	window_t *w = wm_window_by_id(s_alttab_ring[s_alttab_step]);
-	if (w == NULL)
-		return;   // died during the hold; the next Tab steps past it
+
+	// A STEP MOVES THE HIGHLIGHT AND NOTHING ELSE. No raise, no restore, no
+	// focus change, no recency stamp — the z-order the user had is the
+	// z-order they keep until they let go, and exactly one window changes at
+	// the end of the hold. (PASSING THROUGH IS NOT USING — Chris's nit, the
+	// first hour Alt+Tab existed on the P5 — used to need a save/restore of
+	// focusSerial around the raise. Now it needs nothing, because nothing
+	// happens.)
 	printd(DEBUG_GUI, "guicomp: alt-tab step %lu/%lu -> window %u\n",
-		(uint64_t)s_alttab_step, (uint64_t)s_alttab_count, w->id);
-	// PASSING THROUGH IS NOT USING (Chris's nit, 2026-08-23, the first hour
-	// Alt+Tab existed on the P5). A step raises and focuses the window so
-	// the user can SEE where they are, but it must not count as recent: the
-	// recency stamp is taken only when the hold ENDS, on the window it ended
-	// over (alttab_end_locked). Otherwise walking gterm1 → gbounce → gkeys →
-	// gterm2 leaves gkeys second in the order, and the quick Alt+Tab that
-	// should bounce back to gterm1 lands on gkeys instead. wm_raise stamps
-	// unconditionally — it is the right thing for a click — so the stamp is
-	// put back here.
-	uint64_t serial = w->focusSerial;
-	if (wm_is_hidden(w))
-		// Stepping onto a minimized window restores it (and raises). It stays
-		// restored if the walk moves on — the step is how you SEE it, and a
-		// window that popped up and vanished again would be a flicker, not a
-		// preview. Ctrl+Alt+N is one chord away if you wanted it hidden.
-		wm_set_minimized(w, false);
-	else
-		wm_raise(w);
-	w->focusSerial = serial;
+		(uint64_t)s_alttab_step, (uint64_t)s_alttab_count,
+		s_alttab_ring[s_alttab_step]);
+	switcher_damage_locked();
 }
 
-// The hold is over: whatever is focused now is what the user chose, and
-// NOW it becomes the most recent. (A hold that stepped nowhere, or stepped
-// back to where it began, re-stamps the original — harmless.)
-static void alttab_end_locked(void)
+// The hold is over. `commit` false = Escape was pressed: the strip goes and
+// the scene is left exactly as it was found, which is the promise that makes
+// walking the ring safe to do idly.
+//
+// Committing acts on the HIGHLIGHTED window, not on whatever holds focus:
+// nothing moved focus during the hold, so the highlight is the only record of
+// what the user chose. Restore it if it was minimized, raise it otherwise —
+// both paths focus and stamp recency through wm_raise, so the window you
+// released on becomes the most recent and the quick Alt+Tab that follows
+// bounces back to where you came from.
+static void alttab_end_locked(bool commit)
 {
 	s_alttab_active = false;
-	wm_touch_focus();
-	printd(DEBUG_GUI, "guicomp: alt-tab hold ended\n");
+	if (s_alttab_shown) {
+		s_alttab_shown = false;
+		gui_damage_add_locked(s_alttab_strip);   // erase: repaint what was under it
+	}
+
+	if (commit && s_alttab_count > 0) {
+		window_t *w = wm_window_by_id(s_alttab_ring[s_alttab_step]);
+		if (w == NULL) {
+			// Chosen window died mid-hold. Nothing to switch to, and nothing
+			// to clean up — the id was the whole of our hold on it.
+			printd(DEBUG_GUI, "guicomp: alt-tab chose window %u, which is gone\n",
+				s_alttab_ring[s_alttab_step]);
+		} else if (wm_is_hidden(w)) {
+			wm_set_minimized(w, false);   // back on the glass, raised, focused
+		} else {
+			wm_raise(w);
+		}
+	}
+	printd(DEBUG_GUI, "guicomp: alt-tab hold %s\n",
+		commit ? "ended" : "cancelled");
 }
 
 // ── Interactive resize: the Ctrl+Alt gesture and its rubber band ────────────
@@ -862,7 +1092,58 @@ static void route_event_locked(const input_event_t *ev)
 		// key event of any kind that arrives WITHOUT Alt in its modifiers —
 		// a fact both drivers publish on every event they send.
 		if (s_alttab_active && !(ev->key.modifiers & KEYBOARD_MOD_ALT))
-			alttab_end_locked();
+			alttab_end_locked(true);
+		// Escape abandons the hold: the strip goes away and the scene is left
+		// exactly as it was found. Swallowed, since the app never saw the
+		// press that opened the strip either — half a gesture is worse than
+		// none. (Only while a hold is running; Escape is the app's otherwise.)
+		//
+		// THE SCANCODE TEST IS LOAD-BEARING, not belt-and-braces: every arrow
+		// press arrives as a three-event VT100 burst whose first event also
+		// carries ascii 0x1B, so `ascii == 0x1B` alone would cancel the hold
+		// on the first third of the Up key immediately below. See
+		// keyboard_is_escape_key for the whole trap.
+		//
+		// The cancel happens on the key-DOWN (the strip should go the
+		// instant you say so), which leaves its key-UP arriving after the
+		// hold is already over — and an app handed the release half of a
+		// press it never saw is exactly the "half a gesture" this router
+		// swallows Tab's release to avoid. One flag closes it, rather than
+		// eating Alt+Esc unconditionally and quietly taking a chord away
+		// from every app that might want it.
+		if (ev->key.ascii == 0x1b &&
+		    keyboard_is_escape_key(ev->key.scancode, ev->key.modifiers) &&
+		    (s_alttab_active || s_alttab_eat_esc_up)) {
+			if (ev->type == INPUT_EVENT_KEY_DOWN) {
+				if (s_alttab_active) {
+					alttab_end_locked(false);
+					s_alttab_eat_esc_up = true;
+				}
+			} else {
+				s_alttab_eat_esc_up = false;
+			}
+			break;
+		}
+		// Up/Down walk the list too, because on a VERTICAL list they are what
+		// the keys look like they should do. They are available precisely
+		// because the driver spends Alt+Left/Right on the virtual-terminal
+		// cycle and leaves the vertical pair alone — horizontal arrows walk
+		// terminals, vertical arrows walk windows.
+		//
+		// Arrows do not START a hold (Tab does): an Alt+Up that reached no
+		// switcher would be silently stolen from whatever app wanted it.
+		if (s_alttab_active) {
+			int arrow = keyboard_arrow_updown(ev->key.scancode, ev->key.modifiers);
+			if (arrow != 0) {
+				// One press is three events (ESC, '[', 'A'/'B'). Step on the
+				// last of them so a press is a step, and swallow all three so
+				// no app is ever handed half an escape sequence.
+				if (ev->type == INPUT_EVENT_KEY_DOWN &&
+				    (ev->key.ascii == 'A' || ev->key.ascii == 'B'))
+					alttab_step_locked(arrow < 0);
+				break;
+			}
+		}
 		if (ev->key.ascii == '\t' && (ev->key.modifiers & KEYBOARD_MOD_ALT)) {
 			if (ev->type == INPUT_EVENT_KEY_DOWN)
 				alttab_step_locked((ev->key.modifiers & KEYBOARD_MOD_SHIFT) != 0);
@@ -927,7 +1208,10 @@ static void route_event_locked(const input_event_t *ev)
 					wm_set_maximized(focus, max);
 					break;
 				}
-				case 0x0E:     // Ctrl+Alt+N: minimize (Alt+Tab brings it back)
+				// Ctrl+Alt+N: minimize. Alt+Tab brings it back — it shows in
+				// the switcher strip as a dim row, and returns only if the
+				// hold ENDS on it (walking past leaves it hidden).
+				case 0x0E:
 					printd(DEBUG_GUI, "guicomp: window %u minimized\n", focus->id);
 					wm_set_minimized(focus, true);
 					break;
@@ -1034,6 +1318,16 @@ bool guicomp_thread(bool daemon)
 			// the first release after the return would land on a window
 			// that finished its gesture a VT switch ago.
 			s_pointer_window = NULL;
+			// An Alt+Tab hold is stale for exactly the same reason, and it is
+			// the keyboard's version of that bug: a hold ends on the first
+			// key event arriving WITHOUT Alt, and while a text VT held the
+			// iron every one of those went to the console instead. The hold
+			// would otherwise still be open on our return — with the strip
+			// repainted by the full-screen damage below, over a scene the
+			// user has since stopped choosing from. Abandon it: leaving is
+			// not choosing, so the scene is left exactly as it was found.
+			if (s_alttab_active)
+				alttab_end_locked(false);
 			gui_damage_add_locked((rect_t){0, 0, (int32_t)kBackbuffer.width,
 			                               (int32_t)kBackbuffer.height});
 		}

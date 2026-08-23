@@ -38,6 +38,44 @@ static inline int keyboard_fkey_number(uint8_t scancode, uint8_t modifiers)
     return 0;
 }
 
+// Is this event the ESCAPE KEY itself? (PS/2 set-1 0x01, HID usage 0x29.)
+//
+// ASCII CANNOT ANSWER THIS, and the reason is worth knowing before you write
+// `ascii == 0x1B` anywhere: arrow keys and the Home/End/PgUp/Del family are
+// translated by BOTH keyboard drivers into VT100 escape sequences — ESC, '[',
+// then a final byte, delivered as separate key events (see keyboard.c's
+// extended block and xhci.c's hid_deliver_usage). Every one of those bursts
+// therefore opens with an event carrying ascii 0x1B. A consumer that treats
+// 0x1B as "the user pressed Escape" fires on the first third of every arrow
+// press. What tells them apart is the SCANCODE: a burst carries the scancode
+// of the key that produced it, so only a real Escape carries Escape's own.
+// (Found 2026-08-23 wiring Escape-cancels into the Alt+Tab switcher, one
+// edit before it would have made Up cancel the hold it was meant to walk.)
+static inline bool keyboard_is_escape_key(uint8_t scancode, uint8_t modifiers)
+{
+    return (modifiers & KEYBOARD_MOD_HID) ? scancode == 0x29 : scancode == 0x01;
+}
+
+// Which VERTICAL arrow is this event: -1 up, +1 down, 0 neither. The one
+// place both dialects' arrow codes are written, for the same reason
+// keyboard_fkey_number exists — and here the dialects genuinely COLLIDE:
+// 0x50 is Down in PS/2 set-1 and Left in HID. Nothing but the dialect bit
+// can separate them, which is precisely why that bit is carried on every
+// event. (Left and Right are deliberately absent: the driver consumes
+// Alt+Left/Right for the virtual-terminal cycle before anyone sees them, so
+// horizontal arrows walk TERMINALS and vertical ones walk windows.)
+static inline int keyboard_arrow_updown(uint8_t scancode, uint8_t modifiers)
+{
+    if (modifiers & KEYBOARD_MOD_HID) {
+        if (scancode == 0x52) return -1;   // HID Up
+        if (scancode == 0x51) return +1;   // HID Down
+        return 0;
+    }
+    if (scancode == 0x48) return -1;       // PS/2 set-1 Up
+    if (scancode == 0x50) return +1;       // PS/2 set-1 Down
+    return 0;
+}
+
 typedef struct keyboard_event {
     char ascii;
     uint8_t scancode;

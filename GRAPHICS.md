@@ -628,11 +628,11 @@ still reaches the app) extended from the mouse to the keyboard:
 
 | Chord | Does | Notes |
 |---|---|---|
-| **Alt+Tab** / Shift+Alt+Tab | cycle focus | MOST-RECENTLY-USED order, not z-order; quick press = toggle between the two most recent; hold Alt and keep tabbing to walk the whole ring; **passing through a window is not using it** — only the one you release Alt over becomes recent (Chris's nit, first hour on the P5). A minimized window is in the ring, and landing on it restores it |
+| **Alt+Tab** / Shift+Alt+Tab (or Up/Down) | cycle focus | MOST-RECENTLY-USED order, not z-order; quick press = toggle between the two most recent; hold Alt and keep tabbing to walk the whole ring; **passing through a window is not using it** — only the one you release Alt over becomes recent (Chris's nit, first hour on the P5). A vertical strip of titles shows the walk, and **nothing in the scene moves until you let go**. A minimized window is in the ring, drawn dim, and comes back only if you release ON it — see the switcher chapter for the rule that had to die first |
 | **Ctrl+Alt+P** | pin on top (toggle) | two bands in the z-list, pinned above all; white square at the bar's right end; a client cannot ask for it at create (`gui_client.c` masks the flag — a self-pinning app is a pop-up ad) |
 | **Ctrl+Alt+T** | hide/show titlebar | content stays put, the frame's top edge moves; 1px border stays; `OS64_GUI_WINDOW_NO_DECORATIONS` honored at create too |
 | **Ctrl+Alt+M** / titlebar double-click | maximize (toggle) | restore frame remembered; a manual move or resize clears it; raises, so a focused-but-buried window still visibly answers |
-| **Ctrl+Alt+N** | minimize | off the glass, not hit-tested, occludes nothing, alive; focus goes to the most recent visible window; Alt+Tab brings it back |
+| **Ctrl+Alt+N** | minimize | off the glass, not hit-tested, occludes nothing, alive; focus goes to the most recent visible window; Alt+Tab brings it back — release the hold ON its dim row |
 | `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path.ppm` (P6, centered, never scaled — a `screendump` can be the wallpaper); no file = the test pattern stays (`gui/desktop.c`) |
 
 Three things learned building them, for the next chord:
@@ -667,7 +667,7 @@ two Tabs or click twice inside 500ms. Launch with `-device qemu-xhci
 -device usb-kbd` to test the HID dialect; QEMU routes input to USB when it
 is present.
 
-## The Alt+Tab switcher — design (2026-08-23, UNBUILT; for Opus)
+## The Alt+Tab switcher (built 2026-08-23)
 
 *Chris, the first afternoon with minimize: "I minimized everything, and the
 only way back to the gterm I was on was to Alt+Tab through a bunch of
@@ -676,46 +676,98 @@ chapter that was wrong, and it was Fable's call: "stepping onto a minimized
 window restores it, and it stays restored if the walk moves on." With raise-
 as-feedback there was no other way to show the user where they were. A
 visible list is the other way, and it is what every desktop grew for the
-same reason — Windows 3.1's (1992) was a box of icons; os64's will be a box
-of titles, because os64 windows have no icons and a title is what they have.
+same reason.
 
-### What changes
+**THE LIST IS VERTICAL — one window per row.** Fable's design said a
+horizontal strip of cells, on the Windows 3.1 (1992) precedent. Chris asked
+the question that undid it — *"what's in each box? The name of the app?"* —
+and the answer settles the layout: the box holds a TITLE, and every
+horizontal switcher you have ever seen holds an ICON. Icons are square,
+small, and sixteen fit across a screen; titles are wide, variable, and
+getting wider (Chris, same conversation, taking the job: *"I agree with you
+that each window should have a descriptive title"*). Sixteen windows
+sharing 1024 pixels leaves 61 per cell = **five characters** — `gterm`,
+`scrib`, `bounc` — and it degrades further the better the titles get. The
+same sixteen stacked cost 384 pixels of height, fit inside 640x480, and
+show all 32 characters.
+
+The lineage backs the arithmetic. The vertical list of window titles is the
+older and specifically Unix answer — twm's window menu (1987), then fvwm's
+`WindowList` (1993) — reached by people who also had no icons to show; even
+Microsoft's own pre-icon Task List (Alt+Esc, Windows 3.0) was a vertical
+list box, and went horizontal only once there were icons to put in it.
+
+### What changed
 
 - **While Alt is held, NOTHING in the scene moves.** No raise, no restore,
   no focus change, no recency stamp. The z-order the user had is the z-order
-  they keep until they let go. (Today each step raises — delete that.)
-- **A strip appears** on the first Tab: centered, one row, a cell per window
-  in the recency ring (`wm_recency_ids`, most recent first), the title in
-  each cell, the current step highlighted. Minimized windows are in the ring
-  and drawn dimmed (gray text) so "bring back the one I hid" is a visible
-  choice, not a guess. 16 cells max (`ALTTAB_RING_MAX`); the strip is sized
-  to the count.
-- **Tab / Shift+Tab move the highlight.** Nothing else.
+  they keep until they let go. The old raise-per-step is gone, and with it
+  the `focusSerial` save/restore that used to undo the stamp `wm_raise`
+  takes — nothing needs undoing when nothing happens.
+- **A strip appears** on the first Tab: centered, one ROW per window in the
+  recency ring (`wm_recency_ids`, most recent first), the title in each row,
+  the current step highlighted. Minimized windows are in the ring and drawn
+  dimmed (gray text) so "bring back the one I hid" is a visible choice, not
+  a guess. 16 rows max (`ALTTAB_RING_MAX`); the strip is sized to the count.
+- **The snapshot now carries titles and dim flags**, not just ids. The draw
+  path then dereferences no window at all, and the picture cannot reflow
+  under the user's hand mid-walk. (Nothing in the scene is allowed to change
+  during a hold anyway, so a live re-read could only differ by being wrong.)
+- **Tab / Shift+Tab move the highlight, and so do Up/Down.** Nothing else.
+  The vertical arrows are free precisely because the keyboard driver spends
+  Alt+Left/Right on the virtual-terminal cycle: horizontal arrows walk
+  terminals, vertical ones walk windows. Arrows do not START a hold — an
+  Alt+Up that reached no switcher would be silently stolen from the app.
 - **Releasing Alt commits**: the highlighted window is restored if
-  minimized, raised, focused, and recency-stamped (`wm_touch_focus`) — ONE
-  window changes, the rest stay exactly where they were. The strip
-  disappears. Escape during the hold cancels (strip goes, nothing changes).
+  minimized, otherwise raised — both paths focus and recency-stamp on their
+  own. ONE window changes, the rest stay exactly where they were. The strip
+  disappears. Escape during the hold cancels (strip goes, nothing changes);
+  its release edge is swallowed too, so no app is handed half a gesture.
+- **A VT switch away abandons a live hold.** It is the keyboard's version of
+  the stale-pointer-grab bug the resize slice found: a hold ends on the first
+  key event arriving without Alt, and while a text VT holds the iron every
+  one of those goes to the console. Cleared where `s_glass_regained` is
+  consumed, beside `s_pointer_window = NULL`, for exactly the same reason.
+- **`wm_touch_focus` is deleted.** Its only purpose was putting back a
+  recency stamp that raise-as-feedback kept taking; nothing raises during a
+  hold now, so it had no caller and its header comment had become a lie.
 
 ### Where it lives
 
-A new scene layer in `composite_locked`: desktop → windows → **switcher** →
-cursor. It is NOT a window (no `window_t`, no owner, no event queue, not in
-the z-list, not hit-testable) — the rubber band (`band_composite`) is the
+A scene layer in `composite_locked`: desktop → windows → band → **switcher**
+→ cursor. It is NOT a window (no `window_t`, no owner, no event queue, not
+in the z-list, not hit-testable) — the rubber band (`band_composite`) is the
 precedent: compositor-owned pixels drawn straight into the backbuffer for a
 rect the compositor damages itself. `switcher_composite(backbuffer, damage)`
-called right after `wm_composite`; `switcher_damage_locked()` on every
-highlight move (old strip rect ∪ new — or simply the strip rect, it is
-small). State: `s_alttab_*` already holds the ring, count and step; add
-`s_alttab_shown` and the strip rect. `alttab_step_locked` stops calling
-`wm_raise`/`wm_set_minimized` and only moves the step + damages the strip;
-`alttab_end_locked` does the commit described above.
+draws it, `switcher_layout_locked()` sizes it once per hold, and
+`switcher_damage_locked()` republishes the whole strip rect on every
+highlight move — the band damages four thin edges because it is
+window-sized and moves per mouse packet; the strip is small, moves once per
+keystroke, and repaints its highlight in the middle of itself, so the union
+is both simpler and cheaper than the bookkeeping that avoids it.
+(It sits above the band rather than below it, being the more modal of the
+two; in practice they cannot coexist, one needing a Ctrl+Alt mouse drag and
+the other Alt held.)
 
-Cell geometry: 8px glyphs, 16px tall (`surface_draw_text`), titles clipped
-to `GUI_WINDOW_TITLE_MAX`; a cell is `8*len + 2*pad` wide, all cells one
-height (`16 + 2*pad`), strip = cells + borders, centered on the screen. Use
-the chrome palette (`WINDOW_TITLEBAR_FOCUSED` for the highlight,
-`WINDOW_TITLEBAR_UNFOCUSED` for the rest, `GUI_COLOR_WHITE` / a dim gray
-for minimized titles). No translucency — there is none yet (known
+Row geometry: 8x16 glyphs (`surface_draw_text`), rows at `SWITCHER_ROW_H`
+(24) pitch, all rows one width — the longest title plus padding, clamped to
+the screen — and titles clipped to the character count that width admits.
+The clip is structural, not remembered: `surface_draw_text` paints an
+OPAQUE background per glyph, so a title allowed to run past its row would
+repaint the frame beside it. Strip = rows + border, centered.
+
+The palette is the chrome's, and that is why the four `WINDOW_TITLEBAR_*` /
+`WINDOW_BORDER_*` values moved from `window.c` to `window.h`: the
+highlighted row must be the same blue a focused titlebar is, or the strip is
+describing a different desktop than the one behind it. One copy, two
+consumers.
+
+**No separator lines.** Each row is a tile laid on the dark slab and one
+pixel shorter than its pitch, so the frame shows through between them: the
+gap IS the separator. It costs no colour, no extra draw and no decision
+about how dark a divider should be, and it makes the highlighted row read as
+a raised tile rather than a painted stripe — which still works when two
+adjacent rows are the same grey. No translucency; there is none yet (known
 limitation 7).
 
 ### What does not change
@@ -725,19 +777,53 @@ limitation 7).
 - Recency semantics: passing through is still not using (the strip makes
   that literal — nothing is touched until commit).
 - The USB/PS/2 rules: Tab by ASCII, hold ends on the first key event
-  without Alt, Escape by ASCII `0x1B`.
+  without Alt.
 - Ctrl+Alt+N to minimize; Alt+F4 to close.
 
-### Verification
+### The trap this slice found: ESCAPE IS NOT `ascii == 0x1B`
 
-`utility/gui_run.sh` + QMP (`qmp down:alt down:tab up:tab down:tab up:tab`
-then `shot` BEFORE `up:alt`) is exactly the rig for this: the strip must be
-visible in the shot with the highlight on the third entry and the z-order
-unchanged from boot; after `up:alt` one window is on top. Then: minimize all
-three demos (Ctrl+Alt+N ×3), Alt+Tab to the second, release — exactly one
-comes back.
+The design above originally said "Escape by ASCII `0x1B`", which is the
+natural thing to write and is **wrong on both keyboard paths**. Arrow keys —
+and the Home/End/PgUp/Del family — never reach the GUI as keys at all: both
+drivers translate them into VT100 escape sequences at the source, delivered
+as THREE separate key events (`ESC`, `[`, a final byte), the 1979 vocabulary
+kept so a future vim-over-serial reads them unchanged. The first of those
+three carries `ascii == 0x1B`.
 
-Booked in DEBTS under GUI.
+So "Escape cancels the hold" would have fired on the first third of every
+arrow press — and since Up/Down had just been given to the switcher, Up
+would have cancelled the hold it was meant to walk. Caught before it
+shipped, by checking rather than trusting the design note.
+
+What separates them is the SCANCODE: a burst carries the scancode of the key
+that produced it, so only a real Escape carries Escape's own (PS/2 `0x01`,
+HID usage `0x29`). Both facts now live in one dialect-aware helper each —
+`keyboard_is_escape_key` and `keyboard_arrow_updown` in `keyboard.h`,
+alongside `keyboard_fkey_number`, which exists for the same reason. The
+arrow helper is where the dialects genuinely COLLIDE: `0x50` is Down in PS/2
+set-1 and Left in HID, and nothing but `KEYBOARD_MOD_HID` can tell them
+apart. **This is the 2026-08-21 chord-publish lesson in its third costume:
+any key without a unique ASCII needs a helper that knows both dialects, and
+any key WITH one still needs a scancode check if some other key's escape
+sequence can forge it.**
+
+### Verification (run 2026-08-23, `utility/gui_run.sh` + QMP)
+
+QMP is the rig — HMP `sendkey` cannot hold Alt across two Tabs. Boot the
+GUI entry (three windows: `hello os64`, `keys`, `bounce`), then:
+
+| Script | Confirmed by screendump |
+|---|---|
+| `down:alt down:tab up:tab`, shot BEFORE `up:alt` | strip up, highlight on entry 2, **z-order and focus unchanged from boot** |
+| a second `down:tab up:tab` | highlight moved; the window walked PAST was not raised |
+| `up:alt` | that one window raised + focused, strip erased cleanly, others untouched |
+| `ctrl-alt-n`, then Alt+Tab onto the dim row | row drawn gray; **the window stays off the glass while highlighted** — the old rule, dead |
+| release there | it comes back: restored, raised, focused |
+| `down:esc up:esc` mid-hold | strip gone, focus and z-order exactly as before |
+| `down:down` / `down:up` mid-hold | highlight steps once per press (the log shows one `alt-tab step` per arrow, not three) |
+
+Zero panics across the runs; `grep alt-tab` on the serial log reads
+step/step/ended and step/cancelled as designed.
 
 ## Testing / debugging
 
