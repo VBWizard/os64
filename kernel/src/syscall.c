@@ -2875,11 +2875,23 @@ static void spawn_do_create(void *arg)
 	// Both are inherited BY CONSTRUCTION, because both are properties a fork
 	// carries. os64's flag is a task field, so it has to say so out loud.
 	//
-	// Once background, always background, for the whole descendant tree:
-	// there is no spelling of "I am a background job, but this program I am
-	// starting should take the user's keystrokes" that anyone wants.
+	// Once background, always background, for the whole descendant tree ON
+	// THE SAME TERMINAL. The boundary matters, and the first version of this
+	// line (2026-08-23, a few hours old) missed it: `gterm &` made gterm a
+	// background job — correct — and the husk it seated on a brand-new pty
+	// inherited the flag, so every read of ITS OWN terminal came back EOF and
+	// nothing typed into the window reached it. Chris found it on the P5 the
+	// same morning. In Unix terms a job is background WITH RESPECT TO A TTY
+	// (that is what a process group is — per-terminal, not per-tree), and a
+	// child seated on a fresh terminal is that terminal's session leader,
+	// foreground by definition there. `xterm &` is the oldest spelling of
+	// this: the same `&` that keeps a `cat &` off the keyboard hands the
+	// xterm's shell a keyboard of its own. So inheritance stops at a seat.
+	// (The caller's OWN `&` is still honoured across one — that is an
+	// explicit ask, not an inheritance.)
 	child->backgroundJob = p->background ||
-	                      (p->parent != NULL && p->parent->backgroundJob);
+	                      (p->parent != NULL && p->parent->backgroundJob &&
+	                       p->ttySlave == NULL);
 
 	// Seat on a pty slave (PTY.md), BEFORE submission like everything else
 	// here: the child must never run an instruction on the wrong terminal.
