@@ -383,10 +383,13 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_LIBS)
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
 	# FAT — the one file that must never lie about which filesystem it's on).
 	printf 'Ima ext2 partition on the NVME disk\n' > $(EXT2_STAGING)/partition_info.txt
-	# /lib: libos64.so (what every app in /bin above is dynamically linked
-	# against — without it nothing on this volume runs) and libtest.so (the
-	# dynamic-linking regression fixture).
-	printf 'cd /lib\nwrite userland/bin/libos64.so libos64.so\nwrite kernel/bin/libtest.so libtest.so\ncd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
+	# /lib: every library in USERLAND_LIBS (libos64.so is what every app in
+	# /bin above is dynamically linked against — without it nothing on this
+	# volume runs) and libtest.so (the dynamic-linking regression fixture).
+	# Iterated, same as the apps, so a new library cannot be forgotten here.
+	printf 'cd /lib\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach l,$(USERLAND_LIBS),printf 'write %s %s\n' "$(l)" "$(notdir $(l))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	printf 'write kernel/bin/libtest.so libtest.so\ncd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	debugfs -w -f $(EXT2_STAGING)/debugfs_bins.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
 	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps)"
 
@@ -423,9 +426,12 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	$(foreach b,$(USERLAND_BINS),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(b) ::/bin/$(notdir $(b));)
 	# The lifeboat's own /lib. Its /bin is dynamically linked exactly like
-	# root's, so this file is what makes the lifeboat a working system rather
-	# than a partition full of programs that cannot start.
-	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/libos64.so ::/lib/libos64.so
+	# root's, so these files are what make the lifeboat a working system
+	# rather than a partition full of programs that cannot start. Iterated
+	# like the apps above — a second library added to USERLAND_LIBS must not
+	# be able to rebuild the image and still be missing from it.
+	$(foreach l,$(USERLAND_LIBS),\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(l) ::/lib/$(notdir $(l));)
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 	# husk's startup script. It rides the FAT partition rather than root

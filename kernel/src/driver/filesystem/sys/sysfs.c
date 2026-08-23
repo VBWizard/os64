@@ -663,12 +663,21 @@ static void sys_gen_shlib(synth_text_t *t)
 	synth_text_addf(t, "window: 0x%016lx-0x%016lx\n",
 	                (uint64_t)TASK_SHLIB_VIRT_BASE, (uint64_t)TASK_SHLIB_VIRT_END);
 
+	// The whole walk runs under the registry lock (review 2026-08-23): a
+	// first-time load that fails on another core unlinks and frees its
+	// object, and reading a freed node here is a lazy-HHDM panic from the
+	// very file meant to diagnose linking trouble. The page_phys[] scan is
+	// deliberately NOT made consistent — RESOLVING slots flip under the
+	// fault traffic regardless, and the count is a census, not a ledger.
+	shared_object_registry_lock();
+
 	if (kLoadedSharedObjects == NULL || kLoadedSharedObjects->head == NULL)
 	{
 		// Not an error and worth saying plainly: a machine booted entirely
 		// from static binaries is a legitimate state, and an empty table
 		// should not read as a broken one.
 		synth_text_addf(t, "objects: 0 (nothing dynamically linked has been loaded)\n");
+		shared_object_registry_unlock();
 		return;
 	}
 
@@ -708,7 +717,10 @@ static void sys_gen_shlib(synth_text_t *t)
 		                // loud rather than making the reader infer it from an
 		                // address that looks surprising for a program.
 		                (so->is_executable && so->load_bias != 0) ? " (position-independent)" : "");
-		synth_text_addf(t, "  base: 0x%016lx\n", (uint64_t)(so->load_bias + so->vaddr_base));
+		// Page 0's runtime address IS the base — through the accessor, not
+		// the sum: CLAUDE.md's "never open-code it" rule was written the
+		// same day this line broke it (review 2026-08-23).
+		synth_text_addf(t, "  base: 0x%016lx\n", (uint64_t)shared_object_page_va(so, 0));
 		synth_text_addf(t, "  pages: %lu resident of %lu (%lu bytes)\n",
 		                (uint64_t)resident, (uint64_t)so->total_pages,
 		                (uint64_t)resident * PAGE_SIZE);
@@ -717,6 +729,8 @@ static void sys_gen_shlib(synth_text_t *t)
 			synth_text_addf(t, "  needs: %s\n",
 			                so->deps[i] != NULL ? so->deps[i]->path : "?");
 	}
+
+	shared_object_registry_unlock();
 
 	synth_text_addf(t, "objects: %lu\n", total_objects);
 	synth_text_addf(t, "resident_bytes: %lu\n", total_resident_pages * PAGE_SIZE);

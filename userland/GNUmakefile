@@ -206,9 +206,13 @@ $(foreach p,$(APP_BASE_PAIRS),\
 .PHONY: all
 all: $(LIBOS64_SO) $(addprefix $(BIN)/,$(APPS)) $(BIN)/app_bases.gdb
 
-# The shared library itself. ET_DYN, no fixed address — the kernel's
-# shared-object registry places it in the TASK_SHLIB_VIRT_BASE window and
-# every task maps it there.
+# The shared library itself. ET_DYN, PRELINKED: app_bases.py --libs picks its
+# slot in the kernel's prelink region (the first 4GB of the shared window)
+# and lib.ld links it there, so the address is the build's to know and the
+# debugger's to use. The kernel honours it (load_bias 0) rather than choosing
+# one — the bump allocator in shared_object.c serves only images that arrive
+# WITHOUT a base. (This comment said the opposite until 2026-08-23, in the
+# same commit that made it false.)
 # --defsym BEFORE -T (which lives in LIBOS64_LDFLAGS): ld reads options left
 # to right and lib.ld's DEFINED(LIB_BASE) test can only see symbols defined by
 # the time the script is read. The same trap app.ld's comment memorializes.

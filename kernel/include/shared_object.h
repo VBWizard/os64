@@ -137,6 +137,14 @@ typedef struct shared_object {
 // inside shared_object.c — task_create can run from multiple cores.
 extern dlist_t *kLoadedSharedObjects;
 
+/// @brief Hold the registry lock around any walk of kLoadedSharedObjects
+/// from OUTSIDE shared_object.c (/sys/shlib is the one such reader). A
+/// failing first-time load unregisters and frees its object on another
+/// core; a bare walk can dereference the node it just lost. Never take this
+/// from a page-fault path — the load path holds it across disk I/O.
+void shared_object_registry_lock(void);
+void shared_object_registry_unlock(void);
+
 /// @brief The runtime virtual address of page `page_idx` of `so`.
 ///
 /// THE ONE PLACE THIS ARITHMETIC IS WRITTEN, and it earned that status the

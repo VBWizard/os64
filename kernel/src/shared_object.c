@@ -49,6 +49,16 @@ static void registry_unlock(void)
     __sync_lock_release(&kSharedObjectRegistryLock);
 }
 
+// The same lock, for the ONE reader outside this file: /sys/shlib walks the
+// registry and dereferences every object in it. Until 2026-08-23 it did so
+// bare, while fail_registered on another core could dlist_remove + kfree the
+// very node it was reading — so the file CLAUDE.md says to read FIRST when
+// linking looks wrong was the one thing in the system a failing spawn could
+// panic. A reader holds this for the walk; the price is that `cat /sys/shlib`
+// waits out a first-time load's disk I/O, which is the correct answer.
+void shared_object_registry_lock(void)   { registry_lock(); }
+void shared_object_registry_unlock(void) { registry_unlock(); }
+
 uintptr_t shared_object_find_symbol(shared_object_t *so, const char *name)
 {
     if (so == NULL || so->image == NULL || so->image->symtab == NULL || so->image->strtab == NULL) {
@@ -247,8 +257,7 @@ uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx)
     kernel_read_page_params_t *params = kmalloc(sizeof(*params));
     if (params == NULL) {
         printd(DEBUG_TASK, "shared_object: out of memory reading page %lu of %s\n", page_idx, so->path);
-        kfree(virt);
-        goto fail_release_slot;
+        goto fail_free_page;
     }
     params->file = so->image->file;
     params->phdrs = so->phdrs;
@@ -274,8 +283,7 @@ uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx)
 
     if (!read_ok) {
         printd(DEBUG_TASK, "shared_object: read failed for page %lu of %s\n", page_idx, so->path);
-        kfree(virt);
-        goto fail_release_slot;
+        goto fail_free_page;
     }
 
     phys = (uintptr_t)virt - kHHDMOffset;
@@ -287,8 +295,7 @@ uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx)
     uintptr_t page_vaddr = shared_object_page_link_vaddr(so, page_idx);
     if (!apply_page_relocations(so, so->image->rela, so->image->rela_count, page_vaddr, virt) ||
         !apply_page_relocations(so, so->image->jmprel, so->image->jmprel_count, page_vaddr, virt)) {
-        kfree(virt);
-        goto fail_release_slot;
+        goto fail_free_page;
     }
 
     // Publish: this store is the flag every core's fast path (and same-page
@@ -300,6 +307,15 @@ uintptr_t shared_object_resolve_page(shared_object_t *so, size_t page_idx)
 
     return phys;
 
+fail_free_page:
+    // The page buffer exists but was never published, so it is still ours
+    // to free. ONE label for the three failures past the allocation (review
+    // 2026-08-23): "free the page, then release the slot" is a fact of
+    // construction, and a fall-through ladder states it once where three
+    // copies would each have to remember it — the same shape as the "three
+    // copies of the sum, fixed two" bug this file's history confesses to.
+    kfree(virt);
+    /* fall through */
 fail_release_slot:
     // Hand the slot back so a later attempt (or another task) can retry, and
     // so nobody spins on RESOLVING forever. Fenced for the same reason the
@@ -438,6 +454,20 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
     //     address chosen for it, and it gets the next bump slot.
     size_t span = so->total_pages * PAGE_SIZE;
     if (image->ehdr.e_type == ET_EXEC) {
+        // Already placed — but by the FILE, which ring 3 can hand us. The
+        // static loader refuses a PT_LOAD at or above the HHDM; this path
+        // had no check at all (review 2026-08-23), so a crafted ET_EXEC with
+        // a segment in the kernel half, or inside the shared window on top
+        // of a live library, was accepted and mapped. An executable belongs
+        // BELOW the window, full stop — the window is the libraries' and
+        // everything above it is the kernel's.
+        if (so->vaddr_base == 0 || so->vaddr_base + span < so->vaddr_base ||
+            so->vaddr_base + span > TASK_SHLIB_VIRT_BASE) {
+            printd(DEBUG_TASK, "shared_object: %s is linked at 0x%lx (+0x%lx), outside the executable "
+                               "range below 0x%lx — refusing to load it\n",
+                   path, so->vaddr_base, span, (uint64_t)TASK_SHLIB_VIRT_BASE);
+            goto fail_placed;
+        }
         so->load_bias = 0;
     } else if (so->vaddr_base != 0) {
         // A prelinked library MUST land inside the prelink region. Anywhere
@@ -452,9 +482,7 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
                                "prelink region 0x%lx-0x%lx — rebuild it, or the two address maps disagree\n",
                    path, so->vaddr_base, span,
                    (uint64_t)TASK_SHLIB_VIRT_BASE, (uint64_t)TASK_SHLIB_PRELINK_END);
-            kfree(so->page_phys);
-            kfree(so);
-            goto fail_parsed;
+            goto fail_placed;
         }
         // ...and it must not land on top of an object already loaded. Within
         // one build that cannot happen (the assigner hashes and probes for a
@@ -473,9 +501,7 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
                 printd(DEBUG_TASK, "shared_object: %s prelinked at 0x%lx (+0x%lx) OVERLAPS %s at 0x%lx (+0x%lx) "
                                    "— a stale binary from an older build?\n",
                        path, so->vaddr_base, span, other->path, other->vaddr_base, other_span);
-                kfree(so->page_phys);
-                kfree(so);
-                goto fail_parsed;
+                goto fail_placed;
             }
         }
         so->load_bias = 0;
@@ -488,9 +514,7 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
         printd(DEBUG_TASK, "shared_object: shared library virtual window exhausted loading %s "
                            "(next=0x%lx span=0x%lx end=0x%lx)\n",
                path, kSharedObjectNextVirt, span, TASK_SHLIB_VIRT_END);
-        kfree(so->page_phys);
-        kfree(so);
-        goto fail_parsed;
+        goto fail_placed;
     } else {
         so->load_bias = kSharedObjectNextVirt;
         kSharedObjectNextVirt += span;
@@ -556,9 +580,31 @@ fail_registered:
     if (so->load_bias != 0 && kSharedObjectNextVirt == so->load_bias + span) {
         kSharedObjectNextVirt = so->load_bias;
     }
+    // 4. The reason we were registered early is the reason we may not be
+    //    freeable now: a DEPENDENCY CYCLE. If some library we just loaded
+    //    DT_NEEDs us back, its lookup found this entry, took a reference,
+    //    and stored a raw pointer in its own deps[] — and that library stays
+    //    in the registry, warm, pointing at whatever this kfree would
+    //    recycle. refcount started at 1 (ours); anything above that is a
+    //    holder we cannot reach from here. Leak the struct rather than
+    //    dangle it (review 2026-08-23): a few hundred bytes per failed
+    //    cyclic load, loudly reported, versus a use-after-free in the page
+    //    fault path of an unrelated program.
+    if (so->refcount > 1) {
+        printd(DEBUG_TASK, "shared_object: %s failed to load but %u other object(s) already "
+                           "reference it (a DT_NEEDED cycle) — keeping its struct unreachable "
+                           "rather than freeing under them\n",
+               path, so->refcount - 1);
+        goto fail_parsed;
+    }
+    /* fall through */
+fail_placed:
+    // The struct and its page table exist but nothing else points at them
+    // — the four placement refusals arrive here directly, fail_registered
+    // falls in once it has left the registry. One unwind for five failures.
     kfree(so->page_phys);
     kfree(so);
-
+    /* fall through */
 fail_parsed:
     // Common failure cleanup once the ELF has been parsed. Reached directly
     // (nothing was ever registered) or fallen into from fail_registered

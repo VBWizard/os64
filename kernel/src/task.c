@@ -47,6 +47,7 @@ extern uintptr_t kKernelPML4;
 extern char kDebugTaskLoadedPath[TASK_MAX_PATH_LEN];
 extern uint64_t kDebugTaskLoadedBias;
 void debug_task_loaded(void);
+static void debug_announce_loaded(const char *path, uint64_t bias);
 
 // (kForegroundTask lived here 2026-07..2026-08-08. It is tty_t.fgTask now —
 // one per terminal — and NULL still means "nobody owns this console yet",
@@ -1874,6 +1875,14 @@ static bool elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 
 	if (!task_map_shared_object_closure(task, main_so)) {
 		printd(DEBUG_TASK, "task_create: cannot map '%s' and its libraries — not spawning\n", path);
+		// The load above took this task's ONE reference (the pairing rule in
+		// shared_object.h), and task_create is about to return NULL, so the
+		// undertaker — the only other place that releases it — will never
+		// run for this task. Give it back here or the count drifts up by one
+		// per failed spawn, forever (review 2026-08-23). The half-built VMAs
+		// leak with the rest of the task; that is the booked row task_create
+		// cites, not a new one.
+		shared_object_release(main_so);
 		return false;
 	}
 
@@ -1895,22 +1904,23 @@ static bool elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 	// fix that lived solely in the generated file would work in the terminal
 	// and leave the editor exactly as broken as before.
 	//
-	// The whole closure is announced (main image included). The autoloader
-	// dedupes on (file, bias), so repeats across tasks cost nothing, and every
-	// future library is picked up with no build or config change at all.
+	// The LIBRARIES are announced here; the main image is announced once, at
+	// the end of task_create, where static binaries are announced too (it was
+	// announced from both places until 2026-08-23 — the autoloader's dedupe
+	// absorbed it, but a silent breakpoint per spawn is still a breakpoint).
+	// The autoloader dedupes on (file, bias), so repeats across tasks cost
+	// nothing, and every future library is picked up with no build or config
+	// change at all.
 	if (task->shared_objects != NULL) {
 		for (dlist_node_t *node = task->shared_objects->head; node != NULL; node = node->next) {
 			shared_object_t *so = (shared_object_t *)node->data;
-			if (so == NULL)
-				continue;
-			strncpy(kDebugTaskLoadedPath, so->path, TASK_MAX_PATH_LEN);
-			kDebugTaskLoadedPath[TASK_MAX_PATH_LEN - 1] = '\0';
+			if (so == NULL || so == main_so)
+				continue;   // the main image is task_create's to announce, once
 			// A prelinked library carries its own absolute addresses, so bias
 			// 0 is correct and the autoloader omits `-o` — exactly what a
 			// non-PIE app already does. A bump-placed ET_DYN reports its real
 			// bias and gets `-o <bias>`.
-			kDebugTaskLoadedBias = so->load_bias;
-			debug_task_loaded();
+			debug_announce_loaded(so->path, so->load_bias);
 		}
 	}
 
@@ -1963,6 +1973,21 @@ uint64_t kDebugTaskLoadedBias;
 void __attribute__((noinline)) debug_task_loaded(void)
 {
 	__asm__ volatile("" :: "r"(kDebugTaskLoadedPath), "r"(&kDebugTaskLoadedBias) : "memory");
+}
+
+// The staging protocol for the notch, in ONE place: copy the path, terminate
+// it, set the bias, ring. Two call sites spelled it out by hand (the main
+// image at the end of task_create, the library closure in
+// elf_resolve_dynamic_dependencies) until 2026-08-23 — and this is a contract
+// with a PYTHON SCRIPT, so nothing in C would have noticed when the next
+// global (a task id, say, for `upper | upper`) reached one copy and not the
+// other.
+static void debug_announce_loaded(const char *path, uint64_t bias)
+{
+	strncpy(kDebugTaskLoadedPath, path, TASK_MAX_PATH_LEN);
+	kDebugTaskLoadedPath[TASK_MAX_PATH_LEN - 1] = '\0';
+	kDebugTaskLoadedBias = bias;
+	debug_task_loaded();
 }
 
 // Wire up the ring-3 EXIT path for a user task.  Counterpart of the ring0
@@ -2429,10 +2454,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		// Tell an attached GDB (if any) which program image just landed and
 		// where, so it can auto-load the matching symbol file.  Stage the
 		// info in the debug globals first — see debug_task_loaded's comment.
-		strncpy(kDebugTaskLoadedPath, newTask->path, TASK_MAX_PATH_LEN);
-		kDebugTaskLoadedPath[TASK_MAX_PATH_LEN - 1] = '\0';
-		kDebugTaskLoadedBias = newTask->loadBias;
-		debug_task_loaded();
+		debug_announce_loaded(newTask->path, newTask->loadBias);
 	}
 
 	// The child's tables are fully built — close the creator's bracket. From
