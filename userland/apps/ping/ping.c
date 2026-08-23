@@ -163,10 +163,31 @@ int main(int argc, char **argv)
 
     target = positionals[0];
 
-    os64_resolve(target, &rawIP);
-    os64_format_ipv4(rawIP, ipString, 16);
+    // Resolve ONCE, here, and dial the address that came back — not the name
+    // again. os64_dial resolves whatever name it is handed, so passing the
+    // name through would ask twice: two DNS timeouts on a bad name, and on a
+    // round-robin name two different answers, with the header line printing
+    // an address the packets never went to (0.0.0.0 in the case where the
+    // first lookup failed and the second one didn't). One lookup, one
+    // address, and it is the address we say it is. (Codex review, 2026-08-22.)
+    //
+    // A full dial string ("icmp!host") is still allowed as the argument; the
+    // name to resolve is what follows the bang.
+    const char *host = target;
+    if (os64_strlen(target) >= 5 && target[0] == 'i' && target[1] == 'c' &&
+        target[2] == 'm' && target[3] == 'p' && target[4] == '!')
+        host = target + 5;
 
-    if (build_dial_string(dial_string, sizeof(dial_string), target) < 0)
+    int64_t resolved = os64_resolve(host, &rawIP);
+    if (resolved < 0)
+    {
+        os64_printf("ping: cannot resolve %s: %s\n", host,
+                    net_dial_error_message(resolved));
+        return 1;
+    }
+    os64_format_ipv4(rawIP, ipString, sizeof(ipString));
+
+    if (build_dial_string(dial_string, sizeof(dial_string), ipString) < 0)
     {
         os64_printf("ping: dial string too long\n");
         return 1;
