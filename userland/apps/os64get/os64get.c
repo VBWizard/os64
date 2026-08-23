@@ -151,11 +151,46 @@ static const char *const kConfPaths[] = { "/home/os64get.conf", "/etc/os64get.co
 
 // Trim a trailing '/' off a directory value so "/bin/" and "/bin" mean the
 // same thing — the one courtesy the reader extends beyond the dialect.
-static void conf_take_dir(char *dst, const char *value)
+//
+// Returns false if the value is EMPTY or does not FIT, having touched nothing:
+// the caller says so and drops the line. Three reasons this refuses instead of
+// coping. First, os64_strcopy reports the UNTRUNCATED source length (strlcpy's
+// contract, str.h), so copying first and measuring after would send the loop
+// below walking off the end of a 128-byte slot — reading past it, and writing
+// a NUL past it if the byte it finds there happens to be '/'. Second, even
+// with the index clamped, a silently shortened path is a rule that quietly
+// installs your files SOMEWHERE ELSE; "/usr/local/…/bin" truncated to
+// "/usr/local/…" is a directory that may well exist. Third, an EMPTY value
+// routed to "", which join_path formatted as "/husk" — a half-finished edit
+// installing a program at the root of the filesystem, quietly, because an
+// empty string is a perfectly good string. A routing rule nobody can trust is
+// worth less than no rule at all. (Codex review, 2026-08-22/23.)
+static bool conf_take_dir(char *dst, const char *value)
 {
+    size_t len = os64_strlen(value);
+
+    if (len == 0)
+        return false;
+    if (len >= CONF_DIR_MAX)
+        return false;   // dst keeps whatever an earlier line put there
+
     size_t n = os64_strcopy(dst, CONF_DIR_MAX, value);
     while (n > 1 && dst[n - 1] == '/')
         dst[--n] = '\0';
+    return true;
+}
+
+// The one complaint every unusable directory value makes, in one voice — and
+// it says WHICH kind, because "ignored" without a reason sends the reader back
+// to the file to guess.
+static void conf_bad_dir(const conf_t *c, const char *key, const char *value)
+{
+    if (value[0] == '\0')
+        os64_hprintf(OS64_STDERR, "os64get: %s: '%s' has no directory after the '='"
+                     " - ignored\n", c->path, key);
+    else
+        os64_hprintf(OS64_STDERR, "os64get: %s: directory for '%s' is longer than %d bytes"
+                     " - ignored: %s\n", c->path, key, CONF_DIR_MAX - 1, value);
 }
 
 static bool conf_line(const char *key, const char *value, void *user)
@@ -172,12 +207,15 @@ static bool conf_line(const char *key, const char *value, void *user)
     }
 
     if (os64_streq(key, "archive")) {
-        conf_take_dir(c->archive, value);
+        if (!conf_take_dir(c->archive, value))
+            conf_bad_dir(c, key, value);
         return true;
     }
     if (os64_streq(key, "*")) {
-        conf_take_dir(c->star, value);
-        c->anyRule = true;
+        if (!conf_take_dir(c->star, value))
+            conf_bad_dir(c, key, value);
+        else
+            c->anyRule = true;
         return true;
     }
     if (key[0] == '*' && key[1] == '.') {
@@ -185,8 +223,11 @@ static bool conf_line(const char *key, const char *value, void *user)
         // Later lines append; the matcher walks the table backwards so the
         // last one wins.
         if (c->nsuffix < CONF_RULES_MAX) {
+            if (!conf_take_dir(c->suffix[c->nsuffix].dir, value)) {
+                conf_bad_dir(c, key, value);
+                return true;   // the slot stays free for the next rule
+            }
             os64_strcopy(c->suffix[c->nsuffix].name, sizeof(c->suffix[0].name), key + 1);
-            conf_take_dir(c->suffix[c->nsuffix].dir, value);
             c->nsuffix++;
             c->anyRule = true;
         } else {
@@ -202,8 +243,11 @@ static bool conf_line(const char *key, const char *value, void *user)
     }
 
     if (c->nexact < CONF_RULES_MAX) {
+        if (!conf_take_dir(c->exact[c->nexact].dir, value)) {
+            conf_bad_dir(c, key, value);
+            return true;   // the slot stays free for the next rule
+        }
         os64_strcopy(c->exact[c->nexact].name, sizeof(c->exact[0].name), key);
-        conf_take_dir(c->exact[c->nexact].dir, value);
         c->nexact++;
         c->anyRule = true;
     } else {
@@ -226,6 +270,9 @@ static void conf_load(conf_t *c)
         if (rc == OS64_CONF_TRUNCATED)
             os64_hprintf(OS64_STDERR, "os64get: %s is larger than %d bytes - the tail was not read\n",
                          kConfPaths[i], OS64_CONF_MAX);
+        else if (rc == OS64_CONF_NO_MEMORY)
+            os64_hprintf(OS64_STDERR, "os64get: out of memory reading %s - no routing rules;"
+                         " files land in the current directory\n", kConfPaths[i]);
         which = i;
         (void)which;
         return;
@@ -424,16 +471,47 @@ static bool local_matches(const char *path, uint64_t wantLen, uint32_t wantCrc)
 // search toward the server, the firewall and the routing instead. A
 // diagnostic that omits the diagnosis is worse than none: it looks like it
 // tried.
+// "tcp!<host>!6464", built in ONE place because there are now two dialers —
+// the fetch below and fetch_list's LIST — and a fix applied to one of two
+// identical lines is the oldest bug in the trade.
+//
+// Sized from the NAME LIMIT, not from a path limit: "tcp!" + a name of up to
+// OS64_RESOLVE_NAME_MAX (253 — DNS's own ceiling, which the dial parser now
+// accepts) + "!65535" + NUL. GET_PATH_MAX was 256, and a 250-byte hostname
+// silently lost its "!6464" off the end, after which os64_dial rejected the
+// string for having no service — a name the resolver would have handled
+// perfectly, failing with an error about a port nobody mistyped. The result is
+// checked anyway: a truncated dial string fails with the WRONG COMPLAINT, and
+// that is the part worth spending three lines to prevent. (Codex review,
+// 2026-08-22.)
+#define GET_DIAL_MAX (OS64_RESOLVE_NAME_MAX + 16)
+
+static bool build_dialstring(char *buf, size_t cap, const char *host)
+{
+    int32_t n = os64_snprintf(buf, cap, "tcp!%s!%d", host, GET_PORT);
+    if (n >= 0 && (size_t)n < cap)
+        return true;
+
+    os64_hprintf(OS64_STDERR, "os64get: host name is too long to dial (limit %d)\n",
+                 OS64_RESOLVE_NAME_MAX);
+    return false;
+}
+
 static const char *dial_reason(int64_t err)
 {
     // The dial error codes are specific on purpose (os64/net.h) — a refusal
     // and a timeout mean very different things to whoever is standing at the
     // other machine, and printing "failed" for both wastes their next ten
     // minutes.
+    // The last two arrived with the resolver (2026-08-22): a HOST may now be a
+    // name, so "cannot reach" has two new ways to be true that have nothing to
+    // do with the network being down.
     return (err == OS64_NET_ERR_REFUSED)      ? "connection refused — is the server running?" :
            (err == OS64_NET_ERR_TIMEOUT)      ? "timed out — is the host reachable?" :
            (err == OS64_NET_ERR_NO_NIC)       ? "no network interface on this boot" :
-           (err == OS64_NET_ERR_BAD_ADDRESS)  ? "that host is not a dotted quad" :
+           (err == OS64_NET_ERR_BAD_ADDRESS)  ? "that host is not a dotted quad or a name" :
+           (err == OS64_NET_ERR_NO_SUCH_HOST) ? "no such host — not in /home/hosts, /etc/hosts, or DNS" :
+           (err == OS64_NET_ERR_NO_RESOLVER)  ? "that is a name, and there is no name server to ask (see /etc/net.conf)" :
            (err == OS64_NET_ERR_NO_RESOURCES) ? "out of handles or ports" :
                                                 "refused";
 }
@@ -545,8 +623,9 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
     // ── Dial ────────────────────────────────────────────────────────────
     // Plan 9's bang path, which libos64 parses into an os64_netdest_t below
     // the syscall boundary (nothing textual crosses it).
-    char dialstring[GET_PATH_MAX];
-    os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%d", host, GET_PORT);
+    char dialstring[GET_DIAL_MAX];
+    if (!build_dialstring(dialstring, sizeof(dialstring), host))
+        return GET_USAGE;
 
     int64_t conn = os64_dial(dialstring);
     if (conn < 0)
@@ -862,8 +941,9 @@ static void stage_discard(const char *dest, const char *archiveDir, const char *
 static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
                           uint64_t *totalBytes)
 {
-    char dialstring[GET_PATH_MAX];
-    os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%d", host, GET_PORT);
+    char dialstring[GET_DIAL_MAX];
+    if (!build_dialstring(dialstring, sizeof(dialstring), host))
+        return -1;
 
     int64_t conn = os64_dial(dialstring);
     if (conn < 0)
@@ -982,7 +1062,7 @@ int main(int argc, char **argv)
                    "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename. "
                    "With -a, asks the server what it has and fetches all of it — the whole-system refresh.";
 
-    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] HOST NAME [DEST]  |  os64get -a [-q] [-n] HOST",
+    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] [-f] HOST NAME [DEST]  |  os64get -a [-q] [-n] [-f] HOST",
                                     operands, 4);
     if (count == OS64_ARG_HELP)
         return GET_OK;

@@ -37,6 +37,7 @@ dhcp_stats_t kDhcpStats;
 #define DHCP_OPT_PAD          0
 #define DHCP_OPT_SUBNET_MASK  1
 #define DHCP_OPT_ROUTER       3
+#define DHCP_OPT_DNS          6     // "Domain Name Server", RFC 2132 §3.8 — a list; we keep the first
 #define DHCP_OPT_REQUESTED_IP 50
 #define DHCP_OPT_LEASE_TIME   51
 #define DHCP_OPT_MSG_TYPE     53
@@ -194,6 +195,11 @@ static void dhcp_rx(net_device_t* dev, uint32_t src_ip, uint16_t src_port,
 		kDhcpStats.lease_gateway = (opt && olen >= 4) ? net_read32(opt) : kNetIPv4Gateway;
 		opt = dhcp_find_option(p, length, DHCP_OPT_LEASE_TIME, &olen);
 		kDhcpStats.lease_seconds = (opt && olen >= 4) ? net_read32(opt) : 0;
+		// The name server: kept, not used — the resolver lives in ring 3
+		// and reads this back out of /sys/net/dhcp (dhcp.h). Option 6 may
+		// list several; the first is the one every client tries first.
+		opt = dhcp_find_option(p, length, DHCP_OPT_DNS, &olen);
+		kDhcpStats.lease_dns = (opt && olen >= 4) ? net_read32(opt) : 0;
 		kDhcpStats.lease_server = s_dhcp.server_id;
 
 		kNetIPv4Address = kDhcpStats.lease_ip;

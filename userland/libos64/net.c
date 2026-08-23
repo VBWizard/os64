@@ -8,8 +8,10 @@
 // 1-65535; a protocol it knows). No allocation, no globals, no strtok.
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include "os64/dial.h"
+#include "os64/resolve.h"         // names become addresses here, not in the kernel
 #include "os64/syscall.h"          // the raw stubs
 #include "os64/syscall_numbers.h"
 
@@ -74,34 +76,39 @@ int64_t os64_dial(const char *dialstring)
 	// placeholder to keep the shape uniform would be ceremony.
 	bool no_service = (protocol == OS64_NET_ICMP);
 
-	// Segment 2: the address — dotted quad only, until the resolver
-	// library teaches this spot to read names.
+	// Segment 2: the address — a dotted quad, or since 2026-08-22 a NAME,
+	// which the resolver (os64/resolve.h) turns into one: the hosts files
+	// first, then a DNS question. The segment runs to the '!' before the
+	// service, or to the end of the string when there is no service (ICMP).
+	// Nothing textual crosses the syscall boundary either way — the kernel
+	// receives an address, as it always has; this is Plan 9's dial() going
+	// through cs, in one process instead of two.
 	s = bang + 1;
-	uint32_t ip = 0;
-	for (int octet = 0; octet < 4; octet++)
-	{
-		const char *seg_end = s;
-		// The last octet ends at the '!' before the service — or at the
-		// end of the string when there is no service segment (ICMP).
-		char stop = (octet < 3) ? '.' : '!';
-		while (*seg_end && *seg_end != stop)
-			seg_end++;
-		if (octet == 3 && no_service)
-		{
-			if (*seg_end != '\0')
-				return OS64_NET_ERR_BAD_SERVICE;   // "icmp!1.2.3.4!something" —
-				                                   // a service echo doesn't have
-		}
-		else if (*seg_end != stop)
-			return OS64_NET_ERR_BAD_ADDRESS;
+	const char *seg_end = s;
+	while (*seg_end && *seg_end != '!')
+		seg_end++;
+	if (no_service && *seg_end != '\0')
+		return OS64_NET_ERR_BAD_SERVICE;   // "icmp!1.2.3.4!something" —
+		                                   // a service echo doesn't have
+	if (!no_service && *seg_end != '!')
+		return OS64_NET_ERR_BAD_SERVICE;   // "tcp!host" — the door is missing
+	if (seg_end == s || seg_end - s > OS64_RESOLVE_NAME_MAX)
+		return OS64_NET_ERR_BAD_ADDRESS;
 
-		uint32_t value;
-		if (!parse_decimal_segment(s, seg_end, 255, &value))
-			return OS64_NET_ERR_BAD_ADDRESS;
-		ip = (ip << 8) | value;   // host order, per ruling #2 — it reads
-		                          // like an address in a debugger
-		s = seg_end + 1;
+	uint32_t ip = 0;               // host order, per ruling #2 — it reads
+	                               // like an address in a debugger
+	if (!os64_parse_ipv4(s, seg_end, &ip))
+	{
+		char name[OS64_RESOLVE_NAME_MAX + 1];
+		size_t nlen = (size_t)(seg_end - s);
+		for (size_t i = 0; i < nlen; i++)
+			name[i] = s[i];
+		name[nlen] = '\0';
+		int64_t rr = os64_resolve(name, &ip);
+		if (rr < 0)
+			return rr;             // NO_SUCH_HOST / NO_RESOLVER / TIMEOUT — its own words
 	}
+	s = *seg_end ? seg_end + 1 : seg_end;
 
 	// Segment 3: the service — numeric port until names ("!dns") earn a
 	// consumer. Runs to end of string; port 0 is not a door. Absent

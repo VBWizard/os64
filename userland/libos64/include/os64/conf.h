@@ -42,8 +42,15 @@ typedef bool (*os64_conf_fn)(const char *key, const char *value, void *user);
 // buffer — whatever fit WAS delivered, and the caller should say so, because
 // "my setting is at the bottom of the file and nothing happens" is a
 // miserable afternoon (logd's lesson, kept).
+// ...and OS64_CONF_NO_MEMORY if the reader could not get its buffer. The
+// buffer is per-CALL heap (2026-08-22): a static one is shared by every
+// thread in the program and by any callback that reads a config of its own,
+// and this reader NUL-terminates in place, so sharing it means lines that
+// occasionally arrive with a hole in them. 8KB per call, for the duration of
+// the call, is the cheaper mistake.
 #define OS64_CONF_NO_FILE    (-1)
 #define OS64_CONF_TRUNCATED  (-2)
+#define OS64_CONF_NO_MEMORY  (-3)
 #define OS64_CONF_MAX        8192   // the buffer; 8KB of `key = value` is a lot of opinions
 int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user);
 

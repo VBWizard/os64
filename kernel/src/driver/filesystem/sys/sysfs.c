@@ -860,6 +860,15 @@ static void sys_gen_net_dhcp(synth_text_t *t)
 		// gateway, which is why the lifeboat entry tells you to read it.
 		synth_text_addf(t, "server: %u.%u.%u.%u\n",
 		                NET_IPV4_OCTETS(kDhcpStats.lease_server));
+		// The name server the lease offered (option 6). READ BY SOFTWARE,
+		// not just by people: libos64's resolver takes its server from this
+		// line when /etc/net.conf names none — so the key and the shape are
+		// a contract. "none" when the lease was silent.
+		if (kDhcpStats.lease_dns != 0)
+			synth_text_addf(t, "dns: %u.%u.%u.%u\n",
+			                NET_IPV4_OCTETS(kDhcpStats.lease_dns));
+		else
+			synth_text_addf(t, "dns: none\n");
 		synth_text_addf(t, "lease_seconds: %u (recorded; renewal is a DEBT)\n",
 		                kDhcpStats.lease_seconds);
 	}
@@ -1116,8 +1125,14 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		{
 			// Publish failed after we had already taken the store's word for
 			// it — hand both back rather than leaking an entry reference.
-			if (pending != NULL)
-				clipboard_seal(pending);
+			//
+			// DISCARD, not seal. The open is about to fail, so the caller
+			// never gets a handle and never writes a byte; sealing here would
+			// publish the empty pending as the newest snarf and throw away
+			// whatever the user had copied — an allocation failure inside a
+			// failed `open("/sys/clipboard","w")` erasing the clipboard is a
+			// bad trade for anyone. (Codex review, 2026-08-22.)
+			clipboard_discard(pending);
 			clipboard_release(entry);
 			return -1;
 		}

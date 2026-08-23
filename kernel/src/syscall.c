@@ -2857,12 +2857,29 @@ static void spawn_do_create(void *arg)
 	// foreground one could steal a keystroke, and that race would be
 	// spectacularly hard to see.
 	//
-	// DEBT (DEBTS.md): the flag is NOT inherited — a background job that
-	// spawns its own child mints a FOREGROUND grandchild that can read the
-	// keyboard, reopening one generation down exactly the hole this flag
-	// closes. Latent while nothing backgrounded can spawn; the day husk runs
-	// scripts, this line is where the ruling lands.
-	child->backgroundJob = p->background;
+	// AND IT IS INHERITED. The debt booked at this line said "the day husk
+	// runs scripts, this is where the ruling lands" — husk runs scripts as of
+	// this branch, so it lands now (Codex review, 2026-08-23): `myscript &`
+	// ran its commands from a background interpreter, and every command
+	// INSIDE the script was minted foreground, so a `cat` in a backgrounded
+	// script rejoined the keyboard queue and took keystrokes the interactive
+	// husk was owed — the exact hole `&` closes, reopened one generation down.
+	//
+	// Inheritance is also what the two mechanisms real shells use both do,
+	// checked rather than assumed (bash + dash under a pty, 2026-08-23):
+	// with job control OFF, POSIX assigns an asynchronous list's stdin to
+	// /dev/null, and a background job's CHILD and GRANDCHILD both showed
+	// fd 0 = /dev/null while a foreground child showed the terminal; with
+	// job control ON, the background job gets its own process group and
+	// reading the tty earns SIGTTIN — and a child inherits the process group.
+	// Both are inherited BY CONSTRUCTION, because both are properties a fork
+	// carries. os64's flag is a task field, so it has to say so out loud.
+	//
+	// Once background, always background, for the whole descendant tree:
+	// there is no spelling of "I am a background job, but this program I am
+	// starting should take the user's keystrokes" that anyone wants.
+	child->backgroundJob = p->background ||
+	                      (p->parent != NULL && p->parent->backgroundJob);
 
 	// Seat on a pty slave (PTY.md), BEFORE submission like everything else
 	// here: the child must never run an instruction on the wrong terminal.

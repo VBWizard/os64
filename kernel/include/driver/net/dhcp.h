@@ -63,6 +63,12 @@ typedef struct dhcp_stats
 	uint32_t lease_gateway;
 	uint32_t lease_server;      // who to thank (and someday, renew with)
 	uint32_t lease_seconds;     // option 51 — recorded honestly, not yet acted on
+	// Option 6, the first name server offered (2026-08-22). The kernel does
+	// NOT resolve names — that is libos64's job (resolve.c) — it only keeps
+	// what the lease said and publishes it in /sys/net/dhcp, which is where
+	// the resolver reads it when /etc/net.conf names no server of its own.
+	// 0 = the lease offered none (a static boot, or a stingy server).
+	uint32_t lease_dns;
 } dhcp_stats_t;
 extern dhcp_stats_t kDhcpStats;
 

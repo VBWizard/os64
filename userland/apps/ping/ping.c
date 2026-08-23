@@ -7,11 +7,12 @@
 // single tick (10ms) — exactly the shape the note promised.
 
 #include "os64/os64.h"
-
 typedef struct {
     uint32_t seq;
     uint32_t sent_tick;
 } ping_payload_t;
+
+static char ipString[16] = {0}; // Max = 15 chars xxx.yyy.zzz.aaa
 
 static const char *net_dial_error_message(int64_t err)
 {
@@ -20,7 +21,11 @@ static const char *net_dial_error_message(int64_t err)
         case OS64_NET_ERR_BAD_STRING:
             return "bad dial string or unsupported protocol";
         case OS64_NET_ERR_BAD_ADDRESS:
-            return "bad address; expected dotted quad";
+            return "bad address; expected a dotted quad or a name";
+        case OS64_NET_ERR_NO_SUCH_HOST:
+            return "no such host (not in /home/hosts, /etc/hosts, or DNS)";
+        case OS64_NET_ERR_NO_RESOLVER:
+            return "a name, but no name server to ask (DHCP gave none; see /etc/net.conf)";
         case OS64_NET_ERR_BAD_SERVICE:
             return "bad service/port; ICMP has no port";
         case OS64_NET_ERR_BAD_DEST:
@@ -98,11 +103,11 @@ int main(int argc, char **argv)
     uint32_t paramPingCount = 0;
     uint64_t paramTimeout = 5000;
     uint64_t paramInterval = 1000;
+    uint32_t rawIP = 0;
     static const os64_optspec_t specs[] = {
-        { 'n', "count", 1, "stop after count echo requests", .value_out = &count_arg },
-        { 'w', "wait", 1, "wait this many ms for each reply (default: 5000)", .value_out = &wait_arg },
-        { 'i', "interval", 1, "start pings this many ms apart (default: 1000)", .value_out = &interval_arg }
-    };
+        {'n', "count", 1, "stop after count echo requests", .value_out = &count_arg},
+        {'w', "wait", 1, "wait this many ms for each reply (default: 5000)", .value_out = &wait_arg},
+        {'i', "interval", 1, "start pings this many ms apart (default: 1000)", .value_out = &interval_arg}};
     char dial_string[64];
     os64_args_t args;
     os64_args_init(&args, argc, argv, specs, 3);
@@ -111,7 +116,7 @@ int main(int argc, char **argv)
 
     const char *positionals[1] = { NULL };
     int32_t positional_count = os64_args_parse(&args,
-                                              "ping [-n count] [-w ms] [-i ms] <ip-or-icmp-dial>",
+                                              "ping [-n count] [-w ms] [-i ms] <ip-or-icmp-dial-or-hostname>",
                                               positionals, 1);
     if (positional_count < 0)
         return positional_count == OS64_ARG_HELP ? 0 : 1;
@@ -158,7 +163,31 @@ int main(int argc, char **argv)
 
     target = positionals[0];
 
-    if (build_dial_string(dial_string, sizeof(dial_string), target) < 0)
+    // Resolve ONCE, here, and dial the address that came back — not the name
+    // again. os64_dial resolves whatever name it is handed, so passing the
+    // name through would ask twice: two DNS timeouts on a bad name, and on a
+    // round-robin name two different answers, with the header line printing
+    // an address the packets never went to (0.0.0.0 in the case where the
+    // first lookup failed and the second one didn't). One lookup, one
+    // address, and it is the address we say it is. (Codex review, 2026-08-22.)
+    //
+    // A full dial string ("icmp!host") is still allowed as the argument; the
+    // name to resolve is what follows the bang.
+    const char *host = target;
+    if (os64_strlen(target) >= 5 && target[0] == 'i' && target[1] == 'c' &&
+        target[2] == 'm' && target[3] == 'p' && target[4] == '!')
+        host = target + 5;
+
+    int64_t resolved = os64_resolve(host, &rawIP);
+    if (resolved < 0)
+    {
+        os64_printf("ping: cannot resolve %s: %s\n", host,
+                    net_dial_error_message(resolved));
+        return 1;
+    }
+    os64_format_ipv4(rawIP, ipString, sizeof(ipString));
+
+    if (build_dial_string(dial_string, sizeof(dial_string), ipString) < 0)
     {
         os64_printf("ping: dial string too long\n");
         return 1;
@@ -172,9 +201,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    os64_printf("PING %s (icmp echo)%s\n",
+    os64_printf("PING %s (icmp echo)%s (%s)\n",
                 target,
-                forever ? " forever" : "");
+                forever ? " forever" : "",
+                ipString);
 
     uint32_t sent = 0;
     uint32_t received = 0;
@@ -280,7 +310,7 @@ int main(int argc, char **argv)
                 received++;
                 os64_printf("reply %u from %s: %llu tick%s\n",
                             seq,
-                            target,
+                            ipString,
                             (unsigned long long)elapsed,
                             elapsed == 1 ? "" : "s");
                 break;

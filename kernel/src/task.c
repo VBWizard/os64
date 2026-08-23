@@ -2096,6 +2096,53 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask &&
 	    !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
 	{
+		// ── #! — a script names its interpreter (2026-08-22) ────────────────
+		// If the file starts "#!", it is not the program; line one says who
+		// is. Rewrite the request — path becomes the interpreter, argv
+		// becomes [interp, (its one argument), the script's path, the
+		// script's own arguments...] — and create THAT task instead, through
+		// this same function, so everything below (the can-load check, the
+		// loader, the argv blob) sees an ordinary ELF request and knows
+		// nothing about scripts. Ritchie's 1980 exec() trick, exactly: the
+		// loader answers "what can run this file", and the shell stays a
+		// shell. (elf_loader.h carries the lineage and the line format.)
+		//
+		// ONE LEVEL ONLY: an interpreter that is itself a script is refused
+		// rather than chased — the recursion below is guarded by asking the
+		// interpreter the same question first.
+		char interp[TASK_MAX_PATH_LEN];
+		char iarg[EXEC_SHEBANG_LINE_MAX];
+		if (exec_read_shebang(path, interp, sizeof(interp), iarg, sizeof(iarg)))
+		{
+			char probe[TASK_MAX_PATH_LEN];
+			if (exec_read_shebang(interp, probe, sizeof(probe), NULL, 0))
+			{
+				printd(DEBUG_TASK, "task_create: '%s' names interpreter '%s', which is itself a script — refused\n",
+				       path, interp);
+				return NULL;
+			}
+
+			// The script's original argv[0] (the name as typed) is dropped:
+			// the interpreter is argv[0] now, and the script's PATH is what
+			// it receives — a script cannot find itself by the name someone
+			// typed, but it can by the path the kernel resolved.
+			int scriptArgs = (argc > 1) ? argc - 1 : 0;
+			int nargc = 1 + (iarg[0] ? 1 : 0) + 1 + scriptArgs;
+			char *nargv[nargc + 1];
+			int k = 0;
+			nargv[k++] = interp;
+			if (iarg[0])
+				nargv[k++] = iarg;
+			nargv[k++] = path;
+			for (int i = 1; i < argc; i++)
+				nargv[k++] = argv[i];
+			nargv[k] = NULL;
+
+			printd(DEBUG_TASK, "task_create: '%s' is a #! script — running %s%s%s with it\n",
+			       path, interp, iarg[0] ? " " : "", iarg);
+			return task_create(interp, nargc, nargv, parentTaskPtr, isKernelTask, pinnedAPICID);
+		}
+
 		if (!elf_can_load(path))
 		{
 			printd(DEBUG_TASK, "task_create: cannot load '%s' — not spawning\n", path);

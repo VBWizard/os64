@@ -196,6 +196,60 @@ static void shutdown_flush_in_kernel_context(void *arg)
 // The dial lives in CONFIG.h, in milliseconds; ticks are this file's problem.
 #define SHUTDOWN_GRACE_TICKS ((SHUTDOWN_GRACE_MS) / (MS_PER_TICK))
 
+// ── waiting, when the clock might be dead ───────────────────────────────────
+//
+// Every wait in this descent is a wait on kTicksSinceStart, and the P5 taught
+// us (2026-08-21) that a descent can run on a core where that number does not
+// advance. One capped loop is not a fix, it is a fix for ONE loop: the first
+// draft capped the termination grace and left the log-retirement wait and its
+// grace bare, so a stalled clock still hung the machine — thirty lines further
+// down, having just printed "proceeding anyway" (Codex review, 2026-08-22).
+//
+// So the seatbelt lives here, once, and every wait wears it:
+//   - the DEADLINE is the policy — how long this step is worth waiting.
+//   - the SPIN CAP is the seatbelt. Enormous next to the real wait (millions
+//     of yields against the couple of hundred a 2-second grace takes), so it
+//     can only ever fire when the clock is genuinely not moving.
+//   - and the stall is REMEMBERED. Once we have caught the clock standing
+//     still, no later step gets to discover it the slow way: the budget
+//     becomes a fixed number of yields, enough to let a ring-3 daemon finish
+//     what it was doing, and the descent keeps walking.
+#define SHUTDOWN_MAX_SPINS      20000000ULL
+#define SHUTDOWN_STALLED_YIELDS 100000ULL
+
+static bool sh_clockStalled = false;   // sticky for the whole descent
+
+// Yield for `ticks`, or until `stillWaiting()` says we are done (NULL = wait
+// out the whole thing). Returns false if the seatbelt tripped.
+//
+// NO CACHED CLS. Every yield here can put this thread back on a DIFFERENT
+// core, and a cached core_local_storage_t then names the core we used to be
+// on: the trigger would nudge a stranger's APIC and leave the core we are
+// actually running on unyielded, burning the budget without giving logd or a
+// dying task a single extra pass. scheduler_trigger(NULL) re-fetches the CLS
+// through GS on each call, which is exactly the case it re-fetches for.
+// (Codex review, 2026-08-22 — the bug predates this helper: the loops it
+// replaced passed a cls captured before their first yield too.)
+static bool shutdown_wait(uint64_t ticks, bool (*stillWaiting)(void))
+{
+	uint64_t deadline = kTicksSinceStart + ticks;
+	uint64_t spins    = 0;
+	uint64_t maxSpins = sh_clockStalled ? SHUTDOWN_STALLED_YIELDS : SHUTDOWN_MAX_SPINS;
+
+	while (stillWaiting == NULL || stillWaiting())
+	{
+		if (!sh_clockStalled && kTicksSinceStart >= deadline)
+			return true;
+		if (++spins > maxSpins)
+		{
+			sh_clockStalled = true;
+			return false;
+		}
+		scheduler_trigger(NULL);
+	}
+	return true;
+}
+
 static bool shutdown_task_is_exempt(const task_t *t, const task_t *self)
 {
 	if (t == NULL || t == self || t == kKernelTask)
@@ -232,10 +286,9 @@ static void shutdown_terminate_tasks(void)
 
 	// Yield while they go. Ending EARLY when the last one is gone is the
 	// point of watching rather than sleeping — a quiet machine should not
-	// wait out a timeout it has already satisfied.
-	// TWO limits on this wait, not one. The tick deadline is the POLICY; the
-	// spin cap is the SEATBELT, and it exists because a wait whose only exit
-	// is a clock is a wait that never ends if the clock stops.
+	// wait out a timeout it has already satisfied. That per-pass headcount is
+	// why this wait is spelled out here instead of calling shutdown_wait();
+	// the two limits it wears are the same ones, from the same constants.
 	//
 	// This loop is where the P5 froze — reliably enough to notice, randomly
 	// enough to be maddening: "asked 4 tasks to stop" and then nothing, ever
@@ -249,7 +302,6 @@ static void shutdown_terminate_tasks(void)
 	uint64_t started  = kTicksSinceStart;
 	uint64_t deadline = started + SHUTDOWN_GRACE_TICKS;
 	uint64_t spins    = 0;
-	const uint64_t maxSpins = 20000000ULL;
 	uint32_t alive = 0;
 	bool clockStalled = false;
 
@@ -261,17 +313,20 @@ static void shutdown_terminate_tasks(void)
 				alive++;
 		if (alive == 0)
 			break;
-		if (++spins > maxSpins)
+		if (++spins > SHUTDOWN_MAX_SPINS)
 		{
-			clockStalled = true;
+			// Sticky, not local: every wait BELOW this one is on the same
+			// clock, and a clock that stalled here is still stalled there.
+			clockStalled   = true;
+			sh_clockStalled = true;
 			break;
 		}
-		scheduler_trigger(cls);
+		scheduler_trigger(NULL);   // NULL: this thread may wake on another core
 	}
 
 	if (clockStalled)
 		printf("  (the tick clock did not advance during the grace — "
-		       "proceeding anyway)\n");
+		       "proceeding anyway, on a yield budget)\n");
 
 	// The elapsed time is REPORTED, not assumed. The grace is a ceiling of
 	// SHUTDOWN_GRACE_MS, and how much of it actually gets spent is a fact
@@ -308,10 +363,7 @@ static void shutdown_terminate_tasks(void)
 	// on the same clock, and a clock that stalled fifteen lines ago is still
 	// stalled here. (The first draft capped the grace wait and left this one
 	// bare — found in review, 2026-08-22.)
-	uint64_t settle = kTicksSinceStart + TICKS_PER_SECOND / 2;
-	spins = 0;
-	while (kTicksSinceStart < settle && ++spins <= maxSpins)
-		scheduler_trigger(cls);
+	shutdown_wait(TICKS_PER_SECOND / 2, NULL);
 }
 
 void shutdown_system(os64_shutdown_mode_t mode)
@@ -338,14 +390,13 @@ void shutdown_system(os64_shutdown_mode_t mode)
 	//    heartbeat, and a boot that never ran one holds no claim at all —
 	//    either way this loop exits. The extra grace after release covers
 	//    the daemon's final close-and-sync landing on disk.
+	//    Both waits wear the seatbelt (shutdown_wait, above): "bounded" used
+	//    to mean bounded BY THE CLOCK, which is exactly the bound that isn't
+	//    one on the machine this descent was hardened for.
 	klog_request_retire();
-	core_local_storage_t *cls = get_core_local_storage();
-	uint64_t deadline = kTicksSinceStart + 3 * TICKS_PER_SECOND;
-	while (klog_sink_is_claimed() && kTicksSinceStart < deadline)
-		scheduler_trigger(cls);
-	uint64_t grace = kTicksSinceStart + TICKS_PER_SECOND / 2;
-	while (kTicksSinceStart < grace)
-		scheduler_trigger(cls);
+	if (!shutdown_wait(3 * TICKS_PER_SECOND, klog_sink_is_claimed))
+		printf("  (the tick clock is not advancing — not waiting on the log daemon)\n");
+	shutdown_wait(TICKS_PER_SECOND / 2, NULL);
 	printf("  log daemon retired\n");
 
 	// Whatever the daemon did NOT take, the wire gets — the same emergency

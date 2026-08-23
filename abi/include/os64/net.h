@@ -66,6 +66,22 @@ typedef struct os64_netdest
 // for its own readability.
 #define OS64_NET_ERR_TIMEOUT       OS64_ERR_TIMEOUT
 
+// The RESOLVER's two verdicts (libos64/resolve.c, 2026-08-22 — the day a
+// dial string learned to carry a name). Library codes like -3..-5: the
+// kernel never sees a name. They are distinct from BAD_ADDRESS on purpose —
+// "that is not an address" and "that is a perfectly good name nobody
+// answers for" send a person to different places.
+#define OS64_NET_ERR_NO_RESOLVER   (-11) // a name was given but there is no
+                                         //  name server to ask: no
+                                         //  `nameserver` in net.conf and the
+                                         //  DHCP lease offered none (or the
+                                         //  boot is static). /etc/hosts still
+                                         //  works without one
+#define OS64_NET_ERR_NO_SUCH_HOST  (-12) // the hosts files and the name
+                                         //  server were all asked, and the
+                                         //  answer was no (NXDOMAIN, or an
+                                         //  answer with no A record)
+
 // The handle net_dial returns obeys the house read/write contract:
 //   write(h, buf, len)  — one call = ONE datagram (atomic; oversize is an
 //                         error, never a fragmenting loop)

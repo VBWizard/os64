@@ -711,6 +711,79 @@ bool elf_can_load(const char *path)
     return loadable;
 }
 
+// Contract and lineage in elf_loader.h. Reads ONE line — at most
+// EXEC_SHEBANG_LINE_MAX bytes — and never the program itself; a script's
+// body is the interpreter's business.
+bool exec_read_shebang(const char *path, char *interp, size_t interp_cap,
+                       char *arg, size_t arg_cap)
+{
+    if (path == NULL || interp == NULL || interp_cap == 0)
+        return false;
+
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(path, &tail);
+    if (fs == NULL || fs->fops == NULL || fs->fops->open == NULL || fs->fops->read == NULL)
+        return false;
+
+    vfs_file_t *file = NULL;
+    if (fs->fops->open(&file, tail, "r", fs) != 0)
+        return false;
+
+    // A short read is fine (a two-line script is shorter than the cap); a
+    // failed one is "no". The ELF loader's elf_read_at insists on an exact
+    // count, which is right for headers and wrong for a text line.
+    char line[EXEC_SHEBANG_LINE_MAX];
+    int got = fs->fops->read(file, line, sizeof(line) - 1);
+    if (fs->fops->close != NULL)
+        fs->fops->close(file);
+    if (got < 3 || line[0] != '#' || line[1] != '!')
+        return false;
+    line[got] = '\0';
+
+    // The line ends at the first newline (CR tolerated: a script saved from
+    // Windows is still a script). A first line with no newline inside the cap
+    // is refused — an interpreter path that long is not one we will find.
+    char *end = line + 2;
+    while (*end && *end != '\n')
+        end++;
+    if (*end != '\n')
+        return false;
+    *end = '\0';
+    if (end > line && end[-1] == '\r')
+        end[-1] = '\0';
+
+    // interpreter: skip blanks, take to the next blank. Must be absolute —
+    // exec has no PATH and never will (the shell has one; exec takes a name).
+    char *p = line + 2;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p != '/')
+        return false;
+    size_t n = 0;
+    while (*p && *p != ' ' && *p != '\t' && n + 1 < interp_cap)
+        interp[n++] = *p++;
+    interp[n] = '\0';
+    if (*p && *p != ' ' && *p != '\t')
+        return false;   // did not fit
+
+    // one optional argument: the rest of the line, trimmed both ends
+    if (arg != NULL && arg_cap > 0) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        char *ae = p;
+        while (*ae) ae++;
+        while (ae > p && (ae[-1] == ' ' || ae[-1] == '\t'))
+            ae--;
+        size_t an = (size_t)(ae - p);
+        if (an + 1 > arg_cap)
+            an = arg_cap - 1;
+        for (size_t i = 0; i < an; i++)
+            arg[i] = p[i];
+        arg[an] = '\0';
+    }
+    return true;
+}
+
 bool elf_is_dynamic(const char *path)
 {
     if (path == NULL) {
