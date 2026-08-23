@@ -221,8 +221,16 @@ static bool sh_clockStalled = false;   // sticky for the whole descent
 
 // Yield for `ticks`, or until `stillWaiting()` says we are done (NULL = wait
 // out the whole thing). Returns false if the seatbelt tripped.
-static bool shutdown_wait(core_local_storage_t *cls, uint64_t ticks,
-                          bool (*stillWaiting)(void))
+//
+// NO CACHED CLS. Every yield here can put this thread back on a DIFFERENT
+// core, and a cached core_local_storage_t then names the core we used to be
+// on: the trigger would nudge a stranger's APIC and leave the core we are
+// actually running on unyielded, burning the budget without giving logd or a
+// dying task a single extra pass. scheduler_trigger(NULL) re-fetches the CLS
+// through GS on each call, which is exactly the case it re-fetches for.
+// (Codex review, 2026-08-22 — the bug predates this helper: the loops it
+// replaced passed a cls captured before their first yield too.)
+static bool shutdown_wait(uint64_t ticks, bool (*stillWaiting)(void))
 {
 	uint64_t deadline = kTicksSinceStart + ticks;
 	uint64_t spins    = 0;
@@ -237,7 +245,7 @@ static bool shutdown_wait(core_local_storage_t *cls, uint64_t ticks,
 			sh_clockStalled = true;
 			return false;
 		}
-		scheduler_trigger(cls);
+		scheduler_trigger(NULL);
 	}
 	return true;
 }
@@ -313,7 +321,7 @@ static void shutdown_terminate_tasks(void)
 			sh_clockStalled = true;
 			break;
 		}
-		scheduler_trigger(cls);
+		scheduler_trigger(NULL);   // NULL: this thread may wake on another core
 	}
 
 	if (clockStalled)
@@ -355,7 +363,7 @@ static void shutdown_terminate_tasks(void)
 	// on the same clock, and a clock that stalled fifteen lines ago is still
 	// stalled here. (The first draft capped the grace wait and left this one
 	// bare — found in review, 2026-08-22.)
-	shutdown_wait(cls, TICKS_PER_SECOND / 2, NULL);
+	shutdown_wait(TICKS_PER_SECOND / 2, NULL);
 }
 
 void shutdown_system(os64_shutdown_mode_t mode)
@@ -386,10 +394,9 @@ void shutdown_system(os64_shutdown_mode_t mode)
 	//    to mean bounded BY THE CLOCK, which is exactly the bound that isn't
 	//    one on the machine this descent was hardened for.
 	klog_request_retire();
-	core_local_storage_t *cls = get_core_local_storage();
-	if (!shutdown_wait(cls, 3 * TICKS_PER_SECOND, klog_sink_is_claimed))
+	if (!shutdown_wait(3 * TICKS_PER_SECOND, klog_sink_is_claimed))
 		printf("  (the tick clock is not advancing — not waiting on the log daemon)\n");
-	shutdown_wait(cls, TICKS_PER_SECOND / 2, NULL);
+	shutdown_wait(TICKS_PER_SECOND / 2, NULL);
 	printf("  log daemon retired\n");
 
 	// Whatever the daemon did NOT take, the wire gets — the same emergency
