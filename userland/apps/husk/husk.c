@@ -689,6 +689,16 @@ static bool byte_is_expanded(const char *p)
 	return s_expmask[p - s_expbase] != 0;
 }
 
+// Mark a byte as DATA outright. parse() uses this for bytes it copies out of
+// a quoted region: the quotes are removed during tokenization, and without
+// this the fact of having been quoted is removed with them.
+static void byte_mask_mark(const char *p)
+{
+	if (s_expbase == NULL || p < s_expbase || p >= s_expbase + s_explen)
+		return;
+	s_expmask[p - s_expbase] = 1;
+}
+
 // Is this token entirely the author's own typing? Only such a token may be an
 // operator. Two sources of NOT-typed bytes exist, and both are the outside
 // world: a $-expansion (the mask above) and a GLOB result, which is a
@@ -767,7 +777,16 @@ static int parse(char *line, char *argv[], int maxargs)
 					readp++;
 					continue;
 				}
-				byte_mask_move(writep, readp);   // the flag travels with the byte
+				// QUOTED BYTES ARE DATA, and this is the line that makes
+				// quoting mean anything to a redirection. The quotes come
+				// off here — that is what tokenizing does — and until this
+				// mark existed, nothing downstream could tell `echo '>' hi`
+				// from `echo > hi`, so a quoted operator redirected anyway
+				// and printed nothing. (Pipes escaped the bug by accident:
+				// split_pipeline runs BEFORE the quotes are stripped and so
+				// still sees them. Found re-reading this file as its own
+				// reviewer, 2026-08-23; it predates the expansion work.)
+				byte_mask_mark(writep);
 				*writep++ = *readp++;
 				continue;
 			}
