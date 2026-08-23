@@ -51,12 +51,22 @@ int main(int argc, char **argv)
         os64_args_help(&args, "shutdown");
         return 2;
     }
-    for (int secondsExpired = secondsToDelay; secondsExpired >= 0; secondsExpired--)
+    // Sleep BETWEEN the numbers, never after the last one. Sleeping after
+    // every value made the documented five-second delay take six, and made
+    // `shutdown now` — a delay of zero, which is to say THIS INSTANT — stand
+    // there for a second first. (Codex review, 2026-08-22.)
+    //
+    // The counter is int64_t and printed with %ld, matching what the format
+    // says it is reading: `%lu` against a plain int is a varargs mismatch
+    // reading 64 bits of a 32-bit argument, and it was only ever right by the
+    // grace of whatever the compiler left in the top half of the register.
+    for (int64_t remaining = (int64_t)secondsToDelay; remaining >= 0; remaining--)
     {
-        os64_printf("The system will go down in %lu seconds       ", secondsExpired);
+        os64_printf("The system will go down in %ld seconds       ", remaining);
+        if (remaining == 0)
+            break;
         os64_sleep(1000);
-        if (secondsExpired > 0)
-            os64_printf("\r");
+        os64_printf("\r");
     }
     os64_printf("\n");
     os64_shutdown(OS64_SHUTDOWN_POWEROFF);

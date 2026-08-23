@@ -76,7 +76,6 @@ hobby-scale judgment calls — re-rank freely.
 | **PAID 2026-08-15 — the heap.** `map`/`unmap` landed 2026-07-19 and the libos64 `malloc` on top of them today (`libos64/heap.c`): boundary tags with Lea's in-use bit, one first-fit free list, pools for small + a dedicated region per allocation ≥128KB, a virgin frontier that makes `calloc` free on first touch, address-tied canaries, 0xA5 poison on free, and heap crimes that KILL (0xF12EEBAD / 0xCA9A12ED — Chris's ruling). An emptied region goes home to the kernel from the middle of the heap, which brk structurally cannot do. Proven three ways: `tools/test_heap_host.c` (124 host checks incl. a 20,000-round soak and the shrink-coalesce regression), `/bin/malloctest` on the roster (three entries — two of which PASS BY DYING), and `/proc/<pid>/heap`, whose audit identity (mapped == live+free+overhead+virgin) the kernel checks on every read. RESIDUE, booked below: the general userland mutex, the big-allocation address-space churn, and the fact that no APP allocates yet | Feature-gate | — | PAID | MALLOC.md / `libos64/heap.c` |
 | **Userland signal delivery.** `SIGPIPE`'s default action (terminate) is currently enforced *inside the kernel* (`raise_sigpipe_and_die`) because ring 3 cannot install a handler yet. Consequence: a program that wants to SURVIVE a vanishing reader can't — it always dies. Fix = deliver signals to ring 3 (handler + a way to return), after which `pipe_write` can hand `PIPE_ERR_CLOSED` back to a program that asked for it. **TWO MORE CUSTOMERS ARRIVED 2026-08-21**: SIGHUP and SIGTERM both default to death and neither can be caught, so a GUI app cannot say "wait — unsaved work" when its terminal hangs up or the machine goes down. Chris asked how to subscribe to SIGTERM the day it was built; the honest answer was "you can't yet, and this row is why". The shape when it lands: register a handler + a delivery trampoline (kernel pushes a frame on the user stack, redirects RIP, the handler returns through a stub that resumes the interrupted context) — os64's answer to sigaction, without POSIX's restart/mask warts | Feature-gate | M | when a program needs to catch SIGPIPE, SIGHUP or SIGTERM | `signals.h` SIGPIPE/SIGHUP/SIGTERM / `syscall.c` |
 | **Named pipes (FIFOs).** Same pipe object, same semantics — the ONLY difference is the rendezvous: a VFS name instead of inheritance across spawn. A FIFO holds no data (0 bytes on disk forever); it is just a name that resolves to a kernel pipe object, and `open()` blocks until both a reader and a writer arrive. `pipe.c` was written unaware of how it was created, precisely so this is additive. Also the first VFS node that isn't a file — the same door **procfs** walks through | Feature-gate | M | when two UNRELATED processes need to talk | `pipe.c` / VFS |
-| **`backgroundJob` is not inherited across spawn.** A background job that spawns its own child mints a FOREGROUND grandchild, whose console reads rejoin the keyboard queue and compete with husk for keystrokes — exactly the hole `&` closed, reopened one generation down. Latent: nothing backgrounded can spawn today. When the ruling comes, inherit-if-parent-is-background is the likely shape (one line in `spawn_do_create`), but it interacts with `fg` — un-backgrounding a job should probably reach its live descendants too, which is where this stops being one line | Hole (latent) | S | when anything backgrounded can spawn (husk scripts, a backgrounded shell) | `syscall.c` spawn_do_create / `console.c` |
 
 ## Virtual terminals (the VT slice, 2026-08-08 — booked at birth)
 
@@ -216,6 +215,34 @@ hobby-scale judgment calls — re-rank freely.
 
 ## Explicitly NOT debts (recorded so they aren't re-litigated)
 
+- **husk: an EMPTY expansion leaving an adjacent typed `>` as an operator.**
+  Raised as a P1 in PR #28's round 6 (`echo safe $1> output` with `$1` empty
+  redirects instead of printing) and DECLINED 2026-08-23 — the first Codex
+  finding either model has turned down, so the reasoning is written out.
+  **Verified against real shells on the host:** bash redirects that line
+  whether `$1` is empty OR set (`safe` / `safe XX` both land in the file),
+  and dash agrees, because a shell lexes BEFORE it expands — the `>` is an
+  operator token the author typed and no value changes what it is. husk
+  matches on the empty case, so nothing is wrong there. Where husk really
+  diverges is the other half, in the SAFE direction: with `$1` non-empty the
+  token becomes `x>`, and husk's operators are token-exact by design
+  (`upper<f` is a program named "upper<f" — its own comment), so it passes
+  the token through as data where bash would redirect. husk under-recognizes
+  operators rather than over-recognizing them. The proposed cure — tracking
+  expansion boundaries even when the value is empty — would make husk SWALLOW
+  AN OPERATOR THE AUTHOR TYPED: a new divergence, in the surprising
+  direction, to fix a case that already matches POSIX. **The one genuinely
+  odd corner, recorded rather than hidden:** `>$1>` with `$1` empty yields
+  the adjacent pair `>>` (append) where bash performs two separate redirects.
+  That is the token-exact rule meeting adjacency, not data manufacturing
+  syntax — the author typed both bytes — and closing it means lexing before
+  expanding, i.e. rebuilding husk's front end, which is an arc and not a fix.
+  THE DISTINCTION THAT DECIDES THIS CLASS: the four findings in the family
+  that WERE real (argument bytes becoming operators, an expanded quote
+  closing a typed one, a half-substituted `>>`, a glob result read as an
+  operator) all had one signature — *the outside world's bytes acquiring
+  meaning nobody gave them*. This one is the mirror image: the author's own
+  byte keeping the meaning he gave it.
 - **Shared kernel upper half** (every task PML4 → kernel's own tables,
   U/S-protected): a deliberate, sound decision for os64's threat model
   (we run our own binaries). Meltdown/KPTI unshared it for a speculative

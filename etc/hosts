@@ -1,0 +1,21 @@
+# /etc/hosts — the names of the machines in the room.
+#
+#   address   name [alias ...]        '#' starts a comment
+#
+# This file is older than DNS. It is SRI-NIC's HOSTS.TXT (1974), the one
+# list every ARPANET host fetched nightly until the list outgrew the method
+# and Mockapetris wrote DNS (1983) to replace it. It never went away,
+# because for the three machines in the room it is still the right answer:
+# no server to ask, no packet to wait for, no way to be wrong about where
+# the build PC is.
+#
+# WHICH FILE WINS — the usual ladder, but MERGED rather than first-hit
+# (Chris's ruling, 2026-08-22): /home/hosts is read first and /etc/hosts
+# second, so YOUR names (the build PC's, on your own partition, surviving
+# every refresh) sit on top of the system's, and a name in both is yours.
+# Put the machine you os64get from in /home/hosts:
+#
+#   192.168.137.1   yogi          # the ICS host — the valet lives here
+#
+# Names here are case-insensitive, as DNS names are. Anything that is not
+# found here is asked of the name server (see /etc/net.conf).

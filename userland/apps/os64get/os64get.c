@@ -128,11 +128,51 @@ static const char *const kConfPaths[] = { "/home/os64get.conf", "/etc/os64get.co
 
 // Trim a trailing '/' off a directory value so "/bin/" and "/bin" mean the
 // same thing — the one courtesy the reader extends beyond the dialect.
-static void conf_take_dir(char *dst, const char *value)
+//
+// Returns false if the value does NOT FIT, having touched nothing: the caller
+// says so and drops the line. Two reasons it is a refusal and not a trim.
+// First, os64_strcopy reports the UNTRUNCATED source length (strlcpy's
+// contract, str.h), so copying first and measuring after would send the loop
+// below walking off the end of a 128-byte slot — reading past it, and writing
+// a NUL past it if the byte it finds there happens to be '/'. Second, even
+// with the index clamped, a silently shortened path is a rule that quietly
+// installs your files SOMEWHERE ELSE; "/usr/local/…/bin" truncated to
+// "/usr/local/…" is a directory that may well exist. A routing rule nobody
+// can trust is worth less than no rule at all. (Codex review, 2026-08-22.)
+static bool conf_take_dir(char *dst, const char *value)
 {
+    // An EMPTY value is refused for the same reason an over-long one is: it
+    // is a rule nobody can have meant. `husk =` routed to "", join_path made
+    // that "/husk", and a half-finished edit installed a program at the root
+    // of the filesystem — quietly, since an empty string is a perfectly good
+    // string. (Codex review, 2026-08-22.) The documented ways to say "no
+    // rule" are unaffected: leave the line out, or leave the key out of the
+    // file entirely; `archive` off is a missing line or `-n`, exactly as its
+    // comment in /etc/os64get.conf says.
+    size_t len = os64_strlen(value);
+
+    if (len == 0)
+        return false;
+    if (len >= CONF_DIR_MAX)
+        return false;   // dst keeps whatever an earlier line put there
+
     size_t n = os64_strcopy(dst, CONF_DIR_MAX, value);
     while (n > 1 && dst[n - 1] == '/')
         dst[--n] = '\0';
+    return true;
+}
+
+// The one complaint every unusable directory value makes, in one voice —
+// and it says WHICH kind, because "ignored" without a reason sends the
+// reader back to the file to guess.
+static void conf_bad_dir(const conf_t *c, const char *key, const char *value)
+{
+    if (value[0] == '\0')
+        os64_hprintf(OS64_STDERR, "os64get: %s: '%s' has no directory after the '='"
+                     " - ignored\n", c->path, key);
+    else
+        os64_hprintf(OS64_STDERR, "os64get: %s: directory for '%s' is longer than %d bytes"
+                     " - ignored: %s\n", c->path, key, CONF_DIR_MAX - 1, value);
 }
 
 static bool conf_line(const char *key, const char *value, void *user)
@@ -149,12 +189,15 @@ static bool conf_line(const char *key, const char *value, void *user)
     }
 
     if (os64_streq(key, "archive")) {
-        conf_take_dir(c->archive, value);
+        if (!conf_take_dir(c->archive, value))
+            conf_bad_dir(c, key, value);
         return true;
     }
     if (os64_streq(key, "*")) {
-        conf_take_dir(c->star, value);
-        c->anyRule = true;
+        if (!conf_take_dir(c->star, value))
+            conf_bad_dir(c, key, value);
+        else
+            c->anyRule = true;
         return true;
     }
     if (key[0] == '*' && key[1] == '.') {
@@ -162,8 +205,11 @@ static bool conf_line(const char *key, const char *value, void *user)
         // Later lines append; the matcher walks the table backwards so the
         // last one wins.
         if (c->nsuffix < CONF_RULES_MAX) {
+            if (!conf_take_dir(c->suffix[c->nsuffix].dir, value)) {
+                conf_bad_dir(c, key, value);
+                return true;   // the slot stays free for the next rule
+            }
             os64_strcopy(c->suffix[c->nsuffix].name, sizeof(c->suffix[0].name), key + 1);
-            conf_take_dir(c->suffix[c->nsuffix].dir, value);
             c->nsuffix++;
             c->anyRule = true;
         } else {
@@ -179,8 +225,11 @@ static bool conf_line(const char *key, const char *value, void *user)
     }
 
     if (c->nexact < CONF_RULES_MAX) {
+        if (!conf_take_dir(c->exact[c->nexact].dir, value)) {
+            conf_bad_dir(c, key, value);
+            return true;   // the slot stays free for the next rule
+        }
         os64_strcopy(c->exact[c->nexact].name, sizeof(c->exact[0].name), key);
-        conf_take_dir(c->exact[c->nexact].dir, value);
         c->nexact++;
         c->anyRule = true;
     } else {
@@ -203,6 +252,9 @@ static void conf_load(conf_t *c)
         if (rc == OS64_CONF_TRUNCATED)
             os64_hprintf(OS64_STDERR, "os64get: %s is larger than %d bytes - the tail was not read\n",
                          kConfPaths[i], OS64_CONF_MAX);
+        else if (rc == OS64_CONF_NO_MEMORY)
+            os64_hprintf(OS64_STDERR, "os64get: out of memory reading %s - no routing rules;"
+                         " files land in the current directory\n", kConfPaths[i]);
         which = i;
         (void)which;
         return;
@@ -358,17 +410,19 @@ int main(int argc, char **argv)
     const char *operands[4] = {0};
     bool quiet = false;
     bool noArchive = false;
+    bool force = false;
     const os64_optspec_t specs[] = {
         {'q', "quiet", false, "no progress, just the exit code", .flag = &quiet},
         {'n', "no-archive", false, "install only; keep no archive copy", .flag = &noArchive},
+        {'f', "force", false, "fetch even if DEST already matches the server's length and CRC", .flag = &force},
     };
 
-    os64_args_init(&args, argc, argv, specs, 2);
+    os64_args_init(&args, argc, argv, specs, 3);
     args.about = "Fetch a file over the network, archive it, and install it only if it is intact.";
     args.details = "DEST defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
                    "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename.";
 
-    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] HOST NAME [DEST]", operands, 4);
+    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] [-f] HOST NAME [DEST]", operands, 4);
     if (count == OS64_ARG_HELP)
         return GET_OK;
     if (count < 2)
@@ -460,8 +514,27 @@ int main(int argc, char **argv)
     // ── Dial ────────────────────────────────────────────────────────────
     // Plan 9's bang path, which libos64 parses into an os64_netdest_t below
     // the syscall boundary (nothing textual crosses it).
-    char dialstring[GET_PATH_MAX];
-    os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%d", host, GET_PORT);
+    // Sized from the NAME LIMIT, not from a path limit: "tcp!" + a name of up
+    // to OS64_RESOLVE_NAME_MAX (253 — DNS's own ceiling, which the dial parser
+    // now accepts) + "!65535" + NUL. GET_PATH_MAX was 256 and a 250-byte
+    // hostname silently lost its "!6464" off the end, after which os64_dial
+    // rejected the string for having no service — a name the resolver would
+    // have handled perfectly, failing with an error about a port nobody
+    // mistyped. (Codex review, 2026-08-22.)
+    char dialstring[OS64_RESOLVE_NAME_MAX + 16];
+    int32_t dialLen = os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%d",
+                                    host, GET_PORT);
+
+    // And check anyway. The buffer now fits every name the resolver will
+    // accept, so this can only fire on a host string that was never going to
+    // resolve — but a truncated dial string fails with the WRONG COMPLAINT,
+    // and that is the part worth spending three lines to prevent.
+    if (dialLen < 0 || (size_t)dialLen >= sizeof(dialstring))
+    {
+        os64_hprintf(OS64_STDERR, "os64get: host name is too long to dial (limit %d)\n",
+                     OS64_RESOLVE_NAME_MAX);
+        return GET_USAGE;
+    }
 
     int64_t conn = os64_dial(dialstring);
     if (conn < 0)
@@ -476,6 +549,8 @@ int main(int argc, char **argv)
             (conn == OS64_NET_ERR_NO_NIC)       ? "no network interface on this boot" :
             (conn == OS64_NET_ERR_BAD_ADDRESS)  ? "that host is not a dotted quad" :
             (conn == OS64_NET_ERR_NO_RESOURCES) ? "out of handles or ports" :
+            (conn == OS64_NET_ERR_NO_SUCH_HOST) ? "no such host — not in /home/hosts, /etc/hosts, or DNS" :
+            (conn == OS64_NET_ERR_NO_RESOLVER)  ? "that is a name, and there is no name server to ask (see /etc/net.conf)" :
                                                   "refused";
         os64_hprintf(OS64_STDERR, "os64get: cannot reach %s:%d — %s\n", host, GET_PORT, why);
         return GET_DIAL_FAILED;
@@ -561,6 +636,47 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "os64get: malformed OK line '%s'\n", header);
         os64_close((int32_t)conn);
         return GET_BAD_HEADER;
+    }
+
+    // ── Already have it? (2026-08-22) ───────────────────────────────────
+    // The header carries the length and CRC BEFORE the bytes, so the file
+    // already at DEST can be measured against it right now — and if both
+    // agree, the transfer is declined before it starts, not after. That is
+    // HTTP's If-None-Match / 304 (1997) and the entire reason rsync exists:
+    // the cheapest byte to move is the one you already have, and on the
+    // RTL8125 a kernel you already hold is four seconds you don't spend.
+    // LENGTH AND CRC, both: a CRC alone is a one-in-four-billion lie, the
+    // pair is not. Unchanged is SUCCESS (exit 0, one quiet line) — a future
+    // --all over twenty files wants "unchanged" to be a yes — and it leaves
+    // no archive entry, because nothing landed. -f fetches regardless (a
+    // re-archive under today's date is the honest reason to want that).
+    // Hanging up on the valet mid-sentence costs it nothing: serve_one logs
+    // the broken send and takes the next call. (Chris's idea, the stronger
+    // form of it.)
+    if (!force)
+    {
+        int64_t have = os64_open(dest, "r");
+        if (have >= 0)
+        {
+            uint64_t hlen = 0;
+            uint32_t hcrc = os64_crc32_begin();
+            uint8_t hbuf[GET_CHUNK];
+            int64_t hn;
+            while ((hn = os64_read((int32_t)have, hbuf, sizeof(hbuf))) > 0)
+            {
+                hcrc = os64_crc32_update(hcrc, hbuf, (size_t)hn);
+                hlen += (uint64_t)hn;
+            }
+            os64_close((int32_t)have);
+            if (hn == 0 && hlen == expectLen && os64_crc32_end(hcrc) == expectCrc)
+            {
+                os64_close((int32_t)conn);
+                if (!quiet)
+                    os64_printf("%s: unchanged (%lu bytes, crc %08x) — not fetched\n",
+                                dest, (unsigned long)expectLen, expectCrc);
+                return GET_OK;
+            }
+        }
     }
 
     // ── Receive into <target>.part ──────────────────────────────────────

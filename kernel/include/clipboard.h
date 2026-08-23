@@ -85,6 +85,18 @@ int clipboard_append(snarf_pending_t *pending, const void *bytes, size_t length)
 // doesn't have.
 void clipboard_seal(snarf_pending_t *pending);
 
+// Throw a copy away UNPUBLISHED: free the pending and whatever it collected,
+// and leave the store exactly as it was. Frees the pending, like seal does.
+//
+// This is NOT the counterpart of seal for a program that changed its mind —
+// seal-on-death above says a copy that reached the store gets published, and
+// that ruling stands. It is for the OPEN that never completed: clipboard_begin
+// succeeded, something after it failed, and open() is about to return -1. The
+// caller never got a handle, so no copy was ever made, and sealing there would
+// publish an empty entry and ERASE the user's clipboard as the reward for an
+// allocation failure. (Codex review, 2026-08-22.)
+void clipboard_discard(snarf_pending_t *pending);
+
 // Take a reference on the newest sealed entry, or NULL if nothing has ever
 // been copied (a never-used clipboard reads as an empty file, not an error).
 snarf_entry_t *clipboard_acquire(void);

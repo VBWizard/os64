@@ -646,6 +646,92 @@ static int glob_expand(const char *token, char *argv[], int argc, int maxargs)
 //
 // Returns argc, or -1 if a wildcard matched nothing (the message is printed by
 // glob_expand; callers must treat <0 as "already reported, do not run").
+// ── what came out of an expansion is DATA, not syntax ───────────────────────
+//
+// husk expands a line into a flat string and then parses that string, which
+// is the shell's oldest shape and its oldest trap: the bytes a value CONTAINS
+// get read back as operators. A script line as ordinary as
+//
+//     echo $1
+//
+// would open a file when $1 held "> /etc/husk.rc", or start a pipeline when it
+// held "| rm x" — the argument reclassified as syntax by the very act of
+// substituting it. No shell has ever worked that way: the Bourne shell splits
+// expansion results into WORDS (and globs them), but it does not go back and
+// look for `>` or `|` in them, precisely because a program's arguments arrive
+// from outside and must not be able to rewrite the command that received them.
+// The positional parameters made this reachable from outside husk for the
+// first time — a script's arguments are whatever the caller typed. (Codex
+// review, 2026-08-22.)
+//
+// The cure is one bit per byte. expand_line fills a mask parallel to the
+// expanded line, marking every byte it SUBSTITUTED as against every byte the
+// author TYPED, and the three places that recognize an operator ask the mask
+// first. Nothing else changes: word splitting still happens (`echo $*` is
+// still several arguments), globbing still happens (`x=*.c; echo $x` still
+// matches files, as it does in every shell), and quoting inside a value is
+// still processed by parse() — a divergence from POSIX that predates this and
+// is left alone deliberately, since it is the harmless direction: it can only
+// group or split words, never redirect output or spawn a pipeline.
+#define EXPANDED_MAX (LINE_MAX + 512)
+
+static uint8_t s_expmask[EXPANDED_MAX];   // 1 = this byte came from a $-expansion
+static const char *s_expbase = NULL;      // the buffer s_expmask describes
+static int s_explen = 0;                  // how much of it is live
+
+// Did this byte come out of an expansion? Anything outside the expanded
+// buffer (a glob-pool string, a literal) counts as typed — the answer only
+// ever has to be right for bytes the parser is scanning.
+static bool byte_is_expanded(const char *p)
+{
+	if (s_expbase == NULL || p == NULL || p < s_expbase || p >= s_expbase + s_explen)
+		return false;
+	return s_expmask[p - s_expbase] != 0;
+}
+
+// Mark a byte as DATA outright. parse() uses this for bytes it copies out of
+// a quoted region: the quotes are removed during tokenization, and without
+// this the fact of having been quoted is removed with them.
+static void byte_mask_mark(const char *p)
+{
+	if (s_expbase == NULL || p < s_expbase || p >= s_expbase + s_explen)
+		return;
+	s_expmask[p - s_expbase] = 1;
+}
+
+// Is this token entirely the author's own typing? Only such a token may be an
+// operator. Two sources of NOT-typed bytes exist, and both are the outside
+// world: a $-expansion (the mask above) and a GLOB result, which is a
+// filename — the filesystem's text, not the shell's. Glob results live in
+// their own pool rather than in the expanded line, so they are recognized by
+// address rather than by mask.
+static bool token_is_typed(const char *t)
+{
+	if (t == NULL)
+		return false;
+	if (t >= s_glob_pool && t < s_glob_pool + sizeof(s_glob_pool))
+		return false;                       // a filename the glob found
+	for (const char *p = t; *p != '\0'; p++)
+		if (byte_is_expanded(p))
+			return false;                   // any substituted byte disqualifies it
+	return true;
+}
+
+// parse() compacts tokens leftward IN PLACE; the mask has to travel with the
+// bytes or it would describe the pre-compaction line. Destination is always
+// at or left of the source, and the scan is left to right, so a moved flag
+// can never clobber one still waiting to be read.
+static void byte_mask_move(const char *to, const char *from)
+{
+	if (s_expbase == NULL)
+		return;
+	if (to < s_expbase || to >= s_expbase + s_explen)
+		return;
+	if (from < s_expbase || from >= s_expbase + s_explen)
+		return;
+	s_expmask[to - s_expbase] = s_expmask[from - s_expbase];
+}
+
 static int parse(char *line, char *argv[], int maxargs)
 {
 	int argc = 0;
@@ -669,19 +755,43 @@ static int parse(char *line, char *argv[], int maxargs)
 		char quote = 0;
 		while (*readp)
 		{
+			// THE QUOTE STATE MACHINE ANSWERS ONLY TO TYPED QUOTES, in both
+			// directions. A substituted quote byte is inert here: it neither
+			// opens a region nor closes one, and falls through to the copy
+			// below as the ordinary character it is.
+			//
+			// This settles the divergence the first version of this fix left
+			// standing (and flagged for a ruling): parse() used to process
+			// quotes inside a value, so `$x` holding `"a b"` arrived as one
+			// argument. That grouping cannot be kept, because it IS the
+			// escape — an expanded quote that can close a region can end the
+			// author's quoting early, and a `>` the author had safely quoted
+			// becomes a token of its own and redirects. Real shells do not
+			// re-scan expansion results for quotes for exactly this reason.
+			// (Codex review, 2026-08-23.)
 			if (quote != 0)
 			{
-				if (*readp == quote)
+				if (*readp == quote && !byte_is_expanded(readp))
 				{
 					quote = 0;
 					readp++;
 					continue;
 				}
+				// QUOTED BYTES ARE DATA, and this is the line that makes
+				// quoting mean anything to a redirection. The quotes come
+				// off here — that is what tokenizing does — and until this
+				// mark existed, nothing downstream could tell `echo '>' hi`
+				// from `echo > hi`, so a quoted operator redirected anyway
+				// and printed nothing. (Pipes escaped the bug by accident:
+				// split_pipeline runs BEFORE the quotes are stripped and so
+				// still sees them. Found re-reading this file as its own
+				// reviewer, 2026-08-23; it predates the expansion work.)
+				byte_mask_mark(writep);
 				*writep++ = *readp++;
 				continue;
 			}
 
-			if (*readp == '\'' || *readp == '"')
+			if ((*readp == '\'' || *readp == '"') && !byte_is_expanded(readp))
 			{
 				quote = *readp++;
 				continue;
@@ -690,6 +800,7 @@ static int parse(char *line, char *argv[], int maxargs)
 				break;
 			if (*readp == '*' || *readp == '?' || *readp == '[')
 				unquotedMeta = true;
+			byte_mask_move(writep, readp);
 			*writep++ = *readp++;
 		}
 		while (*readp == ' ' || *readp == '\t') readp++;
@@ -733,15 +844,26 @@ static int split_pipeline(char *line, char *stages[], int maxstages)
 	{
 		if (quote != 0)
 		{
-			if (*p == quote)
+			// CLOSING is guarded exactly like opening, and the first cut of
+			// this fix guarded only one of them — which left the hole intact
+			// in mirror image. `echo "$1|touch /home/pwn"` with $1 holding a
+			// single `"` let the SUBSTITUTED quote close the AUTHOR'S quote,
+			// after which the `|` the author had safely quoted stood in the
+			// open and split a pipeline. Data could not create syntax any
+			// more, so it created it by DESTROYING the quoting around it.
+			// (Codex review, 2026-08-23 — a second look at the first fix.)
+			if (*p == quote && !byte_is_expanded(p))
 				quote = 0;
 			p++;
 		}
-		else if (*p == '\'' || *p == '"')
+		else if ((*p == '\'' || *p == '"') && !byte_is_expanded(p))
 		{
+			// A quote INSIDE a substituted value is data — otherwise a lone
+			// apostrophe in $1 would open a quote here and swallow the real
+			// `|` that follows it.
 			quote = *p++;
 		}
-		else if (*p == '|')
+		else if (*p == '|' && !byte_is_expanded(p))
 		{
 			*p++ = 0;              // terminate the stage before the bar
 			stages[n++] = p;       // next stage starts after it
@@ -872,10 +994,44 @@ static int is_name_char(char c)
 	return is_name_start(c) || (c >= '0' && c <= '9');
 }
 
-static void expand_line(const char *src, char *dst, int cap, int last_status)
+// ── positional parameters (2026-08-22) ──────────────────────────────────────
+// A script's arguments: $0 is the script's path, $1..$9 its arguments, $* all
+// of them space-joined, $# how many. Empty when unset, as a Bourne shell
+// would (and as an interactive husk always is — these exist for scripts).
+// The sigil is `$`, because husk already expands $CWD and $NAME with it and a
+// second sigil would be the wart: Chris's ruling, and his DOS reflex (%1)
+// lost to his own "I always hated having to surround a variable with %%".
+static const char *g_script_path = NULL;   // $0 — non-NULL means script mode
+static char **g_params = NULL;             // $1.. — argv slice, kernel-owned
+static int g_nparams = 0;                  // $#
+
+// Append a substituted value, marking every byte as expansion-origin.
+// False means it did not all fit — the caller turns that into a refusal
+// rather than a silently shortened command.
+static bool expand_append(char *dst, int *n, int cap, uint8_t *mask, const char *v)
+{
+	for (; v != NULL && *v != '\0'; v++)
+	{
+		if (*n >= cap - 1)
+			return false;
+		if (mask != NULL)
+			mask[*n] = 1;
+		dst[(*n)++] = *v;
+	}
+	return true;
+}
+
+// Returns false if the expansion did not fit in `dst` — see run_segment.
+static bool expand_line(const char *src, char *dst, int cap, int last_status,
+                        uint8_t *mask)
 {
 	int n = 0;
 	char quote = 0;              // 0, '\'' or '"' — which quote we are inside
+	bool fit = true;
+
+	if (mask != NULL)
+		for (int i = 0; i < cap; i++)
+			mask[i] = 0;
 
 	while (*src && n < cap - 1)
 	{
@@ -898,18 +1054,53 @@ static void expand_line(const char *src, char *dst, int cap, int last_status)
 			dst[n++] = *src++;   // inside '': the shell is deaf, on purpose
 		else if (src[0] == '$' && src[1] == '?')
 		{
-			char nb[20];
-			int k = utoa((unsigned long)(unsigned int)last_status, nb);
-			for (int j = 0; j < k && n < cap - 1; j++)
-				dst[n++] = nb[j];
+			char nb[24];
+			utoa((unsigned long)(unsigned int)last_status, nb);   // NUL-terminates
+			if (!expand_append(dst, &n, cap, mask, nb))
+				fit = false;
 			src += 2;
 		}
 		else if (src[0] == '$' && src[1] == '$')
 		{
 			char nb[24];
-			int k = utoa((unsigned long)os64_getpid(), nb);
-			for (int j = 0; j < k && n < cap - 1; j++)
-				dst[n++] = nb[j];
+			utoa((unsigned long)os64_getpid(), nb);
+			if (!expand_append(dst, &n, cap, mask, nb))
+				fit = false;
+			src += 2;
+		}
+		else if (src[0] == '$' && src[1] >= '0' && src[1] <= '9')
+		{
+			// $0..$9 — ONE digit, Bourne's rule (${10} is a door that stays
+			// closed until someone writes a script with ten arguments).
+			int idx = src[1] - '0';
+			const char *v = NULL;
+			if (idx == 0)
+				v = g_script_path;
+			else if (idx <= g_nparams)
+				v = g_params[idx - 1];
+			if (!expand_append(dst, &n, cap, mask, v))
+				fit = false;
+			src += 2;
+		}
+		else if (src[0] == '$' && src[1] == '*')
+		{
+			for (int i = 0; i < g_nparams; i++)
+			{
+				// The joining space is generated too, so it is marked with
+				// the rest: `$*` is one substitution, not a line of syntax.
+				if (i > 0 && !expand_append(dst, &n, cap, mask, " "))
+					fit = false;
+				if (!expand_append(dst, &n, cap, mask, g_params[i]))
+					fit = false;
+			}
+			src += 2;
+		}
+		else if (src[0] == '$' && src[1] == '#')
+		{
+			char nb[24];
+			utoa((unsigned long)g_nparams, nb);
+			if (!expand_append(dst, &n, cap, mask, nb))
+				fit = false;
 			src += 2;
 		}
 		else if (src[0] == '$' && is_name_start(src[1]))
@@ -924,21 +1115,29 @@ static void expand_line(const char *src, char *dst, int cap, int last_status)
 			if (str_eq(name, "CWD"))
 			{
 				char cwd[256];
-				if (os64_getcwd(cwd, sizeof(cwd)) >= 0)
-					for (const char *v = cwd; *v && n < cap - 1; v++)
-						dst[n++] = *v;
+				if (os64_getcwd(cwd, sizeof(cwd)) >= 0 &&
+				    !expand_append(dst, &n, cap, mask, cwd))
+					fit = false;
 			}
 			else
 			{
-				const char *v = os64_getenv(name);
-				for (; v && *v && n < cap - 1; v++)
-					dst[n++] = *v;
+				// An environment value is substituted text like any other,
+				// and has always been: `PATH` holding a `|` was this same
+				// bug long before $1 existed.
+				if (!expand_append(dst, &n, cap, mask, os64_getenv(name)))
+					fit = false;
 			}
 		}
 		else
 			dst[n++] = *src++;
 	}
 	dst[n] = 0;
+
+	// The main loop stops at cap - 1 as well as at end of source; anything
+	// left in `src` is a line that did not fit.
+	if (*src != '\0')
+		fit = false;
+	return fit;
 }
 
 // ── child lifecycle trace ───────────────────────────────────────────────────
@@ -1118,6 +1317,8 @@ static int strip_background(char *line)
 		n--;
 	if (n == 0 || line[n - 1] != '&')
 		return 0;
+	if (byte_is_expanded(&line[n - 1]))
+		return 0;               // substituted text, not an operator
 	if (n >= 2 && line[n - 2] != ' ' && line[n - 2] != '\t')
 		return 0;               // part of a token, not an operator
 	n--;                        // drop the '&' itself
@@ -1146,6 +1347,24 @@ static int extract_redirections(char *cargv[], char **inFile,
 	int w = 0;
 	for (int r = 0; cargv[r]; r++)
 	{
+		// A token is an OPERATOR only if the author typed every byte of it.
+		// `echo $1` with $1 = "> passwd" prints it, the way every shell since
+		// 1977 has.
+		//
+		// EVERY byte, and not just the first — checking only the first left
+		// two ways in, both found by re-reading this fix as its own reviewer
+		// (2026-08-23). `>$x` with $x = ">" is one token that husk would
+		// normally treat as a literal (its operators are token-exact, so
+		// `>foo` is an argument), and the substitution turned it into the
+		// APPEND operator: data creating syntax by completing it. And a
+		// GLOB result is data too — it comes from the filesystem, which is
+		// the outside world by another door — so a file innocently named ">"
+		// made `echo *` redirect into whatever filename sorted after it.
+		if (!token_is_typed(cargv[r]))
+		{
+			cargv[w++] = cargv[r];
+			continue;
+		}
 		if (str_eq(cargv[r], "<"))
 		{
 			if (!cargv[r + 1]) return -1;
@@ -1568,8 +1787,24 @@ static int run_expanded(char *expanded, int *last_status)
 // "felt more solid" — forty years of consensus arriving early.)
 static int run_segment(char *seg, int *last_status)
 {
-	char expanded[LINE_MAX + 512];  // headroom for expanded $CWD/$PATH values
-	expand_line(seg, expanded, sizeof(expanded), *last_status);
+	// STATIC, and deliberately so: s_expmask describes THIS buffer, and a
+	// stack frame that comes and goes would leave the mask describing an
+	// address that has since become somebody else's locals. One segment runs
+	// at a time (the `time` prefix re-enters run_expanded, never run_segment),
+	// so one buffer is all there ever is.
+	static char expanded[EXPANDED_MAX];   // headroom for expanded $CWD/$PATH values
+
+	if (!expand_line(seg, expanded, sizeof(expanded), *last_status, s_expmask))
+	{
+		// Refuse rather than run the part that fit. The prefix of an expanded
+		// line is a different command — the same reasoning that makes an
+		// over-long script line a refusal (line_overflowed).
+		os64_puts("husk: line too long after expansion - not run\n");
+		*last_status = 1;
+		return 0;
+	}
+	s_expbase = expanded;
+	s_explen  = (int)os64_strlen(expanded);
 
 	if (first_token_is(expanded, "time"))
 	{
@@ -1661,6 +1896,68 @@ static int run_line(char *line, int *last_status)
 // (Unix split .profile from .cshrc over exactly this; the env flows only
 // downward, so one variable is the whole mechanism.)
 
+// ── an over-long line is REFUSED, never half-run ────────────────────────────
+// os64_readline delivers a line longer than the buffer TRUNCATED, having
+// already consumed the tail (io.h — a deliberate anti-fgets rule: you never
+// get the severed tail served back to you as a line). For a file being READ
+// that is the right contract. For a file being EXECUTED it is not, because
+// the prefix is a DIFFERENT COMMAND from the one the author wrote: cut
+// `cp a b > log` at the wrong byte and it is still a perfectly runnable line
+// doing something else, and a line that loses its trailing `# comment` loses
+// the comment, not the command. The -c path has refused over-long lines since
+// the day it was written; the rc and scripts quietly ran the prefix.
+// (Codex review, 2026-08-22.)
+//
+// The mechanism is one spare byte: read into LINE_MAX + 1, and a stored length
+// of LINE_MAX means the line ran to at least LINE_MAX bytes — past husk's
+// stated limit of LINE_MAX - 1 either way — so it is refused out loud. A line
+// that fits never touches the extra byte.
+static bool line_overflowed(const char *line)
+{
+	int n = 0;
+	while (line[n] != '\0')
+		n++;
+	return n >= LINE_MAX;
+}
+
+// The other way a file of commands can end: not at its end. os64_readline
+// answers 1 (a line), 0 (end of input) or NEGATIVE (the read or the seek-back
+// under it failed) — three endings, of which only the middle one means the
+// file is finished. Treating the third as the second is how a script reports
+// success for work it never performed.
+static void report_read_failed(const char *what, const char *path,
+                               int lineNo, int64_t err)
+{
+	os64_puts("husk: ");
+	os64_puts(path);
+	os64_puts(": read failed after line ");
+	put_num((unsigned long)lineNo);
+	os64_puts(" (error ");
+	if (err < 0)
+	{
+		os64_puts("-");
+		put_num((unsigned long)(-err));
+	}
+	else
+		put_num((unsigned long)err);
+	os64_puts(") - ");
+	os64_puts(what);
+	os64_puts(" stopped\n");
+}
+
+static void report_line_too_long(const char *what, const char *path, int lineNo)
+{
+	os64_puts("husk: ");
+	os64_puts(path);
+	os64_puts(": line ");
+	put_num((unsigned long)lineNo);
+	os64_puts(" is longer than ");
+	put_num((unsigned long)(LINE_MAX - 1));
+	os64_puts(" characters - refusing to run part of it (");
+	os64_puts(what);
+	os64_puts(" stopped)\n");
+}
+
 static int run_rc(int *last_status)
 {
 	static const char *rc_paths[] = { "/home/husk.rc", "/etc/husk.rc", "/fat/husk.rc", "/husk.rc" };
@@ -1700,10 +1997,21 @@ static int run_rc(int *last_status)
 	// LINE_MAX exactly as the prompt would have. Comments and blank lines
 	// are filtered here — they are file syntax, not shell syntax (a typed
 	// '#' at the prompt still means a program named '#', honestly not found).
-	char line[LINE_MAX];
+	char line[LINE_MAX + 1];            // the spare byte — see line_overflowed
 	int exiting = 0;
-	while (!exiting && os64_readline(h, line, sizeof(line)) == 1)
+	int lineNo = 0;
+	int64_t readVerdict = 1;            // kept, not discarded — report_read_failed
+	while (!exiting && (readVerdict = os64_readline(h, line, sizeof(line))) == 1)
 	{
+		lineNo++;
+		if (line_overflowed(line))
+		{
+			// The rc is the machine's own startup file, so this stops the rc
+			// rather than the shell: whatever the file had already done
+			// stands, and husk still reaches its prompt to be repaired from.
+			report_line_too_long("rc", found, lineNo);
+			break;
+		}
 		const char *s = line;
 		while (*s == ' ' || *s == '\t')
 			s++;
@@ -1716,6 +2024,12 @@ static int run_rc(int *last_status)
 		exiting = run_line(line, last_status);
 	}
 	os64_close(h);
+
+	// Same three endings as a script (report_read_failed). The rc says so and
+	// husk carries on to its prompt — a machine whose startup file became
+	// unreadable is exactly a machine you want a prompt on.
+	if (readVerdict < 0)
+		report_read_failed("rc", found, lineNo, readVerdict);
 	return exiting;
 }
 
@@ -1776,11 +2090,94 @@ static int run_command_argument(const char *command)
 	return last_status;
 }
 
+// ── a script: a file of lines, with arguments ──────────────────────────────
+// `husk FILE [args...]` — the third SOURCE for run_line after the keyboard
+// and the rc, and the one the rc comment promised ("this same run_line fed
+// from a file"). Nobody types that spelling, though: the kernel does, when
+// a file whose first line is `#!/bin/husk` is spawned (elf_loader.h — the
+// loader rewrites the request to `/bin/husk FILE args...`). So `get cp`
+// works from the prompt because /bin/get says on line one who runs it, and
+// husk here receives its own path as $0 and `cp` as $1.
+//
+// Same policy as -c: no banner, no rc, no prompt, no job table, and the exit
+// status is the LAST LINE's — a script is a program and a program answers.
+// The `#!` line is skipped by the same test that skips an rc comment; a
+// script is an rc with arguments, which is what Thompson's sh scripts were
+// in 1973 before Bourne gave them $1.
+static int run_script(const char *path, char **params, int nparams)
+{
+	int h = (int)os64_open(path, "r");
+	if (h < 0)
+	{
+		os64_puts("husk: cannot open script ");
+		os64_puts(path);
+		os64_puts("\n");
+		return 2;
+	}
+
+	g_script_path = path;
+	g_params = params;
+	g_nparams = nparams;
+
+	os64_debug_log("husk: running a script");
+
+	// LINE_MAX + 1, and the extra byte is the whole point — see line_overflowed.
+	char line[LINE_MAX + 1];
+	int last_status = 0;
+	int exiting = 0;
+	int lineNo = 0;
+	// The readline verdict is KEPT, because 0 and -1 are different endings and
+	// only one of them is the end of the file. `== 1` alone read a failed disk
+	// read as "no more lines", so a script whose tail could not be read exited
+	// with the status of the last line that DID run — quite possibly 0, which
+	// is a script reporting success for work it never performed. (Codex
+	// review, 2026-08-22.) Loop exit via `exiting` leaves this at 1: the
+	// short-circuit means readline is not called on that pass.
+	int64_t readVerdict = 1;
+	while (!exiting && (readVerdict = os64_readline(h, line, sizeof(line))) == 1)
+	{
+		lineNo++;
+		if (line_overflowed(line))
+		{
+			// A script STOPS. It is a program, and a program that cannot
+			// read its own next instruction has no business guessing.
+			report_line_too_long("script", path, lineNo);
+			os64_close(h);
+			return 2;
+		}
+		const char *s = line;
+		while (*s == ' ' || *s == '\t')
+			s++;
+		if (*s == '\0' || *s == '#')
+			continue;                   // blank, comment — and the #! line itself
+		exiting = run_line(line, &last_status);   // `exit` ends the script
+	}
+	os64_close(h);
+
+	if (readVerdict < 0)
+	{
+		// A script that could not be READ did not succeed, whatever its last
+		// line happened to return. Say where it stopped: "it worked up to
+		// line 12" is the difference between a bad disk and a bad script.
+		report_read_failed("script", path, lineNo, readVerdict);
+		return 2;
+	}
+	return last_status;
+}
+
 // ── the shell ───────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv, char **envp)
 {
 	(void)envp;
+
+	// A first argument that is not an option is a SCRIPT, and everything
+	// after it belongs to the script — so `husk /bin/get -v cp` hands `-v`
+	// to the script, not to this parser. That is sh(1)'s rule (the file
+	// stops option parsing), and it is checked by hand here for exactly that
+	// reason: the args parser would otherwise claim `-v` as husk's own.
+	if (argc >= 2 && argv[1] != NULL && argv[1][0] != '-')
+		return run_script(argv[1], argv + 2, argc - 2);
 
 	// The only flag husk has, and the only one it should ever have:
 	// everything else this shell does, it does because you typed it.
@@ -1796,13 +2193,13 @@ int main(int argc, char **argv, char **envp)
 	               "then prompts. With -c it runs one line and exits with that "
 	               "line's status — which is how a program borrows the shell's "
 	               "language without borrowing its parser.";
-	// NO positionals: `husk script.rc` is a door that is closed, and closed
-	// LOUDLY (parse prints the help) rather than by ignoring the argument.
-	// Running a named script is a real future feature, and when it arrives it
-	// will be this same run_line fed from a file — exactly as the rc already
-	// is. The kernel launches husk with argc 0 and argv NULL, which walks
-	// straight out of the parse loop on the first index check.
-	int32_t parsed = os64_args_parse(&args, "husk [-c \"command line\"]", NULL, 0);
+	// No positionals HERE: a script operand was taken above, before this
+	// parser ever saw the line (the door the old comment here said was
+	// closed opened on 2026-08-22, as that comment predicted: "this same
+	// run_line fed from a file"). The kernel launches husk with argc 0 and
+	// argv NULL, which walks straight out of the parse loop on the first
+	// index check.
+	int32_t parsed = os64_args_parse(&args, "husk [-c \"command line\"] | husk FILE [args...]", NULL, 0);
 	if (parsed == OS64_ARG_HELP) return 0;
 	if (parsed < 0) return 2;
 
