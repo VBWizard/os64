@@ -39,6 +39,15 @@ extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
 extern uintptr_t kKernelPML4;
 
+// The GDB symbol-autoload notch, DEFINED further down in this file — declared
+// here because it is now used above its definition (the shared-library
+// announcement in elf_resolve_dynamic_dependencies). Declarations belong at
+// the top of the file, per the house rule in CLAUDE.md; see the long comment
+// at the definition for what this hook is and why it exists.
+extern char kDebugTaskLoadedPath[TASK_MAX_PATH_LEN];
+extern uint64_t kDebugTaskLoadedBias;
+void debug_task_loaded(void);
+
 // (kForegroundTask lived here 2026-07..2026-08-08. It is tty_t.fgTask now —
 // one per terminal — and NULL still means "nobody owns this console yet",
 // with Ctrl+C staying an ordinary data byte there. See task.h and tty.h.)
@@ -602,11 +611,16 @@ static bool task_frame_is_shared_object_cache(vma_t *vma, uintptr_t va, uintptr_
 		return false;
 
 	shared_object_t *so = (shared_object_t *)vma->file;
-	if (so->page_phys == NULL || va < so->load_bias)
+	if (so->page_phys == NULL)
 		return false;
 
-	size_t idx = (va - so->load_bias) / PAGE_SIZE;
-	if (idx >= so->total_pages)
+	// shared_object_page_index, NOT hand-rolled arithmetic: this function is
+	// where getting the index wrong is silent and lethal — a false "not the
+	// cache's" frees a frame the registry still points at, and the next task
+	// to map that page gets whatever landed there afterwards. See the comment
+	// on shared_object_page_va for the day that actually happened.
+	size_t idx = 0;
+	if (!shared_object_page_index(so, va, &idx))
 		return false;
 
 	return so->page_phys[idx] == phys;
@@ -1750,12 +1764,25 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 // shared_objects list — the dependency closure below is a graph, not a
 // tree, so the same object can be reached twice (diamond dependencies, or
 // a dependency cycle) and must only be mapped once per task.
-static bool task_map_shared_object(task_t *task, shared_object_t *so)
+// Returns TASK_MAP_SO_MAPPED if it mapped `so` into this task,
+// TASK_MAP_SO_ALREADY if `so` was already in this task's list (the closure is
+// a graph, not a tree — diamonds and cycles reach the same object twice), or
+// TASK_MAP_SO_FAILED if an allocation failed. The three-way answer replaced a
+// bool + two panics on 2026-08-22: with userland dynamically linked, "we ran
+// out of memory building a task" must fail the spawn, not the machine.
+typedef enum {
+	TASK_MAP_SO_FAILED = -1,
+	TASK_MAP_SO_ALREADY = 0,
+	TASK_MAP_SO_MAPPED = 1,
+} task_map_so_result_t;
+
+static task_map_so_result_t task_map_shared_object(task_t *task, shared_object_t *so)
 {
 	if (task->shared_objects == NULL) {
 		task->shared_objects = kmalloc(sizeof(dlist_t));
 		if (task->shared_objects == NULL) {
-			panic("task_map_shared_object: failed to allocate shared_objects list for %s", so->path);
+			printd(DEBUG_TASK, "task_map_shared_object: out of memory allocating shared_objects list for %s\n", so->path);
+			return TASK_MAP_SO_FAILED;
 		}
 		dlist_init(task->shared_objects);
 	}
@@ -1764,26 +1791,31 @@ static bool task_map_shared_object(task_t *task, shared_object_t *so)
 	// walk below — checked BEFORE creating VMAs so a revisit maps nothing.)
 	for (dlist_node_t *node = task->shared_objects->head; node != NULL; node = node->next) {
 		if ((shared_object_t *)node->data == so) {
-			return false;
+			return TASK_MAP_SO_ALREADY;
 		}
 	}
 
 	for (size_t i = 0; i < so->seg_count; i++) {
 		elf_segment_range_t *seg = &so->segs[i];
+		// seg->vaddr_off is the segment's page-aligned LINK-TIME address, so
+		// this is right for both kinds of image: a library adds its window
+		// slot to a near-zero offset, a non-PIE executable adds zero to its
+		// own absolute link address.
 		uintptr_t virt = so->load_bias + seg->vaddr_off;
 		bool writable = (seg->prot & PROT_WRITE) != 0;
 
 		vma_t *vma = vma_create(virt, virt + seg->pages * PAGE_SIZE, seg->prot,
 		                         MAP_SHARED_LIBRARY, (void *)so, 0);
 		if (vma == NULL) {
-			panic("task_map_shared_object: failed to create VMA for %s segment %lu", so->path, i);
+			printd(DEBUG_TASK, "task_map_shared_object: out of memory creating VMA for %s segment %lu\n", so->path, i);
+			return TASK_MAP_SO_FAILED;
 		}
 		vma->cow = writable;
 		vma_add(task, vma);
 	}
 
 	dlist_add(task->shared_objects, so);
-	return true;
+	return TASK_MAP_SO_MAPPED;
 }
 
 // Maps `so` and its ENTIRE dependency closure (so->deps, recursively) into
@@ -1793,14 +1825,21 @@ static bool task_map_shared_object(task_t *task, shared_object_t *so)
 // owning object's dependency closure, so every task sharing that page must
 // have that closure mapped. task_map_shared_object's already-mapped check
 // terminates diamonds and cycles.
-static void task_map_shared_object_closure(task_t *task, shared_object_t *so)
+static bool task_map_shared_object_closure(task_t *task, shared_object_t *so)
 {
-	if (!task_map_shared_object(task, so)) {
-		return;  // already mapped — its deps were mapped along with it
+	task_map_so_result_t mapped = task_map_shared_object(task, so);
+	if (mapped == TASK_MAP_SO_FAILED) {
+		return false;
+	}
+	if (mapped == TASK_MAP_SO_ALREADY) {
+		return true;  // already mapped — its deps were mapped along with it
 	}
 	for (size_t i = 0; i < so->dep_count; i++) {
-		task_map_shared_object_closure(task, so->deps[i]);
+		if (!task_map_shared_object_closure(task, so->deps[i])) {
+			return false;
+		}
 	}
+	return true;
 }
 
 // Loads a dynamically-linked executable: maps the executable itself and
@@ -1813,29 +1852,79 @@ static void task_map_shared_object_closure(task_t *task, shared_object_t *so)
 // object's own dependency scope. Mutually exclusive with
 // elf_load_from_path's static path — task_create picks one or the other up
 // front via elf_is_dynamic().
-static void elf_resolve_dynamic_dependencies(task_t *task, const char *path)
+static bool elf_resolve_dynamic_dependencies(task_t *task, const char *path)
 {
-	shared_object_t *main_so = shared_object_load_or_get(path);
+	// shared_object_load_executable, not ..._load_or_get: this is the MAIN
+	// image, so ET_EXEC is allowed (os64's apps are non-PIE, linked at fixed
+	// per-app bases — see shared_object.h for the whole argument). A library
+	// reached from here through DT_NEEDED still has to be ET_DYN.
+	shared_object_t *main_so = shared_object_load_executable(path);
 	if (main_so == NULL) {
-		// Covers open/parse/allocation failure AND a non-ET_DYN image — a
-		// dynamically-linked non-PIE (ET_EXEC) binary would need e_entry
-		// and its p_vaddr values treated as already-absolute rather than
-		// load_bias-relative, which the shared fixed-address window can't
-		// express; shared_object_load_or_get rejects those for every image
-		// (main executable and libraries alike).
-		panic("elf_resolve_dynamic_dependencies: failed to load %s (missing, malformed, or not ET_DYN)", path);
+		// Covers a missing/unreadable file, a malformed ELF, an image that is
+		// neither ET_DYN nor ET_EXEC, an unloadable DT_NEEDED dependency, and
+		// allocation failure. This USED TO PANIC, and DEBTS said so plainly:
+		// "ring-3-reachable if a dynamically-linked program with a bad .so is
+		// ever spawned". Userland went dynamic on 2026-08-22, so the debt came
+		// due the same day — a program whose library is missing now simply
+		// fails to start, exactly like the typo case elf_can_load already
+		// handled for static binaries.
+		printd(DEBUG_TASK, "task_create: cannot load dynamic image '%s' — not spawning\n", path);
+		return false;
 	}
 
-	task_map_shared_object_closure(task, main_so);
+	if (!task_map_shared_object_closure(task, main_so)) {
+		printd(DEBUG_TASK, "task_create: cannot map '%s' and its libraries — not spawning\n", path);
+		return false;
+	}
+
+	// TELL AN ATTACHED DEBUGGER ABOUT THE LIBRARIES, not just the program.
+	//
+	// The task-level announcement further down (debug_task_loaded, at the end
+	// of task_create) names the EXECUTABLE only. That was the whole story
+	// while every binary was static; the moment libos64 became a .so it meant
+	// GDB had symbols for `cp` and none whatsoever for the library `cp` spends
+	// most of its time in — so `step` at a library call found no line info and
+	// silently behaved like `next`. Chris hit that within a day of the .so
+	// landing, trying to step into os64_read from cp.c, which is of course the
+	// first thing anyone does in a brand-new shared-library environment.
+	//
+	// Announcing here rather than only in the generated app_bases.gdb matters
+	// because the two debuggers take different routes: CLI gdb sources that
+	// generated file from ./.gdbinit, but VS CODE DOES NOT — it sources only
+	// utility/os64_symbols.gdb, whose autoloader hooks this notification. A
+	// fix that lived solely in the generated file would work in the terminal
+	// and leave the editor exactly as broken as before.
+	//
+	// The whole closure is announced (main image included). The autoloader
+	// dedupes on (file, bias), so repeats across tasks cost nothing, and every
+	// future library is picked up with no build or config change at all.
+	if (task->shared_objects != NULL) {
+		for (dlist_node_t *node = task->shared_objects->head; node != NULL; node = node->next) {
+			shared_object_t *so = (shared_object_t *)node->data;
+			if (so == NULL)
+				continue;
+			strncpy(kDebugTaskLoadedPath, so->path, TASK_MAX_PATH_LEN);
+			kDebugTaskLoadedPath[TASK_MAX_PATH_LEN - 1] = '\0';
+			// A prelinked library carries its own absolute addresses, so bias
+			// 0 is correct and the autoloader omits `-o` — exactly what a
+			// non-PIE app already does. A bump-placed ET_DYN reports its real
+			// bias and gets `-o <bias>`.
+			kDebugTaskLoadedBias = so->load_bias;
+			debug_task_loaded();
+		}
+	}
 
 	task->elf = main_so->image;
-	// ET_DYN: e_entry is load_bias-relative, same as every other address in
-	// the image (unlike ET_EXEC, where it would already be absolute).
+	// Uniform for both image kinds: an ET_DYN image's e_entry is
+	// load_bias-relative and its bias is its window slot; an ET_EXEC image's
+	// e_entry is already absolute and its bias is 0. One expression, because
+	// load_bias carries the difference.
 	task->loadBias = main_so->load_bias;
 	task->entryPoint = main_so->load_bias + main_so->image->ehdr.e_entry;
 	if (task->threads != NULL) {
 		task->threads->regs.RIP = task->entryPoint;
 	}
+	return true;
 }
 
 // GDB symbol-autoload notch.  utility/os64_symbols.gdb plants a SILENT
@@ -2086,7 +2175,14 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask && !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
 	{
 		if (elf_is_dynamic(newTask->path)) {
-			elf_resolve_dynamic_dependencies(newTask, newTask->path);
+			if (!elf_resolve_dynamic_dependencies(newTask, newTask->path)) {
+				// Same unwind as the static failure below, for the same
+				// reasons — a missing library or a corrupt .so is "no", not a
+				// kernel error (DEBTS, paid 2026-08-22). The same
+				// mid-construction leak applies and is the same booked row.
+				task_table_bracket_close();
+				return NULL;
+			}
 		} else if (elf_load_from_path(newTask, newTask->path) != 0) {
 			// The header already validated (elf_can_load, above), so reaching
 			// here means the load failed MID-WAY — a truncated image, a bad

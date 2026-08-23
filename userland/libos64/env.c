@@ -1,9 +1,22 @@
 // env.c — libos64 environment access (os64_getenv, declared in os64/proc.h).
 //
-// __os64_env is stored by launch.S before main() runs: the kernel enters the
-// program with RDX = the env block's task-local mapping (TASK_ENV_VIRT), and
-// launch writes that register here so the library can answer os64_getenv()
-// from anywhere without every program threading envp through its call tree.
+// The kernel enters a program with RDX = the env block's task-local mapping
+// (TASK_ENV_VIRT); launch hands that pointer to os64_runtime_init, which
+// publishes it here, so the library can answer os64_getenv() from anywhere
+// without every program threading envp through its call tree.
+//
+// THE POINTER USED TO BE A GLOBAL launch.S WROTE DIRECTLY (`lea rax, [rip +
+// __os64_env]; mov [rax], rdx`), which was fine while libos64 was statically
+// linked into every app. It stopped being fine on 2026-08-22, when libos64
+// became a shared object: launch is part of the EXECUTABLE and the variable
+// would have been in the LIBRARY, so the linker would have had to emit an
+// R_X86_64_COPY relocation — the ugliest corner of the non-PIE dynamic
+// linking story, where the executable gets its own copy of a library's
+// variable and the library's every reference has to be redirected to it.
+// A one-word function call makes the whole class of problem disappear, and
+// it happens to be the better design anyway: publishing is an ACT with an
+// obvious place in the startup order, not a poke into another module's
+// storage. libos64 exports functions, not variables — see LIBOS64.md.
 //
 // Pure computation over the read-only ABI block (abi/include/os64/env.h) —
 // no syscalls, no allocation. Like fmt.c and args.c, that makes it
@@ -11,12 +24,18 @@
 
 #include "os64/env.h"
 #include "os64/proc.h"
+#include "os64/runtime.h"
 #include "os64/str.h"
 
-// Written exactly once, by launch.S, before main. NULL means the kernel
-// passed no environment (possible for bare fixtures) — getenv then answers
-// NULL for everything, which is the honest answer.
-const os64_env_block_t *__os64_env;
+// Written exactly once, by os64_env_publish, before main. NULL means the
+// kernel passed no environment (possible for bare fixtures) — getenv then
+// answers NULL for everything, which is the honest answer.
+static const os64_env_block_t *__os64_env;
+
+void os64_env_publish(const os64_env_block_t *env)
+{
+	__os64_env = env;
+}
 
 const char *os64_getenv(const char *key)
 {

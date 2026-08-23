@@ -175,6 +175,17 @@ override IMAGE_NAME := os64_kernel
 USERLAND_APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c)))))
 USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
 
+# The shared libraries every one of those apps now needs to run at all
+# (2026-08-22). This is not optional cargo: since libos64 became a .so, an
+# image with /bin but no /lib/libos64.so boots to a husk that cannot start —
+# and cannot start anything else either. It goes on EVERY volume that carries
+# a /bin, which today means the ext2 root AND the FAT lifeboat. The lifeboat
+# gets its own copy on its own partition on purpose: the whole point of a
+# lifeboat is that it does not share machinery with the thing it exists to
+# repair, so a stray write that eats the root's library leaves the lifeboat's
+# untouched.
+USERLAND_LIBS := userland/bin/libos64.so
+
 # Kernel-side ring-3 test fixtures that also ride the image.
 KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
                      syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test hog env_fill glutton libtest.so)
@@ -193,7 +204,7 @@ all-hdd: $(IMAGE_NAME).hdd
 # (new mtime -> the disk image and ISO rebuild) or leaves it alone (old mtime ->
 # they don't). That is what makes `make run` cheap when nothing changed.
 $(KERNEL_BIN) $(KERNEL_FIXTURES): kernel ;
-$(USERLAND_BINS): userland ;
+$(USERLAND_BINS) $(USERLAND_LIBS): userland ;
 
 # Local qemu: ~/src/qemu-9.2.0-rc0/build/
 .PHONY: run
@@ -348,7 +359,7 @@ userland:
 # ext2-ROOT boot (see the "/QEMU Boot (ext2 root)" Limine entry) finds the
 # same programs a FAT boot does. Rebuilds when the generator OR any binary
 # that rides it changes.
-$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf GNUmakefile
+$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -372,11 +383,14 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(KERNEL_FIXTURE
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
 	# FAT — the one file that must never lie about which filesystem it's on).
 	printf 'Ima ext2 partition on the NVME disk\n' > $(EXT2_STAGING)/partition_info.txt
-	printf 'cd /lib\nwrite kernel/bin/libtest.so libtest.so\ncd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
+	# /lib: libos64.so (what every app in /bin above is dynamically linked
+	# against — without it nothing on this volume runs) and libtest.so (the
+	# dynamic-linking regression fixture).
+	printf 'cd /lib\nwrite userland/bin/libos64.so libos64.so\nwrite kernel/bin/libtest.so libtest.so\ncd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	debugfs -w -f $(EXT2_STAGING)/debugfs_bins.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
 	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps)"
 
-$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/partition_info.txt etc/husk.rc limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS) kernel/test/partition_info.txt etc/husk.rc limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -408,6 +422,10 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) kernel/test/par
 	# Every discovered userland app, automatically — no per-app line to forget.
 	$(foreach b,$(USERLAND_BINS),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(b) ::/bin/$(notdir $(b));)
+	# The lifeboat's own /lib. Its /bin is dynamically linked exactly like
+	# root's, so this file is what makes the lifeboat a working system rather
+	# than a partition full of programs that cannot start.
+	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) userland/bin/libos64.so ::/lib/libos64.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 	# husk's startup script. It rides the FAT partition rather than root

@@ -40,10 +40,17 @@ typedef uintptr_t (*elf_symbol_resolver_t)(const char *name, void *ctx);
 /// support — every relocation table is processed once, per page, at first
 /// touch (see shared_object.c).
 ///
+/// symtab_count/strtab_size are the SIZES of those two tables, and they are
+/// not decoration: this is a linker running in ring 0 over a file on disk, so
+/// a symbol index or an st_name offset out of range is a read of arbitrary
+/// kernel memory driven by the contents of an ELF file. Both are checked.
+///
 /// Returns 0 on success (*out_value filled in), -1 if a symbol couldn't be
-/// resolved or an unsupported relocation type was encountered.
+/// resolved, an index was out of range, or an unsupported relocation type was
+/// encountered.
 int elf_relocation_value(const Elf64_Rela *rel, uintptr_t value_base,
-                         const Elf64_Sym *symtab, const char *strtab,
+                         const Elf64_Sym *symtab, size_t symtab_count,
+                         const char *strtab, size_t strtab_size,
                          elf_symbol_resolver_t resolver, void *ctx,
                          uintptr_t *out_value);
 

@@ -925,8 +925,13 @@ static bool test_dynamic_linking(void)
     // The physical-sharing walk, also while the tables are still standing.
     uintptr_t code_phys_a = 0, code_phys_b = 0;
     if (so != NULL) {
-        code_phys_a = paging_walk_paging_table((pt_entry_t *)task_a->pml4v, so->load_bias);
-        code_phys_b = paging_walk_paging_table((pt_entry_t *)task_b->pml4v, so->load_bias);
+        // Page 0's RUNTIME address — shared_object_page_va, not load_bias by
+        // itself. Identical for a library (vaddr_base is 0), and the two part
+        // company for an executable, so use the helper everywhere rather than
+        // leave a spelling here that is only accidentally right.
+        uintptr_t lib_page0 = shared_object_page_va(so, 0);
+        code_phys_a = paging_walk_paging_table((pt_entry_t *)task_a->pml4v, lib_page0);
+        code_phys_b = paging_walk_paging_table((pt_entry_t *)task_b->pml4v, lib_page0);
     }
 
     test_release(task_a);

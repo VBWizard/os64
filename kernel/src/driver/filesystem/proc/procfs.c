@@ -43,6 +43,7 @@
 #include "handle.h"
 #include "memory/vma.h"
 #include "memory/mmap.h"   // MAP_ANONYMOUS — maps tells a file-backed VMA from an anonymous one
+#include "shared_object.h" // MAP_SHARED_LIBRARY VMAs point at one of these, not a vfs_file_t
 #include "memory/paging.h"
 #include "memory/allocator.h"   // allocator_copy_from_task_va — the fault-proof task read
 #include "CONFIG.h"
@@ -638,6 +639,26 @@ typedef struct
 // unmatched one prints its local path bare rather than nothing.
 static void proc_map_file_path(const vma_t *v, char *out, size_t cap)
 {
+	// MAP_SHARED_LIBRARY REPURPOSES vma->file: it holds a shared_object_t*,
+	// not a vfs_file_t* (memory/vma.h says so, and a VMA is only ever one or
+	// the other). Reading it as a vfs_file_t here was a kernel #GP waiting for
+	// its first customer, and on 2026-08-22 — the day userland started linking
+	// against a real libos64.so — it got one: `cat /proc/self/maps` faulted
+	// instantly. The failure was almost beautiful. shared_object_t begins with
+	// an INLINE `char path[]` array, so reading f->f_path pulled eight bytes
+	// out of the middle of the library's own pathname and used them as a
+	// pointer; the exception report showed RAX = 0x006f732e3436736f, which is
+	// "os64.so" — the kernel dereferencing the name of the file it was trying
+	// to name. Take the path from the right union arm and the object names
+	// itself for free, mount prefix and all, because a shared object's path is
+	// already stored canonically.
+	if (v->flags & MAP_SHARED_LIBRARY)
+	{
+		const shared_object_t *so = (const shared_object_t *)v->file;
+		snprintf(out, cap, "%s", (so != NULL && so->path[0] != '\0') ? so->path : "?");
+		return;
+	}
+
 	const vfs_file_t *f = (const vfs_file_t *)v->file;
 	const char *local = (f != NULL && f->f_path != NULL) ? f->f_path : "?";
 	const char *prefix = "";

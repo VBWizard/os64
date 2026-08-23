@@ -255,6 +255,61 @@ make -C kernel test-elf
 
 ### ELF Loading
 
+**Shared libraries (`kernel/src/shared_object.c`) — THE KERNEL IS THE DYNAMIC
+LINKER.** There is no `ld.so` and no `PT_INTERP`; `app.ld` discards `.interp`
+outright. Since 2026-08-22 the entire userland is dynamically linked against
+`/lib/libos64.so` (13MB of `userland/bin` → 1.8MB; one 45KB resident copy of
+the library serves every process). How it fits together:
+
+- **The library is PIC, the apps are NOT.** Apps stay non-PIE `ET_EXEC` at the
+  fixed per-app bases `userland/tools/app_bases.py` assigns, gaining only a
+  `DT_NEEDED`. That keeps the debugger's `add-symbol-file` map working and
+  costs no codegen churn. `shared_object_load_executable()` accepts ET_EXEC
+  (load_bias 0); `shared_object_load_or_get()` — the library path — requires
+  ET_DYN. **A dynamically-linked EXECUTABLE is in the registry too**, so two
+  concurrent runs of one program share its text.
+- **Two bases, and mixing them up is the classic bug.** `load_bias` (0 for an
+  app, a window slot for a library) plus `vaddr_base` (the app's link address,
+  0 for a library). NEVER open-code the sum: use `shared_object_page_va()` for
+  a runtime address, `shared_object_page_link_vaddr()` for a link-time one,
+  `shared_object_page_index()` for the inverse. Three sites did it by hand and
+  the one that was missed freed live shared pages at task burial.
+- **`vma->file` is a UNION discriminated by `MAP_SHARED_LIBRARY`** — a
+  `shared_object_t*` when set, a `vfs_file_t*` otherwise. Check the flag
+  before dereferencing; `/proc/<pid>/maps` didn't and #GP'd in the kernel.
+- **Address map:** the shared-library window is `TASK_SHLIB_VIRT_BASE` =
+  0x7F0000000000 (512GB, carved off the top of the heap range). It used to sit
+  at 0x50000000, *inside* the window app_bases.py hands out — nothing had
+  collided only because nothing dynamic had ever loaded. The window has two
+  halves: a 4GB **PRELINK region** (64 slots × 64MB) and a bump region above
+  it.
+- **LIBRARIES ARE PRELINKED — the build picks the address, not the kernel.**
+  `app_bases.py --libs` hashes the library's name to a slot exactly like it
+  does for apps, `link/lib.ld` links the `.so` there, and the kernel honours a
+  non-zero `vaddr_base` (load_bias 0, the same path a non-PIE executable
+  takes) rather than choosing one. **The reason is the debugger:** the bump
+  allocator placed libraries in LOAD ORDER, so the address was stable only by
+  accident and unknowable to the build — GDB had no symbols there and `step`
+  into any library call silently became `next`. Symbols now reach the debugger
+  by BOTH routes, which is necessary because **CLI gdb and VS Code do not read
+  the same files**: `.gdbinit` sources the generated `app_bases.gdb` (which now
+  carries an `add-symbol-file` line for the `.so`), while VS Code sources only
+  `utility/os64_symbols.gdb`, whose autoloader hooks `debug_task_loaded` — so
+  the kernel announces every shared object in a task's closure through that
+  hook (`elf_resolve_dynamic_dependencies`). Fixing only the generated file
+  would work in the terminal and leave the editor broken. Two tripwires guard
+  the placement: a
+  prelinked base outside the prelink region is refused by name, and so is one
+  that overlaps an already-loaded object (a stale `.so` from an older build).
+  The bump allocator still serves anything arriving without a base — PIE
+  executables, hand-built `.so`s.
+- **`/sys/shlib` reports every loaded object** — base, resident pages,
+  refcount, dependency edges. Read it FIRST when linking looks wrong; it is
+  also where an `ldd` would get its data.
+- Deliberately absent: lazy PLT binding, unloading, TLS/IFUNC/init_array,
+  `RPATH`/search paths (`DT_NEEDED` name → `/lib/<name>`, full stop). See
+  DEBTS § Shared libraries.
+
 **ELF Loader (`kernel/src/elf_loader.c`):**
 - Loads ELF64 binaries from VFS
 - Supports program headers (PT_LOAD segments)

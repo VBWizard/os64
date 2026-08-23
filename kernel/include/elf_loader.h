@@ -91,16 +91,25 @@ int elf_parse_image(vfs_file_t *file, elf_image_t **out_image,
 /// PT_LOAD segment, with no I/O — see elf_loader.c for how shared_object.c
 /// uses this to size a lazily-populated per-page physical cache instead of
 /// loading the whole image up front.
+///
+/// *out_vaddr_base is the page-aligned LOWEST PT_LOAD p_vaddr, and the page
+/// span is measured from there rather than from vaddr 0. That distinction is
+/// invisible for an ET_DYN image (whose vaddrs start at 0 anyway) and load-
+/// bearing for an ET_EXEC one: a non-PIE app linked at 0x68400000 measured
+/// from zero would claim a 1.7GB span and demand a 3.4MB page-cache array for
+/// an image of forty kilobytes.
 int elf_compute_segment_ranges(const Elf64_Phdr *phdrs, Elf64_Half phnum,
+                                Elf64_Addr *out_vaddr_base,
                                 size_t *out_total_pages,
                                 elf_segment_range_t *out_segs, size_t max_segs, size_t *out_seg_count);
 
-/// @brief Read one page's worth of file content (page_idx is a global page
-/// index into the image's own vaddr space) into an already-zeroed `dest`
-/// buffer. Called lazily, from the page-fault path, the first time any task
-/// touches a given page of a dynamically-linked image.
+/// @brief Read one page's worth of file content — `page_vaddr` is the page's
+/// own LINK-TIME virtual address (not a load-biased runtime address, and not
+/// an index) — into an already-zeroed `dest` buffer. Called lazily, from the
+/// page-fault path, the first time any task touches a given page of a
+/// dynamically-linked image.
 bool elf_read_page(vfs_file_t *file, const Elf64_Phdr *phdrs, Elf64_Half phnum,
-                    size_t page_idx, void *dest);
+                    Elf64_Addr page_vaddr, void *dest);
 
 /// @brief Populate task VMAs and entry point from an open ELF file.
 int elf_load_from_file(task_t *task, vfs_file_t *file);

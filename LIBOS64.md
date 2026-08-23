@@ -23,10 +23,29 @@ and ABI.md's userland plan).
 
 ## libos64 is a SHARED object (the foundational fact)
 
-os64 already has the dynamic-linking machinery — `kernel/src/shared_object.c`
-+ `elf_loader.c`'s PT_DYNAMIC/DT_* walk, regression-tested by
-`kernel/test/shlib/libtest.so`. libos64 is built as a `.so` and loaded that
-way, exactly as libChrisOS was. The consequences ARE the design:
+**REALIZED 2026-08-22.** This section was a design intention for six weeks;
+it is now a description. `/lib/libos64.so` exists, all 64 apps carry a
+`DT_NEEDED` on it, and the whole userland runs against one shared copy.
+
+What it actually cost and bought, measured on the day:
+
+| | Before | After |
+|---|---|---|
+| `userland/bin` on disk | 13MB | 1.8MB |
+| `hello` | 197KB | 16KB |
+| `ls` | 210KB | 22KB |
+| `husk` | 237KB | 52KB |
+| libos64 in RAM, whole system | one private copy per running program | **45KB, once** (11 resident pages, `refs: 5`) |
+
+`/sys/shlib` reports all of it live — every loaded object, its base, its
+resident pages, its refcount, its dependency edges. Read that first when
+something about linking looks wrong.
+
+The machinery it rides was already there and already tested —
+`kernel/src/shared_object.c` + `elf_loader.c`'s PT_DYNAMIC/DT_* walk,
+regression-tested by `kernel/test/shlib/libtest.so`. Which was the whole
+point: os64 had exactly one shared library, and one proves capability. The
+consequences ARE the design:
 
 1. **One copy, shared.** The loader maps libos64's read-only code pages once
    and shares them across every task that uses it. Loading it a second time
@@ -37,19 +56,34 @@ way, exactly as libChrisOS was. The consequences ARE the design:
    global is shared between tasks — it isn't. Never assume it's fresh per
    *thread* either — CoW is per address space, so threads in one task DO
    share it.** (This is why thread-safety, below, is a first-class concern.)
-3. **Internal calls bypass the PLT via hidden aliases.** When libos64 calls
-   its own functions, those calls must NOT go through the PLT — it's slower
-   and, worse, interposable (an app's rogue `strlen` could hijack the
-   library's own use) and, in a hand-rolled loader, the lazy-binding
-   resolver path is exactly where things crash (see the failure fingerprint
-   below). libChrisOS solved this by hand: every function existed twice,
-   `strcmpI` (hidden impl) + `strcmp` (visible wrapper). **We keep the
-   intent and drop the duplication:** build with `-fvisibility=hidden`,
-   mark the public API `__attribute__((visibility("default")))`, and use a
-   `LIBOS64_HIDDEN(name)` macro (the glibc `hidden_proto`/`hidden_def`
-   mechanism — an aliased hidden symbol) so ONE written function yields both
-   the exported symbol AND a PLT-free internal alias. No `I` twins, no
-   2×-source tax, same benefit libChrisOS earned the hard way.
+3. **Internal calls bypass the PLT — via `-Bsymbolic-functions`, one linker
+   flag.** When libos64 calls its own functions those calls must NOT go
+   through the PLT: it's slower, it's interposable (an app's rogue `strlen`
+   could hijack the library's own use), and in a hand-rolled loader the
+   lazy-binding resolver path is exactly where things crash. libChrisOS
+   solved it by hand — every function existed twice, `strcmpI` (hidden impl)
+   + `strcmp` (visible wrapper).
+
+   This file used to plan the glibc answer: `-fvisibility=hidden` plus a
+   `LIBOS64_HIDDEN(name)` alias macro on every public function. **We didn't
+   need it.** `ld -Bsymbolic-functions` binds the library's references to its
+   own definitions at LINK time, which is the entire benefit with no source
+   changes at all — measured on the first build: **libos64.so has 85
+   RELATIVE + 6 GLOB_DAT relocations and ZERO JUMP_SLOT**, i.e. not one
+   intra-library call goes through a PLT. glibc needs the macro machinery
+   because it must keep *some* symbols interposable (malloc, above all).
+   os64 has no interposition story and wants none, so the blunt flag is
+   strictly better than the careful mechanism.
+
+   A second reason the old hazard is gone entirely: **os64 has no lazy
+   binding to crash in.** Every relocation on a page is resolved when that
+   page is first touched, so there is no `_dl_runtime_resolve` equivalent
+   anywhere in the system.
+
+   (`-fvisibility=hidden` is still worth doing someday, for a different
+   reason: it would shrink the exported symbol table, which the kernel's
+   resolver LINEAR-SCANS. 158 exports is nothing; a few thousand would not
+   be. Booked in DEBTS, not urgent.)
 
 ## Header module map
 
@@ -157,12 +191,65 @@ biggest behavioral departure from the ancestor.
 
 ## Failure fingerprints (symptom → cause)
 
-- **Crash/hang every time the library calls its OWN function (esp. early, or
-  the first call to a given function):** the internal call is going through
-  the PLT into the lazy-binding resolver instead of a hidden alias — the
-  historical libChrisOS crash, fixed there by the `I` twins and here by
-  `LIBOS64_HIDDEN`. If a new libos64 internal call regresses, check it
-  resolved to the hidden alias, not the exported PLT stub.
+- **Crash/hang every time the library calls its OWN function:** an internal
+  call went through the PLT — the historical libChrisOS crash, fixed there by
+  the `I` twins and here by `-Bsymbolic-functions`. Check with
+  `readelf -rW bin/libos64.so | grep JUMP_SLOT`: the correct answer is
+  *nothing*. If that flag is ever dropped from `LIBOS64_LDFLAGS`, this comes
+  back.
+- **A breakpoint INSIDE a library function is hit, but `step` at the call site
+  in the app steps OVER it** (and only "works" when a breakpoint happens to sit
+  in the callee): the app has no `.plt` SECTION. `foo@plt` symbols are not in
+  the file — BFD synthesizes them, and it finds the PLT **by section name**
+  (`.plt`, `.plt.sec`, `.plt.got`). Fold the stubs into `.text` (as app.ld
+  first did) and the synthetic symbols silently cease to exist, so GDB sees the
+  stub as anonymous `.text` with no line info and none of the markings that say
+  "trampoline — follow it through"; its rule for stepping into code with no
+  line info is to step back out. Check with
+  `objdump -d bin/<app> | grep @plt` — silence means broken. THE GENERAL
+  LESSON, learned twice in one day: **ld and BFD look up the special ELF
+  sections by their canonical names.** Any output section you invent instead
+  loses machinery, and never with an error.
+- **A dynamically-linked binary builds clean and has no `.dynamic` section
+  at all** (`readelf -d` says "There is no dynamic section in this file", and
+  undefined library symbols are left undefined with no complaint from ld):
+  the link script folded the dynamic sections into other output sections by
+  pattern (`*(.dynsym)` inside `.rodata`, etc.). ld places those
+  linker-created sections itself and wants them as output sections under
+  their own canonical names — anything else and they silently evaporate.
+  Cost an hour on 2026-08-22; both `link/app.ld` and `link/lib.ld` carry the
+  warning now.
+- **An app faults at its very first instruction (#UD at the entry point), and
+  only on the SECOND run of that program:** a shared-object cache page was
+  freed at burial and handed to someone else while the registry still pointed
+  at it — the next run got a cache hit on recycled memory. Look at
+  `task_frame_is_shared_object_cache` and whether it is using
+  `shared_object_page_index` rather than open-coded arithmetic.
+- **`step` into a libos64 call behaves like `next` — the debugger refuses to
+  enter the library:** GDB has no symbols at the library's address, and with
+  no line info there is nothing for `step` to step into. Two independent
+  mechanisms are supposed to supply them, because **CLI gdb and VS Code take
+  different routes and only one of them reads the generated file**:
+  1. `userland/bin/app_bases.gdb` carries an `add-symbol-file .../libos64.so
+     <.text addr>` line — sourced by `./.gdbinit`, i.e. **CLI gdb only**.
+  2. The kernel ANNOUNCES every shared object in a task's closure through
+     `debug_task_loaded` (task.c), and the autoloader in
+     `utility/os64_symbols.gdb` add-symbol-file's it — this is the route **VS
+     Code** uses, since its `launch.json` sources that file and not the
+     generated one. You should see `[os64] symbols: …/libos64.so` in the
+     console during boot; if you don't, that hook is the thing that broke.
+
+  Both only work because libraries are PRELINKED at a build-time address
+  (link/lib.ld). While the kernel chose the address by load order, neither
+  mechanism had a truthful address to report. Set breakpoints on library
+  functions freely — `set breakpoint pending on` is already in
+  os64_symbols.gdb, so one named before boot resolves the moment the library
+  is announced.
+- **A kernel #GP inside `strlen` with a register holding ASCII text:**
+  something read a `MAP_SHARED_LIBRARY` VMA's `file` pointer as a
+  `vfs_file_t*`. It is a `shared_object_t*`, whose first field is an inline
+  `char path[]` — so the "pointer" is literally a piece of the library's own
+  filename. See vma.h's comment on the field.
 - **A global "mysteriously shared" between two running programs:** it isn't
   CoW-private because it was never written before the fork/second-load, or
   the loader's CoW privatization regressed (see the `libtest.so` model).
@@ -174,9 +261,11 @@ biggest behavioral departure from the ancestor.
 
 ## Known gaps / future work
 
-- The `LIBOS64_HIDDEN` macro + the `-fvisibility=hidden` build wiring don't
-  exist yet — first scaffolding task, before any real internal call count
-  makes the PLT cost bite.
+- `-fvisibility=hidden` is not wired up. It is no longer needed for the
+  PLT-free internal calls it was originally planned for (`-Bsymbolic-functions`
+  did that, see above) — the remaining reason is symbol-table SIZE, because
+  the kernel's relocation resolver linear-scans `.dynsym`. At 158 exports
+  that is free; revisit if libos64 ever exports thousands.
 - Buffered `<os64/stdio.h>` layer is a second-phase item; raw `<os64/io.h>`
   + the syscall wrappers come first (enough for the shell).
 - Math/soft-float (`sqrt`/`modf` for ps/top-style cpu%) intersects the

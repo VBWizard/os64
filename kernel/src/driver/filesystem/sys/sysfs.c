@@ -125,6 +125,7 @@
 #include "logging/log.h"   // /sys/log — ring stats and sink state
 #include "io.h"             // kSerialPresent
 #include "clipboard.h"      // /sys/clipboard — the snarf store behind the file
+#include "shared_object.h"  // /sys/shlib — the loaded-shared-object registry
 
 extern volatile uint64_t kTicksSinceStart;   // /sys/log stamps the sink heartbeat against it
 extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycles IS idle time
@@ -294,6 +295,7 @@ typedef enum
 	SYS_NODE_NETDHCP,    // /net/dhcp — how that address was come by
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
+	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -387,6 +389,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_GUIFILE;
+		return;
+	}
+
+	if (strcmp(comp, "shlib") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_SHLIBFILE;
 		return;
 	}
 
@@ -625,6 +635,91 @@ static void sys_gen_cache(synth_text_t *t)
 	synth_text_addf(t, "updates: %lu\n", s.updates);
 	synth_text_addf(t, "bypass_edge: %lu\n", s.bypass_edge);
 	synth_text_addf(t, "discarded_races: %lu\n", s.discarded_races);
+}
+
+// /sys/shlib — every shared object the system has loaded, and what each one
+// is actually costing.
+//
+// Born 2026-08-22, the day libos64 became a .so and the whole userland
+// started sharing it. The claim the feature makes is "one copy, shared by
+// everybody" — and until this file existed there was no way to CHECK that
+// claim on a running machine, only a kernel regression test asserting it
+// about a two-task fixture. `resident` is the honest measurement: how many
+// pages of this object have actually been read, relocated and cached, which
+// is the memory the object costs the whole system no matter how many programs
+// are running it. Multiply by nothing; that is the total.
+//
+// This is also the seam an `ldd`-alike reads (the labor division: the kernel
+// grows the view, the utility that presents it is Chris's). Everything a
+// dependency lister needs is here — the objects, their dependency edges, and
+// where each one landed.
+//
+// Deliberately NOT a directory of per-object files: the interesting question
+// is almost always comparative ("what is loaded, what does it cost"), and a
+// single readable table answers it in one `cat`. The clipboard's ruling
+// applies in reverse — a file that wants to stay a file.
+static void sys_gen_shlib(synth_text_t *t)
+{
+	synth_text_addf(t, "window: 0x%016lx-0x%016lx\n",
+	                (uint64_t)TASK_SHLIB_VIRT_BASE, (uint64_t)TASK_SHLIB_VIRT_END);
+
+	if (kLoadedSharedObjects == NULL || kLoadedSharedObjects->head == NULL)
+	{
+		// Not an error and worth saying plainly: a machine booted entirely
+		// from static binaries is a legitimate state, and an empty table
+		// should not read as a broken one.
+		synth_text_addf(t, "objects: 0 (nothing dynamically linked has been loaded)\n");
+		return;
+	}
+
+	uint64_t total_objects = 0, total_resident_pages = 0;
+	for (dlist_node_t *n = kLoadedSharedObjects->head; n != NULL; n = n->next)
+	{
+		shared_object_t *so = (shared_object_t *)n->data;
+		if (so == NULL)
+			continue;
+		total_objects++;
+
+		size_t resident = 0;
+		if (so->page_phys != NULL)
+			for (size_t i = 0; i < so->total_pages; i++)
+			{
+				uintptr_t p = so->page_phys[i];
+				// Skip the RESOLVING sentinel: a page some core is reading
+				// right now is not resident yet, and counting it would make
+				// this file's numbers flicker with the fault traffic.
+				if (p != 0 && p != SHARED_OBJECT_PAGE_RESOLVING)
+					resident++;
+			}
+		total_resident_pages += resident;
+
+		// One line per object, then its dependency edges indented under it.
+		// `kind` distinguishes the two things that live in this registry: a
+		// LIBRARY placed in the shared window, and a dynamically-linked
+		// EXECUTABLE, which is here for exactly the same reason (its pages
+		// are shared between concurrent runs of the same program) but sits
+		// at its own link address with no bias at all.
+		synth_text_addf(t, "object: %s\n", so->path);
+		synth_text_addf(t, "  kind: %s%s\n",
+		                so->is_executable ? "executable" : "library",
+		                // A PIE executable is both things at once — ET_DYN, so
+		                // it takes a slot in the shared window like a library,
+		                // while being somebody's program. Worth saying out
+		                // loud rather than making the reader infer it from an
+		                // address that looks surprising for a program.
+		                (so->is_executable && so->load_bias != 0) ? " (position-independent)" : "");
+		synth_text_addf(t, "  base: 0x%016lx\n", (uint64_t)(so->load_bias + so->vaddr_base));
+		synth_text_addf(t, "  pages: %lu resident of %lu (%lu bytes)\n",
+		                (uint64_t)resident, (uint64_t)so->total_pages,
+		                (uint64_t)resident * PAGE_SIZE);
+		synth_text_addf(t, "  refs: %u\n", so->refcount);
+		for (size_t i = 0; i < so->dep_count; i++)
+			synth_text_addf(t, "  needs: %s\n",
+			                so->deps[i] != NULL ? so->deps[i]->path : "?");
+	}
+
+	synth_text_addf(t, "objects: %lu\n", total_objects);
+	synth_text_addf(t, "resident_bytes: %lu\n", total_resident_pages * PAGE_SIZE);
 }
 
 // /sys/gui — is there a desktop on this boot, and what is it costing?
@@ -1049,7 +1144,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE
 	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_LOGFILE
 	         && sp.type != SYS_NODE_GUIFILE && sp.type != SYS_NODE_NETIP
-	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETCARD)
+	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETCARD
+	         && sp.type != SYS_NODE_SHLIBFILE)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -1064,6 +1160,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_log(&text);
 	else if (sp.type == SYS_NODE_GUIFILE)
 		sys_gen_gui(&text);
+	else if (sp.type == SYS_NODE_SHLIBFILE)
+		sys_gen_shlib(&text);
 	else if (sp.type == SYS_NODE_NETIP)
 		sys_gen_net_ip(&text);
 	else if (sp.type == SYS_NODE_NETDHCP)
@@ -1253,7 +1351,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "cache", "gui", "log", "clipboard" };
+			static const char *kSysRootFiles[] = { "cache", "gui", "log", "shlib", "clipboard" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -1440,6 +1538,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_LOGFILE:
 			strncpy(entry->name, "log", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_SHLIBFILE:
+			strncpy(entry->name, "shlib", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		// The clipboard reports its REAL length here (the only /sys node that

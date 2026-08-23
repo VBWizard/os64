@@ -182,10 +182,16 @@ static int elf_map_segment(task_t *task, vfs_file_t *file, const Elf64_Phdr *phd
 /// through — the actual page contents are read on demand, per page, by
 /// elf_read_page() below (called from the page-fault path, not here).
 int elf_compute_segment_ranges(const Elf64_Phdr *phdrs, Elf64_Half phnum,
+                                Elf64_Addr *out_vaddr_base,
                                 size_t *out_total_pages,
                                 elf_segment_range_t *out_segs, size_t max_segs, size_t *out_seg_count)
 {
     Elf64_Addr max_end = 0;
+    // The lowest page-aligned PT_LOAD vaddr. ~0 as the "nothing seen yet"
+    // sentinel because a legitimate base of 0 is exactly what an ET_DYN image
+    // has, so 0 cannot double as "unset". See the header for why the span is
+    // measured from here and not from vaddr 0.
+    Elf64_Addr min_start = (Elf64_Addr)~0UL;
     size_t seg_count = 0;
 
     for (Elf64_Half i = 0; i < phnum; i++) {
@@ -204,6 +210,9 @@ int elf_compute_segment_ranges(const Elf64_Phdr *phdrs, Elf64_Half phnum,
         if (page_mem_end > max_end) {
             max_end = page_mem_end;
         }
+        if (page_start < min_start) {
+            min_start = page_start;
+        }
 
         out_segs[seg_count].vaddr_off = page_start;
         out_segs[seg_count].pages = (page_mem_end - page_start) / PAGE_SIZE;
@@ -211,27 +220,30 @@ int elf_compute_segment_ranges(const Elf64_Phdr *phdrs, Elf64_Half phnum,
         seg_count++;
     }
 
-    if (max_end == 0) {
-        return -1;
+    if (seg_count == 0 || max_end <= min_start) {
+        return -1;   // no loadable content, or a nonsensical span
     }
 
-    *out_total_pages = max_end / PAGE_SIZE;
+    *out_vaddr_base = min_start;
+    *out_total_pages = (max_end - min_start) / PAGE_SIZE;
     *out_seg_count = seg_count;
     return 0;
 }
 
 /// @brief Read ONE page's worth of content for a dynamically-linked image,
-/// given its raw (not page-aligned) PT_LOAD table. `page_idx` is a global
-/// page index into the image's own vaddr space (vaddr 0 == page 0), the
-/// same indexing shared_object_t's page cache uses. `dest` must already be
+/// given its raw (not page-aligned) PT_LOAD table. `page_vaddr` is the page's
+/// own LINK-TIME virtual address — the address the linker put in the program
+/// headers, before any load bias. (It used to be a page INDEX counted from
+/// vaddr 0, which quietly assumed every dynamically-linked image was ET_DYN
+/// and based at zero; passing the vaddr outright is both honest about what
+/// the phdr comparisons below actually need and correct for a non-PIE ET_EXEC
+/// image, whose vaddrs start wherever it was linked.) `dest` must already be
 /// zeroed (PAGE_SIZE bytes) — this only writes the file-backed portion, if
 /// any, that overlaps this page; anything past a segment's p_filesz (BSS)
 /// or outside every segment entirely is correctly left zero.
 bool elf_read_page(vfs_file_t *file, const Elf64_Phdr *phdrs, Elf64_Half phnum,
-                    size_t page_idx, void *dest)
+                    Elf64_Addr page_vaddr, void *dest)
 {
-    Elf64_Addr page_vaddr = page_idx * PAGE_SIZE;
-
     for (Elf64_Half i = 0; i < phnum; i++) {
         if (phdrs[i].p_type != PT_LOAD || phdrs[i].p_memsz == 0) {
             continue;

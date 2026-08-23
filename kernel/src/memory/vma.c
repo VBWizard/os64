@@ -7,6 +7,7 @@
 #include "paging.h"
 #include "panic.h"
 #include "filesystem/filesystem.h"
+#include "serial_logging.h"   // printd — the MAP_SHARED_LIBRARY refusal below
 #include "smp_core.h"
 
 extern uintptr_t kKernelPML4;
@@ -82,6 +83,21 @@ uintptr_t vma_resolve_backing_page(vma_t *vma, uintptr_t fault_addr)
 {
     uintptr_t page_offset = (fault_addr & ~(PAGE_SIZE - 1)) - vma->start;
     uintptr_t phys = 0;
+
+    // NOT THIS FUNCTION'S JOB, and saying so out loud. A MAP_SHARED_LIBRARY
+    // VMA's `file` is a shared_object_t*, not a vfs_file_t* (vma.h), and its
+    // pages come from the shared per-image page cache so they can be shared
+    // physically between tasks — shared_object_resolve_page does that, and the
+    // page-fault handler branches to it before ever reaching here. Today this
+    // is unreachable; it is written down because the alternative is that the
+    // NEXT caller of this function silently reinterprets a shared object as a
+    // file handle, which is precisely the bug /proc/<pid>/maps shipped with.
+    if (vma->flags & MAP_SHARED_LIBRARY)
+    {
+        printd(DEBUG_TASK, "vma_resolve_backing_page: refusing a MAP_SHARED_LIBRARY VMA at 0x%016lx "
+                           "— those resolve through shared_object_resolve_page\n", vma->start);
+        return 0;
+    }
 
     if ((vma->flags & MAP_ANONYMOUS) || vma->file == NULL)
     {

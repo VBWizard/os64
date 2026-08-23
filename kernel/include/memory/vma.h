@@ -43,7 +43,17 @@ typedef struct vma {
     uintptr_t end;                // Exclusive end address
     int prot;                     // PROT_READ, PROT_WRITE, etc.
     int flags;                    // MAP_PRIVATE, MAP_SHARED, etc.
-    void* file;                   // Optional backing file
+    // Optional backing — AND IT IS TWO DIFFERENT TYPES DEPENDING ON `flags`.
+    // READ THIS BEFORE DEREFERENCING IT:
+    //   MAP_SHARED_LIBRARY set  -> shared_object_t*  (shared_object.h)
+    //   otherwise               -> vfs_file_t*       (vfs.h)
+    // A VMA is only ever one or the other, which is why this is one field
+    // instead of two. The cost of that economy is that every reader has to
+    // check the flag, and on 2026-08-22 one didn't: /proc/<pid>/maps read a
+    // library VMA as a vfs_file_t and #GP'd in the kernel the first time
+    // anything on the system actually had a shared library mapped. See
+    // procfs.c's proc_map_file_path for the (genuinely funny) details.
+    void* file;
     uint64_t file_offset;         // File offset for mmap
     // Number of bytes from `start` that are backed by real file content.
     // For a fully file-backed VMA this equals (end - start).  For an ELF

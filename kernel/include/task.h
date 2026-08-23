@@ -13,13 +13,25 @@
 #define TASK_DEFAULT_PRIORITY 0
 // TASK_STRUCT_VADDR removed - task_t now lives in kernel heap, no fixed mapping needed
 #define TASK_HEAP_START 0x70000000
-#define TASK_HEAP_END   0x00007FFFFFFFFFFF
+// The heap's ceiling stops one window short of the top of the canonical lower
+// half: the 512GB above it is the SHARED LIBRARY window (TASK_SHLIB_VIRT_BASE,
+// shared_object.h), carved off the top here 2026-08-22 so that two independent
+// VA allocators — the heap's bump pointer (syscall.c) and the shared-object
+// registry's — provably cannot meet. The heap loses 0.4% of a range it has
+// never used more than a few megabytes of; see shared_object.h for why the
+// libraries had to leave the low 2GB (they were sharing it with app_bases.py).
+#define TASK_HEAP_END   0x00007EFFFFFFFFFF
 // ── THE FIXED TASK-VA BLOCK (re-laid 2026-08-13 for wildcards) ──────────────
 //
 // Three blobs live at addresses the ABI promises: argv, the environment, and
-// the ring-3 exit trampoline. They sit between the shared-library window
-// (TASK_SHLIB_VIRT_END == TASK_ARGV_VIRT — argv cannot grow DOWNWARD) and
-// TASK_HEAP_START, which leaves 16MB. Almost none of it was being used.
+// the ring-3 exit trampoline. They sit between the app link-base window
+// (userland/tools/app_bases.py hands out bases from 0x400000 up to exactly
+// TASK_ARGV_VIRT — argv cannot grow DOWNWARD) and TASK_HEAP_START, which
+// leaves 16MB. Almost none of it was being used.
+//
+// (Until 2026-08-22 the SHARED LIBRARY window ended here too, overlapping the
+// app window — see shared_object.h. The libraries have moved to the top of the
+// user address space; everything below 0x6f000000 is the apps' alone now.)
 //
 // The old layout put ENV only 0x6000 (24KB) above ARGV, which was ample while
 // spawn allowed 32 arguments of 128 bytes. Raising that ceiling for shell

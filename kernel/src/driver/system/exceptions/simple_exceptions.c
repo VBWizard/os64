@@ -904,12 +904,33 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // (checked above) governs the write path separately, through the
         // existing, unmodified CoW branch.
         shared_object_t *so = (shared_object_t *)vma->file;
-        size_t page_idx = (aligned - so->load_bias) / PAGE_SIZE;
+        // page_idx counts from the image's own lowest PT_LOAD page — see
+        // shared_object_page_index, which owns this arithmetic. A fault
+        // address outside the image's page span means the VMA and the object
+        // disagree about the image's extent, which is a kernel bug, not a
+        // program's: resolve_page would index off the end of the cache array.
+        size_t page_idx = 0;
+        if (!shared_object_page_index(so, aligned, &page_idx))
+            page_fault_panic("shared-object VMA covers an address outside its image",
+                             cr2, error_code, rip);
 
         uintptr_t phys = shared_object_resolve_page(so, page_idx);
         if (!phys)
+        {
+            // The image could not be materialised: out of memory, a disk read
+            // that failed, or a relocation this kernel cannot apply (a
+            // corrupt or wrongly-linked .so). Since 2026-08-22 that is the
+            // FAULTING PROGRAM's problem, not the machine's — a ring-3 fault
+            // kills the task the same way a wild pointer does, and the
+            // resolver has already logged which object and which offset. A
+            // ring-0 fault here still panics: the kernel touching a
+            // shared-object page it cannot resolve is a kernel bug.
+            if (error_code & 0x4)
+                user_fault_kill(task, "shared library or dynamic executable page could not be resolved",
+                                cr2, error_code, rip);
             page_fault_panic("failed to resolve a shared-object page",
                              cr2, error_code, rip);
+        }
 
         paging_map_page((pt_entry_t *)task->pml4v, aligned, phys, PAGE_PRESENT | PAGE_USER);
         kPageFaultCount++;
