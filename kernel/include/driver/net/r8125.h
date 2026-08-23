@@ -63,12 +63,35 @@
 // The register file comfortably fits one page; map a page and be done.
 #define R8125_REG_WINDOW 0x1000
 
-// v1 ring sizes. Powers of two, and modest on purpose: the transfer this
-// exists for is a few megabytes pulled over a LAN, not line-rate routing.
-// The receive ceiling is set by TCP's 8KB window and the scheduler pass
-// long before it is set by these (see RTL8125.md's throughput note), so
-// bigger rings would buy nothing measurable today.
-#define R8125_RX_DESCS 64
+// Ring sizes. These used to both be 64, with a comment reasoning that "bigger
+// rings would buy nothing measurable today" because TCP's window and the
+// scheduler pass set the ceiling first. That reasoning was about THROUGHPUT,
+// and it was right about throughput — but it missed what a small ring costs
+// when it RUNS OUT, which is not slowness. It is RDU: RX-descriptors-exhausted,
+// a bit this family LATCHES, and which halted reception outright until
+// 2026-08-22 taught the driver to acknowledge it (r8125_ack_status).
+//
+// THE RECEIVE RING IS 256 SINCE 2026-08-22, and the evidence is specific. The
+// P5 logged `ISR=0x00000011` — ROK | RDU — during an `os64get -a` pulling 83
+// files back to back: frames arrived faster than one scheduler pass could
+// drain 64 descriptors, the card had nowhere to put the next one, and every
+// such moment is DROPPED FRAMES and a TCP retransmit. Acknowledging made that
+// survivable; it did not make it free. A ring four times deeper absorbs a
+// burst that a single pass then drains, which is exactly the shape of this
+// traffic — bursty file transfer, not steady line-rate.
+//
+// The cost is 256 * R8125_BUF_SIZE = 512KB of receive buffer plus 4KB of
+// descriptors, and it is charged once at bring-up on a machine with at least
+// 8GB (Chris, deciding this: "We're *not* trying to write the world's smallest
+// OS"). 0.006% of the smallest supported machine, against a bug that ended
+// every large transfer.
+//
+// TRANSMIT STAYS AT 64, deliberately, because the evidence never accused it:
+// no TDU, and the ring-full path has not fired once since the acknowledge
+// landed. Growing it too would be changing an untested variable in the same
+// breath as a tested one — and transmit here is mostly bare ACKs, which the
+// device drains as fast as we can post them.
+#define R8125_RX_DESCS 256
 #define R8125_TX_DESCS 64
 
 // One RX buffer per descriptor. 2KB covers a standard 1500-byte MTU with

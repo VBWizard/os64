@@ -260,6 +260,14 @@ real-hardware endgame into an honest ascent:
   registration + magic retval, added to BOTH makefile exclusion lists
   (the TEST_CFILES lesson is still warm).
 
+## Failure fingerprints (symptom → cause)
+
+| Symptom | Cause |
+|---|---|
+| **The network dies completely a few seconds into sustained traffic — TCP hangs, ping stops answering — while the console, the shell and everything else stay perfectly healthy, and nothing appears in the log.** First seen on the P5 2026-08-22, three to six files into an 86-file `os64get -a`, reproducibly, four times. **CONFIRMED AND FIXED the same day**, and the confirmation was exact: the fixed driver logged `ISR=0x00000011` — ROK (a frame arrived) plus **RDU (RX descriptors exhausted)** — and completed all 83 files | The RTL8125's INTERRUPT STATUS REGISTER was never acknowledged. `R8125_ISR0_8125` (0x3C) was defined and read by nothing; the driver masks interrupts (IMR0 = 0) and polls, but **masking does not stop the device LATCHING status**, and RX-FIFO-overflow / RX-descriptors-exhausted are sticky on this family — reception can stay stopped until the bit is written back (write-one-to-clear). Nothing had ever pushed sustained traffic at the card before `-a` existed, so nothing had ever overrun a 64-entry RX ring drained once per scheduler pass. `r8125_ack_status` reads and clears it every poll now, and says so once on DEBUG_EXCEPTIONS when an alarming bit was latched. **The general lesson is bigger than the bug: "we poll, so interrupts are off" does not mean "the status register is irrelevant" — a polled driver still has to drain the device's error state** |
+| The network is dead and the log says nothing at all | It should not, any more (2026-08-22). `r8125_check_stalled` announces a wedged transmit ring or a card that has gone deaf on **DEBUG_EXCEPTIONS** — the bit CONFIG.h keeps permanently lit exactly so must-never-be-silent messages have somewhere to go. A show-stopper that needs `DEBUG_NET` switched on first is a show-stopper nobody will have the log for, because you only know to switch it on after it has happened (Chris's ruling, the day it happened) |
+| A ring-protocol bug is suspected | Run the host harness first — `gcc -I kernel/include tools/test_r8125_host.c kernel/src/driver/net/r8125_ring.c -o /tmp/t && /tmp/t` — it covers ownership handoff, wrap on BOTH rings, and EOR survival, in milliseconds. It passing is real evidence that the fault is in the device interaction (registers, doorbell, status) rather than the descriptor logic, which is exactly the split r8125_ring.c exists to create |
+
 ## Non-goals for this arc (stated so silence never lies)
 
 - **IPv6**: not in this arc. The stack's internal seams shouldn't assume
