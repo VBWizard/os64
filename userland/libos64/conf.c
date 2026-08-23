@@ -15,6 +15,7 @@
 
 #include "os64/conf.h"
 #include "os64/io.h"
+#include "os64/mem.h"   // os64_malloc — the buffer belongs to the CALL, not the program
 
 int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 {
@@ -22,16 +23,31 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 	if (fd < 0)
 		return OS64_CONF_NO_FILE;
 
-	// static: 8KB would blow a user stack (logd learned this first).
-	static char buf[OS64_CONF_MAX];
+	// ONE BUFFER PER CALL, from the heap. It was `static` when this code was
+	// logd's and logd read one file once — 8KB really would blow a user stack
+	// (logd learned that first), and a static looked like the only other
+	// door. It isn't, and a static here is wrong twice over now that the
+	// reader is a library: two THREADS reading configs at the same time
+	// (os64/thread.h — ring-3 threads share every global) would trample each
+	// other's bytes, and so would one thread whose CALLBACK reads a config of
+	// its own, which is a step os64_resolve is one consumer away from taking.
+	// The walk below NUL-terminates in place and puts the byte back, so the
+	// damage would be intermittent and look like a config file that
+	// occasionally forgets a line. (Codex review, 2026-08-22.)
+	char *buf = (char *)os64_malloc(OS64_CONF_MAX);
+	if (buf == NULL) {
+		os64_close((int32_t)fd);
+		return OS64_CONF_NO_MEMORY;
+	}
+
 	size_t got = 0;
 	bool truncated = false;
 	for (;;) {
-		int64_t n = os64_read((int32_t)fd, buf + got, sizeof(buf) - 1 - got);
+		int64_t n = os64_read((int32_t)fd, buf + got, OS64_CONF_MAX - 1 - got);
 		if (n <= 0)
 			break;
 		got += (size_t)n;
-		if (got >= sizeof(buf) - 1) {
+		if (got >= OS64_CONF_MAX - 1) {
 			truncated = true;
 			break;
 		}
@@ -76,8 +92,10 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 			buf[le] = '\0';
 			bool go = fn(NULL, &buf[ks], user);
 			buf[le] = saved;
-			if (!go)
+			if (!go) {
+				os64_free(buf);
 				return delivered;
+			}
 			continue;
 		}
 		k++;   // past '='
@@ -100,10 +118,13 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 		buf[ke] = savedK;
 		buf[ve] = savedV;
 		delivered++;
-		if (!go)
+		if (!go) {
+			os64_free(buf);
 			return delivered;
+		}
 	}
 
+	os64_free(buf);
 	return truncated ? OS64_CONF_TRUNCATED : delivered;
 }
 
