@@ -141,7 +141,19 @@ static const char *const kConfPaths[] = { "/home/os64get.conf", "/etc/os64get.co
 // can trust is worth less than no rule at all. (Codex review, 2026-08-22.)
 static bool conf_take_dir(char *dst, const char *value)
 {
-    if (os64_strlen(value) >= CONF_DIR_MAX)
+    // An EMPTY value is refused for the same reason an over-long one is: it
+    // is a rule nobody can have meant. `husk =` routed to "", join_path made
+    // that "/husk", and a half-finished edit installed a program at the root
+    // of the filesystem — quietly, since an empty string is a perfectly good
+    // string. (Codex review, 2026-08-22.) The documented ways to say "no
+    // rule" are unaffected: leave the line out, or leave the key out of the
+    // file entirely; `archive` off is a missing line or `-n`, exactly as its
+    // comment in /etc/os64get.conf says.
+    size_t len = os64_strlen(value);
+
+    if (len == 0)
+        return false;
+    if (len >= CONF_DIR_MAX)
         return false;   // dst keeps whatever an earlier line put there
 
     size_t n = os64_strcopy(dst, CONF_DIR_MAX, value);
@@ -150,11 +162,17 @@ static bool conf_take_dir(char *dst, const char *value)
     return true;
 }
 
-// The one complaint every over-long value makes, in one voice.
-static void conf_too_long(const conf_t *c, const char *key, const char *value)
+// The one complaint every unusable directory value makes, in one voice —
+// and it says WHICH kind, because "ignored" without a reason sends the
+// reader back to the file to guess.
+static void conf_bad_dir(const conf_t *c, const char *key, const char *value)
 {
-    os64_hprintf(OS64_STDERR, "os64get: %s: directory for '%s' is longer than %d bytes"
-                 " - ignored: %s\n", c->path, key, CONF_DIR_MAX - 1, value);
+    if (value[0] == '\0')
+        os64_hprintf(OS64_STDERR, "os64get: %s: '%s' has no directory after the '='"
+                     " - ignored\n", c->path, key);
+    else
+        os64_hprintf(OS64_STDERR, "os64get: %s: directory for '%s' is longer than %d bytes"
+                     " - ignored: %s\n", c->path, key, CONF_DIR_MAX - 1, value);
 }
 
 static bool conf_line(const char *key, const char *value, void *user)
@@ -172,12 +190,12 @@ static bool conf_line(const char *key, const char *value, void *user)
 
     if (os64_streq(key, "archive")) {
         if (!conf_take_dir(c->archive, value))
-            conf_too_long(c, key, value);
+            conf_bad_dir(c, key, value);
         return true;
     }
     if (os64_streq(key, "*")) {
         if (!conf_take_dir(c->star, value))
-            conf_too_long(c, key, value);
+            conf_bad_dir(c, key, value);
         else
             c->anyRule = true;
         return true;
@@ -188,7 +206,7 @@ static bool conf_line(const char *key, const char *value, void *user)
         // last one wins.
         if (c->nsuffix < CONF_RULES_MAX) {
             if (!conf_take_dir(c->suffix[c->nsuffix].dir, value)) {
-                conf_too_long(c, key, value);
+                conf_bad_dir(c, key, value);
                 return true;   // the slot stays free for the next rule
             }
             os64_strcopy(c->suffix[c->nsuffix].name, sizeof(c->suffix[0].name), key + 1);
@@ -208,7 +226,7 @@ static bool conf_line(const char *key, const char *value, void *user)
 
     if (c->nexact < CONF_RULES_MAX) {
         if (!conf_take_dir(c->exact[c->nexact].dir, value)) {
-            conf_too_long(c, key, value);
+            conf_bad_dir(c, key, value);
             return true;   // the slot stays free for the next rule
         }
         os64_strcopy(c->exact[c->nexact].name, sizeof(c->exact[0].name), key);
@@ -496,8 +514,27 @@ int main(int argc, char **argv)
     // ── Dial ────────────────────────────────────────────────────────────
     // Plan 9's bang path, which libos64 parses into an os64_netdest_t below
     // the syscall boundary (nothing textual crosses it).
-    char dialstring[GET_PATH_MAX];
-    os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%d", host, GET_PORT);
+    // Sized from the NAME LIMIT, not from a path limit: "tcp!" + a name of up
+    // to OS64_RESOLVE_NAME_MAX (253 — DNS's own ceiling, which the dial parser
+    // now accepts) + "!65535" + NUL. GET_PATH_MAX was 256 and a 250-byte
+    // hostname silently lost its "!6464" off the end, after which os64_dial
+    // rejected the string for having no service — a name the resolver would
+    // have handled perfectly, failing with an error about a port nobody
+    // mistyped. (Codex review, 2026-08-22.)
+    char dialstring[OS64_RESOLVE_NAME_MAX + 16];
+    int32_t dialLen = os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%d",
+                                    host, GET_PORT);
+
+    // And check anyway. The buffer now fits every name the resolver will
+    // accept, so this can only fire on a host string that was never going to
+    // resolve — but a truncated dial string fails with the WRONG COMPLAINT,
+    // and that is the part worth spending three lines to prevent.
+    if (dialLen < 0 || (size_t)dialLen >= sizeof(dialstring))
+    {
+        os64_hprintf(OS64_STDERR, "os64get: host name is too long to dial (limit %d)\n",
+                     OS64_RESOLVE_NAME_MAX);
+        return GET_USAGE;
+    }
 
     int64_t conn = os64_dial(dialstring);
     if (conn < 0)
