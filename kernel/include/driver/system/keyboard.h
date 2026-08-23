@@ -17,7 +17,26 @@ typedef enum keyboard_modifiers {
     KEYBOARD_MOD_ALT   = 1u << 2,
     KEYBOARD_MOD_CAPS  = 1u << 3,
     KEYBOARD_MOD_NUM   = 1u << 4,
+    // The keyboard's DIALECT, not a modifier (2026-08-23): set by the xHCI
+    // path on every event it delivers, clear from PS/2. The scancode field
+    // is a set-1 make code on one path and a HID usage on the other, and a
+    // consumer that needs to name a key with no ASCII — the F-row — needs
+    // to know which it is holding. (abi os64/gui.h publishes the same bit.)
+    KEYBOARD_MOD_HID   = 1u << 7,
 } keyboard_modifiers_t;
+
+// Which F-key is this event, 1..12, or 0 if it is not one. The ONE place
+// both dialects' F-row numbering is written: PS/2 set-1 puts F1..F10 at
+// 0x3B..0x44 and F11/F12 at 0x57/0x58; HID puts F1..F12 at 0x3A..0x45.
+static inline int keyboard_fkey_number(uint8_t scancode, uint8_t modifiers)
+{
+    if (modifiers & KEYBOARD_MOD_HID)
+        return (scancode >= 0x3A && scancode <= 0x45) ? (int)(scancode - 0x3A + 1) : 0;
+    if (scancode >= 0x3B && scancode <= 0x44) return (int)(scancode - 0x3B + 1);
+    if (scancode == 0x57) return 11;
+    if (scancode == 0x58) return 12;
+    return 0;
+}
 
 typedef struct keyboard_event {
     char ascii;

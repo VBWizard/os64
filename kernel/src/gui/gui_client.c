@@ -18,6 +18,7 @@
 #include "memcpy.h"
 #include "smp_core.h"   // get_core_local_storage — the caller's identity
 #include "task.h"       // task_t.taskID — what a window's owner IS
+#include "scheduler.h"  // kTaskList — the close escalation finds the owner on the spine
 #include "memory/paging.h"     // the canvas mapping (surface pivot)
 #include "memory/allocator.h"  // allocate_memory_aligned / free_memory — task canvas pages
 #include "signals.h"    // SIGSLEEP / SIGNALS_TERMINATING — event_wait's park and its exit
@@ -136,7 +137,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	// The content inset mirrors wm_create's math; when wm_create refuses a
 	// degenerate size below, the pivot is undone on the same exit.
 	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = (int32_t)h - GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH;
+	int32_t content_h = (int32_t)h - wm_chrome_top((uint32_t)flags) - GUI_BORDER_WIDTH;
 
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = (cls != NULL) ? cls->task : NULL;
@@ -186,7 +187,15 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		goto undo_pivot;
 	}
 
-	window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h}, (uint32_t)flags);
+	// Only the CLIENT flags cross the boundary. The window struct's flag word
+	// also carries window-manager STATE (pinned, and whatever follows it),
+	// which is the user's to set with a chord and not an app's to claim at
+	// birth — a program that pinned itself on top would be the GUI's first
+	// pop-up ad. Masked rather than refused: the ABI header documents the
+	// two bits, and a stray third is a bug in the caller, not an attack.
+	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED;
+	window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
+	                          (uint32_t)flags & client_flags);
 	if (!win) {
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 		goto undo_pivot;
@@ -472,6 +481,35 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 // task cannot decline its own cleanup any more than it can decline
 // handle_close_all. This is the enforcement half of the ownership rule;
 // the checks above are merely the courtesy half.
+// Alt+F4's second press (2026-08-23): the close REQUEST went unanswered, so
+// the owner is told to stop the way `kill` would tell it — SIGTERM, which a
+// program may still catch to say goodbye. The window itself is never
+// destroyed from here: it dies in the task's own exit path with everything
+// else the task owned, which is the only path that can give the canvas
+// pages back safely (see gui_task_destroy_windows). Kernel-thread owners —
+// the compositor's own window, the demos — cannot be signalled and are
+// refused by name. Walks kTaskList the way procfs does; runs in the
+// compositor's thread, OUTSIDE kGuiLock (task_signal_and_nudge takes
+// scheduler locks, and the GUI lock must never nest under those).
+void gui_window_terminate_owner(uint64_t owner)
+{
+	if (owner == 0)
+		return;
+	for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next) {
+		if (t->taskID != owner)
+			continue;
+		if (t->kernelTask || t->exited) {
+			printd(DEBUG_GUI, "gui: close escalation refused — task %lu is %s\n",
+			       owner, t->kernelTask ? "a kernel thread" : "already exiting");
+			return;
+		}
+		printd(DEBUG_GUI, "gui: close escalation — SIGTERM to task %lu (%s)\n", owner, t->path);
+		task_signal_and_nudge(t, SIGTERM);
+		return;
+	}
+	printd(DEBUG_GUI, "gui: close escalation — no task %lu (already gone)\n", owner);
+}
+
 void gui_task_destroy_windows(struct task *t)
 {
 	// taskID 0 is the not-a-task sentinel gui_current_task_id() returns

@@ -280,6 +280,8 @@ void os64_ui_init(os64_ui_t *ui, os64_draw_ctx_t *ctx)
 	ui->any_dirty = false;
 	ui->dirty = (os64_gui_rect_t){0, 0, 0, 0};
 	ui->on_resize = (void (*)(os64_ui_t *))0;
+	ui->on_close = (void (*)(os64_ui_t *))0;
+	ui->quit = false;
 }
 
 void os64_ui_set_root(os64_ui_t *ui, os64_ui_widget_t *root)
@@ -332,6 +334,15 @@ static os64_ui_widget_t *hit_test(os64_ui_widget_t *w, int32_t x, int32_t y)
 
 bool os64_ui_dispatch(os64_ui_t *ui, const os64_gui_event_t *ev)
 {
+	// A close request needs no widget tree to land on — handled first so the
+	// root guard cannot swallow it.
+	if (ev->type == OS64_GUI_EVENT_WINDOW_CLOSE) {
+		if (ui->on_close)
+			ui->on_close(ui);
+		else
+			ui->quit = true;
+		return true;
+	}
 	if (ui->root == (os64_ui_widget_t *)0)
 		return false;
 
@@ -436,7 +447,7 @@ void os64_ui_run(os64_ui_t *ui, int64_t win, volatile bool *running)
 {
 	os64_ui_paint(ui);   // first frame: whatever set_root marked
 
-	while (running == (volatile bool *)0 || *running) {
+	while ((running == (volatile bool *)0 || *running) && !ui->quit) {
 		os64_gui_event_t ev;
 		int64_t rc = os64_gui_event_wait(win, &ev);
 		if (rc != 1)

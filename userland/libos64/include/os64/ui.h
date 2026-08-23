@@ -156,6 +156,16 @@ struct os64_ui
     // honest default for a fixed-layout window; everything still repaints,
     // the widgets just stay where the app put them.
     void (*on_resize)(os64_ui_t *ui);
+
+    // The user asked the window to close (Alt+F4 — OS64_GUI_EVENT_WINDOW_CLOSE,
+    // 2026-08-23). If set, libui calls this and does nothing else: the app
+    // decides (save? ask? ignore?). If NULL, libui sets `quit`, which ends
+    // os64_ui_run; an app with its own loop should check `quit` too. An app
+    // that answers neither is still closable — the user's next Alt+F4 within
+    // five seconds is SIGTERM to the task, which is the window system's way
+    // of saying it asked nicely once.
+    void (*on_close)(os64_ui_t *ui);
+    bool             quit;       // set by the default close handling; read by os64_ui_run
 };
 
 // Bind a UI to a window's draw context and load the theme. root may be set

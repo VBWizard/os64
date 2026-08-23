@@ -25,6 +25,7 @@
 #include "driver/system/pci.h"
 #include "driver/system/keyboard.h"
 #include "gui/input.h"
+#include "gui/compositor.h"   // gui_owns_glass — the VT chord wants Ctrl under the GUI
 #include "tty.h"             // VT chords: Alt+F#, Alt+arrows, Shift+PgUp/PgDn
 #include "driver/system/usb/xhci.h"
 
@@ -418,6 +419,8 @@ static const char s_hid_shift[0x39] = {
 	[0x33]=':',[0x34]='"',[0x35]='~',[0x36]='<',[0x37]='>',[0x38]='?',
 };
 
+static char hid_usage_ascii(const xhci_hid_t *kbd, uint8_t usage);
+
 static void hid_deliver_usage(xhci_hid_t *kbd, uint8_t usage)
 {
 	if (usage == 0x39) {                      // Caps Lock: a latch, not a key
@@ -441,7 +444,12 @@ static void hid_deliver_usage(xhci_hid_t *kbd, uint8_t usage)
 	// — a held Alt+Right walks the terminal ring at 25 cps, which is a
 	// feature if you squint.
 	if (kbd->mods & KEYBOARD_MOD_ALT) {
-		if (usage >= 0x3A && usage <= 0x41) { tty_focus(usage - 0x3A); return; }
+		// F-row: Alt+F1..F8 on a text terminal, CTRL+Alt+F1..F8 while the
+		// GUI holds the glass — X11's convention, and the 2026-08-19 ruling's
+		// own escape hatch, opened the day Alt+F4 was wanted for close.
+		// (The PS/2 driver makes the identical test; keep them in step.)
+		if (usage >= 0x3A && usage <= 0x41 &&
+		    (!gui_owns_glass() || (kbd->mods & KEYBOARD_MOD_CTRL))) { tty_focus(usage - 0x3A); return; }
 		if (usage == 0x50) { tty_focus_step(-1); return; }   // Alt+Left
 		if (usage == 0x4F) { tty_focus_step(+1); return; }   // Alt+Right
 	}
@@ -493,11 +501,35 @@ static void hid_deliver_usage(xhci_hid_t *kbd, uint8_t usage)
 			return;
 		}
 	}
+	// A key with no ASCII (the F-row, the keypad without NumLock) is still
+	// delivered, with ASCII 0 — exactly what the PS/2 driver does for the
+	// same keys, and what Alt+F4 needs: the window system names the F-row
+	// by scancode + dialect (keyboard_fkey_number), and a key this path
+	// dropped here "for later" (until 2026-08-23) was a chord the GUI could
+	// never see from a USB keyboard. The text path ignores ASCII 0 at its
+	// door (keyboard_emit_event), so the terminals see nothing new.
+	char c = hid_usage_ascii(kbd, usage);
+
+	// Scancode field: HID usage stands in. Downstream, the GUI's key-code
+	// passthrough hands it to apps untouched, and the window system itself
+	// never matches on it — its chords test the ASCII, precisely because
+	// this field means different things on the two keyboard paths.
+	printd(DEBUG_USB | DEBUG_DETAILED, "xhci: key usage 0x%02x -> 0x%02x\n",
+	       usage, (uint8_t)c);
+	keyboard_deliver_event(c, usage, kbd->mods, true);
+}
+
+// The ASCII a usage produces under the keyboard's current modifiers, or 0 for
+// a usage the boot table doesn't cover. Split out of hid_deliver_usage
+// (2026-08-23) so a RELEASE can report the same character its press did —
+// the PS/2 driver translates break codes the same way.
+static char hid_usage_ascii(const xhci_hid_t *kbd, uint8_t usage)
+{
 	if (usage >= sizeof(s_hid_base))
-		return;                                // F-keys/keypad: later
+		return 0;
 	char c = s_hid_base[usage];
 	if (c == 0)
-		return;
+		return 0;
 
 	bool shift = (kbd->mods & KEYBOARD_MOD_SHIFT) != 0;
 	bool caps  = (kbd->mods & KEYBOARD_MOD_CAPS) != 0;
@@ -512,12 +544,7 @@ static void hid_deliver_usage(xhci_hid_t *kbd, uint8_t usage)
 	} else if (shift && usage < sizeof(s_hid_shift) && s_hid_shift[usage] != 0) {
 		c = s_hid_shift[usage];
 	}
-
-	// Scancode field: HID usage stands in — nothing downstream interprets
-	// it except the GUI's key-code passthrough, which is source-agnostic.
-	printd(DEBUG_USB | DEBUG_DETAILED, "xhci: key usage 0x%02x -> 0x%02x\n",
-	       usage, (uint8_t)c);
-	keyboard_deliver_event(c, usage, kbd->mods, true);
+	return c;
 }
 
 // Typematic cadence (engine below, state in the keyboard device): half a second of grace,
@@ -544,6 +571,7 @@ static void hid_process_keyboard_report(xhci_hid_t *kbd, const uint8_t *rep)
 	if (m & 0x11) mods |= KEYBOARD_MOD_CTRL;
 	if (m & 0x22) mods |= KEYBOARD_MOD_SHIFT;
 	if (m & 0x44) mods |= KEYBOARD_MOD_ALT;
+	mods |= KEYBOARD_MOD_HID;   // the dialect tag: every event from here says "HID usage" (keyboard.h)
 	kbd->mods = mods;
 	// Publish to the shared snapshot NOW, not at the next keyboard_deliver_event.
 	// A modifier-only report (Ctrl+Alt held, no key usages) delivers no event at
@@ -552,8 +580,44 @@ static void hid_process_keyboard_report(xhci_hid_t *kbd, const uint8_t *rep)
 	// was invisible on USB keyboards (worked in QEMU's PS/2, dead on the P5).
 	keyboard_publish_hid_modifiers(mods);
 
+	// MODIFIER EDGES (2026-08-23). A modifier-only report changes state and
+	// — until today — sent no event: the GUI learned that Alt was held only
+	// from the modifier byte riding on the NEXT key, and learned that it was
+	// released from nothing at all. That is what left Alt+Tab's hold stuck
+	// open on the P5's USB keyboard after working in QEMU's PS/2. The PS/2
+	// driver delivers a modifier key's make AND break like any other key
+	// (ASCII 0, the window system sees the modifiers change), so this path
+	// does the same: one event per modifier bit that flipped, scancode the
+	// HID usage of that modifier (0xE0 + bit: LCtrl, LShift, LAlt, LGui,
+	// RCtrl, RShift, RAlt, RGui). keyboard_deliver_event drops releases on
+	// the text path and ASCII-0 presses are already what PS/2 modifiers
+	// look like there, so the terminals see nothing new.
+	uint8_t prev_m = kbd->prev_report[0];
+	for (int bit = 0; bit < 8; bit++) {
+		uint8_t mask = (uint8_t)(1u << bit);
+		if ((m & mask) != (prev_m & mask))
+			keyboard_deliver_event(0, (uint8_t)(0xE0 + bit), mods, (m & mask) != 0);
+	}
+
+	// RELEASE EDGES (same day): a usage present in the previous report and
+	// absent now is a key-UP, delivered with the same ASCII its press
+	// carried. The GUI has wanted these since keyboard.c grew break-code
+	// delivery for PS/2 ("modifier-drag interactions and chords depend on
+	// knowing when a key was released"); the text path ignores them.
+	for (int j = 2; j < 8; j++) {
+		uint8_t u = kbd->prev_report[j];
+		if (u == 0)
+			continue;
+		bool still_down = false;
+		for (int i = 2; i < 8; i++)
+			if (rep[i] == u)
+				still_down = true;
+		if (!still_down)
+			keyboard_deliver_event(hid_usage_ascii(kbd, u), u, mods, false);
+	}
+
 	// Edge detection: a usage present now but absent from the previous
-	// report is a key-DOWN — the only edge we emit. NOTE, corrected
+	// report is a key-DOWN. NOTE, corrected
 	// 2026-08-08: this comment used to claim boot-protocol keyboards
 	// auto-repeat internally. They do not — that is PS/2 lore. A HID
 	// keyboard reports STATE, and repeat is the HOST's job (which is why

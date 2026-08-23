@@ -16,6 +16,7 @@
 #include "gui/window.h"
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
+#include "gui/desktop.h"
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -376,6 +377,101 @@ static rect_t composite_locked(rect_t damage)
 static window_t *s_drag_window = NULL;
 static int32_t s_drag_dx, s_drag_dy;   // grab offset: cursor minus frame origin
 
+// An Alt+F4 escalation decided by the router (under kGuiLock) and carried
+// out by the frame loop after the lock drops. The owner's task id, 0 = none.
+static uint64_t s_terminate_owner = 0;
+
+// Double-click detection on titlebars (maximize toggle). By id, not pointer
+// — the first click's window may be dead by the second click.
+#define DOUBLE_CLICK_TICKS (TICKS_PER_SECOND / 2)
+static uint32_t s_titlebar_click_window = 0;
+static uint64_t s_titlebar_click_tick = 0;
+
+// ── Alt+Tab: cycling focus from the keyboard (2026-08-23) ───────────────────
+//
+// The first QoL chord, and the one every other window-management feature
+// leans on: minimize has nowhere to restore FROM without it (there is no
+// taskbar and no launcher yet), so it goes first.
+//
+// The shape is the 1990 one (Windows 3.0 introduced it; every WM since has
+// kept it because it is right): while Alt is HELD, each Tab steps one window
+// further down the MOST-RECENTLY-FOCUSED order as it stood WHEN THE HOLD
+// BEGAN, and the window stepped to is raised at once — the raise IS the
+// feedback, no switcher popup needed at this size. Release Alt and the hold
+// ends; the next hold starts from the new order, which makes a quick Alt+Tab
+// a toggle between the two most recent windows, exactly the case people
+// reach for. (Recency, not z-order: the first version walked the stack, and
+// pin-on-top broke it the same afternoon — a pinned window holds the top of
+// the stack while focus goes elsewhere, so "second from the top" stopped
+// meaning "the one I was just using". window_t.focusSerial is the fact.)
+//
+// Why a SNAPSHOT and not a depth counter against the live order: every raise
+// rewrites it. With windows A B C D, three presses walking "index = press
+// count" do reach B, C, D — but the fourth lands on index 0, which is now D
+// again, and the cycle never returns to A. Walking a copy taken at hold
+// start returns to A on the fourth press, by construction.
+// The copy holds IDS, not pointers: a window can die mid-hold (its task
+// exits), and wm_window_by_id answers NULL for the dead where a pointer
+// would have answered with freed memory — the exact bug the resize slice
+// found in the drag state.
+//
+// Shift+Alt+Tab walks the other way. Sixteen windows is the most a snapshot
+// holds; past that the cycle simply covers the top sixteen, which is more
+// windows than this desktop has ever shown at once.
+
+static bool     s_alttab_active = false;
+static uint32_t s_alttab_ring[ALTTAB_RING_MAX];
+static size_t   s_alttab_count = 0;
+static size_t   s_alttab_step  = 0;
+
+static void alttab_step_locked(bool backwards)
+{
+	if (!s_alttab_active) {
+		s_alttab_count = wm_recency_ids(s_alttab_ring, ALTTAB_RING_MAX);
+		s_alttab_step = 0;
+		s_alttab_active = true;
+	}
+	if (s_alttab_count < 2)
+		return;   // nothing to cycle between; the hold still starts, harmlessly
+	s_alttab_step = backwards
+		? (s_alttab_step + s_alttab_count - 1) % s_alttab_count
+		: (s_alttab_step + 1) % s_alttab_count;
+	window_t *w = wm_window_by_id(s_alttab_ring[s_alttab_step]);
+	if (w == NULL)
+		return;   // died during the hold; the next Tab steps past it
+	printd(DEBUG_GUI, "guicomp: alt-tab step %lu/%lu -> window %u\n",
+		(uint64_t)s_alttab_step, (uint64_t)s_alttab_count, w->id);
+	// PASSING THROUGH IS NOT USING (Chris's nit, 2026-08-23, the first hour
+	// Alt+Tab existed on the P5). A step raises and focuses the window so
+	// the user can SEE where they are, but it must not count as recent: the
+	// recency stamp is taken only when the hold ENDS, on the window it ended
+	// over (alttab_end_locked). Otherwise walking gterm1 → gbounce → gkeys →
+	// gterm2 leaves gkeys second in the order, and the quick Alt+Tab that
+	// should bounce back to gterm1 lands on gkeys instead. wm_raise stamps
+	// unconditionally — it is the right thing for a click — so the stamp is
+	// put back here.
+	uint64_t serial = w->focusSerial;
+	if (wm_is_hidden(w))
+		// Stepping onto a minimized window restores it (and raises). It stays
+		// restored if the walk moves on — the step is how you SEE it, and a
+		// window that popped up and vanished again would be a flicker, not a
+		// preview. Ctrl+Alt+N is one chord away if you wanted it hidden.
+		wm_set_minimized(w, false);
+	else
+		wm_raise(w);
+	w->focusSerial = serial;
+}
+
+// The hold is over: whatever is focused now is what the user chose, and
+// NOW it becomes the most recent. (A hold that stepped nowhere, or stepped
+// back to where it began, re-stamps the original — harmless.)
+static void alttab_end_locked(void)
+{
+	s_alttab_active = false;
+	wm_touch_focus();
+	printd(DEBUG_GUI, "guicomp: alt-tab hold ended\n");
+}
+
 // ── Interactive resize: the Ctrl+Alt gesture and its rubber band ────────────
 //
 // THE GESTURE (ruled 2026-08-19). Ctrl+Alt held: left-drag moves the window,
@@ -470,7 +566,7 @@ static void band_composite(surface_t *backbuffer, rect_t damage)
 	char label[24];
 	size_t len = 0;
 	int32_t content_w = s_band_rect.w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = s_band_rect.h - GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH;
+	int32_t content_h = s_band_rect.h - wm_chrome_top(s_band_window->flags) - GUI_BORDER_WIDTH;
 	if (content_w < 0) content_w = 0;
 	if (content_h < 0) content_h = 0;
 	len += band_utoa((uint32_t)content_w, label + len);
@@ -677,6 +773,22 @@ static void route_event_locked(const input_event_t *ev)
 
 		if (ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT &&
 		    wm_point_in_titlebar(w, ev->mouse.x, ev->mouse.y)) {
+			// DOUBLE-CLICK ON THE TITLEBAR MAXIMIZES (and restores) — the
+			// 1990 habit, kept because it is the one thing everyone tries
+			// first. Two presses on the SAME window's bar within the
+			// double-click window make the second one a toggle instead of
+			// a drag. Windows' default interval has been 500ms since 3.0.
+			if (w->id == s_titlebar_click_window &&
+			    ev->tick - s_titlebar_click_tick <= DOUBLE_CLICK_TICKS) {
+				s_titlebar_click_window = 0;   // a third click starts over
+				bool max = !(w->flags & GUI_WINDOW_MAXIMIZED);
+				printd(DEBUG_GUI, "guicomp: titlebar double-click: window %u %s\n",
+					w->id, max ? "maximized" : "restored");
+				wm_set_maximized(w, max);
+				break;
+			}
+			s_titlebar_click_window = w->id;
+			s_titlebar_click_tick = ev->tick;
 			// Grab for dragging; remember where in the frame we grabbed so
 			// the window doesn't jump under the cursor.
 			s_drag_window = w;
@@ -705,6 +817,7 @@ static void route_event_locked(const input_event_t *ev)
 			rect_t final = s_band_rect;
 			band_damage_locked(s_band_rect);   // erase the outline
 			s_band_window = NULL;
+			w->flags &= ~GUI_WINDOW_MAXIMIZED;   // a hand-sized window is not "the maximized one"
 			wm_resize(w, final);
 			break;
 		}
@@ -732,6 +845,105 @@ static void route_event_locked(const input_event_t *ev)
 			"guicomp: key %s sc 0x%02x ascii 0x%02x mods 0x%02x\n",
 			ev->type == INPUT_EVENT_KEY_DOWN ? "down" : "up  ",
 			ev->key.scancode, (uint8_t)ev->key.ascii, ev->key.modifiers);
+
+		// The window system's own chords are taken BEFORE delivery, so an
+		// app never sees half a gesture. Alt+Tab is the whole of that set
+		// today (Alt+F1..F8 and Alt+arrows never reach here — the keyboard
+		// driver consumes them for the VT switch).
+		//
+		// TWO DIALECTS, ONE TEST (the chord-publish lesson of 2026-08-21,
+		// re-learned here the same day Alt+Tab shipped: it worked in QEMU's
+		// PS/2 and did nothing on the P5's USB keyboard). The scancode field
+		// is PS/2 set-1 on one path and a HID usage on the other — Tab is
+		// 0x0F there and 0x2B here — so the key is recognized by its ASCII,
+		// which both paths translate identically. And the hold ends not on
+		// "the Alt key's release event" (PS/2 never delivers one for Right
+		// Alt, HID delivered none for either until today) but on the first
+		// key event of any kind that arrives WITHOUT Alt in its modifiers —
+		// a fact both drivers publish on every event they send.
+		if (s_alttab_active && !(ev->key.modifiers & KEYBOARD_MOD_ALT))
+			alttab_end_locked();
+		if (ev->key.ascii == '\t' && (ev->key.modifiers & KEYBOARD_MOD_ALT)) {
+			if (ev->type == INPUT_EVENT_KEY_DOWN)
+				alttab_step_locked((ev->key.modifiers & KEYBOARD_MOD_SHIFT) != 0);
+			break;   // the Tab's release is swallowed too: the app never saw the press
+		}
+
+		// Alt+F4: close (1990 again, and the reason the VT switch now wants
+		// Ctrl under the GUI). The first press is a REQUEST to the owner —
+		// INPUT_EVENT_WINDOW_CLOSE on its queue, because the window is the
+		// app's and an editor with unsaved work gets to answer. The second
+		// press within GUI_CLOSE_ESCALATE_TICKS, on a window that is still
+		// here, is "I mean it": SIGTERM to the owning task, carried out by
+		// the frame loop after the lock drops. Explicit rather than timed —
+		// a stuck program is killed by the user's hand, never by a clock.
+		// F-keys have no ASCII, so this is the one chord that reads the
+		// scancode — through keyboard_fkey_number, which knows both
+		// dialects. Both edges swallowed.
+		if ((ev->key.modifiers & KEYBOARD_MOD_ALT) && !(ev->key.modifiers & KEYBOARD_MOD_CTRL) &&
+		    keyboard_fkey_number(ev->key.scancode, ev->key.modifiers) == 4) {
+			window_t *focus = wm_focused();
+			if (focus && ev->type == INPUT_EVENT_KEY_DOWN) {
+				if (focus->closeAskedTick != 0 &&
+				    ev->tick - focus->closeAskedTick <= GUI_CLOSE_ESCALATE_TICKS) {
+					printd(DEBUG_GUI, "guicomp: window %u asked to close twice — terminating owner %lu\n",
+						focus->id, focus->owner);
+					focus->closeAskedTick = 0;
+					s_terminate_owner = focus->owner;
+				} else {
+					printd(DEBUG_GUI, "guicomp: window %u asked to close\n", focus->id);
+					focus->closeAskedTick = ev->tick;
+					input_event_t close = {
+						.type = INPUT_EVENT_WINDOW_CLOSE,
+						.tick = ev->tick,
+					};
+					wm_deliver_event(focus, &close);
+				}
+			}
+			break;
+		}
+
+		// Ctrl+Alt+letter: the window-management verbs, on the FOCUSED
+		// window. The same chord the mouse gestures use (GRAPHICS.md's
+		// resize chapter ruled Ctrl+Alt the WM's escape hatch), so a plain
+		// Ctrl+letter still reaches the app. Ctrl strips the letter to its
+		// control code on both keyboard paths, so the ASCII is matched —
+		// 0x10 is Ctrl+P — and the scancode, which differs between PS/2
+		// and HID, is never consulted. Both edges are swallowed.
+		if ((ev->key.modifiers & (KEYBOARD_MOD_CTRL | KEYBOARD_MOD_ALT)) ==
+		    (KEYBOARD_MOD_CTRL | KEYBOARD_MOD_ALT) && ev->key.ascii >= 0x01 && ev->key.ascii <= 0x1A) {
+			window_t *focus = wm_focused();
+			if (focus && ev->type == INPUT_EVENT_KEY_DOWN) {
+				switch (ev->key.ascii) {
+				case 0x10: {   // Ctrl+Alt+P: pin on top (toggle)
+					bool pin = !(focus->flags & GUI_WINDOW_PINNED);
+					printd(DEBUG_GUI, "guicomp: window %u %s\n", focus->id, pin ? "pinned" : "unpinned");
+					wm_set_pinned(focus, pin);
+					break;
+				}
+				case 0x0D: {   // Ctrl+Alt+M: maximize (toggle) — 0x0D is Ctrl+M, a CR by 1963's table
+					bool max = !(focus->flags & GUI_WINDOW_MAXIMIZED);
+					printd(DEBUG_GUI, "guicomp: window %u %s\n", focus->id, max ? "maximized" : "restored");
+					wm_set_maximized(focus, max);
+					break;
+				}
+				case 0x0E:     // Ctrl+Alt+N: minimize (Alt+Tab brings it back)
+					printd(DEBUG_GUI, "guicomp: window %u minimized\n", focus->id);
+					wm_set_minimized(focus, true);
+					break;
+				case 0x14: {   // Ctrl+Alt+T: titlebar (toggle)
+					bool show = (focus->flags & GUI_WINDOW_NO_DECORATIONS) != 0;
+					printd(DEBUG_GUI, "guicomp: window %u titlebar %s\n", focus->id, show ? "shown" : "hidden");
+					wm_set_decorated(focus, show);
+					break;
+				}
+				default:
+					break;   // an unassigned letter is simply swallowed
+				}
+			}
+			break;
+		}
+
 		window_t *focus = wm_focused();
 		if (focus)
 			wm_deliver_event(focus, ev);
@@ -762,7 +974,14 @@ bool guicomp_thread(bool daemon)
 	s_cursor_y = (int32_t)kBackbuffer.height / 2;
 	gui_damage_add(cursor_rect());
 
-	paint_desktop();
+	// The user's desktop if they wrote one (desktop.c: /home/desktop.conf,
+	// then /etc/), else the test pattern that has been here since the
+	// surface core came up. Read here and not in gui_start because this is
+	// the compositor's own task, with a stack and the VFS, before any frame.
+	if (desktop_paint_from_config(&kDesktop))
+		gui_damage_add((rect_t){0, 0, (int32_t)kDesktop.width, (int32_t)kDesktop.height});
+	else
+		paint_desktop();
 
 	// A first window, created through the CLIENT API — so M5 exercises the
 	// exact path demo apps (and later, userland) will use: click it to
@@ -829,6 +1048,15 @@ bool guicomp_thread(bool daemon)
 		kPendingDamageCount = 0;
 
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
+
+		// A close escalation decided under the lock is carried out here,
+		// outside it: signalling a task takes scheduler locks, and kGuiLock
+		// must never nest under those (see gui_window_terminate_owner).
+		if (s_terminate_owner != 0) {
+			uint64_t owner = s_terminate_owner;
+			s_terminate_owner = 0;
+			gui_window_terminate_owner(owner);
+		}
 
 		// -------- Flush to the (slow, uncached) framebuffer, lock-free -----
 		// One flush per surviving rect. composite_locked clipped each to the

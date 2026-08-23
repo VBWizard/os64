@@ -2,6 +2,7 @@
 #define GUI_WINDOW_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "gui/gui_types.h"
 #include "gui/input.h"
@@ -30,7 +31,15 @@
 #define GUI_WINDOW_MIN_CONTENT_H  32
 
 // flags
-#define GUI_WINDOW_NO_DECORATIONS (1u << 0)   // reserved; not yet honored
+// NO TITLEBAR. Honored since 2026-08-23 (it was reserved from birth): the
+// window keeps its 1-pixel border on all four sides — a window with no edge
+// at all is unfindable on a desktop — and loses the 20-pixel bar. Content
+// size is untouched; only the frame shrinks. A creation flag for clients
+// AND a toggle for the user (Ctrl+Alt+T), because "hide the title" is a
+// thing you decide while looking at the window, not only when writing the
+// program. Ctrl+Alt+left-drag still moves it — the chord gestures were
+// designed to need no chrome, and this is the day that pays off.
+#define GUI_WINDOW_NO_DECORATIONS (1u << 0)
 // Created on top of the z-order but WITHOUT stealing focus (unless nothing
 // holds it yet — somebody must). Born 2026-08-17, the day the P5 booted the
 // GUI with no mouse: which window got focus at boot was a RACE between the
@@ -39,6 +48,35 @@
 // wear this flag so the shell's console deterministically ends up focused —
 // the thing you TYPE at is the thing that should be listening first.
 #define GUI_WINDOW_START_UNFOCUSED (1u << 1)
+// PIN ON TOP (2026-08-23): the window lives in the upper band of the z-list
+// and cannot be buried by an ordinary raise. A window-manager state, not a
+// creation option — there is no client flag for it and no app asked for
+// one; the user pins with Ctrl+Alt+P. (twm's f.raise-or-lower era had no
+// such thing; it arrived with fvwm's StaysOnTop in 1994 and every desktop
+// since has kept it, because a clock or a terminal you want to keep seeing
+// is a real need.)
+#define GUI_WINDOW_PINNED          (1u << 2)
+// MAXIMIZED (2026-08-23): the frame is the whole screen and restoreFrame
+// remembers where it came from. Ctrl+Alt+M toggles; so does a double-click
+// on the titlebar (the 1990 habit). A manual move or resize clears it — the
+// user has taken the geometry back, and a later "restore" to a frame they
+// have since abandoned would be a surprise. The capacity reservation is
+// what makes this trivial: the screen IS the canvas capacity, so a
+// maximize can never fail and never allocates (window.h's canvas_cap_w).
+#define GUI_WINDOW_MAXIMIZED       (1u << 3)
+// MINIMIZED (2026-08-23): off the glass — not composited, not hit-tested,
+// occluding nothing — but alive: it keeps its place in the z-list, its
+// event queue, its canvas, and its focus recency. Ctrl+Alt+N hides; there
+// is no taskbar and no launcher yet, so Alt+Tab is the way back: a
+// minimized window stays in the recency walk, and landing on it restores
+// it. (Focus leaves a minimized window at once, to the next most recent —
+// typing into something you cannot see is the one thing this must never
+// allow.)
+#define GUI_WINDOW_MINIMIZED       (1u << 4)
+
+// Alt+F4 twice within this long (5s) on a window that did not go away is
+// "I mean it": the owner task gets SIGTERM.
+#define GUI_CLOSE_ESCALATE_TICKS   (5 * TICKS_PER_SECOND)
 
 typedef struct window
 {
@@ -48,6 +86,25 @@ typedef struct window
 
     uint32_t  id;
     uint32_t  flags;
+
+    // When this window last took focus, as a monotonic serial (window.c's
+    // s_focus_serial, stamped wherever s_focused is assigned). Alt+Tab
+    // orders windows by THIS, not by z-order: the day pin-on-top arrived
+    // (2026-08-23) a pinned window held the top of the list while focus
+    // went elsewhere, and a cycle that read recency off the stacking order
+    // stopped toggling back. Recency is its own fact; this is where it lives.
+    uint64_t  focusSerial;
+
+    // Where the window was before it was maximized — what Ctrl+Alt+M puts
+    // back. Meaningful only while GUI_WINDOW_MAXIMIZED is set.
+    rect_t    restoreFrame;
+
+    // When Alt+F4 last asked this window to close (kTicksSinceStart), 0 if
+    // never. A second ask within GUI_CLOSE_ESCALATE_TICKS while the window
+    // is still here escalates to SIGTERM on the owner — see
+    // INPUT_EVENT_WINDOW_CLOSE in input.h for why the first one is only a
+    // request.
+    uint64_t  closeAskedTick;
 
     // The task that created this window through the client API (task.h
     // taskID), stamped by gui_window_create. Ownership is a CLIENT-API
@@ -133,6 +190,10 @@ void wm_raise(window_t *w);
 // Move the frame origin (drag). Damages the vacated and occupied areas.
 void wm_move(window_t *w, int32_t x, int32_t y);
 
+// Pin (or unpin) a window — see GUI_WINDOW_PINNED. Re-places it at the top
+// of its new band and damages its frame. A no-op if already in that state.
+void wm_set_pinned(window_t *w, bool pinned);
+
 // The capacity rule, in ONE place because two allocators must agree on it:
 // wm_create sizes the kernel-side stores with it, and gui_window_create sizes
 // the task-backed canvas extent with it. A window may be created larger than
@@ -177,6 +238,21 @@ window_t *wm_window_by_id(uint32_t id);
 
 window_t *wm_focused(void);
 
+// Snapshot every window's id (the safe handle — see wm_window_by_id) in
+// MOST-RECENTLY-FOCUSED order, the focused window first. Returns how many
+// were written, at most `max`. Alt+Tab walks this snapshot rather than any
+// live list, because every raise it performs rewrites the live state under
+// it: counting depth against an order you are changing never comes back to
+// where it started.
+size_t wm_recency_ids(uint32_t *ids, size_t max);
+
+// Re-stamp the focused window as the most recently used, without raising
+// or changing anything else. Alt+Tab's hold end is the one caller: its
+// steps raise without stamping (passing through a window is not using it),
+// and this is the stamp for the window the hold ended on.
+void wm_touch_focus(void);
+#define ALTTAB_RING_MAX 16   // the most a snapshot holds; the cycle covers the top sixteen
+
 // Push a routed event onto the window's queue (drops when full).
 void wm_deliver_event(window_t *w, const input_event_t *ev);
 
@@ -193,24 +269,61 @@ void wm_composite(surface_t *backbuffer, rect_t damage);
 // uncached flush on pixels nobody can see. Caller holds kGuiLock.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 
+// How much chrome sits ABOVE the content: the titlebar (which includes the
+// top border) for a decorated window, the bare border for an undecorated
+// one. THE one place the question is answered — seven sites used to spell
+// "GUI_TITLEBAR_HEIGHT" by hand, which is seven sites to miss the day the
+// answer stopped being constant. Takes flags, not a window, because the
+// client boundary sizes a content area before any window exists.
+static inline int32_t wm_chrome_top(uint32_t flags)
+{
+    return (flags & GUI_WINDOW_NO_DECORATIONS) ? GUI_BORDER_WIDTH : GUI_TITLEBAR_HEIGHT;
+}
+
 // Where the content area sits on screen (for event coordinate translation
 // and publish-rect mapping).
 static inline rect_t wm_content_rect_on_screen(const window_t *w)
 {
     return (rect_t){
         w->frame.x + GUI_BORDER_WIDTH,
-        w->frame.y + GUI_TITLEBAR_HEIGHT,
+        w->frame.y + wm_chrome_top(w->flags),
         (int32_t)w->content.width,
         (int32_t)w->content.height,
     };
 }
 
 // True if the point (screen coords) lands in the window's titlebar — the
-// grab-handle for dragging and NOT part of the client content.
+// grab-handle for dragging and NOT part of the client content. An
+// undecorated window has none; its top border is content-adjacent chrome
+// like the other three sides, and a click there is the window system's.
 static inline bool wm_point_in_titlebar(const window_t *w, int32_t x, int32_t y)
 {
+    if (w->flags & GUI_WINDOW_NO_DECORATIONS)
+        return false;
     return rect_contains_point(
         (rect_t){w->frame.x, w->frame.y, w->frame.w, GUI_TITLEBAR_HEIGHT}, x, y);
+}
+
+// Show or hide the titlebar (Ctrl+Alt+T). The CONTENT STAYS WHERE IT IS —
+// the frame's top edge moves to meet it — because the content is what the
+// user is looking at, and a window that jumps 19 pixels when you hide its
+// title is a window you hid the title of by mistake. Damages old ∪ new.
+void wm_set_decorated(window_t *w, bool decorated);
+
+// Maximize to the screen, or restore the remembered frame. See
+// GUI_WINDOW_MAXIMIZED. Goes through wm_resize, so the owner gets its
+// resize event exactly as it would for a drag.
+void wm_set_maximized(window_t *w, bool maximized);
+
+// Hide from the glass, or bring back (restored = raised + focused). See
+// GUI_WINDOW_MINIMIZED.
+void wm_set_minimized(window_t *w, bool minimized);
+
+// Hidden from the glass? The one test composite, hit-testing and occlusion
+// all ask, so they cannot disagree about what "hidden" means.
+static inline bool wm_is_hidden(const window_t *w)
+{
+    return (w->flags & GUI_WINDOW_MINIMIZED) != 0;
 }
 
 #endif // GUI_WINDOW_H

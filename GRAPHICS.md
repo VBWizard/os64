@@ -619,6 +619,126 @@ are not.
   bytes and was using 14), because a compositor keeping its own shadow copy of
   modifier state would drift out of sync across a VT switch.
 
+## The window-management chords (built 2026-08-23 — Chris's QoL list)
+
+Six things a desktop is expected to do, all built the same afternoon, all
+as CHORDS on the focused window and none as chrome — the resize chapter's
+ruling (Ctrl+Alt is the window system's escape hatch; plain Ctrl+letter
+still reaches the app) extended from the mouse to the keyboard:
+
+| Chord | Does | Notes |
+|---|---|---|
+| **Alt+Tab** / Shift+Alt+Tab | cycle focus | MOST-RECENTLY-USED order, not z-order; quick press = toggle between the two most recent; hold Alt and keep tabbing to walk the whole ring; **passing through a window is not using it** — only the one you release Alt over becomes recent (Chris's nit, first hour on the P5). A minimized window is in the ring, and landing on it restores it |
+| **Ctrl+Alt+P** | pin on top (toggle) | two bands in the z-list, pinned above all; white square at the bar's right end; a client cannot ask for it at create (`gui_client.c` masks the flag — a self-pinning app is a pop-up ad) |
+| **Ctrl+Alt+T** | hide/show titlebar | content stays put, the frame's top edge moves; 1px border stays; `OS64_GUI_WINDOW_NO_DECORATIONS` honored at create too |
+| **Ctrl+Alt+M** / titlebar double-click | maximize (toggle) | restore frame remembered; a manual move or resize clears it; raises, so a focused-but-buried window still visibly answers |
+| **Ctrl+Alt+N** | minimize | off the glass, not hit-tested, occludes nothing, alive; focus goes to the most recent visible window; Alt+Tab brings it back |
+| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path.ppm` (P6, centered, never scaled — a `screendump` can be the wallpaper); no file = the test pattern stays (`gui/desktop.c`) |
+
+Three things learned building them, for the next chord:
+
+- **Match keys by ASCII, never by scancode.** The scancode field is PS/2
+  set-1 on one keyboard path and a HID usage on the other (Tab is 0x0F
+  there, 0x2B here). Alt+Tab worked in QEMU's PS/2 and did nothing on the
+  P5's USB keyboard until the test became `ascii == '\t'`. Same for the
+  Ctrl+Alt+letter verbs: Ctrl strips the letter to its control code on both
+  paths, so `0x10` is Ctrl+P everywhere. (The 2026-08-21 chord-publish
+  lesson, re-learned in one day — it is now the rule.)
+- **The HID path emits releases now.** Until today xHCI delivered key-DOWN
+  only: no key-up, no event at all for a modifier-only report. The Alt+Tab
+  hold therefore could not end on USB. `hid_process_keyboard_report`
+  emits a release edge per usage that left the report and a press/release
+  per modifier bit that flipped (scancode `0xE0 + bit`, ASCII 0, so the
+  text path ignores them exactly as it ignores PS/2 modifier keys).
+  And the hold's end is not "the Alt key's release event" at all — PS/2
+  never delivers one for Right Alt — but the first key event of any kind
+  whose modifiers lack Alt.
+- **Recency is its own fact** (`window_t.focusSerial`, stamped by
+  `focus_window()` at every focus assignment). The first Alt+Tab walked
+  the z-list; pin-on-top broke it within the hour, because a pinned window
+  holds the top of the stack while focus goes elsewhere. Z-order is where
+  things are drawn; recency is what the user did last; they stopped being
+  the same number the moment one window could refuse to be buried.
+
+The harness grew to test these: `utility/gui_run.sh` drives a headless
+GUI boot from a key script, and speaks **QMP** (`-qmp unix:`) for raw
+key-down/key-up and button events — HMP `sendkey` cannot hold Alt across
+two Tabs or click twice inside 500ms. Launch with `-device qemu-xhci
+-device usb-kbd` to test the HID dialect; QEMU routes input to USB when it
+is present.
+
+## The Alt+Tab switcher — design (2026-08-23, UNBUILT; for Opus)
+
+*Chris, the first afternoon with minimize: "I minimized everything, and the
+only way back to the gterm I was on was to Alt+Tab through a bunch of
+things, which brought them all back up."* That is the one rule in the chords
+chapter that was wrong, and it was Fable's call: "stepping onto a minimized
+window restores it, and it stays restored if the walk moves on." With raise-
+as-feedback there was no other way to show the user where they were. A
+visible list is the other way, and it is what every desktop grew for the
+same reason — Windows 3.1's (1992) was a box of icons; os64's will be a box
+of titles, because os64 windows have no icons and a title is what they have.
+
+### What changes
+
+- **While Alt is held, NOTHING in the scene moves.** No raise, no restore,
+  no focus change, no recency stamp. The z-order the user had is the z-order
+  they keep until they let go. (Today each step raises — delete that.)
+- **A strip appears** on the first Tab: centered, one row, a cell per window
+  in the recency ring (`wm_recency_ids`, most recent first), the title in
+  each cell, the current step highlighted. Minimized windows are in the ring
+  and drawn dimmed (gray text) so "bring back the one I hid" is a visible
+  choice, not a guess. 16 cells max (`ALTTAB_RING_MAX`); the strip is sized
+  to the count.
+- **Tab / Shift+Tab move the highlight.** Nothing else.
+- **Releasing Alt commits**: the highlighted window is restored if
+  minimized, raised, focused, and recency-stamped (`wm_touch_focus`) — ONE
+  window changes, the rest stay exactly where they were. The strip
+  disappears. Escape during the hold cancels (strip goes, nothing changes).
+
+### Where it lives
+
+A new scene layer in `composite_locked`: desktop → windows → **switcher** →
+cursor. It is NOT a window (no `window_t`, no owner, no event queue, not in
+the z-list, not hit-testable) — the rubber band (`band_composite`) is the
+precedent: compositor-owned pixels drawn straight into the backbuffer for a
+rect the compositor damages itself. `switcher_composite(backbuffer, damage)`
+called right after `wm_composite`; `switcher_damage_locked()` on every
+highlight move (old strip rect ∪ new — or simply the strip rect, it is
+small). State: `s_alttab_*` already holds the ring, count and step; add
+`s_alttab_shown` and the strip rect. `alttab_step_locked` stops calling
+`wm_raise`/`wm_set_minimized` and only moves the step + damages the strip;
+`alttab_end_locked` does the commit described above.
+
+Cell geometry: 8px glyphs, 16px tall (`surface_draw_text`), titles clipped
+to `GUI_WINDOW_TITLE_MAX`; a cell is `8*len + 2*pad` wide, all cells one
+height (`16 + 2*pad`), strip = cells + borders, centered on the screen. Use
+the chrome palette (`WINDOW_TITLEBAR_FOCUSED` for the highlight,
+`WINDOW_TITLEBAR_UNFOCUSED` for the rest, `GUI_COLOR_WHITE` / a dim gray
+for minimized titles). No translucency — there is none yet (known
+limitation 7).
+
+### What does not change
+
+- The toggle: a quick Alt+Tab (one Tab, release) still lands on the second
+  entry — the strip flashes for a frame and that is fine.
+- Recency semantics: passing through is still not using (the strip makes
+  that literal — nothing is touched until commit).
+- The USB/PS/2 rules: Tab by ASCII, hold ends on the first key event
+  without Alt, Escape by ASCII `0x1B`.
+- Ctrl+Alt+N to minimize; Alt+F4 to close.
+
+### Verification
+
+`utility/gui_run.sh` + QMP (`qmp down:alt down:tab up:tab down:tab up:tab`
+then `shot` BEFORE `up:alt`) is exactly the rig for this: the strip must be
+visible in the shot with the highlight on the third entry and the z-order
+unchanged from boot; after `up:alt` one window is on top. Then: minimize all
+three demos (Ctrl+Alt+N ×3), Alt+Tab to the second, release — exactly one
+comes back.
+
+Booked in DEBTS under GUI.
+
 ## Testing / debugging
 
 - `DEBUG_GUI` (CONFIG.h bit 21; also a cmdline token) gates all GUI printd's:
@@ -641,9 +761,12 @@ are not.
    measuring first — dirty-rect flushes are already small.
 4. Damage rect LIST instead of single union (confined to `gui_damage_add_locked`
    + the frame loop).
-5. ~~Window resize~~ **BUILT 2026-08-19 (see the resize chapter above)**; close
-   buttons, minimize, `GUI_WINDOW_NO_DECORATIONS` honor — all still open, all
-   chrome features.
+5. ~~Window resize~~ **BUILT 2026-08-19 (see the resize chapter above)**;
+   ~~minimize, `GUI_WINDOW_NO_DECORATIONS` honor~~ **BUILT 2026-08-23 (the
+   chords chapter above)**. Still open: close buttons (and any titlebar
+   button at all — the chords were chosen so none is needed yet), a
+   launcher/taskbar (Alt+Tab is the only way back from minimize), and
+   re-reading `desktop.conf` without a reboot.
 6. Mouse wheel + 5-button (IntelliMouse magic sample-rate handshake).
 7. Alpha translucency (X byte in XRGB is reserved for it; `surface_blit_masked`
    already does shaped blits).

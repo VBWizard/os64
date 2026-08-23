@@ -34,7 +34,7 @@
 #define OS64_GUI_ERR_INTERRUPTED     (-6)   // a blocking wait cut short by termination
 
 // ── Window flags ────────────────────────────────────────────────────────────
-#define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // reserved; not yet honored
+#define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // no titlebar; 1px border stays (honored since 2026-08-23)
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 
 // The window title's capacity, NUL included (gui/window.h's value, verbatim
@@ -100,6 +100,12 @@ typedef struct os64_gui_surface
 // move) and repaint the whole thing: the newly exposed strip holds the
 // window's background color, not your pixels.
 #define OS64_GUI_EVENT_WINDOW_RESIZE     6
+// The user asked this window to close (Alt+F4). A REQUEST: the window is
+// yours, so you decide — save, ask, or just exit. Ignore it and the user's
+// next Alt+F4 within five seconds is SIGTERM to your whole task, which is the
+// answer you would have given anyway minus the chance to say goodbye. libui
+// handles it (os64_ui_t.on_close, else it sets `quit`).
+#define OS64_GUI_EVENT_WINDOW_CLOSE      7
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
 // key events and — since resize — by mouse events too.
@@ -108,6 +114,13 @@ typedef struct os64_gui_surface
 #define OS64_GUI_MOD_ALT   (1u << 2)
 #define OS64_GUI_MOD_CAPS  (1u << 3)
 #define OS64_GUI_MOD_NUM   (1u << 4)
+// Not a modifier: WHICH KEYBOARD. Set on every event from a USB (HID)
+// keyboard, clear from PS/2. It rides in this byte because the `scancode`
+// field means different things on the two paths — PS/2 set-1 make code
+// versus HID usage — and a key with no ASCII (an F-key, an arrow) cannot
+// be named any other way. Match printable keys by `ascii` and never look
+// at this; match F-keys with it (F1 is 0x3B on PS/2 and 0x3A on HID).
+#define OS64_GUI_MOD_HID   (1u << 7)
 
 // Mouse buttons: bit positions in `mouse.buttons`, and the value carried in
 // `mouse.button` on DOWN/UP. These crossed the boundary from the day mouse

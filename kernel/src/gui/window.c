@@ -41,6 +41,17 @@ static uint32_t s_next_id = 1;
 #define WINDOW_BORDER_UNFOCUSED   0xff40444c
 #define WINDOW_CONTENT_INITIAL    GUI_COLOR_LIGHT_GRAY
 
+// Focus recency, see window_t.focusSerial. EVERY assignment to s_focused
+// goes through here so the serial can never be forgotten at one site —
+// which is the whole reason it is a function and not a field write.
+static uint64_t s_focus_serial = 0;
+static void focus_window(window_t *w)
+{
+	s_focused = w;
+	if (w)
+		w->focusSerial = ++s_focus_serial;
+}
+
 static void unlink_window(window_t *w)
 {
 	if (w->above)
@@ -54,15 +65,40 @@ static void unlink_window(window_t *w)
 	w->above = w->below = NULL;
 }
 
+// Link `w` at the top of ITS BAND. The z-list has two bands since 2026-08-23
+// (pin-on-top): pinned windows occupy the top of the list, everything else
+// the rest, and "on top" means the top of whichever band the window belongs
+// to — an ordinary raise slides in just beneath the lowest pinned window, so
+// a pinned window can be focused, moved and typed at but never buried. ONE
+// function does the placement for create, raise and pin/unpin alike, because
+// three copies of "find the band boundary" is three chances to disagree.
 static void link_on_top(window_t *w)
 {
-	w->above = NULL;
-	w->below = s_top;
-	if (s_top)
-		s_top->above = w;
-	s_top = w;
-	if (!s_bottom)
+	window_t *above = NULL;   // the window that will sit directly above w
+	if (!(w->flags & GUI_WINDOW_PINNED))
+		for (window_t *p = s_top; p && (p->flags & GUI_WINDOW_PINNED); p = p->below)
+			above = p;
+
+	w->above = above;
+	w->below = above ? above->below : s_top;
+	if (w->below)
+		w->below->above = w;
+	else
 		s_bottom = w;
+	if (above)
+		above->below = w;
+	else
+		s_top = w;
+}
+
+// Is `w` already as high as its band allows? (wm_raise's "nothing to relink"
+// test, which used to be `s_top == w` — true for an ordinary window only when
+// nothing is pinned.)
+static bool at_band_top(const window_t *w)
+{
+	if (w->flags & GUI_WINDOW_PINNED)
+		return s_top == w;
+	return w->above == NULL || (w->above->flags & GUI_WINDOW_PINNED);
 }
 
 window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
@@ -70,7 +106,7 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 	// Content = frame minus chrome; refuse degenerate sizes rather than
 	// letting a 0-wide surface ripple NULLs through the compositor.
 	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = frame.h - GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH;
+	int32_t content_h = frame.h - wm_chrome_top(flags) - GUI_BORDER_WIDTH;
 	if (content_w < 8 || content_h < 8)
 		return NULL;
 
@@ -129,7 +165,7 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 	// then kept wearing the focused blue in front of an eyewitness.
 	window_t *old_focus = s_focused;
 	if (!(flags & GUI_WINDOW_START_UNFOCUSED) || s_focused == NULL)
-		s_focused = w;
+		focus_window(w);
 	gui_damage_add_locked(w->frame);
 	if (s_focused == w && old_focus != NULL && old_focus != w)
 		gui_damage_add_locked(old_focus->frame);
@@ -149,10 +185,10 @@ void wm_destroy(window_t *w)
 
 	gui_damage_add_locked(w->frame);   // repaint what the window covered
 	if (s_focused == w)
-		s_focused = w->below ? w->below : s_top;
+		focus_window(w->below ? w->below : s_top);
 	unlink_window(w);
 	if (s_focused == w)
-		s_focused = s_top;
+		focus_window(s_top);
 	// If focus just moved, the inheriting window's titlebar changes color —
 	// damage it, or only the slice under the dead window's frame repaints.
 	// wm_raise always knew this; this path never did, and nobody noticed
@@ -171,7 +207,7 @@ void wm_destroy(window_t *w)
 window_t *wm_topmost_at(int32_t x, int32_t y)
 {
 	for (window_t *w = s_top; w; w = w->below)
-		if (rect_contains_point(w->frame, x, y))
+		if (!wm_is_hidden(w) && rect_contains_point(w->frame, x, y))
 			return w;
 	return NULL;
 }
@@ -180,12 +216,12 @@ void wm_raise(window_t *w)
 {
 	window_t *old_focus = s_focused;
 
-	if (s_top != w) {
+	if (!at_band_top(w)) {
 		unlink_window(w);
 		link_on_top(w);
 		// Newly exposed stacking: repaint the whole raised frame.
 	}
-	s_focused = w;
+	focus_window(w);
 
 	// Titlebars repaint on focus change (color flips on both windows).
 	if (old_focus && old_focus != w)
@@ -193,8 +229,91 @@ void wm_raise(window_t *w)
 	gui_damage_add_locked(w->frame);
 }
 
+void wm_set_pinned(window_t *w, bool pinned)
+{
+	if (pinned == ((w->flags & GUI_WINDOW_PINNED) != 0))
+		return;
+	if (pinned)
+		w->flags |= GUI_WINDOW_PINNED;
+	else
+		w->flags &= ~GUI_WINDOW_PINNED;
+	// Re-place in the new band. Pinning lifts it above everything; unpinning
+	// drops it to the top of the ordinary band — still the most recent thing
+	// you touched, just buriable again. Either way the stacking under its
+	// frame changed, so the frame is damaged.
+	unlink_window(w);
+	link_on_top(w);
+	gui_damage_add_locked(w->frame);
+}
+
+void wm_set_decorated(window_t *w, bool decorated)
+{
+	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS))
+		return;
+	rect_t old = w->frame;
+	// The content's screen position is the invariant; the frame's top edge
+	// moves by the difference between the two chrome heights to keep it so.
+	int32_t before = wm_chrome_top(w->flags);
+	if (decorated)
+		w->flags &= ~GUI_WINDOW_NO_DECORATIONS;
+	else
+		w->flags |= GUI_WINDOW_NO_DECORATIONS;
+	int32_t after = wm_chrome_top(w->flags);
+	w->frame.y += before - after;
+	w->frame.h += after - before;
+	gui_damage_add_locked(rect_union(old, w->frame));
+}
+
+void wm_set_maximized(window_t *w, bool maximized)
+{
+	if (maximized == ((w->flags & GUI_WINDOW_MAXIMIZED) != 0))
+		return;
+	if (maximized) {
+		w->restoreFrame = w->frame;
+		w->flags |= GUI_WINDOW_MAXIMIZED;
+		// Raised as well: a maximized window you cannot see (focused but
+		// stacked under its siblings, which START_UNFOCUSED makes possible)
+		// answers the chord with nothing visible happening.
+		wm_raise(w);
+		wm_resize(w, (rect_t){0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height});
+	} else {
+		w->flags &= ~GUI_WINDOW_MAXIMIZED;
+		wm_resize(w, w->restoreFrame);
+	}
+}
+
+void wm_set_minimized(window_t *w, bool minimized)
+{
+	if (minimized == wm_is_hidden(w))
+		return;
+	if (minimized) {
+		w->flags |= GUI_WINDOW_MINIMIZED;
+		gui_damage_add_locked(w->frame);   // what it covered comes back
+		if (s_focused == w) {
+			// Focus goes to the most recently used VISIBLE window — which is
+			// what Alt+Tab would have picked — not merely the next one down
+			// the stack. NULL if nothing is left showing; keys then go
+			// nowhere, which beats going somewhere invisible.
+			window_t *next = NULL;
+			for (window_t *c = s_top; c; c = c->below)
+				if (!wm_is_hidden(c) && (next == NULL || c->focusSerial > next->focusSerial))
+					next = c;
+			focus_window(next);
+			if (next)
+				gui_damage_add_locked(next->frame);   // its titlebar turns blue
+		}
+	} else {
+		w->flags &= ~GUI_WINDOW_MINIMIZED;
+		wm_raise(w);   // back on top, focused, damaged
+	}
+}
+
 void wm_move(window_t *w, int32_t x, int32_t y)
 {
+	// A moved window is no longer "the maximized one": the user took its
+	// geometry back (see GUI_WINDOW_MAXIMIZED). Cleared before the move so a
+	// restore can never return it to a place it has since left.
+	w->flags &= ~GUI_WINDOW_MAXIMIZED;
 	rect_t old = w->frame;
 	w->frame.x = x;
 	w->frame.y = y;
@@ -233,7 +352,7 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 	// Frame in, content out — the same inset wm_create applies, so the two
 	// can never disagree about where the client area begins.
 	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = frame.h - GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH;
+	int32_t content_h = frame.h - wm_chrome_top(w->flags) - GUI_BORDER_WIDTH;
 
 	// Clamp into [minimum, reservation]. Clamping rather than refusing is
 	// deliberate: this is driven by a mouse, and a drag that runs past a
@@ -250,7 +369,7 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 	// Re-derive the frame from the clamped content so the chrome the
 	// compositor draws and the surface the client draws stay the same window.
 	frame.w = content_w + 2 * GUI_BORDER_WIDTH;
-	frame.h = content_h + GUI_TITLEBAR_HEIGHT + GUI_BORDER_WIDTH;
+	frame.h = content_h + wm_chrome_top(w->flags) + GUI_BORDER_WIDTH;
 	return frame;
 }
 
@@ -262,7 +381,7 @@ bool wm_resize(window_t *w, rect_t frame)
 	// them changed.)
 	frame = wm_clamp_frame(w, frame);
 	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = frame.h - GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH;
+	int32_t content_h = frame.h - wm_chrome_top(w->flags) - GUI_BORDER_WIDTH;
 
 	uint32_t old_cw = w->content.width;
 	uint32_t old_ch = w->content.height;
@@ -361,6 +480,33 @@ window_t *wm_focused(void)
 	return s_focused;
 }
 
+void wm_touch_focus(void)
+{
+	focus_window(s_focused);
+}
+
+size_t wm_recency_ids(uint32_t *ids, size_t max)
+{
+	// Insertion-sort by focusSerial, newest first, as the z-list is walked.
+	// Sixteen entries at most; the sort is the simplest thing that is
+	// obviously right, which is the correct tool at this size.
+	uint64_t serials[ALTTAB_RING_MAX];
+	size_t n = 0;
+	if (max > ALTTAB_RING_MAX)
+		max = ALTTAB_RING_MAX;
+	for (window_t *w = s_top; w; w = w->below) {
+		size_t i = n;
+		while (i > 0 && serials[i - 1] < w->focusSerial) {
+			if (i < max) { ids[i] = ids[i - 1]; serials[i] = serials[i - 1]; }
+			i--;
+		}
+		if (i < max) { ids[i] = w->id; serials[i] = w->focusSerial; }
+		if (n < max)
+			n++;
+	}
+	return n;
+}
+
 void wm_deliver_event(window_t *w, const input_event_t *ev)
 {
 	uint32_t next = (w->evt_head + 1) % GUI_WINDOW_EVENTS_MAX;
@@ -421,19 +567,30 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 	surface_draw_rect(&view, f,
 	                  focused ? WINDOW_BORDER_FOCUSED : WINDOW_BORDER_UNFOCUSED);
 
-	// Titlebar with centered-ish title text (8px/glyph, 16px tall font).
-	rect_t bar = {f.x + GUI_BORDER_WIDTH, f.y + GUI_BORDER_WIDTH,
-	              f.w - 2 * GUI_BORDER_WIDTH, GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH};
-	uint32_t bar_color = focused ? WINDOW_TITLEBAR_FOCUSED : WINDOW_TITLEBAR_UNFOCUSED;
-	surface_fill_rect(&view, bar, bar_color);
+	// Titlebar with centered-ish title text (8px/glyph, 16px tall font) —
+	// unless the window declined one, in which case the border IS the chrome
+	// and focus shows only in the border's color.
+	if (!(w->flags & GUI_WINDOW_NO_DECORATIONS)) {
+		rect_t bar = {f.x + GUI_BORDER_WIDTH, f.y + GUI_BORDER_WIDTH,
+		              f.w - 2 * GUI_BORDER_WIDTH, GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH};
+		uint32_t bar_color = focused ? WINDOW_TITLEBAR_FOCUSED : WINDOW_TITLEBAR_UNFOCUSED;
+		surface_fill_rect(&view, bar, bar_color);
 
-	size_t title_len = 0;
-	while (w->title[title_len] && title_len < GUI_WINDOW_TITLE_MAX - 1)
-		title_len++;
-	// Text clips per glyph cell against the view, so a titlebar sliced down
-	// the middle by a damage rect draws its half-glyph and stops.
-	surface_draw_text(&view, bar.x + 6, bar.y + (bar.h - 16) / 2,
-	                  w->title, title_len, GUI_COLOR_WHITE, bar_color);
+		size_t title_len = 0;
+		while (w->title[title_len] && title_len < GUI_WINDOW_TITLE_MAX - 1)
+			title_len++;
+		// Text clips per glyph cell against the view, so a titlebar sliced down
+		// the middle by a damage rect draws its half-glyph and stops.
+		surface_draw_text(&view, bar.x + 6, bar.y + (bar.h - 16) / 2,
+		                  w->title, title_len, GUI_COLOR_WHITE, bar_color);
+
+		// A pinned window wears a small white square at the right end of its
+		// bar — the only chrome the pin has, and enough to answer "why won't
+		// this thing go behind?" at a glance.
+		if (w->flags & GUI_WINDOW_PINNED)
+			surface_fill_rect(&view, (rect_t){bar.x + bar.w - 14, bar.y + (bar.h - 8) / 2, 8, 8},
+			                  GUI_COLOR_WHITE);
+	}
 
 	// Client content. Blit the WHOLE content rect at its view-space position
 	// and let surface_blit clip both ends: it already mirrors destination
@@ -451,7 +608,7 @@ void wm_composite(surface_t *backbuffer, rect_t damage)
 	// touch the damage at all.
 	rect_t overlap;
 	for (window_t *w = s_bottom; w; w = w->above)
-		if (rect_intersect(w->frame, damage, &overlap))
+		if (!wm_is_hidden(w) && rect_intersect(w->frame, damage, &overlap))
 			composite_one(backbuffer, w, damage);
 }
 
@@ -479,6 +636,8 @@ bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect)
 
 	for (const window_t *above = w->above; above; above = above->above) {
 		rect_t covered;
+		if (wm_is_hidden(above))
+			continue;   // a minimized window covers nothing
 		// Fully inside means: the intersection IS the rect itself.
 		if (rect_intersect(above->frame, screen_rect, &covered) &&
 		    covered.x == screen_rect.x && covered.y == screen_rect.y &&

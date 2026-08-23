@@ -1017,7 +1017,7 @@ void kernel_main()
 	// of kernel_init's boot spew is in the grid and survives an Alt+F2 away
 	// and back; the handful of lines above exist only as pixels.
 	tty_init();
-	printf("Virtual terminals: %u (Alt+F1..F%u or Alt+Arrows to switch; Shift+PgUp/PgDn for scrollback)\n",
+	printf("Virtual terminals: %u (Alt+F1..F%u or Alt+Arrows to switch, Ctrl+Alt+F-key under the GUI; Shift+PgUp/PgDn for scrollback)\n",
 	       TTY_COUNT, TTY_COUNT);
 	kernel_init();
 }

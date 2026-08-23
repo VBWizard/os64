@@ -33,6 +33,13 @@ typedef enum input_event_type
     // is an ordinary event, not a signal — and it is why an event loop is a
     // loop instead of a switchboard.
     INPUT_EVENT_WINDOW_RESIZE,
+    // Synthesized like RESIZE (2026-08-23): the user asked for this window
+    // to go away (Alt+F4). It is a REQUEST, delivered to the owner, because
+    // the window is the app's — an editor with unsaved work gets to say so.
+    // The window system never closes a window itself; what it does if the
+    // request is ignored is escalate (Alt+F4 again = SIGTERM to the owner),
+    // which is the app's business to avoid by answering the first one.
+    INPUT_EVENT_WINDOW_CLOSE,
 } input_event_type_t;
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the

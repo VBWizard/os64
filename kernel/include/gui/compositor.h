@@ -85,4 +85,9 @@ void gui_census(uint32_t *windows, uint64_t *surface_bytes);
 struct task;
 void gui_task_destroy_windows(struct task *t);
 
+// Alt+F4's second press: SIGTERM the task that owns a window which ignored
+// its close request. Runs OUTSIDE kGuiLock (it takes scheduler locks).
+// Kernel-thread owners are refused. See gui_client.c.
+void gui_window_terminate_owner(uint64_t owner);
+
 #endif // GUI_COMPOSITOR_H

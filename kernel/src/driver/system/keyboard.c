@@ -568,8 +568,17 @@ void keyboard_handle_scancode(uint8_t scancode) {
         // F1-F8 are 0x3B..0x42; bare F-keys stay silent on the input stream
         // (no ASCII, same as always), so the F-row remains free for future
         // full-screen apps to claim.
+        //
+        // ...and Ctrl+Alt+F1..F8 while the GUI holds the glass (2026-08-23).
+        // The VT8 ruling of 2026-08-19 said bare Alt stands "until someone
+        // pinches"; Alt+F4 for close was the pinch. X11 drew the same line
+        // for the same reason: under a window system the F-row belongs to
+        // the apps, and the terminal switch takes the extra finger. A text
+        // VT keeps bare Alt — nothing there competes for it. (xhci.c makes
+        // the identical test.)
         if (code >= 0x3B && code <= 0x42 &&
-            (s_modifiers & KEYBOARD_MOD_ALT)) {
+            (s_modifiers & KEYBOARD_MOD_ALT) &&
+            (!gui_owns_glass() || (s_modifiers & KEYBOARD_MOD_CTRL))) {
             tty_focus(code - 0x3B);
             return;
         }
