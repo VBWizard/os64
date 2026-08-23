@@ -1853,6 +1853,31 @@ static bool line_overflowed(const char *line)
 	return n >= LINE_MAX;
 }
 
+// The other way a file of commands can end: not at its end. os64_readline
+// answers 1 (a line), 0 (end of input) or NEGATIVE (the read or the seek-back
+// under it failed) — three endings, of which only the middle one means the
+// file is finished. Treating the third as the second is how a script reports
+// success for work it never performed.
+static void report_read_failed(const char *what, const char *path,
+                               int lineNo, int64_t err)
+{
+	os64_puts("husk: ");
+	os64_puts(path);
+	os64_puts(": read failed after line ");
+	put_num((unsigned long)lineNo);
+	os64_puts(" (error ");
+	if (err < 0)
+	{
+		os64_puts("-");
+		put_num((unsigned long)(-err));
+	}
+	else
+		put_num((unsigned long)err);
+	os64_puts(") - ");
+	os64_puts(what);
+	os64_puts(" stopped\n");
+}
+
 static void report_line_too_long(const char *what, const char *path, int lineNo)
 {
 	os64_puts("husk: ");
@@ -1908,7 +1933,8 @@ static int run_rc(int *last_status)
 	char line[LINE_MAX + 1];            // the spare byte — see line_overflowed
 	int exiting = 0;
 	int lineNo = 0;
-	while (!exiting && os64_readline(h, line, sizeof(line)) == 1)
+	int64_t readVerdict = 1;            // kept, not discarded — report_read_failed
+	while (!exiting && (readVerdict = os64_readline(h, line, sizeof(line))) == 1)
 	{
 		lineNo++;
 		if (line_overflowed(line))
@@ -1931,6 +1957,12 @@ static int run_rc(int *last_status)
 		exiting = run_line(line, last_status);
 	}
 	os64_close(h);
+
+	// Same three endings as a script (report_read_failed). The rc says so and
+	// husk carries on to its prompt — a machine whose startup file became
+	// unreadable is exactly a machine you want a prompt on.
+	if (readVerdict < 0)
+		report_read_failed("rc", found, lineNo, readVerdict);
 	return exiting;
 }
 
@@ -2027,7 +2059,15 @@ static int run_script(const char *path, char **params, int nparams)
 	int last_status = 0;
 	int exiting = 0;
 	int lineNo = 0;
-	while (!exiting && os64_readline(h, line, sizeof(line)) == 1)
+	// The readline verdict is KEPT, because 0 and -1 are different endings and
+	// only one of them is the end of the file. `== 1` alone read a failed disk
+	// read as "no more lines", so a script whose tail could not be read exited
+	// with the status of the last line that DID run — quite possibly 0, which
+	// is a script reporting success for work it never performed. (Codex
+	// review, 2026-08-22.) Loop exit via `exiting` leaves this at 1: the
+	// short-circuit means readline is not called on that pass.
+	int64_t readVerdict = 1;
+	while (!exiting && (readVerdict = os64_readline(h, line, sizeof(line))) == 1)
 	{
 		lineNo++;
 		if (line_overflowed(line))
@@ -2046,6 +2086,15 @@ static int run_script(const char *path, char **params, int nparams)
 		exiting = run_line(line, &last_status);   // `exit` ends the script
 	}
 	os64_close(h);
+
+	if (readVerdict < 0)
+	{
+		// A script that could not be READ did not succeed, whatever its last
+		// line happened to return. Say where it stopped: "it worked up to
+		// line 12" is the difference between a bad disk and a bad script.
+		report_read_failed("script", path, lineNo, readVerdict);
+		return 2;
+	}
 	return last_status;
 }
 
