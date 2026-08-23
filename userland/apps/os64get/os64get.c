@@ -128,11 +128,33 @@ static const char *const kConfPaths[] = { "/home/os64get.conf", "/etc/os64get.co
 
 // Trim a trailing '/' off a directory value so "/bin/" and "/bin" mean the
 // same thing — the one courtesy the reader extends beyond the dialect.
-static void conf_take_dir(char *dst, const char *value)
+//
+// Returns false if the value does NOT FIT, having touched nothing: the caller
+// says so and drops the line. Two reasons it is a refusal and not a trim.
+// First, os64_strcopy reports the UNTRUNCATED source length (strlcpy's
+// contract, str.h), so copying first and measuring after would send the loop
+// below walking off the end of a 128-byte slot — reading past it, and writing
+// a NUL past it if the byte it finds there happens to be '/'. Second, even
+// with the index clamped, a silently shortened path is a rule that quietly
+// installs your files SOMEWHERE ELSE; "/usr/local/…/bin" truncated to
+// "/usr/local/…" is a directory that may well exist. A routing rule nobody
+// can trust is worth less than no rule at all. (Codex review, 2026-08-22.)
+static bool conf_take_dir(char *dst, const char *value)
 {
+    if (os64_strlen(value) >= CONF_DIR_MAX)
+        return false;   // dst keeps whatever an earlier line put there
+
     size_t n = os64_strcopy(dst, CONF_DIR_MAX, value);
     while (n > 1 && dst[n - 1] == '/')
         dst[--n] = '\0';
+    return true;
+}
+
+// The one complaint every over-long value makes, in one voice.
+static void conf_too_long(const conf_t *c, const char *key, const char *value)
+{
+    os64_hprintf(OS64_STDERR, "os64get: %s: directory for '%s' is longer than %d bytes"
+                 " - ignored: %s\n", c->path, key, CONF_DIR_MAX - 1, value);
 }
 
 static bool conf_line(const char *key, const char *value, void *user)
@@ -149,12 +171,15 @@ static bool conf_line(const char *key, const char *value, void *user)
     }
 
     if (os64_streq(key, "archive")) {
-        conf_take_dir(c->archive, value);
+        if (!conf_take_dir(c->archive, value))
+            conf_too_long(c, key, value);
         return true;
     }
     if (os64_streq(key, "*")) {
-        conf_take_dir(c->star, value);
-        c->anyRule = true;
+        if (!conf_take_dir(c->star, value))
+            conf_too_long(c, key, value);
+        else
+            c->anyRule = true;
         return true;
     }
     if (key[0] == '*' && key[1] == '.') {
@@ -162,8 +187,11 @@ static bool conf_line(const char *key, const char *value, void *user)
         // Later lines append; the matcher walks the table backwards so the
         // last one wins.
         if (c->nsuffix < CONF_RULES_MAX) {
+            if (!conf_take_dir(c->suffix[c->nsuffix].dir, value)) {
+                conf_too_long(c, key, value);
+                return true;   // the slot stays free for the next rule
+            }
             os64_strcopy(c->suffix[c->nsuffix].name, sizeof(c->suffix[0].name), key + 1);
-            conf_take_dir(c->suffix[c->nsuffix].dir, value);
             c->nsuffix++;
             c->anyRule = true;
         } else {
@@ -179,8 +207,11 @@ static bool conf_line(const char *key, const char *value, void *user)
     }
 
     if (c->nexact < CONF_RULES_MAX) {
+        if (!conf_take_dir(c->exact[c->nexact].dir, value)) {
+            conf_too_long(c, key, value);
+            return true;   // the slot stays free for the next rule
+        }
         os64_strcopy(c->exact[c->nexact].name, sizeof(c->exact[0].name), key);
-        conf_take_dir(c->exact[c->nexact].dir, value);
         c->nexact++;
         c->anyRule = true;
     } else {
@@ -203,6 +234,9 @@ static void conf_load(conf_t *c)
         if (rc == OS64_CONF_TRUNCATED)
             os64_hprintf(OS64_STDERR, "os64get: %s is larger than %d bytes - the tail was not read\n",
                          kConfPaths[i], OS64_CONF_MAX);
+        else if (rc == OS64_CONF_NO_MEMORY)
+            os64_hprintf(OS64_STDERR, "os64get: out of memory reading %s - no routing rules;"
+                         " files land in the current directory\n", kConfPaths[i]);
         which = i;
         (void)which;
         return;
