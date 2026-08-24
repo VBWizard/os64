@@ -133,7 +133,26 @@
         void* elf;
         char* path;
         volatile uint64_t retVal;
-        //signals_t signals;
+        // THE SIGNAL HANDLERS ARE THE TASK'S, indexed BY SIGNAL NUMBER
+        // (2026-08-23, SIGNALS.md §2). They used to live on the thread — the
+        // commented-out `signals_t signals;` that stood here for years was
+        // somebody standing at this same fork — and the reason they belong
+        // here is the 2026-08-02 scar recorded above task_signal_all_threads:
+        // a signal aimed at a task is OR'd into EVERY thread. Per-thread
+        // handlers would therefore run one SIGTERM once per thread, and an
+        // app's "wait, I have unsaved work" firing four times in a
+        // four-threaded program is not a policy anybody wants.
+        //
+        // Per-task also answers what per-thread only raises: a thread created
+        // after registration has the handler automatically, there is no
+        // inheritance rule to invent, and a handler is plainly a property of
+        // the PROGRAM. The cost is one rule, and it is small: the first thread
+        // to reach a checkpoint runs the handler and clears the bit
+        // task-wide.
+        //
+        // NULL = no handler = the kernel's default action for that signal.
+        // Nothing installs one yet; the registration syscall is step 2.
+        void *sighandler[SIGNAL_COUNT];
         uint64_t heapStart, heapEnd;
         // WHERE THIS TASK'S malloc PUBLISHES ITS REPORT (SYSCALL_HEAP_REPORT,
         // 2026-08-15). A USER virtual address, valid only under this task's own
@@ -320,12 +339,12 @@
 	// taskNext chain plus one OR per thread, and new threads are fully
 	// linked before they are published, so a walker sees either the old
 	// chain or the complete new one.
-	void task_signal_all_threads(task_t* task, uint64_t signal);
+	void task_signal_all_threads(task_t* task, signals signal);
 	// The same, plus a scheduling IPI to the cores the threads last ran on —
 	// for a sender who is NOT the victim (the hangup sweep, the shutdown
 	// ladder). Without the knock, a thread spinning on a tickless AP would
 	// carry the mark unread. See the comment on the definition.
-	void task_signal_and_nudge(task_t* task, uint64_t signal);
+	void task_signal_and_nudge(task_t* task, signals signal);
 
 	// Bring down every thread of a dying task except the one dying. THE
 	// single control point for "exit means exit" — see the implementation

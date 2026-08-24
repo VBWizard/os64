@@ -277,7 +277,7 @@ uint64_t _syscall_dispatch(
 	{
 		core_local_storage_t *sig_cls = get_core_local_storage();
 		thread_t *sig_thread = sig_cls ? sig_cls->currentThread : NULL;
-		if (sig_thread && (sig_thread->signals.sigind & SIGNALS_TERMINATING))
+		if (sig_thread && (sigset_any(sig_thread->signals.sigind, SIGNALS_TERMINATING)))
 			raise_terminating_signal_and_die(sig_cls->task, sig_thread);
 	}
 
@@ -756,13 +756,14 @@ static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 	// WHICH signal killed it, in precedence order — the uncatchable one first,
 	// then the two that name an ending world, then the keyboard's. The corpse
 	// wears one tag and it should be the most specific true one.
-	uintptr_t pending = (thread != NULL) ? thread->signals.sigind : 0;
+	signal_set_t pending = (thread != NULL) ? thread->signals.sigind
+	                                        : (signal_set_t){0};
 	const char *why = "SIGINT";
 	uint64_t code = SIGNALS_EXIT_SIGINT;
 
-	if (pending & SIGKILL)      { why = "SIGKILL"; code = SIGNALS_EXIT_SIGKILL; }
-	else if (pending & SIGTERM) { why = "SIGTERM"; code = SIGNALS_EXIT_SIGTERM; }
-	else if (pending & SIGHUP)  { why = "SIGHUP";  code = SIGNALS_EXIT_SIGHUP;  }
+	if (sigset_has(pending, SIGKILL))      { why = "SIGKILL"; code = SIGNALS_EXIT_SIGKILL; }
+	else if (sigset_has(pending, SIGTERM)) { why = "SIGTERM"; code = SIGNALS_EXIT_SIGTERM; }
+	else if (sigset_has(pending, SIGHUP))  { why = "SIGHUP";  code = SIGNALS_EXIT_SIGHUP;  }
 
 	if (task != NULL)
 	{
@@ -3228,7 +3229,7 @@ static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// or a terminate is pending — and the loop top distinguishes them.
 	for (;;)
 	{
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 		{
 			// Ctrl+C (or a ctl write) landed while we napped. Same rail as
 			// an interrupted console read: die here, in our own context.

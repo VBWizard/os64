@@ -46,12 +46,12 @@ void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
 		case SIGSLEEP:
 		//Set the data first in case a task switch takes place before setting the sigind	
         thread->signals.sigdata[SIGSLEEP]=sigData;
-            thread->signals.sigind |= SIGSLEEP;
+            sigset_add(&thread->signals.sigind, SIGSLEEP);
             printd(DEBUG_SIGNALS, "Signalling SLEEP for thread 0x%08x, wakeTicks=%i\n", thread->threadID, sigData);
             scheduler_trigger(NULL);
 			break;
 		case SIGLOGFLUSH:
-			thread->signals.sigind |= SIGLOGFLUSH;
+			sigset_add(&thread->signals.sigind, SIGLOGFLUSH);
 			printd(DEBUG_SIGNALS, "Signalling LOGFLUSH for thread 0x%08x\n", thread->threadID);
 			scheduler_trigger(NULL);
 			break;
@@ -79,7 +79,7 @@ void processSignals()
 		// walk off into the wrong queue mid-iteration.
 		thread_t *nextSleeper = qSleep->next;
 
-		if (qSleep->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(qSleep->signals.sigind, SIGNALS_TERMINATING))
 		{
 			// A pending terminate outranks the nap. Cancel the sleep and wake
 			// the thread INTO its own blocking loop (console_read / pipe_read /
@@ -90,14 +90,14 @@ void processSignals()
 			// reach a task that is blocked and would otherwise never run again
 			// to notice it.
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
-			qSleep->signals.sigind &= ~(SIGSLEEP);
+			sigset_del(&qSleep->signals.sigind, SIGSLEEP);
 			scheduler_change_thread_queue_locked(qSleep, THREAD_STATE_RUNNABLE);   //we hold the queue lock (above)
 			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending terminate\n", qSleep->threadID);
 		}
 		else if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past
 		{
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
-			qSleep->signals.sigind &= ~(SIGSLEEP);
+			sigset_del(&qSleep->signals.sigind, SIGSLEEP);
 			scheduler_change_thread_queue_locked(qSleep, THREAD_STATE_RUNNABLE);   //we hold the queue lock (above)
 			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP\n", qSleep->threadID);
 		}

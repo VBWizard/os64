@@ -480,7 +480,7 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 			return err;
 		}
 
-		if (self->signals.sigind & SIGNALS_TERMINATING) {
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING)) {
 			// Un-register on the way out — console_read's scar: a stale
 			// waiter slot is a spurious wake out of some LATER unrelated
 			// sleep.

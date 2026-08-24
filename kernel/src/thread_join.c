@@ -171,7 +171,7 @@ long thread_join_read(thread_join_t* j, int64_t* out)
 
 	for (;;)
 	{
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			return THREAD_JOIN_ERR_INTERRUPTED;
 
 		if (j->exited)

@@ -977,7 +977,11 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 	synth_text_addf(t, "rsp\t%p\n", (void *)th->regs.RSP);
 	synth_text_addf(t, "ticks\t%lu\n", th->totalRunTicks);
 	synth_text_addf(t, "runtime_us\t%lu\n", proc_cycles_to_us(th->runCycles));
-	synth_text_addf(t, "signals\t%p\n", (void *)th->signals.sigind);
+	// The pending SET, as the bitmask it is. `.bits` because the set is a
+	// tagged type now (signals.h) — the wrapper is what made the 2026-08-23
+	// renumbering safe, and reaching through it here is the one place a reader
+	// legitimately wants the raw word.
+	synth_text_addf(t, "signals\t%p\n", (void *)(uintptr_t)th->signals.sigind.bits);
 }
 
 // ── ctl ─────────────────────────────────────────────────────────────────────
@@ -988,7 +992,7 @@ static void proc_gen_thread_status(synth_text_t *t, task_t *task, thread_t *th)
 typedef struct
 {
 	const char *word;
-	uint32_t    signal;    // the pending bit a write raises
+	signals     signal;    // the signal NUMBER a write raises (signals.h)
 	const char *effect;    // what a reader is told it does
 } proc_ctl_verb_t;
 

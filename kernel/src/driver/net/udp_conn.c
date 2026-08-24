@@ -190,7 +190,7 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 	{
 		// Terminate outranks the wait — checked at loop top, BEFORE the
 		// lock, so a Ctrl+C that woke us exits instead of re-parking.
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			return UDP_CONN_ERR_INTERRUPTED;
 
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);

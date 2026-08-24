@@ -584,7 +584,7 @@ void scheduler_wake_isleep_thread_locked(thread_t *w)
 	if (w == NULL || w->threadState != THREAD_STATE_ISLEEP)
 		return;
 
-	w->signals.sigind &= ~SIGSLEEP;      // cancel the backstop sleep
+	sigset_del(&w->signals.sigind, SIGSLEEP);      // cancel the backstop sleep
 	w->signals.sigdata[SIGSLEEP] = 0;
 	scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
 }
@@ -1155,7 +1155,7 @@ static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
 {
 	task_t *task = (task_t *)thread->ownerTask;
 
-	if (!(thread->signals.sigind & SIGNALS_TERMINATING))
+	if (!(sigset_any(thread->signals.sigind, SIGNALS_TERMINATING)))
 		return;
 	// `exiting` too (2026-08-09): a thread already inside task_exit_finish has
 	// not set `exited` yet — that is now published only at the very end — so
@@ -1170,8 +1170,11 @@ static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
 	// terminating signals genuinely differ today, and encoding it now means
 	// userland signal delivery inherits the right semantics instead of
 	// retrofitting them.
-	if (!(thread->signals.sigind & SIGKILL) &&
-	    thread->signals.sighandler[SIGINT] != NULL)
+	// The handler table is the TASK's now, not the thread's (2026-08-23,
+	// SIGNALS.md §2): the aim is already a broadcast, so per-thread handlers
+	// would run one signal once per thread. `task` is non-NULL above.
+	if (!(sigset_has(thread->signals.sigind, SIGKILL)) &&
+	    task->sighandler[SIGINT] != NULL)
 		return;                          // future: deliver, don't kill
 	if ((thread->regs.CS & 3) != 3)
 		return;                          // mid-syscall: the pull path owns it
@@ -1183,7 +1186,7 @@ static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
 	mp_isrSavedRIP[apic_id] = TASK_EXIT_TRAMPOLINE_VIRT;
 
 	printd(DEBUG_SCHEDULER, "*%s: forcing thread 0x%08x (%s) into the exit trampoline\n",
-	       (thread->signals.sigind & SIGKILL) ? "SIGKILL" : "SIGINT",
+	       (sigset_has(thread->signals.sigind, SIGKILL)) ? "SIGKILL" : "SIGINT",
 	       thread->threadID, task->exename);
 }
 
@@ -1218,7 +1221,7 @@ void scheduler_run_new_thread()
 			threadToStopNewQueue=THREAD_STATE_ZOMBIE;
 			//TODO: If this is the last thread for the task then do something with the task, INCLUDING resetting its GDT entry
 		}
-        else if (threadToStop->signals.sigind & SIGSLEEP)
+        else if (sigset_has(threadToStop->signals.sigind, SIGSLEEP))
 			threadToStopNewQueue=THREAD_STATE_ISLEEP;
 		else
             threadToStopNewQueue=THREAD_STATE_RUNNABLE;

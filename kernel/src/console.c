@@ -170,7 +170,7 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		// processSignals when the bit appeared) exits the loop instead of
 		// parking forever. Any bytes in the ring stay for the next reader; a
 		// dying task has no further use for them.
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 		{
 			// Un-register on the way out (here and at every exit below): a
 			// reader that leaves the loop while the waiter slot still names it
@@ -279,7 +279,7 @@ void console_wake_if_ready(void)
 		if (w != NULL && w->threadState == THREAD_STATE_ISLEEP && tty_input_has(t))
 		{
 			t->waiter = NULL;
-			w->signals.sigind &= ~SIGSLEEP;     // cancel the backstop sleep
+			sigset_del(&w->signals.sigind, SIGSLEEP);     // cancel the backstop sleep
 			w->signals.sigdata[SIGSLEEP] = 0;
 			// _locked: our only caller is processSignals, which holds the
 			// scheduler queue lock across this wake (that's what makes the

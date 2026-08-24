@@ -161,7 +161,7 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 
 	for (;;)
 	{
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			return ICMP_CONN_ERR_INTERRUPTED;
 
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);

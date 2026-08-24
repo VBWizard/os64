@@ -114,12 +114,12 @@ void* task_alloc_aligned(task_t* task, size_t size)
 /// task_initialize. This counter is the COUNTER-DRAW half of that problem; the
 /// FIXED-CONSTANT half — TASK_ARGV_VIRT and friends — is what the split fixed.)
 // See task.h for why this exists and why it is IRQ-safe.
-void task_signal_all_threads(task_t* task, uint64_t signal)
+void task_signal_all_threads(task_t* task, signals signal)
 {
 	if (task == NULL)
 		return;
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
-		th->signals.sigind |= signal;
+		sigset_add(&th->signals.sigind, signal);
 }
 
 // Raise `signal` on every thread of a task AND knock on the cores they were
@@ -133,7 +133,7 @@ void task_signal_all_threads(task_t* task, uint64_t signal)
 // For senders who are not the victim: the hangup sweep (tty_shell_departed)
 // and the shutdown ladder both aim at tasks that may be parked or spinning
 // anywhere in the machine.
-void task_signal_and_nudge(task_t* task, uint64_t signal)
+void task_signal_and_nudge(task_t* task, signals signal)
 {
 	if (task == NULL)
 		return;
@@ -146,7 +146,7 @@ void task_signal_and_nudge(task_t* task, uint64_t signal)
 		if (th->exited || th->exiting)
 			continue;
 
-		th->signals.sigind |= signal;
+		sigset_add(&th->signals.sigind, signal);
 
 		// Same exemptions as the sibling sweep: this core is already inside
 		// the scheduler's reach, and the BSP's timer is never masked.
@@ -200,7 +200,7 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 		if (th == self || th->exited || th->exiting)
 			continue;
 
-		th->signals.sigind |= SIGKILL;
+		sigset_add(&th->signals.sigind, SIGKILL);
 		marked++;
 		printd(DEBUG_TASK | DEBUG_THREAD,
 		       "task_exit: marking sibling thread 0x%08lx of %s (state %u, last ran on AP %lu) for termination\n",
