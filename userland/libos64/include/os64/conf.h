@@ -185,6 +185,27 @@ typedef struct {
 //    appended. Every program that rewrites your config and eats your comments
 //    is a small betrayal; this is the forty lines that decline to commit one.
 //
+//    THE ONE EXCEPTION, stated because it used to be an overpromise (Codex
+//    #29 rd13 read this paragraph against the code and caught the two
+//    disagreeing — correctly; it is this sentence that was wrong, not the
+//    writer). A DUPLICATED KEY IS CONSOLIDATED: if the file says the same
+//    setting twice, the first occurrence is rewritten and the later ones are
+//    DROPPED, comment and all.
+//
+//    It cannot be otherwise. The reader's rule is LAST ONE WINS, so a
+//    surviving second line would override the value just saved and silently
+//    undo the write — "every comment survives" and "the save takes effect"
+//    are in genuine conflict the moment a key appears twice, and only one of
+//    them can be a promise. Keeping a duplicate would also mean publishing a
+//    file that still contradicts itself, which is not preservation.
+//
+//    Known wart inside the exception, and it is a coin-flip rather than a
+//    bug: the line that SURVIVES is the first, so it keeps the FIRST
+//    occurrence's comment — while under last-one-wins the value actually in
+//    effect belonged to the LAST. Both readings are guesses about what a
+//    self-contradictory file meant, and guessing quietly in the caller's
+//    favour beats inventing an orphan comment attached to nothing.
+//
 // 3. IT PUBLISHES ATOMICALLY: the new text is written to `<path>.new` and
 //    RENAMED over the target. os64's rename replaces atomically (syscall 43,
 //    ruled 2026-08-16), and write-a-temp-then-publish is the case it exists
