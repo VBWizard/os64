@@ -20,15 +20,100 @@
 #include "os64/draw.h"
 #include "os64/fmt.h"
 #include "os64/ui.h"
+#include "os64/conf.h"
 
 #define WIN_W 90u
 #define WIN_H 48u
+// A decorated frame's 20px titlebar includes the top border; an undecorated
+// frame keeps that 1px border. Removing the bar therefore removes 19px while
+// preserving the clock's content height exactly.
+#define TITLEBAR_FRAME_DELTA 19u
 #define MAX_CLOCK_CHARS 40
 
+static int64_t gClockWin = 0;
 static char clockText[MAX_CLOCK_CHARS];
 static os64_ui_widget_t gRoot, gLblClockText;
 static os64_ui_t gUi;
 static bool separatorsShown = false;
+static bool gRunning = true;
+
+typedef struct {
+    int32_t x, y;
+    bool titlebar;
+    bool pinned;
+    const char *path;
+} gclock_conf_t;
+
+static bool parse_i32(const char **text, int32_t *out)
+{
+    const char *p = *text;
+    bool negative = false;
+    uint64_t value = 0;
+    uint64_t limit;
+
+    if (*p == '+' || *p == '-') {
+        negative = (*p == '-');
+        p++;
+    }
+    if (*p < '0' || *p > '9')
+        return false;
+    limit = negative ? 2147483648ULL : 2147483647ULL;
+    while (*p >= '0' && *p <= '9') {
+        uint64_t digit = (uint64_t)(*p++ - '0');
+        if (value > (limit - digit) / 10)
+            return false;
+        value = value * 10 + digit;
+    }
+    *out = negative ? (int32_t)(-(int64_t)value) : (int32_t)value;
+    *text = p;
+    return true;
+}
+
+static bool parse_position(const char *value, int32_t *x, int32_t *y)
+{
+    int32_t px, py;
+    const char *p = value;
+
+    if (!parse_i32(&p, &px) || *p++ != ',' || !parse_i32(&p, &py) || *p != '\0')
+        return false;
+    *x = px;
+    *y = py;
+    return true;
+}
+
+static bool conf_line(const char *key, const char *value, void *user)
+{
+    gclock_conf_t *conf = (gclock_conf_t *)user;
+
+    if (key == NULL) {
+        os64_hprintf(OS64_STDERR, "gclock: %s: expected 'key = value' - ignored: %s\n",
+                     conf->path, value);
+    } else if (os64_streq_nocase(key, "position")) {
+        if (!parse_position(value, &conf->x, &conf->y))
+            os64_hprintf(OS64_STDERR, "gclock: %s: Position must be x,y - ignored: %s\n",
+                         conf->path, value);
+    } else if (os64_streq_nocase(key, "titlebar")) {
+        if (os64_streq_nocase(value, "on"))
+            conf->titlebar = true;
+        else if (os64_streq_nocase(value, "off"))
+            conf->titlebar = false;
+        else
+            os64_hprintf(OS64_STDERR, "gclock: %s: Titlebar must be on or off - ignored: %s\n",
+                         conf->path, value);
+    } else if (os64_streq_nocase(key, "pinned")) {
+        if (os64_streq_nocase(value, "true"))
+            conf->pinned = true;
+        else if (os64_streq_nocase(value, "false"))
+            conf->pinned = false;
+        else
+            os64_hprintf(OS64_STDERR, "gclock: %s: Pinned must be true or false - ignored: %s\n",
+                         conf->path, value);
+    } else {
+        os64_hprintf(OS64_STDERR, "gclock: %s: unknown setting '%s' - ignored\n",
+                     conf->path, key);
+    }
+    return true;
+}
 
 static void refresh_clock_text(void)
 {
@@ -45,27 +130,66 @@ static void refresh_clock_text(void)
                       now.hour, now.minute, now.second);
 }
 
+static void on_close_request(os64_ui_t *ui)
+{
+    (void)ui;
+    os64_gui_window_state_t st;
+    if (os64_gui_window_get_state(gClockWin, &st) == 0)
+    {
+        char pos[32];
+        os64_snprintf(pos, sizeof pos, "%d,%d", st.x, st.y);
+        const os64_conf_pair_t save[] = {
+            {"titlebar", (st.flags & OS64_GUI_WINDOW_NO_DECORATIONS) ? "off" : "on"},
+            {"pinned", (st.flags & OS64_GUI_WINDOW_PINNED) ? "true" : "false"},
+            {"position", pos},
+        };
+        size_t saveCount = (st.flags & OS64_GUI_WINDOW_MAXIMIZED) ? 2 : 3;
+        //don't save position if window is maximized
+        if (os64_conf_write("gclock.conf", save, saveCount)) // → /home/gclock.conf, merged, atomic
+            os64_hprintf(1, "Error: Unable to save configuration to gclock.conf");
+    }
+    gRunning = false;
+}
+
 int main(int argc, char **argv)
 {
 	(void)argc; (void)argv;
 
-	// [1] A window. Flags 0 = normal birth: on top, takes focus.
-	int64_t win = os64_gui_window_create("gclock", 280, 10,
+	gclock_conf_t conf = { .x = 280, .y = 10, .titlebar = true, .pinned = false };
+	char conf_path[OS64_CONF_PATH_MAX];
+	conf.path = conf_path;
+	int64_t conf_rc = os64_conf_find_read("gclock.conf", conf_line, &conf,
+	                                      conf_path, sizeof(conf_path));
+	if (conf_rc == OS64_CONF_TRUNCATED)
+		os64_hprintf(OS64_STDERR, "gclock: %s: file exceeds %d bytes; trailing settings ignored\n",
+		             conf_path, OS64_CONF_MAX - 1);
+	else if (conf_rc == OS64_CONF_NO_MEMORY)
+		os64_hprintf(OS64_STDERR, "gclock: could not allocate config reader buffer; using defaults\n");
+
+	uint64_t flags = 0;
+	if (!conf.titlebar)
+		flags |= OS64_GUI_WINDOW_NO_DECORATIONS;
+	if (conf.pinned)
+		flags |= OS64_GUI_WINDOW_PINNED;
+	uint32_t win_h = conf.titlebar ? WIN_H : WIN_H - TITLEBAR_FRAME_DELTA;
+
+	// [1] A window, born directly in its configured position and WM state.
+	gClockWin = os64_gui_window_create("gclock", conf.x, conf.y,
 	                                     WIN_W,
-	                                     WIN_H, 0);
-	if (win <= 0)
+	                                     win_h, flags);
+	if (gClockWin <= 0)
 	{
-		os64_printf("gclock: no GUI here (window_create %ld)\n", (long)win);
+		os64_printf("gclock: no GUI here (window_create %ld)\n", (long)gClockWin);
 		return 1;
 	}
 
 	// [2] The draw context: the window's shared canvas plus drawing state.
 	//     Retained mode still stands on it — libui paints THROUGH this.
 	os64_draw_ctx_t ctx;
-	if (os64_draw_ctx_init(&ctx, win) != 0)
+	if (os64_draw_ctx_init(&ctx, gClockWin) != 0)
 	{
 		os64_printf("gclock: get_surface failed\n");
-		os64_gui_window_destroy(win);
+		os64_gui_window_destroy(gClockWin);
 		return 1;
 	}
 
@@ -74,6 +198,7 @@ int main(int argc, char **argv)
     //     window shows is the user's to change without a recompile.
     os64_ui_init(&gUi, &ctx);
 
+    gUi.on_close = on_close_request;
     // [4] The furniture. App-owned structs (libui never allocates): a panel
     //     as the root — it paints the themed background — and a label whose
     //     text member POINTS AT our buffer, so refreshing the buffer is
@@ -103,8 +228,11 @@ int main(int argc, char **argv)
     //     matter what the work costs.
     os64_frame_clock_t frameClock;
     os64_frame_clock_init(&frameClock);
-    while (1 == 1)
+    while (gRunning)
     {
+        os64_gui_event_t ev;
+        while (os64_gui_event_poll(gClockWin, &ev) == 1)
+        os64_ui_dispatch(&gUi, &ev);
         // Sync to frames instead of blindly sleeping for 500 ms!
         os64_frame_wait(&frameClock, 500);
         refresh_clock_text();

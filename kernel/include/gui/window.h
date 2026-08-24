@@ -49,9 +49,9 @@
 // the thing you TYPE at is the thing that should be listening first.
 #define GUI_WINDOW_START_UNFOCUSED (1u << 1)
 // PIN ON TOP (2026-08-23): the window lives in the upper band of the z-list
-// and cannot be buried by an ordinary raise. A window-manager state, not a
-// creation option — there is no client flag for it and no app asked for
-// one; the user pins with Ctrl+Alt+P. (twm's f.raise-or-lower era had no
+// and cannot be buried by an ordinary raise. The user can toggle it with
+// Ctrl+Alt+P, and clients whose persisted state asks for it can request it
+// at creation. (twm's f.raise-or-lower era had no
 // such thing; it arrived with fvwm's StaysOnTop in 1994 and every desktop
 // since has kept it, because a clock or a terminal you want to keep seeing
 // is a real need.)
