@@ -94,6 +94,7 @@ static const fixture_t kFixtures[] = {
     // is a fact about the BOOT, not a failure of sync_all — the kernel
     // harness treated it as SKIP and so does this one.
     { "/bin/synctest",        NULL, 0x05CC0000,  0x05CC0001, "sync_all commits bytes AND the directory entry" },
+    { "/bin/conftest",        NULL, 0x0C0F0000,  0,          "config library: get/get_bool/write/set, merge and atomic publish" },
 };
 #define FIXTURE_COUNT (int32_t)(sizeof(kFixtures) / sizeof(kFixtures[0]))
 

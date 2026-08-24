@@ -434,15 +434,90 @@ across the ring 0/3 boundary). Escapes: `%d` date, `%t` time, `%k` ticks, `%c`
 core, `%T` thread, `%g` category name, `%l` level, `%m` message, `%%`.
 - SERIAL's format comes from `LOGFMT=<name>` on the cmdline — the only config
   channel that exists before a filesystem does.
-- The FILE's format comes from **`/etc/logd.conf`**, os64's first config file:
-  `key = value`, `#` comments. Search order is a persistence gradient, first
-  hit wins — `/home/logd.conf`, `/etc/logd.conf`, inherited `LOGFMT=`,
-  `classic` — the same ladder husk climbs for husk.rc. A name (`classic`,
-  `daily`, `full`) or a literal layout both work; an unknown name, unknown
-  escape, or a format with no `%m` is refused loudly and `classic` is kept.
+- The FILE's format comes from **`logd.conf`**, os64's first config file:
+  `key = value`, `#` comments. WHERE it is looked for is the system's business
+  now, not logd's — see "The config search path" below — and the rest of the
+  gradient still falls back through inherited `LOGFMT=` to `classic`. A name
+  (`classic`, `daily`, `full`) or a literal layout both work; an unknown name,
+  unknown escape, or a format with no `%m` is refused loudly and `classic` is
+  kept.
 - `%g`'s names live in the ABI header because logd cannot include `CONFIG.h`;
   `log.c` STATIC-ASSERTS every `DEBUG_*` bit against that table, so renumbering
   a flag stops the build instead of mislabeling the log.
+
+### The config search path (2026-08-23)
+
+**One setting says where config files are looked for, and every reader obeys
+it.** Six readers each carried a private copy of the same `/home` → `/etc`
+ladder (logd, husk's `husk.rc`, os64get, the resolver's `hosts` and
+`net.conf`, the desktop background) until the day the sixth arrived and Chris
+ruled it into existence. Full record and the two departures from the original
+design in `docs/conf_path.md`.
+
+- **`/etc/os64.conf`** is the one file never searched for — it is where the
+  search path itself lives: `conf = /home/conf:/etc`, colon-separated, first
+  hit wins, PATH's 1979 shape. Absent file or absent key = the built-in
+  default `/home:/etc`. The shipped copy has the line COMMENTED OUT on
+  purpose (the default is that line), so an untouched system is unchanged.
+  Other system-wide knobs that do not belong in the environment accumulate
+  here; that is the point of having a root file. A FILE and not the
+  environment, because the environment freezes at spawn, is per-process, and
+  the kernel's own readers have none.
+- **`kernel/src/conf.c` is the only walker.** `conf_init()` runs in
+  `kernel_init` after the secondary-partition sweep (the default ladder names
+  `/home`, which is a mount) and before logd. `conf_find(name, out, cap)`
+  answers "where is `<name>`?"; `conf_find_from(name, from, ...)` resumes a
+  walk. Ring 3 asks the SAME walker through `SYSCALL_CONF_RESOLVE` (47) —
+  ring 3 does not parse the ladder, which is what keeps it one ladder.
+- **A NAME IS A FILE NAME, NOT A PATH.** `conf_find` refuses anything with a
+  `/` in it, loudly. A reader asking for `../../etc/shadow` would be walking
+  the ladder somewhere the ladder does not go.
+- **`hosts` MERGES; everything else is first-hit-wins.** Chris's 2026-08-22
+  ruling: `/home/hosts` layers ON TOP of `/etc/hosts` so your machine names
+  sit over the system's list rather than erasing it. That is why the walk is
+  resumable at all. A settings file is not a database — check which kind you
+  have before reaching for `conf_find`.
+- **`/sys/conf`** publishes the ladder, its `source:`, and one line per reader
+  saying which file it actually took. Read it FIRST when a config seems
+  ignored. Every resolve also prints one `DEBUG_BOOT` line naming the misses
+  (`conf: desktop.conf <- /etc/desktop.conf (no /home/desktop.conf)`).
+- husk's lifeboat spellings (`/fat/husk.rc`, `/husk.rc`) stay hardcoded and
+  stay LAST, deliberately: the lifeboat exists for the day the ext2 root is
+  broken, and the search path's own root file lives on that root.
+- **FOLDING CASE IS THE READER'S CHOICE, NEVER THE PARSER'S**, because os64
+  has two kinds of key. A SETTING name (`position`, `format`, `hello`) is
+  compared with `os64_streq_nocase` — case there is noise, and
+  `os64_conf_get` folds for you. A key that is DATA is compared verbatim:
+  **os64get.conf's keys are FILE NAMES**, and folding `BOOTX64.EFI` would
+  stop it matching, drop it through to the `*` rule, and install the
+  BOOTLOADER into /bin. Silently. (Both halves earned on 2026-08-23:
+  `gclock.conf` shipped `Position` against a `"position"` compare and every
+  setting in it was ignored — and the "just lowercase the keys" cure was
+  checked before shipping and would have misrouted Limine.) Values are ALWAYS
+  verbatim: `%t` and `%T` are different logd escapes, and paths are
+  case-sensitive on ext2.
+- **Settings can be written back**, and three rules make that safe
+  (`os64_conf_write` / `os64_conf_set`, libos64): it writes to the **top of
+  the ladder** (/home) rather than to whatever it read, because /etc is the
+  system's and every build rewrites it; it **merges** line by line so
+  comments and unrelated settings survive a save; and it publishes by writing
+  `<path>.new` and **renaming over** — atomic replace (syscall 43) is exactly
+  what write-a-temp-then-publish is for. `/bin/conftest` is the fixture that
+  proves all three, in the ring-3 suite.
+- **An app can read its own window back** (`os64_gui_window_get_state`, 48):
+  frame rect in create's units plus the live flags. Without it no app could
+  learn anything the user did to its window — drag, resize, Ctrl+Alt+P — so
+  none could save what you had arranged.
+- **`gui.conf` says what starts with the desktop** (`gui/startup.c`, read at
+  the top of `gui_start()`): `start = /bin/gterm`, repeatable and in order,
+  plus `hello = yes|no` for the legacy "hello os64" window. The rule worth
+  knowing: **if the file exists, its `start` lines are the whole list — even
+  when there are none**, which is how "start nothing" is spelled; the
+  built-in demo pair applies only when no `gui.conf` is found at all. This
+  exists because GUI programs used to be launched from `husk.rc`, which runs
+  in EVERY husk (VT1 and VT2 both start one, so you got two of everything)
+  and runs on text boots too (where every GUI line failed once per terminal).
+  A desktop app's startup belongs to the desktop.
 
 **`/sys/log`** reports it all live: sink state, serial presence, active format,
 and per-core `used`/`lost`. Read it FIRST when the log misbehaves — it answers

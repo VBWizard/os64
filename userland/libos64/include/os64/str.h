@@ -50,6 +50,22 @@ size_t os64_strcopy(char *dst, size_t cap, const char *src);
 // something ever needs to SORT — consumer-driven, like everything else here.
 bool os64_streq(const char *a, const char *b);
 
+// The same, ignoring ASCII letter case. `os64_streq_nocase` and not the
+// traditional `strieq`/`strcasecmp` spelling: the `i` infix is fifty-year-old
+// shorthand you have to already know, and this name tells someone who has
+// never seen it (NAMING PHILOSOPHY — os64 keeps the good inherited names and
+// declines the cryptic ones).
+//
+// FOLDING IS THE CALLER'S CHOICE, NEVER THE PARSER'S — and this function
+// exists precisely so that choice can be made per key. os64 has two kinds of
+// config key: a SETTING name (`position`, `format`, `hello`), where case is
+// noise and this is the right compare; and a key that is DATA — os64get.conf's
+// keys are FILE NAMES, matched verbatim against the file being fetched. Fold
+// those and `BOOTX64.EFI = /fat/EFI/BOOT` stops matching `BOOTX64.EFI`, falls
+// through to the `*` rule, and the BOOTLOADER installs into /bin. Silently.
+// (Found 2026-08-23, before a "just lowercase the keys" change shipped.)
+bool os64_streq_nocase(const char *a, const char *b);
+
 // Parse a decimal integer from the front of `s`: optional +/- sign, then
 // digits, stopping at the first non-digit (the classic contract). Returns 0
 // for no-digits — indistinguishable from a real zero, which is atoi's

@@ -22,7 +22,8 @@
 #include "console.h"
 #include "gui/gui_client.h"   // the GUI client API rows 16-21 dispatch into
 #include "gui/window.h"       // GUI_WINDOW_TITLE_MAX — the title copy's bound
-#include "tty.h"     // console writes land on the CALLER's terminal now
+#include "tty.h"           // console writes land on the CALLER's terminal now
+#include "conf.h"          // conf_find — the config search path, walked in one place
 #include "handle.h"
 #include "driver/filesystem/dev/devfs.h"   // devfs_handle_alias — the /dev/tty door
 #include "pipe.h"
@@ -153,11 +154,15 @@ static uint64_t syscall_heap_report(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_tty_handle(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_conf_resolve(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_destroy(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -232,6 +237,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_SET_TIME,  "set_time",  syscall_set_time,  false, 0x00),  // arg0 = UTC epoch bits; monotonic clock is untouched
 	SYSCALL_DEFINE(SYSCALL_HEAP_REPORT, "heap_report", syscall_heap_report, false, 0x01),  // arg0 = user VA of an os64_heap_report_t (0 withdraws)
 	SYSCALL_DEFINE(SYSCALL_TTY_HANDLE, "tty_handle", syscall_tty_handle, false, 0x00),  // no args — the answer is a property of the ASKER
+	SYSCALL_DEFINE(SYSCALL_CONF_RESOLVE, "conf_resolve", syscall_conf_resolve, false, 0x03),  // arg0 = name in, arg1 = path out; arg4 = don't probe
 	// ── GUI (16-21): GRAPHICS.md's userland boundary, live 2026-08-17.
 	// Ownership (migration step 1) went in BEFORE these doors opened: every
 	// handle below is checked against its owner inside gui_client.c, so a
@@ -246,6 +252,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x02),  // arg1 = input_event_t out; BLOCKS (like read)
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
 };
 
 uint64_t _syscall_dispatch(
@@ -3796,6 +3803,74 @@ static uint64_t syscall_tty_handle(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return (uint64_t)h;
 }
 
+// conf_resolve — where is the config file called <name>? Contract in
+// abi/os64/syscall_numbers.h; the walk itself is conf.c's.
+//
+// The kernel does the walking because a ladder every reader obeys must be
+// parsed by exactly one thing, and because the walker being the resolver is
+// what lets /sys/conf report which file each reader actually took without a
+// second channel for saying so.
+//
+// conf_find takes the kernel-context trampoline for its probe, so this
+// handler needs no CR3 arrangement of its own — the SYSCALL_DEFINE row asks
+// for none.
+static uint64_t syscall_conf_resolve(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg5;
+
+	const char *user_name = (const char *)arg0;
+	char       *user_out  = (char *)arg1;
+	size_t      cap       = (size_t)arg2;
+	size_t      from      = (size_t)arg3;
+	bool        any       = (arg4 != 0);   // don't probe — just build the path
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+	if (user_out == NULL || cap == 0)
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	char name[CONF_NAME_MAX];
+	if (!copy_user_string(user_name, name, sizeof(name)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	char found[CONF_PATH_MAX];
+	int matched;
+	if (any) {
+		// "Where WOULD this go?" — the writer's question. No probe, because
+		// the file it is about to create does not exist yet by definition.
+		if (!conf_path_at(from, name, found, sizeof(found)))
+			return SYSCALL_RESULT_INVALID;
+		matched = (int)from;
+	} else {
+		matched = conf_find_from(name, from, found, sizeof(found));
+		if (matched < 0)
+			return SYSCALL_RESULT_INVALID;   // nowhere left — caller uses its defaults
+	}
+
+	// Refuse rather than truncate. A HALF path is worse than no path: it
+	// opens nothing, or — far worse on a system with a curated tree — opens
+	// something else. The caller sized the buffer; tell it the size was wrong.
+	size_t len = 0;
+	while (found[len] != '\0')
+		len++;
+	if (len + 1 > cap)
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	if (!copy_to_user_buffer(user_out, found, len + 1))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	printd(DEBUG_SYSCALL, "conf_resolve: task %s: '%s' -> '%s' (ladder %d)\n",
+	       task->exename, name, found, matched);
+	// The MATCHED INDEX PLUS ONE, so success is always >= 1 and can never be
+	// confused with SYSCALL_RESULT_INVALID (all ones). Hand it straight back
+	// as the next call's `from` to walk to the following copy — which is how
+	// the resolver reads every hosts file instead of only the first.
+	return (uint64_t)(matched + 1);
+}
+
 // heap_report(ptr) — "my heap's report card lives here."
 //
 // The kernel does nothing with the address but REMEMBER it. Nobody reads it
@@ -3877,6 +3952,27 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
 	// is the TASK's own VA for the canvas — a pointer it can finally draw
 	// through. (This is where a NULL stood between steps 2 and 3.)
 	if (!copy_to_user_buffer((void *)arg1, &s, sizeof(s)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return 0;
+}
+
+// Where is my window, and what state is it in? The readback half of create —
+// see os64/gui.h for why an app needs it (everything the USER does to a
+// window happens in the window system, and until this existed no app could
+// learn any of it, so none could save what you had arranged).
+static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 == 0)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+
+	os64_gui_window_state_t st;
+	int64_t rc = gui_window_get_state((int64_t)arg0, &st);
+	if (rc != 0)
+		return (uint64_t)rc;
+
+	if (!copy_to_user_buffer((void *)arg1, &st, sizeof(st)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return 0;
 }

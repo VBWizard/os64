@@ -128,7 +128,11 @@ static bool hosts_lookup_file(const char *path, const char *name, uint32_t *ip)
 	return found;
 }
 
-static const char *const kHostsPaths[] = { "/home/hosts", "/etc/hosts" };
+// (The private { "/home/hosts", "/etc/hosts" } and { "/home/net.conf",
+// "/etc/net.conf" } ladders retired 2026-08-23 to the system search path,
+// /etc/os64.conf's `conf =`. hosts still MERGES across the whole ladder and
+// net.conf still takes the first hit — the difference is preserved
+// deliberately; see each use site.)
 
 // ── which name server ───────────────────────────────────────────────────────
 
@@ -142,8 +146,6 @@ static bool nameserver_conf_line(const char *key, const char *value, void *user)
 	}
 	return true;                            // other keys belong to other readers
 }
-
-static const char *const kNetConfPaths[] = { "/home/net.conf", "/etc/net.conf" };
 
 static bool nameserver_from_sys(uint32_t *ip)
 {
@@ -169,7 +171,9 @@ static bool nameserver_from_sys(uint32_t *ip)
 static bool find_nameserver(uint32_t *ip)
 {
 	uint32_t fromConf = 0;
-	os64_conf_read_first(kNetConfPaths, 2, nameserver_conf_line, &fromConf, NULL);
+	// net.conf IS a settings file, so this one takes the ordinary first-hit
+	// walk — unlike hosts above, your copy REPLACES the system's.
+	os64_conf_find_read("net.conf", nameserver_conf_line, &fromConf, NULL, 0);
 	if (fromConf != 0) {
 		*ip = fromConf;
 		return true;
@@ -301,10 +305,18 @@ int64_t os64_resolve(const char *name, uint32_t *ip)
 	if (os64_parse_ipv4(name, name + len, ip))
 		return 0;
 
-	// The room first: /home/hosts, then /etc/hosts, merged.
-	for (size_t i = 0; i < sizeof(kHostsPaths) / sizeof(kHostsPaths[0]); i++)
-		if (hosts_lookup_file(kHostsPaths[i], name, ip))
+	// The room first: every hosts file on the search path, MERGED — yours
+	// before the system's, a name in both is yours (Chris's ruling
+	// 2026-08-22, and the reason this walk resumes instead of stopping at the
+	// first file that opens the way every settings reader does).
+	size_t from = 0;
+	int64_t next;
+	char hosts_path[OS64_CONF_PATH_MAX];
+	while ((next = os64_conf_find_from("hosts", from, hosts_path, sizeof(hosts_path))) >= 1) {
+		if (hosts_lookup_file(hosts_path, name, ip))
 			return 0;
+		from = (size_t)next;
+	}
 
 	// Then the world.
 	uint32_t server;

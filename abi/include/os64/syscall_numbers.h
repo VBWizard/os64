@@ -454,6 +454,59 @@ typedef enum os64_shutdown_mode
 // Close it with close() like any handle.
 #define SYSCALL_TTY_HANDLE 46
 
+// conf_resolve — WHERE IS THE CONFIG FILE CALLED <name>?
+//
+//   arg0 = const char *name   a FILE name ("logd.conf"), never a path
+//   arg1 = char *out          buffer for the winning path
+//   arg2 = size_t cap         its size
+//   arg3 = size_t from        ladder position to start at; 0 = the ordinary
+//                             "find it" call
+//   arg4 = int any            non-zero: do NOT probe, just build the path this
+//                             name would have at position `from`. The WRITER's
+//                             question — a program saving its settings needs
+//                             the path of a file that does not exist yet, and
+//                             it needs position 0 (the user's directory,
+//                             /home by default) rather than wherever it READ
+//                             from, because /etc is the system's and every
+//                             build rewrites it
+//   returns the matching ladder index PLUS ONE (so success is always >= 1
+//   and can never be read as SYSCALL_RESULT_INVALID), or SYSCALL_RESULT_* on
+//   failure — including "no directory in the search path has it", which is
+//   not an error worth its own code, because the caller's next move is the
+//   same either way: use defaults.
+//
+// `from` EXISTS FOR ONE READER, and it is not gold-plating. Almost every
+// config file is a SETTINGS file, where first-hit-wins is the entire point:
+// your /home/logd.conf replaces the system's. `hosts` is not one — Chris
+// ruled it MERGED on 2026-08-22, /home/hosts layering ON TOP of /etc/hosts so
+// your machine names sit over the system's list rather than erasing it. It is
+// a database, not a setting. Feed a call's return value back as the next
+// call's `from` to walk to the following copy; that lets the resolver read
+// every hosts file on the ladder without keeping the private ladder this
+// syscall exists to abolish.
+//
+// THE WALK IS THE KERNEL'S, and that is the whole point of the call. Six
+// programs each carried a private copy of the same "/home then /etc" ladder
+// until 2026-08-23; the cure is one setting (/etc/os64.conf's `conf =`) that
+// every reader obeys, and a ladder obeyed by everyone must be PARSED by
+// exactly one thing or it is not one ladder. The kernel already has to walk
+// it for its own readers (desktop.c), so ring 3 asks the same walker rather
+// than growing a second one over a /sys file — which would have meant two
+// parsers to keep in agreement AND a separate channel for reporting what
+// each reader took.
+//
+// Reporting comes free this way: because the kernel resolved it, /sys/conf
+// can say which file every reader actually got, which is the diagnostic
+// Chris asked for by name ("for some time I'll want to be able to verify
+// where each conf file is coming from"). Each resolve also prints one line
+// at DEBUG_BOOT.
+//
+// This RESOLVES rather than OPENS: the caller then open()s the path with the
+// handle machinery it already has, and libos64's os64_conf_read takes a path.
+// Handing back an open handle would buy nothing and would put a second way
+// of acquiring handles into the ABI.
+#define SYSCALL_CONF_RESOLVE 47
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //
@@ -521,5 +574,15 @@ typedef enum os64_shutdown_mode
 #define SYSCALL_GUI_EVENT_POLL          20
 #define SYSCALL_GUI_SCREEN_INFO         21
 #define SYSCALL_GUI_EVENT_WAIT          22   // blocking poll — shipped LAST, as planned (step 5)
+
+// The readback half of create (2026-08-23): where is my window, and what
+// state is it in? Frame rect + live flags, in create's own units.
+//
+// It lives at 48 rather than inside the 16..22 GUI block because that block
+// is FULL — the seven reserved numbers were all spent by the surface pivot.
+// Consumer-driven, as ever: gclock wanted to remember where you dragged it
+// and what you pinned, and discovered that nothing in the client ABI could
+// tell an app anything the WINDOW SYSTEM knew about its own window.
+#define SYSCALL_GUI_WINDOW_GET_STATE    48
 
 #endif

@@ -634,6 +634,8 @@ still reaches the app) extended from the mouse to the keyboard:
 | **Ctrl+Alt+M** / titlebar double-click | maximize (toggle) | restore frame remembered; a manual move or resize clears it; raises, so a focused-but-buried window still visibly answers |
 | **Ctrl+Alt+N** | minimize | off the glass, not hit-tested, occludes nothing, alive; focus goes to the most recent visible window; Alt+Tab brings it back — release the hold ON its dim row |
 | `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path.ppm` (P6, centered, never scaled — a `screendump` can be the wallpaper); no file = the test pattern stays (`gui/desktop.c`) |
+| `/home/gclock.conf` → `/etc/gclock.conf` | clock window state | `Position = x,y`, `Titlebar = on|off`, `Pinned = true|false`; no file = `(280,10)`, titlebar on, unpinned |
+| `gui.conf` (via the config search path) | what starts with the desktop | `start = /bin/gterm` (repeatable, in order) and `hello = yes|no` for the legacy window. **If the file exists its `start` lines are the whole list, including none** — that is how you say "start nothing"; the built-in demo pair applies only when no `gui.conf` is found. `gui/startup.c`, read once at the top of `gui_start()` |
 
 Three things learned building them, for the next chord:
 

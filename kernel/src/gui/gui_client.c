@@ -112,7 +112,19 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 {
 	if (!kEnableGUI)
 		return GUI_ERR_NOT_RUNNING;
-	if (w < 32 || h < 32 || w > 4096 || h > 4096)
+	if (w > 4096 || h > 4096)
+		return GUI_ERR_BAD_ARGS;
+
+	// Only documented CLIENT flags cross the boundary. The window struct's
+	// flag word also carries transient WM state (maximized/minimized), which
+	// cannot be claimed accidentally through this creation call.
+	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS |
+	                              GUI_WINDOW_START_UNFOCUSED |
+	                              GUI_WINDOW_PINNED;
+	uint32_t create_flags = (uint32_t)flags & client_flags;
+	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
+	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - GUI_BORDER_WIDTH;
+	if (content_w < 8 || content_h < 8)
 		return GUI_ERR_BAD_ARGS;
 
 	// ── THE SURFACE PIVOT (GRAPHICS.md, migration step 3) ───────────────
@@ -136,9 +148,6 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	//
 	// The content inset mirrors wm_create's math; when wm_create refuses a
 	// degenerate size below, the pivot is undone on the same exit.
-	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = (int32_t)h - wm_chrome_top((uint32_t)flags) - GUI_BORDER_WIDTH;
-
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = (cls != NULL) ? cls->task : NULL;
 	bool pivot = (task != NULL && !task->kernelTask &&
@@ -187,15 +196,8 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		goto undo_pivot;
 	}
 
-	// Only the CLIENT flags cross the boundary. The window struct's flag word
-	// also carries window-manager STATE (pinned, and whatever follows it),
-	// which is the user's to set with a chord and not an app's to claim at
-	// birth — a program that pinned itself on top would be the GUI's first
-	// pop-up ad. Masked rather than refused: the ABI header documents the
-	// two bits, and a stray third is a bug in the caller, not an attack.
-	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED;
 	window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
-	                          (uint32_t)flags & client_flags);
+	                          create_flags);
 	if (!win) {
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 		goto undo_pivot;
@@ -304,6 +306,36 @@ int64_t gui_window_get_surface(int64_t handle, surface_t *out)
 	// what their kernel-thread owners dereference.
 	if (win->canvas_task_phys != 0)
 		out->pixels = (uint32_t *)win->canvas_task_va;
+	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	return 0;
+}
+
+// The readback half of create (SYSCALL_GUI_WINDOW_GET_STATE, 2026-08-23).
+// Answers with the FRAME rect — create's own units, so a saved state hands
+// straight back — and the live flag word, MASKED to the bits the ABI
+// publishes. The mask is not paranoia: window_t.flags is the window system's
+// scratch space and whatever state it grows next would otherwise leak into a
+// contract ring 3 was told is stable.
+int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
+{
+	if (!out)
+		return GUI_ERR_BAD_ARGS;
+	int64_t err;
+	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	window_t *win = handle_lookup_owned(handle, &err);
+	if (!win) {
+		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		return err;
+	}
+	out->x      = win->frame.x;
+	out->y      = win->frame.y;
+	out->width  = (uint32_t)win->frame.w;
+	out->height = (uint32_t)win->frame.h;
+	out->flags  = win->flags & (GUI_WINDOW_NO_DECORATIONS |
+	                            GUI_WINDOW_START_UNFOCUSED |
+	                            GUI_WINDOW_PINNED |
+	                            GUI_WINDOW_MAXIMIZED |
+	                            GUI_WINDOW_MINIMIZED);
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
 	return 0;
 }

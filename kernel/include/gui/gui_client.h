@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "gui/gui_types.h"
 #include "gui/input.h"
+#include "os64/gui.h"   // os64_gui_window_state_t — one struct, both rings
 
 // The GUI client API — the ONLY interface apps use. Kernel-thread apps call
 // these as plain functions today; each is shaped to become a syscall
@@ -38,6 +39,11 @@ int64_t gui_window_destroy(int64_t handle);
 // shows finished frames). Under userland the canvas pages become a
 // shared-memory mapping; the snapshot semantics stay identical.
 int64_t gui_window_get_surface(int64_t handle, surface_t *out);
+
+// Where the window is and what state it is in — the readback half of create.
+// FRAME rect in create's units, plus the published subset of the flag word.
+// (os64/gui.h carries the contract and the reason it exists.)
+int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out);
 
 // Publish content changes: `damage` in CONTENT coordinates (NULL = all).
 // The compositor picks it up on its next frame.
