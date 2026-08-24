@@ -102,6 +102,43 @@ static void print_offset(const char *prefix, int64_t offset)
                  (unsigned long long)millis);
 }
 
+static void log_result(const char *server, uint8_t stratum,
+                       int64_t observed_epoch, int64_t target_epoch,
+                       int64_t offset, int64_t delay, bool big_change,
+                       bool dry_run)
+{
+    uint64_t offset_magnitude = offset < 0 ? 0u - (uint64_t)offset
+                                           : (uint64_t)offset;
+    uint64_t delay_magnitude = delay < 0 ? 0u - (uint64_t)delay
+                                         : (uint64_t)delay;
+    char line[OS64_LOG_MESSAGE_MAX];
+
+    // Keep the source bounded so an RFC-sized DNS name cannot crowd the
+    // actual clock change out of the fixed-size system-log entry. The
+    // observed epoch is T4's local-clock sample; target_epoch is the value
+    // handed (or, for a dry run, that would be handed) to set_time. Offset
+    // and network delay retain the useful sub-second part that set_time's
+    // whole-second ABI cannot express.
+    os64_snprintf(line, sizeof(line),
+                  "ntp: %s%s %.80s (stratum %u): epoch %lld %s %lld; "
+                  "offset %c%llu.%03llu s, delay %c%llu.%03llu s",
+                  big_change ? (dry_run ? "WARNING large difference; "
+                                             : "WARNING large correction; ")
+                             : "",
+                  dry_run ? "checked" : "synchronized", server, stratum,
+                  (long long)observed_epoch, dry_run ? "would set" : "->",
+                  (long long)target_epoch,
+                  offset < 0 ? '-' : '+',
+                  (unsigned long long)(offset_magnitude >> 32),
+                  (unsigned long long)(((offset_magnitude & 0xffffffffu) *
+                                        1000u) >> 32),
+                  delay < 0 ? '-' : '+',
+                  (unsigned long long)(delay_magnitude >> 32),
+                  (unsigned long long)(((delay_magnitude & 0xffffffffu) *
+                                        1000u) >> 32));
+    os64_debug_log(line);
+}
+
 static const char *dial_error(int64_t result)
 {
     if (result == OS64_NET_ERR_BAD_ADDRESS)
@@ -121,8 +158,11 @@ int main(int argc, char **argv)
 {
     const char *timeout_text = NULL;
     const char *warning_text = NULL;
+    bool dry_run = false;
     bool verbose = false;
     const os64_optspec_t specs[] = {
+        { 'n', "dry-run", false, "measure and report without setting the clock",
+          .flag = &dry_run },
         { 't', "timeout", true, "reply timeout in milliseconds (default: 5000)",
           .value_out = &timeout_text },
         { 'w', "warn", true, "warn when the correction is at least this many seconds (default: 300)",
@@ -131,13 +171,13 @@ int main(int argc, char **argv)
           .flag = &verbose },
     };
     os64_args_t args;
-    os64_args_init(&args, argc, argv, specs, 3);
+    os64_args_init(&args, argc, argv, specs, 4);
     args.about = "Set the UTC wall clock from one SNTP/NTPv4 server exchange.";
-    args.details = "SERVER is a dotted IPv4 address. Normal corrections are silent; large ones warn.";
+    args.details = "SERVER is a dotted IPv4 address or DNS name. Normal corrections are silent; large ones warn. --dry-run always reports the difference.";
 
     const char *server = NULL;
     int32_t count = os64_args_parse(&args,
-                                    "ntp [-v] [-t milliseconds] [-w seconds] SERVER",
+                                    "ntp [-n] [-v] [-t milliseconds] [-w seconds] SERVER",
                                     &server, 1);
     if (count == OS64_ARG_HELP)
         return 0;
@@ -263,6 +303,7 @@ int main(int argc, char **argv)
     // signed form is how NTP timestamp arithmetic spans the era rollover.
     int64_t offset = average_signed((int64_t)(t2 - t1),
                                     (int64_t)(t3 - t4));
+    int64_t delay = (int64_t)((t4 - t1) - (t3 - t2));
     uint64_t corrected = t4 + (uint64_t)offset;
 
     int64_t target_epoch = ntp_seconds_to_unix((uint32_t)(corrected >> 32));
@@ -280,10 +321,21 @@ int main(int argc, char **argv)
 
     uint64_t magnitude = offset < 0 ? 0u - (uint64_t)offset : (uint64_t)offset;
     bool big_change = magnitude >= ((uint64_t)warning_seconds << 32);
+
+    if (dry_run) {
+        log_result(server, stratum, received_time.epoch, target_epoch,
+                   offset, delay, big_change, true);
+        print_offset("ntp: clock difference ", offset);
+        return 0;
+    }
+
     if (os64_set_time(target_epoch) < 0) {
         os64_hprintf(OS64_STDERR, "ntp: the kernel refused to set the clock\n");
         return 1;
     }
+
+    log_result(server, stratum, received_time.epoch, target_epoch,
+               offset, delay, big_change, false);
 
     if (big_change)
         print_offset("ntp: warning: large wall-clock correction of ", offset);
