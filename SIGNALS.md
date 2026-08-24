@@ -218,6 +218,74 @@ is nowhere to put it. Delivery fails and the thread dies exactly as it does
 today (exit 139). The cure is an alternate signal stack, and it is a later
 slice; naming the limit is not the same as pretending it isn't there.
 
+## §10 — Delivering to a thread that never makes a syscall (design, UNBUILT)
+
+*Chris, 2026-08-23, after the syscall path shipped: "don't forget that the
+APIC timer triggers eventually. So every AP ends up in scheduling. I know you
+said you didn't want to do signal handling out of the scheduling ISR, but ...
+🤷‍♂️ ... maybe?" He is right, and the reasoning below is why — recorded before
+the building, like the rest of this file.*
+
+A program that spins without ever entering the kernel gets nothing from §5:
+delivery is armed on the way out of a syscall, and there is no syscall. Today
+such a program can be TERMINATED (the forced-syscall push in `scheduler.c`
+patches its RIP into the exit trampoline, which is how `echo kill >
+/proc/N/ctl` reaches `hog`) but not SIGNALLED.
+
+**The scheduler is the delivery point, not a forced syscall.** Every thread
+reaches it: the BSP ticks at 100Hz, and on an AP under tickless the BACKSTOP
+LEASE arms per non-idle dispatch — built precisely so a syscall-free hog
+cannot hold a core forever. So the visit is guaranteed on every core, and it
+is guaranteed at a place that already has everything delivery needs.
+
+**Why that is easier than the syscall path, not harder:**
+
+- `thread->regs` ALREADY holds the full user state, saved by the ISR. Nothing
+  has to be captured; it is sitting there.
+- Patching `regs.RDI` to the signal number is FREE, because the resume path
+  reloads every register. The §5 stub has to fish the number off the stack
+  precisely because `sysretq` does not restore RDI; here that problem does not
+  exist.
+- And `sigreturn` needs no new way home. Restoring a full register set through
+  `sysretq` is impossible — but a thread resumed BY THE SCHEDULER already gets
+  everything back from `thread->regs` via `iretq`, which is how every
+  preempted thread in the system resumes. `sigreturn` writes the saved values
+  into `regs` and lets the thread take that ordinary road.
+
+**What it does need: the whole frame.** §5 saves four values (RAX, RIP, RSP,
+RFLAGS) and gets away with it because the interruption point is a syscall
+RETURN, where the ABI has already declared RCX/R11 dead and a C handler
+preserves the callee-saved set itself. A spinning thread is interrupted at an
+ARBITRARY instruction, so every register is live and a C handler will clobber
+half of them without putting them back. This frame carries the general
+register set.
+
+Which is exactly the shape of Chris's os32 stack diagram, and the reason it
+was long: he picked the general interruption point from the start. §5 is
+short only because it picked the easy one.
+
+**Sketch, to be argued with when it is built:**
+
+1. In the scheduler, where `scheduler_sigint_forced_syscall` already stands:
+   if a pending signal is catchable and handled, build a FULL frame on the
+   user stack (through the HHDM, per §5) from `thread->regs`.
+2. Patch `regs.RIP` to the stub, `regs.RSP` to the frame, `regs.RDI` to the
+   signal number. Mark the frame as full-register, so `sigreturn` knows which
+   kind it is holding.
+3. The thread resumes by `iretq` into the stub, which calls the handler.
+4. `sigreturn` sees a full frame, writes every saved register back into
+   `thread->regs`, and arranges to resume through the scheduler rather than
+   `sysretq`.
+
+**Open questions worth settling before writing code**, rather than during:
+the exact resume mechanism in step 4 (yield-and-be-reloaded is the obvious
+candidate and wants checking against the reentrancy rules in
+SCHEDULER_REENTRANCY.md); whether the forced-syscall push should stay for
+TERMINATION once the scheduler can deliver (probably yes — it is simpler and
+it is proven); and whether one frame type with a flag beats two, given that
+`sigreturn` must never be talked into restoring a register set the kernel did
+not write.
+
 ## Failure modes to design against
 
 | Symptom | Cause to look for |
@@ -293,8 +361,7 @@ the next.
    solves that shape for termination and is the obvious home for it — until
    then a spinning program with a handler installed is reachable only by
    SIGKILL — and that one is genuinely a different mechanism, not more of the
-   same: redirecting a spinning thread means saving a RIP the frame does not
-   carry, or delivering from the ISR the way os32 did. It wants its own think.
+   same. Its design is §10 below, ruled the same night.
 
    **EVERY OTHER BLOCKING CALL REPORTS `OS64_INTERRUPTED` NOW** (§8, done
    2026-08-23): `console_read`, both pipe ends, the TCP/ICMP/UDP readers and
