@@ -20,6 +20,8 @@
 //   0x5160008  could not raise a signal at myself through /proc
 //   0x5160009  the handler never ran (delivery is broken)
 //   0x516000A  a syscall's return value did not survive delivery
+//   0x516000B  a deliberate SIGSEGV was not caught (fault delivery is broken)
+//   0x516000C  the SIGSEGV handler ran for the wrong signal
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -34,6 +36,22 @@ static volatile int gCaught;
 
 static void handler_a(int signo) { gCaught = signo; }
 static void handler_b(int signo) { gCaught = signo + 1000; }
+
+// The SIGSEGV handler is the acceptance test's finale, and it does NOT return:
+// a SIGSEGV handler that returns resumes the faulting instruction and faults
+// again, so a real one exits or longjmps. This one exits with SUCCESS — which
+// is the whole fixture passing — after proving it caught the right signal.
+static void on_segv(int signo)
+{
+    if (signo != OS64_SIGSEGV)
+    {
+        os64_serial_log("sigtest: SIGSEGV handler ran for the wrong signal");
+        os64_exit(0x0516000Cu);
+    }
+    os64_printf("sigtest: caught a deliberate SIGSEGV and lived to tell — all correct\n");
+    os64_serial_log("sigtest: caught a deliberate SIGSEGV and lived to tell — all correct");
+    os64_exit(0x05160000u);   // success: the fixture ends HERE, inside the handler
+}
 
 static void die(uint32_t step, const char *why)
 {
@@ -143,6 +161,19 @@ int main(void)
 
     os64_printf("sigtest: registration, refusals, delivery and resume all correct\n");
     os64_serial_log("sigtest: registration, refusals, delivery and resume all correct");
-    os64_exit(STEP(0));
+
+    // ── SIGSEGV: the acceptance test (SIGNALS.md §9) ───────────────────────
+    // Install a handler, then fault ON PURPOSE, and prove the handler runs.
+    // Chris's os32 test app is the direct ancestor — fault, catch, brag. The
+    // handler (on_segv) exits with success, so reaching any line after the
+    // deref means the fault was NOT delivered.
+    if (os64_signal_set_handler(OS64_SIGSEGV, on_segv) < 0)
+        die(1, "sigtest: could not install the SIGSEGV handler");
+
+    volatile int *wild = (volatile int *)0;   // NULL — guaranteed unmapped (page-0 guard)
+    *wild = 0x1234;                            // <<< SIGSEGV is raised HERE
+
+    // Only reached if the store above did NOT fault into the handler.
+    die(0x0B, "sigtest: a deliberate SIGSEGV was not caught");
     return 0;   // not reached
 }

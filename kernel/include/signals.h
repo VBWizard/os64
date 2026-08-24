@@ -327,6 +327,15 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// depend on the victim's stack).
 	signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thread);
 
+	// SIGSEGV delivery from the PAGE-FAULT handler (SIGNALS.md §9 — the arc's
+	// acceptance test). `context` is an exception_context_t* (void here to
+	// keep exception_report.h out of this widely-included header). Returns
+	// true if a handler was armed and the fault handler should RESUME (the
+	// context now runs the stub); false if it must proceed to kill the task
+	// (no handler, the handler itself faulted, or the faulted stack cannot
+	// hold the frame). Synchronous and thread-local — see the definition.
+	bool signal_deliver_segv(struct task *t, void *thread, void *context);
+
 	// Is there a pending signal something will CATCH? The default-action
 	// checkpoints ask before they kill — a task that installed a handler must
 	// not be executed on its way to being handed the signal it asked for.

@@ -8,6 +8,7 @@
 #include <stddef.h>          // offsetof — the stub's ABI asserts
 #include "scheduler.h"
 #include "spinlock.h"   // task->signalLock — one delivery at a time per task
+#include "exception_report.h"   // exception_context_t — SIGSEGV delivery reads the fault frame
 #include "kernel.h"
 #include "serial_logging.h"
 #include "panic.h"
@@ -446,6 +447,99 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 	       "signal_deliver_to_regs: %s runs handler %p for signal %d (spinner resumes %p)\n",
 	       task->exename, task->sighandler[sig], sig, (void *)spin_rip);
 	return SIGNAL_DELIVER_ARMED;
+}
+
+// ── SIGSEGV DELIVERY: from the PAGE-FAULT handler (SIGNALS.md §9) ────────────
+//
+// The acceptance test of the whole arc — Chris's os32 app that faults on
+// purpose and brags about catching it. This delivery is unlike §5 and §10 in
+// three ways, all because a fault is SYNCHRONOUS and THREAD-LOCAL:
+//
+//  - The target is the FAULTING thread itself, not a broadcast, so there is
+//    no task-wide sigind bit to set or clear and no lock to take: nothing but
+//    this thread touches this thread's mask.
+//  - The interrupted state lives in the EXCEPTION frame (ctx, built on the
+//    stack by exception_entry.S), not in a syscall frame or thread->regs. We
+//    build the full frame from ctx and redirect ctx->rip/ctx->rsp — and the
+//    exception's own iretq resumes into the stub, because exception_entry.S
+//    restores the GP registers from ctx and iretqs its rip/rsp (its comment
+//    says the handler is allowed to edit the context; this is that handler).
+//  - The saved RIP is the FAULTING instruction. A handler that simply returns
+//    resumes it and faults again — so a real SIGSEGV handler exits or longjmps
+//    (the fixture exits). A handler that instead FAULTS is caught by the mask
+//    below: SIGSEGV is blocked for the duration of its own handler (§7), so a
+//    fault inside it finds the mask set, delivery is refused, and the task
+//    dies — no infinite fault loop.
+//
+// Returns true if the handler was armed (ctx now runs the stub, the caller
+// must RESUME); false if nothing catches it (no handler, the handler itself
+// faulted, or — §9's one honest limit — the stack that faulted cannot hold
+// the frame), in which case the caller kills the task exactly as before.
+bool signal_deliver_segv(struct task *t, void *thrd, void *context)
+{
+	task_t              *task   = (task_t *)t;
+	thread_t            *thread = (thread_t *)thrd;
+	exception_context_t *ctx    = (exception_context_t *)context;
+
+	if (task == NULL || thread == NULL || ctx == NULL || task->kernelTask)
+		return false;
+	if (!signal_is_catchable(SIGSEGV) || task->sighandler[SIGSEGV] == NULL)
+		return false;                       // no handler: the default (139) stands
+	if (sigset_has(thread->signals.sigmask, SIGSEGV))
+		return false;                       // the SIGSEGV handler itself faulted — let it die (§7)
+
+	// Full frame below the fault's own RSP, respecting the red zone, from ctx.
+	uint64_t frame_va = (ctx->rsp - 128 - sizeof(signal_frame_full_t)) & ~(uint64_t)0xF;
+
+	bool ok = true;
+	ok &= signal_write_user(task, frame_va + 0,   SIGNAL_FRAME_MAGIC_FULL);
+	ok &= signal_write_user(task, frame_va + 8,   ctx->rax);
+	ok &= signal_write_user(task, frame_va + 16,  ctx->rip);   // the faulting instruction
+	ok &= signal_write_user(task, frame_va + 24,  ctx->rsp);
+	ok &= signal_write_user(task, frame_va + 32,  ctx->rflags);
+	ok &= signal_write_user(task, frame_va + 40,  (uint64_t)SIGSEGV);
+	ok &= signal_write_user(task, frame_va + 48,  (uint64_t)task->sighandler[SIGSEGV]);
+	ok &= signal_write_user(task, frame_va + 56,  0);
+	ok &= signal_write_user(task, frame_va + 64,  ctx->rbx);
+	ok &= signal_write_user(task, frame_va + 72,  ctx->rcx);
+	ok &= signal_write_user(task, frame_va + 80,  ctx->rdx);
+	ok &= signal_write_user(task, frame_va + 88,  ctx->rsi);
+	ok &= signal_write_user(task, frame_va + 96,  ctx->rdi);
+	ok &= signal_write_user(task, frame_va + 104, ctx->rbp);
+	ok &= signal_write_user(task, frame_va + 112, ctx->r8);
+	ok &= signal_write_user(task, frame_va + 120, ctx->r9);
+	ok &= signal_write_user(task, frame_va + 128, ctx->r10);
+	ok &= signal_write_user(task, frame_va + 136, ctx->r11);
+	ok &= signal_write_user(task, frame_va + 144, ctx->r12);
+	ok &= signal_write_user(task, frame_va + 152, ctx->r13);
+	ok &= signal_write_user(task, frame_va + 160, ctx->r14);
+	ok &= signal_write_user(task, frame_va + 168, ctx->r15);
+	if (!ok)
+	{
+		// §9's honest limit: the stack itself is what faulted, so there is
+		// nowhere to put the frame. Refuse — the caller kills the task (139),
+		// exactly as it did before handlers existed. An alternate signal
+		// stack is the cure, and it is a later slice.
+		printd(DEBUG_SIGNALS,
+		       "signal_deliver_segv: %s has no usable stack for the frame — dies (139)\n",
+		       task->exename);
+		return false;
+	}
+
+	// Block SIGSEGV for the duration of its own handler (§7). No sigind bit:
+	// SIGSEGV is synchronous, not a queued broadcast — the mask is what
+	// sigreturn checks to accept the frame and what turns a re-entrant fault
+	// into a clean death instead of an endless loop.
+	sigset_add(&thread->signals.sigmask, SIGSEGV);
+
+	uint64_t fault_rip = ctx->rip;
+	ctx->rip = TASK_SIGRETURN_VIRT;
+	ctx->rsp = frame_va;
+
+	printd(DEBUG_SIGNALS,
+	       "signal_deliver_segv: %s catches SIGSEGV, handler %p (faulted at %p)\n",
+	       task->exename, task->sighandler[SIGSEGV], (void *)fault_rip);
+	return true;
 }
 
 /// RAISE a signal on a thread, with data.

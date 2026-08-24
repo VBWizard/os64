@@ -247,6 +247,23 @@ is nowhere to put it. Delivery fails and the thread dies exactly as it does
 today (exit 139). The cure is an alternate signal stack, and it is a later
 slice; naming the limit is not the same as pretending it isn't there.
 
+**BUILT 2026-08-24** (`signal_deliver_segv`, called from the page-fault
+handler's user-fatal path). It is a THIRD delivery site, distinct from §5 and
+§10 because a fault is *synchronous and thread-local*: the target is the
+faulting thread itself (no broadcast bit, no lock), the interrupted state is
+the exception frame (`exception_context_t`, built on the stack by
+exception_entry.S), and the resume rides the exception's OWN `iretq` — which
+restores the GP registers from the context and honours an edited `rip`/`rsp`
+(the demand-pager already steers it that way). So delivery edits the context
+to run the stub; no new resume path. `sigreturn`'s full-frame path takes the
+handler home unchanged. Two properties earned in the building: a fault INSIDE
+a SIGSEGV handler finds the signal masked (§7) and dies rather than looping
+forever, and a handler that simply RETURNS resumes the faulting instruction
+and faults again — so a real SIGSEGV handler exits or longjmps, which is what
+`/bin/sigtest`'s finale does (fault on a NULL store, catch, brag, exit). The
+default action is untouched for a task with no handler installed: `segv_test`
+still dies with the full forensic dump and exit 139, and the OS survives.
+
 ## §10 — Delivering to a thread that never makes a syscall (design, UNBUILT)
 
 *Chris, 2026-08-23, after the syscall path shipped: "don't forget that the
@@ -463,8 +480,12 @@ the next.
    descendant of his os32 test app.
 4. **Teach the nine checkpoints** to look for a handler before defaulting to
    death.
-5. **The fixture**: raise `SIGSEGV`, catch it, print, die — Chris's os32 test
-   app reborn as `/bin/sigtest`, in the ring-3 suite.
+5. ~~**The fixture**: raise `SIGSEGV`, catch it, print, die~~ **DONE
+   2026-08-24** — Chris's os32 test app reborn as `/bin/sigtest`'s finale, and
+   the SIGSEGV delivery it needed (§9, "BUILT") built with it. Raised by Codex
+   #29 round 3: the API advertised SIGSEGV as catchable while every fault
+   killed unconditionally — the same lie the SIGPIPE fix closed, and closed
+   the same way (deliver, don't reject).
 
 ## Explicitly not in scope
 
