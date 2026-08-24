@@ -126,6 +126,26 @@ int paging_walk_entry_addresses(pt_entry_t *pml4v, uint64_t va, uintptr_t out[4]
 void paging_sentinel_add(uintptr_t va, const char *name);
 void paging_sentinel_check(const char *where);
 uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address);
+
+// The top of the canonical LOWER HALF. A ring-3 address lives below this; at
+// or above it lies non-canonical space (SYSRETQ/IRETQ #GP in ring 0 on such
+// a target) and then the kernel's own upper-half mapping, which is present in
+// EVERY task PML4. The one boundary for "is this a user address."
+#define USER_CANONICAL_MAX 0x0000800000000000ULL
+
+// Resolve `va` in `pml4v` to a physical address ONLY IF it is a legitimately
+// WRITABLE USER page: lower-half (< USER_CANONICAL_MAX), present, PAGE_USER,
+// PAGE_WRITE. Returns the physical address (page frame | in-page offset) on
+// success, 0 on ANY failure — the kernel must never write to a VA this
+// rejects. This is the guard for every place the kernel writes to a
+// RING-3-CONTROLLED address through the HHDM (signal frames, a new thread's
+// user stack): a forged pointer into the kernel's upper half or a read-only
+// SHARED page (one resident libos64.so behind every process) must not be
+// turned into a kernel-mode write. NOT for kernel-stack writes at thread
+// creation — a kernel thread's stack is supervisor, so those keep the plain
+// walk. Assumes 4KB user pages (the keep-flags PTE carries the real bits).
+uintptr_t paging_resolve_user_writable(pt_entry_t *pml4v, uint64_t va);
+
 void validatePagingHierarchy(uintptr_t address);
 void init_os64_paging_tables();
 void paging_map_kernel_into_pml4(uintptr_t* pml4v);

@@ -4198,8 +4198,9 @@ static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t ar
 //     signal it receives (the CVE-2012-0217 family). Requiring both below
 //     the canonical boundary rejects the noncanonical range AND forces the
 //     addresses into user space, where a genuinely bad-but-canonical one is
-//     back to being the program's own ring-3 fault. (SIGNAL_USER_CANONICAL_MAX,
-//     the boundary constant, is shared with the delivery paths — signals.h.)
+//     back to being the program's own ring-3 fault. (USER_CANONICAL_MAX,
+//     the boundary constant, lives in paging.h — shared with the delivery
+//     paths and paging_resolve_user_writable.)
 static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -4246,8 +4247,8 @@ static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// §5 frame's fields and the full frame shares them by prefix, so this one
 	// check guards both the sysretq and the iretq return. A noncanonical value
 	// here is a KERNEL #GP waiting to happen, not a ring-3 segfault.
-	if (saved.rip >= SIGNAL_USER_CANONICAL_MAX ||
-	    saved.rsp >= SIGNAL_USER_CANONICAL_MAX)
+	if (saved.rip >= USER_CANONICAL_MAX ||
+	    saved.rsp >= USER_CANONICAL_MAX)
 	{
 		printd(DEBUG_SIGNALS,
 		       "sigreturn: %s handed a noncanonical rip/rsp (%p/%p) — refused\n",
@@ -4282,8 +4283,8 @@ static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		if (full.base.magic != SIGNAL_FRAME_MAGIC_FULL ||
 		    full.base.signo == 0 || full.base.signo >= SIGNAL_COUNT ||
 		    !sigset_has(thread->signals.sigmask, (signals)full.base.signo) ||
-		    full.base.rip >= SIGNAL_USER_CANONICAL_MAX ||
-		    full.base.rsp >= SIGNAL_USER_CANONICAL_MAX)
+		    full.base.rip >= USER_CANONICAL_MAX ||
+		    full.base.rsp >= USER_CANONICAL_MAX)
 		{
 			printd(DEBUG_SIGNALS,
 			       "sigreturn(full): %s frame changed under validation — refused\n",

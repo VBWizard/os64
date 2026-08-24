@@ -290,13 +290,9 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	#define SIGNAL_RFLAGS_USER_BITS 0x240DD5ULL /* CF PF AF ZF SF TF DF OF AC ID */
 	#define SIGNAL_RFLAGS_FORCED    0x202ULL    /* IF=1, reserved bit 1 = 1 */
 
-	// The top of the canonical LOWER HALF. A ring-3 address (a resume RIP, a
-	// stack pointer, a frame-write target) must live below this: it is both
-	// the canonical boundary — above which SYSRETQ/IRETQ #GP in ring 0 — and
-	// the ceiling of user space, above which lies the kernel's own upper-half
-	// mapping (present in every task PML4). One constant, both delivery paths
-	// and both sigreturn paths (signals.c, syscall.c).
-	#define SIGNAL_USER_CANONICAL_MAX 0x0000800000000000ULL
+	// The user-address boundary the sigreturn paths check a resume RIP/RSP
+	// against lives in paging.h as USER_CANONICAL_MAX — it is an address-space
+	// fact, shared with paging_resolve_user_writable and the delivery writer.
 
 	// What signal_deliver_pending accomplished, and the dispatcher's duty for
 	// each: NONE — nothing pending and handled, carry on. ARMED — a handler
