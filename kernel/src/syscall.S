@@ -121,6 +121,45 @@ syscall_Enter:
     # STAR[63:48] (see smp_core.c) and RFLAGS from R11 — the user's IF comes
     # back on here (user RFLAGS always has IF set).
     mov rsp, rsi
+
+    # SCRUB THE SCRATCH REGISTERS FIRST (2026-08-24). Whatever the kernel
+    # last happened to leave in a caller-saved register was, until this
+    # block, handed to ring 3 verbatim on EVERY syscall return. That is not
+    # hypothetical residue: R10 provably holds the current thread_t* — the
+    # `mov r10, gs:[CLS_CURRENTTHREAD_OFFSET]` a dozen lines up — so every
+    # syscall disclosed a live kernel heap pointer to the program that made
+    # it. The rest (RDI, RDX, R8, R9) carry whatever _syscall_dispatch's
+    # epilogue left behind, which is not a thing anyone reasons about.
+    #
+    # It is worth the five instructions on plain hygiene: a boundary should
+    # hand across what it MEANT to hand across, and nothing else. Ring 3 is
+    # already entitled to treat these as clobbered — they are caller-saved,
+    # and libos64's syscall stubs say so in their clobber lists — so zero is
+    # as valid an answer as garbage, and it is the answer that discloses
+    # nothing. os64 has no KASLR and its kernel base is a published constant,
+    # so this leaks less here than it would elsewhere; that is an argument
+    # about severity, not about whether to do it.
+    #
+    # NOT scrubbed, because each is load-bearing at this instruction:
+    #   RAX — the syscall's return value, the whole point
+    #   RCX — user RIP, consumed by SYSRETQ
+    #   R11 — user RFLAGS, consumed by SYSRETQ
+    #   RSI — was the user RSP; already moved into RSP on the line above, so
+    #         it is zeroed below like the others
+    # RBX/RBP/R12-R15 were popped from the frame and hold the USER's own
+    # callee-saved values — restoring those is the contract, not a leak.
+    #
+    # WHEN THE RAX:RDX RETURN PAIR LANDS (ABI.md's designed value:status
+    # convention, still interim sentinels today), RDX MOVES OUT OF THIS LIST
+    # and into the load-bearing one above. Zeroing it then would silently
+    # destroy every syscall's status word.
+    xor edi, edi
+    xor edx, edx
+    xor esi, esi
+    xor r8d, r8d
+    xor r9d, r9d
+    xor r10d, r10d
+
     sysretq
 
 .size syscall_Enter, .-syscall_Enter

@@ -317,6 +317,26 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	#define SIGNAL_RFLAGS_USER_BITS 0x240DD5ULL /* CF PF AF ZF SF TF DF OF AC ID */
 	#define SIGNAL_RFLAGS_FORCED    0x202ULL    /* IF=1, reserved bit 1 = 1 */
 
+	// The DIRECTION FLAG, cleared on the way INTO a handler and nowhere else
+	// (Codex #29 rd10). The SysV ABI requires DF clear at every function
+	// entry, and a signal handler is an ordinary C function the kernel calls
+	// out of nowhere — so if an async signal interrupts ring-3 code with DF
+	// set, the handler inherits it and any string operation the compiler
+	// emits inside it (a struct copy, a memcpy, a printf) runs BACKWARD.
+	//
+	// Note that DF stays in SIGNAL_RFLAGS_USER_BITS above, and must: the
+	// frame's saved copy carries the INTERRUPTED flags, and sigreturn has to
+	// put the interrupted code back exactly as it was, DF included. Only the
+	// LIVE rflags — the ones the CPU will be running the handler on — get
+	// this cleared. Save the original, enter clean, restore the original.
+	//
+	// Honest about the reach: no os64 program sets DF today (there is not one
+	// `std` in userland), and no compiler leaves it set across a call. This is
+	// the same bargain §10 already makes for the red zone — hand-written
+	// ring-3 asm is allowed to exist, and three instructions is a cheap price
+	// for never having to debug a handler whose memcpy ran the wrong way.
+	#define SIGNAL_RFLAGS_DF        (1ULL << 10)
+
 	// The user-address boundary the sigreturn paths check a resume RIP/RSP
 	// against lives in paging.h as USER_CANONICAL_MAX — it is an address-space
 	// fact, shared with paging_resolve_user_writable and the delivery writer.

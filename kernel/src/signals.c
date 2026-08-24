@@ -355,6 +355,11 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 	// lock (which guards the shared pending set, now consumed).
 	frame[1] = TASK_SIGRETURN_VIRT;
 	frame[2] = frame_va;
+	// Enter the handler with DF CLEAR (Codex #29 rd10, signals.h carries the
+	// argument). frame[0] is the LIVE rflags sysretq will resume on; the
+	// interrupted value is already safe in the frame's saved copy at +32,
+	// written from user_rfl above, so sigreturn still restores it exactly.
+	frame[0] &= ~SIGNAL_RFLAGS_DF;
 
 	printd(DEBUG_SIGNALS, "signal_deliver: %s runs handler %p for signal %d (resumes %p)\n",
 	       task->exename, task->sighandler[sig], sig, (void *)user_rip);
@@ -463,6 +468,10 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 	uint64_t spin_rip = thread->regs.RIP;
 	thread->regs.RIP = TASK_SIGRETURN_VIRT;
 	thread->regs.RSP = frame_va;
+	// DF clear on entry, same rule as §5 — and here it matters slightly more,
+	// because a thread interrupted mid-spin can be at ANY instruction, string
+	// op included. The saved copy at +32 already holds the spin's own flags.
+	thread->regs.RFLAGS &= ~SIGNAL_RFLAGS_DF;
 
 	printd(DEBUG_SIGNALS,
 	       "signal_deliver_to_regs: %s runs handler %p for signal %d (spinner resumes %p)\n",
@@ -579,6 +588,10 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 	uint64_t fault_rip = ctx->rip;
 	ctx->rip = TASK_SIGRETURN_VIRT;
 	ctx->rsp = frame_va;
+	// DF clear on entry, same rule as §5 and §10. The exception's own iretq
+	// resumes on ctx->rflags, and the faulting instruction's real flags are
+	// already in the frame's saved copy at +32 for sigreturn to restore.
+	ctx->rflags &= ~SIGNAL_RFLAGS_DF;
 
 	printd(DEBUG_SIGNALS,
 	       "signal_deliver_segv: %s catches SIGSEGV, handler %p (faulted at %p)\n",

@@ -141,6 +141,23 @@
 		//The task identifier.  This will be the same as the first threadID assigned to the task
 		uint64_t taskID;
 		volatile bool exited;
+		// THE TEARDOWN CLAIM — exactly one thread runs a task's teardown
+		// (Codex #29 rd10). `exited` cannot be that claim, and this is the
+		// whole bug: it is published only AFTER handle_close_all(), and
+		// task_exit's own comment says that stretch "may sleep in the VFS and
+		// resume on any core". Killing a threaded task sends EVERY sibling
+		// down task_exit (the redirect points them at the exit trampoline,
+		// which calls the TASK exit syscall), so a sibling arriving while the
+		// first thread is still inside the VFS reads `exited == false`, walks
+		// straight past the guard, and runs the whole teardown a second time.
+		// The handle table survives that (the CLOSING sentinel, rd4), but
+		// task_enqueue_dead_child does NOT: enqueueing one child twice makes
+		// `parent->deadChildTail->deadChildNext = child` write child->next =
+		// child, and a self-linked corpse means the undertaker's walk never
+		// ends. Claimed with an atomic exchange, so the winner is decided
+		// before any of that runs. Zeroed = unclaimed, by the
+		// all-allocations-zeroed rule.
+		volatile bool tearingDown;
         char exename[128];
         thread_t* threads;
         void* elf;

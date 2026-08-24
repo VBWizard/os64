@@ -13,6 +13,7 @@
 .global handler_irq1_asm
 .section .text
 handler_irq1_asm:
+    cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
     push rax
     push rcx
     push rdx

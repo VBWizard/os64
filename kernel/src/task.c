@@ -1264,10 +1264,28 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	// re-enqueue an already-enqueued dead child, which is how a zombie list
 	// gets corrupted. A thread that finds its task already dead has exactly
 	// one job left: mark itself and get off the CPU.
-	if (task != NULL && task->exited)
+	//
+	// AN ATOMIC CLAIM, NOT A READ OF `exited` (Codex #29 rd10). The danger
+	// above was understood from the day this guard was written; what was
+	// missed is that `exited` is not published until AFTER handle_close_all(),
+	// and task_exit's own comment describes that stretch as one that "may
+	// sleep in the VFS and resume on any core". So the guard only ever caught
+	// siblings arriving after teardown FINISHED — two threads that reach here
+	// while the first is still inside the VFS both read false, both walk past,
+	// and both run the whole teardown. Handles survive it (the CLOSING
+	// sentinel, rd4) but the dead-child enqueue does not: the same child
+	// enqueued twice self-links (`child->deadChildNext = child`) and the
+	// undertaker's walk never terminates.
+	//
+	// One exchange decides the owner before any of that can happen. Everyone
+	// else takes the same road they always did — mark yourself, get off the
+	// CPU — which is exactly what a post-`exited` arrival did before, so the
+	// losing path is not new code, just correctly reached now.
+	if (task != NULL &&
+	    __atomic_exchange_n(&task->tearingDown, true, __ATOMIC_ACQ_REL))
 	{
 		printd(DEBUG_TASK | DEBUG_THREAD,
-		       "task_exit: thread 0x%08lx arrived after %s already died — retiring the thread only\n",
+		       "task_exit: thread 0x%08lx arrived while/after %s was being torn down — retiring the thread only\n",
 		       thread ? thread->threadID : 0, task->exename);
 		// Nothing left to tear down — return to task_exit, whose last breath
 		// marks `exited` and gets off the CPU. (This used to trigger and halt

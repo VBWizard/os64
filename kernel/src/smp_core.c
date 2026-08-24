@@ -507,11 +507,64 @@ void ap_initialization_handler() {
 	//Format: 63..0 = Entry point to the kernel's system call method
 	wrmsr64(LSTAR_MSR, (uintptr_t)&syscall_Enter);
 
-	//SFMASK MSR
-	//Layout: Bits are the same as RFLAGS.  A 1 in a bit causes the associated RFLAG bit to be set to 0
-	//We'll mask IF and TF so that they are set to 0.  No need to touch other flags.
-	//On SYSCALL entry interrupts will be disabled, and the trap flag will not be set
-	wrmsr64(SFMASK_MSR, (1 << 9) | (1 << 8));
+	// SFMASK MSR — WHAT RING 3 IS NOT ALLOWED TO LEND US.
+	//
+	// Layout: bits are RFLAGS bits. A 1 here forces that flag to 0 on SYSCALL
+	// entry. Everything NOT named here crosses the ring boundary into the
+	// kernel exactly as ring 3 left it, and this line used to end with the
+	// sentence "No need to touch other flags" — which is the whole reason
+	// this comment exists now.
+	//
+	// THE PRINCIPLE, and it is not "because a spec says so": the kernel
+	// should not inherit CPU state from the program it is protecting itself
+	// from, whenever that state changes what the kernel's own instructions
+	// MEAN. A flag ring 3 can set with one unprivileged instruction, that
+	// silently alters the behaviour of code the kernel already compiled and
+	// tested, is a hole with no local defence — you cannot review your way
+	// out of it, because every individual line still looks correct.
+	//
+	// By that test, four flags earn a bit here (2026-08-24):
+	//
+	//   IF (9)  — the kernel decides its own preemptibility. Original.
+	//   TF (8)  — single-stepping is not ring 3's to impose on ring 0. Original.
+	//   DF (10) — THE DIRECTION FLAG DECIDES WHICH WAY EVERY STRING COPY RUNS.
+	//             With it set, a `rep movsq` walks DOWNWARD from its start,
+	//             writing over what precedes the destination instead of what
+	//             follows. The kernel binary carries twelve of them (GCC's
+	//             inlined struct copies, present even at -O0) and not one has
+	//             a `cld` in front of it, because the compiler is entitled to
+	//             assume the flag is clear — which is exactly why an inherited
+	//             DF is invisible to inspection. Cost of closing it: one bit.
+	//             (Honest note: an attempt to demonstrate corruption through
+	//             /proc maps did NOT reproduce — see df_test. The mechanism is
+	//             certain, the exploit was not shown. Closed on the principle
+	//             above, not on a proof-of-concept.)
+	//   NT (14) — decides what IRET *IS*. With NT set, IRET means "return from
+	//             a nested task" rather than "return from an interrupt", and
+	//             long mode has no task switching, so it is a #GP instead. Same
+	//             shape of hazard as DF: one ring-3 bit, one kernel instruction
+	//             quietly redefined.
+	//   AC (18) — inert today (alignment checking only applies at CPL 3, and
+	//             SMAP is not enabled), so this one is bought forward rather
+	//             than needed now. It is the bit that would let ring-3 state
+	//             influence whether the kernel may touch user pages the day
+	//             SMAP is turned on, and finding that out then, through a
+	//             fault nobody can place, is worth avoiding for free today.
+	//
+	// The arithmetic flags are deliberately left alone: the kernel sets its
+	// own before it tests them, so inheriting CF or ZF changes nothing. Bits
+	// get masked here because they are load-bearing, not to be thorough.
+	//
+	// The interrupt and exception gates need the same treatment for DF and no
+	// MSR covers them — they get an explicit `cld` in their entry stubs (one
+	// at exc_common serves all 32 vectors; the device IRQs and IPI vectors
+	// have their own).
+	//
+	// Found while fixing the narrower ring-3 half of the same disease: a
+	// signal handler entered with DF set (Codex #29 rd10, signals.h
+	// SIGNAL_RFLAGS_DF). That one needed hand-written ring-3 asm to reach.
+	// This one needs a `std` and any syscall at all.
+	wrmsr64(SFMASK_MSR, (1 << 18) | (1 << 14) | (1 << 10) | (1 << 9) | (1 << 8));
 
 	init_core_local_storage(apic_id);
 	core_local_storage_t *cls = get_core_local_storage();
