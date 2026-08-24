@@ -97,7 +97,7 @@ void kernel_park(void)
 				lastPoolUsed = used;
 			}
         }
-        sigaction(SIGSLEEP, NULL, kTicksSinceStart+90,kKernelTask->threads);
+        signal_raise(SIGSLEEP, kTicksSinceStart+90,kKernelTask->threads);
 	}
 	while (true) {asm("sti\nhlt\n");}
 }

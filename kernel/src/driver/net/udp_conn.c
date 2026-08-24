@@ -28,7 +28,7 @@
 #include "CONFIG.h"
 #include "memory/kmalloc.h"
 #include "smp_core.h"        // get_core_local_storage — who is reading
-#include "signals.h"         // sigaction(SIGSLEEP) — how a reader parks
+#include "signals.h"         // signal_raise(SIGSLEEP) — how a reader parks
 #include "scheduler.h"       // scheduler_change_thread_queue — how it wakes
 #include "driver/net/net_device.h"
 #include "driver/net/net_wire.h"
@@ -232,7 +232,7 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 		uint64_t wake = kTicksSinceStart + UDP_CONN_BACKSTOP_TICKS;
 		if (deadline != 0 && deadline < wake)
 			wake = deadline;
-		sigaction(SIGSLEEP, NULL, wake, self);
+		signal_raise(SIGSLEEP, wake, self);
 	}
 }
 

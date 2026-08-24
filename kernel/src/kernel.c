@@ -637,7 +637,7 @@ void kernel_init()
 		else
 			printf("  /bin/keytest launch failed (not on the image?)\n");
 		while (1)
-			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
+			signal_raise(SIGSLEEP, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
 	}
 
     if (kRunTests)
@@ -851,7 +851,7 @@ void kernel_init()
 		uint64_t statusCount = 0;
 		while (1)
 		{
-			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
+			signal_raise(SIGSLEEP, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
 			printd(DEBUG_GUI, "os64: up %lu ticks, GUI running (status #%lu)\n", kTicksSinceStart, ++statusCount);
 		}
 	}

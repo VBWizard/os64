@@ -257,7 +257,7 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		// glass (tty_focus relights it from the repaint).
 		if (kTTYFocused == tty)
 			renderer_cursor_show();
-		sigaction(SIGSLEEP, NULL, wake, self);
+		signal_raise(SIGSLEEP, wake, self);
 	}
 }
 

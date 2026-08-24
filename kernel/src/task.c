@@ -389,7 +389,7 @@ static void task_enqueue_dead_child(task_t *child)
 		// and its deadline right here, BEFORE attempting the wake, reasoning
 		// that a woken parent still carrying SIGSLEEP would be parked straight
 		// back to ISLEEP. True — but the wake it handed off to only lands on a
-		// thread that has ALREADY parked, and sigaction(SIGSLEEP) does not
+		// thread that has ALREADY parked, and signal_raise(SIGSLEEP) does not
 		// park: it sets the flag and asks for a scheduler pass, so there is a
 		// wide window where the parent is mid-park and the wake is a silent
 		// no-op. Cancel the backstop inside that window and the parent lands in
@@ -1511,7 +1511,7 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// Park until a child exits (woken by task_enqueue_dead_child) or the
 		// backstop fires; then loop and re-check. SIGSLEEP parks atomically.
 		parent->waitingForChild = true;
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, parent->threads);
+		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, parent->threads);
 		parent->waitingForChild = false;
 	}
 }

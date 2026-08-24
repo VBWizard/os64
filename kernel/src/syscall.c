@@ -3243,7 +3243,7 @@ static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// Park with the wake deadline in sigdata[SIGSLEEP] — sigaction
 		// triggers the scheduler itself, so we genuinely leave the CPU here
 		// and resume on the next line when woken.
-		sigaction(SIGSLEEP, NULL, wakeTick, self);
+		signal_raise(SIGSLEEP, wakeTick, self);
 	}
 }
 

@@ -187,7 +187,11 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 
 	extern bool kProcessSignals;
 	extern uint8_t signalProcTickFrequency;
-	void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thread);
+	// RAISE a signal on a thread (NULL = the caller's own), with data — for
+	// SIGSLEEP, the tick to wake at, which is what 21 of its 22 callers want.
+	// Called `sigaction` until 2026-08-23, when it turned out to be holding
+	// that name without setting any action; see its definition for the story.
+	void signal_raise(signals signal, uint64_t sigData, void *thread);
 	void init_signals();
 	
 #endif

@@ -199,7 +199,7 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 		uint64_t wake = kTicksSinceStart + TICKS_PER_SECOND;
 		if (deadline != 0 && deadline < wake)
 			wake = deadline;
-		sigaction(SIGSLEEP, NULL, wake, self);
+		signal_raise(SIGSLEEP, wake, self);
 	}
 }
 

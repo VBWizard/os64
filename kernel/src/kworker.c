@@ -103,7 +103,7 @@ bool kworker_thread(bool daemon)
 				"kworker_thread: APIC %u sleeping until tick %u\n",
 				cls->apic_id,
 				kTicksSinceStart + KWORKER_SLEEP_TICKS);
-			sigaction(SIGSLEEP, NULL, kTicksSinceStart + KWORKER_SLEEP_TICKS, self);
+			signal_raise(SIGSLEEP, kTicksSinceStart + KWORKER_SLEEP_TICKS, self);
 			printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
 				"kworker_thread: APIC %u woke at tick %u\n",
 				cls->apic_id,

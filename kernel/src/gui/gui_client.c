@@ -503,8 +503,8 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 		win->waiter = self;
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 
-		sigaction(SIGSLEEP, NULL,
-		          kTicksSinceStart + GUI_EVENT_WAIT_BACKSTOP_TICKS, self);
+		signal_raise(SIGSLEEP,
+		             kTicksSinceStart + GUI_EVENT_WAIT_BACKSTOP_TICKS, self);
 	}
 }
 

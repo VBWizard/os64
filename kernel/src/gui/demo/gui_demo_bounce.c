@@ -85,6 +85,6 @@ bool gbounce_thread(bool daemon)
 		while (gui_event_poll(win, &ev) == 1)
 			;
 
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + FRAME_TICKS, self);
+		signal_raise(SIGSLEEP, kTicksSinceStart + FRAME_TICKS, self);
 	}
 }

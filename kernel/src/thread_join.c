@@ -187,7 +187,7 @@ long thread_join_read(thread_join_t* j, int64_t* out)
 		// cost), so a waiter caught mid-park stays registered for the
 		// next pass instead of losing its wake entirely.
 		j->waiter = self;
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TICKS_PER_SECOND, self);
+		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
 	}
 }
 

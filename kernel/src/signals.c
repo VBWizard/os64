@@ -24,15 +24,21 @@ extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
 uint8_t signalProcTickFrequency;
 
-/// @brief 
-/// @param signal See SIGNALS.H for the enum
-/// @param sigAction 
-/// @param sigData Data to accompany the signal (i.e. for SIGSLEEP, wake up ticks)
-/// @param thrd - The thread to signal.  If NULL the current thread is signaled
-/// @return 
-void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
+/// RAISE a signal on a thread, with data.
+///
+/// IT WAS CALLED `sigaction` UNTIL 2026-08-23, and the name was wrong twice
+/// over: it sets no action, and 21 of its 22 callers use it to mean "park this
+/// thread until tick N". Its `sigAction` parameter was dead — `(void)`-cast at
+/// the top, "reserved for real handler registration" — and that registration
+/// is now being built properly, as a syscall against the task's own handler
+/// table, which needed the name back before the two could stand next to each
+/// other without confusing everybody who reads them.
+///
+/// @param signal the signal NUMBER (signals.h)
+/// @param sigData data to accompany it — for SIGSLEEP, the wake tick
+/// @param thrd the thread to signal; NULL means the current one
+void signal_raise(signals signal, uint64_t sigData, void *thrd)
 {
-    (void)sigAction;   // reserved for real handler registration; unused until then
     thread_t *thread = thrd;
 
 	if (thread == NULL)
@@ -56,10 +62,8 @@ void *sigaction(int signal, uintptr_t *sigAction, uint64_t sigData, void *thrd)
 			scheduler_trigger(NULL);
 			break;
 		default:
-			panic("sigaction: Unknown signal %u\n",signal);
+			panic("signal_raise: signal %u has no raise path here\n", signal);
 	}
-
-	return NULL;
 }
 
 //Iterate the running, runnable and sleeping queues, looking for new signals

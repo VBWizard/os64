@@ -731,7 +731,7 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 		uint64_t wake = kTicksSinceStart + TICKS_PER_SECOND;
 		if (deadline != 0 && deadline < wake)
 			wake = deadline;
-		sigaction(SIGSLEEP, NULL, wake, self);
+		signal_raise(SIGSLEEP, wake, self);
 	}
 }
 
@@ -775,7 +775,7 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 
 		c->writer = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TICKS_PER_SECOND, self);
+		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
 	}
 
 	// Wait for the last segment's acknowledgement, so a write() that
@@ -794,7 +794,7 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			break;
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TICKS_PER_SECOND, self);
+		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
 	}
 	return (long)sent;
 }
