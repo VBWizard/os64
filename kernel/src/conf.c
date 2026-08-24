@@ -85,7 +85,7 @@ static void conf_io_kernel(void *arg)
 		uint8_t *buf = kmalloc(p->cap + 1);
 		size_t len = 0;
 		if (buf != NULL) {
-			bool oversized = false;
+			bool refuse = false;   // "could not hand this back whole" — oversized OR unreadable
 			for (;;) {
 				if (len >= p->cap) {
 					// At the cap. conf_read_file's contract (conf.h) is NULL
@@ -94,16 +94,37 @@ static void conf_io_kernel(void *arg)
 					// whole read if the file continues past here, rather than
 					// returning a truncated prefix as a success.
 					uint8_t probe;
-					if (fs->fops->read(file, &probe, 1) > 0)
-						oversized = true;
+					int pr = fs->fops->read(file, &probe, 1);
+					// Only ZERO — a clean EOF exactly at the cap — means this
+					// file fits. A positive answer means it continues (too
+					// big); a negative one means we could not find out, and
+					// "could not find out" is not a licence to hand back a
+					// prefix as the whole file.
+					if (pr != 0)
+						refuse = true;
 					break;
 				}
 				int n = fs->fops->read(file, buf + len, p->cap - len);
-				if (n <= 0)
-					break;
+				// AN ERROR IS NOT AN ENDING (Codex #29 rd12, found in the
+				// libos64 twin and fixed on both sides because there is meant
+				// to be ONE ladder and one behaviour). `n <= 0` folded "the
+				// file ended" together with "the storage failed", and a
+				// kernel reader that accepts a truncated prefix as the whole
+				// file silently drops settings — gui_startup would start
+				// fewer apps, the resolver would lose hosts entries, and
+				// nothing anywhere would say why.
+				//
+				// Both failures take the SAME exit: p->buf stays
+				// NULL, so conf_read_file returns NULL and every caller's
+				// existing "could not read it" path runs. Refusing a file we
+				// could not read whole is the same promise the cap check
+				// above already makes.
+				if (n < 0) { refuse = true; break; }
+				if (n == 0)
+					break;                  // genuine end of file
 				len += (size_t)n;
 			}
-			if (oversized) {
+			if (refuse) {
 				kfree(buf);   // p->buf stays NULL → conf_read_file returns NULL
 			} else {
 				buf[len] = 0;

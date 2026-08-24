@@ -96,27 +96,37 @@ static window_t *handle_lookup(int64_t handle)
 // kGuiLock, and no signal path ever takes kGuiLock), so this nests without a
 // cycle. One free_memory for the whole extent, so the hold is bounded no
 // matter how large the canvas.
+// THE ONE PLACE TASK-MAPPED CANVAS PAGES GO BACK. Every caller goes through
+// here so the signalLock rule above is enforced by CONSTRUCTION rather than by
+// each site remembering it — which matters because the site that forgot it was
+// found by review, not by testing, and the next one would be too.
+//
+// The owner is a PRECONDITION, not an optional extra: a task-backed canvas has
+// exactly one owning address space by definition, and both the unmap and the
+// lock need it. Refusing beats freeing pages we cannot unmap, which would
+// leave the task a live mapping to memory the allocator has given away.
+static void canvas_pages_release(task_t *owner, uintptr_t va, uint64_t bytes,
+                                 uintptr_t phys)
+{
+	if (owner == NULL || phys == 0 || bytes == 0)
+		return;
+
+	uint64_t sf = spinlock_acquire_irqsave(&owner->signalLock);
+	paging_unmap_pages((pt_entry_t *)owner->pml4v, va, (size_t)bytes);
+	free_memory(phys);
+	spinlock_release_irqrestore(&owner->signalLock, sf);
+}
+
 static void canvas_release_locked(window_t *win, task_t *owner)
 {
 	if (win->canvas_task_phys == 0)
 		return;
-	// The owner is a PRECONDITION, not an optional extra: a task-backed
-	// canvas has, by definition, exactly one owning address space, and both
-	// the unmap and the lock need it. Refusing here beats freeing pages we
-	// cannot unmap (which would leave the task a live mapping to memory the
-	// allocator has handed to somebody else).
-	if (owner == NULL)
-		return;
 
-	uint64_t sf = spinlock_acquire_irqsave(&owner->signalLock);
-
-	paging_unmap_pages((pt_entry_t *)owner->pml4v, win->canvas_task_va,
-	                   (size_t)win->canvas_pages * PAGE_SIZE);
-	free_memory(win->canvas_task_phys);
+	canvas_pages_release(owner, win->canvas_task_va,
+	                     (uint64_t)win->canvas_pages * PAGE_SIZE,
+	                     win->canvas_task_phys);
 	win->canvas.pixels = NULL;
 	win->canvas_task_phys = 0;
-
-	spinlock_release_irqrestore(&owner->signalLock, sf);
 }
 
 // Look up a handle AND verify the caller owns it — the check every
@@ -279,10 +289,17 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 undo_pivot:
 	// The window never came to be; give back what the pivot staged. The VA
 	// stays burned — never-reuse is the allocator's whole tripwire.
-	if (canvas_phys != 0) {
-		paging_unmap_pages((pt_entry_t *)task->pml4v, canvas_va, canvas_bytes);
-		free_memory(canvas_phys);
-	}
+	//
+	// THROUGH THE SAME CHOKE POINT as a normal release, and not because it is
+	// tidier: these pages are already MAPPED into the task (the pivot mapped
+	// them a few lines up), user-writable, at a VA a sibling can work out —
+	// task->heapEnd is not a secret. So this rollback is subject to exactly
+	// the rule the release path is: free them without the owner's signalLock
+	// and a concurrent signal delivery can be mid-write inside them. Narrow,
+	// since it only runs when window creation fails — but rd8's window was
+	// narrow too, and it was a kernel panic. Routed here rather than fixed in
+	// place so the next person to free a canvas cannot get it wrong.
+	canvas_pages_release(task, canvas_va, canvas_bytes, canvas_phys);
 	return GUI_ERR_NO_RESOURCES;
 }
 

@@ -227,6 +227,23 @@ typedef struct {
 //    fine too; the reader trims them, which is the documented dialect rather
 //    than a loss.)
 #define OS64_CONF_BAD_SETTING (-6)
+//
+// 5. A READ ERROR IS NOT END-OF-FILE (OS64_CONF_IO_ERROR, 2026-08-24). The
+//    read loops here used to break on `n <= 0`, which folds "the file ended"
+//    together with "the disk failed" — and the two demand opposite responses.
+//    On EOF the merge is correct; on an ERROR the buffer holds only the
+//    PREFIX that arrived before the failure, and publishing that prefix
+//    replaces the user's config with a truncated copy of itself. The rename
+//    is atomic, so the damage is committed cleanly and completely: exactly
+//    the outcome rule 3 exists to prevent, arriving through the one door
+//    rule 3 did not watch.
+//
+//    It gets its own code rather than borrowing OS64_CONF_NO_FILE, because
+//    the two mean opposite things to a caller: NO_FILE says "there was
+//    nothing there" (so a fresh save is reasonable), while this says "there
+//    WAS something and I could not read it" (so saving would destroy it).
+//    A caller that confuses them writes over the file it failed to read.
+#define OS64_CONF_IO_ERROR (-7)
 int64_t os64_conf_write(const char *name,
                         const os64_conf_pair_t *pairs, size_t count);
 

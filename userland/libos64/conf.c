@@ -47,10 +47,19 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 
 	size_t got = 0;
 	bool truncated = false;
+	bool io_error = false;
 	for (;;) {
 		int64_t n = os64_read((int32_t)fd, buf + got, OS64_CONF_MAX - 1 - got);
-		if (n <= 0)
-			break;
+		// An error is not an ending (Codex #29 rd12) — same distinction the
+		// write path makes, and for a related reason. Nothing has been handed
+		// to the callback yet (parsing happens after this loop), so failing
+		// here means the caller gets an ERROR rather than a partial file it
+		// would treat as the whole truth. A reader that silently drops the
+		// tail of hosts, or of gui.conf's start list, is a machine behaving
+		// differently for a reason nobody can see.
+		if (n < 0) { io_error = true; break; }
+		if (n == 0)
+			break;                          // genuine end of file
 		got += (size_t)n;
 		if (got >= OS64_CONF_MAX - 1) {
 			// Buffer full — but a file of EXACTLY OS64_CONF_MAX-1 bytes fits,
@@ -60,12 +69,19 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 			// gclock reports it exceeds the limit. Set truncated only if there
 			// really is more.
 			char probe;
-			if (os64_read((int32_t)fd, &probe, 1) > 0)
+			int64_t pr = os64_read((int32_t)fd, &probe, 1);
+			if (pr > 0)
 				truncated = true;
+			else if (pr < 0)
+				io_error = true;            // still do not know — do not guess
 			break;
 		}
 	}
 	os64_close((int32_t)fd);
+	if (io_error) {
+		os64_free(buf);
+		return OS64_CONF_IO_ERROR;
+	}
 	buf[got] = '\0';
 
 	int64_t delivered = 0;
@@ -457,26 +473,54 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 
 	// Read whatever is there. ABSENT IS FINE — this is a first save, and the
 	// merge below simply has nothing to merge with.
+	//
+	// AN ERROR IS NOT AN ENDING (Codex #29 rd12). This loop used to break on
+	// `n <= 0`, folding "the file ended" together with "the read failed" —
+	// and those demand opposite responses. On EOF the merge below is right.
+	// On an ERROR, `old` holds only the prefix that arrived before the
+	// failure, and carrying on publishes that prefix over the user's real
+	// config: rule 3's atomic rename then commits the loss cleanly and
+	// completely. The buffer-full case three lines down already understood
+	// this exact danger ("would silently destroy the tail this routine
+	// promises to preserve") — it was guarded for the size door and not for
+	// the error door.
 	size_t got = 0;
 	bool too_big = false;
+	bool io_error = false;
 	int64_t fd = os64_open(path, "r");
 	if (fd >= 0) {
 		for (;;) {
 			int64_t n = os64_read((int32_t)fd, old + got, OS64_CONF_MAX - 1 - got);
-			if (n <= 0)
-				break;
+			if (n < 0) { io_error = true; break; }
+			if (n == 0)
+				break;                      // genuine end of file
 			got += (size_t)n;
 			if (got >= OS64_CONF_MAX - 1) {
 				// Buffer full. Is there MORE? Publishing only this prefix
 				// would silently destroy the tail this routine promises to
 				// preserve, so probe one byte and refuse if it is there.
+				// The probe gets the same three-way answer: >0 means the file
+				// continues (too big), 0 means it ended exactly here (fine),
+				// and <0 means we STILL do not know — which is not a licence
+				// to publish.
 				char probe;
-				if (os64_read((int32_t)fd, &probe, 1) > 0)
+				int64_t pr = os64_read((int32_t)fd, &probe, 1);
+				if (pr > 0)
 					too_big = true;
+				else if (pr < 0)
+					io_error = true;
 				break;
 			}
 		}
 		os64_close((int32_t)fd);
+	}
+	if (io_error) {
+		// Nothing has been written yet — no temp opened, no rename — so the
+		// existing config is untouched, which is the entire point of failing
+		// here rather than three steps later.
+		os64_free(old);
+		os64_free(neu);
+		return OS64_CONF_IO_ERROR;
 	}
 	if (too_big) {
 		os64_free(old);
