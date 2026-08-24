@@ -43,6 +43,13 @@ typedef enum handle_type
 	                       // (PTY.md: write = keystrokes in, pty_snapshot =
 	                       // the interpreted screen out; read is reserved
 	                       // for the STREAM flavor)
+
+	// A slot mid-CLOSE (2026-08-24). Distinct from NONE so handle_alloc — which
+	// only ever reclaims a NONE slot — cannot reuse a slot whose object the
+	// closer has not yet released, and handle_get refuses to hand a closing
+	// handle to an operation. The closer stamps this while it works, then
+	// NONE when the object is gone. See handle_close for the race it shuts.
+	HANDLE_CLOSING,
 } handle_type_t;
 
 typedef struct handle

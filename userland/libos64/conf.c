@@ -236,6 +236,16 @@ int64_t os64_conf_get(const char *name, const char *key, char *out, size_t cap)
 	int64_t rc = os64_conf_read(path, conf_get_line, &g);
 	if (rc < 0 && rc != OS64_CONF_TRUNCATED)
 		return rc;                 // NO_FILE / NO_MEMORY: nothing was read
+	if (rc == OS64_CONF_TRUNCATED) {
+		// The file was too big to read whole, so "last one wins" is a promise
+		// we cannot keep: a later duplicate of `key` may sit in the tail we
+		// never saw, which would OVERRIDE whatever we found in the prefix
+		// (Codex #29 rd4). Refuse rather than hand back a value a fuller read
+		// would have replaced. (The read/write/kernel paths already surface
+		// truncation; this is the single-setting reader honouring it too.)
+		out[0] = 0;
+		return OS64_CONF_TRUNCATED;
+	}
 	if (!g.found) {
 		out[0] = 0;
 		return OS64_CONF_NO_KEY;

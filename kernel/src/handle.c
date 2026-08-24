@@ -85,8 +85,8 @@ handle_t *handle_get(struct task *t, int h)
 	// This IS the range check: ring 3 passes whatever integer it feels like.
 	if (h < 0 || h >= TASK_MAX_HANDLES)
 		return NULL;
-	if (task->handles[h].type == HANDLE_NONE)
-		return NULL;
+	if (task->handles[h].type == HANDLE_NONE || task->handles[h].type == HANDLE_CLOSING)
+		return NULL;   // free, or mid-close — not operable either way
 
 	return &task->handles[h];
 }
@@ -170,7 +170,8 @@ void handle_dir_object_close(void *vfs_dir)
 
 bool handle_close(struct task *t, int h)
 {
-	task_t *task = (task_t *)t;
+	// Everything below works through `handle` (== &task->handles[h]); the slot
+	// index is closed over by that pointer, so the task_t is not needed here.
 	handle_t *handle = handle_get(t, h);
 
 	if (handle == NULL)
@@ -195,24 +196,35 @@ bool handle_close(struct task *t, int h)
 	// nature — it needs two threads inside the same slot — which is why it
 	// took a busy machine to show up and did not reproduce on demand.
 	//
-	// Taking the type out and blanking the slot FIRST closes the window: the
-	// losing racer now sees HANDLE_NONE, does nothing, and the object is
-	// released exactly once. (handle_get's own NULL check makes a closed slot
-	// safe to re-close; this makes a CLOSING slot safe too.)
+	// The claim is an ATOMIC EXCHANGE to a CLOSING sentinel, and the SENTINEL
+	// (not HANDLE_NONE) is the fix's whole point (tightened twice):
 	//
-	// The claim is an ATOMIC EXCHANGE, not a read-then-store (tightened
-	// 2026-08-24): plain read-then-blank still let two closers both read a
-	// live type in the few instructions before either store landed — the same
-	// race, wearing a narrower window that a busy machine would eventually
-	// thread. xchg makes exactly one closer win by construction. The TYPE is
-	// the claim token rather than the object, because a console handle's
-	// object is legitimately NULL — a NULL exchanged there couldn't tell a
-	// lost race from a handle that never had an object at all.
-	handle_type_t type = __atomic_exchange_n(&handle->type, HANDLE_NONE, __ATOMIC_ACQ_REL);
+	//   Round 1 exchanged straight to HANDLE_NONE, which shut the two-CLOSERS
+	//   race (xchg makes exactly one win). But NONE means "free", and
+	//   handle_alloc reclaims free slots — so between our exchange and our
+	//   capture of `object` below, another thread's handle_alloc could seize
+	//   this very slot and install a NEW object into it. We would then close
+	//   or NULL the newcomer's object, leaking ours and corrupting theirs
+	//   (Codex #29 rd4).
+	//
+	//   CLOSING is distinct from NONE, and handle_alloc only ever reclaims a
+	//   NONE slot, so a slot we are closing is untouchable until WE set it
+	//   NONE — after the object is released. The TYPE is the claim token (a
+	//   console handle's object is legitimately NULL, so it cannot be one);
+	//   a loser sees CLOSING or NONE and bails.
+	handle_type_t type = __atomic_exchange_n(&handle->type, HANDLE_CLOSING, __ATOMIC_ACQ_REL);
 	if (type == HANDLE_NONE)
-		return false;   // another closer claimed this slot first
+	{
+		// We stamped CLOSING onto an already-free slot — undo it so alloc can
+		// have it back. (Nobody else can be mid-close on a NONE slot.)
+		__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
+		return false;
+	}
+	if (type == HANDLE_CLOSING)
+		return false;   // another closer owns it — must NOT revert, that frees it mid-close
+
+	// We own it, and alloc cannot touch a CLOSING slot, so `object` is stable.
 	void *object = handle->object;
-	task->handles[h].object = NULL;
 
 	// Dropping the task's reference on the object. For a pipe this is THE
 	// refcount that decides EOF (last writer gone) and EPIPE (last reader
@@ -265,9 +277,13 @@ bool handle_close(struct task *t, int h)
 			break;
 	}
 
-	// (The slot was blanked BEFORE the switch — see the claim-then-close note
-	// above. Clearing it again here would be harmless but would also be the
-	// line that makes the next reader think the window is still open.)
+	// The object is released; NOW free the slot. Order matters: blank the
+	// object first, then publish HANDLE_NONE — so the instant alloc can claim
+	// this slot (type == NONE), object is already NULL and never a dangling
+	// pointer to what we just closed. The slot was UNREUSABLE the whole time
+	// it held HANDLE_CLOSING, which is what shut the close-vs-alloc race.
+	handle->object = NULL;
+	__atomic_store_n(&handle->type, HANDLE_NONE, __ATOMIC_RELEASE);
 	return true;
 }
 

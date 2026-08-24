@@ -118,8 +118,16 @@ void task_signal_all_threads(task_t* task, signals signal)
 {
 	if (task == NULL)
 		return;
+	// UNDER signalLock (2026-08-24, Codex #29 rd4). The consumer holds this
+	// lock while it selects a signal and CLEARS it on every sibling; if we
+	// publish the broadcast without it, a consumer can clear all siblings
+	// between two of our iterations and we re-set a bit it already delivered
+	// — the handler runs twice, the exact over-delivery signalLock exists to
+	// prevent. Publication and consumption must claim the same lock.
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
 		sigset_add(&th->signals.sigind, signal);
+	spinlock_release_irqrestore(&task->signalLock, f);
 }
 
 // Raise `signal` on every thread of a task AND knock on the cores they were
@@ -141,6 +149,11 @@ void task_signal_and_nudge(task_t* task, signals signal)
 	core_local_storage_t* cls = get_core_local_storage();
 	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
 
+	// UNDER signalLock, same reason as task_signal_all_threads above (Codex
+	// #29 rd4). Holding it across send_ipi is safe: the IPI is lock-free APIC
+	// MMIO, and the only other lock in the signal paths is the scheduler queue
+	// lock, always taken BEFORE signalLock (never after), so there is no cycle.
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
 	{
 		if (th->exited || th->exiting)
@@ -154,6 +167,7 @@ void task_signal_and_nudge(task_t* task, signals signal)
 		    th->lastRunApicID != BOOTSTRAP_PROCESSOR_ID)
 			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 	}
+	spinlock_release_irqrestore(&task->signalLock, f);
 }
 
 // Bring down every thread of a dying task EXCEPT the one doing the dying.
