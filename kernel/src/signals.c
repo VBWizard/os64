@@ -468,8 +468,15 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 // three ways, all because a fault is SYNCHRONOUS and THREAD-LOCAL:
 //
 //  - The target is the FAULTING thread itself, not a broadcast, so there is
-//    no task-wide sigind bit to set or clear and no lock to take: nothing but
-//    this thread touches this thread's mask.
+//    no task-wide sigind bit to set or clear: nothing but this thread touches
+//    this thread's mask. It still takes signalLock, but for the OTHER thing
+//    that lock guards (Codex #29 rd8) — the frame writes below reach a user
+//    page through its HHDM alias, and a sibling calling unmap() could free
+//    that page between a resolve and its store, turning a ring-3 race into a
+//    ring-0 #PF. See task.h; syscall_unmap holds the same lock per page.
+//    (An earlier version of this comment said §9 had "no lock to take". That
+//    was true of the PENDING SET and false of page lifetime, which is
+//    exactly the kind of half-truth that leaves a hole.)
 //  - The interrupted state lives in the EXCEPTION frame (ctx, built on the
 //    stack by exception_entry.S), not in a syscall frame or thread->regs. We
 //    build the full frame from ctx and redirect ctx->rip/ctx->rsp — and the
@@ -512,6 +519,11 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 	// Full frame below the fault's own RSP, respecting the red zone, from ctx.
 	uint64_t frame_va = (ctx->rsp - 128 - sizeof(signal_frame_full_t)) & ~(uint64_t)0xF;
 
+	// The page-lifetime barrier (see the header comment and task.h): held
+	// across every frame write, so no sibling's unmap() can free a page
+	// between one write's resolve and its store.
+	uint64_t segv_flags = spinlock_acquire_irqsave(&task->signalLock);
+
 	bool ok = true;
 	ok &= signal_write_user(task, frame_va + 0,   SIGNAL_FRAME_MAGIC_FULL);
 	ok &= signal_write_user(task, frame_va + 8,   ctx->rax);
@@ -544,6 +556,7 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 		printd(DEBUG_SIGNALS,
 		       "signal_deliver_segv: %s has no usable stack for the frame — dies (139)\n",
 		       task->exename);
+		spinlock_release_irqrestore(&task->signalLock, segv_flags);
 		return false;
 	}
 
@@ -552,6 +565,7 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 	// sigreturn checks to accept the frame and what turns a re-entrant fault
 	// into a clean death instead of an endless loop.
 	sigset_add(&thread->signals.sigmask, SIGSEGV);
+	spinlock_release_irqrestore(&task->signalLock, segv_flags);
 
 	uint64_t fault_rip = ctx->rip;
 	ctx->rip = TASK_SIGRETURN_VIRT;

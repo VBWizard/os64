@@ -1064,7 +1064,7 @@ static bool expand_line(const char *src, char *dst, int cap, int last_status,
 		else if (src[0] == '$' && src[1] == '$')
 		{
 			char nb[24];
-			utoa((unsigned long)os64_getpid(), nb);
+			utoa((unsigned long)os64_taskid(), nb);
 			if (!expand_append(dst, &n, cap, mask, nb))
 				fit = false;
 			src += 2;

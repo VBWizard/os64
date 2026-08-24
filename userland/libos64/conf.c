@@ -18,7 +18,7 @@
 #include "os64/mem.h"   // os64_malloc — the buffer belongs to the CALL, not the program
 #include "os64/str.h"   // os64_streq_nocase (settings keys), os64_strcopy
 #include "os64/fmt.h"   // os64_snprintf — the per-saver temp name
-#include "os64/proc.h"  // os64_getpid — makes that temp name unique
+#include "os64/proc.h"  // os64_taskid — half of what makes that temp name unique
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"   // SYSCALL_CONF_RESOLVE — the kernel walks the ladder
 
@@ -207,6 +207,7 @@ typedef struct {
 	char       *out;
 	size_t      cap;
 	bool        found;
+	bool        cut;               // the value did not fit `out` — see below
 } conf_get_t;
 
 static bool conf_get_line(const char *key, const char *value, void *user)
@@ -219,7 +220,13 @@ static bool conf_get_line(const char *key, const char *value, void *user)
 	// is the caller's choice and never the parser's.)
 	if (!os64_streq_nocase(key, g->want))
 		return true;
-	os64_strcopy(g->out, g->cap, value);
+	// os64_strcopy answers with the length the value WANTED, not the length it
+	// got — so `>= cap` is how you learn it was cut, and discarding the answer
+	// is how this call used to hand back half a setting and call it success
+	// (2026-08-24). ASSIGNED, not OR'd: last-one-wins means only the LAST
+	// match's fate matters, and a long early value replaced by a short later
+	// one is a clean read.
+	g->cut   = (os64_strcopy(g->out, g->cap, value) >= g->cap);
 	g->found = true;
 	return true;                   // keep going: LAST one wins, as everywhere
 }
@@ -234,7 +241,7 @@ int64_t os64_conf_get(const char *name, const char *key, char *out, size_t cap)
 	if (os64_conf_find(name, path, sizeof(path)) != 0)
 		return OS64_CONF_NO_FILE;
 
-	conf_get_t g = { .want = key, .out = out, .cap = cap, .found = false };
+	conf_get_t g = { .want = key, .out = out, .cap = cap, .found = false, .cut = false };
 	int64_t rc = os64_conf_read(path, conf_get_line, &g);
 	if (rc < 0 && rc != OS64_CONF_TRUNCATED)
 		return rc;                 // NO_FILE / NO_MEMORY: nothing was read
@@ -251,6 +258,15 @@ int64_t os64_conf_get(const char *name, const char *key, char *out, size_t cap)
 	if (!g.found) {
 		out[0] = 0;
 		return OS64_CONF_NO_KEY;
+	}
+	if (g.cut) {
+		// The value was longer than the caller's buffer. Same verdict, same
+		// reasoning as the file-truncation case above: a partial answer that
+		// LOOKS complete is worse than no answer, because only one of them
+		// gets checked. Half of `position = 900,540` is a valid-looking
+		// coordinate pointing somewhere else. (conf.h carries the argument.)
+		out[0] = 0;
+		return OS64_CONF_TRUNCATED;
 	}
 	return 0;
 }
@@ -376,12 +392,50 @@ static int64_t line_pair(const char *line, size_t len,
 	return -1;
 }
 
+// Can this pair survive a round trip through the dialect? The full argument
+// is rule 4 in os64/conf.h; the short version is that the writer used to
+// treat caller data as file SYNTAX, so a '\n' in a value wrote a second
+// setting line and a '#' in one was eaten on the way back in.
+//
+// The check is deliberately about the three characters the FORMAT reserves,
+// not about "unsafe" characters in general: a value may hold spaces, '=',
+// quotes, slashes, anything else — the reader takes a value to end of line
+// and never splits it — and an EMPTY value is a real setting. Refusing more
+// than the format requires would be its own kind of lie about the dialect.
+static bool setting_is_writable(const os64_conf_pair_t *p)
+{
+	const char *k = p->key;
+	if (k == NULL || k[0] == '\0')
+		return false;                       // no key: writes " = v", reads as nothing
+	for (const char *c = k; *c != '\0'; c++)
+		if (*c == '\n' || *c == '\r' || *c == '#' || *c == '=' ||
+		    *c == ' '  || *c == '\t')
+			return false;                   // a key that can never match itself again
+
+	const char *v = p->value;
+	if (v == NULL)
+		return false;                       // not the same as empty; nothing to write
+	for (const char *c = v; *c != '\0'; c++)
+		if (*c == '\n' || *c == '\r' || *c == '#')
+			return false;                   // a second line, or a value the reader eats
+	return true;
+}
+
 int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t count)
 {
 	if (pairs == NULL || count == 0)
 		return 0;                           // nothing asked, nothing broken
 	if (count > OS64_CONF_WRITE_MAX)
 		return OS64_CONF_TOO_MANY;          // refused whole, never written in part
+
+	// BEFORE anything is resolved, opened or allocated: nothing this call
+	// cannot read back gets written, and one bad pair refuses the whole save
+	// (rule 4 in os64/conf.h — same whole-refusal doctrine as TOO_MANY above,
+	// because a save that quietly dropped one of its settings is the silent
+	// config failure this arc exists to abolish).
+	for (size_t p = 0; p < count; p++)
+		if (!setting_is_writable(&pairs[p]))
+			return OS64_CONF_BAD_SETTING;
 
 	// RULE 1: the TOP of the ladder, never where we read from. `true` asks
 	// the kernel for the path this name WOULD have at position 0 — the file
@@ -487,11 +541,23 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	// two processes saving the same file both opened the identical temp, and
 	// writer B could truncate it after A closed but before A renamed — so A
 	// published an inode B was still filling, a partial file defeating the
-	// atomic-write guarantee. Tagging it with the pid gives each process its
-	// own temp; the rename over `path` is still the atomic publish.
+	// atomic-write guarantee. The rename over `path` is still the atomic
+	// publish; only the temp needs to be nobody else's.
+	//
+	// TWO parts, because the task id alone is not enough (Codex #29 rd8): it
+	// names the TASK, and every thread of a program shares it — so two
+	// threads saving the same file collided on the identical temp, the very
+	// race rd7 closed, one level down. The sequence number is what separates
+	// threads. RELAXED is the right order: we need each caller to come away
+	// with a DIFFERENT number, not to publish anything alongside it, and
+	// nothing else reads this counter. (GCC atomics rather than an os64 lock
+	// — heap.c's own lock is built the same way, in this same library.)
+	static uint32_t s_temp_seq;
+	uint32_t seq = __atomic_fetch_add(&s_temp_seq, 1u, __ATOMIC_RELAXED);
+
 	char temp[OS64_CONF_PATH_MAX];
-	int64_t tlen = os64_snprintf(temp, sizeof(temp), "%s.%ld.new",
-	                             path, (long)os64_getpid());
+	int64_t tlen = os64_snprintf(temp, sizeof(temp), "%s.%lu.%u.new",
+	                             path, (unsigned long)os64_taskid(), seq);
 	if (tlen < 0 || (size_t)tlen >= sizeof(temp)) {
 		os64_free(old);
 		os64_free(neu);

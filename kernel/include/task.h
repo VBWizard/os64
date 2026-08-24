@@ -175,6 +175,21 @@
         // = unlocked by the all-allocations-zeroed rule. Lock order: the
         // scheduler path already holds the queue lock when it takes this, and
         // the syscall path takes this alone — no cycle.
+        //
+        // IT HAS A SECOND JOB, and it is not obvious from the name (2026-08-24,
+        // Codex #29 rd8). It is also the barrier that keeps a task's user page
+        // ALIVE across a signal-frame write. Delivery reaches a user stack the
+        // house way — walk the task's tables for the physical page, store
+        // through `phys | kHHDMOffset` (CLAUDE.md) — and that alias is
+        // dereferenceable only WHILE THE PAGE IS ALLOCATED. A sibling thread
+        // calling unmap() between the resolve and the store frees the page,
+        // which HHDM-unmaps the kernel alias, and the store then takes a
+        // ring-0 #PF: ring 3 panicking the kernel by racing its own address
+        // space. So syscall_unmap takes this lock around each page it frees,
+        // and all THREE delivery paths (§5, §9, §10) hold it across their
+        // frame writes. A second per-task lock would have been the tidier
+        // name, but two of the three sites already held this one and a second
+        // lock is a second ordering to get wrong.
         spinlock_t signalLock;
         uint64_t heapStart, heapEnd;
         // WHERE THIS TASK'S malloc PUBLISHES ITS REPORT (SYSCALL_HEAP_REPORT,

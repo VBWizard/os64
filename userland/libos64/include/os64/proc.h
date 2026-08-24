@@ -135,12 +135,23 @@ int64_t os64_wait(int64_t pid, int32_t *exit_code);
 //         /* one finished job */;
 int64_t os64_reap(int32_t *exit_code);
 
-// Who am I? The calling task's ID — one syscall, one register, cannot fail.
-// V1 Unix answered this in 1971 and nobody has improved on the answer. The
-// namespace spelling of the same fact is /proc/self (open-time identity:
+// Who am I? The calling TASK's ID — one syscall, one register, cannot fail.
+// V1 Unix answered this in 1971 and nobody has improved on the answer; os64
+// keeps the answer and changes the noun, because it runs tasks and this
+// returns task->taskID. (It was os64_getpid until 2026-08-24. The rename is
+// not cosmetics: "pid" reads as per-process, and libos64's own config writer
+// believed it, built a temporary file name out of it, and had every thread of
+// a program collide on that name. A name that lies costs more than a name
+// that is merely unfamiliar — see SYSCALL_TASKID for the whole story.)
+//
+// IT IS PER-TASK, NOT PER-THREAD. Every thread of a program gets the same
+// number back. There is no thread-id call today; if you need one, that is a
+// consumer talking and it can be built — do not reach for this instead.
+//
+// The namespace spelling of the same fact is /proc/self (open-time identity:
 // whoever OPENS it is the self); this call is expansion-time identity —
 // what husk's $$ freezes into a command line before any child exists.
-uint64_t os64_getpid(void);
+uint64_t os64_taskid(void);
 
 // Sleep for AT LEAST `ms` milliseconds — the thread genuinely parks, zero
 // CPU. The floor is the kernel's scheduler tick (1000/per_second ms — ask

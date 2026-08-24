@@ -150,7 +150,7 @@ static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
-static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+static uint64_t syscall_taskid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_heap_report(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -239,7 +239,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
 	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
-	SYSCALL_DEFINE(SYSCALL_GETPID,    "getpid",    syscall_getpid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register)
+	SYSCALL_DEFINE(SYSCALL_TASKID,    "taskid",    syscall_taskid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register; os64's noun)
 	SYSCALL_DEFINE(SYSCALL_SET_TIME,  "set_time",  syscall_set_time,  false, 0x00),  // arg0 = UTC epoch bits; monotonic clock is untouched
 	SYSCALL_DEFINE(SYSCALL_HEAP_REPORT, "heap_report", syscall_heap_report, false, 0x01),  // arg0 = user VA of an os64_heap_report_t (0 withdraws)
 	SYSCALL_DEFINE(SYSCALL_TTY_HANDLE, "tty_handle", syscall_tty_handle, false, 0x00),  // no args — the answer is a property of the ASKER
@@ -2390,8 +2390,33 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// Give back every page that was actually faulted in. paging_unmap_page
 	// invlpg's locally; pages never touched have no PTE and nothing to free.
+	//
+	// EACH PAGE UNDER signalLock (Codex #29 rd8). Signal delivery writes a
+	// frame onto the target thread's user stack through the HHDM alias, which
+	// is dereferenceable only while the page is ALLOCATED — so a sibling
+	// thread that pivoted RSP into a map()'d region and then raced unmap()
+	// here could free the page between delivery's resolve and its store, and
+	// that store would take a ring-0 #PF. Ring 3 must not be able to panic
+	// the kernel by racing its own address space. The lock is what delivery
+	// holds across its frame writes (see task.h), so taking it here is the
+	// whole barrier.
+	//
+	// PER PAGE, not around the loop: wrapping a large region in one
+	// irqsave hold would keep IF=0 across every free and its TLB-shootdown
+	// broadcast — seconds of a wedged core on a big unmap. One uncontended
+	// spinlock round-trip per page is noise next to the IPI already there.
+	// Per-page is sufficient because signal_write_user RE-RESOLVES before
+	// every 8-byte store, so the only fatal window is one resolve→store
+	// pair, and that pair is entirely inside delivery's own hold.
+	//
+	// What this deliberately does NOT prevent: a free landing BETWEEN two
+	// deliveries, so a program that unmaps the stack it is about to be
+	// signalled on resumes on a dead page and takes a clean ring-3
+	// segfault. That is this function's own stated doctrine — a bad handle
+	// should hurt the caller, not the kernel.
 	for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE)
 	{
+		uint64_t uf = spinlock_acquire_irqsave(&task->signalLock);
 		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va);
 		if (phys != 0 && phys != 0xbadbadba)
 		{
@@ -2400,6 +2425,7 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// kernel alias, per the lazy-HHDM rules.
 			free_memory(phys);
 		}
+		spinlock_release_irqrestore(&task->signalLock, uf);
 	}
 
 	printd(DEBUG_SYSCALL, "unmap: task %s: region 0x%016lx-0x%016lx released\n",
@@ -3920,12 +3946,13 @@ static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	shutdown_system((os64_shutdown_mode_t)arg0);
 }
 
-// getpid() — contract and lineage in syscall_numbers.h. The caller IS the
-// current task, so the answer is sitting in CLS; the only care taken is the
-// same no-task guard every introspective path carries (a ring-3 caller
-// always has a task, but this handler must not be the one place that
-// assumes it). Cannot fail: an identity crisis is not an errno.
-static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+// taskid() — contract and lineage in syscall_numbers.h (including why it is
+// no longer spelled getpid). The caller IS the current task, so the answer is
+// sitting in CLS; the only care taken is the same no-task guard every
+// introspective path carries (a ring-3 caller always has a task, but this
+// handler must not be the one place that assumes it). Cannot fail: an
+// identity crisis is not an errno.
+static uint64_t syscall_taskid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
 	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
@@ -3941,7 +3968,7 @@ static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // terminal needs a second name. Unix spells that name /dev/tty; os64 spells
 // it as a verb until a devfs exists to make the name honest.
 //
-// Sibling of getpid above, and the resemblance is the point: both answer a
+// Sibling of taskid above, and the resemblance is the point: both answer a
 // question about the CALLER, take no arguments, and cannot fail for any
 // reason except the handle table being full. There is no tty to look up here
 // — a HANDLE_CONSOLE_IN carries no object, and the read path resolves

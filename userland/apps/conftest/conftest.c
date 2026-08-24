@@ -24,6 +24,8 @@
 //   0x0C0F0008  get_bool mis-parsed a value it should understand
 //   0x0C0F0009  get_bool ACCEPTED a value that is not a boolean
 //   0x0C0F000A  a .new temporary was left behind
+//   0x0C0F000B  get() cut an oversized value instead of refusing it
+//   0x0C0F000C  write() accepted a setting the dialect cannot read back
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -208,6 +210,71 @@ int main(void)
         die(7, "conftest: a capitalized key was not found by its lowercase name");
     if (!os64_conf_get_bool(value, &b) || b)
         die(8, "conftest: get_bool did not read the capitalized file's value");
+
+    // ── a value too long for the caller's buffer is REFUSED ────────────────
+    // os64_strcopy answers with the length the source WANTED, and get() used
+    // to discard that answer — so a value that did not fit came back cut,
+    // with a success code, and nothing could tell. Half of a coordinate is a
+    // valid-looking coordinate pointing somewhere else. (2026-08-24.)
+    if (!put_file(gPath, "long = 0123456789abcdef\n"))
+        die(11, "conftest: could not write the long-value file");
+    {
+        char small[8];               // 7 chars + NUL: the value needs 16
+        int64_t rc = os64_conf_get(CONF_NAME, "long", small, sizeof(small));
+        if (rc != OS64_CONF_TRUNCATED)
+            die(11, "conftest: an oversized value was not reported as truncated");
+        if (small[0] != '\0')
+            die(11, "conftest: a truncated get() left a partial value behind");
+    }
+    // ...and the same value read into a buffer that FITS is an ordinary
+    // success, so the check above is not just refusing everything.
+    if (os64_conf_get(CONF_NAME, "long", value, sizeof(value)) != 0 ||
+        !os64_streq(value, "0123456789abcdef"))
+        die(11, "conftest: a value that fits was not read back whole");
+
+    // ── a setting the dialect cannot represent is REFUSED, WHOLE ───────────
+    // The writer used to treat caller data as file syntax: a '\n' in a value
+    // wrote a SECOND setting line (data promoted to syntax — husk's ruling,
+    // one subsystem over), and a '#' was eaten on the way back in. Each of
+    // these must be refused before anything is opened, and must leave the
+    // file exactly as it was. (2026-08-24.)
+    if (!put_file(gPath, "keep = me\n"))
+        die(12, "conftest: could not write the pre-injection file");
+    {
+        // The injection itself: a value carrying a whole extra setting.
+        if (os64_conf_set(CONF_NAME, "name", "bob\nadmin = yes") != OS64_CONF_BAD_SETTING)
+            die(12, "conftest: a newline in a value was not refused");
+        if (file_contains(gPath, "admin = yes"))
+            die(12, "conftest: a refused write forged a setting anyway");
+
+        // A '#' would round-trip to an empty value — a silent loss.
+        if (os64_conf_set(CONF_NAME, "color", "#ff0000") != OS64_CONF_BAD_SETTING)
+            die(12, "conftest: a '#' in a value was not refused");
+
+        // A key that could never match itself again on the next save.
+        if (os64_conf_set(CONF_NAME, "two words", "x") != OS64_CONF_BAD_SETTING)
+            die(12, "conftest: a key with whitespace was not refused");
+        if (os64_conf_set(CONF_NAME, "", "x") != OS64_CONF_BAD_SETTING)
+            die(12, "conftest: an empty key was not refused");
+
+        // WHOLE-refusal: one bad pair in a batch writes NONE of them.
+        {
+            const os64_conf_pair_t mixed[] = {
+                { "good",  "fine" },
+                { "evil",  "x\nsneaked = in" },
+            };
+            if (os64_conf_write(CONF_NAME, mixed, 2) != OS64_CONF_BAD_SETTING)
+                die(12, "conftest: a batch with one bad pair was not refused");
+            if (os64_conf_get(CONF_NAME, "good", value, sizeof(value)) != OS64_CONF_NO_KEY)
+                die(12, "conftest: a refused batch wrote one of its settings anyway");
+        }
+
+        // Nothing above touched the file, and an EMPTY value is still legal.
+        if (!file_contains(gPath, "keep = me"))
+            die(12, "conftest: a refused write disturbed the existing file");
+        if (os64_conf_set(CONF_NAME, "blank", "") != 0)
+            die(12, "conftest: an empty value was refused, and it is legal");
+    }
 
     cleanup();
     os64_printf("conftest: all config-library checks passed\n");

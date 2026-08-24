@@ -123,6 +123,15 @@ int64_t os64_conf_read_first(const char *const *paths, size_t count,
 // OS64_CONF_NO_KEY if it is but says nothing about `key`, or the reader's
 // error otherwise. `out` is left empty on every failure.
 //
+// A VALUE TOO LONG FOR `out` IS OS64_CONF_TRUNCATED, NOT A SHORT ANSWER
+// (2026-08-24). It used to be copied in, cut, and reported as success —
+// os64_strcopy returns the length the source WANTED, and this call discarded
+// it. Half a setting is not a smaller setting: half of `position = 900,540`
+// is a window somewhere else entirely. The rest of this file already agrees
+// — a path too long for its buffer is refused (see os64_conf_find), and a
+// file too big for the reader is refused twelve lines down — so the value was
+// the one thing still being cut quietly.
+//
 // THE KEY IS MATCHED WITHOUT REGARD TO CASE (os64_streq_nocase), because a
 // key reached through this call is a SETTING name, where case is noise. That
 // is a property of this entry point, not of the dialect — a reader whose keys
@@ -189,6 +198,35 @@ typedef struct {
 // a real caller ever needs more.
 #define OS64_CONF_WRITE_MAX 16
 #define OS64_CONF_TOO_MANY  (-5)
+//
+// 4. A SETTING IT CANNOT READ BACK IS REFUSED, WHOLE (OS64_CONF_BAD_SETTING,
+//    2026-08-24). The dialect at the top of this file is not a container for
+//    arbitrary bytes, and until now the writer pretended it was:
+//
+//      - a '\n' in a VALUE is not text, it is a SECOND LINE. The reader
+//        splits on newlines, so `os64_conf_set(f, "name", "bob\nadmin = yes")`
+//        writes a file that reads back with a setting nobody asked for. That
+//        is a program's data being promoted to the file's syntax — the exact
+//        thing husk's expansion arc ruled against (DIVERGENCES § the shell:
+//        expansions are DATA, not syntax), one subsystem over.
+//      - a '#' in a value is eaten on the way back in: the reader chops a
+//        line at its first '#', so `color = #ff0000` saves perfectly and
+//        reads back empty. A round trip that loses the value is worse than a
+//        refusal, because the refusal is visible.
+//      - a key that is empty, or holds '=' or whitespace, writes a line that
+//        can never match ITSELF again: the next save fails to recognise it
+//        and appends a duplicate beside it.
+//
+//    So every key and value is checked BEFORE anything is opened, and a bad
+//    one refuses the entire call — nothing resolved, nothing written, no
+//    temporary created. Whole-refusal rather than skip-the-bad-pair, for the
+//    same reason as OS64_CONF_TOO_MANY above: a save that silently dropped
+//    one of the settings it was handed is the silent config failure this arc
+//    exists to abolish. (A value may be EMPTY — `key = ` is a real setting,
+//    meaning "set to nothing". Leading and trailing spaces in a value are
+//    fine too; the reader trims them, which is the documented dialect rather
+//    than a loss.)
+#define OS64_CONF_BAD_SETTING (-6)
 int64_t os64_conf_write(const char *name,
                         const os64_conf_pair_t *pairs, size_t count);
 

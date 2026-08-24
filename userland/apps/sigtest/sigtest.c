@@ -144,7 +144,7 @@ int main(void)
     // operation here, which is the Plan 9 shape /proc was built for.)
     {
         char path[64];
-        os64_snprintf(path, sizeof(path), "/proc/%ld/ctl", (long)os64_getpid());
+        os64_snprintf(path, sizeof(path), "/proc/%ld/ctl", (long)os64_taskid());
         int64_t ctl = os64_open(path, "w");
         if (ctl < 0)
             die(8, "sigtest: could not open my own /proc ctl");
@@ -158,14 +158,14 @@ int main(void)
 
     // One ordinary syscall. Its return value must survive the handler running
     // in the middle of it — that is the whole point of saving RAX in the
-    // frame, and a getpid whose answer came back mangled would prove the
+    // frame, and a taskid whose answer came back mangled would prove the
     // resume path wrong in the quietest possible way.
-    int64_t pid_before = os64_getpid();
-    int64_t pid_after  = os64_getpid();
+    int64_t id_before = os64_taskid();
+    int64_t id_after  = os64_taskid();
 
     if (gCaught != OS64_SIGINT)
         die(9, "sigtest: the handler never ran");
-    if (pid_before != pid_after || pid_after <= 0)
+    if (id_before != id_after || id_after <= 0)
         die(10, "sigtest: a syscall's return value did not survive delivery");
 
     // And the program is still alive, which is the entire point: SIGINT's

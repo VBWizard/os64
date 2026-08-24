@@ -332,11 +332,23 @@ typedef enum os64_shutdown_mode
 } os64_shutdown_mode_t;
 #endif
 
-// getpid() (2026-08-09 — the night after the terminals, because "which tty
+// taskid() (2026-08-09 — the night after the terminals, because "which tty
 // am I on?" starts with "who am I?"). Returns the calling task's ID in RAX;
 // takes nothing, cannot fail. One of the oldest questions in Unix — V1 had
 // getpid in 1971, before pipes, before /tmp — and the answer belongs in a
 // register because the asker is already standing in the kernel's doorway.
+//
+// SPELLED taskid, NOT getpid (2026-08-24). Same question, older than most of
+// this OS; a different noun, because os64 runs TASKS and this returns
+// task->taskID. The Unix name was doubly wrong here — "pid" names a thing
+// os64 does not have, and worse, it PROMISED PER-PROCESS when a reader needed
+// per-thread: libos64's config writer built its temporary file name out of
+// "the pid", every thread of a program got the same one, and two threads
+// saving one file raced to publish each other's half-written temp. The name
+// is what misled it. ("get" is gone too: it earns its keep opposite a `set`,
+// and nothing sets its own identity — os64_ticks and os64_memory read
+// properties the same way.) The NUMBER is untouched: 40 is the contract, the
+// spelling is ours.
 //
 // Identity has TWO spellings on os64, on purpose, answering at two different
 // moments: this syscall is the PRIMITIVE (and what husk's $$ freezes into a
@@ -344,7 +356,7 @@ typedef enum os64_shutdown_mode
 // /proc/self is the NAMESPACE spelling, resolved at open time to whoever
 // does the opening — which is why `echo $$` names your shell and
 // `cat /proc/self/status` names cat. Both honest; different clocks.
-#define SYSCALL_GETPID     40
+#define SYSCALL_TASKID     40
 
 // set_time(epoch) — replace the running kernel's UTC wall-clock counter.
 // The monotonic ticks clock remains untouched, so intervals and uptime never
