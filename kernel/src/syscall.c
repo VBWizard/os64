@@ -3272,8 +3272,19 @@ static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	{
 		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 		{
-			// Ctrl+C (or a ctl write) landed while we napped. Same rail as
-			// an interrupted console read: die here, in our own context.
+			// A CAUGHT signal cuts the nap short instead of ending the
+			// program. Returning is what makes delivery possible at all: the
+			// handler is armed at the DISPATCHER'S EXIT, so a loop that kept
+			// parking would hold the signal forever and never reach it.
+			// The nap is not resumed and the remaining time is not slept —
+			// SIGNALS.md §8, no restart, no EINTR: an interrupted call says
+			// so and the caller decides. os64_sleep answers INTERRUPTED and a
+			// program that wanted the whole nap loops.
+			if (signal_has_handler_for_pending(cls->task, self))
+				return (uint64_t)(int64_t)OS64_INTERRUPTED;
+
+			// Nothing will catch it. Ctrl+C (or a ctl write) landed while we
+			// napped: die here, in our own context.
 			raise_terminating_signal_and_die(cls->task, self);
 			__builtin_unreachable();
 		}

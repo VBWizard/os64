@@ -282,13 +282,28 @@ the next.
    return path does not restore) without the kernel having to touch a register
    the frame does not carry.
 
+   **`sleep` reports `OS64_INTERRUPTED`** (§8) — the first blocking call to
+   do so, and the one the demo needs: a parked thread must RETURN for the
+   dispatcher to arm anything, so a park that kept re-parking would hold the
+   signal forever and never reach delivery. The nap is not resumed and the
+   remaining time is not slept; a caller who wanted the whole nap loops.
+
    NOT YET, and named rather than implied: a program that never makes a
    syscall gets no delivery. `scheduler.c`'s forced-syscall push already
    solves that shape for termination and is the obvious home for it — until
    then a spinning program with a handler installed is reachable only by
-   SIGKILL. Blocking calls also do not yet return INTERRUPTED (§8); they
-   deliver on the way out of whatever they return, which is right, but they
-   still take the default action rather than reporting the interruption.
+   SIGKILL. And the OTHER blocking calls — `console_read`, the pipe pair, the
+   net readers, `gui_event_wait`, join — still take the default action instead
+   of reporting the interruption. Each is the same three-line shape `sleep`
+   now has; they are separate only because each has its own return convention
+   to answer in.
+
+4b. **The demo.** `/bin/sigdemo` — a countdown you interrupt with your own
+   hands, which says it was interrupted and carries on counting. It exists
+   because a fixture reports a verdict and a demo shows a behaviour, and
+   "sigtest exited 85327872" is the former pretending to be the latter
+   (Chris, on being shown the fixture: "pretty anticlimactic!"). Direct
+   descendant of his os32 test app.
 4. **Teach the nine checkpoints** to look for a handler before defaulting to
    death.
 5. **The fixture**: raise `SIGSEGV`, catch it, print, die — Chris's os32 test

@@ -33,6 +33,20 @@
 
 #define OS64_SIGNAL_COUNT 32
 
+// WHAT AN INTERRUPTED CALL ANSWERS. A blocking call whose thread ran a
+// handler returns this instead of its normal result: the wait was cut short,
+// nothing was accomplished, and the caller decides what to do about it.
+//
+// os64 has no SA_RESTART and no EINTR. POSIX shipped both behaviours because
+// its authors could not decide, and every caller since has had to learn which
+// one it got. Here a call that was interrupted says so, and a program that
+// wants to retry writes a loop — which anyone reading it can see.
+//
+// (This can only ever happen to a program that INSTALLED a handler. A signal
+// nothing catches still takes its default action, which for the terminating
+// ones is death, exactly as before.)
+#define OS64_INTERRUPTED (-4)
+
 // A handler is an ordinary C function taking the signal number. It receives
 // nothing else — os64 has no siginfo, and the pending set is a bitmask, so
 // two SIGTERMs before delivery are one SIGTERM. That is classic Unix
