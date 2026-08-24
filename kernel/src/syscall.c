@@ -4172,13 +4172,20 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
 // Contract in abi/os64/syscall_numbers.h; the argument for putting the table
 // on the TASK is SIGNALS.md §2.
 //
-// REGISTRATION ONLY. Nothing is delivered to ring 3 until the frame-and-
-// trampoline half lands (step 3), so today an installed handler means exactly
-// "do not apply the default action" — which the forced-syscall push in
-// scheduler.c has honoured for SIGINT since before there was a way to install
-// one. That is deliberate: a program can be written against this now, and it
-// will start actually running its handler when delivery arrives, without the
-// interface changing under it.
+// AN INSTALLED HANDLER NOW ACTUALLY RUNS. This comment used to say
+// "REGISTRATION ONLY. Nothing is delivered to ring 3 until the frame-and-
+// trampoline half lands (step 3)" — which was true when the call shipped and
+// false by the end of the same arc. Delivery arrived in three places:
+// signal_deliver_pending (§5, the dispatcher exit rewrites where a syscall
+// returns), signal_deliver_to_regs (§10, the scheduler catches a thread that
+// makes no syscalls at all), and signal_deliver_segv (§9, a caught SIGSEGV
+// resumes into its handler from the fault frame).
+//
+// The promise the old note made was kept, which is why it is worth recording
+// rather than just deleting: a program written against registration-only —
+// where an installed handler meant no more than "do not apply the default
+// action" — did not have to change one line when delivery landed underneath
+// it. The interface never moved.
 static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -4196,7 +4203,17 @@ static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t ar
 	int signo = (int)(int64_t)arg0;
 	void *handler = (void *)arg1;
 
-	if ((int)signo <= 0 || signo >= SIGNAL_COUNT)
+	// MEMBERSHIP, not a range (Codex #29 rd13). "In range" accepted the gaps in
+	// the numbering AND the scheduler's own markers at 24-27 — so a handler
+	// could be registered on SIGSLEEP, which the scheduler raises through the
+	// same sigind set delivery scans. signals.c's signal_is_known has the full
+	// account of what that let a program do to its own sleep state.
+	//
+	// The two refusals stay distinct because they are not the same sentence:
+	// BAD_SIGNAL is "no such signal" (so 3 and 25 land here), UNCATCHABLE is
+	// "SIGKILL, and you may not". A caller handed the wrong one goes looking in
+	// the wrong place.
+	if (!signal_is_known((signals)signo))
 		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_SIGNAL;
 	if (!signal_is_catchable((signals)signo))
 		return (uint64_t)(int64_t)OS64_SIG_ERR_UNCATCHABLE;

@@ -392,6 +392,16 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// Can ring 3 install a handler for this signal? Range check plus the one
 	// exception (SIGKILL), in ONE place so registration and delivery can never
 	// reach different conclusions about the same signal.
+	//
+	// Both are MEMBERSHIP tests over the public signal set, not range checks
+	// (rd13): the gaps in the numbering are not signals, and neither are the
+	// scheduler markers at 24-27, which share the sigind word but are thread
+	// STATE. A range check let ring 3 register a handler on SIGSLEEP.
+	//
+	// TWO predicates because the ABI has two refusals and they are not the
+	// same sentence: BAD_SIGNAL means "no such signal", UNCATCHABLE means
+	// "SIGKILL". Everything known is catchable except SIGKILL.
+	bool signal_is_known(signals sig);
 	bool signal_is_catchable(signals sig);
 
 	// Install a handler on the TASK and return the one it replaced. NULL

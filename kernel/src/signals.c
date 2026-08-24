@@ -56,19 +56,65 @@ _Static_assert(SIGIO   == OS64_SIGIO,   "SIGIO disagrees with the ABI (os64/sign
 _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
                "the signal table size disagrees with the ABI (os64/signal.h)");
 
-// Can ring 3 install a handler for this signal? The range check and the one
-// exception, in one place so registration and (later) delivery cannot come to
-// different conclusions about the same signal.
+// Is this a signal number this kernel ACTUALLY HAS? Membership in the public
+// set, listed once (Codex #29 rd13).
+//
+// Two predicates rather than one, because the ABI has two error codes and they
+// mean different things: OS64_SIG_ERR_BAD_SIGNAL is "not a signal number this
+// kernel knows" and OS64_SIG_ERR_UNCATCHABLE is "SIGKILL". Answering
+// UNCATCHABLE for signal 3 would be claiming 3 is a signal you may not catch,
+// when the truth is that 3 is not a signal at all. A caller told the wrong one
+// goes looking in the wrong place.
+//
+// EXPLICITLY ABSENT, and this is the point of the whole function: the
+// SCHEDULER MARKERS (SIGHALT/SIGSLEEP/SIGUSLEEP/SIGLOGFLUSH, 24-27). The enum
+// says out loud they are "not really signals at all" — they are thread state
+// that happens to live in the same word. But `signal_raise(SIGSLEEP, ...)`
+// sets a bit in the SAME sigind set delivery scans, so while this was a bare
+// range check, ring 3 could install a handler on 25 and then:
+//
+//   1. sleep, so the scheduler raises SIGSLEEP on this thread,
+//   2. have the next dispatcher exit find bit 25 pending, catchable, handled,
+//   3. get a frame built and its handler run for "signal 25",
+//   4. and signal_mark_delivered CLEARS SIGSLEEP ON EVERY THREAD of the task
+//      — deleting the scheduler's own record that they are asleep.
+//
+// One legal-looking call, and ring 3 is corrupting kernel scheduling state
+// through an API that reported success. A number the kernel cannot raise must
+// never register.
+//
+// SIGWINCH (28) is deliberately not here either: the enum reserves the number
+// without defining it, and a handler for a signal nothing can send is a caller
+// waiting forever. It joins the list the day the terminal-resize slice gives
+// it something to mean.
+bool signal_is_known(signals sig)
+{
+	switch (sig)
+	{
+		case SIGHUP:
+		case SIGINT:
+		case SIGKILL:
+		case SIGSEGV:
+		case SIGPIPE:
+		case SIGTERM:
+		case SIGCONT:
+		case SIGSTOP:
+		case SIGIO:
+			return true;
+		default:
+			return false;   // gaps, scheduler markers, and reserved numbers
+	}
+}
+
 bool signal_is_catchable(signals sig)
 {
-	if ((int)sig <= 0 || (int)sig >= SIGNAL_COUNT)
-		return false;
-	// SIGKILL is the answer to a program that has stopped answering. A kernel
-	// that let a program decline to die has no last resort — so this is the
-	// one signal whose default action cannot be replaced. (SIGSTOP will join
-	// it the day job control lands: a process must not be able to refuse to
-	// be stopped either, for the same reason.)
-	return sig != SIGKILL;
+	// Was a bare range check ("1 <= sig < SIGNAL_COUNT && sig != SIGKILL") until
+	// rd13. See signal_is_known above for what that let through and why it
+	// mattered — this function is consulted by REGISTRATION and by BOTH delivery
+	// pickers (signal_pick_deliverable, signal_has_handler_for_pending), which
+	// is exactly why it was extracted into one place: fixing membership here
+	// shuts every door at once.
+	return signal_is_known(sig) && sig != SIGKILL;
 }
 
 // Install a handler on the TASK (see task.h for why it is the task's and not

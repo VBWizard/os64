@@ -105,6 +105,33 @@ int main(void)
     if (os64_signal_set_handler(-1, handler_a) != OS64_SIG_ERR_BAD_SIGNAL)
         die(5, "sigtest: a negative signal was accepted");
 
+    // IN RANGE IS NOT THE SAME AS REAL (Codex #29 rd13). The three checks
+    // above only ever probed OUTSIDE the array, so a bare range check passed
+    // them all while accepting every number INSIDE it — including numbers the
+    // kernel has no enumerator for, and the scheduler's own markers.
+    //
+    // 3 is simply not a signal here: os64's numbering is POSIX's where POSIX
+    // has one, and it has no 3. Registering it would leave a program waiting
+    // for something nothing can ever send.
+    if (os64_signal_set_handler(3, handler_a) != OS64_SIG_ERR_BAD_SIGNAL)
+        die(5, "sigtest: signal 3 was accepted, and this kernel has no signal 3");
+
+    // 25 is the one that mattered. It is SIGSLEEP — scheduler STATE that
+    // happens to live in the same pending word signals do. While registration
+    // was a range check, installing here meant the next time this program
+    // slept, the kernel would deliver "signal 25" to the handler AND clear the
+    // sleep marker on every thread of the task. Ring 3 editing kernel
+    // scheduling state through an API that answered "success".
+    if (os64_signal_set_handler(25, handler_a) != OS64_SIG_ERR_BAD_SIGNAL)
+        die(5, "sigtest: a scheduler marker (25/SIGSLEEP) was accepted as a signal");
+
+    // ...and the two refusals must stay DISTINGUISHABLE: SIGKILL is a real
+    // signal you may not catch (UNCATCHABLE), 25 is not a signal at all
+    // (BAD_SIGNAL). Collapsing them would send a caller looking in the wrong
+    // place. (The SIGKILL half is checked above; this is the pairing.)
+    if (os64_signal_set_handler(25, handler_a) == OS64_SIG_ERR_UNCATCHABLE)
+        die(5, "sigtest: a non-signal was refused as if it were merely uncatchable");
+
     // A handler in the higher half would have the CPU attempt kernel text at
     // CPL 3. It faults harmlessly, but being refused by NAME beats finding
     // out three steps later.
