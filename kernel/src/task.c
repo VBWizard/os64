@@ -2009,6 +2009,8 @@ static void debug_announce_loaded(const char *path, uint64_t bias)
 // is only mapped in the task's own PML4, not the kernel's.
 extern const char user_exit_trampoline_template[];
 extern const char user_exit_trampoline_template_end[];
+extern const char user_sigreturn_trampoline_template[];
+extern const char user_sigreturn_trampoline_template_end[];
 static void task_setup_ring3_exit_path(task_t *task)
 {
 	if (task->threads == NULL)
@@ -2020,6 +2022,23 @@ static void task_setup_ring3_exit_path(task_t *task)
 	// copy is tiny (a handful of instructions) so one page is plenty.
 	void *trampoline_page = kmalloc_aligned(PAGE_SIZE);
 	memcpy(trampoline_page, user_exit_trampoline_template, template_bytes);
+
+	// The signal-return stub shares the page, 64 bytes in — see
+	// TASK_SIGRETURN_OFFSET in task.h for why one page holds both. Copied
+	// unconditionally: a task that never installs a handler simply never
+	// jumps here, and the alternative (mapping it lazily on first
+	// registration) would mean touching page tables from the signal path for
+	// no saving worth having.
+	size_t sig_bytes = (size_t)(user_sigreturn_trampoline_template_end -
+	                            user_sigreturn_trampoline_template);
+	if (template_bytes > TASK_SIGRETURN_OFFSET ||
+	    TASK_SIGRETURN_OFFSET + sig_bytes > PAGE_SIZE)
+		panic("task_setup_ring3_exit_path: the trampoline templates no longer fit "
+		      "(exit %lu bytes, signal %lu at offset %u)\n",
+		      (uint64_t)template_bytes, (uint64_t)sig_bytes,
+		      (unsigned)TASK_SIGRETURN_OFFSET);
+	memcpy((uint8_t *)trampoline_page + TASK_SIGRETURN_OFFSET,
+	       user_sigreturn_trampoline_template, sig_bytes);
 
 	uintptr_t trampoline_phys = (uintptr_t)trampoline_page - kHHDMOffset;
 	paging_map_pages(task->pml4v, TASK_EXIT_TRAMPOLINE_VIRT, trampoline_phys, 1,

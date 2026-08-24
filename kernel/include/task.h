@@ -69,6 +69,18 @@
 //Seeded as _start's return address so a plain `ret` becomes an exit syscall.
 //See task_setup_ring3_exit_path() and the template in task_exit_asm.S.
 #define TASK_EXIT_TRAMPOLINE_VIRT 0x6f110000
+// The SIGNAL RETURN stub shares that page, 64 bytes in (2026-08-23). One page,
+// two templates: the exit trampoline is a handful of instructions and the
+// signal stub is three, so a second page would be 4KB spent to avoid an
+// offset. 64 is comfortably past the first template and keeps both aligned.
+//
+// Sharing is not merely thrifty — it is the whole reason signal return is
+// cheap here. Historic Unix put this stub on the STACK, which needs an
+// executable stack; NX outlawed that (nx_test asserts it kills the program)
+// and Linux had to grow a vDSO to escape it. os64 already had a per-task page
+// that is PAGE_USER, not PAGE_WRITE, and executable. See SIGNALS.md §5.
+#define TASK_SIGRETURN_OFFSET     64
+#define TASK_SIGRETURN_VIRT       (TASK_EXIT_TRAMPOLINE_VIRT + TASK_SIGRETURN_OFFSET)
 // (TASK_ENVP_VIRT, an "environment pointers" address at 0x6f010000, was
 // deleted here 2026-08-13: defined since the first OS, referenced by nothing
 // in the kernel or userland, and sitting squarely in the middle of the window

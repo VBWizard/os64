@@ -59,6 +59,15 @@ syscall_Enter:
     mov r12, gs:[CLS_SYSCALL_USER_RSP_OFFSET]
     mov [rsp + 16], r12                         # user RSP
 
+    # Publish WHERE that frame is, so the C side can rewrite it. Signal
+    # delivery works by changing the address this syscall returns to (and the
+    # stack it returns on), and this frame is the only place those live — the
+    # thread's `regs` are the scheduler's save area and the fast path never
+    # touches them. Cleared on the way out, below, so a checkpoint reached
+    # from anywhere but a syscall cannot find a stale frame and deliver
+    # against somebody else's return address.
+    mov gs:[CLS_SYSCALL_RETURN_FRAME_OFFSET], rsp
+
     # Marshal the syscall registers into the SysV C argument slots for
     #   uint64_t _syscall_dispatch(nr, a0, a1, a2, a3, a4, a5)
     # i.e. RDI,RSI,RDX,RCX,R8,R9 + one stack slot.  Order matters: each move
@@ -77,6 +86,12 @@ syscall_Enter:
     # Rebuild the SYSRET context from the saved frame.  RSI is used to carry
     # the user RSP across the callee-saved pops (it's caller-saved — already
     # documented as clobbered).
+    # The frame is no longer live once we start consuming it — see the store
+    # above for why a stale pointer would be dangerous rather than merely
+    # untidy. (r10 is caller-saved and already documented as clobbered.)
+    xor r10, r10
+    mov gs:[CLS_SYSCALL_RETURN_FRAME_OFFSET], r10
+
     mov r11, [rsp]                              # user RFLAGS (SYSRET reloads from R11)
     mov rcx, [rsp + 8]                          # user RIP    (SYSRET reloads from RCX)
     mov rsi, [rsp + 16]                         # user RSP

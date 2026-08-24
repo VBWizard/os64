@@ -608,4 +608,22 @@ typedef enum os64_shutdown_mode
 // before there was any way to install one.
 #define SYSCALL_SIGNAL_HANDLER          49
 
+// sigreturn — resume the context a signal handler interrupted.
+//
+// A PROGRAM NEVER CALLS THIS DELIBERATELY. It exists because the kernel sets
+// a handler's return address to a stub that calls it (TASK_SIGRETURN_VIRT, in
+// the same page as the exit trampoline). A handler is an ordinary C function
+// and ends with `ret`; this is what is waiting at the other end of that `ret`.
+//
+//   arg0 = the frame the kernel wrote on the user stack
+//   does not return — it resumes the interrupted context
+//
+// The frame is VALIDATED, not trusted: it arrives from ring 3 and this call
+// restores register state, which makes it the most attackable thing in the
+// signal path. It is refused unless it carries the kernel's magic, sits on
+// the calling thread's own stack, and names a handler that is actually
+// running. Nothing privileged is ever taken from it — no CS, no SS, no
+// RFLAGS bits the caller did not already have.
+#define SYSCALL_SIGRETURN               50
+
 #endif

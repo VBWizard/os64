@@ -167,6 +167,8 @@ static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint6
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_event_poll(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -260,6 +262,10 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	// reads — so it stays OUT of the pointer mask (which validates readable
 	// user memory) and the handler range-checks it itself.
 	SYSCALL_DEFINE(SYSCALL_SIGNAL_HANDLER,         "signal_handler",         syscall_signal_handler,         false, 0x00),  // arg0 = signo, arg1 = handler
+	// arg0 is the frame, VALIDATED by the handler itself (magic + the running
+	// handler check) rather than by the pointer mask — the mask proves a buffer
+	// is readable, which is the least of what this one has to prove.
+	SYSCALL_DEFINE(SYSCALL_SIGRETURN,              "sigreturn",              syscall_sigreturn,              false, 0x00),  // arg0 = the signal frame
 };
 
 uint64_t _syscall_dispatch(
@@ -281,10 +287,19 @@ uint64_t _syscall_dispatch(
 	// raise_terminating_signal_and_die). Only a syscall-free ring-3 spin
 	// evades this boundary entirely — and the forced-syscall push in
 	// scheduler.c closes that gap.
+	// Hoisted out of the block below so the DELIVERY hook at the end of this
+	// function can reuse them — one lookup, and the two halves of the signal
+	// story (default action on the way in, handler on the way out) provably
+	// talk about the same thread.
+	core_local_storage_t *sig_cls = get_core_local_storage();
+	thread_t *sig_thread = sig_cls ? sig_cls->currentThread : NULL;
 	{
-		core_local_storage_t *sig_cls = get_core_local_storage();
-		thread_t *sig_thread = sig_cls ? sig_cls->currentThread : NULL;
-		if (sig_thread && (sigset_any(sig_thread->signals.sigind, SIGNALS_TERMINATING)))
+		// A pending terminate kills only when NOTHING will catch it. A task
+		// that installed a handler for this signal gets it delivered on the
+		// way out instead — which is the whole point of the registration
+		// syscall, and why the default action has to ask first.
+		if (sig_thread && (sigset_any(sig_thread->signals.sigind, SIGNALS_TERMINATING)) &&
+		    !signal_has_handler_for_pending(sig_cls->task, sig_thread))
 			raise_terminating_signal_and_die(sig_cls->task, sig_thread);
 	}
 
@@ -342,6 +357,25 @@ uint64_t _syscall_dispatch(
 		panic("_syscall_dispatch: syscall %lu (%s) entered on CR3 %#lx but is leaving on %#lx\n",
 		      syscall_number, entry->name ? entry->name : "(unnamed)", entry_cr3, exit_cr3);
 	}
+
+	// ── SIGNAL DELIVERY, on the way out ─────────────────────────────────────
+	//
+	// HERE, and not at the checkpoint on the way IN, because the syscall's
+	// return value has to survive the handler. Delivering before the body ran
+	// would skip the syscall entirely and resume afterwards as though it had
+	// happened — a `read` that silently never read. Delivering here means the
+	// call completes, its answer goes into the frame, and sigreturn puts it
+	// back in RAX.
+	//
+	// One place, not nine: the nine checkpoints exist so a PARKED thread
+	// notices a terminate in its own context, and they still do. Every one of
+	// them returns through here, so this is where a handler gets armed.
+	//
+	// Deliberately last: after the CR3 tripwire, so a delivery can never be
+	// blamed for an address-space escape it did not cause, and after the
+	// syscall body, so `result` is the real answer.
+	if (sig_thread != NULL && sig_cls != NULL && sig_cls->task != NULL)
+		(void)signal_deliver_pending(sig_cls->task, sig_thread, result);
 
 	return result;
 }
@@ -4003,6 +4037,78 @@ static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t ar
 
 	void *previous = signal_set_handler(task, (signals)signo, handler);
 	return (uint64_t)previous;
+}
+
+// sigreturn — resume what a handler interrupted. A program never calls this
+// deliberately; the stub at TASK_SIGRETURN_VIRT does, when the handler `ret`s.
+//
+// THIS IS THE MOST ATTACKABLE CALL IN THE SIGNAL PATH, because it is a
+// "restore register state" primitive reached from ring 3. So the frame is
+// VALIDATED, never trusted:
+//
+//   - it must carry the kernel's magic (the cheap catch for an honest bug);
+//   - it must sit inside the calling thread's OWN stack region;
+//   - a handler for that signal must actually be running (sigmask), which is
+//     what stops a program calling sigreturn out of nowhere to install a
+//     register state of its choosing;
+//   - and nothing privileged is taken from it: no CS, no SS, no RFLAGS. The
+//     interrupted RFLAGS is restored from the frame, but the frame was
+//     written BY US from the value the CPU gave us on entry, and the range
+//     checks above are what make "the frame we wrote" a defensible claim.
+//
+// RIP and RSP are not range-checked on purpose: a program is free to return
+// to any address in its own address space, and a bad one faults in ring 3 as
+// its own segfault. What must not happen is a bad one faulting the KERNEL,
+// and it cannot — the values only take effect through sysretq.
+static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t   *task   = cls ? cls->task : NULL;
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	if (task == NULL || thread == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	uint64_t *frame = (uint64_t *)cls->syscall_return_frame;
+	if (frame == NULL)
+		return SYSCALL_RESULT_INVALID;   // not on a syscall return path
+
+	signal_frame_t saved;
+	if (!copy_user_buffer((const void *)arg0, &saved, sizeof(saved)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	if (saved.magic != SIGNAL_FRAME_MAGIC)
+	{
+		printd(DEBUG_SIGNALS, "sigreturn: %s handed a frame with no magic — refused\n",
+		       task->exename);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	if (saved.signo == 0 || saved.signo >= SIGNAL_COUNT ||
+	    !sigset_has(thread->signals.sigmask, (signals)saved.signo))
+	{
+		// No handler for that signal is running on this thread, so there is
+		// nothing to return FROM. This is the check that makes the call
+		// useless to anyone who did not get here the intended way.
+		printd(DEBUG_SIGNALS, "sigreturn: %s is not inside a handler for signal %lu — refused\n",
+		       task->exename, saved.signo);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	// Unblock the signal now that its handler has finished (SIGNALS.md §7).
+	sigset_del(&thread->signals.sigmask, (signals)saved.signo);
+
+	// Put the interrupted context back where sysretq will find it, and hand
+	// the original syscall's answer back in RAX — which is this syscall's
+	// return value, because RAX is exactly what a syscall returns in.
+	frame[0] = saved.rflags;
+	frame[1] = saved.rip;
+	frame[2] = saved.rsp;
+
+	printd(DEBUG_SIGNALS, "sigreturn: %s resumes %p after signal %lu\n",
+	       task->exename, (void *)saved.rip, saved.signo);
+	return saved.rax;
 }
 
 // Where is my window, and what state is it in? The readback half of create —

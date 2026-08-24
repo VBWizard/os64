@@ -1,14 +1,12 @@
-// sigtest — the ring-3 fixture for signal handler registration (2026-08-23).
+// sigtest — the ring-3 fixture for signal handlers (2026-08-23).
 //
-// SIGNALS.md step 2 landed the registration syscall; delivery is step 3. So
-// this proves exactly what exists and claims nothing about what does not: a
-// handler can be installed, the previous one comes back, the default can be
-// restored, and the refusals refuse.
+// SIGNALS.md steps 2 and 3: a program can install a handler, and the kernel
+// actually runs it. This fixture proves both halves and, deliberately, the
+// awkward parts of each — that a REFUSED registration changes nothing, and
+// that a syscall's return value survives a handler running in the middle of
+// it, which is the quietest way the resume path could be wrong.
 //
-// It will GROW a second half the day delivery lands — raise SIGSEGV, catch it,
-// print, die — which is Chris's os32 test app reborn and the acceptance test
-// for step 3. The scaffolding is written to make that an addition rather than
-// a rewrite.
+// Chris's os32 test app is the ancestor: install, raise, catch, carry on.
 //
 // Exit codes 0x51600xx ("SIGO"; the step is the low byte):
 //   0x5160000  success
@@ -19,6 +17,9 @@
 //   0x5160005  an out-of-range signal was accepted
 //   0x5160006  a kernel-space handler address was accepted
 //   0x5160007  a handler did not survive being read back
+//   0x5160008  could not raise a signal at myself through /proc
+//   0x5160009  the handler never ran (delivery is broken)
+//   0x516000A  a syscall's return value did not survive delivery
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -98,9 +99,50 @@ int main(void)
     if (prev != (int64_t)OS64_SIG_DEFAULT)
         die(6, "sigtest: a refused install changed the handler anyway");
 
-    (void)gCaught;   // step 3's business
-    os64_printf("sigtest: registration, replacement and refusals all correct\n");
-    os64_serial_log("sigtest: registration, replacement and refusals all correct");
+    // ── DELIVERY (step 3) ──────────────────────────────────────────────────
+    // Send ourselves a signal and prove the handler actually runs, that the
+    // interrupted work resumes afterwards, and that the syscall which was in
+    // flight still returns its own answer.
+    gCaught = 0;
+    if (os64_signal_set_handler(OS64_SIGINT, handler_a) < 0)
+        die(1, "sigtest: could not install the delivery handler");
+
+    // Aim SIGINT at ourselves the way kill(1) does — a write to our own
+    // /proc/<pid>/ctl. (There is no kill SYSCALL: signalling is a file
+    // operation here, which is the Plan 9 shape /proc was built for.)
+    {
+        char path[64];
+        os64_snprintf(path, sizeof(path), "/proc/%ld/ctl", (long)os64_getpid());
+        int64_t ctl = os64_open(path, "w");
+        if (ctl < 0)
+            die(8, "sigtest: could not open my own /proc ctl");
+        // The bit lands on every thread of this task during THIS write. Its
+        // delivery happens on the way out of a syscall — which means the very
+        // write that raised it is the one that carries the handler.
+        if (os64_write((int32_t)ctl, "interrupt", 9) < 0)
+            die(8, "sigtest: could not signal myself");
+        os64_close((int32_t)ctl);
+    }
+
+    // One ordinary syscall. Its return value must survive the handler running
+    // in the middle of it — that is the whole point of saving RAX in the
+    // frame, and a getpid whose answer came back mangled would prove the
+    // resume path wrong in the quietest possible way.
+    int64_t pid_before = os64_getpid();
+    int64_t pid_after  = os64_getpid();
+
+    if (gCaught != OS64_SIGINT)
+        die(9, "sigtest: the handler never ran");
+    if (pid_before != pid_after || pid_after <= 0)
+        die(10, "sigtest: a syscall's return value did not survive delivery");
+
+    // And the program is still alive, which is the entire point: SIGINT's
+    // default action is death, and installing a handler replaced it.
+    if (os64_signal_set_handler(OS64_SIGINT, OS64_SIG_DEFAULT) != (int64_t)(uintptr_t)handler_a)
+        die(3, "sigtest: the handler was not still installed after delivery");
+
+    os64_printf("sigtest: registration, refusals, delivery and resume all correct\n");
+    os64_serial_log("sigtest: registration, refusals, delivery and resume all correct");
     os64_exit(STEP(0));
     return 0;   // not reached
 }

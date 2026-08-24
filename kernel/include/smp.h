@@ -86,6 +86,26 @@ typedef struct
 	// nothing can preempt between the store and the reload.
 	uint64_t syscall_user_rsp;
 
+	// Where syscall_Enter's 40-byte return frame sits on THIS core's kernel
+	// stack, for the duration of one syscall: [0]=user RFLAGS, [8]=user RIP,
+	// [16]=user RSP — the three values sysretq is rebuilt from.
+	//
+	// Published GS-relative for signal DELIVERY (SIGNALS.md step 3). A handler
+	// runs by having the kernel change where the syscall returns TO, and this
+	// is the only place that answer lives: `thread_t.regs` is the SCHEDULER's
+	// save area, written when a thread is preempted, and is untouched by the
+	// syscall fast path. Redirecting regs.RIP would move a thread that is not
+	// going to be resumed from regs.
+	//
+	// Single per-core slot for the same reason syscall_user_rsp is: SFMASK
+	// clears IF on entry, so nothing preempts between the store and the read.
+	// Zeroed on the way out so a checkpoint reached from anywhere OTHER than a
+	// syscall (an interrupt, the scheduler) cannot mistake a stale frame for
+	// its own — a signal delivered against another syscall's return address
+	// would resume the wrong instruction, which is exactly the class of bug
+	// that is impossible to find later.
+	uint64_t syscall_return_frame;
+
 	// acct = CPU-time accounting (scheduler_do's switch-boundary charging).
 	// All three are written ONLY by this core, inside its own scheduler
 	// pass; /sys/cpu/<n>/time reads them cross-core, which is safe for the values

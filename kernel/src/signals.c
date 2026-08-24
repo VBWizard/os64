@@ -2,6 +2,10 @@
 #include "CONFIG.h"
 #include "task.h"        // task_t — the handler table lives there now
 #include "os64/signal.h" // the ABI numbers these must agree with
+#include "memory/paging.h"   // paging_walk_paging_table / kHHDMOffset — the
+                             // HHDM write is how the kernel reaches a user
+                             // stack without switching CR3 (CLAUDE.md)
+#include <stddef.h>          // offsetof — the stub's ABI asserts
 #include "scheduler.h"
 #include "kernel.h"
 #include "serial_logging.h"
@@ -76,6 +80,158 @@ void *signal_set_handler(struct task *t, signals sig, void *handler)
 	printd(DEBUG_SIGNALS, "signal_set_handler: %s installs %p for signal %u (was %p)\n",
 	       task->exename, handler, (unsigned)sig, previous);
 	return previous;
+}
+
+// ── DELIVERY ────────────────────────────────────────────────────────────────
+//
+// Run a ring-3 handler by changing where the current syscall RETURNS to. The
+// mechanism, end to end:
+//
+//   1. carve a signal_frame_t out of the user stack and fill it with the four
+//      values nothing else will restore (see signals.h for why only four);
+//   2. point the syscall's saved RIP at the handler, RDI at the signal number
+//      (a handler is an ordinary C function taking an int);
+//   3. put TASK_SIGRETURN_VIRT at [new RSP] so the handler's own `ret` lands
+//      in the stub that calls sigreturn;
+//   4. return to user normally. The handler runs on the thread's own stack.
+//
+// EVERY WRITE GOES THROUGH THE HHDM, never through the task VA. The user stack
+// is mapped only in the task's own PML4 and we may not be on that CR3; the
+// house rule (CLAUDE.md) is to walk the task's tables for the physical page
+// and write through `phys | kHHDMOffset`. This is also what lets os64 skip the
+// CR3 juggling os32's _sigJumpPoint needed — there is no address space to
+// switch INTO, because the write never uses the task's address space.
+//
+// The RED ZONE is respected: SysV reserves 128 bytes below RSP that a leaf
+// function may be using right now, so the frame starts below it.
+static bool signal_write_user(task_t *task, uint64_t user_va, uint64_t value)
+{
+	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, user_va);
+	if (phys == 0 || phys == 0xbadbadba)
+		return false;
+	*(uint64_t *)(phys | kHHDMOffset) = value;
+	return true;
+}
+
+// Does this thread have a pending signal that something will CATCH? The
+// default-action checkpoints ask before they kill: a task that installed a
+// handler must not be executed by the kernel on its way to being handed the
+// signal it asked for.
+//
+// SIGKILL is never caught, so a pending SIGKILL always answers false here and
+// the kill proceeds — which is the property that keeps it the last resort.
+bool signal_has_handler_for_pending(struct task *t, void *thrd)
+{
+	task_t   *task   = (task_t *)t;
+	thread_t *thread = (thread_t *)thrd;
+
+	if (task == NULL || thread == NULL)
+		return false;
+
+	for (int sig = 1; sig < SIGNAL_COUNT; sig++)
+	{
+		if (!sigset_has(thread->signals.sigind, (signals)sig))
+			continue;
+		if (!signal_is_catchable((signals)sig))
+			continue;
+		if (sigset_has(thread->signals.sigmask, (signals)sig))
+			continue;   // inside its own handler; the default must not fire either
+		if (task->sighandler[sig] != NULL)
+			return true;
+	}
+	return false;
+}
+
+// The stub in task_exit_asm.S reads these offsets off RSP by hand. If the
+// struct moves, the stub reads the wrong words and calls whatever happens to
+// be in the frame — so the two are held together here rather than by anyone
+// remembering.
+_Static_assert(offsetof(signal_frame_t, signo)   == 40, "the sigreturn stub reads signo at +40");
+_Static_assert(offsetof(signal_frame_t, handler) == 48, "the sigreturn stub reads handler at +48");
+_Static_assert(sizeof(signal_frame_t) % 16 == 0,        "the signal frame must keep RSP 16-aligned");
+
+bool signal_deliver_pending(struct task *t, void *thrd, uint64_t retval)
+{
+	task_t   *task   = (task_t *)t;
+	thread_t *thread = (thread_t *)thrd;
+
+	if (task == NULL || thread == NULL || task->kernelTask)
+		return false;
+
+	// Only from a syscall return. A checkpoint reached any other way has no
+	// frame to rewrite, and syscall.S clears this on the way out precisely so
+	// a stale one can never be mistaken for ours.
+	core_local_storage_t *cls = get_core_local_storage();
+	uint64_t *frame = cls ? (uint64_t *)cls->syscall_return_frame : NULL;
+	if (frame == NULL)
+		return false;
+
+	// One handled signal, lowest number first — a stable order beats an
+	// arbitrary one, and "lowest first" puts SIGHUP ahead of SIGTERM, which
+	// is the order the world tends to send them in anyway.
+	for (int sig = 1; sig < SIGNAL_COUNT; sig++)
+	{
+		if (!sigset_has(thread->signals.sigind, (signals)sig))
+			continue;
+		if (!signal_is_catchable((signals)sig))
+			continue;                       // SIGKILL: the default is the only action
+		if (task->sighandler[sig] == NULL)
+			continue;                       // no handler: the default action stands
+		if (sigset_has(thread->signals.sigmask, (signals)sig))
+			continue;                       // already inside this signal's own handler
+
+		uint64_t user_rsp = frame[2];       // [16] in syscall.S's frame
+		uint64_t user_rip = frame[1];       // [8]
+		uint64_t user_rfl = frame[0];       // [0]
+
+		// Below the RED ZONE — SysV reserves 128 bytes under RSP that a leaf
+		// function may be using right now — then down for the frame, then
+		// 16-aligned, because the stub CALLs the handler from here.
+		uint64_t frame_va = (user_rsp - 128 - sizeof(signal_frame_t)) & ~(uint64_t)0xF;
+
+		// Write it out field by field through the HHDM. If ANY write fails the
+		// stack is unusable — which is the SIGSEGV-on-a-bad-stack case named in
+		// SIGNALS.md §9 — and we deliver nothing, leaving the default action to
+		// kill the thread exactly as it does today. An alternate signal stack
+		// is the cure, and it is a later slice.
+		bool ok = true;
+		ok &= signal_write_user(task, frame_va + 0,  SIGNAL_FRAME_MAGIC);
+		ok &= signal_write_user(task, frame_va + 8,  retval);
+		ok &= signal_write_user(task, frame_va + 16, user_rip);
+		ok &= signal_write_user(task, frame_va + 24, user_rsp);
+		ok &= signal_write_user(task, frame_va + 32, user_rfl);
+		ok &= signal_write_user(task, frame_va + 40, (uint64_t)sig);
+		ok &= signal_write_user(task, frame_va + 48, (uint64_t)task->sighandler[sig]);
+		if (!ok)
+		{
+			printd(DEBUG_SIGNALS,
+			       "signal_deliver: %s has no usable stack for signal %d — default action stands\n",
+			       task->exename, sig);
+			return false;
+		}
+
+		// CONSUMED ONCE, TASK-WIDE. The aim is a broadcast
+		// (task_signal_all_threads), so leaving the bit set on the siblings
+		// would run one SIGTERM once per thread — the exact outcome the
+		// per-task handler table exists to prevent (SIGNALS.md §2/§3).
+		for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+			sigset_del(&th->signals.sigind, (signals)sig);
+
+		// Blocked for the duration of its own handler: a SIGSEGV handler that
+		// faults must not re-enter itself forever (§7). sigreturn lifts it.
+		sigset_add(&thread->signals.sigmask, (signals)sig);
+
+		// Redirect the return: into the stub, standing on the frame we just
+		// built. The stub loads the handler out of the frame and calls it.
+		frame[1] = TASK_SIGRETURN_VIRT;
+		frame[2] = frame_va;
+
+		printd(DEBUG_SIGNALS, "signal_deliver: %s runs handler %p for signal %d (resumes %p)\n",
+		       task->exename, task->sighandler[sig], sig, (void *)user_rip);
+		return true;
+	}
+
+	return false;
 }
 
 /// RAISE a signal on a thread, with data.

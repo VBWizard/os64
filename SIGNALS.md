@@ -256,8 +256,39 @@ the next.
    before there was any way to install one. A program can be written against
    this interface now and will start actually running its handler when step 3
    lands, without the interface changing under it.
-3. **Delivery + the stub + `sigreturn`.** The frame, the redirect, the second
-   template in the trampoline page.
+3. ~~**Delivery + the stub + `sigreturn`.**~~ **DONE 2026-08-23 for the
+   syscall path**, which is the common case: a handler runs, the program
+   resumes, and the interrupted syscall's return value survives.
+
+   Two findings changed the shape from what §5 above describes, both for the
+   better:
+
+   - **Delivery happens ONCE, at the syscall dispatcher's EXIT — not at the
+     nine checkpoints.** The checkpoints exist so a PARKED thread notices a
+     terminate in its own context, and they still do; but every one of them
+     returns through the dispatcher, so that is the single place a handler
+     needs arming. Arming it on the way IN would have been wrong for a
+     different reason: the syscall would be skipped entirely and then resumed
+     as though it had happened — a `read` that silently never read.
+   - **The saved frame is FOUR values, not a register file.** Because the
+     interrupted context is a syscall return, the syscall ABI has already
+     declared RCX and R11 clobbered, the entry stub preserves the callee-saved
+     set, and a handler obeying the C ABI preserves those itself. What is left
+     is RAX (the syscall's own answer), RIP, RSP and RFLAGS. Delivering from
+     an interrupt — as os32 did — would have needed all of them.
+
+   The stub CALLs the handler and falls through into `sigreturn`, rather than
+   being returned INTO: that puts the signal number in RDI (which the syscall
+   return path does not restore) without the kernel having to touch a register
+   the frame does not carry.
+
+   NOT YET, and named rather than implied: a program that never makes a
+   syscall gets no delivery. `scheduler.c`'s forced-syscall push already
+   solves that shape for termination and is the obvious home for it — until
+   then a spinning program with a handler installed is reachable only by
+   SIGKILL. Blocking calls also do not yet return INTERRUPTED (§8); they
+   deliver on the way out of whatever they return, which is right, but they
+   still take the default action rather than reporting the interruption.
 4. **Teach the nine checkpoints** to look for a handler before defaulting to
    death.
 5. **The fixture**: raise `SIGSEGV`, catch it, print, die — Chris's os32 test

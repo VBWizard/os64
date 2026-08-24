@@ -193,6 +193,57 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// that name without setting any action; see its definition for the story.
 	void signal_raise(signals signal, uint64_t sigData, void *thread);
 
+	// ── DELIVERY (SIGNALS.md §5) ────────────────────────────────────────────
+	//
+	// The frame the kernel writes on the user stack before running a handler,
+	// and that sigreturn restores from.
+	//
+	// FOUR SAVED VALUES, and the shortness is the payoff of delivering at a
+	// SYSCALL BOUNDARY rather than from an interrupt. os32 delivered from the
+	// scheduler ISR, so the interrupted context was an arbitrary instruction
+	// and every register had to be carried. Here the interrupted context is a
+	// syscall RETURN: the syscall ABI already declares RCX and R11 clobbered,
+	// the entry stub preserves the callee-saved set across the dispatcher, and
+	// a handler that obeys the C ABI preserves those itself. What is left that
+	// nothing else will restore is the syscall's own return value and where it
+	// was returning to.
+	// RSP points AT this while the handler runs, so the stub reads signo and
+	// handler straight off its own stack pointer. Offsets are ABI between
+	// signals.c and the stub in task_exit_asm.S — the static asserts in
+	// signals.c hold them together.
+	typedef struct signal_frame
+	{
+		uint64_t magic;     // +0   SIGNAL_FRAME_MAGIC — sigreturn refuses without it
+		uint64_t rax;       // +8   the interrupted syscall's return value
+		uint64_t rip;       // +16  where it was returning to
+		uint64_t rsp;       // +24  the stack it was returning on
+		uint64_t rflags;    // +32
+		uint64_t signo;     // +40  read by the stub into RDI; unblocked on return
+		uint64_t handler;   // +48  read by the stub, then CALLed
+		uint64_t pad;       // +56  keeps the frame 16-byte aligned, which is
+		                    //      what SysV promises a called function
+	} signal_frame_t;
+
+	// Not a hash, just an unlikely constant: it turns "ring 3 handed us a
+	// pointer to anything at all" into a refusal rather than a register load.
+	// The stack-range and running-handler checks are the real defences (see
+	// syscall_sigreturn); this catches the honest mistakes first and cheapest.
+	#define SIGNAL_FRAME_MAGIC 0x5349475246524D45ULL   /* "SIGRFRME" */
+
+	// Deliver one pending, handled signal to ring 3 if there is one, by
+	// rewriting where the current syscall returns to. Called at the
+	// checkpoints, in the victim's own context. Returns true if a handler was
+	// armed — in which case the syscall's return value has been saved and the
+	// caller must not clobber it.
+	struct task;
+	bool signal_deliver_pending(struct task *t, void *thread, uint64_t retval);
+
+	// Is there a pending signal something will CATCH? The default-action
+	// checkpoints ask before they kill — a task that installed a handler must
+	// not be executed on its way to being handed the signal it asked for.
+	// Always false for SIGKILL, which is what keeps it the last resort.
+	bool signal_has_handler_for_pending(struct task *t, void *thread);
+
 	// Can ring 3 install a handler for this signal? Range check plus the one
 	// exception (SIGKILL), in ONE place so registration and delivery can never
 	// reach different conclusions about the same signal.
