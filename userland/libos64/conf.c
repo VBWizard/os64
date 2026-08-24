@@ -51,7 +51,15 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user)
 			break;
 		got += (size_t)n;
 		if (got >= OS64_CONF_MAX - 1) {
-			truncated = true;
+			// Buffer full — but a file of EXACTLY OS64_CONF_MAX-1 bytes fits,
+			// so probe one more byte before crying truncation (Codex #29 rd3).
+			// The write path and the kernel reader already do this; without it
+			// a valid maximum-size file is falsely rejected and a caller like
+			// gclock reports it exceeds the limit. Set truncated only if there
+			// really is more.
+			char probe;
+			if (os64_read((int32_t)fd, &probe, 1) > 0)
+				truncated = true;
 			break;
 		}
 	}
