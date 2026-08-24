@@ -176,59 +176,88 @@ bool handle_close(struct task *t, int h)
 	if (handle == NULL)
 		return false;
 
+	// ── CLAIM THE SLOT, THEN CLOSE (2026-08-23) ─────────────────────────────
+	//
+	// The slot used to be cleared AFTER the switch below, which left it live
+	// for the entire duration of the closer — and a task's handles are not
+	// closed by one thread alone. A MULTI-THREADED TASK BEING KILLED sends
+	// every one of its threads down the exit path at once
+	// (task_terminate_sibling_threads), so two of them can enter
+	// handle_close_all together, both see `type != HANDLE_NONE` on the same
+	// slot, and both run the closer on the same object. The second one is
+	// working with memory the first already freed — and because EVERY
+	// allocation in os64 is zeroed, what it reads back is not garbage but
+	// NULL, so it dereferences 0 and the kernel takes a #PF three frames
+	// away from anything that looks related.
+	//
+	// Seen once, in exactly that shape: `hog` (threads + Ctrl+C) faulting at
+	// thread_join_close+0x10 on address 0x8, with RDI = 0. Intermittent by
+	// nature — it needs two threads inside the same slot — which is why it
+	// took a busy machine to show up and did not reproduce on demand.
+	//
+	// Taking the type and object out and blanking the slot FIRST closes the
+	// window: the losing racer now sees HANDLE_NONE, does nothing, and the
+	// object is released exactly once. (handle_get's own NULL check makes a
+	// closed slot safe to re-close; this makes a CLOSING slot safe too.)
+	handle_type_t type = handle->type;
+	void *object = handle->object;
+	task->handles[h].type = HANDLE_NONE;
+	task->handles[h].object = NULL;
+
 	// Dropping the task's reference on the object. For a pipe this is THE
 	// refcount that decides EOF (last writer gone) and EPIPE (last reader
 	// gone) — closing a handle is how a program says "I am done with this end".
-	switch (handle->type)
+	switch (type)
 	{
 		case HANDLE_PIPE_READ:
-			pipe_close_read_end((pipe_t *)handle->object);
+			pipe_close_read_end((pipe_t *)object);
 			break;
 		case HANDLE_PIPE_WRITE:
-			pipe_close_write_end((pipe_t *)handle->object);
+			pipe_close_write_end((pipe_t *)object);
 			break;
 		case HANDLE_FILE:
-			handle_file_object_close(handle->object);
+			handle_file_object_close(object);
 			break;
 		case HANDLE_DIR:
-			handle_dir_object_close(handle->object);
+			handle_dir_object_close(object);
 			break;
 		case HANDLE_THREAD:
 			// Detach: the thread keeps running if it is still going, and
 			// nobody will ever collect its answer. The join object frees
 			// itself when both references are gone.
-			thread_join_close((thread_join_t *)handle->object);
+			thread_join_close((thread_join_t *)object);
 			break;
 		case HANDLE_NET_TCP:
 			// Orderly shutdown: sends FIN and DETACHES — the closing
 			// dance and TIME_WAIT finish in the background (tcp_poll),
 			// so closing a handle never blocks the program.
-			tcp_conn_close((tcp_conn_t *)handle->object);
+			tcp_conn_close((tcp_conn_t *)object);
 			break;
 		case HANDLE_NET_ICMP:
-			icmp_conn_close((icmp_conn_t *)handle->object);
+			icmp_conn_close((icmp_conn_t *)object);
 			break;
 		case HANDLE_PTY_MASTER:
 			// The terminal side hung up. The slave is buried only when the
 			// SEATS are also empty (PTY.md's lifetime rule) — a child still
 			// running writes into a grid nobody watches, which GRID mode
 			// makes benign by construction.
-			pty_master_close((tty_t *)handle->object);
+			pty_master_close((tty_t *)object);
 			break;
 		case HANDLE_NET_UDP:
 			// Hang up: unbinds the ephemeral port and frees the object.
 			// Safe on any CR3 (everything it touches is kmalloc'd, upper
 			// half) and safe from handle_close_all at task exit (the
 			// owning thread has left any blocking read by then).
-			udp_conn_close((udp_conn_t *)handle->object);
+			udp_conn_close((udp_conn_t *)object);
 			break;
 		default:
 			// Console handles reference no object — nothing to release.
 			break;
 	}
 
-	task->handles[h].type = HANDLE_NONE;
-	task->handles[h].object = NULL;
+	// (The slot was blanked BEFORE the switch — see the claim-then-close note
+	// above. Clearing it again here would be harmless but would also be the
+	// line that makes the next reader think the window is still open.)
 	return true;
 }
 
