@@ -85,16 +85,31 @@ static void conf_io_kernel(void *arg)
 		uint8_t *buf = kmalloc(p->cap + 1);
 		size_t len = 0;
 		if (buf != NULL) {
+			bool oversized = false;
 			for (;;) {
-				if (len >= p->cap) break;   // at the cap: keep what fit, like every other reader
+				if (len >= p->cap) {
+					// At the cap. conf_read_file's contract (conf.h) is NULL
+					// for a file LARGER than cap, and gui_startup's "start
+					// nothing" relies on it — so probe one byte and reject the
+					// whole read if the file continues past here, rather than
+					// returning a truncated prefix as a success.
+					uint8_t probe;
+					if (fs->fops->read(file, &probe, 1) > 0)
+						oversized = true;
+					break;
+				}
 				int n = fs->fops->read(file, buf + len, p->cap - len);
 				if (n <= 0)
 					break;
 				len += (size_t)n;
 			}
-			buf[len] = 0;
-			p->buf = buf;
-			p->len = len;
+			if (oversized) {
+				kfree(buf);   // p->buf stays NULL → conf_read_file returns NULL
+			} else {
+				buf[len] = 0;
+				p->buf = buf;
+				p->len = len;
+			}
 		}
 	}
 

@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "dlist.h"
 #include "thread.h"
+#include "spinlock.h"   // spinlock_t — the per-task signal-delivery lock
 #include "time.h"
 #include "env.h"
 #include "handle.h"
@@ -165,6 +166,16 @@
         // NULL = no handler = the kernel's default action for that signal.
         // Nothing installs one yet; the registration syscall is step 2.
         void *sighandler[SIGNAL_COUNT];
+        // Serializes SIGNAL DELIVERY across this task's threads (2026-08-24,
+        // Codex #29). The aim is a broadcast — every thread carries the
+        // pending bit — so without a task-wide claim two threads on two cores
+        // both pick the same signal, both build a frame, and both run the
+        // "once per task" handler concurrently. This lock makes pick-build-
+        // consume atomic per task, in BOTH delivery paths (signals.c). Zeroed
+        // = unlocked by the all-allocations-zeroed rule. Lock order: the
+        // scheduler path already holds the queue lock when it takes this, and
+        // the syscall path takes this alone — no cycle.
+        spinlock_t signalLock;
         uint64_t heapStart, heapEnd;
         // WHERE THIS TASK'S malloc PUBLISHES ITS REPORT (SYSCALL_HEAP_REPORT,
         // 2026-08-15). A USER virtual address, valid only under this task's own

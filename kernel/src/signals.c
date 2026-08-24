@@ -7,6 +7,7 @@
                              // stack without switching CR3 (CLAUDE.md)
 #include <stddef.h>          // offsetof — the stub's ABI asserts
 #include "scheduler.h"
+#include "spinlock.h"   // task->signalLock — one delivery at a time per task
 #include "kernel.h"
 #include "serial_logging.h"
 #include "panic.h"
@@ -250,9 +251,20 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 	// signal_pick_deliverable — §5 and §10 must never disagree about who is
 	// next). The rest of a multi-signal backlog delivers one syscall at a
 	// time, each sigreturn's own dispatcher exit arming the next.
+	//
+	// PICK-BUILD-CONSUME UNDER THE PER-TASK LOCK (Codex #29): the pending bit
+	// is a broadcast, so a sibling on another core could pick the same signal
+	// and run the handler a second time. The lock makes the claim atomic per
+	// task; the frame is built on THIS thread's own user stack, so holding it
+	// across the HHDM writes serializes only what must be (the shared pending
+	// set), never two threads' distinct stacks.
+	uint64_t sig_flags = spinlock_acquire_irqsave(&task->signalLock);
 	int sig = signal_pick_deliverable(task, thread);
 	if (sig == 0)
+	{
+		spinlock_release_irqrestore(&task->signalLock, sig_flags);
 		return SIGNAL_DELIVER_NONE;
+	}
 
 	uint64_t user_rsp = frame[2];       // [16] in syscall.S's frame
 	uint64_t user_rip = frame[1];       // [8]
@@ -293,18 +305,25 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 		       "signal_deliver: %s has no usable stack for signal %d — default action stands\n",
 		       task->exename, sig);
 		if (SIG_BIT(sig) & SIGNALS_TERMINATING)
+		{
+			spinlock_release_irqrestore(&task->signalLock, sig_flags);
 			return SIGNAL_DELIVER_FAILED;
+		}
 		for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
 			sigset_del(&th->signals.sigind, (signals)sig);
+		spinlock_release_irqrestore(&task->signalLock, sig_flags);
 		return SIGNAL_DELIVER_NONE;
 	}
 
 	// Consume task-wide + block for the handler's duration — the shared
 	// bookkeeping (see signal_mark_delivered for the §2/§3/§7 story).
 	signal_mark_delivered(task, thread, sig);
+	spinlock_release_irqrestore(&task->signalLock, sig_flags);
 
 	// Redirect the return: into the stub, standing on the frame we just
-	// built. The stub loads the handler out of the frame and calls it.
+	// built. The stub loads the handler out of the frame and calls it. This
+	// touches only THIS thread's own return frame, so it is safe outside the
+	// lock (which guards the shared pending set, now consumed).
 	frame[1] = TASK_SIGRETURN_VIRT;
 	frame[2] = frame_va;
 
@@ -344,9 +363,18 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 	if (task == NULL || thread == NULL || task->kernelTask)
 		return SIGNAL_DELIVER_NONE;
 
+	// Same per-task claim as the syscall path (Codex #29): a sibling thread
+	// could pick this broadcast signal on another core. We are already under
+	// the scheduler queue lock here (IF=0); this nests inside it, and the
+	// order is always queue-then-signalLock, so no cycle with the syscall
+	// path (which takes signalLock alone).
+	uint64_t sig_flags = spinlock_acquire_irqsave(&task->signalLock);
 	int sig = signal_pick_deliverable(task, thread);
 	if (sig == 0)
+	{
+		spinlock_release_irqrestore(&task->signalLock, sig_flags);
 		return SIGNAL_DELIVER_NONE;
+	}
 
 	// Same red-zone respect as §5. Userland is -mno-red-zone today, so the
 	// 128 is strictly courtesy — but hand-written ring-3 asm is allowed to
@@ -388,13 +416,18 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 		       "signal_deliver_to_regs: %s has no usable stack for signal %d\n",
 		       task->exename, sig);
 		if (SIG_BIT(sig) & SIGNALS_TERMINATING)
+		{
+			spinlock_release_irqrestore(&task->signalLock, sig_flags);
 			return SIGNAL_DELIVER_FAILED;
+		}
 		for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
 			sigset_del(&th->signals.sigind, (signals)sig);
+		spinlock_release_irqrestore(&task->signalLock, sig_flags);
 		return SIGNAL_DELIVER_NONE;
 	}
 
 	signal_mark_delivered(task, thread, sig);
+	spinlock_release_irqrestore(&task->signalLock, sig_flags);
 
 	uint64_t spin_rip = thread->regs.RIP;
 	thread->regs.RIP = TASK_SIGRETURN_VIRT;

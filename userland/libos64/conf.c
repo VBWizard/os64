@@ -366,6 +366,7 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	// Read whatever is there. ABSENT IS FINE — this is a first save, and the
 	// merge below simply has nothing to merge with.
 	size_t got = 0;
+	bool too_big = false;
 	int64_t fd = os64_open(path, "r");
 	if (fd >= 0) {
 		for (;;) {
@@ -373,10 +374,22 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 			if (n <= 0)
 				break;
 			got += (size_t)n;
-			if (got >= OS64_CONF_MAX - 1)
+			if (got >= OS64_CONF_MAX - 1) {
+				// Buffer full. Is there MORE? Publishing only this prefix
+				// would silently destroy the tail this routine promises to
+				// preserve, so probe one byte and refuse if it is there.
+				char probe;
+				if (os64_read((int32_t)fd, &probe, 1) > 0)
+					too_big = true;
 				break;
+			}
 		}
 		os64_close((int32_t)fd);
+	}
+	if (too_big) {
+		os64_free(old);
+		os64_free(neu);
+		return OS64_CONF_TRUNCATED;
 	}
 	old[got] = '\0';
 

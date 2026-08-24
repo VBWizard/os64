@@ -789,10 +789,11 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // through the normal exit path (retVal carries the signal so a waiting parent
 // can see HOW the child died, not just that it did).
 //
-// A program that wants to SURVIVE a vanishing reader will, once userland signal
-// delivery exists, install a handler and get the PIPE_ERR_CLOSED return value
-// instead. Until then the kernel enforces the default, which is the behavior
-// every pipeline actually wants.
+// A program that wants to SURVIVE a vanishing reader installs a SIGPIPE
+// handler (delivery exists since 2026-08-23): the write path then raises
+// SIGPIPE and returns OS64_INTERRUPTED instead of dying (Codex #29,
+// 2026-08-24). This function is the default action for everyone who did NOT
+// install one — which is the behavior every pipeline actually wants.
 // ── The terminating signals: enforcing the default action (SIGINT.md, PROC.md)
 // Same "kernel enforces the default because ring 3 can't catch it" pattern as
 // SIGPIPE below, same 128+signo retVal encoding for a waiting parent. The bit
@@ -1152,7 +1153,21 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 				if (n == PIPE_ERR_CLOSED)
 				{
-					// Nobody is left to read this. Default action: terminate.
+					// Nobody is left to read this. If the writer INSTALLED a
+					// SIGPIPE handler, honor it (Codex #29): the API accepts
+					// one, so terminating anyway would make catchability a
+					// lie. Raise SIGPIPE — delivery arms on this syscall's
+					// exit, exactly like the terminating signals above — and
+					// tell the caller its write was cut short. OS64_INTERRUPTED
+					// is the arc's one answer for "a signal interrupted your
+					// call"; a program that wants EPIPE-style detail inspects
+					// after its handler runs. Without a handler the default
+					// stands: terminate, which is what `yes | head` needs.
+					if (task->sighandler[SIGPIPE] != NULL)
+					{
+						task_signal_all_threads(task, SIGPIPE);
+						return (uint64_t)(int64_t)OS64_INTERRUPTED;
+					}
 					raise_sigpipe_and_die(task);
 					__builtin_unreachable();
 				}
@@ -4172,10 +4187,19 @@ static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t ar
 // prove nothing, because the frame's CONTENTS are user-writable wherever it
 // sits. The sanitization is the defence; the pointer's location is not.
 //
-// RIP and RSP are not range-checked on purpose either: a program is free to
-// return to any address in its own address space, and a bad one faults in
-// ring 3 as its own segfault. What must not happen is a bad one faulting the
-// KERNEL, and it cannot — the values only take effect through sysretq.
+//   - and the saved RIP/RSP must be CANONICAL LOWER-HALF addresses. This
+//     corrects a claim an earlier version of this comment made — that RIP
+//     and RSP "are not range-checked on purpose" because a bad one "faults
+//     in ring 3 as its own segfault." That is FALSE for a NONCANONICAL
+//     address: SYSRETQ (the short path) loads RIP from RCX and IRETQ (the
+//     full path) pops it from the frame, and BOTH raise #GP in RING 0 when
+//     handed a noncanonical value — before the privilege drop completes. So
+//     a handler that forges saved.rip could crash the KERNEL on the next
+//     signal it receives (the CVE-2012-0217 family). Requiring both below
+//     the canonical boundary rejects the noncanonical range AND forces the
+//     addresses into user space, where a genuinely bad-but-canonical one is
+//     back to being the program's own ring-3 fault.
+#define SIGRETURN_USER_CANONICAL_MAX 0x0000800000000000ULL
 static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -4215,6 +4239,19 @@ static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// useless to anyone who did not get here the intended way.
 		printd(DEBUG_SIGNALS, "sigreturn: %s is not inside a handler for signal %lu — refused\n",
 		       task->exename, saved.signo);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	// CANONICAL LOWER-HALF or nothing (see the block comment). rip/rsp are the
+	// §5 frame's fields and the full frame shares them by prefix, so this one
+	// check guards both the sysretq and the iretq return. A noncanonical value
+	// here is a KERNEL #GP waiting to happen, not a ring-3 segfault.
+	if (saved.rip >= SIGRETURN_USER_CANONICAL_MAX ||
+	    saved.rsp >= SIGRETURN_USER_CANONICAL_MAX)
+	{
+		printd(DEBUG_SIGNALS,
+		       "sigreturn: %s handed a noncanonical rip/rsp (%p/%p) — refused\n",
+		       task->exename, (void *)saved.rip, (void *)saved.rsp);
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
