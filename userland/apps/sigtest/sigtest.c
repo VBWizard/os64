@@ -22,6 +22,7 @@
 //   0x516000A  a syscall's return value did not survive delivery
 //   0x516000B  a deliberate SIGSEGV was not caught (fault delivery is broken)
 //   0x516000C  the SIGSEGV handler ran for the wrong signal
+//   0x516000D  a shared-library-window handler address was wrongly rejected
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -116,6 +117,19 @@ int main(void)
     prev = os64_signal_set_handler(OS64_SIGTERM, OS64_SIG_DEFAULT);
     if (prev != (int64_t)OS64_SIG_DEFAULT)
         die(6, "sigtest: a refused install changed the handler anyway");
+
+    // A handler in the SHARED-LIBRARY WINDOW must be ACCEPTED. The whole
+    // userland is dynamically linked, so a real handler is often a libos64
+    // function, whose text lives at 0x7F00... — above the heap ceiling but
+    // still valid user space. The kernel used to reject at TASK_HEAP_END and
+    // refuse every library handler (Codex #29 rd5); the boundary is now the
+    // canonical-user max. (We register a window ADDRESS to prove the range
+    // check accepts it, then restore the default before it could ever be
+    // delivered — the address need not point at real code for this check.)
+    if (os64_signal_set_handler(OS64_SIGTERM,
+                                (os64_signal_fn)0x00007F0000001000ULL) < 0)
+        die(0x0D, "sigtest: a shared-library-window handler was wrongly rejected");
+    (void)os64_signal_set_handler(OS64_SIGTERM, OS64_SIG_DEFAULT);
 
     // ── DELIVERY (step 3) ──────────────────────────────────────────────────
     // Send ourselves a signal and prove the handler actually runs, that the

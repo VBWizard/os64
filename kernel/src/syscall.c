@@ -4155,7 +4155,18 @@ static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t ar
 	// have the CPU attempt kernel text at CPL 3 — it faults harmlessly, but
 	// refusing it here names the mistake instead of turning it into a
 	// segfault three steps later. NULL is the exception: it means "default".
-	if (handler != NULL && (uint64_t)handler >= TASK_HEAP_END)
+	//
+	// The ceiling is USER_CANONICAL_MAX, NOT TASK_HEAP_END (Codex #29 rd5):
+	// the whole userland is dynamically linked, so a handler is very often a
+	// function in libos64.so, whose text lives in the shared-library window
+	// (TASK_SHLIB_VIRT_BASE = 0x7F00...) — ABOVE the heap ceiling but still a
+	// perfectly valid, executable ring-3 address. Rejecting at TASK_HEAP_END
+	// refused every library-supplied handler. The real boundary is user space
+	// vs. the kernel's upper half, which is exactly USER_CANONICAL_MAX. (A
+	// canonical-but-unmapped or non-executable address still slips through
+	// here — it faults in ring 3 as the program's own segfault, which the
+	// program can now even catch.)
+	if (handler != NULL && (uint64_t)handler >= USER_CANONICAL_MAX)
 		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_HANDLER;
 
 	void *previous = signal_set_handler(task, (signals)signo, handler);

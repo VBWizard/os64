@@ -506,19 +506,37 @@ paging_unmap_page((pt_entry_t*)kKernelPML4, KERNEL_TEMP_MAP_ADDR);
 - No permanent mappings cluttering kernel address space
 - Doesn't waste kmalloc pool on large allocations (like stacks)
 
-### HHDM (Higher-Half Direct Mapping) Limitations
+### HHDM (Higher-Half Direct Mapping) — Lazy Maintenance
 
-**Important**: The HHDM may not cover all physical memory. Specifically:
+**The rule (since the July 2026 lazy-HHDM change): physical memory is
+HHDM-mapped in the kernel page tables exactly while the allocator considers it
+allocated.** This section previously warned that `allocate_memory_aligned()`
+memory "MAY NOT BE accessible via HHDM" — that was true before lazy-HHDM and
+is now FALSE. It misled a reviewer into flagging signal delivery as a
+kernel-fault risk (Codex #29 rd5); the frame-write helpers rely on exactly the
+invariant below.
 
-- Memory allocated with `kmalloc()` or `kmalloc_aligned()` **IS** accessible via HHDM in kKernelPML4
-- Memory allocated with `allocate_memory_aligned()` **MAY NOT BE** accessible via HHDM in kKernelPML4
+- **ANY allocator-owned memory** — `kmalloc()`, `kmalloc_aligned()`, AND
+  `allocate_memory_aligned()` — **IS** accessible via `phys | kHHDMOffset`
+  **while allocated**, on every memory map. The allocator's single alloc choke
+  point (`allocate_memory_at_address_internal`) calls `paging_hhdm_map_range()`
+  on every extent and even zeroes it through the alias; the free path unmaps.
+  Task stacks and heap pages come from `allocate_memory_aligned()`, so they are
+  kernel-visible via the HHDM while allocated — which is what makes the
+  documented "Writing to Task Memory via the HHDM" idiom correct.
+- Freed or never-allocated RAM is **deliberately unmapped**: touching it via
+  the HHDM page-faults with a "use-after-free or wild pointer?" panic (a
+  designed tripwire). MMIO/reserved regions still require explicit mappings.
 
 **When to use each**:
-- `kmalloc()`: For kernel data structures that need to be permanently accessible
-- `allocate_memory_aligned()`: For task-specific memory (stacks, heap pages) that should be isolated
+- `kmalloc()`: kernel data structures that need to be permanently accessible.
+- `allocate_memory_aligned()`: task-specific memory (stacks, heap pages) —
+  isolated (mapped only in the task PML4 at its lower-half VA) but ALSO
+  kernel-visible via the HHDM while allocated, so the kernel can write a task's
+  stack through `phys | kHHDMOffset` after walking the task's own tables.
 
 **Converting addresses**:
-- Physical to HHDM: `phys | kHHDMOffset` (but verify it's actually mapped!)
+- Physical to HHDM: `phys | kHHDMOffset` (valid iff the memory is currently allocated)
 - HHDM to Physical: `hhdm - kHHDMOffset`
 
 ### Static Variables and SMP Safety
