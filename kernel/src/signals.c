@@ -134,8 +134,23 @@ bool signal_has_handler_for_pending(struct task *t, void *thrd)
 			continue;
 		if (!signal_is_catchable((signals)sig))
 			continue;
-		if (sigset_has(thread->signals.sigmask, (signals)sig))
-			continue;   // inside its own handler; the default must not fire either
+		// A MASKED signal still counts as caught. The mask means "inside this
+		// signal's own handler" (§7), and the held bit WILL deliver — at the
+		// dispatcher exit right after sigreturn unblocks it. The first version
+		// of this loop skipped masked signals entirely and thereby answered
+		// "no" for them, and the caller's next move on "no" is the default
+		// action: a second Ctrl+C arriving DURING the handler executed the
+		// program mid-handler — precisely the program that asked to be told.
+		// (The wide-open case is the arc's own poster child: a SIGTERM
+		// handler saving unsaved work while the shutdown ladder is entitled
+		// to send another.)
+		//
+		// Known wart, accepted with eyes open: a HANDLER that itself blocks
+		// while its own signal is pending again gets INTERRUPTED from every
+		// blocking call until it returns (the held bit reads as a pending
+		// terminate to the park loops, and now reads as caught here). Honest,
+		// rare, and strictly better than being killed; the cure is a
+		// "deliverable now vs. held" split at the checkpoints — DEBTS.
 		if (task->sighandler[sig] != NULL)
 			return true;
 	}
@@ -150,21 +165,24 @@ _Static_assert(offsetof(signal_frame_t, signo)   == 40, "the sigreturn stub read
 _Static_assert(offsetof(signal_frame_t, handler) == 48, "the sigreturn stub reads handler at +48");
 _Static_assert(sizeof(signal_frame_t) % 16 == 0,        "the signal frame must keep RSP 16-aligned");
 
-bool signal_deliver_pending(struct task *t, void *thrd, uint64_t retval)
+signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint64_t retval)
 {
 	task_t   *task   = (task_t *)t;
 	thread_t *thread = (thread_t *)thrd;
 
 	if (task == NULL || thread == NULL || task->kernelTask)
-		return false;
+		return SIGNAL_DELIVER_NONE;
 
 	// Only from a syscall return. A checkpoint reached any other way has no
 	// frame to rewrite, and syscall.S clears this on the way out precisely so
-	// a stale one can never be mistaken for ours.
-	core_local_storage_t *cls = get_core_local_storage();
-	uint64_t *frame = cls ? (uint64_t *)cls->syscall_return_frame : NULL;
+	// a stale one can never be mistaken for ours. THE THREAD'S OWN field, not
+	// a per-core slot: a blocking syscall parks with its frame live, so a
+	// per-core slot would hand us whatever thread last entered a syscall on
+	// this core — and rewriting a parked STRANGER's return frame is how an
+	// innocent program comes to resume inside our stub (see thread.h).
+	uint64_t *frame = (uint64_t *)thread->syscall_return_frame;
 	if (frame == NULL)
-		return false;
+		return SIGNAL_DELIVER_NONE;
 
 	// One handled signal, lowest number first — a stable order beats an
 	// arbitrary one, and "lowest first" puts SIGHUP ahead of SIGTERM, which
@@ -204,10 +222,19 @@ bool signal_deliver_pending(struct task *t, void *thrd, uint64_t retval)
 		ok &= signal_write_user(task, frame_va + 48, (uint64_t)task->sighandler[sig]);
 		if (!ok)
 		{
+			// The stack is unusable — the SIGSEGV-on-a-bad-stack case named
+			// in SIGNALS.md §9. Report FAILED so the dispatcher applies the
+			// DEFAULT ACTION: returning "nothing happened" here would leave
+			// the bit pending with a handler installed, and every checkpoint
+			// would then answer "it will be caught" forever — a signal that
+			// neither delivers nor kills, and a program that livelocks on
+			// INTERRUPTED until someone reaches for SIGKILL. An alternate
+			// signal stack is the cure for the delivery itself, and it is a
+			// later slice.
 			printd(DEBUG_SIGNALS,
 			       "signal_deliver: %s has no usable stack for signal %d — default action stands\n",
 			       task->exename, sig);
-			return false;
+			return SIGNAL_DELIVER_FAILED;
 		}
 
 		// CONSUMED ONCE, TASK-WIDE. The aim is a broadcast
@@ -228,10 +255,10 @@ bool signal_deliver_pending(struct task *t, void *thrd, uint64_t retval)
 
 		printd(DEBUG_SIGNALS, "signal_deliver: %s runs handler %p for signal %d (resumes %p)\n",
 		       task->exename, task->sighandler[sig], sig, (void *)user_rip);
-		return true;
+		return SIGNAL_DELIVER_ARMED;
 	}
 
-	return false;
+	return SIGNAL_DELIVER_NONE;
 }
 
 /// RAISE a signal on a thread, with data.

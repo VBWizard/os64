@@ -86,25 +86,13 @@ typedef struct
 	// nothing can preempt between the store and the reload.
 	uint64_t syscall_user_rsp;
 
-	// Where syscall_Enter's 40-byte return frame sits on THIS core's kernel
-	// stack, for the duration of one syscall: [0]=user RFLAGS, [8]=user RIP,
-	// [16]=user RSP — the three values sysretq is rebuilt from.
-	//
-	// Published GS-relative for signal DELIVERY (SIGNALS.md step 3). A handler
-	// runs by having the kernel change where the syscall returns TO, and this
-	// is the only place that answer lives: `thread_t.regs` is the SCHEDULER's
-	// save area, written when a thread is preempted, and is untouched by the
-	// syscall fast path. Redirecting regs.RIP would move a thread that is not
-	// going to be resumed from regs.
-	//
-	// Single per-core slot for the same reason syscall_user_rsp is: SFMASK
-	// clears IF on entry, so nothing preempts between the store and the read.
-	// Zeroed on the way out so a checkpoint reached from anywhere OTHER than a
-	// syscall (an interrupt, the scheduler) cannot mistake a stale frame for
-	// its own — a signal delivered against another syscall's return address
-	// would resume the wrong instruction, which is exactly the class of bug
-	// that is impossible to find later.
-	uint64_t syscall_return_frame;
+	// (The syscall RETURN FRAME pointer lived here for one day, 2026-08-23 to
+	// -24, and review moved it to thread_t — where its comment now lives. The
+	// short version: the frame is on the thread's KERNEL STACK, a blocking
+	// syscall parks with it live, and a per-core slot kept pointing at a
+	// parked thread's frame while other threads delivered signals through it.
+	// syscall_user_rsp above genuinely is per-core — stored and consumed
+	// nanoseconds apart under SFMASK's IF=0, before anything can park.)
 
 	// acct = CPU-time accounting (scheduler_do's switch-boundary charging).
 	// All three are written ONLY by this core, inside its own scheduler

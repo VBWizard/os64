@@ -226,17 +226,49 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 
 	// Not a hash, just an unlikely constant: it turns "ring 3 handed us a
 	// pointer to anything at all" into a refusal rather than a register load.
-	// The stack-range and running-handler checks are the real defences (see
-	// syscall_sigreturn); this catches the honest mistakes first and cheapest.
+	// The RFLAGS sanitization and running-handler checks are the real defences
+	// (see syscall_sigreturn); this catches the honest mistakes first and
+	// cheapest.
 	#define SIGNAL_FRAME_MAGIC 0x5349475246524D45ULL   /* "SIGRFRME" */
+
+	// What sigreturn lets a frame say about RFLAGS. The frame sits on the
+	// USER'S OWN WRITABLE STACK, so its rflags word is ring 3's to forge no
+	// matter who wrote it first — and sysretq loads RFLAGS from R11 nearly
+	// verbatim, including IF and IOPL. A forged IF=0 parks a core outside the
+	// timer's reach forever (only the NMI probe would ever see it again); a
+	// forged IOPL=3 hands ring 3 the I/O ports and cli. So sigreturn KEEPS
+	// only the bits a user program legitimately owns — the arithmetic flags,
+	// TF, DF, AC, ID — and FORCES the rest: IF on, IOPL 0, bit 1 (the
+	// always-one reserved bit).
+	//
+	// §10's full-frame sigreturn must inherit this discipline with higher
+	// stakes: its road home is iretq, which swallows RFLAGS whole and CS/SS
+	// besides. Flags pass through this same mask; selectors come from kernel
+	// constants, never from the frame.
+	#define SIGNAL_RFLAGS_USER_BITS 0x240DD5ULL /* CF PF AF ZF SF TF DF OF AC ID */
+	#define SIGNAL_RFLAGS_FORCED    0x202ULL    /* IF=1, reserved bit 1 = 1 */
+
+	// What signal_deliver_pending accomplished, and the dispatcher's duty for
+	// each: NONE — nothing pending and handled, carry on. ARMED — a handler
+	// was armed; the syscall's return value is saved in the frame and the
+	// caller must not clobber it. FAILED — a handled signal is pending but the
+	// frame could not be written (the stack is unusable, SIGNALS.md §9): the
+	// dispatcher applies the DEFAULT ACTION instead, because leaving the bit
+	// pending with a handler installed would mean every blocking call returns
+	// INTERRUPTED forever while the signal neither delivers nor kills — a
+	// livelock only SIGKILL ends.
+	typedef enum
+	{
+		SIGNAL_DELIVER_NONE   = 0,
+		SIGNAL_DELIVER_ARMED  = 1,
+		SIGNAL_DELIVER_FAILED = 2,
+	} signal_deliver_result_t;
 
 	// Deliver one pending, handled signal to ring 3 if there is one, by
 	// rewriting where the current syscall returns to. Called at the
-	// checkpoints, in the victim's own context. Returns true if a handler was
-	// armed — in which case the syscall's return value has been saved and the
-	// caller must not clobber it.
+	// dispatcher's exit, in the victim's own context.
 	struct task;
-	bool signal_deliver_pending(struct task *t, void *thread, uint64_t retval);
+	signal_deliver_result_t signal_deliver_pending(struct task *t, void *thread, uint64_t retval);
 
 	// Is there a pending signal something will CATCH? The default-action
 	// checkpoints ask before they kill — a task that installed a handler must

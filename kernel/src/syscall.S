@@ -1,4 +1,5 @@
 #include "smp_offsets.h"
+#include "asm-offsets.h"
 
 .code64
 .section .text
@@ -66,7 +67,15 @@ syscall_Enter:
     # touches them. Cleared on the way out, below, so a checkpoint reached
     # from anywhere but a syscall cannot find a stale frame and deliver
     # against somebody else's return address.
-    mov gs:[CLS_SYSCALL_RETURN_FRAME_OFFSET], rsp
+    #
+    # ON THE THREAD, not in CLS (2026-08-24). The frame lives on this thread's
+    # kernel stack, and a blocking syscall PARKS with it live — a per-core slot
+    # would keep naming it while other threads run on this core, and a woken
+    # sleeper delivering on some OTHER core would read that core's leftover
+    # instead of its own. r12 is ours to reuse: its user value is already
+    # saved above and its current job (carrying user RSP) is done.
+    mov r12, gs:[CLS_CURRENTTHREAD_OFFSET]
+    mov [r12 + THREAD_SYSCALL_RETURN_FRAME_OFFSET], rsp
 
     # Marshal the syscall registers into the SysV C argument slots for
     #   uint64_t _syscall_dispatch(nr, a0, a1, a2, a3, a4, a5)
@@ -88,9 +97,13 @@ syscall_Enter:
     # documented as clobbered).
     # The frame is no longer live once we start consuming it — see the store
     # above for why a stale pointer would be dangerous rather than merely
-    # untidy. (r10 is caller-saved and already documented as clobbered.)
-    xor r10, r10
-    mov gs:[CLS_SYSCALL_RETURN_FRAME_OFFSET], r10
+    # untidy. gs:[currentThread] is re-read rather than kept from entry: if
+    # this syscall parked and resumed, the thread may be on a different CORE
+    # now, but gs always describes the core we are executing on and its
+    # currentThread is always us. (r10 is caller-saved and already documented
+    # as clobbered.)
+    mov r10, gs:[CLS_CURRENTTHREAD_OFFSET]
+    mov qword ptr [r10 + THREAD_SYSCALL_RETURN_FRAME_OFFSET], 0
 
     mov r11, [rsp]                              # user RFLAGS (SYSRET reloads from R11)
     mov rcx, [rsp + 8]                          # user RIP    (SYSRET reloads from RCX)

@@ -166,14 +166,31 @@ runs it, which is precisely the property a return path wants.
 ### 6. `sigreturn`
 
 A syscall a program never calls deliberately: it exists because the stub
-calls it. It takes the frame's address, validates that it lies within the
-calling thread's own stack, restores the saved registers, unblocks the signal
-that was being handled, and returns to the interrupted context.
+calls it. It takes the frame's address, validates it, restores the saved
+registers, unblocks the signal that was being handled, and returns to the
+interrupted context.
 
 **The validation is not optional.** `sigreturn` is a "restore arbitrary
-register state" primitive, and it is reached from ring 3. It restores only a
-frame it can prove is the one it wrote, and it never restores a privileged
-selector or flags field from user memory.
+register state" primitive, and it is reached from ring 3. The frame must
+carry the kernel's magic, and a handler for the frame's signal must actually
+be running on the calling thread — the check that makes the call useless to
+anyone who did not arrive the intended way.
+
+**RFLAGS is SANITIZED, never trusted** (amended 2026-08-24, review). The
+design as first written claimed "the frame we wrote" as a defence, and the
+claim does not survive contact with where the frame lives: the user's own
+writable stack, every word of it ring 3's to forge. `sysretq` loads RFLAGS
+from R11 nearly verbatim — IF and IOPL included — so a forged IF=0 parks a
+core beyond the timer's reach forever, and IOPL=3 hands ring 3 the I/O
+ports. The frame's rflags therefore keeps only the bits a user program owns
+(arithmetic flags, TF, DF, AC, ID) and the rest are forced: IF on, IOPL 0
+(`SIGNAL_RFLAGS_*`, signals.h). A stack-range check on the frame POINTER —
+which this section originally specified — is deliberately absent: it proves
+nothing, because the frame's contents are user-writable wherever it sits.
+The sanitization is the defence. §10's full-frame `sigreturn` inherits the
+same mask with higher stakes: its road home is `iretq`, which swallows
+RFLAGS whole and CS/SS besides — flags through this mask, selectors from
+kernel constants, never from the frame.
 
 ### 7. Masking, kept to the minimum that works
 
@@ -185,6 +202,18 @@ never did, which is the usual way one learns this exists. There is no
 `sigprocmask` in v1: DEBTS ratified "os64's answer to sigaction, without
 POSIX's restart/mask warts", and a general mask API is a separate slice with
 its own consumer.
+
+**A blocked signal is HELD, not fatal** (amended 2026-08-24, review). The
+same signal arriving again while its handler runs stays pending and delivers
+at the dispatcher exit right after `sigreturn` unblocks it. The checkpoints
+therefore count a masked-with-handler signal as *caught*
+(`signal_has_handler_for_pending`) — the first implementation skipped masked
+bits, answered "nothing will catch this", and the default action executed
+the program in the middle of the very handler it had installed. One accepted
+wart rides this: a handler that itself BLOCKS while its own signal is
+pending again gets `INTERRUPTED` from every blocking call until it returns —
+honest, rare, and strictly better than dying; the cure is a "deliverable
+now" vs. "held" split at the checkpoints, booked in DEBTS.
 
 os64 also skips the *unreliable-signal* era entirely, and should say so: V7's
 `signal(2)` reset the disposition to the default **before** running the
@@ -292,7 +321,10 @@ not write.
 |---|---|
 | A handler runs N times for one `SIGTERM` | Handler table left on the thread, or the delivery rule not clearing the bit task-wide |
 | A `SIGSEGV` handler faults and the machine spins | The signal not blocked during its own handler (§7) |
-| `sigreturn` resumes with impossible register state | The frame not validated as inside the caller's own stack (§6) |
+| `sigreturn` resumes with impossible register state | The RFLAGS mask (§6) not applied, or the running-handler check bypassed |
+| A DIFFERENT program dies or runs wild after a signal is delivered | The syscall return-frame pointer read from somewhere per-CORE. It is per-THREAD (thread.h) because a blocking syscall parks with its frame live — found in review 2026-08-24, one day after the field shipped in CLS, the same disease as the `cls->task` staleness this arc fixed |
+| A second Ctrl+C during a handler kills the program | A masked pending signal answered "nothing will catch this" at a kill checkpoint. Masked-with-handler counts as CAUGHT (`signal_has_handler_for_pending`) — the held bit delivers right after `sigreturn` unmasks |
+| Every blocking call returns INTERRUPTED forever, handler never runs | Delivery kept failing (unusable stack) with nobody applying the default. `SIGNAL_DELIVER_FAILED` exists so the dispatcher kills instead of shrugging |
 | A signal delivered to a thread that then exits | Deliver at the checkpoint, in the victim's own context — the same property `raise_terminating_signal_and_die` depends on |
 | Handler never runs on a spinning ring-3 program | The forced-syscall push in `scheduler.c` is its only boundary; delivery must ride that checkpoint like termination does |
 | An app "catches" `SIGKILL` | Registration must refuse it (§4) |

@@ -392,8 +392,18 @@ uint64_t _syscall_dispatch(
 	// Same rule as the entry checkpoint: the task comes from the THREAD.
 	// Delivering against cls->task would build a frame from one program's
 	// handler table onto another program's stack.
-	if (sig_thread != NULL && sig_task != NULL)
-		(void)signal_deliver_pending(sig_task, sig_thread, result);
+	if (sig_thread != NULL && sig_task != NULL &&
+	    signal_deliver_pending(sig_task, sig_thread, result) == SIGNAL_DELIVER_FAILED)
+	{
+		// A handled signal is pending and the frame could not be written —
+		// the stack is unusable (SIGNALS.md §9). The handler cannot run, so
+		// the DEFAULT ACTION does, here in the victim's own context, exactly
+		// as if no handler had been installed. The alternative — shrugging —
+		// leaves a signal that neither delivers nor kills, and a program
+		// livelocked on INTERRUPTED (see signal_deliver_result_t).
+		raise_terminating_signal_and_die(sig_task, sig_thread);
+		__builtin_unreachable();
+	}
 
 	return result;
 }
@@ -4107,8 +4117,12 @@ static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t ar
 {
 	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
 
+	// The task comes from the THREAD (the arc's rule, and this is a DECISION
+	// site — it writes a handler table; installing into cls->task during the
+	// old staleness window would have armed the wrong program).
 	core_local_storage_t *cls = get_core_local_storage();
-	task_t *task = cls ? cls->task : NULL;
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	task_t *task = thread ? (task_t *)thread->ownerTask : NULL;
 	if (task == NULL)
 		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_SIGNAL;
 
@@ -4140,31 +4154,45 @@ static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t ar
 // VALIDATED, never trusted:
 //
 //   - it must carry the kernel's magic (the cheap catch for an honest bug);
-//   - it must sit inside the calling thread's OWN stack region;
 //   - a handler for that signal must actually be running (sigmask), which is
 //     what stops a program calling sigreturn out of nowhere to install a
 //     register state of its choosing;
-//   - and nothing privileged is taken from it: no CS, no SS, no RFLAGS. The
-//     interrupted RFLAGS is restored from the frame, but the frame was
-//     written BY US from the value the CPU gave us on entry, and the range
-//     checks above are what make "the frame we wrote" a defensible claim.
+//   - and RFLAGS is SANITIZED, never trusted. "The frame was written by us"
+//     is not a defensible claim for any of its contents: the frame sits on
+//     the user's own writable stack, so every word in it is ring 3's to
+//     forge — and sysretq loads RFLAGS from R11 nearly verbatim, IF and
+//     IOPL included. A forged IF=0 would park a core beyond the timer's
+//     reach forever; IOPL=3 would hand ring 3 the I/O ports. So the frame's
+//     rflags keeps only the bits a user program owns and the rest are
+//     forced (SIGNAL_RFLAGS_* in signals.h, where §10's iretq-shaped
+//     sigreturn is told to inherit the same mask).
 //
-// RIP and RSP are not range-checked on purpose: a program is free to return
-// to any address in its own address space, and a bad one faults in ring 3 as
-// its own segfault. What must not happen is a bad one faulting the KERNEL,
-// and it cannot — the values only take effect through sysretq.
+// A stack-range check on the frame POINTER is deliberately absent: it would
+// prove nothing, because the frame's CONTENTS are user-writable wherever it
+// sits. The sanitization is the defence; the pointer's location is not.
+//
+// RIP and RSP are not range-checked on purpose either: a program is free to
+// return to any address in its own address space, and a bad one faults in
+// ring 3 as its own segfault. What must not happen is a bad one faulting the
+// KERNEL, and it cannot — the values only take effect through sysretq.
 static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
 	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
 
 	core_local_storage_t *cls = get_core_local_storage();
-	task_t   *task   = cls ? cls->task : NULL;
 	thread_t *thread = cls ? cls->currentThread : NULL;
+	// The task comes from the THREAD — the arc's own rule, applied to its
+	// own syscalls too. cls->task is coherent again since scheduler_load_thread
+	// pairs the stores, but a decision site should not have to know that.
+	task_t   *task   = thread ? (task_t *)thread->ownerTask : NULL;
 	if (task == NULL || thread == NULL)
 		return SYSCALL_RESULT_INVALID;
 
-	uint64_t *frame = (uint64_t *)cls->syscall_return_frame;
+	// The THREAD's own frame pointer (see thread.h): we are inside the
+	// sigreturn syscall right now, so this names sigreturn's own 40-byte
+	// return frame — the one sysretq will rebuild this thread from.
+	uint64_t *frame = (uint64_t *)thread->syscall_return_frame;
 	if (frame == NULL)
 		return SYSCALL_RESULT_INVALID;   // not on a syscall return path
 
@@ -4195,7 +4223,11 @@ static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// Put the interrupted context back where sysretq will find it, and hand
 	// the original syscall's answer back in RAX — which is this syscall's
 	// return value, because RAX is exactly what a syscall returns in.
-	frame[0] = saved.rflags;
+	// RFLAGS goes through the mask (see the block comment above and
+	// SIGNAL_RFLAGS_* in signals.h): user bits kept, IF forced on, IOPL
+	// forced to 0 — sysretq would otherwise hand ring 3 whatever the frame
+	// claims, and the frame is the user's to claim things in.
+	frame[0] = (saved.rflags & SIGNAL_RFLAGS_USER_BITS) | SIGNAL_RFLAGS_FORCED;
 	frame[1] = saved.rip;
 	frame[2] = saved.rsp;
 

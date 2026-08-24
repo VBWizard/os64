@@ -195,13 +195,23 @@ bool handle_close(struct task *t, int h)
 	// nature — it needs two threads inside the same slot — which is why it
 	// took a busy machine to show up and did not reproduce on demand.
 	//
-	// Taking the type and object out and blanking the slot FIRST closes the
-	// window: the losing racer now sees HANDLE_NONE, does nothing, and the
-	// object is released exactly once. (handle_get's own NULL check makes a
-	// closed slot safe to re-close; this makes a CLOSING slot safe too.)
-	handle_type_t type = handle->type;
+	// Taking the type out and blanking the slot FIRST closes the window: the
+	// losing racer now sees HANDLE_NONE, does nothing, and the object is
+	// released exactly once. (handle_get's own NULL check makes a closed slot
+	// safe to re-close; this makes a CLOSING slot safe too.)
+	//
+	// The claim is an ATOMIC EXCHANGE, not a read-then-store (tightened
+	// 2026-08-24): plain read-then-blank still let two closers both read a
+	// live type in the few instructions before either store landed — the same
+	// race, wearing a narrower window that a busy machine would eventually
+	// thread. xchg makes exactly one closer win by construction. The TYPE is
+	// the claim token rather than the object, because a console handle's
+	// object is legitimately NULL — a NULL exchanged there couldn't tell a
+	// lost race from a handle that never had an object at all.
+	handle_type_t type = __atomic_exchange_n(&handle->type, HANDLE_NONE, __ATOMIC_ACQ_REL);
+	if (type == HANDLE_NONE)
+		return false;   // another closer claimed this slot first
 	void *object = handle->object;
-	task->handles[h].type = HANDLE_NONE;
 	task->handles[h].object = NULL;
 
 	// Dropping the task's reference on the object. For a pipe this is THE
