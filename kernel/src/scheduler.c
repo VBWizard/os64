@@ -1154,27 +1154,45 @@ void scheduler_trigger(core_local_storage_t *cls)
 // scheduler_trigger's genuine self-IPI gives every scheduler entry — timer or
 // manual — identical interrupt semantics.
 
-// Terminate push delivery, v1 — Chris's os32 forced-syscall trick ("I *forced*
-// the task to make a syscall") wearing a 64-bit seatbelt. If the thread this
-// core is about to resume has a TERMINATING signal pending (Ctrl+C, or a write
-// to its /proc ctl file), no handler installed, and was
-// interrupted IN RING 3 (holding no kernel locks — the seatbelt), point its
-// resume RIP at the task's exit trampoline (TASK_EXIT_TRAMPOLINE_VIRT, mapped
-// read-only into every ring-3 task). The victim resumes, immediately executes
-// `syscall`, and the dispatcher's SIGINT check does the honors — full
-// task_exit in the victim's own context, handles closed safely, retVal 130.
-// This closes the one gap in the pull design: a syscall-free spin loop.
-// Threads interrupted mid-syscall (CS ring 0) are left alone — they die at
-// the syscall boundary instead (console/pipe sentinels + dispatcher check).
-// When userland signal delivery lands, the sighandler check below grows the
-// second branch exactly as os32 had it: handler installed -> redirect to the
-// handler instead of the gallows.
-static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
+// The scheduler's SIGNAL VISIT — delivery for the syscall-free (SIGNALS.md
+// §10), and the gallows for the uncaught. Called `scheduler_sigint_forced_syscall`
+// until 2026-08-24, when the "future: deliver, don't kill" branch it had
+// carried since birth finally grew its body.
+//
+// TWO QUESTIONS, IN ORDER, both behind the same seatbelt (interrupted IN
+// RING 3, holding no kernel locks — threads caught mid-syscall are left
+// alone; the pull path at the dispatcher owns them):
+//
+// 1. WILL SOMETHING CATCH A PENDING SIGNAL? Then deliver it right here:
+//    `thread->regs` already holds the complete interrupted context the ISR
+//    saved, so signal_deliver_to_regs builds the full frame from it and
+//    points regs.RIP at the stub, regs.RSP at the frame (§10 — the reason
+//    this is EASIER from the scheduler than from a syscall, not harder).
+//    Every thread reaches this visit — the BSP ticks at 100Hz, a tickless
+//    AP's backstop lease arms per non-idle dispatch — which is the whole
+//    §10 argument: the visit is the one guaranteed appointment a spin loop
+//    keeps.
+//
+// 2. OTHERWISE, IS A TERMINATE PENDING THAT NOTHING WILL EVER CATCH? The
+//    gallows, unchanged from v1 — Chris's os32 forced-syscall trick ("I
+//    *forced* the task to make a syscall") wearing a 64-bit seatbelt: point
+//    the resume RIP at the exit trampoline (read-only in every ring-3
+//    task); the victim resumes, immediately executes `syscall`, and the
+//    dispatcher does the honors — full task_exit in the victim's own
+//    context, handles closed safely, retVal 130/137/etc.
+//
+// A FAILED delivery of a terminating signal (unusable stack — the frame
+// could not be written) falls THROUGH to the gallows on purpose: death must
+// not depend on the victim's stack, which is also why the gallows itself
+// never grew a frame. SIGKILL never reaches question 1 at all
+// (signal_pick_deliverable refuses to arm anything in front of it), so the
+// last resort cannot be postponed by a handler that never returns.
+static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 {
 	task_t *task = (task_t *)thread->ownerTask;
 
-	if (!(sigset_any(thread->signals.sigind, SIGNALS_TERMINATING)))
-		return;
+	if (thread->signals.sigind.bits == 0)
+		return;                          // the common case, first and cheapest
 	// `exiting` too (2026-08-09): a thread already inside task_exit_finish has
 	// not set `exited` yet — that is now published only at the very end — so
 	// testing `exited` alone would redirect a dying thread down the exit
@@ -1183,23 +1201,37 @@ static void scheduler_sigint_forced_syscall(thread_t *thread, uint64_t apic_id)
 		return;
 	if (task == NULL || task->kernelTask)
 		return;
-	// A SIGKILL is uncatchable by definition: an installed handler only earns
-	// a reprieve from the catchable half. This is the one place the two
-	// terminating signals genuinely differ today, and encoding it now means
-	// userland signal delivery inherits the right semantics instead of
-	// retrofitting them.
-	// The handler table is the TASK's now, not the thread's (2026-08-23,
-	// SIGNALS.md §2): the aim is already a broadcast, so per-thread handlers
-	// would run one signal once per thread. `task` is non-NULL above.
-	if (!(sigset_has(thread->signals.sigind, SIGKILL)) &&
-	    task->sighandler[SIGINT] != NULL)
-		return;                          // future: deliver, don't kill
 	if ((thread->regs.CS & 3) != 3)
 		return;                          // mid-syscall: the pull path owns it
 
-	// Patch BOTH images of the frame: regs (authoritative store) and the
-	// per-core isr array (what the ISR exit path actually IRETs from when the
-	// same thread continues without a reload). Idempotent on repeat passes.
+	// Question 1: deliver. ARMED means regs.RIP/RSP now aim at the stub and
+	// its frame — mirror BOTH images (regs is the authoritative store; the
+	// per-core isr array is what the ISR exit path actually IRETs from when
+	// the same thread continues without a reload). The forced push has
+	// always patched both for the same reason; RSP joins RIP because
+	// delivery is the first redirect that moves the stack too.
+	signal_deliver_result_t dr = signal_deliver_to_regs(task, thread);
+	if (dr == SIGNAL_DELIVER_ARMED)
+	{
+		mp_isrSavedRIP[apic_id] = thread->regs.RIP;
+		mp_isrSavedRSP[apic_id] = thread->regs.RSP;
+		return;
+	}
+
+	// Question 2: the gallows.
+	if (!(sigset_any(thread->signals.sigind, SIGNALS_TERMINATING)))
+		return;
+	// A handler that is installed (or masked-and-held) earns a reprieve —
+	// signal_has_handler_for_pending answers "no" when SIGKILL is pending,
+	// so the uncatchable one never waits. UNLESS delivery just provably
+	// failed: an unusable stack means the handler cannot run, so the
+	// default action must (FAILED is only ever reported for terminating
+	// signals — the non-terminating undeliverables were dropped inside).
+	if (dr != SIGNAL_DELIVER_FAILED &&
+	    signal_has_handler_for_pending(task, thread))
+		return;
+
+	// Patch BOTH images of the frame. Idempotent on repeat passes.
 	thread->regs.RIP = TASK_EXIT_TRAMPOLINE_VIRT;
 	mp_isrSavedRIP[apic_id] = TASK_EXIT_TRAMPOLINE_VIRT;
 
@@ -1255,9 +1287,11 @@ void scheduler_run_new_thread()
         printd(DEBUG_SCHEDULER,"*No new thread to run, continuing with the current task\n");
 		debug_print_registers(apic_id, "continue2");
         // Continue path resumes from the isr arrays WITHOUT a reload, so the
-        // forced-syscall check must run here too (regs were just stored above,
-        // so regs.CS is fresh for the ring-3 seatbelt).
-        scheduler_sigint_forced_syscall(threadToStop, apic_id);
+        // signal visit must run here too (regs were just stored above, so
+        // regs.CS is fresh for the ring-3 seatbelt — and a delivery's
+        // RIP/RSP redirect gets mirrored into the isr arrays, which are
+        // what this path actually IRETs from).
+        scheduler_signal_visit(threadToStop, apic_id);
         if (threadToStop->execDontSaveRegisters)
         {
             printd(DEBUG_SCHEDULER,"Thread to keep running was just exec'd, loading registers from tss\n");
@@ -1274,7 +1308,7 @@ void scheduler_run_new_thread()
         scheduler_load_thread(cls, threadToRun);
         // The switch path: load just synced regs -> isr arrays, so the
         // redirect (if owed) patches both images consistently.
-        scheduler_sigint_forced_syscall(threadToRun, apic_id);
+        scheduler_signal_visit(threadToRun, apic_id);
 		task_t *pTask = (task_t*)threadToRun->ownerTask;
         // exename is a bare basename ("idle0", "idle1", ...) — no leading slash.
         if (strncmp(pTask->exename, "idle", 4) != 0)

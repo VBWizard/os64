@@ -169,10 +169,12 @@ void task_signal_and_nudge(task_t* task, signals signal)
 // TWO mechanisms, because marking alone is not enough:
 //
 //  1. THE MARK. SIGKILL, not SIGINT — a dying task is not a request. The
-//     scheduler's forced-syscall redirect (scheduler_sigint_forced_syscall)
-//     sees a terminating bit and rewrites the thread's RIP to the exit
-//     trampoline, so even a thread in a loop with no syscalls at all walks
-//     into its own exit. No cooperation required.
+//     scheduler's signal visit (scheduler_signal_visit, the forced-syscall
+//     redirect of old) sees a terminating bit and rewrites the thread's RIP
+//     to the exit trampoline, so even a thread in a loop with no syscalls at
+//     all walks into its own exit. No cooperation required — and SIGKILL is
+//     never deferred behind a handler (signal_pick_deliverable refuses to
+//     arm anything in front of it).
 //
 //  2. THE NUDGE, and this is the part that only matters on the boots we
 //     actually run. That redirect fires WHEN THE SCHEDULER RUNS ON THAT

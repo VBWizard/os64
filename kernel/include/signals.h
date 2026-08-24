@@ -231,6 +231,48 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// cheapest.
 	#define SIGNAL_FRAME_MAGIC 0x5349475246524D45ULL   /* "SIGRFRME" */
 
+	// ── THE FULL FRAME (SIGNALS.md §10) — scheduler delivery to a spinner ───
+	//
+	// A thread interrupted at an ARBITRARY ring-3 instruction (a spin loop the
+	// timer caught, not a syscall return) has every register live, so the
+	// frame carries the whole file. It BEGINS with signal_frame_t byte-for-
+	// byte — magic, rax, rip, rsp, rflags, signo at +40, handler at +48 — so
+	// the ONE stub in task_exit_asm.S serves both delivery paths unchanged.
+	//
+	// A SECOND MAGIC, not a flag field, tells sigreturn which restore it is
+	// being asked for: a flag inside user-writable memory would be ring 3's
+	// to flip, upgrading a 4-value restore into a full-file restore. Two
+	// magics mean forging one buys only that frame kind's own validation.
+	//
+	// NO FXSAVE AREA, BY CONSTRUCTION: userland is built -mno-mmx -mno-sse
+	// -mno-sse2 (userland/GNUmakefile), so there is no vector state to be
+	// live at the interruption point. If those flags ever change, this frame
+	// grows a 512-byte fxsave area or float code corrupts across delivery.
+	//
+	// Segment selectors are deliberately NOT in the frame: sigreturn restores
+	// them from GDT constants. A selector a program can write is a selector a
+	// program can forge, and there is exactly one correct answer anyway.
+	typedef struct signal_frame_full
+	{
+		signal_frame_t base;    // +0..+63, the §5 frame, same stub offsets
+		uint64_t rbx;           // +64
+		uint64_t rcx;           // +72
+		uint64_t rdx;           // +80
+		uint64_t rsi;           // +88
+		uint64_t rdi;           // +96
+		uint64_t rbp;           // +104
+		uint64_t r8;            // +112
+		uint64_t r9;            // +120
+		uint64_t r10;           // +128
+		uint64_t r11;           // +136
+		uint64_t r12;           // +144
+		uint64_t r13;           // +152
+		uint64_t r14;           // +160
+		uint64_t r15;           // +168
+	} signal_frame_full_t;      // 176 bytes — keeps RSP 16-aligned
+
+	#define SIGNAL_FRAME_MAGIC_FULL 0x5349475246524D32ULL   /* "SIGRFRM2" */
+
 	// What sigreturn lets a frame say about RFLAGS. The frame sits on the
 	// USER'S OWN WRITABLE STACK, so its rflags word is ring 3's to forge no
 	// matter who wrote it first — and sysretq loads RFLAGS from R11 nearly
@@ -269,6 +311,17 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// dispatcher's exit, in the victim's own context.
 	struct task;
 	signal_deliver_result_t signal_deliver_pending(struct task *t, void *thread, uint64_t retval);
+
+	// The §10 sibling: deliver by rewriting thread->regs — for a thread the
+	// SCHEDULER caught spinning in ring 3, where regs already hold the full
+	// interrupted context. Builds a signal_frame_full_t on the user stack,
+	// points regs.RIP at the stub and regs.RSP at the frame. The CALLER
+	// (scheduler_signal_visit) mirrors RIP/RSP into the per-core isr arrays —
+	// both images, the forced push's own discipline. On FAILED nothing was
+	// changed and the pending bit is untouched: a terminating signal falls
+	// through to the gallows, which is exactly the design (death must not
+	// depend on the victim's stack).
+	signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thread);
 
 	// Is there a pending signal something will CATCH? The default-action
 	// checkpoints ask before they kill — a task that installed a handler must

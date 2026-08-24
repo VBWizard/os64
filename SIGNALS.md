@@ -315,6 +315,58 @@ it is proven); and whether one frame type with a flag beats two, given that
 `sigreturn` must never be talked into restoring a register set the kernel did
 not write.
 
+### §10 as built (2026-08-24) — every open question answered before the code
+
+**The full frame is PREFIX-COMPATIBLE with the §5 frame, and that is what
+makes the stub free.** `signal_frame_full_t` begins with `signal_frame_t`
+byte-for-byte (magic, rax, rip, rsp, rflags, signo, handler, pad) and hangs
+the fourteen remaining GPRs off the end. The stub reads signo at +40 and the
+handler at +48 exactly as before, so ONE stub serves both delivery paths and
+task_exit_asm.S does not change at all. The discriminator is a SECOND MAGIC
+("SIGRFRM2"), not a flag field — a flag inside user-writable memory is the
+attacker's to flip, and flipping it would upgrade a 4-value restore into a
+full-file restore. Two magics mean forging the wrong one buys the validation
+of the frame you forged, never the other one's.
+
+**No FXSAVE area, and the reason is the build system.** Userland is compiled
+`-mno-mmx -mno-sse -mno-sse2` (userland/GNUmakefile CFLAGS), so an
+arbitrary interruption point has NO live vector state to preserve — the
+question that forced Linux's interrupt-delivered frame to carry an fpstate
+simply does not arise. THE FRAME'S COMPLETENESS IS PREDICATED ON THOSE
+FLAGS: the day userland grows SSE, this frame grows a 512-byte FXSAVE area
+or float code corrupts across delivery, quietly, weekly.
+
+**Delivery lives where the forced push lives**, in
+`scheduler_signal_visit` (né `scheduler_sigint_forced_syscall`), called at
+both dispatch sites — the continue path and the switch path — behind the
+same `(regs.CS & 3) == 3` seatbelt: interrupted in ring 3, holding no
+kernel locks. The visit now asks two questions in order: *will something
+catch a pending signal?* → build the full frame from `thread->regs`
+(through the HHDM, per §5), point regs.RIP at the stub and regs.RSP at the
+frame, mirror both into the per-core isr arrays (both images, exactly as
+the forced push always did — RIP and RSP are the only registers delivery
+changes, because the stub takes everything else from the frame); *otherwise,
+is a terminate pending?* → the gallows, unchanged. A FAILED frame write on
+a terminating signal falls through to the gallows (death must not depend on
+the victim's stack — the same reason the push survives at all); on a
+non-terminating one the signal is dropped with a log line.
+
+**`sigreturn`'s full path never returns, and that is the resume mechanism.**
+It validates (magic2, signo, the running-handler check), sanitizes RFLAGS
+through the §6 mask, writes the full register file into `thread->regs` —
+selectors from GDT constants, NEVER from the frame — sets
+`execDontSaveRegisters` (exec's own crafted-regs seam: the next store pass
+skips saving, so the crafted context survives), and parks through the
+ordinary SIGSLEEP machinery with a wake tick of NOW. The kernel
+continuation is abandoned mid-syscall — its stack is forgotten, exactly as
+exec forgets one — the sleep sweep wakes the thread immediately, and the
+next dispatch loads the crafted regs through `scheduler_load_thread` and
+resumes the interrupted spin by `iretq`, the road every preempted thread
+already takes. Not returning is load-bearing twice over: there is no
+sysretq that could restore fifteen registers, and a returning sigreturn
+would run the dispatcher-exit delivery hook against a continuation the
+scheduler is about to discard.
+
 ## Failure modes to design against
 
 | Symptom | Cause to look for |
@@ -388,12 +440,14 @@ the next.
    signal forever and never reach delivery. The nap is not resumed and the
    remaining time is not slept; a caller who wanted the whole nap loops.
 
-   NOT YET, and named rather than implied: a program that never makes a
-   syscall gets no delivery. `scheduler.c`'s forced-syscall push already
-   solves that shape for termination and is the obvious home for it — until
-   then a spinning program with a handler installed is reachable only by
-   SIGKILL — and that one is genuinely a different mechanism, not more of the
-   same. Its design is §10 below, ruled the same night.
+   ~~NOT YET, and named rather than implied: a program that never makes a
+   syscall gets no delivery.~~ **PAID 2026-08-24 — §10 is BUILT** (see "§10
+   as built" below): the scheduler's visit delivers the full-register frame
+   to a thread caught spinning in ring 3, the same stub serves it, and
+   `sigreturn`'s full path resumes the spin through `thread->regs` and
+   `iretq`. `/bin/sigspin` is the demo — a loop with no syscalls in it that
+   catches your Ctrl+C anyway. The forced push survives as the gallows for
+   the uncaught, exactly as designed.
 
    **EVERY OTHER BLOCKING CALL REPORTS `OS64_INTERRUPTED` NOW** (§8, done
    2026-08-23): `console_read`, both pipe ends, the TCP/ICMP/UDP readers and

@@ -28,6 +28,7 @@
 #include "driver/filesystem/dev/devfs.h"   // devfs_handle_alias — the /dev/tty door
 #include "pipe.h"
 #include "signals.h"
+#include "gdt.h"     // GDT_USER_* — sigreturn's full path rebuilds ring-3 selectors from constants
 #include "os64/signal.h"   // OS64_SIG_ERR_* — the errors ring 3 is told
 #include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
 #include "shutdown.h"   // shutdown_system — SYSCALL_SHUTDOWN's engine
@@ -4200,7 +4201,7 @@ static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_user_buffer((const void *)arg0, &saved, sizeof(saved)))
 		return SYSCALL_RESULT_BAD_USER_DATA;
 
-	if (saved.magic != SIGNAL_FRAME_MAGIC)
+	if (saved.magic != SIGNAL_FRAME_MAGIC && saved.magic != SIGNAL_FRAME_MAGIC_FULL)
 	{
 		printd(DEBUG_SIGNALS, "sigreturn: %s handed a frame with no magic — refused\n",
 		       task->exename);
@@ -4215,6 +4216,81 @@ static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		printd(DEBUG_SIGNALS, "sigreturn: %s is not inside a handler for signal %lu — refused\n",
 		       task->exename, saved.signo);
 		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	// ── The FULL frame (§10): the handler interrupted a SPIN, not a syscall ─
+	//
+	// The scheduler delivered this one (signal_deliver_to_regs), so the
+	// interrupted context is an arbitrary instruction with every register
+	// live, and the road home is the one a preempted thread always takes:
+	// thread->regs, loaded by scheduler_load_thread, resumed by iretq. A
+	// sysretq return is structurally impossible here — it cannot restore
+	// fifteen registers — so THIS CALL NEVER RETURNS: it writes the file
+	// into regs, marks them crafted (exec's own seam), and parks. The
+	// kernel continuation below this frame is abandoned exactly as exec
+	// abandons one.
+	if (saved.magic == SIGNAL_FRAME_MAGIC_FULL)
+	{
+		signal_frame_full_t full;
+		if (!copy_user_buffer((const void *)arg0, &full, sizeof(full)))
+			return SYSCALL_RESULT_BAD_USER_DATA;
+
+		// Unblock the signal now that its handler has finished (§7).
+		sigset_del(&thread->signals.sigmask, (signals)saved.signo);
+
+		// The register file, wholesale — through the same RFLAGS mask as the
+		// short path (the frame is the user's to forge; see the block
+		// comment above), and with the selectors from GDT CONSTANTS, never
+		// from the frame: this context resumes by iretq, which swallows
+		// CS/SS whole, and there is exactly one correct answer for a ring-3
+		// thread anyway.
+		thread->regs.RAX    = full.base.rax;
+		thread->regs.RBX    = full.rbx;
+		thread->regs.RCX    = full.rcx;
+		thread->regs.RDX    = full.rdx;
+		thread->regs.RSI    = full.rsi;
+		thread->regs.RDI    = full.rdi;
+		thread->regs.RBP    = full.rbp;
+		thread->regs.R8     = full.r8;
+		thread->regs.R9     = full.r9;
+		thread->regs.R10    = full.r10;
+		thread->regs.R11    = full.r11;
+		thread->regs.R12    = full.r12;
+		thread->regs.R13    = full.r13;
+		thread->regs.R14    = full.r14;
+		thread->regs.R15    = full.r15;
+		thread->regs.RIP    = full.base.rip;
+		thread->regs.RSP    = full.base.rsp;
+		thread->regs.RFLAGS = (full.base.rflags & SIGNAL_RFLAGS_USER_BITS) | SIGNAL_RFLAGS_FORCED;
+		thread->regs.CS     = GDT_USER_CODE_ENTRY << 3 | 3;
+		thread->regs.SS     = GDT_USER_DATA_ENTRY << 3 | 3;
+		thread->regs.DS     = GDT_USER_DATA_ENTRY << 3 | 3;
+		thread->regs.ES     = GDT_USER_DATA_ENTRY << 3 | 3;
+		thread->regs.FS     = GDT_USER_DATA_ENTRY << 3 | 3;
+		thread->regs.GS     = GDT_USER_DATA_ENTRY << 3 | 3;
+
+		// This syscall's return frame dies with the abandoned continuation —
+		// clear the pointer so nothing can ever trust it (syscall.S's own
+		// exit clear will never run for us).
+		thread->syscall_return_frame = 0;
+
+		printd(DEBUG_SIGNALS, "sigreturn: %s resumes its spin at %p after signal %lu\n",
+		       task->exename, (void *)full.base.rip, saved.signo);
+
+		// Crafted regs must SURVIVE the next store pass — exec's seam: the
+		// scheduler skips one save when this is set (see scheduler.c).
+		thread->execDontSaveRegisters = true;
+
+		// Park through the ordinary SIGSLEEP machinery with a wake tick of
+		// NOW: the next pass takes us off the CPU (store skipped, regs
+		// intact), the sleep sweep wakes us the same pass or the next, and
+		// the dispatch after that loads the crafted context and iretqs into
+		// the stub's caller — the interrupted spin. The loop is sleep's own
+		// shape; it never logically exits, because the continuation standing
+		// here is never resumed.
+		for (;;)
+			signal_raise(SIGSLEEP, kTicksSinceStart, thread);
+		__builtin_unreachable();
 	}
 
 	// Unblock the signal now that its handler has finished (SIGNALS.md §7).

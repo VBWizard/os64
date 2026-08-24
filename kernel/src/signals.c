@@ -128,6 +128,16 @@ bool signal_has_handler_for_pending(struct task *t, void *thrd)
 	if (task == NULL || thread == NULL)
 		return false;
 
+	// A pending SIGKILL poisons the whole answer: NOTHING is "caught" while
+	// the last resort is aboard. Without this, a handler for some sibling
+	// signal (installed, or masked-and-held) would answer "yes, caught" and
+	// the kill checkpoints would defer — a SIGKILL a handler chain can
+	// postpone is not a last resort. The same rule lives in
+	// signal_pick_deliverable so neither delivery path arms a handler in
+	// front of a kill.
+	if (sigset_has(thread->signals.sigind, SIGKILL))
+		return false;
+
 	for (int sig = 1; sig < SIGNAL_COUNT; sig++)
 	{
 		if (!sigset_has(thread->signals.sigind, (signals)sig))
@@ -164,6 +174,58 @@ bool signal_has_handler_for_pending(struct task *t, void *thrd)
 _Static_assert(offsetof(signal_frame_t, signo)   == 40, "the sigreturn stub reads signo at +40");
 _Static_assert(offsetof(signal_frame_t, handler) == 48, "the sigreturn stub reads handler at +48");
 _Static_assert(sizeof(signal_frame_t) % 16 == 0,        "the signal frame must keep RSP 16-aligned");
+// The full frame (§10) leans on the same stub, so its base must BE the §5
+// frame — first field, offset zero, no padding in front.
+_Static_assert(offsetof(signal_frame_full_t, base) == 0,  "the full frame must start with the §5 frame");
+_Static_assert(offsetof(signal_frame_full_t, rbx) == 64,  "the full frame's extension must start at +64");
+_Static_assert(sizeof(signal_frame_full_t) % 16 == 0,     "the full frame must keep RSP 16-aligned");
+
+// Which pending signal, if any, would a handler run for RIGHT NOW? One
+// policy, shared by both delivery paths (§5's dispatcher exit and §10's
+// scheduler visit) so they can never disagree about who is next: lowest
+// number first — a stable order beats an arbitrary one, and "lowest first"
+// puts SIGHUP ahead of SIGTERM, which is the order the world tends to send
+// them in anyway. Masked signals are HELD (they deliver after sigreturn
+// unmasks), SIGKILL never answers, no-handler bits are the default action's
+// business. Returns 0 when nothing is deliverable.
+//
+// AND NOTHING DELIVERS IN FRONT OF A SIGKILL: a pending kill answers 0
+// unconditionally, because arming a handler first would let a handler that
+// never returns postpone the one signal that must always work. (Its twin
+// lives in signal_has_handler_for_pending, which answers "no" for the same
+// reason — the two halves keep the kill checkpoints and the delivery paths
+// telling one story.)
+static int signal_pick_deliverable(task_t *task, thread_t *thread)
+{
+	if (sigset_has(thread->signals.sigind, SIGKILL))
+		return 0;
+
+	for (int sig = 1; sig < SIGNAL_COUNT; sig++)
+	{
+		if (!sigset_has(thread->signals.sigind, (signals)sig))
+			continue;
+		if (!signal_is_catchable((signals)sig))
+			continue;                       // SIGKILL: the default is the only action
+		if (task->sighandler[sig] == NULL)
+			continue;                       // no handler: the default action stands
+		if (sigset_has(thread->signals.sigmask, (signals)sig))
+			continue;                       // already inside this signal's own handler
+		return sig;
+	}
+	return 0;
+}
+
+// The bookkeeping both delivery paths share, done ONCE per delivery:
+// consume the bit task-wide (the aim is a broadcast — leaving it on the
+// siblings would run one SIGTERM once per thread, the exact outcome the
+// per-task handler table exists to prevent, §2/§3) and block the signal for
+// the duration of its own handler (§7; sigreturn lifts it).
+static void signal_mark_delivered(task_t *task, thread_t *thread, int sig)
+{
+	for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+		sigset_del(&th->signals.sigind, (signals)sig);
+	sigset_add(&thread->signals.sigmask, (signals)sig);
+}
 
 signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint64_t retval)
 {
@@ -184,81 +246,164 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 	if (frame == NULL)
 		return SIGNAL_DELIVER_NONE;
 
-	// One handled signal, lowest number first — a stable order beats an
-	// arbitrary one, and "lowest first" puts SIGHUP ahead of SIGTERM, which
-	// is the order the world tends to send them in anyway.
-	for (int sig = 1; sig < SIGNAL_COUNT; sig++)
+	// One handled signal per visit, chosen by the shared policy (see
+	// signal_pick_deliverable — §5 and §10 must never disagree about who is
+	// next). The rest of a multi-signal backlog delivers one syscall at a
+	// time, each sigreturn's own dispatcher exit arming the next.
+	int sig = signal_pick_deliverable(task, thread);
+	if (sig == 0)
+		return SIGNAL_DELIVER_NONE;
+
+	uint64_t user_rsp = frame[2];       // [16] in syscall.S's frame
+	uint64_t user_rip = frame[1];       // [8]
+	uint64_t user_rfl = frame[0];       // [0]
+
+	// Below the RED ZONE — SysV reserves 128 bytes under RSP that a leaf
+	// function may be using right now — then down for the frame, then
+	// 16-aligned, because the stub CALLs the handler from here.
+	uint64_t frame_va = (user_rsp - 128 - sizeof(signal_frame_t)) & ~(uint64_t)0xF;
+
+	// Write it out field by field through the HHDM. If ANY write fails the
+	// stack is unusable — which is the SIGSEGV-on-a-bad-stack case named in
+	// SIGNALS.md §9 — and we deliver nothing, leaving the default action to
+	// kill the thread exactly as it does today. An alternate signal stack
+	// is the cure, and it is a later slice.
+	bool ok = true;
+	ok &= signal_write_user(task, frame_va + 0,  SIGNAL_FRAME_MAGIC);
+	ok &= signal_write_user(task, frame_va + 8,  retval);
+	ok &= signal_write_user(task, frame_va + 16, user_rip);
+	ok &= signal_write_user(task, frame_va + 24, user_rsp);
+	ok &= signal_write_user(task, frame_va + 32, user_rfl);
+	ok &= signal_write_user(task, frame_va + 40, (uint64_t)sig);
+	ok &= signal_write_user(task, frame_va + 48, (uint64_t)task->sighandler[sig]);
+	if (!ok)
 	{
-		if (!sigset_has(thread->signals.sigind, (signals)sig))
-			continue;
-		if (!signal_is_catchable((signals)sig))
-			continue;                       // SIGKILL: the default is the only action
-		if (task->sighandler[sig] == NULL)
-			continue;                       // no handler: the default action stands
-		if (sigset_has(thread->signals.sigmask, (signals)sig))
-			continue;                       // already inside this signal's own handler
-
-		uint64_t user_rsp = frame[2];       // [16] in syscall.S's frame
-		uint64_t user_rip = frame[1];       // [8]
-		uint64_t user_rfl = frame[0];       // [0]
-
-		// Below the RED ZONE — SysV reserves 128 bytes under RSP that a leaf
-		// function may be using right now — then down for the frame, then
-		// 16-aligned, because the stub CALLs the handler from here.
-		uint64_t frame_va = (user_rsp - 128 - sizeof(signal_frame_t)) & ~(uint64_t)0xF;
-
-		// Write it out field by field through the HHDM. If ANY write fails the
-		// stack is unusable — which is the SIGSEGV-on-a-bad-stack case named in
-		// SIGNALS.md §9 — and we deliver nothing, leaving the default action to
-		// kill the thread exactly as it does today. An alternate signal stack
-		// is the cure, and it is a later slice.
-		bool ok = true;
-		ok &= signal_write_user(task, frame_va + 0,  SIGNAL_FRAME_MAGIC);
-		ok &= signal_write_user(task, frame_va + 8,  retval);
-		ok &= signal_write_user(task, frame_va + 16, user_rip);
-		ok &= signal_write_user(task, frame_va + 24, user_rsp);
-		ok &= signal_write_user(task, frame_va + 32, user_rfl);
-		ok &= signal_write_user(task, frame_va + 40, (uint64_t)sig);
-		ok &= signal_write_user(task, frame_va + 48, (uint64_t)task->sighandler[sig]);
-		if (!ok)
-		{
-			// The stack is unusable — the SIGSEGV-on-a-bad-stack case named
-			// in SIGNALS.md §9. Report FAILED so the dispatcher applies the
-			// DEFAULT ACTION: returning "nothing happened" here would leave
-			// the bit pending with a handler installed, and every checkpoint
-			// would then answer "it will be caught" forever — a signal that
-			// neither delivers nor kills, and a program that livelocks on
-			// INTERRUPTED until someone reaches for SIGKILL. An alternate
-			// signal stack is the cure for the delivery itself, and it is a
-			// later slice.
-			printd(DEBUG_SIGNALS,
-			       "signal_deliver: %s has no usable stack for signal %d — default action stands\n",
-			       task->exename, sig);
+		// The stack is unusable — the SIGSEGV-on-a-bad-stack case named
+		// in SIGNALS.md §9. A TERMINATING signal reports FAILED so the
+		// dispatcher applies the DEFAULT ACTION: returning "nothing
+		// happened" would leave the bit pending with a handler installed,
+		// and every checkpoint would then answer "it will be caught"
+		// forever — a signal that neither delivers nor kills, a livelock
+		// only SIGKILL ends. A NON-terminating one is DROPPED (cleared,
+		// with a log line): its default is not death, and leaving it
+		// pending buys the same livelock with nothing to end it. An
+		// alternate signal stack is the cure for the delivery itself, and
+		// it is a later slice.
+		printd(DEBUG_SIGNALS,
+		       "signal_deliver: %s has no usable stack for signal %d — default action stands\n",
+		       task->exename, sig);
+		if (SIG_BIT(sig) & SIGNALS_TERMINATING)
 			return SIGNAL_DELIVER_FAILED;
-		}
-
-		// CONSUMED ONCE, TASK-WIDE. The aim is a broadcast
-		// (task_signal_all_threads), so leaving the bit set on the siblings
-		// would run one SIGTERM once per thread — the exact outcome the
-		// per-task handler table exists to prevent (SIGNALS.md §2/§3).
 		for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
 			sigset_del(&th->signals.sigind, (signals)sig);
-
-		// Blocked for the duration of its own handler: a SIGSEGV handler that
-		// faults must not re-enter itself forever (§7). sigreturn lifts it.
-		sigset_add(&thread->signals.sigmask, (signals)sig);
-
-		// Redirect the return: into the stub, standing on the frame we just
-		// built. The stub loads the handler out of the frame and calls it.
-		frame[1] = TASK_SIGRETURN_VIRT;
-		frame[2] = frame_va;
-
-		printd(DEBUG_SIGNALS, "signal_deliver: %s runs handler %p for signal %d (resumes %p)\n",
-		       task->exename, task->sighandler[sig], sig, (void *)user_rip);
-		return SIGNAL_DELIVER_ARMED;
+		return SIGNAL_DELIVER_NONE;
 	}
 
-	return SIGNAL_DELIVER_NONE;
+	// Consume task-wide + block for the handler's duration — the shared
+	// bookkeeping (see signal_mark_delivered for the §2/§3/§7 story).
+	signal_mark_delivered(task, thread, sig);
+
+	// Redirect the return: into the stub, standing on the frame we just
+	// built. The stub loads the handler out of the frame and calls it.
+	frame[1] = TASK_SIGRETURN_VIRT;
+	frame[2] = frame_va;
+
+	printd(DEBUG_SIGNALS, "signal_deliver: %s runs handler %p for signal %d (resumes %p)\n",
+	       task->exename, task->sighandler[sig], sig, (void *)user_rip);
+	return SIGNAL_DELIVER_ARMED;
+}
+
+// ── §10 DELIVERY: to a thread the SCHEDULER caught spinning in ring 3 ───────
+//
+// The syscall path (§5, above) arms a handler by rewriting where a syscall
+// returns. A program that never makes a syscall has no such moment — but the
+// scheduler visits every thread (the BSP ticks; a tickless AP's backstop
+// lease arms per non-idle dispatch), and for a thread interrupted in ring 3,
+// `thread->regs` ALREADY holds the complete user context the ISR saved.
+// Delivery is a rewrite of that saved context: build the FULL frame from
+// regs, point regs.RIP at the same stub and regs.RSP at the frame, and the
+// thread resumes by iretq into the stub exactly as it would have resumed
+// into its spin.
+//
+// Every register is live at an arbitrary interruption point, so the frame
+// carries the whole file (signal_frame_full_t) — os32 delivered from its
+// scheduler ISR, and its long stack diagram is this function's direct
+// ancestor. Only RIP and RSP change in regs: the stub takes signo and
+// handler from the frame, and sigreturn's full path puts everything else
+// back from the frame too.
+//
+// The CALLER (scheduler_signal_visit) mirrors regs.RIP/regs.RSP into the
+// per-core isr arrays when the thread is staying on its CPU — the continue
+// path resumes from those without a reload. Both images, always: the forced
+// push's own discipline, inherited whole.
+signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
+{
+	task_t   *task   = (task_t *)t;
+	thread_t *thread = (thread_t *)thrd;
+
+	if (task == NULL || thread == NULL || task->kernelTask)
+		return SIGNAL_DELIVER_NONE;
+
+	int sig = signal_pick_deliverable(task, thread);
+	if (sig == 0)
+		return SIGNAL_DELIVER_NONE;
+
+	// Same red-zone respect as §5. Userland is -mno-red-zone today, so the
+	// 128 is strictly courtesy — but hand-written ring-3 asm is allowed to
+	// exist, and the two delivery paths staying identical is worth more
+	// than 128 bytes of stack.
+	uint64_t frame_va = (thread->regs.RSP - 128 - sizeof(signal_frame_full_t)) & ~(uint64_t)0xF;
+
+	bool ok = true;
+	ok &= signal_write_user(task, frame_va + 0,   SIGNAL_FRAME_MAGIC_FULL);
+	ok &= signal_write_user(task, frame_va + 8,   thread->regs.RAX);
+	ok &= signal_write_user(task, frame_va + 16,  thread->regs.RIP);
+	ok &= signal_write_user(task, frame_va + 24,  thread->regs.RSP);
+	ok &= signal_write_user(task, frame_va + 32,  thread->regs.RFLAGS);
+	ok &= signal_write_user(task, frame_va + 40,  (uint64_t)sig);
+	ok &= signal_write_user(task, frame_va + 48,  (uint64_t)task->sighandler[sig]);
+	ok &= signal_write_user(task, frame_va + 56,  0);   // pad — deterministic
+	ok &= signal_write_user(task, frame_va + 64,  thread->regs.RBX);
+	ok &= signal_write_user(task, frame_va + 72,  thread->regs.RCX);
+	ok &= signal_write_user(task, frame_va + 80,  thread->regs.RDX);
+	ok &= signal_write_user(task, frame_va + 88,  thread->regs.RSI);
+	ok &= signal_write_user(task, frame_va + 96,  thread->regs.RDI);
+	ok &= signal_write_user(task, frame_va + 104, thread->regs.RBP);
+	ok &= signal_write_user(task, frame_va + 112, thread->regs.R8);
+	ok &= signal_write_user(task, frame_va + 120, thread->regs.R9);
+	ok &= signal_write_user(task, frame_va + 128, thread->regs.R10);
+	ok &= signal_write_user(task, frame_va + 136, thread->regs.R11);
+	ok &= signal_write_user(task, frame_va + 144, thread->regs.R12);
+	ok &= signal_write_user(task, frame_va + 152, thread->regs.R13);
+	ok &= signal_write_user(task, frame_va + 160, thread->regs.R14);
+	ok &= signal_write_user(task, frame_va + 168, thread->regs.R15);
+	if (!ok)
+	{
+		// Unusable stack, regs untouched. Same policy as §5's twin block: a
+		// TERMINATING signal reports FAILED and the caller falls through to
+		// the forced push (death must not depend on the victim's stack); a
+		// NON-terminating one is DROPPED here — cleared with a log line —
+		// because revisiting it every scheduler pass forever helps nobody.
+		printd(DEBUG_SIGNALS,
+		       "signal_deliver_to_regs: %s has no usable stack for signal %d\n",
+		       task->exename, sig);
+		if (SIG_BIT(sig) & SIGNALS_TERMINATING)
+			return SIGNAL_DELIVER_FAILED;
+		for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+			sigset_del(&th->signals.sigind, (signals)sig);
+		return SIGNAL_DELIVER_NONE;
+	}
+
+	signal_mark_delivered(task, thread, sig);
+
+	uint64_t spin_rip = thread->regs.RIP;
+	thread->regs.RIP = TASK_SIGRETURN_VIRT;
+	thread->regs.RSP = frame_va;
+
+	printd(DEBUG_SIGNALS,
+	       "signal_deliver_to_regs: %s runs handler %p for signal %d (spinner resumes %p)\n",
+	       task->exename, task->sighandler[sig], sig, (void *)spin_rip);
+	return SIGNAL_DELIVER_ARMED;
 }
 
 /// RAISE a signal on a thread, with data.
