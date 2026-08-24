@@ -804,6 +804,25 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // `thread` may be NULL: all four call sites run in the VICTIM'S OWN context
 // (that is the whole design), so the core's current thread is the right one
 // to ask which bit is pending.
+// Will something CATCH the terminate this thread is carrying? Asked by every
+// blocking call before it applies the default action, so a program that
+// installed a handler is told its wait was interrupted instead of being
+// executed on the way to the signal it asked for.
+//
+// THE TASK COMES FROM THE THREAD. cls->task and cls->currentThread describe
+// one thing but are two stores, and a decision made on the wrong one killed a
+// program with a handler installed (2026-08-23 — see scheduler_load_thread,
+// where the window itself is now closed). thread->ownerTask cannot lag,
+// because it is part of the thread.
+static bool current_thread_will_catch(void)
+{
+	core_local_storage_t *c = get_core_local_storage();
+	thread_t *th = c ? c->currentThread : NULL;
+	if (th == NULL)
+		return false;
+	return signal_has_handler_for_pending((task_t *)th->ownerTask, th);
+}
+
 static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 {
 	if (thread == NULL)
@@ -1130,6 +1149,11 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				{
 					// Ctrl+C landed while blocked on (or headed into) this
 					// pipe write. Same rail, different signal: terminate, 130.
+					// Caught? Then the wait was INTERRUPTED, not fatal — and
+					// returning is what makes delivery possible at all: the
+					// handler is armed on the way out of this syscall.
+					if (current_thread_will_catch())
+						return (uint64_t)(int64_t)OS64_INTERRUPTED;
 					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
@@ -1168,6 +1192,11 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 				if (n == TCP_ERR_INTERRUPTED)
 				{
+					// Caught? Then the wait was INTERRUPTED, not fatal — and
+					// returning is what makes delivery possible at all: the
+					// handler is armed on the way out of this syscall.
+					if (current_thread_will_catch())
+						return (uint64_t)(int64_t)OS64_INTERRUPTED;
 					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
@@ -1372,6 +1401,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			{
 				// Ctrl+C landed while (or before) we were blocked on stdin.
 				// Default action: terminate. The sentinel never reaches ring 3.
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1405,6 +1439,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			if (got == PIPE_ERR_INTERRUPTED)
 			{
 				// Ctrl+C landed while blocked on (or headed into) a pipe read.
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1422,6 +1461,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			got = tcp_conn_read((tcp_conn_t *)h->object, kbuf, want, deadline);
 			if (got == TCP_ERR_INTERRUPTED)
 			{
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1442,6 +1486,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			got = icmp_conn_read((icmp_conn_t *)h->object, kbuf, want, deadline);
 			if (got == ICMP_CONN_ERR_INTERRUPTED)
 			{
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1461,6 +1510,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			{
 				// Ctrl+C landed while blocked waiting for a packet — same
 				// rail as console and pipe reads: terminate, 130.
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1492,6 +1546,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			long jr = thread_join_read((thread_join_t *)h->object, &retval);
 			if (jr == THREAD_JOIN_ERR_INTERRUPTED)
 			{
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}

@@ -766,6 +766,24 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
 
 	cls->currentThread = thread;
 	cls->threadID = thread->threadID;
+	// AND THE TASK, IN THE SAME BREATH (2026-08-23). cls->task used to be
+	// assigned ~57 lines further down scheduler_do, which left a window where
+	// the core carried the NEW thread and still named the OLD task — and the
+	// two are supposed to describe one thing.
+	//
+	// It cost a program. Signal delivery read the handler table out of
+	// cls->task, hit that window right after a thread migrated cores, asked
+	// the IDLE task whether a handler was installed, got "no", and killed a
+	// program that had one. Intermittently, which is the worst way to find
+	// out. (Chris, on sigdemo: "sometimes it exits if I hit CTRL+C at just
+	// the right time".)
+	//
+	// The signal path was fixed to take the task from the THREAD, which is
+	// unambiguous and stays the rule for anything deciding on a task. This
+	// closes the window itself, because ~40 other places read cls->task and
+	// none of them should have to know it can lag: a value that is only
+	// SOMETIMES right is a trap laid for whoever reads it next.
+	cls->task = (task_t *)thread->ownerTask;
     mp_isrSavedCS[apic_id]=thread->regs.CS;
     mp_isrSavedRIP[apic_id]=thread->regs.RIP;
     mp_isrSavedSS[apic_id]=thread->regs.SS;
@@ -1310,6 +1328,11 @@ void scheduler_run_new_thread()
             taskToRun->justForked = 0;
         }
         //Update the core local storage task
+        // (Kept, and now redundant: scheduler_load_thread sets this beside
+        // cls->currentThread so the pair cannot diverge — see the note there
+        // for the program it cost. Left in place because it is harmless and
+        // because deleting it would hide that this assignment ever lived
+        // here, which is the whole story.)
         cls->task = taskToRun;
 	} //New thread loaded
 }

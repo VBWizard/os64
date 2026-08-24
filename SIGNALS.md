@@ -292,11 +292,15 @@ the next.
    syscall gets no delivery. `scheduler.c`'s forced-syscall push already
    solves that shape for termination and is the obvious home for it — until
    then a spinning program with a handler installed is reachable only by
-   SIGKILL. And the OTHER blocking calls — `console_read`, the pipe pair, the
-   net readers, `gui_event_wait`, join — still take the default action instead
-   of reporting the interruption. Each is the same three-line shape `sleep`
-   now has; they are separate only because each has its own return convention
-   to answer in.
+   SIGKILL — and that one is genuinely a different mechanism, not more of the
+   same: redirecting a spinning thread means saving a RIP the frame does not
+   carry, or delivering from the ISR the way os32 did. It wants its own think.
+
+   **EVERY OTHER BLOCKING CALL REPORTS `OS64_INTERRUPTED` NOW** (§8, done
+   2026-08-23): `console_read`, both pipe ends, the TCP/ICMP/UDP readers and
+   `thread_join`. Eight sites, one shape, one helper —
+   `current_thread_will_catch()`, which takes the task from the THREAD by
+   construction so the staleness below can never reach a decision again.
 
 4b. **The demo.** `/bin/sigdemo` — a countdown you interrupt with your own
    hands, which says it was interrupted and carries on counting. It exists
