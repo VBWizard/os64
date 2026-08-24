@@ -293,14 +293,29 @@ uint64_t _syscall_dispatch(
 	// talk about the same thread.
 	core_local_storage_t *sig_cls = get_core_local_storage();
 	thread_t *sig_thread = sig_cls ? sig_cls->currentThread : NULL;
+	// THE TASK COMES FROM THE THREAD, NEVER FROM CLS — and this is not
+	// pedantry, it is a bug that shipped and was caught on glass the same day
+	// (2026-08-23). cls->task and cls->currentThread are not updated
+	// atomically, so for a window right after a thread MIGRATES CORES they
+	// disagree: the core has the new thread but still names the task it was
+	// idling for. Reading the handler table out of cls->task then asks the
+	// IDLE task whether it installed a handler, gets "no", and kills a
+	// program that had one — intermittently, depending on whether the thread
+	// happened to move. thread->ownerTask cannot be out of sync with the
+	// thread, because it IS part of the thread.
+	//
+	// (The old code passed cls->task here too, but only ever on the way to
+	// dying anyway. Making a DECISION depend on it is what turned a cosmetic
+	// staleness into a lost program.)
+	task_t *sig_task = sig_thread ? (task_t *)sig_thread->ownerTask : NULL;
 	{
 		// A pending terminate kills only when NOTHING will catch it. A task
 		// that installed a handler for this signal gets it delivered on the
 		// way out instead — which is the whole point of the registration
 		// syscall, and why the default action has to ask first.
 		if (sig_thread && (sigset_any(sig_thread->signals.sigind, SIGNALS_TERMINATING)) &&
-		    !signal_has_handler_for_pending(sig_cls->task, sig_thread))
-			raise_terminating_signal_and_die(sig_cls->task, sig_thread);
+		    !signal_has_handler_for_pending(sig_task, sig_thread))
+			raise_terminating_signal_and_die(sig_task, sig_thread);
 	}
 
 	// Remember the address space we arrived on for the exit tripwire below.
@@ -374,8 +389,11 @@ uint64_t _syscall_dispatch(
 	// Deliberately last: after the CR3 tripwire, so a delivery can never be
 	// blamed for an address-space escape it did not cause, and after the
 	// syscall body, so `result` is the real answer.
-	if (sig_thread != NULL && sig_cls != NULL && sig_cls->task != NULL)
-		(void)signal_deliver_pending(sig_cls->task, sig_thread, result);
+	// Same rule as the entry checkpoint: the task comes from the THREAD.
+	// Delivering against cls->task would build a frame from one program's
+	// handler table onto another program's stack.
+	if (sig_thread != NULL && sig_task != NULL)
+		(void)signal_deliver_pending(sig_task, sig_thread, result);
 
 	return result;
 }
@@ -3280,12 +3298,17 @@ static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// SIGNALS.md §8, no restart, no EINTR: an interrupted call says
 			// so and the caller decides. os64_sleep answers INTERRUPTED and a
 			// program that wanted the whole nap loops.
-			if (signal_has_handler_for_pending(cls->task, self))
+			// The task comes from the THREAD — cls->task can be a core
+			// migration behind (see the dispatcher checkpoint's note), and a
+			// sleeper is exactly the thread most likely to wake on a
+			// different core than it parked on.
+			task_t *owner = (task_t *)self->ownerTask;
+			if (signal_has_handler_for_pending(owner, self))
 				return (uint64_t)(int64_t)OS64_INTERRUPTED;
 
 			// Nothing will catch it. Ctrl+C (or a ctl write) landed while we
 			// napped: die here, in our own context.
-			raise_terminating_signal_and_die(cls->task, self);
+			raise_terminating_signal_and_die(owner, self);
 			__builtin_unreachable();
 		}
 
