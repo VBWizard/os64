@@ -100,6 +100,12 @@ static const fixture_t kFixtures[] = {
     // for the same reason: a suite that cries wolf gets ignored.
     { "/bin/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and atomic publish" },
     { "/bin/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
+    // PASSES BY DYING, like the nx_test pair above: 141 is SIGPIPE's default
+    // action (128 + 13), and reaching it proves the kernel still applies that
+    // default when a handler is installed but CANNOT BE DELIVERED. Surviving
+    // is the failure, and sigpipe_test says so with its own code rather than
+    // hanging. Deliberately last — it is the only fixture that ends itself.
+    { "/bin/sigpipe_test",    NULL, 141,         0,          "an undeliverable SIGPIPE still applies its default action" },
 };
 #define FIXTURE_COUNT (int32_t)(sizeof(kFixtures) / sizeof(kFixtures[0]))
 

@@ -854,6 +854,14 @@ static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 	if (sigset_has(pending, SIGKILL))      { why = "SIGKILL"; code = SIGNALS_EXIT_SIGKILL; }
 	else if (sigset_has(pending, SIGTERM)) { why = "SIGTERM"; code = SIGNALS_EXIT_SIGTERM; }
 	else if (sigset_has(pending, SIGHUP))  { why = "SIGHUP";  code = SIGNALS_EXIT_SIGHUP;  }
+	// SIGPIPE joins the ladder (Codex #29 rd9). It never reached here before,
+	// because an uncaught SIGPIPE dies at the write() site with its own tag —
+	// but a HANDLED SIGPIPE whose delivery FAILS now falls through to this
+	// function, and without this arm the corpse would have worn 130 (the
+	// SIGINT default below) for a death SIGINT had nothing to do with. Last
+	// of the four, because it is the most local: the others describe a world
+	// ending, this one describes a pipe.
+	else if (sigset_has(pending, SIGPIPE)) { why = "SIGPIPE"; code = SIGNALS_EXIT_SIGPIPE; }
 
 	if (task != NULL)
 	{
@@ -866,7 +874,11 @@ static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 	__builtin_unreachable();
 }
 
-#define TASK_EXIT_SIGPIPE 141   // 128 + signal, the classic "died by signal" encoding
+// (Here stood a private `#define TASK_EXIT_SIGPIPE 141`, a second copy of a
+// number whose four siblings all live in signals.h. It went when rd9 gave the
+// ladder above a SIGPIPE arm and needed the same constant: two spellings of
+// one exit code is how the two paths out of a SIGPIPE come to disagree about
+// what killed the program. SIGNALS_EXIT_SIGPIPE is now the only copy.)
 static void raise_sigpipe_and_die(task_t *task)
 {
 	if (task != NULL)
@@ -874,7 +886,7 @@ static void raise_sigpipe_and_die(task_t *task)
 		// All threads: SIGPIPE's default action is to terminate the TASK,
 		// so every thread has to learn it, not just the first one.
 		task_signal_all_threads(task, SIGPIPE);
-		task->retVal = TASK_EXIT_SIGPIPE;
+		task->retVal = SIGNALS_EXIT_SIGPIPE;
 		printd(DEBUG_TASK, "SIGPIPE: task %s wrote to a pipe with no readers — terminating\n",
 			task->exename);
 	}

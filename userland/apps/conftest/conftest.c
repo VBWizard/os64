@@ -74,6 +74,73 @@ static bool put_file(const char *path, const char *text)
     return put == len;
 }
 
+// Is ANY temporary left beside the config file? (Codex #29 rd9.)
+//
+// This used to probe the single literal name "<path>.new", which stopped being
+// what the writer creates the moment the temp gained a per-saver tag — so the
+// "no debris" check silently became a check of a name nobody writes, and would
+// have passed while every save leaked. The cure is to stop guessing the
+// scheme: enumerate the DIRECTORY and fail on anything that looks like our
+// file plus a suffix ending in ".new". That holds for "<path>.new", for
+// "<path>.<taskid>.<seq>.new", and for whatever the temp is called next —
+// a fixture that has to be edited whenever the code changes is a fixture that
+// will one day not be.
+static bool temp_debris_beside(const char *path)
+{
+    // Split the config path into its directory and its file name. Config
+    // paths arrive absolute (the kernel builds them from the ladder), but a
+    // fixture that assumes its input is a fixture with a hole in it.
+    size_t at = os64_strlen(path);
+    bool   has_slash = false;
+    size_t cut = 0;
+    for (size_t i = 0; i < at; i++)
+        if (path[i] == '/') { cut = i; has_slash = true; }   // last '/' wins
+
+    char dir[OS64_CONF_PATH_MAX];
+    if (!has_slash) {
+        dir[0] = '.'; dir[1] = '\0';          // a bare name: look where we are
+    } else if (cut == 0) {
+        dir[0] = '/'; dir[1] = '\0';          // "/name": the directory is root
+    } else {
+        if (cut >= sizeof(dir))
+            return false;
+        for (size_t i = 0; i < cut; i++)
+            dir[i] = path[i];
+        dir[cut] = '\0';
+    }
+    const char *base = has_slash ? &path[cut + 1] : path;
+    size_t bl = os64_strlen(base);
+    if (bl == 0)
+        return false;                         // a path ending in '/': no file to guard
+
+    int64_t d = os64_opendir(dir);
+    if (d < 0)
+        return false;                         // cannot look: report no debris
+
+    bool found = false;
+    os64_dirent_t e;
+    while (os64_readdir((int32_t)d, &e) == 1) {
+        size_t nl = os64_strlen(e.name);
+        // "<base>." prefix, ".new" suffix, and longer than the base itself —
+        // which is every temp shape the writer has ever used, and excludes
+        // the config file itself.
+        if (nl <= bl + 4)
+            continue;
+        size_t j = 0;
+        while (j < bl && e.name[j] == base[j])
+            j++;
+        if (j != bl || e.name[bl] != '.')
+            continue;
+        if (e.name[nl - 4] == '.' && e.name[nl - 3] == 'n' &&
+            e.name[nl - 2] == 'e' && e.name[nl - 1] == 'w') {
+            found = true;
+            break;
+        }
+    }
+    os64_close((int32_t)d);
+    return found;
+}
+
 static bool file_contains(const char *path, const char *needle)
 {
     char buf[2048];
@@ -165,21 +232,28 @@ int main(void)
         !os64_streq(value, "two"))
         die(2, "conftest: the merge did not update the key it was given");
 
-    // RULE 3: nothing left beside it.
+    // RULE 3: nothing left beside it — ANY temporary, whatever it is called
+    // (see temp_debris_beside; the old literal "<path>.new" probe went stale
+    // the moment the temp gained a per-saver tag, and a stale probe passes).
+    //
+    // THE DETECTOR PROVES ITSELF FIRST. That is the actual lesson of the stale
+    // probe: an assertion nobody has ever seen FAIL is not evidence, it is a
+    // hope. So plant a temporary by hand, insist it is seen, remove it, and
+    // insist it is gone — and only then trust the real check below.
     {
-        char temp[OS64_CONF_PATH_MAX];
-        os64_strcopy(temp, sizeof(temp), gPath);
-        size_t at = os64_strlen(temp);
-        if (at + 5 < sizeof(temp)) {
-            temp[at + 0] = '.'; temp[at + 1] = 'n'; temp[at + 2] = 'e';
-            temp[at + 3] = 'w'; temp[at + 4] = '\0';
-            int64_t leftover = os64_open(temp, "r");
-            if (leftover >= 0) {
-                os64_close((int32_t)leftover);
-                die(10, "conftest: a .new temporary was left behind");
-            }
+        char planted[OS64_CONF_PATH_MAX];
+        if (os64_snprintf(planted, sizeof(planted), "%s.999999.0.new", gPath) > 0) {
+            if (!put_file(planted, "debris\n"))
+                die(10, "conftest: could not plant a temporary to test the detector");
+            if (!temp_debris_beside(gPath))
+                die(10, "conftest: the debris detector cannot see a temporary");
+            os64_unlink(planted);
+            if (temp_debris_beside(gPath))
+                die(10, "conftest: the debris detector reports a temporary that is gone");
         }
     }
+    if (temp_debris_beside(gPath))
+        die(10, "conftest: a temporary was left behind beside the config file");
 
     // ── a multi-key write, and case-insensitive lookup ──────────────────────
     {

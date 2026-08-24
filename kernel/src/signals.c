@@ -326,7 +326,14 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 		printd(DEBUG_SIGNALS,
 		       "signal_deliver: %s has no usable stack for signal %d — default action stands\n",
 		       task->exename, sig);
-		if (SIG_BIT(sig) & SIGNALS_TERMINATING)
+		// SIGNALS_DEFAULT_IS_DEATH, not SIGNALS_TERMINATING (Codex #29 rd9):
+		// the question here is "what happens when the handler cannot run?",
+		// which is about the DEFAULT ACTION — not "would a checkpoint kill
+		// for this?", which is what the other mask answers. SIGPIPE is the
+		// signal where the two disagree, and asking the wrong one let a
+		// process survive a SIGPIPE purely because its handler could not be
+		// delivered. (signals.h carries the argument for both masks.)
+		if (SIG_BIT(sig) & SIGNALS_DEFAULT_IS_DEATH)
 		{
 			spinlock_release_irqrestore(&task->signalLock, sig_flags);
 			return SIGNAL_DELIVER_FAILED;
@@ -437,7 +444,9 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 		printd(DEBUG_SIGNALS,
 		       "signal_deliver_to_regs: %s has no usable stack for signal %d\n",
 		       task->exename, sig);
-		if (SIG_BIT(sig) & SIGNALS_TERMINATING)
+		// Same mask, same reasoning as §5's twin block above (rd9): the
+		// default action decides, and SIGPIPE's default is death.
+		if (SIG_BIT(sig) & SIGNALS_DEFAULT_IS_DEATH)
 		{
 			spinlock_release_irqrestore(&task->signalLock, sig_flags);
 			return SIGNAL_DELIVER_FAILED;

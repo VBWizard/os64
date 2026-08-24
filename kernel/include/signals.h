@@ -146,7 +146,13 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	//   2. the blocking-call sentinels (console_read, pipe_read, pipe_write)
 	//   3. the forced-syscall push in scheduler_run_new_thread (a spin loop)
 	// (SIGPIPE also terminates, but it is raised BY the dying task inside its
-	// own write() and dies on the spot — it never needs to be noticed later.)
+	// own write() and dies on the spot — it never needs to be noticed later.
+	// TRUE OF THE CHECKPOINTS, AND ONLY OF THEM, since SIGPIPE became
+	// catchable: a HANDLED SIGPIPE is published as a pending bit and armed
+	// like any other, so "what if delivery fails?" has a different answer
+	// from "should a checkpoint kill for this?". That second question is
+	// SIGNALS_DEFAULT_IS_DEATH's, below — do not reach for this mask to
+	// answer it, which is exactly the mistake rd9 caught.)
 	#define SIGNALS_TERMINATING  (SIG_BIT(SIGINT) | SIG_BIT(SIGKILL) | \
 	                              SIG_BIT(SIGHUP) | SIG_BIT(SIGTERM))
 
@@ -158,7 +164,28 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	#define SIGNALS_EXIT_SIGHUP   129   // 128 + 1
 	#define SIGNALS_EXIT_SIGINT   130   // 128 + 2
 	#define SIGNALS_EXIT_SIGKILL  137   // 128 + 9
+	#define SIGNALS_EXIT_SIGPIPE  141   // 128 + 13
 	#define SIGNALS_EXIT_SIGTERM  143   // 128 + 15
+
+	// Every signal whose DEFAULT ACTION IS DEATH — which is NOT the same
+	// question as SIGNALS_TERMINATING above, and conflating them cost a real
+	// bug (Codex #29 rd9). SIGNALS_TERMINATING is the set the CHECKPOINTS
+	// scan: "is a pending bit here reason to stop this thread on its way past
+	// me?" SIGPIPE is excluded from it on purpose, for the reason its comment
+	// gives — it used to be raised by the dying task inside its own write()
+	// and die on the spot, so no checkpoint ever needed to notice it.
+	//
+	// That stopped being the whole truth the day SIGPIPE became CATCHABLE
+	// (rd1): a pending SIGPIPE now exists whenever a handler is installed and
+	// delivery is armed. So when a delivery FAILS — an unusable stack, §9's
+	// honest limit — the question is no longer "would a checkpoint kill for
+	// this?" but "what happens when the handler cannot run?", and the answer
+	// for SIGPIPE is death, exit 141. Asking the checkpoint set that question
+	// let a process survive a SIGPIPE purely because its handler could not be
+	// delivered.
+	//
+	// Two sets, two questions, and each named for the question it answers.
+	#define SIGNALS_DEFAULT_IS_DEATH  (SIGNALS_TERMINATING | SIG_BIT(SIGPIPE))
 
 	// ── PER-THREAD signal state ─────────────────────────────────────────────
 	//
