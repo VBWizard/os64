@@ -28,6 +28,7 @@
 #include "driver/filesystem/dev/devfs.h"   // devfs_handle_alias — the /dev/tty door
 #include "pipe.h"
 #include "signals.h"
+#include "os64/signal.h"   // OS64_SIG_ERR_* — the errors ring 3 is told
 #include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
 #include "shutdown.h"   // shutdown_system — SYSCALL_SHUTDOWN's engine
 #include "allocator.h"  // free_memory — unmap returns pages at the choke point
@@ -164,6 +165,8 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_event_poll(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -253,6 +256,10 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x02),  // arg1 = input_event_t out; BLOCKS (like read)
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
+	// arg1 is a CODE address the kernel will one day jump to, not a buffer it
+	// reads — so it stays OUT of the pointer mask (which validates readable
+	// user memory) and the handler range-checks it itself.
+	SYSCALL_DEFINE(SYSCALL_SIGNAL_HANDLER,         "signal_handler",         syscall_signal_handler,         false, 0x00),  // arg0 = signo, arg1 = handler
 };
 
 uint64_t _syscall_dispatch(
@@ -3955,6 +3962,47 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
 	if (!copy_to_user_buffer((void *)arg1, &s, sizeof(s)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return 0;
+}
+
+// signal_handler — install a handler for a signal, answer with the previous.
+// Contract in abi/os64/syscall_numbers.h; the argument for putting the table
+// on the TASK is SIGNALS.md §2.
+//
+// REGISTRATION ONLY. Nothing is delivered to ring 3 until the frame-and-
+// trampoline half lands (step 3), so today an installed handler means exactly
+// "do not apply the default action" — which the forced-syscall push in
+// scheduler.c has honoured for SIGINT since before there was a way to install
+// one. That is deliberate: a program can be written against this now, and it
+// will start actually running its handler when delivery arrives, without the
+// interface changing under it.
+static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_SIGNAL;
+
+	int signo = (int)(int64_t)arg0;
+	void *handler = (void *)arg1;
+
+	if ((int)signo <= 0 || signo >= SIGNAL_COUNT)
+		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_SIGNAL;
+	if (!signal_is_catchable((signals)signo))
+		return (uint64_t)(int64_t)OS64_SIG_ERR_UNCATCHABLE;
+
+	// A handler must be an address ring 3 could actually execute. The kernel
+	// is about to point a thread's RIP at this, so a higher-half value would
+	// have the CPU attempt kernel text at CPL 3 — it faults harmlessly, but
+	// refusing it here names the mistake instead of turning it into a
+	// segfault three steps later. NULL is the exception: it means "default".
+	if (handler != NULL && (uint64_t)handler >= TASK_HEAP_END)
+		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_HANDLER;
+
+	void *previous = signal_set_handler(task, (signals)signo, handler);
+	return (uint64_t)previous;
 }
 
 // Where is my window, and what state is it in? The readback half of create —

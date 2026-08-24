@@ -585,4 +585,27 @@ typedef enum os64_shutdown_mode
 // tell an app anything the WINDOW SYSTEM knew about its own window.
 #define SYSCALL_GUI_WINDOW_GET_STATE    48
 
+// signal_handler — install a handler for a signal, and answer with the one it
+// replaced.
+//
+//   arg0 = int signo             the signal NUMBER (os64/signal.h)
+//   arg1 = os64_signal_fn hand   the handler, or 0 for the kernel's default
+//   returns the PREVIOUS handler (possibly 0), or a negative
+//   OS64_SIG_ERR_* — in which case nothing was changed
+//
+// The handler belongs to the TASK, not the calling thread: a signal aimed at
+// a program is broadcast to every one of its threads, so a per-thread handler
+// would fire once per thread for a single SIGTERM. Install once, covers all.
+//
+// SIGKILL is refused (OS64_SIG_ERR_UNCATCHABLE). It is the answer to a
+// program that has stopped answering; a kernel that let a program decline to
+// die would have no last resort.
+//
+// Registration is all this does. Nothing is DELIVERED to ring 3 until the
+// frame-and-trampoline half lands (SIGNALS.md step 3) — until then an
+// installed handler means only "do not apply the default action", which the
+// forced-syscall push in scheduler.c has already honoured for SIGINT since
+// before there was any way to install one.
+#define SYSCALL_SIGNAL_HANDLER          49
+
 #endif

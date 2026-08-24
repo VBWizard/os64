@@ -192,6 +192,17 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// Called `sigaction` until 2026-08-23, when it turned out to be holding
 	// that name without setting any action; see its definition for the story.
 	void signal_raise(signals signal, uint64_t sigData, void *thread);
+
+	// Can ring 3 install a handler for this signal? Range check plus the one
+	// exception (SIGKILL), in ONE place so registration and delivery can never
+	// reach different conclusions about the same signal.
+	bool signal_is_catchable(signals sig);
+
+	// Install a handler on the TASK and return the one it replaced. NULL
+	// restores the kernel default. (struct task, not task_t: signals.h is
+	// included BY task.h, so it cannot see the full type.)
+	struct task;
+	void *signal_set_handler(struct task *t, signals sig, void *handler);
 	void init_signals();
 	
 #endif

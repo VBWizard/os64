@@ -234,11 +234,28 @@ slice; naming the limit is not the same as pretending it isn't there.
 M, and it comes apart cleanly. Each step is useful on its own and green before
 the next.
 
-1. **Numbers, and handlers to `task_t`.** No behaviour change; kills the
-   bit-value-indexing landmine. The two existing users of `sighandler`
-   (`SIGSLEEP`, `SIGINT`) come along.
-2. **Registration syscall.** Install / restore-default / report-previous;
-   refuse `SIGKILL`.
+1. ~~**Numbers, and handlers to `task_t`.**~~ **DONE 2026-08-23.** No
+   behaviour change; the bit-value-indexing landmine is gone. The pending set
+   became a struct (`signal_set_t`) so the compiler found all 31 conversion
+   sites itself — a renumbering that stayed silent at even one of them would
+   have been a bug asleep in the tree. Two neighbours came out of it: a
+   pre-existing double-close race in `handle_close` (claim-then-act now), and
+   `asm-offsets.h` never depending on the structs it measures.
+   `sigaction` was renamed `signal_raise`, which is what it always did.
+2. ~~**Registration syscall.**~~ **DONE 2026-08-23** —
+   `SYSCALL_SIGNAL_HANDLER` (49), `os64_signal_set_handler` in
+   `abi/os64/signal.h`. Install / restore-default / report-previous; `SIGKILL`
+   refused by name, out-of-range refused, a higher-half handler address
+   refused. The ABI's numbers are static-asserted against the kernel enum
+   (klog_format.h's discipline), so the two rings cannot drift.
+   `/bin/sigtest` is the fixture, in the ring-3 suite.
+
+   **Registration works; delivery does not exist yet, and that is deliberate.**
+   Today an installed handler means exactly "do not apply the default action"
+   — which `scheduler.c`'s forced-syscall push has honoured for `SIGINT` since
+   before there was any way to install one. A program can be written against
+   this interface now and will start actually running its handler when step 3
+   lands, without the interface changing under it.
 3. **Delivery + the stub + `sigreturn`.** The frame, the redirect, the second
    template in the trampoline page.
 4. **Teach the nine checkpoints** to look for a handler before defaulting to

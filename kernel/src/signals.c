@@ -1,5 +1,7 @@
 #include "signals.h"
 #include "CONFIG.h"
+#include "task.h"        // task_t — the handler table lives there now
+#include "os64/signal.h" // the ABI numbers these must agree with
 #include "scheduler.h"
 #include "kernel.h"
 #include "serial_logging.h"
@@ -23,6 +25,58 @@
 extern volatile int kSchedulerSwitchTasksLock;
 bool kProcessSignals = false;
 uint8_t signalProcTickFrequency;
+
+// ── THE TWO RINGS AGREE ABOUT THE NUMBERS, OR THE BUILD STOPS ───────────────
+//
+// ring 3 cannot include this header, so os64/signal.h carries its own copy of
+// the numbers for programs to use. Two copies of a numbering is exactly how a
+// SIGTERM comes to be delivered as a SIGSEGV one refactor from now, so the
+// copies are checked against each other HERE, at compile time.
+//
+// This is klog_format.h's discipline, applied to the second thing that has to
+// cross the ring boundary intact: there, renaming a DEBUG_* bit without
+// updating the ABI table stops the build rather than mislabelling the log.
+// Same rule, higher stakes — a mislabelled log line is a puzzle, a
+// misdelivered signal is a program running the wrong handler.
+_Static_assert(SIGHUP  == OS64_SIGHUP,  "SIGHUP disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGINT  == OS64_SIGINT,  "SIGINT disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGKILL == OS64_SIGKILL, "SIGKILL disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGSEGV == OS64_SIGSEGV, "SIGSEGV disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGPIPE == OS64_SIGPIPE, "SIGPIPE disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGTERM == OS64_SIGTERM, "SIGTERM disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGCONT == OS64_SIGCONT, "SIGCONT disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGSTOP == OS64_SIGSTOP, "SIGSTOP disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGIO   == OS64_SIGIO,   "SIGIO disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
+               "the signal table size disagrees with the ABI (os64/signal.h)");
+
+// Can ring 3 install a handler for this signal? The range check and the one
+// exception, in one place so registration and (later) delivery cannot come to
+// different conclusions about the same signal.
+bool signal_is_catchable(signals sig)
+{
+	if ((int)sig <= 0 || (int)sig >= SIGNAL_COUNT)
+		return false;
+	// SIGKILL is the answer to a program that has stopped answering. A kernel
+	// that let a program decline to die has no last resort — so this is the
+	// one signal whose default action cannot be replaced. (SIGSTOP will join
+	// it the day job control lands: a process must not be able to refuse to
+	// be stopped either, for the same reason.)
+	return sig != SIGKILL;
+}
+
+// Install a handler on the TASK (see task.h for why it is the task's and not
+// the thread's) and answer with the one it replaced. NULL restores the
+// kernel's default action.
+void *signal_set_handler(struct task *t, signals sig, void *handler)
+{
+	task_t *task = (task_t *)t;
+	void *previous = task->sighandler[sig];
+	task->sighandler[sig] = handler;
+	printd(DEBUG_SIGNALS, "signal_set_handler: %s installs %p for signal %u (was %p)\n",
+	       task->exename, handler, (unsigned)sig, previous);
+	return previous;
+}
 
 /// RAISE a signal on a thread, with data.
 ///

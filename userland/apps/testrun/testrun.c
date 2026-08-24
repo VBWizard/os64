@@ -95,6 +95,7 @@ static const fixture_t kFixtures[] = {
     // harness treated it as SKIP and so does this one.
     { "/bin/synctest",        NULL, 0x05CC0000,  0x05CC0001, "sync_all commits bytes AND the directory entry" },
     { "/bin/conftest",        NULL, 0x0C0F0000,  0,          "config library: get/get_bool/write/set, merge and atomic publish" },
+    { "/bin/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
 };
 #define FIXTURE_COUNT (int32_t)(sizeof(kFixtures) / sizeof(kFixtures[0]))
 
