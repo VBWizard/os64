@@ -77,8 +77,20 @@ bool signal_is_catchable(signals sig)
 void *signal_set_handler(struct task *t, signals sig, void *handler)
 {
 	task_t *task = (task_t *)t;
+	// UNDER signalLock (Codex #29 rd6): registration is the THIRD writer of a
+	// task's signal state — delivery CONSUMES pending bits (rd2's lock),
+	// publication SETS them (rd4's lock), and this sets the HANDLER. Left
+	// unlocked, a delivery path could read a non-NULL handler in
+	// signal_pick_deliverable and then read a just-installed NULL when it
+	// copies the handler into the frame, so the trampoline would call address
+	// 0 and kill the program instead of applying the default action. Holding
+	// the lock keeps the handler stable across every LOCKED delivery (§5/§10,
+	// which read it inside their own signalLock section); the SIGSEGV path
+	// (§9, lock-free by nature) snapshots the pointer once for the same end.
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
 	void *previous = task->sighandler[sig];
 	task->sighandler[sig] = handler;
+	spinlock_release_irqrestore(&task->signalLock, f);
 	printd(DEBUG_SIGNALS, "signal_set_handler: %s installs %p for signal %u (was %p)\n",
 	       task->exename, handler, (unsigned)sig, previous);
 	return previous;
@@ -483,7 +495,16 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 
 	if (task == NULL || thread == NULL || ctx == NULL || task->kernelTask)
 		return false;
-	if (!signal_is_catchable(SIGSEGV) || task->sighandler[SIGSEGV] == NULL)
+	if (!signal_is_catchable(SIGSEGV))
+		return false;
+	// ONE snapshot of the handler, used for both the guard AND the frame write
+	// (Codex #29 rd6): registration runs unlocked-relative-to-us, so reading
+	// task->sighandler[SIGSEGV] twice could see non-NULL here and NULL at the
+	// frame, calling address 0. A snapshot that goes stale is benign — the
+	// function it points at still exists (uninstalling does not unmap it), so
+	// a signal already in flight simply runs the handler one last time.
+	void *segv_handler = task->sighandler[SIGSEGV];
+	if (segv_handler == NULL)
 		return false;                       // no handler: the default (139) stands
 	if (sigset_has(thread->signals.sigmask, SIGSEGV))
 		return false;                       // the SIGSEGV handler itself faulted — let it die (§7)
@@ -498,7 +519,7 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 	ok &= signal_write_user(task, frame_va + 24,  ctx->rsp);
 	ok &= signal_write_user(task, frame_va + 32,  ctx->rflags);
 	ok &= signal_write_user(task, frame_va + 40,  (uint64_t)SIGSEGV);
-	ok &= signal_write_user(task, frame_va + 48,  (uint64_t)task->sighandler[SIGSEGV]);
+	ok &= signal_write_user(task, frame_va + 48,  (uint64_t)segv_handler);
 	ok &= signal_write_user(task, frame_va + 56,  0);
 	ok &= signal_write_user(task, frame_va + 64,  ctx->rbx);
 	ok &= signal_write_user(task, frame_va + 72,  ctx->rcx);
@@ -538,7 +559,7 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 
 	printd(DEBUG_SIGNALS,
 	       "signal_deliver_segv: %s catches SIGSEGV, handler %p (faulted at %p)\n",
-	       task->exename, task->sighandler[SIGSEGV], (void *)fault_rip);
+	       task->exename, segv_handler, (void *)fault_rip);
 	return true;
 }
 

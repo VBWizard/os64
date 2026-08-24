@@ -307,11 +307,29 @@ static void out_str(conf_out_t *o, const char *s, size_t n)
 		out_ch(o, s[i]);
 }
 
-static void out_setting(conf_out_t *o, const char *key, const char *value)
+// Write `key = value`, and — when replacing an existing line (`orig` non-NULL)
+// — PRESERVE that line's inline comment (Codex #29 rd6). The merge contract
+// promises comments are copied through untouched, but reformatting a matched
+// line as bare key/value dropped a trailing `# ...`, silently destroying
+// user-authored context (`position = 10,20 # laptop layout`). The comment
+// text is kept verbatim from the first '#' to end-of-line; only the run of
+// space before it is normalised to one. `orig` is NULL for a freshly-appended
+// setting, which has no original line and so no comment.
+static void out_setting(conf_out_t *o, const char *key, const char *value,
+                        const char *orig, size_t orig_len)
 {
 	out_str(o, key, os64_strlen(key));
 	out_str(o, " = ", 3);
 	out_str(o, value, os64_strlen(value));
+	if (orig != NULL) {
+		size_t c = 0;
+		while (c < orig_len && orig[c] != '#')
+			c++;
+		if (c < orig_len) {                 // an inline comment: carry it through
+			out_ch(o, ' ');
+			out_str(o, &orig[c], orig_len - c);
+		}
+	}
 	out_ch(o, '\n');
 }
 
@@ -431,7 +449,9 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 
 		int64_t p = line_pair(&old[start], end - start, pairs, count);
 		if (p >= 0 && (size_t)p < marks && !written[p]) {
-			out_setting(&o, pairs[p].key, pairs[p].value);
+			// Replacing this line — hand out_setting the ORIGINAL so it can
+			// carry through any inline comment (the merge contract).
+			out_setting(&o, pairs[p].key, pairs[p].value, &old[start], end - start);
 			written[p] = true;
 		} else if (p >= 0 && (size_t)p < marks) {
 			// A REPEATED key we already rewrote: drop the duplicate rather
@@ -444,10 +464,11 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		}
 	}
 
-	// Pairs that matched no existing line go at the end.
+	// Pairs that matched no existing line go at the end — no original line,
+	// so no comment to carry (NULL).
 	for (size_t p = 0; p < marks; p++)
 		if (!written[p])
-			out_setting(&o, pairs[p].key, pairs[p].value);
+			out_setting(&o, pairs[p].key, pairs[p].value, NULL, 0);
 
 	if (o.overflow) {
 		os64_free(old);

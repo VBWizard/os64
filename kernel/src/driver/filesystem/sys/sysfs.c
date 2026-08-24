@@ -792,13 +792,13 @@ static void sys_gen_conf(synth_text_t *t)
 	synth_text_addf(t, "\n");
 	synth_text_addf(t, "source: %s\n", conf_source());
 
-	const char *name = NULL;
-	const char *path = NULL;
+	char name[CONF_NAME_MAX];
+	char path[CONF_PATH_MAX];
 	bool any = false;
-	for (size_t i = 0; conf_note(i, &name, &path); i++)
+	for (size_t i = 0; conf_note(i, name, sizeof(name), path, sizeof(path)); i++)
 	{
 		synth_text_addf(t, "%s: %s\n", name,
-		                (path != NULL && path[0] != '\0') ? path : "(not found)");
+		                path[0] != '\0' ? path : "(not found)");
 		any = true;
 	}
 	if (!any)

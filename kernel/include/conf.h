@@ -131,6 +131,9 @@ void conf_parse(char *text, conf_line_fn fn, void *user);
 size_t conf_dir_count(void);
 const char *conf_dir(size_t index);
 const char *conf_source(void);   // "/etc/os64.conf", or "built-in default"
-bool conf_note(size_t index, const char **name, const char **path);
+// Copies note `index` into the caller's buffers (a locked snapshot — see the
+// definition). Returns false once past the last note.
+bool conf_note(size_t index, char *name_out, size_t name_cap,
+                             char *path_out, size_t path_cap);
 
 #endif // CONF_H

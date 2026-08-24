@@ -515,13 +515,30 @@ const char *conf_source(void)
 	return s_source;
 }
 
-bool conf_note(size_t index, const char **name, const char **path)
+// Copy note `index` into the caller's buffers UNDER kConfLock (Codex #29 rd6).
+// This used to return raw pointers into s_notes[], which sysfs formatted after
+// the call — but conf_note_used mutates those slots under the lock, so a
+// concurrent lookup could bump s_note_count before its strncpy finished and a
+// reader would format a blank or half-written slot. The whole point of
+// /sys/conf is to report config origins accurately, so it must read a
+// consistent snapshot: copy while the writer is excluded, then format from the
+// caller's own copy.
+bool conf_note(size_t index, char *name_out, size_t name_cap,
+                             char *path_out, size_t path_cap)
 {
-	if (index >= s_note_count)
+	uint64_t flags = spinlock_acquire_irqsave(&kConfLock);
+	if (index >= s_note_count) {
+		spinlock_release_irqrestore(&kConfLock, flags);
 		return false;
-	if (name)
-		*name = s_notes[index].name;
-	if (path)
-		*path = s_notes[index].path;
+	}
+	if (name_out && name_cap) {
+		strncpy(name_out, s_notes[index].name, name_cap);
+		name_out[name_cap - 1] = 0;
+	}
+	if (path_out && path_cap) {
+		strncpy(path_out, s_notes[index].path, path_cap);
+		path_out[path_cap - 1] = 0;
+	}
+	spinlock_release_irqrestore(&kConfLock, flags);
 	return true;
 }
