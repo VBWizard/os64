@@ -105,11 +105,30 @@ void *signal_set_handler(struct task *t, signals sig, void *handler)
 //
 // The RED ZONE is respected: SysV reserves 128 bytes below RSP that a leaf
 // function may be using right now, so the frame starts below it.
+// Ring 3 controls the stack pointer, hence frame_va, hence the address this
+// writes to. So the target is VALIDATED, never merely resolved (Codex #29 rd2):
+// a forged RSP aimed at the kernel's own upper-half (mapped in every task
+// PML4) would turn delivery into a ring-3 -> ring-0 arbitrary write, and one
+// aimed at libos64.so's read-only text — a single resident copy shared behind
+// every process — would corrupt the whole system through the HHDM. The target
+// must therefore be a LOWER-HALF, PRESENT, USER, WRITABLE page. Every 8-byte
+// write is checked on its own page, so a frame straddling a page boundary into
+// a bad page fails at that write and the whole delivery is abandoned (the
+// existing `ok &=` / FAILED path). User stacks are 4KB pages, so the
+// keep-flags PTE carries the real USER/WRITE bits (the 2MiB path does not
+// occur here).
 static bool signal_write_user(task_t *task, uint64_t user_va, uint64_t value)
 {
-	uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, user_va);
-	if (phys == 0 || phys == 0xbadbadba)
-		return false;
+	if (user_va >= SIGNAL_USER_CANONICAL_MAX)
+		return false;   // upper half: the kernel's, never a user frame's
+	uintptr_t pte = paging_walk_paging_table_keep_flags(
+	                    (pt_entry_t *)task->pml4v, user_va, true);
+	if (pte == 0xbadbadba)
+		return false;   // not mapped
+	const uint64_t need = PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+	if ((pte & need) != need)
+		return false;   // read-only, kernel-only, or absent — refuse
+	uintptr_t phys = (pte & ~0xFFFULL) | (user_va & 0xFFFULL);
 	*(uint64_t *)(phys | kHHDMOffset) = value;
 	return true;
 }
