@@ -1,6 +1,21 @@
 # AGENTS.md
 
 ## Agent Instructions
+### The Comment Is Part Of The Code
+IMPORTANT: When you change what code DOES, the comments describing it are part of that change — not follow-up work, not a tidy-up for later. A comment you leave behind is a claim you are still making.
+
+**A stale comment is worse than no comment.** No comment makes a reader read the code. A stale one makes them trust a false claim and *stop looking* — so it does not merely fail to help, it actively spends someone's attention in the wrong place. This is not a style preference; it has cost this project real time and hidden real bugs:
+
+- **A stale doc misfiled a P1.** This file's own HHDM section still warned that `allocate_memory_aligned()` memory "MAY NOT BE accessible via HHDM" — false since the July 2026 lazy-HHDM change. A reviewer read it, believed it, and filed a P1 that did not exist. The round was spent proving the DOCUMENT wrong rather than improving the code (PR #29 rd5).
+- **A half-true comment hid a kernel panic.** `signals.c` said the SIGSEGV path had "no lock to take". True of the pending set; false about page lifetime — and the gap it papered over was a ring-3-triggerable ring-0 fault (rd8/rd11).
+- **A reassuring comment WAS the bug.** `smp_core.c`'s SFMASK line ended "No need to touch other flags." That sentence was the defect: the direction flag crossed into the kernel on every syscall (rd10).
+
+**The test, applied after every edit:** re-read every comment your change touches and ask *"is this still true, and is it still the WHOLE truth?"* HALF-TRUE IS THE DANGEROUS KIND — it survives review precisely because the part a reader spot-checks is correct.
+
+**Names are comments too.** If a variable's meaning widens, its name is now stale in exactly the same way (`oversized` became `refuse` the moment it also covered "could not read it").
+
+**When a comment turns out to be wrong, fix the comment in the same commit as the code — and say in the commit message that it was wrong.** The reasoning that was mistaken is more useful to the next reader than a silent correction.
+
 ### Regression-First Debugging
 IMPORTANT: When a new crash, hang, fault, or behavioral regression appears after recent edits, first assume the most recent relevant change may have caused it.
 

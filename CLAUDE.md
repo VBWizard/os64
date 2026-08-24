@@ -8,6 +8,20 @@ you: the philosophy, how to work with Chris, the failure fingerprints, and
 the QEMU verification harness you are expected to drive yourself. This file
 tells you how the code works; that one tells you how the PROJECT works.
 
+**AND THE RULE THAT OUTRANKS EVERYTHING ELSE IN THIS FILE: the comment is part
+of the code.** When you change what code does, the comments describing it
+change in the same commit. A stale comment is worse than no comment — no
+comment makes a reader read the code, a stale one makes them trust a false
+claim and stop looking. It has cost this project a wasted review round (a
+stale HHDM warning in AGENTS.md caused a P1 that did not exist to be filed),
+and it has hidden a real ring-3-triggerable kernel panic behind a comment that
+was only half true. After every edit, re-read the comments your change touched
+and ask "is this still true, and is it still the WHOLE truth?" — half-true is
+the dangerous kind, because the part anyone spot-checks is the part that is
+right. Names count as comments (`oversized` had to become `refuse` the day it
+also meant "unreadable"). Full argument and the receipts: AGENTS.md § The
+Comment Is Part Of The Code.
+
 ## Project Overview
 
 os64 is a 64-bit x86 operating system kernel built for educational purposes. It uses the Limine bootloader protocol and boots on QEMU (or real hardware) in both BIOS and UEFI modes.
@@ -326,9 +340,21 @@ the library serves every process). How it fits together:
   - IRQ0 (timer): `handler_irq0_timer.S` - scheduler tick
   - IRQ1 (keyboard): `handler_irq1_keyboard.S`
 
-**Signals (`kernel/src/signals.c`):**
-- Signal infrastructure (not fully POSIX-compliant yet)
-- `init_signals()`, `signal_handler()`
+**Signals (`kernel/src/signals.c`):** — SIGNALS.md is the design record
+- Ring-3 handlers are REAL: installed via `SYSCALL_SIGNAL_HANDLER` (49),
+  delivered by three paths, ended by `sigreturn`. Deliberately not POSIX —
+  numbers not bitmasks, no `SA_RESTART`, no `errno`; an interrupted blocking
+  call answers `OS64_INTERRUPTED` and the caller decides (DIVERGENCES § Signals)
+- THE THREE DELIVERY PATHS, because which one runs decides what can go wrong:
+  **§5** the dispatcher exit rewrites where a syscall returns (the common
+  case); **§10** the scheduler visits a thread that makes NO syscalls and
+  rewrites `thread->regs` — remember `mp_isrSaved*` is a mirror that must be
+  updated too; **§9** the page-fault handler resumes a caught SIGSEGV out of
+  the exception frame. SIGKILL is never catchable and never deferred
+- `task->signalLock` has TWO jobs: serializing delivery, and keeping a user
+  page alive across a frame write (see its comment in task.h — the second job
+  is not obvious from the name and a missed site was a kernel panic)
+- `init_signals()`, `signal_set_handler()`, `signal_deliver_*()`
 
 ### Configuration
 

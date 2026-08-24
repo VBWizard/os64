@@ -181,7 +181,15 @@
         // task-wide.
         //
         // NULL = no handler = the kernel's default action for that signal.
-        // Nothing installs one yet; the registration syscall is step 2.
+        // Installed through SYSCALL_SIGNAL_HANDLER (49) and DELIVERED by all
+        // three paths in signals.c — the syscall-exit dispatcher (§5), the
+        // scheduler's visit to a spinning thread (§10), and the page-fault
+        // handler for a caught SIGSEGV (§9). Writes take signalLock below.
+        // (This line used to read "Nothing installs one yet; the registration
+        // syscall is step 2." Both steps shipped in the same arc that added
+        // the lock underneath it, and the note outlived them by a fortnight —
+        // which is the whole argument for AGENTS.md § The Comment Is Part Of
+        // The Code, recorded here because this is where it caught us.)
         void *sighandler[SIGNAL_COUNT];
         // Serializes SIGNAL DELIVERY across this task's threads (2026-08-24,
         // Codex #29). The aim is a broadcast — every thread carries the
