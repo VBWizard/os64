@@ -1215,6 +1215,21 @@ static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 	{
 		mp_isrSavedRIP[apic_id] = thread->regs.RIP;
 		mp_isrSavedRSP[apic_id] = thread->regs.RSP;
+		// RFLAGS TOO (Codex #29 rd11), and its absence made the previous
+		// round's fix a no-op on this path. Delivery clears DF in
+		// thread->regs.RFLAGS so a handler is not entered with the
+		// direction flag set — but on the CONTINUE path the ISR exit IRETs
+		// from mp_isrSavedRFlags, never re-reading regs, so the handler got
+		// the stale interrupted flags and the clear achieved nothing.
+		//
+		// THE INVARIANT, stated once so the next field does not repeat this:
+		// mp_isrSaved* is a MIRROR, and a partial mirror is worse than none
+		// because it looks maintained. Whatever delivery changes in
+		// thread->regs must be copied here, or it only takes effect on the
+		// reload path and silently vanishes on the other one. RIP and RSP
+		// were mirrored because delivery obviously moved them; RFLAGS was
+		// missed because the change to it was subtle — one bit.
+		mp_isrSavedRFlags[apic_id] = thread->regs.RFLAGS;
 		return;
 	}
 

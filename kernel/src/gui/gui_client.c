@@ -70,18 +70,53 @@ static window_t *handle_lookup(int64_t handle)
 // Release a task-backed canvas: unmap the owner's VA, give the pages back,
 // and blind wm_destroy's surface_free to the swap (pixels = NULL; its NULL
 // guard makes that free a no-op). Caller holds kGuiLock and supplies the
-// OWNING task's pml4v — the mapping exists in exactly one address space.
+// OWNING task — the mapping exists in exactly one address space.
 // The VA itself stays burned forever (the bump allocator never reuses), so
 // a stale canvas pointer faults instead of aliasing whatever comes next.
-static void canvas_release_locked(window_t *win, pt_entry_t *pml4v)
+//
+// UNDER THE OWNER'S signalLock (Codex #29 rd11), and the reason is not about
+// the GUI at all. A canvas is allocator-backed, task-mapped, USER-WRITABLE
+// memory — which means ring 3 can pivot RSP into it, and signal delivery
+// reaches a user stack by resolving the page and storing through its HHDM
+// alias, an alias that exists only WHILE THE PAGE IS ALLOCATED (task.h,
+// signalLock's second job). Free it between delivery's resolve and its store
+// and that store takes a ring-0 #PF: a sibling calling gui_window_destroy()
+// could panic the kernel.
+//
+// This is the SAME hole rd8 closed in syscall_unmap, and it stayed open here
+// because that round's audit grepped free_memory in syscall.c ONLY and
+// concluded "unmap is the only ring-3-reachable path that frees task user
+// pages". It was not — the GUI frees task pages too, from a syscall. The rule
+// that survives, written where the next such allocator lives: ANY code that
+// frees memory currently mapped into a task's address space as user-writable
+// must take that task's signalLock across the free, or delivery can be
+// standing in it.
+//
+// Lock order is kGuiLock -> signalLock (every caller here already holds
+// kGuiLock, and no signal path ever takes kGuiLock), so this nests without a
+// cycle. One free_memory for the whole extent, so the hold is bounded no
+// matter how large the canvas.
+static void canvas_release_locked(window_t *win, task_t *owner)
 {
 	if (win->canvas_task_phys == 0)
 		return;
-	paging_unmap_pages(pml4v, win->canvas_task_va,
+	// The owner is a PRECONDITION, not an optional extra: a task-backed
+	// canvas has, by definition, exactly one owning address space, and both
+	// the unmap and the lock need it. Refusing here beats freeing pages we
+	// cannot unmap (which would leave the task a live mapping to memory the
+	// allocator has handed to somebody else).
+	if (owner == NULL)
+		return;
+
+	uint64_t sf = spinlock_acquire_irqsave(&owner->signalLock);
+
+	paging_unmap_pages((pt_entry_t *)owner->pml4v, win->canvas_task_va,
 	                   (size_t)win->canvas_pages * PAGE_SIZE);
 	free_memory(win->canvas_task_phys);
 	win->canvas.pixels = NULL;
 	win->canvas_task_phys = 0;
+
+	spinlock_release_irqrestore(&owner->signalLock, sf);
 }
 
 // Look up a handle AND verify the caller owns it — the check every
@@ -274,7 +309,7 @@ int64_t gui_window_destroy(int64_t handle)
 	// context switch.)
 	if (win->canvas_task_phys != 0) {
 		core_local_storage_t *cls = get_core_local_storage();
-		canvas_release_locked(win, cls->task->pml4v);
+		canvas_release_locked(win, cls->task);
 		RELOAD_CR3
 	}
 	wm_destroy(win);   // damages the vacated area itself
@@ -564,7 +599,7 @@ void gui_task_destroy_windows(struct task *t)
 		// call sites (exit teardown and pre-teardown burial), which is what
 		// makes the unmap legal; no TLB flush needed — the task never runs
 		// again, and free_memory's HHDM shootdown covers the alias side.
-		canvas_release_locked(win, t->pml4v);
+		canvas_release_locked(win, t);
 		wm_destroy(win);   // damages the vacated area itself
 	}
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
