@@ -208,6 +208,14 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
 	uint32_t marked = 0;
 
+	// UNDER signalLock, like the other broadcast producers (Codex #29 rd7):
+	// this was the LAST unlocked writer of sigind. A consumer clearing a bit
+	// under the lock and this loop OR-ing SIGKILL in are non-atomic RMWs on
+	// the same word, so a race could drop the SIGKILL — and a sibling that
+	// missed its kill keeps running after teardown has closed the task's
+	// handles and windows. (rd4 locked task_signal_all_threads/_and_nudge;
+	// this one hid in the exit path.)
+	uint64_t slf = spinlock_acquire_irqsave(&task->signalLock);
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
 	{
 		// `exiting` as well as `exited`: a sibling already walking its own
@@ -235,6 +243,7 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		}
 	}
+	spinlock_release_irqrestore(&task->signalLock, slf);
 
 	if (marked)
 		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,

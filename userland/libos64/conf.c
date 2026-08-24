@@ -17,6 +17,8 @@
 #include "os64/io.h"
 #include "os64/mem.h"   // os64_malloc — the buffer belongs to the CALL, not the program
 #include "os64/str.h"   // os64_streq_nocase (settings keys), os64_strcopy
+#include "os64/fmt.h"   // os64_snprintf — the per-saver temp name
+#include "os64/proc.h"  // os64_getpid — makes that temp name unique
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"   // SYSCALL_CONF_RESOLVE — the kernel walks the ladder
 
@@ -481,17 +483,20 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	// rename replaces atomically (the 2026-08-16 ruling), so a crash between
 	// these two calls leaves the OLD config whole rather than a half-written
 	// one.
+	// The temp name is PER-SAVER, not a shared "<path>.new" (Codex #29 rd7):
+	// two processes saving the same file both opened the identical temp, and
+	// writer B could truncate it after A closed but before A renamed — so A
+	// published an inode B was still filling, a partial file defeating the
+	// atomic-write guarantee. Tagging it with the pid gives each process its
+	// own temp; the rename over `path` is still the atomic publish.
 	char temp[OS64_CONF_PATH_MAX];
-	size_t plen = os64_strlen(path);
-	if (plen + 5 >= sizeof(temp)) {
+	int64_t tlen = os64_snprintf(temp, sizeof(temp), "%s.%ld.new",
+	                             path, (long)os64_getpid());
+	if (tlen < 0 || (size_t)tlen >= sizeof(temp)) {
 		os64_free(old);
 		os64_free(neu);
 		return OS64_CONF_TRUNCATED;
 	}
-	for (size_t j = 0; j <= plen; j++)
-		temp[j] = path[j];
-	temp[plen + 0] = '.'; temp[plen + 1] = 'n'; temp[plen + 2] = 'e';
-	temp[plen + 3] = 'w'; temp[plen + 4] = '\0';
 
 	int64_t out_fd = os64_open(temp, "w");
 	if (out_fd < 0) {

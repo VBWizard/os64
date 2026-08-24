@@ -1153,21 +1153,33 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 				if (n == PIPE_ERR_CLOSED)
 				{
-					// Nobody is left to read this. If the writer INSTALLED a
-					// SIGPIPE handler, honor it (Codex #29): the API accepts
-					// one, so terminating anyway would make catchability a
-					// lie. Raise SIGPIPE — delivery arms on this syscall's
-					// exit, exactly like the terminating signals above — and
-					// tell the caller its write was cut short. OS64_INTERRUPTED
-					// is the arc's one answer for "a signal interrupted your
-					// call"; a program that wants EPIPE-style detail inspects
-					// after its handler runs. Without a handler the default
-					// stands: terminate, which is what `yes | head` needs.
+					// Nobody is left to read this. Decide the disposition and
+					// ACT ATOMICALLY under signalLock (Codex #29 rd7): a racy
+					// check-then-publish let another thread restore the default
+					// between the two, after which we returned INTERRUPTED with
+					// no handler run AND no default death — a stuck pending
+					// SIGPIPE on a live task (SIGPIPE is not in
+					// SIGNALS_TERMINATING, so no checkpoint would ever action
+					// it). Registration also holds signalLock, so under it the
+					// handler cannot change beneath us.
+					uint64_t spf = spinlock_acquire_irqsave(&task->signalLock);
 					if (task->sighandler[SIGPIPE] != NULL)
 					{
-						task_signal_all_threads(task, SIGPIPE);
+						// A handler is installed — publish SIGPIPE inline
+						// (task_signal_all_threads would re-take this same
+						// lock) so delivery arms it on this syscall's exit, and
+						// tell the caller its write was cut short.
+						// OS64_INTERRUPTED is the arc's one answer for "a
+						// signal interrupted your call".
+						for (thread_t *pth = task->threads; pth != NULL; pth = pth->taskNext)
+							sigset_add(&pth->signals.sigind, SIGPIPE);
+						spinlock_release_irqrestore(&task->signalLock, spf);
 						return (uint64_t)(int64_t)OS64_INTERRUPTED;
 					}
+					spinlock_release_irqrestore(&task->signalLock, spf);
+					// No handler: the default action is death, applied HERE in
+					// our own context. Nothing is left pending, so nothing can
+					// get stuck — and this is what `yes | head` needs.
 					raise_sigpipe_and_die(task);
 					__builtin_unreachable();
 				}
