@@ -68,11 +68,24 @@ static os64_image_status_t alloc_pixels(uint32_t w, uint32_t h,
 // triples. Jef Poskanzer's 1988 format, and still the easiest way to get a
 // picture out of a program that has no libraries.
 
+// WHAT COUNTS AS WHITESPACE, ANSWERED ONCE (Codex #30 rd5). Three sites
+// used to spell it by hand as the four bytes everybody remembers — space,
+// tab, CR, LF — and all three forgot the two nobody does: vertical tab and
+// form feed. Netpbm's own reader (libnetpbm's pm_getc/pm_getuint) accepts
+// them via isspace(), so a file that separates its header with '\f' is a
+// legal picture that os64 was refusing while claiming to parse "whitespace-
+// separated" input. One predicate, so the next reviewer who finds a seventh
+// byte fixes it in one place rather than in the two they happened to spot.
+static bool ppm_is_ws(uint8_t c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+           c == '\v' || c == '\f';
+}
+
 static bool ppm_skip_ws(const uint8_t *d, size_t len, size_t *i)
 {
     for (;;) {
-        while (*i < len && (d[*i] == ' ' || d[*i] == '\t' ||
-                            d[*i] == '\r' || d[*i] == '\n'))
+        while (*i < len && ppm_is_ws(d[*i]))
             (*i)++;
         // A '#' runs to end of line and may appear anywhere whitespace may —
         // including between the width and the height, which is why this is a
@@ -121,7 +134,7 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
     // decoded a 1x1 image out of a magic number that is not P6 at all. The
     // format is whitespace-separated from end to end; every place that is
     // true has to ask, not just the one a review pointed at.
-    if (i >= len || (d[i] != ' ' && d[i] != '\t' && d[i] != '\r' && d[i] != '\n'))
+    if (i >= len || !ppm_is_ws(d[i]))
         return OS64_IMAGE_MALFORMED;
 
     if (!ppm_read_uint(d, len, &i, &w) ||
@@ -147,7 +160,7 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
     // picture that is subtly wrong rather than to a refusal. The comment
     // above already said the separator was whitespace; the code had not been
     // asking.
-    if (i >= len || (d[i] != ' ' && d[i] != '\t' && d[i] != '\r' && d[i] != '\n'))
+    if (i >= len || !ppm_is_ws(d[i]))
         return OS64_IMAGE_MALFORMED;
     i++;
 

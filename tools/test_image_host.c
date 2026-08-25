@@ -363,11 +363,14 @@ static void test_refusals(void)
                   OS64_IMAGE_MALFORMED,
                   "ppm with a non-whitespace raster separator");
     }
-    // ...and a legal one still works with each of the four whitespace bytes,
+    // ...and a legal one still works with each of the SIX whitespace bytes,
     // so the check above cannot be "reject everything" and pass by accident.
+    // Six, not four (Codex #30 rd5): vertical tab and form feed are Netpbm
+    // whitespace too — libnetpbm reads through isspace() — and the decoder
+    // refused both while calling itself whitespace-separated.
     {
-        const char *seps = " \t\r\n";
-        for (int k = 0; k < 4; k++) {
+        const char *seps = " \t\r\n\v\f";
+        for (int k = 0; k < 6; k++) {
             char f[16];
             int n = snprintf(f, sizeof(f), "P6 1 1 255%c", seps[k]);
             f[n++] = 0x11; f[n++] = 0x22; f[n++] = 0x33;
@@ -512,6 +515,17 @@ static void test_blit(void)
     eq_u32(dst_at(6, 1), 0xff111111u, "blit: does not paint right of itself");
     // The pixel one row below the source's last, which pitch confusion hits.
     eq_u32(dst_at(2, 4), 0xff111111u, "blit: does not paint below itself");
+
+    // OFF-CANVAS AT THE EDGE OF int32_t (Codex #30 rd5): the contract says an
+    // off-canvas blit is a no-op, and "off-canvas" includes x == INT32_MAX,
+    // where `x + w` overflowed inside os64_rect_intersect — undefined
+    // behaviour, flagged by the sanitizer build this file documents, before
+    // the promised no-op could happen. Widened edge sums now; this pins it.
+    d = make_dst();
+    os64_draw_blit(&d, INT32_MAX, INT32_MAX, src, 4, 3, 4);
+    os64_draw_blit(&d, INT32_MIN, INT32_MIN, src, 4, 3, 4);
+    os64_draw_fill_rect(&d, (os64_gui_rect_t){INT32_MAX, 0, 1, 1}, 0xff000000u);
+    eq_u32(dst_at(0, 0), 0xff111111u, "blit at INT32_MAX/INT32_MIN is a no-op, not UB");
 
     // NEGATIVE ORIGIN: clips the source's left and top, does not shift it.
     // This is the case "center an image bigger than the window" depends on.
