@@ -30,7 +30,12 @@
 // What the one entry field currently means. One field, one label naming its
 // mode — a menu bar's worth of dialogs in two widgets (his ruling: button
 // row; "if we hate it we'll change it").
-typedef enum { MODE_NONE, MODE_OPEN, MODE_SAVEAS, MODE_FIND } field_mode_t;
+// MODE_QUITSAVE is MODE_SAVEAS with somewhere to be afterwards (2026-08-23):
+// the same one field, prefilled with the same current path, but a successful
+// write ends the program instead of returning to it. A separate mode rather
+// than a "quitting" flag beside MODE_SAVEAS, because the field's Enter has to
+// mean something different and the label has to SAY so.
+typedef enum { MODE_NONE, MODE_OPEN, MODE_SAVEAS, MODE_FIND, MODE_QUITSAVE } field_mode_t;
 
 typedef struct
 {
@@ -96,11 +101,27 @@ static const char *kHelpLines[] = {
     "  Ctrl+F                          find (Enter = next hit, wraps)",
     "  Ctrl+O                          open another file",
     "  Ctrl+G                          this page (Esc or ^G returns)",
-    "  Ctrl+Q                          quit",
+    "  Ctrl+Q, Alt+F4                  quit (asks first if there are",
+    "                                  unsaved changes)",
+    "",
+    "QUITTING WITH CHANGES PENDING",
+    "  The * beside the filename means the buffer differs from the disk.",
+    "  Quitting then does not just leave: the entry field opens as",
+    "  \"save before quit:\", prefilled with the current path, so Enter",
+    "  alone saves where the file came from and closes.",
+    "",
+    "      Enter   save and quit (a failed save quits nothing)",
+    "      Ctrl+Q  quit anyway, discarding the changes",
+    "      Esc     never mind - back to editing",
+    "",
+    "  Alt+F4 asks the same question. That is the window system being",
+    "  polite: the first press is a REQUEST an app may answer, and only",
+    "  a second press within five seconds is an order.",
     "",
     "THE ENTRY FIELD",
-    "  Open, Save As, and find share one field below the buttons; the",
-    "  label names what it currently means. Enter acts, Esc cancels.",
+    "  Open, Save As, find, and save-before-quit share one field below",
+    "  the buttons; the label names what it currently means. Enter acts,",
+    "  Esc cancels.",
     "  Ctrl+V pastes into it too - one line's worth, since it is one line.",
     "",
     "THE CLIPBOARD IS A FILE",
@@ -123,6 +144,9 @@ static const char *kHelpLines[] = {
     "  scribe was designed and written by Claude Fable 5, who grew the",
     "  toolkit it stands on - textview, scrollbar, textfield - so that",
     "  the NEXT app costs less than this one did.",
+    "  Save-before-quit, and the Alt+F4 answer behind it, by Claude",
+    "  Opus 5 - because Chris noticed that ^Q threw away work without",
+    "  so much as asking, and that one Alt+F4 did nothing at all.",
     "  Built for Chris. Built for os64: our OS.",
     "",
     "  Lineage: ed begat quill; Bravo begat scribe.",
@@ -201,7 +225,17 @@ static void layout(os64_ui_t *ui)
     bool bar2 = (g.mode != MODE_NONE);
     g.mode_label.hidden = g.field.w.hidden = !bar2;
     if (bar2) {
-        int32_t lw = 9 * t->font_w;
+        // MEASURE the label instead of assuming it (2026-08-23). This was a
+        // flat `9 * font_w`, which fits "save as:" and "open:" and silently
+        // guillotined the first label longer than eight characters —
+        // "save before quit:" arrived as "save befor". A width derived from
+        // the text cannot go stale when the next mode is named. Capped at a
+        // third of the window so a long label can never starve the field it
+        // is labelling.
+        size_t label_chars = g.mode_label.text ? os64_strlen(g.mode_label.text) : 0;
+        int32_t lw = (int32_t)(label_chars + 1) * t->font_w;
+        if (lw > W / 3)
+            lw = W / 3;
         g.mode_label.bounds = (os64_gui_rect_t){ pad, y, lw, bh };
         g.field.w.bounds    = (os64_gui_rect_t){ pad + lw + t->gap, y,
                                                  W - 2 * pad - lw - t->gap, bh };
@@ -400,16 +434,64 @@ static void do_load(const char *path)
     os64_ui_mark_dirty(&g.ui, &g.view.w);
 }
 
-static void do_save(const char *path)
+// Returns whether the bytes actually reached the disk. The caller that quits
+// on success (request_quit's prompt) NEEDS that answer: quitting after a
+// failed write is the one bug an editor is never forgiven for, and a `void`
+// here would have made it the easy thing to write. A failure deliberately
+// leaves the field up with its error in the status line, so the next thing
+// the user types is a different path.
+static bool do_save(const char *path)
 {
     char err[SCRIBE_STATUS_MAX];
     if (sbuf_save(&g.buf, path, err, sizeof(err)) < 0) {
         status_show(err);
-        return;
+        return false;
     }
     os64_strcopy(g.path, sizeof(g.path), path);
     leave_mode();
     status_refresh();
+    return true;
+}
+
+// ── quitting, which is a question when there is something to lose ───────────
+//
+// Ctrl+Q used to end the program on the spot, dirty buffer and all, on the
+// argument that the status line's `*` had been the warning. It was not much
+// of one (Chris, 2026-08-23), and Alt+F4 made it worse: the window system
+// asks the app first and only kills on the SECOND press, so scribe — which
+// answered neither — could be closed by any two presses and by no single one.
+//
+// Both verbs come here now, and both mean the same thing: with nothing
+// pending, go; with changes, ASK. The question is the field the user already
+// knows — the same one Open and Save As use — prefilled with the current path
+// so Enter alone is "save where it came from".
+//
+//   Enter   save and quit (a FAILED save quits nothing; the field stays up)
+//   ^Q      quit anyway, discarding — the escape hatch the old behavior was
+//   Esc     never mind, back to editing
+//
+// "Press the quit key a second time to mean it" is deliberately the window
+// system's own grammar one level down: Alt+F4 asks once and escalates on the
+// repeat, and so does this. Two doors, one habit.
+static void request_quit(void)
+{
+    // Already asking? Then this is the second press, and it means it.
+    if (g.mode == MODE_QUITSAVE) {
+        g.running = false;
+        return;
+    }
+    if (!g.buf.dirty) {
+        g.running = false;
+        return;
+    }
+    // enter_mode leaves the help page for us — being asked about a document
+    // you cannot see would be a poor question.
+    enter_mode(MODE_QUITSAVE, "save before quit:", g.path);
+    // Short enough to fit beside the buttons — the status widget's width ends
+    // where Open begins, so a longer line simply gets cut off there. The full
+    // rule (including Esc) lives on the help page, which is where a sentence
+    // that long belongs.
+    status_show("unsaved changes - Enter saves, ^Q discards");
 }
 
 // ── find ────────────────────────────────────────────────────────────────────
@@ -467,8 +549,16 @@ static void field_submit(os64_ui_textfield_t *tf, void *user)
     (void)user;
     switch (g.mode) {
     case MODE_OPEN:   if (tf->buf[0]) do_load(tf->buf); break;
-    case MODE_SAVEAS: if (tf->buf[0]) do_save(tf->buf); break;
+    case MODE_SAVEAS: if (tf->buf[0]) (void)do_save(tf->buf); break;
     case MODE_FIND:   do_find(tf->buf); break;   // stays open: Enter = next
+    case MODE_QUITSAVE:
+        // Only a save that REACHED THE DISK earns the exit. Anything else
+        // leaves the prompt standing with the reason in the status line.
+        if (tf->buf[0] == '\0')
+            status_show("name a file to save to, or ^Q to quit without saving");
+        else if (do_save(tf->buf))
+            g.running = false;
+        break;
     default: break;
     }
 }
@@ -476,7 +566,23 @@ static void field_submit(os64_ui_textfield_t *tf, void *user)
 static void field_cancel(os64_ui_textfield_t *tf, void *user)
 {
     (void)tf; (void)user;
+    // Cancelling the save-before-quit prompt cancels the QUIT as well, which
+    // is what Esc means everywhere else in this program: never mind. The way
+    // out without saving is ^Q, which request_quit spells out in the status
+    // line while the prompt is up.
     leave_mode();
+}
+
+// Alt+F4. The window system delivers this as a REQUEST — the window is the
+// app's, and an editor with unsaved work gets to answer (GRAPHICS.md's chord
+// table). libui routes it here when on_close is set; without one it would set
+// ui->quit instead, and scribe's hand-rolled loop was reading neither, which
+// is why a single Alt+F4 used to do nothing at all and a second one arrived
+// as SIGTERM. Same door as ^Q, deliberately: one habit, two keys.
+static void on_close_request(os64_ui_t *ui)
+{
+    (void)ui;
+    request_quit();
 }
 
 static void click_open(os64_ui_widget_t *w, void *user)
@@ -585,8 +691,12 @@ static bool app_shortcut(const os64_gui_event_t *ev)
     case 0x0f:  // Ctrl+O
         enter_mode(MODE_OPEN, "open:", "");
         return true;
-    case 0x11:  // Ctrl+Q — quits regardless; the status line was the warning
-        g.running = false;
+    case 0x11:  // Ctrl+Q — asks first when there is something to lose, and a
+                // second press while it is asking discards (see request_quit).
+                // Deliberately NOT guarded by `g.mode != MODE_NONE` like the
+                // clipboard trio above: the whole point is that ^Q reaches
+                // through its own prompt.
+        request_quit();
         return true;
     default:
         return false;
@@ -645,6 +755,7 @@ int main(int argc, char **argv)
 
     os64_ui_init(&g.ui, &g.ctx);
     g.ui.on_resize = on_resize;
+    g.ui.on_close  = on_close_request;   // Alt+F4 asks; scribe answers
 
     os64_ui_panel(&g.root);
     g.root.bounds = (os64_gui_rect_t){ 0, 0, (int32_t)g.ctx.surf.width,
@@ -685,7 +796,12 @@ int main(int argc, char **argv)
     // scribe owns its loop instead of using os64_ui_run for exactly this.
     g.running = true;
     os64_ui_paint(&g.ui);
-    while (g.running) {
+    // `!g.ui.quit` as well as `g.running`: ui.h's contract says an app with
+    // its own loop must check it, because libui sets it for any close request
+    // an app has not claimed. scribe HAS claimed it (on_close above), so the
+    // flag should never fire — which is exactly why it is cheap to honor and
+    // expensive to omit. Not honoring it is the bug this slice came from.
+    while (g.running && !g.ui.quit) {
         os64_gui_event_t ev;
         int64_t rc = os64_gui_event_wait(g.win, &ev);
         if (rc != 1)

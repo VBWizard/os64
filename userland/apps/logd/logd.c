@@ -27,6 +27,7 @@
 
 #include "os64/os64.h"
 #include "os64/klog_format.h"   // the ONE renderer, shared with the kernel
+#include "os64/conf.h"          // os64_conf_find — the system's search path, not ours
 
 #define BATCH 64
 #define DEFAULT_PATH "/fat/os64.log"
@@ -84,11 +85,14 @@ static char gFormatBuf[160];           // holds a LITERAL format read from a fil
 // files that disagree about which location outranks which is a trap nobody
 // deserves at 2am:
 //
-//   /home/logd.conf   YOURS. Its own partition, survives builds and root
-//                     refreshes untouched (the persistence doctrine).
-//   /etc/logd.conf    the SYSTEM's, shipped by the build on the ext2 root —
-//                     which means `make` rewrites it, so edits here are the
-//                     build's to keep, not yours.
+//   logd.conf         found wherever the CONFIG SEARCH PATH says
+//                     (/etc/os64.conf's `conf =`, default /home then /etc):
+//                     /home is YOURS — its own partition, survives builds and
+//                     root refreshes untouched (the persistence doctrine) —
+//                     and /etc is the SYSTEM's, shipped by the build on the
+//                     ext2 root, so `make` rewrites it and edits there are
+//                     the build's to keep, not yours. This daemon used to
+//                     spell that pair out itself; it asks now (2026-08-23).
 //   LOGFMT=<name>     inherited from the kernel cmdline (argv[2]) when no
 //                     config file exists at all, so one flag can set both
 //                     sinks when that is all somebody wanted.
@@ -110,7 +114,10 @@ static char gFormatBuf[160];           // holds a LITERAL format read from a fil
 // reading the kernel rings. See the back-off comment in the drain loop.
 static bool gBackingOff = false;
 
-static const char *const kConfPaths[] = { "/home/logd.conf", "/etc/logd.conf" };
+// (The private { "/home/logd.conf", "/etc/logd.conf" } ladder that used to
+// live here retired 2026-08-23 — see logd_choose_format. The gradient it
+// described is now the SYSTEM's, in /etc/os64.conf, and this daemon simply
+// asks where its file is.)
 
 // Complaints about the config, held until the log file is open.
 //
@@ -280,9 +287,16 @@ static void logd_choose_format(int argc, char **argv)
 {
 	char value[sizeof(gFormatBuf)];
 
-	for (unsigned i = 0; i < sizeof(kConfPaths) / sizeof(kConfPaths[0]); i++) {
-		if (!logd_conf_value(kConfPaths[i], "format", value, sizeof(value)))
-			continue;
+	// ASK THE SYSTEM WHERE THE FILE IS (2026-08-23). This used to walk its own
+	// { "/home/logd.conf", "/etc/logd.conf" } — the first of six private
+	// copies of that sequence, and the one every later reader copied. The
+	// ladder is now /etc/os64.conf's `conf =`, walked once in the kernel, and
+	// a file that answers is announced at DEBUG_BOOT and listed in /sys/conf.
+	// Note the shape change: ONE file answers, not "the first of a list that
+	// opens", so the loop is gone — the walker already did the first-hit part.
+	char chosen[OS64_CONF_PATH_MAX];
+	if (os64_conf_find("logd.conf", chosen, sizeof(chosen)) == 0 &&
+	    logd_conf_value(chosen, "format", value, sizeof(value))) {
 
 		const char *named = os64_logfmt_by_name(value);
 		if (named != NULL) {
@@ -301,7 +315,7 @@ static void logd_choose_format(int argc, char **argv)
 			gFormat = gFormatBuf;
 			return;
 		}
-		logd_complain(kConfPaths[i],
+		logd_complain(chosen,
 		              ": format is neither a known name (classic, daily, full) "
 		              "nor a valid layout (needs %m) — using classic: ", value);
 		return;   // a file that names a format WRONGLY is not a file to fall

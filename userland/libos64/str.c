@@ -49,6 +49,26 @@ bool os64_streq(const char *a, const char *b)
     return *a == *b;        // both at their NUL == same string
 }
 
+// ASCII only, deliberately: os64 has no locale and a config key is written in
+// the same 26 letters everywhere. A table-driven fold would be a lie about
+// capabilities this system does not have.
+static inline char fold(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+bool os64_streq_nocase(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL)
+        return a == b;
+    while (*a != '\0' && fold(*a) == fold(*b))
+    {
+        a++;
+        b++;
+    }
+    return fold(*a) == fold(*b);
+}
+
 void *os64_memcpy(void *dst, const void *src, size_t n)
 {
     unsigned char *d = (unsigned char *)dst;

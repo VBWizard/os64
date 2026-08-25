@@ -22,6 +22,14 @@
 #include "memory/paging.h"     // the canvas mapping (surface pivot)
 #include "memory/allocator.h"  // allocate_memory_aligned / free_memory — task canvas pages
 #include "signals.h"    // SIGSLEEP / SIGNALS_TERMINATING — event_wait's park and its exit
+#include "os64/signal.h"   // OS64_INTERRUPTED — the value GUI_ERR_INTERRUPTED must BE
+
+// THE TWO RINGS AGREE, OR THE BUILD STOPS (Codex #29 rd19): gui_event_wait's
+// "a signal cut your wait short" is the system-wide sentinel, not a private
+// GUI code. signals.c pins every signal NUMBER this way; the one error value
+// that crosses subsystems gets the same treatment.
+_Static_assert(GUI_ERR_INTERRUPTED == OS64_INTERRUPTED,
+               "GUI_ERR_INTERRUPTED must be OS64_INTERRUPTED (os64/signal.h) — one sentinel for every interrupted wait");
 #include "kernel.h"     // kTicksSinceStart — the park's backstop deadline
 
 extern struct Framebuffer kFrameBuffer;
@@ -70,16 +78,61 @@ static window_t *handle_lookup(int64_t handle)
 // Release a task-backed canvas: unmap the owner's VA, give the pages back,
 // and blind wm_destroy's surface_free to the swap (pixels = NULL; its NULL
 // guard makes that free a no-op). Caller holds kGuiLock and supplies the
-// OWNING task's pml4v — the mapping exists in exactly one address space.
+// OWNING task — the mapping exists in exactly one address space.
 // The VA itself stays burned forever (the bump allocator never reuses), so
 // a stale canvas pointer faults instead of aliasing whatever comes next.
-static void canvas_release_locked(window_t *win, pt_entry_t *pml4v)
+//
+// UNDER THE OWNER'S signalLock (Codex #29 rd11), and the reason is not about
+// the GUI at all. A canvas is allocator-backed, task-mapped, USER-WRITABLE
+// memory — which means ring 3 can pivot RSP into it, and signal delivery
+// reaches a user stack by resolving the page and storing through its HHDM
+// alias, an alias that exists only WHILE THE PAGE IS ALLOCATED (task.h,
+// signalLock's second job). Free it between delivery's resolve and its store
+// and that store takes a ring-0 #PF: a sibling calling gui_window_destroy()
+// could panic the kernel.
+//
+// This is the SAME hole rd8 closed in syscall_unmap, and it stayed open here
+// because that round's audit grepped free_memory in syscall.c ONLY and
+// concluded "unmap is the only ring-3-reachable path that frees task user
+// pages". It was not — the GUI frees task pages too, from a syscall. The rule
+// that survives, written where the next such allocator lives: ANY code that
+// frees memory currently mapped into a task's address space as user-writable
+// must take that task's signalLock across the free, or delivery can be
+// standing in it.
+//
+// Lock order is kGuiLock -> signalLock (every caller here already holds
+// kGuiLock, and no signal path ever takes kGuiLock), so this nests without a
+// cycle. One free_memory for the whole extent, so the hold is bounded no
+// matter how large the canvas.
+// THE ONE PLACE TASK-MAPPED CANVAS PAGES GO BACK. Every caller goes through
+// here so the signalLock rule above is enforced by CONSTRUCTION rather than by
+// each site remembering it — which matters because the site that forgot it was
+// found by review, not by testing, and the next one would be too.
+//
+// The owner is a PRECONDITION, not an optional extra: a task-backed canvas has
+// exactly one owning address space by definition, and both the unmap and the
+// lock need it. Refusing beats freeing pages we cannot unmap, which would
+// leave the task a live mapping to memory the allocator has given away.
+static void canvas_pages_release(task_t *owner, uintptr_t va, uint64_t bytes,
+                                 uintptr_t phys)
+{
+	if (owner == NULL || phys == 0 || bytes == 0)
+		return;
+
+	uint64_t sf = spinlock_acquire_irqsave(&owner->signalLock);
+	paging_unmap_pages((pt_entry_t *)owner->pml4v, va, (size_t)bytes);
+	free_memory(phys);
+	spinlock_release_irqrestore(&owner->signalLock, sf);
+}
+
+static void canvas_release_locked(window_t *win, task_t *owner)
 {
 	if (win->canvas_task_phys == 0)
 		return;
-	paging_unmap_pages(pml4v, win->canvas_task_va,
-	                   (size_t)win->canvas_pages * PAGE_SIZE);
-	free_memory(win->canvas_task_phys);
+
+	canvas_pages_release(owner, win->canvas_task_va,
+	                     (uint64_t)win->canvas_pages * PAGE_SIZE,
+	                     win->canvas_task_phys);
 	win->canvas.pixels = NULL;
 	win->canvas_task_phys = 0;
 }
@@ -112,7 +165,19 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 {
 	if (!kEnableGUI)
 		return GUI_ERR_NOT_RUNNING;
-	if (w < 32 || h < 32 || w > 4096 || h > 4096)
+	if (w > 4096 || h > 4096)
+		return GUI_ERR_BAD_ARGS;
+
+	// Only documented CLIENT flags cross the boundary. The window struct's
+	// flag word also carries transient WM state (maximized/minimized), which
+	// cannot be claimed accidentally through this creation call.
+	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS |
+	                              GUI_WINDOW_START_UNFOCUSED |
+	                              GUI_WINDOW_PINNED;
+	uint32_t create_flags = (uint32_t)flags & client_flags;
+	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
+	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - GUI_BORDER_WIDTH;
+	if (content_w < 8 || content_h < 8)
 		return GUI_ERR_BAD_ARGS;
 
 	// ── THE SURFACE PIVOT (GRAPHICS.md, migration step 3) ───────────────
@@ -136,9 +201,6 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	//
 	// The content inset mirrors wm_create's math; when wm_create refuses a
 	// degenerate size below, the pivot is undone on the same exit.
-	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = (int32_t)h - wm_chrome_top((uint32_t)flags) - GUI_BORDER_WIDTH;
-
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = (cls != NULL) ? cls->task : NULL;
 	bool pivot = (task != NULL && !task->kernelTask &&
@@ -187,15 +249,8 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		goto undo_pivot;
 	}
 
-	// Only the CLIENT flags cross the boundary. The window struct's flag word
-	// also carries window-manager STATE (pinned, and whatever follows it),
-	// which is the user's to set with a chord and not an app's to claim at
-	// birth — a program that pinned itself on top would be the GUI's first
-	// pop-up ad. Masked rather than refused: the ABI header documents the
-	// two bits, and a stray third is a bug in the caller, not an attack.
-	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED;
 	window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
-	                          (uint32_t)flags & client_flags);
+	                          create_flags);
 	if (!win) {
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 		goto undo_pivot;
@@ -242,10 +297,17 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 undo_pivot:
 	// The window never came to be; give back what the pivot staged. The VA
 	// stays burned — never-reuse is the allocator's whole tripwire.
-	if (canvas_phys != 0) {
-		paging_unmap_pages((pt_entry_t *)task->pml4v, canvas_va, canvas_bytes);
-		free_memory(canvas_phys);
-	}
+	//
+	// THROUGH THE SAME CHOKE POINT as a normal release, and not because it is
+	// tidier: these pages are already MAPPED into the task (the pivot mapped
+	// them a few lines up), user-writable, at a VA a sibling can work out —
+	// task->heapEnd is not a secret. So this rollback is subject to exactly
+	// the rule the release path is: free them without the owner's signalLock
+	// and a concurrent signal delivery can be mid-write inside them. Narrow,
+	// since it only runs when window creation fails — but rd8's window was
+	// narrow too, and it was a kernel panic. Routed here rather than fixed in
+	// place so the next person to free a canvas cannot get it wrong.
+	canvas_pages_release(task, canvas_va, canvas_bytes, canvas_phys);
 	return GUI_ERR_NO_RESOURCES;
 }
 
@@ -272,7 +334,7 @@ int64_t gui_window_destroy(int64_t handle)
 	// context switch.)
 	if (win->canvas_task_phys != 0) {
 		core_local_storage_t *cls = get_core_local_storage();
-		canvas_release_locked(win, cls->task->pml4v);
+		canvas_release_locked(win, cls->task);
 		RELOAD_CR3
 	}
 	wm_destroy(win);   // damages the vacated area itself
@@ -304,6 +366,36 @@ int64_t gui_window_get_surface(int64_t handle, surface_t *out)
 	// what their kernel-thread owners dereference.
 	if (win->canvas_task_phys != 0)
 		out->pixels = (uint32_t *)win->canvas_task_va;
+	spinlock_release_irqrestore(&kGuiLock, irqflags);
+	return 0;
+}
+
+// The readback half of create (SYSCALL_GUI_WINDOW_GET_STATE, 2026-08-23).
+// Answers with the FRAME rect — create's own units, so a saved state hands
+// straight back — and the live flag word, MASKED to the bits the ABI
+// publishes. The mask is not paranoia: window_t.flags is the window system's
+// scratch space and whatever state it grows next would otherwise leak into a
+// contract ring 3 was told is stable.
+int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
+{
+	if (!out)
+		return GUI_ERR_BAD_ARGS;
+	int64_t err;
+	uint64_t irqflags = spinlock_acquire_irqsave(&kGuiLock);
+	window_t *win = handle_lookup_owned(handle, &err);
+	if (!win) {
+		spinlock_release_irqrestore(&kGuiLock, irqflags);
+		return err;
+	}
+	out->x      = win->frame.x;
+	out->y      = win->frame.y;
+	out->width  = (uint32_t)win->frame.w;
+	out->height = (uint32_t)win->frame.h;
+	out->flags  = win->flags & (GUI_WINDOW_NO_DECORATIONS |
+	                            GUI_WINDOW_START_UNFOCUSED |
+	                            GUI_WINDOW_PINNED |
+	                            GUI_WINDOW_MAXIMIZED |
+	                            GUI_WINDOW_MINIMIZED);
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
 	return 0;
 }
@@ -448,7 +540,7 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 			return err;
 		}
 
-		if (self->signals.sigind & SIGNALS_TERMINATING) {
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING)) {
 			// Un-register on the way out — console_read's scar: a stale
 			// waiter slot is a spurious wake out of some LATER unrelated
 			// sleep.
@@ -471,8 +563,8 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 		win->waiter = self;
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 
-		sigaction(SIGSLEEP, NULL,
-		          kTicksSinceStart + GUI_EVENT_WAIT_BACKSTOP_TICKS, self);
+		signal_raise(SIGSLEEP,
+		             kTicksSinceStart + GUI_EVENT_WAIT_BACKSTOP_TICKS, self);
 	}
 }
 
@@ -532,7 +624,7 @@ void gui_task_destroy_windows(struct task *t)
 		// call sites (exit teardown and pre-teardown burial), which is what
 		// makes the unmap legal; no TLB flush needed — the task never runs
 		// again, and free_memory's HHDM shootdown covers the alias side.
-		canvas_release_locked(win, t->pml4v);
+		canvas_release_locked(win, t);
 		wm_destroy(win);   // damages the vacated area itself
 	}
 	spinlock_release_irqrestore(&kGuiLock, irqflags);

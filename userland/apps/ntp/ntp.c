@@ -102,6 +102,39 @@ static void print_offset(const char *prefix, int64_t offset)
                  (unsigned long long)millis);
 }
 
+static void log_synchronization(const char *server, uint8_t stratum,
+                                int64_t observed_epoch, int64_t target_epoch,
+                                int64_t offset, int64_t delay,
+                                bool big_change)
+{
+    uint64_t offset_magnitude = offset < 0 ? 0u - (uint64_t)offset
+                                           : (uint64_t)offset;
+    uint64_t delay_magnitude = delay < 0 ? 0u - (uint64_t)delay
+                                         : (uint64_t)delay;
+    char line[OS64_LOG_MESSAGE_MAX];
+
+    // Keep the source bounded so an RFC-sized DNS name cannot crowd the
+    // actual clock change out of the fixed-size system-log entry. The
+    // observed epoch is T4's local-clock sample; target_epoch is the value
+    // successfully handed to set_time. Offset and network delay retain the
+    // useful sub-second part that set_time's whole-second ABI cannot express.
+    os64_snprintf(line, sizeof(line),
+                  "ntp: %ssynchronized %.80s (stratum %u): epoch %lld -> %lld; "
+                  "offset %c%llu.%03llu s, delay %c%llu.%03llu s",
+                  big_change ? "WARNING large correction; " : "",
+                  server, stratum,
+                  (long long)observed_epoch, (long long)target_epoch,
+                  offset < 0 ? '-' : '+',
+                  (unsigned long long)(offset_magnitude >> 32),
+                  (unsigned long long)(((offset_magnitude & 0xffffffffu) *
+                                        1000u) >> 32),
+                  delay < 0 ? '-' : '+',
+                  (unsigned long long)(delay_magnitude >> 32),
+                  (unsigned long long)(((delay_magnitude & 0xffffffffu) *
+                                        1000u) >> 32));
+    os64_debug_log(line);
+}
+
 static const char *dial_error(int64_t result)
 {
     if (result == OS64_NET_ERR_BAD_ADDRESS)
@@ -263,6 +296,7 @@ int main(int argc, char **argv)
     // signed form is how NTP timestamp arithmetic spans the era rollover.
     int64_t offset = average_signed((int64_t)(t2 - t1),
                                     (int64_t)(t3 - t4));
+    int64_t delay = (int64_t)((t4 - t1) - (t3 - t2));
     uint64_t corrected = t4 + (uint64_t)offset;
 
     int64_t target_epoch = ntp_seconds_to_unix((uint32_t)(corrected >> 32));
@@ -284,6 +318,9 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "ntp: the kernel refused to set the clock\n");
         return 1;
     }
+
+    log_synchronization(server, stratum, received_time.epoch, target_epoch,
+                        offset, delay, big_change);
 
     if (big_change)
         print_offset("ntp: warning: large wall-clock correction of ", offset);

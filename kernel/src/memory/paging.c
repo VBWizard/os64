@@ -406,9 +406,27 @@ uintptr_t paging_walk_paging_table_keep_flags(pt_entry_t* pml4, uint64_t virtual
 }
 
 // Walk the paging table to find the paging entries for a virtual address, returns the PTE value
-uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address) 
+uintptr_t paging_walk_paging_table(pt_entry_t* pml4, uint64_t virtual_address)
 {
 	return paging_walk_paging_table_keep_flags(pml4, virtual_address, false);
+}
+
+// Resolve `va` to a physical address ONLY IF it names a writable USER page —
+// the guard for kernel writes to a ring-3-controlled address (see paging.h).
+// Born 2026-08-24 from a Codex finding on signal delivery; the same idiom
+// lived unguarded in thread_join_create's user-stack write, which is exactly
+// the "if it doesn't exist in other places, it will" Chris predicted.
+uintptr_t paging_resolve_user_writable(pt_entry_t *pml4v, uint64_t va)
+{
+	if (va >= USER_CANONICAL_MAX)
+		return 0;   // upper half: the kernel's own, never a user target
+	uintptr_t pte = paging_walk_paging_table_keep_flags(pml4v, va, true);
+	if (pte == 0xbadbadba)
+		return 0;   // not mapped
+	const uint64_t need = PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+	if ((pte & need) != need)
+		return 0;   // read-only, supervisor-only, or absent — refuse
+	return (pte & ~0xFFFULL) | (va & 0xFFFULL);
 }
 
 /// @brief Fund one table page from `source` (a task's arena) or the pool.

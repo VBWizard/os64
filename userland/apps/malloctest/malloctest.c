@@ -291,7 +291,7 @@ static uint32_t test_proc_heap(void)
     }
 
     char path[64];
-    os64_snprintf(path, sizeof(path), "/proc/%lu/heap", os64_getpid());
+    os64_snprintf(path, sizeof(path), "/proc/%lu/heap", os64_taskid());
 
     int32_t h = (int32_t)os64_open(path, "r");
     if (h < 0)

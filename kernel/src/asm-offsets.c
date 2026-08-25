@@ -26,6 +26,10 @@ void asm_offsets(void)
 
     /* thread_t (thread.h) — used in task_exit_asm.S */
     DEFINE(THREAD_OWNERTASK_OFFSET, offsetof(thread_t, ownerTask));
+    /* used by syscall.S: the in-flight syscall's return frame, published for
+     * signal delivery. On the THREAD because the frame is on the thread's
+     * kernel stack and must park and migrate with it — see thread.h. */
+    DEFINE(THREAD_SYSCALL_RETURN_FRAME_OFFSET, offsetof(thread_t, syscall_return_frame));
 
     /* task_t (task.h) — used in task_exit_asm.S */
     DEFINE(TASK_RETVAL_OFFSET, offsetof(task_t, retVal));

@@ -11,6 +11,7 @@
 # vector123 below.
 .globl vector130
 vector130:
+	cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
 	cli
 	push rax
 	push rbx
@@ -53,6 +54,7 @@ vector130:
 # never coming back has no state worth preserving.
 .globl vector132
 vector132:
+	cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
 	cli
 	call freeze_core_ISR
 1:	hlt
@@ -63,6 +65,7 @@ vector132:
 # the DR programming and the EOI.
 .globl vector131
 vector131:
+	cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
 	cli
 	push rax
 	push rbx
@@ -102,6 +105,7 @@ vector131:
 
 .globl vector123
 vector123: # IPI_INVALIDATE_TLB_VECTOR
+	cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
 	cli
 	push rax
 	push rbx
@@ -140,6 +144,7 @@ vector123: # IPI_INVALIDATE_TLB_VECTOR
 	iretq
 .globl vector124
 vector124: # AP Disable vector (IPI_DISABLE_SCHEDULING_VECTOR)
+	cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
 	cli
 	push rax
 	push rbx
@@ -178,6 +183,7 @@ vector124: # AP Disable vector (IPI_DISABLE_SCHEDULING_VECTOR)
 	iretq
 .globl vector125 
 vector125: # AP Enable vector (IPI_ENABLE_SCHEDULING_VECTOR)
+	cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
 	cli
 	push rax
 	push rbx
@@ -216,6 +222,7 @@ vector125: # AP Enable vector (IPI_ENABLE_SCHEDULING_VECTOR)
 	iretq
 .globl vector127 # AP Initialization vector (IPI_AP_INITIALIZATION_VECTOR)
 vector127:
+	cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
 	cli
 	push rax
 	push rbx

@@ -28,7 +28,7 @@
 #include "CONFIG.h"
 #include "memory/kmalloc.h"
 #include "smp_core.h"        // get_core_local_storage — who is reading
-#include "signals.h"         // sigaction(SIGSLEEP) — how a reader parks
+#include "signals.h"         // signal_raise(SIGSLEEP) — how a reader parks
 #include "scheduler.h"       // scheduler_change_thread_queue — how it wakes
 #include "driver/net/net_device.h"
 #include "driver/net/net_wire.h"
@@ -190,7 +190,7 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 	{
 		// Terminate outranks the wait — checked at loop top, BEFORE the
 		// lock, so a Ctrl+C that woke us exits instead of re-parking.
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			return UDP_CONN_ERR_INTERRUPTED;
 
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
@@ -232,7 +232,7 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 		uint64_t wake = kTicksSinceStart + UDP_CONN_BACKSTOP_TICKS;
 		if (deadline != 0 && deadline < wake)
 			wake = deadline;
-		sigaction(SIGSLEEP, NULL, wake, self);
+		signal_raise(SIGSLEEP, wake, self);
 	}
 }
 

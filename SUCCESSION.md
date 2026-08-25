@@ -17,6 +17,7 @@ to stay current:
 | `LIBOS64.md` | The userland library design (one handle type, no errno, hidden-alias plan for the eventual .so) |
 | `GRAPHICS.md` | The GUI subsystem, bottom to top — the model succession doc, written first for a reason |
 | `SCHEDULER.md` | Queues, cores, the justForked TODO where fork work starts |
+| `SIGNALS.md` | Signal delivery to ring 3 — what is already built and right, and the design for handlers (aim/pending/handler, the trampoline, `sigreturn`). `SIGINT.md` is its Ctrl+C-and-foreground-task ancestor |
 | `MEMORY.md` / `docs/arena_allocator.md` | Allocator, paging, arenas |
 | `VERIFICATION.md` | How this project proves things work |
 | `DEBTS.md` | Everything consciously deferred, and the "explicitly NOT debts" list — read that list before "fixing" a pipe/handle design decision that is actually a ratified choice |

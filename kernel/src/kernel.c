@@ -57,6 +57,7 @@
 #include "driver/filesystem/proc/procfs.h"
 #include "driver/filesystem/sys/sysfs.h"
 #include "driver/filesystem/dev/devfs.h"
+#include "conf.h"                        // the config search path — settled once the mounts exist
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -550,6 +551,15 @@ void kernel_init()
 	// third leg of the promise in SUCCESSION.md's curated-tree list.
 	devfs_mount();
 
+	// ── The config search path ───────────────────────────────────────────────
+	// HERE because /etc/os64.conf lives on the root and the default ladder
+	// names /home, which is a secondary mount: a walker that ran before the
+	// sweep above would conclude the user's config directory does not exist.
+	// And BEFORE logd, because logd is the first reader to ask — its whole
+	// reason for starting this early is that everything below this line is
+	// the expensive part of the boot, and it should be logging by then.
+	conf_init();
+
 	// ── The log daemon, as early as a log daemon can possibly start ──────────
 	// HERE, and not down with husk, is the whole point of the LOGD= flag. The
 	// expensive part of a DEBUG_DETAILED boot is everything BELOW this line —
@@ -627,7 +637,7 @@ void kernel_init()
 		else
 			printf("  /bin/keytest launch failed (not on the image?)\n");
 		while (1)
-			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
+			signal_raise(SIGSLEEP, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
 	}
 
     if (kRunTests)
@@ -841,7 +851,7 @@ void kernel_init()
 		uint64_t statusCount = 0;
 		while (1)
 		{
-			sigaction(SIGSLEEP, NULL, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
+			signal_raise(SIGSLEEP, kTicksSinceStart + 5 * TICKS_PER_SECOND, kKernelTask->threads);
 			printd(DEBUG_GUI, "os64: up %lu ticks, GUI running (status #%lu)\n", kTicksSinceStart, ++statusCount);
 		}
 	}

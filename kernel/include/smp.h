@@ -86,6 +86,14 @@ typedef struct
 	// nothing can preempt between the store and the reload.
 	uint64_t syscall_user_rsp;
 
+	// (The syscall RETURN FRAME pointer lived here for one day, 2026-08-23 to
+	// -24, and review moved it to thread_t — where its comment now lives. The
+	// short version: the frame is on the thread's KERNEL STACK, a blocking
+	// syscall parks with it live, and a per-core slot kept pointing at a
+	// parked thread's frame while other threads delivered signals through it.
+	// syscall_user_rsp above genuinely is per-core — stored and consumed
+	// nanoseconds apart under SFMASK's IF=0, before anything can park.)
+
 	// acct = CPU-time accounting (scheduler_do's switch-boundary charging).
 	// All three are written ONLY by this core, inside its own scheduler
 	// pass; /sys/cpu/<n>/time reads them cross-core, which is safe for the values

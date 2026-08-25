@@ -9,6 +9,7 @@
 .section .text
 
 handler_irq0_asm:
+    cld                     # DF clear before any C runs — an interrupt gate does not clear it, and ring 3 may have set it (see exc_common)
     push rax
 
 	# Increment the number of ticks since the system was started

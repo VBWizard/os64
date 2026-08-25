@@ -475,14 +475,31 @@ uint64_t allocate_memory_at_address_internal(uint64_t requested_address, uint64_
 		// Align to the next multiple of 8
 		requested_length = (requested_length + 7) & ~((size_t)7);
 		memaddr = get_status_entry_for_first_available_address(requested_length, page_aligned);
+		// OUT OF MEMORY IS A PANIC, NOT A HALT (2026-08-25, Fable's review of
+		// PR #29 rd15). This was `cli; hlt` — with the allocator lock HELD, a
+		// few lines up. The core went dark with no panic line and no serial
+		// byte, and every other core then spun forever, interrupts off, on
+		// its next allocation. A silent whole-machine wedge for the one
+		// condition a kernel most needs to explain.
+		//
+		// It also made a promise the rest of the kernel believed: there are
+		// dozens of `if (kmalloc(...) == NULL)` guards in the tree, and NOT
+		// ONE can fire — this function never returns 0 for "no memory", and
+		// even if it did, kmalloc adds kHHDMOffset to it. A whole review
+		// round (rd15) was spent building a fallback for that unreachable
+		// branch. So the contract, stated once where it is enforced: THE
+		// ALLOCATOR NEVER RETURNS "NO MEMORY". It panics, by name, with the
+		// size. Tripwires over silence.
 		if (memaddr == NULL)
-			__asm__("cli\nhlt\n");
+			panic("allocator: OUT OF MEMORY — no free block for %lu bytes (%s)\n",
+			      requested_length, page_aligned ? "page-aligned" : "unaligned");
 	}
 	else
 	{
 		memaddr = get_status_entry_for_requested_address(requested_address, requested_length, false);
 		if ( memaddr == NULL)
-			__asm__("cli\nhlt\n");
+			panic("allocator: no free block covering the requested address 0x%016lx (%lu bytes)\n",
+			      requested_address, requested_length);
 	}
 	if (memaddr->length < requested_length)
 		retVal = 0;

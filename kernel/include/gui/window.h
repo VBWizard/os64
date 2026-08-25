@@ -49,9 +49,9 @@
 // the thing you TYPE at is the thing that should be listening first.
 #define GUI_WINDOW_START_UNFOCUSED (1u << 1)
 // PIN ON TOP (2026-08-23): the window lives in the upper band of the z-list
-// and cannot be buried by an ordinary raise. A window-manager state, not a
-// creation option — there is no client flag for it and no app asked for
-// one; the user pins with Ctrl+Alt+P. (twm's f.raise-or-lower era had no
+// and cannot be buried by an ordinary raise. The user can toggle it with
+// Ctrl+Alt+P, and clients whose persisted state asks for it can request it
+// at creation. (twm's f.raise-or-lower era had no
 // such thing; it arrived with fvwm's StaysOnTop in 1994 and every desktop
 // since has kept it, because a clock or a terminal you want to keep seeing
 // is a real need.)
@@ -68,8 +68,10 @@
 // occluding nothing — but alive: it keeps its place in the z-list, its
 // event queue, its canvas, and its focus recency. Ctrl+Alt+N hides; there
 // is no taskbar and no launcher yet, so Alt+Tab is the way back: a
-// minimized window stays in the recency walk, and landing on it restores
-// it. (Focus leaves a minimized window at once, to the next most recent —
+// minimized window stays in the recency walk and is drawn DIM in the
+// switcher strip, and it comes back only if the hold ENDS on it — walking
+// past does nothing (see the switcher chapter in GRAPHICS.md for the rule
+// that had to die, and why). (Focus leaves a minimized window at once, to the next most recent —
 // typing into something you cannot see is the one thing this must never
 // allow.)
 #define GUI_WINDOW_MINIMIZED       (1u << 4)
@@ -77,6 +79,16 @@
 // Alt+F4 twice within this long (5s) on a window that did not go away is
 // "I mean it": the owner task gets SIGTERM.
 #define GUI_CLOSE_ESCALATE_TICKS   (5 * TICKS_PER_SECOND)
+
+// THE CHROME PALETTE. Private to window.c until 2026-08-23, when the Alt+Tab
+// switcher became a second consumer: its highlighted cell has to be the same
+// blue a focused titlebar is, or the strip is telling the user about a
+// different desktop than the one behind it. One copy, shared — the alternative
+// was a second set of literals drifting a shade at a time.
+#define WINDOW_TITLEBAR_FOCUSED   0xff2a62b8
+#define WINDOW_TITLEBAR_UNFOCUSED 0xff6a6f78
+#define WINDOW_BORDER_FOCUSED     0xffd8dce4
+#define WINDOW_BORDER_UNFOCUSED   0xff40444c
 
 typedef struct window
 {
@@ -241,16 +253,18 @@ window_t *wm_focused(void);
 // Snapshot every window's id (the safe handle — see wm_window_by_id) in
 // MOST-RECENTLY-FOCUSED order, the focused window first. Returns how many
 // were written, at most `max`. Alt+Tab walks this snapshot rather than any
-// live list, because every raise it performs rewrites the live state under
-// it: counting depth against an order you are changing never comes back to
-// where it started.
+// live list — originally because every raise it performed rewrote the live
+// state under it, and now (since the switcher strip, 2026-08-23) for the
+// stronger reason that a hold must not change the scene AT ALL: the picture
+// the user is choosing from has to be the one that was there when they
+// started, or the cell under the highlight moves as they walk.
+//
+// There is no companion "stamp the focused window" call: the hold's commit
+// goes through wm_raise/wm_set_minimized, which focus and stamp on their own.
+// (wm_touch_focus lived here until the switcher; its whole purpose was to put
+// back a recency stamp that raise-as-feedback kept taking, and nothing raises
+// during a hold any more.)
 size_t wm_recency_ids(uint32_t *ids, size_t max);
-
-// Re-stamp the focused window as the most recently used, without raising
-// or changing anything else. Alt+Tab's hold end is the one caller: its
-// steps raise without stamping (passing through a window is not using it),
-// and this is the stamp for the window the hold ended on.
-void wm_touch_focus(void);
 #define ALTTAB_RING_MAX 16   // the most a snapshot holds; the cycle covers the top sixteen
 
 // Push a routed event onto the window's queue (drops when full).

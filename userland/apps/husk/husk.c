@@ -25,6 +25,7 @@
 // builtin PREFIX — see run_segment for why it can never be a utility.
 
 #include "os64/os64.h"
+#include "os64/conf.h"   // os64_conf_find — husk.rc rides the system search path now
 
 #define LINE_MAX 256
 #define ARGS_MAX 512        // raised from 16 for globbing; matches the kernel SPAWN_MAX_ARGS ceiling
@@ -1063,7 +1064,7 @@ static bool expand_line(const char *src, char *dst, int cap, int last_status,
 		else if (src[0] == '$' && src[1] == '$')
 		{
 			char nb[24];
-			utoa((unsigned long)os64_getpid(), nb);
+			utoa((unsigned long)os64_taskid(), nb);
 			if (!expand_append(dst, &n, cap, mask, nb))
 				fit = false;
 			src += 2;
@@ -1880,14 +1881,21 @@ static int run_line(char *line, int *last_status)
 // shell runs on itself at startup, exactly as if a very fast user had typed
 // them. etc/husk.rc (the build's copy) carries the full story.
 //
-// The search order is a persistence gradient, first hit wins:
-//   /home/husk.rc   YOUR copy — its own partition, survives builds AND
-//                   root refreshes untouched (the persistence doctrine,
-//                   ruled 2026-08-07: root is the system's, /home is yours)
-//   /etc/husk.rc    the SYSTEM's copy on the writable ext2 root (the
-//                   curated tree finally has its /etc — same ratification)
+// The search order is a persistence gradient, first hit wins. Since
+// 2026-08-23 the first half of it belongs to the SYSTEM, not to this file:
+//   husk.rc         wherever the CONFIG SEARCH PATH says (/etc/os64.conf's
+//                   `conf =`, default /home then /etc) — YOUR copy on its own
+//                   partition, surviving builds and root refreshes untouched
+//                   (the persistence doctrine, ruled 2026-08-07: root is the
+//                   system's, /home is yours), then the SYSTEM's copy on the
+//                   writable ext2 root
 //   /fat/husk.rc    the lifeboat's copy, rewritten onto FAT every `make`
 //   /husk.rc        the same FAT file when a lifeboat boot mounts it as "/"
+//
+// The two lifeboat spellings stay hardcoded ON PURPOSE and stay LAST: the
+// lifeboat is for the day the ext2 root is broken, and the search path's own
+// root file lives on that root. A ladder readable only when the disk is
+// healthy is no help when it isn't.
 //
 // HUSKRC is the login-shell distinction, enforced by the environment's
 // one-way valve: the first husk sets it BEFORE running the file, every
@@ -1960,7 +1968,15 @@ static void report_line_too_long(const char *what, const char *path, int lineNo)
 
 static int run_rc(int *last_status)
 {
-	static const char *rc_paths[] = { "/home/husk.rc", "/etc/husk.rc", "/fat/husk.rc", "/husk.rc" };
+	// THE LIFEBOAT SPELLINGS, and why they are still written out here
+	// (2026-08-23). The /home-then-/etc half of this list moved to the system
+	// search path, /etc/os64.conf's `conf =`, along with every other reader's
+	// private copy. These two did NOT, and must not: they name the FAT
+	// lifeboat, which exists for the day the ext2 root is broken — and the
+	// search path's own root file lives on that root. A ladder that can only
+	// be read when the disk is healthy is no use on the day the disk is not,
+	// so the walk happens first and these remain the fallback after it.
+	static const char *rc_lifeboat[] = { "/fat/husk.rc", "/husk.rc" };
 
 	if (os64_getenv("HUSKRC") != NULL)
 		return 0;                       // a subshell: the rc already ran upstream
@@ -1968,10 +1984,18 @@ static int run_rc(int *last_status)
 
 	int h = -1;
 	const char *found = NULL;
-	for (unsigned int i = 0; i < sizeof(rc_paths) / sizeof(rc_paths[0]); i++)
+
+	char walked[OS64_CONF_PATH_MAX];
+	if (os64_conf_find("husk.rc", walked, sizeof(walked)) == 0)
 	{
-		h = (int)os64_open(rc_paths[i], "r");
-		if (h >= 0) { found = rc_paths[i]; break; }
+		h = (int)os64_open(walked, "r");
+		if (h >= 0)
+			found = walked;
+	}
+	for (unsigned int i = 0; found == NULL && i < sizeof(rc_lifeboat) / sizeof(rc_lifeboat[0]); i++)
+	{
+		h = (int)os64_open(rc_lifeboat[i], "r");
+		if (h >= 0) { found = rc_lifeboat[i]; break; }
 	}
 	if (found == NULL)
 		return 0;                       // no rc anywhere: a plain boot, not an error

@@ -34,11 +34,10 @@ static window_t *s_bottom = NULL;
 static window_t *s_focused = NULL;
 static uint32_t s_next_id = 1;
 
-// Chrome colors: the focused window gets the saturated titlebar.
-#define WINDOW_TITLEBAR_FOCUSED   0xff2a62b8
-#define WINDOW_TITLEBAR_UNFOCUSED 0xff6a6f78
-#define WINDOW_BORDER_FOCUSED     0xffd8dce4
-#define WINDOW_BORDER_UNFOCUSED   0xff40444c
+// Chrome colors: the focused window gets the saturated titlebar. The four
+// WINDOW_TITLEBAR_*/WINDOW_BORDER_* values moved to window.h when the Alt+Tab
+// switcher became a second consumer (see the palette note there); this one
+// stays private because nothing outside window.c paints a client area.
 #define WINDOW_CONTENT_INITIAL    GUI_COLOR_LIGHT_GRAY
 
 // Focus recency, see window_t.focusSerial. EVERY assignment to s_focused
@@ -478,11 +477,6 @@ window_t *wm_window_by_id(uint32_t id)
 window_t *wm_focused(void)
 {
 	return s_focused;
-}
-
-void wm_touch_focus(void)
-{
-	focus_window(s_focused);
 }
 
 size_t wm_recency_ids(uint32_t *ids, size_t max)

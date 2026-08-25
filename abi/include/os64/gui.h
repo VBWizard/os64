@@ -24,18 +24,47 @@
 #include <stdbool.h>
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"
+#include "os64/signal.h"   // OS64_INTERRUPTED — the one answer for "a signal cut your wait short"
 
 // ── Errors (gui_client.h's values, verbatim) ────────────────────────────────
 #define OS64_GUI_ERR_INVALID_HANDLE  (-1)
 #define OS64_GUI_ERR_NO_RESOURCES    (-2)
 #define OS64_GUI_ERR_BAD_ARGS        (-3)
-#define OS64_GUI_ERR_NOT_RUNNING     (-4)   // boot without the GUI flag — treat as SKIP
+// A blocking wait (os64_gui_event_wait) cut short by a signal. NOT a GUI
+// error of its own: it is THE system-wide sentinel, OS64_INTERRUPTED, because
+// the signal contract promises every interrupted blocking call answers the
+// same value and a program written to that contract must not have to know
+// which subsystem it was waiting on. Was -6 until Codex #29 rd19, with
+// NOT_RUNNING on -4 — so a GUI program checking for OS64_INTERRUPTED would
+// have read "no desktop" instead.
+#define OS64_GUI_ERR_INTERRUPTED     OS64_INTERRUPTED
 #define OS64_GUI_ERR_NOT_OWNER       (-5)   // exists, and is none of your business
-#define OS64_GUI_ERR_INTERRUPTED     (-6)   // a blocking wait cut short by termination
+#define OS64_GUI_ERR_NOT_RUNNING     (-6)   // boot without the GUI flag — treat as SKIP (was -4; moved for the sentinel above)
 
 // ── Window flags ────────────────────────────────────────────────────────────
 #define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // no titlebar; 1px border stays (honored since 2026-08-23)
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
+#define OS64_GUI_WINDOW_PINNED           (1u << 2)   // born in the always-on-top band
+
+// READ-ONLY state, reported by os64_gui_window_get_state and IGNORED at
+// create — gui_window_create masks the flag word down to the three creation
+// bits above, so naming these here cannot let an app claim them at birth.
+// They are published because an app SAVING its geometry needs to know it is
+// not saving a maximized or minimized frame as its ordinary position.
+#define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)
+#define OS64_GUI_WINDOW_MINIMIZED        (1u << 4)
+
+// Where a window IS and what state it is in — the readback half of create.
+//
+// x/y/width/height describe the FRAME, in exactly the units
+// os64_gui_window_create takes, so a saved state hands straight back to a
+// later create with nothing to convert. (get_surface reports the CONTENT
+// area, which is the drawing question; this is the placement question.)
+typedef struct {
+    int32_t  x, y;              // frame origin on screen
+    uint32_t width, height;     // frame size, chrome included
+    uint32_t flags;             // OS64_GUI_WINDOW_* as they stand right now
+} os64_gui_window_state_t;
 
 // The window title's capacity, NUL included (gui/window.h's value, verbatim
 // — window.c static-asserts the two stay equal). This is ABI because the
@@ -199,6 +228,22 @@ static inline int64_t os64_gui_event_poll(int64_t handle,
                                           os64_gui_event_t *out)
 {
     return (int64_t)os64_syscall2(SYSCALL_GUI_EVENT_POLL,
+                                  (uint64_t)handle, (uint64_t)out);
+}
+
+// Where is my window, and what state is it in? Fills *out with the FRAME
+// rect and the live flag word.
+//
+// THE POINT IS PERSISTENCE. Everything a user does to a window — drag it,
+// resize it, Ctrl+Alt+P to pin it, Ctrl+Alt+T to drop the titlebar — happens
+// in the window system, and until this call existed an app had no way to
+// learn any of it. So it could not save what you had arranged, and every
+// launch put the window back where the PROGRAM thought it belonged. Reading
+// this at exit and writing it through os64_conf_write is the whole recipe.
+static inline int64_t os64_gui_window_get_state(int64_t handle,
+                                                os64_gui_window_state_t *out)
+{
+    return (int64_t)os64_syscall2(SYSCALL_GUI_WINDOW_GET_STATE,
                                   (uint64_t)handle, (uint64_t)out);
 }
 

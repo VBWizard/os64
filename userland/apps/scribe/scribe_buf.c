@@ -361,6 +361,18 @@ int sbuf_save(sbuf_t *b, const char *path, char *err, size_t errcap)
 		writer_put(&wr, "\n", 1);
 	}
 	writer_flush(&wr);
+	// COMMIT BEFORE BELIEVING (Codex #29 rd24 — the same finding conf.c took
+	// in rd14). Every write() above was checked, but on FAT the data and
+	// metadata are flushed at CLOSE, and the close ABI cannot report a flush
+	// failure (the kernel has the answer now; handle_close discards it — a
+	// booked ABI ruling). So "every write succeeded" followed by close() can
+	// still leave a file that is not on the disk, and this function would
+	// have cleared `dirty` and let save-before-quit throw the work away on
+	// the strength of it. os64_sync IS a real commit point and DOES report;
+	// on ext2 it is a no-op that says yes (writes are full write-through).
+	// A sync failure is a save failure, same as a short write.
+	if (!wr.failed && os64_sync((int32_t)fd) != 0)
+		wr.failed = true;
 	os64_close((int32_t)fd);
 	if (wr.failed) {
 		os64_snprintf(err, errcap, "write failed on %s", path);

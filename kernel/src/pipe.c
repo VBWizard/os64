@@ -258,7 +258,7 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 		// processSignals when the bit appeared) exits instead of re-parking
 		// forever. Buffered bytes stay put — a dying stage has no further use
 		// for them.
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			return PIPE_ERR_INTERRUPTED;
 
 		uint64_t flags = spinlock_acquire_irqsave(&p->lock);
@@ -312,7 +312,7 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 		printd(DEBUG_PIPE, "pipe_read: pipe 0x%016lx PARKING reader (empty, writers=%u still open)\n",
 			(uintptr_t)p, nw);
 
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + PIPE_BACKSTOP_TICKS, self);
+		signal_raise(SIGSLEEP, kTicksSinceStart + PIPE_BACKSTOP_TICKS, self);
 		// Woken (by a writer, the sweep, or the backstop) — loop and RE-TEST.
 		// The wake was a hint; another reader may have taken the bytes.
 	}
@@ -333,7 +333,7 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 		// Same rule as pipe_read: a pending TERMINATE means the WRITER is being
 		// killed — stop pushing bytes and let the syscall boundary do the
 		// honors. Bytes already landed stay landed (they were real).
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			return PIPE_ERR_INTERRUPTED;
 
 		// A write of <= PIPE_CAPACITY lands WHOLE (our atomicity rule): wait for
@@ -398,7 +398,7 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 		printd(DEBUG_PIPE, "pipe_write: pipe 0x%016lx PARKING writer (want %lu, only %lu free of %u) — backpressure\n",
 			(uintptr_t)p, (uint64_t)want, (uint64_t)(PIPE_CAPACITY - held), PIPE_CAPACITY);
 
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + PIPE_BACKSTOP_TICKS, self);
+		signal_raise(SIGSLEEP, kTicksSinceStart + PIPE_BACKSTOP_TICKS, self);
 		// Woken — loop and RE-TEST. Another writer may have taken the space.
 	}
 

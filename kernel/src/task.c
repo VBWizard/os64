@@ -114,12 +114,20 @@ void* task_alloc_aligned(task_t* task, size_t size)
 /// task_initialize. This counter is the COUNTER-DRAW half of that problem; the
 /// FIXED-CONSTANT half — TASK_ARGV_VIRT and friends — is what the split fixed.)
 // See task.h for why this exists and why it is IRQ-safe.
-void task_signal_all_threads(task_t* task, uint64_t signal)
+void task_signal_all_threads(task_t* task, signals signal)
 {
 	if (task == NULL)
 		return;
+	// UNDER signalLock (2026-08-24, Codex #29 rd4). The consumer holds this
+	// lock while it selects a signal and CLEARS it on every sibling; if we
+	// publish the broadcast without it, a consumer can clear all siblings
+	// between two of our iterations and we re-set a bit it already delivered
+	// — the handler runs twice, the exact over-delivery signalLock exists to
+	// prevent. Publication and consumption must claim the same lock.
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
-		th->signals.sigind |= signal;
+		sigset_add(&th->signals.sigind, signal);
+	spinlock_release_irqrestore(&task->signalLock, f);
 }
 
 // Raise `signal` on every thread of a task AND knock on the cores they were
@@ -133,7 +141,7 @@ void task_signal_all_threads(task_t* task, uint64_t signal)
 // For senders who are not the victim: the hangup sweep (tty_shell_departed)
 // and the shutdown ladder both aim at tasks that may be parked or spinning
 // anywhere in the machine.
-void task_signal_and_nudge(task_t* task, uint64_t signal)
+void task_signal_and_nudge(task_t* task, signals signal)
 {
 	if (task == NULL)
 		return;
@@ -141,12 +149,17 @@ void task_signal_and_nudge(task_t* task, uint64_t signal)
 	core_local_storage_t* cls = get_core_local_storage();
 	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
 
+	// UNDER signalLock, same reason as task_signal_all_threads above (Codex
+	// #29 rd4). Holding it across send_ipi is safe: the IPI is lock-free APIC
+	// MMIO, and the only other lock in the signal paths is the scheduler queue
+	// lock, always taken BEFORE signalLock (never after), so there is no cycle.
+	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
 	{
 		if (th->exited || th->exiting)
 			continue;
 
-		th->signals.sigind |= signal;
+		sigset_add(&th->signals.sigind, signal);
 
 		// Same exemptions as the sibling sweep: this core is already inside
 		// the scheduler's reach, and the BSP's timer is never masked.
@@ -154,6 +167,7 @@ void task_signal_and_nudge(task_t* task, uint64_t signal)
 		    th->lastRunApicID != BOOTSTRAP_PROCESSOR_ID)
 			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 	}
+	spinlock_release_irqrestore(&task->signalLock, f);
 }
 
 // Bring down every thread of a dying task EXCEPT the one doing the dying.
@@ -169,10 +183,12 @@ void task_signal_and_nudge(task_t* task, uint64_t signal)
 // TWO mechanisms, because marking alone is not enough:
 //
 //  1. THE MARK. SIGKILL, not SIGINT — a dying task is not a request. The
-//     scheduler's forced-syscall redirect (scheduler_sigint_forced_syscall)
-//     sees a terminating bit and rewrites the thread's RIP to the exit
-//     trampoline, so even a thread in a loop with no syscalls at all walks
-//     into its own exit. No cooperation required.
+//     scheduler's signal visit (scheduler_signal_visit, the forced-syscall
+//     redirect of old) sees a terminating bit and rewrites the thread's RIP
+//     to the exit trampoline, so even a thread in a loop with no syscalls at
+//     all walks into its own exit. No cooperation required — and SIGKILL is
+//     never deferred behind a handler (signal_pick_deliverable refuses to
+//     arm anything in front of it).
 //
 //  2. THE NUDGE, and this is the part that only matters on the boots we
 //     actually run. That redirect fires WHEN THE SCHEDULER RUNS ON THAT
@@ -192,6 +208,14 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
 	uint32_t marked = 0;
 
+	// UNDER signalLock, like the other broadcast producers (Codex #29 rd7):
+	// this was the LAST unlocked writer of sigind. A consumer clearing a bit
+	// under the lock and this loop OR-ing SIGKILL in are non-atomic RMWs on
+	// the same word, so a race could drop the SIGKILL — and a sibling that
+	// missed its kill keeps running after teardown has closed the task's
+	// handles and windows. (rd4 locked task_signal_all_threads/_and_nudge;
+	// this one hid in the exit path.)
+	uint64_t slf = spinlock_acquire_irqsave(&task->signalLock);
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
 	{
 		// `exiting` as well as `exited`: a sibling already walking its own
@@ -200,7 +224,7 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 		if (th == self || th->exited || th->exiting)
 			continue;
 
-		th->signals.sigind |= SIGKILL;
+		sigset_add(&th->signals.sigind, SIGKILL);
 		marked++;
 		printd(DEBUG_TASK | DEBUG_THREAD,
 		       "task_exit: marking sibling thread 0x%08lx of %s (state %u, last ran on AP %lu) for termination\n",
@@ -219,6 +243,7 @@ void task_terminate_sibling_threads(task_t* task, thread_t* self)
 			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 		}
 	}
+	spinlock_release_irqrestore(&task->signalLock, slf);
 
 	if (marked)
 		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
@@ -389,7 +414,7 @@ static void task_enqueue_dead_child(task_t *child)
 		// and its deadline right here, BEFORE attempting the wake, reasoning
 		// that a woken parent still carrying SIGSLEEP would be parked straight
 		// back to ISLEEP. True — but the wake it handed off to only lands on a
-		// thread that has ALREADY parked, and sigaction(SIGSLEEP) does not
+		// thread that has ALREADY parked, and signal_raise(SIGSLEEP) does not
 		// park: it sets the flag and asks for a scheduler pass, so there is a
 		// wide window where the parent is mid-park and the wake is a silent
 		// no-op. Cancel the backstop inside that window and the parent lands in
@@ -1239,10 +1264,28 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 	// re-enqueue an already-enqueued dead child, which is how a zombie list
 	// gets corrupted. A thread that finds its task already dead has exactly
 	// one job left: mark itself and get off the CPU.
-	if (task != NULL && task->exited)
+	//
+	// AN ATOMIC CLAIM, NOT A READ OF `exited` (Codex #29 rd10). The danger
+	// above was understood from the day this guard was written; what was
+	// missed is that `exited` is not published until AFTER handle_close_all(),
+	// and task_exit's own comment describes that stretch as one that "may
+	// sleep in the VFS and resume on any core". So the guard only ever caught
+	// siblings arriving after teardown FINISHED — two threads that reach here
+	// while the first is still inside the VFS both read false, both walk past,
+	// and both run the whole teardown. Handles survive it (the CLOSING
+	// sentinel, rd4) but the dead-child enqueue does not: the same child
+	// enqueued twice self-links (`child->deadChildNext = child`) and the
+	// undertaker's walk never terminates.
+	//
+	// One exchange decides the owner before any of that can happen. Everyone
+	// else takes the same road they always did — mark yourself, get off the
+	// CPU — which is exactly what a post-`exited` arrival did before, so the
+	// losing path is not new code, just correctly reached now.
+	if (task != NULL &&
+	    __atomic_exchange_n(&task->tearingDown, true, __ATOMIC_ACQ_REL))
 	{
 		printd(DEBUG_TASK | DEBUG_THREAD,
-		       "task_exit: thread 0x%08lx arrived after %s already died — retiring the thread only\n",
+		       "task_exit: thread 0x%08lx arrived while/after %s was being torn down — retiring the thread only\n",
 		       thread ? thread->threadID : 0, task->exename);
 		// Nothing left to tear down — return to task_exit, whose last breath
 		// marks `exited` and gets off the CPU. (This used to trigger and halt
@@ -1511,7 +1554,7 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// Park until a child exits (woken by task_enqueue_dead_child) or the
 		// backstop fires; then loop and re-check. SIGSLEEP parks atomically.
 		parent->waitingForChild = true;
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, parent->threads);
+		signal_raise(SIGSLEEP, kTicksSinceStart + TASK_WAIT_BACKSTOP_TICKS, parent->threads);
 		parent->waitingForChild = false;
 	}
 }
@@ -2009,6 +2052,8 @@ static void debug_announce_loaded(const char *path, uint64_t bias)
 // is only mapped in the task's own PML4, not the kernel's.
 extern const char user_exit_trampoline_template[];
 extern const char user_exit_trampoline_template_end[];
+extern const char user_sigreturn_trampoline_template[];
+extern const char user_sigreturn_trampoline_template_end[];
 static void task_setup_ring3_exit_path(task_t *task)
 {
 	if (task->threads == NULL)
@@ -2020,6 +2065,23 @@ static void task_setup_ring3_exit_path(task_t *task)
 	// copy is tiny (a handful of instructions) so one page is plenty.
 	void *trampoline_page = kmalloc_aligned(PAGE_SIZE);
 	memcpy(trampoline_page, user_exit_trampoline_template, template_bytes);
+
+	// The signal-return stub shares the page, 64 bytes in — see
+	// TASK_SIGRETURN_OFFSET in task.h for why one page holds both. Copied
+	// unconditionally: a task that never installs a handler simply never
+	// jumps here, and the alternative (mapping it lazily on first
+	// registration) would mean touching page tables from the signal path for
+	// no saving worth having.
+	size_t sig_bytes = (size_t)(user_sigreturn_trampoline_template_end -
+	                            user_sigreturn_trampoline_template);
+	if (template_bytes > TASK_SIGRETURN_OFFSET ||
+	    TASK_SIGRETURN_OFFSET + sig_bytes > PAGE_SIZE)
+		panic("task_setup_ring3_exit_path: the trampoline templates no longer fit "
+		      "(exit %lu bytes, signal %lu at offset %u)\n",
+		      (uint64_t)template_bytes, (uint64_t)sig_bytes,
+		      (unsigned)TASK_SIGRETURN_OFFSET);
+	memcpy((uint8_t *)trampoline_page + TASK_SIGRETURN_OFFSET,
+	       user_sigreturn_trampoline_template, sig_bytes);
 
 	uintptr_t trampoline_phys = (uintptr_t)trampoline_page - kHHDMOffset;
 	paging_map_pages(task->pml4v, TASK_EXIT_TRAMPOLINE_VIRT, trampoline_phys, 1,

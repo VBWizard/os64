@@ -135,20 +135,40 @@ int64_t os64_wait(int64_t pid, int32_t *exit_code);
 //         /* one finished job */;
 int64_t os64_reap(int32_t *exit_code);
 
-// Who am I? The calling task's ID — one syscall, one register, cannot fail.
-// V1 Unix answered this in 1971 and nobody has improved on the answer. The
-// namespace spelling of the same fact is /proc/self (open-time identity:
+// Who am I? The calling TASK's ID — one syscall, one register, cannot fail.
+// V1 Unix answered this in 1971 and nobody has improved on the answer; os64
+// keeps the answer and changes the noun, because it runs tasks and this
+// returns task->taskID. (It was os64_getpid until 2026-08-24. The rename is
+// not cosmetics: "pid" reads as per-process, and libos64's own config writer
+// believed it, built a temporary file name out of it, and had every thread of
+// a program collide on that name. A name that lies costs more than a name
+// that is merely unfamiliar — see SYSCALL_TASKID for the whole story.)
+//
+// IT IS PER-TASK, NOT PER-THREAD. Every thread of a program gets the same
+// number back. There is no thread-id call today; if you need one, that is a
+// consumer talking and it can be built — do not reach for this instead.
+//
+// The namespace spelling of the same fact is /proc/self (open-time identity:
 // whoever OPENS it is the self); this call is expansion-time identity —
 // what husk's $$ freezes into a command line before any child exists.
-uint64_t os64_getpid(void);
+uint64_t os64_taskid(void);
 
 // Sleep for AT LEAST `ms` milliseconds — the thread genuinely parks, zero
 // CPU. The floor is the kernel's scheduler tick (1000/per_second ms — ask
 // os64_ticks); requests round UP to it, and the rounding tracks the ACTIVE
 // rate, so a faster-ticking kernel makes every existing binary's short
 // sleeps better with no recompile. os64_sleep(0) is the documented free
-// yield. Returns 0. (One call, milliseconds — Unix needed four generations
-// of this function because the units kept being wrong.)
+// yield. (One call, milliseconds — Unix needed four generations of this
+// function because the units kept being wrong.)
+//
+// Returns 0 when the nap completed, or OS64_INTERRUPTED when a signal
+// you HANDLE arrived and cut it short (2026-08-23). The remaining time is not
+// slept and is not resumed: os64 has no SA_RESTART and no EINTR — an
+// interrupted call says so, and a caller that wanted the whole nap loops,
+// which it can read. (A signal nothing handles still ends the program, as it
+// always did; this return can only happen to a program that asked for it.)
+// The value is OS64_INTERRUPTED (os64/signal.h) — one spelling for every
+// blocking call, since they all mean the same thing by it.
 int64_t os64_sleep(uint64_t ms);
 
 // Read the monotonic clock: ticks since boot + the active tick rate, in one
