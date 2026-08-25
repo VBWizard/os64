@@ -45,7 +45,8 @@ typedef enum esignals
     // 28 is SIGWINCH everywhere, and it is RESERVED here rather than defined:
     // the terminal-resize slice (DEBTS) is what gives it something to mean,
     // and a number claimed early is one nobody has to renegotiate later.
-    SIGIO     = 29,   // POSIX's SIGIO/SIGPOLL
+    SIGIO     = 29,   // POSIX's SIGIO/SIGPOLL — NUMBERED, NOT REAL: nothing raises it,
+                      // so signal_is_known refuses it (Codex #29 rd15), like CONT/STOP
 
     // os64's own, in numbers POSIX left free. The scheduler markers.
     SIGHALT     = 24,

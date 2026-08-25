@@ -24,20 +24,22 @@
 #define OS64_SIGSEGV   11   // you touched memory that isn't yours
 #define OS64_SIGPIPE   13   // you are writing into a pipe nobody reads
 #define OS64_SIGTERM   15   // the machine is going down; finish up
-// NUMBERED BUT NOT YET REAL. Nothing in the kernel raises either one, and
-// job control (stop/continue semantics, husk's fg/bg, the debugger's
-// `ctl stop`) is a booked slice, not a shipped one — so until it lands
-// os64_signal_set_handler REFUSES these with OS64_SIG_ERR_BAD_SIGNAL rather
-// than reporting a success that leaves you waiting for a signal nothing can
-// send. The numbers are claimed here so that day changes only behaviour, not
-// the ABI. (Codex #29 rd14: they used to be accepted, which was the same
-// contract failure as accepting a number the kernel does not have.)
+// NUMBERED BUT NOT YET REAL — all three below. Nothing in the kernel raises
+// any of them: job control (stop/continue semantics, husk's fg/bg, the
+// debugger's `ctl stop`) is a booked slice, not a shipped one, and SIGIO was
+// claimed alongside the POSIX numbers and never given a sender. So until a
+// producer lands, os64_signal_set_handler REFUSES these with
+// OS64_SIG_ERR_BAD_SIGNAL rather than reporting a success that leaves you
+// waiting for a signal nothing can send. The numbers are claimed here so that
+// day changes only behaviour, not the ABI. (Codex #29 rd14/rd15: they used to
+// be accepted, which was the same contract failure as accepting a number the
+// kernel does not have.)
 #define OS64_SIGCONT   18
 #define OS64_SIGSTOP   19
+#define OS64_SIGIO     29
 // 28 is SIGWINCH everywhere and is RESERVED, not defined: the terminal-resize
 // slice gives it something to mean, and a number claimed early is one nobody
 // has to renegotiate.
-#define OS64_SIGIO     29
 
 #define OS64_SIGNAL_COUNT 32
 

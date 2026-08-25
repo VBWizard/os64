@@ -1,11 +1,22 @@
 // handle.c — the per-task handle table. See handle.h for the contract.
 //
-// Deliberately dumb: a fixed array, no locking. A task's handle table is
-// touched by that task's own syscalls, plus by spawn while the child is still
-// being BUILT (before it is ever submitted to the scheduler, so nothing else
-// can see it). No concurrent access, no lock. If handles ever become shareable
-// between threads of one task, this grows a lock — and that will be an obvious
-// change, not a subtle one.
+// Deliberately dumb: a fixed array, no lock — but NOT "no concurrent access".
+// This header used to say that, and it was true until ring-3 threads arrived:
+// every thread of a task shares this table, so two threads can open, close,
+// or exit against the same slot at once. What keeps it lock-free is that the
+// slot's TYPE is the claim token, moved only by atomics: handle_alloc claims a
+// free slot with a compare-and-swap (NONE -> CLOSING as a reservation, then
+// publishes the real type), and handle_close claims a live one with an
+// exchange (live -> CLOSING, then NONE when the object is gone). Nothing
+// touches a slot it did not win. Spawn still builds a child's table with plain
+// stores, and may: the child has not been submitted to the scheduler, so
+// nothing else can see it.
+//
+// (Codex #29 rd4 made close atomic and argued "alloc only ever reclaims a
+// NONE slot" — which is only true once alloc's claim is atomic too. Fable's
+// review of rd15, 2026-08-25, found alloc still scanning-and-storing: two
+// threads opening at once could both win slot N, orphaning one object with no
+// handle at all and handing the other thread a handle of the wrong type.)
 
 #include "handle.h"
 #include "task.h"
@@ -49,10 +60,20 @@ int handle_alloc(struct task *t, handle_type_t type, void *object)
 	// redirect the task's own stdout — a fun afternoon of debugging).
 	for (int i = 3; i < TASK_MAX_HANDLES; i++)
 	{
-		if (task->handles[i].type == HANDLE_NONE)
+		// CLAIM WITH A CAS, NOT A LOOK-THEN-STORE (see the file header). A
+		// sibling thread scanning this same table sees either NONE (and races
+		// us for the CAS — exactly one wins) or CLOSING (and moves on). The
+		// reservation is CLOSING rather than the final type so that a handle
+		// number leaked to a sibling before `object` is stored cannot be used:
+		// handle_get treats CLOSING as "not operable". Object first, then the
+		// real type with release semantics, so whoever reads the type sees the
+		// object behind it.
+		handle_type_t expected = HANDLE_NONE;
+		if (__atomic_compare_exchange_n(&task->handles[i].type, &expected, HANDLE_CLOSING,
+		                                false, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
 		{
-			task->handles[i].type = type;
 			task->handles[i].object = object;
+			__atomic_store_n(&task->handles[i].type, type, __ATOMIC_RELEASE);
 			return i;
 		}
 	}
@@ -92,18 +113,26 @@ handle_t *handle_get(struct task *t, int h)
 }
 
 // Trampoline body for handle_file_object_close: runs under kKernelPML4 on the
-// core's kernel interrupt stack. The vfs_file_t is kmalloc'd (HHDM-reachable),
-// so passing it straight through as the arg is fine.
-// The filesystem's answer has to come BACK (Codex #29 rd14). This used to be
-// `file->fops->close(file);` with the result dropped on the floor — and the
-// whole chain below it was built to carry that result: fops->close returns
-// int, and fat_close ALREADY computes it (f_close != FR_OK -> -1). One
-// discarded return value was the entire defect.
+// core's kernel interrupt stack, and carries the filesystem's answer BACK
+// (Codex #29 rd14). This used to be `file->fops->close(file);` with the
+// result dropped on the floor — and the whole chain below it was built to
+// carry that result: fops->close returns int, and fat_close ALREADY computes
+// it (f_close != FR_OK -> -1). One discarded return value was the entire
+// defect.
 //
-// A params block rather than the bare pointer, because the trampoline hands
-// back nothing: kmalloc'd, per the house rule that anything
+// A params block rather than the bare vfs_file_t pointer, because the
+// trampoline hands back nothing: kmalloc'd, per the house rule that anything
 // call_in_kernel_context touches must be HHDM-reachable and never on the
-// caller's task-local stack.
+// caller's task-local stack. (The vfs_file_t itself is kmalloc'd too, which
+// is what made the old bare-pointer version legal.)
+//
+// There is deliberately NO "close without a status block" fallback for the
+// kmalloc below failing. Rd15 built one; Fable's review found it unreachable:
+// the allocator PANICS on exhaustion (allocator.c, and it says so at the site
+// — it used to `cli;hlt` under its own lock), and kmalloc adds kHHDMOffset to
+// whatever it gets, so `kmalloc() == NULL` cannot happen in this kernel. A
+// fallback for an impossible branch is a comment that lies about what can go
+// wrong.
 typedef struct {
 	vfs_file_t *file;
 	volatile int result;
@@ -113,16 +142,6 @@ static void file_close_in_kernel(void *arg)
 {
 	file_close_params_t *p = (file_close_params_t *)arg;
 	p->result = p->file->fops->close(p->file);
-}
-
-// The same close with nowhere to put the answer — the fallback for when the
-// params block itself cannot be allocated (Codex #29 rd15). Kept as a separate
-// entry point rather than a flag, because its whole meaning is "we are closing
-// blind", and a reader should be able to see which one ran.
-static void file_close_no_status(void *arg)
-{
-	vfs_file_t *file = (vfs_file_t *)arg;
-	file->fops->close(file);
 }
 
 int handle_file_object_close(void *vfs_file)
@@ -142,7 +161,10 @@ int handle_file_object_close(void *vfs_file)
 	// Harvest f_path BEFORE closing — the VFS close frees the file object, and
 	// for a HANDLE_FILE, f_path is always the kmalloc'd copy syscall_open made
 	// (the fs stores whatever pointer open() was given, so open() must hand it
-	// one with handle lifetime — and we are the end of that lifetime).
+	// one with handle lifetime — and we are the end of that lifetime). The
+	// same pointer is the NAME the flush tripwire below prints: after the
+	// close, `file` is gone and this is the only way left to say WHICH file
+	// failed — a diagnostic without a name is one nobody can act on.
 	char *path_copy = file->f_path;
 
 	// A close can flush to disk, and disk I/O (NVMe/AHCI DMA structures) lives
@@ -151,9 +173,6 @@ int handle_file_object_close(void *vfs_file)
 	// stack's TOP, so calling it while ALREADY on that stack (task-exit cleanup
 	// closing a dead task's handles) would overwrite our own live frames.
 	// CR3 tells us which world we're in.
-	// Harvest the NAME too, for the tripwire below — after the close it is
-	// freed, and "a file failed to flush" without saying which file is a
-	// diagnostic nobody can act on.
 	uint64_t cr3;
 	__asm__ volatile("mov %0, cr3" : "=r"(cr3));
 	int rc;
@@ -163,39 +182,15 @@ int handle_file_object_close(void *vfs_file)
 	}
 	else
 	{
+		// kmalloc cannot return NULL (see the params-block comment above), so
+		// the block is simply ours. We are past the refcount drop — this
+		// handle IS the last one and the close below is the act itself.
 		file_close_params_t *p = kmalloc(sizeof(*p));
-		if (p == NULL)
-		{
-			// THE FILE STILL HAS TO CLOSE (Codex #29 rd15 — my own bug, one
-			// commit old). This used to `return -1` here, which was wrong in
-			// three ways at once and every one of them worse than the problem
-			// it was avoiding: the filesystem close never ran (so FAT state
-			// and the vfs_file_t leaked and buffered data was never flushed),
-			// path_copy leaked, and handle_close published the slot as free
-			// regardless — so the caller could not even tell.
-			//
-			// We are past the refcount drop; this handle IS the last one and
-			// the object is ours to release. Not being able to allocate four
-			// bytes to hear the ANSWER is no reason to skip the ACT. So close
-			// blind, and say so.
-			call_in_kernel_context(file_close_no_status, file);
-			printd(DEBUG_EXCEPTIONS,
-			       "handle_file_object_close: closed '%s' WITHOUT a status block (out of memory) — flush result unknown\n",
-			       path_copy ? path_copy : "<unnamed>");
-			// 0, not -1: the close happened, and the only thing missing is our
-			// knowledge of how it went. Manufacturing a failure would make
-			// every close under memory pressure look like data loss, which is
-			// its own lie — the log is where "we do not know" belongs.
-			rc = 0;
-		}
-		else
-		{
-			p->file = file;
-			p->result = -1;
-			call_in_kernel_context(file_close_in_kernel, p);
-			rc = (int)p->result;
-			kfree(p);
-		}
+		p->file = file;
+		p->result = -1;
+		call_in_kernel_context(file_close_in_kernel, p);
+		rc = (int)p->result;
+		kfree(p);
 	}
 
 	// LOUD, because until rd14 this was silent and silence is the actual bug.
