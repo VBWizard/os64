@@ -83,10 +83,33 @@ _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
 // through an API that reported success. A number the kernel cannot raise must
 // never register.
 //
-// SIGWINCH (28) is deliberately not here either: the enum reserves the number
-// without defining it, and a handler for a signal nothing can send is a caller
-// waiting forever. It joins the list the day the terminal-resize slice gives
-// it something to mean.
+// ALSO ABSENT, AND THIS IS THE HARDER CALL: SIGCONT (18), SIGSTOP (19) and
+// SIGWINCH (28). All three have a NUMBER and no PRODUCER — nothing in this
+// kernel raises them. SIGWINCH is not even defined (the enum reserves the
+// number); SIGCONT and SIGSTOP are, and DEBTS § No job control books their
+// stop/continue semantics and delivery as a future slice, calling them
+// exactly what they are: stubs.
+//
+// SIGCONT and SIGSTOP were in this list until rd14 pointed out that keeping
+// them contradicts the rule the rest of this function exists to enforce — the
+// same rule used ONE ROUND EARLIER to exclude SIGWINCH. A handler for a signal
+// nothing can send is a caller waiting forever, and it makes no difference
+// whether the reason is "no such number" or "the slice has not landed".
+//
+// THE COUNTER-ARGUMENT, considered and rejected — and it deserved considering,
+// because os64 has made exactly this bet before and WON it: registration
+// shipped before delivery for the main signals on purpose, so a program
+// written against it started working the day delivery arrived, without
+// changing a line. The difference is that those signals had a producer and a
+// default action the entire time; an installed handler already meant "do not
+// apply the default action", which was real behaviour on day one. SIGCONT and
+// SIGSTOP have no producer, no default and no semantics, so accepting one buys
+// the caller nothing and costs it the truth. They rejoin this list the day the
+// job-control slice gives them meaning, and a program that checks the return
+// simply starts succeeding.
+//
+// Until then OS64_SIG_ERR_BAD_SIGNAL is the honest answer: "not a signal
+// number this kernel knows" is exactly the situation.
 bool signal_is_known(signals sig)
 {
 	switch (sig)
@@ -97,12 +120,10 @@ bool signal_is_known(signals sig)
 		case SIGSEGV:
 		case SIGPIPE:
 		case SIGTERM:
-		case SIGCONT:
-		case SIGSTOP:
 		case SIGIO:
 			return true;
 		default:
-			return false;   // gaps, scheduler markers, and reserved numbers
+			return false;   // gaps, markers, reserved and not-yet-built numbers
 	}
 }
 

@@ -621,6 +621,27 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 		if (n <= 0) { failed = true; break; }
 		put += (size_t)n;
 	}
+	// COMMIT BEFORE PUBLISHING (Codex #29 rd14). Every write() above was
+	// checked, but "the bytes were accepted" is not "the bytes are on the
+	// disk" — on FAT the flush happens at close, and a close that fails
+	// while writing metadata cannot tell us so: handle_file_object_close() is
+	// void, and file_close_in_kernel() discards the filesystem's answer
+	// outright, so checking os64_close's return here would be theatre.
+	//
+	// os64_sync IS a real commit point and DOES report: syscall_sync runs the
+	// filesystem's sync under kKernelPML4 and turns a negative result into an
+	// error the caller can see. So the temp is committed and CHECKED before
+	// the rename, and a failure lands in `failed` — which unlinks the temp and
+	// leaves the original untouched, exactly as a write failure does.
+	//
+	// On ext2 this is a no-op that returns success, because ext2 writes are
+	// full write-through and the promise is already kept (CLAUDE.md). It costs
+	// one syscall on the path that is not the risky one, to be correct on the
+	// path that is — and /home being ext2 today is a fact about this boot, not
+	// a guarantee about the ladder, which is configurable.
+	if (!failed && os64_sync((int32_t)out_fd) != 0)
+		failed = true;
+
 	os64_close((int32_t)out_fd);
 	os64_free(old);
 	os64_free(neu);

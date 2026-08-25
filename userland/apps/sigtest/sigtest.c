@@ -132,6 +132,23 @@ int main(void)
     if (os64_signal_set_handler(25, handler_a) == OS64_SIG_ERR_UNCATCHABLE)
         die(5, "sigtest: a non-signal was refused as if it were merely uncatchable");
 
+    // A NUMBER IS NOT A SIGNAL UNTIL SOMETHING CAN SEND IT (Codex #29 rd14).
+    // SIGCONT and SIGSTOP have numbers and no producer — job control is a
+    // booked slice, not a shipped one — so accepting a handler for them would
+    // leave a caller waiting forever for something nothing raises. Same
+    // contract failure as accepting signal 3, arriving by a politer route.
+    //
+    // WHEN JOB CONTROL LANDS, THIS CHECK IS SUPPOSED TO FAIL. That is the
+    // point of it: it will fail loudly on the first boot after SIGCONT gains
+    // a producer, and whoever is doing that work flips these two lines to
+    // expect success, in the same commit that adds them to signal_is_known.
+    // A fixture that has to be edited by the person changing the behaviour is
+    // a fixture that cannot silently rot.
+    if (os64_signal_set_handler(OS64_SIGCONT, handler_a) != OS64_SIG_ERR_BAD_SIGNAL)
+        die(5, "sigtest: SIGCONT was accepted, and nothing in this kernel can send it");
+    if (os64_signal_set_handler(OS64_SIGSTOP, handler_a) != OS64_SIG_ERR_BAD_SIGNAL)
+        die(5, "sigtest: SIGSTOP was accepted, and nothing in this kernel can send it");
+
     // A handler in the higher half would have the CPU attempt kernel text at
     // CPL 3. It faults harmlessly, but being refused by NAME beats finding
     // out three steps later.
