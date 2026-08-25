@@ -77,10 +77,18 @@ typedef struct os64_image {
 } os64_image_t;
 
 // The largest file os64_image_load will read when the caller passes cap 0.
-// 16MB holds a 2048x2048 32-bit BMP with room to spare; anything larger is
-// almost certainly a mistake, and a cap is how a decoder declines to be a
-// denial-of-service surface for a file it was handed.
-#define OS64_IMAGE_CAP_DEFAULT (16u * 1024u * 1024u)
+// A cap is how a decoder declines to be a denial-of-service surface for a
+// file it was handed; anything larger than this is almost certainly a
+// mistake.
+//
+// 20MB, AND THE ARITHMETIC IS THE POINT (Codex #30 rd2 caught the old
+// number). A 2048x2048 32-bit BMP is 16,777,216 bytes of raster PLUS 54
+// bytes of header — so the previous 16MB cap refused, by 54 bytes, the exact
+// image the comment beside it claimed was admitted "with room to spare". A
+// cap stated in round binary numbers and a size stated in pixels do not
+// compare themselves; someone has to multiply. The slack here is deliberate
+// and covers format overhead for every variant we decode.
+#define OS64_IMAGE_CAP_DEFAULT (20u * 1024u * 1024u)
 
 // No image is allowed to claim more than this in either axis. The bound
 // exists so the width*height arithmetic below cannot be walked into an

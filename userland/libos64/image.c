@@ -114,6 +114,16 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
     size_t i = 2;   // past "P6"
     uint32_t w, h, maxval;
 
+    // WHITESPACE MUST FOLLOW THE MAGIC (Codex #30 rd2) — the unclosed edge of
+    // rd1's separator fix, found in the same file one round later. Parsing
+    // began at byte 2 and ppm_read_uint never required that it skipped
+    // anything, so `P61 1 255\n...` read the '1' of "P61" as the width and
+    // decoded a 1x1 image out of a magic number that is not P6 at all. The
+    // format is whitespace-separated from end to end; every place that is
+    // true has to ask, not just the one a review pointed at.
+    if (i >= len || (d[i] != ' ' && d[i] != '\t' && d[i] != '\r' && d[i] != '\n'))
+        return OS64_IMAGE_MALFORMED;
+
     if (!ppm_read_uint(d, len, &i, &w) ||
         !ppm_read_uint(d, len, &i, &h) ||
         !ppm_read_uint(d, len, &i, &maxval))
@@ -240,7 +250,12 @@ static os64_image_status_t decode_bmp(const uint8_t *d, size_t len,
     uint32_t bytes_pp = bpp / 8u;
     size_t   stride   = (((size_t)w * bytes_pp) + 3u) & ~(size_t)3u;
 
-    if (data_off > len)
+    // The raster cannot begin INSIDE the headers (Codex #30 rd2). Only the
+    // upper bound was checked, so a file claiming data_off 0 passed and the
+    // decoder read its own file header back as pixel rows — returning OK
+    // with a picture that was never in the file. A bound is two-sided or it
+    // is half a bound.
+    if (data_off < BMP_FILE_HEADER + dib_size || data_off > len)
         return OS64_IMAGE_MALFORMED;
     size_t avail = len - data_off;
     if (stride != 0 && h > avail / stride)

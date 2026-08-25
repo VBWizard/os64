@@ -32,6 +32,17 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap,
     if (path == NULL || out == NULL || out_len == NULL || cap == 0)
         return OS64_SLURP_NO_FILE;
 
+    // A CAP OF SIZE_MAX HAS NO ROOM FOR THE TERMINATOR (Codex #30 rd2).
+    // `cap + 1` would wrap to zero, os64_malloc(0) hands back a real
+    // minimum-sized block, and the loop below would then read up to SIZE_MAX
+    // bytes into it — a heap overflow reached by asking for a cap instead of
+    // by supplying a file. Refused as TOO_BIG rather than clamped, because
+    // silently reading less than a caller asked for is how the truncation
+    // bugs in this function's own history started: a cap this reader cannot
+    // honour is a request it should decline, not reinterpret.
+    if (cap == (size_t)-1)
+        return OS64_SLURP_TOO_BIG;
+
     int32_t h = (int32_t)os64_open(path, "r");
     if (h < 0)
         return OS64_SLURP_NO_FILE;

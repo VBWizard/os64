@@ -374,6 +374,41 @@ static void test_refusals(void)
            "huge-dimension ppm allocates nothing (refused on length first)");
     }
 
+    // WHITESPACE AFTER THE MAGIC (Codex #30 rd2 — the unclosed edge of rd1's
+    // separator fix). `P61 1 255` is not a P6 file; reading the '1' of the
+    // magic as a width produced a 1x1 image out of nothing.
+    {
+        const char f[] = "P61 1 255\n\x01\x02\x03";
+        eq_status(os64_image_decode((const uint8_t *)f, sizeof(f) - 1, &img),
+                  OS64_IMAGE_MALFORMED, "ppm with no whitespace after the magic");
+    }
+
+    // A BMP RASTER CANNOT START INSIDE THE HEADERS (Codex #30 rd2). With
+    // data_off 0 the decoder read the file header back as pixel rows and
+    // returned OK with a picture that was never in the file.
+    {
+        uint8_t *b = build_bmp(&len, 24, 0, 0);
+        wr32(b + 10, 0);
+        eq_status(os64_image_decode(b, len, &img), OS64_IMAGE_MALFORMED,
+                  "bmp with data offset inside its own headers");
+        free(b);
+        b = build_bmp(&len, 24, 0, 0);
+        wr32(b + 10, 14 + 39);   // one byte short of the end of the DIB header
+        eq_status(os64_image_decode(b, len, &img), OS64_IMAGE_MALFORMED,
+                  "bmp with data offset one byte inside the DIB header");
+        free(b);
+    }
+
+    // THE DEFAULT CAP MUST ADMIT WHAT ITS COMMENT CLAIMS (Codex #30 rd2). The
+    // old 16MB cap refused a 2048x2048 32-bit BMP by 54 bytes — the exact
+    // image the comment said it held "with room to spare". Pinned here so the
+    // number and the claim cannot drift apart again in silence.
+    {
+        size_t raster_2048 = (size_t)2048 * 2048 * 4;
+        ok(OS64_IMAGE_CAP_DEFAULT >= raster_2048 + 54,
+           "default cap admits a 2048x2048 32-bit BMP including its headers");
+    }
+
     uint8_t *bmp = build_bmp(&len, 24, 0, 1 /* BI_RLE8 */);
     eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_UNSUPPORTED,
               "compressed bmp is UNSUPPORTED");
