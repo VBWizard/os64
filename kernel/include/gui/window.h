@@ -88,18 +88,24 @@
 // unburiable-from-below, exactly as X11's desktop programs are ordinary
 // clients over a server-owned root window.
 //
-// WHAT THE FLAG BUYS, and it is deliberately only this: a z-band. The
-// desktop is still focusable, still hit-tested, still gets keys and clicks
-// and its own event queue — because being an INPUT TARGET is half the
-// reason the shell owns a window at all. A click that lands on no
-// application lands on the desktop, which is where a root menu (twm, 1987)
-// and a launcher come from.
+// WHAT THE FLAG BUYS — the whole list, because an earlier "only a z-band"
+// here was contradicted by its own next paragraph (Codex #31 rd4/rd5):
+//   - the bottom z-band (band_of); nothing can be placed beneath it;
+//   - NO CHROME, whatever the decoration bit says: wm_chrome_top and
+//     wm_border_width answer 0, wm_has_titlebar answers false, and
+//     composite_one paints neither border nor titlebar;
+//   - it is skipped by the Alt+Tab walk (wm_recency_ids — a desktop is not
+//     something you tab TO, it is what is left when you tab away from
+//     everything), and the first Alt+Tab FROM it lands on the most recent app;
+//   - pin, maximize, minimize and decorate decline it at the wm_ setters
+//     (desktop_declines); the chord move/resize gestures and Alt+F4 decline
+//     it in the compositor, since those have no setter to guard.
 //
-// WHAT IT DOES NOT DO: it does not make a window special to the WM
-// otherwise. It is skipped by the Alt+Tab walk (a desktop is not something
-// you tab TO — it is what is left when you tab away from everything), and
-// the destructive chords decline to act on it, since Alt+F4 on your desktop
-// is a gesture nobody means.
+// WHAT IT DOES NOT TAKE AWAY: the desktop is still focusable, still
+// hit-tested, still gets keys and clicks and its own event queue — because
+// being an INPUT TARGET is half the reason the shell owns a window at all. A
+// click that lands on no application lands on the desktop, which is where a
+// root menu (twm, 1987) and a launcher come from. Its owner may destroy it.
 //
 // ANY client may set it, and a second one is not an error: the bands are a
 // z-order rule, not a privilege. Two desktop windows simply stack at the

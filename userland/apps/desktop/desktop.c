@@ -12,8 +12,11 @@
 // compositor stays in the kernel; the shell is a program, exactly as X11 has
 // always had it — the server owns the root window and compositing, while the
 // thing drawing your wallpaper is just another connection. The only thing
-// that makes this window the desktop is OS64_GUI_WINDOW_DESKTOP, which buys
-// one z-band at the bottom and nothing else.
+// that makes this window the desktop is OS64_GUI_WINDOW_DESKTOP: the bottom
+// z-band, no chrome, out of the Alt+Tab walk, and the WM verbs that would
+// make it vanish or float declined — the whole contract is listed on the
+// flag in os64/gui.h. What it keeps is the part that matters here: it is
+// still an input target.
 //
 // WHY A WINDOW AND NOT A "SET WALLPAPER" CALL (Chris's ruling, the day this
 // was designed): handing the kernel a bitmap would have been less work and
@@ -233,10 +236,12 @@ static void conf_report(const char *what, const char *path, bool found, int64_t 
 // desktop. A picture nobody clicks would keep its corpses indefinitely.
 //
 // This is init's oldest job, and it wears init's shape: block until a child
-// ends, collect it, repeat forever. os64_wait(0) answers negative when there
-// are no children AT ALL, which would spin — so that case sleeps rather than
-// retrying immediately. When children exist the wait blocks properly and
-// costs nothing.
+// ends, collect it, repeat forever. os64_wait(0) answers NEGATIVE when there
+// are no children AT ALL (task_wait says 0 in the kernel, and syscall_wait
+// maps that to SYSCALL_RESULT_INVALID — -1 — before ring 3 ever sees it;
+// Codex #31 rd5 read the kernel half and thought zero reached us), which
+// would spin — so that case sleeps rather than retrying immediately. When
+// children exist the wait blocks properly and costs nothing.
 #define DESKTOP_REAP_IDLE_MS 1000
 
 static int64_t reaper(void *arg)
@@ -321,6 +326,14 @@ int main(int argc, char **argv)
     int64_t rc = found ? os64_conf_read(cfg.conf_path, desktop_conf_line, &cfg)
                        : OS64_CONF_NO_FILE;
     conf_report("desktop.conf", cfg.conf_path, found, rc);
+    if (rc == OS64_CONF_TRUNCATED) {
+        // Same rule as gui.conf below: a cut-short `image =` is a different
+        // path. Truncated means the built-in ground, and it says so.
+        os64_hprintf(OS64_STDERR, "desktop: %s: too large to trust — using the built-in colour\n",
+                     cfg.conf_path);
+        cfg.have_color = false;
+        cfg.have_image = false;
+    }
 
     os64_image_t img;
     os64_memset(&img, 0, sizeof(img));
@@ -357,6 +370,19 @@ int main(int argc, char **argv)
     conf_report("gui.conf", gui_path, found, rc);
     if (found && rc == OS64_CONF_NO_FILE)
         rc = 0;   // an unreadable config is an EMPTY one, never an absent one
+    // A TRUNCATED FILE STARTS NOTHING (Codex #31 rd5). The reader hands over
+    // whatever fits, including the line the cut fell in the middle of — and
+    // a `start` path cut short is a DIFFERENT path, one that may name a
+    // program that exists. The kernel's reader refused an oversized gui.conf
+    // outright; so does this one. Refusing the LIST rather than the last
+    // line, because "which line was cut" is not something the callback can
+    // see, and a half-obeyed startup file is worse to debug than an ignored
+    // one that said why.
+    if (rc == OS64_CONF_TRUNCATED) {
+        os64_hprintf(OS64_STDERR, "desktop: %s: too large to trust — starting nothing\n",
+                     gui_path);
+        list.count = 0;
+    }
     if (list.overflowed)
         os64_hprintf(OS64_STDERR, "desktop: more than %d start lines; the rest ignored\n",
                      DESKTOP_APPS_MAX);
