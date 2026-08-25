@@ -270,7 +270,8 @@ damaged frame.
   reads the HHDM alias, which only exists for *allocated* pages; a
   demand-paged canvas would make the kernel fault on pages the task hasn't
   touched yet. Allocate and map everything up front (a 4K×4K max window is
-  64MB of canvas + 64MB of content — the `w/h ≤ 4096` clamp in
+  64MB of canvas + 64MB of content — the `w/h ≤ wm_dim_max()` clamp (4096,
+  or the screen if it is larger) in
   `gui_window_create` is also the memory bound).
 - **VA placement:** carve a dedicated per-task region for canvas mappings
   (a VMA, like heap/ELF segments use) so canvases can never collide with the
@@ -589,7 +590,8 @@ it, because the pages are legitimately mapped to somebody else.
 So the canvas is **reserved at capacity and never re-pointed**:
 
 - Capacity is the screen (`wm_canvas_capacity_for` — or the window, if it was
-  created larger; the client API allows up to 4096 a side). ONE function, used
+  created larger; the client API allows up to 4096 a side, or the screen if
+  that is larger). ONE function, used
   by both allocators, because a canvas smaller than the content snapshotted
   into it is a buffer overrun with a view of the desktop.
 - `pitch_px` is the capacity's width, **for the window's whole life**. A pixel
@@ -707,8 +709,12 @@ Three things learned building them, for the next chord:
   keys and clicks, because being the target of a click that lands on no
   application is the whole point (that click is where a root menu and the
   launcher come from). It IS skipped by the Alt+Tab walk — a desktop is not
-  something you tab to — and pin/maximize/minimize/close decline it, guarded
-  at the `wm_` setters so every caller is covered rather than just the chords.
+  something you tab to — and pin/maximize/minimize/decorate/close decline it,
+  guarded at the `wm_` setters so every caller is covered rather than just the
+  chords. The two verbs with no setter of their own — chord move and chord
+  resize — are declined at the gesture in the compositor, like Alt+F4 (Fable's
+  review, 2026-08-25: without that, Ctrl+Alt+drag on the wallpaper moved the
+  desktop, and the title toggle painted a titlebar across it).
 
 The harness grew to test these: `utility/gui_run.sh` drives a headless
 GUI boot from a key script, and speaks **QMP** (`-qmp unix:`) for raw

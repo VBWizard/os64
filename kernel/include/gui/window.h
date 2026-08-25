@@ -241,8 +241,10 @@ void wm_set_pinned(window_t *w, bool pinned);
 // The capacity rule, in ONE place because two allocators must agree on it:
 // wm_create sizes the kernel-side stores with it, and gui_window_create sizes
 // the task-backed canvas extent with it. A window may be created larger than
-// the screen (the client API allows up to 4096), so capacity is the larger of
+// the screen (the client API allows up to wm_dim_max() — 4096, or the screen
+// if it is larger), so capacity is the larger of
 // the two — never smaller than what the window already is.
+uint32_t wm_dim_max(void);   // the largest side a window may have
 void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
                             uint32_t *cap_w, uint32_t *cap_h);
 

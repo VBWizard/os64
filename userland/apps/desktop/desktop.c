@@ -101,8 +101,29 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
         else
             cfg->have_color = true;
     } else if (os64_streq_nocase(key, "image")) {
-        os64_strcopy(cfg->image, sizeof(cfg->image), value);
+        // REFUSE AN OVERLONG PATH, DO NOT TRUNCATE IT (Codex #31 rd2 — the
+        // same finding as gui.conf's start lines one round earlier, on the
+        // other file). os64_strcopy answers with the SOURCE length, so a
+        // value that did not fit is detectable; a truncated path is a
+        // different path, and a prefix that happens to exist would show the
+        // wrong picture with no complaint. The kernel's reader carried a
+        // 256-byte buffer; this one is 192, so the refusal has to be loud.
+        size_t want = os64_strcopy(cfg->image, sizeof(cfg->image), value);
+        if (want >= sizeof(cfg->image)) {
+            os64_hprintf(OS64_STDERR,
+                         "desktop: %s: image path over %d characters — ignored: %s\n",
+                         cfg->conf_path, (int)sizeof(cfg->image) - 1, value);
+            cfg->image[0] = 0;
+            cfg->have_image = false;
+            return true;
+        }
         cfg->have_image = (cfg->image[0] != 0);
+    } else {
+        // A typo is not a default (Codex #31 rd2): `colour = ...` used to be
+        // accepted and ignored, leaving the built-in ground with no hint
+        // why. The kernel's reader named unknown keys; so does this one.
+        os64_hprintf(OS64_STDERR, "desktop: %s: unknown setting '%s' — ignored\n",
+                     cfg->conf_path, key);
     }
     return true;
 }
@@ -284,8 +305,21 @@ int main(int argc, char **argv)
     // from gui_conf_line can name it — "which gui.conf did it read?" is the
     // first question anyone asks (and /sys/conf answers it too).
     char *gui_path = list.path;
-    rc = os64_conf_find_read("gui.conf", gui_conf_line, &list,
-                             gui_path, DESKTOP_PATH_MAX);
+    // FIND, THEN READ, AS TWO STEPS (Codex #31 rd2) — because the two
+    // answers mean different things here. os64_conf_find_read folds "no
+    // gui.conf anywhere" and "found one, could not open it" into one
+    // NO_FILE, and only the FIRST of those may fall through to the demo
+    // pair below: a config that exists is the operator's word, and a
+    // desktop that starts gbounce because that file failed to open would
+    // be inventing a configuration nobody wrote.
+    bool found = (os64_conf_find("gui.conf", gui_path, DESKTOP_PATH_MAX) == 0);
+    rc = found ? os64_conf_read(gui_path, gui_conf_line, &list)
+               : OS64_CONF_NO_FILE;
+    if (found && rc == OS64_CONF_NO_FILE) {
+        os64_hprintf(OS64_STDERR, "desktop: %s: found but could not be read — starting nothing\n",
+                     gui_path);
+        rc = 0;   // an unreadable config is an EMPTY one, never an absent one
+    }
     if (rc == OS64_CONF_TRUNCATED)
         os64_hprintf(OS64_STDERR, "desktop: %s exceeds %d bytes; trailing settings ignored\n",
                      gui_path, OS64_CONF_MAX - 1);

@@ -281,6 +281,13 @@ void wm_set_pinned(window_t *w, bool pinned)
 
 void wm_set_decorated(window_t *w, bool decorated)
 {
+	// The desktop has no chrome to toggle: wm_chrome_top answers 0 for it
+	// regardless of this flag, but composite_one paints a titlebar whenever
+	// NO_DECORATIONS is clear — so flipping it here drew a titlebar reading
+	// "desktop" across the top of the wallpaper, and that strip became a
+	// drag handle (Fable's review, 2026-08-25).
+	if (desktop_declines(w, "decorate"))
+		return;
 	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS))
 		return;
 	rect_t old = w->frame;
@@ -362,10 +369,26 @@ void wm_move(window_t *w, int32_t x, int32_t y)
 	gui_damage_add_locked(rect_union(old, w->frame));
 }
 
-// The client API's own ceiling, mirrored: a window may be CREATED bigger than
-// the screen (up to 4096 a side), so capacity can never simply be "the
+// The client API's own ceiling: a window may be CREATED bigger than the
+// screen (up to WINDOW_CAP_MAX a side), so capacity can never simply be "the
 // screen" — it is the screen or the window, whichever is larger.
 #define WINDOW_CAP_MAX 4096u
+
+// ...OR THE SCREEN, WHICHEVER IS LARGER (Codex #31 rd2). 4096 was a bare
+// constant in gui_window_create, and a framebuffer wider than that — a 5K
+// panel is 5120 across — would have refused the desktop shell's own
+// fullscreen window at the door, before it read gui.conf, so nothing in the
+// GUI would have started. The screen is the one size every window system
+// must be able to hold. ONE function answers the ceiling for both the
+// create check and the capacity clamp below, because two copies of it were
+// how the constant and the screen disagreed in the first place.
+uint32_t wm_dim_max(void)
+{
+	uint32_t m = WINDOW_CAP_MAX;
+	if (kFrameBuffer.width > m)  m = kFrameBuffer.width;
+	if (kFrameBuffer.height > m) m = kFrameBuffer.height;
+	return m;
+}
 
 void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
                             uint32_t *cap_w, uint32_t *cap_h)
@@ -380,10 +403,10 @@ void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
 	if (content_h > 0 && (uint32_t)content_h > ch)
 		ch = (uint32_t)content_h;
 
-	if (cw > WINDOW_CAP_MAX)
-		cw = WINDOW_CAP_MAX;
-	if (ch > WINDOW_CAP_MAX)
-		ch = WINDOW_CAP_MAX;
+	if (cw > wm_dim_max())
+		cw = wm_dim_max();
+	if (ch > wm_dim_max())
+		ch = wm_dim_max();
 
 	*cap_w = cw;
 	*cap_h = ch;

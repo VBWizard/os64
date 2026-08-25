@@ -54,6 +54,8 @@
 	// see the walker-safety note at the definition).
 	void scheduler_remove_task(task_t *task);
 	void scheduler_trigger(core_local_storage_t *cls);
-	void scheduler_wake_isleep_task(task_t *task);
+	// Wake the thread of `task` that is parked in task_wait (the waiter is
+	// named because it is not always the first thread — task.h, waitThread).
+	void scheduler_wake_task_waiter(task_t *task, thread_t *waiter);
     bool in_scheduler_context(void);
 #endif

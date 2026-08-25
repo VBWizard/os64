@@ -983,7 +983,18 @@ static void route_event_locked(const input_event_t *ev)
 
 		// The chord's two verbs (see the gesture comment above the band
 		// state): left moves, right resizes, anywhere in the window.
-		if (wm_chord_held(ev)) {
+		//
+		// NOT ON THE DESKTOP. The wallpaper is a window, so without this
+		// check Ctrl+Alt+drag on empty desktop MOVED it, and the right-button
+		// chord shrank it to reveal the test pattern around it (Fable's
+		// review, 2026-08-25). Move and resize have no wm_ setter of their
+		// own to guard — wm_move/wm_resize are the WM's internal verbs and
+		// the chord is their only outside caller — so the decline lives at
+		// the gesture, the same way Alt+F4's does.
+		if (wm_chord_held(ev) && (w->flags & GUI_WINDOW_DESKTOP)) {
+			printd(DEBUG_GUI, "guicomp: chord move/resize declined — window %u is the desktop\n",
+				w->id);
+		} else if (wm_chord_held(ev)) {
 			if (ev->mouse.button == INPUT_MOUSE_BUTTON_LEFT) {
 				s_drag_window = w;
 				s_drag_dx = ev->mouse.x - w->frame.x;
@@ -1495,13 +1506,16 @@ void gui_start(void)
 	// (Non-const strings because task_create's path parameter predates
 	// const-correctness — it does not modify them.)
 	//
-	// THE LIST IS gui.conf's NOW (2026-08-23), and the two demos are merely
-	// its default. What made this the right home for it: these apps belong to
-	// the DESKTOP's startup, and everything Chris actually wanted at boot was
-	// stranded in husk.rc — which runs in every husk (VT1 and VT2 both start
-	// one, so he got two gclocks and two gterms) and runs on text boots too
-	// (where every GUI line failed once per terminal). One move fixes both:
-	// the desktop starts once, and only when there is a desktop.
+	// (THE LIST WAS gui.conf's from 2026-08-23 to 2026-08-25, read right
+	// here, with the two demos as its default. What made THIS the right home
+	// then: these apps belong to the DESKTOP's startup, and everything Chris
+	// actually wanted at boot was stranded in husk.rc — which runs in every
+	// husk (VT1 and VT2 both start one, so he got two gclocks and two gterms)
+	// and runs on text boots too (where every GUI line failed once per
+	// terminal). That argument still holds; what changed is WHO the desktop
+	// is. It is a program now, so the list — and the demo default — moved
+	// into /bin/desktop with it, and the kernel's list is the one line
+	// below.)
 	// THE KERNEL STARTS EXACTLY ONE GUI PROGRAM (2026-08-25): the desktop
 	// shell. Everything else that starts with the desktop is started BY the
 	// desktop, out of gui.conf, which is the shell's rc.
