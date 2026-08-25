@@ -247,12 +247,35 @@ bool signal_has_handler_for_pending(struct task *t, void *thrd)
 	if (sigset_has(thread->signals.sigind, SIGKILL))
 		return false;
 
+	// TWO ANSWERS, AND THE ORDER BETWEEN THEM IS THE POINT (Codex #29 rd17).
+	// This loop used to return true at the FIRST handled bit, which made a
+	// held, handled SIGINT (handler running, a second INT masked) answer
+	// "caught" for the whole thread — and an unhandled SIGTERM pending beside
+	// it inherited the reprieve: signal_pick_deliverable skips both (INT masked,
+	// TERM has no handler), so nothing delivers and nothing dies, until the
+	// INT handler returns. If it never does, a signal whose default is death
+	// has been postponed indefinitely by a handler for a DIFFERENT signal.
+	// Only SIGKILL got through, and TERM is not supposed to need escalating.
+	//
+	// So: a pending signal with NO handler and a DEATH default is not covered
+	// by anyone's reprieve — it answers "no" (apply the default) regardless of
+	// what else is pending and handled. Only if every pending death-default
+	// signal is handled does a handled one earn the "yes". The ladder in
+	// raise_terminating_signal_and_die then names the unhandled one (TERM
+	// before INT), so the corpse wears the right code.
+	bool caught = false;
 	for (int sig = 1; sig < SIGNAL_COUNT; sig++)
 	{
 		if (!sigset_has(thread->signals.sigind, (signals)sig))
 			continue;
 		if (!signal_is_catchable((signals)sig))
 			continue;
+		if (task->sighandler[sig] == NULL)
+		{
+			if (SIG_BIT(sig) & SIGNALS_DEFAULT_IS_DEATH)
+				return false;               // an unhandled death outranks any reprieve
+			continue;                       // unhandled, non-fatal: nobody's business here
+		}
 		// A MASKED signal still counts as caught. The mask means "inside this
 		// signal's own handler" (§7), and the held bit WILL deliver — at the
 		// dispatcher exit right after sigreturn unblocks it. The first version
@@ -269,11 +292,12 @@ bool signal_has_handler_for_pending(struct task *t, void *thrd)
 		// blocking call until it returns (the held bit reads as a pending
 		// terminate to the park loops, and now reads as caught here). Honest,
 		// rare, and strictly better than being killed; the cure is a
-		// "deliverable now vs. held" split at the checkpoints — DEBTS.
-		if (task->sighandler[sig] != NULL)
-			return true;
+		// "deliverable now vs. held" split at the checkpoints — DEBTS. The
+		// wart's reach is now bounded by the rule above: it can hold up the
+		// handler's OWN signal, never a different unhandled one.
+		caught = true;
 	}
-	return false;
+	return caught;
 }
 
 // The stub in task_exit_asm.S reads these offsets off RSP by hand. If the

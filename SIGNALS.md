@@ -419,12 +419,19 @@ the next.
    (klog_format.h's discipline), so the two rings cannot drift.
    `/bin/sigtest` is the fixture, in the ring-3 suite.
 
-   **Registration works; delivery does not exist yet, and that is deliberate.**
-   Today an installed handler means exactly "do not apply the default action"
-   — which `scheduler.c`'s forced-syscall push has honoured for `SIGINT` since
-   before there was any way to install one. A program can be written against
-   this interface now and will start actually running its handler when step 3
-   lands, without the interface changing under it.
+   **HISTORICAL — this was the state for a few hours on 2026-08-23, and it
+   is kept because the bet it describes was won.** Registration shipped
+   BEFORE delivery, deliberately: for that window an installed handler meant
+   exactly "do not apply the default action" — which `scheduler.c`'s
+   forced-syscall push had honoured for `SIGINT` since before there was any
+   way to install one. The bet was that a program written against the
+   interface then would start actually running its handler the moment step 3
+   landed, without the interface changing under it. It did, the same day.
+   TODAY a handler RUNS — by all three delivery paths (§5 syscall exit, §10
+   scheduler visit, §9 page fault), and a signal with no producer is refused
+   at registration rather than accepted on the same bet (the rd14 ruling in
+   `signal_is_known`). (Codex #29 rd16 read this paragraph as current
+   behaviour; it was the only way to read it.)
 3. ~~**Delivery + the stub + `sigreturn`.**~~ **DONE 2026-08-23 for the
    syscall path**, which is the common case: a handler runs, the program
    resumes, and the interrupted syscall's return value survives.
