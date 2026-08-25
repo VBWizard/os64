@@ -51,6 +51,18 @@ _Static_assert(__builtin_offsetof(input_event_t, key) == 4,
 _Static_assert(__builtin_offsetof(input_event_t, tick) == 24,
                "input_event_t tick moved — GUI ABI break");
 
+// CHROME IS PUBLISHED TO RING 3 NOW (2026-08-25), because window_create takes
+// FRAME dimensions and an app that wants a canvas of a given size has no way
+// to work out the difference. os64_gui_frame_for_content() does that sum in
+// ring 3 out of these two numbers, so they must BE these two numbers — a
+// helper that quietly disagrees with the WM would size every window slightly
+// wrong, which is exactly the bug it exists to prevent (gview clipped every
+// image it opened; gclock hand-derived the delta and got it right by luck).
+_Static_assert(OS64_GUI_BORDER_WIDTH == GUI_BORDER_WIDTH,
+               "the GUI ABI's border width drifted from the WM's");
+_Static_assert(OS64_GUI_TITLEBAR_HEIGHT == GUI_TITLEBAR_HEIGHT,
+               "the GUI ABI's titlebar height drifted from the WM's");
+
 // Handle table: handle = index + 1, so 0 is never a valid handle. 32 windows
 // is plenty until real userland apps exist. Guarded by kGuiLock.
 #define GUI_MAX_WINDOWS 32

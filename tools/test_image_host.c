@@ -15,10 +15,18 @@
 // pattern looks right upside down.
 //
 // Build & run (one line):
-//   gcc -I userland/libos64/include -I abi/include -masm=intel
+//   gcc -fsanitize=address,undefined
+//       -I userland/libos64/include -I abi/include -masm=intel
 //       userland/libos64/image.c userland/libos64/draw.c
 //       tools/test_image_host.c -o /tmp/os64_image_test
 //   /tmp/os64_image_test
+//
+// RUN IT UNDER THE SANITIZERS. os64 itself cannot use them — a freestanding
+// kernel has no runtime to link — which makes this host harness the only
+// place in the project where they are available at all, so declining them
+// here costs everything. Codex #30 rd3 found a heap-buffer-overflow in THIS
+// FILE's own BMP builder that way: the fixture corrupted its own heap while
+// reporting PASS, and no amount of reading it had caught that.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -166,7 +174,16 @@ static void wr32(uint8_t *d, uint32_t v)
     d[2] = (uint8_t)(v >> 16); d[3] = (uint8_t)(v >> 24);
 }
 
-// bpp: 24 or 32. top_down: store row 0 first and record a negative height.
+// bpp: 24 or 32 write real pixels; ANY OTHER DEPTH writes a header only.
+//
+// That last clause is not decoration (Codex #30 rd3): the refusal tests build
+// an 8-bit BMP to check it is declined as UNSUPPORTED, and the pixel loop
+// below used to write three channel bytes per pixel regardless of depth. At
+// one byte per pixel that overruns every row and eventually the allocation
+// itself — a heap-buffer-overflow inside the fixture, reproducible under
+// AddressSanitizer, in a test that reported PASS. A test that corrupts its
+// own memory is not evidence about anything, and this one was checking a
+// refusal that happens in the HEADER, so it never needed pixels at all.
 static uint8_t *build_bmp(size_t *out_len, unsigned bpp, int top_down,
                           uint32_t compression)
 {
@@ -188,6 +205,13 @@ static uint8_t *build_bmp(size_t *out_len, unsigned bpp, int top_down,
     wr16(f + 28, (uint16_t)bpp);
     wr32(f + 30, compression);
     wr32(f + 34, (uint32_t)pixels);
+
+    // Depths we do not decode get a header and a zeroed raster: the decoder
+    // refuses them on the bpp field, so there is nothing for pixels to prove.
+    if (bytes_pp != 3 && bytes_pp != 4) {
+        *out_len = len;
+        return f;
+    }
 
     for (uint32_t row = 0; row < REF_H; row++) {
         // A bottom-up file stores the picture's LAST row first.

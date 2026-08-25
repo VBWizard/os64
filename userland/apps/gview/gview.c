@@ -71,10 +71,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Size the window to the picture, capped to the screen. screen_info
-    // failing is not fatal — an unknown screen just means no cap.
+    // Size the window so the CANVAS is the picture — which is not the same as
+    // asking for a frame the size of the picture (Codex #30 rd3). create()
+    // takes the frame, the WM keeps its border and titlebar out of the
+    // middle, and asking for exactly img.width x img.height quietly cost two
+    // columns and twenty-one rows of every image gview ever opened. Anything
+    // under 10x29 was refused outright as a degenerate window.
+    uint32_t win_w, win_h;
+    os64_gui_frame_for_content(img.width, img.height, 0, &win_w, &win_h);
+
+    // Capped to the screen. screen_info failing is not fatal — an unknown
+    // screen just means no cap. The cap applies to the FRAME, since that is
+    // what has to fit on the glass.
     uint32_t sw = 0, sh = 0;
-    uint32_t win_w = img.width, win_h = img.height;
     if (os64_gui_screen_info(&sw, &sh) == 0 && sw > 0 && sh > 0) {
         uint32_t max_w = (sw > GVIEW_SCREEN_MARGIN) ? sw - GVIEW_SCREEN_MARGIN : sw;
         uint32_t max_h = (sh > GVIEW_SCREEN_MARGIN) ? sh - GVIEW_SCREEN_MARGIN : sh;
