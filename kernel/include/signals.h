@@ -345,12 +345,16 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// What signal_deliver_pending accomplished, and the dispatcher's duty for
 	// each: NONE — nothing pending and handled, carry on. ARMED — a handler
 	// was armed; the syscall's return value is saved in the frame and the
-	// caller must not clobber it. FAILED — a handled signal is pending but the
-	// frame could not be written (the stack is unusable, SIGNALS.md §9): the
-	// dispatcher applies the DEFAULT ACTION instead, because leaving the bit
-	// pending with a handler installed would mean every blocking call returns
-	// INTERRUPTED forever while the signal neither delivers nor kills — a
-	// livelock only SIGKILL ends.
+	// caller must not clobber it. FAILED — the DEFAULT ACTION must be applied
+	// by the caller, for one of two reasons: a handled signal is pending but
+	// the frame could not be written (the stack is unusable, SIGNALS.md §9),
+	// or — since Codex #29 rd18 — a pending signal is ORPHANED: its default is
+	// death, its handler was removed after the bit was published, and no
+	// checkpoint scans for it (SIGPIPE, which SIGNALS_TERMINATING excludes on
+	// purpose). Either way, shrugging would leave a bit that neither delivers
+	// nor kills: every blocking call returning INTERRUPTED forever, a livelock
+	// only SIGKILL ends. signal_orphaned_death_pending (signals.c) is the
+	// second reason's test.
 	typedef enum
 	{
 		SIGNAL_DELIVER_NONE   = 0,

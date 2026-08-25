@@ -348,6 +348,42 @@ static int signal_pick_deliverable(task_t *task, thread_t *thread)
 	return 0;
 }
 
+// AN ORPHANED DEATH (Codex #29 rd18): a pending signal whose default is death,
+// that has NO handler, and that NO CHECKPOINT WILL EVER ACTION. Today that is
+// exactly SIGPIPE — deliberately outside SIGNALS_TERMINATING because an
+// uncaught SIGPIPE dies at the write() site and never needs noticing later.
+// That stopped being the whole story once SIGPIPE became catchable: write()
+// publishes the bit (to EVERY thread of the task) and returns, trusting the
+// dispatcher exit to arm the handler. Between that publish and this exit,
+// a sibling can uninstall the handler — registration takes signalLock, but
+// write() has already dropped it. Now the pick finds no handler and skips
+// the bit; the checkpoints exclude it; and the writer returns INTERRUPTED
+// with nothing run and nothing dead: a stuck pending SIGPIPE, the exact
+// livelock rd7 closed by check-and-act under one lock — arriving from the
+// other side. Wider than the writer, too: the sibling that got the broadcast
+// bit may be SPINNING, making no syscalls, so §10 has to ask as well.
+//
+// Both delivery paths ask this when the pick answers 0, still under the
+// task's signalLock, so registration cannot move the handler under the
+// check. "Yes" becomes SIGNAL_DELIVER_FAILED, which every caller already
+// turns into the default action (the ladder has a SIGPIPE arm since rd9).
+static bool signal_orphaned_death_pending(task_t *task, thread_t *thread)
+{
+	for (int sig = 1; sig < SIGNAL_COUNT; sig++)
+	{
+		if (!sigset_has(thread->signals.sigind, (signals)sig))
+			continue;
+		if (!signal_is_catchable((signals)sig))
+			continue;                       // SIGKILL: the checkpoints own it
+		if (task->sighandler[sig] != NULL)
+			continue;                       // handled (or held): not orphaned
+		if ((SIG_BIT(sig) & SIGNALS_DEFAULT_IS_DEATH) &&
+		    !(SIG_BIT(sig) & SIGNALS_TERMINATING))
+			return true;
+	}
+	return false;
+}
+
 // The bookkeeping both delivery paths share, done ONCE per delivery:
 // consume the bit task-wide (the aim is a broadcast — leaving it on the
 // siblings would run one SIGTERM once per thread, the exact outcome the
@@ -394,8 +430,12 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 	int sig = signal_pick_deliverable(task, thread);
 	if (sig == 0)
 	{
+		// Nothing to arm — but is something pending that nobody will ever
+		// act on? (rd18, see signal_orphaned_death_pending.) FAILED sends the
+		// caller to the default action; the ladder names SIGPIPE.
+		bool orphaned = signal_orphaned_death_pending(task, thread);
 		spinlock_release_irqrestore(&task->signalLock, sig_flags);
-		return SIGNAL_DELIVER_NONE;
+		return orphaned ? SIGNAL_DELIVER_FAILED : SIGNAL_DELIVER_NONE;
 	}
 
 	uint64_t user_rsp = frame[2];       // [16] in syscall.S's frame
@@ -516,8 +556,13 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 	int sig = signal_pick_deliverable(task, thread);
 	if (sig == 0)
 	{
+		// Same orphan question as §5 (rd18): a spinner can hold a broadcast
+		// SIGPIPE bit whose handler a sibling has since removed, and it makes
+		// no syscall at which to notice. FAILED sends the caller to the
+		// gallows; the victim dies at its next dispatcher exit by the ladder.
+		bool orphaned = signal_orphaned_death_pending(task, thread);
 		spinlock_release_irqrestore(&task->signalLock, sig_flags);
-		return SIGNAL_DELIVER_NONE;
+		return orphaned ? SIGNAL_DELIVER_FAILED : SIGNAL_DELIVER_NONE;
 	}
 
 	// Same red-zone respect as §5. Userland is -mno-red-zone today, so the

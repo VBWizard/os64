@@ -1240,8 +1240,11 @@ static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 	// signal_has_handler_for_pending answers "no" when SIGKILL is pending,
 	// so the uncatchable one never waits. UNLESS delivery just provably
 	// failed: an unusable stack means the handler cannot run, so the
-	// default action must (FAILED is only ever reported for terminating
-	// signals — the non-terminating undeliverables were dropped inside).
+	// default action must. FAILED is reported for a terminating signal
+	// whose frame could not be written (the non-terminating undeliverables
+	// were dropped inside) — and, since rd18, for an ORPHANED death: a
+	// pending SIGPIPE whose handler a sibling removed after the broadcast,
+	// which no checkpoint scans for. Both fall through to the gallows.
 	if (dr != SIGNAL_DELIVER_FAILED &&
 	    signal_has_handler_for_pending(task, thread))
 		return;

@@ -1186,7 +1186,17 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 						for (thread_t *pth = task->threads; pth != NULL; pth = pth->taskNext)
 							sigset_add(&pth->signals.sigind, SIGPIPE);
 						spinlock_release_irqrestore(&task->signalLock, spf);
-						return (uint64_t)(int64_t)OS64_INTERRUPTED;
+						// PROGRESS OUTRANKS THE SENTINEL (Codex #29 rd18). A write
+						// bigger than PIPE_CAPACITY goes in chunks, and chunks
+						// already delivered are not undone by the signal.
+						// OS64_INTERRUPTED means "nothing was accomplished" (the
+						// ABI says so in as many words), so answering it after N
+						// bytes went would make a retrying caller send N twice.
+						// Return the count; the bit is published either way, so
+						// the handler still arms on the way out of this syscall
+						// — delivery reads the pending set, not our return value.
+						// (tcp_conn_write below us has always done exactly this.)
+						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
 					}
 					spinlock_release_irqrestore(&task->signalLock, spf);
 					// No handler: the default action is death, applied HERE in
@@ -1201,9 +1211,12 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 					// pipe write. Same rail, different signal: terminate, 130.
 					// Caught? Then the wait was INTERRUPTED, not fatal — and
 					// returning is what makes delivery possible at all: the
-					// handler is armed on the way out of this syscall.
+					// handler is armed on the way out of this syscall. Progress
+					// first (rd18): earlier chunks are on the pipe and stay
+					// there, so INTERRUPTED — "nothing was accomplished" — is
+					// only the truth when written is 0.
 					if (current_thread_will_catch())
-						return (uint64_t)(int64_t)OS64_INTERRUPTED;
+						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
 					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
@@ -1244,9 +1257,12 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				{
 					// Caught? Then the wait was INTERRUPTED, not fatal — and
 					// returning is what makes delivery possible at all: the
-					// handler is armed on the way out of this syscall.
+					// handler is armed on the way out of this syscall. Progress
+					// first (rd18): tcp_conn_write itself answers `sent` over
+					// INTERRUPTED within a chunk; this loop owed its earlier
+					// chunks the same honesty.
 					if (current_thread_will_catch())
-						return (uint64_t)(int64_t)OS64_INTERRUPTED;
+						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
 					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
