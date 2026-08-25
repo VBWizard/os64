@@ -161,7 +161,7 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 
 	for (;;)
 	{
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			return ICMP_CONN_ERR_INTERRUPTED;
 
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
@@ -199,7 +199,7 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 		uint64_t wake = kTicksSinceStart + TICKS_PER_SECOND;
 		if (deadline != 0 && deadline < wake)
 			wake = deadline;
-		sigaction(SIGSLEEP, NULL, wake, self);
+		signal_raise(SIGSLEEP, wake, self);
 	}
 }
 

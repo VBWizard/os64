@@ -383,6 +383,10 @@ static cmdopt_t cmdopts[] = {
     // single boot, so the loudest thing on it could not be heard without
     // recompiling. Add DEBUG_DETAILED for per-release refcount lines.
     {"DEBUG_TASK", OPT_UINT128_OR, &kDebugLevel, DEBUG_TASK, 0},
+    // DEBUG_SIGNALS existed as a bit (CONFIG.h) with no way to turn it on from
+    // the cmdline — found 2026-08-23 needing exactly that to chase a signal
+    // delivery race. CLAUDE.md's rule about this table, applied late.
+    {"DEBUG_SIGNALS", OPT_UINT128_OR, &kDebugLevel, DEBUG_SIGNALS, 0},
     {"LOGFILE", OPT_BOOL, &kOverrideFileLogging, true, 0},
     {"ROOT", OPT_STRING, kRootPartUUID, 0, 64},
     // Older boot entries (VBox/Bosgame in limine.conf) still use the long

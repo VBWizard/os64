@@ -193,11 +193,37 @@ obj/test/%.c.o: test/%.c GNUmakefile
 
 # Generate struct-field offsets header used by .S files.
 # Compiles asm-offsets.c to assembly, extracts "=> NAME VALUE" lines.
+#
+# -MMD IS LOAD-BEARING HERE, and this rule went without it until 2026-08-23.
+# The prerequisites used to be `src/asm-offsets.c GNUmakefile` alone — the
+# GENERATOR, but not the HEADERS whose struct layouts it measures. So changing
+# a struct that assembly reaches into (thread_t, task_t, core_local_storage_t)
+# left this header untouched, and every .S file assembled against offsets for
+# a layout that no longer existed.
+#
+# It bit on the day the signals work shrank thread_t by 264 bytes:
+# THREAD_OWNERTASK_OFFSET stayed at its old 384, task_exit_asm.S read
+# `ownerTask` from the middle of some other field, and the garbage pointer
+# surfaced as a #PF in a handle closer three frames away — a fault with no
+# visible connection to the change that caused it. A clean build "fixed" it,
+# which is the classic shape of this bug and the reason it is worth a comment
+# this long.
+#
+# This is the same species as the -MMD lesson already in SUCCESSION.md's
+# fingerprint table ("a struct field reads NULL/garbage in ONE binary while
+# everything else tests green"), which cost two days across the kernel and
+# userland in July. A generated header is a build artifact like any other: it
+# depends on everything it reads.
 include/asm-offsets.h: src/asm-offsets.c GNUmakefile
 	@mkdir -p obj include
-	@$(CC) $(CFLAGS) -isystem freestnd-c-hdrs-0bsd -S -o obj/asm-offsets.s $<
+	@$(CC) $(CFLAGS) -isystem freestnd-c-hdrs-0bsd -MMD -MP -MF obj/asm-offsets.d -MT $@ -S -o obj/asm-offsets.s $<
 	@echo "/* auto-generated from src/asm-offsets.c — do not edit */" > $@
 	@awk '/=>/ { print "#define", $$2, $$3 }' obj/asm-offsets.s >> $@
+
+# ...and the dependency file that rule just wrote, so the header rebuilds when
+# any struct it measures changes. Named separately from HEADER_DEPS because it
+# must be included whether or not any .c/.S object exists yet.
+-include obj/asm-offsets.d
 
 # Compilation rules for *.S files (depend on asm-offsets.h so offsets stay current).
 obj/%.S.o: src/%.S include/asm-offsets.h GNUmakefile

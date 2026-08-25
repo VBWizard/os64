@@ -25,8 +25,8 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        seven entries: "bus", "cpu", "net", "cache",
-//                                "gui", "log", "clipboard"
+//   /sys/                        nine entries: "bus", "cpu", "net", "cache",
+//                                "conf", "gui", "log", "shlib", "clipboard"
 //   /sys/bus/                    one entry: "pci"
 //   /sys/bus/pci/                one file per discovered function, named
 //                                bus:dev.fn in hex — "00:1f.3", lspci's
@@ -56,6 +56,13 @@
 //   /sys/net/<card>              one NIC: model/location (both optional),
 //                                mac, mtu, link, whether it carries the
 //                                address, and the traffic counters
+//   /sys/conf                    the config search path (`path:`, and the
+//                                `source:` that set it), then one line per
+//                                config file that has been looked up saying
+//                                which directory actually answered. The
+//                                second half is the point: a ladder tells you
+//                                where a file COULD come from, these lines
+//                                say where it DID (conf.h, 2026-08-23)
 //   /sys/clipboard               THE system clipboard, read AND write:
 //                                `... > /sys/clipboard` copies, `cat` pastes.
 //                                Two firsts for /sys, both worth naming: it
@@ -115,6 +122,7 @@
 #include "task.h"                   // task_t — kIdleTasks' element type
 #include "nmi_probe.h"              // the probe trigger behind cpu/<n>/probe
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
+#include "conf.h"                       // /sys/conf — the config search path and its takers
 #include "driver/net/net_device.h"      // /sys/net — kNetDevices, the registered NICs
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
@@ -296,6 +304,7 @@ typedef enum
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
+	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -389,6 +398,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_GUIFILE;
+		return;
+	}
+
+	if (strcmp(comp, "conf") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_CONFFILE;
 		return;
 	}
 
@@ -753,6 +770,41 @@ static void sys_gen_shlib(synth_text_t *t)
 // task-mapped canvas and a kernel-side content surface — and /proc can only
 // ever show the first (see wm_census_locked's comment for the afternoon that
 // taught us).
+// /sys/conf — where config files are looked for, and which one each reader
+// actually took.
+//
+// The second half is the reason this file exists. Chris, ruling the search
+// path: "for some time I'll want to be able to verify where each conf file is
+// coming from." A ladder you can only READ tells you where a file COULD have
+// come from; the per-reader lines say where it DID. Both halves in one `cat`.
+//
+// The lines are facts, not history: a name that is looked up twice shows its
+// latest answer, because the file a reader is using is a property of now.
+// A name with no path after it was searched for and not found anywhere.
+static void sys_gen_conf(synth_text_t *t)
+{
+	synth_text_addf(t, "path: ");
+	size_t n = conf_dir_count();
+	for (size_t i = 0; i < n; i++)
+		synth_text_addf(t, "%s%s", (i > 0) ? ":" : "", conf_dir(i));
+	if (n == 0)
+		synth_text_addf(t, "(none)");
+	synth_text_addf(t, "\n");
+	synth_text_addf(t, "source: %s\n", conf_source());
+
+	char name[CONF_NAME_MAX];
+	char path[CONF_PATH_MAX];
+	bool any = false;
+	for (size_t i = 0; conf_note(i, name, sizeof(name), path, sizeof(path)); i++)
+	{
+		synth_text_addf(t, "%s: %s\n", name,
+		                path[0] != '\0' ? path : "(not found)");
+		any = true;
+	}
+	if (!any)
+		synth_text_addf(t, "(nothing has looked up a config file yet)\n");
+}
+
 static void sys_gen_gui(synth_text_t *t)
 {
 	synth_text_addf(t, "running: %s\n", kEnableGUI ? "yes" : "no");
@@ -1174,7 +1226,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_LOGFILE
 	         && sp.type != SYS_NODE_GUIFILE && sp.type != SYS_NODE_NETIP
 	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETCARD
-	         && sp.type != SYS_NODE_SHLIBFILE)
+	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -1191,6 +1243,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_gui(&text);
 	else if (sp.type == SYS_NODE_SHLIBFILE)
 		sys_gen_shlib(&text);
+	else if (sp.type == SYS_NODE_CONFFILE)
+		sys_gen_conf(&text);
 	else if (sp.type == SYS_NODE_NETIP)
 		sys_gen_net_ip(&text);
 	else if (sp.type == SYS_NODE_NETDHCP)
@@ -1380,7 +1434,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "cache", "gui", "log", "shlib", "clipboard" };
+			static const char *kSysRootFiles[] = { "cache", "conf", "gui", "log", "shlib", "clipboard" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -1571,6 +1625,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_SHLIBFILE:
 			strncpy(entry->name, "shlib", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_CONFFILE:
+			strncpy(entry->name, "conf", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		// The clipboard reports its REAL length here (the only /sys node that

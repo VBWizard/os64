@@ -147,7 +147,8 @@ typedef struct {
     bool anyRule;                       // did the file route anything at all?
 } conf_t;
 
-static const char *const kConfPaths[] = { "/home/os64get.conf", "/etc/os64get.conf" };
+// (The private { "/home/os64get.conf", "/etc/os64get.conf" } ladder retired
+// 2026-08-23 — conf_load asks the system's search path now.)
 
 // Trim a trailing '/' off a directory value so "/bin/" and "/bin" mean the
 // same thing — the one courtesy the reader extends beyond the dialect.
@@ -259,25 +260,34 @@ static bool conf_line(const char *key, const char *value, void *user)
 
 static void conf_load(conf_t *c)
 {
-    size_t which = 0;
-    // The callback needs c->path for its complaints before we know which
-    // file answered; try each in order ourselves so the name is right.
-    for (size_t i = 0; i < sizeof(kConfPaths) / sizeof(kConfPaths[0]); i++) {
-        c->path = kConfPaths[i];
-        int64_t rc = os64_conf_read(kConfPaths[i], conf_line, c);
-        if (rc == OS64_CONF_NO_FILE)
-            continue;
-        if (rc == OS64_CONF_TRUNCATED)
-            os64_hprintf(OS64_STDERR, "os64get: %s is larger than %d bytes - the tail was not read\n",
-                         kConfPaths[i], OS64_CONF_MAX);
-        else if (rc == OS64_CONF_NO_MEMORY)
-            os64_hprintf(OS64_STDERR, "os64get: out of memory reading %s - no routing rules;"
-                         " files land in the current directory\n", kConfPaths[i]);
-        which = i;
-        (void)which;
+    // ASK THE SYSTEM (2026-08-23). The loop that used to be here walked a
+    // private { "/home/os64get.conf", "/etc/os64get.conf" } — copied from
+    // logd, which is exactly how six programs came to spell one ladder five
+    // ways. /etc/os64.conf's `conf =` is the ladder now, walked in the
+    // kernel; the walker returns the file that answered, so the "try each in
+    // order ourselves so the name is right" problem solves itself: the name
+    // arrives WITH the answer.
+    static char chosen[OS64_CONF_PATH_MAX];   // static: c->path outlives this call
+    if (os64_conf_find("os64get.conf", chosen, sizeof(chosen)) != 0) {
+        c->path = NULL;   // no file: cwd semantics, no archive
         return;
     }
-    c->path = NULL;   // no file: cwd semantics, no archive
+
+    c->path = chosen;
+    int64_t rc = os64_conf_read(chosen, conf_line, c);
+    if (rc == OS64_CONF_NO_FILE) {
+        // It opened for the walker and not for us — vanished in between, or
+        // unreadable. Same outcome as never having had one, said out loud.
+        os64_hprintf(OS64_STDERR, "os64get: %s went away before it could be read;"
+                     " files land in the current directory\n", chosen);
+        c->path = NULL;
+    } else if (rc == OS64_CONF_TRUNCATED) {
+        os64_hprintf(OS64_STDERR, "os64get: %s is larger than %d bytes - the tail was not read\n",
+                     chosen, OS64_CONF_MAX);
+    } else if (rc == OS64_CONF_NO_MEMORY) {
+        os64_hprintf(OS64_STDERR, "os64get: out of memory reading %s - no routing rules;"
+                     " files land in the current directory\n", chosen);
+    }
 }
 
 // The directory a name installs into, or NULL for "no rule" (= cwd).

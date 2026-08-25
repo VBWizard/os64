@@ -91,6 +91,6 @@ bool gkeys_thread(bool daemon)
 			gui_window_publish(win, &text_area);
 		}
 
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + 1, self);
+		signal_raise(SIGSLEEP, kTicksSinceStart + 1, self);
 	}
 }

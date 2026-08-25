@@ -50,6 +50,18 @@ exc_vector_\vec:
 .endm
 
 exc_common:
+    # DF CLEAR BEFORE ANY C RUNS (2026-08-24). An interrupt or exception gate
+    # clears TF, NT, RF, VM — and IF for an interrupt gate — but NOT the
+    # direction flag, so DF arrives here exactly as the interrupted code left
+    # it. Ring 3 is allowed to set it (`std` is an ordinary unprivileged
+    # instruction), and the SysV ABI lets the compiler emit `rep movsq` with
+    # no `cld` in front because DF-clear is a precondition the caller owes.
+    # The kernel carries twelve such copies even at -O0. One instruction here
+    # covers all 32 vectors, since every stub jumps through this label.
+    # (The SYSCALL path is covered by SFMASK instead — smp_core.c — because
+    # an MSR can do it with no instruction at all. No MSR covers these gates.)
+    cld
+
     # rax first so it lands at the HIGHEST address — push walks down, and the
     # struct is written low-address-first.
     push rax

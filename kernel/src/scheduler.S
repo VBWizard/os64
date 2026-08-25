@@ -123,6 +123,16 @@ _schedule_ap:
     # entry vectors now live in class 7, where the hardware holds the second
     # one pending instead of delivering it.  The software guard below is the
     # backstop, not the primary defense.
+    cld                                 # DF clear before ANY C runs (Codex #29 rd27, a P1).
+                                        # Both scheduler vectors are wired straight here,
+                                        # not through handle_mp_isr.S — so rd10's seven
+                                        # clds missed the two most-taken interrupt entries
+                                        # in the kernel. A thread interrupted mid-`std`
+                                        # in ring 3 would have run scheduler_do's
+                                        # compiler-emitted string ops backwards. The
+                                        # interrupted RFLAGS are read from the STACK frame
+                                        # into mp_isrSavedRFlags, so clearing the live
+                                        # flag changes nothing about what is saved.
     push rbx                            # Save original RBX value
 
     mov rbx, rax                        # Put the original RAX value in RBX

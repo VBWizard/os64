@@ -332,11 +332,23 @@ typedef enum os64_shutdown_mode
 } os64_shutdown_mode_t;
 #endif
 
-// getpid() (2026-08-09 — the night after the terminals, because "which tty
+// taskid() (2026-08-09 — the night after the terminals, because "which tty
 // am I on?" starts with "who am I?"). Returns the calling task's ID in RAX;
 // takes nothing, cannot fail. One of the oldest questions in Unix — V1 had
 // getpid in 1971, before pipes, before /tmp — and the answer belongs in a
 // register because the asker is already standing in the kernel's doorway.
+//
+// SPELLED taskid, NOT getpid (2026-08-24). Same question, older than most of
+// this OS; a different noun, because os64 runs TASKS and this returns
+// task->taskID. The Unix name was doubly wrong here — "pid" names a thing
+// os64 does not have, and worse, it PROMISED PER-PROCESS when a reader needed
+// per-thread: libos64's config writer built its temporary file name out of
+// "the pid", every thread of a program got the same one, and two threads
+// saving one file raced to publish each other's half-written temp. The name
+// is what misled it. ("get" is gone too: it earns its keep opposite a `set`,
+// and nothing sets its own identity — os64_ticks and os64_memory read
+// properties the same way.) The NUMBER is untouched: 40 is the contract, the
+// spelling is ours.
 //
 // Identity has TWO spellings on os64, on purpose, answering at two different
 // moments: this syscall is the PRIMITIVE (and what husk's $$ freezes into a
@@ -344,7 +356,7 @@ typedef enum os64_shutdown_mode
 // /proc/self is the NAMESPACE spelling, resolved at open time to whoever
 // does the opening — which is why `echo $$` names your shell and
 // `cat /proc/self/status` names cat. Both honest; different clocks.
-#define SYSCALL_GETPID     40
+#define SYSCALL_TASKID     40
 
 // set_time(epoch) — replace the running kernel's UTC wall-clock counter.
 // The monotonic ticks clock remains untouched, so intervals and uptime never
@@ -454,6 +466,59 @@ typedef enum os64_shutdown_mode
 // Close it with close() like any handle.
 #define SYSCALL_TTY_HANDLE 46
 
+// conf_resolve — WHERE IS THE CONFIG FILE CALLED <name>?
+//
+//   arg0 = const char *name   a FILE name ("logd.conf"), never a path
+//   arg1 = char *out          buffer for the winning path
+//   arg2 = size_t cap         its size
+//   arg3 = size_t from        ladder position to start at; 0 = the ordinary
+//                             "find it" call
+//   arg4 = int any            non-zero: do NOT probe, just build the path this
+//                             name would have at position `from`. The WRITER's
+//                             question — a program saving its settings needs
+//                             the path of a file that does not exist yet, and
+//                             it needs position 0 (the user's directory,
+//                             /home by default) rather than wherever it READ
+//                             from, because /etc is the system's and every
+//                             build rewrites it
+//   returns the matching ladder index PLUS ONE (so success is always >= 1
+//   and can never be read as SYSCALL_RESULT_INVALID), or SYSCALL_RESULT_* on
+//   failure — including "no directory in the search path has it", which is
+//   not an error worth its own code, because the caller's next move is the
+//   same either way: use defaults.
+//
+// `from` EXISTS FOR ONE READER, and it is not gold-plating. Almost every
+// config file is a SETTINGS file, where first-hit-wins is the entire point:
+// your /home/logd.conf replaces the system's. `hosts` is not one — Chris
+// ruled it MERGED on 2026-08-22, /home/hosts layering ON TOP of /etc/hosts so
+// your machine names sit over the system's list rather than erasing it. It is
+// a database, not a setting. Feed a call's return value back as the next
+// call's `from` to walk to the following copy; that lets the resolver read
+// every hosts file on the ladder without keeping the private ladder this
+// syscall exists to abolish.
+//
+// THE WALK IS THE KERNEL'S, and that is the whole point of the call. Six
+// programs each carried a private copy of the same "/home then /etc" ladder
+// until 2026-08-23; the cure is one setting (/etc/os64.conf's `conf =`) that
+// every reader obeys, and a ladder obeyed by everyone must be PARSED by
+// exactly one thing or it is not one ladder. The kernel already has to walk
+// it for its own readers (desktop.c), so ring 3 asks the same walker rather
+// than growing a second one over a /sys file — which would have meant two
+// parsers to keep in agreement AND a separate channel for reporting what
+// each reader took.
+//
+// Reporting comes free this way: because the kernel resolved it, /sys/conf
+// can say which file every reader actually got, which is the diagnostic
+// Chris asked for by name ("for some time I'll want to be able to verify
+// where each conf file is coming from"). Each resolve also prints one line
+// at DEBUG_BOOT.
+//
+// This RESOLVES rather than OPENS: the caller then open()s the path with the
+// handle machinery it already has, and libos64's os64_conf_read takes a path.
+// Handing back an open handle would buy nothing and would put a second way
+// of acquiring handles into the ABI.
+#define SYSCALL_CONF_RESOLVE 47
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //
@@ -521,5 +586,75 @@ typedef enum os64_shutdown_mode
 #define SYSCALL_GUI_EVENT_POLL          20
 #define SYSCALL_GUI_SCREEN_INFO         21
 #define SYSCALL_GUI_EVENT_WAIT          22   // blocking poll — shipped LAST, as planned (step 5)
+
+// The readback half of create (2026-08-23): where is my window, and what
+// state is it in? Frame rect + live flags, in create's own units.
+//
+// It lives at 48 rather than inside the 16..22 GUI block because that block
+// is FULL — the seven reserved numbers were all spent by the surface pivot.
+// Consumer-driven, as ever: gclock wanted to remember where you dragged it
+// and what you pinned, and discovered that nothing in the client ABI could
+// tell an app anything the WINDOW SYSTEM knew about its own window.
+#define SYSCALL_GUI_WINDOW_GET_STATE    48
+
+// signal_handler — install a handler for a signal, and answer with the one it
+// replaced.
+//
+//   arg0 = int signo             the signal NUMBER (os64/signal.h)
+//   arg1 = os64_signal_fn hand   the handler, or 0 for the kernel's default
+//   returns the PREVIOUS handler (possibly 0), or a negative
+//   OS64_SIG_ERR_* — in which case nothing was changed
+//
+// The handler belongs to the TASK, not the calling thread: a signal aimed at
+// a program is broadcast to every one of its threads, so a per-thread handler
+// would fire once per thread for a single SIGTERM. Install once, covers all.
+//
+// SIGKILL is refused (OS64_SIG_ERR_UNCATCHABLE). It is the answer to a
+// program that has stopped answering; a kernel that let a program decline to
+// die would have no last resort.
+//
+// An installed handler RUNS. Delivery arrives by three paths (SIGNALS.md):
+// at the exit of whatever syscall the thread was in (§5 — the common case,
+// and why a blocking call answers OS64_INTERRUPTED afterwards), from the
+// scheduler's visit to a thread spinning in ring 3 that makes no syscalls
+// (§10), and from the page-fault handler for a caught SIGSEGV (§9). The
+// handler returns into a kernel stub that calls sigreturn (below) and the
+// program resumes where it was.
+//
+// (HISTORICAL: for a few hours on 2026-08-23 this call shipped before
+// delivery did, and an installed handler meant only "do not apply the
+// default action". That paragraph stood here as if current until Codex #29
+// rd20.) A signal nothing can send is REFUSED here rather than accepted on
+// that same bet — see the numbered-but-not-real note in os64/signal.h.
+#define SYSCALL_SIGNAL_HANDLER          49
+
+// sigreturn — resume the context a signal handler interrupted.
+//
+// A PROGRAM NEVER CALLS THIS DELIBERATELY. It exists because the kernel sets
+// a handler's return address to a stub that calls it (TASK_SIGRETURN_VIRT, in
+// the same page as the exit trampoline). A handler is an ordinary C function
+// and ends with `ret`; this is what is waiting at the other end of that `ret`.
+//
+//   arg0 = the frame the kernel wrote on the user stack
+//   does not return — it resumes the interrupted context
+//
+// The frame is VALIDATED, not trusted: it arrives from ring 3 and this call
+// restores register state, which makes it the most attackable thing in the
+// signal path. It is refused unless it carries the kernel's magic, names a
+// handler that is actually running on this thread, and carries a canonical
+// lower-half RIP and RSP (a noncanonical one would #GP in ring 0 at the
+// sysretq/iretq — the CVE-2012-0217 family). Nothing privileged is ever
+// taken from it: CS and SS come from GDT constants, and RFLAGS passes
+// through a mask that keeps only the bits a user program owns.
+//
+// WHERE the frame sits is deliberately NOT checked (this note used to say
+// "sits on the calling thread's own stack" — Codex #29 rd20 caught the claim
+// against kernel/src/syscall.c, which explains the omission). A range check
+// on the pointer would prove nothing: every word of the frame is
+// user-writable wherever it is, so the CONTENTS are what is defended, and
+// they are, above. A program that hands sigreturn a frame it forged
+// elsewhere gets exactly the resume it asked for, in ring 3, with ring 3's
+// privileges — its own problem, and nobody else's.
+#define SYSCALL_SIGRETURN               50
 
 #endif

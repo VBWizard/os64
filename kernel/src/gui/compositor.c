@@ -17,6 +17,7 @@
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
 #include "gui/desktop.h"
+#include "gui/startup.h"     // gui.conf — what starts with the desktop
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -1270,7 +1271,16 @@ bool guicomp_thread(bool daemon)
 	// A first window, created through the CLIENT API — so M5 exercises the
 	// exact path demo apps (and later, userland) will use: click it to
 	// focus, drag it by the titlebar.
-	int64_t hello = gui_window_create("hello os64", 340, 250, 340, 240, 0);
+	//
+	// KEPT, AND NOW OPTIONAL (2026-08-23). `hello = no` in gui.conf hides it;
+	// the default is still on, because it has been on the glass since the
+	// first frame this compositor ever drew and an absent config file must
+	// not quietly retire anything. Chris asked for the switch and for the
+	// code to stay in the same breath — "I want to keep that for legacy
+	// sake" — which is exactly what a config flag is for.
+	int64_t hello = gui_startup_hello()
+	                    ? gui_window_create("hello os64", 340, 250, 340, 240, 0)
+	                    : 0;
 	if (hello > 0) {
 		surface_t s;
 		gui_window_get_surface(hello, &s);
@@ -1441,6 +1451,13 @@ uint64_t gui_compositor_affinity(void)
 
 void gui_start(void)
 {
+	// FIRST, before anything is submitted: read gui.conf. The compositor
+	// thread asks gui_startup_hello() while building its scene, so a parse
+	// that raced the task creation below would be a coin toss on whether the
+	// legacy window appears. Settle the answers while we are still the only
+	// one who can ask the question.
+	gui_startup_load();
+
 	// Open the unified input queue before the compositor (its consumer)
 	// exists — events buffered during task startup are simply the first
 	// ones drained.
@@ -1474,11 +1491,17 @@ void gui_start(void)
 	// nothing spawns it anymore.
 	// (Non-const strings because task_create's path parameter predates
 	// const-correctness — it does not modify them.)
-	static char demo_bounce[] = "/bin/gbounce";
-	static char demo_keys[]   = "/bin/gkeys";
-	char *demos[] = { demo_bounce, demo_keys };
-	for (unsigned i = 0; i < sizeof(demos) / sizeof(demos[0]); i++) {
-		task_t *demo = task_create(demos[i], 0, NULL, kKernelTask, false,
+	//
+	// THE LIST IS gui.conf's NOW (2026-08-23), and the two demos are merely
+	// its default. What made this the right home for it: these apps belong to
+	// the DESKTOP's startup, and everything Chris actually wanted at boot was
+	// stranded in husk.rc — which runs in every husk (VT1 and VT2 both start
+	// one, so he got two gclocks and two gterms) and runs on text boots too
+	// (where every GUI line failed once per terminal). One move fixes both:
+	// the desktop starts once, and only when there is a desktop.
+	for (size_t i = 0; i < gui_startup_app_count(); i++) {
+		const char *app = gui_startup_app(i);
+		task_t *demo = task_create((char *)app, 0, NULL, kKernelTask, false,
 		                           THREAD_NO_AFFINITY);
 		if (demo == NULL) {
 			// BOTH sinks, deliberately: printf is FRAMEBUFFER-ONLY (the
@@ -1488,8 +1511,8 @@ void gui_start(void)
 			// first GUI boot against a root that predated the ring-3
 			// demos). The wire copy is unconditional: a missing binary at
 			// boot is exactly the fact a log exists to keep.
-			printf("gui_start: %s launch failed (not on the image?)\n", demos[i]);
-			printd(DEBUG_BOOT, "gui_start: %s launch failed (not on the image?)\n", demos[i]);
+			printf("gui_start: %s launch failed (not on the image?)\n", app);
+			printd(DEBUG_BOOT, "gui_start: %s launch failed (not on the image?)\n", app);
 			continue;
 		}
 		demo->autoReap = true;

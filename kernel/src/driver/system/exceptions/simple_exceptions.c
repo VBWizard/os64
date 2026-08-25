@@ -13,6 +13,7 @@
 #include "memory/paging.h"
 #include "memory/memcpy.h"
 #include "exceptions.h"
+#include "signals.h"            // signal_deliver_segv — a caught SIGSEGV resumes into its handler
 #include "exception_report.h"   // the unified path's context + reporter — the
                                 // demand pager below serves BOTH paths, and
                                 // asks exception_current_context() which one
@@ -615,6 +616,24 @@ static void __attribute__((noreturn)) page_fault_panic(const char *why, uint64_t
 // are on the CPU-switched kernel interrupt stack, and task_exit() is built
 // for exactly this situation — it re-points RSP at that stack's top, switches
 // to kKernelPML4, and schedules away, never returning to the faulting frame.
+// A ring-3 fault is fatal ONLY IF nothing catches it. If the task installed a
+// SIGSEGV handler, deliver it and RESUME into it instead of dying (SIGNALS.md
+// §9): the frame is built on the faulting thread's stack and the exception's
+// own iretq lands in the handler (exception_entry.S restores from the edited
+// context). Returns true if that happened — the caller must then `return`
+// from handle_page_fault so the resume can occur, rather than killing. False
+// falls through to user_fault_kill exactly as before (no handler, the handler
+// itself faulted, or the faulted stack can't hold the frame — §9's limit).
+static bool try_catch_segv(task_t *task)
+{
+	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	exception_context_t *ctx = exception_current_context();
+	if (thread == NULL || ctx == NULL)
+		return false;
+	return signal_deliver_segv(task, thread, ctx);
+}
+
 static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *why,
     uint64_t cr2, uint64_t error_code, uint64_t rip)
 {
@@ -754,6 +773,9 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // kernel bug, and the syscall copy helpers pre-validate user ranges
         // precisely so a bad user pointer can never fault down here in ring 0.)
         if (error_code & 0x4)
+        {
+            if (try_catch_segv(task))
+                return;   // handler armed; the exception iretq resumes into it
             user_fault_kill(task,
                 // No VMA does NOT always mean unmapped: eagerly-mapped memory
                 // (stacks, argv, env) has PTEs but no VMA, so a PRESENT fault
@@ -767,6 +789,7 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
                         ? "no-execute violation (instruction fetch from data memory)"
                         : "protection violation on eagerly-mapped memory"),
                 cr2, error_code, rip);
+        }
         // A fault in the HHDM range is the lazy-HHDM tripwire firing (see
         // paging.h): physical memory is only HHDM-mapped while allocated, so
         // this is a use-after-free, a wild physical-address dereference, or
@@ -870,11 +893,15 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
         // Error bit 4 (I/D) marks an instruction fetch — under NXE that is
         // the NX bit doing its job, and the kill names it (2026-08-16).
         if (error_code & 0x4)
+        {
+            if (try_catch_segv(task))
+                return;   // handler armed; the exception iretq resumes into it
             user_fault_kill(task,
                 (error_code & 0x10)
                     ? "no-execute violation (instruction fetch from data memory)"
                     : "protection violation",
                 cr2, error_code, rip);
+        }
 
         // Page is present but the access was denied and this VMA is not CoW.
         // This is a genuine protection violation, not a recoverable fault.
@@ -926,8 +953,12 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
             // ring-0 fault here still panics: the kernel touching a
             // shared-object page it cannot resolve is a kernel bug.
             if (error_code & 0x4)
+            {
+                if (try_catch_segv(task))
+                    return;   // handler armed; the exception iretq resumes into it
                 user_fault_kill(task, "shared library or dynamic executable page could not be resolved",
                                 cr2, error_code, rip);
+            }
             page_fault_panic("failed to resolve a shared-object page",
                              cr2, error_code, rip);
         }

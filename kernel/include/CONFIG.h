@@ -79,14 +79,15 @@
 //
 // WHY THIS IS A DIAL AT ALL (Chris's question, and it is the right one): no
 // fixed number is "always enough", so the honest thing is to name the number
-// and say what it depends on. TODAY it is generous to the point of academic —
-// ring 3 cannot catch a signal yet, so a SIGTERM'd task dies at its very next
-// checkpoint (its next syscall, or the scheduler's forced redirect), which is
-// microseconds away. The wait is really "how long until every task reaches a
-// checkpoint", and 2 seconds is enormous for that.
+// and say what it depends on. WHEN THIS WAS WRITTEN it was generous to the
+// point of academic — ring 3 could not catch a signal, so a SIGTERM'd task
+// died at its very next checkpoint (its next syscall, or the scheduler's
+// forced redirect), microseconds away, and the wait was really "how long
+// until every task reaches a checkpoint".
 //
-// The day it starts to MATTER is the day userland signal delivery lands (see
-// its DEBTS row): a handler that flushes a file before exiting can take real
+// It started to MATTER on 2026-08-23, when userland signal delivery landed
+// (PR #29, SIGNALS.md — the paragraph above said "yet" until rd21): a
+// handler that flushes a file before exiting can take real
 // time on slow media, and then this number is a genuine policy choice. If it
 // ever needs to vary per boot, the pattern is already here — SCHED_BACKSTOP_MS
 // keeps its compiled default and takes BACKSTOP=<ms> from the cmdline; the

@@ -90,6 +90,26 @@ typedef struct s_thread
 	// thread (the one task_create builds) is always the head.
 	struct s_thread *taskNext;
 	signals_t signals;
+	// Where syscall_Enter's 40-byte return frame sits on THIS THREAD's kernel
+	// stack, for the duration of one in-flight syscall: [0]=user RFLAGS,
+	// [8]=user RIP, [16]=user RSP — the three values sysretq is rebuilt from.
+	// Signal delivery (SIGNALS.md §5) runs a handler by rewriting [8] and
+	// [16]; sigreturn puts them back. Stored by syscall.S at entry, zeroed by
+	// it on the way out, so a checkpoint reached from anywhere OTHER than a
+	// syscall cannot mistake a stale frame for a live one.
+	//
+	// PER-THREAD, NOT PER-CORE, and it lived one day in core_local_storage
+	// before review moved it here (2026-08-24). The frame is on the thread's
+	// kernel stack, and a blocking syscall PARKS with the frame live: the
+	// per-core slot then held a parked thread's frame while other threads ran,
+	// and a woken sleeper reaching the dispatcher exit on such a core would
+	// have delivered its signal into the PARKED stranger's saved return —
+	// rewriting where an innocent program resumes. The same disease as the
+	// cls->task staleness this arc already fixed (scheduler_load_thread):
+	// per-core storage describing a per-thread fact. gs:[currentThread] always
+	// names the running thread, so syscall.S reaches this in two instructions
+	// and the pointer travels with the thread wherever it parks or migrates.
+	uint64_t syscall_return_frame;
 	// Per-thread syscall I/O bounce block, lazily kmalloc'd by syscall.c on the
 	// thread's first read()/write() and REUSED for every one after (it used to
 	// be kmalloc'd/kfree'd per call — with a no-freelist allocator that was a

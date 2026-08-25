@@ -587,7 +587,7 @@ bool logd_thread(bool daemon) {
             was_claimed = true;
             if (!daemon)
                 return false;
-            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
+            signal_raise(SIGSLEEP, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
             continue;
         }
 
@@ -600,7 +600,7 @@ bool logd_thread(bool daemon) {
         {
             if (!daemon)
                 return false;
-            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
+            signal_raise(SIGSLEEP, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
             continue;
         }
         if (was_claimed)
@@ -637,7 +637,7 @@ bool logd_thread(bool daemon) {
             }
             if (!daemon)
                 return false;
-            sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
+            signal_raise(SIGSLEEP, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
             continue;
         }
 
@@ -722,7 +722,7 @@ bool logd_thread(bool daemon) {
         if (backlog)
             continue;
         // Queues drained dry: sleep, wake up periodically regardless.
-        sigaction(SIGSLEEP, NULL, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
+        signal_raise(SIGSLEEP, kTicksSinceStart + LOGD_SLEEP_TICKS, self);
     }
 }
 

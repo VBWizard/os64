@@ -22,11 +22,14 @@
 #include "console.h"
 #include "gui/gui_client.h"   // the GUI client API rows 16-21 dispatch into
 #include "gui/window.h"       // GUI_WINDOW_TITLE_MAX — the title copy's bound
-#include "tty.h"     // console writes land on the CALLER's terminal now
+#include "tty.h"           // console writes land on the CALLER's terminal now
+#include "conf.h"          // conf_find — the config search path, walked in one place
 #include "handle.h"
 #include "driver/filesystem/dev/devfs.h"   // devfs_handle_alias — the /dev/tty door
 #include "pipe.h"
 #include "signals.h"
+#include "gdt.h"     // GDT_USER_* — sigreturn's full path rebuilds ring-3 selectors from constants
+#include "os64/signal.h"   // OS64_SIG_ERR_* — the errors ring 3 is told
 #include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
 #include "shutdown.h"   // shutdown_system — SYSCALL_SHUTDOWN's engine
 #include "allocator.h"  // free_memory — unmap returns pages at the choke point
@@ -147,17 +150,25 @@ static uint64_t syscall_sync_all(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
-static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+static uint64_t syscall_taskid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_heap_report(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_tty_handle(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_conf_resolve(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_destroy(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_gui_window_publish(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -228,10 +239,11 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
 	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
-	SYSCALL_DEFINE(SYSCALL_GETPID,    "getpid",    syscall_getpid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register)
+	SYSCALL_DEFINE(SYSCALL_TASKID,    "taskid",    syscall_taskid,    false, 0x00),  // no args — who am I? (V1's question, V1's answer: a number in a register; os64's noun)
 	SYSCALL_DEFINE(SYSCALL_SET_TIME,  "set_time",  syscall_set_time,  false, 0x00),  // arg0 = UTC epoch bits; monotonic clock is untouched
 	SYSCALL_DEFINE(SYSCALL_HEAP_REPORT, "heap_report", syscall_heap_report, false, 0x01),  // arg0 = user VA of an os64_heap_report_t (0 withdraws)
 	SYSCALL_DEFINE(SYSCALL_TTY_HANDLE, "tty_handle", syscall_tty_handle, false, 0x00),  // no args — the answer is a property of the ASKER
+	SYSCALL_DEFINE(SYSCALL_CONF_RESOLVE, "conf_resolve", syscall_conf_resolve, false, 0x03),  // arg0 = name in, arg1 = path out; arg4 = don't probe
 	// ── GUI (16-21): GRAPHICS.md's userland boundary, live 2026-08-17.
 	// Ownership (migration step 1) went in BEFORE these doors opened: every
 	// handle below is checked against its owner inside gui_client.c, so a
@@ -246,6 +258,15 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x02),  // arg1 = input_event_t out; BLOCKS (like read)
+	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
+	// arg1 is a CODE address the kernel will one day jump to, not a buffer it
+	// reads — so it stays OUT of the pointer mask (which validates readable
+	// user memory) and the handler range-checks it itself.
+	SYSCALL_DEFINE(SYSCALL_SIGNAL_HANDLER,         "signal_handler",         syscall_signal_handler,         false, 0x00),  // arg0 = signo, arg1 = handler
+	// arg0 is the frame, VALIDATED by the handler itself (magic + the running
+	// handler check) rather than by the pointer mask — the mask proves a buffer
+	// is readable, which is the least of what this one has to prove.
+	SYSCALL_DEFINE(SYSCALL_SIGRETURN,              "sigreturn",              syscall_sigreturn,              false, 0x00),  // arg0 = the signal frame
 };
 
 uint64_t _syscall_dispatch(
@@ -267,33 +288,73 @@ uint64_t _syscall_dispatch(
 	// raise_terminating_signal_and_die). Only a syscall-free ring-3 spin
 	// evades this boundary entirely — and the forced-syscall push in
 	// scheduler.c closes that gap.
+	// Hoisted out of the block below so the DELIVERY hook at the end of this
+	// function can reuse them — one lookup, and the two halves of the signal
+	// story (default action on the way in, handler on the way out) provably
+	// talk about the same thread.
+	core_local_storage_t *sig_cls = get_core_local_storage();
+	thread_t *sig_thread = sig_cls ? sig_cls->currentThread : NULL;
+	// THE TASK COMES FROM THE THREAD, NEVER FROM CLS — and this is not
+	// pedantry, it is a bug that shipped and was caught on glass the same day
+	// (2026-08-23). cls->task and cls->currentThread are not updated
+	// atomically, so for a window right after a thread MIGRATES CORES they
+	// disagree: the core has the new thread but still names the task it was
+	// idling for. Reading the handler table out of cls->task then asks the
+	// IDLE task whether it installed a handler, gets "no", and kills a
+	// program that had one — intermittently, depending on whether the thread
+	// happened to move. thread->ownerTask cannot be out of sync with the
+	// thread, because it IS part of the thread.
+	//
+	// (The old code passed cls->task here too, but only ever on the way to
+	// dying anyway. Making a DECISION depend on it is what turned a cosmetic
+	// staleness into a lost program.)
+	task_t *sig_task = sig_thread ? (task_t *)sig_thread->ownerTask : NULL;
 	{
-		core_local_storage_t *sig_cls = get_core_local_storage();
-		thread_t *sig_thread = sig_cls ? sig_cls->currentThread : NULL;
-		if (sig_thread && (sig_thread->signals.sigind & SIGNALS_TERMINATING))
-			raise_terminating_signal_and_die(sig_cls->task, sig_thread);
+		// A pending terminate kills only when NOTHING will catch it. A task
+		// that installed a handler for this signal gets it delivered on the
+		// way out instead — which is the whole point of the registration
+		// syscall, and why the default action has to ask first.
+		if (sig_thread && (sigset_any(sig_thread->signals.sigind, SIGNALS_TERMINATING)) &&
+		    !signal_has_handler_for_pending(sig_task, sig_thread))
+			raise_terminating_signal_and_die(sig_task, sig_thread);
 	}
 
 	// Remember the address space we arrived on for the exit tripwire below.
 	asm volatile("mov %0, cr3" : "=r"(entry_cr3));
 
+	// EVERY WAY OUT OF THIS FUNCTION GOES THROUGH THE DELIVERY EPILOGUE
+	// (Codex #29 rd26). The three refusals below used to `return` directly,
+	// which skipped the one place a handler gets armed — so a program looping
+	// on a rejected call (bad number, empty slot, an argument that fails
+	// validation) had a pending, handled signal that nothing ever delivered:
+	// the entry checkpoint granted the reprieve, the exit hook never ran.
+	// The scheduler's §10 visit would catch the loop eventually, when it found
+	// the thread in ring 3 — but "the other path will probably get it" is not
+	// the contract, and SIGNALS.md promises the dispatcher covers every
+	// syscall return. So a refusal is a RESULT, and results are delivered on.
+	uint64_t result;
+	syscall_entry_t *entry = NULL;
+
 	if (syscall_number >= MAX_SYSCALLS)
 	{
         printd(DEBUG_SYSCALL, "SYSCALL: invalid number %lu\n", syscall_number);
-        return SYSCALL_RESULT_INVALID;
+        result = SYSCALL_RESULT_INVALID;
+        goto deliver_and_return;
 	}
 
-	syscall_entry_t *entry = &syscall_table[syscall_number];
+	entry = &syscall_table[syscall_number];
 	if (!entry->func)
 	{
         printd(DEBUG_SYSCALL, "SYSCALL: unimplemented number %lu\n", syscall_number);
-        return SYSCALL_RESULT_INVALID;
+        result = SYSCALL_RESULT_INVALID;
+        goto deliver_and_return;
 	}
 
 	if (!prepare_syscall_args(entry, raw_args, prepared_args))
 	{
         printd(DEBUG_SYSCALL, "SYSCALL: user argument validation failed for %lu\n", syscall_number);
-        return SYSCALL_RESULT_BAD_USER_DATA;
+        result = SYSCALL_RESULT_BAD_USER_DATA;
+        goto deliver_and_return;
 	}
 
 	if (entry->needs_cr3_switch)
@@ -307,7 +368,7 @@ uint64_t _syscall_dispatch(
 		log_syscall_invocation(entry, prepared_args);
 	}
 
-	uint64_t result = entry->func(
+	result = entry->func(
 		prepared_args[0], prepared_args[1], prepared_args[2],
 		prepared_args[3], prepared_args[4], prepared_args[5]);
 
@@ -327,6 +388,41 @@ uint64_t _syscall_dispatch(
 	{
 		panic("_syscall_dispatch: syscall %lu (%s) entered on CR3 %#lx but is leaving on %#lx\n",
 		      syscall_number, entry->name ? entry->name : "(unnamed)", entry_cr3, exit_cr3);
+	}
+
+	// ── SIGNAL DELIVERY, on the way out ─────────────────────────────────────
+	//
+	// The refusals above jump straight here (rd26): no CR3 switch happened for
+	// them, so the tripwire has nothing to say, and `result` is the refusal.
+deliver_and_return:
+	// HERE, and not at the checkpoint on the way IN, because the syscall's
+	// return value has to survive the handler. Delivering before the body ran
+	// would skip the syscall entirely and resume afterwards as though it had
+	// happened — a `read` that silently never read. Delivering here means the
+	// call completes, its answer goes into the frame, and sigreturn puts it
+	// back in RAX.
+	//
+	// One place, not nine: the nine checkpoints exist so a PARKED thread
+	// notices a terminate in its own context, and they still do. Every one of
+	// them returns through here, so this is where a handler gets armed.
+	//
+	// Deliberately last: after the CR3 tripwire, so a delivery can never be
+	// blamed for an address-space escape it did not cause, and after the
+	// syscall body, so `result` is the real answer.
+	// Same rule as the entry checkpoint: the task comes from the THREAD.
+	// Delivering against cls->task would build a frame from one program's
+	// handler table onto another program's stack.
+	if (sig_thread != NULL && sig_task != NULL &&
+	    signal_deliver_pending(sig_task, sig_thread, result) == SIGNAL_DELIVER_FAILED)
+	{
+		// A handled signal is pending and the frame could not be written —
+		// the stack is unusable (SIGNALS.md §9). The handler cannot run, so
+		// the DEFAULT ACTION does, here in the victim's own context, exactly
+		// as if no handler had been installed. The alternative — shrugging —
+		// leaves a signal that neither delivers nor kills, and a program
+		// livelocked on INTERRUPTED (see signal_deliver_result_t).
+		raise_terminating_signal_and_die(sig_task, sig_thread);
+		__builtin_unreachable();
 	}
 
 	return result;
@@ -712,13 +808,16 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // through the normal exit path (retVal carries the signal so a waiting parent
 // can see HOW the child died, not just that it did).
 //
-// A program that wants to SURVIVE a vanishing reader will, once userland signal
-// delivery exists, install a handler and get the PIPE_ERR_CLOSED return value
-// instead. Until then the kernel enforces the default, which is the behavior
-// every pipeline actually wants.
+// A program that wants to SURVIVE a vanishing reader installs a SIGPIPE
+// handler (delivery exists since 2026-08-23): the write path then raises
+// SIGPIPE and returns OS64_INTERRUPTED instead of dying (Codex #29,
+// 2026-08-24). This function is the default action for everyone who did NOT
+// install one — which is the behavior every pipeline actually wants.
 // ── The terminating signals: enforcing the default action (SIGINT.md, PROC.md)
-// Same "kernel enforces the default because ring 3 can't catch it" pattern as
-// SIGPIPE below, same 128+signo retVal encoding for a waiting parent. The bit
+// Same "the kernel applies the default for whoever did NOT install a handler"
+// pattern as SIGPIPE below (ring 3 CAN catch these since the signals arc —
+// the sentence here used to say it could not), same 128+signo retVal
+// encoding for a waiting parent. The bit
 // is set somewhere the victim is NOT running — at the KEYSTROKE
 // (console_intr_intercept, IRQ path — cat writing a huge file is not reading
 // the console, so a buffered byte could never work), or by another task
@@ -730,14 +829,41 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 //   2. console_read returning CONSOLE_READ_INTERRUPTED (blocked on stdin)
 //   3. pipe_read/pipe_write returning PIPE_ERR_INTERRUPTED (blocked on a pipe)
 //
-// SIGKILL and SIGINT both terminate today (nothing in ring 3 can catch either
-// yet) but they are NOT the same event, and the exit status must not pretend
-// they are: a task killed through ctl did not die "interrupted from the
-// keyboard". SIGKILL wins when both are pending — the uncatchable one always
-// outranks the catchable one.
-// `thread` may be NULL: all four call sites run in the VICTIM'S OWN context
+// SIGKILL and SIGINT both terminate BY DEFAULT, but they are NOT the same
+// event, and the exit status must not pretend they are: a task killed through
+// ctl did not die "interrupted from the keyboard". SIGKILL wins when both are
+// pending — the uncatchable one always outranks the catchable one. And since
+// the signals arc, SIGINT (with HUP, TERM, PIPE) IS catchable from ring 3:
+// every road into this function first asks current_thread_will_catch (just
+// below), and a thread with a handler installed is turned back with
+// OS64_INTERRUPTED instead — so this function is reached only when nothing
+// will catch what is pending. (This paragraph said "nothing in ring 3 can
+// catch either yet" until Codex #29 rd21, one comment block above the
+// function that made it false.)
+// `thread` may be NULL: every call site runs in the VICTIM'S OWN context
 // (that is the whole design), so the core's current thread is the right one
 // to ask which bit is pending.
+//
+// ── current_thread_will_catch ───────────────────────────────────────────────
+// Will something CATCH the terminate this thread is carrying? Asked by every
+// blocking call before it applies the default action, so a program that
+// installed a handler is told its wait was interrupted instead of being
+// executed on the way to the signal it asked for.
+//
+// THE TASK COMES FROM THE THREAD. cls->task and cls->currentThread describe
+// one thing but are two stores, and a decision made on the wrong one killed a
+// program with a handler installed (2026-08-23 — see scheduler_load_thread,
+// where the window itself is now closed). thread->ownerTask cannot lag,
+// because it is part of the thread.
+static bool current_thread_will_catch(void)
+{
+	core_local_storage_t *c = get_core_local_storage();
+	thread_t *th = c ? c->currentThread : NULL;
+	if (th == NULL)
+		return false;
+	return signal_has_handler_for_pending((task_t *)th->ownerTask, th);
+}
+
 static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 {
 	if (thread == NULL)
@@ -749,13 +875,22 @@ static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 	// WHICH signal killed it, in precedence order — the uncatchable one first,
 	// then the two that name an ending world, then the keyboard's. The corpse
 	// wears one tag and it should be the most specific true one.
-	uintptr_t pending = (thread != NULL) ? thread->signals.sigind : 0;
+	signal_set_t pending = (thread != NULL) ? thread->signals.sigind
+	                                        : (signal_set_t){0};
 	const char *why = "SIGINT";
 	uint64_t code = SIGNALS_EXIT_SIGINT;
 
-	if (pending & SIGKILL)      { why = "SIGKILL"; code = SIGNALS_EXIT_SIGKILL; }
-	else if (pending & SIGTERM) { why = "SIGTERM"; code = SIGNALS_EXIT_SIGTERM; }
-	else if (pending & SIGHUP)  { why = "SIGHUP";  code = SIGNALS_EXIT_SIGHUP;  }
+	if (sigset_has(pending, SIGKILL))      { why = "SIGKILL"; code = SIGNALS_EXIT_SIGKILL; }
+	else if (sigset_has(pending, SIGTERM)) { why = "SIGTERM"; code = SIGNALS_EXIT_SIGTERM; }
+	else if (sigset_has(pending, SIGHUP))  { why = "SIGHUP";  code = SIGNALS_EXIT_SIGHUP;  }
+	// SIGPIPE joins the ladder (Codex #29 rd9). It never reached here before,
+	// because an uncaught SIGPIPE dies at the write() site with its own tag —
+	// but a HANDLED SIGPIPE whose delivery FAILS now falls through to this
+	// function, and without this arm the corpse would have worn 130 (the
+	// SIGINT default below) for a death SIGINT had nothing to do with. Last
+	// of the four, because it is the most local: the others describe a world
+	// ending, this one describes a pipe.
+	else if (sigset_has(pending, SIGPIPE)) { why = "SIGPIPE"; code = SIGNALS_EXIT_SIGPIPE; }
 
 	if (task != NULL)
 	{
@@ -768,7 +903,11 @@ static void raise_terminating_signal_and_die(task_t *task, thread_t *thread)
 	__builtin_unreachable();
 }
 
-#define TASK_EXIT_SIGPIPE 141   // 128 + signal, the classic "died by signal" encoding
+// (Here stood a private `#define TASK_EXIT_SIGPIPE 141`, a second copy of a
+// number whose four siblings all live in signals.h. It went when rd9 gave the
+// ladder above a SIGPIPE arm and needed the same constant: two spellings of
+// one exit code is how the two paths out of a SIGPIPE come to disagree about
+// what killed the program. SIGNALS_EXIT_SIGPIPE is now the only copy.)
 static void raise_sigpipe_and_die(task_t *task)
 {
 	if (task != NULL)
@@ -776,7 +915,7 @@ static void raise_sigpipe_and_die(task_t *task)
 		// All threads: SIGPIPE's default action is to terminate the TASK,
 		// so every thread has to learn it, not just the first one.
 		task_signal_all_threads(task, SIGPIPE);
-		task->retVal = TASK_EXIT_SIGPIPE;
+		task->retVal = SIGNALS_EXIT_SIGPIPE;
 		printd(DEBUG_TASK, "SIGPIPE: task %s wrote to a pipe with no readers — terminating\n",
 			task->exename);
 	}
@@ -1055,7 +1194,43 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 				if (n == PIPE_ERR_CLOSED)
 				{
-					// Nobody is left to read this. Default action: terminate.
+					// Nobody is left to read this. Decide the disposition and
+					// ACT ATOMICALLY under signalLock (Codex #29 rd7): a racy
+					// check-then-publish let another thread restore the default
+					// between the two, after which we returned INTERRUPTED with
+					// no handler run AND no default death — a stuck pending
+					// SIGPIPE on a live task (SIGPIPE is not in
+					// SIGNALS_TERMINATING, so no checkpoint would ever action
+					// it). Registration also holds signalLock, so under it the
+					// handler cannot change beneath us.
+					uint64_t spf = spinlock_acquire_irqsave(&task->signalLock);
+					if (task->sighandler[SIGPIPE] != NULL)
+					{
+						// A handler is installed — publish SIGPIPE inline
+						// (task_signal_all_threads would re-take this same
+						// lock) so delivery arms it on this syscall's exit, and
+						// tell the caller its write was cut short.
+						// OS64_INTERRUPTED is the arc's one answer for "a
+						// signal interrupted your call".
+						for (thread_t *pth = task->threads; pth != NULL; pth = pth->taskNext)
+							sigset_add(&pth->signals.sigind, SIGPIPE);
+						spinlock_release_irqrestore(&task->signalLock, spf);
+						// PROGRESS OUTRANKS THE SENTINEL (Codex #29 rd18). A write
+						// bigger than PIPE_CAPACITY goes in chunks, and chunks
+						// already delivered are not undone by the signal.
+						// OS64_INTERRUPTED means "nothing was accomplished" (the
+						// ABI says so in as many words), so answering it after N
+						// bytes went would make a retrying caller send N twice.
+						// Return the count; the bit is published either way, so
+						// the handler still arms on the way out of this syscall
+						// — delivery reads the pending set, not our return value.
+						// (tcp_conn_write below us has always done exactly this.)
+						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
+					}
+					spinlock_release_irqrestore(&task->signalLock, spf);
+					// No handler: the default action is death, applied HERE in
+					// our own context. Nothing is left pending, so nothing can
+					// get stuck — and this is what `yes | head` needs.
 					raise_sigpipe_and_die(task);
 					__builtin_unreachable();
 				}
@@ -1063,6 +1238,14 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				{
 					// Ctrl+C landed while blocked on (or headed into) this
 					// pipe write. Same rail, different signal: terminate, 130.
+					// Caught? Then the wait was INTERRUPTED, not fatal — and
+					// returning is what makes delivery possible at all: the
+					// handler is armed on the way out of this syscall. Progress
+					// first (rd18): earlier chunks are on the pipe and stay
+					// there, so INTERRUPTED — "nothing was accomplished" — is
+					// only the truth when written is 0.
+					if (current_thread_will_catch())
+						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
 					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
@@ -1101,6 +1284,14 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 				if (n == TCP_ERR_INTERRUPTED)
 				{
+					// Caught? Then the wait was INTERRUPTED, not fatal — and
+					// returning is what makes delivery possible at all: the
+					// handler is armed on the way out of this syscall. Progress
+					// first (rd18): tcp_conn_write itself answers `sent` over
+					// INTERRUPTED within a chunk; this loop owed its earlier
+					// chunks the same honesty.
+					if (current_thread_will_catch())
+						return written ? written : (uint64_t)(int64_t)OS64_INTERRUPTED;
 					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
@@ -1305,6 +1496,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			{
 				// Ctrl+C landed while (or before) we were blocked on stdin.
 				// Default action: terminate. The sentinel never reaches ring 3.
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1338,6 +1534,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			if (got == PIPE_ERR_INTERRUPTED)
 			{
 				// Ctrl+C landed while blocked on (or headed into) a pipe read.
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1355,6 +1556,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			got = tcp_conn_read((tcp_conn_t *)h->object, kbuf, want, deadline);
 			if (got == TCP_ERR_INTERRUPTED)
 			{
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1375,6 +1581,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			got = icmp_conn_read((icmp_conn_t *)h->object, kbuf, want, deadline);
 			if (got == ICMP_CONN_ERR_INTERRUPTED)
 			{
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1394,6 +1605,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			{
 				// Ctrl+C landed while blocked waiting for a packet — same
 				// rail as console and pipe reads: terminate, 130.
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -1425,6 +1641,11 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			long jr = thread_join_read((thread_join_t *)h->object, &retval);
 			if (jr == THREAD_JOIN_ERR_INTERRUPTED)
 			{
+				// Caught? Then the wait was INTERRUPTED, not fatal — and
+				// returning is what makes delivery possible at all: the
+				// handler is armed on the way out of this syscall.
+				if (current_thread_will_catch())
+					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
 				__builtin_unreachable();
 			}
@@ -2226,8 +2447,33 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// Give back every page that was actually faulted in. paging_unmap_page
 	// invlpg's locally; pages never touched have no PTE and nothing to free.
+	//
+	// EACH PAGE UNDER signalLock (Codex #29 rd8). Signal delivery writes a
+	// frame onto the target thread's user stack through the HHDM alias, which
+	// is dereferenceable only while the page is ALLOCATED — so a sibling
+	// thread that pivoted RSP into a map()'d region and then raced unmap()
+	// here could free the page between delivery's resolve and its store, and
+	// that store would take a ring-0 #PF. Ring 3 must not be able to panic
+	// the kernel by racing its own address space. The lock is what delivery
+	// holds across its frame writes (see task.h), so taking it here is the
+	// whole barrier.
+	//
+	// PER PAGE, not around the loop: wrapping a large region in one
+	// irqsave hold would keep IF=0 across every free and its TLB-shootdown
+	// broadcast — seconds of a wedged core on a big unmap. One uncontended
+	// spinlock round-trip per page is noise next to the IPI already there.
+	// Per-page is sufficient because signal_write_user RE-RESOLVES before
+	// every 8-byte store, so the only fatal window is one resolve→store
+	// pair, and that pair is entirely inside delivery's own hold.
+	//
+	// What this deliberately does NOT prevent: a free landing BETWEEN two
+	// deliveries, so a program that unmaps the stack it is about to be
+	// signalled on resumes on a dead page and takes a clean ring-3
+	// segfault. That is this function's own stated doctrine — a bad handle
+	// should hurt the caller, not the kernel.
 	for (uintptr_t va = vma->start; va < vma->end; va += PAGE_SIZE)
 	{
+		uint64_t uf = spinlock_acquire_irqsave(&task->signalLock);
 		uintptr_t phys = paging_walk_paging_table((pt_entry_t *)task->pml4v, va);
 		if (phys != 0 && phys != 0xbadbadba)
 		{
@@ -2236,6 +2482,7 @@ static uint64_t syscall_unmap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// kernel alias, per the lazy-HHDM rules.
 			free_memory(phys);
 		}
+		spinlock_release_irqrestore(&task->signalLock, uf);
 	}
 
 	printd(DEBUG_SYSCALL, "unmap: task %s: region 0x%016lx-0x%016lx released\n",
@@ -3221,11 +3468,27 @@ static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// or a terminate is pending — and the loop top distinguishes them.
 	for (;;)
 	{
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 		{
-			// Ctrl+C (or a ctl write) landed while we napped. Same rail as
-			// an interrupted console read: die here, in our own context.
-			raise_terminating_signal_and_die(cls->task, self);
+			// A CAUGHT signal cuts the nap short instead of ending the
+			// program. Returning is what makes delivery possible at all: the
+			// handler is armed at the DISPATCHER'S EXIT, so a loop that kept
+			// parking would hold the signal forever and never reach it.
+			// The nap is not resumed and the remaining time is not slept —
+			// SIGNALS.md §8, no restart, no EINTR: an interrupted call says
+			// so and the caller decides. os64_sleep answers INTERRUPTED and a
+			// program that wanted the whole nap loops.
+			// The task comes from the THREAD — cls->task can be a core
+			// migration behind (see the dispatcher checkpoint's note), and a
+			// sleeper is exactly the thread most likely to wake on a
+			// different core than it parked on.
+			task_t *owner = (task_t *)self->ownerTask;
+			if (signal_has_handler_for_pending(owner, self))
+				return (uint64_t)(int64_t)OS64_INTERRUPTED;
+
+			// Nothing will catch it. Ctrl+C (or a ctl write) landed while we
+			// napped: die here, in our own context.
+			raise_terminating_signal_and_die(owner, self);
 			__builtin_unreachable();
 		}
 
@@ -3235,7 +3498,7 @@ static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// Park with the wake deadline in sigdata[SIGSLEEP] — sigaction
 		// triggers the scheduler itself, so we genuinely leave the CPU here
 		// and resume on the next line when woken.
-		sigaction(SIGSLEEP, NULL, wakeTick, self);
+		signal_raise(SIGSLEEP, wakeTick, self);
 	}
 }
 
@@ -3740,12 +4003,13 @@ static uint64_t syscall_shutdown(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	shutdown_system((os64_shutdown_mode_t)arg0);
 }
 
-// getpid() — contract and lineage in syscall_numbers.h. The caller IS the
-// current task, so the answer is sitting in CLS; the only care taken is the
-// same no-task guard every introspective path carries (a ring-3 caller
-// always has a task, but this handler must not be the one place that
-// assumes it). Cannot fail: an identity crisis is not an errno.
-static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+// taskid() — contract and lineage in syscall_numbers.h (including why it is
+// no longer spelled getpid). The caller IS the current task, so the answer is
+// sitting in CLS; the only care taken is the same no-task guard every
+// introspective path carries (a ring-3 caller always has a task, but this
+// handler must not be the one place that assumes it). Cannot fail: an
+// identity crisis is not an errno.
+static uint64_t syscall_taskid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
 	(void)arg0; (void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
@@ -3761,7 +4025,7 @@ static uint64_t syscall_getpid(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // terminal needs a second name. Unix spells that name /dev/tty; os64 spells
 // it as a verb until a devfs exists to make the name honest.
 //
-// Sibling of getpid above, and the resemblance is the point: both answer a
+// Sibling of taskid above, and the resemblance is the point: both answer a
 // question about the CALLER, take no arguments, and cannot fail for any
 // reason except the handle table being full. There is no tty to look up here
 // — a HANDLE_CONSOLE_IN carries no object, and the read path resolves
@@ -3794,6 +4058,74 @@ static uint64_t syscall_tty_handle(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	printd(DEBUG_SYSCALL, "tty_handle: task %s got handle %d on tty %u\n",
 	       task->exename, h, task_tty(task) ? task_tty(task)->index + 1 : 1);
 	return (uint64_t)h;
+}
+
+// conf_resolve — where is the config file called <name>? Contract in
+// abi/os64/syscall_numbers.h; the walk itself is conf.c's.
+//
+// The kernel does the walking because a ladder every reader obeys must be
+// parsed by exactly one thing, and because the walker being the resolver is
+// what lets /sys/conf report which file each reader actually took without a
+// second channel for saying so.
+//
+// conf_find takes the kernel-context trampoline for its probe, so this
+// handler needs no CR3 arrangement of its own — the SYSCALL_DEFINE row asks
+// for none.
+static uint64_t syscall_conf_resolve(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg5;
+
+	const char *user_name = (const char *)arg0;
+	char       *user_out  = (char *)arg1;
+	size_t      cap       = (size_t)arg2;
+	size_t      from      = (size_t)arg3;
+	bool        any       = (arg4 != 0);   // don't probe — just build the path
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+	if (user_out == NULL || cap == 0)
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	char name[CONF_NAME_MAX];
+	if (!copy_user_string(user_name, name, sizeof(name)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	char found[CONF_PATH_MAX];
+	int matched;
+	if (any) {
+		// "Where WOULD this go?" — the writer's question. No probe, because
+		// the file it is about to create does not exist yet by definition.
+		if (!conf_path_at(from, name, found, sizeof(found)))
+			return SYSCALL_RESULT_INVALID;
+		matched = (int)from;
+	} else {
+		matched = conf_find_from(name, from, found, sizeof(found));
+		if (matched < 0)
+			return SYSCALL_RESULT_INVALID;   // nowhere left — caller uses its defaults
+	}
+
+	// Refuse rather than truncate. A HALF path is worse than no path: it
+	// opens nothing, or — far worse on a system with a curated tree — opens
+	// something else. The caller sized the buffer; tell it the size was wrong.
+	size_t len = 0;
+	while (found[len] != '\0')
+		len++;
+	if (len + 1 > cap)
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	if (!copy_to_user_buffer(user_out, found, len + 1))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	printd(DEBUG_SYSCALL, "conf_resolve: task %s: '%s' -> '%s' (ladder %d)\n",
+	       task->exename, name, found, matched);
+	// The MATCHED INDEX PLUS ONE, so success is always >= 1 and can never be
+	// confused with SYSCALL_RESULT_INVALID (all ones). Hand it straight back
+	// as the next call's `from` to walk to the following copy — which is how
+	// the resolver reads every hosts file instead of only the first.
+	return (uint64_t)(matched + 1);
 }
 
 // heap_report(ptr) — "my heap's report card lives here."
@@ -3877,6 +4209,308 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
 	// is the TASK's own VA for the canvas — a pointer it can finally draw
 	// through. (This is where a NULL stood between steps 2 and 3.)
 	if (!copy_to_user_buffer((void *)arg1, &s, sizeof(s)))
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+	return 0;
+}
+
+// signal_handler — install a handler for a signal, answer with the previous.
+// Contract in abi/os64/syscall_numbers.h; the argument for putting the table
+// on the TASK is SIGNALS.md §2.
+//
+// AN INSTALLED HANDLER NOW ACTUALLY RUNS. This comment used to say
+// "REGISTRATION ONLY. Nothing is delivered to ring 3 until the frame-and-
+// trampoline half lands (step 3)" — which was true when the call shipped and
+// false by the end of the same arc. Delivery arrived in three places:
+// signal_deliver_pending (§5, the dispatcher exit rewrites where a syscall
+// returns), signal_deliver_to_regs (§10, the scheduler catches a thread that
+// makes no syscalls at all), and signal_deliver_segv (§9, a caught SIGSEGV
+// resumes into its handler from the fault frame).
+//
+// The promise the old note made was kept, which is why it is worth recording
+// rather than just deleting: a program written against registration-only —
+// where an installed handler meant no more than "do not apply the default
+// action" — did not have to change one line when delivery landed underneath
+// it. The interface never moved.
+static uint64_t syscall_signal_handler(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	// The task comes from the THREAD (the arc's rule, and this is a DECISION
+	// site — it writes a handler table; installing into cls->task during the
+	// old staleness window would have armed the wrong program).
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	task_t *task = thread ? (task_t *)thread->ownerTask : NULL;
+	if (task == NULL)
+		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_SIGNAL;
+
+	int signo = (int)(int64_t)arg0;
+	void *handler = (void *)arg1;
+
+	// MEMBERSHIP, not a range (Codex #29 rd13). "In range" accepted the gaps in
+	// the numbering AND the scheduler's own markers at 24-27 — so a handler
+	// could be registered on SIGSLEEP, which the scheduler raises through the
+	// same sigind set delivery scans. signals.c's signal_is_known has the full
+	// account of what that let a program do to its own sleep state.
+	//
+	// The two refusals stay distinct because they are not the same sentence:
+	// BAD_SIGNAL is "no such signal" (so 3 and 25 land here), UNCATCHABLE is
+	// "SIGKILL, and you may not". A caller handed the wrong one goes looking in
+	// the wrong place.
+	if (!signal_is_known((signals)signo))
+		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_SIGNAL;
+	if (!signal_is_catchable((signals)signo))
+		return (uint64_t)(int64_t)OS64_SIG_ERR_UNCATCHABLE;
+
+	// A handler must be an address ring 3 could actually execute. The kernel
+	// is about to point a thread's RIP at this, so a higher-half value would
+	// have the CPU attempt kernel text at CPL 3 — it faults harmlessly, but
+	// refusing it here names the mistake instead of turning it into a
+	// segfault three steps later. NULL is the exception: it means "default".
+	//
+	// The ceiling is USER_CANONICAL_MAX, NOT TASK_HEAP_END (Codex #29 rd5):
+	// the whole userland is dynamically linked, so a handler is very often a
+	// function in libos64.so, whose text lives in the shared-library window
+	// (TASK_SHLIB_VIRT_BASE = 0x7F00...) — ABOVE the heap ceiling but still a
+	// perfectly valid, executable ring-3 address. Rejecting at TASK_HEAP_END
+	// refused every library-supplied handler. The real boundary is user space
+	// vs. the kernel's upper half, which is exactly USER_CANONICAL_MAX. (A
+	// canonical-but-unmapped or non-executable address still slips through
+	// here — it faults in ring 3 as the program's own segfault, which the
+	// program can now even catch.)
+	if (handler != NULL && (uint64_t)handler >= USER_CANONICAL_MAX)
+		return (uint64_t)(int64_t)OS64_SIG_ERR_BAD_HANDLER;
+
+	void *previous = signal_set_handler(task, (signals)signo, handler);
+	return (uint64_t)previous;
+}
+
+// sigreturn — resume what a handler interrupted. A program never calls this
+// deliberately; the stub at TASK_SIGRETURN_VIRT does, when the handler `ret`s.
+//
+// THIS IS THE MOST ATTACKABLE CALL IN THE SIGNAL PATH, because it is a
+// "restore register state" primitive reached from ring 3. So the frame is
+// VALIDATED, never trusted:
+//
+//   - it must carry the kernel's magic (the cheap catch for an honest bug);
+//   - a handler for that signal must actually be running (sigmask), which is
+//     what stops a program calling sigreturn out of nowhere to install a
+//     register state of its choosing;
+//   - and RFLAGS is SANITIZED, never trusted. "The frame was written by us"
+//     is not a defensible claim for any of its contents: the frame sits on
+//     the user's own writable stack, so every word in it is ring 3's to
+//     forge — and sysretq loads RFLAGS from R11 nearly verbatim, IF and
+//     IOPL included. A forged IF=0 would park a core beyond the timer's
+//     reach forever; IOPL=3 would hand ring 3 the I/O ports. So the frame's
+//     rflags keeps only the bits a user program owns and the rest are
+//     forced (SIGNAL_RFLAGS_* in signals.h, where §10's iretq-shaped
+//     sigreturn is told to inherit the same mask).
+//
+// A stack-range check on the frame POINTER is deliberately absent: it would
+// prove nothing, because the frame's CONTENTS are user-writable wherever it
+// sits. The sanitization is the defence; the pointer's location is not.
+//
+//   - and the saved RIP/RSP must be CANONICAL LOWER-HALF addresses. This
+//     corrects a claim an earlier version of this comment made — that RIP
+//     and RSP "are not range-checked on purpose" because a bad one "faults
+//     in ring 3 as its own segfault." That is FALSE for a NONCANONICAL
+//     address: SYSRETQ (the short path) loads RIP from RCX and IRETQ (the
+//     full path) pops it from the frame, and BOTH raise #GP in RING 0 when
+//     handed a noncanonical value — before the privilege drop completes. So
+//     a handler that forges saved.rip could crash the KERNEL on the next
+//     signal it receives (the CVE-2012-0217 family). Requiring both below
+//     the canonical boundary rejects the noncanonical range AND forces the
+//     addresses into user space, where a genuinely bad-but-canonical one is
+//     back to being the program's own ring-3 fault. (USER_CANONICAL_MAX,
+//     the boundary constant, lives in paging.h — shared with the delivery
+//     paths and paging_resolve_user_writable.)
+static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	// The task comes from the THREAD — the arc's own rule, applied to its
+	// own syscalls too. cls->task is coherent again since scheduler_load_thread
+	// pairs the stores, but a decision site should not have to know that.
+	task_t   *task   = thread ? (task_t *)thread->ownerTask : NULL;
+	if (task == NULL || thread == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	// The THREAD's own frame pointer (see thread.h): we are inside the
+	// sigreturn syscall right now, so this names sigreturn's own 40-byte
+	// return frame — the one sysretq will rebuild this thread from.
+	uint64_t *frame = (uint64_t *)thread->syscall_return_frame;
+	if (frame == NULL)
+		return SYSCALL_RESULT_INVALID;   // not on a syscall return path
+
+	signal_frame_t saved;
+	if (!copy_user_buffer((const void *)arg0, &saved, sizeof(saved)))
+		return SYSCALL_RESULT_BAD_USER_DATA;
+
+	if (saved.magic != SIGNAL_FRAME_MAGIC && saved.magic != SIGNAL_FRAME_MAGIC_FULL)
+	{
+		printd(DEBUG_SIGNALS, "sigreturn: %s handed a frame with no magic — refused\n",
+		       task->exename);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	if (saved.signo == 0 || saved.signo >= SIGNAL_COUNT ||
+	    !sigset_has(thread->signals.sigmask, (signals)saved.signo))
+	{
+		// No handler for that signal is running on this thread, so there is
+		// nothing to return FROM. This is the check that makes the call
+		// useless to anyone who did not get here the intended way.
+		printd(DEBUG_SIGNALS, "sigreturn: %s is not inside a handler for signal %lu — refused\n",
+		       task->exename, saved.signo);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	// CANONICAL LOWER-HALF or nothing (see the block comment). rip/rsp are the
+	// §5 frame's fields and the full frame shares them by prefix, so this one
+	// check guards both the sysretq and the iretq return. A noncanonical value
+	// here is a KERNEL #GP waiting to happen, not a ring-3 segfault.
+	if (saved.rip >= USER_CANONICAL_MAX ||
+	    saved.rsp >= USER_CANONICAL_MAX)
+	{
+		printd(DEBUG_SIGNALS,
+		       "sigreturn: %s handed a noncanonical rip/rsp (%p/%p) — refused\n",
+		       task->exename, (void *)saved.rip, (void *)saved.rsp);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	// ── The FULL frame (§10): the handler interrupted a SPIN, not a syscall ─
+	//
+	// The scheduler delivered this one (signal_deliver_to_regs), so the
+	// interrupted context is an arbitrary instruction with every register
+	// live, and the road home is the one a preempted thread always takes:
+	// thread->regs, loaded by scheduler_load_thread, resumed by iretq. A
+	// sysretq return is structurally impossible here — it cannot restore
+	// fifteen registers — so THIS CALL NEVER RETURNS: it writes the file
+	// into regs, marks them crafted (exec's own seam), and parks. The
+	// kernel continuation below this frame is abandoned exactly as exec
+	// abandons one.
+	if (saved.magic == SIGNAL_FRAME_MAGIC_FULL)
+	{
+		signal_frame_full_t full;
+		if (!copy_user_buffer((const void *)arg0, &full, sizeof(full)))
+			return SYSCALL_RESULT_BAD_USER_DATA;
+
+		// TOCTOU: the checks above ran on the FIRST copy (`saved`), but this is
+		// a SECOND read of the same user-writable memory — and in a
+		// multithreaded task a sibling can rewrite the frame in between,
+		// substituting a noncanonical rip/rsp that the first validation never
+		// saw (Codex #29 rd2). So re-validate everything we are about to trust
+		// FROM THIS SNAPSHOT, and restore only from it. magic, the running-
+		// handler signal, and the canonical target — all read out of `full`.
+		if (full.base.magic != SIGNAL_FRAME_MAGIC_FULL ||
+		    full.base.signo == 0 || full.base.signo >= SIGNAL_COUNT ||
+		    !sigset_has(thread->signals.sigmask, (signals)full.base.signo) ||
+		    full.base.rip >= USER_CANONICAL_MAX ||
+		    full.base.rsp >= USER_CANONICAL_MAX)
+		{
+			printd(DEBUG_SIGNALS,
+			       "sigreturn(full): %s frame changed under validation — refused\n",
+			       task->exename);
+			return SYSCALL_RESULT_BAD_USER_DATA;
+		}
+
+		// Unblock the signal now that its handler has finished (§7) — the
+		// signal named by the VALIDATED snapshot, not the earlier copy.
+		sigset_del(&thread->signals.sigmask, (signals)full.base.signo);
+
+		// The register file, wholesale — through the same RFLAGS mask as the
+		// short path (the frame is the user's to forge; see the block
+		// comment above), and with the selectors from GDT CONSTANTS, never
+		// from the frame: this context resumes by iretq, which swallows
+		// CS/SS whole, and there is exactly one correct answer for a ring-3
+		// thread anyway.
+		thread->regs.RAX    = full.base.rax;
+		thread->regs.RBX    = full.rbx;
+		thread->regs.RCX    = full.rcx;
+		thread->regs.RDX    = full.rdx;
+		thread->regs.RSI    = full.rsi;
+		thread->regs.RDI    = full.rdi;
+		thread->regs.RBP    = full.rbp;
+		thread->regs.R8     = full.r8;
+		thread->regs.R9     = full.r9;
+		thread->regs.R10    = full.r10;
+		thread->regs.R11    = full.r11;
+		thread->regs.R12    = full.r12;
+		thread->regs.R13    = full.r13;
+		thread->regs.R14    = full.r14;
+		thread->regs.R15    = full.r15;
+		thread->regs.RIP    = full.base.rip;
+		thread->regs.RSP    = full.base.rsp;
+		thread->regs.RFLAGS = (full.base.rflags & SIGNAL_RFLAGS_USER_BITS) | SIGNAL_RFLAGS_FORCED;
+		thread->regs.CS     = GDT_USER_CODE_ENTRY << 3 | 3;
+		thread->regs.SS     = GDT_USER_DATA_ENTRY << 3 | 3;
+		thread->regs.DS     = GDT_USER_DATA_ENTRY << 3 | 3;
+		thread->regs.ES     = GDT_USER_DATA_ENTRY << 3 | 3;
+		thread->regs.FS     = GDT_USER_DATA_ENTRY << 3 | 3;
+		thread->regs.GS     = GDT_USER_DATA_ENTRY << 3 | 3;
+
+		// This syscall's return frame dies with the abandoned continuation —
+		// clear the pointer so nothing can ever trust it (syscall.S's own
+		// exit clear will never run for us).
+		thread->syscall_return_frame = 0;
+
+		printd(DEBUG_SIGNALS, "sigreturn: %s resumes its spin at %p after signal %lu\n",
+		       task->exename, (void *)full.base.rip, saved.signo);
+
+		// Crafted regs must SURVIVE the next store pass — exec's seam: the
+		// scheduler skips one save when this is set (see scheduler.c).
+		thread->execDontSaveRegisters = true;
+
+		// Park through the ordinary SIGSLEEP machinery with a wake tick of
+		// NOW: the next pass takes us off the CPU (store skipped, regs
+		// intact), the sleep sweep wakes us the same pass or the next, and
+		// the dispatch after that loads the crafted context and iretqs into
+		// the stub's caller — the interrupted spin. The loop is sleep's own
+		// shape; it never logically exits, because the continuation standing
+		// here is never resumed.
+		for (;;)
+			signal_raise(SIGSLEEP, kTicksSinceStart, thread);
+		__builtin_unreachable();
+	}
+
+	// Unblock the signal now that its handler has finished (SIGNALS.md §7).
+	sigset_del(&thread->signals.sigmask, (signals)saved.signo);
+
+	// Put the interrupted context back where sysretq will find it, and hand
+	// the original syscall's answer back in RAX — which is this syscall's
+	// return value, because RAX is exactly what a syscall returns in.
+	// RFLAGS goes through the mask (see the block comment above and
+	// SIGNAL_RFLAGS_* in signals.h): user bits kept, IF forced on, IOPL
+	// forced to 0 — sysretq would otherwise hand ring 3 whatever the frame
+	// claims, and the frame is the user's to claim things in.
+	frame[0] = (saved.rflags & SIGNAL_RFLAGS_USER_BITS) | SIGNAL_RFLAGS_FORCED;
+	frame[1] = saved.rip;
+	frame[2] = saved.rsp;
+
+	printd(DEBUG_SIGNALS, "sigreturn: %s resumes %p after signal %lu\n",
+	       task->exename, (void *)saved.rip, saved.signo);
+	return saved.rax;
+}
+
+// Where is my window, and what state is it in? The readback half of create —
+// see os64/gui.h for why an app needs it (everything the USER does to a
+// window happens in the window system, and until this existed no app could
+// learn any of it, so none could save what you had arranged).
+static uint64_t syscall_gui_window_get_state(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	if (arg1 == 0)
+		return (uint64_t)GUI_ERR_BAD_ARGS;
+
+	os64_gui_window_state_t st;
+	int64_t rc = gui_window_get_state((int64_t)arg0, &st);
+	if (rc != 0)
+		return (uint64_t)rc;
+
+	if (!copy_to_user_buffer((void *)arg1, &st, sizeof(st)))
 		return (uint64_t)GUI_ERR_BAD_ARGS;
 	return 0;
 }

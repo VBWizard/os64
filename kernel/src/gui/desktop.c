@@ -6,9 +6,13 @@
 // to be looked at all day. This file gives the desktop to the USER, the same
 // way the log format and the shell's startup went to the user before it:
 //
-//   /home/desktop.conf, then /etc/desktop.conf — first hit wins, the
-//   persistence gradient every config file in os64 climbs (/home survives
-//   a rebuild; /etc is the system's and does not).
+//   desktop.conf, found wherever the CONFIG SEARCH PATH says (conf.h) — by
+//   default /home then /etc, first hit wins, the persistence gradient every
+//   config file in os64 climbs (/home survives a rebuild; /etc is the
+//   system's and does not). This file used to hardcode that pair; it was the
+//   sixth reader to do so, and the one that made Chris rule the search path
+//   into existence the same afternoon. /sys/conf and the DEBUG_BOOT log both
+//   say which copy actually answered.
 //
 //   color = 0x2a5566        the fill, XRGB in hex (the # is the comment
 //                           character in every os64 config, so no CSS spelling)
@@ -41,6 +45,7 @@
 #include "driver/filesystem/vfs/vfs.h"
 #include "kmalloc.h"
 #include "memory/vma.h"   // call_in_kernel_context — disk I/O from a task's address space
+#include "conf.h"          // conf_find — the search path, no longer this file's business
 #include "printd.h"
 #include "strings/strcmp.h"
 #include "strings/strlen.h"
@@ -255,19 +260,23 @@ static bool ppm_draw_centered(surface_t *desk, const uint8_t *d, size_t len)
 // ── the entry point ─────────────────────────────────────────────────────────
 bool desktop_paint_from_config(surface_t *desk)
 {
-	static const char *const search[] = { "/home/desktop.conf", "/etc/desktop.conf" };
 	desktop_config_t cfg = { .color = DESKTOP_DEFAULT_COLOR, .image = "" };
 
-	size_t len = 0;
-	uint8_t *text = NULL;
-	const char *found = NULL;
-	for (size_t k = 0; k < sizeof(search) / sizeof(search[0]) && text == NULL; k++) {
-		text = read_whole_file(search[k], DESKTOP_CONF_MAX, &len);
-		if (text != NULL)
-			found = search[k];
-	}
-	if (text == NULL)
+	// THE LADDER IS NOT OURS ANY MORE (2026-08-23). This used to hold its own
+	// { "/home/desktop.conf", "/etc/desktop.conf" } — the sixth private copy of
+	// the same sequence in the system, and the one whose arrival made Chris
+	// rule the search path into existence. conf_find walks whatever
+	// /etc/os64.conf says and announces which file won at DEBUG_BOOT, so the
+	// "which config am I actually getting" question is answered in the log and
+	// in /sys/conf rather than by reading this function.
+	char found[CONF_PATH_MAX];
+	if (!conf_find("desktop.conf", found, sizeof(found)))
 		return false;   // no config anywhere: the caller keeps its test pattern
+
+	size_t len = 0;
+	uint8_t *text = read_whole_file(found, DESKTOP_CONF_MAX, &len);
+	if (text == NULL)
+		return false;   // it opened for the walker and not for us: over the cap, or gone since
 
 	parse_config((char *)text, &cfg);
 	kfree(text);

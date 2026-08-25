@@ -43,6 +43,13 @@ typedef enum handle_type
 	                       // (PTY.md: write = keystrokes in, pty_snapshot =
 	                       // the interpreted screen out; read is reserved
 	                       // for the STREAM flavor)
+
+	// A slot mid-CLOSE (2026-08-24). Distinct from NONE so handle_alloc — which
+	// only ever reclaims a NONE slot — cannot reuse a slot whose object the
+	// closer has not yet released, and handle_get refuses to hand a closing
+	// handle to an operation. The closer stamps this while it works, then
+	// NONE when the object is gone. See handle_close for the race it shuts.
+	HANDLE_CLOSING,
 } handle_type_t;
 
 typedef struct handle
@@ -88,7 +95,12 @@ void handle_close_all(struct task *t);
 // Also frees the file's f_path — for HANDLE_FILE objects that is ALWAYS the
 // kmalloc'd copy syscall_open made (see the lifetime note there).
 // Exposed so syscall_open can unwind a file it opened but couldn't table.
-void handle_file_object_close(void *vfs_file);
+// Close a HANDLE_FILE object. Returns 0 on success — including "somebody else
+// still holds it" and "no close op" — or the filesystem's negative status when
+// the close FAILED TO FLUSH. A failure is also logged loudly at the source
+// (rd14), because most callers have nowhere to report to and silence there was
+// the original defect: on FAT the commit happens inside close.
+int handle_file_object_close(void *vfs_file);
 
 // The directory sibling: closes a HANDLE_DIR's vfs_directory_t from any
 // context (same CR3-check discipline as files) and frees its f_path copy.

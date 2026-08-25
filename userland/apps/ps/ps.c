@@ -62,7 +62,7 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "ps: cannot read /proc\n");
         return 1;
     }
-    uint64_t self = os64_getpid();
+    uint64_t self = os64_taskid();
     bool found_self = false;
     for (int32_t i = 0; i < count; i++)
         if (tasks[i].pid == self)

@@ -618,7 +618,7 @@ void tty_summon_wake(void)
 	thread_t *w = kKWorkerTask->threads;
 	if (w->threadState == THREAD_STATE_ISLEEP)
 	{
-		w->signals.sigind &= ~SIGSLEEP;
+		sigset_del(&w->signals.sigind, SIGSLEEP);
 		w->signals.sigdata[SIGSLEEP] = 0;
 		scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
 	}
@@ -843,7 +843,7 @@ void tty_pty_wake_readers(void)
 		if (w != NULL && w->threadState == THREAD_STATE_ISLEEP && tty_input_has(t))
 		{
 			t->waiter = NULL;
-			w->signals.sigind &= ~SIGSLEEP;     // cancel the backstop sleep
+			sigset_del(&w->signals.sigind, SIGSLEEP);     // cancel the backstop sleep
 			w->signals.sigdata[SIGSLEEP] = 0;
 			scheduler_change_thread_queue_locked(w, THREAD_STATE_RUNNABLE);
 		}

@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "dlist.h"
 #include "thread.h"
+#include "spinlock.h"   // spinlock_t — the per-task signal-delivery lock
 #include "time.h"
 #include "env.h"
 #include "handle.h"
@@ -69,6 +70,18 @@
 //Seeded as _start's return address so a plain `ret` becomes an exit syscall.
 //See task_setup_ring3_exit_path() and the template in task_exit_asm.S.
 #define TASK_EXIT_TRAMPOLINE_VIRT 0x6f110000
+// The SIGNAL RETURN stub shares that page, 64 bytes in (2026-08-23). One page,
+// two templates: the exit trampoline is a handful of instructions and the
+// signal stub is three, so a second page would be 4KB spent to avoid an
+// offset. 64 is comfortably past the first template and keeps both aligned.
+//
+// Sharing is not merely thrifty — it is the whole reason signal return is
+// cheap here. Historic Unix put this stub on the STACK, which needs an
+// executable stack; NX outlawed that (nx_test asserts it kills the program)
+// and Linux had to grow a vDSO to escape it. os64 already had a per-task page
+// that is PAGE_USER, not PAGE_WRITE, and executable. See SIGNALS.md §5.
+#define TASK_SIGRETURN_OFFSET     64
+#define TASK_SIGRETURN_VIRT       (TASK_EXIT_TRAMPOLINE_VIRT + TASK_SIGRETURN_OFFSET)
 // (TASK_ENVP_VIRT, an "environment pointers" address at 0x6f010000, was
 // deleted here 2026-08-13: defined since the first OS, referenced by nothing
 // in the kernel or userland, and sitting squarely in the middle of the window
@@ -128,12 +141,81 @@
 		//The task identifier.  This will be the same as the first threadID assigned to the task
 		uint64_t taskID;
 		volatile bool exited;
+		// THE TEARDOWN CLAIM — exactly one thread runs a task's teardown
+		// (Codex #29 rd10). `exited` cannot be that claim, and this is the
+		// whole bug: it is published only AFTER handle_close_all(), and
+		// task_exit's own comment says that stretch "may sleep in the VFS and
+		// resume on any core". Killing a threaded task sends EVERY sibling
+		// down task_exit (the redirect points them at the exit trampoline,
+		// which calls the TASK exit syscall), so a sibling arriving while the
+		// first thread is still inside the VFS reads `exited == false`, walks
+		// straight past the guard, and runs the whole teardown a second time.
+		// The handle table survives that (the CLOSING sentinel, rd4), but
+		// task_enqueue_dead_child does NOT: enqueueing one child twice makes
+		// `parent->deadChildTail->deadChildNext = child` write child->next =
+		// child, and a self-linked corpse means the undertaker's walk never
+		// ends. Claimed with an atomic exchange, so the winner is decided
+		// before any of that runs. Zeroed = unclaimed, by the
+		// all-allocations-zeroed rule.
+		volatile bool tearingDown;
         char exename[128];
         thread_t* threads;
         void* elf;
         char* path;
         volatile uint64_t retVal;
-        //signals_t signals;
+        // THE SIGNAL HANDLERS ARE THE TASK'S, indexed BY SIGNAL NUMBER
+        // (2026-08-23, SIGNALS.md §2). They used to live on the thread — the
+        // commented-out `signals_t signals;` that stood here for years was
+        // somebody standing at this same fork — and the reason they belong
+        // here is the 2026-08-02 scar recorded above task_signal_all_threads:
+        // a signal aimed at a task is OR'd into EVERY thread. Per-thread
+        // handlers would therefore run one SIGTERM once per thread, and an
+        // app's "wait, I have unsaved work" firing four times in a
+        // four-threaded program is not a policy anybody wants.
+        //
+        // Per-task also answers what per-thread only raises: a thread created
+        // after registration has the handler automatically, there is no
+        // inheritance rule to invent, and a handler is plainly a property of
+        // the PROGRAM. The cost is one rule, and it is small: the first thread
+        // to reach a checkpoint runs the handler and clears the bit
+        // task-wide.
+        //
+        // NULL = no handler = the kernel's default action for that signal.
+        // Installed through SYSCALL_SIGNAL_HANDLER (49) and DELIVERED by all
+        // three paths in signals.c — the syscall-exit dispatcher (§5), the
+        // scheduler's visit to a spinning thread (§10), and the page-fault
+        // handler for a caught SIGSEGV (§9). Writes take signalLock below.
+        // (This line used to read "Nothing installs one yet; the registration
+        // syscall is step 2." Both steps shipped in the same arc that added
+        // the lock underneath it, and the note outlived them by a fortnight —
+        // which is the whole argument for AGENTS.md § The Comment Is Part Of
+        // The Code, recorded here because this is where it caught us.)
+        void *sighandler[SIGNAL_COUNT];
+        // Serializes SIGNAL DELIVERY across this task's threads (2026-08-24,
+        // Codex #29). The aim is a broadcast — every thread carries the
+        // pending bit — so without a task-wide claim two threads on two cores
+        // both pick the same signal, both build a frame, and both run the
+        // "once per task" handler concurrently. This lock makes pick-build-
+        // consume atomic per task, in BOTH delivery paths (signals.c). Zeroed
+        // = unlocked by the all-allocations-zeroed rule. Lock order: the
+        // scheduler path already holds the queue lock when it takes this, and
+        // the syscall path takes this alone — no cycle.
+        //
+        // IT HAS A SECOND JOB, and it is not obvious from the name (2026-08-24,
+        // Codex #29 rd8). It is also the barrier that keeps a task's user page
+        // ALIVE across a signal-frame write. Delivery reaches a user stack the
+        // house way — walk the task's tables for the physical page, store
+        // through `phys | kHHDMOffset` (CLAUDE.md) — and that alias is
+        // dereferenceable only WHILE THE PAGE IS ALLOCATED. A sibling thread
+        // calling unmap() between the resolve and the store frees the page,
+        // which HHDM-unmaps the kernel alias, and the store then takes a
+        // ring-0 #PF: ring 3 panicking the kernel by racing its own address
+        // space. So syscall_unmap takes this lock around each page it frees,
+        // and all THREE delivery paths (§5, §9, §10) hold it across their
+        // frame writes. A second per-task lock would have been the tidier
+        // name, but two of the three sites already held this one and a second
+        // lock is a second ordering to get wrong.
+        spinlock_t signalLock;
         uint64_t heapStart, heapEnd;
         // WHERE THIS TASK'S malloc PUBLISHES ITS REPORT (SYSCALL_HEAP_REPORT,
         // 2026-08-15). A USER virtual address, valid only under this task's own
@@ -320,12 +402,12 @@
 	// taskNext chain plus one OR per thread, and new threads are fully
 	// linked before they are published, so a walker sees either the old
 	// chain or the complete new one.
-	void task_signal_all_threads(task_t* task, uint64_t signal);
+	void task_signal_all_threads(task_t* task, signals signal);
 	// The same, plus a scheduling IPI to the cores the threads last ran on —
 	// for a sender who is NOT the victim (the hangup sweep, the shutdown
 	// ladder). Without the knock, a thread spinning on a tickless AP would
 	// carry the mark unread. See the comment on the definition.
-	void task_signal_and_nudge(task_t* task, uint64_t signal);
+	void task_signal_and_nudge(task_t* task, signals signal);
 
 	// Bring down every thread of a dying task except the one dying. THE
 	// single control point for "exit means exit" — see the implementation

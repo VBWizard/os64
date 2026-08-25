@@ -135,4 +135,48 @@ user_exit_trampoline_template:
     syscall
 1:  jmp  1b                         // exit never returns; spin if it somehow does
 user_exit_trampoline_template_end:
+
+// ── The SIGNAL RETURN stub (2026-08-23, SIGNALS.md §5) ──────────────────────
+//
+// Copied into the SAME page as the exit trampoline, at TASK_SIGRETURN_OFFSET,
+// and for the same reason it exists at all: a signal handler is an ordinary C
+// function, so it ends with `ret`, and something has to be at that return
+// address to hand control back to the kernel.
+//
+// THE PAGE IS WHY THIS IS EASY, and it is a debt the NX arc paid forward.
+// Every historic Unix pushed this stub onto the STACK and pointed the return
+// address at it — which needs an executable stack, the exact thing nx_test
+// asserts is fatal here. Linux carried a stack trampoline for years before
+// moving it into the vDSO. os64 never has to: this page is already mapped
+// PAGE_USER without PAGE_WRITE, already executable, already per-task. The
+// program can run its own return path and cannot scribble on it.
+//
+// The handler's frame pointer is irrelevant to us: sigreturn does not return
+// here, it rebuilds the syscall's return context and drops to ring 3 at the
+// interrupted address. The `jmp` after it is the same belt-and-braces as
+// above — if sigreturn somehow comes back, spin rather than run whatever
+// happens to sit in the next bytes of the page.
+//
+// Position-independent, like its neighbour: this code executes at a VA it was
+// never assembled at.
+// On entry RSP points AT the signal frame the kernel just wrote, so the
+// handler's argument and address are read straight off it. Offsets are the
+// ones signal_frame_t declares (signals.h) and signals.c static-asserts.
+//
+// The stub CALLS the handler rather than returning into it, which is why
+// there is no pushed return address to arrange: the handler's own `ret` comes
+// back to the next instruction here, and we fall through into sigreturn. RSP
+// is 16-byte aligned on entry, so the `call` leaves the handler seeing
+// RSP%16==8 — what SysV promises a called function.
+.globl user_sigreturn_trampoline_template
+.globl user_sigreturn_trampoline_template_end
+user_sigreturn_trampoline_template:
+    mov  rdi, [rsp + 40]            // frame.signo -> the handler's int argument
+    mov  rax, [rsp + 48]            // frame.handler
+    call rax
+    mov  rdi, rsp                   // the frame, for sigreturn to validate
+    mov  eax, SYSCALL_SIGRETURN
+    syscall
+1:  jmp  1b                         // sigreturn does not come back
+user_sigreturn_trampoline_template_end:
 .section .text

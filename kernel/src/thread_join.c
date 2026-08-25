@@ -93,13 +93,21 @@ thread_join_t* thread_join_create(void* taskv, uint64_t entry, uint64_t arg,
 
 	// Write the return address into the new thread's user stack. The stack
 	// lives at a task-local lower-half VA that the kernel's own page tables
-	// do not map, so it is reached the documented way: walk the TASK's
-	// tables to the physical page, then write through the HHDM alias
-	// (valid while allocated). See CLAUDE.md § Writing to Task Memory.
-	uintptr_t phys_rsp = paging_walk_paging_table((pt_entry_t*)task->pml4v, t->regs.RSP);
-	if (phys_rsp == 0 || phys_rsp == 0xbadbadba)
+	// do not map, so it is reached the documented way: resolve through the
+	// TASK's tables, then write through the HHDM alias (valid while
+	// allocated). See CLAUDE.md § Writing to Task Memory.
+	//
+	// t->regs.RSP is a USER-SUPPLIED stack pointer (the `thread` syscall's
+	// arg), so it is resolved through paging_resolve_user_writable, not a
+	// bare walk (2026-08-24): a plain walk accepted ANY present page, so a
+	// stack pointer forged at the kernel's upper-half or a read-only shared
+	// page would have had the kernel write `exit_stub` there — the same
+	// ring-3 -> ring-0 write Codex found in signal delivery, wearing thread
+	// creation's clothes. The guard demands lower-half + USER + WRITABLE.
+	uintptr_t phys_rsp = paging_resolve_user_writable((pt_entry_t*)task->pml4v, t->regs.RSP);
+	if (phys_rsp == 0)
 	{
-		printd(DEBUG_THREAD, "thread_join_create: new thread's stack VA 0x%016lx is not mapped in %s — refusing\n",
+		printd(DEBUG_THREAD, "thread_join_create: new thread's stack VA 0x%016lx is not a writable user page in %s — refusing\n",
 		       t->regs.RSP, task->exename);
 		kfree(j);
 		return NULL;   // the thread_t leaks; thread teardown is a standing debt
@@ -171,7 +179,7 @@ long thread_join_read(thread_join_t* j, int64_t* out)
 
 	for (;;)
 	{
-		if (self->signals.sigind & SIGNALS_TERMINATING)
+		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
 			return THREAD_JOIN_ERR_INTERRUPTED;
 
 		if (j->exited)
@@ -187,7 +195,7 @@ long thread_join_read(thread_join_t* j, int64_t* out)
 		// cost), so a waiter caught mid-park stays registered for the
 		// next pass instead of losing its wake entirely.
 		j->waiter = self;
-		sigaction(SIGSLEEP, NULL, kTicksSinceStart + TICKS_PER_SECOND, self);
+		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
 	}
 }
 
