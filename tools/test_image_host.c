@@ -32,7 +32,19 @@
 // libimage allocates through libos64's heap; on the host these are the
 // system's. image.c never calls anything else, which is the whole reason it
 // can be tested here.
-void *os64_malloc(size_t size) { return malloc(size); }
+// Instrumented, because one of these tests is about what was ALLOCATED
+// rather than about what was returned. See the huge-dimension case: before
+// the fix, a hostile header allocated a gigabyte and then returned exactly
+// the same MALFORMED status as after it — so a test that checks the status
+// alone passes against the bug, which is the vacuous assertion this project
+// has been bitten by before (Codex #29 rd9's F24).
+static size_t g_alloc_largest = 0;
+void *os64_malloc(size_t size)
+{
+    if (size > g_alloc_largest)
+        g_alloc_largest = size;
+    return malloc(size);
+}
 void  os64_free(void *ptr)     { free(ptr); }
 
 // ── stubs for the halves these tests deliberately do not reach ──────────────
@@ -315,6 +327,51 @@ static void test_refusals(void)
         memset(f + hn, 0, sizeof(f) - hn);
         os64_image_status_t st = os64_image_decode(f, sizeof(f), &img);
         ok(st == OS64_IMAGE_MALFORMED, "absurd ppm dimensions refused");
+    }
+
+    // THE SEPARATOR AFTER maxval MUST BE WHITESPACE (Codex #30 rd1). Stepping
+    // over whatever byte is there accepts this as a 1x1 image with its raster
+    // shifted by one — a malformed header decoding to a subtly wrong picture
+    // instead of a refusal.
+    {
+        const char f[] = "P6 1 1 255X\xaa\xbb\xcc";
+        eq_status(os64_image_decode((const uint8_t *)f, sizeof(f) - 1, &img),
+                  OS64_IMAGE_MALFORMED,
+                  "ppm with a non-whitespace raster separator");
+    }
+    // ...and a legal one still works with each of the four whitespace bytes,
+    // so the check above cannot be "reject everything" and pass by accident.
+    {
+        const char *seps = " \t\r\n";
+        for (int k = 0; k < 4; k++) {
+            char f[16];
+            int n = snprintf(f, sizeof(f), "P6 1 1 255%c", seps[k]);
+            f[n++] = 0x11; f[n++] = 0x22; f[n++] = 0x33;
+            char what[64];
+            snprintf(what, sizeof(what), "ppm accepts separator %d", k);
+            eq_status(os64_image_decode((const uint8_t *)f, (size_t)n, &img),
+                      OS64_IMAGE_OK, what);
+            if (img.pixels) {
+                eq_u32(img.pixels[0], 0xff112233u, "ppm raster is not shifted");
+                os64_image_free(&img);
+            }
+        }
+    }
+
+    // LENGTH BEFORE ALLOCATION (Codex #30 rd1). A tiny file claiming huge
+    // dimensions must be refused WITHOUT ever reserving the plane. The
+    // status is the same either way — MALFORMED before the fix and after —
+    // so this asserts on the ALLOCATION, which is the thing that actually
+    // changed. 16384x16384x4 is a gigabyte; on os64 that is a dedicated
+    // heap mapping reserved and torn down on the say-so of a hostile header,
+    // which is precisely what the documented cap exists to prevent.
+    {
+        const char hdr[] = "P6 16384 16384 255\n";
+        g_alloc_largest = 0;
+        eq_status(os64_image_decode((const uint8_t *)hdr, sizeof(hdr) - 1, &img),
+                  OS64_IMAGE_MALFORMED, "huge-dimension truncated ppm refused");
+        ok(g_alloc_largest < 1024 * 1024,
+           "huge-dimension ppm allocates nothing (refused on length first)");
     }
 
     uint8_t *bmp = build_bmp(&len, 24, 0, 1 /* BI_RLE8 */);

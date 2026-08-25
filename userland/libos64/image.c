@@ -130,19 +130,36 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
     // Exactly ONE whitespace byte separates the header from the data, by the
     // spec — and it matters, because the first pixel byte may itself be a
     // space or a newline and skipping "whitespace" here would eat it.
-    if (i >= len)
+    //
+    // CHECK IT, do not merely step over it (Codex #30 rd1): stepping over
+    // whatever happens to be there accepts `P6 1 1 255X...` as an image and
+    // shifts the whole raster by a byte — a malformed header decoding to a
+    // picture that is subtly wrong rather than to a refusal. The comment
+    // above already said the separator was whitespace; the code had not been
+    // asking.
+    if (i >= len || (d[i] != ' ' && d[i] != '\t' && d[i] != '\r' && d[i] != '\n'))
         return OS64_IMAGE_MALFORMED;
     i++;
 
+    // LENGTH BEFORE ALLOCATION (Codex #30 rd1). A twenty-byte file whose
+    // header claims 16384x16384 would otherwise allocate a 1 GiB pixel plane
+    // and only then discover it is truncated — which defeats the whole point
+    // of the cap, since the memory a hostile file costs us is decided by its
+    // HEADER rather than its size. The BMP path already checked first; this
+    // one did not, so the guard existed on one door of two.
+    // Dimensions first, so the multiplication below is bounded BEFORE it is
+    // performed rather than justified afterwards. (alloc_pixels checks these
+    // too; that is its job, not a reason for this arithmetic to run on
+    // numbers nobody has looked at.)
+    if (w == 0 || h == 0 || w > OS64_IMAGE_DIM_MAX || h > OS64_IMAGE_DIM_MAX)
+        return OS64_IMAGE_MALFORMED;
+    size_t need = (size_t)w * (size_t)h * 3u;
+    if (len - i < need)
+        return OS64_IMAGE_MALFORMED;            // the header promised more than
+                                                // the file contains
     os64_image_status_t st = alloc_pixels(w, h, out);
     if (st != OS64_IMAGE_OK)
         return st;
-
-    size_t need = (size_t)w * (size_t)h * 3u;
-    if (len - i < need) {
-        os64_image_free(out);
-        return OS64_IMAGE_MALFORMED;   // truncated: the header promised more
-    }                                  // than the file contains
 
     const uint8_t *p = d + i;
     uint32_t *px = out->pixels;
@@ -295,11 +312,15 @@ os64_image_status_t os64_image_load(const char *path, size_t cap,
 
     uint8_t *buf = NULL;
     size_t   len = 0;
-    // ONE whole-file reader for the whole tree (os64/slurp.h). The four edge
-    // distinctions it makes — whole vs truncated, at-cap vs past-cap, EOF vs
-    // error, short-read vs done — are exactly the four this decoder would
-    // otherwise have had to re-derive, becoming the fifth hand-written copy
-    // of a loop the conf arc already got wrong three times.
+    // The tree's SHARED whole-file reader (os64/slurp.h) — shared, not yet
+    // sole, and the difference is worth stating plainly (Codex #30 rd1).
+    // Four hand-written capped loops still stand as this is committed:
+    // kernel/src/conf.c, kernel/src/gui/desktop.c, and both read paths in
+    // libos64/conf.c. This decoder declines to be the fifth. Their adoption
+    // is the DEBTS row's remaining payment, and desktop.c's copy dies with
+    // the desktop shell; anyone fixing a whole-file-read bug still has to
+    // visit all of them until then, which is exactly the cost the row is
+    // about.
     os64_slurp_status_t sst = os64_slurp(path, cap, &buf, &len);
     switch (sst) {
         case OS64_SLURP_OK:        break;
