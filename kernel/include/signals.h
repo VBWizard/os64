@@ -399,12 +399,18 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// The §10 sibling: deliver by rewriting thread->regs — for a thread the
 	// SCHEDULER caught spinning in ring 3, where regs already hold the full
 	// interrupted context. Builds a signal_frame_full_t on the user stack,
-	// points regs.RIP at the stub and regs.RSP at the frame. The CALLER
-	// (scheduler_signal_visit) mirrors RIP/RSP into the per-core isr arrays —
-	// both images, the forced push's own discipline. On FAILED nothing was
-	// changed and the pending bit is untouched: a terminating signal falls
-	// through to the gallows, which is exactly the design (death must not
-	// depend on the victim's stack).
+	// points regs.RIP at the stub and regs.RSP at the frame, and clears DF in
+	// regs.RFLAGS. The CALLER (scheduler_signal_visit) mirrors EVERYTHING
+	// delivery changed — RIP, RSP and RFLAGS — into the per-core isr arrays:
+	// both images, the forced push's own discipline, because the continue
+	// path IRETs from the mirror without re-reading regs. (This line named
+	// RIP/RSP only until rd24; rd11 had already found that the RFLAGS half
+	// missing from the mirror made the DF clear a no-op on that path. The
+	// invariant is stated at the mirror site: a partial mirror is worse than
+	// none, because it looks maintained.) On FAILED nothing was changed and
+	// the pending bit is untouched: a terminating signal — or an orphaned
+	// death, rd18 — falls through to the gallows, which is exactly the design
+	// (death must not depend on the victim's stack).
 	signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thread);
 
 	// SIGSEGV delivery from the PAGE-FAULT handler (SIGNALS.md §9 — the arc's
