@@ -71,6 +71,17 @@
 // perfectly good 4x4 picture decodes and then cannot be shown.
 #define OS64_GUI_MIN_CONTENT      8
 
+// The largest FRAME side create will accept (Codex #30 rd6 — the third
+// unpublished WM rule in three rounds, after the chrome and the minimum;
+// the question the rd4 note asked has its answer: "what else is the window
+// manager keeping to itself?" — this). It is also the memory bound: a
+// window's canvas is reserved at capacity, and capacity is the larger of
+// the screen and this. An app that derives a size from data — a viewer, a
+// 5000-pixel image on an 8K panel — clamps to BOTH this and the screen
+// before asking, or decodes a perfectly good file and is refused at the
+// door. window.c asserts the WM's own constant equals this one.
+#define OS64_GUI_WINDOW_DIM_MAX   4096
+
 // The frame to ASK FOR in order to BE GIVEN a canvas of content_w x content_h.
 // Pass the same flags you will create with; an undecorated window still keeps
 // its 1px border.

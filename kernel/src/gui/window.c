@@ -323,6 +323,10 @@ void wm_move(window_t *w, int32_t x, int32_t y)
 // the screen (up to 4096 a side), so capacity can never simply be "the
 // screen" — it is the screen or the window, whichever is larger.
 #define WINDOW_CAP_MAX 4096u
+// Published to ring 3 as OS64_GUI_WINDOW_DIM_MAX (Codex #30 rd6), so an app
+// can clamp before it asks; pinned here the way the title capacity is above.
+_Static_assert(WINDOW_CAP_MAX == OS64_GUI_WINDOW_DIM_MAX,
+               "gui/window.c and abi os64/gui.h disagree on the largest window side");
 
 void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
                             uint32_t *cap_w, uint32_t *cap_h)

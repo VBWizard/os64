@@ -179,7 +179,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 {
 	if (!kEnableGUI)
 		return GUI_ERR_NOT_RUNNING;
-	if (w > 4096 || h > 4096)
+	if (w > OS64_GUI_WINDOW_DIM_MAX || h > OS64_GUI_WINDOW_DIM_MAX)
 		return GUI_ERR_BAD_ARGS;
 
 	// Only documented CLIENT flags cross the boundary. The window struct's
