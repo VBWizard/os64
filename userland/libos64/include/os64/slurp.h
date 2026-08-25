@@ -6,7 +6,8 @@
 // WHY THIS EXISTS. "Read a file up to a cap and tell me whether it was
 // bigger" was hand-written FOUR times in this tree before anyone counted:
 // the kernel's conf reader, libos64's os64_conf_read, os64_conf_write twenty
-// lines away from it, and gui/desktop.c's read_whole_file. Codex #29 found
+// lines away from it, and gui/desktop.c's read_whole_file (since deleted with
+// the kernel desktop, 2026-08-25). Codex #29 found
 // the SAME bug in three of them across three separate rounds (rd1, rd3,
 // rd12), and the fourth was never reviewed at all because it was named
 // differently and nobody was looking there. Three rounds spent on one bug in

@@ -394,11 +394,11 @@ os64_image_status_t os64_image_load(const char *path, size_t cap,
     size_t   len = 0;
     // The tree's SHARED whole-file reader (os64/slurp.h) — shared, not yet
     // sole, and the difference is worth stating plainly (Codex #30 rd1).
-    // Four hand-written capped loops still stand as this is committed:
-    // kernel/src/conf.c, kernel/src/gui/desktop.c, and both read paths in
-    // libos64/conf.c. This decoder declines to be the fifth. Their adoption
-    // is the DEBTS row's remaining payment, and desktop.c's copy dies with
-    // the desktop shell; anyone fixing a whole-file-read bug still has to
+    // Three hand-written capped loops still stand as this is committed:
+    // kernel/src/conf.c and both read paths in libos64/conf.c (a fourth,
+    // gui/desktop.c's, died with the kernel desktop on 2026-08-25). This
+    // decoder declines to be another. Their adoption is the DEBTS row's
+    // remaining payment; anyone fixing a whole-file-read bug still has to
     // visit all of them until then, which is exactly the cost the row is
     // about.
     os64_slurp_status_t sst = os64_slurp(path, cap, &buf, &len);

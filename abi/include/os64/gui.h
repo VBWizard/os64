@@ -50,12 +50,19 @@
 // program — the same arrangement X11 has always had, where the server owns
 // the root window and the thing drawing your wallpaper is just a client.
 //
-// It buys a z-band and NOTHING ELSE. A desktop window is still focusable and
-// still receives keys and clicks, because being the target for a click that
-// lands on no application is half the point (that click is where a root menu
-// and a launcher come from). It is skipped by the Alt+Tab walk, and the
-// destructive chords decline it — Alt+F4 on your desktop is a gesture nobody
-// means.
+// THE WHOLE CONTRACT (Codex #31 rd4 caught an earlier "and NOTHING ELSE"
+// that the next sentences contradicted). A desktop window:
+//   - lives in the bottom z-band; nothing can be placed beneath it;
+//   - has NO CHROME — no titlebar and no border, whatever its decoration
+//     bit says; its frame IS its canvas (os64_gui_frame_for_content agrees);
+//   - is still focusable and still receives keys and clicks, because being
+//     the target for a click that lands on no application is half the point
+//     (that click is where a root menu and a launcher come from);
+//   - is skipped by the Alt+Tab walk (and the first Alt+Tab FROM it lands on
+//     the most recently used app);
+//   - declines pin, maximize, minimize, the decoration toggle, the chord
+//     move/resize gestures and Alt+F4 — Alt+F4 on your desktop is a gesture
+//     nobody means. Its owner can still destroy it.
 //
 // Setting it is not a claim of authority: a second desktop window is legal
 // and simply stacks at the bottom too. os64 has no privilege model, and

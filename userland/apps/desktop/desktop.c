@@ -182,6 +182,43 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
     return true;
 }
 
+// ── saying why a config did nothing ─────────────────────────────────────────
+//
+// ONE VOICE FOR EVERY WAY A CONFIG READ CAN FAIL (Codex #31 rd2 + rd4). Both
+// files are read as find-then-read so "no file anywhere" and "found one and
+// could not read it" stay different answers — the first is the only one
+// allowed to mean "use the built-in default". Everything else the reader
+// can answer is named here: a truncated file, an I/O error, no memory, and
+// a found file that would not open. A config the operator wrote that
+// silently does nothing is the afternoon a config file exists to prevent.
+static void conf_report(const char *what, const char *path, bool found, int64_t rc)
+{
+    if (!found)
+        return;   // absent everywhere: the default applies, nothing to say
+    switch (rc) {
+    case OS64_CONF_NO_FILE:
+        os64_hprintf(OS64_STDERR, "desktop: %s: found but could not be opened (%s)\n",
+                     what, path);
+        break;
+    case OS64_CONF_TRUNCATED:
+        os64_hprintf(OS64_STDERR, "desktop: %s exceeds %d bytes; trailing settings ignored\n",
+                     path, OS64_CONF_MAX - 1);
+        break;
+    case OS64_CONF_IO_ERROR:
+        os64_hprintf(OS64_STDERR, "desktop: %s: read error — settings ignored\n", path);
+        break;
+    case OS64_CONF_NO_MEMORY:
+        os64_hprintf(OS64_STDERR, "desktop: %s: out of memory reading it — settings ignored\n",
+                     path);
+        break;
+    default:
+        if (rc < 0)
+            os64_hprintf(OS64_STDERR, "desktop: %s: read failed (%ld) — settings ignored\n",
+                         path, (long)rc);
+        break;
+    }
+}
+
 // ── the reaper ──────────────────────────────────────────────────────────────
 //
 // A DESKTOP THAT STARTS PROGRAMS MUST BURY THEM (Codex #30/#31). The kernel
@@ -277,11 +314,13 @@ int main(int argc, char **argv)
     // ── the wallpaper ───────────────────────────────────────────────────────
     desktop_config_t cfg;
     os64_memset(&cfg, 0, sizeof(cfg));
-    int64_t rc = os64_conf_find_read("desktop.conf", desktop_conf_line, &cfg,
-                                     cfg.conf_path, sizeof(cfg.conf_path));
-    if (rc == OS64_CONF_TRUNCATED)
-        os64_hprintf(OS64_STDERR, "desktop: %s exceeds %d bytes; trailing settings ignored\n",
-                     cfg.conf_path, OS64_CONF_MAX - 1);
+    // Find, then read, and REPORT every way the read can fail (Codex #31
+    // rd2/rd4): a config the operator wrote that silently paints the
+    // built-in colour is a wallpaper that "was ignored for no reason".
+    bool found = (os64_conf_find("desktop.conf", cfg.conf_path, sizeof(cfg.conf_path)) == 0);
+    int64_t rc = found ? os64_conf_read(cfg.conf_path, desktop_conf_line, &cfg)
+                       : OS64_CONF_NO_FILE;
+    conf_report("desktop.conf", cfg.conf_path, found, rc);
 
     os64_image_t img;
     os64_memset(&img, 0, sizeof(img));
@@ -312,17 +351,12 @@ int main(int argc, char **argv)
     // pair below: a config that exists is the operator's word, and a
     // desktop that starts gbounce because that file failed to open would
     // be inventing a configuration nobody wrote.
-    bool found = (os64_conf_find("gui.conf", gui_path, DESKTOP_PATH_MAX) == 0);
+    found = (os64_conf_find("gui.conf", gui_path, DESKTOP_PATH_MAX) == 0);
     rc = found ? os64_conf_read(gui_path, gui_conf_line, &list)
                : OS64_CONF_NO_FILE;
-    if (found && rc == OS64_CONF_NO_FILE) {
-        os64_hprintf(OS64_STDERR, "desktop: %s: found but could not be read — starting nothing\n",
-                     gui_path);
+    conf_report("gui.conf", gui_path, found, rc);
+    if (found && rc == OS64_CONF_NO_FILE)
         rc = 0;   // an unreadable config is an EMPTY one, never an absent one
-    }
-    if (rc == OS64_CONF_TRUNCATED)
-        os64_hprintf(OS64_STDERR, "desktop: %s exceeds %d bytes; trailing settings ignored\n",
-                     gui_path, OS64_CONF_MAX - 1);
     if (list.overflowed)
         os64_hprintf(OS64_STDERR, "desktop: more than %d start lines; the rest ignored\n",
                      DESKTOP_APPS_MAX);

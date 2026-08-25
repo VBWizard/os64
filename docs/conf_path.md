@@ -17,7 +17,7 @@ Six config files, six hand-rolled "where do I look" sequences:
 | `husk` (`husk.rc`) | 3 | `/home` → `/etc` → `/fat` (lifeboat spelling) |
 | `os64get` (`os64get.conf`) | 3 | `/home` → `/etc` → cwd |
 | resolver (`hosts`, `net.conf`) | 3 (libos64) | `/home` → `/etc` (both) |
-| desktop (`desktop.conf`) | 0 (`gui/desktop.c`) | `/home` → `/etc` |
+| desktop (`desktop.conf`) | 0 (`gui/desktop.c` — deleted 2026-08-25; the reader is ring-3 `/bin/desktop` now, via `os64_conf_find`) | `/home` → `/etc` |
 
 Same idea, five spellings, and the seventh file would add a sixth. Chris's
 ask: **one setting says where config files are looked for, first to last, and
