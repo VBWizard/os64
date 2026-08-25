@@ -306,6 +306,42 @@ unacceptable for tasks (any task could present/destroy any window).
 
 ### Event delivery
 
+**THE RULE FOR DECIDING WHERE A NEW FACT GOES (ruled 2026-08-25, on the
+SIGWINCH question — Chris: "there will be many, so we should probably settle
+on a pattern"): A SIGNAL TELLS A PROCESS SOMETHING; AN EVENT TELLS A WINDOW
+SOMETHING.**
+
+Both end with the app's own function running, so the pattern is not obvious
+from the outside. The difference is WHEN, and on top of WHAT:
+
+- An **event handler runs synchronously** — the app drains its queue at a
+  moment of its own choosing, in its normal context. No reentrancy rules, no
+  signal-safety question, and the fact can carry a PAYLOAD (which key, which
+  button, the new rect) in order.
+- A **signal handler runs asynchronously** — the kernel interrupts the thread
+  wherever it is, pushes a frame, and the handler runs on top of that moment.
+  That is why "which libos64 functions may be called from a handler" is a real
+  open question (SIGNALS.md books it).
+
+So: keys, mouse, resize, close, and every future window fact — focus, theme
+change, publish-ack, a polite close-REQUEST — are EVENTS. Every windowing
+system converged here independently (X11's queue, the Mac's `GetNextEvent`,
+Win32's message pump, all mid-80s); nobody has ever delivered mouse-moves by
+signal. **os64 could not even if it wanted to**: the pending set is
+deliberately a bitmask, so two resizes coalesce into one with no dimensions
+attached — a payload-free coalescing channel is disqualified as a GUI
+transport by its own design (SIGNALS.md § "Explicitly not in scope").
+
+Signals get process-lifecycle and stream-world facts: INT, TERM, HUP, PIPE,
+SEGV — and WINCH, for the program whose whole world is a byte stream.
+**SIGWINCH is not an exception to this rule, it is the rule applied to a
+program that cannot see the GUI**: the process inside a pty has no window and
+no queue, which is exactly why Sun invented the signal for 4.3BSD. Hence the
+terminal-resize slice is TWO hops with two mechanisms — WM → gterm is an
+event (already delivered today), gterm → the program inside is SIGWINCH — and
+the DEBTS row that once called the second hop a client-notification-seam
+customer was corrected the day this rule was written.
+
 - Queues stay per-window (`GUI_WINDOW_EVENTS_MAX 64`, drop-newest on full —
   apps must drain; mouse coords stay CONTENT-local, translated by the
   compositor at routing time).

@@ -51,6 +51,20 @@ _Static_assert(__builtin_offsetof(input_event_t, key) == 4,
 _Static_assert(__builtin_offsetof(input_event_t, tick) == 24,
                "input_event_t tick moved — GUI ABI break");
 
+// CHROME IS PUBLISHED TO RING 3 NOW (2026-08-25), because window_create takes
+// FRAME dimensions and an app that wants a canvas of a given size has no way
+// to work out the difference. os64_gui_frame_for_content() does that sum in
+// ring 3 out of these two numbers, so they must BE these two numbers — a
+// helper that quietly disagrees with the WM would size every window slightly
+// wrong, which is exactly the bug it exists to prevent (gview clipped every
+// image it opened; gclock hand-derived the delta and got it right by luck).
+_Static_assert(OS64_GUI_BORDER_WIDTH == GUI_BORDER_WIDTH,
+               "the GUI ABI's border width drifted from the WM's");
+_Static_assert(OS64_GUI_TITLEBAR_HEIGHT == GUI_TITLEBAR_HEIGHT,
+               "the GUI ABI's titlebar height drifted from the WM's");
+_Static_assert(OS64_GUI_MIN_CONTENT == GUI_MIN_CONTENT,
+               "the GUI ABI's minimum content size drifted from the WM's");
+
 // Handle table: handle = index + 1, so 0 is never a valid handle. 32 windows
 // is plenty until real userland apps exist. Guarded by kGuiLock.
 #define GUI_MAX_WINDOWS 32
@@ -165,7 +179,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 {
 	if (!kEnableGUI)
 		return GUI_ERR_NOT_RUNNING;
-	if (w > 4096 || h > 4096)
+	if (w > OS64_GUI_WINDOW_DIM_MAX || h > OS64_GUI_WINDOW_DIM_MAX)
 		return GUI_ERR_BAD_ARGS;
 
 	// Only documented CLIENT flags cross the boundary. The window struct's
@@ -177,7 +191,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	uint32_t create_flags = (uint32_t)flags & client_flags;
 	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
 	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - GUI_BORDER_WIDTH;
-	if (content_w < 8 || content_h < 8)
+	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return GUI_ERR_BAD_ARGS;
 
 	// ── THE SURFACE PIVOT (GRAPHICS.md, migration step 3) ───────────────
@@ -204,7 +218,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = (cls != NULL) ? cls->task : NULL;
 	bool pivot = (task != NULL && !task->kernelTask &&
-	              content_w >= 8 && content_h >= 8);
+	              content_w >= GUI_MIN_CONTENT && content_h >= GUI_MIN_CONTENT);
 
 	// The extent is sized to the CAPACITY, not to today's window — the
 	// reservation that makes resize free (window.h's canvas_cap_w comment has

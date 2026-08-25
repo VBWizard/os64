@@ -136,8 +136,13 @@ knowing anything happened.
   full-reads only on change. ~16KB copy for 80×25, only when dirty —
   trivial. (A shared read-only mapping of the grid is the someday
   optimization; the snapshot ABI survives it. And the poll retires when the
-  client-notification seam lands — this is that seam's FOURTH customer,
-  after publish-ack, theme reload, and pty-dirty was already counted.)
+  client-notification seam lands — THIS POLL is that seam's third customer,
+  after publish-ack and theme reload. It used to be counted as the fourth,
+  alongside a separate "pty-dirty" entry, which was the same thing twice;
+  and the RESIZE notification was miscounted into the same list, which sent
+  the gterm DEBTS row down the wrong road for a while. Resize is not a seam
+  customer — it is SIGWINCH's, see the Resize row below. The seam is about
+  when a client WAKES; a signal is about a fact a process must hear.)
 - **read(master)**: reserved for STREAM mode. In GRID mode it returns a
   clean error naming the snapshot syscall — a mode misuse should teach, not
   mislead.
@@ -181,7 +186,14 @@ and the self-hosting moment.
 
 - **STREAM mode** — gate: TCP `listen()`; customer: telnetd.
 - **Resize** — grid realloc + child notification; gate: window resize
-  existing at all (GRAPHICS #5).
+  existing at all (GRAPHICS #5). **BOTH GATES ARE OPEN NOW** (resize
+  2026-08-19, signal delivery 2026-08-25), and the notification's shape is
+  settled: the child hears it as **SIGWINCH**, not through the GUI event
+  queue. The program inside a pty has no window and no queue to read — that
+  is the whole reason 4.3BSD invented the signal. The WINDOW half of the
+  news already arrives: gterm gets `WINDOW_RESIZE` on its own event queue
+  today and merely declines to act on it (`gterm.c` resize arm).
+  **Full design: § "Resize — the SIGWINCH slice" below.**
 - **Scrollback exposure** — the slave's ring already holds history;
   a view_offset in the snapshot header exposes it; gate: the terminal
   wanting Shift+PgUp parity.
@@ -200,6 +212,109 @@ and the self-hosting moment.
   every seat) is taken when the X is real. `exit`-closes-the-window needs
   none of this — HUNGUP already delivers it, and ptyprobe's act 3 is its
   standing test.
+
+## Resize — the SIGWINCH slice (designed 2026-08-25, UNBUILT)
+
+*Written before the building, the way SIGNALS.md and MALLOC.md were. The
+Resize row above is the booking; this is the design it points at.*
+
+### It is TWO hops, and they are different animals
+
+The single word "notification" in the old booking hid a mechanism choice.
+GRAPHICS.md § Event delivery now carries the rule — **a signal tells a
+PROCESS something; an event tells a WINDOW something** — and the two hops
+land on opposite sides of it:
+
+1. **WM → gterm: an EVENT, and it already arrives.** `window.c` produces
+   `INPUT_EVENT_WINDOW_RESIZE`, gterm's event loop already catches it, and
+   the resize arm (`gterm.c`, the block whose comment says the grid does not
+   follow "not yet") already refreshes its draw context and forces a repaint.
+   **This hop needs no new mechanism at all** — only the arm's body.
+2. **gterm → the program inside the pty: a SIGNAL.** That program has no
+   window and no event queue; it may be `husk`, or `ls` halfway through a
+   listing. This is SIGWINCH's entire job description and precisely why Sun
+   invented it for 4.3BSD.
+
+### The shape
+
+- **A new syscall, `SYSCALL_PTY_RESIZE(master_handle, cols, rows)`** — 51 is
+  the next free number. gterm calls it from the resize arm after computing
+  the new grid from its window's content rect. It is the master's verb
+  because the master OWNS the geometry: the slave learns, it does not decide.
+- **The kernel half does three things, in this order:** realloc the grid
+  under the tty's own lock, bump the GENERATION counter (the snapshot poll's
+  whole contract — every grid mutation door touches it, per the fingerprint
+  list below), then raise SIGWINCH at the SEATED TASKS. Not the window owner
+  — gterm is the window owner and is the one doing the telling.
+- **No new locking hazard, and this is worth stating because F29 made it a
+  reflex:** the kGuiLock → signalLock order does not arise here. The raise
+  happens on gterm's own syscall thread, inside the pty layer; the compositor
+  is not in the call path and kGuiLock is never held.
+- **Reflow policy: NONE, deliberately.** Preserve the top-left origin, clamp
+  the cursor into the new bounds, blank the new cells. Every hardware
+  terminal and most software ones do exactly this; real reflow (rewrapping
+  logical lines) is a scrollback feature and belongs with the scrollback row,
+  not here. Say it in the code or someone will file it as a bug.
+
+### Admitting number 28
+
+The number is already RESERVED (`abi/include/os64/signal.h`). Admitting it
+means obeying the two rules the gauntlet wrote:
+
+- **`signal_is_known` gains 28 with its PRODUCER NAMED** (the rd14 rule —
+  SIGCONT/SIGSTOP were thrown out for having none). Its producer is
+  `pty_resize`, and now it is real.
+- **SIGWINCH MUST NOT ENTER `SIGNALS_DEFAULT_IS_DEATH`.** Its default action
+  is *ignore* — this is the one mistake that would be catastrophic and
+  invisible in review, because every program that does NOT handle it (husk,
+  ls, cat, all of them) would die the first time a window was dragged. rd9's
+  lesson applies directly: each mask answers ONE question, so check this
+  against the mask that means "what happens when the handler cannot run",
+  not the one that means "would a checkpoint stop this thread".
+- Undeliverable-and-non-terminating is already handled: §10 drops it with a
+  log line. That is the correct behaviour for a WINCH nobody can receive.
+
+### "It changed" is useless without "to what" — and that half already exists
+
+A signal carries no payload (the pending set is a bitmask, by design). The
+program must then ASK. **It already can: `/proc/self/tty` prints `rows` and
+`cols`** — built in the VT arc under the file-not-syscall doctrine, and it
+reports a pty's geometry today. No new syscall, no `ioctl`, no `TIOCGWINSZ`.
+`ls`'s hardcoded 100 columns (DEBTS, item b) becomes a read of that file.
+
+**THE TRAP, and it has already bitten once:** procfs generates its text at
+**OPEN**, not at read — this cost a wasted control experiment during the rd10
+audit (`proc_gen_maps` runs at open, so a probe kept the file open and saw
+stale data). A program must therefore **re-open** `/proc/self/tty` after each
+SIGWINCH; an fd held across the signal answers with the old size forever.
+Write that where the handler goes, not just here.
+
+### The fixture, and why it needs no GUI
+
+Per rd9's doctrine — **prove the test before trusting its green** — the
+fixture must be run against a deliberately broken kernel first (bump the
+generation but skip the raise: the child must then report the OLD size).
+
+It is fully HEADLESS, which is the happy part: `ptyprobe`'s shape already
+covers it. Create a GRID pty, spawn a child that installs a SIGWINCH handler
+and re-reads `/proc/self/tty`, call `pty_resize`, and check the child reports
+the NEW geometry. No compositor, no window, no QMP screendump — the whole
+hop-2 contract is testable in the ordinary suite. Hop 1 is then a one-line
+call in the resize arm, verified on glass by dragging a gterm and watching
+`husk` reflow its prompt.
+
+### Order of work (each lands green before the next)
+
+1. `pty_resize` + grid realloc + generation bump — no signal yet, headless,
+   proves the geometry half alone (gterm letterboxing simply moves).
+2. Admit 28, raise it, fixture with its broken-kernel control.
+3. gterm's resize arm calls it — the glass test.
+4. *Separately, and NOT part of this slice:* `ls` reading `/proc/self/tty`,
+   and the DEFERRED-WRAP bug (DEBTS item a — a `pending_wrap` flag in
+   `tty.c`, what every terminal since the VT100 does). That bug is the one
+   actually producing the blank lines Chris sees, it is smaller than all of
+   the above, and it fixes the symptom at ANY width on gterm AND the text
+   console. Do not let it ride this slice's timeline.
 
 ## Failure fingerprints (predicted; verify against reality when built)
 

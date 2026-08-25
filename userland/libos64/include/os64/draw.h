@@ -45,6 +45,34 @@ void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,
 void os64_draw_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
                     uint32_t color);   // outline
 
+// Blit a block of pixels onto the surface with its top-left at (x, y).
+//
+// PIXELS ONLY — libdraw does not know what a file format is. `src` is
+// width*height of 0xAARRGGBB with its own pitch, which is what libimage
+// hands back and equally what a program that computed its pixels would.
+// Keeping this ignorant of images is what lets either half be tested
+// without the other.
+//
+// SRC_PITCH_PX IS NOT ALWAYS WIDTH, for the same reason a surface's is not:
+// pass the source's real row stride and a sub-image of a larger buffer
+// blits correctly (`src` pointing at its first pixel, `w`/`h` its size,
+// the pitch that of the parent). libimage's own images are tightly packed,
+// so for those it IS the width.
+//
+// Clips like every other primitive: any part hanging off any edge is legal
+// and simply is not drawn. A negative x or y clips on the left/top, which
+// is what makes "center an image larger than the window" work with no
+// arithmetic at the call site.
+//
+// OPAQUE COPY — the source's alpha byte is not consulted. Every image os64
+// draws today is a background or a picture, both of which want every pixel.
+// Source-over blending is booked (DEBTS) against its first real customer,
+// which will be launcher icons drawn over a wallpaper; adding it before
+// then would be a blend nothing asked for and nobody had tested.
+void os64_draw_blit(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                    const uint32_t *src, uint32_t w, uint32_t h,
+                    uint32_t src_pitch_px);
+
 // Text: the embedded PSF1 face (os64/font_psf1.h — the console's own,
 // 8x16, opaque fg-on-bg cells). Pen-advance only; wrapping and flow are
 // higher layers' business. Returns the x the pen ended at.

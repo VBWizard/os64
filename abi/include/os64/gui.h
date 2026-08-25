@@ -46,6 +46,62 @@
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 #define OS64_GUI_WINDOW_PINNED           (1u << 2)   // born in the always-on-top band
 
+// ── Chrome, and how to size a window for the picture you want to show ───────
+//
+// os64_gui_window_create takes FRAME dimensions — the outside of the window,
+// chrome included. Your canvas is what is LEFT after the WM takes its border
+// and titlebar, so asking for a 200x150 frame gets you a 198x129 canvas, and
+// a 200x150 image drawn into it loses two columns and twenty-one rows.
+//
+// EVERY APP THAT WANTS A CANVAS OF A GIVEN SIZE HAS HAD TO KNOW THAT, and
+// until 2026-08-25 the ABI never said it out loud: gclock carries a private
+// `TITLEBAR_FRAME_DELTA 19` (which is this titlebar height minus this border
+// width, derived by hand), and gview got it wrong outright — every image it
+// opened was clipped, and anything under 10x29 was refused as a degenerate
+// window. Two apps, two different mistakes, one missing fact. So the fact is
+// published here, and gui_client.c asserts it against the kernel's own
+// numbers so the two rings cannot drift apart in silence — the same handshake
+// the struct layouts already get.
+#define OS64_GUI_BORDER_WIDTH     1
+#define OS64_GUI_TITLEBAR_HEIGHT  20
+
+// The smallest canvas a window may have. Create REFUSES anything smaller
+// rather than rounding it up, so an app that derives its size from data — an
+// image viewer being the obvious one — has to clamp before it asks, or a
+// perfectly good 4x4 picture decodes and then cannot be shown.
+#define OS64_GUI_MIN_CONTENT      8
+
+// The largest FRAME side create will accept (Codex #30 rd6 — the third
+// unpublished WM rule in three rounds, after the chrome and the minimum;
+// the question the rd4 note asked has its answer: "what else is the window
+// manager keeping to itself?" — this). It is also the memory bound, because
+// a window's canvas is reserved at CAPACITY, and the rule is (Codex #30 rd11
+// corrected an earlier wording that had it wrong both ways):
+//
+//     capacity = min(max(screen, content), OS64_GUI_WINDOW_DIM_MAX)
+//
+// — the screen, raised to the content if the window was born larger, and
+// never past this constant. So a small window on an 800x600 screen reserves
+// 800x600 (a resize up to fullscreen costs no allocation), and an 8K screen
+// is capped here, not reserved whole. An app that derives a size from data — a viewer, a
+// 5000-pixel image on an 8K panel — clamps to BOTH this and the screen
+// before asking, or decodes a perfectly good file and is refused at the
+// door. window.c asserts the WM's own constant equals this one.
+#define OS64_GUI_WINDOW_DIM_MAX   4096
+
+// The frame to ASK FOR in order to BE GIVEN a canvas of content_w x content_h.
+// Pass the same flags you will create with; an undecorated window still keeps
+// its 1px border.
+static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t content_h,
+                                              uint64_t flags,
+                                              uint32_t *frame_w, uint32_t *frame_h)
+{
+    uint32_t top = (flags & OS64_GUI_WINDOW_NO_DECORATIONS)
+                       ? OS64_GUI_BORDER_WIDTH : OS64_GUI_TITLEBAR_HEIGHT;
+    if (frame_w) *frame_w = content_w + 2u * OS64_GUI_BORDER_WIDTH;
+    if (frame_h) *frame_h = content_h + top + OS64_GUI_BORDER_WIDTH;
+}
+
 // READ-ONLY state, reported by os64_gui_window_get_state and IGNORED at
 // create — gui_window_create masks the flag word down to the three creation
 // bits above, so naming these here cannot let an app claim them at birth.

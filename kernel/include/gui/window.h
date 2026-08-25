@@ -14,6 +14,13 @@
 // gui/gui_internal.h). window.c contains no locking of its own.
 
 #define GUI_WINDOW_TITLE_MAX   32
+// The smallest content area a window may have. A degenerate canvas would
+// ripple NULLs and zero-width surfaces through the compositor, so creation
+// refuses one — and ring 3 needs to KNOW that (os64/gui.h publishes it and
+// gui_client.c asserts the two agree), because an app that computes a canvas
+// size from data, as an image viewer does, will otherwise hand over a legal
+// picture and be told its window is bad.
+#define GUI_MIN_CONTENT        8
 #define GUI_WINDOW_EVENTS_MAX  64
 
 // Chrome geometry: a titlebar across the top (which includes the top border)
