@@ -537,12 +537,17 @@ design in `docs/conf_path.md`.
   frame rect in create's units plus the live flags. Without it no app could
   learn anything the user did to its window — drag, resize, Ctrl+Alt+P — so
   none could save what you had arranged.
-- **`gui.conf` says what starts with the desktop** (`gui/startup.c`, read at
-  the top of `gui_start()`): `start = /bin/gterm`, repeatable and in order,
-  plus `hello = yes|no` for the legacy "hello os64" window. The rule worth
-  knowing: **if the file exists, its `start` lines are the whole list — even
-  when there are none**, which is how "start nothing" is spelled; the
-  built-in demo pair applies only when no `gui.conf` is found at all. This
+- **`gui.conf` says what starts with the desktop** — read by **`/bin/desktop`,
+  the ring-3 desktop shell** since 2026-08-25 (it was `gui/startup.c` before
+  that): `start = /bin/gterm`, repeatable and in order. The legacy `hello`
+  window and its `hello = yes|no` key were **retired 2026-08-25** (Chris: "if
+  I want to reminisce, I can run an old build"), and that key was the last
+  thing making the KERNEL read this file — `gui/startup.c` is gone and
+  gui.conf has exactly one reader. The
+  rule worth knowing: **if the file exists, its `start` lines are the whole
+  list — even when there are none**, which is how "start nothing" is
+  spelled; the built-in demo pair applies only when no `gui.conf` is found at
+  all. This
   exists because GUI programs used to be launched from `husk.rc`, which runs
   in EVERY husk (VT1 and VT2 both start one, so you got two of everything)
   and runs on text boots too (where every GUI line failed once per terminal).

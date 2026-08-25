@@ -1,0 +1,273 @@
+// desktop(1) — the os64 desktop shell.
+//
+// WHAT MOVED, AND WHY. Until 2026-08-25 the desktop lived in the kernel:
+// gui/desktop.c read desktop.conf, decoded a PPM, and painted the
+// compositor's background surface, while gui/startup.c read gui.conf and
+// spawned the programs listed in it. That made the kernel a small `init`
+// with an image decoder in it — ring-0 code parsing a file any user can
+// write — and it meant a click on empty desktop landed nowhere, because
+// there was no window there to land on.
+//
+// This program is the replacement, and it is an ORDINARY CLIENT. The
+// compositor stays in the kernel; the shell is a program, exactly as X11 has
+// always had it — the server owns the root window and compositing, while the
+// thing drawing your wallpaper is just another connection. The only thing
+// that makes this window the desktop is OS64_GUI_WINDOW_DESKTOP, which buys
+// one z-band at the bottom and nothing else.
+//
+// WHY A WINDOW AND NOT A "SET WALLPAPER" CALL (Chris's ruling, the day this
+// was designed): handing the kernel a bitmap would have been less work and
+// would have given us wallpaper and nothing else. A window is an INPUT
+// TARGET. A click that lands on no application lands here — and that click
+// is where a root menu (twm, 1987) and the coming launcher come from.
+//
+// IT DOES NOT KNOW WHO STARTED IT, deliberately. Today the kernel spawns it
+// as its one GUI program. When husk-as-init lands, that line moves to the
+// init table and nothing in this file changes, because nothing in this file
+// ever asked.
+
+#include "os64/os64.h"
+#include "os64/io.h"
+#include "os64/conf.h"
+#include "os64/image.h"
+#include "os64/draw.h"
+#include "os64/gui.h"
+#include "os64/proc.h"
+#include "os64/str.h"
+
+#define DESKTOP_PATH_MAX   192
+#define DESKTOP_APPS_MAX   16
+
+// The fallback ground. Only reached if desktop.conf names no color — and
+// note the kernel's own test pattern is UNDER us regardless, which is what
+// shows if this program never starts or dies.
+#define DESKTOP_DEFAULT_COLOR 0xff0c1830u
+
+typedef struct {
+    uint32_t color;
+    bool     have_color;
+    char     image[DESKTOP_PATH_MAX];
+    bool     have_image;
+    char     conf_path[DESKTOP_PATH_MAX];
+} desktop_config_t;
+
+typedef struct {
+    char   apps[DESKTOP_APPS_MAX][DESKTOP_PATH_MAX];
+    size_t count;
+    bool   overflowed;
+} startup_list_t;
+
+// ── desktop.conf ────────────────────────────────────────────────────────────
+
+static bool parse_hex_color(const char *s, uint32_t *out)
+{
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        s += 2;
+    uint32_t v = 0;
+    int digits = 0;
+    for (; *s && *s != ' ' && *s != '\t' && *s != '\r'; s++, digits++) {
+        char c = *s;
+        uint32_t d;
+        if (c >= '0' && c <= '9')      d = (uint32_t)(c - '0');
+        else if (c >= 'a' && c <= 'f') d = (uint32_t)(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') d = (uint32_t)(c - 'A' + 10);
+        else return false;
+        v = (v << 4) | d;
+    }
+    // Exactly six digits: '#' starts a comment in every os64 config, so the
+    // hex must be written 0xRRGGBB and an alpha byte has nowhere to go.
+    if (digits != 6)
+        return false;
+    *out = 0xff000000u | v;
+    return true;
+}
+
+static bool desktop_conf_line(const char *key, const char *value, void *user)
+{
+    desktop_config_t *cfg = (desktop_config_t *)user;
+    if (key == NULL) {
+        os64_hprintf(OS64_STDERR, "desktop: %s: not a `key = value` line: %s\n",
+                     cfg->conf_path, value);
+        return true;
+    }
+    // SETTING names fold case (they are names, not data); the VALUE never
+    // does — a path is case-sensitive on ext2, and so is a file name.
+    if (os64_streq_nocase(key, "color")) {
+        if (!parse_hex_color(value, &cfg->color))
+            os64_hprintf(OS64_STDERR, "desktop: %s: color must be 0xRRGGBB, got \"%s\"\n",
+                         cfg->conf_path, value);
+        else
+            cfg->have_color = true;
+    } else if (os64_streq_nocase(key, "image")) {
+        os64_strcopy(cfg->image, sizeof(cfg->image), value);
+        cfg->have_image = (cfg->image[0] != 0);
+    }
+    return true;
+}
+
+// ── gui.conf — the shell's rc ───────────────────────────────────────────────
+//
+// This file used to be read by the kernel. It is read HERE now, for the same
+// reason husk reads husk.rc: a shell reads its own startup file. One file,
+// one reader.
+
+static bool gui_conf_line(const char *key, const char *value, void *user)
+{
+    startup_list_t *list = (startup_list_t *)user;
+    if (key == NULL)
+        return true;   // reported by the caller's own pass; not fatal here
+    if (!os64_streq_nocase(key, "start"))
+        return true;
+    if (value[0] == 0)
+        return true;
+    if (list->count >= DESKTOP_APPS_MAX) {
+        list->overflowed = true;
+        return true;
+    }
+    os64_strcopy(list->apps[list->count], DESKTOP_PATH_MAX, value);
+    list->count++;
+    return true;
+}
+
+// ── painting ────────────────────────────────────────────────────────────────
+
+static void paint(os64_draw_ctx_t *ctx, const desktop_config_t *cfg,
+                  const os64_image_t *img)
+{
+    os64_draw_ctx_refresh(ctx);
+
+    os64_gui_rect_t all = {0, 0, (int32_t)ctx->surf.width,
+                                 (int32_t)ctx->surf.height};
+    os64_draw_fill_rect(&ctx->surf, all,
+                        cfg->have_color ? cfg->color : DESKTOP_DEFAULT_COLOR);
+
+    if (img->pixels != NULL) {
+        // Centered, never scaled — and an image larger than the screen is
+        // cropped around its middle rather than shifted, which is the blit's
+        // contract. (tools/mkwall.py sizes an image for the screen.)
+        int32_t x = ((int32_t)ctx->surf.width  - (int32_t)img->width)  / 2;
+        int32_t y = ((int32_t)ctx->surf.height - (int32_t)img->height) / 2;
+        os64_draw_blit(&ctx->surf, x, y, img->pixels,
+                       img->width, img->height, img->width);
+    }
+    os64_draw_publish(ctx, NULL);
+}
+
+int main(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+
+    uint32_t sw = 0, sh = 0;
+    if (os64_gui_screen_info(&sw, &sh) != 0 || sw == 0 || sh == 0) {
+        os64_hprintf(OS64_STDERR, "desktop: no GUI here (screen_info)\n");
+        return 1;
+    }
+
+    // The window IS the screen, and it is born unfocused: the programs this
+    // shell is about to start should get the keyboard, not the wallpaper.
+    // Clicking it still focuses it — START_UNFOCUSED is about birth only.
+    int64_t win = os64_gui_window_create("desktop", 0, 0, sw, sh,
+                                         OS64_GUI_WINDOW_DESKTOP |
+                                         OS64_GUI_WINDOW_NO_DECORATIONS |
+                                         OS64_GUI_WINDOW_START_UNFOCUSED);
+    if (win <= 0) {
+        os64_hprintf(OS64_STDERR, "desktop: window_create failed (%ld)\n", (long)win);
+        return 1;
+    }
+
+    os64_draw_ctx_t ctx;
+    if (os64_draw_ctx_init(&ctx, win) != 0) {
+        os64_hprintf(OS64_STDERR, "desktop: get_surface failed\n");
+        os64_gui_window_destroy(win);
+        return 1;
+    }
+
+    // ── the wallpaper ───────────────────────────────────────────────────────
+    desktop_config_t cfg;
+    os64_memset(&cfg, 0, sizeof(cfg));
+    int64_t rc = os64_conf_find_read("desktop.conf", desktop_conf_line, &cfg,
+                                     cfg.conf_path, sizeof(cfg.conf_path));
+    if (rc == OS64_CONF_TRUNCATED)
+        os64_hprintf(OS64_STDERR, "desktop: %s exceeds %d bytes; trailing settings ignored\n",
+                     cfg.conf_path, OS64_CONF_MAX - 1);
+
+    os64_image_t img;
+    os64_memset(&img, 0, sizeof(img));
+    if (cfg.have_image) {
+        os64_image_status_t st = os64_image_load(cfg.image, 0, &img);
+        if (st != OS64_IMAGE_OK) {
+            // A wallpaper that silently fails to appear is a config bug with
+            // no handle on it. Name the file and the reason, then carry on
+            // with the color — a bad image must not cost you a desktop.
+            os64_hprintf(OS64_STDERR, "desktop: %s: %s\n", cfg.image,
+                         os64_image_status_name(st));
+            os64_memset(&img, 0, sizeof(img));
+        }
+    }
+    paint(&ctx, &cfg, &img);
+
+    // ── gui.conf: what starts with the desktop ──────────────────────────────
+    startup_list_t list;
+    os64_memset(&list, 0, sizeof(list));
+    char gui_path[DESKTOP_PATH_MAX];
+    rc = os64_conf_find_read("gui.conf", gui_conf_line, &list,
+                             gui_path, sizeof(gui_path));
+    if (rc == OS64_CONF_TRUNCATED)
+        os64_hprintf(OS64_STDERR, "desktop: %s exceeds %d bytes; trailing settings ignored\n",
+                     gui_path, OS64_CONF_MAX - 1);
+    if (list.overflowed)
+        os64_hprintf(OS64_STDERR, "desktop: more than %d start lines; the rest ignored\n",
+                     DESKTOP_APPS_MAX);
+
+    // NO gui.conf ANYWHERE means the built-in demo pair — the promise the
+    // kernel's reader made and this one inherits: "an absent config file
+    // must leave the machine behaving exactly as it did before the config
+    // file existed", the same promise /etc/os64.conf makes about the search
+    // path. A gui.conf that EXISTS and lists nothing still starts nothing:
+    // that is how "start nothing" is spelled, and the distinction is the
+    // whole reason this check is on NO_FILE and not on the count.
+    if (rc == OS64_CONF_NO_FILE) {
+        os64_strcopy(list.apps[0], DESKTOP_PATH_MAX, "/bin/gbounce");
+        os64_strcopy(list.apps[1], DESKTOP_PATH_MAX, "/bin/gkeys");
+        list.count = 2;
+    }
+
+    for (size_t i = 0; i < list.count; i++) {
+        char *const av[] = { list.apps[i], NULL };
+        int64_t child = os64_spawn(list.apps[i], av);
+        if (child < 0)
+            os64_hprintf(OS64_STDERR, "desktop: could not start %s (%ld)\n",
+                         list.apps[i], (long)child);
+    }
+
+    // ── the loop ────────────────────────────────────────────────────────────
+    // Blocking, because a wallpaper does not animate. The desktop costs
+    // exactly nothing until something happens to it.
+    for (;;) {
+        os64_gui_event_t ev;
+        int64_t r = os64_gui_event_wait(win, &ev);
+        if (r != 1)
+            break;   // the window died, or we are being killed
+
+        switch (ev.type) {
+        case OS64_GUI_EVENT_WINDOW_RESIZE:
+            paint(&ctx, &cfg, &img);
+            break;
+        case OS64_GUI_EVENT_WINDOW_CLOSE:
+            // The WM declines Alt+F4 on the desktop, so this should not
+            // arrive — but a close is a REQUEST and this program's answer is
+            // no. Closing your desktop is not something a keystroke should
+            // be able to do by accident.
+            break;
+        default:
+            // Keys and clicks land here. Nothing listens to them yet: the
+            // root menu and the launcher are step 3, and this is the window
+            // they will live on.
+            break;
+        }
+    }
+
+    os64_gui_window_destroy(win);
+    os64_image_free(&img);
+    return 0;
+}

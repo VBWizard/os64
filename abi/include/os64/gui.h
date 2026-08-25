@@ -45,10 +45,26 @@
 #define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // no titlebar; 1px border stays (honored since 2026-08-23)
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 #define OS64_GUI_WINDOW_PINNED           (1u << 2)   // born in the always-on-top band
+// THE DESKTOP BAND: born at the BOTTOM of the z-list, where nothing can get
+// beneath it. This is what lets a desktop shell be an ordinary ring-3
+// program — the same arrangement X11 has always had, where the server owns
+// the root window and the thing drawing your wallpaper is just a client.
+//
+// It buys a z-band and NOTHING ELSE. A desktop window is still focusable and
+// still receives keys and clicks, because being the target for a click that
+// lands on no application is half the point (that click is where a root menu
+// and a launcher come from). It is skipped by the Alt+Tab walk, and the
+// destructive chords decline it — Alt+F4 on your desktop is a gesture nobody
+// means.
+//
+// Setting it is not a claim of authority: a second desktop window is legal
+// and simply stacks at the bottom too. os64 has no privilege model, and
+// inventing one for a stacking hint would be a lock on the wrong door.
+#define OS64_GUI_WINDOW_DESKTOP          (1u << 5)   // born in the bottom band
 
 // READ-ONLY state, reported by os64_gui_window_get_state and IGNORED at
-// create — gui_window_create masks the flag word down to the three creation
-// bits above, so naming these here cannot let an app claim them at birth.
+// create — gui_window_create masks the flag word down to the CREATION bits
+// above, so naming these here cannot let an app claim them at birth.
 // They are published because an app SAVING its geometry needs to know it is
 // not saving a maximized or minimized frame as its ordinary position.
 #define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)

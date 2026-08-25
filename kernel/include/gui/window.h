@@ -75,6 +75,31 @@
 // typing into something you cannot see is the one thing this must never
 // allow.)
 #define GUI_WINDOW_MINIMIZED       (1u << 4)
+// THE DESKTOP (2026-08-25): this window lives in the BOTTOM band of the
+// z-list and nothing can get beneath it. It is what makes a ring-3 desktop
+// shell possible — the shell is an ordinary client that happens to be
+// unburiable-from-below, exactly as X11's desktop programs are ordinary
+// clients over a server-owned root window.
+//
+// WHAT THE FLAG BUYS, and it is deliberately only this: a z-band. The
+// desktop is still focusable, still hit-tested, still gets keys and clicks
+// and its own event queue — because being an INPUT TARGET is half the
+// reason the shell owns a window at all. A click that lands on no
+// application lands on the desktop, which is where a root menu (twm, 1987)
+// and a launcher come from.
+//
+// WHAT IT DOES NOT DO: it does not make a window special to the WM
+// otherwise. It is skipped by the Alt+Tab walk (a desktop is not something
+// you tab TO — it is what is left when you tab away from everything), and
+// the destructive chords decline to act on it, since Alt+F4 on your desktop
+// is a gesture nobody means.
+//
+// ANY client may set it, and a second one is not an error: the bands are a
+// z-order rule, not a privilege. Two desktop windows simply stack at the
+// bottom in the usual order. os64 has no privilege model to hang "only the
+// real desktop may do this" on, and inventing one for a stacking hint would
+// be a lock on the wrong door.
+#define GUI_WINDOW_DESKTOP         (1u << 5)
 
 // Alt+F4 twice within this long (5s) on a window that did not go away is
 // "I mean it": the owner task gets SIGTERM.
@@ -283,6 +308,13 @@ void wm_composite(surface_t *backbuffer, rect_t damage);
 // uncached flush on pixels nobody can see. Caller holds kGuiLock.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 
+// Is this screen rect completely covered by SOME window? The compositor asks
+// before painting the desktop background into a damage rect: if a window is
+// about to cover every pixel of it, the background underneath is invisible
+// and painting it is pure cost. Matters since the desktop shell became a
+// fullscreen window — see the comment at the definition for the measurement.
+bool wm_rect_is_covered(rect_t screen_rect);
+
 // How much chrome sits ABOVE the content: the titlebar (which includes the
 // top border) for a decorated window, the bare border for an undecorated
 // one. THE one place the question is answered — seven sites used to spell
@@ -291,7 +323,30 @@ bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 // client boundary sizes a content area before any window exists.
 static inline int32_t wm_chrome_top(uint32_t flags)
 {
+    if (flags & GUI_WINDOW_DESKTOP)
+        return 0;   // no chrome at all — see wm_border_width
     return (flags & GUI_WINDOW_NO_DECORATIONS) ? GUI_BORDER_WIDTH : GUI_TITLEBAR_HEIGHT;
+}
+
+// How wide the border is — and it is not always a constant, which is why this
+// exists (2026-08-25). THE DESKTOP HAS NO BORDER.
+//
+// NO_DECORATIONS drops the titlebar and keeps a 1px frame, which is right for
+// an ordinary undecorated window: the border is what separates it from
+// whatever is behind it, and its COLOR is the only focus indication such a
+// window has. Neither argument survives on the desktop. There is nothing
+// behind it to be separated from, and the "border" is a line around the edge
+// of the entire screen that changes colour when you click the wallpaper —
+// which is what Chris saw the first afternoon the shell ran, and it reads as
+// a rendering bug rather than as focus.
+//
+// Written as a function beside wm_chrome_top for exactly the reason that one
+// exists: the border was spelled GUI_BORDER_WIDTH by hand at six sites, and
+// six sites is six chances to miss the day the answer stopped being constant.
+// It stopped being constant today.
+static inline int32_t wm_border_width(uint32_t flags)
+{
+    return (flags & GUI_WINDOW_DESKTOP) ? 0 : GUI_BORDER_WIDTH;
 }
 
 // Where the content area sits on screen (for event coordinate translation
@@ -299,7 +354,7 @@ static inline int32_t wm_chrome_top(uint32_t flags)
 static inline rect_t wm_content_rect_on_screen(const window_t *w)
 {
     return (rect_t){
-        w->frame.x + GUI_BORDER_WIDTH,
+        w->frame.x + wm_border_width(w->flags),
         w->frame.y + wm_chrome_top(w->flags),
         (int32_t)w->content.width,
         (int32_t)w->content.height,

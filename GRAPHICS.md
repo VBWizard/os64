@@ -669,9 +669,9 @@ still reaches the app) extended from the mouse to the keyboard:
 | **Ctrl+Alt+T** | hide/show titlebar | content stays put, the frame's top edge moves; 1px border stays; `OS64_GUI_WINDOW_NO_DECORATIONS` honored at create too |
 | **Ctrl+Alt+M** / titlebar double-click | maximize (toggle) | restore frame remembered; a manual move or resize clears it; raises, so a focused-but-buried window still visibly answers |
 | **Ctrl+Alt+N** | minimize | off the glass, not hit-tested, occludes nothing, alive; focus goes to the most recent visible window; Alt+Tab brings it back — release the hold ON its dim row |
-| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path.ppm` (P6, centered, never scaled — a `screendump` can be the wallpaper); no file = the test pattern stays (`gui/desktop.c`) |
+| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path` — **PPM (P6) or BMP, by magic bytes**, centered, never scaled (a `screendump` can be the wallpaper). Read by **`/bin/desktop`** since 2026-08-25, which paints it into a bottom-band WINDOW; `gui/desktop.c` and its in-kernel PPM decoder are deleted. With no shell running, the compositor's test pattern is what shows — it is the floor, and it stayed in the kernel for exactly that reason |
 | `/home/gclock.conf` → `/etc/gclock.conf` | clock window state | `Position = x,y`, `Titlebar = on|off`, `Pinned = true|false`; no file = `(280,10)`, titlebar on, unpinned |
-| `gui.conf` (via the config search path) | what starts with the desktop | `start = /bin/gterm` (repeatable, in order) and `hello = yes|no` for the legacy window. **If the file exists its `start` lines are the whole list, including none** — that is how you say "start nothing"; the built-in demo pair applies only when no `gui.conf` is found. `gui/startup.c`, read once at the top of `gui_start()` |
+| `gui.conf` (via the config search path) | what starts with the desktop | `start = /bin/gterm` (repeatable, in order). **If the file exists its `start` lines are the whole list, including none** — that is how you say "start nothing"; the built-in demo pair applies only when no `gui.conf` is found. Read once by **`/bin/desktop`** as it starts (2026-08-25) — a shell reads its own rc. The `hello = yes|no` key and the window it switched are retired, and with them `gui/startup.c`: the kernel reads no config file for the GUI at all now |
 
 Three things learned building them, for the next chord:
 
@@ -697,6 +697,18 @@ Three things learned building them, for the next chord:
   holds the top of the stack while focus goes elsewhere. Z-order is where
   things are drawn; recency is what the user did last; they stopped being
   the same number the moment one window could refuse to be buried.
+- **THREE BANDS SINCE 2026-08-25**, when the desktop became a ring-3
+  client: pinned (2) above ordinary (1) above **desktop (0)**, which nothing
+  can get beneath. `band_of()` in window.c returns the rank and both
+  `link_on_top` and `at_band_top` derive from it, so a fourth band costs one
+  line — the two-band code's own warning was that "three copies of find the
+  band boundary is three chances to disagree". The desktop band buys a
+  z-position and nothing else: the window is still focusable and still gets
+  keys and clicks, because being the target of a click that lands on no
+  application is the whole point (that click is where a root menu and the
+  launcher come from). It IS skipped by the Alt+Tab walk — a desktop is not
+  something you tab to — and pin/maximize/minimize/close decline it, guarded
+  at the `wm_` setters so every caller is covered rather than just the chords.
 
 The harness grew to test these: `utility/gui_run.sh` drives a headless
 GUI boot from a key script, and speaks **QMP** (`-qmp unix:`) for raw
@@ -848,7 +860,13 @@ sequence can forge it.**
 ### Verification (run 2026-08-23, `utility/gui_run.sh` + QMP)
 
 QMP is the rig — HMP `sendkey` cannot hold Alt across two Tabs. Boot the
-GUI entry (three windows: `hello os64`, `keys`, `bounce`), then:
+GUI entry, then:
+
+*(As run in 2026-08-23 the entry gave three windows — `hello os64`, `keys`,
+`bounce`. Since 2026-08-25 the desktop is `/bin/desktop` and what starts is
+whatever `gui.conf` lists, so put the windows you want in that file first —
+and note the DESKTOP window is skipped by the Alt+Tab walk, so it never
+appears in the strip.)*
 
 | Script | Confirmed by screendump |
 |---|---|
@@ -890,7 +908,11 @@ step/step/ended and step/cancelled as designed.
    chords chapter above)**. Still open: close buttons (and any titlebar
    button at all — the chords were chosen so none is needed yet), a
    launcher/taskbar (Alt+Tab is the only way back from minimize), and
-   re-reading `desktop.conf` without a reboot.
+   re-reading `desktop.conf` without a reboot — **which is a much smaller job
+   now that the reader is `/bin/desktop`**: re-reading a config and
+   repainting is an ordinary thing for a program to do, where it used to mean
+   the compositor re-entering the VFS. Same for the launcher, which now has a
+   window to live on.
 6. Mouse wheel + 5-button (IntelliMouse magic sample-rate handshake).
 7. Alpha translucency (X byte in XRGB is reserved for it; `surface_blit_masked`
    already does shaped blits).

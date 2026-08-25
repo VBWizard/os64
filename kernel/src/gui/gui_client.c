@@ -173,10 +173,11 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	// cannot be claimed accidentally through this creation call.
 	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS |
 	                              GUI_WINDOW_START_UNFOCUSED |
-	                              GUI_WINDOW_PINNED;
+	                              GUI_WINDOW_PINNED |
+	                              GUI_WINDOW_DESKTOP;
 	uint32_t create_flags = (uint32_t)flags & client_flags;
-	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - GUI_BORDER_WIDTH;
+	int32_t content_w = (int32_t)w - 2 * wm_border_width(create_flags);
+	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - wm_border_width(create_flags);
 	if (content_w < 8 || content_h < 8)
 		return GUI_ERR_BAD_ARGS;
 

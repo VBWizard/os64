@@ -16,8 +16,6 @@
 #include "gui/window.h"
 #include "gui/gui_client.h"
 #include "gui/gui_internal.h"
-#include "gui/desktop.h"
-#include "gui/startup.h"     // gui.conf — what starts with the desktop
 
 #include "tty.h"             // kTTY/kTTYFocused — glass ownership IS VT focus (VT8 chapter)
 #include "vt_select.h"       // the other side of the input fork: console mouse selection
@@ -348,8 +346,14 @@ static rect_t composite_locked(rect_t damage)
 	if (!rect_intersect(damage, screen, &damage))
 		return (rect_t){0, 0, 0, 0};
 
-	// Layer 0: desktop (same coordinates both sides — straight copy).
-	surface_blit(&kBackbuffer, damage.x, damage.y, &kDesktop, damage);
+	// Layer 0: desktop (same coordinates both sides — straight copy), UNLESS
+	// a window already covers this rect completely, in which case these
+	// pixels are about to be painted over and nobody can see them. Since the
+	// desktop shell is a fullscreen window, that is the common case now, and
+	// skipping it is what keeps a drag from costing two screenful blits per
+	// damage rect (wm_rect_is_covered carries the measurement).
+	if (!wm_rect_is_covered(damage))
+		surface_blit(&kBackbuffer, damage.x, damage.y, &kDesktop, damage);
 
 	// Layer 1: windows, bottom-up by z-order.
 	wm_composite(&kBackbuffer, damage);
@@ -1165,6 +1169,17 @@ static void route_event_locked(const input_event_t *ev)
 		if ((ev->key.modifiers & KEYBOARD_MOD_ALT) && !(ev->key.modifiers & KEYBOARD_MOD_CTRL) &&
 		    keyboard_fkey_number(ev->key.scancode, ev->key.modifiers) == 4) {
 			window_t *focus = wm_focused();
+			// The desktop is exempt — and this one is guarded HERE rather
+			// than at a wm_ setter because there is no setter to guard: a
+			// close is a REQUEST delivered to the owner, so the only place
+			// to decline it is where it is composed. Alt+F4 with nothing
+			// but your desktop showing is a gesture nobody means, and its
+			// second press would SIGTERM the shell.
+			if (focus && (focus->flags & GUI_WINDOW_DESKTOP)) {
+				printd(DEBUG_GUI, "guicomp: close declined — window %u is the desktop\n",
+					focus->id);
+				break;
+			}
 			if (focus && ev->type == INPUT_EVENT_KEY_DOWN) {
 				if (focus->closeAskedTick != 0 &&
 				    ev->tick - focus->closeAskedTick <= GUI_CLOSE_ESCALATE_TICKS) {
@@ -1259,40 +1274,28 @@ bool guicomp_thread(bool daemon)
 	s_cursor_y = (int32_t)kBackbuffer.height / 2;
 	gui_damage_add(cursor_rect());
 
-	// The user's desktop if they wrote one (desktop.c: /home/desktop.conf,
-	// then /etc/), else the test pattern that has been here since the
-	// surface core came up. Read here and not in gui_start because this is
-	// the compositor's own task, with a stack and the VFS, before any frame.
-	if (desktop_paint_from_config(&kDesktop))
-		gui_damage_add((rect_t){0, 0, (int32_t)kDesktop.width, (int32_t)kDesktop.height});
-	else
-		paint_desktop();
-
-	// A first window, created through the CLIENT API — so M5 exercises the
-	// exact path demo apps (and later, userland) will use: click it to
-	// focus, drag it by the titlebar.
+	// THE FLOOR, and only the floor. The test pattern has been here since
+	// the surface core came up, and it is what you see before /bin/desktop
+	// starts, if it never starts, or if it dies — which is exactly why it
+	// stays in the kernel now that the decor does not.
 	//
-	// KEPT, AND NOW OPTIONAL (2026-08-23). `hello = no` in gui.conf hides it;
-	// the default is still on, because it has been on the glass since the
-	// first frame this compositor ever drew and an absent config file must
-	// not quietly retire anything. Chris asked for the switch and for the
-	// code to stay in the same breath — "I want to keep that for legacy
-	// sake" — which is exactly what a config flag is for.
-	int64_t hello = gui_startup_hello()
-	                    ? gui_window_create("hello os64", 340, 250, 340, 240, 0)
-	                    : 0;
-	if (hello > 0) {
-		surface_t s;
-		gui_window_get_surface(hello, &s);
-		const char msg1[] = "The os64 window system lives!";
-		const char msg2[] = "Drag me by the title bar.";
-		surface_draw_text(&s, 12, 16, msg1, sizeof(msg1) - 1,
-		                  GUI_COLOR_BLACK, GUI_COLOR_LIGHT_GRAY);
-		surface_draw_text(&s, 12, 40, msg2, sizeof(msg2) - 1,
-		                  GUI_COLOR_DARK_GRAY, GUI_COLOR_LIGHT_GRAY);
-		gui_window_publish(hello, NULL);
-	}
+	// The kernel used to paint the WALLPAPER here too: gui/desktop.c read
+	// desktop.conf and decoded a PPM, in ring 0, from a file any user could
+	// write. That file is deleted as of 2026-08-25 and the job belongs to
+	// the desktop shell, which paints it into a real window in the bottom
+	// z-band — a window, so that a click landing on no application has
+	// somewhere to land.
+	paint_desktop();
 
+	// (THE "hello os64" WINDOW started here — the first window this
+	// compositor ever drew, M5's proof that the client API worked, kept as a
+	// legacy switch when gui.conf arrived. RETIRED 2026-08-25, Chris's call
+	// on the day the desktop moved to ring 3: "lets remove it. If I want to
+	// reminisce, I can run an old build." Its `hello` key was also the last
+	// thing making the KERNEL read gui.conf, so retiring the window closes
+	// the two-readers-of-one-file wart in the same stroke — gui.conf is
+	// entirely /bin/desktop's now. git history has the window.)
+	//
 	// (The ring-0 console window started here from M5 until the VT8 chapter
 	// retired it, 2026-08-19 — ruled: no ring-0-rendered windows. printf and
 	// print_n land in VT1's grid now, one Alt+F1 away; Phase E's terminal is
@@ -1451,13 +1454,13 @@ uint64_t gui_compositor_affinity(void)
 
 void gui_start(void)
 {
-	// FIRST, before anything is submitted: read gui.conf. The compositor
-	// thread asks gui_startup_hello() while building its scene, so a parse
-	// that raced the task creation below would be a coin toss on whether the
-	// legacy window appears. Settle the answers while we are still the only
-	// one who can ask the question.
-	gui_startup_load();
-
+	// THE KERNEL NO LONGER READS gui.conf (2026-08-25). It used to be read
+	// right here, before anything was submitted, because the compositor
+	// thread asked gui_startup_hello() while building its scene. Both the
+	// window and its switch are gone, and the `start` lines belong to
+	// /bin/desktop — so gui.conf has exactly one reader again, in ring 3,
+	// which is the arrangement the config search path was built to protect.
+	//
 	// Open the unified input queue before the compositor (its consumer)
 	// exists — events buffered during task startup are simply the first
 	// ones drained.
@@ -1499,8 +1502,22 @@ void gui_start(void)
 	// one, so he got two gclocks and two gterms) and runs on text boots too
 	// (where every GUI line failed once per terminal). One move fixes both:
 	// the desktop starts once, and only when there is a desktop.
-	for (size_t i = 0; i < gui_startup_app_count(); i++) {
-		const char *app = gui_startup_app(i);
+	// THE KERNEL STARTS EXACTLY ONE GUI PROGRAM (2026-08-25): the desktop
+	// shell. Everything else that starts with the desktop is started BY the
+	// desktop, out of gui.conf, which is the shell's rc.
+	//
+	// The name is hardcoded, and that is the whole of the kernel's startup
+	// policy — one line, deliberately. When husk-as-init lands, this line is
+	// what moves to the init table, and /bin/desktop does not change,
+	// because nothing in it ever asked who started it.
+	//
+	// If it is missing or fails to launch, the compositor's own test pattern
+	// stays on the glass and the machine remains usable — the floor is in
+	// the kernel precisely so the decor can be a program that might not be
+	// there.
+	static const char *const kShell[] = { "/bin/desktop" };
+	for (size_t i = 0; i < sizeof(kShell) / sizeof(kShell[0]); i++) {
+		const char *app = kShell[i];
 		task_t *demo = task_create((char *)app, 0, NULL, kKernelTask, false,
 		                           THREAD_NO_AFFINITY);
 		if (demo == NULL) {
