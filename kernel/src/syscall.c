@@ -322,23 +322,39 @@ uint64_t _syscall_dispatch(
 	// Remember the address space we arrived on for the exit tripwire below.
 	asm volatile("mov %0, cr3" : "=r"(entry_cr3));
 
+	// EVERY WAY OUT OF THIS FUNCTION GOES THROUGH THE DELIVERY EPILOGUE
+	// (Codex #29 rd26). The three refusals below used to `return` directly,
+	// which skipped the one place a handler gets armed — so a program looping
+	// on a rejected call (bad number, empty slot, an argument that fails
+	// validation) had a pending, handled signal that nothing ever delivered:
+	// the entry checkpoint granted the reprieve, the exit hook never ran.
+	// The scheduler's §10 visit would catch the loop eventually, when it found
+	// the thread in ring 3 — but "the other path will probably get it" is not
+	// the contract, and SIGNALS.md promises the dispatcher covers every
+	// syscall return. So a refusal is a RESULT, and results are delivered on.
+	uint64_t result;
+	syscall_entry_t *entry = NULL;
+
 	if (syscall_number >= MAX_SYSCALLS)
 	{
         printd(DEBUG_SYSCALL, "SYSCALL: invalid number %lu\n", syscall_number);
-        return SYSCALL_RESULT_INVALID;
+        result = SYSCALL_RESULT_INVALID;
+        goto deliver_and_return;
 	}
 
-	syscall_entry_t *entry = &syscall_table[syscall_number];
+	entry = &syscall_table[syscall_number];
 	if (!entry->func)
 	{
         printd(DEBUG_SYSCALL, "SYSCALL: unimplemented number %lu\n", syscall_number);
-        return SYSCALL_RESULT_INVALID;
+        result = SYSCALL_RESULT_INVALID;
+        goto deliver_and_return;
 	}
 
 	if (!prepare_syscall_args(entry, raw_args, prepared_args))
 	{
         printd(DEBUG_SYSCALL, "SYSCALL: user argument validation failed for %lu\n", syscall_number);
-        return SYSCALL_RESULT_BAD_USER_DATA;
+        result = SYSCALL_RESULT_BAD_USER_DATA;
+        goto deliver_and_return;
 	}
 
 	if (entry->needs_cr3_switch)
@@ -352,7 +368,7 @@ uint64_t _syscall_dispatch(
 		log_syscall_invocation(entry, prepared_args);
 	}
 
-	uint64_t result = entry->func(
+	result = entry->func(
 		prepared_args[0], prepared_args[1], prepared_args[2],
 		prepared_args[3], prepared_args[4], prepared_args[5]);
 
@@ -376,6 +392,9 @@ uint64_t _syscall_dispatch(
 
 	// ── SIGNAL DELIVERY, on the way out ─────────────────────────────────────
 	//
+	// The refusals above jump straight here (rd26): no CR3 switch happened for
+	// them, so the tripwire has nothing to say, and `result` is the refusal.
+deliver_and_return:
 	// HERE, and not at the checkpoint on the way IN, because the syscall's
 	// return value has to survive the handler. Delivering before the body ran
 	// would skip the syscall entirely and resume afterwards as though it had
