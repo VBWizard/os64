@@ -531,14 +531,19 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 // Every register is live at an arbitrary interruption point, so the frame
 // carries the whole file (signal_frame_full_t) — os32 delivered from its
 // scheduler ISR, and its long stack diagram is this function's direct
-// ancestor. Only RIP and RSP change in regs: the stub takes signo and
-// handler from the frame, and sigreturn's full path puts everything else
-// back from the frame too.
+// ancestor. THREE things change in regs: RIP (to the stub), RSP (to the
+// frame), and RFLAGS (DF cleared, rd10). The stub takes signo and handler
+// from the frame, and sigreturn's full path puts everything else back from
+// the frame too.
 //
-// The CALLER (scheduler_signal_visit) mirrors regs.RIP/regs.RSP into the
-// per-core isr arrays when the thread is staying on its CPU — the continue
-// path resumes from those without a reload. Both images, always: the forced
-// push's own discipline, inherited whole.
+// The CALLER (scheduler_signal_visit) mirrors ALL THREE — regs.RIP, regs.RSP
+// and regs.RFLAGS — into the per-core isr arrays when the thread is staying
+// on its CPU, because the continue path resumes from those without a
+// reload. Both images, always: the forced push's own discipline, inherited
+// whole. (This paragraph said "only RIP and RSP" until rd25 — the last
+// spelling of the two-register model that rd11 found had made the DF clear
+// a no-op on exactly that path. Whatever delivery changes, the mirror
+// carries; a partial mirror looks maintained and is not.)
 signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 {
 	task_t   *task   = (task_t *)t;

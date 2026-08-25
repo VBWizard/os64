@@ -1329,8 +1329,9 @@ void scheduler_run_new_thread()
         // Continue path resumes from the isr arrays WITHOUT a reload, so the
         // signal visit must run here too (regs were just stored above, so
         // regs.CS is fresh for the ring-3 seatbelt — and a delivery's
-        // RIP/RSP redirect gets mirrored into the isr arrays, which are
-        // what this path actually IRETs from).
+        // RIP/RSP/RFLAGS redirect gets mirrored into the isr arrays, which
+        // are what this path actually IRETs from; all three, see the mirror
+        // invariant in scheduler_signal_visit).
         scheduler_signal_visit(threadToStop, apic_id);
         if (threadToStop->execDontSaveRegisters)
         {

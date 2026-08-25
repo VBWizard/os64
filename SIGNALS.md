@@ -376,11 +376,15 @@ same `(regs.CS & 3) == 3` seatbelt: interrupted in ring 3, holding no
 kernel locks. The visit now asks two questions in order: *will something
 catch a pending signal?* → build the full frame from `thread->regs`
 (through the HHDM, per §5), point regs.RIP at the stub and regs.RSP at the
-frame, mirror both into the per-core isr arrays (both images, exactly as
-the forced push always did — RIP and RSP are the only registers delivery
-changes, because the stub takes everything else from the frame); *otherwise,
-is a terminate pending?* → the gallows, unchanged. A FAILED frame write on
-a terminating signal falls through to the gallows (death must not depend on
+frame, clear DF in regs.RFLAGS (rd10), and mirror all three into the
+per-core isr arrays (both images, exactly as the forced push always did —
+RIP, RSP and RFLAGS are the only registers delivery changes, because the
+stub takes everything else from the frame; this sentence said "RIP and RSP"
+until rd25, and rd11 had already found that a mirror missing the third made
+the DF clear a no-op on the continue path); *otherwise, is a terminate
+pending?* → the gallows — asked only when delivery did not FAIL (rd23). A
+FAILED frame write on a terminating signal, or an orphaned death (rd18),
+falls through to the gallows (death must not depend on
 the victim's stack — the same reason the push survives at all); on a
 non-terminating one the signal is dropped with a log line.
 
