@@ -527,8 +527,11 @@ design in `docs/conf_path.md`.
   the ladder** (/home) rather than to whatever it read, because /etc is the
   system's and every build rewrites it; it **merges** line by line so
   comments and unrelated settings survive a save; and it publishes by writing
-  `<path>.new` and **renaming over** — atomic replace (syscall 43) is exactly
-  what write-a-temp-then-publish is for. `/bin/conftest` is the fixture that
+  a PER-SAVER temp — `<path>.<taskid>.<seq>.new`, so two tasks or two
+  threads saving the same file never share one (Codex #29 rd7/rd8) —
+  committing it with `os64_sync`, and **renaming over** — atomic replace
+  (syscall 43) is exactly what write-a-temp-then-publish is for. Anything
+  that looks for a stray temp matches `<base>.*.new`, as conftest does. `/bin/conftest` is the fixture that
   proves all three, in the ring-3 suite.
 - **An app can read its own window back** (`os64_gui_window_get_state`, 48):
   frame rect in create's units plus the live flags. Without it no app could
