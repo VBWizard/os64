@@ -422,14 +422,18 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// Always false for SIGKILL, which is what keeps it the last resort.
 	bool signal_has_handler_for_pending(struct task *t, void *thread);
 
-	// Can ring 3 install a handler for this signal? Range check plus the one
-	// exception (SIGKILL), in ONE place so registration and delivery can never
-	// reach different conclusions about the same signal.
+	// Is this a signal at all, and can ring 3 install a handler for it? Two
+	// MEMBERSHIP tests over the public signal set, in ONE place so registration
+	// and both delivery pickers can never reach different conclusions about
+	// the same number.
 	//
-	// Both are MEMBERSHIP tests over the public signal set, not range checks
-	// (rd13): the gaps in the numbering are not signals, and neither are the
-	// scheduler markers at 24-27, which share the sigind word but are thread
-	// STATE. A range check let ring 3 register a handler on SIGSLEEP.
+	// Membership, not a range (rd13 — the first sentence here said "range
+	// check plus the one exception" until rd21, describing exactly the code
+	// rd13 removed): the gaps in the numbering are not signals, the scheduler
+	// markers at 24-27 share the sigind word but are thread STATE, and the
+	// numbered-but-not-yet-real three (SIGCONT, SIGSTOP, SIGIO) have no
+	// producer. A range check let ring 3 register a handler on SIGSLEEP. The
+	// list itself, with a producer named per entry, is in signals.c.
 	//
 	// TWO predicates because the ABI has two refusals and they are not the
 	// same sentence: BAD_SIGNAL means "no such signal", UNCATCHABLE means

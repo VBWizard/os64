@@ -795,8 +795,10 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // 2026-08-24). This function is the default action for everyone who did NOT
 // install one — which is the behavior every pipeline actually wants.
 // ── The terminating signals: enforcing the default action (SIGINT.md, PROC.md)
-// Same "kernel enforces the default because ring 3 can't catch it" pattern as
-// SIGPIPE below, same 128+signo retVal encoding for a waiting parent. The bit
+// Same "the kernel applies the default for whoever did NOT install a handler"
+// pattern as SIGPIPE below (ring 3 CAN catch these since the signals arc —
+// the sentence here used to say it could not), same 128+signo retVal
+// encoding for a waiting parent. The bit
 // is set somewhere the victim is NOT running — at the KEYSTROKE
 // (console_intr_intercept, IRQ path — cat writing a huge file is not reading
 // the console, so a buffered byte could never work), or by another task
@@ -808,14 +810,22 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 //   2. console_read returning CONSOLE_READ_INTERRUPTED (blocked on stdin)
 //   3. pipe_read/pipe_write returning PIPE_ERR_INTERRUPTED (blocked on a pipe)
 //
-// SIGKILL and SIGINT both terminate today (nothing in ring 3 can catch either
-// yet) but they are NOT the same event, and the exit status must not pretend
-// they are: a task killed through ctl did not die "interrupted from the
-// keyboard". SIGKILL wins when both are pending — the uncatchable one always
-// outranks the catchable one.
-// `thread` may be NULL: all four call sites run in the VICTIM'S OWN context
+// SIGKILL and SIGINT both terminate BY DEFAULT, but they are NOT the same
+// event, and the exit status must not pretend they are: a task killed through
+// ctl did not die "interrupted from the keyboard". SIGKILL wins when both are
+// pending — the uncatchable one always outranks the catchable one. And since
+// the signals arc, SIGINT (with HUP, TERM, PIPE) IS catchable from ring 3:
+// every road into this function first asks current_thread_will_catch (just
+// below), and a thread with a handler installed is turned back with
+// OS64_INTERRUPTED instead — so this function is reached only when nothing
+// will catch what is pending. (This paragraph said "nothing in ring 3 can
+// catch either yet" until Codex #29 rd21, one comment block above the
+// function that made it false.)
+// `thread` may be NULL: every call site runs in the VICTIM'S OWN context
 // (that is the whole design), so the core's current thread is the right one
 // to ask which bit is pending.
+//
+// ── current_thread_will_catch ───────────────────────────────────────────────
 // Will something CATCH the terminate this thread is carrying? Asked by every
 // blocking call before it applies the default action, so a program that
 // installed a handler is told its wait was interrupted instead of being

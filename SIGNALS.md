@@ -56,7 +56,7 @@ Each asks exactly one question today — *"do I have a pending terminate?"* —
 and answers it by dying, **in the victim's own context**, which is what makes
 `task_exit` safe there. That property is load-bearing and does not change.
 
-## The problem
+## The problem (as it stood on 2026-08-23 — the premise the design answers; see STATUS above)
 
 **Ring 3 cannot install a handler.** `signals_t` has a `sighandler[32]` array
 and a `sigaction()` function, but nothing in the syscall table reaches them,
