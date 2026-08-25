@@ -34,6 +34,7 @@
 #include "os64/gui.h"
 #include "os64/proc.h"
 #include "os64/str.h"
+#include "os64/thread.h"
 
 #define DESKTOP_PATH_MAX   192
 #define DESKTOP_APPS_MAX   16
@@ -55,6 +56,7 @@ typedef struct {
     char   apps[DESKTOP_APPS_MAX][DESKTOP_PATH_MAX];
     size_t count;
     bool   overflowed;
+    char   path[DESKTOP_PATH_MAX];   // which gui.conf won — named in complaints
 } startup_list_t;
 
 // ── desktop.conf ────────────────────────────────────────────────────────────
@@ -114,19 +116,88 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
 static bool gui_conf_line(const char *key, const char *value, void *user)
 {
     startup_list_t *list = (startup_list_t *)user;
-    if (key == NULL)
-        return true;   // reported by the caller's own pass; not fatal here
-    if (!os64_streq_nocase(key, "start"))
+
+    // SAY SO. The kernel's reader complained about every one of these, and
+    // this one silently swallowed them behind a comment claiming the caller
+    // reported them — the caller reports truncation and overflow and nothing
+    // else, so the claim was false and the diagnostic was simply gone
+    // (Codex #31). "My startup entry does nothing and I cannot tell why" is
+    // the exact afternoon a config file exists to prevent.
+    if (key == NULL) {
+        os64_hprintf(OS64_STDERR, "desktop: %s: not a `key = value` line: %s\n",
+                     list->path, value);
         return true;
-    if (value[0] == 0)
+    }
+    if (!os64_streq_nocase(key, "start")) {
+        os64_hprintf(OS64_STDERR, "desktop: %s: unknown setting '%s' — ignored\n",
+                     list->path, key);
         return true;
+    }
+    if (value[0] == 0) {
+        os64_hprintf(OS64_STDERR, "desktop: %s: 'start' with no program — ignored\n",
+                     list->path);
+        return true;
+    }
     if (list->count >= DESKTOP_APPS_MAX) {
         list->overflowed = true;
         return true;
     }
-    os64_strcopy(list->apps[list->count], DESKTOP_PATH_MAX, value);
+
+    // REFUSE AN OVERLONG PATH, DO NOT TRUNCATE IT. os64_strcopy returns the
+    // SOURCE length (strlcpy semantics), so a value that did not fit is
+    // detectable — and must be, because a truncated path is a DIFFERENT path,
+    // and a prefix that happens to exist would launch the wrong program
+    // (Codex #31). The kernel's reader refused these explicitly; this one
+    // inherited the job along with the file.
+    size_t want = os64_strcopy(list->apps[list->count], DESKTOP_PATH_MAX, value);
+    if (want >= DESKTOP_PATH_MAX) {
+        os64_hprintf(OS64_STDERR,
+                     "desktop: %s: start path over %d characters — ignored: %s\n",
+                     list->path, DESKTOP_PATH_MAX - 1, value);
+        list->apps[list->count][0] = 0;
+        return true;
+    }
     list->count++;
     return true;
+}
+
+// ── the reaper ──────────────────────────────────────────────────────────────
+//
+// A DESKTOP THAT STARTS PROGRAMS MUST BURY THEM (Codex #30/#31). The kernel
+// used to set `autoReap` on every app it launched from gui.conf; ring 3 has
+// no such switch, so a startup app that exits stays a zombie for as long as
+// the desktop lives — holding its task memory and its executable's resources
+// — and the launcher will make that worse by design.
+//
+// It is a THREAD because the main loop blocks in os64_gui_event_wait, whose
+// backstop loops INSIDE the kernel: it never returns without an event, so a
+// reap folded into that loop would only happen when somebody touched the
+// desktop. A picture nobody clicks would keep its corpses indefinitely.
+//
+// This is init's oldest job, and it wears init's shape: block until a child
+// ends, collect it, repeat forever. os64_wait(0) answers negative when there
+// are no children AT ALL, which would spin — so that case sleeps rather than
+// retrying immediately. When children exist the wait blocks properly and
+// costs nothing.
+#define DESKTOP_REAP_IDLE_MS 1000
+
+static int64_t reaper(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        int32_t code = 0;
+        int64_t pid = os64_wait(0, &code);
+        if (pid > 0) {
+            // Said out loud: a GUI app that dies leaves no other trace, and
+            // "it was running a moment ago" is the whole of the evidence
+            // otherwise.
+            os64_hprintf(OS64_STDERR, "desktop: task %ld exited (%d)\n",
+                         (long)pid, (int)code);
+            continue;
+        }
+        os64_sleep(DESKTOP_REAP_IDLE_MS);   // no children right now
+    }
+    return 0;
 }
 
 // ── painting ────────────────────────────────────────────────────────────────
@@ -209,9 +280,12 @@ int main(int argc, char **argv)
     // ── gui.conf: what starts with the desktop ──────────────────────────────
     startup_list_t list;
     os64_memset(&list, 0, sizeof(list));
-    char gui_path[DESKTOP_PATH_MAX];
+    // The reader fills list.path with the winning file, so every complaint
+    // from gui_conf_line can name it — "which gui.conf did it read?" is the
+    // first question anyone asks (and /sys/conf answers it too).
+    char *gui_path = list.path;
     rc = os64_conf_find_read("gui.conf", gui_conf_line, &list,
-                             gui_path, sizeof(gui_path));
+                             gui_path, DESKTOP_PATH_MAX);
     if (rc == OS64_CONF_TRUNCATED)
         os64_hprintf(OS64_STDERR, "desktop: %s exceeds %d bytes; trailing settings ignored\n",
                      gui_path, OS64_CONF_MAX - 1);
@@ -231,6 +305,15 @@ int main(int argc, char **argv)
         os64_strcopy(list.apps[1], DESKTOP_PATH_MAX, "/bin/gkeys");
         list.count = 2;
     }
+
+    // The undertaker starts BEFORE the first child, so nothing can finish
+    // unwatched. A desktop with no startup apps still wants it: the launcher
+    // will spawn into the same lap.
+    int64_t reap_thread = os64_thread(reaper, NULL);
+    if (reap_thread < 0)
+        os64_hprintf(OS64_STDERR,
+                     "desktop: no reaper thread (%ld) — exited apps will linger\n",
+                     (long)reap_thread);
 
     for (size_t i = 0; i < list.count; i++) {
         char *const av[] = { list.apps[i], NULL };

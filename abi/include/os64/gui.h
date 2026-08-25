@@ -60,6 +60,11 @@
 // Setting it is not a claim of authority: a second desktop window is legal
 // and simply stacks at the bottom too. os64 has no privilege model, and
 // inventing one for a stacking hint would be a lock on the wrong door.
+//
+// The ONE combination refused is DESKTOP together with PINNED, which asks to
+// be at the bottom and the top at once. create() answers BAD_ARGS rather than
+// picking a winner — see gui_client.c for why silently resolving it was worse
+// than refusing.
 #define OS64_GUI_WINDOW_DESKTOP          (1u << 5)   // born in the bottom band
 
 // READ-ONLY state, reported by os64_gui_window_get_state and IGNORED at

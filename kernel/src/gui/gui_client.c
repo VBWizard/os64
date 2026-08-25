@@ -176,6 +176,23 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	                              GUI_WINDOW_PINNED |
 	                              GUI_WINDOW_DESKTOP;
 	uint32_t create_flags = (uint32_t)flags & client_flags;
+
+	// DESKTOP AND PINNED ARE A CONTRADICTION, AND IT USED TO RESOLVE BADLY
+	// (Codex #31). "Always at the bottom" and "always on top" cannot both
+	// hold; band_of() checks PINNED first, so a window claiming both was
+	// placed at the very TOP of the z-list while calling itself the desktop —
+	// and it could never be fixed, because wm_set_pinned declines every
+	// desktop window, so nothing could unpin it.
+	//
+	// REFUSED rather than silently resolved, which is this boundary's habit:
+	// an over-long title is refused instead of truncated, a slurp cap that
+	// cannot be honoured is refused instead of clamped. Picking a winner here
+	// would mean the caller asked for one thing and got another, and the flag
+	// word it later reads back would not be the one it passed.
+	if ((create_flags & GUI_WINDOW_DESKTOP) && (create_flags & GUI_WINDOW_PINNED)) {
+		printd(DEBUG_GUI, "gui: window_create refused — DESKTOP and PINNED are contradictory\n");
+		return GUI_ERR_BAD_ARGS;
+	}
 	int32_t content_w = (int32_t)w - 2 * wm_border_width(create_flags);
 	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - wm_border_width(create_flags);
 	if (content_w < 8 || content_h < 8)
