@@ -1204,12 +1204,14 @@ static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 	if ((thread->regs.CS & 3) != 3)
 		return;                          // mid-syscall: the pull path owns it
 
-	// Question 1: deliver. ARMED means regs.RIP/RSP now aim at the stub and
-	// its frame — mirror BOTH images (regs is the authoritative store; the
-	// per-core isr array is what the ISR exit path actually IRETs from when
-	// the same thread continues without a reload). The forced push has
-	// always patched both for the same reason; RSP joins RIP because
-	// delivery is the first redirect that moves the stack too.
+	// Question 1: deliver. ARMED means regs.RIP and regs.RSP now aim at the
+	// stub and its frame, and regs.RFLAGS has DF cleared — mirror ALL THREE
+	// into the isr arrays (regs is the authoritative store; the per-core isr
+	// array is what the ISR exit path actually IRETs from when the same
+	// thread continues without a reload). The forced push has always patched
+	// both images for the same reason; RSP joined RIP because delivery is the
+	// first redirect that moves the stack too, and RFLAGS joined them in rd11
+	// — see the invariant at the mirror itself.
 	signal_deliver_result_t dr = signal_deliver_to_regs(task, thread);
 	if (dr == SIGNAL_DELIVER_ARMED)
 	{

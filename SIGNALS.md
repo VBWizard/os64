@@ -58,10 +58,11 @@ and answers it by dying, **in the victim's own context**, which is what makes
 
 ## The problem (as it stood on 2026-08-23 — the premise the design answers; see STATUS above)
 
-**Ring 3 cannot install a handler.** `signals_t` has a `sighandler[32]` array
-and a `sigaction()` function, but nothing in the syscall table reaches them,
-so every signal's behaviour is the kernel's default and the default for the
-interesting ones is death.
+**Ring 3 could not install a handler** (the state this design set out to
+change; it can since 2026-08-23). `signals_t` had a `sighandler[32]` array
+and a `sigaction()` function, but nothing in the syscall table reached them,
+so every signal's behaviour was the kernel's default and the default for the
+interesting ones was death.
 
 And the array cannot be used as-is. Its own header says so:
 
