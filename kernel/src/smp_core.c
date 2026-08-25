@@ -523,7 +523,9 @@ void ap_initialization_handler() {
 	// tested, is a hole with no local defence — you cannot review your way
 	// out of it, because every individual line still looks correct.
 	//
-	// By that test, four flags earn a bit here (2026-08-24):
+	// By that test, five flags earn a bit here (2026-08-24 — the two
+	// originals plus three; this line said "four" until rd27 miscounted its
+	// own list back at it):
 	//
 	//   IF (9)  — the kernel decides its own preemptibility. Original.
 	//   TF (8)  — single-stepping is not ring 3's to impose on ring 0. Original.
@@ -556,9 +558,15 @@ void ap_initialization_handler() {
 	// get masked here because they are load-bearing, not to be thorough.
 	//
 	// The interrupt and exception gates need the same treatment for DF and no
-	// MSR covers them — they get an explicit `cld` in their entry stubs (one
-	// at exc_common serves all 32 vectors; the device IRQs and IPI vectors
-	// have their own).
+	// MSR covers them — they get an explicit `cld` in their entry stubs: one
+	// at exc_common serves all 32 exception vectors; the device IRQs and the
+	// IPI stubs in handle_mp_isr.S have their own; and — since rd27, a P1 —
+	// so do the two entries the audit MISSED because they are not wired
+	// through handle_mp_isr.S at all: `_schedule_ap` in scheduler.S (both
+	// scheduler vectors point straight at it — the most-taken interrupt entry
+	// in the kernel) and `nmi_handler` in handler_errors.S. The lesson is the
+	// same as rd11's: an audit scoped to one file is not an audit. The IDT
+	// table in idt.c is the list of entries; check THAT, not the directory.
 	//
 	// Found while fixing the narrower ring-3 half of the same disease: a
 	// signal handler entered with DF set (Codex #29 rd10, signals.h

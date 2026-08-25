@@ -28,6 +28,10 @@
 #
 # rax is free: every user of this macro is about to hand its own values to C.
 .macro CLEAR_STALE_FAULT_CAPTURE
+    cld                     # DF clear before any C runs (rd27's IDT audit). These are the
+                            # EXCOLD fallback stubs — opt-in, diagnostic, never resume the
+                            # faulter — but each calls C, and every one of them runs this
+                            # macro first, so this is the one place that covers all eight.
     xor rax, rax
     mov qword ptr [rip + gLastFaultRegs], rax
     mov qword ptr [rip + gLastFaultRbp], rax
@@ -260,6 +264,11 @@ EXC_NOERR 19, simd_fpu_handler                 # #XM
 .global nmi_handler
 nmi_handler:
     NMI_PUSH_REGS
+    cld                     # DF clear before any C runs (Codex #29 rd27). An NMI
+                            # interrupts ANYTHING, ring 3 mid-`std` included, and
+                            # nmi_probe_capture is C with compiler-emitted string
+                            # ops. The user's flags are safe: NMI_PUSH_REGS pushf'd
+                            # them and NMI_POP_REGS popf's them back.
 
     mov rdi, rsp            # nmi_regs_t*  — the 16 qwords just pushed
     lea rsi, [rsp + 128]    # nmi_frame_t* — RIP, CS, RFLAGS, RSP, SS
