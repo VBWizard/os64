@@ -166,8 +166,13 @@ void *signal_set_handler(struct task *t, signals sig, void *handler)
 	// copies the handler into the frame, so the trampoline would call address
 	// 0 and kill the program instead of applying the default action. Holding
 	// the lock keeps the handler stable across every LOCKED delivery (§5/§10,
-	// which read it inside their own signalLock section); the SIGSEGV path
-	// (§9, lock-free by nature) snapshots the pointer once for the same end.
+	// which read it inside their own signalLock section). The SIGSEGV path
+	// (§9) reads the handler BEFORE it takes the lock — it takes signalLock
+	// too, since rd8, but for page lifetime across the frame writes, not for
+	// the handler — so it snapshots the pointer once, up front, for the same
+	// end. (This line said "lock-free by nature" until Codex #29 rd16, which
+	// was true of the pending set and false of the function — the same
+	// half-truth §9's own header had already corrected.)
 	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
 	void *previous = task->sighandler[sig];
 	task->sighandler[sig] = handler;

@@ -206,12 +206,17 @@ typedef struct {
 //    self-contradictory file meant, and guessing quietly in the caller's
 //    favour beats inventing an orphan comment attached to nothing.
 //
-// 3. IT PUBLISHES ATOMICALLY: the new text is written to `<path>.new` and
-//    RENAMED over the target. os64's rename replaces atomically (syscall 43,
-//    ruled 2026-08-16), and write-a-temp-then-publish is the case it exists
-//    for. A crash mid-write leaves the OLD config intact rather than a
-//    truncated one — a config file is exactly the thing you cannot afford to
-//    find half-written after a bad day.
+// 3. IT PUBLISHES ATOMICALLY: the new text is written to a PER-SAVER temp,
+//    `<path>.<taskid>.<seq>.new` (task id + a per-process counter, so two
+//    tasks OR two threads of one task saving the same file never share a
+//    temp — Codex #29 rd7/rd8), committed with os64_sync, and RENAMED over
+//    the target. os64's rename replaces atomically (syscall 43, ruled
+//    2026-08-16), and write-a-temp-then-publish is the case it exists for.
+//    A crash mid-write leaves the OLD config intact rather than a truncated
+//    one — a config file is exactly the thing you cannot afford to find
+//    half-written after a bad day. Anything that cleans up or checks for a
+//    stray temp should match `<base>.*.new`, as conftest does — this
+//    paragraph named a literal `<path>.new` nobody writes until rd16.
 // More settings than this in ONE save is refused (OS64_CONF_TOO_MANY) rather
 // than partly written: the merge tracks which pairs it has placed in a fixed
 // array, and a writer that silently dropped the seventeenth would be the

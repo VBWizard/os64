@@ -83,10 +83,17 @@ typedef void (*os64_signal_fn)(int signo);
 //
 // SIGKILL IS REFUSED, loudly, with OS64_SIG_ERR_UNCATCHABLE. It is the answer
 // to a program that has stopped answering, and a kernel that let a program
-// decline to die would have no last resort. Nothing else is off limits —
-// including SIGSEGV, though a handler for it runs on the stack that just
-// faulted, so if the STACK is what went wrong there is nowhere to put the
-// frame and the thread dies as it always did.
+// decline to die would have no last resort.
+//
+// WHAT YOU CAN CATCH, exactly: SIGHUP, SIGINT, SIGSEGV, SIGPIPE, SIGTERM — the
+// signals this kernel can actually send. SIGSEGV included, though a handler
+// for it runs on the stack that just faulted, so if the STACK is what went
+// wrong there is nowhere to put the frame and the thread dies as it always
+// did. Every other number — the gaps, and the NUMBERED-BUT-NOT-YET-REAL
+// three above (SIGCONT, SIGSTOP, SIGIO) — is refused with
+// OS64_SIG_ERR_BAD_SIGNAL, because a success for a signal nothing can send
+// is a program waiting forever. (This paragraph said "nothing else is off
+// limits" until Codex #29 rd16; the kernel's list is signal_is_known.)
 //
 // Returning the previous handler is deliberate: "install mine, remember
 // theirs" is how a library that must not stomp its host behaves, and it is
