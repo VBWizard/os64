@@ -341,6 +341,23 @@ static void test_refusals(void)
                   "16-bit ppm is UNSUPPORTED, not MALFORMED");
     }
 
+    // ANY maxval UNDER 256 IS ONE BYTE PER SAMPLE, SCALED (Codex #30 rd6).
+    // The decoder refused everything but 255. `P6 1 1 100` with samples
+    // 100,0,0 is a legal pure-red pixel; 50,0,0 is half-red, rounded to
+    // nearest (50*255/100 = 127.5 -> 128); and a sample above maxval is
+    // clamped rather than turned into a refusal of the whole picture.
+    {
+        const char f[] = "P6 3 1 100\n\x64\x00\x00\x32\x00\x00\xff\x00\x00";
+        eq_status(os64_image_decode((const uint8_t *)f, sizeof(f) - 1, &img),
+                  OS64_IMAGE_OK, "ppm with maxval 100 decodes");
+        if (img.pixels) {
+            eq_u32(img.pixels[0], 0xffff0000u, "maxval 100: full sample scales to 255");
+            eq_u32(img.pixels[1], 0xff800000u, "maxval 100: half sample rounds to 128");
+            eq_u32(img.pixels[2], 0xffff0000u, "maxval 100: over-range sample clamps");
+            os64_image_free(&img);
+        }
+    }
+
     // Dimensions past OS64_IMAGE_DIM_MAX must be refused BEFORE any
     // multiplication — this is the hostile-header case.
     {

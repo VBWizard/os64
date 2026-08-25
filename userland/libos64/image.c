@@ -142,12 +142,18 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
         !ppm_read_uint(d, len, &i, &maxval))
         return OS64_IMAGE_MALFORMED;
 
-    // maxval 255 means one byte per sample. A 16-bit PPM (maxval up to
-    // 65535) is a legal file we simply do not decode — UNSUPPORTED, not
-    // MALFORMED, because there is nothing wrong with it.
+    // ANY maxval UNDER 256 IS ONE BYTE PER SAMPLE (Codex #30 rd6) — the
+    // spec's rule, and not the one this decoder used to apply. It refused
+    // everything but 255 as UNSUPPORTED, so `P6 1 1 100` — a legal file
+    // whose samples run 0..100 — was turned away while the comment beside
+    // the check claimed "255 means one byte", which was the wrong half of
+    // the truth. Samples are SCALED to 0..255 below; a maxval of 255 scales
+    // by exactly one. A 16-bit PPM (maxval 256..65535, two bytes a sample)
+    // is a legal file we simply do not decode — UNSUPPORTED, not MALFORMED,
+    // because there is nothing wrong with it.
     if (maxval == 0 || maxval > 65535)
         return OS64_IMAGE_MALFORMED;
-    if (maxval != 255)
+    if (maxval > 255)
         return OS64_IMAGE_UNSUPPORTED;
 
     // Exactly ONE whitespace byte separates the header from the data, by the
@@ -187,9 +193,26 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
     const uint8_t *p = d + i;
     uint32_t *px = out->pixels;
     size_t count = (size_t)w * (size_t)h;
+    if (maxval == 255) {
+        // The overwhelmingly common case, kept as a straight copy.
+        for (size_t n = 0; n < count; n++) {
+            px[n] = 0xff000000u | ((uint32_t)p[0] << 16) |
+                                  ((uint32_t)p[1] << 8)  | (uint32_t)p[2];
+            p += 3;
+        }
+        return OS64_IMAGE_OK;
+    }
+    // Scale 0..maxval onto 0..255, rounding to nearest. A sample ABOVE
+    // maxval is a malformed file by the spec; it is clamped rather than
+    // refused, because by this point the plane is allocated and the rest of
+    // the picture is fine — one hot pixel is not a reason to show nothing.
     for (size_t n = 0; n < count; n++) {
-        px[n] = 0xff000000u | ((uint32_t)p[0] << 16) |
-                              ((uint32_t)p[1] << 8)  | (uint32_t)p[2];
+        uint32_t c[3];
+        for (int k = 0; k < 3; k++) {
+            uint32_t s = p[k] > maxval ? maxval : p[k];
+            c[k] = (s * 255u + maxval / 2u) / maxval;
+        }
+        px[n] = 0xff000000u | (c[0] << 16) | (c[1] << 8) | c[2];
         p += 3;
     }
     return OS64_IMAGE_OK;

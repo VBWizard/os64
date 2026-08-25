@@ -99,6 +99,14 @@ int main(int argc, char **argv)
         if (win_w > max_w) win_w = max_w;
         if (win_h > max_h) win_h = max_h;
     }
+    // AND to the largest window the WM will create (Codex #30 rd6). The
+    // screen cap alone is not enough on a panel wider than that limit: a
+    // 5000-pixel image on an 8K display passed the screen cap and was then
+    // refused at create, and gview reported a window failure for a file it
+    // had decoded perfectly. The picture is still centered and cropped by
+    // the blit, exactly as an image larger than the screen is.
+    if (win_w > OS64_GUI_WINDOW_DIM_MAX) win_w = OS64_GUI_WINDOW_DIM_MAX;
+    if (win_h > OS64_GUI_WINDOW_DIM_MAX) win_h = OS64_GUI_WINDOW_DIM_MAX;
 
     // THE TITLE IS THE BASENAME, BOUNDED (Codex #30 rd4). A title longer than
     // the window's own field is REFUSED, not truncated — deliberately, so a
