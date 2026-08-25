@@ -236,7 +236,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = (cls != NULL) ? cls->task : NULL;
 	bool pivot = (task != NULL && !task->kernelTask &&
-	              content_w >= 8 && content_h >= 8);
+	              content_w >= GUI_MIN_CONTENT && content_h >= GUI_MIN_CONTENT);
 
 	// The extent is sized to the CAPACITY, not to today's window — the
 	// reservation that makes resize free (window.h's canvas_cap_w comment has
