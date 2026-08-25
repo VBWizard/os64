@@ -74,9 +74,16 @@
 // The largest FRAME side create will accept (Codex #30 rd6 — the third
 // unpublished WM rule in three rounds, after the chrome and the minimum;
 // the question the rd4 note asked has its answer: "what else is the window
-// manager keeping to itself?" — this). It is also the memory bound: a
-// window's canvas is reserved at capacity, and capacity is the larger of
-// the screen and this. An app that derives a size from data — a viewer, a
+// manager keeping to itself?" — this). It is also the memory bound, because
+// a window's canvas is reserved at CAPACITY, and the rule is (Codex #30 rd11
+// corrected an earlier wording that had it wrong both ways):
+//
+//     capacity = min(max(screen, content), OS64_GUI_WINDOW_DIM_MAX)
+//
+// — the screen, raised to the content if the window was born larger, and
+// never past this constant. So a small window on an 800x600 screen reserves
+// 800x600 (a resize up to fullscreen costs no allocation), and an 8K screen
+// is capped here, not reserved whole. An app that derives a size from data — a viewer, a
 // 5000-pixel image on an 8K panel — clamps to BOTH this and the screen
 // before asking, or decodes a perfectly good file and is refused at the
 // door. window.c asserts the WM's own constant equals this one.

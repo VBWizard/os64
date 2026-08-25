@@ -476,6 +476,26 @@ static void test_refusals(void)
                   "bmp with an OS/2 core header is UNSUPPORTED, not MALFORMED");
         free(b);
     }
+    // ...even when the WHOLE FILE is shorter than a BITMAPINFOHEADER (Codex
+    // #30 rd11): a 1x1 24-bit core BMP is 30 bytes — 14 + 12 + one padded
+    // row — and the old length check called it MALFORMED before the size
+    // field was ever read. Legal, undecoded, UNSUPPORTED.
+    {
+        uint8_t core[30];
+        memset(core, 0, sizeof(core));
+        core[0] = 'B'; core[1] = 'M';
+        wr32(core + 2, 30); wr32(core + 10, 26); wr32(core + 14, 12);
+        core[18] = 1; core[20] = 1; core[22] = 1; core[24] = 24;   // 1x1, 1 plane, 24bpp
+        eq_status(os64_image_decode(core, sizeof(core), &img), OS64_IMAGE_UNSUPPORTED,
+                  "30-byte OS/2 core bmp is UNSUPPORTED, not MALFORMED");
+    }
+    // ...and a BITMAPINFOHEADER file cut off inside its header is still broken.
+    {
+        uint8_t *b = build_bmp(&len, 24, 0, 0);
+        eq_status(os64_image_decode(b, 40, &img), OS64_IMAGE_MALFORMED,
+                  "bmp truncated inside its 40-byte header is MALFORMED");
+        free(b);
+    }
 
     bmp = build_bmp(&len, 8, 0, 0);
     eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_UNSUPPORTED,
