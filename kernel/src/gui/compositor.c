@@ -800,8 +800,8 @@ static void band_composite(surface_t *backbuffer, rect_t damage)
 	// same chrome inset wm_resize will apply to the frame we commit.
 	char label[24];
 	size_t len = 0;
-	int32_t content_w = s_band_rect.w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = s_band_rect.h - wm_chrome_top(s_band_window->flags) - GUI_BORDER_WIDTH;
+	int32_t content_w = s_band_rect.w - 2 * wm_border_width(s_band_window->flags);
+	int32_t content_h = s_band_rect.h - wm_chrome_top(s_band_window->flags) - wm_border_width(s_band_window->flags);
 	if (content_w < 0) content_w = 0;
 	if (content_h < 0) content_h = 0;
 	len += band_utoa((uint32_t)content_w, label + len);

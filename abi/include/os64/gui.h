@@ -67,6 +67,53 @@
 // than refusing.
 #define OS64_GUI_WINDOW_DESKTOP          (1u << 5)   // born in the bottom band
 
+// ── Chrome, and how to size a window for the picture you want to show ───────
+//
+// os64_gui_window_create takes FRAME dimensions — the outside of the window,
+// chrome included. Your canvas is what is LEFT after the WM takes its border
+// and titlebar, so asking for a 200x150 frame gets you a 198x129 canvas, and
+// a 200x150 image drawn into it loses two columns and twenty-one rows.
+//
+// EVERY APP THAT WANTS A CANVAS OF A GIVEN SIZE HAS HAD TO KNOW THAT, and
+// until 2026-08-25 the ABI never said it out loud: gclock carries a private
+// `TITLEBAR_FRAME_DELTA 19` (which is this titlebar height minus this border
+// width, derived by hand), and gview got it wrong outright — every image it
+// opened was clipped, and anything under 10x29 was refused as a degenerate
+// window. Two apps, two different mistakes, one missing fact. So the fact is
+// published here, and gui_client.c asserts it against the kernel's own
+// numbers so the two rings cannot drift apart in silence — the same handshake
+// the struct layouts already get.
+#define OS64_GUI_BORDER_WIDTH     1
+#define OS64_GUI_TITLEBAR_HEIGHT  20
+
+// The smallest canvas a window may have. Create REFUSES anything smaller
+// rather than rounding it up, so an app that derives its size from data — an
+// image viewer being the obvious one — has to clamp before it asks, or a
+// perfectly good 4x4 picture decodes and then cannot be shown.
+#define OS64_GUI_MIN_CONTENT      8
+
+// The frame to ASK FOR in order to BE GIVEN a canvas of content_w x content_h.
+// Pass the same flags you will create with: an undecorated window still keeps
+// its 1px border, and a DESKTOP window has no chrome at all — its frame IS
+// its canvas (the WM's wm_border_width/wm_chrome_top say the same, and the
+// three cases here mirror those two functions case for case; a fourth kind
+// of window gets added to both or the static asserts in gui_client.c are
+// the only thing standing between it and every app sizing itself wrong).
+static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t content_h,
+                                              uint64_t flags,
+                                              uint32_t *frame_w, uint32_t *frame_h)
+{
+    if (flags & OS64_GUI_WINDOW_DESKTOP) {
+        if (frame_w) *frame_w = content_w;
+        if (frame_h) *frame_h = content_h;
+        return;
+    }
+    uint32_t top = (flags & OS64_GUI_WINDOW_NO_DECORATIONS)
+                       ? OS64_GUI_BORDER_WIDTH : OS64_GUI_TITLEBAR_HEIGHT;
+    if (frame_w) *frame_w = content_w + 2u * OS64_GUI_BORDER_WIDTH;
+    if (frame_h) *frame_h = content_h + top + OS64_GUI_BORDER_WIDTH;
+}
+
 // READ-ONLY state, reported by os64_gui_window_get_state and IGNORED at
 // create — gui_window_create masks the flag word down to the CREATION bits
 // above, so naming these here cannot let an app claim them at birth.

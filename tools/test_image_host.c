@@ -15,10 +15,18 @@
 // pattern looks right upside down.
 //
 // Build & run (one line):
-//   gcc -I userland/libos64/include -I abi/include -masm=intel
+//   gcc -fsanitize=address,undefined
+//       -I userland/libos64/include -I abi/include -masm=intel
 //       userland/libos64/image.c userland/libos64/draw.c
 //       tools/test_image_host.c -o /tmp/os64_image_test
 //   /tmp/os64_image_test
+//
+// RUN IT UNDER THE SANITIZERS. os64 itself cannot use them — a freestanding
+// kernel has no runtime to link — which makes this host harness the only
+// place in the project where they are available at all, so declining them
+// here costs everything. Codex #30 rd3 found a heap-buffer-overflow in THIS
+// FILE's own BMP builder that way: the fixture corrupted its own heap while
+// reporting PASS, and no amount of reading it had caught that.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +40,19 @@
 // libimage allocates through libos64's heap; on the host these are the
 // system's. image.c never calls anything else, which is the whole reason it
 // can be tested here.
-void *os64_malloc(size_t size) { return malloc(size); }
+// Instrumented, because one of these tests is about what was ALLOCATED
+// rather than about what was returned. See the huge-dimension case: before
+// the fix, a hostile header allocated a gigabyte and then returned exactly
+// the same MALFORMED status as after it — so a test that checks the status
+// alone passes against the bug, which is the vacuous assertion this project
+// has been bitten by before (Codex #29 rd9's F24).
+static size_t g_alloc_largest = 0;
+void *os64_malloc(size_t size)
+{
+    if (size > g_alloc_largest)
+        g_alloc_largest = size;
+    return malloc(size);
+}
 void  os64_free(void *ptr)     { free(ptr); }
 
 // ── stubs for the halves these tests deliberately do not reach ──────────────
@@ -154,7 +174,16 @@ static void wr32(uint8_t *d, uint32_t v)
     d[2] = (uint8_t)(v >> 16); d[3] = (uint8_t)(v >> 24);
 }
 
-// bpp: 24 or 32. top_down: store row 0 first and record a negative height.
+// bpp: 24 or 32 write real pixels; ANY OTHER DEPTH writes a header only.
+//
+// That last clause is not decoration (Codex #30 rd3): the refusal tests build
+// an 8-bit BMP to check it is declined as UNSUPPORTED, and the pixel loop
+// below used to write three channel bytes per pixel regardless of depth. At
+// one byte per pixel that overruns every row and eventually the allocation
+// itself — a heap-buffer-overflow inside the fixture, reproducible under
+// AddressSanitizer, in a test that reported PASS. A test that corrupts its
+// own memory is not evidence about anything, and this one was checking a
+// refusal that happens in the HEADER, so it never needed pixels at all.
 static uint8_t *build_bmp(size_t *out_len, unsigned bpp, int top_down,
                           uint32_t compression)
 {
@@ -176,6 +205,13 @@ static uint8_t *build_bmp(size_t *out_len, unsigned bpp, int top_down,
     wr16(f + 28, (uint16_t)bpp);
     wr32(f + 30, compression);
     wr32(f + 34, (uint32_t)pixels);
+
+    // Depths we do not decode get a header and a zeroed raster: the decoder
+    // refuses them on the bpp field, so there is nothing for pixels to prove.
+    if (bytes_pp != 3 && bytes_pp != 4) {
+        *out_len = len;
+        return f;
+    }
 
     for (uint32_t row = 0; row < REF_H; row++) {
         // A bottom-up file stores the picture's LAST row first.
@@ -317,10 +353,112 @@ static void test_refusals(void)
         ok(st == OS64_IMAGE_MALFORMED, "absurd ppm dimensions refused");
     }
 
+    // THE SEPARATOR AFTER maxval MUST BE WHITESPACE (Codex #30 rd1). Stepping
+    // over whatever byte is there accepts this as a 1x1 image with its raster
+    // shifted by one — a malformed header decoding to a subtly wrong picture
+    // instead of a refusal.
+    {
+        const char f[] = "P6 1 1 255X\xaa\xbb\xcc";
+        eq_status(os64_image_decode((const uint8_t *)f, sizeof(f) - 1, &img),
+                  OS64_IMAGE_MALFORMED,
+                  "ppm with a non-whitespace raster separator");
+    }
+    // ...and a legal one still works with each of the SIX whitespace bytes,
+    // so the check above cannot be "reject everything" and pass by accident.
+    // Six, not four (Codex #30 rd5): vertical tab and form feed are Netpbm
+    // whitespace too — libnetpbm reads through isspace() — and the decoder
+    // refused both while calling itself whitespace-separated.
+    {
+        const char *seps = " \t\r\n\v\f";
+        for (int k = 0; k < 6; k++) {
+            char f[16];
+            int n = snprintf(f, sizeof(f), "P6 1 1 255%c", seps[k]);
+            f[n++] = 0x11; f[n++] = 0x22; f[n++] = 0x33;
+            char what[64];
+            snprintf(what, sizeof(what), "ppm accepts separator %d", k);
+            eq_status(os64_image_decode((const uint8_t *)f, (size_t)n, &img),
+                      OS64_IMAGE_OK, what);
+            if (img.pixels) {
+                eq_u32(img.pixels[0], 0xff112233u, "ppm raster is not shifted");
+                os64_image_free(&img);
+            }
+        }
+    }
+
+    // LENGTH BEFORE ALLOCATION (Codex #30 rd1). A tiny file claiming huge
+    // dimensions must be refused WITHOUT ever reserving the plane. The
+    // status is the same either way — MALFORMED before the fix and after —
+    // so this asserts on the ALLOCATION, which is the thing that actually
+    // changed. 16384x16384x4 is a gigabyte; on os64 that is a dedicated
+    // heap mapping reserved and torn down on the say-so of a hostile header,
+    // which is precisely what the documented cap exists to prevent.
+    {
+        const char hdr[] = "P6 16384 16384 255\n";
+        g_alloc_largest = 0;
+        eq_status(os64_image_decode((const uint8_t *)hdr, sizeof(hdr) - 1, &img),
+                  OS64_IMAGE_MALFORMED, "huge-dimension truncated ppm refused");
+        ok(g_alloc_largest < 1024 * 1024,
+           "huge-dimension ppm allocates nothing (refused on length first)");
+    }
+
+    // WHITESPACE AFTER THE MAGIC (Codex #30 rd2 — the unclosed edge of rd1's
+    // separator fix). `P61 1 255` is not a P6 file; reading the '1' of the
+    // magic as a width produced a 1x1 image out of nothing.
+    {
+        const char f[] = "P61 1 255\n\x01\x02\x03";
+        eq_status(os64_image_decode((const uint8_t *)f, sizeof(f) - 1, &img),
+                  OS64_IMAGE_MALFORMED, "ppm with no whitespace after the magic");
+    }
+
+    // A BMP RASTER CANNOT START INSIDE THE HEADERS (Codex #30 rd2). With
+    // data_off 0 the decoder read the file header back as pixel rows and
+    // returned OK with a picture that was never in the file.
+    {
+        uint8_t *b = build_bmp(&len, 24, 0, 0);
+        wr32(b + 10, 0);
+        eq_status(os64_image_decode(b, len, &img), OS64_IMAGE_MALFORMED,
+                  "bmp with data offset inside its own headers");
+        free(b);
+        b = build_bmp(&len, 24, 0, 0);
+        wr32(b + 10, 14 + 39);   // one byte short of the end of the DIB header
+        eq_status(os64_image_decode(b, len, &img), OS64_IMAGE_MALFORMED,
+                  "bmp with data offset one byte inside the DIB header");
+        free(b);
+    }
+
+    // THE DEFAULT CAP MUST ADMIT WHAT ITS COMMENT CLAIMS (Codex #30 rd2). The
+    // old 16MB cap refused a 2048x2048 32-bit BMP by 54 bytes — the exact
+    // image the comment said it held "with room to spare". Pinned here so the
+    // number and the claim cannot drift apart again in silence.
+    {
+        size_t raster_2048 = (size_t)2048 * 2048 * 4;
+        ok(OS64_IMAGE_CAP_DEFAULT >= raster_2048 + 54,
+           "default cap admits a 2048x2048 32-bit BMP including its headers");
+    }
+
     uint8_t *bmp = build_bmp(&len, 24, 0, 1 /* BI_RLE8 */);
     eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_UNSUPPORTED,
               "compressed bmp is UNSUPPORTED");
     free(bmp);
+
+    // A DIB header that runs past the end of the file is a BROKEN FILE, not a
+    // variant we lack (Codex #30 rd4). The two answers mean opposite things:
+    // one says fix your file, the other says wait for us.
+    {
+        uint8_t *b = build_bmp(&len, 24, 0, 0);
+        wr32(b + 14, 108);   // BITMAPV4HEADER — supported size, absent bytes
+        eq_status(os64_image_decode(b, 14 + 60, &img), OS64_IMAGE_MALFORMED,
+                  "bmp whose DIB header runs past the end of the file");
+        free(b);
+    }
+    // ...while a header too small to BE a BITMAPINFOHEADER stays UNSUPPORTED.
+    {
+        uint8_t *b = build_bmp(&len, 24, 0, 0);
+        wr32(b + 14, 12);    // the OS/2 core header
+        eq_status(os64_image_decode(b, len, &img), OS64_IMAGE_UNSUPPORTED,
+                  "bmp with an OS/2 core header is UNSUPPORTED, not MALFORMED");
+        free(b);
+    }
 
     bmp = build_bmp(&len, 8, 0, 0);
     eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_UNSUPPORTED,
@@ -377,6 +515,17 @@ static void test_blit(void)
     eq_u32(dst_at(6, 1), 0xff111111u, "blit: does not paint right of itself");
     // The pixel one row below the source's last, which pitch confusion hits.
     eq_u32(dst_at(2, 4), 0xff111111u, "blit: does not paint below itself");
+
+    // OFF-CANVAS AT THE EDGE OF int32_t (Codex #30 rd5): the contract says an
+    // off-canvas blit is a no-op, and "off-canvas" includes x == INT32_MAX,
+    // where `x + w` overflowed inside os64_rect_intersect — undefined
+    // behaviour, flagged by the sanitizer build this file documents, before
+    // the promised no-op could happen. Widened edge sums now; this pins it.
+    d = make_dst();
+    os64_draw_blit(&d, INT32_MAX, INT32_MAX, src, 4, 3, 4);
+    os64_draw_blit(&d, INT32_MIN, INT32_MIN, src, 4, 3, 4);
+    os64_draw_fill_rect(&d, (os64_gui_rect_t){INT32_MAX, 0, 1, 1}, 0xff000000u);
+    eq_u32(dst_at(0, 0), 0xff111111u, "blit at INT32_MAX/INT32_MIN is a no-op, not UB");
 
     // NEGATIVE ORIGIN: clips the source's left and top, does not shift it.
     // This is the case "center an image bigger than the window" depends on.

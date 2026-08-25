@@ -68,11 +68,24 @@ static os64_image_status_t alloc_pixels(uint32_t w, uint32_t h,
 // triples. Jef Poskanzer's 1988 format, and still the easiest way to get a
 // picture out of a program that has no libraries.
 
+// WHAT COUNTS AS WHITESPACE, ANSWERED ONCE (Codex #30 rd5). Three sites
+// used to spell it by hand as the four bytes everybody remembers — space,
+// tab, CR, LF — and all three forgot the two nobody does: vertical tab and
+// form feed. Netpbm's own reader (libnetpbm's pm_getc/pm_getuint) accepts
+// them via isspace(), so a file that separates its header with '\f' is a
+// legal picture that os64 was refusing while claiming to parse "whitespace-
+// separated" input. One predicate, so the next reviewer who finds a seventh
+// byte fixes it in one place rather than in the two they happened to spot.
+static bool ppm_is_ws(uint8_t c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' ||
+           c == '\v' || c == '\f';
+}
+
 static bool ppm_skip_ws(const uint8_t *d, size_t len, size_t *i)
 {
     for (;;) {
-        while (*i < len && (d[*i] == ' ' || d[*i] == '\t' ||
-                            d[*i] == '\r' || d[*i] == '\n'))
+        while (*i < len && ppm_is_ws(d[*i]))
             (*i)++;
         // A '#' runs to end of line and may appear anywhere whitespace may —
         // including between the width and the height, which is why this is a
@@ -114,6 +127,16 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
     size_t i = 2;   // past "P6"
     uint32_t w, h, maxval;
 
+    // WHITESPACE MUST FOLLOW THE MAGIC (Codex #30 rd2) — the unclosed edge of
+    // rd1's separator fix, found in the same file one round later. Parsing
+    // began at byte 2 and ppm_read_uint never required that it skipped
+    // anything, so `P61 1 255\n...` read the '1' of "P61" as the width and
+    // decoded a 1x1 image out of a magic number that is not P6 at all. The
+    // format is whitespace-separated from end to end; every place that is
+    // true has to ask, not just the one a review pointed at.
+    if (i >= len || !ppm_is_ws(d[i]))
+        return OS64_IMAGE_MALFORMED;
+
     if (!ppm_read_uint(d, len, &i, &w) ||
         !ppm_read_uint(d, len, &i, &h) ||
         !ppm_read_uint(d, len, &i, &maxval))
@@ -130,19 +153,36 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
     // Exactly ONE whitespace byte separates the header from the data, by the
     // spec — and it matters, because the first pixel byte may itself be a
     // space or a newline and skipping "whitespace" here would eat it.
-    if (i >= len)
+    //
+    // CHECK IT, do not merely step over it (Codex #30 rd1): stepping over
+    // whatever happens to be there accepts `P6 1 1 255X...` as an image and
+    // shifts the whole raster by a byte — a malformed header decoding to a
+    // picture that is subtly wrong rather than to a refusal. The comment
+    // above already said the separator was whitespace; the code had not been
+    // asking.
+    if (i >= len || !ppm_is_ws(d[i]))
         return OS64_IMAGE_MALFORMED;
     i++;
 
+    // LENGTH BEFORE ALLOCATION (Codex #30 rd1). A twenty-byte file whose
+    // header claims 16384x16384 would otherwise allocate a 1 GiB pixel plane
+    // and only then discover it is truncated — which defeats the whole point
+    // of the cap, since the memory a hostile file costs us is decided by its
+    // HEADER rather than its size. The BMP path already checked first; this
+    // one did not, so the guard existed on one door of two.
+    // Dimensions first, so the multiplication below is bounded BEFORE it is
+    // performed rather than justified afterwards. (alloc_pixels checks these
+    // too; that is its job, not a reason for this arithmetic to run on
+    // numbers nobody has looked at.)
+    if (w == 0 || h == 0 || w > OS64_IMAGE_DIM_MAX || h > OS64_IMAGE_DIM_MAX)
+        return OS64_IMAGE_MALFORMED;
+    size_t need = (size_t)w * (size_t)h * 3u;
+    if (len - i < need)
+        return OS64_IMAGE_MALFORMED;            // the header promised more than
+                                                // the file contains
     os64_image_status_t st = alloc_pixels(w, h, out);
     if (st != OS64_IMAGE_OK)
         return st;
-
-    size_t need = (size_t)w * (size_t)h * 3u;
-    if (len - i < need) {
-        os64_image_free(out);
-        return OS64_IMAGE_MALFORMED;   // truncated: the header promised more
-    }                                  // than the file contains
 
     const uint8_t *p = d + i;
     uint32_t *px = out->pixels;
@@ -184,8 +224,18 @@ static os64_image_status_t decode_bmp(const uint8_t *d, size_t len,
 
     uint32_t data_off = rd32(d + 10);
     uint32_t dib_size = rd32(d + 14);
-    if (dib_size < BMP_INFO_MIN || dib_size > len - BMP_FILE_HEADER)
-        return OS64_IMAGE_UNSUPPORTED;   // OS/2 core header, or a lie
+    // TWO DIFFERENT COMPLAINTS, AND THEY HAD BEEN SHARING AN ANSWER (Codex
+    // #30 rd4). A DIB header SMALLER than BITMAPINFOHEADER is a variant we do
+    // not decode — the OS/2 core header — and that is UNSUPPORTED. A header
+    // whose declared size runs past the end of the file is a BROKEN FILE, and
+    // this header's own contract says that is MALFORMED. Answering
+    // UNSUPPORTED for the second told the user their perfectly ordinary
+    // 40-byte BITMAPINFOHEADER was a format we lack support for, when what we
+    // actually lacked was the rest of their file.
+    if (dib_size < BMP_INFO_MIN)
+        return OS64_IMAGE_UNSUPPORTED;
+    if (dib_size > len - BMP_FILE_HEADER)
+        return OS64_IMAGE_MALFORMED;
 
     int32_t  bw     = (int32_t)rd32(d + 18);
     int32_t  bh     = (int32_t)rd32(d + 22);
@@ -223,7 +273,12 @@ static os64_image_status_t decode_bmp(const uint8_t *d, size_t len,
     uint32_t bytes_pp = bpp / 8u;
     size_t   stride   = (((size_t)w * bytes_pp) + 3u) & ~(size_t)3u;
 
-    if (data_off > len)
+    // The raster cannot begin INSIDE the headers (Codex #30 rd2). Only the
+    // upper bound was checked, so a file claiming data_off 0 passed and the
+    // decoder read its own file header back as pixel rows — returning OK
+    // with a picture that was never in the file. A bound is two-sided or it
+    // is half a bound.
+    if (data_off < BMP_FILE_HEADER + dib_size || data_off > len)
         return OS64_IMAGE_MALFORMED;
     size_t avail = len - data_off;
     if (stride != 0 && h > avail / stride)
@@ -295,11 +350,15 @@ os64_image_status_t os64_image_load(const char *path, size_t cap,
 
     uint8_t *buf = NULL;
     size_t   len = 0;
-    // ONE whole-file reader for the whole tree (os64/slurp.h). The four edge
-    // distinctions it makes — whole vs truncated, at-cap vs past-cap, EOF vs
-    // error, short-read vs done — are exactly the four this decoder would
-    // otherwise have had to re-derive, becoming the fifth hand-written copy
-    // of a loop the conf arc already got wrong three times.
+    // The tree's SHARED whole-file reader (os64/slurp.h) — shared, not yet
+    // sole, and the difference is worth stating plainly (Codex #30 rd1).
+    // Four hand-written capped loops still stand as this is committed:
+    // kernel/src/conf.c, kernel/src/gui/desktop.c, and both read paths in
+    // libos64/conf.c. This decoder declines to be the fifth. Their adoption
+    // is the DEBTS row's remaining payment, and desktop.c's copy dies with
+    // the desktop shell; anyone fixing a whole-file-read bug still has to
+    // visit all of them until then, which is exactly the cost the row is
+    // about.
     os64_slurp_status_t sst = os64_slurp(path, cap, &buf, &len);
     switch (sst) {
         case OS64_SLURP_OK:        break;

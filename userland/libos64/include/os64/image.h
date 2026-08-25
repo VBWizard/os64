@@ -4,11 +4,18 @@
 // os64/image.h — libimage: FILE BYTES IN, PIXELS OUT. Nothing else.
 //
 // WHERE THIS LIVES AND WHY. Decoding an image is parsing an untrusted file,
-// and that is the last work that belongs behind the ring boundary. os64's
-// only decoder used to be a PPM parser inside kernel/src/gui/desktop.c —
-// ring-0 code reading a file any user could write. It moved out here with
-// the desktop shell (Chris's ruling, 2026-08-25: "graphics decoders don't
-// belong in the kernel").
+// and that is the last work that belongs behind the ring boundary. Chris's
+// ruling, 2026-08-25: "graphics decoders don't belong in the kernel".
+//
+// THE MIGRATION IS NOT FINISHED YET, AND SAYING OTHERWISE WOULD HIDE THE
+// PART THAT MATTERS (Codex #30 rd1, citing the comment rule — correctly).
+// As this file is committed, `kernel/src/gui/desktop.c` STILL decodes the
+// configured wallpaper in ring 0, and the compositor still calls it: a
+// user-writable file is still parsed behind the ring boundary today. This
+// library is the replacement, and gview(1) is the only thing using it so
+// far. The kernel's copy is deleted in the NEXT slice of this arc, when the
+// desktop shell moves to ring 3 and takes the wallpaper with it — deleted
+// rather than moved twice, which is why it is still standing here.
 //
 // THE LAYERING, which is deliberate and worth keeping: a decoder produces
 // PIXELS. It knows nothing about windows, surfaces, or the compositor —
@@ -70,10 +77,18 @@ typedef struct os64_image {
 } os64_image_t;
 
 // The largest file os64_image_load will read when the caller passes cap 0.
-// 16MB holds a 2048x2048 32-bit BMP with room to spare; anything larger is
-// almost certainly a mistake, and a cap is how a decoder declines to be a
-// denial-of-service surface for a file it was handed.
-#define OS64_IMAGE_CAP_DEFAULT (16u * 1024u * 1024u)
+// A cap is how a decoder declines to be a denial-of-service surface for a
+// file it was handed; anything larger than this is almost certainly a
+// mistake.
+//
+// 20MB, AND THE ARITHMETIC IS THE POINT (Codex #30 rd2 caught the old
+// number). A 2048x2048 32-bit BMP is 16,777,216 bytes of raster PLUS 54
+// bytes of header — so the previous 16MB cap refused, by 54 bytes, the exact
+// image the comment beside it claimed was admitted "with room to spare". A
+// cap stated in round binary numbers and a size stated in pixels do not
+// compare themselves; someone has to multiply. The slack here is deliberate
+// and covers format overhead for every variant we decode.
+#define OS64_IMAGE_CAP_DEFAULT (20u * 1024u * 1024u)
 
 // No image is allowed to claim more than this in either axis. The bound
 // exists so the width*height arithmetic below cannot be walked into an

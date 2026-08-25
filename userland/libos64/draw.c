@@ -41,13 +41,24 @@ os64_gui_rect_t os64_rect_union(os64_gui_rect_t a, os64_gui_rect_t b)
 bool os64_rect_intersect(os64_gui_rect_t a, os64_gui_rect_t b,
                          os64_gui_rect_t *out)
 {
-    int32_t x1 = a.x > b.x ? a.x : b.x;
-    int32_t y1 = a.y > b.y ? a.y : b.y;
-    int32_t x2 = (a.x + a.w) < (b.x + b.w) ? (a.x + a.w) : (b.x + b.w);
-    int32_t y2 = (a.y + a.h) < (b.y + b.h) ? (a.y + a.h) : (b.y + b.h);
+    // THE EDGE SUMS ARE WIDENED (Codex #30 rd5). A rect is allowed to sit
+    // anywhere — the blit contract says an off-canvas placement is a no-op,
+    // and "anywhere" includes x == INT32_MAX with w == 1, where `x + w` in
+    // int32_t is signed overflow: undefined, and the sanitizer run this
+    // file's tests are documented to use flags it. Every primitive above
+    // clips through this one function, so widening here keeps the promise
+    // for all of them at once. The RESULT still fits int32_t: it lies
+    // inside `b`, which is a real surface's bounds.
+    int64_t x1 = a.x > b.x ? a.x : b.x;
+    int64_t y1 = a.y > b.y ? a.y : b.y;
+    int64_t ax2 = (int64_t)a.x + a.w, bx2 = (int64_t)b.x + b.w;
+    int64_t ay2 = (int64_t)a.y + a.h, by2 = (int64_t)b.y + b.h;
+    int64_t x2 = ax2 < bx2 ? ax2 : bx2;
+    int64_t y2 = ay2 < by2 ? ay2 : by2;
     if (x2 <= x1 || y2 <= y1)
         return false;
-    *out = (os64_gui_rect_t){x1, y1, x2 - x1, y2 - y1};
+    *out = (os64_gui_rect_t){(int32_t)x1, (int32_t)y1,
+                             (int32_t)(x2 - x1), (int32_t)(y2 - y1)};
     return true;
 }
 

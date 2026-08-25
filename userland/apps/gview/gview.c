@@ -71,10 +71,28 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Size the window to the picture, capped to the screen. screen_info
-    // failing is not fatal — an unknown screen just means no cap.
+    // Size the window so the CANVAS is the picture — which is not the same as
+    // asking for a frame the size of the picture (Codex #30 rd3). create()
+    // takes the frame, the WM keeps its border and titlebar out of the
+    // middle, and asking for exactly img.width x img.height quietly cost two
+    // columns and twenty-one rows of every image gview ever opened. Anything
+    // under 10x29 was refused outright as a degenerate window.
+    // And clamped UP to the smallest canvas a window may have (Codex #30
+    // rd4): create refuses content under OS64_GUI_MIN_CONTENT rather than
+    // rounding it, so a legal 4x4 picture decoded fine and then could not be
+    // shown at all. The image is still centered in whatever canvas we get, so
+    // a clamped window simply has a mat around a very small picture — which
+    // is what any viewer does with one.
+    uint32_t content_w = img.width  < OS64_GUI_MIN_CONTENT ? OS64_GUI_MIN_CONTENT : img.width;
+    uint32_t content_h = img.height < OS64_GUI_MIN_CONTENT ? OS64_GUI_MIN_CONTENT : img.height;
+
+    uint32_t win_w, win_h;
+    os64_gui_frame_for_content(content_w, content_h, 0, &win_w, &win_h);
+
+    // Capped to the screen. screen_info failing is not fatal — an unknown
+    // screen just means no cap. The cap applies to the FRAME, since that is
+    // what has to fit on the glass.
     uint32_t sw = 0, sh = 0;
-    uint32_t win_w = img.width, win_h = img.height;
     if (os64_gui_screen_info(&sw, &sh) == 0 && sw > 0 && sh > 0) {
         uint32_t max_w = (sw > GVIEW_SCREEN_MARGIN) ? sw - GVIEW_SCREEN_MARGIN : sw;
         uint32_t max_h = (sh > GVIEW_SCREEN_MARGIN) ? sh - GVIEW_SCREEN_MARGIN : sh;
@@ -82,10 +100,29 @@ int main(int argc, char **argv)
         if (win_h > max_h) win_h = max_h;
     }
 
-    int64_t win = os64_gui_window_create(path, 64, 64, win_w, win_h, 0);
+    // THE TITLE IS THE BASENAME, BOUNDED (Codex #30 rd4). A title longer than
+    // the window's own field is REFUSED, not truncated — deliberately, so a
+    // silently shortened name cannot "succeed" — which meant gview decoded
+    // any file at a path of 32 bytes or more and then failed to open a window
+    // for it. The whole path was never the right title anyway: a titlebar
+    // has room for a name, and the name is the last component.
+    const char *base = path;
+    for (const char *p = path; *p != '\0'; p++)
+        if (*p == '/')
+            base = p + 1;
+    char title[OS64_GUI_TITLE_MAX];
+    os64_strcopy(title, sizeof(title), base);   // strlcpy semantics: always terminated
+
+    int64_t win = os64_gui_window_create(title, 64, 64, win_w, win_h, 0);
     if (win <= 0) {
-        os64_hprintf(OS64_STDERR, "gview: no GUI here (window_create %ld)\n",
-                     (long)win);
+        // "No GUI here" is true for exactly ONE of these answers, and saying
+        // it for all of them sent the last reader looking for a missing
+        // compositor when the real complaint was about arguments.
+        if (win == OS64_GUI_ERR_NOT_RUNNING)
+            os64_hprintf(OS64_STDERR, "gview: no GUI on this boot\n");
+        else
+            os64_hprintf(OS64_STDERR, "gview: could not create a window for %s (%ld)\n",
+                         path, (long)win);
         os64_image_free(&img);
         return 1;
     }
