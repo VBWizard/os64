@@ -95,7 +95,12 @@ void handle_close_all(struct task *t);
 // Also frees the file's f_path — for HANDLE_FILE objects that is ALWAYS the
 // kmalloc'd copy syscall_open made (see the lifetime note there).
 // Exposed so syscall_open can unwind a file it opened but couldn't table.
-void handle_file_object_close(void *vfs_file);
+// Close a HANDLE_FILE object. Returns 0 on success — including "somebody else
+// still holds it" and "no close op" — or the filesystem's negative status when
+// the close FAILED TO FLUSH. A failure is also logged loudly at the source
+// (rd14), because most callers have nowhere to report to and silence there was
+// the original defect: on FAT the commit happens inside close.
+int handle_file_object_close(void *vfs_file);
 
 // The directory sibling: closes a HANDLE_DIR's vfs_directory_t from any
 // context (same CR3-check discipline as files) and frees its f_path copy.

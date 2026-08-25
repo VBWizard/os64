@@ -94,25 +94,40 @@ handle_t *handle_get(struct task *t, int h)
 // Trampoline body for handle_file_object_close: runs under kKernelPML4 on the
 // core's kernel interrupt stack. The vfs_file_t is kmalloc'd (HHDM-reachable),
 // so passing it straight through as the arg is fine.
+// The filesystem's answer has to come BACK (Codex #29 rd14). This used to be
+// `file->fops->close(file);` with the result dropped on the floor — and the
+// whole chain below it was built to carry that result: fops->close returns
+// int, and fat_close ALREADY computes it (f_close != FR_OK -> -1). One
+// discarded return value was the entire defect.
+//
+// A params block rather than the bare pointer, because the trampoline hands
+// back nothing: kmalloc'd, per the house rule that anything
+// call_in_kernel_context touches must be HHDM-reachable and never on the
+// caller's task-local stack.
+typedef struct {
+	vfs_file_t *file;
+	volatile int result;
+} file_close_params_t;
+
 static void file_close_in_kernel(void *arg)
 {
-	vfs_file_t *file = (vfs_file_t *)arg;
-	file->fops->close(file);
+	file_close_params_t *p = (file_close_params_t *)arg;
+	p->result = p->file->fops->close(p->file);
 }
 
-void handle_file_object_close(void *vfs_file)
+int handle_file_object_close(void *vfs_file)
 {
 	vfs_file_t *file = (vfs_file_t *)vfs_file;
 
 	if (file == NULL || file->fops == NULL || file->fops->close == NULL)
-		return;
+		return 0;   // nothing to close is not a failure to close
 
 	// Drop THIS handle's reference. Spawn redirection shares one open file
 	// between parent and child (see handleRefCount in vfs.h) — same rule as
 	// pipe ends: only the LAST holder's close actually closes. Atomic because
 	// parent and child can close concurrently on different cores.
 	if (__sync_sub_and_fetch(&file->handleRefCount, 1) > 0)
-		return;
+		return 0;   // somebody else still holds it; nothing was flushed here
 
 	// Harvest f_path BEFORE closing — the VFS close frees the file object, and
 	// for a HANDLE_FILE, f_path is always the kmalloc'd copy syscall_open made
@@ -126,15 +141,54 @@ void handle_file_object_close(void *vfs_file)
 	// stack's TOP, so calling it while ALREADY on that stack (task-exit cleanup
 	// closing a dead task's handles) would overwrite our own live frames.
 	// CR3 tells us which world we're in.
+	// Harvest the NAME too, for the tripwire below — after the close it is
+	// freed, and "a file failed to flush" without saying which file is a
+	// diagnostic nobody can act on.
 	uint64_t cr3;
 	__asm__ volatile("mov %0, cr3" : "=r"(cr3));
+	int rc;
 	if (cr3 == (uint64_t)kKernelPML4)
-		file->fops->close(file);
+	{
+		rc = file->fops->close(file);
+	}
 	else
-		call_in_kernel_context(file_close_in_kernel, file);
+	{
+		file_close_params_t *p = kmalloc(sizeof(*p));
+		if (p == NULL)
+			return -1;      // cannot even ask; do not claim it flushed
+		p->file = file;
+		p->result = -1;
+		call_in_kernel_context(file_close_in_kernel, p);
+		rc = (int)p->result;
+		kfree(p);
+	}
+
+	// LOUD, because until rd14 this was silent and silence is the actual bug.
+	// A close is where FAT commits — FatFs flushes data and metadata inside
+	// f_close — so a failure here means bytes a program was told it had
+	// written are NOT on the disk. Every caller learns something from the log
+	// even when it has nowhere to return an error to, and the burial closer in
+	// task.c is exactly such a caller: a dying task's last write failing is
+	// worth knowing about and there is no one left to tell but the log.
+	//
+	// (ext2 makes this a formality — writes are full write-through, so there
+	// is nothing left to fail at close. FAT is why the line exists, and the
+	// lifeboat is FAT.)
+	// DEBUG_EXCEPTIONS, and the choice is load-bearing rather than lazy:
+	// printd requires ALL the bits it is given ((kDebugLevel & level) !=
+	// level), and DEBUG_VFS is not in DEBUG_MINIMAL_OPTIONS — so tagging this
+	// "DEBUG_VFS | something" would make the tripwire invisible on a default
+	// boot, which is a check that cannot fire dressed up as one that can.
+	// DEBUG_EXCEPTIONS is always on and means exactly what this is: something
+	// went wrong that nobody asked to hear about.
+	if (rc != 0)
+		printd(DEBUG_EXCEPTIONS,
+		       "handle_file_object_close: FLUSH FAILED (%d) closing '%s' — data written to this file may not be on disk\n",
+		       rc, path_copy ? path_copy : "<unnamed>");
 
 	if (path_copy != NULL)
 		kfree(path_copy);
+	return rc;
 }
 
 // Directory sibling of the file pair above — same kernel-context discipline

@@ -364,12 +364,20 @@ static int fat_close(vfs_file_t* vfs_file) {
 	// never find a file whose FIL is about to be freed.
 	vfs_openfile_unregister(vfs_file);
 
-    if (f_close(fat_file) != FR_OK) {
-        return -1; // Error
-    }
-    kfree(vfs_file); // Free the VFS file object
+	// FREE ON BOTH PATHS. This used to `return -1` before the two kfrees, so a
+	// failing close leaked the vfs_file_t AND the FIL — and nothing upstream
+	// could clean up after it, because until rd14 nothing upstream even knew
+	// the close had failed. Found while making that failure reportable.
+	//
+	// Freeing after a FAILED f_close is correct, not optimistic: FatFs does
+	// not touch a FIL again once f_close has returned either way, and the
+	// handle layer has already dropped its reference, so the alternative to
+	// freeing is leaking forever. What the caller loses is the DATA, not the
+	// bookkeeping — and it is now told so, loudly (handle.c).
+	FRESULT fr = f_close(fat_file);
+	kfree(vfs_file); // Free the VFS file object
 	kfree(fat_file);
-    return 0; // Success
+	return (fr == FR_OK) ? 0 : -1;
 }
 
 static int fat_seek(vfs_file_t* vfs_file, long offset, int whence) {
