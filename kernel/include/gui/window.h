@@ -374,9 +374,21 @@ static inline rect_t wm_content_rect_on_screen(const window_t *w)
 // grab-handle for dragging and NOT part of the client content. An
 // undecorated window has none; its top border is content-adjacent chrome
 // like the other three sides, and a click there is the window system's.
+// Does this window HAVE a titlebar? Asked of wm_chrome_top rather than of the
+// NO_DECORATIONS bit (Codex #31 rd3): a DESKTOP window has no chrome whatever
+// its decoration bit says, and the two sites that tested the bit by hand —
+// this hit-test and composite_one's titlebar paint — disagreed with the
+// chrome functions for a desktop created WITHOUT NO_DECORATIONS: an
+// invisible 20px titlebar across the top of the wallpaper that swallowed
+// clicks and dragged the desktop. One question, one answerer.
+static inline bool wm_has_titlebar(uint32_t flags)
+{
+    return wm_chrome_top(flags) == GUI_TITLEBAR_HEIGHT;
+}
+
 static inline bool wm_point_in_titlebar(const window_t *w, int32_t x, int32_t y)
 {
-    if (w->flags & GUI_WINDOW_NO_DECORATIONS)
+    if (!wm_has_titlebar(w->flags))
         return false;
     return rect_contains_point(
         (rect_t){w->frame.x, w->frame.y, w->frame.w, GUI_TITLEBAR_HEIGHT}, x, y);

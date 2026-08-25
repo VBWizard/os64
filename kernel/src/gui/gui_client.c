@@ -426,6 +426,7 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	out->flags  = win->flags & (GUI_WINDOW_NO_DECORATIONS |
 	                            GUI_WINDOW_START_UNFOCUSED |
 	                            GUI_WINDOW_PINNED |
+	                            GUI_WINDOW_DESKTOP |   // the band is state too (Codex #31 rd3): without it a saved-and-recreated desktop came back an ordinary window
 	                            GUI_WINDOW_MAXIMIZED |
 	                            GUI_WINDOW_MINIMIZED);
 	spinlock_release_irqrestore(&kGuiLock, irqflags);

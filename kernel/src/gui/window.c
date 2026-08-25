@@ -646,7 +646,7 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 	// Titlebar with centered-ish title text (8px/glyph, 16px tall font) —
 	// unless the window declined one, in which case the border IS the chrome
 	// and focus shows only in the border's color.
-	if (!(w->flags & GUI_WINDOW_NO_DECORATIONS)) {
+	if (wm_has_titlebar(w->flags)) {   // not the bit: a desktop has none regardless (window.h)
 		rect_t bar = {f.x + GUI_BORDER_WIDTH, f.y + GUI_BORDER_WIDTH,
 		              f.w - 2 * GUI_BORDER_WIDTH, GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH};
 		uint32_t bar_color = focused ? WINDOW_TITLEBAR_FOCUSED : WINDOW_TITLEBAR_UNFOCUSED;

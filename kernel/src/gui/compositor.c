@@ -644,7 +644,8 @@ static void alttab_snapshot_locked(void)
 
 static void alttab_step_locked(bool backwards)
 {
-	if (!s_alttab_active) {
+	bool first = !s_alttab_active;
+	if (first) {
 		alttab_snapshot_locked();
 		s_alttab_step = 0;
 		s_alttab_active = true;
@@ -655,10 +656,24 @@ static void alttab_step_locked(bool backwards)
 	}
 	if (s_alttab_count < 2)
 		return;   // nothing to cycle between; the hold still starts, harmlessly
+
+	// THE FIRST STEP FROM THE WALLPAPER LANDS ON THE MOST RECENT APP (Codex
+	// #31 rd3). The ring never lists the desktop, so when the desktop holds
+	// focus the focused window is absent from the snapshot and entry 0 is
+	// not "where you already are" — it is the app you most recently used.
+	// Advancing past it, as every other first step does, skipped that app
+	// and offered the second one. When the focus is not in the ring, the
+	// first step stays on 0.
+	if (first) {
+		window_t *focus = wm_focused();
+		if (focus == NULL || s_alttab_ring[0] != focus->id)
+			goto chosen;
+	}
 	s_alttab_step = backwards
 		? (s_alttab_step + s_alttab_count - 1) % s_alttab_count
 		: (s_alttab_step + 1) % s_alttab_count;
 
+chosen:
 	// A STEP MOVES THE HIGHLIGHT AND NOTHING ELSE. No raise, no restore, no
 	// focus change, no recency stamp — the z-order the user had is the
 	// z-order they keep until they let go, and exactly one window changes at
