@@ -243,6 +243,20 @@ hobby-scale judgment calls — re-rank freely.
 
 ## Explicitly NOT debts (recorded so they aren't re-litigated)
 
+- **libimage: the BMP `bfSize` field is not validated.** Raised as a P2 in PR
+  #30's round 7 (a file whose declared length ends before its raster still
+  decodes) and DECLINED 2026-08-25. `bfSize` is the least reliable number in
+  the format — real writers put 0 there, or a stale size from an earlier save
+  — and the decoders that survive contact with the wild (stb_image, Windows'
+  own loader) ignore it, because refusing on it rejects legal-in-practice
+  files to protect nothing. The guard that matters is the ACTUAL buffer
+  length: `decode_bmp` checks `data_off` against it and the row count
+  against it by division before allocating, so no byte past the supplied
+  data is ever read. The doctrine "a header that disagrees with the file is
+  refused" applies to the fields a decode DEPENDS on; a field the decoder
+  never uses cannot disagree with anything. Revisit only if a consumer ever
+  needs the declared length for something (multi-image containers, say).
+
 - **husk: an EMPTY expansion leaving an adjacent typed `>` as an operator.**
   Raised as a P1 in PR #28's round 6 (`echo safe $1> output` with `$1` empty
   redirects instead of printing) and DECLINED 2026-08-23 — the first Codex

@@ -228,6 +228,18 @@ static os64_image_status_t decode_ppm(const uint8_t *d, size_t len,
 // rows are padded to a 4-BYTE BOUNDARY, and a POSITIVE height means the
 // image is stored BOTTOM-UP (row 0 of the file is the bottom row of the
 // picture). A negative height means top-down. Both appear in the wild.
+//
+// AND ONE FIELD IGNORED ON PURPOSE: bfSize (bytes 2..5), the file's own
+// declared length. It is the least reliable number in the format — real
+// writers put 0 there, or the size of some earlier save — and every decoder
+// that has survived the wild (stb_image, Windows' own loader) reads past it
+// without a glance. Refusing on it would turn away legal-in-practice files
+// to protect nothing: the guard against reading beyond the data is the
+// ACTUAL buffer length, checked by division below before a byte of the
+// raster is touched. So "a header that disagrees with the file is refused"
+// (the doctrine at the top of this file) means the dimensions and offsets
+// the decode DEPENDS on, not a field it never uses. Declined as Codex #30
+// rd7; DEBTS.md's NOT-debts list carries the ruling.
 
 static uint16_t rd16(const uint8_t *d) { return (uint16_t)(d[0] | (d[1] << 8)); }
 static uint32_t rd32(const uint8_t *d)
