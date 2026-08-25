@@ -1,0 +1,434 @@
+// test_image_host.c — HOST-side unit test for libimage and libdraw's blit.
+//
+// Both are pure computation over buffers — no syscalls, no windows — which
+// is exactly why image.c was split into a `load` half (file I/O) and a
+// `decode` half (bytes in, pixels out). The decode half compiles with plain
+// host gcc and can be checked the strongest possible way: EXACT PIXEL VALUES
+// at known positions, on hand-built files whose every byte is written here.
+//
+// THE CENTRAL TEST IS THE CROSS-CHECK. The same picture is built as a PPM
+// and as three different BMP variants, and all four must decode to
+// byte-identical pixels. Two independently written decoders agreeing on one
+// image catches the entire classic family at once — red/blue swapped,
+// bottom-up rows drawn upside down, row padding miscounted — none of which a
+// "does it look right?" glance reliably catches, because a symmetric test
+// pattern looks right upside down.
+//
+// Build & run (one line):
+//   gcc -I userland/libos64/include -I abi/include -masm=intel
+//       userland/libos64/image.c userland/libos64/draw.c
+//       tools/test_image_host.c -o /tmp/os64_image_test
+//   /tmp/os64_image_test
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include "os64/image.h"
+#include "os64/draw.h"
+#include "os64/slurp.h"
+#include "os64/proc.h"
+
+// libimage allocates through libos64's heap; on the host these are the
+// system's. image.c never calls anything else, which is the whole reason it
+// can be tested here.
+void *os64_malloc(size_t size) { return malloc(size); }
+void  os64_free(void *ptr)     { free(ptr); }
+
+// ── stubs for the halves these tests deliberately do not reach ──────────────
+//
+// image.c's LOAD half and draw.c's text and frame-clock helpers call into the
+// rest of libos64, which means syscalls. None of them is exercised here: the
+// point of splitting decode from load is that the decoder is pure, and the
+// file-reading half is proven in QEMU where there is a real filesystem to
+// fail against. These exist so the linker is satisfied; if a test ever
+// reaches one, it aborts rather than quietly returning a plausible zero.
+static void host_stub(const char *name)
+{
+    printf("  FAIL: host test called %s, which is not testable here\n", name);
+    exit(2);
+}
+os64_slurp_status_t os64_slurp(const char *path, size_t cap,
+                               uint8_t **out, size_t *out_len)
+{
+    (void)path; (void)cap; (void)out; (void)out_len;
+    host_stub("os64_slurp");
+    return OS64_SLURP_IO_ERROR;
+}
+size_t  os64_strlen(const char *s) { (void)s; host_stub("os64_strlen"); return 0; }
+int64_t os64_ticks(os64_ticks_t *out) { (void)out; host_stub("os64_ticks"); return 0; }
+int64_t os64_sleep(uint64_t ms) { (void)ms; host_stub("os64_sleep"); return 0; }
+
+static int failures = 0;
+static int checks   = 0;
+
+static void ok(int cond, const char *what)
+{
+    checks++;
+    if (!cond) {
+        failures++;
+        printf("  FAIL: %s\n", what);
+    }
+}
+
+static void eq_u32(uint32_t got, uint32_t want, const char *what)
+{
+    checks++;
+    if (got != want) {
+        failures++;
+        printf("  FAIL: %s (got 0x%08x, want 0x%08x)\n", what, got, want);
+    }
+}
+
+static void eq_status(os64_image_status_t got, os64_image_status_t want,
+                      const char *what)
+{
+    checks++;
+    if (got != want) {
+        failures++;
+        printf("  FAIL: %s (got \"%s\", want \"%s\")\n", what,
+               os64_image_status_name(got), os64_image_status_name(want));
+    }
+}
+
+// ── the reference picture ───────────────────────────────────────────────────
+//
+// 7 wide by 5 high — ODD WIDTH ON PURPOSE, so a 24-bit BMP row is 21 bytes
+// and must be padded to 24. A decoder that forgets the padding produces a
+// picture that shears progressively, which is obvious here and invisible on
+// a width that happens to be a multiple of four.
+//
+// The colors are chosen so that NO symmetry can hide an error: the four
+// corners are four different colors, so a vertical flip, a horizontal flip
+// and a red/blue swap each produce a different wrong answer.
+
+#define REF_W 7u
+#define REF_H 5u
+
+static uint32_t ref_pixel(uint32_t x, uint32_t y)
+{
+    if (x == 0        && y == 0)        return 0xffff0000u;  // top-left  RED
+    if (x == REF_W-1u && y == 0)        return 0xff00ff00u;  // top-right GREEN
+    if (x == 0        && y == REF_H-1u) return 0xff0000ffu;  // bot-left  BLUE
+    if (x == REF_W-1u && y == REF_H-1u) return 0xffffffffu;  // bot-right WHITE
+    // A ramp everywhere else, distinct per position so a transposition or an
+    // off-by-one row shows up as a mismatch rather than as more of the same.
+    return 0xff000000u | ((x * 30u) << 16) | ((y * 50u) << 8) | (x * 10u + y);
+}
+
+// ── file builders ───────────────────────────────────────────────────────────
+
+static uint8_t *build_ppm(size_t *out_len, int with_comments)
+{
+    char header[128];
+    int hn;
+    if (with_comments)
+        // Comments legal ANYWHERE whitespace is — including between the
+        // width and the height, which is the case a straight-line parser
+        // gets wrong.
+        hn = snprintf(header, sizeof(header),
+                      "P6\n# os64 test image\n%u\n# between the dimensions\n%u\n255\n",
+                      REF_W, REF_H);
+    else
+        hn = snprintf(header, sizeof(header), "P6 %u %u 255\n", REF_W, REF_H);
+
+    size_t len = (size_t)hn + (size_t)REF_W * REF_H * 3u;
+    uint8_t *f = malloc(len);
+    memcpy(f, header, (size_t)hn);
+    uint8_t *p = f + hn;
+    for (uint32_t y = 0; y < REF_H; y++)
+        for (uint32_t x = 0; x < REF_W; x++) {
+            uint32_t c = ref_pixel(x, y);
+            *p++ = (uint8_t)(c >> 16);   // R
+            *p++ = (uint8_t)(c >> 8);    // G
+            *p++ = (uint8_t)c;           // B
+        }
+    *out_len = len;
+    return f;
+}
+
+static void wr16(uint8_t *d, uint16_t v) { d[0] = (uint8_t)v; d[1] = (uint8_t)(v >> 8); }
+static void wr32(uint8_t *d, uint32_t v)
+{
+    d[0] = (uint8_t)v; d[1] = (uint8_t)(v >> 8);
+    d[2] = (uint8_t)(v >> 16); d[3] = (uint8_t)(v >> 24);
+}
+
+// bpp: 24 or 32. top_down: store row 0 first and record a negative height.
+static uint8_t *build_bmp(size_t *out_len, unsigned bpp, int top_down,
+                          uint32_t compression)
+{
+    uint32_t bytes_pp = bpp / 8u;
+    size_t stride = (((size_t)REF_W * bytes_pp) + 3u) & ~(size_t)3u;
+    size_t pixels = stride * REF_H;
+    size_t off = 14u + 40u;
+    size_t len = off + pixels;
+
+    uint8_t *f = calloc(1, len);
+    f[0] = 'B'; f[1] = 'M';
+    wr32(f + 2, (uint32_t)len);
+    wr32(f + 10, (uint32_t)off);
+
+    wr32(f + 14, 40u);                       // BITMAPINFOHEADER
+    wr32(f + 18, REF_W);
+    wr32(f + 22, top_down ? (uint32_t)(-(int32_t)REF_H) : REF_H);
+    wr16(f + 26, 1u);                        // planes
+    wr16(f + 28, (uint16_t)bpp);
+    wr32(f + 30, compression);
+    wr32(f + 34, (uint32_t)pixels);
+
+    for (uint32_t row = 0; row < REF_H; row++) {
+        // A bottom-up file stores the picture's LAST row first.
+        uint32_t src_y = top_down ? row : (REF_H - 1u - row);
+        uint8_t *r = f + off + (size_t)row * stride;
+        for (uint32_t x = 0; x < REF_W; x++) {
+            uint32_t c = ref_pixel(x, src_y);
+            uint8_t *px = r + (size_t)x * bytes_pp;
+            px[0] = (uint8_t)c;           // B
+            px[1] = (uint8_t)(c >> 8);    // G
+            px[2] = (uint8_t)(c >> 16);   // R
+            if (bytes_pp == 4)
+                px[3] = 0x00;             // BI_RGB's reserved byte: zero, as
+                                          // real files have it. A decoder
+                                          // that trusts it makes the whole
+                                          // image transparent.
+        }
+        // Leave the padding bytes as calloc left them (zero) — a decoder that
+        // reads them as pixels will produce black where it should not.
+    }
+    *out_len = len;
+    return f;
+}
+
+// ── the checks ──────────────────────────────────────────────────────────────
+
+static void check_matches_reference(const os64_image_t *img, const char *what)
+{
+    char buf[160];
+    snprintf(buf, sizeof(buf), "%s: width", what);
+    eq_u32(img->width, REF_W, buf);
+    snprintf(buf, sizeof(buf), "%s: height", what);
+    eq_u32(img->height, REF_H, buf);
+    if (img->width != REF_W || img->height != REF_H)
+        return;
+
+    for (uint32_t y = 0; y < REF_H; y++)
+        for (uint32_t x = 0; x < REF_W; x++) {
+            uint32_t got = img->pixels[(size_t)y * REF_W + x];
+            uint32_t want = ref_pixel(x, y);
+            if (got != want) {
+                snprintf(buf, sizeof(buf), "%s: pixel (%u,%u)", what, x, y);
+                eq_u32(got, want, buf);
+                return;   // one report per image is enough to find it
+            }
+        }
+    checks++;   // count the all-pixels-match pass
+}
+
+static void test_formats(void)
+{
+    printf("formats (the cross-check: four files, one picture)\n");
+
+    struct { const char *name; uint8_t *(*mk)(size_t *); } dummy;
+    (void)dummy;
+
+    size_t len;
+    os64_image_t img;
+
+    uint8_t *ppm = build_ppm(&len, 0);
+    eq_status(os64_image_decode(ppm, len, &img), OS64_IMAGE_OK, "ppm decodes");
+    check_matches_reference(&img, "ppm");
+    os64_image_free(&img);
+    free(ppm);
+
+    ppm = build_ppm(&len, 1);
+    eq_status(os64_image_decode(ppm, len, &img), OS64_IMAGE_OK,
+              "ppm with comments decodes");
+    check_matches_reference(&img, "ppm+comments");
+    os64_image_free(&img);
+    free(ppm);
+
+    uint8_t *bmp = build_bmp(&len, 24, 0, 0);
+    eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_OK,
+              "bmp24 bottom-up decodes");
+    check_matches_reference(&img, "bmp24 bottom-up");
+    os64_image_free(&img);
+    free(bmp);
+
+    bmp = build_bmp(&len, 24, 1, 0);
+    eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_OK,
+              "bmp24 top-down decodes");
+    check_matches_reference(&img, "bmp24 top-down");
+    os64_image_free(&img);
+    free(bmp);
+
+    bmp = build_bmp(&len, 32, 0, 0);
+    eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_OK,
+              "bmp32 decodes");
+    // The reference is fully opaque and so must this be: the file's reserved
+    // alpha bytes are ZERO, and a decoder that believed them would hand back
+    // an invisible picture that still passes every RGB comparison.
+    check_matches_reference(&img, "bmp32");
+    os64_image_free(&img);
+    free(bmp);
+}
+
+static void test_refusals(void)
+{
+    printf("refusals (broken files, and files we simply do not decode)\n");
+
+    os64_image_t img;
+    size_t len;
+
+    eq_status(os64_image_decode((const uint8_t *)"", 0, &img),
+              OS64_IMAGE_UNKNOWN_FORMAT, "empty input");
+    eq_status(os64_image_decode((const uint8_t *)"ZZ....", 6, &img),
+              OS64_IMAGE_UNKNOWN_FORMAT, "unknown magic");
+
+    // Truncated PPM: the header promises 7x5 and the file stops short.
+    uint8_t *ppm = build_ppm(&len, 0);
+    eq_status(os64_image_decode(ppm, len - 4, &img), OS64_IMAGE_MALFORMED,
+              "truncated ppm");
+    free(ppm);
+
+    // A 16-bit PPM is a perfectly legal file we do not decode — the status
+    // must say UNSUPPORTED, not MALFORMED. Telling a user their file is
+    // broken when it is our decoder that is incomplete sends them to fix the
+    // wrong thing.
+    {
+        const char *hdr = "P6 4 4 65535\n";
+        size_t hn = strlen(hdr);
+        uint8_t f[64];
+        memcpy(f, hdr, hn);
+        memset(f + hn, 0, sizeof(f) - hn);
+        eq_status(os64_image_decode(f, sizeof(f), &img), OS64_IMAGE_UNSUPPORTED,
+                  "16-bit ppm is UNSUPPORTED, not MALFORMED");
+    }
+
+    // Dimensions past OS64_IMAGE_DIM_MAX must be refused BEFORE any
+    // multiplication — this is the hostile-header case.
+    {
+        const char *hdr = "P6 999999 999999 255\n";
+        size_t hn = strlen(hdr);
+        uint8_t f[64];
+        memcpy(f, hdr, hn);
+        memset(f + hn, 0, sizeof(f) - hn);
+        os64_image_status_t st = os64_image_decode(f, sizeof(f), &img);
+        ok(st == OS64_IMAGE_MALFORMED, "absurd ppm dimensions refused");
+    }
+
+    uint8_t *bmp = build_bmp(&len, 24, 0, 1 /* BI_RLE8 */);
+    eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_UNSUPPORTED,
+              "compressed bmp is UNSUPPORTED");
+    free(bmp);
+
+    bmp = build_bmp(&len, 8, 0, 0);
+    eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_UNSUPPORTED,
+              "8-bit (palette) bmp is UNSUPPORTED");
+    free(bmp);
+
+    bmp = build_bmp(&len, 24, 0, 0);
+    eq_status(os64_image_decode(bmp, len / 2, &img), OS64_IMAGE_MALFORMED,
+              "truncated bmp");
+    free(bmp);
+
+    // A header whose pixel offset points past the end of the file.
+    bmp = build_bmp(&len, 24, 0, 0);
+    wr32(bmp + 10, (uint32_t)(len + 1000));
+    eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_MALFORMED,
+              "bmp data offset past end of file");
+    free(bmp);
+}
+
+// ── the blit ────────────────────────────────────────────────────────────────
+
+#define DST_W 10
+#define DST_H 6
+#define DST_PITCH 16   // pitch > width, as a real window canvas has
+
+static uint32_t dst_pixels[DST_PITCH * DST_H];
+
+static os64_gui_surface_t make_dst(void)
+{
+    for (int i = 0; i < DST_PITCH * DST_H; i++)
+        dst_pixels[i] = 0xff111111u;
+    os64_gui_surface_t s = { dst_pixels, DST_W, DST_H, DST_PITCH };
+    return s;
+}
+
+static uint32_t dst_at(int x, int y) { return dst_pixels[y * DST_PITCH + x]; }
+
+static void test_blit(void)
+{
+    printf("blit (clipping, pitch, and the guard rails)\n");
+
+    // A 4x3 source with a distinct value per cell.
+    uint32_t src[4 * 3];
+    for (int y = 0; y < 3; y++)
+        for (int x = 0; x < 4; x++)
+            src[y * 4 + x] = 0xff000000u | (uint32_t)((y << 8) | x);
+
+    // Plain placement.
+    os64_gui_surface_t d = make_dst();
+    os64_draw_blit(&d, 2, 1, src, 4, 3, 4);
+    eq_u32(dst_at(2, 1), src[0], "blit: top-left lands where asked");
+    eq_u32(dst_at(5, 3), src[2 * 4 + 3], "blit: bottom-right lands");
+    eq_u32(dst_at(1, 1), 0xff111111u, "blit: does not paint left of itself");
+    eq_u32(dst_at(6, 1), 0xff111111u, "blit: does not paint right of itself");
+    // The pixel one row below the source's last, which pitch confusion hits.
+    eq_u32(dst_at(2, 4), 0xff111111u, "blit: does not paint below itself");
+
+    // NEGATIVE ORIGIN: clips the source's left and top, does not shift it.
+    // This is the case "center an image bigger than the window" depends on.
+    d = make_dst();
+    os64_draw_blit(&d, -2, -1, src, 4, 3, 4);
+    eq_u32(dst_at(0, 0), src[1 * 4 + 2], "blit: negative origin crops, not shifts");
+    eq_u32(dst_at(1, 1), src[2 * 4 + 3], "blit: negative origin, second pixel");
+
+    // Off the right and bottom edges: legal, partially drawn, no overrun.
+    d = make_dst();
+    os64_draw_blit(&d, DST_W - 2, DST_H - 1, src, 4, 3, 4);
+    eq_u32(dst_at(DST_W - 2, DST_H - 1), src[0], "blit: clipped at right/bottom");
+    // Nothing may have been written into the pitch slack past DST_W.
+    ok(dst_pixels[(DST_H - 1) * DST_PITCH + DST_W] == 0xff111111u,
+       "blit: never writes into the pitch slack past width");
+
+    // Entirely off-surface: a no-op, not a crash.
+    d = make_dst();
+    os64_draw_blit(&d, 100, 100, src, 4, 3, 4);
+    eq_u32(dst_at(0, 0), 0xff111111u, "blit: fully clipped draws nothing");
+    os64_draw_blit(&d, -100, -100, src, 4, 3, 4);
+    eq_u32(dst_at(0, 0), 0xff111111u, "blit: fully clipped negative draws nothing");
+
+    // A SUB-IMAGE of a larger buffer: src points at (1,1) of the 4x3 and
+    // claims 2x2 with the parent's pitch. This is what pitch is for.
+    d = make_dst();
+    os64_draw_blit(&d, 0, 0, src + 1 * 4 + 1, 2, 2, 4);
+    eq_u32(dst_at(0, 0), src[1 * 4 + 1], "blit: sub-image honors source pitch");
+    eq_u32(dst_at(1, 1), src[2 * 4 + 2], "blit: sub-image second row");
+
+    // A pitch narrower than the width would read past each row's end.
+    d = make_dst();
+    os64_draw_blit(&d, 0, 0, src, 4, 3, 2);
+    eq_u32(dst_at(0, 0), 0xff111111u, "blit: refuses pitch < width");
+
+    // Degenerate inputs.
+    d = make_dst();
+    os64_draw_blit(&d, 0, 0, src, 0, 3, 4);
+    os64_draw_blit(&d, 0, 0, NULL, 4, 3, 4);
+    eq_u32(dst_at(0, 0), 0xff111111u, "blit: zero size and NULL source are no-ops");
+}
+
+int main(void)
+{
+    printf("libimage + libdraw blit — host tests\n\n");
+    test_formats();
+    test_refusals();
+    test_blit();
+    printf("\n%d checks, %d failures\n", checks, failures);
+    if (failures == 0)
+        printf("PASS\n");
+    else
+        printf("FAIL\n");
+    return failures != 0;
+}
