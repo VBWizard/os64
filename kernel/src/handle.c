@@ -115,6 +115,16 @@ static void file_close_in_kernel(void *arg)
 	p->result = p->file->fops->close(p->file);
 }
 
+// The same close with nowhere to put the answer — the fallback for when the
+// params block itself cannot be allocated (Codex #29 rd15). Kept as a separate
+// entry point rather than a flag, because its whole meaning is "we are closing
+// blind", and a reader should be able to see which one ran.
+static void file_close_no_status(void *arg)
+{
+	vfs_file_t *file = (vfs_file_t *)arg;
+	file->fops->close(file);
+}
+
 int handle_file_object_close(void *vfs_file)
 {
 	vfs_file_t *file = (vfs_file_t *)vfs_file;
@@ -155,12 +165,37 @@ int handle_file_object_close(void *vfs_file)
 	{
 		file_close_params_t *p = kmalloc(sizeof(*p));
 		if (p == NULL)
-			return -1;      // cannot even ask; do not claim it flushed
-		p->file = file;
-		p->result = -1;
-		call_in_kernel_context(file_close_in_kernel, p);
-		rc = (int)p->result;
-		kfree(p);
+		{
+			// THE FILE STILL HAS TO CLOSE (Codex #29 rd15 — my own bug, one
+			// commit old). This used to `return -1` here, which was wrong in
+			// three ways at once and every one of them worse than the problem
+			// it was avoiding: the filesystem close never ran (so FAT state
+			// and the vfs_file_t leaked and buffered data was never flushed),
+			// path_copy leaked, and handle_close published the slot as free
+			// regardless — so the caller could not even tell.
+			//
+			// We are past the refcount drop; this handle IS the last one and
+			// the object is ours to release. Not being able to allocate four
+			// bytes to hear the ANSWER is no reason to skip the ACT. So close
+			// blind, and say so.
+			call_in_kernel_context(file_close_no_status, file);
+			printd(DEBUG_EXCEPTIONS,
+			       "handle_file_object_close: closed '%s' WITHOUT a status block (out of memory) — flush result unknown\n",
+			       path_copy ? path_copy : "<unnamed>");
+			// 0, not -1: the close happened, and the only thing missing is our
+			// knowledge of how it went. Manufacturing a failure would make
+			// every close under memory pressure look like data loss, which is
+			// its own lie — the log is where "we do not know" belongs.
+			rc = 0;
+		}
+		else
+		{
+			p->file = file;
+			p->result = -1;
+			call_in_kernel_context(file_close_in_kernel, p);
+			rc = (int)p->result;
+			kfree(p);
+		}
 	}
 
 	// LOUD, because until rd14 this was silent and silence is the actual bug.

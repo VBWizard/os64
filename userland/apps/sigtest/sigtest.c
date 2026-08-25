@@ -148,6 +148,12 @@ int main(void)
         die(5, "sigtest: SIGCONT was accepted, and nothing in this kernel can send it");
     if (os64_signal_set_handler(OS64_SIGSTOP, handler_a) != OS64_SIG_ERR_BAD_SIGNAL)
         die(5, "sigtest: SIGSTOP was accepted, and nothing in this kernel can send it");
+    // SIGIO is the third one found this way, one round after the other two —
+    // claimed alongside the POSIX numbers and never given a sender. The
+    // kernel's list now names a PRODUCER for every signal it admits to
+    // having, precisely so there is no fourth.
+    if (os64_signal_set_handler(OS64_SIGIO, handler_a) != OS64_SIG_ERR_BAD_SIGNAL)
+        die(5, "sigtest: SIGIO was accepted, and nothing in this kernel can send it");
 
     // A handler in the higher half would have the CPU attempt kernel text at
     // CPL 3. It faults harmlessly, but being refused by NAME beats finding

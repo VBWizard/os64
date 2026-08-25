@@ -623,10 +623,18 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	}
 	// COMMIT BEFORE PUBLISHING (Codex #29 rd14). Every write() above was
 	// checked, but "the bytes were accepted" is not "the bytes are on the
-	// disk" — on FAT the flush happens at close, and a close that fails
-	// while writing metadata cannot tell us so: handle_file_object_close() is
-	// void, and file_close_in_kernel() discards the filesystem's answer
-	// outright, so checking os64_close's return here would be theatre.
+	// disk" — on FAT the flush happens at close, which is where FatFs reports
+	// data or metadata it could not write.
+	//
+	// WHY NOT JUST CHECK os64_close? Because ring 3 still cannot see that
+	// answer. The kernel now HAS it — handle_file_object_close returns the
+	// filesystem's status and logs a failure loudly (that was fixed in
+	// afc68b4, and this comment described the old world for exactly one hour
+	// before rd15 caught it) — but handle_close discards it, and the close
+	// ABI still reports only whether the HANDLE was valid. Giving close() a
+	// distinct "released, but your data may not be on disk" answer is a real
+	// ABI ruling and is booked in DEBTS; until it lands, os64_close's return
+	// tells us nothing about the flush.
 	//
 	// os64_sync IS a real commit point and DOES report: syscall_sync runs the
 	// filesystem's sync under kKernelPML4 and turns a negative result into an

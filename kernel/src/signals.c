@@ -114,16 +114,30 @@ bool signal_is_known(signals sig)
 {
 	switch (sig)
 	{
-		case SIGHUP:
-		case SIGINT:
-		case SIGKILL:
-		case SIGSEGV:
-		case SIGPIPE:
-		case SIGTERM:
-		case SIGIO:
+		// EVERY ENTRY NAMES ITS PRODUCER, and that is a rule, not decoration
+		// (Codex #29 rd15). This list has now been trimmed BY HAND three
+		// times — rd13 took out the numeric gaps and the scheduler markers,
+		// rd14 took out SIGCONT and SIGSTOP, rd15 took out SIGIO — because it
+		// was written as a list of names and checked case by case, so each
+		// pass found only what it happened to look at. A list that states WHO
+		// RAISES each member cannot hide the next one: an entry with no
+		// producer to name is visibly wrong to anybody reading it, including
+		// whoever is adding one.
+		case SIGHUP:   // tty_shell_departed — the seated shell went away
+		case SIGINT:   // console Ctrl+C; /proc/<id>/ctl "interrupt"
+		case SIGKILL:  // /proc/<id>/ctl "kill"; task_terminate_sibling_threads
+		case SIGSEGV:  // the page-fault handler, on an unresolvable user fault
+		case SIGPIPE:  // syscall_write, into a pipe whose readers have all gone
+		case SIGTERM:  // the shutdown ladder
 			return true;
 		default:
-			return false;   // gaps, markers, reserved and not-yet-built numbers
+			// Gaps, scheduler markers, reserved numbers — and NUMBERED-BUT-NOT
+			// YET-REAL: SIGCONT/SIGSTOP (job control is booked, not built) and
+			// SIGIO (nothing in kernel or userland raises it; it was claimed
+			// alongside the POSIX numbers and never given a sender). Each
+			// rejoins the list above the day something can send it, and brings
+			// its producer comment with it.
+			return false;
 	}
 }
 
