@@ -14,7 +14,7 @@ const char *os64_slurp_status_name(os64_slurp_status_t status)
 {
     switch (status) {
         case OS64_SLURP_OK:        return "ok";
-        case OS64_SLURP_NO_FILE:   return "no such file";
+        case OS64_SLURP_NO_FILE:   return "could not open";   // not "no such file" — see the NO_FILE paragraph in slurp.h
         case OS64_SLURP_TOO_BIG:   return "too big";
         case OS64_SLURP_IO_ERROR:  return "read error";
         case OS64_SLURP_NO_MEMORY: return "out of memory";
