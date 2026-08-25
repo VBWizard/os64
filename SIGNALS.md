@@ -247,7 +247,13 @@ read.
 
 ### 9. What is catchable
 
-Everything except `SIGKILL`.
+Every signal this kernel can SEND, except `SIGKILL`: `SIGHUP`, `SIGINT`,
+`SIGSEGV`, `SIGPIPE`, `SIGTERM`. (The design said "everything except
+SIGKILL" and meant it; rd14/15 narrowed it, because a number with no
+producer — `SIGCONT`, `SIGSTOP`, `SIGIO` — is refused at registration with
+`BAD_SIGNAL` rather than accepted for a signal nothing can raise. Each
+rejoins the set the day something can send it. `signal_is_known` in
+signals.c is the list, one producer named per entry.)
 
 `SIGSEGV` included — that is the acceptance test — with one honest limit: the
 frame goes on the user stack, so if the *stack itself* is what faulted, there
