@@ -239,8 +239,12 @@ int main(int argc, char **argv)
         os64_ui_mark_dirty(&gUi, &gLblClockText);
         os64_ui_paint(&gUi);
     }
-    // [8] No exit path, and that is honest: a clock has no quit gesture yet.
-    //     Ctrl+C from the launching terminal ends it, and the kernel's exit
-    //     sweep reclaims the window — deliberate, not forgotten.
+    // [8] The exit path: the close callback (Alt+F4, the title-bar close)
+    //     saves where you left the window and clears gRunning, so the loop
+    //     above ends here and the window is destroyed by the normal exit.
+    //     Ctrl+C from the launching terminal is the FORCED alternative — it
+    //     skips the save, and the kernel's exit sweep reclaims the window.
+    //     (This comment said "no exit path" from the day the clock had none
+    //     until Codex #29 rd19, two commits after it grew one.)
 	return 0;
 }

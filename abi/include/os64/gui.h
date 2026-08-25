@@ -24,14 +24,22 @@
 #include <stdbool.h>
 #include "os64/syscall.h"
 #include "os64/syscall_numbers.h"
+#include "os64/signal.h"   // OS64_INTERRUPTED — the one answer for "a signal cut your wait short"
 
 // ── Errors (gui_client.h's values, verbatim) ────────────────────────────────
 #define OS64_GUI_ERR_INVALID_HANDLE  (-1)
 #define OS64_GUI_ERR_NO_RESOURCES    (-2)
 #define OS64_GUI_ERR_BAD_ARGS        (-3)
-#define OS64_GUI_ERR_NOT_RUNNING     (-4)   // boot without the GUI flag — treat as SKIP
+// A blocking wait (os64_gui_event_wait) cut short by a signal. NOT a GUI
+// error of its own: it is THE system-wide sentinel, OS64_INTERRUPTED, because
+// the signal contract promises every interrupted blocking call answers the
+// same value and a program written to that contract must not have to know
+// which subsystem it was waiting on. Was -6 until Codex #29 rd19, with
+// NOT_RUNNING on -4 — so a GUI program checking for OS64_INTERRUPTED would
+// have read "no desktop" instead.
+#define OS64_GUI_ERR_INTERRUPTED     OS64_INTERRUPTED
 #define OS64_GUI_ERR_NOT_OWNER       (-5)   // exists, and is none of your business
-#define OS64_GUI_ERR_INTERRUPTED     (-6)   // a blocking wait cut short by termination
+#define OS64_GUI_ERR_NOT_RUNNING     (-6)   // boot without the GUI flag — treat as SKIP (was -4; moved for the sentinel above)
 
 // ── Window flags ────────────────────────────────────────────────────────────
 #define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // no titlebar; 1px border stays (honored since 2026-08-23)

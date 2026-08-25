@@ -1,10 +1,18 @@
-# SIGNALS.md — delivering signals to ring 3 (design)
+# SIGNALS.md — delivering signals to ring 3 (design, and the record of building it)
 
 *2026-08-23. The design conversation, recorded before the writing — the
-discipline MALLOC.md and SIGINT.md set. NOT BUILT YET. Chris ruled the shape
-at the keyboard; this file exists so the understanding survives the night it
-was had, and so the decisions below are not re-litigated by whoever builds the
-next piece.*
+discipline MALLOC.md and SIGINT.md set. Chris ruled the shape at the keyboard;
+this file exists so the understanding survives the night it was had, and so
+the decisions below are not re-litigated by whoever builds the next piece.*
+
+*STATUS (2026-08-25): BUILT. Registration, and all three delivery paths — §5
+the syscall exit, §10 the scheduler's visit to a spinner, §9 the page-fault
+handler — shipped 2026-08-23/24 and went through the Codex #29 gauntlet. The
+design sections below are kept as written, because the reasoning is the
+record; where the building changed the shape, the "as built" notes say so in
+place. "Size and order" at the bottom is the ledger of what is done. (The
+header said NOT BUILT YET until rd19 pointed out it had been false for two
+days.)*
 
 *Prompted by four customers arriving one after another and getting the same
 answer. `SIGPIPE`: a program that wants to survive a vanishing reader cannot.
@@ -250,7 +258,9 @@ slice; naming the limit is not the same as pretending it isn't there.
 **BUILT 2026-08-24** (`signal_deliver_segv`, called from the page-fault
 handler's user-fatal path). It is a THIRD delivery site, distinct from §5 and
 §10 because a fault is *synchronous and thread-local*: the target is the
-faulting thread itself (no broadcast bit, no lock), the interrupted state is
+faulting thread itself (no broadcast pending bit to set or consume — though
+it DOES take `signalLock`, since rd8, for the lock's other job: keeping the
+user page alive across the frame writes, see task.h), the interrupted state is
 the exception frame (`exception_context_t`, built on the stack by
 exception_entry.S), and the resume rides the exception's OWN `iretq` — which
 restores the GP registers from the context and honours an edited `rip`/`rsp`
@@ -264,7 +274,7 @@ and faults again — so a real SIGSEGV handler exits or longjmps, which is what
 default action is untouched for a task with no handler installed: `segv_test`
 still dies with the full forensic dump and exit 139, and the OS survives.
 
-## §10 — Delivering to a thread that never makes a syscall (design, UNBUILT)
+## §10 — Delivering to a thread that never makes a syscall (design — BUILT 2026-08-24, see "§10 as built" below)
 
 *Chris, 2026-08-23, after the syscall path shipped: "don't forget that the
 APIC timer triggers eventually. So every AP ends up in scheduling. I know you

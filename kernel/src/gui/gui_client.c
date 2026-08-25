@@ -22,6 +22,14 @@
 #include "memory/paging.h"     // the canvas mapping (surface pivot)
 #include "memory/allocator.h"  // allocate_memory_aligned / free_memory — task canvas pages
 #include "signals.h"    // SIGSLEEP / SIGNALS_TERMINATING — event_wait's park and its exit
+#include "os64/signal.h"   // OS64_INTERRUPTED — the value GUI_ERR_INTERRUPTED must BE
+
+// THE TWO RINGS AGREE, OR THE BUILD STOPS (Codex #29 rd19): gui_event_wait's
+// "a signal cut your wait short" is the system-wide sentinel, not a private
+// GUI code. signals.c pins every signal NUMBER this way; the one error value
+// that crosses subsystems gets the same treatment.
+_Static_assert(GUI_ERR_INTERRUPTED == OS64_INTERRUPTED,
+               "GUI_ERR_INTERRUPTED must be OS64_INTERRUPTED (os64/signal.h) — one sentinel for every interrupted wait");
 #include "kernel.h"     // kTicksSinceStart — the park's backstop deadline
 
 extern struct Framebuffer kFrameBuffer;

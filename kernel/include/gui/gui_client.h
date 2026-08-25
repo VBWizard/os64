@@ -16,16 +16,25 @@
 #define GUI_ERR_INVALID_HANDLE  (-1)
 #define GUI_ERR_NO_RESOURCES    (-2)
 #define GUI_ERR_BAD_ARGS        (-3)
-#define GUI_ERR_NOT_RUNNING     (-4)
+// A blocking wait was cut short by a signal — console_read's rule, worn by
+// gui_event_wait: a pending terminate outranks the wait. Since the signals
+// arc this is not only "the caller is dying": a task with a HANDLER
+// installed gets this back, the handler is armed on the syscall's exit, and
+// the program decides whether to wait again. Which is exactly the contract
+// OS64_INTERRUPTED (-4) spells out for EVERY interrupted blocking call in the
+// system — so this value IS that value (Codex #29 rd19). It was -6 with
+// NOT_RUNNING sitting on -4, which meant a GUI program following the common
+// signal API would read "interrupted" as "no desktop". The renumbering is
+// pinned by a _Static_assert in gui_client.c; the ABI header defines its
+// copy as OS64_INTERRUPTED outright.
+#define GUI_ERR_INTERRUPTED     (-4)
 // Handle exists but belongs to another task. Distinct from INVALID_HANDLE
 // on purpose: "no such window" and "exists, and is none of your business"
 // are different answers, and only the first should tempt a caller to retry.
 #define GUI_ERR_NOT_OWNER       (-5)
-// A blocking wait was cut short because the CALLER is being terminated —
-// console_read's rule, worn by gui_event_wait: a pending kill outranks the
-// wait. The dying task rarely sees this value (the syscall boundary
-// finishes the job), but an ABI never lies about why it returned.
-#define GUI_ERR_INTERRUPTED     (-6)
+// Booted without the GUI. Moved from -4 to make room for the common
+// INTERRUPTED sentinel above — every consumer names it symbolically.
+#define GUI_ERR_NOT_RUNNING     (-6)
 
 // Create a window (frame includes decorations). Returns a handle > 0.
 int64_t gui_window_create(const char *title, int32_t x, int32_t y,
