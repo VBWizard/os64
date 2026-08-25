@@ -1234,28 +1234,50 @@ static void scheduler_signal_visit(thread_t *thread, uint64_t apic_id)
 	}
 
 	// Question 2: the gallows.
-	if (!(sigset_any(thread->signals.sigind, SIGNALS_TERMINATING)))
-		return;
-	// A handler that is installed (or masked-and-held) earns a reprieve —
-	// signal_has_handler_for_pending answers "no" when SIGKILL is pending,
-	// so the uncatchable one never waits. UNLESS delivery just provably
-	// failed: an unusable stack means the handler cannot run, so the
-	// default action must. FAILED is reported for a terminating signal
-	// whose frame could not be written (the non-terminating undeliverables
-	// were dropped inside) — and, since rd18, for an ORPHANED death: a
-	// pending SIGPIPE whose handler a sibling removed after the broadcast,
-	// which no checkpoint scans for. Both fall through to the gallows.
-	if (dr != SIGNAL_DELIVER_FAILED &&
-	    signal_has_handler_for_pending(task, thread))
-		return;
+	//
+	// FAILED IS ASKED FIRST (Codex #29 rd23 — the unclosed edge of rd18). A
+	// FAILED delivery means the default action MUST run: the frame could not
+	// be written, or the pending signal is an orphaned death (a SIGPIPE whose
+	// handler a sibling removed after the broadcast). SIGPIPE is deliberately
+	// absent from SIGNALS_TERMINATING — the checkpoints do not scan for it —
+	// so the mask test below, asked first, returned before the gallows for
+	// exactly the signal rd18's orphan check reports, and the spinner spun on.
+	// The syscall path had it right by construction (its FAILED check is the
+	// only check); this path had two questions and asked them in the wrong
+	// order.
+	if (dr != SIGNAL_DELIVER_FAILED)
+	{
+		if (!(sigset_any(thread->signals.sigind, SIGNALS_TERMINATING)))
+			return;
+		// A handler that is installed (or masked-and-held) earns a reprieve
+		// — signal_has_handler_for_pending answers "no" when SIGKILL is
+		// pending, so the uncatchable one never waits, and "no" when any
+		// pending death-default signal has no handler (rd17).
+		if (signal_has_handler_for_pending(task, thread))
+			return;
+	}
+	// Either a terminating signal nothing will catch, or a FAILED delivery
+	// (unusable stack, or an orphaned SIGPIPE). The victim is pushed into the
+	// exit trampoline; its syscall's dispatcher exit applies the default via
+	// the ladder, which has a SIGPIPE arm (rd9) — so the corpse wears 141
+	// rather than 130 when a pipe is what killed it.
 
 	// Patch BOTH images of the frame. Idempotent on repeat passes.
 	thread->regs.RIP = TASK_EXIT_TRAMPOLINE_VIRT;
 	mp_isrSavedRIP[apic_id] = TASK_EXIT_TRAMPOLINE_VIRT;
 
+	// Name the signal the ladder will name — same order as
+	// raise_terminating_signal_and_die, so the log and the exit code agree.
+	// (Said "SIGINT" for anything that was not SIGKILL until rd23, which
+	// would have labelled the new SIGPIPE road as a keyboard interrupt.)
+	const char *why = sigset_has(thread->signals.sigind, SIGKILL) ? "SIGKILL"
+	                : sigset_has(thread->signals.sigind, SIGTERM) ? "SIGTERM"
+	                : sigset_has(thread->signals.sigind, SIGHUP)  ? "SIGHUP"
+	                : sigset_has(thread->signals.sigind, SIGPIPE) ? "SIGPIPE"
+	                : dr == SIGNAL_DELIVER_FAILED                 ? "FAILED delivery"
+	                : "SIGINT";
 	printd(DEBUG_SCHEDULER, "*%s: forcing thread 0x%08x (%s) into the exit trampoline\n",
-	       (sigset_has(thread->signals.sigind, SIGKILL)) ? "SIGKILL" : "SIGINT",
-	       thread->threadID, task->exename);
+	       why, thread->threadID, task->exename);
 }
 
 void scheduler_run_new_thread()
