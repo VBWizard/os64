@@ -16,7 +16,7 @@ const char *os64_image_status_name(os64_image_status_t status)
 {
     switch (status) {
         case OS64_IMAGE_OK:             return "ok";
-        case OS64_IMAGE_NO_FILE:        return "no such file";
+        case OS64_IMAGE_NO_FILE:        return "could not open";   // NOT "no such file": open cannot yet tell absent from unopenable (slurp.h, Codex #30 rd10)
         case OS64_IMAGE_TOO_BIG:        return "file too large";
         case OS64_IMAGE_IO_ERROR:       return "read error";
         case OS64_IMAGE_NO_MEMORY:      return "out of memory";

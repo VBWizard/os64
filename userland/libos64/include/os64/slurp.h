@@ -70,8 +70,18 @@ typedef enum {
 // TOO_BIG AND IO_ERROR ARE DIFFERENT ANSWERS AND MUST STAY THAT WAY: TOO_BIG
 // means "there is more here than you allowed" (the file is intact, your cap
 // is the problem); IO_ERROR means "there WAS something and I could not read
-// it" (saving over it would destroy it). NO_FILE means "nothing is there, a
-// fresh write is safe". Collapsing any two of these is how rd12 happened.
+// it" (saving over it would destroy it). Collapsing the two is how rd12
+// happened.
+//
+// NO_FILE MEANS "COULD NOT OPEN IT" — AND NOTHING MORE (Codex #30 rd10).
+// This paragraph used to promise "nothing is there, a fresh write is safe",
+// and that is a promise ring 3 cannot keep today: SYSCALL_OPEN answers one
+// value, SYSCALL_RESULT_INVALID, for a missing file, a bad path AND a full
+// handle table alike, so a slurp that says NO_FILE may be looking at a file
+// that exists and could not be opened. A caller deciding whether to WRITE
+// must not read NO_FILE as permission. The kernel learning to say "not
+// found" distinctly is booked in DEBTS.md § Filesystems, with this reader as
+// its first consumer; when it lands, the stronger promise comes back here.
 os64_slurp_status_t os64_slurp(const char *path, size_t cap,
                                uint8_t **out, size_t *out_len);
 
