@@ -115,14 +115,40 @@ static inline bool sigset_has(signal_set_t s, signals sig)
     return (s.bits & SIG_BIT(sig)) != 0;
 }
 
+// EVERY MUTATOR IS ATOMIC (Codex #29 rd20), because one thread's pending word
+// has MORE THAN ONE WRITER and they do not all hold the same lock:
+//
+//   - the thread itself, parking: signal_raise(SIGSLEEP) sets its own marker
+//     with no lock at all (it is "my word, my bit");
+//   - the scheduler's sweep, waking it: processSignals clears SIGSLEEP under
+//     the QUEUE lock;
+//   - a SIBLING delivering a task-wide signal: signal_mark_delivered clears
+//     the delivered bit on EVERY thread of the task, under signalLock;
+//   - the producers: task_signal_all_threads sets bits on every thread,
+//     under signalLock.
+//
+// A plain `|=` / `&=` is a read-modify-write, and two of those from two cores
+// on one word lose one of the writes. Concretely: thread A parks (sets 25)
+// while thread B on another core consumes a SIGTERM off A's word (clears 15)
+// — B's RMW read A's word before A's store landed, so B's store puts back a
+// word WITHOUT bit 25, and A never parks; or the other order, and A's stale
+// read resurrects the SIGTERM B just consumed, so the handler runs twice.
+//
+// The fix is at the choke point rather than at any writer: a LOCK-OR and a
+// LOCK-AND cannot lose each other, whatever locks (or none) the callers hold.
+// The sigmask word gets the same treatment for free — it has one writer today
+// (the owning thread) but the helpers do not know which word they are given.
+// RELAXED is the right order: these are single-bit flags with no payload
+// that has to be visible "before" them (SIGSLEEP's wake tick is stored before
+// the bit on purpose, and the scheduler reads it under its own lock).
 static inline void sigset_add(signal_set_t *s, signals sig)
 {
-    s->bits |= SIG_BIT(sig);
+    __atomic_fetch_or(&s->bits, SIG_BIT(sig), __ATOMIC_RELAXED);
 }
 
 static inline void sigset_del(signal_set_t *s, signals sig)
 {
-    s->bits &= ~SIG_BIT(sig);
+    __atomic_fetch_and(&s->bits, ~SIG_BIT(sig), __ATOMIC_RELAXED);
 }
 
 // "Any of these?" — for the SIGNALS_TERMINATING family, which is a mask of
@@ -134,15 +160,17 @@ static inline bool sigset_any(signal_set_t s, uint32_t mask)
 
 static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 {
-    s->bits &= ~mask;
+    __atomic_fetch_and(&s->bits, ~mask, __ATOMIC_RELAXED);
 }
 
-	// THE TERMINATING SIGNALS: pending bits whose DEFAULT ACTION is death.
-	// Ring 3 cannot install handlers yet (the ratified userland-signal-delivery
-	// debt), so the kernel enforces the default — and it does so at three
-	// checkpoints that all ask the same question: "does this thread have a
-	// pending terminate?" Asking it through one macro means a new terminating
-	// signal is added HERE, once, instead of being forgotten at one of them.
+	// THE TERMINATING SIGNALS: pending bits the CHECKPOINTS act on. Ring 3 CAN
+	// install handlers now (the signals arc, 2026-08-23 — this line said it
+	// could not until Fable's rd20 pass), so the checkpoints ask two things:
+	// "does this thread have a pending terminate?" and then, through
+	// signal_has_handler_for_pending, "will something catch it?" — killing
+	// only when the answer is no. Asking through one macro means a new
+	// terminating signal is added HERE, once, instead of being forgotten at
+	// one of them.
 	//   1. the dispatcher check in _syscall_dispatch (the victim's next syscall)
 	//   2. the blocking-call sentinels (console_read, pipe_read, pipe_write)
 	//   3. the forced-syscall push in scheduler_run_new_thread (a spin loop)

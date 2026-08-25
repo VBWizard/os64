@@ -613,11 +613,19 @@ typedef enum os64_shutdown_mode
 // program that has stopped answering; a kernel that let a program decline to
 // die would have no last resort.
 //
-// Registration is all this does. Nothing is DELIVERED to ring 3 until the
-// frame-and-trampoline half lands (SIGNALS.md step 3) — until then an
-// installed handler means only "do not apply the default action", which the
-// forced-syscall push in scheduler.c has already honoured for SIGINT since
-// before there was any way to install one.
+// An installed handler RUNS. Delivery arrives by three paths (SIGNALS.md):
+// at the exit of whatever syscall the thread was in (§5 — the common case,
+// and why a blocking call answers OS64_INTERRUPTED afterwards), from the
+// scheduler's visit to a thread spinning in ring 3 that makes no syscalls
+// (§10), and from the page-fault handler for a caught SIGSEGV (§9). The
+// handler returns into a kernel stub that calls sigreturn (below) and the
+// program resumes where it was.
+//
+// (HISTORICAL: for a few hours on 2026-08-23 this call shipped before
+// delivery did, and an installed handler meant only "do not apply the
+// default action". That paragraph stood here as if current until Codex #29
+// rd20.) A signal nothing can send is REFUSED here rather than accepted on
+// that same bet — see the numbered-but-not-real note in os64/signal.h.
 #define SYSCALL_SIGNAL_HANDLER          49
 
 // sigreturn — resume the context a signal handler interrupted.
@@ -632,10 +640,21 @@ typedef enum os64_shutdown_mode
 //
 // The frame is VALIDATED, not trusted: it arrives from ring 3 and this call
 // restores register state, which makes it the most attackable thing in the
-// signal path. It is refused unless it carries the kernel's magic, sits on
-// the calling thread's own stack, and names a handler that is actually
-// running. Nothing privileged is ever taken from it — no CS, no SS, no
-// RFLAGS bits the caller did not already have.
+// signal path. It is refused unless it carries the kernel's magic, names a
+// handler that is actually running on this thread, and carries a canonical
+// lower-half RIP and RSP (a noncanonical one would #GP in ring 0 at the
+// sysretq/iretq — the CVE-2012-0217 family). Nothing privileged is ever
+// taken from it: CS and SS come from GDT constants, and RFLAGS passes
+// through a mask that keeps only the bits a user program owns.
+//
+// WHERE the frame sits is deliberately NOT checked (this note used to say
+// "sits on the calling thread's own stack" — Codex #29 rd20 caught the claim
+// against kernel/src/syscall.c, which explains the omission). A range check
+// on the pointer would prove nothing: every word of the frame is
+// user-writable wherever it is, so the CONTENTS are what is defended, and
+// they are, above. A program that hands sigreturn a frame it forged
+// elsewhere gets exactly the resume it asked for, in ring 3, with ring 3's
+// privileges — its own problem, and nobody else's.
 #define SYSCALL_SIGRETURN               50
 
 #endif
