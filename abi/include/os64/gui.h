@@ -99,12 +99,17 @@
 // a window's canvas is reserved at CAPACITY, and the rule is (Codex #30 rd11
 // corrected an earlier wording that had it wrong both ways):
 //
-//     capacity = min(max(screen, content), OS64_GUI_WINDOW_DIM_MAX)
+//     capacity = min(max(screen, content), wm_dim_max())
+//     wm_dim_max() = max(OS64_GUI_WINDOW_DIM_MAX, screen width, screen height)
 //
 // — the screen, raised to the content if the window was born larger, and
-// never past this constant. So a small window on an 800x600 screen reserves
-// 800x600 (a resize up to fullscreen costs no allocation), and an 8K screen
-// is capped here, not reserved whole. An app that derives a size from data — a viewer, a
+// never past the ceiling; and since the desktop shell moved to ring 3 the
+// ceiling is this constant OR the screen, whichever is larger, so the screen
+// is ALWAYS reservable in full (a fullscreen shell on a 5K panel is not
+// refused at the door). So a small window on an 800x600 screen reserves
+// 800x600 (a resize up to fullscreen costs no allocation), and this constant
+// is the floor every app may rely on, not the cap the screen is held to.
+// An app that derives a size from data — a viewer, a
 // 5000-pixel image on an 8K panel — clamps to BOTH this and the screen
 // before asking, or decodes a perfectly good file and is refused at the
 // door. window.c asserts the WM's own constant equals this one.
