@@ -254,7 +254,14 @@ static uint32_t rd32(const uint8_t *d)
 static os64_image_status_t decode_bmp(const uint8_t *d, size_t len,
                                       os64_image_t *out)
 {
-    if (len < BMP_FILE_HEADER + BMP_INFO_MIN)
+    // Enough bytes to READ the DIB size field — and no more than that, yet
+    // (Codex #30 rd11). This used to demand a full BITMAPINFOHEADER before
+    // looking at the size, so a 30-byte OS/2 core BMP (14 + 12 + one padded
+    // row) was called MALFORMED by the length check before the branch below
+    // could call it UNSUPPORTED, which is what it is: a legal file we do not
+    // decode. The classification has to run on the field, not on a length
+    // that presumes the answer.
+    if (len < BMP_FILE_HEADER + 4u)
         return OS64_IMAGE_MALFORMED;
 
     uint32_t data_off = rd32(d + 10);
