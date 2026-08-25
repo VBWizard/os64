@@ -211,8 +211,18 @@ static os64_image_status_t decode_bmp(const uint8_t *d, size_t len,
 
     uint32_t data_off = rd32(d + 10);
     uint32_t dib_size = rd32(d + 14);
-    if (dib_size < BMP_INFO_MIN || dib_size > len - BMP_FILE_HEADER)
-        return OS64_IMAGE_UNSUPPORTED;   // OS/2 core header, or a lie
+    // TWO DIFFERENT COMPLAINTS, AND THEY HAD BEEN SHARING AN ANSWER (Codex
+    // #30 rd4). A DIB header SMALLER than BITMAPINFOHEADER is a variant we do
+    // not decode — the OS/2 core header — and that is UNSUPPORTED. A header
+    // whose declared size runs past the end of the file is a BROKEN FILE, and
+    // this header's own contract says that is MALFORMED. Answering
+    // UNSUPPORTED for the second told the user their perfectly ordinary
+    // 40-byte BITMAPINFOHEADER was a format we lack support for, when what we
+    // actually lacked was the rest of their file.
+    if (dib_size < BMP_INFO_MIN)
+        return OS64_IMAGE_UNSUPPORTED;
+    if (dib_size > len - BMP_FILE_HEADER)
+        return OS64_IMAGE_MALFORMED;
 
     int32_t  bw     = (int32_t)rd32(d + 18);
     int32_t  bh     = (int32_t)rd32(d + 22);

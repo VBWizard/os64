@@ -438,6 +438,25 @@ static void test_refusals(void)
               "compressed bmp is UNSUPPORTED");
     free(bmp);
 
+    // A DIB header that runs past the end of the file is a BROKEN FILE, not a
+    // variant we lack (Codex #30 rd4). The two answers mean opposite things:
+    // one says fix your file, the other says wait for us.
+    {
+        uint8_t *b = build_bmp(&len, 24, 0, 0);
+        wr32(b + 14, 108);   // BITMAPV4HEADER — supported size, absent bytes
+        eq_status(os64_image_decode(b, 14 + 60, &img), OS64_IMAGE_MALFORMED,
+                  "bmp whose DIB header runs past the end of the file");
+        free(b);
+    }
+    // ...while a header too small to BE a BITMAPINFOHEADER stays UNSUPPORTED.
+    {
+        uint8_t *b = build_bmp(&len, 24, 0, 0);
+        wr32(b + 14, 12);    // the OS/2 core header
+        eq_status(os64_image_decode(b, len, &img), OS64_IMAGE_UNSUPPORTED,
+                  "bmp with an OS/2 core header is UNSUPPORTED, not MALFORMED");
+        free(b);
+    }
+
     bmp = build_bmp(&len, 8, 0, 0);
     eq_status(os64_image_decode(bmp, len, &img), OS64_IMAGE_UNSUPPORTED,
               "8-bit (palette) bmp is UNSUPPORTED");

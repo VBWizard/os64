@@ -62,6 +62,8 @@ _Static_assert(OS64_GUI_BORDER_WIDTH == GUI_BORDER_WIDTH,
                "the GUI ABI's border width drifted from the WM's");
 _Static_assert(OS64_GUI_TITLEBAR_HEIGHT == GUI_TITLEBAR_HEIGHT,
                "the GUI ABI's titlebar height drifted from the WM's");
+_Static_assert(OS64_GUI_MIN_CONTENT == GUI_MIN_CONTENT,
+               "the GUI ABI's minimum content size drifted from the WM's");
 
 // Handle table: handle = index + 1, so 0 is never a valid handle. 32 windows
 // is plenty until real userland apps exist. Guarded by kGuiLock.
@@ -189,7 +191,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	uint32_t create_flags = (uint32_t)flags & client_flags;
 	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
 	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - GUI_BORDER_WIDTH;
-	if (content_w < 8 || content_h < 8)
+	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return GUI_ERR_BAD_ARGS;
 
 	// ── THE SURFACE PIVOT (GRAPHICS.md, migration step 3) ───────────────

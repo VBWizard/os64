@@ -65,6 +65,12 @@
 #define OS64_GUI_BORDER_WIDTH     1
 #define OS64_GUI_TITLEBAR_HEIGHT  20
 
+// The smallest canvas a window may have. Create REFUSES anything smaller
+// rather than rounding it up, so an app that derives its size from data — an
+// image viewer being the obvious one — has to clamp before it asks, or a
+// perfectly good 4x4 picture decodes and then cannot be shown.
+#define OS64_GUI_MIN_CONTENT      8
+
 // The frame to ASK FOR in order to BE GIVEN a canvas of content_w x content_h.
 // Pass the same flags you will create with; an undecorated window still keeps
 // its 1px border.
