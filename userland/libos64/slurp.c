@@ -39,8 +39,8 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap,
     // cap == 0 is NOT refused (Codex #30 rd9): it means "at most zero bytes",
     // and the normal path already answers that truthfully — an empty file is
     // OK with len 0, anything else is TOO_BIG. Answering NO_FILE instead,
-    // as this used to, told a caller a file that EXISTS was absent, and the
-    // header promises NO_FILE means a fresh write is safe.
+    // as this used to, told a caller a file that EXISTS was absent — and
+    // NO_FILE is reserved for a file that could not be OPENED (rd10).
 
     // A CAP OF SIZE_MAX HAS NO ROOM FOR THE TERMINATOR (Codex #30 rd2).
     // `cap + 1` would wrap to zero, os64_malloc(0) hands back a real
