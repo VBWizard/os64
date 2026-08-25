@@ -1,4 +1,9 @@
-// slurp.c — the one whole-file reader (os64/slurp.h carries the argument).
+// slurp.c — the tree's SHARED whole-file reader (os64/slurp.h carries the
+// argument). Shared, not yet sole: kernel/src/conf.c, kernel/src/gui/desktop.c
+// and both read paths in libos64/conf.c still carry hand-written loops as this
+// is committed (Codex #30 rd1, rd8) — the DEBTS row on the conf readers is the
+// remaining payment, and anyone fixing a whole-file-read bug has to visit all of
+// them until it is paid.
 
 #include "os64/os64.h"
 #include "os64/slurp.h"

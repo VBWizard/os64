@@ -106,7 +106,7 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 	// letting a 0-wide surface ripple NULLs through the compositor.
 	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
 	int32_t content_h = frame.h - wm_chrome_top(flags) - GUI_BORDER_WIDTH;
-	if (content_w < 8 || content_h < 8)
+	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return NULL;
 
 	window_t *w = kmalloc(sizeof(window_t));

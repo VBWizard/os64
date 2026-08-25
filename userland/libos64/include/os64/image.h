@@ -43,9 +43,14 @@
 // for PNG soon. We'll attend to it when we need it"). It needs a complete
 // DEFLATE decoder plus per-scanline filters, and os64 has no inflate
 // anywhere. The reason to build it is INTEROP — an icon someone downloaded,
-// a file os64get fetched — and until such a file actually arrives, BMP with
-// its alpha byte does everything os64's own artwork needs. Same test the ABI
-// philosophy uses: no format compliance without an interop reason. GIF is
+// a file os64get fetched — and until such a file actually arrives, BMP does
+// everything os64's own artwork needs. OPAQUE BMP, to be exact (Codex #30
+// rd8): this decoder forces every output alpha to 0xff, BI_BITFIELDS — the
+// only BMP variant that can carry a real alpha mask — is on the UNSUPPORTED
+// list, and os64_draw_blit copies without blending. The day artwork needs
+// transparency, that is a slice of its own (alpha decode AND a blending
+// blit), not a flag to flip here. Same test the ABI philosophy uses: no
+// format compliance without an interop reason. GIF is
 // not planned at all: its one unique capability is animation, and LZW plus
 // interlacing is a great deal of code for a format the world has retired.
 
