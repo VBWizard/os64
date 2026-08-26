@@ -34,7 +34,9 @@
 // ascii bytes into `buf` and return the count (>0). Unix terminal semantics:
 // a read returns as soon as there IS input, not only when `len` is filled.
 // Sleeps (zero CPU) while the buffer is empty; woken by console_wake_if_ready.
-// Returns CONSOLE_READ_INTERRUPTED if the caller has SIGINT pending.
+// Returns CONSOLE_READ_INTERRUPTED if the caller has a signal pending that
+// ends the wait (signal_park_must_end: a terminate, or any signal a handler
+// will catch — SIGWINCH included, since the resize slice).
 long console_read(char *buf, size_t len);
 
 // The same read with a patience limit: `deadline` is an ABSOLUTE kTicksSinceStart

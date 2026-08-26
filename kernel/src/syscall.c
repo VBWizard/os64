@@ -1943,7 +1943,7 @@ static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	uint32_t cols = (uint32_t)arg1, rows = (uint32_t)arg2;
 	if (!tty_resize_grid(t, cols, rows))
-		return SYSCALL_RESULT_INVALID;   // geometry outside the fence, or no memory
+		return SYSCALL_RESULT_INVALID;   // geometry outside the fence — the only refusal (the allocator never says "no memory", it panics)
 
 	uint32_t told = 0;
 	for (task_t *seat = kTaskList;
@@ -3405,7 +3405,9 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // pid. pid > 0 waits for that specific child; pid == 0 waits for the FIRST of
 // any child to end (os64's own design, not POSIX). Writes the child's exit
 // code to *exit_code_out (if non-NULL). Returns the ended pid, or a
-// SYSCALL_RESULT_* sentinel (e.g. no matching child exists). If the child has
+// SYSCALL_RESULT_* sentinel (e.g. no matching child exists), or
+// OS64_INTERRUPTED when a caught signal ended the wait with nothing collected
+// (the child is still the caller's to wait for again). If the child has
 // ALREADY exited, returns immediately without sleeping.
 static uint64_t syscall_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
@@ -3426,6 +3428,16 @@ static uint64_t syscall_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	uint64_t endedPid = task_wait(parent, targetPid, &exitCode);
 	if (endedPid == 0)
 		return SYSCALL_RESULT_INVALID;   // no such child
+	if (endedPid == TASK_WAIT_INTERRUPTED)
+	{
+		// The same fork every park takes on the way out (sleep, the console
+		// read, the pipes): a handler will run, or nothing will and the
+		// default action is death, here, in the victim's own context.
+		if (current_thread_will_catch())
+			return (uint64_t)(int64_t)OS64_INTERRUPTED;
+		raise_terminating_signal_and_die(parent, NULL);
+		__builtin_unreachable();
+	}
 
 	if (user_code != NULL)
 	{
@@ -3549,17 +3561,25 @@ static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// SIGNALS.md §8, no restart, no EINTR: an interrupted call says
 			// so and the caller decides. os64_sleep answers INTERRUPTED and a
 			// program that wanted the whole nap loops.
-			// The task comes from the THREAD — cls->task can be a core
-			// migration behind (see the dispatcher checkpoint's note), and a
-			// sleeper is exactly the thread most likely to wake on a
-			// different core than it parked on.
-			task_t *owner = (task_t *)self->ownerTask;
-			if (signal_has_handler_for_pending(owner, self))
+			// The same question every other park asks, through the same
+			// door: current_thread_will_catch answers "yes" when NOTHING
+			// TERMINATING is pending, not only when a handler is installed.
+			// The difference matters here because the WINCH that got us up
+			// is task-wide: a sibling waking for the same broadcast can
+			// deliver it first and clear our bit, and a check that asked
+			// only "is there a handler for what is pending?" would then
+			// find nothing pending, decide nothing will catch it, and die
+			// below wearing SIGINT's tag — for a window drag (Codex #32).
+			// (The task comes from the THREAD inside that call, which is
+			// right: a sleeper is exactly the thread most likely to wake on
+			// a different core than it parked on, and cls->task can lag.)
+			if (current_thread_will_catch())
 				return (uint64_t)(int64_t)OS64_INTERRUPTED;
 
-			// Nothing will catch it. Ctrl+C (or a ctl write) landed while we
-			// napped: die here, in our own context.
-			raise_terminating_signal_and_die(owner, self);
+			// A terminate is pending and nothing will catch it. Ctrl+C (or
+			// a ctl write) landed while we napped: die here, in our own
+			// context.
+			raise_terminating_signal_and_die((task_t *)self->ownerTask, self);
 			__builtin_unreachable();
 		}
 

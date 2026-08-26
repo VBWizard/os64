@@ -321,7 +321,10 @@ static void conf_report(const char *what, const char *path, bool found, int64_t 
 // maps that to SYSCALL_RESULT_INVALID — -1 — before ring 3 ever sees it;
 // Codex #31 rd5 read the kernel half and thought zero reached us), which
 // would spin — so that case sleeps rather than retrying immediately. When
-// children exist the wait blocks properly and costs nothing.
+// children exist the wait blocks properly and costs nothing. The OTHER
+// negative answer, OS64_INTERRUPTED, means a handler ran and the children
+// are all still alive — that one waits again at once; the nap is for "nobody
+// to wait for", not for "somebody dragged a window".
 #define DESKTOP_REAP_IDLE_MS 1000
 
 static int64_t reaper(void *arg)
@@ -338,6 +341,8 @@ static int64_t reaper(void *arg)
                          (long)pid, (int)code);
             continue;
         }
+        if (pid == OS64_INTERRUPTED)
+            continue;                       // a handler ran; the children live on
         os64_sleep(DESKTOP_REAP_IDLE_MS);   // no children right now
     }
     return 0;

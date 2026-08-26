@@ -734,10 +734,11 @@ bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows)
 	// Allocate OUTSIDE the grid lock: kmalloc takes the allocator's own
 	// interrupts-off lock, and holding one spinlock while waiting on another
 	// is how lock orders get invented by accident. Zeroed at the choke point,
-	// so every cell a copy does not reach is already blank.
+	// so every cell a copy does not reach is already blank. No NULL check,
+	// because there is nothing to check: the allocator panics by name on
+	// exhaustion and never returns "no memory" (allocator.c) — the fence
+	// above is this function's only refusal.
 	tty_cell_t *fresh = kmalloc((size_t)new_total * cols * sizeof(tty_cell_t));
-	if (fresh == NULL)
-		return false;
 
 	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
 

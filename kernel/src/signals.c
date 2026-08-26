@@ -53,6 +53,7 @@ _Static_assert(SIGTERM == OS64_SIGTERM, "SIGTERM disagrees with the ABI (os64/si
 _Static_assert(SIGCONT == OS64_SIGCONT, "SIGCONT disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGSTOP == OS64_SIGSTOP, "SIGSTOP disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGIO   == OS64_SIGIO,   "SIGIO disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGWINCH == OS64_SIGWINCH, "SIGWINCH disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
                "the signal table size disagrees with the ABI (os64/signal.h)");
 
@@ -83,18 +84,18 @@ _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
 // through an API that reported success. A number the kernel cannot raise must
 // never register.
 //
-// ALSO ABSENT, AND THIS IS THE HARDER CALL: SIGCONT (18), SIGSTOP (19) and
-// SIGWINCH (28). All three have a NUMBER and no PRODUCER — nothing in this
-// kernel raises them. SIGWINCH is not even defined (the enum reserves the
-// number); SIGCONT and SIGSTOP are, and DEBTS § No job control books their
-// stop/continue semantics and delivery as a future slice, calling them
-// exactly what they are: stubs.
+// ALSO ABSENT, AND THIS IS THE HARDER CALL: SIGCONT (18) and SIGSTOP (19).
+// Both have a NUMBER and no PRODUCER — nothing in this kernel raises them.
+// DEBTS § No job control books their stop/continue semantics and delivery as
+// a future slice, calling them exactly what they are: stubs.
 //
 // SIGCONT and SIGSTOP were in this list until rd14 pointed out that keeping
-// them contradicts the rule the rest of this function exists to enforce — the
-// same rule used ONE ROUND EARLIER to exclude SIGWINCH. A handler for a signal
-// nothing can send is a caller waiting forever, and it makes no difference
-// whether the reason is "no such number" or "the slice has not landed".
+// them contradicts the rule the rest of this function exists to enforce. A
+// handler for a signal nothing can send is a caller waiting forever, and it
+// makes no difference whether the reason is "no such number" or "the slice
+// has not landed". SIGWINCH (28) sat outside for the same reason until the
+// resize slice gave it a producer (syscall_pty_resize) — the day a signal
+// gets a sender is the day it joins the list, which is exactly the rule.
 //
 // THE COUNTER-ARGUMENT, considered and rejected — and it deserved considering,
 // because os64 has made exactly this bet before and WON it: registration
@@ -361,12 +362,17 @@ static int signal_pick_deliverable(task_t *task, thread_t *thread)
 		{
 			// No handler: the default action stands. For a death-default
 			// signal that means the checkpoints (or the orphan check below)
-			// end the task. For everything else the default is IGNORE, and
-			// ignoring is spelled CONSUMING: a WINCH nobody asked about is
-			// cleared here, under the lock both delivery paths hold, rather
-			// than sitting pending until a handler happens to be installed
-			// and then firing for a resize that happened an hour ago.
-			if (!(SIG_BIT(sig) & SIGNALS_DEFAULT_IS_DEATH))
+			// end the task. For a default-IGNORE signal, ignoring is spelled
+			// CONSUMING — and the FIRST place that happens is publication
+			// (task_signal_and_nudge drops a WINCH at a task with no handler
+			// before any bit is set, because a thread parked with no handler
+			// never comes through here; Codex #32). This is the backstop for
+			// the gap between: published while a handler was installed,
+			// uninstalled by a sibling before the pick. Cleared under the
+			// lock both delivery paths hold, so it cannot sit pending until a
+			// handler happens to be installed and then fire for a resize
+			// that happened an hour ago.
+			if (SIG_BIT(sig) & SIGNALS_DEFAULT_IS_IGNORE)
 				sigset_del(&thread->signals.sigind, (signals)sig);
 			continue;
 		}

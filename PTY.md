@@ -298,6 +298,19 @@ means obeying the two rules the gauntlet wrote:
   not the one that means "would a checkpoint stop this thread".
 - Undeliverable-and-non-terminating is already handled: §10 drops it with a
   log line. That is the correct behaviour for a WINCH nobody can receive.
+- **Its home is `SIGNALS_DEFAULT_IS_IGNORE`, and ignore means CONSUMED AT
+  PUBLICATION** (Codex #32): a task with no SIGWINCH handler gets no
+  pending bit at all. "Leave the bit and let the pick drop it" looked the
+  same and was not — a thread parked with no handler is deliberately left
+  asleep, never reaches the pick, and a handler installed later by a
+  sibling would run for a resize from an hour ago. The pick's own
+  consumption survives as the backstop for a handler uninstalled between
+  publication and delivery.
+- **Every park ends for it, `task_wait` included, and every park LEAVES
+  through `current_thread_will_catch()`.** The wait was the one that did
+  not ask (a shell could not hear a resize until its job finished —
+  `winchtest` act 6 is its fixture), and sleep was the one that asked the
+  narrower question on the way out (see the fingerprints).
 
 ### "It changed" is useless without "to what" — and that half already exists
 
@@ -350,7 +363,18 @@ call in the resize arm, verified on glass by dragging a gterm and watching
 - **A dragged gterm resizes but husk only notices at the next keystroke**:
   a park loop is testing `SIGNALS_TERMINATING` instead of asking
   `signal_park_must_end` — every blocking wait must ask the predicate, and
-  a new one copied from an old one will carry the mask test with it.
+  a new one copied from an old one will carry the mask test with it. (Or
+  not asking at all: `task_wait` re-parked on every wake until Codex #32,
+  so a shell with a running job was deaf. `winchtest` act 6.)
+- **A multi-threaded program dies 130 when its window is dragged, with
+  no Ctrl+C anywhere**: a park's EXIT asked `signal_has_handler_for_pending`
+  instead of `current_thread_will_catch()`. The WINCH is task-wide; a
+  sibling delivered it first and cleared this thread's bit, and "nothing
+  pending" was read as "nothing will catch it" — a death with no name,
+  which the ladder tags SIGINT. Sleep did this (Codex #32).
+- **A program installs a SIGWINCH handler and it fires at once for a
+  resize that already happened**: the ignored WINCH was left pending
+  instead of consumed at publication (`task_signal_is_ignored`, task.c).
 - **Dragging a window kills everything in it (exit 130/141)**: SIGWINCH has
   crept into `SIGNALS_DEFAULT_IS_DEATH` or `SIGNALS_TERMINATING`. Its
   default is ignore; `winchtest` act 2 catches this (the child dies instead

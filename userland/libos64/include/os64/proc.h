@@ -11,6 +11,7 @@
 // For OS64_SPAWN_* — the spawn flag values are part of the kernel contract,
 // so they are defined once in the ABI rather than mirrored here.
 #include "os64/syscall_numbers.h"
+#include "os64/signal.h"   // OS64_INTERRUPTED — what os64_wait and os64_sleep answer when a handler ran
 // os64_ticks_t — the monotonic clock struct os64_ticks fills (and the
 // stopwatch-vs-calendar doctrine, which lives with the struct).
 #include "os64/ticks.h"
@@ -118,6 +119,12 @@ int64_t os64_spawn_seated(const char *path, char *const argv[], int64_t master);
 // ended (> 0), or negative if there's no such child; writes the child's exit
 // code to *exit_code if non-NULL. Returns immediately if the child already
 // ended.
+//
+// A blocking wait can be CUT SHORT: if this program has a handler installed
+// and that signal arrives (SIGWINCH, when your terminal window is dragged),
+// the handler runs and the call answers OS64_INTERRUPTED with nothing
+// collected — the child is still yours to wait for, so loop (SIGNALS.md §8,
+// no restart). A program with no handlers never sees it.
 int64_t os64_wait(int64_t pid, int32_t *exit_code);
 
 // Collect ONE already-finished child WITHOUT ever blocking. Returns that
