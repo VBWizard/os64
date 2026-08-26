@@ -281,11 +281,14 @@ void wm_set_pinned(window_t *w, bool pinned)
 
 void wm_set_decorated(window_t *w, bool decorated)
 {
-	// The desktop has no chrome to toggle: wm_chrome_top answers 0 for it
-	// regardless of this flag, but composite_one paints a titlebar whenever
-	// NO_DECORATIONS is clear — so flipping it here drew a titlebar reading
-	// "desktop" across the top of the wallpaper, and that strip became a
-	// drag handle (Fable's review, 2026-08-25).
+	// The desktop has no chrome to toggle. wm_has_titlebar answers false for
+	// it whatever this bit says (rd3), so flipping the bit would change
+	// nothing on the glass — and a toggle that changes nothing but the flag
+	// word is worse than one that is refused: get_state would report a
+	// decoration the window does not have. (Before rd3, composite_one read
+	// the bit directly, and the toggle really did paint a "desktop" titlebar
+	// across the wallpaper that doubled as a drag handle — Fable's review,
+	// 2026-08-25. The decline predates the fix that made it cosmetic.)
 	if (desktop_declines(w, "decorate"))
 		return;
 	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS))

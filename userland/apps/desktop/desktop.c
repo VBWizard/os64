@@ -297,9 +297,14 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // The window IS the screen, and it is born unfocused: the programs this
-    // shell is about to start should get the keyboard, not the wallpaper.
-    // Clicking it still focuses it — START_UNFOCUSED is about birth only.
+    // The window IS the screen. START_UNFOCUSED asks that the programs this
+    // shell is about to start get the keyboard rather than the wallpaper —
+    // but on the ordinary boot this is the FIRST window, and the WM focuses
+    // a first window regardless (something must hold focus, or keys route
+    // to NULL — see the flag's comment in window.h). So the desktop IS
+    // focused at birth, and stays so if gui.conf starts nothing; each
+    // startup app takes focus as it appears. Clicking the wallpaper focuses
+    // it again — START_UNFOCUSED is about birth only.
     int64_t win = os64_gui_window_create("desktop", 0, 0, sw, sh,
                                          OS64_GUI_WINDOW_DESKTOP |
                                          OS64_GUI_WINDOW_NO_DECORATIONS |
