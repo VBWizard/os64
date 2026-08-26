@@ -460,29 +460,30 @@ int main(int argc, char **argv)
     // A TRUNCATED FILE STARTS NOTHING (Codex #31 rd5). The reader hands over
     // whatever fits, including the line the cut fell in the middle of — and
     // a `start` path cut short is a DIFFERENT path, one that may name a
-    // program that exists. The kernel's reader refused an oversized gui.conf
-    // outright; so does this one. Refusing the whole FILE rather than the
-    // last line, because "which line was cut" is not something the callback
-    // can see, and a half-obeyed startup file is worse to debug than an
-    // ignored one that said why.
+    // program that exists. Refusing the whole FILE rather than the last
+    // line, because "which line was cut" is not something the callback can
+    // see, and a half-obeyed startup file is worse to debug than an ignored
+    // one that said why.
     if (rc == OS64_CONF_TRUNCATED) {
         os64_complain("desktop: %s: too large to trust — starting nothing\n",
                      gui_path);
         list.count = 0;
         // The launcher bindings go too: the reader hands the callback every
         // buffered line BEFORE reporting the truncation, so a refused file
-        // can already have bound a button. "Starting nothing" has to mean it.
-        for (int b = 0; b < 3; b++)
+        // can already have bound a button. "Starting nothing" has to mean it
+        // — including saying nothing further about lines that were never
+        // going to run.
+        for (size_t b = 0; b < sizeof(list.launcher) / sizeof(list.launcher[0]); b++)
             list.launcher[b][0] = 0;
+        list.overflowed = false;
     }
     if (list.overflowed)
         os64_complain("desktop: more than %d start lines; the rest ignored\n",
                      DESKTOP_APPS_MAX);
 
-    // NO gui.conf ANYWHERE means the built-in demo pair — the promise the
-    // kernel's reader made and this one inherits: "an absent config file
-    // must leave the machine behaving exactly as it did before the config
-    // file existed", the same promise /etc/os64.conf makes about the search
+    // NO gui.conf ANYWHERE means the built-in demo pair — "an absent config
+    // file must leave the machine behaving exactly as it did before the
+    // config file existed", the same promise /etc/os64.conf makes about the search
     // path. A gui.conf that EXISTS and lists nothing still starts nothing:
     // that is how "start nothing" is spelled, and the distinction is the
     // whole reason this check is on NO_FILE and not on the count.

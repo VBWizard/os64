@@ -55,6 +55,13 @@
 // two numbers disagree, the deeper menus parse fine and then answer a hover
 // with nothing at all.
 #define OS64_MENU_DEPTH_MAX   16
+
+// Size an error buffer with this, not with a guess. A complaint is
+// "<path>:<line>: <reason>", and the longest reason quotes a label AND a
+// name in full — the name lands at the END, which is the half a reader
+// needs, so a buffer chosen by eye cuts off exactly the wrong part.
+#define OS64_MENU_ERR_MAX     (OS64_CONF_PATH_MAX + OS64_MENU_LABEL_MAX + \
+                               OS64_MENU_NAME_MAX + 96)
 #define OS64_MENU_NODES_MAX   256   // every item, rule and cascade in the file
 #define OS64_MENU_NAMED_MAX   32    // named menus per file
 #define OS64_MENU_FILE_MAX    32768 // the slurp cap; larger is refused whole

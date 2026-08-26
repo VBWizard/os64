@@ -303,9 +303,8 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
     }
 
     if (depth > 0) {
-        char what[96];
-        os64_snprintf(what, sizeof(what), "menu opened here was never closed with '}'");
-        complain(err, err_cap, m->path, stack[depth - 1].line, what);
+        complain(err, err_cap, m->path, stack[depth - 1].line,
+                 "menu opened here was never closed with '}'");
         return OS64_MENU_SYNTAX;
     }
 
@@ -318,7 +317,9 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
             continue;
         int16_t first = os64_menu_find(m, n->ref);
         if (first < 0 && !os64_menu_named_exists(m, n->ref)) {
-            char what[96];
+            // Both names in full: the REF is what the reader has to go fix,
+            // and it sits at the end of the sentence.
+            char what[OS64_MENU_LABEL_MAX + OS64_MENU_NAME_MAX + 96];
             os64_snprintf(what, sizeof(what), "cascade \"%s\" references a menu named \"%s\" that is not defined",
                           n->label, n->ref);
             complain(err, err_cap, m->path, n->line, what);

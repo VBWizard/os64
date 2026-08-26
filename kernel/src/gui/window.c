@@ -646,9 +646,17 @@ void wm_deliver_event(window_t *w, const input_event_t *ev)
 		// nothing left to take it down.
 		//
 		// So focus takes the OLDEST slot instead. Advancing the tail is what
-		// a reader does, so the full/empty arithmetic is untouched and no
-		// state lives outside the ring. Evicting an older focus event is
-		// fine: the newer one is the transition that still holds.
+		// a reader does, so the arithmetic is untouched and no state lives
+		// outside the ring.
+		//
+		// What LEAVES is whatever is oldest, and it is worth being honest
+		// about the cost: usually a mouse move, but it can be anything the
+		// client has not read — an evicted WINDOW_CLOSE makes a polite
+		// Alt+F4 do nothing, and turns the user's second one into the
+		// SIGTERM escalation. That trade is deliberate, and only reachable
+		// by a client already 64 events behind. (An older FOCUS event is the
+		// one eviction that costs nothing: the newer one is the transition
+		// that still holds.)
 		if (ev->type != INPUT_EVENT_WINDOW_FOCUS)
 			return;
 		w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;

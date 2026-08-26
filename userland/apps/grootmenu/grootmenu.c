@@ -56,6 +56,11 @@ typedef struct
     int             n;
     int             hi;              // highlighted row, -1 = none
     int             open_row;        // the row whose cascade is open, -1 = none
+    // The row whose cascade was last ATTEMPTED, -1 = none. Distinct from
+    // open_row because an attempt can fail: a refused cascade would
+    // otherwise be re-tried — and re-complained — on every mouse move over
+    // its row, which is report rate for a hand resting on the mouse.
+    int             tried_row;
     bool            has_sub;         // any cascade rows (width reserves the arrow)
 } level_t;
 
@@ -126,13 +131,17 @@ static void close_deeper_than(int d)
         os64_gui_window_destroy(lv->win);
         lv->win = 0;
     }
-    if (d >= 0 && d < gDepth)
+    if (d >= 0 && d < gDepth) {
         gLevels[d].open_row = -1;
+        gLevels[d].tried_row = -1;   // the pointer moved on; a retry is honest again
+    }
 }
 
 // Open the menu whose first child is `first`, top-left at screen (sx, sy),
-// clamped so the whole thing is on the glass. Returns false if the tree is
-// empty or the window could not be made.
+// clamped so the whole thing is on the glass. Returns false if it could not
+// be opened — having COMPLAINED first whenever the reason is one the reader
+// could act on, and silently when it is not (an empty tree, nesting past the
+// grammar's own depth). Callers must not add a second guess about why.
 static bool open_level(int16_t first, int32_t sx, int32_t sy)
 {
     if (gDepth >= MENU_DEPTH_MAX || first < 0)
@@ -140,6 +149,7 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
     level_t *lv = &gLevels[gDepth];
     os64_memset(lv, 0, sizeof(*lv));
     lv->hi = -1;
+    lv->tried_row = -1;
     lv->open_row = -1;
 
     // Lay the rows out and measure the widest label.
@@ -219,12 +229,15 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
 static void open_cascade(int d, int r)
 {
     level_t *lv = &gLevels[d];
-    if (lv->open_row == r)
+    if (lv->open_row == r || lv->tried_row == r)
         return;
     close_deeper_than(d);
     const os64_menu_node_t *node = &gMenu.nodes[lv->rows[r]];
     if (node->first_child < 0)
         return;   // an empty cascade opens nothing, and says nothing
+    // Recorded BEFORE the attempt, because a refusal is what has to be
+    // remembered: open_row alone only remembers successes.
+    lv->tried_row = r;
     int32_t sx = lv->x + (int32_t)lv->fw - CASCADE_OVERLAP;
     int32_t sy = lv->y + lv->row_y[r];
     if (open_level(node->first_child, sx, sy))
@@ -329,7 +342,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    char err[160];
+    char err[OS64_MENU_ERR_MAX];
     os64_menu_status_t st = os64_menu_load(&gMenu, "menu.conf", err, sizeof(err));
     if (st != OS64_MENU_OK) {
         // Say WHICH file and WHY: a menu that does not appear is a config
@@ -347,8 +360,13 @@ int main(int argc, char **argv)
     }
 
     os64_ui_theme_init(&gTheme);
-    if (!open_level(os64_menu_find(&gMenu, name), x, y)) {
-        os64_complain("grootmenu: menu \"%s\" is empty\n", name);
+    int16_t first = os64_menu_find(&gMenu, name);
+    if (!open_level(first, x, y)) {
+        // Empty is the only refusal this end can name. The others said what
+        // was wrong on their way out, and a guess appended here would be
+        // both the last word and the wrong one.
+        if (first < 0)
+            os64_complain("grootmenu: menu \"%s\" is empty\n", name);
         return 1;
     }
 
