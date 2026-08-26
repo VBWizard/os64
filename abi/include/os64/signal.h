@@ -50,9 +50,12 @@
 
 #define OS64_SIGNAL_COUNT 32
 
-// WHAT AN INTERRUPTED CALL ANSWERS. A blocking call whose thread ran a
-// handler returns this instead of its normal result: the wait was cut short,
-// nothing was accomplished, and the caller decides what to do about it.
+// WHAT AN INTERRUPTED CALL ANSWERS. A blocking call cut short by a signal
+// this program handled at the moment it woke returns this instead of its
+// normal result: the wait ended early, nothing was accomplished, and the
+// caller decides what to do about it. It does NOT promise the handler ran —
+// it usually has, but a sibling thread can uninstall the handler between
+// the wake and the return, and the call still answers this.
 //
 // os64 has no SA_RESTART and no EINTR. POSIX shipped both behaviours because
 // its authors could not decide, and every caller since has had to learn which

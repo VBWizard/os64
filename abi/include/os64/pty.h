@@ -24,7 +24,8 @@
 //   read()   — reserved for STREAM mode; in GRID mode it refuses (a grid is
 //              not a stream, and pretending would teach the wrong lesson)
 //   resize   — SYSCALL_PTY_RESIZE(master, cols, rows): the grid follows the
-//              window, and every task seated on the slave gets SIGWINCH.
+//              window, and every task seated on the slave that installed a
+//              SIGWINCH handler gets the signal (the rest are not disturbed).
 //              The program inside asks /proc/self/tty what the size is now
 
 #ifndef OS64_PTY_H
@@ -92,9 +93,11 @@ static inline int64_t os64_pty_snapshot(int64_t master,
 // across (left edges kept, no reflow, cursor clamped — and if a shorter
 // screen would hide the cursor, the top rows roll into scrollback so the
 // line being typed stays on the glass), the generation bumps so your own
-// snapshot poll repaints, and every task seated on the slave gets SIGWINCH.
-// Same fence as create (2..512 x 2..256). Returns 0, or a negative error —
-// and on error the grid is exactly as it was.
+// snapshot poll repaints, and every task seated on the slave that installed
+// a SIGWINCH handler gets the signal — a seat without one is not disturbed,
+// and nothing is left pending for a handler it installs later. Same fence
+// as create (2..512 x 2..256). Returns 0, or a negative error — and on
+// error the grid is exactly as it was.
 static inline int64_t os64_pty_resize(int64_t master, uint32_t cols, uint32_t rows)
 {
 	return (int64_t)os64_syscall3(SYSCALL_PTY_RESIZE, (uint64_t)master, cols, rows);

@@ -240,8 +240,9 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows);
 //
 // Grid-only: it never touches the glass, so it is a PTY verb today (the
 // syscall gates on is_pty). A VT could use it the day the renderer's cell
-// geometry can change underneath one. Returns false on a bad geometry or
-// an allocation failure, and then the grid is untouched.
+// geometry can change underneath one. Returns false on a bad geometry —
+// the only refusal there is (the allocator panics on exhaustion rather
+// than returning NULL) — and then the grid is untouched.
 bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows);
 
 // The master's write half: bytes become synthesized key events into the
