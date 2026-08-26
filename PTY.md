@@ -264,19 +264,24 @@ land on opposite sides of it:
   think about. The origin is preserved whenever preserving it is possible.
 - **The wake — the piece the design missed.** Every park loop in the kernel
   (console_read, the pipes, sleep, event_wait, thread_join, the three net
-  waits) ended only for `SIGNALS_TERMINATING`, and `processSignals` rousted
+  waits — and `task_wait`, which asked nothing at all until Codex #32 rd1)
+  ended only for `SIGNALS_TERMINATING`, and `processSignals` rousted
   a sleeper only for the same mask — correct while every catchable signal
   was also terminating, and useless the day one was not. A handled SIGWINCH
   raised at a shell blocked in `read()` would have been delivered on the
   next KEYSTROKE. The fix is one predicate, `signal_park_must_end(thread)`:
   a terminate pending, or ANY pending signal a handler will catch — because
   the handler is armed only at the dispatcher's exit, and a thread that
-  stays parked never reaches it. Twelve sites, one question. The syscall
+  stays parked never reaches it. Twelve park loops plus the sweep —
+  thirteen sites, one question. The syscall
   boundary's `current_thread_will_catch` gained the matching edge: a park
   that ended for a non-death signal whose handler was uninstalled meanwhile
   answers INTERRUPTED, not death — there is nothing terminating to name.
-- **Default action = ignore, and ignore is spelled CONSUME.** An unhandled
-  pending WINCH is cleared at the pick (`signal_pick_deliverable`, under
+- **Default action = ignore, and ignore is spelled CONSUME.** A WINCH at a
+  task with no handler is dropped at publication (no bit is ever set —
+  `task_signal_is_ignored`, rd1), and one orphaned by a handler uninstalled
+  after publication is cleared from every thread at the pick
+  (`signal_pick_deliverable`, under
   the same lock both delivery paths hold) rather than sitting pending until
   a handler is installed an hour later and fires for a resize nobody
   remembers.
