@@ -704,10 +704,13 @@ Three things learned building them, for the next chord:
   can get beneath. `band_of()` in window.c returns the rank and both
   `link_on_top` and `at_band_top` derive from it, so a fourth band costs one
   line — the two-band code's own warning was that "three copies of find the
-  band boundary is three chances to disagree". The desktop band buys a
-  z-position and nothing else: the window is still focusable and still gets
-  keys and clicks, because being the target of a click that lands on no
-  application is the whole point (that click is where a root menu and the
+  band boundary is three chances to disagree". The desktop band buys the
+  z-position, no chrome, an exemption from Alt+Tab and a refusal of the WM
+  verbs that would make the window vanish or float (the whole contract is
+  listed on the flag in os64/gui.h) — and keeps what matters most: the window
+  is still focusable and still gets keys and clicks, because being the
+  target of a click that lands on no application is the whole point (that
+  click is where a root menu and the
   launcher come from). It IS skipped by the Alt+Tab walk — a desktop is not
   something you tab to — and pin/maximize/minimize/decorate/close decline it,
   guarded at the `wm_` setters so every caller is covered rather than just the

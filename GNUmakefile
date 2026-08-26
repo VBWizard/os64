@@ -460,7 +460,7 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/os64.conf ::/etc/os64.conf
 	# gui.conf matters MORE on the lifeboat than anywhere else: the QEMU GUI
 	# boot entry roots this FAT partition, so without a copy here that boot
-	# takes the built-in defaults (both demos, hello window on) and the file
+	# takes the built-in defaults (the demo pair, started by /bin/desktop) and the file
 	# on the ext2 root is never consulted.
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/gui.conf ::/etc/gui.conf
 	# ── The HD-boot payload (2026-08-21) ─────────────────────────────────

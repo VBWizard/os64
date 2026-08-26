@@ -160,9 +160,11 @@ typedef struct window
     // taskID), stamped by gui_window_create. Ownership is a CLIENT-API
     // concept: gui_client.c enforces it on every handle lookup and
     // gui_task_destroy_windows sweeps by it on task exit — the wm_* layer
-    // never reads it (mechanism here, policy at the boundary). Kernel
-    // daemons (guicomp's hello window, the console) own theirs the same
-    // way; they simply never exit.
+    // never reads it (mechanism here, policy at the boundary). A
+    // kernel-thread owner would own its window the same way and simply
+    // never exit — guicomp's hello window and the console window did, until
+    // both were retired (2026-08-19, 2026-08-25); nothing in ring 0 owns a
+    // window today, and the demo kernel threads that could are not spawned.
     uint64_t  owner;
 
     char      title[GUI_WINDOW_TITLE_MAX];

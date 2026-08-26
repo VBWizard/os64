@@ -116,10 +116,12 @@
 // refused at the door). So a small window on an 800x600 screen reserves
 // 800x600 (a resize up to fullscreen costs no allocation), and this constant
 // is the floor every app may rely on, not the cap the screen is held to.
-// An app that derives a size from data — a viewer, a
-// 5000-pixel image on an 8K panel — clamps to BOTH this and the screen
-// before asking, or decodes a perfectly good file and is refused at the
-// door. window.c asserts the WM's own constant equals this one.
+// An app that derives a size from data — a viewer with a 5000-pixel image —
+// clamps to THE SCREEN before asking (os64_gui_screen_info), and a request
+// that fits the screen is never refused for size; on a panel wider than this
+// constant it may also ask up to the screen. This constant is what an app
+// may rely on WITHOUT asking the screen size. window.c asserts the WM's own
+// constant equals this one.
 #define OS64_GUI_WINDOW_DIM_MAX   4096
 
 // The frame to ASK FOR in order to BE GIVEN a canvas of content_w x content_h.

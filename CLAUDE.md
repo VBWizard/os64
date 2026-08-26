@@ -511,7 +511,7 @@ design in `docs/conf_path.md`.
   stay LAST, deliberately: the lifeboat exists for the day the ext2 root is
   broken, and the search path's own root file lives on that root.
 - **FOLDING CASE IS THE READER'S CHOICE, NEVER THE PARSER'S**, because os64
-  has two kinds of key. A SETTING name (`position`, `format`, `hello`) is
+  has two kinds of key. A SETTING name (`position`, `format`, `start`) is
   compared with `os64_streq_nocase` — case there is noise, and
   `os64_conf_get` folds for you. A key that is DATA is compared verbatim:
   **os64get.conf's keys are FILE NAMES**, and folding `BOOTX64.EFI` would
