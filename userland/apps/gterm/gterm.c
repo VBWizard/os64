@@ -46,7 +46,7 @@
 #define CELL_H 16
 #define WANT_COLS 100u
 #define WANT_ROWS 38u
-#define MAX_CELLS 16384u          // 128KB of BSS; caps a resize-crazy future
+#define MAX_CELLS 16384u          // 128KB of BSS; past it a resize keeps the old grid
 
 #define GTERM_BG 0xff000000u      // the console's black, honored
 
@@ -459,17 +459,32 @@ int main(int argc, char **argv)
 			}
 			else if (ev.type == OS64_GUI_EVENT_WINDOW_RESIZE)
 			{
-				// The WINDOW resizes; the GRID does not — not yet. The pty's
-				// cell array is fixed at creation, so a bigger window gets
-				// letterboxed in background and a smaller one clips its right
-				// and bottom edges away (every primitive clips, so this is
-				// safe — just partial). Teaching the pty its new size, and
-				// the program inside it, is the other half: grid realloc plus
-				// a notification, which is SIGWINCH's entire job description
-				// and PTY.md's booked "Resize" row. Its own slice, because a
-				// terminal that LIES about its size is worse than one that
-				// lets you see the seam.
+				// The WINDOW resized; the GRID follows (PTY.md § Resize).
+				// Hop one, WM -> us, is this event. Hop two, us -> the
+				// program inside, is pty_resize: the kernel reallocates the
+				// grid, carries the text, and raises SIGWINCH at every task
+				// seated on the slave that installed a handler for it — a
+				// program that never asked gets nothing, not even a pending
+				// bit; husk today ignores it, a full-screen program listens.
+				// We are the master and the master owns the geometry; the
+				// snapshot header reports the new size from the next poll,
+				// so render() picks it up without being told.
 				os64_draw_ctx_refresh(&ctx);
+				uint32_t ncols = ctx.surf.width / CELL_W;
+				uint32_t nrows = ctx.surf.height / CELL_H;
+				if (ncols >= 2 && nrows >= 2 && ncols * nrows <= MAX_CELLS &&
+				    (ncols != cols || nrows != rows))
+				{
+					if (os64_pty_resize(master, ncols, nrows) == 0)
+					{
+						cols = ncols;
+						rows = nrows;
+						gSelLive = false;   // the cells a highlight named just moved
+					}
+					// A refused resize (the kernel's geometry fence — its only refusal)
+					// leaves the old grid: letterboxed or clipped, but honest
+					// about its size to the program inside.
+				}
 				rendered_gen = ~(uint64_t)0;   // force a repaint next pass
 			}
 		}

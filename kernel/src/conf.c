@@ -89,8 +89,9 @@ static void conf_io_kernel(void *arg)
 			for (;;) {
 				if (len >= p->cap) {
 					// At the cap. conf_read_file's contract (conf.h) is NULL
-					// for a file LARGER than cap, and gui_startup's "start
-					// nothing" relies on it — so probe one byte and reject the
+					// for a file LARGER than cap, and the desktop's "start
+					// nothing" relied on it when gui_startup read this in ring 0
+					// (it is /bin/desktop's rule now, kept) — so probe one byte and reject the
 					// whole read if the file continues past here, rather than
 					// returning a truncated prefix as a success.
 					uint8_t probe;
@@ -110,8 +111,9 @@ static void conf_io_kernel(void *arg)
 				// to be ONE ladder and one behaviour). `n <= 0` folded "the
 				// file ended" together with "the storage failed", and a
 				// kernel reader that accepts a truncated prefix as the whole
-				// file silently drops settings — gui_startup would start
-				// fewer apps, the resolver would lose hosts entries, and
+				// file silently drops settings — a startup reader would start
+				// fewer apps (gui_startup did, before it became /bin/desktop),
+				// the resolver would lose hosts entries, and
 				// nothing anywhere would say why.
 				//
 				// Both failures take the SAME exit: p->buf stays

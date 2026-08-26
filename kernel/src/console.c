@@ -165,12 +165,16 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 	for (;;)
 	{
 		// A pending TERMINATE outranks the read: the READER is being killed,
-		// whether by Ctrl+C or by a write to its /proc ctl file. Checked at the
+		// whether by Ctrl+C or by a write to its /proc ctl file. So does a
+		// pending signal the reader will CATCH — SIGWINCH on a shell parked at
+		// its prompt is the everyday case — because the handler can only be
+		// armed once the read returns (signal_park_must_end). Checked at the
 		// top of every pass — this is how a reader parked below (and woken by
 		// processSignals when the bit appeared) exits the loop instead of
 		// parking forever. Any bytes in the ring stay for the next reader; a
-		// dying task has no further use for them.
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		// dying task has no further use for them, and an interrupted one
+		// comes back for them.
+		if (signal_park_must_end(self))
 		{
 			// Un-register on the way out (here and at every exit below): a
 			// reader that leaves the loop while the waiter slot still names it
@@ -240,8 +244,9 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		// RUNNING->ISLEEP when we are genuinely off-CPU, so there is no
 		// "runnable while still executing" window). We resume here when
 		// woken — by a keypress via console_wake_if_ready, by processSignals
-		// on a pending SIGINT, or by the backstop — and loop back to the
-		// SIGINT check and the drain. A live deadline shortens the backstop
+		// on a pending signal this park must end for (a terminate, or one a
+		// handler will catch), or by the backstop — and loop back to the
+		// signal_park_must_end check and the drain. A live deadline shortens the backstop
 		// nap so the timeout verdict lands on time, not up to a second late.
 		uint64_t wake = kTicksSinceStart + CONSOLE_READ_BACKSTOP_TICKS;
 		if (deadline != 0 && deadline < wake)

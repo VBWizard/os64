@@ -21,7 +21,7 @@
 #include "scheduler.h"  // kTaskList — the close escalation finds the owner on the spine
 #include "memory/paging.h"     // the canvas mapping (surface pivot)
 #include "memory/allocator.h"  // allocate_memory_aligned / free_memory — task canvas pages
-#include "signals.h"    // SIGSLEEP / SIGNALS_TERMINATING — event_wait's park and its exit
+#include "signals.h"    // SIGSLEEP / signal_park_must_end — event_wait's park and its exit
 #include "os64/signal.h"   // OS64_INTERRUPTED — the value GUI_ERR_INTERRUPTED must BE
 
 // THE TWO RINGS AGREE, OR THE BUILD STOPS (Codex #29 rd19): gui_event_wait's
@@ -50,6 +50,20 @@ _Static_assert(__builtin_offsetof(input_event_t, key) == 4,
                "input_event_t union moved — GUI ABI break");
 _Static_assert(__builtin_offsetof(input_event_t, tick) == 24,
                "input_event_t tick moved — GUI ABI break");
+
+// CHROME IS PUBLISHED TO RING 3 NOW (2026-08-25), because window_create takes
+// FRAME dimensions and an app that wants a canvas of a given size has no way
+// to work out the difference. os64_gui_frame_for_content() does that sum in
+// ring 3 out of these two numbers, so they must BE these two numbers — a
+// helper that quietly disagrees with the WM would size every window slightly
+// wrong, which is exactly the bug it exists to prevent (gview clipped every
+// image it opened; gclock hand-derived the delta and got it right by luck).
+_Static_assert(OS64_GUI_BORDER_WIDTH == GUI_BORDER_WIDTH,
+               "the GUI ABI's border width drifted from the WM's");
+_Static_assert(OS64_GUI_TITLEBAR_HEIGHT == GUI_TITLEBAR_HEIGHT,
+               "the GUI ABI's titlebar height drifted from the WM's");
+_Static_assert(OS64_GUI_MIN_CONTENT == GUI_MIN_CONTENT,
+               "the GUI ABI's minimum content size drifted from the WM's");
 
 // Handle table: handle = index + 1, so 0 is never a valid handle. 32 windows
 // is plenty until real userland apps exist. Guarded by kGuiLock.
@@ -165,7 +179,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 {
 	if (!kEnableGUI)
 		return GUI_ERR_NOT_RUNNING;
-	if (w > 4096 || h > 4096)
+	if (w > wm_dim_max() || h > wm_dim_max())   // OS64_GUI_WINDOW_DIM_MAX, or the screen if larger — window.c
 		return GUI_ERR_BAD_ARGS;
 
 	// Only documented CLIENT flags cross the boundary. The window struct's
@@ -173,11 +187,29 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	// cannot be claimed accidentally through this creation call.
 	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS |
 	                              GUI_WINDOW_START_UNFOCUSED |
-	                              GUI_WINDOW_PINNED;
+	                              GUI_WINDOW_PINNED |
+	                              GUI_WINDOW_DESKTOP;
 	uint32_t create_flags = (uint32_t)flags & client_flags;
-	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - GUI_BORDER_WIDTH;
-	if (content_w < 8 || content_h < 8)
+
+	// DESKTOP AND PINNED ARE A CONTRADICTION, AND IT USED TO RESOLVE BADLY
+	// (Codex #31). "Always at the bottom" and "always on top" cannot both
+	// hold; band_of() checks PINNED first, so a window claiming both was
+	// placed at the very TOP of the z-list while calling itself the desktop —
+	// and it could never be fixed, because wm_set_pinned declines every
+	// desktop window, so nothing could unpin it.
+	//
+	// REFUSED rather than silently resolved, which is this boundary's habit:
+	// an over-long title is refused instead of truncated, a slurp cap that
+	// cannot be honoured is refused instead of clamped. Picking a winner here
+	// would mean the caller asked for one thing and got another, and the flag
+	// word it later reads back would not be the one it passed.
+	if ((create_flags & GUI_WINDOW_DESKTOP) && (create_flags & GUI_WINDOW_PINNED)) {
+		printd(DEBUG_GUI, "gui: window_create refused — DESKTOP and PINNED are contradictory\n");
+		return GUI_ERR_BAD_ARGS;
+	}
+	int32_t content_w = (int32_t)w - 2 * wm_border_width(create_flags);
+	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - wm_border_width(create_flags);
+	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return GUI_ERR_BAD_ARGS;
 
 	// ── THE SURFACE PIVOT (GRAPHICS.md, migration step 3) ───────────────
@@ -204,7 +236,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = (cls != NULL) ? cls->task : NULL;
 	bool pivot = (task != NULL && !task->kernelTask &&
-	              content_w >= 8 && content_h >= 8);
+	              content_w >= GUI_MIN_CONTENT && content_h >= GUI_MIN_CONTENT);
 
 	// The extent is sized to the CAPACITY, not to today's window — the
 	// reservation that makes resize free (window.h's canvas_cap_w comment has
@@ -394,6 +426,7 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	out->flags  = win->flags & (GUI_WINDOW_NO_DECORATIONS |
 	                            GUI_WINDOW_START_UNFOCUSED |
 	                            GUI_WINDOW_PINNED |
+	                            GUI_WINDOW_DESKTOP |   // the band is state too (Codex #31 rd3): without it a saved-and-recreated desktop came back an ordinary window
 	                            GUI_WINDOW_MAXIMIZED |
 	                            GUI_WINDOW_MINIMIZED);
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
@@ -514,8 +547,9 @@ int64_t gui_screen_info(uint32_t *width, uint32_t *height)
 // deliberately leaves us alone — cancelling a not-yet-parked thread's
 // backstop is how task_enqueue_dead_child once put a thread to sleep
 // forever — and the backstop deadline re-runs the drain a moment later.
-// A pending TERMINATE outranks the wait, checked every pass (the kill
-// machinery wakes sleepers; this check is how a woken waiter LEAVES).
+// A pending TERMINATE — or a signal a handler will catch — outranks the wait,
+// checked every pass (processSignals wakes sleepers for exactly those; this
+// check is how a woken waiter LEAVES).
 #define GUI_EVENT_WAIT_BACKSTOP_TICKS (TICKS_PER_SECOND / 4)
 
 int64_t gui_event_wait(int64_t handle, input_event_t *out)
@@ -540,7 +574,7 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 			return err;
 		}
 
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING)) {
+		if (signal_park_must_end(self)) {   // a terminate, or a signal a handler is waiting for
 			// Un-register on the way out — console_read's scar: a stale
 			// waiter slot is a spurious wake out of some LATER unrelated
 			// sleep.

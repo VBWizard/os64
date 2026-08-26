@@ -41,13 +41,24 @@ os64_gui_rect_t os64_rect_union(os64_gui_rect_t a, os64_gui_rect_t b)
 bool os64_rect_intersect(os64_gui_rect_t a, os64_gui_rect_t b,
                          os64_gui_rect_t *out)
 {
-    int32_t x1 = a.x > b.x ? a.x : b.x;
-    int32_t y1 = a.y > b.y ? a.y : b.y;
-    int32_t x2 = (a.x + a.w) < (b.x + b.w) ? (a.x + a.w) : (b.x + b.w);
-    int32_t y2 = (a.y + a.h) < (b.y + b.h) ? (a.y + a.h) : (b.y + b.h);
+    // THE EDGE SUMS ARE WIDENED (Codex #30 rd5). A rect is allowed to sit
+    // anywhere — the blit contract says an off-canvas placement is a no-op,
+    // and "anywhere" includes x == INT32_MAX with w == 1, where `x + w` in
+    // int32_t is signed overflow: undefined, and the sanitizer run this
+    // file's tests are documented to use flags it. Every primitive above
+    // clips through this one function, so widening here keeps the promise
+    // for all of them at once. The RESULT still fits int32_t: it lies
+    // inside `b`, which is a real surface's bounds.
+    int64_t x1 = a.x > b.x ? a.x : b.x;
+    int64_t y1 = a.y > b.y ? a.y : b.y;
+    int64_t ax2 = (int64_t)a.x + a.w, bx2 = (int64_t)b.x + b.w;
+    int64_t ay2 = (int64_t)a.y + a.h, by2 = (int64_t)b.y + b.h;
+    int64_t x2 = ax2 < bx2 ? ax2 : bx2;
+    int64_t y2 = ay2 < by2 ? ay2 : by2;
     if (x2 <= x1 || y2 <= y1)
         return false;
-    *out = (os64_gui_rect_t){x1, y1, x2 - x1, y2 - y1};
+    *out = (os64_gui_rect_t){(int32_t)x1, (int32_t)y1,
+                             (int32_t)(x2 - x1), (int32_t)(y2 - y1)};
     return true;
 }
 
@@ -71,6 +82,41 @@ void os64_draw_hline(os64_gui_surface_t *dst, int32_t x, int32_t y,
                      int32_t len, uint32_t color)
 {
     os64_draw_fill_rect(dst, (os64_gui_rect_t){x, y, len, 1}, color);
+}
+
+void os64_draw_blit(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                    const uint32_t *src, uint32_t w, uint32_t h,
+                    uint32_t src_pitch_px)
+{
+    if (dst == NULL || src == NULL || w == 0 || h == 0)
+        return;
+    // A pitch narrower than the width would make every row read past its own
+    // end — refuse rather than walk the source buffer diagonally.
+    if (src_pitch_px < w)
+        return;
+    // The clip is computed in the DESTINATION's coordinates, exactly like
+    // fill_rect, and then the same offset is applied to the source. That is
+    // what makes a negative x or y clip the LEFT of the image instead of
+    // drawing it shifted — the two rects move together.
+    if ((int64_t)w > 0x7fffffffLL || (int64_t)h > 0x7fffffffLL)
+        return;
+    os64_gui_rect_t want = {x, y, (int32_t)w, (int32_t)h};
+    os64_gui_rect_t c;
+    if (!os64_rect_intersect(want, surface_bounds(dst), &c))
+        return;
+
+    // How far into the source the clip started. Both are >= 0 because c is
+    // the intersection, so c.x >= want.x always.
+    uint32_t skip_x = (uint32_t)(c.x - want.x);
+    uint32_t skip_y = (uint32_t)(c.y - want.y);
+
+    for (int32_t row = 0; row < c.h; row++) {
+        const uint32_t *s = src + (size_t)(skip_y + (uint32_t)row) * src_pitch_px
+                                + skip_x;
+        uint32_t *d = surface_row(dst, c.y + row) + c.x;
+        for (int32_t col = 0; col < c.w; col++)
+            d[col] = s[col];
+    }
 }
 
 void os64_draw_vline(os64_gui_surface_t *dst, int32_t x, int32_t y,

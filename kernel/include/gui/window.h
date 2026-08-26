@@ -14,6 +14,13 @@
 // gui/gui_internal.h). window.c contains no locking of its own.
 
 #define GUI_WINDOW_TITLE_MAX   32
+// The smallest content area a window may have. A degenerate canvas would
+// ripple NULLs and zero-width surfaces through the compositor, so creation
+// refuses one — and ring 3 needs to KNOW that (os64/gui.h publishes it and
+// gui_client.c asserts the two agree), because an app that computes a canvas
+// size from data, as an image viewer does, will otherwise hand over a legal
+// picture and be told its window is bad.
+#define GUI_MIN_CONTENT        8
 #define GUI_WINDOW_EVENTS_MAX  64
 
 // Chrome geometry: a titlebar across the top (which includes the top border)
@@ -43,10 +50,14 @@
 // Created on top of the z-order but WITHOUT stealing focus (unless nothing
 // holds it yet — somebody must). Born 2026-08-17, the day the P5 booted the
 // GUI with no mouse: which window got focus at boot was a RACE between the
-// compositor's thread (hello, console) and the demo tasks, and on a machine
-// with no pointer the loser is stuck wherever the race left it. The demos
-// wear this flag so the shell's console deterministically ends up focused —
-// the thing you TYPE at is the thing that should be listening first.
+// compositor's thread (the hello and console windows it drew then, both
+// since retired) and the demo tasks, and on a machine with no pointer the
+// loser is stuck wherever the race left it. The demos wore this flag so the
+// console deterministically ended up focused — the thing you TYPE at is the
+// thing that should be listening first. Today its wearer is the desktop
+// shell (so the apps it starts get the keyboard, not the wallpaper), and
+// the "unless nothing holds it yet" clause is what focuses the desktop on
+// a boot that starts nothing.
 #define GUI_WINDOW_START_UNFOCUSED (1u << 1)
 // PIN ON TOP (2026-08-23): the window lives in the upper band of the z-list
 // and cannot be buried by an ordinary raise. The user can toggle it with
@@ -75,6 +86,37 @@
 // typing into something you cannot see is the one thing this must never
 // allow.)
 #define GUI_WINDOW_MINIMIZED       (1u << 4)
+// THE DESKTOP (2026-08-25): this window lives in the BOTTOM band of the
+// z-list and nothing can get beneath it. It is what makes a ring-3 desktop
+// shell possible — the shell is an ordinary client that happens to be
+// unburiable-from-below, exactly as X11's desktop programs are ordinary
+// clients over a server-owned root window.
+//
+// WHAT THE FLAG BUYS — the whole list, because an earlier "only a z-band"
+// here was contradicted by its own next paragraph (Codex #31 rd4/rd5):
+//   - the bottom z-band (band_of); nothing can be placed beneath it;
+//   - NO CHROME, whatever the decoration bit says: wm_chrome_top and
+//     wm_border_width answer 0, wm_has_titlebar answers false, and
+//     composite_one paints neither border nor titlebar;
+//   - it is skipped by the Alt+Tab walk (wm_recency_ids — a desktop is not
+//     something you tab TO, it is what is left when you tab away from
+//     everything), and the first Alt+Tab FROM it lands on the most recent app;
+//   - pin, maximize, minimize and decorate decline it at the wm_ setters
+//     (desktop_declines); the chord move/resize gestures and Alt+F4 decline
+//     it in the compositor, since those have no setter to guard.
+//
+// WHAT IT DOES NOT TAKE AWAY: the desktop is still focusable, still
+// hit-tested, still gets keys and clicks and its own event queue — because
+// being an INPUT TARGET is half the reason the shell owns a window at all. A
+// click that lands on no application lands on the desktop, which is where a
+// root menu (twm, 1987) and a launcher come from. Its owner may destroy it.
+//
+// ANY client may set it, and a second one is not an error: the bands are a
+// z-order rule, not a privilege. Two desktop windows simply stack at the
+// bottom in the usual order. os64 has no privilege model to hang "only the
+// real desktop may do this" on, and inventing one for a stacking hint would
+// be a lock on the wrong door.
+#define GUI_WINDOW_DESKTOP         (1u << 5)
 
 // Alt+F4 twice within this long (5s) on a window that did not go away is
 // "I mean it": the owner task gets SIGTERM.
@@ -122,9 +164,11 @@ typedef struct window
     // taskID), stamped by gui_window_create. Ownership is a CLIENT-API
     // concept: gui_client.c enforces it on every handle lookup and
     // gui_task_destroy_windows sweeps by it on task exit — the wm_* layer
-    // never reads it (mechanism here, policy at the boundary). Kernel
-    // daemons (guicomp's hello window, the console) own theirs the same
-    // way; they simply never exit.
+    // never reads it (mechanism here, policy at the boundary). A
+    // kernel-thread owner would own its window the same way and simply
+    // never exit — guicomp's hello window and the console window did, until
+    // both were retired (2026-08-19, 2026-08-25); nothing in ring 0 owns a
+    // window today, and the demo kernel threads that could are not spawned.
     uint64_t  owner;
 
     char      title[GUI_WINDOW_TITLE_MAX];
@@ -209,8 +253,10 @@ void wm_set_pinned(window_t *w, bool pinned);
 // The capacity rule, in ONE place because two allocators must agree on it:
 // wm_create sizes the kernel-side stores with it, and gui_window_create sizes
 // the task-backed canvas extent with it. A window may be created larger than
-// the screen (the client API allows up to 4096), so capacity is the larger of
+// the screen (the client API allows up to wm_dim_max() — 4096, or the screen
+// if it is larger), so capacity is the larger of
 // the two — never smaller than what the window already is.
+uint32_t wm_dim_max(void);   // the largest side a window may have
 void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
                             uint32_t *cap_w, uint32_t *cap_h);
 
@@ -283,6 +329,13 @@ void wm_composite(surface_t *backbuffer, rect_t damage);
 // uncached flush on pixels nobody can see. Caller holds kGuiLock.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 
+// Is this screen rect completely covered by SOME window? The compositor asks
+// before painting the desktop background into a damage rect: if a window is
+// about to cover every pixel of it, the background underneath is invisible
+// and painting it is pure cost. Matters since the desktop shell became a
+// fullscreen window — see the comment at the definition for the measurement.
+bool wm_rect_is_covered(rect_t screen_rect);
+
 // How much chrome sits ABOVE the content: the titlebar (which includes the
 // top border) for a decorated window, the bare border for an undecorated
 // one. THE one place the question is answered — seven sites used to spell
@@ -291,7 +344,30 @@ bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
 // client boundary sizes a content area before any window exists.
 static inline int32_t wm_chrome_top(uint32_t flags)
 {
+    if (flags & GUI_WINDOW_DESKTOP)
+        return 0;   // no chrome at all — see wm_border_width
     return (flags & GUI_WINDOW_NO_DECORATIONS) ? GUI_BORDER_WIDTH : GUI_TITLEBAR_HEIGHT;
+}
+
+// How wide the border is — and it is not always a constant, which is why this
+// exists (2026-08-25). THE DESKTOP HAS NO BORDER.
+//
+// NO_DECORATIONS drops the titlebar and keeps a 1px frame, which is right for
+// an ordinary undecorated window: the border is what separates it from
+// whatever is behind it, and its COLOR is the only focus indication such a
+// window has. Neither argument survives on the desktop. There is nothing
+// behind it to be separated from, and the "border" is a line around the edge
+// of the entire screen that changes colour when you click the wallpaper —
+// which is what Chris saw the first afternoon the shell ran, and it reads as
+// a rendering bug rather than as focus.
+//
+// Written as a function beside wm_chrome_top for exactly the reason that one
+// exists: the border was spelled GUI_BORDER_WIDTH by hand at six sites, and
+// six sites is six chances to miss the day the answer stopped being constant.
+// It stopped being constant today.
+static inline int32_t wm_border_width(uint32_t flags)
+{
+    return (flags & GUI_WINDOW_DESKTOP) ? 0 : GUI_BORDER_WIDTH;
 }
 
 // Where the content area sits on screen (for event coordinate translation
@@ -299,7 +375,7 @@ static inline int32_t wm_chrome_top(uint32_t flags)
 static inline rect_t wm_content_rect_on_screen(const window_t *w)
 {
     return (rect_t){
-        w->frame.x + GUI_BORDER_WIDTH,
+        w->frame.x + wm_border_width(w->flags),
         w->frame.y + wm_chrome_top(w->flags),
         (int32_t)w->content.width,
         (int32_t)w->content.height,
@@ -310,9 +386,21 @@ static inline rect_t wm_content_rect_on_screen(const window_t *w)
 // grab-handle for dragging and NOT part of the client content. An
 // undecorated window has none; its top border is content-adjacent chrome
 // like the other three sides, and a click there is the window system's.
+// Does this window HAVE a titlebar? Asked of wm_chrome_top rather than of the
+// NO_DECORATIONS bit (Codex #31 rd3): a DESKTOP window has no chrome whatever
+// its decoration bit says, and the two sites that tested the bit by hand —
+// this hit-test and composite_one's titlebar paint — disagreed with the
+// chrome functions for a desktop created WITHOUT NO_DECORATIONS: an
+// invisible 20px titlebar across the top of the wallpaper that swallowed
+// clicks and dragged the desktop. One question, one answerer.
+static inline bool wm_has_titlebar(uint32_t flags)
+{
+    return wm_chrome_top(flags) == GUI_TITLEBAR_HEIGHT;
+}
+
 static inline bool wm_point_in_titlebar(const window_t *w, int32_t x, int32_t y)
 {
-    if (w->flags & GUI_WINDOW_NO_DECORATIONS)
+    if (!wm_has_titlebar(w->flags))
         return false;
     return rect_contains_point(
         (rect_t){w->frame.x, w->frame.y, w->frame.w, GUI_TITLEBAR_HEIGHT}, x, y);

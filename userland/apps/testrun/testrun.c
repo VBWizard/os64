@@ -100,6 +100,7 @@ static const fixture_t kFixtures[] = {
     // for the same reason: a suite that cries wolf gets ignored.
     { "/bin/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and atomic publish" },
     { "/bin/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
+    { "/bin/winchtest",       NULL, 0x0A1D0000,  0,          "pty resize: the grid follows, the seats hear SIGWINCH, a blocked read and a blocked wait are interrupted" },
     { "/bin/df_test",         NULL, 0x0DF00000,  0,          "the direction flag does not cross a ring boundary (syscall, and into a handler)" },
     { "/bin/regleak_test",    NULL, 0x02E60000,  0,          "a syscall returns no kernel state in its scratch registers" },
     // PASSES BY DYING, like the nx_test pair above: 141 is SIGPIPE's default

@@ -14,6 +14,7 @@
                                // only answers "am I seated?")
 #include "kmalloc.h"
 #include "memset.h"
+#include "memcpy.h"            // tty_resize_grid carries rows into the new ring
 #include "strings/sprintf.h"
 #include "strings/strlen.h"
 #include "task.h"
@@ -529,13 +530,33 @@ void tty_seat_shell(tty_t *t, struct task *shell)
 	t->state = TTY_LIVE;
 }
 
-void tty_shell_departed(struct task *task)
+void tty_task_departed(struct task *task)
 {
 	if (task == NULL || task->tty == NULL)
 		return;
 	tty_t *t = (tty_t *)task->tty;
 	if (t->shell != task)
-		return;   // a child died, not the seat-holder — not our business
+	{
+		// A child died, not the seat-holder. If it was the FOREGROUND job,
+		// the console goes back to the shell HERE, at the death, not when
+		// the shell's wait returns: since a caught signal can end that wait
+		// with the job still running (Codex #32), "the wait finishing"
+		// is no longer the only way the shell learns the job is gone — a
+		// shell that never re-waits, or that the signal killed, would have
+		// left fgTask naming a corpse for Ctrl+C to dereference. NULL, not
+		// the shell, when the seat is empty — the same value an empty
+		// terminal starts with.
+		//
+		// ONE COMPARE-AND-SWAP, not a check and a store (rd5): the shell
+		// can leave wait(A) on a caught signal and enter wait(B) — which
+		// stores B — while A is dying on another core. A separate check
+		// ("still me?") and store ("then the shell") interleave with that
+		// store, and A's death would overwrite B with the shell: Ctrl+C
+		// then reaches the shell as a keystroke instead of stopping B.
+		// The CAS replaces the pointer only if it still names A.
+		__sync_bool_compare_and_swap(&t->fgTask, task, t->shell);
+		return;
+	}
 
 	t->shell = NULL;
 	t->fgTask = NULL;
@@ -689,18 +710,14 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
 	if (cols < 2 || rows < 2 || cols > 512 || rows > 256)
 		return NULL;
 
-	tty_t *t = kmalloc(sizeof(tty_t));   // zeroed at the allocator choke point
-	if (t == NULL)
-		return NULL;
+	// Zeroed at the allocator choke point, and never NULL: the allocator
+	// panics by name on exhaustion (allocator.c), so the fence above is this
+	// function's only refusal — same as tty_resize_grid.
+	tty_t *t = kmalloc(sizeof(tty_t));
 	t->cols = cols;
 	t->rows = rows;
 	t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
 	t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
-	if (t->cells == NULL)
-	{
-		kfree(t);
-		return NULL;
-	}
 	t->color   = 0xffffffff;
 	t->is_pty  = true;
 	t->pty_mode = PTY_MODE_GRID;
@@ -712,6 +729,81 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
 	kPtyList = t;
 	spinlock_release_irqrestore(&kPtyListLock, flags);
 	return t;
+}
+
+// The grid follows the window (see tty.h for the policy this implements).
+//
+// The ring is a LOGICAL LIST of lines — hist_lines of history, oldest first,
+// then the rows of the live screen — and the copy walks that list rather
+// than the ring indices, which is what makes a new ring of a different
+// height straightforward: decide which logical lines survive, lay them down
+// contiguously in the fresh ring, and set screen_top to where the screen
+// landed. Cells are copied row by row, min(old cols, new cols) each, so
+// the left edge is what every line keeps.
+bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows)
+{
+	// Same fence as pty_create_slave: sanity, not policy.
+	if (t == NULL || cols < 2 || rows < 2 || cols > 512 || rows > 256)
+		return false;
+
+	uint32_t new_total = rows * TTY_SCROLLBACK_SCREENS;
+	// Allocate OUTSIDE the grid lock: kmalloc takes the allocator's own
+	// interrupts-off lock, and holding one spinlock while waiting on another
+	// is how lock orders get invented by accident. Zeroed at the choke point,
+	// so every cell a copy does not reach is already blank. No NULL check,
+	// because there is nothing to check: the allocator panics by name on
+	// exhaustion and never returns "no memory" (allocator.c) — the fence
+	// above is this function's only refusal.
+	tty_cell_t *fresh = kmalloc((size_t)new_total * cols * sizeof(tty_cell_t));
+
+	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
+
+	// If the cursor would fall off the bottom of a shorter screen, the top
+	// `shift` rows of the old screen become history so the cursor's row is
+	// the new last row. Growing, or shrinking with room to spare: shift 0,
+	// the origin stays put.
+	uint32_t shift = 0;
+	if (t->cur_row >= rows)
+		shift = t->cur_row - (rows - 1);
+
+	// Logical lines: old history [0, hist_lines), old screen rows after it.
+	uint32_t screen_from = t->hist_lines + shift;          // first surviving screen row
+	uint32_t keep_rows   = t->rows - shift;                 // rows that still exist
+	if (keep_rows > rows)
+		keep_rows = rows;                                   // fewer rows: the rest clip
+	uint32_t keep_hist   = screen_from;                     // everything above it
+	if (keep_hist > new_total - rows)
+		keep_hist = new_total - rows;                       // as much as the new ring holds
+	uint32_t first_kept  = screen_from - keep_hist;         // oldest logical line copied
+
+	uint32_t copy_cols = (t->cols < cols) ? t->cols : cols;
+	// Logical line L lives at ring line (screen_top - hist_lines + L) mod total.
+	uint32_t old_base = (t->screen_top + t->total_lines - t->hist_lines) % t->total_lines;
+	for (uint32_t i = 0; i < keep_hist + keep_rows; i++)
+	{
+		uint32_t src = (old_base + first_kept + i) % t->total_lines;
+		memcpy(&fresh[(size_t)i * cols], tty_line(t, src),
+		       (size_t)copy_cols * sizeof(tty_cell_t));
+	}
+
+	tty_cell_t *old = t->cells;
+	t->cells       = fresh;
+	t->cols        = cols;
+	t->rows        = rows;
+	t->total_lines = new_total;
+	t->hist_lines  = keep_hist;
+	t->screen_top  = keep_hist;        // the screen was laid down right after the history
+	t->view_offset = 0;                // scrolled back or not, a resize shows the live screen
+	t->cur_row    -= shift;
+	if (t->cur_row >= rows)
+		t->cur_row = rows - 1;
+	if (t->cur_col >= cols)
+		t->cur_col = cols - 1;
+	t->generation++;                   // the snapshot poll's contract: every grid mutation
+
+	spinlock_release_irqrestore(&t->lock, flags);
+	kfree(old);
+	return true;
 }
 
 int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)

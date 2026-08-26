@@ -179,7 +179,17 @@ long thread_join_read(thread_join_t* j, int64_t* out)
 
 	for (;;)
 	{
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		// Awake, so a registration left by the park we just came out of
+		// is void — clear it before any return can leave it naming us
+		// (the wake sweep checks threadState through this pointer, and a
+		// stale one is a spurious wake at best, freed memory at worst).
+		// Under the list lock, the lock the sweep claims it under.
+		uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
+		if (j->waiter == self)
+			j->waiter = NULL;
+		spinlock_release_irqrestore(&s_list_lock, lf);
+
+		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return THREAD_JOIN_ERR_INTERRUPTED;
 
 		if (j->exited)

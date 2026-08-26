@@ -18,7 +18,7 @@
 // a corpse tagged 143 is legible to anyone who has ever read a shell's exit
 // status. os64's own take numbers POSIX left free.
 
-#define OS64_SIGHUP    1    // your terminal hung up (tty_shell_departed)
+#define OS64_SIGHUP    1    // your terminal hung up (tty_task_departed, when the seated shell dies)
 #define OS64_SIGINT    2    // Ctrl+C
 #define OS64_SIGKILL   9    // uncatchable, by design — see below
 #define OS64_SIGSEGV   11   // you touched memory that isn't yours
@@ -37,15 +37,27 @@
 #define OS64_SIGCONT   18
 #define OS64_SIGSTOP   19
 #define OS64_SIGIO     29
-// 28 is SIGWINCH everywhere and is RESERVED, not defined: the terminal-resize
-// slice gives it something to mean, and a number claimed early is one nobody
-// has to renegotiate.
+// Your terminal changed size. Raised by pty_resize (a terminal window that
+// was dragged tells its pty) at every task seated on that terminal that has
+// a handler for it. DEFAULT: IGNORED — a program that never asks is
+// unaffected, and gets no pending bit at all (nothing waits for a handler
+// installed later to fire for an old resize). A program that cares
+// installs a handler and then RE-OPENS /proc/self/tty to read `cols` and
+// `rows`: the signal carries no payload (the pending set is a bitmask, two
+// resizes before delivery are one), and procfs renders a file at OPEN, so a
+// handle held across the signal reports the old size forever. Expect a
+// blocking call in flight to answer OS64_INTERRUPTED (that is how the handler
+// gets to run) and loop — SIGNALS.md §8, no restart.
+#define OS64_SIGWINCH  28
 
 #define OS64_SIGNAL_COUNT 32
 
-// WHAT AN INTERRUPTED CALL ANSWERS. A blocking call whose thread ran a
-// handler returns this instead of its normal result: the wait was cut short,
-// nothing was accomplished, and the caller decides what to do about it.
+// WHAT AN INTERRUPTED CALL ANSWERS. A blocking call cut short by a signal
+// this program handled at the moment it woke returns this instead of its
+// normal result: the wait ended early, nothing was accomplished, and the
+// caller decides what to do about it. It does NOT promise the handler ran —
+// it usually has, but a sibling thread can uninstall the handler between
+// the wake and the return, and the call still answers this.
 //
 // os64 has no SA_RESTART and no EINTR. POSIX shipped both behaviours because
 // its authors could not decide, and every caller since has had to learn which
@@ -85,8 +97,8 @@ typedef void (*os64_signal_fn)(int signo);
 // to a program that has stopped answering, and a kernel that let a program
 // decline to die would have no last resort.
 //
-// WHAT YOU CAN CATCH, exactly: SIGHUP, SIGINT, SIGSEGV, SIGPIPE, SIGTERM — the
-// signals this kernel can actually send. SIGSEGV included, though a handler
+// WHAT YOU CAN CATCH, exactly: SIGHUP, SIGINT, SIGSEGV, SIGPIPE, SIGTERM and
+// SIGWINCH — the signals this kernel can actually send. SIGSEGV included, though a handler
 // for it runs on the stack that just faulted, so if the STACK is what went
 // wrong there is nowhere to put the frame and the thread dies as it always
 // did. Every other number — the gaps, and the NUMBERED-BUT-NOT-YET-REAL

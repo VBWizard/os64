@@ -670,10 +670,19 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 
 	for (;;)
 	{
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		// Awake at the top: a registration left by the park we just came
+		// out of is void, cleared before any return below can leave the
+		// slot naming a thread that has moved on (a spurious wake out of a
+		// later sleep, or freed memory once it has exited).
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->reader == self)
+			c->reader = NULL;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
+		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return TCP_ERR_INTERRUPTED;
 
-		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
 		if (c->rcv_count > 0)
 		{
 			// Short reads are the contract (every os64 read returns what
@@ -715,12 +724,10 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 			return TCP_ERR_RESET;
 		}
 		// Deadline LAST: bytes, EOF, and death all outrank the clock —
-		// only pure silence times out. Expired readers deregister so the
-		// sweep never wakes someone who already gave up.
+		// only pure silence times out. No deregistration needed here: the
+		// loop top already voided it, and nothing has re-registered since.
 		if (deadline != 0 && kTicksSinceStart >= deadline)
 		{
-			if (c->reader == self)
-				c->reader = NULL;
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return TCP_ERR_TIMEOUT;
 		}
@@ -744,10 +751,17 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 
 	while (sent < len)
 	{
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		// Same discipline as the reader: awake means our registration is
+		// void, and it goes before any return can leave it behind.
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->writer == self)
+			c->writer = NULL;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
+		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return sent ? (long)sent : TCP_ERR_INTERRUPTED;
 
-		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
 		if (c->reset || c->state == TCP_CLOSED || c->state == TCP_LAST_ACK ||
 		    c->state == TCP_TIME_WAIT)
 		{
@@ -784,16 +798,31 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 	for (;;)
 	{
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Awake: last pass's registration is void (see the read loop).
+		if (c->writer == self)
+			c->writer = NULL;
 		bool done = (c->snd_len == 0) || c->reset || c->state == TCP_CLOSED;
 		if (done)
 		{
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			break;
 		}
+		// Ask BEFORE registering (rd2): a break after `c->writer = self`
+		// left the slot naming a thread that had already returned. And ask
+		// UNDER THE SAME LOCK as the completion check and the registration
+		// (rd5): dropping the lock between "not done" and "registered" let
+		// the final ACK land in the gap — tcp_wake_if_ready found no waiter,
+		// and the park ran to its one-second backstop for a write that was
+		// already complete (the lost-registration case its comment names).
+		// signal_park_must_end takes no lock of its own, so it can be asked
+		// here.
+		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			break;
+		}
 		c->writer = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
-			break;
 		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
 	}
 	return (long)sent;

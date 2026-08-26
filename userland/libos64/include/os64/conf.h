@@ -63,9 +63,12 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *user);
 // code ended up: six programs each carried a private copy of the same
 // "/home then /etc" sequence until the afternoon Chris ruled this into
 // existence, and a ladder every reader is supposed to obey must be parsed by
-// exactly ONE thing or it is not one ladder. The kernel already walks it for
-// its own readers (the desktop background), so ring 3 asks that walker
-// rather than growing a second one.
+// exactly ONE thing or it is not one ladder. The walker lives in the kernel
+// (kernel/src/conf.c) because that is the one place every reader in every
+// ring can reach — NOT because the kernel reads configs itself: it did, for
+// one day (the desktop background, until /bin/desktop took the wallpaper to
+// ring 3 on 2026-08-25), and today SYSCALL_CONF_RESOLVE is the walker's only
+// caller. Ring 3 asks it rather than growing a second one.
 //
 // You get the diagnostic for free: because the kernel resolved it,
 // `cat /sys/conf` shows the ladder AND which file every reader actually took,

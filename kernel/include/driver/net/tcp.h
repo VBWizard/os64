@@ -107,7 +107,7 @@ typedef enum tcp_state
 #define TCP_CONNECT_TIMEOUT (10 * TICKS_PER_SECOND)
 
 // In-band sentinels (the pipe.c convention).
-#define TCP_ERR_INTERRUPTED (-3L)   // terminate signal landed
+#define TCP_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end)
 #define TCP_ERR_RESET       (-4L)   // peer sent RST, or the connection died
 #define TCP_ERR_TIMEOUT     (-5L)   // caller's read deadline expired, no bytes
 

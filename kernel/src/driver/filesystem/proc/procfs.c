@@ -535,12 +535,22 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 {
 	tty_t *tty = task_tty(task);
 
+	// The geometry is ONE fact read under the grid lock, because tty_resize_grid
+	// stores rows and cols as two words under that same lock: a handler that
+	// opens this file during back-to-back resizes must never see the old row
+	// count paired with the new column count — a shape no grid ever had, and
+	// this file is how a SIGWINCH handler learns the shape (Codex #32). The
+	// history depth travels with it; it is set in the same store.
+	uint64_t flags = spinlock_acquire_irqsave(&tty->lock);
+	uint32_t rows = tty->rows, cols = tty->cols, hist = tty->hist_lines;
+	spinlock_release_irqrestore(&tty->lock, flags);
+
 	if (tty->is_pty)
 		synth_text_addf(t, "tty\tpty%u\n", tty->index);   // its own namespace (PTY.md)
 	else
 		synth_text_addf(t, "tty\t%u\n", tty->index + 1);   // 1-based, as Alt+F says
-	synth_text_addf(t, "rows\t%u\n", tty->rows);
-	synth_text_addf(t, "cols\t%u\n", tty->cols);
+	synth_text_addf(t, "rows\t%u\n", rows);
+	synth_text_addf(t, "cols\t%u\n", cols);
 	// Whether the glass is currently showing this terminal — an app can skip
 	// expensive redraw work while nobody is looking (and a human debugging
 	// "why is my output not on screen" gets the answer in one cat).
@@ -548,7 +558,7 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 	synth_text_addf(t, "state\t%s\n", (tty->state == TTY_LIVE) ? "live" : "dormant");
 	// How much history Shift+PgUp can reach right now — a pager that knows
 	// the terminal already holds N lines can choose not to repeat them.
-	synth_text_addf(t, "scrollback\t%u\n", tty->hist_lines);
+	synth_text_addf(t, "scrollback\t%u\n", hist);
 	synth_text_addf(t, "fg_task\t%lu\n",
 	           tty->fgTask ? ((task_t *)tty->fgTask)->taskID : 0);
 }

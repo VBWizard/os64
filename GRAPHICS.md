@@ -45,7 +45,7 @@ client API.
    sub-ms) happens under the lock; flushing (UC, slow) strictly after release.
    `gui_damage_add_locked` vs `gui_damage_add`: pick by whether you hold the
    lock — it is NOT recursive.
-4. **IRQ handlers only enqueue.** Never call `scheduler_wake_isleep_task` from
+4. **IRQ handlers only enqueue.** Never call `scheduler_wake_task_waiter` from
    an ISR (`scheduler_trigger` does `sti/hlt`). The compositor polls.
 5. **The console sink never draws and never takes kGuiLock.** `print_n` may be
    called from any context including exception handlers; the sink only appends
@@ -270,7 +270,8 @@ damaged frame.
   reads the HHDM alias, which only exists for *allocated* pages; a
   demand-paged canvas would make the kernel fault on pages the task hasn't
   touched yet. Allocate and map everything up front (a 4K×4K max window is
-  64MB of canvas + 64MB of content — the `w/h ≤ 4096` clamp in
+  64MB of canvas + 64MB of content — the `w/h ≤ wm_dim_max()` clamp (4096,
+  or the screen if it is larger) in
   `gui_window_create` is also the memory bound).
 - **VA placement:** carve a dedicated per-task region for canvas mappings
   (a VMA, like heap/ELF segments use) so canvases can never collide with the
@@ -305,6 +306,42 @@ unacceptable for tasks (any task could present/destroy any window).
   repaints from surviving windows — nothing else to clean visually.
 
 ### Event delivery
+
+**THE RULE FOR DECIDING WHERE A NEW FACT GOES (ruled 2026-08-25, on the
+SIGWINCH question — Chris: "there will be many, so we should probably settle
+on a pattern"): A SIGNAL TELLS A PROCESS SOMETHING; AN EVENT TELLS A WINDOW
+SOMETHING.**
+
+Both end with the app's own function running, so the pattern is not obvious
+from the outside. The difference is WHEN, and on top of WHAT:
+
+- An **event handler runs synchronously** — the app drains its queue at a
+  moment of its own choosing, in its normal context. No reentrancy rules, no
+  signal-safety question, and the fact can carry a PAYLOAD (which key, which
+  button, the new rect) in order.
+- A **signal handler runs asynchronously** — the kernel interrupts the thread
+  wherever it is, pushes a frame, and the handler runs on top of that moment.
+  That is why "which libos64 functions may be called from a handler" is a real
+  open question (SIGNALS.md books it).
+
+So: keys, mouse, resize, close, and every future window fact — focus, theme
+change, publish-ack, a polite close-REQUEST — are EVENTS. Every windowing
+system converged here independently (X11's queue, the Mac's `GetNextEvent`,
+Win32's message pump, all mid-80s); nobody has ever delivered mouse-moves by
+signal. **os64 could not even if it wanted to**: the pending set is
+deliberately a bitmask, so two resizes coalesce into one with no dimensions
+attached — a payload-free coalescing channel is disqualified as a GUI
+transport by its own design (SIGNALS.md § "Explicitly not in scope").
+
+Signals get process-lifecycle and stream-world facts: INT, TERM, HUP, PIPE,
+SEGV — and WINCH, for the program whose whole world is a byte stream.
+**SIGWINCH is not an exception to this rule, it is the rule applied to a
+program that cannot see the GUI**: the process inside a pty has no window and
+no queue, which is exactly why Sun invented the signal for 4.3BSD. Hence the
+terminal-resize slice is TWO hops with two mechanisms — WM → gterm is an
+event (already delivered today), gterm → the program inside is SIGWINCH — and
+the DEBTS row that once called the second hop a client-notification-seam
+customer was corrected the day this rule was written.
 
 - Queues stay per-window (`GUI_WINDOW_EVENTS_MAX 64`, drop-newest on full —
   apps must drain; mouse coords stay CONTENT-local, translated by the
@@ -553,7 +590,8 @@ it, because the pages are legitimately mapped to somebody else.
 So the canvas is **reserved at capacity and never re-pointed**:
 
 - Capacity is the screen (`wm_canvas_capacity_for` — or the window, if it was
-  created larger; the client API allows up to 4096 a side). ONE function, used
+  created larger; the client API allows up to 4096 a side, or the screen if
+  that is larger). ONE function, used
   by both allocators, because a canvas smaller than the content snapshotted
   into it is a buffer overrun with a view of the desktop.
 - `pitch_px` is the capacity's width, **for the window's whole life**. A pixel
@@ -633,9 +671,9 @@ still reaches the app) extended from the mouse to the keyboard:
 | **Ctrl+Alt+T** | hide/show titlebar | content stays put, the frame's top edge moves; 1px border stays; `OS64_GUI_WINDOW_NO_DECORATIONS` honored at create too |
 | **Ctrl+Alt+M** / titlebar double-click | maximize (toggle) | restore frame remembered; a manual move or resize clears it; raises, so a focused-but-buried window still visibly answers |
 | **Ctrl+Alt+N** | minimize | off the glass, not hit-tested, occludes nothing, alive; focus goes to the most recent visible window; Alt+Tab brings it back — release the hold ON its dim row |
-| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path.ppm` (P6, centered, never scaled — a `screendump` can be the wallpaper); no file = the test pattern stays (`gui/desktop.c`) |
+| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path` — **PPM (P6) or BMP, by magic bytes**, centered, never scaled (a `screendump` can be the wallpaper). Read by **`/bin/desktop`** since 2026-08-25, which paints it into a bottom-band WINDOW; `gui/desktop.c` and its in-kernel PPM decoder are deleted. With no shell running, the compositor's test pattern is what shows — it is the floor, and it stayed in the kernel for exactly that reason |
 | `/home/gclock.conf` → `/etc/gclock.conf` | clock window state | `Position = x,y`, `Titlebar = on|off`, `Pinned = true|false`; no file = `(280,10)`, titlebar on, unpinned |
-| `gui.conf` (via the config search path) | what starts with the desktop | `start = /bin/gterm` (repeatable, in order) and `hello = yes|no` for the legacy window. **If the file exists its `start` lines are the whole list, including none** — that is how you say "start nothing"; the built-in demo pair applies only when no `gui.conf` is found. `gui/startup.c`, read once at the top of `gui_start()` |
+| `gui.conf` (via the config search path) | what starts with the desktop | `start = /bin/gterm` (repeatable, in order). **If the file exists its `start` lines are the whole list, including none** — that is how you say "start nothing"; the built-in demo pair applies only when no `gui.conf` is found. Read once by **`/bin/desktop`** as it starts (2026-08-25) — a shell reads its own rc. The `hello = yes|no` key and the window it switched are retired, and with them `gui/startup.c`: the kernel reads no config file for the GUI at all now |
 
 Three things learned building them, for the next chord:
 
@@ -661,6 +699,25 @@ Three things learned building them, for the next chord:
   holds the top of the stack while focus goes elsewhere. Z-order is where
   things are drawn; recency is what the user did last; they stopped being
   the same number the moment one window could refuse to be buried.
+- **THREE BANDS SINCE 2026-08-25**, when the desktop became a ring-3
+  client: pinned (2) above ordinary (1) above **desktop (0)**, which nothing
+  can get beneath. `band_of()` in window.c returns the rank and both
+  `link_on_top` and `at_band_top` derive from it, so a fourth band costs one
+  line — the two-band code's own warning was that "three copies of find the
+  band boundary is three chances to disagree". The desktop band buys the
+  z-position, no chrome, an exemption from Alt+Tab and a refusal of the WM
+  verbs that would make the window vanish or float (the whole contract is
+  listed on the flag in os64/gui.h) — and keeps what matters most: the window
+  is still focusable and still gets keys and clicks, because being the
+  target of a click that lands on no application is the whole point (that
+  click is where a root menu and the
+  launcher come from). It IS skipped by the Alt+Tab walk — a desktop is not
+  something you tab to — and pin/maximize/minimize/decorate/close decline it,
+  guarded at the `wm_` setters so every caller is covered rather than just the
+  chords. The two verbs with no setter of their own — chord move and chord
+  resize — are declined at the gesture in the compositor, like Alt+F4 (Fable's
+  review, 2026-08-25: without that, Ctrl+Alt+drag on the wallpaper moved the
+  desktop, and the title toggle painted a titlebar across it).
 
 The harness grew to test these: `utility/gui_run.sh` drives a headless
 GUI boot from a key script, and speaks **QMP** (`-qmp unix:`) for raw
@@ -812,7 +869,13 @@ sequence can forge it.**
 ### Verification (run 2026-08-23, `utility/gui_run.sh` + QMP)
 
 QMP is the rig — HMP `sendkey` cannot hold Alt across two Tabs. Boot the
-GUI entry (three windows: `hello os64`, `keys`, `bounce`), then:
+GUI entry, then:
+
+*(As run in 2026-08-23 the entry gave three windows — `hello os64`, `keys`,
+`bounce`. Since 2026-08-25 the desktop is `/bin/desktop` and what starts is
+whatever `gui.conf` lists, so put the windows you want in that file first —
+and note the DESKTOP window is skipped by the Alt+Tab walk, so it never
+appears in the strip.)*
 
 | Script | Confirmed by screendump |
 |---|---|
@@ -854,7 +917,11 @@ step/step/ended and step/cancelled as designed.
    chords chapter above)**. Still open: close buttons (and any titlebar
    button at all — the chords were chosen so none is needed yet), a
    launcher/taskbar (Alt+Tab is the only way back from minimize), and
-   re-reading `desktop.conf` without a reboot.
+   re-reading `desktop.conf` without a reboot — **which is a much smaller job
+   now that the reader is `/bin/desktop`**: re-reading a config and
+   repainting is an ordinary thing for a program to do, where it used to mean
+   the compositor re-entering the VFS. Same for the launcher, which now has a
+   window to live on.
 6. Mouse wheel + 5-button (IntelliMouse magic sample-rate handshake).
 7. Alpha translucency (X byte in XRGB is reserved for it; `surface_blit_masked`
    already does shaped blits).

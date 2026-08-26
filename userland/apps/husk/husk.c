@@ -1590,7 +1590,16 @@ static int run_pipeline(char *stages[], int nstages, int background)
 	for (int i = 0; i < taskCount; i++)
 	{
 		int code = 0;
-		long ended = os64_wait(tasks[i].tid, &code);
+		long ended;
+		// A caught signal (a resize, once husk has a handler for one) cuts the
+		// wait short with NOTHING collected — the child still lives and still
+		// owns the console. Returning to the prompt here would be a shell
+		// talking over its own foreground job; the child is still ours to
+		// wait for, so wait again (SIGNALS.md §8: no restart, the caller
+		// loops — this is the loop).
+		do
+			ended = os64_wait(tasks[i].tid, &code);
+		while (ended == OS64_INTERRUPTED);
 		if (ended > 0)
 			report_exit(&tasks[i], code);
 		if (code == 130)        // 128 + SIGINT: died by Ctrl+C

@@ -230,7 +230,7 @@ int main(int argc, char **argv)
 
     for (;;)
     {
-        if (!forever && seq > paramPingCount)
+        if ((!forever && seq > paramPingCount) || ctrlCExit)
             break;
 
         sent++;

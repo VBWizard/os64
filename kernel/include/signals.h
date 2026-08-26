@@ -42,9 +42,20 @@ typedef enum esignals
     SIGTERM   = 15,
     SIGCONT   = 18,
     SIGSTOP   = 19,
-    // 28 is SIGWINCH everywhere, and it is RESERVED here rather than defined:
-    // the terminal-resize slice (DEBTS) is what gives it something to mean,
-    // and a number claimed early is one nobody has to renegotiate later.
+    // The terminal changed size — raised by pty_resize (syscall 51) at every
+    // task seated on the resized slave THAT HAS A HANDLER; a seat without
+    // one gets no bit (task_signal_is_ignored, at publication). DEFAULT
+    // ACTION: IGNORE, and that is the one property of this signal that must
+    // never drift: it is aimed at husk, ls, cat, everything in the window,
+    // and a default of death would kill the lot the first time a window was
+    // dragged. It is therefore in SIGNALS_DEFAULT_IS_IGNORE and absent from
+    // SIGNALS_DEFAULT_IS_DEATH and SIGNALS_TERMINATING; the pick's consume
+    // (signal_pick_deliverable) is the backstop for a handler uninstalled
+    // after publication.
+    // Sun's 4.3BSD addition, and the one signal that exists BECAUSE a program
+    // can have a terminal without having a window (GRAPHICS.md § Event
+    // delivery: a signal tells a process something, an event tells a window).
+    SIGWINCH  = 28,
     SIGIO     = 29,   // POSIX's SIGIO/SIGPOLL — NUMBERED, NOT REAL: nothing raises it,
                       // so signal_is_known refuses it (Codex #29 rd15), like CONT/STOP
 
@@ -74,7 +85,7 @@ typedef enum esignals
 		// Parent death has never killed anything in Unix (orphans are
 		// reparented and run on; that is what makes a daemon possible). THIS
 		// is what ends a shell's leftovers, and `nohup` (PWB, 1979) exists
-		// solely to opt out of it. Raised by tty_shell_departed on every task
+		// solely to opt out of it. Raised by tty_task_departed on every task
 		// still seated on the departing shell's terminal. (SIGHUP = 1, above.)
 
 		// SIGTERM: the machine is going down; finish up. Raised by the
@@ -215,6 +226,18 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	//
 	// Two sets, two questions, and each named for the question it answers.
 	#define SIGNALS_DEFAULT_IS_DEATH  (SIGNALS_TERMINATING | SIG_BIT(SIGPIPE))
+
+	// Every signal whose DEFAULT ACTION IS IGNORE — the third question, and
+	// not the complement of the one above (SIGSEGV is in neither: its default
+	// is death, enforced at the fault, and it never reaches a set). Named
+	// because "ignore" has a mechanism: a signal nobody asked about is
+	// CONSUMED, at publication when no handler is installed
+	// (task_signal_and_nudge / task_signal_all_threads) and at the pick as the
+	// backstop for a handler uninstalled in between — never left pending for
+	// a handler installed later to fire for a resize that happened an hour
+	// ago (Codex #32). A member here must never also be in
+	// SIGNALS_DEFAULT_IS_DEATH.
+	#define SIGNALS_DEFAULT_IS_IGNORE  (SIG_BIT(SIGWINCH))
 
 	// ── PER-THREAD signal state ─────────────────────────────────────────────
 	//
@@ -427,6 +450,18 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// not be executed on its way to being handed the signal it asked for.
 	// Always false for SIGKILL, which is what keeps it the last resort.
 	bool signal_has_handler_for_pending(struct task *t, void *thread);
+
+	// Must a PARKED thread get up? The one question every blocking loop asks
+	// at its top, and processSignals asks before rousting a sleeper. "Yes"
+	// for a pending terminate (its default is death, and the checkpoint at
+	// the syscall boundary applies it or hands it to a handler), and "yes"
+	// for ANY pending signal a handler will catch — because the handler is
+	// armed only at the dispatcher's exit, and a thread that stays parked
+	// never reaches it. Before the SIGWINCH slice every catchable signal
+	// was also terminating, so the mask test stood in for this; a handled
+	// WINCH raised at a shell blocked in read() then reached it on the next
+	// KEYSTROKE, which is not a resize notification anyone would recognize.
+	bool signal_park_must_end(void *thread);
 
 	// Is this a signal at all, and can ring 3 install a handler for it? Two
 	// MEMBERSHIP tests over the public signal set, in ONE place so registration

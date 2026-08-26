@@ -253,8 +253,9 @@ gap it covers.)
 
 What shipped instead — the SIGPIPE rail, generalized. The raise is still one
 word-OR at the keystroke (`console_intr_intercept`, console.c, called from
-keyboard.c's delivery choke). The KILL is `raise_sigint_and_die` (syscall.c,
-twin of `raise_sigpipe_and_die`): the victim dies in its OWN context, through
+keyboard.c's delivery choke). The KILL is `raise_terminating_signal_and_die`
+(syscall.c — born `raise_sigint_and_die`, twin of `raise_sigpipe_and_die`,
+renamed when it grew the HUP/TERM/PIPE ladder): the victim dies in its OWN context, through
 the normal `task_exit` path — free to sleep, safe to close handles, retVal
 130. Three roads lead there:
 

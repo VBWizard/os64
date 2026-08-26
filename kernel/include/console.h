@@ -17,10 +17,12 @@
 //
 // stdout/stderr already work via the write syscall; this adds stdin.
 
-// console_read returned because the calling thread has SIGINT pending — the
-// read didn't fail, the READER is being terminated. The read syscall sees
-// this and enforces the default action (raise_sigint_and_die, syscall.c);
-// the value never reaches ring 3.
+// console_read returned because the calling thread has a signal pending
+// that ends the wait (signal_park_must_end) — the read didn't fail. Either
+// the READER is being terminated, and the read syscall enforces the default
+// action (raise_terminating_signal_and_die, syscall.c), or a handler will
+// catch it and the syscall answers OS64_INTERRUPTED so the handler can be
+// armed on the way out. This value itself never reaches ring 3.
 #define CONSOLE_READ_INTERRUPTED (-2L)
 
 // console_read_deadline returned because the deadline passed with no byte to
@@ -32,7 +34,9 @@
 // ascii bytes into `buf` and return the count (>0). Unix terminal semantics:
 // a read returns as soon as there IS input, not only when `len` is filled.
 // Sleeps (zero CPU) while the buffer is empty; woken by console_wake_if_ready.
-// Returns CONSOLE_READ_INTERRUPTED if the caller has SIGINT pending.
+// Returns CONSOLE_READ_INTERRUPTED if the caller has a signal pending that
+// ends the wait (signal_park_must_end: a terminate, or any signal a handler
+// will catch — SIGWINCH included, since the resize slice).
 long console_read(char *buf, size_t len);
 
 // The same read with a patience limit: `deadline` is an ABSOLUTE kTicksSinceStart

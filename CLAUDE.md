@@ -351,6 +351,33 @@ the library serves every process). How it fits together:
   rewrites `thread->regs` — remember `mp_isrSaved*` is a mirror that must be
   updated too; **§9** the page-fault handler resumes a caught SIGSEGV out of
   the exception frame. SIGKILL is never catchable and never deferred
+- **A park ends for ANY caught signal, not only a terminate** (2026-08-25,
+  the SIGWINCH slice — PTY.md § Resize). Every blocking wait (console, pipes,
+  sleep, wait, event_wait, join, the net waits) and `processSignals`' sleeper
+  sweep ask `signal_park_must_end(thread)`; a new blocking loop must ask it
+  too, or a caught non-death signal (SIGWINCH is the first) reaches its
+  handler only at the program's next syscall — `task_wait` was the one that
+  did not, and a shell could not hear a resize until its job ended (Codex
+  #32). On the way OUT, ask `current_thread_will_catch()`, never
+  `signal_has_handler_for_pending` alone: a sibling can deliver the
+  task-wide signal first and clear your bit, and "nothing pending" must
+  read as "you will not die", not as a death with no name. AND VOID YOUR
+  OWN REGISTRATION AT THE TOP OF EVERY PASS: a park loop registers itself
+  in a waiter slot (`p->readWaiter`, `c->waiter`, `j->waiter`…) that only
+  a CLAIMANT clears — a backstop wake or a signal does not — so a thread
+  awake at the loop top must clear its own slot under the object's lock
+  before any return (`pipe_forget_waiter` is the shape). A slot left
+  naming a thread that returned is a spurious wake out of some later
+  sleep, or a read of freed memory once that thread exits (Codex #32 rd2
+  — eight loops had it; the caught-signal exit made it reachable by a
+  live thread). SIGWINCH = 28,
+  raised by `pty_resize` (syscall 51) at every task seated on the slave
+  that has a handler for it,
+  default IGNORE — it lives in `SIGNALS_DEFAULT_IS_IGNORE` and must never
+  enter `SIGNALS_DEFAULT_IS_DEATH`. Ignore means CONSUMED AT PUBLICATION:
+  a task with no handler installed gets no bit at all (a parked thread
+  never reaches the pick that would have cleared it, and a handler
+  installed later must not fire for a resize from an hour ago)
 - `task->signalLock` has TWO jobs: serializing delivery, and keeping a user
   page alive across a frame write (see its comment in task.h — the second job
   is not obvious from the name and a missed site was a kernel panic)
@@ -511,7 +538,7 @@ design in `docs/conf_path.md`.
   stay LAST, deliberately: the lifeboat exists for the day the ext2 root is
   broken, and the search path's own root file lives on that root.
 - **FOLDING CASE IS THE READER'S CHOICE, NEVER THE PARSER'S**, because os64
-  has two kinds of key. A SETTING name (`position`, `format`, `hello`) is
+  has two kinds of key. A SETTING name (`position`, `format`, `start`) is
   compared with `os64_streq_nocase` — case there is noise, and
   `os64_conf_get` folds for you. A key that is DATA is compared verbatim:
   **os64get.conf's keys are FILE NAMES**, and folding `BOOTX64.EFI` would
@@ -537,12 +564,17 @@ design in `docs/conf_path.md`.
   frame rect in create's units plus the live flags. Without it no app could
   learn anything the user did to its window — drag, resize, Ctrl+Alt+P — so
   none could save what you had arranged.
-- **`gui.conf` says what starts with the desktop** (`gui/startup.c`, read at
-  the top of `gui_start()`): `start = /bin/gterm`, repeatable and in order,
-  plus `hello = yes|no` for the legacy "hello os64" window. The rule worth
-  knowing: **if the file exists, its `start` lines are the whole list — even
-  when there are none**, which is how "start nothing" is spelled; the
-  built-in demo pair applies only when no `gui.conf` is found at all. This
+- **`gui.conf` says what starts with the desktop** — read by **`/bin/desktop`,
+  the ring-3 desktop shell** since 2026-08-25 (it was `gui/startup.c` before
+  that): `start = /bin/gterm`, repeatable and in order. The legacy `hello`
+  window and its `hello = yes|no` key were **retired 2026-08-25** (Chris: "if
+  I want to reminisce, I can run an old build"), and that key was the last
+  thing making the KERNEL read this file — `gui/startup.c` is gone and
+  gui.conf has exactly one reader. The
+  rule worth knowing: **if the file exists, its `start` lines are the whole
+  list — even when there are none**, which is how "start nothing" is
+  spelled; the built-in demo pair applies only when no `gui.conf` is found at
+  all. This
   exists because GUI programs used to be launched from `husk.rc`, which runs
   in EVERY husk (VT1 and VT2 both start one, so you got two of everything)
   and runs on text boots too (where every GUI line failed once per terminal).

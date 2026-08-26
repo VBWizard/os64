@@ -159,7 +159,7 @@ idle threads must always be present and runnable).
 - **Affinity:** `thread->mp_apic` = `THREAD_NO_AFFINITY` (run anywhere) or
   an APIC id (run only there). `scheduler_thread_can_run_on_core` is the
   single gate.
-- **Wake boost:** `scheduler_wake_isleep_task` adds
+- **Wake boost:** `scheduler_wake_task_waiter(task, waiter)` adds
   `HIGH_PRIORITY_TICKS_BOOST` (10M) so a woken thread wins its next
   eligible pass outright.
 - **Known weakness (open):** a CPU-bound thread on an AP starves same-core
@@ -264,7 +264,7 @@ warned.
 ```c
 sigaction(SIGSLEEP, NULL, kTicksSinceStart + nTicks, NULL); // sleeps CURRENT thread
 // ... BSP's processSignals moves it back to RUNNABLE when ticks expire ...
-scheduler_wake_isleep_task(task);  // early wake + priority boost + trigger
+scheduler_wake_task_waiter(task, thread);  // early wake of THE WAITING THREAD (not thread[0] — task.h waitThread, 2026-08-25) + priority boost + trigger
 ```
 Wake granularity is the BSP pass cadence (~10-30ms); don't build anything
 that needs finer.
