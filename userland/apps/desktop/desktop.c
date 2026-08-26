@@ -334,11 +334,24 @@ static int64_t reaper(void *arg)
         int32_t code = 0;
         int64_t pid = os64_wait(0, &code);
         if (pid > 0) {
-            // Said out loud: a GUI app that dies leaves no other trace, and
-            // "it was running a moment ago" is the whole of the evidence
-            // otherwise.
-            complain("desktop: task %ld exited (%d)\n",
+            // A NORMAL exit is not a complaint. This program's stderr is the
+            // console of record — tty 0, VT1, since the kernel spawned it
+            // with no seat of its own (xinit's 1984 arrangement) — and the
+            // launcher exits after every use, so complaining about exit 0
+            // scribbled a line on VT1 per menu click (Chris, 2026-08-26).
+            // The log still gets every exit, where a curious person can
+            // find it; only a FAILURE is said out loud, because a GUI app
+            // that dies leaves no other trace and "it was running a moment
+            // ago" is the whole of the evidence otherwise.
+            if (code != 0) {
+                complain("desktop: task %ld exited (%d)\n",
                          (long)pid, (int)code);
+            } else {
+                char line[64];
+                os64_snprintf(line, sizeof(line), "desktop: task %ld exited (0)",
+                              (long)pid);
+                os64_debug_log(line);
+            }
             continue;
         }
         if (pid == OS64_INTERRUPTED)
