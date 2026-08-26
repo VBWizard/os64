@@ -546,8 +546,15 @@ void tty_task_departed(struct task *task)
 		// left fgTask naming a corpse for Ctrl+C to dereference. NULL, not
 		// the shell, when the seat is empty — the same value an empty
 		// terminal starts with.
-		if (t->fgTask == task)
-			t->fgTask = t->shell;
+		//
+		// ONE COMPARE-AND-SWAP, not a check and a store (rd5): the shell
+		// can leave wait(A) on a caught signal and enter wait(B) — which
+		// stores B — while A is dying on another core. A separate check
+		// ("still me?") and store ("then the shell") interleave with that
+		// store, and A's death would overwrite B with the shell: Ctrl+C
+		// then reaches the shell as a keystroke instead of stopping B.
+		// The CAS replaces the pointer only if it still names A.
+		__sync_bool_compare_and_swap(&t->fgTask, task, t->shell);
 		return;
 	}
 
