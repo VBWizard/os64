@@ -703,18 +703,14 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
 	if (cols < 2 || rows < 2 || cols > 512 || rows > 256)
 		return NULL;
 
-	tty_t *t = kmalloc(sizeof(tty_t));   // zeroed at the allocator choke point
-	if (t == NULL)
-		return NULL;
+	// Zeroed at the allocator choke point, and never NULL: the allocator
+	// panics by name on exhaustion (allocator.c), so the fence above is this
+	// function's only refusal — same as tty_resize_grid.
+	tty_t *t = kmalloc(sizeof(tty_t));
 	t->cols = cols;
 	t->rows = rows;
 	t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
 	t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
-	if (t->cells == NULL)
-	{
-		kfree(t);
-		return NULL;
-	}
 	t->color   = 0xffffffff;
 	t->is_pty  = true;
 	t->pty_mode = PTY_MODE_GRID;

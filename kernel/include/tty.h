@@ -223,7 +223,8 @@ extern volatile bool kTTYDirect;
 // ── The pty family (PTY.md; mechanism here, the syscall skin in syscall.c) ──
 // Create a GRID-mode slave: a live tty_t with its own grid + scrollback
 // ring, registered on kPtyList (NEVER in kTTY[] — the VT iterators stay
-// blind to ptys by construction). Returns NULL on allocation failure.
+// blind to ptys by construction). Returns NULL on a bad geometry — the
+// only refusal (the allocator panics on exhaustion, never returns NULL).
 tty_t *pty_create_slave(uint32_t cols, uint32_t rows);
 
 // Resize a grid IN PLACE (the SIGWINCH slice, PTY.md § Resize). The ring is
