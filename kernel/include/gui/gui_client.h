@@ -63,9 +63,12 @@ int64_t gui_window_publish(int64_t handle, const rect_t *damage);
 int64_t gui_event_poll(int64_t handle, input_event_t *out);
 
 // Block until an event arrives on the window (1 = event copied out), the
-// window dies under us (GUI_ERR_INVALID_HANDLE), or the caller is being
-// terminated (GUI_ERR_INTERRUPTED). The idle answer to a poll loop: an app
-// that waits costs NOTHING until somebody types at it.
+// window dies under us (GUI_ERR_INVALID_HANDLE), or the caller has a signal
+// pending that ends the wait (GUI_ERR_INTERRUPTED — signal_park_must_end:
+// a terminate, OR any signal the app installed a handler for, SIGWINCH
+// included). A nonfatal INTERRUPTED is not an error: the handler runs on the
+// way back to ring 3, and the app simply waits again. The idle answer to a
+// poll loop: an app that waits costs NOTHING until somebody types at it.
 int64_t gui_event_wait(int64_t handle, input_event_t *out);
 
 int64_t gui_screen_info(uint32_t *width, uint32_t *height);

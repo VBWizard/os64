@@ -224,6 +224,18 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// Two sets, two questions, and each named for the question it answers.
 	#define SIGNALS_DEFAULT_IS_DEATH  (SIGNALS_TERMINATING | SIG_BIT(SIGPIPE))
 
+	// Every signal whose DEFAULT ACTION IS IGNORE — the third question, and
+	// not the complement of the one above (SIGSEGV is in neither: its default
+	// is death, enforced at the fault, and it never reaches a set). Named
+	// because "ignore" has a mechanism: a signal nobody asked about is
+	// CONSUMED, at publication when no handler is installed
+	// (task_signal_and_nudge / task_signal_all_threads) and at the pick as the
+	// backstop for a handler uninstalled in between — never left pending for
+	// a handler installed later to fire for a resize that happened an hour
+	// ago (Codex #32). A member here must never also be in
+	// SIGNALS_DEFAULT_IS_DEATH.
+	#define SIGNALS_DEFAULT_IS_IGNORE  (SIG_BIT(SIGWINCH))
+
 	// ── PER-THREAD signal state ─────────────────────────────────────────────
 	//
 	// The old CAUTION that lived here — "sighandler[] and sigdata[] are indexed

@@ -378,13 +378,22 @@
 	// taskID (its exit code via *exitCode). targetPid > 0 waits for that
 	// specific child; targetPid == 0 waits for the first of ANY child to end.
 	// Returns immediately if a matching child has already exited; returns 0
-	// if no matching child exists at all.
+	// if no matching child exists at all; returns TASK_WAIT_INTERRUPTED when
+	// the CALLING THREAD has a signal pending that ends a park
+	// (signal_park_must_end — a terminate, or one a handler will catch),
+	// with nothing collected. It is a park like every other blocking call
+	// and answers like one (Codex #32): a shell waiting on a child could not
+	// run its own SIGWINCH handler until the child died, because this wait
+	// re-parked on every wake without asking. The syscall decides what the
+	// answer means — OS64_INTERRUPTED to a caller that will catch, the
+	// default action otherwise — exactly as sleep and the console read do.
 	//
 	// RETURNS AN ID, NOT A POINTER — deliberately (the cleanup notes called
 	// this the day task_destroy was first sketched): collecting marks the
 	// corpse retValCollected, which licenses kworker to FREE it on its next
 	// sweep. A returned pointer would be a dangling invitation; an ID is a
 	// fact that stays true forever.
+	#define TASK_WAIT_INTERRUPTED UINT64_MAX   // no task ever wears this ID
 	uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode);
 	// task_wait's NON-BLOCKING half: collect the next already-dead child of
 	// parentTask and return its taskID (exit code via *exitCode), or 0 if
