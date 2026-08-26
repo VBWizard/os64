@@ -148,8 +148,9 @@ void task_signal_all_threads(task_t* task, signals signal)
 }
 
 // Raise `signal` on every thread of a task AND knock on the cores they were
-// last seen running on. The knock is the whole difference between this and
-// task_signal_all_threads, and it is the lesson task_terminate_sibling_threads
+// last seen running on (an ignored signal does neither — see
+// task_signal_is_ignored above). The knock is the whole difference between
+// this and task_signal_all_threads, and it is the lesson task_terminate_sibling_threads
 // wrote down below: marking a thread only matters WHEN THE SCHEDULER NEXT RUNS
 // ON ITS CORE, and under tickless an AP with a spinning thread has its timer
 // masked — the mark would sit there unread forever. A scheduling IPI is an

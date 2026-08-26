@@ -410,7 +410,10 @@
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
 	uintptr_t task_reserve_task_virt(task_t* task, size_t size);
 
-	// OR a signal bit into EVERY thread this task owns.
+	// OR a signal bit into EVERY thread this task owns — unless the signal's
+	// default is IGNORE and the task has no handler for it, in which case
+	// nothing is set anywhere (SIGNALS_DEFAULT_IS_IGNORE: ignore means
+	// consumed at the raise, not left pending; task_signal_is_ignored).
 	//
 	// A signal aimed at a task means the task — all of it. Every delivery
 	// site used to write `task->threads->signals.sigind |= sig`, which was
@@ -420,10 +423,12 @@
 	// (found 2026-08-02, audible as fan noise). The workers were never
 	// ignoring the signal — nobody had told them.
 	//
-	// Safe from IRQ context (Ctrl+C's path): it is a read-only walk of the
-	// taskNext chain plus one OR per thread, and new threads are fully
-	// linked before they are published, so a walker sees either the old
-	// chain or the complete new one.
+	// Safe from IRQ context (Ctrl+C's path): a walk of the taskNext chain
+	// plus one OR per thread, under the task's signalLock (an irqsave
+	// spinlock — publication and consumption claim the same lock so a
+	// consumer's clear cannot race a publisher's set), and new threads are
+	// fully linked before they are published, so a walker sees either the
+	// old chain or the complete new one.
 	void task_signal_all_threads(task_t* task, signals signal);
 	// The same, plus a scheduling IPI to the cores the threads last ran on —
 	// for a sender who is NOT the victim (the hangup sweep, the shutdown

@@ -1916,7 +1916,9 @@ static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2
 // decide. Three things, in this order: the grid follows (tty_resize_grid —
 // realloc, carry the text, clamp the cursor, bump the generation so the
 // master's own snapshot poll repaints), then SIGWINCH at every task SEATED
-// on the slave. Not at the caller: gterm is doing the telling, and it already
+// on the slave — of which only those with a handler installed get a bit
+// (task_signal_and_nudge drops an ignored signal at the raise). Not at the
+// caller: gterm is doing the telling, and it already
 // heard about the resize as a WINDOW event. The two hops use two mechanisms
 // on purpose — GRAPHICS.md § Event delivery has the rule (a signal tells a
 // process something, an event tells a window something), and the program in
@@ -3507,11 +3509,12 @@ static uint64_t syscall_reap(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 //
 // sleep(0) is the documented free yield — not folklore, not an accident.
 //
-// Interruption: a pending SIGINT/SIGKILL wakes the sleeper (processSignals'
-// nap-cancel) and the loop-top check below dies on the same rail as an
-// interrupted console read. Returns 0 always — the only interruption that
-// exists today is death, and the dead read no return values. Remaining-time
-// semantics deliberately wait for the SIGNALS.md EINTR-vs-restart ruling.
+// Interruption: a pending signal the park must end for (signal_park_must_end
+// — a terminate, or one a handler will catch) wakes the sleeper (processSignals'
+// nap-cancel) and the loop-top check below decides: a terminate nothing
+// catches dies on the same rail as an interrupted console read; a caught
+// signal answers OS64_INTERRUPTED with the nap abandoned (SIGNALS.md §8: no
+// restart, the caller loops if it wanted the whole nap). Otherwise 0.
 static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {

@@ -81,9 +81,10 @@
 // generations of this call (sleep/usleep/nanosleep/clock_nanosleep) because
 // the units kept being wrong; one syscall, milliseconds, honest floor.
 // sleep(0) is the documented free yield — no time, but the CPU goes back.
-// Returns 0 always: the only interruption that exists today is death, and
-// the dead read no return values (remaining-time semantics deliberately
-// wait for the SIGNALS.md EINTR-vs-restart ruling).
+// Returns 0 when the nap completed, or OS64_INTERRUPTED when a signal this
+// program handles cut it short — the handler has run, the rest of the nap
+// is NOT slept, and a program that wanted all of it loops (SIGNALS.md §8:
+// no restart, no remaining-time answer; the caller decides).
 #define SYSCALL_SLEEP      25
 
 // ticks(out) — fill an os64_ticks_t (os64/ticks.h) with the monotonic tick
@@ -554,7 +555,9 @@ typedef enum os64_shutdown_mode
 #define SYSCALL_PTY_CREATE   44
 #define SYSCALL_PTY_SNAPSHOT 45
 // pty_resize(master, cols, rows): the grid follows the window and every
-// task seated on the slave hears SIGWINCH (the SIGWINCH slice, 2026-08-25).
+// task seated on the slave that installed a SIGWINCH handler hears it; the
+// rest are not disturbed — an ignored signal is dropped at the raise, not
+// left pending for a handler installed later (the SIGWINCH slice, 2026-08-25).
 // The master's verb — it owns the geometry. A program that hears the signal
 // asks /proc/self/tty for the new size (RE-OPEN it: procfs renders at open).
 #define SYSCALL_PTY_RESIZE   51
