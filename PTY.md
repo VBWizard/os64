@@ -37,7 +37,7 @@ Three discoveries from the code that shaped everything below:
 2. **Console handles are already tty-relative.** A task talks to ITS tty —
    `task->tty`, inherited at creation — and `tty_t` already carries the
    multiplied singletons: per-tty fgTask (Ctrl+C aim), per-tty EOF, waiter,
-   pushback, `tty_shell_departed`. The whole controlling-terminal concept
+   pushback, `tty_task_departed`. The whole controlling-terminal concept
    exists; ptys just mint more terminals.
 3. **spawn already resolves parent handles into child slots.** The
    redirection plumbing pipelines use is the plumbing a terminal needs to

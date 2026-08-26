@@ -82,7 +82,7 @@ typedef enum esignals
 		// Parent death has never killed anything in Unix (orphans are
 		// reparented and run on; that is what makes a daemon possible). THIS
 		// is what ends a shell's leftovers, and `nohup` (PWB, 1979) exists
-		// solely to opt out of it. Raised by tty_shell_departed on every task
+		// solely to opt out of it. Raised by tty_task_departed on every task
 		// still seated on the departing shell's terminal. (SIGHUP = 1, above.)
 
 		// SIGTERM: the machine is going down; finish up. Raised by the

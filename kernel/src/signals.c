@@ -124,7 +124,7 @@ bool signal_is_known(signals sig)
 		// RAISES each member cannot hide the next one: an entry with no
 		// producer to name is visibly wrong to anybody reading it, including
 		// whoever is adding one.
-		case SIGHUP:   // tty_shell_departed — the seated shell went away
+		case SIGHUP:   // tty_task_departed — the seated shell went away
 		case SIGINT:   // console Ctrl+C; /proc/<id>/ctl "interrupt"
 		case SIGKILL:  // /proc/<id>/ctl "kill"; task_terminate_sibling_threads
 		case SIGSEGV:  // the page-fault handler, on an unresolvable user fault

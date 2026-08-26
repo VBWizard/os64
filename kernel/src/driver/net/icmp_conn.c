@@ -187,12 +187,10 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 		}
 		// Deadline check comes AFTER the data check, under the same lock:
 		// a reply that arrived at the buzzer is still a reply (data
-		// outranks the clock), and an expired waiter must deregister
-		// itself so the sweep never wakes a reader that already gave up.
+		// outranks the clock). No deregistration needed here — the loop
+		// top already voided it, and nothing has re-registered since.
 		if (deadline != 0 && kTicksSinceStart >= deadline)
 		{
-			if (c->waiter == self)
-				c->waiter = NULL;
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return ICMP_CONN_ERR_TIMEOUT;
 		}

@@ -434,7 +434,9 @@
 	// for a sender who is NOT the victim (the hangup sweep, the shutdown
 	// ladder). Without the knock, a thread spinning on a tickless AP would
 	// carry the mark unread. See the comment on the definition.
-	void task_signal_and_nudge(task_t* task, signals signal);
+	// Answers whether the signal was PUBLISHED — false when the task ignores
+	// it (no handler, default IGNORE) and nothing was set or knocked.
+	bool task_signal_and_nudge(task_t* task, signals signal);
 
 	// Bring down every thread of a dying task except the one dying. THE
 	// single control point for "exit means exit" — see the implementation

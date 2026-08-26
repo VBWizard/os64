@@ -156,13 +156,13 @@ void task_signal_all_threads(task_t* task, signals signal)
 // masked — the mark would sit there unread forever. A scheduling IPI is an
 // interrupt, so it lands anyway.
 //
-// For senders who are not the victim: the hangup sweep (tty_shell_departed),
+// For senders who are not the victim: the hangup sweep (tty_task_departed),
 // pty_resize's SIGWINCH at the seats, and the shutdown ladder all aim at
 // tasks that may be parked or spinning anywhere in the machine.
-void task_signal_and_nudge(task_t* task, signals signal)
+bool task_signal_and_nudge(task_t* task, signals signal)
 {
 	if (task == NULL)
-		return;
+		return false;
 
 	core_local_storage_t* cls = get_core_local_storage();
 	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
@@ -177,9 +177,10 @@ void task_signal_and_nudge(task_t* task, signals signal)
 		// Nothing to mark and nobody to knock: an ignored signal is a
 		// no-op by definition, and a scheduling IPI for one is a wake for
 		// nothing (see task_signal_is_ignored above for why "leave the bit
-		// and let the pick drop it" was wrong).
+		// and let the pick drop it" was wrong). Answer "no" so a sender
+		// counting its audience counts only those who heard.
 		spinlock_release_irqrestore(&task->signalLock, f);
-		return;
+		return false;
 	}
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
 	{
@@ -195,6 +196,7 @@ void task_signal_and_nudge(task_t* task, signals signal)
 			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 	}
 	spinlock_release_irqrestore(&task->signalLock, f);
+	return true;
 }
 
 // Bring down every thread of a dying task EXCEPT the one doing the dying.
@@ -1370,9 +1372,10 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 
 		// If the departed was a terminal's seated shell, the terminal goes
 		// dormant and posts its summons (tty.c) — the next keystroke there
-		// raises a fresh husk. Checked by tty.c against the SEAT (t->shell),
-		// so an ordinary child dying on a terminal changes nothing.
-		tty_shell_departed(task);
+		// raises a fresh husk. If it was the terminal's FOREGROUND job, the
+		// console goes back to the shell (tty.c says why it happens at the
+		// death). Any other child dying on a terminal changes nothing.
+		tty_task_departed(task);
 
 		// Return the pty seat inheritance took (no-op for VTs). AFTER the
 		// shell-departed hook: that one still reads task->tty, and the seat
