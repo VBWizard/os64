@@ -244,8 +244,9 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		// RUNNING->ISLEEP when we are genuinely off-CPU, so there is no
 		// "runnable while still executing" window). We resume here when
 		// woken — by a keypress via console_wake_if_ready, by processSignals
-		// on a pending SIGINT, or by the backstop — and loop back to the
-		// SIGINT check and the drain. A live deadline shortens the backstop
+		// on a pending signal this park must end for (a terminate, or one a
+		// handler will catch), or by the backstop — and loop back to the
+		// signal_park_must_end check and the drain. A live deadline shortens the backstop
 		// nap so the timeout verdict lands on time, not up to a second late.
 		uint64_t wake = kTicksSinceStart + CONSOLE_READ_BACKSTOP_TICKS;
 		if (deadline != 0 && deadline < wake)

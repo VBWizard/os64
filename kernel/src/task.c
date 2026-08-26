@@ -33,7 +33,7 @@
 #include "kworker.h"
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
-#include "tty.h"   // per-tty foreground (task_wait) + the shell-departed hook
+#include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
 
 extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
@@ -1378,7 +1378,7 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 		tty_task_departed(task);
 
 		// Return the pty seat inheritance took (no-op for VTs). AFTER the
-		// shell-departed hook: that one still reads task->tty, and the seat
+		// task-departure hook: that one still reads task->tty, and the seat
 		// count going to zero is what arms the master's HUNGUP flag.
 		tty_pty_unref((tty_t *)task->tty);
 
