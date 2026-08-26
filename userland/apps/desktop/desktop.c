@@ -52,14 +52,14 @@ typedef struct {
     bool     have_color;
     char     image[DESKTOP_PATH_MAX];
     bool     have_image;
-    char     conf_path[DESKTOP_PATH_MAX];
+    char     conf_path[OS64_CONF_PATH_MAX];   // a LADDER path, sized by the ladder's own cap (Codex #31 rd7) — 192 refused a legal 200-byte resolve as NO_FILE
 } desktop_config_t;
 
 typedef struct {
     char   apps[DESKTOP_APPS_MAX][DESKTOP_PATH_MAX];
     size_t count;
     bool   overflowed;
-    char   path[DESKTOP_PATH_MAX];   // which gui.conf won — named in complaints
+    char   path[OS64_CONF_PATH_MAX];   // which gui.conf won — named in complaints; ladder-sized, not app-path-sized (rd7)
 } startup_list_t;
 
 // ── desktop.conf ────────────────────────────────────────────────────────────
@@ -364,7 +364,7 @@ int main(int argc, char **argv)
     // pair below: a config that exists is the operator's word, and a
     // desktop that starts gbounce because that file failed to open would
     // be inventing a configuration nobody wrote.
-    found = (os64_conf_find("gui.conf", gui_path, DESKTOP_PATH_MAX) == 0);
+    found = (os64_conf_find("gui.conf", gui_path, sizeof(list.path)) == 0);
     rc = found ? os64_conf_read(gui_path, gui_conf_line, &list)
                : OS64_CONF_NO_FILE;
     conf_report("gui.conf", gui_path, found, rc);

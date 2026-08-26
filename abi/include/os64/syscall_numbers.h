@@ -501,8 +501,10 @@ typedef enum os64_shutdown_mode
 // programs each carried a private copy of the same "/home then /etc" ladder
 // until 2026-08-23; the cure is one setting (/etc/os64.conf's `conf =`) that
 // every reader obeys, and a ladder obeyed by everyone must be PARSED by
-// exactly one thing or it is not one ladder. The kernel already has to walk
-// it for its own readers (desktop.c), so ring 3 asks the same walker rather
+// exactly one thing or it is not one ladder. The kernel walked it for a reader
+// of its own (gui/desktop.c — gone to ring 3 as /bin/desktop, 2026-08-25); the
+// walker STAYS in ring 0 because it is the one place every ring can reach, so
+// ring 3 asks it (its only caller now) rather
 // than growing a second one over a /sys file — which would have meant two
 // parsers to keep in agreement AND a separate channel for reporting what
 // each reader took.

@@ -22,8 +22,9 @@ Six config files, six hand-rolled "where do I look" sequences:
 Same idea, five spellings, and the seventh file would add a sixth. Chris's
 ask: **one setting says where config files are looked for, first to last, and
 every reader obeys it.** He considered the environment and rejected it — it
-freezes at spawn, it is per-process, and the kernel's own readers (desktop,
-hosts) have no environment at all. A file tells the truth at read time; that
+freezes at spawn, it is per-process, and a reader with no environment at all
+(the kernel's desktop reader, as it was then; the resolve syscall, still) cannot
+use it. A file tells the truth at read time; that
 is the `/sys/gui` ruling (GRAPHICS.md) applied to configuration.
 
 ## What was built

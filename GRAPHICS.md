@@ -45,7 +45,7 @@ client API.
    sub-ms) happens under the lock; flushing (UC, slow) strictly after release.
    `gui_damage_add_locked` vs `gui_damage_add`: pick by whether you hold the
    lock — it is NOT recursive.
-4. **IRQ handlers only enqueue.** Never call `scheduler_wake_isleep_task` from
+4. **IRQ handlers only enqueue.** Never call `scheduler_wake_task_waiter` from
    an ISR (`scheduler_trigger` does `sti/hlt`). The compositor polls.
 5. **The console sink never draws and never takes kGuiLock.** `print_n` may be
    called from any context including exception handlers; the sink only appends
