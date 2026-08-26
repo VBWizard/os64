@@ -191,10 +191,19 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 		// A terminate, or a signal with a handler waiting, outranks the wait
 		// — checked at loop top, BEFORE the lock, so a Ctrl+C (or a WINCH)
 		// that woke us exits instead of re-parking.
+		// And before that check: awake at the top means any registration
+		// the last park left is void — cleared here so no return below can
+		// leave the slot naming a thread that has moved on (a spurious wake
+		// out of a later sleep, or freed memory once it has exited).
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->waiter == self)
+			c->waiter = NULL;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		if (signal_park_must_end(self))
 			return UDP_CONN_ERR_INTERRUPTED;
 
-		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
 		if (c->count > 0)
 		{
 			uint16_t slot = c->head;
