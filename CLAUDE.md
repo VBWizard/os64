@@ -351,6 +351,14 @@ the library serves every process). How it fits together:
   rewrites `thread->regs` — remember `mp_isrSaved*` is a mirror that must be
   updated too; **§9** the page-fault handler resumes a caught SIGSEGV out of
   the exception frame. SIGKILL is never catchable and never deferred
+- **A park ends for ANY caught signal, not only a terminate** (2026-08-25,
+  the SIGWINCH slice — PTY.md § Resize). Every blocking wait (console, pipes,
+  sleep, event_wait, join, the net waits) and `processSignals`' sleeper
+  sweep ask `signal_park_must_end(thread)`; a new blocking loop must ask it
+  too, or a caught non-death signal (SIGWINCH is the first) reaches its
+  handler only at the program's next syscall. SIGWINCH = 28, raised by
+  `pty_resize` (syscall 51) at every task seated on the slave, default
+  IGNORE — it must never enter `SIGNALS_DEFAULT_IS_DEATH`
 - `task->signalLock` has TWO jobs: serializing delivery, and keeping a user
   page alive across a frame write (see its comment in task.h — the second job
   is not obvious from the name and a missed site was a kernel panic)

@@ -224,6 +224,24 @@ extern volatile bool kTTYDirect;
 // blind to ptys by construction). Returns NULL on allocation failure.
 tty_t *pty_create_slave(uint32_t cols, uint32_t rows);
 
+// Resize a grid IN PLACE (the SIGWINCH slice, PTY.md § Resize). The ring is
+// reallocated at the new geometry and the old text carried across, then the
+// generation bumps so a snapshot poller repaints. Policy, stated so nobody
+// files it as a bug: NO REFLOW. Rows keep their left edge (a narrower grid
+// clips each line's tail, a wider one blanks the new cells), the cursor is
+// clamped into the new bounds, and the view snaps back to the live screen.
+// ONE refinement over "preserve the origin": when fewer rows would leave
+// the cursor below the glass, the top rows roll into scrollback instead so
+// the line being typed stays visible — what xterm does, and the difference
+// between a shrink that keeps your prompt and one that eats it. Rewrapping
+// logical lines is a scrollback feature and waits for that row.
+//
+// Grid-only: it never touches the glass, so it is a PTY verb today (the
+// syscall gates on is_pty). A VT could use it the day the renderer's cell
+// geometry can change underneath one. Returns false on a bad geometry or
+// an allocation failure, and then the grid is untouched.
+bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows);
+
 // The master's write half: bytes become synthesized key events into the
 // slave's input ring — after 0x03 runs the per-tty interrupt intercept
 // against the SLAVE (a windowed Ctrl+C aims at the slave's foreground, not

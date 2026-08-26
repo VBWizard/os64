@@ -179,7 +179,7 @@ long thread_join_read(thread_join_t* j, int64_t* out)
 
 	for (;;)
 	{
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return THREAD_JOIN_ERR_INTERRUPTED;
 
 		if (j->exited)

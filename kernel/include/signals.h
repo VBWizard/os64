@@ -42,9 +42,17 @@ typedef enum esignals
     SIGTERM   = 15,
     SIGCONT   = 18,
     SIGSTOP   = 19,
-    // 28 is SIGWINCH everywhere, and it is RESERVED here rather than defined:
-    // the terminal-resize slice (DEBTS) is what gives it something to mean,
-    // and a number claimed early is one nobody has to renegotiate later.
+    // The terminal changed size — raised by pty_resize (syscall 51) at every
+    // task seated on the resized slave. DEFAULT ACTION: IGNORE, and that is
+    // the one property of this signal that must never drift: it lands on
+    // husk, ls, cat, everything in the window, and a default of death would
+    // kill the lot the first time a window was dragged. It is therefore
+    // absent from SIGNALS_DEFAULT_IS_DEATH and from SIGNALS_TERMINATING, and
+    // an unhandled pending WINCH is simply consumed (signal_pick_deliverable).
+    // Sun's 4.3BSD addition, and the one signal that exists BECAUSE a program
+    // can have a terminal without having a window (GRAPHICS.md § Event
+    // delivery: a signal tells a process something, an event tells a window).
+    SIGWINCH  = 28,
     SIGIO     = 29,   // POSIX's SIGIO/SIGPOLL — NUMBERED, NOT REAL: nothing raises it,
                       // so signal_is_known refuses it (Codex #29 rd15), like CONT/STOP
 
@@ -427,6 +435,18 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// not be executed on its way to being handed the signal it asked for.
 	// Always false for SIGKILL, which is what keeps it the last resort.
 	bool signal_has_handler_for_pending(struct task *t, void *thread);
+
+	// Must a PARKED thread get up? The one question every blocking loop asks
+	// at its top, and processSignals asks before rousting a sleeper. "Yes"
+	// for a pending terminate (its default is death, and the checkpoint at
+	// the syscall boundary applies it or hands it to a handler), and "yes"
+	// for ANY pending signal a handler will catch — because the handler is
+	// armed only at the dispatcher's exit, and a thread that stays parked
+	// never reaches it. Before the SIGWINCH slice every catchable signal
+	// was also terminating, so the mask test stood in for this; a handled
+	// WINCH raised at a shell blocked in read() then reached it on the next
+	// KEYSTROKE, which is not a resize notification anyone would recognize.
+	bool signal_park_must_end(void *thread);
 
 	// Is this a signal at all, and can ring 3 install a handler for it? Two
 	// MEMBERSHIP tests over the public signal set, in ONE place so registration

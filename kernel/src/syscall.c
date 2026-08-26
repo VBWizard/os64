@@ -55,6 +55,7 @@ extern volatile uint64_t kSystemCurrentTime;   // UTC epoch seconds (timer IRQ a
 extern volatile uint64_t irq0_current_count;   // ticks into the current second (same IRQ)
 extern uint64_t kTicksPerSecond;
 extern int kTimeZone;                          // configured zone, HOURS east of UTC
+extern task_t *kKernelTask;        // never a pty seat — pty_resize's walk skips it
 extern uint64_t kTotalMemory;      // installed RAM (memmap.c, Limine map sum)
 extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator governs
 
@@ -95,6 +96,8 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_pty_create(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -236,6 +239,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_RENAME,      "rename",      syscall_rename,      false, 0x03),  // arg0 = old path, arg1 = new path
 	SYSCALL_DEFINE(SYSCALL_PTY_CREATE,   "pty_create",   syscall_pty_create,   false, 0x00),  // args: cols, rows — values, no pointers
 	SYSCALL_DEFINE(SYSCALL_PTY_SNAPSHOT, "pty_snapshot", syscall_pty_snapshot, false, 0x02),  // arg1 = header out; arg2 = cells out, NULLABLE (max_cells 0 = header-only probe — handler validates)
+	SYSCALL_DEFINE(SYSCALL_PTY_RESIZE,   "pty_resize",   syscall_pty_resize,   false, 0x00),  // args: master handle, cols, rows — values, no pointers
 	SYSCALL_DEFINE(SYSCALL_NET_DIAL,  "net_dial",  syscall_net_dial,  false, 0x01),  // arg0 = os64_netdest_t in ptr
 	SYSCALL_DEFINE(SYSCALL_SYNC_ALL,  "sync_all",  syscall_sync_all,  false, 0x00),  // no args — the broom sweeps the whole floor
 	SYSCALL_DEFINE(SYSCALL_SHUTDOWN,  "shutdown",  syscall_shutdown,  false, 0x00),  // no args, no return — the ordered descent (shutdown.c)
@@ -855,12 +859,23 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // program with a handler installed (2026-08-23 — see scheduler_load_thread,
 // where the window itself is now closed). thread->ownerTask cannot lag,
 // because it is part of the thread.
+//
+// SINCE THE SIGWINCH SLICE a park can also end for a signal whose default is
+// NOT death (signal_park_must_end): the loop got up because a handler was
+// installed for it. If that handler has been uninstalled by a sibling in the
+// meantime, the honest answer is still "you will not die" — there is no
+// terminate pending, so the ladder below would have nothing to name and
+// would hang a SIGINT tag (130) on a program that merely had its window
+// dragged. So: with nothing terminating pending, the wait was interrupted
+// and that is all; the orphaned non-death bit is consumed at the pick.
 static bool current_thread_will_catch(void)
 {
 	core_local_storage_t *c = get_core_local_storage();
 	thread_t *th = c ? c->currentThread : NULL;
 	if (th == NULL)
 		return false;
+	if (!sigset_any(th->signals.sigind, SIGNALS_TERMINATING))
+		return true;
 	return signal_has_handler_for_pending((task_t *)th->ownerTask, th);
 }
 
@@ -1236,8 +1251,9 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				}
 				if (n == PIPE_ERR_INTERRUPTED)
 				{
-					// Ctrl+C landed while blocked on (or headed into) this
-					// pipe write. Same rail, different signal: terminate, 130.
+					// A signal ended the wait on (or the way into) this pipe
+					// write — Ctrl+C on the same rail as the reads, default
+					// terminate, 130; or one with a handler, WINCH included.
 					// Caught? Then the wait was INTERRUPTED, not fatal — and
 					// returning is what makes delivery possible at all: the
 					// handler is armed on the way out of this syscall. Progress
@@ -1494,8 +1510,10 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			got = console_read_deadline(kbuf, want, deadline);
 			if (got == CONSOLE_READ_INTERRUPTED)
 			{
-				// Ctrl+C landed while (or before) we were blocked on stdin.
-				// Default action: terminate. The sentinel never reaches ring 3.
+				// A signal ended the wait on stdin (or arrived before it):
+				// Ctrl+C, whose default is terminate — or one a handler will
+				// catch, SIGWINCH on a shell at its prompt being the everyday
+				// case. The sentinel never reaches ring 3.
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
 				// handler is armed on the way out of this syscall.
@@ -1533,7 +1551,8 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			got = pipe_read((pipe_t *)h->object, kbuf, want);
 			if (got == PIPE_ERR_INTERRUPTED)
 			{
-				// Ctrl+C landed while blocked on (or headed into) a pipe read.
+				// A signal ended the wait on (or the way into) a pipe read:
+				// a terminate, or one a handler will catch.
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
 				// handler is armed on the way out of this syscall.
@@ -1603,8 +1622,9 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			got = udp_conn_read((udp_conn_t *)h->object, kbuf, want, deadline);
 			if (got == UDP_CONN_ERR_INTERRUPTED)
 			{
-				// Ctrl+C landed while blocked waiting for a packet — same
-				// rail as console and pipe reads: terminate, 130.
+				// A signal ended the wait for a packet — same rail as the
+				// console and pipe reads: a terminate (130 by default), or
+				// one a handler will catch.
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
 				// handler is armed on the way out of this syscall.
@@ -1888,6 +1908,56 @@ static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2
 			return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 	return ncells;
+}
+
+// pty_resize(master, cols, rows) -> 0. The SIGWINCH slice (PTY.md § Resize).
+// The MASTER's verb, because the master owns the geometry: a terminal window
+// that grew tells its slave the new size, and the slave learns — it does not
+// decide. Three things, in this order: the grid follows (tty_resize_grid —
+// realloc, carry the text, clamp the cursor, bump the generation so the
+// master's own snapshot poll repaints), then SIGWINCH at every task SEATED
+// on the slave. Not at the caller: gterm is doing the telling, and it already
+// heard about the resize as a WINDOW event. The two hops use two mechanisms
+// on purpose — GRAPHICS.md § Event delivery has the rule (a signal tells a
+// process something, an event tells a window something), and the program in
+// the window has no window of its own, which is why Sun invented the signal.
+//
+// No lock-order hazard to reason about: this runs on the caller's syscall
+// thread inside the pty layer; the compositor is nowhere in the call path
+// and kGuiLock is never held. The seat walk is the hangup's (tty_shell_
+// departed) — kTaskList, every task whose terminal of record is this slave.
+static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	handle_t *h = handle_get(task, (int)(int64_t)arg0);
+	if (h == NULL || h->type != HANDLE_PTY_MASTER)
+		return SYSCALL_RESULT_INVALID;
+	tty_t *t = (tty_t *)h->object;
+
+	uint32_t cols = (uint32_t)arg1, rows = (uint32_t)arg2;
+	if (!tty_resize_grid(t, cols, rows))
+		return SYSCALL_RESULT_INVALID;   // geometry outside the fence, or no memory
+
+	uint32_t told = 0;
+	for (task_t *seat = kTaskList;
+	     seat != NULL && seat != (task_t *)NO_TASK;
+	     seat = seat->next)
+	{
+		if (seat->tty != (void *)t || seat == kKernelTask || seat->exited)
+			continue;
+		task_signal_and_nudge(seat, SIGWINCH);
+		told++;
+	}
+	printd(DEBUG_SYSCALL, "pty_resize: %s resized pty%u to %ux%u, SIGWINCH to %u seat%s\n",
+	       task->exename, t->index, cols, rows, told, told == 1 ? "" : "s");
+	return 0;
 }
 
 // net_dial(dest) — open a network conversation and hand back a handle.
@@ -3465,10 +3535,11 @@ static uint64_t syscall_sleep(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	// Level-triggered like every park in this kernel: check, sleep, re-check.
 	// processSignals wakes us for exactly two reasons — the deadline arrived,
-	// or a terminate is pending — and the loop top distinguishes them.
+	// or a signal is pending that this park must end for (a terminate, or
+	// one a handler will catch) — and the loop top distinguishes them.
 	for (;;)
 	{
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		if (signal_park_must_end(self))
 		{
 			// A CAUGHT signal cuts the nap short instead of ending the
 			// program. Returning is what makes delivery possible at all: the

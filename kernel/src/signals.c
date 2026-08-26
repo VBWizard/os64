@@ -129,9 +129,10 @@ bool signal_is_known(signals sig)
 		case SIGSEGV:  // the page-fault handler, on an unresolvable user fault
 		case SIGPIPE:  // syscall_write, into a pipe whose readers have all gone
 		case SIGTERM:  // the shutdown ladder
+		case SIGWINCH: // syscall_pty_resize, at every task seated on the slave
 			return true;
 		default:
-			// Gaps, scheduler markers, reserved numbers — and NUMBERED-BUT-NOT
+			// Gaps, scheduler markers — and NUMBERED-BUT-NOT
 			// YET-REAL: SIGCONT/SIGSTOP (job control is booked, not built) and
 			// SIGIO (nothing in kernel or userland raises it; it was claimed
 			// alongside the POSIX numbers and never given a sender). Each
@@ -300,6 +301,23 @@ bool signal_has_handler_for_pending(struct task *t, void *thrd)
 	return caught;
 }
 
+// See signals.h. The terminate test comes first and unconditionally: a
+// pending SIGKILL makes signal_has_handler_for_pending answer "no" by
+// design, and the park must still end so the checkpoint can carry out the
+// kill. Reads the handler table without the lock, as every checkpoint does —
+// a stale answer here costs one extra trip round the park loop, never a
+// wrong decision, because the loop asks again and the syscall boundary
+// decides under signalLock.
+bool signal_park_must_end(void *thrd)
+{
+	thread_t *thread = (thread_t *)thrd;
+	if (thread == NULL)
+		return false;
+	if (sigset_any(thread->signals.sigind, SIGNALS_TERMINATING))
+		return true;
+	return signal_has_handler_for_pending((task_t *)thread->ownerTask, thread);
+}
+
 // The stub in task_exit_asm.S reads these offsets off RSP by hand. If the
 // struct moves, the stub reads the wrong words and calls whatever happens to
 // be in the frame — so the two are held together here rather than by anyone
@@ -340,7 +358,18 @@ static int signal_pick_deliverable(task_t *task, thread_t *thread)
 		if (!signal_is_catchable((signals)sig))
 			continue;                       // SIGKILL: the default is the only action
 		if (task->sighandler[sig] == NULL)
-			continue;                       // no handler: the default action stands
+		{
+			// No handler: the default action stands. For a death-default
+			// signal that means the checkpoints (or the orphan check below)
+			// end the task. For everything else the default is IGNORE, and
+			// ignoring is spelled CONSUMING: a WINCH nobody asked about is
+			// cleared here, under the lock both delivery paths hold, rather
+			// than sitting pending until a handler happens to be installed
+			// and then firing for a resize that happened an hour ago.
+			if (!(SIG_BIT(sig) & SIGNALS_DEFAULT_IS_DEATH))
+				sigset_del(&thread->signals.sigind, (signals)sig);
+			continue;
+		}
 		if (sigset_has(thread->signals.sigmask, (signals)sig))
 			continue;                       // already inside this signal's own handler
 		return sig;
@@ -818,20 +847,25 @@ void processSignals()
 		// walk off into the wrong queue mid-iteration.
 		thread_t *nextSleeper = qSleep->next;
 
-		if (sigset_any(qSleep->signals.sigind, SIGNALS_TERMINATING))
+		if (signal_park_must_end(qSleep))
 		{
-			// A pending terminate outranks the nap. Cancel the sleep and wake
-			// the thread INTO its own blocking loop (console_read / pipe_read /
-			// pipe_write), whose top-of-loop terminate check bails out to the
-			// syscall boundary — where the default action (terminate, 130) is
-			// enforced in the dying task's own context, free to sleep and to
-			// close handles. This wake is what makes Ctrl+C (and a ctl write)
-			// reach a task that is blocked and would otherwise never run again
-			// to notice it.
+			// A pending terminate — or a pending signal a handler will catch
+			// — outranks the nap. Cancel the sleep and wake the thread INTO
+			// its own blocking loop (console_read / pipe_read / pipe_write
+			// ...), whose top-of-loop check asks the same question and bails
+			// out to the syscall boundary: a terminate nothing catches gets
+			// its default action (130) enforced in the dying task's own
+			// context, free to sleep and to close handles; a caught signal
+			// gets its handler armed at the dispatcher exit and the call
+			// answers INTERRUPTED. This wake is what makes Ctrl+C (and a ctl
+			// write, and a window resize) reach a task that is blocked and
+			// would otherwise never run again to notice it. (Lock order holds:
+			// the predicate reads the handler table lock-free, like every
+			// checkpoint, and we hold only the queue lock here.)
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			sigset_del(&qSleep->signals.sigind, SIGSLEEP);
 			scheduler_change_thread_queue_locked(qSleep, THREAD_STATE_RUNNABLE);   //we hold the queue lock (above)
-			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending terminate\n", qSleep->threadID);
+			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending signal\n", qSleep->threadID);
 		}
 		else if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past
 		{

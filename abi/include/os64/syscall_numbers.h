@@ -553,6 +553,11 @@ typedef enum os64_shutdown_mode
 // for the STREAM mode whose customer (telnetd) waits on TCP listen().
 #define SYSCALL_PTY_CREATE   44
 #define SYSCALL_PTY_SNAPSHOT 45
+// pty_resize(master, cols, rows): the grid follows the window and every
+// task seated on the slave hears SIGWINCH (the SIGWINCH slice, 2026-08-25).
+// The master's verb — it owns the geometry. A program that hears the signal
+// asks /proc/self/tty for the new size (RE-OPEN it: procfs renders at open).
+#define SYSCALL_PTY_RESIZE   51
 
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the

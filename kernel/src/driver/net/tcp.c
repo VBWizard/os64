@@ -670,7 +670,7 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 
 	for (;;)
 	{
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return TCP_ERR_INTERRUPTED;
 
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
@@ -744,7 +744,7 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 
 	while (sent < len)
 	{
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return sent ? (long)sent : TCP_ERR_INTERRUPTED;
 
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
@@ -792,7 +792,7 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 		}
 		c->writer = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING))
+		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			break;
 		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
 	}

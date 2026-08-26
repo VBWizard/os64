@@ -138,9 +138,9 @@ void task_signal_all_threads(task_t* task, signals signal)
 // masked — the mark would sit there unread forever. A scheduling IPI is an
 // interrupt, so it lands anyway.
 //
-// For senders who are not the victim: the hangup sweep (tty_shell_departed)
-// and the shutdown ladder both aim at tasks that may be parked or spinning
-// anywhere in the machine.
+// For senders who are not the victim: the hangup sweep (tty_shell_departed),
+// pty_resize's SIGWINCH at the seats, and the shutdown ladder all aim at
+// tasks that may be parked or spinning anywhere in the machine.
 void task_signal_and_nudge(task_t* task, signals signal)
 {
 	if (task == NULL)

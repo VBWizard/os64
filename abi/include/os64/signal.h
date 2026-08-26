@@ -37,9 +37,16 @@
 #define OS64_SIGCONT   18
 #define OS64_SIGSTOP   19
 #define OS64_SIGIO     29
-// 28 is SIGWINCH everywhere and is RESERVED, not defined: the terminal-resize
-// slice gives it something to mean, and a number claimed early is one nobody
-// has to renegotiate.
+// Your terminal changed size. Raised by pty_resize (a terminal window that
+// was dragged tells its pty) at every task seated on that terminal. DEFAULT:
+// IGNORED — a program that never asks is unaffected. A program that cares
+// installs a handler and then RE-OPENS /proc/self/tty to read `cols` and
+// `rows`: the signal carries no payload (the pending set is a bitmask, two
+// resizes before delivery are one), and procfs renders a file at OPEN, so a
+// handle held across the signal reports the old size forever. Expect a
+// blocking call in flight to answer OS64_INTERRUPTED (that is how the handler
+// gets to run) and loop — SIGNALS.md §8, no restart.
+#define OS64_SIGWINCH  28
 
 #define OS64_SIGNAL_COUNT 32
 
@@ -85,8 +92,8 @@ typedef void (*os64_signal_fn)(int signo);
 // to a program that has stopped answering, and a kernel that let a program
 // decline to die would have no last resort.
 //
-// WHAT YOU CAN CATCH, exactly: SIGHUP, SIGINT, SIGSEGV, SIGPIPE, SIGTERM — the
-// signals this kernel can actually send. SIGSEGV included, though a handler
+// WHAT YOU CAN CATCH, exactly: SIGHUP, SIGINT, SIGSEGV, SIGPIPE, SIGTERM and
+// SIGWINCH — the signals this kernel can actually send. SIGSEGV included, though a handler
 // for it runs on the stack that just faulted, so if the STACK is what went
 // wrong there is nowhere to put the frame and the thread dies as it always
 // did. Every other number — the gaps, and the NUMBERED-BUT-NOT-YET-REAL

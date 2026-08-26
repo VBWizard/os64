@@ -18,9 +18,10 @@ days.)*
 answer. `SIGPIPE`: a program that wants to survive a vanishing reader cannot.
 `SIGTERM`: Chris asked how to subscribe the day the shutdown ladder was built,
 and the honest answer was "you can't". `SIGHUP`: a GUI app cannot say "wait —
-unsaved work" when its terminal hangs up. And `SIGWINCH`, which does not exist
-yet and has nowhere to be delivered even if it did — which is why a maximized
-gterm still reports 38x100 and `ls` still double-spaces.*
+unsaved work" when its terminal hangs up. And `SIGWINCH`, which did not exist
+when this was written and had nowhere to be delivered even if it had — which
+was why a maximized gterm reported 38x100 (built 2026-08-25, PTY.md § Resize;
+`ls` still double-spaces, and that is the deferred-wrap bug, not a signal).*
 
 ## What already exists, and is already right
 
@@ -525,8 +526,14 @@ the next.
   classic Unix behaviour and is not a bug.
 - **Job control** — `SIGTSTP`/`SIGCONT`, `fg`/`bg`. Its own DEBTS row, and it
   wants the debugger's `ctl stop`/`start` built with it.
-- **`SIGWINCH` itself.** This slice builds the road; the terminal-resize row
-  (DEBTS) drives on it, along with gterm resizing its pty grid.
+- ~~**`SIGWINCH` itself.**~~ This slice built the road; the terminal-resize
+  slice drove on it two days later (2026-08-25, PTY.md § Resize): signal 28
+  is real, raised by `pty_resize` at every seat of the slave, default
+  IGNORE. It was the first catchable signal whose default is not death, and
+  that exposed a rule this document never stated: **a park loop must end for
+  any pending signal a handler will catch, not only for a terminate**, or
+  the handler is armed at the next syscall exit the program happens to make
+  — `signal_park_must_end` is that rule, at every blocking wait.
 - **Signal-safe library rules.** Which libos64 functions may be called from a
   handler is a real question with a real answer, and it deserves its own pass
   once there is a handler to call them from.
