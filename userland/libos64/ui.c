@@ -65,7 +65,6 @@ static void theme_defaults(os64_ui_theme_t *t)
 	t->menu_fg             = OS64_GUI_COLOR_BLACK;
 	t->menu_hi_bg          = 0xff2a62b8u;
 	t->menu_hi_fg          = OS64_GUI_COLOR_WHITE;
-	t->menu_border         = OS64_GUI_COLOR_DARK_GRAY;
 	t->menu_sep            = OS64_GUI_COLOR_DARK_GRAY;
 
 	t->pad      = 8;
@@ -114,7 +113,6 @@ static const theme_key_t kThemeKeys[] = {
 	THEME_ROW("menu.fg",             THEME_COLOR,  menu_fg),
 	THEME_ROW("menu.hi.bg",          THEME_COLOR,  menu_hi_bg),
 	THEME_ROW("menu.hi.fg",          THEME_COLOR,  menu_hi_fg),
-	THEME_ROW("menu.border",         THEME_COLOR,  menu_border),
 	THEME_ROW("menu.sep",            THEME_COLOR,  menu_sep),
 	THEME_ROW("pad",                 THEME_METRIC, pad),
 	THEME_ROW("gap",                 THEME_METRIC, gap),

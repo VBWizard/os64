@@ -280,12 +280,13 @@ static void shutdown_terminate_tasks(void)
 	if (asked == 0)
 	{
 		printf("  no tasks to stop\n");
+		printd(DEBUG_SHUTDOWN, "  no tasks to stop\n");
 		return;
 	}
 	printf("  asked %u task%s to stop\n", asked, asked == 1 ? "" : "s");
-    printd(DEBUG_SHUTDOWN,"  asked %u task%s to stop\n", asked, asked == 1 ? "" : "s");
+	printd(DEBUG_SHUTDOWN, "  asked %u task%s to stop\n", asked, asked == 1 ? "" : "s");
 
-    // Yield while they go. Ending EARLY when the last one is gone is the
+	// Yield while they go. Ending EARLY when the last one is gone is the
 	// point of watching rather than sleeping — a quiet machine should not
 	// wait out a timeout it has already satisfied. That per-pass headcount is
 	// why this wait is spelled out here instead of calling shutdown_wait();
@@ -326,8 +327,12 @@ static void shutdown_terminate_tasks(void)
 	}
 
 	if (clockStalled)
+	{
 		printf("  (the tick clock did not advance during the grace — "
 		       "proceeding anyway, on a yield budget)\n");
+		printd(DEBUG_SHUTDOWN, "  (the tick clock did not advance during the grace — "
+		       "proceeding anyway, on a yield budget)\n");
+	}
 
 	// The elapsed time is REPORTED, not assumed. The grace is a ceiling of
 	// SHUTDOWN_GRACE_MS, and how much of it actually gets spent is a fact
@@ -382,9 +387,11 @@ void shutdown_system(os64_shutdown_mode_t mode)
 	serial_print_string(mode == OS64_SHUTDOWN_REBOOT
 	                    ? "[shutdown] descent started (reboot)\n"
 	                    : "[shutdown] descent started\n");
-    
-    //NOTE: Used DEBUG_BOOT on purpose. This message should always be logged
-    printd(DEBUG_BOOT, "The system is going down NOW!\n");
+
+	// DEBUG_BOOT on purpose: the Ctrl+~ suppression leaves DEBUG_BOOT and
+	// DEBUG_EXCEPTIONS on, so this line still reaches a log somebody has
+	// quieted. (`nolog` zeroes the level outright and takes it too.)
+	printd(DEBUG_BOOT, "The system is going down NOW!\n");
 	// 2. Ask every program to stop, then insist. Before logd retires, so the
 	//    exits make the log.
 	shutdown_terminate_tasks();

@@ -43,27 +43,6 @@
 #define DESKTOP_PATH_MAX   192
 #define DESKTOP_APPS_MAX   16
 
-// EVERY COMPLAINT GOES TO THE KERNEL LOG AS WELL AS STDERR. The desktop's
-// stderr is the console it was spawned from, which on a GUI boot is a VT
-// nobody is looking at — so a mistyped `launcher =` line produced a
-// perfectly good complaint that nobody could find (Chris, 2026-08-25:
-// "there was no feedback. Nothing in the log."). os64_debug_log puts the
-// same line where `cat /home/os64.log` and `tail` can see it.
-static void complain(const char *fmt, ...)
-{
-    char line[256];
-    va_list ap;
-    va_start(ap, fmt);
-    os64_vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
-    os64_hprintf(2 /* stderr */, "%s", line);
-    // The log line without the trailing newline: the log adds its own.
-    size_t n = os64_strlen(line);
-    if (n && line[n - 1] == '\n')
-        line[n - 1] = 0;
-    os64_debug_log(line);
-}
-
 // The fallback ground. Only reached if desktop.conf names no color — and
 // note the kernel's own test pattern is UNDER us regardless, which is what
 // shows if this program never starts or dies.
@@ -117,7 +96,7 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
 {
     desktop_config_t *cfg = (desktop_config_t *)user;
     if (key == NULL) {
-        complain("desktop: %s: not a `key = value` line: %s\n",
+        os64_complain("desktop: %s: not a `key = value` line: %s\n",
                      cfg->conf_path, value);
         return true;
     }
@@ -125,7 +104,7 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
     // does — a path is case-sensitive on ext2, and so is a file name.
     if (os64_streq_nocase(key, "color")) {
         if (!parse_hex_color(value, &cfg->color))
-            complain("desktop: %s: color must be 0xRRGGBB, got \"%s\"\n",
+            os64_complain("desktop: %s: color must be 0xRRGGBB, got \"%s\"\n",
                          cfg->conf_path, value);
         else
             cfg->have_color = true;
@@ -139,7 +118,7 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
         // 256-byte buffer; this one is 192, so the refusal has to be loud.
         size_t want = os64_strcopy(cfg->image, sizeof(cfg->image), value);
         if (want >= sizeof(cfg->image)) {
-            complain(
+            os64_complain(
                          "desktop: %s: image path over %d characters — ignored: %s\n",
                          cfg->conf_path, (int)sizeof(cfg->image) - 1, value);
             cfg->image[0] = 0;
@@ -151,7 +130,7 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
         // A typo is not a default (Codex #31 rd2): `colour = ...` used to be
         // accepted and ignored, leaving the built-in ground with no hint
         // why. The kernel's reader named unknown keys; so does this one.
-        complain("desktop: %s: unknown setting '%s' — ignored\n",
+        os64_complain("desktop: %s: unknown setting '%s' — ignored\n",
                      cfg->conf_path, key);
     }
     return true;
@@ -174,7 +153,7 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
     // (Codex #31). "My startup entry does nothing and I cannot tell why" is
     // the exact afternoon a config file exists to prevent.
     if (key == NULL) {
-        complain("desktop: %s: not a `key = value` line: %s\n",
+        os64_complain("desktop: %s: not a `key = value` line: %s\n",
                      list->path, value);
         return true;
     }
@@ -202,7 +181,7 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
                 prog++;
         }
         if (prog[0] == 0) {
-            complain("desktop: %s: 'launcher' with no program — ignored\n",
+            os64_complain("desktop: %s: 'launcher' with no program — ignored\n",
                          list->path);
             return true;
         }
@@ -210,7 +189,7 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
         // program, and this one would run on every click.
         size_t want = os64_strcopy(list->launcher[button], DESKTOP_PATH_MAX, prog);
         if (want >= DESKTOP_PATH_MAX) {
-            complain(
+            os64_complain(
                          "desktop: %s: launcher path over %d characters — ignored: %s\n",
                          list->path, DESKTOP_PATH_MAX - 1, prog);
             list->launcher[button][0] = 0;
@@ -224,7 +203,7 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
         // still reported, this just says it at startup, by name.
         int64_t probe = os64_open(list->launcher[button], "r");
         if (probe < 0) {
-            complain("desktop: %s: launcher \"%s\" cannot be opened (%ld) — the form is `launcher = [left|right|middle] <program>`\n",
+            os64_complain("desktop: %s: launcher \"%s\" cannot be opened (%ld) — the form is `launcher = [left|right|middle] <program>`\n",
                      list->path, list->launcher[button], (long)probe);
             list->launcher[button][0] = 0;
             return true;
@@ -233,12 +212,12 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
         return true;
     }
     if (!os64_streq_nocase(key, "start")) {
-        complain("desktop: %s: unknown setting '%s' — ignored\n",
+        os64_complain("desktop: %s: unknown setting '%s' — ignored\n",
                      list->path, key);
         return true;
     }
     if (value[0] == 0) {
-        complain("desktop: %s: 'start' with no program — ignored\n",
+        os64_complain("desktop: %s: 'start' with no program — ignored\n",
                      list->path);
         return true;
     }
@@ -255,7 +234,7 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
     // inherited the job along with the file.
     size_t want = os64_strcopy(list->apps[list->count], DESKTOP_PATH_MAX, value);
     if (want >= DESKTOP_PATH_MAX) {
-        complain(
+        os64_complain(
                      "desktop: %s: start path over %d characters — ignored: %s\n",
                      list->path, DESKTOP_PATH_MAX - 1, value);
         list->apps[list->count][0] = 0;
@@ -280,23 +259,23 @@ static void conf_report(const char *what, const char *path, bool found, int64_t 
         return;   // absent everywhere: the default applies, nothing to say
     switch (rc) {
     case OS64_CONF_NO_FILE:
-        complain("desktop: %s: found but could not be opened (%s)\n",
+        os64_complain("desktop: %s: found but could not be opened (%s)\n",
                      what, path);
         break;
     case OS64_CONF_TRUNCATED:
-        complain("desktop: %s exceeds %d bytes; trailing settings ignored\n",
+        os64_complain("desktop: %s exceeds %d bytes; trailing settings ignored\n",
                      path, OS64_CONF_MAX - 1);
         break;
     case OS64_CONF_IO_ERROR:
-        complain("desktop: %s: read error — settings ignored\n", path);
+        os64_complain("desktop: %s: read error — settings ignored\n", path);
         break;
     case OS64_CONF_NO_MEMORY:
-        complain("desktop: %s: out of memory reading it — settings ignored\n",
+        os64_complain("desktop: %s: out of memory reading it — settings ignored\n",
                      path);
         break;
     default:
         if (rc < 0)
-            complain("desktop: %s: read failed (%ld) — settings ignored\n",
+            os64_complain("desktop: %s: read failed (%ld) — settings ignored\n",
                          path, (long)rc);
         break;
     }
@@ -345,7 +324,7 @@ static int64_t reaper(void *arg)
             // that dies leaves no other trace and "it was running a moment
             // ago" is the whole of the evidence otherwise.
             if (code != 0) {
-                complain("desktop: task %ld exited (%d)\n",
+                os64_complain("desktop: task %ld exited (%d)\n",
                          (long)pid, (int)code);
             } else {
                 char line[64];
@@ -392,7 +371,7 @@ int main(int argc, char **argv)
 
     uint32_t sw = 0, sh = 0;
     if (os64_gui_screen_info(&sw, &sh) != 0 || sw == 0 || sh == 0) {
-        complain("desktop: no GUI here (screen_info)\n");
+        os64_complain("desktop: no GUI here (screen_info)\n");
         return 1;
     }
 
@@ -409,13 +388,13 @@ int main(int argc, char **argv)
                                          OS64_GUI_WINDOW_NO_DECORATIONS |
                                          OS64_GUI_WINDOW_START_UNFOCUSED);
     if (win <= 0) {
-        complain("desktop: window_create failed (%ld)\n", (long)win);
+        os64_complain("desktop: window_create failed (%ld)\n", (long)win);
         return 1;
     }
 
     os64_draw_ctx_t ctx;
     if (os64_draw_ctx_init(&ctx, win) != 0) {
-        complain("desktop: get_surface failed\n");
+        os64_complain("desktop: get_surface failed\n");
         os64_gui_window_destroy(win);
         return 1;
     }
@@ -433,7 +412,7 @@ int main(int argc, char **argv)
     if (rc == OS64_CONF_TRUNCATED) {
         // Same rule as gui.conf below: a cut-short `image =` is a different
         // path. Truncated means the built-in ground, and it says so.
-        complain("desktop: %s: too large to trust — using the built-in colour\n",
+        os64_complain("desktop: %s: too large to trust — using the built-in colour\n",
                      cfg.conf_path);
         cfg.have_color = false;
         cfg.have_image = false;
@@ -447,7 +426,7 @@ int main(int argc, char **argv)
             // A wallpaper that silently fails to appear is a config bug with
             // no handle on it. Name the file and the reason, then carry on
             // with the color — a bad image must not cost you a desktop.
-            complain("desktop: %s: %s\n", cfg.image,
+            os64_complain("desktop: %s: %s\n", cfg.image,
                          os64_image_status_name(st));
             os64_memset(&img, 0, sizeof(img));
         }
@@ -483,12 +462,12 @@ int main(int argc, char **argv)
     // see, and a half-obeyed startup file is worse to debug than an ignored
     // one that said why.
     if (rc == OS64_CONF_TRUNCATED) {
-        complain("desktop: %s: too large to trust — starting nothing\n",
+        os64_complain("desktop: %s: too large to trust — starting nothing\n",
                      gui_path);
         list.count = 0;
     }
     if (list.overflowed)
-        complain("desktop: more than %d start lines; the rest ignored\n",
+        os64_complain("desktop: more than %d start lines; the rest ignored\n",
                      DESKTOP_APPS_MAX);
 
     // NO gui.conf ANYWHERE means the built-in demo pair — the promise the
@@ -509,7 +488,7 @@ int main(int argc, char **argv)
     // will spawn into the same lap.
     int64_t reap_thread = os64_thread(reaper, NULL);
     if (reap_thread < 0)
-        complain(
+        os64_complain(
                      "desktop: no reaper thread (%ld) — exited apps will linger\n",
                      (long)reap_thread);
 
@@ -517,7 +496,7 @@ int main(int argc, char **argv)
         char *const av[] = { list.apps[i], NULL };
         int64_t child = os64_spawn(list.apps[i], av);
         if (child < 0)
-            complain("desktop: could not start %s (%ld)\n",
+            os64_complain("desktop: could not start %s (%ld)\n",
                          list.apps[i], (long)child);
     }
 
@@ -558,7 +537,7 @@ int main(int argc, char **argv)
             char *const av[] = { list.launcher[b], xs, ys, NULL };
             int64_t child = os64_spawn(list.launcher[b], av);
             if (child < 0)
-                complain("desktop: could not start launcher %s (%ld)\n",
+                os64_complain("desktop: could not start launcher %s (%ld)\n",
                              list.launcher[b], (long)child);
             break;
         }

@@ -61,7 +61,11 @@ static void focus_window(window_t *w)
 	// variant, the one pipe_read uses from thread context.
 	if (old == w)
 		return;
-	bool sibling = (old != NULL && w != NULL && old->owner == w->owner);
+	// 0 is the not-a-task sentinel, never a real owner, so two windows
+	// carrying it are strangers rather than siblings — otherwise a popup
+	// would decline to dismiss for a window that belongs to nobody.
+	bool sibling = (old != NULL && w != NULL &&
+	                old->owner != 0 && old->owner == w->owner);
 	if (old != NULL) {
 		input_event_t ev = {
 			.type  = INPUT_EVENT_WINDOW_FOCUS,
@@ -190,6 +194,11 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 
 	w->id = s_next_id++;
 	w->flags = flags;
+	// "No chrome AND always on top" at CREATE time is what makes a popup, and
+	// the answer is latched here so a later chord cannot change it — see
+	// GUI_WINDOW_POPUP.
+	if ((flags & GUI_WINDOW_NO_DECORATIONS) && (flags & GUI_WINDOW_PINNED))
+		w->flags |= GUI_WINDOW_POPUP;
 	w->frame = frame;
 	strncpy(w->title, title ? title : "", GUI_WINDOW_TITLE_MAX);
 	w->title[GUI_WINDOW_TITLE_MAX - 1] = '\0';
@@ -290,6 +299,25 @@ static bool desktop_declines(const window_t *w, const char *verb)
 	return true;
 }
 
+// A POPUP DECLINES THE CHROME VERBS, at the same door and for the same
+// reason. What a popup is, and why the answer is a latched bit rather than a
+// live reading of the flag word, is GUI_WINDOW_POPUP's comment in window.h.
+//
+// What each verb would do to one: MAXIMIZE fills the screen with panel
+// colour and strands the rows in a corner, and the popup can no longer
+// dismiss itself, because dismissal is focus-loss and nothing else is left
+// to click. DECORATE grows a titlebar and shifts the frame out from under
+// the geometry the program cached when it placed itself. MINIMIZE hides a
+// window whose program goes on polling it. Move and resize are deliberately
+// NOT here: they leave a popup usable, just misplaced.
+static bool popup_declines(const window_t *w, const char *verb)
+{
+	if (!(w->flags & GUI_WINDOW_POPUP))
+		return false;
+	printd(DEBUG_GUI, "wm: %s declined — window %u is a popup\n", verb, w->id);
+	return true;
+}
+
 void wm_set_pinned(window_t *w, bool pinned)
 {
 	if (desktop_declines(w, "pin"))
@@ -319,7 +347,7 @@ void wm_set_decorated(window_t *w, bool decorated)
 	// the bit directly, and the toggle really did paint a "desktop" titlebar
 	// across the wallpaper that doubled as a drag handle — Fable's review,
 	// 2026-08-25. The decline predates the fix that made it cosmetic.)
-	if (desktop_declines(w, "decorate"))
+	if (desktop_declines(w, "decorate") || popup_declines(w, "decorate"))
 		return;
 	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS))
 		return;
@@ -342,7 +370,7 @@ void wm_set_maximized(window_t *w, bool maximized)
 	// A desktop already fills the screen; "maximize" would be a no-op that
 	// still clobbered restoreFrame, and un-maximizing would then shrink your
 	// desktop to a window.
-	if (desktop_declines(w, "maximize"))
+	if (desktop_declines(w, "maximize") || popup_declines(w, "maximize"))
 		return;
 	if (maximized == ((w->flags & GUI_WINDOW_MAXIMIZED) != 0))
 		return;
@@ -364,7 +392,7 @@ void wm_set_minimized(window_t *w, bool minimized)
 {
 	// And there would be no way back: the desktop is skipped by Alt+Tab,
 	// which is the only route a minimized window has home.
-	if (desktop_declines(w, "minimize"))
+	if (desktop_declines(w, "minimize") || popup_declines(w, "minimize"))
 		return;
 	if (minimized == wm_is_hidden(w))
 		return;
@@ -618,9 +646,11 @@ void wm_deliver_event(window_t *w, const input_event_t *ev)
 	w->events[w->evt_head] = *ev;
 	w->evt_head = next;
 
-	// Aim a wake at a parked event_wait-er. Runs in the COMPOSITOR's thread
-	// context under kGuiLock (never an ISR — invariant 4 holds), and the
-	// wake takes only the scheduler queue lock inside, no trigger: the
+	// Aim a wake at a parked event_wait-er. Runs in THREAD context under
+	// kGuiLock — the compositor's thread, or a client's own thread inside a
+	// create/destroy syscall, since the birth and death focus grabs deliver
+	// from there. Never an ISR under either, which is what invariant 4 needs.
+	// The wake takes only the scheduler queue lock inside, no trigger: the
 	// woken thread runs on the next scheduler pass, which is the latency
 	// the design already accepted. A waiter still mid-park is deliberately
 	// left alone (the wake API's own rule) — its backstop re-runs the drain

@@ -719,6 +719,17 @@ Three things learned building them, for the next chord:
   review, 2026-08-25: without that, Ctrl+Alt+drag on the wallpaper moved the
   desktop, and the title toggle painted a titlebar across it).
 
+The same door turns away one more class. A **popup** — created with no chrome
+AND always-on-top, which is what a menu or a cascade is — declines maximize,
+decorate and minimize (`popup_declines`, window.c). A maximized menu cannot
+dismiss itself: dismissal is focus-loss, and a window filling the screen
+leaves nothing else to click. Move and resize are deliberately left alone,
+because they leave a popup usable, only misplaced. The property is LATCHED at
+create (`GUI_WINDOW_POPUP`), never re-read from the live flag word: a chord
+can unpin a menu or pin a borderless gterm, and neither should change what the
+window IS — reading it live let the first walk around the guard and stole the
+titlebar toggle from the second.
+
 The harness grew to test these: `utility/gui_run.sh` drives a headless
 GUI boot from a key script, and speaks **QMP** (`-qmp unix:`) for raw
 key-down/key-up and button events — HMP `sendkey` cannot hold Alt across
@@ -930,7 +941,7 @@ So the pieces are:
   case; labels, names and commands are data, verbatim. Found through the
   config ladder, first hit wins (a settings file, not a database).
 - **Colours come from `theme.conf`** (`menu.bg`, `menu.fg`, `menu.hi.bg`,
-  `menu.hi.fg`, `menu.border`, `menu.sep`) through the same theme table
+  `menu.hi.fg`, `menu.sep`) through the same theme table
   every widget uses — a program must not own its own look.
 
 ### What the slice needed from the kernel: a focus EVENT
@@ -973,8 +984,10 @@ wait for the dock, which is that); icons; a "tear-off" (Motif, 1989).
 
 - **A mistyped `launcher =` gave no feedback.** The desktop complained —
   to a stderr that on a GUI boot is a console nobody watches. Every
-  desktop complaint now ALSO goes to the kernel log (`complain()` in
-  desktop.c: stderr + `os64_debug_log`), and a launcher path is OPENED as
+  desktop complaint now ALSO goes to the kernel log (`os64_complain()` in
+  libos64: stderr + `os64_debug_log`, and the root menu uses it for the same
+  reason — a launcher the desktop starts inherits the desktop's blind
+  stderr), and a launcher path is OPENED as
   the file is read, so "cannot be opened" is said at startup, by name,
   with the line's form — not discovered as a click that does nothing.
 - **A console program from a menu has nowhere to appear.** `hexedit`

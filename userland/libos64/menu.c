@@ -186,7 +186,12 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
             } else {
                 // A cascade: inline (opens a block) or by reference (names
                 // a menu defined elsewhere in the file, twm's f.menu).
-                if (!have3) {
+                // An unquoted `}` is the end of the enclosing block, never a
+                // menu's name — without this it becomes the reference, the
+                // block never closes, and the file is refused for the wrong
+                // reason at the wrong line. (`{` needs no check: it means
+                // "opens".)
+                if (!have3 || (!q3 && os64_streq(w3, "}"))) {
                     complain(err, err_cap, m->path, line, "a cascade is `menu \"Label\" {` or `menu \"Label\" <name>`");
                     return OS64_MENU_SYNTAX;
                 }
@@ -354,8 +359,8 @@ const char *os64_menu_status_name(os64_menu_status_t status)
     return "unknown";
 }
 
-size_t os64_menu_argv(const char *command, char *buf, size_t buf_cap,
-                      char *argv[], size_t argv_max)
+int64_t os64_menu_argv(const char *command, char *buf, size_t buf_cap,
+                       char *argv[], size_t argv_max)
 {
     const char *p = command;
     const char *end = command + os64_strlen(command);
@@ -363,14 +368,19 @@ size_t os64_menu_argv(const char *command, char *buf, size_t buf_cap,
     char word[OS64_MENU_COMMAND_MAX];
     bool quoted;
 
-    while (n + 1 < argv_max && next_word(&p, end, word, sizeof(word), false, &quoted)) {
+    if (argv_max == 0)
+        return -1;   // no room even for the NULL that terminates an empty argv
+
+    while (next_word(&p, end, word, sizeof(word), false, &quoted)) {
         size_t wl = os64_strlen(word) + 1;
-        if (used + wl > buf_cap)
-            return 0;
+        // Both ceilings refuse rather than truncate. `n + 1` keeps the slot
+        // the NULL terminator needs.
+        if (n + 1 >= argv_max || used + wl > buf_cap)
+            return -1;
         os64_memcpy(buf + used, word, wl);
         argv[n++] = buf + used;
         used += wl;
     }
     argv[n] = NULL;
-    return n;
+    return (int64_t)n;
 }

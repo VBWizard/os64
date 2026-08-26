@@ -84,7 +84,6 @@ typedef struct os64_ui_theme
     uint32_t menu_fg;
     uint32_t menu_hi_bg;         // the highlighted row
     uint32_t menu_hi_fg;
-    uint32_t menu_border;
     uint32_t menu_sep;           // the separator rule
 
     // Metrics (pixels).

@@ -2,7 +2,10 @@
 
 #include <stdbool.h>       // os64_readline's flags — a .c includes what it
                            // uses too, not what its neighbors happen to drag in
+#include <stdarg.h>        // os64_complain's varargs
 #include "os64/io.h"
+#include "os64/fmt.h"      // os64_complain formats before it splits the line
+                           // between stderr and the log
 #include "os64/str.h"      // os64_strlen — was a private static here until
                            // env.c needed string helpers too and it graduated
 #include "os64/syscall.h"
@@ -193,6 +196,21 @@ int64_t os64_screen_printat(uint32_t x, uint32_t y, const char *s)
 void os64_debug_log(const char *s)
 {
     os64_syscall2(SYSCALL_DEBUG_LOG, (uint64_t)s, 0);
+}
+
+void os64_complain(const char *fmt, ...)
+{
+    char line[256];
+    va_list ap;
+    va_start(ap, fmt);
+    os64_vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    os64_hprintf(OS64_STDERR, "%s", line);
+    // The log supplies its own line ending, so hand it the text without one.
+    size_t n = os64_strlen(line);
+    if (n && line[n - 1] == '\n')
+        line[n - 1] = 0;
+    os64_debug_log(line);
 }
 
 // The beacon variant: same log line, but ALSO written to the serial wire

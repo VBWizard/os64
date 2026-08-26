@@ -119,9 +119,12 @@ bool os64_menu_named_exists(const os64_menu_t *menu, const char *name);
 
 // Split an item's command line into an argv for os64_spawn: whitespace
 // separates, double quotes group, `buf` receives the NUL-separated words
-// and `argv` the pointers (argv[n] = NULL). Returns the word count, or 0
-// for an empty command or one that would not fit.
-size_t os64_menu_argv(const char *command, char *buf, size_t buf_cap,
-                      char *argv[], size_t argv_max);
+// and `argv` the pointers (argv[n] = NULL). Returns the word count, 0 for
+// an empty command, or negative when the words do not fit in `buf` or
+// `argv` — a REFUSAL, not a truncation, because half a command line is a
+// different command and the caller cannot see the difference in the argv it
+// gets back.
+int64_t os64_menu_argv(const char *command, char *buf, size_t buf_cap,
+                       char *argv[], size_t argv_max);
 
 #endif // OS64_MENU_H

@@ -183,8 +183,9 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		return GUI_ERR_BAD_ARGS;
 
 	// Only documented CLIENT flags cross the boundary. The window struct's
-	// flag word also carries transient WM state (maximized/minimized), which
-	// cannot be claimed accidentally through this creation call.
+	// flag word also carries bits the WM owns — transient state, and the
+	// popup property it latches at birth — which cannot be claimed
+	// accidentally through this creation call.
 	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS |
 	                              GUI_WINDOW_START_UNFOCUSED |
 	                              GUI_WINDOW_PINNED |
@@ -283,10 +284,10 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 
 	// The owner rides into wm_create rather than being stamped after it:
 	// the birth focus grab inside reports "is the newcomer a sibling?" to
-	// the window losing focus, so ownership must be known before it. What
-	// ownership MEANS is still a client-API concept — the wm_* layer only
-	// records it. Whoever asked, owns — and their exit path
-	// (gui_task_destroy_windows) will collect.
+	// the window losing focus, so ownership must be known before it — the
+	// grab is where the wm_ layer compares owners. What ownership MEANS
+	// beyond that bit is still a client-API concept. Whoever asked, owns —
+	// and their exit path (gui_task_destroy_windows) will collect.
 	window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
 	                          create_flags, gui_current_task_id());
 	if (!win) {

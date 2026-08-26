@@ -45,6 +45,14 @@
 #define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // no titlebar; 1px border stays (honored since 2026-08-23)
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 #define OS64_GUI_WINDOW_PINNED           (1u << 2)   // born in the always-on-top band
+
+// NO_DECORATIONS together with PINNED **at create** says POPUP — a menu, a
+// cascade, a tooltip. The WM latches that at birth, and such a window
+// DECLINES the chrome verbs (maximize, minimize, show-titlebar): a menu
+// filling the screen could not dismiss itself, because dismissal is
+// focus-loss and nothing would be left to click. Move and resize are
+// unaffected. Setting or clearing either flag LATER changes nothing — a
+// borderless window you pin afterwards keeps every verb it had.
 // THE DESKTOP BAND: born at the BOTTOM of the z-list, where nothing can get
 // beneath it. This is what lets a desktop shell be an ordinary ring-3
 // program — the same arrangement X11 has always had, where the server owns

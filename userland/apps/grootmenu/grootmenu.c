@@ -145,7 +145,8 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
     // Lay the rows out and measure the widest label.
     size_t widest = 0;
     int32_t y = 1;   // one pixel of the panel colour above the first row
-    for (int16_t i = first; i >= 0 && lv->n < MENU_ROWS_MAX; i = gMenu.nodes[i].next) {
+    int16_t i = first;
+    for (; i >= 0 && lv->n < MENU_ROWS_MAX; i = gMenu.nodes[i].next) {
         const os64_menu_node_t *node = &gMenu.nodes[i];
         lv->rows[lv->n] = i;
         lv->row_y[lv->n] = y;
@@ -161,6 +162,12 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
         }
         lv->n++;
     }
+    // Say when a level ran past its capacity. A row that simply never appears
+    // reads as a typo in menu.conf, and the file is the last place anyone
+    // would look for a limit they never heard of.
+    if (i >= 0)
+        os64_complain("grootmenu: menu truncated at %d rows\n",
+                     MENU_ROWS_MAX);
     if (lv->n == 0)
         return false;
     lv->row_y[lv->n] = y;
@@ -184,7 +191,7 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
 
     lv->win = os64_gui_window_create("grootmenu", sx, sy, lv->fw, lv->fh, flags);
     if (lv->win <= 0) {
-        os64_hprintf(OS64_STDERR, "grootmenu: window_create failed (%ld)\n", (long)lv->win);
+        os64_complain("grootmenu: window_create failed (%ld)\n", (long)lv->win);
         return false;
     }
     if (os64_draw_ctx_init(&lv->ctx, lv->win) != 0) {
@@ -219,13 +226,19 @@ static void launch(const os64_menu_node_t *node)
 {
     char  buf[OS64_MENU_COMMAND_MAX];
     char *argv[ARGV_MAX];
-    if (os64_menu_argv(node->command, buf, sizeof(buf), argv, ARGV_MAX) == 0) {
-        os64_hprintf(OS64_STDERR, "grootmenu: \"%s\": empty command\n", node->label);
+    int64_t argc = os64_menu_argv(node->command, buf, sizeof(buf), argv, ARGV_MAX);
+    if (argc < 0) {
+        os64_complain("grootmenu: \"%s\": command refused — over %d words, or too long\n",
+                     node->label, ARGV_MAX - 1);
+        return;
+    }
+    if (argc == 0) {
+        os64_complain("grootmenu: \"%s\": empty command\n", node->label);
         return;
     }
     int64_t pid = os64_spawn(argv[0], argv);
     if (pid < 0)
-        os64_hprintf(OS64_STDERR, "grootmenu: \"%s\": could not start %s (%ld)\n",
+        os64_complain("grootmenu: \"%s\": could not start %s (%ld)\n",
                      node->label, argv[0], (long)pid);
 }
 
@@ -300,7 +313,7 @@ int main(int argc, char **argv)
     }
 
     if (os64_gui_screen_info(&gScreenW, &gScreenH) != 0 || gScreenW == 0) {
-        os64_hprintf(OS64_STDERR, "grootmenu: no GUI here\n");
+        os64_complain("grootmenu: no GUI here\n");
         return 1;
     }
 
@@ -310,20 +323,20 @@ int main(int argc, char **argv)
         // Say WHICH file and WHY: a menu that does not appear is a config
         // bug with no other handle on it.
         if (err[0])
-            os64_hprintf(OS64_STDERR, "grootmenu: %s\n", err);
+            os64_complain("grootmenu: %s\n", err);
         else
-            os64_hprintf(OS64_STDERR, "grootmenu: %s: %s\n", gMenu.path, os64_menu_status_name(st));
+            os64_complain("grootmenu: %s: %s\n", gMenu.path, os64_menu_status_name(st));
         return 1;
     }
     if (!os64_menu_named_exists(&gMenu, name)) {
-        os64_hprintf(OS64_STDERR, "grootmenu: %s defines no menu named \"%s\"\n",
+        os64_complain("grootmenu: %s defines no menu named \"%s\"\n",
                      gMenu.path, name);
         return 1;
     }
 
     os64_ui_theme_init(&gTheme);
     if (!open_level(os64_menu_find(&gMenu, name), x, y)) {
-        os64_hprintf(OS64_STDERR, "grootmenu: menu \"%s\" is empty\n", name);
+        os64_complain("grootmenu: menu \"%s\" is empty\n", name);
         return 1;
     }
 
