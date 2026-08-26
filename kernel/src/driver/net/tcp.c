@@ -724,12 +724,10 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 			return TCP_ERR_RESET;
 		}
 		// Deadline LAST: bytes, EOF, and death all outrank the clock —
-		// only pure silence times out. Expired readers deregister so the
-		// sweep never wakes someone who already gave up.
+		// only pure silence times out. No deregistration needed here: the
+		// loop top already voided it, and nothing has re-registered since.
 		if (deadline != 0 && kTicksSinceStart >= deadline)
 		{
-			if (c->reader == self)
-				c->reader = NULL;
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return TCP_ERR_TIMEOUT;
 		}

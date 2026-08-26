@@ -223,12 +223,10 @@ long udp_conn_read(udp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 
 		// Deadline check AFTER the data check, under the same lock: a
 		// datagram that arrived at the buzzer still counts (data outranks
-		// the clock), and an expired reader deregisters itself so the
-		// sweep never wakes someone who already gave up.
+		// the clock). No deregistration needed here — the loop top already
+		// voided it, and nothing has re-registered since.
 		if (deadline != 0 && kTicksSinceStart >= deadline)
 		{
-			if (c->waiter == self)
-				c->waiter = NULL;
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return UDP_CONN_ERR_TIMEOUT;
 		}

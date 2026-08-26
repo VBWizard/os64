@@ -530,13 +530,26 @@ void tty_seat_shell(tty_t *t, struct task *shell)
 	t->state = TTY_LIVE;
 }
 
-void tty_shell_departed(struct task *task)
+void tty_task_departed(struct task *task)
 {
 	if (task == NULL || task->tty == NULL)
 		return;
 	tty_t *t = (tty_t *)task->tty;
 	if (t->shell != task)
-		return;   // a child died, not the seat-holder — not our business
+	{
+		// A child died, not the seat-holder. If it was the FOREGROUND job,
+		// the console goes back to the shell HERE, at the death, not when
+		// the shell's wait returns: since a caught signal can end that wait
+		// with the job still running (Codex #32), "the wait finishing"
+		// is no longer the only way the shell learns the job is gone — a
+		// shell that never re-waits, or that the signal killed, would have
+		// left fgTask naming a corpse for Ctrl+C to dereference. NULL, not
+		// the shell, when the seat is empty — the same value an empty
+		// terminal starts with.
+		if (t->fgTask == task)
+			t->fgTask = t->shell;
+		return;
+	}
 
 	t->shell = NULL;
 	t->fgTask = NULL;

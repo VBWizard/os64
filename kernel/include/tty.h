@@ -199,9 +199,11 @@ void tty_view_scroll(int dir);         // Shift+PgUp(+1)/PgDn(-1) — half scree
 // ── Shells and the summons ──────────────────────────────────────────────────
 // Seat a controlling shell on a tty (LIVE, foreground, the works).
 void tty_seat_shell(tty_t *t, struct task *shell);
-// Called from task_exit_finish: if the dying task was a tty's seated shell,
-// the tty goes dormant and announces how to summon a new one.
-void tty_shell_departed(struct task *t);
+// Called from the exit path: if the dying task was a tty's seated shell, the
+// tty goes dormant and announces how to summon a new one; if it was the
+// tty's FOREGROUND job, the console goes back to the shell (a dead task must
+// never remain a Ctrl+C target — see the comment in the body).
+void tty_task_departed(struct task *t);
 // The summons, split across contexts: pending() is the cheap check;
 // wake() runs in processSignals (queue lock held) and rousts kworker early
 // when a terminal has been knocked on; sweep() runs IN KWORKER (task

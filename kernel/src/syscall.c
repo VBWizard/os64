@@ -1947,18 +1947,19 @@ static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!tty_resize_grid(t, cols, rows))
 		return SYSCALL_RESULT_INVALID;   // geometry outside the fence — the only refusal (the allocator never says "no memory", it panics)
 
-	uint32_t told = 0;
+	uint32_t seats = 0, told = 0;
 	for (task_t *seat = kTaskList;
 	     seat != NULL && seat != (task_t *)NO_TASK;
 	     seat = seat->next)
 	{
 		if (seat->tty != (void *)t || seat == kKernelTask || seat->exited)
 			continue;
-		task_signal_and_nudge(seat, SIGWINCH);
-		told++;
+		seats++;
+		if (task_signal_and_nudge(seat, SIGWINCH))
+			told++;   // only a seat with a handler is told; the rest ignore
 	}
-	printd(DEBUG_SYSCALL, "pty_resize: %s resized pty%u to %ux%u, SIGWINCH to %u seat%s\n",
-	       task->exename, t->index, cols, rows, told, told == 1 ? "" : "s");
+	printd(DEBUG_SYSCALL, "pty_resize: %s resized pty%u to %ux%u, SIGWINCH to %u of %u seat%s\n",
+	       task->exename, t->index, cols, rows, told, seats, seats == 1 ? "" : "s");
 	return 0;
 }
 
