@@ -808,11 +808,19 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 			break;
 		}
 		// Ask BEFORE registering (rd2): a break after `c->writer = self`
-		// left the slot naming a thread that had already returned.
-		spinlock_release_irqrestore(&c->lock, irqflags);
+		// left the slot naming a thread that had already returned. And ask
+		// UNDER THE SAME LOCK as the completion check and the registration
+		// (rd5): dropping the lock between "not done" and "registered" let
+		// the final ACK land in the gap — tcp_wake_if_ready found no waiter,
+		// and the park ran to its one-second backstop for a write that was
+		// already complete (the lost-registration case its comment names).
+		// signal_park_must_end takes no lock of its own, so it can be asked
+		// here.
 		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
 			break;
-		irqflags = spinlock_acquire_irqsave(&c->lock);
+		}
 		c->writer = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
