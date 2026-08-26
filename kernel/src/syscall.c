@@ -1926,8 +1926,9 @@ static uint64_t syscall_pty_snapshot(uint64_t arg0, uint64_t arg1, uint64_t arg2
 //
 // No lock-order hazard to reason about: this runs on the caller's syscall
 // thread inside the pty layer; the compositor is nowhere in the call path
-// and kGuiLock is never held. The seat walk is the hangup's (tty_shell_
-// departed) — kTaskList, every task whose terminal of record is this slave.
+// and kGuiLock is never held. The seat walk is the hangup's
+// (tty_task_departed) — kTaskList, every task whose terminal of record is
+// this slave.
 static uint64_t syscall_pty_resize(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {

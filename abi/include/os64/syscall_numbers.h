@@ -82,9 +82,12 @@
 // the units kept being wrong; one syscall, milliseconds, honest floor.
 // sleep(0) is the documented free yield — no time, but the CPU goes back.
 // Returns 0 when the nap completed, or OS64_INTERRUPTED when a signal this
-// program handles cut it short — the handler has run, the rest of the nap
+// program handled at the moment it woke cut it short — the rest of the nap
 // is NOT slept, and a program that wanted all of it loops (SIGNALS.md §8:
-// no restart, no remaining-time answer; the caller decides).
+// no restart, no remaining-time answer; the caller decides). Usually the
+// handler has run by the time you see this; if another thread uninstalled
+// it in between, nothing ran and you still see this — INTERRUPTED means
+// the nap ended early, never "the handler ran".
 #define SYSCALL_SLEEP      25
 
 // ticks(out) — fill an os64_ticks_t (os64/ticks.h) with the monotonic tick

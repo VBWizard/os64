@@ -479,7 +479,7 @@ int main(int argc, char **argv)
 						rows = nrows;
 						gSelLive = false;   // the cells a highlight named just moved
 					}
-					// A refused resize (the kernel's fence, or no memory)
+					// A refused resize (the kernel's geometry fence — its only refusal)
 					// leaves the old grid: letterboxed or clipped, but honest
 					// about its size to the program inside.
 				}
