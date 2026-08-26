@@ -461,14 +461,20 @@ int main(int argc, char **argv)
     // whatever fits, including the line the cut fell in the middle of — and
     // a `start` path cut short is a DIFFERENT path, one that may name a
     // program that exists. The kernel's reader refused an oversized gui.conf
-    // outright; so does this one. Refusing the LIST rather than the last
-    // line, because "which line was cut" is not something the callback can
-    // see, and a half-obeyed startup file is worse to debug than an ignored
-    // one that said why.
+    // outright; so does this one. Refusing the whole FILE rather than the
+    // last line, because "which line was cut" is not something the callback
+    // can see, and a half-obeyed startup file is worse to debug than an
+    // ignored one that said why.
     if (rc == OS64_CONF_TRUNCATED) {
         os64_complain("desktop: %s: too large to trust — starting nothing\n",
                      gui_path);
         list.count = 0;
+        // The launcher bindings go too. Every line the reader buffered
+        // reached the callback BEFORE it reported the truncation, so a
+        // refused file can already have bound a button — perhaps from the
+        // line the cut ran through. "Starting nothing" has to mean it.
+        for (int b = 0; b < 3; b++)
+            list.launcher[b][0] = 0;
     }
     if (list.overflowed)
         os64_complain("desktop: more than %d start lines; the rest ignored\n",

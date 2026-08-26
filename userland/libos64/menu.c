@@ -16,7 +16,6 @@
 #include "os64/fmt.h"
 #include "os64/mem.h"
 
-#define MENU_DEPTH_MAX 16
 #define WORD_MAX       OS64_MENU_COMMAND_MAX
 
 // ── the tokenizer ───────────────────────────────────────────────────────────
@@ -96,6 +95,13 @@ static void complain(char *err, size_t cap, const char *path, int line, const ch
         os64_snprintf(err, cap, "%s:%d: %s", path, line, what);
 }
 
+// A label is DATA as much as a name is: shown verbatim or refused, never
+// quietly shortened into something that reads like a different entry.
+static bool label_fits(const char *label)
+{
+    return os64_strlen(label) < OS64_MENU_LABEL_MAX;
+}
+
 static int16_t new_node(os64_menu_t *m, uint8_t kind, const char *label, uint32_t line)
 {
     if (m->count >= OS64_MENU_NODES_MAX)
@@ -123,7 +129,7 @@ static void append(os64_menu_t *m, scope_t *sc, int16_t node)
 static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
                                 char *err, size_t err_cap)
 {
-    scope_t stack[MENU_DEPTH_MAX];
+    scope_t stack[OS64_MENU_DEPTH_MAX];
     int depth = 0;
     int line = 0;
     const char *s = text, *stop = text + len;
@@ -205,6 +211,10 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
                     complain(err, err_cap, m->path, line, "a cascade is `menu \"Label\" {` or `menu \"Label\" <name>`");
                     return OS64_MENU_SYNTAX;
                 }
+                if (!label_fits(w2)) {
+                    complain(err, err_cap, m->path, line, "label is too long");
+                    return OS64_MENU_SYNTAX;
+                }
                 int16_t node = new_node(m, OS64_MENU_SUBMENU, w2, line);
                 if (node < 0) {
                     complain(err, err_cap, m->path, line, "too many menu entries");
@@ -212,7 +222,7 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
                 }
                 append(m, &stack[depth - 1], node);
                 if (opens) {
-                    if (depth >= MENU_DEPTH_MAX) {
+                    if (depth >= OS64_MENU_DEPTH_MAX) {
                         complain(err, err_cap, m->path, line, "menus nested too deeply");
                         return OS64_MENU_TOO_MANY;
                     }
@@ -243,6 +253,10 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
         if (!q1 && os64_streq_nocase(w1, "item")) {
             if (!next_word(&p, end, w2, sizeof(w2), false, &q2) || w2[0] == 0) {
                 complain(err, err_cap, m->path, line, "item needs a label");
+                return OS64_MENU_SYNTAX;
+            }
+            if (!label_fits(w2)) {
+                complain(err, err_cap, m->path, line, "label is too long");
                 return OS64_MENU_SYNTAX;
             }
             // The command is the REST OF THE LINE, verbatim, trimmed.

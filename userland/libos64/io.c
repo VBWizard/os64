@@ -200,7 +200,12 @@ void os64_debug_log(const char *s)
 
 void os64_complain(const char *fmt, ...)
 {
-    char line[256];
+    // Sized to os64_printf's own ceiling, so a complaint is no more lossy
+    // than any other formatted line. It matters more here than elsewhere:
+    // the actionable half of a diagnostic is its SUFFIX — the reason — and
+    // a single path may be OS64_CONF_PATH_MAX on its own, so a smaller
+    // buffer cut exactly the part the reader needed.
+    char line[1024];
     va_list ap;
     va_start(ap, fmt);
     os64_vsnprintf(line, sizeof(line), fmt, ap);

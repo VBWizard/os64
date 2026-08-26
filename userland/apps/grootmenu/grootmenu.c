@@ -36,7 +36,10 @@
 #include "os64/fmt.h"
 #include "os64/str.h"
 
-#define MENU_DEPTH_MAX  8        // open levels at once; a cascade below this depth does not open
+// Open levels at once. The grammar's own ceiling, not a number of our own:
+// a cascade the parser accepts and the launcher will not open is an arrow
+// that answers a hover with nothing.
+#define MENU_DEPTH_MAX  OS64_MENU_DEPTH_MAX
 #define MENU_ROWS_MAX   64       // rows per level
 #define ROW_PAD         3        // pixels above and below a row's text
 #define SEP_H           7        // a separator row
@@ -182,6 +185,15 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
     const uint64_t flags = OS64_GUI_WINDOW_NO_DECORATIONS | OS64_GUI_WINDOW_PINNED;
     os64_gui_frame_for_content((uint32_t)lv->cw, (uint32_t)lv->ch, flags, &lv->fw, &lv->fh);
 
+    // A level bigger than the glass cannot be slid into view — the clamp
+    // below would leave its far edge permanently off-screen, where rows can
+    // be neither seen nor chosen. Refused, like a level past the row ceiling.
+    if (lv->fw > gScreenW || lv->fh > gScreenH) {
+        os64_complain("grootmenu: a menu is %ux%u, larger than the %ux%u screen — refused\n",
+                     lv->fw, lv->fh, gScreenW, gScreenH);
+        return false;
+    }
+
     // Keep it on the glass: slide left/up rather than clip, the way every
     // menu since the Lisa has.
     if (sx + (int32_t)lv->fw > (int32_t)gScreenW) sx = (int32_t)gScreenW - (int32_t)lv->fw;
@@ -300,18 +312,20 @@ static void handle(int d, const os64_gui_event_t *ev)
 
 int main(int argc, char **argv)
 {
+    // `grootmenu [x y] [name]`, decided by ARITY, not by what the argument
+    // looks like. Sniffing the first character for a digit or '-' made a
+    // menu legitimately named "123" or "-hot" impossible to open: it was
+    // read as a third coordinate and the name silently stayed "root". A
+    // name is data, so nothing about its spelling may change how it is read.
     int32_t x = 0, y = 0;
     const char *name = "root";
-    int numbers = 0;
-    for (int i = 1; i < argc; i++) {
-        char c = argv[i][0];
-        if ((c >= '0' && c <= '9') || c == '-') {
-            if (numbers == 0) x = (int32_t)os64_atoi(argv[i]);
-            else if (numbers == 1) y = (int32_t)os64_atoi(argv[i]);
-            numbers++;
-        } else {
-            name = argv[i];
-        }
+    if (argc == 2) {
+        name = argv[1];              // a name alone; one coordinate means nothing
+    } else if (argc >= 3) {
+        x = (int32_t)os64_atoi(argv[1]);
+        y = (int32_t)os64_atoi(argv[2]);
+        if (argc >= 4)
+            name = argv[3];
     }
 
     if (os64_gui_screen_info(&gScreenW, &gScreenH) != 0 || gScreenW == 0) {

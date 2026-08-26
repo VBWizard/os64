@@ -50,6 +50,11 @@
 #define OS64_MENU_LABEL_MAX   48    // bytes, NUL included — a menu is not a paragraph
 #define OS64_MENU_COMMAND_MAX 160   // a path and a few arguments
 #define OS64_MENU_NAME_MAX    32    // a named menu's name
+// How deep cascades may nest. Here rather than private to the parser because
+// a launcher must be able to OPEN everything the grammar accepts: when the
+// two numbers disagree, the deeper menus parse fine and then answer a hover
+// with nothing at all.
+#define OS64_MENU_DEPTH_MAX   16
 #define OS64_MENU_NODES_MAX   256   // every item, rule and cascade in the file
 #define OS64_MENU_NAMED_MAX   32    // named menus per file
 #define OS64_MENU_FILE_MAX    32768 // the slurp cap; larger is refused whole
