@@ -247,6 +247,19 @@ hobby-scale judgment calls — re-rank freely.
 
 ## Explicitly NOT debts (recorded so they aren't re-litigated)
 
+- **A popup survives a VT switch, and that is the intended behavior.** Raised
+  as a P2 in PR #34 (Ctrl+Alt+F1..F7 hands the glass to a text VT without
+  moving WM focus, so an open root menu is still there when VT8 comes back)
+  and DECLINED 2026-08-26, tested first: switching VTs does not touch the
+  GUI, nothing was clicked, and no window took the focus. A popup dismisses
+  on FOCUS-LOSS, which is a thing that happens inside the GUI; returning to
+  a desktop arranged exactly as you left it is what a VT excursion should
+  mean. The proposed cure also has a hazard of its own — a menu that dies
+  because you glanced at a console — and it would cost a new kernel→WM
+  notification path to get it. The finding argued the behavior "contradicts
+  transient popup behavior"; no such rule exists here, and the convention it
+  came from belongs to toolkits that grab the pointer.
+
 - **libimage: the BMP `bfSize` field is not validated.** Raised as a P2 in PR
   #30's round 7 (a file whose declared length ends before its raster still
   decodes) and DECLINED 2026-08-25. `bfSize` is the least reliable number in

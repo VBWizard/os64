@@ -36,10 +36,7 @@
 #include "os64/fmt.h"
 #include "os64/str.h"
 
-// Open levels at once. The grammar's own ceiling, not a number of our own:
-// a cascade the parser accepts and the launcher will not open is an arrow
-// that answers a hover with nothing.
-#define MENU_DEPTH_MAX  OS64_MENU_DEPTH_MAX
+#define MENU_DEPTH_MAX  OS64_MENU_DEPTH_MAX   // the grammar's ceiling, not one of our own
 #define MENU_ROWS_MAX   64       // rows per level
 #define ROW_PAD         3        // pixels above and below a row's text
 #define SEP_H           7        // a separator row
@@ -312,11 +309,10 @@ static void handle(int d, const os64_gui_event_t *ev)
 
 int main(int argc, char **argv)
 {
-    // `grootmenu [x y] [name]`, decided by ARITY, not by what the argument
-    // looks like. Sniffing the first character for a digit or '-' made a
-    // menu legitimately named "123" or "-hot" impossible to open: it was
-    // read as a third coordinate and the name silently stayed "root". A
-    // name is data, so nothing about its spelling may change how it is read.
+    // `grootmenu [x y] [name]`, decided by ARITY, not by what an argument
+    // looks like. Sniffing the first character made a menu named "123"
+    // unopenable: it read as a coordinate and the name silently stayed
+    // "root". How data is spelled may not change how it is read.
     int32_t x = 0, y = 0;
     const char *name = "root";
     if (argc == 2) {

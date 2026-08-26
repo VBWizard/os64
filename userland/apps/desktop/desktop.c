@@ -469,10 +469,9 @@ int main(int argc, char **argv)
         os64_complain("desktop: %s: too large to trust — starting nothing\n",
                      gui_path);
         list.count = 0;
-        // The launcher bindings go too. Every line the reader buffered
-        // reached the callback BEFORE it reported the truncation, so a
-        // refused file can already have bound a button — perhaps from the
-        // line the cut ran through. "Starting nothing" has to mean it.
+        // The launcher bindings go too: the reader hands the callback every
+        // buffered line BEFORE reporting the truncation, so a refused file
+        // can already have bound a button. "Starting nothing" has to mean it.
         for (int b = 0; b < 3; b++)
             list.launcher[b][0] = 0;
     }
