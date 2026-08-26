@@ -351,6 +351,33 @@ the library serves every process). How it fits together:
   rewrites `thread->regs` — remember `mp_isrSaved*` is a mirror that must be
   updated too; **§9** the page-fault handler resumes a caught SIGSEGV out of
   the exception frame. SIGKILL is never catchable and never deferred
+- **A park ends for ANY caught signal, not only a terminate** (2026-08-25,
+  the SIGWINCH slice — PTY.md § Resize). Every blocking wait (console, pipes,
+  sleep, wait, event_wait, join, the net waits) and `processSignals`' sleeper
+  sweep ask `signal_park_must_end(thread)`; a new blocking loop must ask it
+  too, or a caught non-death signal (SIGWINCH is the first) reaches its
+  handler only at the program's next syscall — `task_wait` was the one that
+  did not, and a shell could not hear a resize until its job ended (Codex
+  #32). On the way OUT, ask `current_thread_will_catch()`, never
+  `signal_has_handler_for_pending` alone: a sibling can deliver the
+  task-wide signal first and clear your bit, and "nothing pending" must
+  read as "you will not die", not as a death with no name. AND VOID YOUR
+  OWN REGISTRATION AT THE TOP OF EVERY PASS: a park loop registers itself
+  in a waiter slot (`p->readWaiter`, `c->waiter`, `j->waiter`…) that only
+  a CLAIMANT clears — a backstop wake or a signal does not — so a thread
+  awake at the loop top must clear its own slot under the object's lock
+  before any return (`pipe_forget_waiter` is the shape). A slot left
+  naming a thread that returned is a spurious wake out of some later
+  sleep, or a read of freed memory once that thread exits (Codex #32 rd2
+  — eight loops had it; the caught-signal exit made it reachable by a
+  live thread). SIGWINCH = 28,
+  raised by `pty_resize` (syscall 51) at every task seated on the slave
+  that has a handler for it,
+  default IGNORE — it lives in `SIGNALS_DEFAULT_IS_IGNORE` and must never
+  enter `SIGNALS_DEFAULT_IS_DEATH`. Ignore means CONSUMED AT PUBLICATION:
+  a task with no handler installed gets no bit at all (a parked thread
+  never reaches the pick that would have cleared it, and a handler
+  installed later must not fire for a resize from an hour ago)
 - `task->signalLock` has TWO jobs: serializing delivery, and keeping a user
   page alive across a frame write (see its comment in task.h — the second job
   is not obvious from the name and a missed site was a kernel panic)

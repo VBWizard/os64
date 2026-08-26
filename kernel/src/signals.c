@@ -53,6 +53,7 @@ _Static_assert(SIGTERM == OS64_SIGTERM, "SIGTERM disagrees with the ABI (os64/si
 _Static_assert(SIGCONT == OS64_SIGCONT, "SIGCONT disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGSTOP == OS64_SIGSTOP, "SIGSTOP disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGIO   == OS64_SIGIO,   "SIGIO disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGWINCH == OS64_SIGWINCH, "SIGWINCH disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
                "the signal table size disagrees with the ABI (os64/signal.h)");
 
@@ -83,18 +84,18 @@ _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
 // through an API that reported success. A number the kernel cannot raise must
 // never register.
 //
-// ALSO ABSENT, AND THIS IS THE HARDER CALL: SIGCONT (18), SIGSTOP (19) and
-// SIGWINCH (28). All three have a NUMBER and no PRODUCER — nothing in this
-// kernel raises them. SIGWINCH is not even defined (the enum reserves the
-// number); SIGCONT and SIGSTOP are, and DEBTS § No job control books their
-// stop/continue semantics and delivery as a future slice, calling them
-// exactly what they are: stubs.
+// ALSO ABSENT, AND THIS IS THE HARDER CALL: SIGCONT (18) and SIGSTOP (19).
+// Both have a NUMBER and no PRODUCER — nothing in this kernel raises them.
+// DEBTS § No job control books their stop/continue semantics and delivery as
+// a future slice, calling them exactly what they are: stubs.
 //
 // SIGCONT and SIGSTOP were in this list until rd14 pointed out that keeping
-// them contradicts the rule the rest of this function exists to enforce — the
-// same rule used ONE ROUND EARLIER to exclude SIGWINCH. A handler for a signal
-// nothing can send is a caller waiting forever, and it makes no difference
-// whether the reason is "no such number" or "the slice has not landed".
+// them contradicts the rule the rest of this function exists to enforce. A
+// handler for a signal nothing can send is a caller waiting forever, and it
+// makes no difference whether the reason is "no such number" or "the slice
+// has not landed". SIGWINCH (28) sat outside for the same reason until the
+// resize slice gave it a producer (syscall_pty_resize) — the day a signal
+// gets a sender is the day it joins the list, which is exactly the rule.
 //
 // THE COUNTER-ARGUMENT, considered and rejected — and it deserved considering,
 // because os64 has made exactly this bet before and WON it: registration
@@ -123,15 +124,16 @@ bool signal_is_known(signals sig)
 		// RAISES each member cannot hide the next one: an entry with no
 		// producer to name is visibly wrong to anybody reading it, including
 		// whoever is adding one.
-		case SIGHUP:   // tty_shell_departed — the seated shell went away
+		case SIGHUP:   // tty_task_departed — the seated shell went away
 		case SIGINT:   // console Ctrl+C; /proc/<id>/ctl "interrupt"
 		case SIGKILL:  // /proc/<id>/ctl "kill"; task_terminate_sibling_threads
 		case SIGSEGV:  // the page-fault handler, on an unresolvable user fault
 		case SIGPIPE:  // syscall_write, into a pipe whose readers have all gone
 		case SIGTERM:  // the shutdown ladder
+		case SIGWINCH: // syscall_pty_resize, at every seat of the slave that has a handler
 			return true;
 		default:
-			// Gaps, scheduler markers, reserved numbers — and NUMBERED-BUT-NOT
+			// Gaps, scheduler markers — and NUMBERED-BUT-NOT
 			// YET-REAL: SIGCONT/SIGSTOP (job control is booked, not built) and
 			// SIGIO (nothing in kernel or userland raises it; it was claimed
 			// alongside the POSIX numbers and never given a sender). Each
@@ -300,6 +302,23 @@ bool signal_has_handler_for_pending(struct task *t, void *thrd)
 	return caught;
 }
 
+// See signals.h. The terminate test comes first and unconditionally: a
+// pending SIGKILL makes signal_has_handler_for_pending answer "no" by
+// design, and the park must still end so the checkpoint can carry out the
+// kill. Reads the handler table without the lock, as every checkpoint does —
+// a stale answer here costs one extra trip round the park loop, never a
+// wrong decision, because the loop asks again and the syscall boundary
+// decides under signalLock.
+bool signal_park_must_end(void *thrd)
+{
+	thread_t *thread = (thread_t *)thrd;
+	if (thread == NULL)
+		return false;
+	if (sigset_any(thread->signals.sigind, SIGNALS_TERMINATING))
+		return true;
+	return signal_has_handler_for_pending((task_t *)thread->ownerTask, thread);
+}
+
 // The stub in task_exit_asm.S reads these offsets off RSP by hand. If the
 // struct moves, the stub reads the wrong words and calls whatever happens to
 // be in the frame — so the two are held together here rather than by anyone
@@ -340,7 +359,28 @@ static int signal_pick_deliverable(task_t *task, thread_t *thread)
 		if (!signal_is_catchable((signals)sig))
 			continue;                       // SIGKILL: the default is the only action
 		if (task->sighandler[sig] == NULL)
-			continue;                       // no handler: the default action stands
+		{
+			// No handler: the default action stands. For a death-default
+			// signal that means the checkpoints (or the orphan check below)
+			// end the task. For a default-IGNORE signal, ignoring is spelled
+			// CONSUMING — and the FIRST place that happens is publication
+			// (task_signal_and_nudge drops a WINCH at a task with no handler
+			// before any bit is set, because a thread parked with no handler
+			// never comes through here; Codex #32). This is the backstop for
+			// the gap between: published while a handler was installed,
+			// uninstalled by a sibling before the pick. Cleared from EVERY
+			// thread of the task, not only the one passing through here
+			// (rd2): the publish was task-wide, and a sibling parked with
+			// no handler will not come through here either — a thread-local
+			// clear would leave its bit to fire on the next install. Under
+			// the lock both delivery paths hold, so nothing sits pending
+			// until a handler happens to be installed and then fires for a
+			// resize that happened an hour ago.
+			if (SIG_BIT(sig) & SIGNALS_DEFAULT_IS_IGNORE)
+				for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+					sigset_del(&th->signals.sigind, (signals)sig);
+			continue;
+		}
 		if (sigset_has(thread->signals.sigmask, (signals)sig))
 			continue;                       // already inside this signal's own handler
 		return sig;
@@ -818,20 +858,25 @@ void processSignals()
 		// walk off into the wrong queue mid-iteration.
 		thread_t *nextSleeper = qSleep->next;
 
-		if (sigset_any(qSleep->signals.sigind, SIGNALS_TERMINATING))
+		if (signal_park_must_end(qSleep))
 		{
-			// A pending terminate outranks the nap. Cancel the sleep and wake
-			// the thread INTO its own blocking loop (console_read / pipe_read /
-			// pipe_write), whose top-of-loop terminate check bails out to the
-			// syscall boundary — where the default action (terminate, 130) is
-			// enforced in the dying task's own context, free to sleep and to
-			// close handles. This wake is what makes Ctrl+C (and a ctl write)
-			// reach a task that is blocked and would otherwise never run again
-			// to notice it.
+			// A pending terminate — or a pending signal a handler will catch
+			// — outranks the nap. Cancel the sleep and wake the thread INTO
+			// its own blocking loop (console_read / pipe_read / pipe_write
+			// ...), whose top-of-loop check asks the same question and bails
+			// out to the syscall boundary: a terminate nothing catches gets
+			// its default action (130) enforced in the dying task's own
+			// context, free to sleep and to close handles; a caught signal
+			// gets its handler armed at the dispatcher exit and the call
+			// answers INTERRUPTED. This wake is what makes Ctrl+C (and a ctl
+			// write, and a window resize) reach a task that is blocked and
+			// would otherwise never run again to notice it. (Lock order holds:
+			// the predicate reads the handler table lock-free, like every
+			// checkpoint, and we hold only the queue lock here.)
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			sigset_del(&qSleep->signals.sigind, SIGSLEEP);
 			scheduler_change_thread_queue_locked(qSleep, THREAD_STATE_RUNNABLE);   //we hold the queue lock (above)
-			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending terminate\n", qSleep->threadID);
+			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending signal\n", qSleep->threadID);
 		}
 		else if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past
 		{

@@ -76,9 +76,11 @@ typedef struct pipe
 // Result codes (negative = error; >= 0 is a byte count).
 #define PIPE_ERR_CLOSED      (-1) // all readers gone: writing into the void (EPIPE)
 #define PIPE_ERR_NOMEM       (-2)
-#define PIPE_ERR_INTERRUPTED (-3) // the CALLER has SIGINT pending: bail out so
-                                  // the syscall boundary can terminate it (the
-                                  // pipe itself is fine; never reaches ring 3)
+#define PIPE_ERR_INTERRUPTED (-3) // the CALLER has a signal pending that ends
+                                  // the wait (signal_park_must_end): a terminate,
+                                  // or one a handler will catch. The syscall
+                                  // boundary kills or answers OS64_INTERRUPTED;
+                                  // the pipe itself is fine; never reaches ring 3
 
 // Lifecycle. pipe_create() returns a pipe with readers == writers == 1 (the
 // creator holds both ends); handing an end to a child is a pipe_ref_*, and

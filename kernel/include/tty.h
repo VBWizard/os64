@@ -199,9 +199,11 @@ void tty_view_scroll(int dir);         // Shift+PgUp(+1)/PgDn(-1) — half scree
 // ── Shells and the summons ──────────────────────────────────────────────────
 // Seat a controlling shell on a tty (LIVE, foreground, the works).
 void tty_seat_shell(tty_t *t, struct task *shell);
-// Called from task_exit_finish: if the dying task was a tty's seated shell,
-// the tty goes dormant and announces how to summon a new one.
-void tty_shell_departed(struct task *t);
+// Called from the exit path: if the dying task was a tty's seated shell, the
+// tty goes dormant and announces how to summon a new one; if it was the
+// tty's FOREGROUND job, the console goes back to the shell (a dead task must
+// never remain a Ctrl+C target — see the comment in the body).
+void tty_task_departed(struct task *t);
 // The summons, split across contexts: pending() is the cheap check;
 // wake() runs in processSignals (queue lock held) and rousts kworker early
 // when a terminal has been knocked on; sweep() runs IN KWORKER (task
@@ -221,8 +223,28 @@ extern volatile bool kTTYDirect;
 // ── The pty family (PTY.md; mechanism here, the syscall skin in syscall.c) ──
 // Create a GRID-mode slave: a live tty_t with its own grid + scrollback
 // ring, registered on kPtyList (NEVER in kTTY[] — the VT iterators stay
-// blind to ptys by construction). Returns NULL on allocation failure.
+// blind to ptys by construction). Returns NULL on a bad geometry — the
+// only refusal (the allocator panics on exhaustion, never returns NULL).
 tty_t *pty_create_slave(uint32_t cols, uint32_t rows);
+
+// Resize a grid IN PLACE (the SIGWINCH slice, PTY.md § Resize). The ring is
+// reallocated at the new geometry and the old text carried across, then the
+// generation bumps so a snapshot poller repaints. Policy, stated so nobody
+// files it as a bug: NO REFLOW. Rows keep their left edge (a narrower grid
+// clips each line's tail, a wider one blanks the new cells), the cursor is
+// clamped into the new bounds, and the view snaps back to the live screen.
+// ONE refinement over "preserve the origin": when fewer rows would leave
+// the cursor below the glass, the top rows roll into scrollback instead so
+// the line being typed stays visible — what xterm does, and the difference
+// between a shrink that keeps your prompt and one that eats it. Rewrapping
+// logical lines is a scrollback feature and waits for that row.
+//
+// Grid-only: it never touches the glass, so it is a PTY verb today (the
+// syscall gates on is_pty). A VT could use it the day the renderer's cell
+// geometry can change underneath one. Returns false on a bad geometry —
+// the only refusal there is (the allocator panics on exhaustion rather
+// than returning NULL) — and then the grid is untouched.
+bool tty_resize_grid(tty_t *t, uint32_t cols, uint32_t rows);
 
 // The master's write half: bytes become synthesized key events into the
 // slave's input ring — after 0x03 runs the per-tty interrupt intercept

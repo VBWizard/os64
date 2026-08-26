@@ -37,7 +37,7 @@ Three discoveries from the code that shaped everything below:
 2. **Console handles are already tty-relative.** A task talks to ITS tty —
    `task->tty`, inherited at creation — and `tty_t` already carries the
    multiplied singletons: per-tty fgTask (Ctrl+C aim), per-tty EOF, waiter,
-   pushback, `tty_shell_departed`. The whole controlling-terminal concept
+   pushback, `tty_task_departed`. The whole controlling-terminal concept
    exists; ptys just mint more terminals.
 3. **spawn already resolves parent handles into child slots.** The
    redirection plumbing pipelines use is the plumbing a terminal needs to
@@ -185,15 +185,12 @@ and the self-hosting moment.
 ## Deferred, each with its trigger
 
 - **STREAM mode** — gate: TCP `listen()`; customer: telnetd.
-- **Resize** — grid realloc + child notification; gate: window resize
-  existing at all (GRAPHICS #5). **BOTH GATES ARE OPEN NOW** (resize
-  2026-08-19, signal delivery 2026-08-25), and the notification's shape is
-  settled: the child hears it as **SIGWINCH**, not through the GUI event
-  queue. The program inside a pty has no window and no queue to read — that
-  is the whole reason 4.3BSD invented the signal. The WINDOW half of the
-  news already arrives: gterm gets `WINDOW_RESIZE` on its own event queue
-  today and merely declines to act on it (`gterm.c` resize arm).
-  **Full design: § "Resize — the SIGWINCH slice" below.**
+- ~~**Resize**~~ — **BUILT 2026-08-25**: `pty_resize` (syscall 51) reallocs
+  the grid and raises **SIGWINCH** at the seats; gterm's resize arm calls
+  it; `/bin/winchtest` proves it headless. The program inside a pty has no
+  window and no queue to read — that is the whole reason 4.3BSD invented
+  the signal. **Design and what the build taught: § "Resize — the SIGWINCH
+  slice" below.**
 - **Scrollback exposure** — the slave's ring already holds history;
   a view_offset in the snapshot header exposes it; gate: the terminal
   wanting Shift+PgUp parity.
@@ -213,10 +210,13 @@ and the self-hosting moment.
   none of this — HUNGUP already delivers it, and ptyprobe's act 3 is its
   standing test.
 
-## Resize — the SIGWINCH slice (designed 2026-08-25, UNBUILT)
+## Resize — the SIGWINCH slice (designed 2026-08-25, BUILT the same day)
 
 *Written before the building, the way SIGNALS.md and MALLOC.md were. The
-Resize row above is the booking; this is the design it points at.*
+Resize row above was the booking; this is the design it pointed at, with
+what the building changed marked where it happened. One thing the design
+missed outright — see "The wake" below — and it was the piece that made
+the signal useful rather than merely deliverable.*
 
 ### It is TWO hops, and they are different animals
 
@@ -255,6 +255,36 @@ land on opposite sides of it:
   terminal and most software ones do exactly this; real reflow (rewrapping
   logical lines) is a scrollback feature and belongs with the scrollback row,
   not here. Say it in the code or someone will file it as a bug.
+  **One refinement, found while building:** "clamp the cursor" alone would
+  have eaten husk's prompt — a shell sits on the LAST row, so shrinking by
+  five rows would have clipped the five rows that contain it and left the
+  cursor clamped onto unrelated text. `tty_resize_grid` therefore rolls the
+  top rows into scrollback when the cursor would otherwise fall off the
+  bottom, which is what xterm does and what a fixed-glass VT100 never had to
+  think about. The origin is preserved whenever preserving it is possible.
+- **The wake — the piece the design missed.** Every park loop in the kernel
+  (console_read, the pipes, sleep, event_wait, thread_join, the three net
+  waits — and `task_wait`, which asked nothing at all until Codex #32 rd1)
+  ended only for `SIGNALS_TERMINATING`, and `processSignals` rousted
+  a sleeper only for the same mask — correct while every catchable signal
+  was also terminating, and useless the day one was not. A handled SIGWINCH
+  raised at a shell blocked in `read()` would have been delivered on the
+  next KEYSTROKE. The fix is one predicate, `signal_park_must_end(thread)`:
+  a terminate pending, or ANY pending signal a handler will catch — because
+  the handler is armed only at the dispatcher's exit, and a thread that
+  stays parked never reaches it. Twelve park loops plus the sweep —
+  thirteen sites, one question. The syscall
+  boundary's `current_thread_will_catch` gained the matching edge: a park
+  that ended for a non-death signal whose handler was uninstalled meanwhile
+  answers INTERRUPTED, not death — there is nothing terminating to name.
+- **Default action = ignore, and ignore is spelled CONSUME.** A WINCH at a
+  task with no handler is dropped at publication (no bit is ever set —
+  `task_signal_is_ignored`, rd1), and one orphaned by a handler uninstalled
+  after publication is cleared from every thread at the pick
+  (`signal_pick_deliverable`, under
+  the same lock both delivery paths hold) rather than sitting pending until
+  a handler is installed an hour later and fires for a resize nobody
+  remembers.
 
 ### Admitting number 28
 
@@ -273,6 +303,19 @@ means obeying the two rules the gauntlet wrote:
   not the one that means "would a checkpoint stop this thread".
 - Undeliverable-and-non-terminating is already handled: §10 drops it with a
   log line. That is the correct behaviour for a WINCH nobody can receive.
+- **Its home is `SIGNALS_DEFAULT_IS_IGNORE`, and ignore means CONSUMED AT
+  PUBLICATION** (Codex #32): a task with no SIGWINCH handler gets no
+  pending bit at all. "Leave the bit and let the pick drop it" looked the
+  same and was not — a thread parked with no handler is deliberately left
+  asleep, never reaches the pick, and a handler installed later by a
+  sibling would run for a resize from an hour ago. The pick's own
+  consumption survives as the backstop for a handler uninstalled between
+  publication and delivery.
+- **Every park ends for it, `task_wait` included, and every park LEAVES
+  through `current_thread_will_catch()`.** The wait was the one that did
+  not ask (a shell could not hear a resize until its job finished —
+  `winchtest` act 6 is its fixture), and sleep was the one that asked the
+  narrower question on the way out (see the fingerprints).
 
 ### "It changed" is useless without "to what" — and that half already exists
 
@@ -305,10 +348,14 @@ call in the resize arm, verified on glass by dragging a gterm and watching
 
 ### Order of work (each lands green before the next)
 
-1. `pty_resize` + grid realloc + generation bump — no signal yet, headless,
-   proves the geometry half alone (gterm letterboxing simply moves).
-2. Admit 28, raise it, fixture with its broken-kernel control.
-3. gterm's resize arm calls it — the glass test.
+1. ~~`pty_resize` + grid realloc + generation bump~~ — `tty_resize_grid`
+   (tty.c) + syscall 51 (syscall.c). **BUILT.**
+2. ~~Admit 28, raise it, fixture with its broken-kernel control.~~ **BUILT:
+   `/bin/winchtest`** (in testrun's table, exit 0x0A1D0000). Its control
+   was run before it was trusted: with the raise deleted it exited
+   0x0A1D0006, "child never reported the grown size".
+3. ~~gterm's resize arm calls it~~ — **BUILT**, the arm now computes the
+   grid from the surface and calls `os64_pty_resize`.
 4. *Separately, and NOT part of this slice:* `ls` reading `/proc/self/tty`,
    and the DEFERRED-WRAP bug (DEBTS item a — a `pending_wrap` flag in
    `tty.c`, what every terminal since the VT100 does). That bug is the one
@@ -316,7 +363,33 @@ call in the resize arm, verified on glass by dragging a gterm and watching
    the above, and it fixes the symptom at ANY width on gterm AND the text
    console. Do not let it ride this slice's timeline.
 
-## Failure fingerprints (predicted; verify against reality when built)
+## Failure fingerprints (the first four predicted before the build, the rest earned)
+
+- **A dragged gterm resizes but husk only notices at the next keystroke**:
+  a park loop is testing `SIGNALS_TERMINATING` instead of asking
+  `signal_park_must_end` — every blocking wait must ask the predicate, and
+  a new one copied from an old one will carry the mask test with it. (Or
+  not asking at all: `task_wait` re-parked on every wake until Codex #32,
+  so a shell with a running job was deaf. `winchtest` act 6.)
+- **A multi-threaded program dies 130 when its window is dragged, with
+  no Ctrl+C anywhere**: a park's EXIT asked `signal_has_handler_for_pending`
+  instead of `current_thread_will_catch()`. The WINCH is task-wide; a
+  sibling delivered it first and cleared this thread's bit, and "nothing
+  pending" was read as "nothing will catch it" — a death with no name,
+  which the ladder tags SIGINT. Sleep did this (Codex #32).
+- **A program installs a SIGWINCH handler and it fires at once for a
+  resize that already happened**: the ignored WINCH was left pending
+  instead of consumed at publication (`task_signal_is_ignored`, task.c).
+- **Dragging a window kills everything in it (exit 130/141)**: SIGWINCH has
+  crept into `SIGNALS_DEFAULT_IS_DEATH` or `SIGNALS_TERMINATING`. Its
+  default is ignore; `winchtest` act 2 catches this (the child dies instead
+  of reporting).
+- **A program's SIGWINCH handler reports the OLD size**: it is reading a
+  `/proc/self/tty` handle it opened earlier — procfs renders at OPEN; re-open
+  after every signal.
+- **The prompt vanishes when a window is made shorter**: the shrink is
+  clamping the cursor instead of rolling the top rows into history
+  (`shift` in `tty_resize_grid`).
 
 - **Terminal shows a frozen grid, child alive**: generation not bumping on
   some grid mutation path — every `tty_write` door must touch it.

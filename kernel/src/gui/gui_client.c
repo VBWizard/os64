@@ -21,7 +21,7 @@
 #include "scheduler.h"  // kTaskList — the close escalation finds the owner on the spine
 #include "memory/paging.h"     // the canvas mapping (surface pivot)
 #include "memory/allocator.h"  // allocate_memory_aligned / free_memory — task canvas pages
-#include "signals.h"    // SIGSLEEP / SIGNALS_TERMINATING — event_wait's park and its exit
+#include "signals.h"    // SIGSLEEP / signal_park_must_end — event_wait's park and its exit
 #include "os64/signal.h"   // OS64_INTERRUPTED — the value GUI_ERR_INTERRUPTED must BE
 
 // THE TWO RINGS AGREE, OR THE BUILD STOPS (Codex #29 rd19): gui_event_wait's
@@ -547,8 +547,9 @@ int64_t gui_screen_info(uint32_t *width, uint32_t *height)
 // deliberately leaves us alone — cancelling a not-yet-parked thread's
 // backstop is how task_enqueue_dead_child once put a thread to sleep
 // forever — and the backstop deadline re-runs the drain a moment later.
-// A pending TERMINATE outranks the wait, checked every pass (the kill
-// machinery wakes sleepers; this check is how a woken waiter LEAVES).
+// A pending TERMINATE — or a signal a handler will catch — outranks the wait,
+// checked every pass (processSignals wakes sleepers for exactly those; this
+// check is how a woken waiter LEAVES).
 #define GUI_EVENT_WAIT_BACKSTOP_TICKS (TICKS_PER_SECOND / 4)
 
 int64_t gui_event_wait(int64_t handle, input_event_t *out)
@@ -573,7 +574,7 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 			return err;
 		}
 
-		if (sigset_any(self->signals.sigind, SIGNALS_TERMINATING)) {
+		if (signal_park_must_end(self)) {   // a terminate, or a signal a handler is waiting for
 			// Un-register on the way out — console_read's scar: a stale
 			// waiter slot is a spurious wake out of some LATER unrelated
 			// sleep.

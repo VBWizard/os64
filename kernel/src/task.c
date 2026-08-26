@@ -33,7 +33,7 @@
 #include "kworker.h"
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
-#include "tty.h"   // per-tty foreground (task_wait) + the shell-departed hook
+#include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
 
 extern volatile uint64_t kSystemCurrentTime;
 extern task_t* kKernelTask;
@@ -113,6 +113,22 @@ void* task_alloc_aligned(task_t* task, size_t size)
 /// (Only ktask shares today; idle tasks stopped sharing on 2026-07-25 — see
 /// task_initialize. This counter is the COUNTER-DRAW half of that problem; the
 /// FIXED-CONSTANT half — TASK_ARGV_VIRT and friends — is what the split fixed.)
+// A default-IGNORE signal at a task with no handler for it is CONSUMED AT
+// PUBLICATION — no bit is set anywhere. Ignoring by leaving the bit pending
+// looked equivalent and was not: a thread parked in a blocking call with no
+// handler is deliberately left asleep (signal_park_must_end), so neither
+// delivery path ever reaches the pick that would clear the bit, and a
+// handler installed by a sibling later would run for a resize that happened
+// while the program was ignoring resizes (Codex #32). The disposition is
+// read UNDER signalLock, the same lock registration writes it under, so a
+// concurrent install either sees this raise or the raise sees the handler.
+// CALLER HOLDS signalLock.
+static bool task_signal_is_ignored(task_t* task, signals signal)
+{
+	return (SIG_BIT(signal) & SIGNALS_DEFAULT_IS_IGNORE) &&
+	       task->sighandler[signal] == NULL;
+}
+
 // See task.h for why this exists and why it is IRQ-safe.
 void task_signal_all_threads(task_t* task, signals signal)
 {
@@ -125,26 +141,28 @@ void task_signal_all_threads(task_t* task, signals signal)
 	// — the handler runs twice, the exact over-delivery signalLock exists to
 	// prevent. Publication and consumption must claim the same lock.
 	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
-	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
-		sigset_add(&th->signals.sigind, signal);
+	if (!task_signal_is_ignored(task, signal))
+		for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
+			sigset_add(&th->signals.sigind, signal);
 	spinlock_release_irqrestore(&task->signalLock, f);
 }
 
 // Raise `signal` on every thread of a task AND knock on the cores they were
-// last seen running on. The knock is the whole difference between this and
-// task_signal_all_threads, and it is the lesson task_terminate_sibling_threads
+// last seen running on (an ignored signal does neither — see
+// task_signal_is_ignored above). The knock is the whole difference between
+// this and task_signal_all_threads, and it is the lesson task_terminate_sibling_threads
 // wrote down below: marking a thread only matters WHEN THE SCHEDULER NEXT RUNS
 // ON ITS CORE, and under tickless an AP with a spinning thread has its timer
 // masked — the mark would sit there unread forever. A scheduling IPI is an
 // interrupt, so it lands anyway.
 //
-// For senders who are not the victim: the hangup sweep (tty_shell_departed)
-// and the shutdown ladder both aim at tasks that may be parked or spinning
-// anywhere in the machine.
-void task_signal_and_nudge(task_t* task, signals signal)
+// For senders who are not the victim: the hangup sweep (tty_task_departed),
+// pty_resize's SIGWINCH at the seats, and the shutdown ladder all aim at
+// tasks that may be parked or spinning anywhere in the machine.
+bool task_signal_and_nudge(task_t* task, signals signal)
 {
 	if (task == NULL)
-		return;
+		return false;
 
 	core_local_storage_t* cls = get_core_local_storage();
 	uint64_t own_apic = cls ? cls->apic_id : BOOTSTRAP_PROCESSOR_ID;
@@ -154,6 +172,16 @@ void task_signal_and_nudge(task_t* task, signals signal)
 	// MMIO, and the only other lock in the signal paths is the scheduler queue
 	// lock, always taken BEFORE signalLock (never after), so there is no cycle.
 	uint64_t f = spinlock_acquire_irqsave(&task->signalLock);
+	if (task_signal_is_ignored(task, signal))
+	{
+		// Nothing to mark and nobody to knock: an ignored signal is a
+		// no-op by definition, and a scheduling IPI for one is a wake for
+		// nothing (see task_signal_is_ignored above for why "leave the bit
+		// and let the pick drop it" was wrong). Answer "no" so a sender
+		// counting its audience counts only those who heard.
+		spinlock_release_irqrestore(&task->signalLock, f);
+		return false;
+	}
 	for (thread_t* th = task->threads; th != NULL; th = th->taskNext)
 	{
 		if (th->exited || th->exiting)
@@ -168,6 +196,7 @@ void task_signal_and_nudge(task_t* task, signals signal)
 			send_ipi(th->lastRunApicID, IPI_MANUAL_SCHEDULE_VECTOR, 0, 1, 0);
 	}
 	spinlock_release_irqrestore(&task->signalLock, f);
+	return true;
 }
 
 // Bring down every thread of a dying task EXCEPT the one doing the dying.
@@ -1343,12 +1372,13 @@ static void __attribute__((noinline)) task_exit_teardown(void)
 
 		// If the departed was a terminal's seated shell, the terminal goes
 		// dormant and posts its summons (tty.c) — the next keystroke there
-		// raises a fresh husk. Checked by tty.c against the SEAT (t->shell),
-		// so an ordinary child dying on a terminal changes nothing.
-		tty_shell_departed(task);
+		// raises a fresh husk. If it was the terminal's FOREGROUND job, the
+		// console goes back to the shell (tty.c says why it happens at the
+		// death). Any other child dying on a terminal changes nothing.
+		tty_task_departed(task);
 
 		// Return the pty seat inheritance took (no-op for VTs). AFTER the
-		// shell-departed hook: that one still reads task->tty, and the seat
+		// task-departure hook: that one still reads task->tty, and the seat
 		// count going to zero is what arms the master's HUNGUP flag.
 		tty_pty_unref((tty_t *)task->tty);
 
@@ -1499,9 +1529,11 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// The console changes hands HERE — the foreground task is by definition
 	// "the task the controlling shell is currently blocked waiting on." Keyed
 	// on wait, not spawn, so a future backgrounded (&) child never takes the
-	// console. Restored to the shell on EVERY return path below: a Ctrl+C at
-	// the prompt after this wait must find the shell foreground again (where
-	// it is a harmless line-kill byte), never a stale pointer at a dead child.
+	// console. Restored to the shell on every return path that FINISHES the
+	// wait (a corpse collected, or no child to wait for): a Ctrl+C at the
+	// prompt after this wait must find the shell foreground again (where it
+	// is a harmless line-kill byte), never a stale pointer at a dead child.
+	// NOT on the interrupted return — the child is still the foreground job.
 	//
 	// THE console is now THIS SHELL'S TERMINAL (task_tty): husk-on-tty2
 	// handing its console to a child moves tty2's foreground pointer and
@@ -1516,6 +1548,21 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 
 	while (1==1)
 	{
+		// Level-triggered like every park in this kernel: the sweep in
+		// processSignals wakes us for a signal this park must end for, and
+		// this is where a woken waiter LEAVES — without it the loop below
+		// re-parked on every such wake and the handler never ran (Codex
+		// #32). Asked of the thread standing here, read from GS where we
+		// stand, for the migration reason the park below spells out.
+		// THE CONSOLE STAYS WITH THE CHILD on this path (rd2): the job is
+		// still running and the shell is coming back to wait on it, so the
+		// interval — the handler, however long it runs, plus the re-wait —
+		// must keep Ctrl+C aimed at the job. Handing the console back here
+		// would aim the next Ctrl+C at the shell, the one party that did
+		// not ask for it. The other returns below are the wait FINISHING.
+		if (signal_park_must_end(get_core_local_storage()->currentThread))
+			return TASK_WAIT_INTERRUPTED;
+
 		// Check FIRST: an already-dead matching child returns immediately, no
 		// sleep (the "don't wait if the child already ended" rule).
 		//
