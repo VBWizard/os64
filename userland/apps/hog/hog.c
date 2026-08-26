@@ -78,9 +78,7 @@ int main(int argc, char **argv)
         threadCount = os64_atoi(paramNumOfThreads);
         if (threadCount > MAX_THREADS)
         {
-            char errorMsg[256] = {0};
-            os64_snprintf(errorMsg, 256, "Cannot run %d threads, exiting\n");
-            os64_write(OS64_STDERR, errorMsg, 256);
+            os64_hprintf(OS64_STDERR, "Cannot run %ld threads, exiting\n", threadCount);
             return HOG_ERROR_TOO_MANY_THREADS_REQUESTED;
         }
     }
@@ -122,6 +120,6 @@ int main(int argc, char **argv)
                         (burnedTicks % (start.per_second ? start.per_second : 1)) / 10,
                         (uint64_t)furnace);
         */
-        os64_printf("Summary: %d threads ran for a total of %d ticks\n", threadCount, totalTicks);
+        os64_printf("Summary: %ld threads ran for a total of %ld ticks\n", threadCount, totalTicks);
         return returnCode;
     }

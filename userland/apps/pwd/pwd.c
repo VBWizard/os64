@@ -29,7 +29,7 @@ int main(int argc, char **argv)
         retVal = os64_getcwd(cwd, 512);
         if (retVal < 0)
         {
-            os64_hprintf(OS64_STDERR, "Error calling syscall_getcwd: %ld\n", retVal);
+            os64_hprintf(OS64_STDERR, "Error calling syscall_getcwd: %d\n", retVal);
             returnCode = 2;
         }
         else
