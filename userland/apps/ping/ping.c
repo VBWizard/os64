@@ -13,7 +13,7 @@ typedef struct {
 } ping_payload_t;
 
 static char ipString[16] = {0}; // Max = 15 chars xxx.yyy.zzz.aaa
-
+static volatile bool ctrlCExit = false;
 static const char *net_dial_error_message(int64_t err)
 {
     switch (err)
@@ -97,6 +97,13 @@ static void print_summary(const char *target, uint32_t sent, uint32_t received,
     }
 }
 
+static void handle_ctrl_c(int signo)
+{
+    (void)signo;
+    ctrlCExit = true;
+    os64_printf("^C\n");
+}
+
 int main(int argc, char **argv)
 {
     const char *target = NULL;
@@ -123,7 +130,7 @@ int main(int argc, char **argv)
     if (positional_count < 1)
     {
         os64_printf("ping: missing target\n");
-        return 1;
+        return 2;
     }
 
     if (count_arg != NULL)
@@ -132,7 +139,7 @@ int main(int argc, char **argv)
         if (parsed_count <= 0 || parsed_count > UINT32_MAX)
         {
             os64_printf("ping: bad count '%s'\n", count_arg);
-            return 1;
+            return 3;
         }
         paramPingCount = (uint32_t)parsed_count;
     }
@@ -143,7 +150,7 @@ int main(int argc, char **argv)
         if (parsed_timeout <= 0)
         {
             os64_printf("ping: bad wait time '%s'\n", wait_arg);
-            return 1;
+            return 4;
         }
         paramTimeout = (uint64_t)parsed_timeout;
     }
@@ -154,9 +161,17 @@ int main(int argc, char **argv)
         if (parsed_interval <= 0)
         {
             os64_printf("ping: bad interval '%s'\n", interval_arg);
-            return 1;
+            return 5;
         }
         paramInterval = (uint64_t)parsed_interval;
+    }
+
+    //Set a CTRL+C handler so that if CTRL+C is pressed, we still get the summary before ping exits
+    int64_t prev = os64_signal_set_handler(OS64_SIGINT, handle_ctrl_c);
+    if (prev < 0)
+    {
+        os64_hprintf(OS64_STDERR, "ping: could not install a SIGINT handler (%ld)\n", prev);
+        os64_exit(14);
     }
 
     bool forever = count_arg == NULL;
@@ -183,14 +198,14 @@ int main(int argc, char **argv)
     {
         os64_printf("ping: cannot resolve %s: %s\n", host,
                     net_dial_error_message(resolved));
-        return 1;
+        return 6;
     }
     os64_format_ipv4(rawIP, ipString, sizeof(ipString));
 
     if (build_dial_string(dial_string, sizeof(dial_string), ipString) < 0)
     {
         os64_printf("ping: dial string too long\n");
-        return 1;
+        return 7;
     }
 
     int64_t handle = os64_dial(dial_string);
@@ -198,7 +213,7 @@ int main(int argc, char **argv)
     {
         os64_printf("ping: dial failed for %s: %s\n",
                     target, net_dial_error_message(handle));
-        return 1;
+        return 8;
     }
 
     os64_printf("PING %s (icmp echo)%s (%s)\n",
@@ -224,7 +239,7 @@ int main(int argc, char **argv)
         {
             os64_printf("ping: clock read failed\n");
             os64_close(handle);
-            return 1;
+            return 9;
         }
 
         ping_payload_t payload;
@@ -240,7 +255,7 @@ int main(int argc, char **argv)
             {
                 os64_printf("ping: clock read failed\n");
                 os64_close(handle);
-                return 1;
+                return 10;
             }
         }
         else if (written != (int64_t)sizeof(payload))
@@ -248,7 +263,7 @@ int main(int argc, char **argv)
             os64_printf("ping: write failed for seq %u (%lld)\n",
                         seq, (long long)written);
             os64_close(handle);
-            return 1;
+            return 11;
         }
         else
         {
@@ -257,7 +272,7 @@ int main(int argc, char **argv)
             {
                 os64_printf("ping: clock read failed\n");
                 os64_close(handle);
-                return 1;
+                return 12;
             }
             uint64_t deadline = wait_start.ticks +
                                 ms_to_ticks_ceil(paramTimeout, wait_start.per_second);
@@ -281,9 +296,11 @@ int main(int argc, char **argv)
                 {
                     os64_printf("ping: clock read failed\n");
                     os64_close(handle);
-                    return 1;
+                    return 13;
                 }
 
+                if (n == OS64_INTERRUPTED)
+                    break; // Ctrl+C: the flag ends the outer loop, the summary follows
                 if (n == OS64_NET_ERR_TIMEOUT)
                 {
                     os64_printf("Request timeout for seq %u\n", seq);
@@ -322,13 +339,12 @@ int main(int argc, char **argv)
 
         uint64_t elapsed_ms = (finish.ticks - start.ticks) * 1000u /
                               start.per_second;
-        if (elapsed_ms < paramInterval)
+        if (!ctrlCExit && elapsed_ms < paramInterval)
             os64_sleep(paramInterval - elapsed_ms);
     }
 
-    if (!forever)
-        print_summary(target, sent, received, rtt_min, rtt_total, rtt_max);
+    print_summary(target, sent, received, rtt_min, rtt_total, rtt_max);
 
     os64_close(handle);
-    return 0;
+    return (received > 0?0:1);
 }
