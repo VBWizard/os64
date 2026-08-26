@@ -231,7 +231,12 @@ typedef struct window
 // Create a window whose FRAME is `frame` (content is automatically inset by
 // the chrome), put it on top, focus it, and damage it. Returns NULL if the
 // content surface can't be allocated.
-window_t *wm_create(const char *title, rect_t frame, uint32_t flags);
+// `owner` is recorded BEFORE the birth focus grab, because that grab tells
+// the window losing focus whether the newcomer is a sibling of its own
+// (INPUT_EVENT_WINDOW_FOCUS's sibling bit) — a cascade's child born with
+// owner 0 read as a stranger and dismissed the menu that opened it. The wm_
+// layer only records the value; what ownership MEANS stays gui_client's.
+window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner);
 
 // Unlink + free. (No owner-notification semantics yet — the caller is the
 // owner.) Damages the vacated area.

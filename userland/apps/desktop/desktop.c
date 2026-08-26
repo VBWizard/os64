@@ -37,10 +37,32 @@
 #include "os64/gui.h"
 #include "os64/proc.h"
 #include "os64/str.h"
+#include "os64/fmt.h"       // os64_snprintf — the click position, as argv for the launcher
 #include "os64/thread.h"
 
 #define DESKTOP_PATH_MAX   192
 #define DESKTOP_APPS_MAX   16
+
+// EVERY COMPLAINT GOES TO THE KERNEL LOG AS WELL AS STDERR. The desktop's
+// stderr is the console it was spawned from, which on a GUI boot is a VT
+// nobody is looking at — so a mistyped `launcher =` line produced a
+// perfectly good complaint that nobody could find (Chris, 2026-08-25:
+// "there was no feedback. Nothing in the log."). os64_debug_log puts the
+// same line where `cat /home/os64.log` and `tail` can see it.
+static void complain(const char *fmt, ...)
+{
+    char line[256];
+    va_list ap;
+    va_start(ap, fmt);
+    os64_vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    os64_hprintf(2 /* stderr */, "%s", line);
+    // The log line without the trailing newline: the log adds its own.
+    size_t n = os64_strlen(line);
+    if (n && line[n - 1] == '\n')
+        line[n - 1] = 0;
+    os64_debug_log(line);
+}
 
 // The fallback ground. Only reached if desktop.conf names no color — and
 // note the kernel's own test pattern is UNDER us regardless, which is what
@@ -59,6 +81,10 @@ typedef struct {
     char   apps[DESKTOP_APPS_MAX][DESKTOP_PATH_MAX];
     size_t count;
     bool   overflowed;
+    // `launcher = [left|right|middle] <program>` — the program a click on
+    // bare wallpaper runs, one per button (indexed by OS64_GUI_MOUSE_*).
+    // Empty = that button does nothing. See gui.conf for the ruling.
+    char   launcher[3][DESKTOP_PATH_MAX];
     char   path[OS64_CONF_PATH_MAX];   // which gui.conf won — named in complaints; ladder-sized, not app-path-sized (rd7)
 } startup_list_t;
 
@@ -91,7 +117,7 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
 {
     desktop_config_t *cfg = (desktop_config_t *)user;
     if (key == NULL) {
-        os64_hprintf(OS64_STDERR, "desktop: %s: not a `key = value` line: %s\n",
+        complain("desktop: %s: not a `key = value` line: %s\n",
                      cfg->conf_path, value);
         return true;
     }
@@ -99,7 +125,7 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
     // does — a path is case-sensitive on ext2, and so is a file name.
     if (os64_streq_nocase(key, "color")) {
         if (!parse_hex_color(value, &cfg->color))
-            os64_hprintf(OS64_STDERR, "desktop: %s: color must be 0xRRGGBB, got \"%s\"\n",
+            complain("desktop: %s: color must be 0xRRGGBB, got \"%s\"\n",
                          cfg->conf_path, value);
         else
             cfg->have_color = true;
@@ -113,7 +139,7 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
         // 256-byte buffer; this one is 192, so the refusal has to be loud.
         size_t want = os64_strcopy(cfg->image, sizeof(cfg->image), value);
         if (want >= sizeof(cfg->image)) {
-            os64_hprintf(OS64_STDERR,
+            complain(
                          "desktop: %s: image path over %d characters — ignored: %s\n",
                          cfg->conf_path, (int)sizeof(cfg->image) - 1, value);
             cfg->image[0] = 0;
@@ -125,7 +151,7 @@ static bool desktop_conf_line(const char *key, const char *value, void *user)
         // A typo is not a default (Codex #31 rd2): `colour = ...` used to be
         // accepted and ignored, leaving the built-in ground with no hint
         // why. The kernel's reader named unknown keys; so does this one.
-        os64_hprintf(OS64_STDERR, "desktop: %s: unknown setting '%s' — ignored\n",
+        complain("desktop: %s: unknown setting '%s' — ignored\n",
                      cfg->conf_path, key);
     }
     return true;
@@ -148,17 +174,71 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
     // (Codex #31). "My startup entry does nothing and I cannot tell why" is
     // the exact afternoon a config file exists to prevent.
     if (key == NULL) {
-        os64_hprintf(OS64_STDERR, "desktop: %s: not a `key = value` line: %s\n",
+        complain("desktop: %s: not a `key = value` line: %s\n",
                      list->path, value);
         return true;
     }
+    if (os64_streq_nocase(key, "launcher")) {
+        // `launcher = [left|right|middle] <program>`. The button word is a
+        // setting name and folds case; the program is a path and does not.
+        // No button word = right, the convention every desktop since
+        // Windows 95 settled on for "what can I do here?" (twm used left,
+        // in 1987, when the mouse had a spare button).
+        const char *prog = value;
+        int button = OS64_GUI_MOUSE_RIGHT;
+        char word[8];
+        size_t wl = 0;
+        while (prog[wl] && prog[wl] != ' ' && prog[wl] != '\t' && wl < sizeof(word) - 1)
+            word[wl] = prog[wl], wl++;
+        word[wl] = 0;
+        bool named = true;
+        if (os64_streq_nocase(word, "left"))        button = OS64_GUI_MOUSE_LEFT;
+        else if (os64_streq_nocase(word, "right"))  button = OS64_GUI_MOUSE_RIGHT;
+        else if (os64_streq_nocase(word, "middle")) button = OS64_GUI_MOUSE_MIDDLE;
+        else named = false;
+        if (named) {
+            prog += wl;
+            while (*prog == ' ' || *prog == '\t')
+                prog++;
+        }
+        if (prog[0] == 0) {
+            complain("desktop: %s: 'launcher' with no program — ignored\n",
+                         list->path);
+            return true;
+        }
+        // Same refusal as `start` below: a truncated path is a different
+        // program, and this one would run on every click.
+        size_t want = os64_strcopy(list->launcher[button], DESKTOP_PATH_MAX, prog);
+        if (want >= DESKTOP_PATH_MAX) {
+            complain(
+                         "desktop: %s: launcher path over %d characters — ignored: %s\n",
+                         list->path, DESKTOP_PATH_MAX - 1, prog);
+            list->launcher[button][0] = 0;
+            return true;
+        }
+        // PROBE THE PATH NOW, not at the first click. A launcher that does
+        // not exist is the classic mistyped line (`launcher = /bin/grootmenu
+        // right` makes the whole value the path), and a click that silently
+        // does nothing is the worst possible answer to it. Opening it is the
+        // only existence test ring 3 has; a spawn failure at click time is
+        // still reported, this just says it at startup, by name.
+        int64_t probe = os64_open(list->launcher[button], "r");
+        if (probe < 0) {
+            complain("desktop: %s: launcher \"%s\" cannot be opened (%ld) — the form is `launcher = [left|right|middle] <program>`\n",
+                     list->path, list->launcher[button], (long)probe);
+            list->launcher[button][0] = 0;
+            return true;
+        }
+        os64_close((int32_t)probe);
+        return true;
+    }
     if (!os64_streq_nocase(key, "start")) {
-        os64_hprintf(OS64_STDERR, "desktop: %s: unknown setting '%s' — ignored\n",
+        complain("desktop: %s: unknown setting '%s' — ignored\n",
                      list->path, key);
         return true;
     }
     if (value[0] == 0) {
-        os64_hprintf(OS64_STDERR, "desktop: %s: 'start' with no program — ignored\n",
+        complain("desktop: %s: 'start' with no program — ignored\n",
                      list->path);
         return true;
     }
@@ -175,7 +255,7 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
     // inherited the job along with the file.
     size_t want = os64_strcopy(list->apps[list->count], DESKTOP_PATH_MAX, value);
     if (want >= DESKTOP_PATH_MAX) {
-        os64_hprintf(OS64_STDERR,
+        complain(
                      "desktop: %s: start path over %d characters — ignored: %s\n",
                      list->path, DESKTOP_PATH_MAX - 1, value);
         list->apps[list->count][0] = 0;
@@ -200,23 +280,23 @@ static void conf_report(const char *what, const char *path, bool found, int64_t 
         return;   // absent everywhere: the default applies, nothing to say
     switch (rc) {
     case OS64_CONF_NO_FILE:
-        os64_hprintf(OS64_STDERR, "desktop: %s: found but could not be opened (%s)\n",
+        complain("desktop: %s: found but could not be opened (%s)\n",
                      what, path);
         break;
     case OS64_CONF_TRUNCATED:
-        os64_hprintf(OS64_STDERR, "desktop: %s exceeds %d bytes; trailing settings ignored\n",
+        complain("desktop: %s exceeds %d bytes; trailing settings ignored\n",
                      path, OS64_CONF_MAX - 1);
         break;
     case OS64_CONF_IO_ERROR:
-        os64_hprintf(OS64_STDERR, "desktop: %s: read error — settings ignored\n", path);
+        complain("desktop: %s: read error — settings ignored\n", path);
         break;
     case OS64_CONF_NO_MEMORY:
-        os64_hprintf(OS64_STDERR, "desktop: %s: out of memory reading it — settings ignored\n",
+        complain("desktop: %s: out of memory reading it — settings ignored\n",
                      path);
         break;
     default:
         if (rc < 0)
-            os64_hprintf(OS64_STDERR, "desktop: %s: read failed (%ld) — settings ignored\n",
+            complain("desktop: %s: read failed (%ld) — settings ignored\n",
                          path, (long)rc);
         break;
     }
@@ -254,7 +334,7 @@ static int64_t reaper(void *arg)
             // Said out loud: a GUI app that dies leaves no other trace, and
             // "it was running a moment ago" is the whole of the evidence
             // otherwise.
-            os64_hprintf(OS64_STDERR, "desktop: task %ld exited (%d)\n",
+            complain("desktop: task %ld exited (%d)\n",
                          (long)pid, (int)code);
             continue;
         }
@@ -293,7 +373,7 @@ int main(int argc, char **argv)
 
     uint32_t sw = 0, sh = 0;
     if (os64_gui_screen_info(&sw, &sh) != 0 || sw == 0 || sh == 0) {
-        os64_hprintf(OS64_STDERR, "desktop: no GUI here (screen_info)\n");
+        complain("desktop: no GUI here (screen_info)\n");
         return 1;
     }
 
@@ -310,13 +390,13 @@ int main(int argc, char **argv)
                                          OS64_GUI_WINDOW_NO_DECORATIONS |
                                          OS64_GUI_WINDOW_START_UNFOCUSED);
     if (win <= 0) {
-        os64_hprintf(OS64_STDERR, "desktop: window_create failed (%ld)\n", (long)win);
+        complain("desktop: window_create failed (%ld)\n", (long)win);
         return 1;
     }
 
     os64_draw_ctx_t ctx;
     if (os64_draw_ctx_init(&ctx, win) != 0) {
-        os64_hprintf(OS64_STDERR, "desktop: get_surface failed\n");
+        complain("desktop: get_surface failed\n");
         os64_gui_window_destroy(win);
         return 1;
     }
@@ -334,7 +414,7 @@ int main(int argc, char **argv)
     if (rc == OS64_CONF_TRUNCATED) {
         // Same rule as gui.conf below: a cut-short `image =` is a different
         // path. Truncated means the built-in ground, and it says so.
-        os64_hprintf(OS64_STDERR, "desktop: %s: too large to trust — using the built-in colour\n",
+        complain("desktop: %s: too large to trust — using the built-in colour\n",
                      cfg.conf_path);
         cfg.have_color = false;
         cfg.have_image = false;
@@ -348,7 +428,7 @@ int main(int argc, char **argv)
             // A wallpaper that silently fails to appear is a config bug with
             // no handle on it. Name the file and the reason, then carry on
             // with the color — a bad image must not cost you a desktop.
-            os64_hprintf(OS64_STDERR, "desktop: %s: %s\n", cfg.image,
+            complain("desktop: %s: %s\n", cfg.image,
                          os64_image_status_name(st));
             os64_memset(&img, 0, sizeof(img));
         }
@@ -384,12 +464,12 @@ int main(int argc, char **argv)
     // see, and a half-obeyed startup file is worse to debug than an ignored
     // one that said why.
     if (rc == OS64_CONF_TRUNCATED) {
-        os64_hprintf(OS64_STDERR, "desktop: %s: too large to trust — starting nothing\n",
+        complain("desktop: %s: too large to trust — starting nothing\n",
                      gui_path);
         list.count = 0;
     }
     if (list.overflowed)
-        os64_hprintf(OS64_STDERR, "desktop: more than %d start lines; the rest ignored\n",
+        complain("desktop: more than %d start lines; the rest ignored\n",
                      DESKTOP_APPS_MAX);
 
     // NO gui.conf ANYWHERE means the built-in demo pair — the promise the
@@ -410,7 +490,7 @@ int main(int argc, char **argv)
     // will spawn into the same lap.
     int64_t reap_thread = os64_thread(reaper, NULL);
     if (reap_thread < 0)
-        os64_hprintf(OS64_STDERR,
+        complain(
                      "desktop: no reaper thread (%ld) — exited apps will linger\n",
                      (long)reap_thread);
 
@@ -418,7 +498,7 @@ int main(int argc, char **argv)
         char *const av[] = { list.apps[i], NULL };
         int64_t child = os64_spawn(list.apps[i], av);
         if (child < 0)
-            os64_hprintf(OS64_STDERR, "desktop: could not start %s (%ld)\n",
+            complain("desktop: could not start %s (%ld)\n",
                          list.apps[i], (long)child);
     }
 
@@ -441,10 +521,30 @@ int main(int argc, char **argv)
             // no. Closing your desktop is not something a keystroke should
             // be able to do by accident.
             break;
+        case OS64_GUI_EVENT_MOUSE_BUTTON_DOWN: {
+            // A click on bare wallpaper: the launcher bound to that button
+            // runs, told where the click was. THE DESKTOP DOES NOT DRAW A
+            // MENU — it starts the program gui.conf named, which draws
+            // whatever its own config says, and exits. That is the whole
+            // seam: swap the program in gui.conf and the wallpaper click
+            // means something else, with nothing here changing. Screen
+            // coordinates and content coordinates are the same thing on a
+            // desktop window (no chrome; its frame IS its canvas).
+            uint8_t b = ev.mouse.button;
+            if (b > OS64_GUI_MOUSE_MIDDLE || list.launcher[b][0] == 0)
+                break;
+            char xs[12], ys[12];
+            os64_snprintf(xs, sizeof(xs), "%d", ev.mouse.x);
+            os64_snprintf(ys, sizeof(ys), "%d", ev.mouse.y);
+            char *const av[] = { list.launcher[b], xs, ys, NULL };
+            int64_t child = os64_spawn(list.launcher[b], av);
+            if (child < 0)
+                complain("desktop: could not start launcher %s (%ld)\n",
+                             list.launcher[b], (long)child);
+            break;
+        }
         default:
-            // Keys and clicks land here. Nothing listens to them yet: the
-            // root menu and the launcher are step 3, and this is the window
-            // they will live on.
+            // Keys, mouse motion, focus: nothing here listens to them.
             break;
         }
     }

@@ -58,6 +58,16 @@ static void theme_defaults(os64_ui_theme_t *t)
 	t->scroll_track        = 0xffd8d6ceu;
 	t->scroll_thumb        = 0xff8a8880u;
 
+	// The menu family: the panel's gray, the house blue for the row under
+	// the pointer — a menu is a column of buttons that have not been drawn
+	// as buttons.
+	t->menu_bg             = OS64_GUI_COLOR_LIGHT_GRAY;
+	t->menu_fg             = OS64_GUI_COLOR_BLACK;
+	t->menu_hi_bg          = 0xff2a62b8u;
+	t->menu_hi_fg          = OS64_GUI_COLOR_WHITE;
+	t->menu_border         = OS64_GUI_COLOR_DARK_GRAY;
+	t->menu_sep            = OS64_GUI_COLOR_DARK_GRAY;
+
 	t->pad      = 8;
 	t->gap      = 8;
 	t->button_h = 24;
@@ -100,6 +110,12 @@ static const theme_key_t kThemeKeys[] = {
 	THEME_ROW("field.border.focus",  THEME_COLOR,  field_border_focus),
 	THEME_ROW("scroll.track",        THEME_COLOR,  scroll_track),
 	THEME_ROW("scroll.thumb",        THEME_COLOR,  scroll_thumb),
+	THEME_ROW("menu.bg",             THEME_COLOR,  menu_bg),
+	THEME_ROW("menu.fg",             THEME_COLOR,  menu_fg),
+	THEME_ROW("menu.hi.bg",          THEME_COLOR,  menu_hi_bg),
+	THEME_ROW("menu.hi.fg",          THEME_COLOR,  menu_hi_fg),
+	THEME_ROW("menu.border",         THEME_COLOR,  menu_border),
+	THEME_ROW("menu.sep",            THEME_COLOR,  menu_sep),
 	THEME_ROW("pad",                 THEME_METRIC, pad),
 	THEME_ROW("gap",                 THEME_METRIC, gap),
 	THEME_ROW("button.h",            THEME_METRIC, button_h),

@@ -281,16 +281,18 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 		goto undo_pivot;
 	}
 
+	// The owner rides into wm_create rather than being stamped after it:
+	// the birth focus grab inside reports "is the newcomer a sibling?" to
+	// the window losing focus, so ownership must be known before it. What
+	// ownership MEANS is still a client-API concept — the wm_* layer only
+	// records it. Whoever asked, owns — and their exit path
+	// (gui_task_destroy_windows) will collect.
 	window_t *win = wm_create(title, (rect_t){x, y, (int32_t)w, (int32_t)h},
-	                          create_flags);
+	                          create_flags, gui_current_task_id());
 	if (!win) {
 		spinlock_release_irqrestore(&kGuiLock, irqflags);
 		goto undo_pivot;
 	}
-	// Stamped here, not in wm_create: ownership is a client-API concept and
-	// the wm_* layer stays policy-free. Whoever asked, owns — and their exit
-	// path (gui_task_destroy_windows) will collect.
-	win->owner = gui_current_task_id();
 
 	if (pivot) {
 		// The swap: the kmalloc back buffer retires, the task-backed pages

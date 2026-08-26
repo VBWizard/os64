@@ -46,9 +46,38 @@ static uint32_t s_next_id = 1;
 static uint64_t s_focus_serial = 0;
 static void focus_window(window_t *w)
 {
+	window_t *old = s_focused;
 	s_focused = w;
 	if (w)
 		w->focusSerial = ++s_focus_serial;
+
+	// Tell both ends (INPUT_EVENT_WINDOW_FOCUS, input.h). Every focus change
+	// passes through here — birth, death, raise — which is why the event is
+	// raised here and not at the three callers: a popup menu must learn that
+	// a NEW window stole its focus just as surely as that a click did. The
+	// sibling bit is the same-owner test; `w` may be NULL when the last
+	// window dies. wm_deliver_event's wake is legal from a client syscall
+	// (create/destroy) as well as the compositor: it is the public wake
+	// variant, the one pipe_read uses from thread context.
+	if (old == w)
+		return;
+	bool sibling = (old != NULL && w != NULL && old->owner == w->owner);
+	if (old != NULL) {
+		input_event_t ev = {
+			.type  = INPUT_EVENT_WINDOW_FOCUS,
+			.focus = { .gained = 0, .sibling = sibling ? 1 : 0 },
+			.tick  = kTicksSinceStart,
+		};
+		wm_deliver_event(old, &ev);
+	}
+	if (w != NULL) {
+		input_event_t ev = {
+			.type  = INPUT_EVENT_WINDOW_FOCUS,
+			.focus = { .gained = 1, .sibling = sibling ? 1 : 0 },
+			.tick  = kTicksSinceStart,
+		};
+		wm_deliver_event(w, &ev);
+	}
 }
 
 static void unlink_window(window_t *w)
@@ -116,7 +145,7 @@ static bool at_band_top(const window_t *w)
 	return w->above == NULL || band_of(w->above) > band_of(w);
 }
 
-window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
+window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner)
 {
 	// Content = frame minus chrome; refuse degenerate sizes rather than
 	// letting a 0-wide surface ripple NULLs through the compositor.
@@ -129,6 +158,7 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 	if (!w)
 		return NULL;
 	memset(w, 0, sizeof(window_t));
+	w->owner = owner;   // before the focus grab below, which reports siblings by it
 
 	// Both stores are reserved at CAPACITY and report the content size — the
 	// reservation that makes resize free of allocation, of pixel motion, and

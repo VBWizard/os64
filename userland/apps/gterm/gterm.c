@@ -329,15 +329,26 @@ static void paste_step(int32_t master)
 
 int main(int argc, char **argv)
 {
-	(void)argc; (void)argv;
-
 	// Ask for chrome + a WANT_COLS x WANT_ROWS content area (100x38 since
 	// Chris's first day driving it — top with no wrapping is uber important);
 	// then believe the SURFACE we actually got and size the pty from it —
 	// the grid fits the window by construction, whatever the decorations
 	// cost this month. Window geometry persistence (/home/.config) is a
 	// wished-for future; until then the constants ARE the config.
-	int64_t win = os64_gui_window_create("gterm", 140, 120,
+	// `gterm [program args...]` seats that program instead of husk — the
+	// root menu's way of running a console program in a window (`item
+	// "Top" /bin/gterm /bin/top`). Full path: there is no shell in that
+	// chain to search PATH. The window wears the program's name.
+	const char *prog = (argc > 1) ? argv[1] : "/bin/husk";
+	char *const *prog_argv = (argc > 1) ? &argv[1] : (char *[]){ "/bin/husk", 0 };
+	const char *title = prog;
+	for (const char *p = prog; *p; p++)
+		if (*p == '/')
+			title = p + 1;
+	if (title[0] == 0)
+		title = "gterm";
+
+	int64_t win = os64_gui_window_create(title, 140, 120,
 	                                     WANT_COLS * CELL_W + 8,
 	                                     WANT_ROWS * CELL_H + 24, 0);
 	if (win <= 0)
@@ -371,11 +382,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	int64_t shell = os64_spawn_seated("/bin/husk",
-	                                  (char *[]){ "/bin/husk", 0 }, master);
+	int64_t shell = os64_spawn_seated(prog, prog_argv, master);
 	if (shell <= 0)
 	{
-		os64_printf("gterm: husk would not seat (%ld)\n", (long)shell);
+		os64_printf("gterm: %s would not seat (%ld)\n", prog, (long)shell);
 		os64_close((int32_t)master);
 		os64_gui_window_destroy(win);
 		return 1;

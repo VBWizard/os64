@@ -77,6 +77,16 @@ typedef struct os64_ui_theme
     uint32_t scroll_track;
     uint32_t scroll_thumb;
 
+    // The menu family (grootmenu, 2026-08-25 — and any launcher that draws
+    // a menu: the colours are here, not in the program, so a dock and the
+    // root menu wear the same theme by construction).
+    uint32_t menu_bg;
+    uint32_t menu_fg;
+    uint32_t menu_hi_bg;         // the highlighted row
+    uint32_t menu_hi_fg;
+    uint32_t menu_border;
+    uint32_t menu_sep;           // the separator rule
+
     // Metrics (pixels).
     int32_t  pad;        // inner padding: panel edges, button text inset
     int32_t  gap;        // spacing between stacked children

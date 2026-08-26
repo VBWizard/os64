@@ -235,6 +235,16 @@ typedef struct os64_gui_surface
 // answer you would have given anyway minus the chance to say goodbye. libui
 // handles it (os64_ui_t.on_close, else it sets `quit`).
 #define OS64_GUI_EVENT_WINDOW_CLOSE      7
+// Keyboard focus arrived at (`focus.gained` = 1) or left (0) this window.
+// Focus is what a click, Alt+Tab, or a new window's birth moves — you get
+// this for every change that touches one of your windows, and you can
+// ignore it (libui does). Its first customer is a popup menu, which must
+// vanish when you click anywhere else, and a focus change is the only way
+// it can see "anywhere else". `focus.sibling` = 1 means the window on the
+// other end of the change belongs to YOUR task — a cascade's submenu taking
+// focus from its parent — so a menu can tell "the user moved into my own
+// submenu" from "the user went elsewhere" without knowing which handle.
+#define OS64_GUI_EVENT_WINDOW_FOCUS      8
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
 // key events and — since resize — by mouse events too.
@@ -280,6 +290,10 @@ typedef struct os64_gui_event
         struct {
             int32_t w, h;       // the NEW content size
         } resize;
+        struct {
+            uint8_t gained;     // 1 = focus arrived here, 0 = it left
+            uint8_t sibling;    // 1 = the other window is one of your own
+        } focus;
     };
     uint64_t tick;              // kTicksSinceStart at enqueue
 } os64_gui_event_t;
