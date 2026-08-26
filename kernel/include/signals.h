@@ -43,12 +43,15 @@ typedef enum esignals
     SIGCONT   = 18,
     SIGSTOP   = 19,
     // The terminal changed size — raised by pty_resize (syscall 51) at every
-    // task seated on the resized slave. DEFAULT ACTION: IGNORE, and that is
-    // the one property of this signal that must never drift: it lands on
-    // husk, ls, cat, everything in the window, and a default of death would
-    // kill the lot the first time a window was dragged. It is therefore
-    // absent from SIGNALS_DEFAULT_IS_DEATH and from SIGNALS_TERMINATING, and
-    // an unhandled pending WINCH is simply consumed (signal_pick_deliverable).
+    // task seated on the resized slave THAT HAS A HANDLER; a seat without
+    // one gets no bit (task_signal_is_ignored, at publication). DEFAULT
+    // ACTION: IGNORE, and that is the one property of this signal that must
+    // never drift: it is aimed at husk, ls, cat, everything in the window,
+    // and a default of death would kill the lot the first time a window was
+    // dragged. It is therefore in SIGNALS_DEFAULT_IS_IGNORE and absent from
+    // SIGNALS_DEFAULT_IS_DEATH and SIGNALS_TERMINATING; the pick's consume
+    // (signal_pick_deliverable) is the backstop for a handler uninstalled
+    // after publication.
     // Sun's 4.3BSD addition, and the one signal that exists BECAUSE a program
     // can have a terminal without having a window (GRAPHICS.md § Event
     // delivery: a signal tells a process something, an event tells a window).

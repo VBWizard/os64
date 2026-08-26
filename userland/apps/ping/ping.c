@@ -13,7 +13,7 @@ typedef struct {
 } ping_payload_t;
 
 static char ipString[16] = {0}; // Max = 15 chars xxx.yyy.zzz.aaa
-
+static bool ctrlCExit = false;
 static const char *net_dial_error_message(int64_t err)
 {
     switch (err)
@@ -215,7 +215,7 @@ int main(int argc, char **argv)
 
     for (;;)
     {
-        if (!forever && seq > paramPingCount)
+        if ((!forever && seq > paramPingCount) || ctrlCExit)
             break;
 
         sent++;
