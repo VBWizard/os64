@@ -38,8 +38,10 @@
 #define OS64_SIGSTOP   19
 #define OS64_SIGIO     29
 // Your terminal changed size. Raised by pty_resize (a terminal window that
-// was dragged tells its pty) at every task seated on that terminal. DEFAULT:
-// IGNORED — a program that never asks is unaffected. A program that cares
+// was dragged tells its pty) at every task seated on that terminal that has
+// a handler for it. DEFAULT: IGNORED — a program that never asks is
+// unaffected, and gets no pending bit at all (nothing waits for a handler
+// installed later to fire for an old resize). A program that cares
 // installs a handler and then RE-OPENS /proc/self/tty to read `cols` and
 // `rows`: the signal carries no payload (the pending set is a bitmask, two
 // resizes before delivery are one), and procfs renders a file at OPEN, so a

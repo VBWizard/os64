@@ -233,8 +233,12 @@ across delivery. There is no reset-to-default and never was.
 
 ### 8. Interrupted calls return INTERRUPTED — no restart, no errno
 
-A blocking call whose thread runs a handler **returns a distinct INTERRUPTED
-result**, and the caller decides what to do about it.
+A blocking call cut short by a signal its thread handled at the moment it
+woke **returns a distinct INTERRUPTED result**, and the caller decides what
+to do about it. INTERRUPTED promises that the wait ended early — not that
+the handler ran: it usually has, but a sibling thread can uninstall the
+handler between the wake and the syscall boundary, and the call still
+answers INTERRUPTED with nothing run (Codex #32 rd3).
 
 This is not a new convention: `os64_gui_event_wait` already returns
 `INTERRUPTED` when its caller is being killed, and libui already handles it
@@ -528,8 +532,10 @@ the next.
   wants the debugger's `ctl stop`/`start` built with it.
 - ~~**`SIGWINCH` itself.**~~ This slice built the road; the terminal-resize
   slice drove on it two days later (2026-08-25, PTY.md § Resize): signal 28
-  is real, raised by `pty_resize` at every seat of the slave, default
-  IGNORE. It was the first catchable signal whose default is not death, and
+  is real, raised by `pty_resize` at every seat of the slave that has a
+  handler for it (a seat without one gets no bit — `SIGNALS_DEFAULT_IS_IGNORE`
+  is consumed at publication), default IGNORE. It was the first catchable
+  signal whose default is not death, and
   that exposed a rule this document never stated: **a park loop must end for
   any pending signal a handler will catch, not only for a terminate**, or
   the handler is armed at the next syscall exit the program happens to make
