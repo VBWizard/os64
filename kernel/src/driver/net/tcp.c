@@ -670,10 +670,19 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 
 	for (;;)
 	{
+		// Awake at the top: a registration left by the park we just came
+		// out of is void, cleared before any return below can leave the
+		// slot naming a thread that has moved on (a spurious wake out of a
+		// later sleep, or freed memory once it has exited).
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->reader == self)
+			c->reader = NULL;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return TCP_ERR_INTERRUPTED;
 
-		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
 		if (c->rcv_count > 0)
 		{
 			// Short reads are the contract (every os64 read returns what
@@ -744,10 +753,17 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 
 	while (sent < len)
 	{
+		// Same discipline as the reader: awake means our registration is
+		// void, and it goes before any return can leave it behind.
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->writer == self)
+			c->writer = NULL;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return sent ? (long)sent : TCP_ERR_INTERRUPTED;
 
-		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
 		if (c->reset || c->state == TCP_CLOSED || c->state == TCP_LAST_ACK ||
 		    c->state == TCP_TIME_WAIT)
 		{
@@ -784,16 +800,23 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 	for (;;)
 	{
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		// Awake: last pass's registration is void (see the read loop).
+		if (c->writer == self)
+			c->writer = NULL;
 		bool done = (c->snd_len == 0) || c->reset || c->state == TCP_CLOSED;
 		if (done)
 		{
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			break;
 		}
-		c->writer = self;
+		// Ask BEFORE registering (rd2): a break after `c->writer = self`
+		// left the slot naming a thread that had already returned.
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			break;
+		irqflags = spinlock_acquire_irqsave(&c->lock);
+		c->writer = self;
+		spinlock_release_irqrestore(&c->lock, irqflags);
 		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
 	}
 	return (long)sent;

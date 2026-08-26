@@ -368,12 +368,17 @@ static int signal_pick_deliverable(task_t *task, thread_t *thread)
 			// before any bit is set, because a thread parked with no handler
 			// never comes through here; Codex #32). This is the backstop for
 			// the gap between: published while a handler was installed,
-			// uninstalled by a sibling before the pick. Cleared under the
-			// lock both delivery paths hold, so it cannot sit pending until a
-			// handler happens to be installed and then fire for a resize
-			// that happened an hour ago.
+			// uninstalled by a sibling before the pick. Cleared from EVERY
+			// thread of the task, not only the one passing through here
+			// (rd2): the publish was task-wide, and a sibling parked with
+			// no handler will not come through here either — a thread-local
+			// clear would leave its bit to fire on the next install. Under
+			// the lock both delivery paths hold, so nothing sits pending
+			// until a handler happens to be installed and then fires for a
+			// resize that happened an hour ago.
 			if (SIG_BIT(sig) & SIGNALS_DEFAULT_IS_IGNORE)
-				sigset_del(&thread->signals.sigind, (signals)sig);
+				for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+					sigset_del(&th->signals.sigind, (signals)sig);
 			continue;
 		}
 		if (sigset_has(thread->signals.sigmask, (signals)sig))

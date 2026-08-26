@@ -161,10 +161,19 @@ long icmp_conn_read(icmp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 
 	for (;;)
 	{
+		// Awake at the top: a registration left by the park we just came
+		// out of is void, and it must be gone before any return below can
+		// leave the slot naming a thread that has moved on (a spurious
+		// wake out of a later sleep — or freed memory, once it has exited).
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		if (c->waiter == self)
+			c->waiter = NULL;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+
 		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
 			return ICMP_CONN_ERR_INTERRUPTED;
 
-		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		irqflags = spinlock_acquire_irqsave(&c->lock);
 		if (c->count > 0)
 		{
 			uint16_t slot = c->head;

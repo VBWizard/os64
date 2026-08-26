@@ -102,6 +102,22 @@ static thread_t *pipe_claim_parked_waiter(thread_t *volatile *slot)
 	return t;
 }
 
+// The claim's other half: a thread AWAKE at the top of its park loop voids
+// whatever it registered for the park it just left. A claimant already
+// cleared it; a backstop wake or a signal did not — and a slot left naming a
+// thread that has moved on is a spurious wake out of some later, unrelated
+// sleep, or, once that thread has exited, a read of freed memory by the next
+// claimant (Codex #32 rd2: the caught-signal exit made this reachable by a
+// LIVE thread, but every exit after a backstop wake had been leaving it).
+// Under the pipe lock, like the claim, so the two never cross.
+static void pipe_forget_waiter(pipe_t *p, thread_t *volatile *slot, thread_t *self)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&p->lock);
+	if (*slot == self)
+		*slot = NULL;
+	spinlock_release_irqrestore(&p->lock, flags);
+}
+
 pipe_t *pipe_create(void)
 {
 	pipe_t *p = (pipe_t *)kmalloc(sizeof(pipe_t));
@@ -259,7 +275,10 @@ long pipe_read(pipe_t *p, char *buf, size_t len)
 		// the top of every pass: this is how a reader parked below (woken by
 		// processSignals when the bit appeared) exits instead of re-parking
 		// forever. Buffered bytes stay put — a dying stage has no further use
-		// for them, and an interrupted one comes back.
+		// for them, and an interrupted one comes back. Registration first:
+		// we are awake, so any slot still naming us is stale (see
+		// pipe_forget_waiter) — and it must be gone BEFORE any return.
+		pipe_forget_waiter(p, &p->readWaiter, self);
 		if (signal_park_must_end(self))
 			return PIPE_ERR_INTERRUPTED;
 
@@ -335,7 +354,9 @@ long pipe_write(pipe_t *p, const char *buf, size_t len)
 		// Same rule as pipe_read: a pending TERMINATE means the WRITER is being
 		// killed, a pending caught signal means it has a handler to run —
 		// either way stop pushing bytes and let the syscall boundary do the
-		// honors. Bytes already landed stay landed (they were real).
+		// honors. Bytes already landed stay landed (they were real). Our
+		// registration, if a park left one, is void now that we are awake.
+		pipe_forget_waiter(p, &p->writeWaiter, self);
 		if (signal_park_must_end(self))
 			return PIPE_ERR_INTERRUPTED;
 

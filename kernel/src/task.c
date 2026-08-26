@@ -1526,9 +1526,11 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// The console changes hands HERE — the foreground task is by definition
 	// "the task the controlling shell is currently blocked waiting on." Keyed
 	// on wait, not spawn, so a future backgrounded (&) child never takes the
-	// console. Restored to the shell on EVERY return path below: a Ctrl+C at
-	// the prompt after this wait must find the shell foreground again (where
-	// it is a harmless line-kill byte), never a stale pointer at a dead child.
+	// console. Restored to the shell on every return path that FINISHES the
+	// wait (a corpse collected, or no child to wait for): a Ctrl+C at the
+	// prompt after this wait must find the shell foreground again (where it
+	// is a harmless line-kill byte), never a stale pointer at a dead child.
+	// NOT on the interrupted return — the child is still the foreground job.
 	//
 	// THE console is now THIS SHELL'S TERMINAL (task_tty): husk-on-tty2
 	// handing its console to a child moves tty2's foreground pointer and
@@ -1549,11 +1551,14 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// re-parked on every such wake and the handler never ran (Codex
 		// #32). Asked of the thread standing here, read from GS where we
 		// stand, for the migration reason the park below spells out.
-		if (signal_park_must_end(get_core_local_storage()->currentThread)) {
-			if (movesConsole)
-				console->fgTask = parent;
+		// THE CONSOLE STAYS WITH THE CHILD on this path (rd2): the job is
+		// still running and the shell is coming back to wait on it, so the
+		// interval — the handler, however long it runs, plus the re-wait —
+		// must keep Ctrl+C aimed at the job. Handing the console back here
+		// would aim the next Ctrl+C at the shell, the one party that did
+		// not ask for it. The other returns below are the wait FINISHING.
+		if (signal_park_must_end(get_core_local_storage()->currentThread))
 			return TASK_WAIT_INTERRUPTED;
-		}
 
 		// Check FIRST: an already-dead matching child returns immediately, no
 		// sleep (the "don't wait if the child already ended" rule).

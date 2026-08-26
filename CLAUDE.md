@@ -361,7 +361,16 @@ the library serves every process). How it fits together:
   #32). On the way OUT, ask `current_thread_will_catch()`, never
   `signal_has_handler_for_pending` alone: a sibling can deliver the
   task-wide signal first and clear your bit, and "nothing pending" must
-  read as "you will not die", not as a death with no name. SIGWINCH = 28,
+  read as "you will not die", not as a death with no name. AND VOID YOUR
+  OWN REGISTRATION AT THE TOP OF EVERY PASS: a park loop registers itself
+  in a waiter slot (`p->readWaiter`, `c->waiter`, `j->waiter`…) that only
+  a CLAIMANT clears — a backstop wake or a signal does not — so a thread
+  awake at the loop top must clear its own slot under the object's lock
+  before any return (`pipe_forget_waiter` is the shape). A slot left
+  naming a thread that returned is a spurious wake out of some later
+  sleep, or a read of freed memory once that thread exits (Codex #32 rd2
+  — eight loops had it; the caught-signal exit made it reachable by a
+  live thread). SIGWINCH = 28,
   raised by `pty_resize` (syscall 51) at every task seated on the slave,
   default IGNORE — it lives in `SIGNALS_DEFAULT_IS_IGNORE` and must never
   enter `SIGNALS_DEFAULT_IS_DEATH`. Ignore means CONSUMED AT PUBLICATION:
