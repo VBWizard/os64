@@ -50,10 +50,14 @@
 // Created on top of the z-order but WITHOUT stealing focus (unless nothing
 // holds it yet — somebody must). Born 2026-08-17, the day the P5 booted the
 // GUI with no mouse: which window got focus at boot was a RACE between the
-// compositor's thread (hello, console) and the demo tasks, and on a machine
-// with no pointer the loser is stuck wherever the race left it. The demos
-// wear this flag so the shell's console deterministically ends up focused —
-// the thing you TYPE at is the thing that should be listening first.
+// compositor's thread (the hello and console windows it drew then, both
+// since retired) and the demo tasks, and on a machine with no pointer the
+// loser is stuck wherever the race left it. The demos wore this flag so the
+// console deterministically ended up focused — the thing you TYPE at is the
+// thing that should be listening first. Today its wearer is the desktop
+// shell (so the apps it starts get the keyboard, not the wallpaper), and
+// the "unless nothing holds it yet" clause is what focuses the desktop on
+// a boot that starts nothing.
 #define GUI_WINDOW_START_UNFOCUSED (1u << 1)
 // PIN ON TOP (2026-08-23): the window lives in the upper band of the z-list
 // and cannot be buried by an ordinary raise. The user can toggle it with
