@@ -130,7 +130,7 @@ bool signal_is_known(signals sig)
 		case SIGSEGV:  // the page-fault handler, on an unresolvable user fault
 		case SIGPIPE:  // syscall_write, into a pipe whose readers have all gone
 		case SIGTERM:  // the shutdown ladder
-		case SIGWINCH: // syscall_pty_resize, at every task seated on the slave
+		case SIGWINCH: // syscall_pty_resize, at every seat of the slave that has a handler
 			return true;
 		default:
 			// Gaps, scheduler markers — and NUMBERED-BUT-NOT

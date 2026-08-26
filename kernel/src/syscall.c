@@ -1256,7 +1256,9 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 					// terminate, 130; or one with a handler, WINCH included.
 					// Caught? Then the wait was INTERRUPTED, not fatal — and
 					// returning is what makes delivery possible at all: the
-					// handler is armed on the way out of this syscall. Progress
+					// handler is armed on the way out of this syscall — if still
+					// installed; a sibling can uninstall it first, and then nothing
+					// runs and INTERRUPTED is still true (the wait DID end early). Progress
 					// first (rd18): earlier chunks are on the pipe and stay
 					// there, so INTERRUPTED — "nothing was accomplished" — is
 					// only the truth when written is 0.
@@ -1302,7 +1304,9 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				{
 					// Caught? Then the wait was INTERRUPTED, not fatal — and
 					// returning is what makes delivery possible at all: the
-					// handler is armed on the way out of this syscall. Progress
+					// handler is armed on the way out of this syscall — if still
+					// installed; a sibling can uninstall it first, and then nothing
+					// runs and INTERRUPTED is still true (the wait DID end early). Progress
 					// first (rd18): tcp_conn_write itself answers `sent` over
 					// INTERRUPTED within a chunk; this loop owed its earlier
 					// chunks the same honesty.
@@ -1516,7 +1520,9 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				// case. The sentinel never reaches ring 3.
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
-				// handler is armed on the way out of this syscall.
+				// handler is armed on the way out of this syscall — if still
+				// installed; a sibling can uninstall it first, and then nothing
+				// runs and INTERRUPTED is still true (the wait DID end early).
 				if (current_thread_will_catch())
 					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
@@ -1555,7 +1561,9 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				// a terminate, or one a handler will catch.
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
-				// handler is armed on the way out of this syscall.
+				// handler is armed on the way out of this syscall — if still
+				// installed; a sibling can uninstall it first, and then nothing
+				// runs and INTERRUPTED is still true (the wait DID end early).
 				if (current_thread_will_catch())
 					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
@@ -1577,7 +1585,9 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			{
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
-				// handler is armed on the way out of this syscall.
+				// handler is armed on the way out of this syscall — if still
+				// installed; a sibling can uninstall it first, and then nothing
+				// runs and INTERRUPTED is still true (the wait DID end early).
 				if (current_thread_will_catch())
 					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
@@ -1602,7 +1612,9 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			{
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
-				// handler is armed on the way out of this syscall.
+				// handler is armed on the way out of this syscall — if still
+				// installed; a sibling can uninstall it first, and then nothing
+				// runs and INTERRUPTED is still true (the wait DID end early).
 				if (current_thread_will_catch())
 					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
@@ -1627,7 +1639,9 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 				// one a handler will catch.
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
-				// handler is armed on the way out of this syscall.
+				// handler is armed on the way out of this syscall — if still
+				// installed; a sibling can uninstall it first, and then nothing
+				// runs and INTERRUPTED is still true (the wait DID end early).
 				if (current_thread_will_catch())
 					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
@@ -1663,7 +1677,9 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			{
 				// Caught? Then the wait was INTERRUPTED, not fatal — and
 				// returning is what makes delivery possible at all: the
-				// handler is armed on the way out of this syscall.
+				// handler is armed on the way out of this syscall — if still
+				// installed; a sibling can uninstall it first, and then nothing
+				// runs and INTERRUPTED is still true (the wait DID end early).
 				if (current_thread_will_catch())
 					return (uint64_t)(int64_t)OS64_INTERRUPTED;
 				raise_terminating_signal_and_die(task, NULL);
@@ -3435,8 +3451,14 @@ static uint64_t syscall_wait(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (endedPid == TASK_WAIT_INTERRUPTED)
 	{
 		// The same fork every park takes on the way out (sleep, the console
-		// read, the pipes): a handler will run, or nothing will and the
-		// default action is death, here, in the victim's own context.
+		// read, the pipes), and it has THREE outcomes, not two: a handler
+		// runs on the way back (the usual case); or the park ended for a
+		// handled non-death signal whose handler a sibling has since
+		// uninstalled — nothing runs, nothing dies, and INTERRUPTED is still
+		// the honest answer, because the wait DID end early
+		// (current_thread_will_catch answers yes for both); or a terminate is
+		// pending that nothing will catch, and the default action is death,
+		// here, in the victim's own context.
 		if (current_thread_will_catch())
 			return (uint64_t)(int64_t)OS64_INTERRUPTED;
 		raise_terminating_signal_and_die(parent, NULL);

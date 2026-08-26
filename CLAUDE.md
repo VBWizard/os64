@@ -371,7 +371,8 @@ the library serves every process). How it fits together:
   sleep, or a read of freed memory once that thread exits (Codex #32 rd2
   — eight loops had it; the caught-signal exit made it reachable by a
   live thread). SIGWINCH = 28,
-  raised by `pty_resize` (syscall 51) at every task seated on the slave,
+  raised by `pty_resize` (syscall 51) at every task seated on the slave
+  that has a handler for it,
   default IGNORE — it lives in `SIGNALS_DEFAULT_IS_IGNORE` and must never
   enter `SIGNALS_DEFAULT_IS_DEATH`. Ignore means CONSUMED AT PUBLICATION:
   a task with no handler installed gets no bit at all (a parked thread

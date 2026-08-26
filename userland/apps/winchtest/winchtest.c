@@ -46,6 +46,10 @@
 //   0x0A1D0010  (child) /proc/self/tty could not be read
 //   0x0A1D0011  (child) the SIGWINCH handler was refused
 //   0x0A1D0012  (waiter) the grandchild would not spawn
+//   0x0A1D0013  (waiter) the resumed wait did not collect the grandchild
+//   0x0A1D000E  the waiter never said it collected its grandchild — the
+//               resumed wait failed, and the hangup that follows would have
+//               been the grandchild's own exit, not proof of anything
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -156,6 +160,11 @@ static int waiter(void)
 
 	// SIGNALS.md §8: an interrupted wait says so, collects nothing, and the
 	// job is still ours — so ask the terminal what changed and wait again.
+	// The RESUMED wait must then genuinely collect the grandchild: any
+	// other answer (an error, some other pid) is a failure the terminal
+	// could not otherwise tell apart from success, because the grandchild's
+	// own exit would hang the session up either way (Codex #32 rd4). So the
+	// waiter says out loud what it collected, and the terminal reads it.
 	for (;;)
 	{
 		int32_t code = 0;
@@ -168,6 +177,9 @@ static int waiter(void)
 			os64_printf("winch %d wait %ux%u\n", gWinch, c, rr);
 			continue;
 		}
+		if (r != kid)
+			die(0x13, "waiter: the resumed wait did not collect the grandchild");
+		os64_printf("collected %ld\n", (long)r);
 		return 0;
 	}
 }
@@ -295,6 +307,10 @@ int main(int argc, char **argv)
 		die(4, "pty_resize refused 90x20");
 	if (!grid_shows(master, "winch 1 wait 90x20", 5000))
 		die(0xC, "the waiter never reported the new size (wait() not interrupted)");
+	// The resumed wait must collect the grandchild — said out loud, because
+	// the hangup below would arrive on the grandchild's own exit regardless.
+	if (!grid_shows(master, "collected", 10000))
+		die(0xE, "the waiter never said it collected its grandchild (resumed wait failed)");
 	hungup = false;
 	for (int i = 0; i < 100 && !hungup; i++)
 	{

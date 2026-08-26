@@ -473,7 +473,9 @@ int main(int argc, char **argv)
 				// Hop one, WM -> us, is this event. Hop two, us -> the
 				// program inside, is pty_resize: the kernel reallocates the
 				// grid, carries the text, and raises SIGWINCH at every task
-				// seated on the slave — husk, and whatever it is running.
+				// seated on the slave that installed a handler for it — a
+				// program that never asked gets nothing, not even a pending
+				// bit; husk today ignores it, a full-screen program listens.
 				// We are the master and the master owns the geometry; the
 				// snapshot header reports the new size from the next poll,
 				// so render() picks it up without being told.
