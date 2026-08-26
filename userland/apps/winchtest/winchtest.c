@@ -43,13 +43,13 @@
 //   0x0A1D000C  the waiter never reported the new size — wait() was not
 //               interrupted for the caught signal (the Codex #32 gap)
 //   0x0A1D000D  the waiter's session did not end when its grandchild did
+//   0x0A1D000E  the waiter never said it collected its grandchild — the
+//               resumed wait failed, and the hangup that follows would have
+//               been the grandchild's own exit, not proof of anything
 //   0x0A1D0010  (child) /proc/self/tty could not be read
 //   0x0A1D0011  (child) the SIGWINCH handler was refused
 //   0x0A1D0012  (waiter) the grandchild would not spawn
 //   0x0A1D0013  (waiter) the resumed wait did not collect the grandchild
-//   0x0A1D000E  the waiter never said it collected its grandchild — the
-//               resumed wait failed, and the hangup that follows would have
-//               been the grandchild's own exit, not proof of anything
 
 #include <stdint.h>
 #include <stdbool.h>
