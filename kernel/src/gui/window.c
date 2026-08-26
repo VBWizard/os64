@@ -194,9 +194,8 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t ow
 
 	w->id = s_next_id++;
 	w->flags = flags;
-	// "No chrome AND always on top" at CREATE time is what makes a popup, and
-	// the answer is latched here so a later chord cannot change it — see
-	// GUI_WINDOW_POPUP.
+	// Latched from the CREATION flags so a later chord cannot change it —
+	// see GUI_WINDOW_POPUP.
 	if ((flags & GUI_WINDOW_NO_DECORATIONS) && (flags & GUI_WINDOW_PINNED))
 		w->flags |= GUI_WINDOW_POPUP;
 	w->frame = frame;
@@ -300,16 +299,14 @@ static bool desktop_declines(const window_t *w, const char *verb)
 }
 
 // A POPUP DECLINES THE CHROME VERBS, at the same door and for the same
-// reason. What a popup is, and why the answer is a latched bit rather than a
-// live reading of the flag word, is GUI_WINDOW_POPUP's comment in window.h.
+// reason. What a popup is, and why it is a latched bit, is
+// GUI_WINDOW_POPUP's comment in window.h.
 //
-// What each verb would do to one: MAXIMIZE fills the screen with panel
-// colour and strands the rows in a corner, and the popup can no longer
-// dismiss itself, because dismissal is focus-loss and nothing else is left
-// to click. DECORATE grows a titlebar and shifts the frame out from under
-// the geometry the program cached when it placed itself. MINIMIZE hides a
-// window whose program goes on polling it. Move and resize are deliberately
-// NOT here: they leave a popup usable, just misplaced.
+// MAXIMIZE is the hazard: a full-screen menu cannot dismiss itself, because
+// dismissal is focus-loss and nothing else is left to click. DECORATE shifts
+// the frame out from under the geometry the program placed itself by;
+// MINIMIZE hides a window whose program goes on polling it. Move and resize
+// are deliberately NOT here — they leave a popup usable, just misplaced.
 static bool popup_declines(const window_t *w, const char *verb)
 {
 	if (!(w->flags & GUI_WINDOW_POPUP))
@@ -641,8 +638,23 @@ size_t wm_recency_ids(uint32_t *ids, size_t max)
 void wm_deliver_event(window_t *w, const input_event_t *ev)
 {
 	uint32_t next = (w->evt_head + 1) % GUI_WINDOW_EVENTS_MAX;
-	if (next == w->evt_tail)
-		return;   // queue full: drop-newest, same policy as the input ring
+	if (next == w->evt_tail) {
+		// FULL. Drop-newest is right for a stream — an unread mouse move is
+		// a sample nobody misses — and wrong for a focus transition, which
+		// is state the client cannot reconstruct and which a popup's whole
+		// dismissal hangs on: lose it and the menu stays up, pinned, with
+		// nothing left to take it down.
+		//
+		// So focus takes the OLDEST slot instead. Advancing the tail is what
+		// a reader does, so the full/empty arithmetic is untouched and no
+		// state lives outside the ring. Evicting an older focus event is
+		// fine: the newer one is the transition that still holds.
+		if (ev->type != INPUT_EVENT_WINDOW_FOCUS)
+			return;
+		w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;
+		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n",
+		       w->id);
+	}
 	w->events[w->evt_head] = *ev;
 	w->evt_head = next;
 

@@ -345,7 +345,9 @@ customer was corrected the day this rule was written.
 
 - Queues stay per-window (`GUI_WINDOW_EVENTS_MAX 64`, drop-newest on full —
   apps must drain; mouse coords stay CONTENT-local, translated by the
-  compositor at routing time).
+  compositor at routing time). **A focus transition is the one event that is
+  never dropped**: it evicts the oldest entry instead, because a client
+  cannot reconstruct it and a popup's dismissal hangs on it (Codex #34).
 - `gui_event_poll` (20) is the v1 interface: non-blocking, pairs with the
   app's own frame pacing.
 - `gui_event_wait` (22) blocks the calling thread (ISLEEP) until an event

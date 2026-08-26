@@ -185,14 +185,18 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
                          list->path);
             return true;
         }
+        // Validated in a candidate, committed only on success. Keys may
+        // repeat, so a later bad `launcher` line must not disable the good
+        // one it claims to be ignored beside: an ignored line leaves the
+        // world as it was.
+        char candidate[DESKTOP_PATH_MAX];
         // Same refusal as `start` below: a truncated path is a different
         // program, and this one would run on every click.
-        size_t want = os64_strcopy(list->launcher[button], DESKTOP_PATH_MAX, prog);
+        size_t want = os64_strcopy(candidate, DESKTOP_PATH_MAX, prog);
         if (want >= DESKTOP_PATH_MAX) {
             os64_complain(
                          "desktop: %s: launcher path over %d characters — ignored: %s\n",
                          list->path, DESKTOP_PATH_MAX - 1, prog);
-            list->launcher[button][0] = 0;
             return true;
         }
         // PROBE THE PATH NOW, not at the first click. A launcher that does
@@ -201,14 +205,14 @@ static bool gui_conf_line(const char *key, const char *value, void *user)
         // does nothing is the worst possible answer to it. Opening it is the
         // only existence test ring 3 has; a spawn failure at click time is
         // still reported, this just says it at startup, by name.
-        int64_t probe = os64_open(list->launcher[button], "r");
+        int64_t probe = os64_open(candidate, "r");
         if (probe < 0) {
             os64_complain("desktop: %s: launcher \"%s\" cannot be opened (%ld) — the form is `launcher = [left|right|middle] <program>`\n",
-                     list->path, list->launcher[button], (long)probe);
-            list->launcher[button][0] = 0;
+                     list->path, candidate, (long)probe);
             return true;
         }
         os64_close((int32_t)probe);
+        os64_strcopy(list->launcher[button], DESKTOP_PATH_MAX, candidate);
         return true;
     }
     if (!os64_streq_nocase(key, "start")) {

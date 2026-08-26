@@ -69,6 +69,9 @@ typedef struct os64_menu_node
     int16_t first_child;                     // SUBMENU: first child node, -1 = empty
     int16_t next;                            // next sibling, -1 = last
     char    ref[OS64_MENU_NAME_MAX];         // SUBMENU by reference: the name (resolved at load)
+    uint16_t line;                           // source line, for diagnostics: a cascade's reference is
+                                             // resolved in a second pass, after the parser's own
+                                             // line counter is gone
 } os64_menu_node_t;
 
 typedef struct os64_menu_named

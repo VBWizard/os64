@@ -162,12 +162,14 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
         }
         lv->n++;
     }
-    // Say when a level ran past its capacity. A row that simply never appears
-    // reads as a typo in menu.conf, and the file is the last place anyone
-    // would look for a limit they never heard of.
-    if (i >= 0)
-        os64_complain("grootmenu: menu truncated at %d rows\n",
+    // A level past its capacity is REFUSED, not shown in part: half a menu is
+    // a different menu, and the rows that vanished cannot be launched or even
+    // seen to be missing. Same ruling as os64_menu_argv's.
+    if (i >= 0) {
+        os64_complain("grootmenu: a menu has more than %d rows — refused rather than shown in part\n",
                      MENU_ROWS_MAX);
+        return false;
+    }
     if (lv->n == 0)
         return false;
     lv->row_y[lv->n] = y;

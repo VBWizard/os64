@@ -120,17 +120,14 @@
 
 // POPUP — DERIVED AT BIRTH, NEVER A CLIENT FLAG. A window created with no
 // chrome AND always-on-top is a menu, a cascade, a tooltip: something that
-// exists only until you look away. wm_create latches this bit from those
-// creation flags, and popup_declines (window.c) reads it to refuse the
-// chrome verbs.
+// exists only until you look away. wm_create latches the bit; popup_declines
+// (window.c) reads it to refuse the chrome verbs.
 //
-// LATCHED, rather than re-read from the live flag word, because both halves
-// of that pair are things the user can change by chord afterwards. Reading
-// them live got it wrong in both directions: unpinning a menu cleared the
-// test and handed back the full-screen sheet the guard exists to prevent,
-// and pinning an already-borderless gterm confiscated its titlebar toggle.
-// What a window IS was settled when it was made; what has been done to it
-// since is a different question.
+// LATCHED rather than re-read from the live flag word, because a chord can
+// change either half afterwards. Reading them live was wrong in both
+// directions: unpinning a menu cleared the test and handed back the
+// full-screen sheet, and pinning a borderless gterm confiscated its titlebar
+// toggle. What a window IS was settled when it was made.
 #define GUI_WINDOW_POPUP           (1u << 6)
 
 // Alt+F4 twice within this long (5s) on a window that did not go away is
@@ -229,7 +226,9 @@ typedef struct window
     uint32_t  canvas_cap_w, canvas_cap_h;
 
     // Per-window event queue: the compositor pushes routed events, the
-    // owning app thread pops them via gui_event_poll(). Drop-newest on full.
+    // owning app thread pops them via gui_event_poll(). Drop-newest on full,
+    // except a focus transition, which evicts the oldest to get in
+    // (wm_deliver_event says why).
     input_event_t events[GUI_WINDOW_EVENTS_MAX];
     uint32_t  evt_head, evt_tail;
 

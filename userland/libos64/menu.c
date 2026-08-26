@@ -96,7 +96,7 @@ static void complain(char *err, size_t cap, const char *path, int line, const ch
         os64_snprintf(err, cap, "%s:%d: %s", path, line, what);
 }
 
-static int16_t new_node(os64_menu_t *m, uint8_t kind, const char *label)
+static int16_t new_node(os64_menu_t *m, uint8_t kind, const char *label, uint32_t line)
 {
     if (m->count >= OS64_MENU_NODES_MAX)
         return -1;
@@ -105,6 +105,7 @@ static int16_t new_node(os64_menu_t *m, uint8_t kind, const char *label)
     n->kind = kind;
     n->first_child = -1;
     n->next = -1;
+    n->line = (uint16_t)line;
     if (label != NULL)
         os64_strcopy(n->label, sizeof(n->label), label);
     return (int16_t)m->count++;
@@ -175,6 +176,15 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
                     complain(err, err_cap, m->path, line, "too many named menus");
                     return OS64_MENU_TOO_MANY;
                 }
+                // A name is DATA, compared verbatim, so it must be stored
+                // whole. Two names sharing the first OS64_MENU_NAME_MAX-1
+                // bytes would otherwise both be accepted — the duplicate
+                // check sees what was typed — and every reference would
+                // open whichever came first.
+                if (os64_strlen(w2) >= OS64_MENU_NAME_MAX) {
+                    complain(err, err_cap, m->path, line, "menu name is too long");
+                    return OS64_MENU_SYNTAX;
+                }
                 if (os64_menu_named_exists(m, w2)) {
                     complain(err, err_cap, m->path, line, "a menu of that name already exists");
                     return OS64_MENU_SYNTAX;
@@ -195,7 +205,7 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
                     complain(err, err_cap, m->path, line, "a cascade is `menu \"Label\" {` or `menu \"Label\" <name>`");
                     return OS64_MENU_SYNTAX;
                 }
-                int16_t node = new_node(m, OS64_MENU_SUBMENU, w2);
+                int16_t node = new_node(m, OS64_MENU_SUBMENU, w2, line);
                 if (node < 0) {
                     complain(err, err_cap, m->path, line, "too many menu entries");
                     return OS64_MENU_TOO_MANY;
@@ -209,6 +219,12 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
                     stack[depth++] = (scope_t){ .first = &m->nodes[node].first_child,
                                                 .last = -1, .line = line };
                 } else {
+                    // Same rule as the definition above: a reference that
+                    // does not fit is refused, never shortened into a match.
+                    if (os64_strlen(w3) >= OS64_MENU_NAME_MAX) {
+                        complain(err, err_cap, m->path, line, "cascade reference is too long");
+                        return OS64_MENU_SYNTAX;
+                    }
                     os64_strcopy(m->nodes[node].ref, sizeof(m->nodes[node].ref), w3);
                 }
             }
@@ -243,7 +259,7 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
                 complain(err, err_cap, m->path, line, "command too long");
                 return OS64_MENU_SYNTAX;
             }
-            int16_t node = new_node(m, OS64_MENU_ITEM, w2);
+            int16_t node = new_node(m, OS64_MENU_ITEM, w2, line);
             if (node < 0) {
                 complain(err, err_cap, m->path, line, "too many menu entries");
                 return OS64_MENU_TOO_MANY;
@@ -259,7 +275,7 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
                 complain(err, err_cap, m->path, line, "separator takes nothing after it");
                 return OS64_MENU_SYNTAX;
             }
-            int16_t node = new_node(m, OS64_MENU_SEPARATOR, NULL);
+            int16_t node = new_node(m, OS64_MENU_SEPARATOR, NULL, line);
             if (node < 0) {
                 complain(err, err_cap, m->path, line, "too many menu entries");
                 return OS64_MENU_TOO_MANY;
@@ -291,7 +307,7 @@ static os64_menu_status_t parse(os64_menu_t *m, const char *text, size_t len,
             char what[96];
             os64_snprintf(what, sizeof(what), "cascade \"%s\" references a menu named \"%s\" that is not defined",
                           n->label, n->ref);
-            complain(err, err_cap, m->path, 0, what);
+            complain(err, err_cap, m->path, n->line, what);
             return OS64_MENU_UNRESOLVED;
         }
         n->first_child = first;
@@ -336,6 +352,7 @@ os64_menu_status_t os64_menu_load(os64_menu_t *menu, const char *name,
     case OS64_SLURP_OK:      break;
     case OS64_SLURP_NO_FILE: return OS64_MENU_NO_FILE;
     case OS64_SLURP_TOO_BIG: return OS64_MENU_TOO_BIG;
+    case OS64_SLURP_NO_MEMORY: return OS64_MENU_NO_MEMORY;
     default:                 return OS64_MENU_IO_ERROR;
     }
 

@@ -382,10 +382,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	int64_t shell = os64_spawn_seated(prog, prog_argv, master);
-	if (shell <= 0)
+	int64_t seated = os64_spawn_seated(prog, prog_argv, master);
+	if (seated <= 0)
 	{
-		os64_printf("gterm: %s would not seat (%ld)\n", prog, (long)shell);
+		os64_printf("gterm: %s would not seat (%ld)\n", prog, (long)seated);
 		os64_close((int32_t)master);
 		os64_gui_window_destroy(win);
 		return 1;
