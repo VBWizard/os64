@@ -64,19 +64,37 @@ static void unlink_window(window_t *w)
 	w->above = w->below = NULL;
 }
 
-// Link `w` at the top of ITS BAND. The z-list has two bands since 2026-08-23
-// (pin-on-top): pinned windows occupy the top of the list, everything else
-// the rest, and "on top" means the top of whichever band the window belongs
-// to — an ordinary raise slides in just beneath the lowest pinned window, so
-// a pinned window can be focused, moved and typed at but never buried. ONE
-// function does the placement for create, raise and pin/unpin alike, because
-// three copies of "find the band boundary" is three chances to disagree.
+// WHICH BAND A WINDOW LIVES IN. The z-list had two bands from 2026-08-23
+// (pin-on-top) and has THREE since the desktop moved to ring 3: the desktop
+// shell's window is a client like any other, and the only thing that makes
+// it the desktop is that nothing can get beneath it.
+//
+//   2  PINNED   — always on top; focused, moved and typed at, never buried
+//   1  ordinary — everything else
+//   0  DESKTOP  — always at the bottom; the thing clicks land on when they
+//                 land on nothing
+//
+// Expressed as a NUMBER rather than as two more branches, because the old
+// two-band code already carried the warning: "three copies of find the band
+// boundary is three chances to disagree". A rank makes link_on_top and
+// at_band_top say the same thing by construction, and a fourth band later
+// costs one line here and nothing anywhere else.
+static int band_of(const window_t *w)
+{
+	if (w->flags & GUI_WINDOW_PINNED)  return 2;
+	if (w->flags & GUI_WINDOW_DESKTOP) return 0;
+	return 1;
+}
+
+// Link `w` at the top of ITS BAND: directly beneath the lowest window of any
+// HIGHER band, and above everything of its own band or lower. ONE function
+// does the placement for create, raise and pin/unpin alike.
 static void link_on_top(window_t *w)
 {
 	window_t *above = NULL;   // the window that will sit directly above w
-	if (!(w->flags & GUI_WINDOW_PINNED))
-		for (window_t *p = s_top; p && (p->flags & GUI_WINDOW_PINNED); p = p->below)
-			above = p;
+	int band = band_of(w);
+	for (window_t *p = s_top; p && band_of(p) > band; p = p->below)
+		above = p;
 
 	w->above = above;
 	w->below = above ? above->below : s_top;
@@ -95,17 +113,15 @@ static void link_on_top(window_t *w)
 // nothing is pinned.)
 static bool at_band_top(const window_t *w)
 {
-	if (w->flags & GUI_WINDOW_PINNED)
-		return s_top == w;
-	return w->above == NULL || (w->above->flags & GUI_WINDOW_PINNED);
+	return w->above == NULL || band_of(w->above) > band_of(w);
 }
 
 window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 {
 	// Content = frame minus chrome; refuse degenerate sizes rather than
 	// letting a 0-wide surface ripple NULLs through the compositor.
-	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = frame.h - wm_chrome_top(flags) - GUI_BORDER_WIDTH;
+	int32_t content_w = frame.w - 2 * wm_border_width(flags);
+	int32_t content_h = frame.h - wm_chrome_top(flags) - wm_border_width(flags);
 	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return NULL;
 
@@ -228,8 +244,26 @@ void wm_raise(window_t *w)
 	gui_damage_add_locked(w->frame);
 }
 
+// THE DESKTOP DECLINES THE WM VERBS THAT WOULD MAKE IT VANISH OR FLOAT.
+// Guarded HERE, at the setters, rather than at the chord handlers: the
+// chords are one caller among several (the client syscalls are another, and
+// a taskbar will be a third), and a rule enforced at the door every caller
+// walks through cannot be forgotten by the next one. Pin is included
+// because "always on top" and "always at the bottom" are a contradiction,
+// not a preference.
+static bool desktop_declines(const window_t *w, const char *verb)
+{
+	if (!(w->flags & GUI_WINDOW_DESKTOP))
+		return false;
+	printd(DEBUG_GUI, "wm: %s declined — window %u is the desktop\n",
+	       verb, w->id);
+	return true;
+}
+
 void wm_set_pinned(window_t *w, bool pinned)
 {
+	if (desktop_declines(w, "pin"))
+		return;
 	if (pinned == ((w->flags & GUI_WINDOW_PINNED) != 0))
 		return;
 	if (pinned)
@@ -247,6 +281,16 @@ void wm_set_pinned(window_t *w, bool pinned)
 
 void wm_set_decorated(window_t *w, bool decorated)
 {
+	// The desktop has no chrome to toggle. wm_has_titlebar answers false for
+	// it whatever this bit says (rd3), so flipping the bit would change
+	// nothing on the glass — and a toggle that changes nothing but the flag
+	// word is worse than one that is refused: get_state would report a
+	// decoration the window does not have. (Before rd3, composite_one read
+	// the bit directly, and the toggle really did paint a "desktop" titlebar
+	// across the wallpaper that doubled as a drag handle — Fable's review,
+	// 2026-08-25. The decline predates the fix that made it cosmetic.)
+	if (desktop_declines(w, "decorate"))
+		return;
 	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS))
 		return;
 	rect_t old = w->frame;
@@ -265,6 +309,11 @@ void wm_set_decorated(window_t *w, bool decorated)
 
 void wm_set_maximized(window_t *w, bool maximized)
 {
+	// A desktop already fills the screen; "maximize" would be a no-op that
+	// still clobbered restoreFrame, and un-maximizing would then shrink your
+	// desktop to a window.
+	if (desktop_declines(w, "maximize"))
+		return;
 	if (maximized == ((w->flags & GUI_WINDOW_MAXIMIZED) != 0))
 		return;
 	if (maximized) {
@@ -283,6 +332,10 @@ void wm_set_maximized(window_t *w, bool maximized)
 
 void wm_set_minimized(window_t *w, bool minimized)
 {
+	// And there would be no way back: the desktop is skipped by Alt+Tab,
+	// which is the only route a minimized window has home.
+	if (desktop_declines(w, "minimize"))
+		return;
 	if (minimized == wm_is_hidden(w))
 		return;
 	if (minimized) {
@@ -319,14 +372,30 @@ void wm_move(window_t *w, int32_t x, int32_t y)
 	gui_damage_add_locked(rect_union(old, w->frame));
 }
 
-// The client API's own ceiling, mirrored: a window may be CREATED bigger than
-// the screen (up to 4096 a side), so capacity can never simply be "the
+// The client API's own ceiling: a window may be CREATED bigger than the
+// screen (up to WINDOW_CAP_MAX a side), so capacity can never simply be "the
 // screen" — it is the screen or the window, whichever is larger.
 #define WINDOW_CAP_MAX 4096u
 // Published to ring 3 as OS64_GUI_WINDOW_DIM_MAX (Codex #30 rd6), so an app
 // can clamp before it asks; pinned here the way the title capacity is above.
 _Static_assert(WINDOW_CAP_MAX == OS64_GUI_WINDOW_DIM_MAX,
                "gui/window.c and abi os64/gui.h disagree on the largest window side");
+
+// ...OR THE SCREEN, WHICHEVER IS LARGER (Codex #31 rd2). 4096 was a bare
+// constant in gui_window_create, and a framebuffer wider than that — a 5K
+// panel is 5120 across — would have refused the desktop shell's own
+// fullscreen window at the door, before it read gui.conf, so nothing in the
+// GUI would have started. The screen is the one size every window system
+// must be able to hold. ONE function answers the ceiling for both the
+// create check and the capacity clamp below, because two copies of it were
+// how the constant and the screen disagreed in the first place.
+uint32_t wm_dim_max(void)
+{
+	uint32_t m = WINDOW_CAP_MAX;
+	if (kFrameBuffer.width > m)  m = kFrameBuffer.width;
+	if (kFrameBuffer.height > m) m = kFrameBuffer.height;
+	return m;
+}
 
 void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
                             uint32_t *cap_w, uint32_t *cap_h)
@@ -341,10 +410,10 @@ void wm_canvas_capacity_for(int32_t content_w, int32_t content_h,
 	if (content_h > 0 && (uint32_t)content_h > ch)
 		ch = (uint32_t)content_h;
 
-	if (cw > WINDOW_CAP_MAX)
-		cw = WINDOW_CAP_MAX;
-	if (ch > WINDOW_CAP_MAX)
-		ch = WINDOW_CAP_MAX;
+	if (cw > wm_dim_max())
+		cw = wm_dim_max();
+	if (ch > wm_dim_max())
+		ch = wm_dim_max();
 
 	*cap_w = cw;
 	*cap_h = ch;
@@ -354,8 +423,8 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 {
 	// Frame in, content out — the same inset wm_create applies, so the two
 	// can never disagree about where the client area begins.
-	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = frame.h - wm_chrome_top(w->flags) - GUI_BORDER_WIDTH;
+	int32_t content_w = frame.w - 2 * wm_border_width(w->flags);
+	int32_t content_h = frame.h - wm_chrome_top(w->flags) - wm_border_width(w->flags);
 
 	// Clamp into [minimum, reservation]. Clamping rather than refusing is
 	// deliberate: this is driven by a mouse, and a drag that runs past a
@@ -371,8 +440,8 @@ rect_t wm_clamp_frame(const window_t *w, rect_t frame)
 
 	// Re-derive the frame from the clamped content so the chrome the
 	// compositor draws and the surface the client draws stay the same window.
-	frame.w = content_w + 2 * GUI_BORDER_WIDTH;
-	frame.h = content_h + wm_chrome_top(w->flags) + GUI_BORDER_WIDTH;
+	frame.w = content_w + 2 * wm_border_width(w->flags);
+	frame.h = content_h + wm_chrome_top(w->flags) + wm_border_width(w->flags);
 	return frame;
 }
 
@@ -383,8 +452,8 @@ bool wm_resize(window_t *w, rect_t frame)
 	// arithmetic they would have agreed right up until the first time one of
 	// them changed.)
 	frame = wm_clamp_frame(w, frame);
-	int32_t content_w = frame.w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = frame.h - wm_chrome_top(w->flags) - GUI_BORDER_WIDTH;
+	int32_t content_w = frame.w - 2 * wm_border_width(w->flags);
+	int32_t content_h = frame.h - wm_chrome_top(w->flags) - wm_border_width(w->flags);
 
 	uint32_t old_cw = w->content.width;
 	uint32_t old_ch = w->content.height;
@@ -493,6 +562,12 @@ size_t wm_recency_ids(uint32_t *ids, size_t max)
 	if (max > ALTTAB_RING_MAX)
 		max = ALTTAB_RING_MAX;
 	for (window_t *w = s_top; w; w = w->below) {
+		// The desktop is not something you tab TO — it is what is left when
+		// you tab away from everything. Listing it would put a permanent
+		// last entry in every switcher strip and make Alt+Tab between two
+		// windows a three-stop walk.
+		if (w->flags & GUI_WINDOW_DESKTOP)
+			continue;
 		size_t i = n;
 		while (i > 0 && serials[i - 1] < w->focusSerial) {
 			if (i < max) { ids[i] = ids[i - 1]; serials[i] = serials[i - 1]; }
@@ -561,14 +636,20 @@ static void composite_one(surface_t *backbuffer, const window_t *w, rect_t damag
 	rect_t f = {w->frame.x - damage.x, w->frame.y - damage.y,
 	            w->frame.w, w->frame.h};
 
-	// Border around everything (the titlebar overwrites the top edge).
-	surface_draw_rect(&view, f,
-	                  focused ? WINDOW_BORDER_FOCUSED : WINDOW_BORDER_UNFOCUSED);
+	// Border around everything (the titlebar overwrites the top edge) — for
+	// every window that HAS one. The desktop does not: a border separates a
+	// window from what is behind it, and there is nothing behind the desktop.
+	// Drawing it put a 1px line around the edge of the screen that changed
+	// colour whenever you clicked the wallpaper, which reads as a rendering
+	// fault rather than as focus (Chris, the first afternoon the shell ran).
+	if (wm_border_width(w->flags) > 0)
+		surface_draw_rect(&view, f,
+		                  focused ? WINDOW_BORDER_FOCUSED : WINDOW_BORDER_UNFOCUSED);
 
 	// Titlebar with centered-ish title text (8px/glyph, 16px tall font) —
 	// unless the window declined one, in which case the border IS the chrome
 	// and focus shows only in the border's color.
-	if (!(w->flags & GUI_WINDOW_NO_DECORATIONS)) {
+	if (wm_has_titlebar(w->flags)) {   // not the bit: a desktop has none regardless (window.h)
 		rect_t bar = {f.x + GUI_BORDER_WIDTH, f.y + GUI_BORDER_WIDTH,
 		              f.w - 2 * GUI_BORDER_WIDTH, GUI_TITLEBAR_HEIGHT - GUI_BORDER_WIDTH};
 		uint32_t bar_color = focused ? WINDOW_TITLEBAR_FOCUSED : WINDOW_TITLEBAR_UNFOCUSED;
@@ -608,6 +689,50 @@ void wm_composite(surface_t *backbuffer, rect_t damage)
 	for (window_t *w = s_bottom; w; w = w->above)
 		if (!wm_is_hidden(w) && rect_intersect(w->frame, damage, &overlap))
 			composite_one(backbuffer, w, damage);
+}
+
+// THE SAME QUESTION, ASKED ABOUT THE BACKGROUND (2026-08-25). The compositor
+// paints kDesktop into every damage rect before it paints any window — which
+// was free-ish when the background was the only thing under them, and stopped
+// being free the day the desktop shell became a FULLSCREEN WINDOW. Then every
+// damage rect cost two screenful-sized blits of the same pixels: the
+// compositor's background, and the shell's window painted straight over it.
+//
+// Chris measured it within the hour on the P5: guicomp at 17-20% while
+// dragging a large gterm, against 1% for a small gclock — the tell being that
+// the cost tracked the RECT AREA, which is what a redundant full-rect blit
+// looks like.
+//
+// So: if some window already covers this rect completely, the background
+// underneath it cannot be seen and is not painted. Self-correcting by
+// construction — if the shell dies, nothing covers the rect any more and the
+// kernel's test pattern comes straight back, which is exactly the floor
+// behaviour we wanted. It also pays off for a case that predates the shell: a
+// maximized window now suppresses the background blit too.
+bool wm_rect_is_covered(rect_t screen_rect)
+{
+	if (rect_is_empty(screen_rect))
+		return true;
+
+	for (const window_t *w = s_top; w; w = w->below) {
+		rect_t covered;
+		if (wm_is_hidden(w))
+			continue;
+		// Same containment test as wm_rect_is_occluded, and the same
+		// deliberate simplicity: ONE window must cover the whole rect. Two
+		// that jointly cover it read as uncovered and the background is
+		// painted — wasted work, never a wrong pixel.
+		//
+		// And the same opacity caveat, which matters MORE here: every os64
+		// window is fully opaque today. The day translucency lands, a
+		// see-through window must stop suppressing the background, or you
+		// will see through it to whatever the backbuffer last held.
+		if (rect_intersect(w->frame, screen_rect, &covered) &&
+		    covered.x == screen_rect.x && covered.y == screen_rect.y &&
+		    covered.w == screen_rect.w && covered.h == screen_rect.h)
+			return true;
+	}
+	return false;
 }
 
 // Occlusion, the cheap half (2026-08-18). Painter's algorithm draws a covered

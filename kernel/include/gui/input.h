@@ -14,7 +14,7 @@
 // the only consumer is the compositor's frame loop.
 //
 // HARD RULE for producers: IRQ handlers ONLY enqueue. They must never wake
-// threads (scheduler_wake_isleep_task -> scheduler_trigger does sti/hlt,
+// threads (scheduler_wake_task_waiter -> scheduler_trigger does sti/hlt,
 // which is fatal in IRQ context). The compositor polls each frame instead.
 
 typedef enum input_event_type

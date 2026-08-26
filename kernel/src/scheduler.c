@@ -957,8 +957,14 @@ void scheduler_remove_from_queue(thread_t *queue, thread_t* thread, bool panicOn
         panic("scheduler_remove_from_queue: Can't find queue entry to remove!");
 }
 
-void scheduler_wake_isleep_task(task_t *task) {
-    if (task == NULL || task->threads == NULL) return; // Ensure task is valid
+// Wake `waiter`, a thread of `task` parked in task_wait. It was
+// scheduler_wake_isleep_task(task) and woke task->threads — the FIRST thread
+// — until 2026-08-25, when a second-thread waiter (the desktop's reaper)
+// showed that the first thread and the waiting thread are not the same
+// thing. The caller names the thread; this function's only opinion is HOW to
+// wake it safely.
+void scheduler_wake_task_waiter(task_t *task, thread_t *waiter) {
+    if (task == NULL || waiter == NULL) return; // Ensure task is valid
 
     // Check-and-relink atomically (this runs in thread context — task_exit
     // waking a parent — which the fan-out can place on any core). The
@@ -975,8 +981,8 @@ void scheduler_wake_isleep_task(task_t *task) {
     // 2026-08-09). Leaving a not-yet-parked thread untouched is the whole
     // trick: its own SIGSLEEP deadline fires a tick later and it re-checks.
     uint64_t flags = scheduler_queues_lock();
-    scheduler_wake_isleep_thread_locked(task->threads);
-    task->threads->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
+    scheduler_wake_isleep_thread_locked(waiter);
+    waiter->prioritizedTicksInRunnable += HIGH_PRIORITY_TICKS_BOOST;
     scheduler_queues_unlock(flags);
     scheduler_trigger(NULL);
 }

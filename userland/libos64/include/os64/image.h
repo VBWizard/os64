@@ -7,15 +7,13 @@
 // and that is the last work that belongs behind the ring boundary. Chris's
 // ruling, 2026-08-25: "graphics decoders don't belong in the kernel".
 //
-// THE MIGRATION IS NOT FINISHED YET, AND SAYING OTHERWISE WOULD HIDE THE
-// PART THAT MATTERS (Codex #30 rd1, citing the comment rule — correctly).
-// As this file is committed, `kernel/src/gui/desktop.c` STILL decodes the
-// configured wallpaper in ring 0, and the compositor still calls it: a
-// user-writable file is still parsed behind the ring boundary today. This
-// library is the replacement, and gview(1) is the only thing using it so
-// far. The kernel's copy is deleted in the NEXT slice of this arc, when the
-// desktop shell moves to ring 3 and takes the wallpaper with it — deleted
-// rather than moved twice, which is why it is still standing here.
+// THE MIGRATION IS FINISHED (2026-08-25, the desktop-shell slice). os64's
+// only decoder used to be a PPM parser inside `kernel/src/gui/desktop.c` —
+// ring-0 code reading a file any user could write — and for one slice this
+// library stood beside it, with gview(1) as its only user (Codex #30 rd1
+// made this header say so rather than claim the move was done). That kernel
+// file is DELETED now: /bin/desktop, the ring-3 shell, paints the wallpaper
+// through this library, and nothing in ring 0 parses an image any more.
 //
 // THE LAYERING, which is deliberate and worth keeping: a decoder produces
 // PIXELS. It knows nothing about windows, surfaces, or the compositor —

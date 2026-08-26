@@ -179,7 +179,7 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 {
 	if (!kEnableGUI)
 		return GUI_ERR_NOT_RUNNING;
-	if (w > OS64_GUI_WINDOW_DIM_MAX || h > OS64_GUI_WINDOW_DIM_MAX)
+	if (w > wm_dim_max() || h > wm_dim_max())   // OS64_GUI_WINDOW_DIM_MAX, or the screen if larger — window.c
 		return GUI_ERR_BAD_ARGS;
 
 	// Only documented CLIENT flags cross the boundary. The window struct's
@@ -187,10 +187,28 @@ int64_t gui_window_create(const char *title, int32_t x, int32_t y,
 	// cannot be claimed accidentally through this creation call.
 	const uint32_t client_flags = GUI_WINDOW_NO_DECORATIONS |
 	                              GUI_WINDOW_START_UNFOCUSED |
-	                              GUI_WINDOW_PINNED;
+	                              GUI_WINDOW_PINNED |
+	                              GUI_WINDOW_DESKTOP;
 	uint32_t create_flags = (uint32_t)flags & client_flags;
-	int32_t content_w = (int32_t)w - 2 * GUI_BORDER_WIDTH;
-	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - GUI_BORDER_WIDTH;
+
+	// DESKTOP AND PINNED ARE A CONTRADICTION, AND IT USED TO RESOLVE BADLY
+	// (Codex #31). "Always at the bottom" and "always on top" cannot both
+	// hold; band_of() checks PINNED first, so a window claiming both was
+	// placed at the very TOP of the z-list while calling itself the desktop —
+	// and it could never be fixed, because wm_set_pinned declines every
+	// desktop window, so nothing could unpin it.
+	//
+	// REFUSED rather than silently resolved, which is this boundary's habit:
+	// an over-long title is refused instead of truncated, a slurp cap that
+	// cannot be honoured is refused instead of clamped. Picking a winner here
+	// would mean the caller asked for one thing and got another, and the flag
+	// word it later reads back would not be the one it passed.
+	if ((create_flags & GUI_WINDOW_DESKTOP) && (create_flags & GUI_WINDOW_PINNED)) {
+		printd(DEBUG_GUI, "gui: window_create refused — DESKTOP and PINNED are contradictory\n");
+		return GUI_ERR_BAD_ARGS;
+	}
+	int32_t content_w = (int32_t)w - 2 * wm_border_width(create_flags);
+	int32_t content_h = (int32_t)h - wm_chrome_top(create_flags) - wm_border_width(create_flags);
 	if (content_w < GUI_MIN_CONTENT || content_h < GUI_MIN_CONTENT)
 		return GUI_ERR_BAD_ARGS;
 
@@ -408,6 +426,7 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	out->flags  = win->flags & (GUI_WINDOW_NO_DECORATIONS |
 	                            GUI_WINDOW_START_UNFOCUSED |
 	                            GUI_WINDOW_PINNED |
+	                            GUI_WINDOW_DESKTOP |   // the band is state too (Codex #31 rd3): without it a saved-and-recreated desktop came back an ordinary window
 	                            GUI_WINDOW_MAXIMIZED |
 	                            GUI_WINDOW_MINIMIZED);
 	spinlock_release_irqrestore(&kGuiLock, irqflags);

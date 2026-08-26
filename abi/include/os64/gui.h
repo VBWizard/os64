@@ -45,6 +45,34 @@
 #define OS64_GUI_WINDOW_NO_DECORATIONS  (1u << 0)   // no titlebar; 1px border stays (honored since 2026-08-23)
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 #define OS64_GUI_WINDOW_PINNED           (1u << 2)   // born in the always-on-top band
+// THE DESKTOP BAND: born at the BOTTOM of the z-list, where nothing can get
+// beneath it. This is what lets a desktop shell be an ordinary ring-3
+// program — the same arrangement X11 has always had, where the server owns
+// the root window and the thing drawing your wallpaper is just a client.
+//
+// THE WHOLE CONTRACT (Codex #31 rd4 caught an earlier "and NOTHING ELSE"
+// that the next sentences contradicted). A desktop window:
+//   - lives in the bottom z-band; nothing can be placed beneath it;
+//   - has NO CHROME — no titlebar and no border, whatever its decoration
+//     bit says; its frame IS its canvas (os64_gui_frame_for_content agrees);
+//   - is still focusable and still receives keys and clicks, because being
+//     the target for a click that lands on no application is half the point
+//     (that click is where a root menu and a launcher come from);
+//   - is skipped by the Alt+Tab walk (and the first Alt+Tab FROM it lands on
+//     the most recently used app);
+//   - declines pin, maximize, minimize, the decoration toggle, the chord
+//     move/resize gestures and Alt+F4 — Alt+F4 on your desktop is a gesture
+//     nobody means. Its owner can still destroy it.
+//
+// Setting it is not a claim of authority: a second desktop window is legal
+// and simply stacks at the bottom too. os64 has no privilege model, and
+// inventing one for a stacking hint would be a lock on the wrong door.
+//
+// The ONE combination refused is DESKTOP together with PINNED, which asks to
+// be at the bottom and the top at once. create() answers BAD_ARGS rather than
+// picking a winner — see gui_client.c for why silently resolving it was worse
+// than refusing.
+#define OS64_GUI_WINDOW_DESKTOP          (1u << 5)   // born in the bottom band
 
 // ── Chrome, and how to size a window for the picture you want to show ───────
 //
@@ -78,24 +106,40 @@
 // a window's canvas is reserved at CAPACITY, and the rule is (Codex #30 rd11
 // corrected an earlier wording that had it wrong both ways):
 //
-//     capacity = min(max(screen, content), OS64_GUI_WINDOW_DIM_MAX)
+//     capacity = min(max(screen, content), wm_dim_max())
+//     wm_dim_max() = max(OS64_GUI_WINDOW_DIM_MAX, screen width, screen height)
 //
 // — the screen, raised to the content if the window was born larger, and
-// never past this constant. So a small window on an 800x600 screen reserves
-// 800x600 (a resize up to fullscreen costs no allocation), and an 8K screen
-// is capped here, not reserved whole. An app that derives a size from data — a viewer, a
-// 5000-pixel image on an 8K panel — clamps to BOTH this and the screen
-// before asking, or decodes a perfectly good file and is refused at the
-// door. window.c asserts the WM's own constant equals this one.
+// never past the ceiling; and since the desktop shell moved to ring 3 the
+// ceiling is this constant OR the screen, whichever is larger, so the screen
+// is ALWAYS reservable in full (a fullscreen shell on a 5K panel is not
+// refused at the door). So a small window on an 800x600 screen reserves
+// 800x600 (a resize up to fullscreen costs no allocation), and this constant
+// is the floor every app may rely on, not the cap the screen is held to.
+// An app that derives a size from data — a viewer with a 5000-pixel image —
+// clamps to THE SCREEN before asking (os64_gui_screen_info), and a request
+// that fits the screen is never refused for size; on a panel wider than this
+// constant it may also ask up to the screen. This constant is what an app
+// may rely on WITHOUT asking the screen size. window.c asserts the WM's own
+// constant equals this one.
 #define OS64_GUI_WINDOW_DIM_MAX   4096
 
 // The frame to ASK FOR in order to BE GIVEN a canvas of content_w x content_h.
-// Pass the same flags you will create with; an undecorated window still keeps
-// its 1px border.
+// Pass the same flags you will create with: an undecorated window still keeps
+// its 1px border, and a DESKTOP window has no chrome at all — its frame IS
+// its canvas (the WM's wm_border_width/wm_chrome_top say the same, and the
+// three cases here mirror those two functions case for case; a fourth kind
+// of window gets added to both or the static asserts in gui_client.c are
+// the only thing standing between it and every app sizing itself wrong).
 static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t content_h,
                                               uint64_t flags,
                                               uint32_t *frame_w, uint32_t *frame_h)
 {
+    if (flags & OS64_GUI_WINDOW_DESKTOP) {
+        if (frame_w) *frame_w = content_w;
+        if (frame_h) *frame_h = content_h;
+        return;
+    }
     uint32_t top = (flags & OS64_GUI_WINDOW_NO_DECORATIONS)
                        ? OS64_GUI_BORDER_WIDTH : OS64_GUI_TITLEBAR_HEIGHT;
     if (frame_w) *frame_w = content_w + 2u * OS64_GUI_BORDER_WIDTH;
@@ -103,8 +147,8 @@ static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t conte
 }
 
 // READ-ONLY state, reported by os64_gui_window_get_state and IGNORED at
-// create — gui_window_create masks the flag word down to the three creation
-// bits above, so naming these here cannot let an app claim them at birth.
+// create — gui_window_create masks the flag word down to the CREATION bits
+// above, so naming these here cannot let an app claim them at birth.
 // They are published because an app SAVING its geometry needs to know it is
 // not saving a maximized or minimized frame as its ordinary position.
 #define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)

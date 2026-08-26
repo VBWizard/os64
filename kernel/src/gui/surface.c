@@ -177,7 +177,7 @@ void surface_draw_text(surface_t *dst, int32_t x, int32_t y,
 	// Reuse the PSF1 console font Limine loaded for us at boot (8-wide
 	// glyphs, charsize tall — 16 for the shipped font). No layout logic
 	// here beyond advancing the pen: no wrapping, no control characters.
-	// Higher layers (console window, titlebars) own text flow.
+	// Higher layers (titlebars, the switcher strip, ring-3 terminals) own text flow.
 	struct PSF1_FONT *font = kRenderer.psf1_font;
 	if (!font)
 		return;
