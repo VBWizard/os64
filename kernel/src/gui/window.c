@@ -654,9 +654,9 @@ void wm_deliver_event(window_t *w, const input_event_t *ev)
 		// client has not read — an evicted WINDOW_CLOSE makes a polite
 		// Alt+F4 do nothing, and turns the user's second one into the
 		// SIGTERM escalation. That trade is deliberate, and only reachable
-		// by a client already 64 events behind. (An older FOCUS event is the
-		// one eviction that costs nothing: the newer one is the transition
-		// that still holds.)
+		// by a client that has let its queue fill. (An older FOCUS event is
+		// the one eviction that costs nothing: the newer one is the
+		// transition that still holds.)
 		if (ev->type != INPUT_EVENT_WINDOW_FOCUS)
 			return;
 		w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;

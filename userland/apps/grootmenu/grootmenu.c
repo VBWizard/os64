@@ -133,7 +133,13 @@ static void close_deeper_than(int d)
     }
     if (d >= 0 && d < gDepth) {
         gLevels[d].open_row = -1;
-        gLevels[d].tried_row = -1;   // the pointer moved on; a retry is honest again
+        // Re-armed HERE and not on every move. After a refused attempt
+        // open_row stays -1, so handle()'s walk over ordinary rows never
+        // reaches this and tried_row survives it; only arriving at another
+        // cascade row clears it. That asymmetry is deliberate — re-arming on
+        // any move would let a wiggle between two rows become the flood
+        // again. A click asks directly and is answered regardless.
+        gLevels[d].tried_row = -1;
     }
 }
 
@@ -215,7 +221,9 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
         os64_complain("grootmenu: window_create failed (%ld)\n", (long)lv->win);
         return false;
     }
-    if (os64_draw_ctx_init(&lv->ctx, lv->win) != 0) {
+    int ctxrc = os64_draw_ctx_init(&lv->ctx, lv->win);
+    if (ctxrc != 0) {
+        os64_complain("grootmenu: no drawing surface for the menu window (%d)\n", ctxrc);
         os64_gui_window_destroy(lv->win);
         lv->win = 0;
         return false;
@@ -226,10 +234,14 @@ static bool open_level(int16_t first, int32_t sx, int32_t sy)
 }
 
 // Open row r's cascade beside it (closing any other cascade of this level).
-static void open_cascade(int d, int r)
+// `asked` separates a CLICK from a hover. A hover is involuntary — the
+// pointer crossing a row is not a request — so a refused cascade stays quiet
+// under it. A click is a request, and a request gets an answer every time,
+// even a repeated refusal.
+static void open_cascade(int d, int r, bool asked)
 {
     level_t *lv = &gLevels[d];
-    if (lv->open_row == r || lv->tried_row == r)
+    if (lv->open_row == r || (!asked && lv->tried_row == r))
         return;
     close_deeper_than(d);
     const os64_menu_node_t *node = &gMenu.nodes[lv->rows[r]];
@@ -282,7 +294,7 @@ static void handle(int d, const os64_gui_event_t *ev)
         }
         if (r >= 0) {
             if (gMenu.nodes[lv->rows[r]].kind == OS64_MENU_SUBMENU)
-                open_cascade(d, r);
+                open_cascade(d, r, false);   // the pointer wandered here
             else if (lv->open_row >= 0)
                 close_deeper_than(d);
         }
@@ -297,7 +309,7 @@ static void handle(int d, const os64_gui_event_t *ev)
             launch(node);
             gQuit = true;
         } else if (node->kind == OS64_MENU_SUBMENU) {
-            open_cascade(d, r);
+            open_cascade(d, r, true);       // asked for, out loud
         }
         break;
     }
