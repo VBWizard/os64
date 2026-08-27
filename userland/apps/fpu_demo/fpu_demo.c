@@ -181,6 +181,10 @@ int main(int argc, char **argv)
 	uint64_t hold_ms = 0;       // time left at the bottom
 	bool paused = false, running = true;
 	uint64_t dt = 33;
+	int    drawn_target = -1;        // what the last render was of
+	double drawn_log2zoom = -1.0;
+	int    drawn_iter = -1;
+	bool   drawn_paused = false;
 
 	while (running)
 	{
@@ -213,13 +217,27 @@ int main(int argc, char **argv)
 
 		int max_iter = ITER_BASE + (int)(ITER_PER_DOUBLING * log2zoom);
 		if (max_iter > ITER_MAX) max_iter = ITER_MAX;
-		render(&ctx, &kTargets[target], log2zoom, max_iter);
 
-		char line[96];
-		int32_t n = os64_snprintf(line, sizeof(line), "%s  2^%d  %d iter  %lu ms%s   space/n/q",
-		                          kTargets[target].name, (int)log2zoom, max_iter, dt, paused ? "  [paused]" : "");
-		os64_draw_text(&ctx.surf, 8, 8, line, (size_t)n, OS64_GUI_COLOR_WHITE, 0xFF000000U);
-		os64_draw_publish(&ctx, (const os64_gui_rect_t *)0);
+		// The picture is a function of (target, zoom, iterations): paused,
+		// or holding at the bottom of a dive, none of them move, and a
+		// 200-million-iteration frame identical to the last one is a core
+		// burned for nothing. Repaint only when the inputs changed; the loop
+		// keeps pacing and polling regardless.
+		bool changed = (target != drawn_target || log2zoom != drawn_log2zoom || max_iter != drawn_iter);
+		if (changed)
+		{
+			render(&ctx, &kTargets[target], log2zoom, max_iter);
+			drawn_target = target; drawn_log2zoom = log2zoom; drawn_iter = max_iter;
+		}
+		if (changed || paused != drawn_paused)
+		{
+			char line[96];
+			int32_t n = os64_snprintf(line, sizeof(line), "%s  2^%d  %d iter  %lu ms%s   space/n/q",
+			                          kTargets[target].name, (int)log2zoom, max_iter, dt, paused ? "  [paused]" : "");
+			os64_draw_text(&ctx.surf, 8, 8, line, (size_t)n, OS64_GUI_COLOR_WHITE, 0xFF000000U);
+			os64_draw_publish(&ctx, (const os64_gui_rect_t *)0);
+			drawn_paused = paused;
+		}
 		dt = os64_frame_wait(&clock, 33);
 	}
 

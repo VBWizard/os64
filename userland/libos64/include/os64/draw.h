@@ -149,12 +149,15 @@ typedef struct os64_frame_clock
 
 void os64_frame_clock_init(os64_frame_clock_t *clock);
 
-// Tell the clock which window it paces. From then on os64_frame_wait pauses
+// Tell the clock which window it paces. From then on os64_frame_wait sleeps
 // while that window is COVERED (minimized, fully behind another, or a text
-// terminal has the screen) and resumes when it is not — an animation nobody
-// can see costs nothing. The window's events are NOT consumed while paused;
-// they wait in the queue for your next poll, which is the first thing your
-// loop does anyway. Unbound (the default), the clock paces regardless.
+// terminal has the screen) — an animation nobody can see costs nothing —
+// and wakes when the window has an event to service: the UNCOVERED nudge,
+// a keystroke, a close request (a covered window can still be the focused
+// one). It then RETURNS, so your loop runs one pass and handles the event
+// through its ordinary poll; if the window is still covered, the next call
+// sleeps again. Nothing is consumed on your behalf. Unbound (the default),
+// the clock paces regardless.
 void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window);
 
 // Sleep out the remainder of `budget_ms` since the last frame boundary

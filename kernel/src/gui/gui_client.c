@@ -553,10 +553,13 @@ int64_t gui_screen_info(uint32_t *width, uint32_t *height)
 // check is how a woken waiter LEAVES).
 #define GUI_EVENT_WAIT_BACKSTOP_TICKS (TICKS_PER_SECOND / 4)
 
+//
+// out == NULL is the PEEK-WAIT (2026-08-27, the frame clock's covered
+// pause): block until an event is queued, return 1, and leave the event
+// where it is for the caller's own poll to take. Same park, same wake,
+// same exits; the only difference is that the pop becomes a look.
 int64_t gui_event_wait(int64_t handle, input_event_t *out)
 {
-	if (!out)
-		return GUI_ERR_BAD_ARGS;
 	core_local_storage_t *cls = get_core_local_storage();
 	thread_t *self = (cls != NULL) ? cls->currentThread : NULL;
 	if (self == NULL)
@@ -585,7 +588,7 @@ int64_t gui_event_wait(int64_t handle, input_event_t *out)
 			return GUI_ERR_INTERRUPTED;
 		}
 
-		if (wm_pop_event(win, out)) {
+		if (out ? wm_pop_event(win, out) : wm_has_event(win)) {
 			if (win->waiter == self)
 				win->waiter = NULL;
 			spinlock_release_irqrestore(&kGuiLock, irqflags);

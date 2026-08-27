@@ -784,14 +784,13 @@ bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect)
 // one event. The flag is the state and the event the nudge (gui.h says why
 // a client must never trust the event alone).
 //
-// The desktop is skipped: it is always covered by definition of "desktop"
-// and never has an animation to stop.
+// The desktop is a window like the others here: a ring-3 client that can
+// animate and bind a frame clock, covered when a maximized window hides
+// all of it or a text terminal holds the glass, and owed the same answer.
 void wm_cover_sweep_locked(void)
 {
 	bool glass = gui_owns_glass();
 	for (window_t *w = s_top; w; w = w->below) {
-		if (w->flags & GUI_WINDOW_DESKTOP)
-			continue;
 		bool covered = !glass || wm_is_hidden(w) || wm_rect_is_occluded(w, w->frame);
 		bool was = (w->flags & GUI_WINDOW_COVERED) != 0;
 		if (covered == was)

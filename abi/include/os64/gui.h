@@ -374,6 +374,11 @@ static inline int64_t os64_gui_screen_info(uint32_t *width, uint32_t *height)
 // answer to a poll loop: an app that waits costs NOTHING until somebody
 // types at it — no cadence, no polling, just sleep until the compositor
 // says otherwise.
+//
+// out == NULL: wait until an event is QUEUED and return 1 without taking
+// it — your next os64_gui_event_poll gets it. This is how the frame clock
+// sleeps while your window is covered without stealing your keystrokes,
+// your Alt+F4, or the UNCOVERED nudge from the loop that must handle them.
 static inline int64_t os64_gui_event_wait(int64_t handle,
                                           os64_gui_event_t *out)
 {

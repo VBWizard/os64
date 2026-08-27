@@ -213,11 +213,6 @@ void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window)
     clock->window = window;
 }
 
-// How often a paused clock asks "can anyone see me yet?". A state read is
-// one syscall and no memory; twenty a second is nothing next to the thirty
-// full frames a second it replaces, and it is the latency of a reveal.
-#define COVERED_NAP_MS 50
-
 // Is the bound window covered right now? Asks the kernel, never the last
 // event: the flag is the truth (gui.h). A window that cannot be asked (it
 // died, the handle is stale) reads as visible, so a broken bind degrades to
@@ -245,13 +240,19 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
     if (budget_ms > used)
         os64_sleep(budget_ms - used);
 
-    // Nobody watching? Then nobody is owed a frame. Nap until that changes,
-    // and hand back a dt that pretends the pause never happened (draw.h).
+    // Nobody watching? Then nobody is owed a frame. Sleep until the window
+    // has an event to service — the UNCOVERED nudge, or a key, or Alt+F4:
+    // a covered window can still be the FOCUSED one (a window created
+    // START_UNFOCUSED over it leaves it so), and its keys must reach its
+    // loop, not rot in a queue behind a nap. The peek-wait leaves the event
+    // for the app's own poll; we return so the app's loop runs one pass and
+    // handles it, and if the window is still covered the next call sleeps
+    // again. The flag is re-read on every call, never inferred from the
+    // event (gui.h), so a dropped UNCOVERED costs one pass, not forever.
+    // The dt pretends the pause never happened (draw.h).
     if (bound_window_covered(clock))
     {
-        do
-            os64_sleep(COVERED_NAP_MS);
-        while (bound_window_covered(clock));
+        os64_gui_event_wait(clock->window, (os64_gui_event_t *)0);
         clock->last_ms = now_ms();
         return budget_ms > 0 ? budget_ms : 1;
     }

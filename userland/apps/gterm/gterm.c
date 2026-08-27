@@ -527,7 +527,17 @@ int main(int argc, char **argv)
 		if (covered)
 		{
 			// Whatever moved is noted by the stale rendered_gen; the first
-			// uncovered pass paints it all at once.
+			// uncovered pass paints it all at once. And the flag is asked
+			// EVERY pass while covered, not only when an event says so: the
+			// UNCOVERED nudge can be dropped from a full queue, and a
+			// terminal that trusted it would stay blind on a visible window.
+			os64_gui_window_state_t st;
+			if (os64_gui_window_get_state(win, &st) == 0 &&
+			    !(st.flags & OS64_GUI_WINDOW_COVERED))
+			{
+				covered = false;
+				rendered_gen = ~(uint64_t)0;
+			}
 		}
 		else if (gHdr.generation != rendered_gen)
 		{

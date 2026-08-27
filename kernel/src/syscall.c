@@ -262,7 +262,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_PUBLISH,     "gui_window_publish",     syscall_gui_window_publish,     false, 0x00),  // arg1 = rect_t in OR NULL (nullable — handler validates)
 	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_POLL,         "gui_event_poll",         syscall_gui_event_poll,         false, 0x02),  // arg1 = input_event_t out
 	SYSCALL_DEFINE(SYSCALL_GUI_SCREEN_INFO,        "gui_screen_info",        syscall_gui_screen_info,        false, 0x00),  // arg0/arg1 = uint32_t outs, EITHER may be NULL (handler validates)
-	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x02),  // arg1 = input_event_t out; BLOCKS (like read)
+	SYSCALL_DEFINE(SYSCALL_GUI_EVENT_WAIT,         "gui_event_wait",         syscall_gui_event_wait,         false, 0x00),  // arg1 = input_event_t out OR NULL (nullable: NULL = wait, don't take — handler validates); BLOCKS (like read)
 	SYSCALL_DEFINE(SYSCALL_GUI_WINDOW_GET_STATE,   "gui_window_get_state",   syscall_gui_window_get_state,   false, 0x02),  // arg1 = os64_gui_window_state_t out
 	// arg1 is a CODE address the kernel will one day jump to, not a buffer it
 	// reads — so it stays OUT of the pointer mask (which validates readable
@@ -4698,8 +4698,15 @@ static uint64_t syscall_gui_event_wait(uint64_t arg0, uint64_t arg1, uint64_t ar
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
 	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+
+	// NULL out = wait until an event is THERE, and leave it there (the
+	// frame clock's covered wait: it must sleep until the app has something
+	// to service, and the app's own poll must be the one that takes it). So
+	// arg1 is nullable, stays out of the dispatcher's pointer mask — the
+	// publish precedent — and the copy-out below is the non-NULL case's
+	// validation.
 	if (arg1 == 0)
-		return (uint64_t)GUI_ERR_BAD_ARGS;
+		return (uint64_t)gui_event_wait((int64_t)arg0, NULL);
 
 	// Blocks inside the handler exactly the way read() does — sleeping in a
 	// syscall on the caller's CR3 is long-established ground. Same

@@ -326,6 +326,11 @@ void wm_deliver_event(window_t *w, const input_event_t *ev);
 
 // Pop for the owner side; false when empty.
 bool wm_pop_event(window_t *w, input_event_t *out);
+// Is anything queued? The peek-wait's question (gui_event_wait with no out).
+static inline bool wm_has_event(const window_t *w)
+{
+    return w->evt_head != w->evt_tail;
+}
 
 // Composite every window that intersects `damage` (screen coords) into the
 // backbuffer, bottom-up, chrome + content. The desktop below and the cursor
