@@ -28,10 +28,14 @@
 // counted against the thread that took it:
 //
 //   §10, the scheduler's own delivery: a HELPER PROCESS (this program,
-//   re-spawned with --helper) sends the task SIGINT from outside. The
-//   spinning workers make no syscalls, so a delivery to one of them can
-//   only have come through the scheduler visit and the full frame. The
-//   fixture requires at least one such delivery.
+//   re-spawned with --helper) sends the task SIGINT from outside, during
+//   a phase in which EVERY thread of this task is a syscall-free spinner
+//   (main keeps time with rdtsc). A spinner is reached only by the
+//   scheduler's visit, so each of those deliveries went through the full
+//   frame. The fixture requires at least one. The phases are sequential
+//   because a task-wide signal goes to the FIRST thread at a delivery
+//   point and is cleared from the rest — a sleeping pinger or a clock
+//   syscall running alongside would take them all (it did, on the P5).
 //
 //   §5, the syscall-exit delivery: the pinger thread loads its own pattern,
 //   issues the ctl write as a RAW syscall instruction inside the same asm
@@ -66,7 +70,7 @@
 #define FPUTEST_XMM_CLOBBERED    0xF0DE0003
 #define FPUTEST_X87_CLOBBERED    0xF0DE0004
 #define FPUTEST_NO_HANDLER       0xF0DE0005
-#define FPUTEST_NO_SIGNALS       0xF0DE0006   // no delivery ever reached a spinning worker (§10 untested)
+#define FPUTEST_NO_SIGNALS       0xF0DE0006   // no external delivery reached a spinning thread (§10 untested)
 #define FPUTEST_NO_CTL           0xF0DE0007
 #define FPUTEST_MXCSR_CLOBBERED  0xF0DE0008
 #define FPUTEST_X87CW_CLOBBERED  0xF0DE0009
@@ -84,6 +88,7 @@
 #define CHUNK_ITERS  1000000UL
 #define HELPER_SENDS 60              // ~2s of external SIGINTs at 30ms
 #define HELPER_GAP_MS 30
+#define PHASE_A_MS   3000            // longer than the helper's sends, so every one lands in phase A
 
 // Which checks failed inside a chunk — one bit each, OR'd across chunks.
 #define BAD_XMM7    (1U << 0)
@@ -396,9 +401,27 @@ int main(int argc, char **argv)
             return FPUTEST_NO_START;
         }
     }
-    int64_t ping = os64_thread(pinger, NULL);
-    if (ping < 0)
-        return FPUTEST_NO_START;
+    // ── Phase A: external signals, and NOBODY to take them but a spinner ──
+    //
+    // A task-wide signal goes to the first thread that reaches a delivery
+    // point, and it is then cleared from the siblings. A syscall exit is a
+    // delivery point; so is the end of a park (a sleeping thread wakes for
+    // any caught signal). A spinning thread on a tickless core is visited
+    // only at its backstop lease — SCHED_BACKSTOP_MS apart. So while the
+    // helper is sending, this task must contain nothing but spinners, or
+    // the spinners never win: the first version ran the pinger's sleeps and
+    // main's os64_ticks calls alongside, and on the P5's eight cores the
+    // external signals reached a worker in five runs out of six (Chris,
+    // 2026-08-27). Main therefore bounds this phase with rdtsc — no clock
+    // syscall — calibrated against one sleep beforehand.
+    uint64_t tsc_per_ms;
+    {
+        uint64_t t0 = __builtin_ia32_rdtsc();
+        os64_sleep(200);
+        tsc_per_ms = (__builtin_ia32_rdtsc() - t0) / 200;
+        if (tsc_per_ms == 0)
+            tsc_per_ms = 1;
+    }
 
     char taskid_text[24];
     os64_snprintf(taskid_text, sizeof(taskid_text), "%lu", os64_taskid());
@@ -410,11 +433,27 @@ int main(int argc, char **argv)
         return FPUTEST_NO_HELPER;
     }
 
-    // The main thread works too, on its own pattern — six threads on
-    // however many cores there are guarantees preemption and sharing.
+    uint32_t bad = 0;
+    {
+        uint64_t phase_start = __builtin_ia32_rdtsc();
+        uint64_t phase_end = phase_start + (uint64_t)PHASE_A_MS * tsc_per_ms;
+        while (__builtin_ia32_rdtsc() < phase_end)
+            bad |= run_chunk(&kPatterns[MAIN_PATTERN]);
+    }
+    int32_t helper_code = 0;
+    while (os64_wait(helper, &helper_code) == OS64_INTERRUPTED)
+        ;   // a straggler ends the wait early; wait again
+    int64_t main_runs_a = gRunsByPattern[MAIN_PATTERN];
+    int64_t spinner_runs = main_runs_a;
+    for (int i = 0; i < WORKERS; i++)
+        spinner_runs += gRunsByPattern[i];
+
+    // ── Phase B: the pinger's syscall-exit probe, main keeping time ──────
+    int64_t ping = os64_thread(pinger, NULL);
+    if (ping < 0)
+        return FPUTEST_NO_START;
     os64_ticks_t start, now;
     os64_ticks(&start);
-    uint32_t bad = 0;
     do {
         bad |= run_chunk(&kPatterns[MAIN_PATTERN]);
         os64_ticks(&now);
@@ -439,16 +478,10 @@ int main(int argc, char **argv)
         return FPUTEST_NO_CTL;
     }
     bad |= (uint32_t)ping_result;
-    int32_t helper_code = 0;
-    while (os64_wait(helper, &helper_code) == OS64_INTERRUPTED)
-        ;   // a late SIGINT ends the wait early; wait again
 
-    int64_t worker_runs = 0;
-    for (int i = 0; i < WORKERS; i++)
-        worker_runs += gRunsByPattern[i];
-    os64_printf("fputest: %ld handler runs — %ld on spinning workers (scheduler-delivered), %ld on main, %ld on the pinger's own syscall (syscall-exit), %ld unidentified\n",
-                gHandlerRuns, worker_runs, gRunsByPattern[MAIN_PATTERN],
-                gRunsByPattern[PINGER_PATTERN], gRunsUnknown);
+    os64_printf("fputest: %ld handler runs — %ld on syscall-free spinners (scheduler-delivered), %ld on the pinger's own syscall (syscall-exit), %ld on main afterwards, %ld unidentified\n",
+                gHandlerRuns, spinner_runs, gRunsByPattern[PINGER_PATTERN],
+                gRunsByPattern[MAIN_PATTERN] - main_runs_a, gRunsUnknown);
     os64_printf("fputest: bad checks: xmm7 %s, xmm8-15 %s, st(0) %s, mxcsr %s, x87cw %s\n",
                 (bad & BAD_XMM7) ? "YES" : "none", (bad & BAD_HIGHXMM) ? "YES" : "none",
                 (bad & BAD_ST0) ? "YES" : "none", (bad & BAD_MXCSR) ? "YES" : "none",
@@ -459,9 +492,9 @@ int main(int argc, char **argv)
     if (bad & BAD_MXCSR)   return FPUTEST_MXCSR_CLOBBERED;
     if (bad & BAD_X87CW)   return FPUTEST_X87CW_CLOBBERED;
     // A pass that never exercised a path must say so rather than claim it.
-    if (worker_runs == 0)
+    if (spinner_runs == 0)
     {
-        os64_printf("fputest: no SIGINT ever reached a spinning worker — the scheduler-delivered frame went untested\n");
+        os64_printf("fputest: no external SIGINT ever reached a spinning thread — the scheduler-delivered frame went untested\n");
         return FPUTEST_NO_SIGNALS;
     }
     if (gRunsByPattern[PINGER_PATTERN] == 0)
