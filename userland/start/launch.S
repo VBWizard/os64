@@ -46,7 +46,8 @@ _start:
     // and SysV wants each call SITE at rsp%16 == 0 so the callee lands at
     // %16 == 8. From a %8 start, every call out of here entered its callee
     // one qword out of phase — since the first app ever ran, masked only by
-    // -mno-sse (no movaps to fault). One qword restores the phase; the
+    // scalar code happened not to use alignment-sensitive vector moves. One
+    // qword restores the phase; the
     // seeded slot stays untouched above us, and launch never `ret`s — main's
     // return becomes os64_exit below.
     sub rsp, 8

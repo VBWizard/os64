@@ -224,6 +224,18 @@ static bool signal_write_user(task_t *task, uint64_t user_va, uint64_t value)
 	return true;
 }
 
+static bool signal_write_user_block(task_t *task, uint64_t user_va,
+		const void *source, uint64_t size)
+{
+	if (size % sizeof(uint64_t) != 0)
+		return false;
+	const uint64_t *words = (const uint64_t *)source;
+	for (uint64_t offset = 0; offset < size; offset += sizeof(uint64_t))
+		if (!signal_write_user(task, user_va + offset, words[offset / sizeof(uint64_t)]))
+			return false;
+	return true;
+}
+
 // Does this thread have a pending signal that something will CATCH? The
 // default-action checkpoints ask before they kill: a task that installed a
 // handler must not be executed by the kernel on its way to being handed the
@@ -329,7 +341,8 @@ _Static_assert(sizeof(signal_frame_t) % 16 == 0,        "the signal frame must k
 // The full frame (§10) leans on the same stub, so its base must BE the §5
 // frame — first field, offset zero, no padding in front.
 _Static_assert(offsetof(signal_frame_full_t, base) == 0,  "the full frame must start with the §5 frame");
-_Static_assert(offsetof(signal_frame_full_t, rbx) == 64,  "the full frame's extension must start at +64");
+_Static_assert(offsetof(signal_frame_full_t, rbx) == sizeof(signal_frame_t),
+		       "the full frame's extension must follow the base frame");
 _Static_assert(sizeof(signal_frame_full_t) % 16 == 0,     "the full frame must keep RSP 16-aligned");
 
 // Which pending signal, if any, would a handler run for RIGHT NOW? One
@@ -487,19 +500,20 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 	// 16-aligned, because the stub CALLs the handler from here.
 	uint64_t frame_va = (user_rsp - 128 - sizeof(signal_frame_t)) & ~(uint64_t)0xF;
 
-	// Write it out field by field through the HHDM. If ANY write fails the
+	// Save the live state before the handler runs, then write it through the
+	// HHDM. If ANY write fails the
 	// stack is unusable — which is the SIGSEGV-on-a-bad-stack case named in
 	// SIGNALS.md §9 — and we deliver nothing, leaving the default action to
 	// kill the thread exactly as it does today. An alternate signal stack
 	// is the cure, and it is a later slice.
-	bool ok = true;
-	ok &= signal_write_user(task, frame_va + 0,  SIGNAL_FRAME_MAGIC);
-	ok &= signal_write_user(task, frame_va + 8,  retval);
-	ok &= signal_write_user(task, frame_va + 16, user_rip);
-	ok &= signal_write_user(task, frame_va + 24, user_rsp);
-	ok &= signal_write_user(task, frame_va + 32, user_rfl);
-	ok &= signal_write_user(task, frame_va + 40, (uint64_t)sig);
-	ok &= signal_write_user(task, frame_va + 48, (uint64_t)task->sighandler[sig]);
+	fpu_save(&thread->fpuState);
+	signal_frame_t saved_frame = {
+		.magic = SIGNAL_FRAME_MAGIC, .rax = retval, .rip = user_rip,
+		.rsp = user_rsp, .rflags = user_rfl, .signo = (uint64_t)sig,
+		.handler = (uint64_t)task->sighandler[sig],
+		.fpuState = thread->fpuState,
+	};
+	bool ok = signal_write_user_block(task, frame_va, &saved_frame, sizeof(saved_frame));
 	if (!ok)
 	{
 		// The stack is unusable — the SIGSEGV-on-a-bad-stack case named
@@ -616,29 +630,18 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 	// than 128 bytes of stack.
 	uint64_t frame_va = (thread->regs.RSP - 128 - sizeof(signal_frame_full_t)) & ~(uint64_t)0xF;
 
-	bool ok = true;
-	ok &= signal_write_user(task, frame_va + 0,   SIGNAL_FRAME_MAGIC_FULL);
-	ok &= signal_write_user(task, frame_va + 8,   thread->regs.RAX);
-	ok &= signal_write_user(task, frame_va + 16,  thread->regs.RIP);
-	ok &= signal_write_user(task, frame_va + 24,  thread->regs.RSP);
-	ok &= signal_write_user(task, frame_va + 32,  thread->regs.RFLAGS);
-	ok &= signal_write_user(task, frame_va + 40,  (uint64_t)sig);
-	ok &= signal_write_user(task, frame_va + 48,  (uint64_t)task->sighandler[sig]);
-	ok &= signal_write_user(task, frame_va + 56,  0);   // pad — deterministic
-	ok &= signal_write_user(task, frame_va + 64,  thread->regs.RBX);
-	ok &= signal_write_user(task, frame_va + 72,  thread->regs.RCX);
-	ok &= signal_write_user(task, frame_va + 80,  thread->regs.RDX);
-	ok &= signal_write_user(task, frame_va + 88,  thread->regs.RSI);
-	ok &= signal_write_user(task, frame_va + 96,  thread->regs.RDI);
-	ok &= signal_write_user(task, frame_va + 104, thread->regs.RBP);
-	ok &= signal_write_user(task, frame_va + 112, thread->regs.R8);
-	ok &= signal_write_user(task, frame_va + 120, thread->regs.R9);
-	ok &= signal_write_user(task, frame_va + 128, thread->regs.R10);
-	ok &= signal_write_user(task, frame_va + 136, thread->regs.R11);
-	ok &= signal_write_user(task, frame_va + 144, thread->regs.R12);
-	ok &= signal_write_user(task, frame_va + 152, thread->regs.R13);
-	ok &= signal_write_user(task, frame_va + 160, thread->regs.R14);
-	ok &= signal_write_user(task, frame_va + 168, thread->regs.R15);
+	signal_frame_full_t saved_frame = {
+		.base = { .magic = SIGNAL_FRAME_MAGIC_FULL, .rax = thread->regs.RAX,
+			.rip = thread->regs.RIP, .rsp = thread->regs.RSP,
+			.rflags = thread->regs.RFLAGS, .signo = (uint64_t)sig,
+			.handler = (uint64_t)task->sighandler[sig], .fpuState = thread->fpuState },
+		.rbx = thread->regs.RBX, .rcx = thread->regs.RCX, .rdx = thread->regs.RDX,
+		.rsi = thread->regs.RSI, .rdi = thread->regs.RDI, .rbp = thread->regs.RBP,
+		.r8 = thread->regs.R8, .r9 = thread->regs.R9, .r10 = thread->regs.R10,
+		.r11 = thread->regs.R11, .r12 = thread->regs.R12, .r13 = thread->regs.R13,
+		.r14 = thread->regs.R14, .r15 = thread->regs.R15,
+	};
+	bool ok = signal_write_user_block(task, frame_va, &saved_frame, sizeof(saved_frame));
 	if (!ok)
 	{
 		// Unusable stack, regs untouched. Same policy as §5's twin block: a
@@ -742,29 +745,18 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 	// between one write's resolve and its store.
 	uint64_t segv_flags = spinlock_acquire_irqsave(&task->signalLock);
 
-	bool ok = true;
-	ok &= signal_write_user(task, frame_va + 0,   SIGNAL_FRAME_MAGIC_FULL);
-	ok &= signal_write_user(task, frame_va + 8,   ctx->rax);
-	ok &= signal_write_user(task, frame_va + 16,  ctx->rip);   // the faulting instruction
-	ok &= signal_write_user(task, frame_va + 24,  ctx->rsp);
-	ok &= signal_write_user(task, frame_va + 32,  ctx->rflags);
-	ok &= signal_write_user(task, frame_va + 40,  (uint64_t)SIGSEGV);
-	ok &= signal_write_user(task, frame_va + 48,  (uint64_t)segv_handler);
-	ok &= signal_write_user(task, frame_va + 56,  0);
-	ok &= signal_write_user(task, frame_va + 64,  ctx->rbx);
-	ok &= signal_write_user(task, frame_va + 72,  ctx->rcx);
-	ok &= signal_write_user(task, frame_va + 80,  ctx->rdx);
-	ok &= signal_write_user(task, frame_va + 88,  ctx->rsi);
-	ok &= signal_write_user(task, frame_va + 96,  ctx->rdi);
-	ok &= signal_write_user(task, frame_va + 104, ctx->rbp);
-	ok &= signal_write_user(task, frame_va + 112, ctx->r8);
-	ok &= signal_write_user(task, frame_va + 120, ctx->r9);
-	ok &= signal_write_user(task, frame_va + 128, ctx->r10);
-	ok &= signal_write_user(task, frame_va + 136, ctx->r11);
-	ok &= signal_write_user(task, frame_va + 144, ctx->r12);
-	ok &= signal_write_user(task, frame_va + 152, ctx->r13);
-	ok &= signal_write_user(task, frame_va + 160, ctx->r14);
-	ok &= signal_write_user(task, frame_va + 168, ctx->r15);
+	fpu_save(&thread->fpuState);
+	signal_frame_full_t saved_frame = {
+		.base = { .magic = SIGNAL_FRAME_MAGIC_FULL, .rax = ctx->rax,
+			.rip = ctx->rip, .rsp = ctx->rsp, .rflags = ctx->rflags,
+			.signo = (uint64_t)SIGSEGV, .handler = (uint64_t)segv_handler,
+			.fpuState = thread->fpuState },
+		.rbx = ctx->rbx, .rcx = ctx->rcx, .rdx = ctx->rdx,
+		.rsi = ctx->rsi, .rdi = ctx->rdi, .rbp = ctx->rbp,
+		.r8 = ctx->r8, .r9 = ctx->r9, .r10 = ctx->r10, .r11 = ctx->r11,
+		.r12 = ctx->r12, .r13 = ctx->r13, .r14 = ctx->r14, .r15 = ctx->r15,
+	};
+	bool ok = signal_write_user_block(task, frame_va, &saved_frame, sizeof(saved_frame));
 	if (!ok)
 	{
 		// §9's honest limit: the stack itself is what faulted, so there is

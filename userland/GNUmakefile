@@ -44,7 +44,7 @@ endif
 # Ring-3 freestanding, same hardening the fixtures earned the hard way:
 #   -mno-red-zone : an interrupt firing mid-function (these run at CPL 3 with
 #                   IF=1 and WILL be preempted) must not clobber red-zone locals
-#   -mno-mmx/sse/sse2 : SIMD is #UD until CR4.OSFXSR + FPU context switching
+#   -msse2            : baseline x87/SSE state is saved per thread by the kernel
 #   -masm=intel   : project-wide asm syntax
 #   -fno-pic/-fno-pie : static, fixed-base for now (PIE is a later item)
 # -Werror in userland too (Chris, 2026-07-18): the const-discard that slipped
@@ -61,8 +61,8 @@ WERROR_FLAG := $(if $(NOWERROR),,-Werror)
 # after the kernel's identical lesson was already written down. The .d files
 # land next to the .o's; the -include below pulls them in. In CFLAGS because
 # CFLAGS is what the compile rules actually pass.
-CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone \
-           -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none \
+CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
+           -fno-stack-protector -fcf-protection=none \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include

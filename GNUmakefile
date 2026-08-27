@@ -677,6 +677,7 @@ $(IMAGE_NAME).hdd: limine/limine kernel
 .PHONY: clean
 clean:
 	$(MAKE) -C kernel clean
+	$(MAKE) -C userland clean
 #	rm -rf iso_root $(IMAGE_NAME).iso $(IMAGE_NAME).hdd
 
 .PHONY: distclean

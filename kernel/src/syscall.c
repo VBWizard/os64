@@ -29,6 +29,7 @@
 #include "pipe.h"
 #include "signals.h"
 #include "gdt.h"     // GDT_USER_* — sigreturn's full path rebuilds ring-3 selectors from constants
+#include "fpu.h"
 #include "os64/signal.h"   // OS64_SIG_ERR_* — the errors ring 3 is told
 #include "vfs.h"     // kRootFilesystem + vfs_file_t (open/seek/file read/write)
 #include "shutdown.h"   // shutdown_system — SYSCALL_SHUTDOWN's engine
@@ -4533,6 +4534,7 @@ static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			       task->exename);
 			return SYSCALL_RESULT_BAD_USER_DATA;
 		}
+		fpu_state_from_user(&thread->fpuState, &full.base.fpuState);
 
 		// Unblock the signal now that its handler has finished (§7) — the
 		// signal named by the VALIDATED snapshot, not the earlier copy.
@@ -4594,6 +4596,7 @@ static uint64_t syscall_sigreturn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	}
 
 	// Unblock the signal now that its handler has finished (SIGNALS.md §7).
+	fpu_state_from_user(&thread->fpuState, &saved.fpuState);
 	sigset_del(&thread->signals.sigmask, (signals)saved.signo);
 
 	// Put the interrupted context back where sysretq will find it, and hand

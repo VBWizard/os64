@@ -12,6 +12,7 @@
 #include "strcmp.h"
 #include "paging.h"
 #include "strstr.h"
+#include "fpu.h"
 
 volatile uint64_t mp_isrSavedRAX[MAX_CPUS],mp_isrSavedRBX[MAX_CPUS],mp_isrSavedRCX[MAX_CPUS],mp_isrSavedRDX[MAX_CPUS],mp_isrSavedRSI[MAX_CPUS],
                   mp_isrSavedRDI[MAX_CPUS],mp_isrSavedRBP[MAX_CPUS],mp_isrSavedCR0[MAX_CPUS],mp_isrSavedCR3[MAX_CPUS],mp_isrSavedCR4[MAX_CPUS],
@@ -714,6 +715,7 @@ void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
     }
     else
     {
+		fpu_save(&thread->fpuState);
         thread->regs.CS=mp_isrSavedCS[apic_id];
         thread->regs.RIP=mp_isrSavedRIP[apic_id];
         thread->regs.SS=mp_isrSavedSS[apic_id];
@@ -784,6 +786,7 @@ void scheduler_load_thread(core_local_storage_t *cls, thread_t* thread)
 	// none of them should have to know it can lag: a value that is only
 	// SOMETIMES right is a trap laid for whoever reads it next.
 	cls->task = (task_t *)thread->ownerTask;
+	fpu_restore(&thread->fpuState);
     mp_isrSavedCS[apic_id]=thread->regs.CS;
     mp_isrSavedRIP[apic_id]=thread->regs.RIP;
     mp_isrSavedSS[apic_id]=thread->regs.SS;

@@ -8,6 +8,7 @@
 #include "driver/system/keyboard.h"
 #include "serial_logging.h"
 #include "rtc.h"
+#include "fpu.h"
 
 #define PIC_REMAP_OFFSET 32
 
@@ -38,6 +39,7 @@ void hardware_init()
 );
 	pic_remap(0 + PIC_REMAP_OFFSET, 8 + PIC_REMAP_OFFSET);
 	initialize_idt();
+	fpu_init_this_cpu();
 	keyboard_init();
     asm("sti\n");
     printd(DEBUG_BOOT, "Interrupts enabled\n");

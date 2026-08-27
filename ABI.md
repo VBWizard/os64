@@ -297,8 +297,7 @@ die before pages."
 ## Deferred debts (all commented at their sites)
 
 **Interruptible syscall bodies** (the "Interruptibility" section — hard
-gate before `read`, also queued in the roadmap order above); FPU/SIMD
-state in the context switch (until then user builds carry `-mno-sse`); a
+gate before `read`, also queued in the roadmap order above); a
 #DF IST emergency stack (turn stack-death triple faults into panics);
 drop IOPL=3 for ring 3 once fixtures stop using `out`; the page-0/VA-0
 NULL guard (MEMORY.md).

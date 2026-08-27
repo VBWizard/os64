@@ -680,6 +680,19 @@ void exception_dispatch(exception_context_t *ctx)
 		// generically rather than swallowing it.
 	}
 
+	// A fault RING 3 raised is the program's bug, not the kernel's: a divide
+	// by zero, an AVX instruction with XSAVE off (#UD), a wild segment (#GP),
+	// an x87 or SSE exception the program unmasked (#MF/#XM) — every one of
+	// them kills the task and keeps the OS, the same way a segfault has since
+	// the fault-isolation work. The kernel's own state is intact: the CPU
+	// switched to the interrupt stack on the way in, nothing in ring 0 was
+	// mid-flight. Two are NOT the program's to answer for: #DF and #MC are
+	// hardware or kernel trouble whatever CS says, and fall through to the
+	// fatal path. (#PF and #DB were dispatched above.)
+	if ((ctx->cs & 3) == 3 && ctx->vector != 8 && ctx->vector != 18) {
+		user_exception_kill(ctx);   // returns only if there is no task to kill
+	}
+
 	// Everything else is fatal. One report, then stop: the scheduler's state
 	// is not trustworthy after an unhandled exception, and an orderly shutdown
 	// would ask that same machinery to walk itself to the door.
