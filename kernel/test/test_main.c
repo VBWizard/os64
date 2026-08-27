@@ -46,6 +46,7 @@
 #include "driver/net/tcp.h"
 #include "driver/net/icmp_conn.h"
 #include "os64/net.h"                // OS64_NET_ERR_* — refusals carry reasons (abi)
+#include "fpu.h"
 
 extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kPageFaultCount;
@@ -106,6 +107,42 @@ static bool test_kmalloc_not_null(void)
 
     kfree(ptr);
     return true;
+}
+
+static bool test_fpu_state_round_trip(void)
+{
+	// Preboot runs only on the BSP before the scheduler starts. Static storage
+	// keeps these FXSAVE targets 16-byte aligned despite this kernel's current
+	// early-boot stack alignment.
+	static fpu_state_t original, first, second, observed;
+	const uint64_t first_pattern[2] = { 0x0123456789ABCDEFULL, 0x0FEDCBA987654321ULL };
+	const uint64_t second_pattern[2] = { 0xDEADBEEFCAFEBABEULL, 0x1122334455667788ULL };
+
+	fpu_save(&original);
+	fpu_state_init(&first);
+	fpu_state_init(&second);
+	fpu_restore(&first);
+	__asm__ volatile("movdqu xmm0, %0" : : "m"(first_pattern) : "memory");
+	fpu_save(&first);
+	fpu_restore(&second);
+	__asm__ volatile("movdqu xmm0, %0" : : "m"(second_pattern) : "memory");
+	fpu_save(&second);
+	fpu_restore(&first);
+	fpu_save(&observed);
+	if (memcmp(&observed.bytes[160], first_pattern, sizeof(first_pattern)) != 0)
+	{
+		fpu_restore(&original);
+		TEST_FAIL("FXSAVE did not restore the first XMM0 pattern");
+	}
+	fpu_restore(&second);
+	fpu_save(&observed);
+	if (memcmp(&observed.bytes[160], second_pattern, sizeof(second_pattern)) != 0)
+	{
+		fpu_restore(&original);
+		TEST_FAIL("FXSAVE did not restore the second XMM0 pattern");
+	}
+	fpu_restore(&original);
+	return true;
 }
 
 static bool test_page_fault_does_not_panic_when_testing_flag_is_set(void)
@@ -4374,7 +4411,8 @@ static bool test_backstop_preemption(void)
 
 static void register_builtin_tests(void)
 {
-    test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
+	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
+	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
     test_register("dlist_basic_operations", test_dlist_basic_operations, TEST_PHASE_PREBOOT);
     test_register("arena_create_and_destroy", test_arena_create_and_destroy, TEST_PHASE_PREBOOT);

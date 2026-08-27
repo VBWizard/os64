@@ -31,9 +31,9 @@ LDFLAGS ?= -static -nostdlib -T linker.ld -z max-page-size=0x1000
 # locals by pushing its exception frame right on top of them.
 # -masm=intel: all asm in this project — kernel and fixtures alike — is
 # Intel syntax (see outb in dyn_consumer.c).
-# -mno-mmx/-mno-sse/-mno-sse2: SIMD is #UD until CR4.OSFXSR + FPU context
-# switching exist (see ARG_CFLAGS note).
-DYN_CFLAGS ?= -g -m64 -ffreestanding -fpie -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra
+# x87/SSE state is saved per thread, so dynamically linked ring-3 fixtures
+# use the normal x86-64 SSE2 baseline too.
+DYN_CFLAGS ?= -g -m64 -ffreestanding -fpie -mno-red-zone -msse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra
 # --hash-style=sysv pins the DT_HASH table the kernel's loader derives the
 # dynamic symbol count from (nchain). Bare-metal binutils defaults to sysv
 # today, but hosted targets default to gnu-only — pinning it costs nothing
@@ -46,14 +46,14 @@ DYN_LDFLAGS ?= -pie -z now -e _start --no-allow-shlib-undefined --hash-style=sys
 # hardening as dyn_consumer (-mno-red-zone etc.) because it runs with interrupts
 # enabled and can be preempted mid-function, and -masm=intel to match the
 # project-wide asm syntax convention.
-# -mno-mmx/-mno-sse/-mno-sse2: CR4.OSFXSR is off, so SIMD is #UD even at
-# ring 3 — same rule as the kernel until the FPU-state slice enables it.
+# -msse2 is the x86-64 user ABI baseline. The kernel's FXSAVE context makes
+# it safe across preemption, migration, and signal delivery.
 # -I../../../abi/include: fixtures take syscall numbers AND raw stubs from the
 # abi contract like every other ring-3 binary — a fixture with hand-copied
 # numbers is one renumbering away from testing the wrong syscall (the exact
 # drift class the abi/ split exists to kill; older fixtures predate the path
 # and still carry local copies — migrate them as they're touched).
-ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra -I../../../abi/include
+ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 -fno-stack-protector -fcf-protection=none -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra -I../../../abi/include
 
 OBJS := serial_ping.o
 

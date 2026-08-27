@@ -190,7 +190,7 @@ EXC_NOERR 1,  debug_exception_handler          # #DB — single-step / breakpoin
 EXC_NOERR 3,  breakpoint_handler               # #BP — int3
 EXC_NOERR 4,  overflow_handler                 # #OF
 EXC_NOERR 5,  bound_range_handler              # #BR
-EXC_NOERR 7,  device_not_available_handler     # #NM — FPU/SSE without CR0 setup
+EXC_NOERR 7,  device_not_available_handler     # #NM — unexpected device-not-available fault
 EXC_ERR   10, invalid_tss_handler              # #TS
 EXC_ERR   11, segment_not_present_handler      # #NP
 EXC_ERR   12, stack_segment_handler            # #SS

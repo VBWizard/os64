@@ -25,7 +25,7 @@
 #define WIN_H 120u
 
 // Animation state, in MILLI-PIXELS (integer math on purpose: userland builds
-// with -mno-sse, and gbounce's screaming-ball scar taught that speeds are
+// and gbounce's screaming-ball scar taught that speeds are
 // per-SECOND quantities scaled by real dt, never per-frame constants).
 #define SWEEP_SPEED_MPX_PER_MS 80   // 80 px/sec, spelled in mpx/ms
 

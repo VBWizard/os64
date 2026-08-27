@@ -126,12 +126,16 @@ thread_t* createThread(void* ownerTask, bool kernelThread)
 {
 	thread_t* newThread;
 
-	//Kmalloc zeroes out all memory so the thread context and other elements will be initialized to zeroes
-	newThread = kmalloc(sizeof(thread_t));
+	// The allocator zeroes memory, so the thread context starts initialized.
+	// FXSAVE/FXRSTOR require the embedded FPU image to be 16-byte aligned.
+	// Allocate the enclosing thread on a page boundary so that its asserted
+	// fpuState member alignment holds for the object as well as its layout.
+	newThread = kmalloc_aligned(sizeof(thread_t));
 
 	newThread->ownerTask = (void*)ownerTask;
 
 	newThread->threadID = get_thread_id();
+	fpu_state_init(&newThread->fpuState);
 
 	//TODO: Fixme - is one of the wrong?
 	newThread->regs.userCR3 = ((task_t*)ownerTask)->pml4;

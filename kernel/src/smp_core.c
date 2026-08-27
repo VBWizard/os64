@@ -23,6 +23,7 @@
 #include "thread.h"
 #include "idt.h"
 #include "panic.h"
+#include "fpu.h"
 
 extern struct IDTPointer kIDTPtr;
 extern void syscall_Enter();
@@ -307,6 +308,7 @@ void ap_wakeup_entry() {
     // Set up the rest of the AP initialization
     load_gdt_and_jump(&kGDTr);
     tss_initialize_cpu(temp_apic_id);
+	fpu_init_this_cpu();
     asm volatile ("lidt %0" : : "m" (kIDTPtr));
 
 	// Set up the AP stack

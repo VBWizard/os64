@@ -521,7 +521,7 @@ static const char *exception_name(uint64_t vector)
         case 3:  return "Breakpoint (#BP) — an int3 executed";
         case 4:  return "Overflow (#OF)";
         case 5:  return "BOUND Range Exceeded (#BR)";
-        case 7:  return "Device Not Available (#NM) — FPU/SSE used before CR0 setup";
+        case 7:  return "Device Not Available (#NM)";
         case 10: return "Invalid TSS (#TS)";
         case 11: return "Segment Not Present (#NP)";
         case 12: return "Stack-Segment Fault (#SS)";

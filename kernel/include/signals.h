@@ -2,6 +2,7 @@
 #define SIGNALS_H
 
 #include <stdint.h>
+#include "fpu.h"
 #include <stdbool.h>
 
 // ── IDENTITY IS A NUMBER; THE PENDING SET IS A BITMASK OF THOSE NUMBERS ─────
@@ -301,6 +302,10 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 		uint64_t handler;   // +48  read by the stub, then CALLed
 		uint64_t pad;       // +56  keeps the frame 16-byte aligned, which is
 		                    //      what SysV promises a called function
+		// A handler executes in the interrupted thread and may use x87/SSE.
+		// Its return must therefore restore the interrupted register file, not
+		// leave the handler's vector values behind.
+		fpu_state_t fpuState;
 	} signal_frame_t;
 
 	// Not a hash, just an unlikely constant: it turns "ring 3 handed us a
@@ -323,32 +328,27 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// to flip, upgrading a 4-value restore into a full-file restore. Two
 	// magics mean forging one buys only that frame kind's own validation.
 	//
-	// NO FXSAVE AREA, BY CONSTRUCTION: userland is built -mno-mmx -mno-sse
-	// -mno-sse2 (userland/GNUmakefile), so there is no vector state to be
-	// live at the interruption point. If those flags ever change, this frame
-	// grows a 512-byte fxsave area or float code corrupts across delivery.
-	//
 	// Segment selectors are deliberately NOT in the frame: sigreturn restores
 	// them from GDT constants. A selector a program can write is a selector a
 	// program can forge, and there is exactly one correct answer anyway.
 	typedef struct signal_frame_full
 	{
-		signal_frame_t base;    // +0..+63, the §5 frame, same stub offsets
-		uint64_t rbx;           // +64
-		uint64_t rcx;           // +72
-		uint64_t rdx;           // +80
-		uint64_t rsi;           // +88
-		uint64_t rdi;           // +96
-		uint64_t rbp;           // +104
-		uint64_t r8;            // +112
-		uint64_t r9;            // +120
-		uint64_t r10;           // +128
-		uint64_t r11;           // +136
-		uint64_t r12;           // +144
-		uint64_t r13;           // +152
-		uint64_t r14;           // +160
-		uint64_t r15;           // +168
-	} signal_frame_full_t;      // 176 bytes — keeps RSP 16-aligned
+		signal_frame_t base;    // starts at +0; the stub-visible words stay first
+		uint64_t rbx;
+		uint64_t rcx;
+		uint64_t rdx;
+		uint64_t rsi;
+		uint64_t rdi;
+		uint64_t rbp;
+		uint64_t r8;
+		uint64_t r9;
+		uint64_t r10;
+		uint64_t r11;
+		uint64_t r12;
+		uint64_t r13;
+		uint64_t r14;
+		uint64_t r15;
+	} signal_frame_full_t;
 
 	#define SIGNAL_FRAME_MAGIC_FULL 0x5349475246524D32ULL   /* "SIGRFRM2" */
 
