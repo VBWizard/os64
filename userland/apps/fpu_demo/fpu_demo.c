@@ -123,16 +123,17 @@ static double pow2(double p)
 
 static void render(os64_draw_ctx_t *ctx, const target_t *t, double log2zoom, int max_iter)
 {
-	double scale = 3.2 / pow2(log2zoom) / (double)WIDTH;   // units per pixel
-	double left = t->x - scale * (WIDTH / 2.0);
-	double top  = t->y - scale * (HEIGHT / 2.0);
+	int width = (int)ctx->surf.width, height = (int)ctx->surf.height;   // the window as it is NOW, not as created
+	double scale = 3.2 / pow2(log2zoom) / (double)width;   // units per pixel
+	double left = t->x - scale * (width / 2.0);
+	double top  = t->y - scale * (height / 2.0);
 	uint32_t *px = ctx->surf.pixels;
 	uint32_t pitch = ctx->surf.pitch_px;
 
-	for (int y = 0; y < HEIGHT; y++)
+	for (int y = 0; y < height; y++)
 	{
 		double ci = top + scale * y;
-		for (int x = 0; x < WIDTH; x++)
+		for (int x = 0; x < width; x++)
 		{
 			double cr = left + scale * x;
 			double zr = 0.0, zi = 0.0, zr2 = 0.0, zi2 = 0.0;
@@ -192,6 +193,15 @@ int main(int argc, char **argv)
 		int64_t erc;
 		while ((erc = os64_gui_event_poll(win, &ev)) == 1)
 		{
+			if (ev.type == OS64_GUI_EVENT_WINDOW_RESIZE)
+			{
+				// The canvas is bigger or smaller now; the cached picture is
+				// the wrong size whatever the tour is doing — including
+				// paused, which is exactly when nothing else would repaint.
+				os64_draw_ctx_refresh(&ctx);
+				drawn_target = -1;
+				continue;
+			}
 			if (ev.type != OS64_GUI_EVENT_KEY_DOWN)
 				continue;
 			if (ev.key.ascii == 'q') running = false;

@@ -870,8 +870,17 @@ bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect)
 void wm_cover_sweep_locked(void)
 {
 	bool glass = gui_owns_glass();
+	// Only the part of a frame that is ON the screen can be seen, and a
+	// window can be moved wholly or partly off it (wm_move does not clamp).
+	// So the question is asked of the frame's intersection with the screen:
+	// nothing on screen is covered, and a sliver that is on screen counts
+	// only if that sliver is behind something.
+	rect_t screen = {0, 0, (int32_t)kFrameBuffer.width, (int32_t)kFrameBuffer.height};
 	for (window_t *w = s_top; w; w = w->below) {
-		bool covered = !glass || wm_is_hidden(w) || wm_rect_is_occluded(w, w->frame);
+		rect_t on_screen;
+		bool covered = !glass || wm_is_hidden(w) ||
+		               !rect_intersect(w->frame, screen, &on_screen) ||
+		               wm_rect_is_occluded(w, on_screen);
 		bool was = (w->flags & GUI_WINDOW_COVERED) != 0;
 		if (covered == was)
 			continue;

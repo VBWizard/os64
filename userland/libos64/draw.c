@@ -250,11 +250,14 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
     // again. The flag is re-read on every call, never inferred from the
     // event (gui.h), so a dropped UNCOVERED costs one pass, not forever.
     // The dt pretends the pause never happened (draw.h).
-    if (bound_window_covered(clock))
+    // A zero budget means "don't sleep, just measure" (draw.h) — and that
+    // promise holds while covered too: a caller sampling elapsed time must
+    // not hang because its window went behind another.
+    if (budget_ms > 0 && bound_window_covered(clock))
     {
         os64_gui_event_wait(clock->window, (os64_gui_event_t *)0);
         clock->last_ms = now_ms();
-        return budget_ms > 0 ? budget_ms : 1;
+        return budget_ms;
     }
 
     now = now_ms();

@@ -498,25 +498,9 @@ int main(int argc, char **argv)
 				}
 				rendered_gen = ~(uint64_t)0;   // force a repaint next pass
 			}
-			else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
-			         ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
-			{
-				// Nobody can see us — or somebody can again. gterm does not
-				// bind its frame clock the way an animation does: a hung-up
-				// session must still close this window, and a paste in
-				// flight must still feed the shell, whether or not anyone is
-				// looking. So the loop keeps its cadence and its header
-				// poll, and only the cell snapshot and the PAINT stop. The
-				// event is a nudge; the flag is the answer (gui.h).
-				os64_gui_window_state_t st;
-				if (os64_gui_window_get_state(win, &st) == 0)
-				{
-					bool now_covered = (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
-					if (covered && !now_covered)
-						rendered_gen = ~(uint64_t)0;   // show what happened while hidden
-					covered = now_covered;
-				}
-			}
+			// COVERED / UNCOVERED events need no branch here: the flag is
+			// asked every pass below, and a nudge that can be dropped from a
+			// full queue is no basis for a decision either way.
 		}
 		if (erc < 0)
 		{
@@ -534,20 +518,26 @@ int main(int argc, char **argv)
 			break;
 		if (gHdr.flags & OS64_PTY_HUNGUP)
 			break;                  // the session ended: exit closes the window
+		// Can anyone see us? Asked EVERY pass — one get_state per frame —
+		// never inferred from the COVERED/UNCOVERED events, either of which
+		// a full queue can drop. gterm does not bind its frame clock the way
+		// an animation does: a hung-up session must still close this window
+		// and a paste in flight must still feed the shell whether or not
+		// anyone is looking, so the loop keeps its cadence and its header
+		// poll, and only the cell snapshot and the PAINT stop while covered.
+		{
+			os64_gui_window_state_t st;
+			bool now_covered = covered;
+			if (os64_gui_window_get_state(win, &st) == 0)
+				now_covered = (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
+			if (covered && !now_covered)
+				rendered_gen = ~(uint64_t)0;   // show what happened while hidden
+			covered = now_covered;
+		}
 		if (covered)
 		{
 			// Whatever moved is noted by the stale rendered_gen; the first
-			// uncovered pass paints it all at once. And the flag is asked
-			// EVERY pass while covered, not only when an event says so: the
-			// UNCOVERED nudge can be dropped from a full queue, and a
-			// terminal that trusted it would stay blind on a visible window.
-			os64_gui_window_state_t st;
-			if (os64_gui_window_get_state(win, &st) == 0 &&
-			    !(st.flags & OS64_GUI_WINDOW_COVERED))
-			{
-				covered = false;
-				rendered_gen = ~(uint64_t)0;
-			}
+			// uncovered pass paints it all at once.
 		}
 		else if (gHdr.generation != rendered_gen)
 		{
