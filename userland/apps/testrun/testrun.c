@@ -68,6 +68,10 @@ static char *const argv_malloc_stomp[]      = { "/bin/malloctest", "stomp", NULL
 // exits 0x0BAD and the mismatch names the disconnected tripwire.
 static char *const argv_nx_stack[] = { "/bin/nx_test", "stack", NULL };
 static char *const argv_nx_text[]  = { "/bin/nx_test", "text",  NULL };
+static char *const argv_fpfault_xm[] = { "/bin/fpfault", "xm", NULL };
+static char *const argv_fpfault_mf[] = { "/bin/fpfault", "mf", NULL };
+static char *const argv_fpfault_de[] = { "/bin/fpfault", "de", NULL };
+static char *const argv_fpfault_ud[] = { "/bin/fpfault", "ud", NULL };
 
 static const fixture_t kFixtures[] = {
     { "/bin/syscall_smoke",   NULL, 0x0005E00D,  0,          "the syscall floor: write/exit from ring 3" },
@@ -88,6 +92,16 @@ static const fixture_t kFixtures[] = {
     { "/bin/malloctest",      argv_malloc_stomp,      0xCA9A12ED, 0, "a stomped canary kills the program (it must)" },
     { "/bin/nx_test",         argv_nx_stack, 139, 0,         "executing the stack kills the program (NX works)" },
     { "/bin/nx_test",         argv_nx_text,  139, 0,         "writing to .text kills the program (W^X works)" },
+    { "/bin/fputest",         NULL, 0xF0DE0000,  0,          "x87/SSE data AND control state survive preemption, migration, a handler that wipes them, and a forged frame MXCSR" },
+    // PASS BY DYING: a CPU exception from ring 3 ends the program with
+    // 200 + vector (user_exception_kill), never the machine.
+    // #XM is the one QEMU's TCG cannot raise (it records SSE exceptions in
+    // MXCSR and never traps), so the fixture answers 3 there and that is a
+    // SKIP, not a failure; on hardware and under KVM it dies with 219.
+    { "/bin/fpfault",         argv_fpfault_xm, 219, 3,       "an unmasked SSE exception (#XM) kills the program, not the OS" },
+    { "/bin/fpfault",         argv_fpfault_mf, 216, 0,       "an unmasked x87 exception (#MF) kills the program, not the OS" },
+    { "/bin/fpfault",         argv_fpfault_de, 200, 0,       "an integer divide by zero (#DE) kills the program, not the OS" },
+    { "/bin/fpfault",         argv_fpfault_ud, 206, 0,       "an AVX instruction with XSAVE off (#UD) kills the program, not the OS" },
     { "/bin/test_elf",        NULL, 0xE1F0CA11,  0,          "a demand-paged static ELF runs and exits" },
     { "/bin/dyn_consumer",    NULL, 0x00300031,  0,          "a dynamically-linked binary resolves and runs" },
     // synctest reports 0x05CC0001 when the boot has no writable /home. That

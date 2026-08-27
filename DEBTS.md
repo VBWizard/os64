@@ -133,6 +133,13 @@ hobby-scale judgment calls — re-rank freely.
 | `thread_join_create` leaks the `thread_t` if the stack-mapping check fails (the only failure path after createThread). Cannot currently happen — the stack was just mapped — and fixing it properly needs the thread teardown above | Cleanup | XS | with thread teardown | `thread_join.c` |
 | No thread affinity control from ring 3: a program cannot say "put this one on its own core." The scheduler's own delegation handles the useful case today | Feature-gate | S | when a program has a reason to care | `syscall_thread` |
 
+## Floating point (the FPU slice, 2026-08-27 — booked the day it was reviewed)
+
+| Debt | Sev | Cost | Gate | Source |
+|---|---|---|---|---|
+| **No XSAVE, so no AVX.** The register file is switched as one 512-byte FXSAVE image; `CR4.OSXSAVE` stays clear, so any AVX/AVX2/AVX-512 instruction is `#UD` at ring 3 (which now kills the program, not the machine). Consistent and safe — the YMM upper halves cannot be live if nothing can execute an instruction that reaches them — but it means `-mavx` in any userland build is a crash, and the compiler must never be told the CPU has it. The cure is XSAVE with the variable-size image `CPUID.0xD` reports, a per-boot size instead of a fixed 512 in `thread_t` and both signal frames, and `xsaveopt`/init-tracking if the copy cost ever shows | Feature-gate | M | the first consumer that wants AVX (none in sight — `-msse2` is the baseline every app builds against) | `fpu.h`, `fpu.c` |
+| **A CPU exception from ring 3 is a kill, not a catchable signal.** `#DE`, `#UD`, `#GP`, `#MF`, `#XM`, `#AC` end the task with exit `200 + vector` (`user_exception_kill`). Unix answers these with SIGFPE/SIGILL/SIGBUS, and a handler CAN legitimately want them (a calculator recovering from 1/0; a JIT probing instruction support). os64 has no such signals, and adding them to the table before a consumer asks is exactly the speculative growth the roadmap forbids. When one asks: the §9 path (`signal_deliver_segv`) already resumes a caught fault into its handler out of the exception frame, and these would ride it | Feature-gate | S–M | the first program that wants to survive its own FP or illegal-instruction fault | `simple_exceptions.c`, SIGNALS.md §9 |
+
 ## Heap (the userland malloc, 2026-08-15 — booked the day it was written)
 
 | Debt | Sev | Cost | Gate | Source |

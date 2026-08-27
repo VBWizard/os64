@@ -186,33 +186,17 @@ machine_check_handler:
     hlt
 .endm
 
-# #MF and #XM are fatal to the faulting program, not to the machine. Their
-# CPU frame has no error code, so CS at +8 tells C which side of the privilege
-# boundary raised the exception. The C handler does not return for either a
-# user kill or a kernel panic.
-.macro EXC_FPU vec, name
-.global \name
-\name:
-    cli
-    CLEAR_STALE_FAULT_CAPTURE
-    mov rdi, \vec
-    mov rsi, [rsp]          # faulting RIP
-    mov rdx, [rsp + 8]      # faulting CS
-    call handle_fpu_exception
-    hlt
-.endm
-
 EXC_NOERR 1,  debug_exception_handler          # #DB — single-step / breakpoints
 EXC_NOERR 3,  breakpoint_handler               # #BP — int3
 EXC_NOERR 4,  overflow_handler                 # #OF
 EXC_NOERR 5,  bound_range_handler              # #BR
-EXC_NOERR 7,  device_not_available_handler     # #NM — unexpected device-not-available fault
+EXC_NOERR 7,  device_not_available_handler     # #NM — cannot happen: CR0.EM and CR0.TS are never set (fpu.c)
 EXC_ERR   10, invalid_tss_handler              # #TS
 EXC_ERR   11, segment_not_present_handler      # #NP
 EXC_ERR   12, stack_segment_handler            # #SS
-EXC_FPU   16, x87_fpu_handler                  # #MF
+EXC_NOERR 16, x87_fpu_handler                  # #MF — ring 3 kills only on the unified path; EXCOLD panics like every other vector here
 EXC_ERR   17, alignment_check_handler          # #AC
-EXC_FPU   19, simd_fpu_handler                 # #XM
+EXC_NOERR 19, simd_fpu_handler                 # #XM — same
 
 # ── NMI (vector 2): the one exception that is also an INSTRUMENT ────────────
 #

@@ -331,6 +331,34 @@ the library serves every process). How it fits together:
 - Demand paging: pages faulted in on access
 - Entry point: `kernel/test/elf/serial_ping.S` (test ELF that writes to serial port)
 
+### Floating Point (`kernel/src/fpu.c`, `fpu.h`)
+
+- **The x87/MMX/SSE register file is thread context**, saved with `fxsave64`
+  in `scheduler_store_thread` and restored in `scheduler_load_thread` — EAGER,
+  no `CR0.TS`/`#NM` laziness. The invariant: the LIVE register file always
+  belongs to the thread the core is running, because **the kernel is built
+  `-mno-sse` and never touches it**. Kernel code that emits SIMD would break
+  that invariant silently; keep the flag.
+- Userland is `-msse2` (the x86-64 baseline) — every program is an FPU
+  program (a varargs `printf` prologue touches XMM), so "disable the FPU" is
+  not a thing this OS can offer without a separately built userland.
+- **Every signal frame carries the 512-byte image** (§5 and §9 `fxsave` the
+  live file; §10 copies `thread->fpuState` because the thread is off-CPU).
+  `sigreturn` masks the user-supplied MXCSR with the CPU's `MXCSR_MASK`
+  before `fxrstor` — a reserved bit there is a KERNEL `#GP`.
+- **XSAVE/AVX deliberately off** (`CR4.OSXSAVE` clear): AVX is `#UD` at
+  ring 3, which is the safe, consistent state. DEBTS § Floating point.
+- **A ring-3 CPU exception kills the program, never the machine** — ALL of
+  them, in one branch of `exception_dispatch` (`user_exception_kill`), not
+  per-vector special cases: `#DE`, `#UD`, `#GP`, `#AC`, and the two the FPU
+  turned on, `#MF` (`CR0.NE`) and `#XM` (`CR4.OSXMMEXCPT`). Exit code is
+  **200 + vector** — os64 has no SIGFPE/SIGILL, and 128+signal would name a
+  signal that never existed. `#DF`/`#MC` stay fatal whatever CS says.
+- The boot line `FPU: x87 SSE SSE2 ... enabled, FXSAVE per thread` prints to
+  the glass AND the log (`fpu_report`); `kFPUFeatures` holds the answers.
+- Fixtures: `fputest` (state survives preemption, migration, and a handler
+  that wipes every register), `fpfault xm|mf|de` (pass by dying, 219/216/200).
+
 ### Interrupt Handling
 
 **IDT (`kernel/src/driver/system/idt.c`):**
