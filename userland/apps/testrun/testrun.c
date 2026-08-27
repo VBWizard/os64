@@ -128,6 +128,34 @@ static const fixture_t kFixtures[] = {
 
 static int32_t gPassed, gFailed, gSkipped;
 
+// An optional NAME on the command line narrows the run to the fixtures
+// whose path contains it — `testrun fputest` runs one program, `testrun
+// fpfault` runs its four rows. The point is `watch -e testrun fputest`: a
+// fixture passes with a distinctive badge (0xF0DE0000), which every
+// exit-code-reading tool calls "nonzero", and the runner is the one thing
+// that knows the badges. Substring, not glob: husk would expand a `*`
+// against the cwd before testrun ever saw it.
+static const char *gOnly;
+
+static bool contains(const char *haystack, const char *needle)
+{
+    size_t n = os64_strlen(needle);
+    for (; *haystack; haystack++)
+    {
+        size_t i = 0;
+        while (i < n && haystack[i] == needle[i])
+            i++;
+        if (i == n)
+            return true;
+    }
+    return false;
+}
+
+static bool selected(const char *path)
+{
+    return gOnly == NULL || contains(path, gOnly);
+}
+
 // One line per verdict, on the SERIAL WIRE. os64_serial_log rather than
 // os64_debug_log on purpose: a harness boot usually runs with LOGD=, and a
 // plain log line would land in a file inside the guest that nobody outside
@@ -239,18 +267,27 @@ int main(int argc, char **argv)
     args.about = "Run the ring-3 test fixtures and report to the serial wire.";
     args.details = "Each fixture is spawned and waited on through the ordinary "
                    "syscalls, so no test can race the undertaker the way the "
-                   "in-kernel versions did.";
-    int32_t parsed = os64_args_parse(&args, "testrun [-n]", NULL, 0);
+                   "in-kernel versions did. NAME narrows the run to fixtures "
+                   "whose path contains it, and the exit code is 0 only if "
+                   "every one passed — so `watch -e testrun fputest` loops a "
+                   "single fixture and stops at its first failure.";
+    int32_t parsed = os64_args_parse(&args, "testrun [-n] [NAME]", &gOnly, 1);
     if (parsed == OS64_ARG_HELP) return 0;
     if (parsed < 0) return 2;
 
     os64_serial_log("TESTRUN: begin (ring-3 suite)");
-    os64_printf("testrun - %d ring-3 fixtures\n", FIXTURE_COUNT);
+    if (gOnly)
+        os64_printf("testrun - fixtures matching '%s'\n", gOnly);
+    else
+        os64_printf("testrun - %d ring-3 fixtures\n", FIXTURE_COUNT);
 
     for (int32_t i = 0; i < FIXTURE_COUNT; i++)
-        run_fixture(&kFixtures[i]);
+        if (selected(kFixtures[i].path))
+            run_fixture(&kFixtures[i]);
 
-    run_concurrent_pair();
+    // The concurrent pair is a property of the whole suite, not of a name.
+    if (gOnly == NULL)
+        run_concurrent_pair();
 
     // The network pair is opt-in: on a boot with no NIC (or no DHCP lease)
     // these fail for a reason that has nothing to do with the code under
@@ -262,7 +299,16 @@ int main(int argc, char **argv)
             { "/bin/fetchtest", NULL, 0x0FE7C400, 0, "TCP fetch over the stack" },
         };
         for (int32_t i = 0; i < 2; i++)
-            run_fixture(&net[i]);
+            if (selected(net[i].path))
+                run_fixture(&net[i]);
+    }
+
+    // A name that matches nothing is a typo, and a typo must not read as
+    // "0 failed": say so, and exit the way a failure does.
+    if (gOnly && gPassed + gFailed + gSkipped == 0)
+    {
+        os64_printf("testrun: no fixture matches '%s'\n", gOnly);
+        return 2;
     }
 
     // THE LINE THE HARNESS GREPS. One format, on the wire, every run — the
