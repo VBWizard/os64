@@ -15,6 +15,7 @@
 #define CR0_NE (1UL << 5)
 #define CR4_OSFXSR (1UL << 9)
 #define CR4_OSXMMEXCPT (1UL << 10)
+#define CR4_OSXSAVE (1UL << 18)
 
 // CPUID.1:EDX — the long-mode baseline every x86-64 CPU carries.
 #define CPUID1_EDX_FPU   (1U << 0)
@@ -104,7 +105,11 @@ void fpu_init_this_cpu(void)
 	// rather than the PC/AT's IRQ13 detour; EM and TS clear so nothing traps.
 	// CR4: OSFXSR licenses FXSAVE/FXRSTOR and the SSE instructions themselves;
 	// OSXMMEXCPT routes unmasked SSE exceptions to #XM (vector 19) instead of
-	// #UD. OSXSAVE stays clear ON PURPOSE (fpu.h).
+	// #UD. OSXSAVE is CLEARED, not left alone: the CR4 we inherit is the
+	// firmware's, and UEFI runs with XSAVE (and usually AVX in XCR0) enabled.
+	// Left set, ring 3 could execute AVX while the context switch saves only
+	// the 512-byte FXSAVE image — YMM upper halves leaking between threads.
+	// The contract in fpu.h is enforced here, not assumed.
 	uint64_t cr0, cr4;
 	__asm__ volatile("mov %0, cr0" : "=r"(cr0));
 	cr0 |= CR0_MP | CR0_NE;
@@ -112,6 +117,7 @@ void fpu_init_this_cpu(void)
 	__asm__ volatile("mov cr0, %0" : : "r"(cr0) : "memory");
 	__asm__ volatile("mov %0, cr4" : "=r"(cr4));
 	cr4 |= CR4_OSFXSR | CR4_OSXMMEXCPT;
+	cr4 &= ~CR4_OSXSAVE;
 	__asm__ volatile("mov cr4, %0" : : "r"(cr4) : "memory");
 	__asm__ volatile("fninit\n\tldmxcsr %0" : : "m"((const uint32_t){ FPU_DEFAULT_MXCSR }) : "memory");
 

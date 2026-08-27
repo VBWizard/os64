@@ -41,9 +41,9 @@
 //   issues the ctl write as a RAW syscall instruction inside the same asm
 //   block, and checks its registers on the far side. SIGINT published by
 //   that very write is delivered to the writing thread at the syscall's
-//   exit — Codex #35 pointed out that this is where a self-sent signal
-//   ALWAYS lands, which is why the earlier version of this fixture, whose
-//   sender held no pattern, was proving nothing about frames at all.
+//   exit, because the dispatcher offers a pending signal to the current
+//   thread before any sibling is visited — so the sender is the thread
+//   that must hold a pattern.
 //
 // Then the hostile case. The frame lives on the program's own stack, and
 // sigreturn restores MXCSR out of it with fxrstor — in the KERNEL. An MXCSR
@@ -99,8 +99,8 @@
 
 // One pattern per THREAD — workers, main, and the pinger. Every field
 // differs between any two of them, so a cross-thread leak cannot pass by
-// luck (Codex #35: main used to share worker 3's, and a leak between
-// exactly those two would have been invisible). The x87 control words are
+// luck — two threads sharing a pattern would hide a leak between exactly
+// those two. The x87 control words are
 // ALL distinct on purpose: the handler identifies the interrupted thread
 // by the one it finds loaded.
 typedef struct {
@@ -408,12 +408,10 @@ int main(int argc, char **argv)
     // delivery point; so is the end of a park (a sleeping thread wakes for
     // any caught signal). A spinning thread on a tickless core is visited
     // only at its backstop lease — SCHED_BACKSTOP_MS apart. So while the
-    // helper is sending, this task must contain nothing but spinners, or
-    // the spinners never win: the first version ran the pinger's sleeps and
-    // main's os64_ticks calls alongside, and on the P5's eight cores the
-    // external signals reached a worker in five runs out of six (Chris,
-    // 2026-08-27). Main therefore bounds this phase with rdtsc — no clock
-    // syscall — calibrated against one sleep beforehand.
+    // helper is sending, this task must contain nothing but spinners, or a
+    // sleeping pinger and a clock syscall take every signal first. Main
+    // therefore bounds this phase with rdtsc — no clock syscall —
+    // calibrated against one sleep beforehand.
     uint64_t tsc_per_ms;
     {
         uint64_t t0 = __builtin_ia32_rdtsc();
