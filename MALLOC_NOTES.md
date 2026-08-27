@@ -31,8 +31,9 @@ landed there):
    recycled memory like everyone since V7 (document it!), calloc zeroes,
    and free POISONS with a pattern (see tripwires below). Never add a
    redundant memset for fresh-from-kernel pages — the house rule.
-2. **Alignment.** 16 bytes minimum. SSE is currently #UD at ring 3, but the
-   FPU-state slice will land someday and a malloc ABI is forever.
+2. **Alignment.** 16 bytes minimum. Userland is SSE2 since the FPU slice
+   (2026-08-27), and an aligned vector move through a heap pointer faults on
+   anything less.
 3. **The mmap threshold and arena chunk size.** Boring numbers, but pick
    them out loud (128KB / 1-4MB are the classics) and name them in
    CONFIG-style constants, not magic literals.
