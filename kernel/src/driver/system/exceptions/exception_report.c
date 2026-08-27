@@ -646,6 +646,13 @@ void exception_dispatch(exception_context_t *ctx)
 		return;   // resolved — the prologue's iretq retries the instruction
 	}
 
+	// Unmasked x87 and SSE exceptions are legal ring-3 outcomes. CR0.NE and
+	// CR4.OSXMMEXCPT make the CPU report them precisely; they must kill the
+	// offending program rather than take the kernel-wide fatal path below.
+	if ((ctx->vector == 16 || ctx->vector == 19) && (ctx->cs & 3) == 3) {
+		handle_fpu_exception(ctx->vector, ctx->rip, ctx->cs);
+	}
+
 	// A debug exception MIGHT be one of ours (watchpoint.c). If it is, the
 	// report leads with which watchpoint fired and what was done to it, and a
 	// TRACE-mode watchpoint RESUMES afterwards — the only non-#PF vector that

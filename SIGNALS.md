@@ -320,9 +320,10 @@ is guaranteed at a place that already has everything delivery needs.
   preempted thread in the system resumes. `sigreturn` writes the saved values
   into `regs` and lets the thread take that ordinary road.
 
-**What it does need: the whole frame.** §5 saves four values (RAX, RIP, RSP,
-RFLAGS) and gets away with it because the interruption point is a syscall
-RETURN, where the ABI has already declared RCX/R11 dead and a C handler
+**What it does need: the whole general-register frame.** §5 saves four
+general/control values (RAX, RIP, RSP, RFLAGS), plus the interrupted FXSAVE
+image, and gets away with the short GPR set because the interruption point is
+a syscall RETURN, where the ABI has already declared RCX/R11 dead and a C handler
 preserves the callee-saved set itself. A spinning thread is interrupted at an
 ARBITRARY instruction, so every register is live and a C handler will clobber
 half of them without putting them back. This frame carries the general
@@ -363,17 +364,14 @@ the fourteen remaining GPRs off the end. The stub reads signo at +40 and the
 handler at +48 exactly as before, so ONE stub serves both delivery paths and
 task_exit_asm.S does not change at all. The discriminator is a SECOND MAGIC
 ("SIGRFRM2"), not a flag field — a flag inside user-writable memory is the
-attacker's to flip, and flipping it would upgrade a 4-value restore into a
-full-file restore. Two magics mean forging the wrong one buys the validation
+attacker's to flip, and flipping it would upgrade a short-GPR restore into a
+full-GPR restore. Two magics mean forging the wrong one buys the validation
 of the frame you forged, never the other one's.
 
-**No FXSAVE area, and the reason is the build system.** Userland is compiled
-`-mno-mmx -mno-sse -mno-sse2` (userland/GNUmakefile CFLAGS), so an
-arbitrary interruption point has NO live vector state to preserve — the
-question that forced Linux's interrupt-delivered frame to carry an fpstate
-simply does not arise. THE FRAME'S COMPLETENESS IS PREDICATED ON THOSE
-FLAGS: the day userland grows SSE, this frame grows a 512-byte FXSAVE area
-or float code corrupts across delivery, quietly, weekly.
+**The prefix carries an FXSAVE area.** Userland uses the x86-64 SSE2 baseline,
+and a signal handler may use x87/SSE regardless of whether the interrupted
+code did. Both frame forms therefore preserve the thread's 512-byte x87/MMX/
+SSE image; `sigreturn` validates and restores it with the integer context.
 
 **Delivery lives where the forced push lives**, in
 `scheduler_signal_visit` (né `scheduler_sigint_forced_syscall`), called at

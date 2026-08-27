@@ -541,6 +541,25 @@ void handle_unexpected_exception(uint64_t vector, uint64_t error_code, uint64_t 
     exception_panic(msg, rip, error_code);
 }
 
+void handle_fpu_exception(uint64_t vector, uint64_t rip, uint64_t cs)
+{
+	if ((cs & 3) == 3) {
+		core_local_storage_t *cls = get_core_local_storage();
+		thread_t *thread = cls ? cls->currentThread : NULL;
+		task_t *task = thread ? (task_t *)thread->ownerTask : NULL;
+		if (task != NULL && !task->kernelTask) {
+			FAULT_PRINT(false, "\nFloating-point exception: %s (task %lu, RIP 0x%016lx, vector %lu)\n",
+			            task->exename[0] ? task->exename : "(unnamed)",
+			            task->taskID, rip, vector);
+			task->retVal = 136; // 128 + SIGFPE(8), the conventional shell status.
+			task_exit();
+			__builtin_unreachable();
+		}
+	}
+
+	handle_unexpected_exception(vector, 0, rip);
+}
+
 
 /// @brief Decode a #PF error code into the bracketed form both fault reports use.
 ///

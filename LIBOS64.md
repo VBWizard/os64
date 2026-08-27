@@ -268,8 +268,7 @@ biggest behavioral departure from the ancestor.
   that is free; revisit if libos64 ever exports thousands.
 - Buffered `<os64/stdio.h>` layer is a second-phase item; raw `<os64/io.h>`
   + the syscall wrappers come first (enough for the shell).
-- Math/soft-float (`sqrt`/`modf` for ps/top-style cpu%) intersects the
-  kernel's `-mno-sse` / FPU-state debt (DEBTS) — defer FP-using utilities
-  until FPU context-switch state exists.
+- Math APIs (`sqrt`/`modf` for ps/top-style cpu%) are not implemented yet;
+  x87/SSE2 execution itself is supported and its state is switched per thread.
 - Everything here rides the userland roadmap order (ABI.md): scaffolding →
   interruptible syscall bodies → `read` → spawn/fork+wait → the shell.

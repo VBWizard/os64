@@ -278,7 +278,7 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	// The frame the kernel writes on the user stack before running a handler,
 	// and that sigreturn restores from.
 	//
-	// FOUR SAVED VALUES, and the shortness is the payoff of delivering at a
+	// FOUR SAVED GENERAL/CONTROL VALUES, and the shortness is the payoff of delivering at a
 	// SYSCALL BOUNDARY rather than from an interrupt. os32 delivered from the
 	// scheduler ISR, so the interrupted context was an arbitrary instruction
 	// and every register had to be carried. Here the interrupted context is a
@@ -325,7 +325,7 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	//
 	// A SECOND MAGIC, not a flag field, tells sigreturn which restore it is
 	// being asked for: a flag inside user-writable memory would be ring 3's
-	// to flip, upgrading a 4-value restore into a full-file restore. Two
+	// to flip, upgrading a short-GPR restore into a full-GPR restore. Two
 	// magics mean forging one buys only that frame kind's own validation.
 	//
 	// Segment selectors are deliberately NOT in the frame: sigreturn restores
