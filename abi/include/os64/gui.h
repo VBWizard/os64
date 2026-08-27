@@ -153,6 +153,14 @@ static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t conte
 // not saving a maximized or minimized frame as its ordinary position.
 #define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)
 #define OS64_GUI_WINDOW_MINIMIZED        (1u << 4)
+// Nobody can see this window right now: it is minimized, or it sits entirely
+// behind one window above it, or a text terminal holds the glass. Kernel-
+// tracked, never yours to set. The frame clock reads it to stop an animation
+// nobody is watching (os64_frame_clock_bind); an app with its own loop reads
+// it after a WINDOW_COVERED/UNCOVERED event. THIS FLAG IS THE TRUTH and the
+// event is only the nudge: a queue is 64 deep and drops the newest when
+// full, so an app that trusted the last event it saw could sleep forever.
+#define OS64_GUI_WINDOW_COVERED          (1u << 6)
 
 // Where a window IS and what state it is in — the readback half of create.
 //
@@ -235,6 +243,14 @@ typedef struct os64_gui_surface
 // answer you would have given anyway minus the chance to say goodbye. libui
 // handles it (os64_ui_t.on_close, else it sets `quit`).
 #define OS64_GUI_EVENT_WINDOW_CLOSE      7
+// Your window just became invisible / visible again (OS64_GUI_WINDOW_COVERED
+// flipped). A NUDGE, not the state: re-read the flag with
+// os64_gui_window_get_state before acting on it, because events can be
+// dropped and this pair can arrive out of step with a queue that was full.
+// The frame clock answers these for any app that uses it; an app with its
+// own loop (gterm) uses them to stop painting while it keeps working.
+#define OS64_GUI_EVENT_WINDOW_COVERED    8
+#define OS64_GUI_EVENT_WINDOW_UNCOVERED  9
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
 // key events and — since resize — by mouse events too.

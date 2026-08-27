@@ -385,6 +385,7 @@ int main(int argc, char **argv)
 	os64_frame_clock_init(&clock);
 	uint64_t rendered_gen = ~(uint64_t)0;
 	bool window_alive = true;
+	bool covered = false;   // nobody can see the window: read the pty, skip the paint
 
 	for (;;)
 	{
@@ -487,6 +488,25 @@ int main(int argc, char **argv)
 				}
 				rendered_gen = ~(uint64_t)0;   // force a repaint next pass
 			}
+			else if (ev.type == OS64_GUI_EVENT_WINDOW_COVERED ||
+			         ev.type == OS64_GUI_EVENT_WINDOW_UNCOVERED)
+			{
+				// Nobody can see us — or somebody can again. gterm does not
+				// bind its frame clock the way an animation does: a hung-up
+				// session must still close this window, and a paste in
+				// flight must still feed the shell, whether or not anyone is
+				// looking. So the loop keeps its cadence and its header
+				// poll, and only the cell snapshot and the PAINT stop. The
+				// event is a nudge; the flag is the answer (gui.h).
+				os64_gui_window_state_t st;
+				if (os64_gui_window_get_state(win, &st) == 0)
+				{
+					bool now_covered = (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
+					if (covered && !now_covered)
+						rendered_gen = ~(uint64_t)0;   // show what happened while hidden
+					covered = now_covered;
+				}
+			}
 		}
 		if (erc < 0)
 		{
@@ -504,7 +524,12 @@ int main(int argc, char **argv)
 			break;
 		if (gHdr.flags & OS64_PTY_HUNGUP)
 			break;                  // the session ended: exit closes the window
-		if (gHdr.generation != rendered_gen)
+		if (covered)
+		{
+			// Whatever moved is noted by the stale rendered_gen; the first
+			// uncovered pass paints it all at once.
+		}
+		else if (gHdr.generation != rendered_gen)
 		{
 			if (os64_pty_snapshot(master, &gHdr, gCells, cols * rows) < 0)
 				break;

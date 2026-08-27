@@ -333,6 +333,40 @@ deliberately a bitmask, so two resizes coalesce into one with no dimensions
 attached — a payload-free coalescing channel is disqualified as a GUI
 transport by its own design (SIGNALS.md § "Explicitly not in scope").
 
+### Covered windows (2026-08-27)
+
+The first window fact after resize and close: **can anyone see this window?**
+`GUI_WINDOW_COVERED` is set when a window is minimized, or its whole frame is
+behind one window above it (`wm_rect_is_occluded`, the same single-window
+containment publish uses), or a text terminal holds the glass.
+`wm_cover_sweep_locked` recomputes it every compositor frame, after the
+window manager has moved whatever it moved, and a flip queues one
+`WINDOW_COVERED` / `WINDOW_UNCOVERED` event.
+
+**The flag is the truth; the event is the nudge.** A queue is 64 deep and
+drops the newest when full, so a client that believed the last event it saw
+could sleep forever on a lost UNCOVERED. Every consumer re-reads the flag
+through `gui_window_get_state` before acting — the event only says "look".
+
+Who acts on it:
+- **The frame clock** (`os64_frame_clock_bind`): an app that paces with
+  `os64_frame_wait` naps while its window is covered and resumes when it is
+  not, returning a dt of one budget rather than the minutes it was hidden.
+  Five animating apps got quiet with one line each. Events are not consumed
+  while napping; they wait for the app's next poll.
+- **gterm** handles the events itself, because its loop must keep running
+  whether or not anyone is looking (a hung-up session still closes the
+  window; a paste still feeds the shell): the header poll continues, the
+  cell snapshot and the paint stop, and the first uncovered frame repaints.
+- **libui apps** block in `gui_event_wait` already and were quiet before.
+
+What this is not: the publish-acknowledgment (Wayland's frame callback)
+the occlusion row in DEBTS sketched, which makes idle the default for apps
+with their own loops instead of asking them to look at a flag. The flag
+covers every consumer that exists; the callback stays the more general
+design if one outgrows it. Also still single-window containment — two
+windows that jointly cover a third do not count.
+
 Signals get process-lifecycle and stream-world facts: INT, TERM, HUP, PIPE,
 SEGV — and WINCH, for the program whose whole world is a byte stream.
 **SIGWINCH is not an exception to this rule, it is the rule applied to a

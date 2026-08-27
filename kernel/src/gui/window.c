@@ -11,6 +11,8 @@
                          // capacity, pinned to ours by the assert below (the
                          // log.c/klog_format.h precedent: renumbering stops
                          // the build instead of lying to ring 3)
+_Static_assert(GUI_WINDOW_COVERED == OS64_GUI_WINDOW_COVERED,
+               "the COVERED flag crosses the ring boundary through get_state");
 _Static_assert(GUI_WINDOW_TITLE_MAX == OS64_GUI_TITLE_MAX,
                "gui/window.h and abi os64/gui.h disagree on the title capacity");
 #include "gui/surface.h"
@@ -768,4 +770,40 @@ bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect)
 			return true;
 	}
 	return false;
+}
+
+// The other half of occlusion: telling the CLIENT. The compositor side
+// (publish drops damage nobody would see) got guicomp to zero under a
+// stack of hidden windows; what was left was every hidden client still
+// computing and painting frames for nobody, and the only cure for that
+// lives in the client. So each frame, after the window manager has moved
+// whatever it moved, every window is asked the same question publish asks
+// — is your whole frame behind one window above you? — plus the two ways to
+// be invisible that have nothing to do with stacking: minimized, and a text
+// terminal holding the glass. A changed answer flips the flag and queues
+// one event. The flag is the state and the event the nudge (gui.h says why
+// a client must never trust the event alone).
+//
+// The desktop is skipped: it is always covered by definition of "desktop"
+// and never has an animation to stop.
+void wm_cover_sweep_locked(void)
+{
+	bool glass = gui_owns_glass();
+	for (window_t *w = s_top; w; w = w->below) {
+		if (w->flags & GUI_WINDOW_DESKTOP)
+			continue;
+		bool covered = !glass || wm_is_hidden(w) || wm_rect_is_occluded(w, w->frame);
+		bool was = (w->flags & GUI_WINDOW_COVERED) != 0;
+		if (covered == was)
+			continue;
+		if (covered)
+			w->flags |= GUI_WINDOW_COVERED;
+		else
+			w->flags &= ~GUI_WINDOW_COVERED;
+		input_event_t ev = {
+			.type = covered ? INPUT_EVENT_WINDOW_COVERED : INPUT_EVENT_WINDOW_UNCOVERED,
+			.tick = kTicksSinceStart,
+		};
+		wm_deliver_event(w, &ev);
+	}
 }

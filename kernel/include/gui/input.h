@@ -40,7 +40,16 @@ typedef enum input_event_type
     // request is ignored is escalate (Alt+F4 again = SIGTERM to the owner),
     // which is the app's business to avoid by answering the first one.
     INPUT_EVENT_WINDOW_CLOSE,
+    // Synthesized by wm_cover_sweep_locked when a window's COVERED flag
+    // flips. The flag is the state; these only say it changed.
+    INPUT_EVENT_WINDOW_COVERED,
+    INPUT_EVENT_WINDOW_UNCOVERED,
 } input_event_type_t;
+
+_Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
+_Static_assert(INPUT_EVENT_WINDOW_CLOSE     == OS64_GUI_EVENT_WINDOW_CLOSE,     "event ABI: close");
+_Static_assert(INPUT_EVENT_WINDOW_COVERED   == OS64_GUI_EVENT_WINDOW_COVERED,   "event ABI: covered");
+_Static_assert(INPUT_EVENT_WINDOW_UNCOVERED == OS64_GUI_EVENT_WINDOW_UNCOVERED, "event ABI: uncovered");
 
 // Mouse button bit positions (in `buttons`, and named in `button` for the
 // BUTTON_DOWN/UP events). These numbers are ABI — they ride out to ring 3 in

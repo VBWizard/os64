@@ -228,6 +228,7 @@ int main(int argc, char **argv)
     //     matter what the work costs.
     os64_frame_clock_t frameClock;
     os64_frame_clock_init(&frameClock);
+    os64_frame_clock_bind(&frameClock, gClockWin);   // sleep while nobody can see the face
     while (gRunning)
     {
         os64_gui_event_t ev;

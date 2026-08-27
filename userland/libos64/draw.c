@@ -205,6 +205,31 @@ static uint64_t now_ms(void)
 void os64_frame_clock_init(os64_frame_clock_t *clock)
 {
     clock->last_ms = now_ms();
+    clock->window = -1;
+}
+
+void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window)
+{
+    clock->window = window;
+}
+
+// How often a paused clock asks "can anyone see me yet?". A state read is
+// one syscall and no memory; twenty a second is nothing next to the thirty
+// full frames a second it replaces, and it is the latency of a reveal.
+#define COVERED_NAP_MS 50
+
+// Is the bound window covered right now? Asks the kernel, never the last
+// event: the flag is the truth (gui.h). A window that cannot be asked (it
+// died, the handle is stale) reads as visible, so a broken bind degrades to
+// the old always-paint behavior rather than to a program that never wakes.
+static bool bound_window_covered(const os64_frame_clock_t *clock)
+{
+    if (clock->window < 0)
+        return false;
+    os64_gui_window_state_t st;
+    if (os64_gui_window_get_state(clock->window, &st) != 0)
+        return false;
+    return (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
 }
 
 uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
@@ -219,6 +244,17 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
     // at 16 — the SMP_MAGIC_NUMBER lesson, made structural.
     if (budget_ms > used)
         os64_sleep(budget_ms - used);
+
+    // Nobody watching? Then nobody is owed a frame. Nap until that changes,
+    // and hand back a dt that pretends the pause never happened (draw.h).
+    if (bound_window_covered(clock))
+    {
+        do
+            os64_sleep(COVERED_NAP_MS);
+        while (bound_window_covered(clock));
+        clock->last_ms = now_ms();
+        return budget_ms > 0 ? budget_ms : 1;
+    }
 
     now = now_ms();
     uint64_t dt = now - clock->last_ms;

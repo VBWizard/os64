@@ -98,6 +98,7 @@ int main(int argc, char **argv)
 
 	os64_frame_clock_t clock;
 	os64_frame_clock_init(&clock);
+	os64_frame_clock_bind(&clock, win);   // sleep while nobody can see the orbit
 	uint64_t elapsed_ms = STEP_MS;
 	uint64_t accumulated_ms = 0;
 	bool running = true;

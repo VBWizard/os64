@@ -428,7 +428,8 @@ int64_t gui_window_get_state(int64_t handle, os64_gui_window_state_t *out)
 	                            GUI_WINDOW_PINNED |
 	                            GUI_WINDOW_DESKTOP |   // the band is state too (Codex #31 rd3): without it a saved-and-recreated desktop came back an ordinary window
 	                            GUI_WINDOW_MAXIMIZED |
-	                            GUI_WINDOW_MINIMIZED);
+	                            GUI_WINDOW_MINIMIZED |
+	                            GUI_WINDOW_COVERED);   // can anyone see me? — the frame clock's question
 	spinlock_release_irqrestore(&kGuiLock, irqflags);
 	return 0;
 }

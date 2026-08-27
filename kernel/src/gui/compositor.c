@@ -1371,6 +1371,14 @@ bool guicomp_thread(bool daemon)
 			                               (int32_t)kBackbuffer.height});
 		}
 
+		// The window manager has had its say for this frame — raises, moves,
+		// minimizes, a VT switch — so this is the moment the answer to "can
+		// anyone see window W?" is settled. Tell the clients whose answer
+		// changed (window.c). Every frame, not only damaged ones: a client's
+		// own create or destroy arrives as damage anyway, and the walk costs
+		// less than one damage rect's composite.
+		wm_cover_sweep_locked();
+
 		// Take the whole damage list in one hold and reset it, so clients
 		// publishing during this frame's flush accumulate into the NEXT
 		// frame instead of racing the one being drawn.
