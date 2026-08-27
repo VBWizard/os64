@@ -26,6 +26,22 @@ The rules that fall out of it, each earned by a round of review:
 4. **After a merge forward, re-read what came across.** A parent's true claim about a thing the child changed is the classic (the capacity rule was exact on libimage and wrong on desktop-shell).
 5. **Run the tool.** `tools/stale_refs.sh` is the MECHANICAL half of the test: before every commit that deletes, renames or moves anything, it lists every retired name that survives only in prose, hit by hit, and every ADDED comment carrying a rule-2 word. Six of the seventeen comment findings were retired names in files the diff never touched — the old wake helper in two docs, the deleted `gui/desktop.c` in five headers, `gui_startup` in `conf.c` — every one a two-second grep nobody ran. Read every line it prints; history may name the dead, but on purpose. What it cannot catch is a REASON that went stale while staying grammatical ("the kernel walks the ladder for its own readers" — after the last reader left). That half is still yours, and rule 0 is how you find it: is this still true, and is it still the WHOLE truth?
 
+**WHAT IS A REPORTABLE FINDING (review scope).** Everything above is an
+AUTHORING rule: it binds whoever changes the code, and the author is expected
+to have applied it before submitting. A review round is metered, and it buys
+hazard-hunting. So when you are REVIEWING rather than authoring:
+
+- **File it** when a comment or a name states something FALSE about the code
+  it describes — and rank it as the hazard it hides, not as a comment. Every
+  receipt above is this kind: a comment that lies about locking is a locking
+  finding.
+- **Do not file it** when the entire fix is text — wording, tone,
+  completeness, a missing cross-reference, prose in a .md file, or a true
+  comment that could be clearer or could "also mention" something.
+
+The test: what breaks if a reader believes this? If the answer is nothing, it
+is not a finding.
+
 ### Regression-First Debugging
 IMPORTANT: When a new crash, hang, fault, or behavioral regression appears after recent edits, first assume the most recent relevant change may have caused it.
 

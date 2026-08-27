@@ -46,9 +46,42 @@ static uint32_t s_next_id = 1;
 static uint64_t s_focus_serial = 0;
 static void focus_window(window_t *w)
 {
+	window_t *old = s_focused;
 	s_focused = w;
 	if (w)
 		w->focusSerial = ++s_focus_serial;
+
+	// Tell both ends (INPUT_EVENT_WINDOW_FOCUS, input.h). Every focus change
+	// passes through here — birth, death, raise — which is why the event is
+	// raised here and not at the three callers: a popup menu must learn that
+	// a NEW window stole its focus just as surely as that a click did. The
+	// sibling bit is the same-owner test; `w` may be NULL when the last
+	// window dies. wm_deliver_event's wake is legal from a client syscall
+	// (create/destroy) as well as the compositor: it is the public wake
+	// variant, the one pipe_read uses from thread context.
+	if (old == w)
+		return;
+	// 0 is the not-a-task sentinel, never a real owner, so two windows
+	// carrying it are strangers rather than siblings — otherwise a popup
+	// would decline to dismiss for a window that belongs to nobody.
+	bool sibling = (old != NULL && w != NULL &&
+	                old->owner != 0 && old->owner == w->owner);
+	if (old != NULL) {
+		input_event_t ev = {
+			.type  = INPUT_EVENT_WINDOW_FOCUS,
+			.focus = { .gained = 0, .sibling = sibling ? 1 : 0 },
+			.tick  = kTicksSinceStart,
+		};
+		wm_deliver_event(old, &ev);
+	}
+	if (w != NULL) {
+		input_event_t ev = {
+			.type  = INPUT_EVENT_WINDOW_FOCUS,
+			.focus = { .gained = 1, .sibling = sibling ? 1 : 0 },
+			.tick  = kTicksSinceStart,
+		};
+		wm_deliver_event(w, &ev);
+	}
 }
 
 static void unlink_window(window_t *w)
@@ -116,7 +149,7 @@ static bool at_band_top(const window_t *w)
 	return w->above == NULL || band_of(w->above) > band_of(w);
 }
 
-window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
+window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner)
 {
 	// Content = frame minus chrome; refuse degenerate sizes rather than
 	// letting a 0-wide surface ripple NULLs through the compositor.
@@ -129,6 +162,7 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 	if (!w)
 		return NULL;
 	memset(w, 0, sizeof(window_t));
+	w->owner = owner;   // before the focus grab below, which reports siblings by it
 
 	// Both stores are reserved at CAPACITY and report the content size — the
 	// reservation that makes resize free of allocation, of pixel motion, and
@@ -160,6 +194,10 @@ window_t *wm_create(const char *title, rect_t frame, uint32_t flags)
 
 	w->id = s_next_id++;
 	w->flags = flags;
+	// Latched from the CREATION flags so a later chord cannot change it —
+	// see GUI_WINDOW_POPUP.
+	if ((flags & GUI_WINDOW_NO_DECORATIONS) && (flags & GUI_WINDOW_PINNED))
+		w->flags |= GUI_WINDOW_POPUP;
 	w->frame = frame;
 	strncpy(w->title, title ? title : "", GUI_WINDOW_TITLE_MAX);
 	w->title[GUI_WINDOW_TITLE_MAX - 1] = '\0';
@@ -260,6 +298,23 @@ static bool desktop_declines(const window_t *w, const char *verb)
 	return true;
 }
 
+// A POPUP DECLINES THE CHROME VERBS, at the same door and for the same
+// reason. What a popup is, and why it is a latched bit, is
+// GUI_WINDOW_POPUP's comment in window.h.
+//
+// MAXIMIZE is the hazard: a full-screen menu cannot dismiss itself, because
+// dismissal is focus-loss and nothing else is left to click. DECORATE shifts
+// the frame out from under the geometry the program placed itself by;
+// MINIMIZE hides a window whose program goes on polling it. Move and resize
+// are deliberately NOT here — they leave a popup usable, just misplaced.
+static bool popup_declines(const window_t *w, const char *verb)
+{
+	if (!(w->flags & GUI_WINDOW_POPUP))
+		return false;
+	printd(DEBUG_GUI, "wm: %s declined — window %u is a popup\n", verb, w->id);
+	return true;
+}
+
 void wm_set_pinned(window_t *w, bool pinned)
 {
 	if (desktop_declines(w, "pin"))
@@ -289,7 +344,7 @@ void wm_set_decorated(window_t *w, bool decorated)
 	// the bit directly, and the toggle really did paint a "desktop" titlebar
 	// across the wallpaper that doubled as a drag handle — Fable's review,
 	// 2026-08-25. The decline predates the fix that made it cosmetic.)
-	if (desktop_declines(w, "decorate"))
+	if (desktop_declines(w, "decorate") || popup_declines(w, "decorate"))
 		return;
 	if (decorated == !(w->flags & GUI_WINDOW_NO_DECORATIONS))
 		return;
@@ -312,7 +367,7 @@ void wm_set_maximized(window_t *w, bool maximized)
 	// A desktop already fills the screen; "maximize" would be a no-op that
 	// still clobbered restoreFrame, and un-maximizing would then shrink your
 	// desktop to a window.
-	if (desktop_declines(w, "maximize"))
+	if (desktop_declines(w, "maximize") || popup_declines(w, "maximize"))
 		return;
 	if (maximized == ((w->flags & GUI_WINDOW_MAXIMIZED) != 0))
 		return;
@@ -334,7 +389,7 @@ void wm_set_minimized(window_t *w, bool minimized)
 {
 	// And there would be no way back: the desktop is skipped by Alt+Tab,
 	// which is the only route a minimized window has home.
-	if (desktop_declines(w, "minimize"))
+	if (desktop_declines(w, "minimize") || popup_declines(w, "minimize"))
 		return;
 	if (minimized == wm_is_hidden(w))
 		return;
@@ -583,14 +638,39 @@ size_t wm_recency_ids(uint32_t *ids, size_t max)
 void wm_deliver_event(window_t *w, const input_event_t *ev)
 {
 	uint32_t next = (w->evt_head + 1) % GUI_WINDOW_EVENTS_MAX;
-	if (next == w->evt_tail)
-		return;   // queue full: drop-newest, same policy as the input ring
+	if (next == w->evt_tail) {
+		// FULL. Drop-newest is right for a stream — an unread mouse move is
+		// a sample nobody misses — and wrong for a focus transition, which
+		// is state the client cannot reconstruct and which a popup's whole
+		// dismissal hangs on: lose it and the menu stays up, pinned, with
+		// nothing left to take it down.
+		//
+		// So focus takes the OLDEST slot instead. Advancing the tail is what
+		// a reader does, so the arithmetic is untouched and no state lives
+		// outside the ring.
+		//
+		// What LEAVES is whatever is oldest, and it is worth being honest
+		// about the cost: usually a mouse move, but it can be anything the
+		// client has not read — an evicted WINDOW_CLOSE makes a polite
+		// Alt+F4 do nothing, and turns the user's second one into the
+		// SIGTERM escalation. That trade is deliberate, and only reachable
+		// by a client that has let its queue fill. (An older FOCUS event is
+		// the one eviction that costs nothing: the newer one is the
+		// transition that still holds.)
+		if (ev->type != INPUT_EVENT_WINDOW_FOCUS)
+			return;
+		w->evt_tail = (w->evt_tail + 1) % GUI_WINDOW_EVENTS_MAX;
+		printd(DEBUG_GUI, "wm: window %u queue full — oldest event evicted to deliver a focus change\n",
+		       w->id);
+	}
 	w->events[w->evt_head] = *ev;
 	w->evt_head = next;
 
-	// Aim a wake at a parked event_wait-er. Runs in the COMPOSITOR's thread
-	// context under kGuiLock (never an ISR — invariant 4 holds), and the
-	// wake takes only the scheduler queue lock inside, no trigger: the
+	// Aim a wake at a parked event_wait-er. Runs in THREAD context under
+	// kGuiLock — the compositor's thread, or a client's own thread inside a
+	// create/destroy syscall, since the birth and death focus grabs deliver
+	// from there. Never an ISR under either, which is what invariant 4 needs.
+	// The wake takes only the scheduler queue lock inside, no trigger: the
 	// woken thread runs on the next scheduler pass, which is the latency
 	// the design already accepted. A waiter still mid-park is deliberately
 	// left alone (the wake API's own rule) — its backstop re-runs the drain
