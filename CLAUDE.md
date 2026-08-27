@@ -22,6 +22,50 @@ right. Names count as comments (`oversized` had to become `refuse` the day it
 also meant "unreadable"). Full argument and the receipts: AGENTS.md § The
 Comment Is Part Of The Code.
 
+**AND ITS COUNTERWEIGHT, because the rule above pulls in one direction only:
+a comment says WHY the code exists and HOW it works — NOW.** Every sentence is
+a claim that can go stale, so the way to keep them all true is to write fewer
+of them.
+
+- **WHY and HOW, in the present tense.** When either changes, the comment
+  changes with it, in the same commit. That half is not negotiable — it is
+  the rule above.
+- **Narrative only when the thing is big enough to earn it.** The story of how
+  something came to be is welcome where it explains a design nobody would
+  otherwise credit; it is not the default voice of every block. Otherwise
+  history goes in the COMMIT MESSAGE, where it cannot go stale.
+- **No expiry dates.** "The migration is not finished YET" was written to
+  become false. Name where the state is tracked (DEBTS.md) and keep the tense
+  out of the code.
+- **No inventories.** Counts and pointers to other places — "three sites do
+  this", "the only caller", "both doors", "this runs after X" — go false when
+  the OTHER place changes and nothing touches this line. WHY a guard exists is
+  durable; WHERE its siblings live is not.
+- **Superlatives have a short half-life** (ONLY / EVERY / NEVER / EXACTLY
+  ONE). Before writing one, ask what would make it false.
+- **Run `tools/stale_refs.sh`** before any commit that deletes, renames or
+  moves a name. It is the mechanical half of the test; the semantic half is
+  yours.
+
+**HOW A REVIEW ROUND IS RUN (ruled 2026-08-26, after a morning was spent on
+findings that were all true):** the findings are correct, so the cure is
+upstream of the reviewer, not a filter on it.
+
+- **The truth pass is YOURS, before every submit and before every
+  re-request.** Every comment in the diff, plus every comment the diff makes
+  false elsewhere, re-read against the code: still true, still the WHOLE
+  truth? Take the extra time. A slow submit is cheaper than a review round —
+  Chris has explicitly traded latency for it.
+- **A finding whose entire fix is text does not go to Chris.** Fix it and give
+  it one line in the round summary. He reads the diff when he wants to, and
+  he does.
+- **Done is a rule, not a mood.** Two consecutive rounds with no
+  code-changing finding: it merges.
+- **Match the reviewer to the risk.** An outside review round costs real money
+  and a chunk of Chris's day. It earns that on kernel concurrency, lifetime,
+  and ring-boundary work. Userland apps, GUI, and polish slices get reviewed
+  here and merged.
+
 ## Project Overview
 
 os64 is a 64-bit x86 operating system kernel built for educational purposes. It uses the Limine bootloader protocol and boots on QEMU (or real hardware) in both BIOS and UEFI modes.

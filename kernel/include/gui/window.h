@@ -124,7 +124,32 @@
 // after the window manager has had its say. Published through
 // gui_window_get_state so a client can stop working for an audience of
 // nobody; the COVERED/UNCOVERED events announce each flip.
-#define GUI_WINDOW_COVERED         (1u << 6)
+#define GUI_WINDOW_COVERED         (1u << 7)
+
+// POPUP — DERIVED AT BIRTH, NEVER A CLIENT FLAG. A window created with no
+// chrome AND always-on-top is a menu, a cascade, a tooltip: something that
+// exists only until you look away. wm_create latches the bit; popup_declines
+// (window.c) reads it to refuse the chrome verbs.
+//
+// LATCHED rather than re-read from the live flag word, because a chord can
+// change either half afterwards. Reading them live was wrong in both
+// directions: unpinning a menu cleared the test and handed back the
+// full-screen sheet, and pinning a borderless gterm confiscated its titlebar
+// toggle. What a window IS was settled when it was made.
+#define GUI_WINDOW_POPUP           (1u << 6)
+
+// EVERY FLAG BIT IS UNIQUE, and the build says so. Two slices born on
+// different branches each took bit 6 — POPUP and COVERED — and merged
+// without a textual conflict, so a minimized terminal read as a popup and
+// declined to come back. The ABI asserts pin each side's copy to the
+// other's; this one pins the kernel's flags to EACH OTHER.
+_Static_assert((GUI_WINDOW_NO_DECORATIONS ^ GUI_WINDOW_START_UNFOCUSED ^ GUI_WINDOW_PINNED ^
+                GUI_WINDOW_MAXIMIZED ^ GUI_WINDOW_MINIMIZED ^ GUI_WINDOW_DESKTOP ^
+                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP) ==
+               (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED | GUI_WINDOW_PINNED |
+                GUI_WINDOW_MAXIMIZED | GUI_WINDOW_MINIMIZED | GUI_WINDOW_DESKTOP |
+                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP),
+               "two window flags share a bit");
 
 // Alt+F4 twice within this long (5s) on a window that did not go away is
 // "I mean it": the owner task gets SIGTERM.
@@ -169,14 +194,16 @@ typedef struct window
     uint64_t  closeAskedTick;
 
     // The task that created this window through the client API (task.h
-    // taskID), stamped by gui_window_create. Ownership is a CLIENT-API
-    // concept: gui_client.c enforces it on every handle lookup and
-    // gui_task_destroy_windows sweeps by it on task exit — the wm_* layer
-    // never reads it (mechanism here, policy at the boundary). A
-    // kernel-thread owner would own its window the same way and simply
-    // never exit — guicomp's hello window and the console window did, until
-    // both were retired (2026-08-19, 2026-08-25); nothing in ring 0 owns a
-    // window today, and the demo kernel threads that could are not spawned.
+    // taskID), or 0 for a window no task is behind. Stamped by wm_create
+    // from the value the client call hands it, because the birth focus grab
+    // inside needs it — see wm_create's comment below.
+    //
+    // What ownership MEANS is a client-API concept: gui_client.c enforces it
+    // on every handle lookup, and gui_task_destroy_windows sweeps by it on
+    // task exit. The wm_ layer reads it too, for the sibling bit —
+    // focus_window asks whether the window that just took the focus belongs
+    // to the same task as the one losing it. A kernel thread can own a
+    // window the same way, and simply never exits to trigger the sweep.
     uint64_t  owner;
 
     char      title[GUI_WINDOW_TITLE_MAX];
@@ -220,7 +247,9 @@ typedef struct window
     uint32_t  canvas_cap_w, canvas_cap_h;
 
     // Per-window event queue: the compositor pushes routed events, the
-    // owning app thread pops them via gui_event_poll(). Drop-newest on full.
+    // owning app thread pops them via gui_event_poll(). Drop-newest on full,
+    // except a focus transition, which evicts the oldest to get in
+    // (wm_deliver_event says why).
     input_event_t events[GUI_WINDOW_EVENTS_MAX];
     uint32_t  evt_head, evt_tail;
 
@@ -239,13 +268,22 @@ typedef struct window
 // Create a window whose FRAME is `frame` (content is automatically inset by
 // the chrome), put it on top, focus it, and damage it. Returns NULL if the
 // content surface can't be allocated.
-window_t *wm_create(const char *title, rect_t frame, uint32_t flags);
+// `owner` is recorded BEFORE the birth focus grab, because that grab tells
+// the window losing focus whether the newcomer is a sibling of its own
+// (INPUT_EVENT_WINDOW_FOCUS's sibling bit) — a cascade's child born with
+// owner 0 read as a stranger and dismissed the menu that opened it. The wm_
+// layer records the value and compares it for that bit; what ownership MEANS
+// — who may look a handle up, whose exit collects the window — is
+// gui_client's.
+window_t *wm_create(const char *title, rect_t frame, uint32_t flags, uint64_t owner);
 
 // Unlink + free. (No owner-notification semantics yet — the caller is the
 // owner.) Damages the vacated area.
 void wm_destroy(window_t *w);
 
-// Topmost window whose frame contains the point, or NULL for the desktop.
+// Topmost unhidden window whose frame contains the point, or NULL if none
+// does. The desktop shell's window is a window like any other, so while it
+// runs a click on bare wallpaper answers with ITS window, not with NULL.
 window_t *wm_topmost_at(int32_t x, int32_t y);
 
 // Bring to front and focus (damages both titlebars when focus moves).

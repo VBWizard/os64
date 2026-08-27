@@ -935,6 +935,18 @@ static inline bool wm_chord_held(const input_event_t *ev)
 	return (ev->mouse.modifiers & both) == both;
 }
 
+// Report a chord's OUTCOME, not its intent. The wm_ setters are free to
+// decline — a desktop, a popup — and a line printed BEFORE the call claimed
+// a change that never happened, leaving "window 2 maximized" sitting
+// directly above "maximize declined". Nothing is logged when nothing moved.
+static void chord_report(const window_t *w, uint32_t bit, bool before,
+                         const char *on, const char *off)
+{
+	bool now = (w->flags & bit) != 0;
+	if (now != before)
+		printd(DEBUG_GUI, "guicomp: window %u %s\n", w->id, now ? on : off);
+}
+
 static void route_event_locked(const input_event_t *ev)
 {
 	// THE INPUT FORK (2026-08-21). Mouse events belong to whoever holds the
@@ -988,7 +1000,10 @@ static void route_event_locked(const input_event_t *ev)
 
 		window_t *w = wm_topmost_at(ev->mouse.x, ev->mouse.y);
 		if (!w)
-			break;   // desktop click: nothing to do (yet)
+			break;   // no window contains this point, so there is nothing to
+			         // raise and nobody to deliver to. While the desktop
+			         // shell runs, ITS window answers for bare wallpaper —
+			         // this is the case where the glass is truly empty.
 		// The modifiers are logged because a chord that does not fire looks
 		// exactly like a chord that was never held — this line is the
 		// difference between those two, and it costs one printd per click.
@@ -1042,10 +1057,11 @@ static void route_event_locked(const input_event_t *ev)
 			if (w->id == s_titlebar_click_window &&
 			    ev->tick - s_titlebar_click_tick <= DOUBLE_CLICK_TICKS) {
 				s_titlebar_click_window = 0;   // a third click starts over
-				bool max = !(w->flags & GUI_WINDOW_MAXIMIZED);
-				printd(DEBUG_GUI, "guicomp: titlebar double-click: window %u %s\n",
-					w->id, max ? "maximized" : "restored");
-				wm_set_maximized(w, max);
+				bool was = (w->flags & GUI_WINDOW_MAXIMIZED) != 0;
+				wm_set_maximized(w, !was);
+				if (((w->flags & GUI_WINDOW_MAXIMIZED) != 0) != was)
+					printd(DEBUG_GUI, "guicomp: titlebar double-click: window %u %s\n",
+						w->id, was ? "restored" : "maximized");
 				break;
 			}
 			s_titlebar_click_window = w->id;
@@ -1239,28 +1255,31 @@ static void route_event_locked(const input_event_t *ev)
 			if (focus && ev->type == INPUT_EVENT_KEY_DOWN) {
 				switch (ev->key.ascii) {
 				case 0x10: {   // Ctrl+Alt+P: pin on top (toggle)
-					bool pin = !(focus->flags & GUI_WINDOW_PINNED);
-					printd(DEBUG_GUI, "guicomp: window %u %s\n", focus->id, pin ? "pinned" : "unpinned");
-					wm_set_pinned(focus, pin);
+					bool was = (focus->flags & GUI_WINDOW_PINNED) != 0;
+					wm_set_pinned(focus, !was);
+					chord_report(focus, GUI_WINDOW_PINNED, was, "pinned", "unpinned");
 					break;
 				}
 				case 0x0D: {   // Ctrl+Alt+M: maximize (toggle) — 0x0D is Ctrl+M, a CR by 1963's table
-					bool max = !(focus->flags & GUI_WINDOW_MAXIMIZED);
-					printd(DEBUG_GUI, "guicomp: window %u %s\n", focus->id, max ? "maximized" : "restored");
-					wm_set_maximized(focus, max);
+					bool was = (focus->flags & GUI_WINDOW_MAXIMIZED) != 0;
+					wm_set_maximized(focus, !was);
+					chord_report(focus, GUI_WINDOW_MAXIMIZED, was, "maximized", "restored");
 					break;
 				}
 				// Ctrl+Alt+N: minimize. Alt+Tab brings it back — it shows in
 				// the switcher strip as a dim row, and returns only if the
 				// hold ENDS on it (walking past leaves it hidden).
-				case 0x0E:
-					printd(DEBUG_GUI, "guicomp: window %u minimized\n", focus->id);
+				case 0x0E: {
+					bool was = wm_is_hidden(focus);
 					wm_set_minimized(focus, true);
+					chord_report(focus, GUI_WINDOW_MINIMIZED, was, "minimized", "restored");
 					break;
+				}
 				case 0x14: {   // Ctrl+Alt+T: titlebar (toggle)
-					bool show = (focus->flags & GUI_WINDOW_NO_DECORATIONS) != 0;
-					printd(DEBUG_GUI, "guicomp: window %u titlebar %s\n", focus->id, show ? "shown" : "hidden");
-					wm_set_decorated(focus, show);
+					bool was = (focus->flags & GUI_WINDOW_NO_DECORATIONS) != 0;
+					wm_set_decorated(focus, was);
+					chord_report(focus, GUI_WINDOW_NO_DECORATIONS, was,
+					             "titlebar hidden", "titlebar shown");
 					break;
 				}
 				default:

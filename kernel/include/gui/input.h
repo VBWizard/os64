@@ -40,6 +40,16 @@ typedef enum input_event_type
     // request is ignored is escalate (Alt+F4 again = SIGTERM to the owner),
     // which is the app's business to avoid by answering the first one.
     INPUT_EVENT_WINDOW_CLOSE,
+    // Synthesized (2026-08-25, the root-menu slice): keyboard focus arrived
+    // at, or left, this window. GRAPHICS.md § Event delivery had already
+    // filed "focus" under events — a fact about a WINDOW, told to the app
+    // that owns it. The first customer is a popup menu, which must vanish
+    // the moment you click somewhere else, and "somewhere else" is exactly
+    // a focus change it cannot otherwise see. `focus.sibling` says whether
+    // the other party belongs to the SAME task: a cascade's child taking
+    // focus from its parent is not "somewhere else", and without that bit
+    // every submenu click would dismiss the menu that opened it.
+    INPUT_EVENT_WINDOW_FOCUS,
     // Synthesized by wm_cover_sweep_locked when a window's COVERED flag
     // flips. The flag is the state; these only say it changed.
     INPUT_EVENT_WINDOW_COVERED,
@@ -48,6 +58,7 @@ typedef enum input_event_type
 
 _Static_assert(INPUT_EVENT_WINDOW_RESIZE    == OS64_GUI_EVENT_WINDOW_RESIZE,    "event ABI: resize");
 _Static_assert(INPUT_EVENT_WINDOW_CLOSE     == OS64_GUI_EVENT_WINDOW_CLOSE,     "event ABI: close");
+_Static_assert(INPUT_EVENT_WINDOW_FOCUS     == OS64_GUI_EVENT_WINDOW_FOCUS,     "event ABI: focus");
 _Static_assert(INPUT_EVENT_WINDOW_COVERED   == OS64_GUI_EVENT_WINDOW_COVERED,   "event ABI: covered");
 _Static_assert(INPUT_EVENT_WINDOW_UNCOVERED == OS64_GUI_EVENT_WINDOW_UNCOVERED, "event ABI: uncovered");
 
@@ -91,6 +102,10 @@ typedef struct input_event
         struct {
             int32_t w, h;       // the NEW content size, in pixels
         } resize;
+        struct {
+            uint8_t gained;     // 1 = focus arrived here, 0 = it left
+            uint8_t sibling;    // 1 = the other window is owned by the same task
+        } focus;
     };
     uint64_t tick;  // kTicksSinceStart at enqueue, for input latency debugging
 } input_event_t;

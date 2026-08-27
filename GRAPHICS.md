@@ -379,7 +379,9 @@ customer was corrected the day this rule was written.
 
 - Queues stay per-window (`GUI_WINDOW_EVENTS_MAX 64`, drop-newest on full —
   apps must drain; mouse coords stay CONTENT-local, translated by the
-  compositor at routing time).
+  compositor at routing time). **A focus transition is the one event that is
+  never dropped**: it evicts the oldest entry instead, because a client
+  cannot reconstruct it and a popup's dismissal hangs on it (Codex #34).
 - `gui_event_poll` (20) is the v1 interface: non-blocking, pairs with the
   app's own frame pacing.
 - `gui_event_wait` (22) blocks the calling thread (ISLEEP) until an event
@@ -753,6 +755,17 @@ Three things learned building them, for the next chord:
   review, 2026-08-25: without that, Ctrl+Alt+drag on the wallpaper moved the
   desktop, and the title toggle painted a titlebar across it).
 
+The same door turns away one more class. A **popup** — created with no chrome
+AND always-on-top, which is what a menu or a cascade is — declines maximize,
+decorate and minimize (`popup_declines`, window.c). A maximized menu cannot
+dismiss itself: dismissal is focus-loss, and a window filling the screen
+leaves nothing else to click. Move and resize are deliberately left alone,
+because they leave a popup usable, only misplaced. The property is LATCHED at
+create (`GUI_WINDOW_POPUP`), never re-read from the live flag word: a chord
+can unpin a menu or pin a borderless gterm, and neither should change what the
+window IS — reading it live let the first walk around the guard and stole the
+titlebar toggle from the second.
+
 The harness grew to test these: `utility/gui_run.sh` drives a headless
 GUI boot from a key script, and speaks **QMP** (`-qmp unix:`) for raw
 key-down/key-up and button events — HMP `sendkey` cannot hold Alt across
@@ -924,6 +937,114 @@ appears in the strip.)*
 Zero panics across the runs; `grep alt-tab` on the serial log reads
 step/step/ended and step/cancelled as designed.
 
+## The root menu — the first launcher (built 2026-08-25)
+
+*Why this exists, in Chris's words the night it was designed: "one of the
+things I loved about Linux was all of the configuration the WMs had. To me
+a desktop is supposed to be configurable — whatever the user wants it to
+be. So we're making our own." GNOME 2's panels and menus lived in text
+files; GNOME 3 took them away "for the masses"; Mint's Cinnamon put them
+back. This is the os64 desktop taking GNOME 2's side, one program at a
+time.*
+
+### The ruling that shaped it
+
+**The launcher is not a feature of the desktop. It is another thing
+`gui.conf` starts.** A root menu today, a dock tomorrow, both the day
+after — each is a separate ring-3 program, and adding one is a line in
+`gui.conf`, not code in `/bin/desktop` or the compositor. That sentence is
+the TEST of the design: if a dock ever needs the desktop shell changed, the
+design has failed.
+
+So the pieces are:
+
+- **`gui.conf: launcher = [left|right|middle] <program>`** — what a click
+  on BARE WALLPAPER runs, per button. `/bin/desktop` spawns it as
+  `<program> x y` (screen coordinates — on a desktop window content and
+  screen coincide) and goes back to being wallpaper. It draws nothing and
+  knows nothing about menus. Default button: right.
+- **`/bin/grootmenu`** (Chris named it) — the root menu, twm's `defops`
+  from 1987: a transient program that opens at the click, shows the menu
+  named `root`, spawns what you chose and exits. The chosen program is
+  orphaned on purpose: the kernel re-parents it to ktask with `autoReap`,
+  so a menu that exits does not leave a zombie or a waiter.
+- **`menu.conf`, read by libos64 (`os64/menu.h`)** — ONE grammar for
+  EVERY launcher. `menu <name> { item "Label" <command> | separator |
+  menu "Label" { … } | menu "Label" <name> }` — named menus, inline
+  cascades, cascades by reference (twm's `f.menu`). The parser lives in
+  the library precisely so a dock reads the identical file: two launchers
+  drifting on what a label is would fail the ruling above. Keywords fold
+  case; labels, names and commands are data, verbatim. Found through the
+  config ladder, first hit wins (a settings file, not a database).
+- **Colours come from `theme.conf`** (`menu.bg`, `menu.fg`, `menu.hi.bg`,
+  `menu.hi.fg`, `menu.sep`) through the same theme table
+  every widget uses — a program must not own its own look.
+
+### What the slice needed from the kernel: a focus EVENT
+
+A popup must vanish when you click anywhere else — and there is no "click
+outside" event, nor should there be: that click landed on somebody else's
+window and is theirs. What a menu CAN know is that it lost focus. So the
+compositor now delivers **`OS64_GUI_EVENT_WINDOW_FOCUS`** (`focus.gained`
+0/1) to both ends of every focus change — birth, death, raise — raised from
+the one function all three pass through (`focus_window`, window.c). The
+event-delivery rule above predicted it: focus is a fact about a WINDOW.
+
+**The `sibling` bit is the part that makes cascades possible.** A submenu
+is a second window of the same task; when it is born it takes focus, and
+its parent would otherwise read that as "the user went elsewhere" and
+dismiss the whole menu. `focus.sibling` = 1 says the other party is owned
+by the same task — computed from `window_t.owner`, which is why `wm_create`
+now takes the owner as a parameter: the first build stamped it AFTER the
+birth focus grab, the newborn read as owner 0, and hovering "Demos" closed
+the menu. Found on the second screendump, fixed at the source.
+
+### Cascades, and what a menu is made of
+
+Every open level is a window: `PINNED` (a menu is never under anything),
+`NO_DECORATIONS`, one pixel of border from the WM. Hovering a cascade row
+opens the child beside it (overlapping the parent by 3px, slid on-screen
+if it would run off — every menu since the Lisa); hovering a different row
+closes it; up to 8 levels open at once (a cascade below that does not
+open — `MENU_DEPTH_MAX`, a fence nobody's menu should reach).
+The program polls every level's queue at frame cadence rather than blocking
+on one window, because the pointer wanders between them and `event_wait`
+watches one handle.
+
+Deliberately NOT in v1, each with its trigger: keyboard navigation
+(arrows/Enter — wants the arrow-key dialect handling gterm has); a menu
+ITEM that opens a named menu in a new root (twm's `f.menu` at top level —
+wait for the dock, which is that); icons; a "tear-off" (Motif, 1989).
+
+### What the first morning's drive changed (Chris on the P5, 2026-08-26)
+
+- **A mistyped `launcher =` gave no feedback.** The desktop complained —
+  to a stderr that on a GUI boot is a console nobody watches. Every
+  desktop complaint now ALSO goes to the kernel log (`os64_complain()` in
+  libos64: stderr + `os64_debug_log`, and the root menu uses it for the same
+  reason — a launcher the desktop starts inherits the desktop's blind
+  stderr), and a launcher path is OPENED as
+  the file is read, so "cannot be opened" is said at startup, by name,
+  with the line's form — not discovered as a click that does nothing.
+- **A console program from a menu has nowhere to appear.** `hexedit`
+  ran, printed to nowhere, exited. Chris's shape: **`gterm <program>
+  [args]` seats that program instead of husk** (full path — no shell in
+  the chain to search PATH), the window wears its name, and closes when it
+  exits. `item "Top" /bin/gterm /bin/top` — verified: a window titled
+  `top` with top in it.
+- **It exits, and that is right.** "I thought it might stay loaded. But it
+  doesn't need to — everything is in the config." A 30KB ELF against a
+  resident libos64 costs less to start than it would to keep around.
+
+### Verification (2026-08-25, QMP-driven, headless)
+
+Right-click bare wallpaper → menu at the click, separators and cascade
+arrows drawn; hover "Demos" → cascade beside it with the row highlighted;
+click "Bounce" → gbounce appears, menu gone; open, left-click elsewhere →
+gone (focus-lost); open, Escape → gone; open, click "Terminal" → gterm.
+The lesson for the next driver: QEMU's monitor `mouse_button` bitmask is
+1=left, 2=right, 4=middle.
+
 ## Testing / debugging
 
 - `DEBUG_GUI` (CONFIG.h bit 21; also a cmdline token) gates all GUI printd's:
@@ -950,12 +1071,13 @@ step/step/ended and step/cancelled as designed.
    ~~minimize, `GUI_WINDOW_NO_DECORATIONS` honor~~ **BUILT 2026-08-23 (the
    chords chapter above)**. Still open: close buttons (and any titlebar
    button at all — the chords were chosen so none is needed yet), a
-   launcher/taskbar (Alt+Tab is the only way back from minimize), and
+   taskbar/dock (Alt+Tab is the only way back from minimize — ~~launcher~~
+   **the root menu is BUILT 2026-08-25, see its chapter above; a dock is
+   another `gui.conf` line away by design**), and
    re-reading `desktop.conf` without a reboot — **which is a much smaller job
    now that the reader is `/bin/desktop`**: re-reading a config and
    repainting is an ordinary thing for a program to do, where it used to mean
-   the compositor re-entering the VFS. Same for the launcher, which now has a
-   window to live on.
+   the compositor re-entering the VFS.
 6. Mouse wheel + 5-button (IntelliMouse magic sample-rate handshake).
 7. Alpha translucency (X byte in XRGB is reserved for it; `surface_blit_masked`
    already does shaped blits).
