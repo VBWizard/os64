@@ -19,14 +19,17 @@
 //   5. the needle moves  -> map a region, TOUCH every page (demand paging:
 //                           untouched pages cost nothing, so touching is the
 //                           allocation), re-query: free fell, used rose, and
-//                           the books STILL balance mid-flight
+//                           the books STILL balance mid-flight (retried up
+//                           to five times — the needle is system-wide and
+//                           a neighbour's burial can swing it the other way)
 //   6. and moves back    -> unmap; free recovers past its touched low-water
 //                           mark, books balance a third time
 //
-// Step 5/6 direction checks are safe on the quiet post-boot suite: for the
-// deltas to be invisible, something else would have to free >=256KB in the
-// microseconds between two syscalls. The balance check needs no such luck —
-// it holds at every instant or the kernel is wrong.
+// The step 5/6 direction checks are about a SYSTEM-WIDE needle, and the
+// suite is not as quiet as it looks: the fixture before this one is being
+// buried while this one runs, and a burial can free more than 256KB between
+// two syscalls. That is why step 5 retries. The balance check needs no such
+// allowance — it holds at every instant or the kernel is wrong.
 
 #include <stdint.h>
 #include "os64/syscall.h"
@@ -42,7 +45,7 @@
 #define FAIL_BOOKS_1        0xF3EE0006UL   // free + used != usable (at rest)
 #define FAIL_CONTRACT       0xF3EE0007UL   // available != free + reclaimable
 #define FAIL_MAP            0xF3EE0008UL   // couldn't map the probe region
-#define FAIL_NEEDLE_STUCK   0xF3EE0009UL   // touched 256KB, numbers didn't move
+#define FAIL_NEEDLE_STUCK   0xF3EE0009UL   // touched 256KB five times, numbers never moved right
 #define FAIL_BOOKS_2        0xF3EE000AUL   // books unbalanced mid-allocation
 #define FAIL_UNMAP          0xF3EE000BUL   // unmap of the probe region failed
 #define FAIL_NO_RECOVERY    0xF3EE000CUL   // free never recovered post-unmap
@@ -94,18 +97,35 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
         exit_with(FAIL_CONTRACT);
 
     // 5. Consume real pages and watch the needle move the right way.
+    //
+    // The needle is SYSTEM-WIDE, and nothing holds the rest of the system
+    // still between the two snapshots: the previous fixture's burial can
+    // hand back more than the probe's 256KB in that window, and the needle
+    // then moves the wrong way for a reason that is not this syscall's.
+    // So the snapshot pair is retried, each time with a fresh region, and
+    // only a needle that never moves right in several tries is stuck.
     uint64_t probe_bytes = PROBE_PAGES * m1.page_size;
-    uint64_t base = os64_syscall1(SYSCALL_MAP, probe_bytes);
-    if (failed(base) || base == 0)
-        exit_with(FAIL_MAP);
-    volatile uint8_t *probe = (volatile uint8_t *)base;
-    for (uint64_t pg = 0; pg < PROBE_PAGES; pg++)
-        probe[pg * m1.page_size] = 0x64;   // one touch per page = one fault = one real page
-
+    uint64_t base = 0;
     os64_memory_t m2;
-    if (failed(read_memory(&m2)))
-        exit_with(FAIL_CALL);
-    if (m2.free >= m1.free || m2.used <= m1.used)
+    int moved = 0;
+    for (int attempt = 0; attempt < 5 && !moved; attempt++)
+    {
+        if (base != 0 && failed(os64_syscall1(SYSCALL_UNMAP, base)))
+            exit_with(FAIL_UNMAP);
+        if (failed(read_memory(&m1)))
+            exit_with(FAIL_CALL);
+        base = os64_syscall1(SYSCALL_MAP, probe_bytes);
+        if (failed(base) || base == 0)
+            exit_with(FAIL_MAP);
+        volatile uint8_t *probe = (volatile uint8_t *)base;
+        for (uint64_t pg = 0; pg < PROBE_PAGES; pg++)
+            probe[pg * m1.page_size] = 0x64;   // one touch per page = one fault = one real page
+
+        if (failed(read_memory(&m2)))
+            exit_with(FAIL_CALL);
+        moved = (m2.free < m1.free && m2.used > m1.used);
+    }
+    if (!moved)
         exit_with(FAIL_NEEDLE_STUCK);
     if (m2.free + m2.used != m2.usable)
         exit_with(FAIL_BOOKS_2);

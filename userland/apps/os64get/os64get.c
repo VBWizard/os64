@@ -1059,14 +1059,15 @@ int main(int argc, char **argv)
     bool noArchive = false;
     bool all = false;
     bool force = false;
+    bool flgChangesOnly = false;
     const os64_optspec_t specs[] = {
         {'q', "quiet", false, "no progress, just the exit code", .flag = &quiet},
         {'n', "no-archive", false, "install only; keep no archive copy", .flag = &noArchive},
         {'a', "all", false, "fetch EVERY file the server offers, routing each by the conf", .flag = &all},
         {'f', "force", false, "fetch even files already identical on disk", .flag = &force},
-    };
+        {'c', "changes-only", false, "display only changed files", .flag = &flgChangesOnly}};
 
-    os64_args_init(&args, argc, argv, specs, 4);
+    os64_args_init(&args, argc, argv, specs, 5);
     args.about = "Fetch a file over the network, archive it, and install it only if it is intact.";
     args.details = "DEST defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
                    "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename. "
@@ -1205,7 +1206,7 @@ int main(int argc, char **argv)
                 local_matches(probe, entries[i].length, entries[i].crc))
             {
                 unchanged++;
-                if (!quiet)
+                if (!quiet && !flgChangesOnly)
                     os64_printf("[%ld/%ld] %s — unchanged\n", (long)(i + 1), (long)n, entries[i].name);
                 continue;
             }
