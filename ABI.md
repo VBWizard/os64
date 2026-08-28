@@ -20,7 +20,12 @@ RAX = result
 - **Clobbered for the caller:** RCX, R11 (hardware), plus all C
   caller-saved registers — exactly the set a plain C call clobbers, so a C
   syscall stub needs no special saving. Callee-saved (RBX, RBP, R12-R15)
-  are preserved.
+  are preserved. **An INLINE-ASM stub must SAY so**: the argument registers
+  are in-out operands (`"+D"`, not `"D"`) and RDI/RSI/RDX/R8/R9/R10 are
+  listed as clobbers, because the kernel zeroes them and an input-only
+  constraint promises GCC the opposite. A stub that omits this works at
+  `-O0` and silently breaks at `-O2` (abi/include/os64/syscall.h,
+  2026-08-27 — fpu_demo was the first program built optimized).
 - Interrupts are masked at entry by SFMASK (mandatory — see
   "Interruptibility" below). TODAY they stay masked for the whole syscall;
   that is a bring-up simplification, not the design — the committed design
@@ -297,8 +302,7 @@ die before pages."
 ## Deferred debts (all commented at their sites)
 
 **Interruptible syscall bodies** (the "Interruptibility" section — hard
-gate before `read`, also queued in the roadmap order above); FPU/SIMD
-state in the context switch (until then user builds carry `-mno-sse`); a
+gate before `read`, also queued in the roadmap order above); a
 #DF IST emergency stack (turn stack-death triple faults into panics);
 drop IOPL=3 for ring 3 once fixtures stop using `out`; the page-0/VA-0
 NULL guard (MEMORY.md).

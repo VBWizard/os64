@@ -25,7 +25,7 @@
 #define WIN_H 120u
 
 // Animation state, in MILLI-PIXELS (integer math on purpose: userland builds
-// with -mno-sse, and gbounce's screaming-ball scar taught that speeds are
+// and gbounce's screaming-ball scar taught that speeds are
 // per-SECOND quantities scaled by real dt, never per-frame constants).
 #define SWEEP_SPEED_MPX_PER_MS 80   // 80 px/sec, spelled in mpx/ms
 
@@ -62,6 +62,7 @@ int main(int argc, char **argv)
 	//     elapsed ms, which is what all animation advances by.
 	os64_frame_clock_t tick;
 	os64_frame_clock_init(&tick);
+	os64_frame_clock_bind(&tick, win);   // sleep while nobody can see the sweep
 
 	int32_t sweep_mpx = 0;          // the underline's x, in milli-pixels
 	uint64_t dt = 16;               // last frame's real duration
@@ -79,8 +80,8 @@ int main(int argc, char **argv)
 			if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii == 'q')
 				running = false;
 		}
-		if (rc < 0)
-			break;
+		if (rc < 0 || !running)
+			break;   // q, or the window died: never sleep another frame after the exit was asked for
 
 		// [5] Advance state by REAL time. One add and a wrap — the point is
 		//     the dt-scaling, not the math.

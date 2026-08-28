@@ -351,6 +351,15 @@ int64_t os64_screen_printat(uint32_t x, uint32_t y, const char *s);
 // os64_serial_log below.
 void os64_debug_log(const char *s);
 
+// A COMPLAINT A HUMAN IS MEANT TO FIND: formatted, and sent to stderr AND
+// the kernel log. A GUI program's stderr is the console it was spawned from,
+// which on a GUI boot is a VT nobody is looking at — so a diagnosis printed
+// only there is one nobody reads, and the program looks like it failed for
+// no reason. Reach for this wherever a program refuses, gives up, or hits a
+// ceiling it wants to name. A trailing newline is optional: stderr gets the
+// line as written, the log gets it without one.
+void os64_complain(const char *fmt, ...);
+
 // The beacon: same log line, but ALSO written directly to the serial wire,
 // immediately, no matter who has claimed the log — the same door panic()
 // uses. For the handful of markers a verification harness greps for while

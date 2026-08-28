@@ -232,6 +232,19 @@
         struct task* deadChildTail;
         struct task* deadChildNext;
         bool waitingForChild;
+        // WHICH THREAD IS DOING THE WAITING (2026-08-25). task_wait used to
+        // park — and task_enqueue_dead_child used to wake — `threads`, the
+        // FIRST thread of the task, on the unstated assumption that the
+        // waiter is the main thread. Every waiter was, until the desktop
+        // shell put its reaper on a second thread: that thread's wait
+        // parked the MAIN thread instead and left the reaper spinning in
+        // ring 0 for the shell's whole life (top showed /bin/desktop at 52%
+        // of a core with one gterm child). Set by task_wait to the calling
+        // thread before it parks, cleared when it returns; read by the
+        // dead-child wake under kDeadChildLock, together with the flag
+        // above, so the wake can never target a thread that has already
+        // stopped waiting. One waiter per task, like the flag it travels with.
+        thread_t* waitThread;
         bool autoReap;
         // THE DEATH CERTIFICATE (ruling 2026-08-06: kworker buries only the
         // COLLECTED). Set by whoever consumes the exit status — task_wait /
@@ -365,13 +378,22 @@
 	// taskID (its exit code via *exitCode). targetPid > 0 waits for that
 	// specific child; targetPid == 0 waits for the first of ANY child to end.
 	// Returns immediately if a matching child has already exited; returns 0
-	// if no matching child exists at all.
+	// if no matching child exists at all; returns TASK_WAIT_INTERRUPTED when
+	// the CALLING THREAD has a signal pending that ends a park
+	// (signal_park_must_end — a terminate, or one a handler will catch),
+	// with nothing collected. It is a park like every other blocking call
+	// and answers like one (Codex #32): a shell waiting on a child could not
+	// run its own SIGWINCH handler until the child died, because this wait
+	// re-parked on every wake without asking. The syscall decides what the
+	// answer means — OS64_INTERRUPTED to a caller that will catch, the
+	// default action otherwise — exactly as sleep and the console read do.
 	//
 	// RETURNS AN ID, NOT A POINTER — deliberately (the cleanup notes called
 	// this the day task_destroy was first sketched): collecting marks the
 	// corpse retValCollected, which licenses kworker to FREE it on its next
 	// sweep. A returned pointer would be a dangling invitation; an ID is a
 	// fact that stays true forever.
+	#define TASK_WAIT_INTERRUPTED UINT64_MAX   // no task ever wears this ID
 	uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode);
 	// task_wait's NON-BLOCKING half: collect the next already-dead child of
 	// parentTask and return its taskID (exit code via *exitCode), or 0 if
@@ -388,7 +410,10 @@
 	void* task_alloc_guarded_stack(task_t* task, size_t stackSize, bool isRing3);
 	uintptr_t task_reserve_task_virt(task_t* task, size_t size);
 
-	// OR a signal bit into EVERY thread this task owns.
+	// OR a signal bit into EVERY thread this task owns — unless the signal's
+	// default is IGNORE and the task has no handler for it, in which case
+	// nothing is set anywhere (SIGNALS_DEFAULT_IS_IGNORE: ignore means
+	// consumed at the raise, not left pending; task_signal_is_ignored).
 	//
 	// A signal aimed at a task means the task — all of it. Every delivery
 	// site used to write `task->threads->signals.sigind |= sig`, which was
@@ -398,16 +423,20 @@
 	// (found 2026-08-02, audible as fan noise). The workers were never
 	// ignoring the signal — nobody had told them.
 	//
-	// Safe from IRQ context (Ctrl+C's path): it is a read-only walk of the
-	// taskNext chain plus one OR per thread, and new threads are fully
-	// linked before they are published, so a walker sees either the old
-	// chain or the complete new one.
+	// Safe from IRQ context (Ctrl+C's path): a walk of the taskNext chain
+	// plus one OR per thread, under the task's signalLock (an irqsave
+	// spinlock — publication and consumption claim the same lock so a
+	// consumer's clear cannot race a publisher's set), and new threads are
+	// fully linked before they are published, so a walker sees either the
+	// old chain or the complete new one.
 	void task_signal_all_threads(task_t* task, signals signal);
 	// The same, plus a scheduling IPI to the cores the threads last ran on —
 	// for a sender who is NOT the victim (the hangup sweep, the shutdown
 	// ladder). Without the knock, a thread spinning on a tickless AP would
 	// carry the mark unread. See the comment on the definition.
-	void task_signal_and_nudge(task_t* task, signals signal);
+	// Answers whether the signal was PUBLISHED — false when the task ignores
+	// it (no handler, default IGNORE) and nothing was set or knocked.
+	bool task_signal_and_nudge(task_t* task, signals signal);
 
 	// Bring down every thread of a dying task except the one dying. THE
 	// single control point for "exit means exit" — see the implementation

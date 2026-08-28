@@ -68,6 +68,10 @@ static char *const argv_malloc_stomp[]      = { "/bin/malloctest", "stomp", NULL
 // exits 0x0BAD and the mismatch names the disconnected tripwire.
 static char *const argv_nx_stack[] = { "/bin/nx_test", "stack", NULL };
 static char *const argv_nx_text[]  = { "/bin/nx_test", "text",  NULL };
+static char *const argv_fpfault_xm[] = { "/bin/fpfault", "xm", NULL };
+static char *const argv_fpfault_mf[] = { "/bin/fpfault", "mf", NULL };
+static char *const argv_fpfault_de[] = { "/bin/fpfault", "de", NULL };
+static char *const argv_fpfault_ud[] = { "/bin/fpfault", "ud", NULL };
 
 static const fixture_t kFixtures[] = {
     { "/bin/syscall_smoke",   NULL, 0x0005E00D,  0,          "the syscall floor: write/exit from ring 3" },
@@ -88,6 +92,16 @@ static const fixture_t kFixtures[] = {
     { "/bin/malloctest",      argv_malloc_stomp,      0xCA9A12ED, 0, "a stomped canary kills the program (it must)" },
     { "/bin/nx_test",         argv_nx_stack, 139, 0,         "executing the stack kills the program (NX works)" },
     { "/bin/nx_test",         argv_nx_text,  139, 0,         "writing to .text kills the program (W^X works)" },
+    { "/bin/fputest",         NULL, 0xF0DE0000,  0,          "x87/SSE data AND control state survive preemption, migration, a handler that wipes them, and a forged frame MXCSR" },
+    // PASS BY DYING: a CPU exception from ring 3 ends the program with
+    // 200 + vector (user_exception_kill), never the machine.
+    // #XM is the one QEMU's TCG cannot raise (it records SSE exceptions in
+    // MXCSR and never traps), so the fixture answers 3 there and that is a
+    // SKIP, not a failure; on hardware and under KVM it dies with 219.
+    { "/bin/fpfault",         argv_fpfault_xm, 219, 3,       "an unmasked SSE exception (#XM) kills the program, not the OS" },
+    { "/bin/fpfault",         argv_fpfault_mf, 216, 0,       "an unmasked x87 exception (#MF) kills the program, not the OS" },
+    { "/bin/fpfault",         argv_fpfault_de, 200, 0,       "an integer divide by zero (#DE) kills the program, not the OS" },
+    { "/bin/fpfault",         argv_fpfault_ud, 206, 0,       "an AVX instruction with XSAVE off (#UD) kills the program, not the OS" },
     { "/bin/test_elf",        NULL, 0xE1F0CA11,  0,          "a demand-paged static ELF runs and exits" },
     { "/bin/dyn_consumer",    NULL, 0x00300031,  0,          "a dynamically-linked binary resolves and runs" },
     // synctest reports 0x05CC0001 when the boot has no writable /home. That
@@ -100,6 +114,7 @@ static const fixture_t kFixtures[] = {
     // for the same reason: a suite that cries wolf gets ignored.
     { "/bin/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and atomic publish" },
     { "/bin/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
+    { "/bin/winchtest",       NULL, 0x0A1D0000,  0,          "pty resize: the grid follows, the seats hear SIGWINCH, a blocked read and a blocked wait are interrupted" },
     { "/bin/df_test",         NULL, 0x0DF00000,  0,          "the direction flag does not cross a ring boundary (syscall, and into a handler)" },
     { "/bin/regleak_test",    NULL, 0x02E60000,  0,          "a syscall returns no kernel state in its scratch registers" },
     // PASSES BY DYING, like the nx_test pair above: 141 is SIGPIPE's default
@@ -112,6 +127,34 @@ static const fixture_t kFixtures[] = {
 #define FIXTURE_COUNT (int32_t)(sizeof(kFixtures) / sizeof(kFixtures[0]))
 
 static int32_t gPassed, gFailed, gSkipped;
+
+// An optional NAME on the command line narrows the run to the fixtures
+// whose path contains it — `testrun fputest` runs one program, `testrun
+// fpfault` runs its four rows. The point is `watch -e testrun fputest`: a
+// fixture passes with a distinctive badge (0xF0DE0000), which every
+// exit-code-reading tool calls "nonzero", and the runner is the one thing
+// that knows the badges. Substring, not glob: husk would expand a `*`
+// against the cwd before testrun ever saw it.
+static const char *gOnly;
+
+static bool contains(const char *haystack, const char *needle)
+{
+    size_t n = os64_strlen(needle);
+    for (; *haystack; haystack++)
+    {
+        size_t i = 0;
+        while (i < n && haystack[i] == needle[i])
+            i++;
+        if (i == n)
+            return true;
+    }
+    return false;
+}
+
+static bool selected(const char *path)
+{
+    return gOnly == NULL || contains(path, gOnly);
+}
 
 // One line per verdict, on the SERIAL WIRE. os64_serial_log rather than
 // os64_debug_log on purpose: a harness boot usually runs with LOGD=, and a
@@ -224,18 +267,27 @@ int main(int argc, char **argv)
     args.about = "Run the ring-3 test fixtures and report to the serial wire.";
     args.details = "Each fixture is spawned and waited on through the ordinary "
                    "syscalls, so no test can race the undertaker the way the "
-                   "in-kernel versions did.";
-    int32_t parsed = os64_args_parse(&args, "testrun [-n]", NULL, 0);
+                   "in-kernel versions did. NAME narrows the run to fixtures "
+                   "whose path contains it, and the exit code is 0 only if "
+                   "every one passed — so `watch -e testrun fputest` loops a "
+                   "single fixture and stops at its first failure.";
+    int32_t parsed = os64_args_parse(&args, "testrun [-n] [NAME]", &gOnly, 1);
     if (parsed == OS64_ARG_HELP) return 0;
     if (parsed < 0) return 2;
 
     os64_serial_log("TESTRUN: begin (ring-3 suite)");
-    os64_printf("testrun - %d ring-3 fixtures\n", FIXTURE_COUNT);
+    if (gOnly)
+        os64_printf("testrun - fixtures matching '%s'\n", gOnly);
+    else
+        os64_printf("testrun - %d ring-3 fixtures\n", FIXTURE_COUNT);
 
     for (int32_t i = 0; i < FIXTURE_COUNT; i++)
-        run_fixture(&kFixtures[i]);
+        if (selected(kFixtures[i].path))
+            run_fixture(&kFixtures[i]);
 
-    run_concurrent_pair();
+    // The concurrent pair is a property of the whole suite, not of a name.
+    if (gOnly == NULL)
+        run_concurrent_pair();
 
     // The network pair is opt-in: on a boot with no NIC (or no DHCP lease)
     // these fail for a reason that has nothing to do with the code under
@@ -247,7 +299,16 @@ int main(int argc, char **argv)
             { "/bin/fetchtest", NULL, 0x0FE7C400, 0, "TCP fetch over the stack" },
         };
         for (int32_t i = 0; i < 2; i++)
-            run_fixture(&net[i]);
+            if (selected(net[i].path))
+                run_fixture(&net[i]);
+    }
+
+    // A name that matches nothing is a typo, and a typo must not read as
+    // "0 failed": say so, and exit the way a failure does.
+    if (gOnly && gPassed + gFailed + gSkipped == 0)
+    {
+        os64_printf("testrun: no fixture matches '%s'\n", gOnly);
+        return 2;
     }
 
     // THE LINE THE HARNESS GREPS. One format, on the wire, every run — the

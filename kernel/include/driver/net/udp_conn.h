@@ -33,7 +33,7 @@
 #define UDP_CONN_QUEUE_SLOTS   8
 
 // In-band sentinels for udp_conn_read (the pipe.c convention).
-#define UDP_CONN_ERR_INTERRUPTED (-3L)   // terminate signal landed; caller dies at the boundary
+#define UDP_CONN_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end); the boundary kills or answers INTERRUPTED
 #define UDP_CONN_ERR_TIMEOUT     (-4L)   // caller's read deadline expired with no datagram
 
 typedef struct udp_conn
@@ -68,7 +68,7 @@ udp_conn_t* udp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 
 // Blocking read: returns one whole datagram (short if buf is smaller —
 // the tail drops, the classic UDP truncation contract), or
-// UDP_CONN_ERR_INTERRUPTED if a terminate signal landed. Task context
+// UDP_CONN_ERR_INTERRUPTED if a signal ended the wait. Task context
 // ONLY (parks on SIGSLEEP).
 // `deadline` = absolute kTicksSinceStart tick after which the wait gives
 // up and returns UDP_CONN_ERR_TIMEOUT; 0 = wait forever (the eternal

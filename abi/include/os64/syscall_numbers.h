@@ -81,9 +81,13 @@
 // generations of this call (sleep/usleep/nanosleep/clock_nanosleep) because
 // the units kept being wrong; one syscall, milliseconds, honest floor.
 // sleep(0) is the documented free yield — no time, but the CPU goes back.
-// Returns 0 always: the only interruption that exists today is death, and
-// the dead read no return values (remaining-time semantics deliberately
-// wait for the SIGNALS.md EINTR-vs-restart ruling).
+// Returns 0 when the nap completed, or OS64_INTERRUPTED when a signal this
+// program handled at the moment it woke cut it short — the rest of the nap
+// is NOT slept, and a program that wanted all of it loops (SIGNALS.md §8:
+// no restart, no remaining-time answer; the caller decides). Usually the
+// handler has run by the time you see this; if another thread uninstalled
+// it in between, nothing ran and you still see this — INTERRUPTED means
+// the nap ended early, never "the handler ran".
 #define SYSCALL_SLEEP      25
 
 // ticks(out) — fill an os64_ticks_t (os64/ticks.h) with the monotonic tick
@@ -501,8 +505,10 @@ typedef enum os64_shutdown_mode
 // programs each carried a private copy of the same "/home then /etc" ladder
 // until 2026-08-23; the cure is one setting (/etc/os64.conf's `conf =`) that
 // every reader obeys, and a ladder obeyed by everyone must be PARSED by
-// exactly one thing or it is not one ladder. The kernel already has to walk
-// it for its own readers (desktop.c), so ring 3 asks the same walker rather
+// exactly one thing or it is not one ladder. The kernel walked it for a reader
+// of its own (gui/desktop.c — gone to ring 3 as /bin/desktop, 2026-08-25); the
+// walker STAYS in ring 0 because it is the one place every ring can reach, so
+// ring 3 asks it (its only caller now) rather
 // than growing a second one over a /sys file — which would have meant two
 // parsers to keep in agreement AND a separate channel for reporting what
 // each reader took.
@@ -551,6 +557,13 @@ typedef enum os64_shutdown_mode
 // for the STREAM mode whose customer (telnetd) waits on TCP listen().
 #define SYSCALL_PTY_CREATE   44
 #define SYSCALL_PTY_SNAPSHOT 45
+// pty_resize(master, cols, rows): the grid follows the window and every
+// task seated on the slave that installed a SIGWINCH handler hears it; the
+// rest are not disturbed — an ignored signal is dropped at the raise, not
+// left pending for a handler installed later (the SIGWINCH slice, 2026-08-25).
+// The master's verb — it owns the geometry. A program that hears the signal
+// asks /proc/self/tty for the new size (RE-OPEN it: procfs renders at open).
+#define SYSCALL_PTY_RESIZE   51
 
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the

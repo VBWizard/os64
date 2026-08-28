@@ -53,6 +53,7 @@ _Static_assert(SIGTERM == OS64_SIGTERM, "SIGTERM disagrees with the ABI (os64/si
 _Static_assert(SIGCONT == OS64_SIGCONT, "SIGCONT disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGSTOP == OS64_SIGSTOP, "SIGSTOP disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGIO   == OS64_SIGIO,   "SIGIO disagrees with the ABI (os64/signal.h)");
+_Static_assert(SIGWINCH == OS64_SIGWINCH, "SIGWINCH disagrees with the ABI (os64/signal.h)");
 _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
                "the signal table size disagrees with the ABI (os64/signal.h)");
 
@@ -83,18 +84,18 @@ _Static_assert(SIGNAL_COUNT == OS64_SIGNAL_COUNT,
 // through an API that reported success. A number the kernel cannot raise must
 // never register.
 //
-// ALSO ABSENT, AND THIS IS THE HARDER CALL: SIGCONT (18), SIGSTOP (19) and
-// SIGWINCH (28). All three have a NUMBER and no PRODUCER — nothing in this
-// kernel raises them. SIGWINCH is not even defined (the enum reserves the
-// number); SIGCONT and SIGSTOP are, and DEBTS § No job control books their
-// stop/continue semantics and delivery as a future slice, calling them
-// exactly what they are: stubs.
+// ALSO ABSENT, AND THIS IS THE HARDER CALL: SIGCONT (18) and SIGSTOP (19).
+// Both have a NUMBER and no PRODUCER — nothing in this kernel raises them.
+// DEBTS § No job control books their stop/continue semantics and delivery as
+// a future slice, calling them exactly what they are: stubs.
 //
 // SIGCONT and SIGSTOP were in this list until rd14 pointed out that keeping
-// them contradicts the rule the rest of this function exists to enforce — the
-// same rule used ONE ROUND EARLIER to exclude SIGWINCH. A handler for a signal
-// nothing can send is a caller waiting forever, and it makes no difference
-// whether the reason is "no such number" or "the slice has not landed".
+// them contradicts the rule the rest of this function exists to enforce. A
+// handler for a signal nothing can send is a caller waiting forever, and it
+// makes no difference whether the reason is "no such number" or "the slice
+// has not landed". SIGWINCH (28) sat outside for the same reason until the
+// resize slice gave it a producer (syscall_pty_resize) — the day a signal
+// gets a sender is the day it joins the list, which is exactly the rule.
 //
 // THE COUNTER-ARGUMENT, considered and rejected — and it deserved considering,
 // because os64 has made exactly this bet before and WON it: registration
@@ -123,15 +124,16 @@ bool signal_is_known(signals sig)
 		// RAISES each member cannot hide the next one: an entry with no
 		// producer to name is visibly wrong to anybody reading it, including
 		// whoever is adding one.
-		case SIGHUP:   // tty_shell_departed — the seated shell went away
+		case SIGHUP:   // tty_task_departed — the seated shell went away
 		case SIGINT:   // console Ctrl+C; /proc/<id>/ctl "interrupt"
 		case SIGKILL:  // /proc/<id>/ctl "kill"; task_terminate_sibling_threads
 		case SIGSEGV:  // the page-fault handler, on an unresolvable user fault
 		case SIGPIPE:  // syscall_write, into a pipe whose readers have all gone
 		case SIGTERM:  // the shutdown ladder
+		case SIGWINCH: // syscall_pty_resize, at every seat of the slave that has a handler
 			return true;
 		default:
-			// Gaps, scheduler markers, reserved numbers — and NUMBERED-BUT-NOT
+			// Gaps, scheduler markers — and NUMBERED-BUT-NOT
 			// YET-REAL: SIGCONT/SIGSTOP (job control is booked, not built) and
 			// SIGIO (nothing in kernel or userland raises it; it was claimed
 			// alongside the POSIX numbers and never given a sender). Each
@@ -222,6 +224,18 @@ static bool signal_write_user(task_t *task, uint64_t user_va, uint64_t value)
 	return true;
 }
 
+static bool signal_write_user_block(task_t *task, uint64_t user_va,
+		const void *source, uint64_t size)
+{
+	if (size % sizeof(uint64_t) != 0)
+		return false;
+	const uint64_t *words = (const uint64_t *)source;
+	for (uint64_t offset = 0; offset < size; offset += sizeof(uint64_t))
+		if (!signal_write_user(task, user_va + offset, words[offset / sizeof(uint64_t)]))
+			return false;
+	return true;
+}
+
 // Does this thread have a pending signal that something will CATCH? The
 // default-action checkpoints ask before they kill: a task that installed a
 // handler must not be executed by the kernel on its way to being handed the
@@ -300,6 +314,23 @@ bool signal_has_handler_for_pending(struct task *t, void *thrd)
 	return caught;
 }
 
+// See signals.h. The terminate test comes first and unconditionally: a
+// pending SIGKILL makes signal_has_handler_for_pending answer "no" by
+// design, and the park must still end so the checkpoint can carry out the
+// kill. Reads the handler table without the lock, as every checkpoint does —
+// a stale answer here costs one extra trip round the park loop, never a
+// wrong decision, because the loop asks again and the syscall boundary
+// decides under signalLock.
+bool signal_park_must_end(void *thrd)
+{
+	thread_t *thread = (thread_t *)thrd;
+	if (thread == NULL)
+		return false;
+	if (sigset_any(thread->signals.sigind, SIGNALS_TERMINATING))
+		return true;
+	return signal_has_handler_for_pending((task_t *)thread->ownerTask, thread);
+}
+
 // The stub in task_exit_asm.S reads these offsets off RSP by hand. If the
 // struct moves, the stub reads the wrong words and calls whatever happens to
 // be in the frame — so the two are held together here rather than by anyone
@@ -310,7 +341,8 @@ _Static_assert(sizeof(signal_frame_t) % 16 == 0,        "the signal frame must k
 // The full frame (§10) leans on the same stub, so its base must BE the §5
 // frame — first field, offset zero, no padding in front.
 _Static_assert(offsetof(signal_frame_full_t, base) == 0,  "the full frame must start with the §5 frame");
-_Static_assert(offsetof(signal_frame_full_t, rbx) == 64,  "the full frame's extension must start at +64");
+_Static_assert(offsetof(signal_frame_full_t, rbx) == sizeof(signal_frame_t),
+		       "the full frame's extension must follow the base frame");
 _Static_assert(sizeof(signal_frame_full_t) % 16 == 0,     "the full frame must keep RSP 16-aligned");
 
 // Which pending signal, if any, would a handler run for RIGHT NOW? One
@@ -340,7 +372,28 @@ static int signal_pick_deliverable(task_t *task, thread_t *thread)
 		if (!signal_is_catchable((signals)sig))
 			continue;                       // SIGKILL: the default is the only action
 		if (task->sighandler[sig] == NULL)
-			continue;                       // no handler: the default action stands
+		{
+			// No handler: the default action stands. For a death-default
+			// signal that means the checkpoints (or the orphan check below)
+			// end the task. For a default-IGNORE signal, ignoring is spelled
+			// CONSUMING — and the FIRST place that happens is publication
+			// (task_signal_and_nudge drops a WINCH at a task with no handler
+			// before any bit is set, because a thread parked with no handler
+			// never comes through here; Codex #32). This is the backstop for
+			// the gap between: published while a handler was installed,
+			// uninstalled by a sibling before the pick. Cleared from EVERY
+			// thread of the task, not only the one passing through here
+			// (rd2): the publish was task-wide, and a sibling parked with
+			// no handler will not come through here either — a thread-local
+			// clear would leave its bit to fire on the next install. Under
+			// the lock both delivery paths hold, so nothing sits pending
+			// until a handler happens to be installed and then fires for a
+			// resize that happened an hour ago.
+			if (SIG_BIT(sig) & SIGNALS_DEFAULT_IS_IGNORE)
+				for (thread_t *th = task->threads; th != NULL; th = th->taskNext)
+					sigset_del(&th->signals.sigind, (signals)sig);
+			continue;
+		}
 		if (sigset_has(thread->signals.sigmask, (signals)sig))
 			continue;                       // already inside this signal's own handler
 		return sig;
@@ -447,19 +500,20 @@ signal_deliver_result_t signal_deliver_pending(struct task *t, void *thrd, uint6
 	// 16-aligned, because the stub CALLs the handler from here.
 	uint64_t frame_va = (user_rsp - 128 - sizeof(signal_frame_t)) & ~(uint64_t)0xF;
 
-	// Write it out field by field through the HHDM. If ANY write fails the
+	// Save the live state before the handler runs, then write it through the
+	// HHDM. If ANY write fails the
 	// stack is unusable — which is the SIGSEGV-on-a-bad-stack case named in
 	// SIGNALS.md §9 — and we deliver nothing, leaving the default action to
 	// kill the thread exactly as it does today. An alternate signal stack
 	// is the cure, and it is a later slice.
-	bool ok = true;
-	ok &= signal_write_user(task, frame_va + 0,  SIGNAL_FRAME_MAGIC);
-	ok &= signal_write_user(task, frame_va + 8,  retval);
-	ok &= signal_write_user(task, frame_va + 16, user_rip);
-	ok &= signal_write_user(task, frame_va + 24, user_rsp);
-	ok &= signal_write_user(task, frame_va + 32, user_rfl);
-	ok &= signal_write_user(task, frame_va + 40, (uint64_t)sig);
-	ok &= signal_write_user(task, frame_va + 48, (uint64_t)task->sighandler[sig]);
+	fpu_save(&thread->fpuState);
+	signal_frame_t saved_frame = {
+		.magic = SIGNAL_FRAME_MAGIC, .rax = retval, .rip = user_rip,
+		.rsp = user_rsp, .rflags = user_rfl, .signo = (uint64_t)sig,
+		.handler = (uint64_t)task->sighandler[sig],
+		.fpuState = thread->fpuState,
+	};
+	bool ok = signal_write_user_block(task, frame_va, &saved_frame, sizeof(saved_frame));
 	if (!ok)
 	{
 		// The stack is unusable — the SIGSEGV-on-a-bad-stack case named
@@ -576,29 +630,18 @@ signal_deliver_result_t signal_deliver_to_regs(struct task *t, void *thrd)
 	// than 128 bytes of stack.
 	uint64_t frame_va = (thread->regs.RSP - 128 - sizeof(signal_frame_full_t)) & ~(uint64_t)0xF;
 
-	bool ok = true;
-	ok &= signal_write_user(task, frame_va + 0,   SIGNAL_FRAME_MAGIC_FULL);
-	ok &= signal_write_user(task, frame_va + 8,   thread->regs.RAX);
-	ok &= signal_write_user(task, frame_va + 16,  thread->regs.RIP);
-	ok &= signal_write_user(task, frame_va + 24,  thread->regs.RSP);
-	ok &= signal_write_user(task, frame_va + 32,  thread->regs.RFLAGS);
-	ok &= signal_write_user(task, frame_va + 40,  (uint64_t)sig);
-	ok &= signal_write_user(task, frame_va + 48,  (uint64_t)task->sighandler[sig]);
-	ok &= signal_write_user(task, frame_va + 56,  0);   // pad — deterministic
-	ok &= signal_write_user(task, frame_va + 64,  thread->regs.RBX);
-	ok &= signal_write_user(task, frame_va + 72,  thread->regs.RCX);
-	ok &= signal_write_user(task, frame_va + 80,  thread->regs.RDX);
-	ok &= signal_write_user(task, frame_va + 88,  thread->regs.RSI);
-	ok &= signal_write_user(task, frame_va + 96,  thread->regs.RDI);
-	ok &= signal_write_user(task, frame_va + 104, thread->regs.RBP);
-	ok &= signal_write_user(task, frame_va + 112, thread->regs.R8);
-	ok &= signal_write_user(task, frame_va + 120, thread->regs.R9);
-	ok &= signal_write_user(task, frame_va + 128, thread->regs.R10);
-	ok &= signal_write_user(task, frame_va + 136, thread->regs.R11);
-	ok &= signal_write_user(task, frame_va + 144, thread->regs.R12);
-	ok &= signal_write_user(task, frame_va + 152, thread->regs.R13);
-	ok &= signal_write_user(task, frame_va + 160, thread->regs.R14);
-	ok &= signal_write_user(task, frame_va + 168, thread->regs.R15);
+	signal_frame_full_t saved_frame = {
+		.base = { .magic = SIGNAL_FRAME_MAGIC_FULL, .rax = thread->regs.RAX,
+			.rip = thread->regs.RIP, .rsp = thread->regs.RSP,
+			.rflags = thread->regs.RFLAGS, .signo = (uint64_t)sig,
+			.handler = (uint64_t)task->sighandler[sig], .fpuState = thread->fpuState },
+		.rbx = thread->regs.RBX, .rcx = thread->regs.RCX, .rdx = thread->regs.RDX,
+		.rsi = thread->regs.RSI, .rdi = thread->regs.RDI, .rbp = thread->regs.RBP,
+		.r8 = thread->regs.R8, .r9 = thread->regs.R9, .r10 = thread->regs.R10,
+		.r11 = thread->regs.R11, .r12 = thread->regs.R12, .r13 = thread->regs.R13,
+		.r14 = thread->regs.R14, .r15 = thread->regs.R15,
+	};
+	bool ok = signal_write_user_block(task, frame_va, &saved_frame, sizeof(saved_frame));
 	if (!ok)
 	{
 		// Unusable stack, regs untouched. Same policy as §5's twin block: a
@@ -702,29 +745,18 @@ bool signal_deliver_segv(struct task *t, void *thrd, void *context)
 	// between one write's resolve and its store.
 	uint64_t segv_flags = spinlock_acquire_irqsave(&task->signalLock);
 
-	bool ok = true;
-	ok &= signal_write_user(task, frame_va + 0,   SIGNAL_FRAME_MAGIC_FULL);
-	ok &= signal_write_user(task, frame_va + 8,   ctx->rax);
-	ok &= signal_write_user(task, frame_va + 16,  ctx->rip);   // the faulting instruction
-	ok &= signal_write_user(task, frame_va + 24,  ctx->rsp);
-	ok &= signal_write_user(task, frame_va + 32,  ctx->rflags);
-	ok &= signal_write_user(task, frame_va + 40,  (uint64_t)SIGSEGV);
-	ok &= signal_write_user(task, frame_va + 48,  (uint64_t)segv_handler);
-	ok &= signal_write_user(task, frame_va + 56,  0);
-	ok &= signal_write_user(task, frame_va + 64,  ctx->rbx);
-	ok &= signal_write_user(task, frame_va + 72,  ctx->rcx);
-	ok &= signal_write_user(task, frame_va + 80,  ctx->rdx);
-	ok &= signal_write_user(task, frame_va + 88,  ctx->rsi);
-	ok &= signal_write_user(task, frame_va + 96,  ctx->rdi);
-	ok &= signal_write_user(task, frame_va + 104, ctx->rbp);
-	ok &= signal_write_user(task, frame_va + 112, ctx->r8);
-	ok &= signal_write_user(task, frame_va + 120, ctx->r9);
-	ok &= signal_write_user(task, frame_va + 128, ctx->r10);
-	ok &= signal_write_user(task, frame_va + 136, ctx->r11);
-	ok &= signal_write_user(task, frame_va + 144, ctx->r12);
-	ok &= signal_write_user(task, frame_va + 152, ctx->r13);
-	ok &= signal_write_user(task, frame_va + 160, ctx->r14);
-	ok &= signal_write_user(task, frame_va + 168, ctx->r15);
+	fpu_save(&thread->fpuState);
+	signal_frame_full_t saved_frame = {
+		.base = { .magic = SIGNAL_FRAME_MAGIC_FULL, .rax = ctx->rax,
+			.rip = ctx->rip, .rsp = ctx->rsp, .rflags = ctx->rflags,
+			.signo = (uint64_t)SIGSEGV, .handler = (uint64_t)segv_handler,
+			.fpuState = thread->fpuState },
+		.rbx = ctx->rbx, .rcx = ctx->rcx, .rdx = ctx->rdx,
+		.rsi = ctx->rsi, .rdi = ctx->rdi, .rbp = ctx->rbp,
+		.r8 = ctx->r8, .r9 = ctx->r9, .r10 = ctx->r10, .r11 = ctx->r11,
+		.r12 = ctx->r12, .r13 = ctx->r13, .r14 = ctx->r14, .r15 = ctx->r15,
+	};
+	bool ok = signal_write_user_block(task, frame_va, &saved_frame, sizeof(saved_frame));
 	if (!ok)
 	{
 		// §9's honest limit: the stack itself is what faulted, so there is
@@ -818,20 +850,25 @@ void processSignals()
 		// walk off into the wrong queue mid-iteration.
 		thread_t *nextSleeper = qSleep->next;
 
-		if (sigset_any(qSleep->signals.sigind, SIGNALS_TERMINATING))
+		if (signal_park_must_end(qSleep))
 		{
-			// A pending terminate outranks the nap. Cancel the sleep and wake
-			// the thread INTO its own blocking loop (console_read / pipe_read /
-			// pipe_write), whose top-of-loop terminate check bails out to the
-			// syscall boundary — where the default action (terminate, 130) is
-			// enforced in the dying task's own context, free to sleep and to
-			// close handles. This wake is what makes Ctrl+C (and a ctl write)
-			// reach a task that is blocked and would otherwise never run again
-			// to notice it.
+			// A pending terminate — or a pending signal a handler will catch
+			// — outranks the nap. Cancel the sleep and wake the thread INTO
+			// its own blocking loop (console_read / pipe_read / pipe_write
+			// ...), whose top-of-loop check asks the same question and bails
+			// out to the syscall boundary: a terminate nothing catches gets
+			// its default action (130) enforced in the dying task's own
+			// context, free to sleep and to close handles; a caught signal
+			// gets its handler armed at the dispatcher exit and the call
+			// answers INTERRUPTED. This wake is what makes Ctrl+C (and a ctl
+			// write, and a window resize) reach a task that is blocked and
+			// would otherwise never run again to notice it. (Lock order holds:
+			// the predicate reads the handler table lock-free, like every
+			// checkpoint, and we hold only the queue lock here.)
 			qSleep->signals.sigdata[SIGSLEEP] = 0;
 			sigset_del(&qSleep->signals.sigind, SIGSLEEP);
 			scheduler_change_thread_queue_locked(qSleep, THREAD_STATE_RUNNABLE);   //we hold the queue lock (above)
-			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending terminate\n", qSleep->threadID);
+			printd(DEBUG_SCHEDULER, "\tThread 0x%08x awoken from ISLEEP by a pending signal\n", qSleep->threadID);
 		}
 		else if (qSleep->signals.sigdata[SIGSLEEP] <= kTicksSinceStart) // Wake up the thread if the wake time is *now* or in the past
 		{

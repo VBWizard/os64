@@ -45,7 +45,7 @@ client API.
    sub-ms) happens under the lock; flushing (UC, slow) strictly after release.
    `gui_damage_add_locked` vs `gui_damage_add`: pick by whether you hold the
    lock — it is NOT recursive.
-4. **IRQ handlers only enqueue.** Never call `scheduler_wake_isleep_task` from
+4. **IRQ handlers only enqueue.** Never call `scheduler_wake_task_waiter` from
    an ISR (`scheduler_trigger` does `sti/hlt`). The compositor polls.
 5. **The console sink never draws and never takes kGuiLock.** `print_n` may be
    called from any context including exception handlers; the sink only appends
@@ -270,7 +270,8 @@ damaged frame.
   reads the HHDM alias, which only exists for *allocated* pages; a
   demand-paged canvas would make the kernel fault on pages the task hasn't
   touched yet. Allocate and map everything up front (a 4K×4K max window is
-  64MB of canvas + 64MB of content — the `w/h ≤ 4096` clamp in
+  64MB of canvas + 64MB of content — the `w/h ≤ wm_dim_max()` clamp (4096,
+  or the screen if it is larger) in
   `gui_window_create` is also the memory bound).
 - **VA placement:** carve a dedicated per-task region for canvas mappings
   (a VMA, like heap/ELF segments use) so canvases can never collide with the
@@ -306,9 +307,81 @@ unacceptable for tasks (any task could present/destroy any window).
 
 ### Event delivery
 
+**THE RULE FOR DECIDING WHERE A NEW FACT GOES (ruled 2026-08-25, on the
+SIGWINCH question — Chris: "there will be many, so we should probably settle
+on a pattern"): A SIGNAL TELLS A PROCESS SOMETHING; AN EVENT TELLS A WINDOW
+SOMETHING.**
+
+Both end with the app's own function running, so the pattern is not obvious
+from the outside. The difference is WHEN, and on top of WHAT:
+
+- An **event handler runs synchronously** — the app drains its queue at a
+  moment of its own choosing, in its normal context. No reentrancy rules, no
+  signal-safety question, and the fact can carry a PAYLOAD (which key, which
+  button, the new rect) in order.
+- A **signal handler runs asynchronously** — the kernel interrupts the thread
+  wherever it is, pushes a frame, and the handler runs on top of that moment.
+  That is why "which libos64 functions may be called from a handler" is a real
+  open question (SIGNALS.md books it).
+
+So: keys, mouse, resize, close, and every future window fact — focus, theme
+change, publish-ack, a polite close-REQUEST — are EVENTS. Every windowing
+system converged here independently (X11's queue, the Mac's `GetNextEvent`,
+Win32's message pump, all mid-80s); nobody has ever delivered mouse-moves by
+signal. **os64 could not even if it wanted to**: the pending set is
+deliberately a bitmask, so two resizes coalesce into one with no dimensions
+attached — a payload-free coalescing channel is disqualified as a GUI
+transport by its own design (SIGNALS.md § "Explicitly not in scope").
+
+### Covered windows (2026-08-27)
+
+The first window fact after resize and close: **can anyone see this window?**
+`GUI_WINDOW_COVERED` is set when a window is minimized, or its whole frame is
+behind one window above it (`wm_rect_is_occluded`, the same single-window
+containment publish uses), or a text terminal holds the glass.
+`wm_cover_sweep_locked` recomputes it every compositor frame, after the
+window manager has moved whatever it moved, and a flip queues one
+`WINDOW_COVERED` / `WINDOW_UNCOVERED` event.
+
+**The flag is the truth; the event is the nudge.** A queue is 64 deep and
+drops the newest when full, so a client that believed the last event it saw
+could sleep forever on a lost UNCOVERED. Every consumer re-reads the flag
+through `gui_window_get_state` before acting — the event only says "look".
+
+Who acts on it:
+- **The frame clock** (`os64_frame_clock_bind`): an app that paces with
+  `os64_frame_wait` naps while its window is covered and resumes when it is
+  not, returning a dt of one budget rather than the minutes it was hidden.
+  Five animating apps got quiet with one line each. Events are not consumed
+  while napping; they wait for the app's next poll.
+- **gterm** handles the events itself, because its loop must keep running
+  whether or not anyone is looking (a hung-up session still closes the
+  window; a paste still feeds the shell): the header poll continues, the
+  cell snapshot and the paint stop, and the first uncovered frame repaints.
+- **libui apps** block in `gui_event_wait` already and were quiet before.
+
+What this is not: the publish-acknowledgment (Wayland's frame callback)
+the occlusion row in DEBTS sketched, which makes idle the default for apps
+with their own loops instead of asking them to look at a flag. The flag
+covers every consumer that exists; the callback stays the more general
+design if one outgrows it. Also still single-window containment — two
+windows that jointly cover a third do not count.
+
+Signals get process-lifecycle and stream-world facts: INT, TERM, HUP, PIPE,
+SEGV — and WINCH, for the program whose whole world is a byte stream.
+**SIGWINCH is not an exception to this rule, it is the rule applied to a
+program that cannot see the GUI**: the process inside a pty has no window and
+no queue, which is exactly why Sun invented the signal for 4.3BSD. Hence the
+terminal-resize slice is TWO hops with two mechanisms — WM → gterm is an
+event (already delivered today), gterm → the program inside is SIGWINCH — and
+the DEBTS row that once called the second hop a client-notification-seam
+customer was corrected the day this rule was written.
+
 - Queues stay per-window (`GUI_WINDOW_EVENTS_MAX 64`, drop-newest on full —
   apps must drain; mouse coords stay CONTENT-local, translated by the
-  compositor at routing time).
+  compositor at routing time). **A focus transition is the one event that is
+  never dropped**: it evicts the oldest entry instead, because a client
+  cannot reconstruct it and a popup's dismissal hangs on it (Codex #34).
 - `gui_event_poll` (20) is the v1 interface: non-blocking, pairs with the
   app's own frame pacing.
 - `gui_event_wait` (22) blocks the calling thread (ISLEEP) until an event
@@ -553,7 +626,8 @@ it, because the pages are legitimately mapped to somebody else.
 So the canvas is **reserved at capacity and never re-pointed**:
 
 - Capacity is the screen (`wm_canvas_capacity_for` — or the window, if it was
-  created larger; the client API allows up to 4096 a side). ONE function, used
+  created larger; the client API allows up to 4096 a side, or the screen if
+  that is larger). ONE function, used
   by both allocators, because a canvas smaller than the content snapshotted
   into it is a buffer overrun with a view of the desktop.
 - `pitch_px` is the capacity's width, **for the window's whole life**. A pixel
@@ -633,9 +707,9 @@ still reaches the app) extended from the mouse to the keyboard:
 | **Ctrl+Alt+T** | hide/show titlebar | content stays put, the frame's top edge moves; 1px border stays; `OS64_GUI_WINDOW_NO_DECORATIONS` honored at create too |
 | **Ctrl+Alt+M** / titlebar double-click | maximize (toggle) | restore frame remembered; a manual move or resize clears it; raises, so a focused-but-buried window still visibly answers |
 | **Ctrl+Alt+N** | minimize | off the glass, not hit-tested, occludes nothing, alive; focus goes to the most recent visible window; Alt+Tab brings it back — release the hold ON its dim row |
-| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path.ppm` (P6, centered, never scaled — a `screendump` can be the wallpaper); no file = the test pattern stays (`gui/desktop.c`) |
+| `/home/desktop.conf` → `/etc/desktop.conf` | background | `color = 0xRRGGBB`, optional `image = /path` — **PPM (P6) or BMP, by magic bytes**, centered, never scaled (a `screendump` can be the wallpaper). Read by **`/bin/desktop`** since 2026-08-25, which paints it into a bottom-band WINDOW; `gui/desktop.c` and its in-kernel PPM decoder are deleted. With no shell running, the compositor's test pattern is what shows — it is the floor, and it stayed in the kernel for exactly that reason |
 | `/home/gclock.conf` → `/etc/gclock.conf` | clock window state | `Position = x,y`, `Titlebar = on|off`, `Pinned = true|false`; no file = `(280,10)`, titlebar on, unpinned |
-| `gui.conf` (via the config search path) | what starts with the desktop | `start = /bin/gterm` (repeatable, in order) and `hello = yes|no` for the legacy window. **If the file exists its `start` lines are the whole list, including none** — that is how you say "start nothing"; the built-in demo pair applies only when no `gui.conf` is found. `gui/startup.c`, read once at the top of `gui_start()` |
+| `gui.conf` (via the config search path) | what starts with the desktop | `start = /bin/gterm` (repeatable, in order). **If the file exists its `start` lines are the whole list, including none** — that is how you say "start nothing"; the built-in demo pair applies only when no `gui.conf` is found. Read once by **`/bin/desktop`** as it starts (2026-08-25) — a shell reads its own rc. The `hello = yes|no` key and the window it switched are retired, and with them `gui/startup.c`: the kernel reads no config file for the GUI at all now |
 
 Three things learned building them, for the next chord:
 
@@ -661,6 +735,36 @@ Three things learned building them, for the next chord:
   holds the top of the stack while focus goes elsewhere. Z-order is where
   things are drawn; recency is what the user did last; they stopped being
   the same number the moment one window could refuse to be buried.
+- **THREE BANDS SINCE 2026-08-25**, when the desktop became a ring-3
+  client: pinned (2) above ordinary (1) above **desktop (0)**, which nothing
+  can get beneath. `band_of()` in window.c returns the rank and both
+  `link_on_top` and `at_band_top` derive from it, so a fourth band costs one
+  line — the two-band code's own warning was that "three copies of find the
+  band boundary is three chances to disagree". The desktop band buys the
+  z-position, no chrome, an exemption from Alt+Tab and a refusal of the WM
+  verbs that would make the window vanish or float (the whole contract is
+  listed on the flag in os64/gui.h) — and keeps what matters most: the window
+  is still focusable and still gets keys and clicks, because being the
+  target of a click that lands on no application is the whole point (that
+  click is where a root menu and the
+  launcher come from). It IS skipped by the Alt+Tab walk — a desktop is not
+  something you tab to — and pin/maximize/minimize/decorate/close decline it,
+  guarded at the `wm_` setters so every caller is covered rather than just the
+  chords. The two verbs with no setter of their own — chord move and chord
+  resize — are declined at the gesture in the compositor, like Alt+F4 (Fable's
+  review, 2026-08-25: without that, Ctrl+Alt+drag on the wallpaper moved the
+  desktop, and the title toggle painted a titlebar across it).
+
+The same door turns away one more class. A **popup** — created with no chrome
+AND always-on-top, which is what a menu or a cascade is — declines maximize,
+decorate and minimize (`popup_declines`, window.c). A maximized menu cannot
+dismiss itself: dismissal is focus-loss, and a window filling the screen
+leaves nothing else to click. Move and resize are deliberately left alone,
+because they leave a popup usable, only misplaced. The property is LATCHED at
+create (`GUI_WINDOW_POPUP`), never re-read from the live flag word: a chord
+can unpin a menu or pin a borderless gterm, and neither should change what the
+window IS — reading it live let the first walk around the guard and stole the
+titlebar toggle from the second.
 
 The harness grew to test these: `utility/gui_run.sh` drives a headless
 GUI boot from a key script, and speaks **QMP** (`-qmp unix:`) for raw
@@ -812,7 +916,13 @@ sequence can forge it.**
 ### Verification (run 2026-08-23, `utility/gui_run.sh` + QMP)
 
 QMP is the rig — HMP `sendkey` cannot hold Alt across two Tabs. Boot the
-GUI entry (three windows: `hello os64`, `keys`, `bounce`), then:
+GUI entry, then:
+
+*(As run in 2026-08-23 the entry gave three windows — `hello os64`, `keys`,
+`bounce`. Since 2026-08-25 the desktop is `/bin/desktop` and what starts is
+whatever `gui.conf` lists, so put the windows you want in that file first —
+and note the DESKTOP window is skipped by the Alt+Tab walk, so it never
+appears in the strip.)*
 
 | Script | Confirmed by screendump |
 |---|---|
@@ -826,6 +936,114 @@ GUI entry (three windows: `hello os64`, `keys`, `bounce`), then:
 
 Zero panics across the runs; `grep alt-tab` on the serial log reads
 step/step/ended and step/cancelled as designed.
+
+## The root menu — the first launcher (built 2026-08-25)
+
+*Why this exists, in Chris's words the night it was designed: "one of the
+things I loved about Linux was all of the configuration the WMs had. To me
+a desktop is supposed to be configurable — whatever the user wants it to
+be. So we're making our own." GNOME 2's panels and menus lived in text
+files; GNOME 3 took them away "for the masses"; Mint's Cinnamon put them
+back. This is the os64 desktop taking GNOME 2's side, one program at a
+time.*
+
+### The ruling that shaped it
+
+**The launcher is not a feature of the desktop. It is another thing
+`gui.conf` starts.** A root menu today, a dock tomorrow, both the day
+after — each is a separate ring-3 program, and adding one is a line in
+`gui.conf`, not code in `/bin/desktop` or the compositor. That sentence is
+the TEST of the design: if a dock ever needs the desktop shell changed, the
+design has failed.
+
+So the pieces are:
+
+- **`gui.conf: launcher = [left|right|middle] <program>`** — what a click
+  on BARE WALLPAPER runs, per button. `/bin/desktop` spawns it as
+  `<program> x y` (screen coordinates — on a desktop window content and
+  screen coincide) and goes back to being wallpaper. It draws nothing and
+  knows nothing about menus. Default button: right.
+- **`/bin/grootmenu`** (Chris named it) — the root menu, twm's `defops`
+  from 1987: a transient program that opens at the click, shows the menu
+  named `root`, spawns what you chose and exits. The chosen program is
+  orphaned on purpose: the kernel re-parents it to ktask with `autoReap`,
+  so a menu that exits does not leave a zombie or a waiter.
+- **`menu.conf`, read by libos64 (`os64/menu.h`)** — ONE grammar for
+  EVERY launcher. `menu <name> { item "Label" <command> | separator |
+  menu "Label" { … } | menu "Label" <name> }` — named menus, inline
+  cascades, cascades by reference (twm's `f.menu`). The parser lives in
+  the library precisely so a dock reads the identical file: two launchers
+  drifting on what a label is would fail the ruling above. Keywords fold
+  case; labels, names and commands are data, verbatim. Found through the
+  config ladder, first hit wins (a settings file, not a database).
+- **Colours come from `theme.conf`** (`menu.bg`, `menu.fg`, `menu.hi.bg`,
+  `menu.hi.fg`, `menu.sep`) through the same theme table
+  every widget uses — a program must not own its own look.
+
+### What the slice needed from the kernel: a focus EVENT
+
+A popup must vanish when you click anywhere else — and there is no "click
+outside" event, nor should there be: that click landed on somebody else's
+window and is theirs. What a menu CAN know is that it lost focus. So the
+compositor now delivers **`OS64_GUI_EVENT_WINDOW_FOCUS`** (`focus.gained`
+0/1) to both ends of every focus change — birth, death, raise — raised from
+the one function all three pass through (`focus_window`, window.c). The
+event-delivery rule above predicted it: focus is a fact about a WINDOW.
+
+**The `sibling` bit is the part that makes cascades possible.** A submenu
+is a second window of the same task; when it is born it takes focus, and
+its parent would otherwise read that as "the user went elsewhere" and
+dismiss the whole menu. `focus.sibling` = 1 says the other party is owned
+by the same task — computed from `window_t.owner`, which is why `wm_create`
+now takes the owner as a parameter: the first build stamped it AFTER the
+birth focus grab, the newborn read as owner 0, and hovering "Demos" closed
+the menu. Found on the second screendump, fixed at the source.
+
+### Cascades, and what a menu is made of
+
+Every open level is a window: `PINNED` (a menu is never under anything),
+`NO_DECORATIONS`, one pixel of border from the WM. Hovering a cascade row
+opens the child beside it (overlapping the parent by 3px, slid on-screen
+if it would run off — every menu since the Lisa); hovering a different row
+closes it; up to 8 levels open at once (a cascade below that does not
+open — `MENU_DEPTH_MAX`, a fence nobody's menu should reach).
+The program polls every level's queue at frame cadence rather than blocking
+on one window, because the pointer wanders between them and `event_wait`
+watches one handle.
+
+Deliberately NOT in v1, each with its trigger: keyboard navigation
+(arrows/Enter — wants the arrow-key dialect handling gterm has); a menu
+ITEM that opens a named menu in a new root (twm's `f.menu` at top level —
+wait for the dock, which is that); icons; a "tear-off" (Motif, 1989).
+
+### What the first morning's drive changed (Chris on the P5, 2026-08-26)
+
+- **A mistyped `launcher =` gave no feedback.** The desktop complained —
+  to a stderr that on a GUI boot is a console nobody watches. Every
+  desktop complaint now ALSO goes to the kernel log (`os64_complain()` in
+  libos64: stderr + `os64_debug_log`, and the root menu uses it for the same
+  reason — a launcher the desktop starts inherits the desktop's blind
+  stderr), and a launcher path is OPENED as
+  the file is read, so "cannot be opened" is said at startup, by name,
+  with the line's form — not discovered as a click that does nothing.
+- **A console program from a menu has nowhere to appear.** `hexedit`
+  ran, printed to nowhere, exited. Chris's shape: **`gterm <program>
+  [args]` seats that program instead of husk** (full path — no shell in
+  the chain to search PATH), the window wears its name, and closes when it
+  exits. `item "Top" /bin/gterm /bin/top` — verified: a window titled
+  `top` with top in it.
+- **It exits, and that is right.** "I thought it might stay loaded. But it
+  doesn't need to — everything is in the config." A 30KB ELF against a
+  resident libos64 costs less to start than it would to keep around.
+
+### Verification (2026-08-25, QMP-driven, headless)
+
+Right-click bare wallpaper → menu at the click, separators and cascade
+arrows drawn; hover "Demos" → cascade beside it with the row highlighted;
+click "Bounce" → gbounce appears, menu gone; open, left-click elsewhere →
+gone (focus-lost); open, Escape → gone; open, click "Terminal" → gterm.
+The lesson for the next driver: QEMU's monitor `mouse_button` bitmask is
+1=left, 2=right, 4=middle.
 
 ## Testing / debugging
 
@@ -853,8 +1071,13 @@ step/step/ended and step/cancelled as designed.
    ~~minimize, `GUI_WINDOW_NO_DECORATIONS` honor~~ **BUILT 2026-08-23 (the
    chords chapter above)**. Still open: close buttons (and any titlebar
    button at all — the chords were chosen so none is needed yet), a
-   launcher/taskbar (Alt+Tab is the only way back from minimize), and
-   re-reading `desktop.conf` without a reboot.
+   taskbar/dock (Alt+Tab is the only way back from minimize — ~~launcher~~
+   **the root menu is BUILT 2026-08-25, see its chapter above; a dock is
+   another `gui.conf` line away by design**), and
+   re-reading `desktop.conf` without a reboot — **which is a much smaller job
+   now that the reader is `/bin/desktop`**: re-reading a config and
+   repainting is an ordinary thing for a program to do, where it used to mean
+   the compositor re-entering the VFS.
 6. Mouse wheel + 5-button (IntelliMouse magic sample-rate handshake).
 7. Alpha translucency (X byte in XRGB is reserved for it; `surface_blit_masked`
    already does shaped blits).

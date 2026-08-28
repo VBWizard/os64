@@ -46,13 +46,129 @@
 #define OS64_GUI_WINDOW_START_UNFOCUSED (1u << 1)   // born on top, declines focus
 #define OS64_GUI_WINDOW_PINNED           (1u << 2)   // born in the always-on-top band
 
+// NO_DECORATIONS together with PINNED **at create** says POPUP — a menu, a
+// cascade, a tooltip. The WM latches that at birth, and such a window
+// DECLINES the chrome verbs (maximize, minimize, show-titlebar): a menu
+// filling the screen could not dismiss itself, because dismissal is
+// focus-loss and nothing would be left to click. Move and resize are
+// unaffected. Setting or clearing either flag LATER changes nothing — a
+// borderless window you pin afterwards keeps every verb it had.
+// THE DESKTOP BAND: born at the BOTTOM of the z-list, where nothing can get
+// beneath it. This is what lets a desktop shell be an ordinary ring-3
+// program — the same arrangement X11 has always had, where the server owns
+// the root window and the thing drawing your wallpaper is just a client.
+//
+// THE WHOLE CONTRACT (Codex #31 rd4 caught an earlier "and NOTHING ELSE"
+// that the next sentences contradicted). A desktop window:
+//   - lives in the bottom z-band; nothing can be placed beneath it;
+//   - has NO CHROME — no titlebar and no border, whatever its decoration
+//     bit says; its frame IS its canvas (os64_gui_frame_for_content agrees);
+//   - is still focusable and still receives keys and clicks, because being
+//     the target for a click that lands on no application is half the point
+//     (that click is where a root menu and a launcher come from);
+//   - is skipped by the Alt+Tab walk (and the first Alt+Tab FROM it lands on
+//     the most recently used app);
+//   - declines pin, maximize, minimize, the decoration toggle, the chord
+//     move/resize gestures and Alt+F4 — Alt+F4 on your desktop is a gesture
+//     nobody means. Its owner can still destroy it.
+//
+// Setting it is not a claim of authority: a second desktop window is legal
+// and simply stacks at the bottom too. os64 has no privilege model, and
+// inventing one for a stacking hint would be a lock on the wrong door.
+//
+// The ONE combination refused is DESKTOP together with PINNED, which asks to
+// be at the bottom and the top at once. create() answers BAD_ARGS rather than
+// picking a winner — see gui_client.c for why silently resolving it was worse
+// than refusing.
+#define OS64_GUI_WINDOW_DESKTOP          (1u << 5)   // born in the bottom band
+
+// ── Chrome, and how to size a window for the picture you want to show ───────
+//
+// os64_gui_window_create takes FRAME dimensions — the outside of the window,
+// chrome included. Your canvas is what is LEFT after the WM takes its border
+// and titlebar, so asking for a 200x150 frame gets you a 198x129 canvas, and
+// a 200x150 image drawn into it loses two columns and twenty-one rows.
+//
+// EVERY APP THAT WANTS A CANVAS OF A GIVEN SIZE HAS HAD TO KNOW THAT, and
+// until 2026-08-25 the ABI never said it out loud: gclock carries a private
+// `TITLEBAR_FRAME_DELTA 19` (which is this titlebar height minus this border
+// width, derived by hand), and gview got it wrong outright — every image it
+// opened was clipped, and anything under 10x29 was refused as a degenerate
+// window. Two apps, two different mistakes, one missing fact. So the fact is
+// published here, and gui_client.c asserts it against the kernel's own
+// numbers so the two rings cannot drift apart in silence — the same handshake
+// the struct layouts already get.
+#define OS64_GUI_BORDER_WIDTH     1
+#define OS64_GUI_TITLEBAR_HEIGHT  20
+
+// The smallest canvas a window may have. Create REFUSES anything smaller
+// rather than rounding it up, so an app that derives its size from data — an
+// image viewer being the obvious one — has to clamp before it asks, or a
+// perfectly good 4x4 picture decodes and then cannot be shown.
+#define OS64_GUI_MIN_CONTENT      8
+
+// The largest FRAME side create will accept (Codex #30 rd6 — the third
+// unpublished WM rule in three rounds, after the chrome and the minimum;
+// the question the rd4 note asked has its answer: "what else is the window
+// manager keeping to itself?" — this). It is also the memory bound, because
+// a window's canvas is reserved at CAPACITY, and the rule is (Codex #30 rd11
+// corrected an earlier wording that had it wrong both ways):
+//
+//     capacity = min(max(screen, content), wm_dim_max())
+//     wm_dim_max() = max(OS64_GUI_WINDOW_DIM_MAX, screen width, screen height)
+//
+// — the screen, raised to the content if the window was born larger, and
+// never past the ceiling; and since the desktop shell moved to ring 3 the
+// ceiling is this constant OR the screen, whichever is larger, so the screen
+// is ALWAYS reservable in full (a fullscreen shell on a 5K panel is not
+// refused at the door). So a small window on an 800x600 screen reserves
+// 800x600 (a resize up to fullscreen costs no allocation), and this constant
+// is the floor every app may rely on, not the cap the screen is held to.
+// An app that derives a size from data — a viewer with a 5000-pixel image —
+// clamps to THE SCREEN before asking (os64_gui_screen_info), and a request
+// that fits the screen is never refused for size; on a panel wider than this
+// constant it may also ask up to the screen. This constant is what an app
+// may rely on WITHOUT asking the screen size. window.c asserts the WM's own
+// constant equals this one.
+#define OS64_GUI_WINDOW_DIM_MAX   4096
+
+// The frame to ASK FOR in order to BE GIVEN a canvas of content_w x content_h.
+// Pass the same flags you will create with: an undecorated window still keeps
+// its 1px border, and a DESKTOP window has no chrome at all — its frame IS
+// its canvas (the WM's wm_border_width/wm_chrome_top say the same, and the
+// three cases here mirror those two functions case for case; a fourth kind
+// of window gets added to both or the static asserts in gui_client.c are
+// the only thing standing between it and every app sizing itself wrong).
+static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t content_h,
+                                              uint64_t flags,
+                                              uint32_t *frame_w, uint32_t *frame_h)
+{
+    if (flags & OS64_GUI_WINDOW_DESKTOP) {
+        if (frame_w) *frame_w = content_w;
+        if (frame_h) *frame_h = content_h;
+        return;
+    }
+    uint32_t top = (flags & OS64_GUI_WINDOW_NO_DECORATIONS)
+                       ? OS64_GUI_BORDER_WIDTH : OS64_GUI_TITLEBAR_HEIGHT;
+    if (frame_w) *frame_w = content_w + 2u * OS64_GUI_BORDER_WIDTH;
+    if (frame_h) *frame_h = content_h + top + OS64_GUI_BORDER_WIDTH;
+}
+
 // READ-ONLY state, reported by os64_gui_window_get_state and IGNORED at
-// create — gui_window_create masks the flag word down to the three creation
-// bits above, so naming these here cannot let an app claim them at birth.
+// create — gui_window_create masks the flag word down to the CREATION bits
+// above, so naming these here cannot let an app claim them at birth.
 // They are published because an app SAVING its geometry needs to know it is
 // not saving a maximized or minimized frame as its ordinary position.
 #define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)
 #define OS64_GUI_WINDOW_MINIMIZED        (1u << 4)
+// Nobody can see this window right now: it is minimized, or it sits entirely
+// behind one window above it, or a text terminal holds the glass. Kernel-
+// tracked, never yours to set. The frame clock reads it to stop an animation
+// nobody is watching (os64_frame_clock_bind); an app with its own loop reads
+// it after a WINDOW_COVERED/UNCOVERED event. THIS FLAG IS THE TRUTH and the
+// event is only the nudge: a queue is 64 deep and drops the newest when
+// full, so an app that trusted the last event it saw could sleep forever.
+#define OS64_GUI_WINDOW_COVERED          (1u << 7)
 
 // Where a window IS and what state it is in — the readback half of create.
 //
@@ -135,6 +251,24 @@ typedef struct os64_gui_surface
 // answer you would have given anyway minus the chance to say goodbye. libui
 // handles it (os64_ui_t.on_close, else it sets `quit`).
 #define OS64_GUI_EVENT_WINDOW_CLOSE      7
+// Keyboard focus arrived at (`focus.gained` = 1) or left (0) this window.
+// Focus is what a click, Alt+Tab, or a new window's birth moves — you get
+// this for every change that touches one of your windows, and you can
+// ignore it (libui does). Its first customer is a popup menu, which must
+// vanish when you click anywhere else, and a focus change is the only way
+// it can see "anywhere else". `focus.sibling` = 1 means the window on the
+// other end of the change belongs to YOUR task — a cascade's submenu taking
+// focus from its parent — so a menu can tell "the user moved into my own
+// submenu" from "the user went elsewhere" without knowing which handle.
+#define OS64_GUI_EVENT_WINDOW_FOCUS      8
+// Your window just became invisible / visible again (OS64_GUI_WINDOW_COVERED
+// flipped). A NUDGE, not the state: re-read the flag with
+// os64_gui_window_get_state before acting on it, because events can be
+// dropped and this pair can arrive out of step with a queue that was full.
+// The frame clock answers these for any app that uses it; an app with its
+// own loop (gterm) uses them to stop painting while it keeps working.
+#define OS64_GUI_EVENT_WINDOW_COVERED    9
+#define OS64_GUI_EVENT_WINDOW_UNCOVERED  10
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
 // key events and — since resize — by mouse events too.
@@ -180,6 +314,10 @@ typedef struct os64_gui_event
         struct {
             int32_t w, h;       // the NEW content size
         } resize;
+        struct {
+            uint8_t gained;     // 1 = focus arrived here, 0 = it left
+            uint8_t sibling;    // 1 = the other window is one of your own
+        } focus;
     };
     uint64_t tick;              // kTicksSinceStart at enqueue
 } os64_gui_event_t;
@@ -258,6 +396,11 @@ static inline int64_t os64_gui_screen_info(uint32_t *width, uint32_t *height)
 // answer to a poll loop: an app that waits costs NOTHING until somebody
 // types at it — no cadence, no polling, just sleep until the compositor
 // says otherwise.
+//
+// out == NULL: wait until an event is QUEUED and return 1 without taking
+// it — your next os64_gui_event_poll gets it. This is how the frame clock
+// sleeps while your window is covered without stealing your keystrokes,
+// your Alt+F4, or the UNCOVERED nudge from the loop that must handle them.
 static inline int64_t os64_gui_event_wait(int64_t handle,
                                           os64_gui_event_t *out)
 {

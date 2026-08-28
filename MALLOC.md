@@ -202,8 +202,9 @@ it just filed the report under the wrong crime.
   informative.
 - **Alignment guarantee.** RULED: **16 bytes**, always. The header is
   16 bytes, so a 16-aligned block yields a 16-aligned payload with no
-  padding math at all. SSE is still #UD at ring 3, but a malloc ABI is
-  forever and the FPU-state slice will land some day.
+  padding math at all. Userland is SSE2 (the FPU slice, 2026-08-27, saves
+  the register file per thread), so `movaps` through a malloc'd pointer is
+  live code today and 16 is the alignment it needs.
 - **calloc trap.** RULED as designed: fresh pages arrive zeroed and are
   handed over WITHOUT a memset; a recycled block carries a `HEAP_DIRTY`
   bit and gets the memset it deserves. Blocks carved off a pool's virgin

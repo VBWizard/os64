@@ -44,7 +44,7 @@ endif
 # Ring-3 freestanding, same hardening the fixtures earned the hard way:
 #   -mno-red-zone : an interrupt firing mid-function (these run at CPL 3 with
 #                   IF=1 and WILL be preempted) must not clobber red-zone locals
-#   -mno-mmx/sse/sse2 : SIMD is #UD until CR4.OSFXSR + FPU context switching
+#   -msse2            : baseline x87/SSE state is saved per thread by the kernel
 #   -masm=intel   : project-wide asm syntax
 #   -fno-pic/-fno-pie : static, fixed-base for now (PIE is a later item)
 # -Werror in userland too (Chris, 2026-07-18): the const-discard that slipped
@@ -61,8 +61,8 @@ WERROR_FLAG := $(if $(NOWERROR),,-Werror)
 # after the kernel's identical lesson was already written down. The .d files
 # land next to the .o's; the -include below pulls them in. In CFLAGS because
 # CFLAGS is what the compile rules actually pass.
-CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone \
-           -mno-mmx -mno-sse -mno-sse2 -fno-stack-protector -fcf-protection=none \
+CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
+           -fno-stack-protector -fcf-protection=none \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
            -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include
@@ -116,7 +116,7 @@ LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/thread_trampoline.S
+LIBOS64_SRCS := libos64/init.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/image.c libos64/menu.c libos64/thread_trampoline.S
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
 # one world must never be picked up by the other.
@@ -311,6 +311,15 @@ $(OBJ)/pic/%.c.o: %.c
 $(OBJ)/pic/%.S.o: %.S
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
+
+# Userland builds -O0 so a debugger sees every local — but a program whose
+# whole job is arithmetic pays for that at retail: at -O0 the Mandelbrot
+# inner loop spills four doubles to the stack every iteration. Apps named
+# here compile at -O2 (a pattern-specific variable, so nothing else
+# changes). Add one only when it has been MEASURED; a demo that feels
+# slow is usually doing more math, not less optimizing.
+OPTIMIZED_APPS := fpu_demo
+$(foreach a,$(OPTIMIZED_APPS),$(eval $(OBJ)/apps/$(a)/%.c.o: CFLAGS += -O2))
 
 $(OBJ)/%.c.o: %.c
 	@mkdir -p "$(dir $@)"

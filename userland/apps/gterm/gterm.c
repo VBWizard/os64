@@ -46,7 +46,7 @@
 #define CELL_H 16
 #define WANT_COLS 100u
 #define WANT_ROWS 38u
-#define MAX_CELLS 16384u          // 128KB of BSS; caps a resize-crazy future
+#define MAX_CELLS 16384u          // 128KB of BSS; past it a resize keeps the old grid
 
 #define GTERM_BG 0xff000000u      // the console's black, honored
 
@@ -329,15 +329,26 @@ static void paste_step(int32_t master)
 
 int main(int argc, char **argv)
 {
-	(void)argc; (void)argv;
-
 	// Ask for chrome + a WANT_COLS x WANT_ROWS content area (100x38 since
 	// Chris's first day driving it — top with no wrapping is uber important);
 	// then believe the SURFACE we actually got and size the pty from it —
 	// the grid fits the window by construction, whatever the decorations
 	// cost this month. Window geometry persistence (/home/.config) is a
 	// wished-for future; until then the constants ARE the config.
-	int64_t win = os64_gui_window_create("gterm", 140, 120,
+	// `gterm [program args...]` seats that program instead of husk — the
+	// root menu's way of running a console program in a window (`item
+	// "Top" /bin/gterm /bin/top`). Full path: there is no shell in that
+	// chain to search PATH. The window wears the program's name.
+	const char *prog = (argc > 1) ? argv[1] : "/bin/husk";
+	char *const *prog_argv = (argc > 1) ? &argv[1] : (char *[]){ "/bin/husk", 0 };
+	const char *title = prog;
+	for (const char *p = prog; *p; p++)
+		if (*p == '/')
+			title = p + 1;
+	if (title[0] == 0)
+		title = "gterm";
+
+	int64_t win = os64_gui_window_create(title, 140, 120,
 	                                     WANT_COLS * CELL_W + 8,
 	                                     WANT_ROWS * CELL_H + 24, 0);
 	if (win <= 0)
@@ -371,11 +382,10 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	int64_t shell = os64_spawn_seated("/bin/husk",
-	                                  (char *[]){ "/bin/husk", 0 }, master);
-	if (shell <= 0)
+	int64_t seated = os64_spawn_seated(prog, prog_argv, master);
+	if (seated <= 0)
 	{
-		os64_printf("gterm: husk would not seat (%ld)\n", (long)shell);
+		os64_printf("gterm: %s would not seat (%ld)\n", prog, (long)seated);
 		os64_close((int32_t)master);
 		os64_gui_window_destroy(win);
 		return 1;
@@ -385,6 +395,7 @@ int main(int argc, char **argv)
 	os64_frame_clock_init(&clock);
 	uint64_t rendered_gen = ~(uint64_t)0;
 	bool window_alive = true;
+	bool covered = false;   // nobody can see the window: read the pty, skip the paint
 
 	for (;;)
 	{
@@ -459,19 +470,37 @@ int main(int argc, char **argv)
 			}
 			else if (ev.type == OS64_GUI_EVENT_WINDOW_RESIZE)
 			{
-				// The WINDOW resizes; the GRID does not — not yet. The pty's
-				// cell array is fixed at creation, so a bigger window gets
-				// letterboxed in background and a smaller one clips its right
-				// and bottom edges away (every primitive clips, so this is
-				// safe — just partial). Teaching the pty its new size, and
-				// the program inside it, is the other half: grid realloc plus
-				// a notification, which is SIGWINCH's entire job description
-				// and PTY.md's booked "Resize" row. Its own slice, because a
-				// terminal that LIES about its size is worse than one that
-				// lets you see the seam.
+				// The WINDOW resized; the GRID follows (PTY.md § Resize).
+				// Hop one, WM -> us, is this event. Hop two, us -> the
+				// program inside, is pty_resize: the kernel reallocates the
+				// grid, carries the text, and raises SIGWINCH at every task
+				// seated on the slave that installed a handler for it — a
+				// program that never asked gets nothing, not even a pending
+				// bit; husk today ignores it, a full-screen program listens.
+				// We are the master and the master owns the geometry; the
+				// snapshot header reports the new size from the next poll,
+				// so render() picks it up without being told.
 				os64_draw_ctx_refresh(&ctx);
+				uint32_t ncols = ctx.surf.width / CELL_W;
+				uint32_t nrows = ctx.surf.height / CELL_H;
+				if (ncols >= 2 && nrows >= 2 && ncols * nrows <= MAX_CELLS &&
+				    (ncols != cols || nrows != rows))
+				{
+					if (os64_pty_resize(master, ncols, nrows) == 0)
+					{
+						cols = ncols;
+						rows = nrows;
+						gSelLive = false;   // the cells a highlight named just moved
+					}
+					// A refused resize (the kernel's geometry fence — its only refusal)
+					// leaves the old grid: letterboxed or clipped, but honest
+					// about its size to the program inside.
+				}
 				rendered_gen = ~(uint64_t)0;   // force a repaint next pass
 			}
+			// COVERED / UNCOVERED events need no branch here: the flag is
+			// asked every pass below, and a nudge that can be dropped from a
+			// full queue is no basis for a decision either way.
 		}
 		if (erc < 0)
 		{
@@ -489,7 +518,28 @@ int main(int argc, char **argv)
 			break;
 		if (gHdr.flags & OS64_PTY_HUNGUP)
 			break;                  // the session ended: exit closes the window
-		if (gHdr.generation != rendered_gen)
+		// Can anyone see us? Asked EVERY pass — one get_state per frame —
+		// never inferred from the COVERED/UNCOVERED events, either of which
+		// a full queue can drop. gterm does not bind its frame clock the way
+		// an animation does: a hung-up session must still close this window
+		// and a paste in flight must still feed the shell whether or not
+		// anyone is looking, so the loop keeps its cadence and its header
+		// poll, and only the cell snapshot and the PAINT stop while covered.
+		{
+			os64_gui_window_state_t st;
+			bool now_covered = covered;
+			if (os64_gui_window_get_state(win, &st) == 0)
+				now_covered = (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
+			if (covered && !now_covered)
+				rendered_gen = ~(uint64_t)0;   // show what happened while hidden
+			covered = now_covered;
+		}
+		if (covered)
+		{
+			// Whatever moved is noted by the stale rendered_gen; the first
+			// uncovered pass paints it all at once.
+		}
+		else if (gHdr.generation != rendered_gen)
 		{
 			if (os64_pty_snapshot(master, &gHdr, gCells, cols * rows) < 0)
 				break;

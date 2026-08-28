@@ -280,9 +280,11 @@ static void shutdown_terminate_tasks(void)
 	if (asked == 0)
 	{
 		printf("  no tasks to stop\n");
+		printd(DEBUG_SHUTDOWN, "  no tasks to stop\n");
 		return;
 	}
 	printf("  asked %u task%s to stop\n", asked, asked == 1 ? "" : "s");
+	printd(DEBUG_SHUTDOWN, "  asked %u task%s to stop\n", asked, asked == 1 ? "" : "s");
 
 	// Yield while they go. Ending EARLY when the last one is gone is the
 	// point of watching rather than sleeping — a quiet machine should not
@@ -325,8 +327,12 @@ static void shutdown_terminate_tasks(void)
 	}
 
 	if (clockStalled)
+	{
 		printf("  (the tick clock did not advance during the grace — "
 		       "proceeding anyway, on a yield budget)\n");
+		printd(DEBUG_SHUTDOWN, "  (the tick clock did not advance during the grace — "
+		       "proceeding anyway, on a yield budget)\n");
+	}
 
 	// The elapsed time is REPORTED, not assumed. The grace is a ceiling of
 	// SHUTDOWN_GRACE_MS, and how much of it actually gets spent is a fact
@@ -338,8 +344,9 @@ static void shutdown_terminate_tasks(void)
 	if (alive == 0)
 	{
 		printf("  all stopped cleanly (%lu ms)\n", (unsigned long)spentMs);
-		return;
-	}
+		printd(DEBUG_SHUTDOWN, "  all stopped cleanly (%lu ms)\n", (unsigned long)spentMs);
+        return;
+    }
 
 	// The grace ran out. SIGKILL is not a request, and the survivors are
 	// named on the wire — a program that had to be killed at shutdown is
@@ -357,8 +364,9 @@ static void shutdown_terminate_tasks(void)
 	}
 	printf("  %u task%s did not stop within %lu ms; killed\n",
 	       killed, killed == 1 ? "" : "s", (unsigned long)spentMs);
-
-	// A short second grace so the kills actually land before the disks go.
+    printd(DEBUG_SHUTDOWN, "  %u task%s did not stop within %lu ms; killed\n",
+           killed, killed == 1 ? "" : "s", (unsigned long)spentMs);
+    // A short second grace so the kills actually land before the disks go.
 	// SAME SEATBELT as the grace loop above, for the same reason: this waits
 	// on the same clock, and a clock that stalled fifteen lines ago is still
 	// stalled here. (The first draft capped the grace wait and left this one
@@ -380,6 +388,10 @@ void shutdown_system(os64_shutdown_mode_t mode)
 	                    ? "[shutdown] descent started (reboot)\n"
 	                    : "[shutdown] descent started\n");
 
+	// DEBUG_BOOT on purpose: the Ctrl+~ suppression leaves DEBUG_BOOT and
+	// DEBUG_EXCEPTIONS on, so this line still reaches a log somebody has
+	// quieted. (`nolog` zeroes the level outright and takes it too.)
+	printd(DEBUG_BOOT, "The system is going down NOW!\n");
 	// 2. Ask every program to stop, then insist. Before logd retires, so the
 	//    exits make the log.
 	shutdown_terminate_tasks();
@@ -398,8 +410,8 @@ void shutdown_system(os64_shutdown_mode_t mode)
 		printf("  (the tick clock is not advancing — not waiting on the log daemon)\n");
 	shutdown_wait(TICKS_PER_SECOND / 2, NULL);
 	printf("  log daemon retired\n");
-
-	// Whatever the daemon did NOT take, the wire gets — the same emergency
+    printd(DEBUG_SHUTDOWN, "  log daemon retired\n");
+    // Whatever the daemon did NOT take, the wire gets — the same emergency
 	// drain panic uses. Load-bearing on any boot where LOGD= was set but the
 	// daemon never attached (its file's directory missing, say): the kernel
 	// drainer holds serial fire waiting for a sink, so without this line the
@@ -414,11 +426,11 @@ void shutdown_system(os64_shutdown_mode_t mode)
 	call_in_kernel_context(shutdown_sync_all_in_kernel_context, NULL);
 	printf("  %ld open file(s) synced\n", sh_synced < 0 ? 0L : (long)sh_synced);
 
-	// 4. Tell the drives to make it true on the media.
+    // 4. Tell the drives to make it true on the media.
 	call_in_kernel_context(shutdown_flush_in_kernel_context, NULL);
 	printf("  storage caches flushed\n");
 
-	// 5. Out. Interrupts off first — nothing below wants preemption.
+    // 5. Out. Interrupts off first — nothing below wants preemption.
 	__asm__ volatile("cli");
 
 	if (mode == OS64_SHUTDOWN_REBOOT)

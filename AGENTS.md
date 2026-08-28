@@ -16,6 +16,32 @@ IMPORTANT: When you change what code DOES, the comments describing it are part o
 
 **When a comment turns out to be wrong, fix the comment in the same commit as the code — and say in the commit message that it was wrong.** The reasoning that was mistaken is more useful to the next reader than a silent correction.
 
+**WHAT A COMMENT IS FOR (Chris's ruling, 2026-08-25, after PRs #30 and #31 spent 17 of 52 review findings on stale prose):** a comment explains WHY the code exists and HOW it works — *now*. **History belongs in the commit message**, unless a future reader needs it to understand the code in front of them (the scar that explains a guard is code documentation; "this used to be X until Tuesday" is not). Two competing requirements are being balanced here and both are real: the hard parts must be understood by future-us, and every sentence of prose is a claim that can go stale. The way to have both is fewer, truer sentences — each one about the present.
+
+The rules that fall out of it, each earned by a round of review:
+
+1. **Never write a comment with an expiry date.** "The migration is not finished YET" was accurate when written and *designed* to be false one slice later. If a state is temporary, name where it is tracked (DEBTS.md) and keep the tense out of the code.
+2. **Superlatives are claims with a short half-life.** ONLY / NOTHING ELSE / THE ONE / EXACTLY ONE / EVERY / NEVER / ALWAYS — before writing one, ask what would make it false and whether anything is likely to. "The ONE whole-file reader" had three siblings; "buys a z-band and NOTHING ELSE" was contradicted by its own next paragraph, in four files.
+3. **When a fix says "the other file / the other door / the other copy", find it BEFORE pushing.** Nearly a third of the code findings were the SAME fix at a sibling site, one round later — rd1's commit message said "the guard existed on one door of two" and rd2 was the other door. The sibling grep is part of the fix.
+4. **After a merge forward, re-read what came across.** A parent's true claim about a thing the child changed is the classic (the capacity rule was exact on libimage and wrong on desktop-shell).
+5. **Run the tool.** `tools/stale_refs.sh` is the MECHANICAL half of the test: before every commit that deletes, renames or moves anything, it lists every retired name that survives only in prose, hit by hit, and every ADDED comment carrying a rule-2 word. Six of the seventeen comment findings were retired names in files the diff never touched — the old wake helper in two docs, the deleted `gui/desktop.c` in five headers, `gui_startup` in `conf.c` — every one a two-second grep nobody ran. Read every line it prints; history may name the dead, but on purpose. What it cannot catch is a REASON that went stale while staying grammatical ("the kernel walks the ladder for its own readers" — after the last reader left). That half is still yours, and rule 0 is how you find it: is this still true, and is it still the WHOLE truth?
+
+**WHAT IS A REPORTABLE FINDING (review scope).** Everything above is an
+AUTHORING rule: it binds whoever changes the code, and the author is expected
+to have applied it before submitting. A review round is metered, and it buys
+hazard-hunting. So when you are REVIEWING rather than authoring:
+
+- **File it** when a comment or a name states something FALSE about the code
+  it describes — and rank it as the hazard it hides, not as a comment. Every
+  receipt above is this kind: a comment that lies about locking is a locking
+  finding.
+- **Do not file it** when the entire fix is text — wording, tone,
+  completeness, a missing cross-reference, prose in a .md file, or a true
+  comment that could be clearer or could "also mention" something.
+
+The test: what breaks if a reader believes this? If the answer is nothing, it
+is not a finding.
+
 ### Regression-First Debugging
 IMPORTANT: When a new crash, hang, fault, or behavioral regression appears after recent edits, first assume the most recent relevant change may have caused it.
 

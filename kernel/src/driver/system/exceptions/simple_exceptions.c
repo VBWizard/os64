@@ -521,7 +521,7 @@ static const char *exception_name(uint64_t vector)
         case 3:  return "Breakpoint (#BP) — an int3 executed";
         case 4:  return "Overflow (#OF)";
         case 5:  return "BOUND Range Exceeded (#BR)";
-        case 7:  return "Device Not Available (#NM) — FPU/SSE used before CR0 setup";
+        case 7:  return "Device Not Available (#NM)";
         case 10: return "Invalid TSS (#TS)";
         case 11: return "Segment Not Present (#NP)";
         case 12: return "Stack-Segment Fault (#SS)";
@@ -539,6 +539,53 @@ void handle_unexpected_exception(uint64_t vector, uint64_t error_code, uint64_t 
     char msg[160];
     snprintf(msg, sizeof(msg), "%s [vector %lu]", exception_name(vector), vector);
     exception_panic(msg, rip, error_code);
+}
+
+// The segfault's siblings: every other exception ring 3 can raise. Same
+// promise as user_fault_kill — the program dies, the OS does not — and the
+// same report shape, minus the #PF-only lines (there is no CR2 to name and no
+// error-code bits to decode for most of these; #GP/#AC carry one, and the
+// register dump prints it raw).
+//
+// THE EXIT CODE NAMES THE VECTOR: 200 + vector. Not 128 + signal, because
+// os64 has no signal for these — SIGFPE/SIGILL/SIGBUS are Seventh Edition
+// numbers for deliveries this kernel does not make, and borrowing one
+// would make `$?` claim a signal that never existed. 200..231 sits above
+// the 128+signal band (129..159) so the two can never be confused, and a
+// shell script can tell a divide-by-zero (200) from an unmasked SSE fault
+// (219) without the log. A CATCHABLE signal for these is consumer-driven
+// and booked in DEBTS.
+//
+// Safe here for the same reasons as user_fault_kill: the unified prologue
+// cli'd, the CPU switched to the interrupt stack, and task_exit is built to
+// leave from exactly this footing. Returns — without killing — only when
+// there is no user task on this core to blame, which the caller treats as
+// the kernel-fatal case it then is.
+#define EXIT_CPU_EXCEPTION_BASE 200
+
+void user_exception_kill(exception_context_t *ctx)
+{
+	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
+	thread_t *thread = cls ? cls->currentThread : NULL;
+	task_t *task = thread ? (task_t *)thread->ownerTask : NULL;
+	if (task == NULL || task->kernelTask)
+		return;
+
+	exception_wire_lock();
+
+	FAULT_PRINT(false, "\nFatal exception: %s (task %lu, %s)\n",
+	            task->exename[0] ? task->exename : "(unnamed)", task->taskID,
+	            exception_vector_name(ctx->vector));
+	FAULT_PRINT(false, "  RIP 0x%016lx  error 0x%lx  exit %lu\n",
+	            ctx->rip, ctx->error_code, EXIT_CPU_EXCEPTION_BASE + ctx->vector);
+	exception_report_registers(ctx, false);   // the OS survives this — ordinary log, in order
+	stack_trace_user(task, ctx->rip, ctx->rbp);
+
+	exception_wire_unlock();
+
+	task->retVal = EXIT_CPU_EXCEPTION_BASE + ctx->vector;
+	task_exit();
+	__builtin_unreachable();
 }
 
 

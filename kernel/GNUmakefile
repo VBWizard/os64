@@ -36,11 +36,9 @@ $(call USER_VARIABLE,AR,x86_64-elf-ar)
 $(call USER_VARIABLE,LD,x86_64-elf-ld)
 
 # User controllable C flags.
-# -mno-mmx/-mno-sse/-mno-sse2: the kernel must not emit SIMD — the scheduler
-# does not save/restore FPU/XMM state on context switch, and CR4.OSFXSR is
-# off anyway (any SSE instruction is #UD; the syscall dispatcher's array
-# zeroing found this the hard way).  Revisit when an FPU-state slice adds
-# fxsave/xsave switching for userland.
+# -mno-mmx/-mno-sse/-mno-sse2: the kernel must not emit SIMD. The live FPU
+# register file belongs to the interrupted user thread until the scheduler
+# saves it, so interrupt, syscall, and scheduler code may not borrow it.
 $(call USER_VARIABLE,CFLAGS,-mno-red-zone -mno-mmx -mno-sse -mno-sse2 -g -O0 -I include -pipe)
 
 # User controllable C preprocessor flags. We set none by default.

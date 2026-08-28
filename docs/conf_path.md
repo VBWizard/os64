@@ -17,13 +17,14 @@ Six config files, six hand-rolled "where do I look" sequences:
 | `husk` (`husk.rc`) | 3 | `/home` → `/etc` → `/fat` (lifeboat spelling) |
 | `os64get` (`os64get.conf`) | 3 | `/home` → `/etc` → cwd |
 | resolver (`hosts`, `net.conf`) | 3 (libos64) | `/home` → `/etc` (both) |
-| desktop (`desktop.conf`) | 0 (`gui/desktop.c`) | `/home` → `/etc` |
+| desktop (`desktop.conf`) | 0 (`gui/desktop.c` — deleted 2026-08-25; the reader is ring-3 `/bin/desktop` now, via `os64_conf_find`) | `/home` → `/etc` |
 
 Same idea, five spellings, and the seventh file would add a sixth. Chris's
 ask: **one setting says where config files are looked for, first to last, and
 every reader obeys it.** He considered the environment and rejected it — it
-freezes at spawn, it is per-process, and the kernel's own readers (desktop,
-hosts) have no environment at all. A file tells the truth at read time; that
+freezes at spawn, it is per-process, and a reader with no environment at all
+(the kernel's desktop reader, as it was then; the resolve syscall, still) cannot
+use it. A file tells the truth at read time; that
 is the `/sys/gui` ruling (GRAPHICS.md) applied to configuration.
 
 ## What was built

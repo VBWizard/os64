@@ -18,9 +18,10 @@ days.)*
 answer. `SIGPIPE`: a program that wants to survive a vanishing reader cannot.
 `SIGTERM`: Chris asked how to subscribe the day the shutdown ladder was built,
 and the honest answer was "you can't". `SIGHUP`: a GUI app cannot say "wait —
-unsaved work" when its terminal hangs up. And `SIGWINCH`, which does not exist
-yet and has nowhere to be delivered even if it did — which is why a maximized
-gterm still reports 38x100 and `ls` still double-spaces.*
+unsaved work" when its terminal hangs up. And `SIGWINCH`, which did not exist
+when this was written and had nowhere to be delivered even if it had — which
+was why a maximized gterm reported 38x100 (built 2026-08-25, PTY.md § Resize;
+`ls` still double-spaces, and that is the deferred-wrap bug, not a signal).*
 
 ## What already exists, and is already right
 
@@ -232,8 +233,12 @@ across delivery. There is no reset-to-default and never was.
 
 ### 8. Interrupted calls return INTERRUPTED — no restart, no errno
 
-A blocking call whose thread runs a handler **returns a distinct INTERRUPTED
-result**, and the caller decides what to do about it.
+A blocking call cut short by a signal its thread handled at the moment it
+woke **returns a distinct INTERRUPTED result**, and the caller decides what
+to do about it. INTERRUPTED promises that the wait ended early — not that
+the handler ran: it usually has, but a sibling thread can uninstall the
+handler between the wake and the syscall boundary, and the call still
+answers INTERRUPTED with nothing run (Codex #32 rd3).
 
 This is not a new convention: `os64_gui_event_wait` already returns
 `INTERRUPTED` when its caller is being killed, and libui already handles it
@@ -315,9 +320,10 @@ is guaranteed at a place that already has everything delivery needs.
   preempted thread in the system resumes. `sigreturn` writes the saved values
   into `regs` and lets the thread take that ordinary road.
 
-**What it does need: the whole frame.** §5 saves four values (RAX, RIP, RSP,
-RFLAGS) and gets away with it because the interruption point is a syscall
-RETURN, where the ABI has already declared RCX/R11 dead and a C handler
+**What it does need: the whole general-register frame.** §5 saves four
+general/control values (RAX, RIP, RSP, RFLAGS), plus the interrupted FXSAVE
+image, and gets away with the short GPR set because the interruption point is
+a syscall RETURN, where the ABI has already declared RCX/R11 dead and a C handler
 preserves the callee-saved set itself. A spinning thread is interrupted at an
 ARBITRARY instruction, so every register is live and a C handler will clobber
 half of them without putting them back. This frame carries the general
@@ -358,17 +364,14 @@ the fourteen remaining GPRs off the end. The stub reads signo at +40 and the
 handler at +48 exactly as before, so ONE stub serves both delivery paths and
 task_exit_asm.S does not change at all. The discriminator is a SECOND MAGIC
 ("SIGRFRM2"), not a flag field — a flag inside user-writable memory is the
-attacker's to flip, and flipping it would upgrade a 4-value restore into a
-full-file restore. Two magics mean forging the wrong one buys the validation
+attacker's to flip, and flipping it would upgrade a short-GPR restore into a
+full-GPR restore. Two magics mean forging the wrong one buys the validation
 of the frame you forged, never the other one's.
 
-**No FXSAVE area, and the reason is the build system.** Userland is compiled
-`-mno-mmx -mno-sse -mno-sse2` (userland/GNUmakefile CFLAGS), so an
-arbitrary interruption point has NO live vector state to preserve — the
-question that forced Linux's interrupt-delivered frame to carry an fpstate
-simply does not arise. THE FRAME'S COMPLETENESS IS PREDICATED ON THOSE
-FLAGS: the day userland grows SSE, this frame grows a 512-byte FXSAVE area
-or float code corrupts across delivery, quietly, weekly.
+**The prefix carries an FXSAVE area.** Userland uses the x86-64 SSE2 baseline,
+and a signal handler may use x87/SSE regardless of whether the interrupted
+code did. Both frame forms therefore preserve the thread's 512-byte x87/MMX/
+SSE image; `sigreturn` validates and restores it with the integer context.
 
 **Delivery lives where the forced push lives**, in
 `scheduler_signal_visit` (né `scheduler_sigint_forced_syscall`), called at
@@ -525,8 +528,16 @@ the next.
   classic Unix behaviour and is not a bug.
 - **Job control** — `SIGTSTP`/`SIGCONT`, `fg`/`bg`. Its own DEBTS row, and it
   wants the debugger's `ctl stop`/`start` built with it.
-- **`SIGWINCH` itself.** This slice builds the road; the terminal-resize row
-  (DEBTS) drives on it, along with gterm resizing its pty grid.
+- ~~**`SIGWINCH` itself.**~~ This slice built the road; the terminal-resize
+  slice drove on it two days later (2026-08-25, PTY.md § Resize): signal 28
+  is real, raised by `pty_resize` at every seat of the slave that has a
+  handler for it (a seat without one gets no bit — `SIGNALS_DEFAULT_IS_IGNORE`
+  is consumed at publication), default IGNORE. It was the first catchable
+  signal whose default is not death, and
+  that exposed a rule this document never stated: **a park loop must end for
+  any pending signal a handler will catch, not only for a terminate**, or
+  the handler is armed at the next syscall exit the program happens to make
+  — `signal_park_must_end` is that rule, at every blocking wait.
 - **Signal-safe library rules.** Which libos64 functions may be called from a
   handler is a real question with a real answer, and it deserves its own pass
   once there is a handler to call them from.

@@ -9,6 +9,7 @@
 #include "io.h"
 #include "serial_logging.h"
 #include "init.h"
+#include "fpu.h"       // fpu_report — the boot line that says the FPU is on
 #include "strftime.h"
 #include "driver/system/cpudet.h"
 #include "smp.h"
@@ -939,6 +940,9 @@ void kernel_main()
 	// my new build actually boot?" ever after.
 	printd(DEBUG_BOOT, "***** OS64 (built %s) - system booting at %s *****\n", kBuildStamp, startTime);
 	printf(	"***** OS64 (built %s) - system booting at %s *****\n", kBuildStamp, startTime);
+	// Right under the banner, and not earlier: hardware_init switched the
+	// FPU on, but the glass only exists from init_video onward.
+	fpu_report();
 	uint64_t high, low;
 	parse_debug_level(kDebugLevel, &high, &low);
 	// Say the verdict on the GLASS. On a machine with no UART this is the only

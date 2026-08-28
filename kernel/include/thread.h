@@ -3,7 +3,9 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "signals.h"
+#include "fpu.h"
 
 #define THREAD_STACK_GUARD_PAGE_COUNT	4			//Number of pages of unmapped memory assigned to each side of a stack as a guard
 
@@ -72,6 +74,10 @@ typedef struct s_thread
 	bool idleThread, execDontSaveRegisters;
 	volatile uint64_t retVal;
 	thread_context_t regs;
+	// The x87/MMX/SSE register file belongs to the thread just as regs does.
+	// The scheduler saves it before another thread runs, and signal frames
+	// snapshot it before a handler is allowed to use floating-point code.
+	fpu_state_t fpuState;
 	uintptr_t* pml4;
 	eThreadState threadState;
 	uint64_t totalRunTicks, ticksSinceLastInterrupted, prioritizedTicksInRunnable;
@@ -154,6 +160,9 @@ typedef struct s_thread
 	// else — that is what makes "idle %" a measurement, not an assumption.
 	uint64_t runCycles;
 } thread_t;
+
+_Static_assert(offsetof(thread_t, fpuState) % 16 == 0,
+		"thread FXSAVE state must begin on a 16-byte boundary");
 
 thread_t* createThread(void* parentTask, bool kernelThread);
 uintptr_t thread_allocate_guarded_stack_memory(uintptr_t pml4, uintptr_t *virtualStart, uint64_t requestedLength, bool isRing3Stack);

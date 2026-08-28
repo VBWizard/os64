@@ -228,11 +228,17 @@ int main(int argc, char **argv)
     //     matter what the work costs.
     os64_frame_clock_t frameClock;
     os64_frame_clock_init(&frameClock);
+    os64_frame_clock_bind(&frameClock, gClockWin);   // sleep while nobody can see the face
     while (gRunning)
     {
         os64_gui_event_t ev;
         while (os64_gui_event_poll(gClockWin, &ev) == 1)
         os64_ui_dispatch(&gUi, &ev);
+        // A close request drained above clears gRunning; leave NOW rather
+        // than sleep one more frame — behind a covering window that sleep
+        // lasts until the next event, not the next tick.
+        if (!gRunning)
+            break;
         // Sync to frames instead of blindly sleeping for 500 ms!
         os64_frame_wait(&frameClock, 500);
         refresh_clock_text();

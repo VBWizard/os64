@@ -22,6 +22,50 @@ right. Names count as comments (`oversized` had to become `refuse` the day it
 also meant "unreadable"). Full argument and the receipts: AGENTS.md § The
 Comment Is Part Of The Code.
 
+**AND ITS COUNTERWEIGHT, because the rule above pulls in one direction only:
+a comment says WHY the code exists and HOW it works — NOW.** Every sentence is
+a claim that can go stale, so the way to keep them all true is to write fewer
+of them.
+
+- **WHY and HOW, in the present tense.** When either changes, the comment
+  changes with it, in the same commit. That half is not negotiable — it is
+  the rule above.
+- **Narrative only when the thing is big enough to earn it.** The story of how
+  something came to be is welcome where it explains a design nobody would
+  otherwise credit; it is not the default voice of every block. Otherwise
+  history goes in the COMMIT MESSAGE, where it cannot go stale.
+- **No expiry dates.** "The migration is not finished YET" was written to
+  become false. Name where the state is tracked (DEBTS.md) and keep the tense
+  out of the code.
+- **No inventories.** Counts and pointers to other places — "three sites do
+  this", "the only caller", "both doors", "this runs after X" — go false when
+  the OTHER place changes and nothing touches this line. WHY a guard exists is
+  durable; WHERE its siblings live is not.
+- **Superlatives have a short half-life** (ONLY / EVERY / NEVER / EXACTLY
+  ONE). Before writing one, ask what would make it false.
+- **Run `tools/stale_refs.sh`** before any commit that deletes, renames or
+  moves a name. It is the mechanical half of the test; the semantic half is
+  yours.
+
+**HOW A REVIEW ROUND IS RUN (ruled 2026-08-26, after a morning was spent on
+findings that were all true):** the findings are correct, so the cure is
+upstream of the reviewer, not a filter on it.
+
+- **The truth pass is YOURS, before every submit and before every
+  re-request.** Every comment in the diff, plus every comment the diff makes
+  false elsewhere, re-read against the code: still true, still the WHOLE
+  truth? Take the extra time. A slow submit is cheaper than a review round —
+  Chris has explicitly traded latency for it.
+- **A finding whose entire fix is text does not go to Chris.** Fix it and give
+  it one line in the round summary. He reads the diff when he wants to, and
+  he does.
+- **Done is a rule, not a mood.** Two consecutive rounds with no
+  code-changing finding: it merges.
+- **Match the reviewer to the risk.** An outside review round costs real money
+  and a chunk of Chris's day. It earns that on kernel concurrency, lifetime,
+  and ring-boundary work. Userland apps, GUI, and polish slices get reviewed
+  here and merged.
+
 ## Project Overview
 
 os64 is a 64-bit x86 operating system kernel built for educational purposes. It uses the Limine bootloader protocol and boots on QEMU (or real hardware) in both BIOS and UEFI modes.
@@ -331,6 +375,34 @@ the library serves every process). How it fits together:
 - Demand paging: pages faulted in on access
 - Entry point: `kernel/test/elf/serial_ping.S` (test ELF that writes to serial port)
 
+### Floating Point (`kernel/src/fpu.c`, `fpu.h`)
+
+- **The x87/MMX/SSE register file is thread context**, saved with `fxsave64`
+  in `scheduler_store_thread` and restored in `scheduler_load_thread` — EAGER,
+  no `CR0.TS`/`#NM` laziness. The invariant: the LIVE register file always
+  belongs to the thread the core is running, because **the kernel is built
+  `-mno-sse` and never touches it**. Kernel code that emits SIMD would break
+  that invariant silently; keep the flag.
+- Userland is `-msse2` (the x86-64 baseline) — every program is an FPU
+  program (a varargs `printf` prologue touches XMM), so "disable the FPU" is
+  not a thing this OS can offer without a separately built userland.
+- **Every signal frame carries the 512-byte image** (§5 and §9 `fxsave` the
+  live file; §10 copies `thread->fpuState` because the thread is off-CPU).
+  `sigreturn` masks the user-supplied MXCSR with the CPU's `MXCSR_MASK`
+  before `fxrstor` — a reserved bit there is a KERNEL `#GP`.
+- **XSAVE/AVX deliberately off** (`CR4.OSXSAVE` clear): AVX is `#UD` at
+  ring 3, which is the safe, consistent state. DEBTS § Floating point.
+- **A ring-3 CPU exception kills the program, never the machine** — ALL of
+  them, in one branch of `exception_dispatch` (`user_exception_kill`), not
+  per-vector special cases: `#DE`, `#UD`, `#GP`, `#AC`, and the two the FPU
+  turned on, `#MF` (`CR0.NE`) and `#XM` (`CR4.OSXMMEXCPT`). Exit code is
+  **200 + vector** — os64 has no SIGFPE/SIGILL, and 128+signal would name a
+  signal that never existed. `#DF`/`#MC` stay fatal whatever CS says.
+- The boot line `FPU: x87 SSE SSE2 ... enabled, FXSAVE per thread` prints to
+  the glass AND the log (`fpu_report`); `kFPUFeatures` holds the answers.
+- Fixtures: `fputest` (state survives preemption, migration, and a handler
+  that wipes every register), `fpfault xm|mf|de` (pass by dying, 219/216/200).
+
 ### Interrupt Handling
 
 **IDT (`kernel/src/driver/system/idt.c`):**
@@ -351,6 +423,33 @@ the library serves every process). How it fits together:
   rewrites `thread->regs` — remember `mp_isrSaved*` is a mirror that must be
   updated too; **§9** the page-fault handler resumes a caught SIGSEGV out of
   the exception frame. SIGKILL is never catchable and never deferred
+- **A park ends for ANY caught signal, not only a terminate** (2026-08-25,
+  the SIGWINCH slice — PTY.md § Resize). Every blocking wait (console, pipes,
+  sleep, wait, event_wait, join, the net waits) and `processSignals`' sleeper
+  sweep ask `signal_park_must_end(thread)`; a new blocking loop must ask it
+  too, or a caught non-death signal (SIGWINCH is the first) reaches its
+  handler only at the program's next syscall — `task_wait` was the one that
+  did not, and a shell could not hear a resize until its job ended (Codex
+  #32). On the way OUT, ask `current_thread_will_catch()`, never
+  `signal_has_handler_for_pending` alone: a sibling can deliver the
+  task-wide signal first and clear your bit, and "nothing pending" must
+  read as "you will not die", not as a death with no name. AND VOID YOUR
+  OWN REGISTRATION AT THE TOP OF EVERY PASS: a park loop registers itself
+  in a waiter slot (`p->readWaiter`, `c->waiter`, `j->waiter`…) that only
+  a CLAIMANT clears — a backstop wake or a signal does not — so a thread
+  awake at the loop top must clear its own slot under the object's lock
+  before any return (`pipe_forget_waiter` is the shape). A slot left
+  naming a thread that returned is a spurious wake out of some later
+  sleep, or a read of freed memory once that thread exits (Codex #32 rd2
+  — eight loops had it; the caught-signal exit made it reachable by a
+  live thread). SIGWINCH = 28,
+  raised by `pty_resize` (syscall 51) at every task seated on the slave
+  that has a handler for it,
+  default IGNORE — it lives in `SIGNALS_DEFAULT_IS_IGNORE` and must never
+  enter `SIGNALS_DEFAULT_IS_DEATH`. Ignore means CONSUMED AT PUBLICATION:
+  a task with no handler installed gets no bit at all (a parked thread
+  never reaches the pick that would have cleared it, and a handler
+  installed later must not fire for a resize from an hour ago)
 - `task->signalLock` has TWO jobs: serializing delivery, and keeping a user
   page alive across a frame write (see its comment in task.h — the second job
   is not obvious from the name and a missed site was a kernel panic)
@@ -511,7 +610,7 @@ design in `docs/conf_path.md`.
   stay LAST, deliberately: the lifeboat exists for the day the ext2 root is
   broken, and the search path's own root file lives on that root.
 - **FOLDING CASE IS THE READER'S CHOICE, NEVER THE PARSER'S**, because os64
-  has two kinds of key. A SETTING name (`position`, `format`, `hello`) is
+  has two kinds of key. A SETTING name (`position`, `format`, `start`) is
   compared with `os64_streq_nocase` — case there is noise, and
   `os64_conf_get` folds for you. A key that is DATA is compared verbatim:
   **os64get.conf's keys are FILE NAMES**, and folding `BOOTX64.EFI` would
@@ -537,12 +636,17 @@ design in `docs/conf_path.md`.
   frame rect in create's units plus the live flags. Without it no app could
   learn anything the user did to its window — drag, resize, Ctrl+Alt+P — so
   none could save what you had arranged.
-- **`gui.conf` says what starts with the desktop** (`gui/startup.c`, read at
-  the top of `gui_start()`): `start = /bin/gterm`, repeatable and in order,
-  plus `hello = yes|no` for the legacy "hello os64" window. The rule worth
-  knowing: **if the file exists, its `start` lines are the whole list — even
-  when there are none**, which is how "start nothing" is spelled; the
-  built-in demo pair applies only when no `gui.conf` is found at all. This
+- **`gui.conf` says what starts with the desktop** — read by **`/bin/desktop`,
+  the ring-3 desktop shell** since 2026-08-25 (it was `gui/startup.c` before
+  that): `start = /bin/gterm`, repeatable and in order. The legacy `hello`
+  window and its `hello = yes|no` key were **retired 2026-08-25** (Chris: "if
+  I want to reminisce, I can run an old build"), and that key was the last
+  thing making the KERNEL read this file — `gui/startup.c` is gone and
+  gui.conf has exactly one reader. The
+  rule worth knowing: **if the file exists, its `start` lines are the whole
+  list — even when there are none**, which is how "start nothing" is
+  spelled; the built-in demo pair applies only when no `gui.conf` is found at
+  all. This
   exists because GUI programs used to be launched from `husk.rc`, which runs
   in EVERY husk (VT1 and VT2 both start one, so you got two of everything)
   and runs on text boots too (where every GUI line failed once per terminal).
