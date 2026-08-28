@@ -3714,8 +3714,8 @@ int main(int argc, char **argv, char **envp)
 	if (command != NULL)
 		return run_command_argument(command);
 
-	os64_write(1, "husk — the os64 shell. `exit` to quit.\n",
-	           sizeof("husk — the os64 shell. `exit` to quit.\n") - 1);
+	os64_write(1, "husk - the os64 shell. `exit` to quit.\n",
+	           sizeof("husk - the os64 shell. `exit` to quit.\n") - 1);
 	os64_debug_log("husk: started");
 
 	char line[LINE_MAX];
