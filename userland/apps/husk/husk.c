@@ -461,15 +461,47 @@ static void complete_at_caret(char *buf, int *n, int *pos, int cap)
 	else
 		comp_list_and_repaint(buf, *n, *pos);
 }
+// ── typeahead pushback ──────────────────────────────────────────────────────
+// A `while` loop polls the console between iterations for a Ctrl+C
+// (loop_interrupted). Any other byte it finds was typed ahead and belongs to
+// the next prompt, so it is parked here and read_line drains it first —
+// a running loop must not eat your typing. Bounded; past the bound a byte
+// is dropped, which is what a full tty queue does too.
+#define PUSHBACK_MAX 64
+static char s_pushback[PUSHBACK_MAX];
+static int  s_pushback_n = 0;      // bytes parked
+static int  s_pushback_i = 0;      // next to hand out
+
+static void pushback_put(char c)
+{
+	if (s_pushback_n < PUSHBACK_MAX)
+		s_pushback[s_pushback_n++] = c;
+}
+
+// One byte for the line editor: the pushback first, then the console.
+static int64_t console_byte(char *c)
+{
+	if (s_pushback_i < s_pushback_n)
+	{
+		*c = s_pushback[s_pushback_i++];
+		if (s_pushback_i == s_pushback_n)
+			s_pushback_i = s_pushback_n = 0;
+		return 1;
+	}
+	return os64_read(0, c, 1);
+}
+
 // Read one line from the console into buf (NUL-terminated), echoing as we go.
-// Returns the length. Handles Enter (submit), Backspace (erase before the
+// Returns the length, or -1 for a Ctrl+C at the prompt. Handles Enter
+// (submit), Backspace (erase before the
 // caret), Left/Right caret movement with mid-line insert (2026-08-08 — the
 // day the console grew a real cursor to make it visible), Up/Down history
 // recall, and — since 2026-08-16 — Delete (erase AT the caret), Home/End,
 // and the control chords every terminal has answered to since the ASR-33
 // era gave way to CRTs: Ctrl+A/E (home/end, emacs's spelling), Ctrl+U (kill
 // to start — V7's line-kill, promoted from @), Ctrl+K (kill to end), and
-// Ctrl+W (word erase — 4BSD's werase, the one Bill Joy typed).
+// Ctrl+W (word erase — 4BSD's werase, the one Bill Joy typed). Tab completes
+// the word at the caret (complete_at_caret, above).
 //
 // KNOWN LIMIT, shared with history recall since birth: the renderer's '\b'
 // clamps at column 0, so editing a line that has WRAPPED misbehaves at the
@@ -485,7 +517,7 @@ static int read_line(char *buf, int cap)
 	for (;;)
 	{
 		char c;
-		if (os64_read(0, &c, 1) != 1)
+		if (console_byte(&c) != 1)
 			continue;
 
 		if (c == '\r' || c == '\n')
@@ -512,9 +544,11 @@ static int read_line(char *buf, int cap)
 			// "Ctrl+C at the prompt": kill the half-typed line, say so, and
 			// let main() re-prompt. A keystroke that visibly does nothing
 			// erodes all faith that it ever does anything — house doctrine.
+			// -1, not 0: an empty line inside an open `if` is nothing, a
+			// Ctrl+C there abandons the whole block.
 			os64_write(1, "^C\n", 3);
 			buf[0] = 0;
-			return 0;
+			return -1;
 		}
 		if (c == 0x1B)                       // ESC — a VT100 sequence begins
 		{
@@ -522,9 +556,9 @@ static int read_line(char *buf, int cap)
 			// the two follow-up reads block only in the pathological case of
 			// a bare ESC from some future source, which no key produces today.
 			char seq[2];
-			if (os64_read(0, &seq[0], 1) != 1 || seq[0] != '[')
+			if (console_byte(&seq[0]) != 1 || seq[0] != '[')
 				continue;        // lone ESC or unknown: swallow
-			if (os64_read(0, &seq[1], 1) != 1)
+			if (console_byte(&seq[1]) != 1)
 				continue;
 
 			// The digit-parameter family: ESC [ <n> ~ (Delete=3, Insert=2,
@@ -538,7 +572,7 @@ static int read_line(char *buf, int cap)
 			{
 				param = seq[1];
 				char tilde;
-				if (os64_read(0, &tilde, 1) != 1 || tilde != '~')
+				if (console_byte(&tilde) != 1 || tilde != '~')
 					continue;    // malformed burst: swallow what we saw
 				seq[1] = '~';
 			}
@@ -2589,6 +2623,26 @@ static int run_segment(char *seg, int *last_status)
 		return exiting;
 	}
 
+	// `!` negates the verdict — Bourne's, and the only way to say "if this
+	// FAILS" without a program that exists to fail. A prefix like `time`,
+	// for the same vantage-point reason: it reports on the whole pipeline.
+	if (first_token_is(expanded, "!"))
+	{
+		char *rest = expanded;
+		while (*rest == ' ') rest++;
+		rest += 1;                            // "!"
+		while (*rest == ' ' || *rest == '\t') rest++;
+		if (*rest == '\0')
+		{
+			err_puts("husk: !: nothing to negate\n");
+			*last_status = 1;
+			return 0;
+		}
+		int exiting = run_expanded(rest, last_status);
+		*last_status = (*last_status == 0) ? 1 : 0;
+		return exiting;
+	}
+
 	return run_expanded(expanded, last_status);
 }
 
@@ -2629,6 +2683,455 @@ static int run_line(char *line, int *last_status)
 			return 1;
 	}
 	return 0;
+}
+
+// ── control flow: if / while ────────────────────────────────────────────────
+// Thompson's shell had no syntax for this at all: `/bin/if` and `/bin/goto`
+// were PROGRAMS (goto seeked the script file). Bourne made them syntax in
+// 1977 and borrowed Algol 68's closers — fi, done, esac — writing the shell
+// in C macros that made it look like Algol. husk takes the syntax and keeps
+// the test OUTSIDE it: `if` decides on an exit status, which is all a shell
+// should know; `test`, `true` and `false` are programs (V7 shipped /bin/test
+// as one in 1979, and `[` was a link to it).
+//
+//   if LIST          while LIST
+//   then …           do …
+//   elif LIST        done
+//   then …
+//   else …
+//   fi
+//
+// A LIST is any command line; its last status decides (0 = true). `then`,
+// `do`, `else` may follow a `;` on the same line, or open their own. `!`
+// negates (run_segment). Every keyword lives in s_keywords, once.
+//
+// THE ASSEMBLER AND THE EVALUATOR. Every line source — keyboard, rc, script,
+// -c — hands physical lines to feed_line, which cuts them into STATEMENTS at
+// top-level `;` and feeds each. A statement outside a block runs at once, as
+// it always has. `if`/`while` opens a block: statements are collected until
+// the matching `fi`/`done` closes it, then the whole block is run by the
+// evaluator, which walks the collected statements recursively. Collected,
+// because a loop body runs more than once and a branch may not run at all —
+// neither can be executed as it is read.
+//
+// A STATEMENT LIMIT AND A DEPTH LIMIT, both loud (BLOCK_STMTS_MAX,
+// BLOCK_DEPTH_MAX). Ctrl+C: a child that died of it (130) aborts the block
+// it was in, and a loop polls the console between iterations for one typed
+// while husk itself was foreground (loop_interrupted). Interactive only —
+// a script's stdin may be data, and polling it would eat that data.
+// `break`/`continue`/`for` are booked (DEBTS § husk).
+enum { KW_NONE, KW_IF, KW_THEN, KW_ELIF, KW_ELSE, KW_FI, KW_WHILE, KW_DO, KW_DONE };
+static const char *const s_keywords[] = {
+	"", "if", "then", "elif", "else", "fi", "while", "do", "done"
+};
+
+// The first word of `s` as a keyword (KW_NONE if it is not one), with *rest
+// pointing past it and its blanks. A keyword is the WHOLE word: `iffy` is a
+// program.
+static int keyword_of(const char *s, const char **rest)
+{
+	while (*s == ' ' || *s == '\t')
+		s++;
+	for (int k = KW_IF; k <= KW_DONE; k++)
+	{
+		const char *w = s_keywords[k];
+		const char *p = s;
+		while (*w != '\0' && *p == *w) { p++; w++; }
+		if (*w == '\0' && (*p == '\0' || *p == ' ' || *p == '\t'))
+		{
+			while (*p == ' ' || *p == '\t')
+				p++;
+			if (rest != NULL)
+				*rest = p;
+			return k;
+		}
+	}
+	if (rest != NULL)
+		*rest = s;
+	return KW_NONE;
+}
+
+#define BLOCK_STMTS_MAX 128
+#define BLOCK_DEPTH_MAX 8
+
+typedef struct {
+	char stmts[BLOCK_STMTS_MAX][LINE_MAX];
+	int  lineOf[BLOCK_STMTS_MAX];   // physical line each came from (0 = keyboard)
+	int  count;
+	int  depth;                     // blocks opened and not yet closed
+	int  startLine;                 // where the outermost one began
+} block_t;
+
+static block_t s_block;
+static bool    s_block_abort;       // the evaluator is unwinding: error, exit, or Ctrl+C
+static bool    s_interactive;       // set by main before the prompt loop
+
+static void block_reset(void)
+{
+	s_block.count = 0;
+	s_block.depth = 0;
+}
+
+static void block_complain(const char *msg, int lineNo)
+{
+	err_puts("husk: ");
+	err_puts(msg);
+	if (lineNo > 0)
+	{
+		err_puts(" (line ");
+		err_num((unsigned long)lineNo);
+		err_puts(")");
+	}
+	err_puts("\n");
+}
+
+// Run one statement through run_line, on a copy: run_line tokenizes in place
+// and a loop body runs more than once. A child killed by Ctrl+C (130) aborts
+// the block — the Bourne shell's SIGINT ends the compound it was in, not
+// merely the command.
+static int run_stmt(const char *stmt, int *last_status)
+{
+	char copy[LINE_MAX];
+	os64_strcopy(copy, sizeof(copy), stmt);
+	int exiting = run_line(copy, last_status);
+	if (*last_status == 130)
+		s_block_abort = true;
+	return exiting;
+}
+
+// Between iterations of a loop. A Ctrl+C typed while husk itself is the
+// foreground task arrives as a DATA byte (the console only signals a
+// foreground CHILD), so poll for it with zero patience; anything else found
+// there was typed ahead and is parked for the next prompt.
+static bool loop_interrupted(void)
+{
+	char c;
+	while (os64_read_for(0, &c, 1, 0) == 1)
+	{
+		if (c == 0x03)
+		{
+			os64_write(1, "^C\n", 3);
+			return true;
+		}
+		pushback_put(c);
+	}
+	return false;
+}
+
+// The first statement in [from, to) whose keyword is in `wanted` (a bitmask
+// of 1 << KW_x), AT THIS NESTING LEVEL — nested if/while blocks are stepped
+// over whole. -1 if the range ends first.
+static int find_kw(int from, int to, unsigned wanted)
+{
+	int level = 0;
+	for (int i = from; i < to; i++)
+	{
+		int kw = keyword_of(s_block.stmts[i], NULL);
+		if (level == 0 && (wanted & (1u << kw)))
+			return i;
+		if (kw == KW_IF || kw == KW_WHILE)
+			level++;
+		else if (kw == KW_FI || kw == KW_DONE)
+			level--;
+	}
+	return -1;
+}
+
+static int exec_stmts(int from, int to, int *last_status);
+
+// A condition: the text after the opening keyword, then the statements up to
+// `then`/`do`. The LAST status decides. Returns the exiting verdict.
+static int run_cond(const char *rest, int from, int to, int *last_status)
+{
+	int exiting = 0;
+	if (*rest != '\0')
+		exiting = run_stmt(rest, last_status);
+	for (int i = from; i < to && !exiting && !s_block_abort; i++)
+		exiting = run_stmt(s_block.stmts[i], last_status);
+	return exiting;
+}
+
+// `if` at statement i. Returns the index after its `fi`, and the exiting
+// verdict through *exiting. On a malformed block, complains, aborts.
+static int exec_if(int i, int to, int *last_status, int *exiting)
+{
+	const char *rest;
+	keyword_of(s_block.stmts[i], &rest);
+	int thenIdx = find_kw(i + 1, to, 1u << KW_THEN);
+	int fiIdx   = (thenIdx < 0) ? -1 : find_kw(thenIdx + 1, to, 1u << KW_FI);
+	if (thenIdx < 0 || fiIdx < 0)
+	{
+		block_complain(thenIdx < 0 ? "if without then" : "if without fi", s_block.lineOf[i]);
+		s_block_abort = true;
+		return to;
+	}
+
+	int condFrom = i + 1, condTo = thenIdx, bodyFrom = thenIdx + 1;
+	bool taken = false;
+	for (;;)
+	{
+		int next = find_kw(bodyFrom, fiIdx, (1u << KW_ELIF) | (1u << KW_ELSE));
+		int bodyTo = (next < 0) ? fiIdx : next;
+		if (!taken)
+		{
+			*exiting = run_cond(rest, condFrom, condTo, last_status);
+			if (*exiting || s_block_abort)
+				return to;
+			if (*last_status == 0)
+			{
+				taken = true;
+				*exiting = exec_stmts(bodyFrom, bodyTo, last_status);
+				if (*exiting || s_block_abort)
+					return to;
+			}
+		}
+		if (next < 0)
+			break;
+		if (keyword_of(s_block.stmts[next], &rest) == KW_ELSE)
+		{
+			if (!taken)
+			{
+				*exiting = exec_stmts(next + 1, fiIdx, last_status);
+				if (*exiting || s_block_abort)
+					return to;
+			}
+			break;
+		}
+		// elif: a fresh condition, then its body
+		int thenAgain = find_kw(next + 1, fiIdx, 1u << KW_THEN);
+		if (thenAgain < 0)
+		{
+			block_complain("elif without then", s_block.lineOf[next]);
+			s_block_abort = true;
+			return to;
+		}
+		condFrom = next + 1;
+		condTo = thenAgain;
+		bodyFrom = thenAgain + 1;
+	}
+	return fiIdx + 1;
+}
+
+// `while` at statement i. Returns the index after its `done`.
+static int exec_while(int i, int to, int *last_status, int *exiting)
+{
+	const char *rest;
+	keyword_of(s_block.stmts[i], &rest);
+	int doIdx   = find_kw(i + 1, to, 1u << KW_DO);
+	int doneIdx = (doIdx < 0) ? -1 : find_kw(doIdx + 1, to, 1u << KW_DONE);
+	if (doIdx < 0 || doneIdx < 0)
+	{
+		block_complain(doIdx < 0 ? "while without do" : "while without done", s_block.lineOf[i]);
+		s_block_abort = true;
+		return to;
+	}
+	for (;;)
+	{
+		if (s_interactive && loop_interrupted())
+		{
+			*last_status = 130;       // the same verdict as a child Ctrl+C killed
+			s_block_abort = true;
+			return to;
+		}
+		*exiting = run_cond(rest, i + 1, doIdx, last_status);
+		if (*exiting || s_block_abort)
+			return to;
+		if (*last_status != 0)
+			break;
+		*exiting = exec_stmts(doIdx + 1, doneIdx, last_status);
+		if (*exiting || s_block_abort)
+			return to;
+	}
+	// A loop that ran to its end succeeded: $? is not the failed test that
+	// stopped it (Bourne agrees — the status is the last BODY command's, or 0).
+	*last_status = 0;
+	return doneIdx + 1;
+}
+
+// Statements [from, to): plain ones run, compounds recurse. Returns the
+// exiting verdict.
+static int exec_stmts(int from, int to, int *last_status)
+{
+	int exiting = 0;
+	int i = from;
+	while (i < to && !exiting && !s_block_abort)
+	{
+		int kw = keyword_of(s_block.stmts[i], NULL);
+		if (kw == KW_IF)
+			i = exec_if(i, to, last_status, &exiting);
+		else if (kw == KW_WHILE)
+			i = exec_while(i, to, last_status, &exiting);
+		else if (kw == KW_NONE)
+		{
+			exiting = run_stmt(s_block.stmts[i], last_status);
+			i++;
+		}
+		else
+		{
+			block_complain("unexpected keyword", s_block.lineOf[i]);
+			err_puts("  ");
+			err_puts(s_block.stmts[i]);
+			err_puts("\n");
+			s_block_abort = true;
+		}
+	}
+	return exiting;
+}
+
+// The block is complete: run it, then forget it.
+static int run_block(int *last_status)
+{
+	s_block_abort = false;
+	int exiting = exec_stmts(0, s_block.count, last_status);
+	if (s_block_abort && *last_status != 130)
+		*last_status = 2;             // a block that could not run is a syntax verdict
+	block_reset();
+	return exiting;
+}
+
+// One statement, already cut from its line. Outside a block it runs at once;
+// `if`/`while` opens one; inside, it is collected. Returns exiting.
+static int feed_stmt(char *stmt, int lineNo, int *last_status)
+{
+	while (*stmt == ' ' || *stmt == '\t')
+		stmt++;
+	if (*stmt == '\0')
+		return 0;
+
+	const char *rest;
+	int kw = keyword_of(stmt, &rest);
+
+	// `then cmd`, `else cmd`, `do cmd` — the keyword is a statement of its
+	// own and the command is the next one (it may itself be an `if`).
+	if ((kw == KW_THEN || kw == KW_ELSE || kw == KW_DO) && *rest != '\0')
+	{
+		char head[8];
+		os64_strcopy(head, sizeof(head), s_keywords[kw]);
+		int exiting = feed_stmt(head, lineNo, last_status);
+		if (exiting || s_block.depth == 0)
+			return exiting;           // a stray `then` was refused; do not run its tail
+		char tail[LINE_MAX];
+		os64_strcopy(tail, sizeof(tail), rest);
+		return feed_stmt(tail, lineNo, last_status);
+	}
+	if ((kw == KW_FI || kw == KW_DONE) && *rest != '\0')
+	{
+		block_complain("text after the closing keyword", lineNo);
+		block_reset();
+		*last_status = 2;
+		return 0;
+	}
+
+	if (s_block.depth == 0)
+	{
+		if (kw == KW_NONE)
+			return run_line(stmt, last_status);
+		if (kw != KW_IF && kw != KW_WHILE)
+		{
+			block_complain("unexpected keyword outside a block", lineNo);
+			err_puts("  ");
+			err_puts(stmt);
+			err_puts("\n");
+			*last_status = 2;
+			return 0;
+		}
+		s_block.startLine = lineNo;
+	}
+
+	if (s_block.count >= BLOCK_STMTS_MAX)
+	{
+		block_complain("block too long - abandoned", s_block.startLine);
+		block_reset();
+		*last_status = 2;
+		return 0;
+	}
+	os64_strcopy(s_block.stmts[s_block.count], LINE_MAX, stmt);
+	s_block.lineOf[s_block.count] = lineNo;
+	s_block.count++;
+
+	if (kw == KW_IF || kw == KW_WHILE)
+	{
+		if (++s_block.depth > BLOCK_DEPTH_MAX)
+		{
+			block_complain("blocks nested too deep - abandoned", lineNo);
+			block_reset();
+			*last_status = 2;
+			return 0;
+		}
+	}
+	else if (kw == KW_FI || kw == KW_DONE)
+	{
+		if (--s_block.depth == 0)
+			return run_block(last_status);
+	}
+	return 0;
+}
+
+// A physical line from any source: cut at top-level `;` (quotes and `$()`
+// hide theirs) and feed the pieces. Returns the exiting verdict. Feeding
+// `a` then `b` is what `a; b` always meant: each expands at its own turn.
+static int feed_line(char *line, int lineNo, int *last_status)
+{
+	char *start = line;
+	char *p = line;
+	char quote = 0;
+	int exiting = 0;
+	for (;;)
+	{
+		char c = *p;
+		if (c == '\0')
+			return exiting ? exiting : feed_stmt(start, lineNo, last_status);
+		if (quote != 0)
+		{
+			if (c == quote)
+				quote = 0;
+			p++;
+		}
+		else if (c == '\'' || c == '"')
+			quote = *p++;
+		else if (c == '$' && p[1] == '(')
+		{
+			const char *close = find_subst_close(p + 2);
+			p = (close != NULL) ? (char *)close + 1 : p + os64_strlen(p);
+		}
+		else if (c == ';')
+		{
+			*p = '\0';
+			exiting = feed_stmt(start, lineNo, last_status);
+			if (exiting)
+				return exiting;       // `exit`: the rest of the line dies with the shell
+			start = ++p;
+		}
+		else
+			p++;
+	}
+}
+
+// At the end of an rc, a script or a -c line: a block still open is a
+// mistake the author should hear about, not silently run. Says so and
+// forgets it; true if there was one.
+static bool block_unterminated(const char *what, const char *path, int *last_status)
+{
+	if (s_block.depth == 0)
+		return false;
+	err_puts("husk: ");
+	if (path != NULL)
+	{
+		err_puts(path);
+		err_puts(": ");
+	}
+	err_puts(what);
+	err_puts(" ended inside an unfinished if/while");
+	if (s_block.startLine > 0)
+	{
+		err_puts(" (opened at line ");
+		err_num((unsigned long)s_block.startLine);
+		err_puts(")");
+	}
+	err_puts(" - not run\n");
+	block_reset();
+	*last_status = 2;
+	return true;
 }
 
 // ── the rc file ─────────────────────────────────────────────────────────────
@@ -2802,7 +3305,7 @@ static int run_rc(int *last_status)
 		// `exit` in an rc is honored — the file IS the shell, and a shell
 		// told to exit exits. An rc that ends this way makes husk a batch
 		// interpreter, which some boot someday will want on purpose.
-		exiting = run_line(line, last_status);
+		exiting = feed_line(line, lineNo, last_status);
 	}
 	os64_close(h);
 
@@ -2811,6 +3314,8 @@ static int run_rc(int *last_status)
 	// unreadable is exactly a machine you want a prompt on.
 	if (readVerdict < 0)
 		report_read_failed("rc", found, lineNo, readVerdict);
+	if (!exiting)
+		block_unterminated("rc", found, last_status);   // said its piece; the prompt follows
 	return exiting;
 }
 
@@ -2867,7 +3372,9 @@ static int run_command_argument(const char *command)
 	}
 
 	os64_debug_log("husk: -c (one line, non-interactive)");
-	run_line(line, &last_status);   // `exit` in a -c line just ends it early
+	feed_line(line, 0, &last_status);   // `exit` in a -c line just ends it early
+	if (block_unterminated("-c", NULL, &last_status))
+		return 2;
 	return last_status;
 }
 
@@ -2931,9 +3438,11 @@ static int run_script(const char *path, char **params, int nparams)
 			s++;
 		if (*s == '\0' || *s == '#')
 			continue;                   // blank, comment — and the #! line itself
-		exiting = run_line(line, &last_status);   // `exit` ends the script
+		exiting = feed_line(line, lineNo, &last_status);   // `exit` ends the script
 	}
 	os64_close(h);
+	if (!exiting && block_unterminated("script", path, &last_status))
+		return 2;
 
 	if (readVerdict < 0)
 	{
@@ -2993,6 +3502,7 @@ int main(int argc, char **argv, char **envp)
 
 	char line[LINE_MAX];
 	int last_status = 0;            // $? — nothing has failed yet
+	s_interactive = true;           // the keyboard is ours: loops may poll it for Ctrl+C
 
 	// The rc runs after the banner and before the first prompt — its output
 	// (job announcements, error messages) lands where a fast typist's would.
@@ -3012,11 +3522,22 @@ int main(int argc, char **argv, char **envp)
 		// why they never pile up as zombies.
 		jobs_poll();
 
-		prompt();
-		if (read_line(line, sizeof(line)) == 0)
+		// Inside an open `if`/`while`, the continuation prompt — Bourne's PS2
+		// — says the shell is still collecting, not waiting for a command.
+		if (s_block.depth > 0)
+			os64_write(1, "> ", 2);
+		else
+			prompt();
+		int got = read_line(line, sizeof(line));
+		if (got < 0)
+		{
+			block_reset();          // Ctrl+C abandons whatever was being collected
+			continue;
+		}
+		if (got == 0)
 			continue;
 
-		if (run_line(line, &last_status))
+		if (feed_line(line, 0, &last_status))
 			break;
 	}
 
