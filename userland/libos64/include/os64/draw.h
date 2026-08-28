@@ -145,6 +145,8 @@ typedef struct os64_frame_clock
     uint64_t last_ms;          // real time at the last frame boundary
     int64_t  window;           // bound window, or -1: the clock does not know
                                // whether anyone is watching
+    uint32_t immediate_wakes;  // covered waits in a row that returned at once
+                               // (library bookkeeping; see os64_frame_wait)
 } os64_frame_clock_t;
 
 void os64_frame_clock_init(os64_frame_clock_t *clock);

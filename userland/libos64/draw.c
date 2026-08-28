@@ -206,6 +206,7 @@ void os64_frame_clock_init(os64_frame_clock_t *clock)
 {
     clock->last_ms = now_ms();
     clock->window = -1;
+    clock->immediate_wakes = 0;
 }
 
 void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window)
@@ -215,7 +216,8 @@ void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window)
 
 // What a covered caller that does not drain its queue pays per pass instead
 // of spinning (see the wait below). Twenty passes a second is bounded and
-// harmless; a draining caller never pays it.
+// harmless; a draining caller never reaches it, because it is charged only
+// from the SECOND immediate wake in a row (one can be an honest race).
 #define COVERED_UNDRAINED_NAP_MS 50
 
 // Is the bound window covered right now? Asks the kernel, never the last
@@ -266,15 +268,27 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
         // and draw.h says so. Uncovered means the pause is over and the
         // frame is one budget long, as before.
         if (!bound_window_covered(clock))
+        {
+            clock->immediate_wakes = 0;
             return budget_ms;
-        // Still covered, and the wait returned without time passing: the
-        // event that woke us is still queued, which means the caller is not
-        // draining its queue (the COVERED nudge itself is enough to do this
-        // to a program that never polls). Left alone that is a spin at full
-        // speed behind a cover — the exact thing a bound clock exists to
-        // prevent. So the price of not draining is a nap, not a core.
+        }
+        // Still covered, and the wait returned without time passing. Once,
+        // that is ordinary: an event queued just before the wait returns in
+        // the same 10ms tick even for a caller that drains faithfully. TWICE
+        // IN A ROW it is not — a drained queue cannot wake the next wait at
+        // once — so the caller is not draining (the COVERED nudge itself is
+        // enough to do this to a program that never polls), and left alone
+        // that is a spin at full speed behind a cover, the exact thing a
+        // bound clock exists to prevent. From the second immediate wake on,
+        // the price of not draining is a nap, not a core; a draining caller
+        // never reaches it.
         if (clock->last_ms == entered)
-            os64_sleep(COVERED_UNDRAINED_NAP_MS);
+        {
+            if (++clock->immediate_wakes >= 2)
+                os64_sleep(COVERED_UNDRAINED_NAP_MS);
+        }
+        else
+            clock->immediate_wakes = 0;
         return 0;
     }
 
