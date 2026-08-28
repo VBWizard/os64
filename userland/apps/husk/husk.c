@@ -23,6 +23,11 @@
 // existed, and they arrive in husk in the same order history added them
 // (; was Thompson's, && and || came with Bourne). And `time` becomes a
 // builtin PREFIX — see run_segment for why it can never be a utility.
+// v5: STDERR (2026-08-28). `2> file`, `2>> file`, `2>&1`, `>&2`, `&> file`,
+// `&>> file` — the third slot spawn had always offered, finally spelled. Same
+// open-install-close discipline as slot 1; extract_redirections carries the
+// vocabulary and the one deliberate departure from Bourne (`2>&1` binds to
+// where stdout ENDS UP, not to where it was at that point on the line).
 
 #include "os64/os64.h"
 #include "os64/conf.h"   // os64_conf_find — husk.rc rides the system search path now
@@ -1206,6 +1211,28 @@ static void put_num(unsigned long v)
 	os64_write(1, b, (unsigned)k);
 }
 
+// husk's own complaints go to handle 2, like every other program's. A shell
+// that scolds you on stdout cannot be told `2> /dev/null` — and worse, its
+// "cannot run" would be swallowed by a `> file` meant for the command's real
+// output. The glob code already speaks to OS64_STDERR through os64_hprintf;
+// these are the same door for the byte-at-a-time sites.
+static void hputs(int h, const char *s)
+{
+	os64_write(h, s, os64_strlen(s));
+}
+
+static void err_puts(const char *s)
+{
+	hputs(OS64_STDERR, s);
+}
+
+static void err_num(unsigned long v)
+{
+	char b[20];
+	int k = utoa(v, b);
+	os64_write(OS64_STDERR, b, (unsigned)k);
+}
+
 // "[1] 57" — job number and task number both, on purpose. In bash the PID is
 // noise because you kill a job by `%1`; os64 has no such notation, so the TASK
 // NUMBER is the handle you actually use: `echo kill > /proc/57/ctl`. Printing
@@ -1329,24 +1356,55 @@ static int strip_background(char *line)
 	return 1;
 }
 
-// Pull `< file` / `> file` / `>> file` out of an already-parsed argv,
-// compacting what remains. Writes the filenames through the out-params
-// (NULL = no redirect; *outAppend says which spelling won) and returns 0,
-// or -1 on a dangling operator (`upper <` with no filename).
+// Where a child's three streams go, as the redirection tokens said. Filled
+// by extract_redirections, spent by run_pipeline.
+typedef struct {
+	char *inFile;                // `< file`
+	char *outFile;               // `> file` / `>> file` / `&> file` / `&>> file`
+	int   outAppend;
+	char *errFile;               // `2> file` / `2>> file`
+	int   errAppend;
+	bool  errJoinsOut;           // `2>&1` (and `&>`): stderr goes where stdout ENDS UP
+	bool  outJoinsErr;           // `>&2`: stdout goes where stderr ends up
+} redirections_t;
+
+// Pull the redirection tokens out of an already-parsed argv, compacting what
+// remains. Returns 0 with *r describing the streams, or -1 on a dangling
+// operator (`upper <` with no filename), or on `>&2 2>&1` — each stream sent
+// to the other is a circle with no file in it.
+//
 // The operators must be their own tokens — husk's parser splits on spaces
 // only, and that simplicity is a feature (`upper<f` is a program named
 // "upper<f", which is honest, if unhelpful). Token-exact matching also
 // means `>>` needs no lexer priority over `>` — they arrive as different
 // whole tokens and can never shadow each other.
-static int extract_redirections(char *cargv[], char **inFile,
-                                char **outFile, int *outAppend)
+//
+// THE STDERR VOCABULARY. The digit is V7 Bourne's file-descriptor number
+// (Thompson's shell had only bare `<` and `>`); `&>` is bash's 1989
+// shorthand for "both". Per stream the LAST spelling wins, and a file
+// spelling and a join spelling replace each other: `2> f 2>&1` joins,
+// `2>&1 2> f` writes f.
+//
+// `2>&1` MEANS WHAT EVERYONE THINKS IT MEANS: stderr goes wherever stdout
+// finally goes — a file, a pipe, the console — no matter where on the line
+// it was written. Bourne resolves it POSITIONALLY (stderr gets whatever
+// stdout was bound to at the moment the token was read), which is why
+// `cmd 2>&1 > f` leaves stderr on the terminal there and why every shell
+// tutorial has a paragraph about it. That paragraph is the fossil; the
+// intent never was. (Chris's ruling, 2026-08-28: "the other way just
+// sounds annoying." DIVERGENCES § The shell.)
+static int extract_redirections(char *cargv[], redirections_t *r)
 {
-	*inFile = NULL;
-	*outFile = NULL;
-	*outAppend = 0;
+	r->inFile = NULL;
+	r->outFile = NULL;
+	r->outAppend = 0;
+	r->errFile = NULL;
+	r->errAppend = 0;
+	r->errJoinsOut = false;
+	r->outJoinsErr = false;
 
 	int w = 0;
-	for (int r = 0; cargv[r]; r++)
+	for (int i = 0; cargv[i]; i++)
 	{
 		// A token is an OPERATOR only if the author typed every byte of it.
 		// `echo $1` with $1 = "> passwd" prints it, the way every shell since
@@ -1361,35 +1419,59 @@ static int extract_redirections(char *cargv[], char **inFile,
 		// GLOB result is data too — it comes from the filesystem, which is
 		// the outside world by another door — so a file innocently named ">"
 		// made `echo *` redirect into whatever filename sorted after it.
-		if (!token_is_typed(cargv[r]))
+		if (!token_is_typed(cargv[i]))
 		{
-			cargv[w++] = cargv[r];
+			cargv[w++] = cargv[i];
 			continue;
 		}
-		if (str_eq(cargv[r], "<"))
+		const char *t = cargv[i];
+		if (str_eq(t, "<"))
 		{
-			if (!cargv[r + 1]) return -1;
-			*inFile = cargv[++r];
+			if (!cargv[i + 1]) return -1;
+			r->inFile = cargv[++i];
 		}
-		else if (str_eq(cargv[r], ">"))
+		else if (str_eq(t, ">") || str_eq(t, ">>"))
 		{
-			if (!cargv[r + 1]) return -1;
-			*outFile = cargv[++r];
-			*outAppend = 0;       // last spelling wins: `> f ... >> g` appends to g
+			if (!cargv[i + 1]) return -1;
+			r->outFile = cargv[++i];
+			r->outAppend = (t[1] == '>');
+			r->outJoinsErr = false;
 		}
-		else if (str_eq(cargv[r], ">>"))
+		else if (str_eq(t, "2>") || str_eq(t, "2>>"))
 		{
-			if (!cargv[r + 1]) return -1;
-			*outFile = cargv[++r];
-			*outAppend = 1;
+			if (!cargv[i + 1]) return -1;
+			r->errFile = cargv[++i];
+			r->errAppend = (t[2] == '>');
+			r->errJoinsOut = false;
+		}
+		else if (str_eq(t, "&>") || str_eq(t, "&>>"))
+		{
+			if (!cargv[i + 1]) return -1;
+			r->outFile = cargv[++i];
+			r->outAppend = (t[2] == '>');
+			r->outJoinsErr = false;
+			r->errFile = NULL;
+			r->errJoinsOut = true;
+		}
+		else if (str_eq(t, "2>&1"))
+		{
+			r->errFile = NULL;
+			r->errJoinsOut = true;
+		}
+		else if (str_eq(t, ">&2") || str_eq(t, "1>&2"))
+		{
+			r->outFile = NULL;
+			r->outJoinsErr = true;
 		}
 		else
 		{
-			cargv[w++] = cargv[r];
+			cargv[w++] = cargv[i];
 		}
 	}
 	cargv[w] = 0;
-	return w == 0 ? -1 : 0;   // a line that was ALL redirections has no program
+	if (r->errJoinsOut && r->outJoinsErr)
+		return -1;                // each stream sent to the other: a circle
+	return w == 0 ? -1 : 0;       // a line that was ALL redirections has no program
 }
 
 // PATH search — V7's gift (1979; before that Unix shells hardcoded /bin).
@@ -1441,8 +1523,10 @@ static const char *resolve_command(const char *cmd, char *buf, int cap)
 //
 // Returns the pipeline's exit status for $?: the LAST stage's exit code —
 // the same answer the Bourne shell has given since 1977, and the sensible
-// one: the last stage is the program whose output you just watched. Any
-// husk-side failure (bad redirection, unspawnable program) reports 1.
+// one: the last stage is the program whose output you just watched. A
+// bad redirection reports 1 and runs nothing; a stage that cannot be
+// spawned reports 1 unless a LATER stage ran and answered (its complaint
+// went where its stderr was sent, and the plumbing after it still runs).
 //
 // THE CLOSE DISCIPLINE IS THE WHOLE JOB. Every end husk hands to a child, husk
 // must then close its OWN copy of — because the reader downstream sees
@@ -1453,9 +1537,11 @@ static const char *resolve_command(const char *cmd, char *buf, int cap)
 static int run_pipeline(char *stages[], int nstages, int background)
 {
 	launched_task_t tasks[MAX_STAGES];
+	int stageOf[MAX_STAGES];    // which stage each launched task was
 	int taskCount = 0;
 	int prev_read = -1;         // read end of the pipe from the PREVIOUS stage
 	int status = 0;             // what $? will remember of this line
+	int failedStage = -1;       // the last stage that could not be spawned
 
 	for (int i = 0; i < nstages; i++)
 	{
@@ -1472,7 +1558,7 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		}
 		if (cargc == 0)
 		{
-			os64_puts("husk: empty command in pipeline\n");
+			err_puts("husk: empty command in pipeline\n");
 			status = 1;
 			break;
 		}
@@ -1480,11 +1566,11 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		// Redirections come out of argv before the child ever sees it —
 		// `upper < in > out` runs upper with argc == 1, exactly as if the
 		// shell had been reading and writing the files itself.
-		char *inFile, *outFile;
-		int outAppend;
-		if (extract_redirections(cargv, &inFile, &outFile, &outAppend) < 0)
+		redirections_t redir;
+		if (extract_redirections(cargv, &redir) < 0)
 		{
-			os64_puts("husk: bad redirection (expected `< file`, `> file`, or `>> file`)\n");
+			err_puts("husk: bad redirection (expected `< file`, `> file`, `>> file`, "
+			         "`2> file`, `2>> file`, `2>&1`, `>&2`, `&> file` or `&>> file`)\n");
 			status = 1;
 			break;
 		}
@@ -1494,21 +1580,33 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		// `>>` opens "a": position at the end, create if absent — both
 		// filesystems already spoke append (FAT since its glue was born,
 		// ext2 since the write arc); the shell was the last one to learn.
-		int inRedir = -1, outRedir = -1;
-		if (inFile && (inRedir = (int)os64_open(inFile, "r")) < 0)
+		int inRedir = -1, outRedir = -1, errRedir = -1;
+		if (redir.inFile && (inRedir = (int)os64_open(redir.inFile, "r")) < 0)
 		{
-			os64_puts("husk: cannot open ");
-			os64_puts(inFile);
-			os64_puts("\n");
+			err_puts("husk: cannot open ");
+			err_puts(redir.inFile);
+			err_puts("\n");
 			status = 1;
 			break;
 		}
-		if (outFile && (outRedir = (int)os64_open(outFile, outAppend ? "a" : "w")) < 0)
+		if (redir.outFile &&
+		    (outRedir = (int)os64_open(redir.outFile, redir.outAppend ? "a" : "w")) < 0)
 		{
-			os64_puts("husk: cannot create ");
-			os64_puts(outFile);
-			os64_puts("\n");
+			err_puts("husk: cannot create ");
+			err_puts(redir.outFile);
+			err_puts("\n");
 			if (inRedir >= 0) os64_close(inRedir);
+			status = 1;
+			break;
+		}
+		if (redir.errFile &&
+		    (errRedir = (int)os64_open(redir.errFile, redir.errAppend ? "a" : "w")) < 0)
+		{
+			err_puts("husk: cannot create ");
+			err_puts(redir.errFile);
+			err_puts("\n");
+			if (inRedir >= 0)  os64_close(inRedir);
+			if (outRedir >= 0) os64_close(outRedir);
 			status = 1;
 			break;
 		}
@@ -1517,9 +1615,10 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		int p[2] = { -1, -1 };
 		if (i < nstages - 1 && os64_pipe(p) < 0)
 		{
-			os64_puts("husk: out of pipes\n");
+			err_puts("husk: out of pipes\n");
 			if (inRedir >= 0)  os64_close(inRedir);
 			if (outRedir >= 0) os64_close(outRedir);
+			if (errRedir >= 0) os64_close(errRedir);
 			status = 1;
 			break;
 		}
@@ -1528,6 +1627,17 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		int in  = (inRedir  >= 0) ? inRedir  : prev_read;    // -1: console
 		int out = (outRedir >= 0) ? outRedir
 		        : (i < nstages - 1) ? p[1] : -1;             // -1: console
+		int err = (errRedir >= 0) ? errRedir : -1;           // -1: console
+		// The joins bind LAST, to the other stream's final destination —
+		// which is what makes `cmd 2>&1 | grep` carry both streams into the
+		// pipe. The two are mutually exclusive (extract_redirections refuses
+		// the pair), so there is no order to get wrong here. A `>&2` in a
+		// non-final stage sends stdout to the console and the pipe's write
+		// end is closed unused below, so the next stage reads EOF: the
+		// output went where it was sent. The kernel refcounts each slot on
+		// its own, so handing one handle to two slots is an ordinary share.
+		if (redir.errJoinsOut) err = out;
+		if (redir.outJoinsErr) out = err;
 
 		// PATH resolution happens HERE, at spawn time — argv[0] stays the
 		// name as typed (a program is told what it was called, not where it
@@ -1539,8 +1649,23 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		// kernel has to know before the child's first instruction: a background
 		// job's read of handle 0 returns EOF instead of competing with husk for
 		// the keyboard. Output is untouched — it still prints to the screen.
-		long tid = os64_spawn_redirected(prog, cargv, in, out, -1,
+		long tid = os64_spawn_redirected(prog, cargv, in, out, err,
 		                                 background ? OS64_SPAWN_BACKGROUND : 0);
+
+		if (tid < 0)
+		{
+			// The complaint is ABOUT this command, so it goes where this
+			// command's stderr was sent — `bogus 2> /dev/null` stays quiet,
+			// and a `2>&1` into a pipe carries it downstream. A forking shell
+			// gets this by accident (its child fails after the redirects are
+			// in place); husk, which fails in the parent, does it on purpose.
+			// Written BEFORE the hand-off closes below, while the handle is
+			// still ours.
+			int where = (err >= 0) ? err : OS64_STDERR;
+			hputs(where, "husk: cannot run ");
+			hputs(where, cargv[0]);
+			hputs(where, "\n");
+		}
 
 		// Hand-off done — drop husk's copies of EVERYTHING it just passed
 		// along (or displaced). The displaced case matters: if a redirect won
@@ -1550,19 +1675,25 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		if (p[1] >= 0)        os64_close(p[1]);
 		if (inRedir >= 0)     os64_close(inRedir);
 		if (outRedir >= 0)    os64_close(outRedir);
+		if (errRedir >= 0)    os64_close(errRedir);
 
 		if (tid < 0)
 		{
-			os64_puts("husk: cannot run ");
-			os64_puts(cargv[0]);
-			os64_puts("\n");
-			if (p[0] >= 0) os64_close(p[0]);
+			// A stage that cannot start is a stage that produced nothing; the
+			// rest of the plumbing still runs. Its output pipe (closed on the
+			// write side just above) hands the next stage an immediate EOF —
+			// after the complaint, when a `2>&1` sent that down the pipe.
+			// The verdict is 1 unless a LATER stage overwrites it, which is
+			// the pipeline rule: the last stage answers for the line.
 			status = 1;
-			break;
+			failedStage = i;
+			prev_read = p[0];
+			continue;
 		}
 
 		launched_task_set(&tasks[taskCount], tid, prog);
 		report_start(&tasks[taskCount]);
+		stageOf[taskCount] = i;
 		taskCount++;
 		prev_read = p[0];       // this stage's output becomes the next one's input
 	}
@@ -1604,7 +1735,9 @@ static int run_pipeline(char *stages[], int nstages, int background)
 			report_exit(&tasks[i], code);
 		if (code == 130)        // 128 + SIGINT: died by Ctrl+C
 			interrupted = 1;
-		status = code;          // reaped in launch order, so the last stage wins
+		if (stageOf[i] > failedStage)
+			status = code;      // reaped in launch order, so the last stage wins —
+			                    // unless the last stage was the one that never ran
 	}
 
 	// Echo the interrupt ONCE, after the whole pipeline is collected — the
@@ -1704,7 +1837,7 @@ static int run_expanded(char *expanded, int *last_status)
 				eq++;
 			if (*eq != '=' || eq == eargv[1])
 			{
-				os64_puts("husk: export: expected KEY=VALUE\n");
+				err_puts("husk: export: expected KEY=VALUE\n");
 				*last_status = 1;
 			}
 			else
@@ -1712,7 +1845,7 @@ static int run_expanded(char *expanded, int *last_status)
 				*eq = 0;   // split in place; parse() already owns the line
 				if (os64_setenv(eargv[1], eq + 1) != 0)
 				{
-					os64_puts("husk: export: failed (environment full?)\n");
+					err_puts("husk: export: failed (environment full?)\n");
 					*last_status = 1;
 				}
 			}
@@ -1733,7 +1866,7 @@ static int run_expanded(char *expanded, int *last_status)
 		}
 		if (uargc < 2)
 		{
-			os64_puts("husk: unset: expected a KEY\n");
+			err_puts("husk: unset: expected a KEY\n");
 			*last_status = 1;
 		}
 		else
@@ -1809,7 +1942,7 @@ static int run_segment(char *seg, int *last_status)
 		// Refuse rather than run the part that fit. The prefix of an expanded
 		// line is a different command — the same reasoning that makes an
 		// over-long script line a refusal (line_overflowed).
-		os64_puts("husk: line too long after expansion - not run\n");
+		err_puts("husk: line too long after expansion - not run\n");
 		*last_status = 1;
 		return 0;
 	}
@@ -1824,7 +1957,7 @@ static int run_segment(char *seg, int *last_status)
 		while (*rest == ' ' || *rest == '\t') rest++;
 		if (*rest == '\0')
 		{
-			os64_puts("husk: time: nothing to time\n");
+			err_puts("husk: time: nothing to time\n");
 			*last_status = 1;
 			return 0;
 		}
@@ -1863,7 +1996,7 @@ static int run_line(char *line, int *last_status)
 	int ncmds = split_commands(line, cmds, seps, MAX_CMDS);
 	if (ncmds < 0)
 	{
-		os64_puts("husk: too many commands on one line (limit 8)\n");
+		err_puts("husk: too many commands on one line (limit 8)\n");
 		*last_status = 1;
 		return 0;
 	}
@@ -1945,34 +2078,34 @@ static bool line_overflowed(const char *line)
 static void report_read_failed(const char *what, const char *path,
                                int lineNo, int64_t err)
 {
-	os64_puts("husk: ");
-	os64_puts(path);
-	os64_puts(": read failed after line ");
-	put_num((unsigned long)lineNo);
-	os64_puts(" (error ");
+	err_puts("husk: ");
+	err_puts(path);
+	err_puts(": read failed after line ");
+	err_num((unsigned long)lineNo);
+	err_puts(" (error ");
 	if (err < 0)
 	{
-		os64_puts("-");
-		put_num((unsigned long)(-err));
+		err_puts("-");
+		err_num((unsigned long)(-err));
 	}
 	else
-		put_num((unsigned long)err);
-	os64_puts(") - ");
-	os64_puts(what);
-	os64_puts(" stopped\n");
+		err_num((unsigned long)err);
+	err_puts(") - ");
+	err_puts(what);
+	err_puts(" stopped\n");
 }
 
 static void report_line_too_long(const char *what, const char *path, int lineNo)
 {
-	os64_puts("husk: ");
-	os64_puts(path);
-	os64_puts(": line ");
-	put_num((unsigned long)lineNo);
-	os64_puts(" is longer than ");
-	put_num((unsigned long)(LINE_MAX - 1));
-	os64_puts(" characters - refusing to run part of it (");
-	os64_puts(what);
-	os64_puts(" stopped)\n");
+	err_puts("husk: ");
+	err_puts(path);
+	err_puts(": line ");
+	err_num((unsigned long)lineNo);
+	err_puts(" is longer than ");
+	err_num((unsigned long)(LINE_MAX - 1));
+	err_puts(" characters - refusing to run part of it (");
+	err_puts(what);
+	err_puts(" stopped)\n");
 }
 
 static int run_rc(int *last_status)
@@ -2114,7 +2247,7 @@ static int run_command_argument(const char *command)
 	line[i] = '\0';
 	if (command[i] != '\0')
 	{
-		os64_puts("husk: -c line too long (limit 255)\n");
+		err_puts("husk: -c line too long (limit 255)\n");
 		return 2;
 	}
 
@@ -2142,9 +2275,9 @@ static int run_script(const char *path, char **params, int nparams)
 	int h = (int)os64_open(path, "r");
 	if (h < 0)
 	{
-		os64_puts("husk: cannot open script ");
-		os64_puts(path);
-		os64_puts("\n");
+		err_puts("husk: cannot open script ");
+		err_puts(path);
+		err_puts("\n");
 		return 2;
 	}
 
