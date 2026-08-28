@@ -3253,7 +3253,7 @@ static void spawn_do_create(void *arg)
 	for (int slot = 0; slot < 3; slot++)
 	{
 		if (p->redirType[slot] == HANDLE_NONE)
-			continue;   // keep the child's default (console)
+			continue;   // the caller had closed that slot: keep the built-in default (console)
 
 		// The child gets its OWN reference on the pipe end. Two tasks now hold
 		// this end; both must close it before the refcount reaches zero and the
@@ -3287,11 +3287,13 @@ static void spawn_do_create(void *arg)
 // parent).
 //
 // in/out/err are the CALLER'S handle numbers to install as the child's 0/1/2,
-// or -1 to leave that stream on the console. This is how a shell builds a
+// or -1 for the caller's own slot 0/1/2 — the console when the caller is at
+// the console, its redirect when it has one. This is how a shell builds a
 // pipeline: spawn(a, ..., -1, pipeW, -1) and spawn(b, ..., pipeR, -1, -1). We
 // deliberately do NOT blanket-inherit the parent's whole handle table the way
-// Unix does — a child gets the console plus exactly what was asked for, and can
-// never accidentally hold some unrelated pipe end open (a classic pipeline hang).
+// Unix does — a child gets its parent's stdio plus exactly what was asked for,
+// and can never accidentally hold some unrelated pipe end open (a classic
+// pipeline hang).
 static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
@@ -3368,8 +3370,20 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		p->redirType[slot] = HANDLE_NONE;
 		p->redirObject[slot] = NULL;
 
+		// -1 = THE CALLER'S OWN SLOT. For a caller at the console that is a
+		// console handle, same as the child's built-in default; for a caller
+		// whose stdout is a file or a pipe it is that file or pipe — which is
+		// how `testrun > log 2>&1` reaches the fixtures testrun spawns, and how
+		// a script's every line lands where the script was pointed. Stdio flows
+		// down; nothing else in the table does (the doctrine below). A caller
+		// that has CLOSED its own slot hands the child the built-in default.
 		if (redir[slot] < 0)
-			continue;   // -1 = leave this stream on the console
+		{
+			handle_t *own = (p->parent != NULL) ? handle_get(p->parent, slot) : NULL;
+			if (own == NULL)
+				continue;
+			redir[slot] = slot;
+		}
 
 		handle_t *h = (p->parent != NULL) ? handle_get(p->parent, (int)redir[slot]) : NULL;
 		if (h == NULL)

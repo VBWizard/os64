@@ -58,7 +58,9 @@ to stay current:
    windows — a handle is a tagged reference; read/write/close dispatch on the
    tag. The non-regret guarantee: routing changes, the contract doesn't.
    Redirect beats pipe when both claim a slot. NO blanket handle inheritance
-   across spawn — a child gets the console plus exactly what was asked for.
+   across spawn — a child gets its parent's 0/1/2 plus exactly what was asked
+   for (the "0/1/2" was "the console" until 2026-08-28, which is why a
+   redirected testrun's fixtures kept printing to the screen).
 7. **The tree is curated, /proc will be pure.** Single-rooted hierarchy,
    WITHOUT the sediment: /bin (all executables, no sbin/usr split ever —
    the /usr split was Ken and Dennis's 1971 disk shortage, not a design),

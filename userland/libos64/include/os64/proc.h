@@ -84,7 +84,10 @@ int64_t os64_chdir(const char *path);
 int64_t os64_spawn(const char *path, char *const argv[]);
 
 // Spawn with REDIRECTION: `in`/`out`/`err` are handles of THIS process to
-// install as the child's 0/1/2, or -1 to leave that stream on the console.
+// install as the child's 0/1/2, or -1 for this process's OWN 0/1/2 — the
+// console if that is where you are, your redirect if you have one (so a
+// program that spawns, run as `prog > log 2>&1`, sends its children's output
+// to the log too; os64_spawn is the all-minus-ones case).
 // This is how a shell builds a pipeline — the child is born reading from and
 // writing to the right places and never knows it was redirected, which is why
 // no program contains a single line of pipe-awareness:

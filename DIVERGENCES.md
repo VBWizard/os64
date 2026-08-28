@@ -72,7 +72,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | Unix/Linux | os64 | Why | Recorded |
 |---|---|---|---|
 | fork+exec as the only birth | `spawn(path, argv, in/out/err, flags)` first-class beside fork | The everyday launch deserves one syscall | ABI #5 |
-| Child inherits the WHOLE fd table | NO blanket inheritance: console + exactly the handles asked for | Kills the classic held-open-pipe-end pipeline hang | DEBTS not-debts |
+| Child inherits the WHOLE fd table | NO blanket inheritance: the parent's 0/1/2 + exactly the handles asked for | Kills the classic held-open-pipe-end pipeline hang | DEBTS not-debts |
 | Background job reads tty → SIGTTIN stop (sessions, pgrps, tcsetpgrp) | `OS64_SPAWN_BACKGROUND` is kernel-known; a background read of handle 0 returns EOF (`cmd &` ≡ `cmd < /dev/null &`) | v1 shape; ctl stop/start later makes it SIGTTIN-like without the session machinery | task.h backgroundJob, syscall_numbers.h |
 | Sessions / process groups / controlling terminal | `controllingShell` flag + `kForegroundTask`, riding `wait` not spawn | The 10% that does the job; generalizes to per-tty later | SIGINT.md |
 | Shells may leak zombies; init adopts orphans | Reporting a finished job and reaping it are the same act — `&` cannot leak | The shell buries its own dead | jobs commit 6167aa3, husk.c |

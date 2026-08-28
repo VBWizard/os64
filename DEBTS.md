@@ -334,9 +334,12 @@ hobby-scale judgment calls — re-rank freely.
   constant memory. Do not "fix" this by growing the buffer on demand; an
   unbounded pipe is a memory leak with a friendly API. See `pipe.h`.
 - **spawn does NOT blanket-inherit the parent's handle table** (Unix does). A
-  child gets the console plus exactly the handles it was explicitly given.
-  Deliberate: a child can never accidentally hold some unrelated pipe end open,
-  which is a classic way pipelines hang. Do not "fix" this into Unix semantics.
+  child gets its parent's 0/1/2 plus exactly the handles it was explicitly
+  given — stdio flows down (since 2026-08-28: `testrun > log 2>&1` was leaving
+  every fixture's output on the console, because `-1` meant "the console"
+  rather than "mine"), and nothing else does. Deliberate: a child can never
+  accidentally hold some unrelated pipe end open, which is a classic way
+  pipelines hang. Do not "fix" this into Unix semantics.
 - **Write atomicity is capacity-bounded, not `PIPE_BUF`-bounded.** os64's rule
   is one sentence — *a write of ≤ PIPE_CAPACITY lands whole, or it waits* —
   instead of Unix's magic 4096 constant that everyone has to memorize. Reads
