@@ -232,15 +232,10 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
     uint64_t now = now_ms();
     uint64_t used = now - clock->last_ms;
 
-    // Sleep out whatever remains of the budget. os64_sleep rounds UP to
-    // the live tick, which is exactly the honest behavior for a cadence-
-    // agnostic loop: on a 10ms-tick kernel a 16ms budget breathes at
-    // 20ms; rebuild the kernel at 1ms ticks and the same binary breathes
-    // at 16 — the SMP_MAGIC_NUMBER lesson, made structural.
-    if (budget_ms > used)
-        os64_sleep(budget_ms - used);
-
-    // Nobody watching? Then nobody is owed a frame. Sleep until the window
+    // Nobody watching? Then nobody is owed a frame. Asked BEFORE the cadence
+    // sleep below, because that sleep registers no waiter: a covered window
+    // that slept its budget first would leave a key or an Alt+F4 queued
+    // behind it for the whole budget. Sleep instead until the window
     // has an event to service — the UNCOVERED nudge, or a key, or Alt+F4:
     // a covered window can still be the FOCUSED one (a window created
     // START_UNFOCUSED over it leaves it so), and its keys must reach its
@@ -266,6 +261,14 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
         // frame is one budget long, as before.
         return bound_window_covered(clock) ? 0 : budget_ms;
     }
+
+    // Sleep out whatever remains of the budget. os64_sleep rounds UP to
+    // the live tick, which is exactly the honest behavior for a cadence-
+    // agnostic loop: on a 10ms-tick kernel a 16ms budget breathes at
+    // 20ms; rebuild the kernel at 1ms ticks and the same binary breathes
+    // at 16 — the SMP_MAGIC_NUMBER lesson, made structural.
+    if (budget_ms > used)
+        os64_sleep(budget_ms - used);
 
     now = now_ms();
     uint64_t dt = now - clock->last_ms;

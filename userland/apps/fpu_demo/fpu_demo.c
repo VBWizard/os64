@@ -233,13 +233,17 @@ int main(int argc, char **argv)
 		// 200-million-iteration frame identical to the last one is a core
 		// burned for nothing. Repaint only when the inputs changed; the loop
 		// keeps pacing and polling regardless.
-		bool changed = (target != drawn_target || log2zoom != drawn_log2zoom || max_iter != drawn_iter);
+		// And not at all on a covered wake (dt == 0, draw.h): a key pressed
+		// under the covering window may change the target, but the picture
+		// is owed on the first VISIBLE frame, which the cache will catch.
+		bool changed = dt != 0 &&
+		               (target != drawn_target || log2zoom != drawn_log2zoom || max_iter != drawn_iter);
 		if (changed)
 		{
 			render(&ctx, &kTargets[target], log2zoom, max_iter);
 			drawn_target = target; drawn_log2zoom = log2zoom; drawn_iter = max_iter;
 		}
-		if (changed || paused != drawn_paused)
+		if (changed || (dt != 0 && paused != drawn_paused))
 		{
 			char line[96];
 			int32_t n = os64_snprintf(line, sizeof(line), "%s  2^%d  %d iter  %lu ms%s   space/n/q",
