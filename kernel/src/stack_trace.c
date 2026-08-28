@@ -43,8 +43,7 @@ extern bool kEnableStackTrace;
 // depends on nothing but the struct layout.
 #define TRACE_STT_FUNC 2
 
-// Every sink, one formatted line. See the header for why the glass and the
-// wire both matter.
+// One formatted line to the wire and the log, and to the glass when asked.
 //
 // The DIRECT serial write was added 2026-08-11 with the rest of the
 // exception-reporting ruling (simple_exceptions.c's FAULT_PRINT carries the
@@ -52,9 +51,12 @@ extern bool kEnableStackTrace;
 // report and it was reaching the wire only when no LOGD= daemon owned the log.
 // The printd copy is added only when it lands somewhere other than this same
 // wire, or the whole chain prints twice in the default no-LOGD case.
-static void trace_emit(const char *line)
+// `glass` false = wire and log only: a ring-3 death's call chain is for the
+// log reader, not the person at the keyboard (simple_exceptions.c FAULT_PRINT).
+static void trace_emit(const char *line, bool glass)
 {
-	printf("%s", line);
+	if (glass)
+		printf("%s", line);
 	serial_print_string(line);
 	if (!log_printd_reaches_serial())
 		printd(DEBUG_EXCEPTIONS, "%s", line);
@@ -121,7 +123,7 @@ static const char *sym_for_address(task_t *task, uint64_t addr, uint64_t *off)
 	return NULL;
 }
 
-void stack_trace_user(task_t *task, uint64_t rip, uint64_t rbp)
+void stack_trace_user(task_t *task, uint64_t rip, uint64_t rbp, bool glass)
 {
 	char line[160];
 
@@ -137,11 +139,11 @@ void stack_trace_user(task_t *task, uint64_t rip, uint64_t rbp)
 	if (img == NULL || img->tracesyms == NULL) {
 		// Stripped, or loaded while NOTRACE was set. Say so once — silence
 		// here would read as "no call chain", which is a different claim.
-		trace_emit("  (no symbol table for this image — call chain unavailable)\n");
+		trace_emit("  (no symbol table for this image — call chain unavailable)\n", glass);
 		return;
 	}
 
-	trace_emit("  Call chain (most recent first):\n");
+	trace_emit("  Call chain (most recent first):\n", glass);
 
 	// The faulting address first, tagged — os32 did this and it is right: the
 	// eye should land on where it died before where it came from.
@@ -152,7 +154,7 @@ void stack_trace_user(task_t *task, uint64_t rip, uint64_t rbp)
 	} else {
 		sprintf(line, "   1) 0x%016lx  <no name>   <-- faulted here\n", rip);
 	}
-	trace_emit(line);
+	trace_emit(line, glass);
 
 	int level = 2;
 	int unknowns = 0;
@@ -179,7 +181,7 @@ void stack_trace_user(task_t *task, uint64_t rip, uint64_t rbp)
 			sprintf(line, "  %2d) 0x%016lx  <no name>\n", level, ret);
 			unknowns++;
 		}
-		trace_emit(line);
+		trace_emit(line, glass);
 
 		// MONOTONICITY: stacks grow DOWN, so each caller's frame must sit at a
 		// HIGHER address than the callee's. This one test ends every kind of
@@ -194,8 +196,8 @@ void stack_trace_user(task_t *task, uint64_t rip, uint64_t rbp)
 	}
 
 	if (level > TRACE_MAX_DEPTH) {
-		trace_emit("  ... (depth limit reached)\n");
+		trace_emit("  ... (depth limit reached)\n", glass);
 	} else if (unknowns > TRACE_MAX_UNKNOWN) {
-		trace_emit("  ... (too many unnamed frames — chain is not trustworthy)\n");
+		trace_emit("  ... (too many unnamed frames — chain is not trustworthy)\n", glass);
 	}
 }

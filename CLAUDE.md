@@ -417,6 +417,16 @@ the library serves every process). How it fits together:
   turned on, `#MF` (`CR0.NE`) and `#XM` (`CR4.OSXMMEXCPT`). Exit code is
   **200 + vector** — os64 has no SIGFPE/SIGILL, and 128+signal would name a
   signal that never existed. `#DF`/`#MC` stay fatal whatever CS says.
+  **On the glass a ring-3 death is ONE line, on the terminal that ran the
+  program** — `Fatal exception: prog (task N, #XM) - exit 219` /
+  `Segmentation fault: prog (task N, why) - exit 139` — while the wire and
+  the log get the full report (registers, forensics, call chain) in order.
+  Ruled 2026-08-28: the full dump on screen earned its place while the
+  kernel liked to die; now that a user fault kills the program and never
+  the machine, it is noise. And it goes to `task->tty`, not VT1 (the
+  kernel's own address): a death in a gterm or on VT2 was invisible where
+  the person was looking. Ring-0 panics are as loud as ever.
+  `user_death_headline` / `s_fault_glass` / `exception_glass_mute`.
 - The boot line `FPU: x87 SSE SSE2 ... enabled, FXSAVE per thread` prints to
   the glass AND the log (`fpu_report`); `kFPUFeatures` holds the answers.
 - Fixtures: `fputest` (state survives preemption, migration, and a handler

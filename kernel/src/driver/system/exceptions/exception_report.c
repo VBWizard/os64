@@ -393,6 +393,16 @@ static void exc_walk_chain(const exception_context_t *ctx, bool dying)
 // whole answer: CR2 says which address died, the registers say which pointer
 // carried it there. Exported (not folded into exception_report) because the
 // ring-3 segfault report needs exactly this block under its own headline.
+// The glass switch, for a caller that reports standalone under the wire lock:
+// the ring-3 kill paths print their one headline and then mute the glass for
+// the register block (simple_exceptions.c FAULT_PRINT says why). Only ever
+// toggled by the narrator holding exception_wire_lock, which is what makes
+// one static flag correct across cores.
+void exception_glass_mute(bool mute)
+{
+	kExcEmitToGlass = !mute;
+}
+
 void exception_report_registers(const exception_context_t *ctx, bool dying)
 {
 	// Reentrant, so this costs nothing under exception_report's own lock and

@@ -30,6 +30,8 @@
 // one thing the old panic never told you was which stack.
 extern uint64_t mp_isrSavedRSP[];
 #include "shared_object.h"
+#include "tty.h"             // tty_write — a ring-3 death's headline goes to the program's own terminal
+#include "strings/strlen.h"  // strlen — the headline's length for tty_write
 
 uint64_t gLastFaultRbp = 0;
 uint64_t gLastFaultRsp = 0;
@@ -157,8 +159,10 @@ static bool fault_address_readable(uint64_t address)
 // `direct` now means exactly ONE thing: THIS CORE IS DYING. A panic must not
 // depend on logd being alive to drain a queue, so it writes polled serial and
 // nothing else. Everything else — a ring-3 segfault, a page-fault diagnosis, a
-// stack trace — goes to ALL THREE sinks: the glass, the wire, and (only when a
-// userland daemon owns it) the LOGD= file.
+// stack trace — goes to the wire and (only when a userland daemon owns it) the
+// LOGD= file, and to the glass unless s_fault_glass says otherwise (below: a
+// ring-3 death shows one line where the program ran, and the rest is for the
+// log).
 //
 // THE RULING THAT CHANGED THIS (Chris, 2026-08-11): a fault report belongs on
 // the wire unconditionally — "it's cheap and it's permanent, and it's viewable
@@ -178,10 +182,48 @@ static bool fault_address_readable(uint64_t address)
 // The printd copy is added only when it lands somewhere OTHER than this same
 // wire — see log_printd_reaches_serial(). Without that test the whole report
 // prints twice on COM1 in the no-LOGD case, which is the default case.
+//
+// THE GLASS IS THE SINK A RING-3 DEATH SPARES (Chris, 2026-08-28): a
+// program dying is a fact the person at the keyboard needs in ONE line —
+// which program, why, and the exit code — while the register dump and the
+// call chain are for whoever reads the log. The full report was the right
+// default while the kernel itself liked to die and the glass was the only
+// sink you were sure to see; it is noise now that a ring-3 fault kills the
+// program and never the machine. So the ring-3 kill paths print their
+// headline (user_death_headline — on the TERMINAL THAT RAN THE PROGRAM),
+// then clear s_fault_glass for the rest of the report; the wire and the log
+// still receive every line in order, per the ruling above. Ring-0 panics
+// never touch the switch and stay as loud as they ever were.
+static bool s_fault_glass = true;
+
+// The headline of a ring-3 death goes to the terminal that ran the program —
+// where every shell since V7 has printed "Segmentation fault" — and not to
+// VT1, which is the kernel's address, not the program's: a death in a gterm
+// or on VT2 would otherwise show nothing at all where the person was
+// looking. A gterm's pty slave carries it into the window; a text VT shows
+// it in place; a task with no terminal falls back to the system console.
+// The wire and the log get the same line, first line of the full report.
+static void user_death_headline(task_t *task, const char *fmt, ...)
+{
+	char line[256];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(line, sizeof(line), fmt, ap);
+	va_end(ap);
+
+	if (task->tty != NULL)
+		tty_write((tty_t *)task->tty, line, strlen(line));
+	else
+		printf("%s", line);
+	serial_print_string(line);
+	if (!log_printd_reaches_serial())
+		printd(DEBUG_EXCEPTIONS, "%s", line);
+}
+
 #define FAULT_PRINT(direct, fmt, ...) do { \
         if (direct) { EXCEPTION_PRINT(fmt, ##__VA_ARGS__); } \
         else { \
-            printf(fmt, ##__VA_ARGS__); \
+            if (s_fault_glass) printf(fmt, ##__VA_ARGS__); \
             char _flt_line[512]; \
             snprintf(_flt_line, sizeof(_flt_line), fmt, ##__VA_ARGS__); \
             serial_print_string(_flt_line); \
@@ -573,13 +615,19 @@ void user_exception_kill(exception_context_t *ctx)
 
 	exception_wire_lock();
 
-	FAULT_PRINT(false, "\nFatal exception: %s (task %lu, %s)\n",
-	            task->exename[0] ? task->exename : "(unnamed)", task->taskID,
-	            exception_vector_name(ctx->vector));
-	FAULT_PRINT(false, "  RIP 0x%016lx  error 0x%lx  exit %lu\n",
-	            ctx->rip, ctx->error_code, EXIT_CPU_EXCEPTION_BASE + ctx->vector);
+	// The headline is the glass's whole share of this report, on the
+	// program's own terminal (FAULT_PRINT's header says why); everything
+	// after it goes to the wire and the log.
+	user_death_headline(task, "\nFatal exception: %s (task %lu, %s) - exit %lu\n",
+	                    task->exename[0] ? task->exename : "(unnamed)", task->taskID,
+	                    exception_vector_name(ctx->vector), EXIT_CPU_EXCEPTION_BASE + ctx->vector);
+	s_fault_glass = false;
+	exception_glass_mute(true);
+	FAULT_PRINT(false, "  RIP 0x%016lx  error 0x%lx\n", ctx->rip, ctx->error_code);
 	exception_report_registers(ctx, false);   // the OS survives this — ordinary log, in order
-	stack_trace_user(task, ctx->rip, ctx->rbp);
+	stack_trace_user(task, ctx->rip, ctx->rbp, false);
+	exception_glass_mute(false);
+	s_fault_glass = true;
 
 	exception_wire_unlock();
 
@@ -690,11 +738,15 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 	// headline through call chain, must land on the wire as one story.
 	exception_wire_lock();
 
-	// The headline, on EVERY sink. DEBUG_EXCEPTIONS is permanently on (see
-	// CONFIG.h), so the printd is not a hedge — it is the copy a script greps.
-	// The direct serial write is the copy that survives the session.
-	FAULT_PRINT(false, "\nSegmentation fault: %s (task %lu, %s)\n",
-	       task->exename[0] ? task->exename : "(unnamed)", task->taskID, why);
+	// The headline, on the program's own terminal, the wire and the log — and
+	// the glass's whole share of the report (FAULT_PRINT's header says why).
+	// DEBUG_EXCEPTIONS is permanently on (see CONFIG.h), so the printd copy
+	// is not a hedge — it is the one a script greps. The direct serial write
+	// is the one that survives the session.
+	user_death_headline(task, "\nSegmentation fault: %s (task %lu, %s) - exit 139\n",
+	                    task->exename[0] ? task->exename : "(unnamed)", task->taskID, why);
+	s_fault_glass = false;
+	exception_glass_mute(true);
 
 	// The error code decoded, because "error=0x7" is a number and "write to a
 	// present page from user mode" is a diagnosis. These five bits answer the
@@ -757,15 +809,17 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 		}
 
 		// And the call chain. NOTRACE disables everything inside.
-		stack_trace_user(task, rip, ctx->rbp);
+		stack_trace_user(task, rip, ctx->rbp, false);
 	} else {
 		dump_fault_registers(false);  // the OS survives this — ordinary log, in order
 
 		// And the call chain. gLastFaultRbp is captured by the #PF stub before it
 		// calls us (handler_errors.S), which is the only reason a trace is possible
 		// this far from the fault. NOTRACE disables everything below.
-		stack_trace_user(task, rip, gLastFaultRbp);
+		stack_trace_user(task, rip, gLastFaultRbp, false);
 	}
+	exception_glass_mute(false);
+	s_fault_glass = true;
 
 	// Report told — free the wire BEFORE task_exit, which never returns.
 	exception_wire_unlock();
