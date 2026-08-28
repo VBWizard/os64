@@ -213,6 +213,11 @@ void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window)
     clock->window = window;
 }
 
+// What a covered caller that does not drain its queue pays per pass instead
+// of spinning (see the wait below). Twenty passes a second is bounded and
+// harmless; a draining caller never pays it.
+#define COVERED_UNDRAINED_NAP_MS 50
+
 // Is the bound window covered right now? Asks the kernel, never the last
 // event: the flag is the truth (gui.h). A window that cannot be asked (it
 // died, the handle is stale) reads as visible, so a broken bind degrades to
@@ -250,6 +255,7 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
     // not hang because its window went behind another.
     if (budget_ms > 0 && bound_window_covered(clock))
     {
+        uint64_t entered = now_ms();
         os64_gui_event_wait(clock->window, (os64_gui_event_t *)0);
         clock->last_ms = now_ms();
         // Woken by the UNCOVERED nudge, or by a key under a window that
@@ -259,7 +265,17 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
         // forward behind it — the one case the "never 0" rule yields to,
         // and draw.h says so. Uncovered means the pause is over and the
         // frame is one budget long, as before.
-        return bound_window_covered(clock) ? 0 : budget_ms;
+        if (!bound_window_covered(clock))
+            return budget_ms;
+        // Still covered, and the wait returned without time passing: the
+        // event that woke us is still queued, which means the caller is not
+        // draining its queue (the COVERED nudge itself is enough to do this
+        // to a program that never polls). Left alone that is a spin at full
+        // speed behind a cover — the exact thing a bound clock exists to
+        // prevent. So the price of not draining is a nap, not a core.
+        if (clock->last_ms == entered)
+            os64_sleep(COVERED_UNDRAINED_NAP_MS);
+        return 0;
     }
 
     // Sleep out whatever remains of the budget. os64_sleep rounds UP to

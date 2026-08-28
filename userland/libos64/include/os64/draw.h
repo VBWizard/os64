@@ -174,7 +174,11 @@ void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window);
 // advance behind a window just because a key was pressed under it. Treat
 // 0 as "service your events, nothing moved". Check the loop's exit flag
 // BEFORE calling again: a close request drained on this pass would
-// otherwise put you back to sleep behind the covering window.
+// otherwise put you back to sleep behind the covering window. And DRAIN
+// YOUR QUEUE every pass — the clock wakes on any queued event, so an event
+// you leave there wakes it again at once (a caller that does not drain is
+// held to a nap per pass rather than allowed to spin, but that is a floor,
+// not the design).
 uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms);
 
 #endif // OS64_DRAW_H
