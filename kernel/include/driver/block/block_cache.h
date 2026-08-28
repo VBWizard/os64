@@ -17,9 +17,18 @@
 // command each (the run-coalescing fix fused in as the fill mechanism),
 // LRU-evicted against a fixed byte budget. Writes are NOT cached (phase 1
 // ruling): the shim passes them straight to the driver — write-through
-// stands, the stray-write tripwire keeps its post — and INVALIDATES any
-// overlapping lines on the way past, because a stale cache is worse than
-// no cache.
+// stands, the stray-write tripwire keeps its post — and then copies the
+// written bytes INTO any overlapping resident line, because a stale cache is
+// worse than no cache and the disk has just agreed to these exact bytes. (It
+// INVALIDATED those lines for the first four hours of its life; see the note
+// four paragraphs down for the iostat confession that changed it.)
+//
+// KEYED BY SECTOR, WHICH IS WHY IT CANNOT SERVE A STALE FILE. A cache line
+// names a place on a device, never a name in a directory — so a file replaced
+// by rename (a new inode on new blocks) has nothing cached to hit, and blocks
+// recycled from a deleted file are correct by the update-in-place rule above.
+// The one cache in os64 that IS keyed by name is the shared-object page cache,
+// and that is exactly why it needed an identity check (shared_object.h).
 //
 // PHASE 2, deliberately absent (rulings 2026-08-06): write caching (no
 // consumers), memory-pressure eviction + the os64_memory_t `reclaimable`
