@@ -1772,6 +1772,149 @@ static void print_elapsed(unsigned long dticks, unsigned long per_second)
 	os64_write(1, "s\n", 2);
 }
 
+// ── the directory stack ─────────────────────────────────────────────────────
+// `pushd DIR` remembers where you were and goes to DIR; `popd` goes back;
+// `dirs` shows the stack; a bare `pushd` swaps you with the top. Bill Joy's
+// csh (1978) — the first shell to notice that "go there, then come back" is
+// a stack, not a pair of cds. `cd -` is ksh's (1983) one-deep cousin: back
+// to the directory you were in before this one, no stack involved.
+//
+// Entries are PATH STRINGS, captured live from the kernel at push time, so
+// a directory renamed underneath the stack strands its entry exactly the
+// way it strands a task's cwd (DEBTS § cwd-as-string). A `popd` into an
+// entry that no longer resolves complains and KEEPS the entry: dropping it
+// silently would lose the one clue to where you had been.
+#define DIR_STACK_DEPTH 16
+#define DIR_PATH_MAX    256
+
+static char s_dirstack[DIR_STACK_DEPTH][DIR_PATH_MAX];
+static int  s_dirdepth = 0;
+static char s_prevdir[DIR_PATH_MAX];     // `cd -`'s target
+static bool s_have_prevdir = false;
+
+// Print the stack the way csh does: one line, where you are first, then
+// the entries newest to oldest — a bare `pushd` swaps the first two words.
+static void dirs_print(void)
+{
+	char cwd[DIR_PATH_MAX];
+	if (os64_getcwd(cwd, sizeof(cwd)) >= 0)
+		os64_write(1, cwd, os64_strlen(cwd));
+	for (int i = s_dirdepth - 1; i >= 0; i--)
+	{
+		os64_write(1, " ", 1);
+		os64_write(1, s_dirstack[i], os64_strlen(s_dirstack[i]));
+	}
+	os64_write(1, "\n", 1);
+}
+
+// Go to `dest`, remembering where you were for `cd -`. Returns 0, or 1
+// after complaining — the number is the builtin's $?.
+static int change_dir(const char *dest)
+{
+	char here[DIR_PATH_MAX];
+	bool haveHere = os64_getcwd(here, sizeof(here)) >= 0;
+	if (os64_chdir(dest) < 0)
+	{
+		err_puts("husk: cd: no such directory: ");
+		err_puts(dest);
+		err_puts("\n");
+		return 1;
+	}
+	if (haveHere)
+	{
+		os64_strcopy(s_prevdir, sizeof(s_prevdir), here);
+		s_have_prevdir = true;
+	}
+	return 0;
+}
+
+// The directory builtins, already parsed into argv. Returns the $? verdict.
+static int run_dir_builtin(char *cargv[], int cargc)
+{
+	const char *verb = cargv[0];
+
+	if (str_eq(verb, "cd"))
+	{
+		// `cd` alone goes to the root — there's no $HOME to go home to.
+		const char *dest = (cargc > 1) ? cargv[1] : "/";
+		if (cargc > 1 && str_eq(cargv[1], "-") && token_is_typed(cargv[1]))
+		{
+			if (!s_have_prevdir)
+			{
+				err_puts("husk: cd: no previous directory\n");
+				return 1;
+			}
+			// The target is overwritten by the move itself, so copy first.
+			char back[DIR_PATH_MAX];
+			os64_strcopy(back, sizeof(back), s_prevdir);
+			if (change_dir(back) != 0)
+				return 1;
+			// An implicit destination is announced, as ksh does — you did
+			// not type where you were going.
+			os64_write(1, back, os64_strlen(back));
+			os64_write(1, "\n", 1);
+			return 0;
+		}
+		return change_dir(dest);
+	}
+
+	if (str_eq(verb, "dirs"))
+	{
+		dirs_print();
+		return 0;
+	}
+
+	if (str_eq(verb, "popd"))
+	{
+		if (s_dirdepth == 0)
+		{
+			err_puts("husk: popd: directory stack empty\n");
+			return 1;
+		}
+		if (change_dir(s_dirstack[s_dirdepth - 1]) != 0)
+			return 1;            // entry kept — see the header comment
+		s_dirdepth--;
+		dirs_print();
+		return 0;
+	}
+
+	// pushd
+	char here[DIR_PATH_MAX];
+	if (os64_getcwd(here, sizeof(here)) < 0)
+	{
+		err_puts("husk: pushd: cannot read the current directory\n");
+		return 1;
+	}
+	if (cargc == 1)
+	{
+		// Bare pushd: swap places with the top entry.
+		if (s_dirdepth == 0)
+		{
+			err_puts("husk: pushd: directory stack empty\n");
+			return 1;
+		}
+		char top[DIR_PATH_MAX];
+		os64_strcopy(top, sizeof(top), s_dirstack[s_dirdepth - 1]);
+		if (change_dir(top) != 0)
+			return 1;
+		os64_strcopy(s_dirstack[s_dirdepth - 1], DIR_PATH_MAX, here);
+		dirs_print();
+		return 0;
+	}
+	if (s_dirdepth >= DIR_STACK_DEPTH)
+	{
+		err_puts("husk: pushd: directory stack full\n");
+		return 1;
+	}
+	// Move FIRST, push second: a pushd into nowhere leaves the stack as it
+	// was, and $? says so.
+	if (change_dir(cargv[1]) != 0)
+		return 1;
+	os64_strcopy(s_dirstack[s_dirdepth++], DIR_PATH_MAX, here);
+	dirs_print();
+	return 0;
+}
+
 // Run one ALREADY-EXPANDED command: the trailing `&`, the pipeline split,
 // the builtins, and finally run_pipeline. Returns 1 when the command asks
 // the shell to exit, else 0; the status lands in *last_status ($?).
@@ -1882,9 +2025,12 @@ static int run_expanded(char *expanded, int *last_status)
 	// `cd` is THE canonical builtin — the textbook answer to "why must
 	// any command be built in?": an external cd would change ITS OWN
 	// cwd (a copy inherited at spawn) and take the change to its grave.
-	// Only the shell can move the shell. `cd` alone goes to the root —
-	// there's no $HOME to go home to yet.
-	if (nstages == 1 && first_token_is(stages[0], "cd"))
+	// Only the shell can move the shell. Its relatives `pushd`, `popd`
+	// and `dirs` are builtins by the same physics.
+	if (nstages == 1 && (first_token_is(stages[0], "cd") ||
+	                     first_token_is(stages[0], "pushd") ||
+	                     first_token_is(stages[0], "popd") ||
+	                     first_token_is(stages[0], "dirs")))
 	{
 		char *cargv[ARGS_MAX];
 		int cargc = parse(stages[0], cargv, ARGS_MAX);
@@ -1894,18 +2040,9 @@ static int run_expanded(char *expanded, int *last_status)
 			// `cd /nomatch*` would silently take you to / , which is the most
 			// alarming thing a shell can do quietly.
 			*last_status = 1;
-			return 1;
+			return 0;            // 0: the shell stays — 1 here would EXIT it
 		}
-		const char *dest = (cargc > 1) ? cargv[1] : "/";
-		if (os64_chdir(dest) < 0)
-		{
-			os64_puts("husk: cd: no such directory: ");
-			os64_puts(dest);
-			os64_puts("\n");
-			*last_status = 1;    // builtins report through $? too
-		}
-		else
-			*last_status = 0;
+		*last_status = run_dir_builtin(cargv, cargc);
 		return 0;
 	}
 
