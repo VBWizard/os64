@@ -173,6 +173,267 @@ static void edit_delete(char *buf, int *n, int *pos, int start, int count)
 	caret_back(*n - *pos + count);
 }
 
+
+// Insert `len` bytes AT the caret: shift the tail right, land the bytes,
+// paint them plus the shifted tail, and walk the caret back to rest just
+// after the insertion. At the end of the line this degenerates to the
+// classic echo — one write, no backspaces. Bytes that would not fit are
+// dropped, so the line never outgrows its buffer.
+static void edit_insert(char *buf, int *n, int *pos, int cap,
+                        const char *text, int len)
+{
+	if (len > cap - 1 - *n)
+		len = cap - 1 - *n;
+	if (len <= 0)
+		return;
+	for (int i = *n - 1; i >= *pos; i--)
+		buf[i + len] = buf[i];
+	for (int i = 0; i < len; i++)
+		buf[*pos + i] = text[i];
+	*n += len;
+	os64_write(1, buf + *pos, (size_t)(*n - *pos));
+	*pos += len;
+	caret_back(*n - *pos);
+}
+
+// ── TAB COMPLETION ──────────────────────────────────────────────────────────
+// TENEX's EXEC completed file names on ESC in 1972 — older than every other
+// convenience in this line editor by a decade; tcsh moved it to Tab (1981)
+// and bash followed (1989). The shape is the classic one: the word before
+// the caret is completed against the directory it names — or, for the first
+// word of a line with no '/' in it, against the builtins and then the
+// current directory and PATH, where resolve_command looks. One match
+// is inserted whole (plus '/' for a directory, a space for anything else);
+// several are extended to their longest common prefix; a Tab that can extend
+// nothing lists them under the line and repaints it.
+//
+// No dotfile exception, same reason as the globs: os64 has no hidden-file
+// convention to protect. The word runs back to the previous blank and quotes
+// are not understood — this is the one place in husk that reads the line
+// RAW — so a name with a space in it cannot be completed. A literal Tab can
+// no longer be typed into a command; nothing in husk's vocabulary needs one.
+#define COMP_MAX       256   // candidates kept — past this it is a listing nobody reads
+#define COMP_NAME_MAX  64    // longer names are skipped, never truncated
+#define COMP_LIST_COLS 100   // the listing's width budget, in cells (ls uses 5 x 20)
+
+static char s_comp[COMP_MAX][COMP_NAME_MAX];
+static bool s_comp_isdir[COMP_MAX];
+static int  s_comp_count;
+
+static int glob_strcmp(const char *a, const char *b);   // defined with the globs below
+
+static bool str_starts(const char *s, const char *prefix)
+{
+	while (*prefix != '\0')
+		if (*s++ != *prefix++)
+			return false;
+	return true;
+}
+
+// Keep `name` as a candidate if it starts with `prefix` and is not already
+// kept (PATH directories can repeat, and a builtin can share a name with a
+// program). Silently full at COMP_MAX.
+static void comp_add(const char *name, const char *prefix, bool isdir)
+{
+	if (s_comp_count >= COMP_MAX || !str_starts(name, prefix))
+		return;
+	if (os64_strlen(name) >= COMP_NAME_MAX)
+		return;
+	for (int i = 0; i < s_comp_count; i++)
+		if (str_eq(s_comp[i], name))
+			return;
+	os64_strcopy(s_comp[s_comp_count], COMP_NAME_MAX, name);
+	s_comp_isdir[s_comp_count] = isdir;
+	s_comp_count++;
+}
+
+// Every entry of `dir` starting with `prefix`. `runnable` skips directories:
+// a command completion offers only what a spawn could take.
+static void comp_scan_dir(const char *dir, const char *prefix, bool runnable)
+{
+	int64_t d = os64_opendir(dir);
+	if (d < 0)
+		return;
+	os64_dirent_t e;
+	while (s_comp_count < COMP_MAX && os64_readdir((int32_t)d, &e) == 1)
+	{
+		bool isdir = (e.flags & OS64_DE_DIR) != 0;
+		if (runnable && isdir)
+			continue;
+		comp_add(e.name, prefix, isdir);
+	}
+	os64_close((int32_t)d);
+}
+
+// The builtins, the current directory, then each PATH directory — the order
+// resolve_command searches, though for completion order is only a courtesy.
+static void comp_scan_commands(const char *prefix)
+{
+	static const char *const builtins[] = {
+		"cd", "dirs", "exit", "export", "popd", "pushd", "time", "unset"
+	};
+	for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++)
+		comp_add(builtins[i], prefix, false);
+
+	char cwd[256];
+	if (os64_getcwd(cwd, sizeof(cwd)) >= 0)
+		comp_scan_dir(cwd, prefix, true);
+
+	const char *path = os64_getenv("PATH");
+	while (path != NULL && *path != '\0')
+	{
+		char dir[256];
+		int n = 0;
+		while (*path != '\0' && *path != ':' && n < (int)sizeof(dir) - 1)
+			dir[n++] = *path++;
+		if (*path == ':')
+			path++;
+		dir[n] = '\0';
+		if (n > 0)
+			comp_scan_dir(dir, prefix, true);
+	}
+}
+
+static void comp_sort(void)
+{
+	for (int i = 1; i < s_comp_count; i++)
+	{
+		char key[COMP_NAME_MAX];
+		bool keyDir = s_comp_isdir[i];
+		os64_strcopy(key, sizeof(key), s_comp[i]);
+		int j = i - 1;
+		while (j >= 0 && glob_strcmp(s_comp[j], key) > 0)
+		{
+			os64_strcopy(s_comp[j + 1], COMP_NAME_MAX, s_comp[j]);
+			s_comp_isdir[j + 1] = s_comp_isdir[j];
+			j--;
+		}
+		os64_strcopy(s_comp[j + 1], COMP_NAME_MAX, key);
+		s_comp_isdir[j + 1] = keyDir;
+	}
+}
+
+// Print the candidates in columns under the line, then repaint the prompt
+// and the line with the caret where it was.
+static void comp_list_and_repaint(const char *buf, int n, int pos)
+{
+	int widest = 0;
+	for (int i = 0; i < s_comp_count; i++)
+	{
+		int w = (int)os64_strlen(s_comp[i]) + (s_comp_isdir[i] ? 1 : 0);
+		if (w > widest)
+			widest = w;
+	}
+	int width = widest + 2;
+	int cols = COMP_LIST_COLS / width;
+	if (cols < 1)
+		cols = 1;
+
+	os64_write(1, "\n", 1);
+	for (int i = 0; i < s_comp_count; i++)
+	{
+		int w = (int)os64_strlen(s_comp[i]);
+		os64_write(1, s_comp[i], (size_t)w);
+		if (s_comp_isdir[i])
+		{
+			os64_write(1, "/", 1);
+			w++;
+		}
+		bool rowEnd = ((i + 1) % cols == 0) || (i + 1 == s_comp_count);
+		if (rowEnd)
+			os64_write(1, "\n", 1);
+		else
+			blank_forward(width - w);
+	}
+	prompt();
+	if (n > 0)
+		os64_write(1, buf, (size_t)n);
+	caret_back(n - pos);
+}
+
+// Complete the word that ends at the caret, editing the line in place.
+static void complete_at_caret(char *buf, int *n, int *pos, int cap)
+{
+	int ws = *pos;
+	while (ws > 0 && buf[ws - 1] != ' ' && buf[ws - 1] != '\t')
+		ws--;
+	int wlen = *pos - ws;
+	char word[LINE_MAX];
+	for (int i = 0; i < wlen; i++)
+		word[i] = buf[ws + i];
+	word[wlen] = '\0';
+
+	bool firstWord = true;
+	for (int i = 0; i < ws; i++)
+		if (buf[i] != ' ' && buf[i] != '\t')
+			firstWord = false;
+	const char *lastSlash = NULL;
+	for (const char *p = word; *p != '\0'; p++)
+		if (*p == '/')
+			lastSlash = p;
+
+	s_comp_count = 0;
+	const char *prefix;
+	if (firstWord && lastSlash == NULL)
+	{
+		// A command name. An EMPTY first word is left alone: a stray Tab at
+		// a bare prompt would otherwise dump every program on the system.
+		if (wlen == 0)
+			return;
+		prefix = word;
+		comp_scan_commands(prefix);
+	}
+	else if (lastSlash != NULL)
+	{
+		// A path: the directory is everything through the last '/', and
+		// the prefix is what follows it.
+		char dir[LINE_MAX];
+		int dlen = (int)(lastSlash - word) + 1;
+		for (int i = 0; i < dlen; i++)
+			dir[i] = word[i];
+		dir[dlen] = '\0';
+		prefix = lastSlash + 1;
+		comp_scan_dir(dir, prefix, false);
+	}
+	else
+	{
+		// A bare name after the command: an entry of the current directory.
+		char cwd[256];
+		if (os64_getcwd(cwd, sizeof(cwd)) < 0)
+			return;
+		prefix = word;
+		comp_scan_dir(cwd, prefix, false);
+	}
+	if (s_comp_count == 0)
+		return;                          // nothing matches: the line is yours as typed
+	comp_sort();
+
+	int plen = (int)os64_strlen(prefix);
+	if (s_comp_count == 1)
+	{
+		// One answer: the rest of the name, then the thing that follows a
+		// finished name — a '/' to keep walking into a directory, a space
+		// to move on to the next argument.
+		edit_insert(buf, n, pos, cap, s_comp[0] + plen, (int)os64_strlen(s_comp[0]) - plen);
+		edit_insert(buf, n, pos, cap, s_comp_isdir[0] ? "/" : " ", 1);
+		return;
+	}
+
+	// Several: extend to their longest common prefix if that says anything
+	// new, otherwise show them.
+	int lcp = (int)os64_strlen(s_comp[0]);
+	for (int i = 1; i < s_comp_count; i++)
+	{
+		int k = 0;
+		while (k < lcp && s_comp[i][k] == s_comp[0][k])
+			k++;
+		lcp = k;
+	}
+	if (lcp > plen)
+		edit_insert(buf, n, pos, cap, s_comp[0] + plen, lcp - plen);
+	else
+		comp_list_and_repaint(buf, *n, *pos);
+}
 // Read one line from the console into buf (NUL-terminated), echoing as we go.
 // Returns the length. Handles Enter (submit), Backspace (erase before the
 // caret), Left/Right caret movement with mid-line insert (2026-08-08 — the
@@ -383,27 +644,18 @@ static int read_line(char *buf, int cap)
 			browse = 0;
 			continue;
 		}
-		// Any other control chord has no line-editing meaning yet — swallow
-		// it rather than burying invisible bytes in the command. Tab stays:
-		// it's typeable text.
-		if ((unsigned char)c < 0x20 && c != '\t')
-			continue;
-		if (n < cap - 1)
+		if (c == '\t')                       // Tab — complete the word at the caret
 		{
-			// Insert AT the caret: shift the tail right, land the byte, then
-			// paint the new glyph plus the shifted tail and walk the caret
-			// back to rest just after the insertion. When the caret is at
-			// the end this degenerates to the classic echo — one write, no
-			// backspaces.
-			for (int i = n; i > pos; i--)
-				buf[i] = buf[i - 1];
-			buf[pos] = c;
-			n++;
-			pos++;
-			os64_write(1, buf + pos - 1, (size_t)(n - pos + 1));
-			caret_back(n - pos);
-			browse = 0;          // typing makes the recalled line YOURS now
+			complete_at_caret(buf, &n, &pos, cap);
+			browse = 0;          // a completion is an edit: the line is YOURS now
+			continue;
 		}
+		// Any other control chord has no line-editing meaning yet — swallow
+		// it rather than burying invisible bytes in the command.
+		if ((unsigned char)c < 0x20)
+			continue;
+		edit_insert(buf, &n, &pos, cap, &c, 1);
+		browse = 0;              // typing makes the recalled line YOURS now
 	}
 }
 
