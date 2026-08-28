@@ -205,12 +205,92 @@ static uint64_t now_ms(void)
 void os64_frame_clock_init(os64_frame_clock_t *clock)
 {
     clock->last_ms = now_ms();
+    clock->window = -1;
+    clock->immediate_wakes = 0;
+}
+
+void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window)
+{
+    clock->window = window;
+}
+
+// What a covered caller that does not drain its queue pays per pass instead
+// of spinning (see the wait below). Twenty passes a second is bounded and
+// harmless; a draining caller never reaches it, because it is charged only
+// from the SECOND immediate wake in a row (one can be an honest race).
+#define COVERED_UNDRAINED_NAP_MS 50
+
+// Is the bound window covered right now? Asks the kernel, never the last
+// event: the flag is the truth (gui.h). A window that cannot be asked (it
+// died, the handle is stale) reads as visible, so a broken bind degrades to
+// the old always-paint behavior rather than to a program that never wakes.
+static bool bound_window_covered(const os64_frame_clock_t *clock)
+{
+    if (clock->window < 0)
+        return false;
+    os64_gui_window_state_t st;
+    if (os64_gui_window_get_state(clock->window, &st) != 0)
+        return false;
+    return (st.flags & OS64_GUI_WINDOW_COVERED) != 0;
 }
 
 uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
 {
     uint64_t now = now_ms();
     uint64_t used = now - clock->last_ms;
+
+    // Nobody watching? Then nobody is owed a frame. Asked BEFORE the cadence
+    // sleep below, because that sleep registers no waiter: a covered window
+    // that slept its budget first would leave a key or an Alt+F4 queued
+    // behind it for the whole budget. Sleep instead until the window
+    // has an event to service — the UNCOVERED nudge, or a key, or Alt+F4:
+    // a covered window can still be the FOCUSED one (a window created
+    // START_UNFOCUSED over it leaves it so), and its keys must reach its
+    // loop, not rot in a queue behind a nap. The peek-wait leaves the event
+    // for the app's own poll; we return so the app's loop runs one pass and
+    // handles it, and if the window is still covered the next call sleeps
+    // again. The flag is re-read on every call, never inferred from the
+    // event (gui.h), so a dropped UNCOVERED costs one pass, not forever.
+    // The dt pretends the pause never happened (draw.h).
+    // A zero budget means "don't sleep, just measure" (draw.h) — and that
+    // promise holds while covered too: a caller sampling elapsed time must
+    // not hang because its window went behind another.
+    if (budget_ms > 0 && bound_window_covered(clock))
+    {
+        uint64_t entered = now_ms();
+        os64_gui_event_wait(clock->window, (os64_gui_event_t *)0);
+        clock->last_ms = now_ms();
+        // Woken by the UNCOVERED nudge, or by a key under a window that
+        // still hides us? The flag decides. Still covered means no frame is
+        // owed: a dt of ZERO, so an integrator holds still and a key held
+        // down under the covering window cannot drive the animation
+        // forward behind it — the one case the "never 0" rule yields to,
+        // and draw.h says so. Uncovered means the pause is over and the
+        // frame is one budget long, as before.
+        if (!bound_window_covered(clock))
+        {
+            clock->immediate_wakes = 0;
+            return budget_ms;
+        }
+        // Still covered, and the wait returned without time passing. Once,
+        // that is ordinary: an event queued just before the wait returns in
+        // the same 10ms tick even for a caller that drains faithfully. TWICE
+        // IN A ROW it is not — a drained queue cannot wake the next wait at
+        // once — so the caller is not draining (the COVERED nudge itself is
+        // enough to do this to a program that never polls), and left alone
+        // that is a spin at full speed behind a cover, the exact thing a
+        // bound clock exists to prevent. From the second immediate wake on,
+        // the price of not draining is a nap, not a core; a draining caller
+        // never reaches it.
+        if (clock->last_ms == entered)
+        {
+            if (++clock->immediate_wakes >= 2)
+                os64_sleep(COVERED_UNDRAINED_NAP_MS);
+        }
+        else
+            clock->immediate_wakes = 0;
+        return 0;
+    }
 
     // Sleep out whatever remains of the budget. os64_sleep rounds UP to
     // the live tick, which is exactly the honest behavior for a cadence-

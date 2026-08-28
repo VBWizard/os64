@@ -143,15 +143,44 @@ static inline int64_t os64_draw_publish(os64_draw_ctx_t *ctx,
 typedef struct os64_frame_clock
 {
     uint64_t last_ms;          // real time at the last frame boundary
+    int64_t  window;           // bound window, or -1: the clock does not know
+                               // whether anyone is watching
+    uint32_t immediate_wakes;  // covered waits in a row that returned at once
+                               // (library bookkeeping; see os64_frame_wait)
 } os64_frame_clock_t;
 
 void os64_frame_clock_init(os64_frame_clock_t *clock);
 
+// Tell the clock which window it paces. From then on os64_frame_wait sleeps
+// while that window is COVERED (minimized, fully behind another, or a text
+// terminal has the screen) — an animation nobody can see costs nothing —
+// and wakes when the window has an event to service: the UNCOVERED nudge,
+// a keystroke, a close request (a covered window can still be the focused
+// one). It then RETURNS, so your loop runs one pass and handles the event
+// through its ordinary poll; if the window is still covered, the next call
+// sleeps again. Nothing is consumed on your behalf. Unbound (the default),
+// the clock paces regardless.
+void os64_frame_clock_bind(os64_frame_clock_t *clock, int64_t window);
+
 // Sleep out the remainder of `budget_ms` since the last frame boundary
 // (0 = don't sleep, just measure), then advance the boundary. Returns the
 // REAL elapsed ms since the previous call — the dt to advance state by.
-// Never returns 0: a dt of zero would freeze integrators, and the floor
-// of 1ms is honest about the tick clock's granularity.
+// Never 0 while your window is visible: the floor of 1ms is honest about
+// the tick clock's granularity, and a zero would freeze integrators.
+//
+// While your window is COVERED (a bound clock only): the call sleeps until
+// the window has an event to service and then returns — ONE BUDGET if the
+// window is visible again (not the minutes you were hidden: an integrator
+// handed a 600-second step does not resume, it explodes), or ZERO if it is
+// still covered, because then no frame is owed and an animation must not
+// advance behind a window just because a key was pressed under it. Treat
+// 0 as "service your events, nothing moved". Check the loop's exit flag
+// BEFORE calling again: a close request drained on this pass would
+// otherwise put you back to sleep behind the covering window. And DRAIN
+// YOUR QUEUE every pass — the clock wakes on any queued event, so an event
+// you leave there wakes it again at once (a caller that does not drain is
+// held to a nap per pass rather than allowed to spin, but that is a floor,
+// not the design).
 uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms);
 
 #endif // OS64_DRAW_H

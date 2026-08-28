@@ -117,6 +117,14 @@
 // real desktop may do this" on, and inventing one for a stacking hint would
 // be a lock on the wrong door.
 #define GUI_WINDOW_DESKTOP         (1u << 5)
+// NOBODY CAN SEE IT (2026-08-27): minimized, or entirely behind one window
+// above it (wm_rect_is_occluded's single-window containment), or a text
+// terminal holds the glass. Kernel-owned — never a creation flag — and kept
+// current by wm_cover_sweep_locked, which the compositor runs every frame
+// after the window manager has had its say. Published through
+// gui_window_get_state so a client can stop working for an audience of
+// nobody; the COVERED/UNCOVERED events announce each flip.
+#define GUI_WINDOW_COVERED         (1u << 7)
 
 // POPUP — DERIVED AT BIRTH, NEVER A CLIENT FLAG. A window created with no
 // chrome AND always-on-top is a menu, a cascade, a tooltip: something that
@@ -129,6 +137,19 @@
 // full-screen sheet, and pinning a borderless gterm confiscated its titlebar
 // toggle. What a window IS was settled when it was made.
 #define GUI_WINDOW_POPUP           (1u << 6)
+
+// EVERY FLAG BIT IS UNIQUE, and the build says so. Two slices born on
+// different branches each took bit 6 — POPUP and COVERED — and merged
+// without a textual conflict, so a minimized terminal read as a popup and
+// declined to come back. The ABI asserts pin each side's copy to the
+// other's; this one pins the kernel's flags to EACH OTHER.
+_Static_assert((GUI_WINDOW_NO_DECORATIONS ^ GUI_WINDOW_START_UNFOCUSED ^ GUI_WINDOW_PINNED ^
+                GUI_WINDOW_MAXIMIZED ^ GUI_WINDOW_MINIMIZED ^ GUI_WINDOW_DESKTOP ^
+                GUI_WINDOW_COVERED ^ GUI_WINDOW_POPUP) ==
+               (GUI_WINDOW_NO_DECORATIONS | GUI_WINDOW_START_UNFOCUSED | GUI_WINDOW_PINNED |
+                GUI_WINDOW_MAXIMIZED | GUI_WINDOW_MINIMIZED | GUI_WINDOW_DESKTOP |
+                GUI_WINDOW_COVERED | GUI_WINDOW_POPUP),
+               "two window flags share a bit");
 
 // Alt+F4 twice within this long (5s) on a window that did not go away is
 // "I mean it": the owner task gets SIGTERM.
@@ -343,6 +364,11 @@ void wm_deliver_event(window_t *w, const input_event_t *ev);
 
 // Pop for the owner side; false when empty.
 bool wm_pop_event(window_t *w, input_event_t *out);
+// Is anything queued? The peek-wait's question (gui_event_wait with no out).
+static inline bool wm_has_event(const window_t *w)
+{
+    return w->evt_head != w->evt_tail;
+}
 
 // Composite every window that intersects `damage` (screen coords) into the
 // backbuffer, bottom-up, chrome + content. The desktop below and the cursor
@@ -353,6 +379,11 @@ void wm_composite(surface_t *backbuffer, rect_t damage);
 // only question publish needs to ask before spending a composite and a slow
 // uncached flush on pixels nobody can see. Caller holds kGuiLock.
 bool wm_rect_is_occluded(const window_t *w, rect_t screen_rect);
+
+// Recompute GUI_WINDOW_COVERED for every window and announce each flip with
+// a COVERED/UNCOVERED event. kGuiLock held. Cheap enough to run every
+// compositor frame (a dozen windows, each asked about the ones above it).
+void wm_cover_sweep_locked(void);
 
 // Is this screen rect completely covered by SOME window? The compositor asks
 // before painting the desktop background into a damage rect: if a window is

@@ -84,6 +84,7 @@ int main(int argc, char **argv)
 
     os64_frame_clock_t clock;
     os64_frame_clock_init(&clock);
+    os64_frame_clock_bind(&clock, win);   // sleep while nobody can see the ball
 
     for (;;) {
         uint64_t dt = os64_frame_wait(&clock, FRAME_MS);

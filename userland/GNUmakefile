@@ -312,6 +312,15 @@ $(OBJ)/pic/%.S.o: %.S
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
 
+# Userland builds -O0 so a debugger sees every local — but a program whose
+# whole job is arithmetic pays for that at retail: at -O0 the Mandelbrot
+# inner loop spills four doubles to the stack every iteration. Apps named
+# here compile at -O2 (a pattern-specific variable, so nothing else
+# changes). Add one only when it has been MEASURED; a demo that feels
+# slow is usually doing more math, not less optimizing.
+OPTIMIZED_APPS := fpu_demo
+$(foreach a,$(OPTIMIZED_APPS),$(eval $(OBJ)/apps/$(a)/%.c.o: CFLAGS += -O2))
+
 $(OBJ)/%.c.o: %.c
 	@mkdir -p "$(dir $@)"
 	$(CC) $(CFLAGS) -c $< -o $@
