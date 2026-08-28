@@ -161,6 +161,14 @@ static inline void os64_gui_frame_for_content(uint32_t content_w, uint32_t conte
 // not saving a maximized or minimized frame as its ordinary position.
 #define OS64_GUI_WINDOW_MAXIMIZED        (1u << 3)
 #define OS64_GUI_WINDOW_MINIMIZED        (1u << 4)
+// Nobody can see this window right now: it is minimized, or it sits entirely
+// behind one window above it, or a text terminal holds the glass. Kernel-
+// tracked, never yours to set. The frame clock reads it to stop an animation
+// nobody is watching (os64_frame_clock_bind); an app with its own loop reads
+// it after a WINDOW_COVERED/UNCOVERED event. THIS FLAG IS THE TRUTH and the
+// event is only the nudge: a queue is 64 deep and drops the newest when
+// full, so an app that trusted the last event it saw could sleep forever.
+#define OS64_GUI_WINDOW_COVERED          (1u << 7)
 
 // Where a window IS and what state it is in — the readback half of create.
 //
@@ -253,6 +261,14 @@ typedef struct os64_gui_surface
 // focus from its parent — so a menu can tell "the user moved into my own
 // submenu" from "the user went elsewhere" without knowing which handle.
 #define OS64_GUI_EVENT_WINDOW_FOCUS      8
+// Your window just became invisible / visible again (OS64_GUI_WINDOW_COVERED
+// flipped). A NUDGE, not the state: re-read the flag with
+// os64_gui_window_get_state before acting on it, because events can be
+// dropped and this pair can arrive out of step with a queue that was full.
+// The frame clock answers these for any app that uses it; an app with its
+// own loop (gterm) uses them to stop painting while it keeps working.
+#define OS64_GUI_EVENT_WINDOW_COVERED    9
+#define OS64_GUI_EVENT_WINDOW_UNCOVERED  10
 
 // Modifier bits (the kernel's keyboard_modifiers_t, verbatim). Carried by
 // key events and — since resize — by mouse events too.
@@ -380,6 +396,11 @@ static inline int64_t os64_gui_screen_info(uint32_t *width, uint32_t *height)
 // answer to a poll loop: an app that waits costs NOTHING until somebody
 // types at it — no cadence, no polling, just sleep until the compositor
 // says otherwise.
+//
+// out == NULL: wait until an event is QUEUED and return 1 without taking
+// it — your next os64_gui_event_poll gets it. This is how the frame clock
+// sleeps while your window is covered without stealing your keystrokes,
+// your Alt+F4, or the UNCOVERED nudge from the loop that must handle them.
 static inline int64_t os64_gui_event_wait(int64_t handle,
                                           os64_gui_event_t *out)
 {

@@ -23,9 +23,11 @@
 //
 // The syscall stubs below are the embryo of the userland syscall layer:
 // os64's convention is RAX=number, args in RDI/RSI/RDX/R10/R8/R9, result in
-// RAX; RCX/R11 are burned by the hardware and the kernel clobbers only what a
-// C call would (see syscall.S), so a simple "syscall" instruction with the
-// right register constraints is a complete stub.
+// RAX; RCX/R11 are burned by the hardware and the kernel clobbers what a C
+// call would (see syscall.S) — and ZEROES the argument registers, so the
+// constraints must say in-out ("+D") and name the rest as clobbers, or an
+// optimizing build reads the kernel's zeros back (abi/include/os64/syscall.h
+// tells the whole story). This fixture builds -O0, and still says it right.
 
 #include <stdint.h>
 
@@ -45,7 +47,7 @@ static inline uint64_t os64_syscall0(uint64_t nr)
     __asm__ volatile("syscall"
                      : "=a"(ret)
                      : "a"(nr)
-                     : "rcx", "r11", "memory");
+                     : "rcx", "r11", "rdi", "rsi", "rdx", "r8", "r9", "r10", "memory");
     return ret;
 }
 
@@ -53,9 +55,9 @@ static inline uint64_t os64_syscall3(uint64_t nr, uint64_t a0, uint64_t a1, uint
 {
     uint64_t ret;
     __asm__ volatile("syscall"
-                     : "=a"(ret)
-                     : "a"(nr), "D"(a0), "S"(a1), "d"(a2)
-                     : "rcx", "r11", "memory");
+                     : "=a"(ret), "+D"(a0), "+S"(a1), "+d"(a2)
+                     : "a"(nr)
+                     : "rcx", "r11", "r8", "r9", "r10", "memory");
     return ret;
 }
 
