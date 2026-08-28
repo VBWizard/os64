@@ -19,6 +19,15 @@ an eager design you don't remember reading about, that's why.
 Reading order matches dependency order: types → parsing → relocation engine
 → registry → task wiring → fault handler → test fixtures → build system.
 
+**THIS IS A SNAPSHOT OF THE CODE AS IT WAS, not a document anyone maintains.**
+It describes the loader at the moment it was written, and the loader has moved
+since — the retention rules in particular. Where it says an object is resident
+forever, that refcounts never decrement, and that teardown must not free a
+dynamic task's image, read `shared_object.h`: refcounts have decremented since
+2026-08-13, and since 2026-08-28 an object is unloaded when nothing holds it
+and retired when its file is replaced on disk. Take the *reasoning* from here
+and the *facts* from the code.
+
 ---
 
 ## 0. The big picture

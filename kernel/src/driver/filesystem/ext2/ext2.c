@@ -449,6 +449,11 @@ int ext2_open_existing(vfs_file_t **vfs_file, const char *path,
 	(*vfs_file)->handle = h;
 	(*vfs_file)->f_path = (char *)path;   // same contract as FAT: caller's
 	                                      // pointer, caller's lifetime problem
+	// The inode number IS ext2's file identity (vfs.h f_ident) — the whole
+	// point of an inode since 1969. Pinned for as long as this handle lives:
+	// the openref registered just above is what stops a removal from freeing
+	// the number for reuse.
+	(*vfs_file)->f_ident = ino;
 	(*vfs_file)->fops = vfs_fs->fops;
 	(*vfs_file)->owner = vfs_fs;
 

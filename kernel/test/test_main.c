@@ -1047,6 +1047,177 @@ static bool test_dynamic_linking(void)
 }
 
 
+// ── Retention and reload (2026-08-28) ────────────────────────────────────────
+//
+// Two claims, one fixture, because they are the two halves of one answer to
+// "is the resident copy of a program still the program on disk?":
+//
+//   RETENTION — an object with no holders is UNLOADED, so the registry only
+//   ever describes what is in use. Shown by loading a program, dropping the
+//   reference, and finding the registry empty of it.
+//
+//   RELOAD — an object whose FILE has been replaced is retired and rebuilt
+//   from the new file, while the old copy stays for whoever is still running
+//   it. Shown by renaming a second copy over the first's name — which is
+//   exactly how os64get commits a refresh — and finding a different object, a
+//   different identity, and the old one retired but alive under its held
+//   reference.
+//
+// The fixture is a byte copy of a real dynamically-linked program under a
+// scratch name: the claims are about the REGISTRY, not about any particular
+// binary, and /bin is not the suite's to rearrange.
+#define SO_FAIL(...) do { \
+        printd(DEBUG_TESTS, "\tFAIL: test_shared_object_reload - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+
+// Byte-copy `src` onto `dst` through the VFS. A real program is tens of
+// kilobytes, so the buffer is kmalloc'd rather than a stack array.
+static bool so_copy_file(const char *src, const char *dst)
+{
+    vfs_file_t *in = NULL, *out = NULL;
+    if (kRootFilesystem->fops->open(&in, src, "r", kRootFilesystem) != 0)
+        return false;
+    if (kRootFilesystem->fops->open(&out, dst, "c", kRootFilesystem) != 0) {
+        kRootFilesystem->fops->close(in);
+        return false;
+    }
+
+    enum { SO_COPY_CHUNK = 8192 };
+    uint8_t *buf = kmalloc(SO_COPY_CHUNK);
+    bool ok = (buf != NULL);
+    while (ok) {
+        int n = kRootFilesystem->fops->read(in, buf, SO_COPY_CHUNK);
+        if (n <= 0) {
+            ok = (n == 0);   // 0 is end of file; negative is a real failure
+            break;
+        }
+        if (kRootFilesystem->fops->write(out, buf, (size_t)n) != n)
+            ok = false;
+    }
+
+    kfree(buf);
+    kRootFilesystem->fops->close(in);
+    kRootFilesystem->fops->close(out);
+    return ok;
+}
+
+// Does the registry currently serve `path`? Asked the way every caller asks
+// it — a retired object does not answer to its own name any more — and under
+// the registry lock, because a walk without it can read a node another core
+// is freeing (the same rule /sys/shlib follows).
+static bool so_registry_serves(const char *path)
+{
+    bool found = false;
+    shared_object_registry_lock();
+    if (kLoadedSharedObjects != NULL) {
+        for (dlist_node_t *n = kLoadedSharedObjects->head; n != NULL && !found; n = n->next) {
+            shared_object_t *so = (shared_object_t *)n->data;
+            found = (so != NULL && !so->retired && strcmp(so->path, path) == 0);
+        }
+    }
+    shared_object_registry_unlock();
+    return found;
+}
+
+static bool test_shared_object_reload(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_shared_object_reload (no root filesystem mounted)\n");
+        return true;
+    }
+    if (kRootFilesystem->fops->write == NULL || kRootFilesystem->fops->rename == NULL ||
+        kRootFilesystem->fops->rm == NULL || kRootFilesystem->dops->mkdir == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_shared_object_reload (root filesystem cannot write, rename or remove)\n");
+        return true;
+    }
+
+    static const char *live = "/etc/testdata/reload_a";
+    static const char *incoming = "/etc/testdata/reload_b";
+
+    // Provision, then start from a known floor — a previous boot's leftovers
+    // would make "already loaded" read as a retention bug. (mkdir answers -1
+    // for "already exists" too, so its result is deliberately ignored; the
+    // copy below is the real judge of whether the directory is usable.)
+    char pathbuf[40];
+    sprintf(pathbuf, "%s", "/etc");
+    kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+    sprintf(pathbuf, "%s", "/etc/testdata");
+    kRootFilesystem->dops->mkdir(pathbuf, kRootFilesystem);
+    kRootFilesystem->fops->rm(live, kRootFilesystem);
+    kRootFilesystem->fops->rm(incoming, kRootFilesystem);
+
+    if (!so_copy_file("/bin/hello", live))
+        SO_FAIL("could not copy /bin/hello to %s\n", live);
+
+    // 1. RETENTION. One load, one release, and nothing left behind.
+    shared_object_t *first = shared_object_load_executable(live);
+    if (first == NULL)
+        SO_FAIL("could not load the copy at %s\n", live);
+    uint64_t first_ident = first->ident;
+    if (first_ident == 0)
+        SO_FAIL("the root filesystem gave %s no identity — a replaced file could not be noticed\n", live);
+
+    shared_object_release(first);   // the last reference: `first` is freed here
+    if (so_registry_serves(live))
+        SO_FAIL("%s outlived its last reference — unload-at-zero did not run\n", live);
+
+    // 2. RELOAD. Hold one copy the way a running task would, replace the file
+    //    underneath it, and ask for it again.
+    shared_object_t *held = shared_object_load_executable(live);
+    if (held == NULL)
+        SO_FAIL("could not re-load %s after it was unloaded\n", live);
+    uint64_t held_ident = held->ident;
+
+    if (!so_copy_file("/bin/hello", incoming)) {
+        shared_object_release(held);
+        SO_FAIL("could not stage a replacement at %s\n", incoming);
+    }
+    if (kRootFilesystem->fops->rename(incoming, live, kRootFilesystem) != 0) {
+        shared_object_release(held);
+        SO_FAIL("could not rename %s over %s (an open destination must be replaceable)\n",
+                incoming, live);
+    }
+
+    shared_object_t *fresh = shared_object_load_executable(live);
+    if (fresh == NULL) {
+        shared_object_release(held);
+        SO_FAIL("loading %s after its file was replaced returned nothing\n", live);
+    }
+
+    // Everything the two objects can tell us, read BEFORE either release —
+    // a release that drops the last reference frees the struct it names.
+    bool distinct       = (fresh != held);
+    bool identity_moved = (fresh->ident != held_ident);
+    bool old_retired    = held->retired;
+    uint32_t held_refs  = held->refcount;
+    uint64_t fresh_ident = fresh->ident;
+
+    shared_object_release(fresh);
+    shared_object_release(held);
+
+    if (!distinct)
+        SO_FAIL("a replaced file returned the SAME object — the registry answered from the path alone\n");
+    if (!identity_moved)
+        SO_FAIL("the reloaded object kept identity %lu — the new file was not noticed\n", held_ident);
+    if (!old_retired)
+        SO_FAIL("the superseded object was not retired — a later load could still find it\n");
+    if (held_refs != 1)
+        SO_FAIL("the superseded object's refcount is %u, expected 1 (this test's own hold) — "
+                "retiring must not disturb the count\n", held_refs);
+    if (so_registry_serves(live))
+        SO_FAIL("%s outlived both references\n", live);
+
+    kRootFilesystem->fops->rm(live, kRootFilesystem);
+
+    printd(DEBUG_TESTS, "\tPASS: test_shared_object_reload (unloaded at zero; a replaced file retired "
+                        "the loaded copy, id %lu -> %lu, and reloaded)\n",
+           held_ident, fresh_ident);
+    return true;
+}
+#undef SO_FAIL
+
+
 // ── Argument delivery (2026-08-13) ───────────────────────────────────────────
 //
 // /bin/arg_echo has existed since ring-3 bring-up and checks the whole startup
@@ -4476,6 +4647,12 @@ static void register_builtin_tests(void)
     test_register_policy("ext2_orphan", test_ext2_orphan, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_readonly_demotion", test_ext2_readonly_demotion, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    // Writes, but NOT a write gauntlet: what it impeaches on failure is the
+    // shared-object registry, not the disk, so demoting every mount to
+    // read-only would be an answer to a question this test never asked. It
+    // runs after the gauntlets above, which is what makes its own writes
+    // trustworthy.
+    test_register("shared_object_reload", test_shared_object_reload, TEST_PHASE_POSTBOOT);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("dirent_mtime", test_dirent_mtime, TEST_PHASE_POSTBOOT);

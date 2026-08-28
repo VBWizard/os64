@@ -788,18 +788,26 @@ static uint64_t task_release_vmas(task_t *t, uint64_t *shared_bytes_out)
 // (see elf_resolve_dynamic_dependencies). It happens to be the list head
 // today — task_map_shared_object_closure adds it before recursing — but
 // depending on that would be depending on a traversal order nobody promised.
+//
+// THE RELEASE GOES LAST, after the walk and after the list is gone, and that
+// ordering is load-bearing: dropping this task's one edge can unload the main
+// image, which cascades into its dependencies — and those dependencies are
+// entries in THIS list. Identifying the edge and dropping it inside the same
+// walk would leave the walk reading shared_object_t structs the drop had
+// already freed, on every burial of the last task using a program.
 static void task_release_shared_objects(task_t *t)
 {
 	if (t->shared_objects == NULL)
 		return;
 
+	shared_object_t *owned = NULL;
 	dlist_node_t *node = t->shared_objects->head;
 	while (node != NULL) {
 		dlist_node_t *next = node->next;
 		shared_object_t *so = (shared_object_t *)node->data;
 
 		if (so != NULL && t->elf != NULL && so->image == (elf_image_t *)t->elf)
-			shared_object_release(so);
+			owned = so;
 
 		kfree(node);
 		node = next;
@@ -807,6 +815,11 @@ static void task_release_shared_objects(task_t *t)
 
 	kfree(t->shared_objects);
 	t->shared_objects = NULL;
+
+	shared_object_release(owned);   // no-op on NULL: a task whose main image
+	                                // is not in its own closure cannot happen,
+	                                // and would be a bookkeeping bug, not a
+	                                // reason to skip the rest of the funeral
 }
 
 // THE ORPHANAGE (the night's second lesson, 2026-08-06): when a task is
@@ -889,8 +902,11 @@ static void task_reparent_orphans(task_t *dying)
 //     page-refcount conversation stays booked to the fork/CoW arc — that is
 //     the day ownership stops being answerable by registry lookup.
 // A dynamic task's elf points INTO the shared_object cache (task.c sets
-// task->elf = main_so->image) — never freed here; the cache owns it. What IS
-// dropped for a dynamic task is the reference, not the image.
+// task->elf = main_so->image), so what burial drops for such a task is the
+// REFERENCE, not the image. The cache owns the image — and frees it, here and
+// now, if this was the last reference to it (shared_object_release). That is
+// why the release is the last of the three teardown steps and why t->elf is
+// cleared right after: from that point the pointer names freed memory.
 // The burial's file-close hop (see the essay at its call site below). Closing
 // a file is disk work, and disk work belongs in the kernel address space —
 // kworker has its own PML4, and the storage drivers' DMA buffers are mapped
@@ -986,12 +1002,13 @@ static void task_destroy(task_t *t)
 	}
 
 	// The VMA apparatus — structs, lists, AND backing frames, the whole thing
-	// since 2026-08-15 — and the shared-object edge. BOTH must precede
-	// arena_destroy: each walks the corpse's page tables or its elf pointer,
-	// and arena_destroy takes the tables away.
+	// since 2026-08-15. Must precede arena_destroy: the walk reads the
+	// corpse's page tables, and arena_destroy takes them away. It must also
+	// precede the shared-object release below, which is the OTHER order that
+	// matters: the walk asks the page cache whether it owns each frame, and
+	// dropping this task's edge first could unload the cache it is asking.
 	uint64_t shared_retained = 0;
 	uint64_t reclaimed = task_release_vmas(t, &shared_retained);
-	task_release_shared_objects(t);
 
 	// Static ELF only: the loader kept the file open for file-backed demand
 	// paging, and with every thread retired no fault can ever need it again.
@@ -1043,6 +1060,20 @@ static void task_destroy(task_t *t)
 		// static image (2026-08-06; see kfree's comment for the story).
 		elf_image_free(image);
 	}
+
+	// The shared-object edge, LAST of the three because releasing it can now
+	// free the image it names. A dynamic task's t->elf points INTO the cached
+	// object (elf_resolve_dynamic_dependencies sets it), and a release that
+	// drops the object's final reference unloads it — image, tables, backing
+	// file and all. Read t->elf after that and you are reading freed memory,
+	// which is exactly what the `image->is_dynamic` test above would have
+	// done when this call still stood in front of it.
+	//
+	// Nothing here contradicts the block above: an image is either dynamic
+	// (owned by the registry, closed and freed by the unload) or static (owned
+	// by this task, closed and freed above), never both.
+	task_release_shared_objects(t);
+	t->elf = NULL;
 
 	// The whole address space back in one motion: PML4 and every PDPT/PD/PT
 	// this task ever drew (PAGING_ARENA.md). Safe HERE because phase 2 runs a

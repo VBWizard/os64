@@ -322,6 +322,14 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 
     (*vfs_file)->handle = fat_file;
 	(*vfs_file)->f_path = (void*)path;
+	// FAT's file identity (vfs.h f_ident): the start cluster, which is where a
+	// FAT file's chain — and so the file itself — begins. Weaker than an inode
+	// in principle (FAT recycles cluster numbers freely, and an empty file has
+	// no cluster at all, reporting 0 = "cannot identify"), sound in practice
+	// for as long as this handle lives: FF_FS_LOCK refuses to unlink a file
+	// somebody has open, so the chain cannot be freed and the number cannot be
+	// handed to anything else.
+	(*vfs_file)->f_ident = (uint64_t)fat_file->obj.sclust;
 	(*vfs_file)->fops = vfs_fs != NULL ? vfs_fs->fops : &fat_fops;
 	(*vfs_file)->owner = vfs_fs;
 

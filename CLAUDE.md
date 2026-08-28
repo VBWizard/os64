@@ -362,11 +362,30 @@ the library serves every process). How it fits together:
   The bump allocator still serves anything arriving without a base — PIE
   executables, hand-built `.so`s.
 - **`/sys/shlib` reports every loaded object** — base, resident pages,
-  refcount, dependency edges. Read it FIRST when linking looks wrong; it is
-  also where an `ldd` would get its data.
-- Deliberately absent: lazy PLT binding, unloading, TLS/IFUNC/init_array,
-  `RPATH`/search paths (`DT_NEEDED` name → `/lib/<name>`, full stop). See
-  DEBTS § Shared libraries.
+  refcount, file identity, dependency edges. Read it FIRST when linking looks
+  wrong; it is also where an `ldd` would get its data.
+- **AN OBJECT LIVES EXACTLY AS LONG AS SOMEBODY USES IT** (2026-08-28). Two
+  rules, and each covers what the other misses. **Unload at refcount zero:**
+  the last release frees the cached frames, the parsed tables and the open
+  file, and drops the object's own dependency edges — so `/sys/shlib` lists
+  only what is in use, and a replaced binary's orphaned inode is reaped
+  instead of waiting for a reboot. **Revalidate on every load:** each load
+  opens the path and compares the file's identity (`vfs.h` f_ident — ext2's
+  inode number, FAT's start cluster) against the resident copy's. Same file,
+  cache hit; different file, the resident copy is RETIRED — struck from every
+  lookup, kept alive for the tasks already running it — and the new file is
+  loaded for everything started from now on. Retirement is TRANSITIVE, because
+  a dependent's cached pages carry the retired object's addresses baked in
+  (and because two builds of one library share a prelink slot, so no task may
+  ever map both). The identity check is what reaches husk, logd and libos64.so
+  — the long-running things a refresh finds still RUNNING, and so never at
+  refcount zero when it matters, which is exactly why unload-at-zero alone
+  would not have been enough. A path that no longer
+  resolves now fails the load instead of serving the cached image of a deleted
+  program. Fixture: `test_shared_object_reload`.
+- Deliberately absent: lazy PLT binding, TLS/IFUNC/init_array, `RPATH`/search
+  paths (`DT_NEEDED` name → `/lib/<name>`, full stop). See DEBTS § Shared
+  libraries.
 
 **ELF Loader (`kernel/src/elf_loader.c`):**
 - Loads ELF64 binaries from VFS

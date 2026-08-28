@@ -271,6 +271,25 @@ struct file
 	eFileType filetype;
 	char* f_path;
 	inode_t* f_inode;
+
+	// WHICH FILE THIS HANDLE IS OPEN ON — a filesystem-local identity, not a
+	// path. The driver fills it at open: ext2 writes the inode number, FAT the
+	// start cluster. Zero means "this filesystem has no identity to give"
+	// (procfs, sysfs, devfs, pipes — none of which can host a program).
+	//
+	// It exists because a path is not a file, and the shared-object registry
+	// (shared_object.c) has to tell the difference: it caches a program's
+	// relocated pages under its path, and `os64get` replaces a binary by
+	// renaming a new inode over the old name, so the path compares equal while
+	// the file is a different one entirely.
+	//
+	// THE NUMBER IS ONLY MEANINGFUL WHILE THE HANDLE IS OPEN — which is
+	// exactly when anyone can ask. Both filesystems refuse to recycle the
+	// identity of a file somebody holds open (ext2 keeps an unlinked inode
+	// allocated on its orphan chain until last close; FatFs's lock table
+	// refuses to unlink an open file), so a live handle pins its own answer.
+	uint64_t f_ident;
+
 	vfs_file_operations_t* fops;
 	void* handle;
 	void *pipe, *pipeContent, **pipeContentPtr;

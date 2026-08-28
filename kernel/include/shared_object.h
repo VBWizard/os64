@@ -86,6 +86,35 @@ typedef struct shared_object {
     // nothing DT_NEEDs a program.
     bool is_executable;
 
+    // WHICH FILE THIS IS, as its filesystem identifies it (vfs.h f_ident — an
+    // ext2 inode number, a FAT start cluster). Recorded at load and compared
+    // against the file on disk at every later load of the same path: equal
+    // means this cache still describes what the name points at, different
+    // means the name has been given to a NEW file and this object is stale.
+    //
+    // The registry is keyed by PATH but a path is not a file, and that gap was
+    // a real bug: `os64get` replaces a binary by renaming a new inode over the
+    // old name, so a refreshed program went on running the old code — with
+    // nothing saying so — until the machine rebooted. The identity closes it.
+    //
+    // Zero means the filesystem could not identify the file, and is treated as
+    // stale every time: correct and slow beats warm and wrong. No filesystem
+    // that can host a program answers zero today.
+    uint64_t ident;
+
+    // SUPERSEDED, BUT STILL IN USE. A stale object with live holders cannot be
+    // freed — running tasks have its pages mapped, and other objects' cached
+    // relocated pages carry its addresses baked in — so it is RETIRED instead:
+    // struck from every path lookup, kept alive and reported until its last
+    // holder is buried, then unloaded like any other object at refcount zero.
+    //
+    // That split is what lets a replaced binary take effect AT ONCE for
+    // programs started afterwards while the copies already running keep the
+    // code they started with. It is what an inode reference has bought on Unix
+    // since the beginning, expressed in the one registry that had been keying
+    // on the name instead.
+    bool retired;
+
     elf_segment_range_t segs[ELF_MAX_SEGMENTS];
     size_t seg_count;
 
@@ -207,6 +236,14 @@ static inline bool shared_object_page_index(const shared_object_t *so, uintptr_t
 /// relocations — that happens lazily, per page, the first time any task's
 /// page fault touches that page (see shared_object_resolve_page).
 ///
+/// EVERY CALL OPENS THE PATH, cache hit or not, and compares the file's
+/// identity (`ident`) against the resident object's. That open IS the lookup:
+/// a name that no longer resolves fails the load rather than quietly serving
+/// the cached image of a file that is gone, and a name that now resolves to a
+/// DIFFERENT file retires the resident object and loads the new one. Without
+/// it the registry answers questions about a path it last read minutes or
+/// days ago.
+///
 /// Requires ET_DYN. A library MUST be position-independent: it is placed at
 /// a load_bias chosen by this registry, so absolute ET_EXEC vaddrs could not
 /// be honoured even in principle.
@@ -242,22 +279,37 @@ shared_object_t *shared_object_load_or_get(const char *path);
 /// at), which is the very property the shared page cache needs.
 shared_object_t *shared_object_load_executable(const char *path);
 
-/// @brief Drop ONE reference on `so`. Decrements refcount under the registry
-/// lock and does NOTHING else — the object stays loaded, its page_phys[]
-/// cache stays warm, its deps keep their edges, and it is never unregistered.
+/// @brief Drop ONE reference on `so`, and UNLOAD IT IF THAT WAS THE LAST ONE.
 ///
-/// WHY UNLOAD IS NOT PART OF THIS (Chris's ruling, 2026-08-13): until today
-/// refcount only ever went UP, which made it a tally of "times anyone ever
-/// asked for this object" rather than a count of live holders — useful for
-/// nothing, and a number that could never become useful, since the moment a
-/// task was buried the count was permanently wrong. Decrementing makes it
-/// TRUE again: refcount is now (live task edges) + (dep edges from loaded
-/// objects) + (direct lookups nobody released). Whether a zero refcount
-/// should trigger an actual unload — dropping the registry node, the cached
-/// pages, the still-open backing file — is a RETENTION policy, and it is
-/// deliberately a separate slice, the same split already ruled for the block
-/// read cache: correctness now, eviction when there is a reason to evict. At
-/// this size of OS a warm library sitting at refcount 0 is a feature.
+/// refcount is (live task edges) + (dep edges from loaded objects) + (direct
+/// lookups nobody released). At zero nothing can reach the object any more:
+/// every task that maps an object holds its main image's edge, and every dep
+/// in that image's closure holds an edge from the image, so a mapped object
+/// always counts at least one. Unloading therefore frees the cached page
+/// frames, the page_phys[] array, the parsed tables, the still-open backing
+/// file and the struct, drops the object's own dep edges (which may cascade),
+/// and leaves the registry.
+///
+/// THE RETENTION POLICY, in one sentence: a warm cache is worth keeping only
+/// while it can be trusted, so os64 keeps it exactly as long as somebody is
+/// using it. Three things a permanently-warm registry cost, all of them paid
+/// here — every executable ever run held its file open forever, so ext2
+/// refused to truncate it and `cp new /bin/ls` failed for any program this
+/// boot had ever run; a replaced binary's old inode rode the orphan chain
+/// until reboot, so fsck could not be green after a refresh; and the registry
+/// (a linear strcmp walk) grew by one entry per distinct program ever run.
+///
+/// What stays warm is what is genuinely shared: libos64.so is pinned by every
+/// resident program that needs it, and something is always running, so the
+/// library nobody wants to reload never reaches zero. And the truncate refusal
+/// survives where it was always right — a program that is RUNNING still holds
+/// its file, so overwriting a live binary in place is still refused, which is
+/// the answer Unix spells ETXTBSY. Replacing it by RENAME still works, and is
+/// what os64get does.
+///
+/// The unload closes a file, which since ext2's orphan reap is real disk I/O,
+/// so it hops to kernel context — the undertaker calls this from kworker's
+/// address space (the rule at task_destroy's own close, and in vfs.h).
 ///
 /// PAIRING RULE — read this before adding a call site. task_create takes
 /// exactly ONE reference per dynamically-linked task: a single

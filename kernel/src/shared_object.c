@@ -325,6 +325,200 @@ fail_release_slot:
     return 0;
 }
 
+// The close hop's parameter block — kmalloc'd, never a stack local, because
+// the continuation runs under kKernelPML4, which does not map a task's own
+// stack (call_in_kernel_context's contract).
+typedef struct {
+    vfs_file_t *file;
+    vfs_file_operations_t *fops;
+} shared_object_close_params_t;
+
+static void shared_object_close_in_kernel_context(void *arg)
+{
+    shared_object_close_params_t *p = (shared_object_close_params_t *)arg;
+    p->fops->close(p->file);
+}
+
+// Close a file this module opened — an unloaded object's backing handle, or
+// the handle a revalidation opened just to read an identity off.
+//
+// A close is real disk I/O since ext2 learned to reap orphaned inodes at last
+// close, and reaping is the LIKELY outcome here: a replaced binary is exactly
+// what an unload usually follows. So it needs kKernelPML4's mappings. But
+// call_in_kernel_context resets RSP to the per-core interrupt stack's TOP, and
+// an unload reached from the load path is ALREADY standing on that stack
+// (task_create runs inside spawn_do_create's own hop), so hopping again would
+// overwrite our own live frames. CR3 says which world we are in; handle.c's
+// file closer answers the identical question the identical way.
+//
+// `name` is for diagnostics, and it is a parameter rather than file->f_path
+// because an fs open stores the CALLER's pointer there — and this module's
+// caller for a dependency is a stack buffer that dies with the load (vfs.h's
+// f_path lifetime rule). The object's own copy of the path outlives it.
+static void shared_object_close_file(vfs_file_t *file, const char *name)
+{
+    if (file == NULL) {
+        return;
+    }
+    vfs_file_operations_t *fops = file->fops;
+    if (fops == NULL && file->owner != NULL) {
+        fops = ((vfs_filesystem_t *)file->owner)->fops;
+    }
+    if (fops == NULL || fops->close == NULL) {
+        return;
+    }
+
+    uint64_t cr3;
+    __asm__ volatile("mov %0, cr3" : "=r"(cr3));
+    if (cr3 == (uint64_t)kKernelPML4) {
+        fops->close(file);
+        return;
+    }
+
+    shared_object_close_params_t *p = kmalloc(sizeof(*p));
+    if (p == NULL) {
+        // Out of memory at unload time. Say so rather than closing from the
+        // wrong address space and faulting: the cost of not closing is one
+        // leaked handle and one inode that waits for the next boot, and both
+        // of those are survivable in a way a #PF in kworker is not.
+        printd(DEBUG_TASK, "shared_object: no memory to close %s — file left open\n", name);
+        return;
+    }
+    p->file = file;
+    p->fops = fops;
+    call_in_kernel_context(shared_object_close_in_kernel_context, p);
+    kfree(p);
+}
+
+static void shared_object_drop_ref_locked(shared_object_t *so);
+
+// Free everything `so` owns and strike it from the registry.
+//
+// CALLED ONLY AT REFCOUNT ZERO, and that is what makes it safe: every task
+// that maps an object holds its main image's reference, and every object in
+// that image's closure holds an edge from the image (task.c's
+// task_map_shared_object_closure maps exactly the set that shared_object.c's
+// scoped resolver referenced), so an object anything can still reach counts at
+// least one. Zero means no page table points at these frames, no deps[] array
+// points at this struct, and no VMA's `file` does either.
+//
+// The dependency edges are dropped LAST, from a copy taken before the struct
+// dies, so a cascading unload never walks memory this call has already freed.
+static void shared_object_unload_locked(shared_object_t *so)
+{
+    // The cached page frames — the whole point of unloading. kmalloc_aligned
+    // gave them out (shared_object_resolve_page), so kfree takes them back,
+    // and kfree HHDM-unmaps the page: anything still holding this address
+    // faults loudly instead of reading a recycled frame.
+    //
+    // The count is of frames actually FREED, not of the image's page span:
+    // resident is what the object was costing, and span is a property of the
+    // file. /sys/shlib draws exactly the same distinction in its `pages` line.
+    size_t freed = 0;
+    if (so->page_phys != NULL) {
+        for (size_t i = 0; i < so->total_pages; i++) {
+            uintptr_t phys = so->page_phys[i];
+            if (phys == 0) {
+                continue;
+            }
+            if (phys == SHARED_OBJECT_PAGE_RESOLVING) {
+                // Unreachable by the refcount argument above — a core mid-
+                // resolution is a core whose task maps this object. Leak the
+                // frame and say so rather than free one somebody is writing:
+                // if this ever prints, the argument has a hole in it.
+                printd(DEBUG_TASK, "shared_object: page %lu of %s is still RESOLVING at unload "
+                                   "— leaking its frame (the refcount invariant is broken)\n",
+                       (uint64_t)i, so->path);
+                continue;
+            }
+            kfree((void *)(phys + kHHDMOffset));
+            freed++;
+        }
+        kfree(so->page_phys);
+        so->page_phys = NULL;
+    }
+
+    printd(DEBUG_TASK, "shared_object: unloading %s%s — %lu resident page(s) of %lu freed\n",
+           so->path, so->retired ? " (retired)" : "",
+           (uint64_t)freed, (uint64_t)so->total_pages);
+
+    // The backing file, held open since load for the lazy per-page reads.
+    // Closing it is what releases ext2's open-inode refcount — and so what
+    // finally frees a replaced binary's orphaned storage.
+    if (so->image != NULL) {
+        shared_object_close_file(so->image->file, so->path);
+        so->image->file = NULL;
+    }
+    elf_image_free(so->image);
+    kfree(so->phdrs);
+
+    dlist_remove(kLoadedSharedObjects, so->registry_node);
+
+    // Give the virtual window slot back IF we were the last bump — the same
+    // exact-reclaim-or-abandon rule the failed-load unwind uses, and for the
+    // same reason it is safe: the bump only ever moves forward, so an
+    // abandoned range is never handed to anyone. It matters more now than it
+    // did there, because unloading makes bump slots something a running system
+    // consumes repeatedly rather than once per distinct image. (Only images
+    // that arrived WITHOUT an address of their own are here at all: a
+    // prelinked library and a non-PIE executable both have load_bias 0.)
+    if (so->load_bias != 0 &&
+        kSharedObjectNextVirt == so->load_bias + so->total_pages * PAGE_SIZE) {
+        kSharedObjectNextVirt = so->load_bias;
+    }
+
+    // Copy the edges out before the struct goes, then drop them: releasing a
+    // dependency can unload IT, which drops its edges in turn, and none of
+    // that recursion may reach back into memory we have already freed.
+    shared_object_t *deps[ELF_MAX_NEEDED];
+    size_t dep_count = so->dep_count;
+    for (size_t i = 0; i < dep_count; i++) {
+        deps[i] = so->deps[i];
+    }
+
+    kfree(so);
+
+    for (size_t i = 0; i < dep_count; i++) {
+        shared_object_drop_ref_locked(deps[i]);
+    }
+}
+
+// Drop one reference, and unload at zero. THE RETENTION POLICY lives in that
+// one `if` — see shared_object_release's header comment for why warmth is kept
+// exactly as long as somebody is using it, and no longer.
+static void shared_object_drop_ref_locked(shared_object_t *so)
+{
+    if (so == NULL) {
+        return;
+    }
+    if (so->refcount == 0) {
+        // A release with no matching reference. LOUD rather than silent (the
+        // house rule) but not a panic: the most common caller is the
+        // undertaker, and killing the machine during a funeral turns a
+        // bookkeeping bug into an unbootable system. The count is already
+        // wrong by the time we get here; saying so is the useful act. If this
+        // ever prints, the pairing rule in shared_object.h has been broken by
+        // a new call site — start there.
+        printd(DEBUG_TASK,
+               "shared_object: REFCOUNT UNDERFLOW on %s — a release with no "
+               "matching reference (see the pairing rule in shared_object.h)\n",
+               so->path);
+        return;
+    }
+
+    so->refcount--;
+    printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
+           "shared_object: %s refcount now %u\n", so->path, so->refcount);
+
+    if (so->refcount == 0) {
+        shared_object_unload_locked(so);
+    }
+}
+
+// Find the object CURRENTLY serving `path`. A retired object is invisible
+// here by design: it is still loaded and still running in whichever tasks
+// hold it, but the name has been given to a different file, and answering
+// with it would hand a new program the code it was refreshed away from.
 static shared_object_t *shared_object_find(const char *path)
 {
     if (kLoadedSharedObjects == NULL) {
@@ -333,12 +527,65 @@ static shared_object_t *shared_object_find(const char *path)
     dlist_node_t *node = kLoadedSharedObjects->head;
     while (node != NULL) {
         shared_object_t *so = (shared_object_t *)node->data;
-        if (strcmp(so->path, path) == 0) {
+        if (!so->retired && strcmp(so->path, path) == 0) {
             return so;
         }
         node = node->next;
     }
     return NULL;
+}
+
+// `so` no longer describes the file at its own path. It is struck from lookups
+// and left to its holders, who go on running the code they started with. A
+// retired object keeps its window slot and its frames until the last of them
+// exits; that is the honest cost of letting a refresh take effect without
+// disturbing what is already running, and /sys/shlib reports it.
+//
+// RETIRING FREES NOTHING, EVER — the unload always comes later, from the
+// release that drops the last holder. A registered object is created with one
+// reference and unloaded the moment it has none, so every object this walk can
+// reach counts at least one, and there is never anything here to sweep.
+//
+// RETIREMENT IS TRANSITIVE, and that is not tidiness. A dependent's cached
+// pages have the retired object's addresses baked into them
+// (shared_object_scoped_resolver), so a program whose own binary did not
+// change can still only ever run against the old library — retiring it makes
+// the next load rebuild it against the new one, which is what a dynamic linker
+// does at every exec.
+//
+// It is also what keeps two builds of one library from meeting inside a single
+// task's closure. They share a prelink address (the build assigns it by name),
+// and a task maps its WHOLE closure, so a diamond — A needing B and C, where B
+// was resolved before the replacement and C after — would map both at the same
+// virtual address. A dependent retired here can never be found by a later
+// closure walk, so the old copy is reachable only through objects that also
+// predate the replacement.
+static void shared_object_retire_locked(shared_object_t *so)
+{
+    so->retired = true;
+
+    // Marked to a fixpoint: retiring an object can make a dependent stale,
+    // which can make ITS dependents stale, and the registry is a list in no
+    // particular order. Each pass either marks something new or ends the loop.
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (dlist_node_t *n = kLoadedSharedObjects->head; n != NULL; n = n->next) {
+            shared_object_t *o = (shared_object_t *)n->data;
+            if (o == NULL || o->retired) {
+                continue;
+            }
+            for (size_t i = 0; i < o->dep_count; i++) {
+                if (o->deps[i] != NULL && o->deps[i]->retired) {
+                    printd(DEBUG_TASK, "shared_object: retiring %s too — it is linked against %s\n",
+                           o->path, o->deps[i]->path);
+                    o->retired = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // The real loader, called with kSharedObjectRegistryLock already held (the
@@ -359,12 +606,6 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
         dlist_init(kLoadedSharedObjects);
     }
 
-    shared_object_t *existing = shared_object_find(path);
-    if (existing != NULL) {
-        existing->refcount++;
-        return existing;
-    }
-
     // Mount-routed like the ELF loader: a DT_NEEDED library resolves through
     // the mount table, so "/lib/…" comes from wherever "/lib" actually lives.
     const char *tail = NULL;
@@ -373,18 +614,39 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
         return NULL;
     }
 
+    // OPEN FIRST, EVEN ON A CACHE HIT, because the open IS the lookup. Nothing
+    // else can say whether the name still means the file this registry read:
+    // the string is the same after a refresh and the file is not. A name that
+    // no longer resolves at all fails here rather than serving the cached image
+    // of a deleted program, which is the answer Unix's exec has always given.
     vfs_file_t *file = NULL;
     if (fs->fops->open(&file, tail, "r", fs) != 0) {
         return NULL;
+    }
+
+    shared_object_t *existing = shared_object_find(path);
+    if (existing != NULL) {
+        if (existing->ident != 0 && existing->ident == file->f_ident) {
+            // Still the same file. The warm cache answers, and the handle
+            // opened to ask the question has done its whole job.
+            shared_object_close_file(file, path);
+            existing->refcount++;
+            return existing;
+        }
+        // A different file wears this name now — or neither can be identified,
+        // which is answered the same way (see shared_object_t's `ident`).
+        // Logged BEFORE the retire, which may free `existing` on the spot.
+        printd(DEBUG_TASK, "shared_object: %s is not the file that was loaded (disk id %lu, "
+                           "loaded id %lu) — retiring the loaded copy\n",
+               path, (uint64_t)file->f_ident, existing->ident);
+        shared_object_retire_locked(existing);
     }
 
     elf_image_t *image = NULL;
     Elf64_Phdr *phdrs = NULL;
     Elf64_Half phnum = 0;
     if (elf_parse_image(file, &image, &phdrs, &phnum) != 0) {
-        if (fs->fops->close != NULL) {
-            fs->fops->close(file);
-        }
+        shared_object_close_file(file, path);
         return NULL;
     }
 
@@ -440,6 +702,18 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
     so->refcount = 1;
     so->dep_count = 0;
     so->is_executable = allow_exec;   // how it was ASKED for, not guessed from its bias
+    so->ident = file->f_ident;        // which FILE this is, for every later load of this path
+    so->retired = false;
+
+    if (so->ident == 0) {
+        // Said once, here, where it is a property of the FILESYSTEM rather
+        // than of any one load: with no identity to compare, every later load
+        // of this path has to assume the file changed, so this object will be
+        // rebuilt on every use. No filesystem that can host a program answers
+        // zero today; if this line ever appears, that stopped being true.
+        printd(DEBUG_TASK, "shared_object: %s comes from a filesystem that gives its files no "
+                           "identity — it will be reloaded on every use\n", path);
+    }
 
     // PLACE THE IMAGE. Three cases, and two of them are the same case:
     //
@@ -495,6 +769,15 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
             shared_object_t *other = (shared_object_t *)n->data;
             if (other == NULL || other->load_bias != 0 || other->vaddr_base == 0)
                 continue;   // only prelinked neighbours can collide with us
+            if (other->retired)
+                continue;   // a predecessor of ours, still serving the tasks
+                            // that were started from it. Two builds of one
+                            // library share a prelink slot BY DESIGN, and no
+                            // task can map both: retirement is transitive, so
+                            // nothing reachable from the old copy answers to a
+                            // name any more (shared_object_retire_locked). The
+                            // tripwire below is for two DIFFERENT libraries
+                            // claiming one slot, which is a stale build.
             uintptr_t other_span = other->total_pages * PAGE_SIZE;
             if (so->vaddr_base < other->vaddr_base + other_span &&
                 other->vaddr_base < so->vaddr_base + span) {
@@ -561,14 +844,15 @@ fail_registered:
     // registered before its dependencies load, so a cycle can find it). Undo
     // in the reverse order of construction:
     //
-    // 1. Drop the reference each successfully-loaded dependency took. They
-    //    stay loaded and warm at refcount 0 — that is the retention policy
-    //    everywhere else in this file, not a leak (shared_object.h explains
-    //    why unload-at-zero is deliberately its own slice).
+    // 1. Drop the reference each successfully-loaded dependency took, through
+    //    the same door every other release uses — a dependency this failed
+    //    load was the only holder of gets unloaded here, rather than sitting
+    //    resident for a program that never started. Dropping one edge can
+    //    unload the object it names, never one of ITS siblings in this list:
+    //    an edge we have not dropped yet is a reference that keeps its target
+    //    alive.
     for (size_t i = 0; i < so->dep_count; i++) {
-        if (so->deps[i]->refcount > 0) {
-            so->deps[i]->refcount--;
-        }
+        shared_object_drop_ref_locked(so->deps[i]);
     }
     // 2. Leave the registry, so no later lookup can find a half-built object.
     dlist_remove(kLoadedSharedObjects, so->registry_node);
@@ -584,12 +868,12 @@ fail_registered:
     //    freeable now: a DEPENDENCY CYCLE. If some library we just loaded
     //    DT_NEEDs us back, its lookup found this entry, took a reference,
     //    and stored a raw pointer in its own deps[] — and that library stays
-    //    in the registry, warm, pointing at whatever this kfree would
-    //    recycle. refcount started at 1 (ours); anything above that is a
-    //    holder we cannot reach from here. Leak the struct rather than
-    //    dangle it (review 2026-08-23): a few hundred bytes per failed
-    //    cyclic load, loudly reported, versus a use-after-free in the page
-    //    fault path of an unrelated program.
+    //    in the registry, pointing at whatever this kfree would recycle.
+    //    refcount started at 1 (ours); anything above that is a holder we
+    //    cannot reach from here. Leak the struct rather than dangle it
+    //    (review 2026-08-23): a few hundred bytes per failed cyclic load,
+    //    loudly reported, versus a use-after-free in the page fault path of
+    //    an unrelated program.
     if (so->refcount > 1) {
         printd(DEBUG_TASK, "shared_object: %s failed to load but %u other object(s) already "
                            "reference it (a DT_NEEDED cycle) — keeping its struct unreachable "
@@ -611,9 +895,7 @@ fail_parsed:
     // above (which has just un-registered it) — either way the file handle
     // and the parsed image plus its tables are exclusively ours to release,
     // because no other holder can reach this object any more.
-    if (fs->fops->close != NULL) {
-        fs->fops->close(file);
-    }
+    shared_object_close_file(file, path);
     elf_image_free(image);
     kfree(phdrs);
     return NULL;
@@ -641,8 +923,10 @@ shared_object_t *shared_object_load_executable(const char *path)
 // shared_objects list, so the undertaker calls this exactly once per buried
 // dynamic task.
 //
-// Deliberately does not unload: see the header for why retention is its own
-// slice. This function's whole job is keeping the number honest.
+// The lock-taking wrapper around the drop; the policy and the unload live in
+// shared_object_drop_ref_locked above. NOTE FOR CALLERS: `so` may be freed by
+// the time this returns — it is the last reference that frees it, and only the
+// caller knows whether it was holding one.
 void shared_object_release(shared_object_t *so)
 {
     if (so == NULL) {
@@ -650,23 +934,6 @@ void shared_object_release(shared_object_t *so)
     }
 
     registry_lock();
-    if (so->refcount > 0) {
-        so->refcount--;
-        printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
-               "shared_object_release: %s refcount now %u\n",
-               so->path, so->refcount);
-    } else {
-        // A release with no matching reference. LOUD rather than silent (the
-        // house rule) but not a panic: this runs inside the undertaker, and
-        // killing the machine during a funeral turns a bookkeeping bug into
-        // an unbootable system. The count is already wrong by the time we get
-        // here; saying so is the useful act. If this ever prints, the pairing
-        // rule in shared_object.h has been broken by a new call site — start
-        // there.
-        printd(DEBUG_TASK,
-               "shared_object_release: REFCOUNT UNDERFLOW on %s — a release with no "
-               "matching reference (see the pairing rule in shared_object.h)\n",
-               so->path);
-    }
+    shared_object_drop_ref_locked(so);
     registry_unlock();
 }

@@ -742,6 +742,15 @@ static void sys_gen_shlib(synth_text_t *t)
 		                (uint64_t)resident, (uint64_t)so->total_pages,
 		                (uint64_t)resident * PAGE_SIZE);
 		synth_text_addf(t, "  refs: %u\n", so->refcount);
+		// WHICH FILE this is (shared_object.h `ident`) and whether the name
+		// still points at it. A RETIRED object is the whole reason this line
+		// exists: it is resident, it is costing pages, and it does not appear
+		// at its own path any more — so a reader asking "why are there two
+		// libos64.so?" gets the answer here instead of inferring it from a
+		// resident_bytes total that grew for no visible reason.
+		synth_text_addf(t, "  file: id %lu%s\n", so->ident,
+		                so->retired ? " (RETIRED — replaced on disk; here for the "
+		                              "programs already running it)" : "");
 		for (size_t i = 0; i < so->dep_count; i++)
 			synth_text_addf(t, "  needs: %s\n",
 			                so->deps[i] != NULL ? so->deps[i]->path : "?");
