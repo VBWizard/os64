@@ -28,6 +28,11 @@
 // open-install-close discipline as slot 1; extract_redirections carries the
 // vocabulary and the one deliberate departure from Bourne (`2>&1` binds to
 // where stdout ENDS UP, not to where it was at that point on the line).
+// v6: COMMAND SUBSTITUTION (2026-08-28). `$(cmd)` becomes what cmd printed —
+// Korn's 1983 spelling, no backquote. The inner line runs in THIS shell one
+// expansion depth down (expansion_ctx_t), its output captured through a pipe
+// and marked as data like every other expansion. Tab completion arrived the
+// same day, in the line editor.
 
 #include "os64/os64.h"
 #include "os64/conf.h"   // os64_conf_find — husk.rc rides the system search path now
@@ -60,6 +65,28 @@ static int utoa(unsigned long v, char *buf)
 	for (int j = 0; j < i; j++) buf[j] = tmp[i - 1 - j];
 	buf[i] = 0;
 	return i;
+}
+
+// husk's own complaints go to handle 2, like every other program's. A shell
+// that scolds you on stdout cannot be told `2> /dev/null` — and worse, its
+// "cannot run" would be swallowed by a `> file` meant for the command's real
+// output. The glob code already speaks to OS64_STDERR through os64_hprintf;
+// these are the same door for the byte-at-a-time sites.
+static void hputs(int h, const char *s)
+{
+	os64_write(h, s, os64_strlen(s));
+}
+
+static void err_puts(const char *s)
+{
+	hputs(OS64_STDERR, s);
+}
+
+static void err_num(unsigned long v)
+{
+	char b[20];
+	int k = utoa(v, b);
+	os64_write(OS64_STDERR, b, (unsigned)k);
 }
 
 // ── line editing ────────────────────────────────────────────────────────────
@@ -957,9 +984,58 @@ static int glob_expand(const char *token, char *argv[], int argc, int maxargs)
 // group or split words, never redirect output or spawn a pipeline.
 #define EXPANDED_MAX (LINE_MAX + 512)
 
-static uint8_t s_expmask[EXPANDED_MAX];   // 1 = this byte came from a $-expansion
-static const char *s_expbase = NULL;      // the buffer s_expmask describes
+// ── the expansion context, one per substitution depth ───────────────────────
+// A `$(...)` runs a whole command line WHILE the line containing it is being
+// expanded, so the expanded text, its mask and the captured output cannot be
+// one static set — the inner line would overwrite the outer's buffer in the
+// middle of filling it. One context per depth; s_expdepth names the one in
+// use, 0 for a line that arrived from the keyboard, the rc or a script.
+// STATIC rather than stack frames, because s_expbase/s_expmask describe the
+// buffer for as long as parse() reads it.
+#define SUBST_DEPTH_MAX 3
+typedef struct {
+	char    text[EXPANDED_MAX];      // the expanded line run_expanded parses
+	uint8_t mask[EXPANDED_MAX];      // 1 = this byte came from an expansion
+	char    capture[EXPANDED_MAX];   // what the line's commands wrote to stdout
+	int     captureLen;
+	bool    captureOverflow;         // more arrived than fits: the substitution is refused
+} expansion_ctx_t;
+static expansion_ctx_t s_expctx[SUBST_DEPTH_MAX + 1];
+static int s_expdepth = 0;
+
+static uint8_t *s_expmask = NULL;         // the mask of the buffer parse() is reading
+static const char *s_expbase = NULL;      // that buffer
 static int s_explen = 0;                  // how much of it is live
+
+// Set by expand_line when it has already explained a refusal, so run_segment
+// does not add a second, wrong explanation on top.
+static bool s_expand_complained = false;
+
+static int run_line(char *line, int *last_status);   // a substitution runs one
+
+// Given the text just after a `$(`, find its closing `)`: parens nest, and
+// quotes hide parens (`$(echo ")")` is one substitution). NULL when the
+// text ends first.
+static const char *find_subst_close(const char *p)
+{
+	int depth = 1;
+	char quote = 0;
+	for (; *p != '\0'; p++)
+	{
+		if (quote != 0)
+		{
+			if (*p == quote)
+				quote = 0;
+		}
+		else if (*p == '\'' || *p == '"')
+			quote = *p;
+		else if (*p == '(')
+			depth++;
+		else if (*p == ')' && --depth == 0)
+			return p;
+	}
+	return NULL;
+}
 
 // Did this byte come out of an expansion? Anything outside the expanded
 // buffer (a glob-pool string, a literal) counts as typed — the answer only
@@ -1198,6 +1274,14 @@ static int split_commands(char *line, char *cmds[], int seps[], int maxcmds)
 		{
 			quote = *p++;
 		}
+		else if (p[0] == '$' && p[1] == '(')
+		{
+			// A substitution's inner text belongs to the line that runs it:
+			// its `;` and `&&` are THAT line's separators. Unterminated, the
+			// rest of the line is swallowed here and expand_line refuses it.
+			const char *close = find_subst_close(p + 2);
+			p = (close != NULL) ? (char *)close + 1 : p + os64_strlen(p);
+		}
 		else if (*p == ';')
 		{
 			if (n >= maxcmds)
@@ -1253,6 +1337,8 @@ static int split_commands(char *line, char *cmds[], int seps[], int maxcmds)
 //          costs one syscall and can never be stale.
 //   $NAME  the env block (os64_getenv). An unset name expands to nothing —
 //          Bourne's rule; a literal "$NOPE" in the output helps nobody.
+//   $(cmd) what cmd printed, trailing newlines stripped — run_substitution
+//          carries the rules and the lineage (Korn, 1983)
 // A '$' that starts no name ($ alone, "$5", "$/") stays a literal '$'.
 //
 // QUOTING (2026-08-09, the day `watch` made it matter): SINGLE quotes suppress
@@ -1304,6 +1390,54 @@ static bool expand_append(char *dst, int *n, int cap, uint8_t *mask, const char 
 	return true;
 }
 
+// ── command substitution ────────────────────────────────────────────────────
+// `$(command)` becomes what the command printed. Bourne's 1977 spelling was
+// the backquote, which cannot nest and quotes badly; Korn's 1983 `$(...)`
+// fixed both and POSIX took it in 1992. husk takes Korn's and skips the
+// backquote entirely.
+//
+// The inner line runs IN THIS SHELL — through the same run_line, one
+// expansion depth down — so it sees the same $1..$9, the same environment
+// and the same $?. Two consequences, both deliberate (DIVERGENCES § The
+// shell): a builtin inside a substitution acts on THIS shell (`$(cd /x)`
+// moves you — Bourne forks a subshell and isolates it), and the
+// substitution's own status is nowhere: $? after a line is that line's.
+// Output is captured by run_pipeline into this depth's context; trailing
+// newlines are stripped (`$(pwd)` is a word, not a line); and every
+// captured byte is marked as expansion-origin, so a `|` or `>` a program
+// printed can never become syntax here — the rule PR #28 settled.
+// `exit` inside a substitution ends the substitution, not the shell.
+static bool run_substitution(const char *inner, int last_status,
+                             const char **out, int *outLen)
+{
+	if (s_expdepth >= SUBST_DEPTH_MAX)
+	{
+		err_puts("husk: $( nested too deep - not run\n");
+		s_expand_complained = true;
+		return false;
+	}
+	char line[LINE_MAX];
+	os64_strcopy(line, sizeof(line), inner);    // run_line tokenizes in place
+
+	s_expdepth++;
+	expansion_ctx_t *ctx = &s_expctx[s_expdepth];
+	ctx->captureLen = 0;
+	ctx->captureOverflow = false;
+	int status = last_status;
+	(void)run_line(line, &status);
+	s_expdepth--;
+
+	if (ctx->captureOverflow)
+	{
+		err_puts("husk: $( produced more than a line can hold - not run\n");
+		s_expand_complained = true;
+		return false;
+	}
+	*out = ctx->capture;
+	*outLen = ctx->captureLen;
+	return true;
+}
+
 // Returns false if the expansion did not fit in `dst` — see run_segment.
 static bool expand_line(const char *src, char *dst, int cap, int last_status,
                         uint8_t *mask)
@@ -1335,6 +1469,49 @@ static bool expand_line(const char *src, char *dst, int cap, int last_status,
 
 		if (quote == '\'')
 			dst[n++] = *src++;   // inside '': the shell is deaf, on purpose
+		else if (src[0] == '$' && src[1] == '(')
+		{
+			const char *close = find_subst_close(src + 2);
+			if (close == NULL)
+			{
+				err_puts("husk: unterminated $( - not run\n");
+				s_expand_complained = true;
+				return false;
+			}
+			// The inner text is handed over RAW: the line that runs it does
+			// its own expanding. Expanding it here first would hand a
+			// substituted value to a second parser as syntax.
+			int ilen = (int)(close - (src + 2));
+			char inner[LINE_MAX];
+			if (ilen >= LINE_MAX)
+			{
+				err_puts("husk: $( too long - not run\n");
+				s_expand_complained = true;
+				return false;
+			}
+			for (int i = 0; i < ilen; i++)
+				inner[i] = src[2 + i];
+			inner[ilen] = '\0';
+
+			const char *out;
+			int outLen;
+			if (!run_substitution(inner, last_status, &out, &outLen))
+				return false;
+			while (outLen > 0 && out[outLen - 1] == '\n')
+				outLen--;                       // Bourne strips trailing newlines
+			for (int i = 0; i < outLen; i++)
+			{
+				if (n >= cap - 1)
+				{
+					fit = false;
+					break;
+				}
+				if (mask != NULL)
+					mask[n] = 1;
+				dst[n++] = out[i];
+			}
+			src = close + 1;
+		}
 		else if (src[0] == '$' && src[1] == '?')
 		{
 			char nb[24];
@@ -1488,27 +1665,6 @@ static void put_num(unsigned long v)
 	os64_write(1, b, (unsigned)k);
 }
 
-// husk's own complaints go to handle 2, like every other program's. A shell
-// that scolds you on stdout cannot be told `2> /dev/null` — and worse, its
-// "cannot run" would be swallowed by a `> file` meant for the command's real
-// output. The glob code already speaks to OS64_STDERR through os64_hprintf;
-// these are the same door for the byte-at-a-time sites.
-static void hputs(int h, const char *s)
-{
-	os64_write(h, s, os64_strlen(s));
-}
-
-static void err_puts(const char *s)
-{
-	hputs(OS64_STDERR, s);
-}
-
-static void err_num(unsigned long v)
-{
-	char b[20];
-	int k = utoa(v, b);
-	os64_write(OS64_STDERR, b, (unsigned)k);
-}
 
 // "[1] 57" — job number and task number both, on purpose. In bash the PID is
 // noise because you kill a job by `%1`; os64 has no such notation, so the TASK
@@ -1796,7 +1952,8 @@ static const char *resolve_command(const char *cmd, char *buf, int cap)
 }
 
 // Build and run a pipeline: spawn every stage, wiring stage i's stdout to
-// stage i+1's stdin through a pipe. The last stage keeps the console.
+// stage i+1's stdin through a pipe. The last stage keeps the console —
+// or, inside a `$(...)`, writes into the capture pipe.
 //
 // Returns the pipeline's exit status for $?: the LAST stage's exit code —
 // the same answer the Bourne shell has given since 1977, and the sensible
@@ -1819,6 +1976,19 @@ static int run_pipeline(char *stages[], int nstages, int background)
 	int prev_read = -1;         // read end of the pipe from the PREVIOUS stage
 	int status = 0;             // what $? will remember of this line
 	int failedStage = -1;       // the last stage that could not be spawned
+
+	// Inside a `$(...)` the LAST stage's stdout is captured through a pipe
+	// of this pipeline's own (a `> f` written inside the substitution still
+	// wins the slot — it is a redirect like any other). One pipe per
+	// pipeline, drained to EOF below BEFORE the children are reaped: wait
+	// first and a child with more than a pipe's worth to say blocks on a
+	// full pipe while husk blocks on the wait — the classic capture deadlock.
+	int capPipe[2] = { -1, -1 };
+	if (s_expdepth > 0 && os64_pipe(capPipe) < 0)
+	{
+		err_puts("husk: out of pipes\n");
+		return 1;
+	}
 
 	for (int i = 0; i < nstages; i++)
 	{
@@ -1903,7 +2073,7 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		// Slot priority: an explicit redirect beats the pipeline's plumbing.
 		int in  = (inRedir  >= 0) ? inRedir  : prev_read;    // -1: console
 		int out = (outRedir >= 0) ? outRedir
-		        : (i < nstages - 1) ? p[1] : -1;             // -1: console
+		        : (i < nstages - 1) ? p[1] : capPipe[1];     // -1: console
 		int err = (errRedir >= 0) ? errRedir : -1;           // -1: console
 		// The joins bind LAST, to the other stream's final destination —
 		// which is what makes `cmd 2>&1 | grep` carry both streams into the
@@ -1977,6 +2147,34 @@ static int run_pipeline(char *stages[], int nstages, int background)
 
 	if (prev_read >= 0)
 		os64_close(prev_read);  // belt and braces: never leave an end dangling
+
+	if (capPipe[1] >= 0)
+		os64_close(capPipe[1]); // EOF can only arrive once husk's own copy is gone
+	if (capPipe[0] >= 0)
+	{
+		// Drain to EOF, which arrives when the last writer closes — normally
+		// the last stage exiting. A background job inside a substitution
+		// holds the write end too, so the substitution waits for it; that is
+		// what Bourne does as well, and `$(x &)` is nobody's idiom. Past the
+		// capacity the bytes are read and dropped so the writer can finish,
+		// and the overflow refuses the substitution afterwards.
+		expansion_ctx_t *ctx = &s_expctx[s_expdepth];
+		for (;;)
+		{
+			char chunk[512];
+			int64_t got = os64_read(capPipe[0], chunk, sizeof(chunk));
+			if (got <= 0)
+				break;              // EOF, or an interruption treated as one
+			int room = EXPANDED_MAX - 1 - ctx->captureLen;
+			int take = (got < room) ? (int)got : room;
+			for (int k = 0; k < take; k++)
+				ctx->capture[ctx->captureLen + k] = chunk[k];
+			ctx->captureLen += take;
+			if (take < got)
+				ctx->captureOverflow = true;
+		}
+		os64_close(capPipe[0]);
+	}
 
 	// A BACKGROUND job is the one case where husk does not wait: it hands the
 	// pipeline to the job table, prints "[1] 57", and goes straight back to the
@@ -2344,23 +2542,26 @@ static int run_expanded(char *expanded, int *last_status)
 // "felt more solid" — forty years of consensus arriving early.)
 static int run_segment(char *seg, int *last_status)
 {
-	// STATIC, and deliberately so: s_expmask describes THIS buffer, and a
-	// stack frame that comes and goes would leave the mask describing an
-	// address that has since become somebody else's locals. One segment runs
-	// at a time (the `time` prefix re-enters run_expanded, never run_segment),
-	// so one buffer is all there ever is.
-	static char expanded[EXPANDED_MAX];   // headroom for expanded $CWD/$PATH values
+	// This depth's context (see expansion_ctx_t): a `$(...)` in the segment
+	// runs its inner line one depth down, in the next context, and comes
+	// back here with the output.
+	expansion_ctx_t *ctx = &s_expctx[s_expdepth];
+	char *expanded = ctx->text;
 
-	if (!expand_line(seg, expanded, sizeof(expanded), *last_status, s_expmask))
+	s_expand_complained = false;
+	if (!expand_line(seg, expanded, EXPANDED_MAX, *last_status, ctx->mask))
 	{
 		// Refuse rather than run the part that fit. The prefix of an expanded
 		// line is a different command — the same reasoning that makes an
-		// over-long script line a refusal (line_overflowed).
-		err_puts("husk: line too long after expansion - not run\n");
+		// over-long script line a refusal (line_overflowed). A substitution
+		// that failed has already said why.
+		if (!s_expand_complained)
+			err_puts("husk: line too long after expansion - not run\n");
 		*last_status = 1;
 		return 0;
 	}
 	s_expbase = expanded;
+	s_expmask = ctx->mask;
 	s_explen  = (int)os64_strlen(expanded);
 
 	if (first_token_is(expanded, "time"))
