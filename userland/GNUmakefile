@@ -183,6 +183,11 @@ HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
 # and its link rule gets eval'd twice.
 APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c)))))
 
+# `[` is the traditional second name for test, not a second program. Keep one
+# linked image and copy it under the punctuation name so both entry points have
+# identical expression semantics and fixes cannot drift between twins.
+APP_ALIASES := [
+
 # EVERY APP LINKS AT ITS OWN BASE ADDRESS.
 #
 # They all used to link at 0x400000 — which was fine while only one program ran
@@ -204,7 +209,11 @@ $(foreach p,$(APP_BASE_PAIRS),\
   $(eval APP_BASE_$(word 1,$(subst =, ,$(p))) := $(word 2,$(subst =, ,$(p)))))
 
 .PHONY: all
-all: $(LIBOS64_SO) $(addprefix $(BIN)/,$(APPS)) $(BIN)/app_bases.gdb
+all: $(LIBOS64_SO) $(addprefix $(BIN)/,$(APPS)) \
+     $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
+
+$(BIN)/[: $(BIN)/test
+	cp $< $@
 
 # The shared library itself. ET_DYN, PRELINKED: app_bases.py --libs picks its
 # slot in the kernel's prelink region (the first 4GB of the shared window)
