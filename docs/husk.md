@@ -55,12 +55,21 @@ moves you; a builtin's output inside it is not captured — `$(pwd)` works,
 | `! a` | a, with its verdict inverted |
 | `time a` | a, then how long it took (the whole pipeline) |
 
+## Variables
+
+There is one kind, and it is the environment: `NAME=value` sets it,
+`$NAME` reads it, every program you run afterwards inherits it, `unset
+NAME` removes it. `export NAME=value` still works and means the same thing.
+A value with spaces needs quotes (`GREETING="hello there"`); `X=*` sets a
+star, not a directory listing. The name and the `=` must be typed — a `$x`
+holding `A=B` is a word, not an assignment.
+
 ## Control flow
 
 ```
-if LIST                    while LIST
-then …                     do …
-elif LIST                  done
+if LIST                    while LIST          for NAME in WORDS
+then …                     do …                do …
+elif LIST                  done                done
 then …
 else …
 fi
@@ -91,9 +100,20 @@ while ! ls /home/flag 2> /dev/null
 do
     sleep 1
 done
+
+for f in /home/*.log
+do
+    echo $f
+done
 ```
 
-Not yet: `for`, `break`, `continue`, `case` — DEBTS § husk scripting.
+`for` expands its list once — globs, `$NAME`, `$(…)` all work there — and
+assigns each word in turn; `for NAME` with no `in` walks a script's
+arguments. NAME keeps its last value when the loop ends. And because a
+variable is the environment, the body's children see it with no ceremony:
+`for i in 1 2; do husk -c "echo $i"; done` prints 1, then 2.
+
+Not yet: `break`, `continue`, `case` — DEBTS § husk scripting.
 
 ## Directories
 

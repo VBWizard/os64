@@ -17,8 +17,8 @@
 # mapped below. Shifted symbols ride sendkey's shift-<key> chords — added
 # 2026-08-06 when `grep sync_all` silently typed "syncall" (underscore had
 # no mapping) and the sync(8) verification chased a phantom for a minute.
-# Uppercase letters remain unmapped: nothing in husk is case-sensitive
-# enough to have needed them yet.
+# Uppercase letters ride shift-<letter> chords too (2026-08-28: environment
+# variable names are the convention that finally needed them).
 
 port="$1"
 shift
@@ -56,6 +56,7 @@ keyname() {
         '(') echo shift-9 ;;
         ')') echo shift-0 ;;
         [a-z0-9]) echo "$1" ;;
+        [A-Z]) echo "shift-$(printf %s "$1" | tr A-Z a-z)" ;;
         *) return 1 ;;
     esac
 }

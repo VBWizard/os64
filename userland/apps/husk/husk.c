@@ -297,7 +297,9 @@ static void comp_scan_dir(const char *dir, const char *prefix, bool runnable)
 static void comp_scan_commands(const char *prefix)
 {
 	static const char *const builtins[] = {
-		"cd", "dirs", "exit", "export", "popd", "pushd", "time", "unset"
+		"cd", "dirs", "exit", "export", "popd", "pushd", "time", "unset",
+		// and the keywords, so `whi<Tab>` finishes a line the way a name does
+		"if", "then", "elif", "else", "fi", "while", "for", "do", "done"
 	};
 	for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++)
 		comp_add(builtins[i], prefix, false);
@@ -2424,6 +2426,73 @@ static int run_dir_builtin(char *cargv[], int cargc)
 	return 0;
 }
 
+// `NAME=value`, with `p` at the `=`. The value is the rest of the statement
+// with its TYPED quotes removed, exactly as parse() would strip them, but
+// WITHOUT globbing (`X=*` sets a star, as it has in every Bourne shell) and
+// as ONE word: a value with unquoted blanks is refused, and so is the
+// `NAME=value command` form — a per-command environment is a feature nobody
+// here has asked for, and refusing it beats silently running the command.
+static int run_assignment(const char *stmt, const char *eq, int *last_status)
+{
+	char name[64];
+	int k = 0;
+	for (const char *q = stmt; q < eq && k < (int)sizeof(name) - 1; q++)
+		name[k++] = *q;
+	name[k] = '\0';
+
+	char value[EXPANDED_MAX];
+	int n = 0;
+	char quote = 0;
+	for (const char *v = eq + 1; *v != '\0'; v++)
+	{
+		bool typed = !byte_is_expanded(v);
+		if (quote != 0)
+		{
+			if (*v == quote && typed)
+			{
+				quote = 0;
+				continue;
+			}
+		}
+		else if ((*v == '\'' || *v == '"') && typed)
+		{
+			quote = *v;
+			continue;
+		}
+		else if ((*v == ' ' || *v == '\t') && typed)
+		{
+			const char *q = v;
+			while (*q == ' ' || *q == '\t')
+				q++;
+			if (*q == '\0')
+				break;                    // trailing blanks are nothing
+			err_puts("husk: an assignment takes one word - quote a value with spaces "
+			         "(there is no `NAME=value command` form)\n");
+			*last_status = 2;
+			return 0;
+		}
+		if (n < (int)sizeof(value) - 1)
+			value[n++] = *v;
+	}
+	value[n] = '\0';
+	if (quote != 0)
+	{
+		err_puts("husk: unterminated quote in assignment\n");
+		*last_status = 2;
+		return 0;
+	}
+	if (os64_setenv(name, value) != 0)
+	{
+		err_puts("husk: cannot set ");
+		err_puts(name);
+		err_puts(" (environment full?)\n");
+		*last_status = 1;
+		return 0;
+	}
+	*last_status = 0;
+	return 0;
+}
+
 // Run one ALREADY-EXPANDED command: the trailing `&`, the pipeline split,
 // the builtins, and finally run_pipeline. Returns 1 when the command asks
 // the shell to exit, else 0; the status lands in *last_status ($?).
@@ -2449,12 +2518,35 @@ static int run_expanded(char *expanded, int *last_status)
 	if (nstages == 1 && first_token_is(stages[0], "exit"))
 		return 1;
 
+	// NAME=value — a variable. A VARIABLE IS AN ENVIRONMENT VARIABLE (Chris's
+	// ruling, 2026-08-28: one namespace — DIVERGENCES § The shell). Bourne's
+	// 1977 split, private unless exported, was a PDP-11 economy (the block is
+	// copied at every exec) that became a silent trap: a child that cannot
+	// see a value says nothing, so everyone learns to export everything and
+	// pays for a distinction they never use. Here an assignment IS the
+	// export; `export NAME=value` is the same act under its older name; and
+	// $NAME at expansion time reads what either wrote. NAME and the `=` must
+	// be TYPED — a $x holding `A=B` is a word of data, not an assignment.
+	if (nstages == 1)
+	{
+		const char *s = stages[0];
+		while (*s == ' ' || *s == '\t')
+			s++;
+		const char *p = s;
+		if (is_name_start(*p) && !byte_is_expanded(p))
+		{
+			while (is_name_char(*p) && !byte_is_expanded(p))
+				p++;
+			if (*p == '=' && !byte_is_expanded(p))
+				return run_assignment(s, p, last_status);
+		}
+	}
+
 	// `export` is a builtin by the same physics as cd: the environment
 	// copies DOWNWARD at spawn, never sideways or up, so an external
-	// export would set its own copy and take it to the grave. Flat
-	// model for now (no shell-variable tier — that arrives with husk
-	// programmability): export KEY=VALUE goes straight to the env,
-	// visible to every child spawned after. `export` alone lists the
+	// export would set its own copy and take it to the grave. Since the
+	// one-namespace ruling above it is an assignment wearing its 1977
+	// name; it stays because fingers type it. `export` alone lists the
 	// environment, same walk env(1) does.
 	if (nstages == 1 && first_token_is(stages[0], "export"))
 	{
@@ -2463,7 +2555,7 @@ static int run_expanded(char *expanded, int *last_status)
 		if (eargc < 0)
 		{
 			*last_status = 1;   // glob already reported; do NOT fall into "list"
-			return 1;
+			return 0;           // 0: the shell stays — 1 here would EXIT it
 		}
 		*last_status = 0;
 		if (eargc < 2)
@@ -2514,7 +2606,7 @@ static int run_expanded(char *expanded, int *last_status)
 		if (uargc < 0)
 		{
 			*last_status = 1;   // glob already reported; not an "expected a KEY" error
-			return 1;
+			return 0;           // 0: the shell stays — 1 here would EXIT it
 		}
 		if (uargc < 2)
 		{
@@ -2694,16 +2786,18 @@ static int run_line(char *line, int *last_status)
 // should know; `test`, `true` and `false` are programs (V7 shipped /bin/test
 // as one in 1979, and `[` was a link to it).
 //
-//   if LIST          while LIST
-//   then …           do …
-//   elif LIST        done
+//   if LIST          while LIST       for NAME in WORDS
+//   then …           do …             do …
+//   elif LIST        done             done
 //   then …
 //   else …
 //   fi
 //
 // A LIST is any command line; its last status decides (0 = true). `then`,
 // `do`, `else` may follow a `;` on the same line, or open their own. `!`
-// negates (run_segment). Every keyword lives in s_keywords, once.
+// negates (run_segment). `for` assigns each word to NAME — an environment
+// variable, os64's only kind (run_assignment). Every keyword lives in
+// s_keywords, once; `in` is not one, it is read by exec_for alone.
 //
 // THE ASSEMBLER AND THE EVALUATOR. Every line source — keyboard, rc, script,
 // -c — hands physical lines to feed_line, which cuts them into STATEMENTS at
@@ -2719,10 +2813,10 @@ static int run_line(char *line, int *last_status)
 // it was in, and a loop polls the console between iterations for one typed
 // while husk itself was foreground (loop_interrupted). Interactive only —
 // a script's stdin may be data, and polling it would eat that data.
-// `break`/`continue`/`for` are booked (DEBTS § husk).
-enum { KW_NONE, KW_IF, KW_THEN, KW_ELIF, KW_ELSE, KW_FI, KW_WHILE, KW_DO, KW_DONE };
+// `break`/`continue`/`case` are booked (DEBTS § husk scripting).
+enum { KW_NONE, KW_IF, KW_THEN, KW_ELIF, KW_ELSE, KW_FI, KW_WHILE, KW_DO, KW_DONE, KW_FOR, KW_COUNT };
 static const char *const s_keywords[] = {
-	"", "if", "then", "elif", "else", "fi", "while", "do", "done"
+	"", "if", "then", "elif", "else", "fi", "while", "do", "done", "for"
 };
 
 // The first word of `s` as a keyword (KW_NONE if it is not one), with *rest
@@ -2732,7 +2826,7 @@ static int keyword_of(const char *s, const char **rest)
 {
 	while (*s == ' ' || *s == '\t')
 		s++;
-	for (int k = KW_IF; k <= KW_DONE; k++)
+	for (int k = KW_IF; k < KW_COUNT; k++)
 	{
 		const char *w = s_keywords[k];
 		const char *p = s;
@@ -2829,7 +2923,7 @@ static int find_kw(int from, int to, unsigned wanted)
 		int kw = keyword_of(s_block.stmts[i], NULL);
 		if (level == 0 && (wanted & (1u << kw)))
 			return i;
-		if (kw == KW_IF || kw == KW_WHILE)
+		if (kw == KW_IF || kw == KW_WHILE || kw == KW_FOR)
 			level++;
 		else if (kw == KW_FI || kw == KW_DONE)
 			level--;
@@ -2948,6 +3042,128 @@ static int exec_while(int i, int to, int *last_status, int *exiting)
 	return doneIdx + 1;
 }
 
+// A `for` keeps its expanded word list here for the loop's lifetime: the
+// expansion buffer and the glob pool are reused by every statement the body
+// runs, so the list cannot live where parse() left it. Nested loops stack
+// their lists; a list that does not fit is refused, never truncated.
+#define FOR_POOL_BYTES (64 * 1024)
+static char s_for_pool[FOR_POOL_BYTES];
+static int  s_for_used = 0;
+
+// `for` at statement i: `for NAME in WORDS` walks the words, `for NAME` walks
+// a script's arguments (Bourne's 1977 shapes, both). The list is expanded
+// ONCE, before the first iteration — globs, $NAME and $(...) included — and
+// each word is assigned the way any assignment is: into the environment,
+// where the body's $NAME reads it and the body's children inherit it. NAME
+// keeps its last value afterwards. Returns the index after `done`.
+static int exec_for(int i, int to, int *last_status, int *exiting)
+{
+	const char *rest;
+	keyword_of(s_block.stmts[i], &rest);
+	int doIdx   = find_kw(i + 1, to, 1u << KW_DO);
+	int doneIdx = (doIdx < 0) ? -1 : find_kw(doIdx + 1, to, 1u << KW_DONE);
+	if (doIdx < 0 || doneIdx < 0)
+	{
+		block_complain(doIdx < 0 ? "for without do" : "for without done", s_block.lineOf[i]);
+		s_block_abort = true;
+		return to;
+	}
+
+	char name[64];
+	int k = 0;
+	const char *p = rest;
+	if (!is_name_start(*p))
+	{
+		block_complain("for: expected a variable name", s_block.lineOf[i]);
+		s_block_abort = true;
+		return to;
+	}
+	while (is_name_char(*p) && k < (int)sizeof(name) - 1)
+		name[k++] = *p++;
+	name[k] = '\0';
+	while (*p == ' ' || *p == '\t')
+		p++;
+
+	int poolStart = s_for_used;
+	char *words[ARGS_MAX];
+	int nwords = 0;
+	if (*p == '\0')
+	{
+		for (int j = 0; j < g_nparams && nwords < ARGS_MAX - 1; j++)
+			words[nwords++] = g_params[j];
+	}
+	else
+	{
+		if (!(p[0] == 'i' && p[1] == 'n' && (p[2] == ' ' || p[2] == '\t' || p[2] == '\0')))
+		{
+			block_complain("for: expected `in` after the variable name", s_block.lineOf[i]);
+			s_block_abort = true;
+			return to;
+		}
+		p += 2;
+		// This depth's context is idle between statements, so the list can
+		// be expanded in it — and must then be copied out (see s_for_pool).
+		expansion_ctx_t *ctx = &s_expctx[s_expdepth];
+		s_expand_complained = false;
+		if (!expand_line(p, ctx->text, EXPANDED_MAX, *last_status, ctx->mask))
+		{
+			if (!s_expand_complained)
+				block_complain("for: list too long after expansion", s_block.lineOf[i]);
+			s_block_abort = true;
+			return to;
+		}
+		s_expbase = ctx->text;
+		s_expmask = ctx->mask;
+		s_explen  = (int)os64_strlen(ctx->text);
+		char *argv[ARGS_MAX];
+		int argc = parse(ctx->text, argv, ARGS_MAX);
+		if (argc < 0)
+		{
+			s_block_abort = true;         // the glob has already said why
+			return to;
+		}
+		for (int j = 0; j < argc; j++)
+		{
+			int len = (int)os64_strlen(argv[j]) + 1;
+			if (s_for_used + len > FOR_POOL_BYTES)
+			{
+				block_complain("for: word list too long", s_block.lineOf[i]);
+				s_for_used = poolStart;
+				s_block_abort = true;
+				return to;
+			}
+			os64_strcopy(s_for_pool + s_for_used, (size_t)len, argv[j]);
+			words[nwords++] = s_for_pool + s_for_used;
+			s_for_used += len;
+		}
+	}
+
+	for (int w = 0; w < nwords; w++)
+	{
+		if (s_interactive && loop_interrupted())
+		{
+			*last_status = 130;
+			s_block_abort = true;
+			break;
+		}
+		if (os64_setenv(name, words[w]) != 0)
+		{
+			block_complain("for: cannot set the variable (environment full?)", s_block.lineOf[i]);
+			s_block_abort = true;
+			break;
+		}
+		*exiting = exec_stmts(doIdx + 1, doneIdx, last_status);
+		if (*exiting || s_block_abort)
+			break;
+	}
+	s_for_used = poolStart;
+	if (*exiting || s_block_abort)
+		return to;
+	if (nwords == 0)
+		*last_status = 0;                 // nothing ran, nothing failed
+	return doneIdx + 1;
+}
+
 // Statements [from, to): plain ones run, compounds recurse. Returns the
 // exiting verdict.
 static int exec_stmts(int from, int to, int *last_status)
@@ -2961,6 +3177,8 @@ static int exec_stmts(int from, int to, int *last_status)
 			i = exec_if(i, to, last_status, &exiting);
 		else if (kw == KW_WHILE)
 			i = exec_while(i, to, last_status, &exiting);
+		else if (kw == KW_FOR)
+			i = exec_for(i, to, last_status, &exiting);
 		else if (kw == KW_NONE)
 		{
 			exiting = run_stmt(s_block.stmts[i], last_status);
@@ -3026,7 +3244,7 @@ static int feed_stmt(char *stmt, int lineNo, int *last_status)
 	{
 		if (kw == KW_NONE)
 			return run_line(stmt, last_status);
-		if (kw != KW_IF && kw != KW_WHILE)
+		if (kw != KW_IF && kw != KW_WHILE && kw != KW_FOR)
 		{
 			block_complain("unexpected keyword outside a block", lineNo);
 			err_puts("  ");
@@ -3049,7 +3267,7 @@ static int feed_stmt(char *stmt, int lineNo, int *last_status)
 	s_block.lineOf[s_block.count] = lineNo;
 	s_block.count++;
 
-	if (kw == KW_IF || kw == KW_WHILE)
+	if (kw == KW_IF || kw == KW_WHILE || kw == KW_FOR)
 	{
 		if (++s_block.depth > BLOCK_DEPTH_MAX)
 		{
