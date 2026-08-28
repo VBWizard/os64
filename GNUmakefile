@@ -345,7 +345,7 @@ userland:
 # It used to be phony, which meant every single `make run` destroyed the image
 # (rm + sgdisk + mformat), re-mcopy'd all eleven files, and — because the ISO
 # carries this image as a Limine module — forced xorriso to repack the whole
-# 77MB ISO. Nothing downstream could EVER be up to date, because a phony
+# ISO. Nothing downstream could EVER be up to date, because a phony
 # prerequisite is by definition always out of date. Fixing the kernel's header
 # dependencies bought nothing until this was fixed too.
 #
@@ -614,9 +614,11 @@ vbox-sync: $(DISK_IMAGE)
 
 # Removed this from both top and bottom of the next section
 #	rm -rf iso_root
-# Real file prerequisites, so xorriso only repacks the 77MB ISO when something
-# on it actually changed (it used to depend on the phony disk-populate, which
-# guaranteed a full repack on every single make).
+# Real file prerequisites, so xorriso only repacks the ISO when something on it
+# actually changed (it used to depend on the phony disk-populate, which
+# guaranteed a full repack on every single make). Nearly all of the ISO's bulk
+# is $(DISK_IMAGE) riding along as a Limine module for the RAMDISK entries —
+# sparse on disk here, dense once xorriso writes it out.
 $(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p5-refresh.sh
 	@mkdir -p iso_root/boot
 	cp kernel/bin/$(IMAGE_NAME) iso_root/boot/
@@ -642,14 +644,46 @@ $(IMAGE_NAME).iso: limine/limine $(KERNEL_BIN) $(DISK_IMAGE) limine.conf tools/p
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		iso_root -o $(IMAGE_NAME).iso > /dev/null
 	./limine/limine bios-install $(IMAGE_NAME).iso > /dev/null
-# The c:/temp export feeds Chris's VBox/P5 boots — a WSL2 convenience, not
-# part of the build contract. Gated on the directory existing (PR #26): an
-# unconditional cp made `make` FAIL on any machine without /mnt/c/temp,
-# which is every machine that isn't this one.
-	@if [ -d /mnt/c/temp ]; then \
-		rm -f /mnt/c/temp/os64_kernel.iso; \
-		cp -v os64_kernel.iso /mnt/c/temp; \
+
+# Hand the built ISO to a machine that isn't this one. Its consumer is
+# VirtualBox on the Windows side, which boots C:/temp/os64_kernel.iso; the
+# DISK half of that hand-off is `make vbox-sync` (VM off), and the two are
+# separate because syncing a VDI is a heavier and rarer act than dropping a
+# fresh ISO next to it.
+#
+# THIS USED TO RIDE INSIDE THE ISO RULE (moved out 2026-08-28, Chris's call).
+# It had quietly become the most expensive step of a build almost nobody was
+# using it for: 2.6s of Windows-filesystem copy against 1.4s to pack the ISO
+# itself, paid on every kernel change, to feed a VM that is barely opened now
+# that the P5 boots os64 from its own disk and takes its refreshes over the
+# wire from os64get. Everything that boots ON this machine — `make run`, and
+# the QEMU harness in SUCCESSION.md — depends on the ISO target directly, so
+# the ISO itself stays in the default build: it is incremental and costs
+# nothing when nothing changed, and gating it would trade 1.4 seconds for the
+# chance of silently booting a stale one.
+#
+# LOUD WHEN IT CANNOT, which is the half that changes with the move. Skipping
+# silently was right for a side effect that had to survive on machines with no
+# /mnt/c/temp (PR #26 — the unconditional cp used to make `make` FAIL on every
+# machine that isn't this one). It is wrong for a target you TYPED: a silent
+# no-op there means booting yesterday's ISO in VBox and wondering where the fix
+# went.
+#
+# NOT CALLED `dist`, which was the first name and lasted an hour: `distclean`
+# already lives two targets down and means the autotools thing (clean harder),
+# so the two would have sat together in tab-completion looking like a pair
+# while meaning nothing to do with each other.
+.PHONY: copy
+copy: $(IMAGE_NAME).iso
+	@if [ ! -d /mnt/c/temp ]; then \
+		echo "copy: /mnt/c/temp does not exist — nowhere to hand the ISO to." >&2; \
+		echo "      This target is the WSL2 -> VirtualBox hand-off. Anywhere else," >&2; \
+		echo "      the ISO you want is already at ./$(IMAGE_NAME).iso." >&2; \
+		exit 1; \
 	fi
+	rm -f /mnt/c/temp/$(IMAGE_NAME).iso
+	cp $(IMAGE_NAME).iso /mnt/c/temp/
+	@echo "copy: C:/temp/$(IMAGE_NAME).iso updated ($$(du -h $(IMAGE_NAME).iso | cut -f1))"
 
 $(IMAGE_NAME).hdd: limine/limine kernel
 #	@rm -f $(IMAGE_NAME).hdd

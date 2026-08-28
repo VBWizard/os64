@@ -32,7 +32,8 @@ here, because your scratchpad dies with your session.*
 
 | Command | What it does |
 |---|---|
-| `make` | Build kernel + 64MB disk image + ISO (ISO also lands at /mnt/c/temp for VBox) |
+| `make` | Build kernel + userland + disk images + ISO. Everything that boots on this machine is ready after this |
+| `make copy` | Hand the ISO to VirtualBox: copy it to /mnt/c/temp, where the VM boots it from. NOT part of `make` since 2026-08-28 — it was the slowest step of every build and the only thing needing it is a VM that is rarely opened now the P5 boots os64 itself. Fails loudly if /mnt/c/temp isn't there |
 | `make run` | QEMU BIOS boot, **windowed** — the human's mode |
 | `make run-uefi` | Same, OVMF/UEFI |
 | `make debug` | QEMU + GDB server :1234, waits (`-S -s`); `gdb kernel/bin/os64_kernel` → `target remote :1234`. QEMU's gdbstub breakpoints are linear-address based — no int3 patching, higher-half addresses work directly |
@@ -50,7 +51,7 @@ exactly the 4 objects that include it rebuild; touch `CONFIG.h` and 66 do.
 
 The same rot was downstream: the `disk` target was `.PHONY`, so every `make
 run` nuked and reformatted the 64MB image and forced `xorriso` to repack the
-77MB ISO — nothing below a phony prerequisite can ever be up to date. The disk
+whole ISO — nothing below a phony prerequisite can ever be up to date. The disk
 image is a real file target now, so an unchanged tree rebuilds nothing (~0.1s)
 and `make run` just launches QEMU.
 
@@ -132,13 +133,35 @@ Offer `-vnc :0` instead of `-display none` if the human wants to peek.
   bracket trick breaks the self-match: `pkill -f 'qemu-system-x86_6[4]'`.
   (A compound command that dies with exit 144 mid-chain: that was this.)
   Background tasks reporting exit 144 after your own pkill are expected.
-- **Waiting on boot progress:** don't chain sleeps; run a background
-  watcher: `until grep -qi "All VFS tests passed" "$LOG"; do sleep 3;
-  done`. Under WSL2 the serial drain can crawl (unsolved QEMU/WSL2
-  artifact) — a quiet log is not a dead kernel; give markers tens of
-  seconds before declaring a hang.
+- **Waiting on boot progress: the marker is `"boot complete"`, and on the
+  default entry it is the ONLY one you may wait on.** Don't chain sleeps:
+  `until grep -q "boot complete" "$LOG"; do sleep 1; done`. `[pool] boot
+  complete: N/M paging pages used` comes out of `kernel_park` through
+  `serial_print_string` — the direct polled write, the same door panic uses —
+  so it is ungated by debug level and survives a logd claim on the port by
+  construction, which is why it was written that way. It prints when the kernel
+  task parks *because userland is running*. ~32s on the default entry.
+
+  Every other milestone in this file's next section is a `printd`, and with
+  `LOGD=` on the cmdline (the default entry has it) those go to logd's FILE and
+  NEVER reach the wire — waiting on `All VFS tests passed` or `BUILT-IN TESTS`
+  there is waiting for something that will not come. Chris's ruling, 2026-08-28,
+  after watching two models burn 90- and 200-second timeouts on exactly that.
+  Read the file host-side after the guest exits (`debugfs -R "cat /os64.log"
+  "disk/os64_data.img?offset=1048576"`), or boot an entry with no `LOGD=`.
+
+  Under WSL2 the serial drain can crawl (unsolved QEMU/WSL2 artifact) — a quiet
+  log is not a dead kernel; give markers tens of seconds before declaring a
+  hang.
 
 ## Reading the serial log
+
+**WHERE these lines live depends on the boot entry.** Every one of them is a
+`printd`, so with `LOGD=` on the cmdline they are in logd's FILE and not on the
+serial wire — this section is about reading the LOG, whichever sink holds it,
+and the only thing you may *wait* on at the wire is `"boot complete"` (see the
+headless section above). Boot an entry without `LOGD=` and they land on serial
+as they always did.
 
 Milestones of a healthy full boot, in order (the counts shown are July
 2026 values and WILL drift — nothing below depends on them):
@@ -298,7 +321,7 @@ plausible reasoning had not.
 | Platform | Uniquely catches | Notes |
 |---|---|---|
 | QEMU/TCG (WSL2) | Fast iteration; `-d int,cpu_reset,guest_errors` traces; deliberately hostile TSC desync between vCPUs | The TSC desync is a feature: it found the rdtsc-across-preemption bug |
-| VirtualBox | Real-ish I/O latency (found the NVMe locking race); stricter virtual-APIC (LVT arming order); firmware differences (virtual-wire mode NOT left on — found the dead-keyboard IMCR bug) | Boots the /mnt/c/temp ISO; disk via `make vbox-sync`, VM OFF |
+| VirtualBox | Real-ish I/O latency (found the NVMe locking race); stricter virtual-APIC (LVT arming order); firmware differences (virtual-wire mode NOT left on — found the dead-keyboard IMCR bug) | Boots the /mnt/c/temp ISO, put there by `make copy`; disk via `make vbox-sync`, VM OFF |
 | Bosgame P5 (bare metal) | Everything virtual APICs forgive; MADT interrupt-source overrides; real 12-core log volume (crashed default logging); USB stick module-load time (~20s for the 512MB ramdisk — it is NOT hung) | RAMDisk entries need zero disk prep; use `nolog` + MAXCORES during bring-up |
 
 A change that touches interrupts, timers, storage, or SMP is not verified
