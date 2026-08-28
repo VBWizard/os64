@@ -442,15 +442,33 @@ static int glob_strcmp(const char *a, const char *b)
 	return (int)(unsigned char)*a - (int)(unsigned char)*b;
 }
 
+// A bracket starts a pattern class only when the class has an end. The first
+// ']' is a literal member, including after a leading negation marker.
+static bool glob_class_closes(const char *open)
+{
+	const char *p = open + 1;
+	if (*p == '!' || *p == '^')
+		p++;
+	if (*p == ']')
+		p++;
+	for (; *p != '\0'; p++)
+		if (*p == ']')
+			return true;
+	return false;
+}
+
 static bool glob_has_meta(const char *s)
 {
 	for (; *s; s++)
-		if (*s == '*' || *s == '?' || *s == '[')
+		if (*s == '*' || *s == '?' ||
+		    (*s == '[' && glob_class_closes(s)))
 			return true;
 	return false;
 }
 
 // V7 pattern match: '*' any run, '?' one character, [abc] [a-z] [!a-z] sets.
+// An '[' with no closing ']' is an ordinary character, as it is in the shell
+// input that invokes /bin/[.
 // Recursive on '*' — the classic formulation, and the recursion depth is
 // bounded by the number of '*' in the pattern, not by the name length.
 static bool glob_match(const char *p, const char *n)
@@ -505,7 +523,13 @@ static bool glob_match(const char *p, const char *n)
 				}
 			}
 			if (*q != ']')
-				return false;                 // unterminated class matches nothing
+			{
+				if (*p != *n)
+					return false;
+				p++;
+				n++;
+				continue;
+			}
 			if (hit == negate)
 				return false;
 			p = q + 1;
@@ -756,7 +780,8 @@ static int parse(char *line, char *argv[], int maxargs)
 
 		char *token = writep;
 		// Tracked HERE and nowhere else: this is the only point in husk that
-		// still knows a '*' arrived unquoted. `echo "*"` must print a star.
+		// still knows a metacharacter arrived unquoted. `echo "*"` must print
+		// a star.
 		bool unquotedMeta = false;
 		char quote = 0;
 		while (*readp)

@@ -173,7 +173,10 @@ override IMAGE_NAME := os64_kernel
 # $(sort) dedupes: multi-file apps (top.c + topMain.c) list their directory
 # once per .c file — without it, top appears twice in every list built here.
 USERLAND_APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/*/*.c)))))
-USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS))
+# Punctuation aliases are alternate names for discovered apps, and therefore
+# ride every /bin without pretending to be independently linked programs.
+USERLAND_ALIASES := [
+USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS) $(USERLAND_ALIASES))
 
 # The shared libraries every one of those apps now needs to run at all
 # (2026-08-22). This is not optional cargo: since libos64 became a .so, an
