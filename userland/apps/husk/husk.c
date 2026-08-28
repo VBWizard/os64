@@ -90,8 +90,11 @@ static void err_num(unsigned long v)
 }
 
 // ── line editing ────────────────────────────────────────────────────────────
-
-static void prompt(void) { os64_write(1, "husk> ", 6); }
+// (the prompt itself lives down beside the job table, which one of its
+// escapes reports on; prompt_draw, beside the block assembler, is what
+// main and the completion repaint both call — it knows whether the shell
+// is prompting for a command or, inside an open `if`, for the rest of one)
+static void prompt_draw(void);
 
 // ── command history ─────────────────────────────────────────────────────────
 // A ring of the last HISTORY_DEPTH submitted lines, recalled with Up/Down.
@@ -374,7 +377,7 @@ static void comp_list_and_repaint(const char *buf, int n, int pos)
 		else
 			blank_forward(width - w);
 	}
-	prompt();
+	prompt_draw();
 	if (n > 0)
 		os64_write(1, buf, (size_t)n);
 	caret_back(n - pos);
@@ -1799,6 +1802,178 @@ static void jobs_poll(void)
 	}
 }
 
+// ── the prompt ──────────────────────────────────────────────────────────────
+//
+// `$PROMPT`, and with it unset the prompt is "husk> " exactly as it has always
+// been. THE NAME IS PROMPT AND NOT PS1 because the 1 in PS1 only means
+// anything alongside PS2, PS3 and PS4 — continuation, select, xtrace — and
+// husk has none of them, so the number points at siblings that do not exist.
+// (PATH keeps its name for the opposite reason: it is a good one.)
+//
+// ESCAPES ONLY. THE PROMPT IS NEVER RE-EXPANDED, and that is a ruling rather
+// than an omission: bash runs PS1 through parameter AND command substitution
+// on every single print, which is its most famous foot-gun. Here the string is
+// rendered by walking a fixed vocabulary that cannot introduce syntax, and
+// anything else you want is an ordinary expansion done ONCE, at the
+// assignment, through the path PR #28 settled — expansions are DATA, never
+// syntax. That is also why there is no \h for the hostname:
+// `export PROMPT="$HOSTNAME:\w $ "` already works, and brings every other
+// environment variable with it for free.
+//
+//   \w  working directory          \?  the last command's exit status
+//   \W  its last component         \j  background jobs being tracked
+//   \t  time, HH:MM:SS             \n  newline, for a two-line prompt
+//   \d  date, YYYY-MM-DD           \\  a literal backslash
+//
+// The date is ISO because os64 has no locale to have an opinion with, and
+// because the one format that sorts is the one worth picking. Both clock
+// escapes read local time through libos64's calendar, so they honour $TZ like
+// everything else.
+//
+// ABSENT, each because os64 has nothing to put in it: \u (there are no users),
+// \h (above), \$'s #-for-root (there are no privilege levels), and \[ \] (the
+// console has no ANSI escape parser, so there are no zero-width sequences to
+// guard — and husk's rub-out counts typed characters rather than columns, so
+// prompt width is not load-bearing either). \! is available the day anyone
+// wants it; the history ring is right up there.
+//
+// AN ESCAPE THE VOCABULARY DOES NOT KNOW IS EMITTED VERBATIM, backslash and
+// all. A prompt is cosmetic, so refusing to draw one over a typo would be
+// hostile — and a `\q` sitting in your prompt on every line is a louder
+// tripwire than a message you would see once and scroll past.
+#define PROMPT_MAX 256
+
+static void prompt_put(char *out, int *n, const char *s)
+{
+	while (*s != '\0' && *n < PROMPT_MAX - 1)
+		out[(*n)++] = *s++;
+}
+
+// Zero-padded two digits — the clock reads wrong without the padding, and
+// every field that uses it is 0..59 or 1..31.
+static void prompt_put_2(char *out, int *n, int v)
+{
+	if (*n < PROMPT_MAX - 1) out[(*n)++] = (char)('0' + (v / 10) % 10);
+	if (*n < PROMPT_MAX - 1) out[(*n)++] = (char)('0' + v % 10);
+}
+
+static void prompt_put_num(char *out, int *n, unsigned long v)
+{
+	char b[24];
+	utoa(v, b);            // NUL-terminates
+	prompt_put(out, n, b);
+}
+
+static void prompt_render(int last_status)
+{
+	const char *fmt = os64_getenv("PROMPT");
+	if (fmt == NULL || *fmt == '\0')
+	{
+		os64_write(1, "husk> ", 6);
+		return;
+	}
+
+	char out[PROMPT_MAX];
+	int n = 0;
+
+	while (*fmt != '\0' && n < PROMPT_MAX - 1)
+	{
+		// A trailing lone backslash is a backslash; there is nothing after it
+		// to name an escape.
+		if (*fmt != '\\' || fmt[1] == '\0')
+		{
+			out[n++] = *fmt++;
+			continue;
+		}
+
+		char code = fmt[1];
+		fmt += 2;
+		switch (code)
+		{
+			case 'w':
+			case 'W':
+			{
+				char cwd[256];
+				if (os64_getcwd(cwd, sizeof(cwd)) < 0)
+					break;              // no answer: show nothing, not garbage
+
+				const char *show = cwd;
+				if (code == 'W')
+				{
+					const char *slash = NULL;
+					for (const char *p = cwd; *p != '\0'; p++)
+						if (*p == '/')
+							slash = p;
+					if (slash != NULL && slash[1] != '\0')
+						show = slash + 1;
+					else if (slash == cwd)
+						show = "/";     // the root has no last component, and
+						                // a prompt with a hole where the
+						                // directory goes is worse than a "/"
+				}
+				prompt_put(out, &n, show);
+				break;
+			}
+
+			case 't':
+			case 'd':
+			{
+				os64_date_t d;
+				if (os64_date_now(&d, NULL) != 0)
+					break;              // same rule as the cwd: no answer, no text
+				if (code == 't')
+				{
+					prompt_put_2(out, &n, d.hour);
+					prompt_put(out, &n, ":");
+					prompt_put_2(out, &n, d.minute);
+					prompt_put(out, &n, ":");
+					prompt_put_2(out, &n, d.second);
+				}
+				else
+				{
+					prompt_put_num(out, &n, (unsigned long)d.year);
+					prompt_put(out, &n, "-");
+					prompt_put_2(out, &n, d.month);
+					prompt_put(out, &n, "-");
+					prompt_put_2(out, &n, d.day);
+				}
+				break;
+			}
+
+			// Spelled exactly as $? is (run_expanded stores it the same way),
+			// so the two never disagree about what a negative status looks
+			// like.
+			case '?':
+				prompt_put_num(out, &n, (unsigned long)(unsigned int)last_status);
+				break;
+
+			case 'j':
+			{
+				int live = 0;
+				for (int i = 0; i < MAX_JOBS; i++)
+					if (gJobs[i].used)
+						live++;
+				prompt_put_num(out, &n, (unsigned long)live);
+				break;
+			}
+
+			case 'n':  out[n++] = '\n'; break;
+			case '\\': out[n++] = '\\'; break;
+
+			default:
+				// Unknown: give both characters back, so the typo is visible.
+				out[n++] = '\\';
+				if (n < PROMPT_MAX - 1)
+					out[n++] = code;
+				break;
+		}
+	}
+
+	// Truncation at PROMPT_MAX is silent because it is not silent: a prompt
+	// that stops mid-word is its own error message, on every line.
+	os64_write(1, out, (unsigned)n);
+}
+
 // Strip a trailing `&` and say whether it was there. The `&` must be its OWN
 // token, exactly like `<` and `>`: husk splits on spaces only, so `hog&` is a
 // program named "hog&" — honest, if unhelpful, and consistent with every other
@@ -2496,6 +2671,15 @@ static int run_assignment(const char *stmt, const char *eq, int *last_status)
 // Run one ALREADY-EXPANDED command: the trailing `&`, the pipeline split,
 // the builtins, and finally run_pipeline. Returns 1 when the command asks
 // the shell to exit, else 0; the status lands in *last_status ($?).
+//
+// THE RETURN VALUE IS EXIT-OR-NOT, NOT A STATUS, and the two look identical
+// at a glance — which is how `cd /nomatch*`, `unset [zz]` and
+// `export FOO=[zz]` came to KILL THE SHELL (found 2026-08-28, driving the new
+// $PROMPT in with an unquoted assignment). Each of the three had a
+// glob-failure path that wanted "stop, do not fall through to the bare-verb
+// default", reached for `return 1` meaning "return early", and got "quit"
+// instead. A builtin that failed reports through *last_status and returns 0.
+// Only `exit` returns 1.
 static int run_expanded(char *expanded, int *last_status)
 {
 	char *stages[MAX_STAGES];
@@ -2555,7 +2739,7 @@ static int run_expanded(char *expanded, int *last_status)
 		if (eargc < 0)
 		{
 			*last_status = 1;   // glob already reported; do NOT fall into "list"
-			return 0;           // 0: the shell stays — 1 here would EXIT it
+			return 0;   // 0 = keep the shell (see the contract above)
 		}
 		*last_status = 0;
 		if (eargc < 2)
@@ -2606,7 +2790,7 @@ static int run_expanded(char *expanded, int *last_status)
 		if (uargc < 0)
 		{
 			*last_status = 1;   // glob already reported; not an "expected a KEY" error
-			return 0;           // 0: the shell stays — 1 here would EXIT it
+			return 0;   // 0 = keep the shell (see the contract above)
 		}
 		if (uargc < 2)
 		{
@@ -2641,7 +2825,7 @@ static int run_expanded(char *expanded, int *last_status)
 			// `cd /nomatch*` would silently take you to / , which is the most
 			// alarming thing a shell can do quietly.
 			*last_status = 1;
-			return 0;            // 0: the shell stays — 1 here would EXIT it
+			return 0;   // 0 = keep the shell (see the contract above)
 		}
 		*last_status = run_dir_builtin(cargv, cargc);
 		return 0;
@@ -3325,6 +3509,22 @@ static int feed_line(char *line, int lineNo, int *last_status)
 	}
 }
 
+// The prompt as the shell is showing it right now: inside an open
+// `if`/`while`/`for`, Bourne's `> ` continuation — the shell is still
+// collecting, not waiting for a command — otherwise $PROMPT rendered
+// against the last status main recorded. One function, because two things
+// draw it: main before each line, and the completion listing when it
+// repaints the line it interrupted.
+static int s_prompt_status = 0;
+
+static void prompt_draw(void)
+{
+	if (s_block.depth > 0)
+		os64_write(1, "> ", 2);
+	else
+		prompt_render(s_prompt_status);
+}
+
 // At the end of an rc, a script or a -c line: a block still open is a
 // mistake the author should hear about, not silently run. Says so and
 // forgets it; true if there was one.
@@ -3740,12 +3940,10 @@ int main(int argc, char **argv, char **envp)
 		// why they never pile up as zombies.
 		jobs_poll();
 
-		// Inside an open `if`/`while`, the continuation prompt — Bourne's PS2
-		// — says the shell is still collecting, not waiting for a command.
-		if (s_block.depth > 0)
-			os64_write(1, "> ", 2);
-		else
-			prompt();
+		// After jobs_poll, so \j counts what is still running rather than what
+		// was running before this pass buried it.
+		s_prompt_status = last_status;
+		prompt_draw();
 		int got = read_line(line, sizeof(line));
 		if (got < 0)
 		{

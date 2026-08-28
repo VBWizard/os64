@@ -67,6 +67,67 @@ program sees a byte:
 grouping wholesale (`'$CWD'` stays literal); double quotes group words but
 let `$` speak. A `$` that starts no name stays a `$`.
 
+## The prompt — `$PROMPT`
+
+Unset, husk prompts `husk> `, exactly as it always has. Set, it is rendered
+from this vocabulary:
+
+| Escape | Prints |
+|---|---|
+| `\w` | working directory |
+| `\W` | its last component (`/` stays `/`) |
+| `\t` | time, `HH:MM:SS`, local — honours `$TZ` |
+| `\d` | date, `YYYY-MM-DD` — ISO because os64 has no locale to have an opinion with, and because the one format that sorts is the one worth picking |
+| `\?` | the last command's exit status |
+| `\j` | background jobs being tracked |
+| `\n` | newline, for a two-line prompt |
+| `\\` | a literal backslash |
+
+```
+export PROMPT="\w $ "
+export PROMPT="[\t] \W \?> "
+export PROMPT="$HOSTNAME:\w $ "
+```
+
+**Named `PROMPT`, not `PS1`.** The `1` in PS1 only means anything alongside
+PS2, PS3 and PS4 — continuation, select, xtrace — and husk has none of them,
+so the number points at siblings that do not exist. (`PATH` keeps its name for
+the opposite reason: it is a good one.)
+
+**Escapes only — the prompt is never re-expanded.** bash runs PS1 through
+parameter *and command* substitution on every print, which is its most famous
+foot-gun. Here the string is expanded ONCE, at the assignment, through the
+ordinary path where expansions are DATA and never syntax; the escapes above
+are a closed vocabulary that cannot introduce syntax at print time. That is
+also why there is no `\h`: `"$HOSTNAME:\w"` already works, and brings every
+other environment variable with it.
+
+**`$?` AND `\?` ARE NOT THE SAME THING, and the difference is the whole design
+in one line.** `$?` is husk's own expansion: it happens once, at the
+assignment, so it freezes the status that was current when the rc ran — a
+literal `0` for the rest of the session. `\?` is a prompt escape, evaluated at
+every print. The frozen one is the dangerous shape precisely because it looks
+alive: put a ticking `\t` beside it and the prompt updates every second while
+the one number that would tell you something never moves. (Found the day
+`$PROMPT` shipped, in the author's own first prompt.)
+
+The rule the two spellings encode: **`$NAME` for what does not change**
+(`$HOSTNAME`), **an escape for what does**. Anything you want frozen, freeze
+with `$`; anything you want live has to be in the escape table, and if it
+isn't, it can't be live — that is the price of never re-expanding.
+
+An escape the vocabulary does not know is printed **verbatim**, backslash and
+all — a prompt is cosmetic, so refusing to draw one over a typo would be
+hostile, and a stray `\q` on every line is a louder tripwire than a message
+you would see once.
+
+Absent because os64 has nothing to put in them: `\u` (no users), `\h` (above),
+`\$`'s `#`-for-root (no privilege levels), and `\[ \]` (the console has no ANSI
+escape parser, so there are no zero-width sequences to guard — and husk's
+rub-out counts typed characters rather than columns, so prompt width is not
+load-bearing either). `\!` is available the day anyone wants it; the history
+ring is already there.
+
 ## Builtins — only what MUST live in the shell
 
 | Builtin | Why it can't be a program |
