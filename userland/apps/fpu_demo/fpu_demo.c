@@ -208,8 +208,8 @@ int main(int argc, char **argv)
 			if (ev.key.ascii == ' ') paused = !paused;
 			if (ev.key.ascii == 'n') { target = (target + 1) % TARGETS; log2zoom = 0.0; direction = 1; hold_ms = 0; }
 		}
-		if (erc < 0)
-			break;
+		if (erc < 0 || !running)
+			break;   // q, or the window died: leave before another frame wait could sleep behind a cover
 
 		// Advance the tour by real time — never by frames — so the pace is
 		// the same on a fast machine, a slow one, and after a pause.
@@ -244,6 +244,10 @@ int main(int argc, char **argv)
 			char line[96];
 			int32_t n = os64_snprintf(line, sizeof(line), "%s  2^%d  %d iter  %lu ms%s   space/n/q",
 			                          kTargets[target].name, (int)log2zoom, max_iter, dt, paused ? "  [paused]" : "");
+			// The whole status band is cleared first: an unpause during the
+			// hold shortens the line without changing the picture, and the
+			// tail of "[paused]" would otherwise stay on the glass.
+			os64_draw_fill_rect(&ctx.surf, (os64_gui_rect_t){0, 6, (int32_t)ctx.surf.width, 20}, 0xFF000000U);
 			os64_draw_text(&ctx.surf, 8, 8, line, (size_t)n, OS64_GUI_COLOR_WHITE, 0xFF000000U);
 			os64_draw_publish(&ctx, (const os64_gui_rect_t *)0);
 			drawn_paused = paused;

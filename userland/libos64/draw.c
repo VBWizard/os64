@@ -257,7 +257,14 @@ uint64_t os64_frame_wait(os64_frame_clock_t *clock, uint64_t budget_ms)
     {
         os64_gui_event_wait(clock->window, (os64_gui_event_t *)0);
         clock->last_ms = now_ms();
-        return budget_ms;
+        // Woken by the UNCOVERED nudge, or by a key under a window that
+        // still hides us? The flag decides. Still covered means no frame is
+        // owed: a dt of ZERO, so an integrator holds still and a key held
+        // down under the covering window cannot drive the animation
+        // forward behind it — the one case the "never 0" rule yields to,
+        // and draw.h says so. Uncovered means the pause is over and the
+        // frame is one budget long, as before.
+        return bound_window_covered(clock) ? 0 : budget_ms;
     }
 
     now = now_ms();

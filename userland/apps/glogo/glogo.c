@@ -80,8 +80,8 @@ int main(int argc, char **argv)
 			if (ev.type == OS64_GUI_EVENT_KEY_DOWN && ev.key.ascii == 'q')
 				running = false;
 		}
-		if (rc < 0)
-			break;
+		if (rc < 0 || !running)
+			break;   // q, or the window died: never sleep another frame after the exit was asked for
 
 		// [5] Advance state by REAL time. One add and a wrap — the point is
 		//     the dt-scaling, not the math.
