@@ -384,6 +384,7 @@ typedef struct {
 	bool      bm_loaded;     // ...and whether a group is in it
 	uint32_t  bm_group;
 	bool      bm_dirty;      // allocations: bits set that the disk has not seen
+	uint32_t  bm_alloced;    // allocations: how many, to give the counts back if the bitmap never lands
 	uint32_t  bm_next;       // allocations: the bit after the last one handed out
 	uint32_t  bm_freed;      // releases: bits cleared, counts not yet credited
 	bool      bm_reconcile;  // releases: a bit was already clear — rebuild the counts
@@ -447,10 +448,14 @@ static void ext2_batch_flush_map(ext2_batch_t *b)
 
 	if (ext2_write_fs_block(b->fs, e, e->groups[g].bg_block_bitmap, b->bm) != 0)
 	{
-		// Nothing published: the disk still calls every block here used.
+		// Nothing published: the disk still calls every block here used —
+		// and every block allocated here still free, so the counts an
+		// allocation took out of the cache go back.
 		b->failed = true;
 		if (releasing && b->free_rc == 0)
 			b->free_rc = EXT2_FREE_FAILED;
+		e->groups[g].bg_free_blocks_count += (uint16_t)b->bm_alloced;
+		e->sb.s_free_blocks_count += b->bm_alloced;
 	}
 	else
 	{
@@ -475,6 +480,7 @@ static void ext2_batch_flush_map(ext2_batch_t *b)
 		}
 	}
 	b->bm_dirty = false;
+	b->bm_alloced = 0;
 	b->bm_freed = 0;
 	b->bm_reconcile = false;
 }
@@ -497,7 +503,9 @@ static void ext2_batch_flush_leaf(ext2_batch_t *b)
 	if (!b->leaf_dirty)
 		return;
 	ext2_batch_flush_map(b);
-	if (ext2_write_fs_block(b->fs, b->e, b->leaf_block, b->leaf) != 0)
+	// A map that did not land licenses nothing: the pointers stay unwritten
+	// (the blocks leak; a reference to unmarked blocks would dangle).
+	if (!b->failed && ext2_write_fs_block(b->fs, b->e, b->leaf_block, b->leaf) != 0)
 		b->failed = true;
 	b->leaf_dirty = false;
 }
@@ -639,6 +647,7 @@ static uint32_t ext2_alloc_block_in_group(vfs_filesystem_t *fs, ext2_fs_t *e,
 	if (batch != NULL)
 	{
 		batch->bm_dirty = true;
+		batch->bm_alloced++;
 		batch->bm_next  = bit + 1;
 		if (zero_fill)
 		{
@@ -1479,10 +1488,16 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		return -1;
 	}
 
+	uint64_t start_pos = h->pos;
 	size_t done = 0;
 	bool io_error = false;
 	while (done < size)
 	{
+		if (batch.failed)
+		{
+			io_error = true;   // a flush already lost a write; stop piling on
+			break;
+		}
 		uint32_t fblock   = (uint32_t)(h->pos / e->block_size);
 		uint32_t in_block = (uint32_t)(h->pos % e->block_size);
 		size_t   chunk    = e->block_size - in_block;
@@ -1543,10 +1558,32 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		h->pos += chunk;
 	}
 	// Everything the batch still holds, in doctrine order — run, map, leaf
-	// — BEFORE the inode below references any of it.
-	if (ext2_batch_end(&batch) != 0)
-		io_error = true;
+	// — BEFORE the inode below references any of it. A batch that lost any
+	// of those writes is an I/O error for the WHOLE call: the in-memory
+	// inode names blocks the disk may not mark or may not hold, so it is
+	// thrown away and re-read, the position rewound, and -1 returned. What
+	// landed meanwhile is an overwrite of bytes the caller asked for
+	// (harmless to repeat) or a marked block nothing references — a leak,
+	// which fsck reclaims. The SHORT write (disk full, no flush lost)
+	// keeps reporting exactly what landed, as it always has.
+	bool lost = ext2_batch_end(&batch) != 0;
 	wr_scratch_put(e, scratch);
+	if (lost)
+	{
+		uint8_t *ibuf = wr_scratch_get(e);
+		if (ibuf != NULL)
+		{
+			// A re-read that fails leaves the stale copy; the next write
+			// re-reads before it mutates (the fresh-inode discipline), so
+			// nothing on disk can come to depend on it.
+			(void)ext2_read_inode_buf(fs, e, h->ino, &h->inode, ibuf);
+			wr_scratch_put(e, ibuf);
+		}
+		h->size = ext2_regular_file_size(&h->inode);
+		h->pos = start_pos;
+		spinlock_release_irqrestore(&e->write_lock, lock_flags);
+		return -1;
+	}
 
 	// WRITE-THROUGH: commit the inode now — size, mtime, and every block
 	// pointer bmap_alloc added, in ONE 128-byte write (i_size never outruns
