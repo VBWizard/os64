@@ -181,6 +181,52 @@ int64_t os64_puts(const char *s)
     return os64_write(SYSCALL_HANDLE_CONSOLE_OUT, s, os64_strlen(s));
 }
 
+int64_t os64_write_escaped(int32_t handle, const char *s)
+{
+    static const char hex[] = "0123456789abcdef";
+    // Batched through a small buffer: one write per 256 bytes rather than
+    // one per escape. An escape is at most four bytes, which is the flush
+    // margin below.
+    char out[256];
+    size_t n = 0;
+
+    for (; *s != '\0'; s++)
+    {
+        unsigned char c = (unsigned char)*s;
+        if (n + 4 > sizeof(out))
+        {
+            int64_t r = os64_write(handle, out, n);
+            if (r < 0)
+                return r;
+            n = 0;
+        }
+        switch (c)
+        {
+        case '\n': out[n++] = '\\'; out[n++] = 'n';  break;
+        case '\t': out[n++] = '\\'; out[n++] = 't';  break;
+        case '\r': out[n++] = '\\'; out[n++] = 'r';  break;
+        case '\\': out[n++] = '\\'; out[n++] = '\\'; break;
+        default:
+            if (c < 0x20 || c == 0x7f)
+            {
+                out[n++] = '\\';
+                out[n++] = 'x';
+                out[n++] = hex[c >> 4];
+                out[n++] = hex[c & 0xf];
+            }
+            else
+                out[n++] = (char)c;
+        }
+    }
+    if (n > 0)
+    {
+        int64_t r = os64_write(handle, out, n);
+        if (r < 0)
+            return r;
+    }
+    return 0;
+}
+
 // The screen layer's one verb (see io.h for the doctrine and the rename
 // story). The SYSCALL number and its "printat" table name stay — the wire
 // is stable; only the identifier learned to say which layer it addresses.

@@ -42,7 +42,9 @@ redirection down: `testrun > log 2>&1` captures every fixture.
 Double quotes group words and still expand; single quotes hand the bytes
 through untouched. `$(…)` nests, runs *in this shell* (a `cd` inside it
 moves you; a builtin's output inside it is not captured — `$(pwd)` works,
-`pwd` being a program), and its own status is not `$?` — the line's is.
+`pwd` being a program). `$?` after a line is the line's — except that a
+bare assignment, `x=$(cmd)`, answers with cmd's status, so the value lands
+in `$x` and the verdict in `$?`; `echo $(cmd)` still reports echo's.
 
 ## Command lists
 
@@ -63,6 +65,14 @@ NAME` removes it. `export NAME=value` still works and means the same thing.
 A value with spaces needs quotes (`GREETING="hello there"`); `X=*` sets a
 star, not a directory listing. The name and the `=` must be typed — a `$x`
 holding `A=B` is a word, not an assignment.
+
+`env` lists the environment, one variable per line (a value holding
+newlines or tabs shows them as `\n` and `\t`). To change it for ONE program
+without changing your own, `env NAME=value command` — env is a program that
+sets the variable in its own copy and runs the command, which inherits it;
+the environment only ever flows down. `env -u NAME command` withholds one,
+`env -i command` starts the program from nothing. The bare `NAME=value
+command` spelling is refused on purpose.
 
 ## Control flow
 

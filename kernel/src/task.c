@@ -1558,19 +1558,29 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	}
 
 	// The console changes hands HERE — the foreground task is by definition
-	// "the task the controlling shell is currently blocked waiting on." Keyed
-	// on wait, not spawn, so a future backgrounded (&) child never takes the
-	// console. Restored to the shell on every return path that FINISHES the
-	// wait (a corpse collected, or no child to wait for): a Ctrl+C at the
-	// prompt after this wait must find the shell foreground again (where it
-	// is a harmless line-kill byte), never a stale pointer at a dead child.
-	// NOT on the interrupted return — the child is still the foreground job.
+	// "the task the current foreground is blocked waiting on": the
+	// controlling shell waiting on a job, or that job itself waiting on a
+	// child of its own (env(1) running the program it carries variables to,
+	// a script's husk running a line). The hand-off follows the wait DOWN
+	// so Ctrl+C reaches the program actually running; aimed at the
+	// middleman it killed `env X=1 sleep 30` at once and left sleep alive,
+	// ownerless, still writing to the terminal. Keyed on wait, not spawn,
+	// so a backgrounded (&) child never takes the console — a background
+	// job is not the foreground, so its own waits move nothing. Restored to
+	// the WAITER on every return path that FINISHES the wait (a corpse
+	// collected, or no child to wait for): a Ctrl+C at the prompt after this
+	// wait must find the shell foreground again (where it is a harmless
+	// line-kill byte), never a stale pointer at a dead child. NOT on the
+	// interrupted return — the child is still the foreground job. (When the
+	// child dies, tty_task_departed already points the console at the shell;
+	// a middleman's finishing wait then takes it back for the instant it
+	// needs to exit, after which its own departure hands it to the shell.)
 	//
 	// THE console is now THIS SHELL'S TERMINAL (task_tty): husk-on-tty2
 	// handing its console to a child moves tty2's foreground pointer and
 	// nobody else's — the Ctrl+C you type on tty1 cannot reach across.
 	tty_t *console = task_tty(parent);
-	bool movesConsole = parent->controllingShell;
+	bool movesConsole = parent->controllingShell || console->fgTask == parent;
 	if (movesConsole) {
 		task_t *fg = task_find_live_child(parent, targetPid);
 		if (fg != NULL)

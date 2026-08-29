@@ -320,6 +320,15 @@ int64_t os64_mkdir(const char *path);
 // Convenience: write a NUL-terminated string to the console (handle 1).
 int64_t os64_puts(const char *s);
 
+// Write `s` to `handle` with every control byte and backslash spelled as a
+// C escape — `\n`, `\t`, `\r`, `\\`, and `\xHH` for the rest — so the bytes
+// that would move a cursor arrive as glyphs instead. For LISTINGS whose
+// reader is a human or a grep: one entry per line only holds while no
+// entry can break a line, and a value captured from `ls` by $(...) carries
+// exactly the newlines that would. Returns 0, or the negative verdict of
+// the write that failed.
+int64_t os64_write_escaped(int32_t handle, const char *s);
+
 // Park a string at an absolute character cell (x, y) on the PHYSICAL console
 // — the SCREEN LAYER (née "the widget plane": renamed 2026-08-19 when libui
 // claimed the word widget for something else, and the day the layer's whole

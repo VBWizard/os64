@@ -1,6 +1,9 @@
-// libos64 proc.c — process control veneer (scaffolding: yield only for now).
+// libos64 proc.c — process control: spawn in its shapes, wait and reap, the
+// environment, cwd, and where a command by name lives. Contracts in proc.h.
 
 #include "os64/proc.h"
+#include "os64/io.h"       // os64_stat — os64_resolve_command probes candidates with it
+#include "os64/str.h"
 #include "os64/syscall.h"
 
 void os64_yield(void)
@@ -60,6 +63,62 @@ int64_t os64_spawn_seated(const char *path, char *const argv[], int64_t master)
     return os64_spawn_redirected(path, argv, -1, -1, -1,
                                  OS64_SPAWN_SET_TTY |
                                  ((uint64_t)(uint32_t)master << OS64_SPAWN_TTY_SHIFT));
+}
+
+const char *os64_resolve_command(const char *command, char *resolved,
+                                 size_t capacity)
+{
+    if (command == NULL || resolved == NULL || capacity == 0)
+        return command;
+
+    for (const char *p = command; *p != '\0'; p++)
+        if (*p == '/')
+            return command;
+
+    os64_dirent_t entry = {0};
+    if (os64_stat(command, &entry) == 0 && (entry.flags & OS64_DE_DIR) == 0)
+        return command;
+
+    const char *path = os64_getenv("PATH");
+    if (path == NULL)
+        return command;
+
+    size_t command_length = os64_strlen(command);
+    while (*path != '\0')
+    {
+        // One PATH element into `resolved`; an element that does not fit
+        // is walked past (so the next one is still read from the right
+        // place) and skipped — a truncated directory is a different
+        // directory, and probing it would be a lie with a stat on the end.
+        size_t length = 0;
+        bool overflow = false;
+        while (*path != '\0' && *path != ':')
+        {
+            if (length + 1 < capacity)
+                resolved[length++] = *path;
+            else
+                overflow = true;
+            path++;
+        }
+        if (*path == ':')
+            path++;                         // step over the separator
+        if (length == 0 || overflow)
+            continue;                       // empty element, or one too long to name
+
+        if (resolved[length - 1] != '/')
+        {
+            if (length + 1 >= capacity)
+                continue;
+            resolved[length++] = '/';
+        }
+        if (length + command_length + 1 > capacity)
+            continue;
+        os64_memcpy(resolved + length, command, command_length + 1);
+
+        if (os64_stat(resolved, &entry) == 0 && (entry.flags & OS64_DE_DIR) == 0)
+            return resolved;
+    }
+    return command;
 }
 
 int64_t os64_wait(int64_t pid, int32_t *exit_code)

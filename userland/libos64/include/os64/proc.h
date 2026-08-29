@@ -1,9 +1,10 @@
 #ifndef OS64_PROC_H
 #define OS64_PROC_H
 
-// libos64 process control (LIBOS64.md layer). SCAFFOLDING: only yield exists
-// so far; spawn/fork/exec*/waitpid arrive when the shell work pulls them in
-// (both spawn AND fork/exec are first-class — see LIBOS64.md/ABI.md).
+// libos64 process control (LIBOS64.md layer): spawn in its shapes, wait and
+// reap, exit, the cwd, the environment, and where a command by name lives.
+// Spawn is the one way to start a program today; fork/exec are first-class
+// in the design and arrive when something asks (LIBOS64.md/ABI.md).
 
 #include <stddef.h>
 #include <stdint.h>
@@ -116,6 +117,22 @@ int64_t os64_spawn_redirected(const char *path, char *const argv[],
 // pty-awareness in the child. The terminal's whole job becomes: write
 // keystrokes to the master, snapshot the screen out.
 int64_t os64_spawn_seated(const char *path, char *const argv[], int64_t master);
+
+// Where is the program called `command`? The search a shell runs at every
+// command line, as a library verb for anything that spawns what a user typed:
+//   - a name containing '/' names a PLACE — used exactly as typed, no search
+//   - a bare name tries the cwd first (V6 shells did: `cd /bin` + `ls`
+//     worked before PATH existed), then each colon-separated directory
+//     of $PATH as this process sees it right now
+// Existence is probed with os64_stat, and a directory never wins — typing
+// `bin` at / must not spawn a directory. Returns `command` itself for a
+// place or a cwd hit, `resolved` filled with the PATH hit, or `command`
+// unresolved when nothing matched, so the spawn that follows delivers the
+// "no" and the caller reports the name the user typed. A candidate that
+// would not fit `resolved` is skipped, not truncated. The buffer must stay
+// alive until the spawn; 256 bytes covers TASK_MAX_PATH_LEN with room.
+const char *os64_resolve_command(const char *command, char *resolved,
+                                 size_t capacity);
 
 // Wait for a child to exit and reap it. pid > 0 waits for that specific child;
 // pid == 0 waits for the first of any child to end. Returns the pid that

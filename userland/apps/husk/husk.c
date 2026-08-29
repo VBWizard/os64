@@ -232,7 +232,7 @@ static void edit_insert(char *buf, int *n, int *pos, int cap,
 // and bash followed (1989). The shape is the classic one: the word before
 // the caret is completed against the directory it names — or, for the first
 // word of a line with no '/' in it, against the builtins and then the
-// current directory and PATH, where resolve_command looks. One match
+// current directory and PATH, where os64_resolve_command looks. One match
 // is inserted whole (plus '/' for a directory, a space for anything else);
 // several are extended to their longest common prefix; a Tab that can extend
 // nothing lists them under the line and repaints it.
@@ -296,7 +296,7 @@ static void comp_scan_dir(const char *dir, const char *prefix, bool runnable)
 }
 
 // The builtins, the current directory, then each PATH directory — the order
-// resolve_command searches, though for completion order is only a courtesy.
+// os64_resolve_command searches, though for completion order is only a courtesy.
 static void comp_scan_commands(const char *prefix)
 {
 	static const char *const builtins[] = {
@@ -1038,6 +1038,8 @@ typedef struct {
 	char    capture[EXPANDED_MAX];   // what the line's commands wrote to stdout
 	int     captureLen;
 	bool    captureOverflow;         // more arrived than fits: the substitution is refused
+	bool    substRan;                // a $(...) ran while THIS depth's line was expanding
+	int     substStatus;             // ...and this is what it answered (the last one, if several)
 } expansion_ctx_t;
 static expansion_ctx_t s_expctx[SUBST_DEPTH_MAX + 1];
 static int s_expdepth = 0;
@@ -1446,6 +1448,14 @@ static bool expand_append(char *dst, int *n, int cap, uint8_t *mask, const char 
 // captured byte is marked as expansion-origin, so a `|` or `>` a program
 // printed can never become syntax here — the rule PR #28 settled.
 // `exit` inside a substitution ends the substitution, not the shell.
+//
+// The inner line's exit status is handed UP to the line being expanded
+// (substRan/substStatus in its context), where one consumer reads it: a
+// bare assignment, `x=$(cmd)`, answers with cmd's status — the value IS
+// the command there, so `$?` reporting "the assignment worked" would be
+// information-free. A command that merely contains a substitution keeps
+// its own status (`echo $(false)` is echo's 0): `$?` names the program
+// you just watched, not one buried in its arguments. Bourne's rule, 1977.
 static bool run_substitution(const char *inner, int last_status,
                              const char **out, int *outLen)
 {
@@ -1465,6 +1475,8 @@ static bool run_substitution(const char *inner, int last_status,
 	int status = last_status;
 	(void)run_line(line, &status);
 	s_expdepth--;
+	s_expctx[s_expdepth].substRan = true;
+	s_expctx[s_expdepth].substStatus = status;
 
 	if (ctx->captureOverflow)
 	{
@@ -1488,6 +1500,7 @@ static bool expand_line(const char *src, char *dst, int cap, int last_status,
 	if (mask != NULL)
 		for (int i = 0; i < cap; i++)
 			mask[i] = 0;
+	s_expctx[s_expdepth].substRan = false;   // this segment's substitutions start from none
 
 	while (*src && n < cap - 1)
 	{
@@ -2118,49 +2131,7 @@ static int extract_redirections(char *cargv[], redirections_t *r)
 	return w == 0 ? -1 : 0;       // a line that was ALL redirections has no program
 }
 
-// PATH search — V7's gift (1979; before that Unix shells hardcoded /bin).
-// Resolve a command name to something spawnable:
-//   - a name containing '/' names a PLACE — used exactly as typed, no search
-//   - a bare name tries the cwd first (so `cd /bin` + `ls` works exactly as
-//     it did before PATH existed), then each colon-separated PATH directory
-// Existence is probed with os64_stat — "what is this one name?" — so a
-// directory can never win the search (typing `bin` at / must not try to
-// exec a directory). Returns `cmd` itself or `buf` filled with the hit;
-// on no hit, returns `cmd` unresolved and lets spawn deliver the "no".
-static const char *resolve_command(const char *cmd, char *buf, int cap)
-{
-	for (const char *p = cmd; *p != '\0'; p++)
-		if (*p == '/')
-			return cmd;
-
-	os64_dirent_t e;
-	if (os64_stat(cmd, &e) == 0 && !(e.flags & OS64_DE_DIR))
-		return cmd;
-
-	const char *path = os64_getenv("PATH");
-	if (path == NULL)
-		return cmd;
-
-	while (*path != '\0')
-	{
-		int n = 0;
-		while (*path != '\0' && *path != ':' && n < cap - 1)
-			buf[n++] = *path++;
-		if (*path == ':')
-			path++;                        // step over the separator
-		if (n == 0)
-			continue;                      // empty PATH element: skip
-		if (n < cap - 1 && buf[n - 1] != '/')
-			buf[n++] = '/';
-		for (const char *c = cmd; *c != '\0' && n < cap - 1; c++)
-			buf[n++] = *c;
-		buf[n] = '\0';
-
-		if (os64_stat(buf, &e) == 0 && !(e.flags & OS64_DE_DIR))
-			return buf;
-	}
-	return cmd;
-}
+static bool s_interactive;        // set by main before the prompt loop: the keyboard is ours
 
 // Build and run a pipeline: spawn every stage, wiring stage i's stdout to
 // stage i+1's stdin through a pipe. The last stage keeps the console —
@@ -2301,7 +2272,7 @@ static int run_pipeline(char *stages[], int nstages, int background)
 		// name as typed (a program is told what it was called, not where it
 		// was found; that's how busybox-style tricks stay possible someday).
 		char pathbuf[256];
-		const char *prog = resolve_command(cargv[0], pathbuf, sizeof(pathbuf));
+		const char *prog = os64_resolve_command(cargv[0], pathbuf, sizeof(pathbuf));
 
 		// The BACKGROUND flag rides all the way to task_create, because the
 		// kernel has to know before the child's first instruction: a background
@@ -2430,7 +2401,9 @@ static int run_pipeline(char *stages[], int nstages, int background)
 	// victim was probably mid-line on the console, and this is the visible
 	// answer to the keystroke (a real terminal echoes ^C at the keypress; we
 	// echo at the funeral, ~10ms later, which reads the same to a human).
-	if (interrupted)
+	// The INTERACTIVE husk's job: a script's husk answers 130 to whoever
+	// ran it, and that shell echoes — two echoes for one keystroke otherwise.
+	if (interrupted && s_interactive)
 		os64_write(1, "^C\n", 3);
 
 	return status;
@@ -2605,8 +2578,10 @@ static int run_dir_builtin(char *cargv[], int cargc)
 // with its TYPED quotes removed, exactly as parse() would strip them, but
 // WITHOUT globbing (`X=*` sets a star, as it has in every Bourne shell) and
 // as ONE word: a value with unquoted blanks is refused, and so is the
-// `NAME=value command` form — a per-command environment is a feature nobody
-// here has asked for, and refusing it beats silently running the command.
+// `NAME=value command` form — a per-command environment is env(1)'s job
+// (`env NAME=value command`: a program that changes its own copy and runs
+// the command), and refusing the spelling here beats silently running the
+// command with the variable set in the SHELL.
 static int run_assignment(const char *stmt, const char *eq, int *last_status)
 {
 	char name[64];
@@ -2642,7 +2617,7 @@ static int run_assignment(const char *stmt, const char *eq, int *last_status)
 			if (*q == '\0')
 				break;                    // trailing blanks are nothing
 			err_puts("husk: an assignment takes one word - quote a value with spaces "
-			         "(there is no `NAME=value command` form)\n");
+			         "(for one command only: env NAME=value command)\n");
 			*last_status = 2;
 			return 0;
 		}
@@ -2664,7 +2639,10 @@ static int run_assignment(const char *stmt, const char *eq, int *last_status)
 		*last_status = 1;
 		return 0;
 	}
-	*last_status = 0;
+	// `x=$(cmd)` answers with cmd's status (run_substitution says why); a
+	// plain `x=value` has nothing to report but that it worked.
+	expansion_ctx_t *ctx = &s_expctx[s_expdepth];
+	*last_status = ctx->substRan ? ctx->substStatus : 0;
 	return 0;
 }
 
@@ -2746,12 +2724,19 @@ static int run_expanded(char *expanded, int *last_status)
 		{
 			// Bare `export`: list. The block is mapped right here in
 			// our address space — walking it costs no syscalls.
+			// One line per variable exactly as env(1) prints it — the value
+			// by POINTER (os64_env_next hands back a bounded copy, and a
+			// $(...) capture can be longer than the bound), with its control
+			// bytes spelled as escapes (a captured `ls` carries newlines,
+			// and a listing is only a listing while one line is one
+			// variable).
 			os64_envent_t e = { .index = 0 };
 			while (os64_env_next(&e) == 0)
 			{
+				const char *v = os64_getenv(e.key);
 				os64_puts(e.key);
 				os64_puts("=");
-				os64_puts(e.value);
+				os64_write_escaped(OS64_STDOUT, v != NULL ? v : "");
 				os64_puts("\n");
 			}
 		}
@@ -3042,7 +3027,6 @@ typedef struct {
 
 static block_t s_block;
 static bool    s_block_abort;       // the evaluator is unwinding: error, exit, or Ctrl+C
-static bool    s_interactive;       // set by main before the prompt loop
 
 static void block_reset(void)
 {
@@ -3857,6 +3841,13 @@ static int run_script(const char *path, char **params, int nparams)
 		if (*s == '\0' || *s == '#')
 			continue;                   // blank, comment — and the #! line itself
 		exiting = feed_line(line, lineNo, &last_status);   // `exit` ends the script
+		// Ctrl+C ends the SCRIPT, not only the line it landed on. The kernel
+		// aims it at the program running (the console follows this husk's
+		// wait down to its child), which dies 130; running the next line as
+		// though nothing happened would make a ten-line script cost ten
+		// Ctrl+Cs. 130 goes upward too, so a script that ran this one stops.
+		if (last_status == 130)
+			break;
 	}
 	os64_close(h);
 	if (!exiting && block_unterminated("script", path, &last_status))
