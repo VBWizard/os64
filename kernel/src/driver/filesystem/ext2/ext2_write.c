@@ -419,10 +419,12 @@ static bool ext2_batch_begin(ext2_batch_t *b, vfs_filesystem_t *fs, ext2_fs_t *e
 	return true;
 }
 
-// The data run: one device write for every contiguous block of it.
+// The data run: one device write for every contiguous block of it. Not
+// after a lost write: the blocks' bits are about to be given back, and
+// content in blocks the disk calls free is a write for nothing.
 static void ext2_batch_flush_run(ext2_batch_t *b)
 {
-	if (b->run_count == 0)
+	if (b->run_count == 0 || b->failed)
 		return;
 	ext2_fs_t *e = b->e;
 	vfs_filesystem_t *fs = b->fs;
@@ -447,8 +449,6 @@ static void ext2_batch_flush_map(ext2_batch_t *b)
 {
 	// A batch that has lost a write flushes nothing more: its callers are
 	// on their way out, and ext2_batch_end gives back what it still holds.
-	if (b->failed)
-		return;
 	ext2_batch_flush_run(b);
 	if (b->failed)
 		return;
@@ -557,9 +557,14 @@ static int ext2_batch_end(ext2_batch_t *b)
 
 // Point the batch at group `g`'s bitmap: a switch flushes the old group's
 // map first (its counts describe bits the disk must see before another
-// group's do). Returns the buffer, or NULL on I/O failure.
+// group's do). Returns the buffer, or NULL on I/O failure — and NULL for
+// every ask after a lost write: a copy the disk will never see is not a
+// bitmap to allocate from or release into, and the caller's next step is
+// out anyway.
 static uint8_t *ext2_batch_bitmap(ext2_batch_t *b, uint32_t g)
 {
+	if (b->failed)
+		return NULL;
 	if (b->bm_loaded && b->bm_group == g)
 		return b->bm;
 	ext2_batch_flush_map(b);
@@ -1746,7 +1751,12 @@ static int ext2_truncate_locked(vfs_filesystem_t *fs, ext2_fs_t *e,
 	node->i_mtime = (uint32_t)kSystemCurrentTime;
 	if (ext2_write_inode_disk(fs, e, ino, node) != 0)
 		return -1;
-	ext2_free_inode_blocks(fs, e, &old);
+	// The verdict is not consulted, on purpose: the map was severed on
+	// disk first, so nothing durable names what a failed release leaves
+	// behind — published or not, it is a leak for fsck, never the reusable
+	// window (which needs a durable record still pointing at free blocks,
+	// and here the only record is `old`, in memory).
+	(void)ext2_free_inode_blocks(fs, e, &old);
 	return 0;
 }
 
