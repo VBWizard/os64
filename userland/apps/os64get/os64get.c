@@ -103,7 +103,11 @@
 #define GET_UNCHANGED      12
 
 #define GET_PORT      6464
-#define GET_CHUNK     4096
+// 64KB per read AND per write: one read() can empty the kernel's whole TCP
+// receive buffer (64KB, tcp.h), and one write() hands ext2 sixteen blocks
+// it can put on the disk as a single run. At 4KB the file was written a
+// block per syscall, and the transfer waited on the disk, not the wire.
+#define GET_CHUNK     65536
 #define GET_PATH_MAX  256
 
 // -a holds the server's whole catalogue in memory before fetching any of it,

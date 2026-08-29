@@ -39,6 +39,14 @@
 // (the looks-empty-until-sync behavior that forced the sync syscall into
 // existence). DIVERGENCES.md records it.
 //
+// WITHIN one op the disk traffic is BATCHED (ext2_batch_t, below the
+// allocator): a write() call's data blocks go to the device in contiguous
+// runs, its bitmap/descriptor/superblock updates land once per group it
+// touched, and the indirect leaf collecting its block pointers is written
+// once — instead of four commands per 4KB block, which is what put a
+// write-through filesystem at 1.7 MB/s on an NVMe drive. The ordering
+// doctrine above is kept at every flush point; only the repetition went.
+//
 // Locking: every op in this file runs whole-body under e->write_lock (the
 // doctrine atop ext2.c). Under that lock the CACHED sb/GDT are the source of
 // truth and the disk is written back FROM them.
@@ -295,15 +303,157 @@ static int ext2_reconcile_free_inode_counts(vfs_filesystem_t *fs, ext2_fs_t *e,
 // s_first_data_block offset is the classic 1KB-block-size quirk: block 0 is
 // the boot record, so data numbering starts at 1).
 
+// ── The per-call batch ──────────────────────────────────────────────────────
+// What one write() call holds back from the disk until a flush point: the
+// group bitmap it is allocating from, the indirect leaf collecting its new
+// block pointers, and the run of data blocks not yet written. Without it
+// every data block cost four commands (data, bitmap, group descriptor,
+// superblock) and a queue-depth-one driver paid each one serially — 1.7
+// MB/s on an NVMe drive. With it a 1MB write is a handful of commands.
+//
+// THE FLUSH ORDER IS THE DOCTRINE, restated for the batch: data run first
+// (content), then bitmap → descriptor → superblock (the map that marks it
+// used), then the leaf (the reference). The inode, the last reference, is
+// the caller's write after ext2_batch_end. A chain block (zero_fill) never
+// waits: its content is zeroed, its bit is marked, and the map is flushed
+// before the parent entry that points at it is written — allocate-then-
+// reference at the indirection layer, exactly as before the batch existed.
+// A crash between any two flushes therefore still leaves at worst a leak.
+//
+// A caller that passes NULL gets one-command-per-step behavior — the right
+// shape for allocating a single block, where there is nothing to batch.
+typedef struct {
+	vfs_filesystem_t *fs;
+	ext2_fs_t        *e;
+	uint8_t  *bm;            // the loaded group bitmap (mount scratch), or NULL
+	uint32_t  bm_group;
+	bool      bm_dirty;      // bits set that the disk has not seen
+	uint32_t  bm_next;       // scan hint: the bit after the last one handed out
+	uint32_t *leaf;          // the loaded indirect leaf (mount scratch), or NULL
+	uint32_t  leaf_block;
+	bool      leaf_dirty;
+	const uint8_t *run_src;  // pending data run: source bytes...
+	uint32_t  run_block;     // ...their first disk block...
+	uint32_t  run_count;     // ...and how many blocks (0 = no run)
+	bool      failed;        // a flush lost a write; sticky, reported by _end
+} ext2_batch_t;
+
+static void ext2_batch_begin(ext2_batch_t *b, vfs_filesystem_t *fs, ext2_fs_t *e)
+{
+	memset(b, 0, sizeof(*b));
+	b->fs = fs;
+	b->e  = e;
+}
+
+// The data run: one device write for every contiguous block of it.
+static void ext2_batch_flush_run(ext2_batch_t *b)
+{
+	if (b->run_count == 0)
+		return;
+	ext2_fs_t *e = b->e;
+	vfs_filesystem_t *fs = b->fs;
+	uint64_t sector = fs->block_device_info->block_device->partition_table
+	                      ->parts[fs->partNumber]->partStartSector
+	                  + (uint64_t)b->run_block * e->sectors_per_block;
+	if (fs->bops->write(fs->block_device_info, sector, b->run_src,
+	                    (uint64_t)b->run_count * e->sectors_per_block) != 0)
+		b->failed = true;
+	b->run_count = 0;
+}
+
+// The map: bitmap, then the counts that describe it.
+static void ext2_batch_flush_map(ext2_batch_t *b)
+{
+	if (!b->bm_dirty)
+		return;
+	ext2_fs_t *e = b->e;
+	if (ext2_write_fs_block(b->fs, e, e->groups[b->bm_group].bg_block_bitmap, b->bm) != 0 ||
+	    ext2_gd_writeback(b->fs, e, b->bm_group) != 0 ||
+	    ext2_sb_writeback(b->fs, e) != 0)
+		b->failed = true;
+	b->bm_dirty = false;
+}
+
+// The reference: the leaf's new pointers, after the map that licenses them.
+static void ext2_batch_flush_leaf(ext2_batch_t *b)
+{
+	if (!b->leaf_dirty)
+		return;
+	ext2_batch_flush_map(b);
+	if (ext2_write_fs_block(b->fs, b->e, b->leaf_block, b->leaf) != 0)
+		b->failed = true;
+	b->leaf_dirty = false;
+}
+
+// Everything, in doctrine order, and the scratch given back. Returns 0 or
+// -1 for any write the batch lost — the caller's io_error.
+static int ext2_batch_end(ext2_batch_t *b)
+{
+	ext2_batch_flush_run(b);
+	ext2_batch_flush_map(b);
+	ext2_batch_flush_leaf(b);
+	// LIFO pool: the leaf was taken after the bitmap, so it goes back first.
+	if (b->leaf != NULL) { wr_scratch_put(b->e, (uint8_t *)b->leaf); b->leaf = NULL; }
+	if (b->bm != NULL)   { wr_scratch_put(b->e, b->bm);              b->bm = NULL; }
+	return b->failed ? -1 : 0;
+}
+
+// Point the batch at group `g`'s bitmap: a switch flushes the old group's
+// map first (its counts describe bits the disk must see before another
+// group's do). Returns the buffer, or NULL on I/O failure.
+static uint8_t *ext2_batch_bitmap(ext2_batch_t *b, uint32_t g)
+{
+	if (b->bm != NULL && b->bm_group == g)
+		return b->bm;
+	ext2_batch_flush_map(b);
+	if (b->bm == NULL)
+	{
+		b->bm = wr_scratch_get(b->e);
+		if (b->bm == NULL)
+			return NULL;
+	}
+	if (ext2_read_fs_block(b->fs, b->e, b->e->groups[g].bg_block_bitmap, b->bm) != 0)
+	{
+		wr_scratch_put(b->e, b->bm);
+		b->bm = NULL;
+		return NULL;
+	}
+	b->bm_group = g;
+	b->bm_next  = 0;
+	return b->bm;
+}
+
+// First clear bit at or after `from`, else before it; ~0u when none.
+static uint32_t ext2_bitmap_find_free(const uint8_t *bm, uint32_t span, uint32_t from)
+{
+	if (from >= span)
+		from = 0;
+	for (uint32_t pass = 0; pass < 2; pass++)
+	{
+		uint32_t lo = pass == 0 ? from : 0;
+		uint32_t hi = pass == 0 ? span : from;
+		for (uint32_t bit = lo; bit < hi; bit++)
+		{
+			if (bm[bit / 8] == 0xFF) { bit |= 7; continue; }   // skip the full byte
+			if (!(bm[bit / 8] & (uint8_t)(1u << (bit % 8))))
+				return bit;
+		}
+	}
+	return (uint32_t)~0u;
+}
+
 // Scan one group's block bitmap for a free bit. Returns the absolute block
-// number (0 = group full / I/O error) and leaves the bitmap updated on disk,
-// counts updated in cache AND on disk. If zero_fill, the block's CONTENT is
-// zeroed on disk BEFORE the bitmap marks it used (allocate-then-reference:
-// an indirect or directory block must never be reachable in a garbage
-// state; a plain data block skips this because its caller writes the real
-// content before any reference exists).
+// number (0 = group full / I/O error) with the bitmap and counts updated —
+// on disk at once, or held in `batch` until its next flush point. If
+// zero_fill, the block's CONTENT is zeroed on disk BEFORE the bitmap marks
+// it used (allocate-then-reference: an indirect or directory block must
+// never be reachable in a garbage state; a plain data block skips this
+// because its caller writes the real content before any reference exists),
+// and a batched zero_fill allocation flushes the map before returning, so
+// the parent entry the caller writes next is ordered after the bit.
 static uint32_t ext2_alloc_block_in_group(vfs_filesystem_t *fs, ext2_fs_t *e,
-                                          uint32_t g, bool zero_fill)
+                                          uint32_t g, bool zero_fill,
+                                          ext2_batch_t *batch)
 {
 	if (e->groups[g].bg_free_blocks_count == 0)
 		return 0;
@@ -315,37 +465,35 @@ static uint32_t ext2_alloc_block_in_group(vfs_filesystem_t *fs, ext2_fs_t *e,
 	if (span > bpg)
 		span = bpg;
 
-	uint8_t *bm = wr_scratch_get(e);
-	if (bm == NULL)
-		return 0;
-	if (ext2_read_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) != 0)
+	uint8_t *bm;
+	if (batch != NULL)
 	{
-		wr_scratch_put(e, bm);
-		return 0;
+		bm = ext2_batch_bitmap(batch, g);
+		if (bm == NULL)
+			return 0;
 	}
-
-	uint32_t bit = (uint32_t)~0u;
-	for (uint32_t byte = 0; byte * 8 < span && bit == (uint32_t)~0u; byte++)
+	else
 	{
-		if (bm[byte] == 0xFF)
-			continue;
-		for (uint32_t b = 0; b < 8; b++)
+		bm = wr_scratch_get(e);
+		if (bm == NULL)
+			return 0;
+		if (ext2_read_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) != 0)
 		{
-			uint32_t candidate = byte * 8 + b;
-			if (candidate >= span)
-				break;
-			if (!(bm[byte] & (1u << b)))
-			{
-				bit = candidate;
-				break;
-			}
+			wr_scratch_put(e, bm);
+			return 0;
 		}
 	}
+
+	// From the hint when batched — consecutive allocations land on
+	// consecutive blocks, which is what makes the data runs long — and from
+	// the start otherwise, the shape every one-block caller had.
+	uint32_t bit = ext2_bitmap_find_free(bm, span, batch != NULL ? batch->bm_next : 0);
 	if (bit == (uint32_t)~0u)
 	{
 		// bg_free_blocks_count said yes but the bitmap says no — believe the
 		// bitmap (it's the on-disk truth) and say so; fsck would flag this.
-		wr_scratch_put(e, bm);
+		if (batch == NULL)
+			wr_scratch_put(e, bm);
 		printd(DEBUG_VFS, "ext2: group %u free count/bitmap disagree — treating as full\n", g);
 		return 0;
 	}
@@ -357,29 +505,45 @@ static uint32_t ext2_alloc_block_in_group(vfs_filesystem_t *fs, ext2_fs_t *e,
 		uint8_t *z = wr_scratch_get(e);
 		if (z == NULL)
 		{
-			wr_scratch_put(e, bm);
+			if (batch == NULL)
+				wr_scratch_put(e, bm);
 			return 0;
 		}
 		// Scratch arrives DIRTY (pool reuse) — make it the zero block by hand.
 		memset(z, 0, e->block_size);
 		if (ext2_write_fs_block(fs, e, block, z) != 0)
 		{
-			wr_scratch_put(e, z); wr_scratch_put(e, bm);
+			wr_scratch_put(e, z);
+			if (batch == NULL)
+				wr_scratch_put(e, bm);
 			return 0;
 		}
 		wr_scratch_put(e, z);
 	}
 
 	bm[bit / 8] |= (uint8_t)(1u << (bit % 8));
+	e->groups[g].bg_free_blocks_count--;
+	e->sb.s_free_blocks_count--;
+
+	if (batch != NULL)
+	{
+		batch->bm_dirty = true;
+		batch->bm_next  = bit + 1;
+		if (zero_fill)
+		{
+			ext2_batch_flush_map(batch);
+			if (batch->failed)
+				return 0;
+		}
+		return block;
+	}
+
 	if (ext2_write_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) != 0)
 	{
 		wr_scratch_put(e, bm);
 		return 0;
 	}
 	wr_scratch_put(e, bm);
-
-	e->groups[g].bg_free_blocks_count--;
-	e->sb.s_free_blocks_count--;
 	ext2_gd_writeback(fs, e, g);
 	ext2_sb_writeback(fs, e);
 	return block;
@@ -387,12 +551,13 @@ static uint32_t ext2_alloc_block_in_group(vfs_filesystem_t *fs, ext2_fs_t *e,
 
 // Allocate one block, goal group first, then the rest in order.
 uint32_t ext2_alloc_block(vfs_filesystem_t *fs, ext2_fs_t *e,
-                          uint32_t goal_group, bool zero_fill)
+                          uint32_t goal_group, bool zero_fill,
+                          ext2_batch_t *batch)
 {
 	for (uint32_t i = 0; i < e->groups_count; i++)
 	{
 		uint32_t g = (goal_group + i) % e->groups_count;
-		uint32_t block = ext2_alloc_block_in_group(fs, e, g, zero_fill);
+		uint32_t block = ext2_alloc_block_in_group(fs, e, g, zero_fill, batch);
 		if (block != 0)
 			return block;
 	}
@@ -603,13 +768,56 @@ out:
 // zero-fill; its caller (ext2_write) writes real content next, and if the
 // content lands as a partial block the fresh flag tells the caller to zero
 // the remainder in the same write.
+//
+// With a batch, a DATA leaf's entry is set in the batch's copy of the
+// indirect block and written at the batch's next flush point, after the
+// bitmap that licenses it; a CHAIN child's entry is written at once, as
+// its zero-filled content and its (batch-flushed) bit already are.
 static uint32_t ext2_ind_get_or_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
                                       uint32_t ind_block, uint32_t idx,
                                       uint32_t goal_group, bool child_is_indirect,
-                                      ext2_inode_t *ino, bool *fresh)
+                                      ext2_inode_t *ino, bool *fresh,
+                                      ext2_batch_t *batch)
 {
 	if (ind_block == 0 || idx >= e->ptrs_per_block)
 		return 0;
+
+	if (batch != NULL && !child_is_indirect)
+	{
+		if (batch->leaf == NULL || batch->leaf_block != ind_block)
+		{
+			// Another leaf: publish the old one (map first, inside), then
+			// load this one — the disk is current once the old is flushed.
+			ext2_batch_flush_leaf(batch);
+			if (batch->leaf == NULL)
+			{
+				batch->leaf = (uint32_t *)wr_scratch_get(e);
+				if (batch->leaf == NULL)
+					return 0;
+			}
+			if (ext2_read_fs_block(fs, e, ind_block, batch->leaf) != 0)
+			{
+				wr_scratch_put(e, (uint8_t *)batch->leaf);
+				batch->leaf = NULL;
+				return 0;
+			}
+			batch->leaf_block = ind_block;
+		}
+		uint32_t child = batch->leaf[idx];
+		if (child == 0)
+		{
+			child = ext2_alloc_block(fs, e, goal_group, false, batch);
+			if (child != 0)
+			{
+				batch->leaf[idx] = child;
+				batch->leaf_dirty = true;
+				ino->i_blocks += e->sectors_per_block;
+				if (fresh != NULL)
+					*fresh = true;
+			}
+		}
+		return child;
+	}
 
 	uint32_t *buf = (uint32_t *)wr_scratch_get(e);
 	if (buf == NULL)
@@ -623,7 +831,7 @@ static uint32_t ext2_ind_get_or_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 	uint32_t child = buf[idx];
 	if (child == 0)
 	{
-		child = ext2_alloc_block(fs, e, goal_group, child_is_indirect);
+		child = ext2_alloc_block(fs, e, goal_group, child_is_indirect, batch);
 		if (child != 0)
 		{
 			uint32_t entry = child;
@@ -656,10 +864,12 @@ static uint32_t ext2_ind_get_or_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 // writing it back — which is what keeps i_block[] and i_size in one atomic
 // inode write. `*fresh` reports a data block that has no content yet (the
 // partial-write-must-zero-the-rest signal). Returns 0 = allocation failed
-// (disk full) or I/O error.
+// (disk full) or I/O error. `batch` (or NULL) rides down to the allocator
+// and the leaf writes; the chain roots in the inode need nothing from it.
 uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
                          ext2_inode_t *ino, uint32_t fblock,
-                         uint32_t goal_group, bool *fresh)
+                         uint32_t goal_group, bool *fresh,
+                         ext2_batch_t *batch)
 {
 	uint32_t ppb = e->ptrs_per_block;
 	if (fresh != NULL)
@@ -671,7 +881,7 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 	{
 		if (ino->i_block[fblock] == 0)
 		{
-			uint32_t b = ext2_alloc_block(fs, e, goal_group, false);
+			uint32_t b = ext2_alloc_block(fs, e, goal_group, false, batch);
 			if (b == 0)
 				return 0;
 			ino->i_block[fblock] = b;
@@ -688,14 +898,14 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 	{
 		if (ino->i_block[EXT2_IND_BLOCK] == 0)
 		{
-			uint32_t ind = ext2_alloc_block(fs, e, goal_group, true);
+			uint32_t ind = ext2_alloc_block(fs, e, goal_group, true, batch);
 			if (ind == 0)
 				return 0;
 			ino->i_block[EXT2_IND_BLOCK] = ind;
 			ino->i_blocks += e->sectors_per_block;
 		}
 		return ext2_ind_get_or_alloc(fs, e, ino->i_block[EXT2_IND_BLOCK],
-		                             fblock, goal_group, false, ino, fresh);
+		                             fblock, goal_group, false, ino, fresh, batch);
 	}
 	fblock -= ppb;
 
@@ -704,40 +914,40 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 	{
 		if (ino->i_block[EXT2_DIND_BLOCK] == 0)
 		{
-			uint32_t dind = ext2_alloc_block(fs, e, goal_group, true);
+			uint32_t dind = ext2_alloc_block(fs, e, goal_group, true, batch);
 			if (dind == 0)
 				return 0;
 			ino->i_block[EXT2_DIND_BLOCK] = dind;
 			ino->i_blocks += e->sectors_per_block;
 		}
 		uint32_t l1 = ext2_ind_get_or_alloc(fs, e, ino->i_block[EXT2_DIND_BLOCK],
-		                                    fblock / ppb, goal_group, true, ino, NULL);
+		                                    fblock / ppb, goal_group, true, ino, NULL, batch);
 		if (l1 == 0)
 			return 0;
 		return ext2_ind_get_or_alloc(fs, e, l1, fblock % ppb,
-		                             goal_group, false, ino, fresh);
+		                             goal_group, false, ino, fresh, batch);
 	}
 	fblock -= ppb * ppb;
 
 	// Triple indirect — same ten lines that bought the read side ~16GB.
 	if (ino->i_block[EXT2_TIND_BLOCK] == 0)
 	{
-		uint32_t tind = ext2_alloc_block(fs, e, goal_group, true);
+		uint32_t tind = ext2_alloc_block(fs, e, goal_group, true, batch);
 		if (tind == 0)
 			return 0;
 		ino->i_block[EXT2_TIND_BLOCK] = tind;
 		ino->i_blocks += e->sectors_per_block;
 	}
 	uint32_t l1 = ext2_ind_get_or_alloc(fs, e, ino->i_block[EXT2_TIND_BLOCK],
-	                                    fblock / (ppb * ppb), goal_group, true, ino, NULL);
+	                                    fblock / (ppb * ppb), goal_group, true, ino, NULL, batch);
 	if (l1 == 0)
 		return 0;
 	uint32_t l2 = ext2_ind_get_or_alloc(fs, e, l1, (fblock / ppb) % ppb,
-	                                    goal_group, true, ino, NULL);
+	                                    goal_group, true, ino, NULL, batch);
 	if (l2 == 0)
 		return 0;
 	return ext2_ind_get_or_alloc(fs, e, l2, fblock % ppb,
-	                             goal_group, false, ino, fresh);
+	                             goal_group, false, ino, fresh, batch);
 }
 
 // ── Truncation ──────────────────────────────────────────────────────────────
@@ -1003,7 +1213,7 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 	// covers the whole block (the empty-slack invariant, degenerate case).
 	uint32_t goal_group = (dir_ino - 1) / e->sb.s_inodes_per_group;
 	bool fresh = false;
-	uint32_t nb = ext2_bmap_alloc(fs, e, dir, dir_blocks, goal_group, &fresh);
+	uint32_t nb = ext2_bmap_alloc(fs, e, dir, dir_blocks, goal_group, &fresh, NULL);
 	if (nb == 0)
 	{
 		wr_scratch_put(e, buf);
@@ -1155,6 +1365,14 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		return -1;
 	}
 
+	// One batch for the call (the doctrine of its flush points is on the
+	// type). Whole blocks join the pending data run while they stay
+	// contiguous on disk and in the caller's buffer; anything else — a
+	// partial block, a run broken by a hole's odd placement — flushes the
+	// run and goes its own way.
+	ext2_batch_t batch;
+	ext2_batch_begin(&batch, fs, e);
+
 	size_t done = 0;
 	bool io_error = false;
 	while (done < size)
@@ -1167,31 +1385,47 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 		bool fresh = false;
 		uint32_t disk_block = ext2_bmap_alloc(fs, e, &h->inode, fblock,
-		                                      goal_group, &fresh);
+		                                      goal_group, &fresh, &batch);
 		if (disk_block == 0)
 			break;   // disk full (or chain I/O error): report the short count
 
-		int rc;
+		int rc = 0;
+		const uint8_t *src = (const uint8_t *)buffer + done;
 		if (chunk == e->block_size)
 		{
-			// Whole block: no read needed, old content irrelevant.
-			rc = ext2_write_fs_block(fs, e, disk_block, (const uint8_t *)buffer + done);
+			// Whole block: no read needed, old content irrelevant. Extend
+			// the run when this block follows its last one on disk AND
+			// these bytes follow its last ones in memory; otherwise start
+			// a new run here.
+			if (batch.run_count != 0 &&
+			    disk_block == batch.run_block + batch.run_count &&
+			    src == batch.run_src + (size_t)batch.run_count * e->block_size)
+				batch.run_count++;
+			else
+			{
+				ext2_batch_flush_run(&batch);
+				batch.run_src   = src;
+				batch.run_block = disk_block;
+				batch.run_count = 1;
+			}
+			if (batch.failed)
+				rc = -1;
 		}
 		else if (fresh)
 		{
 			// Partial write into a block that has NO content yet: the rest
 			// of the block must be zeros, not whatever the previous owner
 			// left there. (This is both the hole-fill contract — holes read
-			// as zeros — and a don't-leak-freed-data rule.) kmalloc's
-			// zeroing gives us the zero canvas.
+			// as zeros — and a don't-leak-freed-data rule.)
+			ext2_batch_flush_run(&batch);
 			memset(scratch, 0, e->block_size);
-			memcpy(scratch + in_block, (const uint8_t *)buffer + done, chunk);
+			memcpy(scratch + in_block, src, chunk);
 			rc = ext2_write_fs_block(fs, e, disk_block, scratch);
 		}
 		else
 		{
-			rc = ext2_rmw_fs_block(fs, e, disk_block, in_block,
-			                       (const uint8_t *)buffer + done, chunk);
+			ext2_batch_flush_run(&batch);
+			rc = ext2_rmw_fs_block(fs, e, disk_block, in_block, src, chunk);
 		}
 		if (rc != 0)
 		{
@@ -1202,6 +1436,10 @@ static int ext2_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 		done += chunk;
 		h->pos += chunk;
 	}
+	// Everything the batch still holds, in doctrine order — run, map, leaf
+	// — BEFORE the inode below references any of it.
+	if (ext2_batch_end(&batch) != 0)
+		io_error = true;
 	wr_scratch_put(e, scratch);
 
 	// WRITE-THROUGH: commit the inode now — size, mtime, and every block
@@ -2054,7 +2292,7 @@ static int ext2_mkdir(char *path, vfs_filesystem_t *vfs_fs)
 
 	// The directory's one data block: "." (rec_len 12 — exactly
 	// EXT2_DIR_REC_LEN(1)) then ".." reaching to the block end.
-	uint32_t block = ext2_alloc_block(vfs_fs, e, goal_group, false);
+	uint32_t block = ext2_alloc_block(vfs_fs, e, goal_group, false, NULL);
 	if (block == 0)
 	{
 		ext2_free_inode(vfs_fs, e, ino, true);
