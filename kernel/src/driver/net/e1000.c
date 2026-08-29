@@ -254,11 +254,13 @@ typedef struct
 } __attribute__((packed)) e1000_tx_desc_t;
 
 // Ring sizes. RDLEN/TDLEN must be a multiple of 128 bytes, and a descriptor
-// is 16 bytes, so the count must be a multiple of 8. Thirty-two of each is
-// 512 bytes per ring and 64KB of frame buffers per direction — generous for
-// an OS whose entire network load is a test suite and a ping, and trivially
-// growable the day a workload says so.
-#define E1000_RX_DESCS  32
+// is 16 bytes, so the count must be a multiple of 8. The RX ring has to hold
+// everything a peer can send between two drains, and the drain is once per
+// scheduler pass: with a 64KB TCP window (tcp.h) that is up to 45 full
+// frames per pass, so 128 slots (256KB of buffers) leaves headroom for a
+// second connection or a burst of ARP and ping on top. TX stays at 32 —
+// os64's send path is one segment in flight at a time.
+#define E1000_RX_DESCS  128
 #define E1000_TX_DESCS  32
 #define E1000_BUF_SIZE  2048   // must match RCTL_BSIZE_2048 above
 
