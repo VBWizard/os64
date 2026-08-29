@@ -1405,7 +1405,7 @@ static bool teardown_leak_wait_quiet(void)
     int quiet_ms = 0;
 
     for (int i = 0; i < 400 && quiet_ms < 5000; i++) {
-        wait(50);
+        nap(50);
         if (kTaskBurialCount != last) {
             last = kTaskBurialCount;
             quiet_ms = 0;      // someone was buried — restart the settle
@@ -1436,7 +1436,7 @@ static bool teardown_leak_wait_allocation_still(void)
     for (int attempt = 0; attempt < 10; attempt++) {
         uint64_t a = 0, b = 0;
         allocator_memory_snapshot(&a, NULL, NULL);
-        wait(200);
+        nap(200);
         allocator_memory_snapshot(&b, NULL, NULL);
         if (a == b)
             return true;
@@ -1467,8 +1467,11 @@ static bool teardown_leak_one_cycle(void)
     }
     scheduler_submit_new_task(t);
 
+    // nap(), not wait(): same tick cadence, but this waits on a task that has
+    // to be SCHEDULED to make progress, and spinning here holds a core that
+    // the fixture (and the shell beside it) could be using.
     for (int i = 0; i < 500 && !t->exited; i++)
-        wait(10);
+        nap(10);
 
     // Read the struct BEFORE releasing it — after test_release the undertaker
     // may free it at any moment and a recycled struct reads as zeros (the
@@ -1493,8 +1496,11 @@ static bool teardown_leak_one_cycle(void)
     // exact when the machine is fast, patient when it is slow. 15s ceiling is
     // ~7 kworker periods — if burial hasn't happened by then it isn't going to,
     // and that is itself the bug.
+    //
+    // nap(), not wait(): the cadence is the same tick, but this loop runs in
+    // the LATE phase beside a live userland, and wait() spins.
     for (int i = 0; i < 1500 && kTaskBurialCount == burials_before; i++)
-        wait(10);
+        nap(10);
 
     if (kTaskBurialCount == burials_before) {
         printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - no burial completed within 15 seconds "

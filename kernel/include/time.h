@@ -34,6 +34,9 @@ time_t mktime_simple(const struct tm *time);
 struct tm *gmtime(const time_t *timer, struct tm *tmbuf);
 void kwait(uint64_t msToWait);
 void wait(uint64_t msToWait);
+// nap() SLEEPS (parks the thread); wait() SPINS. Prefer nap() anywhere a
+// scheduler exists and no spinlock is held — see its comment in time.c.
+void nap(uint64_t msToSleep);
 void __attribute__((noinline))waitTicks(int TicksToWait);
 
 #endif // TIME_H

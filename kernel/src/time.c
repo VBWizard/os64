@@ -2,10 +2,15 @@
 #include <stdint.h>
 #include "kernel.h"
 #include "serial_logging.h"
+#include "signals.h"
+#include "smp_core.h"
 
 extern int kTimeZone;
 extern volatile uint64_t kTicksSinceStart;
 extern uint64_t kTicksPerSecond;
+// Per-core: has scheduling actually started here? nap() asks before parking,
+// because a core with no scheduler has no thread to wake it back up.
+extern bool mp_schedulerEnabled[MAX_CPUS];
 
 const int _ytab[2][12] = {
   {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
@@ -243,9 +248,45 @@ void __attribute__((noinline))waitTicks(int TicksToWait)
 void wait(uint64_t msToWait)
 {
 	__asm__("sti\n");
-	uint64_t ticksToWait = msToWait/MS_PER_TICK; 
+	uint64_t ticksToWait = msToWait/MS_PER_TICK;
 	//CLR 12/03/2024: Added in case request is to wait less than MS_PER_TICK
 	if (ticksToWait==0)
 		ticksToWait=1;
     waitTicks(ticksToWait);
+}
+
+// SLEEP for a while — as opposed to wait(), which SPINS for a while.
+//
+// waitTicks() burns a core on `pause` until the global tick counter arrives.
+// That is the only thing possible before there is a scheduler (early driver
+// init has no thread to park), and it cost nothing for years because
+// everything using it ran when nothing else wanted the core. It stopped
+// costing nothing the moment a caller ran beside userland: the LATE test
+// phase held a core at 100% for half a minute while a person was using the
+// machine, which is how this came to be written (Chris spotted it on the
+// first boot: "latetests spins @ 100% usage for the entire 32 seconds").
+//
+// nap() parks instead, the way kworker and the pipe backstop already do: the
+// thread leaves the run queue and the scheduler wakes it at the tick asked
+// for. The polling CADENCE is identical — a caller looping on nap(10) rechecks
+// every tick exactly as it did — so this is the same logic without the burn.
+//
+// IT FALLS BACK TO THE SPIN when this core has no scheduler yet, so it is
+// safe anywhere wait() was. It is NOT safe in two places wait() tolerates:
+// holding a spinlock, or in interrupt context. Parking there is a deadlock,
+// not a delay.
+void nap(uint64_t msToSleep)
+{
+	core_local_storage_t *cls = get_core_local_storage();
+	if (cls == NULL || cls->currentThread == NULL ||
+	    !mp_schedulerEnabled[cls->apic_id])
+	{
+		wait(msToSleep);
+		return;
+	}
+
+	uint64_t ticks = msToSleep / MS_PER_TICK;
+	if (ticks == 0)
+		ticks = 1;
+	signal_raise(SIGSLEEP, kTicksSinceStart + ticks, cls->currentThread);
 }
