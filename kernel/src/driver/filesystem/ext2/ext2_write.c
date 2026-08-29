@@ -388,6 +388,7 @@ typedef struct {
 	uint32_t  bm_next;       // allocations: the bit after the last one handed out
 	uint32_t  bm_freed;      // releases: bits cleared, counts not yet credited
 	bool      bm_reconcile;  // releases: a bit was already clear — rebuild the counts
+	uint32_t  map_publishes; // releases: bitmap writes that LANDED with cleared bits in them
 	uint32_t *leaf;          // scratch for the indirect leaf (taken second)
 	uint32_t  leaf_block;    // ...the block in it, 0 = none
 	bool      leaf_dirty;
@@ -433,13 +434,17 @@ static void ext2_batch_flush_run(ext2_batch_t *b)
 	b->run_count = 0;
 }
 
-// The map: bitmap, then the counts that describe it. An allocation took its
-// counts out of the cache as it happened; a release's are credited here,
-// once the bitmap that publishes its blocks has landed — the point of no
-// return ext2_free_block describes, with the same verdict when a ledger
+// The map: bitmap, then the counts that describe it — and the data run
+// before either, so no flush point anywhere publishes a block whose content
+// is still only in memory (a hole filled inside the file's size would
+// otherwise read its previous owner's bytes after a crash). An allocation
+// took its counts out of the cache as it happened; a release's are credited
+// here, once the bitmap that publishes its blocks has landed — the point of
+// no return ext2_free_block describes, with the same verdict when a ledger
 // write fails past it.
 static void ext2_batch_flush_map(ext2_batch_t *b)
 {
+	ext2_batch_flush_run(b);
 	if (!b->bm_dirty && b->bm_freed == 0 && !b->bm_reconcile)
 		return;
 	ext2_fs_t *e = b->e;
@@ -459,6 +464,8 @@ static void ext2_batch_flush_map(ext2_batch_t *b)
 	}
 	else
 	{
+		if (releasing)
+			b->map_publishes++;   // bits this release cleared are now free ON DISK
 		int ledger;
 		if (b->bm_reconcile)
 			ledger = ext2_reconcile_free_block_counts(b->fs, e, g, b->bm);
@@ -892,8 +899,9 @@ static uint32_t ext2_ind_get_or_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 	{
 		if (batch->leaf_block != ind_block)
 		{
-			// Another leaf: publish the old one (map first, inside), then
-			// load this one — the disk is current once the old is flushed.
+			// Another leaf: publish the old one — its data run and map
+			// first, inside — then load this one; nothing of the old leaf
+			// is left in memory once it is flushed.
 			ext2_batch_flush_leaf(batch);
 			batch->leaf_block = 0;
 			if (ext2_read_fs_block(fs, e, ind_block, batch->leaf) != 0)
@@ -1159,6 +1167,15 @@ failed:
 	// named by the map, so they are not "released" for the record either.
 	freed -= ext2_batch_discard_map(&batch);
 	(void)ext2_batch_end(&batch);
+	// But bits an EARLIER flush published are free on disk while the
+	// durable map — the inode's own entries, or a parent whose cleared
+	// pointers never got written — still names them. That is the reusable
+	// window whatever the later failure was, so "nothing on disk changed"
+	// would be a lie the allocator acts on: upgrade it. (Every release
+	// clears its direct blocks first, so the first publication always
+	// includes bits the inode names.)
+	if (rc == EXT2_FREE_FAILED && batch.map_publishes > 0)
+		rc = EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
 	uint64_t released_sectors = (uint64_t)freed * e->sectors_per_block;
 	old->i_blocks = released_sectors < old->i_blocks
 	                    ? old->i_blocks - (uint32_t)released_sectors : 0;
