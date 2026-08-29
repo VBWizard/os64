@@ -629,8 +629,22 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
     char dest[GET_PATH_MAX];
     if (destOverride != NULL)
     {
-        // The command line's word is final.
-        if (!join_path(dest, sizeof(dest), NULL, destOverride))
+        // The command line's word is final — but A DIRECTORY NAMES A PLACE,
+        // NOT A FILE. `os64get HOST prog /tmp` obviously means "put it in
+        // /tmp", and it used to mean "write a file called /tmp": the whole
+        // conf below deals in directories, the usage line called DEST a
+        // directory, and only this branch disagreed. The failure was at least
+        // loud — the publish rename hit the directory and said so — but loud
+        // is not the same as right.
+        //
+        // The rule is cp(1)'s, and has been since 1971: an existing directory
+        // receives the file under its own name; anything else IS the path, so
+        // fetching under a different name still works.
+        os64_dirent_t into;
+        bool intoDir = (os64_stat(destOverride, &into) >= 0) &&
+                       (into.flags & OS64_DE_DIR) != 0;
+        if (!join_path(dest, sizeof(dest), intoDir ? destOverride : NULL,
+                                           intoDir ? name : destOverride))
         {
             os64_hprintf(OS64_STDERR, "os64get: destination path too long\n");
             return GET_USAGE;
@@ -1194,7 +1208,8 @@ int main(int argc, char **argv)
 
     os64_args_init(&args, argc, argv, specs, 5);
     args.about = "Fetch a file over the network, archive it, and install it only if it is intact.";
-    args.details = "DEST defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
+    args.details = "DEST is a directory to install into, or the full path to install as; "
+                   "it defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
                    "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename. "
                    "With -a, asks the server what it has and fetches all of it — the whole-system refresh.";
 
