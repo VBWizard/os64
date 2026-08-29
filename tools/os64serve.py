@@ -321,6 +321,25 @@ def main():
     print(f"os64serve: serving on {args.bind}:{args.port}, first hit wins:")
     for directory, lot in directories:
         print(f"           {directory}" + (f"   [lot {lot}]" if lot else ""))
+
+    # A SUBDIRECTORY OF A SERVED DIRECTORY IS NOT SERVED, and saying so at
+    # startup is the difference between a five-second fix and an evening.
+    # The listing walk skips anything that is not a regular file, silently and
+    # correctly — but "silently" is how /tests came to be missing from a
+    # refresh that reported 88 files and no errors, because the fixtures live
+    # under userland/bin/tests and nobody had said that a nested directory
+    # needs naming in its own right.
+    served = {path for path, _lot in directories}
+    for directory, _lot in directories:
+        try:
+            for entry in sorted(os.listdir(directory)):
+                full = os.path.join(directory, entry)
+                if os.path.isdir(full) and os.path.realpath(full) not in served:
+                    print(f"os64serve: NOTE — {full}")
+                    print( "           is a subdirectory and is NOT served. Name it on the")
+                    print(f'           command line too if you want its files: "{full}=<lot>"')
+        except OSError:
+            pass                      # unreadable is the listing walk's problem, not ours
     print("           Ctrl-C to stop.  (Windows may ask about the firewall - say yes.)")
     try:
         while True:

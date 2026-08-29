@@ -1169,6 +1169,33 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
     return count;
 }
 
+// A conf that routes `@lot`s against a server that labelled NOTHING is the
+// exact shape of a valet started without its `dir=lot` arguments — and the
+// symptom is a refresh that reports success while quietly routing everything
+// by name. It cost an evening on 2026-08-29: 88 files fetched, no errors, and
+// the whole of /tests neither served nor routed.
+//
+// The test is "no file carried a lot", not "this file carried none": a lot is
+// optional per file, so an unlabelled file among labelled ones is ordinary and
+// says nothing. Only a catalogue with no lots AT ALL, read by a conf that
+// expects them, is evidence of a misconfigured server.
+static void warn_if_server_has_no_lots(const conf_t *c, int32_t n)
+{
+    if (c->nlot == 0 || n <= 0)
+        return;
+    for (int32_t i = 0; i < n; i++)
+        if (entries[i].lot[0] != '\0')
+            return;
+
+    os64_hprintf(OS64_STDERR,
+                 "os64get: %s routes %ld lot(s), but the server labelled none of its %ld files.\n"
+                 "  Everything will route by NAME alone — anything that needed its lot lands\n"
+                 "  wherever the `*` rule points. Start os64serve with `<directory>=<lot>`\n"
+                 "  arguments, and check the lot's directory is being served at all (a\n"
+                 "  SUBDIRECTORY of a served directory is not served; it needs its own word).\n",
+                 c->path ? c->path : "the conf", (long)c->nlot, (long)n);
+}
+
 // One file's lot, for the single-file fetch that would otherwise never learn
 // it. `-a` already holds every lot in the catalogue it asked for; a lone
 // `os64get HOST fputest` asks only for the file.
@@ -1177,11 +1204,13 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
 // name-routed, which is exactly what os64get did before lots existed. Failing
 // the fetch because an optional refinement was unavailable would trade a
 // working command for a tidier one.
-static void lookup_lot(const char *host, const char *name, char *out, size_t cap)
+static void lookup_lot(const char *host, const char *name, const conf_t *c,
+                       char *out, size_t cap)
 {
     out[0] = '\0';
     uint64_t ignored = 0;
     int32_t n = fetch_list(host, entries, GET_MAX_LIST, &ignored);
+    warn_if_server_has_no_lots(c, n);
     for (int32_t i = 0; i < n; i++)
         if (os64_streq(entries[i].name, name))
         {
@@ -1288,7 +1317,7 @@ int main(int argc, char **argv)
         // destination, and never when the conf has no `@lot` rule to apply.
         char lot[GET_LOT_MAX] = {0};
         if (count < 3 && conf.nlot > 0)
-            lookup_lot(host, operands[1], lot, sizeof(lot));
+            lookup_lot(host, operands[1], &conf, lot, sizeof(lot));
 
         char dest[GET_PATH_MAX] = {0};
         int rc = fetch_stage(host, operands[1], count >= 3 ? operands[2] : NULL,
@@ -1320,6 +1349,12 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "os64get: the server offers nothing — is it serving the right directories?\n");
         return GET_OK;
     }
+
+    // Before a single byte moves: a whole-system refresh routing everything by
+    // name when the conf expects lots is worth interrupting for, and NOT
+    // behind !quiet — a warning you silenced along with the progress is a
+    // warning you will not see on the run that mattered.
+    warn_if_server_has_no_lots(&conf, n);
 
     if (!quiet)
         os64_printf("os64get: %ld files, %lu bytes, from %s\n",
