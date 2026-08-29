@@ -779,6 +779,15 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
         // each of those would hand ext2 one or two blocks at a time. The
         // disk wants the whole chunk as one run, so reads accumulate until
         // the chunk is full or the stream ends.
+        // Progress every 4KB of ARRIVAL, from inside the fill: on a slow
+        // link a 64KB chunk takes a while to gather, and a meter that only
+        // moved once per chunk would read as a hang. (The first version
+        // updated so rarely that Chris watched a 146KB transfer sit on one
+        // line for fifty seconds and concluded it had frozen — which, at
+        // the speeds the stack then managed, was an entirely reasonable
+        // reading. A progress meter exists to distinguish "slow" from
+        // "dead", and one that updates less often than a human's patience
+        // runs out is doing the opposite of its job.)
         int64_t n = 0;
         while ((uint64_t)n < want)
         {
@@ -786,6 +795,10 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
             if (got_now <= 0)
                 break;
             n += got_now;
+            uint64_t staged = got + (uint64_t)n;
+            if (!quiet && (staged % 4096 < (uint64_t)got_now || staged == expectLen))
+                os64_printf("\r%s: %lu/%lu bytes", name,
+                            (unsigned long)staged, (unsigned long)expectLen);
         }
         if (n <= 0)
         {
@@ -809,17 +822,6 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
         // which is why the streaming interface exists.
         crc = os64_crc32_update(crc, buf, (size_t)n);
         got += (uint64_t)n;
-
-        // Progress every 4KB, not every 64KB. The first version updated so
-        // rarely that Chris watched a 146KB transfer sit on one line for
-        // fifty seconds and concluded it had frozen — which, at the speeds
-        // this stack currently manages, was an entirely reasonable reading.
-        // A progress meter exists to distinguish "slow" from "dead", and one
-        // that updates less often than a human's patience runs out is doing
-        // the opposite of its job.
-        if (!quiet && (got % 4096 < (uint64_t)n || got == expectLen))
-            os64_printf("\r%s: %lu/%lu bytes", name,
-                        (unsigned long)got, (unsigned long)expectLen);
     }
     if (!quiet)
         os64_printf("\n");

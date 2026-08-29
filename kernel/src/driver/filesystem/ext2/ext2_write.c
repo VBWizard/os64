@@ -388,7 +388,7 @@ typedef struct {
 	uint32_t  bm_next;       // allocations: the bit after the last one handed out
 	uint32_t  bm_freed;      // releases: bits cleared, counts not yet credited
 	bool      bm_reconcile;  // releases: a bit was already clear — rebuild the counts
-	uint32_t  map_publishes; // releases: bitmap writes that LANDED with cleared bits in them
+	uint32_t  exposed;       // releases: bits free ON DISK whose durable pointer is not yet cleared
 	uint32_t *leaf;          // scratch for the indirect leaf (taken second)
 	uint32_t  leaf_block;    // ...the block in it, 0 = none
 	bool      leaf_dirty;
@@ -444,7 +444,14 @@ static void ext2_batch_flush_run(ext2_batch_t *b)
 // write fails past it.
 static void ext2_batch_flush_map(ext2_batch_t *b)
 {
+	// A batch that has lost a write flushes nothing more: its callers are
+	// on their way out, and what it still holds is theirs to account for
+	// (ext2_batch_discard_map) before the scratch goes back.
+	if (b->failed)
+		return;
 	ext2_batch_flush_run(b);
+	if (b->failed)
+		return;
 	if (!b->bm_dirty && b->bm_freed == 0 && !b->bm_reconcile)
 		return;
 	ext2_fs_t *e = b->e;
@@ -455,17 +462,21 @@ static void ext2_batch_flush_map(ext2_batch_t *b)
 	{
 		// Nothing published: the disk still calls every block here used —
 		// and every block allocated here still free, so the counts an
-		// allocation took out of the cache go back.
+		// allocation took out of the cache go back. A release's pending
+		// count stays where it is, for the discard that follows to report.
 		b->failed = true;
 		if (releasing && b->free_rc == 0)
 			b->free_rc = EXT2_FREE_FAILED;
 		e->groups[g].bg_free_blocks_count += (uint16_t)b->bm_alloced;
 		e->sb.s_free_blocks_count += b->bm_alloced;
+		b->bm_alloced = 0;
+		b->bm_dirty = false;
+		return;
 	}
 	else
 	{
 		if (releasing)
-			b->map_publishes++;   // bits this release cleared are now free ON DISK
+			b->exposed += b->bm_freed;   // free ON DISK now, still named by a durable pointer
 		int ledger;
 		if (b->bm_reconcile)
 			ledger = ext2_reconcile_free_block_counts(b->fs, e, g, b->bm);
@@ -648,11 +659,13 @@ static uint32_t ext2_alloc_block_in_group(vfs_filesystem_t *fs, ext2_fs_t *e,
 	}
 
 	bm[bit / 8] |= (uint8_t)(1u << (bit % 8));
-	e->groups[g].bg_free_blocks_count--;
-	e->sb.s_free_blocks_count--;
 
 	if (batch != NULL)
 	{
+		// The counts leave the cache now, with the bit; the flush gives
+		// them back if the bitmap never lands (bm_alloced).
+		e->groups[g].bg_free_blocks_count--;
+		e->sb.s_free_blocks_count--;
 		batch->bm_dirty = true;
 		batch->bm_alloced++;
 		batch->bm_next  = bit + 1;
@@ -665,12 +678,16 @@ static uint32_t ext2_alloc_block_in_group(vfs_filesystem_t *fs, ext2_fs_t *e,
 		return block;
 	}
 
+	// Unbatched: the counts follow the bitmap write, so a write that fails
+	// leaves cache and disk agreeing that nothing happened.
 	if (ext2_write_fs_block(fs, e, e->groups[g].bg_block_bitmap, bm) != 0)
 	{
 		wr_scratch_put(e, bm);
 		return 0;
 	}
 	wr_scratch_put(e, bm);
+	e->groups[g].bg_free_blocks_count--;
+	e->sb.s_free_blocks_count--;
 	ext2_gd_writeback(fs, e, g);
 	ext2_sb_writeback(fs, e);
 	return block;
@@ -700,9 +717,11 @@ uint32_t ext2_alloc_block(vfs_filesystem_t *fs, ext2_fs_t *e,
 //
 // With a batch the bit clears in the batch's copy of the group bitmap and
 // the publication — bitmap, then counts — happens at its next flush point,
-// which is where the result vocabulary below is then spoken (free_rc). An
+// which is where the result vocabulary above is then spoken (free_rc). An
 // already-clear bit under a batch asks that flush to rebuild the counts
-// from the bitmap, exactly what the immediate path does here itself.
+// from the bitmap, exactly what the immediate path does here itself. The
+// batched answer says which of the two happened: 1 = cleared by this
+// release, 0 = was already clear, negative = a verdict.
 int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block,
                     ext2_batch_t *batch)
 {
@@ -723,13 +742,13 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block,
 		if (batch->failed)
 			return batch->free_rc;      // the group switch's flush lost something
 		if (!(bbm[bit / 8] & (uint8_t)(1u << (bit % 8))))
-			batch->bm_reconcile = true;
-		else
 		{
-			bbm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
-			batch->bm_freed++;
+			batch->bm_reconcile = true;
+			return 0;                   // already free: a replay revisiting it
 		}
-		return 0;
+		bbm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
+		batch->bm_freed++;
+		return 1;                       // cleared by THIS release
 	}
 
 	uint8_t *bm = wr_scratch_get(e);
@@ -1065,12 +1084,17 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 // pointer levels: 0 = data block, 1..3 = indirect. Recursion is bounded by
 // ext2's own geometry — three levels, ever.
 //
-// Results are the free path's shared vocabulary (declared above the batch,
-// whose flush is where the reusable window opens): 0, EXT2_FREE_FAILED, or
-// one of the EXT2_FREE_RETRY_MAP_NAMES_FREE_* results the caller must
-// persist-then-demote on. A subtree that fails is left exactly as the disk
-// has it — parent unwritten, pending bits unpublished — so the record above
-// still leads replay to everything not yet released.
+// Results: negative is the free path's shared vocabulary (declared above
+// the batch, whose flush is where the reusable window opens) —
+// EXT2_FREE_FAILED, or one of the EXT2_FREE_RETRY_MAP_NAMES_FREE_* results
+// the caller must persist-then-demote on. Non-negative is success, and
+// says whether this block's OWN bit was cleared by this release (1) or was
+// already clear (0): the parent uses that to keep the batch's EXPOSURE
+// count honest — bits free on disk that a durable pointer still names —
+// which is what decides the verdict a later failure owes. A subtree that
+// fails is left exactly as the disk has it — parent unwritten, pending
+// bits unpublished — so the record above still leads replay to
+// everything not yet released.
 static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
                            uint32_t block, uint32_t depth,
                            uint32_t *freed, ext2_batch_t *batch)
@@ -1090,40 +1114,45 @@ static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
 		}
 
 		int rc = 0;
-		uint32_t cleared = 0;
-		for (uint32_t i = 0; i < e->ptrs_per_block && rc == 0; i++)
+		uint32_t cleared = 0;     // pointers this parent will drop
+		uint32_t fresh = 0;       // ...of children whose bits THIS release cleared
+		for (uint32_t i = 0; i < e->ptrs_per_block && rc >= 0; i++)
 		{
 			if (buf[i] == 0)
 				continue;
 			rc = ext2_free_chain(fs, e, buf[i], depth - 1, freed, batch);
-			if (rc == 0)
+			if (rc >= 0)
 			{
 				buf[i] = 0;
 				cleared++;
+				fresh += (uint32_t)rc;
 			}
 		}
-		if (rc == 0)
+		if (rc >= 0)
 		{
 			// The subtree's bits, published — then its pointers, in one
 			// write. A parent write that fails leaves durable pointers
 			// naming published-free blocks: the reusable window, named.
+			// One that lands un-names them: they leave the exposure count.
 			ext2_batch_flush_map(batch);
 			if (batch->failed)
 				rc = batch->free_rc;
 			else if (cleared != 0 && ext2_write_fs_block(fs, e, block, buf) != 0)
 				rc = EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
+			else
+				batch->exposed -= fresh;
 		}
 		wr_scratch_put(e, (uint8_t *)buf);
-		if (rc != 0)
+		if (rc < 0)
 			return rc;
 	}
 	// The block itself, into the batch; its own pointer, one level up, stays
 	// until that level publishes.
 	int free_rc = ext2_free_block(fs, e, block, batch);
-	if (free_rc != 0)
+	if (free_rc < 0)
 		return free_rc;
 	(*freed)++;
-	return 0;
+	return free_rc;
 }
 
 // Free all blocks named by `old` (a pre-truncate copy of the inode). On an
@@ -1142,14 +1171,14 @@ static int ext2_free_inode_blocks(vfs_filesystem_t *fs, ext2_fs_t *e,
 	for (uint32_t i = 0; i < EXT2_NDIR_BLOCKS; i++)
 	{
 		rc = ext2_free_chain(fs, e, old->i_block[i], 0, &freed, &batch);
-		if (rc != 0)
+		if (rc < 0)
 			goto failed;
 	}
 	for (uint32_t depth = 1; depth <= 3; depth++)
 	{
 		uint32_t slot = EXT2_IND_BLOCK + depth - 1;
 		rc = ext2_free_chain(fs, e, old->i_block[slot], depth, &freed, &batch);
-		if (rc != 0)
+		if (rc < 0)
 			goto failed;
 	}
 	// The last group's bits: the roots' own, and any direct blocks'.
@@ -1167,14 +1196,14 @@ failed:
 	// named by the map, so they are not "released" for the record either.
 	freed -= ext2_batch_discard_map(&batch);
 	(void)ext2_batch_end(&batch);
-	// But bits an EARLIER flush published are free on disk while the
-	// durable map — the inode's own entries, or a parent whose cleared
-	// pointers never got written — still names them. That is the reusable
-	// window whatever the later failure was, so "nothing on disk changed"
-	// would be a lie the allocator acts on: upgrade it. (Every release
-	// clears its direct blocks first, so the first publication always
-	// includes bits the inode names.)
-	if (rc == EXT2_FREE_FAILED && batch.map_publishes > 0)
+	// But bits an EARLIER flush published, whose durable pointer — an
+	// entry of the inode's own, or of a parent whose cleared pointers never
+	// got written — is still in place, are free on disk AND named: the
+	// reusable window, whatever the later failure was, and "nothing on
+	// disk changed" would be a lie the allocator acts on. The exposure
+	// count is exactly that set (a parent write that lands un-names its
+	// children), so it, not the mere fact of a publication, upgrades.
+	if (rc == EXT2_FREE_FAILED && batch.exposed > 0)
 		rc = EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
 	uint64_t released_sectors = (uint64_t)freed * e->sectors_per_block;
 	old->i_blocks = released_sectors < old->i_blocks
