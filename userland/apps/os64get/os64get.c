@@ -103,7 +103,12 @@
 #define GET_UNCHANGED      12
 
 #define GET_PORT      6464
-#define GET_CHUNK     4096
+// 64KB per write: the fetch loop fills this whole buffer from the socket
+// before writing it, so every write() hands ext2 sixteen blocks it can put
+// on the disk as a single run — however the wire delivered them. At 4KB
+// the file was written a block per syscall, and the transfer waited on the
+// disk, not the wire.
+#define GET_CHUNK     65536
 #define GET_PATH_MAX  256
 
 // -a holds the server's whole catalogue in memory before fetching any of it,
@@ -769,11 +774,35 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
         if (want > sizeof(buf))
             want = sizeof(buf);
 
-        int64_t n = os64_read((int32_t)conn, buf, (size_t)want);
+        // Fill the buffer before writing it: a socket read answers with what
+        // has ARRIVED, a segment or a scheduler pass's worth, and writing
+        // each of those would hand ext2 one or two blocks at a time. The
+        // disk wants the whole chunk as one run, so reads accumulate until
+        // the chunk is full or the stream ends.
+        // Progress every 4KB of ARRIVAL, from inside the fill: on a slow
+        // link a 64KB chunk takes a while to gather, and a meter that only
+        // moved once per chunk would read as a hang. (The first version
+        // updated so rarely that Chris watched a 146KB transfer sit on one
+        // line for fifty seconds and concluded it had frozen — which, at
+        // the speeds the stack then managed, was an entirely reasonable
+        // reading. A progress meter exists to distinguish "slow" from
+        // "dead", and one that updates less often than a human's patience
+        // runs out is doing the opposite of its job.)
+        int64_t n = 0;
+        while ((uint64_t)n < want)
+        {
+            int64_t got_now = os64_read((int32_t)conn, buf + n, (size_t)(want - (uint64_t)n));
+            if (got_now <= 0)
+                break;
+            n += got_now;
+            uint64_t staged = got + (uint64_t)n;
+            if (!quiet && (staged % 4096 < (uint64_t)got_now || staged == expectLen))
+                os64_printf("\r%s: %lu/%lu bytes", name,
+                            (unsigned long)staged, (unsigned long)expectLen);
+        }
         if (n <= 0)
         {
-            // A short read is normal on a stream and handled by the loop;
-            // zero or negative means the conversation ended early, and the
+            // Zero or negative means the conversation ended early, and the
             // file we have is a fragment. Say how far it got — "it failed"
             // and "it failed at 4MB of 5" are different amounts of help.
             os64_hprintf(OS64_STDERR,
@@ -793,17 +822,6 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
         // which is why the streaming interface exists.
         crc = os64_crc32_update(crc, buf, (size_t)n);
         got += (uint64_t)n;
-
-        // Progress every 4KB, not every 64KB. The first version updated so
-        // rarely that Chris watched a 146KB transfer sit on one line for
-        // fifty seconds and concluded it had frozen — which, at the speeds
-        // this stack currently manages, was an entirely reasonable reading.
-        // A progress meter exists to distinguish "slow" from "dead", and one
-        // that updates less often than a human's patience runs out is doing
-        // the opposite of its job.
-        if (!quiet && (got % 4096 < (uint64_t)n || got == expectLen))
-            os64_printf("\r%s: %lu/%lu bytes", name,
-                        (unsigned long)got, (unsigned long)expectLen);
     }
     if (!quiet)
         os64_printf("\n");

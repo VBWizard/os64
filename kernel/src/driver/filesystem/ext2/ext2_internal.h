@@ -112,9 +112,10 @@ typedef struct {
 	//
 	// These buffers are allocated ONCE at mount and handed out LIFO by
 	// wr_scratch_get/put (ext2_write.c) — exclusively owned by the
-	// write_lock holder, so no lock of their own. Deepest observed nesting
-	// is ~6 (write → bmap_alloc → ind_get_or_alloc → alloc_block → bitmap +
-	// zero-fill, plus the caller's data scratch); 8 leaves headroom, and
+	// write_lock holder, so no lock of their own. Deepest nesting is ~6
+	// (write's data scratch + the batch's bitmap and leaf, then a chain
+	// allocation's parent buffer with its zero-fill scratch or RMW scratch,
+	// and the superblock writeback's); 8 leaves headroom, and
 	// get() falls back to kmalloc (loudly) rather than fail if a future
 	// path nests deeper. NOTE: reused buffers arrive DIRTY — any code that
 	// leaned on kmalloc's zero-on-alloc now memsets explicitly (the two
