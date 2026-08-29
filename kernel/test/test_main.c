@@ -835,7 +835,7 @@ static bool test_elf_loader(void)
 
     uint64_t faults_before = kPageFaultCount;
 
-    task_t *elf_task = test_spawn("/bin/test_elf", 0, NULL, true);
+    task_t *elf_task = test_spawn("/tests/test_elf", 0, NULL, true);
     if (elf_task == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - task_create returned NULL\n");
         return false;
@@ -868,7 +868,7 @@ static bool test_elf_loader(void)
     // where the second fault in the same VMA would panic instead of mapping.
     //
     // THIS is why elf_loader keeps a kernel seat while its ring-3 half moved to
-    // /bin/testrun: kPageFaultCount is a kernel global, and no program can see
+    // /tests/testrun: kPageFaultCount is a kernel global, and no program can see
     // it. The exit-code half is testrun's now; the demand-paging half is this.
     else if (kPageFaultCount < faults_before + 2) {
         printd(DEBUG_TESTS, "\tFAIL: test_elf_loader - expected >=2 page faults, got %lu\n",
@@ -905,14 +905,14 @@ static bool test_dynamic_linking(void)
         return true;
     }
 
-    task_t *task_a = test_spawn("/bin/dyn_consumer", 0, NULL, true);
+    task_t *task_a = test_spawn("/tests/dyn_consumer", 0, NULL, true);
     if (task_a == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task A) returned NULL\n");
         return false;
     }
     scheduler_submit_new_task(task_a);
 
-    task_t *task_b = test_spawn("/bin/dyn_consumer", 0, NULL, true);
+    task_t *task_b = test_spawn("/tests/dyn_consumer", 0, NULL, true);
     if (task_b == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_dynamic_linking - task_create (task B) returned NULL\n");
         test_release(task_a);
@@ -952,7 +952,7 @@ static bool test_dynamic_linking(void)
     // is never released — deliberate: the test holds the registry's objects
     // warm for the rest of the boot, and the expected counts below include
     // them by name.)
-    shared_object_t *exe_so = shared_object_load_or_get("/bin/dyn_consumer");
+    shared_object_t *exe_so = shared_object_load_or_get("/tests/dyn_consumer");
     shared_object_t *so     = shared_object_load_or_get("/lib/libtest.so");
     uint32_t exe_refcount   = (exe_so != NULL) ? exe_so->refcount : 0;
     uint32_t lib_refcount   = (so != NULL) ? so->refcount : 0;
@@ -1220,13 +1220,13 @@ static bool test_shared_object_reload(void)
 
 // ── Argument delivery (2026-08-13) ───────────────────────────────────────────
 //
-// /bin/arg_echo has existed since ring-3 bring-up and checks the whole startup
+// /tests/arg_echo has existed since ring-3 bring-up and checks the whole startup
 // contract end to end — argc in RDI, argv in RSI at TASK_ARGV_VIRT, env in RDX
 // at TASK_ENV_VIRT, the argv strings actually copied into the task's own blob,
 // the NULL terminator, and the ELF loader's partial-page BSS zero-fill — with a
 // distinct 0xE00000xx code per broken invariant so a failure names itself.
 //
-// It was only ever run from /bin/testrun, the RING-3 suite, which lives behind
+// It was only ever run from /tests/testrun, the RING-3 suite, which lives behind
 // its own Limine entry. So on an ordinary boot, argument processing had NO
 // coverage at all: you could break argv and every normal boot would stay green.
 // Chris asked for that gap to be closed (2026-08-13) the same evening the argv
@@ -1245,9 +1245,9 @@ static bool test_task_args(void)
 
     // The exact argv the fixture asserts on — it checks argv[1]/argv[2] by
     // content, so these strings are part of the contract, not decoration.
-    char *args[] = { "/bin/arg_echo", "hello", "world" };
+    char *args[] = { "/tests/arg_echo", "hello", "world" };
 
-    task_t *t = test_spawn("/bin/arg_echo", 3, args, false);
+    task_t *t = test_spawn("/tests/arg_echo", 3, args, false);
     if (t == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_task_args - task_create returned NULL\n");
         return false;
@@ -1290,7 +1290,7 @@ static bool test_task_args(void)
 // window, up to the TASK_ENV_MAX_BYTES (64KB) ceiling. The dangerous moving
 // parts are the mid-run REMAP of the task's own read-only window and the
 // grow-copy chain preserving every pair — so the coverage is a ring-3 fixture
-// (/bin/env_fill) that fills ~11KB (two growth events), reads every pair back
+// (/tests/env_fill) that fills ~11KB (two growth events), reads every pair back
 // through the remapped window, drives the block to the ceiling and demands an
 // honest refusal, then proves the refusal corrupted nothing. Distinct
 // 0xE27Fxxxx codes name the invariant that broke.
@@ -1302,7 +1302,7 @@ static bool test_env_growth(void)
         return true;
     }
 
-    task_t *t = test_spawn("/bin/env_fill", 0, NULL, false);
+    task_t *t = test_spawn("/tests/env_fill", 0, NULL, false);
     if (t == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_env_growth - task_create returned NULL\n");
         return false;
@@ -1361,7 +1361,7 @@ static bool test_env_growth(void)
 // floor proves pages were resident AND came back.
 //
 // The fixture matched the claim the same day (Chris's requirement: "a real
-// program with real multiple text pages, bss, heap pages"): /bin/glutton
+// program with real multiple text pages, bss, heap pages"): /tests/glutton
 // deliberately touches ~4 text pages, a dirtied .data page, 4 .bss pages,
 // and a 4-page mapped heap region it never unmaps — then exits with all of
 // it resident, making burial do a real program's worth of work. The asserted
@@ -1421,7 +1421,7 @@ static bool teardown_leak_wait_quiet(void)
 // point: at exit time nothing has been freed yet, and a snapshot taken then
 // would measure the corpse, not the cleanup.
 //
-// /bin/glutton is the fixture on purpose (since 2026-08-15; exit_by_return
+// /tests/glutton is the fixture on purpose (since 2026-08-15; exit_by_return
 // before that). It is ring 3, so it exercises every allocation burial frees —
 // argv blob, env blob, exit trampoline page — AND it deliberately exits with
 // a real program's resident set still mapped: multiple text pages, a dirtied
@@ -1432,7 +1432,7 @@ static bool teardown_leak_one_cycle(void)
 {
     uint64_t burials_before = kTaskBurialCount;
 
-    task_t *t = test_spawn("/bin/glutton", 0, NULL, false);
+    task_t *t = test_spawn("/tests/glutton", 0, NULL, false);
     if (t == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - task_create returned NULL\n");
         return false;
@@ -4529,7 +4529,7 @@ static bool test_dirent_mtime(void)
 }
 
 // The preemption backstop, end to end (2026-08-13; the 08-09 starvation debt's
-// funeral). Pin a syscall-free ring-3 hog (/bin/hog) to an AP, watch that
+// funeral). Pin a syscall-free ring-3 spinner (/tests/nosyscall) to an AP, watch that
 // core's lease expiries tick up for half a second, then SIGKILL it — a signal
 // that only a scheduler pass can deliver to a thread that never enters the
 // kernel. Pre-backstop, both halves fail on tickless: the core takes zero
@@ -4553,10 +4553,18 @@ static bool test_backstop_preemption(void)
     uint32_t ap = kCPUInfo[1].apicID;
     uint64_t fires_before = kSchedBackstopFires[ap];
 
-    // Ring 3 and PINNED: the exact starvation shape. An unpinned hog would
-    // still prove the lease, but the pin removes any doubt about WHOSE
+    // Ring 3 and PINNED: the exact starvation shape. An unpinned spinner
+    // would still prove the lease, but the pin removes any doubt about WHOSE
     // counter must move.
-    task_t *hog = task_create("/bin/hog", 0, NULL, kKernelTask, false, ap);
+    //
+    // /tests/nosyscall, and the NAME is load-bearing: this test is only
+    // meaningful against a thread that never enters the kernel, because a
+    // thread that syscalls gets its scheduler pass for free and would prove
+    // nothing about the backstop. It read "/bin/hog" until 2026-08-29, by
+    // which time /bin/hog was the OTHER hog — the measuring instrument, which
+    // reads the clock as it spins. Renaming the fixture after the property it
+    // must have is what stops that recurring.
+    task_t *hog = task_create("/tests/nosyscall", 0, NULL, kKernelTask, false, ap);
     if (hog == NULL) {
         printd(DEBUG_TESTS, "\tFAIL: test_backstop_preemption - task_create returned NULL\n");
         return false;

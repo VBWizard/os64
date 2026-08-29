@@ -72,7 +72,7 @@ extern bool kEnableRamdisk;
 extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch block below
 extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
-extern bool kRunTestrun; // launch /bin/testrun, the ring-3 half of the suite
+extern bool kRunTestrun; // launch /tests/testrun, the ring-3 half of the suite
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
@@ -203,7 +203,14 @@ void create_kernel_task()
 	// Where husk (and anything else consulting the environment) looks for
 	// programs — colon-separated, walked by userland PATH search. Every task
 	// inherits this block, so one seed here reaches the whole tree.
-	env_set(parentTask.env, "PATH",     "/bin");
+	//
+	// /tests comes SECOND, and the order is what lets it be on the path at
+	// all: /bin is the programs and tools, /tests is the proof harness, and a
+	// fixture must never be able to shadow a command that shares its name.
+	// Putting it on the path at all is a convenience ruling — `testrun`,
+	// `fputest` and the probes stay typeable without a path, which is what the
+	// split would otherwise have cost.
+	env_set(parentTask.env, "PATH",     "/bin:/tests");
 	env_set(parentTask.env, "HOSTNAME", "yogi.localhost.localdomain");
 	// TZ, if the boot cmdline provided one — the kernel is just the courier
 	// here: the string rides into the first task's environment, inheritance
@@ -820,15 +827,15 @@ void kernel_init()
     // leave a permanent zombie that `ps` would report forever.
     if (kRunTestrun && kRootFilesystem != NULL)
     {
-        printf("Launching /bin/testrun (ring-3 test suite) ...\n");
-        task_t *testrunTask = task_create("/bin/testrun", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        printf("Launching /tests/testrun (ring-3 test suite) ...\n");
+        task_t *testrunTask = task_create("/tests/testrun", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
         if (testrunTask)
         {
             testrunTask->autoReap = true;
             scheduler_submit_new_task(testrunTask);
         }
         else
-            printf("  /bin/testrun launch failed (not on the image?)\n");
+            printf("  /tests/testrun launch failed (not on the image?)\n");
     }
 
     // The GUI is strictly optional (DOS/Windows relationship): without the GUI

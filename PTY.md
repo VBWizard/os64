@@ -187,7 +187,7 @@ and the self-hosting moment.
 - **STREAM mode** — gate: TCP `listen()`; customer: telnetd.
 - ~~**Resize**~~ — **BUILT 2026-08-25**: `pty_resize` (syscall 51) reallocs
   the grid and raises **SIGWINCH** at the seats; gterm's resize arm calls
-  it; `/bin/winchtest` proves it headless. The program inside a pty has no
+  it; `/tests/winchtest` proves it headless. The program inside a pty has no
   window and no queue to read — that is the whole reason 4.3BSD invented
   the signal. **Design and what the build taught: § "Resize — the SIGWINCH
   slice" below.**
@@ -351,7 +351,7 @@ call in the resize arm, verified on glass by dragging a gterm and watching
 1. ~~`pty_resize` + grid realloc + generation bump~~ — `tty_resize_grid`
    (tty.c) + syscall 51 (syscall.c). **BUILT.**
 2. ~~Admit 28, raise it, fixture with its broken-kernel control.~~ **BUILT:
-   `/bin/winchtest`** (in testrun's table, exit 0x0A1D0000). Its control
+   `/tests/winchtest`** (in testrun's table, exit 0x0A1D0000). Its control
    was run before it was trusted: with the raise deleted it exited
    0x0A1D0006, "child never reported the grown size".
 3. ~~gterm's resize arm calls it~~ — **BUILT**, the arm now computes the

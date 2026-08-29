@@ -100,7 +100,7 @@ then, out loud. v1 declines.)
 ## BUILT — 2026-08-15 (Opus, at Chris's direction)
 
 The heap exists: `userland/libos64/heap.c`, `<os64/mem.h>` for its face,
-`tools/test_heap_host.c` for its unit tests, `/bin/malloctest` for its
+`tools/test_heap_host.c` for its unit tests, `/tests/malloctest` for its
 in-OS proof, `/proc/<pid>/heap` for its self-portrait. Every RATIFIED
 decision above was built as written; the OPEN list below was ruled on the
 day and each ruling is recorded there. What the engine actually is:

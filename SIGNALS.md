@@ -282,7 +282,7 @@ handler home unchanged. Two properties earned in the building: a fault INSIDE
 a SIGSEGV handler finds the signal masked (§7) and dies rather than looping
 forever, and a handler that simply RETURNS resumes the faulting instruction
 and faults again — so a real SIGSEGV handler exits or longjmps, which is what
-`/bin/sigtest`'s finale does (fault on a NULL store, catch, brag, exit). The
+`/tests/sigtest`'s finale does (fault on a NULL store, catch, brag, exit). The
 default action is untouched for a task with no handler installed: `segv_test`
 still dies with the full forensic dump and exit 139, and the OS survives.
 
@@ -441,7 +441,7 @@ the next.
    refused by name, out-of-range refused, a higher-half handler address
    refused. The ABI's numbers are static-asserted against the kernel enum
    (klog_format.h's discipline), so the two rings cannot drift.
-   `/bin/sigtest` is the fixture, in the ring-3 suite.
+   `/tests/sigtest` is the fixture, in the ring-3 suite.
 
    **HISTORICAL — this was the state for a few hours on 2026-08-23, and it
    is kept because the bet it describes was won.** Registration shipped
@@ -512,7 +512,7 @@ the next.
 4. **Teach the nine checkpoints** to look for a handler before defaulting to
    death.
 5. ~~**The fixture**: raise `SIGSEGV`, catch it, print, die~~ **DONE
-   2026-08-24** — Chris's os32 test app reborn as `/bin/sigtest`'s finale, and
+   2026-08-24** — Chris's os32 test app reborn as `/tests/sigtest`'s finale, and
    the SIGSEGV delivery it needed (§9, "BUILT") built with it. Raised by Codex
    #29 round 3: the API advertised SIGSEGV as catchable while every fault
    killed unconditionally — the same lie the SIGPIPE fix closed, and closed

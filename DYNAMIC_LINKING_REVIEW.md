@@ -455,7 +455,7 @@ Same test, same assertions, same expected values as the first revision —
 and that's worth sitting with for a second: **the test didn't need to
 change at all** when the entire loading strategy underneath it was rebuilt
 from eager to lazy. `test_dynamic_linking()` still creates two tasks running
-`/bin/dyn_consumer`, waits for both to exit, and checks:
+`/tests/dyn_consumer`, waits for both to exit, and checks:
 1. Both got the identical packed retVal (`0x300031` — proves CoW isolation).
 2. `shared_object_load_or_get("/lib/libtest.so")`'s refcount is exactly 3.
 3. Both tasks' page tables map `libtest.so`'s code segment to the same

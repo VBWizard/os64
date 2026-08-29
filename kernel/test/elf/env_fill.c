@@ -1,6 +1,6 @@
 // env_fill.c — environment growth test fixture (setenv past one page).
 //
-// The kernel launches this as /bin/env_fill (test_env_growth, test_main.c).
+// The kernel launches this as /tests/env_fill (test_env_growth, test_main.c).
 // It exists because the environment block is BORN one page and, since
 // 2026-08-14, GROWS when setenv fills it: the kernel swaps a doubled block
 // under the fixed TASK_ENV_VIRT window, up to the TASK_ENV_MAX_BYTES (64KB)

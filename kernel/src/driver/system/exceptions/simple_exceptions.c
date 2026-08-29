@@ -431,7 +431,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     // 2026-08-09). Not decoration — these three are what turn an unexplainable
     // #DF into a diagnosis, and their absence cost a full day.
     //
-    // The story: a reproducible double fault against /bin/hog printed a task
+    // The story: a reproducible double fault against a ring-3 CPU hog printed a task
     // name and a faulting instruction, and nothing else. Everything that
     // actually mattered had to be dug out of the QEMU monitor by hand — CR2
     // said 0x1023bf98, CR3 said kKernelPML4 was live, and the two together

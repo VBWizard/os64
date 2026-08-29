@@ -355,7 +355,7 @@ stays exactly as is (it reads the frame value, not live RFLAGS).
    `temp_rsp[0..3]` (`x/8gx <temp_rsp addr from nm>`): task/idle frame bases
    only. Any `0xffff8000...` scheduler-stack VA in a slot means a window
    still exists — the fix failed. This is the sharpest single test we have.
-4. Both modes boot; kernel suite + `/bin/testrun` green (24+35 at last
+4. Both modes boot; kernel suite + `/tests/testrun` green (24+35 at last
    count); tickless remains the default.
 5. Optional but valuable: re-run the 8/9 hog #DF repro to confirm the hoist
    still holds with the new exit.

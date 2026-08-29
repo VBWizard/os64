@@ -1,8 +1,11 @@
 // arg_echo.c — task startup-state test fixture (arguments, environment, and
 // segment initialization).
 //
-// The kernel launches this as /bin/arg_echo with argc=3 and
-//   argv = { "/bin/arg_echo", "hello", "world" }
+// The kernel launches this as /tests/arg_echo with argc=3 and
+//   argv = { "/tests/arg_echo", "hello", "world" }
+// and argv[0] is CHECKED BY CONTENT below, so the path is part of the
+// contract: move the fixture and both spawners (test_task_args and testrun's
+// table) must move with it, or the fixture reports FAIL_ARGV0 and says so.
 // and (always, since env_inherit never returns NULL) an inherited environment.
 //
 // os64's task ABI hands the entry point argc/argv/env in RDI/RSI/RDX. Because
@@ -86,7 +89,7 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
 
     // --- string contents survived the copy and the TASK-space pointers are
     //     dereferenceable inside our own address space ---
-    if (!streq(argv[0], "/bin/arg_echo"))
+    if (!streq(argv[0], "/tests/arg_echo"))
         return FAIL_ARGV0;
     if (!streq(argv[1], "hello"))
         return FAIL_ARGV1;

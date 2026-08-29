@@ -11,7 +11,7 @@ CWDTEST_OUTPUT ?= ../../bin/cwd_test
 STATTEST_OUTPUT ?= ../../bin/stat_test
 SLEEPTEST_OUTPUT ?= ../../bin/sleep_test
 MEMTEST_OUTPUT ?= ../../bin/memory_test
-HOG_OUTPUT ?= ../../bin/hog
+NOSYSCALL_OUTPUT ?= ../../bin/nosyscall
 ENVFILL_OUTPUT ?= ../../bin/env_fill
 GLUTTON_OUTPUT ?= ../../bin/glutton
 LIBTEST ?= ../../bin/libtest.so
@@ -58,7 +58,7 @@ ARG_CFLAGS ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 -fno
 OBJS := serial_ping.o
 
 .PHONY: all
-all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT) $(REDIR_OUTPUT) $(DIRLIST_OUTPUT) $(MAPUNMAP_OUTPUT) $(CWDTEST_OUTPUT) $(STATTEST_OUTPUT) $(SLEEPTEST_OUTPUT) $(MEMTEST_OUTPUT) $(HOG_OUTPUT) $(ENVFILL_OUTPUT) $(GLUTTON_OUTPUT)
+all: $(OUTPUT) $(DYN_OUTPUT) $(ARG_OUTPUT) $(SMOKE_OUTPUT) $(RETEXIT_OUTPUT) $(FILEIO_OUTPUT) $(REDIR_OUTPUT) $(DIRLIST_OUTPUT) $(MAPUNMAP_OUTPUT) $(CWDTEST_OUTPUT) $(STATTEST_OUTPUT) $(SLEEPTEST_OUTPUT) $(MEMTEST_OUTPUT) $(NOSYSCALL_OUTPUT) $(ENVFILL_OUTPUT) $(GLUTTON_OUTPUT)
 
 $(OUTPUT): $(OBJS)
 	@mkdir -p "$$(dirname $@)"
@@ -147,11 +147,11 @@ $(MEMTEST_OUTPUT): memory_test.o
 memory_test.o: memory_test.c
 	$(CC) $(ARG_CFLAGS) -c $< -o $@
 
-$(HOG_OUTPUT): hog.o
+$(NOSYSCALL_OUTPUT): nosyscall.o
 	@mkdir -p "$$(dirname $@)"
-	$(LD) $(LDFLAGS) -o $@ hog.o
+	$(LD) $(LDFLAGS) -o $@ nosyscall.o
 
-hog.o: hog.c
+nosyscall.o: nosyscall.c
 	$(CC) $(ARG_CFLAGS) -c $< -o $@
 
 $(ENVFILL_OUTPUT): env_fill.o
@@ -179,4 +179,4 @@ dyn_consumer.o: dyn_consumer.c
 
 .PHONY: clean
 clean:
-	rm -f $(OBJS) $(OUTPUT) dyn_consumer.o $(DYN_OUTPUT) arg_echo.o $(ARG_OUTPUT) syscall_smoke.o $(SMOKE_OUTPUT) exit_by_return.o $(RETEXIT_OUTPUT) file_io.o $(FILEIO_OUTPUT) redirect_io.o $(REDIR_OUTPUT) dir_list.o $(DIRLIST_OUTPUT) map_unmap.o $(MAPUNMAP_OUTPUT) cwd_test.o $(CWDTEST_OUTPUT) stat_test.o $(STATTEST_OUTPUT) sleep_test.o $(SLEEPTEST_OUTPUT) memory_test.o $(MEMTEST_OUTPUT) hog.o $(HOG_OUTPUT)
+	rm -f $(OBJS) $(OUTPUT) dyn_consumer.o $(DYN_OUTPUT) arg_echo.o $(ARG_OUTPUT) syscall_smoke.o $(SMOKE_OUTPUT) exit_by_return.o $(RETEXIT_OUTPUT) file_io.o $(FILEIO_OUTPUT) redirect_io.o $(REDIR_OUTPUT) dir_list.o $(DIRLIST_OUTPUT) map_unmap.o $(MAPUNMAP_OUTPUT) cwd_test.o $(CWDTEST_OUTPUT) stat_test.o $(STATTEST_OUTPUT) sleep_test.o $(SLEEPTEST_OUTPUT) memory_test.o $(MEMTEST_OUTPUT) nosyscall.o $(NOSYSCALL_OUTPUT) env_fill.o $(ENVFILL_OUTPUT) glutton.o $(GLUTTON_OUTPUT)

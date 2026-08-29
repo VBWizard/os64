@@ -1,6 +1,6 @@
 // sigdemo — watch a program catch Ctrl+C and keep going.
 //
-// The FIXTURE (/bin/sigtest) proves signal handling is correct and says so in
+// The FIXTURE (/tests/sigtest) proves signal handling is correct and says so in
 // an exit code, which is the right shape for a test suite and a terrible show.
 // This is the other thing: a countdown you interrupt with your own hands, that
 // tells you it was interrupted and then carries on counting.
