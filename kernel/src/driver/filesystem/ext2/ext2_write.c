@@ -389,6 +389,7 @@ typedef struct {
 	uint32_t  bm_freed;      // releases: bits cleared, counts not yet credited
 	bool      bm_reconcile;  // releases: a bit was already clear — rebuild the counts
 	uint32_t  exposed;       // releases: bits free ON DISK whose durable pointer is not yet cleared
+	uint32_t  released;      // releases: bits THIS attempt cleared — all a failure may charge to i_blocks
 	uint32_t *leaf;          // scratch for the indirect leaf (taken second)
 	uint32_t  leaf_block;    // ...the block in it, 0 = none
 	bool      leaf_dirty;
@@ -562,6 +563,11 @@ static uint8_t *ext2_batch_bitmap(ext2_batch_t *b, uint32_t g)
 	if (b->bm_loaded && b->bm_group == g)
 		return b->bm;
 	ext2_batch_flush_map(b);
+	// A switch whose flush failed goes no further: what the batch holds
+	// still belongs to the OLD group, and the discard at the end must find
+	// its identity intact to give the counts back where they came from.
+	if (b->failed)
+		return NULL;
 	b->bm_loaded = false;
 	if (ext2_read_fs_block(b->fs, b->e, b->e->groups[g].bg_block_bitmap, b->bm) != 0)
 		return NULL;
@@ -747,9 +753,12 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block,
 	{
 		uint8_t *bbm = ext2_batch_bitmap(batch, g);
 		if (bbm == NULL)
-			return EXT2_FREE_FAILED;
-		if (batch->failed)
-			return batch->free_rc;      // the group switch's flush lost something
+		{
+			// No bitmap: a read that failed (nothing changed), or a group
+			// switch whose flush lost something — then ITS verdict.
+			return (batch->failed && batch->free_rc != 0) ? batch->free_rc
+			                                                : EXT2_FREE_FAILED;
+		}
 		if (!(bbm[bit / 8] & (uint8_t)(1u << (bit % 8))))
 		{
 			// Already free: a replay revisiting a bit an earlier attempt
@@ -763,6 +772,7 @@ int ext2_free_block(vfs_filesystem_t *fs, ext2_fs_t *e, uint32_t block,
 		}
 		bbm[bit / 8] &= (uint8_t)~(1u << (bit % 8));
 		batch->bm_freed++;
+		batch->released++;
 		return 0;
 	}
 
@@ -1114,7 +1124,7 @@ uint32_t ext2_bmap_alloc(vfs_filesystem_t *fs, ext2_fs_t *e,
 // the verdict it owes.
 static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
                            uint32_t block, uint32_t depth,
-                           uint32_t *freed, ext2_batch_t *batch)
+                           ext2_batch_t *batch)
 {
 	if (block == 0)
 		return 0;
@@ -1136,7 +1146,7 @@ static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
 		{
 			if (buf[i] == 0)
 				continue;
-			rc = ext2_free_chain(fs, e, buf[i], depth - 1, freed, batch);
+			rc = ext2_free_chain(fs, e, buf[i], depth - 1, batch);
 			if (rc == 0)
 			{
 				buf[i] = 0;
@@ -1163,36 +1173,34 @@ static int ext2_free_chain(vfs_filesystem_t *fs, ext2_fs_t *e,
 	}
 	// The block itself, into the batch; its own pointer, one level up, stays
 	// until that level publishes.
-	int free_rc = ext2_free_block(fs, e, block, batch);
-	if (free_rc != 0)
-		return free_rc;
-	(*freed)++;
-	return 0;
+	return ext2_free_block(fs, e, block, batch);
 }
 
 // Free all blocks named by `old` (a pre-truncate copy of the inode). On an
 // error, `old` remains a replayable map — the whole of it: nothing is
 // pruned until every bit is published, and over-naming is harmless because
 // releasing an already-free block is idempotent. An indirect root may then
-// lead replay through already-free children; that is the design.
+// lead replay through already-free children; that is the design. Its
+// i_blocks is charged only for the blocks THIS attempt released, so an
+// already-free block a later attempt walks past is never charged twice
+// however many attempts the release takes.
 static int ext2_free_inode_blocks(vfs_filesystem_t *fs, ext2_fs_t *e,
                                   ext2_inode_t *old)
 {
 	ext2_batch_t batch;
 	if (!ext2_batch_begin(&batch, fs, e))
 		return EXT2_FREE_FAILED;      // nothing taken, nothing changed
-	uint32_t freed = 0;
 	int rc = EXT2_FREE_FAILED;
 	for (uint32_t i = 0; i < EXT2_NDIR_BLOCKS; i++)
 	{
-		rc = ext2_free_chain(fs, e, old->i_block[i], 0, &freed, &batch);
+		rc = ext2_free_chain(fs, e, old->i_block[i], 0, &batch);
 		if (rc < 0)
 			goto failed;
 	}
 	for (uint32_t depth = 1; depth <= 3; depth++)
 	{
 		uint32_t slot = EXT2_IND_BLOCK + depth - 1;
-		rc = ext2_free_chain(fs, e, old->i_block[slot], depth, &freed, &batch);
+		rc = ext2_free_chain(fs, e, old->i_block[slot], depth, &batch);
 		if (rc < 0)
 			goto failed;
 	}
@@ -1209,7 +1217,7 @@ static int ext2_free_inode_blocks(vfs_filesystem_t *fs, ext2_fs_t *e,
 failed:
 	// Bits cleared only in the copy never landed: they stay used on disk and
 	// named by the map, so they are not "released" for the record either.
-	freed -= ext2_batch_discard_map(&batch);
+	uint32_t released = batch.released - ext2_batch_discard_map(&batch);
 	(void)ext2_batch_end(&batch);
 	// But bits an EARLIER flush published, whose durable pointer — an
 	// entry of the inode's own, or of a parent whose cleared pointers never
@@ -1220,7 +1228,7 @@ failed:
 	// children), so it, not the mere fact of a publication, upgrades.
 	if (rc == EXT2_FREE_FAILED && batch.exposed > 0)
 		rc = EXT2_FREE_RETRY_MAP_NAMES_FREE_BLOCK;
-	uint64_t released_sectors = (uint64_t)freed * e->sectors_per_block;
+	uint64_t released_sectors = (uint64_t)released * e->sectors_per_block;
 	old->i_blocks = released_sectors < old->i_blocks
 	                    ? old->i_blocks - (uint32_t)released_sectors : 0;
 	return rc;
