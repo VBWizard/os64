@@ -524,6 +524,10 @@ the library serves every process). How it fits together:
     browns out the dongle (two P5 burns learned this). See kUSBQuiet
   - `RAMDISK`: Register the `os64_disk.img` Limine module as a RAM-backed
     block device (see `/RAMDisk Boot` in limine.conf)
+  - `CRON`: launch `/bin/cron` once userland is up. The flag decides whether
+    the scheduler EXISTS on this boot; the crontab decides what it runs, and
+    `/etc/crontab` ships with every line commented out — so this costs a
+    sleeping daemon and nothing else. Carried by every entry that runs a shell
   - `nolog` / `alllog`: Control logging (both lowercase — legacy)
   - `LOGD=<path>`: launch `/bin/logd` to append the kernel log to a file, and
     hold the kernel drainer off serial until it attaches
@@ -626,11 +630,14 @@ design in `docs/conf_path.md`.
 - **A NAME IS A FILE NAME, NOT A PATH.** `conf_find` refuses anything with a
   `/` in it, loudly. A reader asking for `../../etc/shadow` would be walking
   the ladder somewhere the ladder does not go.
-- **`hosts` MERGES; everything else is first-hit-wins.** Chris's 2026-08-22
-  ruling: `/home/hosts` layers ON TOP of `/etc/hosts` so your machine names
-  sit over the system's list rather than erasing it. That is why the walk is
-  resumable at all. A settings file is not a database — check which kind you
-  have before reaching for `conf_find`.
+- **`hosts` and `crontab` MERGE; everything else is first-hit-wins.** Chris's
+  2026-08-22 ruling: `/home/hosts` layers ON TOP of `/etc/hosts` so your
+  machine names sit over the system's list rather than erasing it. That is why
+  the walk is resumable at all. `crontab` joined it on 2026-08-29 for the same
+  reason and with the same consequence worth stating out loud — a merged file
+  can only ADD, so a `/home` copy cannot turn a system entry off. A settings
+  file is not a database: check which kind you have before reaching for
+  `conf_find`.
 - **`/sys/conf`** publishes the ladder, its `source:`, and one line per reader
   saying which file it actually took. Read it FIRST when a config seems
   ignored. Every resolve also prints one `DEBUG_BOOT` line naming the misses
