@@ -2522,6 +2522,13 @@ static size_t orphan_test_write(void *device, uint64_t sector,
                                 const void *buffer, uint64_t sector_count)
 {
     sOrphanWriteCount++;
+    // The instrument for re-choreographing this test: the write numbers the
+    // stages below fail and expect are a script of the release path's
+    // command stream, and any change to that stream (the 2026-08-29 batch
+    // rewrote it) is read off this line against the image's group layout.
+    printd(DEBUG_TESTS, "\torphan seam: write %u = LBA %lu x%lu%s\n",
+           sOrphanWriteCount, sector, sector_count,
+           sOrphanWriteCount == sOrphanFailWrite ? " (FAILED by the seam)" : "");
     if (sOrphanWriteCount == sOrphanFailWrite)
         return 1;
     return sOrphanRealWrite(device, sector, buffer, sector_count);
@@ -2690,10 +2697,13 @@ static bool test_ext2_orphan(void)
         OR_FAIL("free space is already back at baseline while the handle is OPEN — nothing was orphaned\n");
     }
 
-    // The program exits. Let its first block-bitmap release land, then fail
-    // the following group-descriptor count at write 2. Write 3 persists the
-    // retry map. The next replay must see the already-clear bit and reconcile
-    // both count ledgers without counting that block twice.
+    // The program exits. The release runs through one batch: every data
+    // block's bit — twelve direct and the indirect child — clears in the
+    // batch's bitmap copy and lands in ONE bitmap write (write 1) when the
+    // indirect leaf's subtree is published; fail the group-descriptor count
+    // that follows at write 2. Write 3 persists the retry map. The next
+    // replay must see thirteen already-clear bits and reconcile both count
+    // ledgers without counting any of them twice.
     uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
     uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
     if (!orphan_test_fail_write(kRootFilesystem, 2)) {
@@ -2707,29 +2717,33 @@ static bool test_ext2_orphan(void)
         OR_FAIL("failed release made %u metadata writes, expected 3 (bitmap, failed GDT, retry inode)\n",
                 injected_writes);
     if (ext2_free_inodes(kRootFilesystem) != orphan_inodes ||
-        ext2_free_blocks(kRootFilesystem) != orphan_blocks + 1)
-        OR_FAIL("failed last-close release did not leave exactly one bitmap-completed block for replay\n");
-    // THE AMBIGUOUS FREE, asserted: that block's bitmap bit is clear on disk
-    // while the retry map still names it, so the allocator must be stopped
-    // until replay — and only AFTER write 3 put the map somewhere replay can
-    // find it. A generic "the free failed" would have left this mount taking
-    // allocations that replay would later hand back to the free pool.
+        ext2_free_blocks(kRootFilesystem) != orphan_blocks + orphan_data_blocks)
+        OR_FAIL("failed last-close release did not leave exactly the %u data blocks bitmap-completed for replay (freed %u)\n",
+                orphan_data_blocks, ext2_free_blocks(kRootFilesystem) - orphan_blocks);
+    // THE AMBIGUOUS FREE, asserted: those blocks' bitmap bits are clear on
+    // disk while the retry map still names them (the leaf's pointers were
+    // never rewritten, the indirect root's own bit never cleared), so the
+    // allocator must be stopped until replay — and only AFTER write 3 put
+    // the map somewhere replay can find it. A generic "the free failed"
+    // would have left this mount taking allocations that replay would later
+    // hand back to the free pool.
     if (!reap_mount.read_only)
         OR_FAIL("half-completed last-close block release did not demote its mount\n");
     if (kRootFilesystem->read_only || kRootFilesystem->fops->write == NULL)
         OR_FAIL("last-close demotion escaped onto the real root mount\n");
 
-    // Now exercise MOUNT REPLAY itself, including the new indirect ordering.
-    // Reconciliation of the first direct block costs two writes; the eleven
-    // remaining direct children bring the count to 35. The indirect child is
-    // 36..38, its parent-pointer clear is 39, and its root release is 40..42.
-    // The zero map is write 43 and the inode bitmap is 44; fail its GDT count
-    // at write 45. A clean retry must reconcile the already-free inode too.
+    // Now exercise MOUNT REPLAY itself, including the indirect ordering.
+    // Replay revisits every direct block and the indirect child and finds
+    // each bit already clear, so the leaf's publication is a reconcile:
+    // bitmap (1), GDT (2), superblock (3); the leaf's pointer clear is 4.
+    // The indirect root's own release publishes at the batch's end, 5..7.
+    // The zero map is write 8 and the inode bitmap is 9; fail its GDT count
+    // at write 10. A clean retry must reconcile the already-free inode too.
     if (kRootFilesystem->fops->mounted == NULL)
         OR_FAIL("ext2 mount table has no replay callback\n");
-    if (!orphan_test_fail_write(kRootFilesystem, 45))
+    if (!orphan_test_fail_write(kRootFilesystem, 10))
         OR_FAIL("could not install the replay-write fault seam\n");
-    // Another private mount, for the same reason and a sharper hazard: write 44
+    // Another private mount, for the same reason and a sharper hazard: write 9
     // freed the inode BITMAP BIT, so that inode NUMBER is allocatable while the
     // orphan chain still names it for teardown. Hand it to a new file and the
     // next replay releases that file's storage. This replay must therefore end
@@ -2743,8 +2757,8 @@ static bool test_ext2_orphan(void)
 
     replay_mount.fops->mounted(&replay_mount);
     injected_writes = orphan_test_restore_write(kRootFilesystem);
-    if (injected_writes != 45)
-        OR_FAIL("failed indirect replay made %u metadata writes, expected 45 with orphan still linked\n",
+    if (injected_writes != 10)
+        OR_FAIL("failed indirect replay made %u metadata writes, expected 10 with orphan still linked\n",
                 injected_writes);
     if (!replay_mount.read_only)
         OR_FAIL("half-completed orphan inode free did not demote its mount\n");
@@ -2776,11 +2790,14 @@ static bool test_ext2_orphan(void)
         OR_FAIL("BLOCK LEAK: %u free before, %u after (%d lost)\n",
                 blocks0, blocks1, (int)blocks0 - (int)blocks1);
 
-    // Closed-destination rename failure: freeing twelve direct blocks costs
-    // writes 8..43, freeing the indirect child costs 44..46, and write 47 is
-    // the parent-pointer clear. Fail that clear after its child is already
-    // free. The retry inode + orphan-head writes MUST be allowed to land as
-    // writes 48 and 49 before the mount publishes read-only state.
+    // Closed-destination rename failure: the rename's own writes are 1..7;
+    // the release then publishes all thirteen data bits — twelve direct and
+    // the indirect child — as bitmap 8, GDT 9, superblock 10, and write 11
+    // is the parent-pointer clear. Fail that clear after its children are
+    // already free. The retry inode + orphan-head writes MUST be allowed to
+    // land as writes 12 and 13 before the mount publishes read-only state.
+    // (The seam prints its stream under DEBUG_TESTS; re-read it there when
+    // the release path's command stream changes shape.)
     if (kRootFilesystem->fops->open(&f, "/etc/testdata/orph/retry_victim", "c",
                                     kRootFilesystem) != 0)
         OR_FAIL("could not create the closed retry victim\n");
@@ -2817,15 +2834,15 @@ static bool test_ext2_orphan(void)
     shadow.fops = &shadow_fops;
     shadow.dops = &shadow_dops;
 
-    if (!orphan_test_fail_write(kRootFilesystem, 47))
+    if (!orphan_test_fail_write(kRootFilesystem, 11))
         OR_FAIL("could not install the closed-rename release fault seam\n");
     int rename_rc = shadow.fops->rename("/etc/testdata/orph/retry_replacement",
                                         "/etc/testdata/orph/retry_victim", &shadow);
     injected_writes = orphan_test_restore_write(kRootFilesystem);
     if (rename_rc != 0)
         OR_FAIL("closed replacement rename failed before reaching recoverable teardown\n");
-    if (injected_writes != 49)
-        OR_FAIL("failed closed rename made %u metadata writes, expected 49 (failed parent clear, retry inode, orphan head)\n",
+    if (injected_writes != 13)
+        OR_FAIL("failed closed rename made %u metadata writes, expected 13 (failed parent clear, retry inode, orphan head)\n",
                 injected_writes);
     if (!shadow.read_only)
         OR_FAIL("closed rename parent-clear failure did not demote its mount\n");
