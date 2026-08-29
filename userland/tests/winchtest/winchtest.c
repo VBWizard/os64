@@ -239,8 +239,8 @@ int main(int argc, char **argv)
 	if (master < 0)
 		die(1, "pty_create refused");
 
-	int64_t kid = os64_spawn_seated("/bin/winchtest",
-	                                (char *[]){ "/bin/winchtest", "child", 0 }, master);
+	int64_t kid = os64_spawn_seated("/tests/winchtest",
+	                                (char *[]){ "/tests/winchtest", "child", 0 }, master);
 	if (kid <= 0)
 		die(2, "the child would not seat");
 
@@ -299,8 +299,8 @@ int main(int argc, char **argv)
 	master = os64_pty_create(COLS0, ROWS0);
 	if (master < 0)
 		die(1, "pty_create refused (second session)");
-	kid = os64_spawn_seated("/bin/winchtest",
-	                        (char *[]){ "/bin/winchtest", "waiter", 0 }, master);
+	kid = os64_spawn_seated("/tests/winchtest",
+	                        (char *[]){ "/tests/winchtest", "waiter", 0 }, master);
 	if (kid <= 0 || !grid_shows(master, "waiting", 5000))
 		die(0xB, "the waiter would not seat or never said it was waiting");
 	if (os64_pty_resize(master, 90, 20) != 0)

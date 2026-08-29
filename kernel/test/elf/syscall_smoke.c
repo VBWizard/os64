@@ -1,7 +1,7 @@
 // syscall_smoke.c — first true ring-3 fixture: SYSCALL/SYSRET round trip,
 // write() to the console, and an explicit exit() syscall.
 //
-// The kernel launches this as /bin/syscall_smoke with isKernelTask=false, so
+// The kernel launches this as /tests/syscall_smoke with isKernelTask=false, so
 // unlike every fixture before it, this one actually runs at CPL 3 and crosses
 // the privilege boundary through syscall_Enter/sysretq.  It exercises, in
 // order:

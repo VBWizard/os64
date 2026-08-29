@@ -2,10 +2,11 @@
 // ".." collapse, relative-path resolution in open AND spawn, inheritance.
 // 0x0C3Dxxxx codes name the failed step ("C3D" ~ CWD, squint harder).
 //
-// The clever bit: the fixture SPAWNS ITSELF. Parent mode chdirs to /bin and
-// launches "cwd_test" — by RELATIVE path, which itself proves spawn resolves
-// against cwd — passing the expected directory as argv. Child mode getcwd's
-// and compares: inheritance proven by a child born somewhere specific.
+// The clever bit: the fixture SPAWNS ITSELF. Parent mode chdirs to its own
+// directory and launches "cwd_test" — by RELATIVE path, which itself proves
+// spawn resolves against cwd — passing the expected directory as argv. Child
+// mode getcwd's and compares: inheritance proven by a child born somewhere
+// specific.
 //
 // Steps (parent mode):
 //   1. getcwd            -> "/" (every task starts at the root)
@@ -18,7 +19,9 @@
 //                           /dir1 is on the ext2 partition, NOT the root fs —
 //                           so this path only works via canonicalization
 //                           happening BEFORE existence checking)
-//   7. spawn "cwd_test" child with expected "/bin"; child exit 0 = inherited
+//   7. chdir("/tests") — where this binary lives, so a relative spawn can
+//                           find it — then spawn "cwd_test" child with
+//                           expected "/tests"; child exit 0 = inherited
 #include <stdint.h>
 #include "os64/syscall.h"
 
@@ -94,9 +97,20 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
     if (failed(os64_syscall1(SYSCALL_CHDIR, (uint64_t)"/dir1//../bin/.")) || !cwd_is("/bin"))
         exit_with(FAIL_GAUNTLET);
 
-    // 7. Spawn BY RELATIVE PATH from /bin (spawn resolves too), child
-    //    verifies it woke up in /bin. Inheritance, witnessed.
-    char *cargv[] = { "cwd_test", "child", "/bin", (char *)0 };
+    // 7. Spawn BY RELATIVE PATH, child verifies it woke up where the parent
+    //    stood. Inheritance, witnessed.
+    //
+    //    The chdir to /tests is what makes the relative spawn resolvable at
+    //    all: a relative spawn resolves against the CWD, so the cwd has to be
+    //    the directory this fixture's own binary lives in. That was /bin
+    //    until 2026-08-29, when the fixtures moved to /tests — which is
+    //    exactly the coupling worth being explicit about, since the two
+    //    happened to be the same directory for a year and nothing said why
+    //    it mattered. Steps 2-6 above still use /bin on purpose: the relative
+    //    OPEN needs a file that is genuinely there, and `hello` is.
+    if (failed(os64_syscall1(SYSCALL_CHDIR, (uint64_t)"/tests")) || !cwd_is("/tests"))
+        exit_with(FAIL_INHERIT);
+    char *cargv[] = { "cwd_test", "child", "/tests", (char *)0 };
     uint64_t pid = os64_syscall6(SYSCALL_SPAWN, (uint64_t)"cwd_test",
                                  (uint64_t)cargv, (uint64_t)-1, (uint64_t)-1,
                                  (uint64_t)-1, 0);

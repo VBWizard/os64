@@ -53,76 +53,76 @@ typedef struct {
     const char  *why;        // what a failure would mean, for the log line
 } fixture_t;
 
-static char *const argv_arg_echo[] = { "/bin/arg_echo", "hello", "world", NULL };
+static char *const argv_arg_echo[] = { "/tests/arg_echo", "hello", "world", NULL };
 
 // The crime fixtures that PASS BY DYING: each commits a deliberate offense
 // and the pass code is the badge the enforcement kills with. A crime that
 // failed to kill would report the program's own exit code instead — which is
 // exactly the failure worth catching, since a tripwire nobody tests is a
 // tripwire nobody knows is disconnected.
-static char *const argv_malloc_threads[]    = { "/bin/malloctest", "threads", "4", NULL };
-static char *const argv_malloc_doublefree[] = { "/bin/malloctest", "doublefree", NULL };
-static char *const argv_malloc_stomp[]      = { "/bin/malloctest", "stomp", NULL };
+static char *const argv_malloc_threads[]    = { "/tests/malloctest", "threads", "4", NULL };
+static char *const argv_malloc_doublefree[] = { "/tests/malloctest", "doublefree", NULL };
+static char *const argv_malloc_stomp[]      = { "/tests/malloctest", "stomp", NULL };
 
 // The W^X pair (2026-08-16): both die by the segfault kill, 139. A survivor
 // exits 0x0BAD and the mismatch names the disconnected tripwire.
-static char *const argv_nx_stack[] = { "/bin/nx_test", "stack", NULL };
-static char *const argv_nx_text[]  = { "/bin/nx_test", "text",  NULL };
-static char *const argv_fpfault_xm[] = { "/bin/fpfault", "xm", NULL };
-static char *const argv_fpfault_mf[] = { "/bin/fpfault", "mf", NULL };
-static char *const argv_fpfault_de[] = { "/bin/fpfault", "de", NULL };
-static char *const argv_fpfault_ud[] = { "/bin/fpfault", "ud", NULL };
+static char *const argv_nx_stack[] = { "/tests/nx_test", "stack", NULL };
+static char *const argv_nx_text[]  = { "/tests/nx_test", "text",  NULL };
+static char *const argv_fpfault_xm[] = { "/tests/fpfault", "xm", NULL };
+static char *const argv_fpfault_mf[] = { "/tests/fpfault", "mf", NULL };
+static char *const argv_fpfault_de[] = { "/tests/fpfault", "de", NULL };
+static char *const argv_fpfault_ud[] = { "/tests/fpfault", "ud", NULL };
 
 static const fixture_t kFixtures[] = {
-    { "/bin/syscall_smoke",   NULL, 0x0005E00D,  0,          "the syscall floor: write/exit from ring 3" },
-    { "/bin/exit_by_return",  NULL, 0x2E7BEA57,  0,          "returning from _start reaches retVal" },
-    { "/bin/arg_echo",        argv_arg_echo, 0x0A11600D, 0,  "argc/argv/env delivered at the ABI addresses" },
-    { "/bin/file_io",         NULL, 0x0F11E60D,  0,          "open/read/write/seek/close on a real file" },
-    { "/bin/redirect_io",     NULL, 0x2ED1600D,  0,          "spawn-time handle redirection" },
-    { "/bin/dir_list",        NULL, 0x0D12600D,  0,          "opendir/readdir/close" },
-    { "/bin/map_unmap",       NULL, 0x03A9600D,  0,          "map/unmap — malloc's wall" },
-    { "/bin/cwd_test",        NULL, 0x0C3D600D,  0,          "getcwd/chdir" },
-    { "/bin/stat_test",       NULL, 0x57A7600D,  0,          "stat is readdir for exactly one name" },
-    { "/bin/sleep_test",      NULL, 0x51EE600D,  0,          "sleep parks at least as long as asked" },
-    { "/bin/memory_test",     NULL, 0xF3EE600D,  0,          "the memory syscall's snapshot" },
-    { "/bin/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
-    { "/bin/malloctest",      NULL, 0x0A110C00,  0,          "the heap: split, coalesce, recycle, give-back, /proc/<pid>/heap" },
-    { "/bin/malloctest",      argv_malloc_threads,    0x0A110C10, 0, "four threads, one heap: the lock, and cross-thread frees" },
-    { "/bin/malloctest",      argv_malloc_doublefree, 0xF12EEBAD, 0, "a double free kills the program (it must)" },
-    { "/bin/malloctest",      argv_malloc_stomp,      0xCA9A12ED, 0, "a stomped canary kills the program (it must)" },
-    { "/bin/nx_test",         argv_nx_stack, 139, 0,         "executing the stack kills the program (NX works)" },
-    { "/bin/nx_test",         argv_nx_text,  139, 0,         "writing to .text kills the program (W^X works)" },
-    { "/bin/fputest",         NULL, 0xF0DE0000,  0,          "x87/SSE data AND control state survive preemption, migration, a handler that wipes them, and a forged frame MXCSR" },
+    { "/tests/syscall_smoke",   NULL, 0x0005E00D,  0,          "the syscall floor: write/exit from ring 3" },
+    { "/tests/exit_by_return",  NULL, 0x2E7BEA57,  0,          "returning from _start reaches retVal" },
+    { "/tests/arg_echo",        argv_arg_echo, 0x0A11600D, 0,  "argc/argv/env delivered at the ABI addresses" },
+    { "/tests/file_io",         NULL, 0x0F11E60D,  0,          "open/read/write/seek/close on a real file" },
+    { "/tests/redirect_io",     NULL, 0x2ED1600D,  0,          "spawn-time handle redirection" },
+    { "/tests/dir_list",        NULL, 0x0D12600D,  0,          "opendir/readdir/close" },
+    { "/tests/map_unmap",       NULL, 0x03A9600D,  0,          "map/unmap — malloc's wall" },
+    { "/tests/cwd_test",        NULL, 0x0C3D600D,  0,          "getcwd/chdir" },
+    { "/tests/stat_test",       NULL, 0x57A7600D,  0,          "stat is readdir for exactly one name" },
+    { "/tests/sleep_test",      NULL, 0x51EE600D,  0,          "sleep parks at least as long as asked" },
+    { "/tests/memory_test",     NULL, 0xF3EE600D,  0,          "the memory syscall's snapshot" },
+    { "/tests/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },
+    { "/tests/malloctest",      NULL, 0x0A110C00,  0,          "the heap: split, coalesce, recycle, give-back, /proc/<pid>/heap" },
+    { "/tests/malloctest",      argv_malloc_threads,    0x0A110C10, 0, "four threads, one heap: the lock, and cross-thread frees" },
+    { "/tests/malloctest",      argv_malloc_doublefree, 0xF12EEBAD, 0, "a double free kills the program (it must)" },
+    { "/tests/malloctest",      argv_malloc_stomp,      0xCA9A12ED, 0, "a stomped canary kills the program (it must)" },
+    { "/tests/nx_test",         argv_nx_stack, 139, 0,         "executing the stack kills the program (NX works)" },
+    { "/tests/nx_test",         argv_nx_text,  139, 0,         "writing to .text kills the program (W^X works)" },
+    { "/tests/fputest",         NULL, 0xF0DE0000,  0,          "x87/SSE data AND control state survive preemption, migration, a handler that wipes them, and a forged frame MXCSR" },
     // PASS BY DYING: a CPU exception from ring 3 ends the program with
     // 200 + vector (user_exception_kill), never the machine.
     // #XM is the one QEMU's TCG cannot raise (it records SSE exceptions in
     // MXCSR and never traps), so the fixture answers 3 there and that is a
     // SKIP, not a failure; on hardware and under KVM it dies with 219.
-    { "/bin/fpfault",         argv_fpfault_xm, 219, 3,       "an unmasked SSE exception (#XM) kills the program, not the OS" },
-    { "/bin/fpfault",         argv_fpfault_mf, 216, 0,       "an unmasked x87 exception (#MF) kills the program, not the OS" },
-    { "/bin/fpfault",         argv_fpfault_de, 200, 0,       "an integer divide by zero (#DE) kills the program, not the OS" },
-    { "/bin/fpfault",         argv_fpfault_ud, 206, 0,       "an AVX instruction with XSAVE off (#UD) kills the program, not the OS" },
-    { "/bin/test_elf",        NULL, 0xE1F0CA11,  0,          "a demand-paged static ELF runs and exits" },
-    { "/bin/dyn_consumer",    NULL, 0x00300031,  0,          "a dynamically-linked binary resolves and runs" },
+    { "/tests/fpfault",         argv_fpfault_xm, 219, 3,       "an unmasked SSE exception (#XM) kills the program, not the OS" },
+    { "/tests/fpfault",         argv_fpfault_mf, 216, 0,       "an unmasked x87 exception (#MF) kills the program, not the OS" },
+    { "/tests/fpfault",         argv_fpfault_de, 200, 0,       "an integer divide by zero (#DE) kills the program, not the OS" },
+    { "/tests/fpfault",         argv_fpfault_ud, 206, 0,       "an AVX instruction with XSAVE off (#UD) kills the program, not the OS" },
+    { "/tests/test_elf",        NULL, 0xE1F0CA11,  0,          "a demand-paged static ELF runs and exits" },
+    { "/tests/dyn_consumer",    NULL, 0x00300031,  0,          "a dynamically-linked binary resolves and runs" },
     // synctest reports 0x05CC0001 when the boot has no writable /home. That
     // is a fact about the BOOT, not a failure of sync_all — the kernel
     // harness treated it as SKIP and so does this one.
-    { "/bin/synctest",        NULL, 0x05CC0000,  0x05CC0001, "sync_all commits bytes AND the directory entry" },
+    { "/tests/synctest",        NULL, 0x05CC0000,  0x05CC0001, "sync_all commits bytes AND the directory entry" },
     // conftest reports 0x0C0F0001 when a save could not be written at all —
     // which on a boot with no writable /home is a fact about the BOOT, not a
     // failure of the config library. Same treatment as synctest above, and
     // for the same reason: a suite that cries wolf gets ignored.
-    { "/bin/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and atomic publish" },
-    { "/bin/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
-    { "/bin/winchtest",       NULL, 0x0A1D0000,  0,          "pty resize: the grid follows, the seats hear SIGWINCH, a blocked read and a blocked wait are interrupted" },
-    { "/bin/df_test",         NULL, 0x0DF00000,  0,          "the direction flag does not cross a ring boundary (syscall, and into a handler)" },
-    { "/bin/regleak_test",    NULL, 0x02E60000,  0,          "a syscall returns no kernel state in its scratch registers" },
+    { "/tests/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and atomic publish" },
+    { "/tests/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
+    { "/tests/winchtest",       NULL, 0x0A1D0000,  0,          "pty resize: the grid follows, the seats hear SIGWINCH, a blocked read and a blocked wait are interrupted" },
+    { "/tests/df_test",         NULL, 0x0DF00000,  0,          "the direction flag does not cross a ring boundary (syscall, and into a handler)" },
+    { "/tests/regleak_test",    NULL, 0x02E60000,  0,          "a syscall returns no kernel state in its scratch registers" },
     // PASSES BY DYING, like the nx_test pair above: 141 is SIGPIPE's default
     // action (128 + 13), and reaching it proves the kernel still applies that
     // default when a handler is installed but CANNOT BE DELIVERED. Surviving
     // is the failure, and sigpipe_test says so with its own code rather than
     // hanging. Deliberately last — it is the only fixture that ends itself.
-    { "/bin/sigpipe_test",    NULL, 141,         0,          "an undeliverable SIGPIPE still applies its default action" },
+    { "/tests/sigpipe_test",    NULL, 141,         0,          "an undeliverable SIGPIPE still applies its default action" },
 };
 #define FIXTURE_COUNT (int32_t)(sizeof(kFixtures) / sizeof(kFixtures[0]))
 
@@ -224,7 +224,7 @@ static void run_fixture(const fixture_t *f)
 // nothing but sequence.
 static void run_concurrent_pair(void)
 {
-    const char *path = "/bin/file_io";
+    const char *path = "/tests/file_io";
     char *const solo[] = { (char *)path, NULL };
     int64_t a = os64_spawn(path, solo);
     int64_t b = os64_spawn(path, solo);
@@ -295,8 +295,8 @@ int main(int argc, char **argv)
     if (with_net)
     {
         const fixture_t net[] = {
-            { "/bin/dialtest",  NULL, 0x0D1A1600, 0, "net_dial round trip" },
-            { "/bin/fetchtest", NULL, 0x0FE7C400, 0, "TCP fetch over the stack" },
+            { "/tests/dialtest",  NULL, 0x0D1A1600, 0, "net_dial round trip" },
+            { "/tests/fetchtest", NULL, 0x0FE7C400, 0, "TCP fetch over the stack" },
         };
         for (int32_t i = 0; i < 2; i++)
             if (selected(net[i].path))

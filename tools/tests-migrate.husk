@@ -1,0 +1,72 @@
+#!/bin/husk
+#
+# tests-migrate — retire the fixtures from /bin, once /tests owns them.
+#
+# THIS RUNS INSIDE os64, not on the build host (hence the .husk suffix among
+# tools/'s .sh and .py neighbours). It belongs to one day, 2026-08-29, when the
+# proof harness moved out of /bin into /tests.
+#
+# WHY IT IS NEEDED AT ALL. os64get installs files and updates files; it has no
+# opinion about a file that STOPPED being shipped, and nothing else in os64 has
+# one either. So a machine refreshed over the network rather than reburned
+# keeps every fixture sitting in /bin exactly where the last ISO put it, beside
+# the /tests copies that superseded them. A reburn does not have this problem
+# (p5-refresh.sh rsyncs --delete); the wire does.
+#
+# WHAT DECIDES WHAT GOES: /tests IS THE ORACLE. A name that exists there is a
+# fixture by definition, so the copy of that name in /bin is the stale twin. A
+# name that is NOT in /tests is never touched, whatever it looks like. Two
+# properties fall out of that and both matter: nothing here needs a list of
+# fixture names that could go stale, and running this twice is harmless — the
+# second pass finds nothing to do.
+#
+# RUN IT AFTER A REFRESH, AND AFTER THE RIGHT ONE. os64get only routes fixtures
+# to /tests once the machine holds the os64get and the os64get.conf that know
+# about lots — and the refresh is what delivers those. So the first `os64get -a`
+# installs the new tooling while still routing by the old rules, and a SECOND
+# one is what actually fills /tests. This script checks rather than guesses:
+#
+#   os64get yogi tests-migrate.husk /tmp
+#   os64get -a yogi          # delivers the new os64get and os64get.conf
+#   os64get -a yogi          # now routes the fixtures into /tests
+#   husk /tmp/tests-migrate.husk
+#
+# It does NOT delete itself, though os64 would allow that (removing an open
+# regular file has been legal since 2026-08-16 — the name goes at once, the
+# storage at last close). Keep it instead: the next layout change wants this
+# same shape, and the reasoning above is most of the work.
+
+echo 'tests-migrate: retiring the /bin fixtures that /tests now owns'
+
+# The sentinel is testrun and not the directory, because an EMPTY /tests is the
+# failure worth catching — os64get creates a destination directory as soon as
+# one file routes there, so /tests can exist and mean nothing. testrun is the
+# program /tests exists to run; if it is not there, the harness has not landed.
+if test -f /tests/testrun
+then
+	echo '  /tests is populated — using it as the list of what to retire'
+else
+	echo 'tests-migrate: /tests/testrun is missing, so /tests is not populated.' >&2
+	echo '  Run `os64get -a <host>` TWICE and try again: the first refresh' >&2
+	echo '  delivers the os64get and os64get.conf that know about /tests,' >&2
+	echo '  the second is the one that routes the fixtures into it.' >&2
+	exit
+fi
+
+# Bare `*` against the current directory yields the names EXACTLY as they are
+# on disk — husk attaches no prefix and pads nothing. `ls` would be the obvious
+# reach and is the wrong one: its short form prints through "%-20.19s", so it
+# pads every name and silently truncates one past 19 characters.
+cd /tests
+
+for f in *
+do
+	if test -f /bin/$f
+	then
+		echo "  rm /bin/$f"
+		rm /bin/$f
+	fi
+done
+
+echo 'tests-migrate: done. /bin is commands, /tests is the proof harness.'
+echo '  Check with: ls /bin ; ls /tests ; testrun'

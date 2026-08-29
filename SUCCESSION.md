@@ -62,9 +62,12 @@ to stay current:
    for (the "0/1/2" was "the console" until 2026-08-28, which is why a
    redirected testrun's fixtures kept printing to the screen).
 7. **The tree is curated, /proc will be pure.** Single-rooted hierarchy,
-   WITHOUT the sediment: /bin (all executables, no sbin/usr split ever —
-   the /usr split was Ken and Dennis's 1971 disk shortage, not a design),
-   /lib, /etc, /home, /tmp, /dev later. /proc = processes ONLY, Plan 9
+   WITHOUT the sediment: /bin (the programs and tools a person runs — no
+   sbin/usr split ever; the /usr split was Ken and Dennis's 1971 disk
+   shortage, not a design), /tests (the proof harness — badge-code fixtures
+   and acceptance probes; a split by PURPOSE, which is what /usr never was,
+   and it lands on the path after /bin so a fixture can never shadow a
+   command), /lib, /etc, /home, /tmp, /dev later. /proc = processes ONLY, Plan 9
    style; kernel state goes elsewhere. ext2 is the root's future; FAT keeps
    the boot/interop job forever. ("." and ".." are not directory content —
    readdir never delivers them.)

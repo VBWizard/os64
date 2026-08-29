@@ -23,10 +23,20 @@
 // The valet serves NAMES, one path component each; where a name lands on
 // this machine is THIS machine's business, and it is written in
 // /etc/os64get.conf (or /home/os64get.conf, which wins — the same ladder as
-// logd.conf and husk.rc): exact names, `*.suffix` patterns, and a `*`
-// default, each mapped to a directory. The kernel goes to /fat/boot where
-// Limine reads it, programs go to /bin, and nobody has to remember which is
-// which at the prompt. An explicit DEST on the command line beats the file;
+// logd.conf and husk.rc): exact names, `*.suffix` patterns, `@lot` labels
+// and a `*` default, each mapped to a directory. The kernel goes to
+// /fat/boot where Limine reads it, programs go to /bin, and nobody has to
+// remember which is which at the prompt.
+//
+// A LOT (2026-08-29) is the valet's label for the DIRECTORY a file was
+// served from, carried in the fourth field of every LIST line. It exists
+// because /tests split out of /bin and the fixtures share no suffix and no
+// name pattern — nothing about the string "fputest" says where it belongs,
+// and forty-seven exact rules would be stale by Tuesday. It is the weakest
+// claim in the precedence order (exact, then suffix, then lot, then `*`) so
+// that one served directory can still hold files bound for several places.
+//
+// An explicit DEST on the command line beats the file;
 // no file and no DEST means the current directory, as it always did, so the
 // refresh that delivers a new os64get works before the one that delivers
 // its conf. Lineage: rdist(1), 4.3BSD 1985 — the distfile names the
@@ -123,18 +133,40 @@
 // they are what lets -a decide a file is unchanged WITHOUT dialing for it (see
 // local_matches), which is the difference between a refresh that re-fetches
 // 86 files and one that fetches the three that changed.
+// `lot` is the server's label for WHERE the file came from — its fourth LIST
+// field — and it is what routes a file no name rule claims (`@tests`).
+// Empty means the server offered none, which is what every server did before
+// lots existed and still means "route me by name alone".
+#define GET_LOT_MAX   32
+
 typedef struct {
     char     name[GET_NAME_MAX];
     uint64_t length;
     uint32_t crc;
+    char     lot[GET_LOT_MAX];
 } get_entry_t;
 
+// The catalogue, at file scope because BOTH fetch paths need it and it is far
+// too fat for a stack: `-a` walks the whole thing, and a single-file fetch
+// borrows it to look up that one file's lot (see lookup_lot). They never run
+// in the same invocation, so one buffer is one buffer.
+static get_entry_t entries[GET_MAX_LIST];
+
 // ── The config ──────────────────────────────────────────────────────────
-// A small fixed table, because the whole install map is six lines and a
-// utility that mallocs to read its own config has its priorities wrong.
-// Precedence is by SPECIFICITY (exact beats suffix beats `*`), and within a
-// class the LAST match in the file wins, so a /home copy can override by
-// repeating a line.
+// A small fixed table, because the whole install map is a handful of lines
+// and a utility that mallocs to read its own config has its priorities wrong.
+// Precedence is by SPECIFICITY (exact beats suffix beats `@lot` beats `*`),
+// and within a class the LAST match in the file wins, so a /home copy can
+// override by repeating a line.
+//
+// WHY A LOT SITS BELOW SUFFIX AND ABOVE `*`: a lot names where a file came
+// FROM, so it is the weakest claim any rule can make about a particular file
+// — weaker than one that spells the name and weaker than one that recognises
+// the kind. That ordering is exactly what lets one served directory hold
+// files bound for several places: kernel/bin carries fifteen fixtures for
+// /tests, but also os64_kernel (an exact rule sends it to /fat/boot) and
+// libtest.so (a `*.so` rule sends it to /lib). And it is still stronger than
+// `*`, which is the rule that knows nothing at all.
 #define CONF_RULES_MAX 16
 #define CONF_DIR_MAX   128
 
@@ -146,6 +178,7 @@ typedef struct {
 typedef struct {
     conf_rule_t exact[CONF_RULES_MAX];  size_t nexact;
     conf_rule_t suffix[CONF_RULES_MAX]; size_t nsuffix;
+    conf_rule_t lot[CONF_RULES_MAX];    size_t nlot;   // `@tests = /tests`
     char star[CONF_DIR_MAX];            // the `*` rule; empty = none
     char archive[CONF_DIR_MAX];         // the `archive` key; empty = don't
     const char *path;                   // which file answered (for complaints)
@@ -224,6 +257,24 @@ static bool conf_line(const char *key, const char *value, void *user)
             c->anyRule = true;
         return true;
     }
+    if (key[0] == '@' && key[1] != '\0') {
+        // A LOT rule: `@tests = /tests` routes everything the server labelled
+        // "tests" and no name rule claimed. Stored without the '@' so it can
+        // be compared straight against the LIST field.
+        if (c->nlot < CONF_RULES_MAX) {
+            if (!conf_take_dir(c->lot[c->nlot].dir, value)) {
+                conf_bad_dir(c, key, value);
+                return true;   // the slot stays free for the next rule
+            }
+            os64_strcopy(c->lot[c->nlot].name, sizeof(c->lot[0].name), key + 1);
+            c->nlot++;
+            c->anyRule = true;
+        } else {
+            os64_hprintf(OS64_STDERR, "os64get: %s: too many '@lot' rules (limit %d) - ignored: %s\n",
+                         c->path, CONF_RULES_MAX, key);
+        }
+        return true;
+    }
     if (key[0] == '*' && key[1] == '.') {
         // A suffix rule: stored as ".so", matched against the name's tail.
         // Later lines append; the matcher walks the table backwards so the
@@ -295,8 +346,11 @@ static void conf_load(conf_t *c)
     }
 }
 
-// The directory a name installs into, or NULL for "no rule" (= cwd).
-static const char *conf_route(const conf_t *c, const char *name)
+// The directory a file installs into, or NULL for "no rule" (= cwd).
+// `lot` is the server's source label for this file, or NULL/"" when it
+// offered none — in which case the walk simply skips the lot class and
+// behaves exactly as it did before lots existed.
+static const char *conf_route(const conf_t *c, const char *name, const char *lot)
 {
     for (size_t i = c->nexact; i > 0; i--)
         if (os64_streq(c->exact[i - 1].name, name))
@@ -309,6 +363,11 @@ static const char *conf_route(const conf_t *c, const char *name)
         if (nlen > slen && os64_streq(name + (nlen - slen), suf))
             return c->suffix[i - 1].dir;
     }
+
+    if (lot != NULL && lot[0] != '\0')
+        for (size_t i = c->nlot; i > 0; i--)
+            if (os64_streq(c->lot[i - 1].name, lot))
+                return c->lot[i - 1].dir;
 
     return c->star[0] ? c->star : NULL;
 }
@@ -556,19 +615,36 @@ static const char *dial_reason(int64_t err)
 // published at all.
 //
 // `destOverride` is the command line's final word (NULL to let the conf route
-// it). `archiveDir` is the ONE dated directory the whole run shares, so a
+// it). `lot` is the server's source label for this file, for the conf's
+// `@lot` rules (NULL when unknown — the routing then uses the name alone).
+// `archiveDir` is the ONE dated directory the whole run shares, so a
 // refresh reads as a single install in the archive rather than 86 of them.
 // `outDest` receives the resolved destination path so the caller can later
 // commit or discard this file without re-deriving the routing.
 static int fetch_stage(const char *host, const char *name, const char *destOverride,
+                       const char *lot,
                        const conf_t *conf, const char *archiveDir, bool quiet, bool force,
                        char *outDest, size_t outDestCap)
 {
     char dest[GET_PATH_MAX];
     if (destOverride != NULL)
     {
-        // The command line's word is final.
-        if (!join_path(dest, sizeof(dest), NULL, destOverride))
+        // The command line's word is final — but A DIRECTORY NAMES A PLACE,
+        // NOT A FILE. `os64get HOST prog /tmp` obviously means "put it in
+        // /tmp", and it used to mean "write a file called /tmp": the whole
+        // conf below deals in directories, the usage line called DEST a
+        // directory, and only this branch disagreed. The failure was at least
+        // loud — the publish rename hit the directory and said so — but loud
+        // is not the same as right.
+        //
+        // The rule is cp(1)'s, and has been since 1971: an existing directory
+        // receives the file under its own name; anything else IS the path, so
+        // fetching under a different name still works.
+        os64_dirent_t into;
+        bool intoDir = (os64_stat(destOverride, &into) >= 0) &&
+                       (into.flags & OS64_DE_DIR) != 0;
+        if (!join_path(dest, sizeof(dest), intoDir ? destOverride : NULL,
+                                           intoDir ? name : destOverride))
         {
             os64_hprintf(OS64_STDERR, "os64get: destination path too long\n");
             return GET_USAGE;
@@ -576,7 +652,7 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
     }
     else
     {
-        const char *dir = conf_route(conf, name);
+        const char *dir = conf_route(conf, name, lot);
         if (!join_path(dest, sizeof(dest), dir, name))
         {
             os64_hprintf(OS64_STDERR, "os64get: destination path too long\n");
@@ -1047,10 +1123,19 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
         entries[count].name[sp] = '\0';
         entries[count].length = 0;
         entries[count].crc = 0;
+        entries[count].lot[0] = '\0';
 
-        // "<name> <length> <crc>". A server that sends only the name still
-        // works — the entry simply carries no length/crc, and the unchanged
-        // check for it falls back to the per-file header test after dialing.
+        // "<name> <length> <crc> <lot>". A server that sends only the name
+        // still works — the entry simply carries no length/crc, and the
+        // unchanged check for it falls back to the per-file header test after
+        // dialing. Each field is bounded by the NEXT SPACE rather than by the
+        // end of the line, which is what lets the line keep growing: the crc
+        // parse used to run to end-of-line and wanted exactly eight
+        // characters there, so it saw the lot field and rejected the pair it
+        // had already read correctly. That is precisely what an os64get older
+        // than lots does when it meets a server that has them — it loses the
+        // catalogue's crc, re-checks each file against its own per-file
+        // header, and is slower for exactly one refresh.
         if (sp < len)
         {
             const char *p = line + sp + 1;
@@ -1060,13 +1145,78 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
             if (parse_u64(p, q, &entries[count].length))
                 *totalBytes += entries[count].length;
             if (*q == ' ')
-                parse_hex32(q + 1, q + 1 + os64_strlen(q + 1), &entries[count].crc);
+            {
+                const char *cs = q + 1;
+                const char *ce = cs;
+                while (*ce != '\0' && *ce != ' ')
+                    ce++;
+                parse_hex32(cs, ce, &entries[count].crc);
+                if (*ce == ' ')
+                {
+                    // "-" is the server's word for "this file came from a
+                    // directory I was given no label for", and it must not
+                    // become a lot name a conf rule could match.
+                    const char *ls = ce + 1;
+                    if (!(ls[0] == '-' && ls[1] == '\0'))
+                        os64_strcopy(entries[count].lot, sizeof(entries[count].lot), ls);
+                }
+            }
         }
         count++;
     }
 
     os64_close((int32_t)conn);
     return count;
+}
+
+// A conf that routes `@lot`s against a server that labelled NOTHING is the
+// exact shape of a valet started without its `dir=lot` arguments — and the
+// symptom is a refresh that reports success while quietly routing everything
+// by name. It cost an evening on 2026-08-29: 88 files fetched, no errors, and
+// the whole of /tests neither served nor routed.
+//
+// The test is "no file carried a lot", not "this file carried none": a lot is
+// optional per file, so an unlabelled file among labelled ones is ordinary and
+// says nothing. Only a catalogue with no lots AT ALL, read by a conf that
+// expects them, is evidence of a misconfigured server.
+static void warn_if_server_has_no_lots(const conf_t *c, int32_t n)
+{
+    if (c->nlot == 0 || n <= 0)
+        return;
+    for (int32_t i = 0; i < n; i++)
+        if (entries[i].lot[0] != '\0')
+            return;
+
+    os64_hprintf(OS64_STDERR,
+                 "os64get: %s routes %ld lot(s), but the server labelled none of its %ld files.\n"
+                 "  Everything will route by NAME alone — anything that needed its lot lands\n"
+                 "  wherever the `*` rule points. Start os64serve with `<directory>=<lot>`\n"
+                 "  arguments, and check the lot's directory is being served at all (a\n"
+                 "  SUBDIRECTORY of a served directory is not served; it needs its own word).\n",
+                 c->path ? c->path : "the conf", (long)c->nlot, (long)n);
+}
+
+// One file's lot, for the single-file fetch that would otherwise never learn
+// it. `-a` already holds every lot in the catalogue it asked for; a lone
+// `os64get HOST fputest` asks only for the file.
+//
+// A LIST that fails is NOT fatal here and must not be: the caller proceeds
+// name-routed, which is exactly what os64get did before lots existed. Failing
+// the fetch because an optional refinement was unavailable would trade a
+// working command for a tidier one.
+static void lookup_lot(const char *host, const char *name, const conf_t *c,
+                       char *out, size_t cap)
+{
+    out[0] = '\0';
+    uint64_t ignored = 0;
+    int32_t n = fetch_list(host, entries, GET_MAX_LIST, &ignored);
+    warn_if_server_has_no_lots(c, n);
+    for (int32_t i = 0; i < n; i++)
+        if (os64_streq(entries[i].name, name))
+        {
+            os64_strcopy(out, cap, entries[i].lot);
+            return;
+        }
 }
 
 int main(int argc, char **argv)
@@ -1087,7 +1237,8 @@ int main(int argc, char **argv)
 
     os64_args_init(&args, argc, argv, specs, 5);
     args.about = "Fetch a file over the network, archive it, and install it only if it is intact.";
-    args.details = "DEST defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
+    args.details = "DEST is a directory to install into, or the full path to install as; "
+                   "it defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
                    "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename. "
                    "With -a, asks the server what it has and fetches all of it — the whole-system refresh.";
 
@@ -1159,9 +1310,18 @@ int main(int argc, char **argv)
         // hold back FOR — the two-phase dance below exists to keep a
         // MULTI-file refresh from tearing, and a single file has no siblings
         // to be inconsistent with.
+        // A lone fetch asks the server for one file and learns nothing else,
+        // so without this it would route a fixture by name alone and quietly
+        // install it in /bin. The extra listing is spent ONLY when it can
+        // change the answer — never when the command line already spelled a
+        // destination, and never when the conf has no `@lot` rule to apply.
+        char lot[GET_LOT_MAX] = {0};
+        if (count < 3 && conf.nlot > 0)
+            lookup_lot(host, operands[1], &conf, lot, sizeof(lot));
+
         char dest[GET_PATH_MAX] = {0};
         int rc = fetch_stage(host, operands[1], count >= 3 ? operands[2] : NULL,
-                             &conf, archiving ? archiveDir : NULL, quiet, force,
+                             lot, &conf, archiving ? archiveDir : NULL, quiet, force,
                              dest, sizeof(dest));
         if (rc == GET_UNCHANGED)
             return GET_OK;   // nothing fetched, nothing staged, nothing to say
@@ -1180,7 +1340,6 @@ int main(int argc, char **argv)
     }
 
     // ── The whole system, in one command ────────────────────────────────
-    static get_entry_t entries[GET_MAX_LIST];   // static: far too fat for a stack
     uint64_t totalBytes = 0;
     int32_t n = fetch_list(host, entries, GET_MAX_LIST, &totalBytes);
     if (n < 0)
@@ -1190,6 +1349,12 @@ int main(int argc, char **argv)
         os64_hprintf(OS64_STDERR, "os64get: the server offers nothing — is it serving the right directories?\n");
         return GET_OK;
     }
+
+    // Before a single byte moves: a whole-system refresh routing everything by
+    // name when the conf expects lots is worth interrupting for, and NOT
+    // behind !quiet — a warning you silenced along with the progress is a
+    // warning you will not see on the run that mattered.
+    warn_if_server_has_no_lots(&conf, n);
 
     if (!quiet)
         os64_printf("os64get: %ld files, %lu bytes, from %s\n",
@@ -1218,7 +1383,7 @@ int main(int argc, char **argv)
         // single-file case and for any server that lists bare names.)
         if (!force && entries[i].length != 0)
         {
-            const char *dir = conf_route(&conf, entries[i].name);
+            const char *dir = conf_route(&conf, entries[i].name, entries[i].lot);
             char probe[GET_PATH_MAX];
             if (join_path(probe, sizeof(probe), dir, entries[i].name) &&
                 local_matches(probe, entries[i].length, entries[i].crc))
@@ -1232,7 +1397,7 @@ int main(int argc, char **argv)
 
         if (!quiet)
             os64_printf("[%ld/%ld] %s\n", (long)(i + 1), (long)n, entries[i].name);
-        int rc = fetch_stage(host, entries[i].name, NULL, &conf,
+        int rc = fetch_stage(host, entries[i].name, NULL, entries[i].lot, &conf,
                              archiving ? archiveDir : NULL, quiet, force,
                              dests[i], sizeof(dests[i]));
         if (rc == GET_OK)

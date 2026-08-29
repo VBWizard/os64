@@ -10,7 +10,12 @@ KERNEL started traveling this way: userland/bin carries the apps,
 kernel/bin carries os64_kernel, and a kernel refresh should not require
 copying binaries between them).
 
-    python3 os64serve.py [directory ...] [--port 6464]
+    python3 os64serve.py [directory|directory=LOT ...] [--port 6464]
+
+A directory may carry a LOT label, which travels with every file it serves
+and is what os64get.conf routes on when no rule names the file itself
+(`@tests = /tests`). The label names the SOURCE, never the destination, so
+one lot can hold files bound for several places — see split_lot below.
 
 Run it on the WINDOWS side of the build PC, not inside WSL2. That is not a
 style preference: WSL2 lives behind a NAT of its own, so a listener there
@@ -42,8 +47,8 @@ THE PROTOCOL (RTL8125.md), deliberately 1971-shaped:
                    or:  NO <reason>\n
 
     client -> server:   LIST\n
-    server -> client:   <name> <length-decimal> <crc32-hex8>\n   (one per file)
-                        .\n
+    server -> client:   <name> <length-decimal> <crc32-hex8> <lot>\n
+                        .\n                          (one line per file)
 
 LIST arrived 2026-08-22, when libos64 became a shared object and the payload
 became 66 files: `os64get -a HOST` asks what the valet has and fetches all of
@@ -141,9 +146,11 @@ def read_served_file(directory, name):
 def read_served_file_multi(directories, name):
     """The name is looked up in each directory in command-line order; the
     first that has it wins. Order-as-priority instead of a collision error,
-    because the two real lots (userland/bin, kernel/bin) share no names
-    today — and if they ever do, the operator's ordering IS the decision."""
-    for directory in directories:
+    because the served lots share no names — the BUILD refuses a name claimed
+    by two source trees (GNUmakefile TESTS_NAME_CLASH, userland/GNUmakefile
+    APP_TEST_NAME_CLASH) — and if one ever slips through anyway, the
+    operator's ordering IS the decision."""
+    for directory, _lot in directories:
         data = read_served_file(directory, name)
         if data is not None:
             return data
@@ -177,11 +184,23 @@ def serve_one(conn, addr, directories):
         # the client would be stale the first time an app was added.
         #
         #     client -> server:  LIST\n
-        #     server -> client:  <name> <length> <crc32hex>\n   (one per file)
+        #     server -> client:  <name> <length> <crc32hex> <lot>\n  (per file)
         #                        .\n
         #
         # A lone "." ends it - SMTP's terminator since 1982, and still the
         # right answer for a line protocol a human might type by hand.
+        #
+        # THE LOT is the fourth field (2026-08-29) and it is a source label,
+        # not a destination: os64get.conf maps `@<lot>` to a directory, and
+        # its name rules out-rank its lot rules so one lot can still hold
+        # files bound for different places. Files from an unlabelled
+        # directory carry "-". It is APPENDED rather than woven in because an
+        # os64get built before lots existed reads the first three fields and
+        # stops - the only thing it loses is the list's CRC (its hex parser
+        # wants exactly eight characters to end of line, and now finds more),
+        # so that one refresh re-checks each file against its own per-file
+        # header instead of skipping identical ones. Slower, never wrong, and
+        # it heals the moment the newer os64get it just fetched is installed.
         #
         # Same first-hit-wins order as GET, and the same safety rules, so
         # every name in the list is a name GET will actually serve: listing a
@@ -189,7 +208,7 @@ def serve_one(conn, addr, directories):
         if line == "LIST":
             seen = set()
             entries = []
-            for directory in directories:
+            for directory, lot in directories:
                 try:
                     for entry in sorted(os.listdir(directory)):
                         if entry in seen or not is_safe_name(entry):
@@ -201,12 +220,14 @@ def serve_one(conn, addr, directories):
                         data = read_served_file_multi(directories, entry)
                         if data is None:
                             continue
-                        entries.append((entry, len(data), zlib.crc32(data) & 0xFFFFFFFF))
+                        entries.append((entry, len(data),
+                                        zlib.crc32(data) & 0xFFFFFFFF, lot or "-"))
                 except OSError as exc:
                     print(f"  {addr[0]}: cannot list {directory}: {exc}")
-            body = "".join(f"{n} {ln} {c:08x}\n" for n, ln, c in entries) + ".\n"
+            body = "".join(f"{n} {ln} {c:08x} {lot}\n"
+                           for n, ln, c, lot in entries) + ".\n"
             conn.sendall(body.encode("ascii"))
-            total = sum(ln for _, ln, _ in entries)
+            total = sum(ln for _name, ln, _crc, _lot in entries)
             print(f"  {addr[0]}: listed {len(entries)} files ({total} bytes)")
             return
 
@@ -247,18 +268,62 @@ def serve_one(conn, addr, directories):
         conn.close()
 
 
+def split_lot(spec):
+    """A served directory is `PATH` or `PATH=LOT`.
+
+    The LOT is a short label naming WHERE THE FILE CAME FROM, and it is the
+    only thing this program knows about destinations: os64get.conf decides
+    where a lot installs (`@tests = /tests`). Keeping the label a source name
+    rather than a destination is what lets one lot hold files bound for
+    several places — kernel/bin carries fifteen fixtures for /tests, but also
+    os64_kernel for /fat/boot and libtest.so for /lib, and the client's
+    name rules out-rank its lot rules precisely so those still peel off.
+
+    A directory given with no `=LOT` is served unlabelled, which is what
+    every invocation did before lots existed and still means "route me by
+    name alone".
+    """
+    path, sep, lot = spec.partition("=")
+    if not sep:
+        return os.path.realpath(spec), None
+    if not lot or " " in lot:
+        raise ValueError(f"bad lot label in {spec!r}: must be one word after '='")
+    return os.path.realpath(path), lot
+
+
 def main():
     ap = argparse.ArgumentParser(description="Serve files to os64get.")
-    ap.add_argument("directories", nargs="*", default=["."],
-                    help="directories to serve, searched in order, first hit "
-                         "wins (default: the current one)")
+    # default=[] and NOT default=["."]: argparse fills a default in, so with
+    # ["."] there is no way afterwards to tell "the user named nothing" from
+    # "the user named the current directory" — and the first of those is the
+    # one worth shouting about. The fallback to "." happens below instead.
+    ap.add_argument("directories", nargs="*", default=[],
+                    help="directories to serve as PATH or PATH=LOT, searched "
+                         "in order, first hit wins (default: the current one)")
     ap.add_argument("--port", type=int, default=6464)
     ap.add_argument("--bind", default="0.0.0.0",
                     help="address to listen on (default: everything)")
     args = ap.parse_args()
 
-    directories = [os.path.realpath(d) for d in (args.directories or ["."])]
-    for directory in directories:
+    # NO DIRECTORY NAMED MEANS THE CURRENT ONE, and that has to announce
+    # itself. The default is a convenience for a quick ad-hoc serve, but it is
+    # also what a shell hands you when the arguments went somewhere else — a
+    # multi-line command pasted into cmd.exe runs its first line alone — and
+    # the result is a valet quietly offering your home directory to anything
+    # that dials in. An `os64get -a` against that installs it. Loud, then.
+    defaulted = not args.directories
+    try:
+        directories = [split_lot(d) for d in (args.directories or ["."])]
+    except ValueError as exc:
+        print(f"os64serve: {exc}", file=sys.stderr)
+        return 2
+    if defaulted:
+        print("os64serve: NO DIRECTORY NAMED — serving the CURRENT directory:")
+        print(f"           {directories[0][0]}")
+        print("           If you meant to serve something else, stop now: everything")
+        print("           below is offered to anything that connects. (A multi-line")
+        print("           command pasted into cmd.exe runs only its first line.)")
+    for directory, _lot in directories:
         if not os.path.isdir(directory):
             print(f"os64serve: {directory} is not a directory", file=sys.stderr)
             return 2
@@ -271,8 +336,42 @@ def main():
     s.listen(4)
 
     print(f"os64serve: serving on {args.bind}:{args.port}, first hit wins:")
-    for directory in directories:
-        print(f"           {directory}")
+    for directory, lot in directories:
+        print(f"           {directory}" + (f"   [lot {lot}]" if lot else ""))
+
+    # A SUBDIRECTORY OF A SERVED DIRECTORY IS NOT SERVED, and saying so at
+    # startup is the difference between a five-second fix and an evening.
+    # The listing walk skips anything that is not a regular file, silently and
+    # correctly — but "silently" is how /tests came to be missing from a
+    # refresh that reported 88 files and no errors, because the fixtures live
+    # under userland/bin/tests and nobody had said that a nested directory
+    # needs naming in its own right.
+    #
+    # CAPPED, because a hint that scrolls the screen is not a hint. Serving one
+    # directory that happens to hold thirty others is ordinary; the note exists
+    # for the case where a handful are missing and one of them is the one you
+    # meant, so a few names carry the whole message and a count carries the
+    # rest.
+    served = {path for path, _lot in directories}
+    unserved = []
+    for directory, _lot in directories:
+        try:
+            for entry in sorted(os.listdir(directory)):
+                full = os.path.join(directory, entry)
+                if os.path.isdir(full) and os.path.realpath(full) not in served:
+                    unserved.append(full)
+        except OSError:
+            pass                      # unreadable is the listing walk's problem, not ours
+
+    NOTE_MAX = 4
+    if unserved:
+        print("os64serve: NOTE — these subdirectories of a served directory are NOT")
+        print("           served. A subdirectory needs its own word on the command")
+        print('           line, optionally labelled: "<directory>=<lot>"')
+        for full in unserved[:NOTE_MAX]:
+            print(f"             {full}")
+        if len(unserved) > NOTE_MAX:
+            print(f"             ... and {len(unserved) - NOTE_MAX} more")
     print("           Ctrl-C to stop.  (Windows may ask about the firewall - say yes.)")
     try:
         while True:

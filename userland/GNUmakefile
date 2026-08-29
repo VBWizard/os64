@@ -1,9 +1,11 @@
 # userland/GNUmakefile — builds the whole os64 userland: the launch stub,
-# libos64, and every app under apps/. One makefile above them all (per the
-# roadmap — build scale is a non-issue on the dev machines).
+# libos64, every app under apps/, and every fixture under tests/. One makefile
+# above them all (per the roadmap — build scale is a non-issue on the dev
+# machines).
 #
-# Output: each app links to userland/bin/<app> as a dynamically-linked ring-3
-# ELF (launch + the app, against /lib/libos64.so), ready for the disk image.
+# Output: each program links to userland/bin/<app> or userland/bin/tests/<name>
+# as a dynamically-linked ring-3 ELF (launch + the program, against
+# /lib/libos64.so), ready for the disk image's /bin and /tests.
 
 # THE CROSS TOOLCHAIN, AND THE TWO-FACED `?=` (fixed 2026-08-22).
 #
@@ -96,6 +98,11 @@ LDFLAGS ?= -nostdlib --no-as-needed --hash-style=sysv -T $(CURDIR)/link/app.ld -
 
 BIN     := $(CURDIR)/bin
 OBJ     := $(CURDIR)/obj
+# The fixtures land in their own output directory because they land in their
+# own directory ON THE IMAGE (/tests, not /bin). Keeping the two apart here is
+# what lets the image rules route them without a hand-maintained list of which
+# names are tests — the SOURCE tree is the answer, and it cannot drift.
+TESTBIN := $(BIN)/tests
 
 # ── THE LIBRARY AND THE STUB (split 2026-08-22, when libos64 became a .so) ──
 #
@@ -183,6 +190,33 @@ HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
 # and its link rule gets eval'd twice.
 APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard apps/*/*.c)))))
 
+# And every tests/<name>/ directory is a FIXTURE named <name>, built exactly
+# like an app and installed to /tests instead of /bin.
+#
+# The split is curatorial, not technical: /bin is the programs and tools a
+# person runs, /tests is the proof harness — the badge-code fixtures testrun
+# spawns, and the acceptance probes you drive by hand when a feature is on
+# trial. Two directories also make a NAME COLLISION IMPOSSIBLE TO MISS, which
+# is why the split was worth doing on its own: `hog` existed twice, once here
+# and once under kernel/test/elf, both aimed at /bin/hog, and the image kept
+# the one this tree built. So test_backstop_preemption — whose entire premise
+# is "a thread that never enters the kernel" — was spawning the measuring
+# instrument, which calls os64_ticks() as it spins.
+TESTS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard tests/*/*.c)))))
+
+# AND THE TRIPWIRE, because this slice exists to replace vigilance with a
+# mechanism. Every per-program make variable below (APP_OBJS_<name>,
+# APP_BASE_<name>, the base stamp) is keyed on the NAME alone, so one name in
+# both trees would have the second eval quietly overwrite the first and build
+# one of them from the other's sources. The two directories cannot collide on
+# the IMAGE any more; this is what stops them colliding in the BUILD.
+APP_TEST_NAME_CLASH := $(filter $(APPS),$(TESTS))
+ifneq ($(APP_TEST_NAME_CLASH),)
+$(error name used by both an app and a fixture: $(APP_TEST_NAME_CLASH) — \
+        apps/ and tests/ share one link-base pool and one set of make \
+        variables, so a name must belong to exactly one of them)
+endif
+
 # `[` is the traditional second name for test, not a second program. Keep one
 # linked image and copy it under the punctuation name so both entry points have
 # identical expression semantics and fixes cannot drift between twins.
@@ -200,7 +234,14 @@ APP_ALIASES := [
 # not a hand-maintained table), so an app's address is stable across rebuilds and
 # adding a new app doesn't shove the others around — and "drop a directory and it
 # builds" still holds. See that file for the full rationale and the window map.
-APP_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py $(APPS))
+# FIXTURES DRAW FROM THE SAME POOL AS APPS, and must: a fixture is an ordinary
+# non-PIE ET_EXEC, so two programs sharing a base is the same debugger ambiguity
+# whichever directory they came from — and testrun runs a fixture right next to
+# the app it is testing. Because app_bases.py keys on the NAME and sorts before
+# probing, feeding it both lists yields exactly the map it produced when they
+# were one list: moving a program between apps/ and tests/ does not move it in
+# memory.
+APP_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py $(APPS) $(TESTS))
 # The slot size comes from the same script that assigns the bases, and is
 # handed to ld so app.ld can ASSERT the app actually fits in its slot. One
 # definition of the number; see app.ld's slot-check comment.
@@ -209,7 +250,7 @@ $(foreach p,$(APP_BASE_PAIRS),\
   $(eval APP_BASE_$(word 1,$(subst =, ,$(p))) := $(word 2,$(subst =, ,$(p)))))
 
 .PHONY: all
-all: $(LIBOS64_SO) $(addprefix $(BIN)/,$(APPS)) \
+all: $(LIBOS64_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -230,19 +271,20 @@ $(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld
 	$(LD) --defsym LIB_BASE=$(LIBOS64_BASE) $(LIBOS64_LDFLAGS) -o $@ $(LIBOS64_OBJS)
 	@printf '  %-10s prelinked at %s\n' "libos64.so" "$(LIBOS64_BASE)"
 
-# Per-app link rule, generated per app: the app name appears in BOTH the
-# directory and the filename, and a make pattern prerequisite allows only one
-# `%` stem — so a single `$(BIN)/%: $(OBJ)/apps/%/%.c.o` rule can't express it.
-# eval writes an explicit rule for each app instead (also the natural place to
-# add per-app extras later).
+# The link rule, generated once per program — apps and fixtures alike: the
+# name appears in BOTH the directory and the filename, and a make pattern
+# prerequisite allows only one `%` stem, so a single
+# `$(BIN)/%: $(OBJ)/apps/%/%.c.o` rule can't express it. eval writes an
+# explicit rule for each instead (also the natural place to add per-app
+# extras later).
 # NOTE the argument order: --defsym MUST come BEFORE -T (which lives in LDFLAGS).
 # ld processes options left to right, and the script's DEFINED(APP_BASE) test can
 # only see symbols defined by the time the script is read — a --defsym placed
 # after -T is silently ignored and every app quietly links at the 0x400000
 # fallback again (which builds, runs, and fails only in the debugger — the worst
 # kind of bug). Verified: defsym-after-T -> 0x400000, defsym-before-T -> 0xe400000.
-# MULTI-FILE APPS (since top, 2026-07-27): EVERY .c in apps/<name>/ compiles
-# and links into <name> — before this, the rule named exactly <name>.c.o, so
+# MULTI-FILE APPS (since top, 2026-07-27): EVERY .c in the program's directory
+# compiles and links into it — before this, the rule named exactly <name>.c.o, so
 # a second source file wasn't "compiled but not linked", it was never even
 # compiled ("undefined reference to `topMain'" was the symptom). The wildcard
 # expands at eval time, so dropping another .c into the folder is picked up
@@ -258,31 +300,43 @@ $(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld
 # the required filename changes, its new stamp is created, and only that app
 # relinks with the new --defsym. Old stamps are harmless historical crumbs and
 # disappear with `make clean` alongside the rest of OBJ.
+#
+# THE THREE ARGUMENTS are (name, source directory, output directory) — a
+# fixture builds by exactly the same recipe as an app and differs only in
+# where it comes from and where it goes, so it gets the same rule rather than
+# a parallel copy that could drift.
 define APP_RULE
-APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard apps/$(1)/*.c))
+APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
 APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ))
-APP_BASE_STAMP_$(1) := $(OBJ)/apps/$(1)/.base-$(APP_BASE_$(1))
+APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
 	@touch "$$@"
-$(BIN)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $(LIBOS64_SO) $$(APP_BASE_STAMP_$(1))
-	@mkdir -p "$(BIN)"
+$(3)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $(LIBOS64_SO) $$(APP_BASE_STAMP_$(1))
+	@mkdir -p "$(3)"
 	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $(LIBOS64_SO)
 	@printf '  %-10s base %s\n' "$(1)" "$(APP_BASE_$(1))"
 endef
-$(foreach app,$(APPS),$(eval $(call APP_RULE,$(app))))
+$(foreach app,$(APPS),$(eval $(call APP_RULE,$(app),apps,$(BIN))))
+$(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 
-# The GDB symbol map: one add-symbol-file per app, at its own base. Sourced by
-# ./.gdbinit, so EVERY app's symbols are loaded before anything runs — symbolic
-# breakpoints (`hbreak upper.c:47`) resolve immediately instead of going pending,
-# and they resolve UNAMBIGUOUSLY because no two apps share an address anymore.
-$(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(LIBOS64_SO)
+# The GDB symbol map: one add-symbol-file per program, at its own base. Sourced
+# by ./.gdbinit, so EVERY program's symbols are loaded before anything runs —
+# symbolic breakpoints (`hbreak upper.c:47`) resolve immediately instead of going
+# pending, and they resolve UNAMBIGUOUSLY because no two share an address.
+# FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
+# afterthought: a fixture is the program you are most likely to be single-
+# stepping, because it is what you reach for when something is already broken.
+$(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
-	@printf '# Every app at its own base, so GDB can hold all their symbols at once.\n' >> $@
+	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
 	@$(foreach app,$(APPS),\
 	   printf 'add-symbol-file %s/%s %s\n' "$(BIN)" "$(app)" "$(APP_BASE_$(app))" >> $@;)
+	@printf '\n# The /tests fixtures, from the same base pool.\n' >> $@
+	@$(foreach t,$(TESTS),\
+	   printf 'add-symbol-file %s/%s %s\n' "$(TESTBIN)" "$(t)" "$(APP_BASE_$(t))" >> $@;)
 	@printf '\n' >> $@
 	@printf '# THE SHARED LIBRARY (2026-08-22). Without this line GDB has no line\n' >> $@
 	@printf '# info anywhere in libos64, so `step` at a library call silently behaves\n' >> $@
@@ -294,7 +348,7 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(LIBOS64_SO)
 	@printf '# image base, since lib.ld puts the read-only zone first.\n' >> $@
 	@printf 'add-symbol-file %s 0x%s\n' "$(LIBOS64_SO)" \
 	   "$$(x86_64-elf-readelf -SW $(LIBOS64_SO) | grep -E '\.text +PROGBITS' | grep -oE '[0-9a-f]{16}' | head -1)" >> $@
-	@printf '# (symbols for %s + libos64.so)\n' "$(APPS)" >> $@
+	@printf '# (symbols for %s + libos64.so)\n' "$(APPS) $(TESTS)" >> $@
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each
 # compile regenerates its .d with the current include list, so it cannot drift.
@@ -303,7 +357,7 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(LIBOS64_SO)
 # stale against topMain.h edits — the EXACT bug class this makefile's -MMD
 # comment block memorializes, sneaking back through a side door.
 HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) \
-               $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c)) \
+               $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c tests/*/*.c)) \
                $(PAGER_OBJ:.o=.d) $(HEX_BUFFER_OBJ:.o=.d)
 -include $(HEADER_DEPS)
 
@@ -327,8 +381,14 @@ $(OBJ)/pic/%.S.o: %.S
 # here compile at -O2 (a pattern-specific variable, so nothing else
 # changes). Add one only when it has been MEASURED; a demo that feels
 # slow is usually doing more math, not less optimizing.
+# The source directory is DERIVED rather than spelled, because a name here is
+# a pattern prefix: `$(OBJ)/apps/<name>/%.c.o` matches nothing at all once that
+# program lives under tests/, and a pattern-specific variable that matches
+# nothing is silent — the -O2 would simply stop applying with no diagnostic.
+# fpu_demo made exactly that move on the day /tests was created.
 OPTIMIZED_APPS := fpu_demo
-$(foreach a,$(OPTIMIZED_APPS),$(eval $(OBJ)/apps/$(a)/%.c.o: CFLAGS += -O2))
+$(foreach a,$(OPTIMIZED_APPS),\
+  $(eval $(OBJ)/$(if $(filter $(a),$(TESTS)),tests,apps)/$(a)/%.c.o: CFLAGS += -O2))
 
 $(OBJ)/%.c.o: %.c
 	@mkdir -p "$(dir $@)"

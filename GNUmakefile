@@ -178,6 +178,14 @@ USERLAND_APPS := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/apps/
 USERLAND_ALIASES := [
 USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS) $(USERLAND_ALIASES))
 
+# The fixtures, discovered the same way from userland/tests/ and installed to
+# /tests instead of /bin. /bin is the programs and tools a person runs; /tests
+# is the proof harness. The routing is the SOURCE DIRECTORY and nothing else,
+# so no list here has to be kept in step with anyone's opinion about what
+# counts as a test — moving a directory moves the program.
+USERLAND_TESTS    := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/tests/*/*.c)))))
+USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
+
 # The shared libraries every one of those apps now needs to run at all
 # (2026-08-22). This is not optional cargo: since libos64 became a .so, an
 # image with /bin but no /lib/libos64.so boots to a husk that cannot start —
@@ -189,10 +197,26 @@ USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS) $(USERLAND_ALIASES))
 # untouched.
 USERLAND_LIBS := userland/bin/libos64.so
 
-# Kernel-side ring-3 test fixtures that also ride the image.
+# Kernel-side ring-3 test fixtures. They ride the image into /tests alongside
+# the userland ones — same shelf, because they are the same KIND of thing: a
+# program whose verdict is its exit code. Only their source tree differs
+# (kernel/test/elf, where they were born to be spawned from the kernel suite).
+# libtest.so rides this list for its build dependency only — it is a LIBRARY,
+# so the copy loops filter it out and place it in /lib with the others.
 KERNEL_FIXTURES := $(addprefix kernel/bin/,test_elf arg_echo dyn_consumer \
-                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test hog env_fill glutton libtest.so)
+                     syscall_smoke exit_by_return file_io redirect_io dir_list map_unmap cwd_test stat_test sleep_test memory_test nosyscall env_fill glutton libtest.so)
 KERNEL_BIN      := kernel/bin/$(IMAGE_NAME)
+
+# THE TRIPWIRE FOR THE COLLISION THAT STARTED ALL THIS. Two source trees feed
+# /tests, and neither image builder complains when they claim one name: debugfs
+# refuses the second write, mcopy replaces the first, and both do it silently.
+# `hog` sat in that blind spot from 2026-08-13 until the /tests split found it.
+# A name owned twice now stops the build instead of picking a winner.
+TESTS_NAME_CLASH := $(filter $(USERLAND_TESTS),$(filter-out libtest.so,$(notdir $(KERNEL_FIXTURES))))
+ifneq ($(TESTS_NAME_CLASH),)
+$(error name claimed by both userland/tests and kernel/test/elf: $(TESTS_NAME_CLASH) — \
+        both install to /tests, so a name must belong to exactly one of them)
+endif
 
 
 .PHONY: all
@@ -207,7 +231,7 @@ all-hdd: $(IMAGE_NAME).hdd
 # (new mtime -> the disk image and ISO rebuild) or leaves it alone (old mtime ->
 # they don't). That is what makes `make run` cheap when nothing changed.
 $(KERNEL_BIN) $(KERNEL_FIXTURES): kernel ;
-$(USERLAND_BINS) $(USERLAND_LIBS): userland ;
+$(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS): userland ;
 
 # Local qemu: ~/src/qemu-9.2.0-rc0/build/
 .PHONY: run
@@ -362,7 +386,7 @@ userland:
 # ext2-ROOT boot (see the "/QEMU Boot (ext2 root)" Limine entry) finds the
 # same programs a FAT boot does. Rebuilds when the generator OR any binary
 # that rides it changes.
-$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf GNUmakefile
+$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -376,12 +400,21 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_LIBS)
 	# Second debugfs pass: the program payload. Generated here (not in the
 	# python script) because the bin list is THIS makefile's knowledge — same
 	# discovery as the FAT mcopy loop below, no per-app line to forget.
-	# /etc and /tmp join /bin and /lib: the curated tree, now that root is
-	# writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
+	# /etc, /tmp and /tests join /bin and /lib: the curated tree, now that root
+	# is writable (ratified 2026-08-07). /etc/husk.rc is the SYSTEM's rc —
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
-	printf 'mkdir /bin\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
+	# /tests: the proof harness — the userland fixtures and the kernel-born
+	# ones, on one shelf. NOTE the tie-break if two source trees ever claim one
+	# name again: debugfs `write` REFUSES an existing name, so HERE the first
+	# writer wins, while the lifeboat's `mcopy -o` REPLACES, so THERE the last
+	# one does. Opposite rules, neither of them loud. When `hog` was claimed by
+	# both trees they happened to agree, which is luck and not a mechanism —
+	# separate directories are the mechanism.
+	printf 'cd /tests\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
+	$(foreach t,$(USERLAND_TESTBINS),printf 'write %s %s\n' "$(t)" "$(notdir $(t))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,printf 'write %s %s\n' "$(f)" "$(notdir $(f))" >> $(EXT2_STAGING)/debugfs_bins.cmds;))
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
 	# FAT — the one file that must never lie about which filesystem it's on).
@@ -394,14 +427,14 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_LIBS)
 	$(foreach l,$(USERLAND_LIBS),printf 'write %s %s\n' "$(l)" "$(notdir $(l))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	printf 'write kernel/bin/libtest.so libtest.so\ncd /\nwrite %s partition_info\n' "$(EXT2_STAGING)/partition_info.txt" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	debugfs -w -f $(EXT2_STAGING)/debugfs_bins.cmds $(EXT2_TEST_IMAGE) > /dev/null 2>&1
-	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps)"
+	@echo "  ext2 test image rebuilt (mkfs.ext2 + debugfs, host-authored content + $(words $(USERLAND_APPS)) apps, $(words $(USERLAND_TESTS)) fixtures)"
 
 # etc/desktop.conf, etc/gclock.conf and etc/os64.conf are dependencies because the recipe COPIES
 # them onto the lifeboat's /etc. desktop.conf was missing from this list when it
 # arrived (2026-08-23) — editing it left the image stale, which presents as "I
 # changed my wallpaper and nothing happened". Any file the recipe copies belongs
 # here; that is the whole contract of a prerequisite list.
-$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
+$(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) kernel/test/partition_info.txt etc/husk.rc etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf limine-hd.conf $(wildcard external/*) $(EXT2_TEST_IMAGE) GNUmakefile
 	@mkdir -p "$$(dirname $(DISK_IMAGE))"
 	# rm + truncate instead of dd-from-/dev/zero: creates a sparse file, so
 	# rebuilding the image doesn't write $(DISK_SIZE_MB)MB of zeros each time.
@@ -427,12 +460,20 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	# Drop the host-authored ext2 filesystem into partition 2, byte for byte.
 	dd if=$(EXT2_TEST_IMAGE) of=$(DISK_IMAGE) bs=512 seek=$(EXT2_START_SECTOR) conv=notrunc,sparse status=none
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/bin > /dev/null 2>&1
+	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/tests > /dev/null 2>&1
 	-@mmd -i $(DISK_IMAGE)@@$(DISK_OFFSET) ::/lib > /dev/null 2>&1
-	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
-	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/bin/$(notdir $(f));))
 	# Every discovered userland app, automatically — no per-app line to forget.
 	$(foreach b,$(USERLAND_BINS),\
 	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(b) ::/bin/$(notdir $(b));)
+	# THE LIFEBOAT CARRIES THE PROOF HARNESS TOO (Chris's call, 2026-08-29):
+	# a lifeboat exists to be trusted while everything else is suspect, and one
+	# that cannot demonstrate the CPU, the kernel and the syscall floor are
+	# sound is asking to be taken on faith at the worst possible moment. It
+	# costs ~750KB of the 59MB this partition has spare.
+	$(foreach t,$(USERLAND_TESTBINS),\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(t) ::/tests/$(notdir $(t));)
+	$(foreach f,$(KERNEL_FIXTURES),$(if $(filter %libtest.so,$(f)),,\
+	    mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) $(f) ::/tests/$(notdir $(f));))
 	# The lifeboat's own /lib. Its /bin is dynamically linked exactly like
 	# root's, so these files are what make the lifeboat a working system
 	# rather than a partition full of programs that cannot start. Iterated
@@ -496,6 +537,7 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_LIBS
 	# through /fat.
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) limine/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
 	@echo "  disk image rebuilt: $(words $(USERLAND_APPS)) apps ($(USERLAND_APPS))"
+	@echo "                      $(words $(USERLAND_TESTS)) fixtures in /tests ($(USERLAND_TESTS))"
 
 # The data disk. NO PREREQUISITES, DELIBERATELY: this rule fires exactly once,
 # when the file does not exist, and never again — not when the kernel changes,

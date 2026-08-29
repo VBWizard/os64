@@ -44,7 +44,7 @@ bool kRunKeytest = false;
 // Launch /bin/husk (the shell) from the boot flow and keep the system up. This
 // is the real "launch the shell" path; the HELLO/KEYTEST temps fold into it.
 bool kRunHusk = false;
-// TESTRUN: launch /bin/testrun (the ring-3 half of the suite) once the boot
+// TESTRUN: launch /tests/testrun (the ring-3 half of the suite) once the boot
 // flow is done. The in-kernel suite can only test what the kernel can see;
 // the fixtures that answer "does a program actually run, exit, and hand back
 // the right code" had to become a PROGRAM, so they moved out here. Off by

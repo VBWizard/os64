@@ -659,7 +659,7 @@ design in `docs/conf_path.md`.
   threads saving the same file never share one (Codex #29 rd7/rd8) —
   committing it with `os64_sync`, and **renaming over** — atomic replace
   (syscall 43) is exactly what write-a-temp-then-publish is for. Anything
-  that looks for a stray temp matches `<base>.*.new`, as conftest does. `/bin/conftest` is the fixture that
+  that looks for a stray temp matches `<base>.*.new`, as conftest does. `/tests/conftest` is the fixture that
   proves all three, in the ring-3 suite.
 - **An app can read its own window back** (`os64_gui_window_get_state`, 48):
   frame rect in create's units plus the live flags. Without it no app could
@@ -701,6 +701,40 @@ and per-core `used`/`lost`. Read it FIRST when the log misbehaves — it answers
 - `test_run_preboot()`: Tests run before scheduler starts
 - `test_run_postboot()`: Tests run after scheduler enabled
 - Test files in `kernel/test/`
+
+**THE PROOF HARNESS LIVES IN `/tests`, NOT `/bin`** (ruled 2026-08-29). `/bin`
+is the programs and tools a person runs; `/tests` is what proves the system
+works — the badge-code fixtures `testrun` spawns, and the acceptance probes
+you drive by hand when a feature is on trial (`gfxprobe`, `ptyprobe`,
+`ttyprobe`, `uiprobe`, `gkeys`, `keytest`). Demos that exist to be *enjoyed*
+rather than to prove something stayed in `/bin` (`gbounce`, `glogo`,
+`fpu_orbit`).
+
+- **The routing key is the SOURCE DIRECTORY, and nothing else.**
+  `userland/apps/<name>/` → `/bin`, `userland/tests/<name>/` → `/tests`,
+  `kernel/test/elf/` → `/tests`. No list of "which names are tests" exists
+  anywhere, so none can go stale — moving a directory moves the program, on
+  both the ext2 root and the FAT lifeboat.
+- **The lifeboat carries `/tests` too**: it exists to be trusted while
+  everything else is suspect, and one that cannot demonstrate the CPU, the
+  kernel and the syscall floor are sound is asking to be taken on faith at
+  the worst possible moment. ~750KB of its ~59MB spare.
+- **`PATH=/bin:/tests`, in that order** (seeded in `kernel.c`), so fixtures
+  stay typeable while a fixture can never shadow a command of the same name.
+- **Fixtures draw link bases from the same pool as apps** (`app_bases.py` is
+  fed both lists) — a fixture is an ordinary non-PIE ET_EXEC, and two
+  programs at one base is the same debugger ambiguity whichever tree they
+  came from. `app_bases.gdb` carries `add-symbol-file` lines for both.
+- **Why it was worth doing on its own:** two directories make a name
+  collision impossible rather than merely unlikely. `hog` existed twice —
+  Chris's measuring instrument in `userland/apps` and a zero-syscall spinner
+  in `kernel/test/elf` — both aimed at `/bin/hog`, and the instrument is what
+  reached the image. `test_backstop_preemption`, whose entire premise is a
+  thread that never enters the kernel, had been spawning the one that reads
+  the clock as it spins. The spinner is now `/tests/nosyscall`, named after
+  the property that makes it useful. Note the two image builders break such a
+  tie by OPPOSITE rules and neither says a word: `debugfs write` refuses an
+  existing name (first writer wins), `mcopy -o` replaces it (last one wins).
 
 ## Important Implementation Details
 

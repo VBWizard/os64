@@ -423,8 +423,8 @@ int main(int argc, char **argv)
 
     char taskid_text[24];
     os64_snprintf(taskid_text, sizeof(taskid_text), "%lu", os64_taskid());
-    char *const helper_argv[] = { "/bin/fputest", "--helper", taskid_text, NULL };
-    int64_t helper = os64_spawn("/bin/fputest", helper_argv);
+    char *const helper_argv[] = { "/tests/fputest", "--helper", taskid_text, NULL };
+    int64_t helper = os64_spawn("/tests/fputest", helper_argv);
     if (helper < 0)
     {
         os64_printf("fputest: could not spawn the external sender\n");
