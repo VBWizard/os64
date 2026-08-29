@@ -86,8 +86,9 @@ static uint16_t tcp_window(tcp_conn_t* c)
 	// that would have freed it. Both sides waited politely until the
 	// sender's persist timer fired.
 	//
-	// The P5 measured the cost exactly: six segments would fill the buffer,
-	// the window would land on 873 bytes, and then FIVE SECONDS of silence
+	// The P5 measured the cost exactly (with the 8KB buffer of the time):
+	// six segments would fill it, the window would land on 873 bytes, and
+	// then FIVE SECONDS of silence
 	// before the sender probed again. ~7.3KB per 5s = the 1.7 KB/s that
 	// made a 100BASE-TX link perform like a 1993 modem.
 	//
@@ -384,7 +385,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				if (seq == c->rcv_nxt)
 				{
-					uint16_t room = (uint16_t)(TCP_RCV_BUF - c->rcv_count);
+					uint32_t room = TCP_RCV_BUF - c->rcv_count;   // up to the whole buffer, past 16 bits
 					uint16_t take = data_len < room ? data_len : room;
 					tcp_rcv_store(c, data, take);
 					c->rcv_nxt += take;

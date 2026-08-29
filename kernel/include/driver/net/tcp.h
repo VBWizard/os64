@@ -84,12 +84,17 @@ typedef enum tcp_state
 	TCP_TIME_WAIT,     // the wait that protects the NEXT connection (see tcp.c)
 } tcp_state_t;
 
-// Buffers. 8KB of receive window is plenty for a hobby OS fetching pages
-// (and it is also what we advertise, so it directly sets how much the peer
-// may have in flight toward us). MSS 1460 = the classic ethernet number:
+// Buffers. The receive buffer IS the advertised window, so it sets how much
+// the peer may have in flight toward us — and since the NICs are drained
+// once per scheduler pass, it sets the THROUGHPUT CEILING: window per pass.
+// 64KB is the most a 16-bit window field can say (RFC 1323 scaling would
+// be the next step), 64KB per 10ms pass is ~6.4MB/s, and it costs 64KB of
+// kmalloc per open connection. (8KB here measured 366KB/s: the window
+// emptied inside every pass — five segments, then win=0 — and the sender
+// idled for the rest of each one.) MSS 1460 = the classic ethernet number:
 // 1500 MTU - 20 IP - 20 TCP, the reason so much of the internet's traffic
 // arrives in 1460-byte pieces.
-#define TCP_RCV_BUF  8192
+#define TCP_RCV_BUF  65536
 #define TCP_MSS      1460
 
 // Timers, in ticks (100/s). Fixed RTO with exponential backoff — a real
