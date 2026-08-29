@@ -35,3 +35,32 @@
 # like every other child of the rc.
 #export TZ=EST5EDT
 #clock &
+
+# ── the prompt ──────────────────────────────────────────────────────────────
+# $PROMPT sets it; unset, husk prompts "husk> " the way it always has. The
+# escapes:
+#
+#   \w  working directory          \?  the last command's exit status
+#   \W  its last component         \j  background jobs being tracked
+#   \t  time, HH:MM:SS             \n  newline, for a two-line prompt
+#   \d  date, YYYY-MM-DD           \\  a literal backslash
+#
+# The string is expanded ONCE, here, like any other command line — so
+# "$HOSTNAME:\w" works and picks up whatever the line above set, and that is
+# why there is no \h escape. What husk does NOT do is re-expand the prompt on
+# every print, which is bash's most famous foot-gun: the escapes above are a
+# closed vocabulary that cannot turn into syntax. An escape it does not know is
+# printed verbatim, so a typo shows up in your prompt instead of vanishing.
+#
+# WHICH MAKES $? AND \? DIFFERENT, and it is the one mistake worth warning
+# about: "$?" is expanded HERE and freezes the status that was current when
+# this file ran — a literal 0, for the rest of the session — while "\?" is
+# evaluated at every prompt. The frozen one looks alive, because a ticking \t
+# next to it updates every second while the status never moves. $NAME for what
+# does not change, an escape for what does.
+#
+# Two the shipped default deliberately lacks, because os64 has nothing to put
+# in them: \u (no users) and \$'s #-for-root (no privilege levels).
+#
+#export PROMPT="\w $ "
+#export PROMPT="[\t] \W \?> "
