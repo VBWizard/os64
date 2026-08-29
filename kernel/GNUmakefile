@@ -139,7 +139,16 @@ override SRC_CFILES := $(filter-out src/asm-offsets.c,$(shell find src -type f -
 # by their own sub-Makefiles via the test-elf/test-shlib targets below, with
 # their own -fpie/-fPIC flags) — they are not kernel test code and must not
 # be compiled into the kernel binary, unlike test_main.c/test_vma_*.c.
-override TEST_CFILES := $(filter-out test/elf/dyn_consumer.c test/elf/arg_echo.c test/elf/syscall_smoke.c test/elf/exit_by_return.c test/elf/file_io.c test/elf/redirect_io.c test/elf/dir_list.c test/elf/map_unmap.c test/elf/cwd_test.c test/elf/stat_test.c test/elf/sleep_test.c test/elf/memory_test.c test/elf/hog.c test/elf/env_fill.c test/elf/glutton.c test/shlib/libtest.c,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
+#
+# EXCLUDED BY DIRECTORY, NOT BY NAME. This was a hand-written list of all
+# sixteen fixture files, which is an inventory of somebody else's directory
+# and went stale the first time one was renamed: hog.c became nosyscall.c on
+# 2026-08-29, the list still said hog.c, and the fixture was quietly compiled
+# INTO the kernel. Nothing complained — a spare ring-3 `_start` does not clash
+# with the kernel's entry point, so it linked, booted and ran, carrying dead
+# code nobody had asked for. A `%` pattern cannot be stale: the rule is "no
+# .c under test/elf or test/shlib", which is the rule that was meant all along.
+override TEST_CFILES := $(filter-out test/elf/% test/shlib/%,$(shell find test -type f -name '*.c' 2>/dev/null | LC_ALL=C sort))
 override CFILES := $(SRC_CFILES) $(TEST_CFILES)
 override ASFILES := $(shell find src -type f -name '*.S' | LC_ALL=C sort)
 override NASMFILES := $(shell find src -type f -name '*.asm' | LC_ALL=C sort)
