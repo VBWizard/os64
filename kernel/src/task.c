@@ -31,6 +31,7 @@
 #include "allocator.h"
 #include "memset.h"
 #include "kworker.h"
+#include "test_framework.h"      // late_tests_thread — the "/latetests" task's body
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
 #include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
@@ -2284,6 +2285,18 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isGuiCompTask = (path != NULL && strncmp(path, "/guicomp", 8) == 0);
 	bool isGBounceTask = (path != NULL && strncmp(path, "/gbounce", 8) == 0);
 	bool isGKeysTask   = (path != NULL && strncmp(path, "/gkeys", 6) == 0);
+	bool isLateTestTask = (path != NULL && strncmp(path, "/latetests", 10) == 0);
+
+	// ONE ANSWER TO "IS THIS THE KERNEL'S OWN CODE?", because the question is
+	// asked in more than one place and the copies drifted. The list used to be
+	// re-spelled at each site, so adding /latetests to the loader's copy and
+	// not to the can-load gate's produced a builtin task that was refused for
+	// having no ELF file — a real file it was never going to have. The two
+	// sites now cannot disagree, and the next builtin is one line, not three.
+	bool isKernelBuiltinTask = isIdleTask || isLogdTask || isKWorkerTask ||
+	                           isGuiCompTask || isGBounceTask || isGKeysTask ||
+	                           isLateTestTask;
+
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
 	bool loadedElfProgram = false;
@@ -2300,8 +2313,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// clean: there is no task-teardown path in this tree to unwind with (see
 	// DEBTS), so the only way to fail without leaking is to fail before we
 	// build. spawn() now returns -1 and husk prints "cannot run <path>".
-	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask &&
-	    !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
+	if (!isKernelBuiltinTask && kRootFilesystem != NULL)
 	{
 		// ── #! — a script names its interpreter (2026-08-22) ────────────────
 		// If the file starts "#!", it is not the program; line one says who
@@ -2426,7 +2438,13 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
 	}
 
-	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask && !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
+	if (isLateTestTask)
+	{
+		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
+		newTask->threads->regs.RIP = (uint64_t)&late_tests_thread;
+	}
+
+	if (!isKernelBuiltinTask && kRootFilesystem != NULL)
 	{
 		if (elf_is_dynamic(newTask->path)) {
 			if (!elf_resolve_dynamic_dependencies(newTask, newTask->path)) {

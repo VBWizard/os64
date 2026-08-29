@@ -164,7 +164,7 @@ make -C kernel test-elf
    - Initializes SMP (multi-core support)
    - Creates kernel task and idle tasks
    - Initializes scheduler
-   - Runs pre-boot and post-boot tests
+   - Runs pre-boot and post-boot tests (the LATE phase starts later, after the shells)
    - Loads and runs ELF test program from filesystem
 
 ### Memory Management
@@ -699,7 +699,10 @@ and per-core `used`/`lost`. Read it FIRST when the log misbehaves — it answers
 **Test Framework (`kernel/include/test_framework.h`):**
 - `test_framework_init()`: Initialize test infrastructure
 - `test_run_preboot()`: Tests run before scheduler starts
-- `test_run_postboot()`: Tests run after scheduler enabled
+- `test_run_postboot()`: Tests run after the scheduler, BEFORE the shell is seated
+- LATE phase (`late_tests_thread`): slow tests, on a kernel thread started once the
+  shells are up — so they cost the user nothing. A late test runs beside a LIVE
+  machine: see TEST_PHASE_LATE in test_framework.h for what may move there
 - Test files in `kernel/test/`
 
 **THE PROOF HARNESS LIVES IN `/tests`, NOT `/bin`** (ruled 2026-08-29). `/bin`

@@ -1416,6 +1416,34 @@ static bool teardown_leak_wait_quiet(void)
     return quiet_ms >= 5000;
 }
 
+// AND THE OTHER HALF OF QUIET, which only became necessary when this test
+// moved to the LATE phase (2026-08-29) and started running beside a live
+// userland instead of on an empty machine.
+//
+// The settle above watches BURIALS, because burials were the only thing that
+// moved memory while nothing but the suite was running. What the test
+// actually asserts on is the GLOBAL free-page count, and that is moved by
+// anything at all: logd draining into a file, a block cache warming, a shell
+// faulting in a page it had not touched yet. None of those is a leak, and all
+// of them land in `lost` as one.
+//
+// So ask the question the assertion depends on: is the free-page count STILL?
+// Two samples a short pause apart, a few attempts, and a truthful "no" if it
+// will not hold. A test that cannot measure must skip — it must never spend
+// its caller's trust on a number it did not earn.
+static bool teardown_leak_wait_allocation_still(void)
+{
+    for (int attempt = 0; attempt < 10; attempt++) {
+        uint64_t a = 0, b = 0;
+        allocator_memory_snapshot(&a, NULL, NULL);
+        wait(200);
+        allocator_memory_snapshot(&b, NULL, NULL);
+        if (a == b)
+            return true;
+    }
+    return false;
+}
+
 // One complete cycle: spawn a ring-3 fixture, let it exit, release the corpse,
 // and WAIT FOR THE FUNERAL — not for the death. The distinction is the whole
 // point: at exit time nothing has been freed yet, and a snapshot taken then
@@ -1476,34 +1504,63 @@ static bool teardown_leak_one_cycle(void)
     return true;
 }
 
-static bool test_task_teardown_leak(void)
-{
-    if (kRootFilesystem == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (no root filesystem mounted)\n");
-        return true;
-    }
+// The verdict of ONE measurement attempt. The distinction that matters is
+// between "the number is bad" and "the number is not mine to read", because
+// only the first is a defect and only the second is worth retrying.
+typedef enum {
+    TL_CLEAN,     // measured, and a cycle cost nothing
+    TL_DIRTY,     // could not get a window to measure in — say so, try again
+    TL_ANOMALY,   // measured a loss (or a short reclaim) — REAL if it repeats
+    TL_ERROR      // a cycle could not be run at all; nothing to do but fail
+} teardown_verdict_t;
 
+static teardown_verdict_t teardown_leak_attempt(void)
+{
     if (!teardown_leak_wait_quiet()) {
         // Not a failure of teardown — a failure to get a quiet window, which
         // makes any number we produce meaningless. Say which it is: a test
         // that can't measure must not report a verdict it didn't earn.
-        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (undertaker never went quiet — "
-                            "burials still completing after 20s, cannot measure cleanly)\n");
-        return true;
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: undertaker never went quiet — "
+                            "burials still completing after 20s\n");
+        return TL_DIRTY;
+    }
+    if (!teardown_leak_wait_allocation_still()) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: the free-page count would not hold "
+                            "still — something on this machine is allocating\n");
+        return TL_DIRTY;
     }
 
     for (int i = 0; i < TEARDOWN_LEAK_WARMUP_CYCLES; i++) {
         if (!teardown_leak_one_cycle())
-            return false;
+            return TL_ERROR;
     }
 
     uint64_t free_before = 0, free_after = 0;
     allocator_memory_snapshot(&free_before, NULL, NULL);
     uint64_t reclaimed_before = kTaskVmaReclaimedBytes;
+    // WHOSE FUNERALS HAPPENED IN OUR WINDOW? Exactly one per cycle, or the
+    // delta below belongs partly to somebody else and cannot be read as ours.
+    //
+    // Settling BEFORE the window is not enough, and that is not a guess: with
+    // this test moved to the LATE phase it runs beside a live shell, and one
+    // `ps` typed while it measured turned "a task costs nothing" into a
+    // failure on the glass. The stillness it needs is stillness THROUGHOUT,
+    // and the honest way to get it is not to wait longer — a user can always
+    // out-wait you — but to notice afterwards that the window was not ours
+    // alone, and decline to draw a conclusion from it.
+    uint64_t burials_before = kTaskBurialCount;
 
     for (int i = 0; i < TEARDOWN_LEAK_MEASURED_CYCLES; i++) {
         if (!teardown_leak_one_cycle())
-            return false;
+            return TL_ERROR;
+    }
+
+    uint64_t burials = kTaskBurialCount - burials_before;
+    if (burials != (uint64_t)TEARDOWN_LEAK_MEASURED_CYCLES) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: %lu burials in a window that should have "
+                            "held %d — this machine was busy\n",
+               burials, TEARDOWN_LEAK_MEASURED_CYCLES);
+        return TL_DIRTY;
     }
 
     // (A TEMP DIAG surviving-extent differ lived here during the
@@ -1532,13 +1589,11 @@ static bool test_task_teardown_leak(void)
     // all is an undeclared leak.
     if (lost != 0) {
         printd(DEBUG_TESTS,
-               "\tFAIL: test_task_teardown_leak - %ld bytes per %d cycles leaked "
-               "(%ld bytes/task). Since 2026-08-15 burial reclaims EVERYTHING a task "
-               "owned; something allocated in task_create (or on the task's behalf) "
-               "has no matching free in task_destroy.\n",
+               "\ttask_teardown_leak: %ld bytes per %d cycles unaccounted for "
+               "(%ld bytes/task)\n",
                lost, TEARDOWN_LEAK_MEASURED_CYCLES,
                lost / TEARDOWN_LEAK_MEASURED_CYCLES);
-        return false;
+        return TL_ANOMALY;
     }
 
     // Clause 2: the reclaim provably RAN. A zero delta alone could mean the
@@ -1549,18 +1604,71 @@ static bool test_task_teardown_leak(void)
         GLUTTON_MIN_RECLAIM_PER_CYCLE * TEARDOWN_LEAK_MEASURED_CYCLES;
     if (reclaimed < reclaim_floor) {
         printd(DEBUG_TESTS,
-               "\tFAIL: test_task_teardown_leak - reclaim ran short: %lu bytes freed "
-               "over %d cycles, floor is %lu (glutton's data+bss+heap). Either demand "
-               "paging faulted nothing in, or burial's walk missed resident frames.\n",
+               "\ttask_teardown_leak: reclaim ran short: %lu bytes freed over %d cycles, "
+               "floor is %lu (glutton's data+bss+heap)\n",
                reclaimed, TEARDOWN_LEAK_MEASURED_CYCLES, reclaim_floor);
-        return false;
+        return TL_ANOMALY;
     }
 
     printd(DEBUG_TESTS,
            "\tPASS: test_task_teardown_leak (a task costs nothing: 0 bytes lost, "
            "%lu bytes of VMA backing reclaimed over %d cycles)\n",
            reclaimed, TEARDOWN_LEAK_MEASURED_CYCLES);
-    return true;
+    return TL_CLEAN;
+}
+
+// A LEAK IS SOMETHING THAT HAPPENS EVERY TIME. A single bad measurement is
+// not, and on a live machine it usually is not even about us: the block cache
+// takes 64KB at a time and never gives it back, so one `ls` typed while this
+// runs drops the free count by a quarter of a megabyte that no burial will
+// return. That is a cache doing its job, and calling it a leak on the glass
+// is how a suite teaches people to ignore it.
+//
+// So: measure, and if the number is wrong, measure AGAIN on a fresh quiet
+// window. Only a loss that survives every attempt is a defect — anything
+// transient belonged to whatever else the machine was doing. The cost of the
+// retries is why this test wants the LATE phase; nobody is waiting on it.
+#define TEARDOWN_LEAK_ATTEMPTS 3
+
+static bool test_task_teardown_leak(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (no root filesystem mounted)\n");
+        return true;
+    }
+
+    teardown_verdict_t v = TL_DIRTY;
+    for (int attempt = 1; attempt <= TEARDOWN_LEAK_ATTEMPTS; attempt++) {
+        v = teardown_leak_attempt();
+        if (v == TL_CLEAN)
+            return true;
+        if (v == TL_ERROR) {
+            printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - a cycle could not be run "
+                                "(spawn or burial failed); nothing was measured\n");
+            return false;
+        }
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: attempt %d of %d was %s — retrying on a "
+                            "fresh window\n",
+               attempt, TEARDOWN_LEAK_ATTEMPTS, v == TL_DIRTY ? "unmeasurable" : "anomalous");
+    }
+
+    if (v == TL_DIRTY) {
+        // Never measurable. Not a verdict about teardown, and it must not
+        // pretend to be one.
+        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (never got a window this "
+                            "machine held still for, after %d attempts)\n",
+               TEARDOWN_LEAK_ATTEMPTS);
+        return true;
+    }
+
+    printd(DEBUG_TESTS,
+           "\tFAIL: test_task_teardown_leak - the loss REPEATED across %d independent "
+           "windows, so it is not the machine: since 2026-08-15 burial reclaims "
+           "everything a task owned, and something allocated in task_create (or on the "
+           "task's behalf) has no matching free in task_destroy. The per-attempt numbers "
+           "are above.\n",
+           TEARDOWN_LEAK_ATTEMPTS);
+    return false;
 }
 
 
@@ -4649,7 +4757,15 @@ static void register_builtin_tests(void)
     test_register("dynamic_linking", test_dynamic_linking, TEST_PHASE_POSTBOOT);
     test_register("task_args", test_task_args, TEST_PHASE_POSTBOOT);
     test_register("env_growth", test_env_growth, TEST_PHASE_POSTBOOT);
-    test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_POSTBOOT);
+    // LATE, both of them, and they are the two that bought the phase: on a
+    // machine with a NIC these were twenty of the ~thirty seconds between
+    // power-on and a prompt, and neither answers a question anyone needs
+    // answered before the shell exists. task_teardown_leak spends five
+    // seconds proving the undertaker has gone quiet before it dares measure;
+    // net_tcp_refused spends a ten-second dial timeout whenever the gateway
+    // drops the SYN instead of resetting it, and then SKIPS. Off the critical
+    // path, both costs stop being costs at all.
+    test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_LATE);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("devfs", test_devfs, TEST_PHASE_POSTBOOT);
@@ -4661,7 +4777,7 @@ static void register_builtin_tests(void)
     test_register("net_dhcp", test_net_dhcp, TEST_PHASE_POSTBOOT);
     test_register("net_udp_conn", test_net_udp_conn, TEST_PHASE_POSTBOOT);
     test_register("net_icmp_conn", test_net_icmp_conn, TEST_PHASE_POSTBOOT);
-    test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_POSTBOOT);
+    test_register("net_tcp_refused", test_net_tcp_refused, TEST_PHASE_LATE);
     // The write gauntlets carry TEST_POLICY_RO: a failure here impeaches the
     // WRITE path while logd is actively appending to a disk — continuing to
     // write compounds the damage, halting costs the analysis. Demote every
@@ -4802,4 +4918,18 @@ void test_run_preboot(void)
 void test_run_postboot(void)
 {
     test_run_phase(TEST_PHASE_POSTBOOT, "post-boot");
+}
+
+// The LATE phase, on its own kernel thread (kernel.c creates it as
+// "/latetests" once the shells are seated). The boot does not wait for this:
+// by the time it runs there is a prompt on the glass, which is the entire
+// point — see TEST_PHASE_LATE's comment in test_framework.h.
+//
+// It ends by exiting the thread rather than returning, because a kernel
+// thread's "return" has nowhere to go: the task's entry RIP was set straight
+// to this function, so there is no caller frame beneath it.
+void late_tests_thread(void)
+{
+    test_run_phase(TEST_PHASE_LATE, "late");
+    task_exit();
 }

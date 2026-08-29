@@ -201,7 +201,8 @@ timeout 240 qemu-system-x86_64 -machine q35 -cdrom os64_kernel.iso -boot d \
 - Bash trap that cost a session: `VAR=x && qemu … &` backgrounds the WHOLE
   list, including the assignment — your foreground `$VAR` is empty and the
   screendump lands in `/`. Set variables on their own line.
-- Suite green ≠ done. The suite is 24 pre-boot + N post-boot in serial; the
+- Suite green ≠ done. The suite is pre-boot + post-boot + a LATE phase that runs
+  after the shells are seated (so its verdict lands after `boot complete`); the
   INTERACTIVE things (backspace echo, Ctrl+D, PATH lookup, pipelines) you
   verify by sendkey + screendump, like a user with hands.
 - Host-testable code (fmt/args/env — pure computation) gets tested on the

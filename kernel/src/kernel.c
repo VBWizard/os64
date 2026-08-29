@@ -838,6 +838,39 @@ void kernel_init()
             printf("  /tests/testrun launch failed (not on the image?)\n");
     }
 
+    // THE LATE PHASE (2026-08-29). The slow post-boot tests, moved off the
+    // critical path onto a kernel thread that starts AFTER the shells are
+    // seated — so the prompt is on the glass while they run, instead of
+    // twenty seconds after they finish. What may live here and why is
+    // test_framework.h's TEST_PHASE_LATE comment; the short version is that a
+    // late test must survive a live machine, because it now runs on one.
+    //
+    // It goes after the husk block for the same reason testrun does: its
+    // output goes to the console, and the terminals are seated up there.
+    //
+    // autoReap for the reason every ktask child needs it — ktask never waits,
+    // so an uncollected corpse is an immortal zombie (the 2026-08-15 P5
+    // finding, written up at the husk launch above). This task genuinely
+    // ends, unlike kworker and the idle tasks, so it is the one kernel task
+    // that would actually accumulate one.
+    if (kRunTests && kRootFilesystem != NULL)
+    {
+        // `true` = a KERNEL task, and it is not optional: createThread hands a
+        // ring-3 task ring-3 segment selectors, and the builtin block in
+        // task_create then overwrites CS with the kernel's. The result is an
+        // iret frame carrying kernel CS with user SS, which is a #GP naming
+        // SS's selector the first time the scheduler tries to dispatch it —
+        // as it did here, on the first boot with this task in it.
+        task_t *lateTask = task_create("/latetests", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+        if (lateTask)
+        {
+            lateTask->autoReap = true;
+            scheduler_submit_new_task(lateTask);
+        }
+        else
+            printf("  late test phase failed to start\n");
+    }
+
     // The GUI is strictly optional (DOS/Windows relationship): without the GUI
     // cmdline flag we run tests and shut down exactly as before. With it, the
     // desktop owns the machine — start the compositor and park the kernel task
