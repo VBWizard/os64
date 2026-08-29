@@ -293,7 +293,11 @@ def split_lot(spec):
 
 def main():
     ap = argparse.ArgumentParser(description="Serve files to os64get.")
-    ap.add_argument("directories", nargs="*", default=["."],
+    # default=[] and NOT default=["."]: argparse fills a default in, so with
+    # ["."] there is no way afterwards to tell "the user named nothing" from
+    # "the user named the current directory" — and the first of those is the
+    # one worth shouting about. The fallback to "." happens below instead.
+    ap.add_argument("directories", nargs="*", default=[],
                     help="directories to serve as PATH or PATH=LOT, searched "
                          "in order, first hit wins (default: the current one)")
     ap.add_argument("--port", type=int, default=6464)
@@ -301,11 +305,24 @@ def main():
                     help="address to listen on (default: everything)")
     args = ap.parse_args()
 
+    # NO DIRECTORY NAMED MEANS THE CURRENT ONE, and that has to announce
+    # itself. The default is a convenience for a quick ad-hoc serve, but it is
+    # also what a shell hands you when the arguments went somewhere else — a
+    # multi-line command pasted into cmd.exe runs its first line alone — and
+    # the result is a valet quietly offering your home directory to anything
+    # that dials in. An `os64get -a` against that installs it. Loud, then.
+    defaulted = not args.directories
     try:
         directories = [split_lot(d) for d in (args.directories or ["."])]
     except ValueError as exc:
         print(f"os64serve: {exc}", file=sys.stderr)
         return 2
+    if defaulted:
+        print("os64serve: NO DIRECTORY NAMED — serving the CURRENT directory:")
+        print(f"           {directories[0][0]}")
+        print("           If you meant to serve something else, stop now: everything")
+        print("           below is offered to anything that connects. (A multi-line")
+        print("           command pasted into cmd.exe runs only its first line.)")
     for directory, _lot in directories:
         if not os.path.isdir(directory):
             print(f"os64serve: {directory} is not a directory", file=sys.stderr)
@@ -329,17 +346,32 @@ def main():
     # refresh that reported 88 files and no errors, because the fixtures live
     # under userland/bin/tests and nobody had said that a nested directory
     # needs naming in its own right.
+    #
+    # CAPPED, because a hint that scrolls the screen is not a hint. Serving one
+    # directory that happens to hold thirty others is ordinary; the note exists
+    # for the case where a handful are missing and one of them is the one you
+    # meant, so a few names carry the whole message and a count carries the
+    # rest.
     served = {path for path, _lot in directories}
+    unserved = []
     for directory, _lot in directories:
         try:
             for entry in sorted(os.listdir(directory)):
                 full = os.path.join(directory, entry)
                 if os.path.isdir(full) and os.path.realpath(full) not in served:
-                    print(f"os64serve: NOTE — {full}")
-                    print( "           is a subdirectory and is NOT served. Name it on the")
-                    print(f'           command line too if you want its files: "{full}=<lot>"')
+                    unserved.append(full)
         except OSError:
             pass                      # unreadable is the listing walk's problem, not ours
+
+    NOTE_MAX = 4
+    if unserved:
+        print("os64serve: NOTE — these subdirectories of a served directory are NOT")
+        print("           served. A subdirectory needs its own word on the command")
+        print('           line, optionally labelled: "<directory>=<lot>"')
+        for full in unserved[:NOTE_MAX]:
+            print(f"             {full}")
+        if len(unserved) > NOTE_MAX:
+            print(f"             ... and {len(unserved) - NOTE_MAX} more")
     print("           Ctrl-C to stop.  (Windows may ask about the firewall - say yes.)")
     try:
         while True:
