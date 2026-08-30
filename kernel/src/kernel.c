@@ -919,7 +919,28 @@ void kernel_init()
     // finding, written up at the husk launch above). This task genuinely
     // ends, unlike kworker and the idle tasks, so it is the one kernel task
     // that would actually accumulate one.
-    if (kRunTests && kRootFilesystem != NULL)
+    // NO kRootFilesystem CONDITION. This task carries no ELF — its code is
+    // compiled in — so a root filesystem is nothing it needs, and requiring
+    // one silently deleted a test that used to run: net_tcp_refused depends
+    // on a NIC and a gateway, not a disk, and it ran in POSTBOOT on rootless
+    // boots before this. Each late test already states its own prerequisites
+    // (teardown_leak skips without a root, and says so), which is where a
+    // prerequisite belongs. (Codex, PR #42 rd2.)
+    //
+    // AN UNDERTAKER IS A REAL PRECONDITION, though, and the only one here.
+    // This is the one kernel task that genuinely EXITS — kworker and the idle
+    // tasks loop forever — so its corpse needs collecting, and `autoReap`
+    // only makes it ELIGIBLE. kworker is what actually calls
+    // task_reap_eligible_zombies, so on a boot without KWORKER (the /VBox
+    // Boot entry, and kRunTests defaults TRUE so it would have launched this)
+    // the task would sit as an immortal zombie holding its stack and page
+    // tables for the rest of the boot. Refusing to start, loudly, beats
+    // leaking quietly.
+    if (kRunTests && !kEnableKWorker)
+        serial_print_string("BUILT-IN TESTS: late phase SKIPPED - no KWORKER on this boot, so "
+                            "nothing would collect the task when it exits. Add KWORKER to run it.\n");
+
+    if (kRunTests && kEnableKWorker)
     {
         // `true` = a KERNEL task, and it is not optional: createThread hands a
         // ring-3 task ring-3 segment selectors, and the builtin block in
