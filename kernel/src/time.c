@@ -332,3 +332,32 @@ void nap(uint64_t msToSleep)
 		ticks = 1;
 	signal_raise(SIGSLEEP, kTicksSinceStart + ticks, self);
 }
+
+// TZ counts hours WEST of UTC (V7's little prank: Eastern is 5, Tokyo is -9),
+// so the east-positive kTimeZone is the negation of what the string says.
+// The zone NAME is skipped, not checked — the offset is the only thing the
+// kernel needs from it; the name and the DST rule after the offset are
+// libos64's business.
+void time_set_zone(const char *tz)
+{
+	kTimeZone = 0;
+	if (tz == NULL || tz[0] == '\0')
+		return;
+
+	const char *p = tz;
+	while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))
+		p++;
+	int sign = 1;
+	if (*p == '+')
+		p++;
+	else if (*p == '-') {
+		sign = -1;
+		p++;
+	}
+	if (*p >= '0' && *p <= '9') {
+		int hours = 0;
+		while (*p >= '0' && *p <= '9')
+			hours = hours * 10 + (*p++ - '0');
+		kTimeZone = -(sign * hours);   // west-positive in, east-positive out
+	}
+}

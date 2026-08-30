@@ -47,42 +47,15 @@ void hardware_init()
 	struct tm date_time_buff = getRTCDate();
     kSystemStartTime = mktime(&date_time_buff);
 
-    // The kernel's standard-time offset, hours east of UTC. If the cmdline
-    // carried a TZ= string (classic format: EST5EDT), derive it from there —
-    // skip the leading zone name, read the offset, and remember TZ counts
-    // hours WEST of UTC (V7's little prank: Eastern is 5, Tokyo is -9), so
-    // east-positive kTimeZone is its negation. ONLY the standard offset is
-    // taken here: DST is legislation, legislation lives in libos64's
-    // calendar, and the kernel's own few displays (boot prints, the FAT
-    // timestamp glue) stay honest-if-boring standard time year-round.
-    // Default: GMT. It was Eastern (-5) from the first OS until 2026-08-04,
-    // when timezone became PERSONAL config: the machine speaks UTC unless
-    // told otherwise (TZ= on the cmdline for the kernel's own displays), and
-    // a human's zone lives in their OWN husk.rc as `export TZ=...` — which
-    // is where Unix keeps it too, and for the same reason: the computer has
-    // a location, but the timezone belongs to whoever is looking at it.
-    kTimeZone = 0;
-    if (kTZString[0])
-    {
-        const char *p = kTZString;
-        while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))
-            p++;
-        int sign = 1;
-        if (*p == '+')
-            p++;
-        else if (*p == '-')
-        {
-            sign = -1;
-            p++;
-        }
-        if (*p >= '0' && *p <= '9')
-        {
-            int hours = 0;
-            while (*p >= '0' && *p <= '9')
-                hours = hours * 10 + (*p++ - '0');
-            kTimeZone = -(sign * hours);   // west-positive in, east-positive out
-        }
-    }
+    // The kernel's standard-time offset, from the cmdline's TZ= if there is
+    // one and GMT otherwise (time_set_zone). This is the zone the kernel's
+    // own few displays use until a filesystem exists; bootenv.conf can move
+    // it once one does (bootenv.c), and the environment every program reads
+    // is settled there too. The machine speaks UTC unless told otherwise —
+    // it was Eastern (-5) from the first OS until 2026-08-04 — because the
+    // computer has a location, but the timezone belongs to whoever is
+    // looking at it.
+    time_set_zone(kTZString);
 
     kSystemCurrentTime = kSystemStartTime;
 }

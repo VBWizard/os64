@@ -59,6 +59,7 @@
 #include "driver/filesystem/sys/sysfs.h"
 #include "driver/filesystem/dev/devfs.h"
 #include "conf.h"                        // the config search path — settled once the mounts exist
+#include "bootenv.h"   // bootenv_apply — the first reader on the ladder
 
 extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
@@ -165,7 +166,9 @@ bool kOverrideFileLogging;
 char kRootPartUUID[37] = {0};
 // The TZ= kernel cmdline string, verbatim (classic V7/POSIX format, e.g.
 // EST5EDT). Two consumers: init.c derives kTimeZone's standard offset from
-// it, and kernel_init seeds it into the first task's environment — where
+// it, and create_kernel_task seeds it into the first task's environment (and
+// bootenv_apply re-applies it over bootenv.conf: typed for this boot, it
+// outranks the file) — where
 // libos64's calendar applies the full policy (DST included). The kernel
 // itself never learns DST; it just delivers the string.
 char kTZString[64] = {0};
@@ -211,15 +214,22 @@ void create_kernel_task()
 	// Putting it on the path at all is a convenience ruling — `testrun`,
 	// `fputest` and the probes stay typeable without a path, which is what the
 	// split would otherwise have cost.
+	//
+	// THIS IS THE FLOOR, NOT THE CONFIGURATION. bootenv.conf (bootenv.h) is
+	// applied over this block in kernel_init once the search path exists, and
+	// is where PATH, HOSTNAME and TZ are actually decided; these two lines are
+	// what a boot with no bootenv.conf anywhere — the lifeboat's, or a broken
+	// root's — still gets, so that husk can find its programs.
 	env_set(parentTask.env, "PATH",     "/bin:/tests");
 	env_set(parentTask.env, "HOSTNAME", "yogi.localhost.localdomain");
 	// TZ, if the boot cmdline provided one — the kernel is just the courier
 	// here: the string rides into the first task's environment, inheritance
-	// carries it to everything husk ever spawns, and libos64's calendar is
-	// what actually reads it (offset AND daylight-saving policy). No TZ on
-	// the cmdline = no TZ in the env = the library falls back to the
-	// kernel's standard offset via the time() syscall. Three tiers, each
-	// dumber than the one above it.
+	// carries it to everything ever spawned, and libos64's calendar is what
+	// actually reads it (offset AND daylight-saving policy). It is seeded
+	// here so it exists before a filesystem does; bootenv_apply re-applies
+	// it on top of the file, because a zone typed for THIS boot outranks one
+	// written down for every boot. No TZ from either = the library falls
+	// back to the kernel's standard offset via the time() syscall.
 	if (kTZString[0])
 		env_set(parentTask.env, "TZ", kTZString);
 	// Deliberately NO "CWD" here: the kernel owns the real cwd (task->cwd,
@@ -568,6 +578,13 @@ void kernel_init()
 	// reason for starting this early is that everything below this line is
 	// the expensive part of the boot, and it should be logging by then.
 	conf_init();
+
+	// ── The boot environment ─────────────────────────────────────────────────
+	// The first reader on the ladder, and it has to be: everything spawned
+	// from here down — logd, the shells, the desktop, cron — inherits the
+	// kernel task's block, so bootenv.conf is applied to it before any of
+	// them exist (bootenv.h has the design).
+	bootenv_apply(kKernelTask);
 
 	// ── The log daemon, as early as a log daemon can possibly start ──────────
 	// HERE, and not down with husk, is the whole point of the LOGD= flag. The
