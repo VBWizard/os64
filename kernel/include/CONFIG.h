@@ -209,6 +209,11 @@
 // VINDICATED at the merge of 2026-08-05: 27 and 28 landed side by side with
 // nothing to resolve, which is what choosing the free bit BOUGHT.
 #define DEBUG_NET (__uint128_t)1 << 28
+// System plumbing answering a question, at any point in a machine's life —
+// as opposed to DEBUG_BOOT, which is for milestones that happen once while
+// the system is coming up. The config search path's RESOLVES live here
+// (conf.c): a lookup is not a boot event just because most lookups used to
+// happen at boot, and cron proved it by asking every minute forever.
 #define DEBUG_SYSTEM (__uint128_t)1 << 29
 // The system clipboard (clipboard.c). It rode DEBUG_VFS while /sys/clipboard
 // was its only door — honest then, since every byte arrived through the

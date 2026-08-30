@@ -640,8 +640,13 @@ design in `docs/conf_path.md`.
   `conf_find`.
 - **`/sys/conf`** publishes the ladder, its `source:`, and one line per reader
   saying which file it actually took. Read it FIRST when a config seems
-  ignored. Every resolve also prints one `DEBUG_BOOT` line naming the misses
-  (`conf: desktop.conf <- /etc/desktop.conf (no /home/desktop.conf)`).
+  ignored. Every resolve also prints one line naming the misses
+  (`conf: desktop.conf <- /etc/desktop.conf (no /home/desktop.conf)`) under
+  **`DEBUG_SYSTEM`** — not `DEBUG_BOOT`, since 2026-08-29: establishing the
+  ladder is a boot milestone, but ANSWERING a lookup happens whenever a reader
+  asks, and cron asks every minute forever. The bit has to say what the
+  message is. `DEBUG_SYSTEM` is off by default, so turn it on when a resolve
+  is the question; `/sys/conf` needs no bit at all.
 - husk's lifeboat spellings (`/fat/husk.rc`, `/husk.rc`) stay hardcoded and
   stay LAST, deliberately: the lifeboat exists for the day the ext2 root is
   broken, and the search path's own root file lives on that root.
