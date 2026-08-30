@@ -1576,8 +1576,25 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // page. Removed after the deferral was paid; the two clauses below are
     // the permanent instrument.)
 
+    // free_after IS TAKEN FIRST, before the check below, and the order is the
+    // point: anything sampled after a two-second stillness probe would be
+    // measuring that probe's window too.
     allocator_memory_snapshot(&free_after, NULL, NULL);
     uint64_t reclaimed = kTaskVmaReclaimedBytes - reclaimed_before;
+
+    // AND THE OTHER END OF THE BRACKET. The burial count above catches other
+    // TASKS living and dying in our window; it says nothing about allocation
+    // that never involves a task at all — a block cache line taken and kept,
+    // logd writing, a shell faulting in a page it had not touched. The
+    // stillness check BEFORE the window cannot see inside it either. So ask
+    // again on the way out: a machine still moving memory a moment later was
+    // probably moving it during the cycles, and that window is not ours to
+    // read. (Codex, PR #42 rd3.)
+    if (!teardown_leak_wait_allocation_still()) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: the free-page count would not hold still "
+                            "after the window either — something was allocating across it\n");
+        return TL_DIRTY;
+    }
 
     // Signed on purpose: free memory going UP across the window is not a leak,
     // it is the allocator having coalesced or some cache having shrunk, and
@@ -1616,25 +1633,40 @@ static teardown_verdict_t teardown_leak_attempt(void)
         return TL_ANOMALY;
     }
 
+    // A MEASUREMENT, NOT A VERDICT — this used to say PASS, which was a claim
+    // one window is not entitled to make now that a clean result has to repeat
+    // like a failing one does. The caller announces the verdict once two
+    // windows agree.
     printd(DEBUG_TESTS,
-           "\tPASS: test_task_teardown_leak (a task costs nothing: 0 bytes lost, "
-           "%lu bytes of VMA backing reclaimed over %d cycles)\n",
+           "\ttask_teardown_leak: window clean — 0 bytes lost, %lu bytes of VMA backing "
+           "reclaimed over %d cycles\n",
            reclaimed, TEARDOWN_LEAK_MEASURED_CYCLES);
     return TL_CLEAN;
 }
 
-// A LEAK IS SOMETHING THAT HAPPENS EVERY TIME. A single bad measurement is
-// not, and on a live machine it usually is not even about us: the block cache
-// takes 64KB at a time and never gives it back, so one `ls` typed while this
-// runs drops the free count by a quarter of a megabyte that no burial will
-// return. That is a cache doing its job, and calling it a leak on the glass
-// is how a suite teaches people to ignore it.
+// A VERDICT HAS TO REPEAT BEFORE IT IS BELIEVED — AND SO DOES A CLEAN ONE.
 //
-// So: measure, and if the number is wrong, measure AGAIN on a fresh quiet
-// window. Only a loss that survives every attempt is a defect — anything
-// transient belonged to whatever else the machine was doing. The cost of the
-// retries is why this test wants the LATE phase; nobody is waiting on it.
-#define TEARDOWN_LEAK_ATTEMPTS 3
+// The first half was always the argument: a leak happens every time, while a
+// single bad measurement on a live machine usually is not even about us. The
+// block cache takes 64KB at a time and never gives it back, so one `ls` typed
+// while this runs drops the free count by a quarter of a megabyte no burial
+// will return. Calling that a leak on the glass is how a suite teaches people
+// to ignore it.
+//
+// THE SECOND HALF IS THE ONE I HAD BACKWARDS, and it is the dangerous
+// direction (Codex, PR #42 rd3): the global free count is shared, so an
+// unrelated FREE inside our window can offset a real leak and make `lost`
+// land on zero. The old loop took the first clean window as proof and stopped
+// looking — a false PASS, which hides a defect instead of crying wolf about
+// one. Noise cuts both ways and the test must too.
+//
+// So both verdicts are earned the same way: TWO windows agreeing. Two clean
+// ones pass, two measured losses fail, and any other mixture is inconclusive
+// and says so rather than picking the answer it happened to see last. On a
+// quiet machine that costs one extra window — which is exactly the sort of
+// bill the LATE phase exists to pay, since nobody is waiting on it.
+#define TEARDOWN_LEAK_ATTEMPTS 4
+#define TEARDOWN_LEAK_AGREE    2   // windows that must agree before we believe them
 
 static bool test_task_teardown_leak(void)
 {
@@ -1651,61 +1683,65 @@ static bool test_task_teardown_leak(void)
     // after measuring twice. Both are the wrong story, and on a live machine
     // — where dirty windows are the expected case — both were reachable.
     // (Codex, PR #42.)
-    int measured = 0;    // windows that produced a number: every one an anomaly,
-                         // since a clean one returns immediately below
-    int dirty = 0;       // windows that could not be measured at all
+    int clean = 0;     // windows that measured a cycle costing nothing
+    int lost  = 0;     // windows that measured a loss
+    int dirty = 0;     // windows that could not be measured at all
 
     for (int attempt = 1; attempt <= TEARDOWN_LEAK_ATTEMPTS; attempt++) {
         teardown_verdict_t v = teardown_leak_attempt();
-        if (v == TL_CLEAN)
-            return true;
+
         if (v == TL_ERROR) {
             printd(DEBUG_TESTS, "\tFAIL: test_task_teardown_leak - a cycle could not be run "
                                 "(spawn or burial failed); nothing was measured\n");
             return false;
         }
-        if (v == TL_ANOMALY)
-            measured++;
+        if (v == TL_CLEAN)
+            clean++;
+        else if (v == TL_ANOMALY)
+            lost++;
         else
             dirty++;
-        printd(DEBUG_TESTS, "\ttask_teardown_leak: attempt %d of %d was %s — retrying on a "
-                            "fresh window\n",
-               attempt, TEARDOWN_LEAK_ATTEMPTS, v == TL_DIRTY ? "unmeasurable" : "anomalous");
+
+        // Stop as soon as either verdict has the agreement it needs. There is
+        // nothing to learn from a fourth window once two have said the same
+        // thing, and this test is already the slowest thing on the machine.
+        if (clean >= TEARDOWN_LEAK_AGREE || lost >= TEARDOWN_LEAK_AGREE)
+            break;
+
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: attempt %d of %d was %s — measuring "
+                            "again on a fresh window\n",
+               attempt, TEARDOWN_LEAK_ATTEMPTS,
+               v == TL_DIRTY ? "unmeasurable" : (v == TL_CLEAN ? "clean" : "a loss"));
     }
 
-    if (measured == 0) {
-        // Never measurable. Not a verdict about teardown, and it must not
-        // pretend to be one.
-        printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (never got a window this "
-                            "machine held still for — %d of %d attempts unmeasurable)\n",
-               dirty, TEARDOWN_LEAK_ATTEMPTS);
-        return true;
-    }
-
-    // ONE anomaly is not a leak; it is a measurement. The whole reason for
-    // retrying is that a single bad window is usually the machine — a block
-    // cache taking 64KB it will never give back is indistinguishable from a
-    // leak inside one window and obvious across two. So a lone anomaly beside
-    // windows we could not measure is INCONCLUSIVE, and says so, with the
-    // number in it: a suite that cries wolf gets ignored, and so does one
-    // that swallows a real finding in silence.
-    if (measured < 2) {
+    if (clean >= TEARDOWN_LEAK_AGREE) {
         printd(DEBUG_TESTS,
-               "\tSKIP: test_task_teardown_leak (1 window measured a loss and %d could not "
-               "be measured at all — one measurement is not a repeat, so this is "
-               "inconclusive rather than a leak. The number is above; a quiet machine "
-               "settles it)\n", dirty);
+               "\tPASS: test_task_teardown_leak (a task costs nothing — %d independently "
+               "measured windows agreed, with %d unmeasurable)\n", clean, dirty);
         return true;
     }
 
+    if (lost >= TEARDOWN_LEAK_AGREE) {
+        printd(DEBUG_TESTS,
+               "\tFAIL: test_task_teardown_leak - the loss REPEATED across %d independently "
+               "measured windows, so it is not the machine: since 2026-08-15 burial reclaims "
+               "everything a task owned, and something allocated in task_create (or on the "
+               "task's behalf) has no matching free in task_destroy. The per-attempt numbers "
+               "are above.\n",
+               lost);
+        return false;
+    }
+
+    // Neither verdict earned its two windows. That is not a finding about
+    // teardown and must not be dressed as one — on a machine busy enough to
+    // spoil most windows it is a finding about the machine. The counts go in
+    // the line so a human can see which way it was leaning.
     printd(DEBUG_TESTS,
-           "\tFAIL: test_task_teardown_leak - the loss REPEATED across %d independently "
-           "measured windows, so it is not the machine: since 2026-08-15 burial reclaims "
-           "everything a task owned, and something allocated in task_create (or on the "
-           "task's behalf) has no matching free in task_destroy. The per-attempt numbers "
-           "are above.\n",
-           measured);
-    return false;
+           "\tSKIP: test_task_teardown_leak (inconclusive after %d attempts: %d clean, "
+           "%d showing a loss, %d unmeasurable — no verdict repeated, and one measurement "
+           "is not a repeat in either direction. A quiet machine settles it)\n",
+           TEARDOWN_LEAK_ATTEMPTS, clean, lost, dirty);
+    return true;
 }
 
 
