@@ -59,8 +59,12 @@ upstream of the reviewer, not a filter on it.
 - **A finding whose entire fix is text does not go to Chris.** Fix it and give
   it one line in the round summary. He reads the diff when he wants to, and
   he does.
-- **Done is a rule, not a mood.** Two consecutive rounds with no
-  code-changing finding: it merges.
+- **Done is a rule, not a mood.** A CLEAN round — no findings at all — is
+  done: Codex reads the whole commit every round (Chris's "always keep
+  looking" setting), so "nothing" is its strongest verdict, not a coin flip
+  to repeat. Two consecutive rounds whose findings were all text-only are
+  also done. (Ruled 2026-08-30 after two models read the earlier wording as
+  "two clean rounds"; Chris: "I'd rather visit the dentist.")
 - **Match the reviewer to the risk.** An outside review round costs real money
   and a chunk of Chris's day. It earns that on kernel concurrency, lifetime,
   and ring-boundary work. Userland apps, GUI, and polish slices get reviewed
@@ -141,7 +145,7 @@ make -C kernel test-elf
 
 - **Root Makefile** (`GNUmakefile`): Orchestrates kernel build, ISO creation, disk image setup
 - **Kernel Makefile** (`kernel/GNUmakefile`): Builds kernel binary and test programs
-- **Parallel builds**: Uses `-j$(nproc)` automatically in kernel makefile
+- **Parallel builds**: `-j$(nproc)` by default, added by whichever makefile is the TOP-LEVEL make (`MAKELEVEL` 0 — root, `make -C kernel`, `make -C userland`); sub-makes inherit the jobserver. A command-line `-j` wins. Never add a `-j` to a makefile that can run as a sub-make: it drops the parent's jobserver and oversubscribes (make warns "forced in makefile")
 - **Dependencies**: Run `kernel/get-deps` to fetch Limine headers and C runtime
 
 ## Kernel Architecture
