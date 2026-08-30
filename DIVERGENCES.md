@@ -175,6 +175,20 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 
 ---
 
+## Scheduled work (cron, 2026-08-29)
+
+| Unix/Linux | os64 | Why | Recorded |
+|---|---|---|---|
+| Five compressed fields — `0 3 * * 1` — where day-of-month and day-of-week are OR'd, not AND'd | Words, left to right: `@reboot`, `every 5m`, `every 2h`, `daily 03:00`, `weekly sun 04:30` | The five fields are compression for a file parsed by a tiny C program and typed on a teletype. Nobody reads `*/5 2-4 * * 1-5` right the first time, and the dom/dow OR has surprised people for forty-five years. What os64 gives up is range and step expressiveness; it buys that back the day something asks for it | cron.c header |
+| cron runs in LOCAL time, so DST gives it an hour that never happens and an hour that happens twice — a real source of jobs that run twice or never, which Vixie documented and worked around rather than solved | UTC, always, read straight from the kernel epoch rather than through anybody's `TZ` | The system clock is UTC by ruling (the sysfs arc); a UTC cron simply cannot have the bug. Cost, stated in `/etc/crontab` rather than hidden: `daily 03:00` is 03:00 UTC | cron.c `utc_now` |
+| `*/5` is a calendar match; interval schedulers elsewhere measure from last run | `every 5m` is a CALENDAR MATCH too — minute % 5 — which makes every schedule STATELESS | Due-ness becomes a question about the clock alone, so nothing survives a re-read and a restarted cron is exactly where a running one would be. The wart, stated: `every 7m` is lumpy at the hour (60 ∤ 7). No cron has ever been otherwise | cron.c `job_is_due` |
+| Per-user spools plus `crontab(1)` to manage them | One file, found on the config search path, and no command | `crontab(1)` exists to enforce per-user permissions on a spool directory. os64 has neither users nor a spool, so the command would be a wrapper around `scribe` | cron.c header |
+| `/etc/crontab` is one file; user tables live elsewhere | `/home/crontab` MERGES on top of `/etc/crontab` | A crontab is a LIST, not a setting — the `hosts` treatment (Chris, 2026-08-22), for the same reason: your jobs should join the system's, not erase them. Consequence, stated in the file: adding a crontab cannot turn a system job OFF, only add to it | cron.c `load_crontabs` |
+| cron MAILS a job's output to its owner | Output goes to the console and the log; the exit status is logged for every job, not just failures | There is no mail. The log is where you go looking for "what happened while nobody was watching", and "nothing was printed" is not an answer you can act on | cron.c `reap_finished` |
+| `@reboot` is a scheduling verb because Unix already had rc scripts and Vixie needed a hook an unprivileged user could reach | `@reboot` is os64's ONLY boot hook, because os64 has no init at all | Kept knowingly, not inherited: `husk.rc` runs in EVERY shell (VT1 and VT2 both), so a system service started there starts twice — the bug that moved the desktop's startup list out of it. The day os64 grows an init, cron becomes its tenant and this row gets revisited | kernel.c cron launch |
+
+---
+
 ## Kernel-internal doctrine (not ABI, but porters should know)
 
 | Convention elsewhere | os64 | Why | Recorded |
