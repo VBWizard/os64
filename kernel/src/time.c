@@ -295,6 +295,23 @@ void nap(uint64_t msToSleep)
 	if (flags & 0x200)
 		__asm__ volatile("sti" ::: "memory");
 
+	// INTERRUPTS ALREADY OFF ON THE WAY IN IS A CONTRACT VIOLATION, and this
+	// is where it gets said out loud rather than left in a comment nobody
+	// reads at 2am. IF=0 on entry means an interrupt handler or a held
+	// spinlock — the two places the header warns about — and parking there
+	// deadlocks rather than delays. Fall back to the spin (which is what the
+	// caller would have got from wait(), and which re-enables interrupts on
+	// its way in) and name the caller's mistake. No current caller does this;
+	// the point is that the next one finds out immediately.
+	if (!(flags & 0x200))
+	{
+		printd(DEBUG_SYSTEM, "nap: called with interrupts DISABLED — spinning instead of "
+		                     "parking. A nap under a spinlock or in interrupt context is a "
+		                     "deadlock, not a delay; the caller wants wait().\n");
+		wait(msToSleep);
+		return;
+	}
+
 	// CAN ANYTHING WAKE ME? kSMPInitDone, and NOT mp_schedulerEnabled — which
 	// looks like the readiness flag and is not one. scheduler.c says so where
 	// it recruits parked APs: "under tickless the enable ISR leaves AP timers

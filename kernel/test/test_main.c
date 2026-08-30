@@ -4943,8 +4943,22 @@ static void test_run_phase(int phase, const char *label)
     // count is what proves the tests actually happened.
     // (Chris caught it 2026-08-01, one slice after catching the same
     // "assume it all went to plan" habit in the DNS fixture.)
-    printf("%s tests: %u passed, %u failed\n", label,
-           (unsigned int)passed, (unsigned int)failed);
+    //
+    // EXCEPT WHEN NOBODY ASKED AND SOMEBODY IS TYPING. The LATE phase runs
+    // beside a live shell, so a clean summary lands in the middle of whatever
+    // the user is at — observed exactly that: "husk> /late tests: 2 passed, 0
+    // failed", printed through a half-typed command. os64 has ruled on this
+    // twice already, both times the same way: the GUI heartbeat left the
+    // glass when a real shell moved into the console window, and a ring-3
+    // death report became one line on the dying program's OWN terminal. A
+    // clean verdict nobody is waiting for is not worth stepping on a prompt.
+    //
+    // A FAILING one still is. The honesty argument above is untouched for the
+    // phases a person is watching, and for the late phase the count still
+    // reaches the log, which is where a late verdict is read anyway.
+    if (phase != TEST_PHASE_LATE || failed > 0)
+        printf("%s tests: %u passed, %u failed\n", label,
+               (unsigned int)passed, (unsigned int)failed);
 
     // The verdicts, severest first (test_framework.h owns the taxonomy —
     // ext2's s_errors trio reborn, ratified 2026-08-08: "a failed test means
