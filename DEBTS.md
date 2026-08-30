@@ -272,6 +272,23 @@ hobby-scale judgment calls — re-rank freely.
 
 ## Explicitly NOT debts (recorded so they aren't re-litigated)
 
+- **`limine.conf` will NOT be delivered by `os64get`, and the boot menu is
+  the P5's own.** Chris's ruling, 2026-08-29: *"I don't think I'll ever want
+  to automatically update limine.conf on the P5 using os64get. I just didn't
+  realize that the new boot command existed."* The routing rule in
+  `os64get.conf` stays for a hand-fetch, but nothing will stage the file into
+  a served directory to make `-a` take it. The reasoning is the file's:
+  it is the one thing on the boot volume that can make the machine
+  unbootable, and — alone among the things that travel — it is exercised only
+  on the P5 and never in a harness.
+  **SO THE COST LANDS ON WHOEVER ADDS A CMDLINE TOKEN, and it is a HUMAN
+  cost, not a technical one:** a new flag works in QEMU and is silently
+  absent on the P5 forever, because his boot entries are edited by hand.
+  Adding a token to `limine.conf`/`limine-hd.conf` is therefore not
+  "shipping" it — SAY SO OUT LOUD in the same breath, so he can add it. That
+  is what went wrong with `CRON`, and the fix was him typing four letters
+  once he knew it existed.
+
 - **A popup survives a VT switch, and that is the intended behavior.** Raised
   as a P2 in PR #34 (Ctrl+Alt+F1..F7 hands the glass to a text VT without
   moving WM focus, so an open root menu is still there when VT8 comes back)

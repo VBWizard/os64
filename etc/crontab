@@ -1,0 +1,62 @@
+# /etc/crontab — what the system does on a schedule, and when.
+#
+# Read by /bin/cron. This is the SYSTEM's copy: it lives on the ext2 root,
+# which every `make` rewrites, so edits here last until the next refresh.
+# YOUR copy is /home/crontab — its own partition, survives every build.
+#
+# AND BOTH ARE READ. A crontab is a LIST, not a setting, so it MERGES down
+# the ladder the way /etc/hosts does (Chris's 2026-08-22 ruling): your jobs
+# join the system's rather than replacing them. If you want one of the lines
+# below NOT to run, comment it out here — adding a crontab to /home cannot
+# turn a system job off, only add to it.
+#
+# ── THE SCHEDULE VOCABULARY ─────────────────────────────────────────────────
+#
+#   @reboot            run once, when cron starts
+#   every 5m           when the minute divides by 5 — :00, :05, :10 …
+#   every 2h           when the hour divides by 2, on the hour
+#   daily 03:00        every day at that time
+#   weekly sun 04:30   that weekday, at that time
+#
+# Everything after the schedule is the command, and it is handed to `husk -c`
+# — so a line here is an ordinary command line, with pipelines, redirection
+# and $() all working exactly as they do at the prompt.
+#
+# `#` starts a comment anywhere on a line. Blank lines are ignored. The file
+# is re-read every minute, so an edit takes effect without restarting cron.
+#
+# ── TWO THINGS THAT SURPRISE PEOPLE, SAID PLAINLY ───────────────────────────
+#
+# TIMES ARE UTC. Not your timezone — the kernel's clock is UTC by ruling, and
+# cron reads it directly rather than through anybody's TZ. That is deliberate:
+# a cron that runs in local time inherits daylight saving's missing hour and
+# its duplicated hour, which is a real and famous source of jobs that run
+# twice or never. `date -u` tells you what cron thinks the time is.
+#
+# `every N` MATCHES THE CLOCK, it does not measure an interval. `every 5m`
+# fires at :00, :05, :10 — not five minutes after cron started. So `every 7m`
+# is lumpy at the top of the hour (:00, :07 … :56, then :00 again), because 60
+# does not divide by 7. Numbers that divide 60 behave the way you expect.
+#
+# ── THE SHIPPED LINES ───────────────────────────────────────────────────────
+# All commented out on purpose: an untouched system should do exactly what it
+# did before cron existed. Uncomment what you want, or put your own in
+# /home/crontab.
+
+# The ring-3 test suite, once the machine is up. This is what @reboot was
+# invented for, and what it is doing here: `testrun` used to be launched by
+# the KERNEL behind a cmdline flag, which meant "run the tests at boot" was a
+# decision you made at the bootloader instead of in a file.
+#@reboot           testrun
+
+# Commit anything the write-back cache is still holding. Cheap insurance on a
+# machine that gets powered off by its power button.
+#every 10m         sync
+
+# The clock, re-checked against the network. os64 has no RTC drift
+# correction, so a long uptime wanders.
+#daily 04:00       ntp
+
+# Keep the log from eating /home. logd appends forever by design — 20 minutes
+# of DEBUG_SCHEDULER|DETAILED is 136MB — so something has to draw the line.
+#weekly sun 05:00  mv /home/os64.log /home/os64.log.last

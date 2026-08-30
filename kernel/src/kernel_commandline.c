@@ -54,6 +54,13 @@ bool kRunHusk = false;
 // serial wire via klog, so an unattended A/B run can grep it — which is the
 // entire reason the A/B harness limine entry exists.
 bool kRunTestrun = false;
+// CRON: launch /bin/cron once userland is up. What it then DOES is entirely
+// the crontab's business — an absent or fully-commented file means a sleeping
+// daemon and nothing else — so this flag is only about whether the scheduler
+// exists on this boot, not about what is scheduled. Gated rather than
+// unconditional to match HUSK and LOGD=: the kernel starts a userland service
+// because a boot entry asked it to, never because the kernel had an opinion.
+bool kRunCron = false;
 // DIRECTLOG: printd writes STRAIGHT to COM1 with the polled writer, bypassing
 // the per-core queues entirely.
 //
@@ -300,6 +307,7 @@ static cmdopt_t cmdopts[] = {
     {"KEYTEST", OPT_BOOL, &kRunKeytest, true, 0},
     {"HUSK", OPT_BOOL, &kRunHusk, true, 0},
     {"TESTRUN", OPT_BOOL, &kRunTestrun, true, 0},
+    {"CRON", OPT_BOOL, &kRunCron, true, 0},
     {"DIRECTLOG", OPT_BOOL, &kDirectLog, true, 0},
     {"NOTRACE", OPT_BOOL, &kEnableStackTrace, false, 0},
     {"LOGD", OPT_STRING, kLogdPath, 0, sizeof(kLogdPath)},

@@ -524,6 +524,16 @@ the library serves every process). How it fits together:
     browns out the dongle (two P5 burns learned this). See kUSBQuiet
   - `RAMDISK`: Register the `os64_disk.img` Limine module as a RAM-backed
     block device (see `/RAMDisk Boot` in limine.conf)
+  - `CRON`: launch `/bin/cron` once userland is up. The flag decides whether
+    the scheduler EXISTS on this boot; the crontab decides what it runs, and
+    `/etc/crontab` ships with every line commented out — so this costs a
+    sleeping daemon and nothing else. Carried by every entry that runs a
+    shell, and DELIBERATELY NOT BY THE LIFEBOAT ENTRY (Chris, 2026-08-29):
+    the lifeboat exists to repair a broken system, and a scheduler running
+    jobs of its own while you do that is the opposite of what a rescue
+    environment is for. **Adding a token here does not ship it to the P5** —
+    the boot menu does not travel over the wire (DEBTS § Explicitly NOT
+    debts), so say so out loud when you add one
   - `nolog` / `alllog`: Control logging (both lowercase — legacy)
   - `LOGD=<path>`: launch `/bin/logd` to append the kernel log to a file, and
     hold the kernel drainer off serial until it attaches
@@ -626,15 +636,23 @@ design in `docs/conf_path.md`.
 - **A NAME IS A FILE NAME, NOT A PATH.** `conf_find` refuses anything with a
   `/` in it, loudly. A reader asking for `../../etc/shadow` would be walking
   the ladder somewhere the ladder does not go.
-- **`hosts` MERGES; everything else is first-hit-wins.** Chris's 2026-08-22
-  ruling: `/home/hosts` layers ON TOP of `/etc/hosts` so your machine names
-  sit over the system's list rather than erasing it. That is why the walk is
-  resumable at all. A settings file is not a database — check which kind you
-  have before reaching for `conf_find`.
+- **`hosts` and `crontab` MERGE; everything else is first-hit-wins.** Chris's
+  2026-08-22 ruling: `/home/hosts` layers ON TOP of `/etc/hosts` so your
+  machine names sit over the system's list rather than erasing it. That is why
+  the walk is resumable at all. `crontab` joined it on 2026-08-29 for the same
+  reason and with the same consequence worth stating out loud — a merged file
+  can only ADD, so a `/home` copy cannot turn a system entry off. A settings
+  file is not a database: check which kind you have before reaching for
+  `conf_find`.
 - **`/sys/conf`** publishes the ladder, its `source:`, and one line per reader
   saying which file it actually took. Read it FIRST when a config seems
-  ignored. Every resolve also prints one `DEBUG_BOOT` line naming the misses
-  (`conf: desktop.conf <- /etc/desktop.conf (no /home/desktop.conf)`).
+  ignored. Every resolve also prints one line naming the misses
+  (`conf: desktop.conf <- /etc/desktop.conf (no /home/desktop.conf)`) under
+  **`DEBUG_SYSTEM`** — not `DEBUG_BOOT`, since 2026-08-29: establishing the
+  ladder is a boot milestone, but ANSWERING a lookup happens whenever a reader
+  asks, and cron asks every minute forever. The bit has to say what the
+  message is. `DEBUG_SYSTEM` is off by default, so turn it on when a resolve
+  is the question; `/sys/conf` needs no bit at all.
 - husk's lifeboat spellings (`/fat/husk.rc`, `/husk.rc`) stay hardcoded and
   stay LAST, deliberately: the lifeboat exists for the day the ext2 root is
   broken, and the search path's own root file lives on that root.

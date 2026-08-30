@@ -73,6 +73,7 @@ extern bool kRunHello;   // TEMP (userland bring-up) — remove with the launch 
 extern bool kRunKeytest; // TEMP (read-syscall bring-up) — remove with keytest
 extern bool kRunHusk;    // launch the shell from the boot flow
 extern bool kRunTestrun; // launch /tests/testrun, the ring-3 half of the suite
+extern bool kRunCron;    // launch /bin/cron, the scheduler; the crontab says what it runs
 extern bool kTestPanic;  // TESTPANIC: deliberately panic post-tests (panic-pipeline diagnostic)
 extern bool kTestNmiProbe;  // NMIPROBE: sweep every core with a diagnostic NMI post-tests
 extern bool kTestPageFault; // TESTPF: deliberate wild-kernel-pointer #PF post-tests
@@ -836,6 +837,40 @@ void kernel_init()
         }
         else
             printf("  /tests/testrun launch failed (not on the image?)\n");
+    }
+
+    // cron (2026-08-29). The KERNEL starts it, and not husk.rc, for the same
+    // reason the desktop's startup list left husk.rc: an rc runs in EVERY
+    // shell — VT1 and VT2 both — so anything launched there is launched
+    // twice, and a second cron would run every job twice with nothing to
+    // notice it. A system service belongs to the system.
+    //
+    // It goes after the shells because @reboot jobs are things the system
+    // wanted done ONCE IT WAS UP, and a job that writes to a terminal should
+    // find one seated. What cron actually runs is the crontab's business
+    // entirely — /etc/crontab ships with every line commented out, so this
+    // flag alone changes nothing but the presence of a sleeping daemon.
+    //
+    // autoReap, like every other ktask child: ktask never waits, so an
+    // uncollected corpse would be an immortal zombie (the 2026-08-15 P5
+    // finding). cron normally outlives the boot, so this matters only when it
+    // exits early — a crontab it cannot read, say.
+    if (kRunCron && kRootFilesystem != NULL)
+    {
+        printf("Launching /bin/cron (the scheduler) ...\n");
+        // NOT seated on a terminal: tty_seat_shell would make cron VT1's
+        // shell and displace the husk sitting there, taking Ctrl+C and the
+        // foreground job with it. cron inherits ktask's 0/1/2 like any other
+        // child, so a job's output lands on the console — which is os64's
+        // answer to the mail Vixie's cron sends, there being no mail.
+        task_t *cronTask = task_create("/bin/cron", 0, NULL, kKernelTask, false, THREAD_NO_AFFINITY);
+        if (cronTask)
+        {
+            cronTask->autoReap = true;
+            scheduler_submit_new_task(cronTask);
+        }
+        else
+            printf("  /bin/cron launch failed (not on the image?)\n");
     }
 
     // The GUI is strictly optional (DOS/Windows relationship): without the GUI
