@@ -588,6 +588,68 @@ static void shared_object_retire_locked(shared_object_t *so)
     }
 }
 
+// Is the file at `dep->path` still the one this registry loaded? Asked the
+// way the cache-hit path asks it about the object itself — by opening the
+// name and reading its identity — for the same reason: a name is not a file.
+// A name that no longer resolves answers "no": the fresh load that follows
+// fails on that dependency, naming it, which beats serving a program built
+// against a library that has been deleted.
+static bool shared_object_dep_is_current(shared_object_t *dep)
+{
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(dep->path, &tail);
+    if (fs == NULL || fs->fops == NULL || fs->fops->open == NULL) {
+        return false;
+    }
+    vfs_file_t *file = NULL;
+    if (fs->fops->open(&file, tail, "r", fs) != 0) {
+        return false;
+    }
+    bool current = (dep->ident != 0 && dep->ident == file->f_ident);
+    shared_object_close_file(file, dep->path);
+    return current;
+}
+
+// Numbers the closure walks (shared_object_closure_current_locked). Only ever
+// advanced under the registry lock, which every walk holds.
+static uint32_t kSharedObjectWalkPass;
+
+// Is every library in `so`'s dependency closure still the file at its path?
+//
+// A cached executable is only as current as the libraries its cached pages
+// were relocated against, so a cache hit on the executable has to ask this of
+// everything beneath it. Without the question, replacing /lib/libos64.so ALONE
+// leaves every resident program handing the OLD library to each new task it
+// starts, for as long as anything keeps that program resident — which for
+// husk is until reboot. A stale library is RETIRED here, and retirement is
+// transitive, so `so` itself comes back retired and the caller falls through
+// to a fresh load that rebuilds against the new file.
+//
+// Takes no references: the count of holders must not move for a question
+// (test_dynamic_linking's expected counts depend on exactly that). Recursive
+// over deps[], stamped per pass so a DT_NEEDED cycle ends the walk.
+static bool shared_object_closure_current_locked(shared_object_t *so, uint32_t pass)
+{
+    so->walk_pass = pass;
+    for (size_t i = 0; i < so->dep_count; i++) {
+        shared_object_t *dep = so->deps[i];
+        if (dep == NULL || dep->walk_pass == pass) {
+            continue;
+        }
+        if (!shared_object_dep_is_current(dep)) {
+            printd(DEBUG_TASK, "shared_object: %s is not the file that was loaded (needed by %s) "
+                               "— retiring the loaded copy and everything linked against it\n",
+                   dep->path, so->path);
+            shared_object_retire_locked(dep);
+            return false;
+        }
+        if (!shared_object_closure_current_locked(dep, pass)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The real loader, called with kSharedObjectRegistryLock already held (the
 // public wrapper takes it). Recursive: loading an object loads its
 // DT_NEEDED dependencies too, which is why the lock lives in the wrapper —
@@ -627,19 +689,27 @@ static shared_object_t *shared_object_load_or_get_locked(const char *path, bool 
     shared_object_t *existing = shared_object_find(path);
     if (existing != NULL) {
         if (existing->ident != 0 && existing->ident == file->f_ident) {
-            // Still the same file. The warm cache answers, and the handle
-            // opened to ask the question has done its whole job.
-            shared_object_close_file(file, path);
-            existing->refcount++;
-            return existing;
+            // Still the same file. Its libraries are asked the same question,
+            // and only if every one of them is still current does the warm
+            // cache answer — the handle opened to ask has then done its whole
+            // job.
+            if (shared_object_closure_current_locked(existing, ++kSharedObjectWalkPass)) {
+                shared_object_close_file(file, path);
+                existing->refcount++;
+                return existing;
+            }
+            // A library beneath it changed. The walk retired that library,
+            // and retirement is transitive, so `existing` is retired with it;
+            // the handle stays open, because the fresh load below is its job.
+        } else {
+            // A different file wears this name now — or neither can be
+            // identified, which is answered the same way (see shared_object_t's
+            // `ident`).
+            printd(DEBUG_TASK, "shared_object: %s is not the file that was loaded (disk id %lu, "
+                               "loaded id %lu) — retiring the loaded copy\n",
+                   path, (uint64_t)file->f_ident, existing->ident);
+            shared_object_retire_locked(existing);
         }
-        // A different file wears this name now — or neither can be identified,
-        // which is answered the same way (see shared_object_t's `ident`).
-        // Logged BEFORE the retire, which may free `existing` on the spot.
-        printd(DEBUG_TASK, "shared_object: %s is not the file that was loaded (disk id %lu, "
-                           "loaded id %lu) — retiring the loaded copy\n",
-               path, (uint64_t)file->f_ident, existing->ident);
-        shared_object_retire_locked(existing);
     }
 
     elf_image_t *image = NULL;
