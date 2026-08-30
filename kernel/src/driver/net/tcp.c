@@ -632,9 +632,14 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	tcp_send_reliable(c, NULL, 0, TCP_SYN);
 	spinlock_release_irqrestore(&c->lock, irqflags);
 
-	// Wait out the handshake. Polling the state with short naps rather
-	// than parking: a connect is a one-time cost, this runs in task
-	// context, and it keeps the wake sweep's conditions about DATA only.
+	// Wait out the handshake by polling the state rather than joining the
+	// wake sweep, which keeps that sweep's conditions about DATA only. The
+	// nap is REAL: this said "short naps" while calling wait(), which spins
+	// on `pause` — so a dial to an address that answers with silence burned a
+	// whole core for the ten-second timeout. On a machine where the gateway
+	// drops SYNs instead of resetting them that is every single dial. Same
+	// cadence, no burn; safe here because the lock above is already released
+	// and this runs in task context.
 	uint64_t deadline = kTicksSinceStart + TCP_CONNECT_TIMEOUT;
 	while (kTicksSinceStart < deadline)
 	{
@@ -642,7 +647,7 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 			return c;
 		if (c->reset || c->state == TCP_CLOSED)
 			break;
-		wait(10);
+		nap(10);
 	}
 
 	if (c->state != TCP_ESTABLISHED)

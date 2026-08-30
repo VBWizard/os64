@@ -23,7 +23,7 @@
 >
 > **It is counted, not merely admitted.** Every burial walks its VMAs, books the
 > genuinely-task-owned resident frames into `kTaskDeferredReclaimBytes`, and says
-> so on DEBUG_TASK. The post-boot `task_teardown_leak` test asserts that a
+> so on DEBUG_TASK. The `task_teardown_leak` test (LATE phase) asserts that a
 > spawn→exit→burial cycle's allocator delta equals exactly what was booked — so
 > every byte is either given back or counted, and anything else is an unknown
 > leak the test names and fails on.

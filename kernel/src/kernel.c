@@ -686,6 +686,37 @@ void kernel_init()
 	// slot, the report naming the watchpoint, and — the part that is easy to
 	// get wrong and impossible to notice — TRACE mode actually RESUMING. Two
 	// hits are expected: one trace (the machine keeps going) and then a halt.
+	// SAY SO WHEN THE LATE PHASE WILL NOT RUN. Everything from here down can
+	// end the boot — TESTWATCH halts, TESTPF/TESTGP/TESTPANIC fault on
+	// purpose, SHUTDOWNTEST and REBOOTTEST take the machine away — and the
+	// late phase starts below all of them, after the shells. So a diagnostic
+	// boot runs pre-boot and post-boot and nothing else, which was true the
+	// moment two tests moved LATE and was true SILENTLY, since those entries
+	// are documented as running after the full suite. (Codex, PR #42.)
+	//
+	// Not reordered, deliberately: the late phase exists to run beside a live
+	// machine with a prompt on it, and these boots are the ones with no
+	// machine afterwards. Making them wait ~11 seconds to run two tests
+	// before deliberately panicking would serve nobody. The honest fix for
+	// "silently" is to stop being silent — and if you want those two tests,
+	// the entry to boot is the one without a terminal diagnostic on it.
+	// ON THE WIRE DIRECTLY, by the same reasoning that put "boot complete"
+	// there: this note exists for boots that END ABRUPTLY, and a queued
+	// printd on such a boot is never drained — verified, 2026-08-29, on a
+	// TESTWATCH boot whose log stopped mid-post-boot. printf is
+	// framebuffer-only AND every diagnostic below fills the glass with a
+	// register dump the moment it fires, so the screen copy is gone too. A
+	// message about what a boot did not do has to survive the boot not
+	// finishing.
+	if (kRunTests && (kTestWatchpoint || kTestPageFault || kTestGPFault ||
+	                  kTestPanic || kTestShutdown || kTestReboot))
+	{
+		printf("Note: this boot ends in a diagnostic, so the LATE test phase will not run.\n");
+		serial_print_string("BUILT-IN TESTS: late phase SKIPPED - this boot ends in a terminal "
+		                    "diagnostic, which halts before the phase would start. Pre-boot and "
+		                    "post-boot ran; the two late tests did not.\n");
+	}
+
 	if (kTestWatchpoint)
 	{
 		static volatile uint64_t watchBait = 0;
@@ -871,6 +902,60 @@ void kernel_init()
         }
         else
             printf("  /bin/cron launch failed (not on the image?)\n");
+    }
+
+    // THE LATE PHASE (2026-08-29). The slow post-boot tests, moved off the
+    // critical path onto a kernel thread that starts AFTER the shells are
+    // seated — so the prompt is on the glass while they run, instead of
+    // twenty seconds after they finish. What may live here and why is
+    // test_framework.h's TEST_PHASE_LATE comment; the short version is that a
+    // late test must survive a live machine, because it now runs on one.
+    //
+    // It goes after the husk block for the same reason testrun does: its
+    // output goes to the console, and the terminals are seated up there.
+    //
+    // autoReap for the reason every ktask child needs it — ktask never waits,
+    // so an uncollected corpse is an immortal zombie (the 2026-08-15 P5
+    // finding, written up at the husk launch above). This task genuinely
+    // ends, unlike kworker and the idle tasks, so it is the one kernel task
+    // that would actually accumulate one.
+    // NO kRootFilesystem CONDITION. This task carries no ELF — its code is
+    // compiled in — so a root filesystem is nothing it needs, and requiring
+    // one silently deleted a test that used to run: net_tcp_refused depends
+    // on a NIC and a gateway, not a disk, and it ran in POSTBOOT on rootless
+    // boots before this. Each late test already states its own prerequisites
+    // (teardown_leak skips without a root, and says so), which is where a
+    // prerequisite belongs. (Codex, PR #42 rd2.)
+    //
+    // AN UNDERTAKER IS A REAL PRECONDITION, though, and the only one here.
+    // This is the one kernel task that genuinely EXITS — kworker and the idle
+    // tasks loop forever — so its corpse needs collecting, and `autoReap`
+    // only makes it ELIGIBLE. kworker is what actually calls
+    // task_reap_eligible_zombies, so on a boot without KWORKER (the /VBox
+    // Boot entry, and kRunTests defaults TRUE so it would have launched this)
+    // the task would sit as an immortal zombie holding its stack and page
+    // tables for the rest of the boot. Refusing to start, loudly, beats
+    // leaking quietly.
+    if (kRunTests && !kEnableKWorker)
+        serial_print_string("BUILT-IN TESTS: late phase SKIPPED - no KWORKER on this boot, so "
+                            "nothing would collect the task when it exits. Add KWORKER to run it.\n");
+
+    if (kRunTests && kEnableKWorker)
+    {
+        // `true` = a KERNEL task, and it is not optional: createThread hands a
+        // ring-3 task ring-3 segment selectors, and the builtin block in
+        // task_create then overwrites CS with the kernel's. The result is an
+        // iret frame carrying kernel CS with user SS, which is a #GP naming
+        // SS's selector the first time the scheduler tries to dispatch it —
+        // as it did here, on the first boot with this task in it.
+        task_t *lateTask = task_create("/latetests", 0, NULL, kKernelTask, true, THREAD_NO_AFFINITY);
+        if (lateTask)
+        {
+            lateTask->autoReap = true;
+            scheduler_submit_new_task(lateTask);
+        }
+        else
+            printf("  late test phase failed to start\n");
     }
 
     // The GUI is strictly optional (DOS/Windows relationship): without the GUI

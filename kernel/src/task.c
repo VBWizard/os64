@@ -31,6 +31,7 @@
 #include "allocator.h"
 #include "memset.h"
 #include "kworker.h"
+#include "test_framework.h"      // late_tests_thread — the "/latetests" task's body
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
 #include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
@@ -2284,6 +2285,44 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isGuiCompTask = (path != NULL && strncmp(path, "/guicomp", 8) == 0);
 	bool isGBounceTask = (path != NULL && strncmp(path, "/gbounce", 8) == 0);
 	bool isGKeysTask   = (path != NULL && strncmp(path, "/gkeys", 6) == 0);
+	bool isLateTestTask = (path != NULL && strncmp(path, "/latetests", 10) == 0);
+
+	// ONE ANSWER TO "IS THIS THE KERNEL'S OWN CODE?", because the question is
+	// asked in more than one place and the copies drifted. The list used to be
+	// re-spelled at each site, so adding /latetests to the loader's copy and
+	// not to the can-load gate's produced a builtin task that was refused for
+	// having no ELF file — a real file it was never going to have. The two
+	// sites now cannot disagree, and the next builtin is one line, not three.
+	//
+	// AND IT TAKES `isKernelTask`. A name is something the CALLER chose, and
+	// one of the callers is ring 3:
+	// spawn_do_create hands the user's path straight in with isKernelTask
+	// false. Matching on the path ALONE therefore let a program ask to BE a
+	// kernel builtin — task_create skipped the ELF check, stamped the kernel
+	// code selector and a kernel entry point onto a thread createThread had
+	// just given ring-3 selectors, and the scheduler's first iretq took a #GP
+	// on the mismatched SS. Typing `/kworker` at the husk prompt killed the
+	// machine, and had since long before /latetests existed — verified on
+	// userland 2026-08-29: "Excepting task: kworker (id 56)", error 0x38,
+	// which is the selector. Codex found it here because a seventh name made
+	// the family worth a second look.
+	//
+	// PROVENANCE, NOT SPELLING: only a caller that ASKED for a kernel task
+	// can get one, and every real builtin creator passes true. A ring-3 spawn
+	// of one of these names falls through to the loader — which answers
+	// "cannot run" when nothing is there, and RUNS THE PROGRAM when something
+	// is. A user who puts an ELF at /kworker gets their ELF; the name carries
+	// no privilege it did not earn from the caller.
+	//
+	// THIS FLAG IS NECESSARY AND WAS NOT SUFFICIENT. Gating the ELF-skip here
+	// while the CS override below still keyed on the raw names left the hole
+	// open by a longer road (Codex, PR #42 rd2) — see the one-gate comment at
+	// that override, which is where the selector is actually stamped.
+	bool isKernelBuiltinTask = isKernelTask &&
+	                          (isIdleTask || isLogdTask || isKWorkerTask ||
+	                           isGuiCompTask || isGBounceTask || isGKeysTask ||
+	                           isLateTestTask);
+
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
 	bool loadedElfProgram = false;
@@ -2300,8 +2339,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// clean: there is no task-teardown path in this tree to unwind with (see
 	// DEBTS), so the only way to fail without leaking is to fail before we
 	// build. spawn() now returns -1 and husk prints "cannot run <path>".
-	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask &&
-	    !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
+	if (!isKernelBuiltinTask && kRootFilesystem != NULL)
 	{
 		// ── #! — a script names its interpreter (2026-08-22) ────────────────
 		// If the file starts "#!", it is not the program; line one says who
@@ -2390,43 +2428,45 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
     strcpy(newTask->exename, slash2);
 	printd(DEBUG_TASK, "task_create: Executable name is %s\n", newTask->exename);
 
-	if (isIdleTask)
+	// THE KERNEL CODE SELECTOR IS STAMPED IN EXACTLY ONE PLACE, and the gate
+	// is `isKernelBuiltinTask` — the provenance answer — never a raw name.
+	//
+	// These were seven independent `if (isXTask)` blocks, each writing CS and
+	// RIP on its own authority, and gating only the ELF-skip on provenance
+	// (as the first pass at this did) LEFT THEM OPEN: root is writable, so
+	// ring 3 could put a genuine ELF at /latetests and spawn it. Provenance
+	// said "not a builtin", the loader validated and loaded the image
+	// happily — and then the raw-name block stamped kernel CS anyway. The
+	// loader overwrites RIP but not CS, so the task went to the scheduler
+	// with kernel CS beside the user SS createThread gave it, which is the
+	// same first-dispatch #GP by a longer road. (Codex, PR #42 rd2. The
+	// round-1 comment claiming provenance was "the whole security of it" was
+	// half true, which is the dangerous kind.)
+	//
+	// One gate and a switch on the name makes the class impossible rather
+	// than fixing an instance: there is now no path that writes CS without
+	// having answered the provenance question first.
+	if (isKernelBuiltinTask)
 	{
 		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&task_idle_loop;
+
+		if (isIdleTask)
+			newTask->threads->regs.RIP = (uint64_t)&task_idle_loop;
+		else if (isLogdTask)
+			newTask->threads->regs.RIP = (uint64_t)&logd_thread;
+		else if (isKWorkerTask)
+			newTask->threads->regs.RIP = (uint64_t)&kworker_thread;
+		else if (isGuiCompTask)
+			newTask->threads->regs.RIP = (uint64_t)&guicomp_thread;
+		else if (isGBounceTask)
+			newTask->threads->regs.RIP = (uint64_t)&gbounce_thread;
+		else if (isGKeysTask)
+			newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
+		else if (isLateTestTask)
+			newTask->threads->regs.RIP = (uint64_t)&late_tests_thread;
 	}
 
-	if (isLogdTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&logd_thread;
-	}
-
-	if (isKWorkerTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&kworker_thread;
-	}
-
-	if (isGuiCompTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&guicomp_thread;
-	}
-
-	if (isGBounceTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&gbounce_thread;
-	}
-
-	if (isGKeysTask)
-	{
-		newTask->threads->regs.CS = GDT_KERNEL_CODE_ENTRY << 3;
-		newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
-	}
-
-	if (!isIdleTask && !isLogdTask && !isKWorkerTask && !isGuiCompTask && !isGBounceTask && !isGKeysTask && kRootFilesystem != NULL)
+	if (!isKernelBuiltinTask && kRootFilesystem != NULL)
 	{
 		if (elf_is_dynamic(newTask->path)) {
 			if (!elf_resolve_dynamic_dependencies(newTask, newTask->path)) {

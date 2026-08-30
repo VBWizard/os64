@@ -172,28 +172,38 @@ RAMDISK: registered ... as a block device    (RAMDisk entries only)
 BOOT: Root filesystem found, mounting     →  successfully mounted
 BUILT-IN TESTS: Running post-boot tests:  →  7 passed, 0 failed
 BOOT: All VFS tests passed successfully.
+BUILT-IN TESTS: Running late tests:       →  2 passed, 0 failed
 ```
 
 Grep count-agnostically — never hardcode test counts, they change with
 every added test:
 
 ```bash
-grep "passed, 0 failed" "$LOG"        # eyeball: exactly two lines, and
+grep "passed, 0 failed" "$LOG"        # eyeball: exactly three lines, and
                                       # each follows its phase header
-grep -c "passed, 0 failed" "$LOG"     # assert: == 2 (pre-boot AND post-boot)
+grep -c "passed, 0 failed" "$LOG"     # assert: == 3 (pre-boot, post-boot, late)
 ```
 
 A FAILED in-kernel test **panics** (TEST_FAIL → panic), so a failing phase
-never prints its "passed, 0 failed" line at all — the count-of-2 assertion
+never prints its "passed, 0 failed" line at all — the count assertion
 catches both a failure and a phase that never ran. When reviewing by eye,
-confirm the line's phase from the preceding "Running pre-boot/post-boot
-tests:" header, not from the numbers.
+confirm the line's phase from the preceding "Running … tests:" header, not
+from the numbers.
+
+**THE LATE LINE ARRIVES LAST, AND LATER THAN YOU EXPECT** (2026-08-29). It
+is written by a kernel thread that starts after the shells are seated, so it
+lands *after* `boot complete` and after husk's first prompt — a harness that
+stops reading at `boot complete` will see two lines and conclude a phase
+never ran. Wait for the late line itself when you want all three. The phase
+takes ~11s on a quiet machine and can take longer, because
+`task_teardown_leak` re-measures when something else on the machine moved
+memory under it.
 
 Standing regression greps:
 
 | Boot mode | Must show | Must NOT show |
 |---|---|---|
-| Default (non-GUI) | both `passed, 0 failed` lines (pre+post), VFS pass | `guicomp` (grep -c == 0) |
+| Default (non-GUI) | all three `passed, 0 failed` lines (pre, post, late), VFS pass | `guicomp` (grep -c == 0) |
 | GUI | compositor heartbeats (DEBUG_GUI) | panic lines |
 | RAMDisk (no disk attached!) | `RAMDISK: registered`, root mounted | `Could not find/mount root` |
 | NVMe/AHCI regression | root mounted from the real disk | any `RAMDISK:` line |
@@ -204,13 +214,24 @@ bytes/sec is all you get).
 
 ## The in-kernel test framework
 
-`test_framework.h`: register cases, two phases — `test_run_preboot()`
-(before the scheduler starts) and `test_run_postboot()` (scheduler live;
-this is where the ELF/ring-3 tests run, loaded from the root filesystem —
-which is itself what proves the storage/VFS stack end to end). Tests live
-in `kernel/test/`. Adding one: register in the appropriate phase, keep it
-silent on success, TEST_FAIL (= panic) on failure. No doc or watcher
-updates needed — the greps above are count-agnostic by design.
+`test_framework.h`: register cases, three phases — `test_run_preboot()`
+(before the scheduler starts), `test_run_postboot()` (scheduler live, shell
+NOT yet seated; this is where the ELF/ring-3 tests run, loaded from the root
+filesystem — which is itself what proves the storage/VFS stack end to end),
+and the LATE phase (`late_tests_thread`, a kernel thread started once the
+shells are up). Tests live in `kernel/test/`. Adding one: register in the
+appropriate phase, keep it silent on success, TEST_FAIL (= panic) on
+failure. No doc or watcher updates needed — the greps above are
+count-agnostic by design.
+
+**Choosing the phase** is a question about the machine, not about the test's
+subject: PREBOOT for kernel invariants, POSTBOOT for anything needing a
+quiet machine or a verdict before a person can write to the disk (every
+`TEST_POLICY_RO` write gauntlet, by definition), LATE for slow tests that
+survive a live system. Slow is the reason to go late; tolerant is the
+permission. A late test asserting on a global that userland also moves —
+the free-page count is the one that bit — must gate on quiescence and be
+willing to SKIP, or it belongs in POSTBOOT.
 
 ## The orphan-recovery procedure (a test the suite structurally cannot run)
 
