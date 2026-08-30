@@ -527,7 +527,13 @@ the library serves every process). How it fits together:
   - `CRON`: launch `/bin/cron` once userland is up. The flag decides whether
     the scheduler EXISTS on this boot; the crontab decides what it runs, and
     `/etc/crontab` ships with every line commented out — so this costs a
-    sleeping daemon and nothing else. Carried by every entry that runs a shell
+    sleeping daemon and nothing else. Carried by every entry that runs a
+    shell, and DELIBERATELY NOT BY THE LIFEBOAT ENTRY (Chris, 2026-08-29):
+    the lifeboat exists to repair a broken system, and a scheduler running
+    jobs of its own while you do that is the opposite of what a rescue
+    environment is for. **Adding a token here does not ship it to the P5** —
+    the boot menu does not travel over the wire (DEBTS § Explicitly NOT
+    debts), so say so out loud when you add one
   - `nolog` / `alllog`: Control logging (both lowercase — legacy)
   - `LOGD=<path>`: launch `/bin/logd` to append the kernel log to a file, and
     hold the kernel drainer off serial until it attaches
