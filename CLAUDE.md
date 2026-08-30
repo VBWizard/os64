@@ -371,10 +371,14 @@ the library serves every process). How it fits together:
   only what is in use, and a replaced binary's orphaned inode is reaped
   instead of waiting for a reboot. **Revalidate on every load:** each load
   opens the path and compares the file's identity (`vfs.h` f_ident — ext2's
-  inode number, FAT's start cluster) against the resident copy's. Same file,
-  cache hit; different file, the resident copy is RETIRED — struck from every
-  lookup, kept alive for the tasks already running it — and the new file is
-  loaded for everything started from now on. Retirement is TRANSITIVE, because
+  inode number, FAT's start cluster) against the resident copy's — and a
+  cache hit asks the same question of every library in the object's closure,
+  because its cached pages were relocated against them (replace libos64.so
+  ALONE and every resident program is stale, its own file unchanged). Same
+  file, same libraries, cache hit; anything different, the resident copy is
+  RETIRED — struck from every lookup, kept alive for the tasks already
+  running it — and the new file is loaded for everything started from now
+  on. Retirement is TRANSITIVE, because
   a dependent's cached pages carry the retired object's addresses baked in
   (and because two builds of one library share a prelink slot, so no task may
   ever map both). The identity check is what reaches husk, logd and libos64.so

@@ -88,9 +88,12 @@ typedef struct shared_object {
 
     // WHICH FILE THIS IS, as its filesystem identifies it (vfs.h f_ident — an
     // ext2 inode number, a FAT start cluster). Recorded at load and compared
-    // against the file on disk at every later load of the same path: equal
-    // means this cache still describes what the name points at, different
-    // means the name has been given to a NEW file and this object is stale.
+    // against the file on disk at every later load of the same path — and at
+    // every cache hit of an object linked against this one, because a cached
+    // dependent is only as current as the libraries its pages were relocated
+    // against. Equal means this cache still describes what the name points
+    // at, different means the name has been given to a NEW file and this
+    // object is stale.
     //
     // The registry is keyed by PATH but a path is not a file, and that gap was
     // a real bug: `os64get` replaces a binary by renaming a new inode over the
@@ -114,6 +117,13 @@ typedef struct shared_object {
     // since the beginning, expressed in the one registry that had been keying
     // on the name instead.
     bool retired;
+
+    // The closure walk that last visited this object (shared_object.c's
+    // revalidation of a cache hit's dependencies). A walk stamps each object
+    // it reaches with its own pass number and skips any already stamped, which
+    // is what ends it inside a DT_NEEDED cycle — the registry admits those.
+    // A number rather than a flag so no walk has to clean up after itself.
+    uint32_t walk_pass;
 
     elf_segment_range_t segs[ELF_MAX_SEGMENTS];
     size_t seg_count;
@@ -240,9 +250,11 @@ static inline bool shared_object_page_index(const shared_object_t *so, uintptr_t
 /// identity (`ident`) against the resident object's. That open IS the lookup:
 /// a name that no longer resolves fails the load rather than quietly serving
 /// the cached image of a file that is gone, and a name that now resolves to a
-/// DIFFERENT file retires the resident object and loads the new one. Without
-/// it the registry answers questions about a path it last read minutes or
-/// days ago.
+/// DIFFERENT file retires the resident object and loads the new one. A cache
+/// hit then asks the same of every library in the object's closure — its
+/// cached pages were relocated against them, so a replaced library makes the
+/// object stale with its own file untouched. Without all of that the registry
+/// answers questions about a path it last read minutes or days ago.
 ///
 /// Requires ET_DYN. A library MUST be position-independent: it is placed at
 /// a load_bias chosen by this registry, so absolute ET_EXEC vaddrs could not

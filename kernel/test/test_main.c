@@ -948,10 +948,13 @@ static bool test_dynamic_linking(void)
     uint64_t retval_a = task_a->retVal;
     uint64_t retval_b = task_b->retVal;
 
-    // Registry state, captured live. (These lookups each take a reference that
-    // is never released — deliberate: the test holds the registry's objects
-    // warm for the rest of the boot, and the expected counts below include
-    // them by name.)
+    // Registry state, captured live. Each lookup takes a reference, and the
+    // expected counts below include them by name; both are given back once
+    // the tables have been walked, so this test leaves nothing resident that
+    // the two tasks' burials will not release — a later fixture replaces
+    // libtest.so underneath a holder (test_shared_object_reload), and a
+    // reference kept here would keep the superseded copy, and its orphaned
+    // inode, alive for the rest of the boot.
     shared_object_t *exe_so = shared_object_load_or_get("/tests/dyn_consumer");
     shared_object_t *so     = shared_object_load_or_get("/lib/libtest.so");
     uint32_t exe_refcount   = (exe_so != NULL) ? exe_so->refcount : 0;
@@ -970,6 +973,11 @@ static bool test_dynamic_linking(void)
         code_phys_a = paging_walk_paging_table((pt_entry_t *)task_a->pml4v, lib_page0);
         code_phys_b = paging_walk_paging_table((pt_entry_t *)task_b->pml4v, lib_page0);
     }
+
+    // Both lookups returned before the tasks are: the tasks' own references
+    // keep both objects loaded, so neither release can be the last one here.
+    shared_object_release(so);
+    shared_object_release(exe_so);
 
     test_release(task_a);
     test_release(task_b);
@@ -1010,8 +1018,9 @@ static bool test_dynamic_linking(void)
 
     // libtest.so, by contrast, is loaded as dyn_consumer's DT_NEEDED
     // dependency exactly ONCE — the second task_create cache-hits the
-    // already-loaded executable and never re-walks its deps — so: that one
-    // dependency edge + this lookup = 2. THIS ASYMMETRY IS LOAD-BEARING: it is
+    // already-loaded executable, and the closure check that hit performs
+    // takes no references of its own — so: that one dependency edge + this
+    // lookup = 2. THIS ASYMMETRY IS LOAD-BEARING: it is
     // why the undertaker releases one edge on the main image rather than one
     // per entry in task->shared_objects, which would drive this very count
     // negative on the second burial (see shared_object.h's pairing rule).
@@ -1063,9 +1072,23 @@ static bool test_dynamic_linking(void)
 //   different identity, and the old one retired but alive under its held
 //   reference.
 //
-// The fixture is a byte copy of a real dynamically-linked program under a
-// scratch name: the claims are about the REGISTRY, not about any particular
-// binary, and /bin is not the suite's to rearrange.
+//   THE CLOSURE — a program whose LIBRARY has been replaced is stale too, even
+//   though its own file is untouched, because its cached pages were relocated
+//   against the old library. Shown by replacing only /lib/libtest.so under a
+//   held /tests/dyn_consumer and finding the program retired with the library
+//   and rebuilt against the new one.
+//
+// The first two claims use a byte copy of a real dynamically-linked program
+// under a scratch name: they are about the REGISTRY, not about any particular
+// binary, and /bin is not the suite's to rearrange. The third uses the
+// dynamic-linking fixture pair, the one library on the system nothing live
+// is linked against.
+//
+// Replacing a file somebody holds open is an ext2 property (the inode is the
+// file, the name is only a name); FAT's rename has to unlink the destination
+// first and FatFs refuses that for an open file. So the second and third
+// claims are proven only where the root can keep them, and the lifeboat
+// proves retention alone.
 #define SO_FAIL(...) do { \
         printd(DEBUG_TESTS, "\tFAIL: test_shared_object_reload - " __VA_ARGS__); \
         return false; \
@@ -1162,6 +1185,16 @@ static bool test_shared_object_reload(void)
     if (so_registry_serves(live))
         SO_FAIL("%s outlived its last reference — unload-at-zero did not run\n", live);
 
+    // The remaining claims replace files that are held open, which only ext2
+    // can do (see the header). Identified by the op table, the way
+    // test_vfs_rename does it.
+    if (kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        kRootFilesystem->fops->rm(live, kRootFilesystem);
+        printd(DEBUG_TESTS, "\tPASS: test_shared_object_reload (unloaded at zero; reload and closure "
+                            "claims need a root that can replace an open file, and this one cannot)\n");
+        return true;
+    }
+
     // 2. RELOAD. Hold one copy the way a running task would, replace the file
     //    underneath it, and ask for it again.
     shared_object_t *held = shared_object_load_executable(live);
@@ -1210,9 +1243,69 @@ static bool test_shared_object_reload(void)
 
     kRootFilesystem->fops->rm(live, kRootFilesystem);
 
+    // 3. THE CLOSURE. Hold a program, replace ONLY its library, and ask for
+    //    the program again. Its own file is unchanged, so a registry that
+    //    looked no deeper than the name it was asked for would answer from
+    //    the cache — and the next task would run against the old library.
+    static const char *consumer     = "/tests/dyn_consumer";
+    static const char *lib          = "/lib/libtest.so";
+    static const char *lib_incoming = "/lib/libtest.so.reload";
+
+    shared_object_t *held_exe = shared_object_load_executable(consumer);
+    if (held_exe == NULL)
+        SO_FAIL("could not load %s\n", consumer);
+    if (held_exe->dep_count != 1 || held_exe->deps[0] == NULL ||
+        strcmp(held_exe->deps[0]->path, lib) != 0) {
+        shared_object_release(held_exe);
+        SO_FAIL("%s is not linked against exactly %s — the closure claim has no subject\n",
+                consumer, lib);
+    }
+    shared_object_t *old_lib = held_exe->deps[0];   // alive while held_exe's edge is
+    uint64_t old_lib_ident = old_lib->ident;
+
+    kRootFilesystem->fops->rm(lib_incoming, kRootFilesystem);   // a previous boot's leftover
+    if (!so_copy_file(lib, lib_incoming)) {
+        shared_object_release(held_exe);
+        SO_FAIL("could not stage a replacement library at %s\n", lib_incoming);
+    }
+    if (kRootFilesystem->fops->rename(lib_incoming, lib, kRootFilesystem) != 0) {
+        shared_object_release(held_exe);
+        SO_FAIL("could not rename %s over %s\n", lib_incoming, lib);
+    }
+
+    shared_object_t *fresh_exe = shared_object_load_executable(consumer);
+    if (fresh_exe == NULL) {
+        shared_object_release(held_exe);
+        SO_FAIL("loading %s after its library was replaced returned nothing\n", consumer);
+    }
+
+    bool exe_distinct  = (fresh_exe != held_exe);
+    bool exe_retired   = held_exe->retired;
+    bool lib_retired   = old_lib->retired;
+    bool lib_rebuilt   = (fresh_exe->dep_count == 1 && fresh_exe->deps[0] != NULL &&
+                          fresh_exe->deps[0] != old_lib &&
+                          fresh_exe->deps[0]->ident != old_lib_ident);
+    uint64_t new_lib_ident = lib_rebuilt ? fresh_exe->deps[0]->ident : 0;
+
+    shared_object_release(fresh_exe);
+    shared_object_release(held_exe);
+
+    if (!exe_distinct)
+        SO_FAIL("a program whose LIBRARY was replaced returned the SAME object — the cache hit "
+                "did not look beneath the name it was asked for\n");
+    if (!lib_retired)
+        SO_FAIL("the superseded library was not retired\n");
+    if (!exe_retired)
+        SO_FAIL("the program linked against the superseded library was not retired with it\n");
+    if (!lib_rebuilt)
+        SO_FAIL("the reloaded program is not linked against the new library\n");
+    if (so_registry_serves(consumer) || so_registry_serves(lib))
+        SO_FAIL("%s or %s outlived their references\n", consumer, lib);
+
     printd(DEBUG_TESTS, "\tPASS: test_shared_object_reload (unloaded at zero; a replaced file retired "
-                        "the loaded copy, id %lu -> %lu, and reloaded)\n",
-           held_ident, fresh_ident);
+                        "the loaded copy, id %lu -> %lu, and reloaded; a replaced library, id %lu -> %lu, "
+                        "retired and reloaded the program linked against it)\n",
+           held_ident, fresh_ident, old_lib_ident, new_lib_ident);
     return true;
 }
 #undef SO_FAIL
