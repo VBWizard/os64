@@ -2293,9 +2293,29 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	// not to the can-load gate's produced a builtin task that was refused for
 	// having no ELF file — a real file it was never going to have. The two
 	// sites now cannot disagree, and the next builtin is one line, not three.
-	bool isKernelBuiltinTask = isIdleTask || isLogdTask || isKWorkerTask ||
+	//
+	// AND IT TAKES `isKernelTask`, WHICH IS THE WHOLE SECURITY OF IT. A name
+	// is something the CALLER chose, and one of the callers is ring 3:
+	// spawn_do_create hands the user's path straight in with isKernelTask
+	// false. Matching on the path ALONE therefore let a program ask to BE a
+	// kernel builtin — task_create skipped the ELF check, stamped the kernel
+	// code selector and a kernel entry point onto a thread createThread had
+	// just given ring-3 selectors, and the scheduler's first iretq took a #GP
+	// on the mismatched SS. Typing `/kworker` at the husk prompt killed the
+	// machine, and had since long before /latetests existed — verified on
+	// userland 2026-08-29: "Excepting task: kworker (id 56)", error 0x38,
+	// which is the selector. Codex found it here because a seventh name made
+	// the family worth a second look.
+	//
+	// PROVENANCE, NOT SPELLING: only a caller that ASKED for a kernel task
+	// can get one, and every real builtin creator passes true. A ring-3 spawn
+	// of any of these names now falls through to the loader, finds no such
+	// file, and gets the ordinary "cannot run" — which is what a name that is
+	// not a program has always deserved.
+	bool isKernelBuiltinTask = isKernelTask &&
+	                          (isIdleTask || isLogdTask || isKWorkerTask ||
 	                           isGuiCompTask || isGBounceTask || isGKeysTask ||
-	                           isLateTestTask;
+	                           isLateTestTask);
 
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.

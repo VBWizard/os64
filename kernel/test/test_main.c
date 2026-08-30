@@ -1643,9 +1643,20 @@ static bool test_task_teardown_leak(void)
         return true;
     }
 
-    teardown_verdict_t v = TL_DIRTY;
+    // COUNT THE ATTEMPTS, do not just remember the last one. The verdict used
+    // to read whatever `v` happened to hold when the loop ended, which is a
+    // different question from the one being asked: DIRTY,DIRTY,ANOMALY
+    // announced that "the loss REPEATED across 3 windows" on the strength of
+    // ONE measurement, and ANOMALY,ANOMALY,DIRTY reported "never measurable"
+    // after measuring twice. Both are the wrong story, and on a live machine
+    // — where dirty windows are the expected case — both were reachable.
+    // (Codex, PR #42.)
+    int measured = 0;    // windows that produced a number: every one an anomaly,
+                         // since a clean one returns immediately below
+    int dirty = 0;       // windows that could not be measured at all
+
     for (int attempt = 1; attempt <= TEARDOWN_LEAK_ATTEMPTS; attempt++) {
-        v = teardown_leak_attempt();
+        teardown_verdict_t v = teardown_leak_attempt();
         if (v == TL_CLEAN)
             return true;
         if (v == TL_ERROR) {
@@ -1653,27 +1664,47 @@ static bool test_task_teardown_leak(void)
                                 "(spawn or burial failed); nothing was measured\n");
             return false;
         }
+        if (v == TL_ANOMALY)
+            measured++;
+        else
+            dirty++;
         printd(DEBUG_TESTS, "\ttask_teardown_leak: attempt %d of %d was %s — retrying on a "
                             "fresh window\n",
                attempt, TEARDOWN_LEAK_ATTEMPTS, v == TL_DIRTY ? "unmeasurable" : "anomalous");
     }
 
-    if (v == TL_DIRTY) {
+    if (measured == 0) {
         // Never measurable. Not a verdict about teardown, and it must not
         // pretend to be one.
         printd(DEBUG_TESTS, "\tSKIP: test_task_teardown_leak (never got a window this "
-                            "machine held still for, after %d attempts)\n",
-               TEARDOWN_LEAK_ATTEMPTS);
+                            "machine held still for — %d of %d attempts unmeasurable)\n",
+               dirty, TEARDOWN_LEAK_ATTEMPTS);
+        return true;
+    }
+
+    // ONE anomaly is not a leak; it is a measurement. The whole reason for
+    // retrying is that a single bad window is usually the machine — a block
+    // cache taking 64KB it will never give back is indistinguishable from a
+    // leak inside one window and obvious across two. So a lone anomaly beside
+    // windows we could not measure is INCONCLUSIVE, and says so, with the
+    // number in it: a suite that cries wolf gets ignored, and so does one
+    // that swallows a real finding in silence.
+    if (measured < 2) {
+        printd(DEBUG_TESTS,
+               "\tSKIP: test_task_teardown_leak (1 window measured a loss and %d could not "
+               "be measured at all — one measurement is not a repeat, so this is "
+               "inconclusive rather than a leak. The number is above; a quiet machine "
+               "settles it)\n", dirty);
         return true;
     }
 
     printd(DEBUG_TESTS,
-           "\tFAIL: test_task_teardown_leak - the loss REPEATED across %d independent "
-           "windows, so it is not the machine: since 2026-08-15 burial reclaims "
+           "\tFAIL: test_task_teardown_leak - the loss REPEATED across %d independently "
+           "measured windows, so it is not the machine: since 2026-08-15 burial reclaims "
            "everything a task owned, and something allocated in task_create (or on the "
            "task's behalf) has no matching free in task_destroy. The per-attempt numbers "
            "are above.\n",
-           TEARDOWN_LEAK_ATTEMPTS);
+           measured);
     return false;
 }
 
@@ -4219,7 +4250,16 @@ static bool test_net_tcp_refused(void)
     // to count — and a test that calls that a stack failure cries wolf
     // (the P5's gateway did it one boot in six). Refusal is asserted only
     // when there WAS a refusal; the timeout is reported and skipped.
-    if (why == OS64_NET_ERR_TIMEOUT && kTcpStats.connections_refused == refused_before) {
+    // THE VERDICT IS CONNECTION-LOCAL, and it had to become so when this test
+    // moved to the LATE phase: `kTcpStats.connections_refused` is MACHINE-WIDE,
+    // so any other program completing a refused dial inside our window moved
+    // it. That turned a valid refusal into a failure (delta > 1) and a valid
+    // timeout into a failure rather than a skip (delta != 0). `why` comes from
+    // this connection's own `c->reset` and cannot be moved by anybody else, so
+    // it answers the question the counter was only approximating. (Codex, PR
+    // #42.) The counter still appears in the failure text below, where it is
+    // context for a human rather than an assertion.
+    if (why == OS64_NET_ERR_TIMEOUT) {
         printd(DEBUG_TESTS, "\tSKIP: test_net_tcp_refused (the gateway answered port 9 with silence, not RST — "
                "timed out after %lu ticks; nothing to assert about the stack)\n", elapsed);
         return true;
@@ -4231,11 +4271,16 @@ static bool test_net_tcp_refused(void)
                "want OS64_NET_ERR_REFUSED (%d)\n", why, OS64_NET_ERR_REFUSED);
         return false;
     }
-    // A refusal must be an ANSWER (an RST), not the connect timeout —
-    // fast failure is the observable difference, and the timeout is 10s.
-    if (kTcpStats.connections_refused != refused_before + 1) {
-        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - no RST counted "
-               "(refused=%lu timeouts=%lu resets=%lu, took %lu ticks)\n",
+    // A refusal must be an ANSWER (an RST), not the connect timeout — fast
+    // failure is the observable difference, and the timeout is 10s. AT LEAST
+    // ours, not EXACTLY ours: the counter is machine-wide, so demanding it
+    // moved by exactly one made this test fail whenever another program's
+    // dial was refused in the same window. `why` above already proved THIS
+    // connection got an RST; what is left for the counter to prove is only
+    // that the stack counted the thing it just did.
+    if (kTcpStats.connections_refused < refused_before + 1) {
+        printd(DEBUG_TESTS, "\tFAIL: test_net_tcp_refused - the dial reported REFUSED but "
+               "no RST was counted (refused=%lu timeouts=%lu resets=%lu, took %lu ticks)\n",
                kTcpStats.connections_refused, kTcpStats.connect_timeouts,
                kTcpStats.resets_received, elapsed);
         return false;

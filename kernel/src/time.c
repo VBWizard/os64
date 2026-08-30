@@ -8,9 +8,10 @@
 extern int kTimeZone;
 extern volatile uint64_t kTicksSinceStart;
 extern uint64_t kTicksPerSecond;
-// Per-core: has scheduling actually started here? nap() asks before parking,
-// because a core with no scheduler has no thread to wake it back up.
-extern bool mp_schedulerEnabled[MAX_CPUS];
+// Is there a scheduler that can wake a parked thread? nap() asks before
+// parking, because before SMP init there is nothing to wake it back up.
+// This and NOT the per-core mp_schedulerEnabled — see nap().
+extern bool kSMPInitDone;
 
 const int _ytab[2][12] = {
   {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31},
@@ -277,9 +278,33 @@ void wait(uint64_t msToWait)
 // not a delay.
 void nap(uint64_t msToSleep)
 {
+	// WHO AM I? — asked with interrupts OFF, and that is not caution, it is
+	// correctness. get_core_local_storage() reads GS:0, so `cls` names THIS
+	// CORE; a preemption between that read and the `cls->currentThread`
+	// dereference can resume this thread on a DIFFERENT core, after which the
+	// stale CLS names whoever is running on the old one. We would then put an
+	// unrelated thread to sleep and return without sleeping ourselves —
+	// silently, since both halves look like success. Capturing the thread
+	// pointer atomically is enough: SIGSLEEP targets a specific thread and is
+	// correct wherever that thread later runs. (Codex, PR #42.)
+	uint64_t flags;
+	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+	__asm__ volatile("cli" ::: "memory");
 	core_local_storage_t *cls = get_core_local_storage();
-	if (cls == NULL || cls->currentThread == NULL ||
-	    !mp_schedulerEnabled[cls->apic_id])
+	thread_t *self = (cls != NULL) ? cls->currentThread : NULL;
+	if (flags & 0x200)
+		__asm__ volatile("sti" ::: "memory");
+
+	// CAN ANYTHING WAKE ME? kSMPInitDone, and NOT mp_schedulerEnabled — which
+	// looks like the readiness flag and is not one. scheduler.c says so where
+	// it recruits parked APs: "under tickless the enable ISR leaves AP timers
+	// masked and never sets that flag... kSMPInitDone (checked above) is the
+	// real readiness gate." So an unpinned thread dispatched onto a recruited
+	// tickless AP would have found this false and taken the spin — on exactly
+	// the cores that do not preempt a compute-bound tenant, which is the
+	// worst possible place to spin and the behaviour this function exists to
+	// remove. (Codex, PR #42.)
+	if (self == NULL || self == NO_THREAD || !kSMPInitDone)
 	{
 		wait(msToSleep);
 		return;
@@ -288,5 +313,5 @@ void nap(uint64_t msToSleep)
 	uint64_t ticks = msToSleep / MS_PER_TICK;
 	if (ticks == 0)
 		ticks = 1;
-	signal_raise(SIGSLEEP, kTicksSinceStart + ticks, cls->currentThread);
+	signal_raise(SIGSLEEP, kTicksSinceStart + ticks, self);
 }

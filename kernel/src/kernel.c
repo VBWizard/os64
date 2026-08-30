@@ -686,6 +686,37 @@ void kernel_init()
 	// slot, the report naming the watchpoint, and — the part that is easy to
 	// get wrong and impossible to notice — TRACE mode actually RESUMING. Two
 	// hits are expected: one trace (the machine keeps going) and then a halt.
+	// SAY SO WHEN THE LATE PHASE WILL NOT RUN. Everything from here down can
+	// end the boot — TESTWATCH halts, TESTPF/TESTGP/TESTPANIC fault on
+	// purpose, SHUTDOWNTEST and REBOOTTEST take the machine away — and the
+	// late phase starts below all of them, after the shells. So a diagnostic
+	// boot runs pre-boot and post-boot and nothing else, which was true the
+	// moment two tests moved LATE and was true SILENTLY, since those entries
+	// are documented as running after the full suite. (Codex, PR #42.)
+	//
+	// Not reordered, deliberately: the late phase exists to run beside a live
+	// machine with a prompt on it, and these boots are the ones with no
+	// machine afterwards. Making them wait ~11 seconds to run two tests
+	// before deliberately panicking would serve nobody. The honest fix for
+	// "silently" is to stop being silent — and if you want those two tests,
+	// the entry to boot is the one without a terminal diagnostic on it.
+	// ON THE WIRE DIRECTLY, by the same reasoning that put "boot complete"
+	// there: this note exists for boots that END ABRUPTLY, and a queued
+	// printd on such a boot is never drained — verified, 2026-08-29, on a
+	// TESTWATCH boot whose log stopped mid-post-boot. printf is
+	// framebuffer-only AND every diagnostic below fills the glass with a
+	// register dump the moment it fires, so the screen copy is gone too. A
+	// message about what a boot did not do has to survive the boot not
+	// finishing.
+	if (kRunTests && (kTestWatchpoint || kTestPageFault || kTestGPFault ||
+	                  kTestPanic || kTestShutdown || kTestReboot))
+	{
+		printf("Note: this boot ends in a diagnostic, so the LATE test phase will not run.\n");
+		serial_print_string("BUILT-IN TESTS: late phase SKIPPED - this boot ends in a terminal "
+		                    "diagnostic, which halts before the phase would start. Pre-boot and "
+		                    "post-boot ran; the two late tests did not.\n");
+	}
+
 	if (kTestWatchpoint)
 	{
 		static volatile uint64_t watchBait = 0;
