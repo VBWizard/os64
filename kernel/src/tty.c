@@ -914,6 +914,36 @@ void pty_master_close(tty_t *slave)
 	if (slave == NULL || !slave->is_pty)
 		return;
 	slave->masterClosed = true;
+
+	// ── THE OTHER HANGUP (2026-08-31; booked in PTY.md § SIGHUP on master
+	// close). tty_task_departed's sweep is the SHELL-side carrier drop; this
+	// is the TERMINAL-side one — the master closing is the modem hanging up,
+	// fifty years on. Every seat gets SIGHUP (ruled: the modem did not pick
+	// favorites), which is what lets a parked slave reader die instead of
+	// waiting forever on a line nobody holds — and what lets the pty bury
+	// once those seats empty. The booking gated this on the window X-button;
+	// it arrived through the crash door instead: a terminal-role fixture
+	// died without cleanup and its seated child sat in read() for ten
+	// minutes of a Sunday. Same shutdown stand-down as the shell-side
+	// sweep, for the same P5 scar (a hangup wave mid-descent shot the
+	// undertaker, 2026-08-21 — shutdown.h).
+	if (!kShuttingDown)
+	{
+		uint32_t hung = 0;
+		for (task_t *victim = kTaskList;
+		     victim != NULL && victim != (task_t *)NO_TASK;
+		     victim = victim->next)
+		{
+			if (victim->tty != (void *)slave || victim == kKernelTask || victim->exited)
+				continue;
+			task_signal_and_nudge(victim, SIGHUP);
+			hung++;
+		}
+		if (hung)
+			printd(DEBUG_TASK, "pty%u: master closed, %u seat%s hung up\n",
+			       (unsigned)slave->index, hung, hung == 1 ? "" : "s");
+	}
+
 	pty_maybe_bury(slave);
 }
 
