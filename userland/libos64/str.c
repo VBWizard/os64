@@ -171,6 +171,26 @@ uint64_t os64_atou(const char *s)
     return v;
 }
 
+bool os64_parse_u64(const char *s, uint64_t *out)
+{
+    if (s == NULL || out == NULL || *s == '\0')
+        return false;
+
+    uint64_t value = 0;
+    for (const char *p = s; *p != '\0'; p++)
+    {
+        if (*p < '0' || *p > '9')
+            return false;
+        uint64_t digit = (uint64_t)(*p - '0');
+        if (value > (UINT64_MAX - digit) / 10)
+            return false;
+        value = value * 10 + digit;
+    }
+
+    *out = value;
+    return true;
+}
+
 // One hex digit's value, or -1 if the character isn't one. Kept separate so
 // the "is it a digit" test and the "what is it worth" conversion are the same
 // question asked once — the classic hand-rolled hex loop asks it twice and

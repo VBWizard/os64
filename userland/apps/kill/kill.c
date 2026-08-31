@@ -47,31 +47,10 @@ static const kill_signal_t *find_signal(const char *text)
     return NULL;
 }
 
-static bool parse_pid(const char *text, uint64_t *pid)
-{
-    if (text == NULL || *text == '\0')
-        return false;
-
-    uint64_t value = 0;
-    for (const char *p = text; *p != '\0'; p++)
-    {
-        if (*p < '0' || *p > '9')
-            return false;
-        uint64_t digit = (uint64_t)(*p - '0');
-        if (value > (UINT64_MAX - digit) / 10)
-            return false;
-        value = value * 10 + digit;
-    }
-    if (value == 0)
-        return false;
-    *pid = value;
-    return true;
-}
-
 static int send_signal(const char *pid_text, const kill_signal_t *signal)
 {
     uint64_t pid;
-    if (!parse_pid(pid_text, &pid))
+    if (!os64_parse_u64(pid_text, &pid) || pid == 0)
     {
         os64_hprintf(OS64_STDERR, "kill: invalid PID: %s\n", pid_text);
         return 1;

@@ -29,27 +29,6 @@ static int write_all(int32_t handle, const char *data, size_t len)
     return 0;
 }
 
-static bool parse_line_count(const char *value, uint64_t *lineCount)
-{
-    if (value == NULL || *value == '\0')
-        return false;
-
-    uint64_t result = 0;
-    for (const char *p = value; *p != '\0'; p++)
-    {
-        if (*p < '0' || *p > '9')
-            return false;
-
-        uint64_t digit = (uint64_t)(*p - '0');
-        if (result > (UINT64_MAX - digit) / 10)
-            return false;
-        result = result * 10 + digit;
-    }
-
-    *lineCount = result;
-    return true;
-}
-
 static int64_t find_tail_start(int32_t handle, uint64_t fileSize,
                                uint64_t lineCount)
 {
@@ -337,7 +316,8 @@ int main(int argc, char **argv)
     if (parsed < 0)
         os64_exit(2);
 
-    if (lineCountValue != NULL && !parse_line_count(lineCountValue, &lineCount))
+    if (lineCountValue != NULL &&
+        !os64_parse_u64(lineCountValue, &lineCount))
     {
         os64_hprintf(OS64_STDERR, "tail: invalid line count: %s\n", lineCountValue);
         os64_exit(2);

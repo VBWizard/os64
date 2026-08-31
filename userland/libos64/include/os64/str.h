@@ -69,10 +69,10 @@ bool os64_streq_nocase(const char *a, const char *b);
 // Parse a decimal integer from the front of `s`: optional +/- sign, then
 // digits, stopping at the first non-digit (the classic contract). Returns 0
 // for no-digits — indistinguishable from a real zero, which is atoi's
-// fifty-year-old wart; when a caller needs to tell them apart, a
-// full-diagnosis parser can join it (consumer-driven, as ever). The name
-// survives on merit: `atoi` is one of the handful of Unix names (fork, exec)
-// that earned its keep — every C programmer alive reads it instantly.
+// fifty-year-old wart; use os64_parse_u64 below when a whole unsigned field
+// must be validated. The name survives on merit: `atoi` is one of the handful
+// of Unix names (fork, exec) that earned its keep — every C programmer alive
+// reads it instantly.
 // (Graduated from top's `temporaryAtoi` — "the library guy" was off playing
 // with the network, per the heckling in topmain.c, and has now returned.)
 int64_t os64_atoi(const char *s);
@@ -83,17 +83,22 @@ int64_t os64_atoi(const char *s);
 // negate a tick count.
 uint64_t os64_atou(const char *s);
 
+// Parse one complete unsigned decimal field. Unlike os64_atou, this refuses
+// an empty string, signs, trailing characters, and values beyond UINT64_MAX.
+// On failure *out is untouched, so a rejected field cannot half-update its
+// caller's state. Returns false for NULL inputs as well.
+bool os64_parse_u64(const char *s, uint64_t *out);
+
 // The HEX sibling, and the one /proc's ADDRESSES want: every %p the kernel
 // prints is zero-padded hex with no 0x prefix (sprintf.c), so os64_atou would
 // read "0000000070000000" as seventy million decimal and be quietly, ruinously
 // wrong — it does not fail, it succeeds at another number. Accepts an optional
 // 0x/0X, consumes [0-9a-fA-F], stops at the first character that is not one.
 //
-// It takes the ENDPTR that os64_atoi's comment above promised to a future
-// caller ("a full-diagnosis parser can join it, consumer-driven"): if `end` is
-// non-NULL it is set to where parsing stopped. That is strtol's one genuinely
-// good idea, and it is what makes TWO numbers in one string a non-problem —
-// you never split, you parse in place and step over the delimiter:
+// It takes an ENDPTR rather than os64_parse_u64's whole-field contract: if
+// `end` is non-NULL it is set to where parsing stopped. That is strtol's one
+// genuinely good idea, and it is what makes TWO numbers in one string a
+// non-problem — you never split, you parse in place and step over the delimiter:
 //
 //     const char *p;
 //     uint64_t lo = os64_xtou(text, &p);      // p lands on the '-'
