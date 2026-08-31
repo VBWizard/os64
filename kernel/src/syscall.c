@@ -21,6 +21,7 @@
 #include "thread_join.h"   // the object behind HANDLE_THREAD
 #include "console.h"
 #include "gui/gui_client.h"   // the GUI client API rows 16-21 dispatch into
+#include "strings/strlen.h"   // the dir canonical-path copy measures with it
 #include "gui/window.h"       // GUI_WINDOW_TITLE_MAX — the title copy's bound
 #include "tty.h"           // console writes land on the CALLER's terminal now
 #include "conf.h"          // conf_find — the config search path, walked in one place
@@ -121,6 +122,10 @@ static uint64_t syscall_unlink(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_mkdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_mount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_unmount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
@@ -249,6 +254,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_HEAP_REPORT, "heap_report", syscall_heap_report, false, 0x01),  // arg0 = user VA of an os64_heap_report_t (0 withdraws)
 	SYSCALL_DEFINE(SYSCALL_TTY_HANDLE, "tty_handle", syscall_tty_handle, false, 0x00),  // no args — the answer is a property of the ASKER
 	SYSCALL_DEFINE(SYSCALL_CONF_RESOLVE, "conf_resolve", syscall_conf_resolve, false, 0x03),  // arg0 = name in, arg1 = path out; arg4 = don't probe
+	SYSCALL_DEFINE(SYSCALL_MOUNT,   "mount",   syscall_mount,   false, 0x03),  // arg0 = partition name/GUID, arg1 = mount point, arg2 = OS64_MOUNT_* flags
+	SYSCALL_DEFINE(SYSCALL_UNMOUNT, "unmount", syscall_unmount, false, 0x01),  // arg0 = mount point
 	// ── GUI (16-21): GRAPHICS.md's userland boundary, live 2026-08-17.
 	// Ownership (migration step 1) went in BEFORE these doors opened: every
 	// handle below is checked against its owner inside gui_client.c, so a
@@ -273,6 +280,136 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	// is readable, which is the least of what this one has to prove.
 	SYSCALL_DEFINE(SYSCALL_SIGRETURN,              "sigreturn",              syscall_sigreturn,              false, 0x00),  // arg0 = the signal frame
 };
+
+// ── mount/unmount (the namespace verbs, 2026-08-30) ─────────────────────────
+// Thin couriers: strings in, one vfs call in kernel context, the verdict out
+// verbatim (os64/mount.h's vocabulary — the caller's next move depends on
+// WHICH refusal it was, so the code travels instead of collapsing to -1).
+// The dispatcher runs mount under the path gate as a READER; unmount takes
+// the gate as the writer inside vfs_unmount itself.
+typedef struct {
+	char what[64];                   // a GPT name (≤36) or a dashed GUID (36)
+	char where[TASK_MAX_PATH_LEN];
+	uint64_t flags;                  // OS64_MOUNT_* bits, validated in vfs_mount_explicit
+	int  result;
+} mountop_params_t;
+
+static void mount_do(void *arg)
+{
+	mountop_params_t *p = (mountop_params_t *)arg;
+	p->result = vfs_mount_explicit(p->what, p->where, p->flags);
+}
+
+static void unmount_do(void *arg)
+{
+	mountop_params_t *p = (mountop_params_t *)arg;
+	p->result = vfs_unmount(p->where);
+}
+
+static bool resolve_user_path(task_t *task, const char *in, char *out, size_t outlen);
+
+static uint64_t syscall_mount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	mountop_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	if (!copy_user_string((const char *)arg0, p->what, sizeof(p->what)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	// A NULL `where` asks for the partition's own label (`mount fat` at the
+	// shell = a one-token mounts.conf line). It must not touch the resolver:
+	// an empty path would resolve to the caller's cwd, and "mount it at my
+	// label" would quietly become "mount it wherever I happen to be".
+	if (arg1 == 0)
+		p->where[0] = '\0';
+	else
+	{
+		char raw_where[TASK_MAX_PATH_LEN];
+		if (!copy_user_string((const char *)arg1, raw_where, sizeof(raw_where)))
+		{
+			kfree(p);
+			return SYSCALL_RESULT_BAD_USER_DATA;
+		}
+		if (raw_where[0] == '\0')   // "" is the same ask as NULL, same resolver dodge
+			p->where[0] = '\0';
+		else if (!resolve_user_path(task, raw_where, p->where, sizeof(p->where)))
+		{
+			kfree(p);
+			return SYSCALL_RESULT_BAD_USER_DATA;
+		}
+	}
+	p->flags = arg2;   // a value, not a pointer — vfs_mount_explicit refuses unknown bits
+
+	call_in_kernel_context(mount_do, p);
+	int64_t r = p->result;
+	kfree(p);
+	return (uint64_t)r;
+}
+
+static uint64_t syscall_unmount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg1; (void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	core_local_storage_t *cls = get_core_local_storage();
+	task_t *task = cls ? cls->task : NULL;
+	if (task == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	mountop_params_t *p = kmalloc(sizeof(*p));
+	if (p == NULL)
+		return SYSCALL_RESULT_INVALID;
+
+	char raw_where[TASK_MAX_PATH_LEN];
+	if (!copy_user_string((const char *)arg0, raw_where, sizeof(raw_where)) ||
+	    !resolve_user_path(task, raw_where, p->where, sizeof(p->where)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+
+	call_in_kernel_context(unmount_do, p);
+	int64_t r = p->result;
+	kfree(p);
+	return (uint64_t)r;
+}
+
+// Which syscalls are PATH OPERATIONS — the readers of the vfs path gate
+// (vfs.h). One list, consulted by the dispatcher, so the enter/exit pairing
+// lives in exactly one place instead of threading through eight handlers'
+// dozen return paths. A path op is anything that resolves a path and then
+// acts on the filesystem it resolved to: unmount closes the gate, and this
+// list is what it is closing against. SPAWN covers the ELF loader's and the
+// shared-object registry's opens (they run inside task_create, inside the
+// spawn call). MOUNT rides as a reader too — it stats the parent — while
+// UNMOUNT, the one writer, must never appear here.
+static bool syscall_is_path_op(uint64_t nr)
+{
+	switch (nr)
+	{
+		case SYSCALL_SPAWN:
+		case SYSCALL_OPEN:
+		case SYSCALL_CHDIR:
+		case SYSCALL_STAT:
+		case SYSCALL_UNLINK:
+		case SYSCALL_MKDIR:
+		case SYSCALL_RENAME:
+		case SYSCALL_CONF_RESOLVE:
+		case SYSCALL_MOUNT:
+			return true;
+		default:
+			return false;
+	}
+}
 
 uint64_t _syscall_dispatch(
 	uint64_t syscall_number,
@@ -373,9 +510,18 @@ uint64_t _syscall_dispatch(
 		log_syscall_invocation(entry, prepared_args);
 	}
 
+	// The path gate's reader bracket (vfs.h): whole-handler, so "resolved but
+	// not yet opened" is a state unmount can never observe.
+	bool path_op = syscall_is_path_op(syscall_number);
+	if (path_op)
+		vfs_path_enter();
+
 	result = entry->func(
 		prepared_args[0], prepared_args[1], prepared_args[2],
 		prepared_args[3], prepared_args[4], prepared_args[5]);
+
+	if (path_op)
+		vfs_path_exit();
 
 	if (switched_cr3)
 	{
@@ -2305,19 +2451,28 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	int h;
 	if (is_dir)
 	{
-		// Tag mount roots for mount-aware readdir: an fs-local path of "/"
-		// means this handle opened the top of its mount, so readdir must
-		// append the mount points living directly under it once the fs's
-		// own entries end (see vfs_readdir_child_mounts). The prefix is
-		// found by the fs pointer — one mount per fs by GUID dedupe.
-		if (p->path_copy[0] == '/' && p->path_copy[1] == '\0')
-			for (int i = 0; i < kMountCount; i++)
-				if (kMountTable[i].fs == p->fs)
-				{
-					p->dir->mount_prefix = kMountTable[i].prefix;
-					p->dir->mount_prefix_len = kMountTable[i].prefix_len;
-					break;
-				}
+		// Tag every directory for mount-aware readdir: the mount points
+		// living directly under it are served as synthetic entries once the
+		// fs's own end (vfs_readdir_child_mounts). The tag is the dir's own
+		// CANONICAL path — a copy this handle owns (freed by
+		// handle_dir_object_close), because mounts unmount now and a pointer
+		// into the table would be a pointer into whatever claims the slot
+		// next. Allocation failure just loses the synthetic entries: the
+		// real ones still list.
+		size_t canon_len = strlen(path);
+		char *canon = kmalloc(canon_len + 1);
+		if (canon != NULL)
+		{
+			memcpy(canon, path, canon_len + 1);
+			p->dir->mount_prefix = canon;
+			p->dir->mount_prefix_len = canon_len;
+		}
+		// The dir half of unmount's busy arithmetic (vfs.h open_dir_count):
+		// counted here, uncounted in handle_dir_object_close — the two doors
+		// every user-held directory passes through. owner is the glue's to
+		// set; every filesystem's opendir does.
+		if (p->dir->owner != NULL)
+			__sync_fetch_and_add(&((vfs_filesystem_t *)p->dir->owner)->open_dir_count, 1);
 
 		// Directories carry no refcount — spawn redirection rejects them, so
 		// this handle is the object's one and only owner (see handle.h).
@@ -3361,6 +3516,22 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		memcpy(p->path, canon, sizeof(canon));
 	}
 
+	// Resolve the SET_TTY master FIRST, in the caller's context, where the
+	// caller's handle table is in scope (PTY.md's seat) — first because the
+	// redirection defaults below turn on whether this spawn seats the child.
+	p->ttySlave = NULL;
+	if (flags & OS64_SPAWN_SET_TTY)
+	{
+		int mh = (int)(flags >> OS64_SPAWN_TTY_SHIFT);
+		handle_t *h = (p->parent != NULL) ? handle_get(p->parent, mh) : NULL;
+		if (h == NULL || h->type != HANDLE_PTY_MASTER)
+		{
+			kfree(p);
+			return SYSCALL_RESULT_INVALID;   // not a master you hold
+		}
+		p->ttySlave = (tty_t *)h->object;
+	}
+
 	// Resolve the redirection handles HERE, in the caller's context, where the
 	// caller's handle table is the one in scope. spawn_do_create runs under
 	// kKernelPML4 and only ever sees the resolved (type, object) pairs.
@@ -3377,8 +3548,20 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// a script's every line lands where the script was pointed. Stdio flows
 		// down; nothing else in the table does (the doctrine below). A caller
 		// that has CLOSED its own slot hands the child the built-in default.
+		//
+		// ...UNLESS THIS SPAWN SEATS THE CHILD. Seating a program on a
+		// terminal IS the statement about where its bytes go — the tty has
+		// been the session's stdio since the modem era — so a seated child's
+		// DEFAULTED slots take the built-in console (routed to its seat),
+		// not the caller's. Learned from `testrun > log 2>&1`: the winchtest
+		// terminal's seated child inherited the log file, printed its size
+		// report into it, and the grid the test was polling stayed empty
+		// (2026-08-31). An EXPLICIT redirection still wins — a caller that
+		// wants a seated child writing elsewhere says so per slot.
 		if (redir[slot] < 0)
 		{
+			if (p->ttySlave != NULL)
+				continue;
 			handle_t *own = (p->parent != NULL) ? handle_get(p->parent, slot) : NULL;
 			if (own == NULL)
 				continue;
@@ -3409,21 +3592,6 @@ static uint64_t syscall_spawn(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 		p->redirType[slot] = h->type;
 		p->redirObject[slot] = h->object;
-	}
-
-	// Resolve the SET_TTY master the same way, in the caller's context, where
-	// the caller's handle table is in scope (PTY.md's seat).
-	p->ttySlave = NULL;
-	if (flags & OS64_SPAWN_SET_TTY)
-	{
-		int mh = (int)(flags >> OS64_SPAWN_TTY_SHIFT);
-		handle_t *h = (p->parent != NULL) ? handle_get(p->parent, mh) : NULL;
-		if (h == NULL || h->type != HANDLE_PTY_MASTER)
-		{
-			kfree(p);
-			return SYSCALL_RESULT_INVALID;   // not a master you hold
-		}
-		p->ttySlave = (tty_t *)h->object;
 	}
 
 	// task_create runs under kKernelPML4 so its disk I/O sees the DMA mappings.

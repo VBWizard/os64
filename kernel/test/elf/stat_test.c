@@ -11,8 +11,16 @@
 //      synthesize the root's entry — it has no parent entry to be named by)
 //   4. stat("/no/such/thing")  -> negative (absence answers in-band)
 //   5. stat("bin")             -> RELATIVE path resolves against cwd ("/")
-//   6. stat("/fat") or stat("/ext2") -> whichever secondary mount this boot
-//      produced is a DIRECTORY — stat routing across the mount table
+//   6. stat routing across the mount table, in two halves: "/sys" (a
+//      synthetic claims its prefix on every boot ever, so the ROUTING is
+//      provable unconditionally), then the prefix of every disk-backed
+//      non-root mount /sys/mounts actually lists (a DISK driver's stat
+//      receiving the fs-local tail). WHICH disk mounts exist stopped being
+//      a constant when /etc/mounts.conf made boot mounts policy
+//      (2026-08-31) — this step used to hardcode "/fat or /ext2" from the
+//      sweep era and failed on the first boot whose policy said otherwise.
+//      A boot that mounts no secondary disk answers SKIP, not failure:
+//      that is a fact about the BOOT, not about stat (the synctest rule).
 #include <stdint.h>
 #include "os64/syscall.h"
 #include "os64/dirent.h"
@@ -24,6 +32,7 @@
 #define FAIL_ABSENT      0x57A70004UL
 #define FAIL_RELATIVE    0x57A70005UL
 #define FAIL_MOUNT       0x57A70006UL
+#define SKIP_NO_SECONDARY 0x57A70007UL   // no disk mount beyond root — testrun's skipcode
 
 static inline int failed(uint64_t v) { return (int64_t)v < 0; }
 
@@ -36,6 +45,38 @@ static void __attribute__((noreturn)) exit_with(uint64_t code)
 static uint64_t stat_path(const char *path, os64_dirent_t *e)
 {
     return os64_syscall2(SYSCALL_STAT, (uint64_t)path, (uint64_t)e);
+}
+
+// /sys/mounts, slurped raw (this fixture is deliberately libos64-free: it
+// proves the syscall floor with nothing but the syscalls). The file is a
+// few hundred bytes; a boot that somehow grows it past the buffer fails
+// the read loudly rather than quietly testing a prefix of the table.
+static char gMounts[4096];
+
+static long read_mounts(void)
+{
+    uint64_t h = os64_syscall2(SYSCALL_OPEN, (uint64_t)"/sys/mounts", (uint64_t)"r");
+    if (failed(h))
+        return -1;
+    long total = 0;
+    for (;;)
+    {
+        uint64_t n = os64_syscall4(SYSCALL_READ, h,
+                                   (uint64_t)(gMounts + total),
+                                   (uint64_t)(sizeof(gMounts) - 1 - total),
+                                   OS64_WAIT_FOREVER);
+        if (failed(n))
+            { total = -1; break; }
+        if (n == 0)
+            break;
+        total += (long)n;
+        if (total >= (long)sizeof(gMounts) - 1)
+            { total = -1; break; }   // grew past the buffer — refuse, loudly
+    }
+    os64_syscall1(SYSCALL_CLOSE, h);
+    if (total >= 0)
+        gMounts[total] = '\0';
+    return total;
 }
 
 unsigned long _start(unsigned long argc, char **argv, char **env)
@@ -65,11 +106,50 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
     if (failed(stat_path("bin", &e)) || !(e.flags & OS64_DE_DIR))
         exit_with(FAIL_RELATIVE);
 
-    // 6. Across the mount table: one of the secondary mounts must be there
-    //    (FAT root grows /ext2; ext2 root grows /fat).
-    if ((failed(stat_path("/fat", &e)) || !(e.flags & OS64_DE_DIR)) &&
-        (failed(stat_path("/ext2", &e)) || !(e.flags & OS64_DE_DIR)))
+    // 6a. Routing, unconditionally: a synthetic's prefix routes to its own
+    //     filesystem's stat on every boot there has ever been.
+    if (failed(stat_path("/sys", &e)) || !(e.flags & OS64_DE_DIR))
         exit_with(FAIL_MOUNT);
+
+    // 6b. The disk half: stat the prefix of every disk-backed non-root
+    //     mount the table actually lists (device column != "-"). A mount
+    //     the table names but stat cannot see IS a failure; a table with
+    //     no secondary disk mounts is the boot's policy, and answers SKIP.
+    if (read_mounts() < 0)
+        exit_with(FAIL_MOUNT);
+    int secondaries = 0;
+    for (char *p = gMounts; *p != '\0'; )
+    {
+        char *line = p;
+        while (*p != '\0' && *p != '\n')
+            p++;
+        if (*p == '\n')
+            *p++ = '\0';
+        if (line[0] != '/')
+            continue;   // the '#' header, or noise
+
+        // Columns: prefix fstype device ... — split the first three.
+        char *prefix = line;
+        char *q = line;
+        while (*q != '\0' && *q != ' ' && *q != '\t') q++;
+        if (*q == '\0') continue;
+        *q++ = '\0';
+        while (*q == ' ' || *q == '\t') q++;             // fstype
+        while (*q != '\0' && *q != ' ' && *q != '\t') q++;
+        while (*q == ' ' || *q == '\t') q++;             // device
+        char *device = q;
+        while (*q != '\0' && *q != ' ' && *q != '\t') q++;
+        *q = '\0';
+
+        if (device[0] == '-' || device[0] == '\0' || prefix[1] == '\0')
+            continue;   // synthetic, a short row, or the root itself
+
+        secondaries++;
+        if (failed(stat_path(prefix, &e)) || !(e.flags & OS64_DE_DIR))
+            exit_with(FAIL_MOUNT);
+    }
+    if (secondaries == 0)
+        exit_with(SKIP_NO_SECONDARY);
 
     exit_with(STAT_OK);
     return 0;   // unreachable; keeps the non-void signature honest

@@ -255,16 +255,19 @@ bool synthfs_mount(const char *prefix,
 	// block device, no partition number, because none of those things exist
 	// here.)
 
-	vfs_mount_entry_t *m = &kMountTable[kMountCount];
-	strncpy(m->prefix, prefix, VFS_MOUNT_PREFIX_MAX - 1);
-	m->prefix[VFS_MOUNT_PREFIX_MAX - 1] = '\0';
-	m->prefix_len = strlen(m->prefix);
-	// part_guid stays all-zero: there is no partition. Mounting AFTER the
-	// auto-mount sweep keeps that zero out of the sweep's dedupe comparisons,
-	// where it could otherwise match a partition whose GUID failed to read.
-	memset(m->part_guid, 0, sizeof(m->part_guid));
-	m->fs = fs;
-	kMountCount++;
+	// part_guid stays all-zero (NULL here): there is no partition. Mounting
+	// AFTER the auto-mount sweep keeps that zero out of the sweep's dedupe
+	// comparisons, where it could otherwise match a partition whose GUID
+	// failed to read. The fstype word is the prefix's own name — "/proc" is
+	// the proc filesystem; a synthetic that wants to claim otherwise has no
+	// business being synthetic.
+	if (!vfs_mount_claim(prefix, NULL, prefix + 1, fs))
+	{
+		kfree(fs->fops);
+		kfree(fs->dops);
+		kfree(fs);
+		return false;
+	}
 
 	printd(DEBUG_BOOT, "BOOT: mounted %s (synthetic — %s)\n", prefix, what);
 	// The glass line: "mounted proc at /proc". Synthetic prefixes are

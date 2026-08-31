@@ -6,6 +6,7 @@
 #include "memory/memset.h"
 #include "memory/memcmp.h"
 #include "strcmp.h"
+#include "strcpy.h"   // test_mount_unmount captures the victim prefix
 #include "strlen.h"
 #include "memory/memcpy.h"
 #include "memory/memcmp.h"
@@ -28,6 +29,7 @@
 #include "kernel.h"   // kTicksSinceStart — the TCP tests time their failures
 #include "driver/filesystem/vfs/vfs.h"
 #include "driver/filesystem/ext2/ext2_vfs.h"   // ext2_fops/ext2_dops (real-partition test)
+#include "os64/mount.h"   // the mount/unmount result vocabulary (test_mount_unmount)
 #include "driver/block/block_cache.h"          // stats + is_active (buffer-cache test)
 #include "shared_object.h"
 #include "env.h"
@@ -1309,6 +1311,158 @@ static bool test_shared_object_reload(void)
     return true;
 }
 #undef SO_FAIL
+
+// ── test_mount_unmount ───────────────────────────────────────────────────────
+// The namespace verbs, proven on a live table: pick a mounted, disk-backed,
+// non-root filesystem nobody is using, hold a file on it and watch unmount
+// refuse; release, unmount, watch its name leave the namespace; remount it by
+// GUID at a scratch prefix — READ-ONLY, with the write verbs verifiably
+// absent — and read through the new name; put it back where and HOW it was
+// found. The refusals are half the feature — BUSY on a held file, NOT_A_MOUNT
+// after the strike, and BAD_ARGS for an unknown flag bit are asserted, not
+// assumed.
+#define MU_FAIL(...) do { \
+        printd(DEBUG_TESTS, "\tFAIL: test_mount_unmount - " __VA_ARGS__); \
+        return false; \
+    } while (0)
+static bool test_mount_unmount(void)
+{
+    if (kRootFilesystem == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_mount_unmount (no root filesystem mounted)\n");
+        return true;
+    }
+
+    // The victim: mounted, disk-backed, not "/", nothing open on it. Its
+    // identity is captured as the GUID string, because that survives the
+    // unmount (the table entry does not).
+    char victim_prefix[VFS_MOUNT_PREFIX_MAX] = "";
+    char victim_guid[40] = "";
+    vfs_filesystem_t *victim = NULL;
+    for (int i = 0; i < kMountCount; i++) {
+        vfs_filesystem_t *fs = kMountTable[i].fs;
+        if (fs == NULL || kMountTable[i].prefix_len == 1 || fs->block_device_info == NULL)
+            continue;
+        if (vfs_openfiles_on(fs) != 0 || fs->open_dir_count != 0)
+            continue;
+        victim = fs;
+        strcpy(victim_prefix, kMountTable[i].prefix);
+        vfs_format_guid(kMountTable[i].part_guid, victim_guid);
+        break;
+    }
+    // Captured now because the restore must put back what was FOUND — a
+    // victim that was mounted ro (a mounts.conf `ro` line, or a device that
+    // cannot write) goes back ro, or the test would quietly hand the boot's
+    // namespace a pen it did not have.
+    bool victim_ro = (victim != NULL) && victim->read_only;
+    if (victim == NULL) {
+        printd(DEBUG_TESTS, "\tSKIP: test_mount_unmount (no idle disk mount to exercise)\n");
+        return true;
+    }
+
+    // 1. BUSY. A held file on the victim must hold the mount down.
+    char probe_path[VFS_MOUNT_PREFIX_MAX + 16];
+    sprintf(probe_path, "%s/mu_probe", victim_prefix);
+    const char *tail = NULL;
+    vfs_filesystem_t *fs = vfs_resolve_mount(probe_path, &tail);
+    if (fs != victim)
+        MU_FAIL("%s did not route to the victim filesystem\n", probe_path);
+    vfs_file_t *held = NULL;
+    bool held_open = (victim->fops->open != NULL &&
+                      victim->fops->open(&held, "/", "r", victim) == 0 && held != NULL);
+    // Not every fs opens its root as a FILE; a directory hold proves the same
+    // arithmetic through the other counter.
+    vfs_directory_t *held_dir = NULL;
+    if (!held_open) {
+        if (victim->dops->open == NULL ||
+            victim->dops->open(&held_dir, "/", victim) != 0 || held_dir == NULL)
+            MU_FAIL("could not hold anything open on %s\n", victim_prefix);
+        __sync_fetch_and_add(&victim->open_dir_count, 1);   // the syscall door's half, done by hand
+    }
+    int r = vfs_unmount(victim_prefix);
+    if (r != OS64_UNMOUNT_BUSY) {
+        if (held_open) victim->fops->close(held);
+        MU_FAIL("unmount of %s with a holder answered %d, expected BUSY (%d)\n",
+                victim_prefix, r, OS64_UNMOUNT_BUSY);
+    }
+
+    // 2. RELEASE AND UNMOUNT. The name must leave the namespace.
+    if (held_open)
+        victim->fops->close(held);
+    else {
+        __sync_fetch_and_sub(&victim->open_dir_count, 1);
+        victim->dops->close(held_dir);
+    }
+    r = vfs_unmount(victim_prefix);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("unmount of idle %s answered %d\n", victim_prefix, r);
+    // `victim` is freed as of that call — only the strings live on.
+    r = vfs_unmount(victim_prefix);
+    if (r != OS64_UNMOUNT_NOT_A_MOUNT)
+        MU_FAIL("second unmount of %s answered %d, expected NOT_A_MOUNT (%d)\n",
+                victim_prefix, r, OS64_UNMOUNT_NOT_A_MOUNT);
+
+    // 3. REMOUNT BY GUID at a scratch prefix — READ-ONLY — and the tree must
+    // answer there while every pen is verifiably gone. An unknown flag bit
+    // must bounce before anything mounts.
+    static const char *scratch = "/mu_mount";
+    r = vfs_mount_explicit(victim_guid, scratch, 0x8000);
+    if (r != OS64_MOUNT_BAD_ARGS)
+        MU_FAIL("an unknown mount flag answered %d, expected BAD_ARGS (%d)\n",
+                r, OS64_MOUNT_BAD_ARGS);
+    r = vfs_mount_explicit(victim_guid, scratch, OS64_MOUNT_RO);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("remount of %s at %s answered %d\n", victim_guid, scratch, r);
+    tail = NULL;
+    fs = vfs_resolve_mount("/mu_mount/anything", &tail);
+    if (fs == NULL || fs == kRootFilesystem || strcmp(tail, "/anything") != 0)
+        MU_FAIL("%s did not route into the remounted filesystem\n", scratch);
+    if (!fs->read_only || fs->fops->write != NULL || fs->fops->rm != NULL ||
+        fs->dops->mkdir != NULL)
+        MU_FAIL("an OS64_MOUNT_RO mount still carries write verbs\n");
+    os64_dirent_t entry;
+    if (fs->dops->stat == NULL || fs->dops->stat("/", &entry, fs) != 0)
+        MU_FAIL("stat of the remounted root failed\n");
+
+    r = vfs_unmount(scratch);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("unmount of %s answered %d\n", scratch, r);
+
+    // 3b. NO WHERE: the verb derives the label default — `mount fat` and a
+    // one-token mounts.conf line are the same ask. The landing prefix is
+    // found by GUID, because the fixture deliberately does not re-implement
+    // the derivation it is testing.
+    r = vfs_mount_explicit(victim_guid, NULL, 0);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("mount with no where answered %d\n", r);
+    char derived_prefix[VFS_MOUNT_PREFIX_MAX] = "";
+    for (int i = 0; i < kMountCount; i++) {
+        char g[40];
+        if (kMountTable[i].fs == NULL)
+            continue;
+        vfs_format_guid(kMountTable[i].part_guid, g);
+        if (strcmp(g, victim_guid) == 0) {
+            strcpy(derived_prefix, kMountTable[i].prefix);
+            break;
+        }
+    }
+    if (derived_prefix[0] != '/' || derived_prefix[1] == '\0')
+        MU_FAIL("the label-derived mount is not in the table\n");
+    r = vfs_unmount(derived_prefix);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("unmount of derived %s answered %d\n", derived_prefix, r);
+
+    // 4. PUT IT BACK, in the mode it was found. The boot's namespace
+    // outlives the test.
+    r = vfs_mount_explicit(victim_guid, victim_prefix, victim_ro ? OS64_MOUNT_RO : 0);
+    if (r != OS64_MOUNT_OK)
+        MU_FAIL("restoring %s at %s answered %d\n", victim_guid, victim_prefix, r);
+
+    printd(DEBUG_TESTS, "\tPASS: test_mount_unmount (%s: busy while held, unmounted idle, "
+                        "remounted ro by GUID at %s, restored %s)\n",
+           victim_prefix, scratch, victim_ro ? "ro" : "rw");
+    return true;
+}
+#undef MU_FAIL
 
 
 // ── Argument delivery (2026-08-13) ───────────────────────────────────────────
@@ -4974,6 +5128,7 @@ static void register_builtin_tests(void)
     // runs after the gauntlets above, which is what makes its own writes
     // trustworthy.
     test_register("shared_object_reload", test_shared_object_reload, TEST_PHASE_POSTBOOT);
+    test_register("mount_unmount", test_mount_unmount, TEST_PHASE_POSTBOOT);
     test_register("console_read_deadline", test_console_read_deadline, TEST_PHASE_POSTBOOT);
     test_register_policy("block_cache", test_block_cache, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register("dirent_mtime", test_dirent_mtime, TEST_PHASE_POSTBOOT);

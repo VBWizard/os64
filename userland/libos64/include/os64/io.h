@@ -309,6 +309,21 @@ int64_t os64_unlink(const char *path);
 // This is the call `mv` is built on — within one filesystem.
 int64_t os64_rename(const char *oldpath, const char *newpath);
 
+// Mount a partition into the namespace, or take a mount out of it. `what`
+// names the PARTITION — its GPT name ("home") or dashed GUID — never a
+// device path; `where` is the mount point (its parent must exist; the point
+// itself need not — the mount table is the namespace at that level). A NULL
+// `where` mounts at the partition's own GPT label, exactly as a one-token
+// mounts.conf line does.
+// `flags` is the OS64_MOUNT_* bits — OS64_MOUNT_RO mounts with every write
+// verb refused from birth; an unknown bit is refused as BAD_ARGS.
+// Returns 0 or a negative os64/mount.h code that says WHICH refusal:
+// OS64_UNMOUNT_BUSY and OS64_MOUNT_NOT_FOUND demand different next moves,
+// so the number carries the difference. /sys/mounts and /sys/block are the
+// eyes; these two are the hands.
+int64_t os64_mount(const char *what, const char *where, uint64_t flags);
+int64_t os64_unmount(const char *where);
+
 // Create a directory at `path` (relative paths resolve against the cwd).
 // 0 on success, negative on failure: a read-only filesystem (ext2, by
 // design), a parent that doesn't exist, or a name already taken. Atomic —

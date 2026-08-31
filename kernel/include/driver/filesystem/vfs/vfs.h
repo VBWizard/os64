@@ -116,7 +116,16 @@ typedef enum
 
 struct block_device
 {
+	// The device's own story — a model string, a serial, "ramdisk0" —
+	// whatever its driver wants the logs to say. Not user-facing.
 	char* name;
+	// THE SYSTEM'S HANDLE for this device: bus + ordinal — "nvme0", "sata0",
+	// "ram0" (and "usb0" the day mass storage arrives). Assigned once by
+	// block_assign_dev_names, printed by /sys/block, and COMMITTED as the
+	// name /dev block nodes will reuse when they arrive (ruled 2026-08-30,
+	// so the two can never disagree — Linux's /dev/disk/by-* sediment is
+	// what happens when they do).
+	char dev_name[12];
 	block_device_info_t* device;
 	block_operations_t* ops;
 	int part_count;
@@ -161,16 +170,18 @@ struct directory
 	dlist_t listEntry;
 	void *owner;
 	// Mount-aware readdir (tagged by syscall_open, consumed by
-	// syscall_readdir): when this handle opened the ROOT directory of its
-	// mount (fs-local path "/"), the mount points living directly under it
-	// ("/fat" when listing "/") are served as SYNTHETIC entries after the
-	// filesystem's own entries run out. A mount point is namespace routing,
-	// not directory content — the fs on disk has no such entry to return,
-	// so the VFS must speak for it or `ls /` can't see what `cd /fat`
-	// can reach. mount_prefix points into kMountTable (static storage,
-	// mounts never unmount) and stays NULL for any non-mount-root dir;
-	// mount_scan is the resume cursor for the synthetic phase (the
-	// allocator's zeroing initializes both).
+	// syscall_readdir): the mount points living directly under this
+	// directory ("/fat" when listing "/", "/mnt/stick" when listing "/mnt")
+	// are served as SYNTHETIC entries after the filesystem's own entries run
+	// out. A mount point is namespace routing, not directory content — the
+	// fs on disk has no such entry to return, so the VFS must speak for it
+	// or `ls` can't see what `cd` can reach. mount_prefix is the directory's
+	// own CANONICAL path, a kmalloc'd copy owned by this struct — set by
+	// syscall_open for every directory it opens, freed by
+	// handle_dir_object_close, NULL for kernel-internal opendirs (the
+	// allocator's zeroing). It stopped pointing into kMountTable the day
+	// mounts learned to unmount; mount_scan is the resume cursor for the
+	// synthetic phase.
 	const char *mount_prefix;
 	size_t mount_prefix_len;
 	int mount_scan;
@@ -263,6 +274,14 @@ struct vfs_filesystem
 	// stripped for fast syscall refusal, but retained/saved callbacks must
 	// independently honor this state before performing any mutation.
 	bool read_only;
+	// Open DIRECTORY handles on this mount. Directories have no refcount and
+	// no registry (files have both), so unmount's busy check needs a count
+	// kept at the two doors every user-held directory passes through:
+	// syscall_open's dir branch (++, under the path gate) and
+	// handle_dir_object_close (--). Kernel-internal opendirs (boot-time
+	// tests) don't count and don't need to: they never overlap an unmount
+	// syscall. __sync-adjusted; read with the gate held.
+	int open_dir_count;
 	void* fs_specific;
 };
 
@@ -312,9 +331,17 @@ struct file
 	// it. This is the bookkeeping that lets vfs_sync_all() reach OTHER tasks'
 	// dirty files — the whole reason sync(1) can exist (a FAT file's true
 	// length lives only in the writer's FIL until someone syncs it; ask
-	// ping.log). Future customers: lsof, umount refusal counts.
+	// ping.log). The other customers: unmount's busy count, /sys/openfiles.
 	vfs_file_t *openNext;
 	vfs_file_t *openPrev;
+	// Registration-time COPY of f_path, owned by this struct. f_path itself
+	// is the CALLER's memory (the lifetime rule above the mount table), and
+	// kernel-internal openers pass buffers that die long before the file
+	// closes — the shared-object registry's resolve tail did, and rendering
+	// it later printed garbage (a freed HEAP path would have walked
+	// /sys/openfiles into the use-after-free tripwire instead). Anything
+	// that names a registered file after open returns reads THIS.
+	char reg_path[96];
 
 	// THE POSITION LOCK (2026-08-15). An open file carries ONE seek position,
 	// so "seek here, then read" is only atomic if nobody re-seeks in between —
@@ -421,6 +448,12 @@ struct file_operations
 	// be undone. Report trouble; do not expect to veto.
 	int (*mounted) (vfs_filesystem_t* fs);
 	int (*uninitialize) (vfs_filesystem_t* device);
+	// How big and how full — the numbers df exists to print, in BYTES.
+	// Answered from mount-time state (ext2's cached superblock) or the
+	// driver's own accounting (FatFs walks the FAT); a filesystem with no
+	// meaningful answer (the synthetics) leaves the slot NULL and
+	// /sys/mounts prints dashes. Returns 0 on success.
+	int (*space) (vfs_filesystem_t* fs, uint64_t* total_bytes, uint64_t* free_bytes);
 };
 
 
@@ -467,6 +500,16 @@ typedef struct {
 	                                   // a RAMDisk and the NVMe disk it was
 	                                   // imaged from never both mount (first
 	                                   // registered wins, matching the root scan)
+	// What is mounted here, as a word: "ext2", "fat", or a synthetic's own
+	// name ("proc", "sys", "dev"). A static string or a pointer into this
+	// entry's own prefix — never allocated, never freed. /sys/mounts prints
+	// it; nothing dispatches on it (dispatch is what the op tables are for).
+	const char *fstype;
+	// fs == NULL marks a FREE slot (never mounted, or unmounted). Entries
+	// never move and kMountCount is a high-water mark, so an open directory's
+	// synthetic-readdir cursor (mount_scan) stays meaningful across an
+	// unmount; every walker skips NULL. A claim fills the entry and stores
+	// `fs` LAST; an unmount clears `fs` FIRST (vfs.c, under kMountTableLock).
 	vfs_filesystem_t *fs;
 } vfs_mount_entry_t;
 
@@ -485,11 +528,79 @@ extern int kMountCount;
 vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tail);
 
 // The synthetic phase of mount-aware readdir: serve the next mount point
-// that is a DIRECT child of `dir`'s mount prefix (grandchildren belong to
+// that is a DIRECT child of `dir`'s canonical path (grandchildren belong to
 // deeper listings) as an os64_dirent_t — directory flag set, size 0.
-// Returns 1 = entry filled, 0 = no more (or dir isn't a mount root).
-// Pure kMountTable string scan — no disk I/O, safe from any CR3.
+// Returns 1 = entry filled, 0 = no more (or the dir carries no path tag —
+// a kernel-internal opendir). Pure kMountTable string scan — no disk I/O,
+// safe from any CR3.
 int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry);
+
+// ── The namespace verbs (2026-08-30) ─────────────────────────────────────────
+// mount/unmount at runtime. `what` is a GPT partition name or a GUID string —
+// never a device path (abi/include/os64/mount.h carries the argument, flag
+// and result vocabulary; the syscalls return these values verbatim). `where`
+// is a CANONICAL absolute path — or NULL/empty, meaning "at the partition's
+// own GPT label" (fstype fallback, collision numbering), the same derivation
+// a one-token mounts.conf line gets. `flags` is the OS64_MOUNT_* bits (RO
+// mounts get write-stripped op tables from birth). Callable from kernel
+// context (the fixture and the mounts.conf boot reader do) and from the
+// syscalls.
+int vfs_mount_explicit(const char *what, const char *where, uint64_t flags);
+int vfs_unmount(const char *where);
+
+// THE PATH GATE — what makes unmount sound against in-flight path operations.
+// Every operation that RESOLVES a path to a filesystem and then acts on it
+// (open, chdir, stat, mkdir, rm, rename, spawn's ELF+library loads, the conf
+// walker's probes) enters as a READER for the duration of the operation;
+// readers never wait for each other. vfs_unmount is the only WRITER: it
+// closes the gate, waits for the readers already inside to leave, and holds
+// it shut across its busy checks and the strike — so "no open files, no open
+// dirs, no cwd inside" cannot be falsified by an operation that was mid-fault
+// between resolve and open when the check ran, and the fs it tears down is
+// one no path operation can still be touching. Enter/exit MUST bracket the
+// whole resolve-to-done span, never just the resolve.
+void vfs_path_enter(void);
+void vfs_path_exit(void);
+
+// The mount prefix serving `fs`, for printing a FULL path from an fs-local
+// tail (procfs handles, diagnostics). Root answers "" so prefix+tail
+// concatenates cleanly. Returns false if no live entry names this fs.
+bool vfs_prefix_for_fs(vfs_filesystem_t *fs, char *out, size_t cap);
+
+// How many open files sit on `fs` (the open-file registry's count) —
+// unmount's busy arithmetic and /sys/mounts' open column.
+int vfs_openfiles_on(vfs_filesystem_t *fs);
+
+// One row of /sys/openfiles — a COPY of a registered open file's public
+// face, safe to render after the registry lock is gone. `handles` is the
+// handle-layer refcount: 0 means no task handle references it, so the
+// KERNEL is the holder — a running program's image held for demand paging,
+// a resident shared object, an orphan kept alive by its last opener. Those
+// are exactly the opens no /proc/<pid>/handles walk can see, which is why
+// lsof needs this list and not only the handle tables.
+typedef struct {
+	char mount[VFS_MOUNT_PREFIX_MAX];  // "" for the root mount — prefix+tail concatenates
+	char tail[128];                    // fs-local path (the registration-time reg_path copy)
+	uint64_t ident;                    // f_ident: ext2 inode / FAT start cluster
+	int handles;
+} vfs_openfile_row_t;
+
+// Copy out the registry, newest first (registration order). Returns the
+// TOTAL registered count; at most max_rows rows are written, so a caller
+// seeing total > max_rows knows the listing was cut, and by how much.
+int vfs_openfiles_snapshot(vfs_openfile_row_t *rows, int max_rows);
+
+// Render 16 raw GPT GUID bytes in the dashed spelling ROOT= speaks —
+// "2f4fd02e-68b4-4c82-98bc-72467529b3fc". `out` needs 37 bytes.
+void vfs_format_guid(const uint8_t *guid, char *out);
+
+// Claim a mount table entry — the one place a claim happens, shared by
+// kRegisterFilesystem and synthfs_mount. Reuses free slots, publishes `fs`
+// last (the lock-free-reader ordering rule at vfs_mount_entry_t), announces
+// a full table on the glass itself. `fstype` must be a string that outlives
+// the mount (a literal, or a pointer into static storage).
+bool vfs_mount_claim(const char *prefix, const uint8_t *guid_or_null,
+                     const char *fstype, vfs_filesystem_t *fs);
 
 // ── The open-file registry (the sync(8) slice, 2026-08-06) ──────────────────
 // Called by each filesystem glue at the bottom of a successful open and the

@@ -410,7 +410,12 @@ static const char *proc_handle_type_name(handle_type_t t)
 		case HANDLE_PIPE_WRITE:  return "pipe-write";
 		case HANDLE_FILE:        return "file";
 		case HANDLE_DIR:         return "dir";
+		case HANDLE_THREAD:      return "thread";
+		case HANDLE_NET_UDP:     return "udp";
+		case HANDLE_NET_TCP:     return "tcp";
+		case HANDLE_NET_ICMP:    return "icmp";
 		case HANDLE_PTY_MASTER:  return "pty-master";
+		case HANDLE_CLOSING:     return "closing";
 		default:                 return "none";
 	}
 }
@@ -565,9 +570,13 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 
 static void proc_gen_handles(synth_text_t *t, task_t *task)
 {
-	// "handle<TAB>type<TAB>detail" — the detail column is whatever the tag
-	// makes meaningful, and is simply absent for the console tags (they
-	// reference no object at all; see handle.h).
+	// "handle<TAB>type[<TAB>detail]" — files and directories expose their
+	// full path, and FILE rows append the fs-local identity (vfs.h f_ident:
+	// ext2 inode, FAT start cluster) so lsof can join a task's handle to a
+	// /sys/openfiles row by IDENTITY rather than by path string — a path can
+	// be renamed while the file is open, the identity cannot be recycled.
+	// Pipes expose the shared object identity that ties their ends together.
+	// Other tags currently have no public detail to append.
 	for (int i = 0; i < TASK_MAX_HANDLES; i++)
 	{
 		handle_t *h = &task->handles[i];
@@ -577,17 +586,23 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 		if (h->type == HANDLE_FILE && h->object != NULL)
 		{
 			vfs_file_t *f = (vfs_file_t *)h->object;
-			// f_path is the fs-local TAIL the mount router handed the driver,
-			// so it has lost its mount prefix — "/bin/ls" here could be on any
-			// mounted filesystem. Printing what we have beats printing nothing.
-			synth_text_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
-			           (f->f_path != NULL) ? f->f_path : "(unnamed)");
+			// f_path is the fs-local TAIL the mount router handed the driver;
+			// the mount prefix is recovered from the owning fs, so the column
+			// is a FULL path again. That lets userland correlate an open file
+			// with the namespace spelling its callers use.
+			char prefix[VFS_MOUNT_PREFIX_MAX] = "";
+			vfs_prefix_for_fs((vfs_filesystem_t *)f->owner, prefix, sizeof(prefix));
+			synth_text_addf(t, "%d\t%s\t%s%s\t%lu\n", i, proc_handle_type_name(h->type),
+			           prefix, (f->f_path != NULL) ? f->f_path : "(unnamed)",
+			           f->f_ident);
 		}
 		else if (h->type == HANDLE_DIR && h->object != NULL)
 		{
 			vfs_directory_t *d = (vfs_directory_t *)h->object;
-			synth_text_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
-			           (d->f_path != NULL) ? d->f_path : "(unnamed)");
+			char prefix[VFS_MOUNT_PREFIX_MAX] = "";
+			vfs_prefix_for_fs((vfs_filesystem_t *)d->owner, prefix, sizeof(prefix));
+			synth_text_addf(t, "%d\t%s\t%s%s\n", i, proc_handle_type_name(h->type),
+			           prefix, (d->f_path != NULL) ? d->f_path : "(unnamed)");
 		}
 		else if (h->type == HANDLE_PIPE_READ || h->type == HANDLE_PIPE_WRITE)
 		{

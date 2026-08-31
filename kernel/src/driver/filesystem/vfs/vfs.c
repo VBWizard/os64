@@ -15,14 +15,114 @@
 #include "serial_logging.h"
 #include "BasicRenderer.h"   // printf — mount-sweep lines belong on the glass too
 #include "spinlock.h"        // the PLAIN variant — the open-file registry's lock
+#include "task.h"            // task_t — unmount's cwd busy check walks the task spine
+#include "scheduler.h"       // kTaskList + NO_TASK, the spine that walk follows
+#include "os64/mount.h"      // the mount/unmount result vocabulary (shared with ring 3)
 
 uint8_t kFatDiskNumber=0;
 
 // The mount table (see vfs.h for the design note). Filled by
-// kRegisterFilesystem; consulted by vfs_resolve_mount. Boot-time only writes
-// today, so no lock — revisit when mount/umount syscalls exist.
+// kRegisterFilesystem and synthfs_mount, consulted by vfs_resolve_mount,
+// mutated at runtime by the mount/unmount syscalls (2026-08-30 — the day the
+// old "no lock, revisit when mount/umount syscalls exist" note here came
+// due). Entries never move: fs == NULL is a free slot, a claim stores `fs`
+// LAST and an unmount clears it FIRST, so a lock-free reader keyed on fs
+// never sees a half-built entry. kMountCount is the high-water mark.
 vfs_mount_entry_t kMountTable[VFS_MAX_MOUNTS];
 int kMountCount = 0;
+
+// Serializes table MUTATION (claim, strike) and any walk that must see a
+// consistent whole (the sysfs render, unmount's own checks). The hot reader
+// — vfs_resolve_mount, on every open — deliberately stays lockless per the
+// ordering rule above. PLAIN spinlock: never taken from interrupt or fault
+// context.
+static spinlock_t kMountTableLock = 0;
+
+// ── The path gate (contract in vfs.h) ────────────────────────────────────────
+// Readers are path operations; the writer is vfs_unmount. Readers pay two
+// atomics; the writer spins until the room is empty and blocks the door while
+// it works. A reader arriving while the door is blocked waits — path ops are
+// all bounded (no path op parks on user input), so the wait is bounded too.
+static volatile int  kVfsPathReaders = 0;
+static volatile bool kVfsPathWriter  = false;
+
+void vfs_path_enter(void)
+{
+	for (;;)
+	{
+		while (kVfsPathWriter)
+			__builtin_ia32_pause();
+		__sync_fetch_and_add(&kVfsPathReaders, 1);
+		if (!kVfsPathWriter)
+			return;
+		// The writer arrived between our check and our increment — back out
+		// and queue behind it, or its readers==0 wait never ends.
+		__sync_fetch_and_sub(&kVfsPathReaders, 1);
+	}
+}
+
+void vfs_path_exit(void)
+{
+	__sync_fetch_and_sub(&kVfsPathReaders, 1);
+}
+
+static void vfs_path_gate_close(void)
+{
+	kVfsPathWriter = true;
+	__sync_synchronize();
+	while (kVfsPathReaders != 0)
+		__builtin_ia32_pause();
+}
+
+static void vfs_path_gate_open(void)
+{
+	__sync_synchronize();
+	kVfsPathWriter = false;
+}
+
+// Claim a mount table entry — the ONE place a claim happens, for both doors
+// (kRegisterFilesystem and synthfs_mount). Fills everything, publishes `fs`
+// last. Free slots are reused so unmount/mount cycles don't consume the
+// table. Returns false with the glass complaint when the table is full —
+// the ceiling's contract (vfs.h) is honored here so neither door forgets it.
+bool vfs_mount_claim(const char *prefix, const uint8_t *guid_or_null,
+                     const char *fstype, vfs_filesystem_t *fs)
+{
+	spinlock_acquire(&kMountTableLock);
+	int slot = -1;
+	for (int i = 0; i < kMountCount; i++)
+		if (kMountTable[i].fs == NULL)
+		{
+			slot = i;
+			break;
+		}
+	if (slot < 0 && kMountCount < VFS_MAX_MOUNTS)
+		slot = kMountCount;
+	if (slot < 0)
+	{
+		spinlock_release(&kMountTableLock);
+		printd(DEBUG_BOOT, "BOOT: mount table full (%u), %s not mounted\n",
+		       VFS_MAX_MOUNTS, prefix);
+		printf("MOUNT TABLE FULL (%u) — %s NOT mounted\n", VFS_MAX_MOUNTS, prefix);
+		return false;
+	}
+
+	vfs_mount_entry_t *m = &kMountTable[slot];
+	strncpy(m->prefix, prefix, VFS_MOUNT_PREFIX_MAX - 1);
+	m->prefix[VFS_MOUNT_PREFIX_MAX - 1] = '\0';
+	m->prefix_len = strlen(m->prefix);
+	if (guid_or_null != NULL)
+		memcpy(m->part_guid, guid_or_null, 16);
+	else
+		memset(m->part_guid, 0, sizeof(m->part_guid));
+	m->fstype = fstype;
+	__sync_synchronize();   // the entry is whole before anyone can find it
+	m->fs = fs;
+	if (slot == kMountCount)
+		kMountCount++;
+	spinlock_release(&kMountTableLock);
+	return true;
+}
 
 vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tail)
 {
@@ -31,6 +131,8 @@ vfs_filesystem_t *vfs_resolve_mount(const char *canonical_path, const char **tai
 	for (int i = 0; i < kMountCount; i++)
 	{
 		vfs_mount_entry_t *m = &kMountTable[i];
+		if (m->fs == NULL)
+			continue;   // a free (or freshly unmounted) slot
 		if (m->prefix_len == 1)
 		{
 			// The root ("/") matches every absolute path, as the fallback.
@@ -78,6 +180,8 @@ int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry)
 	while (dir->mount_scan < kMountCount)
 	{
 		vfs_mount_entry_t *m = &kMountTable[dir->mount_scan++];
+		if (m->fs == NULL)
+			continue;   // a free (or freshly unmounted) slot
 		const char *rest = NULL;
 
 		// A child of "/" is "/name"; a child of "/mnt" would be "/mnt/name".
@@ -189,25 +293,21 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 	fs->read_only = fs->read_only || fs->fops->write == NULL;
 
 	// Claim the prefix in the mount table — this is the moment the filesystem
-	// becomes reachable by path.
-	if (kMountCount >= VFS_MAX_MOUNTS)
+	// becomes reachable by path. The claim itself lives in vfs_mount_claim
+	// (shared with synthfs_mount); the fstype word is derived from what the
+	// partition scan found, because /sys/mounts answers "what is this?" in
+	// the same vocabulary the sweep speaks.
+	partEntry_t *part = device->block_device->partition_table->parts[partNo];
+	const char *fstype = "?";
+	switch (part->filesystemType)
 	{
-		// Same reasoning as synthfs_mount's copy: a partition that failed to
-		// mount is an absence, and an absence needs someone to announce it
-		// (vfs.h, THE CEILING).
-		printd(DEBUG_BOOT, "BOOT: mount table full (%u), %s not mounted\n",
-		       VFS_MAX_MOUNTS, mountPoint);
-		printf("MOUNT TABLE FULL (%u) — %s NOT mounted\n", VFS_MAX_MOUNTS, mountPoint);
-		return NULL;
+		case FILESYSTEM_TYPE_FAT:
+		case FILESYSTEM_TYPE_FAT32: fstype = "fat";  break;
+		case FILESYSTEM_TYPE_EXT2:  fstype = "ext2"; break;
+		default: break;
 	}
-	vfs_mount_entry_t *m = &kMountTable[kMountCount];
-	strncpy(m->prefix, mountPoint, VFS_MOUNT_PREFIX_MAX - 1);
-	m->prefix[VFS_MOUNT_PREFIX_MAX - 1] = '\0';
-	m->prefix_len = strlen(m->prefix);
-	memcpy(m->part_guid,
-	       device->block_device->partition_table->parts[partNo]->uniquePartGUID, 16);
-	m->fs = fs;
-	kMountCount++;
+	if (!vfs_mount_claim(mountPoint, part->uniquePartGUID, fstype, fs))
+		return NULL;
 
 	// The filesystem is reachable by path as of the line above — and ONLY as
 	// of that line does the block layer agree this partition is mounted. Any
@@ -284,36 +384,26 @@ int vfs_canonicalize_path(const char *cwd, const char *path, char *out, size_t o
 	return 0;
 }
 
+// GPT stores the first three GUID fields little-endian and the rest as bytes;
+// rendering them with the right widths in order IS the byte-swap dance the
+// dashed spelling wants (mixed-endian by RFC 4122's blessing).
+void vfs_format_guid(const uint8_t *guid, char *out)
+{
+	uint32_t part1 = *(const uint32_t *)guid;
+	uint16_t part2 = *(const uint16_t *)(guid + 4);
+	uint16_t part3 = *(const uint16_t *)(guid + 6);
+	sprintf(out, "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+	        part1, part2, part3,
+	        guid[8], guid[9],
+	        guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]);
+}
+
 char* compare_part_uuids(const char* rootPartUUID, const char* currPartUUID)
 {
 	char* result = 0;
 
-	//Make currPartUUID look like rootPartUUID
-	//The format is U32-U16-U16-BYBY-BYBYBYBYBYBY
-	uint32_t currPart1=(uint32_t)*(uint32_t*)currPartUUID;
-	currPartUUID+=4;
-	uint16_t currPart2=(uint16_t)*(uint16_t*)currPartUUID;
-	currPartUUID+=2;
-	uint16_t currPart3=(uint16_t)*(uint16_t*)currPartUUID;
-	currPartUUID+=2;
-	uint8_t currPart4[2];
-	currPart4[0]=*(uint8_t*)currPartUUID;
-	currPartUUID+=1;
-	currPart4[1]=*(uint8_t*)currPartUUID;
-	currPartUUID+=1;
-
-	uint8_t currPart5[6];
-	for (int cnt=0;cnt<6;cnt++)
-	{
-		currPart5[cnt]=*(uint8_t*)currPartUUID;
-		currPartUUID+=1;
-	}
-
-	char* currPartStr=kmalloc(20);
-	sprintf(currPartStr, "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-			currPart1, currPart2, currPart3, 
-			currPart4[0], currPart4[1],
-			currPart5[0], currPart5[1], currPart5[2], currPart5[3], currPart5[4], currPart5[5]);
+	char* currPartStr=kmalloc(40);
+	vfs_format_guid((const uint8_t *)currPartUUID, currPartStr);
 
 	//Compare the formatted currPartUUID to the part UUID passed to be the root
 	result = strnstr(rootPartUUID, currPartStr,36);
@@ -335,19 +425,23 @@ char* compare_part_uuids(const char* rootPartUUID, const char* currPartUUID)
 static bool vfs_guid_already_mounted(const uint8_t *guid)
 {
 	for (int i = 0; i < kMountCount; i++)
-		if (memcmp(kMountTable[i].part_guid, guid, 16) == 0)
+		if (kMountTable[i].fs != NULL &&
+		    memcmp(kMountTable[i].part_guid, guid, 16) == 0)
 			return true;
 	return false;
 }
 
-// THE AUTO-MOUNT ALLOWLIST: only partitions os64 itself authored may join
-// the namespace uninvited. Learned on the Bosgame P5, 2026-07-19, the hard
-// way: the first bare-metal boot of the mount sweep auto-mounted the
-// machine's WINDOWS EFI SYSTEM PARTITION — writable — plus its recovery
-// partition and a stray ext2. One husk redirection away from an unbootable
-// Windows. Foreign partitions now stay untouched until a deliberate mount
-// syscall exists; these GUIDs are the constants from the root GNUmakefile
-// (DISK_PARTUUID / EXT2_PARTUUID), unchanged since the disk image was born.
+// THE DEFAULT BOOT-MOUNT POLICY: with no /etc/mounts.conf, only partitions
+// os64 itself authored join the namespace uninvited. Learned on the Bosgame
+// P5, 2026-07-19, the hard way: the first bare-metal boot of the mount sweep
+// auto-mounted the machine's WINDOWS EFI SYSTEM PARTITION — writable — plus
+// its recovery partition and a stray ext2. One husk redirection away from an
+// unbootable Windows. These GUIDs began life as a hard GATE (nothing else
+// could mount at all, even by syscall); mounts.conf demoted them to what
+// they are now — the conservative default a machine gets until its owner
+// writes down a different choice. These are the constants from the root
+// GNUmakefile (DISK_PARTUUID / EXT2_PARTUUID), unchanged since the disk
+// image was born.
 static const char *kKnownPartGUIDs[] = {
 	"2f4fd02e-68b4-4c82-98bc-72467529b3fc",   // the os64 FAT partition
 	"1ec5f5ab-71b7-45cd-a7a4-05646e878e57",   // the os64 ext2 partition
@@ -370,7 +464,11 @@ static bool vfs_guid_is_ours(const uint8_t *guid)
 // partition is labelled at the moment it is created, the label travels WITH
 // the disk to any machine, and there is no /etc/fstab to write, parse, keep
 // in sync, or get wrong. Unix needs fstab because a mount point is a local
-// policy decision; here it is a property of the partition.
+// policy decision; here it is a property of the partition. (fstab's one row
+// conflated two questions. WHERE a partition mounts is answered above —
+// by the disk itself. WHAT this machine chooses to mount at boot genuinely
+// IS local policy, and /etc/mounts.conf answers only that — a list of
+// names, no second column needed.)
 //
 // The rules are deliberately strict — letters, digits, '_' and '-' only. A
 // mount prefix becomes the first component of every path on that filesystem,
@@ -402,7 +500,8 @@ static bool vfs_partname_usable(const char *name)
 static bool vfs_prefix_in_use(const char *prefix)
 {
 	for (int i = 0; i < kMountCount; i++)
-		if (strcmp(kMountTable[i].prefix, prefix) == 0)
+		if (kMountTable[i].fs != NULL &&
+		    strcmp(kMountTable[i].prefix, prefix) == 0)
 			return true;
 	return false;
 }
@@ -500,13 +599,336 @@ bool vfs_partition_mounted(block_device_info_t *dev, int partNo)
 	return false;
 }
 
-// Auto-mount every recognized, OS64-AUTHORED non-root partition at its GPT
-// partition NAME ("/home"), falling back to its filesystem type ("/fat",
-// "/ext2") when the name is missing or unusable. Runs once at boot, after the
-// root is claimed; partition tables were already detected by
-// vfs_mount_root_part's first pass.
+// Which op tables (and which name) a partition's filesystem gets — one
+// answer for both mount doors, the boot list and the mount syscall, so a
+// partition mounts the same way however it arrives. Returns false for a
+// filesystem os64 does not recognize.
+//
+// `ro` is the CALLER's read-only intent (OS64_MOUNT_RO, or an `ro` token on
+// a mounts.conf line): the mount gets tables with the write verbs absent
+// FROM BIRTH, the same NULL-slot shape a device that cannot write produces —
+// so every dispatch site, and the stray-write tripwire reading the per-mount
+// copies, enforces the request without a single new check anywhere.
+static bool vfs_ops_for_part(block_device_info_t *devinfo, partEntry_t *part,
+                             vfs_file_operations_t *fileOps,
+                             vfs_directory_operations_t *dirOps,
+                             const char **fsName, bool ro)
+{
+	switch (part->filesystemType)
+	{
+		case FILESYSTEM_TYPE_FAT32:
+			*fsName = "fat";
+			*fileOps = fat_fops;  *dirOps = fat_dops;
+			// FAT has one pair, so read-only is that pair minus its pens —
+			// the same slots vfs_demote_mount_readonly takes away, removed
+			// before the mount is born instead of after it misbehaved.
+			if (ro)
+			{
+				fileOps->write   = NULL;
+				fileOps->sync    = NULL;
+				fileOps->flush   = NULL;
+				fileOps->fputs   = NULL;
+				fileOps->fprintf = NULL;
+				fileOps->rm      = NULL;
+				fileOps->rename  = NULL;
+				dirOps->mkdir    = NULL;
+			}
+			return true;
+		case FILESYSTEM_TYPE_EXT2:
+			*fsName = "ext2";
+			// Ext2 mounts get the WRITABLE pair (secondaries since
+			// 2026-08-04's shakedown; the root joined 2026-08-07 when
+			// writable-root was ratified). ext2_initialize_filesystem
+			// may still strip the write slots if the disk's ro_compat
+			// features outrun us — and a DEVICE whose driver cannot
+			// write demotes the mount the same way (2026-08-08: the
+			// P5's SATA disk, AHCI being read-only today). A REQUESTED
+			// read-only mount takes the same pair — its `mounted` slot
+			// reports leftover orphans without reclaiming them, which is
+			// exactly what a mount that must not write should say.
+			if (ro || devinfo->block_device->ops->write == NULL)
+			{
+				*fileOps = ext2_fops; *dirOps = ext2_dops;
+				if (!ro)
+					printf("%s: device's driver cannot write — mounting READ-ONLY\n",
+					       vfs_partname_usable(part->partName) ? part->partName : *fsName);
+			}
+			else
+			{
+				ext2_rw_tables_init();
+				*fileOps = ext2_rw_fops; *dirOps = ext2_rw_dops;
+			}
+			return true;
+		default:
+			return false;
+	}
+}
+
+// Derive the mount prefix a partition gets when nobody names one: its own
+// GPT name when usable, its filesystem type otherwise. First claimant mounts
+// bare ("/fat"); anyone who wants a name that's taken gets a number starting
+// at 2 ("/fat2"), like device names always have. Two partitions CAN carry
+// the same GPT name — nothing stops a disk from having two called "home" —
+// so this has to hold for names exactly as it did for filesystem types.
+static void vfs_derive_mount_prefix(partEntry_t *part, const char *fsName,
+                                    char *prefix /* VFS_MOUNT_PREFIX_MAX */)
+{
+	const char *baseName = vfs_partname_usable(part->partName)
+	                       ? part->partName : fsName;
+	sprintf(prefix, "/%s", baseName);
+	for (unsigned n = 2; n < 100 && vfs_prefix_in_use(prefix); n++)
+		sprintf(prefix, "/%s%u", baseName, n);
+}
+
+// ── /etc/mounts.conf — what joins the namespace at boot ─────────────────────
+// The WHAT half of the question fstab answered with one table. GPT answered
+// the WHERE half (the partition's own label — see vfs_partname_usable), so
+// this file only says which partitions THIS machine brings into its
+// namespace — the half that genuinely is local policy. House syntax:
+//
+//     # what joins the namespace once the root is up
+//     mount = home
+//     mount = scratch /mnt ro
+//
+// `mount = <gpt-name-or-guid> [/where] [ro]`, repeatable, applied in order.
+// No /where means "mount it at its own label" (vfs_derive_mount_prefix).
+// gui.conf's rule: if the file EXISTS, its lines are the WHOLE list — an
+// empty file mounts nothing beyond root and the synthetics — and only an
+// ABSENT file falls back to the built-in default (the authored-GUIDs sweep
+// below). That rule is also why no example file ships in /etc: a shipped
+// copy full of comments would read as "mount nothing". Root itself never
+// appears here: the file lives ON root, and the lifeboat's premise is
+// booting when that root is broken — ROOT= on the cmdline stays the one
+// answer given from outside.
+//
+// The file is read straight off the root fs, NOT through the conf ladder —
+// it is upstream of the ladder (it decides whether /home mounts at all),
+// the same reasoning that makes os64.conf the one unsearched file.
+
+#define VFS_MOUNTS_CONF        "/etc/mounts.conf"
+#define VFS_MOUNTS_CONF_CAP    8192
+
+static bool vfs_find_part(const char *what, int *out_idx, int *out_partno);
+
+// Case-folding equality for SETTING words ("mount", "ro") — never for the
+// partition names beside them, which are data and compared verbatim (the
+// conf doctrine: folding is the reader's choice, and only for settings).
+static bool vfs_word_eq_nocase(const char *a, const char *b)
+{
+	while (*a != '\0' && *b != '\0')
+	{
+		char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
+		char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
+		if (ca != cb)
+			return false;
+		a++; b++;
+	}
+	return *a == *b;
+}
+
+// Slurp the file whole, or not at all. NULL means "behave as if absent":
+// silently for a file that isn't there, LOUDLY for one that is but can't be
+// handed back complete — conf.c's discipline (an error is not an ending,
+// and a truncated prefix must never pass as the whole policy).
+static char *vfs_mounts_conf_slurp(void)
+{
+	const char *tail = NULL;
+	vfs_filesystem_t *fs = vfs_resolve_mount(VFS_MOUNTS_CONF, &tail);
+	if (fs == NULL || fs->fops == NULL || fs->fops->open == NULL || fs->fops->read == NULL)
+		return NULL;
+
+	vfs_file_t *file = NULL;
+	if (fs->fops->open(&file, tail, "r", fs) != 0)
+		return NULL;   // no file — the default policy applies
+
+	char *buf = kmalloc(VFS_MOUNTS_CONF_CAP + 1);
+	size_t len = 0;
+	bool refuse = (buf == NULL);
+	while (!refuse)
+	{
+		if (len >= VFS_MOUNTS_CONF_CAP)
+		{
+			char probe;
+			if (fs->fops->read(file, &probe, 1) != 0)
+				refuse = true;   // continues past the cap, or unreadable
+			break;
+		}
+		int n = fs->fops->read(file, buf + len, VFS_MOUNTS_CONF_CAP - len);
+		if (n < 0) { refuse = true; break; }
+		if (n == 0) break;
+		len += (size_t)n;
+	}
+	if (fs->fops->close != NULL)
+		fs->fops->close(file);
+
+	if (refuse)
+	{
+		printf("mounts.conf: unreadable or larger than %u bytes — REFUSED, mounting the built-in default set\n",
+		       (unsigned)VFS_MOUNTS_CONF_CAP);
+		printd(DEBUG_BOOT, "BOOT: mounts.conf refused (oversize/unreadable) — default policy applies\n");
+		if (buf != NULL)
+			kfree(buf);
+		return NULL;
+	}
+	buf[len] = '\0';
+	return buf;
+}
+
+static const char *vfs_mount_result_phrase(int r)
+{
+	switch (r)
+	{
+		case OS64_MOUNT_BAD_ARGS:        return "bad arguments";
+		case OS64_MOUNT_NOT_FOUND:       return "no partition wears that name or GUID";
+		case OS64_MOUNT_ALREADY_MOUNTED: return "that partition is already mounted";
+		case OS64_MOUNT_PREFIX_IN_USE:   return "something else is mounted there";
+		case OS64_MOUNT_NO_PARENT:       return "the mount point's parent does not exist";
+		case OS64_MOUNT_TABLE_FULL:      return "the mount table is full";
+		case OS64_MOUNT_UNSUPPORTED:     return "no filesystem os64 recognizes on it";
+		default:                         return "the driver refused it";
+	}
+}
+
+// One `mount =` line, already split off its key. A bad line is skipped with
+// its reason on the glass; it never takes the rest of the file down with it
+// (an absent thumb drive must not cost /home its mount).
+static void vfs_mounts_conf_line(char *value)
+{
+	char *tok[4] = { NULL, NULL, NULL, NULL };
+	int ntok = 0;
+	for (char *p = value; *p != '\0' && ntok < 4; )
+	{
+		while (*p == ' ' || *p == '\t') p++;
+		if (*p == '\0')
+			break;
+		tok[ntok++] = p;
+		while (*p != '\0' && *p != ' ' && *p != '\t') p++;
+		if (*p != '\0')
+			*p++ = '\0';
+	}
+	if (ntok == 0)
+	{
+		printf("mounts.conf: a mount line with nothing to mount — skipped\n");
+		return;
+	}
+
+	const char *what = tok[0];
+	const char *where = NULL;
+	bool ro = false;
+	for (int i = 1; i < ntok; i++)
+	{
+		if (tok[i][0] == '/' && where == NULL)
+			where = tok[i];
+		else if (vfs_word_eq_nocase(tok[i], "ro"))
+			ro = true;
+		else if (vfs_word_eq_nocase(tok[i], "rw"))
+			;   // the default, spelled out
+		else
+		{
+			printf("mounts.conf: \"%s\" is not a mount point, ro, or rw — line for %s skipped\n",
+			       tok[i], what);
+			return;
+		}
+	}
+
+	char derived[VFS_MOUNT_PREFIX_MAX];
+	if (where == NULL)
+	{
+		int idx, partno;
+		if (!vfs_find_part(what, &idx, &partno))
+		{
+			printf("mounts.conf: no partition named \"%s\" — line skipped\n", what);
+			return;
+		}
+		partEntry_t *part = kBlockDeviceInfo[idx].block_device->partition_table->parts[partno];
+		const char *fsName;
+		vfs_file_operations_t fileOps;
+		vfs_directory_operations_t dirOps;
+		if (!vfs_ops_for_part(&kBlockDeviceInfo[idx], part, &fileOps, &dirOps, &fsName, false))
+		{
+			printf("mounts.conf: %s — %s\n", what, vfs_mount_result_phrase(OS64_MOUNT_UNSUPPORTED));
+			return;
+		}
+		vfs_derive_mount_prefix(part, fsName, derived);
+		where = derived;
+	}
+
+	int r = vfs_mount_explicit(what, where, ro ? OS64_MOUNT_RO : 0);
+	if (r == OS64_MOUNT_OK)
+		printf("mounted %s at %s%s\n", what, where, ro ? " (ro)" : "");
+	else
+		printf("mounts.conf: %s at %s — %s\n", what, where, vfs_mount_result_phrase(r));
+}
+
+// Returns true when the file existed and spoke — the caller then mounts
+// NOTHING on its own, however few lines the file carried.
+static bool vfs_mounts_conf_apply(void)
+{
+	char *buf = vfs_mounts_conf_slurp();
+	if (buf == NULL)
+		return false;
+
+	printd(DEBUG_BOOT, "BOOT: /etc/mounts.conf present — it is the whole boot-mount list\n");
+	int applied = 0;
+	char *line = buf;
+	while (line != NULL)
+	{
+		char *next = NULL;
+		for (char *p = line; *p != '\0'; p++)
+			if (*p == '\n') { *p = '\0'; next = p + 1; break; }
+
+		char *s = line;
+		while (*s == ' ' || *s == '\t') s++;
+		size_t slen = strlen(s);
+		if (slen > 0 && s[slen - 1] == '\r')
+			s[slen - 1] = '\0';
+
+		if (*s != '\0' && *s != '#')
+		{
+			char *eq = NULL;
+			for (char *p = s; *p != '\0'; p++)
+				if (*p == '=') { eq = p; break; }
+			if (eq == NULL)
+				printf("mounts.conf: no '=' in \"%s\" — line skipped\n", s);
+			else
+			{
+				*eq = '\0';
+				// Trim the key, fold-compare it (a setting name); the value
+				// beyond '=' is data and vfs_mounts_conf_line splits it raw.
+				char *k = s;
+				while (*k == ' ' || *k == '\t') k++;
+				char *kend = k + strlen(k);
+				while (kend > k && (kend[-1] == ' ' || kend[-1] == '\t'))
+					*--kend = '\0';
+				char *v = eq + 1;
+				while (*v == ' ' || *v == '\t') v++;
+				if (vfs_word_eq_nocase(k, "mount"))
+				{
+					vfs_mounts_conf_line(v);
+					applied++;
+				}
+				else
+					printf("mounts.conf: \"%s\" is not a setting this file knows — line skipped\n", k);
+			}
+		}
+		line = next;
+	}
+	if (applied == 0)
+		printd(DEBUG_BOOT, "BOOT: mounts.conf carried no mount lines — nothing joins the namespace beyond root\n");
+	kfree(buf);
+	return true;
+}
+
+// What joins the namespace besides root — once at boot, after the root is
+// claimed (partition tables were already detected by vfs_mount_root_part's
+// first pass). /etc/mounts.conf decides when it exists; the sweep below is
+// the ABSENT-file default: every recognized, os64-authored partition, at its
+// GPT name.
 static void vfs_mount_secondary_partitions(void)
 {
+	if (vfs_mounts_conf_apply())
+		return;
+
 	for (int idx = 0; idx < kBlockDeviceInfoCount; idx++)
 	{
 		if (kBlockDeviceInfo[idx].ATADeviceType != ATA_DEVICE_TYPE_SATA_HD &&
@@ -519,40 +941,12 @@ static void vfs_mount_secondary_partitions(void)
 			partEntry_t *part = kBlockDeviceInfo[idx].block_device->partition_table->parts[partno];
 
 			// fsName is what the FILESYSTEM is (for the messages, and the
-			// fallback mount point); baseName is what we'll actually mount it as.
+			// fallback mount point).
 			const char *fsName;
 			vfs_file_operations_t fileOps;
 			vfs_directory_operations_t dirOps;
-			switch (part->filesystemType)
-			{
-				case FILESYSTEM_TYPE_FAT32:
-					fsName = "fat";
-					fileOps = fat_fops;  dirOps = fat_dops;
-					break;
-				case FILESYSTEM_TYPE_EXT2:
-					fsName = "ext2";
-					// Ext2 mounts get the WRITABLE pair (secondaries since
-					// 2026-08-04's shakedown; the root joined 2026-08-07 when
-					// writable-root was ratified). ext2_initialize_filesystem
-					// may still strip the write slots if the disk's ro_compat
-					// features outrun us — and a DEVICE whose driver cannot
-					// write demotes the mount the same way (2026-08-08: the
-					// P5's SATA disk, AHCI being read-only today).
-					if (kBlockDeviceInfo[idx].block_device->ops->write == NULL)
-					{
-						fileOps = ext2_fops; dirOps = ext2_dops;
-						printf("%s: device's driver cannot write — mounting READ-ONLY\n",
-						       vfs_partname_usable(part->partName) ? part->partName : fsName);
-					}
-					else
-					{
-						ext2_rw_tables_init();
-						fileOps = ext2_rw_fops; dirOps = ext2_rw_dops;
-					}
-					break;
-				default:
-					continue;   // unrecognized/no filesystem — not mountable
-			}
+			if (!vfs_ops_for_part(&kBlockDeviceInfo[idx], part, &fileOps, &dirOps, &fsName, false))
+				continue;   // unrecognized/no filesystem — not mountable
 
 			const char *baseName = vfs_partname_usable(part->partName)
 			                       ? part->partName : fsName;
@@ -560,10 +954,11 @@ static void vfs_mount_secondary_partitions(void)
 			if (!vfs_guid_is_ours(part->uniquePartGUID))
 			{
 				// Somebody else's partition (a Windows ESP, a Linux root,
-				// who knows) — acknowledge on the glass, touch NOTHING.
+				// who knows) — the default policy touches NOTHING it didn't
+				// author. A mounts.conf line naming it is how it gets in.
 				printf("skipping foreign %s partition (device %u part %u)\n",
 				       baseName, idx, partno);
-				printd(DEBUG_BOOT, "BOOT: foreign %s partition on device %u part %u — not ours, not mounted\n",
+				printd(DEBUG_BOOT, "BOOT: foreign %s partition on device %u part %u — not in the default set, not mounted\n",
 				       baseName, idx, partno);
 				continue;
 			}
@@ -575,15 +970,8 @@ static void vfs_mount_secondary_partitions(void)
 				continue;
 			}
 
-			// First claimant mounts bare ("/fat"); anyone who wants a name
-			// that's taken gets a number starting at 2 ("/fat2"), like device
-			// names always have. Two partitions CAN carry the same GPT name —
-			// nothing stops a disk from having two called "home" — so this has
-			// to hold for names exactly as it did for filesystem types.
 			char prefix[VFS_MOUNT_PREFIX_MAX];
-			sprintf(prefix, "/%s", baseName);
-			for (unsigned n = 2; n < 100 && vfs_prefix_in_use(prefix); n++)
-				sprintf(prefix, "/%s%u", baseName, n);
+			vfs_derive_mount_prefix(part, fsName, prefix);
 
 			vfs_filesystem_t *fs = kRegisterFilesystem(prefix, &kBlockDeviceInfo[idx],
 			                                           partno, &fileOps, &dirOps);
@@ -610,6 +998,10 @@ int vfs_mount_root_part(char* rootPartUUID)
 	bool mounted=false;
 
 	//First we need to get the partition tables of all of the detected drives, and identify the partition types of each of the partitions
+	// Name the devices the moment the boot knows them all — before any
+	// mount, so every later print of a device speaks the system's name.
+	block_assign_dev_names();
+
 	for (int idx=0;idx<kBlockDeviceInfoCount;idx++)
 	{
 		if (kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_SATA_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_NVME_HD ||  kBlockDeviceInfo[idx].ATADeviceType == ATA_DEVICE_TYPE_HD)
@@ -715,8 +1107,9 @@ int vfs_mount_root_part(char* rootPartUUID)
 // ── The open-file registry (the sync(8) slice, 2026-08-06) ──────────────────
 // One global intrusive list of every open vfs_file, threaded through the
 // openNext/openPrev links in struct file. The fs glues call register at the
-// bottom of a successful open and unregister at the top of close; the only
-// walker is vfs_sync_all below. This exists because sync(1)'s whole job is
+// bottom of a successful open and unregister at the top of close; the
+// walkers are vfs_sync_all below, unmount's busy count (vfs_openfiles_on),
+// and /sys/openfiles' snapshot. This exists because sync(1)'s whole job is
 // reaching OTHER tasks' open files — the kernel had no way to enumerate them
 // (the "ping.log reads empty while ping runs" mystery, solved the same
 // afternoon FAT's deferred directory-entry update was identified as 1977
@@ -733,6 +1126,14 @@ void vfs_openfile_register(vfs_file_t *file)
 {
 	if (file == NULL)
 		return;
+	// The one moment the caller's path is guaranteed alive (both glues set
+	// f_path before registering) — take the owned copy the registry renders
+	// from (reg_path's contract in vfs.h).
+	if (file->f_path != NULL)
+	{
+		strncpy(file->reg_path, file->f_path, sizeof(file->reg_path) - 1);
+		file->reg_path[sizeof(file->reg_path) - 1] = '\0';
+	}
 	spinlock_acquire(&kOpenFileLock);
 	file->openPrev = NULL;
 	file->openNext = kOpenFileHead;
@@ -782,4 +1183,292 @@ int64_t vfs_sync_all(void)
 	printd(DEBUG_VFS, "vfs_sync_all: %ld file(s) synced%s\n",
 	       synced, anyFailed ? " (with failures)" : "");
 	return anyFailed ? -1 : synced;
+}
+
+// How many open files sit on `fs` — unmount's first busy question, and
+// /sys/mounts' "open" column. The registry was built for sync(8); this is
+// the second customer its comment predicted.
+int vfs_openfiles_on(vfs_filesystem_t *fs)
+{
+	int n = 0;
+	spinlock_acquire(&kOpenFileLock);
+	for (vfs_file_t *f = kOpenFileHead; f != NULL; f = f->openNext)
+		if (f->owner == fs)
+			n++;
+	spinlock_release(&kOpenFileLock);
+	return n;
+}
+
+// /sys/openfiles' data (contract in vfs.h): copy the registry out row by
+// row so rendering happens after the lock is gone. vfs_prefix_for_fs only
+// COMPARES the fs pointer against the mount table — it never dereferences
+// it — so asking under this lock is sound, and the nesting (open-file lock,
+// then mount-table lock) has no reverse twin: nothing that holds the mount
+// table lock ever takes this one.
+int vfs_openfiles_snapshot(vfs_openfile_row_t *rows, int max_rows)
+{
+	int total = 0;
+	spinlock_acquire(&kOpenFileLock);
+	for (vfs_file_t *f = kOpenFileHead; f != NULL; f = f->openNext, total++)
+	{
+		if (rows == NULL || total >= max_rows)
+			continue;   // keep counting so the caller can say how much was cut
+		vfs_openfile_row_t *r = &rows[total];
+		r->mount[0] = '\0';
+		if (f->owner != NULL)
+			vfs_prefix_for_fs((vfs_filesystem_t *)f->owner, r->mount, sizeof(r->mount));
+		// reg_path, never f_path: the caller's pointer may be long dead by
+		// now (reg_path's contract in vfs.h). Every allocation is zeroed, so
+		// an empty copy means the open carried no path at all.
+		if (f->reg_path[0] != '\0')
+		{
+			strncpy(r->tail, f->reg_path, sizeof(r->tail) - 1);
+			r->tail[sizeof(r->tail) - 1] = '\0';
+		}
+		else
+		{
+			r->tail[0] = '-';
+			r->tail[1] = '\0';
+		}
+		r->ident = f->f_ident;
+		r->handles = f->handleRefCount;
+	}
+	spinlock_release(&kOpenFileLock);
+	return total;
+}
+
+bool vfs_prefix_for_fs(vfs_filesystem_t *fs, char *out, size_t cap)
+{
+	if (fs == NULL || out == NULL || cap == 0)
+		return false;
+	spinlock_acquire(&kMountTableLock);
+	for (int i = 0; i < kMountCount; i++)
+	{
+		if (kMountTable[i].fs != fs)
+			continue;
+		// Root answers "" so prefix+tail concatenates to the tail itself.
+		const char *p = (kMountTable[i].prefix_len == 1) ? "" : kMountTable[i].prefix;
+		size_t need = strlen(p) + 1;
+		if (need > cap)
+			break;
+		strcpy(out, p);
+		spinlock_release(&kMountTableLock);
+		return true;
+	}
+	spinlock_release(&kMountTableLock);
+	return false;
+}
+
+// ── The namespace verbs (contracts in vfs.h and os64/mount.h) ────────────────
+// KERNEL CONTEXT REQUIRED for both: mounting stats the parent and runs the
+// driver's initialize, unmounting runs uninitialize — all real disk I/O. The
+// syscalls hop via call_in_kernel_context; the fixture calls from kernel_init.
+
+// Find the partition `what` names — GPT name first (verbatim compare: names
+// are data), the dashed GUID spelling second. Returns false if nothing wears
+// that name.
+static bool vfs_find_part(const char *what, int *out_idx, int *out_partno)
+{
+	for (int idx = 0; idx < kBlockDeviceInfoCount; idx++)
+	{
+		if (kBlockDeviceInfo[idx].ATADeviceType != ATA_DEVICE_TYPE_SATA_HD &&
+		    kBlockDeviceInfo[idx].ATADeviceType != ATA_DEVICE_TYPE_NVME_HD &&
+		    kBlockDeviceInfo[idx].ATADeviceType != ATA_DEVICE_TYPE_HD)
+			continue;
+		for (int partno = 0; partno < kBlockDeviceInfo[idx].block_device->part_count; partno++)
+		{
+			partEntry_t *part = kBlockDeviceInfo[idx].block_device->partition_table->parts[partno];
+			bool hit = (part->partName[0] != '\0' && strncmp(what, part->partName, 36) == 0) ||
+			           (compare_part_uuids(what, (const char *)part->uniquePartGUID) != NULL);
+			if (hit)
+			{
+				*out_idx = idx;
+				*out_partno = partno;
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+int vfs_mount_explicit(const char *what, const char *where, uint64_t flags)
+{
+	if (what == NULL || what[0] == '\0')
+		return OS64_MOUNT_BAD_ARGS;
+	if ((flags & ~(uint64_t)OS64_MOUNT_RO) != 0)
+		return OS64_MOUNT_BAD_ARGS;   // an unknown bit must fail loudly, not grant less than asked
+
+	// NULL/empty `where` means "at the partition's own label" — `mount fat`
+	// and a one-token mounts.conf line are the same ask, and the answer
+	// (label, fstype fallback, collision numbering) lives in one place.
+	bool derive = (where == NULL || where[0] == '\0');
+	if (!derive)
+	{
+		if (where[0] != '/')
+			return OS64_MOUNT_BAD_ARGS;
+		size_t wlen = strlen(where);
+		if (wlen < 2 || wlen >= VFS_MOUNT_PREFIX_MAX || where[wlen - 1] == '/')
+			return OS64_MOUNT_BAD_ARGS;   // "/" is not mountable-over; canonical paths carry no trailing slash
+	}
+
+	int idx = -1, partno = -1;
+	if (!vfs_find_part(what, &idx, &partno))
+		return OS64_MOUNT_NOT_FOUND;
+	partEntry_t *part = kBlockDeviceInfo[idx].block_device->partition_table->parts[partno];
+
+	// No authorship test here, on purpose (it stood 2026-08-30/31 as a
+	// Windows-safety gate, then mounts.conf arrived): a partition named by
+	// its label or GUID to an explicit verb — typed, or written into the
+	// boot list — IS the deliberateness. The default boot policy is where
+	// "not ours, not touched" still lives.
+	if (vfs_guid_already_mounted(part->uniquePartGUID))
+		return OS64_MOUNT_ALREADY_MOUNTED;
+
+	const char *fsName;
+	vfs_file_operations_t fileOps;
+	vfs_directory_operations_t dirOps;
+	if (!vfs_ops_for_part(&kBlockDeviceInfo[idx], part, &fileOps, &dirOps, &fsName,
+	                      (flags & OS64_MOUNT_RO) != 0))
+		return OS64_MOUNT_UNSUPPORTED;
+
+	char derived[VFS_MOUNT_PREFIX_MAX];
+	if (derive)
+	{
+		vfs_derive_mount_prefix(part, fsName, derived);   // numbering dodges any collision
+		where = derived;
+	}
+	else if (vfs_prefix_in_use(where))
+		return OS64_MOUNT_PREFIX_IN_USE;
+
+	// THE PARENT MUST BE REAL (ratified 2026-08-30): the mount point itself
+	// is the table's — no directory needed — but its parent has to be an
+	// existing directory on a disk mount (or "/"), so `ls` never has to
+	// invent a directory that exists nowhere. (A derived point sits at root
+	// level, so this walk lands on "/" and asks nothing.)
+	const char *last = where + strlen(where);
+	while (last > where && *last != '/')
+		last--;
+	if (last != where)   // parent is not "/"
+	{
+		char parent[VFS_MOUNT_PREFIX_MAX];
+		memcpy(parent, where, (size_t)(last - where));
+		parent[last - where] = '\0';
+		const char *ptail = NULL;
+		vfs_filesystem_t *pfs = vfs_resolve_mount(parent, &ptail);
+		os64_dirent_t entry;
+		if (pfs == NULL || pfs->block_device_info == NULL ||
+		    pfs->dops == NULL || pfs->dops->stat == NULL ||
+		    pfs->dops->stat(ptail, &entry, pfs) != 0 ||
+		    (entry.flags & OS64_DE_DIR) == 0)
+			return OS64_MOUNT_NO_PARENT;
+	}
+
+	vfs_filesystem_t *fs = kRegisterFilesystem((char *)where, &kBlockDeviceInfo[idx],
+	                                           partno, &fileOps, &dirOps);
+	if (fs == NULL)
+		return OS64_MOUNT_FAILED;   // driver refusal or a full table — the log says which
+
+	printd(DEBUG_VFS, "mount: %s (%s, GPT name \"%s\") at %s\n",
+	       what, fsName, part->partName, where);
+	return OS64_MOUNT_OK;
+}
+
+int vfs_unmount(const char *where)
+{
+	if (where == NULL || where[0] != '/')
+		return OS64_MOUNT_BAD_ARGS;
+
+	// Identify the victim first, cheaply, before disturbing anything.
+	spinlock_acquire(&kMountTableLock);
+	vfs_mount_entry_t *m = NULL;
+	for (int i = 0; i < kMountCount; i++)
+		if (kMountTable[i].fs != NULL && strcmp(kMountTable[i].prefix, where) == 0)
+		{
+			m = &kMountTable[i];
+			break;
+		}
+	vfs_filesystem_t *fs = m ? m->fs : NULL;
+	spinlock_release(&kMountTableLock);
+
+	if (fs == NULL)
+		return OS64_UNMOUNT_NOT_A_MOUNT;
+	if (m->prefix_len == 1)
+		return OS64_UNMOUNT_ROOT;
+	if (fs->block_device_info == NULL)
+		return OS64_UNMOUNT_SYNTH;   // /proc, /sys, /dev — the machine's own furniture
+
+	// Close the path gate: from here to the strike, no path operation is in
+	// flight anywhere, so the busy answers below cannot be falsified by an
+	// open that had resolved but not yet registered, and no new operation
+	// can resolve to this fs (the strike happens before the gate reopens).
+	vfs_path_gate_close();
+
+	int open_files = vfs_openfiles_on(fs);
+	int open_dirs  = fs->open_dir_count;
+	bool cwd_inside = false;
+	// The task spine is append-only (procfs walks it the same way); exited
+	// tasks are skipped — a zombie's cwd is on its way to the undertaker.
+	for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+	{
+		if (t->exited || t->cwd == NULL)
+			continue;
+		if (strncmp(t->cwd, where, m->prefix_len) == 0 &&
+		    (t->cwd[m->prefix_len] == '\0' || t->cwd[m->prefix_len] == '/'))
+		{
+			cwd_inside = true;
+			break;
+		}
+	}
+
+	if (open_files > 0 || open_dirs > 0 || cwd_inside)
+	{
+		vfs_path_gate_open();
+		printd(DEBUG_VFS, "unmount: %s is busy — %d open file(s), %d open dir(s)%s\n",
+		       where, open_files, open_dirs, cwd_inside ? ", a task's cwd inside" : "");
+		return OS64_UNMOUNT_BUSY;
+	}
+
+	// The strike: clear `fs` first (the lock-free readers' marker), leave the
+	// prefix bytes in place — a racing synthetic-readdir scan that already
+	// passed the fs check prints a name one microsecond stale, which is what
+	// a listing of a moving namespace means.
+	spinlock_acquire(&kMountTableLock);
+	m->fs = NULL;
+	__sync_synchronize();
+	m->fstype = NULL;
+	spinlock_release(&kMountTableLock);
+
+	vfs_path_gate_open();
+
+	// Teardown, outside the gate — nothing can reach this fs any more.
+	// LIFO reuse of FatFs's volume number, or FF_VOLUMES (10) would be a
+	// mount/unmount cycle budget rather than a concurrent-volume budget.
+	if (fs->fops->uninitialize != NULL)
+		fs->fops->uninitialize(fs);
+	if (fs->fatDiskNumber != FAT_DISK_NONE && fs->fatDiskNumber == kFatDiskNumber)
+		kFatDiskNumber--;
+
+	for (dlist_node_t *n = kBlockDeviceDList->head; n != NULL; n = n->next)
+		if (n->data == fs)
+		{
+			dlist_remove(kBlockDeviceDList, n);
+			break;
+		}
+
+	// The mirror of kRegisterFilesystem's allocations, in reverse. Every one
+	// of these is the per-mount COPY the register made — a driver that
+	// swapped one for a global table would hand this kfree kernel .data,
+	// which is exactly how fat_initialize's fops overwrite was caught.
+	kfree(fs->mount->mnt_root->d_name);
+	kfree(fs->mount->mnt_root);
+	kfree(fs->mount);
+	kfree(fs->files);
+	kfree(fs->dirs);
+	kfree(fs->bops);
+	kfree(fs->dops);
+	kfree(fs->fops);
+	kfree(fs);
+
+	printd(DEBUG_VFS, "unmount: %s unmounted\n", where);
+	return OS64_MOUNT_OK;
 }

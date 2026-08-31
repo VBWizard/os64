@@ -496,9 +496,13 @@ static int fat_initialize(vfs_filesystem_t* vfs_fs) {
         return -1; // Failed to mount
     }
 
-    // Store the context in the VFS filesystem
+    // Store the context in the VFS filesystem. fs->fops is left ALONE: it is
+    // the per-mount COPY kRegisterFilesystem made, and this function used to
+    // overwrite it with &fat_fops — the GLOBAL table — which leaked the copy,
+    // made vfs_demote_mount_readonly strip the global (demoting every FAT
+    // mount at once), and handed unmount's teardown a kernel .data address to
+    // kfree (the allocator names its victim; it named this).
     vfs_fs->fs_specific = fat_fs;
-    vfs_fs->fops = &fat_fops;
     return 0; // Success
 }
 
@@ -760,8 +764,31 @@ static int fat_rename(const char* oldpath, const char* newpath, vfs_filesystem_t
 	return 0;
 }
 
+// df's numbers. f_getfree WALKS THE FAT to count free clusters (FatFs keeps
+// no running total unless FSINFO is trusted), so this does real disk I/O —
+// kernel context, like every other FatFs call. Totals are clusters × cluster
+// size; the two reserved FAT entries are not clusters, hence n_fatent - 2.
+static int fat_space(vfs_filesystem_t *vfs_fs, uint64_t *total_bytes, uint64_t *free_bytes)
+{
+	char drive_label[8];
+	sprintf(drive_label, "%u:", vfs_fs->fatDiskNumber);
+
+	DWORD free_clusters = 0;
+	FATFS *ff = NULL;
+	if (f_getfree(drive_label, &free_clusters, &ff) != FR_OK || ff == NULL)
+		return -1;
+
+	uint64_t cluster_bytes = (uint64_t)ff->csize * FF_MAX_SS;   // fixed sector size build (FF_MIN_SS == FF_MAX_SS), so FATFS carries no ssize member
+	if (total_bytes)
+		*total_bytes = (uint64_t)(ff->n_fatent - 2) * cluster_bytes;
+	if (free_bytes)
+		*free_bytes = (uint64_t)free_clusters * cluster_bytes;
+	return 0;
+}
+
 vfs_file_operations_t fat_fops = {
 	.initialize = fat_initialize,
+	.space = fat_space,
     .open  = fat_open,
     .read  = fat_read,
 	.fgets = fat_gets,

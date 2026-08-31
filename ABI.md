@@ -197,6 +197,8 @@ argument (launch.S also stashes it for `os64_getenv`). Layout is ABI: a
 pairs — real string keys, no `KEY=VALUE` re-splitting, no fixed-width slots.
 The kernel seeds `PATH=/bin`; husk walks colon-separated PATH entries at spawn
 (V7's gift — before 1979, Unix shells hardcoded `/bin`).
+| 52 | `mount(what, where, flags)` | Put a partition into the namespace. `what` is a GPT partition name or dashed GUID — never a device path (a name travels with the disk; PARTLABEL is where Linux ended up and os64 starts). `where`'s PARENT must exist; the point itself is the mount table's (Plan 9's view — DIVERGENCES); NULL/empty `where` mounts at the partition's own GPT label, the same derivation a one-token mounts.conf line gets. `flags` = OS64_MOUNT_* bits (RO mounts with the write verbs absent from birth; an unknown bit is BAD_ARGS, never silently less than asked). Any partition the verb can name is mountable — the deliberateness IS the naming; the conservative default lives in the boot policy (/etc/mounts.conf, or the authored-GUIDs sweep when absent). Returns os64/mount.h codes verbatim — each refusal has its own number because "busy" and "no such partition" demand different next moves |
+| 53 | `unmount(where)` | Take a mount out of the namespace. Refuses "/", the synthetics (/proc,/sys,/dev), and BUSY (open files + open dirs + any task's cwd inside). Sound against in-flight opens via the vfs path gate: the dispatcher runs every path-op syscall as a reader, unmount is the one writer (vfs.h) |
 | 16-22 | GUI (reserved) | See GRAPHICS.md "The userland boundary" — create/destroy/get_surface/publish/event_poll/screen_info/event_wait |
 
 File syscalls (open/seek, and read/write/close on file handles) run their VFS
