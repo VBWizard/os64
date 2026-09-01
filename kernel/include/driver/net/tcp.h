@@ -173,6 +173,14 @@ typedef struct tcp_stats
 	uint64_t connections_opened;
 	uint64_t connections_refused;   // RST to our SYN — nobody listening
 	uint64_t connect_timeouts;
+	// Funerals: connections the poll unlisted and freed.
+	// It answers "is the reaper alive?" while corpses linger in
+	// /sys/net/tcp — and it marks that real kernel heap (a 64KB receive
+	// ring per corpse) was freed with no task burial to account for it,
+	// on the morgue's clock rather than anybody's syscall. Anything
+	// auditing memory across a window (task_teardown_leak brackets on
+	// this) has to be able to see that one landed inside it.
+	uint64_t connections_reaped;
 	uint64_t segments_in, segments_out, retransmits;
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)

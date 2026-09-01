@@ -1603,6 +1603,21 @@ static bool teardown_leak_one_cycle(void)
     return true;
 }
 
+// How many connections the TCP list holds, morgue residents included — the
+// observer discipline tcp.h states: the list lock across the walk, look but
+// never touch. Taken before and after a measurement window because every
+// entry is a live ~64KB allocation: a count that moved means a connection
+// was dialed or reaped inside the window and its buffers are in the delta.
+static uint32_t teardown_tcp_conn_census(void)
+{
+    uint32_t n = 0;
+    uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+    for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
+        n++;
+    spinlock_release_irqrestore(&kTcpListLock, lf);
+    return n;
+}
+
 // The verdict of ONE measurement attempt. The distinction that matters is
 // between "the number is bad" and "the number is not mine to read", because
 // only the first is a defect and only the second is worth retrying.
@@ -1648,6 +1663,8 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // out-wait you — but to notice afterwards that the window was not ours
     // alone, and decline to draw a conclusion from it.
     uint64_t burials_before = kTaskBurialCount;
+    uint64_t reaps_before = kTcpStats.connections_reaped;
+    uint32_t conns_before = teardown_tcp_conn_census();
 
     for (int i = 0; i < TEARDOWN_LEAK_MEASURED_CYCLES; i++) {
         if (!teardown_leak_one_cycle())
@@ -1674,6 +1691,25 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // measuring that probe's window too.
     allocator_memory_snapshot(&free_after, NULL, NULL);
     uint64_t reclaimed = kTaskVmaReclaimedBytes - reclaimed_before;
+
+    // THE THIRD BRACKET, for the moves the other two cannot see: a TCP
+    // connection's birth and funeral. A conn is a ~64KB allocation (the
+    // receive ring) whose free runs on the morgue's 15-second clock, so
+    // its two edges land in different windows and each edge alone reads
+    // as a leak — the dial edge as bytes lost, the reap edge as bytes
+    // conjured — with no task burial to census either time, and the
+    // free far too late for the stillness probes to catch the culprit
+    // still allocating. Both edges move the list census; a dial and a
+    // reap in one window cancel there, which is what the reap counter
+    // is here to break. (Two corpses reaping mid-window measured as
+    // -67200 bytes/task and convicted task_destroy of a leak it didn't
+    // have; an os64get typed mid-window read as +214468 the same way.)
+    if (kTcpStats.connections_reaped != reaps_before ||
+        teardown_tcp_conn_census() != conns_before) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: a TCP connection was dialed or reaped "
+                            "inside the window — its buffers are in the delta and are not ours\n");
+        return TL_DIRTY;
+    }
 
     // AND THE OTHER END OF THE BRACKET. The burial count above catches other
     // TASKS living and dying in our window; it says nothing about allocation

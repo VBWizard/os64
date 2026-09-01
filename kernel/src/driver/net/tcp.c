@@ -33,7 +33,18 @@ tcp_stats_t kTcpStats;
 // Exported (tcp.h) so /sys/net/tcp can walk what tcp_poll walks.
 tcp_conn_t* kTcpConnList = NULL;
 spinlock_t kTcpListLock;
-static uint16_t s_next_ephemeral = 49152;   // same dynamic range as UDP (RFC 6335)
+// The dynamic range, 49152..65535 — same as UDP's (RFC 6335).
+#define TCP_EPHEMERAL_BASE   49152u
+#define TCP_EPHEMERAL_COUNT  16384u
+
+static uint16_t s_next_ephemeral = TCP_EPHEMERAL_BASE;
+
+// One bit per ephemeral port (2KB): which of them a listed connection holds.
+// Guarded by kTcpListLock like the list itself — set when a dial's draw
+// claims the port, cleared when the reaper unlists the connection — so the
+// draw asks "is this port spoken for?" in one bit test instead of walking
+// the whole connection list per candidate.
+static uint64_t s_ephemeral_used[TCP_EPHEMERAL_COUNT / 64];
 
 // ── 1. SEQUENCE ARITHMETIC ──────────────────────────────────────────────────
 // TCP sequence numbers are 32 bits and they WRAP — after 4GB the stream's
@@ -575,6 +586,17 @@ void tcp_poll(void)
 		if (reap)
 		{
 			*pp = c->next;
+			// Give the port back to the draw. Guarded because only
+			// drawn ports live in the bitmap: a local port below the
+			// ephemeral range (a listener's service port, when LISTEN
+			// arrives) was never claimed there, and subtracting the
+			// base from it would underflow into a wild bit index.
+			if (c->local_port >= TCP_EPHEMERAL_BASE)
+			{
+				uint32_t bit = c->local_port - TCP_EPHEMERAL_BASE;
+				s_ephemeral_used[bit / 64] &= ~(1ULL << (bit % 64));
+			}
+			kTcpStats.connections_reaped++;
 			printd(DEBUG_NET, "tcp: reaped %u.%u.%u.%u:%u (local port %u free)\n",
 			       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->local_port);
 			kfree(c->rcv_buf);
@@ -653,30 +675,34 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// critical section. Drawn outside the lock, two tasks dialing at once
 	// could read the same counter and open two connections on one local
 	// port — the demux would then hand one stream's segments to whichever
-	// matched first. The in-use scan skips any port a listed connection
-	// still holds, TIME_WAIT and morgue residents included, which is the
-	// port protection TIME_WAIT exists to give.
+	// matched first. The bitmap holds the port of every listed connection,
+	// TIME_WAIT and morgue residents included, which is the port
+	// protection TIME_WAIT exists to give.
 	//
-	// The search is BOUNDED to one traversal of the dynamic range, and an
-	// exhausted range is a clean NO_RESOURCES — not a spin. 16384
-	// connections at ~64KB apiece fit comfortably in this machine's RAM
-	// (Codex, PR #46, doing the arithmetic a comment here once waved
-	// away), and an unbounded loop under this lock with interrupts off
-	// would freeze TCP machine-wide at the exact moment it is busiest.
+	// The search is BOUNDED to one pass over the dynamic range at one bit
+	// test per candidate, and an exhausted range is a clean NO_RESOURCES —
+	// not a spin. Both halves matter because this lock is irqsave: the
+	// worst case runs with interrupts off on this core and every other
+	// TCP user waiting on the lock, so it has to be cheap at exactly the
+	// load — a full range — it exists to handle. A draw that walked the
+	// connection list per candidate was ~16384 × list-length compares
+	// under those conditions (Codex, PR #46; 16384 connections at ~64KB
+	// apiece fit comfortably in this machine's RAM, so a full range is
+	// reachable, not theoretical).
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	bool found = false;
-	for (uint32_t tries = 65536u - 49152u; tries > 0 && !found; tries--)
+	for (uint32_t tries = TCP_EPHEMERAL_COUNT; tries > 0; tries--)
 	{
-		c->local_port = s_next_ephemeral++;
-		if (s_next_ephemeral < 49152)
-			s_next_ephemeral = 49152;
+		uint16_t candidate = s_next_ephemeral++;
+		if (s_next_ephemeral < TCP_EPHEMERAL_BASE)
+			s_next_ephemeral = TCP_EPHEMERAL_BASE;
+		uint32_t bit = candidate - TCP_EPHEMERAL_BASE;
+		if (s_ephemeral_used[bit / 64] & (1ULL << (bit % 64)))
+			continue;
+		s_ephemeral_used[bit / 64] |= (1ULL << (bit % 64));
+		c->local_port = candidate;
 		found = true;
-		for (tcp_conn_t* t = kTcpConnList; t != NULL; t = t->next)
-			if (t->local_port == c->local_port)
-			{
-				found = false;
-				break;
-			}
+		break;
 	}
 	if (!found)
 	{

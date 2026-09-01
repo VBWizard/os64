@@ -1000,6 +1000,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "connections_opened: %lu\n", kTcpStats.connections_opened);
 	synth_text_addf(t, "connections_refused: %lu\n", kTcpStats.connections_refused);
 	synth_text_addf(t, "connect_timeouts: %lu\n", kTcpStats.connect_timeouts);
+	synth_text_addf(t, "connections_reaped: %lu\n", kTcpStats.connections_reaped);
 	synth_text_addf(t, "resets_received: %lu\n", kTcpStats.resets_received);
 	synth_text_addf(t, "segments_in: %lu\n", kTcpStats.segments_in);
 	synth_text_addf(t, "segments_out: %lu\n", kTcpStats.segments_out);
@@ -1008,37 +1009,67 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "bad_checksum: %lu\n", kTcpStats.bad_checksum);
 	synth_text_addf(t, "no_connection: %lu\n", kTcpStats.no_connection);
 
-	// tcp_poll's discipline: the list lock across the walk, each conn's own
-	// lock to read its fields — snapshotted into locals so the render (which
-	// may kmalloc to grow) never runs under two locks at once.
-	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	// tcp_poll's discipline for READING — the list lock across the walk,
+	// each conn's own lock for its fields — and NO FORMATTING under
+	// either: synth_text_addf grows its buffer by kmalloc/copy/kfree, and
+	// the list lock is irqsave, so rendering the table inside it held
+	// interrupts off on this core for the whole render while every TCP
+	// user on the other cores spun on the lock (Codex, PR #46). So the
+	// walk fills a row-snapshot array — one bounded kmalloc, sized by the
+	// count just taken — and the formatting runs after both locks are
+	// gone.
+	struct tcp_row
+	{
+		uint32_t peer_ip;
+		uint16_t peer_port;
+		uint16_t local_port;
+		uint32_t state;
+		uint16_t mss;
+		uint16_t win;
+		uint32_t buf_used;
+		uint64_t rx, tx, rexmit, ooo;
+		bool     detached, zwin, rst;
+	};
 
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	uint32_t count = 0;
 	for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
 		count++;
-	synth_text_addf(t, "connections: %u\n", count);
 
+	struct tcp_row *rows = NULL;
+	uint32_t n = 0;
 	if (count > 0)
+		rows = kmalloc(count * sizeof(*rows));
+	if (rows != NULL)
+		for (tcp_conn_t *c = kTcpConnList; c != NULL && n < count; c = c->next)
+		{
+			struct tcp_row *r = &rows[n++];
+			uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+			r->peer_ip    = c->peer_ip;
+			r->peer_port  = c->peer_port;
+			r->local_port = c->local_port;
+			r->state      = (uint32_t)c->state;
+			r->mss        = c->snd_mss;
+			r->win        = c->snd_wnd;
+			r->buf_used   = c->rcv_count;
+			r->rx         = c->rx_bytes;
+			r->tx         = c->tx_bytes;
+			r->rexmit     = c->retransmits;
+			r->ooo        = c->out_of_order_dropped;
+			r->detached   = c->detached;
+			r->zwin       = c->zero_window;
+			r->rst        = c->reset;
+			spinlock_release_irqrestore(&c->lock, irqflags);
+		}
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	synth_text_addf(t, "connections: %u\n", count);
+	if (n > 0)
 	{
 		synth_text_addf(t, "# local peer state mss win buf rx_bytes tx_bytes rexmit ooo flags\n");
-		for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
+		for (uint32_t i = 0; i < n; i++)
 		{
-			uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
-			uint32_t peer_ip     = c->peer_ip;
-			uint16_t peer_port   = c->peer_port;
-			uint16_t local_port  = c->local_port;
-			unsigned state       = (unsigned)c->state;
-			uint16_t mss         = c->snd_mss;
-			uint16_t win         = c->snd_wnd;
-			uint32_t buf_used    = c->rcv_count;
-			uint64_t rx          = c->rx_bytes;
-			uint64_t tx          = c->tx_bytes;
-			uint64_t rexmit      = c->retransmits;
-			uint64_t ooo         = c->out_of_order_dropped;
-			bool detached        = c->detached;
-			bool zwin            = c->zero_window;
-			bool rst             = c->reset;
-			spinlock_release_irqrestore(&c->lock, irqflags);
+			struct tcp_row *r = &rows[i];
 
 			// `win` is the PEER's advertised window — the term of
 			// throughput = window/RTT that tcp.c's TCPRX trace watches
@@ -1051,13 +1082,13 @@ static void sys_gen_net_tcp(synth_text_t *t)
 			// the fact. Comma-joined by hand; "-" when nothing is set.
 			char flags[16];
 			size_t fl = 0;
-			if (detached) { flags[fl++] = 'd'; flags[fl++] = 'e'; flags[fl++] = 't'; }
-			if (zwin)
+			if (r->detached) { flags[fl++] = 'd'; flags[fl++] = 'e'; flags[fl++] = 't'; }
+			if (r->zwin)
 			{
 				if (fl) flags[fl++] = ',';
 				flags[fl++] = 'z'; flags[fl++] = 'w'; flags[fl++] = 'i'; flags[fl++] = 'n';
 			}
-			if (rst)
+			if (r->rst)
 			{
 				if (fl) flags[fl++] = ',';
 				flags[fl++] = 'r'; flags[fl++] = 's'; flags[fl++] = 't';
@@ -1067,17 +1098,22 @@ static void sys_gen_net_tcp(synth_text_t *t)
 			flags[fl] = '\0';
 
 			synth_text_addf(t, "%u %u.%u.%u.%u:%u %s %u %u %u/%u %lu %lu %lu %lu %s\n",
-			                (unsigned)local_port,
-			                NET_IPV4_OCTETS(peer_ip), (unsigned)peer_port,
-			                state < (sizeof(kTcpStateNames) / sizeof(kTcpStateNames[0]))
-			                    ? kTcpStateNames[state] : "?",
-			                (unsigned)mss, (unsigned)win,
-			                (unsigned)buf_used, (unsigned)TCP_RCV_BUF,
-			                rx, tx, rexmit, ooo, flags);
+			                (unsigned)r->local_port,
+			                NET_IPV4_OCTETS(r->peer_ip), (unsigned)r->peer_port,
+			                r->state < (sizeof(kTcpStateNames) / sizeof(kTcpStateNames[0]))
+			                    ? kTcpStateNames[r->state] : "?",
+			                (unsigned)r->mss, (unsigned)r->win,
+			                (unsigned)r->buf_used, (unsigned)TCP_RCV_BUF,
+			                r->rx, r->tx, r->rexmit, r->ooo, flags);
 		}
 	}
+	else if (count > 0)
+		// The count above is honest but its rows could not be: no memory
+		// for the snapshot. Saying so beats a silently empty table.
+		synth_text_addf(t, "# rows omitted: no memory for the snapshot\n");
 
-	spinlock_release_irqrestore(&kTcpListLock, lf);
+	if (rows != NULL)
+		kfree(rows);   // kfree(NULL) panics in os64 — the guard is load-bearing
 }
 
 // net/<card> — one registered NIC: what it is, whether the wire is good, and
