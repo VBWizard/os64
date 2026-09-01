@@ -53,16 +53,21 @@ static int32_t remove_path(const char *path, bool recursive, uint32_t depth)
         return 1;
     }
 
+    if (unsafe_recursive_operand(path))
+    {
+        os64_hprintf(OS64_STDERR, "rm: refusing to recursively remove '%s'\n", path);
+        return 1;
+    }
+
+    // AFTER the operand check, never before it. "/" is itself a mount point
+    // — the root mount — so this test matches it too, and "refusing to cross
+    // a filesystem boundary at '/'" names the wrong reason for the one
+    // refusal rm most needs to get right. The specific complaint wins; this
+    // one is for a mount named as an operand or met during the walk.
     if (entry.flags & OS64_DE_MOUNT)
     {
         os64_hprintf(OS64_STDERR,
                      "rm: refusing to cross filesystem boundary at '%s'\n", path);
-        return 1;
-    }
-
-    if (unsafe_recursive_operand(path))
-    {
-        os64_hprintf(OS64_STDERR, "rm: refusing to recursively remove '%s'\n", path);
         return 1;
     }
 

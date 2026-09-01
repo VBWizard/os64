@@ -1409,8 +1409,22 @@ static bool test_mount_unmount(void)
     }
     int r = vfs_unmount(victim_prefix);
     if (r != OS64_UNMOUNT_BUSY)
+    {
+        // OK here is the regression this leg exists to catch — and it means
+        // the filesystem was TORN DOWN AND FREED under our holder, taking
+        // `victim` (and the handle we are holding) with it. Cleanup must not
+        // touch either, so drop the claims before jumping: the object they
+        // name is already gone. Any other answer left the mount standing,
+        // and cleanup closes the holder normally.
+        if (r == OS64_MOUNT_OK)
+        {
+            held_open = false;
+            held_dir_open = false;
+            held_dir_counted = false;
+        }
         MU_FAIL("unmount of %s with a holder answered %d, expected BUSY (%d)\n",
                 victim_prefix, r, OS64_UNMOUNT_BUSY);
+    }
 
     // 2. RELEASE AND UNMOUNT. The name must leave the namespace.
     if (held_open) {

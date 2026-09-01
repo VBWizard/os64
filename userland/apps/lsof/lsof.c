@@ -496,6 +496,12 @@ static int list_kernel_openfiles(const lsof_options_t *options,
             *cursor++ = '\0';
         if (*line == '\0')
             continue;
+        // A '#' line whose first word is a NUMBER means the producer cut the
+        // listing. It no longer can — the snapshot is sized to the registry
+        // and retried if it grows — so this is a TRIPWIRE against that
+        // guarantee being lost, not a case anyone expects to hit. Failing is
+        // right if it ever fires: a partial answer from lsof is worse than no
+        // answer, because the whole question is what is missing.
         if (*line == '#')
         {
             const char *p = line + 1;

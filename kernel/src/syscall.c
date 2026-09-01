@@ -288,6 +288,19 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 // WHICH refusal it was, so the code travels instead of collapsing to -1).
 // Neither verb takes a reader ticket in the dispatcher. Their VFS entry
 // points serialize namespace mutations and close the path gate as writers.
+//
+// AN ARGUMENT REFUSAL ANSWERS IN mount.h's VOCABULARY, including the ones
+// raised here before the vfs call is ever made. The two vocabularies
+// OVERLAP NUMERICALLY and neither knows about the other:
+// SYSCALL_RESULT_BAD_USER_DATA is -2, which mount(1) reads as
+// OS64_MOUNT_NOT_FOUND and prints as "no partition wears that name or GUID
+// (see /sys/block)" — blaming a missing partition for an argument that was
+// merely unreadable or too long, and sending the reader to the wrong file.
+// An argument this layer cannot even copy IS a bad argument, which is what
+// mount.h's BAD_ARGS already says it covers. (The SYSCALL_RESULT_INVALID
+// returns that remain below are -1, which IS BAD_ARGS numerically: they
+// answer "no task" and "out of memory", for which mount.h has no word, and
+// -1 at least does not accuse the disk.)
 typedef struct {
 	char what[64];                   // a GPT name (≤36) or a dashed GUID (36)
 	char where[TASK_MAX_PATH_LEN];
@@ -325,7 +338,7 @@ static uint64_t syscall_mount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_user_string((const char *)arg0, p->what, sizeof(p->what)))
 	{
 		kfree(p);
-		return SYSCALL_RESULT_BAD_USER_DATA;
+		return (uint64_t)(int64_t)OS64_MOUNT_BAD_ARGS;
 	}
 	// A NULL `where` asks for the partition's own label (`mount fat` at the
 	// shell = a one-token mounts.conf line). It must not touch the resolver:
@@ -339,7 +352,7 @@ static uint64_t syscall_mount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		if (!copy_user_string((const char *)arg1, raw_where, sizeof(raw_where)))
 		{
 			kfree(p);
-			return SYSCALL_RESULT_BAD_USER_DATA;
+			return (uint64_t)(int64_t)OS64_MOUNT_BAD_ARGS;
 		}
 		// WHERE names the machine-wide namespace, not a place relative to one
 		// caller. Reject it before the resolver can erase that distinction.
@@ -353,7 +366,7 @@ static uint64_t syscall_mount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		else if (!resolve_user_path(task, raw_where, p->where, sizeof(p->where)))
 		{
 			kfree(p);
-			return SYSCALL_RESULT_BAD_USER_DATA;
+			return (uint64_t)(int64_t)OS64_MOUNT_BAD_ARGS;
 		}
 	}
 	p->flags = arg2;   // a value, not a pointer — vfs_mount_explicit refuses unknown bits
@@ -381,7 +394,7 @@ static uint64_t syscall_unmount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!copy_user_string((const char *)arg0, raw_where, sizeof(raw_where)))
 	{
 		kfree(p);
-		return SYSCALL_RESULT_BAD_USER_DATA;
+		return (uint64_t)(int64_t)OS64_MOUNT_BAD_ARGS;
 	}
 	// Unmount has the same namespace-wide path contract as mount. An empty or
 	// relative name is malformed rather than an instruction involving cwd.
@@ -393,7 +406,7 @@ static uint64_t syscall_unmount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (!resolve_user_path(task, raw_where, p->where, sizeof(p->where)))
 	{
 		kfree(p);
-		return SYSCALL_RESULT_BAD_USER_DATA;
+		return (uint64_t)(int64_t)OS64_MOUNT_BAD_ARGS;
 	}
 
 	call_in_kernel_context(unmount_do, p);
