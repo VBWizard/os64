@@ -111,6 +111,30 @@ typedef enum tcp_state
 #define TCP_MSL_TICKS       (15 * TICKS_PER_SECOND)
 #define TCP_CONNECT_TIMEOUT (10 * TICKS_PER_SECOND)
 
+// The morgue: how long a CLOSED, detached connection stays listed before
+// the poll reaps it. DISPLAY policy, not protocol — TIME_WAIT's linger is
+// TCP's own law (see tcp_poll), this one exists so /sys/net/tcp can answer
+// "what just happened" after a dial fails or a fetch ends. A human who ran
+// a command that died gets this long to cat the aftermath.
+//
+// A MORGUE ROW OWNS NOTHING. Whatever killed the connection — a dial
+// refused or timed out, a reset after it was established, a close the
+// peer began — the moment it is CLOSED and detached it is a TOMBSTONE:
+// buffers freed, port returned, only the row left (state, peer, rst —
+// all the observer ever read). The port goes because there is nothing
+// for a held port to protect: TIME_WAIT is the protocol's linger, and a
+// reset or passive close never enters it. Tombstones are CAPPED, oldest
+// evicted, because a refused dial returns at once and costs no handle
+// and a peer that accepts-then-resets costs one for a moment, so either
+// can fill the morgue faster than it drains — and a capful of rows says
+// "refused, again" as well as sixty thousand would.
+//
+// TIME_WAIT is stripped the same way but keeps its port: 2×MSL of port
+// protection is what the state IS, and a header-only ACK to a late FIN
+// needs no buffer. (Linux's timewait sock is the same economy.)
+#define TCP_MORGUE_TICKS      (15 * TICKS_PER_SECOND)
+#define TCP_MORGUE_TOMBSTONES 64
+
 // In-band sentinels (the pipe.c convention).
 #define TCP_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end)
 #define TCP_ERR_RESET       (-4L)   // peer sent RST, or the connection died
@@ -148,15 +172,28 @@ typedef struct tcp_conn
 
 	bool     reset;        // RST received or fatal error: reads/writes fail
 	uint64_t time_wait_until;
+	uint64_t closed_at;    // the morgue clock: when the poll first saw this
+	                       // conn CLOSED and detached (0 = not yet)
 
 	spinlock_t lock;
 	thread_t* volatile reader;   // parked in tcp_conn_read
 	thread_t* volatile writer;   // parked in tcp_conn_write
 	bool detached;               // handle closed; poll may reap after TIME_WAIT
+	bool stripped;               // buffers freed; the row and (in TIME_WAIT) the port remain
+	bool tombstone;              // a morgue row: stripped, port returned, in the capped queue
 
 	uint64_t rx_bytes, tx_bytes, retransmits, out_of_order_dropped;
 
+	// The connection list is doubly linked so an unlink is O(1) from
+	// anywhere — the tombstone cap evicts from the middle of the list on
+	// every failed dial, and rediscovering a predecessor by walking a
+	// list of thousands with kTcpListLock held irqsave is the scan the
+	// cap must never do (Codex, PR #46). tomb_next threads the tombstones
+	// through a FIFO of their own, oldest at the head, so the cap knows
+	// its next eviction without looking. All three under kTcpListLock.
 	struct tcp_conn* next;
+	struct tcp_conn* prev;
+	struct tcp_conn* tomb_next;
 } tcp_conn_t;
 
 typedef struct tcp_stats
@@ -164,12 +201,45 @@ typedef struct tcp_stats
 	uint64_t connections_opened;
 	uint64_t connections_refused;   // RST to our SYN — nobody listening
 	uint64_t connect_timeouts;
+	// Funerals: connections unlisted and freed — by the poll's reap, or
+	// by the tombstone cap's eviction. It answers "is the reaper alive?"
+	// while corpses linger in /sys/net/tcp.
+	uint64_t connections_reaped;
+	// THE HEAP INVARIANT, in one number. Every TCP heap allocation and
+	// free happens under kTcpListLock, through tcp_heap_alloc_locked /
+	// tcp_heap_free_locked, and each ticks this once in the same critical
+	// section. So a reader that takes the list lock sees either a move
+	// and its tick or neither — never bytes that moved without a tick —
+	// and task_teardown_leak's bracket, which must know whether TCP
+	// moved memory inside its window with no task burial to account for
+	// it, asks this one number instead of a counter per edge. Five
+	// review rounds of finding one more uncounted edge (a reap, an
+	// eviction, an entomb, a port-exhausted dial, an unpublished
+	// allocation) are why it is one number and one door (Codex, PR #46).
+	uint64_t heap_moves;
 	uint64_t segments_in, segments_out, retransmits;
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)
 	uint64_t resets_received;
+	// The machine-wide twin of the per-conn counter, because a reaped
+	// connection takes its copy to the grave: "has this stack EVER seen
+	// reordering" has to survive the connections that answered it.
+	uint64_t out_of_order_dropped;
+	// Bytes we already took, sent again: OUR ack was lost or late, and the
+	// peer resent from where it last heard from us. Not reordering — kept
+	// apart so out_of_order_dropped answers only "is the network
+	// reordering", the question the reassembly debt hangs on, while this
+	// one answers "is the network eating our acks".
+	uint64_t duplicates_dropped;
 } tcp_stats_t;
 extern tcp_stats_t kTcpStats;
+
+// The connection list, exported for /sys/net/tcp. The discipline is
+// tcp_poll's: hold kTcpListLock across the walk (it guards the links),
+// take each conn's own lock to read its fields. Readers outside tcp.c
+// observe; they never unlink, retire, or wake anything.
+extern tcp_conn_t* kTcpConnList;
+extern spinlock_t kTcpListLock;
 
 // ── The API behind HANDLE_NET_TCP ───────────────────────────────────────────
 // Active open. BLOCKS until the handshake completes (task context only);
@@ -204,6 +274,10 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 // Timers: retransmission, connect timeout, TIME_WAIT reaping. From
 // processSignals beside dhcp_poll.
 void tcp_poll(void);
+
+// task_teardown_leak's bracket: heap_moves, read under kTcpListLock (the
+// invariant its comment states is what makes one locked read exact).
+uint64_t tcp_leak_bracket_snapshot(void);
 
 // Level-triggered wake sweep, beside udp_conn_wake_if_ready.
 void tcp_wake_if_ready(void);

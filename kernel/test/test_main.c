@@ -1901,6 +1901,7 @@ static bool teardown_leak_one_cycle(void)
     return true;
 }
 
+
 // The verdict of ONE measurement attempt. The distinction that matters is
 // between "the number is bad" and "the number is not mine to read", because
 // only the first is a defect and only the second is worth retrying.
@@ -1932,9 +1933,6 @@ static teardown_verdict_t teardown_leak_attempt(void)
             return TL_ERROR;
     }
 
-    uint64_t free_before = 0, free_after = 0;
-    allocator_memory_snapshot(&free_before, NULL, NULL);
-    uint64_t reclaimed_before = kTaskVmaReclaimedBytes;
     // WHOSE FUNERALS HAPPENED IN OUR WINDOW? Exactly one per cycle, or the
     // delta below belongs partly to somebody else and cannot be read as ours.
     //
@@ -1945,7 +1943,20 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // and the honest way to get it is not to wait longer — a user can always
     // out-wait you — but to notice afterwards that the window was not ours
     // alone, and decline to draw a conclusion from it.
+    //
+    // THE BRACKETS OPEN BEFORE THE MEMORY SNAPSHOT AND CLOSE AFTER IT, and
+    // that order is the whole instrument: a bracket's claim is "nothing it
+    // watches moved between the two memory readings", so each baseline must
+    // be older than free_before and each check younger than free_after. A
+    // burial or a reap that landed between free_before and a baseline taken
+    // after it would be inside the memory delta and outside the bracket —
+    // counted as the starting state, and the delta blamed on the cycles.
     uint64_t burials_before = kTaskBurialCount;
+    uint64_t tcp_moves_before = tcp_leak_bracket_snapshot();
+
+    uint64_t free_before = 0, free_after = 0;
+    allocator_memory_snapshot(&free_before, NULL, NULL);
+    uint64_t reclaimed_before = kTaskVmaReclaimedBytes;
 
     for (int i = 0; i < TEARDOWN_LEAK_MEASURED_CYCLES; i++) {
         if (!teardown_leak_one_cycle())
@@ -1972,6 +1983,27 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // measuring that probe's window too.
     allocator_memory_snapshot(&free_after, NULL, NULL);
     uint64_t reclaimed = kTaskVmaReclaimedBytes - reclaimed_before;
+
+    // THE THIRD BRACKET, for the moves the other two cannot see: TCP's
+    // heap. A connection's receive ring is ~64KB allocated at the dial
+    // and freed on the morgue's clock or at a failed dial's return, with
+    // no task burial to census either edge and the free far too late for
+    // the stillness probes to catch the culprit still allocating; each
+    // edge alone reads as a leak — bytes lost at the dial, bytes conjured
+    // at the free. (Two corpses reaping mid-window measured as -67200
+    // bytes/task and convicted task_destroy of a leak it didn't have; an
+    // os64get typed mid-window read as +214468 the same way.) The
+    // bracket asks ONE number: tcp.h's heap_moves, which every TCP
+    // allocation and free ticks under the list lock in the same critical
+    // section as the move, read here under that lock — so it either sees
+    // a move or the move has not happened, and no edge can go uncounted
+    // by construction (the per-edge counters this replaced missed five
+    // in a row).
+    if (tcp_leak_bracket_snapshot() != tcp_moves_before) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: TCP moved heap inside the window — "
+                            "a connection's buffers are in the delta and are not ours\n");
+        return TL_DIRTY;
+    }
 
     // AND THE OTHER END OF THE BRACKET. The burial count above catches other
     // TASKS living and dying in our window; it says nothing about allocation

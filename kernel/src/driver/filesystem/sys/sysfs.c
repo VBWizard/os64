@@ -45,15 +45,22 @@
 //                                the schedule — READ, side-effect free, no NMI
 //   /sys/cpu/<n>/probe           WRITE "probe": fire a diagnostic NMI at the
 //                                core.  READ: the last snapshot, rendered.
-//   /sys/net/                    the networking view: "ip", "dhcp", then one
-//                                file per REGISTERED NIC, named as the driver
-//                                registered it ("r8125_0") — never by index,
-//                                which would renumber if probe order changed
+//   /sys/net/                    the networking view: "ip", "dhcp", "tcp",
+//                                then one file per REGISTERED NIC, named as
+//                                the driver registered it ("r8125_0") — never
+//                                by index, which would renumber if probe
+//                                order changed
 //   /sys/net/ip                  the machine's address. MACHINE-wide and it
 //                                says so: os64 is single-homed (one
 //                                kNetIPv4Address, up to NET_MAX_DEVICES cards)
 //   /sys/net/dhcp                how that address was come by — state, lease,
 //                                and the conversation's counters
+//   /sys/net/tcp                 the transport: the machine-wide counters,
+//                                then one row per connection, the recently
+//                                dead lingering briefly (the morgue) —
+//                                netstat's data, and the shakedown
+//                                instruments for the day this stack meets
+//                                the real internet
 //   /sys/net/<card>              one NIC: model/location (both optional),
 //                                mac, mtu, link, whether it carries the
 //                                address, and the traffic counters
@@ -130,6 +137,7 @@
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
+#include "driver/net/tcp.h"             // /sys/net/tcp — kTcpStats + the conn list
 #include "gui/compositor.h"             // /sys/gui — kEnableGUI, seat, census
 #include "video.h"                      // kFrameBuffer — the resolution it reports
 #include "CONFIG.h"
@@ -304,6 +312,7 @@ typedef enum
 	SYS_NODE_NETDIR,     // /net — the networking view (2026-08-20)
 	SYS_NODE_NETIP,      // /net/ip — the machine's address, and it is ONE
 	SYS_NODE_NETDHCP,    // /net/dhcp — how that address was come by
+	SYS_NODE_NETTCP,     // /net/tcp — the transport, connection by connection
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
@@ -467,14 +476,16 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		}
 		bool is_ip   = (strcmp(comp, "ip") == 0);
 		bool is_dhcp = (strcmp(comp, "dhcp") == 0);
-		if (is_ip || is_dhcp)
+		bool is_tcp  = (strcmp(comp, "tcp") == 0);
+		if (is_ip || is_dhcp || is_tcp)
 		{
 			// Decide BEFORE the lookahead: synth_next_component writes into
 			// `comp`, so testing it afterwards would be reading the wrong
 			// component (or a leftover one).
 			if (synth_next_component(path, &pos, comp, sizeof(comp)))
 				return;   // nothing lives inside a file
-			out->type = is_ip ? SYS_NODE_NETIP : SYS_NODE_NETDHCP;
+			out->type = is_ip ? SYS_NODE_NETIP
+			          : is_dhcp ? SYS_NODE_NETDHCP : SYS_NODE_NETTCP;
 			return;
 		}
 		// A card is addressed by the name the DRIVER registered ("r8125_0"),
@@ -1194,6 +1205,199 @@ static void sys_gen_net_dhcp(synth_text_t *t)
 	synth_text_addf(t, "ignored: %lu\n", kDhcpStats.ignored);
 }
 
+// net/tcp — the transport. Counters first, then one row per connection the
+// machine currently holds — TIME_WAIT ghosts included (they are real: each
+// one is a port pair still spoken for), and the recently dead too, kept
+// listed for TCP_MORGUE_TICKS so the aftermath of a failed dial or a
+// finished fetch is readable instead of gone by the next poll (tcp_poll
+// owns that linger and says why). netstat(1) is the pretty-printer —
+// kernel emits the truth, userland makes it sing, the lspci division. The
+// rows are the house table dialect: a `#` header naming the columns,
+// whitespace-separated fields. Nothing here needs escaping; every column
+// is machine-made.
+//
+// The counters are the shakedown instruments. This stack has spent its
+// whole life on a LAN, where retransmits and out_of_order_dropped read
+// zero forever — the day it dials the real internet is the day they start
+// reporting weather, and whether the booked v1 debts (reassembly, window
+// scaling, measured RTO — tcp.h states them) are worth paying is a
+// question these numbers answer with data instead of theory.
+static void sys_gen_net_tcp(synth_text_t *t)
+{
+	// RFC 793's own vocabulary, netstat's spelling since 4.2BSD.
+	static const char *kTcpStateNames[] = {
+		"CLOSED", "LISTEN", "SYN_SENT", "SYN_RECEIVED", "ESTABLISHED",
+		"FIN_WAIT_1", "FIN_WAIT_2", "CLOSE_WAIT", "CLOSING", "LAST_ACK",
+		"TIME_WAIT"
+	};
+
+	synth_text_addf(t, "connections_opened: %lu\n", kTcpStats.connections_opened);
+	synth_text_addf(t, "connections_refused: %lu\n", kTcpStats.connections_refused);
+	synth_text_addf(t, "connect_timeouts: %lu\n", kTcpStats.connect_timeouts);
+	synth_text_addf(t, "connections_reaped: %lu\n", kTcpStats.connections_reaped);
+	synth_text_addf(t, "resets_received: %lu\n", kTcpStats.resets_received);
+	synth_text_addf(t, "segments_in: %lu\n", kTcpStats.segments_in);
+	synth_text_addf(t, "segments_out: %lu\n", kTcpStats.segments_out);
+	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
+	synth_text_addf(t, "out_of_order_dropped: %lu\n", kTcpStats.out_of_order_dropped);
+	synth_text_addf(t, "duplicates_dropped: %lu\n", kTcpStats.duplicates_dropped);
+	synth_text_addf(t, "heap_moves: %lu\n", kTcpStats.heap_moves);
+	synth_text_addf(t, "bad_checksum: %lu\n", kTcpStats.bad_checksum);
+	synth_text_addf(t, "no_connection: %lu\n", kTcpStats.no_connection);
+
+	// tcp_poll's discipline for READING — the list lock across the walk,
+	// each conn's own lock for its fields — and NO FORMATTING under
+	// either: synth_text_addf grows its buffer by kmalloc/copy/kfree, and
+	// the list lock is irqsave, so rendering the table inside it held
+	// interrupts off on this core for the whole render while every TCP
+	// user on the other cores spun on the lock (Codex, PR #46). So the
+	// walk fills a row-snapshot array — one bounded kmalloc, sized by the
+	// count just taken — and the formatting runs after both locks are
+	// gone.
+	struct tcp_row
+	{
+		uint32_t peer_ip;
+		uint16_t peer_port;
+		uint16_t local_port;
+		uint32_t state;
+		uint16_t mss;
+		uint16_t win;
+		uint32_t buf_used;
+		uint64_t rx, tx, rexmit, ooo;
+		bool     detached, zwin, rst;
+	};
+
+	// The snapshot lives in PAGE-SIZED CHUNKS, linked, never one array.
+	// The allocator does not fail — exhaustion is a panic, by name
+	// (allocator.c) — so "what if kmalloc returns NULL" is not the
+	// question; "how big a contiguous block does cat'ing this file
+	// demand" is. One array sized by the count is ~1MB at the full
+	// ephemeral range, the largest single request in sysfs and, on a
+	// fragmented map, the request likeliest to be the one that finds no
+	// free block (Codex, PR #46). A chunk is one page — the size class
+	// the renderer's own buffer growth asks for — so the snapshot risks
+	// nothing the file's text does not already.
+	//
+	// Chunks are allocated between the census and the copy, under no
+	// lock; a list that grew in that gap overflows the chunks, and the
+	// overflow is REPORTED, not silently cropped.
+	struct tcp_row_chunk
+	{
+		struct tcp_row_chunk *next;
+		struct tcp_row rows[(PAGE_SIZE - sizeof(void *)) / sizeof(struct tcp_row)];
+	};
+	const uint32_t rows_per_chunk = sizeof(((struct tcp_row_chunk *)0)->rows) / sizeof(struct tcp_row);
+
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint32_t count = 0;
+	for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
+		count++;
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	struct tcp_row_chunk *chunks = NULL, **link = &chunks;
+	uint32_t capacity = 0;
+	while (capacity < count)
+	{
+		struct tcp_row_chunk *ch = kmalloc(sizeof(*ch));
+		*link = ch;
+		link = &ch->next;
+		capacity += rows_per_chunk;
+	}
+
+	lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint32_t n = 0, omitted = 0;
+	struct tcp_row_chunk *fill = chunks;
+	for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
+	{
+		if (n >= capacity)
+		{
+			omitted++;
+			continue;
+		}
+		if (n > 0 && n % rows_per_chunk == 0)
+			fill = fill->next;
+		struct tcp_row *r = &fill->rows[n % rows_per_chunk];
+		n++;
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		r->peer_ip    = c->peer_ip;
+		r->peer_port  = c->peer_port;
+		r->local_port = c->local_port;
+		r->state      = (uint32_t)c->state;
+		r->mss        = c->snd_mss;
+		r->win        = c->snd_wnd;
+		r->buf_used   = c->rcv_count;
+		r->rx         = c->rx_bytes;
+		r->tx         = c->tx_bytes;
+		r->rexmit     = c->retransmits;
+		r->ooo        = c->out_of_order_dropped;
+		r->detached   = c->detached;
+		r->zwin       = c->zero_window;
+		r->rst        = c->reset;
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		}
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	synth_text_addf(t, "connections: %u\n", n + omitted);
+	if (n > 0)
+	{
+		synth_text_addf(t, "# local peer state mss win buf rx_bytes tx_bytes rexmit ooo flags\n");
+		struct tcp_row_chunk *ch = chunks;
+		for (uint32_t i = 0; i < n; i++)
+		{
+			if (i > 0 && i % rows_per_chunk == 0)
+				ch = ch->next;
+			struct tcp_row *r = &ch->rows[i % rows_per_chunk];
+
+			// `win` is the PEER's advertised window — the term of
+			// throughput = window/RTT that tcp.c's TCPRX trace watches
+			// from the other direction. `buf` is our side of the same
+			// bargain: how full the receive ring the peer is throttled
+			// by. `zwin` in flags means we have told them to stop.
+			// `rst` is what separates a morgue row that was REFUSED or
+			// reset from one that timed out or ended politely — the
+			// same split dial reports to its caller, readable after
+			// the fact. Comma-joined by hand; "-" when nothing is set.
+			char flags[16];
+			size_t fl = 0;
+			if (r->detached) { flags[fl++] = 'd'; flags[fl++] = 'e'; flags[fl++] = 't'; }
+			if (r->zwin)
+			{
+				if (fl) flags[fl++] = ',';
+				flags[fl++] = 'z'; flags[fl++] = 'w'; flags[fl++] = 'i'; flags[fl++] = 'n';
+			}
+			if (r->rst)
+			{
+				if (fl) flags[fl++] = ',';
+				flags[fl++] = 'r'; flags[fl++] = 's'; flags[fl++] = 't';
+			}
+			if (fl == 0)
+				flags[fl++] = '-';
+			flags[fl] = '\0';
+
+			synth_text_addf(t, "%u %u.%u.%u.%u:%u %s %u %u %u/%u %lu %lu %lu %lu %s\n",
+			                (unsigned)r->local_port,
+			                NET_IPV4_OCTETS(r->peer_ip), (unsigned)r->peer_port,
+			                r->state < (sizeof(kTcpStateNames) / sizeof(kTcpStateNames[0]))
+			                    ? kTcpStateNames[r->state] : "?",
+			                (unsigned)r->mss, (unsigned)r->win,
+			                (unsigned)r->buf_used, (unsigned)TCP_RCV_BUF,
+			                r->rx, r->tx, r->rexmit, r->ooo, flags);
+		}
+	}
+	if (omitted > 0)
+		// The count above is the live list; the rows are the census's.
+		// Connections dialed between the two overflowed the chunks, and
+		// saying so beats a table that looks complete and is not.
+		synth_text_addf(t, "# rows omitted: %u (dialed after the snapshot was sized)\n", omitted);
+
+	while (chunks != NULL)
+	{
+		struct tcp_row_chunk *next = chunks->next;
+		kfree(chunks);
+		chunks = next;
+	}
+}
+
 // net/<card> — one registered NIC: what it is, whether the wire is good, and
 // what has actually moved through it.
 static void sys_gen_net_card(synth_text_t *t, uint32_t index)
@@ -1468,7 +1672,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	else if (sp.type != SYS_NODE_CPUCOUNT && sp.type != SYS_NODE_CPUFILE
 	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_LOGFILE
 	         && sp.type != SYS_NODE_GUIFILE && sp.type != SYS_NODE_NETIP
-	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETCARD
+	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETTCP
+	         && sp.type != SYS_NODE_NETCARD
 	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
 	         && sp.type != SYS_NODE_OPENFILESFILE)
@@ -1500,6 +1705,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_net_ip(&text);
 	else if (sp.type == SYS_NODE_NETDHCP)
 		sys_gen_net_dhcp(&text);
+	else if (sp.type == SYS_NODE_NETTCP)
+		sys_gen_net_tcp(&text);
 	else if (sp.type == SYS_NODE_NETCARD)
 		sys_gen_net_card(&text, sp.net);
 	else if (sp.type == SYS_NODE_CPUCOUNT)
@@ -1757,11 +1964,11 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 
 		case SYS_NODE_NETDIR:
 		{
-			// The machine's two facts first — a reader asking "what are my
+			// The machine's own facts first — a reader asking "what are my
 			// network settings" wants `ip` before a card roster — then one
 			// file per REGISTERED card, in registration order, which is the
 			// order that decides who carries the address.
-			static const char *kSysNetFiles[] = { "ip", "dhcp" };
+			static const char *kSysNetFiles[] = { "ip", "dhcp", "tcp" };
 			const int kNetFileCount = (int)(sizeof(kSysNetFiles) / sizeof(kSysNetFiles[0]));
 			if (h->index < kNetFileCount)
 			{
@@ -1938,6 +2145,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_NETDHCP:
 			strncpy(entry->name, "dhcp", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_NETTCP:
+			strncpy(entry->name, "tcp", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETCARD:
