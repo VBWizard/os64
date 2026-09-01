@@ -1241,6 +1241,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
 	synth_text_addf(t, "out_of_order_dropped: %lu\n", kTcpStats.out_of_order_dropped);
 	synth_text_addf(t, "duplicates_dropped: %lu\n", kTcpStats.duplicates_dropped);
+	synth_text_addf(t, "heap_moves: %lu\n", kTcpStats.heap_moves);
 	synth_text_addf(t, "bad_checksum: %lu\n", kTcpStats.bad_checksum);
 	synth_text_addf(t, "no_connection: %lu\n", kTcpStats.no_connection);
 

@@ -1952,9 +1952,7 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // after it would be inside the memory delta and outside the bracket —
     // counted as the starting state, and the delta blamed on the cycles.
     uint64_t burials_before = kTaskBurialCount;
-    uint64_t reaps_before, dial_fails_before;
-    uint32_t conns_before;
-    tcp_leak_bracket_snapshot(&reaps_before, &dial_fails_before, &conns_before);
+    uint64_t tcp_moves_before = tcp_leak_bracket_snapshot();
 
     uint64_t free_before = 0, free_after = 0;
     allocator_memory_snapshot(&free_before, NULL, NULL);
@@ -1986,36 +1984,24 @@ static teardown_verdict_t teardown_leak_attempt(void)
     allocator_memory_snapshot(&free_after, NULL, NULL);
     uint64_t reclaimed = kTaskVmaReclaimedBytes - reclaimed_before;
 
-    // THE THIRD BRACKET, for the moves the other two cannot see: a TCP
-    // connection's birth and funeral. A conversation's conn is a ~64KB
-    // allocation (the receive ring) whose free runs on the morgue's
-    // 15-second clock, so its two edges land in different windows and
-    // each edge alone reads as a leak — the dial edge as bytes lost, the
-    // reap edge as bytes conjured — with no task burial to census either
-    // time, and the free far too late for the stillness probes to catch
-    // the culprit still allocating. A FAILED dial frees its ring before
-    // it returns, seconds after its row joined the list if it timed out,
-    // so that free can land alone in a window too — which is why the
-    // failure counters are watched here, and why tcp.c ticks every one
-    // of these counters AFTER the free it accounts for. (A dial the port
-    // draw turns away has allocated nothing yet, so it has nothing to
-    // count — tcp_conn_dial draws before it allocates for exactly this
-    // reason.) Both edges move
-    // the list census; a dial and a reap in one window cancel there,
-    // which is what the counters are here to break. (Two corpses reaping
-    // mid-window measured as -67200 bytes/task and convicted
-    // task_destroy of a leak it didn't have; an os64get typed mid-window
-    // read as +214468 the same way.) The three are read as ONE snapshot
-    // under the list lock — tcp.h says why a counter read beside the
-    // lock could compare equal while the census waited out the entomb
-    // whose bytes were already in the delta.
-    uint64_t reaps_after, dial_fails_after;
-    uint32_t conns_after;
-    tcp_leak_bracket_snapshot(&reaps_after, &dial_fails_after, &conns_after);
-    if (reaps_after != reaps_before || dial_fails_after != dial_fails_before ||
-        conns_after != conns_before) {
-        printd(DEBUG_TESTS, "\ttask_teardown_leak: a TCP connection was dialed or reaped "
-                            "inside the window — its buffers are in the delta and are not ours\n");
+    // THE THIRD BRACKET, for the moves the other two cannot see: TCP's
+    // heap. A connection's receive ring is ~64KB allocated at the dial
+    // and freed on the morgue's clock or at a failed dial's return, with
+    // no task burial to census either edge and the free far too late for
+    // the stillness probes to catch the culprit still allocating; each
+    // edge alone reads as a leak — bytes lost at the dial, bytes conjured
+    // at the free. (Two corpses reaping mid-window measured as -67200
+    // bytes/task and convicted task_destroy of a leak it didn't have; an
+    // os64get typed mid-window read as +214468 the same way.) The
+    // bracket asks ONE number: tcp.h's heap_moves, which every TCP
+    // allocation and free ticks under the list lock in the same critical
+    // section as the move, read here under that lock — so it either sees
+    // a move or the move has not happened, and no edge can go uncounted
+    // by construction (the per-edge counters this replaced missed five
+    // in a row).
+    if (tcp_leak_bracket_snapshot() != tcp_moves_before) {
+        printd(DEBUG_TESTS, "\ttask_teardown_leak: TCP moved heap inside the window — "
+                            "a connection's buffers are in the delta and are not ours\n");
         return TL_DIRTY;
     }
 

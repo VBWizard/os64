@@ -117,16 +117,21 @@ typedef enum tcp_state
 // "what just happened" after a dial fails or a fetch ends. A human who ran
 // a command that died gets this long to cat the aftermath.
 //
-// A conversation that ENDED lies in state: its buffers and its port stay
-// its own until the reap, the port because TIME_WAIT's protection is
-// exactly a port held past the last segment. A dial that FAILED is a
-// tombstone (tcp_dial_entomb): the row, and nothing else — buffers freed
-// and port returned the moment dial gave up, because no conversation
-// happened and there is nothing for a held port to protect. Tombstones
-// are CAPPED, oldest evicted: a refused dial returns at once and costs
-// no handle, so a loop of them is the one way to fill the morgue faster
-// than it drains, and a capful of rows says "refused, again" as well
-// as sixty thousand would.
+// A MORGUE ROW OWNS NOTHING. Whatever killed the connection — a dial
+// refused or timed out, a reset after it was established, a close the
+// peer began — the moment it is CLOSED and detached it is a TOMBSTONE:
+// buffers freed, port returned, only the row left (state, peer, rst —
+// all the observer ever read). The port goes because there is nothing
+// for a held port to protect: TIME_WAIT is the protocol's linger, and a
+// reset or passive close never enters it. Tombstones are CAPPED, oldest
+// evicted, because a refused dial returns at once and costs no handle
+// and a peer that accepts-then-resets costs one for a moment, so either
+// can fill the morgue faster than it drains — and a capful of rows says
+// "refused, again" as well as sixty thousand would.
+//
+// TIME_WAIT is stripped the same way but keeps its port: 2×MSL of port
+// protection is what the state IS, and a header-only ACK to a late FIN
+// needs no buffer. (Linux's timewait sock is the same economy.)
 #define TCP_MORGUE_TICKS      (15 * TICKS_PER_SECOND)
 #define TCP_MORGUE_TOMBSTONES 64
 
@@ -174,8 +179,8 @@ typedef struct tcp_conn
 	thread_t* volatile reader;   // parked in tcp_conn_read
 	thread_t* volatile writer;   // parked in tcp_conn_write
 	bool detached;               // handle closed; poll may reap after TIME_WAIT
-	bool tombstone;              // a failed dial's row: buffers freed, port returned,
-	                             // owns nothing the reap must give back (tcp_dial_entomb)
+	bool stripped;               // buffers freed; the row and (in TIME_WAIT) the port remain
+	bool tombstone;              // a morgue row: stripped, port returned, in the capped queue
 
 	uint64_t rx_bytes, tx_bytes, retransmits, out_of_order_dropped;
 
@@ -197,15 +202,21 @@ typedef struct tcp_stats
 	uint64_t connections_refused;   // RST to our SYN — nobody listening
 	uint64_t connect_timeouts;
 	// Funerals: connections unlisted and freed — by the poll's reap, or
-	// by the tombstone cap's eviction.
-	// It answers "is the reaper alive?" while corpses linger in
-	// /sys/net/tcp — and it marks that real kernel heap (a 64KB receive
-	// ring per corpse that had a conversation; a tombstone's went at the
-	// failed dial) was freed with no task burial to account for it, on
-	// the morgue's clock rather than anybody's syscall. Anything
-	// auditing memory across a window (task_teardown_leak brackets on
-	// this) has to be able to see that one landed inside it.
+	// by the tombstone cap's eviction. It answers "is the reaper alive?"
+	// while corpses linger in /sys/net/tcp.
 	uint64_t connections_reaped;
+	// THE HEAP INVARIANT, in one number. Every TCP heap allocation and
+	// free happens under kTcpListLock, through tcp_heap_alloc_locked /
+	// tcp_heap_free_locked, and each ticks this once in the same critical
+	// section. So a reader that takes the list lock sees either a move
+	// and its tick or neither — never bytes that moved without a tick —
+	// and task_teardown_leak's bracket, which must know whether TCP
+	// moved memory inside its window with no task burial to account for
+	// it, asks this one number instead of a counter per edge. Five
+	// review rounds of finding one more uncounted edge (a reap, an
+	// eviction, an entomb, a port-exhausted dial, an unpublished
+	// allocation) are why it is one number and one door (Codex, PR #46).
+	uint64_t heap_moves;
 	uint64_t segments_in, segments_out, retransmits;
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)
@@ -264,14 +275,9 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 // processSignals beside dhcp_poll.
 void tcp_poll(void);
 
-// task_teardown_leak's bracket, as ONE reading under kTcpListLock: the
-// funerals, the failed dials, and the listed count. Every counter here
-// moves under that lock, after the free it accounts for, so a snapshot
-// taken under it either sees a free's counter or was taken before the
-// free — never the free without the tick (Codex, PR #46: read unlocked,
-// the counter could compare equal while the census waited out the very
-// entomb whose bytes were already in the delta).
-void tcp_leak_bracket_snapshot(uint64_t* reaps, uint64_t* dial_fails, uint32_t* listed);
+// task_teardown_leak's bracket: heap_moves, read under kTcpListLock (the
+// invariant its comment states is what makes one locked read exact).
+uint64_t tcp_leak_bracket_snapshot(void);
 
 // Level-triggered wake sweep, beside udp_conn_wake_if_ready.
 void tcp_wake_if_ready(void);

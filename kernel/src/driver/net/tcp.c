@@ -332,12 +332,37 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	// the ISS carries the tick it was minted on — so a stale answer
 	// acknowledges a number this connection never sent, and is dropped
 	// (Codex, PR #46).
+	//
+	// Once SYNCHRONIZED the same stranger is judged by RFC 5961 (2010,
+	// the blind-reset fix): an RST is honored only at exactly the next
+	// sequence number we expect; one merely inside our window earns a
+	// "challenge" ACK that tells the real peer where we are and would
+	// draw a genuine RST back; anything else is dropped. A SYN in a
+	// synchronized state is challenged the same way, never obeyed — a
+	// stale SYN+ACK is precisely that — and an ACK for bytes we have not
+	// sent is answered and dropped (RFC 793 §3.9). Guarding SYN_SENT
+	// alone protected the replacement only until it established; the
+	// stragglers do not know the handshake is over.
+	bool synchronized = (c->state == TCP_ESTABLISHED || c->state == TCP_FIN_WAIT_1 ||
+	                     c->state == TCP_FIN_WAIT_2 || c->state == TCP_CLOSE_WAIT ||
+	                     c->state == TCP_CLOSING || c->state == TCP_LAST_ACK ||
+	                     c->state == TCP_TIME_WAIT);
 	if (flags & TCP_RST)
 	{
 		if (c->state == TCP_SYN_SENT && (!(flags & TCP_ACK) || ack != c->snd_nxt))
 		{
 			printd(DEBUG_NET, "tcp: RST for a SYN this connection did not send (ack 0x%x, ours 0x%x) — dropped\n",
 			       ack, c->snd_nxt);
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return;
+		}
+		if (synchronized && seq != c->rcv_nxt)
+		{
+			bool in_window = seq_geq(seq, c->rcv_nxt) && seq_lt(seq, c->rcv_nxt + tcp_window(c));
+			printd(DEBUG_NET, "tcp: RST at seq 0x%x, expected 0x%x — %s\n",
+			       seq, c->rcv_nxt, in_window ? "challenged" : "dropped");
+			if (in_window)
+				tcp_ack(c);
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return;
 		}
@@ -349,6 +374,23 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		// reaper's to free, and nothing here may read it again.
 		printd(DEBUG_NET, "tcp: connection to %u.%u.%u.%u:%u reset by some jerk :-P\n",
 		       NET_IPV4_OCTETS(c->peer_ip), c->peer_port);
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		return;
+	}
+
+	if (synchronized && (flags & TCP_SYN))
+	{
+		printd(DEBUG_NET, "tcp: SYN in a synchronized state from %u.%u.%u.%u:%u — challenged\n",
+		       NET_IPV4_OCTETS(c->peer_ip), c->peer_port);
+		tcp_ack(c);
+		spinlock_release_irqrestore(&c->lock, irqflags);
+		return;
+	}
+	if (synchronized && (flags & TCP_ACK) && seq_gt(ack, c->snd_nxt))
+	{
+		printd(DEBUG_NET, "tcp: ACK 0x%x for bytes we have not sent (snd_nxt 0x%x) — dropped\n",
+		       ack, c->snd_nxt);
+		tcp_ack(c);
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		return;
 	}
@@ -614,70 +656,95 @@ static void tcp_tomb_remove_locked(tcp_conn_t* c)
 	s_tomb_count--;
 }
 
-// A failed dial's connection becomes a TOMBSTONE: listed for the morgue,
-// owning nothing. The buffers go now (65KB a corpse, and a refused dial
-// costs the caller no handle — so nothing but memory bounded a loop of
-// them), and so does the port: TIME_WAIT holds a port to keep a dead
-// conversation's stragglers away from its successor, and a dial that never
-// completed had no conversation. What survives is the row — state, peer,
-// rst — which is all the observer ever read. (tcp.h § the morgue.)
-//
-// Under both locks, list then conn — tcp_poll's order. Once `tombstone` is
-// set nothing touches the buffers: the demux skips the row, tcp_poll's
-// retransmit excludes CLOSED, and a segment already past the demux finds
-// CLOSED under the conn lock and answers RST without them.
-//
-// The cap: past TCP_MORGUE_TOMBSTONES the queue's head — the oldest — is
-// evicted. THE EVICTED CONN'S LOCK IS DRAINED BEFORE THE FREE: a receiver
-// that found it in the demux before it was a tombstone pinned it by
-// taking its lock under the list lock, so it holds that lock now or never
-// will; acquiring and releasing it here, with the list lock held, waits
-// out the one holder that can exist. The head is never `c` — `c` was just
-// pushed at the tail, and a queue of one is under the cap.
-//
-// THE COUNTERS MOVE LAST, after every free, and the frees stay under the
-// list lock so that order is one critical section: connections_refused,
-// connect_timeouts and connections_reaped are what task_teardown_leak's
-// bracket reads to learn that TCP moved memory inside its window, and a
-// counter that ticks before its free is a free the bracket cannot see —
-// sampled as the baseline while the bytes land in the delta (Codex, PR
-// #46). The failure counters are entomb's for the same reason: the free
-// they must follow happens here.
-static void tcp_dial_entomb(tcp_conn_t* c)
+// ── The heap invariant (tcp.h heap_moves) ──────────────────────────────────
+// TCP's heap moves ONLY through these two, ONLY under kTcpListLock, and
+// each move ticks heap_moves in the same critical section. The tripwire
+// is the lock word itself: a caller that does not hold it is the next
+// uncounted edge, and it panics by name instead of waiting for a review
+// to find it. (The allocator never returns NULL — exhaustion panics —
+// so there is no failure path to handle.)
+static void* tcp_heap_alloc_locked(size_t bytes)
 {
-	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
-	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
-	uint8_t* rcv = c->rcv_buf;
-	uint8_t* snd = c->snd_buf;
-	bool refused = c->reset;
+	if (kTcpListLock == 0)
+		panic("tcp: heap allocation outside kTcpListLock\n");
+	kTcpStats.heap_moves++;
+	return kmalloc(bytes);
+}
+
+static void tcp_heap_free_locked(void* p)
+{
+	if (kTcpListLock == 0)
+		panic("tcp: heap free outside kTcpListLock\n");
+	kfree(p);
+	kTcpStats.heap_moves++;
+}
+
+// ── Stripping, entombing, evicting (tcp.h § the morgue) ────────────────────
+// All three run under the list lock; strip and entomb also under c->lock.
+// Once `stripped` is set nothing touches the buffers: the demux skips a
+// tombstone outright, the retransmit excludes CLOSED and TIME_WAIT, the
+// receive path never stores in TIME_WAIT, and a segment already past the
+// demux finds the state under the conn lock and answers with headers only.
+static void tcp_conn_strip_locked(tcp_conn_t* c)
+{
+	tcp_heap_free_locked(c->rcv_buf);
+	tcp_heap_free_locked(c->snd_buf);
 	c->rcv_buf = NULL;
 	c->snd_buf = NULL;
 	c->rcv_count = 0;
 	c->snd_len = 0;
-	c->state = TCP_CLOSED;
-	c->detached = true;   // the poll morgues it (briefly readable), then reaps
-	c->tombstone = true;
-	tcp_port_release_locked(c->local_port);
-	spinlock_release_irqrestore(&c->lock, irqflags);
+	c->stripped = true;
+}
 
+// CLOSED and detached: strip, give the port back, join the morgue queue,
+// start the morgue clock.
+static void tcp_conn_entomb_locked(tcp_conn_t* c, uint64_t now)
+{
+	tcp_conn_strip_locked(c);
+	tcp_port_release_locked(c->local_port);
+	c->tombstone = true;
+	c->closed_at = now;
 	tcp_tomb_push_locked(c);
-	tcp_conn_t* evicted = NULL;
-	if (s_tomb_count > TCP_MORGUE_TOMBSTONES)
+}
+
+// The cap: past TCP_MORGUE_TOMBSTONES the queue's head — the oldest — is
+// evicted. Caller holds the list lock and NO conn lock, because THE
+// EVICTED CONN'S LOCK IS DRAINED BEFORE THE FREE: a receiver that found
+// it in the demux before it was a tombstone pinned it by taking its lock
+// under the list lock, so it holds that lock now or never will, and
+// acquiring and releasing it here, with the list lock held, waits out the
+// one holder that can exist. Never called from inside a list walk — an
+// eviction unlinks an arbitrary node, and a walker's cursor may be
+// pointing through it.
+static void tcp_tomb_evict_over_cap_locked(void)
+{
+	while (s_tomb_count > TCP_MORGUE_TOMBSTONES)
 	{
-		evicted = s_tomb_head;
+		tcp_conn_t* evicted = s_tomb_head;
 		tcp_tomb_remove_locked(evicted);
 		tcp_list_unlink_locked(evicted);
 		spinlock_acquire(&evicted->lock);
 		spinlock_release(&evicted->lock);
-	}
-
-	kfree(rcv);
-	kfree(snd);
-	if (evicted != NULL)
-	{
-		kfree(evicted);
+		tcp_heap_free_locked(evicted);
 		kTcpStats.connections_reaped++;
 	}
+}
+
+// A failed dial: the dialing thread entombs its own attempt at once
+// rather than leaving it for the poll's next sweep — a refused dial
+// returns in a millisecond and costs the caller no handle, so a loop of
+// them is bounded by nothing else. The failure counters live here because
+// dial is the only place that knows which failure it was.
+static void tcp_dial_entomb(tcp_conn_t* c)
+{
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+	bool refused = c->reset;
+	c->state = TCP_CLOSED;
+	c->detached = true;
+	tcp_conn_entomb_locked(c, kTicksSinceStart);
+	spinlock_release_irqrestore(&c->lock, irqflags);
+	tcp_tomb_evict_over_cap_locked();
 	if (refused)
 		kTcpStats.connections_refused++;
 	else
@@ -685,16 +752,12 @@ static void tcp_dial_entomb(tcp_conn_t* c)
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 }
 
-void tcp_leak_bracket_snapshot(uint64_t* reaps, uint64_t* dial_fails, uint32_t* listed)
+uint64_t tcp_leak_bracket_snapshot(void)
 {
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
-	*reaps = kTcpStats.connections_reaped;
-	*dial_fails = kTcpStats.connections_refused + kTcpStats.connect_timeouts;
-	uint32_t n = 0;
-	for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
-		n++;
-	*listed = n;
+	uint64_t moves = kTcpStats.heap_moves;
 	spinlock_release_irqrestore(&kTcpListLock, lf);
+	return moves;
 }
 
 // ── 4. THE CLOCK ────────────────────────────────────────────────────────────
@@ -780,15 +843,22 @@ void tcp_poll(void)
 		// used to vanish from /sys/net/tcp on the very next pass, so the
 		// aftermath of a failure was unreadable the moment it mattered
 		// (Chris, on VBox, racing cat against the reaper to glimpse
-		// SYN_SENT). The clock starts when THIS sweep first finds the
-		// conn both closed and detached, wherever those were set.
+		// SYN_SENT). Either linger is held as a ROW: the first sweep to
+		// find a conn in TIME_WAIT strips its buffers, and the first to
+		// find one CLOSED and detached entombs it — buffers, port, the
+		// morgue clock starts (tcp.h § the morgue). A dial that failed
+		// entombed itself before this sweep could.
 		bool reap = false;
-		if (c->state == TCP_TIME_WAIT && now >= c->time_wait_until)
-			reap = c->detached;
+		if (c->state == TCP_TIME_WAIT && c->detached)
+		{
+			if (!c->stripped)
+				tcp_conn_strip_locked(c);
+			reap = now >= c->time_wait_until;
+		}
 		else if (c->state == TCP_CLOSED && c->detached)
 		{
-			if (c->closed_at == 0)
-				c->closed_at = now;
+			if (!c->tombstone)
+				tcp_conn_entomb_locked(c, now);
 			reap = (now >= c->closed_at + TCP_MORGUE_TICKS);
 		}
 
@@ -797,31 +867,25 @@ void tcp_poll(void)
 		if (reap)
 		{
 			// The unlink leaves *pp naming c's successor, which is what
-			// the loop reads next. A tombstone gave its port and buffers
-			// back when its dial failed (tcp_dial_entomb); reaping it is
-			// unlisting it, here and from the cap's queue.
+			// the loop reads next. Buffers went at the strip; a tombstone
+			// gave its port back then too, TIME_WAIT gives it back now.
 			tcp_list_unlink_locked(c);
 			if (c->tombstone)
 				tcp_tomb_remove_locked(c);
 			else
-			{
 				tcp_port_release_locked(c->local_port);
-				kfree(c->rcv_buf);
-				kfree(c->snd_buf);
-			}
 			printd(DEBUG_NET, "tcp: reaped %u.%u.%u.%u:%u (local port %u %s)\n",
 			       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->local_port,
 			       c->tombstone ? "was already free" : "free");
-			kfree(c);
-			// After the last free, never before: the counter is how the
-			// leak test's bracket learns this funeral happened inside
-			// its window, and a tick that precedes the free lets the
-			// bytes land past the baseline (tcp_dial_entomb says why).
+			tcp_heap_free_locked(c);
 			kTcpStats.connections_reaped++;
 			continue;
 		}
 		pp = &c->next;
 	}
+	// After the walk, never inside it: an eviction unlinks whichever
+	// tombstone is oldest, and the walk's cursor may point through it.
+	tcp_tomb_evict_over_cap_locked();
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 }
 
@@ -869,23 +933,20 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// unless the handshake itself says otherwise (reset/timeout at the end).
 	if (why) *why = OS64_NET_ERR_NO_RESOURCES;
 
-	// THE PORT IS DRAWN BEFORE A BYTE IS ALLOCATED. The draw is the
-	// reservation: the bit is claimed under the list lock, so two tasks
-	// dialing at once cannot open two connections on one local port (the
-	// demux would hand one stream's segments to whichever matched first),
-	// and a dial that finds the range full leaves with nothing to free.
-	// That last part is what task_teardown_leak's bracket depends on — it
-	// counts what a failed dial frees through the failure counters, and a
-	// port-exhausted exit is neither refused nor timed out (Codex, PR
-	// #46). Between the draw and the publication below the port is held
-	// by its bit alone; a segment for it in that gap finds nobody home
-	// and is answered RST, which is right — we have sent nothing yet.
+	// THE DRAW, THE ALLOCATION AND THE PUBLICATION ARE ONE CRITICAL
+	// SECTION. The draw first, so a dial that finds the range full leaves
+	// having allocated nothing; then the buffers, under the same lock,
+	// because TCP's heap moves only under it (tcp.h heap_moves — an
+	// allocation made outside it and published later was a 65KB gap no
+	// bracket could see); then the row. Two tasks dialing at once cannot
+	// open two connections on one local port, because the bit is claimed
+	// in the same section the row is published in.
 	//
-	// The bitmap holds the port of every listed connection that had a
-	// conversation, TIME_WAIT and morgue residents included, which is the
-	// port protection TIME_WAIT exists to give. A failed dial's tombstone
-	// is the exception — it gave its port back when the dial returned
-	// (tcp_dial_entomb), having had nothing to protect.
+	// The bitmap holds the port of every listed connection that is not a
+	// tombstone — the live ones, and TIME_WAIT, which is the port
+	// protection that state exists to give. A tombstone gave its port
+	// back when it was entombed, having nothing left to protect (tcp.h §
+	// the morgue).
 	//
 	// The search is BOUNDED to one pass over the dynamic range at one bit
 	// test per candidate, and an exhausted range is a clean NO_RESOURCES —
@@ -913,16 +974,15 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 		found = true;
 		break;
 	}
-	spinlock_release_irqrestore(&kTcpListLock, lf);
 	if (!found)
+	{
+		spinlock_release_irqrestore(&kTcpListLock, lf);
 		return NULL;         // *why already answers NO_RESOURCES, the honest verdict
+	}
 
-	// None of these can be NULL: allocator exhaustion is a panic by name
-	// (allocator.c), so a "no memory" branch here would be the fallback
-	// that never fires.
-	tcp_conn_t* c = kmalloc(sizeof(*c));
-	c->rcv_buf = kmalloc(TCP_RCV_BUF);
-	c->snd_buf = kmalloc(TCP_MSS);
+	tcp_conn_t* c = tcp_heap_alloc_locked(sizeof(*c));
+	c->rcv_buf = tcp_heap_alloc_locked(TCP_RCV_BUF);
+	c->snd_buf = tcp_heap_alloc_locked(TCP_MSS);
 	c->dev = dev;
 	c->peer_ip = peer_ip;
 	c->peer_port = peer_port;
@@ -935,7 +995,6 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->snd_nxt = iss;
 	c->state = TCP_SYN_SENT;
 
-	lf = spinlock_acquire_irqsave(&kTcpListLock);
 	c->next = kTcpConnList;
 	c->prev = NULL;
 	if (kTcpConnList != NULL)
