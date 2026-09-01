@@ -1323,7 +1323,7 @@ static bool test_shared_object_reload(void)
 // assumed.
 #define MU_FAIL(...) do { \
         printd(DEBUG_TESTS, "\tFAIL: test_mount_unmount - " __VA_ARGS__); \
-        return false; \
+        goto mu_cleanup; \
     } while (0)
 static bool test_mount_unmount(void)
 {
@@ -1379,6 +1379,15 @@ static bool test_mount_unmount(void)
         return true;
     }
 
+    // Cleanup owns these after their first successful acquisition. A failed
+    // assertion must release the artificial holder before it can put the
+    // victim mount back.
+    vfs_file_t *held = NULL;
+    vfs_directory_t *held_dir = NULL;
+    bool held_open = false;
+    bool held_dir_open = false;
+    bool held_dir_counted = false;
+
     // 1. BUSY. A held file on the victim must hold the mount down.
     char probe_path[VFS_MOUNT_PREFIX_MAX + 16];
     sprintf(probe_path, "%s/mu_probe", victim_prefix);
@@ -1386,31 +1395,34 @@ static bool test_mount_unmount(void)
     vfs_filesystem_t *fs = vfs_resolve_mount(probe_path, &tail);
     if (fs != victim)
         MU_FAIL("%s did not route to the victim filesystem\n", probe_path);
-    vfs_file_t *held = NULL;
-    bool held_open = (victim->fops->open != NULL &&
-                      victim->fops->open(&held, "/", "r", victim) == 0 && held != NULL);
+    held_open = (victim->fops->open != NULL &&
+                 victim->fops->open(&held, "/", "r", victim) == 0 && held != NULL);
     // Not every fs opens its root as a FILE; a directory hold proves the same
     // arithmetic through the other counter.
-    vfs_directory_t *held_dir = NULL;
     if (!held_open) {
         if (victim->dops->open == NULL ||
             victim->dops->open(&held_dir, "/", victim) != 0 || held_dir == NULL)
             MU_FAIL("could not hold anything open on %s\n", victim_prefix);
+        held_dir_open = true;
         __sync_fetch_and_add(&victim->open_dir_count, 1);   // the syscall door's half, done by hand
+        held_dir_counted = true;
     }
     int r = vfs_unmount(victim_prefix);
-    if (r != OS64_UNMOUNT_BUSY) {
-        if (held_open) victim->fops->close(held);
+    if (r != OS64_UNMOUNT_BUSY)
         MU_FAIL("unmount of %s with a holder answered %d, expected BUSY (%d)\n",
                 victim_prefix, r, OS64_UNMOUNT_BUSY);
-    }
 
     // 2. RELEASE AND UNMOUNT. The name must leave the namespace.
-    if (held_open)
+    if (held_open) {
         victim->fops->close(held);
-    else {
+        held = NULL;
+        held_open = false;
+    } else {
         __sync_fetch_and_sub(&victim->open_dir_count, 1);
+        held_dir_counted = false;
         victim->dops->close(held_dir);
+        held_dir = NULL;
+        held_dir_open = false;
     }
     r = vfs_unmount(victim_prefix);
     if (r != OS64_MOUNT_OK)
@@ -1537,6 +1549,48 @@ static bool test_mount_unmount(void)
                         "exact identifiers, a nested mount pinning its parent, restored %s)\n",
            victim_prefix, scratch, victim_ro ? "ro" : "rw");
     return true;
+
+mu_cleanup:
+    if (held_open && held != NULL)
+        victim->fops->close(held);
+    if (held_dir_open && held_dir != NULL) {
+        if (held_dir_counted)
+            __sync_fetch_and_sub(&victim->open_dir_count, 1);
+        victim->dops->close(held_dir);
+    }
+
+    // Find the victim by the identity captured before its first unmount. It
+    // may be absent or may occupy scratch, nested, or label-derived storage;
+    // remove that temporary claim before restoring the boot-time prefix.
+    char current_prefix[VFS_MOUNT_PREFIX_MAX] = "";
+    for (int i = 0; i < kMountCount; i++) {
+        char g[40];
+        if (kMountTable[i].fs == NULL)
+            continue;
+        vfs_format_guid(kMountTable[i].part_guid, g);
+        if (strcmp(g, victim_guid) == 0) {
+            strcpy(current_prefix, kMountTable[i].prefix);
+            break;
+        }
+    }
+
+    bool at_original = strcmp(current_prefix, victim_prefix) == 0;
+    if (current_prefix[0] != '\0' && !at_original) {
+        int cleanup_r = vfs_unmount(current_prefix);
+        if (cleanup_r != OS64_MOUNT_OK)
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_unmount cleanup could not unmount %s (%d)\n",
+                   current_prefix, cleanup_r);
+        else
+            current_prefix[0] = '\0';
+    }
+    if (!at_original && current_prefix[0] == '\0') {
+        int cleanup_r = vfs_mount_explicit(victim_guid, victim_prefix,
+                                           victim_ro ? OS64_MOUNT_RO : 0);
+        if (cleanup_r != OS64_MOUNT_OK)
+            printd(DEBUG_TESTS, "\tFAIL: test_mount_unmount cleanup could not restore %s (%d)\n",
+                   victim_prefix, cleanup_r);
+    }
+    return false;
 }
 #undef MU_FAIL
 
