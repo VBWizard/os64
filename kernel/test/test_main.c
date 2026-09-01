@@ -1423,11 +1423,66 @@ static bool test_mount_unmount(void)
     if (fs->dops->stat == NULL || fs->dops->stat("/", &entry, fs) != 0)
         MU_FAIL("stat of the remounted root failed\n");
 
+    // 3a. AND THE OPEN ITSELF MUST REFUSE. Taking the write verbs away is
+    // only half of read-only: a creating open writes before any of those
+    // verbs is reached (FAT's does it inside f_open), so the mount would
+    // have been one `>` away from the stray-write tripwire's panic. Both
+    // drivers answer this from fs->read_only, so this leg holds for either.
+    vfs_file_t *pen = NULL;
+    if (fs->fops->open != NULL &&
+        fs->fops->open(&pen, "/mu_pen", "w", fs) == 0)
+    {
+        if (fs->fops->close != NULL)
+            fs->fops->close(pen);
+        MU_FAIL("a read-only mount opened /mu_pen for writing\n");
+    }
+
     r = vfs_unmount(scratch);
     if (r != OS64_MOUNT_OK)
         MU_FAIL("unmount of %s answered %d\n", scratch, r);
 
-    // 3b. NO WHERE: the verb derives the label default — `mount fat` and a
+    // 3b. AN IDENTIFIER IS EXACT. A valid GUID with anything appended names
+    // no partition — a bounded compare answered "yes" to that, so malformed
+    // administrative input acted on a real disk.
+    char guid_plus[48];
+    sprintf(guid_plus, "%sjunk", victim_guid);
+    r = vfs_mount_explicit(guid_plus, scratch, 0);
+    if (r != OS64_MOUNT_NOT_FOUND) {
+        if (r == OS64_MOUNT_OK)
+            vfs_unmount(scratch);
+        MU_FAIL("'%s' answered %d, expected NOT_FOUND (%d)\n",
+                guid_plus, r, OS64_MOUNT_NOT_FOUND);
+    }
+
+    // 3c. A MOUNT UNDER A DIRECTORY PINS THAT DIRECTORY. /bin is an ordinary
+    // directory to unlink and rename, and removing it while something is
+    // mounted beneath leaves a live filesystem whose point has no parent —
+    // vfs_mount_under is what those two verbs ask. Three answers, because
+    // the wrong string compare gets one of them wrong: the parent yes, a
+    // partial path component no, the mount point itself no.
+    if (kRootFilesystem->dops != NULL && kRootFilesystem->dops->stat != NULL &&
+        kRootFilesystem->dops->stat("/bin", &entry, kRootFilesystem) == 0 &&
+        (entry.flags & OS64_DE_DIR))
+    {
+        static const char *nested = "/bin/mu_mount";
+        r = vfs_mount_explicit(victim_guid, nested, OS64_MOUNT_RO);
+        if (r != OS64_MOUNT_OK)
+            MU_FAIL("nested mount at %s answered %d\n", nested, r);
+        bool under_parent = vfs_mount_under("/bin");
+        bool under_partial = vfs_mount_under("/bi");
+        bool under_self = vfs_mount_under(nested);
+        r = vfs_unmount(nested);
+        if (!under_parent)
+            MU_FAIL("/bin holds a mount and vfs_mount_under said otherwise\n");
+        if (under_partial)
+            MU_FAIL("vfs_mount_under matched /bi, which is not a path component\n");
+        if (under_self)
+            MU_FAIL("vfs_mount_under counted %s as being under itself\n", nested);
+        if (r != OS64_MOUNT_OK)
+            MU_FAIL("unmount of nested %s answered %d\n", nested, r);
+    }
+
+    // 3d. NO WHERE: the verb derives the label default — `mount fat` and a
     // one-token mounts.conf line are the same ask. The landing prefix is
     // found by GUID, because the fixture deliberately does not re-implement
     // the derivation it is testing.
@@ -1458,7 +1513,8 @@ static bool test_mount_unmount(void)
         MU_FAIL("restoring %s at %s answered %d\n", victim_guid, victim_prefix, r);
 
     printd(DEBUG_TESTS, "\tPASS: test_mount_unmount (%s: busy while held, unmounted idle, "
-                        "remounted ro by GUID at %s, restored %s)\n",
+                        "remounted ro by GUID at %s with its open refusing a pen, "
+                        "exact identifiers, a nested mount pinning its parent, restored %s)\n",
            victim_prefix, scratch, victim_ro ? "ro" : "rw");
     return true;
 }

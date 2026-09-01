@@ -14,7 +14,14 @@
 #define LSOF_MAX_TASKS 512
 #define LSOF_MAX_PATHS 64
 #define LSOF_PATH_MAX 512
-#define LSOF_HANDLES_CAP 16384
+// Sized for what the PRODUCERS can emit, not for what a quiet machine shows.
+// os64_slurp allocates its cap up front and answers TOO_BIG rather than
+// truncating, so a cap under the producer's ceiling is a report that fails
+// instead of a report that lies — but it still fails. A handle row carries a
+// mount prefix and a path, and both are ESCAPED data columns that can
+// quadruple (a filename may hold any byte), so a task's full handle table is
+// worth ~19KB in the limit even though a real one is a few hundred bytes.
+#define LSOF_HANDLES_CAP 32768
 #define LSOF_OPENFILES_CAP 65536
 
 typedef struct {
@@ -217,9 +224,14 @@ static void claims_free(lsof_claims_t *claims)
 }
 
 // Parse "handle<TAB>type[<TAB>detail[<TAB>ident]]" in place. A FILE's
-// identity is its final field; taking it from the right leaves tabs inside a
-// pathname intact. Unknown future type words remain printable because the
-// kernel's text file, not this utility, owns that vocabulary.
+// identity is its final field, taken from the right. Unknown future type
+// words remain printable because the kernel's text file, not this utility,
+// owns that vocabulary.
+//
+// The path column arrives ESCAPED (procfs.c, the same transform /sys uses)
+// because a filename may hold the very delimiters this report is built from.
+// Decode it AFTER the splits and never before — a decode puts real tabs and
+// newlines back, and the fields above still have to be found.
 static bool parse_handle(char *line, uint64_t *number,
                          char **type, char **detail,
                          uint64_t *ident, bool *hasIdent)
@@ -264,6 +276,8 @@ static bool parse_handle(char *line, uint64_t *number,
         *lastTab = '\0';
         *hasIdent = true;
     }
+    if (*detail != NULL)
+        os64_unescape_field(*detail);
     return **type != '\0' && os64_parse_u64(line, number);
 }
 

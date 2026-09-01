@@ -857,8 +857,15 @@ static void sys_gen_openfiles(synth_text_t *t)
 		synth_text_escape(rows[i].mount, emount, sizeof(emount));
 		synth_text_escape(rows[i].tail, etail, sizeof(etail));
 		synth_text_escape(m, ecolumn, sizeof(ecolumn));
-		synth_text_addf(t, "%s%s %s %lu %d\n",
-		                emount, etail, ecolumn, rows[i].ident, rows[i].handles);
+		// Several calls, not one, and each escaped field ALONE in its call:
+		// a fully-escaped path can fill synth_text_addf's per-call line
+		// buffer by itself (synthfs.c says so), and a row that overflows it
+		// is TRUNCATED — half a field, which a column reader rejects whole.
+		// Even the separator rides on the next call, so nothing here depends
+		// on a field being a few bytes under the cap.
+		synth_text_addf(t, "%s", emount);
+		synth_text_addf(t, "%s", etail);
+		synth_text_addf(t, " %s %lu %d\n", ecolumn, rows[i].ident, rows[i].handles);
 	}
 	if (total > shown)
 		// The SHAPE is load-bearing: lsof recognizes a cut listing by a '#'

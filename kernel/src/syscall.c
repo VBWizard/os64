@@ -2927,6 +2927,20 @@ static uint64_t syscall_unlink(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;
 	}
 
+	// ...and refuse to delete a mount point's ANCESTOR. `/mnt` is an
+	// ordinary empty directory to this syscall, and removing it while
+	// /mnt/usb is mounted leaves a live filesystem whose point has no parent
+	// — routing still finds it, every listing loses it. Ordered against a
+	// concurrent mount by the path gate: this syscall holds a reader ticket
+	// for its whole span, and mount closes the gate for its whole span.
+	if (vfs_mount_under(p->path))
+	{
+		printd(DEBUG_SYSCALL, "unlink: task %s: '%s' holds a mount — unmount that first\n",
+		       task->exename, p->path);
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
 	p->result = -1;
 	call_in_kernel_context(unlink_do, p);
 
@@ -3122,6 +3136,18 @@ static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	    p->new_tail == NULL || p->new_tail[0] == '\0' ||
 	    (p->new_tail[0] == '/' && p->new_tail[1] == '\0'))
 	{
+		kfree(p);
+		return SYSCALL_RESULT_INVALID;
+	}
+
+	// And a mount point's ANCESTOR as either end, for the reason
+	// syscall_unlink gives: moving `/mnt` out from under a live /mnt/usb
+	// orphans it as surely as deleting it does, and the destination end
+	// matters too — an atomic replace lands ON the old name.
+	if (vfs_mount_under(p->oldpath) || vfs_mount_under(p->newpath))
+	{
+		printd(DEBUG_SYSCALL, "rename: task %s: '%s' -> '%s' would move a mount's parent — unmount first\n",
+		       task->exename, p->oldpath, p->newpath);
 		kfree(p);
 		return SYSCALL_RESULT_INVALID;
 	}

@@ -19,6 +19,12 @@
 #include "scheduler.h"       // kTaskList + NO_TASK, the spine that walk follows
 #include "os64/mount.h"      // the mount/unmount result vocabulary (shared with ring 3)
 
+// The registry's owned path copy has to hold whatever a path syscall can
+// carry. The two constants live in headers that cannot see each other; this
+// is the one place that sees both.
+_Static_assert(VFS_REG_PATH_MAX >= TASK_MAX_PATH_LEN,
+               "VFS_REG_PATH_MAX must not be shorter than TASK_MAX_PATH_LEN");
+
 // FatFs's volume numbers, handed out and GIVEN BACK. A FAT mount is "1:",
 // "2:" … to FatFs, and that number is the only thread disk_read has back to
 // its block device (fat_glue's drive_label / pdrv), so two live mounts must
@@ -531,6 +537,12 @@ void vfs_format_guid(const uint8_t *guid, char *out)
 	        guid[10], guid[11], guid[12], guid[13], guid[14], guid[15]);
 }
 
+// Does `rootPartUUID` name this partition? The dashed spelling is a FIXED 36
+// characters, and the answer is exact equality — nothing else. It used to be
+// "does the GUID appear at the start", which made `<valid-guid>junk` name a
+// real partition: malformed administrative input acting on a disk instead of
+// being refused. Returns the caller's own pointer on a match (its callers
+// test for NULL) — a match has nothing else to hand back.
 char* compare_part_uuids(const char* rootPartUUID, const char* currPartUUID)
 {
 	char* result = 0;
@@ -538,18 +550,14 @@ char* compare_part_uuids(const char* rootPartUUID, const char* currPartUUID)
 	char* currPartStr=kmalloc(40);
 	vfs_format_guid((const uint8_t *)currPartUUID, currPartStr);
 
-	//Compare the formatted currPartUUID to the part UUID passed to be the root
-	result = strnstr(rootPartUUID, currPartStr,36);
+	if (strlen(rootPartUUID) == 36 && strncmp(rootPartUUID, currPartStr, 36) == 0)
+		result = (char*)rootPartUUID;
 
 	printd(DEBUG_BOOT | DEBUG_DETAILED, "\tBOOT: Compared rootPartUUID=%s with partition %s, result=%p\n", rootPartUUID, currPartStr, result);
 
     kfree(currPartStr);
 
-    if (result == rootPartUUID)
-    {
-        return result;
-    }
-	return NULL;
+	return result;
 }
 
 // Is this partition's GUID already backing a mount? (Dedupe: RAMDisk boots
@@ -639,6 +647,35 @@ static bool vfs_prefix_in_use(const char *prefix)
 	return false;
 }
 
+// Does a live mount sit UNDER this path? (Contract in vfs.h.) The same scan
+// unmount runs against the victim it is about to strike, asked here on behalf
+// of unlink and rename — because a mount point's parent is an ordinary
+// directory on an ordinary filesystem, and nothing about removing it consults
+// the namespace. The mount would keep routing (longest-prefix matching is
+// pure string work) while its point had no parent to be listed in: the child
+// vanishes from every listing and `ls` is asked to invent the directory the
+// mount verb refused to invent. Take the table lock: unlike unmount's copy of
+// this scan, the caller here does not hold the namespace against mutations.
+bool vfs_mount_under(const char *path)
+{
+	if (path == NULL || path[0] != '/' || path[1] == '\0')
+		return false;   // "/" is not removable through any door, and everything is under it
+
+	size_t len = strlen(path);
+	bool found = false;
+	spinlock_acquire(&kMountTableLock);
+	for (int i = 0; i < kMountCount; i++)
+		if (kMountTable[i].fs != NULL &&
+		    strncmp(kMountTable[i].prefix, path, len) == 0 &&
+		    kMountTable[i].prefix[len] == '/')
+		{
+			found = true;
+			break;
+		}
+	spinlock_release(&kMountTableLock);
+	return found;
+}
+
 // The stray-write tripwire's oracle (contract in vfs.h): is the partition at
 // (dev, partNo) backed by a mount that installed a write path? The per-mount
 // fops COPY is deliberately the thing consulted — kRegisterFilesystem clones
@@ -685,7 +722,9 @@ void vfs_demote_mount_readonly(vfs_filesystem_t *fs)
 		return;
 
 	// Publish the state FIRST. A callback retained before its slot is cleared
-	// must see the demotion when it reaches its filesystem's write lock.
+	// must see the demotion when it reaches its filesystem's write lock —
+	// and an OPEN that creates must see it too, since no slot can be taken
+	// away to stop that one (ext2_open_rw and fat_open both read this flag).
 	fs->read_only = true;
 	if (fs->fops != NULL)
 	{
@@ -755,6 +794,10 @@ static bool vfs_ops_for_part(block_device_info_t *devinfo, partEntry_t *part,
 			// FAT has one pair, so read-only is that pair minus its pens —
 			// the same slots vfs_demote_mount_readonly takes away, removed
 			// before the mount is born instead of after it misbehaved.
+			// Taking the pens away is not the whole answer for FAT: its
+			// open CREATES (fat_glue.c says why), so fat_open asks
+			// fs->read_only for itself. Both mechanisms, or a read-only
+			// mount is one `>` away from a stray-write panic.
 			if (ro)
 			{
 				fileOps->write   = NULL;
@@ -1423,6 +1466,12 @@ bool vfs_prefix_for_fs(vfs_filesystem_t *fs, char *out, size_t cap)
 // Find the partition `what` names — GPT name first (verbatim compare: names
 // are data), the dashed GUID spelling second. Returns false if nothing wears
 // that name.
+//
+// BOTH COMPARES ARE EXACT. partName is a 36-byte array that a full-length
+// name fills with no terminator (gpt.c), so the compare has to be bounded —
+// and a bounded compare alone made `<36-char-name>junk` a hit, because it
+// stopped looking at 36. The length test is what turns "starts with" back
+// into "is".
 static bool vfs_find_part(const char *what, int *out_idx, int *out_partno)
 {
 	for (int idx = 0; idx < kBlockDeviceInfoCount; idx++)
@@ -1434,7 +1483,8 @@ static bool vfs_find_part(const char *what, int *out_idx, int *out_partno)
 		for (int partno = 0; partno < kBlockDeviceInfo[idx].block_device->part_count; partno++)
 		{
 			partEntry_t *part = kBlockDeviceInfo[idx].block_device->partition_table->parts[partno];
-			bool hit = (part->partName[0] != '\0' && strncmp(what, part->partName, 36) == 0) ||
+			bool hit = (part->partName[0] != '\0' && strlen(what) <= 36 &&
+			            strncmp(what, part->partName, 36) == 0) ||
 			           (compare_part_uuids(what, (const char *)part->uniquePartGUID) != NULL);
 			if (hit)
 			{
@@ -1538,7 +1588,22 @@ int vfs_mount_explicit(const char *what, const char *where, uint64_t flags)
 	}
 
 	spinlock_acquire(&kNamespaceLock);
+	// THE GATE, CLOSED ACROSS THE WHOLE VERB — mount is its second writer,
+	// and for the same reason unmount is its first: everything below is
+	// read-then-act on a namespace that path operations can move underneath
+	// it. Both directions need it. Outbound, our parent check ("is /mnt a
+	// directory?") is worthless if an unlink already in flight removes /mnt
+	// between the stat and the claim. Inbound, unlink's own guard ("is
+	// anything mounted under /mnt?") is worthless if we publish /mnt/usb
+	// after it looked. Neither can be fixed on one side alone: the two
+	// operations have to be ordered, and the gate is what orders them.
+	//
+	// Held across the driver's initialize, which is real disk I/O — the
+	// trade unmount already makes, affordable for the same reason (these
+	// verbs are rare and human-paced, and every path op is bounded).
+	vfs_path_gate_close();
 	int r = vfs_mount_locked(what, where, flags, derive);
+	vfs_path_gate_open();
 	spinlock_release(&kNamespaceLock);
 	return r;
 }

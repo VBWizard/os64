@@ -15,6 +15,12 @@
 #define VFS_FILE_ALLOC_SIZE 65535+FS_FILE_COPYBUFFER_SIZE
 #define VFS_MAX_PARTITIONS 128
 #define DEFAULT_SECTOR_SIZE 512
+// The longest fs-local path the open-file registry keeps — the longest path
+// the kernel carries anywhere (task.h's TASK_MAX_PATH_LEN), spelled again
+// because vfs.h sits BELOW task.h in the include graph. vfs.c static-asserts
+// the two against each other, so raising one and forgetting the other stops
+// the build instead of quietly shortening a path.
+#define VFS_REG_PATH_MAX 256
 
 #define SEEK_SET	0	/* Seek from beginning of file.  */
 #define SEEK_CUR	1	/* Seek from current position.  */
@@ -351,8 +357,11 @@ struct file
 	// closes — the shared-object registry's resolve tail did, and rendering
 	// it later printed garbage (a freed HEAP path would have walked
 	// /sys/openfiles into the use-after-free tripwire instead). Anything
-	// that names a registered file after open returns reads THIS.
-	char reg_path[96];
+	// that names a registered file after open returns reads THIS — at FULL
+	// length: a copy that silently drops the tail of a long path hands
+	// /sys/openfiles and lsof a different file, and for a kernel-held open
+	// (a running image, a resident .so) that row is the only one there is.
+	char reg_path[VFS_REG_PATH_MAX];
 
 	// THE POSITION LOCK (2026-08-15). An open file carries ONE seek position,
 	// so "seek here, then read" is only atomic if nobody re-seeks in between —
@@ -569,13 +578,19 @@ int vfs_unmount(const char *where);
 // Every operation that RESOLVES a path to a filesystem and then acts on it
 // (open, chdir, stat, mkdir, rm, rename, spawn's ELF+library loads, the conf
 // walker's probes) enters as a READER for the duration of the operation;
-// readers never wait for each other. vfs_unmount is the only WRITER: it
-// closes the gate, waits for the readers already inside to leave, and holds
-// it shut across its busy checks and the strike — so "no open files, no open
-// dirs, no cwd inside" cannot be falsified by an operation that was mid-fault
-// between resolve and open when the check ran, and the fs it tears down is
-// one no path operation can still be touching. Enter/exit MUST bracket the
-// whole resolve-to-done span, never just the resolve.
+// readers never wait for each other. THE TWO NAMESPACE VERBS ARE THE WRITERS:
+// each closes the gate, waits for the readers already inside to leave, and
+// holds it shut across its decisions.
+//
+// Unmount needs it so that "no open files, no open dirs, no cwd inside"
+// cannot be falsified by an operation that was mid-fault between resolve and
+// open when the check ran, and so the fs it tears down is one no path
+// operation can still be touching. Mount needs it because its parent check
+// and unlink's mount-under check (vfs_mount_under) are each other's mirror:
+// unordered, one of them always reads a namespace the other is halfway
+// through changing, and the result is a live mount whose point has no parent.
+// Enter/exit MUST bracket the whole resolve-to-done span, never just the
+// resolve.
 //
 // The gate excludes READERS and nothing else — its writer flag is a flag,
 // not a lock, and writers exclude each other through kNamespaceLock (vfs.c).
@@ -588,6 +603,13 @@ void vfs_path_exit(void);
 // tail (procfs handles, diagnostics). Root answers "" so prefix+tail
 // concatenates cleanly. Returns false if no live entry names this fs.
 bool vfs_prefix_for_fs(vfs_filesystem_t *fs, char *out, size_t cap);
+
+// Is a live mount rooted UNDER `path`? Asked by unlink and rename before
+// they remove or move a directory: the mount verb insisted the point's
+// parent exist, and nothing else in the tree knows to keep it existing —
+// a mount point's parent is an ordinary directory to every other verb.
+// Answers false for "/" (not removable, and everything is under it).
+bool vfs_mount_under(const char *path);
 
 // How many open files sit on `fs` (the open-file registry's count) —
 // unmount's busy arithmetic and /sys/mounts' open column.
@@ -602,7 +624,7 @@ int vfs_openfiles_on(vfs_filesystem_t *fs);
 // lsof needs this list and not only the handle tables.
 typedef struct {
 	char mount[VFS_MOUNT_PREFIX_MAX];  // "" for the root mount — prefix+tail concatenates
-	char tail[128];                    // fs-local path (the registration-time reg_path copy)
+	char tail[VFS_REG_PATH_MAX];       // fs-local path (the registration-time reg_path copy)
 	uint64_t ident;                    // f_ident: ext2 inode / FAT start cluster
 	int handles;
 } vfs_openfile_row_t;

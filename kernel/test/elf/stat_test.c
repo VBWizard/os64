@@ -48,10 +48,14 @@ static uint64_t stat_path(const char *path, os64_dirent_t *e)
 }
 
 // /sys/mounts, slurped raw (this fixture is deliberately libos64-free: it
-// proves the syscall floor with nothing but the syscalls). The file is a
-// few hundred bytes; a boot that somehow grows it past the buffer fails
-// the read loudly rather than quietly testing a prefix of the table.
-static char gMounts[4096];
+// proves the syscall floor with nothing but the syscalls). Sized for the
+// PRODUCER's worst case, not for the boots we happen to run: a full mount
+// table, every row carrying a mount prefix and a 36-character GPT name that
+// escaping can quadruple (a name is arbitrary bytes off somebody's disk).
+// The old 4096 fitted a typical boot and failed a legal one — and this
+// fixture reports a short read as FAIL_MOUNT, so the suite would have called
+// a supported mounts.conf a broken stat.
+static char gMounts[16384];
 
 static long read_mounts(void)
 {

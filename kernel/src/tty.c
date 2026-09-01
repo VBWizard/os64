@@ -853,6 +853,9 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 // ── Seats and burial ────────────────────────────────────────────────────────
 // Every task whose ->tty is a pty holds one seat: taken at inheritance
 // (task_create) and at spawn's explicit seating, dropped in task teardown.
+// The count doubles as a LIFETIME GUARD for kernel code that must survive its
+// own hangup sweep (pty_master_close) — a holder is a holder, whether it is a
+// task sitting at the terminal or the code taking the terminal away.
 // The slave is buried when the master is CLOSED and the seats are EMPTY —
 // whichever happens last does it. The race between a last unref and a
 // master close is settled by the unlink: burial happens inside the list
@@ -913,6 +916,21 @@ void pty_master_close(tty_t *slave)
 {
 	if (slave == NULL || !slave->is_pty)
 		return;
+
+	// A LIFETIME GUARD, TAKEN BEFORE THE FLAG THAT ARMS BURIAL. From
+	// masterClosed onward this object is one departing seat away from being
+	// freed — and the sweep below is what makes them depart: a task takes
+	// its SIGHUP, dies on another core, and reaches tty_pty_unref while we
+	// are still walking the list, reading slave->index for the diagnostic,
+	// and calling the burial at the bottom. The seat count is the only thing
+	// burial consults, so holding one is how the sweep says "still in use".
+	//
+	// Bumped directly rather than through tty_pty_ref because this is NOT a
+	// seat: everSeated must stay off, or closing the master of a pty nobody
+	// ever sat on would arm HUNGUP for it. The transient +1 is visible to
+	// syscall_tty_handle's HUNGUP answer, and reads correctly there — the
+	// hangup is being dispatched, so it has not completed.
+	__sync_fetch_and_add(&slave->seats, 1);
 	slave->masterClosed = true;
 
 	// ── THE OTHER HANGUP (2026-08-31; booked in PTY.md § SIGHUP on master
@@ -950,7 +968,9 @@ void pty_master_close(tty_t *slave)
 			       (unsigned)slave->index, hung, hung == 1 ? "" : "s");
 	}
 
-	pty_maybe_bury(slave);
+	// Drop the guard, which IS the burial call: whoever holds the last seat
+	// buries, and after the sweep that is us or it is the task still seated.
+	tty_pty_unref(slave);
 }
 
 // console_wake_if_ready's pty leg — the same wake idiom as its VT loop,

@@ -291,6 +291,23 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
 	else
 		return -1;
 
+	// A READ-ONLY MOUNT REFUSES A MUTATING OPEN AT THE DOOR, the way
+	// ext2_open_rw does. FAT needs it more: an f_open carrying
+	// FA_CREATE_ALWAYS or FA_OPEN_APPEND WRITES — a directory entry, a
+	// truncated cluster chain — so the open is the mutation and there is no
+	// later dispatch site for a missing write verb to refuse at. Uncovered
+	// that is a ring-3 kernel panic rather than a leak: the metadata write
+	// lands on a partition the block tripwire knows is mounted read-only,
+	// and that tripwire panics by design.
+	//
+	// Written as an ALLOW-list of the two flags that only ever read or
+	// position, so any other flag — including one this driver does not use
+	// today — is refused by default rather than by having been remembered
+	// here. (FA_WRITE passes: "u" neither creates nor truncates, and the
+	// NULL write verb is what stops its writes.)
+	if (vfs_fs->read_only && (fat_mode & ~(BYTE)(FA_READ | FA_WRITE)) != 0)
+		return -1;
+
 	FIL* fat_file = kmalloc(sizeof(FIL));  // FIL object (FAT filesystem file handle)
 	*vfs_file = kmalloc(sizeof(vfs_file_t));
 	if (fat_file == NULL || *vfs_file == NULL)
