@@ -14,15 +14,14 @@
 #define LSOF_MAX_TASKS 512
 #define LSOF_MAX_PATHS 64
 #define LSOF_PATH_MAX 512
-// Sized for what the PRODUCERS can emit, not for what a quiet machine shows.
-// os64_slurp allocates its cap up front and answers TOO_BIG rather than
-// truncating, so a cap under the producer's ceiling is a report that fails
-// instead of a report that lies — but it still fails. A handle row carries a
+// The per-task handle report has a producer ceiling: a handle row carries a
 // mount prefix and a path, and both are ESCAPED data columns that can
 // quadruple (a filename may hold any byte), so a task's full handle table is
 // worth ~19KB in the limit even though a real one is a few hundred bytes.
+// The machine-wide open-file registry has no ceiling; its value is an initial
+// slurp size that list_kernel_openfiles doubles until the snapshot fits.
 #define LSOF_HANDLES_CAP 32768
-#define LSOF_OPENFILES_CAP 65536
+#define LSOF_OPENFILES_INITIAL_CAP 65536
 
 typedef struct {
     bool terse;
@@ -469,9 +468,16 @@ static int list_kernel_openfiles(const lsof_options_t *options,
 
     uint8_t *contents = NULL;
     size_t length = 0;
-    os64_slurp_status_t status = os64_slurp("/sys/openfiles",
-                                            LSOF_OPENFILES_CAP,
-                                            &contents, &length);
+    size_t cap = LSOF_OPENFILES_INITIAL_CAP;
+    os64_slurp_status_t status;
+    do
+    {
+        status = os64_slurp("/sys/openfiles", cap, &contents, &length);
+        if (status == OS64_SLURP_TOO_BIG && cap <= (size_t)-1 / 2)
+            cap *= 2;
+        else
+            break;
+    } while (true);
     if (status != OS64_SLURP_OK)
     {
         os64_hprintf(OS64_STDERR, "lsof: /sys/openfiles: %s\n",

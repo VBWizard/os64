@@ -835,13 +835,27 @@ static void sys_gen_shlib(synth_text_t *t)
 static void sys_gen_openfiles(synth_text_t *t)
 {
 	synth_text_addf(t, "# path mount ident handles\n");
-	enum { OF_ROWS_MAX = 256 };
-	vfs_openfile_row_t *rows = kmalloc(OF_ROWS_MAX * sizeof(vfs_openfile_row_t));
-	if (rows == NULL)
+	int capacity = vfs_openfiles_snapshot(NULL, 0);
+	if (capacity == 0)
 		return;
-	int total = vfs_openfiles_snapshot(rows, OF_ROWS_MAX);
-	int shown = (total < OF_ROWS_MAX) ? total : OF_ROWS_MAX;
-	for (int i = 0; i < shown; i++)
+	vfs_openfile_row_t *rows = NULL;
+	int total = 0;
+	while (capacity > 0)
+	{
+		rows = kmalloc((size_t)capacity * sizeof(*rows));
+		if (rows == NULL)
+			return;
+		total = vfs_openfiles_snapshot(rows, capacity);
+		if (total <= capacity)
+			break;
+
+		// The registry grew between the count and the copy. Retry at its new
+		// size rather than publishing a plausible-looking partial listing.
+		kfree(rows);
+		rows = NULL;
+		capacity = total;
+	}
+	for (int i = 0; i < total; i++)
 	{
 		// Root's prefix is "" so prefix+tail concatenates to the full path;
 		// the mount column still says "/" out loud.
@@ -867,11 +881,6 @@ static void sys_gen_openfiles(synth_text_t *t)
 		synth_text_addf(t, "%s", etail);
 		synth_text_addf(t, " %s %lu %d\n", ecolumn, rows[i].ident, rows[i].handles);
 	}
-	if (total > shown)
-		// The SHAPE is load-bearing: lsof recognizes a cut listing by a '#'
-		// line whose first word is a NUMBER (any other '#' line is a header).
-		// Reword freely; keep the count first.
-		synth_text_addf(t, "# %d more not shown\n", total - shown);
 	kfree(rows);
 }
 
