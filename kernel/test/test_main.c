@@ -1332,9 +1332,9 @@ static bool test_mount_unmount(void)
         return true;
     }
 
-    // The victim: mounted, disk-backed, not "/", nothing open on it. Its
-    // identity is captured as the GUID string, because that survives the
-    // unmount (the table entry does not).
+    // The victim: mounted, disk-backed, not "/", with no open handles,
+    // descendant mount, or live cwd user. Its identity is captured as the GUID
+    // string, because that survives the unmount (the table entry does not).
     char victim_prefix[VFS_MOUNT_PREFIX_MAX] = "";
     char victim_guid[40] = "";
     vfs_filesystem_t *victim = NULL;
@@ -1344,8 +1344,28 @@ static bool test_mount_unmount(void)
             continue;
         if (vfs_openfiles_on(fs) != 0 || fs->open_dir_count != 0)
             continue;
+        const char *prefix = kMountTable[i].prefix;
+        if (vfs_mount_under(prefix))
+            continue;
+
+        bool cwd_inside = false;
+        size_t prefix_len = kMountTable[i].prefix_len;
+        for (task_t *t = kTaskList; t != NULL && t != (task_t *)NO_TASK; t = t->next)
+        {
+            if (t->exited || t->cwd == NULL)
+                continue;
+            if (strncmp(t->cwd, prefix, prefix_len) == 0 &&
+                (t->cwd[prefix_len] == '\0' || t->cwd[prefix_len] == '/'))
+            {
+                cwd_inside = true;
+                break;
+            }
+        }
+        if (cwd_inside)
+            continue;
+
         victim = fs;
-        strcpy(victim_prefix, kMountTable[i].prefix);
+        strcpy(victim_prefix, prefix);
         vfs_format_guid(kMountTable[i].part_guid, victim_guid);
         break;
     }
@@ -1355,7 +1375,7 @@ static bool test_mount_unmount(void)
     // namespace a pen it did not have.
     bool victim_ro = (victim != NULL) && victim->read_only;
     if (victim == NULL) {
-        printd(DEBUG_TESTS, "\tSKIP: test_mount_unmount (no idle disk mount to exercise)\n");
+        printd(DEBUG_TESTS, "\tSKIP: test_mount_unmount (no unmountable disk mount to exercise)\n");
         return true;
     }
 
