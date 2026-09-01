@@ -492,7 +492,14 @@ void tcp_poll(void)
 		// BECAUSE everyone is retransmitting (October 1986, LBL to
 		// Berkeley: 32 kbit/s across a 400-yard link, and Van Jacobson's
 		// answer is why the modern internet works at all).
-		if (c->snd_len > 0 && c->state != TCP_TIME_WAIT && now >= c->rto_deadline)
+		//
+		// TIME_WAIT and CLOSED are past transmitting. TIME_WAIT still
+		// answers a late FIN (tcp_input); CLOSED speaks only through
+		// tcp_input's RST. The CLOSED exclusion is what keeps the morgue
+		// display-only: a timed-out dial leaves its SYN armed in the
+		// slot, and a listed corpse must not retransmit it.
+		if (c->snd_len > 0 && c->state != TCP_TIME_WAIT && c->state != TCP_CLOSED &&
+		    now >= c->rto_deadline)
 		{
 			if (++c->retries > TCP_MAX_RETRIES)
 			{
@@ -648,24 +655,37 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// port — the demux would then hand one stream's segments to whichever
 	// matched first. The in-use scan skips any port a listed connection
 	// still holds, TIME_WAIT and morgue residents included, which is the
-	// port protection TIME_WAIT exists to give. (The scan terminates
-	// because connections number far fewer than the 16384 ports of the
-	// dynamic range — kmalloc would have refused long before that.)
+	// port protection TIME_WAIT exists to give.
+	//
+	// The search is BOUNDED to one traversal of the dynamic range, and an
+	// exhausted range is a clean NO_RESOURCES — not a spin. 16384
+	// connections at ~64KB apiece fit comfortably in this machine's RAM
+	// (Codex, PR #46, doing the arithmetic a comment here once waved
+	// away), and an unbounded loop under this lock with interrupts off
+	// would freeze TCP machine-wide at the exact moment it is busiest.
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
-	bool taken;
-	do
+	bool found = false;
+	for (uint32_t tries = 65536u - 49152u; tries > 0 && !found; tries--)
 	{
 		c->local_port = s_next_ephemeral++;
 		if (s_next_ephemeral < 49152)
 			s_next_ephemeral = 49152;
-		taken = false;
+		found = true;
 		for (tcp_conn_t* t = kTcpConnList; t != NULL; t = t->next)
 			if (t->local_port == c->local_port)
 			{
-				taken = true;
+				found = false;
 				break;
 			}
-	} while (taken);
+	}
+	if (!found)
+	{
+		spinlock_release_irqrestore(&kTcpListLock, lf);
+		kfree(c->rcv_buf);   // never inserted, nothing published — plain cleanup
+		kfree(c->snd_buf);
+		kfree(c);
+		return NULL;         // *why already answers NO_RESOURCES, the honest verdict
+	}
 
 	uint32_t iss = tcp_initial_seq(peer_ip, peer_port, c->local_port);
 	c->snd_una = iss;
