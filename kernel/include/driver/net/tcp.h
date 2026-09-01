@@ -116,7 +116,19 @@ typedef enum tcp_state
 // TCP's own law (see tcp_poll), this one exists so /sys/net/tcp can answer
 // "what just happened" after a dial fails or a fetch ends. A human who ran
 // a command that died gets this long to cat the aftermath.
-#define TCP_MORGUE_TICKS    (15 * TICKS_PER_SECOND)
+//
+// A conversation that ENDED lies in state: its buffers and its port stay
+// its own until the reap, the port because TIME_WAIT's protection is
+// exactly a port held past the last segment. A dial that FAILED is a
+// tombstone (tcp_dial_entomb): the row, and nothing else — buffers freed
+// and port returned the moment dial gave up, because no conversation
+// happened and there is nothing for a held port to protect. Tombstones
+// are CAPPED, oldest evicted: a refused dial returns at once and costs
+// no handle, so a loop of them is the one way to fill the morgue faster
+// than it drains, and a capful of rows says "refused, again" as well
+// as sixty thousand would.
+#define TCP_MORGUE_TICKS      (15 * TICKS_PER_SECOND)
+#define TCP_MORGUE_TOMBSTONES 64
 
 // In-band sentinels (the pipe.c convention).
 #define TCP_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end)
@@ -162,6 +174,8 @@ typedef struct tcp_conn
 	thread_t* volatile reader;   // parked in tcp_conn_read
 	thread_t* volatile writer;   // parked in tcp_conn_write
 	bool detached;               // handle closed; poll may reap after TIME_WAIT
+	bool tombstone;              // a failed dial's row: buffers freed, port returned,
+	                             // owns nothing the reap must give back (tcp_dial_entomb)
 
 	uint64_t rx_bytes, tx_bytes, retransmits, out_of_order_dropped;
 
@@ -173,11 +187,13 @@ typedef struct tcp_stats
 	uint64_t connections_opened;
 	uint64_t connections_refused;   // RST to our SYN — nobody listening
 	uint64_t connect_timeouts;
-	// Funerals: connections the poll unlisted and freed.
+	// Funerals: connections unlisted and freed — by the poll's reap, or
+	// by the tombstone cap's eviction.
 	// It answers "is the reaper alive?" while corpses linger in
 	// /sys/net/tcp — and it marks that real kernel heap (a 64KB receive
-	// ring per corpse) was freed with no task burial to account for it,
-	// on the morgue's clock rather than anybody's syscall. Anything
+	// ring per corpse that had a conversation; a tombstone's went at the
+	// failed dial) was freed with no task burial to account for it, on
+	// the morgue's clock rather than anybody's syscall. Anything
 	// auditing memory across a window (task_teardown_leak brackets on
 	// this) has to be able to see that one landed inside it.
 	uint64_t connections_reaped;

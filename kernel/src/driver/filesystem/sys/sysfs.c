@@ -1265,45 +1265,86 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		bool     detached, zwin, rst;
 	};
 
+	// The snapshot lives in PAGE-SIZED CHUNKS, linked, never one array.
+	// The allocator does not fail — exhaustion is a panic, by name
+	// (allocator.c) — so "what if kmalloc returns NULL" is not the
+	// question; "how big a contiguous block does cat'ing this file
+	// demand" is. One array sized by the count is ~1MB at the full
+	// ephemeral range, the largest single request in sysfs and, on a
+	// fragmented map, the request likeliest to be the one that finds no
+	// free block (Codex, PR #46). A chunk is one page — the size class
+	// the renderer's own buffer growth asks for — so the snapshot risks
+	// nothing the file's text does not already.
+	//
+	// Chunks are allocated between the census and the copy, under no
+	// lock; a list that grew in that gap overflows the chunks, and the
+	// overflow is REPORTED, not silently cropped.
+	struct tcp_row_chunk
+	{
+		struct tcp_row_chunk *next;
+		struct tcp_row rows[(PAGE_SIZE - sizeof(void *)) / sizeof(struct tcp_row)];
+	};
+	const uint32_t rows_per_chunk = sizeof(((struct tcp_row_chunk *)0)->rows) / sizeof(struct tcp_row);
+
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	uint32_t count = 0;
 	for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
 		count++;
+	spinlock_release_irqrestore(&kTcpListLock, lf);
 
-	struct tcp_row *rows = NULL;
-	uint32_t n = 0;
-	if (count > 0)
-		rows = kmalloc(count * sizeof(*rows));
-	if (rows != NULL)
-		for (tcp_conn_t *c = kTcpConnList; c != NULL && n < count; c = c->next)
+	struct tcp_row_chunk *chunks = NULL, **link = &chunks;
+	uint32_t capacity = 0;
+	while (capacity < count)
+	{
+		struct tcp_row_chunk *ch = kmalloc(sizeof(*ch));
+		*link = ch;
+		link = &ch->next;
+		capacity += rows_per_chunk;
+	}
+
+	lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint32_t n = 0, omitted = 0;
+	struct tcp_row_chunk *fill = chunks;
+	for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
+	{
+		if (n >= capacity)
 		{
-			struct tcp_row *r = &rows[n++];
-			uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
-			r->peer_ip    = c->peer_ip;
-			r->peer_port  = c->peer_port;
-			r->local_port = c->local_port;
-			r->state      = (uint32_t)c->state;
-			r->mss        = c->snd_mss;
-			r->win        = c->snd_wnd;
-			r->buf_used   = c->rcv_count;
-			r->rx         = c->rx_bytes;
-			r->tx         = c->tx_bytes;
-			r->rexmit     = c->retransmits;
-			r->ooo        = c->out_of_order_dropped;
-			r->detached   = c->detached;
-			r->zwin       = c->zero_window;
-			r->rst        = c->reset;
-			spinlock_release_irqrestore(&c->lock, irqflags);
+			omitted++;
+			continue;
+		}
+		if (n > 0 && n % rows_per_chunk == 0)
+			fill = fill->next;
+		struct tcp_row *r = &fill->rows[n % rows_per_chunk];
+		n++;
+		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+		r->peer_ip    = c->peer_ip;
+		r->peer_port  = c->peer_port;
+		r->local_port = c->local_port;
+		r->state      = (uint32_t)c->state;
+		r->mss        = c->snd_mss;
+		r->win        = c->snd_wnd;
+		r->buf_used   = c->rcv_count;
+		r->rx         = c->rx_bytes;
+		r->tx         = c->tx_bytes;
+		r->rexmit     = c->retransmits;
+		r->ooo        = c->out_of_order_dropped;
+		r->detached   = c->detached;
+		r->zwin       = c->zero_window;
+		r->rst        = c->reset;
+		spinlock_release_irqrestore(&c->lock, irqflags);
 		}
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 
-	synth_text_addf(t, "connections: %u\n", count);
+	synth_text_addf(t, "connections: %u\n", n + omitted);
 	if (n > 0)
 	{
 		synth_text_addf(t, "# local peer state mss win buf rx_bytes tx_bytes rexmit ooo flags\n");
+		struct tcp_row_chunk *ch = chunks;
 		for (uint32_t i = 0; i < n; i++)
 		{
-			struct tcp_row *r = &rows[i];
+			if (i > 0 && i % rows_per_chunk == 0)
+				ch = ch->next;
+			struct tcp_row *r = &ch->rows[i % rows_per_chunk];
 
 			// `win` is the PEER's advertised window — the term of
 			// throughput = window/RTT that tcp.c's TCPRX trace watches
@@ -1341,13 +1382,18 @@ static void sys_gen_net_tcp(synth_text_t *t)
 			                r->rx, r->tx, r->rexmit, r->ooo, flags);
 		}
 	}
-	else if (count > 0)
-		// The count above is honest but its rows could not be: no memory
-		// for the snapshot. Saying so beats a silently empty table.
-		synth_text_addf(t, "# rows omitted: no memory for the snapshot\n");
+	if (omitted > 0)
+		// The count above is the live list; the rows are the census's.
+		// Connections dialed between the two overflowed the chunks, and
+		// saying so beats a table that looks complete and is not.
+		synth_text_addf(t, "# rows omitted: %u (dialed after the snapshot was sized)\n", omitted);
 
-	if (rows != NULL)
-		kfree(rows);   // kfree(NULL) panics in os64 — the guard is load-bearing
+	while (chunks != NULL)
+	{
+		struct tcp_row_chunk *next = chunks->next;
+		kfree(chunks);
+		chunks = next;
+	}
 }
 
 // net/<card> — one registered NIC: what it is, whether the wire is good, and

@@ -278,10 +278,15 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	// Demux on the FULL four-tuple (their address, their port, our port) —
 	// which is what lets two programs on this machine talk to the same
 	// server, and the same program talk to two servers, without confusion.
+	// A tombstone is not a party to anything: its port is back in the
+	// draw, so the tuple it shows may belong to a live dial, and the
+	// answer to a segment aimed at its dead conversation is "nobody
+	// home" below.
 	tcp_conn_t* c = NULL;
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	for (tcp_conn_t* t = kTcpConnList; t != NULL; t = t->next)
-		if (t->local_port == dst_port && t->peer_port == src_port && t->peer_ip == src_ip)
+		if (!t->tombstone &&
+		    t->local_port == dst_port && t->peer_port == src_port && t->peer_ip == src_ip)
 		{
 			c = t;
 			break;
@@ -486,6 +491,76 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	spinlock_release_irqrestore(&c->lock, irqflags);
 }
 
+// Give a port back to the draw. Caller holds kTcpListLock. Guarded because
+// only drawn ports live in the bitmap: a local port below the ephemeral
+// range (a listener's service port, when LISTEN arrives) was never claimed
+// there, and subtracting the base from it would underflow into a wild bit
+// index.
+static void tcp_port_release_locked(uint16_t port)
+{
+	if (port >= TCP_EPHEMERAL_BASE)
+	{
+		uint32_t bit = port - TCP_EPHEMERAL_BASE;
+		s_ephemeral_used[bit / 64] &= ~(1ULL << (bit % 64));
+	}
+}
+
+// A failed dial's connection becomes a TOMBSTONE: listed for the morgue,
+// owning nothing. The buffers go now (65KB a corpse, and a refused dial
+// costs the caller no handle — so nothing but memory bounded a loop of
+// them), and so does the port: TIME_WAIT holds a port to keep a dead
+// conversation's stragglers away from its successor, and a dial that never
+// completed had no conversation. What survives is the row — state, peer,
+// rst — which is all the observer ever read. (tcp.h § the morgue.)
+//
+// Under both locks, list then conn — tcp_poll's order. Once `tombstone` is
+// set nothing touches the buffers: the demux skips the row, tcp_poll's
+// retransmit excludes CLOSED, and a segment already past the demux finds
+// CLOSED under the conn lock and answers RST without them. The frees
+// happen after the locks drop.
+//
+// The cap: count tombstones on the way, evict the oldest past
+// TCP_MORGUE_TOMBSTONES. The list is newest-first (dial prepends), so the
+// oldest is the last one met, and it is never `c` unless `c` is alone.
+static void tcp_dial_entomb(tcp_conn_t* c)
+{
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+	uint8_t* rcv = c->rcv_buf;
+	uint8_t* snd = c->snd_buf;
+	c->rcv_buf = NULL;
+	c->snd_buf = NULL;
+	c->rcv_count = 0;
+	c->snd_len = 0;
+	c->state = TCP_CLOSED;
+	c->detached = true;   // the poll morgues it (briefly readable), then reaps
+	c->tombstone = true;
+	tcp_port_release_locked(c->local_port);
+	spinlock_release_irqrestore(&c->lock, irqflags);
+
+	uint32_t tombstones = 0;
+	tcp_conn_t** oldest = NULL;
+	for (tcp_conn_t** pp = &kTcpConnList; *pp != NULL; pp = &(*pp)->next)
+		if ((*pp)->tombstone)
+		{
+			tombstones++;
+			oldest = pp;
+		}
+	tcp_conn_t* evicted = NULL;
+	if (tombstones > TCP_MORGUE_TOMBSTONES)
+	{
+		evicted = *oldest;
+		*oldest = evicted->next;
+		kTcpStats.connections_reaped++;
+	}
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+
+	kfree(rcv);
+	kfree(snd);
+	if (evicted != NULL)
+		kfree(evicted);
+}
+
 // ── 4. THE CLOCK ────────────────────────────────────────────────────────────
 void tcp_poll(void)
 {
@@ -507,8 +582,8 @@ void tcp_poll(void)
 		// TIME_WAIT and CLOSED are past transmitting. TIME_WAIT still
 		// answers a late FIN (tcp_input); CLOSED speaks only through
 		// tcp_input's RST. The CLOSED exclusion is what keeps the morgue
-		// display-only: a timed-out dial leaves its SYN armed in the
-		// slot, and a listed corpse must not retransmit it.
+		// display-only whatever a death left armed in the slot: a listed
+		// corpse must not retransmit it.
 		if (c->snd_len > 0 && c->state != TCP_TIME_WAIT && c->state != TCP_CLOSED &&
 		    now >= c->rto_deadline)
 		{
@@ -586,21 +661,18 @@ void tcp_poll(void)
 		if (reap)
 		{
 			*pp = c->next;
-			// Give the port back to the draw. Guarded because only
-			// drawn ports live in the bitmap: a local port below the
-			// ephemeral range (a listener's service port, when LISTEN
-			// arrives) was never claimed there, and subtracting the
-			// base from it would underflow into a wild bit index.
-			if (c->local_port >= TCP_EPHEMERAL_BASE)
+			// A tombstone gave its port and buffers back when its dial
+			// failed (tcp_dial_entomb); reaping it is unlisting it.
+			if (!c->tombstone)
 			{
-				uint32_t bit = c->local_port - TCP_EPHEMERAL_BASE;
-				s_ephemeral_used[bit / 64] &= ~(1ULL << (bit % 64));
+				tcp_port_release_locked(c->local_port);
+				kfree(c->rcv_buf);
+				kfree(c->snd_buf);
 			}
 			kTcpStats.connections_reaped++;
-			printd(DEBUG_NET, "tcp: reaped %u.%u.%u.%u:%u (local port %u free)\n",
-			       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->local_port);
-			kfree(c->rcv_buf);
-			kfree(c->snd_buf);
+			printd(DEBUG_NET, "tcp: reaped %u.%u.%u.%u:%u (local port %u %s)\n",
+			       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->local_port,
+			       c->tombstone ? "was already free" : "free");
 			kfree(c);
 			continue;
 		}
@@ -675,9 +747,11 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// critical section. Drawn outside the lock, two tasks dialing at once
 	// could read the same counter and open two connections on one local
 	// port — the demux would then hand one stream's segments to whichever
-	// matched first. The bitmap holds the port of every listed connection,
-	// TIME_WAIT and morgue residents included, which is the port
-	// protection TIME_WAIT exists to give.
+	// matched first. The bitmap holds the port of every listed connection
+	// that had a conversation, TIME_WAIT and morgue residents included,
+	// which is the port protection TIME_WAIT exists to give. A failed
+	// dial's tombstone is the exception — it gave its port back when the
+	// dial returned (tcp_dial_entomb), having had nothing to protect.
 	//
 	// The search is BOUNDED to one pass over the dynamic range at one bit
 	// test per candidate, and an exhausted range is a clean NO_RESOURCES —
@@ -761,8 +835,7 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 		printd(DEBUG_NET, "tcp: dial to %u.%u.%u.%u:%u failed (%s)\n",
 		       NET_IPV4_OCTETS(peer_ip), peer_port,
 		       c->reset ? "refused" : "timed out");
-		c->state = TCP_CLOSED;
-		c->detached = true;   // the poll morgues it (briefly readable), then reaps
+		tcp_dial_entomb(c);
 		return NULL;
 	}
 	return c;

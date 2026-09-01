@@ -1947,9 +1947,6 @@ static teardown_verdict_t teardown_leak_attempt(void)
             return TL_ERROR;
     }
 
-    uint64_t free_before = 0, free_after = 0;
-    allocator_memory_snapshot(&free_before, NULL, NULL);
-    uint64_t reclaimed_before = kTaskVmaReclaimedBytes;
     // WHOSE FUNERALS HAPPENED IN OUR WINDOW? Exactly one per cycle, or the
     // delta below belongs partly to somebody else and cannot be read as ours.
     //
@@ -1960,9 +1957,21 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // and the honest way to get it is not to wait longer — a user can always
     // out-wait you — but to notice afterwards that the window was not ours
     // alone, and decline to draw a conclusion from it.
+    //
+    // THE BRACKETS OPEN BEFORE THE MEMORY SNAPSHOT AND CLOSE AFTER IT, and
+    // that order is the whole instrument: a bracket's claim is "nothing it
+    // watches moved between the two memory readings", so each baseline must
+    // be older than free_before and each check younger than free_after. A
+    // burial or a reap that landed between free_before and a baseline taken
+    // after it would be inside the memory delta and outside the bracket —
+    // counted as the starting state, and the delta blamed on the cycles.
     uint64_t burials_before = kTaskBurialCount;
     uint64_t reaps_before = kTcpStats.connections_reaped;
     uint32_t conns_before = teardown_tcp_conn_census();
+
+    uint64_t free_before = 0, free_after = 0;
+    allocator_memory_snapshot(&free_before, NULL, NULL);
+    uint64_t reclaimed_before = kTaskVmaReclaimedBytes;
 
     for (int i = 0; i < TEARDOWN_LEAK_MEASURED_CYCLES; i++) {
         if (!teardown_leak_one_cycle())
@@ -1991,17 +2000,20 @@ static teardown_verdict_t teardown_leak_attempt(void)
     uint64_t reclaimed = kTaskVmaReclaimedBytes - reclaimed_before;
 
     // THE THIRD BRACKET, for the moves the other two cannot see: a TCP
-    // connection's birth and funeral. A conn is a ~64KB allocation (the
-    // receive ring) whose free runs on the morgue's 15-second clock, so
-    // its two edges land in different windows and each edge alone reads
-    // as a leak — the dial edge as bytes lost, the reap edge as bytes
-    // conjured — with no task burial to census either time, and the
-    // free far too late for the stillness probes to catch the culprit
-    // still allocating. Both edges move the list census; a dial and a
-    // reap in one window cancel there, which is what the reap counter
-    // is here to break. (Two corpses reaping mid-window measured as
-    // -67200 bytes/task and convicted task_destroy of a leak it didn't
-    // have; an os64get typed mid-window read as +214468 the same way.)
+    // connection's birth and funeral. A conversation's conn is a ~64KB
+    // allocation (the receive ring) whose free runs on the morgue's
+    // 15-second clock, so its two edges land in different windows and
+    // each edge alone reads as a leak — the dial edge as bytes lost, the
+    // reap edge as bytes conjured — with no task burial to census either
+    // time, and the free far too late for the stillness probes to catch
+    // the culprit still allocating. (A FAILED dial frees its ring before
+    // it returns, but its tombstone joins the list, and the cap's
+    // eviction of an older one counts as a reap.) Both edges move the
+    // list census; a dial and a reap in one window cancel there, which
+    // is what the reap counter is here to break. (Two corpses reaping
+    // mid-window measured as -67200 bytes/task and convicted
+    // task_destroy of a leak it didn't have; an os64get typed mid-window
+    // read as +214468 the same way.)
     if (kTcpStats.connections_reaped != reaps_before ||
         teardown_tcp_conn_census() != conns_before) {
         printd(DEBUG_TESTS, "\ttask_teardown_leak: a TCP connection was dialed or reaped "
