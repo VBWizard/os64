@@ -323,8 +323,24 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	// RST: the conversation is over, right now, no reply. (An RST that
 	// arrives for a connection we are still opening means "refused" —
 	// dial sees `reset` and counts it when it entombs the attempt.)
+	//
+	// In SYN_SENT the RST must acknowledge OUR SYN — RFC 793 §3.9 — or it
+	// is not ours: a failed dial gives its port back at once, and after
+	// enough dials the draw wraps, so a new dial to the same peer can wear
+	// the four-tuple of an earlier one whose replies are still on the
+	// wire. What tells the incarnations apart is the sequence space —
+	// the ISS carries the tick it was minted on — so a stale answer
+	// acknowledges a number this connection never sent, and is dropped
+	// (Codex, PR #46).
 	if (flags & TCP_RST)
 	{
+		if (c->state == TCP_SYN_SENT && (!(flags & TCP_ACK) || ack != c->snd_nxt))
+		{
+			printd(DEBUG_NET, "tcp: RST for a SYN this connection did not send (ack 0x%x, ours 0x%x) — dropped\n",
+			       ack, c->snd_nxt);
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return;
+		}
 		kTcpStats.resets_received++;
 		c->reset = true;
 		c->state = TCP_CLOSED;
@@ -346,7 +362,25 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			// starting sequence number; acknowledging it (rcv_nxt = their
 			// seq + 1, because SYN counts as a byte) completes the
 			// three-way handshake and opens the stream.
-			if ((flags & TCP_SYN) && (flags & TCP_ACK) && seq_geq(ack, c->snd_nxt))
+			//
+			// The ACK must be EXACTLY our SYN's successor: only the SYN is
+			// outstanding, and anything else acknowledges a segment this
+			// connection never sent — a previous incarnation's, when the
+			// port draw has wrapped onto a tuple whose replies are still
+			// in flight (the RST rule above says why that is reachable).
+			// RFC 793 §3.9: an unacceptable ACK in SYN_SENT is answered
+			// with RST at its own number and dropped, and we stay put;
+			// our own SYN's answer is still coming. `>=` here let a stale
+			// SYN+ACK complete a handshake it was never part of.
+			if ((flags & TCP_ACK) && ack != c->snd_nxt)
+			{
+				printd(DEBUG_NET, "tcp: SYN_SENT answer acks 0x%x, ours is 0x%x — a stale incarnation, RST\n",
+				       ack, c->snd_nxt);
+				spinlock_release_irqrestore(&c->lock, irqflags);
+				tcp_send_rst(dev, src_ip, dst_port, src_port, 0, ack, true);
+				return;
+			}
+			if ((flags & TCP_SYN) && (flags & TCP_ACK))
 			{
 				c->rcv_nxt = seq + 1;
 				c->snd_una = ack;
@@ -835,33 +869,23 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// unless the handshake itself says otherwise (reset/timeout at the end).
 	if (why) *why = OS64_NET_ERR_NO_RESOURCES;
 
-	tcp_conn_t* c = kmalloc(sizeof(*c));
-	if (c == NULL)
-		return NULL;
-	c->rcv_buf = kmalloc(TCP_RCV_BUF);
-	c->snd_buf = kmalloc(TCP_MSS);
-	if (c->rcv_buf == NULL || c->snd_buf == NULL)
-	{
-		if (c->rcv_buf) kfree(c->rcv_buf);
-		if (c->snd_buf) kfree(c->snd_buf);
-		kfree(c);
-		return NULL;
-	}
-	c->dev = dev;
-	c->peer_ip = peer_ip;
-	c->peer_port = peer_port;
-	c->snd_mss = 536;
-	c->snd_wnd = TCP_MSS;
-
-	// The port draw, the connection's identity, and its publication are ONE
-	// critical section. Drawn outside the lock, two tasks dialing at once
-	// could read the same counter and open two connections on one local
-	// port — the demux would then hand one stream's segments to whichever
-	// matched first. The bitmap holds the port of every listed connection
-	// that had a conversation, TIME_WAIT and morgue residents included,
-	// which is the port protection TIME_WAIT exists to give. A failed
-	// dial's tombstone is the exception — it gave its port back when the
-	// dial returned (tcp_dial_entomb), having had nothing to protect.
+	// THE PORT IS DRAWN BEFORE A BYTE IS ALLOCATED. The draw is the
+	// reservation: the bit is claimed under the list lock, so two tasks
+	// dialing at once cannot open two connections on one local port (the
+	// demux would hand one stream's segments to whichever matched first),
+	// and a dial that finds the range full leaves with nothing to free.
+	// That last part is what task_teardown_leak's bracket depends on — it
+	// counts what a failed dial frees through the failure counters, and a
+	// port-exhausted exit is neither refused nor timed out (Codex, PR
+	// #46). Between the draw and the publication below the port is held
+	// by its bit alone; a segment for it in that gap finds nobody home
+	// and is answered RST, which is right — we have sent nothing yet.
+	//
+	// The bitmap holds the port of every listed connection that had a
+	// conversation, TIME_WAIT and morgue residents included, which is the
+	// port protection TIME_WAIT exists to give. A failed dial's tombstone
+	// is the exception — it gave its port back when the dial returned
+	// (tcp_dial_entomb), having had nothing to protect.
 	//
 	// The search is BOUNDED to one pass over the dynamic range at one bit
 	// test per candidate, and an exhausted range is a clean NO_RESOURCES —
@@ -874,6 +898,7 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// apiece fit comfortably in this machine's RAM, so a full range is
 	// reachable, not theoretical).
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint16_t local_port = 0;
 	bool found = false;
 	for (uint32_t tries = TCP_EPHEMERAL_COUNT; tries > 0; tries--)
 	{
@@ -884,24 +909,33 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 		if (s_ephemeral_used[bit / 64] & (1ULL << (bit % 64)))
 			continue;
 		s_ephemeral_used[bit / 64] |= (1ULL << (bit % 64));
-		c->local_port = candidate;
+		local_port = candidate;
 		found = true;
 		break;
 	}
+	spinlock_release_irqrestore(&kTcpListLock, lf);
 	if (!found)
-	{
-		spinlock_release_irqrestore(&kTcpListLock, lf);
-		kfree(c->rcv_buf);   // never inserted, nothing published — plain cleanup
-		kfree(c->snd_buf);
-		kfree(c);
 		return NULL;         // *why already answers NO_RESOURCES, the honest verdict
-	}
+
+	// None of these can be NULL: allocator exhaustion is a panic by name
+	// (allocator.c), so a "no memory" branch here would be the fallback
+	// that never fires.
+	tcp_conn_t* c = kmalloc(sizeof(*c));
+	c->rcv_buf = kmalloc(TCP_RCV_BUF);
+	c->snd_buf = kmalloc(TCP_MSS);
+	c->dev = dev;
+	c->peer_ip = peer_ip;
+	c->peer_port = peer_port;
+	c->local_port = local_port;
+	c->snd_mss = 536;
+	c->snd_wnd = TCP_MSS;
 
 	uint32_t iss = tcp_initial_seq(peer_ip, peer_port, c->local_port);
 	c->snd_una = iss;
 	c->snd_nxt = iss;
 	c->state = TCP_SYN_SENT;
 
+	lf = spinlock_acquire_irqsave(&kTcpListLock);
 	c->next = kTcpConnList;
 	c->prev = NULL;
 	if (kTcpConnList != NULL)

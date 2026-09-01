@@ -1997,7 +1997,10 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // it returns, seconds after its row joined the list if it timed out,
     // so that free can land alone in a window too — which is why the
     // failure counters are watched here, and why tcp.c ticks every one
-    // of these counters AFTER the free it accounts for. Both edges move
+    // of these counters AFTER the free it accounts for. (A dial the port
+    // draw turns away has allocated nothing yet, so it has nothing to
+    // count — tcp_conn_dial draws before it allocates for exactly this
+    // reason.) Both edges move
     // the list census; a dial and a reap in one window cancel there,
     // which is what the counters are here to break. (Two corpses reaping
     // mid-window measured as -67200 bytes/task and convicted
