@@ -44,6 +44,7 @@
 #include "os64/pty.h"      // os64_pty_header_t/_cell_t — pty_snapshot's out-structs (abi)
 #include "env.h"           // env_set/env_unset — setenv() mutates the task's env block
 #include "os64/net.h"      // os64_netdest_t — net_dial's in-struct (abi)
+#include "os64/mount.h"    // OS64_MOUNT_BAD_ARGS — namespace verbs preserve this ABI verdict
 #include "driver/net/net_device.h"   // kNetDevices — dial needs a NIC to dial on
 #include "driver/net/net_wire.h"     // NET_IPV4_OCTETS — address logging
 #include "driver/net/udp_conn.h"     // the object behind HANDLE_NET_UDP
@@ -340,8 +341,15 @@ static uint64_t syscall_mount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			kfree(p);
 			return SYSCALL_RESULT_BAD_USER_DATA;
 		}
+		// WHERE names the machine-wide namespace, not a place relative to one
+		// caller. Reject it before the resolver can erase that distinction.
 		if (raw_where[0] == '\0')   // "" is the same ask as NULL, same resolver dodge
 			p->where[0] = '\0';
+		else if (raw_where[0] != '/')
+		{
+			kfree(p);
+			return (uint64_t)(int64_t)OS64_MOUNT_BAD_ARGS;
+		}
 		else if (!resolve_user_path(task, raw_where, p->where, sizeof(p->where)))
 		{
 			kfree(p);
@@ -370,8 +378,19 @@ static uint64_t syscall_unmount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;
 
 	char raw_where[TASK_MAX_PATH_LEN];
-	if (!copy_user_string((const char *)arg0, raw_where, sizeof(raw_where)) ||
-	    !resolve_user_path(task, raw_where, p->where, sizeof(p->where)))
+	if (!copy_user_string((const char *)arg0, raw_where, sizeof(raw_where)))
+	{
+		kfree(p);
+		return SYSCALL_RESULT_BAD_USER_DATA;
+	}
+	// Unmount has the same namespace-wide path contract as mount. An empty or
+	// relative name is malformed rather than an instruction involving cwd.
+	if (raw_where[0] != '/')
+	{
+		kfree(p);
+		return (uint64_t)(int64_t)OS64_MOUNT_BAD_ARGS;
+	}
+	if (!resolve_user_path(task, raw_where, p->where, sizeof(p->where)))
 	{
 		kfree(p);
 		return SYSCALL_RESULT_BAD_USER_DATA;
