@@ -73,13 +73,25 @@ static inline bool seq_geq(uint32_t a, uint32_t b) { return (int32_t)(a - b) >= 
 // this mixes the tick counter with the connection's own addressing and a
 // scramble — better than a counter, honestly weaker than a real PRNG, and
 // booked as a DEBT rather than dressed up.
+//
+// The per-dial serial is the part that is not about attackers: it is what
+// makes two incarnations of one four-tuple DISTINGUISHABLE. A refused
+// dial gives its port back at once, so a redial can wear the same tuple
+// within the same 10ms tick, and the acceptance rules in tcp_input judge
+// a straggler from the first attempt by whether it acknowledges this
+// one's ISS. Tick alone gave both the same ISS (Codex, PR #46); RFC 793's
+// 4µs clock and RFC 6528's M term exist for exactly this, and a serial
+// that moves on every dial is the same guarantee without a finer clock.
+// Read under kTcpListLock, which every dial holds here.
+static uint32_t s_dial_serial;
 static uint32_t tcp_initial_seq(uint32_t peer_ip, uint16_t peer_port, uint16_t local_port)
 {
 	uint32_t t = (uint32_t)kTicksSinceStart;
 	uint32_t mix = t * 2654435761u;              // Knuth's multiplicative hash constant
 	mix ^= peer_ip + ((uint32_t)peer_port << 16) + local_port;
 	mix ^= mix >> 13;
-	return mix * 2246822519u;
+	mix *= 2246822519u;
+	return mix + (++s_dial_serial) * 2654435761u; // distinct per dial, whatever the tick
 }
 
 // ── 2. SEGMENT CONSTRUCTION ─────────────────────────────────────────────────
@@ -329,9 +341,9 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	// enough dials the draw wraps, so a new dial to the same peer can wear
 	// the four-tuple of an earlier one whose replies are still on the
 	// wire. What tells the incarnations apart is the sequence space —
-	// the ISS carries the tick it was minted on — so a stale answer
-	// acknowledges a number this connection never sent, and is dropped
-	// (Codex, PR #46).
+	// every dial mints a distinct ISS (tcp_initial_seq's serial) — so a
+	// stale answer acknowledges a number this connection never sent, and
+	// is dropped (Codex, PR #46).
 	//
 	// Once SYNCHRONIZED the same stranger is judged by RFC 5961 (2010,
 	// the blind-reset fix): an RST is honored only at exactly the next
