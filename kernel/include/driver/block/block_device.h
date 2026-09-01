@@ -16,4 +16,8 @@ extern dlist_t* kBlockDeviceDList;
 	// bytes — see block_device.c for the corruption that earned it.
 	void block_verify_write_allowed(block_device_info_t* device, uint64_t sector, uint64_t count);
 
+	// Assign the system's bus+ordinal device names ("nvme0") — once, after
+	// enumeration; /sys/block and the future /dev nodes speak these.
+	void block_assign_dev_names(void);
+
 #endif

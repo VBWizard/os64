@@ -13,6 +13,9 @@
 //   6. close(dir)                 -> 0; readdir afterwards -> error
 //   7. open("/", "d")             -> root lists "bin" WITH the DIR flag
 //                                    (the flag that tells ls to color it 😉)
+//                                    and WITHOUT the MOUNT flag, while "sys"
+//                                    carries both — the bit a recursive walk
+//                                    stops at, proved in both polarities
 
 #include <stdint.h>
 #include "os64/syscall.h"
@@ -27,6 +30,7 @@
 #define FAIL_BOGUS_PATH   0x0D120006UL   // step 5
 #define FAIL_CLOSE        0x0D120007UL   // step 6
 #define FAIL_ROOT_BIN     0x0D120008UL   // step 7
+#define FAIL_MOUNT_FLAG   0x0D120009UL   // step 7: OS64_DE_MOUNT wrong on / entries
 
 static inline int failed(uint64_t v) { return (int64_t)v < 0; }
 
@@ -87,17 +91,39 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
         !failed(os64_syscall2(SYSCALL_READDIR, d, (uint64_t)&e)))
         exit_with(FAIL_CLOSE);
 
-    // 7. The root knows /bin is a directory — the flag ls will color by.
+    // 7. The root knows /bin is a directory — the flag ls will color by —
+    //    and it knows /sys is a MOUNT, which is the flag a recursive walker
+    //    stops at (dirent.h). Both polarities in one walk, because the bit
+    //    is only useful if it is absent where it should be: /bin is an
+    //    ordinary directory ON the root filesystem, /sys is a different
+    //    filesystem that the namespace synthesized an entry for. Both exist
+    //    on every boot there has ever been, so neither leg is conditional.
     d = os64_syscall2(SYSCALL_OPEN, (uint64_t)"/", (uint64_t)"d");
     if (failed(d))
         exit_with(FAIL_ROOT_BIN);
-    int saw_bin_dir = 0;
+    int saw_bin_dir = 0, bin_claimed_mount = 0;
+    int saw_sys_mount = 0, sys_missing_flag = 0;
     while (os64_syscall2(SYSCALL_READDIR, d, (uint64_t)&e) == 1)
+    {
         if (str_eq(e.name, "bin") && (e.flags & OS64_DE_DIR))
+        {
             saw_bin_dir = 1;
+            if (e.flags & OS64_DE_MOUNT)
+                bin_claimed_mount = 1;
+        }
+        if (str_eq(e.name, "sys"))
+        {
+            saw_sys_mount = 1;
+            if ((e.flags & (OS64_DE_DIR | OS64_DE_MOUNT)) !=
+                (OS64_DE_DIR | OS64_DE_MOUNT))
+                sys_missing_flag = 1;
+        }
+    }
     os64_syscall1(SYSCALL_CLOSE, d);
     if (!saw_bin_dir)
         exit_with(FAIL_ROOT_BIN);
+    if (bin_claimed_mount || !saw_sys_mount || sys_missing_flag)
+        exit_with(FAIL_MOUNT_FLAG);
 
     exit_with(DIRLIST_OK);
 }

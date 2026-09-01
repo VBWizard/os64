@@ -25,8 +25,9 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        nine entries: "bus", "cpu", "net", "cache",
-//                                "conf", "gui", "log", "shlib", "clipboard"
+//   /sys/                        eleven entries: "bus", "cpu", "net", "block",
+//                                "cache", "conf", "gui", "log", "mounts",
+//                                "shlib", "clipboard"
 //   /sys/bus/                    one entry: "pci"
 //   /sys/bus/pci/                one file per discovered function, named
 //                                bus:dev.fn in hex — "00:1f.3", lspci's
@@ -123,6 +124,8 @@
 #include "strings/strings.h"
 #include "sprintf.h"
 #include "serial_logging.h"
+#include "ata.h"      // eATADeviceType — /sys/block names devices by bus
+#include "memcmp.h"   // the /sys/block mounted-at GUID match
 #include "scheduler.h"              // mp_inScheduler, mp_lastIretqRIP
 #include "smp.h"                    // core_local_storage_t, kMPCoreCount
 #include "smp_core.h"               // get_core_local_storage_for_core, mpAcctSettleAll
@@ -311,6 +314,9 @@ typedef enum
 	SYS_NODE_NETDHCP,    // /net/dhcp — how that address was come by
 	SYS_NODE_NETTCP,     // /net/tcp — the transport, connection by connection
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
+	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
+	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
+	SYS_NODE_OPENFILESFILE, // /openfiles — the open-file registry (lsof's deep half)
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
@@ -423,6 +429,30 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_SHLIBFILE;
+		return;
+	}
+
+	if (strcmp(comp, "mounts") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_MOUNTSFILE;
+		return;
+	}
+
+	if (strcmp(comp, "openfiles") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_OPENFILESFILE;
+		return;
+	}
+
+	if (strcmp(comp, "block") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_BLOCKFILE;
 		return;
 	}
 
@@ -801,6 +831,210 @@ static void sys_gen_shlib(synth_text_t *t)
 // The lines are facts, not history: a name that is looked up twice shows its
 // latest answer, because the file a reader is using is a property of now.
 // A name with no path after it was searched for and not found anywhere.
+// ── /sys/openfiles — the open-file registry as columns (2026-08-31) ─────────
+// One line per open file on a DISK filesystem — the same list unmount's BUSY
+// arithmetic trusts, so this file answers "busy with WHAT?". lsof's deep
+// half: /proc/<pid>/handles knows WHO holds what, but only this list sees
+// the kernel's own holds — a running program's image kept open for demand
+// paging, a resident shared object, an orphan pinned by its last opener —
+// and handles==0 marks exactly those (no task handle references the file).
+// Synthetic files (procfs, sysfs, pipes) never register; their story stays
+// in the handle tables. ident is the fs-local file identity (ext2 inode,
+// FAT start cluster — vfs.h f_ident). The path and mount columns are DATA,
+// so both are escaped — synth_text_escape in synthfs.h carries the rule and
+// the reason.
+static void sys_gen_openfiles(synth_text_t *t)
+{
+	synth_text_addf(t, "# path mount ident handles\n");
+	int capacity = vfs_openfiles_snapshot(NULL, 0);
+	if (capacity == 0)
+		return;
+	vfs_openfile_row_t *rows = NULL;
+	int total = 0;
+	while (capacity > 0)
+	{
+		rows = kmalloc((size_t)capacity * sizeof(*rows));
+		if (rows == NULL)
+			return;
+		total = vfs_openfiles_snapshot(rows, capacity);
+		if (total <= capacity)
+			break;
+
+		// The registry grew between the count and the copy. Retry at its new
+		// size rather than publishing a plausible-looking partial listing.
+		kfree(rows);
+		rows = NULL;
+		capacity = total;
+	}
+	for (int i = 0; i < total; i++)
+	{
+		// Root's prefix is "" so prefix+tail concatenates to the full path;
+		// the mount column still says "/" out loud.
+		//
+		// Both are ESCAPED (synthfs.h): a filename may hold whatever a
+		// filename may hold, and so may a mount path. Escaping the two
+		// halves separately and joining them is the same bytes as escaping
+		// the join — the transform is per-byte.
+		const char *m = rows[i].mount[0] != '\0' ? rows[i].mount : "/";
+		char emount[sizeof(rows[i].mount) * 4];
+		char etail[sizeof(rows[i].tail) * 4];
+		char ecolumn[sizeof(emount)];
+		synth_text_escape(rows[i].mount, emount, sizeof(emount));
+		synth_text_escape(rows[i].tail, etail, sizeof(etail));
+		synth_text_escape(m, ecolumn, sizeof(ecolumn));
+		// Several calls, not one, and each escaped field ALONE in its call:
+		// a fully-escaped path can fill synth_text_addf's per-call line
+		// buffer by itself (synthfs.c says so), and a row that overflows it
+		// is TRUNCATED — half a field, which a column reader rejects whole.
+		// Even the separator rides on the next call, so nothing here depends
+		// on a field being a few bytes under the cap.
+		synth_text_addf(t, "%s", emount);
+		synth_text_addf(t, "%s", etail);
+		synth_text_addf(t, " %s %lu %d\n", ecolumn, rows[i].ident, rows[i].handles);
+	}
+	kfree(rows);
+}
+
+// ── /sys/mounts — the mount table as columns (2026-08-30) ───────────────────
+// One line per live mount, whitespace-separated, '#' header naming the
+// columns; "-" is the honest absent value. df reads this file — the numbers
+// come from each filesystem's space fop (real disk I/O for FAT, which is why
+// this renders in kernel context like every synth file). The dir count rides
+// beside the file count because unmount's BUSY answer is their sum, and the
+// person df'ing before an unmount deserves the same arithmetic. The prefix
+// and GPT-name columns are DATA and are escaped — synth_text_escape in
+// synthfs.h carries the rule and the reason.
+static void sys_gen_mounts(synth_text_t *t)
+{
+	synth_text_addf(t, "# prefix fstype device part name guid mode blocksz total free open_files open_dirs\n");
+	for (int i = 0; i < kMountCount; i++)
+	{
+		vfs_filesystem_t *fs = kMountTable[i].fs;
+		if (fs == NULL)
+			continue;
+		const char *fstype = kMountTable[i].fstype ? kMountTable[i].fstype : "?";
+
+		char guid[40] = "-";
+		char dev[16] = "-";
+		char part[8] = "-";
+		// A GPT name is 36 characters of somebody else's data, so it is
+		// ESCAPED into a field four times that (synthfs.h) — otherwise
+		// "Basic data partition" hands df fifteen columns where twelve
+		// were promised and the whole report reads as malformed.
+		char name[36 * 4 + 1] = "-";
+		if (fs->block_device_info != NULL)
+		{
+			vfs_format_guid(kMountTable[i].part_guid, guid);
+			block_device_t *bd = fs->block_device_info->block_device;
+			if (bd != NULL && bd->dev_name[0] != '\0')
+				sprintf(dev, "%s", bd->dev_name);
+			sprintf(part, "%d", fs->partNumber);
+			partEntry_t *pe = (bd != NULL && bd->partition_table != NULL &&
+			                   fs->partNumber < bd->part_count)
+			                  ? bd->partition_table->parts[fs->partNumber] : NULL;
+			if (pe != NULL && pe->partName[0] != '\0')
+			{
+				char raw[37];
+				sprintf(raw, "%.36s", pe->partName);
+				synth_text_escape(raw, name, sizeof(name));
+			}
+		}
+
+		// The prefix is a path, and a path may hold whatever a filename may.
+		char prefix[VFS_MOUNT_PREFIX_MAX * 4];
+		synth_text_escape(kMountTable[i].prefix, prefix, sizeof(prefix));
+
+		uint64_t total = 0, free_b = 0;
+		bool have_space = (fs->fops != NULL && fs->fops->space != NULL &&
+		                   fs->fops->space(fs, &total, &free_b) == 0);
+
+		synth_text_addf(t, "%s %s %s %s %s %s %s ",
+		                prefix, fstype, dev, part, name, guid,
+		                fs->read_only ? "ro" : "rw");
+		if (fs->blockSize > 0)
+			synth_text_addf(t, "%d ", fs->blockSize);
+		else
+			synth_text_addf(t, "- ");
+		if (have_space)
+			synth_text_addf(t, "%lu %lu ", total, free_b);
+		else
+			synth_text_addf(t, "- - ");
+		synth_text_addf(t, "%d %d\n", vfs_openfiles_on(fs), fs->open_dir_count);
+	}
+}
+
+// ── /sys/block — every device and partition, named and located ──────────────
+// "dev" rows then their "part" rows, in enumeration order. The device name is
+// THE system name ("nvme0" — block_assign_dev_names, and the future /dev
+// nodes). A partition's last column is where it is mounted, or "-": the
+// answer to "what CAN I mount?" is every "-" row with a filesystem word.
+// The GPT-name and mounted-at columns are DATA and are escaped —
+// synth_text_escape in synthfs.h carries the rule and the reason.
+static void sys_gen_block(synth_text_t *t)
+{
+	synth_text_addf(t, "# dev  <name> <kind> <sectors> <sector_bytes>\n");
+	synth_text_addf(t, "# part <dev> <n> <gpt_name> <fs> <guid> <mounted_at>\n");
+	for (int i = 0; i < kBlockDeviceInfoCount; i++)
+	{
+		block_device_t *bd = kBlockDeviceInfo[i].block_device;
+		if (bd == NULL)
+			continue;
+		const char *kind = "?";
+		switch (kBlockDeviceInfo[i].ATADeviceType)
+		{
+			case ATA_DEVICE_TYPE_NVME_HD: kind = "nvme"; break;
+			case ATA_DEVICE_TYPE_SATA_HD: kind = "sata"; break;
+			case ATA_DEVICE_TYPE_HD:      kind = (bd->dev_name[0] == 'r') ? "ram" : "disk"; break;
+			case ATA_DEVICE_TYPE_CD:
+			case ATA_DEVICE_TYPE_SATA_CD: kind = "cd"; break;
+		}
+		synth_text_addf(t, "dev %s %s %u %u\n",
+		                bd->dev_name[0] ? bd->dev_name : "-", kind,
+		                kBlockDeviceInfo[i].totalSectorCount,
+		                kBlockDeviceInfo[i].sectorSize);
+
+		for (int p = 0; bd->partition_table != NULL && p < bd->part_count; p++)
+		{
+			partEntry_t *pe = bd->partition_table->parts[p];
+			if (pe == NULL)
+				continue;
+			const char *fsword = "-";
+			switch (pe->filesystemType)
+			{
+				case FILESYSTEM_TYPE_FAT:
+				case FILESYSTEM_TYPE_FAT32: fsword = "fat";  break;
+				case FILESYSTEM_TYPE_EXT2:  fsword = "ext2"; break;
+				default: break;
+			}
+			char guid[40];
+			vfs_format_guid(pe->uniquePartGUID, guid);
+
+			// Both of these are DATA in a whitespace-columned row — a GPT
+			// name off the disk and a mount path — so both are escaped
+			// (synthfs.h). Windows names its data partition "Basic data
+			// partition"; unescaped, that is four columns.
+			char at[VFS_MOUNT_PREFIX_MAX * 4] = "-";
+			for (int mi = 0; mi < kMountCount; mi++)
+				if (kMountTable[mi].fs != NULL &&
+				    memcmp(kMountTable[mi].part_guid, pe->uniquePartGUID, 16) == 0)
+				{
+					synth_text_escape(kMountTable[mi].prefix, at, sizeof(at));
+					break;
+				}
+			char pname[36 * 4 + 1] = "-";
+			if (pe->partName[0] != '\0')
+			{
+				char raw[37];
+				sprintf(raw, "%.36s", pe->partName);
+				synth_text_escape(raw, pname, sizeof(pname));
+			}
+			synth_text_addf(t, "part %s %d %s %s %s %s\n",
+			                bd->dev_name[0] ? bd->dev_name : "-", p,
+			                pname, fsword, guid, at);
+		}
+	}
+}
+
 static void sys_gen_conf(synth_text_t *t)
 {
 	synth_text_addf(t, "path: ");
@@ -1392,7 +1626,9 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_GUIFILE && sp.type != SYS_NODE_NETIP
 	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETTCP
 	         && sp.type != SYS_NODE_NETCARD
-	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE)
+	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
+	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
+	         && sp.type != SYS_NODE_OPENFILESFILE)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -1411,6 +1647,12 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_shlib(&text);
 	else if (sp.type == SYS_NODE_CONFFILE)
 		sys_gen_conf(&text);
+	else if (sp.type == SYS_NODE_MOUNTSFILE)
+		sys_gen_mounts(&text);
+	else if (sp.type == SYS_NODE_BLOCKFILE)
+		sys_gen_block(&text);
+	else if (sp.type == SYS_NODE_OPENFILESFILE)
+		sys_gen_openfiles(&text);
 	else if (sp.type == SYS_NODE_NETIP)
 		sys_gen_net_ip(&text);
 	else if (sp.type == SYS_NODE_NETDHCP)
@@ -1602,7 +1844,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "cache", "conf", "gui", "log", "shlib", "clipboard" };
+			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "shlib", "clipboard" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -1797,6 +2039,18 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_CONFFILE:
 			strncpy(entry->name, "conf", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_MOUNTSFILE:
+			strncpy(entry->name, "mounts", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_BLOCKFILE:
+			strncpy(entry->name, "block", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_OPENFILESFILE:
+			strncpy(entry->name, "openfiles", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		// The clipboard reports its REAL length here (the only /sys node that

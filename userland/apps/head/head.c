@@ -6,27 +6,6 @@
 
 static char buf[HEAD_BUF_SIZE];
 
-static bool parse_line_count(const char *value, uint64_t *lineCount)
-{
-    if (value == NULL || *value == '\0')
-        return false;
-
-    uint64_t result = 0;
-    for (const char *p = value; *p != '\0'; p++)
-    {
-        if (*p < '0' || *p > '9')
-            return false;
-
-        uint64_t digit = (uint64_t)(*p - '0');
-        if (result > (UINT64_MAX - digit) / 10)
-            return false;
-        result = result * 10 + digit;
-    }
-
-    *lineCount = result;
-    return true;
-}
-
 static int write_all(int32_t handle, const char *data, size_t length)
 {
     size_t written = 0;
@@ -101,7 +80,8 @@ int main(int argc, char **argv)
     if (parsed < 0)
         os64_exit(2);
 
-    if (lineCountValue != NULL && !parse_line_count(lineCountValue, &lineCount))
+    if (lineCountValue != NULL &&
+        !os64_parse_u64(lineCountValue, &lineCount))
     {
         os64_hprintf(OS64_STDERR, "head: invalid line count: %s\n",
                      lineCountValue);

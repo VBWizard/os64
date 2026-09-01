@@ -382,6 +382,17 @@ int64_t os64_rename(const char *oldpath, const char *newpath)
     return (long)os64_syscall2(SYSCALL_RENAME, (uint64_t)oldpath, (uint64_t)newpath);
 }
 
+// The namespace verbs (io.h has the contract; os64/mount.h the vocabulary).
+int64_t os64_mount(const char *what, const char *where, uint64_t flags)
+{
+    return (long)os64_syscall3(SYSCALL_MOUNT, (uint64_t)what, (uint64_t)where, flags);
+}
+
+int64_t os64_unmount(const char *where)
+{
+    return (long)os64_syscall1(SYSCALL_UNMOUNT, (uint64_t)where);
+}
+
 // Create a directory. Relative paths resolve against the cwd, like open's.
 //
 // One atomic call — the kernel owes us that much since 4.2BSD showed it was

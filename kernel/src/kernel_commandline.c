@@ -256,19 +256,28 @@ static int parse_decimal(const char *s)
     return value;
 }
 
-// Simple in-place whitespace tokenizer
+// Simple in-place whitespace tokenizer.
+//
+// CR AND LF SEPARATE TOKENS TOO, and that is not decoration: this string
+// arrives from a config file somebody may have saved on Windows, and a line
+// ending that survives the bootloader lands on the LAST token of the line.
+// Every string option would then carry it — LOGD=/home/os64.log\r opens a
+// file whose name ends in a control character, ROOT=<guid>\r names no
+// partition at all. The config readers already treat CR as whitespace
+// (conf.c, and mounts.conf strips it by hand); the cmdline is the one door
+// that did not, and it is the door that decides whether a root mounts.
 static int tokenize(char *cmdline, const char **argv, int max)
 {
     int argc = 0;
     char *p = cmdline;
     while (*p && argc < max)
     {
-        while ((*p == ' ' || *p == '\t') && *p)
+        while ((*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') && *p)
             p++;
         if (!*p)
             break;
         argv[argc++] = p;
-        while (*p && *p != ' ' && *p != '\t')
+        while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n')
             p++;
         if (*p)
         {

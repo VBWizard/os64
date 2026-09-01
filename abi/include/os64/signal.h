@@ -18,7 +18,7 @@
 // a corpse tagged 143 is legible to anyone who has ever read a shell's exit
 // status. os64's own take numbers POSIX left free.
 
-#define OS64_SIGHUP    1    // your terminal hung up (tty_task_departed, when the seated shell dies)
+#define OS64_SIGHUP    1    // your terminal hung up — the seated shell died, or the pty master closed; either way the line went away
 #define OS64_SIGINT    2    // Ctrl+C
 #define OS64_SIGKILL   9    // uncatchable, by design — see below
 #define OS64_SIGSEGV   11   // you touched memory that isn't yours

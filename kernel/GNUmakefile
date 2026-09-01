@@ -1,6 +1,11 @@
 # Nuke built-in rules and variables.
 MAKEFLAGS += -rR
+# Parallel when this is the top-level make (`make -C kernel`); under the root
+# build it inherits the root's jobserver instead, because a -j of its own
+# would drop that jobserver and run a full count beside the root's jobs.
+ifeq ($(MAKELEVEL),0)
 MAKEFLAGS += -j$(shell nproc)
+endif
 # Find all directories in `include` recursively
 INCLUDE_DIRS := $(shell find include -type d)
 # Prefix each directory with -I for GCC

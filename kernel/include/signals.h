@@ -86,8 +86,10 @@ typedef enum esignals
 		// Parent death has never killed anything in Unix (orphans are
 		// reparented and run on; that is what makes a daemon possible). THIS
 		// is what ends a shell's leftovers, and `nohup` (PWB, 1979) exists
-		// solely to opt out of it. Raised by tty_task_departed on every task
-		// still seated on the departing shell's terminal. (SIGHUP = 1, above.)
+		// solely to opt out of it. Raised on every task still seated when
+		// the line goes away — the seated shell dying (tty_task_departed)
+		// or a pty's master closing (pty_master_close), which are the same
+		// carrier drop heard from opposite ends. (SIGHUP = 1, above.)
 
 		// SIGTERM: the machine is going down; finish up. Raised by the
 		// shutdown descent's termination ladder on every user task, with a

@@ -1,6 +1,9 @@
 #include "block_device.h"
 #include "kmalloc.h"
 #include "panic.h"
+#include "sprintf.h"
+#include "strings.h"
+#include "ata.h"
 
 dlist_t* kBlockDeviceDList;
 int SATAMinor=0, NVMEMinor=0;
@@ -123,4 +126,55 @@ dlist_node_t* add_block_device(vfs_filesystem_t* vfs_block_device)
 	retVal->major = major;
 	retVal->minor = minor;
 	return retVal;
+}
+
+// ── The system's device names (2026-08-30, the mount/df slice) ──────────────
+// bus + ordinal — "nvme0", "sata0", "ram0" — assigned once, after the boot's
+// enumeration and before anything user-facing prints a device. This is THE
+// name: /sys/block speaks it, and /dev block nodes will reuse it verbatim
+// when they arrive, which is the commitment that keeps os64 from ever
+// needing a /dev/disk/by-* pile of aliases. `name` remains the driver's own
+// story (a model string, "ramdisk0") for the logs.
+//
+// Runs once and latches: enumeration is a boot-time affair, and re-running
+// with fresh counters would hand a later arrival a name some earlier device
+// already wears. The day devices can arrive after boot, the counters become
+// per-bus high-water marks — that day, not before.
+void block_assign_dev_names(void)
+{
+	static bool assigned = false;
+	if (assigned)
+		return;
+	assigned = true;
+
+	int nvme = 0, sata = 0, ram = 0, disk = 0;
+	for (int i = 0; i < kBlockDeviceInfoCount; i++)
+	{
+		block_device_t *bd = kBlockDeviceInfo[i].block_device;
+		if (bd == NULL)
+			continue;
+		const char *bus;
+		int *ctr;
+		switch (kBlockDeviceInfo[i].ATADeviceType)
+		{
+			case ATA_DEVICE_TYPE_NVME_HD: bus = "nvme"; ctr = &nvme; break;
+			case ATA_DEVICE_TYPE_SATA_HD: bus = "sata"; ctr = &sata; break;
+			case ATA_DEVICE_TYPE_HD:
+				// The RAMDisk registers as a plain HD; its driver name is
+				// the tell. Anything else HD-typed is legacy IDE — "disk",
+				// until a real customer earns it a better word.
+				if (bd->name != NULL && strncmp(bd->name, "ramdisk", 7) == 0)
+				{
+					bus = "ram";  ctr = &ram;
+				}
+				else
+				{
+					bus = "disk"; ctr = &disk;
+				}
+				break;
+			default:
+				continue;   // CD types — no name until a customer exists
+		}
+		sprintf(bd->dev_name, "%s%d", bus, (*ctr)++);
+	}
 }

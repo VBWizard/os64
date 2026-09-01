@@ -171,6 +171,26 @@ uint64_t os64_atou(const char *s)
     return v;
 }
 
+bool os64_parse_u64(const char *s, uint64_t *out)
+{
+    if (s == NULL || out == NULL || *s == '\0')
+        return false;
+
+    uint64_t value = 0;
+    for (const char *p = s; *p != '\0'; p++)
+    {
+        if (*p < '0' || *p > '9')
+            return false;
+        uint64_t digit = (uint64_t)(*p - '0');
+        if (value > (UINT64_MAX - digit) / 10)
+            return false;
+        value = value * 10 + digit;
+    }
+
+    *out = value;
+    return true;
+}
+
 // One hex digit's value, or -1 if the character isn't one. Kept separate so
 // the "is it a digit" test and the "what is it worth" conversion are the same
 // question asked once — the classic hand-rolled hex loop asks it twice and
@@ -181,6 +201,47 @@ static int hex_digit(char c)
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return -1;
+}
+
+// Contract, and the argument for the escaping, in str.h.
+void os64_unescape_field(char *s)
+{
+    char *out;
+    const char *in;
+
+    if (s == NULL)
+        return;
+
+    for (in = s, out = s; *in != '\0'; )
+    {
+        if (*in != '\\')
+        {
+            *out++ = *in++;
+            continue;
+        }
+        if (in[1] == '\\')
+        {
+            *out++ = '\\';
+            in += 2;
+            continue;
+        }
+        if (in[1] == 'x')
+        {
+            int hi = hex_digit(in[2]);
+            int lo = (hi >= 0) ? hex_digit(in[3]) : -1;
+            if (lo >= 0)
+            {
+                *out++ = (char)((hi << 4) | lo);
+                in += 4;
+                continue;
+            }
+        }
+        // Not an escape this encoder produces. Pass the backslash through
+        // rather than guess — a report that says something we cannot read is
+        // better read literally than read wrong.
+        *out++ = *in++;
+    }
+    *out = '\0';
 }
 
 uint64_t os64_xtou(const char *s, const char **end)

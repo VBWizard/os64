@@ -7,6 +7,13 @@
 # as a dynamically-linked ring-3 ELF (launch + the program, against
 # /lib/libos64.so), ready for the disk image's /bin and /tests.
 
+# Parallel when this is the top-level make (`make -C userland`); under the
+# root build it inherits the root's jobserver instead — a -j of its own
+# would drop that jobserver and run a full count beside the root's jobs.
+ifeq ($(MAKELEVEL),0)
+MAKEFLAGS += -j$(shell nproc)
+endif
+
 # THE CROSS TOOLCHAIN, AND THE TWO-FACED `?=` (fixed 2026-08-22).
 #
 # These two lines used to read `CC ?= x86_64-elf-gcc` / `LD ?= x86_64-elf-ld`,
