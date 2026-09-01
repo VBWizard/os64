@@ -111,6 +111,13 @@ typedef enum tcp_state
 #define TCP_MSL_TICKS       (15 * TICKS_PER_SECOND)
 #define TCP_CONNECT_TIMEOUT (10 * TICKS_PER_SECOND)
 
+// The morgue: how long a CLOSED, detached connection stays listed before
+// the poll reaps it. DISPLAY policy, not protocol — TIME_WAIT's linger is
+// TCP's own law (see tcp_poll), this one exists so /sys/net/tcp can answer
+// "what just happened" after a dial fails or a fetch ends. A human who ran
+// a command that died gets this long to cat the aftermath.
+#define TCP_MORGUE_TICKS    (15 * TICKS_PER_SECOND)
+
 // In-band sentinels (the pipe.c convention).
 #define TCP_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end)
 #define TCP_ERR_RESET       (-4L)   // peer sent RST, or the connection died
@@ -148,6 +155,8 @@ typedef struct tcp_conn
 
 	bool     reset;        // RST received or fatal error: reads/writes fail
 	uint64_t time_wait_until;
+	uint64_t closed_at;    // the morgue clock: when the poll first saw this
+	                       // conn CLOSED and detached (0 = not yet)
 
 	spinlock_t lock;
 	thread_t* volatile reader;   // parked in tcp_conn_read
@@ -168,8 +177,19 @@ typedef struct tcp_stats
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)
 	uint64_t resets_received;
+	// The machine-wide twin of the per-conn counter, because a reaped
+	// connection takes its copy to the grave: "has this stack EVER seen
+	// reordering" has to survive the connections that answered it.
+	uint64_t out_of_order_dropped;
 } tcp_stats_t;
 extern tcp_stats_t kTcpStats;
+
+// The connection list, exported for /sys/net/tcp. The discipline is
+// tcp_poll's: hold kTcpListLock across the walk (it guards the links),
+// take each conn's own lock to read its fields. Readers outside tcp.c
+// observe; they never unlink, retire, or wake anything.
+extern tcp_conn_t* kTcpConnList;
+extern spinlock_t kTcpListLock;
 
 // ── The API behind HANDLE_NET_TCP ───────────────────────────────────────────
 // Active open. BLOCKS until the handshake completes (task context only);

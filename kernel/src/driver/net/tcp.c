@@ -30,8 +30,9 @@
 
 tcp_stats_t kTcpStats;
 
-static tcp_conn_t* kTcpConnList = NULL;
-static spinlock_t s_list_lock;
+// Exported (tcp.h) so /sys/net/tcp can walk what tcp_poll walks.
+tcp_conn_t* kTcpConnList = NULL;
+spinlock_t kTcpListLock;
 static uint16_t s_next_ephemeral = 49152;   // same dynamic range as UDP (RFC 6335)
 
 // ── 1. SEQUENCE ARITHMETIC ──────────────────────────────────────────────────
@@ -267,14 +268,14 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	// which is what lets two programs on this machine talk to the same
 	// server, and the same program talk to two servers, without confusion.
 	tcp_conn_t* c = NULL;
-	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	for (tcp_conn_t* t = kTcpConnList; t != NULL; t = t->next)
 		if (t->local_port == dst_port && t->peer_port == src_port && t->peer_ip == src_ip)
 		{
 			c = t;
 			break;
 		}
-	spinlock_release_irqrestore(&s_list_lock, lf);
+	spinlock_release_irqrestore(&kTcpListLock, lf);
 
 	if (c == NULL)
 	{
@@ -413,6 +414,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				else
 				{
 					c->out_of_order_dropped++;
+					kTcpStats.out_of_order_dropped++;
 					tcp_ack(c);          // re-announce where we actually are
 				}
 			}
@@ -453,6 +455,19 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			}
 			break;
 
+		case TCP_CLOSED:
+			// The morgue keeps this conn LISTED for the observer, but the
+			// protocol is over: RFC 793 answers anything sent to a CLOSED
+			// connection with RST, exactly as if no connection existed.
+			// Without this, a peer answering our long-dead SYN late would
+			// retransmit into the morgue's silence instead of learning
+			// immediately. (RST segments never reach here — judged above.)
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			tcp_send_rst(dev, src_ip, dst_port, src_port, seq + data_len +
+			             (((flags & TCP_SYN) || (flags & TCP_FIN)) ? 1 : 0),
+			             ack, (flags & TCP_ACK) != 0);
+			return;
+
 		default:
 			break;
 	}
@@ -465,7 +480,7 @@ void tcp_poll(void)
 {
 	uint64_t now = kTicksSinceStart;
 
-	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	tcp_conn_t** pp = &kTcpConnList;
 	while (*pp != NULL)
 	{
@@ -481,11 +496,16 @@ void tcp_poll(void)
 		{
 			if (++c->retries > TCP_MAX_RETRIES)
 			{
+				// No connect_timeouts count here, and that is not an
+				// omission: dial's own 10-second deadline gives up on a
+				// silent handshake long before a SYN's retries could
+				// exhaust (their backoff sums past 30 seconds), and dial
+				// counts that death itself. What dies HERE is an
+				// established conversation whose peer stopped answering,
+				// and the caller hears it as a reset.
 				c->reset = true;         // the peer is gone; give up honestly
 				c->state = TCP_CLOSED;
 				c->snd_len = 0;
-				if (c->state == TCP_SYN_SENT)
-					kTcpStats.connect_timeouts++;
 			}
 			else
 			{
@@ -525,11 +545,23 @@ void tcp_poll(void)
 		// mistaken for that one's data, and our final ACK must be
 		// retransmittable if the peer's FIN comes again. 2×MSL is the
 		// price of not corrupting a future stranger's stream.
+		//
+		// CLOSED gets a linger too — the morgue — but for the OBSERVER,
+		// not the protocol: a dial that timed out or a fetch that ended
+		// used to vanish from /sys/net/tcp on the very next pass, so the
+		// aftermath of a failure was unreadable the moment it mattered
+		// (Chris, on VBox, racing cat against the reaper to glimpse
+		// SYN_SENT). The clock starts when THIS sweep first finds the
+		// conn both closed and detached, wherever those were set.
 		bool reap = false;
 		if (c->state == TCP_TIME_WAIT && now >= c->time_wait_until)
 			reap = c->detached;
 		else if (c->state == TCP_CLOSED && c->detached)
-			reap = true;
+		{
+			if (c->closed_at == 0)
+				c->closed_at = now;
+			reap = (now >= c->closed_at + TCP_MORGUE_TICKS);
+		}
 
 		spinlock_release_irqrestore(&c->lock, irqflags);
 
@@ -545,12 +577,12 @@ void tcp_poll(void)
 		}
 		pp = &c->next;
 	}
-	spinlock_release_irqrestore(&s_list_lock, lf);
+	spinlock_release_irqrestore(&kTcpListLock, lf);
 }
 
 void tcp_wake_if_ready(void)
 {
-	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
 	{
 		thread_t *r = NULL, *w = NULL;
@@ -581,7 +613,7 @@ void tcp_wake_if_ready(void)
 		if (r) scheduler_wake_isleep_thread_locked(r);
 		if (w) scheduler_wake_isleep_thread_locked(w);
 	}
-	spinlock_release_irqrestore(&s_list_lock, lf);
+	spinlock_release_irqrestore(&kTcpListLock, lf);
 }
 
 // ── Handle plumbing: dial, read, write, close ───────────────────────────────
@@ -607,21 +639,42 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->dev = dev;
 	c->peer_ip = peer_ip;
 	c->peer_port = peer_port;
-	c->local_port = s_next_ephemeral++;
-	if (s_next_ephemeral < 49152)
-		s_next_ephemeral = 49152;
 	c->snd_mss = 536;
 	c->snd_wnd = TCP_MSS;
+
+	// The port draw, the connection's identity, and its publication are ONE
+	// critical section. Drawn outside the lock, two tasks dialing at once
+	// could read the same counter and open two connections on one local
+	// port — the demux would then hand one stream's segments to whichever
+	// matched first. The in-use scan skips any port a listed connection
+	// still holds, TIME_WAIT and morgue residents included, which is the
+	// port protection TIME_WAIT exists to give. (The scan terminates
+	// because connections number far fewer than the 16384 ports of the
+	// dynamic range — kmalloc would have refused long before that.)
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	bool taken;
+	do
+	{
+		c->local_port = s_next_ephemeral++;
+		if (s_next_ephemeral < 49152)
+			s_next_ephemeral = 49152;
+		taken = false;
+		for (tcp_conn_t* t = kTcpConnList; t != NULL; t = t->next)
+			if (t->local_port == c->local_port)
+			{
+				taken = true;
+				break;
+			}
+	} while (taken);
 
 	uint32_t iss = tcp_initial_seq(peer_ip, peer_port, c->local_port);
 	c->snd_una = iss;
 	c->snd_nxt = iss;
 	c->state = TCP_SYN_SENT;
 
-	uint64_t lf = spinlock_acquire_irqsave(&s_list_lock);
 	c->next = kTcpConnList;
 	kTcpConnList = c;
-	spinlock_release_irqrestore(&s_list_lock, lf);
+	spinlock_release_irqrestore(&kTcpListLock, lf);
 
 	printd(DEBUG_NET, "tcp: dialing %u.%u.%u.%u:%u from port %u (iss 0x%x)\n",
 	       NET_IPV4_OCTETS(peer_ip), peer_port, c->local_port, iss);
@@ -663,7 +716,7 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 		       NET_IPV4_OCTETS(peer_ip), peer_port,
 		       c->reset ? "refused" : "timed out");
 		c->state = TCP_CLOSED;
-		c->detached = true;   // let the poll reap it
+		c->detached = true;   // the poll morgues it (briefly readable), then reaps
 		return NULL;
 	}
 	return c;
