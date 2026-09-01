@@ -205,6 +205,12 @@ typedef struct tcp_stats
 	// connection takes its copy to the grave: "has this stack EVER seen
 	// reordering" has to survive the connections that answered it.
 	uint64_t out_of_order_dropped;
+	// Bytes we already took, sent again: OUR ack was lost or late, and the
+	// peer resent from where it last heard from us. Not reordering — kept
+	// apart so out_of_order_dropped answers only "is the network
+	// reordering", the question the reassembly debt hangs on, while this
+	// one answers "is the network eating our acks".
+	uint64_t duplicates_dropped;
 } tcp_stats_t;
 extern tcp_stats_t kTcpStats;
 

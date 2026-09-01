@@ -310,12 +310,11 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
 
 	// RST: the conversation is over, right now, no reply. (An RST that
-	// arrives for a connection we are still opening means "refused".)
+	// arrives for a connection we are still opening means "refused" —
+	// dial sees `reset` and counts it when it entombs the attempt.)
 	if (flags & TCP_RST)
 	{
 		kTcpStats.resets_received++;
-		if (c->state == TCP_SYN_SENT)
-			kTcpStats.connections_refused++;
 		c->reset = true;
 		c->state = TCP_CLOSED;
 		c->snd_len = 0;
@@ -427,11 +426,24 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					tcp_ack(c);          // acknowledge immediately: simple,
 					                     // and the peer's window depends on it
 				}
-				else
+				else if (seq_gt(seq, c->rcv_nxt))
 				{
+					// Ahead of us: something between here and the peer
+					// reordered or dropped. THIS is the count the
+					// reassembly debt is judged by.
 					c->out_of_order_dropped++;
 					kTcpStats.out_of_order_dropped++;
 					tcp_ack(c);          // re-announce where we actually are
+				}
+				else
+				{
+					// Behind us: bytes we already took, sent again because
+					// our ack never reached them (or not in time). The
+					// same drop, a different weather report — and the
+					// re-announce is the cure, which is why it is not the
+					// reordering count (Codex, PR #46).
+					kTcpStats.duplicates_dropped++;
+					tcp_ack(c);
 				}
 			}
 
@@ -516,18 +528,27 @@ static void tcp_port_release_locked(uint16_t port)
 // Under both locks, list then conn — tcp_poll's order. Once `tombstone` is
 // set nothing touches the buffers: the demux skips the row, tcp_poll's
 // retransmit excludes CLOSED, and a segment already past the demux finds
-// CLOSED under the conn lock and answers RST without them. The frees
-// happen after the locks drop.
+// CLOSED under the conn lock and answers RST without them.
 //
 // The cap: count tombstones on the way, evict the oldest past
 // TCP_MORGUE_TOMBSTONES. The list is newest-first (dial prepends), so the
 // oldest is the last one met, and it is never `c` unless `c` is alone.
+//
+// THE COUNTERS MOVE LAST, after every free, and the frees stay under the
+// list lock so that order is one critical section: connections_refused,
+// connect_timeouts and connections_reaped are what task_teardown_leak's
+// bracket reads to learn that TCP moved memory inside its window, and a
+// counter that ticks before its free is a free the bracket cannot see —
+// sampled as the baseline while the bytes land in the delta (Codex, PR
+// #46). The failure counters are entomb's for the same reason: the free
+// they must follow happens here.
 static void tcp_dial_entomb(tcp_conn_t* c)
 {
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
 	uint8_t* rcv = c->rcv_buf;
 	uint8_t* snd = c->snd_buf;
+	bool refused = c->reset;
 	c->rcv_buf = NULL;
 	c->snd_buf = NULL;
 	c->rcv_count = 0;
@@ -551,14 +572,20 @@ static void tcp_dial_entomb(tcp_conn_t* c)
 	{
 		evicted = *oldest;
 		*oldest = evicted->next;
-		kTcpStats.connections_reaped++;
 	}
-	spinlock_release_irqrestore(&kTcpListLock, lf);
 
 	kfree(rcv);
 	kfree(snd);
 	if (evicted != NULL)
+	{
 		kfree(evicted);
+		kTcpStats.connections_reaped++;
+	}
+	if (refused)
+		kTcpStats.connections_refused++;
+	else
+		kTcpStats.connect_timeouts++;
+	spinlock_release_irqrestore(&kTcpListLock, lf);
 }
 
 // ── 4. THE CLOCK ────────────────────────────────────────────────────────────
@@ -669,11 +696,15 @@ void tcp_poll(void)
 				kfree(c->rcv_buf);
 				kfree(c->snd_buf);
 			}
-			kTcpStats.connections_reaped++;
 			printd(DEBUG_NET, "tcp: reaped %u.%u.%u.%u:%u (local port %u %s)\n",
 			       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->local_port,
 			       c->tombstone ? "was already free" : "free");
 			kfree(c);
+			// After the last free, never before: the counter is how the
+			// leak test's bracket learns this funeral happened inside
+			// its window, and a tick that precedes the free lets the
+			// bytes land past the baseline (tcp_dial_entomb says why).
+			kTcpStats.connections_reaped++;
 			continue;
 		}
 		pp = &c->next;
@@ -825,8 +856,6 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 
 	if (c->state != TCP_ESTABLISHED)
 	{
-		if (!c->reset)
-			kTcpStats.connect_timeouts++;
 		// The two failures a caller can actually act on: REFUSED means the
 		// machine answered and said no (wrong port? service down?); TIMEOUT
 		// means silence (wrong address? unplugged? filtered?). This used to

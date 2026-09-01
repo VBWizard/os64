@@ -1967,6 +1967,7 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // counted as the starting state, and the delta blamed on the cycles.
     uint64_t burials_before = kTaskBurialCount;
     uint64_t reaps_before = kTcpStats.connections_reaped;
+    uint64_t dial_fails_before = kTcpStats.connections_refused + kTcpStats.connect_timeouts;
     uint32_t conns_before = teardown_tcp_conn_census();
 
     uint64_t free_before = 0, free_after = 0;
@@ -2006,15 +2007,18 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // each edge alone reads as a leak — the dial edge as bytes lost, the
     // reap edge as bytes conjured — with no task burial to census either
     // time, and the free far too late for the stillness probes to catch
-    // the culprit still allocating. (A FAILED dial frees its ring before
-    // it returns, but its tombstone joins the list, and the cap's
-    // eviction of an older one counts as a reap.) Both edges move the
-    // list census; a dial and a reap in one window cancel there, which
-    // is what the reap counter is here to break. (Two corpses reaping
+    // the culprit still allocating. A FAILED dial frees its ring before
+    // it returns, seconds after its row joined the list if it timed out,
+    // so that free can land alone in a window too — which is why the
+    // failure counters are watched here, and why tcp.c ticks every one
+    // of these counters AFTER the free it accounts for. Both edges move
+    // the list census; a dial and a reap in one window cancel there,
+    // which is what the counters are here to break. (Two corpses reaping
     // mid-window measured as -67200 bytes/task and convicted
     // task_destroy of a leak it didn't have; an os64get typed mid-window
     // read as +214468 the same way.)
     if (kTcpStats.connections_reaped != reaps_before ||
+        kTcpStats.connections_refused + kTcpStats.connect_timeouts != dial_fails_before ||
         teardown_tcp_conn_census() != conns_before) {
         printd(DEBUG_TESTS, "\ttask_teardown_leak: a TCP connection was dialed or reaped "
                             "inside the window — its buffers are in the delta and are not ours\n");
