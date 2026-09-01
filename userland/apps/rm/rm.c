@@ -53,6 +53,13 @@ static int32_t remove_path(const char *path, bool recursive, uint32_t depth)
         return 1;
     }
 
+    if (entry.flags & OS64_DE_MOUNT)
+    {
+        os64_hprintf(OS64_STDERR,
+                     "rm: refusing to cross filesystem boundary at '%s'\n", path);
+        return 1;
+    }
+
     if (unsafe_recursive_operand(path))
     {
         os64_hprintf(OS64_STDERR, "rm: refusing to recursively remove '%s'\n", path);
@@ -90,6 +97,19 @@ static int32_t remove_path(const char *path, bool recursive, uint32_t depth)
         if (wanted < 0 || (size_t)wanted >= sizeof(childPath))
         {
             os64_hprintf(OS64_STDERR, "rm: path too long beneath '%s'\n", path);
+            returnCode = 1;
+            continue;
+        }
+
+        // Use the mount attribute returned with this directory entry so the
+        // recursive walk cannot cross the boundary between reading the name
+        // and descending into it. The stat check above also protects a mount
+        // point supplied directly as an operand.
+        if (child.flags & OS64_DE_MOUNT)
+        {
+            os64_hprintf(OS64_STDERR,
+                         "rm: refusing to cross filesystem boundary at '%s'\n",
+                         childPath);
             returnCode = 1;
             continue;
         }
