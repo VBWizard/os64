@@ -13,7 +13,8 @@
 //   5. stat("bin")             -> RELATIVE path resolves against cwd ("/")
 //   6. stat routing across the mount table, in two halves: "/sys" (a
 //      synthetic claims its prefix on every boot ever, so the ROUTING is
-//      provable unconditionally), then the prefix of every disk-backed
+//      provable unconditionally — and so is OS64_DE_MOUNT, against /bin
+//      which must NOT carry it), then the prefix of every disk-backed
 //      non-root mount /sys/mounts actually lists (a DISK driver's stat
 //      receiving the fs-local tail). WHICH disk mounts exist stopped being
 //      a constant when /etc/mounts.conf made boot mounts policy
@@ -111,8 +112,19 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
         exit_with(FAIL_RELATIVE);
 
     // 6a. Routing, unconditionally: a synthetic's prefix routes to its own
-    //     filesystem's stat on every boot there has ever been.
-    if (failed(stat_path("/sys", &e)) || !(e.flags & OS64_DE_DIR))
+    //     filesystem's stat on every boot there has ever been — and stat
+    //     says it is a MOUNT while /bin, an ordinary directory on the root
+    //     filesystem, says it is not. Both polarities, because stat is the
+    //     door where that bit is least obvious: the path resolves INTO the
+    //     mounted filesystem and asks its root, which knows nothing about
+    //     being mounted, so the answer is assembled by the resolver rather
+    //     than reported by the driver (dirent.h's OS64_DE_MOUNT). A walker
+    //     that stats before it descends has to get the same answer readdir
+    //     would have given it.
+    if (failed(stat_path("/sys", &e)) ||
+        (e.flags & (OS64_DE_DIR | OS64_DE_MOUNT)) != (OS64_DE_DIR | OS64_DE_MOUNT))
+        exit_with(FAIL_MOUNT);
+    if (failed(stat_path("/bin", &e)) || (e.flags & OS64_DE_MOUNT))
         exit_with(FAIL_MOUNT);
 
     // 6b. The disk half: stat the prefix of every disk-backed non-root
@@ -149,7 +161,10 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
             continue;   // synthetic, a short row, or the root itself
 
         secondaries++;
-        if (failed(stat_path(prefix, &e)) || !(e.flags & OS64_DE_DIR))
+        // A DISK mount, so the MOUNT bit has to hold for a real filesystem
+        // and not only for the synthetics 6a proved it on.
+        if (failed(stat_path(prefix, &e)) ||
+            (e.flags & (OS64_DE_DIR | OS64_DE_MOUNT)) != (OS64_DE_DIR | OS64_DE_MOUNT))
             exit_with(FAIL_MOUNT);
     }
     if (secondaries == 0)

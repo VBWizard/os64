@@ -281,7 +281,11 @@ int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry)
 			continue;
 
 		memset(entry, 0, sizeof(*entry));
-		entry->flags = OS64_DE_DIR;   // a mount point always lists as a directory
+		// A mount point always lists as a directory, and says that it is one
+		// — this is the synthetic entry a recursive walker would otherwise
+		// climb into another filesystem through (dirent.h carries the whole
+		// argument).
+		entry->flags = OS64_DE_DIR | OS64_DE_MOUNT;
 		size_t n = 0;
 		while (rest[n] != '\0' && n < OS64_DIRENT_NAME_MAX)
 		{

@@ -3237,15 +3237,28 @@ static uint64_t syscall_stat(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		return SYSCALL_RESULT_INVALID;
 	}
 
+	// THE SECOND DOOR ONTO A MOUNT POINT (dirent.h's OS64_DE_MOUNT). A
+	// readdir of the parent says so because the namespace synthesized the
+	// entry; a stat of the point itself resolves straight INTO the mounted
+	// filesystem and asks it about its own root, which knows nothing about
+	// being mounted. Left alone, the same path answers "mount" through one
+	// door and "ordinary directory" through the other — and a walker that
+	// stats before it descends would get the wrong one. A tail of exactly
+	// "/" IS the answer: it means the path resolved to a filesystem's root,
+	// which is what a mount point is.
+	if (p->fs_tail != NULL && p->fs_tail[0] == '/' && p->fs_tail[1] == '\0')
+		p->entry.flags |= OS64_DE_MOUNT;
+
 	if (!copy_to_user_buffer((void *)arg1, &p->entry, sizeof(p->entry)))
 	{
 		kfree(p);
 		return SYSCALL_RESULT_BAD_USER_DATA;
 	}
 
-	printd(DEBUG_SYSCALL, "stat: task %s: '%s' -> %s, size %lu\n",
+	printd(DEBUG_SYSCALL, "stat: task %s: '%s' -> %s%s, size %lu\n",
 	       task->exename, p->path,
 	       (p->entry.flags & OS64_DE_DIR) ? "directory" : "file",
+	       (p->entry.flags & OS64_DE_MOUNT) ? " (mount point)" : "",
 	       p->entry.size);
 	kfree(p);
 	return 0;
