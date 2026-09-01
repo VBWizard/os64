@@ -2,21 +2,6 @@
 
 #include "ps.h"
 
-static bool parse_pid(const char *text, uint64_t *pid)
-{
-    if (text == NULL || *text == '\0') return false;
-    uint64_t value = 0;
-    for (const char *p = text; *p != '\0'; p++)
-    {
-        if (*p < '0' || *p > '9') return false;
-        uint64_t digit = (uint64_t)(*p - '0');
-        if (value > (UINT64_MAX - digit) / 10) return false;
-        value = value * 10 + digit;
-    }
-    *pid = value;
-    return true;
-}
-
 int main(int argc, char **argv)
 {
     ps_options_t options = {0};
@@ -42,7 +27,7 @@ int main(int argc, char **argv)
 
     if (pid_text != NULL)
     {
-        if (!parse_pid(pid_text, &options.pid))
+        if (!os64_parse_u64(pid_text, &options.pid))
         {
             os64_hprintf(OS64_STDERR, "ps: invalid PID: %s\n", pid_text);
             return 2;

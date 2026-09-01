@@ -24,10 +24,8 @@
 #include "os64/env.h"     // the ABI env block — os64_getenv walks it
 #include "os64/proc.h"    // os64_getenv declaration
 #include "os64/date.h"
-
-// env.c's global, normally stored by launch.S before main; the test sets it
-// to a hand-built block.
-extern const os64_env_block_t *__os64_env;
+#include "os64/runtime.h" // publish the hand-built environment blocks
+#include "os64/str.h"
 
 // fmt.c's printf veneers call os64_write; on the host, swallow it.
 long os64_write(int handle, const void *buf, size_t len)
@@ -110,6 +108,35 @@ int main(void)
         int n = os64_snprintf(small, sizeof(small), "abcdefghij");
         EXPECT(n == 10);
         EXPECT(strcmp(small, "abcdefg") == 0);
+    }
+    // Shared binary-size rendering (ls -h, du -h, and df -h). The maximum
+    // case proves the fractional digit does not overflow while scaling an
+    // exbibyte remainder by ten.
+    {
+        char amount[32];
+        EXPECT(os64_format_binary_size(0, amount, sizeof(amount)) == 2);
+        EXPECT(strcmp(amount, "0B") == 0);
+        os64_format_binary_size(1023, amount, sizeof(amount));
+        EXPECT(strcmp(amount, "1023B") == 0);
+        os64_format_binary_size(1536, amount, sizeof(amount));
+        EXPECT(strcmp(amount, "1.5K") == 0);
+        os64_format_binary_size(1024 * 1024, amount, sizeof(amount));
+        EXPECT(strcmp(amount, "1.0M") == 0);
+        os64_format_binary_size(UINT64_MAX, amount, sizeof(amount));
+        EXPECT(strcmp(amount, "15.9E") == 0);
+    }
+    // Strict decimal fields: the process tools must reject a typo or a value
+    // that wrapped, while the classic atou remains deliberately permissive.
+    {
+        uint64_t value = 99;
+        EXPECT(os64_parse_u64("0", &value) && value == 0);
+        EXPECT(os64_parse_u64("18446744073709551615", &value) &&
+               value == UINT64_MAX);
+        value = 99;
+        EXPECT(!os64_parse_u64("", &value) && value == 99);
+        EXPECT(!os64_parse_u64("12x", &value) && value == 99);
+        EXPECT(!os64_parse_u64("-1", &value) && value == 99);
+        EXPECT(!os64_parse_u64("18446744073709551616", &value) && value == 99);
     }
     // %p differs from host formatting (we pin "0x..."), so check shape only.
     {
@@ -202,12 +229,12 @@ int main(void)
         blk->count = 2;
         blk->data_end = sizeof(pairs) - 1;   // through the last pair's NUL
 
-        __os64_env = blk;
+        os64_env_publish(blk);
         EXPECT(os64_getenv("PATH") != NULL && strcmp(os64_getenv("PATH"), "/bin") == 0);
         EXPECT(os64_getenv("HOSTNAME") != NULL && strcmp(os64_getenv("HOSTNAME"), "yogi") == 0);
         EXPECT(os64_getenv("NOPE") == NULL);
         EXPECT(os64_getenv("PAT") == NULL);     // prefix of a key is not the key
-        __os64_env = NULL;
+        os64_env_publish(NULL);
         EXPECT(os64_getenv("PATH") == NULL);    // no block = honest NULL
     }
     {   // value option may end a bundle, never sit inside one
@@ -315,7 +342,7 @@ int main(void)
         blk->page_count = 1;
         blk->count = 1;
         blk->data_end = sizeof(pairs) - 1;
-        __os64_env = blk;
+        os64_env_publish(blk);
 
         os64_date_t local = {
             .year = 2026, .month = 3, .day = 8,
@@ -335,7 +362,7 @@ int main(void)
         char zone[32];
         EXPECT(os64_strftime(zone, sizeof(zone), "%T %z %Z", &local) != 0);
         EXPECT(strcmp(zone, "03:00:00 -0400 EDT") == 0);
-        __os64_env = NULL;
+        os64_env_publish(NULL);
     }
 
     if (failures == 0) {

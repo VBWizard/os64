@@ -239,7 +239,12 @@ void handle_dir_object_close(void *vfs_dir)
 
 	// Harvest before close — the VFS close frees the directory object, and
 	// f_path is the kmalloc'd copy syscall_open made (dir flavor).
+	// mount_prefix is syscall_open's canonical-path copy (mount-aware
+	// readdir), and owner is where the open_dir_count this close must
+	// balance lives (vfs.h) — all three die with the object if read after.
 	char *path_copy = dir->f_path;
+	char *mount_prefix = (char *)dir->mount_prefix;
+	vfs_filesystem_t *owner = (vfs_filesystem_t *)dir->owner;
 
 	uint64_t cr3;
 	__asm__ volatile("mov %0, cr3" : "=r"(cr3));
@@ -248,6 +253,15 @@ void handle_dir_object_close(void *vfs_dir)
 	else
 		call_in_kernel_context(dir_close_in_kernel, dir);
 
+	// The decrement pairs with syscall_open's increment BY CALL PATH, not by
+	// flag: every dir that reaches this closer came from syscall_open's
+	// handle (nothing else mints HANDLE_DIR), so owner-set is the whole
+	// condition on both sides — mount_prefix can be NULL here (its kmalloc
+	// is allowed to fail) and the count must still balance.
+	if (owner != NULL)
+		__sync_fetch_and_sub(&owner->open_dir_count, 1);
+	if (mount_prefix != NULL)
+		kfree(mount_prefix);
 	if (path_copy != NULL)
 		kfree(path_copy);
 }

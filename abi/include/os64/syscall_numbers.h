@@ -565,6 +565,12 @@ typedef enum os64_shutdown_mode
 // asks /proc/self/tty for the new size (RE-OPEN it: procfs renders at open).
 #define SYSCALL_PTY_RESIZE   51
 
+// mount(what, where) / unmount(where): the namespace verbs (2026-08-30).
+// `what` is a GPT partition name or GUID — never a device path (os64/mount.h
+// carries the vocabulary and the result codes both sides speak).
+#define SYSCALL_MOUNT        52
+#define SYSCALL_UNMOUNT      53
+
 // seek() whence values — where `offset` is measured FROM. Part of the ABI
 // because both sides must agree on the numbers; they intentionally match the
 // kernel VFS's internal SEEK_* so no translation layer is needed.

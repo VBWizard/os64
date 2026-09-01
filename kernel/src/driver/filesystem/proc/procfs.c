@@ -410,7 +410,12 @@ static const char *proc_handle_type_name(handle_type_t t)
 		case HANDLE_PIPE_WRITE:  return "pipe-write";
 		case HANDLE_FILE:        return "file";
 		case HANDLE_DIR:         return "dir";
+		case HANDLE_THREAD:      return "thread";
+		case HANDLE_NET_UDP:     return "udp";
+		case HANDLE_NET_TCP:     return "tcp";
+		case HANDLE_NET_ICMP:    return "icmp";
 		case HANDLE_PTY_MASTER:  return "pty-master";
+		case HANDLE_CLOSING:     return "closing";
 		default:                 return "none";
 	}
 }
@@ -563,11 +568,39 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 	           tty->fgTask ? ((task_t *)tty->fgTask)->taskID : 0);
 }
 
+// The leading "handle<TAB>type<TAB><escaped mount><escaped path>" of a file
+// or directory row, in several addf calls because one fully-escaped path can
+// fill synth_text_addf's per-call line buffer on its own (synthfs.c), and an
+// overflowing row is truncated mid-field. The caller finishes the line —
+// what follows the path differs by handle type.
+static void proc_add_handle_path(synth_text_t *t, int handle, const char *type,
+                                 const char *prefix, const char *path)
+{
+	char eprefix[VFS_MOUNT_PREFIX_MAX * 4];
+	char epath[VFS_REG_PATH_MAX * 4];
+	synth_text_escape(prefix, eprefix, sizeof(eprefix));
+	synth_text_escape(path, epath, sizeof(epath));
+	synth_text_addf(t, "%d\t%s\t", handle, type);
+	synth_text_addf(t, "%s", eprefix);
+	synth_text_addf(t, "%s", epath);
+}
+
 static void proc_gen_handles(synth_text_t *t, task_t *task)
 {
-	// "handle<TAB>type<TAB>detail" — the detail column is whatever the tag
-	// makes meaningful, and is simply absent for the console tags (they
-	// reference no object at all; see handle.h).
+	// "handle<TAB>type[<TAB>detail]" — files and directories expose their
+	// full path, and FILE rows append the fs-local identity (vfs.h f_ident:
+	// ext2 inode, FAT start cluster) so lsof can join a task's handle to a
+	// /sys/openfiles row by IDENTITY rather than by path string — a path can
+	// be renamed while the file is open, the identity cannot be recycled.
+	// Pipes expose the shared object identity that ties their ends together.
+	// Other tags currently have no public detail to append.
+	//
+	// THE PATH IS DATA AND IS ESCAPED, the same rule and the same transform
+	// the /sys reports use (synth_text_escape in synthfs.h). An ext2
+	// filename may hold a newline or a tab, and this report is delimited by
+	// both: one such name turns a row into two, and lsof — which rejects a
+	// malformed row rather than guess — loses the whole task's handles.
+	// The reader reverses it with os64_unescape_field after splitting.
 	for (int i = 0; i < TASK_MAX_HANDLES; i++)
 	{
 		handle_t *h = &task->handles[i];
@@ -577,17 +610,24 @@ static void proc_gen_handles(synth_text_t *t, task_t *task)
 		if (h->type == HANDLE_FILE && h->object != NULL)
 		{
 			vfs_file_t *f = (vfs_file_t *)h->object;
-			// f_path is the fs-local TAIL the mount router handed the driver,
-			// so it has lost its mount prefix — "/bin/ls" here could be on any
-			// mounted filesystem. Printing what we have beats printing nothing.
-			synth_text_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
-			           (f->f_path != NULL) ? f->f_path : "(unnamed)");
+			// f_path is the fs-local TAIL the mount router handed the driver;
+			// the mount prefix is recovered from the owning fs, so the column
+			// is a FULL path again. That lets userland correlate an open file
+			// with the namespace spelling its callers use.
+			char prefix[VFS_MOUNT_PREFIX_MAX] = "";
+			vfs_prefix_for_fs((vfs_filesystem_t *)f->owner, prefix, sizeof(prefix));
+			proc_add_handle_path(t, i, proc_handle_type_name(h->type), prefix,
+			                     (f->f_path != NULL) ? f->f_path : "(unnamed)");
+			synth_text_addf(t, "\t%lu\n", f->f_ident);
 		}
 		else if (h->type == HANDLE_DIR && h->object != NULL)
 		{
 			vfs_directory_t *d = (vfs_directory_t *)h->object;
-			synth_text_addf(t, "%d\t%s\t%s\n", i, proc_handle_type_name(h->type),
-			           (d->f_path != NULL) ? d->f_path : "(unnamed)");
+			char prefix[VFS_MOUNT_PREFIX_MAX] = "";
+			vfs_prefix_for_fs((vfs_filesystem_t *)d->owner, prefix, sizeof(prefix));
+			proc_add_handle_path(t, i, proc_handle_type_name(h->type), prefix,
+			                     (d->f_path != NULL) ? d->f_path : "(unnamed)");
+			synth_text_addf(t, "\n");
 		}
 		else if (h->type == HANDLE_PIPE_READ || h->type == HANDLE_PIPE_WRITE)
 		{

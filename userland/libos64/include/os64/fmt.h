@@ -60,6 +60,12 @@
 int32_t os64_snprintf(char *buf, size_t size, const char *fmt, ...) OS64_PRINTF(3, 4);
 int32_t os64_vsnprintf(char *buf, size_t size, const char *fmt, va_list args) OS64_PRINTF(3, 0);
 
+// Format a byte count in powers of 1024 using the userland-wide compact
+// spelling: 900B, 1.5K, 2.0M, and so on through E. One fractional digit is
+// retained once a unit is selected. Returns the full length wanted, with the
+// same always-terminate/truncation contract as os64_snprintf.
+int32_t os64_format_binary_size(uint64_t bytes, char *buf, size_t size);
+
 // Format and write to a handle. os64_printf goes to 1 (stdout by
 // convention); os64_hprintf targets any handle — 2 for errors, a file, a
 // pipe end; it neither knows nor cares (that's the point of handles).

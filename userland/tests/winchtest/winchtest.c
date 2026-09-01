@@ -50,6 +50,10 @@
 //   0x0A1D0011  (child) the SIGWINCH handler was refused
 //   0x0A1D0012  (waiter) the grandchild would not spawn
 //   0x0A1D0013  (waiter) the resumed wait did not collect the grandchild
+//   0x0A1D0014  (carrier drop) the third session's child would not seat
+//               and park
+//   0x0A1D0015  closing the master did not end the seated child with 129
+//               (128+SIGHUP) — the orphan leak of 2026-08-31 is back
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -71,10 +75,26 @@
 static os64_pty_header_t gHdr;
 static os64_pty_cell_t   gCells[MAX_CELLS];
 
+// The terminal role's current seated child, so a failing act reaps its own
+// mess. The kernel's master-close hangup is the backstop — but a fixture
+// that TESTS the cleanup must not rely on it for its own hygiene.
+static int64_t gKid;
+
 static void die(uint32_t step, const char *why)
 {
 	os64_printf("winchtest: %s\n", why);
 	os64_serial_log(why);
+	if (gKid > 0)
+	{
+		char path[48];
+		os64_snprintf(path, sizeof(path), "/proc/%ld/ctl", (long)gKid);
+		int64_t h = os64_open(path, "w");
+		if (h >= 0)
+		{
+			os64_write((int32_t)h, "kill", 4);
+			os64_close((int32_t)h);
+		}
+	}
 	os64_exit(STEP(step));
 }
 
@@ -241,6 +261,7 @@ int main(int argc, char **argv)
 
 	int64_t kid = os64_spawn_seated("/tests/winchtest",
 	                                (char *[]){ "/tests/winchtest", "child", 0 }, master);
+	gKid = kid;
 	if (kid <= 0)
 		die(2, "the child would not seat");
 
@@ -287,6 +308,7 @@ int main(int argc, char **argv)
 	}
 	if (!hungup)
 		die(0xA, "the session did not hang up after EOT");
+	gKid = 0;
 
 	os64_close((int32_t)master);
 
@@ -301,6 +323,7 @@ int main(int argc, char **argv)
 		die(1, "pty_create refused (second session)");
 	kid = os64_spawn_seated("/tests/winchtest",
 	                        (char *[]){ "/tests/winchtest", "waiter", 0 }, master);
+	gKid = kid;
 	if (kid <= 0 || !grid_shows(master, "waiting", 5000))
 		die(0xB, "the waiter would not seat or never said it was waiting");
 	if (os64_pty_resize(master, 90, 20) != 0)
@@ -321,8 +344,30 @@ int main(int argc, char **argv)
 	}
 	if (!hungup)
 		die(0xD, "the waiter's session did not end with its grandchild");
+	gKid = 0;
 	os64_close((int32_t)master);
 
-	os64_printf("winchtest: PASS (grid follows, seats hear SIGWINCH, blocked read and wait interrupted)\n");
+	// Act 7: the carrier drop. A terminal that dies without a word — the
+	// master closing while the child is still parked in read() — must END
+	// the session: the kernel's other hangup (pty_master_close) raises
+	// SIGHUP at every seat, the child dies 129, and the pty can bury. This
+	// exact shape leaked the child forever until 2026-08-31 (a fixture
+	// failure left one parked for ten minutes of a Sunday); this act is the
+	// tripwire that keeps it dead.
+	master = os64_pty_create(COLS0, ROWS0);
+	if (master < 0)
+		die(1, "pty_create refused (third session)");
+	kid = os64_spawn_seated("/tests/winchtest",
+	                        (char *[]){ "/tests/winchtest", "child", 0 }, master);
+	gKid = kid;
+	if (kid <= 0 || !grid_shows(master, "size 80x25", 5000))
+		die(0x14, "the carrier-drop child would not seat and park");
+	os64_close((int32_t)master);
+	int32_t code = 0;
+	if (os64_wait(kid, &code) != kid || code != 129)
+		die(0x15, "closing the master did not end the seated child (want 129)");
+	gKid = 0;
+
+	os64_printf("winchtest: PASS (grid follows, seats hear SIGWINCH, blocked read and wait interrupted, master close hangs up)\n");
 	os64_exit(STEP(0));
 }

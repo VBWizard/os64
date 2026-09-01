@@ -60,24 +60,10 @@ static void sort_entries(os64_dirent_t *entries, int32_t count, ls_sort_t sort)
 static void format_size(uint64_t size, bool humanReadable,
                         char *out, size_t capacity)
 {
-    if (!humanReadable || size < 1024)
-    {
-        os64_snprintf(out, capacity, humanReadable ? "%luB" : "%lu", size);
-        return;
-    }
-
-    static const char *units[] = {"K", "M", "G", "T", "P", "E"};
-    uint64_t divisor = 1024;
-    int32_t unit = 0;
-    while (unit < 5 && size >= divisor * 1024)
-    {
-        divisor *= 1024;
-        unit++;
-    }
-
-    uint64_t whole = size / divisor;
-    uint64_t tenth = (size % divisor) * 10 / divisor;
-    os64_snprintf(out, capacity, "%lu.%lu%s", whole, tenth, units[unit]);
+    if (humanReadable)
+        os64_format_binary_size(size, out, capacity);
+    else
+        os64_snprintf(out, capacity, "%lu", size);
 }
 
 static void format_mtime(uint64_t mtime, int64_t currentEpoch,

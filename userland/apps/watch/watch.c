@@ -9,25 +9,6 @@
 #define DEFAULT_INTERVAL_MS 2000ULL
 #define MAX_INTERVAL_MS     86400000ULL
 
-static bool parse_uint(const char *text, uint64_t *value)
-{
-	if (text == NULL || *text == '\0')
-		return false;
-
-	uint64_t n = 0;
-	for (const char *p = text; *p != '\0'; p++)
-	{
-		if (*p < '0' || *p > '9')
-			return false;
-		uint64_t digit = (uint64_t)(*p - '0');
-		if (n > (UINT64_MAX - digit) / 10)
-			return false;
-		n = n * 10 + digit;
-	}
-	*value = n;
-	return true;
-}
-
 // Parse seconds with up to millisecond precision: 2, 0.5, 1.025.  The
 // scheduler rounds the resulting milliseconds up to its active tick rate.
 static bool parse_interval(const char *text, uint64_t *milliseconds)
@@ -145,7 +126,7 @@ int main(int argc, char **argv)
 
 	uint64_t repetitions = 0;       // zero means forever
 	if (repetitions_text != NULL &&
-	    (!parse_uint(repetitions_text, &repetitions) || repetitions == 0))
+	    (!os64_parse_u64(repetitions_text, &repetitions) || repetitions == 0))
 	{
 		os64_hprintf(OS64_STDERR,
 		             "watch: repetitions must be a positive integer\n");

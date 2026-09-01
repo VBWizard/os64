@@ -82,7 +82,11 @@ static const fixture_t kFixtures[] = {
     { "/tests/dir_list",        NULL, 0x0D12600D,  0,          "opendir/readdir/close" },
     { "/tests/map_unmap",       NULL, 0x03A9600D,  0,          "map/unmap — malloc's wall" },
     { "/tests/cwd_test",        NULL, 0x0C3D600D,  0,          "getcwd/chdir" },
-    { "/tests/stat_test",       NULL, 0x57A7600D,  0,          "stat is readdir for exactly one name" },
+    // stat_test reports 0x57A70007 when the boot's mount policy
+    // (/etc/mounts.conf) mounts no disk beyond root — nothing to route a
+    // disk stat across. A fact about the BOOT, not a failure of stat; the
+    // routing half still ran against /sys. Same treatment as synctest.
+    { "/tests/stat_test",       NULL, 0x57A7600D,  0x57A70007, "stat is readdir for exactly one name" },
     { "/tests/sleep_test",      NULL, 0x51EE600D,  0,          "sleep parks at least as long as asked" },
     { "/tests/memory_test",     NULL, 0xF3EE600D,  0,          "the memory syscall's snapshot" },
     { "/tests/threadtest",      NULL, 0x1B2EAD00,  0,          "threads: create, argument, join, shared address space" },

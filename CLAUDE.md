@@ -59,8 +59,12 @@ upstream of the reviewer, not a filter on it.
 - **A finding whose entire fix is text does not go to Chris.** Fix it and give
   it one line in the round summary. He reads the diff when he wants to, and
   he does.
-- **Done is a rule, not a mood.** Two consecutive rounds with no
-  code-changing finding: it merges.
+- **Done is a rule, not a mood.** A CLEAN round — no findings at all — is
+  done: Codex reads the whole commit every round (Chris's "always keep
+  looking" setting), so "nothing" is its strongest verdict, not a coin flip
+  to repeat. Two consecutive rounds whose findings were all text-only are
+  also done. (Ruled 2026-08-30 after two models read the earlier wording as
+  "two clean rounds"; Chris: "I'd rather visit the dentist.")
 - **Match the reviewer to the risk.** An outside review round costs real money
   and a chunk of Chris's day. It earns that on kernel concurrency, lifetime,
   and ring-boundary work. Userland apps, GUI, and polish slices get reviewed
@@ -141,7 +145,7 @@ make -C kernel test-elf
 
 - **Root Makefile** (`GNUmakefile`): Orchestrates kernel build, ISO creation, disk image setup
 - **Kernel Makefile** (`kernel/GNUmakefile`): Builds kernel binary and test programs
-- **Parallel builds**: Uses `-j$(nproc)` automatically in kernel makefile
+- **Parallel builds**: `-j$(nproc)` by default, added by whichever makefile is the TOP-LEVEL make (`MAKELEVEL` 0 — root, `make -C kernel`, `make -C userland`); sub-makes inherit the jobserver. A command-line `-j` wins. Never add a `-j` to a makefile that can run as a sub-make: it drops the parent's jobserver and oversubscribes (make warns "forced in makefile")
 - **Dependencies**: Run `kernel/get-deps` to fetch Limine headers and C runtime
 
 ## Kernel Architecture
@@ -273,14 +277,102 @@ make -C kernel test-elf
 - Root filesystem mounted via `ROOTPARTUUID`/`ROOT` kernel cmdline parameter;
   FAT32 or ext2 both work as root (see the "/QEMU Boot (ext2 root)" Limine entry)
 - **Mount table** (vfs.c/vfs.h, since 2026-07-19): multiple filesystems in one
-  namespace, longest-prefix routed. Root claims "/"; every other recognized
-  partition auto-mounts at "/<fstype>" ("/fat", "/ext2", "/fat2"…), deduped by
+  namespace, longest-prefix routed. Root claims "/"; what else joins at boot
+  is `/etc/mounts.conf`'s call (next bullet) — absent the file, the default
+  sweep mounts every os64-authored partition at its GPT label ("/home"),
+  falling back to "/<fstype>" ("/fat", "/ext2", "/fat2"…), deduped by
   partition GUID (so RAMDisk twins never double-mount). `vfs_resolve_mount()`
   maps a canonical path → (filesystem, fs-local tail); it is pure string
   matching, safe from any CR3. Dispatch sites: syscall open/chdir, ELF loader,
   shared_object. LIFETIME RULE: whatever pointer an fs open stores as f_path
   gets kfree'd by the handle closer — always hand the fs a BASE pointer
   (syscall_open clones the TAIL, not the full path, for exactly this reason)
+- **mount/unmount at runtime** (syscalls 52/53, 2026-08-30). `mount` names a
+  PARTITION — GPT name or GUID, never a device path (`os64/mount.h` is the
+  shared vocabulary; each refusal has its own code because "busy" and "no
+  such partition" demand different next moves). The mount point's PARENT
+  must exist; the point itself is the table's (Plan 9's view, ratified —
+  DIVERGENCES). Flags: `OS64_MOUNT_RO` (mount(1)'s `-r`) mounts with the
+  write verbs absent from birth — ext2 takes its read-only pair, FAT its
+  pair minus the pens — and an unknown bit is BAD_ARGS, never silently less.
+  ANY partition the verb can name is mountable: naming it — typed, or
+  written in the boot list — IS the deliberateness (ruled 2026-08-31; the
+  foreign-refusal era lasted one day). A NULL/empty `where` (mount(1) with
+  one operand) mounts at the partition's own GPT label — `mount fat` and
+  `mount = fat` are the same ask through the same door.
+  **`/etc/mounts.conf` is WHAT joins the namespace at boot** — the not-fstab:
+  `mount = <gpt-name-or-guid> [/where] [ro]`, repeatable, in order, each
+  line through `vfs_mount_explicit` (one door). No `/where` = the
+  partition's own GPT label (the WHERE stays the disk's property; the file
+  answers only WHAT, the half that is genuinely local policy). gui.conf's
+  rule: an EXISTING file is the whole list (empty = mount nothing beyond
+  root + synthetics); an ABSENT file = the built-in default, today's sweep
+  of os64-authored GUIDs — the old Windows-safety allowlist, demoted from
+  gate to default policy. Root-only and read straight off /etc (NOT the
+  conf ladder — it decides whether /home mounts, so it is upstream of the
+  ladder, os64.conf's reasoning). Root itself stays `ROOT=` on the cmdline
+  (the file lives ON root; the lifeboat boots when root is broken). No
+  example file ships — a shipped copy of comments would mean "mount
+  nothing".
+  A mount UNDER a mount holds its parent down: `unmount /mnt` with
+  `/mnt/usb` live is refused (`OS64_UNMOUNT_HAS_MOUNTS`), never cascaded —
+  unmounting one thing must not take out a second thing nobody named.
+  **THREE LOCKS, AND EACH ANSWERS A DIFFERENT QUESTION.**
+  (1) **The namespace lock** makes mount and unmount EXCLUSIVE — one
+  mutation at a time, machine-wide. Both verbs are read-then-act on a table
+  the layer beneath re-reads nothing from, so two at once meant two unmounts
+  freeing one filesystem twice and two mounts publishing one partition
+  twice. It is held across the driver's initialize/uninitialize, which is
+  real disk I/O — affordable only because these verbs are rare and
+  human-paced.
+  (2) **THE PATH GATE** (`vfs_path_enter/exit`) is what makes unmount sound
+  against operations already in flight: the dispatcher brackets every
+  path-op syscall (`syscall_is_path_op` — open, chdir, stat, unlink, mkdir,
+  rename, spawn, conf_resolve) as a READER, so unmount's busy checks
+  (open-file registry + per-fs `open_dir_count` + task cwd walk) can't be
+  falsified by an op that resolved but hasn't opened yet. NEITHER namespace
+  verb is on that list: mount looked like a reader because it stats a
+  parent, but a reader is something the namespace may change underneath,
+  and mount is what changes it.
+  (3) **`closing` in `struct file`** covers the one door the gate cannot:
+  a CLOSE resolves no path, so it can arrive at any moment — and both glues
+  keep using the filesystem after close begins (FAT's `f_close` is disk
+  I/O; ext2 reads `fs_specific` and may reap an orphan). A closing file
+  stays ON the open-file registry until that work is done, so unmount
+  counts it as busy instead of freeing the filesystem underneath it;
+  `vfs_sync_all` skips it, which is the opposite answer and why one flag
+  serves both. (Directories were always right — `handle.c` decrements
+  `open_dir_count` after `dops->close` returns.)
+  Table entries never move:
+  `fs == NULL` is a free slot, claims publish `fs` last (`vfs_mount_claim`,
+  one door for disk and synth mounts), strikes clear it first. A directory's
+  `mount_prefix` is now a kmalloc'd canonical-path copy owned by the handle
+  (it used to point into the table — mounts unmount now), and nested mount
+  points list in their parent via the same synthetic readdir "/" always used.
+  **`/sys/mounts`** (df's data: fstype, device, GUID, mode, totals from the
+  `space` fop, open counts) and **`/sys/block`** (lsblk's data: devices by
+  their SYSTEM names — `nvme0`/`sata0`/`ram0`, `block_assign_dev_names`,
+  committed as the names /dev block nodes will reuse — plus every partition,
+  its GPT name, and where it is mounted). **`/sys/openfiles`** (lsof's deep
+  half, 2026-08-31): the open-file registry as rows — path, mount, f_ident,
+  handle count — the same list unmount's BUSY trusts, so it answers "busy
+  with WHAT?". `handles 0` = KERNEL-held (a running binary's image, a
+  resident .so, an orphan's last holder), which no /proc/<pid>/handles walk
+  can see — that's why lsof needs this file AND /proc (handles answer WHO).
+  Synthetic files never register; their story stays in the handle tables.
+  It renders `reg_path`, the registration-time copy owned by the vfs_file —
+  NEVER f_path, which is caller memory that may be long dead (vfs.h).
+  **A COLUMN THAT IS DATA IS ESCAPED** in all three files
+  (`synth_text_escape` / `os64_unescape_field`): a GPT name is arbitrary
+  bytes off somebody's disk — "Basic data partition" is what Windows writes
+  — and a mount prefix and a path may hold whatever a filename may, so a
+  whitespace-columned row cannot be split without it. Backslash becomes
+  `\\`, a byte at or below 0x20 or equal to 0x7F becomes `\xHH`, nothing
+  else changes; a reader splits FIRST and decodes the data columns after.
+  Sanitizing was rejected: `mount` matches GPT names verbatim, so printing
+  `Basic_data_partition` would show a name the machine refuses to take back.
+  `mount`(1)/`unmount`(1) ship in /bin; df/lsblk/lsof are Chris's, reading
+  these files.
 
 **System Drivers:**
 - **PCI** (`pci.c`): PCI device enumeration and configuration

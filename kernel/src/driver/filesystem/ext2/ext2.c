@@ -571,8 +571,10 @@ static int ext2_close(vfs_file_t *vfs_file)
 {
 	ext2_handle_t *h = (ext2_handle_t *)vfs_file->handle;
 	vfs_filesystem_t *fs = (vfs_filesystem_t *)vfs_file->owner;
-	vfs_openfile_unregister(vfs_file);   // before any free — sync-all must
-	                                     // never walk onto a dying file
+	// MARKED, not unlinked: sync-all must never walk onto a dying file, and
+	// unmount's busy count must still see it — everything below this line
+	// touches `fs`, and unmount frees `fs` (vfs.h, the `closing` contract).
+	vfs_openfile_mark_closing(vfs_file);
 	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
 	uint32_t closing_ino = h->ino;
 	bool was_last = ext2_openref_unregister(e, closing_ino);
@@ -583,6 +585,9 @@ static int ext2_close(vfs_file_t *vfs_file)
 		ext2_orphan_reap_if_pending(fs, e, closing_ino);
 	// Nothing else to flush: the write path is WRITE-THROUGH (every write
 	// commits data and inode before returning), so a close is pure bookkeeping.
+	// Done with `fs` — off the registry now, so an unmount waiting on this
+	// file may proceed. Nothing below touches the filesystem.
+	vfs_openfile_unregister(vfs_file);
 	if (h->blockbuf != NULL)
 		kfree(h->blockbuf);
 	kfree(h);
@@ -944,8 +949,45 @@ uint32_t ext2_free_blocks(vfs_filesystem_t *fs)
 // and the honest vocabulary for any future mount that must not write. The
 // stray-write tripwire (block_device.c) consults the per-mount copy of
 // exactly these slots, so a read-only claim is enforced at the disk too.
+// df's numbers, from the cached superblock — no disk I/O. The free count
+// mutates under write_lock and is read here without it: a uint32 load is
+// atomic on x86-64, and a df racing a write deserves whichever side of the
+// write it lands on (the number describes a moving disk either way).
+static int ext2_space(vfs_filesystem_t *fs, uint64_t *total_bytes, uint64_t *free_bytes)
+{
+	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
+	if (e == NULL)
+		return -1;
+	if (total_bytes)
+		*total_bytes = (uint64_t)e->sb.s_blocks_count * e->block_size;
+	if (free_bytes)
+		*free_bytes = (uint64_t)e->sb.s_free_blocks_count * e->block_size;
+	return 0;
+}
+
+// The undoing of ext2_initialize_filesystem, for unmount: give back what the
+// mount allocated. Runs only after vfs_unmount's busy checks — no open file
+// or directory can still reach this context, so freeing under nobody's lock
+// is sound. The scratch pool exists only on mounts that got the write tables.
+static int ext2_uninitialize(vfs_filesystem_t *fs)
+{
+	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
+	if (e == NULL)
+		return 0;
+	for (size_t i = 0; i < sizeof(e->wr_scratch) / sizeof(e->wr_scratch[0]); i++)
+		if (e->wr_scratch[i] != NULL)
+			kfree(e->wr_scratch[i]);
+	if (e->groups != NULL)
+		kfree(e->groups);
+	kfree(e);
+	fs->fs_specific = NULL;   // a dangling context pointer is a re-mount trap
+	return 0;
+}
+
 vfs_file_operations_t ext2_fops = {
 	.initialize = ext2_initialize_filesystem,
+	.uninitialize = ext2_uninitialize,
+	.space = ext2_space,
 	// Present on the READ-ONLY table too, on purpose: a read-only mount
 	// cannot reclaim an orphan, but it can still SAY there is one to reclaim,
 	// and a silent leak is the failure this whole mechanism exists to avoid.

@@ -197,18 +197,21 @@ and the self-hosting moment.
 - **Shared-mapping snapshot** — gate: profiling showing the copy matters.
 - **The /dev/tty knob** — gate: the pager slice getting picked up.
 - **Raw input pass-through** (0x03 as data) — rides STREAM mode.
-- **SIGHUP on master close** — gate: window close buttons (GRAPHICS #5).
-  Today a master closing orphans the slave benignly (GRID absorbs the
-  writes), which is correct for a probe but wrong for a terminal WINDOW:
-  clicking the X with husk alive inside would leave a ghost session typing
-  into a grid nobody watches. The classic answer, with the etymology worn
-  proudly: SIGHUP is named for a MODEM hanging up mid-session — the master
-  closing is the same event fifty years on, the phone line replaced by a
-  window's X. Mechanism exists (task_signal_all_threads at the slave's
-  seats); the ruling on who exactly gets signalled (the seated shell, or
-  every seat) is taken when the X is real. `exit`-closes-the-window needs
-  none of this — HUNGUP already delivers it, and ptyprobe's act 3 is its
-  standing test.
+- **SIGHUP on master close** — BUILT 2026-08-31 (pty_master_close, tty.c).
+  This booking gated on window close buttons (GRAPHICS #5); the crash door
+  opened first: a terminal-role fixture died without cleanup and its seated
+  child sat parked in read() forever, the pty unburiable — cron's @reboot
+  testrun manufactured one such orphan per failing boot. The classic
+  answer, with the etymology worn proudly: SIGHUP is named for a MODEM
+  hanging up mid-session — the master closing is the same event fifty years
+  on, whether the phone line became a window's X or a dead process's handle
+  table. RULED: EVERY seat is signalled (the modem did not pick favorites),
+  with tty_task_departed's shutdown stand-down carried over (a hangup wave
+  mid-descent shot the undertaker once — shutdown.h). A window's X now gets
+  the hangup free by closing the master. `exit`-closes-the-window still
+  needs none of this — HUNGUP already delivers it, and ptyprobe's act 3 is
+  its standing test; the master-close direction's standing test is
+  winchtest act 7 (the child must die 129, 128+SIGHUP).
 
 ## Resize — the SIGWINCH slice (designed 2026-08-25, BUILT the same day)
 

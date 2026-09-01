@@ -1,5 +1,13 @@
 # Nuke built-in rules and variables.
 MAKEFLAGS += -rR
+# Parallel by default, decided at the TOP only: a sub-make inherits this
+# make's jobserver (or its serial -j1), and one -j of its own would make
+# it drop that jobserver and run its full count beside ours — GNU make even
+# says so ("-jN forced in makefile: resetting jobserver mode"). A -j on the
+# command line still wins over this line.
+ifeq ($(MAKELEVEL),0)
+MAKEFLAGS += -j$(shell nproc)
+endif
 .SUFFIXES:
 QEMUDEBUGFLAGS = -S -s
 # Convenience macro to reliably declare user overridable variables.

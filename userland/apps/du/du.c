@@ -21,26 +21,6 @@ typedef struct {
     bool complete;
 } du_result_t;
 
-static bool parse_depth(const char *text, uint64_t *depth)
-{
-    if (text == NULL || *text == '\0')
-        return false;
-
-    uint64_t value = 0;
-    for (const char *p = text; *p != '\0'; p++)
-    {
-        if (*p < '0' || *p > '9')
-            return false;
-        uint64_t digit = (uint64_t)(*p - '0');
-        if (value > (UINT64_MAX - digit) / 10)
-            return false;
-        value = value * 10 + digit;
-    }
-
-    *depth = value;
-    return true;
-}
-
 static int join_path(char *out, size_t capacity, const char *directory,
                      const char *name)
 {
@@ -51,35 +31,13 @@ static int join_path(char *out, size_t capacity, const char *directory,
     return wanted >= 0 && (size_t)wanted < capacity ? 0 : -1;
 }
 
-static void format_human_size(uint64_t bytes, char *out, size_t capacity)
-{
-    if (bytes < 1024)
-    {
-        os64_snprintf(out, capacity, "%luB", bytes);
-        return;
-    }
-
-    static const char *units[] = {"K", "M", "G", "T", "P", "E"};
-    uint64_t divisor = 1024;
-    int32_t unit = 0;
-    while (unit < 5 && bytes >= divisor * 1024)
-    {
-        divisor *= 1024;
-        unit++;
-    }
-
-    uint64_t whole = bytes / divisor;
-    uint64_t tenth = (bytes % divisor) * 10 / divisor;
-    os64_snprintf(out, capacity, "%lu.%lu%s", whole, tenth, units[unit]);
-}
-
 static void print_usage(uint64_t bytes, const char *path,
                         const du_options_t *options)
 {
     if (options->humanReadable)
     {
         char amount[32];
-        format_human_size(bytes, amount, sizeof(amount));
+        os64_format_binary_size(bytes, amount, sizeof(amount));
         os64_printf("%s\t%s\n", amount, path);
         return;
     }
@@ -219,7 +177,7 @@ int main(int argc, char **argv)
     if (operandCount < 0)
         return 2;
 
-    if (depthText != NULL && !parse_depth(depthText, &options.maxDepth))
+    if (depthText != NULL && !os64_parse_u64(depthText, &options.maxDepth))
     {
         os64_hprintf(OS64_STDERR, "du: invalid maximum depth: %s\n", depthText);
         return 2;
