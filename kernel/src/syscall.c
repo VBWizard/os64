@@ -285,8 +285,8 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 // Thin couriers: strings in, one vfs call in kernel context, the verdict out
 // verbatim (os64/mount.h's vocabulary — the caller's next move depends on
 // WHICH refusal it was, so the code travels instead of collapsing to -1).
-// The dispatcher runs mount under the path gate as a READER; unmount takes
-// the gate as the writer inside vfs_unmount itself.
+// Neither verb takes a reader ticket in the dispatcher. Their VFS entry
+// points serialize namespace mutations and close the path gate as writers.
 typedef struct {
 	char what[64];                   // a GPT name (≤36) or a dashed GUID (36)
 	char where[TASK_MAX_PATH_LEN];

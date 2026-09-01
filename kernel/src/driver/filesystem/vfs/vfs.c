@@ -103,14 +103,14 @@ static spinlock_t kMountTableLock = 0;
 static spinlock_t kNamespaceLock = 0;
 
 // ── The path gate (contract in vfs.h) ────────────────────────────────────────
-// Readers are path operations; the writer is vfs_unmount. Readers pay two
-// atomics; the writer spins until the room is empty and blocks the door while
-// it works. A reader arriving while the door is blocked waits — path ops are
-// all bounded (no path op parks on user input), so the wait is bounded too.
+// Readers are path operations; mount and unmount are writers. Readers pay two
+// atomics; a writer spins until the room is empty and blocks the door while it
+// works. A reader arriving while the door is blocked waits — path ops are all
+// bounded (no path op parks on user input), so the wait is bounded too.
 //
 // kVfsPathWriter is a FLAG, not a lock: it excludes readers, and nothing
 // more. Two writers both find it false and both set it true, which is why
-// the one caller that closes this gate holds kNamespaceLock first.
+// callers that close this gate hold kNamespaceLock first.
 static volatile int  kVfsPathReaders = 0;
 static volatile bool kVfsPathWriter  = false;
 
