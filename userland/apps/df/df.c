@@ -34,8 +34,10 @@ static bool is_space(char c)
 }
 
 // Split one writable report row in place. The producer promises whitespace
-// columns, so retaining exactly twelve fields also makes a format change fail
-// visibly instead of quietly assigning totals to the wrong headings.
+// columns — and escapes the whitespace inside any column that is data, which
+// is what makes that promise keepable — so retaining exactly twelve fields
+// also makes a format change fail visibly instead of quietly assigning totals
+// to the wrong headings.
 static int32_t split_fields(char *line, char **fields)
 {
     int32_t count = 0;
@@ -63,6 +65,15 @@ static bool parse_mount(char *line, df_mount_t *mount)
     char *fields[DF_FIELD_COUNT];
     if (split_fields(line, fields) != DF_FIELD_COUNT)
         return false;
+
+    // Two of these twelve are DATA and arrive escaped — the mount prefix (a
+    // path) and the GPT name (arbitrary bytes off the disk). Splitting on
+    // whitespace works precisely BECAUSE they are escaped; decoding is the
+    // step after the split, and only for those two. The rest are words the
+    // kernel chose and never escapes, so decoding them would be inventing a
+    // transformation nobody applied. See os64_unescape_field (str.h).
+    os64_unescape_field(fields[0]);
+    os64_unescape_field(fields[4]);
 
     mount->prefix = fields[0];
     mount->fstype = fields[1];

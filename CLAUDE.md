@@ -314,12 +314,36 @@ make -C kernel test-elf
   (the file lives ON root; the lifeboat boots when root is broken). No
   example file ships — a shipped copy of comments would mean "mount
   nothing".
-  **THE PATH GATE** (`vfs_path_enter/exit`) is what makes unmount sound: the
-  dispatcher brackets every path-op syscall (`syscall_is_path_op` — open,
-  chdir, stat, unlink, mkdir, rename, spawn, conf_resolve, mount) as a
-  READER; `vfs_unmount` is the one writer, so its busy checks (open-file
-  registry + per-fs `open_dir_count` + task cwd walk) can't be falsified by
-  an op that resolved but hasn't opened yet. Table entries never move:
+  A mount UNDER a mount holds its parent down: `unmount /mnt` with
+  `/mnt/usb` live is refused (`OS64_UNMOUNT_HAS_MOUNTS`), never cascaded —
+  unmounting one thing must not take out a second thing nobody named.
+  **THREE LOCKS, AND EACH ANSWERS A DIFFERENT QUESTION.**
+  (1) **The namespace lock** makes mount and unmount EXCLUSIVE — one
+  mutation at a time, machine-wide. Both verbs are read-then-act on a table
+  the layer beneath re-reads nothing from, so two at once meant two unmounts
+  freeing one filesystem twice and two mounts publishing one partition
+  twice. It is held across the driver's initialize/uninitialize, which is
+  real disk I/O — affordable only because these verbs are rare and
+  human-paced.
+  (2) **THE PATH GATE** (`vfs_path_enter/exit`) is what makes unmount sound
+  against operations already in flight: the dispatcher brackets every
+  path-op syscall (`syscall_is_path_op` — open, chdir, stat, unlink, mkdir,
+  rename, spawn, conf_resolve) as a READER, so unmount's busy checks
+  (open-file registry + per-fs `open_dir_count` + task cwd walk) can't be
+  falsified by an op that resolved but hasn't opened yet. NEITHER namespace
+  verb is on that list: mount looked like a reader because it stats a
+  parent, but a reader is something the namespace may change underneath,
+  and mount is what changes it.
+  (3) **`closing` in `struct file`** covers the one door the gate cannot:
+  a CLOSE resolves no path, so it can arrive at any moment — and both glues
+  keep using the filesystem after close begins (FAT's `f_close` is disk
+  I/O; ext2 reads `fs_specific` and may reap an orphan). A closing file
+  stays ON the open-file registry until that work is done, so unmount
+  counts it as busy instead of freeing the filesystem underneath it;
+  `vfs_sync_all` skips it, which is the opposite answer and why one flag
+  serves both. (Directories were always right — `handle.c` decrements
+  `open_dir_count` after `dops->close` returns.)
+  Table entries never move:
   `fs == NULL` is a free slot, claims publish `fs` last (`vfs_mount_claim`,
   one door for disk and synth mounts), strikes clear it first. A directory's
   `mount_prefix` is now a kmalloc'd canonical-path copy owned by the handle
@@ -338,6 +362,15 @@ make -C kernel test-elf
   Synthetic files never register; their story stays in the handle tables.
   It renders `reg_path`, the registration-time copy owned by the vfs_file —
   NEVER f_path, which is caller memory that may be long dead (vfs.h).
+  **A COLUMN THAT IS DATA IS ESCAPED** in all three files
+  (`synth_text_escape` / `os64_unescape_field`): a GPT name is arbitrary
+  bytes off somebody's disk — "Basic data partition" is what Windows writes
+  — and a mount prefix and a path may hold whatever a filename may, so a
+  whitespace-columned row cannot be split without it. Backslash becomes
+  `\\`, a byte at or below 0x20 or equal to 0x7F becomes `\xHH`, nothing
+  else changes; a reader splits FIRST and decodes the data columns after.
+  Sanitizing was rejected: `mount` matches GPT names verbatim, so printing
+  `Basic_data_partition` would show a name the machine refuses to take back.
   `mount`(1)/`unmount`(1) ship in /bin; df/lsblk/lsof are Chris's, reading
   these files.
 

@@ -42,6 +42,29 @@ typedef struct
 bool synth_text_init(synth_text_t *t, size_t cap);
 void synth_text_addf(synth_text_t *t, const char *fmt, ...);
 
+// ── Whitespace-columned reports: escaping a field that is DATA ──────────────
+// A row of whitespace-separated columns only parses if no column contains
+// whitespace, and some of them are not ours to promise that about. A GPT
+// partition name is arbitrary bytes off somebody's disk — "Basic data
+// partition" is what Windows writes by default — and a mount prefix is a
+// path, which os64 lets contain anything a filename may. One such value
+// turned a 12-column /sys/mounts row into 15 and df rejected the whole
+// report as malformed.
+//
+// So a DATA field is escaped and a reader reverses it (os64_unescape_field
+// in libos64): backslash becomes `\\`, and any byte at or below 0x20 or
+// equal to 0x7F becomes `\xHH`. Nothing else changes, which is why every row
+// this kernel has ever printed for a well-behaved disk is byte-identical
+// before and after — the escape shows up exactly where the format was
+// already broken. Worst-case growth is 4x plus the NUL; the caller sizes
+// `out` for it.
+//
+// SANITIZING was the alternative and it is a trap: turning "Basic data
+// partition" into "Basic_data_partition" prints something that is not the
+// partition's name, and `mount` matches GPT names verbatim — so the reader
+// would be shown a name the machine refuses to accept back.
+void synth_text_escape(const char *in, char *out, size_t cap);
+
 // ── Path parsing helpers ────────────────────────────────────────────────────
 // Paths arrive fs-local (the mount prefix is already stripped by
 // vfs_resolve_mount), always absolute. These are the neutral tools every

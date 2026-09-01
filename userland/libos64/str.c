@@ -203,6 +203,47 @@ static int hex_digit(char c)
     return -1;
 }
 
+// Contract, and the argument for the escaping, in str.h.
+void os64_unescape_field(char *s)
+{
+    char *out;
+    const char *in;
+
+    if (s == NULL)
+        return;
+
+    for (in = s, out = s; *in != '\0'; )
+    {
+        if (*in != '\\')
+        {
+            *out++ = *in++;
+            continue;
+        }
+        if (in[1] == '\\')
+        {
+            *out++ = '\\';
+            in += 2;
+            continue;
+        }
+        if (in[1] == 'x')
+        {
+            int hi = hex_digit(in[2]);
+            int lo = (hi >= 0) ? hex_digit(in[3]) : -1;
+            if (lo >= 0)
+            {
+                *out++ = (char)((hi << 4) | lo);
+                in += 4;
+                continue;
+            }
+        }
+        // Not an escape this encoder produces. Pass the backslash through
+        // rather than guess — a report that says something we cannot read is
+        // better read literally than read wrong.
+        *out++ = *in++;
+    }
+    *out = '\0';
+}
+
 uint64_t os64_xtou(const char *s, const char **end)
 {
     uint64_t v = 0;

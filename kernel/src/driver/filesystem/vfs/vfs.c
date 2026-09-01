@@ -19,7 +19,47 @@
 #include "scheduler.h"       // kTaskList + NO_TASK, the spine that walk follows
 #include "os64/mount.h"      // the mount/unmount result vocabulary (shared with ring 3)
 
-uint8_t kFatDiskNumber=0;
+// FatFs's volume numbers, handed out and GIVEN BACK. A FAT mount is "1:",
+// "2:" … to FatFs, and that number is the only thread disk_read has back to
+// its block device (fat_glue's drive_label / pdrv), so two live mounts must
+// never share one and FF_VOLUMES is a ceiling FatFs cannot be argued out of.
+//
+// A bitmap and not a counter. The counter could only take back the number it
+// handed out LAST, so unmounting the OLDER of two FAT mounts leaked its
+// number for the rest of the boot, and a remount cycle on that partition
+// walked the ceiling one number at a time. Nothing checked the ceiling
+// either: past it, the counter handed FatFs a pdrv nothing resolves.
+//
+// Volume 0 is never allocated. FAT_DISK_NONE is 0xFF and a zeroed fs struct
+// must not read as a valid FAT mount — see the FAT_DISK_NONE note in vfs.h
+// for the root-corruption hunt that rule came from.
+static volatile uint16_t kFatVolumesInUse = 0;   // bit N set = volume N is live
+
+static uint8_t fat_volume_alloc(void)
+{
+	for (;;)
+	{
+		uint16_t inUse = kFatVolumesInUse;
+		uint8_t n = 1;
+		while (n < FF_VOLUMES && (inUse & (1u << n)) != 0)
+			n++;
+		if (n >= FF_VOLUMES)
+			return FAT_DISK_NONE;   // every volume spoken for
+		// CAS rather than a lock: this is reached from the boot sweep and from
+		// the mount verb, and a self-contained atomic owes nothing to whichever
+		// lock the caller happens to hold.
+		if (__sync_bool_compare_and_swap(&kFatVolumesInUse, inUse,
+		                                 (uint16_t)(inUse | (1u << n))))
+			return n;
+	}
+}
+
+static void fat_volume_free(uint8_t n)
+{
+	if (n == FAT_DISK_NONE || n >= FF_VOLUMES)
+		return;
+	__sync_fetch_and_and(&kFatVolumesInUse, (uint16_t)~(1u << n));
+}
 
 // The mount table (see vfs.h for the design note). Filled by
 // kRegisterFilesystem and synthfs_mount, consulted by vfs_resolve_mount,
@@ -38,11 +78,33 @@ int kMountCount = 0;
 // context.
 static spinlock_t kMountTableLock = 0;
 
+// Serializes the NAMESPACE VERBS against each other — one mount or one
+// unmount at a time, machine-wide. kMountTableLock protects the table's
+// BYTES; this protects the DECISIONS taken from them. Both verbs are
+// read-then-act — mount asks "is this GUID mounted, is this prefix free"
+// and unmount asks "is anything using this" — and neither the claim nor the
+// strike underneath them re-asks. Two cores unmounting one prefix both
+// passed the busy check and both ran the teardown: a ring-3-triggerable
+// double free. Two cores mounting one partition both published it.
+//
+// PLAIN spinlock, and it is HELD ACROSS REAL DISK I/O (a driver's
+// initialize and uninitialize). That is the trade kOpenFileLock already
+// makes, for the same reason: interrupts must stay on or a disk wait times
+// out against its own frozen tick clock (spinlock.h). What spinlock.h calls
+// unaffordable — a long critical section — is affordable here because these
+// verbs are rare and human-paced; the waiter is another core spinning
+// through one mount, not a hot path.
+static spinlock_t kNamespaceLock = 0;
+
 // ── The path gate (contract in vfs.h) ────────────────────────────────────────
 // Readers are path operations; the writer is vfs_unmount. Readers pay two
 // atomics; the writer spins until the room is empty and blocks the door while
 // it works. A reader arriving while the door is blocked waits — path ops are
 // all bounded (no path op parks on user input), so the wait is bounded too.
+//
+// kVfsPathWriter is a FLAG, not a lock: it excludes readers, and nothing
+// more. Two writers both find it false and both set it true, which is why
+// the one caller that closes this gate holds kNamespaceLock first.
 static volatile int  kVfsPathReaders = 0;
 static volatile bool kVfsPathWriter  = false;
 
@@ -226,9 +288,56 @@ int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry)
 	return 0;   // table exhausted — readdir's sticky EOF from here on
 }
 
-vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps)
+// The mirror of kRegisterFilesystem's construction, in reverse — ONE
+// teardown with two callers, a failed mount's unwind and vfs_unmount, so the
+// two can never drift apart. `initialized` says whether the driver's
+// initialize ran AND succeeded: only then is there driver state to reclaim,
+// and fat_uninitialize would kfree(NULL) — a panic in this kernel — on a
+// mount whose initialize never got as far as fs_specific.
+//
+// Every kfree below is of the per-mount COPY the register made. A driver that
+// swapped one for a global table would hand this a kernel .data address,
+// which is exactly how fat_initialize's fops overwrite was caught.
+static void vfs_teardown_filesystem(vfs_filesystem_t *fs, bool initialized)
+{
+	if (fs == NULL)
+		return;
+
+	if (initialized && fs->fops != NULL && fs->fops->uninitialize != NULL)
+		fs->fops->uninitialize(fs);
+	fat_volume_free(fs->fatDiskNumber);
+
+	for (dlist_node_t *n = kBlockDeviceDList->head; n != NULL; n = n->next)
+		if (n->data == fs)
+		{
+			dlist_remove(kBlockDeviceDList, n);
+			break;
+		}
+
+	if (fs->mount != NULL)
+	{
+		if (fs->mount->mnt_root != NULL)
+		{
+			if (fs->mount->mnt_root->d_name != NULL)
+				kfree(fs->mount->mnt_root->d_name);
+			kfree(fs->mount->mnt_root);
+		}
+		kfree(fs->mount);
+	}
+	if (fs->files != NULL) kfree(fs->files);
+	if (fs->dirs  != NULL) kfree(fs->dirs);
+	if (fs->bops  != NULL) kfree(fs->bops);
+	if (fs->dops  != NULL) kfree(fs->dops);
+	if (fs->fops  != NULL) kfree(fs->fops);
+	kfree(fs);
+}
+
+vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps, int *out_reason)
 {
     vfs_filesystem_t *fs;
+
+	if (out_reason != NULL)
+		*out_reason = OS64_MOUNT_OK;
 
     fs = kmalloc(sizeof(vfs_filesystem_t));
     memset(fs, 0, sizeof(vfs_filesystem_t));
@@ -273,19 +382,33 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 	// resolves its drive number back to the device by walking this list.
 	add_block_device(fs);
 	if (device->block_device->partition_table->parts[partNo]->filesystemType==FILESYSTEM_TYPE_FAT32)
-		fs->fatDiskNumber=++kFatDiskNumber;
+	{
+		fs->fatDiskNumber = fat_volume_alloc();
+		if (fs->fatDiskNumber == FAT_DISK_NONE)
+		{
+			printd(DEBUG_BOOT, "BOOT: no FatFs volume number free (%u in use) — %s not mounted\n",
+			       FF_VOLUMES - 1, mountPoint);
+			printf("NO FAT VOLUME FREE (%u) — %s NOT mounted\n", FF_VOLUMES - 1, mountPoint);
+			if (out_reason != NULL)
+				*out_reason = OS64_MOUNT_NO_FAT_VOLUME;
+			vfs_teardown_filesystem(fs, false);
+			return NULL;
+		}
+	}
 	if (fs->fops->initialize != NULL)
 	{
 		// A failed initialize (unreadable superblock, feature we can't honor)
 		// means NO mount: the fs never enters the mount table, so no path can
-		// route to it. The dlist entry stays behind (unwinding it needs a
-		// remove that doesn't exist yet) — harmless, its fatDiskNumber is
-		// unique and nothing else matches on it. Boot-time, rare, logged.
+		// route to it — and every allocation above is given back, because ring
+		// 3 can now ask for the same doomed mount as many times as it likes.
 		int initResult = fs->fops->initialize(fs);
 		if (initResult != 0)
 		{
 			printd(DEBUG_BOOT, "BOOT: filesystem at %s failed to initialize (%d) — not mounted\n",
 			       mountPoint, initResult);
+			if (out_reason != NULL)
+				*out_reason = OS64_MOUNT_FAILED;
+			vfs_teardown_filesystem(fs, false);
 			return NULL;
 		}
 	}
@@ -307,7 +430,17 @@ vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *dev
 		default: break;
 	}
 	if (!vfs_mount_claim(mountPoint, part->uniquePartGUID, fstype, fs))
+	{
+		// Claim's false means a full table (its contract in vfs.h keeps it
+		// that way), so the caller hears which ceiling it hit rather than
+		// "the driver refused it" — the two ask for different next moves
+		// (os64/mount.h). The driver DID initialize, so this unwind is the
+		// one that must undo that too.
+		if (out_reason != NULL)
+			*out_reason = OS64_MOUNT_TABLE_FULL;
+		vfs_teardown_filesystem(fs, true);
 		return NULL;
+	}
 
 	// The filesystem is reachable by path as of the line above — and ONLY as
 	// of that line does the block layer agree this partition is mounted. Any
@@ -974,7 +1107,7 @@ static void vfs_mount_secondary_partitions(void)
 			vfs_derive_mount_prefix(part, fsName, prefix);
 
 			vfs_filesystem_t *fs = kRegisterFilesystem(prefix, &kBlockDeviceInfo[idx],
-			                                           partno, &fileOps, &dirOps);
+			                                           partno, &fileOps, &dirOps, NULL);
 			if (fs != NULL)
 			{
 				printd(DEBUG_BOOT, "BOOT: mounted %s (device %u partition %u, GPT name \"%s\") at %s\n",
@@ -1060,7 +1193,7 @@ int vfs_mount_root_part(char* rootPartUUID)
 							dirOps = ext2_rw_dops;
 							printd(DEBUG_BOOT, "BOOT: Root filesystem found (ext2), mounting read-write\n");
 						}
-						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps);
+						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps, NULL);
 						mounted = (kRootFilesystem != NULL);
 						// The glass line (2026-08-08): the SECONDARY mounts
 						// announce on the framebuffer, but the root — the
@@ -1075,7 +1208,7 @@ int vfs_mount_root_part(char* rootPartUUID)
 						fileOps = fat_fops;
 						dirOps = fat_dops;
 						printd(DEBUG_BOOT, "BOOT: Root filesystem found, mounting\n");
-						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps);
+						kRootFilesystem = kRegisterFilesystem("/", &kBlockDeviceInfo[idx], partno, &fileOps, &dirOps, NULL);
 						mounted = (kRootFilesystem != NULL);
                         if (mounted)
                             printd(DEBUG_BOOT, "BOOT: Root filesystem successfully mounted\n");
@@ -1107,9 +1240,13 @@ int vfs_mount_root_part(char* rootPartUUID)
 // ── The open-file registry (the sync(8) slice, 2026-08-06) ──────────────────
 // One global intrusive list of every open vfs_file, threaded through the
 // openNext/openPrev links in struct file. The fs glues call register at the
-// bottom of a successful open and unregister at the top of close; the
-// walkers are vfs_sync_all below, unmount's busy count (vfs_openfiles_on),
-// and /sys/openfiles' snapshot. This exists because sync(1)'s whole job is
+// bottom of a successful open, mark_closing at the TOP of close, and
+// unregister at the BOTTOM of it (the `closing` contract in vfs.h — the two
+// walkers want opposite answers about a file that is mid-close, and a file
+// that had left the list while still touching its filesystem let an unmount
+// tear that filesystem down underneath it). The walkers are vfs_sync_all
+// below, unmount's busy count (vfs_openfiles_on), and /sys/openfiles'
+// snapshot. This exists because sync(1)'s whole job is
 // reaching OTHER tasks' open files — the kernel had no way to enumerate them
 // (the "ping.log reads empty while ping runs" mystery, solved the same
 // afternoon FAT's deferred directory-entry update was identified as 1977
@@ -1143,6 +1280,15 @@ void vfs_openfile_register(vfs_file_t *file)
 	spinlock_release(&kOpenFileLock);
 }
 
+void vfs_openfile_mark_closing(vfs_file_t *file)
+{
+	if (file == NULL)
+		return;
+	spinlock_acquire(&kOpenFileLock);
+	file->closing = true;
+	spinlock_release(&kOpenFileLock);
+}
+
 void vfs_openfile_unregister(vfs_file_t *file)
 {
 	if (file == NULL)
@@ -1170,6 +1316,9 @@ int64_t vfs_sync_all(void)
 	spinlock_acquire(&kOpenFileLock);
 	for (vfs_file_t *f = kOpenFileHead; f != NULL; f = f->openNext)
 	{
+		if (f->closing)
+			continue;   // mid-close: its data is already committed or lost, and
+			            // its handle is one instruction from being freed
 		if (f->fops == NULL || f->fops->sync == NULL)
 			continue;   // read-only mount or a filesystem with nothing to say
 		if (f->fops->sync(f) < 0)
@@ -1188,6 +1337,13 @@ int64_t vfs_sync_all(void)
 // How many open files sit on `fs` — unmount's first busy question, and
 // /sys/mounts' "open" column. The registry was built for sync(8); this is
 // the second customer its comment predicted.
+//
+// A file being CLOSED right now counts. Close is not a path operation, so
+// the gate cannot hold one off, and both glues keep using the filesystem
+// after they start closing (FAT's f_close is disk I/O; ext2 reads
+// fs_specific and may reap an orphan). Counting it makes the unmount say
+// BUSY for the microseconds that takes, which is the honest answer — the
+// alternative was freeing the filesystem under a close in flight.
 int vfs_openfiles_on(vfs_filesystem_t *fs)
 {
 	int n = 0;
@@ -1291,26 +1447,11 @@ static bool vfs_find_part(const char *what, int *out_idx, int *out_partno)
 	return false;
 }
 
-int vfs_mount_explicit(const char *what, const char *where, uint64_t flags)
+// The mount verb's body, run under kNamespaceLock. Everything from here down
+// is read-then-act on the namespace — "is this GUID mounted", "is this prefix
+// free", then the claim — and the claim re-asks neither question.
+static int vfs_mount_locked(const char *what, const char *where, uint64_t flags, bool derive)
 {
-	if (what == NULL || what[0] == '\0')
-		return OS64_MOUNT_BAD_ARGS;
-	if ((flags & ~(uint64_t)OS64_MOUNT_RO) != 0)
-		return OS64_MOUNT_BAD_ARGS;   // an unknown bit must fail loudly, not grant less than asked
-
-	// NULL/empty `where` means "at the partition's own label" — `mount fat`
-	// and a one-token mounts.conf line are the same ask, and the answer
-	// (label, fstype fallback, collision numbering) lives in one place.
-	bool derive = (where == NULL || where[0] == '\0');
-	if (!derive)
-	{
-		if (where[0] != '/')
-			return OS64_MOUNT_BAD_ARGS;
-		size_t wlen = strlen(where);
-		if (wlen < 2 || wlen >= VFS_MOUNT_PREFIX_MAX || where[wlen - 1] == '/')
-			return OS64_MOUNT_BAD_ARGS;   // "/" is not mountable-over; canonical paths carry no trailing slash
-	}
-
 	int idx = -1, partno = -1;
 	if (!vfs_find_part(what, &idx, &partno))
 		return OS64_MOUNT_NOT_FOUND;
@@ -1363,21 +1504,50 @@ int vfs_mount_explicit(const char *what, const char *where, uint64_t flags)
 			return OS64_MOUNT_NO_PARENT;
 	}
 
+	int reason = OS64_MOUNT_OK;
 	vfs_filesystem_t *fs = kRegisterFilesystem((char *)where, &kBlockDeviceInfo[idx],
-	                                           partno, &fileOps, &dirOps);
+	                                           partno, &fileOps, &dirOps, &reason);
 	if (fs == NULL)
-		return OS64_MOUNT_FAILED;   // driver refusal or a full table — the log says which
+		return reason;   // driver refusal, a full table, no FatFs volume — it says which
 
 	printd(DEBUG_VFS, "mount: %s (%s, GPT name \"%s\") at %s\n",
 	       what, fsName, part->partName, where);
 	return OS64_MOUNT_OK;
 }
 
-int vfs_unmount(const char *where)
+int vfs_mount_explicit(const char *what, const char *where, uint64_t flags)
 {
-	if (where == NULL || where[0] != '/')
+	// Argument SHAPE first: nonsense needs no lock to refuse, and holding the
+	// namespace against a whole disk mount is not something to pay for a typo.
+	if (what == NULL || what[0] == '\0')
 		return OS64_MOUNT_BAD_ARGS;
+	if ((flags & ~(uint64_t)OS64_MOUNT_RO) != 0)
+		return OS64_MOUNT_BAD_ARGS;   // an unknown bit must fail loudly, not grant less than asked
 
+	// NULL/empty `where` means "at the partition's own label" — `mount fat`
+	// and a one-token mounts.conf line are the same ask, and the answer
+	// (label, fstype fallback, collision numbering) lives in one place.
+	bool derive = (where == NULL || where[0] == '\0');
+	if (!derive)
+	{
+		if (where[0] != '/')
+			return OS64_MOUNT_BAD_ARGS;
+		size_t wlen = strlen(where);
+		if (wlen < 2 || wlen >= VFS_MOUNT_PREFIX_MAX || where[wlen - 1] == '/')
+			return OS64_MOUNT_BAD_ARGS;   // "/" is not mountable-over; canonical paths carry no trailing slash
+	}
+
+	spinlock_acquire(&kNamespaceLock);
+	int r = vfs_mount_locked(what, where, flags, derive);
+	spinlock_release(&kNamespaceLock);
+	return r;
+}
+
+// The unmount verb's body, run under kNamespaceLock. Nothing here is safe to
+// interleave with another namespace mutation: two callers reaching the strike
+// with the same `fs` both tore it down, freeing every allocation twice.
+static int vfs_unmount_locked(const char *where)
+{
 	// Identify the victim first, cheaply, before disturbing anything.
 	spinlock_acquire(&kMountTableLock);
 	vfs_mount_entry_t *m = NULL;
@@ -1396,6 +1566,33 @@ int vfs_unmount(const char *where)
 		return OS64_UNMOUNT_ROOT;
 	if (fs->block_device_info == NULL)
 		return OS64_UNMOUNT_SYNTH;   // /proc, /sys, /dev — the machine's own furniture
+
+	// A MOUNT UNDER THIS ONE HOLDS IT DOWN. Nothing about the child's own
+	// filesystem breaks if the parent leaves — longest-prefix routing would
+	// still find it — but the namespace around it stops making sense: the
+	// child vanishes from root's synthetic listing (it lists as a CHILD of
+	// /mnt, and /mnt is gone), its mount point's parent no longer exists, and
+	// the next filesystem mounted at /mnt silently inherits it. Refused, not
+	// cascaded: unmounting one thing must never take out a second thing the
+	// caller did not name.
+	//
+	// No table lock for the scan: every mutation a running machine can make
+	// is one of the two namespace verbs, and we hold the lock that makes
+	// those exclusive. (The boot-time claims — synthfs_mount and the
+	// partition sweep — go straight to vfs_mount_claim, and run before a
+	// second caller exists.)
+	for (int i = 0; i < kMountCount; i++)
+	{
+		if (kMountTable[i].fs == NULL || kMountTable[i].fs == fs)
+			continue;
+		if (strncmp(kMountTable[i].prefix, where, m->prefix_len) == 0 &&
+		    kMountTable[i].prefix[m->prefix_len] == '/')
+		{
+			printd(DEBUG_VFS, "unmount: %s holds a mount at %s — unmount that first\n",
+			       where, kMountTable[i].prefix);
+			return OS64_UNMOUNT_HAS_MOUNTS;
+		}
+	}
 
 	// Close the path gate: from here to the strike, no path operation is in
 	// flight anywhere, so the busy answers below cannot be falsified by an
@@ -1440,35 +1637,22 @@ int vfs_unmount(const char *where)
 
 	vfs_path_gate_open();
 
-	// Teardown, outside the gate — nothing can reach this fs any more.
-	// LIFO reuse of FatFs's volume number, or FF_VOLUMES (10) would be a
-	// mount/unmount cycle budget rather than a concurrent-volume budget.
-	if (fs->fops->uninitialize != NULL)
-		fs->fops->uninitialize(fs);
-	if (fs->fatDiskNumber != FAT_DISK_NONE && fs->fatDiskNumber == kFatDiskNumber)
-		kFatDiskNumber--;
-
-	for (dlist_node_t *n = kBlockDeviceDList->head; n != NULL; n = n->next)
-		if (n->data == fs)
-		{
-			dlist_remove(kBlockDeviceDList, n);
-			break;
-		}
-
-	// The mirror of kRegisterFilesystem's allocations, in reverse. Every one
-	// of these is the per-mount COPY the register made — a driver that
-	// swapped one for a global table would hand this kfree kernel .data,
-	// which is exactly how fat_initialize's fops overwrite was caught.
-	kfree(fs->mount->mnt_root->d_name);
-	kfree(fs->mount->mnt_root);
-	kfree(fs->mount);
-	kfree(fs->files);
-	kfree(fs->dirs);
-	kfree(fs->bops);
-	kfree(fs->dops);
-	kfree(fs->fops);
-	kfree(fs);
+	// Teardown, outside the gate — nothing can reach this fs any more — but
+	// still under kNamespaceLock, so the FatFs volume number this gives back
+	// cannot be handed to a new mount while the old one is still using it.
+	vfs_teardown_filesystem(fs, true);
 
 	printd(DEBUG_VFS, "unmount: %s unmounted\n", where);
 	return OS64_MOUNT_OK;
+}
+
+int vfs_unmount(const char *where)
+{
+	if (where == NULL || where[0] != '/')
+		return OS64_MOUNT_BAD_ARGS;
+
+	spinlock_acquire(&kNamespaceLock);
+	int r = vfs_unmount_locked(where);
+	spinlock_release(&kNamespaceLock);
+	return r;
 }

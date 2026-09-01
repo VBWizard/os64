@@ -368,9 +368,12 @@ static int fat_write(vfs_file_t* vfs_file, const void* buffer, size_t size) {
 static int fat_close(vfs_file_t* vfs_file) {
     FIL* fat_file = (FIL*)vfs_file->handle;
 
-	// Off the open-file registry FIRST — a concurrent vfs_sync_all must
-	// never find a file whose FIL is about to be freed.
-	vfs_openfile_unregister(vfs_file);
+	// MARKED, not unlinked. A concurrent vfs_sync_all must never find a file
+	// whose FIL is about to be freed — the mark is enough for that. Unlinking
+	// here was too much: f_close below is real disk I/O on this volume, and a
+	// file off the registry is a file unmount counts as gone, so it could free
+	// the filesystem mid-f_close (vfs.h, the `closing` contract).
+	vfs_openfile_mark_closing(vfs_file);
 
 	// FREE ON BOTH PATHS. This used to `return -1` before the two kfrees, so a
 	// failing close leaked the vfs_file_t AND the FIL — and nothing upstream
@@ -383,6 +386,9 @@ static int fat_close(vfs_file_t* vfs_file) {
 	// freeing is leaking forever. What the caller loses is the DATA, not the
 	// bookkeeping — and it is now told so, loudly (handle.c).
 	FRESULT fr = f_close(fat_file);
+	// Done with the volume — off the registry, so an unmount waiting on this
+	// file may proceed. Nothing below touches the filesystem.
+	vfs_openfile_unregister(vfs_file);
 	kfree(vfs_file); // Free the VFS file object
 	kfree(fat_file);
 	return (fr == FR_OK) ? 0 : -1;

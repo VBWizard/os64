@@ -226,6 +226,26 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 			return (long)n;   // got input — return it (terminal semantics)
 		}
 
+		// THE LINE IS DEAD. A pty whose master has closed can never receive
+		// another byte, so an empty read on one is EOF — the same answer a
+		// hung-up terminal has given since the modem era, and the reason
+		// masterClosed is checked HERE and not only announced as SIGHUP.
+		// The signal alone was not enough: it is consumed on delivery, so a
+		// program that CATCHES SIGHUP (rather than dying of it) came back
+		// from its handler, called read again, and parked forever on a line
+		// nobody held — keeping its seat, and keeping the pty from ever
+		// being buried, which is the orphan the hangup exists to prevent.
+		// After the drain, so whatever the master typed before it left is
+		// delivered first: bytes, then EOF.
+		if (tty->is_pty && tty->masterClosed)
+		{
+			if (tty->waiter == self)
+				tty->waiter = NULL;
+			if (kTTYFocused == tty)
+				renderer_cursor_hide();
+			return 0;
+		}
+
 		// Empty-handed and out of patience: the deadline verdict. Checked
 		// AFTER the drain, so a poll (deadline already past) still delivers
 		// anything that was waiting — the deadline caps the WAIT, never the

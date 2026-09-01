@@ -50,9 +50,18 @@ static bool synth_text_grow(synth_text_t *t, size_t needed)
 // Append one formatted line. Deliberately renders into a bounded stack line
 // buffer first: snprintf tells us the true length, so the grow decision is
 // made with the real number rather than a guess.
+//
+// THE BUFFER IS THE LIMIT ON ONE CALL, not on a row: a generator whose widest
+// possible row could pass this must build it from several calls (sys_gen_mounts
+// is the shape). Escaping raised what "widest possible" means — a field that
+// is DATA can quadruple (synth_text_escape) — so the buffer is sized for a
+// fully-escaped path plus a fully-escaped mount prefix and their columns, on
+// a kernel stack where a kilobyte is 1% of the frame. Over it, the line is
+// TRUNCATED, and a truncated row is one a column reader rejects whole, so it
+// says so rather than quietly shipping half a field.
 void synth_text_addf(synth_text_t *t, const char *fmt, ...)
 {
-	char line[512];
+	char line[1024];
 	va_list args;
 
 	if (t->buf == NULL)
@@ -66,7 +75,11 @@ void synth_text_addf(synth_text_t *t, const char *fmt, ...)
 		return;
 	size_t want = (size_t)n;
 	if (want >= sizeof(line))
+	{
+		printd(DEBUG_VFS, "synthfs: a %d-byte line was truncated to %u — split the row\n",
+		       n, (unsigned)(sizeof(line) - 1));
 		want = sizeof(line) - 1;   // truncated at the line buffer; still valid text
+	}
 
 	if (t->len + want + 1 > t->cap && !synth_text_grow(t, t->len + want + 1))
 		return;
@@ -74,6 +87,51 @@ void synth_text_addf(synth_text_t *t, const char *fmt, ...)
 	memcpy(t->buf + t->len, line, want);
 	t->len += want;
 	t->buf[t->len] = '\0';
+}
+
+// Escape one DATA field for a whitespace-columned report (contract and the
+// argument for it in synthfs.h). Truncates rather than overrun, and never
+// truncates mid-escape — half of a `\xHH` would decode to something the
+// field never contained, which is worse than a short name.
+void synth_text_escape(const char *in, char *out, size_t cap)
+{
+	static const char hex[] = "0123456789abcdef";
+	size_t n = 0;
+
+	if (out == NULL || cap == 0)
+		return;
+	if (in == NULL)
+	{
+		out[0] = '\0';
+		return;
+	}
+
+	for (const unsigned char *p = (const unsigned char *)in; *p != '\0'; p++)
+	{
+		if (*p == '\\')
+		{
+			if (n + 2 >= cap)
+				break;
+			out[n++] = '\\';
+			out[n++] = '\\';
+		}
+		else if (*p <= 0x20 || *p == 0x7F)
+		{
+			if (n + 4 >= cap)
+				break;
+			out[n++] = '\\';
+			out[n++] = 'x';
+			out[n++] = hex[*p >> 4];
+			out[n++] = hex[*p & 0x0F];
+		}
+		else
+		{
+			if (n + 1 >= cap)
+				break;
+			out[n++] = (char)*p;
+		}
+	}
+	out[n] = '\0';
 }
 
 // ── Path parsing helpers ────────────────────────────────────────────────────

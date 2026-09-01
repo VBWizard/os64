@@ -921,7 +921,13 @@ void pty_master_close(tty_t *slave)
 	// fifty years on. Every seat gets SIGHUP (ruled: the modem did not pick
 	// favorites), which is what lets a parked slave reader die instead of
 	// waiting forever on a line nobody holds — and what lets the pty bury
-	// once those seats empty. The booking gated this on the window X-button;
+	// once those seats empty.
+	//
+	// The signal is the WAKE, not the whole answer: it is consumed on
+	// delivery, so a program that CATCHES SIGHUP instead of dying of it would
+	// return from its handler and park again. What it gets on that next read
+	// is EOF, because console_read reads masterClosed for itself (console.c).
+	// The booking gated this on the window X-button;
 	// it arrived through the crash door instead: a terminal-role fixture
 	// died without cleanup and its seated child sat in read() for ten
 	// minutes of a Sunday. Same shutdown stand-down as the shell-side

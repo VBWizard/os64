@@ -390,8 +390,15 @@ static uint64_t syscall_unmount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // acts on the filesystem it resolved to: unmount closes the gate, and this
 // list is what it is closing against. SPAWN covers the ELF loader's and the
 // shared-object registry's opens (they run inside task_create, inside the
-// spawn call). MOUNT rides as a reader too — it stats the parent — while
-// UNMOUNT, the one writer, must never appear here.
+// spawn call).
+//
+// NEITHER NAMESPACE VERB APPEARS HERE. Mount stats a parent, so it looked
+// like a reader and rode as one — but a reader is something the namespace
+// may change underneath, and mount CHANGES the namespace. It and unmount
+// exclude each other (and themselves) through vfs.c's kNamespaceLock; a
+// reader ticket would have let two of them run at once, which is the whole
+// bug. Nor does CLOSE belong here: it resolves no path, and its race with
+// unmount is answered by `closing` in struct file.
 static bool syscall_is_path_op(uint64_t nr)
 {
 	switch (nr)
@@ -404,7 +411,6 @@ static bool syscall_is_path_op(uint64_t nr)
 		case SYSCALL_MKDIR:
 		case SYSCALL_RENAME:
 		case SYSCALL_CONF_RESOLVE:
-		case SYSCALL_MOUNT:
 			return true;
 		default:
 			return false;

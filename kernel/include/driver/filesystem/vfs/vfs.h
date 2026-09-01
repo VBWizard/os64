@@ -334,6 +334,17 @@ struct file
 	// ping.log). The other customers: unmount's busy count, /sys/openfiles.
 	vfs_file_t *openNext;
 	vfs_file_t *openPrev;
+	// THE CLOSING WINDOW. Set at the top of a glue's close, cleared by
+	// leaving the list at the bottom of it. It exists because the registry's
+	// two walkers want OPPOSITE answers about a file that is mid-close:
+	// vfs_sync_all must skip it (its handle is about to be freed), and
+	// unmount's busy count must still SEE it (everything between those two
+	// points runs on the filesystem — FAT's f_close is disk I/O, ext2 reads
+	// fs_specific and may reap an orphan — and unmount is what frees the
+	// filesystem). Leaving the list at the top served the first walker and
+	// betrayed the second: close is not a path operation, so the gate cannot
+	// hold one off, and a close in flight looked like no open file at all.
+	volatile bool closing;
 	// Registration-time COPY of f_path, owned by this struct. f_path itself
 	// is the CALLER's memory (the lifetime rule above the mount table), and
 	// kernel-internal openers pass buffers that die long before the file
@@ -545,6 +556,12 @@ int vfs_readdir_child_mounts(vfs_directory_t *dir, os64_dirent_t *entry);
 // mounts get write-stripped op tables from birth). Callable from kernel
 // context (the fixture and the mounts.conf boot reader do) and from the
 // syscalls.
+//
+// BOTH VERBS ARE EXCLUSIVE — one namespace mutation at a time, machine-wide
+// (kNamespaceLock, vfs.c). Each is read-then-act on a table the layer below
+// re-reads nothing from, so admitting two at once let two unmounts free one
+// filesystem twice and two mounts publish one partition twice. This is why
+// mount is NOT a path-gate reader: it is the gate's other writer.
 int vfs_mount_explicit(const char *what, const char *where, uint64_t flags);
 int vfs_unmount(const char *where);
 
@@ -559,6 +576,11 @@ int vfs_unmount(const char *where);
 // between resolve and open when the check ran, and the fs it tears down is
 // one no path operation can still be touching. Enter/exit MUST bracket the
 // whole resolve-to-done span, never just the resolve.
+//
+// The gate excludes READERS and nothing else — its writer flag is a flag,
+// not a lock, and writers exclude each other through kNamespaceLock (vfs.c).
+// And it cannot cover a CLOSE, which resolves no path and can arrive at any
+// moment: that hole is closed by `closing` in struct file instead.
 void vfs_path_enter(void);
 void vfs_path_exit(void);
 
@@ -599,14 +621,23 @@ void vfs_format_guid(const uint8_t *guid, char *out);
 // last (the lock-free-reader ordering rule at vfs_mount_entry_t), announces
 // a full table on the glass itself. `fstype` must be a string that outlives
 // the mount (a literal, or a pointer into static storage).
+//
+// FALSE MEANS THE TABLE WAS FULL, and only that. kRegisterFilesystem reads
+// this bool and answers its caller OS64_MOUNT_TABLE_FULL, so a second reason
+// to refuse cannot just be added here — it needs a reason out-param, or the
+// mount verb starts naming the wrong ceiling.
 bool vfs_mount_claim(const char *prefix, const uint8_t *guid_or_null,
                      const char *fstype, vfs_filesystem_t *fs);
 
 // ── The open-file registry (the sync(8) slice, 2026-08-06) ──────────────────
-// Called by each filesystem glue at the bottom of a successful open and the
-// top of close. Task/kernel-thread context ONLY (the registry lock is a
-// plain, interrupts-on spinlock — see spinlock.h for the discipline).
+// Each filesystem glue calls register at the bottom of a successful open,
+// mark_closing at the TOP of close, and unregister at the BOTTOM of it —
+// after the last line that touches the filesystem, before the frees (see
+// `closing` in struct file for why the two ends are not the same moment).
+// Task/kernel-thread context ONLY (the registry lock is a plain,
+// interrupts-on spinlock — see spinlock.h for the discipline).
 void vfs_openfile_register(vfs_file_t *file);
+void vfs_openfile_mark_closing(vfs_file_t *file);
 void vfs_openfile_unregister(vfs_file_t *file);
 
 // sync(1)'s engine: walk every registered open file and run its fops->sync.
@@ -676,7 +707,13 @@ bool vfs_partition_mounted(block_device_info_t *dev, int partNo);
 int vfs_canonicalize_path(const char *cwd, const char *path, char *out, size_t outlen);
 
 void init_block();
-vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps);
+// Build a mount and publish it. Returns NULL on refusal, having given back
+// every allocation it made — a runtime mount can be asked for over and over
+// by any task, so a failure that leaked would be an exhaustion attack. When
+// out_reason is non-NULL it receives the OS64_MOUNT_* code saying WHICH
+// refusal it was (os64/mount.h); boot-time callers, which have a log line
+// instead of a caller to answer, pass NULL.
+vfs_filesystem_t* kRegisterFilesystem(char *mountPoint, block_device_info_t *device, int partNo, vfs_file_operations_t* fileOps, vfs_directory_operations_t* dirOps, int *out_reason);
 int ext2_initialize_filesystem(vfs_filesystem_t* device);
 int vfs_mount_root_part(char* rootPartUUID);
 

@@ -121,6 +121,21 @@ uint64_t os64_xtou(const char *s, const char **end);
 // is hi - lo — the first number is the low end, in both files.
 bool os64_parse_range(const char *s, uint64_t *lo, uint64_t *hi);
 
+// Reverse the kernel's field escaping, IN PLACE — the reader's half of the
+// contract the emitter states in full at synth_text_escape (kernel synthfs.h).
+// A row of whitespace-separated columns can only be split if no column holds
+// whitespace, and columns that are DATA cannot promise that: a GPT partition
+// name is arbitrary bytes off somebody's disk ("Basic data partition" is what
+// Windows writes), and a mount prefix is a path. Those columns arrive with
+// backslash written `\\` and any byte at or below 0x20 or equal to 0x7F
+// written `\xHH`; split the row FIRST, then unescape each field you keep.
+//
+// The result is never longer than the input, so it decodes over itself. A
+// malformed escape is left exactly as it reads — a lone trailing backslash,
+// or `\x` without two hex digits, is a corrupt report rather than a value,
+// and inventing a byte for it would hide that.
+void os64_unescape_field(char *s);
+
 // Copy `n` bytes. No overlap handling (that is memmove's job, below).
 void *os64_memcpy(void *dst, const void *src, size_t n);
 

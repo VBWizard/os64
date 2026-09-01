@@ -829,7 +829,9 @@ static void sys_gen_shlib(synth_text_t *t)
 // and handles==0 marks exactly those (no task handle references the file).
 // Synthetic files (procfs, sysfs, pipes) never register; their story stays
 // in the handle tables. ident is the fs-local file identity (ext2 inode,
-// FAT start cluster — vfs.h f_ident).
+// FAT start cluster — vfs.h f_ident). The path and mount columns are DATA,
+// so both are escaped — synth_text_escape in synthfs.h carries the rule and
+// the reason.
 static void sys_gen_openfiles(synth_text_t *t)
 {
 	synth_text_addf(t, "# path mount ident handles\n");
@@ -843,9 +845,20 @@ static void sys_gen_openfiles(synth_text_t *t)
 	{
 		// Root's prefix is "" so prefix+tail concatenates to the full path;
 		// the mount column still says "/" out loud.
+		//
+		// Both are ESCAPED (synthfs.h): a filename may hold whatever a
+		// filename may hold, and so may a mount path. Escaping the two
+		// halves separately and joining them is the same bytes as escaping
+		// the join — the transform is per-byte.
 		const char *m = rows[i].mount[0] != '\0' ? rows[i].mount : "/";
+		char emount[sizeof(rows[i].mount) * 4];
+		char etail[sizeof(rows[i].tail) * 4];
+		char ecolumn[sizeof(emount)];
+		synth_text_escape(rows[i].mount, emount, sizeof(emount));
+		synth_text_escape(rows[i].tail, etail, sizeof(etail));
+		synth_text_escape(m, ecolumn, sizeof(ecolumn));
 		synth_text_addf(t, "%s%s %s %lu %d\n",
-		                rows[i].mount, rows[i].tail, m, rows[i].ident, rows[i].handles);
+		                emount, etail, ecolumn, rows[i].ident, rows[i].handles);
 	}
 	if (total > shown)
 		// The SHAPE is load-bearing: lsof recognizes a cut listing by a '#'
@@ -861,7 +874,9 @@ static void sys_gen_openfiles(synth_text_t *t)
 // come from each filesystem's space fop (real disk I/O for FAT, which is why
 // this renders in kernel context like every synth file). The dir count rides
 // beside the file count because unmount's BUSY answer is their sum, and the
-// person df'ing before an unmount deserves the same arithmetic.
+// person df'ing before an unmount deserves the same arithmetic. The prefix
+// and GPT-name columns are DATA and are escaped — synth_text_escape in
+// synthfs.h carries the rule and the reason.
 static void sys_gen_mounts(synth_text_t *t)
 {
 	synth_text_addf(t, "# prefix fstype device part name guid mode blocksz total free open_files open_dirs\n");
@@ -875,7 +890,11 @@ static void sys_gen_mounts(synth_text_t *t)
 		char guid[40] = "-";
 		char dev[16] = "-";
 		char part[8] = "-";
-		char name[40] = "-";
+		// A GPT name is 36 characters of somebody else's data, so it is
+		// ESCAPED into a field four times that (synthfs.h) — otherwise
+		// "Basic data partition" hands df fifteen columns where twelve
+		// were promised and the whole report reads as malformed.
+		char name[36 * 4 + 1] = "-";
 		if (fs->block_device_info != NULL)
 		{
 			vfs_format_guid(kMountTable[i].part_guid, guid);
@@ -887,15 +906,23 @@ static void sys_gen_mounts(synth_text_t *t)
 			                   fs->partNumber < bd->part_count)
 			                  ? bd->partition_table->parts[fs->partNumber] : NULL;
 			if (pe != NULL && pe->partName[0] != '\0')
-				sprintf(name, "%.36s", pe->partName);
+			{
+				char raw[37];
+				sprintf(raw, "%.36s", pe->partName);
+				synth_text_escape(raw, name, sizeof(name));
+			}
 		}
+
+		// The prefix is a path, and a path may hold whatever a filename may.
+		char prefix[VFS_MOUNT_PREFIX_MAX * 4];
+		synth_text_escape(kMountTable[i].prefix, prefix, sizeof(prefix));
 
 		uint64_t total = 0, free_b = 0;
 		bool have_space = (fs->fops != NULL && fs->fops->space != NULL &&
 		                   fs->fops->space(fs, &total, &free_b) == 0);
 
 		synth_text_addf(t, "%s %s %s %s %s %s %s ",
-		                kMountTable[i].prefix, fstype, dev, part, name, guid,
+		                prefix, fstype, dev, part, name, guid,
 		                fs->read_only ? "ro" : "rw");
 		if (fs->blockSize > 0)
 			synth_text_addf(t, "%d ", fs->blockSize);
@@ -914,6 +941,8 @@ static void sys_gen_mounts(synth_text_t *t)
 // THE system name ("nvme0" — block_assign_dev_names, and the future /dev
 // nodes). A partition's last column is where it is mounted, or "-": the
 // answer to "what CAN I mount?" is every "-" row with a filesystem word.
+// The GPT-name and mounted-at columns are DATA and are escaped —
+// synth_text_escape in synthfs.h carries the rule and the reason.
 static void sys_gen_block(synth_text_t *t)
 {
 	synth_text_addf(t, "# dev  <name> <kind> <sectors> <sector_bytes>\n");
@@ -953,17 +982,28 @@ static void sys_gen_block(synth_text_t *t)
 			char guid[40];
 			vfs_format_guid(pe->uniquePartGUID, guid);
 
-			const char *at = "-";
+			// Both of these are DATA in a whitespace-columned row — a GPT
+			// name off the disk and a mount path — so both are escaped
+			// (synthfs.h). Windows names its data partition "Basic data
+			// partition"; unescaped, that is four columns.
+			char at[VFS_MOUNT_PREFIX_MAX * 4] = "-";
 			for (int mi = 0; mi < kMountCount; mi++)
 				if (kMountTable[mi].fs != NULL &&
 				    memcmp(kMountTable[mi].part_guid, pe->uniquePartGUID, 16) == 0)
 				{
-					at = kMountTable[mi].prefix;
+					synth_text_escape(kMountTable[mi].prefix, at, sizeof(at));
 					break;
 				}
+			char pname[36 * 4 + 1] = "-";
+			if (pe->partName[0] != '\0')
+			{
+				char raw[37];
+				sprintf(raw, "%.36s", pe->partName);
+				synth_text_escape(raw, pname, sizeof(pname));
+			}
 			synth_text_addf(t, "part %s %d %s %s %s %s\n",
 			                bd->dev_name[0] ? bd->dev_name : "-", p,
-			                pe->partName[0] ? pe->partName : "-", fsword, guid, at);
+			                pname, fsword, guid, at);
 		}
 	}
 }

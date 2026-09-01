@@ -388,7 +388,11 @@ static int list_cwd(const os64_proc_info_t *task,
 }
 
 // Split the final whitespace-delimited field from a row. Working from the
-// right preserves spaces in the pathname at the front of /sys/openfiles.
+// right is a second belt on the same braces: /sys/openfiles escapes the
+// whitespace inside its path and mount columns (os64_unescape_field, str.h),
+// so no field carries a space by the time it reaches here — but a row whose
+// last three columns are numbers-and-a-word is unambiguous from the right
+// whatever the front of it turns out to hold.
 static bool take_last_field(char *line, char **field)
 {
     size_t length = os64_strlen(line);
@@ -426,6 +430,11 @@ static bool parse_openfile(char *line, char **path, uint64_t *ident,
         !os64_parse_u64(identText, ident) ||
         *line == '\0' || *mount == '\0')
         return false;
+    // Decode AFTER the split, and only the two columns the kernel escapes —
+    // the numbers are numbers. The path is compared against canonical
+    // operands, so it has to be back in its real spelling by then.
+    os64_unescape_field(line);
+    os64_unescape_field(mount);
     *path = line;
     return true;
 }

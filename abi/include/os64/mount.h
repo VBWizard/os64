@@ -42,4 +42,10 @@
 #define OS64_UNMOUNT_SYNTH        -12   // /proc, /sys, /dev — not disk mounts
 #define OS64_UNMOUNT_BUSY         -13   // open files/directories on it, or a task's cwd inside it
 
+// Numbers are handed out in the order the refusals were discovered, so the
+// mount and unmount runs stopped being contiguous here. The VALUE is the
+// ABI; the grouping never was.
+#define OS64_MOUNT_NO_FAT_VOLUME  -14   // FatFs volume numbers all spoken for (unmount a FAT mount)
+#define OS64_UNMOUNT_HAS_MOUNTS   -15   // something is mounted UNDER `where` — unmount that first
+
 #endif

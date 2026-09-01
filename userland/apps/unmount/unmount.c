@@ -20,6 +20,7 @@ static const char *unmount_strerror(int64_t code)
         case OS64_UNMOUNT_ROOT:         return "the root filesystem is not unmountable";
         case OS64_UNMOUNT_SYNTH:        return "that is the machine's own furniture, not a disk mount";
         case OS64_UNMOUNT_BUSY:         return "busy — open files or directories on it, or a task is cd'd into it";
+        case OS64_UNMOUNT_HAS_MOUNTS:   return "something is mounted under it — unmount that first (see /sys/mounts)";
         default:                        return "failed";
     }
 }

@@ -33,6 +33,7 @@ static const char *mount_strerror(int64_t code)
         case OS64_MOUNT_TABLE_FULL:      return "the mount table is full";
         case OS64_MOUNT_UNSUPPORTED:     return "no filesystem os64 recognizes on it";
         case OS64_MOUNT_FAILED:          return "the filesystem driver refused it";
+        case OS64_MOUNT_NO_FAT_VOLUME:   return "every FAT volume number is in use — unmount a FAT mount first";
         default:                         return "failed";
     }
 }

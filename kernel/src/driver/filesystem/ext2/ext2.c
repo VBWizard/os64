@@ -571,8 +571,10 @@ static int ext2_close(vfs_file_t *vfs_file)
 {
 	ext2_handle_t *h = (ext2_handle_t *)vfs_file->handle;
 	vfs_filesystem_t *fs = (vfs_filesystem_t *)vfs_file->owner;
-	vfs_openfile_unregister(vfs_file);   // before any free — sync-all must
-	                                     // never walk onto a dying file
+	// MARKED, not unlinked: sync-all must never walk onto a dying file, and
+	// unmount's busy count must still see it — everything below this line
+	// touches `fs`, and unmount frees `fs` (vfs.h, the `closing` contract).
+	vfs_openfile_mark_closing(vfs_file);
 	ext2_fs_t *e = (ext2_fs_t *)fs->fs_specific;
 	uint32_t closing_ino = h->ino;
 	bool was_last = ext2_openref_unregister(e, closing_ino);
@@ -583,6 +585,9 @@ static int ext2_close(vfs_file_t *vfs_file)
 		ext2_orphan_reap_if_pending(fs, e, closing_ino);
 	// Nothing else to flush: the write path is WRITE-THROUGH (every write
 	// commits data and inode before returning), so a close is pure bookkeeping.
+	// Done with `fs` — off the registry now, so an unmount waiting on this
+	// file may proceed. Nothing below touches the filesystem.
+	vfs_openfile_unregister(vfs_file);
 	if (h->blockbuf != NULL)
 		kfree(h->blockbuf);
 	kfree(h);
