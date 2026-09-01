@@ -1901,20 +1901,6 @@ static bool teardown_leak_one_cycle(void)
     return true;
 }
 
-// How many connections the TCP list holds, morgue residents included — the
-// observer discipline tcp.h states: the list lock across the walk, look but
-// never touch. Taken before and after a measurement window because every
-// entry is a live ~64KB allocation: a count that moved means a connection
-// was dialed or reaped inside the window and its buffers are in the delta.
-static uint32_t teardown_tcp_conn_census(void)
-{
-    uint32_t n = 0;
-    uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
-    for (tcp_conn_t *c = kTcpConnList; c != NULL; c = c->next)
-        n++;
-    spinlock_release_irqrestore(&kTcpListLock, lf);
-    return n;
-}
 
 // The verdict of ONE measurement attempt. The distinction that matters is
 // between "the number is bad" and "the number is not mine to read", because
@@ -1966,9 +1952,9 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // after it would be inside the memory delta and outside the bracket —
     // counted as the starting state, and the delta blamed on the cycles.
     uint64_t burials_before = kTaskBurialCount;
-    uint64_t reaps_before = kTcpStats.connections_reaped;
-    uint64_t dial_fails_before = kTcpStats.connections_refused + kTcpStats.connect_timeouts;
-    uint32_t conns_before = teardown_tcp_conn_census();
+    uint64_t reaps_before, dial_fails_before;
+    uint32_t conns_before;
+    tcp_leak_bracket_snapshot(&reaps_before, &dial_fails_before, &conns_before);
 
     uint64_t free_before = 0, free_after = 0;
     allocator_memory_snapshot(&free_before, NULL, NULL);
@@ -2016,10 +2002,15 @@ static teardown_verdict_t teardown_leak_attempt(void)
     // which is what the counters are here to break. (Two corpses reaping
     // mid-window measured as -67200 bytes/task and convicted
     // task_destroy of a leak it didn't have; an os64get typed mid-window
-    // read as +214468 the same way.)
-    if (kTcpStats.connections_reaped != reaps_before ||
-        kTcpStats.connections_refused + kTcpStats.connect_timeouts != dial_fails_before ||
-        teardown_tcp_conn_census() != conns_before) {
+    // read as +214468 the same way.) The three are read as ONE snapshot
+    // under the list lock — tcp.h says why a counter read beside the
+    // lock could compare equal while the census waited out the entomb
+    // whose bytes were already in the delta.
+    uint64_t reaps_after, dial_fails_after;
+    uint32_t conns_after;
+    tcp_leak_bracket_snapshot(&reaps_after, &dial_fails_after, &conns_after);
+    if (reaps_after != reaps_before || dial_fails_after != dial_fails_before ||
+        conns_after != conns_before) {
         printd(DEBUG_TESTS, "\ttask_teardown_leak: a TCP connection was dialed or reaped "
                             "inside the window — its buffers are in the delta and are not ours\n");
         return TL_DIRTY;

@@ -16,6 +16,7 @@
 #include "spinlock.h"
 #include "CONFIG.h"
 #include "memory/kmalloc.h"
+#include "panic.h"          // the tombstone queue's invariant, when it breaks
 #include "smp_core.h"
 #include "signals.h"
 #include "scheduler.h"
@@ -282,19 +283,30 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	// draw, so the tuple it shows may belong to a live dial, and the
 	// answer to a segment aimed at its dead conversation is "nobody
 	// home" below.
+	//
+	// THE CONN IS PINNED BEFORE THE LIST LOCK DROPS: its lock is taken
+	// under the list lock, and the list lock is released without
+	// restoring interrupts, so `irqflags` walks across to the conn lock
+	// and interrupts stay off for the whole handoff. Every unlink-and-free
+	// runs under the list lock (tcp_poll's reap, the tombstone cap's
+	// eviction), so a conn found here is either locked by us before the
+	// freer takes the list lock — and the freer waits for us — or already
+	// gone before we look. Found-then-lock, with a gap between, was a
+	// pointer to a conn another core could free (Codex, PR #46).
 	tcp_conn_t* c = NULL;
-	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	uint64_t irqflags = spinlock_acquire_irqsave(&kTcpListLock);
 	for (tcp_conn_t* t = kTcpConnList; t != NULL; t = t->next)
 		if (!t->tombstone &&
 		    t->local_port == dst_port && t->peer_port == src_port && t->peer_ip == src_ip)
 		{
 			c = t;
+			spinlock_acquire(&c->lock);
 			break;
 		}
-	spinlock_release_irqrestore(&kTcpListLock, lf);
 
 	if (c == NULL)
 	{
+		spinlock_release_irqrestore(&kTcpListLock, irqflags);
 		// Nobody home. A segment for an unknown connection gets an RST —
 		// that is how the far side learns immediately instead of
 		// retransmitting into silence (and it is exactly what a closed
@@ -306,8 +318,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			             ack, (flags & TCP_ACK) != 0);
 		return;
 	}
-
-	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
+	spinlock_release(&kTcpListLock);   // irqflags now belongs to c->lock
 
 	// RST: the conversation is over, right now, no reply. (An RST that
 	// arrives for a connection we are still opening means "refused" —
@@ -318,9 +329,11 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		c->reset = true;
 		c->state = TCP_CLOSED;
 		c->snd_len = 0;
-		spinlock_release_irqrestore(&c->lock, irqflags);
+		// Logged under the lock: past the release the conn is the
+		// reaper's to free, and nothing here may read it again.
 		printd(DEBUG_NET, "tcp: connection to %u.%u.%u.%u:%u reset by some jerk :-P\n",
 		       NET_IPV4_OCTETS(c->peer_ip), c->peer_port);
+		spinlock_release_irqrestore(&c->lock, irqflags);
 		return;
 	}
 
@@ -517,6 +530,56 @@ static void tcp_port_release_locked(uint16_t port)
 	}
 }
 
+// ── The list, and the tombstone queue threaded through it ──────────────────
+// Both under kTcpListLock. The queue is FIFO, oldest at the head: a push
+// is O(1), the cap's eviction is O(1), and only the reaper's removal of a
+// tombstone from the middle walks it — bounded by the cap, never by the
+// number of connections.
+static tcp_conn_t* s_tomb_head;
+static tcp_conn_t* s_tomb_tail;
+static uint32_t    s_tomb_count;
+
+static void tcp_list_unlink_locked(tcp_conn_t* c)
+{
+	if (c->prev != NULL)
+		c->prev->next = c->next;
+	else
+		kTcpConnList = c->next;
+	if (c->next != NULL)
+		c->next->prev = c->prev;
+	c->next = NULL;
+	c->prev = NULL;
+}
+
+static void tcp_tomb_push_locked(tcp_conn_t* c)
+{
+	c->tomb_next = NULL;
+	if (s_tomb_tail != NULL)
+		s_tomb_tail->tomb_next = c;
+	else
+		s_tomb_head = c;
+	s_tomb_tail = c;
+	s_tomb_count++;
+}
+
+static void tcp_tomb_remove_locked(tcp_conn_t* c)
+{
+	tcp_conn_t* prev = NULL;
+	tcp_conn_t** pp = &s_tomb_head;
+	while (*pp != NULL && *pp != c)
+	{
+		prev = *pp;
+		pp = &(*pp)->tomb_next;
+	}
+	if (*pp == NULL)
+		panic("tcp: tombstone %p is listed but not queued\n", c);
+	*pp = c->tomb_next;
+	if (s_tomb_tail == c)
+		s_tomb_tail = prev;
+	c->tomb_next = NULL;
+	s_tomb_count--;
+}
+
 // A failed dial's connection becomes a TOMBSTONE: listed for the morgue,
 // owning nothing. The buffers go now (65KB a corpse, and a refused dial
 // costs the caller no handle — so nothing but memory bounded a loop of
@@ -530,9 +593,13 @@ static void tcp_port_release_locked(uint16_t port)
 // retransmit excludes CLOSED, and a segment already past the demux finds
 // CLOSED under the conn lock and answers RST without them.
 //
-// The cap: count tombstones on the way, evict the oldest past
-// TCP_MORGUE_TOMBSTONES. The list is newest-first (dial prepends), so the
-// oldest is the last one met, and it is never `c` unless `c` is alone.
+// The cap: past TCP_MORGUE_TOMBSTONES the queue's head — the oldest — is
+// evicted. THE EVICTED CONN'S LOCK IS DRAINED BEFORE THE FREE: a receiver
+// that found it in the demux before it was a tombstone pinned it by
+// taking its lock under the list lock, so it holds that lock now or never
+// will; acquiring and releasing it here, with the list lock held, waits
+// out the one holder that can exist. The head is never `c` — `c` was just
+// pushed at the tail, and a queue of one is under the cap.
 //
 // THE COUNTERS MOVE LAST, after every free, and the frees stay under the
 // list lock so that order is one critical section: connections_refused,
@@ -559,19 +626,15 @@ static void tcp_dial_entomb(tcp_conn_t* c)
 	tcp_port_release_locked(c->local_port);
 	spinlock_release_irqrestore(&c->lock, irqflags);
 
-	uint32_t tombstones = 0;
-	tcp_conn_t** oldest = NULL;
-	for (tcp_conn_t** pp = &kTcpConnList; *pp != NULL; pp = &(*pp)->next)
-		if ((*pp)->tombstone)
-		{
-			tombstones++;
-			oldest = pp;
-		}
+	tcp_tomb_push_locked(c);
 	tcp_conn_t* evicted = NULL;
-	if (tombstones > TCP_MORGUE_TOMBSTONES)
+	if (s_tomb_count > TCP_MORGUE_TOMBSTONES)
 	{
-		evicted = *oldest;
-		*oldest = evicted->next;
+		evicted = s_tomb_head;
+		tcp_tomb_remove_locked(evicted);
+		tcp_list_unlink_locked(evicted);
+		spinlock_acquire(&evicted->lock);
+		spinlock_release(&evicted->lock);
 	}
 
 	kfree(rcv);
@@ -585,6 +648,18 @@ static void tcp_dial_entomb(tcp_conn_t* c)
 		kTcpStats.connections_refused++;
 	else
 		kTcpStats.connect_timeouts++;
+	spinlock_release_irqrestore(&kTcpListLock, lf);
+}
+
+void tcp_leak_bracket_snapshot(uint64_t* reaps, uint64_t* dial_fails, uint32_t* listed)
+{
+	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
+	*reaps = kTcpStats.connections_reaped;
+	*dial_fails = kTcpStats.connections_refused + kTcpStats.connect_timeouts;
+	uint32_t n = 0;
+	for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
+		n++;
+	*listed = n;
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 }
 
@@ -687,10 +762,14 @@ void tcp_poll(void)
 
 		if (reap)
 		{
-			*pp = c->next;
-			// A tombstone gave its port and buffers back when its dial
-			// failed (tcp_dial_entomb); reaping it is unlisting it.
-			if (!c->tombstone)
+			// The unlink leaves *pp naming c's successor, which is what
+			// the loop reads next. A tombstone gave its port and buffers
+			// back when its dial failed (tcp_dial_entomb); reaping it is
+			// unlisting it, here and from the cap's queue.
+			tcp_list_unlink_locked(c);
+			if (c->tombstone)
+				tcp_tomb_remove_locked(c);
+			else
 			{
 				tcp_port_release_locked(c->local_port);
 				kfree(c->rcv_buf);
@@ -824,6 +903,9 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->state = TCP_SYN_SENT;
 
 	c->next = kTcpConnList;
+	c->prev = NULL;
+	if (kTcpConnList != NULL)
+		kTcpConnList->prev = c;
 	kTcpConnList = c;
 	spinlock_release_irqrestore(&kTcpListLock, lf);
 

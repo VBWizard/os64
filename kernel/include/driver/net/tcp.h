@@ -179,7 +179,16 @@ typedef struct tcp_conn
 
 	uint64_t rx_bytes, tx_bytes, retransmits, out_of_order_dropped;
 
+	// The connection list is doubly linked so an unlink is O(1) from
+	// anywhere — the tombstone cap evicts from the middle of the list on
+	// every failed dial, and rediscovering a predecessor by walking a
+	// list of thousands with kTcpListLock held irqsave is the scan the
+	// cap must never do (Codex, PR #46). tomb_next threads the tombstones
+	// through a FIFO of their own, oldest at the head, so the cap knows
+	// its next eviction without looking. All three under kTcpListLock.
 	struct tcp_conn* next;
+	struct tcp_conn* prev;
+	struct tcp_conn* tomb_next;
 } tcp_conn_t;
 
 typedef struct tcp_stats
@@ -254,6 +263,15 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 // Timers: retransmission, connect timeout, TIME_WAIT reaping. From
 // processSignals beside dhcp_poll.
 void tcp_poll(void);
+
+// task_teardown_leak's bracket, as ONE reading under kTcpListLock: the
+// funerals, the failed dials, and the listed count. Every counter here
+// moves under that lock, after the free it accounts for, so a snapshot
+// taken under it either sees a free's counter or was taken before the
+// free — never the free without the tick (Codex, PR #46: read unlocked,
+// the counter could compare equal while the census waited out the very
+// entomb whose bytes were already in the delta).
+void tcp_leak_bracket_snapshot(uint64_t* reaps, uint64_t* dial_fails, uint32_t* listed);
 
 // Level-triggered wake sweep, beside udp_conn_wake_if_ready.
 void tcp_wake_if_ready(void);
