@@ -190,6 +190,12 @@ HEX_BUFFER_APPS := hexedit
 HEX_BUFFER_SRC  := common/hex_buffer.c
 HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
 
+# tar's header codec is pure byte work. The app uses it to handle archives;
+# tartest uses the same object to construct malformed inputs at the format
+# boundary instead of carrying a private almost-tar encoder in the fixture.
+TAR_FORMAT_PROGRAMS := tartest
+TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
+
 # Every apps/<name>/ directory holding .c files is an app named <name>.
 # $(sort) both orders and DEDUPES — essential since apps went multi-file
 # (top was the first: top.c + topMain.c): the wildcard yields the directory
@@ -315,7 +321,8 @@ $(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld
 define APP_RULE
 APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
 APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
-                       $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ))
+                       $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ)) \
+                       $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
