@@ -153,10 +153,13 @@ typedef struct tcp_conn
 	uint16_t snd_wnd;      // the peer's advertised receive window
 	uint16_t snd_mss;      // the peer's advertised MSS (or 536, the RFC floor)
 
-	// The retransmit slot: v1 holds ONE unacknowledged segment. Its
-	// presence (snd_len > 0) is what arms the RTO timer.
+	// The retransmit slot: v1 holds ONE unacknowledged segment. What arms
+	// the RTO timer is snd_una trailing snd_nxt — RFC 793's own "there is
+	// outstanding data" — NOT snd_len: a SYN or a FIN consumes a sequence
+	// number while carrying no bytes, and a slot judged by its byte count
+	// left both unprotected (tcp.c tcp_unacked).
 	uint8_t* snd_buf;
-	uint32_t snd_len;
+	uint32_t snd_len;      // payload bytes in snd_buf (0 for a bare SYN/FIN)
 	uint32_t snd_seq;      // sequence number of snd_buf[0]
 	uint8_t  snd_flags;    // the FIN/SYN riding this segment, if any
 	uint64_t rto_deadline; // kTicksSinceStart when we resend
