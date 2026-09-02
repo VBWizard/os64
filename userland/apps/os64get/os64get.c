@@ -571,24 +571,6 @@ static bool build_dialstring(char *buf, size_t cap, const char *host)
     return false;
 }
 
-static const char *dial_reason(int64_t err)
-{
-    // The dial error codes are specific on purpose (os64/net.h) — a refusal
-    // and a timeout mean very different things to whoever is standing at the
-    // other machine, and printing "failed" for both wastes their next ten
-    // minutes.
-    // The last two arrived with the resolver (2026-08-22): a HOST may now be a
-    // name, so "cannot reach" has two new ways to be true that have nothing to
-    // do with the network being down.
-    return (err == OS64_NET_ERR_REFUSED)      ? "connection refused — is the server running?" :
-           (err == OS64_NET_ERR_TIMEOUT)      ? "timed out — is the host reachable?" :
-           (err == OS64_NET_ERR_NO_NIC)       ? "no network interface on this boot" :
-           (err == OS64_NET_ERR_BAD_ADDRESS)  ? "that host is not a dotted quad or a name" :
-           (err == OS64_NET_ERR_NO_SUCH_HOST) ? "no such host — not in /home/hosts, /etc/hosts, or DNS" :
-           (err == OS64_NET_ERR_NO_RESOLVER)  ? "that is a name, and there is no name server to ask (see /etc/net.conf)" :
-           (err == OS64_NET_ERR_NO_RESOURCES) ? "out of handles or ports" :
-                                                "refused";
-}
 
 // ── ONE FILE, FETCHED AND STAGED (but NOT installed) ────────────────────
 //
@@ -722,7 +704,7 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
     if (conn < 0)
     {
         os64_hprintf(OS64_STDERR, "os64get: cannot reach %s:%d — %s\n",
-                     host, GET_PORT, dial_reason(conn));
+                     host, GET_PORT, os64_dial_reason(conn));
         return GET_DIAL_FAILED;
     }
 
@@ -1053,7 +1035,7 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
     if (conn < 0)
     {
         os64_hprintf(OS64_STDERR, "os64get: cannot reach %s:%d to ask what it has — %s\n",
-                     host, GET_PORT, dial_reason(conn));
+                     host, GET_PORT, os64_dial_reason(conn));
         return -1;
     }
 

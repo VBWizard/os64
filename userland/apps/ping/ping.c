@@ -14,38 +14,6 @@ typedef struct {
 
 static char ipString[16] = {0}; // Max = 15 chars xxx.yyy.zzz.aaa
 static volatile bool ctrlCExit = false;
-static const char *net_dial_error_message(int64_t err)
-{
-    switch (err)
-    {
-        case OS64_NET_ERR_BAD_STRING:
-            return "bad dial string or unsupported protocol";
-        case OS64_NET_ERR_BAD_ADDRESS:
-            return "bad address; expected a dotted quad or a name";
-        case OS64_NET_ERR_NO_SUCH_HOST:
-            return "no such host (not in /home/hosts, /etc/hosts, or DNS)";
-        case OS64_NET_ERR_NO_RESOLVER:
-            return "a name, but no name server to ask (DHCP gave none; see /etc/net.conf)";
-        case OS64_NET_ERR_BAD_SERVICE:
-            return "bad service/port; ICMP has no port";
-        case OS64_NET_ERR_BAD_DEST:
-            return "bad destination data";
-        case OS64_NET_ERR_NO_NIC:
-            return "no network interface available";
-        case OS64_NET_ERR_NO_RESOURCES:
-            return "out of network resources";
-        case OS64_NET_ERR_REFUSED:
-            return "destination refused the connection";
-        case OS64_NET_ERR_TIMEOUT:
-            return "dial timed out waiting for the peer";
-        case OS64_NET_ERR_INVALID:
-            return "invalid network dial request";
-        case OS64_NET_ERR_BAD_POINTER:
-            return "bad destination pointer";
-        default:
-            return "unknown dial error";
-    }
-}
 
 static int build_dial_string(char *buf, size_t cap, const char *arg)
 {
@@ -197,7 +165,7 @@ int main(int argc, char **argv)
     if (resolved < 0)
     {
         os64_printf("ping: cannot resolve %s: %s\n", host,
-                    net_dial_error_message(resolved));
+                    os64_dial_reason(resolved));
         return 6;
     }
     os64_format_ipv4(rawIP, ipString, sizeof(ipString));
@@ -212,7 +180,7 @@ int main(int argc, char **argv)
     if (handle < 0)
     {
         os64_printf("ping: dial failed for %s: %s\n",
-                    target, net_dial_error_message(handle));
+                    target, os64_dial_reason(handle));
         return 8;
     }
 

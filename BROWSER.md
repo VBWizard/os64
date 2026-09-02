@@ -45,18 +45,18 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    flags splits refused from timed-out. netstat(1) is CHRIS'S tool,
    whenever he feels like writing it — the file is its food.
 
-2. **whois (port 43) — next; Opus-suitable.** First conversation with a
-   machine nobody in this house administers. `userland/apps/whois` → /bin
-   (a person runs it). v1: dial `tcp!<server>!43` (the dial string
-   resolves hostnames already — os64get's `build_dialstring` is the
-   pattern), send `<query>\r\n` (CRLF, not bare LF — 1970s protocols mean
-   it), read until EOF, print raw. Default server `whois.iana.org`, `-h
-   <server>` to override; referral-chasing (IANA → registry → registrar)
-   is EXPLICITLY deferred — book it, don't build it. Errors through the
-   house refusal vocabulary (os64get's `dial_reason` is the model).
-   Verification: `make run-net` — slirp NATs outbound TCP to anything the
-   host can reach, so the guest can whois the actual IANA from QEMU. Watch
-   /sys/net/tcp while it happens; that's what it's for.
+2. **whois (port 43) — DONE.** First conversation with a machine nobody in
+   this house administers: `whois example.com` in the guest got IANA's
+   answer through slirp, and `-h whois.verisign-grs.com` got the
+   registry's. `userland/apps/whois` → /bin. v1 dials `tcp!<server>!43`,
+   sends `<query>\r\n` (CRLF, not bare LF — 1982 protocols mean it), reads
+   until EOF, prints raw. Default server `whois.iana.org`, `-h <server>`
+   to override; referral-chasing (IANA → registry → registrar) is booked
+   in DEBTS, not built. The slice's seam work: the dial-refusal words
+   moved into libos64 as `os64_dial_reason` — os64get and ping each
+   carried a private copy, and whois was the third customer, which is the
+   consumer-driven moment a table becomes a library's. Watch /sys/net/tcp
+   while it happens; that's what it's for.
 
 3. **os64get learns URLs — Opus-suitable, in INCREMENTS (each its own
    commit, maybe its own PR).** Bare-name operands keep meaning the valet

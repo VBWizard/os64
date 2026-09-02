@@ -130,3 +130,28 @@ int64_t os64_dial(const char *dialstring)
 	};
 	return os64_net_dial(&dest);
 }
+
+// The refusal, in words a person can act on — ONE vocabulary for every
+// program that dials, so "connection refused" and "timed out" read the same
+// on every glass. They mean very different things to whoever is standing at
+// the other machine, and printing "failed" for both wastes their next ten
+// minutes. Codes are os64/net.h's.
+const char *os64_dial_reason(int64_t err)
+{
+	switch (err)
+	{
+		case OS64_NET_ERR_REFUSED:      return "connection refused — is the server running?";
+		case OS64_NET_ERR_TIMEOUT:      return "timed out — is the host reachable?";
+		case OS64_NET_ERR_NO_NIC:       return "no network interface on this boot";
+		case OS64_NET_ERR_NO_SUCH_HOST: return "no such host — not in /home/hosts, /etc/hosts, or DNS";
+		case OS64_NET_ERR_NO_RESOLVER:  return "that is a name, and there is no name server to ask (see /etc/net.conf)";
+		case OS64_NET_ERR_NO_RESOURCES: return "out of handles or ports";
+		case OS64_NET_ERR_BAD_STRING:   return "not a dial string — expected network!address!service";
+		case OS64_NET_ERR_BAD_ADDRESS:  return "that host is not a dotted quad or a name";
+		case OS64_NET_ERR_BAD_SERVICE:  return "bad service — a port from 1 to 65535 (ICMP takes none)";
+		case OS64_NET_ERR_BAD_DEST:     return "the kernel refused the destination (address 0, or an unknown protocol)";
+		case OS64_NET_ERR_INVALID:
+		case OS64_NET_ERR_BAD_POINTER:  return "refused at the syscall boundary";
+		default:                        return "refused";
+	}
+}
