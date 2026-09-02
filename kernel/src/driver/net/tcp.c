@@ -204,6 +204,18 @@ static void tcp_ack(tcp_conn_t* c)
 // a SYN carries no ACK bit (there is nothing yet to acknowledge, and a
 // listener answers a SYN+ACK it never asked for with RST), while data and
 // FIN always do.
+// Start the retransmit clock over: initial timeout, fresh retry budget.
+// The RTO state belongs to WHAT IS OUTSTANDING, so it restarts whenever
+// that changes — a new segment, a FIN joining one already in flight, or an
+// ACK that retired part of one (RFC 6298 §5.3). Inheriting a spent budget
+// across such a change is how a segment gets sent once and never again.
+static void tcp_rto_arm(tcp_conn_t* c)
+{
+	c->rto_ticks = TCP_RTO_TICKS;
+	c->rto_deadline = kTicksSinceStart + c->rto_ticks;
+	c->retries = 0;
+}
+
 static void tcp_send_reliable(tcp_conn_t* c, const void* data, uint16_t len, uint8_t flags)
 {
 	if (len)
@@ -211,9 +223,7 @@ static void tcp_send_reliable(tcp_conn_t* c, const void* data, uint16_t len, uin
 	c->snd_len = len;
 	c->snd_flags = flags;
 	c->snd_seq = c->snd_nxt;
-	c->rto_ticks = TCP_RTO_TICKS;
-	c->rto_deadline = kTicksSinceStart + c->rto_ticks;
-	c->retries = 0;
+	tcp_rto_arm(c);
 
 	tcp_send_segment(c, c->snd_seq, flags, data, len, (flags & TCP_SYN) != 0);
 	// SYN and FIN each consume one sequence number even though they carry
@@ -488,12 +498,16 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		{
 			// (a) Their acknowledgement retires our unacknowledged segment
 			// — advancing snd_una is the whole of the disarm (tcp_unacked).
-			// An ACK short of snd_nxt covers part of a segment; the slot
-			// stays armed and the RTO resends the whole thing, which the
-			// peer trims (stop-and-wait has no smaller unit to resend).
+			// An ACK short of snd_nxt covers part of a segment: the slot
+			// stays armed with a restarted clock, and the RTO resends the
+			// whole thing, which the peer trims (stop-and-wait has no
+			// smaller unit to resend). Progress is proof of life, so the
+			// spent retries do not count against what remains.
 			if ((flags & TCP_ACK) && seq_gt(ack, c->snd_una))
 			{
 				c->snd_una = ack;
+				if (tcp_unacked(c))
+					tcp_rto_arm(c);
 				// Our FIN being acknowledged is a state transition, not
 				// just bookkeeping.
 				if (c->state == TCP_FIN_WAIT_1 && seq_geq(ack, c->snd_nxt))
@@ -1256,10 +1270,13 @@ void tcp_conn_close(tcp_conn_t* c)
 			// rides THAT segment rather than replacing it: the slot holds
 			// exactly one, and a fresh FIN written over it would drop the
 			// bytes it carried, leaving the peer parked at the gap and our
-			// FIN, sequenced past it, forever unacceptable. Sent once now;
-			// the running timer resends data-plus-FIN together from here.
+			// FIN, sequenced past it, forever unacceptable. What is
+			// outstanding has changed shape, so the clock starts over: a
+			// budget the data had already spent would let data-plus-FIN
+			// go out once and then die unsent.
 			c->snd_flags |= TCP_FIN;
 			c->snd_nxt += 1;
+			tcp_rto_arm(c);
 			tcp_send_segment(c, c->snd_seq, c->snd_flags,
 			                 c->snd_buf, (uint16_t)c->snd_len, false);
 		}
