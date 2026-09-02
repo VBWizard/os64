@@ -35,4 +35,9 @@
 int64_t os64_net_dial(const os64_netdest_t *dest);
 int64_t os64_dial(const char *dialstring);
 
+// A negative dial result, in words a person can act on — one vocabulary
+// for every program that dials, so a refusal and a timeout read the same
+// on every glass. Never NULL; an unknown code says "refused".
+const char *os64_dial_reason(int64_t err);
+
 #endif // OS64_DIAL_H
