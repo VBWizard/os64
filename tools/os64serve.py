@@ -373,9 +373,20 @@ def main():
         if len(unserved) > NOTE_MAX:
             print(f"             ... and {len(unserved) - NOTE_MAX} more")
     print("           Ctrl-C to stop.  (Windows may ask about the firewall - say yes.)")
+    # A short timeout on the listener is what makes Ctrl-C work on Windows:
+    # WinSock's blocking accept() does not return for a console signal, so
+    # Python can only raise the KeyboardInterrupt when the call next returns
+    # — which used to mean "on the next client", read by everyone as "does
+    # not stop". Waking once a second costs nothing and honors it at once.
+    s.settimeout(1.0)
     try:
         while True:
-            conn, addr = s.accept()
+            try:
+                conn, addr = s.accept()
+            except socket.timeout:
+                continue
+            conn.settimeout(None)     # an accepted socket inherits the listener's
+                                      # timeout; serve_one sets the one it wants
             serve_one(conn, addr, directories)
     except KeyboardInterrupt:
         print("\nos64serve: stopped.")
