@@ -4,12 +4,16 @@
 //
 // NO 256-ENTRY TABLE, deliberately. The libgzip review measured this bitwise
 // CRC inside end-to-end decoding of a 10MB mixed text/binary payload: 25 MB/s
-// at userland's -O0 (75 MB/s at -O2), faster than the current wire and disk
-// paths. The bitwise form keeps the algorithm visible in nine lines: no
-// generated constants to audit, and a reader can confirm the standard
-// polynomial by looking rather than trusting. If a future profile puts
-// meaningful time here, a table can replace this loop behind the same
-// interface and the host vectors prove it agrees.
+// at userland's -O0 (75 MB/s at -O2). The current pipelines are slower where
+// it matters: os64get measured 660 KB/s after its receive-window increase, and
+// ext2 write-through measured 1.7 MB/s. Those are the measured input and output
+// rates for HTTP decoding or `gunzip big.gz > file`; ext2 reads can exceed the
+// CRC rate and are not the reason for deferring a table. The bitwise form
+// keeps the algorithm visible in nine lines: no generated constants to audit,
+// and a reader can confirm the standard polynomial by looking rather than
+// trusting.
+// If a future profile puts meaningful time here, a table can replace this loop
+// behind the same interface and the host vectors prove it agrees.
 //
 // THE THREE PLACES CRC32 IMPLEMENTATIONS GO WRONG, all of them here:
 //   1. the initial value is 0xFFFFFFFF, not 0
