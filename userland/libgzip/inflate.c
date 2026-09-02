@@ -10,6 +10,7 @@
 
 #include "gzip/inflate.h"
 #include "os64/mem.h"
+#include "os64/str.h"
 
 #define INFLATE_WINDOW_SIZE 32768u
 #define INFLATE_WINDOW_MASK (INFLATE_WINDOW_SIZE - 1u)
@@ -99,23 +100,19 @@ static const uint8_t kCodeLengthOrder[19] = {
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15
 };
 
-static void bytes_zero(void *memory, size_t length)
-{
-    uint8_t *bytes = memory;
-    for (size_t i = 0; i < length; i++)
-        bytes[i] = 0;
-}
-
 // Build the canonical-code decoding order described in RFC 1951 section
 // 3.2.2. allow_empty is needed for a literal-only dynamic block: its one
 // declared distance alphabet may contain no code because no distance will be
-// read. Any attempt to use that empty tree is still malformed.
+// read. Any attempt to use that empty tree is still malformed. allow_single
+// admits the one incomplete form accepted for literal/length and distance
+// alphabets: one symbol with a one-bit code. The code-length alphabet does not
+// get that exception.
 static bool huffman_build(inflate_huffman_t *tree, const uint8_t *lengths,
                           uint16_t symbols, bool allow_empty,
                           bool allow_single)
 {
     uint16_t offsets[INFLATE_MAX_BITS + 1u];
-    bytes_zero(tree, sizeof(*tree));
+    os64_memset(tree, 0, sizeof(*tree));
 
     for (uint16_t symbol = 0; symbol < symbols; symbol++) {
         if (lengths[symbol] > INFLATE_MAX_BITS)
@@ -273,7 +270,7 @@ void os64_inflate_reset(os64_inflate_t *stream, uint64_t output_limit)
 {
     if (stream == NULL)
         return;
-    bytes_zero(stream, sizeof(*stream));
+    os64_memset(stream, 0, sizeof(*stream));
     stream->mode = MODE_BLOCK_HEADER;
     stream->terminal = OS64_INFLATE_NEED_INPUT;
     stream->output_limit = output_limit;
@@ -372,12 +369,12 @@ os64_inflate_status_t os64_inflate_process(os64_inflate_t *stream,
                     stream->mode = MODE_BLOCK_HEADER;
                     break;
                 }
-                if (*output_length == 0)
-                    return OS64_INFLATE_NEED_OUTPUT;
                 if (stream->output_size >= stream->output_limit) {
                     refuse(stream, OS64_INFLATE_LIMIT);
                     return stream->terminal;
                 }
+                if (*output_length == 0)
+                    return OS64_INFLATE_NEED_OUTPUT;
                 if (!read_bits(stream, input, input_length, 8, &value))
                     return input_short(stream, end_of_input);
                 (void)emit_byte(stream, (uint8_t)value, output, output_length);
@@ -394,8 +391,8 @@ os64_inflate_status_t os64_inflate_process(os64_inflate_t *stream,
                     refuse(stream, OS64_INFLATE_MALFORMED);
                     return stream->terminal;
                 }
-                bytes_zero(stream->code_length_lengths,
-                           sizeof(stream->code_length_lengths));
+                os64_memset(stream->code_length_lengths, 0,
+                            sizeof(stream->code_length_lengths));
                 stream->dynamic_index = 0;
                 stream->mode = MODE_DYNAMIC_CODE_LENGTHS;
                 break;
@@ -568,6 +565,10 @@ os64_inflate_status_t os64_inflate_process(os64_inflate_t *stream,
 
             case MODE_COPY:
                 while (stream->copy_remaining != 0) {
+                    if (stream->output_size >= stream->output_limit) {
+                        refuse(stream, OS64_INFLATE_LIMIT);
+                        return stream->terminal;
+                    }
                     if (*output_length == 0)
                         return OS64_INFLATE_NEED_OUTPUT;
                     uint32_t source = (stream->window_position -

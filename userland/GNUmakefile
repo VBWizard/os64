@@ -141,8 +141,8 @@ LIBOS64_SO   := $(BIN)/libos64.so
 # libgzip is a separate shared module: the raw DEFLATE engine is useful to
 # gzip, a future zlib/PNG wrapper, and HTTP content decoding without becoming
 # part of libos64's foundational C surface. Its gzip framing reuses libos64's
-# established CRC32 and heap, so the object records a real DT_NEEDED on
-# libos64.so instead of carrying private copies of either.
+# established CRC32, heap, and memory primitives, so the object records a real
+# DT_NEEDED on libos64.so instead of carrying private copies of them.
 LIBGZIP_SRCS := libgzip/inflate.c libgzip/gzip.c
 LIBGZIP_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBGZIP_SRCS))
 LIBGZIP_SO   := $(BIN)/libgzip.so
@@ -190,6 +190,7 @@ LIBGZIP_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libgzip.so
 # slot. app_bases.py sorts before probing, so adding a library gives the build
 # one deterministic map independent of link order.
 LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so)
+LIB_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --lib-slot-size)
 LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
 LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
 
@@ -298,20 +299,24 @@ $(BIN)/[: $(BIN)/test
 # one — the bump allocator in shared_object.c serves only images that arrive
 # WITHOUT a base. (This comment said the opposite until 2026-08-23, in the
 # same commit that made it false.)
-# --defsym BEFORE -T (which lives in LIBOS64_LDFLAGS): ld reads options left
-# to right and lib.ld's DEFINED(LIB_BASE) test can only see symbols defined by
-# the time the script is read. The same trap app.ld's comment memorializes.
-$(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld
+# Both --defsym values precede -T (which lives in LIBOS64_LDFLAGS): ld reads
+# options left to right, and lib.ld must see the assigned base and the slot
+# bound before it evaluates either one. LIB_SLOT_SIZE comes from the assigner
+# that spaces the bases, so its ASSERT checks against the build's actual map.
+$(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
 	@mkdir -p "$(BIN)"
-	$(LD) --defsym LIB_BASE=$(LIBOS64_BASE) $(LIBOS64_LDFLAGS) -o $@ $(LIBOS64_OBJS)
+	$(LD) --defsym LIB_BASE=$(LIBOS64_BASE) \
+	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBOS64_LDFLAGS) \
+	      -o $@ $(LIBOS64_OBJS)
 	@printf '  %-10s prelinked at %s\n' "libos64.so" "$(LIBOS64_BASE)"
 
 # --no-as-needed makes the dependency an explicit property of libgzip.so.
 # The kernel recursively loads DT_NEEDED objects and resolves this library's
-# os64_crc32/malloc/free references within that dependency closure.
-$(LIBGZIP_SO): $(LIBGZIP_OBJS) $(LIBOS64_SO) $(CURDIR)/link/lib.ld
+# libos64 references within that dependency closure.
+$(LIBGZIP_SO): $(LIBGZIP_OBJS) $(LIBOS64_SO) $(CURDIR)/link/lib.ld $(CURDIR)/tools/app_bases.py
 	@mkdir -p "$(BIN)"
-	$(LD) --defsym LIB_BASE=$(LIBGZIP_BASE) $(LIBGZIP_LDFLAGS) --no-as-needed \
+	$(LD) --defsym LIB_BASE=$(LIBGZIP_BASE) \
+	      --defsym LIB_SLOT_SIZE=$(LIB_SLOT_SIZE) $(LIBGZIP_LDFLAGS) --no-as-needed \
 	      -o $@ $(LIBGZIP_OBJS) $(LIBOS64_SO)
 	@printf '  %-10s prelinked at %s\n' "libgzip.so" "$(LIBGZIP_BASE)"
 
@@ -390,12 +395,10 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TES
 	@printf '# why each library is PRELINKED at a build-time address (link/lib.ld):\n' >> $@
 	@printf '# when the kernel chose the address by load order, the build had nothing\n' >> $@
 	@printf '# truthful to write here.\n' >> $@
-	@printf '# The address is .text, which is what add-symbol-file wants — NOT the\n' >> $@
-	@printf '# image base, since lib.ld puts the read-only zone first.\n' >> $@
-	@printf 'add-symbol-file %s 0x%s\n' "$(LIBOS64_SO)" \
-	   "$$(x86_64-elf-readelf -SW $(LIBOS64_SO) | grep -E '\.text +PROGBITS' | grep -oE '[0-9a-f]{16}' | head -1)" >> $@
-	@printf 'add-symbol-file %s 0x%s\n' "$(LIBGZIP_SO)" \
-	   "$$(x86_64-elf-readelf -SW $(LIBGZIP_SO) | grep -E '\.text +PROGBITS' | grep -oE '[0-9a-f]{16}' | head -1)" >> $@
+	@printf '# Their section addresses are already absolute in each prelinked ELF, so\n' >> $@
+	@printf '# bare add-symbol-file reads the truth without duplicating it by regex.\n' >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBOS64_SO)" >> $@
+	@printf 'add-symbol-file %s\n' "$(LIBGZIP_SO)" >> $@
 	@printf '# (symbols for %s + libos64.so + libgzip.so)\n' "$(APPS) $(TESTS)" >> $@
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each

@@ -18,6 +18,7 @@ typedef enum {
     OS64_GZIP_MALFORMED,
     OS64_GZIP_UNSUPPORTED,
     OS64_GZIP_CHECKSUM,
+    OS64_GZIP_TRAILING_DATA,
     OS64_GZIP_LIMIT,
     OS64_GZIP_BAD_ARGUMENT
 } os64_gzip_status_t;
@@ -33,7 +34,9 @@ void os64_gzip_reset(os64_gzip_t *stream, uint64_t output_limit);
 // stored after its compressed data. Callers that require atomic publication
 // must stage those bytes until the stream has been verified.
 // DONE means every member and trailer was verified and no trailing bytes
-// remain. Bytes after a valid member must begin another gzip member.
+// remain. Bytes after a valid member must begin another gzip member; other
+// bytes, including zero padding, produce OS64_GZIP_TRAILING_DATA. A partial
+// next-member header that begins with gzip's magic produces OS64_GZIP_TRUNCATED.
 os64_gzip_status_t os64_gzip_process(os64_gzip_t *stream,
                                      const uint8_t **input,
                                      size_t *input_length,

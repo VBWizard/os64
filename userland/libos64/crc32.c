@@ -2,13 +2,14 @@
 //
 // See crc32.h for why this variant and not another. This file is about how.
 //
-// NO 256-ENTRY TABLE, deliberately. libgzip makes CRC32 a bulk-data path now,
-// alongside a decoder that is itself bit-oriented; changing both before an
-// end-to-end measurement would guess which loop matters. The bitwise form
-// keeps the whole algorithm visible in nine lines: no generated constants to
-// audit and a reader can confirm the standard polynomial by looking rather
-// than trusting. If a profile puts meaningful time here, a table can replace
-// this loop behind the same interface and the host vectors prove it agrees.
+// NO 256-ENTRY TABLE, deliberately. The libgzip review measured this bitwise
+// CRC inside end-to-end decoding of a 10MB mixed text/binary payload: 25 MB/s
+// at userland's -O0 (75 MB/s at -O2), faster than the current wire and disk
+// paths. The bitwise form keeps the algorithm visible in nine lines: no
+// generated constants to audit, and a reader can confirm the standard
+// polynomial by looking rather than trusting. If a future profile puts
+// meaningful time here, a table can replace this loop behind the same
+// interface and the host vectors prove it agrees.
 //
 // THE THREE PLACES CRC32 IMPLEMENTATIONS GO WRONG, all of them here:
 //   1. the initial value is 0xFFFFFFFF, not 0

@@ -11,9 +11,14 @@
 
 #include "gzip/gzip.h"
 #include "gzip/inflate.h"
+#include "os64/str.h"
 
 void *os64_malloc(size_t size) { return malloc(size); }
 void os64_free(void *memory) { free(memory); }
+void *os64_memset(void *memory, int value, size_t length)
+{
+    return memset(memory, value, length);
+}
 
 static uint8_t *read_file(const char *path, size_t *length)
 {
@@ -52,6 +57,14 @@ static uint64_t parse_u64(const char *text)
     return (uint64_t)value;
 }
 
+static size_t output_offer(size_t chunk, size_t position, uint64_t limit)
+{
+    if ((uint64_t)position >= limit)
+        return 0;
+    uint64_t remaining = limit - (uint64_t)position;
+    return remaining < chunk ? (size_t)remaining : chunk;
+}
+
 static int run_raw(const uint8_t *compressed, size_t compressed_length,
                    const uint8_t *expected, size_t expected_length,
                    size_t input_chunk, size_t output_chunk, uint64_t limit,
@@ -72,7 +85,8 @@ static int run_raw(const uint8_t *compressed, size_t compressed_length,
         size_t offered_input = compressed_length - input_position;
         if (offered_input > input_chunk)
             offered_input = input_chunk;
-        size_t offered_output = output_chunk;
+        size_t offered_output = output_offer(output_chunk, output_position,
+                                             limit);
         const uint8_t *input = compressed + input_position;
         uint8_t *output = actual + output_position;
         size_t input_left = offered_input;
@@ -130,7 +144,8 @@ static int run_gzip(const uint8_t *compressed, size_t compressed_length,
         size_t offered_input = compressed_length - input_position;
         if (offered_input > input_chunk)
             offered_input = input_chunk;
-        size_t offered_output = output_chunk;
+        size_t offered_output = output_offer(output_chunk, output_position,
+                                             limit);
         const uint8_t *input = compressed + input_position;
         uint8_t *output = actual + output_position;
         size_t input_left = offered_input;

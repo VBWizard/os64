@@ -82,6 +82,9 @@ method[2] = 7
 (root / "bad_stored.deflate").write_bytes(b"\x01\x01\x00\x00\x00A")
 (root / "truncated.gz").write_bytes(plain[:-3])
 (root / "trailing.gz").write_bytes(plain + b"not gzip")
+(root / "trailing_long.gz").write_bytes(plain + b"not gzip" * 5)
+(root / "trailing_zero.gz").write_bytes(plain + bytes(512))
+(root / "next_header_truncated.gz").write_bytes(plain + b"\x1f\x8b\x08")
 PY
 
 run() {
@@ -136,7 +139,19 @@ run gzip "$work/method.gz" "$work/empty" 2 2 \
 run gzip "$work/truncated.gz" "$work/payload" 5 19 \
     18446744073709551615 "truncated stream" 0
 run gzip "$work/trailing.gz" "$work/payload" 5 19 \
+    18446744073709551615 "trailing data after final member" 1
+run gzip "$work/trailing_long.gz" "$work/payload" 5 19 \
+    18446744073709551615 "trailing data after final member" 1
+run gzip "$work/trailing_zero.gz" "$work/payload" 5 19 \
+    18446744073709551615 "trailing data after final member" 1
+run gzip "$work/next_header_truncated.gz" "$work/payload" 5 19 \
     18446744073709551615 "truncated stream" 1
 run gzip "$work/plain.gz" "$work/payload" 3 5 100 \
+    "output limit exceeded" 0
+run gzip "$work/plain.gz" "$work/payload" 7 13 140724 done 1
+run gzip "$work/plain.gz" "$work/payload" 7 13 140723 \
+    "output limit exceeded" 0
+run gzip "$work/concat.gz" "$work/concat_expected" 7 13 141186 done 2
+run gzip "$work/concat.gz" "$work/concat_expected" 7 13 141185 \
     "output limit exceeded" 0
 echo "gzip empty/history, corruption, truncation, and limit cases  PASS"

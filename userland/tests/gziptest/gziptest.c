@@ -91,7 +91,8 @@ static void test_gunzip_filter(void)
 static os64_gzip_status_t decode(const uint8_t *compressed, size_t length,
                                  uint8_t *decoded, size_t *decoded_length)
 {
-    os64_gzip_t *stream = os64_gzip_create(1024);
+    size_t decoded_capacity = *decoded_length;
+    os64_gzip_t *stream = os64_gzip_create(decoded_capacity);
     if (stream == NULL)
         fail("could not allocate decoder");
 
@@ -101,7 +102,9 @@ static os64_gzip_status_t decode(const uint8_t *compressed, size_t length,
     while (status == OS64_GZIP_NEED_INPUT ||
            status == OS64_GZIP_NEED_OUTPUT) {
         size_t input_available = input_position < length ? 1 : 0;
-        size_t output_available = 3;
+        size_t output_available = decoded_capacity - output_position;
+        if (output_available > 3)
+            output_available = 3;
         const uint8_t *input = compressed + input_position;
         uint8_t *output = decoded + output_position;
         bool finish = input_position + input_available == length;
@@ -120,7 +123,7 @@ static os64_gzip_status_t decode(const uint8_t *compressed, size_t length,
 int main(void)
 {
     uint8_t decoded[sizeof(kExpected) + 16];
-    size_t decoded_length = 0;
+    size_t decoded_length = sizeof(decoded);
     os64_gzip_status_t status = decode(kCompressed, sizeof(kCompressed),
                                        decoded, &decoded_length);
     if (status != OS64_GZIP_DONE)
@@ -129,9 +132,15 @@ int main(void)
         !bytes_equal(decoded, kExpected, sizeof(kExpected) - 1))
         fail("decoded bytes differ");
 
+    decoded_length = 8;
+    status = decode(kCompressed, sizeof(kCompressed), decoded, &decoded_length);
+    if (status != OS64_GZIP_LIMIT)
+        fail("decoder did not enforce the caller's output buffer bound");
+
     uint8_t corrupt[sizeof(kCompressed)];
     os64_memcpy(corrupt, kCompressed, sizeof(corrupt));
     corrupt[sizeof(corrupt) - 8] ^= 0x01;
+    decoded_length = sizeof(decoded);
     status = decode(corrupt, sizeof(corrupt), decoded, &decoded_length);
     if (status != OS64_GZIP_CHECKSUM)
         fail("damaged trailer was accepted");

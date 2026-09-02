@@ -69,8 +69,9 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    - (c) redirects: 301/302/307/308, `Location:`, hop cap ~5, refuse
      https:// targets HONESTLY (name the reason: no TLS yet).
    - (d) `Content-Encoding: gzip` — stream through libgzip with a response
-     expansion cap; the shared DEFLATE decoder is also the engine a zlib/PNG
-     wrapper will use.
+     expansion cap, keep the output provisional until `OS64_GZIP_DONE`, and
+     reject its explicit trailing-data result; the shared DEFLATE decoder is
+     also the engine a zlib/PNG wrapper will use.
    - (e) `Range:`/resume — later, wants a consumer first.
    DESIGN CONSTRAINT: keep the HTTP machinery in cleanly separable
    functions — the extraction into a shared library (FreeBSD libfetch's

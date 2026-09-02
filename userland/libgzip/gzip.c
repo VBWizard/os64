@@ -8,6 +8,7 @@
 #include "gzip/inflate.h"
 #include "os64/crc32.h"
 #include "os64/mem.h"
+#include "os64/str.h"
 
 #define GZIP_FLAG_HEADER_CRC 0x02u
 #define GZIP_FLAG_EXTRA      0x04u
@@ -48,13 +49,6 @@ struct os64_gzip {
     uint8_t trailer[8];
     uint8_t trailer_have;
 };
-
-static void bytes_zero(void *memory, size_t length)
-{
-    uint8_t *bytes = memory;
-    for (size_t i = 0; i < length; i++)
-        bytes[i] = 0;
-}
 
 static uint16_t read_le16(const uint8_t bytes[2])
 {
@@ -150,7 +144,7 @@ os64_gzip_t *os64_gzip_create(uint64_t output_limit)
     os64_gzip_t *stream = os64_malloc(sizeof(*stream));
     if (stream == NULL)
         return NULL;
-    bytes_zero(stream, sizeof(*stream));
+    os64_memset(stream, 0, sizeof(*stream));
     stream->inflate = os64_inflate_create(output_limit);
     if (stream->inflate == NULL) {
         os64_free(stream);
@@ -165,7 +159,7 @@ void os64_gzip_reset(os64_gzip_t *stream, uint64_t output_limit)
     if (stream == NULL)
         return;
     os64_inflate_t *inflate = stream->inflate;
-    bytes_zero(stream, sizeof(*stream));
+    os64_memset(stream, 0, sizeof(*stream));
     stream->inflate = inflate;
     stream->output_limit = output_limit;
     stream->terminal = OS64_GZIP_NEED_INPUT;
@@ -200,6 +194,7 @@ const char *os64_gzip_status_name(os64_gzip_status_t status)
         case OS64_GZIP_MALFORMED:    return "malformed stream";
         case OS64_GZIP_UNSUPPORTED:  return "unsupported compression method";
         case OS64_GZIP_CHECKSUM:     return "checksum or size mismatch";
+        case OS64_GZIP_TRAILING_DATA: return "trailing data after final member";
         case OS64_GZIP_LIMIT:        return "output limit exceeded";
         case OS64_GZIP_BAD_ARGUMENT: return "bad argument";
     }
@@ -233,13 +228,14 @@ os64_gzip_status_t os64_gzip_process(os64_gzip_t *stream,
                 stream->fixed_header[stream->fixed_have++] = byte;
                 stream->header_crc = os64_crc32_update(stream->header_crc,
                                                         &byte, 1);
-                if (stream->fixed_have != sizeof(stream->fixed_header))
-                    break;
-                if (stream->fixed_header[0] != 0x1f ||
-                    stream->fixed_header[1] != 0x8b) {
-                    refuse(stream, OS64_GZIP_MALFORMED);
+                if ((stream->fixed_have == 1 && byte != 0x1f) ||
+                    (stream->fixed_have == 2 && byte != 0x8b)) {
+                    refuse(stream, stream->members == 0 ? OS64_GZIP_MALFORMED :
+                                                         OS64_GZIP_TRAILING_DATA);
                     return stream->terminal;
                 }
+                if (stream->fixed_have != sizeof(stream->fixed_header))
+                    break;
                 if (stream->fixed_header[2] != 8) {
                     refuse(stream, OS64_GZIP_UNSUPPORTED);
                     return stream->terminal;
