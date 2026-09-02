@@ -264,7 +264,7 @@ static tar_format_result_t normalize_path(const char *input,
     if (input == NULL || input[0] == '\0')
         return TAR_FORMAT_EMPTY_NAME;
     if (extraction && input[0] == '/')
-        return TAR_FORMAT_PATH_TOO_LONG;
+        return TAR_FORMAT_UNSAFE_PATH;
 
     size_t length = 0;
     const char *cursor = input;
@@ -284,7 +284,7 @@ static tar_format_result_t normalize_path(const char *input,
         if (component_length == 2 && component[0] == '.' &&
             component[1] == '.') {
             if (extraction)
-                return TAR_FORMAT_PATH_TOO_LONG;
+                return TAR_FORMAT_UNSAFE_PATH;
             if (length != 0) {
                 while (length > 0 && out[length - 1] != '/')
                     length--;
@@ -325,7 +325,8 @@ const char *tar_format_error(tar_format_result_t result)
 {
     switch (result) {
     case TAR_FORMAT_OK:            return "no error";
-    case TAR_FORMAT_PATH_TOO_LONG: return "unsafe or overlong path";
+    case TAR_FORMAT_PATH_TOO_LONG: return "path is too long";
+    case TAR_FORMAT_UNSAFE_PATH:   return "unsafe path";
     case TAR_FORMAT_BAD_CHECKSUM:  return "bad header checksum";
     case TAR_FORMAT_BAD_MAGIC:     return "unrecognized header magic";
     case TAR_FORMAT_BAD_NUMBER:    return "invalid numeric field";

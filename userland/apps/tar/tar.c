@@ -110,8 +110,8 @@ static int join_path(char out[TAR_PATH_CAP], const char *parent,
     return wanted >= 0 && wanted < TAR_PATH_CAP ? 0 : -1;
 }
 
-// os64 has no links, so two canonical path strings identify the same file.
-// This is used to keep the archive being written out of its own traversal.
+// Path identity is lexical because the namespace has no link objects. DEBTS'
+// tar link-safety row makes link support conditional on replacing this rule.
 static int canonical_path(const char *path, char out[TAR_PATH_CAP])
 {
     char cwd[TAR_PATH_CAP];
@@ -310,6 +310,15 @@ static int write_padding(int32_t handle, uint64_t size)
 
 static int write_header(int32_t handle, const tar_work_t *work)
 {
+    if ((work->flags & OS64_DE_DIR) == 0 &&
+        work->size > TAR_USTAR_SIZE_MAX) {
+        os64_hprintf(OS64_STDERR,
+                     "tar: '%s' is too large for ustar "
+                     "(maximum 8 GiB minus one byte)\n",
+                     work->member);
+        return -1;
+    }
+
     tar_entry_t entry = {0};
     if (os64_strcopy(entry.path, sizeof(entry.path), work->member) >=
         sizeof(entry.path))
@@ -379,13 +388,11 @@ static int queue_directory(tar_work_stack_t *stack, const tar_work_t *parent,
         return -1;
     }
 
+    tar_work_stack_t children = {0};
     int result = 0;
     int64_t read_result;
     os64_dirent_t child = {0};
     while ((read_result = os64_readdir(directory, &child)) == 1) {
-        if (os64_streq(child.name, ".") || os64_streq(child.name, ".."))
-            continue;
-
         tar_work_t work = {0};
         if (join_path(work.source, parent->source, child.name) < 0 ||
             join_path(work.member, parent->member, child.name) < 0) {
@@ -404,7 +411,7 @@ static int queue_directory(tar_work_stack_t *stack, const tar_work_t *parent,
         work.size = child.size;
         work.mtime = child.mtime;
         work.flags = child.flags;
-        if (work_push(stack, &work) < 0) {
+        if (work_push(&children, &work) < 0) {
             os64_hprintf(OS64_STDERR,
                          "tar: out of memory while walking '%s'\n",
                          parent->source);
@@ -420,6 +427,19 @@ static int queue_directory(tar_work_stack_t *stack, const tar_work_t *parent,
     }
     if (os64_close(directory) < 0)
         result = -1;
+
+    if (result == 0) {
+        for (size_t i = children.count; i-- > 0;) {
+            if (work_push(stack, &children.items[i]) < 0) {
+                os64_hprintf(OS64_STDERR,
+                             "tar: out of memory while queuing '%s'\n",
+                             parent->source);
+                result = -1;
+                break;
+            }
+        }
+    }
+    os64_free(children.items);
     return result;
 }
 
@@ -432,6 +452,7 @@ static int create_archive(const tar_options_t *options,
 
     tar_work_stack_t stack = {0};
     int result = 0;
+    bool warned_normalized_name = false;
     for (int32_t i = operand_count; i-- > 0;) {
         tar_work_t work = {.command_operand = true};
         if (os64_strcopy(work.source, sizeof(work.source), operands[i]) >=
@@ -457,6 +478,13 @@ static int create_archive(const tar_options_t *options,
                          work.source, tar_format_error(path_result));
             result = 1;
             continue;
+        }
+        if (!warned_normalized_name &&
+            !os64_streq(work.source, work.member)) {
+            os64_hprintf(OS64_STDERR,
+                         "tar: storing source paths as normalized relative "
+                         "member names\n");
+            warned_normalized_name = true;
         }
         if (os64_stat(work.source, &entry) < 0) {
             os64_hprintf(OS64_STDERR, "tar: cannot stat '%s'\n", work.source);
@@ -772,7 +800,8 @@ int main(int argc, char **argv)
          .flag = &options.one_file_system}
     };
 
-    os64_args_init(&args, argc, argv, specs, 6);
+    os64_args_init(&args, argc, argv, specs,
+                   (int32_t)(sizeof(specs) / sizeof(specs[0])));
     args.about = "Create, list, or extract POSIX ustar archives.";
     args.details = "Without -f, create writes stdout and list/extract read stdin. "
                    "Regular files and directories are supported; filesystem "

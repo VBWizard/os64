@@ -140,12 +140,25 @@ static void unit_tests(void)
     check(tar_extract_path("safe/./child", path) == TAR_FORMAT_OK &&
           strcmp(path, "safe/child") == 0,
           "safe extraction paths are normalized");
-    check(tar_extract_path("../escape", path) == TAR_FORMAT_PATH_TOO_LONG,
+    check(tar_extract_path("../escape", path) == TAR_FORMAT_UNSAFE_PATH,
           "a leading parent component cannot escape extraction");
-    check(tar_extract_path("safe/../escape", path) == TAR_FORMAT_PATH_TOO_LONG,
+    check(tar_extract_path("safe/../escape", path) == TAR_FORMAT_UNSAFE_PATH,
           "an embedded parent component cannot escape extraction");
-    check(tar_extract_path("/absolute", path) == TAR_FORMAT_PATH_TOO_LONG,
+    check(tar_extract_path("/absolute", path) == TAR_FORMAT_UNSAFE_PATH,
           "an absolute member cannot escape extraction");
+
+    char too_long[TAR_PATH_CAP + 1];
+    memset(too_long, 'a', TAR_PATH_CAP);
+    too_long[TAR_PATH_CAP] = '\0';
+    check(tar_extract_path(too_long, path) == TAR_FORMAT_PATH_TOO_LONG,
+          "an overlong extraction path reports its actual failure");
+
+    original.size = TAR_USTAR_SIZE_MAX;
+    check(tar_header_encode(block, &original) == TAR_FORMAT_OK,
+          "the largest POSIX ustar size is encodable");
+    original.size++;
+    check(tar_header_encode(block, &original) == TAR_FORMAT_BAD_NUMBER,
+          "a size beyond the POSIX ustar field is rejected");
 }
 
 int main(int argc, char **argv)
