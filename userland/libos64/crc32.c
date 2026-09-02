@@ -2,16 +2,18 @@
 //
 // See crc32.h for why this variant and not another. This file is about how.
 //
-// NO 256-ENTRY TABLE, deliberately. The table version is roughly eight
-// times faster and is what you would reach for in a hot path — but this
-// runs once per transferred file, on data that just crossed a wire at a few
-// hundred kilobytes a second, so the checksum is not remotely the slow part.
-// What the bitwise form buys instead is that the whole algorithm is visible
-// in nine lines: no generated constants to get subtly wrong, nothing to
-// regenerate if the polynomial ever changes, and a reader can confirm it is
-// the standard CRC32 by looking rather than by trusting. If a consumer ever
-// appears that checksums megabytes in a loop, add the table THEN, behind
-// this same interface, with the host test as the proof it still agrees.
+// NO 256-ENTRY TABLE, deliberately. The libgzip review measured this bitwise
+// CRC inside end-to-end decoding of a 10MB mixed text/binary payload: 25 MB/s
+// at userland's -O0 (75 MB/s at -O2). The current pipelines are slower where
+// it matters: os64get measured 660 KB/s after its receive-window increase, and
+// ext2 write-through measured 1.7 MB/s. Those are the measured input and output
+// rates for HTTP decoding or `gunzip big.gz > file`; ext2 reads can exceed the
+// CRC rate and are not the reason for deferring a table. The bitwise form
+// keeps the algorithm visible in nine lines: no generated constants to audit,
+// and a reader can confirm the standard polynomial by looking rather than
+// trusting.
+// If a future profile puts meaningful time here, a table can replace this loop
+// behind the same interface and the host vectors prove it agrees.
 //
 // THE THREE PLACES CRC32 IMPLEMENTATIONS GO WRONG, all of them here:
 //   1. the initial value is 0xFFFFFFFF, not 0

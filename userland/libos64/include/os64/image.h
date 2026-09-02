@@ -38,11 +38,12 @@
 //         bottom-up or top-down.
 //
 // PNG IS DELIBERATELY ABSENT (Chris, 2026-08-25: "I suspect we'll have need
-// for PNG soon. We'll attend to it when we need it"). It needs a complete
-// DEFLATE decoder plus per-scanline filters, and os64 has no inflate
-// anywhere. The reason to build it is INTEROP — an icon someone downloaded,
-// a file os64get fetched — and until such a file actually arrives, BMP does
-// everything os64's own artwork needs. OPAQUE BMP, to be exact (Codex #30
+// for PNG soon. We'll attend to it when we need it"). libgzip supplies the
+// raw DEFLATE engine, but PNG still needs its zlib framing and Adler-32 check,
+// per-scanline filters, and color-type conversion. The reason to build those
+// pieces is INTEROP — an icon someone downloaded, a file os64get fetched —
+// and until such a file actually arrives, BMP does everything os64's own
+// artwork needs. OPAQUE BMP, to be exact (Codex #30
 // rd8): this decoder forces every output alpha to 0xff, BI_BITFIELDS — the
 // only BMP variant that can carry a real alpha mask — is on the UNSUPPORTED
 // list, and os64_draw_blit copies without blending. The day artwork needs

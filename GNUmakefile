@@ -194,16 +194,14 @@ USERLAND_BINS := $(addprefix userland/bin/,$(USERLAND_APPS) $(USERLAND_ALIASES))
 USERLAND_TESTS    := $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard userland/tests/*/*.c)))))
 USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 
-# The shared libraries every one of those apps now needs to run at all
-# (2026-08-22). This is not optional cargo: since libos64 became a .so, an
-# image with /bin but no /lib/libos64.so boots to a husk that cannot start —
-# and cannot start anything else either. It goes on EVERY volume that carries
-# a /bin, which today means the ext2 root AND the FAT lifeboat. The lifeboat
-# gets its own copy on its own partition on purpose: the whole point of a
-# lifeboat is that it does not share machinery with the thing it exists to
-# repair, so a stray write that eats the root's library leaves the lifeboat's
-# untouched.
-USERLAND_LIBS := userland/bin/libos64.so
+# The shared libraries used by the discovered apps. libos64 is foundational:
+# an image with /bin but no /lib/libos64.so boots to a husk that cannot start
+# anything. Other modules, beginning with libgzip, serve narrower consumers
+# but travel with the complete userland so installed binaries have their
+# dependencies. The set goes on both volumes that currently carry /bin — the
+# ext2 root and the FAT lifeboat — with independent copies so damage to one
+# volume does not also eat the repair environment's libraries.
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so
 
 # Kernel-side ring-3 test fixtures. They ride the image into /tests alongside
 # the userland ones — same shelf, because they are the same KIND of thing: a
@@ -427,9 +425,9 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTB
 	# The ext2 partition introduces ITSELF (Chris caught it claiming to be
 	# FAT — the one file that must never lie about which filesystem it's on).
 	printf 'Ima ext2 partition on the NVME disk\n' > $(EXT2_STAGING)/partition_info.txt
-	# /lib: every library in USERLAND_LIBS (libos64.so is what every app in
-	# /bin above is dynamically linked against — without it nothing on this
-	# volume runs) and libtest.so (the dynamic-linking regression fixture).
+	# /lib: every shipped userland library (libos64.so is foundational;
+	# libgzip.so is loaded by its consumers) and libtest.so, the dynamic-linking
+	# regression fixture.
 	# Iterated, same as the apps, so a new library cannot be forgotten here.
 	printf 'cd /lib\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach l,$(USERLAND_LIBS),printf 'write %s %s\n' "$(l)" "$(notdir $(l))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
