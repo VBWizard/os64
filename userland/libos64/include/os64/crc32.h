@@ -33,9 +33,8 @@
 // One-shot: the CRC32 of a buffer.
 uint32_t os64_crc32(const void *data, size_t length);
 
-// Streaming, for data that arrives in pieces — which is every transfer over
-// a socket, and the reason this pair exists at all: os64get must checksum a
-// file it never holds in memory all at once.
+// Streaming, for data that arrives in pieces — a socket transfer and a gzip
+// decoder both checksum bytes they never hold in memory all at once.
 //
 // Start with os64_crc32_begin(), feed each chunk in order, finish with
 // os64_crc32_end(). The value carried in between is NOT the CRC of what has

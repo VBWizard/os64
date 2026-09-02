@@ -68,8 +68,9 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    - (b) chunked transfer-encoding.
    - (c) redirects: 301/302/307/308, `Location:`, hop cap ~5, refuse
      https:// targets HONESTLY (name the reason: no TLS yet).
-   - (d) `Content-Encoding: gzip` — WAITS for the DEFLATE arc (Codex is
-     designing tar/gzip separately; one decoder, three customers).
+   - (d) `Content-Encoding: gzip` — stream through libgzip with a response
+     expansion cap; the shared DEFLATE decoder is also the engine a zlib/PNG
+     wrapper will use.
    - (e) `Range:`/resume — later, wants a consumer first.
    DESIGN CONSTRAINT: keep the HTTP machinery in cleanly separable
    functions — the extraction into a shared library (FreeBSD libfetch's

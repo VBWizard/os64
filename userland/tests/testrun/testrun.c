@@ -118,6 +118,7 @@ static const fixture_t kFixtures[] = {
     // for the same reason: a suite that cries wolf gets ignored.
     { "/tests/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and atomic publish" },
     { "/tests/tartest",         NULL, 0x7A120000,  0,          "ustar create/list/extract, pipelines, atomic publication and path safety" },
+    { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip: streaming decode, trailer refusal and gunzip filter" },
     { "/tests/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
     { "/tests/winchtest",       NULL, 0x0A1D0000,  0,          "pty resize: the grid follows, the seats hear SIGWINCH, a blocked read and a blocked wait are interrupted" },
     { "/tests/df_test",         NULL, 0x0DF00000,  0,          "the direction flag does not cross a ring boundary (syscall, and into a handler)" },

@@ -74,7 +74,8 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
            -fno-stack-protector -fcf-protection=none \
            -nostdlib -nostartfiles -nodefaultlibs -masm=intel -Wall -Wextra \
            $(WERROR_FLAG) -MMD -MP \
-           -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include
+           -I$(CURDIR)/../abi/include -I$(CURDIR)/libos64/include \
+           -I$(CURDIR)/libgzip/include
 # -z noexecstack: bare-metal objects carry no .note.GNU-stack section (that
 # annotation is a Linux userspace convention), and without the flag ld warns
 # about one arbitrary object per link — noise with no meaning here, since
@@ -111,7 +112,7 @@ OBJ     := $(CURDIR)/obj
 # names are tests — the SOURCE tree is the answer, and it cannot drift.
 TESTBIN := $(BIN)/tests
 
-# ── THE LIBRARY AND THE STUB (split 2026-08-22, when libos64 became a .so) ──
+# ── LIBOS64 AND THE STUB (split 2026-08-22, when libos64 became a .so) ──────
 #
 # Until today every one of these objects was linked into every single app:
 # 64 private copies of the same ~81KB of library code, on disk and again in
@@ -126,7 +127,7 @@ TESTBIN := $(BIN)/tests
 LAUNCH_SRCS := start/launch.S
 LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 
-# The library's own sources. thread_trampoline.S moved here out of launch.S
+# libos64's own sources. thread_trampoline.S moved here out of launch.S
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
@@ -137,12 +138,21 @@ LIBOS64_SRCS := libos64/init.c libos64/io.c libos64/linereader.c libos64/proc.c 
 LIBOS64_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBOS64_SRCS))
 LIBOS64_SO   := $(BIN)/libos64.so
 
-# The library is position-independent; the apps are not. That asymmetry is the
+# libgzip is a separate shared module: the raw DEFLATE engine is useful to
+# gzip, a future zlib/PNG wrapper, and HTTP content decoding without becoming
+# part of libos64's foundational C surface. Its gzip framing reuses libos64's
+# established CRC32 and heap, so the object records a real DT_NEEDED on
+# libos64.so instead of carrying private copies of either.
+LIBGZIP_SRCS := libgzip/inflate.c libgzip/gzip.c
+LIBGZIP_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBGZIP_SRCS))
+LIBGZIP_SO   := $(BIN)/libgzip.so
+
+# Shared-library code is position-independent; the apps are not. That is the
 # whole design (see kernel/include/shared_object.h): apps keep their fixed
 # per-app link bases — which is what lets a host debugger tell two running
-# programs apart — while the LIBRARY, being PIC, can be placed anywhere and is
-# therefore free to live outside the crowded low 2GB entirely.
+# programs apart — while a PIC library can live outside the crowded low 2GB.
 LIBOS64_CFLAGS := $(filter-out -fno-pic -fno-pie,$(CFLAGS)) -fPIC
+LIBGZIP_CFLAGS := $(LIBOS64_CFLAGS)
 
 # --hash-style=sysv: the kernel derives the dynamic symbol COUNT from
 #   DT_HASH's nchain word (there is no DT_SYMTABSZ in ELF), so a GNU-only
@@ -161,20 +171,27 @@ LIBOS64_CFLAGS := $(filter-out -fno-pic -fno-pie,$(CFLAGS)) -fPIC
 # -z separate-code: keep CODE in a segment of its own. Without it ld happily
 # merges the read-only zone (symbol tables, relocations, .rodata) into the
 # executable one and hands back a single R+E LOAD — which, since os64 derives
-# page protections straight from segment flags, would make every constant in
-# the library executable and undo the NX arc for the one object every program
-# maps. lib.ld's ALIGNs are necessary but NOT sufficient; the flag is what
-# makes ld honour them as segment boundaries.
-LIBOS64_LDFLAGS := -shared -soname libos64.so --hash-style=sysv -Bsymbolic-functions \
-                   -z max-page-size=0x1000 -z noexecstack -z separate-code \
-                   -T $(CURDIR)/link/lib.ld
+# page protections straight from segment flags, would make the library's
+# constants executable. lib.ld's ALIGNs are necessary but NOT sufficient; the
+# flag is what makes ld honour them as segment boundaries.
+SHARED_LIB_LDFLAGS := -shared --hash-style=sysv -Bsymbolic-functions \
+                      -z max-page-size=0x1000 -z noexecstack -z separate-code \
+                      -T $(CURDIR)/link/lib.ld
+LIBOS64_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libos64.so
+LIBGZIP_LDFLAGS := $(SHARED_LIB_LDFLAGS) -soname libgzip.so
 
 # Each library's PRELINKED base, from the same assigner that places the apps
 # (--libs switches it to the shared-library window). Libraries are placed at
 # BUILD time, not by the kernel's bump allocator, so the address is a stable
 # function of the library's name — which is what lets the GDB map below name
 # it and `step` into a library call actually step in. See link/lib.ld.
-LIBOS64_BASE   := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so | cut -d= -f2)
+# Library bases must be assigned as one population: calculating each name in
+# isolation would miss a hash collision and prelink two objects into the same
+# slot. app_bases.py sorts before probing, so adding a library gives the build
+# one deterministic map independent of link order.
+LIB_BASE_PAIRS := $(shell $(CURDIR)/tools/app_bases.py --libs libos64.so libgzip.so)
+LIBOS64_BASE   := $(patsubst libos64.so=%,%,$(filter libos64.so=%,$(LIB_BASE_PAIRS)))
+LIBGZIP_BASE   := $(patsubst libgzip.so=%,%,$(filter libgzip.so=%,$(LIB_BASE_PAIRS)))
 
 # more and less are two policies over one file-pager engine.  Keeping that
 # engine outside either app directory prevents the first useful slices from
@@ -195,6 +212,11 @@ HEX_BUFFER_OBJ  := $(OBJ)/$(HEX_BUFFER_SRC).o
 # boundary instead of carrying a private almost-tar encoder in the fixture.
 TAR_FORMAT_PROGRAMS := tartest
 TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
+
+# These programs consume the standalone gzip module. Keep the dependency
+# selective: linking libgzip into every app would turn an optional format
+# engine into part of the foundational runtime by accident.
+LIBGZIP_PROGRAMS := gunzip gziptest
 
 # Every apps/<name>/ directory holding .c files is an app named <name>.
 # $(sort) both orders and DEDUPES — essential since apps went multi-file
@@ -263,7 +285,7 @@ $(foreach p,$(APP_BASE_PAIRS),\
   $(eval APP_BASE_$(word 1,$(subst =, ,$(p))) := $(word 2,$(subst =, ,$(p)))))
 
 .PHONY: all
-all: $(LIBOS64_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
+all: $(LIBOS64_SO) $(LIBGZIP_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
 
 $(BIN)/[: $(BIN)/test
@@ -283,6 +305,15 @@ $(LIBOS64_SO): $(LIBOS64_OBJS) $(CURDIR)/link/lib.ld
 	@mkdir -p "$(BIN)"
 	$(LD) --defsym LIB_BASE=$(LIBOS64_BASE) $(LIBOS64_LDFLAGS) -o $@ $(LIBOS64_OBJS)
 	@printf '  %-10s prelinked at %s\n' "libos64.so" "$(LIBOS64_BASE)"
+
+# --no-as-needed makes the dependency an explicit property of libgzip.so.
+# The kernel recursively loads DT_NEEDED objects and resolves this library's
+# os64_crc32/malloc/free references within that dependency closure.
+$(LIBGZIP_SO): $(LIBGZIP_OBJS) $(LIBOS64_SO) $(CURDIR)/link/lib.ld
+	@mkdir -p "$(BIN)"
+	$(LD) --defsym LIB_BASE=$(LIBGZIP_BASE) $(LIBGZIP_LDFLAGS) --no-as-needed \
+	      -o $@ $(LIBGZIP_OBJS) $(LIBOS64_SO)
+	@printf '  %-10s prelinked at %s\n' "libgzip.so" "$(LIBGZIP_BASE)"
 
 # The link rule, generated once per program — apps and fixtures alike: the
 # name appears in BOTH the directory and the filename, and a make pattern
@@ -323,13 +354,14 @@ APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
 APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ)) \
                        $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ))
+APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
 	@touch "$$@"
-$(3)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $(LIBOS64_SO) $$(APP_BASE_STAMP_$(1))
+$(3)/$(1): $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $$(APP_EXTRA_LIBS_$(1)) $(LIBOS64_SO) $$(APP_BASE_STAMP_$(1))
 	@mkdir -p "$(3)"
-	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $(LIBOS64_SO)
+	$(LD) --defsym APP_BASE=$(APP_BASE_$(1)) --defsym APP_SLOT_SIZE=$(APP_SLOT_SIZE) $(LDFLAGS) -o $$@ $$(APP_OBJS_$(1)) $$(APP_EXTRA_OBJS_$(1)) $(LAUNCH_OBJS) $$(APP_EXTRA_LIBS_$(1)) $(LIBOS64_SO)
 	@printf '  %-10s base %s\n' "$(1)" "$(APP_BASE_$(1))"
 endef
 $(foreach app,$(APPS),$(eval $(call APP_RULE,$(app),apps,$(BIN))))
@@ -342,7 +374,7 @@ $(foreach t,$(TESTS),$(eval $(call APP_RULE,$(t),tests,$(TESTBIN))))
 # FIXTURES ARE IN HERE TOO, and that is the point of the line rather than an
 # afterthought: a fixture is the program you are most likely to be single-
 # stepping, because it is what you reach for when something is already broken.
-$(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO)
+$(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) $(LIBOS64_SO) $(LIBGZIP_SO)
 	@mkdir -p "$(BIN)"
 	@printf '# GENERATED by userland/GNUmakefile — do not edit.\n' > $@
 	@printf '# Every program at its own base, so GDB can hold all their symbols at once.\n' >> $@
@@ -352,17 +384,19 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TES
 	@$(foreach t,$(TESTS),\
 	   printf 'add-symbol-file %s/%s %s\n' "$(TESTBIN)" "$(t)" "$(APP_BASE_$(t))" >> $@;)
 	@printf '\n' >> $@
-	@printf '# THE SHARED LIBRARY (2026-08-22). Without this line GDB has no line\n' >> $@
-	@printf '# info anywhere in libos64, so `step` at a library call silently behaves\n' >> $@
-	@printf '# like `next` — it cannot step into code it has no symbols for. This is\n' >> $@
-	@printf '# also why the library is PRELINKED at a build-time address (link/lib.ld):\n' >> $@
+	@printf '# THE SHARED LIBRARIES. Without these lines GDB has no line info in\n' >> $@
+	@printf '# libos64 or libgzip, so `step` at a library call silently behaves like\n' >> $@
+	@printf '# `next` — it cannot step into code it has no symbols for. This is also\n' >> $@
+	@printf '# why each library is PRELINKED at a build-time address (link/lib.ld):\n' >> $@
 	@printf '# when the kernel chose the address by load order, the build had nothing\n' >> $@
 	@printf '# truthful to write here.\n' >> $@
 	@printf '# The address is .text, which is what add-symbol-file wants — NOT the\n' >> $@
 	@printf '# image base, since lib.ld puts the read-only zone first.\n' >> $@
 	@printf 'add-symbol-file %s 0x%s\n' "$(LIBOS64_SO)" \
 	   "$$(x86_64-elf-readelf -SW $(LIBOS64_SO) | grep -E '\.text +PROGBITS' | grep -oE '[0-9a-f]{16}' | head -1)" >> $@
-	@printf '# (symbols for %s + libos64.so)\n' "$(APPS) $(TESTS)" >> $@
+	@printf 'add-symbol-file %s 0x%s\n' "$(LIBGZIP_SO)" \
+	   "$$(x86_64-elf-readelf -SW $(LIBGZIP_SO) | grep -E '\.text +PROGBITS' | grep -oE '[0-9a-f]{16}' | head -1)" >> $@
+	@printf '# (symbols for %s + libos64.so + libgzip.so)\n' "$(APPS) $(TESTS)" >> $@
 
 # Every .d gcc emitted for the runtime and each app — self-maintaining: each
 # compile regenerates its .d with the current include list, so it cannot drift.
@@ -370,7 +404,7 @@ $(BIN)/app_bases.gdb: $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TES
 # per-app form covered only <name>.c.d, which would have left topMain.c.o
 # stale against topMain.h edits — the EXACT bug class this makefile's -MMD
 # comment block memorializes, sneaking back through a side door.
-HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) \
+HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) $(LIBGZIP_OBJS:.o=.d) \
                $(patsubst %.c,$(OBJ)/%.c.d,$(wildcard apps/*/*.c tests/*/*.c)) \
                $(PAGER_OBJ:.o=.d) $(HEX_BUFFER_OBJ:.o=.d)
 -include $(HEADER_DEPS)
@@ -381,6 +415,10 @@ HEADER_DEPS := $(LAUNCH_OBJS:.o=.d) $(LIBOS64_OBJS:.o=.d) \
 # does not decide that — the stems differ in length, and the more specific
 # prefix wins — but keeping them adjacent and commented means nobody has to
 # re-derive it.
+$(OBJ)/pic/libgzip/%.c.o: libgzip/%.c
+	@mkdir -p "$(dir $@)"
+	$(CC) $(LIBGZIP_CFLAGS) -c $< -o $@
+
 $(OBJ)/pic/%.c.o: %.c
 	@mkdir -p "$(dir $@)"
 	$(CC) $(LIBOS64_CFLAGS) -c $< -o $@
