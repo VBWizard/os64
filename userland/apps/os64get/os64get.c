@@ -6,9 +6,9 @@
 // USB stick across a room; since 2026-08-21 the P5 boots from its own disk
 // and this program is the whole supply line — kernel, menu, bootloader, apps.
 //
-// The protocol is RTL8125.md's, deliberately 1971-shaped — one TCP
-// connection per file, ASCII where a human might read it, binary only where
-// a machine must:
+// THE SUPPLY LINE'S PROTOCOL is RTL8125.md's, deliberately 1971-shaped — one
+// TCP connection per file, ASCII where a human might read it, binary only
+// where a machine must:
 //
 //     client -> server:   GET <name>\n
 //     server -> client:   OK <length-decimal> <crc32-hex8>\n  then <length> bytes
@@ -18,7 +18,22 @@
 // a protocol you can type is a protocol you can debug at 1am on a machine
 // with no tooling.
 //
-// ── WHERE A FILE GOES (2026-08-22) ──────────────────────────────────────
+// AND SINCE 2026-09-02 THERE IS A SECOND DIALECT: an operand shaped like
+// `http://host[:port]/path` fetches from the world instead of from the
+// valet. It is a different conversation with different guarantees — no
+// checksum, no routing, no archive — and it is kept apart from the first
+// rather than braided through it; see THE WORLD'S DIALECT below, and http.h
+// for the protocol itself. This program is BROWSER.md's third rung: the
+// ladder that climbs toward a browser by pointing os64's TCP at traffic the
+// last rung did not.
+//
+// An `https://` operand is the same dialect reaching somewhere os64 cannot
+// go alone: this machine has no TLS and never will (BROWSER.md borrows one
+// when its day comes), so an https fetch is carried by a proxy that DOES
+// have a TLS, named by `$https_proxy`. See THE TLS PROXY below for what that
+// buys and what it costs.
+//
+// ── WHERE A VALET FILE GOES (2026-08-22) ────────────────────────────────
 //
 // The valet serves NAMES, one path component each; where a name lands on
 // this machine is THIS machine's business, and it is written in
@@ -42,7 +57,7 @@
 // its conf. Lineage: rdist(1), 4.3BSD 1985 — the distfile names the
 // destinations and the tool obeys.
 //
-// ── THE ARCHIVE (same day) ──────────────────────────────────────────────
+// ── THE ARCHIVE, WHICH IS THE VALET'S TOO (same day) ───────────────────
 //
 // Before a file is installed it is KEPT, at
 //
@@ -61,18 +76,24 @@
 // ── THE PART THAT MATTERS: PUBLISHING ───────────────────────────────────
 //
 // Every file this program creates is written as `<target>.part` BESIDE its
-// target and renamed into place only after its length and CRC32 check out.
+// target and renamed into place only after what CAN be checked has been.
 // That ordering is the entire safety property, and it is why a rename
 // syscall got built the morning the driver did:
 //
 //   - a transfer that dies halfway leaves a .part file and the PREVIOUS
 //     version of the real name completely untouched;
-//   - a transfer that completes but arrives damaged is DISCARDED, not
+//   - a valet transfer that completes but arrives damaged is DISCARDED, not
 //     installed, because "complete" and "correct" are different claims and
 //     only the checksum can tell them apart;
 //   - the swap itself is atomic — os64's rename replaces the destination
 //     with no instant at which the name fails to resolve, which is what
 //     4.2BSD invented rename(2) for in 1983.
+//
+// HOW MUCH THE SECOND BULLET CAN PROMISE DEPENDS ON THE DIALECT, and the
+// difference is the server's, not this program's. The valet names a CRC, so
+// "correct" is answerable. HTTP names a length and nothing else, so a URL
+// fetch can prove a body was not CUT SHORT and cannot prove it arrived
+// intact — which is exactly what it says, and why it claims no more.
 //
 // BESIDE is load-bearing: rename works within ONE filesystem (the kernel
 // refuses a cross-mount rename, correctly), and /home, /fat and / are three.
@@ -95,6 +116,8 @@
 #include "os64/conf.h"
 #include "os64/date.h"
 
+#include "http.h"
+
 #define GET_OK             0
 #define GET_USAGE          2
 #define GET_DIAL_FAILED    3
@@ -111,6 +134,18 @@
 // never escapes main (which reports it and exits 0) — it exists so the commit
 // phase knows there is no `.part` waiting for it.
 #define GET_UNCHANGED      12
+// The operand carried a "scheme://" and was still not a URL this program can
+// fetch — an unknown scheme (https, until os64 borrows a TLS), or a shape a
+// URL cannot have. Distinct from GET_USAGE because the command line was
+// well formed: it is the ADDRESS that cannot be used.
+#define GET_BAD_URL        13
+// The reply is well formed and this program cannot honestly read it yet — a
+// chunked framing, or a content coding it does not decode. Distinct from
+// GET_BAD_HEADER, which means the server said something that is not HTTP:
+// "I do not speak this" and "that was not speech" are different answers, and
+// a script driving a dozen fetches should not have to tell them apart from
+// the English.
+#define GET_UNSUPPORTED    14
 
 #define GET_PORT      6464
 // 64KB per write: the fetch loop fills this whole buffer from the socket
@@ -152,7 +187,7 @@ typedef struct {
 // in the same invocation, so one buffer is one buffer.
 static get_entry_t entries[GET_MAX_LIST];
 
-// ── The config ──────────────────────────────────────────────────────────
+// ── The config: the valet's routing map ───────────────────────────────
 // A small fixed table, because the whole install map is a handful of lines
 // and a utility that mallocs to read its own config has its priorities wrong.
 // Precedence is by SPECIFICITY (exact beats suffix beats `@lot` beats `*`),
@@ -446,7 +481,7 @@ static int copy_verified(const char *src, const char *dst, uint64_t expect, uint
     return rc;
 }
 
-// ── Parsing the header ──────────────────────────────────────────────────
+// ── Parsing the valet's header ─────────────────────────────────────────
 
 // Parse a decimal from [s, end). Returns false on empty, on a non-digit, or
 // on a value too large for 64 bits — refusal rather than a guess, because a
@@ -496,7 +531,7 @@ static bool parse_hex32(const char *s, const char *end, uint32_t *out)
     return true;
 }
 
-// ── DO WE ALREADY HAVE IT? ──────────────────────────────────────────────
+// ── DO WE ALREADY HAVE IT? (the valet's unchanged check) ───────────────
 //
 // Read the file at `path` and say whether it is byte-for-byte what the server
 // is offering. LENGTH AND CRC, both: a CRC alone is a one-in-four-billion lie,
@@ -545,9 +580,11 @@ static bool local_matches(const char *path, uint64_t wantLen, uint32_t wantCrc)
 // search toward the server, the firewall and the routing instead. A
 // diagnostic that omits the diagnosis is worse than none: it looks like it
 // tried.
-// "tcp!<host>!6464", built in ONE place because there are now two dialers —
-// the fetch below and fetch_list's LIST — and a fix applied to one of two
-// identical lines is the oldest bug in the trade.
+// "tcp!<host>!<port>", built in ONE place because every dialer here wants the
+// same string and the same complaint when it will not fit — and a fix applied
+// to one of several identical lines is the oldest bug in the trade. The PORT
+// is a parameter rather than GET_PORT because the valet answers on 6464 and
+// the world answers on whatever a URL names.
 //
 // Sized from the NAME LIMIT, not from a path limit: "tcp!" + a name of up to
 // OS64_RESOLVE_NAME_MAX (253 — DNS's own ceiling, which the dial parser now
@@ -560,9 +597,9 @@ static bool local_matches(const char *path, uint64_t wantLen, uint32_t wantCrc)
 // 2026-08-22.)
 #define GET_DIAL_MAX (OS64_RESOLVE_NAME_MAX + 16)
 
-static bool build_dialstring(char *buf, size_t cap, const char *host)
+static bool build_dialstring(char *buf, size_t cap, const char *host, uint16_t port)
 {
-    int32_t n = os64_snprintf(buf, cap, "tcp!%s!%d", host, GET_PORT);
+    int32_t n = os64_snprintf(buf, cap, "tcp!%s!%u", host, (unsigned)port);
     if (n >= 0 && (size_t)n < cap)
         return true;
 
@@ -697,7 +734,7 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
     // Plan 9's bang path, which libos64 parses into an os64_netdest_t below
     // the syscall boundary (nothing textual crosses it).
     char dialstring[GET_DIAL_MAX];
-    if (!build_dialstring(dialstring, sizeof(dialstring), host))
+    if (!build_dialstring(dialstring, sizeof(dialstring), host, GET_PORT))
         return GET_USAGE;
 
     int64_t conn = os64_dial(dialstring);
@@ -959,8 +996,10 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
 
 // ── COMMIT, AND ABANDON ─────────────────────────────────────────────────
 //
-// The two halves of the second phase. Staging leaves a verified `<dest>.part`
-// beside every destination; these either publish it or sweep it away.
+// The two halves of the second phase. Staging leaves a checked `<dest>.part`
+// beside every destination; these either publish it or sweep it away. Both
+// verbs serve the valet; a URL fetch borrows commit and keeps its own .part
+// (there is no archive copy behind it to make sweeping one away safe).
 //
 // commit is ONE rename inside ONE directory: no data moves, nothing is read,
 // and before the call the old file is whole while after it the new one is —
@@ -977,7 +1016,7 @@ static int stage_commit(const char *dest)
     if (os64_rename(partPath, dest) < 0)
     {
         os64_hprintf(OS64_STDERR,
-                     "os64get: %s verified but could not be renamed to %s "
+                     "os64get: %s is staged but could not be renamed to %s "
                      "(read-only filesystem, or a directory in the way?)\n",
                      partPath, dest);
         return GET_PUBLISH_FAILED;
@@ -1028,7 +1067,7 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
                           uint64_t *totalBytes)
 {
     char dialstring[GET_DIAL_MAX];
-    if (!build_dialstring(dialstring, sizeof(dialstring), host))
+    if (!build_dialstring(dialstring, sizeof(dialstring), host, GET_PORT))
         return -1;
 
     int64_t conn = os64_dial(dialstring);
@@ -1201,6 +1240,615 @@ static void lookup_lot(const char *host, const char *name, const conf_t *c,
         }
 }
 
+// ── THE WORLD'S DIALECT (2026-09-02) ────────────────────────────────────
+//
+// An operand shaped like `http://host[:port]/path` means the internet. A bare
+// word still means the valet, and nothing above this line changes: the two
+// dialects are told apart by the `://` a URL must carry, never by guesswork
+// about what a word might be. (wget accepts a bare `host/path` and assumes
+// http; here that assumption would collide with every name the valet serves.)
+//
+// WHAT A URL FETCH DELIBERATELY DOES NOT DO, and why each:
+//
+//   - IT DOES NOT ROUTE THROUGH os64get.conf. That file maps the valet's
+//     NAMES onto this machine's system directories, and its last rule is
+//     `* = /bin`. Routing a URL through it would install a web page into
+//     /bin as a program. The conf answers "where does this piece of the
+//     SYSTEM belong", and a page off the internet is not one.
+//   - IT DOES NOT ARCHIVE. The archive is the supply line's record of what
+//     landed on this machine and when, so a bad build can be walked back by
+//     hand. A download is not an install and has nothing to walk back to.
+//   - IT HAS NO CHECKSUM, so it cannot tell "complete" from "correct", and
+//     says so rather than implying otherwise. HTTP offers a length; a body
+//     shorter than Content-Length fails loudly, and everything past that is
+//     the server's word.
+//
+// What it KEEPS is the property this whole program is built around: the bytes
+// land in `<dest>.part` and the real name is only ever replaced by an atomic
+// rename. A transfer that dies halfway leaves the file that was there exactly
+// where it was.
+
+typedef struct { int32_t handle; } url_source_t;
+
+// The stream's bytes come from the dialed connection. A function and a
+// context rather than a handle, because http.c is written to be driven by a
+// memory buffer too — that is what lets tools/test_http_host.sh hand the
+// parser a reply one byte at a time and find the bugs that live where a
+// token straddles two reads.
+static int64_t url_source_read(void *ctx, void *buf, size_t cap)
+{
+    return os64_read(((url_source_t *)ctx)->handle, buf, cap);
+}
+
+// The name a URL suggests for the thing it points at: the last path segment,
+// query dropped. A path ending in '/' names a directory, and the web has
+// answered that with index.html since the first server in 1993.
+//
+// "." and ".." are refused rather than translated. They name a DIRECTORY, and
+// the interesting case is not the honest one — it is a URL ending in `/..`,
+// where a tool that shrugged and picked something would be picking a place
+// the person never typed.
+static bool url_basename(const http_url_t *url, char *out, size_t cap)
+{
+    const char *end = url->path;
+    while (*end != '\0' && *end != '?')
+        end++;
+    const char *start = end;
+    while (start > url->path && start[-1] != '/')
+        start--;
+
+    size_t len = (size_t)(end - start);
+    if (len == 0)
+        return os64_strcopy(out, cap, "index.html") < cap;
+    if ((len == 1 && start[0] == '.') ||
+        (len == 2 && start[0] == '.' && start[1] == '.'))
+        return false;
+    if (len + 1 > cap)
+        return false;
+
+    for (size_t i = 0; i < len; i++)
+        out[i] = start[i];
+    out[len] = '\0';
+    return true;
+}
+
+// ── THE TLS PROXY, AND WHAT IT COSTS (2026-09-02) ───────────────────────
+//
+// os64 has no TLS and is not going to grow one here; BROWSER.md's first
+// ruling is that it gets BORROWED when its day comes. Until then the ruling
+// names a stopgap, and this is it: a machine that DOES have a TLS makes the
+// call and hands the answer back in plain HTTP. `$https_proxy` names it,
+// `$http_proxy` names one for ordinary http, and `$no_proxy` names the hosts
+// that skip both — the CERN convention from 1992, honoured by every fetcher
+// since. Environment variables rather than a config file because a proxy is
+// a property of where this machine is SITTING, not of what it is: carry the
+// P5 to another network and the answer changes without the system changing.
+//
+//     export https_proxy=http://10.0.2.2:8888/
+//     os64get https://example.com/
+//
+// THE SCHEME PICKS THE VARIABLE, and that is worth more than tidiness. os64's
+// only reason for a proxy is TLS, so the ordinary setup is a proxy for https
+// and a direct road for everything else — and one variable covering both
+// would silently reroute the plain-HTTP fetches that were working perfectly,
+// through a machine that may have no way to reach them. Learned live rather
+// than reasoned out: with a single setting, a fetch of the local test server
+// at 10.0.2.2 went out through a proxy on the host, where that address means
+// nothing at all, and came back 502.
+//
+// WHAT IT COSTS, and this program says so out loud on every proxied fetch
+// rather than letting it go quiet: THE PROXY SEES EVERYTHING IN THE CLEAR.
+// The encrypted leg runs from the proxy to the origin; the leg from here to
+// the proxy is plain text on the wire, and the proxy itself holds the whole
+// conversation unencrypted in its memory. For reading public pages that is
+// exactly the trade BROWSER.md intends. For anything carrying a password it
+// is not TLS, must never be described as though it were, and the reason the
+// notice is printed and not merely documented is that a security property
+// nobody is reminded of is a security property people forget.
+//
+// Note what is NOT special-cased: a proxied fetch is an ordinary plain-HTTP
+// conversation with a different peer and a longer request line. The header
+// parser, the body loop, the .part discipline and every refusal above are
+// untouched by it.
+typedef struct {
+    bool     inUse;
+    char     host[HTTP_HOST_MAX];
+    uint16_t port;
+} proxy_t;
+
+// ASCII case folding for one byte. A host out of http_url_parse is already
+// lowercased (a DNS name is case-insensitive by definition); a `$no_proxy`
+// entry is whatever somebody typed, so only that side needs folding.
+static char lower_ascii(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : c;
+}
+
+// A proxy setting's value, in either spelling people actually use: the full
+// URL everyone writes ("http://host:8888/") and the bare "host:port" that
+// gets typed in a hurry. A value that is neither is refused BY NAME rather
+// than ignored, because a proxy setting that silently does nothing sends
+// every https fetch to a "no TLS" refusal that names the wrong cause.
+static bool proxy_take(const char *value, const char *variable, proxy_t *out)
+{
+    http_url_t url;
+    http_url_result_t rc = http_url_parse(value, &url);
+
+    if (rc == HTTP_URL_OK)
+    {
+        if (!os64_streq(url.scheme, "http"))
+        {
+            os64_hprintf(OS64_STDERR,
+                         "os64get: $%s is %s, and the road TO a proxy is the plain one"
+                         " — os64 has no TLS to reach it with\n", variable, url.scheme);
+            return false;
+        }
+        os64_strcopy(out->host, sizeof(out->host), url.host);
+        out->port = url.port;
+        out->inUse = true;
+        return true;
+    }
+
+    if (rc != HTTP_URL_NOT_A_URL)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: $%s is not a proxy address (%s): %s\n",
+                     variable, http_url_reason(rc), value);
+        return false;
+    }
+
+    // "host:port", or a bare "host" meaning the customary 8080.
+    const char *colon = NULL;
+    for (const char *p = value; *p != '\0'; p++)
+        if (*p == ':')
+            colon = p;
+
+    size_t hostLen = colon != NULL ? (size_t)(colon - value) : os64_strlen(value);
+    if (hostLen == 0 || hostLen >= sizeof(out->host))
+    {
+        os64_hprintf(OS64_STDERR, "os64get: $%s names no usable host: %s\n", variable, value);
+        return false;
+    }
+    for (size_t i = 0; i < hostLen; i++)
+        out->host[i] = value[i];
+    out->host[hostLen] = '\0';
+
+    out->port = 8080;
+    if (colon != NULL)
+    {
+        uint64_t port = 0;
+        if (!os64_parse_u64(colon + 1, &port) || port == 0 || port > 65535)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: $%s has no usable port: %s\n", variable, value);
+            return false;
+        }
+        out->port = (uint16_t)port;
+    }
+    out->inUse = true;
+    return true;
+}
+
+// `$no_proxy`: the hosts to reach DIRECTLY even when a proxy is set. Entries
+// are separated by commas or spaces; `*` means every host; a bare name
+// matches that host and anything under it, so "example.com" also covers
+// "www.example.com" but never "notexample.com", and a leading dot is accepted
+// because half the world writes ".example.com" for the same thing.
+//
+// THIS IS NOT DECORATION HERE, it is the difference between a working harness
+// and a baffling one. QEMU's guest reaches the host at 10.0.2.2, an address
+// that means nothing anywhere else — so a proxy running ON the host, asked to
+// fetch `http://10.0.2.2:8080/`, dials into the void and times out. Every
+// address that is only meaningful from where os64 is sitting has that shape.
+static bool no_proxy_covers(const char *host)
+{
+    const char *list = os64_getenv("no_proxy");
+    if (list == NULL || list[0] == '\0')
+        return false;
+
+    size_t hostLen = os64_strlen(host);
+    const char *p = list;
+    while (*p != '\0')
+    {
+        while (*p == ',' || *p == ' ' || *p == '\t')
+            p++;
+        const char *start = p;
+        while (*p != '\0' && *p != ',' && *p != ' ' && *p != '\t')
+            p++;
+
+        size_t len = (size_t)(p - start);
+        if (len == 0)
+            continue;
+        if (len == 1 && start[0] == '*')
+            return true;
+        if (start[0] == '.')
+        {
+            start++;
+            len--;
+        }
+        if (len == 0 || len > hostLen)
+            continue;
+
+        // Match the whole host, or a dot-bounded tail of it. The dot is what
+        // keeps "example.com" from covering "notexample.com".
+        const char *tail = host + (hostLen - len);
+        if (len != hostLen && tail[-1] != '.')
+            continue;
+
+        size_t i = 0;
+        while (i < len && tail[i] == lower_ascii(start[i]))
+            i++;
+        if (i == len)
+            return true;
+    }
+    return false;
+}
+
+// WHICH PROXY, IF ANY, CARRIES THIS URL. The variable is chosen by the URL's
+// SCHEME — `$https_proxy` for https, `$http_proxy` for http — which is the
+// convention every fetcher has followed since these names appeared, and here
+// it is load-bearing rather than pedantry: os64's whole reason for having a
+// proxy is TLS, so the ordinary setup is a proxy for https and a direct road
+// for everything else. One variable covering both would silently reroute the
+// plain-HTTP fetches that were working perfectly, through a machine that may
+// have no way to reach them at all. There is deliberately NO fallback between
+// the two: which variable answers should be predictable from the address.
+static bool proxy_for(const http_url_t *url, proxy_t *out)
+{
+    out->inUse = false;
+
+    const char *variable = os64_streq(url->scheme, "https") ? "https_proxy" : "http_proxy";
+    const char *value = os64_getenv(variable);
+    if (value == NULL || value[0] == '\0')
+        return true;
+
+    if (no_proxy_covers(url->host))
+        return true;
+
+    return proxy_take(value, variable, out);
+}
+
+// A DEST names a place on THIS machine, so an operand shaped like a URL in
+// that slot is somebody meaning "fetch this" and being understood as "write
+// it there". Refuse rather than obey: os64 paths are '/'-separated, so
+// "https://example.com/" as a file name is not a thing anyone has ever meant,
+// and the failure it produces otherwise is a complaint about a directory that
+// does not exist — which sends the reader looking at their filesystem for a
+// mistake they made in their address.
+//
+// Guarding the SHAPE and not just the wording of one message, because the
+// wording that caused it (see redirect_advice) will not be the last one.
+static bool dest_is_a_url(const char *dest)
+{
+    if (dest == NULL)
+        return false;
+    http_url_t probe;
+    return http_url_parse(dest, &probe) != HTTP_URL_NOT_A_URL;
+}
+
+// What to do about a redirect, in words that name a COMMAND rather than an
+// address. The first version of this said "fetch that address instead", and
+// Chris did exactly that — `os64get <url> https://example.com/` — which put
+// the address in the DEST slot, where it means "save it here". The sentence
+// was followable and the command line was not shaped the way the sentence
+// read. Advice that cannot be typed verbatim is advice that will be typed
+// wrong, so this prints the whole command when it can spell one, and says
+// plainly why it cannot when it cannot.
+static void redirect_advice(const http_url_t *from, const char *location)
+{
+    if (location[0] == '\0')
+    {
+        os64_hprintf(OS64_STDERR, "os64get: ...and does not say where to\n");
+        return;
+    }
+
+    os64_hprintf(OS64_STDERR, "os64get: it points at %s, and os64get does not"
+                              " follow redirects yet.\n", location);
+
+    http_url_t target;
+    http_url_result_t rc = http_url_parse(location, &target);
+    if (rc == HTTP_URL_SCHEME)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: os64get speaks http and https, not %s.\n",
+                     target.scheme);
+        return;
+    }
+    if (rc != HTTP_URL_OK && rc != HTTP_URL_NOT_A_URL)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: and that address is unusable — %s.\n",
+                     http_url_reason(rc));
+        return;
+    }
+
+    // AN https TARGET IS ADVICE OR AN OBSTACLE DEPENDING ON THIS MACHINE, so
+    // the answer is worked out here rather than written once. Most of the
+    // plain-HTTP web now redirects to https; whether that is a dead end or a
+    // command to type is exactly the question $https_proxy answers.
+    //
+    // THE PROXY ASKED ABOUT IS THE TARGET'S, NOT THIS FETCH'S. They are
+    // different questions and the scheme decides each one separately — a
+    // redirect from http to https is carried by $https_proxy no matter what
+    // carried the request that produced it. Passing the current fetch's proxy
+    // in here looked obviously right and was obviously wrong the first time a
+    // plain-HTTP page redirected to https with $https_proxy set: the advice
+    // said "out of reach" about an address that was one command away.
+    proxy_t targetProxy;
+    proxy_for(&target, &targetProxy);
+
+    if (rc == HTTP_URL_OK && os64_streq(target.scheme, "https") && !targetProxy.inUse)
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: that address is https and os64 has no TLS of its own —"
+                     " set $https_proxy to a machine that has one, and it becomes reachable.\n");
+        return;
+    }
+
+    char whole[HTTP_LINE_MAX + HTTP_HOST_MAX + 16];
+    if (http_url_absolute(from, location, whole, sizeof(whole)))
+        os64_hprintf(OS64_STDERR, "os64get: to follow it by hand:  os64get %s\n", whole);
+    else
+        os64_hprintf(OS64_STDERR, "os64get: that is relative to the page you asked for,"
+                                  " and os64get needs a whole URL.\n");
+}
+
+// Fetch one URL into one file, staged and published exactly as the valet's
+// files are. `urlText` is what the person typed, kept for the diagnostics —
+// a complaint about a URL should quote the URL, not a reassembled version of
+// it that differs in some way the reader then has to account for.
+static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *proxy,
+                     const char *destOverride, bool quiet)
+{
+    char name[GET_PATH_MAX];
+    if (!url_basename(url, name, sizeof(name)))
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: %s does not name a file to save — say where with a DEST\n",
+                     urlText);
+        return GET_USAGE;
+    }
+
+    // The command line's word is final, under cp(1)'s rule since 1971: an
+    // existing directory receives the file under its own name, anything else
+    // IS the path. Without a DEST the file lands in the current directory —
+    // NOT wherever os64get.conf would have sent a valet file of that name.
+    char dest[GET_PATH_MAX];
+    bool ok;
+    if (destOverride != NULL)
+    {
+        os64_dirent_t into;
+        bool intoDir = (os64_stat(destOverride, &into) >= 0) &&
+                       (into.flags & OS64_DE_DIR) != 0;
+        ok = join_path(dest, sizeof(dest), intoDir ? destOverride : NULL,
+                                           intoDir ? name : destOverride);
+    }
+    else
+    {
+        ok = join_path(dest, sizeof(dest), NULL, name);
+    }
+    if (!ok)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: destination path too long\n");
+        return GET_USAGE;
+    }
+
+    char partPath[GET_PATH_MAX];
+    if (os64_snprintf(partPath, sizeof(partPath), "%s.part", dest) >= (int32_t)sizeof(partPath))
+    {
+        os64_hprintf(OS64_STDERR, "os64get: path is too long to append '.part'\n");
+        return GET_WRITE_FAILED;
+    }
+
+    // THE NOTICE IS NOT BEHIND -q, deliberately, and the precedent is this
+    // program's own: warn_if_server_has_no_lots prints regardless, because a
+    // warning you silenced along with the progress is a warning you will not
+    // see on the run that mattered. What the reader needs is different for
+    // the two schemes — an http fetch through a proxy was never encrypted
+    // and the proxy is merely another hop, while an https fetch through one
+    // LOOKS like the encrypted thing it is not.
+    if (proxy->inUse)
+    {
+        if (os64_streq(url->scheme, "https"))
+            os64_hprintf(OS64_STDERR,
+                         "os64get: via the proxy at %s:%u, which TERMINATES the TLS — it holds this"
+                         " page in the clear, and the leg from here to it is plain text."
+                         " This is not end-to-end encryption.\n",
+                         proxy->host, (unsigned)proxy->port);
+        else
+            os64_hprintf(OS64_STDERR, "os64get: via the proxy at %s:%u\n",
+                         proxy->host, (unsigned)proxy->port);
+    }
+
+    // ── Dial: the proxy if there is one, the origin if not ──────────────
+    // The CONNECTION goes to whoever is answering; the ADDRESS stays in the
+    // request line. That split is the whole of proxying.
+    const char *peerHost = proxy->inUse ? proxy->host : url->host;
+    uint16_t    peerPort = proxy->inUse ? proxy->port : url->port;
+
+    char dialstring[GET_DIAL_MAX];
+    if (!build_dialstring(dialstring, sizeof(dialstring), peerHost, peerPort))
+        return GET_USAGE;
+
+    int64_t conn = os64_dial(dialstring);
+    if (conn < 0)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: cannot reach %s%s:%u — %s\n",
+                     proxy->inUse ? "the proxy at " : "", peerHost,
+                     (unsigned)peerPort, os64_dial_reason(conn));
+        return GET_DIAL_FAILED;
+    }
+
+    // ── Ask ─────────────────────────────────────────────────────────────
+    char request[HTTP_LINE_MAX];
+    if (!http_request(request, sizeof(request), url, proxy->inUse))
+    {
+        os64_hprintf(OS64_STDERR, "os64get: the request does not fit — the path is too long\n");
+        os64_close((int32_t)conn);
+        return GET_REQUEST_FAILED;
+    }
+    size_t reqlen = os64_strlen(request);
+    if (os64_write((int32_t)conn, request, reqlen) != (int64_t)reqlen)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: could not send the request\n");
+        os64_close((int32_t)conn);
+        return GET_REQUEST_FAILED;
+    }
+
+    // ── The reply's head ────────────────────────────────────────────────
+    url_source_t src = { .handle = (int32_t)conn };
+    http_stream_t stream;
+    http_stream_init(&stream, url_source_read, &src);
+
+    http_response_t reply;
+    http_head_result_t hrc = http_head_read(&stream, &reply);
+    if (hrc != HTTP_HEAD_OK)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", urlText, http_head_reason(hrc));
+        os64_close((int32_t)conn);
+        return GET_BAD_HEADER;
+    }
+
+    if (reply.status != 200)
+    {
+        // The server's own words for its own decision. A 404 is a refusal in
+        // the same sense the valet's "NO" is, and gets the same exit code.
+        os64_hprintf(OS64_STDERR, "os64get: %s — %ld %s\n", urlText, (long)reply.status,
+                     reply.reason[0] != '\0' ? reply.reason : "(no reason given)");
+        if (reply.status >= 300 && reply.status < 400)
+        {
+            redirect_advice(url, reply.location);
+        }
+        os64_close((int32_t)conn);
+        return GET_REFUSED;
+    }
+
+    // A FRAMING OR A CODING THIS PROGRAM CANNOT UNDO MUST NEVER BECOME A
+    // FILE. What would land is the envelope wearing the letter's name, and a
+    // `.html` full of chunk lengths or DEFLATE is worse than no file at all,
+    // because it looks like a successful download. The rule outlives the
+    // list: whatever this program learns to read moves out of these branches
+    // by being handled, and whatever it has not learned is refused by name.
+    if (reply.transferEncoding[0] != '\0' && !os64_streq(reply.transferEncoding, "identity"))
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: the reply is framed as '%s', which os64get does not read yet"
+                     " — nothing written\n", reply.transferEncoding);
+        os64_close((int32_t)conn);
+        return GET_UNSUPPORTED;
+    }
+    if (reply.contentEncoding[0] != '\0' && !os64_streq(reply.contentEncoding, "identity"))
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: the reply is encoded as '%s', which os64get does not decode yet"
+                     " — nothing written\n", reply.contentEncoding);
+        os64_close((int32_t)conn);
+        return GET_UNSUPPORTED;
+    }
+
+    // ── Receive into <dest>.part ────────────────────────────────────────
+    int64_t out = os64_open(partPath, "w");
+    if (out < 0)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: cannot create %s\n", partPath);
+        os64_close((int32_t)conn);
+        return GET_WRITE_FAILED;
+    }
+
+    // WITHOUT A Content-Length, THE CLOSE IS THE LENGTH. That is HTTP/1.0's
+    // original framing (RFC 1945 §7.2.2) and the reason `Connection: close`
+    // is in the request: the end of the body and the end of the connection
+    // are the same event, so a reply with no length is still readable — it
+    // just cannot be told apart from one that was cut short. When there IS a
+    // length, that ambiguity is gone and a short body is a failure.
+    uint8_t buf[GET_CHUNK];
+    uint64_t got = 0;
+    int status = GET_OK;
+    bool broke = false, ended = false;
+
+    while (!ended && !broke && (!reply.hasLength || got < reply.length))
+    {
+        size_t want = sizeof(buf);
+        if (reply.hasLength && (reply.length - got) < (uint64_t)want)
+            want = (size_t)(reply.length - got);
+
+        // Fill the buffer before writing it, for the disk's sake: a socket
+        // read answers with what has ARRIVED — a segment, or a scheduler
+        // pass's worth — and writing each of those hands ext2 a block or two
+        // at a time. Progress ticks from INSIDE the fill, every 4KB of
+        // arrival, so a slow link reads as slow rather than as hung.
+        size_t filled = 0;
+        while (filled < want)
+        {
+            int64_t n = http_stream_read(&stream, buf + filled, want - filled);
+            if (n < 0) { broke = true; break; }
+            if (n == 0) { ended = true; break; }
+            filled += (size_t)n;
+            uint64_t staged = got + filled;
+            if (!quiet && (staged % 4096 < (uint64_t)n ||
+                           (reply.hasLength && staged == reply.length)))
+            {
+                if (reply.hasLength)
+                    os64_printf("\r%s: %lu/%lu bytes", name,
+                                (unsigned long)staged, (unsigned long)reply.length);
+                else
+                    os64_printf("\r%s: %lu bytes", name, (unsigned long)staged);
+            }
+        }
+
+        if (filled > 0 && os64_write((int32_t)out, buf, filled) != (int64_t)filled)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: write to %s failed (disk full?)\n", partPath);
+            status = GET_WRITE_FAILED;
+            break;
+        }
+        got += filled;
+    }
+    if (!quiet)
+        os64_printf("\n");
+
+    os64_close((int32_t)conn);
+
+    if (status == GET_OK && broke)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: the connection broke after %lu bytes\n",
+                     (unsigned long)got);
+        status = GET_SHORT;
+    }
+    if (status == GET_OK && reply.hasLength && got != reply.length)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: the reply ended after %lu of %lu bytes\n",
+                     (unsigned long)got, (unsigned long)reply.length);
+        status = GET_SHORT;
+    }
+    if (status == GET_OK && os64_sync((int32_t)out) < 0)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: could not commit %s; %s NOT written\n",
+                     partPath, dest);
+        status = GET_WRITE_FAILED;
+    }
+    os64_close((int32_t)out);
+
+    if (status != GET_OK)
+    {
+        // The fragment stays as <dest>.part ON PURPOSE, exactly as it does on
+        // the valet's path: whatever was at the real name is still there and
+        // still whole, and the fragment is evidence for whoever is debugging
+        // the failure.
+        return status;
+    }
+
+    // A failed publish keeps the .part too — and here that is a COMPLETE
+    // download, not a fragment. The valet's path can sweep one away because
+    // the archive holds a verified copy; nothing holds this one but itself.
+    int rc = stage_commit(dest);
+    if (rc != GET_OK)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: the download is whole, at %s\n", partPath);
+        return rc;
+    }
+
+    if (!quiet)
+        os64_printf("%s: %lu bytes from %s\n", dest, (unsigned long)got, url->host);
+    return GET_OK;
+}
+
 int main(int argc, char **argv)
 {
     os64_args_t args = {0};
@@ -1218,21 +1866,106 @@ int main(int argc, char **argv)
         {'c', "changes-only", false, "display only changed files", .flag = &flgChangesOnly}};
 
     os64_args_init(&args, argc, argv, specs, 5);
-    args.about = "Fetch a file over the network, archive it, and install it only if it is intact.";
+    args.about = "Fetch a file over the network: the build valet's supply line, or any http:// address.";
     args.details = "DEST is a directory to install into, or the full path to install as; "
                    "it defaults to the directory /etc/os64get.conf names for NAME (or the cwd). "
                    "Keeps <archive>/DATE/TIME/NAME first, then installs from that copy via DEST.part + rename. "
-                   "With -a, asks the server what it has and fetches all of it — the whole-system refresh.";
+                   "With -a, asks the server what it has and fetches all of it — the whole-system refresh. "
+                   "An http:// or https:// URL fetches from the world instead: no routing, no archive "
+                   "and no checksum (HTTP offers none), landing in the current directory under the "
+                   "URL's own last path segment unless DEST says otherwise. https needs $https_proxy "
+                   "set to a machine that has a TLS, since os64 has none; $no_proxy lists the hosts "
+                   "that skip it. -a is the valet's verb, and on a URL fetch -n and -f have nothing "
+                   "to act on (no archive, no unchanged check).";
 
-    int32_t count = os64_args_parse(&args, "os64get [-q] [-n] [-f] HOST NAME [DEST]  |  os64get -a [-q] [-n] [-f] HOST",
+    int32_t count = os64_args_parse(&args,
+                                    "os64get [-q] [-n] [-f] HOST NAME [DEST]  |  os64get -a [-q] [-n] [-f] HOST"
+                                    "  |  os64get [-q] http://HOST/PATH [DEST]",
                                     operands, 4);
     if (count == OS64_ARG_HELP)
         return GET_OK;
-    if (count < 1 || (!all && count < 2))
+    if (count < 1)
     {
         if (count != OS64_ARG_ERROR)
             os64_hprintf(OS64_STDERR, all ? "os64get: need a HOST\n"
-                                          : "os64get: need a HOST and a NAME\n");
+                                          : "os64get: need a HOST and a NAME, or a URL\n");
+        return GET_USAGE;
+    }
+
+    // ── WHICH DIALECT? THE OPERAND ANSWERS ──────────────────────────────
+    // A URL carries "scheme://" and a valet operand is a bare word, so the
+    // two never have to be told apart by guesswork. Anything WITH a scheme
+    // is committed to the world's path — including a scheme this program
+    // cannot speak, which earns an honest refusal rather than a silent
+    // fallthrough into the valet's dialect (where "https://x/y" would have
+    // been dialled as a host name).
+    http_url_t url;
+    http_url_result_t urc = http_url_parse(operands[0], &url);
+    if (urc != HTTP_URL_NOT_A_URL)
+    {
+        if (all)
+        {
+            os64_hprintf(OS64_STDERR,
+                         "os64get: -a asks a valet for its whole catalogue; a URL names one file\n");
+            return GET_USAGE;
+        }
+        if (count > 2)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: a URL takes at most a DEST after it\n");
+            return GET_USAGE;
+        }
+        if (urc == HTTP_URL_SCHEME)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: os64get speaks http and https, not %s (%s)\n",
+                         url.scheme, operands[0]);
+            return GET_BAD_URL;
+        }
+        if (urc != HTTP_URL_OK)
+        {
+            os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", operands[0], http_url_reason(urc));
+            return GET_BAD_URL;
+        }
+
+        proxy_t proxy;
+        if (!proxy_for(&url, &proxy))
+            return GET_USAGE;
+
+        // WHETHER https IS REACHABLE IS A QUESTION ABOUT THIS MACHINE, not
+        // about the address — which is why the parser above answers only the
+        // second. os64 has no TLS and will BORROW one when its day comes
+        // (BROWSER.md's first ruling: thirty years of side-channel attacks
+        // teach no kernel lessons), so the only way to an https page today is
+        // a machine that already has a TLS fetching it for us.
+        if (os64_streq(url.scheme, "https") && !proxy.inUse)
+        {
+            os64_hprintf(OS64_STDERR,
+                         "os64get: %s is https, and os64 has no TLS of its own.\n"
+                         "os64get: set $https_proxy to a machine that will fetch it for you:\n"
+                         "os64get:     export https_proxy=http://<host>:8888/\n"
+                         "os64get: (tools/tlsproxy.py is one; it terminates the TLS, so it sees\n"
+                         "os64get:  the page in the clear — fine for reading, not for secrets.)\n"
+                         "os64get: or try the http:// address if the site still answers on one.\n",
+                         operands[0]);
+            return GET_BAD_URL;
+        }
+        // The DEST slot, checked before the wire: a URL there is somebody
+        // answering the advice above the way the sentence reads.
+        const char *dest = count >= 2 ? operands[1] : NULL;
+        if (dest_is_a_url(dest))
+        {
+            os64_hprintf(OS64_STDERR,
+                         "os64get: DEST says where to SAVE the file, and '%s' is an address.\n"
+                         "os64get: to fetch it:            os64get %s\n"
+                         "os64get: to save it somewhere:   os64get %s <directory-or-path>\n",
+                         dest, dest, operands[0]);
+            return GET_USAGE;
+        }
+        return fetch_url(&url, operands[0], &proxy, dest, quiet);
+    }
+
+    if (!all && count < 2)
+    {
+        os64_hprintf(OS64_STDERR, "os64get: need a HOST and a NAME, or a URL\n");
         return GET_USAGE;
     }
     if (all && count > 1)
@@ -1247,6 +1980,19 @@ int main(int argc, char **argv)
     }
 
     const char *host = operands[0];
+
+    // Same guard on this side: the valet's DEST is a place on this machine
+    // too, and there is no reading of "os64get HOST NAME http://..." where
+    // the third operand is a filename.
+    if (dest_is_a_url(count >= 3 ? operands[2] : NULL))
+    {
+        os64_hprintf(OS64_STDERR,
+                     "os64get: DEST says where to SAVE the file, and '%s' is an address.\n"
+                     "os64get: to fetch an address:  os64get %s\n",
+                     operands[2], operands[2]);
+        return GET_USAGE;
+    }
+
 
     // ── Where things go ─────────────────────────────────────────────────
     static conf_t conf;   // static: two 16-entry tables are too fat for the stack
