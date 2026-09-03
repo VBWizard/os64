@@ -59,6 +59,7 @@ Routes, and what each is FOR:
     /gzipped        Content-Encoding: gzip                 refused, not written
     /cut            half the promised body, then hangs up  a short body is a failure
     /junk           not HTTP at all                        a bad header line
+    /reason-latin1  404 with a Latin-1 reason phrase       high bytes are glyphs
     /stall          half a head, then 45s of silence       the idle deadline
 
 NOTE ON /redirect-https: it REDIRECTS to an https address, it does not fetch
@@ -257,6 +258,11 @@ class Handler(socketserver.StreamRequestHandler):
             self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
                                        ("Content-Length", 100000)]))
             self.send(BIG[:40000])
+        elif route == "/reason-latin1":
+            # A reason phrase in Latin-1 (obs-text, legal), which os64get
+            # prints. Every byte a program prints must be a glyph the console
+            # can draw; this route is how that is checked from ring 3.
+            self.send(head(404, "Nicht gefunden - déjà vu üñå", [("Content-Length", 0)]))
         elif route == "/junk":
             self.send(b"220 this is not an HTTP server\r\n\r\nwhatever\n")
         elif route == "/stall":
