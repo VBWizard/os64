@@ -172,24 +172,38 @@ time_t mktime_simple(const struct tm *time) {
 
 struct tm *gmtime(const time_t *timer, struct tm *tmbuf) {
   time_t time = *timer;
-  unsigned long dayclock, dayno;
+  long dayclock, dayno;
   int year = EPOCH_YR;
 
-  dayclock = (unsigned long) time % SECS_DAY;
-  dayno = (unsigned long) time / SECS_DAY;
+  // C division truncates toward zero, but calendar days must floor: -1 is
+  // the final second of 1969, not a negative clock on the first day of 1970.
+  // Keeping dayno signed also prevents a west-of-UTC adjustment near epoch 0
+  // from becoming an enormous unsigned year walk.
+  dayclock = time % SECS_DAY;
+  dayno = time / SECS_DAY;
+  if (dayclock < 0) {
+    dayclock += SECS_DAY;
+    dayno--;
+  }
 
   tmbuf->tm_sec = dayclock % 60;
   tmbuf->tm_min = (dayclock % 3600) / 60;
   tmbuf->tm_hour = dayclock / 3600;
   tmbuf->tm_wday = (dayno + 4) % 7; // Day 0 was a thursday
-  while (dayno >= (unsigned long) YEARSIZE(year)) {
+  if (tmbuf->tm_wday < 0)
+    tmbuf->tm_wday += 7;
+  while (dayno < 0) {
+    year--;
+    dayno += YEARSIZE(year);
+  }
+  while (dayno >= YEARSIZE(year)) {
     dayno -= YEARSIZE(year);
     year++;
   }
   tmbuf->tm_year = year - YEAR0;
   tmbuf->tm_yday = dayno;
   tmbuf->tm_mon = 0;
-  while (dayno >= (unsigned long) _ytab[LEAPYEAR(year)][tmbuf->tm_mon]) {
+  while (dayno >= _ytab[LEAPYEAR(year)][tmbuf->tm_mon]) {
     dayno -= _ytab[LEAPYEAR(year)][tmbuf->tm_mon];
     tmbuf->tm_mon++;
   }

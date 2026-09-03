@@ -4560,6 +4560,20 @@ static bool test_env_inherit_independence(void)
     return true;
 }
 
+static bool test_gmtime_negative_epoch(void)
+{
+    time_t before_epoch = -1;
+    struct tm utc_before_epoch;
+    gmtime(&before_epoch, &utc_before_epoch);
+    if (utc_before_epoch.tm_year != 69 || utc_before_epoch.tm_mon != 11 ||
+        utc_before_epoch.tm_mday != 31 || utc_before_epoch.tm_hour != 23 ||
+        utc_before_epoch.tm_min != 59 || utc_before_epoch.tm_sec != 59 ||
+        utc_before_epoch.tm_wday != 3) {
+        TEST_FAIL("gmtime(-1) did not land on the final second of 1969");
+    }
+    return true;
+}
+
 static bool test_time_zone_minute_offsets(void)
 {
     int saved = kTimeZoneOffsetMinutes;
@@ -4578,6 +4592,19 @@ static bool test_time_zone_minute_offsets(void)
         TEST_FAIL("NST3:30 did not parse as 210 minutes west");
     }
 
+    // This is the regression boundary: applying a westward offset to epoch
+    // zero produces a negative local epoch. gmtime must floor it into 1969,
+    // not cast it into an effectively endless unsigned year walk.
+    time_set_zone("EST5");
+    time_t epoch = 0;
+    struct tm local;
+    localtime_r(&epoch, &local);
+    if (local.tm_year != 69 || local.tm_mon != 11 || local.tm_mday != 31 ||
+        local.tm_hour != 19 || local.tm_min != 0 || local.tm_wday != 3) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("westward epoch-zero localtime did not land in 1969");
+    }
+
     time_set_zone("EST5EDT");
     if (kTimeZoneOffsetMinutes != -300) {
         kTimeZoneOffsetMinutes = saved;
@@ -4585,8 +4612,6 @@ static bool test_time_zone_minute_offsets(void)
     }
 
     time_set_zone("IST-5:30");
-    time_t epoch = 0;
-    struct tm local;
     localtime_r(&epoch, &local);
     if (local.tm_hour != 5 || local.tm_min != 30) {
         kTimeZoneOffsetMinutes = saved;
@@ -5042,6 +5067,7 @@ static void register_builtin_tests(void)
     test_register("env_multi_key",           test_env_multi_key,             TEST_PHASE_PREBOOT);
     test_register("env_inherit_copies",      test_env_inherit_copies,        TEST_PHASE_PREBOOT);
     test_register("env_inherit_independence",test_env_inherit_independence,  TEST_PHASE_PREBOOT);
+    test_register("gmtime_negative_epoch",   test_gmtime_negative_epoch,     TEST_PHASE_PREBOOT);
     test_register("time_zone_minute_offsets",test_time_zone_minute_offsets,  TEST_PHASE_PREBOOT);
     test_register("env_inherit_grown",       test_env_inherit_grown,         TEST_PHASE_PREBOOT);
     test_register("env_count_accurate",      test_env_count_accurate,        TEST_PHASE_PREBOOT);
