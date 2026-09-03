@@ -118,7 +118,7 @@ void renderer_glass_clear_locked(void);    // wipe to background
 // frame in ONE memcpy. A terminal switch is a single blit, not 16k pokes.
 void renderer_glass_defer_locked(void);
 void renderer_glass_blit_locked(void);
-void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff);
+void put_char(BasicRenderer *basicrenderer, unsigned char chr, unsigned int xOff, unsigned int yOff);
 void clear(BasicRenderer *basicrenderer, uint32_t color, bool resetCursor);
 void renderer_bust_lock(void);
 // Blit-throttle flush rider (processSignals): if a scroll burst left the

@@ -486,7 +486,16 @@ void print(const char* str) {
 // video for a text-console selection is the first customer (vt_select.c,
 // 2026-08-21), and gpm's highlight on the Linux console was exactly this
 // operation. Any future per-cell attribute lands here too.
-static void put_char_colors(BasicRenderer *basicrenderer, char chr,
+//
+// THE GLYPH INDEX IS AN UNSIGNED BYTE, in the signature and not only at the
+// multiply. On x86 a plain `char` is signed, so a byte at or above 0x80 —
+// Latin-1 in a web server's reason phrase, any byte of a binary somebody
+// cats — indexed BEHIND the glyph table: a ring-0 read of whatever precedes
+// the font module, driven by bytes a ring-3 program chose. A PSF1 font holds
+// 256 or 512 glyphs, so every unsigned byte is a glyph that exists. (Codex
+// review, PR #52 round 8, 2026-09-03 — found by following an http.c
+// predicate's claim that every byte it accepted was safely drawn.)
+static void put_char_colors(BasicRenderer *basicrenderer, unsigned char chr,
                             unsigned int xOff, unsigned int yOff,
                             uint32_t fg, uint32_t bg)
 {
@@ -519,7 +528,7 @@ static void put_char_colors(BasicRenderer *basicrenderer, char chr,
     }
 }
 
-void put_char(BasicRenderer *basicrenderer, char chr, unsigned int xOff, unsigned int yOff)
+void put_char(BasicRenderer *basicrenderer, unsigned char chr, unsigned int xOff, unsigned int yOff)
 {
     put_char_colors(basicrenderer, chr, xOff, yOff,
                     basicrenderer->color, kFrameBufferBackgroundColor);

@@ -17,11 +17,29 @@ common elements is a weekend. The bosses are:
    — recommendation BearSSL (no malloc, no syscalls, caller-owned buffers,
    constant-time), living in ring 3 as `/lib/libtls.so` with the trust
    store at `/etc/certs` on the conf ladder. The kernel never learns about
-   TLS. Until that slice: plain-HTTP sources (neverssl.com, textfiles.com,
-   FrogFind, mirrors) and, if wanted, a TLS-terminating proxy on the valet.
-   Rolling our own was considered and rejected on merit: the hazard is
+   TLS. Rolling our own was considered and rejected on merit: the hazard is
    thirty years of side-channel and oracle attacks, and surviving them
    teaches no kernel lessons.
+   **THE STOPGAP THIS RULING NAMED IS BUILT (2026-09-02): `tools/tlsproxy.py`.**
+   Chris asked for it after reading a badly-named test route (`/tohttps`,
+   since renamed) as a promise that the server would make the TLS call for
+   him — which is exactly what this line had sanctioned and nobody had yet
+   written. It speaks the proxy dialect every proxy has spoken since CERN's
+   in 1994 (the whole URL in the request line, "absolute-form", RFC 7230
+   §5.3.2), fetches over TLS with the host's own trust store, and hands the
+   answer back in plain HTTP. os64get picks it up from `$https_proxy`, with
+   `$http_proxy` and `$no_proxy` beside it; **the scheme picks the variable**,
+   which is load-bearing rather than tidy — one setting covering both
+   silently rerouted the local test fetches through a machine that could not
+   reach them (10.0.2.2 means nothing off the guest), and 502 was the first
+   anyone knew. **Verified: `https://example.com/` and the 137582-byte
+   `https://www.rfc-editor.org/rfc/rfc1945.txt` both arrived byte-identical
+   to curl's copies** — an OS with no TLS reading the HTTP/1.0 specification
+   over TLS. What it COSTS is printed on every proxied fetch and never
+   softened: the proxy terminates the TLS, so it holds the page in the clear
+   and the leg from os64 to it is plain text. Public reading, not secrets.
+   Plain-HTTP sources (neverssl.com, textfiles.com, FrogFind, mirrors) still
+   work with no proxy at all.
 2. **Layout.** Block flow, inline flow, the box model. Distant; the ladder
    climbs there via the gopher/line-mode client's UI. Not yet designed —
    deliberately.
@@ -62,9 +80,37 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    commit, maybe its own PR).** Bare-name operands keep meaning the valet
    (dialect untouched); an operand shaped like `http://host[:port]/path`
    means the world.
-   - (a) URL parse + HTTP/1.0 GET: request line, `Host:` header, status
-     line + headers parse, `Content-Length` read (read-until-close as the
-     fallback the length-less server forces).
+   - (a) **DONE 2026-09-02.** URL parse + HTTP/1.0 GET: request line,
+     `Host:` header, status line + headers parse, `Content-Length` read,
+     read-until-close as the fallback the length-less server forces. The
+     machinery lives in `apps/os64get/http.{c,h}` — the seam a libfetch
+     would eventually be sawn along, not the library. Two rulings the
+     increment forced, both written down where they bind: a URL fetch does
+     NOT route through `os64get.conf` (whose last rule is `* = /bin` — a
+     web page would install as a program) and keeps NO archive (a download
+     is not an install); and a framing or coding os64get cannot undo is
+     REFUSED BY NAME rather than written to disk, because a `.html` full of
+     chunk lengths looks like a successful download. Proof:
+     `tools/test_http_host.sh` drives the parser against http.client and
+     urllib.parse at every chunk size from one byte up, and
+     `tools/httptestd.py` is the deterministic server the guest is pointed
+     at — the awkward routes included (no length, cut mid-body, 301, a
+     coding to refuse). Verified in QEMU over slirp: sixteen fetches, every
+     exit code as designed, a 1 MiB body byte-identical host-side, a cut
+     transfer left as `cut.part` with nothing published, and the valet
+     dialect still checksumming and installing. And against the real web:
+     `http://textfiles.com/computers/` came back 70392 bytes BYTE-IDENTICAL
+     to curl's copy on the host — a real server, a real path ending in
+     '/', a real index.html. neverssl.com did NOT answer under QEMU — DNS
+     resolved it, the SYN went out and was retransmitted three times with no
+     SYN-ACK, and `/sys/net/tcp` said exactly that in one `cat`
+     (`connect_timeouts: 2`, `rexmit 3`, mss still 536 because nothing ever
+     came back to negotiate one). **Chris then fetched the same page on the
+     P5 the same day**, which settles what that was: slirp not relaying to
+     that host, not a debt in the stack. Worth writing down for the shape of
+     the evidence rather than the verdict — the counters answered "who
+     failed" in one command, and a second machine answered "whose fault"
+     in one try. Neither cost a debugging session.
    - (b) chunked transfer-encoding.
    - (c) redirects: 301/302/307/308, `Location:`, hop cap ~5, refuse
      https:// targets HONESTLY (name the reason: no TLS yet).
@@ -78,9 +124,19 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    shape; future customers: gopher client, the browser) is a LATER,
    Fable-reviewed slice. Do not build the .so speculatively
    (consumer-driven growth, the house rule).
-   Verification: a local `python3 -m http.server` behind the harness for
-   deterministic tests; neverssl.com / textfiles.com / frogfind.com for
-   the real world.
+   Verification: `tools/httptestd.py` behind the harness for deterministic
+   tests (it grew out of the `python3 -m http.server` this line used to name —
+   a well-behaved library will not produce a reply with no Content-Length or
+   a connection cut mid-body on request); neverssl.com / textfiles.com /
+   frogfind.com for the real world. FOR AN END-TO-END IMAGE TEST, which
+   wants a format libimage actually reads, the modern web is nearly useless
+   — everything is PNG or JPEG now — but John Burkardt's data archive at the
+   University of South Carolina still serves real 24-bit Windows BMPs:
+   `https://people.math.sc.edu/Burkardt/data/bmp/blackbuck.bmp` (786486
+   bytes, 512x512x24), and `lena.bmp` and `snail.bmp` beside it. https, so
+   they exercise the proxy too, and `os64get.conf` already routes `*.bmp` to
+   /home/images where gview will find them. Written down because finding
+   them took longer than fetching them.
 
 4. **gopher client (port 70).** Fetch-and-close: selector + CRLF, read to
    EOF; menus are lines of `<type>\t<display>\t<selector>\t<host>\t<port>`.
