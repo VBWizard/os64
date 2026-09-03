@@ -3572,7 +3572,7 @@ static bool test_ext2_readonly_demotion(void)
         shadow.fops->close(file);
     }
 
-    const char modes[] = { 'w', 'c', 'a' };
+    const char modes[] = { 'w', 'c', 'a', 'x' };
     for (unsigned i = 0; i < sizeof(modes); i++) {
         char mode[2] = { modes[i], '\0' };
         file = NULL;
@@ -3584,6 +3584,11 @@ static bool test_ext2_readonly_demotion(void)
     file = NULL;
     if (saved_open(&file, created_path, "c", &shadow) == 0) {
         ROD_FAIL("retained open callback created a file after demotion\n");
+        shadow.fops->close(file);
+    }
+    file = NULL;
+    if (saved_open(&file, created_path, "x", &shadow) == 0) {
+        ROD_FAIL("retained exclusive open created a file after demotion\n");
         shadow.fops->close(file);
     }
     if (saved_mkdir(mkdir_path, &shadow) == 0)
@@ -3609,7 +3614,7 @@ static bool test_ext2_readonly_demotion(void)
     kRootFilesystem->fops->rm(mkdir_path, kRootFilesystem);
 
     if (ok)
-        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/truncate/append/write/rm/rename/mkdir refused)\n");
+        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/exclusive-create/truncate/append/write/rm/rename/mkdir refused)\n");
     return ok;
 #undef ROD_FAIL
 }
@@ -3655,7 +3660,41 @@ static bool test_ext2_secondary_write(void)
     char buf[64];
     vfs_file_t *f = NULL;
 
-    // 1. Create, write, close, reopen, read back byte-exact.
+    // 1. Exclusive creation: one new inode and handle, then a refusal that
+    //    preserves its contents rather than truncating through the name.
+    fs->fops->rm("/__xtest.txt", fs);
+    if (fs->fops->open(&f, "/__xtest.txt", "x", fs) != 0) {
+        ES_FAIL("exclusive create /__xtest.txt failed\n");
+        return false;
+    }
+    if (fs->fops->write(f, msg1, sizeof(msg1) - 1) != (int)(sizeof(msg1) - 1)) {
+        ES_FAIL("write through exclusive handle failed\n");
+        fs->fops->close(f);
+        return false;
+    }
+    vfs_file_t *second = NULL;
+    if (fs->fops->open(&second, "/__xtest.txt", "x", fs) == 0) {
+        ES_FAIL("exclusive open accepted an existing name\n");
+        fs->fops->close(second);
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->fops->open(&f, "/__xtest.txt", "r", fs) != 0) {
+        ES_FAIL("reopen after exclusive create failed\n");
+        return false;
+    }
+    int n = fs->fops->read(f, buf, sizeof(buf));
+    fs->fops->close(f);
+    f = NULL;
+    if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0 ||
+        fs->fops->rm("/__xtest.txt", fs) != 0) {
+        ES_FAIL("exclusive-create contents changed or cleanup failed (n=%d)\n", n);
+        return false;
+    }
+
+    // 2. Create, write, close, reopen, read back byte-exact.
     if (fs->fops->open(&f, "/__wtest.txt", "c", fs) != 0) {
         ES_FAIL("create /__wtest.txt failed\n");
         return false;
@@ -3671,7 +3710,7 @@ static bool test_ext2_secondary_write(void)
         ES_FAIL("reopen after create failed\n");
         return false;
     }
-    int n = fs->fops->read(f, buf, sizeof(buf));
+    n = fs->fops->read(f, buf, sizeof(buf));
     fs->fops->close(f);
     f = NULL;
     if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0) {
@@ -3679,7 +3718,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 2. Append; verify the concatenation and the stat'd size.
+    // 3. Append; verify the concatenation and the stat'd size.
     if (fs->fops->open(&f, "/__wtest.txt", "a", fs) != 0) {
         ES_FAIL("append open failed\n");
         return false;
@@ -3698,7 +3737,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 3. Truncate via "w": size drops to 0 territory, then rewrite.
+    // 4. Truncate via "w": size drops to 0 territory, then rewrite.
     if (fs->fops->open(&f, "/__wtest.txt", "w", fs) != 0) {
         ES_FAIL("truncating open failed\n");
         return false;
@@ -3723,7 +3762,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 4. Growth across the single-indirect boundary. At 1KB blocks the
+    // 5. Growth across the single-indirect boundary. At 1KB blocks the
     //    direct blocks end at byte 12,287; a 16KB file forces the indirect
     //    chain into existence. Self-describing 16-byte records, same idea
     //    as pattern.bin.
@@ -3777,7 +3816,7 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
 
-    // 5. A hole: seek far past end, write one record; the gap reads zeros.
+    // 6. A hole: seek far past end, write one record; the gap reads zeros.
     if (fs->fops->open(&f, "/__whole.bin", "c", fs) != 0) {
         ES_FAIL("create /__whole.bin failed\n");
         return false;
@@ -3815,7 +3854,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 6. mkdir; a file inside proves it's a real directory; readdir sees the
+    // 7. mkdir; a file inside proves it's a real directory; readdir sees the
     //    file and (Plan 9 doctrine) no dot entries.
     if (fs->dops->mkdir("/__wdir", fs) != 0) {
         ES_FAIL("mkdir /__wdir failed\n");
@@ -3847,7 +3886,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 7. The one removal verb, all four verdicts: non-empty dir refused,
+    // 8. The one removal verb, all four verdicts: non-empty dir refused,
     //    nonexistent refused, file removed, then-empty dir removed.
     if (fs->fops->rm("/__wdir", fs) == 0) {
         ES_FAIL("rm of NON-empty dir succeeded (must refuse)\n");
@@ -3868,7 +3907,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 8. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
+    // 9. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
     //
     //    Ruling 5 made rm refuse ANY open file, and this step asserted
     //    exactly that. The orphan slice superseded it: an open REGULAR file
@@ -3954,14 +3993,14 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 9. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
+    // 10. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
     //    indirect chain, /__whole.bin a sparse map. e2fsck audits the wake.
     if (fs->fops->rm("/__wbig.bin", fs) != 0 || fs->fops->rm("/__whole.bin", fs) != 0) {
         ES_FAIL("cleanup rm failed\n");
         return false;
     }
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (exclusive-create/create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
     return true;
 }
 #undef ES_FAIL

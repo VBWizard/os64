@@ -3,9 +3,8 @@
 // bookkeeping, dirent surgery — everything that mutates the disk) lives next
 // door in ext2_write.c, added 2026-08-04, the day os64 wrote its first ext2
 // byte. The two halves share the private seam ext2_internal.h and map onto
-// the two op-table pairs: ext2_fops/ext2_dops (read-only — what the ROOT
-// mounts until writable-root is ratified) and ext2_rw_fops/ext2_rw_dops
-// (the superset secondary mounts get).
+// two op-table pairs: ext2_fops/ext2_dops for requested or forced read-only
+// mounts, and ext2_rw_fops/ext2_rw_dops for writable mounts.
 //
 // The read half was verified against a filesystem os64 NEVER TOUCHED:
 // partition 2 of the build image is formatted by the host's mkfs.ext2 and
@@ -324,10 +323,9 @@ uint32_t ext2_resolve_path(vfs_filesystem_t *fs, ext2_fs_t *e,
 }
 
 // ── The open-inode refcount table ───────────────────────────────────────────
-// The rm-of-an-open-file refusal (ruled 2026-08-04; contract in
-// ext2_internal.h). Every open on EITHER op table passes through here, so a
-// writable mount's rm sees read-only handles too. The lock is held for a
-// 64-slot scan and nothing else.
+// The open-inode lifetime contract (ext2_internal.h). Every open on either
+// op table registers here, so namespace mutation sees read-only and writable
+// handles alike. The lock is held for a 64-slot scan and nothing else.
 
 bool ext2_openref_register(ext2_fs_t *e, uint32_t ino)
 {
@@ -341,7 +339,7 @@ bool ext2_openref_register(ext2_fs_t *e, uint32_t ino)
 			spinlock_release_irqrestore(&e->open_lock, flags);
 			return true;
 		}
-		if (e->open_refs[i].ino == 0 && free_slot < 0)
+		if (e->open_refs[i].ino == 0 && e->open_refs[i].count == 0 && free_slot < 0)
 			free_slot = i;
 	}
 	if (free_slot < 0)
@@ -358,6 +356,51 @@ bool ext2_openref_register(ext2_fs_t *e, uint32_t ino)
 	e->open_refs[free_slot].count = 1;
 	spinlock_release_irqrestore(&e->open_lock, flags);
 	return true;
+}
+
+int ext2_openref_reserve(ext2_fs_t *e)
+{
+	uint64_t flags = spinlock_acquire_irqsave(&e->open_lock);
+	for (int i = 0; i < EXT2_OPEN_TABLE_SLOTS; i++)
+	{
+		if (e->open_refs[i].ino == 0 && e->open_refs[i].count == 0)
+		{
+			// An inode number is not known yet. count distinguishes this owned
+			// reservation from a free zeroed slot without inventing an inode
+			// sentinel that could collide with a legal 32-bit ext2 inode.
+			e->open_refs[i].count = 1;
+			spinlock_release_irqrestore(&e->open_lock, flags);
+			return i;
+		}
+	}
+	spinlock_release_irqrestore(&e->open_lock, flags);
+	printd(DEBUG_VFS, "ext2: open-inode table full (%u slots) — refusing exclusive create\n",
+	       EXT2_OPEN_TABLE_SLOTS);
+	return -1;
+}
+
+bool ext2_openref_commit(ext2_fs_t *e, int slot, uint32_t ino)
+{
+	if (slot < 0 || slot >= EXT2_OPEN_TABLE_SLOTS || ino == 0)
+		return false;
+
+	uint64_t flags = spinlock_acquire_irqsave(&e->open_lock);
+	bool reserved = e->open_refs[slot].ino == 0 && e->open_refs[slot].count == 1;
+	if (reserved)
+		e->open_refs[slot].ino = ino;
+	spinlock_release_irqrestore(&e->open_lock, flags);
+	return reserved;
+}
+
+void ext2_openref_cancel(ext2_fs_t *e, int slot)
+{
+	if (slot < 0 || slot >= EXT2_OPEN_TABLE_SLOTS)
+		return;
+
+	uint64_t flags = spinlock_acquire_irqsave(&e->open_lock);
+	if (e->open_refs[slot].ino == 0 && e->open_refs[slot].count == 1)
+		e->open_refs[slot].count = 0;
+	spinlock_release_irqrestore(&e->open_lock, flags);
 }
 
 // Returns TRUE when this was the LAST handle on the inode — the caller's cue
@@ -403,10 +446,33 @@ uint32_t ext2_openref_count(ext2_fs_t *e, uint32_t ino)
 
 // ── File operations ─────────────────────────────────────────────────────────
 
-// The shared open core: resolve an EXISTING regular file, count it open,
-// build the handle. Both op tables' opens compose this — the read-only
-// table's open below adds nothing but the mode check; the writable table's
-// (ext2_open_rw, ext2_write.c) adds create/truncate/append around it.
+// Build a file handle for an inode the caller has already counted open.
+// Existing-file opens and exclusive creation share this final shape.
+void ext2_open_handle_init(vfs_file_t **out, vfs_file_t *file,
+                           ext2_handle_t *h, const char *path,
+                           vfs_filesystem_t *vfs_fs, uint32_t ino,
+                           const ext2_inode_t *inode)
+{
+	h->inode = *inode;
+	h->ino = ino;
+	h->pos = 0;
+	h->size = ext2_regular_file_size(inode);
+	h->blockbuf = NULL;
+	h->blockbuf_index = (uint32_t)~0u;
+
+	file->handle = h;
+	file->f_path = (char *)path;   // same contract as FAT: caller's pointer,
+	                              // caller's lifetime problem
+	// The inode number IS ext2's file identity (vfs.h f_ident). The openref
+	// already registered by the caller pins it until this handle closes.
+	file->f_ident = ino;
+	file->fops = vfs_fs->fops;
+	file->owner = vfs_fs;
+
+	vfs_openfile_register(file);
+	*out = file;
+}
+
 int ext2_open_existing(vfs_file_t **vfs_file, const char *path,
                        vfs_filesystem_t *vfs_fs)
 {
@@ -439,29 +505,8 @@ int ext2_open_existing(vfs_file_t **vfs_file, const char *path,
 		return -1;
 	}
 
-	h->inode = probe.inode;
-	h->ino = ino;
-	h->pos = 0;
-	h->size = ext2_regular_file_size(&probe.inode);
-	h->blockbuf = NULL;
-	h->blockbuf_index = (uint32_t)~0u;
-
-	(*vfs_file)->handle = h;
-	(*vfs_file)->f_path = (char *)path;   // same contract as FAT: caller's
-	                                      // pointer, caller's lifetime problem
-	// The inode number IS ext2's file identity (vfs.h f_ident) — the whole
-	// point of an inode since 1969. Pinned for as long as this handle lives:
-	// the openref registered just above is what stops a removal from freeing
-	// the number for reuse.
-	(*vfs_file)->f_ident = ino;
-	(*vfs_file)->fops = vfs_fs->fops;
-	(*vfs_file)->owner = vfs_fs;
-
-	// VFS open-file registry (every open path — ro and rw — funnels through
-	// here, so this one call covers all four). ext2's sync is nearly free
-	// (write-through already committed everything), but a uniform registry
-	// is what lsof-shaped futures are built on.
-	vfs_openfile_register(*vfs_file);
+	ext2_open_handle_init(vfs_file, *vfs_file, h, path, vfs_fs, ino,
+	                      &probe.inode);
 	return 0;
 }
 
@@ -469,7 +514,7 @@ static int ext2_open(vfs_file_t **vfs_file, const char *path, const char *mode,
                      vfs_filesystem_t *vfs_fs)
 {
 	// THE READ-ONLY TABLE's open: "r" is the entire mode vocabulary. Refusing
-	// "w"/"a"/"c" here — loudly, at open — beats writes that silently go
+	// "w"/"a"/"c"/"x" here — loudly, at open — beats writes that silently go
 	// nowhere.
 	if (mode == NULL || mode[0] != 'r' || mode[1] != '\0')
 		return -1;

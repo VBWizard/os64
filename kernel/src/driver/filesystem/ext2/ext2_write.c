@@ -1311,8 +1311,11 @@ static uint32_t ext2_split_path(vfs_filesystem_t *fs, ext2_fs_t *e,
 // (mtime rides along either way — caller need not re-write it).
 //
 // Ordering: an in-place insert is one whole-block RMW (a reader sees the
-// entry absent or complete, never partial). Growth writes the new block's
-// content first, then the dir inode that references it.
+// entry absent or complete, never partial). Once that block write succeeds,
+// insertion succeeded even if the parent's mtime write fails — reporting
+// failure then would invite a caller to free the now-named child inode.
+// Growth writes the new block's content first, then the dir inode that makes
+// that block and its entry reachable.
 static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
                            uint32_t dir_ino, ext2_inode_t *dir,
                            const char *name, uint32_t len,
@@ -1356,11 +1359,13 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 				de->name_len = (uint8_t)len;
 				de->file_type = file_type;
 				memcpy(de->name, name, len);
-				int rc = ext2_write_fs_block(fs, e, disk_block, buf) == 0 ? 0 : -1;
+				int rc = ext2_write_fs_block(fs, e, disk_block, buf);
 				if (rc == 0)
 				{
 					dir->i_mtime = (uint32_t)kSystemCurrentTime;
-					rc = ext2_write_inode_disk(fs, e, dir_ino, dir);
+					if (ext2_write_inode_disk(fs, e, dir_ino, dir) != 0)
+						EXT2_ALARM("ext2: directory entry '%s' was inserted, but parent inode %u mtime could not be written\n",
+						           name, dir_ino);
 				}
 				wr_scratch_put(e, buf);
 				return rc;
@@ -1379,11 +1384,13 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 				ne->name_len = (uint8_t)len;
 				ne->file_type = file_type;
 				memcpy(ne->name, name, len);
-				int rc = ext2_write_fs_block(fs, e, disk_block, buf) == 0 ? 0 : -1;
+				int rc = ext2_write_fs_block(fs, e, disk_block, buf);
 				if (rc == 0)
 				{
 					dir->i_mtime = (uint32_t)kSystemCurrentTime;
-					rc = ext2_write_inode_disk(fs, e, dir_ino, dir);
+					if (ext2_write_inode_disk(fs, e, dir_ino, dir) != 0)
+						EXT2_ALARM("ext2: directory entry '%s' was inserted, but parent inode %u mtime could not be written\n",
+						           name, dir_ino);
 				}
 				wr_scratch_put(e, buf);
 				return rc;
@@ -1427,29 +1434,41 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 // ── File creation ───────────────────────────────────────────────────────────
 
 // Create an empty regular file at `path`. Caller holds write_lock.
-// Returns the new inode number, or 0. Ordering: fully-initialized child
-// inode first (its bitmap bit was set by the allocator), parent dirent LAST
-// — a crash in between leaks an inode e2fsck reclaims, and no reader ever
-// finds a name pointing at an uninitialized inode.
+// Returns the new inode number, or 0. A nonnegative open_slot is an openref
+// reservation this function CONSUMES on every return: success binds it to the
+// new inode before publishing the name; failure cancels it. Ordering is child
+// inode, optional openref, parent dirent LAST — a crash in between leaks an
+// inode e2fsck reclaims, and no reader finds a name pointing at an
+// uninitialized or unpinned inode.
 static uint32_t ext2_create_file(vfs_filesystem_t *fs, ext2_fs_t *e,
-                                 const char *path)
+                                 const char *path, int open_slot,
+                                 ext2_inode_t *created)
 {
 	ext2_inode_t parent;
 	const char *name;
 	uint32_t len;
 	uint32_t parent_ino = ext2_split_path(fs, e, path, &parent, &name, &len);
 	if (parent_ino == 0)
+	{
+		ext2_openref_cancel(e, open_slot);
 		return 0;
+	}
 
 	// Name already taken? (The open path checks existence first, but mkdir
 	// and future callers come through here too — cheap and load-bearing.)
 	if (ext2_dir_find(fs, e, &parent, name, len) != 0)
+	{
+		ext2_openref_cancel(e, open_slot);
 		return 0;
+	}
 
 	uint32_t goal_group = (parent_ino - 1) / e->sb.s_inodes_per_group;
 	uint32_t ino = ext2_alloc_inode(fs, e, goal_group, false);
 	if (ino == 0)
+	{
+		ext2_openref_cancel(e, open_slot);
 		return 0;
+	}
 
 	ext2_inode_t node;
 	memset(&node, 0, sizeof(node));
@@ -1461,15 +1480,36 @@ static uint32_t ext2_create_file(vfs_filesystem_t *fs, ext2_fs_t *e,
 	{
 		// The inode never became real: give the number back.
 		ext2_free_inode(fs, e, ino, false);
+		ext2_openref_cancel(e, open_slot);
 		return 0;
+	}
+
+	bool registered = false;
+	if (open_slot >= 0)
+	{
+		if (!ext2_openref_commit(e, open_slot, ino))
+		{
+			// Losing a private reservation is an internal invariant failure,
+			// but the disk still gets the ordinary clean creation failure.
+			EXT2_ALARM("ext2: exclusive create lost reserved open-inode slot %d\n",
+			           open_slot);
+			ext2_openref_cancel(e, open_slot);
+			ext2_free_inode(fs, e, ino, false);
+			return 0;
+		}
+		registered = true;
 	}
 
 	if (ext2_dir_insert(fs, e, parent_ino, &parent, name, len,
 	                    ino, EXT2_FT_REG_FILE) != 0)
 	{
+		if (registered)
+			(void)ext2_openref_unregister(e, ino);
 		ext2_free_inode(fs, e, ino, false);
 		return 0;
 	}
+	if (created != NULL)
+		*created = node;
 	return ino;
 }
 
@@ -1721,9 +1761,10 @@ static int ext2_fprintf(vfs_file_t *vfs_file, const char *fmt, ...)
 //   "a"      — append: open at end, CREATING the file if absent
 //   "w"/"c"  — create-or-truncate ("c" predates "w" and is byte-identical;
 //              kept for existing callers, same as FAT)
+//   "x"      — create a new file, refusing an existing name atomically
 // Creation and truncation mutate the disk, so those arms run under
-// write_lock; the handle itself is built by the same shared core every open
-// uses, AFTER the lock drops (the core takes no locks — it's the read path).
+// write_lock. Exclusive creation binds its handle to the inode created under
+// that lock; the older create-or-truncate modes retain their path reopen.
 
 // The truncate arm, factored for clarity. Caller holds write_lock.
 static int ext2_truncate_locked(vfs_filesystem_t *fs, ext2_fs_t *e,
@@ -1789,7 +1830,7 @@ static int ext2_open_rw(vfs_file_t **vfs_file, const char *path, const char *mod
 					spinlock_release_irqrestore(&e->write_lock, flags);
 					return -1;
 				}
-				uint32_t ino = ext2_create_file(vfs_fs, e, path);
+				uint32_t ino = ext2_create_file(vfs_fs, e, path, -1, NULL);
 				spinlock_release_irqrestore(&e->write_lock, flags);
 				if (ino == 0)
 					return -1;
@@ -1826,7 +1867,7 @@ static int ext2_open_rw(vfs_file_t **vfs_file, const char *path, const char *mod
 			}
 			else
 			{
-				ino = ext2_create_file(vfs_fs, e, path);
+				ino = ext2_create_file(vfs_fs, e, path, -1, NULL);
 				if (ino == 0)
 				{
 					spinlock_release_irqrestore(&e->write_lock, flags);
@@ -1840,6 +1881,57 @@ static int ext2_open_rw(vfs_file_t **vfs_file, const char *path, const char *mod
 			// (empty) file we just made. The refusal above was about
 			// truncating a file somebody ALREADY held.
 			return ext2_open_existing(vfs_file, path, vfs_fs);
+		}
+
+		case 'x':
+		{
+			if (vfs_fs->read_only)
+				return -1;
+
+			// Allocate every fallible in-memory resource before the name can
+			// exist. The openref reservation also guarantees that creation
+			// cannot succeed and then fail for lack of an inode-lifetime slot.
+			ext2_handle_t *h = kmalloc(sizeof(ext2_handle_t));
+			vfs_file_t *file = kmalloc(sizeof(vfs_file_t));
+			if (h == NULL || file == NULL)
+			{
+				if (h != NULL) kfree(h);
+				if (file != NULL) kfree(file);
+				return -1;
+			}
+			int open_slot = ext2_openref_reserve(e);
+			if (open_slot < 0)
+			{
+				kfree(h);
+				kfree(file);
+				return -1;
+			}
+
+			uint64_t flags = spinlock_acquire_irqsave(&e->write_lock);
+			if (vfs_fs->read_only)
+			{
+				ext2_openref_cancel(e, open_slot);
+				spinlock_release_irqrestore(&e->write_lock, flags);
+				kfree(h);
+				kfree(file);
+				return -1;
+			}
+
+			ext2_inode_t node;
+			uint32_t ino = ext2_create_file(vfs_fs, e, path, open_slot, &node);
+			spinlock_release_irqrestore(&e->write_lock, flags);
+			if (ino == 0)
+			{
+				kfree(h);
+				kfree(file);
+				return -1;
+			}
+
+			// Use the inode we created, not a second path lookup. A concurrent
+			// unlink or replacement after write_lock drops cannot redirect this
+			// handle to another task's file.
+			ext2_open_handle_init(vfs_file, file, h, path, vfs_fs, ino, &node);
+			return 0;
 		}
 
 		default:
@@ -2939,8 +3031,8 @@ refuse:
 // The RW pair: every read slot aliases the read half's functions (via the
 // RO tables — same function pointers, one implementation); the write slots
 // are this file's. A mount registered with this pair answers the tripwire's
-// mounted-writable question YES — which is the entire difference between
-// the root (RO pair, still guarded) and /ext2 (this pair, allowed the pen).
+// mounted-writable question YES; read-only or compatibility-demoted mounts
+// retain the guarded pair instead.
 vfs_file_operations_t ext2_rw_fops;
 vfs_directory_operations_t ext2_rw_dops;
 
