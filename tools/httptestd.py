@@ -38,6 +38,7 @@ that costs an afternoon if it is not said out loud:
 
 Routes, and what each is FOR:
 
+    /               this text                              the map, served
     /hello.txt      a small text file, Content-Length      the happy path
     /big.bin        1 MiB, Content-Length                  the 64KB write loop
     /slow.txt       Content-Length, dribbled out           the progress meter
@@ -50,7 +51,7 @@ Routes, and what each is FOR:
     /redirect-tricky 302 -> /hello.txt;reboot               the advice quotes it
     /redirect-relative 302 -> //example.com/elsewhere       resolved before judged
     /redirect-broken 302 -> /bad path                       unusable, said so
-    /chunked        Transfer-Encoding: chunked             refused, not written
+    /chunked        200000 bytes chunked, ext + trailer    the framing comes off
     /dots/..        a URL with no usable basename          DEST must still be honored
     /chunked-cut    chunked, terminator never sent         truncation must not pass
     /framing-spaced that framing, plus a blank before the colon
@@ -118,6 +119,25 @@ def big_bytes(size=1024 * 1024, seed=0x05064A17):
 
 
 BIG = big_bytes()
+CHUNKED = BIG[:200000]
+INDEX = (__doc__.strip() + "\n").encode("utf-8")
+
+
+def chunked(body, sizes):
+    """`body` in chunked transfer coding, cut at `sizes` (cycled), with a
+    chunk extension on the first piece and one trailer field — the optional
+    parts of the grammar, so a client that only reads the mandatory ones is
+    found out here rather than by the first real server that uses them."""
+    out = b""
+    at = 0
+    i = 0
+    while at < len(body):
+        n = min(sizes[i % len(sizes)], len(body) - at)
+        size = f"{n:x}" + (";os64=first" if i == 0 else "")
+        out += size.encode() + b"\r\n" + body[at:at + n] + b"\r\n"
+        at += n
+        i += 1
+    return out + b"0\r\nX-Body-Bytes: %d\r\n\r\n" % len(body)
 
 
 def head(status, reason, headers, version="HTTP/1.1"):
@@ -138,8 +158,8 @@ class Handler(socketserver.StreamRequestHandler):
     timeout = 30
 
     # A fetch-and-close client gets a fetch-and-close server: every reply
-    # ends by hanging up, which is HTTP/1.0's framing and the only one
-    # os64get speaks at this rung of the ladder.
+    # ends by hanging up, whatever else frames it — os64get asks for the
+    # close and does not speak keep-alive.
     def handle(self):
         try:
             request = self.read_head()
@@ -158,7 +178,13 @@ class Handler(socketserver.StreamRequestHandler):
         route = path.split("?", 1)[0]
         query = path.split("?", 1)[1] if "?" in path else ""
 
-        if route == "/hello.txt":
+        if route == "/":
+            # The map, served by the territory: this module's own docstring,
+            # so the page a client reads and the source a person reads are one
+            # text and cannot disagree about what a route is for.
+            self.send(head(200, "OK", [("Content-Type", "text/plain; charset=utf-8"),
+                                       ("Content-Length", len(INDEX))]) + INDEX)
+        elif route == "/hello.txt":
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
                                        ("Content-Length", len(HELLO))]) + HELLO)
         elif route == "/big.bin":
@@ -246,9 +272,13 @@ class Handler(socketserver.StreamRequestHandler):
                                        ("Transfer-Encoding", "gzip, chunked")]))
             self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
         elif route == "/chunked":
-            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+            # The grammar's whole vocabulary in one reply: sizes from one
+            # byte to past the client's read buffer, an extension, a trailer.
+            # The body is BIG's first 200000 bytes, so `--dump` has the file
+            # to compare against.
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
                                        ("Transfer-Encoding", "chunked")]))
-            self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
+            self.send(chunked(CHUNKED, [1, 7, 100, 4096, 9000, 65536, 3]))
         elif route == "/gzipped":
             body = zlib.compress(HELLO)
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
@@ -329,7 +359,8 @@ def dump_bodies(where):
     out = pathlib.Path(where)
     out.mkdir(parents=True, exist_ok=True)
     for name, body in (("hello.txt", HELLO), ("big.bin", BIG), ("slow.txt", SLOW),
-                       ("nolength.txt", NOLENGTH), ("index.html", DIRPAGE)):
+                       ("nolength.txt", NOLENGTH), ("index.html", DIRPAGE),
+                       ("chunked", CHUNKED)):
         (out / name).write_bytes(body)
     print(f"bodies written to {out}")
 

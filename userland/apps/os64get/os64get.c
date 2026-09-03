@@ -140,7 +140,8 @@
 // well formed: it is the ADDRESS that cannot be used.
 #define GET_BAD_URL        13
 // The reply is well formed and this program cannot honestly read it yet — a
-// chunked framing, or a content coding it does not decode. Distinct from
+// transfer coding other than chunked, or a content coding it does not
+// decode. Distinct from
 // GET_BAD_HEADER, which means the server said something that is not HTTP:
 // "I do not speak this" and "that was not speech" are different answers, and
 // a script driving a dozen fetches should not have to tell them apart from
@@ -1259,9 +1260,9 @@ static void lookup_lot(const char *host, const char *name, const conf_t *c,
 //     landed on this machine and when, so a bad build can be walked back by
 //     hand. A download is not an install and has nothing to walk back to.
 //   - IT HAS NO CHECKSUM, so it cannot tell "complete" from "correct", and
-//     says so rather than implying otherwise. HTTP offers a length; a body
-//     shorter than Content-Length fails loudly, and everything past that is
-//     the server's word.
+//     says so rather than implying otherwise. HTTP offers a length or chunk
+//     framing; a body cut before either is satisfied fails loudly, and
+//     everything past that is the server's word.
 //
 // What it KEEPS is the property this whole program is built around: the bytes
 // land in `<dest>.part` and the real name is only ever replaced by an atomic
@@ -1779,7 +1780,7 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
         // A framing header too long to read, or a 101 that hands the
         // connection to another protocol, is not a MALFORMED reply — it is a
         // legal one this program cannot honestly act on, the same answer the
-        // chunked and gzip refusals below give, reached a different way, and
+        // coding refusals below give, reached a different way, and
         // it earns the same exit code so a script cannot tell them apart by
         // accident.
         return (hrc == HTTP_HEAD_FRAMING || hrc == HTTP_HEAD_SWITCHED)
@@ -1802,14 +1803,15 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
 
     // A FRAMING OR A CODING THIS PROGRAM CANNOT UNDO MUST NEVER BECOME A
     // FILE. What would land is the envelope wearing the letter's name, and a
-    // `.html` full of chunk lengths or DEFLATE is worse than no file at all,
-    // because it looks like a successful download. The rule outlives the
-    // list: whatever this program learns to read moves out of these branches
-    // by being handled, and whatever it has not learned is refused by name.
-    if (reply.transferEncoding[0] != '\0' && !os64_streq(reply.transferEncoding, "identity"))
+    // `.html` full of DEFLATE is worse than no file at all, because it looks
+    // like a successful download. The rule outlives the list: whatever this
+    // program learns to read moves out of these branches by being handled
+    // (chunked did), and whatever it has not learned is refused by name.
+    http_body_t body;
+    if (!http_body_open(&body, &stream, &reply))
     {
         os64_hprintf(OS64_STDERR,
-                     "os64get: the reply is framed as '%s', which os64get does not read yet"
+                     "os64get: the reply is framed as '%s', which os64get does not read"
                      " — nothing written\n", reply.transferEncoding);
         os64_close((int32_t)conn);
         return GET_UNSUPPORTED;
@@ -1832,34 +1834,31 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
         return GET_WRITE_FAILED;
     }
 
-    // WITHOUT A Content-Length, THE CLOSE IS THE LENGTH. That is HTTP/1.0's
-    // original framing (RFC 1945 §7.2.2) and the reason `Connection: close`
-    // is in the request: the end of the body and the end of the connection
-    // are the same event, so a reply with no length is still readable — it
-    // just cannot be told apart from one that was cut short. When there IS a
-    // length, that ambiguity is gone and a short body is a failure.
+    // THE FRAMING IS THE BODY READER'S BUSINESS (http.h). What comes out of
+    // it is the file's bytes and nothing else, and when it answers 0 its
+    // result says whether the body ENDED or was merely STOPPED — a
+    // distinction only a length or chunked framing can draw. Without either,
+    // the close is the length (HTTP/1.0's original framing, RFC 1945 §7.2.2,
+    // and the reason `Connection: close` is in the request): a reply with no
+    // length is still readable, it just cannot be told apart from one that
+    // was cut short.
     uint8_t buf[GET_CHUNK];
     uint64_t got = 0;
     int status = GET_OK;
-    bool broke = false, ended = false;
+    bool over = false;
 
-    while (!ended && !broke && (!reply.hasLength || got < reply.length))
+    while (!over)
     {
-        size_t want = sizeof(buf);
-        if (reply.hasLength && (reply.length - got) < (uint64_t)want)
-            want = (size_t)(reply.length - got);
-
         // Fill the buffer before writing it, for the disk's sake: a socket
         // read answers with what has ARRIVED — a segment, or a scheduler
         // pass's worth — and writing each of those hands ext2 a block or two
         // at a time. Progress ticks from INSIDE the fill, every 4KB of
         // arrival, so a slow link reads as slow rather than as hung.
         size_t filled = 0;
-        while (filled < want)
+        while (filled < sizeof(buf))
         {
-            int64_t n = http_stream_read(&stream, buf + filled, want - filled);
-            if (n < 0) { broke = true; break; }
-            if (n == 0) { ended = true; break; }
+            int64_t n = http_body_read(&body, buf + filled, sizeof(buf) - filled);
+            if (n <= 0) { over = true; break; }
             filled += (size_t)n;
             uint64_t staged = got + filled;
             if (!quiet && (staged % 4096 < (uint64_t)n ||
@@ -1882,25 +1881,48 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
         got += filled;
     }
     if (!quiet)
+    {
+        // The meter's last tick: a length-framed body printed it when the
+        // count came due, but a chunked or close-delimited body learns its
+        // total only now, and a meter that stops at the last 4KB boundary
+        // reads as a transfer that stopped short.
+        if (!reply.hasLength)
+            os64_printf("\r%s: %lu bytes", name, (unsigned long)got);
         os64_printf("\n");
+    }
 
     os64_close((int32_t)conn);
 
-    if (status == GET_OK && broke)
+    if (status == GET_OK && body.result != HTTP_BODY_DONE)
     {
-        if (src.silent)
-            os64_hprintf(OS64_STDERR, "os64get: the server went silent for %u seconds"
-                         " after %lu bytes\n", URL_IDLE_MS / 1000, (unsigned long)got);
-        else
-            os64_hprintf(OS64_STDERR, "os64get: the connection broke after %lu bytes\n",
-                         (unsigned long)got);
-        status = GET_SHORT;
-    }
-    if (status == GET_OK && reply.hasLength && got != reply.length)
-    {
-        os64_hprintf(OS64_STDERR, "os64get: the reply ended after %lu of %lu bytes\n",
-                     (unsigned long)got, (unsigned long)reply.length);
-        status = GET_SHORT;
+        switch (body.result)
+        {
+        case HTTP_BODY_BROKE:
+            if (src.silent)
+                os64_hprintf(OS64_STDERR, "os64get: the server went silent for %u seconds"
+                             " after %lu bytes\n", URL_IDLE_MS / 1000, (unsigned long)got);
+            else
+                os64_hprintf(OS64_STDERR, "os64get: the connection broke after %lu bytes\n",
+                             (unsigned long)got);
+            status = GET_SHORT;
+            break;
+        case HTTP_BODY_CUT:
+            if (reply.hasLength)
+                os64_hprintf(OS64_STDERR, "os64get: the reply ended after %lu of %lu bytes\n",
+                             (unsigned long)got, (unsigned long)reply.length);
+            else
+                os64_hprintf(OS64_STDERR, "os64get: the reply ended after %lu bytes,"
+                             " before its last chunk\n", (unsigned long)got);
+            status = GET_SHORT;
+            break;
+        default:
+            // The server's chunk framing stopped being HTTP: "that was not
+            // speech", the same verdict a broken head earns.
+            os64_hprintf(OS64_STDERR, "os64get: after %lu bytes, %s\n",
+                         (unsigned long)got, http_body_reason(body.result));
+            status = GET_BAD_HEADER;
+            break;
+        }
     }
     if (status == GET_OK && os64_sync((int32_t)out) < 0)
     {

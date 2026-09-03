@@ -111,7 +111,22 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      the evidence rather than the verdict — the counters answered "who
      failed" in one command, and a second machine answered "whose fault"
      in one try. Neither cost a debugging session.
-   - (b) chunked transfer-encoding.
+   - (b) **DONE 2026-09-03.** HTTP/1.1 and chunked transfer coding. The
+     two are one slice because the version is a promise: a 1.0 client is
+     owed a length or a close, a 1.1 client must read chunks, and saying
+     1.1 without reading them would be the lie 1.0 was chosen to avoid.
+     The body reader (`http_body_open/read`, http.h) now owns the framing
+     — length, chunked, or the close — and os64get's receive loop sees only
+     the file's bytes and one verdict at the end: DONE, CUT, BROKE, or a
+     framing that stopped being HTTP. `Connection: close` stays in the
+     request because keep-alive is still not spoken. Extensions are
+     ignored whole, trailers read to their end and ignored, both bounded
+     by the head's own caps. Proof: the host harness runs every body
+     through the reference's de-chunker at every split size, and a table of
+     28 damaged chunk streams pins the verdict AND the byte count handed
+     back before it. Verified in QEMU against httptestd's `/chunked`
+     (200000 bytes, sizes 1 to 65536, an extension, a trailer —
+     byte-identical) and `/chunked-cut` (exit 7, `.part` left).
    - (c) redirects: 301/302/307/308, `Location:`, hop cap ~5, refuse
      https:// targets HONESTLY (name the reason: no TLS yet).
    - (d) `Content-Encoding: gzip` — stream through libgzip with a response

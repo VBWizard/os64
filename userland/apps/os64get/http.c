@@ -274,7 +274,7 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
     // a client that cannot inflate anything ends up with a gzip stream in a
     // file named .html. Asking for identity says what is true.
     int32_t n = os64_snprintf(out, cap,
-                              "GET %s HTTP/1.0\r\n"
+                              "GET %s HTTP/1.1\r\n"
                               "Host: %s\r\n"
                               "User-Agent: os64get/1 (os64)\r\n"
                               "Accept-Encoding: identity\r\n"
@@ -432,10 +432,11 @@ static line_result_t line_read(http_stream_t *s, char *out, size_t cap,
 
 // ── The answer ──────────────────────────────────────────────────────────
 
-// "HTTP/1.1 404 Not Found" — the version is read and ignored (we asked in
-// 1.0; what a server calls itself changes nothing this code does), the code
-// must be exactly three digits, and the reason phrase is the server's own
-// words, kept so a refusal can be reported in them rather than in ours.
+// "HTTP/1.1 404 Not Found" — the version is read and ignored (a 1.0 server
+// answers a 1.1 request with a 1.0 reply, and every framing either may use is
+// one http_body_read reads), the code must be exactly three digits, and the
+// reason phrase is the server's own words, kept so a refusal can be reported
+// in them rather than in ours.
 static bool status_parse(const char *line, http_response_t *out)
 {
     if (line[0] != 'H' || line[1] != 'T' || line[2] != 'T' || line[3] != 'P' || line[4] != '/')
@@ -743,4 +744,228 @@ int64_t http_stream_read(http_stream_t *s, void *out, size_t cap)
     os64_memcpy(out, s->buf + s->next, n);
     s->next += n;
     return (int64_t)n;
+}
+
+// ── The body, with its framing taken off ────────────────────────────────
+
+// Where a chunked reader is between calls. The framing is a grammar
+// (RFC 9112 §7.1) — size line, data, CRLF, repeat; a zero size, then trailer
+// lines to a blank one — and a read may hand the caller only part of one
+// chunk's data, so the position has to outlive the call.
+enum {
+    CHUNK_SIZE = 0,   // a chunk-size line is next
+    CHUNK_DATA,       // inside chunk-data, `remaining` bytes to go
+    CHUNK_DATA_END,   // the CRLF that closes a chunk's data is next
+    CHUNK_TRAILER,    // after the last chunk: trailer lines until a blank one
+    CHUNK_FINISHED
+};
+
+bool http_body_open(http_body_t *b, http_stream_t *s, const http_response_t *reply)
+{
+    os64_memset(b, 0, sizeof(*b));
+    b->s = s;
+    b->result = HTTP_BODY_OPEN;
+
+    if (reply->transferEncoding[0] != '\0' &&
+        !os64_streq_nocase(reply->transferEncoding, "identity")) {
+        if (!os64_streq_nocase(reply->transferEncoding, "chunked"))
+            return false;
+        b->framing = HTTP_FRAMING_CHUNKED;
+        b->state = CHUNK_SIZE;
+        return true;
+    }
+    if (reply->hasLength) {
+        b->framing = HTTP_FRAMING_LENGTH;
+        b->remaining = reply->length;
+        return true;
+    }
+    b->framing = HTTP_FRAMING_CLOSE;
+    return true;
+}
+
+static int64_t body_finish(http_body_t *b, http_body_result_t rc)
+{
+    b->result = rc;
+    return (rc == HTTP_BODY_DONE || rc == HTTP_BODY_CUT) ? 0 : -1;
+}
+
+// Read `cap` bytes at most of the current chunk's data (or of a length-framed
+// body — the same arithmetic). Ending here is a CUT: the peer promised more.
+static int64_t body_read_counted(http_body_t *b, void *out, size_t cap)
+{
+    if (b->remaining < (uint64_t)cap)
+        cap = (size_t)b->remaining;
+    int64_t n = http_stream_read(b->s, out, cap);
+    if (n < 0)
+        return body_finish(b, HTTP_BODY_BROKE);
+    if (n == 0)
+        return body_finish(b, HTTP_BODY_CUT);
+    b->remaining -= (uint64_t)n;
+    b->delivered += (uint64_t)n;
+    return n;
+}
+
+// "1a2f;ext=val" → 0x1a2f. Hex digits, then optional blanks, then either the
+// end or a ';' opening a chunk extension, which is ignored whole: this code
+// defines none, and RFC 9112 §7.1.1 says a recipient that does not define one
+// ignores it. Anything else on the line is not a chunk size.
+static bool chunk_size_parse(const char *line, uint64_t *size)
+{
+    const char *p = line;
+    uint64_t value = 0;
+    size_t digits = 0;
+
+    for (;; p++) {
+        uint64_t d;
+        if (is_digit(*p))                 d = (uint64_t)(*p - '0');
+        else if (*p >= 'a' && *p <= 'f')  d = (uint64_t)(*p - 'a') + 10;
+        else if (*p >= 'A' && *p <= 'F')  d = (uint64_t)(*p - 'A') + 10;
+        else break;
+        // Sixteen hex digits fill a uint64_t; a seventeenth is a size no
+        // body can have and a number this arithmetic cannot hold.
+        if (++digits > 16)
+            return false;
+        value = value << 4 | d;
+    }
+    if (digits == 0)
+        return false;
+    while (is_blank(*p))
+        p++;
+    if (*p != '\0' && *p != ';')
+        return false;
+    *size = value;
+    return true;
+}
+
+// A token, then a colon, somewhere. Enough to tell a trailer field from junk
+// without parsing what this code does not read.
+static bool field_line_shaped(const char *line)
+{
+    if (!is_token_byte(line[0]))
+        return false;
+    for (const char *p = line; *p != '\0'; p++)
+        if (*p == ':')
+            return true;
+    return false;
+}
+
+static int64_t body_read_chunked(http_body_t *b, void *out, size_t cap)
+{
+    char line[HTTP_LINE_MAX];
+    size_t consumed;
+
+    for (;;) {
+        switch (b->state) {
+        case CHUNK_SIZE: {
+            line_result_t r = line_read(b->s, line, sizeof(line), sizeof(line), &consumed);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r == LINE_NUL)   return body_finish(b, HTTP_BODY_SYNTAX);
+            if (r == LINE_LONG)  return body_finish(b, HTTP_BODY_TOO_MUCH);
+            uint64_t size;
+            if (!chunk_size_parse(line, &size))
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            if (size == 0) {
+                b->state = CHUNK_TRAILER;
+                break;
+            }
+            b->remaining = size;
+            b->state = CHUNK_DATA;
+            break;
+        }
+        case CHUNK_DATA: {
+            int64_t n = body_read_counted(b, out, cap);
+            if (n > 0 && b->remaining == 0)
+                b->state = CHUNK_DATA_END;
+            return n;
+        }
+        case CHUNK_DATA_END: {
+            // Exactly a line terminator. The budget of two is the length of
+            // CRLF: a third byte before the newline is data the size line
+            // did not count, and line_read reports it as an over-long line.
+            line_result_t r = line_read(b->s, line, sizeof(line), 2, &consumed);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r != LINE_OK || line[0] != '\0')
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            b->state = CHUNK_SIZE;
+            break;
+        }
+        case CHUNK_TRAILER: {
+            // Trailer fields are read to find their end and otherwise
+            // ignored: nothing this program does depends on one, and a
+            // sender may not put framing there (RFC 9110 §6.5.1). Bounded
+            // exactly as the head is, or the trailer is the endless-head
+            // attack wearing a different hat. An over-long trailer line is
+            // dropped, as an over-long non-framing header is.
+            line_result_t r = line_read(b->s, line, sizeof(line),
+                                        HTTP_HEAD_MAX - b->trailerUsed + 1, &consumed);
+            b->trailerUsed += consumed;
+            if (b->trailerUsed > HTTP_HEAD_MAX)
+                return body_finish(b, HTTP_BODY_TOO_MUCH);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r == LINE_NUL)   return body_finish(b, HTTP_BODY_SYNTAX);
+            if (r == LINE_OK && line[0] == '\0') {
+                b->state = CHUNK_FINISHED;
+                return body_finish(b, HTTP_BODY_DONE);
+            }
+            if (b->trailers >= HTTP_HEADERS_MAX)
+                return body_finish(b, HTTP_BODY_TOO_MUCH);
+            b->trailers++;
+            // The shape of a field line, checked so far as it costs nothing:
+            // a name, a colon. A line beginning with whitespace is obs-fold,
+            // refused here for the reason the head refuses it.
+            if (r == LINE_OK && !field_line_shaped(line))
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            break;
+        }
+        default:
+            return body_finish(b, HTTP_BODY_DONE);
+        }
+    }
+}
+
+int64_t http_body_read(http_body_t *b, void *out, size_t cap)
+{
+    if (b->result != HTTP_BODY_OPEN)
+        return (b->result == HTTP_BODY_DONE || b->result == HTTP_BODY_CUT) ? 0 : -1;
+    if (cap == 0)
+        return 0;
+
+    switch (b->framing) {
+    case HTTP_FRAMING_LENGTH:
+        if (b->remaining == 0)
+            return body_finish(b, HTTP_BODY_DONE);
+        {
+            int64_t n = body_read_counted(b, out, cap);
+            if (n > 0 && b->remaining == 0)
+                b->result = HTTP_BODY_DONE;   // the next call answers 0
+            return n;
+        }
+    case HTTP_FRAMING_CHUNKED:
+        return body_read_chunked(b, out, cap);
+    default: {
+        int64_t n = http_stream_read(b->s, out, cap);
+        if (n < 0)
+            return body_finish(b, HTTP_BODY_BROKE);
+        if (n == 0)
+            return body_finish(b, HTTP_BODY_DONE);
+        b->delivered += (uint64_t)n;
+        return n;
+    }
+    }
+}
+
+const char *http_body_reason(http_body_result_t rc)
+{
+    switch (rc) {
+    case HTTP_BODY_OPEN:     return "the body is still arriving";
+    case HTTP_BODY_DONE:     return "the body arrived whole";
+    case HTTP_BODY_CUT:      return "the connection closed before the body was whole";
+    case HTTP_BODY_BROKE:    return "the connection broke";
+    case HTTP_BODY_SYNTAX:   return "the chunk framing is not chunk framing";
+    case HTTP_BODY_TOO_MUCH: return "more chunk framing than this will read";
+    }
+    return "unknown";
 }
