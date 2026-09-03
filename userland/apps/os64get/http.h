@@ -173,7 +173,8 @@ typedef enum {
     HTTP_HEAD_SYNTAX,     // a header line is not "Name: value"
     HTTP_HEAD_TOO_MUCH,   // more head than this will read
     HTTP_HEAD_CONFLICT,   // two different answers to one question
-    HTTP_HEAD_FRAMING     // a header deciding how to read the body was unreadable
+    HTTP_HEAD_FRAMING,    // a header deciding how to read the body was unreadable
+    HTTP_HEAD_SWITCHED    // 101: the bytes that follow are not HTTP any more
 } http_head_result_t;
 
 // Read the status line and every header, stopping on the blank line that

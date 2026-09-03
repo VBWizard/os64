@@ -471,14 +471,30 @@ static bool status_parse(const char *line, http_response_t *out)
 // is refused rather than resolved: which of two Transfer-Encodings a stream
 // is in has no correct guess, and guessing wrong writes a file of framing
 // bytes.
-static bool take_once(char *slot, size_t cap, const char *value)
+//
+// THE VALUE IS JUDGED BEFORE IT IS STORED, because the slot is small and
+// "absent" is spelled by an empty slot. An EMPTY value stored there read as
+// no header at all — so `Transfer-Encoding:` with nothing after it slipped
+// past the conflict check and the framing refusal both, and a chunked body
+// or a body beside a Content-Length went through as if nothing framed it
+// (Codex review round 7, 2026-09-03). A value LONGER than the slot used to
+// be folded into it truncated, so two different long values compared equal
+// and a truncated name matched nothing — safe only by accident. A coding
+// this program will act on is a short word; one that does not fit is a
+// framing header it cannot read, and says so.
+static http_head_result_t coding_take(char *slot, size_t cap, const char *value, size_t vlen)
 {
+    if (vlen == 0)
+        return HTTP_HEAD_SYNTAX;      // a coding header must name a coding
+    if (vlen >= HTTP_TOKEN_MAX)
+        return HTTP_HEAD_FRAMING;
+
     char folded[HTTP_TOKEN_MAX];
-    copy_lower(folded, sizeof(folded), value, os64_strlen(value));
+    copy_lower(folded, sizeof(folded), value, vlen);
     if (slot[0] != '\0')
-        return os64_streq(slot, folded);
+        return os64_streq(slot, folded) ? HTTP_HEAD_OK : HTTP_HEAD_CONFLICT;
     os64_strcopy(slot, cap, folded);
-    return true;
+    return HTTP_HEAD_OK;
 }
 
 static http_head_result_t header_take(char *line, http_response_t *out)
@@ -521,11 +537,15 @@ static http_head_result_t header_take(char *line, http_response_t *out)
         out->hasLength = true;
         out->length = length;
     } else if (os64_streq_nocase(line, "Transfer-Encoding")) {
-        if (!take_once(out->transferEncoding, sizeof(out->transferEncoding), value))
-            return HTTP_HEAD_CONFLICT;
+        http_head_result_t rc = coding_take(out->transferEncoding,
+                                            sizeof(out->transferEncoding), value, vlen);
+        if (rc != HTTP_HEAD_OK)
+            return rc;
     } else if (os64_streq_nocase(line, "Content-Encoding")) {
-        if (!take_once(out->contentEncoding, sizeof(out->contentEncoding), value))
-            return HTTP_HEAD_CONFLICT;
+        http_head_result_t rc = coding_take(out->contentEncoding,
+                                            sizeof(out->contentEncoding), value, vlen);
+        if (rc != HTTP_HEAD_OK)
+            return rc;
     } else if (os64_streq_nocase(line, "Location")) {
         if (out->location[0] == '\0')
             copy_span(out->location, sizeof(out->location), value, vlen);
@@ -661,6 +681,14 @@ http_head_result_t http_head_read(http_stream_t *s, http_response_t *out)
         http_head_result_t rc = head_read_once(s, out);
         if (rc != HTTP_HEAD_OK)
             return rc;
+        // 101 IS NOT INTERIM. After it the connection speaks whatever was
+        // upgraded to, so reading on for "the real reply" would parse a
+        // foreign protocol as an HTTP head — and hang on the idle deadline
+        // when it is not one, or accept it as the download when its first
+        // bytes happen to look like a status line. Nothing was asked for, so
+        // there is nothing to follow. (Codex review round 7, 2026-09-03.)
+        if (out->status == 101)
+            return HTTP_HEAD_SWITCHED;
         if (out->status < 100 || out->status >= 200)
             return HTTP_HEAD_OK;
     }
@@ -677,6 +705,7 @@ const char *http_head_reason(http_head_result_t rc)
         case HTTP_HEAD_TOO_MUCH: return "more headers than this program will read";
         case HTTP_HEAD_CONFLICT: return "the headers answer one question two ways";
         case HTTP_HEAD_FRAMING:  return "a header saying how to read the body was too long to read";
+        case HTTP_HEAD_SWITCHED: return "the server switched protocols (101), which a fetch cannot follow";
     }
     return "refused";
 }

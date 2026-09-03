@@ -406,6 +406,25 @@ refusals = {
                                "conflict"),
     "te-chunked-and-length": (b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n"
                               b"Transfer-Encoding: chunked\r\n\r\n", "conflict"),
+    # An EMPTY coding header used to store an empty slot, which is how
+    # "absent" is spelled — so it slipped past the conflict check and the
+    # framing refusal both. A coding header must name a coding. (Codex
+    # review round 7, 2026-09-03.)
+    "empty-te": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding:\r\nContent-Length: 32\r\n\r\n" + body,
+                 "syntax"),
+    "blank-te": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding:    \r\n\r\n", "syntax"),
+    "empty-ce": (b"HTTP/1.1 200 OK\r\nContent-Encoding:\r\nContent-Length: 32\r\n\r\n" + body,
+                 "syntax"),
+    # A coding value longer than the slot was folded in TRUNCATED, so two
+    # different long values compared equal and the truncated name matched
+    # nothing — refused, but by accident. Found reading the file whole.
+    "long-te": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: " + b"c" * 40 + b"\r\n\r\n", "framing"),
+    "long-ce": (b"HTTP/1.1 200 OK\r\nContent-Encoding: " + b"g" * 40 + b"\r\n\r\n", "framing"),
+    # 101 hands the connection to another protocol. It is not interim, and
+    # the bytes after it are not a head to keep reading for — here they even
+    # look like one. (Codex review round 7, 2026-09-03.)
+    "switching": (b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: x\r\n\r\n"
+                  b"HTTP/1.1 200 OK\r\nContent-Length: 32\r\n\r\n" + body, "switched"),
     "too-many-headers": (b"HTTP/1.1 200 OK\r\n" + b"X-Pad: 1\r\n" * 200 + b"\r\n",
                          "too_much"),
     # One past the cap — and "max-headers" above proves the cap itself is
