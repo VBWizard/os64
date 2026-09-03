@@ -1,10 +1,10 @@
 // gview(1) — look at a picture.
 //
 // The first program os64 has ever had that opens an image file and shows it
-// to you. It exists as much to PROVE libimage and os64_draw_blit against
-// real files as to be useful: the desktop shell and the launcher will both
-// stand on this pair, and neither is a good place to discover that a BMP
-// decodes upside down.
+// to you. It exists as much to PROVE the image codecs and os64_draw_blit
+// against real files as to be useful: the desktop shell and the launcher will
+// both stand on this pair, and neither is a good place to discover that a BMP
+// decodes upside down or a PNG lost its alpha.
 //
 // It is deliberately a direct libdraw app rather than a libui one. There is
 // no furniture here — no labels, no panels, nothing to lay out — just a
@@ -19,6 +19,8 @@
 #include "os64/image.h"
 #include "os64/draw.h"
 #include "os64/gui.h"
+#include "os64/slurp.h"
+#include "png/png.h"
 
 // The mat around a picture that does not fill its window. Not the theme's
 // business: this is a viewer's own furniture, and a neutral gray is what
@@ -29,6 +31,56 @@
 // Leave the window somewhat inside the screen when the image is enormous —
 // a window born bigger than the glass cannot be dragged back into view.
 #define GVIEW_SCREEN_MARGIN 64u
+
+static bool is_png(const uint8_t *data, size_t length)
+{
+    static const uint8_t signature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    if (length < sizeof(signature))
+        return false;
+    for (size_t i = 0; i < sizeof(signature); i++)
+        if (data[i] != signature[i])
+            return false;
+    return true;
+}
+
+static bool load_picture(const char *path, os64_image_t *image,
+                         const char **reason)
+{
+    image->width = 0;
+    image->height = 0;
+    image->pixels = NULL;
+
+    uint8_t *data = NULL;
+    size_t length = 0;
+    os64_slurp_status_t read_status = os64_slurp(
+        path, OS64_IMAGE_CAP_DEFAULT, &data, &length);
+    if (read_status != OS64_SLURP_OK) {
+        *reason = os64_slurp_status_name(read_status);
+        return false;
+    }
+
+    bool loaded = false;
+    if (is_png(data, length)) {
+        // This small fork is the transitional seam recorded in LIBIMAGE.md:
+        // libpng is independent now, while BMP/PPM still live in libos64.
+        // The eventual libimage façade will own this magic dispatch.
+        os64_png_image_t png;
+        os64_png_status_t status = os64_png_decode(data, length, 0, &png);
+        *reason = os64_png_status_name(status);
+        if (status == OS64_PNG_OK) {
+            image->width = png.width;
+            image->height = png.height;
+            image->pixels = png.pixels;
+            loaded = true;
+        }
+    } else {
+        os64_image_status_t status = os64_image_decode(data, length, image);
+        *reason = os64_image_status_name(status);
+        loaded = status == OS64_IMAGE_OK;
+    }
+    os64_free(data);
+    return loaded;
+}
 
 static void repaint(os64_draw_ctx_t *ctx, const os64_image_t *img)
 {
@@ -62,12 +114,11 @@ int main(int argc, char **argv)
     const char *path = argv[1];
 
     os64_image_t img;
-    os64_image_status_t st = os64_image_load(path, 0, &img);
-    if (st != OS64_IMAGE_OK) {
+    const char *reason;
+    if (!load_picture(path, &img, &reason)) {
         // Name the file AND the reason. "gview: failed" is the error message
         // that sends someone to read this source; this one does not.
-        os64_hprintf(OS64_STDERR, "gview: %s: %s\n", path,
-                     os64_image_status_name(st));
+        os64_hprintf(OS64_STDERR, "gview: %s: %s\n", path, reason);
         return 1;
     }
 

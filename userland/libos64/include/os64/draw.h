@@ -64,11 +64,11 @@ void os64_draw_rect(os64_gui_surface_t *dst, os64_gui_rect_t r,
 // is what makes "center an image larger than the window" work with no
 // arithmetic at the call site.
 //
-// OPAQUE COPY — the source's alpha byte is not consulted. Every image os64
-// draws today is a background or a picture, both of which want every pixel.
-// Source-over blending is booked (DEBTS) against its first real customer,
-// which will be launcher icons drawn over a wallpaper; adding it before
-// then would be a blend nothing asked for and nobody had tested.
+// OPAQUE COPY — the source's alpha byte is not consulted. libpng preserves
+// real alpha now, but this call still copies those pixels verbatim; it does
+// not composite them over the destination. Source-over is a distinct libdraw
+// operation booked in DEBTS for the browser and launcher rather than a silent
+// semantic change to the blit every existing background relies on.
 void os64_draw_blit(os64_gui_surface_t *dst, int32_t x, int32_t y,
                     const uint32_t *src, uint32_t w, uint32_t h,
                     uint32_t src_pitch_px);
