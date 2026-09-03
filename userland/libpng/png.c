@@ -133,9 +133,10 @@ static os64_png_status_t parse_ihdr(const uint8_t *chunk, uint32_t length,
     uint8_t filter = chunk[11];
     uint8_t interlace = chunk[12];
 
-    if (info->width == 0 || info->height == 0 ||
-        info->width > OS64_PNG_DIM_MAX || info->height > OS64_PNG_DIM_MAX)
+    if (info->width == 0 || info->height == 0)
         return OS64_PNG_MALFORMED;
+    if (info->width > OS64_PNG_DIM_MAX || info->height > OS64_PNG_DIM_MAX)
+        return OS64_PNG_LIMIT;
     if (!depth_valid(info->color_type, info->bit_depth))
         return OS64_PNG_MALFORMED;
     if (compression != 0 || filter != 0 || interlace > 1)

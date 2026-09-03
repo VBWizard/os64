@@ -183,7 +183,7 @@ def valid(name, w, h, depth, color, rows, **kwargs):
             raise SystemExit(f"host decoder disagrees on {name}")
     return png, expected, compressed
 
-def invalid(name, contents):
+def fixture(name, contents):
     (root / f"{name}.png").write_bytes(contents)
 
 def exact(name, contents, expected):
@@ -235,13 +235,13 @@ valid("rgb_trns", 2, 1, 8, 2, [[1, 2, 3, 4, 5, 6]], trns=(4, 5, 6))
 
 # Inner zlib and scanline errors retain correct outer CRCs, so the expected
 # layer—not an earlier checksum—answers.
-invalid("bad_signature", b"not png")
-invalid("bad_ihdr_crc", corrupt_chunk_crc(base, b"IHDR"))
+fixture("bad_signature", b"not png")
+fixture("bad_ihdr_crc", corrupt_chunk_crc(base, b"IHDR"))
 palette_png = assemble(2, 1, 1, 3, [[0, 1]],
                        palette=[(255, 0, 0), (0, 255, 0)], trns=[17, 231])[0]
-invalid("bad_plte_crc", corrupt_chunk_crc(palette_png, b"PLTE"))
-invalid("bad_idat_crc", corrupt_chunk_crc(base, b"IDAT"))
-invalid("bad_iend_crc", corrupt_chunk_crc(base, b"IEND"))
+fixture("bad_plte_crc", corrupt_chunk_crc(palette_png, b"PLTE"))
+fixture("bad_idat_crc", corrupt_chunk_crc(base, b"IDAT"))
+fixture("bad_iend_crc", corrupt_chunk_crc(base, b"IEND"))
 bad_gama, bad_gama_rgba, _ = assemble(
     5, 5, 8, 6, filter_rows, filters=[0, 1, 2, 3, 4],
     before=[bad_crc_chunk(b"gAMA", struct.pack(">I", 45455))])
@@ -250,50 +250,52 @@ bad_trns, bad_trns_rgba, _ = assemble(
     3, 1, 4, 0, [[0, 5, 15]],
     before=[bad_crc_chunk(b"tRNS", struct.pack(">H", 5))])
 exact("bad_trns_crc", bad_trns, bad_trns_rgba)
-invalid("bad_adler", assemble(5, 5, 8, 6, filter_rows,
+fixture("bad_adler", assemble(5, 5, 8, 6, filter_rows,
         z_override=base_z[:-1] + bytes([base_z[-1] ^ 1]))[0])
-invalid("bad_zlib", assemble(5, 5, 8, 6, filter_rows,
+fixture("bad_zlib", assemble(5, 5, 8, 6, filter_rows,
         z_override=bytes([base_z[0] ^ 1]) + base_z[1:])[0])
 dictionary_flag = next(flag for flag in range(256)
                        if flag & 0x20 and ((0x78 << 8) | flag) % 31 == 0)
-invalid("preset_dictionary", assemble(5, 5, 8, 6, filter_rows,
+fixture("preset_dictionary", assemble(5, 5, 8, 6, filter_rows,
         z_override=bytes((0x78, dictionary_flag)) + b"\0\0\0\0" + base_z[2:])[0])
 bad_filter_raw = bytes([5]) + pack_samples(filter_rows[0], 8)
-invalid("bad_filter", assemble(5, 1, 8, 6, [filter_rows[0]],
+fixture("bad_filter", assemble(5, 1, 8, 6, [filter_rows[0]],
         raw_override=bad_filter_raw)[0])
-invalid("truncated", assemble(5, 5, 8, 6, filter_rows,
+fixture("truncated", assemble(5, 5, 8, 6, filter_rows,
         z_override=base_z[:-3])[0])
-invalid("zlib_trailing", assemble(5, 5, 8, 6, filter_rows,
+fixture("zlib_trailing", assemble(5, 5, 8, 6, filter_rows,
         z_override=base_z + b"x")[0])
-invalid("overlong_raster", assemble(5, 5, 8, 6, filter_rows,
+fixture("overlong_raster", assemble(5, 5, 8, 6, filter_rows,
         raw_override=zlib.decompress(base_z) + b"\0")[0])
-invalid("unknown_critical", assemble(5, 5, 8, 6, filter_rows,
+fixture("unknown_critical", assemble(5, 5, 8, 6, filter_rows,
         before=[chunk(b"ABCD", b"future")])[0])
 reserved_name, reserved_rgba, _ = assemble(5, 5, 8, 6, filter_rows,
         before=[chunk(b"abce", b"reserved")])
 exact("reserved_name", reserved_name, reserved_rgba)
-invalid("reserved_critical", assemble(5, 5, 8, 6, filter_rows,
+fixture("reserved_critical", assemble(5, 5, 8, 6, filter_rows,
         before=[chunk(b"ABcD", b"future")])[0])
-invalid("interlaced", assemble(5, 5, 8, 6, filter_rows, interlace=1)[0])
+fixture("interlaced", assemble(5, 5, 8, 6, filter_rows, interlace=1)[0])
 
 nonconsecutive = (signature + ihdr(5, 5, 8, 6) +
                   chunk(b"IDAT", base_z[:3]) + chunk(b"abCd", b"gap") +
                   chunk(b"IDAT", base_z[3:]) + chunk(b"IEND"))
-invalid("nonconsecutive", nonconsecutive)
+fixture("nonconsecutive", nonconsecutive)
 bad_ancillary_gap = (signature + ihdr(5, 5, 8, 6) +
                      chunk(b"IDAT", base_z[:3]) +
                      bad_crc_chunk(b"gAMA", struct.pack(">I", 45455)) +
                      chunk(b"IDAT", base_z[3:]) + chunk(b"IEND"))
-invalid("bad_ancillary_gap", bad_ancillary_gap)
-invalid("after_iend", base + b"x")
-invalid("zero_width", signature + ihdr(0, 1, 8, 6) +
+fixture("bad_ancillary_gap", bad_ancillary_gap)
+fixture("after_iend", base + b"x")
+fixture("zero_width", signature + ihdr(0, 1, 8, 6) +
         chunk(b"IDAT", zstream(b"")) + chunk(b"IEND"))
+fixture("too_wide", assemble(16385, 1, 1, 0, [[0] * 16385])[0])
+fixture("too_tall", assemble(1, 16385, 1, 0, [[0] for _ in range(16385)])[0])
 
 palette_bad = (signature + ihdr(1, 1, 2, 3) +
                chunk(b"PLTE", bytes((0, 0, 0, 255, 255, 255))) +
                chunk(b"IDAT", zstream(bytes([0]) + pack_samples([3], 2))) +
                chunk(b"IEND"))
-invalid("palette_index", palette_bad)
+fixture("palette_index", palette_bad)
 PY
 
 run() {
@@ -350,6 +352,8 @@ run "$work/nonconsecutive.png" - 0 0 0 "malformed PNG" 0
 run "$work/bad_ancillary_gap.png" - 0 0 0 "malformed PNG" 0
 run "$work/after_iend.png" - 0 0 0 "malformed PNG" 0
 run "$work/zero_width.png" - 0 0 0 "malformed PNG" 0
+run "$work/too_wide.png" - 0 0 0 "decoded image exceeds limit" 0
+run "$work/too_tall.png" - 0 0 0 "decoded image exceeds limit" 0
 run "$work/palette_index.png" - 0 0 0 "malformed PNG" any
 run "$work/filters.png" - 0 0 24 "decoded image exceeds limit" 0
 echo "PNG structural, checksum, zlib, scanline, and limit refusals  PASS"
