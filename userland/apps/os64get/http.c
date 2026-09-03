@@ -285,29 +285,115 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 }
 
 
+// DOES THIS REFERENCE NAME ITS OWN SCHEME? RFC 3986 §3.1's grammar exactly: a
+// letter, then letters, digits, '+', '-' and '.', ended by a colon — and the
+// search stops at the first '/', '?' or '#', because a colon past one of
+// those is a byte of the path or query, not a scheme's punctuation.
+//
+// The whole difficulty lives in that stopping rule. This used to be "does the
+// string contain '://'", which made `/login?next=https://id.example/` — an
+// ordinary root-relative redirect carrying a URL in its query — look like an
+// absolute reference, and the advice printed the query's contents as the
+// address to fetch (Codex review round 3, 2026-09-02). Asking the URL parser
+// instead fixed that one and left `mailto:someone@example.com` looking
+// relative, which joined it onto the base and produced a plausible, wrong
+// http address for something that was never a page at all. The grammar
+// answers both.
+//
+// THE STRICT READING, where RFC 3986 §5.4.2 offers two. `http:page.html`
+// names the scheme http and the opaque path "page.html"; browsers and
+// urllib join it to the base instead, for compatibility with references
+// written before 1998. Read strictly it is an address os64get cannot fetch
+// and says so; read loosely it is a guess about what a malformed header
+// meant. A fetch that guesses wrong downloads the wrong page and calls it
+// success, so this guesses not at all.
+static bool reference_has_scheme(const char *ref)
+{
+    if (!is_alpha(ref[0]))
+        return false;               // a scheme starts with a letter, always
+    for (const char *p = ref; *p != '\0'; p++) {
+        if (*p == ':')
+            return true;
+        if (*p == '/' || *p == '?' || *p == '#')
+            return false;
+        if (!is_alpha(*p) && !is_digit(*p) && *p != '+' && *p != '-' && *p != '.')
+            return false;
+    }
+    return false;
+}
+
+// The longest path this file ever builds: a base's whole path with a whole
+// Location joined onto it, before the dot segments come out.
+#define HTTP_JOIN_MAX (HTTP_PATH_MAX + HTTP_LINE_MAX + 2)
+
+// RFC 3986 §5.2.4: resolve away the "." and ".." segments a merge just
+// created. Written as the segment walk the spec describes rather than the
+// spec's own five-case string rewrite, because the walk is the thing anybody
+// reading this can check: split on '/', drop a ".", pop the previous segment
+// for a "..", and keep everything else.
+//
+// TWO EDGES DECIDE WHETHER THIS IS RIGHT. A ".." at the very top pops
+// nothing — the leading '/' is a floor, so `/..` is `/` and not an escape
+// upwards into somebody's parent directory. And a "." or ".." that ends the
+// path leaves a trailing '/' behind it (`/a/b/..` is `/a/`, which is a
+// DIRECTORY, not the file `/a`), because the segment it replaced was there.
+// An empty segment is data and is kept: `//x` names something a server may
+// well serve, and is not `/x`.
+static bool path_dots(const char *in, char *out, size_t cap)
+{
+    size_t len = 0;
+    const char *p = in;
+
+    if (*p == '/')
+        p++;                          // the leading empty segment: the root
+
+    for (;;) {
+        const char *seg = p;
+        while (*p != '\0' && *p != '/')
+            p++;
+        size_t n = (size_t)(p - seg);
+        bool last = (*p == '\0');
+        if (!last)
+            p++;
+
+        if (n == 1 && seg[0] == '.') {
+            n = 0;                    // dropped; if it ended the path, its '/' stays
+            if (!last)
+                continue;
+        } else if (n == 2 && seg[0] == '.' && seg[1] == '.') {
+            while (len > 0 && out[len - 1] != '/')
+                len--;
+            if (len > 0)
+                len--;                // and the '/' that introduced it
+            n = 0;
+            if (!last)
+                continue;
+        }
+
+        if (len + 1 + n + 1 > cap)
+            return false;
+        out[len++] = '/';
+        for (size_t i = 0; i < n; i++)
+            out[len++] = seg[i];
+        if (last)
+            break;
+    }
+
+    out[len] = '\0';
+    return true;
+}
+
 bool http_url_absolute(const http_url_t *base, const char *location,
                        char *out, size_t cap)
 {
     if (location == NULL || location[0] == '\0')
         return false;
 
-    // ALREADY WHOLE? ASK THE PARSER, which is the one place that knows what a
-    // URL looks like. This used to scan the whole string for "://" and take
-    // the first hit, so `/login?next=https://id.example/` — an ordinary
-    // root-relative redirect carrying a URL in its query — was mistaken for
-    // an absolute reference and printed back unchanged. The command it
-    // produced then read as the valet dialect and was refused, which is a
-    // long way round to giving somebody no help at all.
-    //
-    // http_url_parse already answers this correctly (the bytes before the
-    // "://" must all be scheme-legal, and `/`, `?` and `=` are not), and
-    // asking it rather than re-deciding here is what keeps ONE definition of
-    // a URL in this file. NOT_A_URL means relative; anything else means the
-    // reference names its own scheme, including one this program cannot
-    // fetch — the caller wants to SAY what the address is, not dial it.
-    // (Codex review round 3, 2026-09-02.)
-    http_url_t probe;
-    if (http_url_parse(location, &probe) != HTTP_URL_NOT_A_URL)
+    // ALREADY WHOLE: copied through as written, whatever it names. Dot
+    // segments inside it are left alone on purpose — a reference that names
+    // its own origin is describing a path on somebody else's filesystem, and
+    // what `/a/../b` means there is that server's business, not ours.
+    if (reference_has_scheme(location))
         return os64_strcopy(out, cap, location) < cap;
 
     // A SCHEME-RELATIVE REFERENCE — `//cdn.example.com/file` — NAMES A
@@ -317,27 +403,82 @@ bool http_url_absolute(const http_url_t *base, const char *location,
     // back at the server that just redirected away from itself, which would
     // fetch something unrelated and look like it worked. Only the scheme is
     // inherited; the authority comes from the reference. (RFC 3986 §4.2, and
-    // Codex review round 2, 2026-09-02.)
+    // Codex review round 2, 2026-09-02.) Its path rides along as written,
+    // for the reason the branch above leaves one alone: it belongs to the
+    // origin the reference itself names.
     if (location[0] == '/' && location[1] == '/') {
         int32_t n = os64_snprintf(out, cap, "%s:%s", base->scheme, location);
         return n > 0 && (size_t)n < cap;
     }
 
-    if (location[0] != '/')
-        return false;                 // relative to the page: not ours to resolve
+    // ── Everything left is relative to the page that answered ───────────
+    // RFC 3986 §5.2.2, for the case where the reference brings no scheme and
+    // no authority: the origin is inherited whole, and only the path and
+    // query are worked out. The fragment is cut off first — it names a place
+    // inside the document and has never crossed the wire.
+    char ref[HTTP_LINE_MAX];
+    size_t reflen = 0;
+    while (location[reflen] != '\0' && location[reflen] != '#')
+        reflen++;
+    if (reflen >= sizeof(ref))
+        return false;
+    copy_span(ref, sizeof(ref), location, reflen);
 
-    // The origin that just answered, plus the path it named — KEEPING THAT
-    // ORIGIN'S SCHEME. Hard-coding http here sent an https page's `/login`
-    // redirect back as `http://host:443/login`: plaintext at a TLS port, an
-    // address that cannot work, printed as a command to copy. The port rides
-    // along only when it is not the default FOR THAT SCHEME, for the same
-    // reason the Host header omits it. (Codex review, 2026-09-02.)
+    // Both sides split at their query, because a '?' ends the path and every
+    // rule below is about paths. `..` inside a query is a byte, not a step.
+    const char *baseQuery = base->path;
+    while (*baseQuery != '\0' && *baseQuery != '?')
+        baseQuery++;
+    size_t basePathLen = (size_t)(baseQuery - base->path);
+
+    const char *refQuery = ref;
+    while (*refQuery != '\0' && *refQuery != '?')
+        refQuery++;
+    size_t refPathLen = (size_t)(refQuery - ref);
+
+    char path[HTTP_JOIN_MAX];
+    const char *query;
+
+    if (refPathLen == 0) {
+        // `?page=2`, or a reference that was nothing but a fragment: the page
+        // stays, and only the question changes. With no '?' of its own the
+        // reference is the SAME address, which is a redirect in a circle —
+        // said plainly by whoever compares them, not papered over here.
+        copy_span(path, sizeof(path), base->path, basePathLen);
+        query = (*refQuery == '?') ? refQuery : baseQuery;
+    } else {
+        char joined[HTTP_JOIN_MAX];
+        if (ref[0] == '/') {
+            copy_span(joined, sizeof(joined), ref, refPathLen);
+        } else {
+            // §5.2.3's merge: the base path up to and INCLUDING its last
+            // '/', then the reference. `/a/b.html` + `c.html` is `/a/c.html`
+            // — the page's directory, not the page.
+            size_t cut = basePathLen;
+            while (cut > 0 && base->path[cut - 1] != '/')
+                cut--;
+            if (cut + refPathLen + 1 > sizeof(joined))
+                return false;
+            copy_span(joined, sizeof(joined), base->path, cut);
+            copy_span(joined + cut, sizeof(joined) - cut, ref, refPathLen);
+        }
+        if (!path_dots(joined, path, sizeof(path)))
+            return false;
+        query = refQuery;
+    }
+
+    // The origin that just answered, KEEPING THAT ORIGIN'S SCHEME.
+    // Hard-coding http here sent an https page's `/login` redirect back as
+    // `http://host:443/login`: plaintext at a TLS port, an address that
+    // cannot work, printed as a command to copy. The port rides along only
+    // when it is not the default FOR THAT SCHEME, for the same reason the
+    // Host header omits it. (Codex review, 2026-09-02.)
     int32_t n;
     if (base->port != scheme_default_port(base->scheme))
-        n = os64_snprintf(out, cap, "%s://%s:%u%s", base->scheme, base->host,
-                          (unsigned)base->port, location);
+        n = os64_snprintf(out, cap, "%s://%s:%u%s%s", base->scheme, base->host,
+                          (unsigned)base->port, path, query);
     else
-        n = os64_snprintf(out, cap, "%s://%s%s", base->scheme, base->host, location);
+        n = os64_snprintf(out, cap, "%s://%s%s%s", base->scheme, base->host, path, query);
     return n > 0 && (size_t)n < cap;
 }
 

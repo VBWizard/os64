@@ -127,8 +127,42 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      back before it. Verified in QEMU against httptestd's `/chunked`
      (200000 bytes, sizes 1 to 65536, an extension, a trailer —
      byte-identical) and `/chunked-cut` (exit 7, `.part` left).
-   - (c) redirects: 301/302/307/308, `Location:`, hop cap ~5, refuse
-     https:// targets HONESTLY (name the reason: no TLS yet).
+   - (c) **DONE 2026-09-03.** Redirects followed: 301/302/307/308 and 303
+     (whose whole meaning is "GET this instead" — the famous 301-vs-307
+     distinction is about rewriting a METHOD, and os64get only ever sends
+     GET), hop cap 5 (RFC 2068 §10.3's own number), each hop announced and
+     each judged by the rules the typed address was. The 3xx codes NOT
+     followed are refused BY NAME with what each one means: 300 is a list
+     for a person to pick from, 305 is a stranger choosing this machine's
+     route, 304 answers a conditional request nobody made. Three rulings
+     the increment forced. **A REDIRECT NEVER NAMES THE FILE** — the
+     destination is settled from the typed address before the first request
+     goes out, or a server answering `/download` with a redirect to
+     `/.profile` would be choosing a name in somebody's directory (wget
+     spells this as `--trust-server-names`, off by default; os64get does
+     not offer the switch, since DEST already says "call it this").
+     **THE PROXY IS RE-ASKED AT EVERY HOP**, because `$https_proxy` and
+     `$http_proxy` are chosen by SCHEME: a plain-HTTP page redirecting to
+     https is carried by a variable that had nothing to do with the first
+     request, and an https target is a dead end or an ordinary hop
+     depending only on that. And a new exit code, **15**, for a road that
+     did not arrive (hop cap, a circle, an unreachable target) — distinct
+     from 5, the server's final answer about the page, because the thing to
+     change is on a different side. `http_url_absolute` grew into RFC 3986
+     §5.2's full reference resolution to do it (relative refs, `.`/`..`,
+     query-only refs), so there is no longer such a thing as a `Location`
+     os64get cannot spell. Proof: `tools/test_http_host.sh` runs RFC 3986
+     §5.4's OWN vector table — the abnormal examples included — against
+     `urllib.parse.urljoin`; `tools/httptestd.py` grew the trails
+     (`/redirect/N`, a loop, a page-relative Location, 303/307/308, 300,
+     305, `mailto:`); and in QEMU 23 cases came back with every exit code
+     as designed, nothing written on any refusal, no `.part` left behind,
+     e2fsck clean. Against the real web: httpbin's relative- and
+     absolute-Location chains both arrived at `/get`, and
+     `http://www.rfc-editor.org/rfc/rfc1945.txt` — a plain-HTTP address
+     that 301s to https — refused honestly with no proxy set, then went
+     `301 -> https://...` through `$https_proxy` and landed 137582 bytes
+     byte-identical to curl's copy.
    - (d) `Content-Encoding: gzip` — stream through libgzip with a response
      expansion cap, keep the output provisional until `OS64_GZIP_DONE`, and
      reject its explicit trailing-data result; the shared DEFLATE decoder is

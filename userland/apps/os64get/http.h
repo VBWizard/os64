@@ -22,10 +22,16 @@
 // network is a parser nobody drives across those boundaries.
 //
 // DELIBERATELY NOT HERE, each a rung of BROWSER.md's ladder or a ruling of
-// its own: redirects, content codings, transfer codings other than chunked,
+// its own: content codings, transfer codings other than chunked,
 // authentication, cookies, keep-alive, IPv6 literals. What is missing is
 // REFUSED BY NAME rather than mis-read: a response this code cannot honestly
 // turn into a file must never become a file.
+//
+// WHAT A REDIRECT MEANS IS NOT HERE EITHER, and that split is on purpose:
+// this file answers "where does that Location point", which is arithmetic on
+// addresses (http_url_absolute), and the caller answers "and may I go
+// there", which depends on the machine — whether a proxy is configured, how
+// many hops have been spent, whether the answer points back at itself.
 //
 // TLS IS NOT HERE EITHER AND NEVER WILL BE — os64 borrows a TLS when its day
 // comes, because thirty years of side-channel and oracle attacks teach no
@@ -65,6 +71,12 @@
 #define HTTP_SCHEME_MAX    16
 #define HTTP_REASON_MAX    64
 #define HTTP_TOKEN_MAX     32     // a coding name: "chunked", "gzip", "identity"
+
+// The longest address http_url_absolute can spell: a base's scheme and host,
+// with a whole Location header joined onto its path. Every buffer an
+// absolute-form address is written into is this size, so the ones that must
+// agree cannot drift apart.
+#define HTTP_URL_TEXT_MAX  (HTTP_SCHEME_MAX + HTTP_HOST_MAX + HTTP_PATH_MAX + HTTP_LINE_MAX + 16)
 
 // The read buffer. Big enough that a whole response head usually arrives in
 // one os64_read, and the leftover tail of that read is where the body starts
@@ -126,16 +138,24 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 bool http_url_render(const http_url_t *url, char *out, size_t cap);
 
 
-// Spell a `Location:` as a WHOLE address, given the URL it arrived from.
-// Handles the two forms a redirect actually uses: an absolute URL (copied
-// through) and an absolute path (joined to the origin that just answered).
-// Returns false for a genuinely relative reference (`page.html`, `../up`) —
-// resolving those is RFC 3986's full algorithm and belongs to the increment
-// that follows redirects for real; saying "I cannot spell this one" is the
-// honest answer until then, and a better one than a plausible guess.
+// Spell a `Location:` as a WHOLE address, given the URL it arrived from —
+// RFC 3986 §5.2's reference resolution, which is what a redirect header is
+// written in. Every form a server actually sends resolves: an absolute URL
+// (`http://other/x`), a scheme-relative one (`//cdn/x`), an absolute path
+// (`/login`), a path relative to the page (`page.html`, `../up/`), a
+// query-only reference (`?page=2`) and a fragment-only one (which names the
+// page it came from). `.` and `..` are resolved away where a merge with the
+// base's path created them.
 //
-// This exists for a DIAGNOSTIC: a message telling someone to fetch an
-// address owes them one they can actually type.
+// A reference that names its OWN scheme is copied through untouched, even
+// one this program could never fetch (`mailto:`, `ftp://`) — what the
+// address IS and whether to go there are different questions, and the second
+// belongs to the caller.
+//
+// Returns false only when the answer will not fit in `cap` or the reference
+// is empty. An empty `Location` names no address at all: RFC 3986 would read
+// it as "the page you already have", and a redirect to the page you already
+// have is a server that has lost its place.
 bool http_url_absolute(const http_url_t *base, const char *location,
                        char *out, size_t cap);
 // ── A stream of bytes that arrives in whatever pieces it likes ──────────

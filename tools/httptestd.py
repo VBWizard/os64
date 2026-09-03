@@ -46,11 +46,21 @@ Routes, and what each is FOR:
     /dir/           a page at a path ending in '/'         the index.html rule
     /query?x=1&y=2  a page behind a query string           the query survives
     /missing        404                                    a refusal
-    /redirect       301 -> /hello.txt                      reported, not followed
+    /redirect       301 -> /hello.txt                      the ordinary hop
+    /redirect/N     301 -> /redirect/N-1, then /hello.txt  a trail, and the hop cap
+    /redirect-page  302 -> hello.txt (page-relative)        RFC 3986 §5.2's merge
+    /redirect-303   303 -> /hello.txt                      "GET this instead"
+    /redirect-307   307 -> /hello.txt                      the method-keeping pair
+    /redirect-308   308 -> /hello.txt                      ditto, permanent
+    /redirect-loop  302 -> itself                          a circle, named as one
+    /redirect-none  302 with no Location                   nowhere to go
+    /redirect-300   300 + Location                         a choice, not an order
+    /redirect-305   305 + Location                         "use my proxy": refused
     /redirect-https 302 -> an https:// address              the honest TLS answer
-    /redirect-tricky 302 -> /hello.txt;reboot               the advice quotes it
-    /redirect-relative 302 -> //example.com/elsewhere       resolved before judged
+    /redirect-tricky 302 -> /hello.txt;reboot               a path, never a command
+    /redirect-relative 302 -> //example.com/elsewhere       scheme-relative, off-host
     /redirect-broken 302 -> /bad path                       unusable, said so
+    /redirect-mail  302 -> mailto:...                       not a page at all
     /chunked        200000 bytes chunked, ext + trailer    the framing comes off
     /dots/..        a URL with no usable basename          DEST must still be honored
     /chunked-cut    chunked, terminator never sent         truncation must not pass
@@ -209,23 +219,78 @@ class Handler(socketserver.StreamRequestHandler):
         elif route == "/redirect":
             self.send(head(301, "Moved Permanently",
                            [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route.startswith("/redirect/"):
+            # A TRAIL OF N HOPS, so the same server can prove both halves of
+            # the rule: a chain shorter than the cap arrives, and one longer
+            # than it stops with the address it stopped at. The body is a
+            # courtesy page a browser would show and a fetcher must discard —
+            # sent with a length so a client that reads it instead of the
+            # real file is caught by the size, not by luck.
+            rest = route[len("/redirect/"):]
+            left = int(rest) if rest.isdigit() else 0
+            where = f"/redirect/{left - 1}" if left > 1 else "/hello.txt"
+            page = b"<html><body>this way</body></html>\n"
+            self.send(head(301, "Moved Permanently",
+                           [("Location", where), ("Content-Type", "text/html"),
+                            ("Content-Length", len(page))]) + page)
+        elif route == "/redirect-page":
+            # RELATIVE TO THE PAGE, the form RFC 3986 §5.2.3's merge exists
+            # for: `hello.txt` is not an address until it is joined to the
+            # directory of the page that said it.
+            self.send(head(302, "Found",
+                           [("Location", "hello.txt"), ("Content-Length", 0)]))
+        elif route in ("/redirect-303", "/redirect-307", "/redirect-308"):
+            code = int(route[-3:])
+            reason = {303: "See Other", 307: "Temporary Redirect",
+                      308: "Permanent Redirect"}[code]
+            self.send(head(code, reason,
+                           [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route == "/redirect-loop":
+            # Pointing at itself. The hop cap would eventually stop this, five
+            # requests later and in words about counting; a client that
+            # notices should say what actually happened.
+            self.send(head(302, "Found",
+                           [("Location", "/redirect-loop"), ("Content-Length", 0)]))
+        elif route == "/redirect-none":
+            self.send(head(302, "Found", [("Content-Length", 0)]))
+        elif route == "/redirect-300":
+            # A LIST TO CHOOSE FROM. Its Location is the server's preference,
+            # not an instruction, and a fetcher choosing on somebody's behalf
+            # is guessing.
+            self.send(head(300, "Multiple Choices",
+                           [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route == "/redirect-305":
+            # "Route your traffic through this machine" — from a stranger.
+            # Every browser dropped 305 for that reason; os64get must not
+            # obey it either.
+            self.send(head(305, "Use Proxy",
+                           [("Location", "http://10.0.2.2:9/"), ("Content-Length", 0)]))
+        elif route == "/redirect-mail":
+            self.send(head(302, "Found",
+                           [("Location", "mailto:someone@example.com"),
+                            ("Content-Length", 0)]))
         elif route == "/redirect-https":
             self.send(head(302, "Found",
                            [("Location", "https://example.com/"), ("Content-Length", 0)]))
         elif route == "/redirect-relative":
-            # Scheme-relative: a different host, the scheme inherited. The
-            # advice must resolve it BEFORE judging it, or it judges nothing.
+            # Scheme-relative: a different host, the scheme inherited. It is
+            # resolved BEFORE it is judged, or nothing is being judged — and
+            # following it leaves this server for a real one, which is the
+            # point: only the guest's own dial says whether that host answers.
             self.send(head(302, "Found",
                            [("Location", "//example.com/elsewhere"), ("Content-Length", 0)]))
         elif route == "/redirect-broken":
             # Root-relative and malformed: resolved, it is a URL os64get
-            # refuses, and the advice must say so rather than offer it.
+            # refuses, and it must say so rather than dial something it made
+            # up out of the readable part.
             self.send(head(302, "Found",
                            [("Location", "/bad path"), ("Content-Length", 0)]))
         elif route == "/redirect-tricky":
-            # A Location that is a legal URL AND a husk command separator.
-            # The advice os64get prints must quote it, or copying the
-            # suggested command runs `reboot`. (Codex review round 5, PR #52.)
+            # A Location that is a legal path AND a husk command separator.
+            # It is FOLLOWED, as a path, and this server has nothing there —
+            # so the fetch ends in an honest 404 rather than in `reboot`. Any
+            # message that offers an address as a command to type must quote
+            # it. (Codex review round 5, PR #52.)
             self.send(head(302, "Found",
                            [("Location", "/hello.txt;reboot"), ("Content-Length", 0)]))
         elif route == "/framing-hidden":

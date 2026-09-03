@@ -177,10 +177,11 @@ for text, want in bad_urls.items():
 
 
 # ── Location -> a whole address ─────────────────────────────────────────
-# What the redirect advice offers when it says "to follow it by hand". The
-# forms os64get claims to resolve are checked against urllib's urljoin; the
-# ones it deliberately declines are checked by name, because declining is the
-# answer, not a shortfall to be papered over.
+# Where a redirect points: RFC 3986 §5.2 reference resolution, checked
+# against urllib.parse.urljoin, which implements the same algorithm. This is
+# the arithmetic the fetch loop trusts before it dials anywhere, so the two
+# lists below are a curated one (the forms a redirect actually arrives in,
+# each with the accident it cost) and the spec's OWN test vectors.
 join_cases = [
     ("http://example.com/a/b.html", "http://other.example/x"),
     ("http://example.com/a/b.html", "https://other.example/x"),
@@ -211,6 +212,26 @@ join_cases = [
     # dialect and refused. (Codex round 3.)
     ("https://example.com/a/b.html", "/login?next=https://id.example/"),
     ("http://example.com/a/b.html", "/go?u=http://other.example/x&v=1"),
+    # RELATIVE TO THE PAGE, which is the form the redirect increment had to
+    # learn: a server that answers /dir/ with `index.html` is not naming a
+    # host, a path or anything else that can be dialled until it is joined to
+    # the page that said it.
+    ("http://example.com/a/b.html", "c.html"),
+    ("http://example.com/a/b.html", "../up.html"),
+    ("http://example.com/a/b/", "../../top.html"),
+    ("http://example.com/a/b.html", "./same-dir.html"),
+    ("http://example.com/dir/", "index.html"),
+    ("http://example.com/a/b.html", "?page=2"),
+    ("http://example.com/a/b.html?page=1", "?page=2"),
+    ("http://example.com/a/b.html?page=1", "c.html"),
+    ("http://10.0.2.8:8080/redirect-page", "hello.txt"),
+    # A reference that names its own scheme is copied through, whatever the
+    # scheme is — `mailto:` is not a page, and saying so is the caller's job.
+    # Joining it to the base (which is what happens when "does it have a
+    # scheme" is spelled "does it contain ://") makes a plausible http
+    # address for something that was never one.
+    ("http://example.com/a/b.html", "mailto:someone@example.com"),
+    ("http://example.com/a/b.html", "ftp://files.example/pub/x"),
 ]
 for base, location in join_cases:
     verdict, got, _ = run(["absolute", base, location])
@@ -228,13 +249,39 @@ for base, location in join_cases:
        (b.scheme, b.hostname, b.port or default(b.scheme), b.path, b.query):
         fail(f"absolute {base} + {location}", f"{got['url']!r} != {want!r}")
 
-# Declined on purpose: a genuinely relative reference wants RFC 3986's full
-# algorithm, which belongs to the increment that follows redirects for real.
-for base, location in [("http://example.com/a/b.html", "page.html"),
-                       ("http://example.com/a/b.html", "../up.html"),
-                       ("http://example.com/a/b.html", "")]:
+# RFC 3986 §5.4's OWN examples, base and all — the normal ones and the
+# abnormal ones, which are where a hand-rolled resolver goes wrong: a ".."
+# that would climb above the root, a "." that ends the path and must leave
+# its '/' behind, and the two forms that only LOOK like dot segments (`g.`
+# and `..g` are ordinary names). The expectation is urljoin's, so this is
+# three implementations agreeing rather than a table somebody typed.
+rfc3986_base = "http://a/b/c/d;p?q"
+rfc3986_refs = [
+    # §5.4.1, normal
+    "g:h", "g", "./g", "g/", "/g", "//g", "?y", "g?y", "#s", "g#s", "g?y#s",
+    ";x", "g;x", "g;x?y#s", ".", "./", "..", "../", "../g", "../..", "../../",
+    "../../g",
+    # §5.4.2, abnormal
+    "../../../g", "../../../../g", "/./g", "/../g", "g.", ".g", "g..", "..g",
+    "./../g", "./g/.", "g/./h", "g/../h", "g;x=1/./y", "g;x=1/../y",
+    "g?y/./x", "g?y/../x", "g#s/./x", "g#s/../x",
+]
+for location in rfc3986_refs:
+    verdict, got, _ = run(["absolute", rfc3986_base, location])
+    if verdict != "absolute":
+        fail(f"rfc3986 {location!r}", f"declined it ({verdict})")
+        continue
+    want = urllib.parse.urljoin(rfc3986_base, location)
+    a, b = urllib.parse.urlsplit(got["url"]), urllib.parse.urlsplit(want)
+    if (a.scheme, a.netloc, a.path, a.query) != (b.scheme, b.netloc, b.path, b.query):
+        fail(f"rfc3986 {location!r}", f"{got['url']!r} != {want!r}")
+
+# Declined on purpose. An EMPTY Location resolves, in RFC 3986, to the page
+# you already have — and a redirect to the page you already have is a server
+# that has lost its place, not an address to go to.
+for base, location in [("http://example.com/a/b.html", "")]:
     verdict, _, _ = run(["absolute", base, location])
-    if verdict != "relative":
+    if verdict != "declined":
         fail(f"absolute {base} + {location}", f"resolved it ({verdict}) — it should decline")
 
 # ── Replies ─────────────────────────────────────────────────────────────

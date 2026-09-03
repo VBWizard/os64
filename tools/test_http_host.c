@@ -247,8 +247,9 @@ static int do_head(const char *path, size_t chunk, size_t sip, size_t breakAt,
 }
 
 // "absolute": given a base URL and a Location, print the whole address the
-// redirect advice would offer — or "relative" when this deliberately does not
-// resolve one. Checked against urllib.parse.urljoin for the forms it claims.
+// redirect resolves to — or "declined" when there is none to spell (an empty
+// reference, or an answer too long to hold). Checked against
+// urllib.parse.urljoin, which implements the same RFC 3986 §5.2.
 static int do_absolute(const char *baseText, const char *location)
 {
     http_url_t base;
@@ -257,9 +258,9 @@ static int do_absolute(const char *baseText, const char *location)
         return 2;
     }
 
-    char whole[HTTP_LINE_MAX + HTTP_HOST_MAX + 16];
+    char whole[HTTP_URL_TEXT_MAX];
     if (!http_url_absolute(&base, location, whole, sizeof(whole))) {
-        printf("relative\n");
+        printf("declined\n");
         return 0;
     }
     printf("absolute\n");
