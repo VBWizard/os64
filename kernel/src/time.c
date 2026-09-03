@@ -5,7 +5,7 @@
 #include "signals.h"
 #include "smp_core.h"
 
-extern int kTimeZone;
+extern int kTimeZoneOffsetMinutes;
 extern volatile uint64_t kTicksSinceStart;
 extern uint64_t kTicksPerSecond;
 // Is there a scheduler that can wake a parked thread? nap() asks before
@@ -116,12 +116,14 @@ time_t mktime(struct tm *tmbuf) {
   if ((TIME_MAX - seconds) / SECS_DAY < day) overflow|=8;
   seconds += day * SECS_DAY;
 
-  // Now adjust according to timezone and daylight saving time
-  if (((kTimeZone > 0) && (TIME_MAX - kTimeZone < seconds)) || 
-      ((kTimeZone < 0) && (seconds < -kTimeZone))) {
+  // mktime receives local civil time, so remove the east-positive offset to
+  // obtain UTC. The kernel owns standard time only; _dstbias is separate.
+  long zone_seconds = (long)kTimeZoneOffsetMinutes * 60;
+  if (((zone_seconds < 0) && (TIME_MAX + zone_seconds < seconds)) ||
+      ((zone_seconds > 0) && (seconds < zone_seconds))) {
           overflow|=16;
   }
-  seconds += kTimeZone;
+  seconds -= zone_seconds;
 
   if (tmbuf->tm_isdst) {
     dst = _dstbias;
@@ -170,24 +172,38 @@ time_t mktime_simple(const struct tm *time) {
 
 struct tm *gmtime(const time_t *timer, struct tm *tmbuf) {
   time_t time = *timer;
-  unsigned long dayclock, dayno;
+  long dayclock, dayno;
   int year = EPOCH_YR;
 
-  dayclock = (unsigned long) time % SECS_DAY;
-  dayno = (unsigned long) time / SECS_DAY;
+  // C division truncates toward zero, but calendar days must floor: -1 is
+  // the final second of 1969, not a negative clock on the first day of 1970.
+  // Keeping dayno signed also prevents a west-of-UTC adjustment near epoch 0
+  // from becoming an enormous unsigned year walk.
+  dayclock = time % SECS_DAY;
+  dayno = time / SECS_DAY;
+  if (dayclock < 0) {
+    dayclock += SECS_DAY;
+    dayno--;
+  }
 
   tmbuf->tm_sec = dayclock % 60;
   tmbuf->tm_min = (dayclock % 3600) / 60;
   tmbuf->tm_hour = dayclock / 3600;
   tmbuf->tm_wday = (dayno + 4) % 7; // Day 0 was a thursday
-  while (dayno >= (unsigned long) YEARSIZE(year)) {
+  if (tmbuf->tm_wday < 0)
+    tmbuf->tm_wday += 7;
+  while (dayno < 0) {
+    year--;
+    dayno += YEARSIZE(year);
+  }
+  while (dayno >= YEARSIZE(year)) {
     dayno -= YEARSIZE(year);
     year++;
   }
   tmbuf->tm_year = year - YEAR0;
   tmbuf->tm_yday = dayno;
   tmbuf->tm_mon = 0;
-  while (dayno >= (unsigned long) _ytab[LEAPYEAR(year)][tmbuf->tm_mon]) {
+  while (dayno >= _ytab[LEAPYEAR(year)][tmbuf->tm_mon]) {
     dayno -= _ytab[LEAPYEAR(year)][tmbuf->tm_mon];
     tmbuf->tm_mon++;
   }
@@ -200,14 +216,14 @@ struct tm *localtime(const time_t *timer) {
   time_t t;
   struct tm tmbuf;
   
-  t = *timer - kTimeZone;
+  t = *timer + ((time_t)kTimeZoneOffsetMinutes * 60);
   return gmtime(&t, &tmbuf);
 }
 
 struct tm *localtime_r(const time_t *timer, struct tm *tmbuf) {
   time_t t;
 
-  t = *timer - kTimeZone;
+  t = *timer + ((time_t)kTimeZoneOffsetMinutes * 60);
   return gmtime(&t, tmbuf);
 }
 
@@ -331,4 +347,49 @@ void nap(uint64_t msToSleep)
 	if (ticks == 0)
 		ticks = 1;
 	signal_raise(SIGSLEEP, kTicksSinceStart + ticks, self);
+}
+
+// TZ counts offsets WEST of UTC (V7's little prank: Eastern is 5, India is
+// -5:30), so the east-positive minute result negates what the string says.
+// The zone NAME is skipped, not checked — the offset is the only thing the
+// kernel needs from it; the name and the DST rule after the offset are
+// libos64's business.
+void time_set_zone(const char *tz)
+{
+	kTimeZoneOffsetMinutes = 0;
+	if (tz == NULL || tz[0] == '\0')
+		return;
+
+	const char *p = tz;
+	while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z'))
+		p++;
+	int sign = 1;
+	if (*p == '+')
+		p++;
+	else if (*p == '-') {
+		sign = -1;
+		p++;
+	}
+	if (*p >= '0' && *p <= '9') {
+		int hours = 0;
+		while (*p >= '0' && *p <= '9') {
+			hours = hours * 10 + (*p++ - '0');
+			if (hours > 24)
+				return;
+		}
+
+		int minutes = 0;
+		if (*p == ':') {
+			p++;
+			if (*p < '0' || *p > '9')
+				return;
+			while (*p >= '0' && *p <= '9') {
+				minutes = minutes * 10 + (*p++ - '0');
+				if (minutes > 59)
+					return;
+			}
+		}
+
+		kTimeZoneOffsetMinutes = -sign * (hours * 60 + minutes);
+	}
 }

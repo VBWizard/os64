@@ -34,6 +34,7 @@
 #include "shared_object.h"
 #include "env.h"
 #include "sprintf.h"
+#include "strftime.h"
 #include "console.h"   // console_read_deadline — the read-patience test
 #include "driver/net/net_device.h"   // test_net_wire — the driver's first packets
 #include "driver/net/net_wire.h"     // Phase 2 stack tests build real wire bytes
@@ -1683,8 +1684,9 @@ static bool test_task_args(void)
 // grow-copy chain preserving every pair — so the coverage is a ring-3 fixture
 // (/tests/env_fill) that fills ~11KB (two growth events), reads every pair back
 // through the remapped window, drives the block to the ceiling and demands an
-// honest refusal, then proves the refusal corrupted nothing. Distinct
-// 0xE27Fxxxx codes name the invariant that broke.
+// honest refusal, then proves an oversized replacement also refuses without
+// deleting its old value. Distinct 0xE27Fxxxx codes name the invariant that
+// broke.
 #define ENV_FILL_OK 0x0E27600DUL
 static bool test_env_growth(void)
 {
@@ -1724,7 +1726,7 @@ static bool test_env_growth(void)
     }
 
     printd(DEBUG_TESTS, "\tPASS: test_env_growth (block grew under the fixed window, pairs "
-                        "survived the copies, 64KB ceiling refused honestly)\n");
+                        "survived the copies, 64KB refusals were atomic)\n");
     return true;
 }
 
@@ -4888,6 +4890,133 @@ static bool test_env_inherit_independence(void)
     return true;
 }
 
+static bool test_gmtime_negative_epoch(void)
+{
+    time_t before_epoch = -1;
+    struct tm utc_before_epoch;
+    gmtime(&before_epoch, &utc_before_epoch);
+    if (utc_before_epoch.tm_year != 69 || utc_before_epoch.tm_mon != 11 ||
+        utc_before_epoch.tm_mday != 31 || utc_before_epoch.tm_hour != 23 ||
+        utc_before_epoch.tm_min != 59 || utc_before_epoch.tm_sec != 59 ||
+        utc_before_epoch.tm_wday != 3) {
+        TEST_FAIL("gmtime(-1) did not land on the final second of 1969");
+    }
+    return true;
+}
+
+static bool test_time_zone_minute_offsets(void)
+{
+    int saved = kTimeZoneOffsetMinutes;
+
+    time_set_zone("IST-5:30");
+    if (kTimeZoneOffsetMinutes != 330) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("IST-5:30 did not parse as 330 minutes east");
+    }
+
+    // Exercise the opposite sign too: classic TZ offsets count west of UTC,
+    // while the kernel ABI reports minutes east.
+    time_set_zone("NST3:30");
+    if (kTimeZoneOffsetMinutes != -210) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("NST3:30 did not parse as 210 minutes west");
+    }
+
+    // This is the regression boundary: applying a westward offset to epoch
+    // zero produces a negative local epoch. gmtime must floor it into 1969,
+    // not cast it into an effectively endless unsigned year walk.
+    time_set_zone("EST5");
+    time_t epoch = 0;
+    struct tm local;
+    localtime_r(&epoch, &local);
+    if (local.tm_year != 69 || local.tm_mon != 11 || local.tm_mday != 31 ||
+        local.tm_hour != 19 || local.tm_min != 0 || local.tm_wday != 3) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("westward epoch-zero localtime did not land in 1969");
+    }
+
+    time_set_zone("EST5EDT");
+    if (kTimeZoneOffsetMinutes != -300) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("whole-hour TZ no longer uses minute units");
+    }
+
+    time_set_zone("IST-5:30");
+    localtime_r(&epoch, &local);
+    if (local.tm_hour != 5 || local.tm_min != 30) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("kernel localtime did not apply the minute offset");
+    }
+    struct tm local_epoch = {
+        .tm_year = 70, .tm_mon = 0, .tm_mday = 1,
+        .tm_hour = 5, .tm_min = 30, .tm_sec = 0,
+    };
+    if (mktime(&local_epoch) != 0) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("kernel mktime did not remove the minute offset");
+    }
+    char rendered[6];
+    if (strftime(rendered, sizeof(rendered), "%z", &local) == 0 ||
+        strcmp(rendered, "+0530") != 0) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("kernel strftime did not render the minute offset");
+    }
+
+    // A malformed minute suffix must not degrade into its whole-hour prefix.
+    time_set_zone("BAD5:60");
+    if (kTimeZoneOffsetMinutes != 0) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("out-of-range TZ minutes were silently truncated");
+    }
+    time_set_zone("BAD5:");
+    if (kTimeZoneOffsetMinutes != 0) {
+        kTimeZoneOffsetMinutes = saved;
+        TEST_FAIL("missing TZ minutes were silently truncated");
+    }
+
+    kTimeZoneOffsetMinutes = saved;
+    return true;
+}
+
+static bool test_env_inherit_grown(void)
+{
+    envpage_t *parent = env_create();
+    if (!parent) TEST_FAIL("env_create returned NULL");
+
+    envpage_t *bigger = env_grow(parent, TASK_ENV_MAX_BYTES / PAGE_SIZE);
+    if (!bigger) TEST_FAIL("env_grow returned NULL");
+    kfree(parent);
+    parent = bigger;
+
+    // Put live data beyond the first page, not merely unused capacity, so a
+    // one-page inheritance copy cannot pass by accident.
+    char key[8];
+    static char value[256];
+    for (int i = 0; i < 255; i++)
+        value[i] = (char)('a' + (i % 26));
+    value[255] = '\0';
+    for (int i = 0; i < 25; i++) {
+        key[0] = 'G';
+        key[1] = '0' + (i / 10);
+        key[2] = '0' + (i % 10);
+        key[3] = '\0';
+        if (!env_set(parent, key, value))
+            TEST_FAIL("two-page parent filled unexpectedly early");
+    }
+    if (parent->data_end <= ENV_DATA_CAPACITY(1))
+        TEST_FAIL("grown parent has no live data beyond page one");
+
+    envpage_t *child = env_inherit(parent);
+    if (!child) TEST_FAIL("env_inherit returned NULL for grown parent");
+    size_t bytes = (size_t)parent->page_count * PAGE_SIZE;
+    if (child->page_count != parent->page_count || memcmp(child, parent, bytes) != 0)
+        TEST_FAIL("child did not inherit the complete grown environment");
+
+    kfree(parent);
+    kfree(child);
+    return true;
+}
+
 static bool test_env_count_accurate(void)
 {
     envpage_t *env = env_create();
@@ -4931,6 +5060,19 @@ static bool test_env_capacity_full(void)
     // Entries set before the page filled must still be readable.
     if (env_get(env, "K000") == NULL)
         TEST_FAIL("K000 missing after fill");
+
+    // A larger replacement that cannot fit must be transactional. This is
+    // the bootenv PATH case: compacting the old pair before the capacity
+    // check used to return false with the old value already deleted.
+    static uint8_t before[PAGE_SIZE];
+    memcpy(before, env, PAGE_SIZE);
+    if (env_set(env, "K000", "replacement"))
+        TEST_FAIL("oversized replacement unexpectedly fit in full env");
+    if (memcmp(before, env, PAGE_SIZE) != 0)
+        TEST_FAIL("failed replacement changed the environment");
+    const char *preserved = env_get(env, "K000");
+    if (preserved == NULL || strcmp(preserved, "V000") != 0)
+        TEST_FAIL("failed replacement lost the old value");
 
     kfree(env);
     return true;
@@ -5255,6 +5397,9 @@ static void register_builtin_tests(void)
     test_register("env_multi_key",           test_env_multi_key,             TEST_PHASE_PREBOOT);
     test_register("env_inherit_copies",      test_env_inherit_copies,        TEST_PHASE_PREBOOT);
     test_register("env_inherit_independence",test_env_inherit_independence,  TEST_PHASE_PREBOOT);
+    test_register("gmtime_negative_epoch",   test_gmtime_negative_epoch,     TEST_PHASE_PREBOOT);
+    test_register("time_zone_minute_offsets",test_time_zone_minute_offsets,  TEST_PHASE_PREBOOT);
+    test_register("env_inherit_grown",       test_env_inherit_grown,         TEST_PHASE_PREBOOT);
     test_register("env_count_accurate",      test_env_count_accurate,        TEST_PHASE_PREBOOT);
     test_register("env_capacity_full",       test_env_capacity_full,         TEST_PHASE_PREBOOT);
     test_register("task_arena_create_and_destroy", test_task_arena_create_and_destroy, TEST_PHASE_PREBOOT);

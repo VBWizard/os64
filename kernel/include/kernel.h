@@ -22,7 +22,7 @@ extern bool kEnableKWorker;
 extern volatile uint64_t kSystemStartTime, kUptime;
 extern volatile uint64_t kSystemCurrentTime;
 extern volatile uint64_t kTicksSinceStart;
-extern int kTimeZone;
+extern int kTimeZoneOffsetMinutes;
 
 extern volatile struct limine_framebuffer_request framebuffer_request;
 extern volatile struct limine_memmap_request memmap_request;
@@ -32,7 +32,6 @@ extern volatile struct limine_module_request module_request;
 extern volatile struct limine_smp_request smp_request;
 extern struct limine_module_response *limine_module_response;
 extern struct limine_memmap_response *memmap_response;
-extern int kTimeZone;
 extern BasicRenderer kRenderer;
 extern uint64_t kCPUCyclesPerSecond;
 

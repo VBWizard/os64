@@ -57,7 +57,7 @@ extern volatile uint64_t kTicksSinceStart;
 extern volatile uint64_t kSystemCurrentTime;   // UTC epoch seconds (timer IRQ advances it)
 extern volatile uint64_t irq0_current_count;   // ticks into the current second (same IRQ)
 extern uint64_t kTicksPerSecond;
-extern int kTimeZone;                          // configured zone, HOURS east of UTC
+extern int kTimeZoneOffsetMinutes;             // configured standard offset, east of UTC
 extern task_t *kKernelTask;        // never a pty seat — pty_resize's walk skips it
 extern uint64_t kTotalMemory;      // installed RAM (memmap.c, Limine map sum)
 extern uint64_t kAvailableMemory;  // USABLE entries only — what the allocator governs
@@ -3989,7 +3989,7 @@ static uint64_t syscall_time(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	os64_time_t t;
 	t.epoch             = (int64_t)epoch;
-	t.tz_offset_minutes = kTimeZone * 60;     // kernel config is whole hours
+	t.tz_offset_minutes = kTimeZoneOffsetMinutes;
 	t.ticks_into_second = (uint32_t)phase;
 	t.ticks_per_second  = (uint32_t)kTicksPerSecond;
 	t.reserved          = 0;

@@ -18,9 +18,9 @@
 //   4. keep setting until the 64KB ceiling refuses (bounded loop — if the
 //      refusal never comes, the cap is broken and the block would pave the
 //      exit trampoline one page at a time);
-//   5. after the refusal, prove the block was not corrupted by the failed
-//      set, that REPLACING an existing key still works at a full block
-//      (compact-then-append), and that unset frees room a new set can use.
+//   5. after the refusal, prove the block was not corrupted, prove a larger
+//      replacement refuses without deleting its old value, then prove a
+//      same-size replacement and unset/reuse still work at the ceiling.
 //
 // Every check returns a distinct 0xE27Fxxxx code so a regression names the
 // invariant that died; success returns ENV_FILL_OK.
@@ -174,8 +174,21 @@ uint64_t _start(int argc, char **argv, os64_env_block_t *env)
     if (still == 0 || !local_streq(still, "V0000"))
         return FAIL_POST_REFUSAL;
 
-    // ...replacing an existing key at a FULL block must still work (env_set
-    // compacts the old pair out before appending, so same-size fits)...
+    // A replacement that needs more room than remains must fail WITHOUT
+    // deleting the old pair. This reaches env_set's capacity failure while
+    // env_grow is already at its ceiling — the path that used to turn a
+    // reported setenv failure into a successful, silent unset.
+    static char oversized[2048];
+    for (int i = 0; i < 2046; i++)
+        oversized[i] = (char)('A' + (i % 26));
+    oversized[2046] = '\0';
+    if (sys_setenv(key, oversized) == 0)
+        return FAIL_POST_REFUSAL;
+    still = env_lookup(env, key);
+    if (still == 0 || !local_streq(still, "V0000"))
+        return FAIL_POST_REFUSAL;
+
+    // A same-size replacement at the full block still succeeds.
     if (sys_setenv(key, "V9999") != 0)
         return FAIL_REPLACE_FULL;
     still = env_lookup(env, key);

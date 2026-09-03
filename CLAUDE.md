@@ -732,14 +732,28 @@ design in `docs/conf_path.md`.
 - **A NAME IS A FILE NAME, NOT A PATH.** `conf_find` refuses anything with a
   `/` in it, loudly. A reader asking for `../../etc/shadow` would be walking
   the ladder somewhere the ladder does not go.
-- **`hosts` and `crontab` MERGE; everything else is first-hit-wins.** Chris's
-  2026-08-22 ruling: `/home/hosts` layers ON TOP of `/etc/hosts` so your
-  machine names sit over the system's list rather than erasing it. That is why
-  the walk is resumable at all. `crontab` joined it on 2026-08-29 for the same
-  reason and with the same consequence worth stating out loud — a merged file
-  can only ADD, so a `/home` copy cannot turn a system entry off. A settings
-  file is not a database: check which kind you have before reaching for
-  `conf_find`.
+- **`hosts`, `crontab` and `bootenv.conf` MERGE; everything else is
+  first-hit-wins.** Chris's 2026-08-22 ruling: `/home/hosts` layers ON TOP of
+  `/etc/hosts` so your machine names sit over the system's list rather than
+  erasing it. That is why the walk is resumable at all. `crontab` joined it
+  on 2026-08-29 for the same reason and with the same consequence worth
+  stating out loud — a merged file can only ADD, so a `/home` copy cannot
+  turn a system entry off. `bootenv.conf` (2026-08-30) merges name by name
+  and is the exception to that consequence: `NAME =` with nothing after it
+  unsets. A settings file is not a database: check which kind you have
+  before reaching for `conf_find`.
+- **`bootenv.conf` is the environment every program is born with** — read
+  by the KERNEL (`kernel/src/bootenv.c`), the first reader on the ladder,
+  applied to the kernel task's block right after `conf_init` and before
+  anything is spawned, so logd, both shells, the desktop and cron all
+  inherit it. PATH, HOSTNAME, TZ live there; the two `env_set` lines in
+  `create_kernel_task` are the FLOOR for a boot with no file (the lifeboat),
+  not the configuration. A cmdline `TZ=` outranks the file for that boot.
+  It exists because `export TZ` in husk.rc reached only husk's children,
+  and the desktop is the kernel's child — the clock gui.conf started showed
+  UTC while the one husk started showed Eastern. The block is one page and
+  is NOT grown for it (the kernel task's window is never remapped): a file
+  that overflows it is refused loudly at the variable that did not fit.
 - **`/sys/conf`** publishes the ladder, its `source:`, and one line per reader
   saying which file it actually took. Read it FIRST when a config seems
   ignored. Every resolve also prints one line naming the misses
