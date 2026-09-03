@@ -1,4 +1,6 @@
-// mv.c — move files and directories with the VFS's atomic rename operation.
+// mv.c — move files and directories with the VFS rename operation. Moving to
+// an unused name is one filesystem operation; replacement is atomic on ext2
+// and retains FAT's legacy remove-first behavior.
 
 #include "os64/os64.h"
 

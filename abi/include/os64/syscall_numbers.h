@@ -388,9 +388,9 @@ typedef enum os64_shutdown_mode
 // rename(oldpath, newpath) — give a file a different name, possibly in a
 // different directory. Returns 0, or negative on refusal.
 //
-// THE GUARANTEE, and the only reason this call exists as a call: if
-// `newpath` already names a regular file, it is REPLACED, and there is no
-// instant at which `newpath` fails to resolve. That is the whole point.
+// THE LEGACY CONTRACT: if `newpath` already names a regular file, it is
+// REPLACED. A filesystem capable of swinging that name directly keeps it
+// resolving throughout; the FAT limitation is stated below.
 // Unix went its first decade without rename(2) — you wrote link(new, old)
 // then unlink(old), two steps, and a crash between them left you with two
 // names or none. 4.2BSD (1983) added rename precisely to close that window,
@@ -400,8 +400,8 @@ typedef enum os64_shutdown_mode
 // reason it was built: a transfer that fails must leave the previous file
 // exactly where it was, not a truncated impostor wearing its name.
 //
-// os64 keeps the atomicity and declines the rest of POSIX's rename, which
-// accumulated a great deal (EXDEV, directory-onto-empty-directory
+// os64 keeps the single-operation rename and declines the rest of POSIX's
+// rename, which accumulated a great deal (EXDEV, directory-onto-empty-directory
 // replacement, the ".."-and-link-count corner cases). The rules here are
 // four, and each one refuses rather than surprising you:
 //
@@ -425,14 +425,36 @@ typedef enum os64_shutdown_mode
 //     detaches the subtree into a ring nothing points at — one of the few
 //     things a rename can do that fsck cannot quietly repair.
 //
-// ATOMICITY IS THE FILESYSTEM'S TO GRANT. ext2 keeps the promise honestly
-// (one directory-block write swings the name onto the new inode). FAT
+// syscall 43 deliberately remains a two-argument ABI. Its unused registers
+// were never required to be zero, so reinterpreting arg2 here would make an
+// old binary's behavior depend on register residue. The safety policies
+// therefore have their own door, SYSCALL_RENAME_WITH_FLAGS (54):
+//
+//   OS64_RENAME_NOREPLACE
+//       Refuse if newpath already exists. The existence check and rename are
+//       one filesystem operation, so this is a destination-name claim rather
+//       than the racy userland sequence "stat, then rename".
+//
+//   OS64_RENAME_REQUIRE_ATOMIC_REPLACE
+//       Rename when newpath is absent; when it exists, replace only if the
+//       filesystem can do so without first removing the old name. ext2 can;
+//       FAT refuses and leaves both files intact.
+//
+// The modes are mutually exclusive. Unknown bits or both bits together are
+// refused. os64_rename() uses syscall 43; os64_rename_with_flags() uses 54.
+//
+// ATOMICITY IS THE FILESYSTEM'S TO GRANT. ext2 keeps the legacy promise
+// honestly (one directory-block write swings the name onto the new inode). FAT
 // cannot — it has no file identity separate from the directory entry, which
 // is exactly the idea the inode was and MS-DOS's 1981 filesystem was not —
 // so on FAT an existing destination is removed first and a real window
 // exists. Booked in DEBTS; root is ext2 precisely so the guarantee lives
 // where it can be kept.
+#define OS64_RENAME_NOREPLACE                 0x01
+#define OS64_RENAME_REQUIRE_ATOMIC_REPLACE    0x02
+#define OS64_RENAME_FLAG_MASK                 0x03
 #define SYSCALL_RENAME 43
+#define SYSCALL_RENAME_WITH_FLAGS 54
 
 // 44 and 45 belong to the pty pair (PTY_CREATE / PTY_SNAPSHOT, defined with
 // the GUI block below) — they were claimed on the gui branch first and this

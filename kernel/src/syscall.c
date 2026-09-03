@@ -124,6 +124,8 @@ static uint64_t syscall_mkdir(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
+static uint64_t syscall_rename_with_flags(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_mount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_unmount(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -243,7 +245,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_THREAD,      "thread",      syscall_thread,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_THREAD_EXIT, "thread_exit", syscall_thread_exit, false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_MKDIR,       "mkdir",       syscall_mkdir,       false, 0x01),  // arg0 = path
-	SYSCALL_DEFINE(SYSCALL_RENAME,      "rename",      syscall_rename,      false, 0x03),  // arg0 = old path, arg1 = new path
+	SYSCALL_DEFINE(SYSCALL_RENAME,      "rename",      syscall_rename,      false, 0x03),  // legacy arg0/1 = paths; every trailing register is ignored
 	SYSCALL_DEFINE(SYSCALL_PTY_CREATE,   "pty_create",   syscall_pty_create,   false, 0x00),  // args: cols, rows — values, no pointers
 	SYSCALL_DEFINE(SYSCALL_PTY_SNAPSHOT, "pty_snapshot", syscall_pty_snapshot, false, 0x02),  // arg1 = header out; arg2 = cells out, NULLABLE (max_cells 0 = header-only probe — handler validates)
 	SYSCALL_DEFINE(SYSCALL_PTY_RESIZE,   "pty_resize",   syscall_pty_resize,   false, 0x00),  // args: master handle, cols, rows — values, no pointers
@@ -257,6 +259,7 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_CONF_RESOLVE, "conf_resolve", syscall_conf_resolve, false, 0x03),  // arg0 = name in, arg1 = path out; arg4 = don't probe
 	SYSCALL_DEFINE(SYSCALL_MOUNT,   "mount",   syscall_mount,   false, 0x03),  // arg0 = partition name/GUID, arg1 = mount point, arg2 = OS64_MOUNT_* flags
 	SYSCALL_DEFINE(SYSCALL_UNMOUNT, "unmount", syscall_unmount, false, 0x01),  // arg0 = mount point
+	SYSCALL_DEFINE(SYSCALL_RENAME_WITH_FLAGS, "rename_with_flags", syscall_rename_with_flags, false, 0x03),  // arg0/1 = paths, arg2 = OS64_RENAME_*
 	// ── GUI (16-21): GRAPHICS.md's userland boundary, live 2026-08-17.
 	// Ownership (migration step 1) went in BEFORE these doors opened: every
 	// handle below is checked against its owner inside gui_client.c, so a
@@ -3086,6 +3089,7 @@ typedef struct {
 	vfs_filesystem_t *fs;              // the one filesystem BOTH paths live on
 	const char *old_tail;              // fs-local remainders; point into the
 	const char *new_tail;              //   buffers above — transient, never freed
+	uint64_t flags;                    // opt-in policy; zero is legacy behavior
 	volatile long result;
 } rename_params_t;
 
@@ -3096,20 +3100,19 @@ static void rename_do(void *arg)
 	// path leaves this slot NULL, and dispatching through it would execute
 	// mapped page zero rather than fail (fat_glue.c's disk_write, again).
 	p->result = (p->fs->fops != NULL && p->fs->fops->rename != NULL)
-	                ? p->fs->fops->rename(p->old_tail, p->new_tail, p->fs)
+	                ? p->fs->fops->rename(p->old_tail, p->new_tail, p->fs,
+	                                       p->flags)
 	                : -1;
 }
 
-// rename(oldpath, newpath) — see the contract over SYSCALL_RENAME in
-// syscall_numbers.h. This half owns exactly three jobs: get both strings
+// Both rename ABI doors meet here after deciding the policy. This half owns
+// exactly three jobs: get both strings
 // safely out of user space, resolve both against the task's cwd and the
 // mount table, and refuse the two cases no filesystem driver should ever be
 // asked about (a cross-mount rename, and a mount point as either end).
-static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
-    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+static uint64_t syscall_rename_common(uint64_t arg0, uint64_t arg1,
+                                      uint64_t flags)
 {
-	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
-
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
 	if (task == NULL)
@@ -3137,6 +3140,7 @@ static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	p->old_tail = NULL;
 	p->new_tail = NULL;
+	p->flags = flags;
 	p->fs = vfs_resolve_mount(p->oldpath, &p->old_tail);
 	vfs_filesystem_t *new_fs = vfs_resolve_mount(p->newpath, &p->new_tail);
 	if (p->fs == NULL || new_fs == NULL)
@@ -3199,6 +3203,30 @@ static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	       task->exename, p->oldpath, p->newpath);
 	kfree(p);
 	return 0;
+}
+
+// Syscall 43 is frozen as the original two-argument call. In particular,
+// arg2 is ignored rather than treated as flags: old raw callers were never
+// required to clear an unused register, so reading it here would silently
+// change already-built programs.
+static uint64_t syscall_rename(uint64_t arg0, uint64_t arg1, uint64_t arg2,
+    uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg2; (void)arg3; (void)arg4; (void)arg5;
+	return syscall_rename_common(arg0, arg1, 0);
+}
+
+// Syscall 54 is the explicit policy-bearing door. The two policies are
+// mutually exclusive because "must not exist" and "replace atomically if it
+// exists" ask opposite questions of the same destination.
+static uint64_t syscall_rename_with_flags(uint64_t arg0, uint64_t arg1,
+    uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5)
+{
+	(void)arg3; (void)arg4; (void)arg5;
+	if ((arg2 & ~((uint64_t)OS64_RENAME_FLAG_MASK)) != 0 ||
+	    arg2 == OS64_RENAME_FLAG_MASK)
+		return SYSCALL_RESULT_INVALID;
+	return syscall_rename_common(arg0, arg1, arg2);
 }
 
 // stat's kernel-context half: one dops->stat, into the HHDM params block.
@@ -4439,7 +4467,7 @@ static uint64_t syscall_tty_handle(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 }
 
 // conf_resolve — where is the config file called <name>? Contract in
-// abi/os64/syscall_numbers.h; the walk itself is conf.c's.
+// abi/include/os64/syscall_numbers.h; the walk itself is conf.c's.
 //
 // The kernel does the walking because a ladder every reader obeys must be
 // parsed by exactly one thing, and because the walker being the resolver is
@@ -4592,7 +4620,7 @@ static uint64_t syscall_gui_window_get_surface(uint64_t arg0, uint64_t arg1, uin
 }
 
 // signal_handler — install a handler for a signal, answer with the previous.
-// Contract in abi/os64/syscall_numbers.h; the argument for putting the table
+// Contract in abi/include/os64/syscall_numbers.h; the argument for putting the table
 // on the TASK is SIGNALS.md §2.
 //
 // AN INSTALLED HANDLER NOW ACTUALLY RUNS. This comment used to say
