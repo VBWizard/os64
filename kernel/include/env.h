@@ -48,8 +48,9 @@ envpage_t  *env_inherit(const envpage_t *parent);
 const char *env_get(const envpage_t *env, const char *key);
 
 // Set key=val.  If the key already exists its value is replaced (the old
-// entry is compacted out and the new pair appended).  Returns false if
-// there is no room in the current page allocation.
+// entry is compacted out and the new pair appended). Returns false if there
+// is no room in the current page allocation, leaving the block byte-for-byte
+// unchanged so a caller can grow and retry without losing the old value.
 bool        env_set(envpage_t *env, const char *key, const char *val);
 
 // Remove key (compacting the block).  Returns true whether or not the key

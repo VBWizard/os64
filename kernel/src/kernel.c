@@ -154,7 +154,7 @@ volatile uint64_t kSystemStartTime;
 volatile uint64_t kUptime;
 volatile uint64_t kTicksSinceStart;
 volatile uint64_t kSystemCurrentTime;
-int kTimeZone;
+int kTimeZoneOffsetMinutes;
 volatile bool kInitDone;
 volatile bool kFBInitDone = 0;
 uint64_t kTicksPerSecond;
@@ -165,7 +165,7 @@ char kKernelCommandline[512];
 bool kOverrideFileLogging;
 char kRootPartUUID[37] = {0};
 // The TZ= kernel cmdline string, verbatim (classic V7/POSIX format, e.g.
-// EST5EDT). Two consumers: init.c derives kTimeZone's standard offset from
+// EST5EDT). Two consumers: init.c derives the kernel's standard offset from
 // it, and create_kernel_task seeds it into the first task's environment (and
 // bootenv_apply re-applies it over bootenv.conf: typed for this boot, it
 // outranks the file) — where
@@ -1049,7 +1049,8 @@ void kernel_main()
 	// to report it to.
 	kLogFormatBad = (kLogFormatName[0] != '\0' && !log_set_format_by_name(kLogFormatName));
 	hardware_init();
-	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S", kSystemCurrentTime + (kTimeZone * 60 * 60));
+	strftime_epoch(&startTime[0], 100, "%m/%d/%Y %H:%M:%S",
+	               kSystemCurrentTime + ((long)kTimeZoneOffsetMinutes * 60));
 	// A SERIAL= value that is neither 'on' nor 'off' (values are
 	// case-sensitive, like every token this cmdline parses) must not be
 	// swallowed: this is the one flag whose silent failure costs the wire

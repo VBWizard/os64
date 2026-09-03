@@ -2395,7 +2395,31 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 		}
 	}
 
+	// Snapshot the parent's complete environment BEFORE task construction.
+	// Besides making every child inherit parent->page_count pages, this order
+	// makes allocation failure clean: no task, stacks, page tables, argv, or
+	// loader state exist yet to unwind. A sibling thread may grow and replace
+	// the parent's block, so the copy shares syscall_setenv's swap lock.
+	envpage_t *inheritedEnv;
+	{
+		uint64_t envIrq = spinlock_acquire_irqsave(&kTaskEnvLock);
+		inheritedEnv = env_inherit(parentTaskPtr->env);
+		spinlock_release_irqrestore(&kTaskEnvLock, envIrq);
+	}
+	if (inheritedEnv == NULL) {
+		// Starting successfully with no environment would turn allocator
+		// pressure into a delayed, misleading PATH failure in this task and
+		// every descendant. User spawns get the ordinary cannot-run result;
+		// required kernel infrastructure names the boot-stopping failure.
+		printd(DEBUG_TASK, "task_create: cannot copy %s's environment for %s — out of memory\n",
+		       parentTaskPtr->exename, path);
+		if (isKernelTask)
+			panic("task_create: cannot copy the environment for kernel task %s\n", path);
+		return NULL;
+	}
+
 	task_t* newTask = task_initialize(parentTaskPtr, isKernelTask, isIdleTask, pinnedAPICID);
+	newTask->env = inheritedEnv;
 
     //Copy the path (parameter) value from the parentTask's memory.
     newTask->path=kmalloc(TASK_MAX_PATH_LEN); 
@@ -2647,18 +2671,6 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	paging_map_pages(newTask->pml4v, TASK_ARGV_VIRT, argvPhys, mapPages, PAGE_PRESENT | PAGE_WRITE | PAGE_USER | PAGE_NO_EXECUTE);   // argv is data
 
 	newTask->kernelTask=isKernelTask;
-
-	// Inherit the parent's environment.  env_inherit makes a full independent copy
-	// so parent and child can diverge freely.  True CoW (sharing the physical page
-	// until first write) is a future optimisation.
-	// Under kTaskEnvLock since env growth (2026-08-14): a sibling thread of the
-	// parent could setenv mid-spawn, and growth SWAPS AND FREES the parent's
-	// block — without the lock this memcpy can chase a freed pointer.
-	{
-		uint64_t envIrq = spinlock_acquire_irqsave(&kTaskEnvLock);
-		newTask->env = env_inherit(parentTaskPtr->env);
-		spinlock_release_irqrestore(&kTaskEnvLock, envIrq);
-	}
 
 	// Now that argc/argv are built and mapped (TASK_ARGV_VIRT) and env is
 	// inherited, latch the ELF entry registers: RDI=argc, RSI=argv, RDX=env.

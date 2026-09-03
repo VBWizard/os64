@@ -18,7 +18,9 @@
 // is the floor beneath the file, so a boot with no bootenv.conf anywhere —
 // the lifeboat's, or a broken root's — still has a path to walk. A `TZ=` on
 // the boot cmdline outranks the file: it is typed for THIS boot, and it is
-// the only channel that exists before a filesystem does.
+// the only channel that exists before a filesystem does. When present, that
+// pair is seeded before file processing and every file-level TZ assignment
+// or unset is ignored, so capacity cannot weaken the precedence rule.
 //
 // WHY A FILE. The first task's environment used to be C source — PATH,
 // HOSTNAME, and TZ-if-the-cmdline-had-one — and `export TZ=...` in husk.rc
@@ -31,8 +33,10 @@
 // what things that are not shells need, and this is os64's.
 //
 // Applied ONCE, in kernel_init, to the kernel task's block after conf_init
-// has settled the ladder and before the first program is spawned — logd,
-// the shells, the desktop and cron all inherit from that block.
+// has settled the ladder and before the first program is spawned. The block
+// starts at one page and grows on demand to TASK_ENV_MAX_BYTES while the
+// files are merged; logd, the shells, the desktop and cron then inherit its
+// completed allocation and contents.
 void bootenv_apply(task_t *task);
 
 #endif

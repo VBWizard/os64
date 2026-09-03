@@ -5,7 +5,7 @@
 #include "signals.h"
 #include "smp_core.h"
 
-extern int kTimeZone;
+extern int kTimeZoneOffsetMinutes;
 extern volatile uint64_t kTicksSinceStart;
 extern uint64_t kTicksPerSecond;
 // Is there a scheduler that can wake a parked thread? nap() asks before
@@ -116,12 +116,14 @@ time_t mktime(struct tm *tmbuf) {
   if ((TIME_MAX - seconds) / SECS_DAY < day) overflow|=8;
   seconds += day * SECS_DAY;
 
-  // Now adjust according to timezone and daylight saving time
-  if (((kTimeZone > 0) && (TIME_MAX - kTimeZone < seconds)) || 
-      ((kTimeZone < 0) && (seconds < -kTimeZone))) {
+  // mktime receives local civil time, so remove the east-positive offset to
+  // obtain UTC. The kernel owns standard time only; _dstbias is separate.
+  long zone_seconds = (long)kTimeZoneOffsetMinutes * 60;
+  if (((zone_seconds < 0) && (TIME_MAX + zone_seconds < seconds)) ||
+      ((zone_seconds > 0) && (seconds < zone_seconds))) {
           overflow|=16;
   }
-  seconds += kTimeZone;
+  seconds -= zone_seconds;
 
   if (tmbuf->tm_isdst) {
     dst = _dstbias;
@@ -200,14 +202,14 @@ struct tm *localtime(const time_t *timer) {
   time_t t;
   struct tm tmbuf;
   
-  t = *timer - kTimeZone;
+  t = *timer + ((time_t)kTimeZoneOffsetMinutes * 60);
   return gmtime(&t, &tmbuf);
 }
 
 struct tm *localtime_r(const time_t *timer, struct tm *tmbuf) {
   time_t t;
 
-  t = *timer - kTimeZone;
+  t = *timer + ((time_t)kTimeZoneOffsetMinutes * 60);
   return gmtime(&t, tmbuf);
 }
 
@@ -333,14 +335,14 @@ void nap(uint64_t msToSleep)
 	signal_raise(SIGSLEEP, kTicksSinceStart + ticks, self);
 }
 
-// TZ counts hours WEST of UTC (V7's little prank: Eastern is 5, Tokyo is -9),
-// so the east-positive kTimeZone is the negation of what the string says.
+// TZ counts offsets WEST of UTC (V7's little prank: Eastern is 5, India is
+// -5:30), so the east-positive minute result negates what the string says.
 // The zone NAME is skipped, not checked — the offset is the only thing the
 // kernel needs from it; the name and the DST rule after the offset are
 // libos64's business.
 void time_set_zone(const char *tz)
 {
-	kTimeZone = 0;
+	kTimeZoneOffsetMinutes = 0;
 	if (tz == NULL || tz[0] == '\0')
 		return;
 
@@ -356,8 +358,24 @@ void time_set_zone(const char *tz)
 	}
 	if (*p >= '0' && *p <= '9') {
 		int hours = 0;
-		while (*p >= '0' && *p <= '9')
+		while (*p >= '0' && *p <= '9') {
 			hours = hours * 10 + (*p++ - '0');
-		kTimeZone = -(sign * hours);   // west-positive in, east-positive out
+			if (hours > 24)
+				return;
+		}
+
+		int minutes = 0;
+		if (*p == ':') {
+			p++;
+			if (*p < '0' || *p > '9')
+				return;
+			while (*p >= '0' && *p <= '9') {
+				minutes = minutes * 10 + (*p++ - '0');
+				if (minutes > 59)
+					return;
+			}
+		}
+
+		kTimeZoneOffsetMinutes = -sign * (hours * 60 + minutes);
 	}
 }

@@ -21,7 +21,6 @@ int usedCount=0;
 extern volatile uint64_t kSystemCurrentTime;
 extern volatile uint64_t kTicksSinceStart;
 extern BasicRenderer kRenderer;
-extern int kTimeZone;
 extern volatile uint64_t kSystemStartTime;
 extern task_t* kKernelTask;
 

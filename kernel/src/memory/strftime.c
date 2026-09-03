@@ -38,7 +38,7 @@ const char *_months_abbrev[12] = {
   "Oct", "Nov", "Dec"
 };
 
-extern int kTimeZone;
+extern int kTimeZoneOffsetMinutes;
 
 static char *_fmt(const char *format, const struct tm *t, char *pt, const char *ptlim);
 static char *_conv(const int n, char *format, char *pt, const char *ptlim);
@@ -261,15 +261,15 @@ static char *_fmt(const char *format, const struct tm *t, char *pt, const char *
 
         case 'z': {
           long absoff;
-          if (kTimeZone >= 0) {
-            absoff = kTimeZone;
+          if (kTimeZoneOffsetMinutes >= 0) {
+            absoff = kTimeZoneOffsetMinutes;
             pt = _add("+", pt, ptlim);
           } else {
-            absoff = kTimeZone;
+            absoff = -kTimeZoneOffsetMinutes;
             pt = _add("-", pt, ptlim);
           }
-          pt = _conv(absoff / 3600, "%02d", pt, ptlim);
-          pt = _conv((absoff % 3600) / 60, "%02d", pt, ptlim);
+          pt = _conv(absoff / 60, "%02d", pt, ptlim);
+          pt = _conv(absoff % 60, "%02d", pt, ptlim);
 
           continue;
         }
