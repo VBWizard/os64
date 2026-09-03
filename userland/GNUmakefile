@@ -217,7 +217,7 @@ TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 # These programs consume the standalone gzip module. Keep the dependency
 # selective: linking libgzip into every app would turn an optional format
 # engine into part of the foundational runtime by accident.
-LIBGZIP_PROGRAMS := gunzip gziptest
+LIBGZIP_PROGRAMS := gunzip gziptest os64get
 
 # Every apps/<name>/ directory holding .c files is an app named <name>.
 # $(sort) both orders and DEDUPES — essential since apps went multi-file

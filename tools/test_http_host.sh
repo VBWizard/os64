@@ -125,6 +125,8 @@ for text in good_urls:
         fail(text, f"host header {hostLine!r} != {wantHost!r}")
     if "\r\n\r\n" not in head:
         fail(text, "request has no blank line")
+    if "\r\nAccept-Encoding: gzip, identity\r\n" not in head:
+        fail(text, "request does not name exactly the supported content codings")
 
     # Addressed to a PROXY: the whole URL in the request line (absolute-form,
     # RFC 7230 §5.3.2), Host still naming the origin. Getting these two
@@ -137,6 +139,8 @@ for text in good_urls:
     proxyHostLine = [l for l in proxyHead.split("\r\n") if l.lower().startswith("host:")][0]
     if proxyHostLine != f"Host: {wantHost}":
         fail(text, f"proxy host header {proxyHostLine!r} != {wantHost!r}")
+    if "\r\nAccept-Encoding: gzip, identity\r\n" not in proxyHead:
+        fail(text, "proxy request does not name exactly the supported content codings")
 
 # Refusals, each named. These are the cases where os64get is stricter than
 # urllib on purpose.

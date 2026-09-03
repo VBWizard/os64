@@ -22,10 +22,11 @@
 // network is a parser nobody drives across those boundaries.
 //
 // DELIBERATELY NOT HERE, each a rung of BROWSER.md's ladder or a ruling of
-// its own: chunked transfer-encoding, redirects, content codings,
+// its own: chunked transfer-encoding, redirects, content codings beyond gzip,
 // authentication, cookies, keep-alive, IPv6 literals. What is missing is
 // REFUSED BY NAME rather than mis-read: a response this code cannot honestly
-// turn into a file must never become a file.
+// turn into a file must never become a file. gzip decoding stays in the
+// caller because http.c is the transport parser; libgzip owns that format.
 //
 // TLS IS NOT HERE EITHER AND NEVER WILL BE — os64 borrows a TLS when its day
 // comes, because thirty years of side-channel and oracle attacks teach no
@@ -162,7 +163,7 @@ typedef struct {
     bool     hasLength;
     uint64_t length;                          // valid only when hasLength
     char     transferEncoding[HTTP_TOKEN_MAX];// "" = none said
-    char     contentEncoding[HTTP_TOKEN_MAX]; // "" = identity, the only one this speaks
+    char     contentEncoding[HTTP_TOKEN_MAX]; // "" = identity; caller also accepts gzip
     char     location[HTTP_LINE_MAX];         // "" = none said
 } http_response_t;
 

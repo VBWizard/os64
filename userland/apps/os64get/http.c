@@ -269,15 +269,15 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
         requestTarget = target;
     }
 
-    // Accept-Encoding: identity is not decoration. RFC 7231 reads a MISSING
-    // Accept-Encoding as "any coding is acceptable", so saying nothing is how
-    // a client that cannot inflate anything ends up with a gzip stream in a
-    // file named .html. Asking for identity says what is true.
+    // Name both codings this client can turn back into the representation.
+    // A missing Accept-Encoding means any coding may be acceptable; an
+    // explicit list lets a server choose gzip without licensing br, compress,
+    // or another envelope that would otherwise have to be refused afterward.
     int32_t n = os64_snprintf(out, cap,
                               "GET %s HTTP/1.0\r\n"
                               "Host: %s\r\n"
                               "User-Agent: os64get/1 (os64)\r\n"
-                              "Accept-Encoding: identity\r\n"
+                              "Accept-Encoding: gzip, identity\r\n"
                               "Connection: close\r\n"
                               "\r\n",
                               requestTarget, host);

@@ -114,10 +114,20 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    - (b) chunked transfer-encoding.
    - (c) redirects: 301/302/307/308, `Location:`, hop cap ~5, refuse
      https:// targets HONESTLY (name the reason: no TLS yet).
-   - (d) `Content-Encoding: gzip` — stream through libgzip with a response
-     expansion cap, keep the output provisional until `OS64_GZIP_DONE`, and
-     reject its explicit trailing-data result; the shared DEFLATE decoder is
-     also the engine a zlib/PNG wrapper will use.
+   - (d) **DONE 2026-09-03.** `Content-Encoding: gzip` streams through
+     libgzip into the same `<dest>.part` staging the identity path uses, and
+     the name is published only after `OS64_GZIP_DONE` has verified every
+     member CRC/size and ruled out trailing data. `Accept-Encoding` now names
+     exactly `gzip, identity` both directly and through `tlsproxy.py`.
+     Length-framed replies may expand at most 100x, with a 1 MiB usability
+     floor and 16 MiB absolute ceiling; close-framed gzip uses that ceiling
+     because its wire length is not known in advance. Identity downloads are
+     unchanged. Host ASan/UBSan parser and gzip suites passed; in QEMU over
+     slirp, length- and close-framed gzip both decoded byte-identically, a bad
+     CRC and explicit trailing bytes exited 8 without replacing the old name,
+     and a 1 MiB + 1 compression fixture stopped at exactly 1048576 staged
+     bytes with exit 14. The shared DEFLATE decoder remains the engine a
+     zlib/PNG wrapper will use.
    - (e) `Range:`/resume — later, wants a consumer first.
    DESIGN CONSTRAINT: keep the HTTP machinery in cleanly separable
    functions — the extraction into a shared library (FreeBSD libfetch's

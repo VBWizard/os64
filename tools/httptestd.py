@@ -4,8 +4,8 @@ r"""httptestd — a deterministic HTTP server for driving os64get's URL half.
 BROWSER.md's verification note calls for "a local python3 -m http.server
 behind the harness"; this is that, with the awkward cases added, because the
 answers worth testing are the ones a well-behaved library will not produce on
-request: a reply with no Content-Length, a connection cut mid-body, a 301, a
-content coding os64get must refuse rather than write to disk.
+request: a reply with no Content-Length, a connection cut mid-body, a 301,
+and content codings os64get must either decode or refuse without publishing.
 
 Every route's bytes are fixed by a seed, so the file the guest downloads can
 be compared against the file this server meant to send — host-side, byte for
@@ -56,7 +56,11 @@ Routes, and what each is FOR:
     /framing-spaced that framing, plus a blank before the colon
     /coding-chain   Transfer-Encoding: gzip, chunked       a coding nothing decoded
     /framing-hidden that framing, padded past a line cap    refused, not dropped
-    /gzipped        Content-Encoding: gzip                 refused, not written
+    /gzipped        Content-Encoding: gzip                 decoded to HELLO
+    /gzip-close     gzip with no Content-Length            EOF finalizes it
+    /gzip-corrupt   gzip with a bad trailer CRC            kept only as .part
+    /gzip-trailing  valid gzip followed by junk            kept only as .part
+    /gzip-limit     1 MiB + 1 decoded zero byte            expansion refused
     /cut            half the promised body, then hangs up  a short body is a failure
     /junk           not HTTP at all                        a bad header line
     /reason-latin1  404 with a Latin-1 reason phrase       high bytes are glyphs
@@ -118,6 +122,25 @@ def big_bytes(size=1024 * 1024, seed=0x05064A17):
 
 
 BIG = big_bytes()
+
+
+def gzip_bytes(chunks):
+    """Build one RFC 1952 stream without retaining its uncompressed input."""
+    encoder = zlib.compressobj(level=9, wbits=16 + zlib.MAX_WBITS)
+    pieces = []
+    for chunk in chunks:
+        pieces.append(encoder.compress(chunk))
+    pieces.append(encoder.flush())
+    return b"".join(pieces)
+
+
+GZIP_HELLO = gzip_bytes([HELLO])
+GZIP_CORRUPT = bytearray(GZIP_HELLO)
+GZIP_CORRUPT[-8] ^= 0x80
+GZIP_CORRUPT = bytes(GZIP_CORRUPT)
+# The compressed stream is far below 1/100 of its decoded size, so os64get's
+# ratio rule reaches its 1 MiB floor. One byte more proves the exact boundary.
+GZIP_LIMIT = gzip_bytes([bytes(1024 * 1024), b"\0"])
 
 
 def head(status, reason, headers, version="HTTP/1.1"):
@@ -250,10 +273,26 @@ class Handler(socketserver.StreamRequestHandler):
                                        ("Transfer-Encoding", "chunked")]))
             self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
         elif route == "/gzipped":
-            body = zlib.compress(HELLO)
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_HELLO))]) + GZIP_HELLO)
+        elif route == "/gzip-close":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip")],
+                           version="HTTP/1.0") + GZIP_HELLO)
+        elif route == "/gzip-corrupt":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_CORRUPT))]) + GZIP_CORRUPT)
+        elif route == "/gzip-trailing":
+            body = GZIP_HELLO + b"not another gzip member"
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
                                        ("Content-Encoding", "gzip"),
                                        ("Content-Length", len(body))]) + body)
+        elif route == "/gzip-limit":
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_LIMIT))]) + GZIP_LIMIT)
         elif route == "/cut":
             self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
                                        ("Content-Length", 100000)]))
