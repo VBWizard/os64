@@ -269,6 +269,19 @@ bool http_url_absolute(const http_url_t *base, const char *location,
         if (p[0] == ':' && p[1] == '/' && p[2] == '/')
             return os64_strcopy(out, cap, location) < cap;
 
+    // A SCHEME-RELATIVE REFERENCE — `//cdn.example.com/file` — NAMES A
+    // DIFFERENT HOST. It looks like an absolute path because it starts with a
+    // slash, and treating it as one produced
+    // `https://original.example//cdn.example.com/file`: an address pointing
+    // back at the server that just redirected away from itself, which would
+    // fetch something unrelated and look like it worked. Only the scheme is
+    // inherited; the authority comes from the reference. (RFC 3986 §4.2, and
+    // Codex review round 2, 2026-09-02.)
+    if (location[0] == '/' && location[1] == '/') {
+        int32_t n = os64_snprintf(out, cap, "%s:%s", base->scheme, location);
+        return n > 0 && (size_t)n < cap;
+    }
+
     if (location[0] != '/')
         return false;                 // relative to the page: not ours to resolve
 

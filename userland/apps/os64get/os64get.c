@@ -1596,33 +1596,53 @@ static void redirect_advice(const http_url_t *from, const char *location)
 static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *proxy,
                      const char *destOverride, bool quiet)
 {
-    char name[GET_PATH_MAX];
-    if (!url_basename(url, name, sizeof(name)))
-    {
-        os64_hprintf(OS64_STDERR,
-                     "os64get: %s does not name a file to save — say where with a DEST\n",
-                     urlText);
-        return GET_USAGE;
-    }
-
-    // The command line's word is final, under cp(1)'s rule since 1971: an
-    // existing directory receives the file under its own name, anything else
-    // IS the path. Without a DEST the file lands in the current directory —
-    // NOT wherever os64get.conf would have sent a valet file of that name.
+    // WHERE THE FILE GOES, and the basename is only needed for some of the
+    // answers. The command line's word is final, under cp(1)'s rule since
+    // 1971: an existing directory receives the file under its own name,
+    // anything else IS the path. Without a DEST the file lands in the current
+    // directory — NOT wherever os64get.conf would have sent a valet file of
+    // that name.
+    //
+    // A DEST THAT NAMES A FILE IS ASKED FOR FIRST, before the URL is asked
+    // what it would like to be called. The order used to be the other way
+    // round, so a URL ending in `/..`, or with a last segment past 255 bytes,
+    // was refused with "say where with a DEST" — while HAVING been given one.
+    // Advice that the program itself will not accept is the same defect as
+    // advice that cannot be typed, which this file has now made twice.
+    // (Codex review round 2, 2026-09-02.)
     char dest[GET_PATH_MAX];
+    char name[GET_PATH_MAX];
     bool ok;
+    bool intoDir = false;
+
     if (destOverride != NULL)
     {
         os64_dirent_t into;
-        bool intoDir = (os64_stat(destOverride, &into) >= 0) &&
-                       (into.flags & OS64_DE_DIR) != 0;
-        ok = join_path(dest, sizeof(dest), intoDir ? destOverride : NULL,
-                                           intoDir ? name : destOverride);
+        intoDir = (os64_stat(destOverride, &into) >= 0) &&
+                  (into.flags & OS64_DE_DIR) != 0;
+    }
+
+    if (destOverride != NULL && !intoDir)
+    {
+        ok = join_path(dest, sizeof(dest), NULL, destOverride);
+        // The name is still wanted for the progress meter, and a URL that
+        // suggests none is no longer a problem now that the destination is
+        // spelled out. Fall back to the last thing anybody typed.
+        if (!url_basename(url, name, sizeof(name)))
+            os64_strcopy(name, sizeof(name), destOverride);
     }
     else
     {
-        ok = join_path(dest, sizeof(dest), NULL, name);
+        if (!url_basename(url, name, sizeof(name)))
+        {
+            os64_hprintf(OS64_STDERR,
+                         "os64get: %s does not name a file to save — give a DEST that does,"
+                         " such as a path ending in the name you want\n", urlText);
+            return GET_USAGE;
+        }
+        ok = join_path(dest, sizeof(dest), intoDir ? destOverride : NULL, name);
     }
+
     if (!ok)
     {
         os64_hprintf(OS64_STDERR, "os64get: destination path too long\n");

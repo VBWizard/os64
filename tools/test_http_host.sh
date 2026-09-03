@@ -193,6 +193,12 @@ join_cases = [
     ("https://example.com:8443/a/b.html", "/top.html"),
     ("https://example.com:443/a/b.html", "/top.html"),
     ("https://example.com/a/b.html", "http://plain.example/x"),
+    # Scheme-relative: the AUTHORITY comes from the reference, only the scheme
+    # is inherited (RFC 3986 §4.2). Treating it as a path pointed the command
+    # back at the server that had just redirected away from itself.
+    ("https://example.com/a/b.html", "//cdn.example.com/file"),
+    ("http://example.com/a/b.html", "//cdn.example.com/file?x=1"),
+    ("http://example.com:8080/a/b.html", "//cdn.example.com/"),
 ]
 for base, location in join_cases:
     verdict, got, _ = run(["absolute", base, location])

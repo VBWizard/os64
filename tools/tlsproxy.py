@@ -45,6 +45,15 @@ a file on this machine instead of a page on the web.
     GET https://example.com/ HTTP/1.0
     Host: example.com
 
+WHAT IT PROMISES ABOUT COMPLETENESS, because it sits inside a tool whose
+whole point is that "complete" and "correct" are different claims: a body
+that does not arrive whole becomes a 502, never a short file. A length the
+origin stated is forwarded so os64get can police it; a length nobody stated
+is established here by spooling the body before announcing it, so an
+upstream failure still happens while there is somewhere to put the error.
+A transfer-coding this proxy did not actually decode is refused rather than
+passed on with its framing stripped and its label removed.
+
 Deliberately NOT implemented: CONNECT. A real proxy tunnels TLS through it
 untouched, which is the right thing when the client can do TLS — and os64
 cannot, so a tunnel would hand it bytes it has no way to read. Terminating is
@@ -54,6 +63,7 @@ not a shortcut here, it is the entire point.
 import http.client
 import socketserver
 import ssl
+import tempfile
 import sys
 import urllib.parse
 
@@ -75,6 +85,14 @@ USAGE = "python3 tlsproxy.py [--port N] [--verbose]"
 #   length means the close is the length.
 HOP_BY_HOP = {"transfer-encoding", "connection", "keep-alive", "proxy-authenticate",
               "proxy-authorization", "te", "trailer", "upgrade", "content-length"}
+
+# The unknown-length spool. Small bodies stay in memory; past SPOOL_RAM the
+# temp file rolls over to disk, so the memory bound survives. SPOOL_MAX is
+# the point at which a lengthless origin that never stops is refused rather
+# than allowed to fill the disk instead of the RAM — the same hazard moved,
+# not the same hazard solved.
+SPOOL_RAM = 8 * 1024 * 1024
+SPOOL_MAX = 512 * 1024 * 1024
 
 VERBOSE = False
 
@@ -126,6 +144,13 @@ class Handler(socketserver.StreamRequestHandler):
             # The one failure worth naming precisely: this is the proxy doing
             # the job os64 borrowed it for, and saying no.
             self.refuse(502, "Bad Gateway", f"TLS refused the far end: {error}")
+        except http.client.HTTPException as error:
+            # IncompleteRead and friends are HTTPException, NOT OSError, so
+            # without this arm a body that stops mid-chunk escapes the handler
+            # entirely: the thread dies, the socket shuts abruptly, and the
+            # reason never reaches anyone. It is caught here so the failure is
+            # SAID — and, when it happens during the spool, said as a 502.
+            self.refuse(502, "Bad Gateway", f"the origin broke off: {error!r}")
         except OSError as error:
             self.refuse(502, "Bad Gateway", f"could not reach {split.hostname}: {error}")
 
@@ -155,51 +180,95 @@ class Handler(socketserver.StreamRequestHandler):
             })
             reply = upstream.getresponse()
 
-            # THE BODY IS STREAMED, NEVER HELD WHOLE. Reading it entire to
-            # measure it meant one arbitrary URL could cost this process the
-            # size of the response — and a close-delimited reply that never
-            # ends could cost it everything, once per connection, with a
-            # thread each. (Codex review, 2026-09-02.)
-            #
-            # What that costs in return is the length: http.client un-chunks
-            # for us, so a chunked origin's decoded size is unknowable until
-            # the end. So the length is FORWARDED when the origin stated one
-            # and omitted when it did not, and an omitted length means the
-            # close is the length — HTTP/1.0's own framing, which os64get
-            # already reads. The common case keeps its Content-Length and
-            # therefore keeps os64get's ability to notice a short body.
+            # ONLY STRIP A FRAMING WE ACTUALLY REMOVED. http.client de-chunks
+            # exactly when the header reads "chunked" and nothing else, so a
+            # legal chain like `Transfer-Encoding: gzip, chunked` arrives
+            # still coded and still framed — and dropping the header that says
+            # so would hand os64get chunk lengths to publish as the file.
+            # reply.chunked IS the question "did we decode it", so ask that
+            # rather than assuming the header's presence proves it.
+            # (Codex review round 2, 2026-09-02.)
+            coding = reply.getheader("Transfer-Encoding")
+            if coding is not None and not reply.chunked:
+                self.refuse(502, "Bad Gateway",
+                            f"the origin used transfer-coding '{coding}', which this "
+                            f"proxy does not decode — passing it on would look like a file")
+                return
+
             declared = reply.getheader("Content-Length")
-            if reply.getheader("Transfer-Encoding") is not None:
-                declared = None          # de-chunked: the origin's length is not ours
+            if coding is not None:
+                declared = None      # de-chunked: the origin's length is not ours
 
-            # REDIRECTS ARE PASSED THROUGH, NOT FOLLOWED. os64get is the
-            # client; deciding what a 301 means is its business, and a proxy
-            # that followed them would hide the one thing it asked to see.
-            head = f"HTTP/1.0 {reply.status} {reply.reason}\r\n"
-            for name, value in reply.getheaders():
-                if name.lower() in HOP_BY_HOP:
-                    continue
-                head += f"{name}: {value}\r\n"
             if declared is not None:
-                head += f"Content-Length: {declared}\r\n"
-            head += "Via: 1.0 os64-tlsproxy\r\n"
-            head += "\r\n"
-            self.send(head.encode("latin-1"))
-            self.headersSent = True
+                # THE LENGTH IS KNOWN, so stream it and let os64get police it:
+                # a body that stops early contradicts the Content-Length we
+                # forwarded, and os64get already fails loudly on that.
+                self.deliver(reply, reply, declared)
+                return
 
-            moved = 0
-            while True:
-                piece = reply.read(65536)
-                if not piece:
-                    break
-                self.send(piece)
-                moved += len(piece)
+            # THE LENGTH IS NOT KNOWN, and that is the dangerous shape. With no
+            # Content-Length the close IS the end, so an upstream failure part
+            # way through — an unterminated chunked body, a timeout, a reset —
+            # reaches os64get as a clean EOF and gets PUBLISHED as a complete
+            # file. Streaming it would trade a memory hazard for a silent
+            # truncation, which is the worse of the two: this program exists
+            # inside a tool whose whole point is that "complete" and "correct"
+            # are different claims. (Codex review round 2, 2026-09-02, who
+            # reproduced it with a chunked origin that omitted its terminator.)
+            #
+            # So an unknown-length body is SPOOLED first and only announced
+            # once it has arrived whole. Memory is still bounded — the spool
+            # rolls over to disk past SPOOL_RAM — and a failure now happens
+            # before any head has gone out, so it can still be said out loud
+            # as a 502 rather than mimed as a short file.
+            with tempfile.SpooledTemporaryFile(max_size=SPOOL_RAM, mode="w+b") as spool:
+                size = 0
+                while True:
+                    piece = reply.read(65536)
+                    if not piece:
+                        break
+                    size += len(piece)
+                    if size > SPOOL_MAX:
+                        self.refuse(502, "Bad Gateway",
+                                    f"the origin declared no length and passed "
+                                    f"{SPOOL_MAX} bytes — refusing to spool more")
+                        return
+                    spool.write(piece)
+                spool.seek(0)
+                self.deliver(reply, spool, str(size), spooled=True)
         finally:
             upstream.close()
 
+    def deliver(self, reply, body, declared, spooled=False):
+        """Send the head, then the body. Past the head there is no way to
+        report a failure — see headersSent — so everything that can go wrong
+        upstream must already have gone right before this is called."""
+
+        head = f"HTTP/1.0 {reply.status} {reply.reason}\r\n"
+        # REDIRECTS ARE PASSED THROUGH, NOT FOLLOWED. os64get is the client;
+        # deciding what a 301 means is its business, and a proxy that followed
+        # them would hide the one thing it asked to see.
+        for name, value in reply.getheaders():
+            if name.lower() in HOP_BY_HOP:
+                continue
+            head += f"{name}: {value}\r\n"
+        head += f"Content-Length: {declared}\r\n"
+        head += "Via: 1.0 os64-tlsproxy\r\n"
+        head += "\r\n"
+        self.send(head.encode("latin-1"))
+        self.headersSent = True
+
+        moved = 0
+        while True:
+            piece = body.read(65536)
+            if not piece:
+                break
+            self.send(piece)
+            moved += len(piece)
+
         if VERBOSE:
             print(f"    -> {reply.status} {reply.reason}, {moved} bytes"
-                  f"{'' if declared is not None else ' (close-delimited)'}", flush=True)
+                  f"{' (spooled)' if spooled else ''}", flush=True)
 
     def refuse(self, status, reason, detail):
         if self.headersSent:
@@ -207,9 +276,18 @@ class Handler(socketserver.StreamRequestHandler):
             print(f"    !! {detail} (after headers — hanging up)", flush=True)
             return
         print(f"    !! {status} {reason}: {detail}", flush=True)
-        body = f"tlsproxy: {detail}\n".encode("latin-1")
+
+        # THE BODY IS UTF-8 AND THE HEAD IS LATIN-1, which is not fussiness:
+        # header field values are latin-1 by the spec, a message body is
+        # whatever Content-Type says, and every explanation this program
+        # writes is English prose with an em-dash in it. Encoding the body as
+        # latin-1 raised UnicodeEncodeError from inside the error path —
+        # so a correctly detected refusal died on the way to being reported,
+        # which is worse than reporting it wrongly. (Found while testing the
+        # round-2 fixes, 2026-09-02.)
+        body = f"tlsproxy: {detail}\n".encode("utf-8")
         self.send(f"HTTP/1.0 {status} {reason}\r\n"
-                  f"Content-Type: text/plain\r\n"
+                  f"Content-Type: text/plain; charset=utf-8\r\n"
                   f"Content-Length: {len(body)}\r\n"
                   f"\r\n".encode("latin-1") + body)
 

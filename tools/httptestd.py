@@ -48,6 +48,9 @@ Routes, and what each is FOR:
     /redirect       301 -> /hello.txt                      reported, not followed
     /redirect-https 302 -> an https:// address              the honest TLS answer
     /chunked        Transfer-Encoding: chunked             refused, not written
+    /dots/..        a URL with no usable basename          DEST must still be honored
+    /chunked-cut    chunked, terminator never sent         truncation must not pass
+    /coding-chain   Transfer-Encoding: gzip, chunked       a coding nothing decoded
     /framing-hidden that framing, padded past a line cap    refused, not dropped
     /gzipped        Content-Encoding: gzip                 refused, not written
     /cut            half the promised body, then hangs up  a short body is a failure
@@ -146,6 +149,28 @@ class Handler(socketserver.StreamRequestHandler):
             # framing as the file. os64get must refuse it. (Codex P1, PR #52.)
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
                                        ("Transfer-Encoding", " " * 3000 + "chunked")]))
+            self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
+        elif route == "/dots/..":
+            # A URL whose last path segment is unusable as a file name. With
+            # a DEST naming a file, the fetch must still work — the basename
+            # is only wanted when nothing else says where the bytes go.
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Length", len(HELLO))]) + HELLO)
+        elif route == "/chunked-cut":
+            # A chunked body that never sends its terminating chunk, then
+            # hangs up. Through a proxy that strips the framing and states no
+            # length, this arrives downstream as a clean EOF and publishes as
+            # a COMPLETE file — truncation wearing success. (Codex round 2.)
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Transfer-Encoding", "chunked")]))
+            self.send(b"10000\r\n" + BIG[:65536] + b"\r\n")
+        elif route == "/coding-chain":
+            # A legal transfer-coding CHAIN. http.client de-chunks only when
+            # the header is exactly "chunked", so this arrives still coded and
+            # still framed — and a proxy that drops the header on sight would
+            # hand the raw framing on as a file.
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Transfer-Encoding", "gzip, chunked")]))
             self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
         elif route == "/chunked":
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
