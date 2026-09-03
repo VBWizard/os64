@@ -50,6 +50,7 @@ Routes, and what each is FOR:
     /chunked        Transfer-Encoding: chunked             refused, not written
     /dots/..        a URL with no usable basename          DEST must still be honored
     /chunked-cut    chunked, terminator never sent         truncation must not pass
+    /framing-spaced that framing, plus a blank before the colon
     /coding-chain   Transfer-Encoding: gzip, chunked       a coding nothing decoded
     /framing-hidden that framing, padded past a line cap    refused, not dropped
     /gzipped        Content-Encoding: gzip                 refused, not written
@@ -164,6 +165,18 @@ class Handler(socketserver.StreamRequestHandler):
             self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
                                        ("Transfer-Encoding", "chunked")]))
             self.send(b"10000\r\n" + BIG[:65536] + b"\r\n")
+        elif route == "/framing-spaced":
+            # The framing header padded past a client's line cap AND carrying
+            # the blank before the colon that the SHORT form is already
+            # refused for. Both shapes must earn the same answer, or a server
+            # picks which parser it faces by padding a line. Written as raw
+            # bytes because head() cannot spell a malformed name.
+            # (Codex round 3.)
+            self.send(b"HTTP/1.1 200 OK\r\n"
+                      b"Content-Type: text/plain\r\n"
+                      b"Transfer-Encoding :" + b" " * 3000 + b"chunked\r\n"
+                      b"\r\n")
+            self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
         elif route == "/coding-chain":
             # A legal transfer-coding CHAIN. http.client de-chunks only when
             # the header is exactly "chunked", so this arrives still coded and

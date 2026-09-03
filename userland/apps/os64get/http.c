@@ -12,6 +12,26 @@ static bool is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <
 static bool is_blank(char c) { return c == ' ' || c == '\t'; }
 static char to_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : c; }
 
+// A FIELD NAME IS A TOKEN, and both places that read one judge it by this.
+// RFC 7230's tchar: letters, digits, and "!#$%&'*+-.^_`|~". Nothing else —
+// no space, no tab, no colon, no control byte.
+//
+// It exists because the two paths were judging names by different rules and
+// the looser one was reachable. `Transfer-Encoding :` is refused by
+// header_take (which checks the byte before the colon) and was ACCEPTED by
+// overlong_verdict, whose name simply carried the trailing blank and matched
+// nothing — so the malformed short form was rejected while the malformed
+// LONG form was dropped, and dropping it published chunk markers as a file.
+// A shared rule cannot drift like two spellings of one rule can.
+// (Codex review round 3, 2026-09-02.)
+static bool is_token_byte(char c)
+{
+    return is_alpha(c) || is_digit(c) ||
+           c == '!' || c == '#' || c == '$'  || c == '%' || c == '&' ||
+           c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' ||
+           c == '^' || c == '_' || c == '`'  || c == '|' || c == '~';
+}
+
 // os64_strcopy's contract (the wanted length, not the written one), plus
 // ASCII case folding. Case matters here in exactly one direction: a scheme
 // and a coding name are compared, so they are folded once on the way in
@@ -263,11 +283,24 @@ bool http_url_absolute(const http_url_t *base, const char *location,
     if (location == NULL || location[0] == '\0')
         return false;
 
-    // Already whole — including a scheme this program cannot fetch, because
-    // the caller wants to SAY what the address is, not to dial it.
-    for (const char *p = location; *p != '\0'; p++)
-        if (p[0] == ':' && p[1] == '/' && p[2] == '/')
-            return os64_strcopy(out, cap, location) < cap;
+    // ALREADY WHOLE? ASK THE PARSER, which is the one place that knows what a
+    // URL looks like. This used to scan the whole string for "://" and take
+    // the first hit, so `/login?next=https://id.example/` — an ordinary
+    // root-relative redirect carrying a URL in its query — was mistaken for
+    // an absolute reference and printed back unchanged. The command it
+    // produced then read as the valet dialect and was refused, which is a
+    // long way round to giving somebody no help at all.
+    //
+    // http_url_parse already answers this correctly (the bytes before the
+    // "://" must all be scheme-legal, and `/`, `?` and `=` are not), and
+    // asking it rather than re-deciding here is what keeps ONE definition of
+    // a URL in this file. NOT_A_URL means relative; anything else means the
+    // reference names its own scheme, including one this program cannot
+    // fetch — the caller wants to SAY what the address is, not dial it.
+    // (Codex review round 3, 2026-09-02.)
+    http_url_t probe;
+    if (http_url_parse(location, &probe) != HTTP_URL_NOT_A_URL)
+        return os64_strcopy(out, cap, location) < cap;
 
     // A SCHEME-RELATIVE REFERENCE — `//cdn.example.com/file` — NAMES A
     // DIFFERENT HOST. It looks like an absolute path because it starts with a
@@ -427,27 +460,22 @@ static bool take_once(char *slot, size_t cap, const char *value)
 
 static http_head_result_t header_take(char *line, http_response_t *out)
 {
-    // A HEADER LINE MAY NOT BEGIN WITH WHITESPACE. That shape is obs-fold, a
-    // continuation of the line above, deprecated by RFC 7230 §3.2.4 and
-    // required to be rejected by anything that is not a proxy. Refusing it is
-    // not pedantry: `  Transfer-Encoding: chunked` would otherwise parse as a
-    // header NAMED "  Transfer-Encoding", match none of the three compares
-    // below, and be ignored — the same silent miss as an over-long framing
-    // header, arriving through a different door. (Found while writing the
-    // test for Codex's P1, which named the trailing-whitespace door.)
-    if (is_blank(line[0]))
-        return HTTP_HEAD_SYNTAX;
-
+    // THE NAME IS A TOKEN, judged by the same is_token_byte the over-long
+    // path uses — which is the point, because these two used to judge it
+    // differently and the looser one was reachable. That single rule covers
+    // what were three separate checks: a line beginning with whitespace
+    // (obs-fold, a continuation of the line above, deprecated by RFC 7230
+    // §3.2.4 and required to be rejected by anything that is not a proxy), a
+    // blank before the colon, and any other byte a field name may not hold.
+    // Each of those, left through, hides a framing header under a name that
+    // matches nothing and gets its chunk markers published as a file.
     char *colon = line;
-    while (*colon != '\0' && *colon != ':')
+    while (*colon != '\0' && *colon != ':') {
+        if (!is_token_byte(*colon))
+            return HTTP_HEAD_SYNTAX;
         colon++;
+    }
     if (*colon != ':' || colon == line)
-        return HTTP_HEAD_SYNTAX;
-    // RFC 7230 forbids whitespace between the name and the colon, and every
-    // server that has ever been written obeys. A client that "helpfully"
-    // trims it is a client that disagrees with the next parser in the chain
-    // about where a header begins.
-    if (is_blank(colon[-1]))
         return HTTP_HEAD_SYNTAX;
     *colon = '\0';
 
@@ -497,22 +525,22 @@ static http_head_result_t header_take(char *line, http_response_t *out)
 // is not something to shrug at.
 static http_head_result_t overlong_verdict(const char *prefix)
 {
-    // Leading whitespace makes the name unknowable here for the same reason
-    // it is refused in header_take: the line is obs-fold, and what it hides
-    // cannot be read out of the prefix.
-    if (is_blank(prefix[0]))
-        return HTTP_HEAD_FRAMING;
-
+    // The name, judged by is_token_byte — the SAME rule header_take applies,
+    // so the two paths cannot disagree about what a header is called. Any
+    // byte that is not a token byte ends the walk: a blank, a control byte,
+    // or the obs-fold whitespace that starts a continuation line.
     char name[HTTP_TOKEN_MAX];
     size_t n = 0;
     while (prefix[n] != '\0' && prefix[n] != ':') {
+        if (!is_token_byte(prefix[n]))
+            return HTTP_HEAD_SYNTAX;  // malformed, exactly as the short form would be
         if (n + 1 >= sizeof(name))
-            return HTTP_HEAD_OK;      // too long to BE one of the three
+            return HTTP_HEAD_OK;      // a legal name, too long to BE one of the three
         name[n] = prefix[n];
         n++;
     }
-    if (prefix[n] != ':')
-        return HTTP_HEAD_FRAMING;     // no colon in the whole prefix
+    if (prefix[n] != ':' || n == 0)
+        return HTTP_HEAD_FRAMING;     // no name and no colon in the whole prefix
     name[n] = '\0';
 
     if (os64_streq_nocase(name, "Content-Length") ||

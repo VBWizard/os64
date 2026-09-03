@@ -199,6 +199,12 @@ join_cases = [
     ("https://example.com/a/b.html", "//cdn.example.com/file"),
     ("http://example.com/a/b.html", "//cdn.example.com/file?x=1"),
     ("http://example.com:8080/a/b.html", "//cdn.example.com/"),
+    # A URL inside the QUERY of a root-relative redirect. The "://" is there
+    # but it does not START the reference, so this must be joined to the base
+    # — printing it unchanged produced a command the CLI read as the valet
+    # dialect and refused. (Codex round 3.)
+    ("https://example.com/a/b.html", "/login?next=https://id.example/"),
+    ("http://example.com/a/b.html", "/go?u=http://other.example/x&v=1"),
 ]
 for base, location in join_cases:
     verdict, got, _ = run(["absolute", base, location])
@@ -394,25 +400,53 @@ for label, (raw, want) in refusals.items():
 # PR #52; the rule was right and its premise ("the headers this acts on are
 # all short") was the server's to break.
 pad = b" " * 3000
+# Each entry is (bytes, the refusal it must earn). "framing" means the name
+# was legible and names a header the body's reading depends on; "syntax"
+# means the name was not a legal token at all, which the SHORT form of the
+# same line is also refused for — the two paths judge a name by one rule now,
+# and that is the property under test.
 framing_hidden = {
-    "long-transfer-encoding": b"HTTP/1.1 200 OK\r\nTransfer-Encoding:" + pad + b"chunked\r\n\r\n",
-    "long-content-encoding": b"HTTP/1.1 200 OK\r\nContent-Encoding:" + pad + b"gzip\r\n\r\n",
-    "long-content-length": b"HTTP/1.1 200 OK\r\nContent-Length:" + pad + b"5\r\n\r\nhello",
+    "long-transfer-encoding": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding:" + pad + b"chunked\r\n\r\n", "framing"),
+    "long-content-encoding": (b"HTTP/1.1 200 OK\r\nContent-Encoding:" + pad + b"gzip\r\n\r\n", "framing"),
+    "long-content-length": (b"HTTP/1.1 200 OK\r\nContent-Length:" + pad + b"5\r\n\r\nhello", "framing"),
     # Cased differently, because the compare must not care.
-    "long-te-cased": b"HTTP/1.1 200 OK\r\ntRaNsFeR-eNcOdInG:" + pad + b"chunked\r\n\r\n",
+    "long-te-cased": (b"HTTP/1.1 200 OK\r\ntRaNsFeR-eNcOdInG:" + pad + b"chunked\r\n\r\n", "framing"),
     # Whitespace before the name is obs-fold, and it hides a framing header
     # exactly as trailing padding does — the same hole through a second door,
     # found while writing this test rather than by Codex.
-    "folded-transfer-encoding": b"HTTP/1.1 200 OK\r\n  Transfer-Encoding:" + pad + b"chunked\r\n\r\n",
+    "folded-transfer-encoding": (b"HTTP/1.1 200 OK\r\n  Transfer-Encoding:" + pad + b"chunked\r\n\r\n", "syntax"),
+    # A THIRD door (Codex round 3): whitespace BEFORE the colon. The short
+    # form is refused by header_take; the long form used to carry the blank
+    # into the name, match nothing, and be dropped.
+    "long-te-space-before-colon": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding :" + pad + b"chunked\r\n\r\n", "syntax"),
+    "long-cl-space-before-colon": (b"HTTP/1.1 200 OK\r\nContent-Length :" + pad + b"5\r\n\r\nhello", "syntax"),
+    "long-te-tab-before-colon": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding\t:" + pad + b"chunked\r\n\r\n", "syntax"),
+    # Any other byte a field name may not hold, for the same reason.
+    "long-te-inner-space": (b"HTTP/1.1 200 OK\r\nTransfer Encoding:" + pad + b"chunked\r\n\r\n", "syntax"),
 }
-for label, raw in framing_hidden.items():
+for label, (raw, want) in framing_hidden.items():
     path = work / f"framing-{label}"
     path.write_bytes(raw)
     for chunk in [1, 7, 64, 4096, 0]:
         verdict, _, _ = run(["head", path, chunk, 64, 0, work / "body.out"])
-        if verdict != "framing":
+        if verdict != want:
             fail(f"framing {label} chunk={chunk}",
-                 f"{verdict} != framing — an unreadable framing header was DROPPED")
+                 f"{verdict} != {want} — an unreadable framing header was DROPPED")
+
+# The SHORT form of each malformed name must earn the same answer, because a
+# server must not be able to pick which parser it faces by padding a line.
+short_malformed = {
+    "short-te-space-before-colon": b"HTTP/1.1 200 OK\r\nTransfer-Encoding : chunked\r\n\r\n",
+    "short-te-tab-before-colon": b"HTTP/1.1 200 OK\r\nTransfer-Encoding\t: chunked\r\n\r\n",
+    "short-te-inner-space": b"HTTP/1.1 200 OK\r\nTransfer Encoding: chunked\r\n\r\n",
+}
+for label, raw in short_malformed.items():
+    path = work / f"short-{label}"
+    path.write_bytes(raw)
+    for chunk in [1, 7, 0]:
+        verdict, _, _ = run(["head", path, chunk, 64, 0, work / "body.out"])
+        if verdict != "syntax":
+            fail(f"short {label} chunk={chunk}", f"{verdict} != syntax")
 
 # ...and the tolerance the drop rule exists for must survive. A giant
 # Set-Cookie is real on the web, os64get does not read cookies, and refusing

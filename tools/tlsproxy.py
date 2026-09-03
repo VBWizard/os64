@@ -94,6 +94,14 @@ HOP_BY_HOP = {"transfer-encoding", "connection", "keep-alive", "proxy-authentica
 SPOOL_RAM = 8 * 1024 * 1024
 SPOOL_MAX = 512 * 1024 * 1024
 
+# The request head this proxy will read from a client: one line at a time,
+# bounded in length, in count, and in total. os64get sends five short lines;
+# these are generous next to that and finite next to a client that is not
+# playing.
+MAX_LINE = 65536
+MAX_HEAD = 262144
+MAX_HEAD_LINES = 200
+
 VERBOSE = False
 
 
@@ -104,6 +112,16 @@ def bad(message):
 
 
 class Handler(socketserver.StreamRequestHandler):
+    # A PER-CONNECTION READ TIMEOUT, because this binds to every interface and
+    # anything that can reach the port can open a connection and then say
+    # nothing. socketserver applies this to the socket in setup(), so a client
+    # that never finishes its request head is dropped instead of parking a
+    # worker thread and a file descriptor forever — repeat that and the proxy
+    # stops being able to serve the guest at all. It bounds the upstream wait
+    # too, which was already 30s by its own timeout.
+    # (Codex review round 3, 2026-09-02.)
+    timeout = 30
+
     # Set the moment a reply head goes out. Once it has, THERE IS NO LONGER
     # A PLACE TO PUT AN ERROR: a 502 written after the headers would land in
     # the middle of the body as bytes of the file. A failure past this point
@@ -113,11 +131,15 @@ class Handler(socketserver.StreamRequestHandler):
     headersSent = False
 
     def handle(self):
-        request = self.rfile.readline(65536).decode("latin-1", "replace").strip()
-        while True:                          # drain the rest of the head
-            line = self.rfile.readline(65536)
-            if line in (b"\r\n", b"\n", b""):
-                break
+        try:
+            request, ok = self.read_head()
+        except OSError as error:
+            # A timeout or a reset while the request was still arriving. There
+            # is nothing to answer yet and nobody waiting to read an answer.
+            print(f"    !! request head never finished: {error}", flush=True)
+            return
+        if not ok:
+            return
 
         parts = request.split()
         if len(parts) < 2:
@@ -153,6 +175,33 @@ class Handler(socketserver.StreamRequestHandler):
             self.refuse(502, "Bad Gateway", f"the origin broke off: {error!r}")
         except OSError as error:
             self.refuse(502, "Bad Gateway", f"could not reach {split.hostname}: {error}")
+
+
+    def read_head(self):
+        """The request line and the headers after it, bounded in both
+        directions. Returns (request-line, ok); a refusal has already been
+        sent when ok is false.
+
+        The drain has a cap for the same reason the timeout exists: a client
+        that keeps sending short header lines forever is as effective at
+        parking a worker as one that sends nothing at all, and neither needs
+        to be malicious to do it."""
+        request = self.rfile.readline(MAX_LINE).decode("latin-1", "replace").strip()
+
+        used = 0
+        lines = 0
+        while True:
+            line = self.rfile.readline(MAX_LINE)
+            if line in (b"\r\n", b"\n", b""):
+                break
+            used += len(line)
+            lines += 1
+            if used > MAX_HEAD or lines > MAX_HEAD_LINES:
+                self.refuse(431, "Request Header Fields Too Large",
+                            "more request head than this proxy will read")
+                return request, False
+
+        return request, True
 
     def relay(self, split):
         port = split.port or (443 if split.scheme == "https" else 80)
