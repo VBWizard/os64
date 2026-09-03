@@ -102,9 +102,18 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    channel + a data connection per transfer, ephemeral-port churn — the
    browser's connection pattern rehearsed before the browser exists.
 
-Rising in parallel, unscheduled: a **chaos rig** on the host/valet
-(toxiproxy-shape: injected latency, loss, stalls, mid-stream resets) so the
-internet's weather becomes a reproducible harness fixture.
+Beside the ladder, BUILT (2026-09-02): the **chaos rig**, `tools/cable.py`
+— a frame-level cable with weather in it (loss, delay, jitter, reorder,
+duplication, link cuts, a blackhole after N), plugged into the QEMU
+harness through `filter-redirector`, no root. VERIFICATION.md § The chaos
+rig is the manual. It is the instrument the TCP debts get measured with:
+its first day priced v1's no-reassembly at 29s against 2s for one 100KB
+fetch under 30% reordering, CRC-clean both times, while 200ms round trips
+with order kept cost a download nothing (VERIFICATION.md has the table). It is QEMU-only by
+construction; the P5's chaos rig is the internet itself, read through the
+same counters. Stream-level nastiness for HTTP (slow dribbles, truncated
+bodies, RST mid-body) is the HTTP lane's own fixture — an os64serve.py
+flag someday — not this tool.
 
 ## NOT in the ladder's lane (Fable-tier — do not start these)
 

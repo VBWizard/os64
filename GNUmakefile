@@ -274,6 +274,38 @@ run-net: $(IMAGE_NAME).iso
 		-boot d \
 		$(QEMUFLAGS) $(QEMU_NET_FLAGS)
 
+# The chaos rig: run-net with tools/cable.py in the wire (its header is the
+# design). Two filter-redirectors hand every frame out to the cable and take
+# the survivors back; the pcap dump sits AFTER the cable in both directions,
+# so the capture records what got through and the cable's ledger says what
+# did not. Creation order is the ordering: QEMU walks a netdev's filters
+# forward for frames the netdev sends (slirp → guest, queue=tx) and in
+# REVERSE for frames sent to it (guest → slirp, queue=rx), so cable_down
+# must come before the dump and cable_up after it. START THE CABLE FIRST
+# AND LEAVE IT RUNNING: with no cable listening at QEMU start, frames pass
+# through untouched (no cable, no weather) — but a cable that goes away
+# mid-run wedges the redirectors (QEMU 8.2.2 reconnects only half the
+# chardevs and every send after that fails EPERM), so the cure is to
+# restart the guest, never the cable. Weather is set on the cable's command
+# line or changed live, which is why it never needs restarting:
+# tools/cable.py ctl set up loss 0.1
+CABLE_PORT ?= 7100
+QEMU_CHAOS_FLAGS = -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+                   -chardev socket,id=cable_up_out,host=127.0.0.1,port=$$(($(CABLE_PORT)+1)),reconnect=1 \
+                   -chardev socket,id=cable_up_in,host=127.0.0.1,port=$$(($(CABLE_PORT)+2)),reconnect=1 \
+                   -chardev socket,id=cable_down_out,host=127.0.0.1,port=$$(($(CABLE_PORT)+3)),reconnect=1 \
+                   -chardev socket,id=cable_down_in,host=127.0.0.1,port=$$(($(CABLE_PORT)+4)),reconnect=1 \
+                   -object filter-redirector,id=cable_down,netdev=n0,queue=tx,outdev=cable_down_out,indev=cable_down_in \
+                   -object filter-dump,id=dump0,netdev=n0,file=net_capture.pcap \
+                   -object filter-redirector,id=cable_up,netdev=n0,queue=rx,outdev=cable_up_out,indev=cable_up_in
+
+.PHONY: run-chaos
+run-chaos: $(IMAGE_NAME).iso | $(DATA_IMAGE)
+	qemu-system-x86_64 \
+		-cdrom $(IMAGE_NAME).iso \
+		-boot d \
+		$(QEMUFLAGS) $(QEMU_CHAOS_FLAGS)
+
 # Same slirp harness, e1000 instead of virtio — the INTx doorbell's test
 # bench (2026-08-06). Boot this to see "e1000: interrupts live — INTx
 # GSI <n> -> vector 0x45 (probe-confirmed)" on the glass; run-net stays

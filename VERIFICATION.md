@@ -154,6 +154,64 @@ Offer `-vnc :0` instead of `-display none` if the human wants to peek.
   log is not a dead kernel; give markers tens of seconds before declaring a
   hang.
 
+## The chaos rig (weather in the wire)
+
+slirp is a perfect network: nothing is ever lost, reordered, duplicated or
+late, so `/sys/net/tcp`'s retransmit and out-of-order counters read zero on
+this harness forever, and the TCP debts they exist to adjudicate (RTT-measured
+RTO, reassembly, a send window) cannot be measured here. `tools/cable.py` puts
+a cable with weather in it between the guest's NIC and slirp, using QEMU's
+`filter-redirector` (the COLO building block): every frame goes out to the
+cable over a loopback socket and the survivors come back in. No tap, no
+netem, no root. The header of `tools/cable.py` is the design; the
+`QEMU_CHAOS_FLAGS` comment in the GNUmakefile is the wiring, including the
+direction trap (QEMU's `queue=rx` on the slirp netdev is the guest's UP).
+
+```bash
+python3 tools/cable.py --seed 1 &            # passthrough until told otherwise
+make run-chaos                               # run-net, wired through the cable
+tools/cable.py ctl set both loss 0.2         # weather, changed live
+tools/cable.py ctl set down reorder 0.3      # hold 30% of inbound frames 50ms
+tools/cable.py ctl set down dup 0.2
+tools/cable.py ctl link up off               # the FIN-into-the-void test
+tools/cable.py ctl stats                     # the ledger: every frame accounted for
+```
+
+Start the cable BEFORE the guest and leave it running for the guest's whole
+life: weather changes go through `ctl`, never through a restart, because a
+cable that goes away under a live QEMU 8.2.2 wedges its redirectors (half the
+chardevs never reconnect, the rest fail EPERM) — restart the guest, not the
+cable. For an agent run, add `QEMU_CHAOS_FLAGS`'s chardev/object lines to the
+blessed invocation above (the pcap path is the only thing to change).
+`up`/`down` are always the guest's view. Directions are impaired
+independently; parameters are `loss delay jitter reorder reorder_ms dup
+blackhole`, on the command line as `--up-loss 0.1` or live through `ctl`.
+The seed makes a run reproducible: same seed, same drops.
+
+**The workload has to be big enough to show the weather.** A whois is one
+data segment: holding it 50ms reorders nothing, and a duplicated pure ACK
+has no counter. Fetch a file of a hundred KB or more from `tools/os64serve.py`
+on the host (`os64get 10.0.2.2 mid.bin /home/mid.bin`) and the counters
+move. The rig's first day (2026-09-02), same 100KB file, all CRC-verified:
+
+| Weather | Time | What moved |
+|---|---|---|
+| none | 2s | nothing |
+| `loss 0.1` both ways | 12s | `retransmits` |
+| `delay 100` `jitter 30` both ways, order kept | 2s | nothing — a download rides the peer's send window; what 200ms round trips cost an os64 *upload* (stop-and-wait) is the send-window debt's measurement, not taken yet |
+| `reorder 0.3` down | 29s | `out_of_order_dropped 49` on one connection — the price of v1's no-reassembly, measured |
+| `dup 0.2` down | — | `duplicates_dropped` |
+
+Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
+under jitter, as a real pipe does, so a delay leg measures the clock and only
+the `reorder` knob measures reassembly. (The first delay leg did not keep
+order and read as a 30× slowdown; all of it was reassembly.)
+
+The pcap dump sits AFTER the cable in both directions: the capture is what
+got through, the ledger is what did not, and `orphaned` (a frame the cable
+could not hand back because QEMU's inbound socket was gone) is never zero
+silently.
+
 ## Reading the serial log
 
 **WHERE these lines live depends on the boot entry.** Every one of them is a
