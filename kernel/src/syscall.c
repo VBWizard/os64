@@ -445,6 +445,7 @@ static bool syscall_is_path_op(uint64_t nr)
 		case SYSCALL_UNLINK:
 		case SYSCALL_MKDIR:
 		case SYSCALL_RENAME:
+		case SYSCALL_RENAME_WITH_FLAGS:
 		case SYSCALL_CONF_RESOLVE:
 			return true;
 		default:
