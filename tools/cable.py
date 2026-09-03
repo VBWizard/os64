@@ -76,16 +76,30 @@ class Direction:
         self.link = True
         self.last_due = 0.0         # loop.time() the previous frame is due; order is kept behind it
         self.writer = None          # the QEMU side we hand survivors to
+        self.connection_generation = 0  # identifies the QEMU run that supplied a scheduled frame
         self.counts = {k: 0 for k in ('seen', 'passed', 'lost', 'linkdown', 'blackholed',
                                       'duplicated', 'reordered', 'delayed', 'orphaned')}
         self.bytes_in = 0
         self.bytes_out = 0
 
-    def weather(self, frame, loop):
+    def begin_connection(self):
+        self.connection_generation += 1
+        self.last_due = 0.0
+        return self.connection_generation
+
+    def end_connection(self, generation):
+        if self.connection_generation == generation:
+            self.connection_generation += 1
+            self.last_due = 0.0
+
+    def weather(self, frame, loop, generation):
         c = self.counts
         p = self.params
         c['seen'] += 1
         self.bytes_in += len(frame)
+        if generation != self.connection_generation:
+            c['orphaned'] += 1
+            return
         if not self.link:
             c['linkdown'] += 1
             return
@@ -112,19 +126,25 @@ class Direction:
         if p['reorder'] > 0 and self.rng.random() < p['reorder']:
             due += p['reorder_ms'] / 1000.0
             c['reordered'] += 1
-        self.schedule(frame, due, loop)
+        self.schedule(frame, due, loop, generation)
         if p['dup'] > 0 and self.rng.random() < p['dup']:
             c['duplicated'] += 1
-            self.schedule(frame, due, loop)
+            self.schedule(frame, due, loop, generation)
 
-    def schedule(self, frame, due, loop):
+    def schedule(self, frame, due, loop, generation):
         if due > loop.time():
             self.counts['delayed'] += 1
-            loop.call_at(due, self.emit, frame)
+            loop.call_at(due, self.emit, frame, generation)
         else:
-            self.emit(frame)
+            self.emit(frame, generation)
 
-    def emit(self, frame):
+    def emit(self, frame, generation):
+        # A delayed frame belongs to the QEMU connection that supplied it.
+        # A replacement guest must start with an empty wire, not inherit the
+        # previous guest's in-flight traffic.
+        if generation != self.connection_generation:
+            self.counts['orphaned'] += 1
+            return
         w = self.writer
         if w is None or w.is_closing():
             self.counts['orphaned'] += 1
@@ -152,6 +172,7 @@ class Cable:
     async def serve_out(self, direction, reader, writer):
         # QEMU → cable: frames in, weather applied, survivors scheduled.
         d = self.dirs[direction]
+        generation = d.begin_connection()
         peer = writer.get_extra_info('peername')
         print(f"cable: {direction} out connected from {peer}", flush=True)
         try:
@@ -159,10 +180,11 @@ class Cable:
                 hdr = await reader.readexactly(4)
                 (n,) = struct.unpack('>I', hdr)
                 frame = await reader.readexactly(n)
-                d.weather(frame, self.loop)
+                d.weather(frame, self.loop, generation)
         except (asyncio.IncompleteReadError, ConnectionResetError):
             pass
         finally:
+            d.end_connection(generation)
             print(f"cable: {direction} out disconnected", flush=True)
             writer.close()
 
