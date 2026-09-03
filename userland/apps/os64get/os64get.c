@@ -1567,15 +1567,30 @@ static void redirect_advice(const http_url_t *from, const char *location)
     os64_hprintf(OS64_STDERR, "os64get: it points at %s, and os64get does not"
                               " follow redirects yet.\n", location);
 
+    // THE WHOLE ADDRESS FIRST, AND EVERY QUESTION IS ASKED OF THAT. A
+    // Location may be root-relative (`/login`) or scheme-relative
+    // (`//cdn.example/x`), and neither parses as a URL on its own — so a
+    // judgement made on the raw header judged an empty host, asked the proxy
+    // policy about nothing, and let a malformed relative path through to be
+    // offered as a command os64get itself would refuse. Resolve, then parse,
+    // then advise. (Codex review round 6, 2026-09-03.)
+    char whole[HTTP_LINE_MAX + HTTP_HOST_MAX + 16];
+    if (!http_url_absolute(from, location, whole, sizeof(whole)))
+    {
+        os64_hprintf(OS64_STDERR, "os64get: that is relative to the page you asked for,"
+                                  " and os64get needs a whole URL.\n");
+        return;
+    }
+
     http_url_t target;
-    http_url_result_t rc = http_url_parse(location, &target);
+    http_url_result_t rc = http_url_parse(whole, &target);
     if (rc == HTTP_URL_SCHEME)
     {
         os64_hprintf(OS64_STDERR, "os64get: os64get speaks http and https, not %s.\n",
                      target.scheme);
         return;
     }
-    if (rc != HTTP_URL_OK && rc != HTTP_URL_NOT_A_URL)
+    if (rc != HTTP_URL_OK)
     {
         os64_hprintf(OS64_STDERR, "os64get: and that address is unusable — %s.\n",
                      http_url_reason(rc));
@@ -1597,19 +1612,11 @@ static void redirect_advice(const http_url_t *from, const char *location)
     proxy_t targetProxy;
     proxy_for(&target, &targetProxy);
 
-    if (rc == HTTP_URL_OK && os64_streq(target.scheme, "https") && !targetProxy.inUse)
+    if (os64_streq(target.scheme, "https") && !targetProxy.inUse)
     {
         os64_hprintf(OS64_STDERR,
                      "os64get: that address is https and os64 has no TLS of its own —"
                      " set $https_proxy to a machine that has one, and it becomes reachable.\n");
-        return;
-    }
-
-    char whole[HTTP_LINE_MAX + HTTP_HOST_MAX + 16];
-    if (!http_url_absolute(from, location, whole, sizeof(whole)))
-    {
-        os64_hprintf(OS64_STDERR, "os64get: that is relative to the page you asked for,"
-                                  " and os64get needs a whole URL.\n");
         return;
     }
 

@@ -48,6 +48,8 @@ Routes, and what each is FOR:
     /redirect       301 -> /hello.txt                      reported, not followed
     /redirect-https 302 -> an https:// address              the honest TLS answer
     /redirect-tricky 302 -> /hello.txt;reboot               the advice quotes it
+    /redirect-relative 302 -> //example.com/elsewhere       resolved before judged
+    /redirect-broken 302 -> /bad path                       unusable, said so
     /chunked        Transfer-Encoding: chunked             refused, not written
     /dots/..        a URL with no usable basename          DEST must still be honored
     /chunked-cut    chunked, terminator never sent         truncation must not pass
@@ -183,6 +185,16 @@ class Handler(socketserver.StreamRequestHandler):
         elif route == "/redirect-https":
             self.send(head(302, "Found",
                            [("Location", "https://example.com/"), ("Content-Length", 0)]))
+        elif route == "/redirect-relative":
+            # Scheme-relative: a different host, the scheme inherited. The
+            # advice must resolve it BEFORE judging it, or it judges nothing.
+            self.send(head(302, "Found",
+                           [("Location", "//example.com/elsewhere"), ("Content-Length", 0)]))
+        elif route == "/redirect-broken":
+            # Root-relative and malformed: resolved, it is a URL os64get
+            # refuses, and the advice must say so rather than offer it.
+            self.send(head(302, "Found",
+                           [("Location", "/bad path"), ("Content-Length", 0)]))
         elif route == "/redirect-tricky":
             # A Location that is a legal URL AND a husk command separator.
             # The advice os64get prints must quote it, or copying the

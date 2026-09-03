@@ -615,7 +615,20 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
         if (r == LINE_NUL)
             return HTTP_HEAD_SYNTAX;
         if (r == LINE_OK && line[0] == '\0')
-            return HTTP_HEAD_OK;   // the blank line: the head is whole
+        {
+            // The blank line: the head is whole. A HEAD THAT NAMES BOTH A
+            // TRANSFER CODING AND A LENGTH IS REFUSED HERE, as the same
+            // conflict two Content-Lengths are: when both are present the
+            // coding is the framing and the length is to be ignored (RFC
+            // 9112 §6.3), so a body read to the length — even under a
+            // coding of `identity` that changes nothing — is a PREFIX of the
+            // body, published as the whole of it. A server must never send
+            // both; one that does is confused or hostile, and neither gets
+            // a guess. (Codex review round 6, 2026-09-03.)
+            if (out->hasLength && out->transferEncoding[0] != '\0')
+                return HTTP_HEAD_CONFLICT;
+            return HTTP_HEAD_OK;
+        }
 
         if (fields >= HTTP_HEADERS_MAX)
             return HTTP_HEAD_TOO_MUCH;

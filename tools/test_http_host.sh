@@ -295,10 +295,15 @@ cases.append(("bare-lf", b"HTTP/1.1 200 OK\nContent-Length: %d\n\n" % len(body) 
               body, True))
 cases.append(("no-reason", reply_bytes(
     200, "", [("Content-Length", str(len(body)))], body), body, True))
-cases.append(("identity", reply_bytes(
+# A CONTENT coding of identity beside a length is fine — the coding says the
+# bytes are untouched, and the length frames them. A TRANSFER coding beside a
+# length is not (see "te-identity-and-length" below): the coding is then the
+# framing and the length is noise. So identity gets two cases, not one.
+cases.append(("identity-coding", reply_bytes(
     200, "OK", [("Content-Length", str(len(body))),
-                ("Transfer-Encoding", "identity"),
                 ("Content-Encoding", "identity")], body), body, True))
+cases.append(("identity-transfer-close-delimited", reply_bytes(
+    200, "OK", [("Transfer-Encoding", "identity")], body), body, True))
 cases.append(("repeated-length", reply_bytes(
     200, "OK", [("Content-Length", str(len(body))),
                 ("Content-Length", str(len(body)))], body), body, True))
@@ -391,6 +396,16 @@ refusals = {
                     "conflict"),
     "two-encodings": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
                       b"Transfer-Encoding: identity\r\n\r\n", "conflict"),
+    # A transfer coding AND a length is the same two-answers shape: the coding
+    # is the framing and the length is to be ignored (RFC 9112 §6.3), so a
+    # body read to the length is a prefix published as the whole. `identity`
+    # is the sly form — it looks like "no framing", and a longer body behind
+    # it would be silently cut. (Codex review round 6, 2026-09-03.)
+    "te-identity-and-length": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding: identity\r\n"
+                               b"Content-Length: 32\r\n\r\n" + body + b"and then some more",
+                               "conflict"),
+    "te-chunked-and-length": (b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n"
+                              b"Transfer-Encoding: chunked\r\n\r\n", "conflict"),
     "too-many-headers": (b"HTTP/1.1 200 OK\r\n" + b"X-Pad: 1\r\n" * 200 + b"\r\n",
                          "too_much"),
     # One past the cap — and "max-headers" above proves the cap itself is
