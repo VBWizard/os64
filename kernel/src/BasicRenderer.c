@@ -598,6 +598,17 @@ void renderer_glass_clear_locked(void)
 	clear_framebuffer_full(&kRenderer);
 }
 
+// ONE ALIGNED STORE, AND DELIBERATELY NO LOCK. Its callers are the tty layer,
+// which may or may not be inside a glass session — a function that took the
+// renderer lock would deadlock the half that already holds it, and one that
+// assumed the lock would be wrong for the other half. What a racing reader
+// can lose is a single frame painted with the previous background, and the
+// caller schedules a full repaint immediately after, which settles it.
+void renderer_set_background(uint32_t color)
+{
+	kFrameBufferBackgroundColor = color;
+}
+
 void renderer_glass_defer_locked(void)
 {
 	// Only meaningful with a shadow to defer INTO: pre-shadow, put_char

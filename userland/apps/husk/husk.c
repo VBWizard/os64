@@ -1972,6 +1972,13 @@ static void prompt_render(int last_status)
 
 			case 'n':  out[n++] = '\n'; break;
 			case '\\': out[n++] = '\\'; break;
+			// AN ESCAPE BYTE, WHICH IS THE ONLY WAY TO SPELL ONE HERE. The
+			// terminal reads colour and cursor sequences now, but they begin
+			// with a byte no keyboard types and no shell vocabulary could
+			// otherwise put into a variable — so a coloured prompt was
+			// impossible for want of one character. `\e[1;32m` is what
+			// everyone already writes.
+			case 'e':  out[n++] = 0x1B; break;
 
 			default:
 				// Unknown: give both characters back, so the typo is visible.

@@ -81,7 +81,18 @@ from this vocabulary:
 | `\?` | the last command's exit status |
 | `\j` | background jobs being tracked |
 | `\n` | newline, for a two-line prompt |
+| `\e` | an escape byte — how a prompt gets colour, since no key types one and no other spelling puts it in a variable |
 | `\\` | a literal backslash |
+
+The terminal reads the colour and cursor sequences an escape byte begins
+(CLAUDE.md § The terminal's escape sequences), so a green prompt is:
+
+```
+export PROMPT="\e[1;32m\W\e[0m$ "
+```
+
+`\e[0m` at the end is not optional politeness — without it, everything the
+next command prints inherits the colour.
 
 ```
 export PROMPT="\w $ "
