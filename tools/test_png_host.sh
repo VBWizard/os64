@@ -39,6 +39,18 @@ def chunk(kind, payload=b""):
     body = kind + payload
     return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body))
 
+def bad_crc_chunk(kind, payload=b""):
+    result = bytearray(chunk(kind, payload))
+    result[-1] ^= 1
+    return bytes(result)
+
+def corrupt_chunk_crc(contents, kind):
+    result = bytearray(contents)
+    type_at = result.index(kind, len(signature))
+    length = struct.unpack_from(">I", result, type_at - 4)[0]
+    result[type_at + 4 + length] ^= 1
+    return bytes(result)
+
 def ihdr(w, h, depth, color, interlace=0):
     return chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, depth, color, 0, 0, interlace))
 
@@ -174,6 +186,10 @@ def valid(name, w, h, depth, color, rows, **kwargs):
 def invalid(name, contents):
     (root / f"{name}.png").write_bytes(contents)
 
+def exact(name, contents, expected):
+    (root / f"{name}.png").write_bytes(contents)
+    (root / f"{name}.rgba").write_bytes(expected)
+
 # Every legal non-interlaced color/depth pair. Values avoid symmetry and hit
 # both ends of each sample range.
 for color, legal_depths in depths.items():
@@ -217,12 +233,23 @@ valid("fixed", 5, 5, 8, 6, filter_rows, strategy=zlib.Z_FIXED)
 valid("gray_trns", 3, 1, 4, 0, [[0, 5, 15]], trns=5)
 valid("rgb_trns", 2, 1, 8, 2, [[1, 2, 3, 4, 5, 6]], trns=(4, 5, 6))
 
-# Refusals are rebuilt with correct outer CRCs when testing an inner zlib or
-# scanline error, so the expected layer—not an earlier checksum—answers.
+# Inner zlib and scanline errors retain correct outer CRCs, so the expected
+# layer—not an earlier checksum—answers.
 invalid("bad_signature", b"not png")
-bad_crc = bytearray(base)
-bad_crc[-5] ^= 1
-invalid("bad_crc", bad_crc)
+invalid("bad_ihdr_crc", corrupt_chunk_crc(base, b"IHDR"))
+palette_png = assemble(2, 1, 1, 3, [[0, 1]],
+                       palette=[(255, 0, 0), (0, 255, 0)], trns=[17, 231])[0]
+invalid("bad_plte_crc", corrupt_chunk_crc(palette_png, b"PLTE"))
+invalid("bad_idat_crc", corrupt_chunk_crc(base, b"IDAT"))
+invalid("bad_iend_crc", corrupt_chunk_crc(base, b"IEND"))
+bad_gama, bad_gama_rgba, _ = assemble(
+    5, 5, 8, 6, filter_rows, filters=[0, 1, 2, 3, 4],
+    before=[bad_crc_chunk(b"gAMA", struct.pack(">I", 45455))])
+exact("bad_gama_crc", bad_gama, bad_gama_rgba)
+bad_trns, bad_trns_rgba, _ = assemble(
+    3, 1, 4, 0, [[0, 5, 15]],
+    before=[bad_crc_chunk(b"tRNS", struct.pack(">H", 5))])
+exact("bad_trns_crc", bad_trns, bad_trns_rgba)
 invalid("bad_adler", assemble(5, 5, 8, 6, filter_rows,
         z_override=base_z[:-1] + bytes([base_z[-1] ^ 1]))[0])
 invalid("bad_zlib", assemble(5, 5, 8, 6, filter_rows,
@@ -238,16 +265,26 @@ invalid("truncated", assemble(5, 5, 8, 6, filter_rows,
         z_override=base_z[:-3])[0])
 invalid("zlib_trailing", assemble(5, 5, 8, 6, filter_rows,
         z_override=base_z + b"x")[0])
+invalid("overlong_raster", assemble(5, 5, 8, 6, filter_rows,
+        raw_override=zlib.decompress(base_z) + b"\0")[0])
 invalid("unknown_critical", assemble(5, 5, 8, 6, filter_rows,
         before=[chunk(b"ABCD", b"future")])[0])
-invalid("reserved_name", assemble(5, 5, 8, 6, filter_rows,
-        before=[chunk(b"abce", b"reserved")])[0])
+reserved_name, reserved_rgba, _ = assemble(5, 5, 8, 6, filter_rows,
+        before=[chunk(b"abce", b"reserved")])
+exact("reserved_name", reserved_name, reserved_rgba)
+invalid("reserved_critical", assemble(5, 5, 8, 6, filter_rows,
+        before=[chunk(b"ABcD", b"future")])[0])
 invalid("interlaced", assemble(5, 5, 8, 6, filter_rows, interlace=1)[0])
 
 nonconsecutive = (signature + ihdr(5, 5, 8, 6) +
                   chunk(b"IDAT", base_z[:3]) + chunk(b"abCd", b"gap") +
                   chunk(b"IDAT", base_z[3:]) + chunk(b"IEND"))
 invalid("nonconsecutive", nonconsecutive)
+bad_ancillary_gap = (signature + ihdr(5, 5, 8, 6) +
+                     chunk(b"IDAT", base_z[:3]) +
+                     bad_crc_chunk(b"gAMA", struct.pack(">I", 45455)) +
+                     chunk(b"IDAT", base_z[3:]) + chunk(b"IEND"))
+invalid("bad_ancillary_gap", bad_ancillary_gap)
 invalid("after_iend", base + b"x")
 invalid("zero_width", signature + ihdr(0, 1, 8, 6) +
         chunk(b"IDAT", zstream(b"")) + chunk(b"IEND"))
@@ -292,17 +329,25 @@ done
 echo "PNG filters, IDAT splits, block kinds, and transparency       PASS"
 
 run "$work/bad_signature.png" - 0 0 0 "not a PNG" 0
-run "$work/bad_crc.png" - 0 0 0 "PNG checksum mismatch" 0
+run "$work/bad_ihdr_crc.png" - 0 0 0 "PNG checksum mismatch" 0
+run "$work/bad_plte_crc.png" - 0 0 0 "PNG checksum mismatch" 0
+run "$work/bad_idat_crc.png" - 0 0 0 "PNG checksum mismatch" 0
+run "$work/bad_iend_crc.png" - 0 0 0 "PNG checksum mismatch" 0
+run "$work/bad_gama_crc.png" "$work/bad_gama_crc.rgba" 5 5 0 ok any
+run "$work/bad_trns_crc.png" "$work/bad_trns_crc.rgba" 3 1 0 ok any
 run "$work/bad_adler.png" - 0 0 0 "PNG checksum mismatch" any
 run "$work/bad_zlib.png" - 0 0 0 "malformed PNG" any
 run "$work/preset_dictionary.png" - 0 0 0 "malformed PNG" any
 run "$work/bad_filter.png" - 0 0 0 "malformed PNG" any
 run "$work/truncated.png" - 0 0 0 "malformed PNG" any
 run "$work/zlib_trailing.png" - 0 0 0 "malformed PNG" any
+run "$work/overlong_raster.png" - 0 0 0 "malformed PNG" any
 run "$work/unknown_critical.png" - 0 0 0 "unsupported PNG variant" 0
-run "$work/reserved_name.png" - 0 0 0 "malformed PNG" 0
+run "$work/reserved_name.png" "$work/reserved_name.rgba" 5 5 0 ok any
+run "$work/reserved_critical.png" - 0 0 0 "unsupported PNG variant" 0
 run "$work/interlaced.png" - 0 0 0 "unsupported PNG variant" 0
 run "$work/nonconsecutive.png" - 0 0 0 "malformed PNG" 0
+run "$work/bad_ancillary_gap.png" - 0 0 0 "malformed PNG" 0
 run "$work/after_iend.png" - 0 0 0 "malformed PNG" 0
 run "$work/zero_width.png" - 0 0 0 "malformed PNG" 0
 run "$work/palette_index.png" - 0 0 0 "malformed PNG" any

@@ -32,7 +32,7 @@ typedef struct os64_png_image {
 
 // Decode one complete PNG held in memory. pixel_cap 0 selects the default.
 // On success, out owns its pixel plane. On every failure, out is zeroed and
-// owns nothing. The first version accepts non-interlaced PNG; Adam7 reports
+// owns nothing. The decoder accepts non-interlaced PNG; Adam7 reports
 // OS64_PNG_UNSUPPORTED rather than pretending the file is malformed.
 os64_png_status_t os64_png_decode(const uint8_t *data, size_t length,
                                   uint64_t pixel_cap,

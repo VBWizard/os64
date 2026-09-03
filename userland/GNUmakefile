@@ -95,9 +95,9 @@ CFLAGS  ?= -g -m64 -ffreestanding -fno-pic -fno-pie -mno-red-zone -msse2 \
 # host toolchain this tree actually builds with defaults to gnu-only hashing,
 # so this is load-bearing, not belt-and-braces.
 # -rpath-link names the BUILD-TIME directory where ld can verify transitive
-# shared dependencies. libpng is the first two-level edge (an app needs
-# libpng, which needs libgzip); without this hint ld warns that libgzip cannot
-# be found and then treats libpng's inflate calls as unresolved. This does not
+# shared dependencies. An app that needs libpng needs libgzip transitively;
+# without this hint ld warns that libgzip cannot be found and then treats
+# libpng's inflate calls as unresolved. This does not
 # write an RPATH into the ELF — os64's runtime loader follows DT_NEEDED names
 # in /lib, independent of the host build tree.
 # -z separate-code: keep CODE in a segment of its own, exactly as the library
@@ -236,8 +236,8 @@ TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 # engine into part of the foundational runtime by accident.
 LIBGZIP_PROGRAMS := gunzip gziptest
 
-# gview is the first real PNG consumer; pngtest proves the same dependency in
-# the guest without requiring a GUI. libpng carries its own DT_NEEDED edge on
+# gview consumes PNG in the GUI; pngtest proves the same dependency in the
+# guest without requiring a GUI. libpng carries its own DT_NEEDED edge on
 # libgzip, so consumers name the codec they asked for rather than its engine.
 LIBPNG_PROGRAMS := gview pngtest
 

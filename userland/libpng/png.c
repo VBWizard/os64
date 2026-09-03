@@ -1,9 +1,11 @@
 // png.c — bounded decoding for the PNG datastream and its zlib payload.
 //
-// The input is untrusted. The first pass validates every chunk, its ordering,
-// and its CRC before allocating from dimensions in IHDR. The second pass feeds
-// IDAT directly to libgzip's raw inflater: compressed data is never copied into
-// a second whole-file buffer, and decoded data is held one scanline at a time.
+// The input is untrusted. The first pass validates chunk framing and ordering
+// before allocating from dimensions in IHDR. Bad critical CRCs are fatal; a
+// bad ancillary CRC discards that chunk without trusting its contents. The
+// second pass feeds IDAT directly to libgzip's raw inflater: compressed data is
+// never copied into a second whole-file buffer, and decoded data is held one
+// scanline at a time.
 
 #include "png/png.h"
 
@@ -82,16 +84,14 @@ static bool bytes_equal(const uint8_t *left, const uint8_t *right,
     return true;
 }
 
-static bool chunk_name_valid(const uint8_t *name)
+static bool chunk_type_letters_valid(const uint8_t *name)
 {
     for (size_t i = 0; i < 4; i++) {
         uint8_t c = name[i];
         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')))
             return false;
     }
-    // PNG reserves the third letter's lowercase bit. Accepting it would make
-    // a future chunk namespace look like today's understood namespace.
-    return (name[2] & 0x20u) == 0;
+    return true;
 }
 
 static bool depth_valid(uint8_t color_type, uint8_t depth)
@@ -235,7 +235,8 @@ static os64_png_status_t parse_chunks(const uint8_t *data, size_t length,
             return OS64_PNG_MALFORMED;
         uint32_t chunk_length = read_be32(data + offset);
         const uint8_t *type_bytes = data + offset + 4u;
-        if (chunk_length > 0x7fffffffu || !chunk_name_valid(type_bytes) ||
+        if (chunk_length > 0x7fffffffu ||
+            !chunk_type_letters_valid(type_bytes) ||
             (size_t)chunk_length > length - offset - PNG_CHUNK_OVERHEAD)
             return OS64_PNG_MALFORMED;
 
@@ -245,14 +246,21 @@ static os64_png_status_t parse_chunks(const uint8_t *data, size_t length,
         uint32_t crc = os64_crc32_begin();
         crc = os64_crc32_update(crc, type_bytes, 4);
         crc = os64_crc32_update(crc, chunk, chunk_length);
-        if (os64_crc32_end(crc) != wanted_crc)
+        bool crc_matches = os64_crc32_end(crc) == wanted_crc;
+        bool ancillary = (type_bytes[0] & 0x20u) != 0;
+        if (!crc_matches && !ancillary)
             return OS64_PNG_CHECKSUM;
 
         if (!seen_ihdr && type != PNG_IHDR)
             return OS64_PNG_MALFORMED;
 
         os64_png_status_t status = OS64_PNG_OK;
-        if (type == PNG_IHDR) {
+        if (!crc_matches) {
+            // Recovery is safe only by treating the entire ancillary chunk as
+            // unknown. Its position still ends a consecutive IDAT sequence.
+            if (phase == CHUNKS_IN_IDAT)
+                phase = CHUNKS_AFTER_IDAT;
+        } else if (type == PNG_IHDR) {
             if (seen_ihdr || offset != PNG_SIGNATURE_SIZE)
                 return OS64_PNG_MALFORMED;
             seen_ihdr = true;
@@ -422,7 +430,10 @@ static os64_png_status_t map_inflate_status(os64_inflate_status_t status)
     switch (status) {
         case OS64_INFLATE_TRUNCATED: return OS64_PNG_MALFORMED;
         case OS64_INFLATE_MALFORMED: return OS64_PNG_MALFORMED;
-        case OS64_INFLATE_LIMIT: return OS64_PNG_LIMIT;
+        case OS64_INFLATE_LIMIT:
+            // This cap is IHDR's exact filtered raster size. Exceeding it means
+            // the stream contradicts the raster, not that a resource cap fired.
+            return OS64_PNG_MALFORMED;
         case OS64_INFLATE_BAD_ARGUMENT: return OS64_PNG_BAD_ARGUMENT;
         case OS64_INFLATE_NEED_INPUT:
         case OS64_INFLATE_NEED_OUTPUT:

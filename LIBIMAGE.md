@@ -79,9 +79,9 @@ The raw streaming DEFLATE engine was completed with the gzip work merged by
 PR #50. It deliberately exposes RFC 1951 rather than making gzip framing part
 of the inflater, so libpng reuses it beneath PNG's zlib container.
 
-`userland/libpng/png.c` now supplies that PNG layer as `libpng.so`. Its first
-consumer is gview, and `/tests/pngtest` proves the transitive shared-library
-edge in ring 3. The codec accepts every legal PNG color-type/bit-depth pairing
+`userland/libpng/png.c` supplies that PNG layer as `libpng.so`. gview consumes
+it, and `/tests/pngtest` proves the transitive shared-library edge in ring 3.
+The codec accepts every legal PNG color-type/bit-depth pairing
 without interlace, preserves palette and key transparency, and reverses all
 five scanline filters while holding two rows rather than a decompressed image
 copy. Adam7 is the remaining format gap and reports UNSUPPORTED.
@@ -140,7 +140,8 @@ corruption—or make hostile input look like an innocent missing feature.
 `libpng.so` owns everything between the eight-byte PNG signature and the
 normalized pixel plane:
 
-- chunk framing, ordering and CRC verification;
+- chunk framing and ordering, critical CRC enforcement, and discard of
+  ancillary chunks whose CRC fails;
 - IHDR validation and bounded dimension arithmetic;
 - concatenating IDAT's logical zlib stream across chunk boundaries;
 - zlib header validation and Adler-32 verification around libgzip's raw
@@ -151,7 +152,7 @@ normalized pixel plane:
 - rejecting unknown critical chunks while safely skipping unknown ancillary
   chunks.
 
-The first implementation is a decoder. Encoding, metadata editing, color
+The library currently decodes only. Encoding, metadata editing, color
 management, gamma correction, and APNG each require a real consumer before
 they enlarge the contract.
 
