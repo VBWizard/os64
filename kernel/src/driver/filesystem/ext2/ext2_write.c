@@ -2629,9 +2629,10 @@ static bool ext2_is_ancestor(vfs_filesystem_t *fs, ext2_fs_t *e,
 // in a different directory of the SAME filesystem (syscall_rename refuses
 // cross-mount before we ever see it).
 //
-// THE RULING (Chris, 2026-08-16) is ATOMIC REPLACE: if the destination name
-// already holds a regular file, it is replaced, and at no instant does the
-// destination name fail to resolve. That guarantee is the entire reason
+// With flags zero or REQUIRE_ATOMIC_REPLACE, an existing regular destination
+// is replaced, and at no instant does the destination name fail to resolve.
+// NOREPLACE instead refuses while this same write lock holds the lookup and
+// the decision together. Atomic replacement is the entire reason
 // rename(2) was invented — 4.2BSD added it because the link-then-unlink
 // idiom everyone was using had a window in the middle, and every "write a
 // new version safely" recipe since (editors, package managers, and now
@@ -2674,12 +2675,14 @@ static bool ext2_is_ancestor(vfs_filesystem_t *fs, ext2_fs_t *e,
 // from under you. e2fsck staying green is the constitution for a writable
 // root, so the two extra inode writes are cheap insurance.
 static int ext2_rename(const char *oldpath, const char *newpath,
-                       vfs_filesystem_t *vfs_fs)
+                       vfs_filesystem_t *vfs_fs, uint64_t flags)
 {
 	ext2_fs_t *e = (ext2_fs_t *)vfs_fs->fs_specific;
 
 	uint64_t lock_flags = spinlock_acquire_irqsave(&e->write_lock);
-	if (vfs_fs->read_only)
+	if (vfs_fs->read_only ||
+	    (flags & ~((uint64_t)OS64_RENAME_FLAG_MASK)) != 0 ||
+	    flags == OS64_RENAME_FLAG_MASK)
 		goto refuse;
 
 	// Resolve both ends. split_path also refuses "." and ".." leaves and
@@ -2739,6 +2742,8 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 	if (same_parent && old_len == new_len &&
 	    memcmp(old_name, new_name, old_len) == 0)
 	{
+		if (flags & OS64_RENAME_NOREPLACE)
+			goto refuse;   // the destination demonstrably exists
 		spinlock_release_irqrestore(&e->write_lock, lock_flags);
 		return 0;
 	}
@@ -2752,6 +2757,10 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 	uint32_t dst_ino = ext2_dir_find(vfs_fs, e, np, new_name, new_len);
 	if (dst_ino != 0)
 	{
+		// This lookup and the eventual directory mutation share write_lock,
+		// making NOREPLACE a real name claim rather than stat-then-rename.
+		if (flags & OS64_RENAME_NOREPLACE)
+			goto refuse;
 		// Both names already denote the same inode — a hard link, which os64
 		// cannot create but a disk written elsewhere can carry. The request
 		// is already satisfied; removing the old name would DROP a link the

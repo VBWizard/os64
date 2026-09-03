@@ -353,17 +353,13 @@ int64_t os64_unlink(const char *path)
 // Give a file a different name, possibly in a different directory of the
 // same filesystem. Relative paths resolve against the cwd, like open's.
 //
-// The guarantee worth knowing: replacing an existing regular file happens in
-// ONE motion — `newpath` never stops resolving, not even for an instant.
-// That is what makes the safe-publish recipe work:
+// On ext2, replacing an existing regular file happens in one motion. FAT's
+// legacy replacement removes the destination first, so callers that require
+// safe publication use os64_rename_with_flags below:
 //
 //     h = os64_open("report.part", "w");   ...write, verify...
-//     os64_rename("report.part", "report");
-//
-// A crash anywhere in that sequence leaves either the old `report` intact or
-// the new one complete, never a half-written impostor wearing the name. Unix
-// had no such call for its first decade (link-then-unlink, with the window
-// in the middle); 4.2BSD added rename(2) to close it, and this is that.
+//     os64_rename_with_flags("report.part", "report",
+//                            OS64_RENAME_REQUIRE_ATOMIC_REPLACE);
 //
 // Returns 0 on success, negative on refusal: a read-only filesystem, a
 // source that isn't there, the two paths on DIFFERENT filesystems (that's a
@@ -380,6 +376,16 @@ int64_t os64_unlink(const char *path)
 int64_t os64_rename(const char *oldpath, const char *newpath)
 {
     return (long)os64_syscall2(SYSCALL_RENAME, (uint64_t)oldpath, (uint64_t)newpath);
+}
+
+// The separate syscall number asks for a stronger destination policy. Keeping
+// the original wrapper on syscall 43 is intentional: unused registers in an
+// old raw call were never defined, so only a new door can preserve old binaries.
+int64_t os64_rename_with_flags(const char *oldpath, const char *newpath,
+                               uint64_t flags)
+{
+    return (long)os64_syscall3(SYSCALL_RENAME_WITH_FLAGS, (uint64_t)oldpath,
+                               (uint64_t)newpath, flags);
 }
 
 // The namespace verbs (io.h has the contract; os64/mount.h the vocabulary).
