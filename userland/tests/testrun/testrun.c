@@ -116,10 +116,11 @@ static const fixture_t kFixtures[] = {
     // which on a boot with no writable /home is a fact about the BOOT, not a
     // failure of the config library. Same treatment as synctest above, and
     // for the same reason: a suite that cries wolf gets ignored.
-    { "/tests/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and atomic publish" },
-    { "/tests/tartest",         NULL, 0x7A120000,  0,          "ustar create/list/extract, pipelines, atomic publication and path safety" },
+    { "/tests/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and ext2 atomic publish" },
+    { "/tests/tartest",         NULL, 0x7A120000,  0,          "ustar create/list/extract, pipelines, ext2 atomic publication and path safety" },
     { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip: streaming encode/decode and gzip/gunzip commands" },
     { "/tests/pngtest",         NULL, 0x90640000,  0,          "standalone libpng: filtered RGBA decode, alpha, CRC and pixel cap" },
+    { "/tests/renametest",      NULL, 0x4E4D0000,  0,          "rename policies on ext2 and FAT, plus invalid flags and legacy ABI compatibility" },
     { "/tests/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
     { "/tests/winchtest",       NULL, 0x0A1D0000,  0,          "pty resize: the grid follows, the seats hear SIGWINCH, a blocked read and a blocked wait are interrupted" },
     { "/tests/df_test",         NULL, 0x0DF00000,  0,          "the direction flag does not cross a ring boundary (syscall, and into a handler)" },

@@ -7,7 +7,7 @@
 //
 //   1. it writes to the TOP of the search path, never back to what it read
 //   2. it MERGES — comments and unrelated settings survive a save
-//   3. it publishes atomically, leaving no .new debris behind
+//   3. on ext2 it publishes atomically, leaving no .new debris behind
 //
 // It works under a name nothing else uses and removes the file on the way
 // out, so a passing run leaves the machine exactly as it found it.

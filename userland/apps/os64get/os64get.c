@@ -85,9 +85,10 @@
 //   - a valet transfer that completes but arrives damaged is DISCARDED, not
 //     installed, because "complete" and "correct" are different claims and
 //     only the checksum can tell them apart;
-//   - the swap itself is atomic — os64's rename replaces the destination
-//     with no instant at which the name fails to resolve, which is what
-//     4.2BSD invented rename(2) for in 1983.
+//   - on ext2, the swap itself is atomic — rename replaces the destination
+//     with no instant at which the name fails to resolve. FAT's legacy
+//     replacement has a remove-first window, so this caller does not promise
+//     crash-safe publication there.
 //
 // HOW MUCH THE SECOND BULLET CAN PROMISE DEPENDS ON THE DIALECT, and the
 // difference is the server's, not this program's. The valet names a CRC, so
@@ -1001,12 +1002,13 @@ static int fetch_stage(const char *host, const char *name, const char *destOverr
 // verbs serve the valet; a URL fetch borrows commit and keeps its own .part
 // (there is no archive copy behind it to make sweeping one away safe).
 //
-// commit is ONE rename inside ONE directory: no data moves, nothing is read,
-// and before the call the old file is whole while after it the new one is —
-// there is no instant in between. That is what makes pointing this at /bin a
-// reasonable thing to do rather than a brave one, and it is why an 86-file
-// refresh can now flip the whole system over in the time it takes to write 86
-// directory entries instead of the time it takes to cross a network.
+// commit is ONE rename inside ONE directory: no data moves and nothing is
+// read. On ext2, before the call the old file is whole and after it the new one
+// is, with no instant in between. That is what makes pointing this at /bin on
+// the ext2 root a reasonable thing to do rather than a brave one, and it is
+// why an 86-file refresh can now flip the whole system over in the time it
+// takes to write 86 directory entries instead of crossing a network. A FAT
+// destination retains syscall 43's documented remove-first window.
 static int stage_commit(const char *dest)
 {
     char partPath[GET_PATH_MAX];
@@ -1264,9 +1266,10 @@ static void lookup_lot(const char *host, const char *name, const conf_t *c,
 //     the server's word.
 //
 // What it KEEPS is the property this whole program is built around: the bytes
-// land in `<dest>.part` and the real name is only ever replaced by an atomic
-// rename. A transfer that dies halfway leaves the file that was there exactly
-// where it was.
+// land in `<dest>.part`, and only a complete body reaches the real name. On
+// ext2 that final replacement is atomic, so a transfer that dies halfway
+// leaves the file that was there exactly where it was. A FAT destination has
+// syscall 43's documented remove-first publication window.
 
 // HOW LONG A SILENT ORIGIN IS WAITED ON. An internet host can finish the
 // handshake and then say nothing — a stalled proxy, a server that fell over
