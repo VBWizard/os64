@@ -1,14 +1,14 @@
 // gzip — compress streams and safely replace named files with .gz siblings.
 //
-// A named-file result is written beside its destination, synced, closed, and
-// then published with an atomic destination policy. Without -f publication
-// refuses an existing name; with -f it refuses filesystems that cannot replace
-// an existing file atomically. The source is removed last, so write and
-// publication failures leave it intact. A final size/mtime check catches
-// changes visible before publication; a live log must still be rotated before
-// compression because os64 has no file snapshot or lock spanning that check
-// and removal. Standard output remains the composable door for callers that
-// manage publication themselves.
+// A per-run staging directory beside the destination is claimed atomically.
+// Its named-file result is synced, closed, and then published with an atomic
+// destination policy. Without -f publication refuses an existing name; with
+// -f it refuses filesystems that cannot replace an existing file atomically.
+// The source is removed last, so staging and publication failures leave it
+// intact. A final size/mtime check catches changes visible before publication;
+// a live log must still be rotated before compression because os64 has no file
+// snapshot or lock spanning that check and removal. Standard output remains
+// the composable door for callers that manage publication themselves.
 
 #include "os64/os64.h"
 #include "gzip/gzip.h"
@@ -113,7 +113,9 @@ static int destination_path(const char *source, char out[GZIP_PATH_MAX])
     return wanted >= 0 && wanted < (int32_t)GZIP_PATH_MAX ? 0 : -1;
 }
 
-static int temporary_path(const char *target, char out[GZIP_PATH_MAX])
+static int temporary_paths(const char *target,
+                           char directory[GZIP_PATH_MAX],
+                           char output[GZIP_PATH_MAX])
 {
     size_t slash = os64_strlen(target);
     while (slash > 0 && target[slash - 1] != '/')
@@ -123,24 +125,37 @@ static int temporary_path(const char *target, char out[GZIP_PATH_MAX])
         uint32_t sequence = gTemporarySequence++;
         int32_t wanted;
         if (slash == 0) {
-            wanted = os64_snprintf(out, GZIP_PATH_MAX,
-                                   ".gzip-%lu-%u.part",
+            wanted = os64_snprintf(directory, GZIP_PATH_MAX,
+                                   ".gzip-%lu-%u.stage",
                                    os64_taskid(), sequence);
         } else if (slash == 1) {
-            wanted = os64_snprintf(out, GZIP_PATH_MAX,
-                                   "/.gzip-%lu-%u.part",
+            wanted = os64_snprintf(directory, GZIP_PATH_MAX,
+                                   "/.gzip-%lu-%u.stage",
                                    os64_taskid(), sequence);
         } else {
-            wanted = os64_snprintf(out, GZIP_PATH_MAX,
-                                   "%.*s/.gzip-%lu-%u.part",
+            wanted = os64_snprintf(directory, GZIP_PATH_MAX,
+                                   "%.*s/.gzip-%lu-%u.stage",
                                    (int32_t)(slash - 1), target,
                                    os64_taskid(), sequence);
         }
         if (wanted < 0 || wanted >= (int32_t)GZIP_PATH_MAX)
             return -1;
+
+        // mkdir is the namespace claim. A colliding task wins or loses that
+        // one operation; neither side can observe absence and then truncate
+        // a file the other side installed in the gap.
+        if (os64_mkdir(directory) == 0) {
+            wanted = os64_snprintf(output, GZIP_PATH_MAX, "%s/output",
+                                   directory);
+            if (wanted >= 0 && wanted < (int32_t)GZIP_PATH_MAX)
+                return 0;
+            os64_unlink(directory);
+            return -1;
+        }
+
         os64_dirent_t existing = {0};
-        if (os64_stat(out, &existing) < 0)
-            return 0;
+        if (os64_stat(directory, &existing) < 0)
+            return -1;
     }
     return -1;
 }
@@ -202,9 +217,7 @@ static int encode_path(const char *path, const gzip_options_t *options)
     }
 
     char destination[GZIP_PATH_MAX];
-    char temporary[GZIP_PATH_MAX];
-    if (destination_path(path, destination) < 0 ||
-        temporary_path(destination, temporary) < 0) {
+    if (destination_path(path, destination) < 0) {
         os64_hprintf(OS64_STDERR,
                      "gzip: output path for '%s' is too long\n", path);
         return -1;
@@ -231,11 +244,22 @@ static int encode_path(const char *path, const gzip_options_t *options)
         os64_hprintf(OS64_STDERR, "gzip: cannot open '%s'\n", path);
         return -1;
     }
+
+    char temporary_directory[GZIP_PATH_MAX];
+    char temporary[GZIP_PATH_MAX];
+    if (temporary_paths(destination, temporary_directory, temporary) < 0) {
+        os64_hprintf(OS64_STDERR,
+                     "gzip: cannot claim staging space beside '%s'\n",
+                     destination);
+        os64_close(input);
+        return -1;
+    }
     int32_t output = (int32_t)os64_open(temporary, "w");
     if (output < 0) {
         os64_hprintf(OS64_STDERR,
                      "gzip: cannot create output beside '%s'\n", destination);
         os64_close(input);
+        os64_unlink(temporary_directory);
         return -1;
     }
 
@@ -284,8 +308,14 @@ static int encode_path(const char *path, const gzip_options_t *options)
             result = -1;
         }
     }
+    if (result == 0 && os64_unlink(temporary_directory) < 0) {
+        os64_hprintf(OS64_STDERR,
+                     "gzip: cannot remove staging directory for '%s'\n", path);
+        result = -1;
+    }
     if (result < 0) {
         os64_unlink(temporary);
+        os64_unlink(temporary_directory);
         return -1;
     }
 

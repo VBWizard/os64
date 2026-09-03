@@ -25,6 +25,8 @@ static char gSourcePath[96];
 static char gEncodedPath[100];
 static char gFatSourcePath[96];
 static char gFatEncodedPath[100];
+static const char *gExt2ScratchDirectory;
+static const char *gFatScratchDirectory;
 static uint8_t gCommandPayload[8192];
 static uint8_t gCommandCompressed[sizeof(gCommandPayload) * 2];
 static uint8_t gCommandOutput[sizeof(gCommandPayload) + 16];
@@ -65,10 +67,30 @@ static int32_t spawn_and_wait(const char *path, char *const argv[])
     return code;
 }
 
+static bool directory_exists(const char *path)
+{
+    os64_dirent_t entry = {0};
+    return os64_stat(path, &entry) == 0 &&
+           (entry.flags & OS64_DE_DIR) != 0;
+}
+
+static void select_filesystem_layout(void)
+{
+    // The secondary mount names the root's opposite. Keep command replacement
+    // tests on ext2 and refusal tests on FAT in both supported boot layouts.
+    bool fat_is_secondary = directory_exists("/fat");
+    bool ext2_is_secondary = directory_exists("/ext2");
+    if (fat_is_secondary == ext2_is_secondary)
+        fail("could not identify the FAT/ext2 mount layout");
+    gExt2ScratchDirectory = fat_is_secondary ? "/tmp" : "/ext2";
+    gFatScratchDirectory = fat_is_secondary ? "/fat" : "";
+}
+
 static void test_gunzip_filter(void)
 {
     if (os64_snprintf(gCompressedPath, sizeof(gCompressedPath),
-                      "/tmp/gziptest-%lu.gz", os64_taskid()) >=
+                      "%s/gziptest-%lu.gz", gExt2ScratchDirectory,
+                      os64_taskid()) >=
         (int32_t)sizeof(gCompressedPath))
         fail("temporary path is too long");
 
@@ -277,7 +299,8 @@ static void test_gzip_stdout(void)
 static void test_gzip_command(void)
 {
     if (os64_snprintf(gSourcePath, sizeof(gSourcePath),
-                      "/tmp/gziptest-%lu.log", os64_taskid()) >=
+                      "%s/gziptest-%lu.log", gExt2ScratchDirectory,
+                      os64_taskid()) >=
             (int32_t)sizeof(gSourcePath) ||
         os64_snprintf(gEncodedPath, sizeof(gEncodedPath), "%s.gz",
                       gSourcePath) >= (int32_t)sizeof(gEncodedPath))
@@ -365,7 +388,8 @@ static void test_gzip_fat_force_refusal(void)
     static const uint8_t source[] = "new log bytes\n";
     static const uint8_t destination[] = "old gzip bytes\n";
     if (os64_snprintf(gFatSourcePath, sizeof(gFatSourcePath),
-                      "/fat/gziptest-%lu.log", os64_taskid()) >=
+                      "%s/gziptest-%lu.log", gFatScratchDirectory,
+                      os64_taskid()) >=
             (int32_t)sizeof(gFatSourcePath) ||
         os64_snprintf(gFatEncodedPath, sizeof(gFatEncodedPath), "%s.gz",
                       gFatSourcePath) >= (int32_t)sizeof(gFatEncodedPath))
@@ -422,6 +446,7 @@ int main(void)
     if (status != OS64_GZIP_CHECKSUM)
         fail("damaged trailer was accepted");
 
+    select_filesystem_layout();
     test_gunzip_filter();
     test_gzip_command();
     test_gzip_fat_force_refusal();
