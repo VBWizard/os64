@@ -48,6 +48,7 @@
 
 import argparse
 import asyncio
+import math
 import random
 import signal
 import socket
@@ -55,15 +56,30 @@ import struct
 import sys
 import time
 
+
+def probability(value):
+    parsed = float(value)
+    if not math.isfinite(parsed) or not 0.0 <= parsed <= 1.0:
+        raise ValueError('must be a finite probability from 0 to 1')
+    return parsed
+
+
+def nonnegative_int(value):
+    parsed = int(value)
+    if parsed < 0:
+        raise ValueError('must be nonnegative')
+    return parsed
+
+
 PARAMS = {
     # name: (default, parser, meaning)
-    'loss':        (0.0, float, 'probability a frame is dropped'),
+    'loss':        (0.0, probability, 'probability a frame is dropped'),
     'delay':       (0.0, float, 'milliseconds added to every frame'),
     'jitter':      (0.0, float, 'milliseconds of ± noise on the delay'),
-    'reorder':     (0.0, float, 'probability a frame is held back behind its successors'),
+    'reorder':     (0.0, probability, 'probability a frame is held back behind its successors'),
     'reorder_ms':  (50.0, float, 'how long a held-back frame waits'),
-    'dup':         (0.0, float, 'probability a frame is delivered twice'),
-    'blackhole':   (0, int, 'drop everything after this many frames (0 = never)'),
+    'dup':         (0.0, probability, 'probability a frame is delivered twice'),
+    'blackhole':   (0, nonnegative_int, 'drop after this many subsequent frames (0 = never)'),
 }
 DIRECTIONS = ('up', 'down')
 
@@ -73,6 +89,9 @@ class Direction:
         self.name = name
         self.rng = random.Random(seed)
         self.params = {k: v[0] for k, v in PARAMS.items()}
+        # Absolute `seen` cutoff; live blackhole settings translate their
+        # relative frame count here when the control command arrives.
+        self.blackhole_at = None
         self.link = True
         self.last_due = 0.0         # loop.time() the previous frame is due; order is kept behind it
         self.writer = None          # the QEMU side we hand survivors to
@@ -92,6 +111,22 @@ class Direction:
             self.connection_generation += 1
             self.last_due = 0.0
 
+    def set_param(self, name, value, live=False):
+        self.params[name] = value
+        if name == 'blackhole':
+            if not value:
+                self.blackhole_at = None
+            elif live:
+                self.blackhole_at = self.counts['seen'] + value
+            else:
+                self.blackhole_at = value
+
+    def reset_counts(self):
+        for key in self.counts:
+            self.counts[key] = 0
+        self.bytes_in = self.bytes_out = 0
+        self.blackhole_at = self.params['blackhole'] or None
+
     def weather(self, frame, loop, generation):
         c = self.counts
         p = self.params
@@ -103,7 +138,7 @@ class Direction:
         if not self.link:
             c['linkdown'] += 1
             return
-        if p['blackhole'] and c['seen'] > p['blackhole']:
+        if self.blackhole_at is not None and c['seen'] > self.blackhole_at:
             c['blackholed'] += 1
             return
         if p['loss'] > 0 and self.rng.random() < p['loss']:
@@ -213,9 +248,7 @@ class Cable:
             return '\n'.join(d.stats_line() for d in self.dirs.values())
         if verb == 'reset':
             for d in self.dirs.values():
-                for k in d.counts:
-                    d.counts[k] = 0
-                d.bytes_in = d.bytes_out = 0
+                d.reset_counts()
             return 'ok'
         if verb == 'quit':
             self.loop.call_soon(self.loop.stop)
@@ -230,7 +263,7 @@ class Cable:
             except ValueError:
                 return f'err bad value {words[3]!r}'
             for d in self.pick(words[1]):
-                d.params[words[2]] = value
+                d.set_param(words[2], value, live=True)
             return 'ok'
         return ('err usage: stats | reset | quit | link <up|down|both> <on|off> | '
                 'set <up|down|both> <param> <value>; params: ' + ' '.join(PARAMS))
@@ -272,7 +305,7 @@ async def run(args):
         for k in PARAMS:
             v = getattr(args, f'{d}_{k}')
             if v is not None:
-                cable.dirs[d].params[k] = v
+                cable.dirs[d].set_param(k, v)
 
     def bind(handler, port):
         return asyncio.start_server(handler, '127.0.0.1', port)
