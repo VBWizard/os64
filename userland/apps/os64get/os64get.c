@@ -1702,7 +1702,12 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
     {
         os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", urlText, http_head_reason(hrc));
         os64_close((int32_t)conn);
-        return GET_BAD_HEADER;
+        // A framing header too long to read is not a MALFORMED reply, it is a
+        // legal one this program cannot honestly act on — the same answer the
+        // chunked and gzip refusals below give, reached a different way, and
+        // it earns the same exit code so a script cannot tell them apart by
+        // accident.
+        return hrc == HTTP_HEAD_FRAMING ? GET_UNSUPPORTED : GET_BAD_HEADER;
     }
 
     if (reply.status != 200)

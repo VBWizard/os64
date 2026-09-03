@@ -272,15 +272,18 @@ bool http_url_absolute(const http_url_t *base, const char *location,
     if (location[0] != '/')
         return false;                 // relative to the page: not ours to resolve
 
-    // The origin that just answered, plus the path it named. The port rides
-    // along only when it is not the default, for the same reason the Host
-    // header omits it: everybody writes the short form.
+    // The origin that just answered, plus the path it named — KEEPING THAT
+    // ORIGIN'S SCHEME. Hard-coding http here sent an https page's `/login`
+    // redirect back as `http://host:443/login`: plaintext at a TLS port, an
+    // address that cannot work, printed as a command to copy. The port rides
+    // along only when it is not the default FOR THAT SCHEME, for the same
+    // reason the Host header omits it. (Codex review, 2026-09-02.)
     int32_t n;
-    if (base->port != 80)
-        n = os64_snprintf(out, cap, "http://%s:%u%s", base->host,
+    if (base->port != scheme_default_port(base->scheme))
+        n = os64_snprintf(out, cap, "%s://%s:%u%s", base->scheme, base->host,
                           (unsigned)base->port, location);
     else
-        n = os64_snprintf(out, cap, "http://%s%s", base->host, location);
+        n = os64_snprintf(out, cap, "%s://%s%s", base->scheme, base->host, location);
     return n > 0 && (size_t)n < cap;
 }
 
@@ -411,6 +414,17 @@ static bool take_once(char *slot, size_t cap, const char *value)
 
 static http_head_result_t header_take(char *line, http_response_t *out)
 {
+    // A HEADER LINE MAY NOT BEGIN WITH WHITESPACE. That shape is obs-fold, a
+    // continuation of the line above, deprecated by RFC 7230 §3.2.4 and
+    // required to be rejected by anything that is not a proxy. Refusing it is
+    // not pedantry: `  Transfer-Encoding: chunked` would otherwise parse as a
+    // header NAMED "  Transfer-Encoding", match none of the three compares
+    // below, and be ignored — the same silent miss as an over-long framing
+    // header, arriving through a different door. (Found while writing the
+    // test for Codex's P1, which named the trailing-whitespace door.)
+    if (is_blank(line[0]))
+        return HTTP_HEAD_SYNTAX;
+
     char *colon = line;
     while (*colon != '\0' && *colon != ':')
         colon++;
@@ -452,6 +466,50 @@ static http_head_result_t header_take(char *line, http_response_t *out)
     return HTTP_HEAD_OK;
 }
 
+// WHAT WAS THAT LINE, before we throw it away. An over-long header is
+// dropped rather than fatal (see HTTP_LINE_MAX in http.h), and that is safe
+// only for a header nothing depends on. It is NOT safe for the three that
+// decide how the body is framed and coded: a server chooses the length of
+// its own header lines, so `Transfer-Encoding:` followed by three kilobytes
+// of the optional whitespace RFC 7230 permits and then `chunked` would be
+// dropped, leave the reply looking unframed, and end with raw chunk lengths
+// published as the file — the precise failure the refusal rule exists to
+// prevent. (Codex review, 2026-09-02. The rule was right; the premise under
+// it — "the headers this acts on are all short" — was the server's to break,
+// not ours to assume.)
+//
+// The NAME is readable even when the value is not: it arrives first and is
+// short, so the truncated prefix still carries it. A line so long that not
+// even a colon fits is refused too — an unidentifiable multi-kilobyte header
+// is not something to shrug at.
+static http_head_result_t overlong_verdict(const char *prefix)
+{
+    // Leading whitespace makes the name unknowable here for the same reason
+    // it is refused in header_take: the line is obs-fold, and what it hides
+    // cannot be read out of the prefix.
+    if (is_blank(prefix[0]))
+        return HTTP_HEAD_FRAMING;
+
+    char name[HTTP_TOKEN_MAX];
+    size_t n = 0;
+    while (prefix[n] != '\0' && prefix[n] != ':') {
+        if (n + 1 >= sizeof(name))
+            return HTTP_HEAD_OK;      // too long to BE one of the three
+        name[n] = prefix[n];
+        n++;
+    }
+    if (prefix[n] != ':')
+        return HTTP_HEAD_FRAMING;     // no colon in the whole prefix
+    name[n] = '\0';
+
+    if (os64_streq_nocase(name, "Content-Length") ||
+        os64_streq_nocase(name, "Transfer-Encoding") ||
+        os64_streq_nocase(name, "Content-Encoding"))
+        return HTTP_HEAD_FRAMING;
+
+    return HTTP_HEAD_OK;              // genuinely nothing depends on it
+}
+
 static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
 {
     char line[HTTP_LINE_MAX];
@@ -485,7 +543,13 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
         if (r == LINE_END || r == LINE_ERROR)
             return HTTP_HEAD_SOURCE;
         if (r == LINE_LONG)
-            continue;              // dropped on purpose — see HTTP_LINE_MAX in http.h
+        {
+            // Dropped, but only once we know nothing depends on it.
+            http_head_result_t verdict = overlong_verdict(line);
+            if (verdict != HTTP_HEAD_OK)
+                return verdict;
+            continue;
+        }
         if (line[0] == '\0')
             return HTTP_HEAD_OK;   // the blank line: the head is whole
 
@@ -522,6 +586,7 @@ const char *http_head_reason(http_head_result_t rc)
         case HTTP_HEAD_SYNTAX:   return "a header line is not 'Name: value'";
         case HTTP_HEAD_TOO_MUCH: return "more headers than this program will read";
         case HTTP_HEAD_CONFLICT: return "the headers answer one question two ways";
+        case HTTP_HEAD_FRAMING:  return "a header saying how to read the body was too long to read";
     }
     return "refused";
 }

@@ -185,6 +185,14 @@ join_cases = [
     ("http://example.com/a/b.html", "/q?x=1&y=2"),
     ("http://10.0.2.2:8080/redirect-https", "https://example.com/"),
     ("http://10.0.2.2:8080/redirect", "/hello.txt"),
+# The redirect helper must keep the BASE's scheme. Hard-coding http sent an
+# https page's `/login` back as `http://host:443/login` — plaintext at a TLS
+# port, printed as a command to copy. (Codex, PR #52.)
+    ("https://example.com/a/b.html", "/login"),
+    ("https://example.com/", "/"),
+    ("https://example.com:8443/a/b.html", "/top.html"),
+    ("https://example.com:443/a/b.html", "/top.html"),
+    ("https://example.com/a/b.html", "http://plain.example/x"),
 ]
 for base, location in join_cases:
     verdict, got, _ = run(["absolute", base, location])
@@ -192,11 +200,14 @@ for base, location in join_cases:
         fail(f"absolute {base} + {location}", f"declined it ({verdict})")
         continue
     want = urllib.parse.urljoin(base, location)
-    # urljoin keeps an explicit :80; os64get drops it for the same reason the
-    # Host header does, so compare the parsed pieces rather than the spelling.
+    # urljoin keeps an explicit default port; os64get drops it for the same
+    # reason the Host header does, so compare the parsed pieces rather than
+    # the spelling — and default the port PER SCHEME, or https://host and
+    # https://host:443 read as different places.
     a, b = urllib.parse.urlsplit(got["url"]), urllib.parse.urlsplit(want)
-    if (a.scheme, a.hostname, a.port or 80, a.path, a.query) != \
-       (b.scheme, b.hostname, b.port or 80, b.path, b.query):
+    default = lambda s: 443 if s == "https" else 80
+    if (a.scheme, a.hostname, a.port or default(a.scheme), a.path, a.query) != \
+       (b.scheme, b.hostname, b.port or default(b.scheme), b.path, b.query):
         fail(f"absolute {base} + {location}", f"{got['url']!r} != {want!r}")
 
 # Declined on purpose: a genuinely relative reference wants RFC 3986's full
@@ -336,6 +347,11 @@ refusals = {
     "long-status": (b"HTTP/1.1 2000 OK\r\n\r\n", "status"),
     "no-status": (b"HTTP/1.1\r\n\r\n", "status"),
     "space-before-colon": (b"HTTP/1.1 200 OK\r\nContent-Length : 32\r\n\r\n", "syntax"),
+    # obs-fold: a line beginning with whitespace is a continuation, deprecated
+    # by RFC 7230 §3.2.4 and refused here because it can hide a framing header
+    # under a name that matches nothing.
+    "folded-line": (b"HTTP/1.1 200 OK\r\n  Transfer-Encoding: chunked\r\n\r\n", "syntax"),
+    "folded-tab": (b"HTTP/1.1 200 OK\r\n\tContent-Length: 32\r\n\r\n", "syntax"),
     "no-colon": (b"HTTP/1.1 200 OK\r\nContent-Length 32\r\n\r\n", "syntax"),
     "empty-name": (b"HTTP/1.1 200 OK\r\n: 32\r\n\r\n", "syntax"),
     "bad-length": (b"HTTP/1.1 200 OK\r\nContent-Length: 32x\r\n\r\n", "syntax"),
@@ -363,6 +379,49 @@ for label, (raw, want) in refusals.items():
         verdict, _, _ = run(["head", path, chunk, 64, 0, work / "body.out"])
         if verdict != want:
             fail(f"refusal {label} chunk={chunk}", f"{verdict} != {want}")
+
+# ── The P1: an over-long header that DECIDES THE FRAMING ────────────────
+# The drop rule for long header lines is safe only for headers nothing
+# depends on. A server picks the length of its own lines, and RFC 7230 allows
+# unlimited optional whitespace after the colon — so these hide a framing
+# header behind padding and must be REFUSED, not dropped. Found by Codex on
+# PR #52; the rule was right and its premise ("the headers this acts on are
+# all short") was the server's to break.
+pad = b" " * 3000
+framing_hidden = {
+    "long-transfer-encoding": b"HTTP/1.1 200 OK\r\nTransfer-Encoding:" + pad + b"chunked\r\n\r\n",
+    "long-content-encoding": b"HTTP/1.1 200 OK\r\nContent-Encoding:" + pad + b"gzip\r\n\r\n",
+    "long-content-length": b"HTTP/1.1 200 OK\r\nContent-Length:" + pad + b"5\r\n\r\nhello",
+    # Cased differently, because the compare must not care.
+    "long-te-cased": b"HTTP/1.1 200 OK\r\ntRaNsFeR-eNcOdInG:" + pad + b"chunked\r\n\r\n",
+    # Whitespace before the name is obs-fold, and it hides a framing header
+    # exactly as trailing padding does — the same hole through a second door,
+    # found while writing this test rather than by Codex.
+    "folded-transfer-encoding": b"HTTP/1.1 200 OK\r\n  Transfer-Encoding:" + pad + b"chunked\r\n\r\n",
+}
+for label, raw in framing_hidden.items():
+    path = work / f"framing-{label}"
+    path.write_bytes(raw)
+    for chunk in [1, 7, 64, 4096, 0]:
+        verdict, _, _ = run(["head", path, chunk, 64, 0, work / "body.out"])
+        if verdict != "framing":
+            fail(f"framing {label} chunk={chunk}",
+                 f"{verdict} != framing — an unreadable framing header was DROPPED")
+
+# ...and the tolerance the drop rule exists for must survive. A giant
+# Set-Cookie is real on the web, os64get does not read cookies, and refusing
+# the whole fetch over one would be the wrong trade.
+body = b"payload\n" * 64
+tolerated = (b"HTTP/1.1 200 OK\r\nSet-Cookie: c=" + b"x" * 4000 +
+             b"\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+path = work / "framing-tolerated"
+path.write_bytes(tolerated)
+for chunk in [1, 7, 64, 4096, 0]:
+    verdict, got, _ = run(["head", path, chunk, 64, 0, work / "body.out"])
+    if verdict != "ok":
+        fail(f"tolerated chunk={chunk}", f"a long Set-Cookie was refused: {verdict}")
+    elif int(got["length"]) != len(body) or (work / "body.out").read_bytes() != body:
+        fail(f"tolerated chunk={chunk}", "the long header cost the body")
 
 # ── A connection that breaks mid-body ───────────────────────────────────
 # The head parses, the body does not arrive, and the caller must be able to

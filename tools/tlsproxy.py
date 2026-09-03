@@ -8,7 +8,7 @@ and oracle attacks teach no kernel lessons. That same ruling names the stopgap
 plain HTTP, this fetches over TLS with the trust store the host machine
 already maintains, and the answer comes back in plain HTTP.
 
-    export http_proxy=http://<this-machine>:8888/     (in the guest)
+    export https_proxy=http://<this-machine>:8888/    (in the guest)
     os64get https://example.com/
 
 WHAT IT COSTS, said here as plainly as os64get says it on every fetch: THIS
@@ -27,7 +27,7 @@ doing and why you should stop it when you are done.
 
 WHERE TO RUN IT, the same split every tool here has:
   - QEMU, from WSL2: run it in WSL2; the guest reaches the host's loopback at
-    10.0.2.2, so `export http_proxy=http://10.0.2.2:8888/`.
+    10.0.2.2, so `export https_proxy=http://10.0.2.2:8888/`.
   - THE P5, or anything on the LAN: run it on the WINDOWS side, because WSL2
     lives behind a NAT of its own and a listener inside it is not reachable
     from the room (os64serve.py's header tells the same story at length):
@@ -68,8 +68,11 @@ USAGE = "python3 tlsproxy.py [--port N] [--verbose]"
 #   is a proxy's ordinary job, not a trick.)
 # Connection / Keep-Alive: hop-by-hop by definition (RFC 7230 §6.1); they
 #   describe THIS connection, not the origin's.
-# Content-Length: re-derived below, because the body's length after
-#   un-chunking is ours to state, not the origin's to remember.
+# Content-Length: dropped here and decided in relay(), because whether the
+#   origin's number still describes what os64get will receive depends on
+#   whether the body was un-chunked on the way through. Forwarded when the
+#   origin stated one and was not chunked; omitted otherwise, and an omitted
+#   length means the close is the length.
 HOP_BY_HOP = {"transfer-encoding", "connection", "keep-alive", "proxy-authenticate",
               "proxy-authorization", "te", "trailer", "upgrade", "content-length"}
 
@@ -83,6 +86,14 @@ def bad(message):
 
 
 class Handler(socketserver.StreamRequestHandler):
+    # Set the moment a reply head goes out. Once it has, THERE IS NO LONGER
+    # A PLACE TO PUT AN ERROR: a 502 written after the headers would land in
+    # the middle of the body as bytes of the file. A failure past this point
+    # can only hang up, which os64get already reads as a broken transfer.
+    # (The hazard arrived with streaming — buffering the body meant nothing
+    # was sent until everything had succeeded.)
+    headersSent = False
+
     def handle(self):
         request = self.rfile.readline(65536).decode("latin-1", "replace").strip()
         while True:                          # drain the rest of the head
@@ -143,27 +154,58 @@ class Handler(socketserver.StreamRequestHandler):
                 "Connection": "close",
             })
             reply = upstream.getresponse()
-            body = reply.read()
+
+            # THE BODY IS STREAMED, NEVER HELD WHOLE. Reading it entire to
+            # measure it meant one arbitrary URL could cost this process the
+            # size of the response — and a close-delimited reply that never
+            # ends could cost it everything, once per connection, with a
+            # thread each. (Codex review, 2026-09-02.)
+            #
+            # What that costs in return is the length: http.client un-chunks
+            # for us, so a chunked origin's decoded size is unknowable until
+            # the end. So the length is FORWARDED when the origin stated one
+            # and omitted when it did not, and an omitted length means the
+            # close is the length — HTTP/1.0's own framing, which os64get
+            # already reads. The common case keeps its Content-Length and
+            # therefore keeps os64get's ability to notice a short body.
+            declared = reply.getheader("Content-Length")
+            if reply.getheader("Transfer-Encoding") is not None:
+                declared = None          # de-chunked: the origin's length is not ours
+
+            # REDIRECTS ARE PASSED THROUGH, NOT FOLLOWED. os64get is the
+            # client; deciding what a 301 means is its business, and a proxy
+            # that followed them would hide the one thing it asked to see.
+            head = f"HTTP/1.0 {reply.status} {reply.reason}\r\n"
+            for name, value in reply.getheaders():
+                if name.lower() in HOP_BY_HOP:
+                    continue
+                head += f"{name}: {value}\r\n"
+            if declared is not None:
+                head += f"Content-Length: {declared}\r\n"
+            head += "Via: 1.0 os64-tlsproxy\r\n"
+            head += "\r\n"
+            self.send(head.encode("latin-1"))
+            self.headersSent = True
+
+            moved = 0
+            while True:
+                piece = reply.read(65536)
+                if not piece:
+                    break
+                self.send(piece)
+                moved += len(piece)
         finally:
             upstream.close()
 
-        # REDIRECTS ARE PASSED THROUGH, NOT FOLLOWED. os64get is the client;
-        # deciding what a 301 means is its business, and a proxy that followed
-        # them would hide from it the one thing it asked to see.
-        head = f"HTTP/1.0 {reply.status} {reply.reason}\r\n"
-        for name, value in reply.getheaders():
-            if name.lower() in HOP_BY_HOP:
-                continue
-            head += f"{name}: {value}\r\n"
-        head += f"Content-Length: {len(body)}\r\n"
-        head += "Via: 1.0 os64-tlsproxy\r\n"
-        head += "\r\n"
-
         if VERBOSE:
-            print(f"    -> {reply.status} {reply.reason}, {len(body)} bytes", flush=True)
-        self.send(head.encode("latin-1") + body)
+            print(f"    -> {reply.status} {reply.reason}, {moved} bytes"
+                  f"{'' if declared is not None else ' (close-delimited)'}", flush=True)
 
     def refuse(self, status, reason, detail):
+        if self.headersSent:
+            # Too late to say anything but goodbye.
+            print(f"    !! {detail} (after headers — hanging up)", flush=True)
+            return
         print(f"    !! {status} {reason}: {detail}", flush=True)
         body = f"tlsproxy: {detail}\n".encode("latin-1")
         self.send(f"HTTP/1.0 {status} {reason}\r\n"
@@ -213,7 +255,9 @@ def main():
             bad(f"unknown option {token}")
 
     print(f"tlsproxy listening on 0.0.0.0:{port}")
-    print("  In the guest:  export http_proxy=http://<this-machine>:%d/" % port)
+    print("  In the guest:  export https_proxy=http://<this-machine>:%d/" % port)
+    print("  (THE SCHEME PICKS THE VARIABLE: os64get reads $https_proxy for https,")
+    print("   $http_proxy for http. This exists for https, so that is the one to set.)")
     print("  IT SEES EVERY PAGE IN THE CLEAR. Public reading only; stop it when done.")
     print("  Ctrl-C to stop.  (Windows may ask about the firewall - say yes.)")
     try:

@@ -48,6 +48,7 @@ Routes, and what each is FOR:
     /redirect       301 -> /hello.txt                      reported, not followed
     /redirect-https 302 -> an https:// address              the honest TLS answer
     /chunked        Transfer-Encoding: chunked             refused, not written
+    /framing-hidden that framing, padded past a line cap    refused, not dropped
     /gzipped        Content-Encoding: gzip                 refused, not written
     /cut            half the promised body, then hangs up  a short body is a failure
     /junk           not HTTP at all                        a bad header line
@@ -137,6 +138,15 @@ class Handler(socketserver.StreamRequestHandler):
         elif route == "/redirect-https":
             self.send(head(302, "Found",
                            [("Location", "https://example.com/"), ("Content-Length", 0)]))
+        elif route == "/framing-hidden":
+            # A framing header PADDED past a client's line limit. RFC 7230 lets
+            # any amount of optional whitespace follow the colon, so a server
+            # picks how long its own headers are — and a client that drops long
+            # lines to be tolerant will miss this one and publish raw chunk
+            # framing as the file. os64get must refuse it. (Codex P1, PR #52.)
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Transfer-Encoding", " " * 3000 + "chunked")]))
+            self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
         elif route == "/chunked":
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
                                        ("Transfer-Encoding", "chunked")]))

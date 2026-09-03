@@ -99,6 +99,7 @@ static const char *head_result_name(http_head_result_t rc)
         case HTTP_HEAD_SYNTAX:   return "syntax";
         case HTTP_HEAD_TOO_MUCH: return "too_much";
         case HTTP_HEAD_CONFLICT: return "conflict";
+        case HTTP_HEAD_FRAMING:  return "framing";
     }
     return "?";
 }

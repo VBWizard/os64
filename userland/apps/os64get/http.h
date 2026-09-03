@@ -42,10 +42,14 @@
 
 #include "os64/resolve.h"   // OS64_RESOLVE_NAME_MAX — DNS's own ceiling
 
-// A header line longer than this is DROPPED, not fatal. The headers this
-// code acts on are all short (a length, a coding name, a URL), so dropping a
-// two-kilobyte one costs nothing an answer depends on — while refusing the
-// whole response over somebody's enormous Set-Cookie would cost the fetch.
+// A header line longer than this is DROPPED rather than fatal — but only
+// after the line's NAME has been read out of the truncated prefix and found
+// to be one nothing depends on. Refusing every over-long line would cost the
+// fetch over somebody's enormous Set-Cookie, which os64get does not even
+// read; dropping one blindly would let a server hide `Transfer-Encoding:
+// chunked` behind three kilobytes of legal whitespace and get raw chunk
+// framing published as the file. See overlong_verdict: the three headers
+// that decide how a body is framed and coded refuse the reply instead.
 #define HTTP_LINE_MAX      2048
 // ...but the DROPPING is bounded, or a peer that talks forever and never
 // sends a newline is read forever. HTTP_HEAD_MAX is the whole head's budget
@@ -168,7 +172,8 @@ typedef enum {
     HTTP_HEAD_STATUS,     // the first line is not an HTTP status line
     HTTP_HEAD_SYNTAX,     // a header line is not "Name: value"
     HTTP_HEAD_TOO_MUCH,   // more head than this will read
-    HTTP_HEAD_CONFLICT    // two different answers to one question
+    HTTP_HEAD_CONFLICT,   // two different answers to one question
+    HTTP_HEAD_FRAMING     // a header deciding how to read the body was unreadable
 } http_head_result_t;
 
 // Read the status line and every header, stopping on the blank line that
