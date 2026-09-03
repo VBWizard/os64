@@ -201,7 +201,7 @@ USERLAND_TESTBINS := $(addprefix userland/bin/tests/,$(USERLAND_TESTS))
 # dependencies. The set goes on both volumes that currently carry /bin — the
 # ext2 root and the FAT lifeboat — with independent copies so damage to one
 # volume does not also eat the repair environment's libraries.
-USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so
+USERLAND_LIBS := userland/bin/libos64.so userland/bin/libgzip.so userland/bin/libpng.so
 
 # Kernel-side ring-3 test fixtures. They ride the image into /tests alongside
 # the userland ones — same shelf, because they are the same KIND of thing: a
@@ -458,7 +458,7 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTB
 	# FAT — the one file that must never lie about which filesystem it's on).
 	printf 'Ima ext2 partition on the NVME disk\n' > $(EXT2_STAGING)/partition_info.txt
 	# /lib: every shipped userland library (libos64.so is foundational;
-	# libgzip.so is loaded by its consumers) and libtest.so, the dynamic-linking
+	# libgzip.so and libpng.so are loaded by their consumers) and libtest.so, the dynamic-linking
 	# regression fixture.
 	# Iterated, same as the apps, so a new library cannot be forgotten here.
 	printf 'cd /lib\n' >> $(EXT2_STAGING)/debugfs_bins.cmds
