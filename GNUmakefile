@@ -302,7 +302,7 @@ QEMU_CHAOS_FLAGS = -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
                    -object filter-redirector,id=cable_up,netdev=n0,queue=rx,outdev=cable_up_out,indev=cable_up_in
 
 .PHONY: run-chaos
-run-chaos: $(IMAGE_NAME).iso
+run-chaos: $(IMAGE_NAME).iso | $(DATA_IMAGE)
 	qemu-system-x86_64 \
 		-cdrom $(IMAGE_NAME).iso \
 		-boot d \
