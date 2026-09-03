@@ -10,6 +10,14 @@
 static bool is_digit(char c) { return c >= '0' && c <= '9'; }
 static bool is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
 static bool is_blank(char c) { return c == ' ' || c == '\t'; }
+// What a reason phrase or a field value may hold: RFC 9110's field-vchar,
+// obs-text and the blanks — bytes a terminal draws, not bytes it obeys. Both
+// are the origin's words and both get printed to the person's terminal, so
+// a control byte is refused once, here, rather than escaped at every print.
+static bool is_field_byte(char c)
+{
+    return c == '\t' || ((unsigned char)c >= 0x20 && c != 0x7F);
+}
 static char to_lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + ('a' - 'A')) : c; }
 
 // A FIELD NAME IS A TOKEN, and both places that read one judge it by this.
@@ -452,6 +460,9 @@ static bool status_parse(const char *line, http_response_t *out)
     while (*p == ' ')
         p++;
 
+    for (const char *q = p; *q != '\0'; q++)
+        if (!is_field_byte(*q))
+            return false;            // a reason phrase that would drive the terminal
     copy_span(out->reason, sizeof(out->reason), p, os64_strlen(p));
     return true;
 }
@@ -497,6 +508,9 @@ static http_head_result_t header_take(char *line, http_response_t *out)
     size_t vlen = os64_strlen(value);
     while (vlen > 0 && is_blank(value[vlen - 1]))
         value[--vlen] = '\0';
+    for (size_t i = 0; i < vlen; i++)
+        if (!is_field_byte(value[i]))
+            return HTTP_HEAD_SYNTAX;  // a Location that would clear the screen
 
     if (os64_streq_nocase(line, "Content-Length")) {
         uint64_t length = 0;

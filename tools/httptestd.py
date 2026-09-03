@@ -47,6 +47,7 @@ Routes, and what each is FOR:
     /missing        404                                    a refusal
     /redirect       301 -> /hello.txt                      reported, not followed
     /redirect-https 302 -> an https:// address              the honest TLS answer
+    /redirect-tricky 302 -> /hello.txt;reboot               the advice quotes it
     /chunked        Transfer-Encoding: chunked             refused, not written
     /dots/..        a URL with no usable basename          DEST must still be honored
     /chunked-cut    chunked, terminator never sent         truncation must not pass
@@ -81,6 +82,25 @@ USAGE = "python3 httptestd.py [--port N] [--dump DIR]"
 MAX_LINE = 65536
 MAX_HEAD = 262144
 MAX_HEAD_LINES = 200
+
+
+def visible(text):
+    """`text` with every byte a terminal would OBEY spelled as an escape —
+    C0 controls, DEL and the C1 range as `\\xHH`, backslash as `\\\\` — so a
+    request line off the LAN is logged as glyphs and cannot clear or rewrite
+    the operator's screen. tlsproxy.py keeps the same rule for the same
+    reason: both ports are open to the room. (Codex review round 5,
+    2026-09-03.)"""
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif code < 0x20 or 0x7F <= code < 0xA0:
+            out.append(f"\\x{code:02x}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 HELLO = b"hello from the host, over HTTP.\n"
 DIRPAGE = b"<html><body><h1>a directory</h1></body></html>\n"
@@ -130,7 +150,7 @@ class Handler(socketserver.StreamRequestHandler):
 
         parts = request.split()
         path = parts[1] if len(parts) >= 2 else "/"
-        print(f"  {request}", flush=True)
+        print(f"  {visible(request)}", flush=True)
 
         route = path.split("?", 1)[0]
         query = path.split("?", 1)[1] if "?" in path else ""
@@ -163,6 +183,12 @@ class Handler(socketserver.StreamRequestHandler):
         elif route == "/redirect-https":
             self.send(head(302, "Found",
                            [("Location", "https://example.com/"), ("Content-Length", 0)]))
+        elif route == "/redirect-tricky":
+            # A Location that is a legal URL AND a husk command separator.
+            # The advice os64get prints must quote it, or copying the
+            # suggested command runs `reboot`. (Codex review round 5, PR #52.)
+            self.send(head(302, "Found",
+                           [("Location", "/hello.txt;reboot"), ("Content-Length", 0)]))
         elif route == "/framing-hidden":
             # A framing header PADDED past a client's line limit. RFC 7230 lets
             # any amount of optional whitespace follow the colon, so a server

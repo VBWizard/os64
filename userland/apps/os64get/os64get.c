@@ -1606,11 +1606,30 @@ static void redirect_advice(const http_url_t *from, const char *location)
     }
 
     char whole[HTTP_LINE_MAX + HTTP_HOST_MAX + 16];
-    if (http_url_absolute(from, location, whole, sizeof(whole)))
-        os64_hprintf(OS64_STDERR, "os64get: to follow it by hand:  os64get %s\n", whole);
-    else
+    if (!http_url_absolute(from, location, whole, sizeof(whole)))
+    {
         os64_hprintf(OS64_STDERR, "os64get: that is relative to the page you asked for,"
                                   " and os64get needs a whole URL.\n");
+        return;
+    }
+
+    // THE COMMAND IS QUOTED, BECAUSE THE ADDRESS IN IT IS THE SERVER'S. husk
+    // splits an unquoted line at `;` and `&&`, and a URL may legally carry
+    // either (`/x;reboot` is a path), so printed bare this line was a command
+    // that ran something the person never typed the moment they copied it.
+    // Single quotes hide everything from husk except a single quote, and
+    // husk has no backslash to escape one with — so an address holding one
+    // is shown as an address and offered as no command at all. (Codex
+    // review round 5, 2026-09-03.)
+    bool holdsQuote = false;
+    for (const char *q = whole; *q != '\0'; q++)
+        if (*q == '\'')
+            holdsQuote = true;
+    if (holdsQuote)
+        os64_hprintf(OS64_STDERR, "os64get: the whole address is %s — it holds a quote"
+                                  " character, so type it with care.\n", whole);
+    else
+        os64_hprintf(OS64_STDERR, "os64get: to follow it by hand:  os64get '%s'\n", whole);
 }
 
 // Fetch one URL into one file, staged and published exactly as the valet's

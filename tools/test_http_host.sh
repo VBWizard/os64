@@ -314,6 +314,11 @@ cases.append(("redirect", reply_bytes(
     301, "Moved Permanently",
     [("Location", "http://example.com/elsewhere"), ("Content-Length", "0")],
     b""), b"", True))
+# A tab inside a value and non-ASCII (obs-text) in a reason are LEGAL field
+# bytes; the control-byte refusals below must not reach them.
+cases.append(("tab-in-value", reply_bytes(
+    200, "OK déjà", [("X-Tab", "a\tb"), ("Content-Length", str(len(body)))],
+    body), body, True))
 
 for label, raw, body, checkReference in cases:
     path = work / f"reply-{label}"
@@ -403,6 +408,16 @@ refusals = {
     "nul-in-name": (b"HTTP/1.1 200 OK\r\nX-\x00Pad: 1\r\n\r\n", "syntax"),
     "nul-in-status": (b"HTTP/1.1 200 OK\x00\r\n\r\n", "status"),
     "nul-leads-status": (b"\x00HTTP/1.1 200 OK\r\n\r\n", "status"),
+    # Any other control byte in the origin's WORDS — the reason phrase, a
+    # Location — is refused too: os64get prints both to the terminal, and
+    # ESC [ 2 J in a reason clears the screen of whoever ran it. A tab is
+    # the one control a value may hold (see "tab-in-value" above). (Codex
+    # review round 5, 2026-09-03.)
+    "escape-in-reason": (b"HTTP/1.1 200 OK\x1b[2J\r\n\r\n", "status"),
+    "escape-in-value": (b"HTTP/1.1 302 Found\r\nLocation: /x\x1b[2J\r\nContent-Length: 0\r\n\r\n",
+                        "syntax"),
+    "del-in-value": (b"HTTP/1.1 200 OK\r\nX-A: a\x7fb\r\n\r\n", "syntax"),
+    "bell-in-length": (b"HTTP/1.1 200 OK\r\nContent-Length: \x0732\r\n\r\n" + body, "syntax"),
     "endless-interim": (b"HTTP/1.1 100 Continue\r\n\r\n" * 20, "too_much"),
     # A peer that talks forever and never sends a newline. The head's cap is
     # checked BETWEEN lines, so without a budget inside the line reader this

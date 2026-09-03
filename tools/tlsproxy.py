@@ -65,6 +65,7 @@ import socketserver
 import ssl
 import tempfile
 import sys
+import threading
 import urllib.parse
 
 USAGE = "python3 tlsproxy.py [--port N] [--verbose]"
@@ -88,11 +89,25 @@ HOP_BY_HOP = {"transfer-encoding", "connection", "keep-alive", "proxy-authentica
 
 # The unknown-length spool. Small bodies stay in memory; past SPOOL_RAM the
 # temp file rolls over to disk, so the memory bound survives. SPOOL_MAX is
-# the point at which a lengthless origin that never stops is refused rather
-# than allowed to fill the disk instead of the RAM — the same hazard moved,
-# not the same hazard solved.
+# the point at which ONE lengthless origin that never stops is refused.
+# SPOOL_SLOTS is what makes those two numbers bound the PROCESS and not just
+# a thread: ThreadingTCPServer gives every connection its own thread and so
+# its own spool, and a client on the LAN can open as many as it likes, so
+# without it the per-response cap was N × 512 MiB of temporary disk and
+# N × 8 MiB of RAM for any N the client chose. The worst case is now
+# SPOOL_SLOTS × SPOOL_MAX on disk and SPOOL_SLOTS × SPOOL_RAM in memory, and a
+# client past the limit is told 503 rather than queued — a proxy that blocks
+# is a proxy that has stopped serving the guest. (Codex review round 5,
+# 2026-09-03.)
 SPOOL_RAM = 8 * 1024 * 1024
 SPOOL_MAX = 512 * 1024 * 1024
+SPOOL_SLOTS = 4
+spoolSlots = threading.BoundedSemaphore(SPOOL_SLOTS)
+
+# How many interim (1xx) replies an origin may send before the real one —
+# the same patience os64get has, for the same reason: a peer that only ever
+# clears its throat is a peer to hang up on.
+INTERIM_MAX = 8
 
 # The request head this proxy will read from a client: one line at a time,
 # bounded in length, in count, and in total. os64get sends five short lines;
@@ -103,6 +118,39 @@ MAX_HEAD = 262144
 MAX_HEAD_LINES = 200
 
 VERBOSE = False
+
+
+def visible(text):
+    """`text` with every byte a terminal would OBEY spelled as an escape, so
+    what a LAN peer put in a request line is logged as glyphs. This port is
+    open to the room; a request target carrying ESC-[-2-J would otherwise
+    clear the operator's screen, or forge a line of proxy activity. C0
+    controls, DEL and the C1 range (latin-1 decoding keeps 0x80-0x9F as the
+    terminal controls they are) are spelled `\\xHH`; a backslash is spelled
+    `\\\\`, or a logged `\\x1b` could not be told from an escaped ESC.
+    (Codex review round 5, 2026-09-03.)"""
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif code < 0x20 or 0x7F <= code < 0xA0:
+            out.append(f"\\x{code:02x}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+class _SameStream:
+    """A socket stand-in whose makefile() hands back an EXISTING buffered
+    reader, so a second HTTPResponse can be parsed from exactly where the
+    first one stopped. A fresh makefile() on the real socket would start a
+    new buffer and lose whatever the first had already read ahead."""
+    def __init__(self, fp):
+        self.fp = fp
+
+    def makefile(self, *args, **kwargs):
+        return self.fp
 
 
 def bad(message):
@@ -159,7 +207,7 @@ class Handler(socketserver.StreamRequestHandler):
                         "(absolute-form), e.g. GET https://example.com/ HTTP/1.0")
             return
 
-        print(f"  {method} {target}", flush=True)
+        print(f"  {visible(method)} {visible(target)}", flush=True)
         try:
             self.relay(split)
         except (ssl.SSLError, ssl.SSLCertVerificationError) as error:
@@ -227,7 +275,9 @@ class Handler(socketserver.StreamRequestHandler):
                 "Accept-Encoding": "identity",
                 "Connection": "close",
             })
-            reply = upstream.getresponse()
+            reply = self.final_response(upstream)
+            if reply is None:
+                return
 
             # ONLY STRIP A FRAMING WE ACTUALLY REMOVED. http.client de-chunks
             # exactly when the header reads "chunked" and nothing else, so a
@@ -267,26 +317,66 @@ class Handler(socketserver.StreamRequestHandler):
             #
             # So an unknown-length body is SPOOLED first and only announced
             # once it has arrived whole. Memory is still bounded — the spool
-            # rolls over to disk past SPOOL_RAM — and a failure now happens
-            # before any head has gone out, so it can still be said out loud
-            # as a 502 rather than mimed as a short file.
-            with tempfile.SpooledTemporaryFile(max_size=SPOOL_RAM, mode="w+b") as spool:
-                size = 0
-                while True:
-                    piece = reply.read(65536)
-                    if not piece:
-                        break
-                    size += len(piece)
-                    if size > SPOOL_MAX:
-                        self.refuse(502, "Bad Gateway",
-                                    f"the origin declared no length and passed "
-                                    f"{SPOOL_MAX} bytes — refusing to spool more")
-                        return
-                    spool.write(piece)
-                spool.seek(0)
-                self.deliver(reply, spool, str(size), spooled=True)
+            # rolls over to disk past SPOOL_RAM, and SPOOL_SLOTS caps how many
+            # spools exist at once — and a failure now happens before any
+            # head has gone out, so it can still be said out loud as a 502
+            # rather than mimed as a short file.
+            if not spoolSlots.acquire(blocking=False):
+                self.refuse(503, "Service Unavailable",
+                            f"{SPOOL_SLOTS} unknown-length bodies are already being "
+                            f"spooled — try again shortly")
+                return
+            try:
+                with tempfile.SpooledTemporaryFile(max_size=SPOOL_RAM, mode="w+b") as spool:
+                    size = 0
+                    while True:
+                        piece = reply.read(65536)
+                        if not piece:
+                            break
+                        size += len(piece)
+                        if size > SPOOL_MAX:
+                            self.refuse(502, "Bad Gateway",
+                                        f"the origin declared no length and passed "
+                                        f"{SPOOL_MAX} bytes — refusing to spool more")
+                            return
+                        spool.write(piece)
+                    spool.seek(0)
+                    self.deliver(reply, spool, str(size), spooled=True)
+            finally:
+                spoolSlots.release()
         finally:
             upstream.close()
+
+    def final_response(self, upstream):
+        """The origin's FINAL reply, read past any interim ones. http.client
+        skips 100 Continue by itself and stops at anything else, so a 103
+        Early Hints came back as THE response: a zero-length 103 was
+        delivered to os64get and the 200 behind it never left the origin —
+        os64get, correctly treating the 103 as interim, then reported the
+        reply broken when this proxy hung up. Each further head is parsed
+        from the buffered stream the previous one left off in (_SameStream).
+        101 is refused: a protocol switch is not something a fetch can
+        follow. Returns None when a refusal has been sent.
+        (Codex review round 5, 2026-09-03.)"""
+        reply = upstream.getresponse()
+        for _ in range(INTERIM_MAX):
+            if not 100 <= reply.status < 200:
+                return reply
+            if reply.status == 101:
+                self.refuse(502, "Bad Gateway",
+                            "the origin switched protocols (101), which a fetch cannot follow")
+                return None
+            following = http.client.HTTPResponse(_SameStream(reply.fp), method="GET")
+            # The stream now belongs to the reply that follows. The interim
+            # one is still the connection's idea of "its response" and gets
+            # closed with it, so it must not own the buffer any more — or it
+            # flushes a file the final reply has already closed.
+            reply.fp = None
+            following.begin()
+            reply = following
+        self.refuse(502, "Bad Gateway",
+                    f"the origin sent more than {INTERIM_MAX} interim replies and no answer")
+        return None
 
     def deliver(self, reply, body, declared, spooled=False):
         """Send the head, then the body. Past the head there is no way to
@@ -322,9 +412,9 @@ class Handler(socketserver.StreamRequestHandler):
     def refuse(self, status, reason, detail):
         if self.headersSent:
             # Too late to say anything but goodbye.
-            print(f"    !! {detail} (after headers — hanging up)", flush=True)
+            print(f"    !! {visible(detail)} (after headers — hanging up)", flush=True)
             return
-        print(f"    !! {status} {reason}: {detail}", flush=True)
+        print(f"    !! {status} {reason}: {visible(detail)}", flush=True)
 
         # THE BODY IS UTF-8 AND THE HEAD IS LATIN-1, which is not fussiness:
         # header field values are latin-1 by the spec, a message body is
