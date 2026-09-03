@@ -1,12 +1,14 @@
 // gzip — compress streams and safely replace named files with .gz siblings.
 //
-// A named-file result is written beside its destination and renamed into
-// place only after the encoder and both file closes succeed. The source is
-// removed last, so write and publication failures leave it intact. A final
-// size/mtime check catches changes visible before publication; a live log
-// must still be rotated before compression because os64 has no file snapshot
-// or lock spanning that check and removal. Standard output remains the
-// composable door for callers that manage publication themselves.
+// A named-file result is written beside its destination, synced, closed, and
+// then published with an atomic destination policy. Without -f publication
+// refuses an existing name; with -f it refuses filesystems that cannot replace
+// an existing file atomically. The source is removed last, so write and
+// publication failures leave it intact. A final size/mtime check catches
+// changes visible before publication; a live log must still be rotated before
+// compression because os64 has no file snapshot or lock spanning that check
+// and removal. Standard output remains the composable door for callers that
+// manage publication themselves.
 
 #include "os64/os64.h"
 #include "gzip/gzip.h"
@@ -240,6 +242,11 @@ static int encode_path(const char *path, const gzip_options_t *options)
     uint64_t encoded_size = 0;
     int result = encode_handle(input, output, path, gzip_time(before.mtime),
                                &encoded_size);
+    if (result == 0 && os64_sync(output) < 0) {
+        os64_hprintf(OS64_STDERR,
+                     "gzip: cannot sync temporary output for '%s'\n", path);
+        result = -1;
+    }
     if (os64_close(output) < 0) {
         os64_hprintf(OS64_STDERR,
                      "gzip: cannot close temporary output for '%s'\n", path);
@@ -259,10 +266,23 @@ static int encode_path(const char *path, const gzip_options_t *options)
                      path);
         result = -1;
     }
-    if (result == 0 && os64_rename(temporary, destination) < 0) {
-        os64_hprintf(OS64_STDERR,
-                     "gzip: cannot publish '%s'\n", destination);
-        result = -1;
+    if (result == 0) {
+        uint64_t publish_flags = options->force
+            ? OS64_RENAME_REQUIRE_ATOMIC_REPLACE
+            : OS64_RENAME_NOREPLACE;
+        if (os64_rename_with_flags(temporary, destination,
+                                   publish_flags) < 0) {
+            if (options->force) {
+                os64_hprintf(OS64_STDERR,
+                             "gzip: cannot atomically replace '%s'\n",
+                             destination);
+            } else {
+                os64_hprintf(OS64_STDERR,
+                             "gzip: cannot publish '%s' without replacing it\n",
+                             destination);
+            }
+            result = -1;
+        }
     }
     if (result < 0) {
         os64_unlink(temporary);
@@ -287,7 +307,7 @@ int main(int argc, char **argv)
          .flag = &options.to_stdout},
         {'k', "keep", false, "keep input files after compression",
          .flag = &options.keep},
-        {'f', "force", false, "replace an existing .gz output file",
+        {'f', "force", false, "atomically replace an existing .gz output file",
          .flag = &options.force}
     };
     os64_args_t args = {0};

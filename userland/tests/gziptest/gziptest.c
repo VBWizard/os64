@@ -23,6 +23,8 @@ static const char kExpected[] =
 static char gCompressedPath[96];
 static char gSourcePath[96];
 static char gEncodedPath[100];
+static char gFatSourcePath[96];
+static char gFatEncodedPath[100];
 static uint8_t gCommandPayload[8192];
 static uint8_t gCommandCompressed[sizeof(gCommandPayload) * 2];
 static uint8_t gCommandOutput[sizeof(gCommandPayload) + 16];
@@ -47,6 +49,10 @@ static void fail(const char *reason)
         os64_unlink(gSourcePath);
     if (gEncodedPath[0] != '\0')
         os64_unlink(gEncodedPath);
+    if (gFatSourcePath[0] != '\0')
+        os64_unlink(gFatSourcePath);
+    if (gFatEncodedPath[0] != '\0')
+        os64_unlink(gFatEncodedPath);
     os64_exit(GZIPTEST_FAIL);
 }
 
@@ -317,6 +323,76 @@ static void test_gzip_command(void)
     gEncodedPath[0] = '\0';
 }
 
+static bool plant_file(const char *path, const uint8_t *bytes, size_t length)
+{
+    int32_t file = (int32_t)os64_open(path, "w");
+    if (file < 0)
+        return false;
+    size_t written = 0;
+    while (written < length) {
+        int64_t amount = os64_write(file, bytes + written, length - written);
+        if (amount <= 0)
+            break;
+        written += (size_t)amount;
+    }
+    bool ok = written == length && os64_sync(file) == 0;
+    if (os64_close(file) < 0)
+        ok = false;
+    return ok;
+}
+
+static bool file_holds(const char *path, const uint8_t *bytes, size_t length)
+{
+    int32_t file = (int32_t)os64_open(path, "r");
+    if (file < 0)
+        return false;
+    size_t have = 0;
+    uint8_t byte = 0;
+    while (have < length) {
+        int64_t amount = os64_read(file, &byte, 1);
+        if (amount != 1 || byte != bytes[have])
+            break;
+        have++;
+    }
+    bool ok = have == length && os64_read(file, &byte, 1) == 0;
+    if (os64_close(file) < 0)
+        ok = false;
+    return ok;
+}
+
+static void test_gzip_fat_force_refusal(void)
+{
+    static const uint8_t source[] = "new log bytes\n";
+    static const uint8_t destination[] = "old gzip bytes\n";
+    if (os64_snprintf(gFatSourcePath, sizeof(gFatSourcePath),
+                      "/fat/gziptest-%lu.log", os64_taskid()) >=
+            (int32_t)sizeof(gFatSourcePath) ||
+        os64_snprintf(gFatEncodedPath, sizeof(gFatEncodedPath), "%s.gz",
+                      gFatSourcePath) >= (int32_t)sizeof(gFatEncodedPath))
+        fail("FAT gzip command path is too long");
+
+    os64_unlink(gFatSourcePath);
+    os64_unlink(gFatEncodedPath);
+    if (!plant_file(gFatSourcePath, source, sizeof(source) - 1) ||
+        !plant_file(gFatEncodedPath, destination, sizeof(destination) - 1))
+        fail("could not create FAT force fixtures");
+
+    char *const force_argv[] = {
+        "/bin/gzip", "-f", "-k", gFatSourcePath, NULL
+    };
+    if (spawn_and_wait("/bin/gzip", force_argv) == 0 ||
+        !file_holds(gFatSourcePath, source, sizeof(source) - 1) ||
+        !file_holds(gFatEncodedPath, destination,
+                    sizeof(destination) - 1))
+        fail("gzip -f did not preserve both FAT files on refusal");
+
+    if (os64_unlink(gFatSourcePath) < 0 ||
+        os64_unlink(gFatEncodedPath) < 0)
+        fail("could not clean up FAT force fixtures");
+    gFatSourcePath[0] = '\0';
+    gFatEncodedPath[0] = '\0';
+}
+
 int main(void)
 {
     uint8_t encoded[256];
@@ -348,6 +424,7 @@ int main(void)
 
     test_gunzip_filter();
     test_gzip_command();
+    test_gzip_fat_force_refusal();
 
     return GZIPTEST_OK;
 }
