@@ -56,6 +56,7 @@ Routes, and what each is FOR:
     /gzipped        Content-Encoding: gzip                 refused, not written
     /cut            half the promised body, then hangs up  a short body is a failure
     /junk           not HTTP at all                        a bad header line
+    /stall          half a head, then 45s of silence       the idle deadline
 
 NOTE ON /redirect-https: it REDIRECTS to an https address, it does not fetch
 one. The first name for it was `/tohttps`, which read to Chris as "the server
@@ -73,6 +74,13 @@ import time
 import zlib
 
 USAGE = "python3 httptestd.py [--port N] [--dump DIR]"
+
+# How much request head a connection may send before it is refused — the
+# same three bounds tlsproxy.py keeps, for the same reason its Handler has a
+# timeout: the port is on the LAN.
+MAX_LINE = 65536
+MAX_HEAD = 262144
+MAX_HEAD_LINES = 200
 
 HELLO = b"hello from the host, over HTTP.\n"
 DIRPAGE = b"<html><body><h1>a directory</h1></body></html>\n"
@@ -97,15 +105,28 @@ def head(status, reason, headers, version="HTTP/1.1"):
 
 
 class Handler(socketserver.StreamRequestHandler):
+    # A PER-CONNECTION READ TIMEOUT, and a bounded head drain, for the same
+    # reason tlsproxy.py has both: this binds every interface (the P5 case
+    # needs it to), so anything on the LAN can open a connection and then
+    # send nothing — or send short header lines forever. Either parks a
+    # worker thread and a file descriptor for good, and enough of them and
+    # the guest's fetches stop connecting. socketserver applies `timeout` to
+    # the socket in setup(). (Codex review round 4, 2026-09-03.)
+    timeout = 30
+
     # A fetch-and-close client gets a fetch-and-close server: every reply
     # ends by hanging up, which is HTTP/1.0's framing and the only one
     # os64get speaks at this rung of the ladder.
     def handle(self):
-        request = self.rfile.readline(8192).decode("latin-1", "replace").strip()
-        while True:                       # drain the rest of the head
-            line = self.rfile.readline(8192)
-            if line in (b"\r\n", b"\n", b""):
-                break
+        try:
+            request = self.read_head()
+        except OSError as error:
+            # A timeout or a reset while the request was still arriving;
+            # nothing to answer and nobody waiting to read one.
+            print(f"  !! request head never finished: {error}", flush=True)
+            return
+        if request is None:
+            return
 
         parts = request.split()
         path = parts[1] if len(parts) >= 2 else "/"
@@ -200,10 +221,36 @@ class Handler(socketserver.StreamRequestHandler):
             self.send(BIG[:40000])
         elif route == "/junk":
             self.send(b"220 this is not an HTTP server\r\n\r\nwhatever\n")
+        elif route == "/stall":
+            # Half a head, then silence for longer than os64get's idle
+            # deadline. The fetch must FAIL on its own, saying the server
+            # went silent, not sit until someone presses Ctrl+C.
+            self.send(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n")
+            time.sleep(45)
         else:
             body = f"no such thing here: {route}\n".encode("latin-1")
             self.send(head(404, "Not Found", [("Content-Type", "text/plain"),
                                               ("Content-Length", len(body))]) + body)
+
+    def read_head(self):
+        """The request line, with the headers after it drained and bounded.
+        Returns None when the head is more than this server will read; a
+        client that keeps sending short header lines forever is as good at
+        parking a worker as one that sends nothing at all."""
+        request = self.rfile.readline(MAX_LINE).decode("latin-1", "replace").strip()
+        used = 0
+        lines = 0
+        while True:
+            line = self.rfile.readline(MAX_LINE)
+            if line in (b"\r\n", b"\n", b""):
+                return request
+            used += len(line)
+            lines += 1
+            if used > MAX_HEAD or lines > MAX_HEAD_LINES:
+                print("  !! more request head than this server will read", flush=True)
+                self.send(head(431, "Request Header Fields Too Large",
+                               [("Content-Length", 0)]))
+                return None
 
     def send(self, data):
         try:

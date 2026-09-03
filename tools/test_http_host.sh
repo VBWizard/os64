@@ -242,6 +242,11 @@ def reply_bytes(status, reason, headers, body, version="HTTP/1.1"):
     return head.encode("latin-1") + b"\r\n" + body
 
 
+# http.client stops at 100 header fields; os64get's cap is 128, and the
+# boundary case has to be checked against a reference that will read it.
+http.client._MAXHEADERS = 256
+
+
 def reference(raw):
     """What http.client makes of the same bytes."""
     class FakeSocket:
@@ -298,6 +303,13 @@ cases.append(("repeated-length", reply_bytes(
     200, "OK", [("Content-Length", str(len(body))),
                 ("Content-Length", str(len(body)))], body), body, True))
 cases.append(("headerless", reply_bytes(404, "Not Found", [], b""), b"", True))
+# Exactly HTTP_HEADERS_MAX fields (127 padding plus the length) is LEGAL: the
+# cap used to charge for the blank line, so the advertised 128 was really
+# 127 and a reply sitting on the boundary was refused as too much. (Codex
+# review round 4, 2026-09-03.)
+cases.append(("max-headers", reply_bytes(
+    200, "OK", [("X-Pad", str(i)) for i in range(127)] + [("Content-Length", str(len(body)))],
+    body), body, True))
 cases.append(("redirect", reply_bytes(
     301, "Moved Permanently",
     [("Location", "http://example.com/elsewhere"), ("Content-Length", "0")],
@@ -376,6 +388,21 @@ refusals = {
                       b"Transfer-Encoding: identity\r\n\r\n", "conflict"),
     "too-many-headers": (b"HTTP/1.1 200 OK\r\n" + b"X-Pad: 1\r\n" * 200 + b"\r\n",
                          "too_much"),
+    # One past the cap — and "max-headers" above proves the cap itself is
+    # accepted, so between them the count is exact.
+    "one-header-too-many": (b"HTTP/1.1 200 OK\r\n" + b"X-Pad: 1\r\n" * 129 + b"\r\n",
+                            "too_much"),
+    # A NUL byte anywhere in the head. The line is handed on as a C string,
+    # so a NUL that LED a line made it read as the blank terminator, and the
+    # framing header behind it became body: the raw chunk markers were the
+    # file. No legal head holds one, so every position is refused. (Codex
+    # review round 4, 2026-09-03.)
+    "nul-leads-header": (b"HTTP/1.1 200 OK\r\n\x00Transfer-Encoding: chunked\r\n\r\n"
+                         b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n", "syntax"),
+    "nul-in-value": (b"HTTP/1.1 200 OK\r\nContent-Length: 32\x00\r\n\r\n" + body, "syntax"),
+    "nul-in-name": (b"HTTP/1.1 200 OK\r\nX-\x00Pad: 1\r\n\r\n", "syntax"),
+    "nul-in-status": (b"HTTP/1.1 200 OK\x00\r\n\r\n", "status"),
+    "nul-leads-status": (b"\x00HTTP/1.1 200 OK\r\n\r\n", "status"),
     "endless-interim": (b"HTTP/1.1 100 Continue\r\n\r\n" * 20, "too_much"),
     # A peer that talks forever and never sends a newline. The head's cap is
     # checked BETWEEN lines, so without a budget inside the line reader this

@@ -1268,7 +1268,20 @@ static void lookup_lot(const char *host, const char *name, const conf_t *c,
 // rename. A transfer that dies halfway leaves the file that was there exactly
 // where it was.
 
-typedef struct { int32_t handle; } url_source_t;
+// HOW LONG A SILENT ORIGIN IS WAITED ON. An internet host can finish the
+// handshake and then say nothing — a stalled proxy, a server that fell over
+// mid-reply, a middlebox that ate the rest — and a plain read waits
+// OS64_WAIT_FOREVER for it, which turned every such stall into a fetch that
+// hung until someone pressed Ctrl+C, and a script that never finished at
+// all. Thirty seconds of silence is the deadline; a slow origin still
+// arrives, because it is IDLE time — the wait between bytes — not the whole
+// transfer that is bounded. (Codex review round 4, 2026-09-03.)
+#define URL_IDLE_MS 30000
+
+typedef struct {
+    int32_t handle;
+    bool    silent;    // the deadline expired: the failure is a stall, not a break
+} url_source_t;
 
 // The stream's bytes come from the dialed connection. A function and a
 // context rather than a handle, because http.c is written to be driven by a
@@ -1277,7 +1290,18 @@ typedef struct { int32_t handle; } url_source_t;
 // token straddles two reads.
 static int64_t url_source_read(void *ctx, void *buf, size_t cap)
 {
-    return os64_read(((url_source_t *)ctx)->handle, buf, cap);
+    url_source_t *src = (url_source_t *)ctx;
+    int64_t n = os64_read_for(src->handle, buf, cap, URL_IDLE_MS);
+    if (n == OS64_ERR_TIMEOUT)
+    {
+        // The stream's vocabulary is bytes / end / broke; a stall is a
+        // broke with a better reason, and the reason is remembered here so
+        // the message can say "silent", not "broke" — the difference between
+        // blaming the wire and blaming the server.
+        src->silent = true;
+        return -1;
+    }
+    return n;
 }
 
 // The name a URL suggests for the thing it points at: the last path segment,
@@ -1720,7 +1744,11 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
     http_head_result_t hrc = http_head_read(&stream, &reply);
     if (hrc != HTTP_HEAD_OK)
     {
-        os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", urlText, http_head_reason(hrc));
+        if (hrc == HTTP_HEAD_SOURCE && src.silent)
+            os64_hprintf(OS64_STDERR, "os64get: %s — the server went silent for %u seconds"
+                         " before the reply was whole\n", urlText, URL_IDLE_MS / 1000);
+        else
+            os64_hprintf(OS64_STDERR, "os64get: %s — %s\n", urlText, http_head_reason(hrc));
         os64_close((int32_t)conn);
         // A framing header too long to read is not a MALFORMED reply, it is a
         // legal one this program cannot honestly act on — the same answer the
@@ -1832,8 +1860,12 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
 
     if (status == GET_OK && broke)
     {
-        os64_hprintf(OS64_STDERR, "os64get: the connection broke after %lu bytes\n",
-                     (unsigned long)got);
+        if (src.silent)
+            os64_hprintf(OS64_STDERR, "os64get: the server went silent for %u seconds"
+                         " after %lu bytes\n", URL_IDLE_MS / 1000, (unsigned long)got);
+        else
+            os64_hprintf(OS64_STDERR, "os64get: the connection broke after %lu bytes\n",
+                         (unsigned long)got);
         status = GET_SHORT;
     }
     if (status == GET_OK && reply.hasLength && got != reply.length)

@@ -364,6 +364,7 @@ static int stream_fill(http_stream_t *s)
 typedef enum {
     LINE_OK = 0,
     LINE_LONG,     // read and thrown away: longer than we will hold
+    LINE_NUL,      // a NUL byte: not a line at all, and not one to keep reading
     LINE_END,      // the peer stopped talking mid-head
     LINE_ERROR
 } line_result_t;
@@ -377,6 +378,15 @@ typedef enum {
 // is read forever: the caller's cap is checked between lines, and this call
 // would never return to be checked. Running out of budget reads as an
 // over-long line, which is what it is.
+//
+// A NUL BYTE IS REFUSED WHEREVER IT FALLS IN THE LINE, because the line is
+// handed on as a C string and a NUL inside it ends the string early. A line
+// that BEGAN with one read as empty — the blank line that ends the head — so
+// `\0Transfer-Encoding: chunked` was taken for the terminator, the framing
+// header behind it was read as body, and the raw chunk markers were published
+// as the file. No HTTP head may contain NUL (RFC 9110 §5.5 forbids it in
+// values, and a name is a token), so there is no reply to save by tolerating
+// it. (Codex review round 4, 2026-09-03.)
 static line_result_t line_read(http_stream_t *s, char *out, size_t cap,
                                size_t budget, size_t *consumed)
 {
@@ -398,6 +408,8 @@ static line_result_t line_read(http_stream_t *s, char *out, size_t cap,
         (*consumed)++;
         if (c == '\n')
             break;
+        if (c == '\0')
+            return LINE_NUL;
         if (len + 1 < cap)
             out[len++] = c;
         else
@@ -565,6 +577,7 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
         // sixty-four of them: both come back LINE_LONG, and the answer to
         // both is that whatever is on the far end is not an HTTP server.
         case LINE_LONG:  return HTTP_HEAD_STATUS;
+        case LINE_NUL:   return HTTP_HEAD_STATUS;
         case LINE_END:   return HTTP_HEAD_SOURCE;
         case LINE_ERROR: return HTTP_HEAD_SOURCE;
     }
@@ -572,10 +585,12 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
     if (!status_parse(line, out))
         return HTTP_HEAD_STATUS;
 
-    for (size_t n = 0; ; n++) {
-        if (n >= HTTP_HEADERS_MAX)
-            return HTTP_HEAD_TOO_MUCH;
-
+    // `fields` counts header FIELDS — dropped over-long ones included, since
+    // they were fields too — and the blank line is not one, so it is
+    // recognised before the count is judged: a reply with exactly
+    // HTTP_HEADERS_MAX fields is legal, and the cap means what it says.
+    size_t fields = 0;
+    for (;;) {
         line_result_t r = line_read(s, line, sizeof(line), HTTP_HEAD_MAX - used + 1, &consumed);
         used += consumed;
         if (used > HTTP_HEAD_MAX)
@@ -583,6 +598,15 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
 
         if (r == LINE_END || r == LINE_ERROR)
             return HTTP_HEAD_SOURCE;
+        if (r == LINE_NUL)
+            return HTTP_HEAD_SYNTAX;
+        if (r == LINE_OK && line[0] == '\0')
+            return HTTP_HEAD_OK;   // the blank line: the head is whole
+
+        if (fields >= HTTP_HEADERS_MAX)
+            return HTTP_HEAD_TOO_MUCH;
+        fields++;
+
         if (r == LINE_LONG)
         {
             // Dropped, but only once we know nothing depends on it.
@@ -591,8 +615,6 @@ static http_head_result_t head_read_once(http_stream_t *s, http_response_t *out)
                 return verdict;
             continue;
         }
-        if (line[0] == '\0')
-            return HTTP_HEAD_OK;   // the blank line: the head is whole
 
         http_head_result_t rc = header_take(line, out);
         if (rc != HTTP_HEAD_OK)
