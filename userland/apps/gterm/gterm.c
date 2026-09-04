@@ -160,13 +160,26 @@ static void render(os64_draw_ctx_t *ctx)
 		uint32_t c = 0;
 		while (c < gHdr.cols)
 		{
-			uint32_t color = row[c].color;
+			// A RUN IS A STRETCH THAT LOOKS THE SAME, which since the
+			// terminal learned escape sequences means the same foreground,
+			// the same background AND the same attributes — batching on
+			// colour alone would have painted a reversed cell like its
+			// neighbour. The two colours are resolved through os64/ansi.h,
+			// the one place that knows what an index and an attribute mean,
+			// so a red is the same red here as on the glass.
+			uint32_t fg = row[c].color;
+			uint32_t bg = os64_ansi_bg_color(row[c].bg, GTERM_BG);
+			os64_ansi_apply_attrs(row[c].attrs, &fg, &bg);
+			uint8_t attrs = row[c].attrs;
+			uint8_t bgix = row[c].bg;
+			uint32_t base = row[c].color;
 			// Selection breaks a run exactly like a color change does — it IS
 			// a color change, just one the grid doesn't store. Highlighting
 			// therefore costs no extra pass over the row.
 			bool sel = SELECTED(c);
 			uint32_t start = c, n = 0;
-			while (c < gHdr.cols && row[c].color == color &&
+			while (c < gHdr.cols && row[c].color == base &&
+			       row[c].bg == bgix && row[c].attrs == attrs &&
 			       SELECTED(c) == sel && n < sizeof(run))
 			{
 				char ch = row[c].ch;
@@ -175,11 +188,13 @@ static void render(os64_draw_ctx_t *ctx)
 			}
 			// Inverse video for the highlight: the oldest "this is selected"
 			// signal there is, and it needs no theme, no second color, and no
-			// agreement with whatever the program inside chose to paint.
+			// agreement with whatever the program inside chose to paint. It
+			// swaps whatever the cell had ALREADY resolved to, so selecting
+			// text that is itself reversed reads correctly.
 			os64_draw_text(&ctx->surf, (int32_t)(start * CELL_W),
 			               (int32_t)(r * CELL_H), run, n,
-			               sel ? GTERM_BG : color,
-			               sel ? color : GTERM_BG);
+			               sel ? bg : fg,
+			               sel ? fg : bg);
 		}
 		#undef SELECTED
 	}

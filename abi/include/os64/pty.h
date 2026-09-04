@@ -35,6 +35,7 @@
 #include <stddef.h>
 #include "os64/syscall_numbers.h"
 #include "os64/syscall.h"
+#include "os64/ansi.h"   // what a cell's attributes and background byte mean
 
 // ── the snapshot ────────────────────────────────────────────────────────────
 
@@ -55,11 +56,19 @@ typedef struct os64_pty_header
 // One interpreted cell — layout pinned to the kernel's tty_cell_t (the
 // kernel static-asserts the match, the ext2-superblock trick): the glyph, 3
 // pad bytes, the XRGB color it was written in.
+// THE THREE BYTES AFTER THE GLYPH WERE PADDING AND ARE NOW STATE. The size
+// is unchanged and so is the static assert below — what changed is that the
+// bytes mean something, so a renderer that ignores them (an older gterm
+// against a newer kernel) simply draws without attributes, and a kernel that
+// never sets them (the reverse pairing) leaves zeros, which mean "plain".
+// The two ends can therefore be updated in either order.
 typedef struct os64_pty_cell
 {
 	char     ch;                  // 0 = never written (render as blank)
-	char     _pad[3];
-	uint32_t color;
+	uint8_t  attrs;               // OS64_ANSI_ATTR_* (os64/ansi.h)
+	uint8_t  bg;                  // palette index+1; 0 = the terminal's own
+	uint8_t  _pad;
+	uint32_t color;               // foreground, XRGB
 } os64_pty_cell_t;
 
 _Static_assert(sizeof(os64_pty_cell_t) == 8, "pty cell ABI: 8 bytes");

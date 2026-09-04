@@ -386,7 +386,46 @@ make -C kernel test-elf
   console_read (console.c) turns into end-of-input: read() returns 0 once,
   then the console reads normally again. The framebuffer renderer
   (BasicRenderer.c print_n) honors '\b' (cursor back one cell, clamped at
-  column 0 — erasure is caller overprint, e.g. husk's "\b \b") and '\r'
+  column 0 — erasure is caller overprint, e.g. husk's "\b \b") and '\r'.
+  **Arrow keys arrive as `ESC [ A/B/C/D`** — the VT100 spelling, chosen for
+  interop so that anything reading a terminal reads them unchanged
+
+### The terminal's escape sequences
+
+**A terminal that obeys a byte can be told what to do by whoever wrote it**,
+so os64 implements an escape WHEN SOMETHING ASKS FOR ONE and not before
+(Chris's ruling). What is read today, and nothing else: `ESC[<n>m` (SGR —
+colour and attributes), `ESC[<r>;<c>H` (cursor position), `ESC[<n>J` and
+`ESC[<n>K` (erase display, erase line), and `ESC]11;#rrggbb` (OSC 11 — the
+terminal's own background). Everything else is consumed and ignored, which
+is what every terminal does: printing the bytes of an unknown sequence
+spills its parameters across the screen, and logging them floods the log the
+first time a program with better taste in terminals runs.
+
+- **`kernel/src/ansi.c` is a pure state machine** — no kernel headers, no
+  locks, one byte in and one action out — so `tools/test_ansi_host.sh`
+  drives it with plain `cc` under ASan. That is not decoration: a sequence
+  arrives in whatever pieces `write()` was called with, and the harness
+  caught four real bugs (stale parameters leaking into the next sequence, a
+  leading `;` losing a parameter, an ESC mid-sequence printing as text, and
+  `ESC ( B` leaving its final letter on screen) before the kernel ever ran it.
+- **THE PEN AND THE PAPER are different things.** `t->color`/`t->bg`/
+  `t->attrs` are the pen — what the next character will look like, set by
+  SGR. `t->glass_bg` is the paper — what this terminal IS underneath,
+  including where nothing was ever written and the margins past the last
+  cell, set by OSC 11 and carried by `renderer_set_background` when the
+  focus moves. Per tty, so VT2 can differ from VT1 and a gterm from both.
+- **A cell costs the same eight bytes it always did**: the glyph, an
+  attribute byte, a background palette INDEX, and the 32-bit foreground.
+  The three that were compiler padding now hold state, and the layout is
+  static-asserted against `os64_pty_cell_t` because gterm renders the same
+  cells in ring 3. The background is an index because SGR can only NAME
+  sixteen — `abi/include/os64/ansi.h` holds the palette and the two
+  functions that resolve a cell, so the glass and a gterm cannot disagree
+  about what red is.
+- A background of ZERO means "this terminal's own", not black — a cleared
+  line is a `memset`, and every cell has to start meaning "nothing was said
+  here". Fixture: `/tests/ansiprobe` (add `paper` to change the background)
 
 ### SMP (Symmetric Multiprocessing)
 
