@@ -95,8 +95,9 @@ vtable is where a streamed read-only backend slots in without touching the
 textview (booked, unbuilt).
 
 Save writes `<file>` directly. Crash-safety via write-temp-then-rename is
-possible the day it matters — rename is atomic-replace (syscall 43's ruling)
-— booked, not built: v1's honest failure mode is the same as quill's.
+possible the day it matters — ext2 replacement rename is atomic, and the
+policy-bearing syscall can require that guarantee — booked, not built: v1's
+honest failure mode is the same as quill's.
 
 ## Chrome (RULED: button row, not menu bar)
 

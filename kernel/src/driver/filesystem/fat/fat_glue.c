@@ -288,6 +288,7 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
     else if (strcmp(mode, "w") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
     else if (strcmp(mode, "a") == 0) fat_mode = FA_WRITE | FA_OPEN_APPEND;
 	else if (strcmp(mode, "c") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
+	else if (strcmp(mode, "x") == 0) fat_mode = FA_WRITE | FA_CREATE_NEW;
 	else
 		return -1;
 
@@ -711,8 +712,8 @@ static int fat_rm(const char* filename, vfs_filesystem_t* vfs_fs)
 
 // Rename a file — and the place where FAT's age shows.
 //
-// The seam (vfs.h fops->rename) promises ATOMIC REPLACE: the destination
-// name never fails to resolve, even for an instant. ext2 can honor that,
+// With flags zero, the seam preserves its original REPLACE behavior. ext2
+// can make that replacement atomic,
 // because one directory-block write swings a name onto a different inode.
 // FAT CANNOT, and this function is where we say so instead of pretending:
 //
@@ -727,14 +728,19 @@ static int fat_rm(const char* filename, vfs_filesystem_t* vfs_fs)
 // no concept of a file identity separate from its directory entry — that
 // idea IS the inode, and it is exactly what Ken Thompson's 1969 filesystem
 // had and MS-DOS's 1981 one did not. A DEBTS row carries it so the
-// difference stays visible, and root is ext2 precisely so the guarantee
-// that matters lives where it can actually be kept. The lifeboat is allowed
-// to be a lifeboat; it is not allowed to lie about its seaworthiness.
-static int fat_rename(const char* oldpath, const char* newpath, vfs_filesystem_t* vfs_fs)
+// difference stays visible. The opt-in policies do not pretend otherwise:
+// NOREPLACE leaves an existing destination alone, and REQUIRE_ATOMIC_REPLACE
+// refuses one because FAT cannot provide that guarantee. When the destination
+// is absent, FatFs's own f_rename still closes a race by refusing if another
+// caller creates it before the operation acquires the volume lock.
+static int fat_rename(const char* oldpath, const char* newpath,
+                      vfs_filesystem_t* vfs_fs, uint64_t flags)
 {
 	char lOld[512], lNew[512];
 
-	if (oldpath == NULL || newpath == NULL || vfs_fs == NULL)
+	if (oldpath == NULL || newpath == NULL || vfs_fs == NULL ||
+	    (flags & ~((uint64_t)OS64_RENAME_FLAG_MASK)) != 0 ||
+	    flags == OS64_RENAME_FLAG_MASK)
 		return -1;
 
 	strncpy(lOld, oldpath, sizeof(lOld) - 1);
@@ -752,6 +758,13 @@ static int fat_rename(const char* oldpath, const char* newpath, vfs_filesystem_t
 	FRESULT st = f_stat(lNew, &fi);
 	if (st == FR_OK)
 	{
+		if (flags & (OS64_RENAME_NOREPLACE |
+		             OS64_RENAME_REQUIRE_ATOMIC_REPLACE))
+		{
+			printd(DEBUG_VFS, "fat_rename: destination '%s' exists — requested safe policy refuses replacement\n",
+			       lNew);
+			return -1;
+		}
 		// Directories are never replaced — the seam's ruling, and here it is
 		// also self-preservation: f_unlink on a non-empty directory fails,
 		// and on an empty one it would silently remove a directory the

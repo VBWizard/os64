@@ -1209,7 +1209,7 @@ static bool test_shared_object_reload(void)
         shared_object_release(held);
         SO_FAIL("could not stage a replacement at %s\n", incoming);
     }
-    if (kRootFilesystem->fops->rename(incoming, live, kRootFilesystem) != 0) {
+    if (kRootFilesystem->fops->rename(incoming, live, kRootFilesystem, 0) != 0) {
         shared_object_release(held);
         SO_FAIL("could not rename %s over %s (an open destination must be replaceable)\n",
                 incoming, live);
@@ -1271,7 +1271,7 @@ static bool test_shared_object_reload(void)
         shared_object_release(held_exe);
         SO_FAIL("could not stage a replacement library at %s\n", lib_incoming);
     }
-    if (kRootFilesystem->fops->rename(lib_incoming, lib, kRootFilesystem) != 0) {
+    if (kRootFilesystem->fops->rename(lib_incoming, lib, kRootFilesystem, 0) != 0) {
         shared_object_release(held_exe);
         SO_FAIL("could not rename %s over %s\n", lib_incoming, lib);
     }
@@ -2867,11 +2867,9 @@ static bool test_vfs_write_mkdir(void)
 //
 // What it actually proves, in order of how much it would hurt to get wrong:
 //
-//   1. ATOMIC REPLACE (the 2026-08-16 ruling). Renaming onto an existing
-//      file leaves the DESTINATION NAME holding the SOURCE'S BYTES. This is
-//      the assertion the whole feature exists for — if it ever fails, the
-//      write-a-temp-then-publish recipe is a lie and os64get can eat a good
-//      file.
+//   1. DESTINATION POLICY. NOREPLACE leaves both names intact everywhere;
+//      REQUIRE_ATOMIC_REPLACE publishes on ext2 and refuses on FAT; flags
+//      zero retains FAT's legacy remove-then-rename replacement.
 //   2. A directory MOVE keeps its contents reachable through the new path.
 //      That single read proves both halves of the surgery: the new parent's
 //      entry AND the moved directory's rewritten "..".
@@ -2880,7 +2878,8 @@ static bool test_vfs_write_mkdir(void)
 //
 // The ext2-only steps are gated on the op table rather than a filesystem-type
 // field (there isn't one): a mount whose rename IS ext2's is ext2's. FAT gets
-// the shared assertions and is spared the two it cannot answer — the
+// the shared assertions, including its explicit safe-policy refusal, and is
+// spared the two it cannot answer — the
 // open-handle refusal (FAT keeps no open-inode count) and the loop refusal
 // (which on FAT would mean deliberately asking the lifeboat to corrupt
 // itself to see whether it declines).
@@ -2961,7 +2960,7 @@ static bool test_vfs_rename(void)
     if (!rn_plant("/etc/testdata/rn/a", alpha, sizeof(alpha) - 1))
         RN_FAIL("could not plant rn/a\n");
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/a", "/etc/testdata/rn/b",
-                                      kRootFilesystem) != 0)
+                                      kRootFilesystem, 0) != 0)
         RN_FAIL("plain rename a -> b failed\n");
     if (kRootFilesystem->dops->stat("/etc/testdata/rn/a", &de, kRootFilesystem) == 0)
         RN_FAIL("old name rn/a still resolves after rename\n");
@@ -2969,38 +2968,69 @@ static bool test_vfs_rename(void)
     if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
         RN_FAIL("rn/b read-back mismatch after rename (n=%d)\n", n);
 
-    // 2. THE RULING: atomic replace. rn/c exists and holds OMEGA; renaming
-    //    b onto it must leave c holding ALPHA — the source's bytes under the
-    //    destination's name, with no third state in between.
+    // 2. rn/c exists and holds OMEGA. NOREPLACE must refuse without consuming
+    //    either name. An unknown policy must do the same even for an in-kernel
+    //    caller that bypasses syscall validation.
     if (!rn_plant("/etc/testdata/rn/c", omega, sizeof(omega) - 1))
         RN_FAIL("could not plant rn/c\n");
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/b", "/etc/testdata/rn/c",
-                                      kRootFilesystem) != 0)
-        RN_FAIL("replacing rename b -> c failed (the ruling says it must succeed)\n");
+                                      kRootFilesystem, OS64_RENAME_NOREPLACE) == 0)
+        RN_FAIL("NOREPLACE accepted an existing destination\n");
+    if (kRootFilesystem->fops->rename("/etc/testdata/rn/b", "/etc/testdata/rn/c",
+                                      kRootFilesystem, 0x80) == 0)
+        RN_FAIL("an unknown rename policy was accepted\n");
+    n = rn_slurp("/etc/testdata/rn/b", buf, sizeof(buf));
+    if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
+        RN_FAIL("a refused destination policy damaged rn/b (n=%d)\n", n);
+    n = rn_slurp("/etc/testdata/rn/c", buf, sizeof(buf));
+    if (n != (int)(sizeof(omega) - 1) || memcmp(buf, omega, sizeof(omega) - 1) != 0)
+        RN_FAIL("a refused destination policy damaged rn/c (n=%d)\n", n);
+
+    // 3. REQUIRE_ATOMIC_REPLACE may replace on ext2. FAT must refuse and
+    //    preserve both files; a following flags-zero call then proves the old
+    //    FAT behavior remains available to every existing caller.
+    int safe_replace = kRootFilesystem->fops->rename(
+        "/etc/testdata/rn/b", "/etc/testdata/rn/c", kRootFilesystem,
+        OS64_RENAME_REQUIRE_ATOMIC_REPLACE);
+    if (is_ext2 && safe_replace != 0)
+        RN_FAIL("ext2 refused a replacement it can perform atomically\n");
+    if (!is_ext2) {
+        if (safe_replace == 0)
+            RN_FAIL("FAT performed a replacement under REQUIRE_ATOMIC_REPLACE\n");
+        n = rn_slurp("/etc/testdata/rn/b", buf, sizeof(buf));
+        if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
+            RN_FAIL("FAT's safe-policy refusal damaged rn/b (n=%d)\n", n);
+        n = rn_slurp("/etc/testdata/rn/c", buf, sizeof(buf));
+        if (n != (int)(sizeof(omega) - 1) || memcmp(buf, omega, sizeof(omega) - 1) != 0)
+            RN_FAIL("FAT's safe-policy refusal damaged rn/c (n=%d)\n", n);
+        if (kRootFilesystem->fops->rename("/etc/testdata/rn/b", "/etc/testdata/rn/c",
+                                          kRootFilesystem, 0) != 0)
+            RN_FAIL("flags-zero FAT replacement no longer works\n");
+    }
     if (kRootFilesystem->dops->stat("/etc/testdata/rn/b", &de, kRootFilesystem) == 0)
         RN_FAIL("source rn/b survived a replacing rename\n");
     n = rn_slurp("/etc/testdata/rn/c", buf, sizeof(buf));
     if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
-        RN_FAIL("replace left the WRONG bytes under rn/c (n=%d) — atomic replace is broken\n", n);
+        RN_FAIL("replace left the WRONG bytes under rn/c (n=%d)\n", n);
 
-    // 3. Move to a different directory, same filesystem.
+    // 4. Move to a different directory, same filesystem.
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/c", "/etc/testdata/rn2/c",
-                                      kRootFilesystem) != 0)
+                                      kRootFilesystem, 0) != 0)
         RN_FAIL("cross-directory rename failed\n");
     n = rn_slurp("/etc/testdata/rn2/c", buf, sizeof(buf));
     if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
         RN_FAIL("rn2/c read-back mismatch after move (n=%d)\n", n);
 
-    // 4. A source that isn't there is a refusal, not a silent success.
+    // 5. A source that isn't there is a refusal, not a silent success.
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/nothing_here",
-                                      "/etc/testdata/rn/x", kRootFilesystem) == 0)
+                                      "/etc/testdata/rn/x", kRootFilesystem, 0) == 0)
         RN_FAIL("rename of a nonexistent source reported success\n");
 
-    // 5. A directory is never replaced — and the source must survive the no.
+    // 6. A directory is never replaced — and the source must survive the no.
     if (!rn_plant("/etc/testdata/rn/f", omega, sizeof(omega) - 1))
         RN_FAIL("could not plant rn/f\n");
     if (kRootFilesystem->fops->rename("/etc/testdata/rn/f", "/etc/testdata/rn2",
-                                      kRootFilesystem) == 0)
+                                      kRootFilesystem, 0) == 0)
         RN_FAIL("rename replaced a DIRECTORY — the ruling forbids it\n");
     if (kRootFilesystem->dops->stat("/etc/testdata/rn/f", &de, kRootFilesystem) != 0)
         RN_FAIL("refused rename still consumed the source rn/f\n");
@@ -3008,7 +3038,7 @@ static bool test_vfs_rename(void)
         || !(de.flags & OS64_DE_DIR))
         RN_FAIL("refused rename damaged the destination directory rn2\n");
 
-    // 6. An open SOURCE is NOT a refusal — revised 2026-08-16 with the orphan
+    // 7. An open SOURCE is NOT a refusal — revised 2026-08-16 with the orphan
     //    slice. This step originally asserted the opposite, and it FAILED the
     //    first boot after the rule changed, which is exactly what a test that
     //    encodes a ruling is for. The rule it encodes now: an ext2 handle
@@ -3022,7 +3052,7 @@ static bool test_vfs_rename(void)
         if (kRootFilesystem->fops->open(&held, "/etc/testdata/rn/f", "r", kRootFilesystem) != 0)
             RN_FAIL("could not open rn/f to hold it\n");
         if (kRootFilesystem->fops->rename("/etc/testdata/rn/f",
-                                          "/etc/testdata/rn/g", kRootFilesystem) != 0) {
+                                          "/etc/testdata/rn/g", kRootFilesystem, 0) != 0) {
             kRootFilesystem->fops->close(held);
             RN_FAIL("refused to rename a file that was merely OPEN — a reader holds an inode, not a name\n");
         }
@@ -3042,7 +3072,7 @@ static bool test_vfs_rename(void)
         vfs_directory_t *heldDir = NULL;
         if (kRootFilesystem->dops->open(&heldDir, "/etc/testdata/rn2", kRootFilesystem) == 0) {
             int rcDir = kRootFilesystem->fops->rename("/etc/testdata/rn2",
-                                                      "/etc/testdata/rn2moved", kRootFilesystem);
+                                                      "/etc/testdata/rn2moved", kRootFilesystem, 0);
             kRootFilesystem->dops->close(heldDir);
             if (rcDir == 0)
                 RN_FAIL("moved a directory that another handle was reading\n");
@@ -3053,11 +3083,11 @@ static bool test_vfs_rename(void)
         kRootFilesystem->fops->rm("/etc/testdata/rn/f", kRootFilesystem);
     }
 
-    // 7. Move a whole DIRECTORY, and prove its contents came with it. One
+    // 8. Move a whole DIRECTORY, and prove its contents came with it. One
     //    read through the new path exercises the new parent's entry and the
     //    moved directory's rewritten ".." at the same time.
     if (kRootFilesystem->fops->rename("/etc/testdata/rn2", "/etc/testdata/rn/sub",
-                                      kRootFilesystem) != 0)
+                                      kRootFilesystem, 0) != 0)
         RN_FAIL("directory rename rn2 -> rn/sub failed\n");
     if (kRootFilesystem->dops->stat("/etc/testdata/rn/sub", &de, kRootFilesystem) != 0
         || !(de.flags & OS64_DE_DIR))
@@ -3066,12 +3096,12 @@ static bool test_vfs_rename(void)
     if (n != (int)(sizeof(alpha) - 1) || memcmp(buf, alpha, sizeof(alpha) - 1) != 0)
         RN_FAIL("moved directory's contents unreachable at the new path (n=%d)\n", n);
 
-    // 8. A directory may not move into its own descendant. Attempted on ext2
+    // 9. A directory may not move into its own descendant. Attempted on ext2
     //    only — on FAT this would be asking the lifeboat to corrupt itself to
     //    see whether it says no.
     if (is_ext2) {
         if (kRootFilesystem->fops->rename("/etc/testdata/rn", "/etc/testdata/rn/sub/loop",
-                                          kRootFilesystem) == 0)
+                                          kRootFilesystem, 0) == 0)
             RN_FAIL("renamed a directory into its own descendant — that's a detached loop\n");
         if (kRootFilesystem->dops->stat("/etc/testdata/rn/sub/c", &de, kRootFilesystem) != 0)
             RN_FAIL("the refused loop rename damaged the tree\n");
@@ -3083,8 +3113,8 @@ static bool test_vfs_rename(void)
     kRootFilesystem->fops->rm("/etc/testdata/rn/sub", kRootFilesystem);
     kRootFilesystem->fops->rm("/etc/testdata/rn", kRootFilesystem);
 
-    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: plain, atomic replace, move, directory move, open-source survives, %u refusals)\n",
-           is_ext2 ? "ext2" : "FAT", is_ext2 ? 4u : 2u);
+    printd(DEBUG_TESTS, "\tPASS: test_vfs_rename (%s: legacy plus safe policies, move, directory move, open-source survives, %u refusals)\n",
+           is_ext2 ? "ext2" : "FAT", is_ext2 ? 6u : 5u);
     return true;
 }
 #undef RN_FAIL
@@ -3116,50 +3146,150 @@ static bool test_vfs_rename(void)
 // fail one chosen metadata write, restore the real callback immediately, and
 // ask fops->mounted to perform the same replay a boot performs.
 
-// ext2_orphan test's block-write fault seam. These globals belong exclusively
-// to test_ext2_orphan and are live only around its synchronous close/replay
-// calls; ext2's write_lock keeps another writer on this mount from entering
-// while the chosen operation is in flight.
-static size_t (*sOrphanRealWrite)(void *, uint64_t, const void *, uint64_t);
-static uint32_t sOrphanWriteCount;
-static uint32_t sOrphanFailWrite;
+// The ext2 block-write fault seam. These globals are live only around one
+// synchronous filesystem operation; ext2's write_lock keeps another writer
+// on this mount from entering while the chosen operation is in flight.
+static size_t (*sExt2FaultRealWrite)(void *, uint64_t, const void *, uint64_t);
+static uint32_t sExt2FaultWriteCount;
+static uint32_t sExt2FaultFailWrite;
 
-static size_t orphan_test_write(void *device, uint64_t sector,
-                                const void *buffer, uint64_t sector_count)
+static size_t ext2_fault_test_write(void *device, uint64_t sector,
+                                    const void *buffer, uint64_t sector_count)
 {
-    sOrphanWriteCount++;
-    // The instrument for re-choreographing this test: the write numbers the
-    // stages below fail and expect are a script of the release path's
-    // command stream, and any change to that stream (the 2026-08-29 batch
-    // rewrote it) is read off this line against the image's group layout.
-    printd(DEBUG_TESTS, "\torphan seam: write %u = LBA %lu x%lu%s\n",
-           sOrphanWriteCount, sector, sector_count,
-           sOrphanWriteCount == sOrphanFailWrite ? " (FAILED by the seam)" : "");
-    if (sOrphanWriteCount == sOrphanFailWrite)
+    sExt2FaultWriteCount++;
+    // The instrument for re-choreographing a fault test: the write numbers
+    // are the operation's command stream. If an implementation change moves
+    // a chosen failure point, the new boundary is read from this line.
+    printd(DEBUG_TESTS, "\text2 fault seam: write %u = LBA %lu x%lu%s\n",
+           sExt2FaultWriteCount, sector, sector_count,
+           sExt2FaultWriteCount == sExt2FaultFailWrite ? " (FAILED by the seam)" : "");
+    if (sExt2FaultWriteCount == sExt2FaultFailWrite)
         return 1;
-    return sOrphanRealWrite(device, sector, buffer, sector_count);
+    return sExt2FaultRealWrite(device, sector, buffer, sector_count);
 }
 
-static bool orphan_test_fail_write(vfs_filesystem_t *fs, uint32_t nth)
+static bool ext2_fault_test_fail_write(vfs_filesystem_t *fs, uint32_t nth)
 {
     if (fs == NULL || fs->bops == NULL || fs->bops->write == NULL ||
-        sOrphanRealWrite != NULL || nth == 0)
+        sExt2FaultRealWrite != NULL || nth == 0)
         return false;
-    sOrphanRealWrite = fs->bops->write;
-    sOrphanWriteCount = 0;
-    sOrphanFailWrite = nth;
-    fs->bops->write = orphan_test_write;
+    sExt2FaultRealWrite = fs->bops->write;
+    sExt2FaultWriteCount = 0;
+    sExt2FaultFailWrite = nth;
+    fs->bops->write = ext2_fault_test_write;
     return true;
 }
 
-static uint32_t orphan_test_restore_write(vfs_filesystem_t *fs)
+static uint32_t ext2_fault_test_restore_write(vfs_filesystem_t *fs)
 {
-    uint32_t writes = sOrphanWriteCount;
-    fs->bops->write = sOrphanRealWrite;
-    sOrphanRealWrite = NULL;
-    sOrphanWriteCount = 0;
-    sOrphanFailWrite = 0;
+    uint32_t writes = sExt2FaultWriteCount;
+    fs->bops->write = sExt2FaultRealWrite;
+    sExt2FaultRealWrite = NULL;
+    sExt2FaultWriteCount = 0;
+    sExt2FaultFailWrite = 0;
     return writes;
+}
+
+// A directory entry can reach disk one write before its parent inode. For a
+// regular file the second write carries only mtime, but mkdir also carries
+// the parent's backlink count. Fail exactly that final mkdir write and prove
+// the driver keeps the published child allocated, reports the partial result,
+// and demotes instead of continuing with structurally stale metadata.
+//
+// The damaged parent is itself disposable: cleanup removes the published
+// child and then the parent inode, so its deliberately stale private link
+// count cannot survive this test or reach the host's e2fsck verdict.
+static bool test_ext2_published_insert_failure(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+        kRootFilesystem->dops == NULL ||
+        kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_published_insert_failure (root is not writable ext2)\n");
+        return true;
+    }
+
+    static const char parent_path[] = "/etc/testdata/insertfault";
+    static const char probe_path[] = "/etc/testdata/insertfault/probe";
+    static const char child_path[] = "/etc/testdata/insertfault/child";
+    char parent_mut[48], probe_mut[56], child_mut[56];
+    sprintf(parent_mut, "%s", parent_path);
+    sprintf(probe_mut, "%s", probe_path);
+    sprintf(child_mut, "%s", child_path);
+
+    // A prior interrupted test run must not decide this run's allocation
+    // shape or baseline.
+    kRootFilesystem->fops->rm(child_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(probe_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(parent_path, kRootFilesystem);
+    uint32_t inodes0 = ext2_free_inodes(kRootFilesystem);
+    uint32_t blocks0 = ext2_free_blocks(kRootFilesystem);
+
+    if (kRootFilesystem->dops->mkdir(parent_mut, kRootFilesystem) != 0)
+        goto fail;
+
+    // Measure this image's mkdir write stream without failing it. Removing
+    // the probe returns the same inode/block slots, making the second mkdir
+    // repeat the stream with its final write selected.
+    if (!ext2_fault_test_fail_write(kRootFilesystem, UINT32_MAX))
+        goto cleanup_parent;
+    int probe_rc = kRootFilesystem->dops->mkdir(probe_mut, kRootFilesystem);
+    uint32_t parent_write = ext2_fault_test_restore_write(kRootFilesystem);
+    os64_dirent_t de;
+    bool probe_exists = kRootFilesystem->dops->stat(
+        probe_path, &de, kRootFilesystem) == 0 && (de.flags & OS64_DE_DIR);
+    if (probe_rc != 0 || !probe_exists || parent_write == 0)
+        goto cleanup_probe;
+    if (kRootFilesystem->fops->rm(probe_path, kRootFilesystem) != 0)
+        goto cleanup_parent;
+
+    // Demote a private mount copy so the real root remains available to
+    // remove the deliberately half-completed fixture afterward.
+    vfs_filesystem_t shadow = *kRootFilesystem;
+    vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
+    shadow.fops = &shadow_fops;
+    shadow.dops = &shadow_dops;
+
+    kTestingExpectedNoise = true;
+    if (!ext2_fault_test_fail_write(kRootFilesystem, parent_write))
+        goto cleanup_parent;
+    int child_rc = shadow.dops->mkdir(child_mut, &shadow);
+    uint32_t failed_writes = ext2_fault_test_restore_write(kRootFilesystem);
+    bool child_exists = kRootFilesystem->dops->stat(
+        child_path, &de, kRootFilesystem) == 0 && (de.flags & OS64_DE_DIR);
+    bool shadow_demoted = shadow.read_only && shadow.dops->mkdir == NULL &&
+                          shadow.fops->write == NULL;
+    bool root_writable = !kRootFilesystem->read_only &&
+                         kRootFilesystem->dops->mkdir != NULL &&
+                         kRootFilesystem->fops->write != NULL;
+
+    bool cleanup_ok = child_exists &&
+        kRootFilesystem->fops->rm(child_path, kRootFilesystem) == 0;
+    cleanup_ok = kRootFilesystem->fops->rm(parent_path, kRootFilesystem) == 0 &&
+                 cleanup_ok;
+    bool counts_restored = ext2_free_inodes(kRootFilesystem) == inodes0 &&
+                           ext2_free_blocks(kRootFilesystem) == blocks0;
+
+    if (child_rc == 0 || failed_writes != parent_write || !child_exists ||
+        !shadow_demoted || !root_writable || !cleanup_ok || !counts_restored) {
+        printf("FAIL ext2_published_insert_failure: rc=%d writes=%u/%u published=%u demoted=%u root-rw=%u cleanup=%u counts=%u\n",
+               child_rc, failed_writes, parent_write, child_exists,
+               shadow_demoted, root_writable, cleanup_ok, counts_restored);
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_published_insert_failure (published mkdir parent-write failure mishandled)\n");
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_published_insert_failure (write %u failed after dirent publication; child retained, private mount demoted, cleanup exact)\n",
+           parent_write);
+    return true;
+
+cleanup_probe:
+    kRootFilesystem->fops->rm(probe_path, kRootFilesystem);
+cleanup_parent:
+    kRootFilesystem->fops->rm(parent_path, kRootFilesystem);
+fail:
+    printd(DEBUG_TESTS, "\tFAIL: test_ext2_published_insert_failure (could not establish deterministic fixture)\n");
+    return false;
 }
 
 #define OR_FAIL(...) do { \
@@ -3269,7 +3399,7 @@ static bool test_ext2_orphan(void)
     // The replacement lands on the victim's name while that handle is live.
     // Before 2026-08-16 this refused outright.
     if (kRootFilesystem->fops->rename("/etc/testdata/orph/replacement",
-                                      "/etc/testdata/orph/victim", kRootFilesystem) != 0) {
+                                      "/etc/testdata/orph/victim", kRootFilesystem, 0) != 0) {
         kRootFilesystem->fops->close(held);
         OR_FAIL("rename onto an OPEN destination was refused — the orphan path never ran\n");
     }
@@ -3312,13 +3442,13 @@ static bool test_ext2_orphan(void)
     // ledgers without counting any of them twice.
     uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
     uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
-    if (!orphan_test_fail_write(kRootFilesystem, 2)) {
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 2)) {
         kRootFilesystem->fops->close(held);
         OR_FAIL("could not install the release-write fault seam\n");
     }
     kRootFilesystem->fops->close(held);
     held = NULL;
-    uint32_t injected_writes = orphan_test_restore_write(kRootFilesystem);
+    uint32_t injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (injected_writes != 3)
         OR_FAIL("failed release made %u metadata writes, expected 3 (bitmap, failed GDT, retry inode)\n",
                 injected_writes);
@@ -3347,7 +3477,7 @@ static bool test_ext2_orphan(void)
     // at write 10. A clean retry must reconcile the already-free inode too.
     if (kRootFilesystem->fops->mounted == NULL)
         OR_FAIL("ext2 mount table has no replay callback\n");
-    if (!orphan_test_fail_write(kRootFilesystem, 10))
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 10))
         OR_FAIL("could not install the replay-write fault seam\n");
     // Another private mount, for the same reason and a sharper hazard: write 9
     // freed the inode BITMAP BIT, so that inode NUMBER is allocatable while the
@@ -3362,7 +3492,7 @@ static bool test_ext2_orphan(void)
     replay_mount.dops = &replay_dops;
 
     replay_mount.fops->mounted(&replay_mount);
-    injected_writes = orphan_test_restore_write(kRootFilesystem);
+    injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (injected_writes != 10)
         OR_FAIL("failed indirect replay made %u metadata writes, expected 10 with orphan still linked\n",
                 injected_writes);
@@ -3440,11 +3570,11 @@ static bool test_ext2_orphan(void)
     shadow.fops = &shadow_fops;
     shadow.dops = &shadow_dops;
 
-    if (!orphan_test_fail_write(kRootFilesystem, 11))
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 11))
         OR_FAIL("could not install the closed-rename release fault seam\n");
     int rename_rc = shadow.fops->rename("/etc/testdata/orph/retry_replacement",
-                                        "/etc/testdata/orph/retry_victim", &shadow);
-    injected_writes = orphan_test_restore_write(kRootFilesystem);
+                                        "/etc/testdata/orph/retry_victim", &shadow, 0);
+    injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (rename_rc != 0)
         OR_FAIL("closed replacement rename failed before reaching recoverable teardown\n");
     if (injected_writes != 13)
@@ -3521,7 +3651,7 @@ static bool test_ext2_readonly_demotion(void)
     int (*saved_open)(vfs_file_t **, const char *, const char *, vfs_filesystem_t *) = shadow_fops.open;
     int (*saved_write)(vfs_file_t *, const void *, size_t) = shadow_fops.write;
     int (*saved_rm)(const char *, vfs_filesystem_t *) = shadow_fops.rm;
-    int (*saved_rename)(const char *, const char *, vfs_filesystem_t *) = shadow_fops.rename;
+    int (*saved_rename)(const char *, const char *, vfs_filesystem_t *, uint64_t) = shadow_fops.rename;
     int (*saved_mkdir)(char *, vfs_filesystem_t *) = shadow_dops.mkdir;
 
     vfs_demote_mount_readonly(&shadow);
@@ -3542,7 +3672,7 @@ static bool test_ext2_readonly_demotion(void)
         shadow.fops->close(file);
     }
 
-    const char modes[] = { 'w', 'c', 'a' };
+    const char modes[] = { 'w', 'c', 'a', 'x' };
     for (unsigned i = 0; i < sizeof(modes); i++) {
         char mode[2] = { modes[i], '\0' };
         file = NULL;
@@ -3556,9 +3686,14 @@ static bool test_ext2_readonly_demotion(void)
         ROD_FAIL("retained open callback created a file after demotion\n");
         shadow.fops->close(file);
     }
+    file = NULL;
+    if (saved_open(&file, created_path, "x", &shadow) == 0) {
+        ROD_FAIL("retained exclusive open created a file after demotion\n");
+        shadow.fops->close(file);
+    }
     if (saved_mkdir(mkdir_path, &shadow) == 0)
         ROD_FAIL("retained mkdir callback mutated a demoted mount\n");
-    if (saved_rename(guard_path, renamed_path, &shadow) == 0)
+    if (saved_rename(guard_path, renamed_path, &shadow, 0) == 0)
         ROD_FAIL("retained rename callback mutated a demoted mount\n");
     if (saved_rm(guard_path, &shadow) == 0)
         ROD_FAIL("retained rm callback mutated a demoted mount\n");
@@ -3579,7 +3714,7 @@ static bool test_ext2_readonly_demotion(void)
     kRootFilesystem->fops->rm(mkdir_path, kRootFilesystem);
 
     if (ok)
-        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/truncate/append/write/rm/rename/mkdir refused)\n");
+        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/exclusive-create/truncate/append/write/rm/rename/mkdir refused)\n");
     return ok;
 #undef ROD_FAIL
 }
@@ -3625,7 +3760,41 @@ static bool test_ext2_secondary_write(void)
     char buf[64];
     vfs_file_t *f = NULL;
 
-    // 1. Create, write, close, reopen, read back byte-exact.
+    // 1. Exclusive creation: one new inode and handle, then a refusal that
+    //    preserves its contents rather than truncating through the name.
+    fs->fops->rm("/__xtest.txt", fs);
+    if (fs->fops->open(&f, "/__xtest.txt", "x", fs) != 0) {
+        ES_FAIL("exclusive create /__xtest.txt failed\n");
+        return false;
+    }
+    if (fs->fops->write(f, msg1, sizeof(msg1) - 1) != (int)(sizeof(msg1) - 1)) {
+        ES_FAIL("write through exclusive handle failed\n");
+        fs->fops->close(f);
+        return false;
+    }
+    vfs_file_t *second = NULL;
+    if (fs->fops->open(&second, "/__xtest.txt", "x", fs) == 0) {
+        ES_FAIL("exclusive open accepted an existing name\n");
+        fs->fops->close(second);
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->fops->open(&f, "/__xtest.txt", "r", fs) != 0) {
+        ES_FAIL("reopen after exclusive create failed\n");
+        return false;
+    }
+    int n = fs->fops->read(f, buf, sizeof(buf));
+    fs->fops->close(f);
+    f = NULL;
+    if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0 ||
+        fs->fops->rm("/__xtest.txt", fs) != 0) {
+        ES_FAIL("exclusive-create contents changed or cleanup failed (n=%d)\n", n);
+        return false;
+    }
+
+    // 2. Create, write, close, reopen, read back byte-exact.
     if (fs->fops->open(&f, "/__wtest.txt", "c", fs) != 0) {
         ES_FAIL("create /__wtest.txt failed\n");
         return false;
@@ -3641,7 +3810,7 @@ static bool test_ext2_secondary_write(void)
         ES_FAIL("reopen after create failed\n");
         return false;
     }
-    int n = fs->fops->read(f, buf, sizeof(buf));
+    n = fs->fops->read(f, buf, sizeof(buf));
     fs->fops->close(f);
     f = NULL;
     if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0) {
@@ -3649,7 +3818,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 2. Append; verify the concatenation and the stat'd size.
+    // 3. Append; verify the concatenation and the stat'd size.
     if (fs->fops->open(&f, "/__wtest.txt", "a", fs) != 0) {
         ES_FAIL("append open failed\n");
         return false;
@@ -3668,7 +3837,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 3. Truncate via "w": size drops to 0 territory, then rewrite.
+    // 4. Truncate via "w": size drops to 0 territory, then rewrite.
     if (fs->fops->open(&f, "/__wtest.txt", "w", fs) != 0) {
         ES_FAIL("truncating open failed\n");
         return false;
@@ -3693,7 +3862,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 4. Growth across the single-indirect boundary. At 1KB blocks the
+    // 5. Growth across the single-indirect boundary. At 1KB blocks the
     //    direct blocks end at byte 12,287; a 16KB file forces the indirect
     //    chain into existence. Self-describing 16-byte records, same idea
     //    as pattern.bin.
@@ -3747,7 +3916,7 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
 
-    // 5. A hole: seek far past end, write one record; the gap reads zeros.
+    // 6. A hole: seek far past end, write one record; the gap reads zeros.
     if (fs->fops->open(&f, "/__whole.bin", "c", fs) != 0) {
         ES_FAIL("create /__whole.bin failed\n");
         return false;
@@ -3785,7 +3954,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 6. mkdir; a file inside proves it's a real directory; readdir sees the
+    // 7. mkdir; a file inside proves it's a real directory; readdir sees the
     //    file and (Plan 9 doctrine) no dot entries.
     if (fs->dops->mkdir("/__wdir", fs) != 0) {
         ES_FAIL("mkdir /__wdir failed\n");
@@ -3817,7 +3986,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 7. The one removal verb, all four verdicts: non-empty dir refused,
+    // 8. The one removal verb, all four verdicts: non-empty dir refused,
     //    nonexistent refused, file removed, then-empty dir removed.
     if (fs->fops->rm("/__wdir", fs) == 0) {
         ES_FAIL("rm of NON-empty dir succeeded (must refuse)\n");
@@ -3838,7 +4007,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 8. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
+    // 9. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
     //
     //    Ruling 5 made rm refuse ANY open file, and this step asserted
     //    exactly that. The orphan slice superseded it: an open REGULAR file
@@ -3924,14 +4093,14 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 9. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
+    // 10. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
     //    indirect chain, /__whole.bin a sparse map. e2fsck audits the wake.
     if (fs->fops->rm("/__wbig.bin", fs) != 0 || fs->fops->rm("/__whole.bin", fs) != 0) {
         ES_FAIL("cleanup rm failed\n");
         return false;
     }
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (exclusive-create/create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
     return true;
 }
 #undef ES_FAIL
@@ -5440,6 +5609,7 @@ static void register_builtin_tests(void)
     // in test_framework.h; the demotion engine in vfs.c).
     test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("vfs_rename", test_vfs_rename, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("ext2_published_insert_failure", test_ext2_published_insert_failure, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_orphan", test_ext2_orphan, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_readonly_demotion", test_ext2_readonly_demotion, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);

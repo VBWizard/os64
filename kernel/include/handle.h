@@ -44,6 +44,13 @@ typedef enum handle_type
 	                       // the interpreted screen out; read is reserved
 	                       // for the STREAM flavor)
 
+	// A slot reserved before an operation that may publish external state.
+	// Exclusive file creation uses it so a full handle table is discovered
+	// BEFORE the filesystem creates the name. It is not operable; commit turns
+	// it into a live type, while close/task teardown cancels it like any other
+	// handle claim.
+	HANDLE_RESERVED,
+
 	// A slot mid-CLOSE (2026-08-24). Distinct from NONE so handle_alloc — which
 	// only ever reclaims a NONE slot — cannot reuse a slot whose object the
 	// closer has not yet released, and handle_get refuses to hand a closing
@@ -65,6 +72,15 @@ void handle_table_init(struct task *t);
 
 // Claim the lowest free slot. Returns the handle, or -1 if the table is full.
 int handle_alloc(struct task *t, handle_type_t type, void *object);
+
+// Two-phase allocation for operations that must know a return slot exists
+// before they mutate external state. reserve returns a slot or -1; commit
+// publishes its object, and cancel gives an unused reservation back. A task
+// teardown may cancel the reservation first, in which case commit is false
+// and the caller still owns `object`.
+int  handle_reserve(struct task *t);
+bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *object);
+bool handle_cancel_reserved(struct task *t, int slot);
 
 // Force an object into a SPECIFIC slot, closing whatever was there. This is
 // how spawn redirects a child's stdin/stdout: the child is simply born with a

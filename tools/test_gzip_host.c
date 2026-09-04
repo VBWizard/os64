@@ -1,8 +1,8 @@
 // test_gzip_host.c — host-side streaming harness for libgzip.
 //
-// The companion shell script generates independent stored, fixed-Huffman,
-// and dynamic-Huffman streams with Python's zlib, then drives each one across
-// deliberately hostile input/output chunk boundaries under ASan and UBSan.
+// The companion shell script checks encoder output with Python's zlib, then
+// checks independently generated stored, fixed-Huffman, and dynamic-Huffman
+// input. Both directions cross hostile chunk boundaries under ASan and UBSan.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "gzip/gzip.h"
+#include "gzip/deflate.h"
 #include "gzip/inflate.h"
 #include "os64/str.h"
 
@@ -18,6 +19,10 @@ void os64_free(void *memory) { free(memory); }
 void *os64_memset(void *memory, int value, size_t length)
 {
     return memset(memory, value, length);
+}
+void *os64_memcpy(void *destination, const void *source, size_t length)
+{
+    return memcpy(destination, source, length);
 }
 
 static uint8_t *read_file(const char *path, size_t *length)
@@ -185,11 +190,143 @@ static int run_gzip(const uint8_t *compressed, size_t compressed_length,
     return failed;
 }
 
+static int write_file(const char *path, const uint8_t *bytes, size_t length)
+{
+    FILE *file = fopen(path, "wb");
+    if (file == NULL)
+        return -1;
+    int failed = fwrite(bytes, 1, length, file) != length;
+    if (fclose(file) != 0)
+        failed = 1;
+    return failed ? -1 : 0;
+}
+
+static int run_encode(const char *format, const uint8_t *input_bytes,
+                      size_t input_length, const char *output_path,
+                      size_t input_chunk, size_t output_chunk, uint32_t mtime)
+{
+    size_t output_capacity = input_length * 2 + 1024;
+    uint8_t *actual = calloc(1, output_capacity);
+    os64_deflate_t *raw = NULL;
+    os64_gzip_encoder_t *gzip = NULL;
+    if (strcmp(format, "raw") == 0)
+        raw = os64_deflate_create();
+    else if (strcmp(format, "gzip") == 0)
+        gzip = os64_gzip_encoder_create(mtime);
+    else {
+        fprintf(stderr, "unknown encoder format: %s\n", format);
+        free(actual);
+        return 2;
+    }
+    if (actual == NULL || (raw == NULL && gzip == NULL)) {
+        os64_deflate_destroy(raw);
+        os64_gzip_encoder_destroy(gzip);
+        free(actual);
+        return 2;
+    }
+
+    size_t input_position = 0;
+    size_t output_position = 0;
+    int done = 0;
+    for (size_t turns = 0; turns < 10000000; turns++) {
+        size_t offered_input = input_length - input_position;
+        if (offered_input > input_chunk)
+            offered_input = input_chunk;
+        size_t offered_output = output_capacity - output_position;
+        if (offered_output > output_chunk)
+            offered_output = output_chunk;
+        if (offered_output == 0) {
+            fprintf(stderr, "%s encoder exceeded test output capacity\n",
+                    format);
+            break;
+        }
+        const uint8_t *input = input_bytes + input_position;
+        uint8_t *output = actual + output_position;
+        size_t input_left = offered_input;
+        size_t output_left = offered_output;
+        bool finish = input_position + offered_input == input_length;
+
+        int status;
+        int need_input;
+        int need_output;
+        if (raw != NULL) {
+            status = os64_deflate_process(raw, &input, &input_left, &output,
+                                          &output_left, finish);
+            need_input = OS64_DEFLATE_NEED_INPUT;
+            need_output = OS64_DEFLATE_NEED_OUTPUT;
+            done = status == OS64_DEFLATE_DONE;
+        } else {
+            status = os64_gzip_encoder_process(gzip, &input, &input_left,
+                                                &output, &output_left, finish);
+            need_input = OS64_GZIP_ENCODE_NEED_INPUT;
+            need_output = OS64_GZIP_ENCODE_NEED_OUTPUT;
+            done = status == OS64_GZIP_ENCODE_DONE;
+        }
+        input_position += offered_input - input_left;
+        output_position += offered_output - output_left;
+        if (done)
+            break;
+        if (status != need_input && status != need_output) {
+            fprintf(stderr, "%s encoder failed with status %d\n", format,
+                    status);
+            break;
+        }
+        if (status == need_input && input_left != 0) {
+            fprintf(stderr, "%s encoder left input behind\n", format);
+            break;
+        }
+    }
+
+    uint64_t counted_input = raw != NULL
+        ? os64_deflate_input_size(raw)
+        : os64_gzip_encoder_input_size(gzip);
+    uint64_t counted_output = raw != NULL
+        ? os64_deflate_output_size(raw)
+        : os64_gzip_encoder_output_size(gzip);
+    int failed = !done || input_position != input_length ||
+                 counted_input != input_length ||
+                 counted_output != output_position ||
+                 write_file(output_path, actual, output_position) < 0;
+    if (failed)
+        fprintf(stderr,
+                "%s encode failed: input=%zu/%zu output=%zu counted=%llu chunks=%zu/%zu\n",
+                format, input_position, input_length, output_position,
+                (unsigned long long)counted_output, input_chunk, output_chunk);
+
+    os64_deflate_destroy(raw);
+    os64_gzip_encoder_destroy(gzip);
+    free(actual);
+    return failed;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 8 && strcmp(argv[1], "encode") == 0) {
+        size_t input_length = 0;
+        uint8_t *input = read_file(argv[3], &input_length);
+        if (input == NULL) {
+            fprintf(stderr, "could not read encoder input\n");
+            return 2;
+        }
+        size_t input_chunk = (size_t)parse_u64(argv[5]);
+        size_t output_chunk = (size_t)parse_u64(argv[6]);
+        uint32_t mtime = (uint32_t)parse_u64(argv[7]);
+        if (input_chunk == 0 || output_chunk == 0) {
+            fprintf(stderr, "chunk sizes must be nonzero\n");
+            free(input);
+            return 2;
+        }
+        int result = run_encode(argv[2], input, input_length, argv[4],
+                                input_chunk, output_chunk, mtime);
+        free(input);
+        return result;
+    }
+
     if (argc != 9) {
         fprintf(stderr,
-                "usage: %s raw|gzip COMPRESSED EXPECTED IN_CHUNK OUT_CHUNK LIMIT STATUS MEMBERS\n",
+                "usage: %s raw|gzip COMPRESSED EXPECTED IN_CHUNK OUT_CHUNK LIMIT STATUS MEMBERS\n"
+                "       %s encode raw|gzip INPUT OUTPUT IN_CHUNK OUT_CHUNK MTIME\n",
+                argv[0],
                 argv[0]);
         return 2;
     }

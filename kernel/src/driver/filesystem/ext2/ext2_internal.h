@@ -67,8 +67,8 @@
 #define EXT2_OPEN_TABLE_SLOTS 64
 
 typedef struct {
-	uint32_t ino;      // 0 = free slot
-	uint32_t count;    // concurrent handles on this inode
+	uint32_t ino;      // 0 with count 0 = free; 0 with count 1 = reserved
+	uint32_t count;    // concurrent handles, or the reservation marker above
 } ext2_open_ref_t;
 
 // ── The per-mount context (fs->fs_specific) ─────────────────────────────────
@@ -215,11 +215,15 @@ uint32_t ext2_dir_find(vfs_filesystem_t *fs, ext2_fs_t *e,
                        const char *name, uint32_t len);
 uint32_t ext2_resolve_path(vfs_filesystem_t *fs, ext2_fs_t *e,
                            const char *path, ext2_inode_t *out);
-// The shared open core: resolve an EXISTING regular file, count it open,
-// build the handle. The RO table's open adds only the "r" mode check; the
-// RW table's open (ext2_write.c) adds create/truncate/append around it.
+// The shared existing-file core resolves and counts the inode, then the
+// handle initializer below builds the same handle shape used by exclusive
+// creation after it has atomically created and counted a new inode.
 int      ext2_open_existing(vfs_file_t **vfs_file, const char *path,
                             vfs_filesystem_t *vfs_fs);
+void     ext2_open_handle_init(vfs_file_t **out, vfs_file_t *file,
+                               ext2_handle_t *handle, const char *path,
+                               vfs_filesystem_t *fs, uint32_t ino,
+                               const ext2_inode_t *inode);
 // read_inode with caller-supplied block scratch (the write path passes its
 // mount scratch; ext2_read_inode wraps this with a kmalloc for the
 // lock-free read paths, where per-call scratch still earns its keep).
@@ -231,6 +235,12 @@ int      ext2_read_inode_buf(vfs_filesystem_t *fs, ext2_fs_t *e,
 // one). Returns false only when the table is full — the open FAILS then,
 // loudly, rather than silently escaping the rm protection.
 bool     ext2_openref_register(ext2_fs_t *e, uint32_t ino);
+// Exclusive creation reserves table capacity before allocating or publishing
+// an inode. commit binds that reservation to the new inode; cancel releases
+// an unneeded reservation. The slot token belongs to one caller.
+int      ext2_openref_reserve(ext2_fs_t *e);
+bool     ext2_openref_commit(ext2_fs_t *e, int slot, uint32_t ino);
+void     ext2_openref_cancel(ext2_fs_t *e, int slot);
 // TRUE = that was the LAST handle, and the caller then owes the orphan chain
 // a look (ext2_orphan_reap_if_pending) — which must happen OUTSIDE open_lock.
 bool     ext2_openref_unregister(ext2_fs_t *e, uint32_t ino);
