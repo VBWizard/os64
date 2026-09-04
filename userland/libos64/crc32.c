@@ -7,7 +7,7 @@
 // at userland's -O0 (75 MB/s at -O2). The current pipelines are slower where
 // it matters: os64get measured 660 KB/s after its receive-window increase, and
 // ext2 write-through measured 1.7 MB/s. Those are the measured input and output
-// rates for HTTP decoding or `gunzip big.gz > file`; ext2 reads can exceed the
+// rates for HTTP decoding or `gunzip -c big.gz > file`; ext2 reads can exceed
 // CRC rate and are not the reason for deferring a table. The bitwise form
 // keeps the algorithm visible in nine lines: no generated constants to audit,
 // and a reader can confirm the standard polynomial by looking rather than
