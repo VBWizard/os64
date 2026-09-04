@@ -1,10 +1,11 @@
-// gzip.c — RFC 1952 framing around the shared raw DEFLATE decoder.
+// gzip.c — RFC 1952 framing around the shared raw DEFLATE engines.
 //
-// A gzip trailer authenticates both the bytes and their length. Neither
-// check is optional here: returning plausible output from a damaged stream is
-// worse than refusing it, because the caller cannot recover the distinction.
+// The encoder records CRC32 and length after the compressed body; the decoder
+// verifies both before declaring provisional output complete. Returning
+// plausible bytes from a damaged stream would erase that distinction.
 
 #include "gzip/gzip.h"
+#include "gzip/deflate.h"
 #include "gzip/inflate.h"
 #include "os64/crc32.h"
 #include "os64/mem.h"
@@ -50,6 +51,25 @@ struct os64_gzip {
     uint8_t trailer_have;
 };
 
+typedef enum {
+    GZIP_ENCODE_HEADER,
+    GZIP_ENCODE_BODY,
+    GZIP_ENCODE_TRAILER,
+    GZIP_ENCODE_DONE
+} gzip_encode_mode_t;
+
+struct os64_gzip_encoder {
+    os64_deflate_t *deflate;
+    gzip_encode_mode_t mode;
+    uint32_t crc;
+    uint32_t input_size;
+    uint64_t input_total;
+    uint8_t header[10];
+    uint8_t header_position;
+    uint8_t trailer[8];
+    uint8_t trailer_position;
+};
+
 static uint16_t read_le16(const uint8_t bytes[2])
 {
     return (uint16_t)((uint16_t)bytes[0] | (uint16_t)bytes[1] << 8);
@@ -59,6 +79,28 @@ static uint32_t read_le32(const uint8_t bytes[4])
 {
     return (uint32_t)bytes[0] | (uint32_t)bytes[1] << 8 |
            (uint32_t)bytes[2] << 16 | (uint32_t)bytes[3] << 24;
+}
+
+static void write_le32(uint8_t bytes[4], uint32_t value)
+{
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
+static void copy_to_output(const uint8_t *source, size_t source_size,
+                           uint8_t *position, uint8_t **output,
+                           size_t *output_length)
+{
+    size_t available = source_size - *position;
+    size_t amount = available < *output_length ? available : *output_length;
+    if (amount == 0)
+        return;
+    os64_memcpy(*output, source + *position, amount);
+    *position += (uint8_t)amount;
+    *output += amount;
+    *output_length -= amount;
 }
 
 static void refuse(os64_gzip_t *stream, os64_gzip_status_t status)
@@ -356,5 +398,132 @@ os64_gzip_status_t os64_gzip_process(os64_gzip_t *stream,
             case GZIP_MODE_ERROR:
                 return stream->terminal;
         }
+    }
+}
+
+os64_gzip_encoder_t *os64_gzip_encoder_create(uint32_t modification_time)
+{
+    os64_gzip_encoder_t *stream = os64_malloc(sizeof(*stream));
+    if (stream == NULL)
+        return NULL;
+    os64_memset(stream, 0, sizeof(*stream));
+    stream->deflate = os64_deflate_create();
+    if (stream->deflate == NULL) {
+        os64_free(stream);
+        return NULL;
+    }
+    os64_gzip_encoder_reset(stream, modification_time);
+    return stream;
+}
+
+void os64_gzip_encoder_reset(os64_gzip_encoder_t *stream,
+                             uint32_t modification_time)
+{
+    if (stream == NULL)
+        return;
+    os64_deflate_t *deflate = stream->deflate;
+    os64_memset(stream, 0, sizeof(*stream));
+    stream->deflate = deflate;
+    os64_deflate_reset(deflate);
+    stream->mode = GZIP_ENCODE_HEADER;
+    stream->crc = os64_crc32_begin();
+    stream->header[0] = 0x1f;
+    stream->header[1] = 0x8b;
+    stream->header[2] = 8;
+    stream->header[3] = 0;
+    write_le32(stream->header + 4, modification_time);
+    stream->header[8] = 0;
+    stream->header[9] = 255;
+}
+
+void os64_gzip_encoder_destroy(os64_gzip_encoder_t *stream)
+{
+    if (stream == NULL)
+        return;
+    os64_deflate_destroy(stream->deflate);
+    os64_free(stream);
+}
+
+uint64_t os64_gzip_encoder_input_size(const os64_gzip_encoder_t *stream)
+{
+    return stream == NULL ? 0 : stream->input_total;
+}
+
+uint64_t os64_gzip_encoder_output_size(const os64_gzip_encoder_t *stream)
+{
+    if (stream == NULL)
+        return 0;
+    return stream->header_position +
+           os64_deflate_output_size(stream->deflate) +
+           stream->trailer_position;
+}
+
+const char *os64_gzip_encode_status_name(os64_gzip_encode_status_t status)
+{
+    switch (status) {
+        case OS64_GZIP_ENCODE_NEED_INPUT:  return "needs input";
+        case OS64_GZIP_ENCODE_NEED_OUTPUT: return "needs output space";
+        case OS64_GZIP_ENCODE_DONE:        return "done";
+        case OS64_GZIP_ENCODE_BAD_ARGUMENT: return "bad argument";
+    }
+    return "unknown";
+}
+
+os64_gzip_encode_status_t os64_gzip_encoder_process(
+    os64_gzip_encoder_t *stream,
+    const uint8_t **input,
+    size_t *input_length,
+    uint8_t **output,
+    size_t *output_length,
+    bool end_of_input)
+{
+    if (stream == NULL || input == NULL || input_length == NULL ||
+        output == NULL || output_length == NULL ||
+        (*input_length != 0 && *input == NULL) ||
+        (*output_length != 0 && *output == NULL))
+        return OS64_GZIP_ENCODE_BAD_ARGUMENT;
+    if (stream->mode == GZIP_ENCODE_DONE)
+        return OS64_GZIP_ENCODE_DONE;
+
+    for (;;) {
+        if (stream->mode == GZIP_ENCODE_HEADER) {
+            copy_to_output(stream->header, sizeof(stream->header),
+                           &stream->header_position, output, output_length);
+            if (stream->header_position != sizeof(stream->header))
+                return OS64_GZIP_ENCODE_NEED_OUTPUT;
+            stream->mode = GZIP_ENCODE_BODY;
+        }
+
+        if (stream->mode == GZIP_ENCODE_BODY) {
+            const uint8_t *input_start = *input;
+            size_t input_before = *input_length;
+            os64_deflate_status_t status = os64_deflate_process(
+                stream->deflate, input, input_length, output, output_length,
+                end_of_input);
+            size_t consumed = input_before - *input_length;
+            if (consumed != 0) {
+                stream->crc = os64_crc32_update(stream->crc, input_start,
+                                                 consumed);
+                stream->input_size += (uint32_t)consumed;
+                stream->input_total += consumed;
+            }
+            if (status == OS64_DEFLATE_NEED_INPUT)
+                return OS64_GZIP_ENCODE_NEED_INPUT;
+            if (status == OS64_DEFLATE_NEED_OUTPUT)
+                return OS64_GZIP_ENCODE_NEED_OUTPUT;
+            if (status == OS64_DEFLATE_BAD_ARGUMENT)
+                return OS64_GZIP_ENCODE_BAD_ARGUMENT;
+
+            write_le32(stream->trailer, os64_crc32_end(stream->crc));
+            write_le32(stream->trailer + 4, stream->input_size);
+            stream->mode = GZIP_ENCODE_TRAILER;
+        }
+
+        copy_to_output(stream->trailer, sizeof(stream->trailer),
+                       &stream->trailer_position, output, output_length);
+        if (stream->trailer_position != sizeof(stream->trailer))
+            return OS64_GZIP_ENCODE_NEED_OUTPUT;
+        stream->mode = GZIP_ENCODE_DONE;
+        return OS64_GZIP_ENCODE_DONE;
     }
 }
