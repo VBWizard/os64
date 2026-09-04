@@ -15,7 +15,7 @@ trap 'rm -rf "$work"' EXIT
 
 cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/apps/os64get -I userland/libos64/include -I abi/include \
-   userland/apps/os64get/http.c userland/libos64/str.c userland/libos64/fmt.c \
+   userland/apps/os64get/http.c userland/libos64/url.c userland/libos64/str.c userland/libos64/fmt.c \
    tools/test_http_host.c \
    -o "$work/test_http"
 
