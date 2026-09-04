@@ -1337,7 +1337,13 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		r->rexmit     = c->retransmits;
 		r->ooo        = c->out_of_order_dropped;
 		r->held       = c->out_of_order_held;
-		r->rto_ms     = c->rto * 1000u / TICKS_PER_SECOND;
+		// THE TIMER IN FORCE, not the estimator's answer: after a timeout
+		// rto_ticks is the doubled value the next deadline will use and
+		// stays so until a clean sample (Karn), while c->rto is what that
+		// sample last said. A row reading the estimator during a backoff
+		// experiment would show 200 while the deadline was 800 (Codex, PR
+		// #62).
+		r->rto_ms     = (c->rto_backed_off ? c->rto_ticks : c->rto) * 1000u / TICKS_PER_SECOND;
 		r->srtt_ms    = (c->srtt_x8 >> 3) * 1000u / TICKS_PER_SECOND;
 		r->detached   = c->detached;
 		r->zwin       = c->zero_window;
