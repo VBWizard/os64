@@ -1307,16 +1307,26 @@ static uint32_t ext2_split_path(vfs_filesystem_t *fs, ext2_fs_t *e,
 // as SLACK inside entries. A new entry either claims a dead entry
 // (inode == 0) whose rec_len fits, or splits a live entry's slack. If no
 // block has room, the directory grows by one block whose single entry
-// covers it entirely. Updates and WRITES BACK the dir inode when it grows
-// (mtime rides along either way — caller need not re-write it).
+// covers it entirely. For an in-place insertion, the dirent block and parent
+// inode are two separate writes; the result distinguishes "nothing
+// published" from "entry published, parent inode write failed" so callers
+// never free a child the directory names.
 //
 // Ordering: an in-place insert is one whole-block RMW (a reader sees the
 // entry absent or complete, never partial). Once that block write succeeds,
-// insertion succeeded even if the parent's mtime write fails — reporting
-// failure then would invite a caller to free the now-named child inode.
+// the name is published even if the parent inode write fails. That inode
+// write is normally an mtime, but mkdir and a cross-parent directory rename
+// also carry structural link-count changes in it.
 // Growth writes the new block's content first, then the dir inode that makes
 // that block and its entry reachable.
-static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
+typedef enum {
+	EXT2_DIR_INSERT_FAILED = -1,
+	EXT2_DIR_INSERT_OK = 0,
+	EXT2_DIR_INSERT_PUBLISHED_PARENT_FAILED = 1,
+} ext2_dir_insert_result_t;
+
+static ext2_dir_insert_result_t ext2_dir_insert(
+                           vfs_filesystem_t *fs, ext2_fs_t *e,
                            uint32_t dir_ino, ext2_inode_t *dir,
                            const char *name, uint32_t len,
                            uint32_t child_ino, uint8_t file_type)
@@ -1333,7 +1343,7 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 
 	uint8_t *buf = wr_scratch_get(e);
 	if (buf == NULL)
-		return -1;
+		return EXT2_DIR_INSERT_FAILED;
 
 	uint32_t dir_blocks = dir->i_size / e->block_size;
 	for (uint32_t fb = 0; fb < dir_blocks; fb++)
@@ -1359,16 +1369,16 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 				de->name_len = (uint8_t)len;
 				de->file_type = file_type;
 				memcpy(de->name, name, len);
-				int rc = ext2_write_fs_block(fs, e, disk_block, buf);
-				if (rc == 0)
+				ext2_dir_insert_result_t result = EXT2_DIR_INSERT_FAILED;
+				if (ext2_write_fs_block(fs, e, disk_block, buf) == 0)
 				{
 					dir->i_mtime = (uint32_t)kSystemCurrentTime;
-					if (ext2_write_inode_disk(fs, e, dir_ino, dir) != 0)
-						EXT2_ALARM("ext2: directory entry '%s' was inserted, but parent inode %u mtime could not be written\n",
-						           name, dir_ino);
+					result = ext2_write_inode_disk(fs, e, dir_ino, dir) == 0
+					             ? EXT2_DIR_INSERT_OK
+					             : EXT2_DIR_INSERT_PUBLISHED_PARENT_FAILED;
 				}
 				wr_scratch_put(e, buf);
-				return rc;
+				return result;
 			}
 
 			// A live entry's slack: the gap between what it needs and what
@@ -1384,16 +1394,16 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 				ne->name_len = (uint8_t)len;
 				ne->file_type = file_type;
 				memcpy(ne->name, name, len);
-				int rc = ext2_write_fs_block(fs, e, disk_block, buf);
-				if (rc == 0)
+				ext2_dir_insert_result_t result = EXT2_DIR_INSERT_FAILED;
+				if (ext2_write_fs_block(fs, e, disk_block, buf) == 0)
 				{
 					dir->i_mtime = (uint32_t)kSystemCurrentTime;
-					if (ext2_write_inode_disk(fs, e, dir_ino, dir) != 0)
-						EXT2_ALARM("ext2: directory entry '%s' was inserted, but parent inode %u mtime could not be written\n",
-						           name, dir_ino);
+					result = ext2_write_inode_disk(fs, e, dir_ino, dir) == 0
+					             ? EXT2_DIR_INSERT_OK
+					             : EXT2_DIR_INSERT_PUBLISHED_PARENT_FAILED;
 				}
 				wr_scratch_put(e, buf);
-				return rc;
+				return result;
 			}
 
 			pos += de->rec_len;
@@ -1408,7 +1418,7 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 	if (nb == 0)
 	{
 		wr_scratch_put(e, buf);
-		return -1;
+		return EXT2_DIR_INSERT_FAILED;
 	}
 	memset(buf, 0, e->block_size);
 	ext2_dir_entry_2_t *ne = (ext2_dir_entry_2_t *)buf;
@@ -1420,7 +1430,7 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 	if (ext2_write_fs_block(fs, e, nb, buf) != 0)
 	{
 		wr_scratch_put(e, buf);
-		return -1;
+		return EXT2_DIR_INSERT_FAILED;
 	}
 	wr_scratch_put(e, buf);
 
@@ -1428,7 +1438,8 @@ static int ext2_dir_insert(vfs_filesystem_t *fs, ext2_fs_t *e,
 	// size and (via bmap_alloc's mutation) the new block in its map.
 	dir->i_size += e->block_size;
 	dir->i_mtime = (uint32_t)kSystemCurrentTime;
-	return ext2_write_inode_disk(fs, e, dir_ino, dir);
+	return ext2_write_inode_disk(fs, e, dir_ino, dir) == 0
+	           ? EXT2_DIR_INSERT_OK : EXT2_DIR_INSERT_FAILED;
 }
 
 // ── File creation ───────────────────────────────────────────────────────────
@@ -1500,14 +1511,18 @@ static uint32_t ext2_create_file(vfs_filesystem_t *fs, ext2_fs_t *e,
 		registered = true;
 	}
 
-	if (ext2_dir_insert(fs, e, parent_ino, &parent, name, len,
-	                    ino, EXT2_FT_REG_FILE) != 0)
+	ext2_dir_insert_result_t inserted = ext2_dir_insert(
+	    fs, e, parent_ino, &parent, name, len, ino, EXT2_FT_REG_FILE);
+	if (inserted == EXT2_DIR_INSERT_FAILED)
 	{
 		if (registered)
 			(void)ext2_openref_unregister(e, ino);
 		ext2_free_inode(fs, e, ino, false);
 		return 0;
 	}
+	if (inserted == EXT2_DIR_INSERT_PUBLISHED_PARENT_FAILED)
+		EXT2_ALARM("ext2: file '%s' was created, but parent inode %u mtime could not be written\n",
+		           path, parent_ino);
 	if (created != NULL)
 		*created = node;
 	return ino;
@@ -2666,12 +2681,24 @@ static int ext2_mkdir(char *path, vfs_filesystem_t *vfs_fs)
 	// Parent last: its links bump (the new "..") rides dir_insert's
 	// parent-inode write.
 	parent.i_links_count++;
-	if (ext2_dir_insert(vfs_fs, e, parent_ino, &parent, name, len,
-	                    ino, EXT2_FT_DIR) != 0)
+	ext2_dir_insert_result_t inserted = ext2_dir_insert(
+	    vfs_fs, e, parent_ino, &parent, name, len, ino, EXT2_FT_DIR);
+	if (inserted == EXT2_DIR_INSERT_FAILED)
 	{
 		ext2_free_block(vfs_fs, e, block, NULL);
 		ext2_free_inode(vfs_fs, e, ino, true);
 		goto refuse;
+	}
+	if (inserted == EXT2_DIR_INSERT_PUBLISHED_PARENT_FAILED)
+	{
+		// The child and its name are durable, so freeing either allocation
+		// would turn a stale link count into a dangling dirent. Stop further
+		// mutation and leave e2fsck the intact directory to reconcile.
+		EXT2_ALARM("ext2: directory '%s' was created but parent inode %u link count could not be written — demoting mount to read-only\n",
+		           path, parent_ino);
+		vfs_demote_mount_readonly(vfs_fs);
+		spinlock_release_irqrestore(&e->write_lock, lock_flags);
+		return -1;
 	}
 
 	spinlock_release_irqrestore(&e->write_lock, lock_flags);
@@ -2916,12 +2943,30 @@ static int ext2_rename(const char *oldpath, const char *newpath,
 		// part of its own work (mkdir does exactly this).
 		if (src_is_dir && !same_parent)
 			np->i_links_count++;
-		if (ext2_dir_insert(vfs_fs, e, new_parent_ino, np, new_name, new_len,
-		                    src_ino, file_type) != 0)
+		ext2_dir_insert_result_t inserted = ext2_dir_insert(
+		    vfs_fs, e, new_parent_ino, np, new_name, new_len,
+		    src_ino, file_type);
+		if (inserted == EXT2_DIR_INSERT_FAILED)
 		{
 			if (src_is_dir && !same_parent)
 				np->i_links_count--;
 			goto unwind;
+		}
+		if (inserted == EXT2_DIR_INSERT_PUBLISHED_PARENT_FAILED)
+		{
+			if (src_is_dir && !same_parent)
+			{
+				// Both names and the source's two links are durable now; an
+				// unwind would under-count them. The new parent's missing
+				// backlink count is structural, so stop with both names intact.
+				EXT2_ALARM("ext2: rename '%s' -> '%s' published the new name but parent inode %u link count could not be written — demoting mount to read-only\n",
+				           oldpath, newpath, new_parent_ino);
+				vfs_demote_mount_readonly(vfs_fs);
+				spinlock_release_irqrestore(&e->write_lock, lock_flags);
+				return -1;
+			}
+			EXT2_ALARM("ext2: rename '%s' -> '%s' published the new name, but parent inode %u mtime could not be written\n",
+			           oldpath, newpath, new_parent_ino);
 		}
 	}
 
