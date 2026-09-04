@@ -132,6 +132,22 @@ static int destination_path(const char *source, char out[GUNZIP_PATH_MAX])
     return wanted > 0 && wanted < (int32_t)GUNZIP_PATH_MAX ? 0 : -1;
 }
 
+static int same_resolved_name(const char *first, const char *second)
+{
+    os64_dirent_t first_entry = {0};
+    os64_dirent_t second_entry = {0};
+
+    if (os64_stat(first, &first_entry) < 0)
+        return -1;
+    if (os64_stat(second, &second_entry) < 0)
+        return 0;
+
+    // Both paths are siblings. Comparing the names returned by their mounted
+    // filesystem catches aliases under that filesystem's own lookup rules;
+    // in particular, FAT returns one stored name for case-folded spellings.
+    return os64_streq(first_entry.name, second_entry.name) ? 1 : 0;
+}
+
 static int32_t create_temporary(const char *target,
                                 char out[GUNZIP_PATH_MAX])
 {
@@ -162,8 +178,17 @@ static int32_t create_temporary(const char *target,
         if (os64_streq(out, target))
             continue;
         int64_t handle = os64_open(out, "x");
-        if (handle >= 0)
-            return (int32_t)handle;
+        if (handle >= 0) {
+            int aliases_target = same_resolved_name(out, target);
+            if (aliases_target == 0)
+                return (int32_t)handle;
+
+            int close_result = os64_close((int32_t)handle);
+            int unlink_result = os64_unlink(out);
+            if (aliases_target < 0 || close_result < 0 || unlink_result < 0)
+                return -1;
+            continue;
+        }
 
         os64_dirent_t existing = {0};
         if (os64_stat(out, &existing) < 0)
