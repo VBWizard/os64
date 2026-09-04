@@ -767,11 +767,17 @@ static http_head_result_t header_take(char *line, http_response_t *out)
         // different ones is a reply with no unambiguous destination at all —
         // an intermediary that combines or reorders the lines would send
         // another client somewhere else. The same answer given twice is one
-        // answer, as for Content-Length (Codex review of PR #60).
+        // answer, as for Content-Length. PRESENCE IS ITS OWN FLAG, because
+        // an empty value is a legal Location that names nowhere, and
+        // spelling "seen" as "non-empty" let `Location:` then `Location:
+        // /target` through while the reverse order was refused — the same
+        // reply, judged by field order (Codex review of PR #60, rounds 1
+        // and 2).
         char seen[HTTP_LINE_MAX];
         copy_span(seen, sizeof(seen), value, vlen);
-        if (out->location[0] != '\0')
+        if (out->hasLocation)
             return os64_streq(out->location, seen) ? HTTP_HEAD_OK : HTTP_HEAD_CONFLICT;
+        out->hasLocation = true;
         copy_span(out->location, sizeof(out->location), value, vlen);
     }
     return HTTP_HEAD_OK;
@@ -1032,6 +1038,12 @@ static int64_t body_read_counted(http_body_t *b, void *out, size_t cap)
 // end or a ';' opening a chunk extension, which is ignored whole: this code
 // defines none, and RFC 9112 §7.1.1 says a recipient that does not define one
 // ignores it. Anything else on the line is not a chunk size.
+//
+// THE BOUND IS THE VALUE, NOT THE DIGIT COUNT. The grammar is 1*HEXDIG, so
+// `00000000000000001` is a legal spelling of 1 and a digit cap refused it
+// (Codex review of PR #60, round 2); what no body can have is a size past
+// 2^64-1, which is caught as the arithmetic is about to lose it. Leading
+// zeros are bounded by the line buffer the size line arrives in.
 static bool chunk_size_parse(const char *line, uint64_t *size)
 {
     const char *p = line;
@@ -1044,11 +1056,10 @@ static bool chunk_size_parse(const char *line, uint64_t *size)
         else if (*p >= 'a' && *p <= 'f')  d = (uint64_t)(*p - 'a') + 10;
         else if (*p >= 'A' && *p <= 'F')  d = (uint64_t)(*p - 'A') + 10;
         else break;
-        // Sixteen hex digits fill a uint64_t; a seventeenth is a size no
-        // body can have and a number this arithmetic cannot hold.
-        if (++digits > 16)
+        if (value > (UINT64_MAX >> 4))
             return false;
         value = value << 4 | d;
+        digits++;
     }
     if (digits == 0)
         return false;

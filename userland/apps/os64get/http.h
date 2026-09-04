@@ -186,7 +186,8 @@ typedef struct {
     uint64_t length;                          // valid only when hasLength
     char     transferEncoding[HTTP_TOKEN_MAX];// "" = none said
     char     contentEncoding[HTTP_TOKEN_MAX]; // "" = identity, the only one this speaks
-    char     location[HTTP_LINE_MAX];         // "" = none said
+    bool     hasLocation;                     // a Location line was seen, even an empty one
+    char     location[HTTP_LINE_MAX];         // valid only when hasLocation; "" = it named nowhere
 } http_response_t;
 
 typedef enum {
