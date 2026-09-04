@@ -159,7 +159,7 @@ Offer `-vnc :0` instead of `-display none` if the human wants to peek.
 slirp is a perfect network: nothing is ever lost, reordered, duplicated or
 late, so `/sys/net/tcp`'s retransmit and out-of-order counters read zero on
 this harness forever, and the TCP debts they exist to adjudicate (RTT-measured
-RTO, reassembly, a send window) cannot be measured here. `tools/cable.py` puts
+RTO, a send window — and reassembly, until it was paid) cannot be measured here. `tools/cable.py` puts
 a cable with weather in it between the guest's NIC and slirp, using QEMU's
 `filter-redirector` (the COLO building block): every frame goes out to the
 cable over a loopback socket and the survivors come back in. No tap, no
@@ -200,6 +200,7 @@ move. The rig's first day (2026-09-02), same 100KB file, all CRC-verified:
 | `loss 0.1` both ways | 12s | `retransmits` |
 | `delay 100` `jitter 30` both ways, order kept | 2s | nothing — a download rides the peer's send window; what 200ms round trips cost an os64 *upload* (stop-and-wait) is the send-window debt's measurement, not taken yet |
 | `reorder 0.3` down | 29s | `out_of_order_dropped 49` on one connection — the price of v1's no-reassembly, measured |
+| `reorder 0.3` down, **after reassembly** (2026-09-04) | 1s | `out_of_order_held 34`, `out_of_order_dropped 0`, `retransmits 0`; the trunk kernel the same morning, same seed: 34s and 47 dropped. Both files CRC-verified |
 | `dup 0.2` down | — | `duplicates_dropped` |
 
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order

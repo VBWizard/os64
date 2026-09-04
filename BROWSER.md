@@ -312,7 +312,7 @@ flag someday — not this tool.
 
 ## NOT in the ladder's lane (Fable-tier — do not start these)
 
-- **Any change to tcp.c's protocol behavior**: reassembly buffer, window
+- **Any change to tcp.c's protocol behavior**: window
   scaling (RFC 1323), RTT-measured RTO (Jacobson), send window, LISTEN.
   Counter-driven, concurrency-heavy, and the review tier is Fable +
   Codex-by-Chris's-hand. The eyes exist so these are paid at the right
