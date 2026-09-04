@@ -274,7 +274,7 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
     // explicit list lets a server choose gzip without licensing br, compress,
     // or another envelope that would otherwise have to be refused afterward.
     int32_t n = os64_snprintf(out, cap,
-                              "GET %s HTTP/1.0\r\n"
+                              "GET %s HTTP/1.1\r\n"
                               "Host: %s\r\n"
                               "User-Agent: os64get/1 (os64)\r\n"
                               "Accept-Encoding: gzip, identity\r\n"
@@ -285,29 +285,115 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 }
 
 
+// DOES THIS REFERENCE NAME ITS OWN SCHEME? RFC 3986 §3.1's grammar exactly: a
+// letter, then letters, digits, '+', '-' and '.', ended by a colon — and the
+// search stops at the first '/', '?' or '#', because a colon past one of
+// those is a byte of the path or query, not a scheme's punctuation.
+//
+// The whole difficulty lives in that stopping rule. This used to be "does the
+// string contain '://'", which made `/login?next=https://id.example/` — an
+// ordinary root-relative redirect carrying a URL in its query — look like an
+// absolute reference, and the advice printed the query's contents as the
+// address to fetch (Codex review round 3, 2026-09-02). Asking the URL parser
+// instead fixed that one and left `mailto:someone@example.com` looking
+// relative, which joined it onto the base and produced a plausible, wrong
+// http address for something that was never a page at all. The grammar
+// answers both.
+//
+// THE STRICT READING, where RFC 3986 §5.4.2 offers two. `http:page.html`
+// names the scheme http and the opaque path "page.html"; browsers and
+// urllib join it to the base instead, for compatibility with references
+// written before 1998. Read strictly it is an address os64get cannot fetch
+// and says so; read loosely it is a guess about what a malformed header
+// meant. A fetch that guesses wrong downloads the wrong page and calls it
+// success, so this guesses not at all.
+static bool reference_has_scheme(const char *ref)
+{
+    if (!is_alpha(ref[0]))
+        return false;               // a scheme starts with a letter, always
+    for (const char *p = ref; *p != '\0'; p++) {
+        if (*p == ':')
+            return true;
+        if (*p == '/' || *p == '?' || *p == '#')
+            return false;
+        if (!is_alpha(*p) && !is_digit(*p) && *p != '+' && *p != '-' && *p != '.')
+            return false;
+    }
+    return false;
+}
+
+// The longest path this file ever builds: a base's whole path with a whole
+// Location joined onto it, before the dot segments come out.
+#define HTTP_JOIN_MAX (HTTP_PATH_MAX + HTTP_LINE_MAX + 2)
+
+// RFC 3986 §5.2.4: resolve away the "." and ".." segments a merge just
+// created. Written as the segment walk the spec describes rather than the
+// spec's own five-case string rewrite, because the walk is the thing anybody
+// reading this can check: split on '/', drop a ".", pop the previous segment
+// for a "..", and keep everything else.
+//
+// TWO EDGES DECIDE WHETHER THIS IS RIGHT. A ".." at the very top pops
+// nothing — the leading '/' is a floor, so `/..` is `/` and not an escape
+// upwards into somebody's parent directory. And a "." or ".." that ends the
+// path leaves a trailing '/' behind it (`/a/b/..` is `/a/`, which is a
+// DIRECTORY, not the file `/a`), because the segment it replaced was there.
+// An empty segment is data and is kept: `//x` names something a server may
+// well serve, and is not `/x`.
+static bool path_dots(const char *in, char *out, size_t cap)
+{
+    size_t len = 0;
+    const char *p = in;
+
+    if (*p == '/')
+        p++;                          // the leading empty segment: the root
+
+    for (;;) {
+        const char *seg = p;
+        while (*p != '\0' && *p != '/')
+            p++;
+        size_t n = (size_t)(p - seg);
+        bool last = (*p == '\0');
+        if (!last)
+            p++;
+
+        if (n == 1 && seg[0] == '.') {
+            n = 0;                    // dropped; if it ended the path, its '/' stays
+            if (!last)
+                continue;
+        } else if (n == 2 && seg[0] == '.' && seg[1] == '.') {
+            while (len > 0 && out[len - 1] != '/')
+                len--;
+            if (len > 0)
+                len--;                // and the '/' that introduced it
+            n = 0;
+            if (!last)
+                continue;
+        }
+
+        if (len + 1 + n + 1 > cap)
+            return false;
+        out[len++] = '/';
+        for (size_t i = 0; i < n; i++)
+            out[len++] = seg[i];
+        if (last)
+            break;
+    }
+
+    out[len] = '\0';
+    return true;
+}
+
 bool http_url_absolute(const http_url_t *base, const char *location,
                        char *out, size_t cap)
 {
     if (location == NULL || location[0] == '\0')
         return false;
 
-    // ALREADY WHOLE? ASK THE PARSER, which is the one place that knows what a
-    // URL looks like. This used to scan the whole string for "://" and take
-    // the first hit, so `/login?next=https://id.example/` — an ordinary
-    // root-relative redirect carrying a URL in its query — was mistaken for
-    // an absolute reference and printed back unchanged. The command it
-    // produced then read as the valet dialect and was refused, which is a
-    // long way round to giving somebody no help at all.
-    //
-    // http_url_parse already answers this correctly (the bytes before the
-    // "://" must all be scheme-legal, and `/`, `?` and `=` are not), and
-    // asking it rather than re-deciding here is what keeps ONE definition of
-    // a URL in this file. NOT_A_URL means relative; anything else means the
-    // reference names its own scheme, including one this program cannot
-    // fetch — the caller wants to SAY what the address is, not dial it.
-    // (Codex review round 3, 2026-09-02.)
-    http_url_t probe;
-    if (http_url_parse(location, &probe) != HTTP_URL_NOT_A_URL)
+    // ALREADY WHOLE: copied through as written, whatever it names. Dot
+    // segments inside it are left alone on purpose — a reference that names
+    // its own origin is describing a path on somebody else's filesystem, and
+    // what `/a/../b` means there is that server's business, not ours.
+    if (reference_has_scheme(location))
         return os64_strcopy(out, cap, location) < cap;
 
     // A SCHEME-RELATIVE REFERENCE — `//cdn.example.com/file` — NAMES A
@@ -317,27 +403,82 @@ bool http_url_absolute(const http_url_t *base, const char *location,
     // back at the server that just redirected away from itself, which would
     // fetch something unrelated and look like it worked. Only the scheme is
     // inherited; the authority comes from the reference. (RFC 3986 §4.2, and
-    // Codex review round 2, 2026-09-02.)
+    // Codex review round 2, 2026-09-02.) Its path rides along as written,
+    // for the reason the branch above leaves one alone: it belongs to the
+    // origin the reference itself names.
     if (location[0] == '/' && location[1] == '/') {
         int32_t n = os64_snprintf(out, cap, "%s:%s", base->scheme, location);
         return n > 0 && (size_t)n < cap;
     }
 
-    if (location[0] != '/')
-        return false;                 // relative to the page: not ours to resolve
+    // ── Everything left is relative to the page that answered ───────────
+    // RFC 3986 §5.2.2, for the case where the reference brings no scheme and
+    // no authority: the origin is inherited whole, and only the path and
+    // query are worked out. The fragment is cut off first — it names a place
+    // inside the document and has never crossed the wire.
+    char ref[HTTP_LINE_MAX];
+    size_t reflen = 0;
+    while (location[reflen] != '\0' && location[reflen] != '#')
+        reflen++;
+    if (reflen >= sizeof(ref))
+        return false;
+    copy_span(ref, sizeof(ref), location, reflen);
 
-    // The origin that just answered, plus the path it named — KEEPING THAT
-    // ORIGIN'S SCHEME. Hard-coding http here sent an https page's `/login`
-    // redirect back as `http://host:443/login`: plaintext at a TLS port, an
-    // address that cannot work, printed as a command to copy. The port rides
-    // along only when it is not the default FOR THAT SCHEME, for the same
-    // reason the Host header omits it. (Codex review, 2026-09-02.)
+    // Both sides split at their query, because a '?' ends the path and every
+    // rule below is about paths. `..` inside a query is a byte, not a step.
+    const char *baseQuery = base->path;
+    while (*baseQuery != '\0' && *baseQuery != '?')
+        baseQuery++;
+    size_t basePathLen = (size_t)(baseQuery - base->path);
+
+    const char *refQuery = ref;
+    while (*refQuery != '\0' && *refQuery != '?')
+        refQuery++;
+    size_t refPathLen = (size_t)(refQuery - ref);
+
+    char path[HTTP_JOIN_MAX];
+    const char *query;
+
+    if (refPathLen == 0) {
+        // `?page=2`, or a reference that was nothing but a fragment: the page
+        // stays, and only the question changes. With no '?' of its own the
+        // reference is the SAME address, which is a redirect in a circle —
+        // said plainly by whoever compares them, not papered over here.
+        copy_span(path, sizeof(path), base->path, basePathLen);
+        query = (*refQuery == '?') ? refQuery : baseQuery;
+    } else {
+        char joined[HTTP_JOIN_MAX];
+        if (ref[0] == '/') {
+            copy_span(joined, sizeof(joined), ref, refPathLen);
+        } else {
+            // §5.2.3's merge: the base path up to and INCLUDING its last
+            // '/', then the reference. `/a/b.html` + `c.html` is `/a/c.html`
+            // — the page's directory, not the page.
+            size_t cut = basePathLen;
+            while (cut > 0 && base->path[cut - 1] != '/')
+                cut--;
+            if (cut + refPathLen + 1 > sizeof(joined))
+                return false;
+            copy_span(joined, sizeof(joined), base->path, cut);
+            copy_span(joined + cut, sizeof(joined) - cut, ref, refPathLen);
+        }
+        if (!path_dots(joined, path, sizeof(path)))
+            return false;
+        query = refQuery;
+    }
+
+    // The origin that just answered, KEEPING THAT ORIGIN'S SCHEME.
+    // Hard-coding http here sent an https page's `/login` redirect back as
+    // `http://host:443/login`: plaintext at a TLS port, an address that
+    // cannot work, printed as a command to copy. The port rides along only
+    // when it is not the default FOR THAT SCHEME, for the same reason the
+    // Host header omits it. (Codex review, 2026-09-02.)
     int32_t n;
     if (base->port != scheme_default_port(base->scheme))
-        n = os64_snprintf(out, cap, "%s://%s:%u%s", base->scheme, base->host,
-                          (unsigned)base->port, location);
+        n = os64_snprintf(out, cap, "%s://%s:%u%s%s", base->scheme, base->host,
+                          (unsigned)base->port, path, query);
     else
-        n = os64_snprintf(out, cap, "%s://%s%s", base->scheme, base->host, location);
+        n = os64_snprintf(out, cap, "%s://%s%s%s", base->scheme, base->host, path, query);
     return n > 0 && (size_t)n < cap;
 }
 
@@ -432,10 +573,11 @@ static line_result_t line_read(http_stream_t *s, char *out, size_t cap,
 
 // ── The answer ──────────────────────────────────────────────────────────
 
-// "HTTP/1.1 404 Not Found" — the version is read and ignored (we asked in
-// 1.0; what a server calls itself changes nothing this code does), the code
-// must be exactly three digits, and the reason phrase is the server's own
-// words, kept so a refusal can be reported in them rather than in ours.
+// "HTTP/1.1 404 Not Found" — the version is read and ignored (a 1.0 server
+// answers a 1.1 request with a 1.0 reply, and every framing either may use is
+// one http_body_read reads), the code must be exactly three digits, and the
+// reason phrase is the server's own words, kept so a refusal can be reported
+// in them rather than in ours.
 static bool status_parse(const char *line, http_response_t *out)
 {
     if (line[0] != 'H' || line[1] != 'T' || line[2] != 'T' || line[3] != 'P' || line[4] != '/')
@@ -467,10 +609,15 @@ static bool status_parse(const char *line, http_response_t *out)
     return true;
 }
 
-// Store a coding name once. A SECOND, DIFFERENT answer to the same question
-// is refused rather than resolved: which of two Transfer-Encodings a stream
-// is in has no correct guess, and guessing wrong writes a file of framing
-// bytes.
+// Store a coding name. A SECOND, DIFFERENT answer to the same question is
+// refused rather than resolved: which of two Transfer-Encodings a stream is
+// in has no correct guess, and guessing wrong writes a file of framing bytes.
+// THE SAME answer twice is not a conflict, it is a LIST — RFC 7230 §3.2.2
+// joins repeated field lines with commas, so two `Content-Encoding: gzip`
+// lines say `gzip, gzip`: encoded twice. The list is kept as the value, so
+// the caller meets a coding it does not speak and refuses it by name,
+// instead of undoing one layer and publishing the other as the page (Codex
+// review of PR #54, 2026-09-03).
 //
 // THE VALUE IS JUDGED BEFORE IT IS STORED, because the slot is small and
 // "absent" is spelled by an empty slot. An EMPTY value stored there read as
@@ -480,8 +627,8 @@ static bool status_parse(const char *line, http_response_t *out)
 // (Codex review round 7, 2026-09-03). A value LONGER than the slot used to
 // be folded into it truncated, so two different long values compared equal
 // and a truncated name matched nothing — safe only by accident. A coding
-// this program will act on is a short word; one that does not fit is a
-// framing header it cannot read, and says so.
+// this program will act on is a short word; one that does not fit, or a
+// list that no longer does, is a framing header it cannot read, and says so.
 static http_head_result_t coding_take(char *slot, size_t cap, const char *value, size_t vlen)
 {
     if (vlen == 0)
@@ -491,9 +638,19 @@ static http_head_result_t coding_take(char *slot, size_t cap, const char *value,
 
     char folded[HTTP_TOKEN_MAX];
     copy_lower(folded, sizeof(folded), value, vlen);
-    if (slot[0] != '\0')
-        return os64_streq(slot, folded) ? HTTP_HEAD_OK : HTTP_HEAD_CONFLICT;
-    os64_strcopy(slot, cap, folded);
+    if (slot[0] == '\0') {
+        os64_strcopy(slot, cap, folded);
+        return HTTP_HEAD_OK;
+    }
+    if (!os64_streq(slot, folded))
+        return HTTP_HEAD_CONFLICT;
+
+    size_t have = os64_strlen(slot);
+    if (have + 2 + vlen >= cap)
+        return HTTP_HEAD_FRAMING;
+    slot[have] = ',';
+    slot[have + 1] = ' ';
+    os64_strcopy(slot + have + 2, cap - have - 2, folded);
     return HTTP_HEAD_OK;
 }
 
@@ -743,4 +900,228 @@ int64_t http_stream_read(http_stream_t *s, void *out, size_t cap)
     os64_memcpy(out, s->buf + s->next, n);
     s->next += n;
     return (int64_t)n;
+}
+
+// ── The body, with its framing taken off ────────────────────────────────
+
+// Where a chunked reader is between calls. The framing is a grammar
+// (RFC 9112 §7.1) — size line, data, CRLF, repeat; a zero size, then trailer
+// lines to a blank one — and a read may hand the caller only part of one
+// chunk's data, so the position has to outlive the call.
+enum {
+    CHUNK_SIZE = 0,   // a chunk-size line is next
+    CHUNK_DATA,       // inside chunk-data, `remaining` bytes to go
+    CHUNK_DATA_END,   // the CRLF that closes a chunk's data is next
+    CHUNK_TRAILER,    // after the last chunk: trailer lines until a blank one
+    CHUNK_FINISHED
+};
+
+bool http_body_open(http_body_t *b, http_stream_t *s, const http_response_t *reply)
+{
+    os64_memset(b, 0, sizeof(*b));
+    b->s = s;
+    b->result = HTTP_BODY_OPEN;
+
+    if (reply->transferEncoding[0] != '\0' &&
+        !os64_streq_nocase(reply->transferEncoding, "identity")) {
+        if (!os64_streq_nocase(reply->transferEncoding, "chunked"))
+            return false;
+        b->framing = HTTP_FRAMING_CHUNKED;
+        b->state = CHUNK_SIZE;
+        return true;
+    }
+    if (reply->hasLength) {
+        b->framing = HTTP_FRAMING_LENGTH;
+        b->remaining = reply->length;
+        return true;
+    }
+    b->framing = HTTP_FRAMING_CLOSE;
+    return true;
+}
+
+static int64_t body_finish(http_body_t *b, http_body_result_t rc)
+{
+    b->result = rc;
+    return (rc == HTTP_BODY_DONE || rc == HTTP_BODY_CUT) ? 0 : -1;
+}
+
+// Read `cap` bytes at most of the current chunk's data (or of a length-framed
+// body — the same arithmetic). Ending here is a CUT: the peer promised more.
+static int64_t body_read_counted(http_body_t *b, void *out, size_t cap)
+{
+    if (b->remaining < (uint64_t)cap)
+        cap = (size_t)b->remaining;
+    int64_t n = http_stream_read(b->s, out, cap);
+    if (n < 0)
+        return body_finish(b, HTTP_BODY_BROKE);
+    if (n == 0)
+        return body_finish(b, HTTP_BODY_CUT);
+    b->remaining -= (uint64_t)n;
+    b->delivered += (uint64_t)n;
+    return n;
+}
+
+// "1a2f;ext=val" → 0x1a2f. Hex digits, then optional blanks, then either the
+// end or a ';' opening a chunk extension, which is ignored whole: this code
+// defines none, and RFC 9112 §7.1.1 says a recipient that does not define one
+// ignores it. Anything else on the line is not a chunk size.
+static bool chunk_size_parse(const char *line, uint64_t *size)
+{
+    const char *p = line;
+    uint64_t value = 0;
+    size_t digits = 0;
+
+    for (;; p++) {
+        uint64_t d;
+        if (is_digit(*p))                 d = (uint64_t)(*p - '0');
+        else if (*p >= 'a' && *p <= 'f')  d = (uint64_t)(*p - 'a') + 10;
+        else if (*p >= 'A' && *p <= 'F')  d = (uint64_t)(*p - 'A') + 10;
+        else break;
+        // Sixteen hex digits fill a uint64_t; a seventeenth is a size no
+        // body can have and a number this arithmetic cannot hold.
+        if (++digits > 16)
+            return false;
+        value = value << 4 | d;
+    }
+    if (digits == 0)
+        return false;
+    while (is_blank(*p))
+        p++;
+    if (*p != '\0' && *p != ';')
+        return false;
+    *size = value;
+    return true;
+}
+
+// A token, then a colon, somewhere. Enough to tell a trailer field from junk
+// without parsing what this code does not read.
+static bool field_line_shaped(const char *line)
+{
+    if (!is_token_byte(line[0]))
+        return false;
+    for (const char *p = line; *p != '\0'; p++)
+        if (*p == ':')
+            return true;
+    return false;
+}
+
+static int64_t body_read_chunked(http_body_t *b, void *out, size_t cap)
+{
+    char line[HTTP_LINE_MAX];
+    size_t consumed;
+
+    for (;;) {
+        switch (b->state) {
+        case CHUNK_SIZE: {
+            line_result_t r = line_read(b->s, line, sizeof(line), sizeof(line), &consumed);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r == LINE_NUL)   return body_finish(b, HTTP_BODY_SYNTAX);
+            if (r == LINE_LONG)  return body_finish(b, HTTP_BODY_TOO_MUCH);
+            uint64_t size;
+            if (!chunk_size_parse(line, &size))
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            if (size == 0) {
+                b->state = CHUNK_TRAILER;
+                break;
+            }
+            b->remaining = size;
+            b->state = CHUNK_DATA;
+            break;
+        }
+        case CHUNK_DATA: {
+            int64_t n = body_read_counted(b, out, cap);
+            if (n > 0 && b->remaining == 0)
+                b->state = CHUNK_DATA_END;
+            return n;
+        }
+        case CHUNK_DATA_END: {
+            // Exactly a line terminator. The budget of two is the length of
+            // CRLF: a third byte before the newline is data the size line
+            // did not count, and line_read reports it as an over-long line.
+            line_result_t r = line_read(b->s, line, sizeof(line), 2, &consumed);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r != LINE_OK || line[0] != '\0')
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            b->state = CHUNK_SIZE;
+            break;
+        }
+        case CHUNK_TRAILER: {
+            // Trailer fields are read to find their end and otherwise
+            // ignored: nothing this program does depends on one, and a
+            // sender may not put framing there (RFC 9110 §6.5.1). Bounded
+            // exactly as the head is, or the trailer is the endless-head
+            // attack wearing a different hat. An over-long trailer line is
+            // dropped, as an over-long non-framing header is.
+            line_result_t r = line_read(b->s, line, sizeof(line),
+                                        HTTP_HEAD_MAX - b->trailerUsed + 1, &consumed);
+            b->trailerUsed += consumed;
+            if (b->trailerUsed > HTTP_HEAD_MAX)
+                return body_finish(b, HTTP_BODY_TOO_MUCH);
+            if (r == LINE_END)   return body_finish(b, HTTP_BODY_CUT);
+            if (r == LINE_ERROR) return body_finish(b, HTTP_BODY_BROKE);
+            if (r == LINE_NUL)   return body_finish(b, HTTP_BODY_SYNTAX);
+            if (r == LINE_OK && line[0] == '\0') {
+                b->state = CHUNK_FINISHED;
+                return body_finish(b, HTTP_BODY_DONE);
+            }
+            if (b->trailers >= HTTP_HEADERS_MAX)
+                return body_finish(b, HTTP_BODY_TOO_MUCH);
+            b->trailers++;
+            // The shape of a field line, checked so far as it costs nothing:
+            // a name, a colon. A line beginning with whitespace is obs-fold,
+            // refused here for the reason the head refuses it.
+            if (r == LINE_OK && !field_line_shaped(line))
+                return body_finish(b, HTTP_BODY_SYNTAX);
+            break;
+        }
+        default:
+            return body_finish(b, HTTP_BODY_DONE);
+        }
+    }
+}
+
+int64_t http_body_read(http_body_t *b, void *out, size_t cap)
+{
+    if (b->result != HTTP_BODY_OPEN)
+        return (b->result == HTTP_BODY_DONE || b->result == HTTP_BODY_CUT) ? 0 : -1;
+    if (cap == 0)
+        return 0;
+
+    switch (b->framing) {
+    case HTTP_FRAMING_LENGTH:
+        if (b->remaining == 0)
+            return body_finish(b, HTTP_BODY_DONE);
+        {
+            int64_t n = body_read_counted(b, out, cap);
+            if (n > 0 && b->remaining == 0)
+                b->result = HTTP_BODY_DONE;   // the next call answers 0
+            return n;
+        }
+    case HTTP_FRAMING_CHUNKED:
+        return body_read_chunked(b, out, cap);
+    default: {
+        int64_t n = http_stream_read(b->s, out, cap);
+        if (n < 0)
+            return body_finish(b, HTTP_BODY_BROKE);
+        if (n == 0)
+            return body_finish(b, HTTP_BODY_DONE);
+        b->delivered += (uint64_t)n;
+        return n;
+    }
+    }
+}
+
+const char *http_body_reason(http_body_result_t rc)
+{
+    switch (rc) {
+    case HTTP_BODY_OPEN:     return "the body is still arriving";
+    case HTTP_BODY_DONE:     return "the body arrived whole";
+    case HTTP_BODY_CUT:      return "the connection closed before the body was whole";
+    case HTTP_BODY_BROKE:    return "the connection broke";
+    case HTTP_BODY_SYNTAX:   return "the chunk framing is not chunk framing";
+    case HTTP_BODY_TOO_MUCH: return "more chunk framing than this will read";
+    }
+    return "unknown";
 }

@@ -1,7 +1,7 @@
 #ifndef OS64GET_HTTP_H
 #define OS64GET_HTTP_H
 
-// http.h — enough of HTTP/1.0 (RFC 1945) to ask a stranger on port 80 for a
+// http.h — enough of HTTP/1.1 (RFC 9112) to ask a stranger on port 80 for a
 // file and know whether what came back is one.
 //
 // WHY IT IS ITS OWN FILE. os64get speaks two dialects now: the valet's
@@ -22,11 +22,17 @@
 // network is a parser nobody drives across those boundaries.
 //
 // DELIBERATELY NOT HERE, each a rung of BROWSER.md's ladder or a ruling of
-// its own: chunked transfer-encoding, redirects, content codings beyond gzip,
+// its own: content codings beyond gzip, transfer codings other than chunked,
 // authentication, cookies, keep-alive, IPv6 literals. What is missing is
 // REFUSED BY NAME rather than mis-read: a response this code cannot honestly
 // turn into a file must never become a file. gzip decoding stays in the
 // caller because http.c is the transport parser; libgzip owns that format.
+//
+// WHAT A REDIRECT MEANS IS NOT HERE EITHER, and that split is on purpose:
+// this file answers "where does that Location point", which is arithmetic on
+// addresses (http_url_absolute), and the caller answers "and may I go
+// there", which depends on the machine — whether a proxy is configured, how
+// many hops have been spent, whether the answer points back at itself.
 //
 // TLS IS NOT HERE EITHER AND NEVER WILL BE — os64 borrows a TLS when its day
 // comes, because thirty years of side-channel and oracle attacks teach no
@@ -67,6 +73,12 @@
 #define HTTP_REASON_MAX    64
 #define HTTP_TOKEN_MAX     32     // a coding name: "chunked", "gzip", "identity"
 
+// The longest address http_url_absolute can spell: a base's scheme and host,
+// with a whole Location header joined onto its path. Every buffer an
+// absolute-form address is written into is this size, so the ones that must
+// agree cannot drift apart.
+#define HTTP_URL_TEXT_MAX  (HTTP_SCHEME_MAX + HTTP_HOST_MAX + HTTP_PATH_MAX + HTTP_LINE_MAX + 16)
+
 // The read buffer. Big enough that a whole response head usually arrives in
 // one os64_read, and the leftover tail of that read is where the body starts
 // — which is why the stream, not the caller, owns it (see http_stream_read).
@@ -105,12 +117,15 @@ http_url_result_t http_url_parse(const char *url, http_url_t *out);
 // sentence than a generic refusal.
 const char *http_url_reason(http_url_result_t rc);
 
-// Build the request. HTTP/1.0 on purpose: a server may not answer a 1.0
-// client with chunked encoding, so asking in 1.0 is what keeps this rung of
-// the ladder honestly self-contained. `Host:` is 1.1's header, sent anyway
-// because name-based virtual hosting means a request without it reaches
-// whatever the address answers with by default — usually not the page asked
-// for.
+// Build the request. HTTP/1.1, and the version is a promise about what the
+// reply may look like: a 1.1 client must read chunked framing, because a 1.1
+// server may answer any request with it (a 1.0 client is owed a length or a
+// close, which is what this asked for until http_body_read learned chunks).
+// `Connection: close` is sent because keep-alive is not spoken here — one
+// request, one connection, and a reply framed by neither length nor chunks
+// still ends at the close. `Host:` because name-based virtual hosting means a
+// request without it reaches whatever the address answers with by default —
+// usually not the page asked for.
 //
 // `absoluteForm` puts the WHOLE URL in the request line instead of the path,
 // which is what a proxy needs to know which origin the request is for (RFC
@@ -124,16 +139,24 @@ bool http_request(char *out, size_t cap, const http_url_t *url, bool absoluteFor
 bool http_url_render(const http_url_t *url, char *out, size_t cap);
 
 
-// Spell a `Location:` as a WHOLE address, given the URL it arrived from.
-// Handles the two forms a redirect actually uses: an absolute URL (copied
-// through) and an absolute path (joined to the origin that just answered).
-// Returns false for a genuinely relative reference (`page.html`, `../up`) —
-// resolving those is RFC 3986's full algorithm and belongs to the increment
-// that follows redirects for real; saying "I cannot spell this one" is the
-// honest answer until then, and a better one than a plausible guess.
+// Spell a `Location:` as a WHOLE address, given the URL it arrived from —
+// RFC 3986 §5.2's reference resolution, which is what a redirect header is
+// written in. Every form a server actually sends resolves: an absolute URL
+// (`http://other/x`), a scheme-relative one (`//cdn/x`), an absolute path
+// (`/login`), a path relative to the page (`page.html`, `../up/`), a
+// query-only reference (`?page=2`) and a fragment-only one (which names the
+// page it came from). `.` and `..` are resolved away where a merge with the
+// base's path created them.
 //
-// This exists for a DIAGNOSTIC: a message telling someone to fetch an
-// address owes them one they can actually type.
+// A reference that names its OWN scheme is copied through untouched, even
+// one this program could never fetch (`mailto:`, `ftp://`) — what the
+// address IS and whether to go there are different questions, and the second
+// belongs to the caller.
+//
+// Returns false only when the answer will not fit in `cap` or the reference
+// is empty. An empty `Location` names no address at all: RFC 3986 would read
+// it as "the page you already have", and a redirect to the page you already
+// have is a server that has lost its place.
 bool http_url_absolute(const http_url_t *base, const char *location,
                        char *out, size_t cap);
 // ── A stream of bytes that arrives in whatever pieces it likes ──────────
@@ -185,10 +208,65 @@ http_head_result_t http_head_read(http_stream_t *s, http_response_t *out);
 
 const char *http_head_reason(http_head_result_t rc);
 
-// Body bytes, in whatever quantity is to hand: > 0 got some, 0 the peer is
-// done, < 0 the connection broke. Serves what the head-read over-read first,
-// so no byte of the body is ever lost to the header buffer — a stream has no
-// message boundaries, and this is where that fact is paid for.
+// Raw bytes after the head, in whatever quantity is to hand: > 0 got some, 0
+// the peer is done, < 0 the connection broke. Serves what the head-read
+// over-read first, so no byte of the body is ever lost to the header buffer —
+// a stream has no message boundaries, and this is where that fact is paid
+// for. The body reader below is built on it; a caller wanting the BODY rather
+// than the wire goes through that.
 int64_t http_stream_read(http_stream_t *s, void *out, size_t cap);
+
+// ── The body, with its framing taken off ────────────────────────────────
+//
+// HTTP has three ways of saying where a body ends, and a reply picks one:
+// a Content-Length (count the bytes), chunked transfer coding (the body
+// arrives as sized pieces and a zero-sized piece is the end — HTTP/1.1's
+// answer for a page whose length is not known when its head is sent), or
+// neither, in which case the close IS the end (HTTP/1.0's original framing,
+// RFC 1945 §7.2.2). The first two can tell a complete body from a cut one;
+// the third cannot, which is the whole reason the other two were invented.
+
+typedef enum {
+    HTTP_FRAMING_CLOSE = 0,
+    HTTP_FRAMING_LENGTH,
+    HTTP_FRAMING_CHUNKED
+} http_framing_t;
+
+typedef enum {
+    HTTP_BODY_OPEN = 0,   // still reading
+    HTTP_BODY_DONE,       // the framing was satisfied: every byte promised arrived
+    HTTP_BODY_CUT,        // the peer closed before it had
+    HTTP_BODY_BROKE,      // the connection failed
+    HTTP_BODY_SYNTAX,     // chunk framing that is not chunk framing
+    HTTP_BODY_TOO_MUCH    // a chunk-size line or trailer section beyond the caps
+} http_body_result_t;
+
+typedef struct {
+    http_stream_t     *s;
+    http_framing_t     framing;
+    http_body_result_t result;
+    uint64_t           delivered;   // body bytes handed to the caller so far
+    uint64_t           remaining;   // LENGTH: of the body; CHUNKED: of this chunk
+    uint8_t            state;       // CHUNKED's position (private to http.c)
+    size_t             trailerUsed; // CHUNKED: trailer bytes read, against HTTP_HEAD_MAX
+    size_t             trailers;    // CHUNKED: trailer lines read, against HTTP_HEADERS_MAX
+} http_body_t;
+
+// Decide the framing from the head and position the reader at the body.
+// Returns false when the reply names a transfer coding this code cannot undo
+// (anything but chunked or identity) — the caller refuses that by name, and
+// nothing is read. A Content-Length beside a transfer coding never reaches
+// here; http_head_read calls it a CONFLICT.
+bool http_body_open(http_body_t *b, http_stream_t *s, const http_response_t *reply);
+
+// Body bytes, framing removed: > 0 got some; 0 the body is over, and
+// `b->result` says whether it ended (DONE) or was merely stopped (CUT); < 0
+// it cannot go on, and `b->result` says why (BROKE, SYNTAX, TOO_MUCH). Never
+// hands back a byte of chunk framing, and never returns 0 for a chunked body
+// before its terminating chunk and trailer section have been read — so a
+// caller that sees 0 with DONE has a WHOLE file.
+int64_t http_body_read(http_body_t *b, void *out, size_t cap);
+
+const char *http_body_reason(http_body_result_t rc);
 
 #endif // OS64GET_HTTP_H

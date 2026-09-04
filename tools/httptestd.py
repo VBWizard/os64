@@ -38,6 +38,7 @@ that costs an afternoon if it is not said out loud:
 
 Routes, and what each is FOR:
 
+    /               this text                              the map, served
     /hello.txt      a small text file, Content-Length      the happy path
     /big.bin        1 MiB, Content-Length                  the 64KB write loop
     /slow.txt       Content-Length, dribbled out           the progress meter
@@ -45,12 +46,22 @@ Routes, and what each is FOR:
     /dir/           a page at a path ending in '/'         the index.html rule
     /query?x=1&y=2  a page behind a query string           the query survives
     /missing        404                                    a refusal
-    /redirect       301 -> /hello.txt                      reported, not followed
+    /redirect       301 -> /hello.txt                      the ordinary hop
+    /redirect/N     301 -> /redirect/N-1, then /hello.txt  a trail, and the hop cap
+    /redirect-page  302 -> hello.txt (page-relative)        RFC 3986 §5.2's merge
+    /redirect-303   303 -> /hello.txt                      "GET this instead"
+    /redirect-307   307 -> /hello.txt                      the method-keeping pair
+    /redirect-308   308 -> /hello.txt                      ditto, permanent
+    /redirect-loop  302 -> itself                          a circle, named as one
+    /redirect-none  302 with no Location                   nowhere to go
+    /redirect-300   300 + Location                         a choice, not an order
+    /redirect-305   305 + Location                         "use my proxy": refused
     /redirect-https 302 -> an https:// address              the honest TLS answer
-    /redirect-tricky 302 -> /hello.txt;reboot               the advice quotes it
-    /redirect-relative 302 -> //example.com/elsewhere       resolved before judged
+    /redirect-tricky 302 -> /hello.txt;reboot               a path, never a command
+    /redirect-relative 302 -> //example.com/elsewhere       scheme-relative, off-host
     /redirect-broken 302 -> /bad path                       unusable, said so
-    /chunked        Transfer-Encoding: chunked             refused, not written
+    /redirect-mail  302 -> mailto:...                       not a page at all
+    /chunked        200000 bytes chunked, ext + trailer    the framing comes off
     /dots/..        a URL with no usable basename          DEST must still be honored
     /chunked-cut    chunked, terminator never sent         truncation must not pass
     /framing-spaced that framing, plus a blank before the colon
@@ -61,6 +72,9 @@ Routes, and what each is FOR:
     /gzip-corrupt   gzip with a bad trailer CRC            kept only as .part
     /gzip-trailing  valid gzip followed by junk            kept only as .part
     /gzip-limit     1 MiB + 1 decoded zero byte            expansion refused
+    /gzip-chunked   gzip inside chunked framing            both envelopes come off
+    /gzip-twice     Content-Encoding: gzip, on two lines   encoded twice: refused by name
+    /gzip-cut       half a length-framed gzip, then close  a short body, not a bad one
     /cut            half the promised body, then hangs up  a short body is a failure
     /junk           not HTTP at all                        a bad header line
     /reason-latin1  404 with a Latin-1 reason phrase       high bytes are glyphs
@@ -122,6 +136,25 @@ def big_bytes(size=1024 * 1024, seed=0x05064A17):
 
 
 BIG = big_bytes()
+CHUNKED = BIG[:200000]
+INDEX = (__doc__.strip() + "\n").encode("utf-8")
+
+
+def chunked(body, sizes):
+    """`body` in chunked transfer coding, cut at `sizes` (cycled), with a
+    chunk extension on the first piece and one trailer field — the optional
+    parts of the grammar, so a client that only reads the mandatory ones is
+    found out here rather than by the first real server that uses them."""
+    out = b""
+    at = 0
+    i = 0
+    while at < len(body):
+        n = min(sizes[i % len(sizes)], len(body) - at)
+        size = f"{n:x}" + (";os64=first" if i == 0 else "")
+        out += size.encode() + b"\r\n" + body[at:at + n] + b"\r\n"
+        at += n
+        i += 1
+    return out + b"0\r\nX-Body-Bytes: %d\r\n\r\n" % len(body)
 
 
 def gzip_bytes(chunks):
@@ -141,6 +174,12 @@ GZIP_CORRUPT = bytes(GZIP_CORRUPT)
 # The compressed stream is far below 1/100 of its decoded size, so os64get's
 # ratio rule reaches its 1 MiB floor. One byte more proves the exact boundary.
 GZIP_LIMIT = gzip_bytes([bytes(1024 * 1024), b"\0"])
+# Two Content-Encoding: gzip lines say `gzip, gzip` (RFC 7230 §3.2.2), and a
+# body that honours it is gzipped twice. One decoder pass leaves a gzip file
+# wearing the page's name; the client must refuse the list, not unwrap one.
+GZIP_TWICE = gzip_bytes([GZIP_HELLO])
+# gzip of the same 200000 bytes /chunked serves, for the chunked-and-gzip case.
+GZIP_CHUNKED = gzip_bytes([BIG[:200000]])
 
 
 def head(status, reason, headers, version="HTTP/1.1"):
@@ -161,8 +200,8 @@ class Handler(socketserver.StreamRequestHandler):
     timeout = 30
 
     # A fetch-and-close client gets a fetch-and-close server: every reply
-    # ends by hanging up, which is HTTP/1.0's framing and the only one
-    # os64get speaks at this rung of the ladder.
+    # ends by hanging up, whatever else frames it — os64get asks for the
+    # close and does not speak keep-alive.
     def handle(self):
         try:
             request = self.read_head()
@@ -181,7 +220,13 @@ class Handler(socketserver.StreamRequestHandler):
         route = path.split("?", 1)[0]
         query = path.split("?", 1)[1] if "?" in path else ""
 
-        if route == "/hello.txt":
+        if route == "/":
+            # The map, served by the territory: this module's own docstring,
+            # so the page a client reads and the source a person reads are one
+            # text and cannot disagree about what a route is for.
+            self.send(head(200, "OK", [("Content-Type", "text/plain; charset=utf-8"),
+                                       ("Content-Length", len(INDEX))]) + INDEX)
+        elif route == "/hello.txt":
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
                                        ("Content-Length", len(HELLO))]) + HELLO)
         elif route == "/big.bin":
@@ -206,23 +251,78 @@ class Handler(socketserver.StreamRequestHandler):
         elif route == "/redirect":
             self.send(head(301, "Moved Permanently",
                            [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route.startswith("/redirect/"):
+            # A TRAIL OF N HOPS, so the same server can prove both halves of
+            # the rule: a chain shorter than the cap arrives, and one longer
+            # than it stops with the address it stopped at. The body is a
+            # courtesy page a browser would show and a fetcher must discard —
+            # sent with a length so a client that reads it instead of the
+            # real file is caught by the size, not by luck.
+            rest = route[len("/redirect/"):]
+            left = int(rest) if rest.isdigit() else 0
+            where = f"/redirect/{left - 1}" if left > 1 else "/hello.txt"
+            page = b"<html><body>this way</body></html>\n"
+            self.send(head(301, "Moved Permanently",
+                           [("Location", where), ("Content-Type", "text/html"),
+                            ("Content-Length", len(page))]) + page)
+        elif route == "/redirect-page":
+            # RELATIVE TO THE PAGE, the form RFC 3986 §5.2.3's merge exists
+            # for: `hello.txt` is not an address until it is joined to the
+            # directory of the page that said it.
+            self.send(head(302, "Found",
+                           [("Location", "hello.txt"), ("Content-Length", 0)]))
+        elif route in ("/redirect-303", "/redirect-307", "/redirect-308"):
+            code = int(route[-3:])
+            reason = {303: "See Other", 307: "Temporary Redirect",
+                      308: "Permanent Redirect"}[code]
+            self.send(head(code, reason,
+                           [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route == "/redirect-loop":
+            # Pointing at itself. The hop cap would eventually stop this, five
+            # requests later and in words about counting; a client that
+            # notices should say what actually happened.
+            self.send(head(302, "Found",
+                           [("Location", "/redirect-loop"), ("Content-Length", 0)]))
+        elif route == "/redirect-none":
+            self.send(head(302, "Found", [("Content-Length", 0)]))
+        elif route == "/redirect-300":
+            # A LIST TO CHOOSE FROM. Its Location is the server's preference,
+            # not an instruction, and a fetcher choosing on somebody's behalf
+            # is guessing.
+            self.send(head(300, "Multiple Choices",
+                           [("Location", "/hello.txt"), ("Content-Length", 0)]))
+        elif route == "/redirect-305":
+            # "Route your traffic through this machine" — from a stranger.
+            # Every browser dropped 305 for that reason; os64get must not
+            # obey it either.
+            self.send(head(305, "Use Proxy",
+                           [("Location", "http://10.0.2.2:9/"), ("Content-Length", 0)]))
+        elif route == "/redirect-mail":
+            self.send(head(302, "Found",
+                           [("Location", "mailto:someone@example.com"),
+                            ("Content-Length", 0)]))
         elif route == "/redirect-https":
             self.send(head(302, "Found",
                            [("Location", "https://example.com/"), ("Content-Length", 0)]))
         elif route == "/redirect-relative":
-            # Scheme-relative: a different host, the scheme inherited. The
-            # advice must resolve it BEFORE judging it, or it judges nothing.
+            # Scheme-relative: a different host, the scheme inherited. It is
+            # resolved BEFORE it is judged, or nothing is being judged — and
+            # following it leaves this server for a real one, which is the
+            # point: only the guest's own dial says whether that host answers.
             self.send(head(302, "Found",
                            [("Location", "//example.com/elsewhere"), ("Content-Length", 0)]))
         elif route == "/redirect-broken":
             # Root-relative and malformed: resolved, it is a URL os64get
-            # refuses, and the advice must say so rather than offer it.
+            # refuses, and it must say so rather than dial something it made
+            # up out of the readable part.
             self.send(head(302, "Found",
                            [("Location", "/bad path"), ("Content-Length", 0)]))
         elif route == "/redirect-tricky":
-            # A Location that is a legal URL AND a husk command separator.
-            # The advice os64get prints must quote it, or copying the
-            # suggested command runs `reboot`. (Codex review round 5, PR #52.)
+            # A Location that is a legal path AND a husk command separator.
+            # It is FOLLOWED, as a path, and this server has nothing there —
+            # so the fetch ends in an honest 404 rather than in `reboot`. Any
+            # message that offers an address as a command to type must quote
+            # it. (Codex review round 5, PR #52.)
             self.send(head(302, "Found",
                            [("Location", "/hello.txt;reboot"), ("Content-Length", 0)]))
         elif route == "/framing-hidden":
@@ -269,9 +369,13 @@ class Handler(socketserver.StreamRequestHandler):
                                        ("Transfer-Encoding", "gzip, chunked")]))
             self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
         elif route == "/chunked":
-            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+            # The grammar's whole vocabulary in one reply: sizes from one
+            # byte to past the client's read buffer, an extension, a trailer.
+            # The body is BIG's first 200000 bytes, so `--dump` has the file
+            # to compare against.
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
                                        ("Transfer-Encoding", "chunked")]))
-            self.send(b"20\r\nthirty-two bytes of chunked body\r\n0\r\n\r\n")
+            self.send(chunked(CHUNKED, [1, 7, 100, 4096, 9000, 65536, 3]))
         elif route == "/gzipped":
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
                                        ("Content-Encoding", "gzip"),
@@ -293,6 +397,25 @@ class Handler(socketserver.StreamRequestHandler):
             self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
                                        ("Content-Encoding", "gzip"),
                                        ("Content-Length", len(GZIP_LIMIT))]) + GZIP_LIMIT)
+        elif route == "/gzip-chunked":
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Transfer-Encoding", "chunked")]))
+            self.send(chunked(GZIP_CHUNKED, [1, 7, 100, 4096, 9000, 65536, 3]))
+        elif route == "/gzip-twice":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_TWICE))]) + GZIP_TWICE)
+        elif route == "/gzip-cut":
+            # A length that promises the whole stream, half of it, then the
+            # close: the framing's verdict (cut) must win over the decoder's
+            # (it never saw a trailer), and the client must not wait forever
+            # for bytes the peer has hung up on.
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_CHUNKED))])
+                      + GZIP_CHUNKED[:len(GZIP_CHUNKED) // 2])
         elif route == "/cut":
             self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
                                        ("Content-Length", 100000)]))
@@ -368,7 +491,8 @@ def dump_bodies(where):
     out = pathlib.Path(where)
     out.mkdir(parents=True, exist_ok=True)
     for name, body in (("hello.txt", HELLO), ("big.bin", BIG), ("slow.txt", SLOW),
-                       ("nolength.txt", NOLENGTH), ("index.html", DIRPAGE)):
+                       ("nolength.txt", NOLENGTH), ("index.html", DIRPAGE),
+                       ("chunked", CHUNKED)):
         (out / name).write_bytes(body)
     print(f"bodies written to {out}")
 
