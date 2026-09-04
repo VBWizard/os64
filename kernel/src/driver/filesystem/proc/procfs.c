@@ -415,6 +415,7 @@ static const char *proc_handle_type_name(handle_type_t t)
 		case HANDLE_NET_TCP:     return "tcp";
 		case HANDLE_NET_ICMP:    return "icmp";
 		case HANDLE_PTY_MASTER:  return "pty-master";
+		case HANDLE_RESERVED:    return "reserved";
 		case HANDLE_CLOSING:     return "closing";
 		default:                 return "none";
 	}

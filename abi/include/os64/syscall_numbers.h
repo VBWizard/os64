@@ -226,18 +226,16 @@
 // natively, and the ext2 write driver was built to it the same afternoon
 // the contract was ratified (2026-08-04: ext2_rm, promise kept).
 //
-// Returns 0 on success. Refused, not half-done: a read-only filesystem
-// (os64's ext2 ROOT mount stays read-only until ratified writable — the
-// driver itself writes since 2026-08-04), a path that isn't there, a file
-// or directory another handle holds OPEN (ext2 refuses rather than racing
-// the reader), or a directory that still has contents — emptying it first
-// is the caller's
-// job, which is what rm -r's depth-first walk is.
+// Returns 0 on success. Refused, not half-done: a read-only filesystem, a
+// path that isn't there, an OPEN directory, or a directory that still has
+// contents — emptying it first is the caller's job, which is what rm -r's
+// depth-first walk is. An open regular ext2 file loses its name immediately
+// and its storage at last close, so replacing a running program is safe.
 #define SYSCALL_UNLINK 35
 
 // mkdir(path) — create a directory. Returns 0, or negative: read-only
-// filesystem (ext2 by design), a parent that doesn't exist, or a name
-// already taken. One call, atomic, done.
+// filesystem, a parent that doesn't exist, or a name already taken. One
+// call, atomic, done.
 //
 // That last word is the whole history: Unix went its FIRST DECADE without
 // this syscall. V6/V7's mkdir(1) was a SETUID-ROOT PROGRAM that built a

@@ -288,6 +288,7 @@ static int fat_open (vfs_file_t** vfs_file, const char* path, const char* mode, 
     else if (strcmp(mode, "w") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
     else if (strcmp(mode, "a") == 0) fat_mode = FA_WRITE | FA_OPEN_APPEND;
 	else if (strcmp(mode, "c") == 0) fat_mode = FA_WRITE | FA_CREATE_ALWAYS;
+	else if (strcmp(mode, "x") == 0) fat_mode = FA_WRITE | FA_CREATE_NEW;
 	else
 		return -1;
 

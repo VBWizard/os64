@@ -522,11 +522,10 @@ $(DISK_IMAGE): $(KERNEL_BIN) $(KERNEL_FIXTURES) $(USERLAND_BINS) $(USERLAND_TEST
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/bin/libtest.so ::/lib/libtest.so
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) kernel/test/partition_info.txt ::/partition_info
 	# husk's startup script. It rides the FAT partition rather than root
-	# because the DEFAULT boot entry mounts ext2 as root, and ext2 is
-	# read-only by design here — /etc/husk.rc would not merely be awkward to
-	# update from inside the OS, it would be unwritable. On this boot it
-	# appears as /fat/husk.rc; on a FAT-root boot the same file is /husk.rc,
-	# which is why husk looks in both places.
+# because the DEFAULT boot entry mounts ext2 as root. On that boot this copy
+# appears as /fat/husk.rc; on a FAT-root lifeboat boot it is /husk.rc, which
+# is why husk looks in both places. Keeping the rescue copy on FAT also makes
+# it available when the ext2 root is the thing being repaired.
 	mcopy -o -i $(DISK_IMAGE)@@$(DISK_OFFSET) etc/husk.rc ::/husk.rc
 	# The lifeboat's /etc (2026-08-23): the desktop and gclock, so a FAT-root
 	# GUI boot — the QEMU GUI entry — gets the same setup the ext2 root does, and

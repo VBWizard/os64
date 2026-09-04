@@ -3146,50 +3146,150 @@ static bool test_vfs_rename(void)
 // fail one chosen metadata write, restore the real callback immediately, and
 // ask fops->mounted to perform the same replay a boot performs.
 
-// ext2_orphan test's block-write fault seam. These globals belong exclusively
-// to test_ext2_orphan and are live only around its synchronous close/replay
-// calls; ext2's write_lock keeps another writer on this mount from entering
-// while the chosen operation is in flight.
-static size_t (*sOrphanRealWrite)(void *, uint64_t, const void *, uint64_t);
-static uint32_t sOrphanWriteCount;
-static uint32_t sOrphanFailWrite;
+// The ext2 block-write fault seam. These globals are live only around one
+// synchronous filesystem operation; ext2's write_lock keeps another writer
+// on this mount from entering while the chosen operation is in flight.
+static size_t (*sExt2FaultRealWrite)(void *, uint64_t, const void *, uint64_t);
+static uint32_t sExt2FaultWriteCount;
+static uint32_t sExt2FaultFailWrite;
 
-static size_t orphan_test_write(void *device, uint64_t sector,
-                                const void *buffer, uint64_t sector_count)
+static size_t ext2_fault_test_write(void *device, uint64_t sector,
+                                    const void *buffer, uint64_t sector_count)
 {
-    sOrphanWriteCount++;
-    // The instrument for re-choreographing this test: the write numbers the
-    // stages below fail and expect are a script of the release path's
-    // command stream, and any change to that stream (the 2026-08-29 batch
-    // rewrote it) is read off this line against the image's group layout.
-    printd(DEBUG_TESTS, "\torphan seam: write %u = LBA %lu x%lu%s\n",
-           sOrphanWriteCount, sector, sector_count,
-           sOrphanWriteCount == sOrphanFailWrite ? " (FAILED by the seam)" : "");
-    if (sOrphanWriteCount == sOrphanFailWrite)
+    sExt2FaultWriteCount++;
+    // The instrument for re-choreographing a fault test: the write numbers
+    // are the operation's command stream. If an implementation change moves
+    // a chosen failure point, the new boundary is read from this line.
+    printd(DEBUG_TESTS, "\text2 fault seam: write %u = LBA %lu x%lu%s\n",
+           sExt2FaultWriteCount, sector, sector_count,
+           sExt2FaultWriteCount == sExt2FaultFailWrite ? " (FAILED by the seam)" : "");
+    if (sExt2FaultWriteCount == sExt2FaultFailWrite)
         return 1;
-    return sOrphanRealWrite(device, sector, buffer, sector_count);
+    return sExt2FaultRealWrite(device, sector, buffer, sector_count);
 }
 
-static bool orphan_test_fail_write(vfs_filesystem_t *fs, uint32_t nth)
+static bool ext2_fault_test_fail_write(vfs_filesystem_t *fs, uint32_t nth)
 {
     if (fs == NULL || fs->bops == NULL || fs->bops->write == NULL ||
-        sOrphanRealWrite != NULL || nth == 0)
+        sExt2FaultRealWrite != NULL || nth == 0)
         return false;
-    sOrphanRealWrite = fs->bops->write;
-    sOrphanWriteCount = 0;
-    sOrphanFailWrite = nth;
-    fs->bops->write = orphan_test_write;
+    sExt2FaultRealWrite = fs->bops->write;
+    sExt2FaultWriteCount = 0;
+    sExt2FaultFailWrite = nth;
+    fs->bops->write = ext2_fault_test_write;
     return true;
 }
 
-static uint32_t orphan_test_restore_write(vfs_filesystem_t *fs)
+static uint32_t ext2_fault_test_restore_write(vfs_filesystem_t *fs)
 {
-    uint32_t writes = sOrphanWriteCount;
-    fs->bops->write = sOrphanRealWrite;
-    sOrphanRealWrite = NULL;
-    sOrphanWriteCount = 0;
-    sOrphanFailWrite = 0;
+    uint32_t writes = sExt2FaultWriteCount;
+    fs->bops->write = sExt2FaultRealWrite;
+    sExt2FaultRealWrite = NULL;
+    sExt2FaultWriteCount = 0;
+    sExt2FaultFailWrite = 0;
     return writes;
+}
+
+// A directory entry can reach disk one write before its parent inode. For a
+// regular file the second write carries only mtime, but mkdir also carries
+// the parent's backlink count. Fail exactly that final mkdir write and prove
+// the driver keeps the published child allocated, reports the partial result,
+// and demotes instead of continuing with structurally stale metadata.
+//
+// The damaged parent is itself disposable: cleanup removes the published
+// child and then the parent inode, so its deliberately stale private link
+// count cannot survive this test or reach the host's e2fsck verdict.
+static bool test_ext2_published_insert_failure(void)
+{
+    if (kRootFilesystem == NULL || kRootFilesystem->fops == NULL ||
+        kRootFilesystem->dops == NULL ||
+        kRootFilesystem->fops->rename != ext2_rw_fops.rename) {
+        printd(DEBUG_TESTS, "\tSKIP: test_ext2_published_insert_failure (root is not writable ext2)\n");
+        return true;
+    }
+
+    static const char parent_path[] = "/etc/testdata/insertfault";
+    static const char probe_path[] = "/etc/testdata/insertfault/probe";
+    static const char child_path[] = "/etc/testdata/insertfault/child";
+    char parent_mut[48], probe_mut[56], child_mut[56];
+    sprintf(parent_mut, "%s", parent_path);
+    sprintf(probe_mut, "%s", probe_path);
+    sprintf(child_mut, "%s", child_path);
+
+    // A prior interrupted test run must not decide this run's allocation
+    // shape or baseline.
+    kRootFilesystem->fops->rm(child_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(probe_path, kRootFilesystem);
+    kRootFilesystem->fops->rm(parent_path, kRootFilesystem);
+    uint32_t inodes0 = ext2_free_inodes(kRootFilesystem);
+    uint32_t blocks0 = ext2_free_blocks(kRootFilesystem);
+
+    if (kRootFilesystem->dops->mkdir(parent_mut, kRootFilesystem) != 0)
+        goto fail;
+
+    // Measure this image's mkdir write stream without failing it. Removing
+    // the probe returns the same inode/block slots, making the second mkdir
+    // repeat the stream with its final write selected.
+    if (!ext2_fault_test_fail_write(kRootFilesystem, UINT32_MAX))
+        goto cleanup_parent;
+    int probe_rc = kRootFilesystem->dops->mkdir(probe_mut, kRootFilesystem);
+    uint32_t parent_write = ext2_fault_test_restore_write(kRootFilesystem);
+    os64_dirent_t de;
+    bool probe_exists = kRootFilesystem->dops->stat(
+        probe_path, &de, kRootFilesystem) == 0 && (de.flags & OS64_DE_DIR);
+    if (probe_rc != 0 || !probe_exists || parent_write == 0)
+        goto cleanup_probe;
+    if (kRootFilesystem->fops->rm(probe_path, kRootFilesystem) != 0)
+        goto cleanup_parent;
+
+    // Demote a private mount copy so the real root remains available to
+    // remove the deliberately half-completed fixture afterward.
+    vfs_filesystem_t shadow = *kRootFilesystem;
+    vfs_file_operations_t shadow_fops = *kRootFilesystem->fops;
+    vfs_directory_operations_t shadow_dops = *kRootFilesystem->dops;
+    shadow.fops = &shadow_fops;
+    shadow.dops = &shadow_dops;
+
+    kTestingExpectedNoise = true;
+    if (!ext2_fault_test_fail_write(kRootFilesystem, parent_write))
+        goto cleanup_parent;
+    int child_rc = shadow.dops->mkdir(child_mut, &shadow);
+    uint32_t failed_writes = ext2_fault_test_restore_write(kRootFilesystem);
+    bool child_exists = kRootFilesystem->dops->stat(
+        child_path, &de, kRootFilesystem) == 0 && (de.flags & OS64_DE_DIR);
+    bool shadow_demoted = shadow.read_only && shadow.dops->mkdir == NULL &&
+                          shadow.fops->write == NULL;
+    bool root_writable = !kRootFilesystem->read_only &&
+                         kRootFilesystem->dops->mkdir != NULL &&
+                         kRootFilesystem->fops->write != NULL;
+
+    bool cleanup_ok = child_exists &&
+        kRootFilesystem->fops->rm(child_path, kRootFilesystem) == 0;
+    cleanup_ok = kRootFilesystem->fops->rm(parent_path, kRootFilesystem) == 0 &&
+                 cleanup_ok;
+    bool counts_restored = ext2_free_inodes(kRootFilesystem) == inodes0 &&
+                           ext2_free_blocks(kRootFilesystem) == blocks0;
+
+    if (child_rc == 0 || failed_writes != parent_write || !child_exists ||
+        !shadow_demoted || !root_writable || !cleanup_ok || !counts_restored) {
+        printf("FAIL ext2_published_insert_failure: rc=%d writes=%u/%u published=%u demoted=%u root-rw=%u cleanup=%u counts=%u\n",
+               child_rc, failed_writes, parent_write, child_exists,
+               shadow_demoted, root_writable, cleanup_ok, counts_restored);
+        printd(DEBUG_TESTS, "\tFAIL: test_ext2_published_insert_failure (published mkdir parent-write failure mishandled)\n");
+        return false;
+    }
+
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_published_insert_failure (write %u failed after dirent publication; child retained, private mount demoted, cleanup exact)\n",
+           parent_write);
+    return true;
+
+cleanup_probe:
+    kRootFilesystem->fops->rm(probe_path, kRootFilesystem);
+cleanup_parent:
+    kRootFilesystem->fops->rm(parent_path, kRootFilesystem);
+fail:
+    printd(DEBUG_TESTS, "\tFAIL: test_ext2_published_insert_failure (could not establish deterministic fixture)\n");
+    return false;
 }
 
 #define OR_FAIL(...) do { \
@@ -3342,13 +3442,13 @@ static bool test_ext2_orphan(void)
     // ledgers without counting any of them twice.
     uint32_t orphan_inodes = ext2_free_inodes(kRootFilesystem);
     uint32_t orphan_blocks = ext2_free_blocks(kRootFilesystem);
-    if (!orphan_test_fail_write(kRootFilesystem, 2)) {
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 2)) {
         kRootFilesystem->fops->close(held);
         OR_FAIL("could not install the release-write fault seam\n");
     }
     kRootFilesystem->fops->close(held);
     held = NULL;
-    uint32_t injected_writes = orphan_test_restore_write(kRootFilesystem);
+    uint32_t injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (injected_writes != 3)
         OR_FAIL("failed release made %u metadata writes, expected 3 (bitmap, failed GDT, retry inode)\n",
                 injected_writes);
@@ -3377,7 +3477,7 @@ static bool test_ext2_orphan(void)
     // at write 10. A clean retry must reconcile the already-free inode too.
     if (kRootFilesystem->fops->mounted == NULL)
         OR_FAIL("ext2 mount table has no replay callback\n");
-    if (!orphan_test_fail_write(kRootFilesystem, 10))
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 10))
         OR_FAIL("could not install the replay-write fault seam\n");
     // Another private mount, for the same reason and a sharper hazard: write 9
     // freed the inode BITMAP BIT, so that inode NUMBER is allocatable while the
@@ -3392,7 +3492,7 @@ static bool test_ext2_orphan(void)
     replay_mount.dops = &replay_dops;
 
     replay_mount.fops->mounted(&replay_mount);
-    injected_writes = orphan_test_restore_write(kRootFilesystem);
+    injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (injected_writes != 10)
         OR_FAIL("failed indirect replay made %u metadata writes, expected 10 with orphan still linked\n",
                 injected_writes);
@@ -3470,11 +3570,11 @@ static bool test_ext2_orphan(void)
     shadow.fops = &shadow_fops;
     shadow.dops = &shadow_dops;
 
-    if (!orphan_test_fail_write(kRootFilesystem, 11))
+    if (!ext2_fault_test_fail_write(kRootFilesystem, 11))
         OR_FAIL("could not install the closed-rename release fault seam\n");
     int rename_rc = shadow.fops->rename("/etc/testdata/orph/retry_replacement",
                                         "/etc/testdata/orph/retry_victim", &shadow, 0);
-    injected_writes = orphan_test_restore_write(kRootFilesystem);
+    injected_writes = ext2_fault_test_restore_write(kRootFilesystem);
     if (rename_rc != 0)
         OR_FAIL("closed replacement rename failed before reaching recoverable teardown\n");
     if (injected_writes != 13)
@@ -3572,7 +3672,7 @@ static bool test_ext2_readonly_demotion(void)
         shadow.fops->close(file);
     }
 
-    const char modes[] = { 'w', 'c', 'a' };
+    const char modes[] = { 'w', 'c', 'a', 'x' };
     for (unsigned i = 0; i < sizeof(modes); i++) {
         char mode[2] = { modes[i], '\0' };
         file = NULL;
@@ -3584,6 +3684,11 @@ static bool test_ext2_readonly_demotion(void)
     file = NULL;
     if (saved_open(&file, created_path, "c", &shadow) == 0) {
         ROD_FAIL("retained open callback created a file after demotion\n");
+        shadow.fops->close(file);
+    }
+    file = NULL;
+    if (saved_open(&file, created_path, "x", &shadow) == 0) {
+        ROD_FAIL("retained exclusive open created a file after demotion\n");
         shadow.fops->close(file);
     }
     if (saved_mkdir(mkdir_path, &shadow) == 0)
@@ -3609,7 +3714,7 @@ static bool test_ext2_readonly_demotion(void)
     kRootFilesystem->fops->rm(mkdir_path, kRootFilesystem);
 
     if (ok)
-        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/truncate/append/write/rm/rename/mkdir refused)\n");
+        printd(DEBUG_TESTS, "\tPASS: test_ext2_readonly_demotion (read allowed; create/exclusive-create/truncate/append/write/rm/rename/mkdir refused)\n");
     return ok;
 #undef ROD_FAIL
 }
@@ -3655,7 +3760,41 @@ static bool test_ext2_secondary_write(void)
     char buf[64];
     vfs_file_t *f = NULL;
 
-    // 1. Create, write, close, reopen, read back byte-exact.
+    // 1. Exclusive creation: one new inode and handle, then a refusal that
+    //    preserves its contents rather than truncating through the name.
+    fs->fops->rm("/__xtest.txt", fs);
+    if (fs->fops->open(&f, "/__xtest.txt", "x", fs) != 0) {
+        ES_FAIL("exclusive create /__xtest.txt failed\n");
+        return false;
+    }
+    if (fs->fops->write(f, msg1, sizeof(msg1) - 1) != (int)(sizeof(msg1) - 1)) {
+        ES_FAIL("write through exclusive handle failed\n");
+        fs->fops->close(f);
+        return false;
+    }
+    vfs_file_t *second = NULL;
+    if (fs->fops->open(&second, "/__xtest.txt", "x", fs) == 0) {
+        ES_FAIL("exclusive open accepted an existing name\n");
+        fs->fops->close(second);
+        fs->fops->close(f);
+        return false;
+    }
+    fs->fops->close(f);
+    f = NULL;
+    if (fs->fops->open(&f, "/__xtest.txt", "r", fs) != 0) {
+        ES_FAIL("reopen after exclusive create failed\n");
+        return false;
+    }
+    int n = fs->fops->read(f, buf, sizeof(buf));
+    fs->fops->close(f);
+    f = NULL;
+    if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0 ||
+        fs->fops->rm("/__xtest.txt", fs) != 0) {
+        ES_FAIL("exclusive-create contents changed or cleanup failed (n=%d)\n", n);
+        return false;
+    }
+
+    // 2. Create, write, close, reopen, read back byte-exact.
     if (fs->fops->open(&f, "/__wtest.txt", "c", fs) != 0) {
         ES_FAIL("create /__wtest.txt failed\n");
         return false;
@@ -3671,7 +3810,7 @@ static bool test_ext2_secondary_write(void)
         ES_FAIL("reopen after create failed\n");
         return false;
     }
-    int n = fs->fops->read(f, buf, sizeof(buf));
+    n = fs->fops->read(f, buf, sizeof(buf));
     fs->fops->close(f);
     f = NULL;
     if (n != (int)(sizeof(msg1) - 1) || memcmp(buf, msg1, sizeof(msg1) - 1) != 0) {
@@ -3679,7 +3818,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 2. Append; verify the concatenation and the stat'd size.
+    // 3. Append; verify the concatenation and the stat'd size.
     if (fs->fops->open(&f, "/__wtest.txt", "a", fs) != 0) {
         ES_FAIL("append open failed\n");
         return false;
@@ -3698,7 +3837,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 3. Truncate via "w": size drops to 0 territory, then rewrite.
+    // 4. Truncate via "w": size drops to 0 territory, then rewrite.
     if (fs->fops->open(&f, "/__wtest.txt", "w", fs) != 0) {
         ES_FAIL("truncating open failed\n");
         return false;
@@ -3723,7 +3862,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 4. Growth across the single-indirect boundary. At 1KB blocks the
+    // 5. Growth across the single-indirect boundary. At 1KB blocks the
     //    direct blocks end at byte 12,287; a 16KB file forces the indirect
     //    chain into existence. Self-describing 16-byte records, same idea
     //    as pattern.bin.
@@ -3777,7 +3916,7 @@ static bool test_ext2_secondary_write(void)
     fs->fops->close(f);
     f = NULL;
 
-    // 5. A hole: seek far past end, write one record; the gap reads zeros.
+    // 6. A hole: seek far past end, write one record; the gap reads zeros.
     if (fs->fops->open(&f, "/__whole.bin", "c", fs) != 0) {
         ES_FAIL("create /__whole.bin failed\n");
         return false;
@@ -3815,7 +3954,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 6. mkdir; a file inside proves it's a real directory; readdir sees the
+    // 7. mkdir; a file inside proves it's a real directory; readdir sees the
     //    file and (Plan 9 doctrine) no dot entries.
     if (fs->dops->mkdir("/__wdir", fs) != 0) {
         ES_FAIL("mkdir /__wdir failed\n");
@@ -3847,7 +3986,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 7. The one removal verb, all four verdicts: non-empty dir refused,
+    // 8. The one removal verb, all four verdicts: non-empty dir refused,
     //    nonexistent refused, file removed, then-empty dir removed.
     if (fs->fops->rm("/__wdir", fs) == 0) {
         ES_FAIL("rm of NON-empty dir succeeded (must refuse)\n");
@@ -3868,7 +4007,7 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 8. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
+    // 9. THE ORPHAN CONTRACT — ruling 5 (2026-08-04) as REVISED 2026-08-16.
     //
     //    Ruling 5 made rm refuse ANY open file, and this step asserted
     //    exactly that. The orphan slice superseded it: an open REGULAR file
@@ -3954,14 +4093,14 @@ static bool test_ext2_secondary_write(void)
         return false;
     }
 
-    // 9. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
+    // 10. Cleanup doubles as coverage: freeing /__wbig.bin tears down a real
     //    indirect chain, /__whole.bin a sparse map. e2fsck audits the wake.
     if (fs->fops->rm("/__wbig.bin", fs) != 0 || fs->fops->rm("/__whole.bin", fs) != 0) {
         ES_FAIL("cleanup rm failed\n");
         return false;
     }
 
-    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
+    printd(DEBUG_TESTS, "\tPASS: test_ext2_secondary_write (exclusive-create/create/append/truncate/indirect/hole/mkdir/rm/orphan/busy-refusal)\n");
     return true;
 }
 #undef ES_FAIL
@@ -5470,6 +5609,7 @@ static void register_builtin_tests(void)
     // in test_framework.h; the demotion engine in vfs.c).
     test_register_policy("vfs_write_mkdir", test_vfs_write_mkdir, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("vfs_rename", test_vfs_rename, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
+    test_register_policy("ext2_published_insert_failure", test_ext2_published_insert_failure, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_orphan", test_ext2_orphan, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_readonly_demotion", test_ext2_readonly_demotion, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
     test_register_policy("ext2_secondary_write", test_ext2_secondary_write, TEST_PHASE_POSTBOOT, TEST_POLICY_RO);
