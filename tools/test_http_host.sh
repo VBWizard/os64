@@ -697,7 +697,12 @@ bodyRefusals = {
     "size-leading-space": (b" 5\r\nhello\r\n0\r\n\r\n", "syntax", 0),
     "size-only-ext": (b";x=1\r\nhello\r\n0\r\n\r\n", "syntax", 0),
     "size-nul": (b"5\x00\r\nhello\r\n0\r\n\r\n", "syntax", 0),
+    # The bound is the VALUE: a seventeenth digit that overflows is refused,
+    # a seventeenth digit that is a leading zero is a legal spelling (the
+    # grammar is 1*HEXDIG). A digit cap refused the second (Codex round 2).
     "size-17-digits": (b"1" * 17 + b"\r\n", "syntax", 0),
+    "size-overflow-by-one": (b"1" + b"0" * 16 + b"\r\n", "syntax", 0),
+    "size-zero-padded": (b"0" * 20 + b"5\r\nhello\r\n0\r\n\r\n", "done", 5),
     # Sixteen digits parse; the peer then owes 2^64-1 bytes and hangs up.
     "size-16-digits": (b"ffffffffffffffff\r\nhello", "cut", 5),
     "size-blank-then-ext": (b"5 \t;x\r\nhello\r\n0\r\n\r\n", "done", 5),
@@ -814,6 +819,15 @@ path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /b\r\nContent
 verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
 if verdict != "conflict":
     fail("two-locations", f"{verdict} (want conflict)")
+# Presence is a flag of its own: an EMPTY Location names nowhere but was
+# still said, so the pair is a conflict in EITHER order (Codex round 2).
+for label, lines in [("empty-then-target", b"Location:\r\nLocation: /b\r\n"),
+                     ("target-then-empty", b"Location: /b\r\nLocation:\r\n")]:
+    path = work / f"loc-{label}"
+    path.write_bytes(b"HTTP/1.1 302 Found\r\n" + lines + b"Content-Length: 0\r\n\r\n")
+    verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+    if verdict != "conflict":
+        fail(f"location {label}", f"{verdict} (want conflict)")
 path = work / "repeated-location"
 path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /a\r\nContent-Length: 0\r\n\r\n")
 verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
