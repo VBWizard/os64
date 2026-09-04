@@ -37,7 +37,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | Ctrl+letter = control codes; Ctrl+D = EOT = EOF | 1963 semantics, done properly (one-shot EOF, then normal reads) |
 | ELF, SysV x86-64 calling convention | Interop with the toolchain — a *specific reason*, per the philosophy |
 | Syscall args in RDI/RSI/RDX/R10/R8/R9 | Hardware forces R10-for-RCX; happens to match Linux |
-| ext2 on-disk format | FFS re-expressed; FULL read/write since 2026-08-04, judged by the host's own e2fsck (`make fsck-ext2`); root stays mounted read-only until ratified (FAT keeps boot/interop forever) |
+| ext2 on-disk format | FFS re-expressed; full read/write, including writable root, judged by the host's own e2fsck (`make fsck-ext2`); FAT keeps boot/interop forever |
 
 ---
 
@@ -50,7 +50,7 @@ file records *decisions*, not gaps — gaps live in DEBTS.md.
 | `getdents` + per-entry `stat` dance; `struct dirent`'s poverty | `readdir` yields name+size+kind in ONE call; returns 1/0/<0; EOF is sticky | One call, whole answer | dirent.h, ABI #11 |
 | Separate `struct stat` | `stat` fills the SAME `os64_dirent_t` readdir yields — "stat is readdir for exactly one name" | One struct, no fork | ABI #23 |
 | `readdir` delivers `.` and `..` | Never. They are not directory content | Plan 9 was right | SUCCESSION #7 |
-| `open` flag ints (O_RDONLY\|O_CREAT\|...) | Mode strings "r"/"w"/"a"/"c", "d" for directories; unknown modes REFUSED at the boundary | Tripwires over silence | ABI #9 |
+| `open` flag ints (O_RDONLY\|O_CREAT\|...) | Mode strings "r"/"w"/"a"/"c", "u" for update, "x" for atomic create-new, "d" for directories; unknown modes REFUSED at the boundary | The common operations get names; unsupported combinations cannot slip through as flag arithmetic | ABI #9 |
 | `O_DIRECTORY` / opendir as separate machinery | Directories open with mode "d", same open, same close, one handle type | One door | ABI #9 |
 | `brk`/`sbrk` | NEVER. `map(len)`/`unmap(base)` regions: demand-paged, zeroed, guard page after, VAs never reused | brk frees only from the end; stale pointers must fault | DEBTS not-debts, MALLOC.md, ABI #12-13 |
 | `waitpid(WNOHANG)` | `reap` is its OWN syscall; returns 0 = "nobody died" as an ordinary answer | A wait that doesn't wait is a name that lies | syscall.c reap, task.h |

@@ -2290,7 +2290,7 @@ static uint64_t syscall_close(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // with HANDLE lifetime, not syscall lifetime. handle_file_object_close frees
 // it when the handle dies; this block itself dies with the syscall.
 typedef struct {
-	char        mode[4];      // "r"/"u"/"w"/"a"/"c"/"d" — validated before we get here
+	char        mode[4];      // "r"/"u"/"w"/"a"/"c"/"x"/"d" — validated before we get here
 	char       *path_copy;    // kmalloc'd, becomes f_path, outlives the syscall
 	vfs_filesystem_t *fs;     // mount-resolved BEFORE kernel context (pure
 	                          // string matching); path_copy is the fs-local
@@ -2362,6 +2362,7 @@ static void readdir_do(void *arg)
 // sentinel. mode is a 1-letter string, validated HERE at the boundary:
 //   "r" read existing   "u" update existing without truncation
 //   "w"/"c" create-or-truncate for writing   "a" append
+//   "x" exclusively create a new file for writing
 // NULL mode means "r". The handle then plugs into read/write/seek/close —
 // and into spawn's redirection slots, where `upper < file` falls out for free.
 static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -2415,7 +2416,8 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	// ("d" = directory, for readdir — see open_do.)
 	if (p->mode[1] != '\0' ||
 	    (p->mode[0] != 'r' && p->mode[0] != 'u' && p->mode[0] != 'w' &&
-	     p->mode[0] != 'a' && p->mode[0] != 'c' && p->mode[0] != 'd'))
+	     p->mode[0] != 'a' && p->mode[0] != 'c' && p->mode[0] != 'x' &&
+	     p->mode[0] != 'd'))
 	{
 		kfree(p);
 		return SYSCALL_RESULT_BAD_USER_DATA;
@@ -2477,6 +2479,19 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	p->dir = NULL;
 	p->result = -1;
 	bool is_dir = (p->mode[0] == 'd');
+	int reserved_h = -1;
+	if (p->mode[0] == 'x')
+	{
+		// Exclusive creation may publish a new name. Reserve the return slot
+		// first so a full task table refuses without touching the filesystem.
+		reserved_h = handle_reserve(task);
+		if (reserved_h < 0)
+		{
+			kfree(p->path_copy);
+			kfree(p);
+			return SYSCALL_RESULT_INVALID;
+		}
+	}
 
 	// The directory walk does disk I/O — kernel context required (see open_do).
 	call_in_kernel_context(open_do, p);
@@ -2485,6 +2500,8 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	{
 		printd(DEBUG_SYSCALL, "open: task %s: '%s' mode '%s' failed\n",
 		       task->exename, path, p->mode);   // full path — tail loses the mount
+		if (reserved_h >= 0)
+			(void)handle_cancel_reserved(task, reserved_h);
 		kfree(p->path_copy);
 		kfree(p);
 		return SYSCALL_RESULT_INVALID;   // no such file/directory / bad path
@@ -2533,7 +2550,10 @@ static uint64_t syscall_open(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		// uninitialized.
 		p->file->handleRefCount = 1;
 
-		h = handle_alloc(task, HANDLE_FILE, p->file);
+		h = reserved_h >= 0
+		        ? (handle_commit_reserved(task, reserved_h, HANDLE_FILE, p->file)
+		               ? reserved_h : -1)
+		        : handle_alloc(task, HANDLE_FILE, p->file);
 		if (h < 0)
 		{
 			// Table full — unwind the open. This also frees path_copy (it is

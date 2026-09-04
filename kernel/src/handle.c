@@ -5,12 +5,11 @@
 // every thread of a task shares this table, so two threads can open, close,
 // or exit against the same slot at once. What keeps it lock-free is that the
 // slot's TYPE is the claim token, moved only by atomics: handle_alloc claims a
-// free slot with a compare-and-swap (NONE -> CLOSING as a reservation, then
-// publishes the real type), and handle_close claims a live one with an
-// exchange (live -> CLOSING, then NONE when the object is gone). Nothing
-// touches a slot it did not win. Spawn still builds a child's table with plain
-// stores, and may: the child has not been submitted to the scheduler, so
-// nothing else can see it.
+// free slot through CLOSING; two-phase allocation claims one as RESERVED and
+// later commits through CLOSING; handle_close claims a non-closing state with
+// an exchange. Nothing touches a slot it did not win. Spawn still builds a
+// child's table with plain stores, and may: the child has not been submitted
+// to the scheduler, so nothing else can see it.
 //
 // (Codex #29 rd4 made close atomic and argued "alloc only ever reclaims a
 // NONE slot" — which is only true once alloc's claim is atomic too. Fable's
@@ -83,6 +82,68 @@ int handle_alloc(struct task *t, handle_type_t type, void *object)
 	return -1;
 }
 
+int handle_reserve(struct task *t)
+{
+	task_t *task = (task_t *)t;
+
+	for (int i = 3; i < TASK_MAX_HANDLES; i++)
+	{
+		handle_type_t expected = HANDLE_NONE;
+		if (__atomic_compare_exchange_n(&task->handles[i].type, &expected,
+		                                HANDLE_RESERVED, false,
+		                                __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+		{
+			task->handles[i].object = NULL;
+			return i;
+		}
+	}
+
+	printd(DEBUG_TASK, "handle_reserve: task %s is out of handles (max %u)\n",
+	       task->exename, TASK_MAX_HANDLES);
+	return -1;
+}
+
+bool handle_commit_reserved(struct task *t, int slot, handle_type_t type, void *object)
+{
+	task_t *task = (task_t *)t;
+	if (slot < 3 || slot >= TASK_MAX_HANDLES || type == HANDLE_NONE ||
+	    type == HANDLE_RESERVED || type == HANDLE_CLOSING)
+		return false;
+
+	// Claim the reservation through CLOSING before publishing its object. A
+	// concurrent task teardown either wins first (and commit refuses, leaving
+	// the object with the caller) or sees CLOSING and leaves this owner to
+	// finish. After publication, a teardown that already passed the slot is
+	// detected through tearingDown and this owner closes the new handle.
+	handle_type_t expected = HANDLE_RESERVED;
+	if (!__atomic_compare_exchange_n(&task->handles[slot].type, &expected,
+	                                 HANDLE_CLOSING, false,
+	                                 __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+		return false;
+
+	task->handles[slot].object = object;
+	__atomic_store_n(&task->handles[slot].type, type, __ATOMIC_RELEASE);
+	if (__atomic_load_n(&task->tearingDown, __ATOMIC_ACQUIRE))
+		(void)handle_close(t, slot);
+	return true;
+}
+
+bool handle_cancel_reserved(struct task *t, int slot)
+{
+	task_t *task = (task_t *)t;
+	if (slot < 3 || slot >= TASK_MAX_HANDLES)
+		return false;
+
+	handle_type_t expected = HANDLE_RESERVED;
+	if (!__atomic_compare_exchange_n(&task->handles[slot].type, &expected,
+	                                 HANDLE_CLOSING, false,
+	                                 __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+		return false;
+	task->handles[slot].object = NULL;
+	__atomic_store_n(&task->handles[slot].type, HANDLE_NONE, __ATOMIC_RELEASE);
+	return true;
+}
+
 bool handle_install(struct task *t, int slot, handle_type_t type, void *object)
 {
 	task_t *task = (task_t *)t;
@@ -106,8 +167,10 @@ handle_t *handle_get(struct task *t, int h)
 	// This IS the range check: ring 3 passes whatever integer it feels like.
 	if (h < 0 || h >= TASK_MAX_HANDLES)
 		return NULL;
-	if (task->handles[h].type == HANDLE_NONE || task->handles[h].type == HANDLE_CLOSING)
-		return NULL;   // free, or mid-close — not operable either way
+	if (task->handles[h].type == HANDLE_NONE ||
+	    task->handles[h].type == HANDLE_RESERVED ||
+	    task->handles[h].type == HANDLE_CLOSING)
+		return NULL;   // free, reserved, or mid-close — none is operable
 
 	return &task->handles[h];
 }
