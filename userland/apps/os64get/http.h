@@ -54,10 +54,10 @@
 // to be one nothing depends on. Refusing every over-long line would cost the
 // fetch over somebody's enormous Set-Cookie, which os64get does not even
 // read; dropping one blindly would let a server hide `Transfer-Encoding:
+// chunked` behind three kilobytes of legal whitespace and get raw chunk
 // framing published as the file. See overlong_verdict: a header the fetch
 // DEPENDS ON — how a body is framed and coded, or where a redirect points —
 // refuses the reply instead.
-// that decide how a body is framed and coded refuse the reply instead.
 #define HTTP_LINE_MAX      2048
 // ...but the DROPPING is bounded, or a peer that talks forever and never
 // sends a newline is read forever. HTTP_HEAD_MAX is the whole head's budget
