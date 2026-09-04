@@ -261,9 +261,20 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      this is an interactive session with a screen and a history stack.
      What they share is the dial and the URL parser — `gopher://` URLs are
      how gopherspace is written down, so the client takes one (Chris,
-     emphatically, 2026-09-03), and that makes the URL half of `http.c`
-     its second customer and the first honest occasion to ask whether it
-     should move. Bindings are lynx's, whose path this re-walks in the
+     emphatically, 2026-09-03). That made the URL half of `http.c` its
+     second customer and the first honest occasion to ask whether it
+     should move, and **the answer was yes (2026-09-04, Fable's ruling on
+     Opus's reading of the code): `os64_url_parse` is libos64's now**
+     (`os64/url.h`). The argument is a hazard, not a tidiness: the host
+     alphabet, the right-to-left colon search, fold-host-never-path, and
+     "`host:` with nothing after it is a refusal" each have a security
+     edge, gopher needs every one of them, and two copies of an edged rule
+     drift until the looser copy is the one somebody reaches. What did NOT
+     move is `http_url_absolute` — RFC 3986 §5.2 reference resolution has
+     exactly one customer, because gopher has no relative links. This is
+     the `os64_dial_reason` hoist, not the libfetch one: pure string
+     arithmetic with a differential harness already in the tree, no
+     streams, no buffer ownership across a read boundary. Bindings are lynx's, whose path this re-walks in the
      right order: Up/Down to move, Enter to follow, LEFT ARROW for back,
      `q` to quit. Item types: `0` text through the pager, `1` menu, `7`
      search (prompt, resend `selector\tquery`), `9`/`I`/`g`/`s` saved to a
@@ -318,7 +329,10 @@ flag someday — not this tool.
   Codex-by-Chris's-hand. The eyes exist so these are paid at the right
   moment, not speculatively.
 - **TLS integration** and the libfetch extraction (seams cross review
-  tiers).
+  tiers). What libfetch means here is the FETCH machinery — streams,
+  heads, bodies, buffer ownership across a read boundary — which is where
+  lifetime bugs live. The URL parser was never that and has gone to
+  libos64 already; see 4(b).
 - Anything touching park loops, the scheduler, or signal delivery.
 
 ## Process (the campaign's working agreement)
