@@ -209,11 +209,58 @@ static void tcp_ack(tcp_conn_t* c)
 // that changes — a new segment, a FIN joining one already in flight, or an
 // ACK that retired part of one (RFC 6298 §5.3). Inheriting a spent budget
 // across such a change is how a segment gets sent once and never again.
-static void tcp_rto_arm(tcp_conn_t* c)
+// One clean round-trip sample, in ticks — Jacobson/Karels 1988, in the
+// paper's own integer form (RFC 6298 §2.3 says the same in reals):
+// err = r - srtt; srtt += err/8; rttvar += (|err| - rttvar)/4; timer =
+// srtt + 4·rttvar. With srtt kept ×8 and rttvar ×4 the divisions are
+// shifts of the stored values and the 4· is free. A sample of zero ticks
+// is real on a virtual wire — the ack came back inside one tick — and the
+// floor is what keeps the timer honest there.
+static void tcp_rtt_sample(tcp_conn_t* c, uint32_t r)
 {
-	c->rto_ticks = TCP_RTO_TICKS;
+	if (c->rtt_samples == 0)
+	{
+		c->srtt_x8   = r << 3;
+		c->rttvar_x4 = r << 1;       // rttvar = r/2, ×4
+	}
+	else
+	{
+		int32_t err = (int32_t)r - (int32_t)(c->srtt_x8 >> 3);
+		c->srtt_x8 = (uint32_t)((int32_t)c->srtt_x8 + err);
+		if (err < 0)
+			err = -err;
+		err -= (int32_t)(c->rttvar_x4 >> 2);
+		c->rttvar_x4 = (uint32_t)((int32_t)c->rttvar_x4 + err);
+	}
+	uint32_t rto = (c->srtt_x8 >> 3) + (c->rttvar_x4 > 1 ? c->rttvar_x4 : 1);  // G = one tick
+	if (rto < TCP_RTO_MIN_TICKS)
+		rto = TCP_RTO_MIN_TICKS;
+	if (rto > TCP_RTO_MAX_TICKS)
+		rto = TCP_RTO_MAX_TICKS;
+	c->rto = rto;
+	c->rto_backed_off = false;
+	c->rtt_samples++;
+	kTcpStats.rtt_samples++;
+	printd(DEBUG_NET, "tcp: rtt %u ticks -> srtt_x8 %u rttvar_x4 %u rto %u ticks\n",
+	       r, c->srtt_x8, c->rttvar_x4, c->rto);
+}
+
+// Arm the retransmit clock for the segment in the slot. A FRESH send starts
+// the round-trip stopwatch; a restart (the peer acknowledged part of the
+// segment) keeps it, because the segment has been in flight since its
+// first send. A timer that has backed off stays backed off (Karn) until a
+// clean sample sets a new one.
+static void tcp_rto_arm(tcp_conn_t* c, bool fresh)
+{
+	if (!c->rto_backed_off)
+		c->rto_ticks = c->rto;
 	c->rto_deadline = kTicksSinceStart + c->rto_ticks;
 	c->retries = 0;
+	if (fresh)
+	{
+		c->snd_sent_at = kTicksSinceStart;
+		c->snd_resent = false;
+	}
 }
 
 static void tcp_send_reliable(tcp_conn_t* c, const void* data, uint16_t len, uint8_t flags)
@@ -223,7 +270,7 @@ static void tcp_send_reliable(tcp_conn_t* c, const void* data, uint16_t len, uin
 	c->snd_len = len;
 	c->snd_flags = flags;
 	c->snd_seq = c->snd_nxt;
-	tcp_rto_arm(c);
+	tcp_rto_arm(c, true);
 
 	tcp_send_segment(c, c->snd_seq, flags, data, len, (flags & TCP_SYN) != 0);
 	// SYN and FIN each consume one sequence number even though they carry
@@ -611,6 +658,8 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				c->rcv_nxt = seq + 1;
 				c->snd_una = ack;        // our SYN is acknowledged, which disarms the timer
+				if (!c->snd_resent)      // and the handshake is the first round trip measured
+					tcp_rtt_sample(c, (uint32_t)(kTicksSinceStart - c->snd_sent_at));
 				c->state = TCP_ESTABLISHED;
 				kTcpStats.connections_opened++;
 
@@ -655,7 +704,9 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				c->snd_una = ack;
 				if (tcp_unacked(c))
-					tcp_rto_arm(c);
+					tcp_rto_arm(c, false);
+				else if (!c->snd_resent)
+					tcp_rtt_sample(c, (uint32_t)(kTicksSinceStart - c->snd_sent_at));
 				// Our FIN being acknowledged is a state transition, not
 				// just bookkeeping.
 				if (c->state == TCP_FIN_WAIT_1 && seq_geq(ack, c->snd_nxt))
@@ -1004,6 +1055,8 @@ void tcp_poll(void)
 				if (c->rto_ticks > TCP_RTO_MAX_TICKS)
 					c->rto_ticks = TCP_RTO_MAX_TICKS;
 				c->rto_deadline = now + c->rto_ticks;
+				c->rto_backed_off = true;   // stays doubled until a clean sample (Karn)
+				c->snd_resent = true;       // this slot's ack can no longer be timed
 				// The flags exactly as first sent (tcp_send_reliable says
 				// why a SYN must not grow an ACK bit here); the ACK
 				// NUMBER, where there is one, is whatever rcv_nxt says
@@ -1192,6 +1245,7 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->local_port = local_port;
 	c->snd_mss = 536;
 	c->snd_wnd = TCP_MSS;
+	c->rto = TCP_RTO_INITIAL_TICKS;
 
 	uint32_t iss = tcp_initial_seq(peer_ip, peer_port, c->local_port);
 	c->snd_una = iss;
@@ -1436,7 +1490,8 @@ void tcp_conn_close(tcp_conn_t* c)
 			// go out once and then die unsent.
 			c->snd_flags |= TCP_FIN;
 			c->snd_nxt += 1;
-			tcp_rto_arm(c);
+			tcp_rto_arm(c, false);
+			c->snd_resent = true;        // the slot goes out twice; neither ack is a sample
 			tcp_send_segment(c, c->snd_seq, c->snd_flags,
 			                 c->snd_buf, (uint16_t)c->snd_len, false);
 		}
