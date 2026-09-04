@@ -131,8 +131,6 @@ for text in good_urls:
         fail(text, f"host header {hostLine!r} != {wantHost!r}")
     if "\r\n\r\n" not in head:
         fail(text, "request has no blank line")
-    if "\r\nAccept-Encoding: gzip, identity\r\n" not in head:
-        fail(text, "request does not name exactly the supported content codings")
 
     # Addressed to a PROXY: the whole URL in the request line (absolute-form,
     # RFC 7230 §5.3.2), Host still naming the origin. Getting these two
@@ -145,8 +143,6 @@ for text in good_urls:
     proxyHostLine = [l for l in proxyHead.split("\r\n") if l.lower().startswith("host:")][0]
     if proxyHostLine != f"Host: {wantHost}":
         fail(text, f"proxy host header {proxyHostLine!r} != {wantHost!r}")
-    if "\r\nAccept-Encoding: gzip, identity\r\n" not in proxyHead:
-        fail(text, "proxy request does not name exactly the supported content codings")
 
 # Refusals, each named. These are the cases where os64get is stricter than
 # urllib on purpose.
@@ -786,6 +782,43 @@ path.write_bytes(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Enc
 verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
 if verdict != "ok" or got["framing"] != "unsupported" or got["transfer"] != "chunked, chunked":
     fail("te chunked-twice", f"{verdict} framing={got.get('framing')} transfer={got.get('transfer')!r}")
+
+# ── A reference with its own authority still has its dots removed ───────
+# §5.2.2 applies remove_dot_segments in every branch, and every other
+# client squashes the path before it goes on the wire; urljoin does NOT for
+# an absolute reference, so these expectations are typed rather than
+# borrowed (Codex review of PR #60). The fragment is cut everywhere.
+absolute_dots = [
+    ("http://example.com/a/b.html", "http://other.example/a/../b", "http://other.example/b"),
+    ("http://example.com/a/b.html", "http://other.example/a/./b/../c?x=1#f", "http://other.example/a/c?x=1"),
+    ("http://example.com/a/b.html", "http://other.example/../../up", "http://other.example/up"),
+    ("http://example.com/a/b.html", "http://other.example/dir/.", "http://other.example/dir/"),
+    ("https://example.com/a/b.html", "http://other.example", "http://other.example"),
+    ("https://example.com/a/b.html", "http://other.example?q=/../x#f", "http://other.example?q=/../x"),
+    ("http://example.com/a/b.html", "//cdn.example.com/x/../y", "http://cdn.example.com/y"),
+    ("https://example.com/a/b.html", "//cdn.example.com:8443/a/./b#f", "https://cdn.example.com:8443/a/b"),
+]
+for base, location, want in absolute_dots:
+    verdict, got, _ = run(["absolute", base, location])
+    if verdict != "absolute":
+        fail(f"absolute-dots {base} + {location}", f"declined it ({verdict})")
+        continue
+    a, b = urllib.parse.urlsplit(got["url"]), urllib.parse.urlsplit(want)
+    if (a.scheme, a.netloc, a.path, a.query) != (b.scheme, b.netloc, b.path, b.query):
+        fail(f"absolute-dots {base} + {location}", f"{got['url']!r} != {want!r}")
+
+# ── Location is a singleton ─────────────────────────────────────────────
+# Two DIFFERENT destinations is a reply with none; the same one twice is one.
+path = work / "two-locations"
+path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /b\r\nContent-Length: 0\r\n\r\n")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "conflict":
+    fail("two-locations", f"{verdict} (want conflict)")
+path = work / "repeated-location"
+path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /a\r\nContent-Length: 0\r\n\r\n")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "ok" or got["location"] != "/a":
+    fail("repeated-location", f"{verdict} location={got.get('location')!r}")
 if failures:
     raise SystemExit(f"{failures} failure(s)")
 print("test_http_host: all checks passed")

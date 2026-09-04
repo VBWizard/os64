@@ -297,6 +297,25 @@ class Handler(socketserver.StreamRequestHandler):
             # obey it either.
             self.send(head(305, "Use Proxy",
                            [("Location", "http://10.0.2.2:9/"), ("Content-Length", 0)]))
+        elif route == "/redirect-dots":
+            # An absolute Location with dot segments. §5.2.2 squashes them in
+            # every branch; sent raw, `/dir/../hello.txt` asks this server
+            # what `..` means, and this server (like many) says 404.
+            self.send(head(302, "Found",
+                           [("Location", f"http://10.0.2.2:{self.server.server_address[1]}/dir/../hello.txt"),
+                            ("Content-Length", 0)]))
+        elif route == "/redirect-dead":
+            # A hop to a port nothing listens on: a road that does not
+            # arrive, which is exit 15 — not 3, which names the address that
+            # was TYPED as unreachable.
+            self.send(head(302, "Found",
+                           [("Location", "http://10.0.2.2:1/nothing"),
+                            ("Content-Length", 0)]))
+        elif route == "/redirect-two":
+            # Two different Locations: a redirect with no destination.
+            self.send(head(302, "Found",
+                           [("Location", "/hello.txt"), ("Location", "/missing"),
+                            ("Content-Length", 0)]))
         elif route == "/redirect-mail":
             self.send(head(302, "Found",
                            [("Location", "mailto:someone@example.com"),
