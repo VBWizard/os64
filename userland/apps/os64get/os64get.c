@@ -2104,11 +2104,13 @@ static int url_ask(url_reply_t *answer, const http_url_t *start, const char *url
                          proxy.inUse ? "the proxy at " : "", peerHost,
                          (unsigned)peerPort, os64_dial_reason(conn));
             // At the FIRST hop this is the address that was typed, and 3
-            // says so. Past it, the machine that cannot be reached is one a
-            // server chose, and a script must be able to tell those apart:
-            // the road did not arrive, which is what 15 means (Codex review
-            // of PR #60).
-            return hops > 0 ? GET_REDIRECT : GET_DIAL_FAILED;
+            // says so. Past it, a SERVER that cannot be reached is one
+            // another server chose, and a script must be able to tell those
+            // apart: the road did not arrive, which is what 15 means (Codex
+            // review of PR #60). A PROXY that cannot be reached is neither —
+            // it is this machine's own setting, the same defect at whichever
+            // hop it is noticed, and it keeps the answer the first hop gives.
+            return (hops > 0 && !proxy.inUse) ? GET_REDIRECT : GET_DIAL_FAILED;
         }
 
         // ── Ask ─────────────────────────────────────────────────────────
