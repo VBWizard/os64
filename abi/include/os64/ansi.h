@@ -75,6 +75,16 @@ static inline uint32_t os64_ansi_bg_color(uint8_t stored, uint32_t fallback)
 // than thickening the glyph, which is what every terminal since the VT100
 // has done with a font that has no bold cut — os64's PSF1 font has one
 // weight, so "bold" means "the bright half of the palette" here, honestly.
+//
+// AND IT IS A WEAK SIGNAL, which is worth knowing before a program leans on
+// it. The bright half of this palette is close to the dim half at the top
+// end: white to bright white is 0xe5e5e5 to 0xffffff, and red to bright red
+// is 0xcd0000 to 0xff0000. Bold reads as emphasis on a word; it does NOT
+// reliably separate two KINDS of text down a whole screen. A program that
+// needs that wants two palette entries with a gap between them — grey
+// against white — or two different hues. (/bin/gopher marked its links bold
+// and they were indistinguishable from the prose beneath them; Chris spotted
+// it against /tests/ansiprobe's own attributes line.)
 #define OS64_ANSI_ATTR_BOLD    0x01
 #define OS64_ANSI_ATTR_REVERSE 0x02   // swap foreground and background
 
