@@ -148,6 +148,7 @@ void    os64_linereader_close(os64_linereader_t *lr);
 //   "r"  read what exists            "u"  update what exists (read/write)
 //   "a"  append to what exists
 //   "w"/"c"  create (or truncate) for writing
+//   "x"  atomically create a NEW file for writing; refuse if it exists
 // Pass NULL for "r" — reading is what almost every open is.
 //
 // The handle you get back is the SAME species as 0/1/2 and pipe ends: it
@@ -299,15 +300,24 @@ int64_t os64_unlink(const char *path);
 // Both must live on the SAME filesystem — moving between mounts is a copy,
 // and belongs in userland where a half-finished one can be cleaned up.
 //
-// Replacing an existing regular file is ATOMIC: `newpath` never stops
-// resolving, so the write-a-temp-then-put-it-in-place recipe is actually
-// safe. Refuses (negative) rather than surprising you: read-only filesystem,
+// With flags zero, replacement follows the filesystem's legacy behavior:
+// ext2 replaces atomically, while FAT removes the destination before moving
+// the source and therefore has a window where neither name exists. Refuses
+// (negative) rather than surprising you: read-only filesystem,
 // missing source, cross-filesystem, a directory on either side of a
 // replacement, an open DIRECTORY on either side, or a directory moved into
 // its own descendant. Open FILES are fine on both sides — replacing one that
 // is being read (or RUN) leaves the reader's copy alive until it closes.
 // This is the call `mv` is built on — within one filesystem.
 int64_t os64_rename(const char *oldpath, const char *newpath);
+
+// The opt-in safe-publish policies. OS64_RENAME_NOREPLACE atomically refuses
+// when newpath exists. OS64_RENAME_REQUIRE_ATOMIC_REPLACE replaces an existing
+// destination only on a filesystem that can do so without unlinking it first;
+// FAT therefore refuses that case and preserves both files. The two flags are
+// mutually exclusive, and unknown combinations are refused.
+int64_t os64_rename_with_flags(const char *oldpath, const char *newpath,
+                               uint64_t flags);
 
 // Mount a partition into the namespace, or take a mount out of it. `what`
 // names the PARTITION — its GPT name ("home") or dashed GUID — never a
@@ -325,8 +335,8 @@ int64_t os64_mount(const char *what, const char *where, uint64_t flags);
 int64_t os64_unmount(const char *where);
 
 // Create a directory at `path` (relative paths resolve against the cwd).
-// 0 on success, negative on failure: a read-only filesystem (ext2, by
-// design), a parent that doesn't exist, or a name already taken. Atomic —
+// 0 on success, negative on failure: a read-only filesystem, a parent that
+// doesn't exist, or a name already taken. Atomic —
 // one call, unlike the three-step setuid dance early Unix made of it.
 // This is the call `mkdir` is built on; its undo is os64_unlink above —
 // the one removal verb covers empty directories, so no rmdir twin needed.
