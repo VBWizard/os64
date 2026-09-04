@@ -4,8 +4,8 @@ r"""httptestd — a deterministic HTTP server for driving os64get's URL half.
 BROWSER.md's verification note calls for "a local python3 -m http.server
 behind the harness"; this is that, with the awkward cases added, because the
 answers worth testing are the ones a well-behaved library will not produce on
-request: a reply with no Content-Length, a connection cut mid-body, a 301, a
-content coding os64get must refuse rather than write to disk.
+request: a reply with no Content-Length, a connection cut mid-body, a 301,
+and content codings os64get must either decode or refuse without publishing.
 
 Every route's bytes are fixed by a seed, so the file the guest downloads can
 be compared against the file this server meant to send — host-side, byte for
@@ -67,7 +67,14 @@ Routes, and what each is FOR:
     /framing-spaced that framing, plus a blank before the colon
     /coding-chain   Transfer-Encoding: gzip, chunked       a coding nothing decoded
     /framing-hidden that framing, padded past a line cap    refused, not dropped
-    /gzipped        Content-Encoding: gzip                 refused, not written
+    /gzipped        Content-Encoding: gzip                 decoded to HELLO
+    /gzip-close     gzip with no Content-Length            EOF finalizes it
+    /gzip-corrupt   gzip with a bad trailer CRC            kept only as .part
+    /gzip-trailing  valid gzip followed by junk            kept only as .part
+    /gzip-limit     1 MiB + 1 decoded zero byte            expansion refused
+    /gzip-chunked   gzip inside chunked framing            both envelopes come off
+    /gzip-twice     Content-Encoding: gzip, on two lines   encoded twice: refused by name
+    /gzip-cut       half a length-framed gzip, then close  a short body, not a bad one
     /cut            half the promised body, then hangs up  a short body is a failure
     /junk           not HTTP at all                        a bad header line
     /reason-latin1  404 with a Latin-1 reason phrase       high bytes are glyphs
@@ -148,6 +155,31 @@ def chunked(body, sizes):
         at += n
         i += 1
     return out + b"0\r\nX-Body-Bytes: %d\r\n\r\n" % len(body)
+
+
+def gzip_bytes(chunks):
+    """Build one RFC 1952 stream without retaining its uncompressed input."""
+    encoder = zlib.compressobj(level=9, wbits=16 + zlib.MAX_WBITS)
+    pieces = []
+    for chunk in chunks:
+        pieces.append(encoder.compress(chunk))
+    pieces.append(encoder.flush())
+    return b"".join(pieces)
+
+
+GZIP_HELLO = gzip_bytes([HELLO])
+GZIP_CORRUPT = bytearray(GZIP_HELLO)
+GZIP_CORRUPT[-8] ^= 0x80
+GZIP_CORRUPT = bytes(GZIP_CORRUPT)
+# The compressed stream is far below 1/100 of its decoded size, so os64get's
+# ratio rule reaches its 1 MiB floor. One byte more proves the exact boundary.
+GZIP_LIMIT = gzip_bytes([bytes(1024 * 1024), b"\0"])
+# Two Content-Encoding: gzip lines say `gzip, gzip` (RFC 7230 §3.2.2), and a
+# body that honours it is gzipped twice. One decoder pass leaves a gzip file
+# wearing the page's name; the client must refuse the list, not unwrap one.
+GZIP_TWICE = gzip_bytes([GZIP_HELLO])
+# gzip of the same 200000 bytes /chunked serves, for the chunked-and-gzip case.
+GZIP_CHUNKED = gzip_bytes([BIG[:200000]])
 
 
 def head(status, reason, headers, version="HTTP/1.1"):
@@ -364,10 +396,45 @@ class Handler(socketserver.StreamRequestHandler):
                                        ("Transfer-Encoding", "chunked")]))
             self.send(chunked(CHUNKED, [1, 7, 100, 4096, 9000, 65536, 3]))
         elif route == "/gzipped":
-            body = zlib.compress(HELLO)
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_HELLO))]) + GZIP_HELLO)
+        elif route == "/gzip-close":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip")],
+                           version="HTTP/1.0") + GZIP_HELLO)
+        elif route == "/gzip-corrupt":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_CORRUPT))]) + GZIP_CORRUPT)
+        elif route == "/gzip-trailing":
+            body = GZIP_HELLO + b"not another gzip member"
             self.send(head(200, "OK", [("Content-Type", "text/plain"),
                                        ("Content-Encoding", "gzip"),
                                        ("Content-Length", len(body))]) + body)
+        elif route == "/gzip-limit":
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_LIMIT))]) + GZIP_LIMIT)
+        elif route == "/gzip-chunked":
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Transfer-Encoding", "chunked")]))
+            self.send(chunked(GZIP_CHUNKED, [1, 7, 100, 4096, 9000, 65536, 3]))
+        elif route == "/gzip-twice":
+            self.send(head(200, "OK", [("Content-Type", "text/plain"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_TWICE))]) + GZIP_TWICE)
+        elif route == "/gzip-cut":
+            # A length that promises the whole stream, half of it, then the
+            # close: the framing's verdict (cut) must win over the decoder's
+            # (it never saw a trailer), and the client must not wait forever
+            # for bytes the peer has hung up on.
+            self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
+                                       ("Content-Encoding", "gzip"),
+                                       ("Content-Length", len(GZIP_CHUNKED))])
+                      + GZIP_CHUNKED[:len(GZIP_CHUNKED) // 2])
         elif route == "/cut":
             self.send(head(200, "OK", [("Content-Type", "application/octet-stream"),
                                        ("Content-Length", 100000)]))

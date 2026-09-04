@@ -267,12 +267,13 @@ class Handler(socketserver.StreamRequestHandler):
             upstream = http.client.HTTPConnection(split.hostname, port, timeout=30)
 
         try:
-            # identity, for the same reason os64get asks for it: nothing
-            # downstream can inflate anything yet.
+            # Match the downstream client's actual decoder set. Content-Encoding
+            # is end-to-end metadata, so deliver() preserves it while only
+            # Transfer-Encoding is removed after http.client de-chunks.
             upstream.request("GET", path, headers={
                 "Host": split.netloc,
                 "User-Agent": "os64 tlsproxy/1",
-                "Accept-Encoding": "identity",
+                "Accept-Encoding": "gzip, identity",
                 "Connection": "close",
             })
             reply = self.final_response(upstream)

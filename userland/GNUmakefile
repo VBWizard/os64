@@ -234,7 +234,7 @@ TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 # These programs consume the standalone gzip module. Keep the dependency
 # selective: linking libgzip into every app would turn an optional format
 # engine into part of the foundational runtime by accident.
-LIBGZIP_PROGRAMS := gzip gunzip gziptest
+LIBGZIP_PROGRAMS := gzip gunzip gziptest os64get
 
 # gview consumes PNG in the GUI; pngtest proves the same dependency in the
 # guest without requiring a GUI. libpng carries its own DT_NEEDED edge on

@@ -91,10 +91,12 @@
 //     crash-safe publication there.
 //
 // HOW MUCH THE SECOND BULLET CAN PROMISE DEPENDS ON THE DIALECT, and the
-// difference is the server's, not this program's. The valet names a CRC, so
-// "correct" is answerable. HTTP names a length and nothing else, so a URL
-// fetch can prove a body was not CUT SHORT and cannot prove it arrived
-// intact — which is exactly what it says, and why it claims no more.
+// difference is the format's, not this program's. The valet names a CRC, so
+// "correct" is answerable. An identity-coded HTTP body names only a length,
+// so a URL fetch can prove it was not CUT SHORT and cannot prove it arrived
+// intact. A gzip body carries its own CRC and decoded size in the trailer;
+// those are checked before the `.part` is published, but they prove integrity,
+// not authenticity — a server can send the wrong page with a perfect CRC.
 //
 // BESIDE is load-bearing: rename works within ONE filesystem (the kernel
 // refuses a cross-mount rename, correctly), and /home, /fat and / are three.
@@ -117,6 +119,7 @@
 #include "os64/conf.h"
 #include "os64/date.h"
 
+#include "gzip/gzip.h"
 #include "http.h"
 
 #define GET_OK             0
@@ -164,6 +167,17 @@
 // disk, not the wire.
 #define GET_CHUNK     65536
 #define GET_PATH_MAX  256
+
+// A compressed response cannot spend the destination filesystem without a
+// bound merely by describing the same byte millions of times. Content-Length
+// counts wire bytes, so a length-framed response may expand at most 100x, with
+// a 1 MiB floor that keeps small ordinary pages useful. Sixteen MiB is the
+// ceiling in every case, and the only available bound when close frames the
+// body and its wire length is unknowable in advance. Identity is unaffected:
+// these limits pay specifically for compression's amplification hazard.
+#define URL_GZIP_OUTPUT_FLOOR (1ull * 1024ull * 1024ull)
+#define URL_GZIP_OUTPUT_MAX   (16ull * 1024ull * 1024ull)
+#define URL_GZIP_RATIO_MAX    100ull
 
 // -a holds the server's whole catalogue in memory before fetching any of it,
 // so that a list too long to hold fails BEFORE the system is half-replaced.
@@ -1268,10 +1282,13 @@ static void lookup_lot(const char *host, const char *name, const conf_t *c,
 //   - IT DOES NOT ARCHIVE. The archive is the supply line's record of what
 //     landed on this machine and when, so a bad build can be walked back by
 //     hand. A download is not an install and has nothing to walk back to.
-//   - IT HAS NO CHECKSUM, so it cannot tell "complete" from "correct", and
-//     says so rather than implying otherwise. HTTP offers a length or chunk
-//     framing; a body cut before either is satisfied fails loudly, and
-//     everything past that is the server's word.
+//   - IDENTITY-CODED HTTP HAS NO CHECKSUM, so it cannot tell "complete" from
+//     "correct", and says so rather than implying otherwise. HTTP offers a
+//     length or chunk framing; a body cut before either is satisfied fails
+//     loudly in either coding, and everything past that is the server's
+//     word. gzip's trailer does carry a CRC and decoded size, and both are
+//     verified before publish; neither is authentication, so the server
+//     still owns what the bytes mean.
 //   - IT DOES NOT LET A REDIRECT NAME THE FILE. Following one is ordinary
 //     (see url_ask); letting the far end choose what appears in somebody's
 //     directory is not, so the name is settled from the typed address before
@@ -1317,6 +1334,200 @@ static int64_t url_source_read(void *ctx, void *buf, size_t cap)
         return -1;
     }
     return n;
+}
+
+// URL fetches are sequential, so one pair of BSS buffers serves every one.
+// Keeping 128 KiB off the stack matters even though the current user stack is
+// larger: the buffers are transfer state, not call state, and gzip needs an
+// input chunk and a decoded-output chunk alive at the same time.
+static uint8_t urlWire[GET_CHUNK];
+static uint8_t urlPlain[GET_CHUNK];
+
+typedef struct {
+    uint64_t received;       // body bytes the framing handed over: the wire's count
+    uint64_t produced;       // representation bytes staged in the .part file
+} url_body_result_t;
+
+static int gzip_body_result(os64_gzip_status_t status)
+{
+    // An unsupported method and a local expansion policy are both honest
+    // "this reply cannot be decoded here" answers. Every other terminal gzip
+    // result says the bytes claimed to be gzip but did not form one complete,
+    // verified gzip stream, which is corruption rather than missing support.
+    if (status == OS64_GZIP_UNSUPPORTED || status == OS64_GZIP_LIMIT)
+        return GET_UNSUPPORTED;
+    return GET_CORRUPT;
+}
+
+// The wire length is only known in advance under a Content-Length; a chunked
+// or close-framed gzip body gets the ceiling and nothing finer.
+static uint64_t gzip_body_limit(const http_response_t *reply)
+{
+    if (!reply->hasLength)
+        return URL_GZIP_OUTPUT_MAX;
+
+    uint64_t limit;
+    if (reply->length > URL_GZIP_OUTPUT_MAX / URL_GZIP_RATIO_MAX)
+        limit = URL_GZIP_OUTPUT_MAX;
+    else
+        limit = reply->length * URL_GZIP_RATIO_MAX;
+    if (limit < URL_GZIP_OUTPUT_FLOOR)
+        limit = URL_GZIP_OUTPUT_FLOOR;
+    if (limit > URL_GZIP_OUTPUT_MAX)
+        limit = URL_GZIP_OUTPUT_MAX;
+    return limit;
+}
+
+// Read one HTTP message body into an already-open .part file.
+//
+// THE FRAMING IS THE BODY READER'S BUSINESS (http.h): what comes out of it is
+// the body's bytes and nothing else — a length, chunks, or the close, taken
+// off — and when it answers 0 its `result` says whether the body ENDED or
+// was merely STOPPED. This function decides only what those bytes ARE: the
+// file itself, or a gzip stream the file is inside. The decoder's output is
+// written as it streams but stays provisional by construction: the caller
+// publishes the .part only after this returns OK, and for gzip that takes
+// the framing satisfied AND OS64_GZIP_DONE — every member trailer verified,
+// no trailing data.
+//
+// A body the framing calls CUT or BROKE is NOT this function's verdict to
+// give. The decoder is told the input is final only when the body is WHOLE,
+// so a truncated transfer reaches it as "no more for now" and this returns
+// OK with the decoder's work unfinished; the caller reads `body->result` and
+// says "cut short", the same as it would for an identity body. (The earlier
+// shape, which framed the body itself, looped forever on a length-framed
+// gzip reply that closed early — Codex review of PR #54.)
+static int receive_url_body(http_body_t *body, const http_response_t *reply,
+                            int32_t out, const char *partPath, const char *name,
+                            bool quiet, bool gzipEncoded,
+                            url_body_result_t *result)
+{
+    // The counters are the caller's to read on EVERY return — a refused
+    // allocation included, since the meter's last tick reports them — so
+    // they are set before anything can fail.
+    result->received = 0;
+    result->produced = 0;
+
+    os64_gzip_t *decoder = NULL;
+    uint64_t gzipLimit = 0;
+    if (gzipEncoded) {
+        gzipLimit = gzip_body_limit(reply);
+        decoder = os64_gzip_create(gzipLimit);
+        if (decoder == NULL) {
+            os64_hprintf(OS64_STDERR, "os64get: cannot allocate the gzip decoder\n");
+            return GET_WRITE_FAILED;
+        }
+    }
+
+    int status = GET_OK;
+    os64_gzip_status_t gzipStatus = OS64_GZIP_NEED_INPUT;
+    const char *unit = gzipEncoded ? " wire" : "";
+    bool over = false;
+
+    while (!over) {
+        // Fill the buffer before writing it, for the disk's sake: a socket
+        // read answers with what has ARRIVED — a segment, or a scheduler
+        // pass's worth — and writing each of those hands ext2 a block or two
+        // at a time. Progress ticks from INSIDE the fill, every 4KB of
+        // arrival, so a slow link reads as slow rather than as hung. The
+        // meter counts arrival, which for gzip is the wire's bytes even
+        // though the file being staged grows faster.
+        size_t filled = 0;
+        while (filled < sizeof(urlWire)) {
+            int64_t n = http_body_read(body, urlWire + filled, sizeof(urlWire) - filled);
+            if (n <= 0) { over = true; break; }
+            filled += (size_t)n;
+            uint64_t staged = result->received + filled;
+            if (!quiet && (staged % 4096 < (uint64_t)n ||
+                           (reply->hasLength && staged == reply->length))) {
+                if (reply->hasLength)
+                    os64_printf("\r%s: %lu/%lu%s bytes", name,
+                                (unsigned long)staged, (unsigned long)reply->length, unit);
+                else
+                    os64_printf("\r%s: %lu%s bytes", name, (unsigned long)staged, unit);
+            }
+        }
+        result->received += filled;
+
+        bool finalInput = over && body->result == HTTP_BODY_DONE;
+
+        if (!gzipEncoded) {
+            if (filled != 0 &&
+                os64_write(out, urlWire, filled) != (int64_t)filled) {
+                os64_hprintf(OS64_STDERR,
+                             "os64get: write to %s failed (disk full?)\n",
+                             partPath);
+                status = GET_WRITE_FAILED;
+                break;
+            }
+            result->produced += filled;
+        } else if (filled != 0 || finalInput) {
+            const uint8_t *input = urlWire;
+            size_t inputLeft = filled;
+
+            for (;;) {
+                uint8_t *output = urlPlain;
+                size_t outputLeft = sizeof(urlPlain);
+                gzipStatus = os64_gzip_process(decoder, &input, &inputLeft,
+                                                &output, &outputLeft,
+                                                finalInput);
+                size_t produced = sizeof(urlPlain) - outputLeft;
+                if (produced != 0 &&
+                    os64_write(out, urlPlain, produced) != (int64_t)produced) {
+                    os64_hprintf(OS64_STDERR,
+                                 "os64get: write to %s failed (disk full?)\n",
+                                 partPath);
+                    status = GET_WRITE_FAILED;
+                    break;
+                }
+                result->produced += produced;
+
+                if (gzipStatus == OS64_GZIP_NEED_OUTPUT)
+                    continue;
+                if (gzipStatus == OS64_GZIP_NEED_INPUT) {
+                    // Asked for more with the whole body already given is a
+                    // stream that ends before its trailer; asked for more
+                    // while holding some is the decoder breaking its word.
+                    if (finalInput) {
+                        gzipStatus = OS64_GZIP_TRUNCATED;
+                        status = GET_CORRUPT;
+                    } else if (inputLeft != 0) {
+                        gzipStatus = OS64_GZIP_BAD_ARGUMENT;
+                        status = GET_CORRUPT;
+                    }
+                    break;
+                }
+                if (gzipStatus == OS64_GZIP_DONE)
+                    break;
+
+                status = gzip_body_result(gzipStatus);
+                break;
+            }
+        }
+
+        if (status != GET_OK)
+            break;
+        if (finalInput && gzipEncoded && gzipStatus != OS64_GZIP_DONE)
+            status = gzip_body_result(gzipStatus);
+    }
+
+    if (gzipEncoded && status != GET_OK) {
+        if (gzipStatus == OS64_GZIP_LIMIT)
+            os64_hprintf(OS64_STDERR,
+                         "os64get: gzip response expands past its %lu-byte safety limit"
+                         " (at most %lux wire size and %lu MiB overall)"
+                         " — %s NOT written\n",
+                         (unsigned long)gzipLimit,
+                         (unsigned long)URL_GZIP_RATIO_MAX,
+                         (unsigned long)(URL_GZIP_OUTPUT_MAX / 1024 / 1024),
+                         partPath);
+        else if (status != GET_WRITE_FAILED)
+            os64_hprintf(OS64_STDERR, "os64get: bad gzip response: %s"
+                         " — %s NOT written\n",
+                         os64_gzip_status_name(gzipStatus), partPath);
+    }
+    os64_gzip_destroy(decoder);
+    return status;
 }
 
 // The name a URL suggests for the thing it points at: the last path segment,
@@ -2093,10 +2304,11 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
 
     // A FRAMING OR A CODING THIS PROGRAM CANNOT UNDO MUST NEVER BECOME A
     // FILE. What would land is the envelope wearing the letter's name, and a
-    // `.html` full of DEFLATE is worse than no file at all, because it looks
-    // like a successful download. The rule outlives the list: whatever this
-    // program learns to read moves out of these branches by being handled
-    // (chunked did), and whatever it has not learned is refused by name.
+    // `.html` full of chunk lengths or of a compression nothing here speaks
+    // is worse than no file at all, because it looks like a successful
+    // download. The rule outlives the list: whatever this program learns to
+    // read moves out of these branches by being handled (chunked and gzip
+    // did), and whatever it has not learned is refused by name.
     http_body_t body;
     if (!http_body_open(&body, &answer.stream, &answer.reply))
     {
@@ -2106,11 +2318,16 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
         os64_close(answer.conn);
         return GET_UNSUPPORTED;
     }
+    // gzip is the one content coding this program undoes (BROWSER.md 3(d)),
+    // and it is undone in receive_url_body, DOWNSTREAM of the framing: a
+    // gzip body may arrive chunked, and the two envelopes come off in the
+    // order they went on.
+    bool gzipEncoded = os64_streq(answer.reply.contentEncoding, "gzip");
     if (answer.reply.contentEncoding[0] != '\0' &&
-        !os64_streq(answer.reply.contentEncoding, "identity"))
+        !os64_streq(answer.reply.contentEncoding, "identity") && !gzipEncoded)
     {
         os64_hprintf(OS64_STDERR,
-                     "os64get: the reply is encoded as '%s', which os64get does not decode yet"
+                     "os64get: the reply is encoded as '%s', which os64get does not decode"
                      " — nothing written\n", answer.reply.contentEncoding);
         os64_close(answer.conn);
         return GET_UNSUPPORTED;
@@ -2125,52 +2342,20 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
         return GET_WRITE_FAILED;
     }
 
-    // THE FRAMING IS THE BODY READER'S BUSINESS (http.h). What comes out of
-    // it is the file's bytes and nothing else, and when it answers 0 its
-    // result says whether the body ENDED or was merely STOPPED — a
-    // distinction only a length or chunked framing can draw. Without either,
-    // the close is the length (HTTP/1.0's original framing, RFC 1945 §7.2.2,
-    // and the reason `Connection: close` is in the request): a reply with no
-    // length is still readable, it just cannot be told apart from one that
-    // was cut short.
-    uint8_t buf[GET_CHUNK];
-    uint64_t got = 0;
-    int status = GET_OK;
-    bool over = false;
-
-    while (!over)
-    {
-        // Fill the buffer before writing it, for the disk's sake: a socket
-        // read answers with what has ARRIVED — a segment, or a scheduler
-        // pass's worth — and writing each of those hands ext2 a block or two
-        // at a time. Progress ticks from INSIDE the fill, every 4KB of
-        // arrival, so a slow link reads as slow rather than as hung.
-        size_t filled = 0;
-        while (filled < sizeof(buf))
-        {
-            int64_t n = http_body_read(&body, buf + filled, sizeof(buf) - filled);
-            if (n <= 0) { over = true; break; }
-            filled += (size_t)n;
-            uint64_t staged = got + filled;
-            if (!quiet && (staged % 4096 < (uint64_t)n ||
-                           (answer.reply.hasLength && staged == answer.reply.length)))
-            {
-                if (answer.reply.hasLength)
-                    os64_printf("\r%s: %lu/%lu bytes", name,
-                                (unsigned long)staged, (unsigned long)answer.reply.length);
-                else
-                    os64_printf("\r%s: %lu bytes", name, (unsigned long)staged);
-            }
-        }
-
-        if (filled > 0 && os64_write((int32_t)out, buf, filled) != (int64_t)filled)
-        {
-            os64_hprintf(OS64_STDERR, "os64get: write to %s failed (disk full?)\n", partPath);
-            status = GET_WRITE_FAILED;
-            break;
-        }
-        got += filled;
-    }
+    // THE FRAMING IS THE BODY READER'S BUSINESS (http.h) AND THE CODING IS
+    // receive_url_body's. The first takes off the length, the chunks or the
+    // close and answers whether the body ENDED or was merely STOPPED — a
+    // distinction only a length or chunked framing can draw; without either
+    // the close is the length (HTTP/1.0's original framing, RFC 1945
+    // §7.2.2, and the reason `Connection: close` is in the request), and a
+    // reply with no length cannot be told apart from one that was cut
+    // short. The second decides what the bytes ARE: the file, or a gzip
+    // stream the file is inside. A Content-Length counts WIRE bytes either
+    // way; what lands in the .part is counted separately and, for gzip,
+    // capped.
+    url_body_result_t staged;
+    int status = receive_url_body(&body, &answer.reply, (int32_t)out, partPath,
+                                  name, quiet, gzipEncoded, &staged);
     if (!quiet)
     {
         // The meter's last tick: a length-framed body printed it when the
@@ -2178,7 +2363,8 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
         // total only now, and a meter that stops at the last 4KB boundary
         // reads as a transfer that stopped short.
         if (!answer.reply.hasLength)
-            os64_printf("\r%s: %lu bytes", name, (unsigned long)got);
+            os64_printf("\r%s: %lu%s bytes", name, (unsigned long)staged.received,
+                        gzipEncoded ? " wire" : "");
         os64_printf("\n");
     }
 
@@ -2191,26 +2377,28 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
         case HTTP_BODY_BROKE:
             if (answer.src.silent)
                 os64_hprintf(OS64_STDERR, "os64get: the server went silent for %u seconds"
-                             " after %lu bytes\n", URL_IDLE_MS / 1000, (unsigned long)got);
+                             " after %lu bytes\n", URL_IDLE_MS / 1000,
+                             (unsigned long)staged.received);
             else
                 os64_hprintf(OS64_STDERR, "os64get: the connection broke after %lu bytes\n",
-                             (unsigned long)got);
+                             (unsigned long)staged.received);
             status = GET_SHORT;
             break;
         case HTTP_BODY_CUT:
             if (answer.reply.hasLength)
                 os64_hprintf(OS64_STDERR, "os64get: the reply ended after %lu of %lu bytes\n",
-                             (unsigned long)got, (unsigned long)answer.reply.length);
+                             (unsigned long)staged.received,
+                             (unsigned long)answer.reply.length);
             else
                 os64_hprintf(OS64_STDERR, "os64get: the reply ended after %lu bytes,"
-                             " before its last chunk\n", (unsigned long)got);
+                             " before its last chunk\n", (unsigned long)staged.received);
             status = GET_SHORT;
             break;
         default:
             // The server's chunk framing stopped being HTTP: "that was not
             // speech", the same verdict a broken head earns.
             os64_hprintf(OS64_STDERR, "os64get: after %lu bytes, %s\n",
-                         (unsigned long)got, http_body_reason(body.result));
+                         (unsigned long)staged.received, http_body_reason(body.result));
             status = GET_BAD_HEADER;
             break;
         }
@@ -2225,10 +2413,12 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
 
     if (status != GET_OK)
     {
-        // The fragment stays as <dest>.part ON PURPOSE, exactly as it does on
-        // the valet's path: whatever was at the real name is still there and
-        // still whole, and the fragment is evidence for whoever is debugging
-        // the failure.
+        // The provisional bytes stay as <dest>.part ON PURPOSE, exactly as a
+        // valet fragment does: whatever was at the real name is still there
+        // and whole, and the staged bytes are evidence for whoever is
+        // debugging the failure. A gzip checksum or trailing-data refusal can
+        // leave a full-looking decoded file here; `.part` is the visible claim
+        // that it was never verified and must not be mistaken for the answer.
         return status;
     }
 
@@ -2243,10 +2433,18 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
     }
 
     // THE HOST NAMED IS THE ONE THAT SERVED IT, which after a redirect is not
-    // the one that was typed — that is the whole point of saying it.
+    // the one that was typed — that is the whole point of saying it. A gzip
+    // body names both counts, because the one the meter showed was the wire's.
     if (!quiet)
-        os64_printf("%s: %lu bytes from %s\n", dest, (unsigned long)got,
-                    answer.answered.host);
+    {
+        if (gzipEncoded)
+            os64_printf("%s: %lu bytes (gzip, %lu on the wire) from %s\n", dest,
+                        (unsigned long)staged.produced, (unsigned long)staged.received,
+                        answer.answered.host);
+        else
+            os64_printf("%s: %lu bytes from %s\n", dest, (unsigned long)staged.produced,
+                        answer.answered.host);
+    }
     return GET_OK;
 }
 

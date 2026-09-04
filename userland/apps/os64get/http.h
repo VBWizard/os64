@@ -22,10 +22,11 @@
 // network is a parser nobody drives across those boundaries.
 //
 // DELIBERATELY NOT HERE, each a rung of BROWSER.md's ladder or a ruling of
-// its own: content codings, transfer codings other than chunked,
+// its own: content codings beyond gzip, transfer codings other than chunked,
 // authentication, cookies, keep-alive, IPv6 literals. What is missing is
 // REFUSED BY NAME rather than mis-read: a response this code cannot honestly
-// turn into a file must never become a file.
+// turn into a file must never become a file. gzip decoding stays in the
+// caller because http.c is the transport parser; libgzip owns that format.
 //
 // WHAT A REDIRECT MEANS IS NOT HERE EITHER, and that split is on purpose:
 // this file answers "where does that Location point", which is arithmetic on
@@ -186,7 +187,7 @@ typedef struct {
     bool     hasLength;
     uint64_t length;                          // valid only when hasLength
     char     transferEncoding[HTTP_TOKEN_MAX];// "" = none said
-    char     contentEncoding[HTTP_TOKEN_MAX]; // "" = identity, the only one this speaks
+    char     contentEncoding[HTTP_TOKEN_MAX]; // "" = identity; caller also accepts gzip
     bool     hasLocation;                     // a Location line was seen, even an empty one
     char     location[HTTP_LINE_MAX];         // valid only when hasLocation; "" = it named nowhere
 } http_response_t;

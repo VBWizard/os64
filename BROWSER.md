@@ -111,6 +111,30 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      the evidence rather than the verdict — the counters answered "who
      failed" in one command, and a second machine answered "whose fault"
      in one try. Neither cost a debugging session.
+   - (d) **DONE 2026-09-03.** `Content-Encoding: gzip` streams through
+     libgzip into the same `<dest>.part` staging the identity path uses, and
+     the name is published only after `OS64_GZIP_DONE` has verified every
+     member CRC/size and ruled out trailing data. `Accept-Encoding` now names
+     exactly `gzip, identity` both directly and through `tlsproxy.py`.
+     Length-framed replies may expand at most 100x, with a 1 MiB usability
+     floor and 16 MiB absolute ceiling; a chunked or close-framed gzip body
+     gets the ceiling, because its wire length is not known in advance.
+     Identity downloads are unchanged. **The coding comes off DOWNSTREAM of
+     the framing** (`receive_url_body` reads through 3(b)'s body reader and
+     decides only what the bytes ARE), so a gzip body may arrive chunked and
+     the two envelopes come off in the order they went on — and the framing's
+     verdict outranks the decoder's: a length-framed gzip reply that closes
+     early is a SHORT transfer (exit 7, `.part` left), never a hang and never
+     "corrupt". Two `Content-Encoding: gzip` field lines are the list
+     `gzip, gzip` (RFC 7230 §3.2.2, a body encoded twice), kept as the value
+     and refused by name rather than unwrapped once and published (both from
+     Codex's review of PR #54). Host ASan/UBSan parser and gzip suites
+     passed; in QEMU over slirp, length-, close- and chunk-framed gzip all
+     decoded byte-identically, a bad CRC and explicit trailing bytes exited 8
+     without replacing the old name, a 1 MiB + 1 compression fixture stopped
+     at exactly 1048576 staged bytes with exit 14, `/gzip-twice` exited 14
+     with nothing written, `/gzip-cut` exited 7. The shared DEFLATE decoder
+     is also the engine beneath libpng's zlib framing.
    - (b) **DONE 2026-09-03.** HTTP/1.1 and chunked transfer coding. The
      two are one slice because the version is a promise: a 1.0 client is
      owed a length or a close, a 1.1 client must read chunks, and saying
@@ -163,10 +187,6 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      that 301s to https — refused honestly with no proxy set, then went
      `301 -> https://...` through `$https_proxy` and landed 137582 bytes
      byte-identical to curl's copy.
-   - (d) `Content-Encoding: gzip` — stream through libgzip with a response
-     expansion cap, keep the output provisional until `OS64_GZIP_DONE`, and
-     reject its explicit trailing-data result; libpng uses the same shared
-     DEFLATE decoder beneath PNG's zlib framing.
    - (e) `Range:`/resume — later, wants a consumer first.
    DESIGN CONSTRAINT: keep the HTTP machinery in cleanly separable
    functions — the extraction into a shared library (FreeBSD libfetch's
