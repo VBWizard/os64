@@ -1077,15 +1077,22 @@ static bool chunk_size_parse(const char *line, uint64_t *size)
     return true;
 }
 
-// A token, then a colon, somewhere. Enough to tell a trailer field from junk
-// without parsing what this code does not read.
+// A token, then a colon: the NAME is every byte before the colon, and each
+// one is judged by is_token_byte — the rule header_take applies, so the
+// trailer section cannot be looser about what a field is called than the
+// head is (it was: only the first byte was checked, and `X Bad: value`
+// ended a body as DONE — Codex review of PR #60, round 4). Nothing past the
+// colon is read, so nothing past it is judged.
 static bool field_line_shaped(const char *line)
 {
     if (!is_token_byte(line[0]))
         return false;
-    for (const char *p = line; *p != '\0'; p++)
+    for (const char *p = line; *p != '\0'; p++) {
         if (*p == ':')
             return true;
+        if (!is_token_byte(*p))
+            return false;
+    }
     return false;
 }
 
