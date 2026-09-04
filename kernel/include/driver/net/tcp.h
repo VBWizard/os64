@@ -101,16 +101,27 @@ typedef enum tcp_state
 #define TCP_RCV_BUF  65536
 #define TCP_MSS      1460
 
-// Timers, in ticks (100/s). Fixed RTO with exponential backoff — a real
-// stack measures round-trip time and adapts (Jacobson/Karels, 1988); ours
-// is booked as a DEBT and stated here so nobody mistakes 1 second for
-// measurement. TIME_WAIT is 2×MSL, and MSL ("maximum segment lifetime")
+// Timers, in ticks (100/s). THE RETRANSMIT TIMER IS MEASURED: Jacobson
+// and Karels' 1988 estimator — a smoothed round trip and its deviation,
+// the timer at the mean plus four deviations — with Karn's 1987 rule that
+// a retransmitted segment yields no sample (its ack could be for either
+// copy) and keeps its backed-off timer until a clean sample arrives. RFC
+// 6298 spells the arithmetic; the scaled integers in tcp_conn_t (srtt ×8,
+// rttvar ×4) are the paper's own, and keep some precision at a 10ms tick.
+// THE FLOOR IS 200ms, LINUX'S, NOT THE RFC'S "SHOULD 1 second" — on
+// merit: one second was the fixed timer this stack had until 2026-09-04,
+// and on a millisecond wire it made every lost segment cost a second; the
+// floor exists so a peer's delayed ack is not read as loss, and 200ms
+// clears that with thirty years of evidence behind it. Before the first
+// sample the timer is the RFC's initial second. TIME_WAIT is 2×MSL, and
+// MSL ("maximum segment lifetime")
 // is the assumption that no packet outlives 15 seconds on this network —
 // RFC 793 suggests 2 minutes for the internet at large; a virtual wire and
 // a home LAN are not the 1981 ARPAnet, and 30 seconds of TIME_WAIT is
 // already deep paranoia by our standards.
-#define TCP_RTO_TICKS       (1 * TICKS_PER_SECOND)
-#define TCP_RTO_MAX_TICKS   (8 * TICKS_PER_SECOND)
+#define TCP_RTO_INITIAL_TICKS (1 * TICKS_PER_SECOND)
+#define TCP_RTO_MIN_TICKS     (TICKS_PER_SECOND / 5)
+#define TCP_RTO_MAX_TICKS     (8 * TICKS_PER_SECOND)
 #define TCP_MAX_RETRIES     6
 #define TCP_MSL_TICKS       (15 * TICKS_PER_SECOND)
 #define TCP_CONNECT_TIMEOUT (10 * TICKS_PER_SECOND)
@@ -175,8 +186,22 @@ typedef struct tcp_conn
 	uint32_t snd_seq;      // sequence number of snd_buf[0]
 	uint8_t  snd_flags;    // the FIN/SYN riding this segment, if any
 	uint64_t rto_deadline; // kTicksSinceStart when we resend
-	uint32_t rto_ticks;    // current timeout (doubles on each retry)
+	uint32_t rto_ticks;    // the timeout in force (doubles on each retry)
 	uint8_t  retries;
+
+	// The measured round trip (Jacobson/Karels; the timer constants above
+	// say why): srtt in eighths of a tick, rttvar in quarters, so
+	// (srtt_x8 >> 3) + rttvar_x4 is the mean plus FOUR deviations in whole
+	// ticks. snd_sent_at is when the slot's segment first went out; the
+	// sample is taken only if that segment was never sent again (Karn —
+	// snd_resent), and a timeout's doubled timer stays in force
+	// (rto_backed_off) until a clean sample replaces it.
+	uint32_t srtt_x8, rttvar_x4;
+	uint32_t rto;          // ticks: what the next fresh send arms with
+	uint64_t snd_sent_at;
+	uint32_t rtt_samples;
+	bool     snd_resent;
+	bool     rto_backed_off;
 
 	// ── RECEIVE state (RCV.*) ──
 	uint32_t rcv_nxt;      // next sequence number we expect — the ACK we send
@@ -251,6 +276,7 @@ typedef struct tcp_stats
 	// allocation) are why it is one number and one door (Codex, PR #46).
 	uint64_t heap_moves;
 	uint64_t segments_in, segments_out, retransmits;
+	uint64_t rtt_samples;           // clean round trips measured (Karn's rule counts the rest out)
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)
 	uint64_t resets_received;

@@ -1219,11 +1219,12 @@ static void sys_gen_net_dhcp(synth_text_t *t)
 // The counters are the shakedown instruments. This stack spent its first
 // weeks on a LAN, where retransmits and out_of_order_held read zero
 // forever; the chaos rig (VERIFICATION.md) and the real internet are where
-// they report weather, and whether a booked v1 debt (window scaling,
-// measured RTO — tcp.h states them) is worth paying is a question these
+// they report weather, and whether a booked v1 debt (window scaling, a
+// send window — tcp.h states them) is worth paying is a question these
 // numbers answer with data instead of theory. Reassembly was the first one
-// paid that way: out_of_order_dropped priced it, out_of_order_held is the
-// receipt.
+// paid that way (out_of_order_dropped priced it, out_of_order_held is the
+// receipt) and the measured retransmit timer the second (retransmits
+// priced it; rto and srtt are the receipt).
 static void sys_gen_net_tcp(synth_text_t *t)
 {
 	// RFC 793's own vocabulary, netstat's spelling since 4.2BSD.
@@ -1241,6 +1242,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "segments_in: %lu\n", kTcpStats.segments_in);
 	synth_text_addf(t, "segments_out: %lu\n", kTcpStats.segments_out);
 	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
+	synth_text_addf(t, "rtt_samples: %lu\n", kTcpStats.rtt_samples);
 	synth_text_addf(t, "out_of_order_held: %lu\n", kTcpStats.out_of_order_held);
 	synth_text_addf(t, "out_of_order_dropped: %lu\n", kTcpStats.out_of_order_dropped);
 	synth_text_addf(t, "duplicates_dropped: %lu\n", kTcpStats.duplicates_dropped);
@@ -1267,6 +1269,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		uint16_t win;
 		uint32_t buf_used;
 		uint64_t rx, tx, rexmit, ooo, held;
+		uint32_t rto_ms, srtt_ms;
 		bool     detached, zwin, rst;
 	};
 
@@ -1334,6 +1337,8 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		r->rexmit     = c->retransmits;
 		r->ooo        = c->out_of_order_dropped;
 		r->held       = c->out_of_order_held;
+		r->rto_ms     = c->rto * 1000u / TICKS_PER_SECOND;
+		r->srtt_ms    = (c->srtt_x8 >> 3) * 1000u / TICKS_PER_SECOND;
 		r->detached   = c->detached;
 		r->zwin       = c->zero_window;
 		r->rst        = c->reset;
@@ -1344,7 +1349,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "connections: %u\n", n + omitted);
 	if (n > 0)
 	{
-		synth_text_addf(t, "# local peer state mss win buf rx_bytes tx_bytes rexmit ooo held flags\n");
+		synth_text_addf(t, "# local peer state mss win buf rx_bytes tx_bytes rexmit ooo held rto_ms srtt_ms flags\n");
 		struct tcp_row_chunk *ch = chunks;
 		for (uint32_t i = 0; i < n; i++)
 		{
@@ -1378,14 +1383,14 @@ static void sys_gen_net_tcp(synth_text_t *t)
 				flags[fl++] = '-';
 			flags[fl] = '\0';
 
-			synth_text_addf(t, "%u %u.%u.%u.%u:%u %s %u %u %u/%u %lu %lu %lu %lu %lu %s\n",
+			synth_text_addf(t, "%u %u.%u.%u.%u:%u %s %u %u %u/%u %lu %lu %lu %lu %lu %u %u %s\n",
 			                (unsigned)r->local_port,
 			                NET_IPV4_OCTETS(r->peer_ip), (unsigned)r->peer_port,
 			                r->state < (sizeof(kTcpStateNames) / sizeof(kTcpStateNames[0]))
 			                    ? kTcpStateNames[r->state] : "?",
 			                (unsigned)r->mss, (unsigned)r->win,
 			                (unsigned)r->buf_used, (unsigned)TCP_RCV_BUF,
-			                r->rx, r->tx, r->rexmit, r->ooo, r->held, flags);
+			                r->rx, r->tx, r->rexmit, r->ooo, r->held, r->rto_ms, r->srtt_ms, flags);
 		}
 	}
 	if (omitted > 0)
