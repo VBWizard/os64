@@ -2,13 +2,15 @@
 //
 // Decoder output is provisional until the gzip trailer has been verified.
 // A named-file result therefore stays in an exclusively created sibling
-// temporary file until it is complete, synced, and closed. Publication uses
-// the same atomic destination policies as gzip: without -f an existing name
-// is refused, while -f refuses replacement on filesystems that cannot do it
-// atomically. The source is removed last, so damaged input and publication
-// failures leave it intact. A final size/mtime check detects ordinary
-// concurrent changes, but os64 has no file snapshot or lock spanning that
-// check and removal.
+// temporary file until it is complete, synced, and closed. Exclusive creation
+// rejects accidental name collisions; it is not an access-control boundary
+// against another task deliberately rewriting a live staging path. Publication
+// uses the same atomic destination policies as gzip: without -f an existing
+// name is refused, while -f refuses replacement on filesystems that cannot do
+// it atomically. The source is removed last, so detected input damage and
+// reported publication failures leave it intact. The byte count plus a final
+// size/mtime check detects ordinary concurrent changes, but os64 has no file
+// snapshot or lock spanning that check and removal.
 
 #include "os64/os64.h"
 #include "gzip/gzip.h"
@@ -41,7 +43,8 @@ static int write_all(int32_t handle, const uint8_t *bytes, size_t length)
 }
 
 static int decode_handle(int32_t input_handle, int32_t output_handle,
-                         const char *input_name, const char *output_name)
+                         const char *input_name, const char *output_name,
+                         uint64_t *input_size)
 {
     os64_gzip_t *stream = os64_gzip_create(UINT64_MAX);
     if (stream == NULL) {
@@ -59,6 +62,13 @@ static int decode_handle(int32_t input_handle, int32_t output_handle,
         }
 
         bool end_of_input = read_result == 0;
+        if ((uint64_t)read_result > UINT64_MAX - *input_size) {
+            os64_hprintf(OS64_STDERR, "gunzip: input size overflow for %s\n",
+                         input_name);
+            os64_gzip_destroy(stream);
+            return -1;
+        }
+        *input_size += (uint64_t)read_result;
         const uint8_t *input = gInput;
         size_t input_left = (size_t)read_result;
 
@@ -149,6 +159,8 @@ static int32_t create_temporary(const char *target,
         if (wanted < 0 || wanted >= (int32_t)GUNZIP_PATH_MAX)
             return -1;
 
+        if (os64_streq(out, target))
+            continue;
         int64_t handle = os64_open(out, "x");
         if (handle >= 0)
             return (int32_t)handle;
@@ -162,9 +174,10 @@ static int32_t create_temporary(const char *target,
 
 static int decode_to_stdout(const char *path)
 {
+    uint64_t ignored_size = 0;
     if (os64_streq(path, "-"))
         return decode_handle(OS64_STDIN, OS64_STDOUT, "standard input",
-                             "standard output");
+                             "standard output", &ignored_size);
 
     os64_dirent_t entry = {0};
     if (os64_stat(path, &entry) < 0) {
@@ -181,7 +194,8 @@ static int decode_to_stdout(const char *path)
         os64_hprintf(OS64_STDERR, "gunzip: cannot open '%s'\n", path);
         return -1;
     }
-    int result = decode_handle(input, OS64_STDOUT, path, "standard output");
+    int result = decode_handle(input, OS64_STDOUT, path, "standard output",
+                               &ignored_size);
     if (os64_close(input) < 0) {
         os64_hprintf(OS64_STDERR, "gunzip: cannot close '%s'\n", path);
         result = -1;
@@ -246,7 +260,9 @@ static int decode_path(const char *path, const gunzip_options_t *options)
         return -1;
     }
 
-    int result = decode_handle(input, output, path, temporary);
+    uint64_t compressed_size = 0;
+    int result = decode_handle(input, output, path, temporary,
+                               &compressed_size);
     if (result == 0 && os64_sync(output) < 0) {
         os64_hprintf(OS64_STDERR,
                      "gunzip: cannot sync temporary output for '%s'\n", path);
@@ -264,8 +280,8 @@ static int decode_path(const char *path, const gunzip_options_t *options)
 
     os64_dirent_t after = {0};
     if (result == 0 &&
-        (os64_stat(path, &after) < 0 || after.size != before.size ||
-         after.mtime != before.mtime)) {
+        (compressed_size != before.size || os64_stat(path, &after) < 0 ||
+         after.size != before.size || after.mtime != before.mtime)) {
         os64_hprintf(OS64_STDERR,
                      "gunzip: '%s' changed while it was being decompressed\n",
                      path);
@@ -330,9 +346,11 @@ int main(int argc, char **argv)
     if (operand_count < 0)
         return 2;
 
-    if (operand_count == 0)
+    if (operand_count == 0) {
+        uint64_t ignored_size = 0;
         return decode_handle(OS64_STDIN, OS64_STDOUT, "standard input",
-                             "standard output") == 0 ? 0 : 1;
+                             "standard output", &ignored_size) == 0 ? 0 : 1;
+    }
 
     int return_code = 0;
     for (int32_t i = 0; i < operand_count; i++) {
