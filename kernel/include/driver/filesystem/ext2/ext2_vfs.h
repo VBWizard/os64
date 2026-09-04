@@ -8,10 +8,10 @@
 //
 //   ext2_fops/ext2_dops       — READ-ONLY (write slots NULL, refused at the
 //                               syscall layer AND at the stray-write
-//                               tripwire). What the ROOT mounts until
-//                               writable-root is ratified.
-//   ext2_rw_fops/ext2_rw_dops — the writable superset (ext2_write.c). What
-//                               secondary ext2 mounts get. Call
+//                               tripwire). Used for an explicitly read-only
+//                               or compatibility-demoted mount.
+//   ext2_rw_fops/ext2_rw_dops — the writable superset (ext2_write.c). Used
+//                               by every writable ext2 mount. Call
 //                               ext2_rw_tables_init() once before first use —
 //                               C static init can't alias another table's
 //                               members, so a tiny constructor fills them.

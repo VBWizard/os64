@@ -148,6 +148,7 @@ void    os64_linereader_close(os64_linereader_t *lr);
 //   "r"  read what exists            "u"  update what exists (read/write)
 //   "a"  append to what exists
 //   "w"/"c"  create (or truncate) for writing
+//   "x"  atomically create a NEW file for writing; refuse if it exists
 // Pass NULL for "r" — reading is what almost every open is.
 //
 // The handle you get back is the SAME species as 0/1/2 and pipe ends: it
@@ -334,8 +335,8 @@ int64_t os64_mount(const char *what, const char *where, uint64_t flags);
 int64_t os64_unmount(const char *where);
 
 // Create a directory at `path` (relative paths resolve against the cwd).
-// 0 on success, negative on failure: a read-only filesystem (ext2, by
-// design), a parent that doesn't exist, or a name already taken. Atomic —
+// 0 on success, negative on failure: a read-only filesystem, a parent that
+// doesn't exist, or a name already taken. Atomic —
 // one call, unlike the three-step setuid dance early Unix made of it.
 // This is the call `mkdir` is built on; its undo is os64_unlink above —
 // the one removal verb covers empty directories, so no rmdir twin needed.

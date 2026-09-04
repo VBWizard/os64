@@ -52,11 +52,11 @@ void init_block()
 // partition whose MOUNTED filesystem installed a write path. The original
 // rule allowlisted FAT partitions by TYPE — correct while ext2 was read-only
 // by design, wrong the moment it wasn't. Asking the mount instead keeps
-// every old guarantee and adds a new one: a read-only ext2 mount (the root,
-// until it's ratified writable) still panics on any write aimed at it, GPT
-// headers/tables and unpartitioned space still panic, unmounted partitions
-// still panic — and the writable /ext2 secondary passes only because its
-// per-mount fops carry a real write op. The backtrace of the caller is worth
+// every old guarantee and adds a new one: a requested or device-demoted
+// read-only ext2 mount still panics on any write aimed at it, GPT headers,
+// tables and unpartitioned space still panic, unmounted partitions still
+// panic — and a writable ext2 mount passes only because its per-mount fops
+// carry a real write op. The backtrace of the caller is worth
 // infinitely more than a silently corrupted root filesystem discovered three
 // boots later.
 //
