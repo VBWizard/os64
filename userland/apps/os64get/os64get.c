@@ -1402,6 +1402,12 @@ static int receive_url_body(http_body_t *body, const http_response_t *reply,
                             bool quiet, bool gzipEncoded,
                             url_body_result_t *result)
 {
+    // The counters are the caller's to read on EVERY return — a refused
+    // allocation included, since the meter's last tick reports them — so
+    // they are set before anything can fail.
+    result->received = 0;
+    result->produced = 0;
+
     os64_gzip_t *decoder = NULL;
     uint64_t gzipLimit = 0;
     if (gzipEncoded) {
@@ -1413,8 +1419,6 @@ static int receive_url_body(http_body_t *body, const http_response_t *reply,
         }
     }
 
-    result->received = 0;
-    result->produced = 0;
     int status = GET_OK;
     os64_gzip_status_t gzipStatus = OS64_GZIP_NEED_INPUT;
     const char *unit = gzipEncoded ? " wire" : "";
