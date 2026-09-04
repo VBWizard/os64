@@ -118,7 +118,7 @@ static const fixture_t kFixtures[] = {
     // for the same reason: a suite that cries wolf gets ignored.
     { "/tests/conftest",        NULL, 0x0C0F0000,  0x0C0F0001, "config library: get/get_bool/write/set, merge and ext2 atomic publish" },
     { "/tests/tartest",         NULL, 0x7A120000,  0,          "ustar create/list/extract, pipelines, ext2 atomic publication and path safety" },
-    { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip: streaming encode/decode and gzip/gunzip commands" },
+    { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip and safe gzip/gunzip command publication" },
     { "/tests/pngtest",         NULL, 0x90640000,  0,          "standalone libpng: filtered RGBA decode, alpha, CRC and pixel cap" },
     { "/tests/renametest",      NULL, 0x4E4D0000,  0,          "rename policies on ext2 and FAT, plus invalid flags and legacy ABI compatibility" },
     { "/tests/openxtest",        NULL, 0x0EAC7000,  0,          "atomic exclusive create on ext2 and FAT, including contention and full-handle refusal" },

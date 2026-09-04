@@ -1,23 +1,39 @@
-// gunzip — stream a gzip file to standard output.
+// gunzip — decompress streams and safely replace named .gz files.
 //
-// This first consumer deliberately has no replace-the-input mode. Publishing
-// a decoded file safely needs the temporary-file-and-rename contract used by
-// tar and os64get; stdout already has honest failure semantics and composes
-// immediately with tar, the browser's fetch path, and ordinary pipelines.
+// Decoder output is provisional until the gzip trailer has been verified.
+// A named-file result therefore stays in an exclusively created sibling
+// temporary file until it is complete, synced, and closed. Exclusive creation
+// rejects accidental name collisions; it is not an access-control boundary
+// against another task deliberately rewriting a live staging path. Publication
+// uses the same atomic destination policies as gzip: without -f an existing
+// name is refused, while -f refuses replacement on filesystems that cannot do
+// it atomically. The source is removed last, so detected input damage and
+// reported publication failures leave it intact. The byte count plus a final
+// size/mtime check detects ordinary concurrent changes, but os64 has no file
+// snapshot or lock spanning that check and removal.
 
 #include "os64/os64.h"
 #include "gzip/gzip.h"
 
-#define GUNZIP_IO_SIZE (64u * 1024u)
+#define GUNZIP_IO_SIZE      (64u * 1024u)
+#define GUNZIP_PATH_MAX     512u
+#define GUNZIP_MAX_OPERANDS 512
+
+typedef struct {
+    bool to_stdout;
+    bool keep;
+    bool force;
+} gunzip_options_t;
 
 static uint8_t gInput[GUNZIP_IO_SIZE];
 static uint8_t gOutput[GUNZIP_IO_SIZE];
+static uint32_t gTemporarySequence;
 
-static int write_all(const uint8_t *bytes, size_t length)
+static int write_all(int32_t handle, const uint8_t *bytes, size_t length)
 {
     size_t written = 0;
     while (written < length) {
-        int64_t result = os64_write(OS64_STDOUT, bytes + written,
+        int64_t result = os64_write(handle, bytes + written,
                                     length - written);
         if (result <= 0)
             return -1;
@@ -26,7 +42,9 @@ static int write_all(const uint8_t *bytes, size_t length)
     return 0;
 }
 
-static int decode_handle(int32_t handle, const char *name)
+static int decode_handle(int32_t input_handle, int32_t output_handle,
+                         const char *input_name, const char *output_name,
+                         uint64_t *input_size)
 {
     os64_gzip_t *stream = os64_gzip_create(UINT64_MAX);
     if (stream == NULL) {
@@ -35,14 +53,22 @@ static int decode_handle(int32_t handle, const char *name)
     }
 
     for (;;) {
-        int64_t read_result = os64_read(handle, gInput, sizeof(gInput));
+        int64_t read_result = os64_read(input_handle, gInput, sizeof(gInput));
         if (read_result < 0) {
-            os64_hprintf(OS64_STDERR, "gunzip: error reading %s\n", name);
+            os64_hprintf(OS64_STDERR, "gunzip: error reading %s\n",
+                         input_name);
             os64_gzip_destroy(stream);
             return -1;
         }
 
         bool end_of_input = read_result == 0;
+        if ((uint64_t)read_result > UINT64_MAX - *input_size) {
+            os64_hprintf(OS64_STDERR, "gunzip: input size overflow for %s\n",
+                         input_name);
+            os64_gzip_destroy(stream);
+            return -1;
+        }
+        *input_size += (uint64_t)read_result;
         const uint8_t *input = gInput;
         size_t input_left = (size_t)read_result;
 
@@ -53,9 +79,10 @@ static int decode_handle(int32_t handle, const char *name)
                 stream, &input, &input_left, &output, &output_left,
                 end_of_input);
             size_t produced = sizeof(gOutput) - output_left;
-            if (produced != 0 && write_all(gOutput, produced) < 0) {
-                os64_hprintf(OS64_STDERR,
-                             "gunzip: error writing standard output\n");
+            if (produced != 0 &&
+                write_all(output_handle, gOutput, produced) < 0) {
+                os64_hprintf(OS64_STDERR, "gunzip: error writing %s\n",
+                             output_name);
                 os64_gzip_destroy(stream);
                 return -1;
             }
@@ -65,8 +92,7 @@ static int decode_handle(int32_t handle, const char *name)
             if (status == OS64_GZIP_NEED_INPUT) {
                 // NEED_INPUT consumes the offered chunk into the decoder's
                 // bit reservoir. Bytes left here would make the caller spin
-                // forever on the same input, so treat that as a library
-                // contract failure rather than hiding it.
+                // forever on the same input, so expose a contract failure.
                 if (input_left != 0) {
                     os64_hprintf(OS64_STDERR,
                                  "gunzip: decoder left input behind\n");
@@ -80,7 +106,7 @@ static int decode_handle(int32_t handle, const char *name)
                 return 0;
             }
 
-            os64_hprintf(OS64_STDERR, "gunzip: %s: %s\n", name,
+            os64_hprintf(OS64_STDERR, "gunzip: %s: %s\n", input_name,
                          os64_gzip_status_name(status));
             os64_gzip_destroy(stream);
             return -1;
@@ -88,10 +114,95 @@ static int decode_handle(int32_t handle, const char *name)
     }
 }
 
-static int decode_path(const char *path)
+static bool has_gzip_suffix(const char *path)
 {
+    size_t length = os64_strlen(path);
+    return length > 3 && path[length - 4] != '/' &&
+           path[length - 3] == '.' && path[length - 2] == 'g' &&
+           path[length - 1] == 'z';
+}
+
+static int destination_path(const char *source, char out[GUNZIP_PATH_MAX])
+{
+    size_t length = os64_strlen(source);
+    if (!has_gzip_suffix(source) || length - 3 > INT32_MAX)
+        return -1;
+    int32_t wanted = os64_snprintf(out, GUNZIP_PATH_MAX, "%.*s",
+                                   (int32_t)(length - 3), source);
+    return wanted > 0 && wanted < (int32_t)GUNZIP_PATH_MAX ? 0 : -1;
+}
+
+static int same_resolved_name(const char *first, const char *second)
+{
+    os64_dirent_t first_entry = {0};
+    os64_dirent_t second_entry = {0};
+
+    if (os64_stat(first, &first_entry) < 0)
+        return -1;
+    if (os64_stat(second, &second_entry) < 0)
+        return 0;
+
+    // Both paths are siblings. Comparing the names returned by their mounted
+    // filesystem catches aliases under that filesystem's own lookup rules;
+    // in particular, FAT returns one stored name for case-folded spellings.
+    return os64_streq(first_entry.name, second_entry.name) ? 1 : 0;
+}
+
+static int32_t create_temporary(const char *target,
+                                char out[GUNZIP_PATH_MAX])
+{
+    size_t slash = os64_strlen(target);
+    while (slash > 0 && target[slash - 1] != '/')
+        slash--;
+
+    for (uint32_t attempt = 0; attempt < 1000; attempt++) {
+        uint32_t sequence = gTemporarySequence++;
+        int32_t wanted;
+        if (slash == 0) {
+            wanted = os64_snprintf(out, GUNZIP_PATH_MAX,
+                                   ".gunzip-%lu-%u.part",
+                                   os64_taskid(), sequence);
+        } else if (slash == 1) {
+            wanted = os64_snprintf(out, GUNZIP_PATH_MAX,
+                                   "/.gunzip-%lu-%u.part",
+                                   os64_taskid(), sequence);
+        } else {
+            wanted = os64_snprintf(out, GUNZIP_PATH_MAX,
+                                   "%.*s/.gunzip-%lu-%u.part",
+                                   (int32_t)(slash - 1), target,
+                                   os64_taskid(), sequence);
+        }
+        if (wanted < 0 || wanted >= (int32_t)GUNZIP_PATH_MAX)
+            return -1;
+
+        if (os64_streq(out, target))
+            continue;
+        int64_t handle = os64_open(out, "x");
+        if (handle >= 0) {
+            int aliases_target = same_resolved_name(out, target);
+            if (aliases_target == 0)
+                return (int32_t)handle;
+
+            int close_result = os64_close((int32_t)handle);
+            int unlink_result = os64_unlink(out);
+            if (aliases_target < 0 || close_result < 0 || unlink_result < 0)
+                return -1;
+            continue;
+        }
+
+        os64_dirent_t existing = {0};
+        if (os64_stat(out, &existing) < 0)
+            return -1;
+    }
+    return -1;
+}
+
+static int decode_to_stdout(const char *path)
+{
+    uint64_t ignored_size = 0;
     if (os64_streq(path, "-"))
-        return decode_handle(OS64_STDIN, "standard input");
+        return decode_handle(OS64_STDIN, OS64_STDOUT, "standard input",
+                             "standard output", &ignored_size);
 
     os64_dirent_t entry = {0};
     if (os64_stat(path, &entry) < 0) {
@@ -103,50 +214,176 @@ static int decode_path(const char *path)
         return -1;
     }
 
-    int32_t handle = (int32_t)os64_open(path, "r");
-    if (handle < 0) {
+    int32_t input = (int32_t)os64_open(path, "r");
+    if (input < 0) {
         os64_hprintf(OS64_STDERR, "gunzip: cannot open '%s'\n", path);
         return -1;
     }
-    int result = decode_handle(handle, path);
-    if (os64_close(handle) < 0) {
+    int result = decode_handle(input, OS64_STDOUT, path, "standard output",
+                               &ignored_size);
+    if (os64_close(input) < 0) {
         os64_hprintf(OS64_STDERR, "gunzip: cannot close '%s'\n", path);
         result = -1;
     }
     return result;
 }
 
-int main(int argc, char **argv)
+static int decode_path(const char *path, const gunzip_options_t *options)
 {
-    os64_args_t args = {0};
-    os64_args_init(&args, argc, argv, NULL, 0);
-    args.about = "Decompress gzip data to standard output.";
-    args.details = "With no FILE, or when FILE is -, read standard input. "
-                   "Each FILE is decoded in order; input files are never "
-                   "replaced.";
-
-    int32_t input_count = 0;
-    int32_t result;
-    while ((result = os64_args_next(&args)) != OS64_ARG_END) {
-        if (result == OS64_ARG_POSITIONAL) {
-            input_count++;
-            continue;
-        }
-        if (result == OS64_ARG_HELP) {
-            os64_args_help(&args, "gunzip [FILE ...]");
-            return 0;
-        }
-        os64_args_help(&args, "gunzip [FILE ...]");
-        return 2;
+    if (!has_gzip_suffix(path)) {
+        os64_hprintf(OS64_STDERR,
+                     "gunzip: '%s' does not have a .gz suffix -- unchanged\n",
+                     path);
+        return -1;
     }
 
-    if (input_count == 0)
-        return decode_handle(OS64_STDIN, "standard input") == 0 ? 0 : 1;
+    os64_dirent_t before = {0};
+    if (os64_stat(path, &before) < 0) {
+        os64_hprintf(OS64_STDERR, "gunzip: cannot stat '%s'\n", path);
+        return -1;
+    }
+    if ((before.flags & OS64_DE_DIR) != 0) {
+        os64_hprintf(OS64_STDERR, "gunzip: '%s' is a directory\n", path);
+        return -1;
+    }
+
+    char destination[GUNZIP_PATH_MAX];
+    char temporary[GUNZIP_PATH_MAX];
+    if (destination_path(path, destination) < 0) {
+        os64_hprintf(OS64_STDERR,
+                     "gunzip: output path for '%s' is too long\n", path);
+        return -1;
+    }
+
+    os64_dirent_t existing = {0};
+    if (os64_stat(destination, &existing) == 0) {
+        if ((existing.flags & OS64_DE_DIR) != 0) {
+            os64_hprintf(OS64_STDERR,
+                         "gunzip: output path '%s' is a directory\n",
+                         destination);
+            return -1;
+        }
+        if (!options->force) {
+            os64_hprintf(OS64_STDERR,
+                         "gunzip: '%s' already exists -- use -f to replace it\n",
+                         destination);
+            return -1;
+        }
+    }
+
+    int32_t input = (int32_t)os64_open(path, "r");
+    if (input < 0) {
+        os64_hprintf(OS64_STDERR, "gunzip: cannot open '%s'\n", path);
+        return -1;
+    }
+    int32_t output = create_temporary(destination, temporary);
+    if (output < 0) {
+        os64_hprintf(OS64_STDERR,
+                     "gunzip: cannot claim staging space beside '%s'\n",
+                     destination);
+        os64_close(input);
+        return -1;
+    }
+
+    uint64_t compressed_size = 0;
+    int result = decode_handle(input, output, path, temporary,
+                               &compressed_size);
+    if (result == 0 && os64_sync(output) < 0) {
+        os64_hprintf(OS64_STDERR,
+                     "gunzip: cannot sync temporary output for '%s'\n", path);
+        result = -1;
+    }
+    if (os64_close(output) < 0) {
+        os64_hprintf(OS64_STDERR,
+                     "gunzip: cannot close temporary output for '%s'\n", path);
+        result = -1;
+    }
+    if (os64_close(input) < 0) {
+        os64_hprintf(OS64_STDERR, "gunzip: cannot close '%s'\n", path);
+        result = -1;
+    }
+
+    os64_dirent_t after = {0};
+    if (result == 0 &&
+        (compressed_size != before.size || os64_stat(path, &after) < 0 ||
+         after.size != before.size || after.mtime != before.mtime)) {
+        os64_hprintf(OS64_STDERR,
+                     "gunzip: '%s' changed while it was being decompressed\n",
+                     path);
+        result = -1;
+    }
+    if (result == 0) {
+        uint64_t publish_flags = options->force
+            ? OS64_RENAME_REQUIRE_ATOMIC_REPLACE
+            : OS64_RENAME_NOREPLACE;
+        if (os64_rename_with_flags(temporary, destination,
+                                   publish_flags) < 0) {
+            if (options->force) {
+                os64_hprintf(OS64_STDERR,
+                             "gunzip: cannot atomically replace '%s'\n",
+                             destination);
+            } else {
+                os64_hprintf(OS64_STDERR,
+                             "gunzip: cannot publish '%s' without replacing it\n",
+                             destination);
+            }
+            result = -1;
+        }
+    }
+    if (result < 0) {
+        os64_unlink(temporary);
+        return -1;
+    }
+
+    if (!options->keep && os64_unlink(path) < 0) {
+        os64_hprintf(OS64_STDERR,
+                     "gunzip: decompressed '%s' but could not remove the original\n",
+                     path);
+        return -1;
+    }
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    gunzip_options_t options = {0};
+    const char *operands[GUNZIP_MAX_OPERANDS] = {0};
+    const os64_optspec_t specs[] = {
+        {'c', "stdout", false, "write decompressed data to standard output",
+         .flag = &options.to_stdout},
+        {'k', "keep", false, "keep input files after decompression",
+         .flag = &options.keep},
+        {'f', "force", false, "atomically replace an existing output file",
+         .flag = &options.force}
+    };
+    os64_args_t args = {0};
+    os64_args_init(&args, argc, argv, specs, 3);
+    args.about = "Decompress gzip data.";
+    args.details = "With no FILE, or when FILE is -, read standard input and "
+                   "write standard output. Named FILE.gz inputs become FILE; "
+                   "the compressed input is removed after safe publication.";
+
+    int32_t operand_count = os64_args_parse(
+        &args, "gunzip [-cfk] [FILE.gz ...]", operands,
+        GUNZIP_MAX_OPERANDS);
+    if (operand_count == OS64_ARG_HELP)
+        return 0;
+    if (operand_count < 0)
+        return 2;
+
+    if (operand_count == 0) {
+        uint64_t ignored_size = 0;
+        return decode_handle(OS64_STDIN, OS64_STDOUT, "standard input",
+                             "standard output", &ignored_size) == 0 ? 0 : 1;
+    }
 
     int return_code = 0;
-    os64_args_init(&args, argc, argv, NULL, 0);
-    while ((result = os64_args_next(&args)) != OS64_ARG_END)
-        if (result == OS64_ARG_POSITIONAL && decode_path(args.value) < 0)
+    for (int32_t i = 0; i < operand_count; i++) {
+        int result = options.to_stdout || os64_streq(operands[i], "-")
+            ? decode_to_stdout(operands[i])
+            : decode_path(operands[i], &options);
+        if (result < 0)
             return_code = 1;
+    }
     return return_code;
 }

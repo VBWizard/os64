@@ -1,5 +1,5 @@
-// gziptest — ring-3 proof that the standalone libgzip dependency loads and
-// streams both directions through the ordinary shared-object path.
+// gziptest — ring-3 proof of the standalone libgzip codecs and the gzip and
+// gunzip commands' filter, replacement, and failure-publication contracts.
 
 #include "os64/os64.h"
 #include "gzip/gzip.h"
@@ -21,6 +21,7 @@ static const uint8_t kCompressed[] = {
 static const char kExpected[] =
     "libgzip reaches ring three through its own shared object.\n";
 static char gCompressedPath[96];
+static char gDecodedPath[96];
 static char gSourcePath[96];
 static char gEncodedPath[100];
 static char gFatSourcePath[96];
@@ -31,10 +32,11 @@ static uint8_t gCommandPayload[8192];
 static uint8_t gCommandCompressed[sizeof(gCommandPayload) * 2];
 static uint8_t gCommandOutput[sizeof(gCommandPayload) + 16];
 
-static bool bytes_equal(const uint8_t *left, const char *right, size_t length)
+static bool bytes_equal(const uint8_t *left, const void *right, size_t length)
 {
+    const uint8_t *right_bytes = right;
     for (size_t i = 0; i < length; i++)
-        if (left[i] != (uint8_t)right[i])
+        if (left[i] != right_bytes[i])
             return false;
     return true;
 }
@@ -47,6 +49,8 @@ static void fail(const char *reason)
     os64_printf("%s\n", message);
     if (gCompressedPath[0] != '\0')
         os64_unlink(gCompressedPath);
+    if (gDecodedPath[0] != '\0')
+        os64_unlink(gDecodedPath);
     if (gSourcePath[0] != '\0')
         os64_unlink(gSourcePath);
     if (gEncodedPath[0] != '\0')
@@ -86,27 +90,81 @@ static void select_filesystem_layout(void)
     gFatScratchDirectory = fat_is_secondary ? "/fat" : "";
 }
 
-static void test_gunzip_filter(void)
+static void set_fat_paths(void)
 {
-    if (os64_snprintf(gCompressedPath, sizeof(gCompressedPath),
-                      "%s/gziptest-%lu.gz", gExt2ScratchDirectory,
-                      os64_taskid()) >=
-        (int32_t)sizeof(gCompressedPath))
-        fail("temporary path is too long");
+    if (os64_snprintf(gFatSourcePath, sizeof(gFatSourcePath),
+                      "%s/gziptest-%lu.log", gFatScratchDirectory,
+                      os64_taskid()) >= (int32_t)sizeof(gFatSourcePath) ||
+        os64_snprintf(gFatEncodedPath, sizeof(gFatEncodedPath), "%s.gz",
+                      gFatSourcePath) >= (int32_t)sizeof(gFatEncodedPath))
+        fail("FAT gzip command path is too long");
+}
 
-    int32_t file = (int32_t)os64_open(gCompressedPath, "w");
+static void clean_paths(void)
+{
+    os64_unlink(gCompressedPath);
+    os64_unlink(gDecodedPath);
+}
+
+static void write_path(const char *path, const uint8_t *bytes, size_t length)
+{
+    int32_t file = (int32_t)os64_open(path, "w");
     if (file < 0)
-        fail("could not write gzip input for gunzip");
-    bool wrote = os64_write(file, kCompressed, sizeof(kCompressed)) ==
-                 (int64_t)sizeof(kCompressed);
+        fail("could not create gunzip fixture");
+    bool wrote = os64_write(file, bytes, length) == (int64_t)length;
     bool closed = os64_close(file) == 0;
     if (!wrote || !closed)
-        fail("could not write gzip input for gunzip");
+        fail("could not write gunzip fixture");
+}
+
+static bool path_exists(const char *path)
+{
+    os64_dirent_t entry = {0};
+    return os64_stat(path, &entry) == 0;
+}
+
+static bool path_equals(const char *path, const uint8_t *expected,
+                        size_t length)
+{
+    os64_dirent_t entry = {0};
+    if (os64_stat(path, &entry) < 0 ||
+        (entry.flags & OS64_DE_DIR) != 0 || entry.size != length)
+        return false;
+
+    int32_t file = (int32_t)os64_open(path, "r");
+    if (file < 0)
+        return false;
+    uint8_t actual[sizeof(kCompressed) + 16];
+    size_t have = 0;
+    int64_t received = 0;
+    while (have < sizeof(actual) &&
+           (received = os64_read(file, actual + have,
+                                 sizeof(actual) - have)) > 0)
+        have += (size_t)received;
+    bool closed = os64_close(file) == 0;
+    return received >= 0 && closed && have == length &&
+           bytes_equal(actual, expected, length);
+}
+
+static int32_t run_gunzip(char *const argv[])
+{
+    return spawn_and_wait("/bin/gunzip", argv);
+}
+
+static void write_compressed(void)
+{
+    write_path(gCompressedPath, kCompressed, sizeof(kCompressed));
+}
+
+static void test_gunzip_filter(void)
+{
+    clean_paths();
+    write_compressed();
 
     int32_t pipe_ends[2];
     if (os64_pipe(pipe_ends) < 0)
         fail("could not create gunzip output pipe");
-    char *const argv[] = { "/bin/gunzip", gCompressedPath, NULL };
+    char *const argv[] = { "/bin/gunzip", "-c", gCompressedPath, NULL };
     int64_t child = os64_spawn_redirected("/bin/gunzip", argv, -1,
                                           pipe_ends[1], -1, 0);
     os64_close(pipe_ends[1]);
@@ -129,9 +187,168 @@ static void test_gunzip_filter(void)
         !bytes_equal(output, kExpected, sizeof(kExpected) - 1))
         fail("gunzip filter did not reproduce the payload");
 
-    if (os64_unlink(gCompressedPath) < 0)
-        fail("could not remove gunzip input");
-    gCompressedPath[0] = '\0';
+    if (!path_exists(gCompressedPath) || path_exists(gDecodedPath))
+        fail("gunzip -c changed named files");
+    clean_paths();
+}
+
+static void test_gunzip_stdin(void)
+{
+    int32_t input_ends[2];
+    int32_t output_ends[2];
+    if (os64_pipe(input_ends) < 0)
+        fail("could not create gunzip input pipe");
+    if (os64_pipe(output_ends) < 0) {
+        os64_close(input_ends[0]);
+        os64_close(input_ends[1]);
+        fail("could not create gunzip output pipe");
+    }
+    if (os64_write(input_ends[1], kCompressed, sizeof(kCompressed)) !=
+            (int64_t)sizeof(kCompressed) ||
+        os64_close(input_ends[1]) < 0)
+        fail("could not feed gunzip standard input");
+
+    char *const argv[] = { "/bin/gunzip", NULL };
+    int64_t child = os64_spawn_redirected("/bin/gunzip", argv,
+                                          input_ends[0], output_ends[1],
+                                          -1, 0);
+    os64_close(input_ends[0]);
+    os64_close(output_ends[1]);
+    if (child < 0) {
+        os64_close(output_ends[0]);
+        fail("could not spawn gunzip for standard input");
+    }
+
+    uint8_t output[sizeof(kExpected) + 16];
+    size_t have = 0;
+    int64_t received;
+    while ((received = os64_read(output_ends[0], output + have,
+                                 sizeof(output) - have)) > 0)
+        have += (size_t)received;
+    os64_close(output_ends[0]);
+
+    int32_t code = -1;
+    if (received < 0 || os64_wait(child, &code) < 0 || code != 0 ||
+        have != sizeof(kExpected) - 1 ||
+        !bytes_equal(output, kExpected, sizeof(kExpected) - 1))
+        fail("gunzip standard-input filter did not reproduce the payload");
+}
+
+static void test_gunzip_replacement(void)
+{
+    clean_paths();
+    write_compressed();
+    char *const argv[] = { "/bin/gunzip", gCompressedPath, NULL };
+    if (run_gunzip(argv) != 0 || path_exists(gCompressedPath) ||
+        !path_equals(gDecodedPath, (const uint8_t *)kExpected,
+                     sizeof(kExpected) - 1))
+        fail("gunzip did not safely replace a named input");
+    clean_paths();
+}
+
+static void test_gunzip_keep(void)
+{
+    clean_paths();
+    write_compressed();
+    char *const argv[] = { "/bin/gunzip", "-k", gCompressedPath, NULL };
+    if (run_gunzip(argv) != 0 || !path_exists(gCompressedPath) ||
+        !path_equals(gDecodedPath, (const uint8_t *)kExpected,
+                     sizeof(kExpected) - 1))
+        fail("gunzip -k did not keep the compressed input");
+    clean_paths();
+}
+
+static void test_gunzip_force(void)
+{
+    static const uint8_t old[] = "old output\n";
+    clean_paths();
+    write_compressed();
+    write_path(gDecodedPath, old, sizeof(old) - 1);
+
+    char *const refuse_argv[] = { "/bin/gunzip", gCompressedPath, NULL };
+    if (run_gunzip(refuse_argv) != 1 || !path_exists(gCompressedPath) ||
+        !path_equals(gDecodedPath, old, sizeof(old) - 1))
+        fail("gunzip overwrote an existing output without -f");
+
+    char *const force_argv[] = {
+        "/bin/gunzip", "-f", gCompressedPath, NULL
+    };
+    if (run_gunzip(force_argv) != 0 || path_exists(gCompressedPath) ||
+        !path_equals(gDecodedPath, (const uint8_t *)kExpected,
+                     sizeof(kExpected) - 1))
+        fail("gunzip -f did not replace the existing output");
+    clean_paths();
+}
+
+static void test_gunzip_corrupt_input(void)
+{
+    uint8_t corrupt[sizeof(kCompressed)];
+    os64_memcpy(corrupt, kCompressed, sizeof(corrupt));
+    corrupt[sizeof(corrupt) - 8] ^= 0x01;
+    clean_paths();
+    write_path(gCompressedPath, corrupt, sizeof(corrupt));
+
+    char *const argv[] = { "/bin/gunzip", gCompressedPath, NULL };
+    if (run_gunzip(argv) != 1 || !path_exists(gCompressedPath) ||
+        path_exists(gDecodedPath))
+        fail("gunzip published output from corrupt input");
+    clean_paths();
+}
+
+static void test_gunzip_suffix_refusal(void)
+{
+    clean_paths();
+    write_path(gDecodedPath, kCompressed, sizeof(kCompressed));
+
+    char *const argv[] = { "/bin/gunzip", gDecodedPath, NULL };
+    if (run_gunzip(argv) != 1 ||
+        !path_equals(gDecodedPath, kCompressed, sizeof(kCompressed)) ||
+        path_exists(gCompressedPath))
+        fail("gunzip accepted a replacement input without .gz");
+    clean_paths();
+}
+
+static void test_gunzip_fat_force_refusal(void)
+{
+    static const uint8_t old[] = "old output\n";
+    set_fat_paths();
+    os64_unlink(gFatSourcePath);
+    os64_unlink(gFatEncodedPath);
+    write_path(gFatSourcePath, old, sizeof(old) - 1);
+    write_path(gFatEncodedPath, kCompressed, sizeof(kCompressed));
+
+    char *const force_argv[] = {
+        "/bin/gunzip", "-f", gFatEncodedPath, NULL
+    };
+    if (run_gunzip(force_argv) != 1 ||
+        !path_equals(gFatSourcePath, old, sizeof(old) - 1) ||
+        !path_equals(gFatEncodedPath, kCompressed, sizeof(kCompressed)))
+        fail("gunzip -f did not preserve both FAT files on refusal");
+
+    if (os64_unlink(gFatSourcePath) < 0 ||
+        os64_unlink(gFatEncodedPath) < 0)
+        fail("could not clean up FAT gunzip fixtures");
+    gFatSourcePath[0] = '\0';
+    gFatEncodedPath[0] = '\0';
+}
+
+static void test_gunzip_fat_new_output(void)
+{
+    set_fat_paths();
+    os64_unlink(gFatSourcePath);
+    os64_unlink(gFatEncodedPath);
+    write_path(gFatEncodedPath, kCompressed, sizeof(kCompressed));
+
+    char *const argv[] = { "/bin/gunzip", gFatEncodedPath, NULL };
+    if (run_gunzip(argv) != 0 || path_exists(gFatEncodedPath) ||
+        !path_equals(gFatSourcePath, (const uint8_t *)kExpected,
+                     sizeof(kExpected) - 1))
+        fail("gunzip could not publish a new FAT output");
+
+    if (os64_unlink(gFatSourcePath) < 0)
+        fail("could not clean up FAT gunzip output");
+    gFatSourcePath[0] = '\0';
+    gFatEncodedPath[0] = '\0';
 }
 
 static os64_gzip_status_t decode(const uint8_t *compressed, size_t length,
@@ -234,7 +451,7 @@ static void check_command_output(void)
     int32_t pipe_ends[2];
     if (os64_pipe(pipe_ends) < 0)
         fail("could not create gzip command output pipe");
-    char *const argv[] = { "/bin/gunzip", gEncodedPath, NULL };
+    char *const argv[] = { "/bin/gunzip", "-c", gEncodedPath, NULL };
     int64_t child = os64_spawn_redirected("/bin/gunzip", argv, -1,
                                           pipe_ends[1], -1, 0);
     os64_close(pipe_ends[1]);
@@ -387,13 +604,7 @@ static void test_gzip_fat_force_refusal(void)
 {
     static const uint8_t source[] = "new log bytes\n";
     static const uint8_t destination[] = "old gzip bytes\n";
-    if (os64_snprintf(gFatSourcePath, sizeof(gFatSourcePath),
-                      "%s/gziptest-%lu.log", gFatScratchDirectory,
-                      os64_taskid()) >=
-            (int32_t)sizeof(gFatSourcePath) ||
-        os64_snprintf(gFatEncodedPath, sizeof(gFatEncodedPath), "%s.gz",
-                      gFatSourcePath) >= (int32_t)sizeof(gFatEncodedPath))
-        fail("FAT gzip command path is too long");
+    set_fat_paths();
 
     os64_unlink(gFatSourcePath);
     os64_unlink(gFatEncodedPath);
@@ -447,7 +658,23 @@ int main(void)
         fail("damaged trailer was accepted");
 
     select_filesystem_layout();
+    if (os64_snprintf(gCompressedPath, sizeof(gCompressedPath),
+                      "%s/gunziptest-%lu.gz", gExt2ScratchDirectory,
+                      os64_taskid()) >= (int32_t)sizeof(gCompressedPath) ||
+        os64_snprintf(gDecodedPath, sizeof(gDecodedPath),
+                      "%s/gunziptest-%lu", gExt2ScratchDirectory,
+                      os64_taskid()) >= (int32_t)sizeof(gDecodedPath))
+        fail("gunzip command path is too long");
+
     test_gunzip_filter();
+    test_gunzip_stdin();
+    test_gunzip_replacement();
+    test_gunzip_keep();
+    test_gunzip_force();
+    test_gunzip_corrupt_input();
+    test_gunzip_suffix_refusal();
+    test_gunzip_fat_new_output();
+    test_gunzip_fat_force_refusal();
     test_gzip_command();
     test_gzip_fat_force_refusal();
 
