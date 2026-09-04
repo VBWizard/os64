@@ -413,8 +413,10 @@ first time a program with better taste in terminals runs.
   `t->attrs` are the pen — what the next character will look like, set by
   SGR. `t->glass_bg` is the paper — what this terminal IS underneath,
   including where nothing was ever written and the margins past the last
-  cell, set by OSC 11 and carried by `renderer_set_background` when the
-  focus moves. Per tty, so VT2 can differ from VT1 and a gterm from both.
+  cell, set by OSC 11. `renderer_glass_background_locked` updates the
+  renderer's paper and remainder strips during a full tty repaint, including
+  focus changes and history views. Per tty; gterm's use of this paper is
+  deferred in DEBTS.md.
 - **A cell costs the same eight bytes it always did**: the glyph, an
   attribute byte, a background palette INDEX, and the 32-bit foreground.
   The three that were compiler padding now hold state, and the layout is

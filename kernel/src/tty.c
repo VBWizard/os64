@@ -115,13 +115,11 @@ static void tty_clear_line(tty_t *t, uint32_t ring_line)
 	memset(tty_line(t, ring_line), 0, (size_t)t->cols * sizeof(tty_cell_t));
 }
 
-// The two colours a cell is actually painted in, attributes applied. Both
-// renderers ask this question; the kernel answers it here and gterm answers
-// it with the same two lines out of os64/ansi.h, because reverse video that
-// meant different things on the glass and in a window would be a bug nobody
-// could see until they were side by side.
-static void tty_cell_colors(const tty_t *t, const tty_cell_t *cell,
-                            uint32_t *fg, uint32_t *bg)
+// Resolve attributes before an overlay swaps the resulting colours. The
+// console repaint and selection painter share this; gterm uses the same
+// palette and attribute helpers from os64/ansi.h.
+void tty_cell_colors(const tty_t *t, const tty_cell_t *cell,
+                     uint32_t *fg, uint32_t *bg)
 {
 	*fg = cell->ch ? cell->color : t->color;
 	*bg = os64_ansi_bg_color(cell->bg, t->glass_bg);
@@ -280,6 +278,21 @@ static void tty_sgr_locked(tty_t *t, const ansi_action_t *a)
 	for (uint8_t i = 0; i < n; i++)
 	{
 		uint16_t p = a->nparams == 0 ? 0 : a->params[i];
+		// Extended colours are unsupported groups, not independent SGR
+		// commands: an RGB component of zero must not reset the pen. An
+		// unknown selector has no known length, so discard the remaining
+		// parameters rather than interpret possible colour components.
+		if (p == 38 || p == 48 || p == 58)
+		{
+			if (i + 1 >= n)
+				break;
+			uint16_t selector = a->params[++i];
+			uint8_t components = selector == 5 ? 1 : selector == 2 ? 3 : 0;
+			if (components == 0 || components > n - i - 1)
+				break;
+			i += components;
+			continue;
+		}
 
 		if (p == 0)
 		{
@@ -358,6 +371,8 @@ static void tty_apply_locked(tty_t *t, const ansi_action_t *a, bool *glass)
 	case ANSI_ERASE_DISPLAY:
 	{
 		uint16_t mode = a->nparams > 0 ? a->params[0] : 0;
+		if (mode > 2)
+			return;   // unsupported ED modes must not fall back to ED0
 		// ED DOES NOT MOVE THE CURSOR. `clear` sends `ESC[2J` and then
 		// `ESC[H` precisely because the first does not imply the second,
 		// and a terminal that homed the cursor on its own would put the
@@ -386,6 +401,8 @@ static void tty_apply_locked(tty_t *t, const ansi_action_t *a, bool *glass)
 	case ANSI_ERASE_LINE:
 	{
 		uint16_t mode = a->nparams > 0 ? a->params[0] : 0;
+		if (mode > 2)
+			return;
 		uint32_t line = tty_row_line(t, t->cur_row);
 		if (mode == 2)
 			tty_erase_span(t, line, 0, t->cols);
@@ -412,12 +429,10 @@ static void tty_apply_locked(tty_t *t, const ansi_action_t *a, bool *glass)
 		t->glass_bg = a->color;
 		if (kTTYFocused == t)
 		{
-			renderer_set_background(a->color);
-			if (*glass)
-			{
-				s_glassStale = true;
-				*glass = false;
-			}
+			// History uses the same paper. Defer its cells and margins
+			// together, even when this write was not mirroring the glass.
+			s_glassStale = true;
+			*glass = false;
 		}
 		return;
 
@@ -443,6 +458,7 @@ static void tty_repaint_locked(tty_t *t)
 
 	uint64_t rflags = renderer_glass_begin();
 	renderer_glass_defer_locked();
+	renderer_glass_background_locked(t->glass_bg);
 
 	for (uint32_t r = 0; r < t->rows; r++)
 	{
@@ -561,10 +577,9 @@ void tty_flush_if_dirty(void)
 		return;
 
 	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
-	// Re-check under the lock; repaint only the terminal that is still on
-	// stage AND showing the present (a scrollback viewer's screen must not
-	// snap forward because a background flood is writing history).
-	if (s_glassStale && kTTYFocused == t && t->view_offset == 0)
+	// Re-check focus under the lock. Repaint uses tty_visible_line, so a
+	// paper change also refreshes history without changing view_offset.
+	if (s_glassStale && kTTYFocused == t)
 		tty_repaint_locked(t);   // clears s_glassStale itself
 	spinlock_release_irqrestore(&t->lock, flags);
 }
@@ -707,10 +722,6 @@ void tty_focus(uint32_t index)
 	bool gui_target = (next == &kTTY[7] && gui_vt8_seated());
 	if (!gui_target)
 	{
-		// The paper travels with the focus: the glass's own background is
-		// whatever the terminal now on stage says it is, so the margins past
-		// the last cell match the terminal rather than the one before it.
-		renderer_set_background(next->glass_bg);
 		tty_repaint_locked(next);
 	}
 	spinlock_release_irqrestore(&next->lock, flags);

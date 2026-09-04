@@ -115,9 +115,9 @@ void renderer_glass_scroll_locked(void);   // one text line up (throttled blit)
 void renderer_glass_clear_locked(void);    // wipe to background
 
 // The colour the glass shows where no cell covers it — the margin beyond the
-// last row and column, and what a wipe leaves behind. Set from the FOCUSED
-// terminal's own background, so switching terminals switches the paper.
-void renderer_set_background(uint32_t color);
+// last row and column, and what a wipe leaves behind. Called under the
+// renderer lock during a full tty repaint; also paints the remainder strips.
+void renderer_glass_background_locked(uint32_t color);
 // The repaint gait (focus switch / scrollback view): defer marks the glass
 // dirty so every putc lands in the shadow only; blit pushes the finished
 // frame in ONE memcpy. A terminal switch is a single blit, not 16k pokes.

@@ -1,13 +1,9 @@
 // test_ansi_host.c — host harness for the terminal's escape reader.
 //
 // The parser is fed a script one byte at a time and every action it produces
-// is printed as a line. The companion shell script runs each case at every
-// chunk size, because a sequence arrives in whatever pieces write() was
-// called with: `printf("\033[31m")` can put the ESC in one write and the
-// bracket in the next, and a parser that has only ever seen whole sequences
-// is a parser nobody has tested at the seam. (Same lesson, same shape, as
-// tools/test_http_host.sh — that one found bugs where a token straddled two
-// reads, and this is the same hazard wearing a different hat.)
+// is printed as a line. The companion shell script checks individual
+// sequences and a concatenated corpus to exercise state carried between
+// calls, including recovery from incomplete sequences.
 
 #include <stdio.h>
 #include <string.h>

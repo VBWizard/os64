@@ -182,6 +182,9 @@ tty_t *task_tty(struct task *t);
 // view; NULL if the row is out of range. THE one place that knows how the
 // ring, screen_top and view_offset combine. Caller holds t->lock.
 tty_cell_t *tty_visible_line(tty_t *t, uint32_t screen_row);
+// Resolve a cell for painting, before selection overlays. Caller holds t->lock.
+void tty_cell_colors(const tty_t *t, const tty_cell_t *cell,
+                     uint32_t *fg, uint32_t *bg);
 
 // Build the grids and take over the console. Call once kmalloc is up —
 // right after renderer_attach_shadow, so nearly all boot spew lands in VT1's

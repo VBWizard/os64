@@ -107,24 +107,23 @@ check("\\e]11;" + "#" * 200 + "\\a", [], "an OSC string longer than the buffer i
 # would be asserting the buffer size, which is free to change.
 done_run = subprocess.run([exe, "\\e]11;" + "x" * 400 + "BACK"],
                           capture_output=True, text=True)
+if done_run.returncode != 0:
+    raise SystemExit(f"harness failed ({done_run.returncode}): {done_run.stderr!r}")
 lines = [l for l in done_run.stdout.split("\n") if l]
 swallowed = 400 - sum(1 for l in lines if l == "print 78")
 if lines[-4:] != ["print 42", "print 41", "print 43", "print 4b"]:
-    fail("runaway OSC", f"printing did not resume: {lines[-6:]}")
+    failures += 1
+    print(f"FAIL runaway OSC: printing did not resume: {lines[-6:]}")
 elif not (64 <= swallowed <= 300):
-    fail("runaway OSC", f"swallowed {swallowed} bytes — bounded, but not sanely")
+    failures += 1
+    print(f"FAIL runaway OSC: swallowed {swallowed} bytes — bounded, but not sanely")
 
-# ── The seam: every case again, arriving in pieces ──────────────────────
-# The parser's whole reason for being a separate file. If any case above
-# behaves differently when its bytes are split across calls, the state
-# machine is keeping something in the wrong place.
+if failures:
+    raise SystemExit(1)
 PY
 
-# The chunk sweep is the same binary called once per byte — the parser holds
-# its state across calls by construction, so feeding one byte at a time IS
-# the worst case, and the harness above already does exactly that. What this
-# second pass adds is the whole corpus concatenated into ONE script, so a
-# sequence's state cannot be accidentally cleared by the harness restarting.
+# Concatenate a corpus into one run of the byte-fed parser so state left by
+# one sequence is tested by the next without restarting the harness.
 python3 - "$work" <<'PY'
 import pathlib, subprocess, sys
 work = pathlib.Path(sys.argv[1]); exe = str(work / "test_ansi")
@@ -133,10 +132,26 @@ corpus = ("A\\e[31mB\\e[0m\\e[10;20H\\e[2J\\e]11;#010203\\a"
 want = ["print 41", "sgr 31", "print 42", "sgr 0", "cup 10 20", "ed 2",
         "bg 010203", "print 43", "sgr 38 5 9", "print 44", "sgr 32", "print 45"]
 done = subprocess.run([exe, corpus], capture_output=True, text=True)
+if done.returncode != 0:
+    raise SystemExit(f"harness failed ({done.returncode}): {done.stderr!r}")
 got = [l for l in done.stdout.split("\n") if l]
 if got != want:
     print(f"FAIL corpus\n  got  {got}\n  want {want}")
     raise SystemExit(1)
 PY
+
+# Run the tty/selection and framebuffer consumers as well as the parser.
+# Link-time section collection drops unrelated kernel entry points. The tty
+# fixture records renderer calls; the margin fixture paints into RAM. Neither
+# invokes privileged entry points or models SMP interleavings.
+for fixture in tty_ansi ansi_margins; do
+    cc -std=gnu11 -D_POSIX_C_SOURCE=200809L -g -O1 -fno-builtin -masm=intel \
+       -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
+       -Wno-unused-function -fsanitize=address,undefined \
+       -I kernel/include -I kernel/include/memory -I kernel/include/driver/system \
+       -I kernel/include/strings -I abi/include -Wl,--gc-sections \
+       "tools/test_${fixture}_host.c" kernel/src/ansi.c -o "$work/test_$fixture"
+    "$work/test_$fixture"
+done
 
 echo "test_ansi_host: all checks passed"

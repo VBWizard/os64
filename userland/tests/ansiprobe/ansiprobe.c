@@ -31,7 +31,8 @@ int main(int argc, char **argv)
     // would be worth knowing about immediately.
     if (argc > 1 && argv[1] != NULL && argv[1][0] == 'r')
     {
-        os64_write(1, "[write] \033[31;44mZ> \033[0mafter\n", 30);
+        static const char raw[] = "[write] \033[31;44mZ> \033[0mafter\n";
+        os64_write(1, raw, sizeof(raw) - 1);
         os64_printf("[printf] \033[31;44mZ> \033[0mafter\n");
         return 0;
     }
