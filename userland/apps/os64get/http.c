@@ -785,7 +785,7 @@ static http_head_result_t header_take(char *line, http_response_t *out)
 
 // WHAT WAS THAT LINE, before we throw it away. An over-long header is
 // dropped rather than fatal (see HTTP_LINE_MAX in http.h), and that is safe
-// only for a header nothing depends on. It is NOT safe for the three that
+// only for a header nothing depends on. It is NOT safe for the headers that
 // decide how the body is framed and coded: a server chooses the length of
 // its own header lines, so `Transfer-Encoding:` followed by three kilobytes
 // of the optional whitespace RFC 7230 permits and then `chunked` would be
@@ -793,7 +793,12 @@ static http_head_result_t header_take(char *line, http_response_t *out)
 // published as the file — the precise failure the refusal rule exists to
 // prevent. (Codex review, 2026-09-02. The rule was right; the premise under
 // it — "the headers this acts on are all short" — was the server's to break,
-// not ours to assume.)
+// not ours to assume.) NOR is it safe for Location, since redirects are
+// followed: Location is a singleton, and dropping an unreadable one lets a
+// readable twin through the conflict check — `Location: /safe` beside a
+// padded `Location: /evil` reads as an unambiguous /safe, in either order
+// (Codex review of PR #60, round 3). A destination too long to read is a
+// redirect this program cannot honestly follow, whatever the status.
 //
 // The NAME is readable even when the value is not: it arrives first and is
 // short, so the truncated prefix still carries it. A line so long that not
@@ -811,7 +816,7 @@ static http_head_result_t overlong_verdict(const char *prefix)
         if (!is_token_byte(prefix[n]))
             return HTTP_HEAD_SYNTAX;  // malformed, exactly as the short form would be
         if (n + 1 >= sizeof(name))
-            return HTTP_HEAD_OK;      // a legal name, too long to BE one of the three
+            return HTTP_HEAD_OK;      // a legal name, too long to BE one this depends on
         name[n] = prefix[n];
         n++;
     }
@@ -821,7 +826,8 @@ static http_head_result_t overlong_verdict(const char *prefix)
 
     if (os64_streq_nocase(name, "Content-Length") ||
         os64_streq_nocase(name, "Transfer-Encoding") ||
-        os64_streq_nocase(name, "Content-Encoding"))
+        os64_streq_nocase(name, "Content-Encoding") ||
+        os64_streq_nocase(name, "Location"))
         return HTTP_HEAD_FRAMING;
 
     return HTTP_HEAD_OK;              // genuinely nothing depends on it
@@ -934,7 +940,7 @@ const char *http_head_reason(http_head_result_t rc)
         case HTTP_HEAD_SYNTAX:   return "a header line is not 'Name: value'";
         case HTTP_HEAD_TOO_MUCH: return "more headers than this program will read";
         case HTTP_HEAD_CONFLICT: return "the headers answer one question two ways";
-        case HTTP_HEAD_FRAMING:  return "a header saying how to read the body was too long to read";
+        case HTTP_HEAD_FRAMING:  return "a header this fetch depends on was too long to read";
         case HTTP_HEAD_SWITCHED: return "the server switched protocols (101), which a fetch cannot follow";
     }
     return "refused";

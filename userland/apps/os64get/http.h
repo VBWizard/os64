@@ -53,8 +53,9 @@
 // to be one nothing depends on. Refusing every over-long line would cost the
 // fetch over somebody's enormous Set-Cookie, which os64get does not even
 // read; dropping one blindly would let a server hide `Transfer-Encoding:
-// chunked` behind three kilobytes of legal whitespace and get raw chunk
-// framing published as the file. See overlong_verdict: the three headers
+// framing published as the file. See overlong_verdict: a header the fetch
+// DEPENDS ON — how a body is framed and coded, or where a redirect points —
+// refuses the reply instead.
 // that decide how a body is framed and coded refuse the reply instead.
 #define HTTP_LINE_MAX      2048
 // ...but the DROPPING is bounded, or a peer that talks forever and never
@@ -197,7 +198,7 @@ typedef enum {
     HTTP_HEAD_SYNTAX,     // a header line is not "Name: value"
     HTTP_HEAD_TOO_MUCH,   // more head than this will read
     HTTP_HEAD_CONFLICT,   // two different answers to one question
-    HTTP_HEAD_FRAMING,    // a header deciding how to read the body was unreadable
+    HTTP_HEAD_FRAMING,    // a header the fetch depends on was unreadable: framing, coding, or where a redirect points
     HTTP_HEAD_SWITCHED    // 101: the bytes that follow are not HTTP any more
 } http_head_result_t;
 

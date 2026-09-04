@@ -613,6 +613,13 @@ framing_hidden = {
     "long-te-tab-before-colon": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding\t:" + pad + b"chunked\r\n\r\n", "syntax"),
     # Any other byte a field name may not hold, for the same reason.
     "long-te-inner-space": (b"HTTP/1.1 200 OK\r\nTransfer Encoding:" + pad + b"chunked\r\n\r\n", "syntax"),
+    # Location joined the list when redirects were followed: it is a
+    # singleton, and DROPPING an unreadable one lets its readable twin through
+    # the conflict check as the only destination — in either order (Codex
+    # round 3 on PR #60).
+    "long-location": (b"HTTP/1.1 302 Found\r\nLocation:" + pad + b"/x\r\nContent-Length: 0\r\n\r\n", "framing"),
+    "safe-then-long-location": (b"HTTP/1.1 302 Found\r\nLocation: /safe\r\nLocation: /evil?" + pad + b"\r\nContent-Length: 0\r\n\r\n", "framing"),
+    "long-then-safe-location": (b"HTTP/1.1 302 Found\r\nLocation: /evil?" + pad + b"\r\nLocation: /safe\r\nContent-Length: 0\r\n\r\n", "framing"),
 }
 for label, (raw, want) in framing_hidden.items():
     path = work / f"framing-{label}"
