@@ -737,6 +737,14 @@ bodyRefusals = {
     "trailer-fold": (b"0\r\n X-A: 1\r\n\r\n", "syntax", 0),
     "trailer-no-colon": (b"0\r\nnocolon\r\n\r\n", "syntax", 0),
     "trailer-nul": (b"0\r\nX-A: \x001\r\n\r\n", "syntax", 0),
+    # The WHOLE name is a token, not just its first byte: a blank, a tab or a
+    # control byte before the colon is refused as the head refuses it. Only
+    # the first byte was judged, and `X Bad: value` ended a body as DONE
+    # (Codex round 4 on PR #60).
+    "trailer-space-in-name": (b"5\r\nhello\r\n0\r\nX Bad: value\r\n\r\n", "syntax", 5),
+    "trailer-space-before-colon": (b"0\r\nX-A : 1\r\n\r\n", "syntax", 0),
+    "trailer-tab-in-name": (b"0\r\nX\tA: 1\r\n\r\n", "syntax", 0),
+    "trailer-ctl-in-name": (b"0\r\nX\x01A: 1\r\n\r\n", "syntax", 0),
     "trailer-long-dropped": (b"0\r\nX-Big: " + b"x" * 4000 + b"\r\n\r\n", "done", 0),
     "trailers-at-cap": (b"0\r\n" + b"X-A: 1\r\n" * 128 + b"\r\n", "done", 0),
     # Bytes after the terminating CRLF are not the body's: the framing said
