@@ -158,8 +158,9 @@ Offer `-vnc :0` instead of `-display none` if the human wants to peek.
 
 slirp is a perfect network: nothing is ever lost, reordered, duplicated or
 late, so `/sys/net/tcp`'s retransmit and out-of-order counters read zero on
-this harness forever, and the TCP debts they exist to adjudicate (RTT-measured
-RTO, reassembly, a send window) cannot be measured here. `tools/cable.py` puts
+this harness forever, and the TCP debts they exist to adjudicate (a send
+window — and reassembly and the measured RTO, until each was paid) cannot be
+measured here. `tools/cable.py` puts
 a cable with weather in it between the guest's NIC and slirp, using QEMU's
 `filter-redirector` (the COLO building block): every frame goes out to the
 cable over a loopback socket and the survivors come back in. No tap, no
@@ -200,7 +201,22 @@ move. The rig's first day (2026-09-02), same 100KB file, all CRC-verified:
 | `loss 0.1` both ways | 12s | `retransmits` |
 | `delay 100` `jitter 30` both ways, order kept | 2s | nothing — a download rides the peer's send window; what 200ms round trips cost an os64 *upload* (stop-and-wait) is the send-window debt's measurement, not taken yet |
 | `reorder 0.3` down | 29s | `out_of_order_dropped 49` on one connection — the price of v1's no-reassembly, measured |
+| `reorder 0.3` down, **after reassembly** (2026-09-04) | 1s | `out_of_order_held 34`, `out_of_order_dropped 0`, `retransmits 0`; the trunk kernel the same morning, same seed: 34s and 47 dropped. Both files CRC-verified |
 | `dup 0.2` down | — | `duplicates_dropped` |
+
+**The send side has its own workload**, because our retransmit timer governs
+only the segments os64 sends, and a download's losses are the peer's timer's
+problem: `/tests/netsend HOST PORT BYTES` pushes a seeded byte stream up a
+connection and prints the milliseconds; `tools/tcpsink.py` on the host drains
+it and checks every byte against the same stream. 100KB, seed 1, the
+fixed-timer kernel against the measured one (2026-09-04, same cable, same 21
+segments lost):
+
+| Weather (upload) | fixed 1s RTO | Jacobson/Karn RTO | What moved |
+|---|---|---|---|
+| none | 0.8s | 0.8s | nothing; `srtt_ms 10`, `rto_ms 200` (the floor) |
+| `loss 0.1` up | 11.8s | 3.3s | `retransmits 9` vs `10` — each loss cost a second, now the 200ms floor |
+| `delay 100` both + `loss 0.1` up | 31.5s | 19.9s | `srtt_ms 210`, `rto_ms 250`; the 13.8s that remain are 69 stop-and-wait round trips — the send-window debt's number |
 
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
 under jitter, as a real pipe does, so a delay leg measures the clock and only

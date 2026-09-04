@@ -209,11 +209,58 @@ static void tcp_ack(tcp_conn_t* c)
 // that changes — a new segment, a FIN joining one already in flight, or an
 // ACK that retired part of one (RFC 6298 §5.3). Inheriting a spent budget
 // across such a change is how a segment gets sent once and never again.
-static void tcp_rto_arm(tcp_conn_t* c)
+// One clean round-trip sample, in ticks — Jacobson/Karels 1988, in the
+// paper's own integer form (RFC 6298 §2.3 says the same in reals):
+// err = r - srtt; srtt += err/8; rttvar += (|err| - rttvar)/4; timer =
+// srtt + 4·rttvar. With srtt kept ×8 and rttvar ×4 the divisions are
+// shifts of the stored values and the 4· is free. A sample of zero ticks
+// is real on a virtual wire — the ack came back inside one tick — and the
+// floor is what keeps the timer honest there.
+static void tcp_rtt_sample(tcp_conn_t* c, uint32_t r)
 {
-	c->rto_ticks = TCP_RTO_TICKS;
+	if (c->rtt_samples == 0)
+	{
+		c->srtt_x8   = r << 3;
+		c->rttvar_x4 = r << 1;       // rttvar = r/2, ×4
+	}
+	else
+	{
+		int32_t err = (int32_t)r - (int32_t)(c->srtt_x8 >> 3);
+		c->srtt_x8 = (uint32_t)((int32_t)c->srtt_x8 + err);
+		if (err < 0)
+			err = -err;
+		err -= (int32_t)(c->rttvar_x4 >> 2);
+		c->rttvar_x4 = (uint32_t)((int32_t)c->rttvar_x4 + err);
+	}
+	uint32_t rto = (c->srtt_x8 >> 3) + (c->rttvar_x4 > 1 ? c->rttvar_x4 : 1);  // G = one tick
+	if (rto < TCP_RTO_MIN_TICKS)
+		rto = TCP_RTO_MIN_TICKS;
+	if (rto > TCP_RTO_MAX_TICKS)
+		rto = TCP_RTO_MAX_TICKS;
+	c->rto = rto;
+	c->rto_backed_off = false;
+	c->rtt_samples++;
+	kTcpStats.rtt_samples++;
+	printd(DEBUG_NET, "tcp: rtt %u ticks -> srtt_x8 %u rttvar_x4 %u rto %u ticks\n",
+	       r, c->srtt_x8, c->rttvar_x4, c->rto);
+}
+
+// Arm the retransmit clock for the segment in the slot. A FRESH send starts
+// the round-trip stopwatch; a restart (the peer acknowledged part of the
+// segment) keeps it, because the segment has been in flight since its
+// first send. A timer that has backed off stays backed off (Karn) until a
+// clean sample sets a new one.
+static void tcp_rto_arm(tcp_conn_t* c, bool fresh)
+{
+	if (!c->rto_backed_off)
+		c->rto_ticks = c->rto;
 	c->rto_deadline = kTicksSinceStart + c->rto_ticks;
 	c->retries = 0;
+	if (fresh)
+	{
+		c->snd_sent_at = kTicksSinceStart;
+		c->snd_resent = false;
+	}
 }
 
 static void tcp_send_reliable(tcp_conn_t* c, const void* data, uint16_t len, uint8_t flags)
@@ -223,7 +270,7 @@ static void tcp_send_reliable(tcp_conn_t* c, const void* data, uint16_t len, uin
 	c->snd_len = len;
 	c->snd_flags = flags;
 	c->snd_seq = c->snd_nxt;
-	tcp_rto_arm(c);
+	tcp_rto_arm(c, true);
 
 	tcp_send_segment(c, c->snd_seq, flags, data, len, (flags & TCP_SYN) != 0);
 	// SYN and FIN each consume one sequence number even though they carry
@@ -276,6 +323,154 @@ static void tcp_rcv_store(tcp_conn_t* c, const uint8_t* data, uint16_t len)
 		c->rcv_count++;
 	}
 	c->rx_bytes += len;
+}
+
+// ── 2b. REASSEMBLY: the ring is the queue ───────────────────────────────────
+//
+// A segment ahead of rcv_nxt used to be dropped — legal, and priced by the
+// chaos rig at 29 seconds for a 100KB fetch under 30% reordering against 2
+// seconds clean, because every early segment was thrown away and sent again
+// after the hole it followed. 4.2BSD's receiver (1983) held such segments
+// and so does this one, with no queue of its own: the receive ring's free
+// space IS the window we advertise, so a segment inside the window has a
+// slot in the ring already, at offset seq - rcv_nxt past the in-order bytes.
+// That offset is stable — a read moves rcv_head and rcv_count by the same
+// amount, and an in-order arrival moves rcv_count and rcv_nxt by the same
+// amount, so (rcv_head + rcv_count) always points at where byte rcv_nxt
+// belongs. The bytes go into their slot; the list remembers which slots are
+// full; and when the gap closes, rcv_count simply grows over them.
+//
+// An in-order arrival that reaches into a held range overwrites it with
+// the same bytes: the peer's stream is one stream, and a sequence number
+// names one byte of it.
+
+// Keep an ahead-of-sequence segment: write it into its slot and record the
+// range, merging with anything it touches. Everything the caller advertised
+// is honoured and nothing more — bytes past the window are not ours to
+// hold, and a segment for which no slot is free is dropped, counted.
+static void tcp_hold(tcp_conn_t* c, uint32_t seq, const uint8_t* data, uint32_t len)
+{
+	uint32_t room = TCP_RCV_BUF - c->rcv_count;    // exactly what tcp_window offers, before its SWS rounding
+	uint32_t wnd_end = c->rcv_nxt + room;
+	if (!seq_lt(seq, wnd_end))
+	{
+		c->out_of_order_dropped++;
+		kTcpStats.out_of_order_dropped++;
+		return;
+	}
+	if (seq_gt(seq + len, wnd_end))
+		len = wnd_end - seq;                        // the tail beyond our window is the sender's problem
+	uint32_t end = seq + len;
+
+	// Where the new range lands in the sorted, disjoint list: `first` is the
+	// first range that ends at or after it starts, `last` the first that
+	// starts after it ends; everything in [first, last) merges with it into
+	// [lo, hi). THE SEGMENT'S OWN seq IS WHAT PLACES ITS BYTES — the merged
+	// range may start earlier, at bytes some previous segment already put
+	// there, and writing this segment from THAT start shifted it back over
+	// them (found by the rig's CRC on the first run, 2026-09-04).
+	uint32_t lo = seq, hi = end;
+	uint8_t first = 0;
+	while (first < c->held_count && seq_lt(c->held[first].seq + c->held[first].len, seq))
+		first++;
+	uint8_t last = first;
+	while (last < c->held_count && seq_leq(c->held[last].seq, end))
+	{
+		if (seq_lt(c->held[last].seq, lo))
+			lo = c->held[last].seq;
+		if (seq_gt(c->held[last].seq + c->held[last].len, hi))
+			hi = c->held[last].seq + c->held[last].len;
+		last++;
+	}
+	if (first == last && c->held_count == TCP_HELD_MAX)
+	{
+		c->out_of_order_dropped++;
+		kTcpStats.out_of_order_dropped++;
+		return;
+	}
+
+	// Into the ring, at the offset the sequence number dictates. Done after
+	// the slot check so a refused segment leaves no bytes behind.
+	uint32_t base = (c->rcv_head + c->rcv_count + (seq - c->rcv_nxt)) % TCP_RCV_BUF;
+	for (uint32_t i = 0; i < len; i++)
+		c->rcv_buf[(base + i) % TCP_RCV_BUF] = data[i];
+
+	// Replace [first, last) with the merged range.
+	uint8_t drop = (uint8_t)(last - first);
+	if (drop == 0)
+	{
+		for (uint8_t i = c->held_count; i > first; i--)
+			c->held[i] = c->held[i - 1];
+		c->held_count++;
+	}
+	else if (drop > 1)
+	{
+		for (uint8_t i = first + 1; i + drop - 1 < c->held_count; i++)
+			c->held[i] = c->held[i + drop - 1];
+		c->held_count -= (uint8_t)(drop - 1);
+	}
+	c->held[first].seq = lo;
+	c->held[first].len = hi - lo;
+	c->out_of_order_held++;
+	kTcpStats.out_of_order_held++;
+}
+
+// Their FIN, at exactly rcv_nxt: they will send no more. The stream stays
+// readable until the buffer drains — THEN read() returns 0.
+static void tcp_take_fin(tcp_conn_t* c)
+{
+	c->rcv_nxt++;            // FIN occupies one sequence number
+	c->rcv_fin = true;
+	tcp_ack(c);
+	if (c->state == TCP_ESTABLISHED)
+		c->state = TCP_CLOSE_WAIT;
+	else if (c->state == TCP_FIN_WAIT_1)
+		c->state = TCP_CLOSING;      // simultaneous close
+	else if (c->state == TCP_FIN_WAIT_2)
+	{
+		// The normal end of a client connection: both sides have said
+		// goodbye. TIME_WAIT now guards the port — see tcp_poll for why
+		// that wait is not paranoia.
+		c->state = TCP_TIME_WAIT;
+		c->time_wait_until = kTicksSinceStart + 2 * TCP_MSL_TICKS;
+	}
+	printd(DEBUG_NET, "tcp: peer %u.%u.%u.%u:%u closed its half\n",
+	       NET_IPV4_OCTETS(c->peer_ip), c->peer_port);
+}
+
+// rcv_nxt moved: absorb every held range it now reaches, in order, and the
+// held FIN if the stream has arrived at it. The bytes are already in place,
+// so absorbing a range is arithmetic on rcv_count and rcv_nxt.
+static void tcp_absorb_held(tcp_conn_t* c)
+{
+	while (c->held_count > 0 && seq_leq(c->held[0].seq, c->rcv_nxt))
+	{
+		uint32_t end = c->held[0].seq + c->held[0].len;
+		if (seq_gt(end, c->rcv_nxt))
+		{
+			uint32_t more = end - c->rcv_nxt;
+			uint32_t room = TCP_RCV_BUF - c->rcv_count;
+			if (more > room)
+			{
+				// Cannot happen: a held range was inside the window when it
+				// was held, and the window only moves forward with rcv_nxt.
+				// Said loudly rather than trusted silently.
+				printd(DEBUG_NET, "tcp: held range past the ring (more=%u room=%u) — truncated\n", more, room);
+				more = room;
+			}
+			c->rcv_count += more;
+			c->rcv_nxt += more;
+			c->rx_bytes += more;
+		}
+		for (uint8_t i = 1; i < c->held_count; i++)
+			c->held[i - 1] = c->held[i];
+		c->held_count--;
+	}
+	if (c->held_fin && c->rcv_nxt == c->held_fin_seq)
+	{
+		c->held_fin = false;
+		tcp_take_fin(c);
+	}
 }
 
 // ── 3. THE STATE MACHINE ────────────────────────────────────────────────────
@@ -463,6 +658,8 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				c->rcv_nxt = seq + 1;
 				c->snd_una = ack;        // our SYN is acknowledged, which disarms the timer
+				if (!c->snd_resent)      // and the handshake is the first round trip measured
+					tcp_rtt_sample(c, (uint32_t)(kTicksSinceStart - c->snd_sent_at));
 				c->state = TCP_ESTABLISHED;
 				kTcpStats.connections_opened++;
 
@@ -507,7 +704,9 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				c->snd_una = ack;
 				if (tcp_unacked(c))
-					tcp_rto_arm(c);
+					tcp_rto_arm(c, false);
+				else if (!c->snd_resent)
+					tcp_rtt_sample(c, (uint32_t)(kTicksSinceStart - c->snd_sent_at));
 				// Our FIN being acknowledged is a state transition, not
 				// just bookkeeping.
 				if (c->state == TCP_FIN_WAIT_1 && seq_geq(ack, c->snd_nxt))
@@ -521,10 +720,20 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					c->state = TCP_CLOSED;   // fully closed; poll reaps it
 			}
 
-			// (b) Their data — but ONLY if it is the next thing we expect.
-			// Out-of-order arrivals are dropped (v1, a booked DEBT): the
-			// sender's own retransmission will bring them back in order,
-			// which is slow but never wrong.
+			// (b) Their data. In order, it goes into the ring and rcv_nxt
+			// advances over it and over whatever held ranges it now reaches;
+			// ahead of us, it is held in its slot (tcp_hold); behind us, it
+			// is a duplicate. A segment that starts behind us and reaches
+			// past us is a retransmission overlapping bytes we took — the
+			// stop-and-wait sender resends its whole segment after a partial
+			// ack, and RFC 793 §3.9 says trim — so its tail is in-order data.
+			if (data_len && seq_lt(seq, c->rcv_nxt) && seq_gt(seq + data_len, c->rcv_nxt))
+			{
+				uint32_t old = c->rcv_nxt - seq;
+				data += old;
+				data_len = (uint16_t)(data_len - old);
+				seq = c->rcv_nxt;
+			}
 			if (data_len)
 			{
 				if (seq == c->rcv_nxt)
@@ -533,6 +742,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					uint16_t take = data_len < room ? data_len : room;
 					tcp_rcv_store(c, data, take);
 					c->rcv_nxt += take;
+					tcp_absorb_held(c);
 					// The receive-path trace, and the reason it is
 					// permanent rather than a debugging leftover: this
 					// stack moves ~1.7 KB/s on a 100BASE-TX link (measured
@@ -547,27 +757,29 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					// took < len says our buffer was too small for the
 					// segment. win == 0 says we just told the sender to
 					// stop, and the next TCPWIN line says how long it took
-					// us to take that back.
-					printd(DEBUG_NET, "TCPRX t=%lu len=%u room=%u took=%u buf=%u win=%u\n",
+					// us to take that back. held is the ranges still
+					// waiting past a hole.
+					printd(DEBUG_NET, "TCPRX t=%lu len=%u room=%u took=%u buf=%u win=%u held=%u\n",
 					       kTicksSinceStart, data_len, room, take,
-					       c->rcv_count, tcp_window(c));
+					       c->rcv_count, tcp_window(c), c->held_count);
 					tcp_ack(c);          // acknowledge immediately: simple,
 					                     // and the peer's window depends on it
 				}
 				else if (seq_gt(seq, c->rcv_nxt))
 				{
 					// Ahead of us: something between here and the peer
-					// reordered or dropped. THIS is the count the
-					// reassembly debt is judged by.
-					c->out_of_order_dropped++;
-					kTcpStats.out_of_order_dropped++;
-					tcp_ack(c);          // re-announce where we actually are
+					// reordered or dropped. Keep it, and re-announce where
+					// we are — the sender's fast retransmit (RFC 5681 §3.2)
+					// is cued by three of these, and that one resend is
+					// what closes the hole over everything held behind it.
+					tcp_hold(c, seq, data, data_len);
+					tcp_ack(c);
 				}
 				else
 				{
 					// Behind us: bytes we already took, sent again because
-					// our ack never reached them (or not in time). The
-					// same drop, a different weather report — and the
+					// our ack never reached them (or not in time). Not
+					// reordering — a different weather report — and the
 					// re-announce is the cure, which is why it is not the
 					// reordering count (Codex, PR #46).
 					kTcpStats.duplicates_dropped++;
@@ -575,27 +787,26 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				}
 			}
 
-			// (c) Their FIN: they will send no more. The stream stays
-			// readable until the buffer drains — THEN read() returns 0.
-			if ((flags & TCP_FIN) && seq_leq(seq, c->rcv_nxt))
+			// (c) Their FIN occupies the sequence number after their last
+			// byte. Taken only when the stream has ARRIVED there: a FIN
+			// riding a segment whose bytes were not all taken (the ring was
+			// full), or one ahead of a hole, waits for rcv_nxt like any
+			// other byte — taking it early would step over data still owed.
+			// One already taken and sent again (our ack was lost) is
+			// re-acknowledged, not re-taken.
+			if (flags & TCP_FIN)
 			{
-				c->rcv_nxt++;            // FIN occupies one sequence number
-				c->rcv_fin = true;
-				tcp_ack(c);
-				if (c->state == TCP_ESTABLISHED)
-					c->state = TCP_CLOSE_WAIT;
-				else if (c->state == TCP_FIN_WAIT_1)
-					c->state = TCP_CLOSING;      // simultaneous close
-				else if (c->state == TCP_FIN_WAIT_2)
+				uint32_t fin_seq = seq + data_len;
+				if (fin_seq == c->rcv_nxt)
+					tcp_take_fin(c);
+				else if (seq_gt(fin_seq, c->rcv_nxt))
 				{
-					// The normal end of a client connection: both sides
-					// have said goodbye. TIME_WAIT now guards the port —
-					// see tcp_poll for why that wait is not paranoia.
-					c->state = TCP_TIME_WAIT;
-					c->time_wait_until = kTicksSinceStart + 2 * TCP_MSL_TICKS;
+					c->held_fin = true;
+					c->held_fin_seq = fin_seq;
+					tcp_ack(c);          // a bare FIN ahead of a hole still earns the re-announce
 				}
-				printd(DEBUG_NET, "tcp: peer %u.%u.%u.%u:%u closed its half\n",
-				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port);
+				else
+					tcp_ack(c);
 			}
 			break;
 		}
@@ -844,6 +1055,8 @@ void tcp_poll(void)
 				if (c->rto_ticks > TCP_RTO_MAX_TICKS)
 					c->rto_ticks = TCP_RTO_MAX_TICKS;
 				c->rto_deadline = now + c->rto_ticks;
+				c->rto_backed_off = true;   // stays doubled until a clean sample (Karn)
+				c->snd_resent = true;       // this slot's ack can no longer be timed
 				// The flags exactly as first sent (tcp_send_reliable says
 				// why a SYN must not grow an ACK bit here); the ACK
 				// NUMBER, where there is one, is whatever rcv_nxt says
@@ -1032,6 +1245,7 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->local_port = local_port;
 	c->snd_mss = 536;
 	c->snd_wnd = TCP_MSS;
+	c->rto = TCP_RTO_INITIAL_TICKS;
 
 	uint32_t iss = tcp_initial_seq(peer_ip, peer_port, c->local_port);
 	c->snd_una = iss;
@@ -1276,7 +1490,8 @@ void tcp_conn_close(tcp_conn_t* c)
 			// go out once and then die unsent.
 			c->snd_flags |= TCP_FIN;
 			c->snd_nxt += 1;
-			tcp_rto_arm(c);
+			tcp_rto_arm(c, false);
+			c->snd_resent = true;        // the slot goes out twice; neither ack is a sample
 			tcp_send_segment(c, c->snd_seq, c->snd_flags,
 			                 c->snd_buf, (uint16_t)c->snd_len, false);
 		}

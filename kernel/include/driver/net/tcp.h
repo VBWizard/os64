@@ -44,9 +44,13 @@
 //     segment) and it costs nothing on the RECEIVE side, which is where
 //     a page fetch's bytes actually flow. A real send window is a booked
 //     DEBT, not a pretense.
-//   - Out-of-order arrivals are DROPPED (the sender will resend them in
-//     order). Legal — RFC 793 permits a receiver to discard anything it
-//     cannot use — and it means no reassembly queue in v1. Booked.
+//   - Out-of-order arrivals are HELD, not dropped, since 2026-09-04: a
+//     segment inside the window is written into the receive ring at its
+//     own offset and absorbed when the gap closes (tcp_hold / tcp_absorb
+//     in tcp.c). What is NOT offered is SACK (RFC 2018): the sender is
+//     told where we are, never what we hold, so it refills a hole by its
+//     own retransmit rules — fast retransmit on our duplicate acks, or its
+//     RTO. Booked.
 //   - Congestion control: fixed window. Also booked. os64 on slirp is
 //     not going to melt the internet, but silence would still be a lie.
 
@@ -97,16 +101,27 @@ typedef enum tcp_state
 #define TCP_RCV_BUF  65536
 #define TCP_MSS      1460
 
-// Timers, in ticks (100/s). Fixed RTO with exponential backoff — a real
-// stack measures round-trip time and adapts (Jacobson/Karels, 1988); ours
-// is booked as a DEBT and stated here so nobody mistakes 1 second for
-// measurement. TIME_WAIT is 2×MSL, and MSL ("maximum segment lifetime")
+// Timers, in ticks (100/s). THE RETRANSMIT TIMER IS MEASURED: Jacobson
+// and Karels' 1988 estimator — a smoothed round trip and its deviation,
+// the timer at the mean plus four deviations — with Karn's 1987 rule that
+// a retransmitted segment yields no sample (its ack could be for either
+// copy) and keeps its backed-off timer until a clean sample arrives. RFC
+// 6298 spells the arithmetic; the scaled integers in tcp_conn_t (srtt ×8,
+// rttvar ×4) are the paper's own, and keep some precision at a 10ms tick.
+// THE FLOOR IS 200ms, LINUX'S, NOT THE RFC'S "SHOULD 1 second" — on
+// merit: one second was the fixed timer this stack had until 2026-09-04,
+// and on a millisecond wire it made every lost segment cost a second; the
+// floor exists so a peer's delayed ack is not read as loss, and 200ms
+// clears that with thirty years of evidence behind it. Before the first
+// sample the timer is the RFC's initial second. TIME_WAIT is 2×MSL, and
+// MSL ("maximum segment lifetime")
 // is the assumption that no packet outlives 15 seconds on this network —
 // RFC 793 suggests 2 minutes for the internet at large; a virtual wire and
 // a home LAN are not the 1981 ARPAnet, and 30 seconds of TIME_WAIT is
 // already deep paranoia by our standards.
-#define TCP_RTO_TICKS       (1 * TICKS_PER_SECOND)
-#define TCP_RTO_MAX_TICKS   (8 * TICKS_PER_SECOND)
+#define TCP_RTO_INITIAL_TICKS (1 * TICKS_PER_SECOND)
+#define TCP_RTO_MIN_TICKS     (TICKS_PER_SECOND / 5)
+#define TCP_RTO_MAX_TICKS     (8 * TICKS_PER_SECOND)
 #define TCP_MAX_RETRIES     6
 #define TCP_MSL_TICKS       (15 * TICKS_PER_SECOND)
 #define TCP_CONNECT_TIMEOUT (10 * TICKS_PER_SECOND)
@@ -140,6 +155,14 @@ typedef enum tcp_state
 #define TCP_ERR_RESET       (-4L)   // peer sent RST, or the connection died
 #define TCP_ERR_TIMEOUT     (-5L)   // caller's read deadline expired, no bytes
 
+// One ahead-of-sequence range held in the receive ring (tcp_conn_t.held).
+#define TCP_HELD_MAX 16
+typedef struct
+{
+	uint32_t seq;
+	uint32_t len;
+} tcp_held_t;
+
 typedef struct tcp_conn
 {
 	tcp_state_t state;
@@ -163,8 +186,22 @@ typedef struct tcp_conn
 	uint32_t snd_seq;      // sequence number of snd_buf[0]
 	uint8_t  snd_flags;    // the FIN/SYN riding this segment, if any
 	uint64_t rto_deadline; // kTicksSinceStart when we resend
-	uint32_t rto_ticks;    // current timeout (doubles on each retry)
+	uint32_t rto_ticks;    // the timeout in force (doubles on each retry)
 	uint8_t  retries;
+
+	// The measured round trip (Jacobson/Karels; the timer constants above
+	// say why): srtt in eighths of a tick, rttvar in quarters, so
+	// (srtt_x8 >> 3) + rttvar_x4 is the mean plus FOUR deviations in whole
+	// ticks. snd_sent_at is when the slot's segment first went out; the
+	// sample is taken only if that segment was never sent again (Karn —
+	// snd_resent), and a timeout's doubled timer stays in force
+	// (rto_backed_off) until a clean sample replaces it.
+	uint32_t srtt_x8, rttvar_x4;
+	uint32_t rto;          // ticks: what the next fresh send arms with
+	uint64_t snd_sent_at;
+	uint32_t rtt_samples;
+	bool     snd_resent;
+	bool     rto_backed_off;
 
 	// ── RECEIVE state (RCV.*) ──
 	uint32_t rcv_nxt;      // next sequence number we expect — the ACK we send
@@ -172,6 +209,22 @@ typedef struct tcp_conn
 	uint32_t rcv_head, rcv_count;
 	bool     rcv_fin;      // their FIN arrived: after the buffer drains, EOF
 	bool     zero_window;  // we advertised 0; owe a window update when drained
+
+	// AHEAD-OF-SEQUENCE DATA IS HELD IN THE RING ITSELF. The ring spans the
+	// whole window we advertise (its free space IS the window), so a
+	// segment at seq > rcv_nxt has a slot waiting at offset seq - rcv_nxt
+	// past the in-order bytes — a slot no in-order byte can reach without
+	// first becoming that very byte. Writing it there costs no allocation
+	// under the lock; what must be remembered is only WHICH offsets are
+	// filled, and that is this list: sorted by seq, disjoint, absorbed into
+	// rcv_count as rcv_nxt reaches each. The list is small and fixed
+	// because a hole is a rare event with a short life (one retransmit
+	// closes it); a segment arriving with every slot taken is dropped and
+	// counted, never silently.
+	tcp_held_t held[TCP_HELD_MAX];
+	uint8_t  held_count;
+	bool     held_fin;     // their FIN arrived ahead of sequence; it takes effect...
+	uint32_t held_fin_seq; // ...when rcv_nxt reaches this
 
 	bool     reset;        // RST received or fatal error: reads/writes fail
 	uint64_t time_wait_until;
@@ -185,7 +238,9 @@ typedef struct tcp_conn
 	bool stripped;               // buffers freed; the row and (in TIME_WAIT) the port remain
 	bool tombstone;              // a morgue row: stripped, port returned, in the capped queue
 
-	uint64_t rx_bytes, tx_bytes, retransmits, out_of_order_dropped;
+	uint64_t rx_bytes, tx_bytes, retransmits;
+	uint64_t out_of_order_held;     // ahead-of-sequence segments kept in the ring
+	uint64_t out_of_order_dropped;  // ahead-of-sequence segments there was no room to keep
 
 	// The connection list is doubly linked so an unlink is O(1) from
 	// anywhere — the tombstone cap evicts from the middle of the list on
@@ -221,18 +276,24 @@ typedef struct tcp_stats
 	// allocation) are why it is one number and one door (Codex, PR #46).
 	uint64_t heap_moves;
 	uint64_t segments_in, segments_out, retransmits;
+	uint64_t rtt_samples;           // clean round trips measured (Karn's rule counts the rest out)
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)
 	uint64_t resets_received;
-	// The machine-wide twin of the per-conn counter, because a reaped
+	// The machine-wide twins of the per-conn counters, because a reaped
 	// connection takes its copy to the grave: "has this stack EVER seen
-	// reordering" has to survive the connections that answered it.
+	// reordering" has to survive the connections that answered it. HELD is
+	// the reordering count — every ahead-of-sequence segment the ring kept.
+	// DROPPED is the ones it could not keep: past the window we advertised,
+	// or every hold slot taken. A rising DROPPED beside a small HELD is a
+	// sender ignoring our window; beside a large one it is TCP_HELD_MAX
+	// being too small for the weather.
+	uint64_t out_of_order_held;
 	uint64_t out_of_order_dropped;
 	// Bytes we already took, sent again: OUR ack was lost or late, and the
 	// peer resent from where it last heard from us. Not reordering — kept
-	// apart so out_of_order_dropped answers only "is the network
-	// reordering", the question the reassembly debt hangs on, while this
-	// one answers "is the network eating our acks".
+	// apart so out_of_order_held answers only "is the network reordering",
+	// while this one answers "is the network eating our acks".
 	uint64_t duplicates_dropped;
 } tcp_stats_t;
 extern tcp_stats_t kTcpStats;

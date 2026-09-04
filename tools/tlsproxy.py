@@ -74,9 +74,9 @@ USAGE = "python3 tlsproxy.py [--port N] [--verbose]"
 #
 # Transfer-Encoding: http.client has already un-chunked the body by the time
 #   we see it, so forwarding the header would describe a framing that is no
-#   longer there. (This is also why a chunked origin works through the proxy
-#   while os64get cannot read chunked directly — an HTTP/1.1-to-1.0 downgrade
-#   is a proxy's ordinary job, not a trick.)
+#   longer there. (os64get reads chunked itself now; this proxy still answers
+#   in 1.0 with the close as the length, which is a framing every client
+#   reads — an HTTP/1.1-to-1.0 downgrade is a proxy's ordinary job.)
 # Connection / Keep-Alive: hop-by-hop by definition (RFC 7230 §6.1); they
 #   describe THIS connection, not the origin's.
 # Content-Length: dropped here and decided in relay(), because whether the
@@ -267,12 +267,13 @@ class Handler(socketserver.StreamRequestHandler):
             upstream = http.client.HTTPConnection(split.hostname, port, timeout=30)
 
         try:
-            # identity, for the same reason os64get asks for it: nothing
-            # downstream can inflate anything yet.
+            # Match the downstream client's actual decoder set. Content-Encoding
+            # is end-to-end metadata, so deliver() preserves it while only
+            # Transfer-Encoding is removed after http.client de-chunks.
             upstream.request("GET", path, headers={
                 "Host": split.netloc,
                 "User-Agent": "os64 tlsproxy/1",
-                "Accept-Encoding": "identity",
+                "Accept-Encoding": "gzip, identity",
                 "Connection": "close",
             })
             reply = self.final_response(upstream)

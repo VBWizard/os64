@@ -7,6 +7,7 @@
 #include "dlist.h"
 #include "types.h"
 #include "os64/dirent.h"   // os64_dirent_t — the fs-neutral dops->read contract
+#include "os64/syscall_numbers.h" // OS64_RENAME_* — rename policy crosses this seam
 
 
 #define DENTRY_ROOT 0xFFFFFFFF    
@@ -412,8 +413,9 @@ struct file_operations
 	// (Unix draws the same line and calls it EXDEV; ours is the same line
 	// drawn for the same reason.)
 	//
-	// THE RULING (Chris, 2026-08-16): an existing REGULAR destination is
-	// REPLACED, and the replacement is the point. rename(2) exists at all
+	// With flags zero, an existing REGULAR destination is REPLACED — the
+	// original contract and the behavior every existing caller keeps.
+	// rename(2) exists at all
 	// because 4.2BSD could not make link+unlink atomic, and every safe
 	// "write a new version of this file" idiom since — write to a temp
 	// name, verify it, put it in place — rests on there being no instant
@@ -425,11 +427,19 @@ struct file_operations
 	//   - the destination is a DIRECTORY (empty or not). Directories are
 	//     not interchangeable with files, and a silent rmdir hiding inside
 	//     a rename is exactly the surprise this house does not ship.
-	//   - either side is OPEN (the open-inode refcount). A handle holding
-	//     a file is a claim on it; renaming out from under a reader is the
-	//     same violation as deleting out from under one.
+	//   - an open DIRECTORY on either side. Its reader is walking the very
+	//     blocks whose naming context a move changes. Open regular files are
+	//     fine; their handles retain inode identity across rename/replacement.
 	//
-	// ATOMICITY IS THE FILESYSTEM'S TO GRANT, not this seam's to promise.
+	// Nonzero OS64_RENAME_* flags ask the filesystem for a stronger policy:
+	// NOREPLACE refuses an existing destination atomically, while
+	// REQUIRE_ATOMIC_REPLACE refuses replacement on a filesystem that would
+	// have to unlink first. They are mutually exclusive; unknown combinations
+	// are refused. The syscall validates too, but the driver still owns the
+	// guarantee because in-kernel callers use this seam directly.
+	//
+	// Legacy replacement atomicity is the filesystem's to grant, not this
+	// seam's to promise.
 	// ext2 gets it honestly (one directory-block write publishes the new
 	// name; the old name's removal and the doomed inode's teardown follow).
 	// FAT cannot: FatFs's f_rename refuses an existing destination outright,
@@ -442,7 +452,8 @@ struct file_operations
 	// reports read-only rather than dispatching through zero (the same
 	// lesson fat_glue.c's disk_write taught the hard way).
 	// Returns 0 on success, negative on refusal.
-	int (*rename) (const char *oldpath, const char *newpath, vfs_filesystem_t* vfs_fs);
+	int (*rename) (const char *oldpath, const char *newpath,
+	               vfs_filesystem_t* vfs_fs, uint64_t flags);
 	int (*initialize) (vfs_filesystem_t* device);
 	// "You are now reachable by path." Called by kRegisterFilesystem AFTER
 	// the mount table entry exists — the moment that separates a filesystem

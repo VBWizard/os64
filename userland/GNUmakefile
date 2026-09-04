@@ -137,7 +137,7 @@ LAUNCH_OBJS := $(patsubst %,$(OBJ)/%.o,$(LAUNCH_SRCS))
 # the same day: a shared object's relocations resolve against itself and its
 # own dependencies (never against the executable that loaded it), so the
 # library has to carry every symbol the library uses.
-LIBOS64_SRCS := libos64/init.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/image.c libos64/menu.c libos64/thread_trampoline.S
+LIBOS64_SRCS := libos64/init.c libos64/url.c libos64/io.c libos64/linereader.c libos64/proc.c libos64/procfs.c libos64/fmt.c libos64/args.c libos64/mem.c libos64/heap.c libos64/env.c libos64/str.c libos64/date.c libos64/klog.c libos64/thread.c libos64/net.c libos64/crc32.c libos64/draw.c libos64/ui.c libos64/ui_text.c libos64/clip.c libos64/conf.c libos64/resolve.c libos64/slurp.c libos64/image.c libos64/menu.c libos64/thread_trampoline.S
 # PIC objects live under obj/pic/ — a separate tree, because these are
 # compiled with different flags than everything else and an object built for
 # one world must never be picked up by the other.
@@ -149,7 +149,7 @@ LIBOS64_SO   := $(BIN)/libos64.so
 # libos64's foundational C surface. Its gzip framing reuses libos64's
 # established CRC32, heap, and memory primitives, so the object records a real
 # DT_NEEDED on libos64.so instead of carrying private copies of them.
-LIBGZIP_SRCS := libgzip/inflate.c libgzip/gzip.c
+LIBGZIP_SRCS := libgzip/inflate.c libgzip/deflate.c libgzip/gzip.c
 LIBGZIP_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(LIBGZIP_SRCS))
 LIBGZIP_SO   := $(BIN)/libgzip.so
 
@@ -234,7 +234,7 @@ TAR_FORMAT_OBJ      := $(OBJ)/apps/tar/tar_format.c.o
 # These programs consume the standalone gzip module. Keep the dependency
 # selective: linking libgzip into every app would turn an optional format
 # engine into part of the foundational runtime by accident.
-LIBGZIP_PROGRAMS := gunzip gziptest
+LIBGZIP_PROGRAMS := gzip gunzip gziptest os64get
 
 # gview consumes PNG in the GUI; pngtest proves the same dependency in the
 # guest without requiring a GUI. libpng carries its own DT_NEEDED edge on

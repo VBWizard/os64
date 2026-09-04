@@ -105,6 +105,19 @@ static const char *head_result_name(http_head_result_t rc)
     return "?";
 }
 
+static const char *body_result_name(http_body_result_t rc)
+{
+    switch (rc) {
+        case HTTP_BODY_OPEN:     return "open";
+        case HTTP_BODY_DONE:     return "done";
+        case HTTP_BODY_CUT:      return "cut";
+        case HTTP_BODY_BROKE:    return "broke";
+        case HTTP_BODY_SYNTAX:   return "syntax";
+        case HTTP_BODY_TOO_MUCH: return "too_much";
+    }
+    return "?";
+}
+
 static int do_url(const char *text)
 {
     http_url_t url;
@@ -181,8 +194,19 @@ static int do_head(const char *path, size_t chunk, size_t sip, size_t breakAt,
     printf("content=%s\n", reply.contentEncoding);
     printf("location=%s\n", reply.location);
 
-    // The body, read exactly the way os64get reads it: bounded by
-    // Content-Length when there is one, by the close when there is not.
+    // The body, read exactly the way os64get reads it: through the body
+    // reader, which takes the framing off — a length, chunks, or the close.
+    // A transfer coding it cannot undo is reported as os64get would refuse
+    // it, and nothing is read.
+    http_body_t body;
+    if (!http_body_open(&body, &stream, &reply)) {
+        printf("framing=unsupported\n");
+        free(bytes);
+        return 0;
+    }
+    printf("framing=%s\n", body.framing == HTTP_FRAMING_CHUNKED ? "chunked"
+                         : body.framing == HTTP_FRAMING_LENGTH  ? "length" : "close");
+
     FILE *out = fopen(bodyPath, "wb");
     if (out == NULL) {
         fprintf(stderr, "cannot write %s\n", bodyPath);
@@ -194,33 +218,38 @@ static int do_head(const char *path, size_t chunk, size_t sip, size_t breakAt,
     if (sipBuf == NULL) { fclose(out); free(bytes); return 2; }
 
     uint64_t got = 0;
-    int broke = 0;
     for (;;) {
-        if (reply.hasLength && got >= reply.length)
-            break;
-        size_t want = sip;
-        if (reply.hasLength && (reply.length - got) < (uint64_t)want)
-            want = (size_t)(reply.length - got);
-
-        int64_t n = http_stream_read(&stream, sipBuf, want);
-        if (n < 0) { broke = 1; break; }
-        if (n == 0) break;
+        int64_t n = http_body_read(&body, sipBuf, sip);
+        if (n <= 0) break;
         fwrite(sipBuf, 1, (size_t)n, out);
         got += (uint64_t)n;
+    }
+    // Once over, the reader must keep answering the same verdict: a caller
+    // that asks again after 0 or -1 gets no fresh byte and no new story.
+    http_body_result_t verdict = body.result;
+    uint8_t again[8];
+    int64_t more = http_body_read(&body, again, sizeof(again));
+    if (body.result != verdict || more > 0) {
+        fprintf(stderr, "the body reader changed its mind after finishing\n");
+        return 3;
     }
     fclose(out);
     free(sipBuf);
     free(bytes);
 
     printf("bodylen=%llu\n", (unsigned long long)got);
-    printf("broke=%d\n", broke);
-    printf("short=%d\n", (reply.hasLength && got != reply.length) ? 1 : 0);
+    printf("verdict=%s\n", body_result_name(verdict));
+    // The two words os64get's exit codes are keyed on. `short` is a body the
+    // framing says is incomplete; `broke` is a source that failed.
+    printf("broke=%d\n", verdict == HTTP_BODY_BROKE ? 1 : 0);
+    printf("short=%d\n", verdict == HTTP_BODY_CUT ? 1 : 0);
     return 0;
 }
 
 // "absolute": given a base URL and a Location, print the whole address the
-// redirect advice would offer — or "relative" when this deliberately does not
-// resolve one. Checked against urllib.parse.urljoin for the forms it claims.
+// redirect resolves to — or "declined" when there is none to spell (an empty
+// reference, or an answer too long to hold). Checked against
+// urllib.parse.urljoin, which implements the same RFC 3986 §5.2.
 static int do_absolute(const char *baseText, const char *location)
 {
     http_url_t base;
@@ -229,9 +258,9 @@ static int do_absolute(const char *baseText, const char *location)
         return 2;
     }
 
-    char whole[HTTP_LINE_MAX + HTTP_HOST_MAX + 16];
+    char whole[HTTP_URL_TEXT_MAX];
     if (!http_url_absolute(&base, location, whole, sizeof(whole))) {
-        printf("relative\n");
+        printf("declined\n");
         return 0;
     }
     printf("absolute\n");

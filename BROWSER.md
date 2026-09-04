@@ -111,13 +111,82 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      the evidence rather than the verdict — the counters answered "who
      failed" in one command, and a second machine answered "whose fault"
      in one try. Neither cost a debugging session.
-   - (b) chunked transfer-encoding.
-   - (c) redirects: 301/302/307/308, `Location:`, hop cap ~5, refuse
-     https:// targets HONESTLY (name the reason: no TLS yet).
-   - (d) `Content-Encoding: gzip` — stream through libgzip with a response
-     expansion cap, keep the output provisional until `OS64_GZIP_DONE`, and
-     reject its explicit trailing-data result; libpng uses the same shared
-     DEFLATE decoder beneath PNG's zlib framing.
+   - (d) **DONE 2026-09-03.** `Content-Encoding: gzip` streams through
+     libgzip into the same `<dest>.part` staging the identity path uses, and
+     the name is published only after `OS64_GZIP_DONE` has verified every
+     member CRC/size and ruled out trailing data. `Accept-Encoding` now names
+     exactly `gzip, identity` both directly and through `tlsproxy.py`.
+     Length-framed replies may expand at most 100x, with a 1 MiB usability
+     floor and 16 MiB absolute ceiling; a chunked or close-framed gzip body
+     gets the ceiling, because its wire length is not known in advance.
+     Identity downloads are unchanged. **The coding comes off DOWNSTREAM of
+     the framing** (`receive_url_body` reads through 3(b)'s body reader and
+     decides only what the bytes ARE), so a gzip body may arrive chunked and
+     the two envelopes come off in the order they went on — and the framing's
+     verdict outranks the decoder's: a length-framed gzip reply that closes
+     early is a SHORT transfer (exit 7, `.part` left), never a hang and never
+     "corrupt". Two `Content-Encoding: gzip` field lines are the list
+     `gzip, gzip` (RFC 7230 §3.2.2, a body encoded twice), kept as the value
+     and refused by name rather than unwrapped once and published (both from
+     Codex's review of PR #54). Host ASan/UBSan parser and gzip suites
+     passed; in QEMU over slirp, length-, close- and chunk-framed gzip all
+     decoded byte-identically, a bad CRC and explicit trailing bytes exited 8
+     without replacing the old name, a 1 MiB + 1 compression fixture stopped
+     at exactly 1048576 staged bytes with exit 14, `/gzip-twice` exited 14
+     with nothing written, `/gzip-cut` exited 7. The shared DEFLATE decoder
+     is also the engine beneath libpng's zlib framing.
+   - (b) **DONE 2026-09-03.** HTTP/1.1 and chunked transfer coding. The
+     two are one slice because the version is a promise: a 1.0 client is
+     owed a length or a close, a 1.1 client must read chunks, and saying
+     1.1 without reading them would be the lie 1.0 was chosen to avoid.
+     The body reader (`http_body_open/read`, http.h) now owns the framing
+     — length, chunked, or the close — and os64get's receive loop sees only
+     the file's bytes and one verdict at the end: DONE, CUT, BROKE, or a
+     framing that stopped being HTTP. `Connection: close` stays in the
+     request because keep-alive is still not spoken. Extensions are
+     ignored whole, trailers read to their end and ignored, both bounded
+     by the head's own caps. Proof: the host harness runs every body
+     through the reference's de-chunker at every split size, and a table of
+     28 damaged chunk streams pins the verdict AND the byte count handed
+     back before it. Verified in QEMU against httptestd's `/chunked`
+     (200000 bytes, sizes 1 to 65536, an extension, a trailer —
+     byte-identical) and `/chunked-cut` (exit 7, `.part` left).
+   - (c) **DONE 2026-09-03.** Redirects followed: 301/302/307/308 and 303
+     (whose whole meaning is "GET this instead" — the famous 301-vs-307
+     distinction is about rewriting a METHOD, and os64get only ever sends
+     GET), hop cap 5 (RFC 2068 §10.3's own number), each hop announced and
+     each judged by the rules the typed address was. The 3xx codes NOT
+     followed are refused BY NAME with what each one means: 300 is a list
+     for a person to pick from, 305 is a stranger choosing this machine's
+     route, 304 answers a conditional request nobody made. Three rulings
+     the increment forced. **A REDIRECT NEVER NAMES THE FILE** — the
+     destination is settled from the typed address before the first request
+     goes out, or a server answering `/download` with a redirect to
+     `/.profile` would be choosing a name in somebody's directory (wget
+     spells this as `--trust-server-names`, off by default; os64get does
+     not offer the switch, since DEST already says "call it this").
+     **THE PROXY IS RE-ASKED AT EVERY HOP**, because `$https_proxy` and
+     `$http_proxy` are chosen by SCHEME: a plain-HTTP page redirecting to
+     https is carried by a variable that had nothing to do with the first
+     request, and an https target is a dead end or an ordinary hop
+     depending only on that. And a new exit code, **15**, for a road that
+     did not arrive (hop cap, a circle, an unreachable target) — distinct
+     from 5, the server's final answer about the page, because the thing to
+     change is on a different side. `http_url_absolute` grew into RFC 3986
+     §5.2's full reference resolution to do it (relative refs, `.`/`..`,
+     query-only refs), so there is no longer such a thing as a `Location`
+     os64get cannot spell. Proof: `tools/test_http_host.sh` runs RFC 3986
+     §5.4's OWN vector table — the abnormal examples included — against
+     `urllib.parse.urljoin`; `tools/httptestd.py` grew the trails
+     (`/redirect/N`, a loop, a page-relative Location, 303/307/308, 300,
+     305, `mailto:`); and in QEMU 23 cases came back with every exit code
+     as designed, nothing written on any refusal, no `.part` left behind,
+     e2fsck clean. Against the real web: httpbin's relative- and
+     absolute-Location chains both arrived at `/get`, and
+     `http://www.rfc-editor.org/rfc/rfc1945.txt` — a plain-HTTP address
+     that 301s to https — refused honestly with no proxy set, then went
+     `301 -> https://...` through `$https_proxy` and landed 137582 bytes
+     byte-identical to curl's copy.
    - (e) `Range:`/resume — later, wants a consumer first.
    DESIGN CONSTRAINT: keep the HTTP machinery in cleanly separable
    functions — the extraction into a shared library (FreeBSD libfetch's
@@ -138,12 +207,93 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    /home/images where gview will find them. Written down because finding
    them took longer than fetching them.
 
-4. **gopher client (port 70).** Fetch-and-close: selector + CRLF, read to
-   EOF; menus are lines of `<type>\t<display>\t<selector>\t<host>\t<port>`.
-   The numbered-menu UI is the line-mode browser's face being born — this
-   slice is where the browser's UI lineage starts, so hold it until 2–3
-   have landed and the shape can be discussed. Gopherspace is alive:
-   Floodgap, SDF, magical.fish (Chris can vouch for the games menu).
+4. **gopher (port 70) — IN TWO PARTS, and the first one is not a
+   protocol.** The shape was discussed 2026-09-03, the conversation this
+   rung was held open for. Fetch-and-close is a weekend: selector + CRLF,
+   read to EOF, a lone `.` ends a menu, whose lines are
+   `<type><display>\t<selector>\t<host>\t<port>` (the type character is
+   GLUED to the display name — the classic parsing trip). The UI is the
+   whole point, because this is where the browser's face is born.
+
+   **CHRIS'S RULING: the links are chosen with the ARROW KEYS.** Numbered
+   menus read as oddly backwards to him, and he is right that a browser
+   picks links by pointing at them. That decides everything below, because
+   pointing needs a screen that can be repainted, and os64's terminal has
+   never repainted anything.
+
+   - (a) **The terminal grows a voice.** Three of the four pieces already
+     exist and nobody noticed: arrow keys have arrived as `ESC [ A/B/C/D`
+     since 2026-08-04 (keyboard.c chose the VT100 spelling for exactly
+     this kind of interop); `os64_tty_read` already answers rows and cols,
+     which is how `less` pages; and `renderer_glass_putc_bg_locked` already
+     paints a cell with a named foreground AND background, because
+     overlays needed it. What is missing is that a tty cell cannot
+     REMEMBER anything but a foreground, so nothing survives a repaint —
+     and nothing in the system has ever sent an escape sequence.
+     **Scope, and CHRIS'S RULING on how to choose it (2026-09-03): an
+     escape is implemented when something asks for it, and not before.**
+     The gopher browser asks for five — `ESC[2J` clear, `ESC[<r>;<c>H`
+     position, `ESC[K` erase to end of line, `ESC[<n>m` SGR (reset, bold,
+     reverse, the 16 foregrounds and the 16 backgrounds). Scroll regions,
+     insert/delete line, the alternate screen, DEC private modes and
+     256-color wait for a consumer that names them.
+     **Where the state goes is the pretty part:** `tty_cell_t` is 8 bytes
+     of which three are padding — ABI-pinned and static-asserted against
+     `os64_pty_cell_t`, so the pad is already spoken for by the format and
+     wasted by the content. ANSI has exactly 16 background colours and a
+     handful of attributes, so a background INDEX and an attribute byte
+     fit in that padding: no growth, no ABI change, and per-cell
+     highlighting for free. (Storing a second full XRGB would double the
+     fleet's ~4MB of scrollback for colours nobody can name.)
+     **A property to keep on purpose:** an app that POSITIONS rather than
+     scrolls never pushes a line into the scrollback ring, so os64 needs
+     none of the alternate-screen dance real terminals invented. Both
+     renderers honour the cell — the glass through BasicRenderer, gterm
+     through the PTY grid, where its existing batch-by-colour becomes
+     batch-by-colour-and-attribute.
+     **Its other customers were waiting:** `ls` in colour, errors in red,
+     green PASS and red FAIL in the suite, and Chris's `$PROMPT` — which
+     wants one small thing more, a way to SPELL an escape byte in a
+     variable, since no shell vocabulary here has one yet.
+   - (b) **The client, `/bin/gopher` — its own program, not a mode of
+     os64get.** The protocols differ, but the KIND differs more: os64get
+     is a one-shot fetcher that writes a file and exits with a code, and
+     this is an interactive session with a screen and a history stack.
+     What they share is the dial and the URL parser — `gopher://` URLs are
+     how gopherspace is written down, so the client takes one (Chris,
+     emphatically, 2026-09-03). That made the URL half of `http.c` its
+     second customer and the first honest occasion to ask whether it
+     should move, and **the answer was yes (2026-09-04, Fable's ruling on
+     Opus's reading of the code): `os64_url_parse` is libos64's now**
+     (`os64/url.h`). The argument is a hazard, not a tidiness: the host
+     alphabet, the right-to-left colon search, fold-host-never-path, and
+     "`host:` with nothing after it is a refusal" each have a security
+     edge, gopher needs every one of them, and two copies of an edged rule
+     drift until the looser copy is the one somebody reaches. What did NOT
+     move is `http_url_absolute` — RFC 3986 §5.2 reference resolution has
+     exactly one customer, because gopher has no relative links. This is
+     the `os64_dial_reason` hoist, not the libfetch one: pure string
+     arithmetic with a differential harness already in the tree, no
+     streams, no buffer ownership across a read boundary. Bindings are lynx's, whose path this re-walks in the
+     right order: Up/Down to move, Enter to follow, LEFT ARROW for back,
+     `q` to quit. Item types: `0` text through the pager, `1` menu, `7`
+     search (prompt, resend `selector\tquery`), `9`/`I`/`g`/`s` saved to a
+     file, `i` shown but not selectable, `3` the server's error shown as
+     one, and **anything unknown shown but NOT followable** — guessing
+     what a type means is how you download a thing that is not what it
+     said. Type `h` carries a `URL:http://…` link and is **handed to
+     os64get**, which is only as good as os64get's exit codes are precise
+     (Chris's condition, and the reason 3(a)–(c)'s code table was worth
+     the care it got: 5 refused, 7 short, 13 bad address, 14 a coding it
+     cannot read, 15 a redirect it could not follow).
+     A MENU IS A STRANGER'S BYTES ON YOUR TERMINAL, and (a) makes the
+     terminal obey more of them — so os64get's rule travels with the
+     handoff: control bytes are refused once, where the line is parsed,
+     never escaped at each print.
+     Harness: `tools/gophertestd.py` for deterministic menus, the way
+     httptestd made HTTP testable, and Floodgap for the real world.
+   Gopherspace is alive: Floodgap, SDF, magical.fish (Chris can vouch for
+   the games menu).
 
 5. **telnet (port 23).** The long-lived-interactive shakedown: tiny
    segments both ways, server-initiated data, half-close — everything
@@ -173,13 +323,16 @@ flag someday — not this tool.
 
 ## NOT in the ladder's lane (Fable-tier — do not start these)
 
-- **Any change to tcp.c's protocol behavior**: reassembly buffer, window
-  scaling (RFC 1323), RTT-measured RTO (Jacobson), send window, LISTEN.
+- **Any change to tcp.c's protocol behavior**: window
+  scaling (RFC 1323), send window, LISTEN.
   Counter-driven, concurrency-heavy, and the review tier is Fable +
   Codex-by-Chris's-hand. The eyes exist so these are paid at the right
   moment, not speculatively.
 - **TLS integration** and the libfetch extraction (seams cross review
-  tiers).
+  tiers). What libfetch means here is the FETCH machinery — streams,
+  heads, bodies, buffer ownership across a read boundary — which is where
+  lifetime bugs live. The URL parser was never that and has gone to
+  libos64 already; see 4(b).
 - Anything touching park loops, the scheduler, or signal delivery.
 
 ## Process (the campaign's working agreement)

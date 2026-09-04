@@ -209,15 +209,15 @@ typedef struct {
 //    self-contradictory file meant, and guessing quietly in the caller's
 //    favour beats inventing an orphan comment attached to nothing.
 //
-// 3. IT PUBLISHES ATOMICALLY: the new text is written to a PER-SAVER temp,
+// 3. ON EXT2 IT PUBLISHES ATOMICALLY: the new text is written to a PER-SAVER temp,
 //    `<path>.<taskid>.<seq>.new` (task id + a per-process counter, so two
 //    tasks OR two threads of one task saving the same file never share a
 //    temp — Codex #29 rd7/rd8), committed with os64_sync, and RENAMED over
-//    the target. os64's rename replaces atomically (syscall 43, ruled
-//    2026-08-16), and write-a-temp-then-publish is the case it exists for.
-//    A crash mid-write leaves the OLD config intact rather than a truncated
-//    one — a config file is exactly the thing you cannot afford to find
-//    half-written after a bad day. Anything that cleans up or checks for a
+//    the target. ext2's rename replaces atomically; legacy flags-zero rename
+//    on FAT has a remove-first window, as os64_rename documents. On ext2, a
+//    crash mid-write leaves the OLD config intact rather than a truncated one
+//    — a config file is exactly the thing you cannot afford to find half-written
+//    after a bad day. Anything that cleans up or checks for a
 //    stray temp should match `<base>.*.new`, as conftest does — this
 //    paragraph named a literal `<path>.new` nobody writes until rd16.
 // More settings than this in ONE save is refused (OS64_CONF_TOO_MANY) rather
@@ -263,7 +263,7 @@ typedef struct {
 //    On EOF the merge is correct; on an ERROR the buffer holds only the
 //    PREFIX that arrived before the failure, and publishing that prefix
 //    replaces the user's config with a truncated copy of itself. The rename
-//    is atomic, so the damage is committed cleanly and completely: exactly
+//    is atomic on ext2, so the damage is committed cleanly and completely:
 //    the outcome rule 3 exists to prevent, arriving through the one door
 //    rule 3 did not watch.
 //

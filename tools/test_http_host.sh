@@ -15,7 +15,7 @@ trap 'rm -rf "$work"' EXIT
 
 cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/apps/os64get -I userland/libos64/include -I abi/include \
-   userland/apps/os64get/http.c userland/libos64/str.c userland/libos64/fmt.c \
+   userland/apps/os64get/http.c userland/libos64/url.c userland/libos64/str.c userland/libos64/fmt.c \
    tools/test_http_host.c \
    -o "$work/test_http"
 
@@ -113,12 +113,18 @@ for text in good_urls:
     if "#" in got["render"]:
         fail(text, f"render kept a fragment: {got['render']!r}")
 
-    # The request line carries the path verbatim; Host carries the port only
-    # when it is not the scheme's default.
+    # The request line carries the path verbatim and asks in HTTP/1.1 — the
+    # version is a promise to read chunked framing, and http_body_read keeps
+    # it. Host carries the port only when it is not the scheme's default.
     head = out.split("request<<\n", 1)[1].split("\n>>\nproxyrequest", 1)[0] + "\n"
     first = head.split("\r\n")[0]
-    if first != f"GET {wantPath} HTTP/1.0":
+    if first != f"GET {wantPath} HTTP/1.1":
         fail(text, f"request line {first!r}")
+    # And says `Connection: close`, because keep-alive is not spoken: a 1.1
+    # server would otherwise hold the connection open after a close-delimited
+    # body, and the close is what ends one of those.
+    if "Connection: close" not in head.split("\r\n"):
+        fail(text, "request does not ask for the close")
     hostLine = [l for l in head.split("\r\n") if l.lower().startswith("host:")][0]
     wantHost = want.hostname + (f":{want.port}" if want.port and want.port != wantDefault else "")
     if hostLine != f"Host: {wantHost}":
@@ -132,8 +138,8 @@ for text in good_urls:
     # the proxy, and a Host naming the proxy would lose the virtual host.
     proxyHead = out.split("proxyrequest<<\n", 1)[1].rsplit(">>\n", 1)[0]
     proxyFirst = proxyHead.split("\r\n")[0]
-    if proxyFirst != f"GET {wantRender} HTTP/1.0":
-        fail(text, f"proxy request line {proxyFirst!r} != 'GET {wantRender} HTTP/1.0'")
+    if proxyFirst != f"GET {wantRender} HTTP/1.1":
+        fail(text, f"proxy request line {proxyFirst!r} != 'GET {wantRender} HTTP/1.1'")
     proxyHostLine = [l for l in proxyHead.split("\r\n") if l.lower().startswith("host:")][0]
     if proxyHostLine != f"Host: {wantHost}":
         fail(text, f"proxy host header {proxyHostLine!r} != {wantHost!r}")
@@ -171,10 +177,11 @@ for text, want in bad_urls.items():
 
 
 # ── Location -> a whole address ─────────────────────────────────────────
-# What the redirect advice offers when it says "to follow it by hand". The
-# forms os64get claims to resolve are checked against urllib's urljoin; the
-# ones it deliberately declines are checked by name, because declining is the
-# answer, not a shortfall to be papered over.
+# Where a redirect points: RFC 3986 §5.2 reference resolution, checked
+# against urllib.parse.urljoin, which implements the same algorithm. This is
+# the arithmetic the fetch loop trusts before it dials anywhere, so the two
+# lists below are a curated one (the forms a redirect actually arrives in,
+# each with the accident it cost) and the spec's OWN test vectors.
 join_cases = [
     ("http://example.com/a/b.html", "http://other.example/x"),
     ("http://example.com/a/b.html", "https://other.example/x"),
@@ -205,6 +212,26 @@ join_cases = [
     # dialect and refused. (Codex round 3.)
     ("https://example.com/a/b.html", "/login?next=https://id.example/"),
     ("http://example.com/a/b.html", "/go?u=http://other.example/x&v=1"),
+    # RELATIVE TO THE PAGE, which is the form the redirect increment had to
+    # learn: a server that answers /dir/ with `index.html` is not naming a
+    # host, a path or anything else that can be dialled until it is joined to
+    # the page that said it.
+    ("http://example.com/a/b.html", "c.html"),
+    ("http://example.com/a/b.html", "../up.html"),
+    ("http://example.com/a/b/", "../../top.html"),
+    ("http://example.com/a/b.html", "./same-dir.html"),
+    ("http://example.com/dir/", "index.html"),
+    ("http://example.com/a/b.html", "?page=2"),
+    ("http://example.com/a/b.html?page=1", "?page=2"),
+    ("http://example.com/a/b.html?page=1", "c.html"),
+    ("http://10.0.2.8:8080/redirect-page", "hello.txt"),
+    # A reference that names its own scheme is copied through, whatever the
+    # scheme is — `mailto:` is not a page, and saying so is the caller's job.
+    # Joining it to the base (which is what happens when "does it have a
+    # scheme" is spelled "does it contain ://") makes a plausible http
+    # address for something that was never one.
+    ("http://example.com/a/b.html", "mailto:someone@example.com"),
+    ("http://example.com/a/b.html", "ftp://files.example/pub/x"),
 ]
 for base, location in join_cases:
     verdict, got, _ = run(["absolute", base, location])
@@ -222,13 +249,39 @@ for base, location in join_cases:
        (b.scheme, b.hostname, b.port or default(b.scheme), b.path, b.query):
         fail(f"absolute {base} + {location}", f"{got['url']!r} != {want!r}")
 
-# Declined on purpose: a genuinely relative reference wants RFC 3986's full
-# algorithm, which belongs to the increment that follows redirects for real.
-for base, location in [("http://example.com/a/b.html", "page.html"),
-                       ("http://example.com/a/b.html", "../up.html"),
-                       ("http://example.com/a/b.html", "")]:
+# RFC 3986 §5.4's OWN examples, base and all — the normal ones and the
+# abnormal ones, which are where a hand-rolled resolver goes wrong: a ".."
+# that would climb above the root, a "." that ends the path and must leave
+# its '/' behind, and the two forms that only LOOK like dot segments (`g.`
+# and `..g` are ordinary names). The expectation is urljoin's, so this is
+# three implementations agreeing rather than a table somebody typed.
+rfc3986_base = "http://a/b/c/d;p?q"
+rfc3986_refs = [
+    # §5.4.1, normal
+    "g:h", "g", "./g", "g/", "/g", "//g", "?y", "g?y", "#s", "g#s", "g?y#s",
+    ";x", "g;x", "g;x?y#s", ".", "./", "..", "../", "../g", "../..", "../../",
+    "../../g",
+    # §5.4.2, abnormal
+    "../../../g", "../../../../g", "/./g", "/../g", "g.", ".g", "g..", "..g",
+    "./../g", "./g/.", "g/./h", "g/../h", "g;x=1/./y", "g;x=1/../y",
+    "g?y/./x", "g?y/../x", "g#s/./x", "g#s/../x",
+]
+for location in rfc3986_refs:
+    verdict, got, _ = run(["absolute", rfc3986_base, location])
+    if verdict != "absolute":
+        fail(f"rfc3986 {location!r}", f"declined it ({verdict})")
+        continue
+    want = urllib.parse.urljoin(rfc3986_base, location)
+    a, b = urllib.parse.urlsplit(got["url"]), urllib.parse.urlsplit(want)
+    if (a.scheme, a.netloc, a.path, a.query) != (b.scheme, b.netloc, b.path, b.query):
+        fail(f"rfc3986 {location!r}", f"{got['url']!r} != {want!r}")
+
+# Declined on purpose. An EMPTY Location resolves, in RFC 3986, to the page
+# you already have — and a redirect to the page you already have is a server
+# that has lost its place, not an address to go to.
+for base, location in [("http://example.com/a/b.html", "")]:
     verdict, _, _ = run(["absolute", base, location])
-    if verdict != "relative":
+    if verdict != "declined":
         fail(f"absolute {base} + {location}", f"resolved it ({verdict}) — it should decline")
 
 # ── Replies ─────────────────────────────────────────────────────────────
@@ -240,6 +293,30 @@ def reply_bytes(status, reason, headers, body, version="HTTP/1.1"):
     for name, value in headers:
         head += f"{name}: {value}\r\n"
     return head.encode("latin-1") + b"\r\n" + body
+
+
+def chunked_bytes(body, sizes, ext=False, trailers=(), upper=False, zeros=0,
+                  eol=b"\r\n"):
+    """`body` as chunked transfer coding, cut at `sizes` (cycled), with the
+    grammar's optional parts on request: a chunk extension on every chunk,
+    trailer fields, upper-case hex, leading zeros, and the line ending (bare
+    LF is what line_read tolerates in the head, so the body must too)."""
+    out = b""
+    at = 0
+    i = 0
+    while at < len(body):
+        n = min(sizes[i % len(sizes)], len(body) - at)
+        i += 1
+        size = f"{n:X}" if upper else f"{n:x}"
+        size = "0" * zeros + size
+        if ext:
+            size += f";name=value{i}"
+        out += size.encode() + eol + body[at:at + n] + eol
+        at += n
+    out += b"0" + eol
+    for name, value in trailers:
+        out += f"{name}: {value}".encode() + eol
+    return out + eol
 
 
 # http.client stops at 100 header fields; os64get's cap is 128, and the
@@ -279,6 +356,35 @@ for name, body in bodies.items():
     cases.append((f"{name}-close", reply_bytes(
         200, "OK", [("Content-Type", "text/plain")], body, "HTTP/1.0"),
         body, True))
+    # Chunked: HTTP/1.1's framing for a body whose length is not known when
+    # the head goes out. Sizes chosen to straddle every read boundary the
+    # sweep below uses — one byte, a few, a page, more than the stream's
+    # buffer — and the reference de-chunks it, so the fixture is checked too.
+    cases.append((f"{name}-chunked", reply_bytes(
+        200, "OK", [("Content-Type", "text/plain"), ("Transfer-Encoding", "chunked")],
+        chunked_bytes(body, [1, 7, 100, 4096, 9000, 3])), body, True))
+
+# The grammar's optional parts, each on its own: extensions (ignored whole),
+# trailers (read to their end, otherwise ignored), upper-case hex and leading
+# zeros (a size is a number), one chunk, and a bare-LF sender — the last
+# without the reference, because http.client reads the two bytes after
+# chunk-data blind and cannot follow a bare LF there.
+body = b"the quick brown fox jumps over the lazy dog\n" * 977
+chunkedHead = [("Content-Type", "text/plain"), ("Transfer-Encoding", "chunked")]
+cases.append(("chunked-ext", reply_bytes(200, "OK", chunkedHead,
+              chunked_bytes(body, [500, 1, 8192], ext=True)), body, True))
+cases.append(("chunked-trailers", reply_bytes(200, "OK", chunkedHead,
+              chunked_bytes(body, [1000], trailers=[("X-Checksum", "abc"), ("Expires", "0")])),
+              body, True))
+cases.append(("chunked-upper-zeros", reply_bytes(200, "OK", chunkedHead,
+              chunked_bytes(body, [255, 16, 4095], upper=True, zeros=3)), body, True))
+cases.append(("chunked-one-chunk", reply_bytes(200, "OK", chunkedHead,
+              chunked_bytes(body, [len(body)])), body, True))
+cases.append(("chunked-bare-lf", reply_bytes(200, "OK", chunkedHead,
+              chunked_bytes(body, [64, 1000], eol=b"\n")), body, False))
+# A 1.0 server answering a 1.1 request answers in 1.0, framed by its close.
+cases.append(("old-server", reply_bytes(200, "OK", [("Server", "NCSA/1.3")], body, "HTTP/1.0"),
+              body, True))
 
 # Header shapes a real server produces: odd casing, generous whitespace, a
 # reason phrase with spaces in it, and a header line long enough to be
@@ -351,6 +457,14 @@ for label, raw, body, checkReference in cases:
                 break
             if int(got["status"]) != ref.status:
                 fail(f"{label} chunk={chunk}", f"status {got['status']} != {ref.status}")
+            # The framing os64get chose, against the one http.client chose.
+            wantFraming = ("chunked" if ref.chunked
+                           else "length" if ref.getheader("Content-Length") is not None
+                           else "close")
+            if got["framing"] != wantFraming:
+                fail(f"{label} chunk={chunk}", f"framing {got['framing']} != {wantFraming}")
+            if got["verdict"] != "done":
+                fail(f"{label} chunk={chunk} sip={sip}", f"verdict {got['verdict']} != done")
             # http.client joins repeated headers with ", "; RFC 7230 lets a
             # recipient collapse identical Content-Lengths to the one value,
             # which is what os64get does.
@@ -499,6 +613,13 @@ framing_hidden = {
     "long-te-tab-before-colon": (b"HTTP/1.1 200 OK\r\nTransfer-Encoding\t:" + pad + b"chunked\r\n\r\n", "syntax"),
     # Any other byte a field name may not hold, for the same reason.
     "long-te-inner-space": (b"HTTP/1.1 200 OK\r\nTransfer Encoding:" + pad + b"chunked\r\n\r\n", "syntax"),
+    # Location joined the list when redirects were followed: it is a
+    # singleton, and DROPPING an unreadable one lets its readable twin through
+    # the conflict check as the only destination — in either order (Codex
+    # round 3 on PR #60).
+    "long-location": (b"HTTP/1.1 302 Found\r\nLocation:" + pad + b"/x\r\nContent-Length: 0\r\n\r\n", "framing"),
+    "safe-then-long-location": (b"HTTP/1.1 302 Found\r\nLocation: /safe\r\nLocation: /evil?" + pad + b"\r\nContent-Length: 0\r\n\r\n", "framing"),
+    "long-then-safe-location": (b"HTTP/1.1 302 Found\r\nLocation: /evil?" + pad + b"\r\nLocation: /safe\r\nContent-Length: 0\r\n\r\n", "framing"),
 }
 for label, (raw, want) in framing_hidden.items():
     path = work / f"framing-{label}"
@@ -552,8 +673,8 @@ for chunk in [1, 64, 4096, 0]:
     if verdict != "ok":
         fail(f"cut chunk={chunk}", f"head refused: {verdict}")
         continue
-    if got["broke"] != "1" or got["short"] != "1":
-        fail(f"cut chunk={chunk}", f"broke={got['broke']} short={got['short']}")
+    if got["broke"] != "1" or got["verdict"] != "broke":
+        fail(f"cut chunk={chunk}", f"broke={got['broke']} verdict={got['verdict']}")
     if int(got["bodylen"]) != 1000:
         fail(f"cut chunk={chunk}", f"bodylen {got['bodylen']} != 1000")
 
@@ -569,6 +690,164 @@ for chunk in [1, 64, 0]:
         fail(f"truncated chunk={chunk}",
              f"broke={got['broke']} short={got['short']} bodylen={got['bodylen']}")
 
+# ── Chunk framing that must be REFUSED, or that ends early ──────────────
+# The head is fine in every one of these; the verdict comes from the body
+# reader. `bodylen` is how many bytes reached the caller before it stopped —
+# the number a diagnostic prints and a .part file holds — so it is pinned
+# too: a reader that hands back one byte of framing as data would show here.
+chunkedHead = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+bodyRefusals = {
+    # The size line is hex digits, blanks, then the end or an extension.
+    "size-not-hex": (b"zz\r\nhello\r\n0\r\n\r\n", "syntax", 0),
+    "size-negative": (b"-5\r\nhello\r\n0\r\n\r\n", "syntax", 0),
+    "size-0x": (b"0x5\r\nhello\r\n0\r\n\r\n", "syntax", 0),
+    "size-leading-space": (b" 5\r\nhello\r\n0\r\n\r\n", "syntax", 0),
+    "size-only-ext": (b";x=1\r\nhello\r\n0\r\n\r\n", "syntax", 0),
+    "size-nul": (b"5\x00\r\nhello\r\n0\r\n\r\n", "syntax", 0),
+    # The bound is the VALUE: a seventeenth digit that overflows is refused,
+    # a seventeenth digit that is a leading zero is a legal spelling (the
+    # grammar is 1*HEXDIG). A digit cap refused the second (Codex round 2).
+    "size-17-digits": (b"1" * 17 + b"\r\n", "syntax", 0),
+    "size-overflow-by-one": (b"1" + b"0" * 16 + b"\r\n", "syntax", 0),
+    "size-zero-padded": (b"0" * 20 + b"5\r\nhello\r\n0\r\n\r\n", "done", 5),
+    # Sixteen digits parse; the peer then owes 2^64-1 bytes and hangs up.
+    "size-16-digits": (b"ffffffffffffffff\r\nhello", "cut", 5),
+    "size-blank-then-ext": (b"5 \t;x\r\nhello\r\n0\r\n\r\n", "done", 5),
+    # After chunk-data comes exactly a line ending.
+    "data-then-junk": (b"5\r\nhelloX\r\n0\r\n\r\n", "syntax", 5),
+    "data-then-crcr": (b"5\r\nhello\r\r\n0\r\n\r\n", "syntax", 5),
+    "data-then-eof": (b"5\r\nhello", "cut", 5),
+    # The peer hangs up with the framing unsatisfied: mid-data, before the
+    # next size line, inside the trailers. Every one is a CUT, never a quiet
+    # success — this is the shape /chunked-cut in httptestd exists for.
+    "cut-mid-data": (b"20\r\nten bytes!", "cut", 10),
+    "cut-before-size": (b"5\r\nhello\r\n", "cut", 5),
+    "cut-in-trailers": (b"5\r\nhello\r\n0\r\nX-A: 1\r\n", "cut", 5),
+    "cut-before-final-crlf": (b"5\r\nhello\r\n0\r\n", "cut", 5),
+    "nothing-at-all": (b"", "cut", 0),
+    # The caps: an endless extension, an endless size line, a trailer flood,
+    # and the trailer section's byte budget.
+    "ext-flood": (b"5;" + b"e" * 3000 + b"\r\nhello\r\n0\r\n\r\n", "too_much", 0),
+    "size-flood": (b"1" * (1 << 20), "too_much", 0),
+    "trailer-flood": (b"0\r\n" + b"X-A: 1\r\n" * 129 + b"\r\n", "too_much", 0),
+    "trailer-bytes-flood": (b"0\r\n" + (b"X-A: " + b"x" * 4000 + b"\r\n") * 20 + b"\r\n",
+                            "too_much", 0),
+    # A trailer is a field line: a token, a colon. Obs-fold refused as in
+    # the head; an over-long trailer line dropped as in the head.
+    "trailer-fold": (b"0\r\n X-A: 1\r\n\r\n", "syntax", 0),
+    "trailer-no-colon": (b"0\r\nnocolon\r\n\r\n", "syntax", 0),
+    "trailer-nul": (b"0\r\nX-A: \x001\r\n\r\n", "syntax", 0),
+    # The WHOLE name is a token, not just its first byte: a blank, a tab or a
+    # control byte before the colon is refused as the head refuses it. Only
+    # the first byte was judged, and `X Bad: value` ended a body as DONE
+    # (Codex round 4 on PR #60).
+    "trailer-space-in-name": (b"5\r\nhello\r\n0\r\nX Bad: value\r\n\r\n", "syntax", 5),
+    "trailer-space-before-colon": (b"0\r\nX-A : 1\r\n\r\n", "syntax", 0),
+    "trailer-tab-in-name": (b"0\r\nX\tA: 1\r\n\r\n", "syntax", 0),
+    "trailer-ctl-in-name": (b"0\r\nX\x01A: 1\r\n\r\n", "syntax", 0),
+    "trailer-long-dropped": (b"0\r\nX-Big: " + b"x" * 4000 + b"\r\n\r\n", "done", 0),
+    "trailers-at-cap": (b"0\r\n" + b"X-A: 1\r\n" * 128 + b"\r\n", "done", 0),
+    # Bytes after the terminating CRLF are not the body's: the framing said
+    # where the body ended, and the connection's close is another matter.
+    "junk-after-end": (b"5\r\nhello\r\n0\r\n\r\nJUNK", "done", 5),
+    "empty-body": (b"0\r\n\r\n", "done", 0),
+}
+for label, (raw, want, wantLen) in bodyRefusals.items():
+    path = work / f"chunk-{label}"
+    path.write_bytes(chunkedHead + raw)
+    for chunk in [1, 3, 64, 0]:
+        for sip in [1, 64, 16384]:
+            verdict, got, _ = run(["head", path, chunk, sip, 0, work / "body.out"])
+            if verdict != "ok" or got["framing"] != "chunked":
+                fail(f"chunk {label} chunk={chunk}", f"head: {verdict} framing={got.get('framing')}")
+                continue
+            if got["verdict"] != want or int(got["bodylen"]) != wantLen:
+                fail(f"chunk {label} chunk={chunk} sip={sip}",
+                     f"verdict={got['verdict']} bodylen={got['bodylen']} (want {want}, {wantLen})")
+
+# A transfer coding this code cannot undo is refused before a byte is read.
+for label, coding in [("gzip-chunked", "gzip, chunked"), ("deflate", "deflate"),
+                      ("chunked-chained", "chunked, gzip")]:
+    path = work / f"te-{label}"
+    path.write_bytes(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: " + coding.encode() +
+                     b"\r\n\r\n5\r\nhello\r\n0\r\n\r\n")
+    verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+    if verdict != "ok" or got["framing"] != "unsupported":
+        fail(f"te {label}", f"{verdict} framing={got.get('framing')}")
+
+
+# ── Repeated coding fields ──────────────────────────────────────────────
+# RFC 7230 §3.2.2 joins repeated field lines with commas, so the SAME coding
+# named twice is a list — `gzip, gzip` is a body encoded twice — and the
+# list is what the caller must see, so that it refuses a coding it does not
+# speak instead of undoing one layer and publishing the other (Codex review
+# of PR #54). A DIFFERENT second value is still a conflict, as for lengths.
+path = work / "ce-gzip-twice"
+path.write_bytes(b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\n"
+                 b"Content-Length: 5\r\n\r\nhello")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "ok" or got["content"] != "gzip, gzip":
+    fail("ce gzip-twice", f"{verdict} content={got.get('content')!r} (want 'gzip, gzip')")
+path = work / "ce-gzip-identity"
+path.write_bytes(b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: identity\r\n"
+                 b"Content-Length: 5\r\n\r\nhello")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "conflict":
+    fail("ce gzip-identity", f"{verdict} (want conflict)")
+# `chunked, chunked` is a framing nothing here undoes, refused before a byte
+# of the body is read, like any other transfer coding beyond chunked.
+path = work / "te-chunked-twice"
+path.write_bytes(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n"
+                 b"\r\n5\r\nhello\r\n0\r\n\r\n")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "ok" or got["framing"] != "unsupported" or got["transfer"] != "chunked, chunked":
+    fail("te chunked-twice", f"{verdict} framing={got.get('framing')} transfer={got.get('transfer')!r}")
+
+# ── A reference with its own authority still has its dots removed ───────
+# §5.2.2 applies remove_dot_segments in every branch, and every other
+# client squashes the path before it goes on the wire; urljoin does NOT for
+# an absolute reference, so these expectations are typed rather than
+# borrowed (Codex review of PR #60). The fragment is cut everywhere.
+absolute_dots = [
+    ("http://example.com/a/b.html", "http://other.example/a/../b", "http://other.example/b"),
+    ("http://example.com/a/b.html", "http://other.example/a/./b/../c?x=1#f", "http://other.example/a/c?x=1"),
+    ("http://example.com/a/b.html", "http://other.example/../../up", "http://other.example/up"),
+    ("http://example.com/a/b.html", "http://other.example/dir/.", "http://other.example/dir/"),
+    ("https://example.com/a/b.html", "http://other.example", "http://other.example"),
+    ("https://example.com/a/b.html", "http://other.example?q=/../x#f", "http://other.example?q=/../x"),
+    ("http://example.com/a/b.html", "//cdn.example.com/x/../y", "http://cdn.example.com/y"),
+    ("https://example.com/a/b.html", "//cdn.example.com:8443/a/./b#f", "https://cdn.example.com:8443/a/b"),
+]
+for base, location, want in absolute_dots:
+    verdict, got, _ = run(["absolute", base, location])
+    if verdict != "absolute":
+        fail(f"absolute-dots {base} + {location}", f"declined it ({verdict})")
+        continue
+    a, b = urllib.parse.urlsplit(got["url"]), urllib.parse.urlsplit(want)
+    if (a.scheme, a.netloc, a.path, a.query) != (b.scheme, b.netloc, b.path, b.query):
+        fail(f"absolute-dots {base} + {location}", f"{got['url']!r} != {want!r}")
+
+# ── Location is a singleton ─────────────────────────────────────────────
+# Two DIFFERENT destinations is a reply with none; the same one twice is one.
+path = work / "two-locations"
+path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /b\r\nContent-Length: 0\r\n\r\n")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "conflict":
+    fail("two-locations", f"{verdict} (want conflict)")
+# Presence is a flag of its own: an EMPTY Location names nowhere but was
+# still said, so the pair is a conflict in EITHER order (Codex round 2).
+for label, lines in [("empty-then-target", b"Location:\r\nLocation: /b\r\n"),
+                     ("target-then-empty", b"Location: /b\r\nLocation:\r\n")]:
+    path = work / f"loc-{label}"
+    path.write_bytes(b"HTTP/1.1 302 Found\r\n" + lines + b"Content-Length: 0\r\n\r\n")
+    verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+    if verdict != "conflict":
+        fail(f"location {label}", f"{verdict} (want conflict)")
+path = work / "repeated-location"
+path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /a\r\nContent-Length: 0\r\n\r\n")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "ok" or got["location"] != "/a":
+    fail("repeated-location", f"{verdict} location={got.get('location')!r}")
 if failures:
     raise SystemExit(f"{failures} failure(s)")
 print("test_http_host: all checks passed")

@@ -479,7 +479,7 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	// and those demand opposite responses. On EOF the merge below is right.
 	// On an ERROR, `old` holds only the prefix that arrived before the
 	// failure, and carrying on publishes that prefix over the user's real
-	// config: rule 3's atomic rename then commits the loss cleanly and
+	// config: rule 3's ext2 atomic rename then commits the loss cleanly and
 	// completely. The buffer-full case three lines down already understood
 	// this exact danger ("would silently destroy the tail this routine
 	// promises to preserve") — it was guarded for the size door and not for
@@ -577,15 +577,16 @@ int64_t os64_conf_write(const char *name, const os64_conf_pair_t *pairs, size_t 
 	}
 	neu[o.len] = '\0';
 
-	// RULE 3: publish ATOMICALLY — write beside it, then rename over. os64's
-	// rename replaces atomically (the 2026-08-16 ruling), so a crash between
-	// these two calls leaves the OLD config whole rather than a half-written
-	// one.
+	// RULE 3: write beside the target, then rename over it. On ext2 that
+	// replacement is atomic, so a crash between these calls leaves the old
+	// config whole rather than a half-written one. This legacy caller keeps
+	// flags-zero behavior; FAT's replacement has the remove-first window
+	// documented by os64_rename.
 	// The temp name is PER-SAVER, not a shared "<path>.new" (Codex #29 rd7):
 	// two processes saving the same file both opened the identical temp, and
 	// writer B could truncate it after A closed but before A renamed — so A
 	// published an inode B was still filling, a partial file defeating the
-	// atomic-write guarantee. The rename over `path` is still the atomic
+	// publish guarantee. The rename over `path` is still the ext2 atomic
 	// publish; only the temp needs to be nobody else's.
 	//
 	// TWO parts, because the task id alone is not enough (Codex #29 rd8): it

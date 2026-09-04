@@ -1,5 +1,6 @@
 #!/bin/bash
-# Cross-check libgzip against Python's zlib across formats and chunk boundaries.
+# Cross-check both libgzip directions against Python's zlib across formats and
+# chunk boundaries.
 
 set -eu
 cd "$(git rev-parse --show-toplevel)"
@@ -9,7 +10,8 @@ trap 'rm -rf "$work"' EXIT
 
 cc -std=c11 -g -Wall -Wextra -Werror -fsanitize=address,undefined \
    -I userland/libgzip/include -I userland/libos64/include -I abi/include \
-   userland/libgzip/inflate.c userland/libgzip/gzip.c \
+   userland/libgzip/inflate.c userland/libgzip/deflate.c \
+   userland/libgzip/gzip.c \
    userland/libos64/crc32.c tools/test_gzip_host.c \
    -o "$work/test_gzip"
 
@@ -30,6 +32,10 @@ rng = random.Random(0x064D3F1A)
 far_payload = rng.randbytes(32768)
 far_payload += far_payload + far_payload[:4096]
 (root / "far_payload").write_bytes(far_payload)
+(root / "random_payload").write_bytes(rng.randbytes(100000))
+for size in (1, 2, 3, 257, 258, 259, 32767, 32768, 32769,
+             65535, 65536, 65537):
+    (root / f"boundary-{size}").write_bytes(rng.randbytes(size))
 
 def raw(data, level=6, strategy=zlib.Z_DEFAULT_STRATEGY):
     encoder = zlib.compressobj(level, zlib.DEFLATED, -15, 8, strategy)
@@ -90,6 +96,72 @@ PY
 run() {
     ASAN_OPTIONS=detect_leaks=0 "$work/test_gzip" "$@"
 }
+
+encode() {
+    ASAN_OPTIONS=detect_leaks=0 "$work/test_gzip" encode "$@"
+}
+
+for chunks in "1 1" "2 3" "7 31" "4096 17" "65536 65536"; do
+    set -- $chunks
+    encode raw "$work/payload" "$work/encoded-raw-$1-$2" "$1" "$2" 0
+    encode gzip "$work/payload" "$work/encoded-gzip-$1-$2" "$1" "$2" \
+        1234567890
+done
+encode raw "$work/empty" "$work/encoded-raw-empty" 1 1 0
+encode gzip "$work/empty" "$work/encoded-gzip-empty" 1 1 1234567890
+encode raw "$work/far_payload" "$work/encoded-raw-far" 13 29 0
+encode gzip "$work/random_payload" "$work/encoded-gzip-random" 19 23 0
+for size in 1 2 3 257 258 259 32767 32768 32769 65535 65536 65537; do
+    encode raw "$work/boundary-$size" "$work/encoded-raw-boundary-$size" \
+        97 113 0
+    encode gzip "$work/boundary-$size" \
+        "$work/encoded-gzip-boundary-$size" 101 109 0
+done
+
+python3 - "$work" <<'PY'
+import gzip
+import pathlib
+import struct
+import sys
+import zlib
+
+root = pathlib.Path(sys.argv[1])
+payload = (root / "payload").read_bytes()
+raw_outputs = []
+gzip_outputs = []
+for path in root.glob("encoded-raw-[0-9]*"):
+    encoded = path.read_bytes()
+    assert zlib.decompress(encoded, -15) == payload, path
+    raw_outputs.append(encoded)
+for path in root.glob("encoded-gzip-[0-9]*"):
+    encoded = path.read_bytes()
+    assert gzip.decompress(encoded) == payload, path
+    assert struct.unpack_from("<I", encoded, 4)[0] == 1234567890, path
+    gzip_outputs.append(encoded)
+assert len(set(raw_outputs)) == 1
+assert len(set(gzip_outputs)) == 1
+assert len(gzip_outputs[0]) < len(payload) // 4
+assert zlib.decompress((root / "encoded-raw-empty").read_bytes(), -15) == b""
+assert gzip.decompress((root / "encoded-gzip-empty").read_bytes()) == b""
+assert zlib.decompress((root / "encoded-raw-far").read_bytes(), -15) == \
+       (root / "far_payload").read_bytes()
+assert gzip.decompress((root / "encoded-gzip-random").read_bytes()) == \
+       (root / "random_payload").read_bytes()
+for path in root.glob("boundary-*"):
+    size = path.name.split("-")[1]
+    expected = path.read_bytes()
+    assert zlib.decompress(
+        (root / f"encoded-raw-boundary-{size}").read_bytes(), -15) == expected
+    assert gzip.decompress(
+        (root / f"encoded-gzip-boundary-{size}").read_bytes()) == expected
+PY
+echo "raw/gzip encoders: chunks, boundaries, mtime, ratio, interop PASS"
+
+run raw "$work/encoded-raw-1-1" "$work/payload" 3 5 \
+    18446744073709551615 done 0
+run gzip "$work/encoded-gzip-1-1" "$work/payload" 3 5 \
+    18446744073709551615 done 1
+echo "libgzip decoders accept streams produced by libgzip encoders PASS"
 
 for stream in stored fixed dynamic; do
     for chunks in "1 1" "2 3" "7 31" "4096 17" "65536 65536"; do
