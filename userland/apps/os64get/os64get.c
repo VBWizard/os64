@@ -1892,7 +1892,12 @@ static int url_ask(url_reply_t *answer, const http_url_t *start, const char *url
             os64_hprintf(OS64_STDERR, "os64get: cannot reach %s%s:%u — %s\n",
                          proxy.inUse ? "the proxy at " : "", peerHost,
                          (unsigned)peerPort, os64_dial_reason(conn));
-            return GET_DIAL_FAILED;
+            // At the FIRST hop this is the address that was typed, and 3
+            // says so. Past it, the machine that cannot be reached is one a
+            // server chose, and a script must be able to tell those apart:
+            // the road did not arrive, which is what 15 means (Codex review
+            // of PR #60).
+            return hops > 0 ? GET_REDIRECT : GET_DIAL_FAILED;
         }
 
         // ── Ask ─────────────────────────────────────────────────────────

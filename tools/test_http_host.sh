@@ -755,6 +755,70 @@ for label, coding in [("gzip-chunked", "gzip, chunked"), ("deflate", "deflate"),
     if verdict != "ok" or got["framing"] != "unsupported":
         fail(f"te {label}", f"{verdict} framing={got.get('framing')}")
 
+
+# ── Repeated coding fields ──────────────────────────────────────────────
+# RFC 7230 §3.2.2 joins repeated field lines with commas, so the SAME coding
+# named twice is a list — `gzip, gzip` is a body encoded twice — and the
+# list is what the caller must see, so that it refuses a coding it does not
+# speak instead of undoing one layer and publishing the other (Codex review
+# of PR #54). A DIFFERENT second value is still a conflict, as for lengths.
+path = work / "ce-gzip-twice"
+path.write_bytes(b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: gzip\r\n"
+                 b"Content-Length: 5\r\n\r\nhello")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "ok" or got["content"] != "gzip, gzip":
+    fail("ce gzip-twice", f"{verdict} content={got.get('content')!r} (want 'gzip, gzip')")
+path = work / "ce-gzip-identity"
+path.write_bytes(b"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Encoding: identity\r\n"
+                 b"Content-Length: 5\r\n\r\nhello")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "conflict":
+    fail("ce gzip-identity", f"{verdict} (want conflict)")
+# `chunked, chunked` is a framing nothing here undoes, refused before a byte
+# of the body is read, like any other transfer coding beyond chunked.
+path = work / "te-chunked-twice"
+path.write_bytes(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n"
+                 b"\r\n5\r\nhello\r\n0\r\n\r\n")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "ok" or got["framing"] != "unsupported" or got["transfer"] != "chunked, chunked":
+    fail("te chunked-twice", f"{verdict} framing={got.get('framing')} transfer={got.get('transfer')!r}")
+
+# ── A reference with its own authority still has its dots removed ───────
+# §5.2.2 applies remove_dot_segments in every branch, and every other
+# client squashes the path before it goes on the wire; urljoin does NOT for
+# an absolute reference, so these expectations are typed rather than
+# borrowed (Codex review of PR #60). The fragment is cut everywhere.
+absolute_dots = [
+    ("http://example.com/a/b.html", "http://other.example/a/../b", "http://other.example/b"),
+    ("http://example.com/a/b.html", "http://other.example/a/./b/../c?x=1#f", "http://other.example/a/c?x=1"),
+    ("http://example.com/a/b.html", "http://other.example/../../up", "http://other.example/up"),
+    ("http://example.com/a/b.html", "http://other.example/dir/.", "http://other.example/dir/"),
+    ("https://example.com/a/b.html", "http://other.example", "http://other.example"),
+    ("https://example.com/a/b.html", "http://other.example?q=/../x#f", "http://other.example?q=/../x"),
+    ("http://example.com/a/b.html", "//cdn.example.com/x/../y", "http://cdn.example.com/y"),
+    ("https://example.com/a/b.html", "//cdn.example.com:8443/a/./b#f", "https://cdn.example.com:8443/a/b"),
+]
+for base, location, want in absolute_dots:
+    verdict, got, _ = run(["absolute", base, location])
+    if verdict != "absolute":
+        fail(f"absolute-dots {base} + {location}", f"declined it ({verdict})")
+        continue
+    a, b = urllib.parse.urlsplit(got["url"]), urllib.parse.urlsplit(want)
+    if (a.scheme, a.netloc, a.path, a.query) != (b.scheme, b.netloc, b.path, b.query):
+        fail(f"absolute-dots {base} + {location}", f"{got['url']!r} != {want!r}")
+
+# ── Location is a singleton ─────────────────────────────────────────────
+# Two DIFFERENT destinations is a reply with none; the same one twice is one.
+path = work / "two-locations"
+path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /b\r\nContent-Length: 0\r\n\r\n")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "conflict":
+    fail("two-locations", f"{verdict} (want conflict)")
+path = work / "repeated-location"
+path.write_bytes(b"HTTP/1.1 302 Found\r\nLocation: /a\r\nLocation: /a\r\nContent-Length: 0\r\n\r\n")
+verdict, got, _ = run(["head", path, 0, 64, 0, work / "body.out"])
+if verdict != "ok" or got["location"] != "/a":
+    fail("repeated-location", f"{verdict} location={got.get('location')!r}")
 if failures:
     raise SystemExit(f"{failures} failure(s)")
 print("test_http_host: all checks passed")

@@ -383,18 +383,73 @@ static bool path_dots(const char *in, char *out, size_t cap)
     return true;
 }
 
+// A reference that carries its own authority — `scheme://host...` or
+// `//host...` — keeps that authority verbatim, and its PATH still gets
+// §5.2.2's remove_dot_segments, its fragment cut. The path is what the
+// request line carries, and every other client squashes it before sending
+// (curl, wget, the browsers), so a server has never had to decide what
+// `/a/../b` means and may decide it badly — RFC 3986 already decided.
+// `prefix` is the byte count up to and including the authority. An empty
+// path stays empty: `http://host` and `http://host/` are one place, and
+// the circle check compares spellings.
+static bool authority_path_dots(const char *ref, size_t prefix, char *out, size_t cap)
+{
+    const char *path = ref + prefix;
+    size_t pathLen = 0;
+    while (path[pathLen] != '\0' && path[pathLen] != '?' && path[pathLen] != '#')
+        pathLen++;
+    const char *query = path + pathLen;
+    size_t queryLen = 0;
+    while (query[queryLen] != '\0' && query[queryLen] != '#')
+        queryLen++;
+
+    if (prefix >= cap)
+        return false;
+    copy_span(out, cap, ref, prefix);
+    size_t len = prefix;
+    if (pathLen != 0) {
+        char raw[HTTP_JOIN_MAX];
+        char dots[HTTP_JOIN_MAX];
+        if (pathLen >= sizeof(raw))
+            return false;
+        copy_span(raw, sizeof(raw), path, pathLen);
+        if (!path_dots(raw, dots, sizeof(dots)))
+            return false;
+        size_t n = os64_strlen(dots);
+        if (len + n >= cap)
+            return false;
+        copy_span(out + len, cap - len, dots, n);
+        len += n;
+    }
+    if (len + queryLen >= cap)
+        return false;
+    copy_span(out + len, cap - len, query, queryLen);
+    return true;
+}
+
 bool http_url_absolute(const http_url_t *base, const char *location,
                        char *out, size_t cap)
 {
     if (location == NULL || location[0] == '\0')
         return false;
 
-    // ALREADY WHOLE: copied through as written, whatever it names. Dot
-    // segments inside it are left alone on purpose — a reference that names
-    // its own origin is describing a path on somebody else's filesystem, and
-    // what `/a/../b` means there is that server's business, not ours.
-    if (reference_has_scheme(location))
-        return os64_strcopy(out, cap, location) < cap;
+    // ALREADY WHOLE: the authority is whoever it names, verbatim. With no
+    // `//` after the scheme there is no authority and no path to squash —
+    // `mailto:someone`, or `http:page.html`, which §5.4.2 lets a resolver
+    // join to the base and this one refuses — so it is copied through for
+    // the caller to judge.
+    if (reference_has_scheme(location)) {
+        const char *p = location;
+        while (*p != ':')
+            p++;
+        p++;
+        if (p[0] != '/' || p[1] != '/')
+            return os64_strcopy(out, cap, location) < cap;
+        p += 2;
+        while (*p != '\0' && *p != '/' && *p != '?' && *p != '#')
+            p++;
+        return authority_path_dots(location, (size_t)(p - location), out, cap);
+    }
 
     // A SCHEME-RELATIVE REFERENCE — `//cdn.example.com/file` — NAMES A
     // DIFFERENT HOST. It looks like an absolute path because it starts with a
@@ -403,12 +458,16 @@ bool http_url_absolute(const http_url_t *base, const char *location,
     // back at the server that just redirected away from itself, which would
     // fetch something unrelated and look like it worked. Only the scheme is
     // inherited; the authority comes from the reference. (RFC 3986 §4.2, and
-    // Codex review round 2, 2026-09-02.) Its path rides along as written,
-    // for the reason the branch above leaves one alone: it belongs to the
-    // origin the reference itself names.
+    // Codex review round 2, 2026-09-02.)
     if (location[0] == '/' && location[1] == '/') {
-        int32_t n = os64_snprintf(out, cap, "%s:%s", base->scheme, location);
-        return n > 0 && (size_t)n < cap;
+        char whole[HTTP_LINE_MAX];
+        int32_t n = os64_snprintf(whole, sizeof(whole), "%s:%s", base->scheme, location);
+        if (n <= 0 || (size_t)n >= sizeof(whole))
+            return false;
+        const char *p = whole + os64_strlen(base->scheme) + 3;
+        while (*p != '\0' && *p != '/' && *p != '?' && *p != '#')
+            p++;
+        return authority_path_dots(whole, (size_t)(p - whole), out, cap);
     }
 
     // ── Everything left is relative to the page that answered ───────────
@@ -609,10 +668,15 @@ static bool status_parse(const char *line, http_response_t *out)
     return true;
 }
 
-// Store a coding name once. A SECOND, DIFFERENT answer to the same question
-// is refused rather than resolved: which of two Transfer-Encodings a stream
-// is in has no correct guess, and guessing wrong writes a file of framing
-// bytes.
+// Store a coding name. A SECOND, DIFFERENT answer to the same question is
+// refused rather than resolved: which of two Transfer-Encodings a stream is
+// in has no correct guess, and guessing wrong writes a file of framing bytes.
+// THE SAME answer twice is not a conflict, it is a LIST — RFC 7230 §3.2.2
+// joins repeated field lines with commas, so two `Content-Encoding: gzip`
+// lines say `gzip, gzip`: encoded twice. The list is kept as the value, so
+// the caller meets a coding it does not speak and refuses it by name,
+// instead of undoing one layer and publishing the other as the page (Codex
+// review of PR #54, 2026-09-03).
 //
 // THE VALUE IS JUDGED BEFORE IT IS STORED, because the slot is small and
 // "absent" is spelled by an empty slot. An EMPTY value stored there read as
@@ -622,8 +686,8 @@ static bool status_parse(const char *line, http_response_t *out)
 // (Codex review round 7, 2026-09-03). A value LONGER than the slot used to
 // be folded into it truncated, so two different long values compared equal
 // and a truncated name matched nothing — safe only by accident. A coding
-// this program will act on is a short word; one that does not fit is a
-// framing header it cannot read, and says so.
+// this program will act on is a short word; one that does not fit, or a
+// list that no longer does, is a framing header it cannot read, and says so.
 static http_head_result_t coding_take(char *slot, size_t cap, const char *value, size_t vlen)
 {
     if (vlen == 0)
@@ -633,9 +697,19 @@ static http_head_result_t coding_take(char *slot, size_t cap, const char *value,
 
     char folded[HTTP_TOKEN_MAX];
     copy_lower(folded, sizeof(folded), value, vlen);
-    if (slot[0] != '\0')
-        return os64_streq(slot, folded) ? HTTP_HEAD_OK : HTTP_HEAD_CONFLICT;
-    os64_strcopy(slot, cap, folded);
+    if (slot[0] == '\0') {
+        os64_strcopy(slot, cap, folded);
+        return HTTP_HEAD_OK;
+    }
+    if (!os64_streq(slot, folded))
+        return HTTP_HEAD_CONFLICT;
+
+    size_t have = os64_strlen(slot);
+    if (have + 2 + vlen >= cap)
+        return HTTP_HEAD_FRAMING;
+    slot[have] = ',';
+    slot[have + 1] = ' ';
+    os64_strcopy(slot + have + 2, cap - have - 2, folded);
     return HTTP_HEAD_OK;
 }
 
@@ -689,8 +763,16 @@ static http_head_result_t header_take(char *line, http_response_t *out)
         if (rc != HTTP_HEAD_OK)
             return rc;
     } else if (os64_streq_nocase(line, "Location")) {
-        if (out->location[0] == '\0')
-            copy_span(out->location, sizeof(out->location), value, vlen);
+        // Location is a singleton: a redirect has ONE destination, and two
+        // different ones is a reply with no unambiguous destination at all —
+        // an intermediary that combines or reorders the lines would send
+        // another client somewhere else. The same answer given twice is one
+        // answer, as for Content-Length (Codex review of PR #60).
+        char seen[HTTP_LINE_MAX];
+        copy_span(seen, sizeof(seen), value, vlen);
+        if (out->location[0] != '\0')
+            return os64_streq(out->location, seen) ? HTTP_HEAD_OK : HTTP_HEAD_CONFLICT;
+        copy_span(out->location, sizeof(out->location), value, vlen);
     }
     return HTTP_HEAD_OK;
 }
