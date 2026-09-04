@@ -1,9 +1,11 @@
 // gzip — compress streams and safely replace named files with .gz siblings.
 //
 // A temporary file beside the destination is created exclusively, then
-// synced, closed, and published with an atomic destination policy. Without
-// -f publication refuses an existing name; with -f it refuses filesystems
-// that cannot replace an existing file atomically.
+// synced, closed, and published with an atomic destination policy. Exclusive
+// creation rejects accidental name collisions; it is not an access-control
+// boundary against another task deliberately rewriting a live staging path.
+// Without -f publication refuses an existing name; with -f it refuses
+// filesystems that cannot replace an existing file atomically.
 // The source is removed last, so staging and publication failures leave it
 // intact. A final size/mtime check catches changes visible before publication;
 // a live log must still be rotated before compression because os64 has no file
