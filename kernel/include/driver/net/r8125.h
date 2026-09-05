@@ -33,12 +33,14 @@
 // ── REGISTER PROVENANCE, stated once ───────────────────────────────────
 //
 // Offsets marked [8169-family] are shared across the whole RealTek
-// descriptor-ring lineage and are the ones this author knows cold.
-// Offsets marked [8125-SPECIFIC] MOVED in this generation and are the
-// dangerous ones — they are written from knowledge of Linux's r8169.c
-// (RTL8125 = RTL_GIGA_MAC_VER_60 and up) and MUST be confirmed against the
-// vendor's GPL r8125 driver or that file before first light on the P5.
-// Any offset this driver has not yet confirmed says so at its definition.
+// descriptor-ring lineage. Offsets marked [8125-SPECIFIC] MOVED in this
+// generation. The driver was first written from knowledge of Linux's
+// r8169.c (RTL8125 = RTL_GIGA_MAC_VER_60 and up) with the moved ones
+// tagged UNCONFIRMED; on 2026-09-05 every offset and bit was checked
+// against Realtek's own GPL r8125 driver (r8125.h / r8125_n.c, the
+// awesometic/realtek-r8125-dkms mirror) and the tags came off, each
+// definition naming the vendor's spelling. The PHY register map arrived
+// the same day, already checked (r8125_phy.h).
 //
 // The doc's tripwire put it best: trust the shape, verify the numbers.
 
@@ -102,6 +104,24 @@
 // [8169-family] — unchanged for this generation. We allocate page-aligned,
 // which satisfies it several times over.
 #define R8125_RING_ALIGN 256
+
+// WHAT THE PHY ADVERTISES, above the 10/100/1000 it always offers
+// (r8125_phy_plan_advertisement owns the rest of the policy).
+//
+// 2.5GBASE-T is ON — which is to say the driver leaves the PHY's own
+// default alone. The first draft of this slice turned it off on the
+// theory that the P5's gigabit switch mishandled the 802.3bz next pages
+// and fell back to 100M; the P5's "as found" dump refuted that the same
+// day (2026-09-05: 2.5G advertised, partner offering 10/100/1000, link
+// 1000/full, before the driver had touched anything). With it ON, a boot
+// whose firmware left the PHY at its default advertises exactly what we
+// would write, so nothing is written and the link is never dropped at
+// init. With it OFF every such boot renegotiated for no gain.
+//
+// The receive path could not drain a real 2.5G link (the ring already
+// overruns on gigabit bursts — R8125_RX_DESCS), so the day a 2.5G switch
+// arrives, that row is the next problem. A good problem to have.
+#define R8125_ADVERTISE_2500 1
 
 void init_r8125(void);
 // The processSignals rider, beside virtio_net_poll and e1000_poll. Cheap

@@ -1434,15 +1434,20 @@ static void sys_gen_net_card(synth_text_t *t, uint32_t index)
 	                d->mac[0], d->mac[1], d->mac[2], d->mac[3], d->mac[4], d->mac[5]);
 	synth_text_addf(t, "mtu: %u\n", d->mtu);
 	// Speed/duplex when the card knows them (link_mbps 0 = unknown: virtio has
-	// no wire, and an 8125 at 2.5GbE reports through a bit its driver does not
-	// decode). Same silence-over-guessing contract as model and location — and
-	// the whole reason those fields moved onto the seam, since until 2026-08-20
-	// the e1000 knew its speed and had nowhere to say it.
+	// no wire, and a link word a driver cannot decode is still a link). Same
+	// silence-over-guessing contract as model and location — and the whole
+	// reason those fields moved onto the seam, since until 2026-08-20 the
+	// e1000 knew its speed and had nowhere to say it.
 	if (d->link_up && d->link_mbps != 0)
 		synth_text_addf(t, "link: up, %u/%s\n", d->link_mbps,
 		                d->full_duplex ? "full" : "half");
 	else
 		synth_text_addf(t, "link: %s\n", d->link_up ? "up" : "down");
+	// The register behind that line, verbatim, when the driver has one
+	// (net_device.h): the number to read against the chip's datasheet when
+	// "up, 100/full" is not the answer anyone expected.
+	if (d->link_raw[0] != '\0')
+		synth_text_addf(t, "link_raw: %s\n", d->link_raw);
 
 	// Does this card carry the machine's one address? kNetDevices[0] does:
 	// syscall dial hands it to tcp/udp/icmp_conn_dial, and kernel_init hands
