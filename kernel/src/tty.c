@@ -105,11 +105,9 @@ tty_cell_t *tty_visible_line(tty_t *t, uint32_t screen_row)
 	return tty_line(t, (top + screen_row) % t->total_lines);
 }
 
-// A cleared cell is EIGHT ZERO BYTES, and every field's meaning is chosen so
-// that zero is the right answer: no glyph, no attributes, and a background
-// of "whatever this terminal's is". That is why the background is stored
-// with an offset of one (os64/ansi.h) — a memset has to mean "nothing was
-// said here", not "black".
+// Form feed restores blank cells to terminal paper. Background indices use
+// an offset of one (os64/ansi.h) so zero means default paper, not black.
+// Scrolling and ANSI erasure instead use tty_erase_span's SGR background.
 static void tty_clear_line(tty_t *t, uint32_t ring_line)
 {
 	memset(tty_line(t, ring_line), 0, (size_t)t->cols * sizeof(tty_cell_t));
@@ -126,10 +124,9 @@ void tty_cell_colors(const tty_t *t, const tty_cell_t *cell,
 	os64_ansi_apply_attrs(cell->attrs, fg, bg);
 }
 
-// Erase a span of one line to the terminal's current background — NOT to
-// zero. `ESC[2J` on a blue terminal makes a blue screen, and a cleared
-// region that reverted to the default would leave the erased part a
-// different colour from the part still holding text.
+// Erasure and scrolling fill with the current SGR background, not default
+// paper. Reverse video belongs to drawn text: blanks drop attributes while
+// retaining the SGR background, matching xterm's background-colour erase.
 static void tty_erase_span(tty_t *t, uint32_t ring_line, uint32_t from, uint32_t to)
 {
 	tty_cell_t *line = tty_line(t, ring_line);
@@ -230,7 +227,7 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 		t->screen_top = (t->screen_top + 1) % t->total_lines;
 		if (t->hist_lines < t->total_lines - t->rows)
 			t->hist_lines++;
-		tty_clear_line(t, tty_row_line(t, t->rows - 1));
+		tty_erase_span(t, tty_row_line(t, t->rows - 1), 0, t->cols);
 		t->cur_row = t->rows - 1;
 		// THE deferral point: no glass scroll, no 3MB memmove. Mark the
 		// glass stale, stop mirroring for the rest of this write, and let

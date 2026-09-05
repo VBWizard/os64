@@ -154,4 +154,14 @@ for fixture in tty_ansi ansi_margins; do
     "$work/test_$fixture"
 done
 
+# Capture the real husk prompt builder's writes, then feed them through the
+# parser to check that length limiting cannot strand a partial escape.
+cc -std=gnu11 -D_POSIX_C_SOURCE=200809L -g -O1 -fno-builtin -masm=intel \
+   -ffunction-sections -fdata-sections -Wall -Wextra -Werror \
+   -Wno-unused-function -fsanitize=address,undefined \
+   -I userland/libos64/include -I abi/include -I kernel/include \
+   -Wl,--gc-sections tools/test_husk_prompt_host.c kernel/src/ansi.c \
+   -o "$work/test_husk_prompt"
+"$work/test_husk_prompt"
+
 echo "test_ansi_host: all checks passed"

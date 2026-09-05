@@ -94,6 +94,35 @@ int main(void)
     check(paper == 0xabcdef && paints == 1 && t.view_offset == 1,
           "history repaint changed view or lost paper");
     check(painted_bg[0][1] == 0xabcdef, "history default cells retained old paper");
+
+    // Erasure uses SGR's background, not the foreground that reverse video
+    // puts behind text. Erasing must not change the pen for subsequent text.
+    feed(&t, "\033[H\033[31;44;7mX\033[2K");
+    tty_cell_t *line = tty_line(&t, tty_row_line(&t, 0));
+    for (unsigned c = 0; c < t.cols; c++) {
+        uint32_t erase_fg, erase_bg;
+        tty_cell_colors(&t, &line[c], &erase_fg, &erase_bg);
+        check(!line[c].ch && !line[c].attrs && erase_bg == os64_ansi_color(4),
+              "reverse erasure must retain SGR background without reverse");
+    }
+    check(t.attrs == OS64_ANSI_ATTR_REVERSE, "erase changed the pen attributes");
+
+    // Both newline and right-edge wrapping create a bottom row. Exercise
+    // ring reuse as well as the first scroll, with reverse still enabled.
+    for (unsigned scroll = 0; scroll < 8; scroll++) {
+        feed(&t, scroll % 2 ? "\033[4;8HX" : "\033[4;1H\n");
+        line = tty_line(&t, tty_row_line(&t, t.rows - 1));
+        for (unsigned c = 0; c < t.cols; c++) {
+            uint32_t scroll_fg, scroll_bg;
+            tty_cell_colors(&t, &line[c], &scroll_fg, &scroll_bg);
+            check(!line[c].ch && !line[c].attrs && scroll_bg == os64_ansi_color(4),
+                  "scrolled-in blank lost SGR background");
+        }
+    }
+    feed(&t, "\033[0m");
+    uint32_t scroll_fg, scroll_bg;
+    tty_cell_colors(&t, &line[0], &scroll_fg, &scroll_bg);
+    check(scroll_bg == os64_ansi_color(4), "pen reset recoloured scrolled-in blank");
     puts("test_tty_ansi_host: all checks passed");
     return 0;
 }

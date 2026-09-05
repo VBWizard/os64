@@ -1837,28 +1837,28 @@ static void jobs_poll(void)
 //   \W  its last component         \j  background jobs being tracked
 //   \t  time, HH:MM:SS             \n  newline, for a two-line prompt
 //   \d  date, YYYY-MM-DD           \\  a literal backslash
+//   \e  an escape byte for terminal control sequences
 //
 // The date is ISO because os64 has no locale to have an opinion with, and
 // because the one format that sorts is the one worth picking. Both clock
 // escapes read local time through libos64's calendar, so they honour $TZ like
 // everything else.
 //
-// ABSENT, each because os64 has nothing to put in it: \u (there are no users),
-// \h (above), \$'s #-for-root (there are no privilege levels), and \[ \] (the
-// console has no ANSI escape parser, so there are no zero-width sequences to
-// guard — and husk's rub-out counts typed characters rather than columns, so
-// prompt width is not load-bearing either). \! is available the day anyone
-// wants it; the history ring is right up there.
+// ABSENT: \u (there are no users), \h (above), \$'s #-for-root (there are no
+// privilege levels), and \[ \] (husk's rub-out counts typed characters rather
+// than measuring prompt columns, so it needs no zero-width delimiters).
 //
 // AN ESCAPE THE VOCABULARY DOES NOT KNOW IS EMITTED VERBATIM, backslash and
 // all. A prompt is cosmetic, so refusing to draw one over a typo would be
 // hostile — and a `\q` sitting in your prompt on every line is a louder
 // tripwire than a message you would see once and scroll past.
+// Up to 255 output bytes plus one byte to detect overflow. The write is
+// counted, so the buffer needs no NUL terminator.
 #define PROMPT_MAX 256
 
 static void prompt_put(char *out, int *n, const char *s)
 {
-	while (*s != '\0' && *n < PROMPT_MAX - 1)
+	while (*s != '\0' && *n < PROMPT_MAX)
 		out[(*n)++] = *s++;
 }
 
@@ -1866,8 +1866,8 @@ static void prompt_put(char *out, int *n, const char *s)
 // every field that uses it is 0..59 or 1..31.
 static void prompt_put_2(char *out, int *n, int v)
 {
-	if (*n < PROMPT_MAX - 1) out[(*n)++] = (char)('0' + (v / 10) % 10);
-	if (*n < PROMPT_MAX - 1) out[(*n)++] = (char)('0' + v % 10);
+	if (*n < PROMPT_MAX) out[(*n)++] = (char)('0' + (v / 10) % 10);
+	if (*n < PROMPT_MAX) out[(*n)++] = (char)('0' + v % 10);
 }
 
 static void prompt_put_num(char *out, int *n, unsigned long v)
@@ -1889,7 +1889,7 @@ static void prompt_render(int last_status)
 	char out[PROMPT_MAX];
 	int n = 0;
 
-	while (*fmt != '\0' && n < PROMPT_MAX - 1)
+	while (*fmt != '\0' && n < PROMPT_MAX)
 	{
 		// A trailing lone backslash is a backslash; there is nothing after it
 		// to name an escape.
@@ -1972,25 +1972,25 @@ static void prompt_render(int last_status)
 
 			case 'n':  out[n++] = '\n'; break;
 			case '\\': out[n++] = '\\'; break;
-			// AN ESCAPE BYTE, WHICH IS THE ONLY WAY TO SPELL ONE HERE. The
-			// terminal reads colour and cursor sequences now, but they begin
-			// with a byte no keyboard types and no shell vocabulary could
-			// otherwise put into a variable — so a coloured prompt was
-			// impossible for want of one character. `\e[1;32m` is what
-			// everyone already writes.
+			// Emit ESC so PROMPT can spell sequences such as \e[1;32m.
 			case 'e':  out[n++] = 0x1B; break;
 
 			default:
 				// Unknown: give both characters back, so the typo is visible.
 				out[n++] = '\\';
-				if (n < PROMPT_MAX - 1)
+				if (n < PROMPT_MAX)
 					out[n++] = code;
 				break;
 		}
 	}
 
-	// Truncation at PROMPT_MAX is silent because it is not silent: a prompt
-	// that stops mid-word is its own error message, on every line.
+	// A truncated CSI or OSC can consume subsequent input echo. Reject an
+	// overlong expansion before writing any of it, including its escapes.
+	if (n == PROMPT_MAX)
+	{
+		os64_write(1, "husk> ", 6);
+		return;
+	}
 	os64_write(1, out, (unsigned)n);
 }
 

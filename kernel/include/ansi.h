@@ -74,9 +74,8 @@ typedef struct {
 // turned into an action.
 ansi_action_t ansi_feed(ansi_parser_t *p, char byte);
 
-// Is the parser mid-sequence? Only the tty's own housekeeping asks — a
-// terminal being resized or cleared under a half-arrived sequence should
-// drop it rather than finish it against the new geometry.
+// Is the parser mid-sequence? State belongs to the byte stream and survives
+// tty resize; completed actions are applied against the current geometry.
 static inline bool ansi_in_sequence(const ansi_parser_t *p) { return p->state != 0; }
 
 // Forget a half-arrived sequence.
