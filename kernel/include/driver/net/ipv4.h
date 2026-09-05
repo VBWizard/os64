@@ -110,11 +110,24 @@ int32_t ipv4_send(net_device_t* dev, uint32_t dst_ip, uint8_t protocol,
 int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                        uint8_t protocol, const void* payload, uint16_t length);
 
-// Is the next hop toward dst_ip resolved — will a send go to the wire now,
-// or be parked for ARP? The two share ipv4_send's -2 (a driver refusing a
-// full ring says -2 too), and a sender keeping sequence books has to know
-// which it got: a parked packet goes when ARP answers and stays on the
-// books; a refused one never left and must not.
-bool ipv4_next_hop_known(net_device_t* dev, uint32_t dst_ip);
+// WHAT BECAME OF THE PACKET, decided in the same breath as the send. The
+// return value's -2 is shared by two different fates — parked for ARP, and
+// refused by a driver whose ring is full — and a sender keeping sequence
+// books (TCP) needs them apart: a parked packet is the wire's now (it goes
+// when the neighbour answers, or is dropped as any packet the wire eats)
+// and stays on the books; a refused one never left and must not. Asking
+// the ARP cache afterwards cannot tell them apart — the reply may land in
+// between — so the disposition comes out WITH the verdict.
+typedef enum
+{
+	IPV4_TX_SENT,      // handed to the driver
+	IPV4_TX_PARKED,    // next hop unresolved: held for ARP, or dropped as a first packet
+	IPV4_TX_REFUSED,   // never left: over the MTU, or the driver turned it away
+} ipv4_tx_t;
+
+// ipv4_send_from, with the disposition (may be NULL). Same return values.
+int32_t ipv4_send_from_ex(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
+                          uint8_t protocol, const void* payload, uint16_t length,
+                          ipv4_tx_t* how);
 
 #endif // IPV4_H

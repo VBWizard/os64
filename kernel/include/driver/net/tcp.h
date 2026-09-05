@@ -245,6 +245,13 @@ typedef struct tcp_conn
 	// network even if we cannot tell which.
 	uint32_t cwnd, ssthresh;
 	uint8_t  dup_acks;
+	// A resend of the head (fast retransmit, a partial ack, a reopened
+	// window) that the NIC refused at the door. Nothing else will retry it
+	// — the head is already on the books, so no ack is owed for it — so
+	// tcp_poll retries each tick until it goes, an ack moves the head, or a
+	// timeout resends everything anyway.
+	bool     head_resend_pending;
+	bool     syn_on_wire;  // a SYN has gone to the wire: a later one is a retransmission, not a first try the NIC refused
 	// Where the window stood when fast retransmit fired: an ack short of
 	// it is a PARTIAL ack — the hole it filled had another behind it — and
 	// NewReno (RFC 6582) resends that next hole at once instead of waiting

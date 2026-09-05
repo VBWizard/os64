@@ -151,14 +151,15 @@ static uint16_t tcp_window(tcp_conn_t* c)
 // Build and transmit one segment. `with_mss` adds the MSS option, which
 // only ever rides a SYN (that is the one moment both sides are allowed to
 // state their limits).
-// Returns ipv4_send's verdict: negative when the segment did not reach the
-// wire now — -2 is PARKED for ARP (ipv4.c's waiting room holds ONE packet
-// per neighbour, so a second send to the same unresolved neighbour would
-// replace it). A sender putting several segments out in one pass must stop
-// at the first such answer; the parked one goes when the neighbour
-// answers, and the rest go on the ack it earns.
-static int32_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
-                                const void* data, uint16_t data_len, bool with_mss)
+// Returns what became of the segment (ipv4.h ipv4_tx_t, decided with the
+// send — an ARP lookup afterwards could be answered in between). SENT is
+// the wire's. PARKED is the wire's too — it goes when the neighbour
+// answers, or is dropped as a first packet — but ipv4.c's waiting room
+// holds ONE packet per neighbour, so a sender putting several segments out
+// in one pass must stop at it: the rest go on the ack the parked one
+// earns. REFUSED never left, is not counted, and is not on the books.
+static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
+                                  const void* data, uint16_t data_len, bool with_mss)
 {
 	uint8_t seg[TCP_HDR_MIN + 4 + TCP_MSS];
 	uint16_t hdr_len = TCP_HDR_MIN + (with_mss ? 4 : 0);
@@ -202,17 +203,18 @@ static int32_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	sum = net_checksum_add(sum, seg, total);
 	net_write16(seg + 16, net_checksum_fold(sum));
 
-	int32_t rc = ipv4_send(c->dev, c->peer_ip, IPV4_PROTO_TCP, seg, total);
-	// Counted if it went or will go (parked for ARP); a segment the NIC
-	// refused never left, and a tx_bytes that counted it would read
-	// higher than the peer ever received.
-	if (rc >= 0 || !ipv4_next_hop_known(c->dev, c->peer_ip))
+	ipv4_tx_t how = IPV4_TX_REFUSED;
+	ipv4_send_from_ex(c->dev, kNetIPv4Address, c->peer_ip, IPV4_PROTO_TCP, seg, total, &how);
+	// Counted if it went or will go; a segment the NIC refused never left,
+	// and a tx_bytes that counted it would read higher than the peer ever
+	// received.
+	if (how != IPV4_TX_REFUSED)
 	{
 		kTcpStats.segments_out++;
 		if (data_len)
 			c->tx_bytes += data_len;
 	}
-	return rc;
+	return how;
 }
 
 // A bare acknowledgement: no data, no state change, just "I'm up to here"
@@ -343,7 +345,7 @@ static void tcp_snd_copy_out(const tcp_conn_t* c, uint32_t off, uint8_t* dst, ui
 // unit fits the window; a retransmit repeats what the segment first
 // carried). The ACK bit always rides data: there is always something to
 // acknowledge once the handshake is done.
-static int32_t tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len, bool fin)
+static ipv4_tx_t tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len, bool fin)
 {
 	uint8_t payload[TCP_MSS];
 	tcp_snd_copy_out(c, off, payload, len);
@@ -358,11 +360,23 @@ static int32_t tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len, 
 // by one from what you first expect. Caller holds c->lock.
 static void tcp_send_syn(tcp_conn_t* c)
 {
-	tcp_send_segment(c, c->snd_nxt, TCP_SYN, NULL, 0, true);
+	ipv4_tx_t how = tcp_send_segment(c, c->snd_nxt, TCP_SYN, NULL, 0, true);
 	c->snd_nxt += 1;
 	c->snd_max = c->snd_nxt;
 	tcp_rto_arm(c);
 	tcp_rtt_start(c, c->snd_nxt);
+	// A SYN the NIC refused stays on the books (the timer's SYN_SENT arm
+	// resends it) but is asked for again next tick, not after the initial
+	// second: the ring drains in microseconds, and a dial should not pay
+	// an RTO for a full ring. Karn: no stopwatch on what did not go.
+	if (how == IPV4_TX_REFUSED)
+	{
+		kTcpStats.tx_refused++;
+		c->rtt_timing = false;
+		c->rto_deadline = kTicksSinceStart + 1;
+	}
+	else
+		c->syn_on_wire = true;
 }
 
 // May this connection put data on the wire? Established, or closing in a
@@ -444,14 +458,14 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		bool resend = seq_lt(c->snd_una + in_flight, c->snd_max);
 		if (!tcp_unacked(c))
 			tcp_rto_arm(c);                                // first thing into an empty window: the clock starts
-		int32_t rc = tcp_send_data_segment(c, in_flight, chunk, fin);
-		if (rc < 0 && ipv4_next_hop_known(c->dev, c->peer_ip))
+		ipv4_tx_t how = tcp_send_data_segment(c, in_flight, chunk, fin);
+		if (how == IPV4_TX_REFUSED)
 		{
-			// Not parked — REFUSED: the NIC's transmit ring is full (or
-			// the frame was turned away), and the segment never left. It
-			// is not on the books: snd_nxt stays, nothing is counted, no
-			// stopwatch starts, and the pass stops here. tcp_poll's sweep
-			// tries again next tick; the ring drains meanwhile.
+			// The NIC's transmit ring is full (or the frame was turned
+			// away), and the segment never left. It is not on the books:
+			// snd_nxt stays, nothing is counted, no stopwatch starts, and
+			// the pass stops here. tcp_poll's sweep tries again next tick;
+			// the ring drains meanwhile.
 			kTcpStats.tx_refused++;
 			parked = true;
 			break;
@@ -479,7 +493,7 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		}
 		if (seq_gt(c->snd_nxt, c->snd_max))
 			c->snd_max = c->snd_nxt;
-		if (rc < 0)
+		if (how == IPV4_TX_PARKED)
 		{
 			parked = true;                                 // the rest waits for the ack the parked one earns
 			break;
@@ -497,10 +511,9 @@ static void tcp_output(tcp_conn_t* c, bool force)
 	{
 		if (!tcp_unacked(c))
 			tcp_rto_arm(c);
-		int32_t rc = tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false);
-		if (rc < 0 && ipv4_next_hop_known(c->dev, c->peer_ip))
+		if (tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false) == IPV4_TX_REFUSED)
 		{
-			kTcpStats.tx_refused++;                        // refused, not parked: still queued, the sweep retries
+			kTcpStats.tx_refused++;                        // never left: still queued, the sweep retries
 			return;
 		}
 		if (!(in_flight < c->snd_wnd))
@@ -549,26 +562,35 @@ static void tcp_output(tcp_conn_t* c, bool force)
 // Resend what the peer is waiting for: the SYN while the handshake is
 // open, else the ring's head (one segment's worth, the FIN riding it if it
 // is the end), else a bare FIN. Karn: the stopwatch is cancelled — from
-// here until a fresh segment starts a new one, no ack is a sample.
+// here until a fresh segment starts a new one, no ack is a sample. A
+// resend the NIC refuses is counted as nothing and left pending (tcp.h
+// head_resend_pending) for tcp_poll to try again.
 static void tcp_retransmit_head(tcp_conn_t* c)
 {
 	c->rtt_timing = false;
-	c->retransmits++;
-	kTcpStats.retransmits++;
+	ipv4_tx_t how;
 	if (c->state == TCP_SYN_SENT)
+		how = tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true);
+	else
 	{
-		tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true);
-		return;
+		uint32_t in_flight = tcp_bytes_in_flight(c);
+		if (in_flight == 0)
+			how = tcp_send_segment(c, c->snd_una, TCP_FIN | TCP_ACK, NULL, 0, false);
+		else
+		{
+			uint32_t len = in_flight < c->snd_mss ? in_flight : c->snd_mss;
+			// The FIN rode the head only if the head IS the last segment out.
+			how = tcp_send_data_segment(c, 0, len, c->snd_fin_sent && len == in_flight);
+		}
 	}
-	uint32_t in_flight = tcp_bytes_in_flight(c);
-	if (in_flight == 0)
+	c->head_resend_pending = (how == IPV4_TX_REFUSED);
+	if (how == IPV4_TX_REFUSED)
+		kTcpStats.tx_refused++;
+	else
 	{
-		tcp_send_segment(c, c->snd_una, TCP_FIN | TCP_ACK, NULL, 0, false);
-		return;
+		c->retransmits++;
+		kTcpStats.retransmits++;
 	}
-	uint32_t len = in_flight < c->snd_mss ? in_flight : c->snd_mss;
-	// The FIN rode the head only if the head IS the last segment out.
-	tcp_send_data_segment(c, 0, len, c->snd_fin_sent && len == in_flight);
 }
 
 // Loss has been detected, one way or the other: RFC 5681 §3.1's response.
@@ -1096,6 +1118,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				// evidence — it is what the exhaustion branch spends.
 				c->rto_backed_off = false;
 				c->retries = 0;
+				c->head_resend_pending = false;  // the head moved; whatever was owed for the old one is moot
 				if (c->rtt_timing && seq_geq(ack, c->rtt_seq))
 				{
 					c->rtt_timing = false;
@@ -1180,6 +1203,13 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					c->recover = c->snd_nxt;         // recovery ends when the peer reaches here
 					tcp_congestion_loss(c, false);
 					tcp_retransmit_head(c);
+					// The clock restarts for the resend (RFC 6298 §5.3's
+					// spirit): left on the original send's deadline, a
+					// third duplicate arriving late in the interval would
+					// let the timer fire before the resend's ack could
+					// come back, and a timeout would undo the recovery
+					// that had just found the loss the fast way.
+					tcp_rto_arm(c);
 					kTcpStats.fast_retransmits++;
 					printd(DEBUG_NET, "tcp: fast retransmit to %u.%u.%u.%u:%u (seq 0x%x, cwnd %u)\n",
 					       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_una, c->cwnd);
@@ -1559,14 +1589,30 @@ void tcp_poll(void)
 				// already superseded.
 				tcp_congestion_loss(c, true);
 				c->dup_acks = 0;
+				c->head_resend_pending = false;   // go-back-N below resends the head with everything else
 				c->recover = c->snd_max;    // no fast retransmit until the peer is past everything sent before this (RFC 6582 §3.2)
 				c->rtt_timing = false;      // Karn: nothing sent from here is a sample
 				if (c->state == TCP_SYN_SENT)
 				{
 					c->rto_deadline = now + c->rto_ticks;
-					tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true);
-					c->retransmits++;
-					kTcpStats.retransmits++;
+					// A retransmission only if a SYN ever went (tcp.h
+					// syn_on_wire): a first try the NIC refused is asked
+					// for again next tick, counted as refused, and its
+					// eventual send is the first the peer will see.
+					if (tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true) == IPV4_TX_REFUSED)
+					{
+						kTcpStats.tx_refused++;
+						c->rto_deadline = now + 1;
+					}
+					else
+					{
+						if (c->syn_on_wire)
+						{
+							c->retransmits++;
+							kTcpStats.retransmits++;
+						}
+						c->syn_on_wire = true;
+					}
 				}
 				else
 				{
@@ -1621,6 +1667,12 @@ void tcp_poll(void)
 		if (tcp_may_send_data(c) && !tcp_unacked(c) &&
 		    (c->snd_count > 0 || (c->snd_fin && !c->snd_fin_sent)))
 			tcp_output(c, false);
+		// And a resend of the head the NIC refused (tcp.h
+		// head_resend_pending): the head is on the books, so no ack will
+		// ever prompt it — only this does, until it goes.
+		if (c->head_resend_pending && tcp_unacked(c) &&
+		    c->state != TCP_TIME_WAIT && c->state != TCP_CLOSED && !c->stripped)
+			tcp_retransmit_head(c);
 
 		// The window update we owe a peer we stalled: once the reader
 		// drained our buffer, tell them they may speak again. Without

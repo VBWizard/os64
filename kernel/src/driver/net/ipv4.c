@@ -315,28 +315,22 @@ void ipv4_arp_resolved(net_device_t* dev, uint32_t ip)
 	               held.payload, held.length);
 }
 
-// The same routing decision ipv4_send_from makes, asked without sending:
-// broadcasts need no neighbour, everything else needs the on-link host or
-// the gateway in the ARP cache.
-bool ipv4_next_hop_known(net_device_t* dev, uint32_t dst_ip)
-{
-	(void)dev;
-	uint32_t subnet_bcast = (kNetIPv4Address & kNetIPv4Netmask) | ~kNetIPv4Netmask;
-	if (dst_ip == 0xFFFFFFFF || dst_ip == subnet_bcast)
-		return true;
-	bool on_link = ((dst_ip ^ kNetIPv4Address) & kNetIPv4Netmask) == 0;
-	uint8_t mac[NET_MAC_LEN];
-	return arp_lookup(on_link ? dst_ip : kNetIPv4Gateway, mac);
-}
-
 int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                        uint8_t protocol, const void* payload, uint16_t length)
+{
+	return ipv4_send_from_ex(dev, src_ip, dst_ip, protocol, payload, length, NULL);
+}
+
+int32_t ipv4_send_from_ex(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
+                          uint8_t protocol, const void* payload, uint16_t length,
+                          ipv4_tx_t* how)
 {
 	if ((uint32_t)length + IPV4_HDR_MIN > dev->mtu)
 	{
 		// Over-MTU means fragmenting, and we don't (DF world, see the
 		// header stance). Refused here, loudly, instead of half-sent.
 		kIPv4Stats.tx_too_big++;
+		if (how) *how = IPV4_TX_REFUSED;
 		return -1;
 	}
 
@@ -406,6 +400,7 @@ int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			arp_send_request(dev, next_hop);
 			if (!parked)
 				kIPv4Stats.tx_awaiting_arp++;
+			if (how) *how = IPV4_TX_PARKED;   // held, or dropped as a first packet: the wire's either way
 			return -2;
 		}
 	}
@@ -438,5 +433,6 @@ int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		kIPv4Stats.tx_sent++;
 	else
 		kIPv4Stats.tx_errors++;
+	if (how) *how = (rc == 0) ? IPV4_TX_SENT : IPV4_TX_REFUSED;
 	return rc;
 }
