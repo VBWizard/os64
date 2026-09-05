@@ -421,12 +421,13 @@ static void test_phy_bmcr_service(void)
 	// The P5 as found (autoneg on, the 1000 speed-select bit) and mid-restart.
 	CHECK(!r8125_phy_bmcr_out_of_service(0x1040), "the P5's as-found BMCR is in service");
 	CHECK(!r8125_phy_bmcr_out_of_service(0x1200), "a restart in flight is in service");
-	// The four states firmware can leave a PHY in that a restart write clears.
+	// The five states firmware can leave a PHY in that a restart write clears.
 	CHECK(r8125_phy_bmcr_out_of_service(0x0000), "autonegotiation off");
 	CHECK(r8125_phy_bmcr_out_of_service(0x2100), "forced 100/full");
 	CHECK(r8125_phy_bmcr_out_of_service(0x1800), "power-down");
 	CHECK(r8125_phy_bmcr_out_of_service(0x1400), "isolate");
 	CHECK(r8125_phy_bmcr_out_of_service(0x5000), "loopback");
+	CHECK(r8125_phy_bmcr_out_of_service(0x1080), "collision test");
 }
 
 static void test_phy_id_check(void)

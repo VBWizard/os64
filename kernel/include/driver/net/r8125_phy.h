@@ -85,6 +85,7 @@ uint16_t r8125_phy_mii_ocp_addr(uint8_t mii_reg);
 #define R8125_MII_ESTATUS  15   // extended status: what this PHY can do at gigabit
 
 // BMCR
+#define R8125_BMCR_COLTEST    0x0080   // collision test: transmissions look like collisions
 #define R8125_BMCR_ANRESTART  0x0200
 #define R8125_BMCR_ISOLATE    0x0400
 #define R8125_BMCR_PDOWN      0x0800
@@ -94,7 +95,8 @@ uint16_t r8125_phy_mii_ocp_addr(uint8_t mii_reg);
 // Autonegotiation restart, exactly as the vendor writes it
 // (rtl8125_phy_restart_nway): enable + restart, nothing else. Writing the
 // whole register rather than read-modify-write is deliberate — it also
-// clears power-down, isolate and loopback, none of which we ever want.
+// clears power-down, isolate, loopback and collision test, none of which
+// we ever want.
 #define R8125_BMCR_RESTART_AUTONEG (R8125_BMCR_ANENABLE | R8125_BMCR_ANRESTART)
 
 // BMSR. LSTATUS is LATCHING-LOW: it reports "the link has been down since
@@ -153,10 +155,11 @@ uint16_t r8125_phy_mii_ocp_addr(uint8_t mii_reg);
 bool r8125_phy_id_is_realtek(uint16_t id1, uint16_t id2);
 
 // Is the PHY out of autonegotiating service — autonegotiation disabled (a
-// forced mode), powered down, isolated, or in loopback? Any of these is a
+// forced mode), powered down, isolated, in loopback, or in collision-test
+// mode? Any of these is a
 // state firmware can leave a PHY in, none of them is one this driver ever
 // wants, and the one BMCR write the driver makes (R8125_BMCR_RESTART_AUTONEG)
-// clears all four. A PHY in such a state gets that write even when its
+// clears all five. A PHY in such a state gets that write even when its
 // advertisement registers already read exactly as planned (Codex, PR #66).
 bool r8125_phy_bmcr_out_of_service(uint16_t bmcr);
 

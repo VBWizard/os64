@@ -164,7 +164,7 @@ bool r8125_phy_bmcr_out_of_service(uint16_t bmcr)
 {
 	if ((bmcr & R8125_BMCR_ANENABLE) == 0)
 		return true;
-	return (bmcr & (R8125_BMCR_PDOWN | R8125_BMCR_ISOLATE | R8125_BMCR_LOOPBACK)) != 0;
+	return (bmcr & (R8125_BMCR_PDOWN | R8125_BMCR_ISOLATE | R8125_BMCR_LOOPBACK | R8125_BMCR_COLTEST)) != 0;
 }
 
 bool r8125_phy_restart_taken(uint16_t bmsr_before, uint32_t phystatus_before,

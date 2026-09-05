@@ -643,11 +643,12 @@ static void r8125_phy_configure(r8125_t* r)
 	// (1) The advertisement is not what we want — a PHY somebody left at
 	//     10/100, or one missing gigabit. Write it, then restart.
 	// (2) The PHY was left OUT OF SERVICE: autonegotiation disabled (a
-	//     forced mode), powered down, isolated, or in loopback — states
-	//     firmware can leave behind and this driver never wants. The one
-	//     BMCR write below clears all of them. Without this reason a PHY
-	//     whose advertisement already matched would have kept whatever mode
-	//     it was left in (Codex, PR #66).
+	//     forced mode), powered down, isolated, in loopback, or in
+	//     collision-test mode — states firmware can leave behind and this
+	//     driver never wants. The one BMCR write below clears all of them.
+	//     Without this reason a PHY whose advertisement already matched
+	//     would have kept whatever mode it was left in (Codex, PR #66,
+	//     rounds 1 and 4).
 	// (3) The advertisement is fine but the LINK IS BELOW what both sides
 	//     offer — speed AND duplex, in annex 28B's priority order: 100/full
 	//     between two parties that both listed 1000F is a negotiation that
