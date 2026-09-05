@@ -330,7 +330,7 @@ int32_t ipv4_send_from_ex(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		// Over-MTU means fragmenting, and we don't (DF world, see the
 		// header stance). Refused here, loudly, instead of half-sent.
 		kIPv4Stats.tx_too_big++;
-		if (how) *how = IPV4_TX_REFUSED;
+		if (how) *how = IPV4_TX_INVALID;
 		return -1;
 	}
 
@@ -433,6 +433,6 @@ int32_t ipv4_send_from_ex(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		kIPv4Stats.tx_sent++;
 	else
 		kIPv4Stats.tx_errors++;
-	if (how) *how = (rc == 0) ? IPV4_TX_SENT : IPV4_TX_REFUSED;
+	if (how) *how = (rc == 0) ? IPV4_TX_SENT : IPV4_TX_DROPPED;
 	return rc;
 }

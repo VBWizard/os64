@@ -258,11 +258,10 @@ typedef struct
 // everything a peer can send between two drains, and the drain is once per
 // scheduler pass: with a 64KB TCP window (tcp.h) that is up to 45 full
 // frames per pass, so 128 slots (256KB of buffers) leaves headroom for a
-// second connection or a burst of ARP and ping on top. TX holds a full
-// send window (tcp.h TCP_SND_BUF: up to 45 frames in one output pass) with
-// room for the acks of a download beside it; a sender that outruns it is
-// refused at the door (-2) and tries again, so the bound is flow control,
-// never loss.
+// second connection or a burst of ARP and ping on top. TX has 63 usable
+// slots: enough for one 64KB flight at MSS 1460, but smaller segments and
+// concurrent connections can fill it. A refused frame remains TCP's loss
+// recovery responsibility; queue depth does not guarantee submission.
 #define E1000_RX_DESCS  128
 #define E1000_TX_DESCS  64
 #define E1000_BUF_SIZE  2048   // must match RCTL_BSIZE_2048 above

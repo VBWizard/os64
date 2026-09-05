@@ -1245,7 +1245,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
 	synth_text_addf(t, "fast_retransmits: %lu\n", kTcpStats.fast_retransmits);
 	synth_text_addf(t, "window_probes: %lu\n", kTcpStats.window_probes);
-	synth_text_addf(t, "tx_refused: %lu\n", kTcpStats.tx_refused);
+	synth_text_addf(t, "tx_local_drops: %lu\n", kTcpStats.tx_local_drops);
 	synth_text_addf(t, "rtt_samples: %lu\n", kTcpStats.rtt_samples);
 	synth_text_addf(t, "out_of_order_held: %lu\n", kTcpStats.out_of_order_held);
 	synth_text_addf(t, "out_of_order_dropped: %lu\n", kTcpStats.out_of_order_dropped);
@@ -1350,12 +1350,10 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		// #62).
 		r->rto_ms     = (c->rto_backed_off ? c->rto_ticks : c->rto) * 1000u / TICKS_PER_SECOND;
 		r->srtt_ms    = (c->srtt_x8 >> 3) * 1000u / TICKS_PER_SECOND;
-		// The send side's three numbers: the sequence span out and unacked
-		// (SYN and FIN count, being what the timer protects), the ring's
-		// unacknowledged bytes — in flight plus waiting, so sndq minus
-		// inflight is what the windows are holding back — and the
-		// congestion window that with `win` decides how much may be out.
-		r->inflight   = c->snd_nxt - c->snd_una;
+		// Submission flight includes SYN/FIN sequence units; sndq is
+		// ring bytes, including those waiting behind the window. Flight
+		// stays visible while a retransmission cursor walks it again.
+		r->inflight   = c->snd_max - c->snd_una;
 		r->sndq       = c->snd_count;
 		r->cwnd       = c->cwnd;
 		r->detached   = c->detached;

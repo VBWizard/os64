@@ -96,9 +96,9 @@ void ipv4_arp_resolved(net_device_t* dev, uint32_t ip);
 
 // Wrap `payload` in an IPv4 header and send it toward dst_ip. Handles the
 // host routing decision (on-link vs gateway) and ARP resolution. Returns
-// 0 = handed to the wire; -2 = next hop not yet resolved (an ARP query was
-// just broadcast — retry shortly; see the first-packet note at the
-// implementation); other negatives = refused.
+// 0 = accepted by the driver; negatives include unresolved ARP, construction
+// errors and driver refusal. Driver codes overlap the ARP -2 result; callers
+// needing the distinction use ipv4_send_from_ex and its disposition.
 int32_t ipv4_send(net_device_t* dev, uint32_t dst_ip, uint8_t protocol,
                   const void* payload, uint16_t length);
 
@@ -110,19 +110,17 @@ int32_t ipv4_send(net_device_t* dev, uint32_t dst_ip, uint8_t protocol,
 int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                        uint8_t protocol, const void* payload, uint16_t length);
 
-// WHAT BECAME OF THE PACKET, decided in the same breath as the send. The
-// return value's -2 is shared by two different fates — parked for ARP, and
-// refused by a driver whose ring is full — and a sender keeping sequence
-// books (TCP) needs them apart: a parked packet is the wire's now (it goes
-// when the neighbour answers, or is dropped as any packet the wire eats)
-// and stays on the books; a refused one never left and must not. Asking
-// the ARP cache afterwards cannot tell them apart — the reply may land in
-// between — so the disposition comes out WITH the verdict.
+// Submission disposition, decided with the send. PARKED may be held for
+// ARP or dropped if no pending slot is free. DROPPED is a driver failure
+// (possibly transient); INVALID is rejected by IPv4's construction checks.
+// TCP retains lost-packet responsibility for PARKED and DROPPED, but stops
+// the output pass. No driver API change or post-send ARP lookup is needed.
 typedef enum
 {
-	IPV4_TX_SENT,      // handed to the driver
-	IPV4_TX_PARKED,    // next hop unresolved: held for ARP, or dropped as a first packet
-	IPV4_TX_REFUSED,   // never left: over the MTU, or the driver turned it away
+	IPV4_TX_SENT,
+	IPV4_TX_PARKED,
+	IPV4_TX_DROPPED,
+	IPV4_TX_INVALID,
 } ipv4_tx_t;
 
 // ipv4_send_from, with the disposition (may be NULL). Same return values.

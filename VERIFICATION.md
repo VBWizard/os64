@@ -252,15 +252,14 @@ found when the link came back. (A 2000-byte stream through the same stall
 never sees the window shut — slirp holds it — so the FIN-into-a-zero-window
 case is covered by reading, not by this rig.)
 
-**A NIC refusing a frame** (its transmit ring full: e1000 and virtio answer
--2, the RTL8125 -1) is the third thing the rig cannot make happen — virtio's
-queue is 256 deep and e1000's 64 — so it was run by FAULT INJECTION, a scratch
-build of `virtio_net_transmit` refusing every seventh frame, never committed.
-`tx_refused` in `/sys/net/tcp` climbed to 38 across the three upload legs,
-every leg verified at its usual time, and the clean leg's `retransmits`
-stayed 0: a refused segment is not on the sequence books, and the poll's
-sweep sends it on the next tick. Repeat it whenever `tcp_output`'s
-bookkeeping around the send changes.
+**Historical local-refusal experiment (2026-09-04, superseded sender):**
+a scratch virtio build dropped every seventh submission. Transfers verified,
+but it exercised only intermittent refusal. Its next-tick retry machinery
+missed sustained-refusal lifetime failures and has been removed. Those old
+`tx_refused`/zero-retransmit results do not describe the current implementation.
+The refactored sender counts `tx_local_drops`, commits loss responsibility,
+and recovers through protocol timers; see `TCP_SENDER.md` and the acceptance
+results below.
 
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
 under jitter, as a real pipe does, so a delay leg measures the clock and only
@@ -271,6 +270,58 @@ The pcap dump sits AFTER the cable in both directions: the capture is what
 got through, the ledger is what did not, and `orphaned` (a frame the cable
 could not hand back because QEMU's inbound socket was gone) is never zero
 silently.
+
+## TCP sender refactor acceptance (2026-09-05)
+
+The refactor contract is `TCP_SENDER.md`. These are new runs, independent of
+previous throughput tables; timing differences are not controlled speedup
+claims. The isolated rig used QEMU q35, 8 CPUs, virtio-net, copied ext2 root/data
+images, the current built kernel, `tools/cable.py --seed 1`, and host sinks.
+The guest configuration search finds `/home/husk.rc` before `/etc/husk.rc`;
+the rig installed its startup there and used `mkdir` to let only one of the
+two VT shells start the workload. An initial run that missed this precedence
+was discarded because its output file was from an older test.
+
+| Check | Result |
+|---|---|
+| ASan/UBSan host sender transitions | Pass; actual TCP bodies, checksummed peer input, deterministic clock/submission dispositions |
+| Host stream loss matrix | Pass; 150 KB per case, MSS 48/536/1460 crossed with peer windows 100/4000/65535, independent data and ACK loss, ring and sequence wrap, FIN through EOF |
+| 100 KB upload, clean | Verified, 70 ms guest verdict time |
+| 100 KB upload, 10% outbound loss | Verified, 430 ms |
+| 100 KB upload, same loss plus 100 ms delay each way | Verified, 3750 ms |
+| 2 MB upload, 4 KB host receive buffer, reader paused 12 seconds, return path disconnected for 10 seconds | Verified, 17520 ms; four probes, captured gaps approximately 2/4/8 seconds; window reopened and transfer completed |
+| Close with 32 KiB queued, 100 ms delay each way | Host received exactly 32768 correct bytes then EOF; post-close snapshot had FIN_WAIT_1, `inflight=14600`, `sndq=32768`, `det`; later TIME_WAIT with buffers stripped |
+| 100 KB download, clean / 30% downlink reorder / 10% downlink loss | All three byte-identical to the source (MD5 f602e2c389c0184f5bbef36b3c0b6a2b) |
+| Full build and strict changed-C compilation | Pass |
+| Completed-kernel smoke after handshake/reset invariant cleanup | 100 KB verified (30 ms); built-in suites 28 + 29 + 2 passed, zero failures |
+| Copied guest filesystems after the final run | Root and data `e2fsck -fn` both exit 0 |
+| e1000 upload attempt | Unvalidated: early boot stopped in the unchanged `e1000_enable_intx` probe, before the workload; this is not a transfer result |
+
+Run the host suite from the worktree with:
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 tools/test_tcp_host.sh
+```
+
+Only LeakSanitizer is disabled: this environment reports that it cannot run
+under ptrace. ASan and UBSan remain active. The harness does not establish
+SMP, IRQ, DMA, or physical NIC correctness. Sustained driver drops and detached
+outages beyond the cleanup deadline are covered by the deterministic suite;
+the guest outage test exercises an owned connection reopening before close.
+
+The separate close fixture avoids mistaking queued writes for delivery:
+
+```sh
+# Host, accepts one connection and verifies through EOF:
+python3 tools/test_tcp_close.py --port 17250
+# Guest (with cable delay enabled so the ring remains outstanding):
+/tests/netclose 10.0.2.2 17250
+cat /sys/net/tcp
+```
+
+Fable's PHY work is separate. Production r8125 unplug/replug and combined-tree
+throughput remain physical-hardware acceptance work. No link notification is
+used as a substitute for ACK progress.
 
 ## Reading the serial log
 
