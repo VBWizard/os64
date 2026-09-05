@@ -353,6 +353,11 @@ typedef struct tcp_stats
 	// upload is a peer that stopped reading, not a network eating segments.
 	uint64_t fast_retransmits;
 	uint64_t window_probes;
+	// Segments the NIC refused at the door (a full transmit ring). Not
+	// sent, not counted as sent, not a network signal: the pass stops and
+	// the poll's sweep tries again next tick. Rising fast beside a small
+	// window is a driver's ring being too small for the sender.
+	uint64_t tx_refused;
 	uint64_t rtt_samples;           // clean round trips measured (Karn's rule counts the rest out)
 	uint64_t bad_checksum;
 	uint64_t no_connection;         // segment for a 4-tuple we don't know (we RST it)

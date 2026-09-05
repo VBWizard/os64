@@ -203,9 +203,15 @@ static int32_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	net_write16(seg + 16, net_checksum_fold(sum));
 
 	int32_t rc = ipv4_send(c->dev, c->peer_ip, IPV4_PROTO_TCP, seg, total);
-	kTcpStats.segments_out++;
-	if (data_len)
-		c->tx_bytes += data_len;
+	// Counted if it went or will go (parked for ARP); a segment the NIC
+	// refused never left, and a tx_bytes that counted it would read
+	// higher than the peer ever received.
+	if (rc >= 0 || !ipv4_next_hop_known(c->dev, c->peer_ip))
+	{
+		kTcpStats.segments_out++;
+		if (data_len)
+			c->tx_bytes += data_len;
+	}
 	return rc;
 }
 
@@ -439,6 +445,17 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		if (!tcp_unacked(c))
 			tcp_rto_arm(c);                                // first thing into an empty window: the clock starts
 		int32_t rc = tcp_send_data_segment(c, in_flight, chunk, fin);
+		if (rc < 0 && ipv4_next_hop_known(c->dev, c->peer_ip))
+		{
+			// Not parked — REFUSED: the NIC's transmit ring is full (or
+			// the frame was turned away), and the segment never left. It
+			// is not on the books: snd_nxt stays, nothing is counted, no
+			// stopwatch starts, and the pass stops here. tcp_poll's sweep
+			// tries again next tick; the ring drains meanwhile.
+			kTcpStats.tx_refused++;
+			parked = true;
+			break;
+		}
 		if (resend)
 		{
 			c->retransmits++;
@@ -481,7 +498,11 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		if (!tcp_unacked(c))
 			tcp_rto_arm(c);
 		int32_t rc = tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false);
-		(void)rc;                                          // a parked FIN goes when ARP answers; nothing follows it
+		if (rc < 0 && ipv4_next_hop_known(c->dev, c->peer_ip))
+		{
+			kTcpStats.tx_refused++;                        // refused, not parked: still queued, the sweep retries
+			return;
+		}
 		if (!(in_flight < c->snd_wnd))
 			probed = true;                                 // it went only as the probe's payload
 		if (seq_lt(c->snd_nxt, c->snd_max))
@@ -1140,13 +1161,18 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			         win == old_wnd && c->snd_wnd != 0)
 			{
 				c->dup_acks++;
-				if (c->dup_acks == 3 && !seq_gt(c->snd_una, c->recover))
+				if (c->dup_acks == 3 && seq_lt(c->snd_una, c->recover))
 				{
-					// Duplicates for data BELOW the last recovery mark — the
-					// go-back-N resends after a timeout, which the peer
-					// largely already holds, each draw one — are not a
-					// loss signal (RFC 6582 §3.2 step 1B). Count them
-					// down again and wait for the timer or real progress.
+					// Duplicates while the head is still BELOW the last
+					// recovery mark — the go-back-N resends after a timeout,
+					// which the peer largely already holds, each draw one —
+					// are not a loss signal (RFC 6582 §3.2 step 1B). Count
+					// them down again and wait for the timer or real
+					// progress. AT the mark they are: `recover` is the
+					// exclusive end of what was out when recovery began, so
+					// a head sitting exactly there is the first segment of
+					// the next window, and only data past it can be drawing
+					// duplicates — a real hole, found the fast way.
 					c->dup_acks = 0;
 				}
 				else if (c->dup_acks == 3)
@@ -1584,6 +1610,17 @@ void tcp_poll(void)
 				tcp_output(c, true);
 			}
 		}
+
+		// THE SWEEP: bytes (or a FIN) waiting with nothing out is a state
+		// that must not persist, and every event that ends it normally —
+		// an ack, a write, a probe's answer — has already tried. What is
+		// left is a send the NIC refused (tx_refused) with nothing in
+		// flight to earn the next try, so the poll makes one each tick.
+		// Into a shut window tcp_output sends nothing and leaves the
+		// persist clock as it stands; into an open one it sends.
+		if (tcp_may_send_data(c) && !tcp_unacked(c) &&
+		    (c->snd_count > 0 || (c->snd_fin && !c->snd_fin_sent)))
+			tcp_output(c, false);
 
 		// The window update we owe a peer we stalled: once the reader
 		// drained our buffer, tell them they may speak again. Without

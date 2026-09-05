@@ -110,4 +110,11 @@ int32_t ipv4_send(net_device_t* dev, uint32_t dst_ip, uint8_t protocol,
 int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                        uint8_t protocol, const void* payload, uint16_t length);
 
+// Is the next hop toward dst_ip resolved — will a send go to the wire now,
+// or be parked for ARP? The two share ipv4_send's -2 (a driver refusing a
+// full ring says -2 too), and a sender keeping sequence books has to know
+// which it got: a parked packet goes when ARP answers and stays on the
+// books; a refused one never left and must not.
+bool ipv4_next_hop_known(net_device_t* dev, uint32_t dst_ip);
+
 #endif // IPV4_H

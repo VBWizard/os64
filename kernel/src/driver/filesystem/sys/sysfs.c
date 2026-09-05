@@ -1245,6 +1245,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
 	synth_text_addf(t, "fast_retransmits: %lu\n", kTcpStats.fast_retransmits);
 	synth_text_addf(t, "window_probes: %lu\n", kTcpStats.window_probes);
+	synth_text_addf(t, "tx_refused: %lu\n", kTcpStats.tx_refused);
 	synth_text_addf(t, "rtt_samples: %lu\n", kTcpStats.rtt_samples);
 	synth_text_addf(t, "out_of_order_held: %lu\n", kTcpStats.out_of_order_held);
 	synth_text_addf(t, "out_of_order_dropped: %lu\n", kTcpStats.out_of_order_dropped);

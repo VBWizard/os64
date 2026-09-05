@@ -315,6 +315,20 @@ void ipv4_arp_resolved(net_device_t* dev, uint32_t ip)
 	               held.payload, held.length);
 }
 
+// The same routing decision ipv4_send_from makes, asked without sending:
+// broadcasts need no neighbour, everything else needs the on-link host or
+// the gateway in the ARP cache.
+bool ipv4_next_hop_known(net_device_t* dev, uint32_t dst_ip)
+{
+	(void)dev;
+	uint32_t subnet_bcast = (kNetIPv4Address & kNetIPv4Netmask) | ~kNetIPv4Netmask;
+	if (dst_ip == 0xFFFFFFFF || dst_ip == subnet_bcast)
+		return true;
+	bool on_link = ((dst_ip ^ kNetIPv4Address) & kNetIPv4Netmask) == 0;
+	uint8_t mac[NET_MAC_LEN];
+	return arp_lookup(on_link ? dst_ip : kNetIPv4Gateway, mac);
+}
+
 int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                        uint8_t protocol, const void* payload, uint16_t length)
 {

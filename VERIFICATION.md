@@ -252,6 +252,16 @@ found when the link came back. (A 2000-byte stream through the same stall
 never sees the window shut — slirp holds it — so the FIN-into-a-zero-window
 case is covered by reading, not by this rig.)
 
+**A NIC refusing a frame** (its transmit ring full: e1000 and virtio answer
+-2, the RTL8125 -1) is the third thing the rig cannot make happen — virtio's
+queue is 256 deep and e1000's 64 — so it was run by FAULT INJECTION, a scratch
+build of `virtio_net_transmit` refusing every seventh frame, never committed.
+`tx_refused` in `/sys/net/tcp` climbed to 38 across the three upload legs,
+every leg verified at its usual time, and the clean leg's `retransmits`
+stayed 0: a refused segment is not on the sequence books, and the poll's
+sweep sends it on the next tick. Repeat it whenever `tcp_output`'s
+bookkeeping around the send changes.
+
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
 under jitter, as a real pipe does, so a delay leg measures the clock and only
 the `reorder` knob measures reassembly. (The first delay leg did not keep
