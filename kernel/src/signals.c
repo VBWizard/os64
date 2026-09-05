@@ -20,6 +20,8 @@
 #include "thread_join.h"
 #include "BasicRenderer.h"   // renderer_flush_if_dirty — the blit-throttle rider
 #include "driver/system/usb/xhci.h"
+#include "doorbell.h"   // the net drainer's bell — rung once per tick
+#include "knet.h"
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
@@ -887,58 +889,37 @@ void processSignals()
 	// (guard branch + one cached-RAM read); does nothing before USB init.
 	xhci_poll();
 
-	// Same liveness ride for the NIC: drain TX completions and deliver RX
-	// arrivals once per pass. Same economics as xhci_poll — a guard branch
-	// and two ring-index compares when idle; interrupt wiring is a future
-	// slice (NETWORK.md), and this path is what makes packets move today.
-	virtio_net_poll();
-	// Every registered NIC needs its own drainer — this is a per-DRIVER
-	// call, not a per-device one, and each is a guard branch away from free
-	// when its hardware is absent. (A generic "poll every net_device" verb
-	// through the seam is the obvious tidy-up; it waits for a third driver
-	// to make the abstraction pay, the same way the seam itself waited for
-	// a second one.)
+	// THE NETWORK LEFT THIS PASS (2026-09-05, DOORBELL.md). The NIC drains,
+	// the protocol stack they feed and the TCP/DHCP timers all used to run
+	// right here, under this lock, once per tick — which made "once per
+	// tick" the throughput ceiling of every connection (tcp.h's window-per-
+	// pass arithmetic) and made this lock's hold time scale with traffic.
+	// They run in knet now, a kernel thread parked on a doorbell that a
+	// NIC's interrupt handler rings on arrival. The tick still rings it here:
+	// that is what keeps a NIC with no interrupt at exactly the cadence it
+	// always had, and what runs the timers when the wire is quiet. One store;
+	// the pass answers it at its service point (scheduler.c).
 	//
-	// Since 2026-08-06 the e1000 drain is DOORBELL-GATED when INTx is live:
-	// the ISR (vector 0x45) raises kE1000RxWork and this pass consumes it.
-	// Clear BEFORE draining — a packet that lands mid-drain re-raises the
-	// flag and schedules the next pass, instead of vanishing into a
-	// cleared-after window (the classic lost-wakeup shape, same reason the
-	// wake sweeps re-evaluate conditions instead of remembering edges).
-	// No confirmed wire = unconditional poll, yesterday's behavior exactly.
-	if (!kE1000UsesIntx || kE1000RxWork)
+	// ONCE PER TICK, NOT ONCE PER PASS. This function runs in EVERY BSP pass,
+	// and a pass is also what knet's own park provokes — so ringing here
+	// unconditionally rang the bell on the very pass that parked the thread,
+	// which woke it, which parked it, which rang it: 5,800 wakes a second on
+	// an idle link, measured in /sys/net/knet the first time it existed.
+	static uint64_t s_net_rung_at_tick;
+	if (kNetDeviceCount > 0 && kTicksSinceStart != s_net_rung_at_tick)
 	{
-		// If the ISR divorced the wire at runtime (shared line gone hostile
-		// — see storm breaker #2 in e1000.c), announce it exactly once. The
-		// fallback itself already happened in interrupt context; this is
-		// the no-silent-fallbacks receipt.
-		if (kE1000IntxDivorced)
-		{
-			kE1000IntxDivorced = false;
-			printf("e1000: INTx wire went hostile (stranger storm) — back to polling\n");
-		}
-		kE1000RxWork = false;
-		e1000_poll();
+		s_net_rung_at_tick = kTicksSinceStart;
+		doorbell_ring_in_pass(&kNetDoorbell);
 	}
 
-	// And the RTL8125's drainer. Wired in from its FIRST slice, before it
-	// has any rings to drain, precisely so that adding them needs no
-	// scheduler surgery later — same economics as the two calls above: one
-	// guard branch away from free when the hardware is absent, which on
-	// every machine here except the P5 is always.
-	r8125_poll();
-
-	// DHCP's retry timer rides the same pass (one state compare when the
-	// lease is settled). Delivery of DHCP replies happens inside the poll
-	// above (UDP demux → dhcp_rx); this call only handles the wire going
-	// QUIET — resend, and eventually give up honestly.
-	dhcp_poll();
-
-	// TCP's clock: retransmission deadlines, connect timeouts, and the
-	// TIME_WAIT reaper. THIS is what makes the stream reliable — a stack
-	// with no timer is a stack that hangs the first time a packet is
-	// lost. Walks only live connections (usually none).
-	tcp_poll();
+	// The doorbell fixture (test_doorbell_wakes_sleeper) arms this so the
+	// next pass — this one — rings its bell from inside a pass, which is the
+	// half of the primitive an interrupt cannot rehearse in QEMU.
+	if (kDoorbellTestArm)
+	{
+		kDoorbellTestArm = false;
+		doorbell_ring_in_pass(&kDoorbellTestBell);
+	}
 
 	// Blit-throttle flush: if a console scroll burst left the glass behind
 	// its shadow (BasicRenderer's ~30Hz throttle), deliver the finished
@@ -977,17 +958,18 @@ void processSignals()
 	pipe_wake_if_ready();
 
 	// And for dialed network conversations: wake any reader whose datagram
-	// ring is non-empty. Placed AFTER virtio_net_poll above on purpose —
-	// a packet delivered this pass wakes its reader this same pass, so
-	// blocking-read latency is one scheduler pass, not two. (UDP conns
-	// have NO fast-path wake at all — their enqueue runs in RX context,
-	// which may not hold this lock — so this sweep is their only waker;
-	// see the context map in udp_conn.c.)
+	// ring is non-empty. (UDP conns have NO fast-path wake — their enqueue
+	// runs in knet, which could take the queue lock the way tcp_input now
+	// does, but nothing has asked for a faster datagram yet — so this sweep
+	// is their only waker, one tick behind the arrival; see the context map
+	// in udp_conn.c.)
 	udp_conn_wake_if_ready();
 
 	// Same for TCP streams: a reader wakes for bytes, EOF, or death; a
-	// writer wakes when its segment is acknowledged. Same level-triggered
-	// re-evaluation, same reason.
+	// writer wakes when its segment is acknowledged. tcp_input wakes both
+	// on arrival now (DOORBELL.md); this sweep is the backstop for a waiter
+	// that had registered but not yet parked when its bytes landed — the
+	// same race, and the same cure, as pipes.
 	tcp_wake_if_ready();
 
 	// And echo conversations: a reader wakes when its reply lands.

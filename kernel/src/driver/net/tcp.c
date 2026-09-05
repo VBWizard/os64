@@ -839,7 +839,31 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			break;
 	}
 
+	// WAKE ON ARRIVAL (2026-09-05, DOORBELL.md). This function runs in knet,
+	// a thread, so it may take the scheduler's queue lock the way pipe_read
+	// does — which the tick pass it used to run inside could not. The
+	// condition is the sweep's (tcp_wake_if_ready), evaluated under the
+	// connection lock, and the wake happens after that lock is released so
+	// the two are never held together. The sweep stays: it catches a waiter
+	// that registered but had not yet parked, exactly as it does for pipes.
+	// Without this the reader would wake at the next tick, and the stream
+	// would be tick-bound again, one buffer per tick.
+	thread_t *wake_reader = NULL, *wake_writer = NULL;
+	if (c->reader != NULL && c->reader->threadState == THREAD_STATE_ISLEEP &&
+	    (c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
+	{
+		wake_reader = c->reader;
+		c->reader = NULL;
+	}
+	if (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP &&
+	    (!tcp_unacked(c) || c->reset || c->state == TCP_CLOSED))
+	{
+		wake_writer = c->writer;
+		c->writer = NULL;
+	}
 	spinlock_release_irqrestore(&c->lock, irqflags);
+	if (wake_reader) scheduler_wake_isleep_thread(wake_reader);
+	if (wake_writer) scheduler_wake_isleep_thread(wake_writer);
 }
 
 // Give a port back to the draw. Caller holds kTcpListLock. Guarded because

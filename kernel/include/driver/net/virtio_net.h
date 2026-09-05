@@ -18,11 +18,14 @@
 void init_virtio_net(void);
 
 // Drain the used rings: TX completions free their slots, RX arrivals are
-// delivered through net_device_rx and their buffers recycled. Called from
-// processSignals every scheduler pass (the xhci_poll precedent) — cheap
-// when idle (one guarded compare against each ring's index), safe from
-// any context (irqsave lock inside). Interrupt-driven delivery is a
-// future slice; this is the liveness path until then.
-void virtio_net_poll(void);
+// delivered through net_device_rx and their buffers recycled. The seam's
+// drain verb, called by knet when the tick rings its bell — once a tick,
+// the cadence the poll always had (DOORBELL.md) — cheap when idle (one
+// guarded compare against each ring's index), safe from any context
+// (irqsave lock inside); returns whether anything moved. Interrupt-driven
+// delivery is a future slice (DEBTS: MSI-X); this is the liveness path
+// until then.
+struct net_device;   // the seam's handle; net_device.h owns it
+bool virtio_net_drain(struct net_device* dev);
 
 #endif // VIRTIO_NET_H

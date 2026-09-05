@@ -53,6 +53,7 @@
 #include "driver/net/e1000.h"
 #include "driver/net/r8125.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
+#include "knet.h"                  // the network drainer, minted beside kworker
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
 #include "driver/net/dhcp.h"
 #include "driver/filesystem/proc/procfs.h"
@@ -146,6 +147,9 @@ bool kEnableNet = true;
 // here that has one, so this flag exists for the day that machine needs to
 // boot WITHOUT its NIC in order to diagnose something else.
 bool kEnableR8125 = true;
+// Set by NETPOLL — every NIC stays tick-driven: no INTx probe, no MSI, and
+// knet wakes only when processSignals rings it (DOORBELL.md's flashlight).
+bool kNetPoll = false;
 // Cleared by the NOTESTS cmdline flag to skip ALL test execution (pre-boot,
 // post-boot, and the disk/VFS tests) — used to isolate a boot hang by booting
 // with no test code in the path.
@@ -448,7 +452,13 @@ void kernel_init()
 	// own bell — see e1000_enable_intx), so this works on q35, PIIX3, or
 	// bare metal without an AML interpreter. No NIC, no IOAPIC, or a silent
 	// probe all degrade to the polled path — never a dead network.
-	e1000_enable_intx();
+	if (!kNetPoll)
+		e1000_enable_intx();
+	// The RTL8125's MSI, same moment, same flashlight (DOORBELL.md): the
+	// LAPIC is the interrupt controller from here on, which is what a message-
+	// signalled interrupt needs. Nothing to route and nothing to probe.
+	if (!kNetPoll)
+		r8125_enable_msi();
 
     // We need the cls->task to be populated for running tests, so ...
     // put the kernel task in the cls because it'll be the first task to start running
@@ -524,7 +534,24 @@ void kernel_init()
 	    	kKWorkerTask->threads->threadID);
 	    scheduler_submit_new_task(kKWorkerTask);
 	}
-	   
+
+	// THE NETWORK DRAINER (DOORBELL.md). A daemon like kworker, minted only
+	// when a NIC registered — a netless boot has nothing to drain and gets no
+	// thread. PINNED TO THE BSP for v1 (Chris, 2026-09-05: "keep the
+	// complexity down"): the NIC interrupts are routed there, so a ring is a
+	// self-IPI and the tick that preempts a busy drainer is the one the BSP
+	// already has. The bell it parks on is rung by every NIC interrupt
+	// handler and by processSignals once per tick.
+	if (kEnableNet && kNetDeviceCount > 0)
+	{
+		kKnetTask = task_create("/knet", 0, NULL, kKernelTask, true, BOOTSTRAP_PROCESSOR_ID);
+		kKnetTask->autoReap = true;
+		printd(DEBUG_TASK | DEBUG_DETAILED,
+		       "kernel_init: enabling /knet (pinned to the BSP; task=0x%08x, thread=0x%08x)\n",
+		       kKnetTask->taskID, kKnetTask->threads->threadID);
+		scheduler_submit_new_task(kKnetTask);
+	}
+
 	    scheduler_enable();
     scheduler_change_thread_queue(kKernelTask->threads, THREAD_STATE_RUNNING);
     core_local_storage_t *cls = get_core_local_storage();

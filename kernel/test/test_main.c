@@ -37,6 +37,7 @@
 #include "strftime.h"
 #include "console.h"   // console_read_deadline — the read-patience test
 #include "driver/net/net_device.h"   // test_net_wire — the driver's first packets
+#include "doorbell.h"                // test_doorbell_wakes_sleeper
 #include "driver/net/net_wire.h"     // Phase 2 stack tests build real wire bytes
 #include "driver/net/net_checksum.h"
 #include "driver/net/ethernet.h"
@@ -2092,6 +2093,44 @@ static teardown_verdict_t teardown_leak_attempt(void)
 // bill the LATE phase exists to pay, since nobody is waiting on it.
 #define TEARDOWN_LEAK_ATTEMPTS 4
 #define TEARDOWN_LEAK_AGREE    2   // windows that must agree before we believe them
+
+// ── The doorbell (DOORBELL.md) ──────────────────────────────────────────
+// A sleeper parked on a bell is woken by the next pass that rings it, not
+// by its backstop. processSignals rings kDoorbellTestBell on the pass after
+// the arm is set, so a wake within a couple of ticks is the primitive
+// working end to end — service point, expedite, park — and a wake at the
+// five-second backstop is the primitive NOT working, unmistakably.
+
+static bool test_doorbell_wakes_sleeper(void)
+{
+    thread_t *self = get_core_local_storage()->currentThread;
+    doorbell_register(&kDoorbellTestBell, self, "test");
+
+    uint64_t worst = 0;
+    bool ok = true;
+    for (int round = 0; round < 3 && ok; round++) {
+        kDoorbellTestBell.rung = false;
+        __sync_synchronize();
+        uint64_t before = kTicksSinceStart;
+        kDoorbellTestArm = true;                                // the BSP's next pass rings
+        doorbell_park(&kDoorbellTestBell, 5 * TICKS_PER_SECOND);
+        uint64_t took = kTicksSinceStart - before;
+        if (took > worst)
+            worst = took;
+        if (!kDoorbellTestBell.rung) {
+            printd(DEBUG_TESTS, "\tFAIL: test_doorbell_wakes_sleeper - woke with the bell unrung after %lu ticks (the backstop, not the bell)\n", took);
+            ok = false;
+        } else if (took > 3) {
+            printd(DEBUG_TESTS, "\tFAIL: test_doorbell_wakes_sleeper - the ring took %lu ticks to wake the sleeper\n", took);
+            ok = false;
+        }
+    }
+    doorbell_unregister(&kDoorbellTestBell);
+    if (ok)
+        printd(DEBUG_TESTS, "\tPASS: test_doorbell_wakes_sleeper (3 rings, worst %lu tick(s), %lu wake(s) answered by a pass)\n",
+               worst, kDoorbellTestBell.wakes);
+    return ok;
+}
 
 static bool test_task_teardown_leak(void)
 {
@@ -5590,6 +5629,7 @@ static void register_builtin_tests(void)
     // drops the SYN instead of resetting it, and then SKIPS. Off the critical
     // path, both costs stop being costs at all.
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_LATE);
+    test_register("doorbell_wakes_sleeper", test_doorbell_wakes_sleeper, TEST_PHASE_LATE);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("devfs", test_devfs, TEST_PHASE_POSTBOOT);

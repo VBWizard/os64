@@ -311,23 +311,30 @@ static int32_t virtio_net_transmit(net_device_t* dev, const void* frame, uint16_
 
 static net_operations_t s_vnet_ops = {
 	.transmit = virtio_net_transmit,
+	.drain    = virtio_net_drain,
 };
 
-// ── Poll (called from processSignals, the xhci_poll precedent) ──────────────
+// ── Drain (the seam's verb; knet calls it, DOORBELL.md) ─────────────────────
 // Drains both used rings: TX completions return their slots to the free
 // stack; RX arrivals are delivered through the seam's choke point and the
 // buffer goes straight back on the avail ring — recycled, never reallocated.
-void virtio_net_poll(void)
+// Returns whether anything moved, so the drainer knows to come around again.
+// virtio has no interrupt wired (DEBTS: its conversion is MSI-X work), so the
+// tick's ring of knet's bell is the only thing that brings it here — the
+// cadence it always had, out from under the scheduler lock.
+bool virtio_net_drain(struct net_device* dev)
 {
+	(void)dev;   // one virtio-net per machine; the seam's handle and s_vnet are the same card
 	virtio_net_t* vn = &s_vnet;
 	if (!vn->driver_ok)
-		return;
+		return false;
 
 	// Cheap reentry guard (the xhci_poll idiom): if another core is mid-
-	// drain, skip — frames aren't lost, the next pass collects them.
+	// drain, skip — frames aren't lost, the next drain collects them.
 	static volatile uint32_t busy = 0;
 	if (__sync_lock_test_and_set(&busy, 1))
-		return;
+		return false;
+	bool moved = false;
 
 	uint64_t irqflags = spinlock_acquire_irqsave(&vn->lock);
 
@@ -337,6 +344,7 @@ void virtio_net_poll(void)
 		volatile virtq_used_elem_t* e = &tx->used->ring[tx->last_used % tx->size];
 		tx->free_ids[tx->free_top++] = (uint16_t)e->id;
 		tx->last_used++;
+		moved = true;
 	}
 	spinlock_release_irqrestore(&vn->lock, irqflags);
 
@@ -390,11 +398,13 @@ void virtio_net_poll(void)
 		spinlock_release_irqrestore(&vn->lock, irqflags);
 		*rx->notify = VQ_RX;
 
+		moved = true;   // a buffer came back, delivered or counted
 		if (flen)
 			net_device_rx(&vn->netdev, staged, flen);
 	}
 
 	__sync_lock_release(&busy);
+	return moved;
 }
 
 // ── Virtqueue construction ──────────────────────────────────────────────────

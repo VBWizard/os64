@@ -32,6 +32,7 @@
 #include "memset.h"
 #include "kworker.h"
 #include "test_framework.h"      // late_tests_thread — the "/latetests" task's body
+#include "knet.h"                // knet_thread — the "/knet" task's body
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
 #include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
@@ -2286,6 +2287,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isGBounceTask = (path != NULL && strncmp(path, "/gbounce", 8) == 0);
 	bool isGKeysTask   = (path != NULL && strncmp(path, "/gkeys", 6) == 0);
 	bool isLateTestTask = (path != NULL && strncmp(path, "/latetests", 10) == 0);
+	bool isKnetTask    = (path != NULL && strncmp(path, "/knet", 5) == 0);
 
 	// ONE ANSWER TO "IS THIS THE KERNEL'S OWN CODE?", because the question is
 	// asked in more than one place and the copies drifted. The list used to be
@@ -2321,7 +2323,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isKernelBuiltinTask = isKernelTask &&
 	                          (isIdleTask || isLogdTask || isKWorkerTask ||
 	                           isGuiCompTask || isGBounceTask || isGKeysTask ||
-	                           isLateTestTask);
+	                           isLateTestTask || isKnetTask);
 
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
@@ -2486,6 +2488,8 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 			newTask->threads->regs.RIP = (uint64_t)&gbounce_thread;
 		else if (isGKeysTask)
 			newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
+		else if (isKnetTask)
+			newTask->threads->regs.RIP = (uint64_t)&knet_thread;
 		else if (isLateTestTask)
 			newTask->threads->regs.RIP = (uint64_t)&late_tests_thread;
 	}

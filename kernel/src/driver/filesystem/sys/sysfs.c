@@ -47,7 +47,7 @@
 //                                core.  READ: the last snapshot, rendered.
 //   /sys/net/                    the networking view: "ip", "dhcp", "tcp",
 //                                then one file per REGISTERED NIC, named as
-//                                the driver registered it ("r8125_0") — never
+//                                the driver registered it ("r81250") — never
 //                                by index, which would renumber if probe
 //                                order changed
 //   /sys/net/ip                  the machine's address. MACHINE-wide and it
@@ -134,6 +134,8 @@
 #include "driver/block/block_cache.h"   // /sys/cache — the block cache's own numbers
 #include "conf.h"                       // /sys/conf — the config search path and its takers
 #include "driver/net/net_device.h"      // /sys/net — kNetDevices, the registered NICs
+#include "knet.h"                       // /sys/net/knet — the drainer's counters
+#include "doorbell.h"                   // /sys/net/knet — every bell in the registry
 #include "driver/net/ipv4.h"            // kNetIPv4Address/Gateway/Netmask
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
@@ -151,6 +153,7 @@ extern task_t   *kIdleTasks[];         // per-core idle tasks — their runCycle
 extern uint64_t  kCPUCyclesPerSecond;  // boot-calibrated: the cycles→µs exchange rate
 extern volatile bool mp_acctSettleAck[MAX_CPUS];
 extern bool mp_schedulerEnabled[MAX_CPUS];
+extern bool      kNetPoll;              // kernel.c — the NETPOLL flashlight, for /sys/net/knet
 
 // ── The unified PCI view ────────────────────────────────────────────────────
 // init_PCI files what it finds into three arrays: kPCIDeviceHeaders
@@ -313,6 +316,7 @@ typedef enum
 	SYS_NODE_NETIP,      // /net/ip — the machine's address, and it is ONE
 	SYS_NODE_NETDHCP,    // /net/dhcp — how that address was come by
 	SYS_NODE_NETTCP,     // /net/tcp — the transport, connection by connection
+	SYS_NODE_NETKNET,    // /net/knet — the drainer thread and its doorbell (DOORBELL.md)
 	SYS_NODE_NETCARD,    // /net/<name> — one registered NIC
 	SYS_NODE_MOUNTSFILE, // /mounts — the mount table, one line per live mount (df's data)
 	SYS_NODE_BLOCKFILE,  // /block — devices and partitions, named and located (lsblk's data)
@@ -477,7 +481,8 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		bool is_ip   = (strcmp(comp, "ip") == 0);
 		bool is_dhcp = (strcmp(comp, "dhcp") == 0);
 		bool is_tcp  = (strcmp(comp, "tcp") == 0);
-		if (is_ip || is_dhcp || is_tcp)
+		bool is_knet = (strcmp(comp, "knet") == 0);
+		if (is_ip || is_dhcp || is_tcp || is_knet)
 		{
 			// Decide BEFORE the lookahead: synth_next_component writes into
 			// `comp`, so testing it afterwards would be reading the wrong
@@ -485,10 +490,11 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 			if (synth_next_component(path, &pos, comp, sizeof(comp)))
 				return;   // nothing lives inside a file
 			out->type = is_ip ? SYS_NODE_NETIP
-			          : is_dhcp ? SYS_NODE_NETDHCP : SYS_NODE_NETTCP;
+			          : is_dhcp ? SYS_NODE_NETDHCP
+			          : is_knet ? SYS_NODE_NETKNET : SYS_NODE_NETTCP;
 			return;
 		}
-		// A card is addressed by the name the DRIVER registered ("r8125_0"),
+		// A card is addressed by the name the DRIVER registered ("r81250"),
 		// not by an index — the index is an implementation detail of
 		// kNetDevices and would renumber if probe order ever changed. Only a
 		// name that is actually registered exists, same rule as /cpu/<n>.
@@ -1413,6 +1419,35 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	}
 }
 
+// net/knet — the drainer thread and the doorbell it parks on (DOORBELL.md).
+// The numbers a person reads when a transfer is slower than the wire: how
+// often the drainer woke, how many drain rounds those wakes took, how often
+// it spent its whole budget with work still waiting, and the longest single
+// wake. The bell's own tally says who rang: `rings` counts every ring
+// (interrupt handlers and the tick alike), `wakes` the ones that found the
+// thread parked and relinked it — the rest found it already awake.
+static void sys_gen_net_knet(synth_text_t *t)
+{
+	synth_text_addf(t, "thread: %s\n", kKnetTask != NULL ? "running" : "none (no NIC registered)");
+	synth_text_addf(t, "mode: %s\n", kNetPoll ? "tick-driven (NETPOLL)" : "doorbell");
+	synth_text_addf(t, "wakes: %lu\n", kKnetWakes);
+	synth_text_addf(t, "drain_rounds: %lu\n", kKnetDrainRounds);
+	synth_text_addf(t, "budget_exhausted: %lu\n", kKnetBudgetExhausted);
+	synth_text_addf(t, "wake_cycles_max: %lu\n", kKnetWakeCyclesMax);
+	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
+	synth_text_addf(t, "bell_wakes: %lu\n", kNetDoorbell.wakes);
+	// Every bell in the registry, for the day there is a second daemon on
+	// one — async NVMe is the named next customer.
+	for (uint32_t i = 0; i < doorbell_count(); i++)
+	{
+		doorbell_t *db = doorbell_at(i);
+		if (db == NULL)
+			continue;
+		synth_text_addf(t, "bell %s: rings %lu wakes %lu\n",
+		                db->name != NULL ? db->name : "?", db->rings, db->wakes);
+	}
+}
+
 // net/<card> — one registered NIC: what it is, whether the wire is good, and
 // what has actually moved through it.
 static void sys_gen_net_card(synth_text_t *t, uint32_t index)
@@ -1693,6 +1728,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_CACHEFILE && sp.type != SYS_NODE_LOGFILE
 	         && sp.type != SYS_NODE_GUIFILE && sp.type != SYS_NODE_NETIP
 	         && sp.type != SYS_NODE_NETDHCP && sp.type != SYS_NODE_NETTCP
+	         && sp.type != SYS_NODE_NETKNET
 	         && sp.type != SYS_NODE_NETCARD
 	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
@@ -1727,6 +1763,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_net_dhcp(&text);
 	else if (sp.type == SYS_NODE_NETTCP)
 		sys_gen_net_tcp(&text);
+	else if (sp.type == SYS_NODE_NETKNET)
+		sys_gen_net_knet(&text);
 	else if (sp.type == SYS_NODE_NETCARD)
 		sys_gen_net_card(&text, sp.net);
 	else if (sp.type == SYS_NODE_CPUCOUNT)
@@ -1988,7 +2026,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// network settings" wants `ip` before a card roster — then one
 			// file per REGISTERED card, in registration order, which is the
 			// order that decides who carries the address.
-			static const char *kSysNetFiles[] = { "ip", "dhcp", "tcp" };
+			static const char *kSysNetFiles[] = { "ip", "dhcp", "tcp", "knet" };
 			const int kNetFileCount = (int)(sizeof(kSysNetFiles) / sizeof(kSysNetFiles[0]));
 			if (h->index < kNetFileCount)
 			{
@@ -2165,6 +2203,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_NETDHCP:
 			strncpy(entry->name, "dhcp", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_NETKNET:
+			strncpy(entry->name, "knet", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_NETTCP:

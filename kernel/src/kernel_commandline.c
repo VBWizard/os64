@@ -15,6 +15,7 @@ extern bool kEnableUSB;
 extern bool kUSBQuiet;
 extern bool kEnableNet;
 extern bool kEnableR8125;
+extern bool kNetPoll;
 // Static IPv4 configuration strings (ipv4.c owns them; empty = the 10.0.2.x
 // NAT-convention defaults shared by QEMU slirp and VirtualBox NAT). DHCP
 // supersedes all three in NETWORK.md Phase 3.
@@ -345,6 +346,10 @@ static cmdopt_t cmdopts[] = {
     // this table is matched with strcmp and folds no case — the lesson
     // three dead boot entries taught on 2026-08-16 (commit 642eb9f).
     {"NOR8125", OPT_BOOL, &kEnableR8125, false, 0},
+    // The bottom-half flashlight (DOORBELL.md): every NIC stays TICK-DRIVEN —
+    // no INTx probe, no MSI — and knet wakes only when processSignals rings
+    // it. The path that carried every packet before the doorbell existed.
+    {"NETPOLL", OPT_BOOL, &kNetPoll, true, 0},
     {"DEBUG_NET", OPT_UINT128_OR, &kDebugLevel, DEBUG_NET, 0},
     // The NVMe command-stream histogram (nvme.c iostat) rides this level —
     // boot with DEBUG_NVME, run the workload, read the log.

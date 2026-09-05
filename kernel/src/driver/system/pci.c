@@ -448,3 +448,22 @@ pci_config_space_t *pci_get_config_space(uint8_t bus, uint8_t device, uint8_t fu
 
     return configSpace;
 }
+
+uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id)
+{
+	// Status bit 4 says the list exists at all; a function without it may
+	// carry garbage at 0x34, and following garbage is how walks wander.
+	uint32_t status_cmd = readPCIRegister(bus, device, function, 0x04);
+	if (((status_cmd >> 16) & 0x0010) == 0)
+		return 0;
+
+	uint8_t ptr = (uint8_t)(readPCIRegister(bus, device, function, 0x34) & 0xFC);
+	for (int hops = 0; ptr != 0 && hops < 48; hops++)
+	{
+		uint32_t entry = readPCIRegister(bus, device, function, ptr);
+		if ((entry & 0xFF) == cap_id)
+			return ptr;
+		ptr = (uint8_t)((entry >> 8) & 0xFC);
+	}
+	return 0;
+}

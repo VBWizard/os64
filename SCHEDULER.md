@@ -36,17 +36,23 @@ LAPIC timer (vector 0x7E, periodic) or self-IPI (0x81, from scheduler_trigger)
    2. Read ALL FIVE interrupt-frame fields (RIP,CS,RFLAGS,RSP,SS) — while
       still on the interrupted thread's stack, BEFORE the CR3 switch
       (invariants 1-3).
-   3. (BSP only) _check_signals → processSignals: wake expired ISLEEPers.
+   3. (BSP only) _check_signals → processSignals: wake expired ISLEEPers,
+      ring knet's doorbell once per tick, run the wake sweeps (DOORBELL.md).
    4. Save GP registers into the per-core mp_isrSaved*[apic_id] arrays.
    5. mov cr3, kKernelPML4; switch RSP to this core's scheduler stack.
    6. call scheduler_do:
       - take kSchedulerSwitchTasksLock (test-and-set spinlock)
+      - answer rung doorbells (service point A, doorbell_service_locked):
+        a parked thread whose bell rang is relinked RUNNABLE and expedited
       - peek the runnable queue (justBrowsing) — if the winner is already
         the current thread, shortcut out (no switch)
       - else: "Time to make the donuts. (switch threads)" and
         scheduler_run_new_thread():
           · store mp_isrSaved* → outgoing thread->regs; requeue it
             (RUNNABLE, or ISLEEP if SIGSLEEP, or ZOMBIE if exited)
+          · answer rung doorbells again (service point B): a sleeper whose
+            bell rang while it was still on the CPU has just gone ISLEEP
+            above, and comes straight back out here
           · pick incoming thread (scheduler_find_thread_to_run, for real
             this time — increments everyone's starvation ticks)
           · load incoming thread->regs → mp_isrSaved*; move to RUNNING;
