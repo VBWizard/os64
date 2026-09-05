@@ -175,3 +175,15 @@ bool r8125_phy_bmcr_out_of_service(uint16_t bmcr)
 		return true;
 	return (bmcr & (R8125_BMCR_PDOWN | R8125_BMCR_ISOLATE | R8125_BMCR_LOOPBACK)) != 0;
 }
+
+bool r8125_phy_restart_taken(uint16_t bmsr_before, uint32_t phystatus_before,
+                             uint16_t bmcr_now, uint16_t bmsr_now, uint32_t phystatus_now)
+{
+	if ((bmcr_now & R8125_BMCR_ANRESTART) == 0)
+		return true;   // the PHY consumed the restart bit
+	bool complete_dropped = (bmsr_before & R8125_BMSR_ANEGCOMPLETE) != 0 &&
+	                        (bmsr_now & R8125_BMSR_ANEGCOMPLETE) == 0;
+	bool link_fell = (phystatus_before & R8125_PHYS_LINK) != 0 &&
+	                 (phystatus_now & R8125_PHYS_LINK) == 0;
+	return complete_dropped || link_fell;
+}

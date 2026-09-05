@@ -395,6 +395,27 @@ static void test_phy_ocp_command_words(void)
 	}
 }
 
+static void test_phy_restart_taken(void)
+{
+	// The P5 mid-restart: bit 9 still set, complete and link still the OLD
+	// values — not taken yet (this is the "0 polls" snapshot that started it).
+	CHECK(!r8125_phy_restart_taken(0x79ad, 0xf08000f3, 0x1200, 0x79ad, 0xf08000f3),
+	      "stale complete+link read as taken");
+	// Then "complete" drops: taken. Or the MAC sees the link fall: taken.
+	CHECK(r8125_phy_restart_taken(0x79ad, 0xf08000f3, 0x1200, 0x798d, 0xf08000f3), "complete dropped");
+	CHECK(r8125_phy_restart_taken(0x79ad, 0xf08000f3, 0x1200, 0x79ad, 0xf08000f1), "link fell");
+	// The restart bit self-clearing is evidence on its own.
+	CHECK(r8125_phy_restart_taken(0x79ad, 0xf08000f3, 0x1000, 0x79ad, 0xf08000f3), "restart bit cleared");
+	// Codex's scenario: the link was DOWN and a negotiation already in
+	// flight before the write. Low levels are not a transition...
+	CHECK(!r8125_phy_restart_taken(0x7989, 0xf0800000, 0x1200, 0x7989, 0xf0800000),
+	      "pre-existing low levels read as taken");
+	// ...and that OLDER negotiation completing (complete 0->1, link 0->1,
+	// restart bit still pending) is the opposite transition — not taken.
+	CHECK(!r8125_phy_restart_taken(0x7989, 0xf0800000, 0x1200, 0x79ad, 0xf08000f3),
+	      "an older negotiation completing read as the restart taking");
+}
+
 static void test_phy_bmcr_service(void)
 {
 	// The P5 as found (autoneg on, the 1000 speed-select bit) and mid-restart.
@@ -585,6 +606,7 @@ int main(void)
 	test_phy_ocp_command_words();
 	test_phy_id_check();
 	test_phy_bmcr_service();
+	test_phy_restart_taken();
 	test_phy_status_decode();
 	test_phy_plan_leaves_a_correct_advertisement_alone();
 	test_phy_plan_adds_gigabit_and_drops_2500();

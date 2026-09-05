@@ -160,6 +160,17 @@ bool r8125_phy_id_is_realtek(uint16_t id1, uint16_t id2);
 // advertisement registers already read exactly as planned (Codex, PR #66).
 bool r8125_phy_bmcr_out_of_service(uint16_t bmcr);
 
+// Has THIS restart taken? Evidence tied to the write just made, never a
+// level that may have been low already: the self-clearing restart bit in
+// BMCR reading back clear (802.3 22.2.4.1.6), "complete" going from set to
+// clear, or the link going from up to down — each compared with the state
+// captured right before the BMCR write. A link that was already down, or a
+// negotiation already in flight, shows none of these until the restart
+// actually initiates; an older negotiation completing in the meantime
+// shows the opposite transitions and does not count (Codex, PR #66 round 2).
+bool r8125_phy_restart_taken(uint16_t bmsr_before, uint32_t phystatus_before,
+                             uint16_t bmcr_now, uint16_t bmsr_now, uint32_t phystatus_now);
+
 // ── PHYstatus (MAC register 0x6C), read as 32 bits ──────────────────────
 //
 // The 8169 generation's PHYstatus was one byte; the 8125 kept those eight

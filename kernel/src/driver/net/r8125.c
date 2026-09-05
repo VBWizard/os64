@@ -586,6 +586,17 @@ static void r8125_phy_print(r8125_t* r, const char* when, const r8125_phy_snapsh
 	       when, ours, theirs, link, r->phystatus);
 }
 
+// Put the three advertisement registers back to what a snapshot found. Best
+// effort by design: it runs on paths where a write has already failed, and
+// a window that stopped answering may refuse these too — the outcome is
+// printed by the caller either way, and the link stands as it was.
+static void r8125_phy_restore_advertisement(r8125_t* r, const r8125_phy_snapshot_t* found)
+{
+	r8125_phy_mii_write(r, R8125_MII_ANAR, found->anar);
+	r8125_phy_mii_write(r, R8125_MII_GBCR, found->gbcr);
+	r8125_phy_write(r, R8125_PHY_OCP_ADV_2500, found->adv2500);
+}
+
 // Identify the PHY, print the negotiation as found, set the advertisement,
 // and — only if that changed anything — restart negotiation and wait for
 // the link. Best effort throughout: a PHY that cannot be read is reported
@@ -675,33 +686,44 @@ static void r8125_phy_configure(r8125_t* r)
 		// a bit (a part that cannot do what was asked) shows here, and a
 		// write that stalls mid-way leaves a mixture that must not be
 		// negotiated.
+		// A mixture must never be left in the PHY, let alone negotiated: a
+		// write that stalls after ANAR took, or a readback that differs,
+		// both put back what was found (best effort — a window that stopped
+		// answering may refuse the restore too) and leave the link standing
+		// as it was. Restarting on a mixture would drop a working link and
+		// bring it back without the bit the PHY declined; leaving a mixture
+		// unrestarted would negotiate it at the next cable event (Codex, PR
+		// #66, both rounds).
 		if (!r8125_phy_mii_write(r, R8125_MII_ANAR, want.anar) ||
 		    !r8125_phy_mii_write(r, R8125_MII_GBCR, want.gbcr) ||
 		    !r8125_phy_write(r, R8125_PHY_OCP_ADV_2500, want.adv2500))
 		{
-			printf("r8125: PHY advertisement write did not complete — not renegotiating\n");
+			printf("r8125: PHY advertisement write did not complete — restoring it as found, not renegotiating\n");
+			r8125_phy_restore_advertisement(r, &found);
 			return;
 		}
 		r8125_phy_snapshot_t set;
 		if (!r8125_phy_snapshot(r, &set))
 		{
-			printf("r8125: PHY registers stopped answering after the write — not renegotiating\n");
+			printf("r8125: PHY registers stopped answering after the write — restoring it as found, not renegotiating\n");
+			r8125_phy_restore_advertisement(r, &found);
 			return;
 		}
 		if (set.anar != want.anar || set.gbcr != want.gbcr || set.adv2500 != want.adv2500)
 		{
-			// A mixture must not be negotiated: put back what was found,
-			// best effort, and leave the link standing as it was. Restarting
-			// here would drop a working link and bring it back without the
-			// bit the PHY declined (Codex, PR #66).
 			printf("r8125: PHY kept a different advertisement than written (ANAR 0x%04x/0x%04x GBCR 0x%04x/0x%04x 2.5G 0x%04x/0x%04x, wrote/read) — restoring it as found, not renegotiating\n",
 			       want.anar, set.anar, want.gbcr, set.gbcr, want.adv2500, set.adv2500);
-			r8125_phy_mii_write(r, R8125_MII_ANAR, found.anar);
-			r8125_phy_mii_write(r, R8125_MII_GBCR, found.gbcr);
-			r8125_phy_write(r, R8125_PHY_OCP_ADV_2500, found.adv2500);
+			r8125_phy_restore_advertisement(r, &found);
 			return;
 		}
 	}
+
+	// The state THIS restart will be judged against, read right before the
+	// write: "taken" below means a transition from here, never a level that
+	// may have been low already.
+	uint16_t bmsr_before = found.bmsr;
+	(void)r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr_before);
+	uint32_t phystatus_before = r8125_read32(r, R8125_PHYSTATUS);
 
 	printd(DEBUG_BOOT, "r8125: PHY renegotiating because %s\n", why);
 	if (!r8125_phy_mii_write(r, R8125_MII_BMCR, R8125_BMCR_RESTART_AUTONEG))
@@ -716,18 +738,24 @@ static void r8125_phy_configure(r8125_t* r)
 	// dropped — the P5 did exactly that on 2026-09-05: "took 0 ticks (0
 	// polls)", a snapshot taken mid-teardown (partner page already emptied,
 	// restart bit still pending), and then the real drop landed on the
-	// post-boot network tests. The restart has taken when BMSR stops saying
-	// complete (802.3: bit 1.5 clears when the process restarts), or when
-	// the MAC sees the link fall — either is unambiguous.
+	// post-boot network tests. "Taken" is evidence tied to THIS write
+	// (r8125_phy_restart_taken, host-tested): the self-clearing restart bit
+	// reading back clear, complete going set-to-clear, or the link going
+	// up-to-down, each against the state captured above. A link that was
+	// already down, or a negotiation already in flight, shows none of those
+	// until the restart really initiates — and an older negotiation
+	// completing meanwhile shows the opposite transitions, which do not
+	// count (Codex, PR #66 round 2).
 	uint64_t started = kTicksSinceStart;
 	uint32_t spins = 0;
 	bool restarted = false;
 	for (; spins < R8125_PHY_LINK_WAIT_SPINS; spins++)
 	{
-		uint16_t bmsr;
-		if (r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr) &&
-		    ((bmsr & R8125_BMSR_ANEGCOMPLETE) == 0 ||
-		     (r8125_read32(r, R8125_PHYSTATUS) & R8125_PHYS_LINK) == 0))
+		uint16_t bmcr, bmsr;
+		if (r8125_phy_mii_read(r, R8125_MII_BMCR, &bmcr) &&
+		    r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr) &&
+		    r8125_phy_restart_taken(bmsr_before, phystatus_before,
+		                            bmcr, bmsr, r8125_read32(r, R8125_PHYSTATUS)))
 		{
 			restarted = true;
 			break;
@@ -750,9 +778,9 @@ static void r8125_phy_configure(r8125_t* r)
 	// ends the wait; a timeout is reported, not fatal.
 	bool negotiated = false;
 	if (!restarted)
-		printd(DEBUG_BOOT, "r8125: PHY never showed the negotiation restarting (BMSR stayed "
-		       "'complete' and the link stayed up for %lu ticks) — not waiting for a completion "
-		       "that would be the old one\n", kTicksSinceStart - started);
+		printd(DEBUG_BOOT, "r8125: PHY never showed the restart taking within %lu ticks (restart bit "
+		       "still set, no complete-to-incomplete, no link fall) — not waiting for a completion "
+		       "that would be the old negotiation's\n", kTicksSinceStart - started);
 	else
 	{
 		for (; spins < R8125_PHY_LINK_WAIT_SPINS; spins++)
