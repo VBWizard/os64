@@ -12,6 +12,7 @@ download number exactly where it was, which is what this slice is for.*
 | P5 download, os64get of a 178MB file, Task Manager | ~33 Mbit/s | the receive ceiling, not the wire |
 | Same number at 100/full and at 1000/full | unchanged | link speed is not the limit |
 | QEMU virtio + slirp download (2026-08-29) | 660 KB/s | slirp is slow; QEMU measures RELATIVE change only |
+| Same rig, 2026-09-05, 10MB from a host `http.server`: merge base / this branch before the virtio TX reap / after | ~7 MB/s / 77 KB/s / 8.7 MB/s | the branch's wake-on-arrival keeps the window open, so slirp's bursts exceed the 64-slot TX ring's worth of ACKs; every refused ACK cost a 1.5s retransmit timeout until `virtio_net_transmit` reaped completions before refusing (the e1000 already did) |
 
 The mechanism is in `tcp.h`'s own words: the receive buffer is the advertised
 window, and the NICs are drained once per scheduler pass, so the ceiling is

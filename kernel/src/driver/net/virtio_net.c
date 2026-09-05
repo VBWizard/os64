@@ -260,6 +260,23 @@ static volatile uint8_t* virtio_map_region(uint64_t bar_phys, uint32_t offset, u
 }
 
 // ── Transmit ────────────────────────────────────────────────────────────────
+
+// Return every finished TX slot to the free stack. Caller holds vn->lock.
+// Shared by the drain and by transmit's ring-full path, so a completion the
+// device has already posted can never be the reason a frame is refused.
+static bool virtio_tx_reap_locked(vq_t* tx)
+{
+	bool moved = false;
+	while (tx->last_used != tx->used->idx)
+	{
+		volatile virtq_used_elem_t* e = &tx->used->ring[tx->last_used % tx->size];
+		tx->free_ids[tx->free_top++] = (uint16_t)e->id;
+		tx->last_used++;
+		moved = true;
+	}
+	return moved;
+}
+
 static int32_t virtio_net_transmit(net_device_t* dev, const void* frame, uint16_t length)
 {
 	virtio_net_t* vn = (virtio_net_t*)dev->driver_data;
@@ -272,6 +289,15 @@ static int32_t virtio_net_transmit(net_device_t* dev, const void* frame, uint16_
 
 	uint64_t irqflags = spinlock_acquire_irqsave(&vn->lock);
 	vq_t* tx = &vn->tx;
+
+	// Reap before declaring the ring full (the e1000's move): the stack
+	// answers every arriving segment with an ACK, and one drain can deliver
+	// more segments than this ring has slots, so a receive burst outruns
+	// the reap at the top of the drain while the device has long finished
+	// the earlier frames. An ACK refused here is an ACK the sender waits a
+	// whole retransmit timeout for.
+	if (tx->free_top == 0)
+		virtio_tx_reap_locked(tx);
 
 	if (tx->free_top == 0)
 	{
@@ -337,15 +363,7 @@ bool virtio_net_drain(struct net_device* dev)
 	bool moved = false;
 
 	uint64_t irqflags = spinlock_acquire_irqsave(&vn->lock);
-
-	vq_t* tx = &vn->tx;
-	while (tx->last_used != tx->used->idx)
-	{
-		volatile virtq_used_elem_t* e = &tx->used->ring[tx->last_used % tx->size];
-		tx->free_ids[tx->free_top++] = (uint16_t)e->id;
-		tx->last_used++;
-		moved = true;
-	}
+	moved = virtio_tx_reap_locked(&vn->tx);
 	spinlock_release_irqrestore(&vn->lock, irqflags);
 
 	// RX drain: one frame per lock hold, DELIVERED WITH THE LOCK RELEASED.
