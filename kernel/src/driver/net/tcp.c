@@ -1686,7 +1686,16 @@ void tcp_poll(void)
 		// ever prompt it — only this does, until it goes.
 		if (c->head_resend_pending && tcp_unacked(c) &&
 		    c->state != TCP_TIME_WAIT && c->state != TCP_CLOSED && !c->stripped)
+		{
 			tcp_retransmit_head(c);
+			// It went: the clock restarts now, not from the refused
+			// attempt — a refusal that lasted most of an RTO would
+			// otherwise let the timer fire before this resend had a
+			// round trip to earn its ack, and charge local backpressure
+			// as a network timeout.
+			if (!c->head_resend_pending)
+				tcp_rto_arm(c);
+		}
 
 		// The window update we owe a peer we stalled: once the reader
 		// drained our buffer, tell them they may speak again. Without
