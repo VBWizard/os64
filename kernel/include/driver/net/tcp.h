@@ -152,10 +152,13 @@ typedef enum tcp_state
 // its reader drains can be lost like any other segment, and nothing
 // retransmits it — a pure ACK is never acknowledged — so the sender has
 // to ask. The probe is one byte past the window (RFC 793 §3.7; the
-// peer drops it and answers with its current window), and from then on
-// the retransmit clock's backoff paces the asking. The first wait is at
-// least a second: a reader that drains within a round trip will say so
-// unprompted, and probing a paused reader five times a second is noise.
+// peer drops it and answers with its current window), asked again at
+// doubling intervals up to the retransmit ceiling, for as long as the
+// window stays shut — a persist wait has no death in it (4.4BSD's never
+// did): the wait is the peer's reader, not the network. The first wait
+// is at least a second: a reader that drains within a round trip will
+// say so unprompted, and probing a paused reader five times a second is
+// noise.
 #define TCP_PERSIST_MIN_TICKS (1 * TICKS_PER_SECOND)
 #define TCP_MSL_TICKS       (15 * TICKS_PER_SECOND)
 #define TCP_CONNECT_TIMEOUT (10 * TICKS_PER_SECOND)
@@ -224,13 +227,14 @@ typedef struct tcp_conn
 	uint8_t* snd_buf;
 	uint32_t snd_head;
 	uint32_t snd_count;
+	uint32_t snd_max;      // the highest sequence number ever sent: a send below it is a retransmission
 	bool     snd_fin;      // close() queued a FIN behind whatever is in the ring...
 	bool     snd_fin_sent; // ...and it has gone out: snd_nxt counts it, nothing follows it
-	uint64_t rto_deadline; // kTicksSinceStart when we resend the ring's head
+	uint64_t rto_deadline; // kTicksSinceStart when the timer resends
 	uint32_t rto_ticks;    // the timeout in force (doubles on each retry)
-	uint8_t  retries;
+	uint8_t  retries;      // timeouts in a row with no new data acknowledged
 	uint64_t persist_deadline; // when to probe a zero window (0 = not waiting on one)
-	uint64_t last_ack_at;      // when the peer last acknowledged anything: alive, whatever its window says
+	uint32_t persist_ticks;    // the probe interval in force (doubles per probe, up to the RTO ceiling)
 
 	// CONGESTION CONTROL (RFC 5681). cwnd caps what may be in flight
 	// alongside the peer's window; ssthresh is where slow start's doubling

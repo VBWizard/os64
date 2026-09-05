@@ -224,11 +224,14 @@ static void tcp_ack(tcp_conn_t* c)
 // Retransmission is always from the ring's head — the oldest unacked byte
 // — because that is the byte the peer is waiting for: a hole anywhere
 // else is behind it in sequence and delivers the moment the head does.
-// There are two cues. The timer (tcp_poll) is the slow one: nothing heard
-// for a whole RTO. Three duplicate acks (tcp_input) is the fast one, and
-// the reason a loss under a working connection costs one round trip and
-// not a timeout: every segment that lands past the hole makes the peer
-// repeat where it is, and three repeats cannot be reordering.
+// There are two cues, and they resend different amounts. The timer
+// (tcp_poll) is the slow one — nothing heard for a whole RTO — and it
+// says nothing about what else was lost, so it sends everything
+// outstanding again from the head, in order, under slow start. Three
+// duplicate acks (tcp_input) is the fast one, and the reason a loss under
+// a working connection costs one round trip and not a timeout: every
+// segment that lands past the hole makes the peer repeat where it is,
+// three repeats cannot be reordering, and the head alone is resent.
 
 // One clean round-trip sample, in ticks — Jacobson/Karels 1988, in the
 // paper's own integer form (RFC 6298 §2.3 says the same in reals):
@@ -266,19 +269,18 @@ static void tcp_rtt_sample(tcp_conn_t* c, uint32_t r)
 	       r, c->srtt_x8, c->rttvar_x4, c->rto);
 }
 
-// (Re)start the retransmit clock: the timeout in force, a fresh retry
-// budget. The RTO state belongs to WHAT IS OUTSTANDING, so it restarts
-// whenever that changes — the first segment into an empty window, or an
-// ACK that retired the head with more behind it (RFC 6298 §5.3).
-// Inheriting a spent budget across such a change is how a segment gets
-// sent once and never again. A timer that has backed off stays backed off
-// until the peer acknowledges new data (tcp_input's ack path says why).
+// (Re)start the retransmit clock with the timeout in force. The clock
+// belongs to WHAT IS OUTSTANDING, so it restarts whenever that changes —
+// the first segment into an empty window, or an ACK that retired the head
+// with more behind it (RFC 6298 §5.3). The retry BUDGET is not this
+// function's: it is spent by timeouts and refilled only by an ack of new
+// data (tcp_input), so a timeout's own resend cannot refill it. A timer
+// that has backed off stays backed off until that same ack.
 static void tcp_rto_arm(tcp_conn_t* c)
 {
 	if (!c->rto_backed_off)
 		c->rto_ticks = c->rto;
 	c->rto_deadline = kTicksSinceStart + c->rto_ticks;
-	c->retries = 0;
 }
 
 // Start the round-trip stopwatch on a segment ending at `seq_end`, if none
@@ -307,18 +309,17 @@ static void tcp_snd_copy_out(const tcp_conn_t* c, uint32_t off, uint8_t* dst, ui
 		memcpy(dst + first, c->snd_buf, len - first);
 }
 
-// Send the ring's bytes [off, off+len) as one segment, with the FIN if
-// this segment reaches the end of a ring behind which one is queued. The
-// ACK bit always rides data: there is always something to acknowledge
-// once the handshake is done.
-static void tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len)
+// Send the ring's bytes [off, off+len) as one segment, the FIN riding it
+// if the caller says so (tcp_output decides whether the FIN's sequence
+// unit fits the window; a retransmit repeats what the segment first
+// carried). The ACK bit always rides data: there is always something to
+// acknowledge once the handshake is done.
+static void tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len, bool fin)
 {
 	uint8_t payload[TCP_MSS];
 	tcp_snd_copy_out(c, off, payload, len);
-	uint8_t flags = TCP_ACK;
-	if (c->snd_fin && off + len == c->snd_count)
-		flags |= TCP_FIN;
-	tcp_send_segment(c, c->snd_una + off, flags, payload, (uint16_t)len, false);
+	tcp_send_segment(c, c->snd_una + off, fin ? (TCP_FIN | TCP_ACK) : TCP_ACK,
+	                 payload, (uint16_t)len, false);
 }
 
 // The opening SYN: no ACK bit (there is nothing yet to acknowledge, and a
@@ -330,6 +331,7 @@ static void tcp_send_syn(tcp_conn_t* c)
 {
 	tcp_send_segment(c, c->snd_nxt, TCP_SYN, NULL, 0, true);
 	c->snd_nxt += 1;
+	c->snd_max = c->snd_nxt;
 	tcp_rto_arm(c);
 	tcp_rtt_start(c, c->snd_nxt);
 }
@@ -394,51 +396,94 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		if (in_flight > 0 && chunk < c->snd_mss && chunk < unsent)
 			break;                                         // SWS: neither full nor final; wait for the ack
 
+		// THE FIN IS A SEQUENCE NUMBER TOO, and it has to fit the peer's
+		// window like any byte: a FIN one past the window's edge is
+		// dropped at the door (RFC 793 §3.9's acceptability test), and
+		// snd_fin_sent would then keep it from going again until the
+		// timer. So it rides this segment only if the window has a unit
+		// to spare past the data; otherwise it stays queued for the next
+		// pass, when an ack has widened the window.
+		bool fin = c->snd_fin && in_flight + chunk == c->snd_count && chunk + 1 <= usable;
+		// Below snd_max this is a RESEND — a timeout pulled snd_nxt back
+		// (tcp_poll) and the ring is going out again in order. It counts as
+		// one, and it starts no stopwatch (Karn).
+		bool resend = seq_lt(c->snd_una + in_flight, c->snd_max);
 		if (!tcp_unacked(c))
 			tcp_rto_arm(c);                                // first thing into an empty window: the clock starts
-		tcp_send_data_segment(c, in_flight, chunk);
-		tcp_rtt_start(c, c->snd_una + in_flight + chunk);
+		tcp_send_data_segment(c, in_flight, chunk, fin);
+		if (resend)
+		{
+			c->retransmits++;
+			kTcpStats.retransmits++;
+		}
+		else
+			tcp_rtt_start(c, c->snd_una + in_flight + chunk);
 		// The send-side twin of TCPRX: every term of throughput = window /
 		// round trip, per segment, so one DEBUG_NET boot answers "which
 		// window held the upload back" without theorizing first.
-		printd(DEBUG_NET, "TCPTX t=%lu seq=%u len=%u inflight=%u queued=%u wnd=%u cwnd=%u\n",
+		printd(DEBUG_NET, "TCPTX t=%lu seq=%u len=%u inflight=%u queued=%u wnd=%u cwnd=%u%s\n",
 		       kTicksSinceStart, c->snd_una + in_flight, chunk, in_flight + chunk,
-		       c->snd_count - in_flight - chunk, c->snd_wnd, c->cwnd);
+		       c->snd_count - in_flight - chunk, c->snd_wnd, c->cwnd, resend ? " resend" : "");
 		in_flight += chunk;
 		c->snd_nxt += chunk;
 		sent_any = true;
-		if (c->snd_fin && in_flight == c->snd_count)
+		if (fin)
 		{
-			c->snd_fin_sent = true;                        // it rode that segment (tcp_send_data_segment)
+			c->snd_fin_sent = true;                        // it rode that segment
 			c->snd_nxt += 1;
 		}
+		if (seq_gt(c->snd_nxt, c->snd_max))
+			c->snd_max = c->snd_nxt;
 	}
 
-	// A FIN with nothing to carry it: the ring was already empty, or its
-	// last segment went out before close() queued the FIN.
-	if (c->snd_fin && !c->snd_fin_sent && in_flight == c->snd_count)
+	// A FIN with nothing to carry it: the ring was already empty, its last
+	// segment went out before close() queued the FIN, or the last segment
+	// filled the window to the byte and the FIN had to wait. Sent when its
+	// sequence unit is inside the peer's window — or when nothing is in
+	// flight at all, since a zero-length segment AT rcv_nxt is acceptable
+	// whatever the window says (§3.9's table, the zero-window row).
+	if (c->snd_fin && !c->snd_fin_sent && in_flight == c->snd_count &&
+	    (in_flight == 0 || in_flight < c->snd_wnd))
 	{
 		if (!tcp_unacked(c))
 			tcp_rto_arm(c);
 		tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false);
+		if (seq_lt(c->snd_nxt, c->snd_max))
+		{
+			c->retransmits++;                              // the FIN went out before a timeout pulled it back
+			kTcpStats.retransmits++;
+		}
 		c->snd_fin_sent = true;
 		c->snd_nxt += 1;
+		if (seq_gt(c->snd_nxt, c->snd_max))
+			c->snd_max = c->snd_nxt;
 		sent_any = true;
 	}
 
 	// Data waiting, nothing in flight, and the window says stop: start the
-	// persist clock, unless it is already running. Anything in flight makes
-	// it unnecessary — that segment's ack will carry the window.
+	// persist clock, unless it is already running — at the RTO or a second,
+	// whichever is longer, then doubling per probe up to the RTO ceiling.
+	// Anything in flight makes it unnecessary (that segment's ack will
+	// carry the window), and a window that is open again resets the
+	// interval for the next time.
 	if (!sent_any && in_flight == 0 && c->snd_count > 0 && c->snd_wnd == 0)
 	{
 		if (c->persist_deadline == 0)
 		{
-			uint32_t wait = c->rto > TCP_PERSIST_MIN_TICKS ? c->rto : TCP_PERSIST_MIN_TICKS;
-			c->persist_deadline = kTicksSinceStart + wait;
+			uint32_t floor = c->rto > TCP_PERSIST_MIN_TICKS ? c->rto : TCP_PERSIST_MIN_TICKS;
+			uint32_t next = c->persist_ticks == 0 ? floor : c->persist_ticks * 2;
+			if (next > TCP_RTO_MAX_TICKS)
+				next = TCP_RTO_MAX_TICKS;
+			c->persist_ticks = next;
+			c->persist_deadline = kTicksSinceStart + next;
 		}
 	}
 	else
+	{
 		c->persist_deadline = 0;
+		if (c->snd_wnd != 0)
+			c->persist_ticks = 0;
+	}
 }
 
 // Resend what the peer is waiting for: the SYN while the handshake is
@@ -462,7 +507,8 @@ static void tcp_retransmit_head(tcp_conn_t* c)
 		return;
 	}
 	uint32_t len = in_flight < c->snd_mss ? in_flight : c->snd_mss;
-	tcp_send_data_segment(c, 0, len);
+	// The FIN rode the head only if the head IS the last segment out.
+	tcp_send_data_segment(c, 0, len, c->snd_fin_sent && len == in_flight);
 }
 
 // Loss has been detected, one way or the other: RFC 5681 §3.1's response.
@@ -835,10 +881,13 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		return;
 	}
-	if (synchronized && (flags & TCP_ACK) && seq_gt(ack, c->snd_nxt))
+	// Judged against snd_max, not snd_nxt: after a timeout pulls snd_nxt
+	// back to the head, the peer may acknowledge anything up to what it
+	// had already received — everything between is ours, sent once.
+	if (synchronized && (flags & TCP_ACK) && seq_gt(ack, c->snd_max))
 	{
-		printd(DEBUG_NET, "tcp: ACK 0x%x for bytes we have not sent (snd_nxt 0x%x) — dropped\n",
-		       ack, c->snd_nxt);
+		printd(DEBUG_NET, "tcp: ACK 0x%x for bytes we have not sent (snd_max 0x%x) — dropped\n",
+		       ack, c->snd_max);
 		tcp_ack(c);
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		return;
@@ -847,16 +896,18 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	// The peer's window, taken from any segment whose ack is current
 	// (RFC 793's SND.WL check pared down to what is reachable here: an ack
 	// behind snd_una is a straggler, and its window is a stale one). A
-	// window that was ZERO and is not any more, with something unacked, is
-	// the reopening the persist probe has been asking about — the probe
-	// was dropped at the peer's door, so the head is resent now rather
-	// than when the backed-off timer next fires.
+	// window that was ZERO and is not any more, with something unacked
+	// that THIS segment does not acknowledge, is the reopening the persist
+	// probe has been asking about with the probe dropped at the peer's
+	// door — so the head is resent now rather than when the backed-off
+	// timer next fires. An ack that advances took the probe: the ack path
+	// below retires it and sends into the new window, and resending here
+	// would count a retransmit and cancel a sample for a byte that landed.
 	uint16_t old_wnd = c->snd_wnd;
 	if (!(flags & TCP_ACK) || seq_geq(ack, c->snd_una))
 		c->snd_wnd = win;
-	if (synchronized && (flags & TCP_ACK))
-		c->last_ack_at = kTicksSinceStart;
-	if (synchronized && old_wnd == 0 && c->snd_wnd > 0 && tcp_unacked(c) && !c->stripped)
+	if (synchronized && old_wnd == 0 && c->snd_wnd > 0 && tcp_unacked(c) && !c->stripped &&
+	    !((flags & TCP_ACK) && seq_gt(ack, c->snd_una)))
 	{
 		tcp_retransmit_head(c);
 		tcp_rto_arm(c);
@@ -954,13 +1005,23 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				uint32_t acked = ack - c->snd_una;
 				uint32_t ring_acked = acked;
-				if (c->snd_fin_sent && ack == c->snd_nxt)
-					ring_acked -= 1;                 // the FIN's number names no ring byte
-				if (ring_acked > c->snd_count)
-					ring_acked = c->snd_count;       // said rather than trusted: the guard above already refused acks past snd_nxt
+				// The only sequence number past the ring's bytes is the
+				// FIN's, so an ack that reaches past them acknowledges the
+				// FIN — whether it went out just now, or before a timeout
+				// pulled snd_nxt back and forgot that it had (the guard
+				// above admits nothing past snd_max).
+				bool fin_acked = false;
+				if (acked > c->snd_count)
+				{
+					ring_acked = c->snd_count;
+					fin_acked = true;
+					c->snd_fin_sent = true;
+				}
 				c->snd_head = (c->snd_head + ring_acked) % TCP_SND_BUF;
 				c->snd_count -= ring_acked;
 				c->snd_una = ack;
+				if (seq_lt(c->snd_nxt, c->snd_una))
+					c->snd_nxt = c->snd_una;         // a pulled-back snd_nxt skips what the peer already holds
 				// Progress ends the backoff (4.4BSD's t_rxtshift = 0): the
 				// peer is answering, so the next timeout is the estimator's
 				// again, not the doubled one. Karn's rule is about SAMPLING
@@ -969,8 +1030,10 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				// on the rig's delay+loss leg and charged a tail loss all of
 				// it: a windowed sender under loss rarely goes a whole
 				// window without a resend, so the sample it waited for
-				// rarely came.
+				// rarely came. The retry budget refills on the same
+				// evidence — it is what the exhaustion branch spends.
 				c->rto_backed_off = false;
+				c->retries = 0;
 				if (c->rtt_timing && seq_geq(ack, c->rtt_seq))
 				{
 					c->rtt_timing = false;
@@ -1003,7 +1066,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				// Our FIN being acknowledged is a state transition, not
 				// just bookkeeping — and only the FIN's own ack is: the
 				// FIN may still be queued behind data this ack retired.
-				if (c->snd_fin_sent && seq_geq(ack, c->snd_nxt))
+				if (fin_acked)
 				{
 					if (c->state == TCP_FIN_WAIT_1)
 						c->state = TCP_FIN_WAIT_2;
@@ -1021,7 +1084,16 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			         win == old_wnd && c->snd_wnd != 0)
 			{
 				c->dup_acks++;
-				if (c->dup_acks == 3)
+				if (c->dup_acks == 3 && !seq_gt(c->snd_una, c->recover))
+				{
+					// Duplicates for data BELOW the last recovery mark — the
+					// go-back-N resends after a timeout, which the peer
+					// largely already holds, each draw one — are not a
+					// loss signal (RFC 6582 §3.2 step 1B). Count them
+					// down again and wait for the timer or real progress.
+					c->dup_acks = 0;
+				}
+				else if (c->dup_acks == 3)
 				{
 					c->recover = c->snd_nxt;         // recovery ends when the peer reaches here
 					tcp_congestion_loss(c, false);
@@ -1357,14 +1429,12 @@ void tcp_poll(void)
 		if (tcp_unacked(c) && c->state != TCP_TIME_WAIT && c->state != TCP_CLOSED &&
 		    now >= c->rto_deadline)
 		{
-			// A peer holding a ZERO window and still answering is alive,
-			// and the budget does not run out on it: the wait is the
-			// peer's reader, not the network, and a persist wait has no
-			// death in it (4.2BSD's never did). What is out there is the
-			// probe byte, and it keeps being asked at the ceiling interval.
-			bool peer_holding = c->snd_wnd == 0 &&
-			                    c->last_ack_at + c->rto_ticks >= c->rto_deadline;
-			if (++c->retries > TCP_MAX_RETRIES && !peer_holding)
+			// A peer holding a ZERO window is not gone: what is out there
+			// is the probe byte, the wait is the peer's reader and not the
+			// network, and a persist wait has no death in it (tcp.h
+			// TCP_PERSIST_MIN_TICKS). The budget is spent only on a window
+			// that was open.
+			if (++c->retries > TCP_MAX_RETRIES && c->snd_wnd != 0)
 			{
 				// No connect_timeouts count here, and that is not an
 				// omission: dial's own 10-second deadline gives up on a
@@ -1384,15 +1454,45 @@ void tcp_poll(void)
 				c->rto_ticks *= 2;
 				if (c->rto_ticks > TCP_RTO_MAX_TICKS)
 					c->rto_ticks = TCP_RTO_MAX_TICKS;
-				c->rto_deadline = now + c->rto_ticks;
 				c->rto_backed_off = true;   // stays doubled until the peer acknowledges new data
 				// A timeout is loss found the slow way, and the network's
 				// state is unknown: back to one segment and slow-start up.
+				// It also ENDS any fast recovery in progress — with the
+				// duplicate count still standing, the next new ack would be
+				// read as a partial ack of a recovery that the timeout has
+				// already superseded.
 				tcp_congestion_loss(c, true);
-				tcp_retransmit_head(c);
-				printd(DEBUG_NET, "tcp: retransmit #%u to %u.%u.%u.%u:%u (rto %u ticks, cwnd %u)\n",
+				c->dup_acks = 0;
+				c->recover = c->snd_max;    // no fast retransmit until the peer is past everything sent before this (RFC 6582 §3.2)
+				c->rtt_timing = false;      // Karn: nothing sent from here is a sample
+				if (c->state == TCP_SYN_SENT)
+				{
+					c->rto_deadline = now + c->rto_ticks;
+					tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true);
+					c->retransmits++;
+					kTcpStats.retransmits++;
+				}
+				else
+				{
+					// GO BACK TO THE HEAD (4.4BSD's snd_nxt = snd_una): the
+					// timer knows only that the head is gone, and a timeout
+					// is the one cue that gives no hint about the rest —
+					// so everything outstanding is sent again, in order,
+					// paced by slow start from one segment, and the acks
+					// that come back say what actually arrived. Resending
+					// the head alone and waiting to hear about the rest
+					// costs one backed-off timeout per further hole
+					// (measured on the rig: 0.5s, then 1.4s, for two holes
+					// behind one timeout). tcp_output arms the clock with
+					// the backed-off timer as it sends; the persist takes
+					// over if the window is shut.
+					c->snd_nxt = c->snd_una;
+					c->snd_fin_sent = false;
+					tcp_output(c, false);
+				}
+				printd(DEBUG_NET, "tcp: timeout #%u to %u.%u.%u.%u:%u (rto %u ticks, cwnd %u, %u bytes to resend)\n",
 				       (uint32_t)c->retries, NET_IPV4_OCTETS(c->peer_ip),
-				       c->peer_port, c->rto_ticks, c->cwnd);
+				       c->peer_port, c->rto_ticks, c->cwnd, c->snd_count);
 			}
 		}
 
@@ -1593,6 +1693,8 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	uint32_t iss = tcp_initial_seq(peer_ip, peer_port, c->local_port);
 	c->snd_una = iss;
 	c->snd_nxt = iss;
+	c->snd_max = iss;
+	c->recover = iss;      // RFC 6582's starting point: below it, no recovery has ever run
 	c->state = TCP_SYN_SENT;
 
 	c->next = kTcpConnList;

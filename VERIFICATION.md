@@ -218,17 +218,23 @@ same 21 segments lost each time (2026-09-04 — three kernels in one day):
 |---|---|---|---|---|
 | none | 0.8s | 0.8s | 0.03s | `srtt_ms 10`, `rto_ms 200` (the floor); the window sends 100KB in one slow-start burst |
 | `loss 0.1` up | 11.8s | 3.3s | 0.02s | `retransmits 10`, `fast_retransmits 4` — every hole found by duplicate acks, none by the timer |
-| `delay 100` both + `loss 0.1` up | 31.5s | 19.9s | 5.1s | `srtt_ms 210`; ~7 loss events at a 200ms round trip, each a recovery round trip and a halved cwnd — what NewReno costs at 10% loss; SACK is the next number down |
+| `delay 100` both + `loss 0.1` up | 31.5s | 19.9s | 4.7s | `srtt_ms 210`; ~7 loss events at a 200ms round trip, each a recovery round trip and a halved cwnd — what NewReno costs at 10% loss; SACK is the next number down |
 
-Two of the window's own lessons are in that third column. The first cut
-(Reno, RFC 5681 alone) read **6.7s on the loss leg — slower than
-stop-and-wait**: a fast retransmit filled the first hole and the ack landed
-on the second, where only two duplicates could ever follow, so every further
-hole in the window waited for a backed-off timer (0.6s, 0.8s, 1.6s, 3.2s in
-the capture). NewReno's partial-ack rule (RFC 6582) took it to 0.09s. The
-second, on the delay leg: a tail loss cost 3.7s because the doubled timer
-waited for a clean sample that a windowed sender under loss rarely gets;
-4.4BSD's rule — progress ends the backoff — took the leg from 9.0s to 5.1s.
+Three of the window's own lessons are in that third column, each read off
+the capture. The first cut (Reno, RFC 5681 alone) read **6.7s on the loss
+leg — slower than stop-and-wait**: a fast retransmit filled the first hole
+and the ack landed on the second, where only two duplicates could ever
+follow, so every further hole in the window waited for a backed-off timer
+(0.6s, 0.8s, 1.6s, 3.2s). NewReno's partial-ack rule (RFC 6582) took it to
+0.09s. The second, on the delay leg: a tail loss cost 3.7s because the
+doubled timer waited for a clean sample that a windowed sender under loss
+rarely gets; 4.4BSD's rule — progress ends the backoff — took the leg from
+9.0s to 5.1s. The third, found answering the first review round: a timeout
+resent only the head, and every further hole behind it then waited for its
+own timeout (0.5s, then 1.4s, for two holes behind one). 4.4BSD's go-back-N
+— `snd_nxt = snd_una`, everything outstanding resent in order under slow
+start — took the leg to 4.7s, with no gap over a quarter second anywhere
+in its capture.
 
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
 under jitter, as a real pipe does, so a delay leg measures the clock and only
