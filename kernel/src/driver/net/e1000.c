@@ -745,6 +745,9 @@ static bool e1000_setup_tx(e1000_t* e)
 // which callers render as nothing at all.
 static void e1000_read_link_mode(e1000_t* e, uint32_t status)
 {
+	// The seam's verbatim link word (net_device.h): STATUS, whatever it says.
+	snprintf(e->netdev.link_raw, sizeof(e->netdev.link_raw), "0x%08x", status);
+
 	if (!(status & STATUS_LU))
 	{
 		e->netdev.link_mbps  = 0;

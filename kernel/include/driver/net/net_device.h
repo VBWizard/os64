@@ -84,6 +84,16 @@ typedef struct net_device
 	uint32_t link_mbps;         // 10 / 100 / 1000 / 2500 …, 0 = not known
 	bool full_duplex;           // meaningless unless link_mbps is nonzero
 
+	// THE HARDWARE'S OWN LINK WORD, verbatim, for the day the decode above is
+	// not the whole story (2026-09-05: the P5 at 100/full on a gigabit
+	// switch, and the number that explained it was in no file anyone could
+	// read). A driver formats its status register here as hex — PHYstatus on
+	// the r8125, STATUS on the e1000 — meaningful only to someone with that
+	// chip's register map, and never decoded by the seam. Same contract as
+	// model and location: empty means the driver has no such word (virtio
+	// has no wire), and /sys/net omits the line.
+	char link_raw[16];          // "0x0000004b"
+
 	// WHAT THIS CARD ACTUALLY IS, for /sys/net/<card> (2026-08-20). The name
 	// above is the stack's handle for it; these two are the hardware's own
 	// answer, and they are what a person reads to check that the driver that

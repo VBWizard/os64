@@ -68,13 +68,21 @@ typedef struct
 // stack, deals in frame lengths without those trailing CRC bytes.
 #define R8125_RX_FCS_LEN 4u
 
-// Receive error bits [8169-family] — UNCONFIRMED for the 8125's descriptor
-// and treated accordingly: a descriptor carrying ANY of them is counted as
-// an rx_error and dropped rather than delivered. That is the safe direction
-// under uncertainty — the worst case of a wrong bit here is discarding a
-// good frame, which shows up as a counter and a retransmit, whereas the
-// worst case of ignoring errors is feeding the protocol stack garbage that
-// the hardware already knew was damaged.
+// Receive error bits [8169-family], confirmed against the vendor driver's
+// RxRWT/RxRES/RxRUNT/RxCRC (2026-09-05). A descriptor carrying ANY of them
+// is counted as an rx_error and dropped rather than delivered: the worst
+// case of a wrong bit here is discarding a good frame, which shows up as a
+// counter and a retransmit, whereas the worst case of ignoring errors is
+// feeding the protocol stack garbage that the hardware already knew was
+// damaged.
+//
+// A CAVEAT THAT IS EASY TO TRIP OVER WHEN READING THE VENDOR SOURCE: the
+// vendor driver opts this chip into a 32-byte "V3" receive descriptor by
+// setting RxConfig bit 24 (EnableRxDescV3), and the V3 layout puts these
+// same error bits at DIFFERENT positions. This driver never sets that bit,
+// so the chip uses the classic 16-byte descriptor described here — the one
+// the P5 has moved every frame with. Copy the vendor's RxConfig value and
+// this whole file's layout silently stops being true.
 #define R8125_RX_RES   (1u << 21)   // receive error summary
 #define R8125_RX_RWT   (1u << 22)   // watchdog timer expired
 #define R8125_RX_RUNT  (1u << 20)   // runt packet
