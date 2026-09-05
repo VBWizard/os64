@@ -598,6 +598,30 @@ void renderer_glass_clear_locked(void)
 	clear_framebuffer_full(&kRenderer);
 }
 
+// A full tty repaint covers complete cells; fill the remainder strips here
+// under the same renderer lock. Honor deferred painting so the paper and
+// cells reach VRAM in the same frame, and keep the shadow pixel-consistent.
+void renderer_glass_background_locked(uint32_t color)
+{
+	kFrameBufferBackgroundColor = color;
+	struct Framebuffer *fb = kRenderer.framebuffer;
+	uint32_t cell_width = renderer_cols() * FONT_WIDTH;
+	uint32_t cell_height = renderer_rows() * FONT_HEIGHT;
+	uint32_t *pixels = (uint32_t *)fb->base_address;
+	for (uint32_t y = 0; y < fb->height; y++)
+	{
+		uint32_t start = y < cell_height ? cell_width : 0;
+		for (uint32_t x = start; x < fb->width; x++)
+		{
+			size_t index = (size_t)y * fb->pixels_per_scan_line + x;
+			if (!s_glassDirty)
+				pixels[index] = color;
+			if (kRenderer.shadow != NULL)
+				kRenderer.shadow[index] = color;
+		}
+	}
+}
+
 void renderer_glass_defer_locked(void)
 {
 	// Only meaningful with a shadow to defer INTO: pre-shadow, put_char

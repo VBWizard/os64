@@ -81,7 +81,18 @@ from this vocabulary:
 | `\?` | the last command's exit status |
 | `\j` | background jobs being tracked |
 | `\n` | newline, for a two-line prompt |
+| `\e` | an escape byte for terminal control sequences, including colour |
 | `\\` | a literal backslash |
+
+The terminal reads the colour and cursor sequences an escape byte begins
+(CLAUDE.md § The terminal's escape sequences), so a green prompt is:
+
+```
+export PROMPT="\e[1;32m\W\e[0m$ "
+```
+
+`\e[0m` at the end is not optional politeness — without it, everything the
+next command prints inherits the colour.
 
 ```
 export PROMPT="\w $ "
@@ -121,12 +132,13 @@ all — a prompt is cosmetic, so refusing to draw one over a typo would be
 hostile, and a stray `\q` on every line is a louder tripwire than a message
 you would see once.
 
-Absent because os64 has nothing to put in them: `\u` (no users), `\h` (above),
-`\$`'s `#`-for-root (no privilege levels), and `\[ \]` (the console has no ANSI
-escape parser, so there are no zero-width sequences to guard — and husk's
-rub-out counts typed characters rather than columns, so prompt width is not
-load-bearing either). `\!` is available the day anyone wants it; the history
-ring is already there.
+Expanded prompts are limited to 255 bytes. A longer expansion uses `husk> `
+instead, before any custom prompt bytes are written: truncating a CSI or OSC
+sequence could otherwise consume the next command's echoed characters.
+
+Absent: `\u` (no users), `\h` (above), `\$`'s `#`-for-root (no privilege
+levels), and `\[ \]` (husk's rub-out counts typed characters rather than
+measuring prompt columns, so it needs no zero-width delimiters).
 
 ## Builtins — only what MUST live in the shell
 
