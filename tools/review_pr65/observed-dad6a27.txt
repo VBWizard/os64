@@ -1,0 +1,11 @@
+refused data after 100 seconds: state=5 detached=1 stripped=0 queued=1000 retries=0 unacked=0 attempts=10001
+refused detached probe: closed=1 after=6 ticks retries=7 attempts=6 stripped=1
+refused RTO resend after 100 seconds: outstanding=10000 cursor_span=0 unacked=0 retries=1
+normal fast retransmit: fast=1 dup=3 cwnd=8000
+first loss after 2GiB clean: fast=0 dup=0 cwnd=10000 recover=1000 una=2147484664
+one-byte partial ACK: cwnd 8000 -> 8999 (expected 7999)
+limited transmit flight before third duplicate=12000
+threshold including limited transmit=6000 (expected 5000)
+same head second RTO: ssthresh 5000 -> 2000 (expected unchanged)
+burst after 60s idle: sent=65535 packets=66 initial_window=10000
+positive controls: ring+sequence wrap, FIN close/reap, late pre-RTO cumulative ACK, persist reply/reopen: PASS

@@ -66,16 +66,25 @@ static inline bool seq_leq(uint32_t a, uint32_t b) { return (int32_t)(a - b) <= 
 static inline bool seq_gt(uint32_t a, uint32_t b)  { return (int32_t)(a - b) >  0; }
 static inline bool seq_geq(uint32_t a, uint32_t b) { return (int32_t)(a - b) >= 0; }
 
-// Is anything we sent still waiting for its acknowledgement? This is the
-// retransmit slot's ARMED test, and it is asked of the sequence space
-// rather than of snd_len because a SYN and a FIN each occupy a sequence
-// number while carrying no bytes: judged by byte count, a bare SYN or FIN
-// was never armed, so a lost one was never resent — every dial into a
-// black hole sat out its full deadline on ONE packet, and a lost FIN left
-// the peer holding open a conversation we had already forgotten.
-// Disarming needs no site of its own: the ACK that advances snd_una to
-// snd_nxt is the disarm.
-static inline bool tcp_unacked(const tcp_conn_t* c) { return seq_gt(c->snd_nxt, c->snd_una); }
+// Outstanding responsibility uses the submission high-water mark. Moving the
+// retransmission cursor does not acknowledge a byte or stop its timer.
+static inline bool tcp_unacked(const tcp_conn_t* c) { return seq_gt(c->snd_max, c->snd_una); }
+
+static inline uint32_t tcp_bytes_in_flight(const tcp_conn_t* c)
+{
+	uint32_t span = c->snd_max - c->snd_una;
+	uint32_t units = (c->state == TCP_SYN_SENT ? 1 : 0) +
+	                 (c->snd_fin_sent && seq_leq(c->snd_una, c->snd_fin_seq) ? 1 : 0);
+	return span > units ? span - units : 0;
+}
+
+static void tcp_abort(tcp_conn_t* c)
+{
+	c->reset = true;
+	c->state = TCP_CLOSED;
+	c->send_timer = TCP_TIMER_IDLE;
+	c->rtt_timing = false;
+}
 
 // The initial sequence number. RFC 793 specified a clock-based ISN, and
 // Robert Morris showed in 1985 that a PREDICTABLE ISN lets an attacker
@@ -140,8 +149,11 @@ static uint16_t tcp_window(tcp_conn_t* c)
 // Build and transmit one segment. `with_mss` adds the MSS option, which
 // only ever rides a SYN (that is the one moment both sides are allowed to
 // state their limits).
-static void tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
-                             const void* data, uint16_t data_len, bool with_mss)
+// The disposition is decided with submission. Driver drops remain TCP's
+// responsibility like network loss; PARKED/DROPPED stop a bulk output pass.
+// INVALID is a packet IPv4 cannot construct and terminates the connection.
+static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
+                                  const void* data, uint16_t data_len, bool with_mss)
 {
 	uint8_t seg[TCP_HDR_MIN + 4 + TCP_MSS];
 	uint16_t hdr_len = TCP_HDR_MIN + (with_mss ? 4 : 0);
@@ -185,30 +197,35 @@ static void tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	sum = net_checksum_add(sum, seg, total);
 	net_write16(seg + 16, net_checksum_fold(sum));
 
-	ipv4_send(c->dev, c->peer_ip, IPV4_PROTO_TCP, seg, total);
-	kTcpStats.segments_out++;
-	if (data_len)
+	ipv4_tx_t how = IPV4_TX_DROPPED;
+	ipv4_send_from_ex(c->dev, kNetIPv4Address, c->peer_ip, IPV4_PROTO_TCP, seg, total, &how);
+	if (how == IPV4_TX_INVALID)
+		tcp_abort(c);
+	else
+	{
+		// TCP attempts include local drops and retransmissions. Device
+		// counters report accepted frames; neither promises peer receipt.
+		kTcpStats.segments_out++;
 		c->tx_bytes += data_len;
+		if (how == IPV4_TX_DROPPED)
+			kTcpStats.tx_local_drops++;
+	}
+	return how;
 }
 
-// A bare acknowledgement: no data, no state change, just "I'm up to here"
-// (and, implicitly, "here is my current window").
+// A bare acknowledgement advertises receive progress and the current window.
+// During persist, use the oldest unacknowledged sequence as BSD does.
 static void tcp_ack(tcp_conn_t* c)
 {
-	tcp_send_segment(c, c->snd_nxt, TCP_ACK, NULL, 0, false);
+	tcp_send_segment(c, c->send_timer == TCP_TIMER_PERSIST ? c->snd_una : c->snd_max,
+	                 TCP_ACK, NULL, 0, false);
 }
 
-// Arm the retransmit slot with a segment and send it. Everything that must
-// survive loss — SYN, data, FIN — goes out through here. The flags are
-// recorded as sent, because a retransmission must repeat them exactly:
-// a SYN carries no ACK bit (there is nothing yet to acknowledge, and a
-// listener answers a SYN+ACK it never asked for with RST), while data and
-// FIN always do.
-// Start the retransmit clock over: initial timeout, fresh retry budget.
-// The RTO state belongs to WHAT IS OUTSTANDING, so it restarts whenever
-// that changes — a new segment, a FIN joining one already in flight, or an
-// ACK that retired part of one (RFC 6298 §5.3). Inheriting a spent budget
-// across such a change is how a segment gets sent once and never again.
+// ── 2a. THE SENDER ─────────────────────────────────────────────────────────
+// The ring retains bytes until acknowledged. snd_max records normal send
+// attempts, snd_nxt selects the next output position, and a persist probe has
+// its own ACK eligibility. See TCP_SENDER.md for timer and recovery invariants.
+
 // One clean round-trip sample, in ticks — Jacobson/Karels 1988, in the
 // paper's own integer form (RFC 6298 §2.3 says the same in reals):
 // err = r - srtt; srtt += err/8; rttvar += (|err| - rttvar)/4; timer =
@@ -245,39 +262,296 @@ static void tcp_rtt_sample(tcp_conn_t* c, uint32_t r)
 	       r, c->srtt_x8, c->rttvar_x4, c->rto);
 }
 
-// Arm the retransmit clock for the segment in the slot. A FRESH send starts
-// the round-trip stopwatch; a restart (the peer acknowledged part of the
-// segment) keeps it, because the segment has been in flight since its
-// first send. A timer that has backed off stays backed off (Karn) until a
-// clean sample sets a new one.
-static void tcp_rto_arm(tcp_conn_t* c, bool fresh)
+// A fresh attempt into an idle sender or an advancing ACK starts the RTO.
+// Fast retransmission also restarts it; adding a tail to a flight does not.
+static void tcp_rto_arm(tcp_conn_t* c)
 {
 	if (!c->rto_backed_off)
 		c->rto_ticks = c->rto;
-	c->rto_deadline = kTicksSinceStart + c->rto_ticks;
-	c->retries = 0;
-	if (fresh)
+	c->send_timer = TCP_TIMER_RETRANSMIT;
+	c->send_deadline = kTicksSinceStart + c->rto_ticks;
+}
+
+static uint32_t tcp_persist_interval(const tcp_conn_t* c)
+{
+	uint32_t next = c->persist_ticks ? c->persist_ticks * 2 :
+	                (c->rto > TCP_PERSIST_MIN_TICKS ? c->rto : TCP_PERSIST_MIN_TICKS);
+	return next > TCP_RTO_MAX_TICKS ? TCP_RTO_MAX_TICKS : next;
+}
+
+// Start the round-trip stopwatch on a segment ending at `seq_end`, if none
+// is running: one segment is timed at a time, and the ack that reaches
+// seq_end stops it. A retransmission of ANYTHING cancels it (Karn's rule,
+// tcp_retransmit_head) — the ack could be for either copy.
+static void tcp_rtt_start(tcp_conn_t* c, uint32_t seq_end)
+{
+	if (c->rtt_timing)
+		return;
+	c->rtt_timing = true;
+	c->rtt_seq = seq_end;
+	c->snd_sent_at = kTicksSinceStart;
+}
+
+// The ring's bytes, `off` past its head, copied out contiguous — a
+// segment's payload may wrap the ring's end.
+static void tcp_snd_copy_out(const tcp_conn_t* c, uint32_t off, uint8_t* dst, uint32_t len)
+{
+	uint32_t at = (c->snd_head + off) % TCP_SND_BUF;
+	uint32_t first = TCP_SND_BUF - at;
+	if (first > len)
+		first = len;
+	memcpy(dst, c->snd_buf + at, first);
+	if (len > first)
+		memcpy(dst + first, c->snd_buf, len - first);
+}
+
+// Send the ring's bytes [off, off+len) as one segment, the FIN riding it
+// if the caller says so. Output and recovery each check whether its sequence
+// unit fits the current peer window. The ACK bit rides data: there is something to
+// acknowledge once the handshake is done.
+static ipv4_tx_t tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len, bool fin)
+{
+	uint8_t payload[TCP_MSS];
+	tcp_snd_copy_out(c, off, payload, len);
+	return tcp_send_segment(c, c->snd_una + off, fin ? (TCP_FIN | TCP_ACK) : TCP_ACK,
+	                        payload, (uint16_t)len, false);
+}
+
+// SYN uses the same submission and loss policy as data and FIN.
+static void tcp_send_syn(tcp_conn_t* c)
+{
+	if (tcp_send_segment(c, c->snd_nxt, TCP_SYN, NULL, 0, true) == IPV4_TX_INVALID)
+		return;
+	c->snd_nxt++;
+	c->snd_max = c->snd_nxt;
+	tcp_rto_arm(c);
+	tcp_rtt_start(c, c->snd_max);
+}
+
+static bool tcp_may_send_data(const tcp_conn_t* c)
+{
+	return !c->stripped &&
+	       (c->state == TCP_ESTABLISHED || c->state == TCP_CLOSE_WAIT ||
+	        c->state == TCP_FIN_WAIT_1 || c->state == TCP_CLOSING ||
+	        c->state == TCP_LAST_ACK);
+}
+
+// Select the timer from protocol state. Probe responses do not restart the
+// persist deadline: answered and unanswered probes follow the same cadence.
+static void tcp_send_clock(tcp_conn_t* c, bool restart)
+{
+	if (c->state == TCP_CLOSED || c->state == TCP_TIME_WAIT)
 	{
-		c->snd_sent_at = kTicksSinceStart;
-		c->snd_resent = false;
+		c->send_timer = TCP_TIMER_IDLE;
+		return;
+	}
+	bool pending = c->snd_count || (c->snd_fin && seq_leq(c->snd_una, c->snd_fin_seq));
+	if (c->state != TCP_SYN_SENT && c->snd_wnd == 0 && pending)
+	{
+		if (c->send_timer != TCP_TIMER_PERSIST)
+		{
+			c->persist_ticks = 0;
+			c->persist_ticks = tcp_persist_interval(c);
+			c->send_deadline = kTicksSinceStart + c->persist_ticks;
+			c->send_timer = TCP_TIMER_PERSIST;
+			c->snd_nxt = c->snd_una;
+			c->rtt_timing = false;
+			if (c->fast_recovery)
+				c->cwnd = c->ssthresh;
+			c->fast_recovery = false;
+			c->dup_acks = 0;
+			c->limited_bytes = 0;
+		}
+		return;
+	}
+	if (c->send_timer == TCP_TIMER_PERSIST)
+	{
+		c->send_timer = TCP_TIMER_IDLE;
+		c->persist_ticks = 0;
+	}
+	if (!tcp_unacked(c))
+		c->send_timer = TCP_TIMER_IDLE;
+	else if (restart || c->send_timer != TCP_TIMER_RETRANSMIT)
+		tcp_rto_arm(c);
+}
+
+// A probe offers one sequence unit without extending the normal flight.
+// Remember its position so an accepted probe may advance the ACK boundary.
+static void tcp_probe(tcp_conn_t* c)
+{
+	if (!tcp_may_send_data(c))
+		return;
+	ipv4_tx_t how;
+	if (c->snd_count)
+		how = tcp_send_data_segment(c, 0, 1, false);
+	else if (c->snd_fin && c->snd_una == c->snd_fin_seq)
+		how = tcp_send_segment(c, c->snd_una, TCP_FIN | TCP_ACK, NULL, 0, false);
+	else
+		return;
+	if (how == IPV4_TX_INVALID)
+		return;
+	c->probe_pending = true;
+	c->probe_seq = c->snd_una;
+	c->rtt_timing = false;
+	kTcpStats.window_probes++;
+}
+
+static void tcp_note_data_send(tcp_conn_t* c)
+{
+	c->data_sent = true;
+	c->last_data_sent = kTicksSinceStart;
+}
+
+// Emit from the cursor, including go-back-N recovery after RTO. The cursor's
+// offset paces resends under slow start; FlightSize still uses snd_max.
+// limited_allowance is supplied only by the first two duplicate ACK events;
+// each such event may solicit at most one new segment (RFC 3042).
+static void tcp_output(tcp_conn_t* c, uint32_t limited_allowance)
+{
+	if (!tcp_may_send_data(c))
+		return;
+	tcp_send_clock(c, false);
+	if (c->send_timer == TCP_TIMER_PERSIST)
+		return;
+	if (!tcp_unacked(c) && c->data_sent &&
+	    kTicksSinceStart - c->last_data_sent >= c->rto)
+	{
+		uint32_t restart = TCP_INIT_CWND_SEGMENTS * (uint32_t)c->snd_mss;
+		if (c->cwnd > restart)
+			c->cwnd = restart;
+	}
+	uint32_t window = c->cwnd + limited_allowance;
+	if (window > c->snd_wnd)
+		window = c->snd_wnd;
+	uint32_t off = c->snd_nxt - c->snd_una;
+	bool stop = false;
+	while (off < c->snd_count && off < window)
+	{
+		uint32_t unsent = c->snd_count - off;
+		uint32_t chunk = unsent < c->snd_mss ? unsent : c->snd_mss;
+		if (chunk > window - off)
+			chunk = window - off;
+		// Sender SWS avoidance yields to progress when no segment in
+		// this pass can earn an ACK, including the first RTO resend.
+		if (off && chunk < c->snd_mss && chunk < unsent)
+			break;
+		bool resend = seq_lt(c->snd_nxt, c->snd_max) ||
+		              (c->probe_pending && c->snd_nxt == c->probe_seq);
+		bool fin = c->snd_fin && off + chunk == c->snd_count && off + chunk < window;
+		ipv4_tx_t how = tcp_send_data_segment(c, off, chunk, fin);
+		if (how == IPV4_TX_INVALID)
+			return;
+		if (resend)
+		{
+			c->rtt_timing = false;
+			c->retransmits++;
+			kTcpStats.retransmits++;
+		}
+		else
+			tcp_rtt_start(c, c->snd_nxt + chunk);
+		if (limited_allowance && !seq_lt(c->snd_nxt, c->snd_max))
+			c->limited_bytes += chunk;
+		tcp_note_data_send(c);
+		c->snd_nxt += chunk;
+		off += chunk;
+		if (fin)
+		{
+			c->snd_fin_sent = true;
+			c->snd_nxt++;
+		}
+		if (seq_gt(c->snd_nxt, c->snd_max))
+			c->snd_max = c->snd_nxt;
+		// A local drop is committed like a lost packet. Stop the burst
+		// so a full queue or unresolved neighbour is not flooded.
+		stop = how != IPV4_TX_SENT || limited_allowance != 0;
+		if (stop || fin)
+			break;
+	}
+	if (!stop && c->snd_fin && c->snd_nxt == c->snd_fin_seq && off < c->snd_wnd)
+	{
+		bool resend = c->snd_fin_sent || (c->probe_pending && c->probe_seq == c->snd_fin_seq);
+		if (tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false) == IPV4_TX_INVALID)
+			return;
+		if (resend)
+		{
+			c->rtt_timing = false;
+			c->retransmits++;
+			kTcpStats.retransmits++;
+		}
+		c->snd_fin_sent = true;
+		c->snd_nxt++;
+		if (seq_gt(c->snd_nxt, c->snd_max))
+			c->snd_max = c->snd_nxt;
+	}
+	tcp_send_clock(c, false);
+}
+
+// Recovery sends repeat the oldest submitted unit, respecting a reopened
+// peer window. The RTO owns the next attempt even when the driver drops it.
+static void tcp_retransmit_head(tcp_conn_t* c)
+{
+	c->rtt_timing = false;
+	ipv4_tx_t how;
+	if (c->state == TCP_SYN_SENT)
+		how = tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true);
+	else
+	{
+		uint32_t flight = tcp_bytes_in_flight(c);
+		uint32_t len = flight < c->snd_mss ? flight : c->snd_mss;
+		if (len > c->snd_wnd)
+			len = c->snd_wnd;
+		if (!c->snd_wnd)
+			return;
+		if (len)
+		{
+			how = tcp_send_data_segment(c, 0, len,
+			                           c->snd_fin_sent && c->snd_una + len == c->snd_fin_seq && len < c->snd_wnd);
+			tcp_note_data_send(c);
+		}
+		else if (c->snd_fin_sent && c->snd_una == c->snd_fin_seq)
+			how = tcp_send_segment(c, c->snd_una, TCP_FIN | TCP_ACK, NULL, 0, false);
+		else
+			return;
+	}
+	if (how != IPV4_TX_INVALID)
+	{
+		c->retransmits++;
+		kTcpStats.retransmits++;
+		tcp_send_clock(c, true);
 	}
 }
 
-static void tcp_send_reliable(tcp_conn_t* c, const void* data, uint16_t len, uint8_t flags)
+// Threshold changes on the first RTO of a head or on fast-recovery entry.
+// Limited-transmit bytes are excluded from the fast-recovery FlightSize.
+static void tcp_congestion_loss(tcp_conn_t* c, bool timeout)
 {
-	if (len)
-		memcpy(c->snd_buf, (void*)data, len);
-	c->snd_len = len;
-	c->snd_flags = flags;
-	c->snd_seq = c->snd_nxt;
-	tcp_rto_arm(c, true);
+	uint32_t flight = tcp_bytes_in_flight(c);
+	if (!timeout)
+		flight = flight > c->limited_bytes ? flight - c->limited_bytes : 0;
+	if (!timeout || c->retries == 1)
+	{
+		uint32_t half = flight / 2;
+		uint32_t floor = 2u * c->snd_mss;
+		c->ssthresh = half > floor ? half : floor;
+	}
+	c->cwnd = timeout ? c->snd_mss : c->ssthresh + 3u * c->snd_mss;
+}
 
-	tcp_send_segment(c, c->snd_seq, flags, data, len, (flags & TCP_SYN) != 0);
-	// SYN and FIN each consume one sequence number even though they carry
-	// no data — that is what makes them acknowledgeable (and, through
-	// tcp_unacked, what arms the timer for them), and it is why the
-	// handshake's numbers are always off by one from what you first expect.
-	c->snd_nxt += len + (((flags & TCP_SYN) || (flags & TCP_FIN)) ? 1 : 0);
+// cwnd grows on acknowledged new data (RFC 5681 §3.1): by what was acked
+// in slow start — doubling per round trip — and by one segment per window
+// in congestion avoidance. Capped at the ring, past which a larger window
+// could carry nothing.
+static void tcp_congestion_grow(tcp_conn_t* c, uint32_t acked)
+{
+	if (c->cwnd < c->ssthresh)
+		c->cwnd += acked < c->snd_mss ? acked : c->snd_mss;
+	else
+	{
+		uint32_t step = (c->snd_mss * c->snd_mss) / c->cwnd;
+		c->cwnd += step > 0 ? step : 1;
+	}
+	if (c->cwnd > TCP_SND_BUF)
+		c->cwnd = TCP_SND_BUF;
 }
 
 // A refusal to a segment we have no connection for: RST, the protocol's
@@ -600,8 +874,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			return;
 		}
 		kTcpStats.resets_received++;
-		c->reset = true;
-		c->state = TCP_CLOSED;
+		tcp_abort(c);
 		// Logged under the lock: past the release the conn is the
 		// reaper's to free, and nothing here may read it again.
 		printd(DEBUG_NET, "tcp: connection to %u.%u.%u.%u:%u reset by some jerk :-P\n",
@@ -618,16 +891,29 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		return;
 	}
-	if (synchronized && (flags & TCP_ACK) && seq_gt(ack, c->snd_nxt))
+	// Normal submissions and an offered probe are the ACK boundary. A
+	// probe does not become normal flight unless the peer accepts it.
+	uint32_t ack_limit = c->snd_max;
+	if (c->probe_pending && seq_gt(c->probe_seq + 1, ack_limit))
+		ack_limit = c->probe_seq + 1;
+	if (synchronized && (flags & TCP_ACK) && seq_gt(ack, ack_limit))
 	{
-		printd(DEBUG_NET, "tcp: ACK 0x%x for bytes we have not sent (snd_nxt 0x%x) — dropped\n",
-		       ack, c->snd_nxt);
 		tcp_ack(c);
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		return;
 	}
 
-	c->snd_wnd = win;
+	// Retain the newest window announcement using both sequence spaces.
+	// A reordered data segment can carry a current ACK but an old window.
+	uint16_t old_wnd = c->snd_wnd;
+	if ((flags & TCP_ACK) && seq_geq(ack, c->snd_una) &&
+	    (c->state == TCP_SYN_SENT || seq_gt(seq, c->snd_wl1) ||
+	     (seq == c->snd_wl1 && seq_geq(ack, c->snd_wl2))))
+	{
+		c->snd_wnd = win;
+		c->snd_wl1 = seq;
+		c->snd_wl2 = ack;
+	}
 
 	switch (c->state)
 	{
@@ -657,9 +943,16 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			if ((flags & TCP_SYN) && (flags & TCP_ACK))
 			{
 				c->rcv_nxt = seq + 1;
-				c->snd_una = ack;        // our SYN is acknowledged, which disarms the timer
-				if (!c->snd_resent)      // and the handshake is the first round trip measured
+				c->snd_una = ack;        // the SYN is acknowledged
+				c->recover_valid = false;
+				c->send_timer = TCP_TIMER_IDLE;
+				c->retries = 0;          // and refills the budget a resent SYN spent — progress, like any new ack
+				c->rto_backed_off = false;
+				if (c->rtt_timing)       // and the handshake is the first round trip measured (not if the SYN was resent — Karn)
+				{
+					c->rtt_timing = false;
 					tcp_rtt_sample(c, (uint32_t)(kTicksSinceStart - c->snd_sent_at));
+				}
 				c->state = TCP_ESTABLISHED;
 				kTcpStats.connections_opened++;
 
@@ -674,11 +967,20 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					uint8_t olen = p[o + 1];
 					if (olen < 2 || o + olen > hdr_len) break;
 					if (kind == 2 && olen == 4)
-						c->snd_mss = net_read16(p + o + 2);
+					{
+						uint16_t said = net_read16(p + o + 2);
+						if (said >= TCP_SND_MSS_MIN)   // tcp.h: a smaller one is refused, the floor stands
+							c->snd_mss = said;
+						else
+							printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u advertised MSS %u — refused, using %u\n",
+							       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, said, c->snd_mss);
+					}
 					o += olen;
 				}
 				if (c->snd_mss > TCP_MSS)
 					c->snd_mss = TCP_MSS;   // never send more than WE can build
+				c->cwnd = TCP_INIT_CWND_SEGMENTS * (uint32_t)c->snd_mss;
+				c->ssthresh = TCP_SND_BUF;  // slow start all the way up, until loss says otherwise
 
 				tcp_ack(c);
 				printd(DEBUG_NET, "tcp: established with %u.%u.%u.%u:%u (their mss %u, win %u)\n",
@@ -693,40 +995,111 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		case TCP_CLOSING:
 		case TCP_LAST_ACK:
 		{
-			// (a) Their acknowledgement retires our unacknowledged segment
-			// — advancing snd_una is the whole of the disarm (tcp_unacked).
-			// An ACK short of snd_nxt covers part of a segment: the slot
-			// stays armed with a restarted clock, and the RTO resends the
-			// whole thing, which the peer trims (stop-and-wait has no
-			// smaller unit to resend). Progress is proof of life, so the
-			// spent retries do not count against what remains.
+			// ACK retirement is independent of the output cursor. A probe
+			// accepted beyond snd_max commits its offered unit here.
+			uint32_t limited_allowance = 0;
 			if ((flags & TCP_ACK) && seq_gt(ack, c->snd_una))
 			{
+				uint32_t acked = ack - c->snd_una;
+				uint32_t ring_acked = acked < c->snd_count ? acked : c->snd_count;
+				bool fin_acked = c->snd_fin && seq_gt(ack, c->snd_fin_seq);
+				c->snd_head = (c->snd_head + ring_acked) % TCP_SND_BUF;
+				c->snd_count -= ring_acked;
 				c->snd_una = ack;
-				if (tcp_unacked(c))
-					tcp_rto_arm(c, false);
-				else if (!c->snd_resent)
-					tcp_rtt_sample(c, (uint32_t)(kTicksSinceStart - c->snd_sent_at));
-				// Our FIN being acknowledged is a state transition, not
-				// just bookkeeping.
-				if (c->state == TCP_FIN_WAIT_1 && seq_geq(ack, c->snd_nxt))
-					c->state = TCP_FIN_WAIT_2;
-				else if (c->state == TCP_CLOSING && seq_geq(ack, c->snd_nxt))
+				if (seq_gt(ack, c->snd_max))
+					c->snd_max = ack;
+				if (seq_lt(c->snd_nxt, ack))
+					c->snd_nxt = ack;
+				c->probe_pending = false;
+				c->rto_backed_off = false;
+				c->retries = 0;
+				c->limited_bytes = 0;
+				if (c->detached)
+					c->detached_deadline = kTicksSinceStart + TCP_DETACHED_IDLE_TICKS;
+				if (c->rtt_timing && seq_geq(ack, c->rtt_seq))
 				{
-					c->state = TCP_TIME_WAIT;
-					c->time_wait_until = kTicksSinceStart + 2 * TCP_MSL_TICKS;
+					c->rtt_timing = false;
+					tcp_rtt_sample(c, (uint32_t)(kTicksSinceStart - c->snd_sent_at));
 				}
-				else if (c->state == TCP_LAST_ACK && seq_geq(ack, c->snd_nxt))
-					c->state = TCP_CLOSED;   // fully closed; poll reaps it
+				if (c->fast_recovery && seq_lt(ack, c->recover))
+				{
+					// RFC 6582 partial deflation: sub-MSS progress does not
+					// earn a full segment's artificial recovery credit.
+					c->cwnd = c->cwnd > ring_acked ? c->cwnd - ring_acked : 0;
+					if (ring_acked >= c->snd_mss)
+						c->cwnd += c->snd_mss;
+					if (c->cwnd == 0)
+						c->cwnd = 1;
+					tcp_retransmit_head(c);
+				}
+				else
+				{
+					if (c->fast_recovery)
+						c->cwnd = c->ssthresh;
+					else if (ring_acked)
+						tcp_congestion_grow(c, ring_acked);
+					c->fast_recovery = false;
+					c->dup_acks = 0;
+				}
+				// A recovery mark is valid only while its flight is still
+				// outstanding; retiring it prevents a stale half-space
+				// comparison after gigabytes of loss-free progress.
+				if (c->recover_valid && seq_geq(ack, c->recover))
+					c->recover_valid = false;
+				if (fin_acked)
+				{
+					c->snd_fin_sent = true;
+					if (c->state == TCP_FIN_WAIT_1)
+						c->state = TCP_FIN_WAIT_2;
+					else if (c->state == TCP_CLOSING)
+					{
+						c->state = TCP_TIME_WAIT;
+						c->time_wait_until = kTicksSinceStart + 2 * TCP_MSL_TICKS;
+					}
+					else if (c->state == TCP_LAST_ACK)
+						c->state = TCP_CLOSED;
+				}
+				tcp_send_clock(c, true);
+			}
+			else if ((flags & TCP_ACK) && ack == c->snd_una && tcp_bytes_in_flight(c) &&
+			         data_len == 0 && !(flags & (TCP_SYN | TCP_FIN)) &&
+			         win == old_wnd && c->snd_wnd != 0)
+			{
+				if (c->dup_acks != 255)
+					c->dup_acks++;
+				if (!c->fast_recovery && c->dup_acks < 3 && c->snd_nxt == c->snd_max)
+					limited_allowance = c->dup_acks * (uint32_t)c->snd_mss;
+				else if (!c->fast_recovery && c->dup_acks == 3)
+				{
+					if (c->recover_valid && seq_lt(c->snd_una, c->recover))
+						c->dup_acks = 0;
+					else
+					{
+						c->recover = c->snd_max;
+						c->recover_valid = true;
+						c->fast_recovery = true;
+						tcp_congestion_loss(c, false);
+						c->limited_bytes = 0;
+						tcp_retransmit_head(c);
+						kTcpStats.fast_retransmits++;
+					}
+				}
+				else if (c->fast_recovery)
+				{
+					c->cwnd += c->snd_mss;
+					if (c->cwnd > TCP_SND_BUF)
+						c->cwnd = TCP_SND_BUF;
+				}
 			}
 
 			// (b) Their data. In order, it goes into the ring and rcv_nxt
 			// advances over it and over whatever held ranges it now reaches;
 			// ahead of us, it is held in its slot (tcp_hold); behind us, it
 			// is a duplicate. A segment that starts behind us and reaches
-			// past us is a retransmission overlapping bytes we took — the
-			// stop-and-wait sender resends its whole segment after a partial
-			// ack, and RFC 793 §3.9 says trim — so its tail is in-order data.
+			// past us is a retransmission overlapping bytes we took — a
+			// sender resends from its oldest unacknowledged byte, which
+			// may sit inside a segment we took part of, and RFC 793 §3.9
+			// says trim — so its tail is in-order data.
 			if (data_len && seq_lt(seq, c->rcv_nxt) && seq_gt(seq + data_len, c->rcv_nxt))
 			{
 				uint32_t old = c->rcv_nxt - seq;
@@ -808,6 +1181,11 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				else
 					tcp_ack(c);
 			}
+
+			// (d) Whatever this segment made room for — acked bytes, a
+			// wider window — goes out now. tcp_output refuses by state if
+			// the FIN above ended the conversation.
+			tcp_output(c, limited_allowance);
 			break;
 		}
 
@@ -942,7 +1320,8 @@ static void tcp_conn_strip_locked(tcp_conn_t* c)
 	c->rcv_buf = NULL;
 	c->snd_buf = NULL;
 	c->rcv_count = 0;
-	c->snd_len = 0;
+	c->snd_count = 0;
+	c->snd_head = 0;
 	c->stripped = true;
 }
 
@@ -1022,53 +1401,48 @@ void tcp_poll(void)
 		tcp_conn_t* c = *pp;
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
 
-		// Retransmission: the one mechanism that makes the stream
-		// reliable. Back off exponentially — the network may be congested
-		// BECAUSE everyone is retransmitting (October 1986, LBL to
-		// Berkeley: 32 kbit/s across a 400-yard link, and Van Jacobson's
-		// answer is why the modern internet works at all).
-		//
-		// TIME_WAIT and CLOSED are past transmitting. TIME_WAIT still
-		// answers a late FIN (tcp_input); CLOSED speaks only through
-		// tcp_input's RST. The CLOSED exclusion is what keeps the morgue
-		// display-only whatever a death left armed in the slot: a listed
-		// corpse must not retransmit it.
-		if (tcp_unacked(c) && c->state != TCP_TIME_WAIT && c->state != TCP_CLOSED &&
-		    now >= c->rto_deadline)
+		// Closing has a wall-clock no-progress bound, independent of how
+		// many network/probe attempts happen. FIN_WAIT_2 is covered too.
+		if (c->detached && c->state != TCP_CLOSED && c->state != TCP_TIME_WAIT &&
+		    now >= c->detached_deadline)
+			tcp_abort(c);
+
+		if (c->send_timer != TCP_TIMER_IDLE && now >= c->send_deadline &&
+		    c->state != TCP_CLOSED && c->state != TCP_TIME_WAIT)
 		{
-			if (++c->retries > TCP_MAX_RETRIES)
+			if (c->send_timer == TCP_TIMER_PERSIST)
 			{
-				// No connect_timeouts count here, and that is not an
-				// omission: dial's own 10-second deadline gives up on a
-				// silent handshake long before a SYN's retries could
-				// exhaust (their backoff sums past 30 seconds), and dial
-				// counts that death itself. What dies HERE is an
-				// established conversation whose peer stopped answering
-				// — or a detached close whose FIN nobody will ever
-				// acknowledge — and the caller hears it as a reset.
-				c->reset = true;         // the peer is gone; give up honestly
-				c->state = TCP_CLOSED;
+				tcp_probe(c);
+				if (c->send_timer == TCP_TIMER_PERSIST)
+				{
+					c->persist_ticks = tcp_persist_interval(c);
+					c->send_deadline = now + c->persist_ticks;
+				}
 			}
+			else if (++c->retries > TCP_MAX_RETRIES)
+				tcp_abort(c);
 			else
 			{
 				c->rto_ticks *= 2;
 				if (c->rto_ticks > TCP_RTO_MAX_TICKS)
 					c->rto_ticks = TCP_RTO_MAX_TICKS;
-				c->rto_deadline = now + c->rto_ticks;
-				c->rto_backed_off = true;   // stays doubled until a clean sample (Karn)
-				c->snd_resent = true;       // this slot's ack can no longer be timed
-				// The flags exactly as first sent (tcp_send_reliable says
-				// why a SYN must not grow an ACK bit here); the ACK
-				// NUMBER, where there is one, is whatever rcv_nxt says
-				// now, which is the one thing a retransmission may update.
-				tcp_send_segment(c, c->snd_seq, c->snd_flags,
-				                 c->snd_buf, (uint16_t)c->snd_len,
-				                 (c->snd_flags & TCP_SYN) != 0);
-				c->retransmits++;
-				kTcpStats.retransmits++;
-				printd(DEBUG_NET, "tcp: retransmit #%u to %u.%u.%u.%u:%u (rto %u ticks)\n",
-				       (uint32_t)c->retries, NET_IPV4_OCTETS(c->peer_ip),
-				       c->peer_port, c->rto_ticks);
+				c->rto_backed_off = true;
+				tcp_congestion_loss(c, true);
+				c->dup_acks = 0;
+				c->limited_bytes = 0;
+				c->fast_recovery = false;
+				c->recover = c->snd_max;
+				c->recover_valid = true;
+				c->rtt_timing = false;
+				// Arm before submission: local drops retain a future event.
+				tcp_rto_arm(c);
+				if (c->state == TCP_SYN_SENT)
+					tcp_retransmit_head(c);
+				else
+				{
+					c->snd_nxt = c->snd_una;
+					tcp_output(c, 0);
+				}
 			}
 		}
 
@@ -1153,10 +1527,10 @@ void tcp_wake_if_ready(void)
 		thread_t *r = NULL, *w = NULL;
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
 		// Level-triggered, always re-evaluating the CONDITION: a reader
-		// wakes for bytes, for EOF, or for death; a writer wakes when its
-		// segment is acknowledged, when the handshake completes, or for
-		// death. (Same doctrine as pipes — a wake is a hint, never a
-		// promise, and both sleepers re-test after waking.)
+		// wakes for bytes, for EOF, or for death; a writer wakes when an
+		// ack has made room in the ring, or for death. (Same doctrine as
+		// pipes — a wake is a hint, never a promise, and both sleepers
+		// re-test after waking.)
 		// The ISLEEP test is part of the condition (see the long note in
 		// icmp_conn.c): a waiter that registered but has not yet parked
 		// must stay registered, or its wake is silently dropped and it
@@ -1168,7 +1542,7 @@ void tcp_wake_if_ready(void)
 			c->reader = NULL;
 		}
 		if (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP &&
-		    (!tcp_unacked(c) || c->reset || c->state == TCP_CLOSED))
+		    (c->snd_count < TCP_SND_BUF || c->reset || c->state == TCP_CLOSED))
 		{
 			w = c->writer;
 			c->writer = NULL;
@@ -1238,18 +1612,22 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 
 	tcp_conn_t* c = tcp_heap_alloc_locked(sizeof(*c));
 	c->rcv_buf = tcp_heap_alloc_locked(TCP_RCV_BUF);
-	c->snd_buf = tcp_heap_alloc_locked(TCP_MSS);
+	c->snd_buf = tcp_heap_alloc_locked(TCP_SND_BUF);
 	c->dev = dev;
 	c->peer_ip = peer_ip;
 	c->peer_port = peer_port;
 	c->local_port = local_port;
 	c->snd_mss = 536;
 	c->snd_wnd = TCP_MSS;
+	c->cwnd = TCP_INIT_CWND_SEGMENTS * TCP_MSS;   // resized to the peer's MSS at establishment
+	c->ssthresh = TCP_SND_BUF;
 	c->rto = TCP_RTO_INITIAL_TICKS;
 
 	uint32_t iss = tcp_initial_seq(peer_ip, peer_port, c->local_port);
 	c->snd_una = iss;
 	c->snd_nxt = iss;
+	c->snd_max = iss;
+	c->recover = iss;      // inactive until a loss sets recover_valid
 	c->state = TCP_SYN_SENT;
 
 	c->next = kTcpConnList;
@@ -1262,10 +1640,10 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	printd(DEBUG_NET, "tcp: dialing %u.%u.%u.%u:%u from port %u (iss 0x%x)\n",
 	       NET_IPV4_OCTETS(peer_ip), peer_port, c->local_port, iss);
 
-	// The opening SYN. It rides the reliable path, so a lost SYN is
-	// retransmitted by the same timer that protects data.
+	// The opening SYN. It arms the same timer that protects data, so a
+	// lost SYN is resent like anything else.
 	uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
-	tcp_send_reliable(c, NULL, 0, TCP_SYN);
+	tcp_send_syn(c);
 	spinlock_release_irqrestore(&c->lock, irqflags);
 
 	// Wait out the handshake by polling the state rather than joining the
@@ -1401,65 +1779,41 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 			return sent ? (long)sent : TCP_ERR_INTERRUPTED;
 
 		irqflags = spinlock_acquire_irqsave(&c->lock);
-		if (c->reset || c->state == TCP_CLOSED || c->state == TCP_LAST_ACK ||
-		    c->state == TCP_TIME_WAIT)
+		if (c->reset || !(c->state == TCP_ESTABLISHED || c->state == TCP_CLOSE_WAIT))
 		{
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return sent ? (long)sent : TCP_ERR_RESET;
 		}
 
-		if (!tcp_unacked(c))
+		// Into the ring: as much as fits, and it is on its way the moment
+		// tcp_output sees it. QUEUED is the promise a write makes — not
+		// acknowledged: the ring, the ack clock and the timer own the bytes
+		// from here, and close() will not send its FIN ahead of them. The
+		// ring may wrap under the copy.
+		uint32_t room = TCP_SND_BUF - c->snd_count;
+		if (room > 0)
 		{
-			// Stop-and-wait (v1): one segment in flight, bounded by both
-			// the peer's MSS and the peer's advertised window — the window
-			// is the peer's flow control and ignoring it is how you get an
-			// RST from a server that meant to be helpful.
-			size_t chunk = len - sent;
-			if (chunk > c->snd_mss)  chunk = c->snd_mss;
-			if (chunk > c->snd_wnd)  chunk = c->snd_wnd;
-			if (chunk > 0)
-			{
-				tcp_send_reliable(c, src + sent, (uint16_t)chunk, TCP_ACK);
-				sent += chunk;
-				spinlock_release_irqrestore(&c->lock, irqflags);
-				continue;
-			}
+			uint32_t n = (len - sent) < room ? (uint32_t)(len - sent) : room;
+			uint32_t at = (c->snd_head + c->snd_count) % TCP_SND_BUF;
+			uint32_t first = TCP_SND_BUF - at;
+			if (first > n)
+				first = n;
+			memcpy(c->snd_buf + at, (void*)(src + sent), first);
+			if (n > first)
+				memcpy(c->snd_buf, (void*)(src + sent + first), n - first);
+			c->snd_count += n;
+			sent += n;
+			tcp_output(c, 0);
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			continue;
 		}
 
-		c->writer = self;
-		spinlock_release_irqrestore(&c->lock, irqflags);
-		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
-	}
-
-	// Wait for the last segment's acknowledgement, so a write() that
-	// returns means the bytes are genuinely on their way (not merely
-	// queued). Bounded by the RTO machinery, which gives up honestly.
-	for (;;)
-	{
-		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
-		// Awake: last pass's registration is void (see the read loop).
-		if (c->writer == self)
-			c->writer = NULL;
-		bool done = !tcp_unacked(c) || c->reset || c->state == TCP_CLOSED;
-		if (done)
-		{
-			spinlock_release_irqrestore(&c->lock, irqflags);
-			break;
-		}
-		// Ask BEFORE registering (rd2): a break after `c->writer = self`
-		// left the slot naming a thread that had already returned. And ask
-		// UNDER THE SAME LOCK as the completion check and the registration
-		// (rd5): dropping the lock between "not done" and "registered" let
-		// the final ACK land in the gap — tcp_wake_if_ready found no waiter,
-		// and the park ran to its one-second backstop for a write that was
-		// already complete (the lost-registration case its comment names).
-		// signal_park_must_end takes no lock of its own, so it can be asked
-		// here.
-		if (signal_park_must_end(self))   // a terminate, or a signal a handler is waiting for
-		{
-			spinlock_release_irqrestore(&c->lock, irqflags);
-			break;
-		}
+		// The ring is full — a whole window ahead of the peer. Park until an
+		// ack makes room (tcp_wake_if_ready's condition) or the backstop
+		// re-checks. Registered UNDER THE SAME LOCK as the room check: a gap
+		// between "no room" and "registered" is where the ack that frees
+		// the ring lands unseen, and the park then runs to its backstop
+		// for a wait that was already over.
 		c->writer = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
 		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
@@ -1477,33 +1831,23 @@ void tcp_conn_close(tcp_conn_t* c)
 	if (c->state == TCP_ESTABLISHED || c->state == TCP_CLOSE_WAIT)
 	{
 		bool they_finished = (c->state == TCP_CLOSE_WAIT);
-		if (tcp_unacked(c))
-		{
-			// A segment is still in flight — a write whose wait for the
-			// ACK ended on a signal, and now the handle is going. The FIN
-			// rides THAT segment rather than replacing it: the slot holds
-			// exactly one, and a fresh FIN written over it would drop the
-			// bytes it carried, leaving the peer parked at the gap and our
-			// FIN, sequenced past it, forever unacceptable. What is
-			// outstanding has changed shape, so the clock starts over: a
-			// budget the data had already spent would let data-plus-FIN
-			// go out once and then die unsent.
-			c->snd_flags |= TCP_FIN;
-			c->snd_nxt += 1;
-			tcp_rto_arm(c, false);
-			c->snd_resent = true;        // the slot goes out twice; neither ack is a sample
-			tcp_send_segment(c, c->snd_seq, c->snd_flags,
-			                 c->snd_buf, (uint16_t)c->snd_len, false);
-		}
-		else
-			tcp_send_reliable(c, NULL, 0, TCP_FIN | TCP_ACK);
+		// The FIN queues BEHIND whatever the ring still holds: a write
+		// returns when its bytes are queued, so a close right behind it
+		// must not say "no more" ahead of them. tcp_output sends the FIN
+		// now if the ring is drained, else on or after the last segment,
+		// and the ack clock keeps draining the ring after the handle is
+		// gone — the state changes here, the wire catches up.
+		c->snd_fin = true;
+		c->snd_fin_seq = c->snd_una + c->snd_count;
 		c->state = they_finished ? TCP_LAST_ACK : TCP_FIN_WAIT_1;
+		tcp_output(c, 0);
 	}
 
 	// Detach, never block: close() returns immediately and the poll
 	// finishes the closing dance and the TIME_WAIT nap in the background.
 	// A program should not wait 30 seconds for protocol politeness.
 	c->detached = true;
+	c->detached_deadline = kTicksSinceStart + TCP_DETACHED_IDLE_TICKS;
 	c->reader = NULL;
 	c->writer = NULL;
 	spinlock_release_irqrestore(&c->lock, irqflags);

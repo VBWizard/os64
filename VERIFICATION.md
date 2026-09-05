@@ -199,7 +199,7 @@ move. The rig's first day (2026-09-02), same 100KB file, all CRC-verified:
 |---|---|---|
 | none | 2s | nothing |
 | `loss 0.1` both ways | 12s | `retransmits` |
-| `delay 100` `jitter 30` both ways, order kept | 2s | nothing — a download rides the peer's send window; what 200ms round trips cost an os64 *upload* (stop-and-wait) is the send-window debt's measurement, not taken yet |
+| `delay 100` `jitter 30` both ways, order kept | 2s | nothing — a download rides the peer's send window; what 200ms round trips cost an os64 *upload* is the table below |
 | `reorder 0.3` down | 29s | `out_of_order_dropped 49` on one connection — the price of v1's no-reassembly, measured |
 | `reorder 0.3` down, **after reassembly** (2026-09-04) | 1s | `out_of_order_held 34`, `out_of_order_dropped 0`, `retransmits 0`; the trunk kernel the same morning, same seed: 34s and 47 dropped. Both files CRC-verified |
 | `dup 0.2` down | — | `duplicates_dropped` |
@@ -208,15 +208,58 @@ move. The rig's first day (2026-09-02), same 100KB file, all CRC-verified:
 only the segments os64 sends, and a download's losses are the peer's timer's
 problem: `/tests/netsend HOST PORT BYTES` pushes a seeded byte stream up a
 connection and prints the milliseconds; `tools/tcpsink.py` on the host drains
-it and checks every byte against the same stream. 100KB, seed 1, the
-fixed-timer kernel against the measured one (2026-09-04, same cable, same 21
-segments lost):
+it, checks every byte against the same stream, and answers one byte — and
+**that byte is where netsend's clock stops**, because a write returns when
+its bytes are queued and a close returns with the ring still draining, so
+only the far end can say when the bytes arrived. 100KB, seed 1, same cable,
+same 21 segments lost each time (2026-09-04 — three kernels in one day):
 
-| Weather (upload) | fixed 1s RTO | Jacobson/Karn RTO | What moved |
-|---|---|---|---|
-| none | 0.8s | 0.8s | nothing; `srtt_ms 10`, `rto_ms 200` (the floor) |
-| `loss 0.1` up | 11.8s | 3.3s | `retransmits 9` vs `10` — each loss cost a second, now the 200ms floor |
-| `delay 100` both + `loss 0.1` up | 31.5s | 19.9s | `srtt_ms 210`, `rto_ms 250`; the 13.8s that remain are 69 stop-and-wait round trips — the send-window debt's number |
+| Weather (upload) | fixed 1s RTO | Jacobson/Karn RTO (stop-and-wait) | send window + NewReno | What moved |
+|---|---|---|---|---|
+| none | 0.8s | 0.8s | 0.03s | `srtt_ms 10`, `rto_ms 200` (the floor); the window sends 100KB in one slow-start burst |
+| `loss 0.1` up | 11.8s | 3.3s | 0.02s | `retransmits 10`, `fast_retransmits 4` — every hole found by duplicate acks, none by the timer |
+| `delay 100` both + `loss 0.1` up | 31.5s | 19.9s | 4.7s | `srtt_ms 210`; ~7 loss events at a 200ms round trip, each a recovery round trip and a halved cwnd — what NewReno costs at 10% loss; SACK is the next number down |
+
+Three of the window's own lessons are in that third column, each read off
+the capture. The first cut (Reno, RFC 5681 alone) read **6.7s on the loss
+leg — slower than stop-and-wait**: a fast retransmit filled the first hole
+and the ack landed on the second, where only two duplicates could ever
+follow, so every further hole in the window waited for a backed-off timer
+(0.6s, 0.8s, 1.6s, 3.2s). NewReno's partial-ack rule (RFC 6582) took it to
+0.09s. The second, on the delay leg: a tail loss cost 3.7s because the
+doubled timer waited for a clean sample that a windowed sender under loss
+rarely gets; 4.4BSD's rule — progress ends the backoff — took the leg from
+9.0s to 5.1s. The third, found answering the first review round: a timeout
+resent only the head, and every further hole behind it then waited for its
+own timeout (0.5s, then 1.4s, for two holes behind one). 4.4BSD's go-back-N
+— `snd_nxt = snd_una`, everything outstanding resent in order under slow
+start — took the leg to 4.7s, with no gap over a quarter second anywhere
+in its capture.
+
+**The zero-window path needs a peer that stops reading**, and slirp is in
+the way: it buffers on the guest's behalf, so a 100KB `netsend` into a host
+sink that has stopped reading never sees a zero window at all — the guest
+reports 40ms and slirp holds the bytes. A 2MB stream into a sink with a 4KB
+`SO_RCVBUF` that sleeps 12 seconds before its first read is what fills
+slirp: the capture (2026-09-04) shows the window go to zero with nothing in
+flight, probes at 1s, 2s and 4s each answered `ack == snd_una, win 0`,
+`cwnd` and `rto_ms` untouched by them, the peer's own update reopening the
+window, and the stream completing verified. The same run with the cable's
+`link down off` thrown after the second probe: the third and fourth went
+unanswered and the fourth followed the third at the interval that led to it
+(4s, then 8s) with no retransmit timeout in series, and the reopen was
+found when the link came back. (A 2000-byte stream through the same stall
+never sees the window shut — slirp holds it — so the FIN-into-a-zero-window
+case is covered by reading, not by this rig.)
+
+**Historical local-refusal experiment (2026-09-04, superseded sender):**
+a scratch virtio build dropped every seventh submission. Transfers verified,
+but it exercised only intermittent refusal. Its next-tick retry machinery
+missed sustained-refusal lifetime failures and has been removed. Those old
+`tx_refused`/zero-retransmit results do not describe the current implementation.
+The refactored sender counts `tx_local_drops`, commits loss responsibility,
+and recovers through protocol timers; see `TCP_SENDER.md` and the acceptance
+results below.
 
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
 under jitter, as a real pipe does, so a delay leg measures the clock and only
@@ -227,6 +270,58 @@ The pcap dump sits AFTER the cable in both directions: the capture is what
 got through, the ledger is what did not, and `orphaned` (a frame the cable
 could not hand back because QEMU's inbound socket was gone) is never zero
 silently.
+
+## TCP sender refactor acceptance (2026-09-05)
+
+The refactor contract is `TCP_SENDER.md`. These are new runs, independent of
+previous throughput tables; timing differences are not controlled speedup
+claims. The isolated rig used QEMU q35, 8 CPUs, virtio-net, copied ext2 root/data
+images, the current built kernel, `tools/cable.py --seed 1`, and host sinks.
+The guest configuration search finds `/home/husk.rc` before `/etc/husk.rc`;
+the rig installed its startup there and used `mkdir` to let only one of the
+two VT shells start the workload. An initial run that missed this precedence
+was discarded because its output file was from an older test.
+
+| Check | Result |
+|---|---|
+| ASan/UBSan host sender transitions | Pass; actual TCP bodies, checksummed peer input, deterministic clock/submission dispositions |
+| Host stream loss matrix | Pass; 150 KB per case, MSS 48/536/1460 crossed with peer windows 100/4000/65535, independent data and ACK loss, ring and sequence wrap, FIN through EOF |
+| 100 KB upload, clean | Verified, 70 ms guest verdict time |
+| 100 KB upload, 10% outbound loss | Verified, 430 ms |
+| 100 KB upload, same loss plus 100 ms delay each way | Verified, 3750 ms |
+| 2 MB upload, 4 KB host receive buffer, reader paused 12 seconds, return path disconnected for 10 seconds | Verified, 17520 ms; four probes, captured gaps approximately 2/4/8 seconds; window reopened and transfer completed |
+| Close with 32 KiB queued, 100 ms delay each way | Host received exactly 32768 correct bytes then EOF; post-close snapshot had FIN_WAIT_1, `inflight=14600`, `sndq=32768`, `det`; later TIME_WAIT with buffers stripped |
+| 100 KB download, clean / 30% downlink reorder / 10% downlink loss | All three byte-identical to the source (MD5 f602e2c389c0184f5bbef36b3c0b6a2b) |
+| Full build and strict changed-C compilation | Pass |
+| Completed-kernel smoke after handshake/reset invariant cleanup | 100 KB verified (30 ms); built-in suites 28 + 29 + 2 passed, zero failures |
+| Copied guest filesystems after the final run | Root and data `e2fsck -fn` both exit 0 |
+| e1000 upload attempt | Unvalidated: early boot stopped in the unchanged `e1000_enable_intx` probe, before the workload; this is not a transfer result |
+
+Run the host suite from the worktree with:
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 tools/test_tcp_host.sh
+```
+
+Only LeakSanitizer is disabled: this environment reports that it cannot run
+under ptrace. ASan and UBSan remain active. The harness does not establish
+SMP, IRQ, DMA, or physical NIC correctness. Sustained driver drops and detached
+outages beyond the cleanup deadline are covered by the deterministic suite;
+the guest outage test exercises an owned connection reopening before close.
+
+The separate close fixture avoids mistaking queued writes for delivery:
+
+```sh
+# Host, accepts one connection and verifies through EOF:
+python3 tools/test_tcp_close.py --port 17250
+# Guest (with cable delay enabled so the ring remains outstanding):
+/tests/netclose 10.0.2.2 17250
+cat /sys/net/tcp
+```
+
+Fable's PHY work is separate. Production r8125 unplug/replug and combined-tree
+throughput remain physical-hardware acceptance work. No link notification is
+used as a substitute for ACK progress.
 
 ## Reading the serial log
 
