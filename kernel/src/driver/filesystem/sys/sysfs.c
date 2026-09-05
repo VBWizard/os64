@@ -1219,12 +1219,13 @@ static void sys_gen_net_dhcp(synth_text_t *t)
 // The counters are the shakedown instruments. This stack spent its first
 // weeks on a LAN, where retransmits and out_of_order_held read zero
 // forever; the chaos rig (VERIFICATION.md) and the real internet are where
-// they report weather, and whether a booked v1 debt (window scaling, a
-// send window — tcp.h states them) is worth paying is a question these
-// numbers answer with data instead of theory. Reassembly was the first one
-// paid that way (out_of_order_dropped priced it, out_of_order_held is the
-// receipt) and the measured retransmit timer the second (retransmits
-// priced it; rto and srtt are the receipt).
+// they report weather, and whether a booked v1 debt (window scaling, SACK
+// — tcp.h states them) is worth paying is a question these numbers answer
+// with data instead of theory. Reassembly was the first one paid that way
+// (out_of_order_dropped priced it, out_of_order_held is the receipt), the
+// measured retransmit timer the second (retransmits priced it; rto and
+// srtt are the receipt), and the send window the third (an upload's
+// seconds priced it; inflight, sndq and cwnd are the receipt).
 static void sys_gen_net_tcp(synth_text_t *t)
 {
 	// RFC 793's own vocabulary, netstat's spelling since 4.2BSD.
@@ -1242,6 +1243,8 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "segments_in: %lu\n", kTcpStats.segments_in);
 	synth_text_addf(t, "segments_out: %lu\n", kTcpStats.segments_out);
 	synth_text_addf(t, "retransmits: %lu\n", kTcpStats.retransmits);
+	synth_text_addf(t, "fast_retransmits: %lu\n", kTcpStats.fast_retransmits);
+	synth_text_addf(t, "window_probes: %lu\n", kTcpStats.window_probes);
 	synth_text_addf(t, "rtt_samples: %lu\n", kTcpStats.rtt_samples);
 	synth_text_addf(t, "out_of_order_held: %lu\n", kTcpStats.out_of_order_held);
 	synth_text_addf(t, "out_of_order_dropped: %lu\n", kTcpStats.out_of_order_dropped);
@@ -1270,6 +1273,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		uint32_t buf_used;
 		uint64_t rx, tx, rexmit, ooo, held;
 		uint32_t rto_ms, srtt_ms;
+		uint32_t inflight, sndq, cwnd;
 		bool     detached, zwin, rst;
 	};
 
@@ -1339,12 +1343,20 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		r->held       = c->out_of_order_held;
 		// THE TIMER IN FORCE, not the estimator's answer: after a timeout
 		// rto_ticks is the doubled value the next deadline will use and
-		// stays so until a clean sample (Karn), while c->rto is what that
-		// sample last said. A row reading the estimator during a backoff
+		// stays so until the peer acknowledges new data, while c->rto is
+		// what the last sample said. A row reading the estimator during a backoff
 		// experiment would show 200 while the deadline was 800 (Codex, PR
 		// #62).
 		r->rto_ms     = (c->rto_backed_off ? c->rto_ticks : c->rto) * 1000u / TICKS_PER_SECOND;
 		r->srtt_ms    = (c->srtt_x8 >> 3) * 1000u / TICKS_PER_SECOND;
+		// The send side's three numbers: the sequence span out and unacked
+		// (SYN and FIN count, being what the timer protects), the ring's
+		// unacknowledged bytes — in flight plus waiting, so sndq minus
+		// inflight is what the windows are holding back — and the
+		// congestion window that with `win` decides how much may be out.
+		r->inflight   = c->snd_nxt - c->snd_una;
+		r->sndq       = c->snd_count;
+		r->cwnd       = c->cwnd;
 		r->detached   = c->detached;
 		r->zwin       = c->zero_window;
 		r->rst        = c->reset;
@@ -1355,7 +1367,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 	synth_text_addf(t, "connections: %u\n", n + omitted);
 	if (n > 0)
 	{
-		synth_text_addf(t, "# local peer state mss win buf rx_bytes tx_bytes rexmit ooo held rto_ms srtt_ms flags\n");
+		synth_text_addf(t, "# local peer state mss win buf rx_bytes tx_bytes rexmit ooo held rto_ms srtt_ms inflight sndq cwnd flags\n");
 		struct tcp_row_chunk *ch = chunks;
 		for (uint32_t i = 0; i < n; i++)
 		{
@@ -1389,14 +1401,15 @@ static void sys_gen_net_tcp(synth_text_t *t)
 				flags[fl++] = '-';
 			flags[fl] = '\0';
 
-			synth_text_addf(t, "%u %u.%u.%u.%u:%u %s %u %u %u/%u %lu %lu %lu %lu %lu %u %u %s\n",
+			synth_text_addf(t, "%u %u.%u.%u.%u:%u %s %u %u %u/%u %lu %lu %lu %lu %lu %u %u %u %u %u %s\n",
 			                (unsigned)r->local_port,
 			                NET_IPV4_OCTETS(r->peer_ip), (unsigned)r->peer_port,
 			                r->state < (sizeof(kTcpStateNames) / sizeof(kTcpStateNames[0]))
 			                    ? kTcpStateNames[r->state] : "?",
 			                (unsigned)r->mss, (unsigned)r->win,
 			                (unsigned)r->buf_used, (unsigned)TCP_RCV_BUF,
-			                r->rx, r->tx, r->rexmit, r->ooo, r->held, r->rto_ms, r->srtt_ms, flags);
+			                r->rx, r->tx, r->rexmit, r->ooo, r->held, r->rto_ms, r->srtt_ms,
+			                (unsigned)r->inflight, (unsigned)r->sndq, (unsigned)r->cwnd, flags);
 		}
 	}
 	if (omitted > 0)

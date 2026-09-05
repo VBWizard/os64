@@ -1467,8 +1467,10 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		case HANDLE_NET_TCP:
 		{
 			// A stream write: no atomicity promise and no size limit —
-			// tcp_conn_write segments it and blocks until every byte is
-			// acknowledged. Bounce through kernel memory in MSS-ish
+			// tcp_conn_write queues into the connection's send ring and
+			// returns once the bytes are QUEUED (the ring, the ack clock
+			// and the timer carry them from there), blocking only while
+			// the ring is full. Bounce through kernel memory in MSS-ish
 			// chunks for the same fault discipline as every other write.
 			size_t written = 0;
 			while (written < length)

@@ -1,27 +1,45 @@
-// netsend — push bytes UP a TCP connection, and say how long it took.
+// netsend — push bytes UP a TCP connection, and say how long it took to
+// ARRIVE.
 //
 // Everything else in the tree downloads: os64get, whois, the browser rungs
 // are all a small request followed by a large reply, so the segments os64
 // itself must get across the wire are a handful. This is the workload the
-// SEND side's debts are measured against — the retransmit timer (only OUR
-// lost segments are OUR timer's problem; a download's losses are the
-// peer's), the stop-and-wait slot, one day a send window. Its partner is
-// tools/tcpsink.py on the host, which verifies every byte against the same
-// pattern, so "arrived" and "arrived right" are one answer.
+// SEND side is measured against — the retransmit timer (only OUR lost
+// segments are OUR timer's problem; a download's losses are the peer's),
+// the send window, the congestion window. Its partner is tools/tcpsink.py
+// on the host, which verifies every byte against the same pattern, so
+// "arrived" and "arrived right" are one answer.
+//
+// THE CLOCK STOPS AT THE SINK'S VERDICT, not at close(). A write returns
+// when its bytes are queued and a close returns at once with the ring
+// still draining, so a clock read at either would say how fast the kernel
+// TOOK the bytes, not how fast the wire carried them. So the stream is
+// announced first — one line, `netsend <BYTES>\n` — and the sink, having
+// read exactly that many and checked them, answers one byte: `K` (every
+// byte right) or `W` (wrong). That byte is the end of the transfer, and
+// its round trip is in the number, honestly.
 //
 //   netsend HOST PORT BYTES        e.g. netsend 10.0.2.2 7200 100000
 //
 // Exit 0 with a line naming bytes and milliseconds; a badge code otherwise.
 #include "os64/os64.h"
 
-#define NETSEND_USAGE      0x5E4D0001
-#define NETSEND_BAD_DIAL   0x5E4D0002
-#define NETSEND_BAD_WRITE  0x5E4D0003
-#define NETSEND_BAD_CLOCK  0x5E4D0004
+#define NETSEND_USAGE        0x5E4D0001
+#define NETSEND_BAD_DIAL     0x5E4D0002
+#define NETSEND_BAD_WRITE    0x5E4D0003
+#define NETSEND_BAD_CLOCK    0x5E4D0004
+#define NETSEND_NO_VERDICT   0x5E4D0005   // the sink never answered (or hung up)
+#define NETSEND_WRONG_BYTES  0x5E4D0006   // it answered: the bytes were not ours
 
 // The pattern: a 32-bit LCG (Numerical Recipes' constants), one byte from
 // the middle of each state. tcpsink.py generates the same stream.
 #define NETSEND_SEED 0x5EEDu
+
+// How long to wait for the verdict once everything is queued: the ring's
+// worth of bytes still has to cross the wire, through whatever weather
+// the rig is making, and the retransmit ladder gives up honestly long
+// before this does.
+#define NETSEND_VERDICT_WAIT_MS 120000
 
 int main(int argc, char **argv)
 {
@@ -52,6 +70,15 @@ int main(int argc, char **argv)
 	if (os64_ticks(&start) < 0)
 		return NETSEND_BAD_CLOCK;
 
+	char announce[32];
+	int alen = os64_snprintf(announce, sizeof(announce), "netsend %ld\n", (long)total);
+	if (os64_write((int32_t)conn, announce, (size_t)alen) != alen)
+	{
+		os64_hprintf(OS64_STDERR, "netsend: could not announce the stream\n");
+		os64_close((int32_t)conn);
+		return NETSEND_BAD_WRITE;
+	}
+
 	static uint8_t chunk[8192];
 	uint32_t x = NETSEND_SEED;
 	int64_t sent = 0;
@@ -80,13 +107,30 @@ int main(int argc, char **argv)
 		}
 		sent += n;
 	}
-	os64_close((int32_t)conn);
 
+	// Everything is queued. The wire is still working; wait for the sink
+	// to say it has all of it.
+	char verdict = 0;
+	int64_t got = os64_read_for((int32_t)conn, &verdict, 1, NETSEND_VERDICT_WAIT_MS);
 	os64_ticks_t end;
 	if (os64_ticks(&end) < 0)
 		return NETSEND_BAD_CLOCK;
+	os64_close((int32_t)conn);
+
 	uint64_t ms = (end.ticks - start.ticks) * 1000u / start.per_second;
-	os64_printf("netsend: %ld bytes to %s:%ld in %lu ms\n",
+	if (got != 1)
+	{
+		os64_hprintf(OS64_STDERR, "netsend: %ld bytes queued to %s:%ld, no verdict after %lu ms (%ld)\n",
+		             (long)sent, argv[1], (long)port, (unsigned long)ms, (long)got);
+		return NETSEND_NO_VERDICT;
+	}
+	if (verdict != 'K')
+	{
+		os64_hprintf(OS64_STDERR, "netsend: %ld bytes to %s:%ld in %lu ms — the sink says WRONG\n",
+		             (long)sent, argv[1], (long)port, (unsigned long)ms);
+		return NETSEND_WRONG_BYTES;
+	}
+	os64_printf("netsend: %ld bytes to %s:%ld in %lu ms, verified\n",
 	            (long)sent, argv[1], (long)port, (unsigned long)ms);
 	return 0;
 }

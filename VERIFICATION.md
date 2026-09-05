@@ -199,7 +199,7 @@ move. The rig's first day (2026-09-02), same 100KB file, all CRC-verified:
 |---|---|---|
 | none | 2s | nothing |
 | `loss 0.1` both ways | 12s | `retransmits` |
-| `delay 100` `jitter 30` both ways, order kept | 2s | nothing — a download rides the peer's send window; what 200ms round trips cost an os64 *upload* (stop-and-wait) is the send-window debt's measurement, not taken yet |
+| `delay 100` `jitter 30` both ways, order kept | 2s | nothing — a download rides the peer's send window; what 200ms round trips cost an os64 *upload* is the table below |
 | `reorder 0.3` down | 29s | `out_of_order_dropped 49` on one connection — the price of v1's no-reassembly, measured |
 | `reorder 0.3` down, **after reassembly** (2026-09-04) | 1s | `out_of_order_held 34`, `out_of_order_dropped 0`, `retransmits 0`; the trunk kernel the same morning, same seed: 34s and 47 dropped. Both files CRC-verified |
 | `dup 0.2` down | — | `duplicates_dropped` |
@@ -208,15 +208,27 @@ move. The rig's first day (2026-09-02), same 100KB file, all CRC-verified:
 only the segments os64 sends, and a download's losses are the peer's timer's
 problem: `/tests/netsend HOST PORT BYTES` pushes a seeded byte stream up a
 connection and prints the milliseconds; `tools/tcpsink.py` on the host drains
-it and checks every byte against the same stream. 100KB, seed 1, the
-fixed-timer kernel against the measured one (2026-09-04, same cable, same 21
-segments lost):
+it, checks every byte against the same stream, and answers one byte — and
+**that byte is where netsend's clock stops**, because a write returns when
+its bytes are queued and a close returns with the ring still draining, so
+only the far end can say when the bytes arrived. 100KB, seed 1, same cable,
+same 21 segments lost each time (2026-09-04 — three kernels in one day):
 
-| Weather (upload) | fixed 1s RTO | Jacobson/Karn RTO | What moved |
-|---|---|---|---|
-| none | 0.8s | 0.8s | nothing; `srtt_ms 10`, `rto_ms 200` (the floor) |
-| `loss 0.1` up | 11.8s | 3.3s | `retransmits 9` vs `10` — each loss cost a second, now the 200ms floor |
-| `delay 100` both + `loss 0.1` up | 31.5s | 19.9s | `srtt_ms 210`, `rto_ms 250`; the 13.8s that remain are 69 stop-and-wait round trips — the send-window debt's number |
+| Weather (upload) | fixed 1s RTO | Jacobson/Karn RTO (stop-and-wait) | send window + NewReno | What moved |
+|---|---|---|---|---|
+| none | 0.8s | 0.8s | 0.03s | `srtt_ms 10`, `rto_ms 200` (the floor); the window sends 100KB in one slow-start burst |
+| `loss 0.1` up | 11.8s | 3.3s | 0.02s | `retransmits 10`, `fast_retransmits 4` — every hole found by duplicate acks, none by the timer |
+| `delay 100` both + `loss 0.1` up | 31.5s | 19.9s | 5.1s | `srtt_ms 210`; ~7 loss events at a 200ms round trip, each a recovery round trip and a halved cwnd — what NewReno costs at 10% loss; SACK is the next number down |
+
+Two of the window's own lessons are in that third column. The first cut
+(Reno, RFC 5681 alone) read **6.7s on the loss leg — slower than
+stop-and-wait**: a fast retransmit filled the first hole and the ack landed
+on the second, where only two duplicates could ever follow, so every further
+hole in the window waited for a backed-off timer (0.6s, 0.8s, 1.6s, 3.2s in
+the capture). NewReno's partial-ack rule (RFC 6582) took it to 0.09s. The
+second, on the delay leg: a tail loss cost 3.7s because the doubled timer
+waited for a clean sample that a windowed sender under loss rarely gets;
+4.4BSD's rule — progress ends the backoff — took the leg from 9.0s to 5.1s.
 
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
 under jitter, as a real pipe does, so a delay leg measures the clock and only
