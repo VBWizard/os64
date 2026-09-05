@@ -236,6 +236,18 @@ own timeout (0.5s, then 1.4s, for two holes behind one). 4.4BSD's go-back-N
 start — took the leg to 4.7s, with no gap over a quarter second anywhere
 in its capture.
 
+**The zero-window path needs a peer that stops reading**, and slirp is in
+the way: it buffers on the guest's behalf, so a 100KB `netsend` into a host
+sink that has stopped reading never sees a zero window at all — the guest
+reports 40ms and slirp holds the bytes. A 2MB stream into a sink with a 4KB
+`SO_RCVBUF` that sleeps 12 seconds before its first read is what fills
+slirp: the capture (2026-09-04) shows the window go to zero with nothing in
+flight, probes at 1s, 2s and 4s each answered `ack == snd_una, win 0`,
+`cwnd` and `rto_ms` untouched by them, the peer's own update reopening the
+window, and the stream completing verified. (A 2000-byte stream through the
+same stall never sees the window shut — slirp holds it — so the FIN-into-a-
+zero-window case is covered by reading, not by this rig.)
+
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
 under jitter, as a real pipe does, so a delay leg measures the clock and only
 the `reorder` knob measures reassembly. (The first delay leg did not keep

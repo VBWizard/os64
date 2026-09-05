@@ -151,8 +151,14 @@ static uint16_t tcp_window(tcp_conn_t* c)
 // Build and transmit one segment. `with_mss` adds the MSS option, which
 // only ever rides a SYN (that is the one moment both sides are allowed to
 // state their limits).
-static void tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
-                             const void* data, uint16_t data_len, bool with_mss)
+// Returns ipv4_send's verdict: negative when the segment did not reach the
+// wire now — -2 is PARKED for ARP (ipv4.c's waiting room holds ONE packet
+// per neighbour, so a second send to the same unresolved neighbour would
+// replace it). A sender putting several segments out in one pass must stop
+// at the first such answer; the parked one goes when the neighbour
+// answers, and the rest go on the ack it earns.
+static int32_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
+                                const void* data, uint16_t data_len, bool with_mss)
 {
 	uint8_t seg[TCP_HDR_MIN + 4 + TCP_MSS];
 	uint16_t hdr_len = TCP_HDR_MIN + (with_mss ? 4 : 0);
@@ -196,10 +202,11 @@ static void tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	sum = net_checksum_add(sum, seg, total);
 	net_write16(seg + 16, net_checksum_fold(sum));
 
-	ipv4_send(c->dev, c->peer_ip, IPV4_PROTO_TCP, seg, total);
+	int32_t rc = ipv4_send(c->dev, c->peer_ip, IPV4_PROTO_TCP, seg, total);
 	kTcpStats.segments_out++;
 	if (data_len)
 		c->tx_bytes += data_len;
+	return rc;
 }
 
 // A bare acknowledgement: no data, no state change, just "I'm up to here"
@@ -314,12 +321,12 @@ static void tcp_snd_copy_out(const tcp_conn_t* c, uint32_t off, uint8_t* dst, ui
 // unit fits the window; a retransmit repeats what the segment first
 // carried). The ACK bit always rides data: there is always something to
 // acknowledge once the handshake is done.
-static void tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len, bool fin)
+static int32_t tcp_send_data_segment(tcp_conn_t* c, uint32_t off, uint32_t len, bool fin)
 {
 	uint8_t payload[TCP_MSS];
 	tcp_snd_copy_out(c, off, payload, len);
-	tcp_send_segment(c, c->snd_una + off, fin ? (TCP_FIN | TCP_ACK) : TCP_ACK,
-	                 payload, (uint16_t)len, false);
+	return tcp_send_segment(c, c->snd_una + off, fin ? (TCP_FIN | TCP_ACK) : TCP_ACK,
+	                        payload, (uint16_t)len, false);
 }
 
 // The opening SYN: no ACK bit (there is nothing yet to acknowledge, and a
@@ -379,6 +386,7 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		cwnd += c->dup_acks * (uint32_t)c->snd_mss;
 	uint32_t window = c->snd_wnd < cwnd ? c->snd_wnd : cwnd;
 	bool sent_any = false;
+	bool parked = false;   // a send did not reach the wire now (tcp_send_segment): this pass stops
 
 	while (in_flight < c->snd_count)
 	{
@@ -410,7 +418,7 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		bool resend = seq_lt(c->snd_una + in_flight, c->snd_max);
 		if (!tcp_unacked(c))
 			tcp_rto_arm(c);                                // first thing into an empty window: the clock starts
-		tcp_send_data_segment(c, in_flight, chunk, fin);
+		int32_t rc = tcp_send_data_segment(c, in_flight, chunk, fin);
 		if (resend)
 		{
 			c->retransmits++;
@@ -434,20 +442,26 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		}
 		if (seq_gt(c->snd_nxt, c->snd_max))
 			c->snd_max = c->snd_nxt;
+		if (rc < 0)
+		{
+			parked = true;                                 // the rest waits for the ack the parked one earns
+			break;
+		}
 	}
 
 	// A FIN with nothing to carry it: the ring was already empty, its last
 	// segment went out before close() queued the FIN, or the last segment
-	// filled the window to the byte and the FIN had to wait. Sent when its
-	// sequence unit is inside the peer's window — or when nothing is in
-	// flight at all, since a zero-length segment AT rcv_nxt is acceptable
-	// whatever the window says (§3.9's table, the zero-window row).
-	if (c->snd_fin && !c->snd_fin_sent && in_flight == c->snd_count &&
-	    (in_flight == 0 || in_flight < c->snd_wnd))
+	// filled the window to the byte and the FIN had to wait. A FIN occupies
+	// one unit of sequence space and RFC 793 counts it in SEG.LEN, so a
+	// zero window refuses it like any byte (§3.9's table): it goes when its
+	// unit is inside the peer's window, or as the persist probe's payload.
+	if (c->snd_fin && !c->snd_fin_sent && !parked && in_flight == c->snd_count &&
+	    (in_flight < c->snd_wnd || (force && in_flight == 0)))
 	{
 		if (!tcp_unacked(c))
 			tcp_rto_arm(c);
-		tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false);
+		int32_t rc = tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false);
+		(void)rc;                                          // a parked FIN goes when ARP answers; nothing follows it
 		if (seq_lt(c->snd_nxt, c->snd_max))
 		{
 			c->retransmits++;                              // the FIN went out before a timeout pulled it back
@@ -466,7 +480,8 @@ static void tcp_output(tcp_conn_t* c, bool force)
 	// Anything in flight makes it unnecessary (that segment's ack will
 	// carry the window), and a window that is open again resets the
 	// interval for the next time.
-	if (!sent_any && in_flight == 0 && c->snd_count > 0 && c->snd_wnd == 0)
+	bool fin_waiting = c->snd_fin && !c->snd_fin_sent;
+	if (!sent_any && in_flight == 0 && (c->snd_count > 0 || fin_waiting) && c->snd_wnd == 0)
 	{
 		if (c->persist_deadline == 0)
 		{
@@ -1079,6 +1094,21 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 						c->state = TCP_CLOSED;   // fully closed; poll reaps it
 				}
 			}
+			else if ((flags & TCP_ACK) && ack == c->snd_una && c->snd_wnd == 0 &&
+			         c->snd_nxt - c->snd_una == 1)
+			{
+				// THE PROBE ANSWERED, AND THE WINDOW IS STILL SHUT: the peer
+				// dropped the unit past its window and said where it
+				// stands. The peer is alive and its reader is not; nothing
+				// about the network is learned. The probe is taken back
+				// (nothing is now outstanding, so the retransmit timer is
+				// off) and tcp_output below re-arms the persist clock at
+				// its next interval — no loss signal, no backoff, no
+				// halved window.
+				c->snd_nxt = c->snd_una;
+				c->snd_fin_sent = false;
+				c->rtt_timing = false;
+			}
 			else if ((flags & TCP_ACK) && ack == c->snd_una && tcp_unacked(c) &&
 			         data_len == 0 && !(flags & (TCP_SYN | TCP_FIN)) &&
 			         win == old_wnd && c->snd_wnd != 0)
@@ -1429,12 +1459,22 @@ void tcp_poll(void)
 		if (tcp_unacked(c) && c->state != TCP_TIME_WAIT && c->state != TCP_CLOSED &&
 		    now >= c->rto_deadline)
 		{
-			// A peer holding a ZERO window is not gone: what is out there
-			// is the probe byte, the wait is the peer's reader and not the
-			// network, and a persist wait has no death in it (tcp.h
-			// TCP_PERSIST_MIN_TICKS). The budget is spent only on a window
-			// that was open.
-			if (++c->retries > TCP_MAX_RETRIES && c->snd_wnd != 0)
+			// A PROBE NOBODY ANSWERED is not a loss signal either: the one
+			// unit out there is the persist probe into a zero window (a
+			// byte, or the FIN riding as one), the wait is the peer's
+			// reader and not the network, and a persist wait has no death
+			// in it (tcp.h TCP_PERSIST_MIN_TICKS). It is taken back, and
+			// the persist clock — its own backoff — asks again; the
+			// congestion window, the retransmit timer and the retry budget
+			// are for a window that was open.
+			if (c->snd_wnd == 0 && c->snd_nxt - c->snd_una == 1 && c->state != TCP_SYN_SENT)
+			{
+				c->snd_nxt = c->snd_una;
+				c->snd_fin_sent = false;
+				c->rtt_timing = false;
+				tcp_output(c, false);       // sends nothing into a shut window; arms the persist
+			}
+			else if (++c->retries > TCP_MAX_RETRIES)
 			{
 				// No connect_timeouts count here, and that is not an
 				// omission: dial's own 10-second deadline gives up on a
@@ -1504,11 +1544,13 @@ void tcp_poll(void)
 		if (c->persist_deadline != 0 && now >= c->persist_deadline)
 		{
 			c->persist_deadline = 0;
-			if (tcp_may_send_data(c) && c->snd_wnd == 0 && !tcp_unacked(c) && c->snd_count > 0)
+			if (tcp_may_send_data(c) && c->snd_wnd == 0 && !tcp_unacked(c) &&
+			    (c->snd_count > 0 || (c->snd_fin && !c->snd_fin_sent)))
 			{
 				kTcpStats.window_probes++;
-				printd(DEBUG_NET, "tcp: zero-window probe to %u.%u.%u.%u:%u (%u bytes waiting)\n",
-				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_count);
+				printd(DEBUG_NET, "tcp: zero-window probe to %u.%u.%u.%u:%u (%u bytes waiting%s)\n",
+				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_count,
+				       (c->snd_fin && !c->snd_fin_sent) ? ", and a FIN" : "");
 				tcp_output(c, true);
 			}
 		}

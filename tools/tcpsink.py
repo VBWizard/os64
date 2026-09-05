@@ -29,25 +29,37 @@ def pattern(n, x):
     return bytes(out), x
 
 
+ANNOUNCE_MAX = 64          # bytes through the newline; longer is not an announce
+BYTES_MAX = 1 << 30        # a stream past this is a typo, not a test
+
+
 def read_announce(conn):
-    """The opening line, byte by byte so nothing past the newline is taken
-    as part of it; whatever recv delivers after the newline is stream."""
+    """The opening line — `netsend <BYTES>\\n` — with whatever recv delivered
+    past the newline handed back as the stream's first bytes. The line is
+    capped BEFORE it is parsed: this sink listens on every interface, and a
+    stranger's kilobyte of digits must be a refused announce, not a
+    ValueError that ends the run."""
     line = bytearray()
-    while len(line) < 64:
+    while True:
         chunk = conn.recv(65536)
         if not chunk:
             return None, b""
-        nl = chunk.find(b"\n")
+        nl = chunk.find(b"\n", 0, ANNOUNCE_MAX - len(line))
         if nl < 0:
+            if len(line) + len(chunk) >= ANNOUNCE_MAX:
+                return None, b""
             line += chunk
             continue
         line += chunk[:nl]
         rest = chunk[nl + 1:]
         words = line.split()
-        if len(words) != 2 or words[0] != b"netsend" or not words[1].isdigit():
+        if (len(words) != 2 or words[0] != b"netsend" or not words[1].isdigit()
+                or len(words[1]) > 12):
             return None, rest
-        return int(words[1]), rest
-    return None, b""
+        n = int(words[1])
+        if n == 0 or n > BYTES_MAX:
+            return None, rest
+        return n, rest
 
 
 def main():
