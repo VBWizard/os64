@@ -83,8 +83,11 @@ def main():
         x = SEED
         got = 0
         wrong_at = None
+        overrun = False
         while True:
             if data:
+                if len(data) > expected - got:
+                    overrun = True       # more than announced: a sender bug, never a pass
                 take = data[:expected - got]
                 want, x = pattern(len(take), x)
                 if wrong_at is None and take != want:
@@ -101,13 +104,15 @@ def main():
         took = time.monotonic() - started
         if got < expected:
             verdict = f"SHORT: {got} of {expected} bytes, then the sender hung up"
+        elif overrun:
+            verdict = f"OVERRUN: bytes past the announced {expected}"
         elif wrong_at is None:
             verdict = "ok"
         else:
             verdict = f"WRONG from byte {wrong_at}"
         try:
             if got >= expected:
-                conn.sendall(b"K" if wrong_at is None else b"W")
+                conn.sendall(b"K" if (wrong_at is None and not overrun) else b"W")
         except OSError as e:
             verdict += f" (verdict undeliverable: {e})"
         conn.close()

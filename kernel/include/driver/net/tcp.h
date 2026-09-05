@@ -164,10 +164,13 @@ typedef enum tcp_state
 // peer drops it and answers with its current window), asked again at
 // doubling intervals up to the retransmit ceiling, for as long as the
 // window stays shut — a persist wait has no death in it (4.4BSD's never
-// did): the wait is the peer's reader, not the network. The first wait
-// is at least a second: a reader that drains within a round trip will
-// say so unprompted, and probing a paused reader five times a second is
-// noise.
+// did) while somebody owns the connection: the wait is the peer's reader,
+// not the network. Once the handle is closed nobody is waiting, and the
+// probes spend the retry budget instead (tcp.c tcp_detached_probe_spent),
+// so a peer that shut its window and vanished cannot hold the buffers and
+// the port forever. The first wait is at least a second: a reader that
+// drains within a round trip will say so unprompted, and probing a paused
+// reader five times a second is noise.
 #define TCP_PERSIST_MIN_TICKS (1 * TICKS_PER_SECOND)
 #define TCP_MSL_TICKS       (15 * TICKS_PER_SECOND)
 #define TCP_CONNECT_TIMEOUT (10 * TICKS_PER_SECOND)

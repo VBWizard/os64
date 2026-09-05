@@ -600,6 +600,28 @@ static void tcp_retransmit_head(tcp_conn_t* c)
 	}
 }
 
+// A persist wait has no death in it while somebody OWNS the connection
+// (tcp.h TCP_PERSIST_MIN_TICKS) — but once the handle is closed nobody is
+// waiting, and a peer that shut its window and vanished would otherwise
+// hold the ring, the receive buffer and the port forever. So a DETACHED
+// connection spends the retry budget on its probes, answered or not:
+// nothing that could refill it (an ack of new data) can arrive through a
+// shut window, and six probes at the doubling cadence is about half a
+// minute of asking. Returns true when the budget is gone and the
+// connection has been given up. Caller holds c->lock.
+static bool tcp_detached_probe_spent(tcp_conn_t* c)
+{
+	if (!c->detached)
+		return false;
+	if (++c->retries <= TCP_MAX_RETRIES)
+		return false;
+	c->reset = true;
+	c->state = TCP_CLOSED;
+	printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u kept its window shut past a closed handle's patience — given up\n",
+	       NET_IPV4_OCTETS(c->peer_ip), c->peer_port);
+	return true;
+}
+
 // Loss has been detected, one way or the other: RFC 5681 §3.1's response.
 // Half of what was in flight is the new threshold (never under two
 // segments), and cwnd falls to `to` — one segment after a timeout (the
@@ -1587,11 +1609,14 @@ void tcp_poll(void)
 				c->snd_nxt = c->snd_una;
 				c->snd_fin_sent = false;
 				c->rtt_timing = false;
-				tcp_persist_next(c);        // the interval doubles...
-				kTcpStats.window_probes++;
-				printd(DEBUG_NET, "tcp: zero-window probe unanswered by %u.%u.%u.%u:%u — again (%u ticks)\n",
-				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->persist_ticks);
-				tcp_output(c, true);        // ...and the next probe goes now, waited for on it
+				if (!tcp_detached_probe_spent(c))
+				{
+					tcp_persist_next(c);        // the interval doubles...
+					kTcpStats.window_probes++;
+					printd(DEBUG_NET, "tcp: zero-window probe unanswered by %u.%u.%u.%u:%u — again (%u ticks)\n",
+					       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->persist_ticks);
+					tcp_output(c, true);        // ...and the next probe goes now, waited for on it
+				}
 			}
 			else if (++c->retries > TCP_MAX_RETRIES)
 			{
@@ -1629,19 +1654,12 @@ void tcp_poll(void)
 				{
 					// A SYN that went once and drew no answer (a first try the
 					// NIC refused is the branch above's). A resend the NIC
-					// refuses is asked for again next tick and is no
-					// retransmission yet.
+					// refuses is left for the sweep's pending retry, like a
+					// refused head resend — NOT a deadline one tick out, which
+					// would bring the poll back through this branch to spend
+					// another retry and double again on the NIC's account.
 					c->rto_deadline = now + c->rto_ticks;
-					if (tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true) == IPV4_TX_REFUSED)
-					{
-						kTcpStats.tx_refused++;
-						c->rto_deadline = now + 1;
-					}
-					else
-					{
-						c->retransmits++;
-						kTcpStats.retransmits++;
-					}
+					tcp_retransmit_head(c);
 				}
 				else
 				{
@@ -1676,7 +1694,8 @@ void tcp_poll(void)
 		{
 			c->persist_deadline = 0;
 			if (tcp_may_send_data(c) && c->snd_wnd == 0 && !tcp_unacked(c) &&
-			    (c->snd_count > 0 || (c->snd_fin && !c->snd_fin_sent)))
+			    (c->snd_count > 0 || (c->snd_fin && !c->snd_fin_sent)) &&
+			    !tcp_detached_probe_spent(c))
 			{
 				kTcpStats.window_probes++;
 				printd(DEBUG_NET, "tcp: zero-window probe to %u.%u.%u.%u:%u (%u bytes waiting%s)\n",
