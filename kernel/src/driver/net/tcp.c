@@ -1549,7 +1549,25 @@ void tcp_poll(void)
 			// the persist clock — its own backoff — asks again; the
 			// congestion window, the retransmit timer and the retry budget
 			// are for a window that was open.
-			if (c->snd_wnd == 0 && c->snd_nxt - c->snd_una == 1 && c->state != TCP_SYN_SENT)
+			if (c->state == TCP_SYN_SENT && !c->syn_on_wire)
+			{
+				// NO SYN HAS REACHED THE WIRE: the NIC refused the dial's
+				// (tcp_send_syn asks again next tick). That is local
+				// backpressure, not a network timeout, so it spends none of
+				// the retry budget and doubles nothing; the first SYN that
+				// goes starts the network's clock as a first try.
+				if (tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true) == IPV4_TX_REFUSED)
+				{
+					kTcpStats.tx_refused++;
+					c->rto_deadline = now + 1;
+				}
+				else
+				{
+					c->syn_on_wire = true;
+					c->rto_deadline = now + c->rto_ticks;
+				}
+			}
+			else if (c->snd_wnd == 0 && c->snd_nxt - c->snd_una == 1 && c->state != TCP_SYN_SENT)
 			{
 				c->snd_nxt = c->snd_una;
 				c->snd_fin_sent = false;
@@ -1594,11 +1612,11 @@ void tcp_poll(void)
 				c->rtt_timing = false;      // Karn: nothing sent from here is a sample
 				if (c->state == TCP_SYN_SENT)
 				{
+					// A SYN that went once and drew no answer (a first try the
+					// NIC refused is the branch above's). A resend the NIC
+					// refuses is asked for again next tick and is no
+					// retransmission yet.
 					c->rto_deadline = now + c->rto_ticks;
-					// A retransmission only if a SYN ever went (tcp.h
-					// syn_on_wire): a first try the NIC refused is asked
-					// for again next tick, counted as refused, and its
-					// eventual send is the first the peer will see.
 					if (tcp_send_segment(c, c->snd_una, TCP_SYN, NULL, 0, true) == IPV4_TX_REFUSED)
 					{
 						kTcpStats.tx_refused++;
@@ -1606,12 +1624,8 @@ void tcp_poll(void)
 					}
 					else
 					{
-						if (c->syn_on_wire)
-						{
-							c->retransmits++;
-							kTcpStats.retransmits++;
-						}
-						c->syn_on_wire = true;
+						c->retransmits++;
+						kTcpStats.retransmits++;
 					}
 				}
 				else
