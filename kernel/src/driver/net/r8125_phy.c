@@ -168,3 +168,10 @@ uint32_t r8125_phy_best_common_mbps(uint8_t ours, uint8_t theirs)
 	if (both & (R8125_ABILITY_10F | R8125_ABILITY_10H))      return 10;
 	return 0;
 }
+
+bool r8125_phy_bmcr_out_of_service(uint16_t bmcr)
+{
+	if ((bmcr & R8125_BMCR_ANENABLE) == 0)
+		return true;
+	return (bmcr & (R8125_BMCR_PDOWN | R8125_BMCR_ISOLATE | R8125_BMCR_LOOPBACK)) != 0;
+}

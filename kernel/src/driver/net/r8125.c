@@ -483,7 +483,8 @@ static void r8125_link_words(const r8125_t* r, char* out, uint32_t cap)
 // advancing — the e1000's INTx probe met exactly that.
 #define R8125_PHY_LINK_WAIT_TICKS (5 * TICKS_PER_SECOND)
 #define R8125_PHY_LINK_WAIT_SPINS 500000u
-// How long a BMCR restart may take to show in BMSR before the driver stops
+// How long a BMCR restart may take to show — BMSR dropping "complete", or the
+// MAC seeing the link fall — before the driver stops
 // waiting for it, and how long the link-partner page may lag a completed
 // negotiation (both loops in r8125_phy_configure). Generous: a PHY that is
 // going to react does so in milliseconds.
@@ -619,27 +620,41 @@ static void r8125_phy_configure(r8125_t* r)
 		printf("r8125: PHY registers stopped answering mid-read — leaving the PHY as found\n");
 		return;
 	}
+	// The link as it stands NOW, read beside the registers, not the read
+	// from before the MAC soft reset: a negotiation can finish between the
+	// two, and a decision about the link has to be made from the same moment
+	// as the registers it is compared with (Codex, PR #66).
+	r8125_read_link(r);
 	r8125_phy_print(r, "as found", &found);
 
-	// TWO REASONS TO RENEGOTIATE, and a healthy boot has neither.
+	// THREE REASONS TO RENEGOTIATE, and a healthy boot has none.
 	//
 	// (1) The advertisement is not what we want — a PHY somebody left at
 	//     10/100, or one missing gigabit. Write it, then restart.
-	// (2) The advertisement is fine but the LINK IS BELOW what both sides
+	// (2) The PHY was left OUT OF SERVICE: autonegotiation disabled (a
+	//     forced mode), powered down, isolated, or in loopback — states
+	//     firmware can leave behind and this driver never wants. The one
+	//     BMCR write below clears all of them. Without this reason a PHY
+	//     whose advertisement already matched would have kept whatever mode
+	//     it was left in (Codex, PR #66).
+	// (3) The advertisement is fine but the LINK IS BELOW what both sides
 	//     offer: 100/full between two parties that both listed 1000F is a
 	//     negotiation that went wrong, not a slow partner, and one restart
 	//     is what every OS tries before anyone blames a cable. This is the
 	//     shape the P5 reported on 2026-09-05, and the "as found" dump is
 	//     what makes it decidable rather than guessed.
 	//
-	// A boot where the PHY already advertises everything and negotiated the
-	// best common speed touches nothing — restarting a negotiation that
-	// produced the right answer would only drop the link for nothing, and
-	// a link dropped at init is a link the post-boot network tests run on.
+	// A boot where the PHY already advertises everything, is in service, and
+	// negotiated the best common speed touches nothing — restarting a
+	// negotiation that produced the right answer would only drop the link
+	// for nothing, and a link dropped at init is a link the post-boot
+	// network tests run on.
 	r8125_phy_adv_t have = { found.anar, found.gbcr, found.adv2500 }, want;
 	bool rewrite = r8125_phy_plan_advertisement(&have, &want, R8125_ADVERTISE_2500 != 0);
 	const char* why = rewrite ? "the advertisement changed" : NULL;
-	if (!rewrite && r->netdev.link_up && r->netdev.link_mbps != 0)
+	if (why == NULL && r8125_phy_bmcr_out_of_service(found.bmcr))
+		why = "the PHY was left out of autonegotiating service";
+	if (why == NULL && r->netdev.link_up && r->netdev.link_mbps != 0)
 	{
 		uint32_t best = r8125_phy_best_common_mbps(
 			r8125_phy_abilities_ours(found.anar, found.gbcr, found.adv2500),
@@ -649,8 +664,8 @@ static void r8125_phy_configure(r8125_t* r)
 	}
 	if (why == NULL)
 	{
-		printd(DEBUG_BOOT, "r8125: PHY advertisement is already what we want and the link matches "
-		       "both sides' best — not renegotiating\n");
+		printd(DEBUG_BOOT, "r8125: PHY advertisement is already what we want, the PHY is in "
+		       "service and the link matches both sides' best — not renegotiating\n");
 		return;
 	}
 
@@ -674,8 +689,18 @@ static void r8125_phy_configure(r8125_t* r)
 			return;
 		}
 		if (set.anar != want.anar || set.gbcr != want.gbcr || set.adv2500 != want.adv2500)
-			printf("r8125: PHY kept a different advertisement than written (ANAR 0x%04x/0x%04x GBCR 0x%04x/0x%04x 2.5G 0x%04x/0x%04x, wrote/read)\n",
+		{
+			// A mixture must not be negotiated: put back what was found,
+			// best effort, and leave the link standing as it was. Restarting
+			// here would drop a working link and bring it back without the
+			// bit the PHY declined (Codex, PR #66).
+			printf("r8125: PHY kept a different advertisement than written (ANAR 0x%04x/0x%04x GBCR 0x%04x/0x%04x 2.5G 0x%04x/0x%04x, wrote/read) — restoring it as found, not renegotiating\n",
 			       want.anar, set.anar, want.gbcr, set.gbcr, want.adv2500, set.adv2500);
+			r8125_phy_mii_write(r, R8125_MII_ANAR, found.anar);
+			r8125_phy_mii_write(r, R8125_MII_GBCR, found.gbcr);
+			r8125_phy_write(r, R8125_PHY_OCP_ADV_2500, found.adv2500);
+			return;
+		}
 	}
 
 	printd(DEBUG_BOOT, "r8125: PHY renegotiating because %s\n", why);
@@ -691,8 +716,9 @@ static void r8125_phy_configure(r8125_t* r)
 	// dropped — the P5 did exactly that on 2026-09-05: "took 0 ticks (0
 	// polls)", a snapshot taken mid-teardown (partner page already emptied,
 	// restart bit still pending), and then the real drop landed on the
-	// post-boot network tests. The restart has taken when BMSR stops
-	// saying complete (802.3: bit 1.5 clears when the process restarts).
+	// post-boot network tests. The restart has taken when BMSR stops saying
+	// complete (802.3: bit 1.5 clears when the process restarts), or when
+	// the MAC sees the link fall — either is unambiguous.
 	uint64_t started = kTicksSinceStart;
 	uint32_t spins = 0;
 	bool restarted = false;
@@ -700,7 +726,8 @@ static void r8125_phy_configure(r8125_t* r)
 	{
 		uint16_t bmsr;
 		if (r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr) &&
-		    (bmsr & R8125_BMSR_ANEGCOMPLETE) == 0)
+		    ((bmsr & R8125_BMSR_ANEGCOMPLETE) == 0 ||
+		     (r8125_read32(r, R8125_PHYSTATUS) & R8125_PHYS_LINK) == 0))
 		{
 			restarted = true;
 			break;
@@ -709,29 +736,39 @@ static void r8125_phy_configure(r8125_t* r)
 			break;
 		__asm__ volatile("pause");
 	}
-	if (!restarted)
-		printd(DEBUG_BOOT, "r8125: PHY never reported the negotiation restarting (BMSR stayed "
-		       "'complete' for %lu ticks) — what follows may be the old link\n",
-		       kTicksSinceStart - started);
 
-	// THEN WAIT FOR IT TO FINISH. The link comes back one to three seconds
-	// later on a gigabit partner; a boot line printed in between would say
-	// DOWN about a wire that is fine. Complete AND the MAC sees the link.
-	// Either bound ends the wait; a timeout is reported, not fatal.
+	// THEN WAIT FOR IT TO FINISH — but only a restart that was SEEN to take
+	// has a finish to wait for. If neither sign appeared, the old completion
+	// is still what the registers say, and a loop that accepted it would
+	// report the old link as a new one: the exact failure the two halves
+	// exist to prevent. So "not observed" is a timeout, and the link stands
+	// as found; a PHY that applies the write late drops the link later, and
+	// the poll reports that as the link change it is (Codex, PR #66).
+	// Otherwise: the link comes back one to three seconds later on a gigabit
+	// partner, and a boot line printed in between would say DOWN about a
+	// wire that is fine. Complete AND the MAC sees the link. Either bound
+	// ends the wait; a timeout is reported, not fatal.
 	bool negotiated = false;
-	for (; spins < R8125_PHY_LINK_WAIT_SPINS; spins++)
+	if (!restarted)
+		printd(DEBUG_BOOT, "r8125: PHY never showed the negotiation restarting (BMSR stayed "
+		       "'complete' and the link stayed up for %lu ticks) — not waiting for a completion "
+		       "that would be the old one\n", kTicksSinceStart - started);
+	else
 	{
-		uint16_t bmsr;
-		if (r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr) &&
-		    (bmsr & R8125_BMSR_ANEGCOMPLETE) &&
-		    (r8125_read32(r, R8125_PHYSTATUS) & R8125_PHYS_LINK))
+		for (; spins < R8125_PHY_LINK_WAIT_SPINS; spins++)
 		{
-			negotiated = true;
-			break;
+			uint16_t bmsr;
+			if (r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr) &&
+			    (bmsr & R8125_BMSR_ANEGCOMPLETE) &&
+			    (r8125_read32(r, R8125_PHYSTATUS) & R8125_PHYS_LINK))
+			{
+				negotiated = true;
+				break;
+			}
+			if (kTicksSinceStart - started >= R8125_PHY_LINK_WAIT_TICKS)
+				break;
+			__asm__ volatile("pause");
 		}
-		if (kTicksSinceStart - started >= R8125_PHY_LINK_WAIT_TICKS)
-			break;
-		__asm__ volatile("pause");
 	}
 
 	// The restart empties the partner page and the new exchange writes it
@@ -759,10 +796,11 @@ static void r8125_phy_configure(r8125_t* r)
 		printf("r8125: PHY registers stopped answering after renegotiation\n");
 		return;
 	}
-	r8125_phy_print(r, negotiated ? "renegotiated" : "renegotiation TIMED OUT", &after);
+	r8125_phy_print(r, negotiated ? "renegotiated"
+	                  : restarted ? "renegotiation TIMED OUT" : "renegotiation NOT OBSERVED", &after);
 	printd(DEBUG_BOOT, "r8125: PHY renegotiation took %lu ticks (%u polls, %u more for the partner page)%s\n",
 	       kTicksSinceStart - started, spins, settle,
-	       negotiated ? "" : " — no link yet; the poll reports it if it comes up later");
+	       negotiated ? "" : " — no new link yet; the poll reports it if it comes up later");
 }
 
 // ── Ring construction ───────────────────────────────────────────────────────
@@ -1000,6 +1038,17 @@ static void r8125_ack_status(r8125_t* r)
 	if (status == 0)
 		return;
 
+	// Write-one-to-clear FIRST, before any of the work below: hand back
+	// exactly the bits just read, so an event that lands from here on —
+	// including a second link transition while the link is re-read and
+	// logged further down — relatches and survives to the next pass instead
+	// of being cleared unseen (Codex, PR #66: a clear that came after the
+	// re-read swallowed the transition and left the seam holding the state
+	// in between).
+	r8125_write32(r, R8125_ISR0_8125, status);
+	r->isr_acks++;
+	r->isr_last = status;
+
 	if ((status & (R8125_ISR_RDU | R8125_ISR_RXFOVW)) != 0)
 	{
 		r->isr_overrun_events++;
@@ -1065,19 +1114,16 @@ static void r8125_ack_status(r8125_t* r)
 		// the link IS rather than what it was at boot, and say so on the
 		// always-lit channel: a cable falling out ends the network, and
 		// nobody should need a debug bit on to learn that from the log.
+		// The bit was handed back BEFORE this read (top of the function), so
+		// a second transition landing during the read or the log line
+		// relatches it and is seen next pass, instead of being cleared
+		// unseen with the seam holding the state in between (Codex, PR #66).
 		char link[R8125_LINK_WORDS_CAP];
 		r8125_read_link(r);
 		r8125_link_words(r, link, sizeof link);
 		printd(DEBUG_EXCEPTIONS, "r8125: link changed: %s (PHYstatus 0x%08x)\n",
 		       link, r->phystatus);
 	}
-
-	// Write-one-to-clear: hand back exactly the bits we just read, so an
-	// event that lands between the read and the write survives to the next
-	// pass instead of being cleared unseen.
-	r8125_write32(r, R8125_ISR0_8125, status);
-	r->isr_acks++;
-	r->isr_last = status;
 }
 
 // ── THE STALL WATCHDOG ──────────────────────────────────────────────────────

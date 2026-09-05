@@ -152,6 +152,14 @@ uint16_t r8125_phy_mii_ocp_addr(uint8_t mii_reg);
 #define R8125_PHYID2_REALTEK       0xC800
 bool r8125_phy_id_is_realtek(uint16_t id1, uint16_t id2);
 
+// Is the PHY out of autonegotiating service — autonegotiation disabled (a
+// forced mode), powered down, isolated, or in loopback? Any of these is a
+// state firmware can leave a PHY in, none of them is one this driver ever
+// wants, and the one BMCR write the driver makes (R8125_BMCR_RESTART_AUTONEG)
+// clears all four. A PHY in such a state gets that write even when its
+// advertisement registers already read exactly as planned (Codex, PR #66).
+bool r8125_phy_bmcr_out_of_service(uint16_t bmcr);
+
 // ── PHYstatus (MAC register 0x6C), read as 32 bits ──────────────────────
 //
 // The 8169 generation's PHYstatus was one byte; the 8125 kept those eight

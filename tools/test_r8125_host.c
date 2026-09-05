@@ -395,6 +395,19 @@ static void test_phy_ocp_command_words(void)
 	}
 }
 
+static void test_phy_bmcr_service(void)
+{
+	// The P5 as found (autoneg on, the 1000 speed-select bit) and mid-restart.
+	CHECK(!r8125_phy_bmcr_out_of_service(0x1040), "the P5's as-found BMCR is in service");
+	CHECK(!r8125_phy_bmcr_out_of_service(0x1200), "a restart in flight is in service");
+	// The four states firmware can leave a PHY in that a restart write clears.
+	CHECK(r8125_phy_bmcr_out_of_service(0x0000), "autonegotiation off");
+	CHECK(r8125_phy_bmcr_out_of_service(0x2100), "forced 100/full");
+	CHECK(r8125_phy_bmcr_out_of_service(0x1800), "power-down");
+	CHECK(r8125_phy_bmcr_out_of_service(0x1400), "isolate");
+	CHECK(r8125_phy_bmcr_out_of_service(0x5000), "loopback");
+}
+
 static void test_phy_id_check(void)
 {
 	CHECK(r8125_phy_id_is_realtek(0x001C, 0xC800), "RTL8125's own PHY id refused");
@@ -571,6 +584,7 @@ int main(void)
 	test_phy_mii_map_matches_the_vendor();
 	test_phy_ocp_command_words();
 	test_phy_id_check();
+	test_phy_bmcr_service();
 	test_phy_status_decode();
 	test_phy_plan_leaves_a_correct_advertisement_alone();
 	test_phy_plan_adds_gigabit_and_drops_2500();
