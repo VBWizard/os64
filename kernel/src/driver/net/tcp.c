@@ -290,6 +290,22 @@ static void tcp_rto_arm(tcp_conn_t* c)
 	c->rto_deadline = kTicksSinceStart + c->rto_ticks;
 }
 
+// The persist clock's next interval: the RTO or a second, whichever is
+// longer, then doubling per probe up to the RTO ceiling (tcp.h
+// TCP_PERSIST_MIN_TICKS). One door for both probe cadences — the wait
+// before a probe when nothing is out, and the wait for an answer once one
+// is — so an unanswered probe is followed by the next at the doubled
+// interval, not after an RTO plus a whole interval.
+static uint32_t tcp_persist_next(tcp_conn_t* c)
+{
+	uint32_t floor = c->rto > TCP_PERSIST_MIN_TICKS ? c->rto : TCP_PERSIST_MIN_TICKS;
+	uint32_t next = c->persist_ticks == 0 ? floor : c->persist_ticks * 2;
+	if (next > TCP_RTO_MAX_TICKS)
+		next = TCP_RTO_MAX_TICKS;
+	c->persist_ticks = next;
+	return next;
+}
+
 // Start the round-trip stopwatch on a segment ending at `seq_end`, if none
 // is running: one segment is timed at a time, and the ack that reaches
 // seq_end stops it. A retransmission of ANYTHING cancels it (Karn's rule,
@@ -387,6 +403,7 @@ static void tcp_output(tcp_conn_t* c, bool force)
 	uint32_t window = c->snd_wnd < cwnd ? c->snd_wnd : cwnd;
 	bool sent_any = false;
 	bool parked = false;   // a send did not reach the wire now (tcp_send_segment): this pass stops
+	bool probed = false;   // `force` put one unit past a zero window: its answer is waited for on the persist clock
 
 	while (in_flight < c->snd_count)
 	{
@@ -398,7 +415,10 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		if (chunk > usable)
 			chunk = usable;
 		if (force && chunk == 0 && in_flight == 0)
+		{
 			chunk = 1;                                     // the probe: one byte past the window
+			probed = true;
+		}
 		if (chunk == 0)
 			break;
 		if (in_flight > 0 && chunk < c->snd_mss && chunk < unsent)
@@ -462,6 +482,8 @@ static void tcp_output(tcp_conn_t* c, bool force)
 			tcp_rto_arm(c);
 		int32_t rc = tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false);
 		(void)rc;                                          // a parked FIN goes when ARP answers; nothing follows it
+		if (!(in_flight < c->snd_wnd))
+			probed = true;                                 // it went only as the probe's payload
 		if (seq_lt(c->snd_nxt, c->snd_max))
 		{
 			c->retransmits++;                              // the FIN went out before a timeout pulled it back
@@ -484,14 +506,7 @@ static void tcp_output(tcp_conn_t* c, bool force)
 	if (!sent_any && in_flight == 0 && (c->snd_count > 0 || fin_waiting) && c->snd_wnd == 0)
 	{
 		if (c->persist_deadline == 0)
-		{
-			uint32_t floor = c->rto > TCP_PERSIST_MIN_TICKS ? c->rto : TCP_PERSIST_MIN_TICKS;
-			uint32_t next = c->persist_ticks == 0 ? floor : c->persist_ticks * 2;
-			if (next > TCP_RTO_MAX_TICKS)
-				next = TCP_RTO_MAX_TICKS;
-			c->persist_ticks = next;
-			c->persist_deadline = kTicksSinceStart + next;
-		}
+			c->persist_deadline = kTicksSinceStart + tcp_persist_next(c);
 	}
 	else
 	{
@@ -499,6 +514,15 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		if (c->snd_wnd != 0)
 			c->persist_ticks = 0;
 	}
+	// A probe is waited for on the persist clock's interval, not the
+	// retransmit timer's: the deadline is the interval that led to this
+	// probe, and when it passes unanswered tcp_poll doubles the interval,
+	// takes the probe back and sends the next at once — so probes are the
+	// promised interval apart whether the peer answers them or not (an
+	// answer arms the persist clock at the next doubling, above).
+	if (probed)
+		c->rto_deadline = kTicksSinceStart +
+		                  (c->persist_ticks ? c->persist_ticks : TCP_PERSIST_MIN_TICKS);
 }
 
 // Resend what the peer is waiting for: the SYN while the handshake is
@@ -957,6 +981,8 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				c->rcv_nxt = seq + 1;
 				c->snd_una = ack;        // our SYN is acknowledged, which disarms the timer
+				c->retries = 0;          // and refills the budget a resent SYN spent — progress, like any new ack
+				c->rto_backed_off = false;
 				if (c->rtt_timing)       // and the handshake is the first round trip measured (not if the SYN was resent — Karn)
 				{
 					c->rtt_timing = false;
@@ -1472,7 +1498,11 @@ void tcp_poll(void)
 				c->snd_nxt = c->snd_una;
 				c->snd_fin_sent = false;
 				c->rtt_timing = false;
-				tcp_output(c, false);       // sends nothing into a shut window; arms the persist
+				tcp_persist_next(c);        // the interval doubles...
+				kTcpStats.window_probes++;
+				printd(DEBUG_NET, "tcp: zero-window probe unanswered by %u.%u.%u.%u:%u — again (%u ticks)\n",
+				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->persist_ticks);
+				tcp_output(c, true);        // ...and the next probe goes now, waited for on it
 			}
 			else if (++c->retries > TCP_MAX_RETRIES)
 			{

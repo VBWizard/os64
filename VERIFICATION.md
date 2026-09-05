@@ -244,9 +244,13 @@ reports 40ms and slirp holds the bytes. A 2MB stream into a sink with a 4KB
 slirp: the capture (2026-09-04) shows the window go to zero with nothing in
 flight, probes at 1s, 2s and 4s each answered `ack == snd_una, win 0`,
 `cwnd` and `rto_ms` untouched by them, the peer's own update reopening the
-window, and the stream completing verified. (A 2000-byte stream through the
-same stall never sees the window shut — slirp holds it — so the FIN-into-a-
-zero-window case is covered by reading, not by this rig.)
+window, and the stream completing verified. The same run with the cable's
+`link down off` thrown after the second probe: the third and fourth went
+unanswered and the fourth followed the third at the interval that led to it
+(4s, then 8s) with no retransmit timeout in series, and the reopen was
+found when the link came back. (A 2000-byte stream through the same stall
+never sees the window shut — slirp holds it — so the FIN-into-a-zero-window
+case is covered by reading, not by this rig.)
 
 Delay and reorder are separate knobs ON PURPOSE: the cable keeps frame order
 under jitter, as a real pipe does, so a delay leg measures the clock and only
