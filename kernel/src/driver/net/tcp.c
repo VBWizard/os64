@@ -474,6 +474,38 @@ static void tcp_absorb_held(tcp_conn_t* c)
 }
 
 // ── 3. THE STATE MACHINE ────────────────────────────────────────────────────
+// WAKE ON ARRIVAL (DOORBELL.md): tcp_input's exit for every path that
+// changed something a parked reader or writer is waiting on. tcp_input
+// runs in knet, a thread, so it may take the scheduler's queue lock the
+// way pipe_read does — which the tick pass it used to run inside could
+// not. The condition is the sweep's (tcp_wake_if_ready), evaluated under
+// the connection lock; the wake happens after that lock is released so
+// the two are never held together, and past the release only the captured
+// thread pointers are touched — the conn may be the reaper's by then. The
+// sweep stays: it catches a waiter that registered but had not yet parked,
+// exactly as it does for pipes. Without this the reader would wake at the
+// next tick, and the stream would be tick-bound again, one buffer per tick.
+// Caller holds c->lock; this releases it.
+static void tcp_input_wake_and_unlock(tcp_conn_t* c, uint64_t irqflags)
+{
+	thread_t *wake_reader = NULL, *wake_writer = NULL;
+	if (c->reader != NULL && c->reader->threadState == THREAD_STATE_ISLEEP &&
+	    (c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
+	{
+		wake_reader = c->reader;
+		c->reader = NULL;
+	}
+	if (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP &&
+	    (!tcp_unacked(c) || c->reset || c->state == TCP_CLOSED))
+	{
+		wake_writer = c->writer;
+		c->writer = NULL;
+	}
+	spinlock_release_irqrestore(&c->lock, irqflags);
+	if (wake_reader) scheduler_wake_isleep_thread(wake_reader);
+	if (wake_writer) scheduler_wake_isleep_thread(wake_writer);
+}
+
 void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
                const void* seg, uint16_t length)
 {
@@ -603,10 +635,12 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		c->reset = true;
 		c->state = TCP_CLOSED;
 		// Logged under the lock: past the release the conn is the
-		// reaper's to free, and nothing here may read it again.
+		// reaper's to free, and nothing here may read it again. A
+		// parked reader or writer is waiting on exactly this death, so
+		// it leaves through the wake exit like data and FIN do.
 		printd(DEBUG_NET, "tcp: connection to %u.%u.%u.%u:%u reset by some jerk :-P\n",
 		       NET_IPV4_OCTETS(c->peer_ip), c->peer_port);
-		spinlock_release_irqrestore(&c->lock, irqflags);
+		tcp_input_wake_and_unlock(c, irqflags);
 		return;
 	}
 
@@ -839,31 +873,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			break;
 	}
 
-	// WAKE ON ARRIVAL (2026-09-05, DOORBELL.md). This function runs in knet,
-	// a thread, so it may take the scheduler's queue lock the way pipe_read
-	// does — which the tick pass it used to run inside could not. The
-	// condition is the sweep's (tcp_wake_if_ready), evaluated under the
-	// connection lock, and the wake happens after that lock is released so
-	// the two are never held together. The sweep stays: it catches a waiter
-	// that registered but had not yet parked, exactly as it does for pipes.
-	// Without this the reader would wake at the next tick, and the stream
-	// would be tick-bound again, one buffer per tick.
-	thread_t *wake_reader = NULL, *wake_writer = NULL;
-	if (c->reader != NULL && c->reader->threadState == THREAD_STATE_ISLEEP &&
-	    (c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
-	{
-		wake_reader = c->reader;
-		c->reader = NULL;
-	}
-	if (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP &&
-	    (!tcp_unacked(c) || c->reset || c->state == TCP_CLOSED))
-	{
-		wake_writer = c->writer;
-		c->writer = NULL;
-	}
-	spinlock_release_irqrestore(&c->lock, irqflags);
-	if (wake_reader) scheduler_wake_isleep_thread(wake_reader);
-	if (wake_writer) scheduler_wake_isleep_thread(wake_writer);
+	tcp_input_wake_and_unlock(c, irqflags);
 }
 
 // Give a port back to the draw. Caller holds kTcpListLock. Guarded because

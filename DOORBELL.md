@@ -154,9 +154,12 @@ Three consequences, each a DEBTS row this slice retires:
   The third driver shipped in August. Each driver's drain loops until its
   ring is empty, the NAPI rule; the per-pass bound the r8125 carries today
   existed only because a bound was owed to the pass.
-- **Readers wake on arrival.** After enqueueing bytes, `tcp_input` captures
-  the parked reader under the connection lock, releases it, and calls
-  `scheduler_wake_isleep_thread` exactly as `pipe_read` does. That was
+- **Readers wake on arrival.** Whenever a segment changes what a parked
+  reader or writer waits on — bytes, their FIN, an ACK for our unacked
+  data, or a reset — `tcp_input` captures the waiter under the connection
+  lock, releases it, and calls `scheduler_wake_isleep_thread` exactly as
+  `pipe_read` does (`tcp_input_wake_and_unlock`, the one exit for all of
+  them; an accepted RST leaves through it too). That was
   impossible while the stack ran inside the pass that holds the queue lock;
   in thread context it is the pipe's own idiom. The sweep remains for the
   registered-but-not-yet-parked race, as for pipes. Without this, the reader

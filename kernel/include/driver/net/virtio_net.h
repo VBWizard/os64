@@ -21,9 +21,14 @@ void init_virtio_net(void);
 // delivered through net_device_rx and their buffers recycled. The seam's
 // drain verb, called by knet when the tick rings its bell — once a tick,
 // the cadence the poll always had (DOORBELL.md) — cheap when idle (one
-// guarded compare against each ring's index), safe from any context
-// (irqsave lock inside); returns whether anything moved. Interrupt-driven
-// delivery is a future slice (DEBTS: MSI-X); this is the liveness path
+// guarded compare against each ring's index); returns whether anything
+// moved. THREAD CONTEXT ONLY, never from an interrupt handler: the frames
+// it delivers reach tcp_input, which wakes parked readers through the
+// scheduler's queue lock, and a handler landing on a core that already
+// holds that lock would deadlock it. A future virtio MSI-X handler RINGS
+// the doorbell (doorbell.h) and lets knet drain — the net_operations.drain
+// contract in net_device.h. Interrupt-driven delivery for this driver is
+// a future slice (DEBTS: MSI-X); the tick's bell is the liveness path
 // until then.
 struct net_device;   // the seam's handle; net_device.h owns it
 bool virtio_net_drain(struct net_device* dev);
