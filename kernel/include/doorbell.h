@@ -37,6 +37,7 @@ typedef struct doorbell
 	volatile bool rung;      // set by a ringer, cleared by the sleeper
 	uint64_t      rings;     // every ring, whoever rang — diagnostics, racy by design
 	uint64_t      wakes;     // rings that found the thread parked and relinked it
+	uint64_t      boosts;    // rings that found it runnable and expedited it in place
 	const char*   name;      // for /sys and the log
 } doorbell_t;
 
@@ -66,8 +67,12 @@ void doorbell_ring_in_pass(doorbell_t* db);
 void doorbell_park(doorbell_t* db, uint64_t backstop_ticks);
 
 // ANSWER: the scheduler's half. Called from inside a pass, under the queue
-// lock, at both service points scheduler.c names. Relinks every parked
-// thread whose bell is rung and marks it expedited.
+// lock, at both service points scheduler.c names. For every bell that is
+// rung: a PARKED thread is relinked and marked expedited; a RUNNABLE one —
+// the ring landed while it ran, and the pass requeued it before the second
+// service point — is marked expedited in place, so the pick that follows
+// takes it either way. A RUNNING one needs nothing: it sees the bit at the
+// top of its loop.
 void doorbell_service_locked(void);
 
 // The registry, for /sys. Index by position; a slot can be NULL.

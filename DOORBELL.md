@@ -89,7 +89,13 @@ same three lines as `tty_summon_wake` uses to roust kworker, in the exact
 same place, for the exact same reasons. The service point sits AFTER the
 requeue on purpose: a sleeper that raised SIGSLEEP and was still on the CPU
 when the bell rang is moved to ISLEEP by the requeue and pulled straight
-back out by the service, in one pass.
+back out by the service, in one pass. A thread the ring finds RUNNABLE —
+it was mid-drain when the interrupt landed, and the very pass the ring
+provoked has just requeued it — is marked `expedite` where it lies, no
+relink, so the pick hands the CPU straight back to it instead of to
+whatever aging favours; without that the boost held only for a sleeper,
+and a bell rung under a busy drainer bought nothing (Codex, PR #67). `/sys`
+counts these as `boosts`, beside `wakes`.
 
 **The lost-wakeup question, answered the way the pipe answered it.** The
 sleeper's loop is:

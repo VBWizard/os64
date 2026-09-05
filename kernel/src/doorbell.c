@@ -18,6 +18,7 @@ void doorbell_register(doorbell_t* db, thread_t* thread, const char* name)
 	db->rung   = false;
 	db->rings  = 0;
 	db->wakes  = 0;
+	db->boosts = 0;
 	db->name   = name;
 
 	// Find a free slot, then publish the pointer LAST so a service pass on
@@ -107,8 +108,24 @@ void doorbell_service_locked(void)
 		if (db == NULL || !db->rung)
 			continue;
 		thread_t* t = db->thread;
-		if (t == NULL || t->threadState != THREAD_STATE_ISLEEP)
-			continue;   // awake already: it will see the bit at the top of its loop
+		if (t == NULL)
+			continue;
+		if (t->threadState == THREAD_STATE_RUNNABLE)
+		{
+			// Awake but off the CPU: the ring landed while it ran, and the
+			// pass answering the ring has just requeued it behind the
+			// service point (or it was already waiting its turn). It will
+			// see the bit at the top of its loop; the boost is what makes
+			// that loop top come at the NEXT pick instead of after aging.
+			// No relink — it is on the runnable queue already. Counted
+			// once per ring, not once per pass that walks past it.
+			if (!t->expedite)
+				db->boosts++;
+			t->expedite = true;
+			continue;
+		}
+		if (t->threadState != THREAD_STATE_ISLEEP)
+			continue;   // RUNNING, here before its requeue or on another core: it will see the bit at the top of its loop
 		// The bit stays SET — the sleeper clears it, so a ring that lands
 		// between this relink and the sleeper's loop top is not lost.
 		db->wakes++;

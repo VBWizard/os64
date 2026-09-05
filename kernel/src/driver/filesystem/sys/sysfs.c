@@ -1436,6 +1436,7 @@ static void sys_gen_net_knet(synth_text_t *t)
 	synth_text_addf(t, "wake_cycles_max: %lu\n", kKnetWakeCyclesMax);
 	synth_text_addf(t, "bell_rings: %lu\n", kNetDoorbell.rings);
 	synth_text_addf(t, "bell_wakes: %lu\n", kNetDoorbell.wakes);
+	synth_text_addf(t, "bell_boosts: %lu\n", kNetDoorbell.boosts);
 	// Every bell in the registry, for the day there is a second daemon on
 	// one — async NVMe is the named next customer.
 	for (uint32_t i = 0; i < doorbell_count(); i++)
@@ -1443,8 +1444,8 @@ static void sys_gen_net_knet(synth_text_t *t)
 		doorbell_t *db = doorbell_at(i);
 		if (db == NULL)
 			continue;
-		synth_text_addf(t, "bell %s: rings %lu wakes %lu\n",
-		                db->name != NULL ? db->name : "?", db->rings, db->wakes);
+		synth_text_addf(t, "bell %s: rings %lu wakes %lu boosts %lu\n",
+		                db->name != NULL ? db->name : "?", db->rings, db->wakes, db->boosts);
 	}
 }
 
