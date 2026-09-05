@@ -108,6 +108,15 @@ typedef enum tcp_state
 #define TCP_RCV_BUF  65536
 #define TCP_MSS      1460
 
+// The smallest MSS a peer may talk us into. The option is the peer's word
+// for what it can take, and a peer can say anything — zero included, which
+// would make our congestion window zero and the first congestion-avoidance
+// step a division by it, in the kernel, from the wire. Below this the
+// value is refused and RFC 879's 536 stands. 48 is Linux's floor
+// (tcp_min_snd_mss, after the 2019 SACK-panic advisories): a segment that
+// small is a resource attack, not a network.
+#define TCP_SND_MSS_MIN 48
+
 // The send ring holds everything written and not yet acknowledged —
 // the segments in flight AND the bytes waiting behind them — so it is
 // also how far a write() can run ahead of the wire before it parks. Its

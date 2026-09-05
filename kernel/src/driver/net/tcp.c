@@ -424,6 +424,7 @@ static void tcp_output(tcp_conn_t* c, bool force)
 	bool sent_any = false;
 	bool parked = false;   // a send did not reach the wire now (tcp_send_segment): this pass stops
 	bool probed = false;   // `force` put one unit past a zero window: its answer is waited for on the persist clock
+	bool probe_refused = false;   // ...or tried to, and the NIC turned it away: asked again next tick, cadence unmoved
 
 	while (in_flight < c->snd_count)
 	{
@@ -467,6 +468,8 @@ static void tcp_output(tcp_conn_t* c, bool force)
 			// the pass stops here. tcp_poll's sweep tries again next tick;
 			// the ring drains meanwhile.
 			kTcpStats.tx_refused++;
+			if (probed)
+				probe_refused = true;
 			parked = true;
 			break;
 		}
@@ -514,6 +517,8 @@ static void tcp_output(tcp_conn_t* c, bool force)
 		if (tcp_send_segment(c, c->snd_nxt, TCP_FIN | TCP_ACK, NULL, 0, false) == IPV4_TX_REFUSED)
 		{
 			kTcpStats.tx_refused++;                        // never left: still queued, the sweep retries
+			if (force)
+				c->persist_deadline = kTicksSinceStart + 1;   // a refused probe is asked again next tick, cadence unmoved
 			return;
 		}
 		if (!(in_flight < c->snd_wnd))
@@ -537,7 +542,9 @@ static void tcp_output(tcp_conn_t* c, bool force)
 	// carry the window), and a window that is open again resets the
 	// interval for the next time.
 	bool fin_waiting = c->snd_fin && !c->snd_fin_sent;
-	if (!sent_any && in_flight == 0 && (c->snd_count > 0 || fin_waiting) && c->snd_wnd == 0)
+	if (probe_refused)
+		c->persist_deadline = kTicksSinceStart + 1;   // the NIC, not the peer, said no: ask again next tick, cadence unmoved
+	else if (!sent_any && in_flight == 0 && (c->snd_count > 0 || fin_waiting) && c->snd_wnd == 0)
 	{
 		if (c->persist_deadline == 0)
 			c->persist_deadline = kTicksSinceStart + tcp_persist_next(c);
@@ -554,7 +561,7 @@ static void tcp_output(tcp_conn_t* c, bool force)
 	// takes the probe back and sends the next at once — so probes are the
 	// promised interval apart whether the peer answers them or not (an
 	// answer arms the persist clock at the next doubling, above).
-	if (probed)
+	if (probed && !probe_refused)
 		c->rto_deadline = kTicksSinceStart +
 		                  (c->persist_ticks ? c->persist_ticks : TCP_PERSIST_MIN_TICKS);
 }
@@ -1045,7 +1052,14 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 					uint8_t olen = p[o + 1];
 					if (olen < 2 || o + olen > hdr_len) break;
 					if (kind == 2 && olen == 4)
-						c->snd_mss = net_read16(p + o + 2);
+					{
+						uint16_t said = net_read16(p + o + 2);
+						if (said >= TCP_SND_MSS_MIN)   // tcp.h: a smaller one is refused, the floor stands
+							c->snd_mss = said;
+						else
+							printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u advertised MSS %u — refused, using %u\n",
+							       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, said, c->snd_mss);
+					}
 					o += olen;
 				}
 				if (c->snd_mss > TCP_MSS)
@@ -1183,7 +1197,8 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			         data_len == 0 && !(flags & (TCP_SYN | TCP_FIN)) &&
 			         win == old_wnd && c->snd_wnd != 0)
 			{
-				c->dup_acks++;
+				if (c->dup_acks != 255)
+					c->dup_acks++;       // saturates: a wrap to 0 would forget a recovery in progress
 				if (c->dup_acks == 3 && seq_lt(c->snd_una, c->recover))
 				{
 					// Duplicates while the head is still BELOW the last
