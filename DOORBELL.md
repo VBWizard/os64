@@ -92,11 +92,16 @@ requeue on purpose: a sleeper that raised SIGSLEEP and was still on the CPU
 when the bell rang is moved to ISLEEP by the requeue and pulled straight
 back out by the service, in one pass. A thread the ring finds RUNNABLE —
 it was mid-drain when the interrupt landed, and the very pass the ring
-provoked has just requeued it — is marked `expedite` where it lies, no
-relink, so the pick hands the CPU straight back to it instead of to
-whatever aging favours; without that the boost held only for a sleeper,
-and a bell rung under a busy drainer bought nothing (Codex, PR #67). `/sys`
-counts these as `boosts`, beside `wakes`.
+provoked has just requeued it — gets NOTHING from the service: it sees the
+bit at the top of its loop and competes on aging for its next turn. That
+is the flood guard below, and it was tested the hard way: PR #67's round 2
+asked for the runnable case to be expedited in place, so a bell rung under
+a busy drainer would buy the next pick, and on the P5 — where the MSI rings
+once per frame — that pick was bought at every pass. knet owned the BSP
+until the ring emptied, the reader beside it emptied nothing, the window
+closed, and a 300 Mbit/s download held at 180. `/sys` counts the case as
+`rung_runnable` beside `wakes`; on that P5 run it read 79,733 against
+66,322 wakes, which is how the cause was seen.
 
 **The lost-wakeup question, answered the way the pipe answered it.** The
 sleeper's loop is:

@@ -18,7 +18,7 @@ void doorbell_register(doorbell_t* db, thread_t* thread, const char* name)
 	db->rung   = false;
 	db->rings  = 0;
 	db->wakes  = 0;
-	db->boosts = 0;
+	db->rung_runnable = 0;
 	db->name   = name;
 
 	// Find a free slot, then publish the pointer LAST so a service pass on
@@ -113,15 +113,18 @@ void doorbell_service_locked(void)
 		if (t->threadState == THREAD_STATE_RUNNABLE)
 		{
 			// Awake but off the CPU: the ring landed while it ran, and the
-			// pass answering the ring has just requeued it behind the
-			// service point (or it was already waiting its turn). It will
-			// see the bit at the top of its loop; the boost is what makes
-			// that loop top come at the NEXT pick instead of after aging.
-			// No relink — it is on the runnable queue already. Counted
-			// once per ring, not once per pass that walks past it.
-			if (!t->expedite)
-				db->boosts++;
-			t->expedite = true;
+			// pass answering the ring has just requeued it (or it was
+			// already waiting its turn). It sees the bit at the top of its
+			// loop, and it competes on AGING for its next turn — NOT the
+			// boost. The boost is one pick for a sleeper; handing it to a
+			// preempted drainer at every pass turns it into a priority
+			// under a NIC that rings once per frame, and the drainer then
+			// owns its core until the ring empties — which, with the reader
+			// starved beside it, is when the window closes (DOORBELL.md:
+			// a sustained flood must not starve the BSP; the P5 measured
+			// the other rule at 180 Mbit/s against 300). Counted, because
+			// this count is how that was seen.
+			db->rung_runnable++;
 			continue;
 		}
 		if (t->threadState != THREAD_STATE_ISLEEP)
