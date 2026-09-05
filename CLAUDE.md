@@ -419,15 +419,17 @@ first time a program with better taste in terminals runs.
   deferred in DEBTS.md.
 - **A cell costs the same eight bytes it always did**: the glyph, an
   attribute byte, a background palette INDEX, and the 32-bit foreground.
-  The three that were compiler padding now hold state, and the layout is
-  static-asserted against `os64_pty_cell_t` because gterm renders the same
-  cells in ring 3. The background is an index because SGR can only NAME
-  sixteen — `abi/include/os64/ansi.h` holds the palette and the two
+  One byte remains padding. Size and field offsets are static-asserted
+  against `os64_pty_cell_t` because gterm renders the same cells in ring 3.
+  The background index covers the supported sixteen-colour SGR subset plus
+  default paper; extended indexed and RGB SGR colours are consumed without
+  applying them. `abi/include/os64/ansi.h` holds the palette and the two
   functions that resolve a cell, so the glass and a gterm cannot disagree
   about what red is.
-- A background of ZERO means "this terminal's own", not black — a cleared
-  line is a `memset`, and every cell has to start meaning "nothing was said
-  here". Fixture: `/tests/ansiprobe` (add `paper` to change the background)
+- A background of ZERO means "this terminal's own", not black. New grids
+  and form-feed clearing use zeroed cells; scrolling and ANSI erasure use
+  the active SGR background. Fixture: `/tests/ansiprobe` (add `paper` to
+  change the background)
 
 ### SMP (Symmetric Multiprocessing)
 

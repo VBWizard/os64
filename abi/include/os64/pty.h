@@ -53,18 +53,12 @@ typedef struct os64_pty_header
 	uint32_t _reserved;
 } os64_pty_header_t;
 
-// One interpreted cell — layout pinned to the kernel's tty_cell_t (the
-// kernel static-asserts the match, the ext2-superblock trick): the glyph, 3
-// pad bytes, the XRGB color it was written in.
-// THE THREE BYTES AFTER THE GLYPH WERE PADDING AND ARE NOW STATE. The size
-// is unchanged and so is the static assert below — what changed is that the
-// bytes mean something, so a renderer that ignores them (an older gterm
-// against a newer kernel) simply draws without attributes, and a kernel that
-// never sets them (the reverse pairing) leaves zeros, which mean "plain".
-// The two ends can therefore be updated in either order.
+// One interpreted cell: glyph, attributes, background index, one padding
+// byte, and the XRGB foreground. syscall.c checks the size and field offsets
+// against the kernel's tty_cell_t because snapshots copy these bytes directly.
 typedef struct os64_pty_cell
 {
-	char     ch;                  // 0 = never written (render as blank)
+	char     ch;                  // 0 = blank
 	uint8_t  attrs;               // OS64_ANSI_ATTR_* (os64/ansi.h)
 	uint8_t  bg;                  // palette index+1; 0 = the terminal's own
 	uint8_t  _pad;

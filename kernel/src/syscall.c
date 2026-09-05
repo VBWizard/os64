@@ -1987,11 +1987,22 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return 0;
 }
 
-// The cell layouts must be the SAME BYTES — pty_snapshot memcpys grid rows
-// straight into the ABI struct. Pinned the ext2-superblock way: change either
-// side and the build stops here instead of the terminal rendering confetti.
+// pty_snapshot copies grid rows directly into the ABI struct, so their sizes
+// and field offsets must match. Catch layout drift before it reaches gterm.
 _Static_assert(sizeof(tty_cell_t) == sizeof(os64_pty_cell_t),
                "pty cell ABI drifted from tty_cell_t (size)");
+_Static_assert(__builtin_offsetof(tty_cell_t, ch) ==
+               __builtin_offsetof(os64_pty_cell_t, ch),
+               "pty cell ABI drifted from tty_cell_t (ch offset)");
+_Static_assert(__builtin_offsetof(tty_cell_t, attrs) ==
+               __builtin_offsetof(os64_pty_cell_t, attrs),
+               "pty cell ABI drifted from tty_cell_t (attrs offset)");
+_Static_assert(__builtin_offsetof(tty_cell_t, bg) ==
+               __builtin_offsetof(os64_pty_cell_t, bg),
+               "pty cell ABI drifted from tty_cell_t (bg offset)");
+_Static_assert(__builtin_offsetof(tty_cell_t, _pad) ==
+               __builtin_offsetof(os64_pty_cell_t, _pad),
+               "pty cell ABI drifted from tty_cell_t (_pad offset)");
 _Static_assert(__builtin_offsetof(tty_cell_t, color) ==
                __builtin_offsetof(os64_pty_cell_t, color),
                "pty cell ABI drifted from tty_cell_t (color offset)");

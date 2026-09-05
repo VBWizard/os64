@@ -1,7 +1,7 @@
 #ifndef OS64_ANSI_H
 #define OS64_ANSI_H
 
-// ansi.h — the sixteen colours an escape sequence can name, and the
+// ansi.h — the sixteen-colour subset supported by os64's SGR handling, and the
 // attributes a cell can carry. ONE copy, on the ABI shelf, for the reason
 // klog_format.h is here: both sides of the ring boundary render these cells.
 // The kernel paints the glass through BasicRenderer; gterm paints the same
@@ -12,9 +12,9 @@
 // WHY AN INDEX AND NOT A COLOUR. A tty cell is eight bytes — glyph,
 // attributes, background INDEX, and a 32-bit foreground — and the eight is
 // pinned by a static assert against the PTY grid's ABI. A second full XRGB
-// would not fit without doubling the fleet's scrollback (~4MB to ~8MB), and
-// it would buy nothing: an SGR sequence can only NAME sixteen backgrounds,
-// so sixteen is the whole of what a program can ask for. The foreground
+// would increase each cell's size and scrollback cost. The index covers the
+// supported sixteen-colour subset plus default paper; extended indexed and
+// RGB SGR colours are consumed without applying them. The foreground
 // stays a full XRGB because the kernel wrote colours there long before
 // escape sequences existed, and nothing is gained by narrowing it.
 
@@ -54,8 +54,8 @@ static inline uint32_t os64_ansi_color(uint8_t index)
 
 // A CELL'S BACKGROUND IS STORED WITH AN OFFSET OF ONE, and this is the kind
 // of off-by-one that has to be shouted rather than mentioned: zero means THE
-// TERMINAL'S OWN BACKGROUND, not black. Every cell of every tty starts as
-// eight zero bytes (a line is cleared with memset), so zero has to mean
+// TERMINAL'S OWN BACKGROUND, not black. Newly allocated grids are zeroed,
+// and form feed restores zeroed cells, so zero has to mean
 // "nothing was ever said about this cell" — and a screen full of cells that
 // each insisted on black would be a screen that ignored the background the
 // terminal was set to.

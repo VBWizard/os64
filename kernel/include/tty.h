@@ -55,18 +55,15 @@
 // which is the cheapest possible price for repaint-from-state plus
 // scrollback.
 //
-// THE ATTRIBUTES AND THE BACKGROUND COST NOTHING, because this struct was
-// already 8 bytes and three of them were padding the compiler inserted and
-// nobody used. The layout is pinned to `os64_pty_cell_t` by a static assert
-// (gterm renders these same cells in ring 3), and it stays 8 bytes — which
-// is why the background is a palette INDEX rather than a second XRGB:
-// os64/ansi.h has the argument, and the short version is that an escape
-// sequence can only NAME sixteen backgrounds, so sixteen is all a program
-// can ask for and a second 32-bit colour would double the fleet's scrollback
-// to express colours nobody can spell.
+// An attribute byte and a background index keep the cell at 8 bytes. Its
+// size and field offsets are checked against os64_pty_cell_t in syscall.c
+// because gterm renders these same cells in ring 3. The index represents
+// this implementation's sixteen-colour SGR subset plus default paper;
+// extended indexed and RGB SGR colours are consumed without applying them.
+// A second full XRGB would increase each cell's size and scrollback cost.
 typedef struct tty_cell
 {
-	char ch;                           // 0 = blank (never painted)
+	char ch;                           // 0 = blank
 	uint8_t attrs;                     // OS64_ANSI_ATTR_* (bold, reverse)
 	uint8_t bg;                        // palette index+1; 0 = the tty's own
 	uint8_t _pad;
@@ -103,7 +100,7 @@ typedef struct tty
 	// ── What an escape sequence has said (guarded by `lock`) ───────────────
 	// The pen: every cell written takes these until something changes them.
 	// `glass_bg` is the terminal's OWN background — what a cell with no
-	// background of its own is painted on, what a cleared region becomes,
+	// background of its own is painted on, what form feed restores,
 	// and what the margins beyond the last cell show. It is PER TTY, so VT2
 	// can be a different colour from VT1, and a gterm from both.
 	uint8_t  attrs;                    // OS64_ANSI_ATTR_*
