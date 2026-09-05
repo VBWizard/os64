@@ -649,14 +649,16 @@ static void r8125_phy_configure(r8125_t* r)
 	//     whose advertisement already matched would have kept whatever mode
 	//     it was left in (Codex, PR #66).
 	// (3) The advertisement is fine but the LINK IS BELOW what both sides
-	//     offer: 100/full between two parties that both listed 1000F is a
-	//     negotiation that went wrong, not a slow partner, and one restart
+	//     offer — speed AND duplex, in annex 28B's priority order: 100/full
+	//     between two parties that both listed 1000F is a negotiation that
+	//     went wrong, and so is 100/half between two that both listed
+	//     100/full (Codex, PR #66 round 3). Not a slow partner; one restart
 	//     is what every OS tries before anyone blames a cable. This is the
 	//     shape the P5 reported on 2026-09-05, and the "as found" dump is
 	//     what makes it decidable rather than guessed.
 	//
 	// A boot where the PHY already advertises everything, is in service, and
-	// negotiated the best common speed touches nothing — restarting a
+	// negotiated the best common mode touches nothing — restarting a
 	// negotiation that produced the right answer would only drop the link
 	// for nothing, and a link dropped at init is a link the post-boot
 	// network tests run on.
@@ -667,16 +669,17 @@ static void r8125_phy_configure(r8125_t* r)
 		why = "the PHY was left out of autonegotiating service";
 	if (why == NULL && r->netdev.link_up && r->netdev.link_mbps != 0)
 	{
-		uint32_t best = r8125_phy_best_common_mbps(
+		uint32_t best = r8125_phy_best_common_rank(
 			r8125_phy_abilities_ours(found.anar, found.gbcr, found.adv2500),
 			r8125_phy_abilities_partner(found.anlpar, found.gbsr, found.lpa2500));
-		if (best != 0 && r->netdev.link_mbps < best)
+		uint32_t linked = r8125_phy_mode_rank(r->netdev.link_mbps, r->netdev.full_duplex);
+		if (best != R8125_MODE_RANK_NONE && linked < best)
 			why = "the link is below what both sides offer";
 	}
 	if (why == NULL)
 	{
 		printd(DEBUG_BOOT, "r8125: PHY advertisement is already what we want, the PHY is in "
-		       "service and the link matches both sides' best — not renegotiating\n");
+		       "service and the link is the best mode both sides offer — not renegotiating\n");
 		return;
 	}
 
@@ -746,15 +749,28 @@ static void r8125_phy_configure(r8125_t* r)
 	// until the restart really initiates — and an older negotiation
 	// completing meanwhile shows the opposite transitions, which do not
 	// count (Codex, PR #66 round 2).
+	//
+	// A READ THAT TIMES OUT ENDS THE WAIT. Each failed OCP transaction has
+	// already spent its own bound (R8125_PHY_OCP_SPINS polls); a loop that
+	// retried it R8125_PHY_LINK_WAIT_SPINS times would spend fifty billion
+	// register reads with the tick stalled — the very condition the
+	// iteration bound exists for — and that is a boot hang, not a timeout
+	// (Codex, PR #66 round 3). So a window that stops answering ends every
+	// phase below at once, says so, and leaves the link as it stands.
 	uint64_t started = kTicksSinceStart;
 	uint32_t spins = 0;
 	bool restarted = false;
+	bool window_dead = false;
 	for (; spins < R8125_PHY_LINK_WAIT_SPINS; spins++)
 	{
 		uint16_t bmcr, bmsr;
-		if (r8125_phy_mii_read(r, R8125_MII_BMCR, &bmcr) &&
-		    r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr) &&
-		    r8125_phy_restart_taken(bmsr_before, phystatus_before,
+		if (!r8125_phy_mii_read(r, R8125_MII_BMCR, &bmcr) ||
+		    !r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr))
+		{
+			window_dead = true;
+			break;
+		}
+		if (r8125_phy_restart_taken(bmsr_before, phystatus_before,
 		                            bmcr, bmsr, r8125_read32(r, R8125_PHYSTATUS)))
 		{
 			restarted = true;
@@ -777,7 +793,9 @@ static void r8125_phy_configure(r8125_t* r)
 	// wire that is fine. Complete AND the MAC sees the link. Either bound
 	// ends the wait; a timeout is reported, not fatal.
 	bool negotiated = false;
-	if (!restarted)
+	if (window_dead)
+		;   // reported below, once
+	else if (!restarted)
 		printd(DEBUG_BOOT, "r8125: PHY never showed the restart taking within %lu ticks (restart bit "
 		       "still set, no complete-to-incomplete, no link fall) — not waiting for a completion "
 		       "that would be the old negotiation's\n", kTicksSinceStart - started);
@@ -786,8 +804,12 @@ static void r8125_phy_configure(r8125_t* r)
 		for (; spins < R8125_PHY_LINK_WAIT_SPINS; spins++)
 		{
 			uint16_t bmsr;
-			if (r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr) &&
-			    (bmsr & R8125_BMSR_ANEGCOMPLETE) &&
+			if (!r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr))
+			{
+				window_dead = true;
+				break;
+			}
+			if ((bmsr & R8125_BMSR_ANEGCOMPLETE) &&
 			    (r8125_read32(r, R8125_PHYSTATUS) & R8125_PHYS_LINK))
 			{
 				negotiated = true;
@@ -809,12 +831,24 @@ static void r8125_phy_configure(r8125_t* r)
 		for (; settle < R8125_PHY_LINK_WAIT_SPINS; settle++)
 		{
 			uint16_t anlpar;
-			if (r8125_phy_mii_read(r, R8125_MII_ANLPAR, &anlpar) && anlpar != 0)
+			if (!r8125_phy_mii_read(r, R8125_MII_ANLPAR, &anlpar))
+			{
+				window_dead = true;
+				break;
+			}
+			if (anlpar != 0)
 				break;
 			if (kTicksSinceStart - settle_started >= R8125_PHY_PARTNER_WAIT_TICKS)
 				break;
 			__asm__ volatile("pause");
 		}
+	}
+
+	if (window_dead)
+	{
+		printf("r8125: PHY window stopped answering while waiting for the renegotiation — the link stands as it is\n");
+		r8125_read_link(r);
+		return;
 	}
 
 	r8125_read_link(r);

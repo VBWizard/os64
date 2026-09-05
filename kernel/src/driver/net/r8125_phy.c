@@ -159,15 +159,6 @@ uint32_t r8125_phy_abilities_text(uint8_t abilities, char* out, uint32_t cap)
 	return at;
 }
 
-uint32_t r8125_phy_best_common_mbps(uint8_t ours, uint8_t theirs)
-{
-	uint8_t both = (uint8_t)(ours & theirs);
-	if (both & R8125_ABILITY_2500F)                          return 2500;
-	if (both & (R8125_ABILITY_1000F | R8125_ABILITY_1000H))  return 1000;
-	if (both & (R8125_ABILITY_100F | R8125_ABILITY_100H))    return 100;
-	if (both & (R8125_ABILITY_10F | R8125_ABILITY_10H))      return 10;
-	return 0;
-}
 
 bool r8125_phy_bmcr_out_of_service(uint16_t bmcr)
 {
@@ -186,4 +177,29 @@ bool r8125_phy_restart_taken(uint16_t bmsr_before, uint32_t phystatus_before,
 	bool link_fell = (phystatus_before & R8125_PHYS_LINK) != 0 &&
 	                 (phystatus_now & R8125_PHYS_LINK) == 0;
 	return complete_dropped || link_fell;
+}
+
+uint32_t r8125_phy_best_common_rank(uint8_t ours, uint8_t theirs)
+{
+	uint8_t both = (uint8_t)(ours & theirs);
+	if (both & R8125_ABILITY_2500F) return R8125_MODE_RANK_2500F;
+	if (both & R8125_ABILITY_1000F) return R8125_MODE_RANK_1000F;
+	if (both & R8125_ABILITY_1000H) return R8125_MODE_RANK_1000H;
+	if (both & R8125_ABILITY_100F)  return R8125_MODE_RANK_100F;
+	if (both & R8125_ABILITY_100H)  return R8125_MODE_RANK_100H;
+	if (both & R8125_ABILITY_10F)   return R8125_MODE_RANK_10F;
+	if (both & R8125_ABILITY_10H)   return R8125_MODE_RANK_10H;
+	return R8125_MODE_RANK_NONE;
+}
+
+uint32_t r8125_phy_mode_rank(uint32_t mbps, bool full_duplex)
+{
+	switch (mbps)
+	{
+		case 10:   return full_duplex ? R8125_MODE_RANK_10F   : R8125_MODE_RANK_10H;
+		case 100:  return full_duplex ? R8125_MODE_RANK_100F  : R8125_MODE_RANK_100H;
+		case 1000: return full_duplex ? R8125_MODE_RANK_1000F : R8125_MODE_RANK_1000H;
+		case 2500: return R8125_MODE_RANK_2500F;   // 2.5GBASE-T is full duplex only
+		default:   return R8125_MODE_RANK_NONE;
+	}
 }

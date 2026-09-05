@@ -252,13 +252,25 @@ bool r8125_phy_plan_advertisement(const r8125_phy_adv_t* have,
 uint8_t r8125_phy_abilities_ours(uint16_t anar, uint16_t gbcr, uint16_t adv2500);
 uint8_t r8125_phy_abilities_partner(uint16_t anlpar, uint16_t gbsr, uint16_t lpa2500);
 
-// The speed a correct negotiation lands on: the fastest mode both sides
-// offer. 0 when they share nothing — which is also what an empty partner
-// page yields, so a caller cannot mistake "not reported" for "10 Mbit".
-// A link running BELOW this number is a negotiation that went wrong (a
-// marginal pair, a partner that fumbled a page), and one restart is the
-// cure every OS applies before blaming the cable.
-uint32_t r8125_phy_best_common_mbps(uint8_t ours, uint8_t theirs);
+// The MODE a correct negotiation lands on, as a rank: 802.3 annex 28B's
+// priority order, 10 half below 10 full below 100 half ... below 2500
+// full, so that speed AND duplex are judged together. A link at 100/half
+// between two parties that both offer 100/full is a negotiation that went
+// wrong every bit as much as one at 100 when both offer 1000 (Codex, PR
+// #66 round 3); megabits alone could not see it. 0 = nothing in common,
+// which is also what an empty partner page yields.
+#define R8125_MODE_RANK_NONE   0
+#define R8125_MODE_RANK_10H    1
+#define R8125_MODE_RANK_10F    2
+#define R8125_MODE_RANK_100H   3
+#define R8125_MODE_RANK_100F   4
+#define R8125_MODE_RANK_1000H  5
+#define R8125_MODE_RANK_1000F  6
+#define R8125_MODE_RANK_2500F  7
+uint32_t r8125_phy_best_common_rank(uint8_t ours, uint8_t theirs);
+// The rank of a link as PHYstatus decoded it (r8125_link_t's mbps and
+// duplex); 0 for a speed the decode could not name.
+uint32_t r8125_phy_mode_rank(uint32_t mbps, bool full_duplex);
 
 // "10H/10F/100H/100F/1000F", or "none". Writes at most `cap` bytes
 // including the terminator and returns the length it wrote (not counting

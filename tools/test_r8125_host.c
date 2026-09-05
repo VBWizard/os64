@@ -568,22 +568,34 @@ static void test_phy_abilities_text(void)
 	CHECK(n == 0 && buf[0] == 'X', "cap 0 wrote something");
 }
 
-static void test_phy_best_common_speed(void)
+static void test_phy_best_common_mode(void)
 {
 	// The P5 as found on 2026-09-05: we offered everything including 2.5G,
-	// the switch offered 10/100/1000 — a correct negotiation lands on 1000.
+	// the switch offered 10/100/1000 — a correct negotiation lands on 1000F,
+	// and the link the P5 had (1000/full) is exactly that rank.
 	uint8_t ours   = r8125_phy_abilities_ours(0x1DE1, 0x0200, 0x0081);
 	uint8_t theirs = r8125_phy_abilities_partner(0xC5E1, 0x3800, 0x0000);
-	CHECK(r8125_phy_best_common_mbps(ours, theirs) == 1000, "P5 pair should be 1000: %u",
-	      r8125_phy_best_common_mbps(ours, theirs));
-	// Both 2.5G-capable: 2500. Half-duplex-only partner at 100: 100.
-	CHECK(r8125_phy_best_common_mbps(0x7F, 0x7F) == 2500, "2.5G pair");
-	CHECK(r8125_phy_best_common_mbps(0x7F, R8125_ABILITY_100H) == 100, "100H partner");
-	CHECK(r8125_phy_best_common_mbps(0x7F, R8125_ABILITY_10F) == 10, "10F partner");
-	// Nothing in common, and the empty partner page, both read as 0 — never
-	// a speed a caller could compare a link against.
-	CHECK(r8125_phy_best_common_mbps(R8125_ABILITY_1000F, R8125_ABILITY_100F) == 0, "disjoint");
-	CHECK(r8125_phy_best_common_mbps(0x7F, 0x00) == 0, "empty partner page");
+	CHECK(r8125_phy_best_common_rank(ours, theirs) == R8125_MODE_RANK_1000F, "P5 pair should be 1000F");
+	CHECK(r8125_phy_mode_rank(1000, true) == r8125_phy_best_common_rank(ours, theirs), "the P5's link is its best");
+	// The original symptom: linked at 100/full below a 1000F best.
+	CHECK(r8125_phy_mode_rank(100, true) < r8125_phy_best_common_rank(ours, theirs), "100/full is below 1000F");
+	// Codex's case (PR #66 round 3): both sides offer 100 half AND full,
+	// the link settled at 100/half — megabits match, the MODE does not.
+	uint8_t both100 = R8125_ABILITY_100H | R8125_ABILITY_100F;
+	CHECK(r8125_phy_best_common_rank(both100, both100) == R8125_MODE_RANK_100F, "100H+100F pair should be 100F");
+	CHECK(r8125_phy_mode_rank(100, false) < R8125_MODE_RANK_100F, "100/half is below 100F");
+	CHECK(r8125_phy_mode_rank(100, true) == R8125_MODE_RANK_100F, "100/full is 100F");
+	// Duplex outranks nothing across speeds: 100F is above 10F, below 1000H.
+	CHECK(R8125_MODE_RANK_10F < R8125_MODE_RANK_100H && R8125_MODE_RANK_100F < R8125_MODE_RANK_1000H, "annex 28B order");
+	// Both 2.5G-capable: 2500F. A half-duplex-only partner at 100: 100H.
+	CHECK(r8125_phy_best_common_rank(0x7F, 0x7F) == R8125_MODE_RANK_2500F, "2.5G pair");
+	CHECK(r8125_phy_best_common_rank(0x7F, R8125_ABILITY_100H) == R8125_MODE_RANK_100H, "100H partner");
+	// Nothing in common, and the empty partner page, both rank 0 — never a
+	// mode a caller could compare a link against.
+	CHECK(r8125_phy_best_common_rank(R8125_ABILITY_1000F, R8125_ABILITY_100F) == 0, "disjoint");
+	CHECK(r8125_phy_best_common_rank(0x7F, 0x00) == 0, "empty partner page");
+	// A speed the decode could not name ranks 0 too, so it never restarts anything.
+	CHECK(r8125_phy_mode_rank(0, true) == 0, "unknown speed");
 }
 
 int main(void)
@@ -612,7 +624,7 @@ int main(void)
 	test_phy_plan_adds_gigabit_and_drops_2500();
 	test_phy_plan_preserves_what_it_does_not_own();
 	test_phy_abilities_text();
-	test_phy_best_common_speed();
+	test_phy_best_common_mode();
 
 	if (g_failures == 0)
 	{
