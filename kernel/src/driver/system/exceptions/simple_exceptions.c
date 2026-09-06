@@ -7,6 +7,7 @@
 #include "smp_core.h"
 #include "task.h"
 #include "stack_trace.h"   // symbolized ring-3 call chains (NOTRACE-gated)
+#include "signals.h"       // SIGNALS_EXIT_SIGSEGV — the status a fault death leaves
 #include "CONFIG.h"
 #include "msr.h"        // rdmsr64 — GS_BASE in the fault report
 #include "log.h"
@@ -824,7 +825,7 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 	// Report told — free the wire BEFORE task_exit, which never returns.
 	exception_wire_unlock();
 
-	task->retVal = 139;   // 128 + SIGSEGV(11)
+	task->retVal = SIGNALS_EXIT_SIGSEGV;
 	task_exit();
 	__builtin_unreachable();
 }

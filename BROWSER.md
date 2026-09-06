@@ -255,8 +255,8 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      green PASS and red FAIL in the suite, and Chris's `$PROMPT` — which
      wants one small thing more, a way to SPELL an escape byte in a
      variable, since no shell vocabulary here has one yet.
-   - (b) **The client, `/bin/gopher` — its own program, not a mode of
-     os64get.** The protocols differ, but the KIND differs more: os64get
+   - (b) **DONE 2026-09-04. The client, `/bin/gopher` — its own program,
+     not a mode of os64get.** The protocols differ, but the KIND differs more: os64get
      is a one-shot fetcher that writes a file and exits with a code, and
      this is an interactive session with a screen and a history stack.
      What they share is the dial and the URL parser — `gopher://` URLs are
@@ -281,15 +281,68 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      file, `i` shown but not selectable, `3` the server's error shown as
      one, and **anything unknown shown but NOT followable** — guessing
      what a type means is how you download a thing that is not what it
-     said. Type `h` carries a `URL:http://…` link and is **handed to
+     said. A TYPE MEANS THE SAME THING WHEREVER THE ADDRESS CAME FROM:
+     `gopher gopher://host/9/thing.zip` on the command line saves it and
+     exits with a code, exactly as pressing Enter on that item would,
+     because the framing is the type's answer and not the menu's. Type `h` carries a `URL:http://…` link and is **handed to
      os64get**, which is only as good as os64get's exit codes are precise
      (Chris's condition, and the reason 3(a)–(c)'s code table was worth
      the care it got: 5 refused, 7 short, 13 bad address, 14 a coding it
      cannot read, 15 a redirect it could not follow).
-     A MENU IS A STRANGER'S BYTES ON YOUR TERMINAL, and (a) makes the
-     terminal obey more of them — so os64get's rule travels with the
-     handoff: control bytes are refused once, where the line is parsed,
-     never escaped at each print.
+     **THE HANDOFF SHOWS THE PAGE, AND TRANSLATES THE NUMBER** (both
+     2026-09-04, from Chris's first hour in real gopherspace). os64get
+     fetches into a temp file and the client displays it in the same
+     scroller a gopher text file gets, because a person who followed a
+     link and got their menu repainted with `exited 0` at the bottom has
+     not been shown anything. It is HTML source — os64 has no renderer
+     yet — and that is strictly more than nothing. Every code becomes a
+     SENTENCE: the one that matters is **an https link with no
+     `$https_proxy`**, which is most of the modern web and arrives as 13
+     when the item names it and 2 when a redirect reaches it. A status bar
+     reading `os64get exited 2` sends a person to look up a number; this
+     is the whole reason those codes were made precise one at a time.
+     **A DEAD LINK IS A PAGE THAT DID NOT LOAD, NOT THE END OF THE
+     SESSION** (2026-09-04, Chris asking whether a "cannot reach" always
+     killed the client — it did). The fetch lands in a second page and the
+     current one is untouched until it succeeds, so a burrow that has gone
+     off the air costs a sentence on the status bar and nothing else; Back
+     spends its crumb only if the page it names comes back. The FIRST fetch
+     stays fatal, and that asymmetry is the design: `gopher dead.host` is a
+     command that failed and owes an exit code. `q` asks before leaving for
+     the same reason — the session and its history are what it discards.
+     **AND TYPE `h` MEANS TWO THINGS.** A selector without a `URL:` is
+     type h's ORIGINAL meaning — an HTML file served by that gopher
+     server, predating the convention — and is fetched over gopher as
+     text. Reading it as a broken URL would refuse pages that work.
+     A PAGE IS A STRANGER'S BYTES ON YOUR TERMINAL, and (a) makes the
+     terminal obey more of them — so it takes TWO guards, because there
+     are two kinds of page. A MENU LINE is refused whole where it is
+     parsed, which is the only place that can stop a doctored item being
+     FOLLOWED rather than merely drawn. A TEXT FILE and an `h` link's
+     fetched HTML pass through no parse at all — they are somebody's
+     document, and refusing one for a stray byte would be refusing the
+     page — so they are escaped where they are DRAWN, in `cat -v`'s
+     notation, by the one clip-to-width function every painted string on
+     that screen goes through. The slice shipped with only the first
+     guard and the doctrine "refused once at the parse, never escaped at
+     each print", which read as settled because the half anyone checks —
+     menus — was the half it covered; a type-0 file full of `ESC[2J`
+     owned the screen. **A rule that names where a check goes is only as
+     good as its census of what arrives.**
+     WHAT THE SLICE SETTLED. The wire lives in `apps/gopher/wire.{c,h}`
+     and takes its bytes from a source function, so `tools/test_gopher_host.sh`
+     drives every case at chunk sizes 1, 2, 3, 7, 17, 64 and whole. There is
+     NO reference implementation to diff against — Python dropped gopherlib
+     in 3.0 — so the expectations are stated by hand, except the address
+     half, which is cross-checked against `urllib.parse`. Two bugs the host
+     suite caught before the OS ever ran it: `%00` in a selector decoded to a
+     NUL that every downstream check was blind to (they are all C string
+     operations, and they all stop AT it), and a menu line's tail could be
+     read past its cap. **A bar is painted with a BACKGROUND, not with
+     reverse video** — `ESC[K` fills with the pen's background and clears
+     attributes, and padding with spaces to the last column instead writes
+     the bottom-right cell, which SCROLLS the screen: the first boot lost its
+     title bar off the top edge and drew every row one line high.
      Harness: `tools/gophertestd.py` for deterministic menus, the way
      httptestd made HTTP testable, and Floodgap for the real world.
    Gopherspace is alive: Floodgap, SDF, magical.fish (Chris can vouch for
