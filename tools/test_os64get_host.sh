@@ -10,9 +10,13 @@ cc -std=c11 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
    tools/test_os64get_host.c userland/apps/os64get/install.c userland/apps/os64get/http.c \
    userland/libos64/{str,fmt,args,date,crc32,url}.c userland/libgzip/{gzip,inflate,deflate}.c \
    -Wl,--gc-sections,--wrap=os64_time -o "$work/os64get-test"
-for scenario in success absent unchanged force-identical no-archive single url url-https url-archive-blocked url-short url-cancel short crc \
+scenarios=(success absent unchanged force-identical no-archive single url url-https url-archive-blocked url-short url-cancel short crc \
                 backup-read backup-write backup-corrupt sync close publish aliases appeared unsafe-name archive-overlap \
-                cancel-list cancel-download cancel-backup cancel-verify cancel-commit cancel-cleanup; do
+                cancel-list cancel-download cancel-backup cancel-verify cancel-commit cancel-cleanup
+                review-empty-backup review-partial-backup review-ro review-full review-all-full
+                review-empty-ro review-legacy-list review-force-ro review-single-full review-duplicate-unchanged review-duplicate-new)
+if (( $# )); then scenarios=("$@"); fi
+for scenario in "${scenarios[@]}"; do
     mkdir "$work/$scenario"
     ASAN_OPTIONS=detect_leaks=0 "$work/os64get-test" "$scenario" "$work/$scenario"
 done

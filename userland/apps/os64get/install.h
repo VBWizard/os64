@@ -22,6 +22,9 @@ typedef struct {
 
 // One invocation owns the recorded paths. Completed backups survive cleanup.
 bool install_init(const char *archive);
+// Resolution is read-only; reserve scratch after ruling out an unchanged file.
+bool install_resolve(install_file_t *file, const char *destination);
+bool install_reserve(install_file_t *file);
 bool install_plan(install_file_t *file, const char *destination);
 bool install_conflicts(const install_file_t *a, const install_file_t *b);
 bool install_prepare(install_file_t *file);
@@ -29,6 +32,7 @@ bool install_recheck(const install_file_t *file);
 bool install_begin_commit(void);
 bool install_commit(install_file_t *file);
 bool install_cleanup(install_file_t *files, unsigned count);
+// Empty until at least one original backup has been finalized.
 const char *install_archive(void);
 void install_cancel(int signo);
 bool install_cancelled(void);

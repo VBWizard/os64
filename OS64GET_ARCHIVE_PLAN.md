@@ -95,7 +95,9 @@ Structure `-a` as three batch phases, with run-wide cleanup:
 
 1. Resolve and check the manifest, skip unchanged destinations, and receive
    and validate the incoming files. Reject duplicate or filesystem-equivalent
-   destination mappings before staging.
+   destination mappings before receiving payloads. Resolve and compare before
+   reserving scratch: unchanged entries need no filesystem writes. Existing
+   resolved names and changed entries' staging basenames supply alias checks.
 2. Prepare and verify the required backups of old destinations. All required
    downloads and backups must be ready before the first installation rename.
 3. Publish the prepared files with same-filesystem renames, then clean up.
@@ -184,7 +186,7 @@ Verify bytes at the installed and archive paths, not just success messages.
 
 ## Verification
 
-`tools/test_os64get_host.sh` passes 29 scenarios using the production application control flow with
+`tools/test_os64get_host.sh` passes 40 scenarios using the production application control flow with
 host filesystem and transport adapters under ASan/UBSan (leak detection disabled
 for the execution environment). It covers successful and cancelled batches,
 new and unchanged destinations, forced identical downloads, backup read/write/
@@ -194,6 +196,12 @@ and URL success/failure/cancellation. HTTP and proxied HTTPS replacements leave
 no archive directory; HTTP also succeeds with an unusable archive path.
 Repeated SIGINT requests during cleanup
 and an interrupted first publication rename are included.
+
+PR review regressions cover failed first and later backup finalization, with
+recovery messages emitted only when a completed backup exists; unchanged files
+on read-only or metadata-full mounts, including empty files; a fully unchanged
+batch and single-file fetch without scratch writes; forced read-only failure;
+legacy name-only manifests; and existing/absent FAT duplicate destinations.
 
 The strict userland and full image builds pass, as do the existing HTTP and
 gzip host suites. `git diff --check` passes. The stale-reference scan's server

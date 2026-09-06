@@ -147,10 +147,13 @@ to take precedence.
 
 For `-a`, preparation covers the batch before installation begins:
 
-1. **Catalogue and plan.** Read LIST, resolve destinations, reject conflicting
-   targets (including filesystem aliases), and reserve private staging names.
-2. **Download and verify.** Skip files that match the advertised length and
-   CRC unless forced. Receive the others into scratch files and verify the
+1. **Catalogue and plan.** Read LIST and resolve destinations. Compare files
+   with the advertised length and CRC before reserving scratch, so unchanged
+   files need no writes on a read-only or full mount. Unless forced, matching
+   entries need no staging reservation. Reject conflicting targets, using
+   filesystem-resolved names and the changed entries' reserved staging names
+   to identify aliases before receiving payloads.
+2. **Download and verify.** Receive changed files into scratch and verify the
    received length and CRC before accepting them. Sync and close the files.
 3. **Prepare originals.** Compare downloaded contents with existing targets.
    If they differ and backups are enabled, copy the old destination to
@@ -206,6 +209,8 @@ Deleting a large installed file and downloading it again therefore creates
 no archive entry. After successful installation and cleanup, the incoming
 copy exists at its destination, without a retained download copy elsewhere.
 
+The client reports “originals kept at” only after a backup is finalized. A
+failed first backup may leave an empty archive directory, without that message.
 Completed backups remain even if later preparation, cancellation, or a rename
 fails. Their presence records originals preserved for attempted replacements;
 it does not prove that those replacements completed. Backups preserve file

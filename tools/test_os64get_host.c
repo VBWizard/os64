@@ -33,7 +33,10 @@ static char sandbox[512];
 static char fdpaths[1024][256];
 static const char *scenario;
 static unsigned installs, backup_reads;
-static bool injected;
+static bool injected, run_active;
+static unsigned blocked_scratch_attempts;
+static char output_text[16384];
+static size_t output_used;
 static os64_signal_fn handler;
 static const char *names[] = { "a", "b", "c" };
 static const char *payloads[] = { "incoming A", "incoming B", "incoming C" };
@@ -97,6 +100,7 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *ctx)
     (void)path;
     fn("a", "/bin", ctx); fn("b", "/home", ctx); fn("c", "/fat", ctx);
     fn("archive", "/home/archive", ctx);
+    if (is("review-duplicate-unchanged") || is("review-duplicate-new")) fn("C", "/fat", ctx);
     return 0;
 }
 os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **out, size_t *len)
@@ -106,7 +110,12 @@ os64_slurp_status_t os64_slurp(const char *path, size_t cap, uint8_t **out, size
         "/ ext2 d 1 root g rw 4096 10000000 9000000 0 0\n"
         "/home ext2 d 2 home g rw 4096 10000000 9000000 0 0\n"
         "/fat fat d 3 fat g rw 512 10000000 9000000 0 0\n";
-    *len = strlen(text); assert(*len < cap); *out = (uint8_t *)strdup(text); return OS64_SLURP_OK;
+    *len = strlen(text); assert(*len < cap); *out = (uint8_t *)strdup(text);
+    if (is("review-ro") || is("review-empty-ro") || is("review-force-ro")) {
+        char *fat = strstr((char *)*out, "/fat fat"); assert(fat);
+        char *mode = strstr(fat, " rw "); assert(mode); mode[2] = 'o';
+    }
+    return OS64_SLURP_OK;
 }
 int64_t os64_open(const char *path, const char *mode)
 {
@@ -135,7 +144,17 @@ int64_t os64_stat(const char *path, os64_dirent_t *out)
     snprintf(out->name, sizeof(out->name), "%s", strrchr(full, '/') + 1);
     return 0;
 }
-int64_t os64_mkdir(const char *path) { char full[1024]; host_path(path, full); return mkdir(full, 0700); }
+int64_t os64_mkdir(const char *path)
+{
+    bool fat = !strncmp(path, "/fat/.os64get-tmp", 17);
+    bool root = !strncmp(path, "/tmp/os64get", 12);
+    if (run_active && ((fat && (is("review-ro") || is("review-empty-ro") || is("review-full"))) ||
+                       (root && is("review-single-full")) ||
+                       ((fat || root || strstr(path, ".os64get-tmp")) && is("review-all-full")))) {
+        blocked_scratch_attempts++; return -1;
+    }
+    char full[1024]; host_path(path, full); return mkdir(full, 0700);
+}
 int64_t os64_unlink(const char *path)
 {
     if (is("cancel-cleanup")) interrupt_run();
@@ -153,6 +172,8 @@ int64_t os64_rename_with_flags(const char *from, const char *to, uint64_t flags)
     bool publish = !strcmp(to, targets[0]) || !strcmp(to, targets[1]) || !strcmp(to, targets[2]);
     if (publish && is("cancel-commit") && !injected) { interrupt_run(); return OS64_INTERRUPTED; }
     if (publish && is("publish") && !strcmp(to, targets[1])) return -1;
+    if (!publish && strstr(to, "/home/archive/") &&
+        (is("review-empty-backup") || (is("review-partial-backup") && installs == 0 && strstr(to, "/home/b")))) return -1;
     if (publish) installs++;
     // Assert that application publication does not attempt a cross-mount move.
     int a = !strncmp(from, "/home/", 6) ? 1 : !strncmp(from, "/fat/", 5) ? 2 : 0;
@@ -191,15 +212,24 @@ int64_t os64_dial(const char *dial)
 { (void)dial; assert(connections < 16); return (int64_t)(10000 + connections++); }
 int64_t os64_write(int32_t h, const void *buf, size_t n)
 {
-    if (h < 3) return (int64_t)fwrite(buf, 1, n, h == 2 ? stderr : stdout);
+    if (h < 3) {
+        assert(output_used + n < sizeof(output_text));
+        memcpy(output_text + output_used, buf, n); output_used += n; output_text[output_used] = 0;
+        return (int64_t)fwrite(buf, 1, n, h == 2 ? stderr : stdout);
+    }
     if (h >= 10000) {
         unsigned i = (unsigned)(h - 10000);
         if (n == 5 && !memcmp(buf, "LIST\n", 5)) {
             size_t used = 0;
-            for (unsigned j = 0; j < 3; j++)
+            for (unsigned j = 0; j < 3; j++) {
+                if (is("review-legacy-list")) {
+                    used += (size_t)snprintf(network[i] + used, sizeof(network[i]) - used, "%s\n", names[j]);
+                    continue;
+                }
                 used += (size_t)snprintf(network[i] + used, sizeof(network[i]) - used,
                                         "%s %zu %08x\n", names[j], strlen(payloads[j]),
                                         os64_crc32(payloads[j], strlen(payloads[j])));
+            }
             strcat(network[i], ".\n");
         } else if ((n > 5 && !memcmp(buf, "GET /", 5)) ||
                    (n > 12 && !memcmp(buf, "GET https://", 12))) {
@@ -245,11 +275,58 @@ static unsigned file_count(const char *path)
     closedir(dir); return count;
 }
 
+static void review_scenario(void)
+{
+    bool duplicate = is("review-duplicate-unchanged") || is("review-duplicate-new");
+    bool single = is("review-single-full");
+    if (is("review-empty-ro")) payloads[2] = "";
+    if (duplicate) {
+        names[0] = "c"; names[1] = "C"; names[2] = "b";
+        payloads[1] = payloads[0];
+        if (is("review-duplicate-unchanged")) put("/fat/c", payloads[0]);
+    } else {
+        put(targets[0], single || is("review-all-full") ? payloads[0] : "local A");
+        put(targets[1], is("review-all-full") ? payloads[1] : "local B");
+        put(targets[2], is("review-empty-backup") || is("review-partial-backup") ? "local C" : payloads[2]);
+    }
+    if (is("review-legacy-list")) put(targets[2], "");
+    char *batch[] = { "os64get", "-a", "-q", "host", NULL };
+    char *force[] = { "os64get", "-a", "-q", "-f", "host", NULL };
+    char *one[] = { "os64get", "-q", "host", "a", "/bin/a", NULL };
+    run_active = true;
+    int rc = single ? os64get_entry(5, one) : is("review-force-ro") ? os64get_entry(5, force) : os64get_entry(4, batch);
+    run_active = false;
+    bool backup_failure = is("review-empty-backup") || is("review-partial-backup");
+    assert(rc == (duplicate ? GET_USAGE : backup_failure ? GET_ARCHIVE_FAILED : is("review-force-ro") ? GET_WRITE_FAILED : GET_OK));
+    if (backup_failure) {
+        contents(targets[0], "local A"); contents(targets[1], "local B"); contents(targets[2], "local C");
+        bool kept = is("review-partial-backup");
+        assert(file_count("/home/archive") == (kept ? 1u : 0u));
+        assert((strstr(output_text, "originals kept at") != NULL) == kept);
+        assert(installs == 0);
+    } else if (duplicate || is("review-force-ro")) assert(installs == 0);
+    else {
+        contents(targets[0], payloads[0]);
+        contents(targets[1], single ? "local B" : payloads[1]);
+        contents(targets[2], payloads[2]);
+        assert(blocked_scratch_attempts == 0);
+        unsigned expected = single || is("review-all-full") ? 0u : is("review-legacy-list") ? 3u : 2u;
+        assert(installs == expected);
+        assert(file_count("/home/archive") == expected);
+    }
+    assert(file_count("/tmp/os64get") == 0);
+    assert(file_count("/home/.os64get-tmp") == 0);
+    assert(file_count("/fat/.os64get-tmp") == 0);
+    for (int i = 3; i < 1024; i++) assert(fdpaths[i][0] == 0);
+    printf("PASS %s\n", scenario);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 3); scenario = argv[1]; snprintf(sandbox, sizeof(sandbox), "%s", argv[2]);
     assert(os64_mkdir("/bin") == 0); assert(os64_mkdir("/home") == 0);
     assert(os64_mkdir("/fat") == 0); assert(os64_mkdir("/tmp") == 0);
+    if (!strncmp(scenario, "review-", 7)) { review_scenario(); return 0; }
     if (is("archive-overlap")) {
         install_file_t f;
         assert(install_init("/fat/.OS64GET-TMP"));

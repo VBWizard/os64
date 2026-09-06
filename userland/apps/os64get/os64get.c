@@ -32,7 +32,7 @@
 #define GET_PUBLISH_FAILED 10  // downloaded fine, could not put it in place
 #define GET_ARCHIVE_FAILED 11  // could not make or keep the archive copy
 // The destination matches the server's length and CRC, so no payload was
-// fetched. The run still owns its empty staging reservation. This status
+// fetched. A batch may still own an empty staging reservation. This status
 // never escapes main (which reports it and exits 0) — it exists so the commit
 // phase knows there is no downloaded file to prepare.
 #define GET_UNCHANGED      12
@@ -104,6 +104,7 @@ typedef struct {
     char     name[GET_NAME_MAX];
     uint64_t length;
     uint32_t crc;
+    bool     has_checksum;  // distinguishes an empty file from a name-only LIST entry
     char     lot[GET_LOT_MAX];
 } get_entry_t;
 
@@ -630,6 +631,10 @@ static int fetch_stage(const char *host, const char *name, install_file_t *stage
     }
 
     // ── Receive into managed scratch ──────────────────────────────────────
+    if (!stage->part[0] && !install_reserve(stage)) {
+        os64_close((int32_t)conn);
+        return GET_WRITE_FAILED;
+    }
     int64_t out = os64_open(partPath, "w");
     if (out < 0)
     {
@@ -865,6 +870,7 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
         entries[count].name[sp] = '\0';
         entries[count].length = 0;
         entries[count].crc = 0;
+        entries[count].has_checksum = false;
         entries[count].lot[0] = '\0';
 
         // "<name> <length> <crc> <lot>". A server that sends only the name
@@ -884,7 +890,8 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
             const char *q = p;
             while (*q != '\0' && *q != ' ')
                 q++;
-            if (parse_u64(p, q, &entries[count].length))
+            bool length_ok = parse_u64(p, q, &entries[count].length);
+            if (length_ok)
                 *totalBytes += entries[count].length;
             if (*q == ' ')
             {
@@ -892,7 +899,7 @@ static int32_t fetch_list(const char *host, get_entry_t *entries, int32_t max,
                 const char *ce = cs;
                 while (*ce != '\0' && *ce != ' ')
                     ce++;
-                parse_hex32(cs, ce, &entries[count].crc);
+                entries[count].has_checksum = parse_hex32(cs, ce, &entries[count].crc) && length_ok;
                 if (*ce == ' ')
                 {
                     // "-" is the server's word for "this file came from a
@@ -2301,7 +2308,7 @@ static int get_main(int argc, char **argv)
                                      lot, &conf, dest);
         if (rc != GET_OK) return rc;
         stage_count = 1;
-        if (!install_plan(&stages[0], dest)) return GET_WRITE_FAILED;
+        if (!install_resolve(&stages[0], dest)) return GET_WRITE_FAILED;
         rc = fetch_stage(host, operands[1], &stages[0], quiet, force);
         if (rc == GET_UNCHANGED) return GET_OK;
         if (rc != GET_OK) return rc;
@@ -2321,15 +2328,21 @@ static int get_main(int argc, char **argv)
         os64_printf("os64get: %ld files, %lu bytes, from %s\n",
                     (long)n, (unsigned long)totalBytes, host);
 
-    // Plan and reserve names before network payloads. The staging basenames
-    // let the destination filesystem itself answer duplicate/alias checks.
+    // Resolve destinations before reserving scratch. Unchanged files need
+    // no writes even on a read-only or full mount. Changed entries reserve
+    // basenames so the filesystem can also identify aliases of absent targets.
+    static bool unchanged_entry[GET_MAX_LIST];
     for (int32_t i = 0; i < n; i++) {
         if (install_cancelled()) return GET_CANCELLED;
         char dest[GET_PATH_MAX];
         int rc = resolve_destination(entries[i].name, NULL, entries[i].lot, &conf, dest);
         if (rc != GET_OK) return rc;
         stage_count = (unsigned)i + 1;
-        if (!install_plan(&stages[i], dest)) return GET_WRITE_FAILED;
+        if (!install_resolve(&stages[i], dest)) return GET_WRITE_FAILED;
+        unchanged_entry[i] = !force && entries[i].has_checksum &&
+            local_matches(stages[i].dest, entries[i].length, entries[i].crc);
+        if (install_cancelled()) return GET_CANCELLED;
+        if (!unchanged_entry[i] && !install_reserve(&stages[i])) return GET_WRITE_FAILED;
         for (int32_t j = 0; j < i; j++) {
             if (install_conflicts(&stages[j], &stages[i])) {
                 os64_hprintf(OS64_STDERR, "os64get: duplicate destination: %s\n", dest);
@@ -2342,8 +2355,7 @@ static int get_main(int argc, char **argv)
     unsigned failed = 0, unchanged = 0;
     for (int32_t i = 0; i < n; i++) {
         if (install_cancelled()) return GET_CANCELLED;
-        if (!force && entries[i].length != 0 &&
-            local_matches(stages[i].dest, entries[i].length, entries[i].crc)) {
+        if (unchanged_entry[i]) {
             unchanged++;
             if (!quiet && !flgChangesOnly)
                 os64_printf("[%ld/%ld] %s — unchanged\n", (long)(i + 1), (long)n, entries[i].name);

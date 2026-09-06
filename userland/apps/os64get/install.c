@@ -20,13 +20,13 @@ static install_mount_t mounts[MOUNT_MAX];
 static unsigned mount_count, sequence;
 static char archive_root[INSTALL_PATH_MAX], archive_run[INSTALL_PATH_MAX];
 static volatile bool cancelled;
-static bool committing;
+static bool committing, originals_kept;
 static uint8_t copy_buffer[COPY_CHUNK];
 
 void install_cancel(int signo) { (void)signo; cancelled = true; }
 bool install_cancelled(void) { return cancelled && !committing; }
 bool install_cancel_requested(void) { return cancelled; }
-const char *install_archive(void) { return archive_run; }
+const char *install_archive(void) { return originals_kept ? archive_run : ""; }
 
 static bool problem(const char *action, const char *path)
 {
@@ -170,7 +170,7 @@ static bool remove_owned(char *path)
 bool install_init(const char *archive)
 {
     mount_count = sequence = 0;
-    cancelled = committing = false;
+    cancelled = committing = originals_kept = false;
     os64_memset(mounts, 0, sizeof(mounts));
     archive_root[0] = archive_run[0] = '\0';
     uint8_t *report = NULL;
@@ -253,7 +253,7 @@ static bool reserved_path(const char *dest)
     return false;
 }
 
-bool install_plan(install_file_t *f, const char *destination)
+bool install_resolve(install_file_t *f, const char *destination)
 {
     os64_memset(f, 0, sizeof(*f));
     char parent[INSTALL_PATH_MAX];
@@ -264,6 +264,12 @@ bool install_plan(install_file_t *f, const char *destination)
         return problem("plan destination", destination);
     if (os64_stat(f->dest, &e) == 0 && (e.flags & OS64_DE_DIR))
         return problem("replace a directory", f->dest);
+    return true;
+}
+
+bool install_reserve(install_file_t *f)
+{
+    if (install_cancelled()) return false;
     const char *run;
     if (!scratch_run(mount_for(f->dest), &run) || !run_directory(f->directory, run))
         return problem("create staging directory", f->dest);
@@ -275,11 +281,24 @@ bool install_plan(install_file_t *f, const char *destination)
     return close_file((int32_t)h);
 }
 
+bool install_plan(install_file_t *f, const char *destination)
+{
+    return install_resolve(f, destination) && install_reserve(f);
+}
+
 bool install_conflicts(const install_file_t *a, const install_file_t *b)
 {
+    // Existing names were resolved by the filesystem, including FAT aliases.
+    if (os64_streq(a->dest, b->dest)) return true;
     char ap[INSTALL_PATH_MAX], bp[INSTALL_PATH_MAX], probe[INSTALL_PATH_MAX];
     if (!parent_of(ap, a->dest) || !parent_of(bp, b->dest)) return true;
     if (!os64_streq(ap, bp)) return false;
+    // Unchanged entries need no staging file. If neither entry has one,
+    // their existing resolved names above supply the identity check.
+    if (!a->directory[0]) {
+        if (!b->directory[0]) return false;
+        const install_file_t *swap = a; a = b; b = swap;
+    }
     // The private staging file has the destination's basename on the same
     // filesystem. Probe it using the other name to let FAT resolve aliases,
     // including names absent at the real destination, without case guesses.
@@ -381,6 +400,7 @@ static bool backup_original(install_file_t *f)
     if (os64_rename_with_flags(f->backup_part, candidate, OS64_RENAME_NOREPLACE) < 0) return false;
     f->backup_part[0] = '\0';
     copy_path(f->backup, candidate);
+    originals_kept = true;
     return true;
 }
 
