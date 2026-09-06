@@ -12,6 +12,7 @@
 #include "sprintf.h"
 #include "memset.h"
 #include "smp_core.h"
+#include "x86_64.h"   // read_apic_id works before GS-based CLS is installed
 #include "task.h"
 #include "scheduler.h"  //for scheduler_wake_task
 #include "signals.h"
@@ -262,8 +263,6 @@ static bool log_awaiting_userland_sink(void)
 
 void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t category, bool continued, const char *message)
 {
-	core_local_storage_t *cls = get_core_local_storage();
-
 	if (!kLoggingInitialized)
 		return;
 	if (core >= MAX_CPUS) panic("Invalid core ID in log_store_entry: %u", core);
@@ -279,10 +278,14 @@ void log_store_entry(uint16_t core, uint64_t ticks, uint8_t priority, uint8_t ca
     entry->log_level = priority;
     entry->category = category;
     entry->continued = continued;
-	if (kSMPInitDone)
-		entry->threadID = cls->currentThread->threadID;
-	else
-		entry->threadID = 0;
+    // Early boot has no GS-based CLS. Read it only when SMP startup has
+    // installed the per-core state and a thread ID can be recorded.
+    entry->threadID = 0;
+    if (kSMPInitDone) {
+        core_local_storage_t *cls = get_core_local_storage();
+        if (cls->currentThread != NULL)
+            entry->threadID = cls->currentThread->threadID;
+    }
     snprintf(entry->message, MAX_LOG_MESSAGE_SIZE, "%s", message);
     entry->message[MAX_LOG_MESSAGE_SIZE-1] = '\0';
     buffer->head = (buffer->head + 1) % buffer->capacity;
@@ -566,7 +569,9 @@ uint32_t klog_dequeue(log_entry_t *out, uint32_t max)
 }
 
 bool logd_thread(bool daemon) {
-    thread_t *self = get_core_local_storage()->currentThread;
+    // Synchronous early-boot flushes have no GS-based CLS. Only the daemon
+    // needs its current thread to sleep between drain passes.
+    thread_t *self = daemon ? get_core_local_storage()->currentThread : NULL;
     bool nonDaemonRunSuccess = false;
     static uint32_t drain_pass = 0;
     static bool was_claimed = false;
@@ -644,7 +649,7 @@ bool logd_thread(bool daemon) {
         // Try-lock: if another CPU is already flushing, skip this wakeup
         if (!__sync_lock_test_and_set(&kLogDWorkLock, 1))
         {
-            kLogDDrainerCore = get_core_local_storage()->apic_id;
+            kLogDDrainerCore = read_apic_id();
             if (kLoggingInitialized)
             {
                 // k-way merge: on each step pick the core whose oldest entry
@@ -759,7 +764,7 @@ void logd_emergency_flush(void)
         // the price of completeness.
         kLogDWorkLock = 1;
     }
-    kLogDDrainerCore = get_core_local_storage()->apic_id;
+    kLogDDrainerCore = read_apic_id();
 
     // Budget = every slot in every queue, so cores that are still alive and
     // producing can't hold us hostage: we flush the backlog that existed when

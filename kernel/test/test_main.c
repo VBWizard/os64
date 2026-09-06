@@ -102,6 +102,58 @@ bool test_register(const char *name, bool (*func)(void), int phase)
         phase == TEST_PHASE_PREBOOT ? TEST_POLICY_PANIC : TEST_POLICY_WARN);
 }
 
+static bool test_null_guard_for_root(pt_entry_t *root, const char *name)
+{
+    uintptr_t pte_address = paging_pte_address(root, 0);
+    if (pte_address == 0 || *(pt_entry_t *)pte_address != 0 ||
+        (paging_walk_paging_table_keep_flags(root, 0, true) & PAGE_PRESENT)) {
+        paging_report_walk(root, 0, name);
+        return false;
+    }
+
+    // A remap must be refused even without PAGE_PRESENT in the request,
+    // and an unaligned address must not bypass the first-page guard.
+    paging_map_page(root, 0, PAGE_SIZE, 0);
+    paging_map_page(root, PAGE_SIZE - 1, PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    if (*(pt_entry_t *)pte_address != 0 ||
+        (paging_walk_paging_table_keep_flags(root, 0, true) & PAGE_PRESENT)) {
+        paging_report_walk(root, 0, name);
+        return false;
+    }
+    return true;
+}
+
+static bool test_page_zero_unmapped(void)
+{
+    if (!test_null_guard_for_root((pt_entry_t *)kKernelPML4v, "kernel NULL guard"))
+        TEST_FAIL("kernel page zero is not guarded");
+
+    // Exercise the production task-table constructor without creating a
+    // schedulable thread. Its arena owns the throwaway tables in full.
+    task_t *task = kmalloc(sizeof(*task));
+    if (task == NULL)
+        TEST_FAIL("cannot allocate the NULL-guard test task");
+    memset(task, 0, sizeof(*task));
+    task_init_page_tables(task);
+    bool ok = test_null_guard_for_root(task->pml4v, "fresh task NULL guard");
+
+    // Bulk mapping must retain the guard while still mapping its neighbour.
+    // The backing addresses are arena pages; the test reads only the tables.
+    uintptr_t phys = (uintptr_t)task->pml4;
+    paging_map_pages(task->pml4v, 0, phys, 2, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    ok = test_null_guard_for_root(task->pml4v, "task NULL guard after bulk map") && ok;
+    uintptr_t neighbour = paging_walk_paging_table_keep_flags(task->pml4v, PAGE_SIZE, true);
+    if ((neighbour & (PAGE_ADDRESS_MASK | PAGE_PRESENT | PAGE_WRITE | PAGE_USER)) !=
+        ((phys + PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER))
+        ok = false;
+
+    arena_destroy(task->tableArena);
+    kfree(task);
+    if (!ok)
+        TEST_FAIL("task page zero guard or neighbouring mapping is incorrect");
+    return true;
+}
+
 static bool test_kmalloc_not_null(void)
 {
     void *ptr = kmalloc(64);
@@ -5599,6 +5651,7 @@ static void register_builtin_tests(void)
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
+    test_register_policy("page_zero_unmapped", test_page_zero_unmapped, TEST_PHASE_PREBOOT, TEST_POLICY_PANIC);
     test_register("dlist_basic_operations", test_dlist_basic_operations, TEST_PHASE_PREBOOT);
     test_register("arena_create_and_destroy", test_arena_create_and_destroy, TEST_PHASE_PREBOOT);
     test_register("arena_basic_alloc", test_arena_basic_alloc, TEST_PHASE_PREBOOT);

@@ -66,6 +66,11 @@ extern int kKernelPageMappingsCount;
 
 
 void paging_init(/*uint64_t kernel_physical, uint64_t kernel_virtual*/);
+struct arena;
+// Initialize VA 0's absent leaf in a new, inactive root addressed via HHDM.
+// tableSource owns the intermediate tables; NULL charges the kernel pool.
+void paging_init_null_guard(pt_entry_t *pml4v, struct arena *tableSource);
+// Maps a present page; refuses the first virtual page, including unaligned offsets.
 void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physical_address, uint64_t flags);
 
 void paging_map_pages(
@@ -79,9 +84,10 @@ void paging_unmap_page(pt_entry_t *pml4v, uint64_t virtual_address);
 void paging_unmap_pages(pt_entry_t *pml4v, uint64_t virtual_address, size_t length);
 
 // ---- Lazy HHDM maintenance (map-on-alloc / unmap-on-free) ----
-// Physical memory is HHDM-mapped in the kernel page tables ONLY while the
-// allocator considers it allocated. The allocator calls these two functions
-// from its single alloc/free choke points; nothing else should. The payoff:
+// Allocator-managed RAM is HHDM-mapped in the kernel page tables while the
+// allocator considers it allocated. Firmware/MMIO aliases are mapped explicitly.
+// The allocator calls these functions from its alloc/free choke points;
+// nothing else should. The payoff:
 // `phys | kHHDMOffset` is guaranteed dereferenceable for ANY allocator-owned
 // extent (no more "works on QEMU because the memory map happens to line up"),
 // and touching freed or never-allocated RAM through the HHDM faults — a
@@ -170,8 +176,7 @@ extern uint64_t kPagingPagesCount;
 //   the current task       → the child's arena (task_create's bracket)
 //   anything else          → NULL (pool — a safe leak, never a corruption)
 //
-// Called once per paging_map_page with the NORMALIZED (HHDM) pml4v.
-struct arena;
+// Accepts a normalized (HHDM) PML4 pointer.
 struct arena *paging_table_arena_for(pt_entry_t *pml4v);
 
 // Program PAT entry 7 = write-combining on THE CALLING CORE (IA32_PAT is
