@@ -106,6 +106,31 @@ for url in CROSS:
     check(f"roundtrip {url}", got["roundtrip"], "same")
 print(f"addresses: {len(CROSS)} cross-checked against urllib.parse")
 
+# A '#' IS SILENTLY DISCARDED BY THE SHARED PARSER, and gopherspace has no
+# anchors for it to have meant. Both doors matter: the bare spelling that gets
+# a scheme interpolated into it, and the `gopher://` one that does not — the
+# fragment vanished from BOTH, so `example.com#typo` quietly fetched the root
+# of example.com and `/1/world#frag` quietly fetched `/world`. A `%23` is an
+# ordinary encoded byte and must still travel.
+FRAGMENTS = [
+    "example.com#typo",
+    "example.com:70#junk",
+    "gopher://example.com/1/world#frag",
+    "gopher://example.com#x",
+]
+for url in FRAGMENTS:
+    verdict, got = run("url", url)
+    if verdict == "ok":
+        fail(f"fragment {url!r}",
+             f"accepted as host={got.get('host')!r} selector={got.get('selector')!r}"
+             f" — the '#' and everything after it was thrown away in silence")
+    else:
+        check(f"fragment {url!r} reason", got["code"], str(8))   # GOPHER_URL_FRAGMENT
+verdict, got = run("url", "gopher://example.com/1/a%23b")
+check("encoded hash survives", verdict, "ok")
+check("encoded hash selector", got["selector"], "/a#b")
+print(f"addresses: {len(FRAGMENTS)} fragments refused, %23 kept")
+
 # A bare host is a gopher host — this program's guess, not the library's.
 verdict, got = run("url", "gopher.floodgap.com")
 check("bare host verdict", verdict, "ok")

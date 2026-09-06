@@ -125,10 +125,22 @@ typedef enum {
     GOPHER_URL_ESCAPE,      // a `%` that is not followed by two hex digits
     GOPHER_URL_PORT,
     GOPHER_URL_TOO_LONG,
+    // A '#' anywhere in the address. Gopherspace has no anchors and RFC 4266
+    // defines no fragment, so the shared parser DISCARDS everything from the
+    // '#' on — which means `example.com#typo` would quietly fetch the root of
+    // example.com and `…/1/world#frag` would quietly fetch `/world`. Its own
+    // code because the next move is its own: delete the '#' and what follows,
+    // rather than hunt for a byte that cannot be in a selector. (A `%23` is
+    // an ordinary encoded byte and still travels.)
+    GOPHER_URL_FRAGMENT,
 } gopher_url_result_t;
 
-// Take a `gopher://host[:port][/<type><selector>]` apart (RFC 4266), or a
-// bare `host[:port]`.
+// Take a `gopher://host[:port][/<type><selector>]` apart (RFC 4266), or the
+// same thing with the scheme left off — `gopher.floodgap.com`,
+// `sdf.org:70`, `gopher.floodgap.com/1/world`. The bare form is the spelled
+// form minus `gopher://`, because the scheme is interpolated in and the one
+// parser reads both; a bare operand is not a narrower grammar, it is the
+// same grammar with a piece supplied.
 //
 // A BARE HOST IS A GOPHER HOST — that guess is made HERE and not in the
 // library, because "an address has a scheme" is grammar and "a bare word

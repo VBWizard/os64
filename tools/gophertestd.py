@@ -212,6 +212,12 @@ def root_menu():
         # And a last component that is not a name at all: the prompt must
         # offer NOTHING and make the person type one.
         item("9", "A binary whose name is a directory", "/bin/.."),
+        # A final component longer than any sane name buffer. Copying it into
+        # one TRUNCATES it, and a truncated name is a name the server never
+        # suggested — two different long selectors can even agree once cut.
+        # The prompt must offer nothing rather than something shortened.
+        item("9", "A binary whose suggested name is enormous",
+             "/bin/" + "n" * 300),
         item("1", "Item lines that are not item lines", "/menu/malformed"),
         item("1", "A menu of prose, taller than the screen", "/menu/prose"),
         item("1", "A menu with no terminator", "/menu/nodot"),

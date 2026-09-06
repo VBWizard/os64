@@ -159,6 +159,18 @@ gopher_url_result_t gopher_url_parse(const char *text, gopher_addr_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
 
+    // WHAT THE PARSER WOULD THROW AWAY, refused before it can. A '#' starts a
+    // fragment, the shared parser drops it and everything after, and gopher
+    // has nothing a fragment could mean — so an address carrying one is a
+    // person asking for something this program will not do, and doing a
+    // different thing quietly is the failure. Checked on the RAW text, which
+    // covers both doors below: the bare spelling that gets a scheme
+    // interpolated into it, and the `gopher://` one that does not. A `%23` is
+    // an ordinary encoded byte and is not this.
+    for (const char *p = text; *p != '\0'; p++)
+        if (*p == '#')
+            return GOPHER_URL_FRAGMENT;
+
     os64_url_t parsed;
     os64_url_result_t rc = os64_url_parse(text, &parsed);
 
@@ -238,6 +250,8 @@ const char *gopher_url_reason(gopher_url_result_t rc)
         case GOPHER_URL_ESCAPE:     return "a '%' is not followed by two hex digits";
         case GOPHER_URL_PORT:       return "the port is not a number from 1 to 65535";
         case GOPHER_URL_TOO_LONG:   return "the address is too long";
+        case GOPHER_URL_FRAGMENT:   return "a '#' and everything after it addresses"
+                                           " nothing in gopherspace — delete it";
     }
     return "the address cannot be read";
 }

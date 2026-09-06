@@ -125,8 +125,17 @@ static char    s_status[256];
 // exactly those because this program asked for them): clear, position, erase
 // to end of line, and set colour or attribute.
 
-static void out(const char *s)      { os64_write(OS64_STDOUT, s, os64_strlen(s)); }
-static void outn(const char *s, size_t n) { os64_write(OS64_STDOUT, s, n); }
+// WHETHER THIS PROGRAM HAS TOUCHED THE SCREEN IT WAS HANDED. An exit has to
+// put the terminal back, and only where there is something to put back:
+// clearing a screen this program never wrote on would throw away whatever the
+// person had on it. Set at the two writers rather than at each painter,
+// because that is the one place it cannot be forgotten — a prompt that quits
+// on Escape before the full-screen setup had left the shell drawing its next
+// prompt onto the status bar.
+static bool s_painted;
+
+static void out(const char *s)      { s_painted = true; os64_write(OS64_STDOUT, s, os64_strlen(s)); }
+static void outn(const char *s, size_t n) { s_painted = true; os64_write(OS64_STDOUT, s, n); }
 
 static void screen_clear(void)      { out("\033[2J"); }
 static void screen_home(void)       { out("\033[H"); }
@@ -144,6 +153,25 @@ static void sgr(const char *params)
     out(seq);
 }
 static void sgr_reset(void)         { out("\033[0m"); }
+
+// Hand the terminal back the way it was found, and be safe to call twice.
+//
+// `main` calls this after the session returns, which is what makes it happen
+// on every path rather than on the paths somebody remembered — an exit that
+// forgets is the bug this exists for, and a rule that has to be re-obeyed at
+// each new `return` is a rule that gets forgotten. The calls INSIDE the
+// session are about ORDER, not coverage: an exit with a parting sentence
+// restores first so the sentence lands on a clean screen, and clearing the
+// flag is what stops the backstop from wiping it afterwards.
+static void screen_restore(void)
+{
+    if (!s_painted)
+        return;                      // nothing of ours is on it; leave it alone
+    screen_clear();
+    screen_home();
+    sgr_reset();
+    s_painted = false;               // the screen is the shell's again
+}
 
 // A BAR IS PAINTED WITH A BACKGROUND, NOT WITH REVERSE VIDEO, and the reason
 // is `ESC[K`: erase-to-end-of-line fills the rest of the row with the PEN's
@@ -737,8 +765,14 @@ static void selector_basename(const char *selector, char *out_name, size_t cap)
     for (const char *p = selector; *p != '\0'; p++)
         if (*p == '/' || *p == '\\')
             last = p + 1;
-    os64_strcopy(out_name, cap, last);
-    if (!name_is_one_component(out_name))
+    // TRUNCATION IS ONE OF THE WAYS THIS FAILS. os64_strcopy answers the
+    // SOURCE's length, not the written one, and a selector runs to
+    // GOPHER_SELECTOR_MAX while this buffer does not — so a long final
+    // component came back shortened and passed the check below, and Enter
+    // saved under a name the server never suggested. Two of them could even
+    // agree once cut. A name this program cannot vouch for is left empty,
+    // and a name that arrived in pieces is one of those.
+    if (os64_strcopy(out_name, cap, last) >= cap || !name_is_one_component(out_name))
         out_name[0] = '\0';
 }
 
@@ -1352,19 +1386,28 @@ static int32_t browse(gopher_addr_t start)
     gopher_addr_t addr;
     follow_t action = follow_decide(&start, &addr);
 
+    // The restores below are about ORDER — a parting sentence wants a clean
+    // screen under it — not about coverage. `main` restores whatever these
+    // miss, and `screen_restore` knows whether there is anything to put back:
+    // `follow_decide` may have painted a search prompt across the bottom row,
+    // and may not have.
     if (action == FOLLOW_REFUSED) {
+        screen_restore();
         os64_hprintf(OS64_STDERR, "gopher: %s %s item is not something to"
                      " follow\n", article_for(gopher_type_name(start.type)),
                      gopher_type_name(start.type));
         return GOPHER_BAD_ADDRESS;
     }
-    if (action == FOLLOW_CANCELLED)
-        return GOPHER_OK;                 // asked for a search, thought better of it
+    if (action == FOLLOW_CANCELLED) {
+        // Asked for a search, thought better of it — and the prompt that
+        // asked is still on the bottom row, so the shell's next line would
+        // have been drawn onto it.
+        screen_restore();
+        return GOPHER_OK;
+    }
     if (action == FOLLOW_HANDOFF) {
         int32_t rc = hand_to_os64get(addr.selector);
-        screen_clear();
-        screen_home();
-        sgr_reset();
+        screen_restore();
         // A page that was shown leaves nothing to say — the showing was the
         // saying. Only a failure has words, and they go where words about
         // failures go.
@@ -1380,9 +1423,7 @@ static int32_t browse(gopher_addr_t start)
         screen_clear();
         screen_home();
         save_result_t saved = save_item(&addr);
-        screen_clear();
-        screen_home();
-        sgr_reset();
+        screen_restore();
         // A CANCEL IS NOT A FAILURE, and the exit code has to agree with the
         // one a cancelled search gives: the person answered the question, and
         // the answer was no. Only the disk saying no is worth a code a script
@@ -1399,6 +1440,10 @@ static int32_t browse(gopher_addr_t start)
     // session is still perfectly alive.
     int64_t rc = page_fetch(&addr, &page);
     if (rc != 0) {
+        // A type-7 address asked for its search before we got here, so this
+        // exit can have a prompt on the screen too — the one the finding
+        // above named was its neighbour, not the only one.
+        screen_restore();
         if (rc < 0)
             os64_hprintf(OS64_STDERR, "gopher: cannot reach %s:%u — %s\n",
                          addr.host, (unsigned)addr.port, os64_dial_reason(rc));
@@ -1510,18 +1555,14 @@ static int32_t browse(gopher_addr_t start)
                 if (!confirm(" leave gopher? (y/n) "))
                     break;
                 page_free(&page);
-                screen_clear();
-                screen_home();
-                sgr_reset();
+                screen_restore();
                 return GOPHER_OK;
 
             case KEY_EOF:
                 // Not a decision anybody made — the terminal went away. There
                 // is nothing to confirm with and nobody to confirm it.
                 page_free(&page);
-                screen_clear();
-                screen_home();
-                sgr_reset();
+                screen_restore();
                 return GOPHER_OK;
 
             default:
@@ -1561,6 +1602,11 @@ int main(int argc, char **argv)
 
     geometry();
     int32_t status = browse(addr);
+    // The backstop, and the reason no `return` inside the session has to
+    // remember: a program that painted a screen owes it back before the shell
+    // draws on it. A no-op when an exit already did it, and when nothing was
+    // ever painted.
+    screen_restore();
     os64_close((int32_t)s_keys);
     return status;
 }
