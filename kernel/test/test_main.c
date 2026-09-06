@@ -5447,7 +5447,17 @@ static bool test_block_cache(void)
     if (homefs->fops->rm != NULL)
         homefs->fops->rm(tail, homefs);   // tidy; failure is not a verdict
 
-    if (got < (int)sizeof(contentB) || memcmp(chunk, contentB, sizeof(contentB)) != 0)
+    // Two failures that used to share one verdict, and must not: a SHORT
+    // read means the rewrite never landed (a full /home refuses the block —
+    // the P5, 2026-09-06, spent a morning on "invalidation broken" that was
+    // a disk with zero free blocks), while the OLD bytes at full length is
+    // the cache serving what the disk no longer holds.
+    if (got < (int)sizeof(contentB))
+    {
+        kfree(chunk);
+        TEST_FAIL("coherence: rewrite came back SHORT — the write was refused (is /home full?), the cache is not on trial");
+    }
+    if (memcmp(chunk, contentB, sizeof(contentB)) != 0)
     {
         kfree(chunk);
         TEST_FAIL("coherence: read-after-write returned STALE data — invalidation broken");

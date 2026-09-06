@@ -270,9 +270,18 @@ make -C kernel test-elf
   replaced underneath it. Open DIRECTORIES still refuse. (The blanket refusal
   ruled 2026-08-04 was explicitly consumer-driven; the consumer was `os64
   refresh` replacing /bin/husk while husk runs.) NOTE for anyone adding code
-  that closes a file: a close can now do real disk I/O, so it must run in
-  KERNEL context (see `fops->mounted` in vfs.h and the burial close in
-  task.c). Verified by the in-OS test suite AND host `make fsck-ext2`
+  that closes a file: a close can now do real disk I/O. **NVMe I/O is
+  reachable from ANY address space since 2026-09-06** — every buffer the
+  path touches is an HHDM alias and so is the NVMe register window (the
+  window was the last lower-half dependency; it made the ELF loader's
+  direct opens a kernel #PF on the first block-cache miss under a task's
+  CR3 — the P5's NOCACHE and os64get-during-latetests deaths). AHCI still
+  identity-maps its window and command lists in kKernelPML4 alone, so on a
+  SATA root the old rule holds until its DEBTS row is paid. The
+  `call_in_kernel_context` wrappers on the syscall and burial paths stay
+  for the reasons that remain: a burial runs while the task's own address
+  space is being torn down, and the per-core interrupt stack is deeper than
+  a thread's. Verified by the in-OS test suite AND host `make fsck-ext2`
   (e2fsck must stay green — with a writable root it is the constitution).
 - Root filesystem mounted via `ROOTPARTUUID`/`ROOT` kernel cmdline parameter;
   FAT32 or ext2 both work as root (see the "/QEMU Boot (ext2 root)" Limine entry)
