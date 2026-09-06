@@ -83,14 +83,17 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    - (a) **DONE 2026-09-02.** URL parse + HTTP/1.0 GET: request line,
      `Host:` header, status line + headers parse, `Content-Length` read,
      read-until-close as the fallback the length-less server forces. The
-     machinery lives in `apps/os64get/http.{c,h}` — the seam a libfetch
+     machinery lives in `userland/apps/os64get/http.{c,h}` — the seam a libfetch
      would eventually be sawn along, not the library. Two rulings the
      increment forced, both written down where they bind: a URL fetch does
-     NOT route through `os64get.conf` (whose last rule is `* = /bin` — a
-     web page would install as a program) and keeps NO archive (a download
-     is not an install); and a framing or coding os64get cannot undo is
+     not use the filename routing in `os64get.conf` (whose `* = /bin` rule
+     would install a web page as a program); and a framing or coding os64get cannot undo is
      REFUSED BY NAME rather than written to disk, because a `.html` full of
-     chunk lengths looks like a successful download. Proof:
+     chunk lengths looks like a successful download. URL downloads use managed
+     scratch cleanup but do not make replacement backups; the archive belongs
+     to valet installations. See [OS64GET.md](OS64GET.md) for current behavior.
+     The validation observations below record the earlier HTTP increments,
+     including their temporary-file behavior before installer cleanup. Proof:
      `tools/test_http_host.sh` drives the parser against http.client and
      urllib.parse at every chunk size from one byte up, and
      `tools/httptestd.py` is the deterministic server the guest is pointed
@@ -112,7 +115,7 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      failed" in one command, and a second machine answered "whose fault"
      in one try. Neither cost a debugging session.
    - (d) **DONE 2026-09-03.** `Content-Encoding: gzip` streams through
-     libgzip into the same `<dest>.part` staging the identity path uses, and
+     libgzip into the same managed staging that the identity path uses, and
      the name is published only after `OS64_GZIP_DONE` has verified every
      member CRC/size and ruled out trailing data. `Accept-Encoding` now names
      exactly `gzip, identity` both directly and through `tlsproxy.py`.
@@ -124,7 +127,7 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      decides only what the bytes ARE), so a gzip body may arrive chunked and
      the two envelopes come off in the order they went on — and the framing's
      verdict outranks the decoder's: a length-framed gzip reply that closes
-     early is a SHORT transfer (exit 7, `.part` left), never a hang and never
+     early is a SHORT transfer (exit 7, temporary files cleaned), never a hang and never
      "corrupt". Two `Content-Encoding: gzip` field lines are the list
      `gzip, gzip` (RFC 7230 §3.2.2, a body encoded twice), kept as the value
      and refused by name rather than unwrapped once and published (both from
