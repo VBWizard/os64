@@ -55,10 +55,16 @@ _Static_assert(SIGSTOP == OS64_SIGSTOP, "SIGSTOP disagrees with the ABI (os64/si
 
 // And the exit codes, because a program that CATCHES a signal and exits
 // itself has to write the same number this kernel would have written for it.
-// The ABI publishes the 128+signo rule; these pin every code that uses it.
+// The ABI publishes the 128+signo rule; these pin the codes to it.
+//
+// SIGSEGV is in the list even though nothing here raises it — the page-fault
+// handler kills the task at the fault — because an assertion block is only
+// worth what it COVERS, and a status spelled as a literal somewhere else is
+// exactly the one that would survive a change to the rule.
 _Static_assert(SIGNALS_EXIT_SIGHUP  == OS64_EXIT_FOR_SIGNAL(OS64_SIGHUP),  "SIGHUP exit code disagrees with the ABI");
 _Static_assert(SIGNALS_EXIT_SIGINT  == OS64_EXIT_FOR_SIGNAL(OS64_SIGINT),  "SIGINT exit code disagrees with the ABI");
 _Static_assert(SIGNALS_EXIT_SIGKILL == OS64_EXIT_FOR_SIGNAL(OS64_SIGKILL), "SIGKILL exit code disagrees with the ABI");
+_Static_assert(SIGNALS_EXIT_SIGSEGV == OS64_EXIT_FOR_SIGNAL(OS64_SIGSEGV), "SIGSEGV exit code disagrees with the ABI");
 _Static_assert(SIGNALS_EXIT_SIGPIPE == OS64_EXIT_FOR_SIGNAL(OS64_SIGPIPE), "SIGPIPE exit code disagrees with the ABI");
 _Static_assert(SIGNALS_EXIT_SIGTERM == OS64_EXIT_FOR_SIGNAL(OS64_SIGTERM), "SIGTERM exit code disagrees with the ABI");
 _Static_assert(SIGIO   == OS64_SIGIO,   "SIGIO disagrees with the ABI (os64/signal.h)");

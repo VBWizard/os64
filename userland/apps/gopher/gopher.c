@@ -174,12 +174,34 @@ static void screen_restore(void)
     s_painted = false;               // the screen is the shell's again
 }
 
-// Ctrl+C. Restores and leaves, rather than raising a flag for a loop to find:
-// the wait this most needs to interrupt is inside the kernel with no loop of
-// ours between it and here.
+// THE HANDOFF'S FILES, while there are any. At file scope because the
+// interrupt handler has to be able to sweep them and it does not return
+// through the code that made them — a Ctrl+C while reading a fetched page
+// left the whole thing in a /tmp with no cleaner (DEBTS).
+static char s_handoff_temp[64];
+
+// Both names the handoff can leave: what os64get KEEPS when a fetch fails
+// (`<temp>.part`, deliberately — its comment argues the case) and what it
+// leaves when one succeeds. One door, because there are now three ways out of
+// a handoff and the exit that skipped this was the one nobody wrote.
+static void handoff_cleanup(void)
+{
+    if (s_handoff_temp[0] == '\0')
+        return;
+    char stage[sizeof(s_handoff_temp) + 8];
+    os64_snprintf(stage, sizeof(stage), "%s.part", s_handoff_temp);
+    os64_unlink(stage);
+    os64_unlink(s_handoff_temp);
+    s_handoff_temp[0] = '\0';
+}
+
+// Ctrl+C. Sweeps, restores and leaves, rather than raising a flag for a loop
+// to find: the wait this most needs to interrupt is inside the kernel with no
+// loop of ours between it and here.
 static void on_interrupt(int signo)
 {
     (void)signo;
+    handoff_cleanup();
     screen_restore();
     os64_exit(OS64_EXIT_FOR_SIGNAL(OS64_SIGINT));
 }
@@ -798,11 +820,19 @@ static void selector_basename(const char *selector, char *out_name, size_t cap)
 // status bar in every case. CANCELLED is its own answer rather than a kind of
 // failure, because a person who changed their mind did not hit a problem —
 // and when this is the whole job it decides the exit code, where "you asked
-// me not to" and "the disk refused" must not be the same number.
+// me not to", "the wire went away" and "the disk refused" must not be the
+// same number.
+//
+// THE WIRE AND THE DISK ARE SEPARATE ANSWERS because a script acts on them
+// differently — one says try again or check the cable, the other says go and
+// look at the filesystem — and because the exit code that carried both said
+// the bytes had ARRIVED. A dial that never connected reported a storage
+// failure. They were one flag when the only question was "did it work".
 typedef enum {
     SAVE_DONE = 0,
     SAVE_CANCELLED,
-    SAVE_FAILED,
+    SAVE_UNREACHABLE,   // the server: never dialed, or stopped mid-transfer
+    SAVE_FAILED,        // this machine: the file could not be written or named
 } save_result_t;
 
 static save_result_t save_item(const gopher_addr_t *addr)
@@ -845,7 +875,7 @@ static save_result_t save_item(const gopher_addr_t *addr)
     if (conn < 0) {
         os64_snprintf(s_status, sizeof(s_status), " cannot reach %s — %s",
                       addr->host, os64_dial_reason(conn));
-        return SAVE_FAILED;
+        return SAVE_UNREACHABLE;
     }
 
     char request[GOPHER_SELECTOR_MAX + GOPHER_QUERY_MAX + 8];
@@ -853,7 +883,7 @@ static save_result_t save_item(const gopher_addr_t *addr)
     if (reqlen == 0 || os64_write((int32_t)conn, request, reqlen) < 0) {
         os64_close((int32_t)conn);
         os64_strcopy(s_status, sizeof(s_status), " the request could not be sent");
-        return SAVE_FAILED;
+        return SAVE_UNREACHABLE;
     }
 
     int64_t file = os64_open(part, "w");
@@ -867,14 +897,19 @@ static save_result_t save_item(const gopher_addr_t *addr)
     gopher_stream_t stream;
     gopher_stream_init(&stream, source_read, &src);
 
+    // WHICH END GAVE UP, not merely THAT one did. A read that fails is the
+    // server or the wire; a write that comes up short is this machine. They
+    // were one `broke` flag while the only question was whether to rename,
+    // and the exit code inherited that blur — a host that never answered was
+    // reported as a disk that would not take the bytes.
     uint64_t total = 0;
-    bool broke = false;
+    save_result_t broke = SAVE_DONE;
     char buf[4096];
     for (;;) {
         int64_t n = gopher_stream_raw(&stream, buf, sizeof(buf));
-        if (n < 0) { broke = true; break; }
+        if (n < 0) { broke = SAVE_UNREACHABLE; break; }
         if (n == 0) break;
-        if (os64_write((int32_t)file, buf, (size_t)n) != n) { broke = true; break; }
+        if (os64_write((int32_t)file, buf, (size_t)n) != n) { broke = SAVE_FAILED; break; }
         total += (uint64_t)n;
     }
     // COMMIT BEFORE PUBLISHING, and ask whether the commit worked. A close
@@ -886,14 +921,14 @@ static save_result_t save_item(const gopher_addr_t *addr)
     // question at every one of its downloads; this is the one that did not.
     // (On ext2 it is a formality — write-through leaves nothing to fail —
     // and the lifeboat is FAT.)
-    bool uncommitted = !broke && os64_sync((int32_t)file) < 0;
+    bool uncommitted = broke == SAVE_DONE && os64_sync((int32_t)file) < 0;
     os64_close((int32_t)file);
     os64_close((int32_t)conn);
 
-    // The .part stays either way. A person can see what arrived; nothing
-    // wears the real name until all of it did — which is only TRUE with the
-    // sync above, because the wire and the disk are two different ways for
-    // this to go wrong and only one of them announces itself.
+    // The .part stays whichever end gave up. A person can see what arrived;
+    // nothing wears the real name until all of it did — which is only TRUE
+    // with the sync above, because the wire and the disk are two different
+    // ways for this to go wrong and only one of them announces itself.
     if (uncommitted) {
         os64_snprintf(s_status, sizeof(s_status),
                       " %lu bytes arrived but the disk would not take them"
@@ -901,10 +936,16 @@ static save_result_t save_item(const gopher_addr_t *addr)
                       (unsigned long)total, part, name);
         return SAVE_FAILED;
     }
-    if (broke) {
+    if (broke == SAVE_UNREACHABLE) {
         os64_snprintf(s_status, sizeof(s_status),
                       " transfer broke after %lu bytes — %s kept",
                       (unsigned long)total, part);
+        return SAVE_UNREACHABLE;
+    }
+    if (broke == SAVE_FAILED) {
+        os64_snprintf(s_status, sizeof(s_status),
+                      " the disk stopped taking %s after %lu bytes — kept",
+                      part, (unsigned long)total);
         return SAVE_FAILED;
     }
     if (os64_rename(part, name) < 0) {
@@ -1027,9 +1068,12 @@ static int32_t hand_to_os64get(const char *selector)
     }
 
     // Somewhere to put it that is nobody's working directory. Named for the
-    // task so two gophers cannot land on one file.
-    char temp[64];
-    os64_snprintf(temp, sizeof(temp), "/tmp/gopher.%ld.html", (long)os64_taskid());
+    // task so two gophers cannot land on one file, and remembered at file
+    // scope from the moment the name exists, so an interrupt anywhere below
+    // sweeps it — the spawn is the last point at which nothing has been
+    // written under it.
+    os64_snprintf(s_handoff_temp, sizeof(s_handoff_temp),
+                  "/tmp/gopher.%ld.html", (long)os64_taskid());
 
     // os64get draws a progress meter, so it gets a clean screen to draw on
     // rather than half a menu.
@@ -1037,10 +1081,11 @@ static int32_t hand_to_os64get(const char *selector)
     screen_home();
     sgr_reset();
 
-    char *argv[] = { (char *)"os64get", (char *)url, temp, NULL };
+    char *argv[] = { (char *)"os64get", (char *)url, s_handoff_temp, NULL };
     int64_t pid = os64_spawn("/bin/os64get", argv);
     if (pid < 0) {
         os64_strcopy(s_status, sizeof(s_status), " could not run os64get");
+        handoff_cleanup();
         screen_clear();
         return GOPHER_UNREACHABLE;
     }
@@ -1048,17 +1093,15 @@ static int32_t hand_to_os64get(const char *selector)
     os64_wait(pid, &status);
 
     if (status != 0) {
-        os64_snprintf(s_status, sizeof(s_status), " %s — %s",
-                      url, os64get_said(status));
         // OS64GET KEEPS ITS STAGING FILE ON A FAILURE, on purpose: the
         // fragment is evidence, and whatever stood at the real name is
         // untouched. That reasoning is about a file somebody ASKED for. This
         // one is a temp nobody named, in a /tmp with no cleaner (DEBTS), so
         // the evidence has no reader and a failed web link would leave most
         // of a page in there until the machine went down.
-        char stage[sizeof(temp) + 8];
-        os64_snprintf(stage, sizeof(stage), "%s.part", temp);
-        os64_unlink(stage);
+        os64_snprintf(s_status, sizeof(s_status), " %s — %s",
+                      url, os64get_said(status));
+        handoff_cleanup();
         screen_clear();
         return GOPHER_UNREACHABLE;
     }
@@ -1066,8 +1109,8 @@ static int32_t hand_to_os64get(const char *selector)
     // The fetch succeeded; SHOWING it is the other half, and it can fail on
     // its own (out of memory, or the disk refusing the file os64get just
     // wrote). A page nobody could be shown is not a handoff that worked.
-    bool shown = view_local_text(temp, url);
-    os64_unlink(temp);          // shown is the point; kept is os64get's job
+    bool shown = view_local_text(s_handoff_temp, url);
+    handoff_cleanup();          // shown is the point; kept is os64get's job
     screen_clear();
     return shown ? GOPHER_OK : GOPHER_UNREACHABLE;
 }
@@ -1447,13 +1490,18 @@ static int32_t browse(gopher_addr_t start)
         screen_home();
         save_result_t saved = save_item(&addr);
         screen_restore();
-        // A CANCEL IS NOT A FAILURE, and the exit code has to agree with the
-        // one a cancelled search gives: the person answered the question, and
-        // the answer was no. Only the disk saying no is worth a code a script
-        // would act on.
-        bool failed = saved == SAVE_FAILED;
-        os64_hprintf(failed ? OS64_STDERR : OS64_STDOUT, "gopher:%s\n", s_status);
-        return failed ? GOPHER_SAVE_FAILED : GOPHER_OK;
+        // EACH ANSWER KEEPS ITS OWN NUMBER. A cancel is not a failure — the
+        // person answered the question and the answer was no, which agrees
+        // with what a cancelled search exits. A server that never answered is
+        // UNREACHABLE, the same code a page from that host would have given;
+        // it used to report a storage failure, which sent a script to look at
+        // a disk that was never involved. Only the disk gets the disk's code.
+        int32_t rc = GOPHER_OK;
+        if (saved == SAVE_UNREACHABLE) rc = GOPHER_UNREACHABLE;
+        else if (saved == SAVE_FAILED) rc = GOPHER_SAVE_FAILED;
+        os64_hprintf(rc == GOPHER_OK ? OS64_STDOUT : OS64_STDERR,
+                     "gopher:%s\n", s_status);
+        return rc;
     }
 
     // A FETCH THAT FAILS IS FATAL HERE AND NOWHERE ELSE, and that asymmetry
