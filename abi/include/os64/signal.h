@@ -18,6 +18,18 @@
 // a corpse tagged 143 is legible to anyone who has ever read a shell's exit
 // status. os64's own take numbers POSIX left free.
 
+// WHAT A CORPSE IS TAGGED WITH when a signal killed it: 128 plus the number.
+// Published as the RULE rather than as a list, because the rule is the
+// durable half and a list would be a second place for the numbers to live.
+//
+// It is here for the program that CATCHES a signal and then exits itself: the
+// kernel's default death writes this code, so a handler that tidies up and
+// leaves must write the same one or a script cannot tell "interrupted" from
+// whatever the program returns on a good day. /bin/gopher wants it because
+// Ctrl+C is the only way out of a blocking call it cannot put a deadline on,
+// and the terminal it painted has to go back before it dies.
+#define OS64_EXIT_FOR_SIGNAL(signo)  (128 + (signo))
+
 #define OS64_SIGHUP    1    // your terminal hung up — the seated shell died, or the pty master closed; either way the line went away
 #define OS64_SIGINT    2    // Ctrl+C
 #define OS64_SIGKILL   9    // uncatchable, by design — see below

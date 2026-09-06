@@ -43,6 +43,7 @@
 #include "os64/mem.h"
 #include "os64/proc.h"
 #include "os64/procfs.h"
+#include "os64/signal.h"
 #include "os64/str.h"
 
 // A page holds either items or lines, never both — the type that led here
@@ -171,6 +172,16 @@ static void screen_restore(void)
     screen_home();
     sgr_reset();
     s_painted = false;               // the screen is the shell's again
+}
+
+// Ctrl+C. Restores and leaves, rather than raising a flag for a loop to find:
+// the wait this most needs to interrupt is inside the kernel with no loop of
+// ours between it and here.
+static void on_interrupt(int signo)
+{
+    (void)signo;
+    screen_restore();
+    os64_exit(OS64_EXIT_FOR_SIGNAL(OS64_SIGINT));
 }
 
 // A BAR IS PAINTED WITH A BACKGROUND, NOT WITH REVERSE VIDEO, and the reason
@@ -1039,6 +1050,15 @@ static int32_t hand_to_os64get(const char *selector)
     if (status != 0) {
         os64_snprintf(s_status, sizeof(s_status), " %s — %s",
                       url, os64get_said(status));
+        // OS64GET KEEPS ITS STAGING FILE ON A FAILURE, on purpose: the
+        // fragment is evidence, and whatever stood at the real name is
+        // untouched. That reasoning is about a file somebody ASKED for. This
+        // one is a temp nobody named, in a /tmp with no cleaner (DEBTS), so
+        // the evidence has no reader and a failed web link would leave most
+        // of a page in there until the machine went down.
+        char stage[sizeof(temp) + 8];
+        os64_snprintf(stage, sizeof(stage), "%s.part", temp);
+        os64_unlink(stage);
         screen_clear();
         return GOPHER_UNREACHABLE;
     }
@@ -1517,6 +1537,19 @@ static int32_t browse(gopher_addr_t start)
                 // read that would pay for a negative one.
                 if (!page.isMenu || page.sel < 0 || page.sel >= page.nitems)
                     break;
+                if (!page.hasLinks) {
+                    // NOTHING IS SELECTED HERE — the page draws no cursor —
+                    // so a refusal naming the row `sel` happens to sit on
+                    // would describe something nobody pointed at. Say what is
+                    // true of the PAGE instead. (Silence would do as well for
+                    // correctness; this program answers Back at the bottom of
+                    // the stack with a sentence too, and a key that does
+                    // nothing without saying so is the thing that reads as
+                    // broken.)
+                    os64_strcopy(s_status, sizeof(s_status),
+                                 " nothing on this page can be followed");
+                    break;
+                }
                 gopher_item_t *item = &page.items[page.sel];
                 gopher_addr_t next;
                 switch (follow_decide(&item->addr, &next)) {
@@ -1598,6 +1631,21 @@ int main(int argc, char **argv)
 
     // Keys come from the TERMINAL, not from handle 0, so `gopher < file` and
     // a gopher inside a pipeline still read the person's arrows.
+    // CTRL+C IS AN EXIT TOO, and it was the one that skipped the cleanup:
+    // the default action kills the task where it stands, so `main` never
+    // reaches its restore and the shell drew its next prompt onto a browser
+    // screen. It matters most exactly where it is most likely to be pressed —
+    // a request write has no deadline this program can give it (DEBTS,
+    // tcp_conn_write), and a signal is what ends that park.
+    //
+    // The handler EXITS rather than setting a flag: a flag needs a loop to
+    // notice it, and the stall this is for is in the kernel with no loop of
+    // ours to return to. The code is the one the kernel's own death would
+    // have written, so a script cannot tell the two apart.
+    if (os64_signal_set_handler(OS64_SIGINT, on_interrupt) < 0)
+        os64_hprintf(OS64_STDERR, "gopher: no SIGINT handler; Ctrl+C will"
+                     " leave the screen as it was\n");
+
     s_keys = os64_tty_handle();
     if (s_keys < 0)
         s_keys = OS64_STDIN;
