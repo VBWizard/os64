@@ -719,10 +719,12 @@ static void selector_basename(const char *selector, char *out_name, size_t cap)
         out_name[0] = '\0';
 }
 
-// Stream a binary item to `<name>.part`, then rename it into place. The
-// .part-then-rename discipline is os64get's, and it is here for the same
-// reason: a transfer that dies halfway must not leave something that looks
-// like a finished file.
+// Stream a binary item to `<name>.part`, COMMIT it, then rename it into
+// place. The stage-commit-rename discipline is os64get's, and it is here for
+// the same reason: a transfer that dies halfway must not leave something that
+// looks like a finished file. All three steps are the discipline — a rename
+// that publishes bytes the disk never accepted is the same lie by a quieter
+// route.
 //
 // Answers what became of the transfer; the sentence for the person is on the
 // status bar in every case. CANCELLED is its own answer rather than a kind of
@@ -804,12 +806,31 @@ static save_result_t save_item(const gopher_addr_t *addr)
         if (os64_write((int32_t)file, buf, (size_t)n) != n) { broke = true; break; }
         total += (uint64_t)n;
     }
+    // COMMIT BEFORE PUBLISHING, and ask whether the commit worked. A close
+    // is where FAT writes its data and metadata (handle.c says so), and
+    // close() has nowhere to hand a failure back to — the kernel logs it and
+    // ring 3 is told nothing. So a `.part` full of bytes the disk never took
+    // would have been renamed into place and called saved, which is the exact
+    // thing the staging discipline exists to prevent. os64get asks this
+    // question at every one of its downloads; this is the one that did not.
+    // (On ext2 it is a formality — write-through leaves nothing to fail —
+    // and the lifeboat is FAT.)
+    bool uncommitted = !broke && os64_sync((int32_t)file) < 0;
     os64_close((int32_t)file);
     os64_close((int32_t)conn);
 
+    // The .part stays either way. A person can see what arrived; nothing
+    // wears the real name until all of it did — which is only TRUE with the
+    // sync above, because the wire and the disk are two different ways for
+    // this to go wrong and only one of them announces itself.
+    if (uncommitted) {
+        os64_snprintf(s_status, sizeof(s_status),
+                      " %lu bytes arrived but the disk would not take them"
+                      " — %s kept, %s NOT written",
+                      (unsigned long)total, part, name);
+        return SAVE_FAILED;
+    }
     if (broke) {
-        // The .part stays. A person can see what arrived; nothing wears the
-        // real name until all of it did.
         os64_snprintf(s_status, sizeof(s_status),
                       " transfer broke after %lu bytes — %s kept",
                       (unsigned long)total, part);
@@ -894,19 +915,29 @@ static const char *os64get_said(int32_t code)
 // convention — and are fetched over gopher as text. The guard below is kept
 // anyway, because a function that trusts its caller to have checked is a
 // function that breaks quietly when a second caller appears.
-static void view_local_text(const char *path, const char *title);
+//
+// ANSWERS A GOPHER EXIT CODE — 0, or the one this program would exit with if
+// the handoff were the whole job. Inside a session the caller drops it and
+// the status bar carries the words; from the command line it IS the outcome,
+// and every failure here used to be reduced to a sentence under a returned
+// success. THE SENTENCE STAYS WHERE THE PRECISION IS: os64get's own codes are
+// translated into English (os64get_said) rather than passed through, because
+// two exit vocabularies in one number is worse than one blunt code, so the
+// answer here is only ever "the address was wrong" or "the fetch did not
+// happen".
+static bool view_local_text(const char *path, const char *title);
 
-static void hand_to_os64get(const char *selector)
+static int32_t hand_to_os64get(const char *selector)
 {
     if (!starts_with_url_prefix(selector)) {
         os64_strcopy(s_status, sizeof(s_status),
                      " that link has no address in it");
-        return;
+        return GOPHER_BAD_ADDRESS;
     }
     const char *url = selector + 4;
     if (url[0] == '\0') {
         os64_strcopy(s_status, sizeof(s_status), " that link carries no address");
-        return;
+        return GOPHER_BAD_ADDRESS;
     }
     // A SPAWN ARGUMENT IS BOUNDED AND A SELECTOR IS NOT, so the two caps
     // disagree and the gap has to be named rather than discovered. An
@@ -921,7 +952,7 @@ static void hand_to_os64get(const char *selector)
                       " that link's address is longer than %d bytes,"
                       " which is more than os64get can be handed",
                       (int)OS64_SPAWN_ARG_MAX - 1);
-        return;
+        return GOPHER_BAD_ADDRESS;
     }
 
     // Somewhere to put it that is nobody's working directory. Named for the
@@ -940,7 +971,7 @@ static void hand_to_os64get(const char *selector)
     if (pid < 0) {
         os64_strcopy(s_status, sizeof(s_status), " could not run os64get");
         screen_clear();
-        return;
+        return GOPHER_UNREACHABLE;
     }
     int32_t status = 0;
     os64_wait(pid, &status);
@@ -949,12 +980,16 @@ static void hand_to_os64get(const char *selector)
         os64_snprintf(s_status, sizeof(s_status), " %s — %s",
                       url, os64get_said(status));
         screen_clear();
-        return;
+        return GOPHER_UNREACHABLE;
     }
 
-    view_local_text(temp, url);
+    // The fetch succeeded; SHOWING it is the other half, and it can fail on
+    // its own (out of memory, or the disk refusing the file os64get just
+    // wrote). A page nobody could be shown is not a handoff that worked.
+    bool shown = view_local_text(temp, url);
     os64_unlink(temp);          // shown is the point; kept is os64get's job
     screen_clear();
+    return shown ? GOPHER_OK : GOPHER_UNREACHABLE;
 }
 
 // ── The session ─────────────────────────────────────────────────────────
@@ -996,7 +1031,7 @@ static void scroll_clamp(page_t *page)
 // rather than a page in the history, because what you go BACK to from here
 // is the menu you were reading, and that menu is still sitting in `browse`'s
 // frame waiting to be redrawn.
-static void view_local_text(const char *path, const char *title)
+static bool view_local_text(const char *path, const char *title)
 {
     page_t page;
     os64_memset(&page, 0, sizeof(page));
@@ -1011,14 +1046,14 @@ static void view_local_text(const char *path, const char *title)
     page.lines = os64_malloc(sizeof(char *) * GOPHER_MAX_LINES);
     if (page.lines == NULL) {
         os64_strcopy(s_status, sizeof(s_status), " not enough memory to show it");
-        return;
+        return false;
     }
 
     os64_linereader_t reader;
     if (os64_linereader_open(&reader, path) < 0) {
         os64_free(page.lines);
         os64_snprintf(s_status, sizeof(s_status), " %s could not be read", path);
-        return;
+        return false;
     }
     char line[GOPHER_LINE_MAX];
     int64_t read_rc = 0;
@@ -1041,7 +1076,7 @@ static void view_local_text(const char *path, const char *title)
             os64_linereader_close(&reader);
             page_free(&page);
             os64_strcopy(s_status, sizeof(s_status), " not enough memory to show it");
-            return;
+            return false;
         }
         os64_memcpy(copy, line, len + 1);
         page.lines[page.nlines++] = copy;
@@ -1054,7 +1089,7 @@ static void view_local_text(const char *path, const char *title)
     if (read_rc < 0) {
         page_free(&page);
         os64_snprintf(s_status, sizeof(s_status), " %s could not be read", path);
-        return;
+        return false;
     }
     if (page.nlines == GOPHER_MAX_LINES)
         page.truncated = true;
@@ -1085,6 +1120,7 @@ static void view_local_text(const char *path, const char *title)
         }
     }
     page_free(&page);
+    return true;
 }
 
 // Put the selection on a followable item, starting from where it already is
@@ -1282,12 +1318,17 @@ static int32_t browse(gopher_addr_t start)
     if (action == FOLLOW_CANCELLED)
         return GOPHER_OK;                 // asked for a search, thought better of it
     if (action == FOLLOW_HANDOFF) {
-        hand_to_os64get(addr.selector);
+        int32_t rc = hand_to_os64get(addr.selector);
         screen_clear();
         screen_home();
         sgr_reset();
-        os64_hprintf(OS64_STDOUT, "gopher:%s\n", s_status);
-        return GOPHER_OK;
+        // A page that was shown leaves nothing to say — the showing was the
+        // saying. Only a failure has words, and they go where words about
+        // failures go.
+        if (s_status[0] != '\0')
+            os64_hprintf(rc == GOPHER_OK ? OS64_STDOUT : OS64_STDERR,
+                         "gopher:%s\n", s_status);
+        return rc;
     }
     if (action == FOLLOW_SAVE) {
         // The prompt is the one the menu's Enter asks, on a screen cleared
