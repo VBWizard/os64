@@ -186,16 +186,25 @@ typedef struct {
 
 // Parse one menu line (with its terminator already stripped).
 //
-// A MENU IS A STRANGER'S BYTES ON YOUR TERMINAL, and os64's terminal learned
-// to obey escape sequences the day before this client was written. So the
-// refusal is HERE, once, where the line is parsed — not at each print, which
-// is the arrangement that eventually misses a print. A display name, a
-// selector or a host carrying a byte below 0x20 or a DEL is GOPHER_ITEM_
-// REFUSED: shown as a refusal, never followed, never painted.
+// A MENU IS A STRANGER'S BYTES ON YOUR TERMINAL, and os64's terminal obeys
+// escape sequences. A display name, a selector or a host carrying a byte
+// below 0x20 or a DEL is GOPHER_ITEM_REFUSED: shown as a refusal, never
+// followed. Refusing the whole ITEM is what a print-time escape cannot do —
+// it is what keeps a doctored line from being FOLLOWED, not merely from
+// being drawn. (The client escapes at the print too, because a text file's
+// lines never pass through here at all.)
 //
 // High bytes are NOT controls and are kept. A menu written in Latin-1 by
 // somebody in 1994 is not an attack, and the renderer's font decides what a
 // byte over 0x7F looks like.
+//
+// THE HOST AND PORT MUST SURVIVE THE ROUND TRIP. They are judged by spelling
+// them as a URL and handing that to the shared parser — so a field carrying
+// a URL delimiter would change the STRUCTURE of the spelling before the
+// parser ever saw it, and `evil.com/path` would be read back as the host
+// `evil.com`. The parse is therefore checked against the fields it came
+// from, and an item that does not match exactly is MALFORMED. Following an
+// address that is not the one the line named is worse than following none.
 gopher_item_result_t gopher_item_parse(const char *line, gopher_item_t *out);
 
 // ── Reading an answer ───────────────────────────────────────────────────
@@ -214,6 +223,12 @@ typedef struct {
     bool             terminated;  // a lone '.' ended the answer properly
     bool             truncated;   // a line hit GOPHER_LINE_MAX, or the ceiling did
     bool             failed;      // the source returned an error
+    // GOPHER_RESPONSE_MAX was reached, and this stream is DONE. A separate
+    // flag from `truncated` because they answer different questions: that
+    // one says the answer is incomplete, this one says no more will be read.
+    // Without it the ceiling only marked the line it landed in, and the next
+    // call read on — past a bound the caller was told held.
+    bool             ceiling;
     uint64_t         bytes;       // read from the source, ceiling included
 } gopher_stream_t;
 
@@ -222,8 +237,9 @@ void gopher_stream_init(gopher_stream_t *s, gopher_source_fn source, void *ctx);
 // One line, terminator stripped, NUL-terminated. Returns 1 for a line, 0 at
 // the end of the answer, and <0 for a source that failed.
 //
-// END means one of three things, and the caller can tell them apart from the
+// END means one of four things, and the caller can tell them apart from the
 // flags: `terminated` — the period arrived and the answer is whole;
+// `ceiling` — the answer outgrew GOPHER_RESPONSE_MAX and was cut off here;
 // otherwise the connection simply ended, which is common enough in the wild
 // that it is not an error; and `failed`, which is.
 //

@@ -19,11 +19,16 @@
 // was walked in 1992: Up/Down to move, Enter to follow, LEFT ARROW for back,
 // `q` to quit.
 //
-// NOTHING FROM THE WIRE IS PRINTED. Every glyph on this screen is one this
-// program decided to draw, at a position it chose, and a menu's bytes have
-// already been refused if they carried anything a terminal obeys (wire.c,
-// where the line is parsed). That order matters now that os64's terminal has
-// learned to obey: a page is a stranger with a paintbrush otherwise.
+// NO ESCAPE SEQUENCE FROM THE WIRE REACHES THE TERMINAL, and that takes two
+// guards rather than one, because there are two kinds of stranger's bytes
+// here. A MENU LINE is refused whole at the parse (wire.c) — a doctored item
+// is never followed, which no print-time check could achieve. A TEXT FILE's
+// lines and an `h` link's fetched HTML pass through no parse at all: they
+// are somebody's document, and refusing one for a stray byte would be
+// refusing the page. Those are escaped where they are DRAWN, by
+// draw_clipped, which every painted string on this screen goes through.
+// Both matter now that os64's terminal obeys: a page is a stranger with a
+// paintbrush otherwise.
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -58,10 +63,14 @@
 #define GOPHER_USAGE       2
 #define GOPHER_BAD_ADDRESS 13
 #define GOPHER_UNREACHABLE 5
+// 9 is os64get's "the page could not be written", and it means the same
+// thing here: the bytes arrived and the disk is where it went wrong.
+#define GOPHER_SAVE_FAILED 9
 
-// A fetch that failed on this side of the wire. Positive, so it can never be
-// mistaken for a dial reason (those are negative).
-#define GOPHER_FETCH_LOCAL 1
+// What page_fetch answers with when the failure was not the network's.
+// Positive, so neither can ever be mistaken for a dial reason (negative).
+#define GOPHER_FETCH_LOCAL  1
+#define GOPHER_FETCH_BINARY 2
 
 typedef struct {
     gopher_addr_t addr;
@@ -162,11 +171,40 @@ static void select_on(void)         { sgr("30;46"); }
 // Draw `text` truncated to `width` cells. Truncation and not wrapping: a menu
 // line is one item, and an item split across two rows is an item the arrow
 // keys would have to learn to skip half of.
+//
+// THIS IS WHERE A STRANGER'S BYTES STOP BEING OBEYED. Everything this program
+// paints comes through here, which is the point: a text file's lines and an
+// `h` link's fetched HTML reach the screen having passed no parse at all, and
+// a guard written at each of those roads separately is a guard the next road
+// is added without.
+//
+// The notation is `cat -v`'s, and for its reason: `^[` says WHICH byte was
+// there, where a dropped byte or a bare `?` says only that something was.
+// TAB is the exception and becomes one SPACE: the glass advances a single
+// cell for a tab anyway (its deliberate quirk — not a tab stop), so a space
+// costs the same column and paints the gap rather than leaving whatever the
+// cell held before. A text file's indentation is layout, not an attack.
+// High bytes are left alone — a menu written in Latin-1 in 1994 is
+// somebody's language, and the font decides what it looks like.
 static void draw_clipped(const char *text, int32_t width)
 {
     int32_t n = 0;
-    for (const char *p = text; *p != '\0' && n < width; p++, n++)
-        outn(p, 1);
+    for (const char *p = text; *p != '\0' && n < width; p++) {
+        unsigned char b = (unsigned char)*p;
+        if (b >= 0x20 && b != 0x7F) {
+            outn(p, 1);
+            n++;
+        } else if (b == '\t') {
+            outn(" ", 1);
+            n++;
+        } else if (n + 2 <= width) {
+            char caret[2] = { '^', (char)(b == 0x7F ? '?' : b + 0x40) };
+            outn(caret, 2);
+            n += 2;
+        } else {
+            break;              // no room for both halves; the clip lands here
+        }
+    }
 }
 
 static void geometry(void)
@@ -218,14 +256,23 @@ static void page_free(page_t *page)
 
 // Dial, ask, and read the answer according to the framing the TYPE dictates.
 //
-// Returns 0; a NEGATIVE dial reason; or GOPHER_FETCH_LOCAL for a failure that
-// is this machine's rather than the network's. The two are kept apart because
-// os64_dial_reason would happily turn "out of memory" into a sentence about
-// the network, and a person acting on that would go and check their cable.
+// Returns 0; a NEGATIVE dial reason; GOPHER_FETCH_LOCAL for a failure that
+// is this machine's rather than the network's; or GOPHER_FETCH_BINARY for an
+// address that is a download and not a page. The dial reason is kept apart
+// from the rest because os64_dial_reason would happily turn "out of memory"
+// into a sentence about the network, and a person acting on that would go
+// and check their cable.
 static int64_t page_fetch(const gopher_addr_t *addr, page_t *page)
 {
     os64_memset(page, 0, sizeof(*page));
     page->addr = *addr;
+
+    // A BINARY IS NOT A PAGE, and the type says so before a socket is opened.
+    // A page holds a menu or lines of text; a binary framing is neither, and
+    // reading one as lines split a zip file on its newlines and painted it.
+    // Whoever wanted this address wanted save_item.
+    if (gopher_framing_for(addr->type) == GOPHER_FRAMING_BINARY)
+        return GOPHER_FETCH_BINARY;
 
     char dialstring[GOPHER_HOST_MAX + 32];
     if (os64_snprintf(dialstring, sizeof(dialstring), "tcp!%s!%u",
@@ -247,8 +294,12 @@ static int64_t page_fetch(const gopher_addr_t *addr, page_t *page)
     gopher_stream_t stream;
     gopher_stream_init(&stream, source_read, &src);
 
-    gopher_framing_t framing = gopher_framing_for(addr->type);
-    page->isMenu = framing == GOPHER_FRAMING_MENU;
+    page->isMenu = gopher_framing_for(addr->type) == GOPHER_FRAMING_MENU;
+
+    // Out of memory partway through an answer is a FAILED fetch, not a short
+    // one. A page that is missing lines nobody was told about would replace
+    // the page you were reading and look like the whole document.
+    bool starved = false;
 
     char line[GOPHER_LINE_MAX];
     if (page->isMenu) {
@@ -269,8 +320,7 @@ static int64_t page_fetch(const gopher_addr_t *addr, page_t *page)
                gopher_stream_line(&stream, line, sizeof(line), true) == 1) {
             size_t len = os64_strlen(line);
             char *copy = os64_malloc(len + 1);
-            if (copy == NULL)
-                break;
+            if (copy == NULL) { starved = true; break; }
             os64_memcpy(copy, line, len + 1);
             page->lines[page->nlines++] = copy;
         }
@@ -282,6 +332,21 @@ static int64_t page_fetch(const gopher_addr_t *addr, page_t *page)
     page->terminated = stream.terminated;
     page->stalled = src.stalled;
     os64_close((int32_t)conn);
+
+    if (starved) {
+        page_free(page);
+        return GOPHER_FETCH_LOCAL;
+    }
+
+    // A BROKEN CONNECTION IS NOT AN ENDED ONE. A stall has its own word on
+    // the status bar and leaves a short page standing, because a slow server
+    // is still a server; a reset is the fetch failing, and the page you were
+    // reading must survive it. `failed` covers both, so the stall is what
+    // separates them.
+    if (stream.failed && !src.stalled) {
+        page_free(page);
+        return GOPHER_FETCH_LOCAL;
+    }
 
     // A menu's first selectable item, so Enter does something sensible the
     // moment a page arrives.
@@ -340,10 +405,15 @@ static void draw_status(const page_t *page)
                       page->stalled ? "  (the server went quiet)"
                                     : (page->terminated ? "" : "  (no end marker)"));
     } else {
+        // A TEXT FILE IS DOT-TERMINATED TOO, so a missing period says the
+        // same thing here it says on a menu: the server stopped talking
+        // rather than finished. A page that arrived short and a page that
+        // arrived whole must not read the same, whichever kind it is.
         os64_snprintf(text, sizeof(text),
                       " %d lines%s%s   arrows scroll  left back  q quit",
                       (int)page->nlines, page->truncated ? "  (truncated)" : "",
-                      page->stalled ? "  (the server went quiet)" : "");
+                      page->stalled ? "  (the server went quiet)"
+                                    : (page->terminated ? "" : "  (no end marker)"));
     }
     cursor_to(s_rows, 1);
     bar_on();
@@ -433,7 +503,17 @@ static void draw(const page_t *page)
 // The keyboard delivers arrows as the VT100 spelling — ESC '[' A/B/C/D — and
 // the digit-parameter family as ESC '[' <n> '~'. Decoding them here rather
 // than in libos64 keeps the guess about a LONE escape local: this program
-// treats one as "quit", and a program with a text field would not.
+// ignores one, and a program with a text field would not.
+//
+// THE ESCAPE KEY AND AN ARROW KEY START WITH THE SAME BYTE, which is the
+// oldest ambiguity in terminal input and has exactly one answer: WAIT A
+// LITTLE. The rest of a real sequence is already in the input ring — the
+// driver delivers a sequence's bytes back to back out of one interrupt —
+// while the Escape KEY is one byte and nothing after it. So the lookahead is
+// patient enough to collect a sequence that is already there and far too
+// short for a person to notice. Blocking instead made Escape look like a
+// hang until the next key was pressed, and then ate that key.
+#define GOPHER_ESC_LOOKAHEAD_MS 50
 
 typedef enum {
     KEY_NONE = 0, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
@@ -441,11 +521,54 @@ typedef enum {
     KEY_OTHER,
 } key_t;
 
+// A byte read while looking for the rest of a sequence that turned out not to
+// be one. It belongs to whoever asks next; throwing it away would lose the
+// keystroke a person actually meant.
+static int32_t s_pushback = -1;
+
+// Whether this input can be asked to wait a BOUNDED time. The console can and
+// a file cannot (os64/io.h: everywhere else a finite patience is refused
+// rather than silently blocking), and keys come from the terminal whenever
+// there is one — so this is false only where there is none, and there the
+// lookahead blocks exactly as it always did. The ambiguity is unresolvable on
+// such a handle; pretending otherwise would end the session at the first
+// Escape byte in a file.
+static bool s_timed_keys = true;
+
+// 1 a byte, 0 nothing within the patience, -1 the input ended or broke.
+static int key_byte(char *c, uint64_t patience_ms)
+{
+    if (s_pushback >= 0) {
+        *c = (char)s_pushback;
+        s_pushback = -1;
+        return 1;
+    }
+    if (!s_timed_keys)
+        patience_ms = OS64_WAIT_FOREVER;
+    int64_t n = os64_read_for((int32_t)s_keys, c, 1, patience_ms);
+    if (n == 1)                return 1;
+    if (n == OS64_ERR_TIMEOUT) return 0;
+    return -1;                       // 0 is end of input; the rest is a broken handle
+}
+
+// Ask the input, once, whether it takes a deadline — with a patience of zero,
+// the poll that never blocks, so the question costs nothing and cannot hang.
+// A byte it happens to find was already typed and is still owed to somebody.
+static void keys_probe_patience(void)
+{
+    char c;
+    int64_t n = os64_read_for((int32_t)s_keys, &c, 1, 0);
+    if (n == 1)
+        s_pushback = (unsigned char)c;
+    else if (n != OS64_ERR_TIMEOUT)
+        s_timed_keys = false;
+}
+
 static key_t key_read(char *literal)
 {
     char c;
-    if (os64_read((int32_t)s_keys, &c, 1) != 1)
-        return KEY_EOF;                  // input ended; nobody is left to ask
+    if (key_byte(&c, OS64_WAIT_FOREVER) != 1)
+        return KEY_EOF;              // input ended; nobody is left to ask
     *literal = c;
 
     if (c == '\r' || c == '\n') return KEY_ENTER;
@@ -453,18 +576,20 @@ static key_t key_read(char *literal)
     if (c != 0x1B)              return KEY_OTHER;
 
     char bracket;
-    if (os64_read((int32_t)s_keys, &bracket, 1) != 1)
+    int got = key_byte(&bracket, GOPHER_ESC_LOOKAHEAD_MS);
+    if (got < 0)
         return KEY_EOF;
-    // A STRAY ESC IS IGNORED, NOT OBEYED. The keyboard only ever sends ESC as
-    // the head of a sequence, so a bare one is somebody leaning on the key —
-    // and it used to mean "quit", which also swallowed whatever they pressed
-    // next. Dropping both bytes costs a keystroke nobody meant.
-    if (bracket != '[')
-        return KEY_NONE;
+    if (got == 0)
+        return KEY_NONE;             // the Escape KEY: nothing followed it
+    if (bracket != '[') {
+        s_pushback = (unsigned char)bracket;
+        return KEY_NONE;             // not a sequence; the byte is still owed
+    }
 
     char final;
-    if (os64_read((int32_t)s_keys, &final, 1) != 1)
-        return KEY_EOF;
+    got = key_byte(&final, GOPHER_ESC_LOOKAHEAD_MS);
+    if (got < 0) return KEY_EOF;
+    if (got == 0) return KEY_NONE;   // a sequence that stopped halfway
     switch (final) {
         case 'A': return KEY_UP;
         case 'B': return KEY_DOWN;
@@ -476,7 +601,8 @@ static key_t key_read(char *literal)
     }
     if (final >= '0' && final <= '9') {
         char tilde;
-        os64_read((int32_t)s_keys, &tilde, 1);      // the '~' that ends it
+        if (key_byte(&tilde, GOPHER_ESC_LOOKAHEAD_MS) == 1 && tilde != '~')
+            s_pushback = (unsigned char)tilde;
         if (final == '5') return KEY_PGUP;
         if (final == '6') return KEY_PGDN;
     }
@@ -496,15 +622,26 @@ static bool confirm(const char *question)
     cursor_to(s_rows, (int32_t)os64_strlen(question) + 1);
 
     char c;
-    if (os64_read((int32_t)s_keys, &c, 1) != 1)
+    if (key_byte(&c, OS64_WAIT_FOREVER) != 1)
         return true;                     // input ended: there is nobody to ask
     return c == 'y' || c == 'Y';
 }
 
+// WHAT A PROMPT CAME BACK WITH, and it takes three words rather than two.
+// "Nothing typed" and "changed my mind" are different answers — a caller
+// holding a default must use it for the first and abandon the whole job for
+// the second — and a bool made them the same, so Escape at `save as [x]:`
+// downloaded x.
+typedef enum {
+    PROMPT_TYPED = 0,   // there is text in the buffer
+    PROMPT_EMPTY,       // Enter on an empty line: whatever the default is
+    PROMPT_CANCELLED,   // Escape, or the input ended
+} prompt_result_t;
+
 // Ask for a line, on the status bar, with echo this program does itself —
 // the console does not echo, which is exactly what a full-screen program
 // needs everywhere except here.
-static bool prompt(const char *label, char *out_text, size_t cap)
+static prompt_result_t prompt(const char *label, char *out_text, size_t cap)
 {
     size_t n = 0;
     out_text[0] = '\0';
@@ -518,12 +655,12 @@ static bool prompt(const char *label, char *out_text, size_t cap)
         sgr_reset();
 
         char c;
-        if (os64_read((int32_t)s_keys, &c, 1) != 1)
-            return false;
+        if (key_byte(&c, OS64_WAIT_FOREVER) != 1)
+            return PROMPT_CANCELLED;    // nobody is there to finish answering
         if (c == '\r' || c == '\n')
-            return n > 0;
+            return n > 0 ? PROMPT_TYPED : PROMPT_EMPTY;
         if (c == 0x1B)
-            return false;                       // changed your mind
+            return PROMPT_CANCELLED;            // changed your mind
         if (c == '\b' || c == 0x7F) {
             if (n > 0) out_text[--n] = '\0';
             continue;
@@ -555,18 +692,32 @@ static void selector_basename(const char *selector, char *out_name, size_t cap)
 // .part-then-rename discipline is os64get's, and it is here for the same
 // reason: a transfer that dies halfway must not leave something that looks
 // like a finished file.
-static void save_item(const gopher_addr_t *addr)
+//
+// Answers whether the file is on the disk under its real name; the sentence
+// for the person is on the status bar either way.
+static bool save_item(const gopher_addr_t *addr)
 {
     char name[256];
     selector_basename(addr->selector, name, sizeof(name));
     char asked[256];
     os64_snprintf(asked, sizeof(asked), "save as [%s]: ", name[0] != '\0' ? name : "");
     char typed[256];
-    if (prompt(asked, typed, sizeof(typed)))
-        os64_strcopy(name, sizeof(name), typed);
+    switch (prompt(asked, typed, sizeof(typed))) {
+        case PROMPT_TYPED:
+            os64_strcopy(name, sizeof(name), typed);
+            break;
+        case PROMPT_EMPTY:
+            break;                       // the default in the brackets
+        case PROMPT_CANCELLED:
+            // Before anything is opened, so nothing is truncated: reading a
+            // cancel as "yes, the default" opens <default>.part and writes
+            // over whatever a previous transfer left there.
+            os64_strcopy(s_status, sizeof(s_status), " nothing saved (cancelled)");
+            return false;
+    }
     if (name[0] == '\0') {
         os64_strcopy(s_status, sizeof(s_status), " nothing saved (no name)");
-        return;
+        return false;
     }
 
     char part[280];
@@ -579,7 +730,7 @@ static void save_item(const gopher_addr_t *addr)
     if (conn < 0) {
         os64_snprintf(s_status, sizeof(s_status), " cannot reach %s — %s",
                       addr->host, os64_dial_reason(conn));
-        return;
+        return false;
     }
 
     char request[GOPHER_SELECTOR_MAX + GOPHER_QUERY_MAX + 8];
@@ -587,14 +738,14 @@ static void save_item(const gopher_addr_t *addr)
     if (reqlen == 0 || os64_write((int32_t)conn, request, reqlen) < 0) {
         os64_close((int32_t)conn);
         os64_strcopy(s_status, sizeof(s_status), " the request could not be sent");
-        return;
+        return false;
     }
 
     int64_t file = os64_open(part, "w");
     if (file < 0) {
         os64_close((int32_t)conn);
         os64_snprintf(s_status, sizeof(s_status), " cannot write %s", part);
-        return;
+        return false;
     }
 
     source_t src = { conn, false };
@@ -620,16 +771,17 @@ static void save_item(const gopher_addr_t *addr)
         os64_snprintf(s_status, sizeof(s_status),
                       " transfer broke after %lu bytes — %s kept",
                       (unsigned long)total, part);
-        return;
+        return false;
     }
     if (os64_rename(part, name) < 0) {
         os64_snprintf(s_status, sizeof(s_status),
                       " %lu bytes saved, but %s could not be renamed",
                       (unsigned long)total, part);
-        return;
+        return false;
     }
     os64_snprintf(s_status, sizeof(s_status), " saved %s (%lu bytes)",
                   name, (unsigned long)total);
+    return true;
 }
 
 // An `h` item's selector is `URL:<address>`, and os64get is what fetches it.
@@ -809,9 +961,24 @@ static void view_local_text(const char *path, const char *title)
     while (page.nlines < GOPHER_MAX_LINES &&
            os64_linereader_line(&reader, line, sizeof(line)) == 1) {
         size_t len = os64_strlen(line);
+        // A LONG LINE ARRIVES SHORTENED AND SAYS NOTHING ABOUT IT. The reader
+        // truncates to the buffer and swallows the rest of the line by
+        // contract (os64/io.h), which is right for a config file and wrong
+        // for minified HTML — one line, and the page would look whole. A full
+        // buffer is the only evidence there is, so it is what marks the page.
+        // It over-reports by one case (a line of exactly this length), and
+        // "may not be whole" is the honest side to be wrong on.
+        if (len == sizeof(line) - 1)
+            page.truncated = true;
         char *copy = os64_malloc(len + 1);
-        if (copy == NULL)
-            break;
+        if (copy == NULL) {
+            // Same rule as a fetched page: a document missing lines nobody
+            // was told about must not be shown as the document.
+            os64_linereader_close(&reader);
+            page_free(&page);
+            os64_strcopy(s_status, sizeof(s_status), " not enough memory to show it");
+            return;
+        }
         os64_memcpy(copy, line, len + 1);
         page.lines[page.nlines++] = copy;
     }
@@ -848,16 +1015,34 @@ static void view_local_text(const char *path, const char *title)
 }
 
 // Put the selection on a followable item, starting from where it already is
-// and walking in `step` direction. Home and End land on a ROW, and a row is
-// only somewhere to BE if pressing Enter there would do something — landing
-// on the prose at the top of a menu leaves the cursor somewhere the whole
-// rest of the keyboard disagrees with.
+// and walking in `step` direction. A row is only somewhere to BE if pressing
+// Enter there would do something — landing on the prose at the top of a menu
+// leaves the cursor somewhere the whole rest of the keyboard disagrees with.
+//
+// The start is clamped first, because a caller that MOVES BY A DISTANCE can
+// hand this an index off either end of the menu, and a walk beginning outside
+// the array finds nothing and reports success by leaving `sel` where it was.
 static void select_snap(page_t *page, int32_t step)
 {
-    if (!page->isMenu)
+    if (!page->isMenu || page->nitems <= 0)
         return;
+    if (page->sel < 0) page->sel = 0;
+    if (page->sel >= page->nitems) page->sel = page->nitems - 1;
     for (int32_t i = page->sel; i >= 0 && i < page->nitems; i += step)
         if (page->items[i].followable) { page->sel = i; return; }
+}
+
+// The same, and if that direction has nothing left, back the other way. It is
+// what a PAGE move wants: a screenful is a distance, not a destination, so
+// there is no reason to prefer the far side of the menu to the near one when
+// the landing area is all prose.
+static void select_snap_either(page_t *page, int32_t step)
+{
+    select_snap(page, step);
+    if (page->isMenu && page->nitems > 0 &&
+        page->sel >= 0 && page->sel < page->nitems &&
+        !page->items[page->sel].followable)
+        select_snap(page, -step);
 }
 
 // Move the selection to the next followable item in `step` direction, so the
@@ -901,6 +1086,13 @@ static bool navigate_to(page_t *page, gopher_addr_t *addr,
 {
     page_t next;
     int64_t rc = page_fetch(target, &next);
+    if (rc == GOPHER_FETCH_BINARY) {
+        // A download is not somewhere to BE, so this is not a navigation
+        // whatever the answer. A caller that asks the framing first never
+        // arrives here; this keeps the rule true for one that does not.
+        save_item(target);
+        return false;
+    }
     if (rc != 0) {
         if (rc < 0)
             os64_snprintf(s_status, sizeof(s_status), " cannot reach %s:%u — %s",
@@ -908,8 +1100,8 @@ static bool navigate_to(page_t *page, gopher_addr_t *addr,
                           os64_dial_reason(rc));
         else
             os64_snprintf(s_status, sizeof(s_status),
-                          " could not ask %s — out of memory,"
-                          " or the address is too long", target->host);
+                          " %s did not answer whole — out of memory, a broken"
+                          " connection, or an address too long", target->host);
         return false;
     }
 
@@ -935,13 +1127,29 @@ static int32_t browse(gopher_addr_t start)
     // reached from inside a session is a page that did not load, and the
     // session is still perfectly alive.
     int64_t rc = page_fetch(&addr, &page);
+    if (rc == GOPHER_FETCH_BINARY) {
+        // AN ADDRESS MEANS THE SAME THING WHEREVER IT CAME FROM. Following a
+        // `9` inside a menu downloads it, so typing one must download it too
+        // — not read a zip file as lines of text and paint them. The prompt
+        // is the same one the menu's Enter asks, on a screen cleared for it,
+        // and then there is no session to have: a download is the whole job.
+        screen_clear();
+        screen_home();
+        bool saved = save_item(&addr);
+        screen_clear();
+        screen_home();
+        sgr_reset();
+        os64_hprintf(saved ? OS64_STDOUT : OS64_STDERR, "gopher:%s\n", s_status);
+        return saved ? GOPHER_OK : GOPHER_SAVE_FAILED;
+    }
     if (rc != 0) {
         if (rc < 0)
             os64_hprintf(OS64_STDERR, "gopher: cannot reach %s:%u — %s\n",
                          addr.host, (unsigned)addr.port, os64_dial_reason(rc));
         else
-            os64_hprintf(OS64_STDERR, "gopher: could not ask %s:%u"
-                         " — out of memory, or the address is too long\n",
+            os64_hprintf(OS64_STDERR, "gopher: %s:%u did not answer whole"
+                         " — out of memory, a broken connection,"
+                         " or an address too long\n",
                          addr.host, (unsigned)addr.port);
         return GOPHER_UNREACHABLE;
     }
@@ -960,8 +1168,18 @@ static int32_t browse(gopher_addr_t start)
         switch (key) {
             case KEY_UP:    select_step(&page, -1); break;
             case KEY_DOWN:  select_step(&page, +1); break;
-            case KEY_PGUP:  page.top -= rows; page.sel -= rows; break;
-            case KEY_PGDN:  page.top += rows; page.sel += rows; break;
+            // A page move travels a screenful and then looks for somewhere to
+            // land, the way the arrows and Home/End do. Without the snap the
+            // highlight sat on whatever prose the arithmetic reached, and
+            // Enter answered that an `i` line is not something to follow.
+            case KEY_PGUP:
+                page.top -= rows; page.sel -= rows;
+                select_snap_either(&page, -1);
+                break;
+            case KEY_PGDN:
+                page.top += rows; page.sel += rows;
+                select_snap_either(&page, +1);
+                break;
             case KEY_HOME:
                 page.top = 0;
                 page.sel = 0;
@@ -1016,7 +1234,11 @@ static int32_t browse(gopher_addr_t start)
                     next.type = '0';   // gopher-served HTML: it is text
                 if (item->type == '7') {
                     char query[GOPHER_QUERY_MAX];
-                    if (!prompt("search for: ", query, sizeof(query))) {
+                    // Only typed text is a search. There is no default here
+                    // to fall back to, so an empty line and an Escape want
+                    // the same thing — unlike a save, which has a name in
+                    // brackets and must tell the two apart.
+                    if (prompt("search for: ", query, sizeof(query)) != PROMPT_TYPED) {
                         os64_strcopy(s_status, sizeof(s_status), " search cancelled");
                         break;
                     }
@@ -1091,6 +1313,7 @@ int main(int argc, char **argv)
     s_keys = os64_tty_handle();
     if (s_keys < 0)
         s_keys = OS64_STDIN;
+    keys_probe_patience();
 
     geometry();
     int32_t status = browse(addr);

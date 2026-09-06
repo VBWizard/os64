@@ -48,6 +48,9 @@ SELECTORS, and what each one is FOR:
   /text/dotted       lines that begin with a period      dot-unstuffing
   /text/nodot        a text file ended by the close      the missing terminator
   /text/tabs         tabs and a very long line           rendering, not parsing
+  /text/hostile      ESC, CR, NUL and OSC inside a TEXT FILE, which nothing
+                     parses — the escaping a menu gets at the parse has to
+                     happen at the PRINT for this one, or a page owns the screen
   /search            type 7: expects `selector<TAB>query`
   /bin/blob          64 KiB, seeded, no terminator       binary framing
   /bin/image.png     a real PNG                          the save path
@@ -194,6 +197,7 @@ def root_menu():
         info(""),
         info("-- the awkward half --"),
         item("1", "Display names with escapes in them", "/menu/hostile"),
+        item("0", "A TEXT FILE with escapes in it", "/text/hostile"),
         item("1", "Item lines that are not item lines", "/menu/malformed"),
         item("1", "A menu with no terminator", "/menu/nodot"),
         item("0", "A text file with no terminator", "/text/nodot"),
@@ -243,14 +247,17 @@ def types_menu():
 def hostile_menu():
     r"""Display names and selectors carrying bytes a terminal would obey.
 
-    This is the route that matters most. os64's terminal learned to obey
-    escape sequences the day before this client was written, which means a
-    menu is now a stranger with a paintbrush: `\033[2J` in a display name
-    clears the screen, `\033[H` moves the cursor somewhere the client did not
-    put it, and a CR drags the rest of the line back over the start of it.
-    The client's rule is that control bytes are refused where the line is
-    PARSED — once — rather than escaped at each print, so what this route
-    proves is that none of the eight lines below can paint anything."""
+    os64's terminal obeys escape sequences, which makes a menu a stranger
+    with a paintbrush: `\033[2J` in a display name clears the screen,
+    `\033[H` moves the cursor somewhere the client did not put it, and a CR
+    drags the rest of the line back over the start of it.
+
+    A menu line is refused WHOLE at the parse, which is what keeps a doctored
+    item from being followed and not merely from being drawn — so what this
+    route proves is that none of the lines below paint anything AND that none
+    of them can be entered. Its sibling is /text/hostile, where nothing
+    parses and the escaping falls to the print; between them they cover both
+    roads a stranger's bytes take to that screen."""
     lines = [
         b"1" + b"clear the screen: \x1b[2J" + b"\t/menu/plain\t" + ADVERTISE_HOST.encode() + b"\t" + str(ADVERTISE_PORT).encode() + b"\r\n",
         b"1" + b"home the cursor: \x1b[H" + b"\t/menu/plain\t" + ADVERTISE_HOST.encode() + b"\t" + str(ADVERTISE_PORT).encode() + b"\r\n",
@@ -360,6 +367,37 @@ TAB_LINES = [
     "done.",
 ]
 
+# LATIN-1, NOT UTF-8. `text_body` encodes latin-1, so a character outside it
+# is an encode error and the route serves nothing at all — which is what an
+# em-dash in this list did on its first run. High bytes are fine and wanted
+# (the `café` in /menu/hostile is deliberate); it is the punctuation this
+# project writes in prose that has no latin-1 spelling, and no os64 glyph
+# either (DEBTS: the terminal does not speak UTF-8).
+HOSTILE_TEXT_LINES = [
+    "A TEXT FILE IS ALSO A STRANGER'S BYTES, and it reaches a screen by a",
+    "different road than a menu does: nothing PARSES it, because it is",
+    "somebody's document and refusing it for a stray byte would be refusing",
+    "the page. So the escaping has to happen where it is DRAWN.",
+    "",
+    "Each line below carries what a page would use to take the screen. Every",
+    "one of them must appear as visible text (`^[[2J` and not a cleared",
+    "screen), and the browser's own title and status bars must survive:",
+    "",
+    "erase display:   \x1b[2J and the rest of this line",
+    "home the cursor: \x1b[H and the rest of this line",
+    "paint it red:    \x1b[41;97m and the rest of this line",
+    "set the paper:   \x1b]11;#ff0000\x07 and the rest of this line",
+    "erase to end:    \x1b[K and the rest of this line",
+    "put it far away: \x1b[99;1H and the rest of this line",
+    "a carriage return: before\rafter  (the second half must not overwrite)",
+    "a bell:          \x07 and the rest of this line",
+    "a DEL:           \x7f and the rest of this line",
+    "a NUL ends the line early:  \x00 nothing after this should be shown",
+    "a tab\tis layout, not an attack, and stays a tab stop's worth of space",
+    "",
+    "If the screen is intact and the chrome is where it was, the guard holds.",
+]
+
 
 class Handler(socketserver.StreamRequestHandler):
     # A per-connection read timeout and a bounded selector read, for the
@@ -453,6 +491,8 @@ class Handler(socketserver.StreamRequestHandler):
             return text_body(DOTTED_LINES), "text"
         if route == "/text/tabs":
             return text_body(TAB_LINES), "text"
+        if route == "/text/hostile":
+            return text_body(HOSTILE_TEXT_LINES), "text"
         if route == "/text/nodot":
             return text_body(HELLO_LINES)[: -len(TERMINATOR)], "text"
 

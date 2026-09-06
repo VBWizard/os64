@@ -249,6 +249,31 @@ for line in HOSTILE:
     check(f"hostile {line[1:24]!r}", verdict, "refused")
 print(f"item lines: {len(MALFORMED)} malformed and {len(HOSTILE)} hostile, all refused")
 
+# A HOST FIELD THAT REWRITES THE URL IT IS SPELLED INTO. The host and port are
+# judged by handing `gopher://<host>:<port>/` to the shared parser, so a field
+# carrying a URL delimiter changes the shape of that spelling BEFORE the parser
+# reads it: `/`, `?` and `#` each end an authority, and `#` also starts a
+# fragment the port never sees. Each of these parses cleanly into an address
+# that is not the one the menu line named, which is the whole reason the parse
+# is checked back against the fields it came from.
+SMUGGLED = [
+    ("1slash in host\t/sel\tevil.com/path\t70",     "evil.com"),
+    ("1query in host\t/sel\tevil.com?x\t70",        "evil.com"),
+    ("1fragment in host\t/sel\tevil.com#x\t70",     "evil.com"),
+    ("1slash in port\t/sel\texample.com\t70/x",     "example.com"),
+    ("1fragment in port\t/sel\texample.com\t70#junk", "example.com"),
+    ("1empty then junk\t/sel\texample.com\t70?q",   "example.com"),
+]
+for line, would_have_been in SMUGGLED:
+    verdict, got = item(line)
+    if verdict == "ok":
+        fail(f"smuggled {line[1:24]!r}",
+             f"followed host {got.get('host')!r}:{got.get('port')} instead of refusing"
+             f" (the field said something else; {would_have_been!r} is what it collapses to)")
+    else:
+        check(f"smuggled {line[1:24]!r}", verdict, "malformed")
+print(f"item lines: {len(SMUGGLED)} delimiter-smuggling hosts and ports refused")
+
 # A high byte is NOT a control byte. Somebody's Latin-1 menu from 1994 is not
 # an attack, and what a byte over 0x7F looks like is the font's business.
 verdict, got = item("1caf\xe9\t/sel\texample.com\t70")
@@ -330,6 +355,39 @@ for chunk in (1, 2, 13, 4096, 0):
     seen.add(got["hash"])
 check("raw identical at every chunk size", len(seen), 1)
 print(f"framing: menus, text, binaries at chunk sizes {CHUNKS}")
+
+# ── The response ceiling ends the answer, rather than marking one line ──
+#
+# A peer that never stops talking must be cut off by GOPHER_RESPONSE_MAX and
+# not by patience — and that has to hold for a peer sending ONE endless line
+# as much as for one sending an endless supply of short ones. Marking only
+# the line the ceiling landed in left `bytes` over the cap and every later
+# call tripping the same check, handing back one byte at a time for as long
+# as the caller kept asking. `hit_cap` is the shape of that failure: the
+# harness stopped it, nothing in the parser did.
+#
+# The bytes are manufactured inside the harness because 8MB cannot travel in
+# argv, and the limits are read back from it so they are not spelled twice.
+for linelen, what in ((0, "one line that never ends"),
+                      (4000, "an endless supply of lines")):
+    _, got = run("flood", linelen, 20000)
+    cap = int(got["response_max"])
+    check(f"ceiling ends {what}", got["ceiling"], "1")
+    check(f"ceiling truncates {what}", got["truncated"], "1")
+    check(f"ceiling is not an error: {what}", got["failed"], "0")
+    check(f"ceiling is not a terminator: {what}", got["terminated"], "0")
+    if got["hit_cap"] == "1":
+        fail(f"ceiling {what}",
+             f"produced {got['count']} lines and was still going — the cap"
+             f" stopped it, not the {cap}-byte ceiling")
+    # One buffer of overshoot is the honest amount: the check runs per byte,
+    # so the read that crosses the cap has already been taken whole.
+    served, slack = int(got["served"]), 2 * int(got["buf_size"])
+    if served > cap + slack:
+        fail(f"ceiling overshoot {what}",
+             f"read {served} bytes against a {cap}-byte cap"
+             f" ({served - cap} past it)")
+print("ceiling: an endless peer is cut off at the response cap, not by patience")
 
 if failures:
     print(f"test_gopher_host: {failures} FAILED")

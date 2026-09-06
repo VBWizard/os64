@@ -366,6 +366,14 @@ gopher_item_result_t gopher_item_parse(const char *line, gopher_item_t *out)
         port[i] = field[3][i];
     port[len[3]] = '\0';
 
+    // A PORT IS DECIMAL DIGITS, and saying so here is not a second copy of
+    // the host alphabet: it is what makes the round trip below meaningful.
+    // `70#junk` parses to port 70 because the '#' starts a fragment, and a
+    // port field that was never a number must not be read as one.
+    for (size_t i = 0; i < len[3]; i++)
+        if (port[i] < '0' || port[i] > '9')
+            return (out->result = GOPHER_ITEM_MALFORMED);
+
     // THE HOST AND PORT ARE JUDGED BY THE SHARED GRAMMAR, by spelling them
     // as the address they are and handing it to os64_url_parse. A private
     // host-alphabet check here would be the second copy of exactly the rule
@@ -376,6 +384,15 @@ gopher_item_result_t gopher_item_parse(const char *line, gopher_item_t *out)
         return (out->result = GOPHER_ITEM_MALFORMED);
     os64_url_t checked;
     if (os64_url_parse(spelled, &checked) != OS64_URL_OK)
+        return (out->result = GOPHER_ITEM_MALFORMED);
+
+    // AND THE ANSWER MUST BE THE QUESTION. Interpolating a field into a URL
+    // lets that field rewrite the URL's shape: `evil.com/path` spells an
+    // authority of `evil.com` with a path after it, and the parse SUCCEEDS
+    // on an address the menu line never named. Compare what came back with
+    // what went in — without regard to case, because the parser lowercases a
+    // host and a menu may not have.
+    if (!os64_streq_nocase(checked.host, out->addr.host))
         return (out->result = GOPHER_ITEM_MALFORMED);
 
     os64_strcopy(out->addr.host, sizeof(out->addr.host), checked.host);
@@ -413,7 +430,7 @@ static int stream_fill(gopher_stream_t *s)
 
 int gopher_stream_line(gopher_stream_t *s, char *out, size_t cap, bool unstuff)
 {
-    if (s->terminated || s->failed)
+    if (s->terminated || s->failed || s->ceiling)
         return s->failed ? -1 : 0;
 
     size_t n = 0;
@@ -438,8 +455,13 @@ int gopher_stream_line(gopher_stream_t *s, char *out, size_t cap, bool unstuff)
 
         // The ceiling is checked HERE and not between lines, because a cap
         // a single endless line never returns to be measured by is not a cap.
+        // Crossing it ENDS the stream: marking only this line left `bytes`
+        // over the ceiling and every later call tripping the same check one
+        // byte at a time, so a dribbling peer kept the fetch alive far past
+        // the bound. The partial line is still handed back — it was read.
         if (s->bytes > GOPHER_RESPONSE_MAX) {
             s->truncated = true;
+            s->ceiling = true;
             out[n < cap ? n : cap - 1] = '\0';
             return n > 0 ? 1 : 0;
         }

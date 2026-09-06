@@ -161,7 +161,66 @@ static int do_lines(const char *chunkText, const char *unstuffText, const char *
     printf("count=%d\n", count);
     printf("terminated=%d\n", s.terminated ? 1 : 0);
     printf("truncated=%d\n", s.truncated ? 1 : 0);
+    printf("ceiling=%d\n", s.ceiling ? 1 : 0);
     printf("failed=%d\n", s.failed ? 1 : 0);
+    return 0;
+}
+
+// ── A source that never stops talking ───────────────────────────────────
+// It never returns 0 and never fails, so nothing in the PARSER can end a
+// read of it except the response ceiling — which is the whole point, and why
+// the bytes are manufactured here: a fixture that fits in argv can never
+// reach an 8MB bound. (do_flood's line cap ends the LOOP, and says so.)
+typedef struct {
+    size_t   linelen;    // bytes between newlines; 0 = a line that never ends
+    size_t   col;
+    uint64_t served;
+} flood_t;
+
+static int64_t flood_source(void *ctx, void *buf, size_t cap)
+{
+    flood_t *f = ctx;
+    char *out = buf;
+    for (size_t i = 0; i < cap; i++) {
+        if (f->linelen != 0 && f->col == f->linelen) {
+            out[i] = '\n';
+            f->col = 0;
+        } else {
+            out[i] = (char)('a' + (f->col % 26));
+            f->col++;
+        }
+    }
+    f->served += cap;
+    return (int64_t)cap;
+}
+
+static int do_flood(const char *linelenText, const char *maxlinesText)
+{
+    flood_t f = { (size_t)strtoul(linelenText, NULL, 10), 0, 0 };
+    gopher_stream_t s;
+    gopher_stream_init(&s, flood_source, &f);
+
+    // A cap so a stream that refuses to end fails the suite instead of
+    // hanging it. Reaching it IS the failure, and `hit_cap` says so.
+    long maxlines = strtol(maxlinesText, NULL, 10);
+    char line[GOPHER_LINE_MAX];
+    long count = 0;
+    while (count < maxlines) {
+        int rc = gopher_stream_line(&s, line, sizeof(line), false);
+        if (rc < 0) { printf("error\n"); break; }
+        if (rc == 0) break;
+        count++;
+    }
+    printf("count=%ld\n", count);
+    printf("hit_cap=%d\n", count >= maxlines ? 1 : 0);
+    printf("terminated=%d\n", s.terminated ? 1 : 0);
+    printf("truncated=%d\n", s.truncated ? 1 : 0);
+    printf("ceiling=%d\n", s.ceiling ? 1 : 0);
+    printf("failed=%d\n", s.failed ? 1 : 0);
+    printf("served=%llu\n", (unsigned long long)f.served);
+    // The limits come from the header so the suite never spells them twice.
+    printf("response_max=%llu\n", (unsigned long long)GOPHER_RESPONSE_MAX);
+    printf("buf_size=%llu\n", (unsigned long long)GOPHER_BUF_SIZE);
     return 0;
 }
 
@@ -200,8 +259,11 @@ int main(int argc, char **argv)
         return do_lines(argv[2], argv[3], argv[4]);
     if (argc >= 4 && strcmp(argv[1], "raw") == 0)
         return do_raw(argv[2], argv[3]);
+    if (argc >= 4 && strcmp(argv[1], "flood") == 0)
+        return do_flood(argv[2], argv[3]);
 
     fprintf(stderr, "usage: %s url <text> | item <hex> |"
-                    " lines <chunk> <unstuff> <hex> | raw <chunk> <hex>\n", argv[0]);
+                    " lines <chunk> <unstuff> <hex> | raw <chunk> <hex> |"
+                    " flood <linelen> <maxlines>\n", argv[0]);
     return 2;
 }

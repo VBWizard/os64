@@ -281,7 +281,10 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      file, `i` shown but not selectable, `3` the server's error shown as
      one, and **anything unknown shown but NOT followable** — guessing
      what a type means is how you download a thing that is not what it
-     said. Type `h` carries a `URL:http://…` link and is **handed to
+     said. A TYPE MEANS THE SAME THING WHEREVER THE ADDRESS CAME FROM:
+     `gopher gopher://host/9/thing.zip` on the command line saves it and
+     exits with a code, exactly as pressing Enter on that item would,
+     because the framing is the type's answer and not the menu's. Type `h` carries a `URL:http://…` link and is **handed to
      os64get**, which is only as good as os64get's exit codes are precise
      (Chris's condition, and the reason 3(a)–(c)'s code table was worth
      the care it got: 5 refused, 7 short, 13 bad address, 14 a coding it
@@ -311,10 +314,21 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      type h's ORIGINAL meaning — an HTML file served by that gopher
      server, predating the convention — and is fetched over gopher as
      text. Reading it as a broken URL would refuse pages that work.
-     A MENU IS A STRANGER'S BYTES ON YOUR TERMINAL, and (a) makes the
-     terminal obey more of them — so os64get's rule travels with the
-     handoff: control bytes are refused once, where the line is parsed,
-     never escaped at each print.
+     A PAGE IS A STRANGER'S BYTES ON YOUR TERMINAL, and (a) makes the
+     terminal obey more of them — so it takes TWO guards, because there
+     are two kinds of page. A MENU LINE is refused whole where it is
+     parsed, which is the only place that can stop a doctored item being
+     FOLLOWED rather than merely drawn. A TEXT FILE and an `h` link's
+     fetched HTML pass through no parse at all — they are somebody's
+     document, and refusing one for a stray byte would be refusing the
+     page — so they are escaped where they are DRAWN, in `cat -v`'s
+     notation, by the one clip-to-width function every painted string on
+     that screen goes through. The slice shipped with only the first
+     guard and the doctrine "refused once at the parse, never escaped at
+     each print", which read as settled because the half anyone checks —
+     menus — was the half it covered; a type-0 file full of `ESC[2J`
+     owned the screen. **A rule that names where a check goes is only as
+     good as its census of what arrives.**
      WHAT THE SLICE SETTLED. The wire lives in `apps/gopher/wire.{c,h}`
      and takes its bytes from a source function, so `tools/test_gopher_host.sh`
      drives every case at chunk sizes 1, 2, 3, 7, 17, 64 and whole. There is
