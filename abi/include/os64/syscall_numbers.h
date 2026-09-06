@@ -545,6 +545,16 @@ typedef enum os64_shutdown_mode
 // of acquiring handles into the ABI.
 #define SYSCALL_CONF_RESOLVE 47
 
+// HOW LONG ONE spawn() ARGUMENT MAY BE, including its terminator. The kernel
+// copies each argv string into a bounded scratch block and REFUSES one that
+// does not fit — it never truncates — so a caller holding a string of its own
+// choosing needs the number rather than a guess. Published because a caller
+// asked: /bin/gopher accepts a menu selector far longer than this and hands
+// part of it to os64get, and a spawn that simply failed read as "the program
+// is missing" when it was the ARGUMENT that could not be carried. A limit a
+// caller cannot see is one it reports as the wrong thing.
+#define OS64_SPAWN_ARG_MAX 256
+
 // spawn() FLAGS — arg5. Zero is the everyday spawn, so every caller written
 // before this existed keeps working unchanged.
 //

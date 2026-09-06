@@ -405,10 +405,13 @@ static void draw_status(const page_t *page)
                       page->stalled ? "  (the server went quiet)"
                                     : (page->terminated ? "" : "  (no end marker)"));
     } else {
-        // A TEXT FILE IS DOT-TERMINATED TOO, so a missing period says the
-        // same thing here it says on a menu: the server stopped talking
+        // A GOPHER TEXT FILE IS DOT-TERMINATED TOO, so a missing period says
+        // the same thing here it says on a menu: the server stopped talking
         // rather than finished. A page that arrived short and a page that
         // arrived whole must not read the same, whichever kind it is.
+        // `terminated` is the question "did it end the way its protocol says
+        // it ends?", which is why a handed-off page — no gopher framing at
+        // all, and os64get already vouched for it — answers yes.
         os64_snprintf(text, sizeof(text),
                       " %d lines%s%s   arrows scroll  left back  q quit",
                       (int)page->nlines, page->truncated ? "  (truncated)" : "",
@@ -676,16 +679,44 @@ static prompt_result_t prompt(const char *label, char *out_text, size_t cap)
 
 // ── Following an item ───────────────────────────────────────────────────
 
-// The last path component of a selector, which is the name a saved file
-// wants. A selector that ends in '/' or has none gives nothing, and the
-// caller asks the person instead.
+// THE DEFAULT FILENAME IS THE SERVER'S SUGGESTION, and accepting it is one
+// keystroke — so it has to be a name and not a route to somewhere else.
+//
+// A BACKSLASH SEPARATES PATH COMPONENTS ON FAT (FatFs `IsSeparator`, and the
+// lifeboat partition is FAT), so splitting on '/' alone is not "the last
+// component" anywhere it matters: a selector of `/bin/..\limine.conf` yields
+// `..\limine.conf`, and pressing Enter at the prompt would have written the
+// staging file a directory up and then renamed it over the boot config that
+// exists for the day root is broken. Splitting on BOTH separators is half the
+// answer; the other half is that a component of `.` or `..` is not a name
+// either. Anything that fails leaves the default EMPTY, which the caller
+// already knows means "ask the person" — a suggestion this program cannot
+// vouch for is one it should not make.
+//
+// A name the person TYPES is their own business and is not touched: that is
+// the difference between a path somebody chose and one a stranger chose for
+// them.
+static bool name_is_one_component(const char *name)
+{
+    if (name[0] == '\0')
+        return false;
+    for (const char *p = name; *p != '\0'; p++)
+        if (*p == '/' || *p == '\\')
+            return false;
+    if (os64_streq(name, ".") || os64_streq(name, ".."))
+        return false;
+    return true;
+}
+
 static void selector_basename(const char *selector, char *out_name, size_t cap)
 {
     const char *last = selector;
     for (const char *p = selector; *p != '\0'; p++)
-        if (*p == '/')
+        if (*p == '/' || *p == '\\')
             last = p + 1;
     os64_strcopy(out_name, cap, last);
+    if (!name_is_one_component(out_name))
+        out_name[0] = '\0';
 }
 
 // Stream a binary item to `<name>.part`, then rename it into place. The
@@ -693,9 +724,18 @@ static void selector_basename(const char *selector, char *out_name, size_t cap)
 // reason: a transfer that dies halfway must not leave something that looks
 // like a finished file.
 //
-// Answers whether the file is on the disk under its real name; the sentence
-// for the person is on the status bar either way.
-static bool save_item(const gopher_addr_t *addr)
+// Answers what became of the transfer; the sentence for the person is on the
+// status bar in every case. CANCELLED is its own answer rather than a kind of
+// failure, because a person who changed their mind did not hit a problem —
+// and when this is the whole job it decides the exit code, where "you asked
+// me not to" and "the disk refused" must not be the same number.
+typedef enum {
+    SAVE_DONE = 0,
+    SAVE_CANCELLED,
+    SAVE_FAILED,
+} save_result_t;
+
+static save_result_t save_item(const gopher_addr_t *addr)
 {
     char name[256];
     selector_basename(addr->selector, name, sizeof(name));
@@ -713,11 +753,13 @@ static bool save_item(const gopher_addr_t *addr)
             // cancel as "yes, the default" opens <default>.part and writes
             // over whatever a previous transfer left there.
             os64_strcopy(s_status, sizeof(s_status), " nothing saved (cancelled)");
-            return false;
+            return SAVE_CANCELLED;
     }
     if (name[0] == '\0') {
+        // Enter on an empty default. Also a choice, not a fault: the person
+        // was shown an empty bracket and pressed Enter anyway.
         os64_strcopy(s_status, sizeof(s_status), " nothing saved (no name)");
-        return false;
+        return SAVE_CANCELLED;
     }
 
     char part[280];
@@ -730,7 +772,7 @@ static bool save_item(const gopher_addr_t *addr)
     if (conn < 0) {
         os64_snprintf(s_status, sizeof(s_status), " cannot reach %s — %s",
                       addr->host, os64_dial_reason(conn));
-        return false;
+        return SAVE_FAILED;
     }
 
     char request[GOPHER_SELECTOR_MAX + GOPHER_QUERY_MAX + 8];
@@ -738,14 +780,14 @@ static bool save_item(const gopher_addr_t *addr)
     if (reqlen == 0 || os64_write((int32_t)conn, request, reqlen) < 0) {
         os64_close((int32_t)conn);
         os64_strcopy(s_status, sizeof(s_status), " the request could not be sent");
-        return false;
+        return SAVE_FAILED;
     }
 
     int64_t file = os64_open(part, "w");
     if (file < 0) {
         os64_close((int32_t)conn);
         os64_snprintf(s_status, sizeof(s_status), " cannot write %s", part);
-        return false;
+        return SAVE_FAILED;
     }
 
     source_t src = { conn, false };
@@ -771,17 +813,17 @@ static bool save_item(const gopher_addr_t *addr)
         os64_snprintf(s_status, sizeof(s_status),
                       " transfer broke after %lu bytes — %s kept",
                       (unsigned long)total, part);
-        return false;
+        return SAVE_FAILED;
     }
     if (os64_rename(part, name) < 0) {
         os64_snprintf(s_status, sizeof(s_status),
                       " %lu bytes saved, but %s could not be renamed",
                       (unsigned long)total, part);
-        return false;
+        return SAVE_FAILED;
     }
     os64_snprintf(s_status, sizeof(s_status), " saved %s (%lu bytes)",
                   name, (unsigned long)total);
-    return true;
+    return SAVE_DONE;
 }
 
 // An `h` item's selector is `URL:<address>`, and os64get is what fetches it.
@@ -866,6 +908,21 @@ static void hand_to_os64get(const char *selector)
         os64_strcopy(s_status, sizeof(s_status), " that link carries no address");
         return;
     }
+    // A SPAWN ARGUMENT IS BOUNDED AND A SELECTOR IS NOT, so the two caps
+    // disagree and the gap has to be named rather than discovered. An
+    // argument is capped at TASK_MAX_PATH_LEN (ABI.md) while a selector runs
+    // to GOPHER_SELECTOR_MAX, so a long enough `URL:` is a link this program
+    // accepted, parsed and cannot hand over — and the spawn's plain failure
+    // read as "could not run os64get", which sends a person to look for a
+    // missing binary that is sitting right there. Say what is actually
+    // wrong; carrying such a URL through a wider channel is in DECLINED.md.
+    if (os64_strlen(url) >= OS64_SPAWN_ARG_MAX) {
+        os64_snprintf(s_status, sizeof(s_status),
+                      " that link's address is longer than %d bytes,"
+                      " which is more than os64get can be handed",
+                      (int)OS64_SPAWN_ARG_MAX - 1);
+        return;
+    }
 
     // Somewhere to put it that is nobody's working directory. Named for the
     // task so two gophers cannot land on one file.
@@ -944,6 +1001,12 @@ static void view_local_text(const char *path, const char *title)
     page_t page;
     os64_memset(&page, 0, sizeof(page));
     page.title = title;
+    // A LOCAL FILE HAS NO GOPHER FRAMING TO BE MISSING. `terminated` answers
+    // "did the answer end the way its protocol says it ends?", and os64get
+    // settled that before this file existed — an HTTP body has no dot marker
+    // to look for. Left false, the status bar told the truth about a gopher
+    // stream and a lie about every page that arrived through the handoff.
+    page.terminated = true;
 
     page.lines = os64_malloc(sizeof(char *) * GOPHER_MAX_LINES);
     if (page.lines == NULL) {
@@ -958,8 +1021,9 @@ static void view_local_text(const char *path, const char *title)
         return;
     }
     char line[GOPHER_LINE_MAX];
+    int64_t read_rc = 0;
     while (page.nlines < GOPHER_MAX_LINES &&
-           os64_linereader_line(&reader, line, sizeof(line)) == 1) {
+           (read_rc = os64_linereader_line(&reader, line, sizeof(line))) == 1) {
         size_t len = os64_strlen(line);
         // A LONG LINE ARRIVES SHORTENED AND SAYS NOTHING ABOUT IT. The reader
         // truncates to the buffer and swallows the rest of the line by
@@ -983,6 +1047,15 @@ static void view_local_text(const char *path, const char *title)
         page.lines[page.nlines++] = copy;
     }
     os64_linereader_close(&reader);
+    // A READ THAT FAILED IS NOT A FILE THAT ENDED. The reader answers 1, 0
+    // and negative, and a loop testing `== 1` reads the third as the second
+    // — so a page cut short by the disk was shown as the whole document, and
+    // the caller then deleted the file it came from.
+    if (read_rc < 0) {
+        page_free(&page);
+        os64_snprintf(s_status, sizeof(s_status), " %s could not be read", path);
+        return;
+    }
     if (page.nlines == GOPHER_MAX_LINES)
         page.truncated = true;
 
@@ -1069,6 +1142,73 @@ static void select_step(page_t *page, int32_t step)
         page->top += step;
 }
 
+// WHAT FOLLOWING AN ADDRESS MEANS — decided ONCE, because there are two doors
+// into it: an item somebody pressed Enter on, and an address somebody typed.
+//
+// They had drifted, and in the direction that matters: the typed door asked
+// `page_fetch` its framing question directly, and everything that is not a
+// menu or a text file frames as BINARY — so a typed `h` offered to SAVE the
+// HTML file a menu would have SHOWN, and a typed `3`, `8` or `T` offered to
+// save things the menu path refuses to follow at all. Two doors onto one
+// question is how a rule ends up true at one of them.
+//
+// `out` receives the address as RESOLVED: an `h` that is a gopher-served file
+// becomes type '0', and a `7` carries the query that was asked for. A `7`
+// that already names its query (a TAB in the address a person typed) is not
+// asked again — it was answered before it arrived.
+// "a error item" is what one refusal read as, in the two places that refuse.
+// The type names are ordinary English words and none of them is a silent-h or
+// a "eu-", so the first letter settles it.
+static const char *article_for(const char *word)
+{
+    char c = word[0];
+    if (c >= 'A' && c <= 'Z')
+        c = (char)(c + ('a' - 'A'));
+    return (c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u') ? "an" : "a";
+}
+
+typedef enum {
+    FOLLOW_REFUSED = 0,   // the type is not one this client fetches
+    FOLLOW_HANDOFF,       // an `h` carrying a `URL:` — os64get's job
+    FOLLOW_SAVE,          // a binary framing — save_item's job
+    FOLLOW_PAGE,          // fetch it and show it
+    FOLLOW_CANCELLED,     // a search the person decided against
+} follow_t;
+
+static follow_t follow_decide(const gopher_addr_t *in, gopher_addr_t *out)
+{
+    *out = *in;
+
+    if (!gopher_type_followable(in->type))
+        return FOLLOW_REFUSED;
+
+    // TYPE `h` MEANS TWO DIFFERENT THINGS, and the SELECTOR says which.
+    // `URL:http://…` is the convention the web era added, and os64get fetches
+    // it. Anything else is type h's ORIGINAL meaning — an HTML file served by
+    // this very gopher server — which is fetched over gopher like any other
+    // text. Reading the second as a broken first would refuse pages that are
+    // working perfectly.
+    if (in->type == 'h') {
+        if (starts_with_url_prefix(in->selector))
+            return FOLLOW_HANDOFF;
+        out->type = '0';
+    }
+
+    if (in->type == '7' && in->query[0] == '\0') {
+        char query[GOPHER_QUERY_MAX];
+        // Only typed text is a search. There is no default here to fall back
+        // to, so an empty line and an Escape want the same thing — unlike a
+        // save, which has a name in brackets and must tell the two apart.
+        if (prompt("search for: ", query, sizeof(query)) != PROMPT_TYPED)
+            return FOLLOW_CANCELLED;
+        os64_strcopy(out->query, sizeof(out->query), query);
+    }
+
+    if (gopher_framing_for(out->type) == GOPHER_FRAMING_BINARY)
+        return FOLLOW_SAVE;
+    return FOLLOW_PAGE;
+}
+
 // GO SOMEWHERE, OR STAY EXACTLY WHERE YOU ARE.
 //
 // The fetch lands in a SECOND page and the current one is not touched until
@@ -1119,29 +1259,61 @@ static bool navigate_to(page_t *page, gopher_addr_t *addr,
 static int32_t browse(gopher_addr_t start)
 {
     page_t page;
-    gopher_addr_t addr = start;
 
-    // THE FIRST FETCH IS THE ONLY FATAL ONE, and that asymmetry is the
-    // design rather than an accident of where the code sits. `gopher
+    // AN ADDRESS MEANS THE SAME THING WHEREVER IT CAME FROM, and this is the
+    // line that makes that true: the address a person typed goes through the
+    // same decision an item they pressed Enter on does. A typed `9` downloads,
+    // a typed `h` file is shown as the text it is, a typed `7` asks for its
+    // search, and a type this client does not follow is refused here rather
+    // than offered as a download.
+    //
+    // What differs is only what there is to RETURN to. Inside a session these
+    // outcomes are a sentence on the status bar; here each one is the whole
+    // job, so each ends the program with a code.
+    gopher_addr_t addr;
+    follow_t action = follow_decide(&start, &addr);
+
+    if (action == FOLLOW_REFUSED) {
+        os64_hprintf(OS64_STDERR, "gopher: %s %s item is not something to"
+                     " follow\n", article_for(gopher_type_name(start.type)),
+                     gopher_type_name(start.type));
+        return GOPHER_BAD_ADDRESS;
+    }
+    if (action == FOLLOW_CANCELLED)
+        return GOPHER_OK;                 // asked for a search, thought better of it
+    if (action == FOLLOW_HANDOFF) {
+        hand_to_os64get(addr.selector);
+        screen_clear();
+        screen_home();
+        sgr_reset();
+        os64_hprintf(OS64_STDOUT, "gopher:%s\n", s_status);
+        return GOPHER_OK;
+    }
+    if (action == FOLLOW_SAVE) {
+        // The prompt is the one the menu's Enter asks, on a screen cleared
+        // for it — and then there is no session to have: a download is all
+        // of it.
+        screen_clear();
+        screen_home();
+        save_result_t saved = save_item(&addr);
+        screen_clear();
+        screen_home();
+        sgr_reset();
+        // A CANCEL IS NOT A FAILURE, and the exit code has to agree with the
+        // one a cancelled search gives: the person answered the question, and
+        // the answer was no. Only the disk saying no is worth a code a script
+        // would act on.
+        bool failed = saved == SAVE_FAILED;
+        os64_hprintf(failed ? OS64_STDERR : OS64_STDOUT, "gopher:%s\n", s_status);
+        return failed ? GOPHER_SAVE_FAILED : GOPHER_OK;
+    }
+
+    // A FETCH THAT FAILS IS FATAL HERE AND NOWHERE ELSE, and that asymmetry
+    // is the design rather than an accident of where the code sits. `gopher
     // dead.host` is a command that failed and owes an exit code; a dead link
     // reached from inside a session is a page that did not load, and the
     // session is still perfectly alive.
     int64_t rc = page_fetch(&addr, &page);
-    if (rc == GOPHER_FETCH_BINARY) {
-        // AN ADDRESS MEANS THE SAME THING WHEREVER IT CAME FROM. Following a
-        // `9` inside a menu downloads it, so typing one must download it too
-        // — not read a zip file as lines of text and paint them. The prompt
-        // is the same one the menu's Enter asks, on a screen cleared for it,
-        // and then there is no session to have: a download is the whole job.
-        screen_clear();
-        screen_home();
-        bool saved = save_item(&addr);
-        screen_clear();
-        screen_home();
-        sgr_reset();
-        os64_hprintf(saved ? OS64_STDOUT : OS64_STDERR, "gopher:%s\n", s_status);
-        return saved ? GOPHER_OK : GOPHER_SAVE_FAILED;
-    }
     if (rc != 0) {
         if (rc < 0)
             os64_hprintf(OS64_STDERR, "gopher: cannot reach %s:%u — %s\n",
@@ -1211,50 +1383,35 @@ static int32_t browse(gopher_addr_t start)
                 if (!page.isMenu || page.sel >= page.nitems)
                     break;
                 gopher_item_t *item = &page.items[page.sel];
-                if (!item->followable) {
-                    os64_snprintf(s_status, sizeof(s_status),
-                                  " a %s item is not something to follow",
-                                  gopher_type_name(item->type));
-                    break;
-                }
-                // TYPE `h` MEANS TWO DIFFERENT THINGS, and the SELECTOR says
-                // which. `URL:http://…` is the convention the web era added,
-                // and os64get fetches it. Anything else is type h's ORIGINAL
-                // meaning — an HTML file served by this very gopher server —
-                // which is fetched over gopher like any other text. Reading
-                // the second as a broken first would refuse pages that are
-                // working perfectly.
-                if (item->type == 'h' &&
-                    starts_with_url_prefix(item->addr.selector)) {
-                    hand_to_os64get(item->addr.selector);
-                    break;
-                }
-                gopher_addr_t next = item->addr;
-                if (item->type == 'h')
-                    next.type = '0';   // gopher-served HTML: it is text
-                if (item->type == '7') {
-                    char query[GOPHER_QUERY_MAX];
-                    // Only typed text is a search. There is no default here
-                    // to fall back to, so an empty line and an Escape want
-                    // the same thing — unlike a save, which has a name in
-                    // brackets and must tell the two apart.
-                    if (prompt("search for: ", query, sizeof(query)) != PROMPT_TYPED) {
+                gopher_addr_t next;
+                switch (follow_decide(&item->addr, &next)) {
+                    case FOLLOW_REFUSED:
+                        os64_snprintf(s_status, sizeof(s_status),
+                                      " %s %s item is not something to follow",
+                                      article_for(gopher_type_name(item->type)),
+                                      gopher_type_name(item->type));
+                        break;
+                    case FOLLOW_CANCELLED:
                         os64_strcopy(s_status, sizeof(s_status), " search cancelled");
                         break;
+                    case FOLLOW_HANDOFF:
+                        hand_to_os64get(next.selector);
+                        break;
+                    case FOLLOW_SAVE:
+                        save_item(&next);
+                        break;
+                    case FOLLOW_PAGE: {
+                        // Where we are NOW, captured before the move can
+                        // overwrite it — a crumb is only worth dropping if
+                        // the step succeeds.
+                        gopher_addr_t from = addr;
+                        int32_t fromTop = page.top;
+                        int32_t fromSel = page.sel;
+                        if (navigate_to(&page, &addr, &next, -1, -1))
+                            history_push(&from, fromTop, fromSel);
+                        break;
                     }
-                    os64_strcopy(next.query, sizeof(next.query), query);
                 }
-                if (gopher_framing_for(next.type) == GOPHER_FRAMING_BINARY) {
-                    save_item(&next);
-                    break;
-                }
-                // Where we are NOW, captured before the move can overwrite it
-                // — a crumb is only worth dropping if the step succeeds.
-                gopher_addr_t from = addr;
-                int32_t fromTop = page.top;
-                int32_t fromSel = page.sel;
-                if (navigate_to(&page, &addr, &next, -1, -1))
-                    history_push(&from, fromTop, fromSel);
                 break;
             }
 

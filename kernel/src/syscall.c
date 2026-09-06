@@ -3385,6 +3385,12 @@ static int count_user_argv(char *const *user_argv)
 	return SPAWN_MAX_ARGS;
 }
 
+// The cap below is PUBLISHED, so ring 3 can say "that argument is too long"
+// instead of discovering it as a spawn that failed for no stated reason. Two
+// spellings of one number drift; this is what stops them.
+_Static_assert(TASK_MAX_PATH_LEN == OS64_SPAWN_ARG_MAX,
+               "spawn's argument cap and the ABI's OS64_SPAWN_ARG_MAX disagree");
+
 static int marshal_user_argv(char *const *user_argv, char *kargv[],
                              char *strbuf, size_t strbuf_len, int max_args)
 {

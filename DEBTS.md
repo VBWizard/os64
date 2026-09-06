@@ -11,6 +11,12 @@ owning section in its source doc (the two must not drift). When a review adds
 a debt to a subsystem doc, add its row here too. Severity/cost are
 hobby-scale judgment calls — re-rank freely.
 
+**A row here is work that WILL be done** — every one names a gate, and the
+gate firing is what schedules it. A finding that is correct and is NOT going
+to be fixed belongs in `DECLINED.md` instead, which carries the bar for
+saying so. Putting a declination here as a debt with an impossible gate is
+how a worklist fills with things nobody intends to do.
+
 - Severity: **Hole** (real defect exploitable/crashing) · **Robustness**
   (turns silent failures into loud ones, or prevents a known future crash) ·
   **Feature-gate** (blocks a planned feature) · **Cleanup** (honesty,

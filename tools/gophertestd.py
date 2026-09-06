@@ -198,6 +198,18 @@ def root_menu():
         info("-- the awkward half --"),
         item("1", "Display names with escapes in them", "/menu/hostile"),
         item("0", "A TEXT FILE with escapes in it", "/text/hostile"),
+        # A SELECTOR IS A NAME THE SERVER CHOSE, and the save prompt offers
+        # its last component as the default — one keystroke from being
+        # accepted. FatFs separates path components on BOTH '/' and '\\', so a
+        # backslash here is a directory traversal on any FAT mount, and the
+        # lifeboat partition is FAT. The prompt must offer `limine.conf` (a
+        # name in this directory), never `..\limine.conf` (the boot config of
+        # the partition that exists for when root is broken).
+        item("9", "A binary whose name climbs out of the directory",
+             "/bin/..\\limine.conf"),
+        # And a last component that is not a name at all: the prompt must
+        # offer NOTHING and make the person type one.
+        item("9", "A binary whose name is a directory", "/bin/.."),
         item("1", "Item lines that are not item lines", "/menu/malformed"),
         item("1", "A menu with no terminator", "/menu/nodot"),
         item("0", "A text file with no terminator", "/text/nodot"),
