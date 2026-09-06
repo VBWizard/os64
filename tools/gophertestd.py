@@ -41,6 +41,8 @@ SELECTORS, and what each one is FOR:
                      which predates the URL: convention and is still served
   /menu/hostile      ESC, CR and NUL inside display names and selectors
   /menu/malformed    too few tabs, empty host, a port that is not a number
+  /menu/prose        120 `i` lines and NO links: the arrows must scroll it,
+                     because there is no selection to walk
   /menu/longline     one item line far past any sane cap
   /menu/nodot        a menu the server ends by hanging up
   /text/hello        a small text file                   the happy path
@@ -211,6 +213,7 @@ def root_menu():
         # offer NOTHING and make the person type one.
         item("9", "A binary whose name is a directory", "/bin/.."),
         item("1", "Item lines that are not item lines", "/menu/malformed"),
+        item("1", "A menu of prose, taller than the screen", "/menu/prose"),
         item("1", "A menu with no terminator", "/menu/nodot"),
         item("0", "A text file with no terminator", "/text/nodot"),
         item("0", "Lines that begin with a period", "/text/dotted"),
@@ -283,6 +286,20 @@ def hostile_menu():
     ]
     return b"".join([info("Nine lines, none of which may paint anything"), info("")]
                     + lines + [TERMINATOR])
+
+
+def prose_menu(rows=120):
+    """A MENU WITH NO LINKS AT ALL, and taller than any screen.
+
+    Gopherspace is full of these — a phlog index, a header of `i` lines, an
+    ASCII-art page — and they are documents that happen to be spelled as
+    menus. A client that walks LINKS with the arrow keys has nothing to walk
+    here, so the arrows have to scroll instead; one that pins its viewport to
+    a selection that cannot move shows the first screenful and then refuses
+    to move at all, which is what this route is for."""
+    lines = [info(f"{n:03d}  " + "a line of prose with no link in it")
+             for n in range(rows)]
+    return b"".join(lines) + TERMINATOR
 
 
 def malformed_menu():
@@ -481,6 +498,8 @@ class Handler(socketserver.StreamRequestHandler):
             return hostile_menu(), "menu"
         if route == "/menu/malformed":
             return malformed_menu(), "menu"
+        if route == "/menu/prose":
+            return prose_menu(), "menu"
         if route.startswith("/menu/deep/"):
             try:
                 depth = int(route.rsplit("/", 1)[1])

@@ -84,6 +84,13 @@ typedef struct {
     bool          truncated;    // the answer hit a cap
     bool          terminated;   // the server sent its period
     bool          stalled;      // it went quiet instead of hanging up
+    // Whether ANY item on this menu can be followed. A menu with none is a
+    // DOCUMENT that happens to be spelled as a menu — a phlog index, a
+    // header of `i` lines, a page of prose — and it has no selection to
+    // move, which is a different thing from having one that is stuck at the
+    // top. Answered once when the page arrives; asking it per keystroke was
+    // a scan of the whole menu inside the arrow keys.
+    bool          hasLinks;
     // What the title bar says, when the page did not come from a gopher
     // address — an `h` link's page is fetched by os64get and belongs to the
     // web, so spelling its gopher_addr_t would name a place it never was.
@@ -349,11 +356,16 @@ static int64_t page_fetch(const gopher_addr_t *addr, page_t *page)
     }
 
     // A menu's first selectable item, so Enter does something sensible the
-    // moment a page arrives.
+    // moment a page arrives — and whether there is one at all, which decides
+    // whether this page has a selection or is only something to read.
     page->sel = 0;
     if (page->isMenu)
         for (int32_t i = 0; i < page->nitems; i++)
-            if (page->items[i].followable) { page->sel = i; break; }
+            if (page->items[i].followable) {
+                page->sel = i;
+                page->hasLinks = true;
+                break;
+            }
     return 0;
 }
 
@@ -430,7 +442,10 @@ static void draw_menu_row(const page_t *page, int32_t index, int32_t row)
     const gopher_item_t *item = &page->items[index];
     cursor_to(row, 1);
 
-    bool selected = index == page->sel;
+    // No links, no cursor. A highlight on a menu where nothing can be
+    // followed offers something that is not there, and now that such a menu
+    // SCROLLS, the bar would sit on whichever row happened to be row zero.
+    bool selected = page->hasLinks && index == page->sel;
     if (selected)
         select_on();
 
@@ -1016,10 +1031,22 @@ static void scroll_clamp(page_t *page)
     int32_t rows = content_rows();
 
     if (page->isMenu) {
+        // `sel` stays a valid index whatever the arithmetic did to it, links
+        // or no links: Enter reads items[sel], and END on an EMPTY menu asks
+        // for item -1. This clamp is a bounds check, not a scrolling policy,
+        // which is why it is not under the condition below.
         if (page->sel < 0) page->sel = 0;
         if (page->sel >= count) page->sel = count > 0 ? count - 1 : 0;
-        if (page->sel < page->top) page->top = page->sel;
-        if (page->sel >= page->top + rows) page->top = page->sel - rows + 1;
+
+        // THE VIEWPORT FOLLOWS THE SELECTION, but only where there IS one. On
+        // a menu with nothing followable the selection cannot move, so
+        // pinning `top` to it pinned the whole page: the arrows bumped `top`
+        // and this dragged it straight back, and a menu of prose taller than
+        // the screen could not be read past its first screenful.
+        if (page->hasLinks) {
+            if (page->sel < page->top) page->top = page->sel;
+            if (page->sel >= page->top + rows) page->top = page->sel - rows + 1;
+        }
     }
     int32_t maxTop = count > rows ? count - rows : 0;
     if (page->top > maxTop) page->top = maxTop;
@@ -1157,9 +1184,14 @@ static void select_snap_either(page_t *page, int32_t step)
 // Move the selection to the next followable item in `step` direction, so the
 // arrow keys walk LINKS and skip the prose between them — which is what
 // makes a menu full of `i` lines navigable at all.
+//
+// A MENU WITH NO LINKS SCROLLS INSTEAD, because there is nothing to walk: it
+// is a document spelled as a menu, and the arrows are the only way through
+// it. That needs `scroll_clamp` to stop pinning the viewport to a selection
+// that cannot move, which is where this used to be undone one line later.
 static void select_step(page_t *page, int32_t step)
 {
-    if (!page->isMenu) {
+    if (!page->isMenu || !page->hasLinks) {
         page->top += step;
         return;
     }
@@ -1169,13 +1201,8 @@ static void select_step(page_t *page, int32_t step)
             return;
         }
     }
-    // Nothing followable that way: scroll instead, so a menu that is ALL
-    // prose still moves under the arrow keys.
-    bool any = false;
-    for (int32_t i = 0; i < page->nitems; i++)
-        if (page->items[i].followable) { any = true; break; }
-    if (!any)
-        page->top += step;
+    // The end of the links in that direction: stay where the last one is
+    // rather than running off it.
 }
 
 // WHAT FOLLOWING AN ADDRESS MEANS — decided ONCE, because there are two doors
@@ -1421,7 +1448,10 @@ static int32_t browse(gopher_addr_t start)
 
             case KEY_RIGHT:
             case KEY_ENTER: {
-                if (!page.isMenu || page.sel >= page.nitems)
+                // Both ends, not just the top: `sel` is moved by arithmetic
+                // (a page, an end) before anything clamps it, and this is the
+                // read that would pay for a negative one.
+                if (!page.isMenu || page.sel < 0 || page.sel >= page.nitems)
                     break;
                 gopher_item_t *item = &page.items[page.sel];
                 gopher_addr_t next;
