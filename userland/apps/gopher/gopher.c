@@ -50,9 +50,17 @@
 #define GOPHER_MAX_ITEMS  4096
 #define GOPHER_MAX_LINES  65536
 
-// Thirty seconds of silence ends a fetch. It is IDLE time — the wait between
+// Thirty seconds of silence ends a READ. It is IDLE time — the wait between
 // bytes — so a slow server still arrives; os64get uses the same number for
 // the same reason.
+//
+// IT DOES NOT COVER THE REQUEST, and that is not this program's choice:
+// `os64_read_for` carries a patience and there is no `os64_write_for`, so the
+// write that asks for a page has no deadline to be given. A peer that
+// completes the handshake advertising a zero window stalls that write in the
+// kernel indefinitely — DEBTS.md, tcp_conn_write — and Ctrl+C is what ends it
+// until the kernel grows the bound. Saying "thirty seconds ends a fetch" here
+// was half true, and the half it left out is the half a hostile server picks.
 #define GOPHER_IDLE_MS    30000
 
 #define GOPHER_HISTORY_MAX 64
@@ -1313,7 +1321,15 @@ static bool navigate_to(page_t *page, gopher_addr_t *addr,
     *addr = *target;
     if (landTop >= 0) {
         page->top = landTop;
+        // A CRUMB REMEMBERS AN INDEX, AND AN INDEX IS NOT A PLACE. Back
+        // REFETCHES (DEBTS: there is no cache), so the menu underneath the
+        // remembered number may have changed shape while you were away, and
+        // installing it raw overwrote the followable row page_fetch had just
+        // chosen. Snap it back to something Enter would act on — the rule is
+        // that the selection only ever sits where pressing Enter does
+        // something, and a restored one is not exempt from it.
         page->sel = landSel;
+        select_snap_either(page, +1);
     }
     screen_clear();
     return true;
