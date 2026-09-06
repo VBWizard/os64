@@ -136,7 +136,8 @@ archive = /home/archive
 Omit the setting to disable backups, or use `-n` for one invocation. The
 archive directory and its dated subdirectories are created as needed.
 Installation directories are not created automatically. Archive and managed
-scratch trees cannot overlap, and cannot be used as installation destinations.
+scratch trees cannot overlap. Installation destinations cannot lie inside
+these trees or enclose them, including filesystem aliases.
 
 The configuration is read once at startup. A batch that replaces
 `/etc/os64get.conf` uses the previously loaded rules throughout that batch;
@@ -154,8 +155,10 @@ For `-a`, preparation covers the batch before installation begins:
    filesystem-resolved names and the changed entries' reserved staging names
    to identify aliases before receiving payloads.
 2. **Download and verify.** Receive changed files into scratch and verify the
-   received length and CRC before accepting them. Sync and close the files.
-3. **Prepare originals.** Compare downloaded contents with existing targets.
+   received length and CRC. Sync and close the files, then reread their stored
+   bytes during preparation and compare with the received length and CRC.
+   This check also applies to new destinations and installs with `-n`.
+3. **Prepare originals.** Compare the verified contents with existing targets.
    If they differ and backups are enabled, copy the old destination to
    scratch on the archive's filesystem, sync it, reread it to check length
    and CRC, and finalize the backup without overwriting another backup.
@@ -363,6 +366,11 @@ destination exists and the configuration enables archiving. Managed scratch,
 verification, publication, and cancellation still apply. `-n` has no additional
 effect; `-a` is unavailable for URLs.
 
+The client fingerprints the received representation and checks the staged
+file against it after syncing and closing. For gzip this is the decoded
+output, not the compressed wire bytes. This checks the stored copy against
+the receive buffers; it does not give identity-coded HTTP a server checksum.
+
 The HTTP reader supports Content-Length, chunked, and connection-close body
 framing, follows up to five redirects, and decodes `Content-Encoding: gzip`.
 Unsupported coding and malformed or detectably truncated bodies are refused
@@ -405,7 +413,7 @@ guest-to-proxy leg and data inside the proxy are plaintext.
 | 7 / 8 | Short transfer / corrupt data; batch transfer failures are aggregated as 8. |
 | 9 | Local write, staging, initialization, or cleanup failure. |
 | 10 | Installation rename failed; some files may have installed. |
-| 11 | Backup preparation or destination recheck failed. |
+| 11 | Staged-file verification, backup preparation, or destination recheck failed. |
 | 13 / 14 / 15 | Unusable URL or missing HTTPS route / unsupported coding or gzip expansion limit / failed redirect chain. |
 | 130 | Ctrl+C requested cancellation, or was deferred through successful installation. |
 

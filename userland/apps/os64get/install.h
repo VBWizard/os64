@@ -13,8 +13,11 @@ typedef struct {
     char directory[INSTALL_PATH_MAX];
     char backup_part[INSTALL_PATH_MAX];
     char backup[INSTALL_PATH_MAX];
+    uint64_t received_length;
+    uint32_t received_crc;
     uint64_t old_length;
     uint32_t old_crc;
+    bool received;
     bool existed;
     bool ready;
     bool skip;
@@ -27,6 +30,9 @@ bool install_resolve(install_file_t *file, const char *destination);
 bool install_reserve(install_file_t *file);
 bool install_plan(install_file_t *file, const char *destination);
 bool install_conflicts(const install_file_t *a, const install_file_t *b);
+// Record the completed transfer's byte fingerprint; preparation checks the
+// staged file against it after the download handle has been synced and closed.
+void install_received(install_file_t *file, uint64_t length, uint32_t crc);
 bool install_prepare(install_file_t *file);
 bool install_recheck(const install_file_t *file);
 bool install_begin_commit(void);

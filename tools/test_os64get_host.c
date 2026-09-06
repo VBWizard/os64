@@ -100,6 +100,11 @@ int64_t os64_conf_read(const char *path, os64_conf_fn fn, void *ctx)
     (void)path;
     fn("a", "/bin", ctx); fn("b", "/home", ctx); fn("c", "/fat", ctx);
     fn("archive", "/home/archive", ctx);
+    if (!strncmp(scenario, "enclose-", 8)) {
+        fn("archive", is("enclose-fat-alias") ? "/fat/NEW/archive" :
+                      is("enclose-sibling") ? "/home/news/archive" : "/home/new/archive", ctx);
+        fn("new", is("enclose-fat-alias") ? "/fat" : "/home", ctx);
+    }
     if (is("review-duplicate-unchanged") || is("review-duplicate-new")) fn("C", "/fat", ctx);
     return 0;
 }
@@ -195,6 +200,12 @@ int64_t os64_read(int32_t h, void *buf, size_t cap)
         if (n > 3) n = 3;
         memcpy(buf, network[i] + network_pos[i], n); network_pos[i] += n; return (int64_t)n;
     }
+    if (run_active && is("integrity-read") && strstr(fdpaths[h], "/run-") &&
+        !strstr(fdpaths[h], "backup-")) return -1;
+    if (run_active && is("integrity-cancel") && !injected &&
+        strstr(fdpaths[h], "/run-") && !strstr(fdpaths[h], "backup-")) {
+        interrupt_run(); return OS64_INTERRUPTED;
+    }
     if (strstr(fdpaths[h], "backup-")) {
         backup_reads++;
         if (is("backup-read") && !injected) { injected = true; return -1; }
@@ -233,10 +244,20 @@ int64_t os64_write(int32_t h, const void *buf, size_t n)
             strcat(network[i], ".\n");
         } else if ((n > 5 && !memcmp(buf, "GET /", 5)) ||
                    (n > 12 && !memcmp(buf, "GET https://", 12))) {
+            if (is("integrity-gzip") || is("integrity-gzip-ok")) {
+                static const unsigned char compressed[] = {0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03, 0xcb, 0xcc, 0x4b, 0xce, 0xcf, 0xcd, 0xcc, 0x4b, 0x57, 0x70, 0x04, 0x00, 0x27, 0x87, 0x35, 0x5b, 0x0a, 0x00, 0x00, 0x00};
+                int head = snprintf(network[i], sizeof(network[i]),
+                    "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: %zu\r\n\r\n", sizeof(compressed));
+                memcpy(network[i] + head, compressed, sizeof(compressed));
+                network_len[i] = (size_t)head + sizeof(compressed); return (int64_t)n;
+            }
             snprintf(network[i], sizeof(network[i]), "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n%s",
                      is("url-short") ? "cut" : "incoming A");
         } else {
-            unsigned j = ((const char *)buf)[4] == 'a' ? 0 : ((const char *)buf)[4] == 'b' ? 1 : 2;
+            unsigned j;
+            for (j = 0; j < 3; j++)
+                if (n == strlen(names[j]) + 5 && !memcmp((const char *)buf + 4, names[j], strlen(names[j]))) break;
+            assert(j < 3);
             uint32_t crc = os64_crc32(payloads[j], strlen(payloads[j]));
             if (is("crc") && j == 1) crc++;
             snprintf(network[i], sizeof(network[i]), "OK %zu %08x\n%s", strlen(payloads[j]), crc,
@@ -247,6 +268,18 @@ int64_t os64_write(int32_t h, const void *buf, size_t n)
     if (strstr(fdpaths[h], "backup-")) {
         if (is("backup-write") && !injected) { injected = true; return -1; }
         if (is("cancel-backup") && !injected) { interrupt_run(); return OS64_INTERRUPTED; }
+    }
+    if (run_active && !strncmp(scenario, "integrity-", 10) &&
+        !is("integrity-read") && !is("integrity-cancel") && !is("integrity-gzip-ok") && !injected && n &&
+        strstr(fdpaths[h], "/run-") && !strstr(fdpaths[h], "backup-")) {
+        // Store different bytes while reporting a successful full write.
+        unsigned char damaged[65536]; assert(n <= sizeof(damaged)); memcpy(damaged, buf, n);
+        if (is("integrity-append")) {
+            assert(write(h, buf, n) == (ssize_t)n); assert(write(h, "x", 1) == 1);
+        } else {
+            damaged[0] ^= 1; assert(write(h, damaged, n) == (ssize_t)n);
+        }
+        injected = true; return (int64_t)n;
     }
     return write(h, buf, n);
 }
@@ -275,6 +308,64 @@ static unsigned file_count(const char *path)
     closedir(dir); return count;
 }
 
+static void integrity_scenario(void)
+{
+    bool absent = is("integrity-absent");
+    bool url = is("integrity-url") || is("integrity-gzip") || is("integrity-gzip-ok");
+    if (!absent) put(targets[0], "local A");
+    put(targets[1], "local B"); put(targets[2], "local C");
+    char *batch[] = { "os64get", "-a", "-q", "host", NULL };
+    char *web[] = { "os64get", "-q", "http://host/a", "/bin/a", NULL };
+    char *noarchive[] = { "os64get", "-a", "-q", "-n", "host", NULL };
+    run_active = true;
+    int rc = url ? os64get_entry(4, web) : is("integrity-no-archive") ?
+        os64get_entry(5, noarchive) : os64get_entry(4, batch);
+    run_active = false;
+    bool success = is("integrity-gzip-ok");
+    assert(rc == (success ? GET_OK : is("integrity-cancel") ? GET_CANCELLED : GET_PREPARE_FAILED));
+    if (!success && !is("integrity-read")) assert(injected);
+    assert(installs == (success ? 1u : 0u));
+    if (absent) { os64_dirent_t e; assert(os64_stat(targets[0], &e) < 0); }
+    else contents(targets[0], success ? payloads[0] : "local A");
+    contents(targets[1], "local B"); contents(targets[2], "local C");
+    assert(file_count("/home/archive") == 0);
+    assert(file_count("/tmp/os64get") == 0);
+    assert(file_count("/home/.os64get-tmp") == 0);
+    assert(file_count("/fat/.os64get-tmp") == 0);
+    for (int i = 3; i < 1024; i++) assert(fdpaths[i][0] == 0);
+    printf("PASS %s\n", scenario);
+}
+
+static void enclosure_scenario(void)
+{
+    bool sibling = is("enclose-sibling");
+    targets[0] = is("enclose-fat-alias") ? "/fat/new" : "/home/new";
+    if (is("enclose-fat-scratch")) {
+        assert(os64_mkdir("/fat/.OS64GET-TMP") == 0);
+        assert(os64_mkdir("/fat/.OS64GET-TMP/sub") == 0);
+        targets[0] = "/fat/.OS64GET-TMP/sub/new";
+    }
+    put(targets[1], "local B"); put(targets[2], "local C");
+    char destination[256]; snprintf(destination, sizeof(destination), "%s", targets[0]);
+    char *one[] = { "os64get", "-q", "host", "a", destination, NULL };
+    char *batch[] = { "os64get", "-a", "-q", "host", NULL };
+    bool all = is("enclose-batch") || is("enclose-fat-alias");
+    if (all) names[0] = "new";
+    run_active = true;
+    int rc = all ? os64get_entry(4, batch) : os64get_entry(5, one);
+    run_active = false;
+    assert(sibling ? rc == GET_OK : rc == GET_WRITE_FAILED);
+    assert(installs == (sibling ? 1u : 0u));
+    if (sibling) contents(targets[0], payloads[0]);
+    else { os64_dirent_t e; assert(os64_stat(targets[0], &e) < 0); }
+    contents(targets[1], "local B"); contents(targets[2], "local C");
+    assert(file_count("/tmp/os64get") == 0);
+    assert(file_count("/home/.os64get-tmp") == 0);
+    assert(file_count("/fat/.os64get-tmp") == 0);
+    for (int i = 3; i < 1024; i++) assert(fdpaths[i][0] == 0);
+    printf("PASS %s\n", scenario);
+}
+
 static void review_scenario(void)
 {
     bool duplicate = is("review-duplicate-unchanged") || is("review-duplicate-new");
@@ -297,7 +388,7 @@ static void review_scenario(void)
     int rc = single ? os64get_entry(5, one) : is("review-force-ro") ? os64get_entry(5, force) : os64get_entry(4, batch);
     run_active = false;
     bool backup_failure = is("review-empty-backup") || is("review-partial-backup");
-    assert(rc == (duplicate ? GET_USAGE : backup_failure ? GET_ARCHIVE_FAILED : is("review-force-ro") ? GET_WRITE_FAILED : GET_OK));
+    assert(rc == (duplicate ? GET_USAGE : backup_failure ? GET_PREPARE_FAILED : is("review-force-ro") ? GET_WRITE_FAILED : GET_OK));
     if (backup_failure) {
         contents(targets[0], "local A"); contents(targets[1], "local B"); contents(targets[2], "local C");
         bool kept = is("review-partial-backup");
@@ -326,6 +417,8 @@ int main(int argc, char **argv)
     assert(argc == 3); scenario = argv[1]; snprintf(sandbox, sizeof(sandbox), "%s", argv[2]);
     assert(os64_mkdir("/bin") == 0); assert(os64_mkdir("/home") == 0);
     assert(os64_mkdir("/fat") == 0); assert(os64_mkdir("/tmp") == 0);
+    if (!strncmp(scenario, "integrity-", 10)) { integrity_scenario(); return 0; }
+    if (!strncmp(scenario, "enclose-", 8)) { enclosure_scenario(); return 0; }
     if (!strncmp(scenario, "review-", 7)) { review_scenario(); return 0; }
     if (is("archive-overlap")) {
         install_file_t f;
@@ -333,6 +426,7 @@ int main(int argc, char **argv)
         put("/bin/a", "original");
         assert(install_plan(&f, "/bin/a"));
         put(f.part, "incoming");
+        install_received(&f, 8, os64_crc32("incoming", 8));
         assert(!install_prepare(&f));
         assert(install_cleanup(&f, 1));
         contents("/bin/a", "original");
@@ -357,6 +451,7 @@ int main(int argc, char **argv)
         } else {
             assert(install_plan(&f[0], "/bin/new"));
             put(f[0].part, "download");
+            install_received(&f[0], 8, os64_crc32("download", 8));
             assert(install_prepare(&f[0]));
             put("/bin/new", "external writer");
             assert(install_begin_commit());

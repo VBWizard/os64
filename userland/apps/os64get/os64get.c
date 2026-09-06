@@ -30,7 +30,7 @@
 #define GET_CORRUPT        8   // arrived complete and WRONG — the CRC caught it
 #define GET_WRITE_FAILED   9
 #define GET_PUBLISH_FAILED 10  // downloaded fine, could not put it in place
-#define GET_ARCHIVE_FAILED 11  // could not make or keep the archive copy
+#define GET_PREPARE_FAILED 11  // staged verification, original backup, or recheck failed
 // The destination matches the server's length and CRC, so no payload was
 // fetched. A batch may still own an empty staging reservation. This status
 // never escapes main (which reports it and exits 0) — it exists so the commit
@@ -726,7 +726,8 @@ static int fetch_stage(const char *host, const char *name, install_file_t *stage
         return (int)status;
     }
 
-    // ── Verify, THEN publish the wire copy ──────────────────────────────
+    // Check the wire fingerprint, then retain it for the staged-file reread
+    // during preparation. A successful write need not have stored these bytes.
     uint32_t actual = os64_crc32_end(crc);
     if (actual != expectCrc)
     {
@@ -737,8 +738,9 @@ static int fetch_stage(const char *host, const char *name, install_file_t *stage
         return GET_CORRUPT;
     }
 
+    install_received(stage, expectLen, expectCrc);
     if (!quiet)
-        os64_printf("%s: %lu bytes, crc %08x, verified\n",
+        os64_printf("%s: %lu bytes, crc %08x, transfer verified\n",
                     dest, (unsigned long)expectLen, actual);
     return GET_OK;
 }
@@ -752,11 +754,11 @@ static int publish_run(const bool *downloaded, unsigned count, bool quiet,
         if (install_cancelled()) return GET_CANCELLED;
         if (downloaded[i]) {
             if (!quiet) os64_printf("%s: preparing replacement\n", stages[i].dest);
-            if (!install_prepare(&stages[i])) return GET_ARCHIVE_FAILED;
+            if (!install_prepare(&stages[i])) return GET_PREPARE_FAILED;
         }
     }
     for (unsigned i = 0; i < count; i++)
-        if (downloaded[i] && !install_recheck(&stages[i])) return GET_ARCHIVE_FAILED;
+        if (downloaded[i] && !install_recheck(&stages[i])) return GET_PREPARE_FAILED;
     if (!install_begin_commit()) return GET_CANCELLED;
     unsigned installed = 0, failed = 0;
     for (unsigned i = 0; i < count; i++) {
@@ -1048,6 +1050,7 @@ static uint8_t urlPlain[GET_CHUNK];
 typedef struct {
     uint64_t received;       // body bytes the framing handed over: the wire's count
     uint64_t produced;       // representation bytes staged in the temporary file
+    uint32_t crc;            // fingerprint of the identity/decoded receive buffers
 } url_body_result_t;
 
 static int gzip_body_result(os64_gzip_status_t status)
@@ -1109,6 +1112,8 @@ static int receive_url_body(http_body_t *body, const http_response_t *reply,
     // they are set before anything can fail.
     result->received = 0;
     result->produced = 0;
+    result->crc = 0;
+    uint32_t crc = os64_crc32_begin();
 
     os64_gzip_t *decoder = NULL;
     uint64_t gzipLimit = 0;
@@ -1163,6 +1168,7 @@ static int receive_url_body(http_body_t *body, const http_response_t *reply,
                 break;
             }
             result->produced += filled;
+            crc = os64_crc32_update(crc, urlWire, filled);
         } else if (filled != 0 || finalInput) {
             const uint8_t *input = urlWire;
             size_t inputLeft = filled;
@@ -1184,6 +1190,7 @@ static int receive_url_body(http_body_t *body, const http_response_t *reply,
                     break;
                 }
                 result->produced += produced;
+                crc = os64_crc32_update(crc, urlPlain, produced);
 
                 if (gzipStatus == OS64_GZIP_NEED_OUTPUT)
                     continue;
@@ -1230,6 +1237,7 @@ static int receive_url_body(http_body_t *body, const http_response_t *reply,
                          " — %s NOT written\n",
                          os64_gzip_status_name(gzipStatus), partPath);
     }
+    result->crc = os64_crc32_end(crc);
     os64_gzip_destroy(decoder);
     return status;
 }
@@ -2116,6 +2124,7 @@ static int fetch_url(const http_url_t *url, const char *urlText, const proxy_t *
 
     if (install_cancelled()) return GET_CANCELLED;
     if (status != GET_OK) return status;
+    install_received(&stages[0], staged.produced, staged.crc);
     const bool downloaded[] = { true };
     rc = publish_run(downloaded, 1, quiet, 0, false);
     if (rc != GET_OK) return rc;

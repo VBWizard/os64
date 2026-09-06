@@ -243,12 +243,21 @@ static bool scratch_run(int mount, const char **out)
     return true;
 }
 
+static bool overlaps_tree(const char *dest, const char *root)
+{
+    if (!root[0]) return false;
+    char resolved[INSTALL_PATH_MAX];
+    if (!absolute_path(resolved, root)) return true;
+    return under(dest, resolved) || under(resolved, dest);
+}
+
 static bool reserved_path(const char *dest)
 {
-    if (under(dest, "/tmp/os64get") || under(dest, archive_root)) return true;
+    if (overlaps_tree(dest, "/tmp/os64get") || overlaps_tree(dest, archive_root)) return true;
     for (unsigned i = 0; i < mount_count; i++) {
         char root[INSTALL_PATH_MAX];
-        if (!join(root, mounts[i].prefix, ".os64get-tmp") || under(dest, root)) return true;
+        if (!join(root, mounts[i].prefix, ".os64get-tmp") ||
+            overlaps_tree(dest, root)) return true;
     }
     return false;
 }
@@ -267,6 +276,29 @@ bool install_resolve(install_file_t *f, const char *destination)
     return true;
 }
 
+// An absent FAT destination can alias a reserved tree's missing ancestor.
+// Probe that ancestor's component through our reserved staging basename;
+// the real destination must stay absent until publication.
+static bool encloses_alias(const install_file_t *f, const char *root)
+{
+    char parent[INSTALL_PATH_MAX], name[INSTALL_PATH_MAX], probe[INSTALL_PATH_MAX];
+    char resolved[INSTALL_PATH_MAX];
+    if (!root[0]) return false;
+    if (!absolute_path(resolved, root)) return true;
+    root = resolved;
+    if (!parent_of(parent, f->dest)) return true;
+    if (!under(root, parent)) return false;
+    const char *component = root + os64_strlen(parent);
+    while (*component == '/') component++;
+    size_t n = 0;
+    while (component[n] && component[n] != '/') n++;
+    if (!n) return true;
+    os64_memcpy(name, component, n); name[n] = '\0';
+    if (!join(probe, f->directory, name)) return true;
+    os64_dirent_t e;
+    return os64_stat(probe, &e) == 0;
+}
+
 bool install_reserve(install_file_t *f)
 {
     if (install_cancelled()) return false;
@@ -278,7 +310,15 @@ bool install_reserve(install_file_t *f)
     int64_t h = os64_open(candidate, "x");
     if (h < 0) return problem("create staging file", candidate);
     copy_path(f->part, candidate);
-    return close_file((int32_t)h);
+    if (!close_file((int32_t)h)) return false;
+    if (encloses_alias(f, archive_root) || encloses_alias(f, "/tmp/os64get"))
+        return problem("install over reserved directory ancestor", f->dest);
+    for (unsigned i = 0; i < mount_count; i++) {
+        char root[INSTALL_PATH_MAX];
+        if (!join(root, mounts[i].prefix, ".os64get-tmp") || encloses_alias(f, root))
+            return problem("install over scratch directory ancestor", f->dest);
+    }
+    return true;
 }
 
 bool install_plan(install_file_t *f, const char *destination)
@@ -404,17 +444,24 @@ static bool backup_original(install_file_t *f)
     return true;
 }
 
+void install_received(install_file_t *f, uint64_t length, uint32_t crc)
+{
+    f->received_length = length;
+    f->received_crc = crc;
+    f->received = true;
+}
+
 bool install_prepare(install_file_t *f)
 {
     if (install_cancelled()) return false;
+    if (!f->received || !matches(f->part, f->received_length, f->received_crc))
+        return problem("verify staged download against received bytes", f->part);
     os64_dirent_t e;
     f->existed = os64_stat(f->dest, &e) == 0;
     if (f->existed) {
         if ((e.flags & OS64_DE_DIR) || !fingerprint(f->dest, &f->old_length, &f->old_crc))
             return problem("read original", f->dest);
-        uint64_t length; uint32_t crc;
-        if (!fingerprint(f->part, &length, &crc)) return problem("verify staged file", f->part);
-        f->skip = length == f->old_length && crc == f->old_crc;
+        f->skip = f->received_length == f->old_length && f->received_crc == f->old_crc;
         if (!f->skip && archive_root[0] && !backup_original(f)) {
             if (install_cancelled()) return false;
             return problem("back up original; replacement stopped", f->dest);

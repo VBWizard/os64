@@ -64,7 +64,10 @@ exists; unique naming does not solve that remaining storage issue.
 ## Backup and publication
 
 1. Resolve the destination and scratch paths. Receive, validate, sync, and
-   close the incoming file, retaining each protocol's current validation.
+   close the incoming file. Retain the received length and CRC, and reread
+   the staged file against them before making it ready, including absent
+   destinations and `-n`. HTTP records the identity/decoded receive buffers'
+   fingerprint; this is a stored-copy check, not a server-provided checksum.
 2. Inspect the destination after the transfer. If it is absent, publish using
    `OS64_RENAME_NOREPLACE`; if a file appears meanwhile, stop rather than
    overwrite an unbacked-up file. A stat error is not proof of absence; the
@@ -77,8 +80,9 @@ exists; unique naming does not solve that remaining storage issue.
    `<archive>/YYYY-MM-DD/HHMMSS-<unique>/bin/prog` for destination `/bin/prog`.
    Preserve destination-relative paths to distinguish equal basenames and
    explicit renamed destinations. Create the archive run lazily, when an old
-   file actually needs backing up. Reject unsafe overlaps with archive and
-   scratch trees; enforce the kernel's path-length limit before writing.
+   file actually needs backing up. Reject destinations inside or enclosing
+   archive and scratch trees, including FAT aliases of missing ancestors;
+   enforce the kernel's path-length limit before writing.
 5. Publish the incoming file by a same-filesystem rename into its destination.
    Then remove empty scratch directories. No incoming data is copied into
    the archive. Backup failures prevent publication of the associated file.
@@ -186,7 +190,7 @@ Verify bytes at the installed and archive paths, not just success messages.
 
 ## Verification
 
-`tools/test_os64get_host.sh` passes 40 scenarios using the production application control flow with
+`tools/test_os64get_host.sh` passes 54 scenarios using the production application control flow with
 host filesystem and transport adapters under ASan/UBSan (leak detection disabled
 for the execution environment). It covers successful and cancelled batches,
 new and unchanged destinations, forced identical downloads, backup read/write/
@@ -202,6 +206,12 @@ recovery messages emitted only when a completed backup exists; unchanged files
 on read-only or metadata-full mounts, including empty files; a fully unchanged
 batch and single-file fetch without scratch writes; forced read-only failure;
 legacy name-only manifests; and existing/absent FAT duplicate destinations.
+They also inject successful writes that store altered or extra bytes, staging
+read failures and cancellation, and check rejection before publication for
+existing/new destinations, `-n`, HTTP identity, and decoded gzip. A valid gzip
+control succeeds. Archive ancestors are rejected for single/batch installs
+and missing FAT case aliases; a sibling directory remains usable, and an
+existing FAT alias of managed scratch is rejected as an install destination.
 
 The strict userland and full image builds pass, as do the existing HTTP and
 gzip host suites. `git diff --check` passes. The stale-reference scan's server

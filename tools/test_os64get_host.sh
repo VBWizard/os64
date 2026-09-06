@@ -14,7 +14,10 @@ scenarios=(success absent unchanged force-identical no-archive single url url-ht
                 backup-read backup-write backup-corrupt sync close publish aliases appeared unsafe-name archive-overlap \
                 cancel-list cancel-download cancel-backup cancel-verify cancel-commit cancel-cleanup
                 review-empty-backup review-partial-backup review-ro review-full review-all-full
-                review-empty-ro review-legacy-list review-force-ro review-single-full review-duplicate-unchanged review-duplicate-new)
+                review-empty-ro review-legacy-list review-force-ro review-single-full review-duplicate-unchanged review-duplicate-new
+                integrity-existing integrity-absent integrity-append integrity-read integrity-url integrity-gzip integrity-gzip-ok
+                integrity-no-archive integrity-cancel
+                enclose-single enclose-batch enclose-fat-alias enclose-sibling enclose-fat-scratch)
 if (( $# )); then scenarios=("$@"); fi
 for scenario in "${scenarios[@]}"; do
     mkdir "$work/$scenario"
