@@ -19,8 +19,8 @@ typedef struct {
 static install_mount_t mounts[MOUNT_MAX];
 static unsigned mount_count, sequence;
 static char archive_root[INSTALL_PATH_MAX], archive_run[INSTALL_PATH_MAX];
-static volatile bool cancelled;
-static bool committing, originals_kept;
+static volatile bool cancelled, committing;
+static bool originals_kept;
 static uint8_t copy_buffer[COPY_CHUNK];
 
 void install_cancel(int signo) { (void)signo; cancelled = true; }
@@ -481,8 +481,14 @@ bool install_recheck(const install_file_t *f)
 
 bool install_begin_commit(void)
 {
-    if (install_cancelled()) return false;
     committing = true;
+    // This raw flag read is the commitment boundary. Checking the masked
+    // install_cancelled() here would hide a pending request. Volatile keeps
+    // the state store before the read; later cancellation is deferred.
+    if (cancelled) {
+        committing = false;
+        return false;
+    }
     return true;
 }
 

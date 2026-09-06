@@ -12,7 +12,7 @@ cc -std=c11 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
    -Wl,--gc-sections,--wrap=os64_time -o "$work/os64get-test"
 scenarios=(success absent unchanged force-identical no-archive single url url-https url-archive-blocked url-short url-cancel short crc \
                 backup-read backup-write backup-corrupt sync close publish aliases appeared unsafe-name archive-overlap \
-                cancel-list cancel-download cancel-backup cancel-verify cancel-commit cancel-cleanup
+                cancel-list cancel-download cancel-backup cancel-verify cancel-commit cancel-cleanup cancel-transition
                 review-empty-backup review-partial-backup review-ro review-full review-all-full
                 review-empty-ro review-legacy-list review-force-ro review-single-full review-duplicate-unchanged review-duplicate-new
                 integrity-existing integrity-absent integrity-append integrity-read integrity-url integrity-gzip integrity-gzip-ok
@@ -21,5 +21,28 @@ scenarios=(success absent unchanged force-identical no-archive single url url-ht
 if (( $# )); then scenarios=("$@"); fi
 for scenario in "${scenarios[@]}"; do
     mkdir "$work/$scenario"
-    ASAN_OPTIONS=detect_leaks=0 "$work/os64get-test" "$scenario" "$work/$scenario"
+    if [[ "$scenario" == cancel-transition ]]; then
+        # Stop at the commit-state assignment and perform the signal handler's
+        # flag store there. This deterministically exercises the transition gap
+        # without adding a scheduling hook to production code. Requires GDB.
+        transition_line=$(python3 - <<'PYLINE'
+from pathlib import Path
+lines = Path("userland/apps/os64get/install.c").read_text().splitlines()
+spots = [i + 1 for i, line in enumerate(lines) if line.strip() == "committing = true;"]
+assert len(spots) == 1, "locate the commit transition before injecting cancellation"
+print(spots[0])
+PYLINE
+        )
+        if ! ASAN_OPTIONS=detect_leaks=0 gdb -nx -q -batch \
+            -ex "break userland/apps/os64get/install.c:$transition_line" \
+            -ex run -ex 'set variable cancelled = 1' -ex continue \
+            --args "$work/os64get-test" "$scenario" "$work/$scenario" > "$work/transition.log" 2>&1; then
+            cat "$work/transition.log" >&2
+            exit 1
+        fi
+        cat "$work/transition.log"
+        rg -q '^PASS cancel-transition$' "$work/transition.log"
+    else
+        ASAN_OPTIONS=detect_leaks=0 "$work/os64get-test" "$scenario" "$work/$scenario"
+    fi
 done

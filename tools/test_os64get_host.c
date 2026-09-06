@@ -491,7 +491,8 @@ int main(int argc, char **argv)
         if (stages[i].backup[0]) contents(stages[i].backup, i == 0 ? "local A" : i == 1 ? "local B" : "local C");
     }
     if (is("absent") || is("unchanged") || is("force-identical") || is("no-archive")) assert(file_count("/home/archive") == 0);
-    if (is("success") || is("publish") || is("cancel-commit")) assert(file_count("/home/archive") == 3);
+    if (is("success") || is("publish") || is("cancel-commit") || is("cancel-transition"))
+        assert(file_count("/home/archive") == 3);
     if (url_mode) {
         assert(backup_reads == 0);
         if (is("url-archive-blocked")) contents("/home/archive", "not a directory");

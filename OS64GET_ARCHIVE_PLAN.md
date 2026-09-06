@@ -190,7 +190,7 @@ Verify bytes at the installed and archive paths, not just success messages.
 
 ## Verification
 
-`tools/test_os64get_host.sh` passes 54 scenarios using the production application control flow with
+`tools/test_os64get_host.sh` passes 55 scenarios using the production application control flow with
 host filesystem and transport adapters under ASan/UBSan (leak detection disabled
 for the execution environment). It covers successful and cancelled batches,
 new and unchanged destinations, forced identical downloads, backup read/write/
@@ -200,6 +200,12 @@ and URL success/failure/cancellation. HTTP and proxied HTTPS replacements leave
 no archive directory; HTTP also succeeds with an unusable archive path.
 Repeated SIGINT requests during cleanup
 and an interrupted first publication rename are included.
+The `cancel-transition` case uses GDB (with host ptrace permission) to set the
+handler's cancellation flag at the commit-state assignment. It reproduces the
+old check-then-store race and verifies cancellation without publication, with
+original backups retained and temporary files cleaned. Commit mode is entered
+before the final raw cancellation check; a pending request reverts that state,
+while a request after that check is deferred through publication and cleanup.
 
 PR review regressions cover failed first and later backup finalization, with
 recovery messages emitted only when a completed backup exists; unchanged files
