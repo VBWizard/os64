@@ -129,10 +129,10 @@ static char    s_status[256];
 // WHETHER THIS PROGRAM HAS TOUCHED THE SCREEN IT WAS HANDED. An exit has to
 // put the terminal back, and only where there is something to put back:
 // clearing a screen this program never wrote on would throw away whatever the
-// person had on it. Set at the two writers rather than at each painter,
-// because that is the one place it cannot be forgotten — a prompt that quits
-// on Escape before the full-screen setup had left the shell drawing its next
-// prompt onto the status bar.
+// person had on it. Set where bytes actually LEAVE for the terminal rather
+// than at each painter, because a painter can be added and this cannot: a
+// prompt that quit on Escape before the full-screen setup had left the shell
+// drawing its next prompt onto the status bar.
 static bool s_painted;
 
 static void out(const char *s)      { s_painted = true; os64_write(OS64_STDOUT, s, os64_strlen(s)); }
@@ -182,8 +182,9 @@ static char s_handoff_temp[64];
 
 // Both names the handoff can leave: what os64get KEEPS when a fetch fails
 // (`<temp>.part`, deliberately — its comment argues the case) and what it
-// leaves when one succeeds. One door, because there are now three ways out of
-// a handoff and the exit that skipped this was the one nobody wrote.
+// leaves when one succeeds. ONE DOOR, because a handoff has more ways out
+// than anyone holds in their head, and the exit that skipped this was the one
+// nobody had thought to count.
 static void handoff_cleanup(void)
 {
     if (s_handoff_temp[0] == '\0')
@@ -899,17 +900,19 @@ static save_result_t save_item(const gopher_addr_t *addr)
 
     // WHICH END GAVE UP, not merely THAT one did. A read that fails is the
     // server or the wire; a write that comes up short is this machine. They
-    // were one `broke` flag while the only question was whether to rename,
-    // and the exit code inherited that blur — a host that never answered was
-    // reported as a disk that would not take the bytes.
+    // were one boolean while the only question was whether to rename, and the
+    // exit code inherited that blur — a host that never answered was reported
+    // as a disk that would not take the bytes. It holds HOW THE TRANSFER
+    // ENDED, so SAVE_DONE is the ordinary answer and the name has to say that
+    // rather than the opposite.
     uint64_t total = 0;
-    save_result_t broke = SAVE_DONE;
+    save_result_t transfer = SAVE_DONE;
     char buf[4096];
     for (;;) {
         int64_t n = gopher_stream_raw(&stream, buf, sizeof(buf));
-        if (n < 0) { broke = SAVE_UNREACHABLE; break; }
+        if (n < 0) { transfer = SAVE_UNREACHABLE; break; }
         if (n == 0) break;
-        if (os64_write((int32_t)file, buf, (size_t)n) != n) { broke = SAVE_FAILED; break; }
+        if (os64_write((int32_t)file, buf, (size_t)n) != n) { transfer = SAVE_FAILED; break; }
         total += (uint64_t)n;
     }
     // COMMIT BEFORE PUBLISHING, and ask whether the commit worked. A close
@@ -921,7 +924,7 @@ static save_result_t save_item(const gopher_addr_t *addr)
     // question at every one of its downloads; this is the one that did not.
     // (On ext2 it is a formality — write-through leaves nothing to fail —
     // and the lifeboat is FAT.)
-    bool uncommitted = broke == SAVE_DONE && os64_sync((int32_t)file) < 0;
+    bool uncommitted = transfer == SAVE_DONE && os64_sync((int32_t)file) < 0;
     os64_close((int32_t)file);
     os64_close((int32_t)conn);
 
@@ -936,13 +939,13 @@ static save_result_t save_item(const gopher_addr_t *addr)
                       (unsigned long)total, part, name);
         return SAVE_FAILED;
     }
-    if (broke == SAVE_UNREACHABLE) {
+    if (transfer == SAVE_UNREACHABLE) {
         os64_snprintf(s_status, sizeof(s_status),
                       " transfer broke after %lu bytes — %s kept",
                       (unsigned long)total, part);
         return SAVE_UNREACHABLE;
     }
-    if (broke == SAVE_FAILED) {
+    if (transfer == SAVE_FAILED) {
         os64_snprintf(s_status, sizeof(s_status),
                       " the disk stopped taking %s after %lu bytes — kept",
                       part, (unsigned long)total);
@@ -1327,9 +1330,9 @@ static void select_step(page_t *page, int32_t step)
 // becomes type '0', and a `7` carries the query that was asked for. A `7`
 // that already names its query (a TAB in the address a person typed) is not
 // asked again — it was answered before it arrived.
-// "a error item" is what one refusal read as, in the two places that refuse.
-// The type names are ordinary English words and none of them is a silent-h or
-// a "eu-", so the first letter settles it.
+// "a error item" is what a refusal read as wherever one names a type. The
+// type names are ordinary English words and none of them is a silent-h or a
+// "eu-", so the first letter settles it.
 static const char *article_for(const char *word)
 {
     char c = word[0];
@@ -1599,6 +1602,19 @@ static int32_t browse(gopher_addr_t start)
                     break;
                 }
                 gopher_item_t *item = &page.items[page.sel];
+                // `followable` IS TWO QUESTIONS — did the line parse, and is
+                // the type one this client fetches — and follow_decide can
+                // only ask the second: it reads an ADDRESS, and the door that
+                // takes a typed one has no item to ask about. So the door
+                // that HAS an item asks the first here. A malformed line
+                // keeps its type character (that is the first byte, read
+                // before anyone knows the field count is wrong) and carries a
+                // zeroed address, so following one would dial an empty host.
+                if (item->result != GOPHER_ITEM_OK) {
+                    os64_strcopy(s_status, sizeof(s_status),
+                                 " that line is not a link");
+                    break;
+                }
                 gopher_addr_t next;
                 switch (follow_decide(&item->addr, &next)) {
                     case FOLLOW_REFUSED:
