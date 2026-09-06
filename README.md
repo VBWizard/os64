@@ -2,6 +2,10 @@
 
 A 64-bit x86 operating system built for educational purposes.
 
+For installing builds onto a running system, see
+[os64get and os64serve](OS64GET.md): server setup, batch installation,
+configuration, replacement backups, temporary files, and HTTP downloads.
+
 ## Getting Started
 
 ### Prerequisites
