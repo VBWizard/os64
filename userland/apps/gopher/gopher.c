@@ -798,7 +798,10 @@ static save_result_t save_item(const gopher_addr_t *addr)
 {
     char name[256];
     selector_basename(addr->selector, name, sizeof(name));
-    char asked[256];
+    // Sized from the NAME, so the brackets always show the whole of what
+    // Enter would accept. A label cut short is a different failure from a
+    // name cut short: it shows one thing and saves another.
+    char asked[sizeof(name) + 16];
     os64_snprintf(asked, sizeof(asked), "save as [%s]: ", name[0] != '\0' ? name : "");
     char typed[256];
     switch (prompt(asked, typed, sizeof(typed))) {

@@ -219,10 +219,17 @@ for ch, name in (("3", "error"), ("2", "phone"), ("8", "telnet"),
 # EVERY TYPE NAME FITS THE LABEL COLUMN /bin/gopher draws it in. A longer one
 # is clipped and reads as a typo rather than as a name — "phone book" came
 # back from a real Floodgap menu and was drawn "phone b".
+#
+# AND NO TYPE NAME IS EMPTY, which is the same rule pointing the other way: a
+# name is not only a column heading, it is the noun in the sentence the client
+# writes when Enter lands on something nothing follows. `i` had none, and that
+# sentence read "a  item is not something to follow".
 for ch in "0123456789+TdghisI":
     _, got = item(f"{ch}Something\t/s\texample.com\t70")
     if len(got["typename"]) > 7:
         fail(f"type name {ch}", f"{got['typename']!r} is longer than the column")
+    if got["typename"] == "":
+        fail(f"type name {ch}", "has no name, so a sentence about it has a hole in it")
 
 # ...and the ones it does.
 for ch in "014567 9dgIs".replace(" ", ""):

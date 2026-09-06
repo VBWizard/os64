@@ -97,7 +97,12 @@ const char *gopher_type_name(char type)
         case 'd': return "doc";
         case 'g': return "gif";
         case 'h': return "web";
-        case 'i': return "";
+        // An `i` line is drawn without a type label — the menu indents its
+        // prose past that column instead — so this name is never a column
+        // heading. It is what a SENTENCE about the type calls it, and the
+        // client writes one when Enter lands somewhere nothing follows: an
+        // empty name there read "a  item is not something to follow".
+        case 'i': return "info";
         case 's': return "sound";
         case 'I': return "image";
         default:  return "unknown";
@@ -181,7 +186,14 @@ gopher_url_result_t gopher_url_parse(const char *text, gopher_addr_t *out)
     // in one place rather than growing a second, laxer path for bare names.
     char spelled[OS64_URL_HOST_MAX + OS64_URL_PATH_MAX + 16];
     if (rc == OS64_URL_NOT_A_URL) {
-        if (os64_snprintf(spelled, sizeof(spelled), "gopher://%s", text) <= 0)
+        // `>= sizeof` and not `<= 0`: os64_snprintf answers the length the
+        // WHOLE result wanted, so a bare operand too long for this buffer
+        // would be cut and its PREFIX parsed — a different address than the
+        // one asked for, arrived at in silence. A spawn argument cannot
+        // currently be long enough to reach it, which is a fact about the
+        // caller and not about this function.
+        int32_t wanted = os64_snprintf(spelled, sizeof(spelled), "gopher://%s", text);
+        if (wanted <= 0 || (size_t)wanted >= sizeof(spelled))
             return GOPHER_URL_TOO_LONG;
         rc = os64_url_parse(spelled, &parsed);
         if (rc == OS64_URL_NOT_A_URL)
