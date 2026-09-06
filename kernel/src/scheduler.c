@@ -13,6 +13,7 @@
 #include "paging.h"
 #include "strstr.h"
 #include "fpu.h"
+#include "doorbell.h"
 
 volatile uint64_t mp_isrSavedRAX[MAX_CPUS],mp_isrSavedRBX[MAX_CPUS],mp_isrSavedRCX[MAX_CPUS],mp_isrSavedRDX[MAX_CPUS],mp_isrSavedRSI[MAX_CPUS],
                   mp_isrSavedRDI[MAX_CPUS],mp_isrSavedRBP[MAX_CPUS],mp_isrSavedCR0[MAX_CPUS],mp_isrSavedCR3[MAX_CPUS],mp_isrSavedCR4[MAX_CPUS],
@@ -555,7 +556,10 @@ void scheduler_change_thread_queue_locked(thread_t* thread, eThreadState newStat
 	        scheduler_nudge_parked_aps(thread);
 	    }
 	    else if (newState==THREAD_STATE_RUNNING)
+	    {
 	        thread->lastRunStartTicks=kTicksSinceStart;
+	        thread->expedite=false;   // the doorbell boost buys one pick — this one
+	    }
 }
 
 // Public entry: takes the queue lock (IF off — see the doctrine block up top)
@@ -1009,12 +1013,18 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
     // core at 50% each while a core idled six inches away.
     thread_t *warmSkipped = NO_THREAD;
     uint32_t warmSkippedTicks = 0;
+    // A doorbell answered this pass (doorbell.h): the pick takes it over aging.
+    // Remembered rather than taken on the spot so the loop still ages everyone.
+    thread_t *expedited = NO_THREAD;
     
     int queEntryNum = 0;
     while (queue!=NO_NEXT)
     {
 		thread = queue;
 		task = (task_t*)thread->ownerTask;
+		if (thread->expedite && !thread->idleThread && expedited == NO_THREAD &&
+		    scheduler_thread_can_run_on_core(thread, cls))
+			expedited = thread;
 		oldTicks=thread->prioritizedTicksInRunnable;
 		//This is where we increment all the runnable ticks, based on the process' priority
         if (!thread->idleThread && !justBrowsing)
@@ -1100,6 +1110,8 @@ thread_t *scheduler_find_thread_to_run(core_local_storage_t *cls, bool justBrows
 		threadToRun = warmSkipped;
 	}
 
+	if (expedited != NO_THREAD)
+		threadToRun = expedited;
 	if (threadToRun == NO_THREAD && !justBrowsing)
 		panic("scheduler_find_thread_to_run: No runnable threads found\n");
 	if (!justBrowsing)
@@ -1330,6 +1342,12 @@ void scheduler_run_new_thread()
         scheduler_change_thread_queue_locked(threadToStop, threadToStopNewQueue);   //scheduler_do holds the queue lock
 	}
 	printd(DEBUG_SCHEDULER | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,"*Finding thread to run\n");
+    // Doorbell service point B: AFTER the outgoing thread was requeued. A
+    // sleeper that raised SIGSLEEP and was still on the CPU when its bell
+    // rang has just been moved to ISLEEP above; this pulls it straight back
+    // out in the same pass, which is what closes the park window rather
+    // than merely narrowing it (doorbell_park).
+    doorbell_service_locked();
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, false);
 	task_t* taskToRun = (task_t*)threadToRun->ownerTask;
 	
@@ -1539,6 +1557,10 @@ void scheduler_do()
 		if (lockSpins > kDiagLockMaxSpins)             // TEMP DIAG
 			kDiagLockMaxSpins = lockSpins;             // TEMP DIAG
 	}
+    // Doorbell service point A: a parked sleeper whose bell was rung is
+    // relinked here, BEFORE the peek, or the peek would find the idle thread
+    // already running and shortcut past it (doorbell.h, DOORBELL.md).
+    doorbell_service_locked();
     thread_t* threadToRun=scheduler_find_thread_to_run(cls, true);
   	if (threadToRun != NO_THREAD && threadToRun->threadID!=cls->threadID)
     {
@@ -1601,4 +1623,17 @@ void scheduler_do()
 		else
 			sched_backstop_disarm();
 	}
+}
+
+// The queue-lock idiom for callers outside this file that must hold the lock
+// in thread context (doorbell_park): lock with IF off, restore on unlock —
+// type 2 in the doctrine block at the top of this file.
+uint64_t scheduler_lock_queues(void)
+{
+	return scheduler_queues_lock();
+}
+
+void scheduler_unlock_queues(uint64_t flags)
+{
+	scheduler_queues_unlock(flags);
 }

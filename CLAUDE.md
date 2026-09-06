@@ -374,6 +374,19 @@ make -C kernel test-elf
   `mount`(1)/`unmount`(1) ship in /bin; df/lsblk/lsof are Chris's, reading
   these files.
 
+**The network bottom half (`kernel/src/knet.c`, `kernel/src/doorbell.c`) —
+DOORBELL.md is the design record.** A NIC's interrupt handler RINGS a
+doorbell (lock-free, a store and a self-IPI — it may never take the queue
+lock, the 9badced rule) and `knet`, a kernel daemon pinned to the BSP, wakes
+to DRAIN every registered NIC through the seam's `drain` verb, run the
+TCP/DHCP timers, and park. The tick rings the same bell once per tick, which
+is what keeps a NIC with no interrupt (virtio) at its old cadence.
+`/sys/net/knet` carries the counters (wakes, drain rounds, the longest wake)
+— read it FIRST when a transfer is slower than the wire; it caught a 5,800
+wakes-a-second loop the day it was born. The e1000 rings from its INTx
+handler, the RTL8125 from MSI (vector 0x46, P5 only), and `tcp_input` wakes a
+parked reader on arrival instead of at the tick.
+
 **System Drivers:**
 - **PCI** (`pci.c`): PCI device enumeration and configuration
 - **ACPI** (`acpi.c`): ACPI table parsing (RSDP, MADT, MCFG, etc.)
@@ -656,6 +669,10 @@ the library serves every process). How it fits together:
   - `NOAHCI`: Disable AHCI driver
   - `NONVME`: Disable NVMe driver
   - `NONET`: Disable networking entirely (there is no per-NIC off switch)
+  - `NETPOLL`: every NIC stays TICK-DRIVEN — no e1000 INTx probe, no RTL8125
+    MSI — and knet wakes only when the tick rings it (DOORBELL.md's
+    flashlight, the path that carried every packet before the doorbell).
+    Like every token: it does NOT travel to the P5 by itself
   - `USBQUIET`: Opt-in 2.4GHz hygiene — unpower idle xHCI controllers'
     ports after enumeration (USB3 signaling jams wireless dongles; Intel's
     2012 whitepaper). Default OFF: connector USB2/USB3 twins share VBUS —

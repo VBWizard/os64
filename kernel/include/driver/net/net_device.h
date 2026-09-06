@@ -54,6 +54,15 @@ typedef struct net_operations
 	// is pinned? until which interrupt?), and it is exactly the kind of
 	// cleverness you add AFTER the pcap says the simple thing works.
 	int32_t (*transmit)(struct net_device* dev, const void* frame, uint16_t length);
+
+	// Take what the hardware has: reclaim finished transmit descriptors and
+	// deliver every received frame through net_device_rx. Returns whether
+	// anything moved, so the caller knows to come around again. Called by
+	// knet, the network drainer thread, never from an interrupt handler —
+	// a handler RINGS (doorbell.h); the drain is the work the ring defers.
+	// The verb the seam lacked while there were two drivers and a per-driver
+	// poll call in the scheduler pass; the third driver made it pay.
+	bool (*drain)(struct net_device* dev);
 } net_operations_t;
 
 // One registered NIC. Drivers allocate this (kmalloc), fill it in, and

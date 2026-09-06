@@ -51,6 +51,8 @@
 #include "memcpy.h"
 #include "memset.h"
 #include "strings/sprintf.h"   // snprintf — netdev.location, "02:00.0"
+#include "knet.h"                // kNetDoorbell — the interrupt handler rings it
+#include "smp.h"                 // kCPUInfo — the MSI is addressed at the BSP
 
 // kPCIDeviceHeaders / kPCIDeviceFunctions and their counts come from pci.h —
 // declared there, so NOT re-declared here. (Re-declaring them by hand is how
@@ -214,7 +216,8 @@ typedef struct
 	// — allocate_memory_aligned hands back page-aligned physical memory that
 	// is HHDM-reachable while allocated (the lazy-HHDM rule), so one
 	// allocation yields both. Upper-half by construction, which is what lets
-	// r8125_poll touch them from processSignals under any task's CR3.
+	// the drain and the interrupt handler touch them from knet and from
+	// whatever context the interrupt lands in.
 	uint64_t rx_phys, rx_buf_phys;
 	uint64_t tx_phys, tx_buf_phys;
 	r8125_desc_t* rx;
@@ -261,6 +264,16 @@ typedef struct
 	uint64_t isr_acks;            // how many times the status register was cleared
 	uint32_t isr_last;            // the last non-zero status seen
 	bool     isr_trouble_reported;// one-shot for the alarming bits
+	// The top half's hand-off (DOORBELL.md). The interrupt handler acknowledges
+	// the status register itself — an MSI is edge-triggered, and a bit left
+	// latched is a message never sent again — and parks the bits here for the
+	// drain's bookkeeping, which is where the overrun accounting and every
+	// log line live: an interrupt handler prints nothing.
+	volatile uint32_t isr_pending;
+	bool     msi;                 // the capability was programmed and enabled
+	uint8_t  msi_vector;
+	volatile uint64_t msi_fires;  // handler entries with a non-zero status
+	volatile uint64_t msi_spurious;// handler entries that found nothing latched
 	// Overruns are COUNTED as well as announced, because their frequency is
 	// the whole question once acknowledging has made them survivable: one
 	// during a big transfer is the wire briefly outrunning us, and hundreds
@@ -391,12 +404,14 @@ static uint64_t r8125_bar_phys(pci_device_t* dev, uint8_t bar)
 
 // Map the register window at the kernel's HHDM alias, PAGE_PCD.
 //
-// The HHDM (upper half) rather than anywhere else because r8125_poll runs
-// from processSignals, under WHATEVER task's CR3 happened to be interrupted
-// — upper-half mappings are shared by every address space, lower-half ones
+// The HHDM (upper half) rather than anywhere else because the interrupt
+// handler runs under WHATEVER task's CR3 happened to be interrupted, the
+// drain in knet's address space, and transmit in the calling task's —
+// upper-half mappings are shared by every address space, lower-half ones
 // are not. That is not a style preference: it is the exact distinction that
-// panicked kworker earlier today when a lower-half DMA mapping turned out to
-// exist in one address space only (see DEBTS.md's kmalloc_dma row).
+// panicked kworker on 2026-08-19, when a lower-half DMA mapping turned out
+// to exist in one address space only (kmalloc.h's account of the identity-
+// map era).
 //
 // PAGE_PCD because device registers must never be cached — a cached read of
 // a ring cursor returns stale truth, which in a producer/consumer protocol
@@ -873,13 +888,14 @@ static void r8125_phy_configure(r8125_t* r)
 // needs: the physical one the bus master is given, and an upper-half kernel
 // pointer we can write through from any address space.
 //
-// NOT kmalloc_dma, and the reason is fresh: it identity-maps at a LOWER-half
-// VA in kKernelPML4 alone, so anything touching such a buffer from another
-// task's page tables takes a #PF — which is precisely what killed kworker
-// earlier today (DEBTS.md). r8125_poll runs from processSignals under
-// whatever CR3 was interrupted, so a lower-half buffer here would be a
-// scheduled crash rather than a latent one. Page alignment also satisfies
-// the hardware's 256-byte descriptor-base requirement several times over.
+// allocate_memory_aligned rather than kmalloc_dma: both hand back page-
+// aligned, HHDM-reachable memory today, and this driver keeps the one it
+// was written with. The rule that chose it holds: the drain runs in knet
+// and transmit in whatever task called it, so a buffer only the kernel's
+// own page tables map would be a scheduled crash rather than a latent one
+// (kworker died exactly that way on 2026-08-19 — kmalloc.h's account).
+// Page alignment also satisfies the hardware's 256-byte descriptor-base
+// requirement several times over.
 static bool r8125_setup_rings(r8125_t* r)
 {
 	r->rx_phys = allocate_memory_aligned(R8125_RX_DESCS * sizeof(r8125_desc_t));
@@ -1049,14 +1065,17 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 
 static net_operations_t s_r8125_ops = {
 	.transmit = r8125_transmit,
+	.drain    = r8125_drain,
 };
 
 // ── THE INTERRUPT STATUS REGISTER, ACKNOWLEDGED (2026-08-22) ────────────────
 //
-// This driver masks interrupts off (IMR0 = 0) and polls, which is a fine
-// choice. What it did NOT do — from its first slice until today — is ever
-// READ the status register. R8125_ISR0_8125 was defined and referenced
-// nowhere.
+// This driver masked interrupts off (IMR0 = 0) and polled until the MSI top
+// half arrived (2026-09-05, further down); on a NETPOLL boot or a chip
+// without the capability it still does, and either way the drain below
+// runs from knet. What the polled driver did NOT do — from its first slice
+// until 2026-08-22 — is ever READ the status register. R8125_ISR0_8125 was
+// defined and referenced nowhere.
 //
 // That is a trap this chip family is famous for. ISR is WRITE-ONE-TO-CLEAR,
 // and masking interrupts does not stop the device LATCHING status bits; it
@@ -1097,7 +1116,12 @@ static net_operations_t s_r8125_ops = {
 
 static void r8125_ack_status(r8125_t* r)
 {
-	uint32_t status = r8125_read32(r, R8125_ISR0_8125);
+	// What the register says now, plus whatever the interrupt handler
+	// already acknowledged and parked for us (isr_pending): the accounting
+	// below wants every bit that was set since the last drain, whichever
+	// half of the driver cleared it.
+	uint32_t status = r8125_read32(r, R8125_ISR0_8125)
+	                | __sync_lock_test_and_set(&r->isr_pending, 0);
 	if (status == 0)
 		return;
 
@@ -1235,13 +1259,15 @@ static void r8125_check_stalled(r8125_t* r)
 		       "tx_next=%u tx_clean=%u rx_cursor=%u (rings of %u/%u), "
 		       "tx_frames=%lu tx_errors=%lu rx_frames=%lu rx_errors=%lu, "
 		       "%lu completions, %u sent since the last arrival, "
-		       "%lu status acks, %lu receive overruns.\n",
+		       "%lu status acks, %lu receive overruns, "
+		       "%s: %lu interrupts (%lu spurious).\n",
 		       what, r->tx_next, r->tx_clean, r->rx_cursor,
 		       (unsigned)R8125_TX_DESCS, (unsigned)R8125_RX_DESCS,
 		       r->netdev.tx_frames, r->netdev.tx_errors,
 		       r->netdev.rx_frames, r->netdev.rx_errors,
 		       r->tx_completions, r->tx_since_rx,
-		       r->isr_acks, r->isr_overrun_events);
+		       r->isr_acks, r->isr_overrun_events,
+		       r->msi ? "MSI" : "tick-driven", r->msi_fires, r->msi_spurious);
 	}
 	else if (!wedged && r->stall_reported && r->tx_clean == r->tx_next)
 	{
@@ -1253,24 +1279,27 @@ static void r8125_check_stalled(r8125_t* r)
 	}
 }
 
-// ── The drain ───────────────────────────────────────────────────────────────
-void r8125_poll(void)
+// ── The drain (the seam's verb; knet calls it, DOORBELL.md) ────────────────
+// Returns whether anything moved — a completion reaped or a frame taken off
+// the ring — so the drainer knows to come around again.
+bool r8125_drain(struct net_device* dev)
 {
+	(void)dev;   // one RTL8125 per machine; the seam's handle and s_r8125 are the same card
 	r8125_t* r = &s_r8125;
 	if (!r->present)
-		return;
+		return false;
+	bool moved = false;
 
-	// Re-entrancy guard, the e1000's pattern: processSignals runs on the
-	// core that owns scheduling, but a transmit from another core takes the
-	// same lock, and nothing here should ever nest.
+	// The lock: a transmit from another core takes the same one, and
+	// nothing here should ever nest.
 	uint64_t flags = spinlock_acquire_irqsave(&r->lock);
 
 	// ACKNOWLEDGE FIRST. A latched RX-overflow or descriptors-exhausted bit
 	// can be holding reception stopped; clearing it before the drain gives
 	// the device permission to resume the moment the refills below give it
 	// somewhere to put things. Anything that arrives during the drain
-	// re-raises and is acknowledged next pass — the same re-evaluate-don't-
-	// remember-edges discipline the e1000 doorbell gate uses in signals.c.
+	// re-raises and is acknowledged next time — the same re-evaluate-don't-
+	// remember-edges discipline the doorbell itself lives by.
 	r8125_ack_status(r);
 
 	// Transmit completions first — cheap, and it frees slots for whatever
@@ -1280,19 +1309,21 @@ void r8125_poll(void)
 	{
 		r->tx_completions += reaped;
 		r->last_progress_tick = kTicksSinceStart;
+		moved = true;
 	}
 
-	// Then every frame the device has finished with. Bounded per pass: a
-	// wire delivering faster than we drain must not let one scheduler pass
-	// run the whole ring repeatedly and starve everything else on this core.
-	// Whatever is left stays owned by us and is collected next pass.
+	// Then every frame the device has finished with. Bounded per call: a
+	// wire delivering faster than we drain must not let one call run the
+	// whole ring repeatedly; knet comes around again while anything moved,
+	// under a budget of its own, so the protocol timers still get their
+	// turn. Whatever is left stays owned by us and is collected next call.
 	//
 	// THE BOUND IS THE RING SIZE, AND THAT COUPLING IS DELIBERATE (restated
 	// 2026-08-22, when the receive ring went 64 -> 256). The ring exists to
-	// absorb a burst that arrives faster than passes happen; draining less
-	// than a full ring per pass would leave the tail of every burst sitting
+	// absorb a burst that arrives faster than drains happen; draining less
+	// than a full ring per call would leave the tail of every burst sitting
 	// there, which is how the card ran out of descriptors in the first
-	// place. One pass may therefore now handle 256 frames instead of 64 —
+	// place. One call may therefore handle 256 frames instead of 64 —
 	// roughly a millisecond of copying and stack work at the sizes this
 	// traffic uses, which is the right trade against dropping frames.
 	for (uint16_t drained = 0; drained < R8125_RX_DESCS; drained++)
@@ -1337,11 +1368,13 @@ void r8125_poll(void)
 		// most for noticing it is not.
 		r->tx_since_rx = 0;
 		r->last_progress_tick = kTicksSinceStart;
+		moved = true;
 	}
 
 	r8125_check_stalled(r);
 
 	spinlock_release_irqrestore(&r->lock, flags);
+	return moved;
 }
 
 // ── Bring-up ────────────────────────────────────────────────────────────────
@@ -1511,11 +1544,15 @@ static bool r8125_init_device(pci_device_t* dev)
 	r8125_write32_verify(r, R8125_TXCONFIG, R8125_TX_CONFIG_DEFAULT,
 	                     R8125_TXCONFIG_HW_OWNED, "TxConfig");
 
-	// Every interrupt masked. This driver POLLS (RTL8125.md's phased plan:
-	// prove the silicon moves frames before asking whether an interrupt
-	// routes). An unmasked legacy INTx line shared with another device would
-	// mean a level-triggered interrupt nobody ever acknowledges — which
-	// wedges that line for its rightful owner too.
+	// Every interrupt masked at bring-up. The MAC has no message to send
+	// until r8125_enable_msi unmasks it, at the platform moment the LAPIC
+	// becomes the interrupt controller (DOORBELL.md); on a NETPOLL boot, or
+	// a chip without the capability, this mask is permanent and the tick's
+	// ring of knet's bell drains the rings — RTL8125.md's phased plan, prove
+	// the silicon moves frames before asking whether an interrupt routes.
+	// An unmasked legacy INTx line shared with another device would mean a
+	// level-triggered interrupt nobody ever acknowledges — which wedges that
+	// line for its rightful owner too; MSI has no line to wedge.
 	r8125_write32(r, R8125_IMR0_8125, 0);
 	r8125_write32(r, R8125_ISR0_8125, 0xFFFFFFFF);   // clear anything pending
 
@@ -1577,7 +1614,7 @@ static bool r8125_init_device(pci_device_t* dev)
 	// promise is only made now that transmit is real.
 	//
 	// present goes true FIRST: registration makes us reachable, and
-	// r8125_poll must be willing to drain the moment anything can arrive.
+	// r8125_drain must be willing to drain the moment anything can arrive.
 	r->present = true;
 	if (net_device_register(&r->netdev) != 0)
 	{
@@ -1610,6 +1647,131 @@ static bool r8125_init_device(pci_device_t* dev)
 	       link, r->phystatus);
 	printd(DEBUG_NET, "r8125: registered as %s\n", r->netdev.name);
 	return true;
+}
+
+// ── The top half: MSI (DOORBELL.md, 2026-09-05) ─────────────────────────────
+//
+// MSI, and why not the e1000's INTx port (Chris ruled it, 2026-09-05): an
+// MSI is a message the device writes to the LAPIC — edge-triggered, ours
+// alone, needing no IOAPIC route and no GSI probe. The 8125 has no self-
+// trigger to probe with (the 8169's forced software interrupt did not
+// survive the doorbell register's move to 0x90), so an INTx port would have
+// had to transmit a frame and listen for TOK. MSI is what Linux runs this
+// chip on, and it costs three configuration-space writes.
+//
+// The message itself: address 0xFEE00000 with the destination APIC id in
+// bits 19:12 (physical destination, fixed delivery), data = the vector —
+// the LAPIC's message format from the Intel SDM, the one every OS programs.
+// The capability's layout is PCI 3.0 §6.8.1: a control word in the high
+// half of the capability dword, the address (one or two dwords, the 64-bit
+// flag says which), then the 16-bit data.
+//
+// THIS CANNOT BE REHEARSED HERE. QEMU's e1000 has no MSI capability and
+// QEMU has no RTL8125, so the P5 is the first machine to run this code, the
+// same position the PHY slice was in. Same discipline: read everything
+// back, print what was programmed, refuse to enable anything that did not
+// take, and keep NETPOLL as the flashlight.
+#define R8125_MSI_VECTOR          0x46
+#define MSI_CTRL_ENABLE           (1u << 16)   // message control is the capability dword's high half
+#define MSI_CTRL_MME_MASK         (7u << 20)   // multiple message enable: 0 = one vector
+#define MSI_CTRL_64BIT            (1u << 23)
+#define MSI_ADDRESS_BASE          0xFEE00000u
+#define PCI_COMMAND_INTX_DISABLE  (1u << 10)
+
+// Every event this driver decodes (the ack's bit table). TOK is in: a
+// download answers every segment with an ACK, and the transmit ring is 64
+// deep, so completions must be reaped as they happen, not at the tick. On
+// a burst these coalesce into one message anyway — the mask says WHICH
+// bits may send, and a message is sent when the first of them sets.
+#define R8125_IMR_EVENTS (R8125_ISR_ROK | R8125_ISR_RER | R8125_ISR_TOK | R8125_ISR_TER | \
+                          R8125_ISR_RDU | R8125_ISR_LINKCHG | R8125_ISR_RXFOVW | \
+                          R8125_ISR_TDU | R8125_ISR_SERR)
+
+// Interrupt context. Reads nothing that needs a lock, prints nothing, and
+// takes no lock — the doorbell rule (doorbell.h). The status is written
+// back HERE, not left for the drain: an MSI is edge-triggered, and a bit
+// left latched is an arrival the device will never announce again. The
+// bits are parked in isr_pending for the drain's accounting.
+void r8125_isr(void)
+{
+	r8125_t* r = &s_r8125;
+	if (!r->present)
+		return;
+
+	uint32_t status = r8125_read32(r, R8125_ISR0_8125);
+	if (status == 0)
+	{
+		r->msi_spurious++;
+		return;
+	}
+	r8125_write32(r, R8125_ISR0_8125, status);
+	__sync_fetch_and_or(&r->isr_pending, status);
+	r->msi_fires++;
+	doorbell_ring(&kNetDoorbell);
+}
+
+void r8125_enable_msi(void)
+{
+	r8125_t* r = &s_r8125;
+	if (!r->present)
+		return;
+	pci_device_t* dev = r->pci;
+	uint8_t bus = dev->busNo, slot = dev->deviceNo, func = dev->funcNo;
+
+	uint8_t cap = pci_find_capability(bus, slot, func, PCI_CAP_MSI);
+	if (cap == 0)
+	{
+		printf("r8125: no MSI capability in config space — staying tick-driven\n");
+		return;
+	}
+
+	uint32_t ctrl  = readPCIRegister(bus, slot, func, cap);
+	bool     is64  = (ctrl & MSI_CTRL_64BIT) != 0;
+	uint8_t  bsp   = kCPUInfo[0].apicID;
+	uint32_t addr  = MSI_ADDRESS_BASE | ((uint32_t)bsp << 12);
+
+	// Address, then data, then enable — the order the spec wants, so the
+	// first message the device sends already has somewhere to go.
+	writePCIRegister(bus, slot, func, cap + 4, addr);
+	if (is64)
+	{
+		writePCIRegister(bus, slot, func, cap + 8, 0);
+		writePCIRegister(bus, slot, func, cap + 12, R8125_MSI_VECTOR);
+	}
+	else
+		writePCIRegister(bus, slot, func, cap + 8, R8125_MSI_VECTOR);
+
+	writePCIRegister(bus, slot, func, cap, (ctrl & ~MSI_CTRL_MME_MASK) | MSI_CTRL_ENABLE);
+
+	// INTx off at the source, so a pin nobody routes cannot assert a level
+	// line nobody answers. A LIVE read-modify-write of the command word,
+	// the a848273 rule.
+	uint32_t live = readPCIRegister(bus, slot, func, 4) & 0xFFFF;
+	writePCIRegister(bus, slot, func, 4, live | PCI_COMMAND_INTX_DISABLE);
+
+	// Read it all back. On a machine with no debugger the read-back IS the
+	// investigation, and an enable bit that did not stick means the device
+	// will interrupt nobody — say so and keep the tick.
+	uint32_t ctrl_back = readPCIRegister(bus, slot, func, cap);
+	uint32_t addr_back = readPCIRegister(bus, slot, func, cap + 4);
+	uint32_t data_back = readPCIRegister(bus, slot, func, cap + (is64 ? 12 : 8)) & 0xFFFF;
+	printd(DEBUG_BOOT, "r8125: MSI capability at 0x%02x (%s-bit), address 0x%08x data 0x%04x, control 0x%04x -> 0x%04x\n",
+	       cap, is64 ? "64" : "32", addr_back, data_back, ctrl >> 16, ctrl_back >> 16);
+	if ((ctrl_back & MSI_CTRL_ENABLE) == 0 || addr_back != addr || data_back != R8125_MSI_VECTOR)
+	{
+		printf("r8125: MSI did not take (control 0x%04x address 0x%08x data 0x%04x) — staying tick-driven\n",
+		       ctrl_back >> 16, addr_back, data_back);
+		return;
+	}
+
+	// Now the MAC may speak: clear anything latched during bring-up so the
+	// first message is a real event, then unmask the events we decode.
+	r8125_write32(r, R8125_ISR0_8125, 0xFFFFFFFF);
+	r8125_write32(r, R8125_IMR0_8125, R8125_IMR_EVENTS);
+	r->msi = true;
+	r->msi_vector = R8125_MSI_VECTOR;
+	printf("r8125: interrupts live — MSI vector 0x%02x at APIC %u, IMR0 0x%08x\n",
+	       R8125_MSI_VECTOR, bsp, r8125_read32(r, R8125_IMR0_8125));
 }
 
 void init_r8125(void)

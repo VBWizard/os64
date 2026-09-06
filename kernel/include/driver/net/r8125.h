@@ -124,9 +124,20 @@
 #define R8125_ADVERTISE_2500 1
 
 void init_r8125(void);
-// The processSignals rider, beside virtio_net_poll and e1000_poll. Cheap
+// The seam's drain verb, called by knet whenever its doorbell rings
+// (DOORBELL.md): by this driver's interrupt handler on arrival once MSI is
+// wired, and by the tick every pass until then. Cheap
 // when the hardware is absent (one pointer test) and cheap when it is idle
-// (one descriptor-status read per ring).
-void r8125_poll(void);
+// (one descriptor-status read per ring); returns whether anything moved.
+bool r8125_drain(struct net_device* dev);
+
+// Adopt MSI (DOORBELL.md): called from kernel_init at the platform moment the
+// e1000 adopts its INTx wire — after the LAPIC is the interrupt controller —
+// never from init_r8125, which runs long before that. Programs the PCI MSI
+// capability at the BSP and vector 0x46; a chip without the capability, or a
+// NETPOLL boot, stays tick-driven and says so. The handler, r8125_isr, is
+// called only from handler_r8125_msi_asm.
+void r8125_enable_msi(void);
+void r8125_isr(void);
 
 #endif // R8125_H
