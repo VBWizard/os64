@@ -69,7 +69,7 @@ static volatile uint32_t kWireDepth = 0;
 
 static uint32_t wire_self(void)
 {
-	core_local_storage_t *cls = get_core_local_storage();
+	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
 	// 0xFE: the pre-CLS early-boot pseudo-identity. One core, no contention.
 	return (cls != NULL) ? (uint32_t)cls->apic_id : 0xFEu;
 }
@@ -427,10 +427,8 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 	// with the frame. GS earns its line because get_core_local_storage() IS
 	// `mov rax, [gs:0]` — a wrong GS makes every cls-> read return garbage,
 	// which is the shape of a corruption family this OS spent weeks on. And
-	// because os64 uses SWAPGS NOWHERE, the base has ONE correct answer at all
-	// times, ring 0 and ring 3 alike: inside kCoreLocalStorage. So it is not
-	// merely printed, it is CHECKED — if this line says WRONG, stop reading
-	// the rest of the report and believe this line first.
+	// after CLS initialization the base should be inside kCoreLocalStorage
+	// in ring 0 and ring 3 alike. Before BSP CLS setup, zero is expected.
 	{
 		uint64_t gs_base = rdmsr64(IA32_GS_BASE);
 		uint64_t cls_lo = (uint64_t)&kCoreLocalStorage[0];
@@ -438,7 +436,8 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 		bool sane = (gs_base >= cls_lo && gs_base < cls_hi);
 		EXC_EMIT(dying, ">>> GS_BASE 0x%016lx  (%s) <<<\n",
 		         gs_base,
-		         sane ? "in kCoreLocalStorage — ok"
+		         (!kCLSInitialized && gs_base == 0) ? "not initialized (early boot)"
+		              : sane ? "in kCoreLocalStorage — ok"
 		              : "*** OUTSIDE kCoreLocalStorage — GS IS WRONG ***");
 	}
 	exception_wire_unlock();
@@ -446,7 +445,7 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 
 void exception_report(const exception_context_t *ctx, const char *why)
 {
-	core_local_storage_t *cls = get_core_local_storage();
+	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
 	uint64_t cr0, cr2, cr3, cr4;
 	char bits[96];
 
@@ -614,16 +613,16 @@ static exception_context_t *kCurrentCtx[MAX_CPUS];
 
 exception_context_t *exception_current_context(void)
 {
-	core_local_storage_t *cls = get_core_local_storage();
-	if (cls == NULL || cls->apic_id >= MAX_CPUS) {
-		return NULL;
-	}
-	return kCurrentCtx[cls->apic_id];
+	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
+	// Match dispatch's early-boot slot so the pager can report its captured
+	// context before GS-based CLS exists. Only the BSP is running then.
+	uint32_t core = (cls != NULL && cls->apic_id < MAX_CPUS) ? (uint32_t)cls->apic_id : 0;
+	return kCurrentCtx[core];
 }
 
 void exception_dispatch(exception_context_t *ctx)
 {
-	core_local_storage_t *cls = get_core_local_storage();
+	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
 	uint32_t core = (cls != NULL && cls->apic_id < MAX_CPUS) ? (uint32_t)cls->apic_id : 0;
 
 	// Save-and-restore rather than set-and-clear, because exceptions NEST: a

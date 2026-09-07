@@ -124,7 +124,7 @@ static bool fault_address_readable(uint64_t address)
 	if (address_is_mapped(address)) {
 		return true;
 	}
-	core_local_storage_t *cls = get_core_local_storage();
+	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
 	task_t *t = (cls != NULL) ? (task_t *)cls->task : NULL;
 	if (t == NULL || t->pml4v == 0) {
 		return false;
@@ -365,14 +365,9 @@ void dump_fault_registers(bool direct)
 	// the shape of the corruption family this OS spent weeks on.
 	//
 	// The SELECTOR is the useless half; in long mode the base comes from
-	// IA32_GS_BASE, so that MSR is what gets printed. And because os64 uses
-	// SWAPGS NOWHERE (verified — the base is written once per core at bring-up
-	// in smp_core.c and never swapped), this value has one correct answer at
-	// all times, in ring 0 and ring 3 alike: it must point into the
-	// kCoreLocalStorage array. So we do not merely print it, we CHECK it — a
-	// number a reader has to validate by hand is a number that gets skimmed
-	// past. If this ever says WRONG, stop reading the rest of the report and
-	// believe this line first.
+	// IA32_GS_BASE, so that MSR is what gets printed. After CLS initialization
+	// it should point into kCoreLocalStorage in ring 0 and ring 3 alike.
+	// Before BSP CLS setup, zero is expected.
 	{
 		uint64_t gs_base = rdmsr64(IA32_GS_BASE);
 		uint64_t cls_lo = (uint64_t)&kCoreLocalStorage[0];
@@ -380,7 +375,8 @@ void dump_fault_registers(bool direct)
 		bool sane = (gs_base >= cls_lo && gs_base < cls_hi);
 		FAULT_PRINT(direct, ">>> GS_BASE 0x%016lx  (%s) <<<\n",
 		                gs_base,
-		                sane ? "in kCoreLocalStorage — ok"
+		                (!kCLSInitialized && gs_base == 0) ? "not initialized (early boot)"
+		                     : sane ? "in kCoreLocalStorage — ok"
 		                     : "*** OUTSIDE kCoreLocalStorage — GS IS WRONG ***");
 	}
 	FAULT_PRINT(direct, ">>> R8  0x%016lx  R9  0x%016lx  R10 0x%016lx  R11 0x%016lx <<<\n",
@@ -413,7 +409,7 @@ void dump_fault_registers(bool direct)
 
 
 void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
-    core_local_storage_t* core = get_core_local_storage();
+    core_local_storage_t* core = kCLSInitialized ? get_core_local_storage() : NULL;
 
     // One narrator per report (exception_report.h) — without this, two cores
     // faulting together braid their reports character-by-character on COM1,
@@ -421,7 +417,8 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     exception_wire_lock();
 
     EXCEPTION_PRINT("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);
-    EXCEPTION_PRINT(">>> AP %lu (Thread 0x%08x) <<<                        \n", core->apic_id, core->threadID);
+    EXCEPTION_PRINT(">>> AP %lu (Thread 0x%08x) <<<                        \n",
+                    core ? core->apic_id : 0, core ? core->threadID : 0);
     EXCEPTION_PRINT(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
 
     if (error_code != 0xFFFFFFFFFFFFFFFF) {
@@ -467,7 +464,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     EXCEPTION_PRINT(">>> CR2: 0x%016lx (page-fault address; STALE unless this is a #PF)  CR3: 0x%016lx <<<\n",
                     cr2_val, cr3_val);
     EXCEPTION_PRINT(">>> Interrupted RSP: 0x%016lx <<<      \n",
-                    mp_isrSavedRSP[core->apic_id]);
+                    core ? mp_isrSavedRSP[core->apic_id] : 0);
 
     // The register set the fault interrupted. Free (already pushed by the
     // stub), always safe, and frequently the whole answer — CR2 says WHAT
@@ -487,7 +484,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     // instead of confidently walking the last page fault's stack.
     dump_stack_trace(rip, true);
 
-    if (core->currentThread) {
+    if (core && core->currentThread) {
 		task_t *task = (task_t*)core->currentThread->ownerTask;
 
         EXCEPTION_PRINT(">>> Excepting Task: %s <<<                         \n", task->path);
@@ -527,7 +524,7 @@ void handle_invalid_opcode(uint64_t rip) {
 // something wrong.
 void handle_double_fault_frame(uint64_t rip, uint64_t rsp, uint64_t rflags)
 {
-	core_local_storage_t *core = get_core_local_storage();
+	core_local_storage_t *core = kCLSInitialized ? get_core_local_storage() : NULL;
 	// EXCEPTION_PRINT, not FAULT_PRINT: a #DF is as dying as it gets. The wire
 	// copy is the only one that can be trusted to survive, and touching a log
 	// queue here risks a lock this core may already hold.
