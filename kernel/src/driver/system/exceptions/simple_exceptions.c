@@ -856,16 +856,28 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     // line loses nothing when a fault is actually news.
     printd(DEBUG_DEMAND_PAGING, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
 
-    // Guard against faults BEFORE per-core state exists (early boot: CLS not
-    // allocated and/or GS base not programmed). Without this, [gs:0] returns
-    // junk, ->task is junk, and vma_lookup faults on the junk pointer — the
-    // handler then re-enters itself until the stack dies in a triple fault,
-    // taking the diagnosable panic below with it.
+    // Early faults have no task context until GS-based CLS is installed.
+    // Do not read it to look up a VMA before that initialization.
     task_t *task = kCLSInitialized ? get_core_local_storage()->task : NULL;
     if (!task)
     {
         page_fault_panic("no task context (early boot?)", cr2, error_code, rip);
     }
+
+    // A VMA cannot override the first-page guard. Refuse before resolving
+    // backing pages: the mapper rejects this address, so retrying would
+    // fault again and could allocate an unreachable frame on each pass.
+    if (cr2 < PAGE_SIZE)
+    {
+        if (error_code & 0x4)
+        {
+            if (try_catch_segv(task))
+                return;
+            user_fault_kill(task, "access to guarded page zero", cr2, error_code, rip);
+        }
+        page_fault_panic("access to guarded page zero", cr2, error_code, rip);
+    }
+
     vma_t *vma = vma_lookup(task, cr2);
     if (!vma)
     {
