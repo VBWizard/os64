@@ -323,9 +323,9 @@ static void paint_row_locked(tty_t *t, uint32_t r)
 		// gpm drew exactly this on the Linux console, and it works on any
 		// glass that can paint a character.
 		if (inverse)
-			renderer_glass_putc_bg_locked(ch, r, c, bg, fg);
+			renderer_glass_putc_bg_locked(ch, line[c].charset, r, c, bg, fg);
 		else
-			renderer_glass_putc_bg_locked(ch, r, c, fg, bg);
+			renderer_glass_putc_bg_locked(ch, line[c].charset, r, c, fg, bg);
 	}
 }
 

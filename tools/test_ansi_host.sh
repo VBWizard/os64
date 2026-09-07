@@ -116,7 +116,20 @@ check("\\e[1:32mX", text("X"), "a colon where a semicolon was meant eats the seq
 check("\\e[<0;1;2mX", text("X"), "a private-parameter sequence is swallowed whole")
 check("\\e[6n", [], "a query with no answer here is still consumed")
 check("\\e7", [], "a two-byte escape is consumed")
-check("\\e(B", [], "a charset selection is consumed whole, including its final byte")
+
+# ── Which character set the high half draws as ──────────────────────────
+# ANSI art is CP437 and a 1994 gopher menu is Latin-1, so the terminal is
+# told which it is looking at. The Linux console's spelling, and the G0 slot
+# only: os64 has no shift-out, so a G1 mapping would name a set nothing
+# could ever select.
+check("\\e(U", ["charset 1"], "ESC ( U selects CP437")
+check("\\e(B", ["charset 0"], "ESC ( B puts Latin-1 back")
+check("\\e(0", [], "DEC line drawing is not read, and is consumed whole")
+check("\\e)U", [], "the G1 slot is not read, and is consumed whole")
+check("\\e(K", [], "a user mapping is not read, and is consumed whole")
+check("A\\e(UB", text("A") + ["charset 1"] + text("B"),
+      "text either side of a selection")
+check("\\e(", ["pending"], "a selection split before its final byte waits")
 check("\\e[999999999m", [], "a parameter past any sane value discards the sequence")
 check("\\e[1;2;3;4;5;6;7;8;9;10;11;12;13;14;15;16;17m", [],
       "more parameters than the parser holds discards the sequence")

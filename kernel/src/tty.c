@@ -135,7 +135,10 @@ static void tty_erase_span(tty_t *t, uint32_t ring_line, uint32_t from, uint32_t
 		line[c].ch = '\0';
 		line[c].attrs = 0;
 		line[c].bg = t->bg;
-		line[c]._pad = 0;
+		// An erased cell has no glyph, so it has no character set either —
+		// zeroed, so a blank made by erasing is identical to one made by
+		// form feed or by never having been written.
+		line[c].charset = OS64_CHARSET_LATIN1;
 		line[c].color = t->color;
 	}
 }
@@ -200,13 +203,18 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 			cell->ch = ch;
 			cell->attrs = t->attrs;
 			cell->bg = t->bg;
-			cell->_pad = 0;
+			// The set this byte was written under travels WITH it, so a
+			// repaint, a walk back through history and gterm's own painter
+			// all draw what the program wrote — not what the terminal was
+			// told most recently.
+			cell->charset = t->charset;
 			cell->color = t->color;
 			if (*glass)
 			{
 				uint32_t fg, bg;
 				tty_cell_colors(t, cell, &fg, &bg);
-				renderer_glass_putc_bg_locked(ch, t->cur_row, t->cur_col, fg, bg);
+				renderer_glass_putc_bg_locked(ch, cell->charset,
+				                              t->cur_row, t->cur_col, fg, bg);
 			}
 			t->cur_col++;
 			break;
@@ -383,6 +391,14 @@ static void tty_apply_locked(tty_t *t, const ansi_action_t *a, bool *glass)
 		return;   // moving the cursor paints nothing
 	}
 
+	case ANSI_CHARSET:
+		// PART OF THE PEN, beside the colours and the attributes: it says
+		// how the NEXT byte is to be read, and every cell records the answer
+		// that was current when it was written. What is already on the
+		// screen does not change meaning because a program changed its mind.
+		t->charset = (uint8_t)a->params[0];
+		return;
+
 	case ANSI_CURSOR_SAVE:
 		t->save_row = t->cur_row;
 		t->save_col = t->cur_col;
@@ -500,7 +516,7 @@ static void tty_repaint_locked(tty_t *t)
 			char ch = line[c].ch ? line[c].ch : ' ';
 			uint32_t fg, bg;
 			tty_cell_colors(t, &line[c], &fg, &bg);
-			renderer_glass_putc_bg_locked(ch, r, c, fg, bg);
+			renderer_glass_putc_bg_locked(ch, line[c].charset, r, c, fg, bg);
 		}
 	}
 	renderer_glass_blit_locked();

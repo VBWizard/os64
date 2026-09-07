@@ -420,7 +420,8 @@ so os64 implements an escape WHEN SOMETHING ASKS FOR ONE and not before
 colour and attributes), `ESC[<r>;<c>H` (cursor position), `ESC[<n>A/B/C/D`
 (move the cursor from where it is) with `ESC[s`/`ESC[u` (save it, put it
 back), `ESC[<n>J` and `ESC[<n>K` (erase display, erase line), and
-`ESC]11;#rrggbb` (OSC 11 — the terminal's own background). The relative
+`ESC]11;#rrggbb` (OSC 11 — the terminal's own background), and `ESC ( U` /
+`ESC ( B` (which character set a byte over 0x7F draws as). The relative
 moves and the saved cursor are ANSI art's, and they arrived TOGETHER on
 purpose: `ESC[s ESC[255B ESC[6n ESC[u` is how a program asks how tall a
 terminal is, so obeying the move without the restore strands the cursor at
@@ -448,8 +449,9 @@ first time a program with better taste in terminals runs.
   focus changes and history views. Per tty; gterm's use of this paper is
   deferred in DEBTS.md.
 - **A cell costs the same eight bytes it always did**: the glyph, an
-  attribute byte, a background palette INDEX, and the 32-bit foreground.
-  One byte remains padding. Size and field offsets are static-asserted
+  attribute byte, a background palette INDEX, the CHARACTER SET the glyph
+  was written under, and the 32-bit foreground. No byte is spare now — the
+  charset took the padding. Size and field offsets are static-asserted
   against `os64_pty_cell_t` because gterm renders the same cells in ring 3.
   The background index covers the supported sixteen-colour SGR subset plus
   default paper; extended indexed and RGB SGR colours are consumed without
@@ -459,7 +461,27 @@ first time a program with better taste in terminals runs.
 - A background of ZERO means "this terminal's own", not black. New grids
   and form-feed clearing use zeroed cells; scrolling and ANSI erasure use
   the active SGR background. Fixture: `/tests/ansiprobe` (add `paper` to
-  change the background)
+  change the background, `cp437` for the high half both ways)
+- **WHAT A BYTE OVER 0x7F DRAWS AS IS THE TERMINAL'S ANSWER, AND THE CELL
+  REMEMBERS IT** (`abi/include/os64/charset.h`). os64 has two consumers who
+  want different things from the same byte and neither is wrong: a gopher
+  menu written in 1994 is Latin-1 (the byte IS the glyph index, which is
+  what the console has always drawn), and ANSI art is CP437 — 0xB0..0xDF
+  are the shades, half blocks and box-drawing set the whole art form is
+  made of. So the set is PER TERMINAL, chosen by the program with `ESC ( U`
+  / `ESC ( B`, and VT1 can show a Latin-1 menu while VT2 shows a board.
+  The set is part of the PEN, but it is recorded on every CELL: what is
+  already on the screen must not change meaning because a program changed
+  its mind, and a repaint, a walk back through history and gterm's ring-3
+  painter all have to draw what was written. The table is INDICES into the
+  shipped face, written down because gterm's embedded font carries no
+  Unicode table to derive them from — and `charset_verify` (video.c)
+  re-derives every entry from the console face's own table at boot and says
+  so under `DEBUG_BOOT` if one moved. Five glyphs the face lacks (the dark
+  shade and the four half blocks) are supplied as bitmaps because art
+  cannot be drawn without them; the rest of a missing entry draws BLANK,
+  which reads as missing rather than as corruption — approximating a
+  box-drawing character is a lie about what the program asked for.
 
 ### SMP (Symmetric Multiprocessing)
 

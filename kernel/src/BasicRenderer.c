@@ -9,6 +9,7 @@
 #include "kmalloc.h"   // renderer_attach_shadow — the console's RAM mirror
 #include "tty.h"       // print_n's router half: grids up -> bytes go to VT1
 #include "gui/compositor.h"  // gui_owns_glass — "is the iron the GUI's right now?"
+#include "os64/charset.h"    // which bitmap draws a byte over 0x7F
 
 extern BasicRenderer kRenderer;
 uint32_t kFrameBufferBackgroundColor;
@@ -495,12 +496,29 @@ void print(const char* str) {
 // 256 or 512 glyphs, so every unsigned byte is a glyph that exists. (Codex
 // review, PR #52 round 8, 2026-09-03 — found by following an http.c
 // predicate's claim that every byte it accepted was safely drawn.)
+// WHICH BITMAP DRAWS THIS BYTE, which is a question with two answers above
+// 0x7F and one below it. Under Latin-1 the byte IS the glyph index, which is
+// what this renderer has always done; under CP437 the byte is a code point
+// and the face's glyph for it is somewhere else entirely — 0xB0 is the light
+// shade, and it lives at glyph 203. os64/charset.h holds the map, on the ABI
+// shelf, because gterm draws the same bytes from the same cells in ring 3.
+static const uint8_t *glyph_for(BasicRenderer *basicrenderer, unsigned char chr,
+                                uint8_t charset)
+{
+    const struct PSF1_HEADER *head = basicrenderer->psf1_font->psf1_header;
+    uint32_t nglyphs = (head->mode & 0x01) ? 512 : 256;
+
+    return os64_charset_glyph(chr, charset,
+                              (const uint8_t *)basicrenderer->psf1_font->glyph_buffer,
+                              nglyphs, head->charsize);
+}
+
 static void put_char_colors(BasicRenderer *basicrenderer, unsigned char chr,
-                            unsigned int xOff, unsigned int yOff,
+                            uint8_t charset, unsigned int xOff, unsigned int yOff,
                             uint32_t fg, uint32_t bg)
 {
     unsigned int *pixPtr = (unsigned int *)basicrenderer->framebuffer->base_address;
-    char *fontPtr = (char *)basicrenderer->psf1_font->glyph_buffer + (chr * basicrenderer->psf1_font->psf1_header->charsize);
+    const char *fontPtr = (const char *)glyph_for(basicrenderer, chr, charset);
 
     for (unsigned long y = yOff; y < yOff + 16; y++)
     {
@@ -528,9 +546,12 @@ static void put_char_colors(BasicRenderer *basicrenderer, unsigned char chr,
     }
 }
 
+// The kernel's own printing door, and LATIN-1 always: print_n serves the log
+// banner and the panic path, which belong to no terminal and so have no
+// charset a program could have changed underneath them.
 void put_char(BasicRenderer *basicrenderer, unsigned char chr, unsigned int xOff, unsigned int yOff)
 {
-    put_char_colors(basicrenderer, chr, xOff, yOff,
+    put_char_colors(basicrenderer, chr, OS64_CHARSET_LATIN1, xOff, yOff,
                     basicrenderer->color, kFrameBufferBackgroundColor);
 }
 
@@ -579,13 +600,14 @@ void renderer_glass_putc_locked(char ch, uint32_t row, uint32_t col, uint32_t co
 	put_char(&kRenderer, ch, col * FONT_WIDTH, row * FONT_HEIGHT);
 }
 
-void renderer_glass_putc_bg_locked(char ch, uint32_t row, uint32_t col,
+void renderer_glass_putc_bg_locked(char ch, uint8_t charset,
+                                   uint32_t row, uint32_t col,
                                    uint32_t fg, uint32_t bg)
 {
 	// Same contract as the putc above, with the background named. Does NOT
 	// touch kRenderer.color: an overlay is a temporary lie about one cell,
 	// and the tty's idea of the current write color must survive it intact.
-	put_char_colors(&kRenderer, ch, col * FONT_WIDTH, row * FONT_HEIGHT, fg, bg);
+	put_char_colors(&kRenderer, ch, charset, col * FONT_WIDTH, row * FONT_HEIGHT, fg, bg);
 }
 
 void renderer_glass_scroll_locked(void)

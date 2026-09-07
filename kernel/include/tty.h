@@ -8,6 +8,7 @@
 #include "spinlock.h"
 #include "ansi.h"                     // the escape reader's state, held per tty
 #include "os64/ansi.h"                // the palette both renderers paint from
+#include "os64/charset.h"             // and which bitmap a byte over 0x7F draws as
 
 // tty.h — the virtual terminal object (2026-08-08, "I WANT MY VTs!").
 //
@@ -66,7 +67,7 @@ typedef struct tty_cell
 	char ch;                           // 0 = blank
 	uint8_t attrs;                     // OS64_ANSI_ATTR_* (bold, reverse)
 	uint8_t bg;                        // palette index+1; 0 = the tty's own
-	uint8_t _pad;
+	uint8_t charset;                   // OS64_CHARSET_* this byte was written under
 	uint32_t color;                    // foreground, XRGB
 } tty_cell_t;
 
@@ -111,6 +112,12 @@ typedef struct tty
 	// can be a different colour from VT1, and a gterm from both.
 	uint8_t  attrs;                    // OS64_ANSI_ATTR_*
 	uint8_t  bg;                       // palette index+1; 0 = glass_bg
+	// What a byte over 0x7F DRAWS as on this terminal — OS64_CHARSET_LATIN1
+	// or _CP437, chosen by the program with `ESC ( B` / `ESC ( U`. Per tty
+	// because os64 has both kinds of consumer at once: a gopher menu from
+	// 1994 is Latin-1 and a BBS's art is CP437, and a machine-wide answer
+	// would have to be wrong for one of them.
+	uint8_t  charset;
 	uint8_t  fg_index;                 // which palette entry `color` came from,
 	                                   // or TTY_FG_NOT_INDEXED — kept so that a
 	                                   // later bold can brighten a colour chosen

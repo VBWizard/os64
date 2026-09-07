@@ -108,7 +108,11 @@ void renderer_glass_putc_locked(char ch, uint32_t row, uint32_t col, uint32_t co
 // paint one cell differently from the console's one background color.
 // Inverse video (swap the two) is the text-console selection's highlight and
 // its mouse pointer; see vt_select.c. Leaves kRenderer.color untouched.
-void renderer_glass_putc_bg_locked(char ch, uint32_t row, uint32_t col,
+// `charset` is the TERMINAL's, not the renderer's: it decides which bitmap a
+// byte over 0x7F draws as (os64/charset.h). Every caller that has a tty in
+// hand passes that tty's; the kernel's own printing passes Latin-1.
+void renderer_glass_putc_bg_locked(char ch, uint8_t charset,
+                                   uint32_t row, uint32_t col,
                                    uint32_t fg, uint32_t bg);
 extern uint32_t kFrameBufferBackgroundColor;   // the console's one background
 void renderer_glass_scroll_locked(void);   // one text line up (throttled blit)

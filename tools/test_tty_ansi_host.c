@@ -24,10 +24,10 @@ void renderer_glass_defer_locked(void) {}
 void renderer_glass_blit_locked(void) { paints++; }
 void renderer_glass_clear_locked(void) {}
 void renderer_glass_background_locked(uint32_t c) { paper = c; }
-void renderer_glass_putc_bg_locked(char ch, uint32_t r, uint32_t c,
+void renderer_glass_putc_bg_locked(char ch, uint8_t charset, uint32_t r, uint32_t c,
                                   uint32_t fg, uint32_t bg)
 {
-    (void)ch;
+    (void)ch; (void)charset;
     check(r < 4 && c < 8, "paint outside fixture");
     painted_fg[r][c] = fg;
     painted_bg[r][c] = bg;

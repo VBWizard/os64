@@ -2011,9 +2011,9 @@ _Static_assert(__builtin_offsetof(tty_cell_t, attrs) ==
 _Static_assert(__builtin_offsetof(tty_cell_t, bg) ==
                __builtin_offsetof(os64_pty_cell_t, bg),
                "pty cell ABI drifted from tty_cell_t (bg offset)");
-_Static_assert(__builtin_offsetof(tty_cell_t, _pad) ==
-               __builtin_offsetof(os64_pty_cell_t, _pad),
-               "pty cell ABI drifted from tty_cell_t (_pad offset)");
+_Static_assert(__builtin_offsetof(tty_cell_t, charset) ==
+               __builtin_offsetof(os64_pty_cell_t, charset),
+               "pty cell ABI drifted from tty_cell_t (charset offset)");
 _Static_assert(__builtin_offsetof(tty_cell_t, color) ==
                __builtin_offsetof(os64_pty_cell_t, color),
                "pty cell ABI drifted from tty_cell_t (color offset)");

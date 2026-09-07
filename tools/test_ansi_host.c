@@ -23,6 +23,7 @@ static const char *kind_name(ansi_action_kind_t k)
         case ANSI_ERASE_DISPLAY:  return "ed";
         case ANSI_ERASE_LINE:     return "el";
         case ANSI_GLASS_BG:       return "bg";
+        case ANSI_CHARSET:        return "charset";
     }
     return "?";
 }
