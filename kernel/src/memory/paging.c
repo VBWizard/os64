@@ -547,10 +547,29 @@ static pt_entry_t *paging_walk_or_create_level(pt_entry_t *table, uint64_t idx,
     }
 }
 
+void paging_init_null_guard(pt_entry_t *pml4v, struct arena *tableSource)
+{
+    // The root is inactive. Build a private low-page table with an absent
+    // leaf, so later mappings in this region preserve the NULL guard.
+    pt_entry_t *pdpt = paging_walk_or_create_level(pml4v, 0, 0, tableSource, "PDPT", 0);
+    pt_entry_t *pd = paging_walk_or_create_level(pdpt, 0, 0, tableSource, "PD", 0);
+    pt_entry_t *pt = paging_walk_or_create_level(pd, 0, 0, tableSource, "PT", 0);
+    if (pt[0] != 0)
+        pt[0] = 0;
+}
+
 void paging_map_page(pt_entry_t *pml4v, uint64_t virtual_address, uint64_t physical_address, uint64_t flags) {
     // Align addresses to 4 KB boundaries
     physical_address &= PAGE_ADDRESS_MASK;
     virtual_address &= PAGE_ADDRESS_MASK;
+
+    // Check after alignment: offsets within the NULL page are forbidden too.
+    // Refuse before walking, so even intermediate entries stay untouched.
+    if (virtual_address == 0) {
+        printd(DEBUG_PAGING, "PAGING: refusing to map virtual page zero (pml4 0x%016lx, physical 0x%016lx)\n",
+               (uintptr_t)pml4v, physical_address);
+        return;
+    }
 
 	// Flags that must be present at EVERY level of the walk, not just the PTE:
 	// on x86-64 an access is only permitted if the needed right exists in the
@@ -923,10 +942,8 @@ void init_os64_paging_tables()
 	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual pml4 (%p) to physical pml4 (%p)\n", pml4v, pml4p);
 	paging_map_page(pml4v, (uintptr_t)pml4v, (uintptr_t)pml4p, PAGE_PRESENT | PAGE_WRITE);
 
-	//make page 0 invalid
-	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map page 0\n");
-	printd(DEBUG_PAGING | DEBUG_DETAILED,"\tPAGING: Mapping virtual page 0 to physical page 0 (not present)\n");
-	paging_map_page(pml4v, 0, 0, 0); 
+	// A ring-0 NULL dereference must fault instead of reading the BIOS page.
+	paging_init_null_guard(pml4v, NULL);
 
 	//Map the page pool into the new structure
 	printd(DEBUG_PAGING | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "* PAGING: Map paging page pool\n");

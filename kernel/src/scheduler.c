@@ -702,7 +702,9 @@ void debug_print_registers(uint64_t apic_id, char* prefix)
 void scheduler_store_thread(core_local_storage_t *cls, thread_t* thread)
 {
     int apic_id = cls->apic_id;
-	task_t* task = (task_t*)cls->currentThread->ownerTask;
+    // The first BSP save precedes scheduler_load_thread's CLS publication.
+    // The outgoing thread argument already identifies the owner to save.
+    task_t* task = (task_t*)thread->ownerTask;
     if (apic_id > 0 && mp_timesEnteringScheduler[apic_id]==1)
     {
         printd(DEBUG_SCHEDULER,"storeISRSavedRegs: AP hasn't been through the scheduler before, not saving registers\n");

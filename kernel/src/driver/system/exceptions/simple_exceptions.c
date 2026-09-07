@@ -9,6 +9,7 @@
 #include "stack_trace.h"   // symbolized ring-3 call chains (NOTRACE-gated)
 #include "signals.h"       // SIGNALS_EXIT_SIGSEGV — the status a fault death leaves
 #include "CONFIG.h"
+#include "driver/system/x86_64.h"   // read_apic_id works before this CPU installs GS
 #include "msr.h"        // rdmsr64 — GS_BASE in the fault report
 #include "log.h"
 #include "memory/paging.h"
@@ -124,7 +125,7 @@ static bool fault_address_readable(uint64_t address)
 	if (address_is_mapped(address)) {
 		return true;
 	}
-	core_local_storage_t *cls = get_core_local_storage();
+	core_local_storage_t *cls = try_get_core_local_storage();
 	task_t *t = (cls != NULL) ? (task_t *)cls->task : NULL;
 	if (t == NULL || t->pml4v == 0) {
 		return false;
@@ -365,14 +366,9 @@ void dump_fault_registers(bool direct)
 	// the shape of the corruption family this OS spent weeks on.
 	//
 	// The SELECTOR is the useless half; in long mode the base comes from
-	// IA32_GS_BASE, so that MSR is what gets printed. And because os64 uses
-	// SWAPGS NOWHERE (verified — the base is written once per core at bring-up
-	// in smp_core.c and never swapped), this value has one correct answer at
-	// all times, in ring 0 and ring 3 alike: it must point into the
-	// kCoreLocalStorage array. So we do not merely print it, we CHECK it — a
-	// number a reader has to validate by hand is a number that gets skimmed
-	// past. If this ever says WRONG, stop reading the rest of the report and
-	// believe this line first.
+	// IA32_GS_BASE, so that MSR is what gets printed. After CLS initialization
+	// it should point into kCoreLocalStorage in ring 0 and ring 3 alike.
+	// During CPU bring-up, zero is expected until that CPU installs GS.
 	{
 		uint64_t gs_base = rdmsr64(IA32_GS_BASE);
 		uint64_t cls_lo = (uint64_t)&kCoreLocalStorage[0];
@@ -380,7 +376,8 @@ void dump_fault_registers(bool direct)
 		bool sane = (gs_base >= cls_lo && gs_base < cls_hi);
 		FAULT_PRINT(direct, ">>> GS_BASE 0x%016lx  (%s) <<<\n",
 		                gs_base,
-		                sane ? "in kCoreLocalStorage — ok"
+		                (!kSMPInitDone && gs_base == 0) ? "not initialized (early boot)"
+		                     : sane ? "in kCoreLocalStorage — ok"
 		                     : "*** OUTSIDE kCoreLocalStorage — GS IS WRONG ***");
 	}
 	FAULT_PRINT(direct, ">>> R8  0x%016lx  R9  0x%016lx  R10 0x%016lx  R11 0x%016lx <<<\n",
@@ -413,7 +410,7 @@ void dump_fault_registers(bool direct)
 
 
 void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
-    core_local_storage_t* core = get_core_local_storage();
+    core_local_storage_t* core = try_get_core_local_storage();
 
     // One narrator per report (exception_report.h) — without this, two cores
     // faulting together braid their reports character-by-character on COM1,
@@ -421,7 +418,8 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     exception_wire_lock();
 
     EXCEPTION_PRINT("\n>>> EXCEPTION PANIC: %s <<<                      \n", message);
-    EXCEPTION_PRINT(">>> AP %lu (Thread 0x%08x) <<<                        \n", core->apic_id, core->threadID);
+    EXCEPTION_PRINT(">>> AP %lu (Thread 0x%08x) <<<                        \n",
+                    (uint64_t)read_apic_id(), core ? core->threadID : 0);
     EXCEPTION_PRINT(">>> Faulting instruction: 0x%016lx <<<             \n", rip);
 
     if (error_code != 0xFFFFFFFFFFFFFFFF) {
@@ -467,7 +465,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     EXCEPTION_PRINT(">>> CR2: 0x%016lx (page-fault address; STALE unless this is a #PF)  CR3: 0x%016lx <<<\n",
                     cr2_val, cr3_val);
     EXCEPTION_PRINT(">>> Interrupted RSP: 0x%016lx <<<      \n",
-                    mp_isrSavedRSP[core->apic_id]);
+                    core ? mp_isrSavedRSP[core->apic_id] : 0);
 
     // The register set the fault interrupted. Free (already pushed by the
     // stub), always safe, and frequently the whole answer — CR2 says WHAT
@@ -487,7 +485,7 @@ void exception_panic(const char* message, uint64_t rip, uint64_t error_code) {
     // instead of confidently walking the last page fault's stack.
     dump_stack_trace(rip, true);
 
-    if (core->currentThread) {
+    if (core && core->currentThread) {
 		task_t *task = (task_t*)core->currentThread->ownerTask;
 
         EXCEPTION_PRINT(">>> Excepting Task: %s <<<                         \n", task->path);
@@ -527,11 +525,10 @@ void handle_invalid_opcode(uint64_t rip) {
 // something wrong.
 void handle_double_fault_frame(uint64_t rip, uint64_t rsp, uint64_t rflags)
 {
-	core_local_storage_t *core = get_core_local_storage();
 	// EXCEPTION_PRINT, not FAULT_PRINT: a #DF is as dying as it gets. The wire
 	// copy is the only one that can be trusted to survive, and touching a log
 	// queue here risks a lock this core may already hold.
-	EXCEPTION_PRINT("\n>>> DOUBLE FAULT on AP %lu <<<\n", core ? core->apic_id : 0);
+	EXCEPTION_PRINT("\n>>> DOUBLE FAULT on AP %lu <<<\n", (uint64_t)read_apic_id());
 	EXCEPTION_PRINT(">>> RIP=0x%016lx RSP=0x%016lx RFLAGS=0x%016lx <<<\n", rip, rsp, rflags);
 	// Name the usual suspects rather than making a reader decode bits.
 	if (rflags & 0x100)   EXCEPTION_PRINT(">>>   RFLAGS.TF set — single-step on a kernel thread <<<\n");
@@ -608,7 +605,7 @@ void handle_unexpected_exception(uint64_t vector, uint64_t error_code, uint64_t 
 
 void user_exception_kill(exception_context_t *ctx)
 {
-	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
+	core_local_storage_t *cls = try_get_core_local_storage();
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	task_t *task = thread ? (task_t *)thread->ownerTask : NULL;
 	if (task == NULL || task->kernelTask)
@@ -722,7 +719,7 @@ static void __attribute__((noreturn)) page_fault_panic(const char *why, uint64_t
 // itself faulted, or the faulted stack can't hold the frame — §9's limit).
 static bool try_catch_segv(task_t *task)
 {
-	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
+	core_local_storage_t *cls = try_get_core_local_storage();
 	thread_t *thread = cls ? cls->currentThread : NULL;
 	exception_context_t *ctx = exception_current_context();
 	if (thread == NULL || ctx == NULL)
@@ -783,7 +780,7 @@ static void __attribute__((noreturn)) user_fault_kill(task_t *task, const char *
 		{
 			uint64_t liveCr3;
 			__asm__ volatile("mov %0, cr3" : "=r"(liveCr3));
-			core_local_storage_t *dcls = get_core_local_storage();
+			core_local_storage_t *dcls = try_get_core_local_storage();
 			thread_t *dthr = (dcls != NULL) ? dcls->currentThread : NULL;
 			uintptr_t rspPhys = task->pml4v ? paging_walk_paging_table((pt_entry_t *)task->pml4v, ctx->rsp) : 0;
 			uintptr_t ripPhys = task->pml4v ? paging_walk_paging_table((pt_entry_t *)task->pml4v, ctx->rip) : 0;
@@ -856,16 +853,29 @@ void handle_page_fault(uint64_t cr2, uint64_t error_code, uint64_t rip)
     // line loses nothing when a fault is actually news.
     printd(DEBUG_DEMAND_PAGING, "PAGE FAULT at RIP=0x%016lx, CR2=0x%016lx, ERROR=0x%lx\n", rip, cr2, error_code);
 
-    // Guard against faults BEFORE per-core state exists (early boot: CLS not
-    // allocated and/or GS base not programmed). Without this, [gs:0] returns
-    // junk, ->task is junk, and vma_lookup faults on the junk pointer — the
-    // handler then re-enters itself until the stack dies in a triple fault,
-    // taking the diagnosable panic below with it.
-    task_t *task = kCLSInitialized ? get_core_local_storage()->task : NULL;
+    // Early faults have no task context until GS-based CLS is installed.
+    // Do not read it to look up a VMA before that initialization.
+    core_local_storage_t *cls = try_get_core_local_storage();
+    task_t *task = cls ? cls->task : NULL;
     if (!task)
     {
         page_fault_panic("no task context (early boot?)", cr2, error_code, rip);
     }
+
+    // A VMA cannot override the first-page guard. Refuse before resolving
+    // backing pages: the mapper rejects this address, so retrying would
+    // fault again and could allocate an unreachable frame on each pass.
+    if (cr2 < PAGE_SIZE)
+    {
+        if (error_code & 0x4)
+        {
+            if (try_catch_segv(task))
+                return;
+            user_fault_kill(task, "access to guarded page zero", cr2, error_code, rip);
+        }
+        page_fault_panic("access to guarded page zero", cr2, error_code, rip);
+    }
+
     vma_t *vma = vma_lookup(task, cr2);
     if (!vma)
     {

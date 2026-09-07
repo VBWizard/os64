@@ -661,7 +661,9 @@ void restore_user_cr3(void)
 // An app must not be able to panic the OS by handing a syscall a garbage
 // pointer (ls did exactly that, 2026-07-22), so every page of a user range is
 // vetted before the memcpy touches it:
-//   - VMA-covered → legal: a not-present page is just demand paging waiting
+//   - First virtual page → reject: the pager cannot resolve the NULL guard,
+//     even if a VMA covers it.
+//   - Other VMA-covered pages → legal: a not-present page is demand paging waiting
 //     to happen.  For copy-OUT the VMA must also be writable — a store to a
 //     read-only page would be a ring-0 protection violation, another panic
 //     door.  (CoW pages pass correctly: their VMA says PROT_WRITE and the
@@ -672,12 +674,15 @@ void restore_user_cr3(void)
 //     SYSCALL_RESULT_BAD_USER_DATA instead of the kernel faulting.
 static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
 {
+	uintptr_t addr = (uintptr_t)user_ptr;
+	if (addr < PAGE_SIZE)
+		return false;
+
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
 	if (task == NULL)
 		return false;
 
-	uintptr_t addr = (uintptr_t)user_ptr;
 	uintptr_t end = addr + length;   // no overflow: callers range-check vs kHHDMOffset first
 
 	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)

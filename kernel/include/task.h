@@ -371,6 +371,10 @@
 	// exited). Incremented as task_destroy's very last act.
 	extern uint64_t kTaskBurialCount;
 
+    // Initialize a fresh task's private page tables, without threads or scheduling.
+    // Release tableArena after the address space is no longer in use.
+    void task_init_page_tables(task_t *task);
+
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
 	void task_exit_with_retval(void);   // asm stub: captures RAX into task->retVal then calls task_exit

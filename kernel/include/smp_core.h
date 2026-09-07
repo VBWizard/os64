@@ -1,6 +1,7 @@
 #ifndef SMP_CORE_H
 #define SMP_CORE_H
 #include "smp.h"
+#include "msr.h"
 
 #define TIMER_SYNC_ITERATIONS 3
 #define IA32_GS_BASE 0xC0000101 
@@ -139,6 +140,22 @@ static inline core_local_storage_t* get_core_local_storage(void)
         : "=r"(cls)
     );
     return cls;
+}
+
+// Exception paths can run on an AP before it installs GS, while the BSP's
+// global kCLSInitialized flag is already set. Check this CPU's base before
+// dereferencing it, including the window before the self pointer is stored.
+static inline core_local_storage_t *try_get_core_local_storage(void)
+{
+    uintptr_t base = rdmsr64(IA32_GS_BASE);
+    uintptr_t first = (uintptr_t)&kCoreLocalStorage[0];
+    uintptr_t limit = (uintptr_t)&kCoreLocalStorage[MAX_CPUS];
+    if (base < first || base >= limit ||
+        (base - first) % sizeof(core_local_storage_t) != 0)
+        return NULL;
+
+    core_local_storage_t *cls = (core_local_storage_t *)base;
+    return cls->self == cls ? cls : NULL;
 }
 
 static inline core_local_storage_t* get_core_local_storage_for_core(uint64_t coreNum)
