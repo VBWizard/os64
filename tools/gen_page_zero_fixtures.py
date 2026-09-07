@@ -59,7 +59,9 @@ def main():
     )
     script = ['cd "$1" || exit 1']
     for name, address, file_backed, expected in cases:
-        (args.outdir / name).write_bytes(elf_image(address, file_backed))
+        fixture = args.outdir / name
+        fixture.write_bytes(elf_image(address, file_backed))
+        fixture.chmod(0o755)
         script += [
             f"./{name}",
             "result=$?",
