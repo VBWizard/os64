@@ -854,12 +854,46 @@ static void tcp_absorb_held(tcp_conn_t* c)
 }
 
 // ── 3. THE STATE MACHINE ────────────────────────────────────────────────────
+// THE WAKE CONDITIONS, level-triggered and always re-evaluated: a reader
+// wakes for bytes, for EOF, or for death; a writer wakes when an ack has
+// made room in the ring, or for death. (Same doctrine as pipes — a wake is
+// a hint, never a promise, and both sleepers re-test after waking.) The
+// doorbell exit below and the tick sweep (tcp_wake_if_ready) ask these
+// same two functions, so the two doors cannot drift apart: a writer's
+// wait is for RING SPACE, not for an empty flight, and an ack that
+// retires part of a full ring is what lets a bulk upload keep the window
+// full. The ISLEEP test is part of the condition (see the long note in
+// icmp_conn.c): a waiter that registered but has not yet parked must stay
+// registered, or its wake is silently dropped and it sleeps the whole
+// backstop second. A claimed waiter is unregistered here and woken by the
+// caller once the lock is gone. Caller holds c->lock.
+static thread_t* tcp_claim_reader_if_ready(tcp_conn_t* c)
+{
+	thread_t* r = c->reader;
+	if (r == NULL || r->threadState != THREAD_STATE_ISLEEP ||
+	    !(c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
+		return NULL;
+	c->reader = NULL;
+	return r;
+}
+
+static thread_t* tcp_claim_writer_if_ready(tcp_conn_t* c)
+{
+	thread_t* w = c->writer;
+	if (w == NULL || w->threadState != THREAD_STATE_ISLEEP ||
+	    !(c->snd_count < TCP_SND_BUF || c->reset || c->state == TCP_CLOSED))
+		return NULL;
+	c->writer = NULL;
+	return w;
+}
+
 // WAKE ON ARRIVAL (DOORBELL.md): tcp_input's exit for every path that
 // changed something a parked reader or writer is waiting on. tcp_input
 // runs in knet, a thread, so it may take the scheduler's queue lock the
 // way pipe_read does — which the tick pass it used to run inside could
-// not. The condition is the sweep's (tcp_wake_if_ready), evaluated under
-// the connection lock; the wake happens after that lock is released so
+// not. The conditions are tcp_claim_*_if_ready's, shared with the sweep
+// (tcp_wake_if_ready) and evaluated under the connection lock; the wake
+// happens after that lock is released so
 // the two are never held together, and past the release only the captured
 // thread pointers are touched — the conn may be the reaper's by then. The
 // sweep stays: it catches a waiter that registered but had not yet parked,
@@ -868,19 +902,8 @@ static void tcp_absorb_held(tcp_conn_t* c)
 // Caller holds c->lock; this releases it.
 static void tcp_input_wake_and_unlock(tcp_conn_t* c, uint64_t irqflags)
 {
-	thread_t *wake_reader = NULL, *wake_writer = NULL;
-	if (c->reader != NULL && c->reader->threadState == THREAD_STATE_ISLEEP &&
-	    (c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
-	{
-		wake_reader = c->reader;
-		c->reader = NULL;
-	}
-	if (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP &&
-	    (!tcp_unacked(c) || c->reset || c->state == TCP_CLOSED))
-	{
-		wake_writer = c->writer;
-		c->writer = NULL;
-	}
+	thread_t* wake_reader = tcp_claim_reader_if_ready(c);
+	thread_t* wake_writer = tcp_claim_writer_if_ready(c);
 	spinlock_release_irqrestore(&c->lock, irqflags);
 	if (wake_reader) scheduler_wake_isleep_thread(wake_reader);
 	if (wake_writer) scheduler_wake_isleep_thread(wake_writer);
@@ -1763,29 +1786,12 @@ void tcp_wake_if_ready(void)
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	for (tcp_conn_t* c = kTcpConnList; c != NULL; c = c->next)
 	{
-		thread_t *r = NULL, *w = NULL;
 		uint64_t irqflags = spinlock_acquire_irqsave(&c->lock);
-		// Level-triggered, always re-evaluating the CONDITION: a reader
-		// wakes for bytes, for EOF, or for death; a writer wakes when an
-		// ack has made room in the ring, or for death. (Same doctrine as
-		// pipes — a wake is a hint, never a promise, and both sleepers
-		// re-test after waking.)
-		// The ISLEEP test is part of the condition (see the long note in
-		// icmp_conn.c): a waiter that registered but has not yet parked
-		// must stay registered, or its wake is silently dropped and it
-		// sleeps the whole backstop second.
-		if (c->reader != NULL && c->reader->threadState == THREAD_STATE_ISLEEP &&
-		    (c->rcv_count > 0 || c->rcv_fin || c->reset || c->state == TCP_CLOSED))
-		{
-			r = c->reader;
-			c->reader = NULL;
-		}
-		if (c->writer != NULL && c->writer->threadState == THREAD_STATE_ISLEEP &&
-		    (c->snd_count < TCP_SND_BUF || c->reset || c->state == TCP_CLOSED))
-		{
-			w = c->writer;
-			c->writer = NULL;
-		}
+		// The conditions are tcp_claim_*_if_ready's, shared with the
+		// doorbell exit; this sweep is the backstop for a waiter that
+		// registered but had not yet parked when its wake went by.
+		thread_t* r = tcp_claim_reader_if_ready(c);
+		thread_t* w = tcp_claim_writer_if_ready(c);
 		spinlock_release_irqrestore(&c->lock, irqflags);
 
 		if (r) scheduler_wake_isleep_thread_locked(r);

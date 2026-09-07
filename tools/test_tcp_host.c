@@ -331,10 +331,29 @@ static void test_arp_hold(void)
 	cleanup(c);
 }
 
+static void test_writer_wake(void)
+{
+	// A writer parked on a full ring is woken by the ACK that makes room,
+	// on tcp_input's own exit — not when the whole flight has drained, and
+	// not at the next sweep. The reader's condition is the same door.
+	thread_t writer = {THREAD_STATE_ISLEEP}, reader = {THREAD_STATE_ISLEEP};
+	tcp_conn_t* c = init(); c->snd_count = TCP_SND_BUF; tcp_output(c, 0);
+	assert(tcp_unacked(c) && c->snd_max - c->snd_una == 10000);
+	c->writer = &writer; c->reader = &reader;
+	ack(c, 1000, 65535); assert(c->writer == &writer);        // no room made
+	ack(c, 2000, 65535); assert(c->writer == NULL);           // room, flight still out
+	assert(c->reader == &reader);                              // nothing to read yet
+	c->writer = &writer; writer.threadState = 0;
+	ack(c, 3000, 65535); assert(c->writer == &writer);        // not parked yet: stays registered
+	incoming(c, c->rcv_nxt, c->snd_una, 65535, TCP_ACK | TCP_FIN);
+	assert(c->reader == NULL);                                 // EOF wakes the reader
+	cleanup(c);
+}
+
 int main(void)
 {
 	test_submissions(); test_handshake_reset(); test_lifetime(); test_rto(); test_congestion();
-	test_persist(); test_wrap_fin_window(); test_stream(); test_arp_hold();
-	puts("TCP host: submission, lifetime, RTO, congestion, persist, ring/sequence/FIN, ARP-hold tests PASS");
+	test_persist(); test_wrap_fin_window(); test_stream(); test_arp_hold(); test_writer_wake();
+	puts("TCP host: submission, lifetime, RTO, congestion, persist, ring/sequence/FIN, ARP-hold, writer-wake tests PASS");
 	return 0;
 }
