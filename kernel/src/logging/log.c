@@ -687,23 +687,15 @@ bool logd_thread(bool daemon) {
             nonDaemonRunSuccess = processed_logs > 0;
             drain_pass++;
 
-            // Print queue depths directly to serial, so we can monitor buffer
-            // pressure without adding to the ring buffers themselves (which
-            // would skew the numbers). Quiet passes always print; while a
-            // backlog persists the heartbeat is rate-limited to every
-            // LOGD_STATS_EVERY-th pass so it can't flood the wire it reports
-            // on. Per-pass visibility cracked the 2026-07 slow-walk, and the
-            // 2026-07-11 eternal-drain bug was spotted precisely because this
-            // line STOPPED printing — keep it alive under all conditions. AP
-            // is the core the pass ran on — kworker drains from AP1 every 2s
-            // through this same code, so without it the stats can't tell the
-            // two drainers apart.
+            // Prepare queue-depth diagnostics without adding to the rings.
+            // The serial output call below is disabled; formatting still runs
+            // and must be safe before GS-based CLS is installed.
             if (!backlog || (drain_pass % LOGD_STATS_EVERY) == 0)
             {
                 char stats[128];
                 int pos = snprintf(stats, sizeof(stats),
                     "[logd] AP%u tick=%lu pass=%u drained=%d",
-                    get_core_local_storage()->apic_id, kTicksSinceStart, drain_pass, processed_logs);
+                    read_apic_id(), kTicksSinceStart, drain_pass, processed_logs);
                 for (int c = 0; c < kMPCoreCount && pos < (int)sizeof(stats) - 32; c++) {
                     log_buffer_t *b = &core_log_buffers[c];
                     size_t used = (b->head >= b->tail)
