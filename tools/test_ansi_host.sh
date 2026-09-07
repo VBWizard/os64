@@ -63,6 +63,38 @@ check("\\e[H", ["cup"], "no parameters: home, decided by the caller")
 check("\\e[2J", ["ed 2"], "erase display")
 check("\\e[K", ["el"], "erase line, default mode")
 
+# ── Relative movement, and the saved cursor that had to come with it ────
+# ANSI art moves the cursor right instead of writing runs of spaces — it is
+# how the art was compressed in the first place — so an omitted count is by
+# far the commonest spelling and reading it as zero would make the single
+# most frequent sequence in the form do nothing.
+check("\\e[C", ["move 0 1"], "an omitted count is ONE")
+check("\\e[0C", ["move 0 1"], "and so is an explicit zero")
+check("\\e[10C", ["move 0 10"], "cursor right")
+check("\\e[10D", ["move 0 -10"], "cursor left is the same distance, negated")
+check("\\e[3A", ["move -3 0"], "cursor up")
+check("\\e[255B", ["move 255 0"], "cursor down")
+check("\\e[A", ["move -1 0"], "every direction defaults to one")
+check("\\e[B", ["move 1 0"], "every direction defaults to one")
+check("\\e[D", ["move 0 -1"], "every direction defaults to one")
+check("\\e[s", ["scp"], "save the cursor")
+check("\\e[u", ["rcp"], "put it back")
+check("\\e[1;2C", ["move 0 1"],
+      "a relative move reads its FIRST parameter; a second is not its business")
+check("\\e[65535C", ["move 0 65535"],
+      "the largest count a parameter can hold survives — clamping is the terminal's job")
+check("\\e[999999C", [], "a count past any parameter's range discards the sequence")
+# A '?' makes it somebody else's sequence entirely. Without this the mouse
+# tracking a BBS switches on would be read as a cursor move.
+check("\\e[?1000h", [], "mouse tracking is consumed, not obeyed")
+check("\\e[?5C", [], "a private prefix disqualifies what would otherwise be CUF")
+# THE SCREEN-HEIGHT PROBE, whole, exactly as blackflag.acid.org sends it:
+# save, drive the cursor down past any screen, ask where it ended up, put it
+# back. The query has no answer here and is consumed; the save and restore
+# are what keep the drive-down from costing the program its place.
+check("\\e[s\\e[255B\\e[6n\\e[u", ["scp", "move 255 0", "rcp"],
+      "the screen-height probe survives, and leaves the cursor where it started")
+
 # ── OSC 11: the terminal's own background ───────────────────────────────
 check("\\e]11;#001122\\a", ["bg 001122"], "OSC ended by BEL")
 check("\\e]11;#001122\\e\\\\", ["bg 001122"], "OSC ended by ST (ESC backslash)")

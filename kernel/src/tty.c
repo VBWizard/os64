@@ -365,6 +365,37 @@ static void tty_apply_locked(tty_t *t, const ansi_action_t *a, bool *glass)
 		return;   // moving the cursor paints nothing
 	}
 
+	case ANSI_CURSOR_MOVE:
+	{
+		// A RELATIVE MOVE STOPS AT THE EDGE. It does not wrap to the next
+		// line and it does not scroll — a terminal that scrolled here would
+		// answer `ESC[255B` (which is how a program asks how tall you are)
+		// by throwing away 255 lines of somebody's screen.
+		//
+		// Signed arithmetic in 64 bits so that the count a sequence is
+		// allowed to carry cannot wrap the position it is added to.
+		int64_t row = (int64_t)t->cur_row + a->drow;
+		int64_t col = (int64_t)t->cur_col + a->dcol;
+		t->cur_row = row < 0 ? 0
+		           : row >= (int64_t)t->rows ? t->rows - 1 : (uint32_t)row;
+		t->cur_col = col < 0 ? 0
+		           : col >= (int64_t)t->cols ? t->cols - 1 : (uint32_t)col;
+		return;   // moving the cursor paints nothing
+	}
+
+	case ANSI_CURSOR_SAVE:
+		t->save_row = t->cur_row;
+		t->save_col = t->cur_col;
+		return;
+
+	case ANSI_CURSOR_RESTORE:
+		// Clamped on the way out, because the screen may have been resized
+		// between the save and the restore and the remembered place may no
+		// longer be on it.
+		t->cur_row = t->save_row < t->rows ? t->save_row : t->rows - 1;
+		t->cur_col = t->save_col < t->cols ? t->save_col : t->cols - 1;
+		return;
+
 	case ANSI_ERASE_DISPLAY:
 	{
 		uint16_t mode = a->nparams > 0 ? a->params[0] : 0;

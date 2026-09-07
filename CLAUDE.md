@@ -417,9 +417,17 @@ parked reader on arrival instead of at the tick.
 **A terminal that obeys a byte can be told what to do by whoever wrote it**,
 so os64 implements an escape WHEN SOMETHING ASKS FOR ONE and not before
 (Chris's ruling). What is read today, and nothing else: `ESC[<n>m` (SGR —
-colour and attributes), `ESC[<r>;<c>H` (cursor position), `ESC[<n>J` and
-`ESC[<n>K` (erase display, erase line), and `ESC]11;#rrggbb` (OSC 11 — the
-terminal's own background). Everything else is consumed and ignored, which
+colour and attributes), `ESC[<r>;<c>H` (cursor position), `ESC[<n>A/B/C/D`
+(move the cursor from where it is) with `ESC[s`/`ESC[u` (save it, put it
+back), `ESC[<n>J` and `ESC[<n>K` (erase display, erase line), and
+`ESC]11;#rrggbb` (OSC 11 — the terminal's own background). The relative
+moves and the saved cursor are ANSI art's, and they arrived TOGETHER on
+purpose: `ESC[s ESC[255B ESC[6n ESC[u` is how a program asks how tall a
+terminal is, so obeying the move without the restore strands the cursor at
+the foot of the glass, which is worse than ignoring both. A relative move
+clamps at the edge and never scrolls — a terminal that scrolled to answer
+that probe would throw away a screen of output to describe its own size.
+Everything else is consumed and ignored, which
 is what every terminal does: printing the bytes of an unknown sequence
 spills its parameters across the screen, and logging them floods the log the
 first time a program with better taste in terminals runs.

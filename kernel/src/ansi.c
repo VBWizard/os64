@@ -65,6 +65,25 @@ static ansi_action_t finish(ansi_parser_t *p, ansi_action_kind_t kind)
     return a;
 }
 
+// A RELATIVE MOVE'S COUNT DEFAULTS TO ONE, not to zero. `ESC[C` is one column
+// right, and it is the spelling ANSI art uses most — the count is omitted
+// whenever it is one, which is often. Reading the missing parameter as zero
+// would make the commonest sequence in the whole art form do nothing.
+static ansi_action_t cursor_move(ansi_parser_t *p, int32_t rows, int32_t cols)
+{
+    uint16_t count = p->nparams > 0 && p->params[0] > 0 ? p->params[0] : 1;
+    ansi_action_t a = finish(p, ANSI_CURSOR_MOVE);
+
+    // finish() hands back NOTHING for a sequence that overflowed; a move
+    // built on parameters we could not read is exactly that.
+    if (a.kind != ANSI_CURSOR_MOVE)
+        return a;
+
+    a.drow = rows * (int32_t)count;
+    a.dcol = cols * (int32_t)count;
+    return a;
+}
+
 // "#rrggbb" or "#rgb" — xterm accepts more spellings (rgb:RR/GG/BB, colour
 // names), and those wait for somebody who writes them. Returns false for
 // anything else, which the caller turns into "ignored".
@@ -235,6 +254,12 @@ ansi_action_t ansi_feed(ansi_parser_t *p, char byte)
         case 'm': return finish(p, ANSI_SGR);
         case 'H':
         case 'f': return finish(p, ANSI_CURSOR_POS);
+        case 'A': return cursor_move(p, -1, 0);
+        case 'B': return cursor_move(p, +1, 0);
+        case 'C': return cursor_move(p, 0, +1);
+        case 'D': return cursor_move(p, 0, -1);
+        case 's': return finish(p, ANSI_CURSOR_SAVE);
+        case 'u': return finish(p, ANSI_CURSOR_RESTORE);
         case 'J': return finish(p, ANSI_ERASE_DISPLAY);
         case 'K': return finish(p, ANSI_ERASE_LINE);
         default:

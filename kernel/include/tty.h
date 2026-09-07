@@ -95,6 +95,12 @@ typedef struct tty
 	uint32_t hist_lines;               // valid history lines above screen_top
 	uint32_t view_offset;              // >0 = viewing history, this many lines up
 	uint32_t cur_row, cur_col;         // cursor, relative to screen_top
+	// Where SCP put the cursor away, for RCP to take it back out. POSITION
+	// ONLY — the pen below is not saved with it, which is what ANSI.SYS's
+	// pair has always meant and what the programs using it expect. Zero is a
+	// good starting value: a restore with no save homes the cursor, the way
+	// every terminal answers that question.
+	uint32_t save_row, save_col;
 	uint32_t color;                    // current write color (foreground)
 
 	// ── What an escape sequence has said (guarded by `lock`) ───────────────

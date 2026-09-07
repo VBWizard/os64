@@ -100,7 +100,23 @@ int main(int argc, char **argv)
                 row + 3);
     os64_printf("\033[%u;44H\033[K", row + 3);
 
-    esc("[19;1H");
+    // THE RELATIVE MOVES. A gap written as cursor-right rather than as
+    // spaces is how ANSI art has spelled a gap since the BBS days — the art
+    // was compressed that way — so a terminal that ignores the move runs
+    // these three words into one.
+    os64_printf("\033[%u;13Hrelative    left\033[6Cmiddle\033[6Cright", row + 5);
+
+    // THE HEIGHT PROBE, which is how a program that cannot negotiate a
+    // window size asks how tall this terminal is: save the cursor, drive it
+    // past the bottom, ask where it ended up, put it back. There is no
+    // answer to the question here and there does not need to be — what
+    // matters is that the drive-down neither scrolls the screen nor strands
+    // the cursor. If the restore is missing, the tail of this line is at the
+    // foot of the screen instead of on it.
+    os64_printf("\033[%u;13Hprobe       ", row + 6);
+    os64_printf("\033[s\033[255B\033[6n\033[u<- and back where it started");
+
+    esc("[22;1H");
     os64_printf("\033[32mdone.\033[0m %s\n",
                 paper ? "(paper changed; 'clear' leaves it changed)" : "");
     return 0;

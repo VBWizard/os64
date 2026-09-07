@@ -123,6 +123,48 @@ int main(void)
     uint32_t scroll_fg, scroll_bg;
     tty_cell_colors(&t, &line[0], &scroll_fg, &scroll_bg);
     check(scroll_bg == os64_ansi_color(4), "pen reset recoloured scrolled-in blank");
+    // ── A relative move stops at the edge, and never scrolls ────────────
+    //
+    // `ESC[255B` is how a program asks how tall this terminal is: save the
+    // cursor, drive it down past any screen, ask where it landed, restore.
+    // A terminal that SCROLLED to answer that would throw away a screen of
+    // somebody's output to describe its own size.
+    uint32_t top_before = t.screen_top;
+    feed(&t, "\033[2;3H\033[C");
+    check(t.cur_row == 1 && t.cur_col == 3, "CUF moved by one");
+    feed(&t, "\033[2A");
+    check(t.cur_row == 0 && t.cur_col == 3, "CUU clamps at the top row");
+    feed(&t, "\033[99C");
+    check(t.cur_col == t.cols - 1, "CUF stops at the right edge without wrapping");
+    feed(&t, "\033[99D");
+    check(t.cur_col == 0, "CUB stops at column zero");
+    feed(&t, "\033[255B");
+    check(t.cur_row == t.rows - 1, "CUD stops at the bottom row");
+    check(t.screen_top == top_before, "a relative move must never scroll");
+
+    memcpy(saved, cells, sizeof(cells));
+    feed(&t, "\033[2;4H\033[s\033[255B\033[6n\033[u");
+    check(t.cur_row == 1 && t.cur_col == 3, "the height probe moved the cursor");
+    check(t.screen_top == top_before, "the height probe scrolled the screen");
+    for (unsigned i = 0; i < sizeof(cells); i++)
+        check(((char *)cells)[i] == ((char *)saved)[i], "the height probe wrote to the grid");
+
+    // A restore onto a screen that shrank since the save lands on the screen
+    // there is, not the one there was.
+    feed(&t, "\033[4;8H\033[s");
+    t.rows = 2; t.cols = 4;
+    feed(&t, "\033[u");
+    check(t.cur_row == 1 && t.cur_col == 3, "a restore onto a smaller screen clamps");
+
+    // A restore with nothing saved homes the cursor — the answer every
+    // terminal gives to that question, and the reason the saved position
+    // starts at zero rather than at "unset".
+    tty_t fresh = {.cells = cells, .cols = 8, .rows = 4, .total_lines = 6,
+                   .color = TTY_DEFAULT_FG, .fg_index = TTY_FG_NOT_INDEXED,
+                   .cur_row = 2, .cur_col = 5};
+    feed(&fresh, "\033[u");
+    check(fresh.cur_row == 0 && fresh.cur_col == 0, "RCP with no SCP homes the cursor");
+
     puts("test_tty_ansi_host: all checks passed");
     return 0;
 }
