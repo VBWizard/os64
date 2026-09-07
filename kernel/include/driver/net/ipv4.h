@@ -112,8 +112,9 @@ int32_t ipv4_send_from(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 
 // Submission disposition, decided with the send. PARKED may be held for
 // ARP or dropped if no pending slot is free; the slot holds one frame per
-// neighbour and a later PARKED frame replaces it, which is why TCP pauses
-// its output for an ARP round trip after one. DROPPED is a driver failure
+// neighbour and a later PARKED frame replaces it, which is why TCP holds
+// its output after one until that unit is acknowledged or resent by its
+// timer. DROPPED is a driver failure
 // (possibly transient); INVALID is rejected by IPv4's construction checks.
 // TCP retains lost-packet responsibility for PARKED and DROPPED, but stops
 // the output pass. No driver API change or post-send ARP lookup is needed.

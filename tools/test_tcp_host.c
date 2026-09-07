@@ -274,60 +274,84 @@ static void test_stream(void)
 
 static void test_arp_hold(void)
 {
-	// A parked segment holds output for an ARP round trip: passes inside
-	// the hold submit nothing (a second frame would replace the first in
-	// the waiting room); the cursor resumes where it stopped once it expires.
+	// A parked segment holds output until it is acknowledged: passes under
+	// the hold submit nothing however long ARP takes (a second frame would
+	// replace the first in the waiting room), and the parked unit's ACK
+	// resumes the cursor where it stopped — nothing sits with no flight and
+	// no timer, because the parked unit keeps the RTO armed.
 	tcp_conn_t* c = init(); disposition = IPV4_TX_PARKED;
 	c->snd_count = 1000; tcp_output(c, 0);
-	assert(npackets == 1 && c->snd_max == 2000 && c->send_timer == TCP_TIMER_RETRANSMIT);
-	assert(c->arp_hold_until == kTicksSinceStart + TCP_ARP_HOLD_TICKS);
+	assert(npackets == 1 && c->snd_max == 2000 && c->send_timer == TCP_TIMER_RETRANSMIT && c->arp_hold);
 	disposition = IPV4_TX_SENT;
 	c->snd_count += 1000; tcp_output(c, 0); assert(npackets == 1 && c->snd_nxt == 2000);
-	kTicksSinceStart += TCP_ARP_HOLD_TICKS - 1; tcp_output(c, 0); assert(npackets == 1);
-	kTicksSinceStart++; tcp_output(c, 0);
+	kTicksSinceStart += 15; tcp_output(c, 0); assert(npackets == 1 && c->arp_hold);
+	ack(c, 2000, 65535);
 	assert(npackets == 2 && packets[1].seq == 2000 && packets[1].len == 1000 && c->snd_nxt == 3000);
+	assert(!c->arp_hold && c->send_timer == TCP_TIMER_RETRANSMIT);
 	cleanup(c);
 
-	// The parked unit's ACK ends the hold early: with nothing unacknowledged
-	// the neighbour has answered, and the ring must not sit with no flight
-	// and no timer.
-	c = init(); disposition = IPV4_TX_PARKED;
-	c->snd_count = 1000; tcp_output(c, 0);
-	disposition = IPV4_TX_SENT; c->snd_count += 1000; ack(c, 2000, 65535);
-	assert(npackets == 2 && packets[1].seq == 2000 && c->snd_nxt == 3000);
-	assert(c->send_timer == TCP_TIMER_RETRANSMIT);
-	cleanup(c);
-
-	// An ACK for an EARLIER unit does not: the parked one is still out.
+	// An ACK for an EARLIER unit does not lift it: the parked one is still out.
 	c = init(); c->snd_count = 1000; tcp_output(c, 0);
 	disposition = IPV4_TX_PARKED; c->snd_count += 1000; tcp_output(c, 0);
 	assert(npackets == 2 && packets[1].seq == 2000);
 	disposition = IPV4_TX_SENT; c->snd_count += 1000; ack(c, 2000, 65535);
-	assert(npackets == 2 && c->snd_nxt == 3000 && c->snd_una == 2000);
-	kTicksSinceStart += TCP_ARP_HOLD_TICKS; tcp_output(c, 0);
-	assert(npackets == 3 && packets[2].seq == 3000);
+	assert(npackets == 2 && c->snd_nxt == 3000 && c->snd_una == 2000 && c->arp_hold);
+	ack(c, 3000, 65535); assert(npackets == 3 && packets[2].seq == 3000 && !c->arp_hold);
 	cleanup(c);
 
-	// Recovery outranks the hold: an RTO that lands inside it resends from
-	// snd_una at once instead of waiting out a second, doubled timer.
+	// Recovery outranks the hold: the RTO resends from snd_una at once.
 	c = init(); c->snd_count = 1000; tcp_output(c, 0);
-	kTicksSinceStart = c->send_deadline - 1;
 	disposition = IPV4_TX_PARKED; c->snd_count += 1000; tcp_output(c, 0);
-	assert(npackets == 2 && c->arp_hold_until > c->send_deadline);
+	assert(npackets == 2 && c->arp_hold);
 	disposition = IPV4_TX_SENT; deadline(c);
-	assert(npackets == 3 && packets[2].seq == 1000 && c->retries == 1 && !c->arp_hold_until);
+	assert(npackets == 3 && packets[2].seq == 1000 && c->retries == 1 && !c->arp_hold);
+	cleanup(c);
+
+	// A stale hold does not survive a SENT submission: a parked SYN, then
+	// the handshake, then a burst — the burst goes, and the pass after it
+	// is not held for that burst's ACK.
+	c = init(); c->state = TCP_SYN_SENT; disposition = IPV4_TX_PARKED; tcp_send_syn(c);
+	deadline(c); assert(c->arp_hold);
+	incoming(c, 9000, c->snd_max, 65535, TCP_SYN | TCP_ACK);
+	assert(c->state == TCP_ESTABLISHED && npackets == 3);   // the handshake's ACK is the third
+	disposition = IPV4_TX_SENT; c->snd_count = 536; tcp_output(c, 0);
+	assert(npackets == 4 && packets[3].len == 536 && !c->arp_hold);
+	c->snd_count += 536; tcp_output(c, 0); assert(npackets == 5);
+	cleanup(c);
+
+	// A bare ACK is withheld under the hold — it would replace the parked
+	// data segment, which carries an ACK of its own — and goes again once
+	// the parked unit is acknowledged.
+	c = init(); disposition = IPV4_TX_PARKED; c->snd_count = 1000; tcp_output(c, 0);
+	disposition = IPV4_TX_SENT;
+	incoming(c, c->rcv_nxt, c->snd_una, 65535, TCP_ACK | TCP_FIN);   // their FIN: an ACK is owed
+	assert(c->rcv_fin && npackets == 1 && c->state == TCP_CLOSE_WAIT);
+	ack(c, 2000, 65535); assert(!tcp_unacked(c));                       // the hold is moot now
+	incoming(c, c->rcv_nxt - 1, c->snd_una, 65535, TCP_ACK | TCP_FIN); // their FIN again
+	assert(npackets == 2 && packets[1].len == 0);                       // re-acknowledged
+	cleanup(c);
+
+	// A SENT probe clears a stale hold: the neighbour answered it, so the
+	// window's reopening is not held for the timer.
+	c = init(); disposition = IPV4_TX_PARKED; c->snd_count = 1000; tcp_output(c, 0);
+	ack(c, 1000, 0); assert(c->send_timer == TCP_TIMER_PERSIST && c->arp_hold);
+	disposition = IPV4_TX_SENT; deadline(c); assert(c->probe_pending && !c->arp_hold);
+	ack(c, 1000, 65535);
+	assert(npackets == 3 && packets[2].seq == 1000 && packets[2].len == 1000);
 	cleanup(c);
 
 	// A parked fast retransmission holds too: the window inflating on
-	// further duplicates must not replace the resent head.
+	// further duplicates must not replace the resent head; the partial ACK
+	// that proves it landed resumes.
 	c = init(); c->snd_count = 5000; tcp_output(c, 0); assert(npackets == 5);
 	disposition = IPV4_TX_PARKED;
 	for (unsigned i = 0; i < 3; i++) ack(c, 1000, 65535);
-	assert(npackets == 6 && packets[5].seq == 1000 && c->fast_recovery);
+	assert(npackets == 6 && packets[5].seq == 1000 && c->fast_recovery && c->arp_hold);
 	disposition = IPV4_TX_SENT; c->snd_count += 1000;
 	ack(c, 1000, 65535); assert(npackets == 6);
-	kTicksSinceStart += TCP_ARP_HOLD_TICKS;
-	ack(c, 1000, 65535); assert(npackets == 7 && packets[6].seq == 6000);
+	ack(c, 2000, 65535);
+	assert(packets[6].seq == 2000 && !c->arp_hold);            // NewReno resend of the next hole, SENT
+	assert(npackets == 8 && packets[7].seq == 6000);          // and the pass behind it moves again
 	cleanup(c);
 }
 

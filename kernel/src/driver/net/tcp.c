@@ -220,12 +220,33 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	return how;
 }
 
+// A PARKED unit sets the ARP hold (tcp.h arp_hold): the waiting room keeps
+// one frame per neighbour and a later one replaces it, so output pauses
+// rather than overwrite its own segment. A SENT unit clears it: the
+// neighbour has answered. A DROPPED one says nothing about the neighbour.
+// Every submission reports here, probes and bare ACKs included, because
+// any frame to the neighbour tells the same story.
+static void tcp_note_parked(tcp_conn_t* c, ipv4_tx_t how)
+{
+	if (how == IPV4_TX_PARKED)
+		c->arp_hold = true;
+	else if (how == IPV4_TX_SENT)
+		c->arp_hold = false;
+}
+
 // A bare acknowledgement advertises receive progress and the current window.
 // During persist, use the oldest unacknowledged sequence as BSD does.
+// Under the ARP hold with a unit still out it is not sent: a frame to an
+// unresolved neighbour would replace the parked data segment, and that
+// segment carries an ACK of its own when it finally goes. The peer waits
+// a round trip for a fresher one, which is cheaper than our losing data.
 static void tcp_ack(tcp_conn_t* c)
 {
-	tcp_send_segment(c, c->send_timer == TCP_TIMER_PERSIST ? c->snd_una : c->snd_max,
-	                 TCP_ACK, NULL, 0, false);
+	if (c->arp_hold && tcp_unacked(c))
+		return;
+	ipv4_tx_t how = tcp_send_segment(c, c->send_timer == TCP_TIMER_PERSIST ? c->snd_una : c->snd_max,
+	                                 TCP_ACK, NULL, 0, false);
+	tcp_note_parked(c, how);
 }
 
 // ── 2a. THE SENDER: the ring, the window, the clock ─────────────────────────
@@ -430,6 +451,7 @@ static void tcp_probe(tcp_conn_t* c)
 		return;
 	if (how == IPV4_TX_INVALID)
 		return;
+	tcp_note_parked(c, how);
 	c->probe_pending = true;
 	c->probe_seq = c->snd_una;
 	c->rtt_timing = false;
@@ -443,15 +465,6 @@ static void tcp_note_data_send(tcp_conn_t* c)
 {
 	c->data_sent = true;
 	c->last_data_sent = kTicksSinceStart;
-}
-
-// A PARKED unit starts the ARP hold (TCP_ARP_HOLD_TICKS): the waiting room
-// keeps one frame per neighbour and a later one replaces it, so output
-// pauses for an ARP round trip rather than overwrite its own segment.
-static void tcp_note_parked(tcp_conn_t* c, ipv4_tx_t how)
-{
-	if (how == IPV4_TX_PARKED)
-		c->arp_hold_until = kTicksSinceStart + TCP_ARP_HOLD_TICKS;
 }
 
 // Put as much of the ring as both windows allow on the wire from the
@@ -488,13 +501,13 @@ static void tcp_output(tcp_conn_t* c, uint32_t limited_allowance)
 	tcp_send_clock(c, false);
 	if (c->send_timer == TCP_TIMER_PERSIST)
 		return;
-	// Inside the ARP hold with the parked unit still unacknowledged, a
+	// Under the ARP hold with the parked unit still unacknowledged, a
 	// further segment would replace it in the waiting room. That unit's
 	// ACK or the RTO resumes output, so nothing queued here is stranded:
-	// an unacknowledged flight keeps the retransmit timer armed. Once
-	// nothing is unacknowledged the neighbour has answered and the hold
-	// is moot.
-	if (kTicksSinceStart < c->arp_hold_until && tcp_unacked(c))
+	// an unacknowledged flight keeps the retransmit timer armed. With
+	// nothing unacknowledged the hold is moot, and the first SENT unit of
+	// this pass clears it.
+	if (c->arp_hold && tcp_unacked(c))
 		return;
 	if (!tcp_unacked(c) && c->data_sent &&
 	    kTicksSinceStart - c->last_data_sent >= c->rto)
@@ -1684,7 +1697,7 @@ void tcp_poll(void)
 				tcp_rto_arm(c);
 				// Recovery outranks the ARP hold: the resend is the oldest
 				// unit, so replacing whatever is parked loses nothing.
-				c->arp_hold_until = 0;
+				c->arp_hold = false;
 				printd(DEBUG_NET, "tcp: timeout #%u to %u.%u.%u.%u:%u (rto %u ticks, cwnd %u, %u bytes to resend)\n",
 				       (uint32_t)c->retries, NET_IPV4_OCTETS(c->peer_ip),
 				       c->peer_port, c->rto_ticks, c->cwnd, tcp_bytes_in_flight(c));

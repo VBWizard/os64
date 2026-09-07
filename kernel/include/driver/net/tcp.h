@@ -178,11 +178,6 @@ typedef enum tcp_state
 // forever. A detached connection that makes no ACK progress for this long
 // is given up, whatever its probes or retransmissions are doing.
 #define TCP_DETACHED_IDLE_TICKS (30 * TICKS_PER_SECOND)
-// How long output pauses after a segment is PARKED for ARP: the waiting
-// room holds one frame per neighbour and a second replaces the first
-// (ipv4.c), so a burst into an unresolved neighbour would overwrite its own
-// earlier segments. An ARP round trip on a LAN is well under a tick.
-#define TCP_ARP_HOLD_TICKS 2
 
 typedef enum
 {
@@ -270,8 +265,16 @@ typedef struct tcp_conn
 	bool probe_pending;     // probe_seq + 1 is also an acceptable ACK
 	uint32_t probe_seq;
 	uint64_t detached_deadline; // elapsed no-progress bound after handle close
-	uint64_t arp_hold_until; // output pauses here after a PARKED submission,
-	                         // while that flight is unacknowledged; RTO clears it
+	// THE ARP HOLD. The waiting room holds one frame per neighbour and a
+	// later frame replaces it (ipv4.c), so after a PARKED submission the
+	// sender must not offer that neighbour another frame until the parked
+	// one has left: output pauses while the hold is set AND something is
+	// unacknowledged, and resumes on that unit's ACK or the timer's resend.
+	// No clock: how long ARP takes is the neighbour's business (a delayed
+	// link or a sleeping station answers in hundreds of milliseconds), and
+	// an unacknowledged flight keeps the RTO armed, so nothing is stranded.
+	// A SENT submission clears it — the neighbour has answered.
+	bool arp_hold;
 
 	// CONGESTION CONTROL (RFC 5681). cwnd caps what may be in flight
 	// alongside the peer's window; ssthresh is where slow start's doubling
