@@ -320,15 +320,24 @@ static void test_arp_hold(void)
 	cleanup(c);
 
 	// A bare ACK is withheld under the hold — it would replace the parked
-	// data segment, which carries an ACK of its own — and goes again once
-	// the parked unit is acknowledged.
+	// data segment, whose own ACK field predates their FIN — and is OWED:
+	// it goes with the very segment that makes the hold moot, not when
+	// the peer gives up and sends the FIN again.
 	c = init(); disposition = IPV4_TX_PARKED; c->snd_count = 1000; tcp_output(c, 0);
 	disposition = IPV4_TX_SENT;
 	incoming(c, c->rcv_nxt, c->snd_una, 65535, TCP_ACK | TCP_FIN);   // their FIN: an ACK is owed
-	assert(c->rcv_fin && npackets == 1 && c->state == TCP_CLOSE_WAIT);
-	ack(c, 2000, 65535); assert(!tcp_unacked(c));                       // the hold is moot now
+	assert(c->rcv_fin && npackets == 1 && c->state == TCP_CLOSE_WAIT && c->ack_owed);
+	ack(c, 2000, 65535); assert(!tcp_unacked(c) && !c->ack_owed);      // the hold is moot: paid
+	assert(npackets == 2 && packets[1].len == 0 && packets[1].ack == c->rcv_nxt);
 	incoming(c, c->rcv_nxt - 1, c->snd_una, 65535, TCP_ACK | TCP_FIN); // their FIN again
-	assert(npackets == 2 && packets[1].len == 0);                       // re-acknowledged
+	assert(npackets == 3 && packets[2].len == 0);                       // re-acknowledged
+	cleanup(c);
+
+	// And a segment of ours that goes first pays the debt on the way.
+	c = init(); disposition = IPV4_TX_PARKED; c->snd_count = 1000; tcp_output(c, 0);
+	incoming(c, c->rcv_nxt, c->snd_una, 65535, TCP_ACK | TCP_FIN); assert(c->ack_owed);
+	disposition = IPV4_TX_SENT; deadline(c);                            // RTO: resend carries the ACK
+	assert(!c->ack_owed && npackets == 2 && packets[1].len == 1000 && packets[1].ack == c->rcv_nxt);
 	cleanup(c);
 
 	// A SENT probe clears a stale hold: the neighbour answered it, so the

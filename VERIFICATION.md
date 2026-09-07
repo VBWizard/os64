@@ -226,7 +226,11 @@ connection and prints the milliseconds; `tools/tcpsink.py` on the host drains
 it, checks every byte against the same stream, and answers one byte — and
 **that byte is where netsend's clock stops**, because a write returns when
 its bytes are queued and a close returns with the ring still draining, so
-only the far end can say when the bytes arrived. 100KB, seed 1, same cable,
+only the far end can say when the bytes arrived. The byte is the clock's
+verdict; the experiment's is the line the sink prints after draining to
+the sender's EOF, which is the only way to prove the stream ENDED where it
+said it would (a byte past the count may arrive after the answer went).
+100KB, seed 1, same cable,
 same 21 segments lost each time (2026-09-04 — three kernels in one day):
 
 | Weather (upload) | fixed 1s RTO | Jacobson/Karn RTO (stop-and-wait) | send window + NewReno | What moved |

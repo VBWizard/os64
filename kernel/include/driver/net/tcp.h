@@ -275,6 +275,11 @@ typedef struct tcp_conn
 	// an unacknowledged flight keeps the RTO armed, so nothing is stranded.
 	// A SENT submission clears it — the neighbour has answered.
 	bool arp_hold;
+	// A bare ACK the hold withheld. The parked frame's ACK field predates
+	// whatever arrived after it was built, so the debt is remembered and
+	// paid the moment the hold is moot — unless a segment carrying the
+	// current ACK went first, which pays it on the way.
+	bool ack_owed;
 
 	// CONGESTION CONTROL (RFC 5681). cwnd caps what may be in flight
 	// alongside the peer's window; ssthresh is where slow start's doubling

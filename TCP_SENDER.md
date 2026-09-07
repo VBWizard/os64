@@ -36,7 +36,9 @@ waiting room. There is no clock on it — how long ARP takes is the
 neighbour's business. The parked unit's ACK or the RTO resumes output; the
 RTO clears the hold, since its resend is the oldest unit and replacing a
 parked frame loses nothing, and a SENT submission clears it, since the
-neighbour has answered.
+neighbour has answered. A bare ACK the hold withholds is owed (`ack_owed`)
+and goes the moment the hold is moot, unless a segment carrying the
+current ACK went first.
 Ordinary ACK/retransmission logic then recovers loss. There is no next-tick
 local retry path. INVALID means IPv4 rejected packet construction, currently
 an MTU violation, and terminates the connection.

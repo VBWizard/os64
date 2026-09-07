@@ -9,10 +9,20 @@ generates (seed 0x5EED, Numerical Recipes' constants, the byte from bits
 16..23 of each state). When the last byte is in, ONE BYTE goes back — `K`
 if every byte was right, `W` if not — and that byte is what netsend's
 clock stops on: a sender's write returns when its bytes are queued, so
-only the receiver can say when they arrived. The line printed here names
-the count, the verdict, the offset where the bytes went wrong if they did,
-and the wall time from accept to the last byte, as a second opinion on the
-guest's number. Runs until killed.
+only the receiver can say when they arrived.
+
+THE BYTE IS THE CLOCK'S VERDICT; THE LINE IS THE EXPERIMENT'S. netsend
+closes as soon as it has read the byte, so the byte cannot wait for the
+stream's end without deadlocking both ends — and a sender that keeps
+talking past its announced count may do so in a segment that arrives
+after the byte went. So after answering, the sink keeps reading until the
+peer's EOF (bounded by DRAIN_SECONDS, a sender that never closes is its
+own bug) and counts every byte past the announced count, whichever side
+of the answer it landed on. The line printed here names the count, the
+verdict, the offset where the bytes went wrong if they did, the trailing
+bytes if any, and the wall time from accept to the last announced byte,
+as a second opinion on the guest's number. A stream is verified only when
+the line says so. Runs until killed.
 """
 import socket
 import sys
@@ -31,6 +41,7 @@ def pattern(n, x):
 
 ANNOUNCE_MAX = 64          # bytes through the newline; longer is not an announce
 BYTES_MAX = 1 << 30        # a stream past this is a typo, not a test
+DRAIN_SECONDS = 5.0        # how long to wait for the sender's EOF after the answer
 
 
 def read_announce(conn):
@@ -83,12 +94,11 @@ def main():
         x = SEED
         got = 0
         wrong_at = None
-        overrun = False
+        trailing = 0                     # bytes past the announced count, before or after the answer
         while True:
             if data:
-                if len(data) > expected - got:
-                    overrun = True       # more than announced: a sender bug, never a pass
                 take = data[:expected - got]
+                trailing += len(data) - len(take)   # more than announced: a sender bug, never a pass
                 want, x = pattern(len(take), x)
                 if wrong_at is None and take != want:
                     for i, (a, b) in enumerate(zip(take, want)):
@@ -102,21 +112,34 @@ def main():
             if not data:
                 break
         took = time.monotonic() - started
+        answer = ""
+        if got >= expected:
+            try:
+                conn.sendall(b"K" if (wrong_at is None and trailing == 0) else b"W")
+            except OSError as e:
+                answer = f" (answer undeliverable: {e})"
+            # The answer is out and the sender's clock has stopped; now prove
+            # the stream ENDED where it said it would. Anything that arrives
+            # before the peer's EOF is trailing, however late it comes.
+            conn.settimeout(DRAIN_SECONDS)
+            try:
+                while True:
+                    more = conn.recv(65536)
+                    if not more:
+                        break
+                    trailing += len(more)
+            except (socket.timeout, OSError):
+                answer += " (no EOF from the sender within the drain window)"
+        conn.close()
         if got < expected:
             verdict = f"SHORT: {got} of {expected} bytes, then the sender hung up"
-        elif overrun:
-            verdict = f"OVERRUN: bytes past the announced {expected}"
+        elif trailing:
+            verdict = f"OVERRUN: {trailing} bytes past the announced {expected}"
         elif wrong_at is None:
             verdict = "ok"
         else:
             verdict = f"WRONG from byte {wrong_at}"
-        try:
-            if got >= expected:
-                conn.sendall(b"K" if (wrong_at is None and not overrun) else b"W")
-        except OSError as e:
-            verdict += f" (verdict undeliverable: {e})"
-        conn.close()
-        print(f"tcpsink: {peer[0]}:{peer[1]} sent {got} bytes in {took:.2f}s — {verdict}", flush=True)
+        print(f"tcpsink: {peer[0]}:{peer[1]} sent {got} bytes in {took:.2f}s — {verdict}{answer}", flush=True)
 
 
 if __name__ == "__main__":

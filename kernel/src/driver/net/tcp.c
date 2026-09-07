@@ -216,6 +216,10 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 		c->tx_bytes += data_len;
 		if (how == IPV4_TX_DROPPED)
 			kTcpStats.tx_local_drops++;
+		// Every segment past the handshake carries rcv_nxt as of now, so
+		// whatever bare ACK the hold withheld has just been paid.
+		if (flags & TCP_ACK)
+			c->ack_owed = false;
 	}
 	return how;
 }
@@ -237,13 +241,17 @@ static void tcp_note_parked(tcp_conn_t* c, ipv4_tx_t how)
 // A bare acknowledgement advertises receive progress and the current window.
 // During persist, use the oldest unacknowledged sequence as BSD does.
 // Under the ARP hold with a unit still out it is not sent: a frame to an
-// unresolved neighbour would replace the parked data segment, and that
-// segment carries an ACK of its own when it finally goes. The peer waits
-// a round trip for a fresher one, which is cheaper than our losing data.
+// unresolved neighbour would replace the parked data segment. The parked
+// frame's own ACK field is stale by whatever arrived after it was built,
+// so the debt is remembered (ack_owed) and paid by tcp_input the moment
+// the hold is moot, or by the next segment that goes, whichever is first.
 static void tcp_ack(tcp_conn_t* c)
 {
 	if (c->arp_hold && tcp_unacked(c))
+	{
+		c->ack_owed = true;
 		return;
+	}
 	ipv4_tx_t how = tcp_send_segment(c, c->send_timer == TCP_TIMER_PERSIST ? c->snd_una : c->snd_max,
 	                                 TCP_ACK, NULL, 0, false);
 	tcp_note_parked(c, how);
@@ -1437,6 +1445,11 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			break;
 	}
 
+	// The ACK the hold withheld goes the moment the hold is moot — this
+	// segment may be the peer's acknowledgement of the parked unit, with
+	// nothing of ours left to carry it.
+	if (c->ack_owed)
+		tcp_ack(c);
 	tcp_input_wake_and_unlock(c, irqflags);
 }
 
