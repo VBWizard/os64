@@ -272,10 +272,69 @@ static void test_stream(void)
         }
 }
 
+static void test_arp_hold(void)
+{
+	// A parked segment holds output for an ARP round trip: passes inside
+	// the hold submit nothing (a second frame would replace the first in
+	// the waiting room); the cursor resumes where it stopped once it expires.
+	tcp_conn_t* c = init(); disposition = IPV4_TX_PARKED;
+	c->snd_count = 1000; tcp_output(c, 0);
+	assert(npackets == 1 && c->snd_max == 2000 && c->send_timer == TCP_TIMER_RETRANSMIT);
+	assert(c->arp_hold_until == kTicksSinceStart + TCP_ARP_HOLD_TICKS);
+	disposition = IPV4_TX_SENT;
+	c->snd_count += 1000; tcp_output(c, 0); assert(npackets == 1 && c->snd_nxt == 2000);
+	kTicksSinceStart += TCP_ARP_HOLD_TICKS - 1; tcp_output(c, 0); assert(npackets == 1);
+	kTicksSinceStart++; tcp_output(c, 0);
+	assert(npackets == 2 && packets[1].seq == 2000 && packets[1].len == 1000 && c->snd_nxt == 3000);
+	cleanup(c);
+
+	// The parked unit's ACK ends the hold early: with nothing unacknowledged
+	// the neighbour has answered, and the ring must not sit with no flight
+	// and no timer.
+	c = init(); disposition = IPV4_TX_PARKED;
+	c->snd_count = 1000; tcp_output(c, 0);
+	disposition = IPV4_TX_SENT; c->snd_count += 1000; ack(c, 2000, 65535);
+	assert(npackets == 2 && packets[1].seq == 2000 && c->snd_nxt == 3000);
+	assert(c->send_timer == TCP_TIMER_RETRANSMIT);
+	cleanup(c);
+
+	// An ACK for an EARLIER unit does not: the parked one is still out.
+	c = init(); c->snd_count = 1000; tcp_output(c, 0);
+	disposition = IPV4_TX_PARKED; c->snd_count += 1000; tcp_output(c, 0);
+	assert(npackets == 2 && packets[1].seq == 2000);
+	disposition = IPV4_TX_SENT; c->snd_count += 1000; ack(c, 2000, 65535);
+	assert(npackets == 2 && c->snd_nxt == 3000 && c->snd_una == 2000);
+	kTicksSinceStart += TCP_ARP_HOLD_TICKS; tcp_output(c, 0);
+	assert(npackets == 3 && packets[2].seq == 3000);
+	cleanup(c);
+
+	// Recovery outranks the hold: an RTO that lands inside it resends from
+	// snd_una at once instead of waiting out a second, doubled timer.
+	c = init(); c->snd_count = 1000; tcp_output(c, 0);
+	kTicksSinceStart = c->send_deadline - 1;
+	disposition = IPV4_TX_PARKED; c->snd_count += 1000; tcp_output(c, 0);
+	assert(npackets == 2 && c->arp_hold_until > c->send_deadline);
+	disposition = IPV4_TX_SENT; deadline(c);
+	assert(npackets == 3 && packets[2].seq == 1000 && c->retries == 1 && !c->arp_hold_until);
+	cleanup(c);
+
+	// A parked fast retransmission holds too: the window inflating on
+	// further duplicates must not replace the resent head.
+	c = init(); c->snd_count = 5000; tcp_output(c, 0); assert(npackets == 5);
+	disposition = IPV4_TX_PARKED;
+	for (unsigned i = 0; i < 3; i++) ack(c, 1000, 65535);
+	assert(npackets == 6 && packets[5].seq == 1000 && c->fast_recovery);
+	disposition = IPV4_TX_SENT; c->snd_count += 1000;
+	ack(c, 1000, 65535); assert(npackets == 6);
+	kTicksSinceStart += TCP_ARP_HOLD_TICKS;
+	ack(c, 1000, 65535); assert(npackets == 7 && packets[6].seq == 6000);
+	cleanup(c);
+}
+
 int main(void)
 {
 	test_submissions(); test_handshake_reset(); test_lifetime(); test_rto(); test_congestion();
-	test_persist(); test_wrap_fin_window(); test_stream();
-	puts("TCP host: submission, lifetime, RTO, congestion, persist, ring/sequence/FIN tests PASS");
+	test_persist(); test_wrap_fin_window(); test_stream(); test_arp_hold();
+	puts("TCP host: submission, lifetime, RTO, congestion, persist, ring/sequence/FIN, ARP-hold tests PASS");
 	return 0;
 }

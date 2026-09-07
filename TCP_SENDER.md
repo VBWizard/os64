@@ -29,6 +29,12 @@ SENT means the driver accepted the frame. PARKED means ARP resolution is
 pending (its holding slot may already be occupied). DROPPED means a driver
 returned a negative result, including queue pressure. These outcomes commit
 normal sequence responsibility; PARKED and DROPPED stop the output pass.
+PARKED also starts the ARP hold (`arp_hold_until`, `TCP_ARP_HOLD_TICKS`):
+later output passes submit nothing while the parked unit is unacknowledged
+and the hold has not expired, because a second frame to the same unresolved
+neighbour replaces the first in the waiting room. The parked unit's ACK or
+the RTO resumes output; the RTO clears the hold, since its resend is the
+oldest unit and replacing a parked frame loses nothing.
 Ordinary ACK/retransmission logic then recovers loss. There is no next-tick
 local retry path. INVALID means IPv4 rejected packet construction, currently
 an MTU violation, and terminates the connection.
