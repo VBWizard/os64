@@ -340,6 +340,41 @@ static void test_arp_hold(void)
 	assert(!c->ack_owed && npackets == 2 && packets[1].len == 1000 && packets[1].ack == c->rcv_nxt);
 	cleanup(c);
 
+	// A bare ACK the driver drops has no timer of its own: the debt stays
+	// owed, and the next segment from the peer — even one that earns no
+	// ACK by itself — pays it.
+	c = init(); disposition = IPV4_TX_PARKED; c->snd_count = 1000; tcp_output(c, 0);
+	incoming(c, c->rcv_nxt, c->snd_una, 65535, TCP_ACK | TCP_FIN); assert(c->ack_owed);
+	disposition = IPV4_TX_DROPPED; ack(c, 2000, 65535);                // the hold is moot; the ACK is dropped
+	assert(npackets == 2 && packets[1].how == IPV4_TX_DROPPED && c->ack_owed);
+	disposition = IPV4_TX_SENT; ack(c, 2000, 60000);                   // a window update, nothing to ack
+	assert(npackets == 3 && packets[2].len == 0 && packets[2].ack == c->rcv_nxt && !c->ack_owed);
+	cleanup(c);
+
+	// The same debt without any hold: a bare ACK the driver drops is owed,
+	// and their next segment pays it.
+	c = init(); disposition = IPV4_TX_DROPPED;
+	incoming(c, c->rcv_nxt, c->snd_una, 65535, TCP_ACK | TCP_FIN);
+	assert(npackets == 1 && packets[0].how == IPV4_TX_DROPPED && c->ack_owed);
+	disposition = IPV4_TX_SENT; ack(c, c->snd_una, 60000);
+	assert(npackets == 2 && packets[1].ack == c->rcv_nxt && !c->ack_owed);
+	cleanup(c);
+
+	// A debt dies with the connection: a reset pays nothing, and neither
+	// does a conversation the segment itself ended.
+	c = init(); disposition = IPV4_TX_DROPPED;
+	incoming(c, c->rcv_nxt, c->snd_una, 65535, TCP_ACK | TCP_FIN); assert(c->ack_owed);
+	disposition = IPV4_TX_SENT;
+	incoming(c, c->rcv_nxt, c->snd_una, 65535, TCP_RST | TCP_ACK);
+	assert(c->state == TCP_CLOSED && !c->ack_owed && npackets == 1);
+	cleanup(c);
+	c = init(); c->state = TCP_LAST_ACK; c->snd_fin = true; c->snd_fin_sent = true;
+	c->snd_fin_seq = 1000; c->snd_nxt = c->snd_max = 1001; c->rcv_fin = true;
+	c->ack_owed = true; disposition = IPV4_TX_SENT;
+	ack(c, 1001, 65535);                                               // their ACK of our FIN: CLOSED
+	assert(c->state == TCP_CLOSED && npackets == 0);
+	cleanup(c);
+
 	// A SENT probe clears a stale hold: the neighbour answered it, so the
 	// window's reopening is not held for the timer.
 	c = init(); disposition = IPV4_TX_PARKED; c->snd_count = 1000; tcp_output(c, 0);

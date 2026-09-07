@@ -38,7 +38,8 @@ RTO clears the hold, since its resend is the oldest unit and replacing a
 parked frame loses nothing, and a SENT submission clears it, since the
 neighbour has answered. A bare ACK the hold withholds is owed (`ack_owed`)
 and goes the moment the hold is moot, unless a segment carrying the
-current ACK went first.
+current ACK went first. A bare ACK the driver drops stays owed — it has
+no timer of its own — and the peer's next segment pays it.
 Ordinary ACK/retransmission logic then recovers loss. There is no next-tick
 local retry path. INVALID means IPv4 rejected packet construction, currently
 an MTU violation, and terminates the connection.

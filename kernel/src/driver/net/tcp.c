@@ -91,6 +91,7 @@ static void tcp_abort(tcp_conn_t* c)
 	c->state = TCP_CLOSED;
 	c->send_timer = TCP_TIMER_IDLE;
 	c->rtt_timing = false;
+	c->ack_owed = false;   // nothing is owed to a peer we are done with
 }
 
 // The initial sequence number. RFC 793 specified a clock-based ISN, and
@@ -217,8 +218,11 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 		if (how == IPV4_TX_DROPPED)
 			kTcpStats.tx_local_drops++;
 		// Every segment past the handshake carries rcv_nxt as of now, so
-		// whatever bare ACK the hold withheld has just been paid.
-		if (flags & TCP_ACK)
+		// whatever bare ACK the hold withheld has just been paid — unless
+		// the driver dropped this one. Data and FIN have a timer to try
+		// again; a bare ACK does not, so a debt the driver ate stays
+		// owed, and the next incoming segment pays it.
+		if ((flags & TCP_ACK) && how != IPV4_TX_DROPPED)
 			c->ack_owed = false;
 	}
 	return how;
@@ -245,6 +249,9 @@ static void tcp_note_parked(tcp_conn_t* c, ipv4_tx_t how)
 // frame's own ACK field is stale by whatever arrived after it was built,
 // so the debt is remembered (ack_owed) and paid by tcp_input the moment
 // the hold is moot, or by the next segment that goes, whichever is first.
+// A bare ACK the driver drops is owed the same way: it has no timer of its
+// own, and remembering it costs a bit, so the peer's next segment pays it
+// instead of the peer's own timeout.
 static void tcp_ack(tcp_conn_t* c)
 {
 	if (c->arp_hold && tcp_unacked(c))
@@ -255,6 +262,8 @@ static void tcp_ack(tcp_conn_t* c)
 	ipv4_tx_t how = tcp_send_segment(c, c->send_timer == TCP_TIMER_PERSIST ? c->snd_una : c->snd_max,
 	                                 TCP_ACK, NULL, 0, false);
 	tcp_note_parked(c, how);
+	if (how == IPV4_TX_DROPPED)
+		c->ack_owed = true;
 }
 
 // ── 2a. THE SENDER: the ring, the window, the clock ─────────────────────────
@@ -1036,6 +1045,10 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	                     c->state == TCP_FIN_WAIT_2 || c->state == TCP_CLOSE_WAIT ||
 	                     c->state == TCP_CLOSING || c->state == TCP_LAST_ACK ||
 	                     c->state == TCP_TIME_WAIT);
+	// A bare ACK owed from BEFORE this segment is paid at the end of it
+	// (the exit below); one this segment's own handling fails to deliver
+	// waits for the next, so a full driver is asked once per arrival.
+	bool ack_was_owed = c->ack_owed;
 	if (flags & TCP_RST)
 	{
 		if (c->state == TCP_SYN_SENT && (!(flags & TCP_ACK) || ack != c->snd_nxt))
@@ -1445,10 +1458,11 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			break;
 	}
 
-	// The ACK the hold withheld goes the moment the hold is moot — this
-	// segment may be the peer's acknowledgement of the parked unit, with
-	// nothing of ours left to carry it.
-	if (c->ack_owed)
+	// The ACK the hold withheld, or the driver dropped, goes the moment it
+	// can — this segment may be the peer's acknowledgement of the parked
+	// unit, with nothing of ours left to carry it. Not from CLOSED: a
+	// conversation this segment ended, or a listed corpse, owes nothing.
+	if (ack_was_owed && c->ack_owed && c->state != TCP_CLOSED)
 		tcp_ack(c);
 	tcp_input_wake_and_unlock(c, irqflags);
 }
