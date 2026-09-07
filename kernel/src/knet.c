@@ -8,6 +8,7 @@
 
 #include "knet.h"
 #include "doorbell.h"
+#include "random.h"             // the pool's thread-context fold, and the drain's own moment
 #include "driver/net/net_device.h"
 #include "driver/net/tcp.h"
 #include "driver/net/dhcp.h"
@@ -75,6 +76,12 @@ void knet_thread(void)
 			rounds++;
 		} while (moved && rounds < KNET_DRAIN_ROUNDS);
 		kKnetDrainRounds += rounds;
+		// Thread context, so the pool may take its lock here: fold what the
+		// interrupt handlers and the tick have accumulated, and add this
+		// wake's own moment if frames moved (RANDOM.md).
+		if (rounds > 1 || moved)
+			random_add_timing(RANDOM_SOURCE_DRAIN);
+		random_fold_fast_pools();
 		if (moved)
 		{
 			// Budget spent with work still on a ring: after the timers, come

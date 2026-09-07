@@ -28,7 +28,11 @@ override USER_VARIABLE = $(if $(filter $(origin $(1)),default undefined),$(eval 
 # target individually, so anyone rebuilding an invocation from these
 # variables — as the headless harness does — inherited everything EXCEPT the
 # flag that mattered. See VERIFICATION.md's headless section for the scar.
-QEMU_BASE_FLAGS = -machine q35 -m 8g -no-reboot -smp 8 \
+# -cpu: the default qemu64 model hides RDRAND and RDSEED, which every real
+# machine this OS runs on has (RNG_PROBE.md); exposing them keeps the
+# harness honest about the entropy pool's normal path. A boot on the bare
+# model (drop the +features) is how the pool's timing-only path is tested.
+QEMU_BASE_FLAGS = -machine q35 -cpu qemu64,+rdrand,+rdseed -m 8g -no-reboot -smp 8 \
                   -serial file:qemu_com1.log \
                   -monitor $(shell echo telnet:127.0.0.1:55555,server,nowait) \
 				 # -d $(shell echo int,cpu_reset,pcall,guest_errors)

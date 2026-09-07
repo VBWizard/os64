@@ -23,6 +23,12 @@
 //   /dev/null   reads EOF, swallows every write.
 //   /dev/zero   reads an endless run of zero bytes, swallows every write.
 //   /dev/full   reads zeros like /dev/zero; every write FAILS.
+//   /dev/random reads exactly the bytes asked for from the entropy pool
+//               (random.h, RANDOM.md), never short; a write is folded into
+//               the pool. Refuses a read before the pool is seeded, which
+//               boot outlasts on every machine here. ONE node: the
+//               random/urandom split is a fossil of a gated estimator
+//               Linux itself retired in 5.6.
 //   /dev/tty    the caller's own terminal (see THE ALIAS below).
 //
 // ── Lineage, because it explains the shapes ─────────────────────────────────

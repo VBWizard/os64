@@ -53,6 +53,7 @@
 #include "strings/sprintf.h"   // snprintf — netdev.location, "02:00.0"
 #include "knet.h"                // kNetDoorbell — the interrupt handler rings it
 #include "smp.h"                 // kCPUInfo — the MSI is addressed at the BSP
+#include "random.h"              // the interrupt's moment feeds the entropy pool
 
 // kPCIDeviceHeaders / kPCIDeviceFunctions and their counts come from pci.h —
 // declared there, so NOT re-declared here. (Re-declaring them by hand is how
@@ -1707,6 +1708,7 @@ void r8125_isr(void)
 	r8125_write32(r, R8125_ISR0_8125, status);
 	__sync_fetch_and_or(&r->isr_pending, status);
 	r->msi_fires++;
+	random_add_timing(RANDOM_SOURCE_NIC);   // the arrival's moment, lock-free (RANDOM.md)
 	doorbell_ring(&kNetDoorbell);
 }
 

@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "kernel.h"          // kTicksSinceStart — every TCP timer rides it
+#include "random.h"          // the ISS and the ephemeral port's starting point
 #include "serial_logging.h"
 #include "memcpy.h"
 #include "spinlock.h"
@@ -38,7 +39,12 @@ spinlock_t kTcpListLock;
 #define TCP_EPHEMERAL_BASE   49152u
 #define TCP_EPHEMERAL_COUNT  16384u
 
-static uint16_t s_next_ephemeral = TCP_EPHEMERAL_BASE;
+// The next port to try, walked in order from a RANDOM start chosen at the
+// first dial (RFC 6056's simplest recommendation): a sequence that began
+// at 49152 on every boot told a remote observer exactly which port the
+// next connection would use, which is half of what an off-path attacker
+// needs to guess a four-tuple. Zero until the first draw.
+static uint16_t s_next_ephemeral;
 
 // One bit per ephemeral port (2KB): which of them a listed connection holds.
 // Guarded by kTcpListLock like the list itself — set when a dial's draw
@@ -97,29 +103,21 @@ static void tcp_abort(tcp_conn_t* c)
 // The initial sequence number. RFC 793 specified a clock-based ISN, and
 // Robert Morris showed in 1985 that a PREDICTABLE ISN lets an attacker
 // forge a connection blind (the technique behind the 1994 Mitnick attack);
-// RFC 6528 now requires unpredictability. os64 has no entropy pool yet, so
-// this mixes the tick counter with the connection's own addressing and a
-// scramble — better than a counter, honestly weaker than a real PRNG, and
-// booked as a DEBT rather than dressed up.
+// RFC 6528 now requires unpredictability, and the entropy pool (random.h,
+// RANDOM.md) supplies it: every dial draws a fresh 32-bit ISS.
 //
-// The per-dial serial is the part that is not about attackers: it is what
-// makes two incarnations of one four-tuple DISTINGUISHABLE. A refused
-// dial gives its port back at once, so a redial can wear the same tuple
-// within the same 10ms tick, and the acceptance rules in tcp_input judge
-// a straggler from the first attempt by whether it acknowledges this
-// one's ISS. Tick alone gave both the same ISS (Codex, PR #46); RFC 793's
-// 4µs clock and RFC 6528's M term exist for exactly this, and a serial
-// that moves on every dial is the same guarantee without a finer clock.
-// Read under kTcpListLock, which every dial holds here.
-static uint32_t s_dial_serial;
-static uint32_t tcp_initial_seq(uint32_t peer_ip, uint16_t peer_port, uint16_t local_port)
+// That draw also covers the job the tick counter could not: two
+// incarnations of one four-tuple must be DISTINGUISHABLE. A refused dial
+// gives its port back at once, so a redial can wear the same tuple within
+// the same 10ms tick, and the acceptance rules in tcp_input judge a
+// straggler from the first attempt by whether it acknowledges this one's
+// ISS. Tick alone gave both the same ISS (Codex, PR #46); a per-dial serial
+// answered that until the pool existed, and a random ISS answers it with
+// odds of one in four billion, which is what RFC 6528's construction
+// promises too. Called under kTcpListLock, which every dial holds here.
+static uint32_t tcp_initial_seq(void)
 {
-	uint32_t t = (uint32_t)kTicksSinceStart;
-	uint32_t mix = t * 2654435761u;              // Knuth's multiplicative hash constant
-	mix ^= peer_ip + ((uint32_t)peer_port << 16) + local_port;
-	mix ^= mix >> 13;
-	mix *= 2246822519u;
-	return mix + (++s_dial_serial) * 2654435761u; // distinct per dial, whatever the tick
+	return random_u32();
 }
 
 // ── 2. SEGMENT CONSTRUCTION ─────────────────────────────────────────────────
@@ -1876,6 +1874,8 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	uint16_t local_port = 0;
 	bool found = false;
+	if (s_next_ephemeral == 0)
+		s_next_ephemeral = (uint16_t)(TCP_EPHEMERAL_BASE + random_u32() % TCP_EPHEMERAL_COUNT);
 	for (uint32_t tries = TCP_EPHEMERAL_COUNT; tries > 0; tries--)
 	{
 		uint16_t candidate = s_next_ephemeral++;
@@ -1908,7 +1908,7 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	c->ssthresh = TCP_SND_BUF;
 	c->rto = TCP_RTO_INITIAL_TICKS;
 
-	uint32_t iss = tcp_initial_seq(peer_ip, peer_port, c->local_port);
+	uint32_t iss = tcp_initial_seq();
 	c->snd_una = iss;
 	c->snd_nxt = iss;
 	c->snd_max = iss;
