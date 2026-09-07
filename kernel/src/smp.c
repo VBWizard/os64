@@ -60,11 +60,16 @@ bool mp_scan_for_config(uintptr_t start, uintptr_t length)
 
 bool mp_find_tables()
 {
-    uint16_t* lEBDAPtr=(uint16_t*)0x40e;
-    bool lResult;
-    
-    if (lEBDAPtr != 0)
-        lResult=mp_scan_for_config(*lEBDAPtr<<4, 0x400);
+    // The BIOS data area lives in physical page zero. Its explicit HHDM
+    // alias lets MP discovery read the EBDA pointer without mapping NULL.
+    paging_map_page((pt_entry_t *)kKernelPML4v, kHHDMOffset, 0, PAGE_PRESENT);
+    const uint16_t *ebda_segment = (const uint16_t *)(kHHDMOffset + 0x40e);
+    uintptr_t ebda = (uintptr_t)*ebda_segment << 4;
+    bool lResult = false;
+
+    // An absent or malformed EBDA pointer cannot name the guarded page.
+    if (ebda >= PAGE_SIZE)
+        lResult=mp_scan_for_config(ebda, 0x400);
     if (!lResult)
         if (!mp_scan_for_config(0x9fc00, 0x400))
             if (!mp_scan_for_config(0xF0000, 0xFFFF))

@@ -105,9 +105,39 @@ tty_cell_t *tty_visible_line(tty_t *t, uint32_t screen_row)
 	return tty_line(t, (top + screen_row) % t->total_lines);
 }
 
+// Form feed restores blank cells to terminal paper. Background indices use
+// an offset of one (os64/ansi.h) so zero means default paper, not black.
+// Scrolling and ANSI erasure instead use tty_erase_span's SGR background.
 static void tty_clear_line(tty_t *t, uint32_t ring_line)
 {
 	memset(tty_line(t, ring_line), 0, (size_t)t->cols * sizeof(tty_cell_t));
+}
+
+// Resolve attributes before an overlay swaps the resulting colours. The
+// console repaint and selection painter share this; gterm uses the same
+// palette and attribute helpers from os64/ansi.h.
+void tty_cell_colors(const tty_t *t, const tty_cell_t *cell,
+                     uint32_t *fg, uint32_t *bg)
+{
+	*fg = cell->ch ? cell->color : t->color;
+	*bg = os64_ansi_bg_color(cell->bg, t->glass_bg);
+	os64_ansi_apply_attrs(cell->attrs, fg, bg);
+}
+
+// Erasure and scrolling fill with the current SGR background, not default
+// paper. Reverse video belongs to drawn text: blanks drop attributes while
+// retaining the SGR background, matching xterm's background-colour erase.
+static void tty_erase_span(tty_t *t, uint32_t ring_line, uint32_t from, uint32_t to)
+{
+	tty_cell_t *line = tty_line(t, ring_line);
+	for (uint32_t c = from; c < to && c < t->cols; c++)
+	{
+		line[c].ch = '\0';
+		line[c].attrs = 0;
+		line[c].bg = t->bg;
+		line[c]._pad = 0;
+		line[c].color = t->color;
+	}
 }
 
 tty_t *task_tty(struct task *t)
@@ -168,9 +198,16 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 		{
 			tty_cell_t *cell = &tty_line(t, tty_row_line(t, t->cur_row))[t->cur_col];
 			cell->ch = ch;
+			cell->attrs = t->attrs;
+			cell->bg = t->bg;
+			cell->_pad = 0;
 			cell->color = t->color;
 			if (*glass)
-				renderer_glass_putc_locked(ch, t->cur_row, t->cur_col, t->color);
+			{
+				uint32_t fg, bg;
+				tty_cell_colors(t, cell, &fg, &bg);
+				renderer_glass_putc_bg_locked(ch, t->cur_row, t->cur_col, fg, bg);
+			}
 			t->cur_col++;
 			break;
 		}
@@ -190,7 +227,7 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 		t->screen_top = (t->screen_top + 1) % t->total_lines;
 		if (t->hist_lines < t->total_lines - t->rows)
 			t->hist_lines++;
-		tty_clear_line(t, tty_row_line(t, t->rows - 1));
+		tty_erase_span(t, tty_row_line(t, t->rows - 1), 0, t->cols);
 		t->cur_row = t->rows - 1;
 		// THE deferral point: no glass scroll, no 3MB memmove. Mark the
 		// glass stale, stop mirroring for the rest of this write, and let
@@ -200,6 +237,204 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 			s_glassStale = true;
 			*glass = false;
 		}
+	}
+}
+
+// ── What an escape sequence asked for (caller holds t->lock) ───────────────
+//
+// THE PEN AND THE PAPER. `t->color`/`t->bg`/`t->attrs` are the pen: what the
+// NEXT character written will look like. `t->glass_bg` is the paper: what
+// this terminal is, underneath everything, including the parts no character
+// has ever been written to. A program changes the pen constantly and the
+// paper almost never, which is why one is SGR and the other is an OSC.
+
+#define TTY_DEFAULT_FG 0xffffffff
+#define TTY_FG_NOT_INDEXED 0xff   // the pen's colour did not come from the palette
+
+// The foreground a palette index means RIGHT NOW — bold picks the bright
+// half. A font with one weight cannot thicken a glyph, so bold does here
+// what every such terminal has done since the VT100: it brightens. Keeping
+// the INDEX in the tty (never in the cell, which has no room) is what lets a
+// later `ESC[1m` brighten a colour chosen before it, the way a real terminal
+// does.
+static uint32_t tty_fg_for(uint8_t index, uint8_t attrs)
+{
+	if (index == TTY_FG_NOT_INDEXED)
+		return TTY_DEFAULT_FG;
+	if ((attrs & OS64_ANSI_ATTR_BOLD) && index < 8)
+		index = (uint8_t)(index + 8);
+	return os64_ansi_color(index);
+}
+
+static void tty_sgr_locked(tty_t *t, const ansi_action_t *a)
+{
+	// No parameters at all is `ESC[m`, which is a reset — the one place
+	// where "nothing was said" means something rather than nothing.
+	uint8_t n = a->nparams == 0 ? 1 : a->nparams;
+
+	for (uint8_t i = 0; i < n; i++)
+	{
+		uint16_t p = a->nparams == 0 ? 0 : a->params[i];
+		// Extended colours are unsupported groups, not independent SGR
+		// commands: an RGB component of zero must not reset the pen. An
+		// unknown selector has no known length, so discard the remaining
+		// parameters rather than interpret possible colour components.
+		if (p == 38 || p == 48 || p == 58)
+		{
+			if (i + 1 >= n)
+				break;
+			uint16_t selector = a->params[++i];
+			uint8_t components = selector == 5 ? 1 : selector == 2 ? 3 : 0;
+			if (components == 0 || components > n - i - 1)
+				break;
+			i += components;
+			continue;
+		}
+
+		if (p == 0)
+		{
+			t->attrs = 0;
+			t->bg = OS64_ANSI_BG_DEFAULT;
+			t->fg_index = TTY_FG_NOT_INDEXED;
+			t->color = TTY_DEFAULT_FG;
+		}
+		else if (p == 1)  { t->attrs |= OS64_ANSI_ATTR_BOLD;
+		                    t->color = tty_fg_for(t->fg_index, t->attrs); }
+		else if (p == 7)  { t->attrs |= OS64_ANSI_ATTR_REVERSE; }
+		else if (p == 22) { t->attrs &= (uint8_t)~OS64_ANSI_ATTR_BOLD;
+		                    t->color = tty_fg_for(t->fg_index, t->attrs); }
+		else if (p == 27) { t->attrs &= (uint8_t)~OS64_ANSI_ATTR_REVERSE; }
+		else if (p >= 30 && p <= 37)   { t->fg_index = (uint8_t)(p - 30);
+		                                 t->color = tty_fg_for(t->fg_index, t->attrs); }
+		else if (p == 39)              { t->fg_index = TTY_FG_NOT_INDEXED;
+		                                 t->color = TTY_DEFAULT_FG; }
+		else if (p >= 40 && p <= 47)   { t->bg = OS64_ANSI_BG_INDEX(p - 40); }
+		else if (p == 49)              { t->bg = OS64_ANSI_BG_DEFAULT; }
+		else if (p >= 90 && p <= 97)   { t->fg_index = (uint8_t)(p - 90 + 8);
+		                                 t->color = tty_fg_for(t->fg_index, t->attrs); }
+		else if (p >= 100 && p <= 107) { t->bg = OS64_ANSI_BG_INDEX(p - 100 + 8); }
+		// Everything else — underline, blink, 256-colour, the strikethroughs
+		// — is a rendition this terminal cannot show. Skipped in silence, and
+		// deliberately not "approximated": a blink rendered as bold is a lie
+		// about what the program asked for.
+	}
+}
+
+// Erase, and hand the glass back to the repaint rider. An erase changes a
+// region rather than a cell, and painting it here would mean teaching the
+// renderer a second way to be told about a rectangle — while the rider
+// already repaints the whole screen from the grid, correctly, within a
+// frame. (The one exception is a full clear to the terminal's own paper,
+// which the renderer can do in a single fill and which clear(1) does often
+// enough to be worth the branch.)
+static void tty_erase_glass_hint(tty_t *t, bool *glass, bool whole_screen)
+{
+	if (!*glass)
+		return;
+	if (whole_screen && os64_ansi_bg_color(t->bg, t->glass_bg) == t->glass_bg)
+	{
+		renderer_glass_clear_locked();
+		return;
+	}
+	s_glassStale = true;
+	*glass = false;
+}
+
+static void tty_apply_locked(tty_t *t, const ansi_action_t *a, bool *glass)
+{
+	switch (a->kind)
+	{
+	case ANSI_PRINT:
+		tty_putc_locked(t, a->byte, glass);
+		return;
+
+	case ANSI_SGR:
+		tty_sgr_locked(t, a);
+		return;
+
+	case ANSI_CURSOR_POS:
+	{
+		// 1-based on the wire, 0-based here, and a missing or zero
+		// parameter means one. Clamped rather than refused: a program that
+		// asks for row 99 on a 25-row terminal means the bottom, and every
+		// terminal it has ever run on told it so.
+		uint32_t row = a->nparams > 0 && a->params[0] > 0 ? a->params[0] - 1u : 0;
+		uint32_t col = a->nparams > 1 && a->params[1] > 0 ? a->params[1] - 1u : 0;
+		t->cur_row = row < t->rows ? row : t->rows - 1;
+		t->cur_col = col < t->cols ? col : t->cols - 1;
+		return;   // moving the cursor paints nothing
+	}
+
+	case ANSI_ERASE_DISPLAY:
+	{
+		uint16_t mode = a->nparams > 0 ? a->params[0] : 0;
+		if (mode > 2)
+			return;   // unsupported ED modes must not fall back to ED0
+		// ED DOES NOT MOVE THE CURSOR. `clear` sends `ESC[2J` and then
+		// `ESC[H` precisely because the first does not imply the second,
+		// and a terminal that homed the cursor on its own would put the
+		// next line of output somewhere the program did not ask for.
+		if (mode == 2)
+		{
+			for (uint32_t r = 0; r < t->rows; r++)
+				tty_erase_span(t, tty_row_line(t, r), 0, t->cols);
+		}
+		else if (mode == 1)
+		{
+			for (uint32_t r = 0; r < t->cur_row; r++)
+				tty_erase_span(t, tty_row_line(t, r), 0, t->cols);
+			tty_erase_span(t, tty_row_line(t, t->cur_row), 0, t->cur_col + 1);
+		}
+		else
+		{
+			tty_erase_span(t, tty_row_line(t, t->cur_row), t->cur_col, t->cols);
+			for (uint32_t r = t->cur_row + 1; r < t->rows; r++)
+				tty_erase_span(t, tty_row_line(t, r), 0, t->cols);
+		}
+		tty_erase_glass_hint(t, glass, mode == 2);
+		return;
+	}
+
+	case ANSI_ERASE_LINE:
+	{
+		uint16_t mode = a->nparams > 0 ? a->params[0] : 0;
+		if (mode > 2)
+			return;
+		uint32_t line = tty_row_line(t, t->cur_row);
+		if (mode == 2)
+			tty_erase_span(t, line, 0, t->cols);
+		else if (mode == 1)
+			tty_erase_span(t, line, 0, t->cur_col + 1);
+		else
+			tty_erase_span(t, line, t->cur_col, t->cols);
+		tty_erase_glass_hint(t, glass, false);
+		return;
+	}
+
+	case ANSI_GLASS_BG:
+		// SETTING THE PAPER TO WHAT IT ALREADY IS COSTS NOTHING, and that
+		// matters because the natural way to keep a terminal's colour is to
+		// put the sequence in $PROMPT, where it arrives before every command
+		// line. Without this, each prompt would order a full repaint of a
+		// screen that had not changed.
+		if (t->glass_bg == a->color)
+			return;
+		// The paper changes under everything, including the margins beyond
+		// the last cell, so the whole glass owes a repaint. The renderer's
+		// own background follows the FOCUSED terminal — that is what fills
+		// the pixels no cell covers.
+		t->glass_bg = a->color;
+		if (kTTYFocused == t)
+		{
+			// History uses the same paper. Defer its cells and margins
+			// together, even when this write was not mirroring the glass.
+			s_glassStale = true;
+			*glass = false;
+		}
+		return;
+
+	case ANSI_NOTHING:
+		return;
 	}
 }
 
@@ -220,6 +455,7 @@ static void tty_repaint_locked(tty_t *t)
 
 	uint64_t rflags = renderer_glass_begin();
 	renderer_glass_defer_locked();
+	renderer_glass_background_locked(t->glass_bg);
 
 	for (uint32_t r = 0; r < t->rows; r++)
 	{
@@ -227,10 +463,13 @@ static void tty_repaint_locked(tty_t *t)
 		for (uint32_t c = 0; c < t->cols; c++)
 		{
 			// A never-written cell paints as a space — full coverage means
-			// the repaint needs no separate clear pass (and no flicker).
+			// the repaint needs no separate clear pass (and no flicker),
+			// and it is also what paints this terminal's own background
+			// across the parts of the screen nothing has been written to.
 			char ch = line[c].ch ? line[c].ch : ' ';
-			uint32_t color = line[c].ch ? line[c].color : t->color;
-			renderer_glass_putc_locked(ch, r, c, color);
+			uint32_t fg, bg;
+			tty_cell_colors(t, &line[c], &fg, &bg);
+			renderer_glass_putc_bg_locked(ch, r, c, fg, bg);
 		}
 	}
 	renderer_glass_blit_locked();
@@ -294,8 +533,15 @@ void tty_write(tty_t *t, const char *bytes, size_t length)
 	// tty_putc_locked may retire `glass` at the first scroll (deferred-glass
 	// doctrine) — that changes who paints, not who holds the renderer lock,
 	// which is why the release below keys off glass_lock_held instead.
+	// EVERY BYTE GOES THROUGH THE ESCAPE READER, whose state lives in the
+	// tty — so a sequence split across two write() calls (which is what
+	// `printf("\033[31m%s", s)` can produce) is still one sequence.
 	for (size_t i = 0; i < length; i++)
-		tty_putc_locked(t, bytes[i], &glass);
+	{
+		ansi_action_t action = ansi_feed(&t->ansi, bytes[i]);
+		if (action.kind != ANSI_NOTHING)
+			tty_apply_locked(t, &action, &glass);
+	}
 
 	// Change tracking (PTY.md): one bump per WRITE, not per character — a
 	// snapshot poll cares that the grid moved, not how many times. Every
@@ -328,10 +574,9 @@ void tty_flush_if_dirty(void)
 		return;
 
 	uint64_t flags = spinlock_acquire_irqsave(&t->lock);
-	// Re-check under the lock; repaint only the terminal that is still on
-	// stage AND showing the present (a scrollback viewer's screen must not
-	// snap forward because a background flood is writing history).
-	if (s_glassStale && kTTYFocused == t && t->view_offset == 0)
+	// Re-check focus under the lock. Repaint uses tty_visible_line, so a
+	// paper change also refreshes history without changing view_offset.
+	if (s_glassStale && kTTYFocused == t)
 		tty_repaint_locked(t);   // clears s_glassStale itself
 	spinlock_release_irqrestore(&t->lock, flags);
 }
@@ -473,7 +718,9 @@ void tty_focus(uint32_t index)
 	// lock.
 	bool gui_target = (next == &kTTY[7] && gui_vt8_seated());
 	if (!gui_target)
+	{
 		tty_repaint_locked(next);
+	}
 	spinlock_release_irqrestore(&next->lock, flags);
 	if (gui_target)
 		gui_vt8_focus_gained();
@@ -718,7 +965,13 @@ tty_t *pty_create_slave(uint32_t cols, uint32_t rows)
 	t->rows = rows;
 	t->total_lines = rows * TTY_SCROLLBACK_SCREENS;
 	t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
-	t->color   = 0xffffffff;
+	// kmalloc zeroes, which is already right for the attributes, the
+	// background and the escape reader. The two that are NOT zero say so:
+	// the pen's colour did not come from the palette, and the paper starts
+	// as the console's.
+	t->color   = TTY_DEFAULT_FG;
+	t->fg_index = TTY_FG_NOT_INDEXED;
+	t->glass_bg = kFrameBufferBackgroundColor;
 	t->is_pty  = true;
 	t->pty_mode = PTY_MODE_GRID;
 	t->state   = TTY_LIVE;   // born attended — its master IS the human
@@ -1031,7 +1284,9 @@ void tty_init(void)
 		// kmalloc zeroes every allocation at the choke point (house doctrine),
 		// so every cell starts blank and every lock/counter starts clear.
 		t->cells = kmalloc((size_t)t->total_lines * cols * sizeof(tty_cell_t));
-		t->color = 0xffffffff;
+		t->color = TTY_DEFAULT_FG;
+		t->fg_index = TTY_FG_NOT_INDEXED;
+		t->glass_bg = kFrameBufferBackgroundColor;
 		t->state = TTY_DORMANT;
 	}
 

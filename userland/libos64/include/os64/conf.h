@@ -6,7 +6,7 @@
 // os64's configuration dialect was settled by /etc/logd.conf on 2026-08-18
 // and its header made a promise: "whatever this file does, the next daemon
 // that needs configuring will copy". The next one was os64get (2026-08-22,
-// /etc/os64get.conf — where a fetched file goes, and where its archive copy
+// /etc/os64get.conf — where a fetched file goes, and where the replaced original
 // lives), and copying a parser is how two files come to disagree about what
 // a comment is. So the reader moved here, the day its second consumer
 // arrived — consumer-driven, like everything else in this library.

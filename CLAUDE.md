@@ -270,9 +270,18 @@ make -C kernel test-elf
   replaced underneath it. Open DIRECTORIES still refuse. (The blanket refusal
   ruled 2026-08-04 was explicitly consumer-driven; the consumer was `os64
   refresh` replacing /bin/husk while husk runs.) NOTE for anyone adding code
-  that closes a file: a close can now do real disk I/O, so it must run in
-  KERNEL context (see `fops->mounted` in vfs.h and the burial close in
-  task.c). Verified by the in-OS test suite AND host `make fsck-ext2`
+  that closes a file: a close can now do real disk I/O. **NVMe I/O is
+  reachable from ANY address space since 2026-09-06** — every buffer the
+  path touches is an HHDM alias and so is the NVMe register window (the
+  window was the last lower-half dependency; it made the ELF loader's
+  direct opens a kernel #PF on the first block-cache miss under a task's
+  CR3 — the P5's NOCACHE and os64get-during-latetests deaths). AHCI still
+  identity-maps its window and command lists in kKernelPML4 alone, so on a
+  SATA root the old rule holds until its DEBTS row is paid. The
+  `call_in_kernel_context` wrappers on the syscall and burial paths stay
+  for the reasons that remain: a burial runs while the task's own address
+  space is being torn down, and the per-core interrupt stack is deeper than
+  a thread's. Verified by the in-OS test suite AND host `make fsck-ext2`
   (e2fsck must stay green — with a writable root it is the constitution).
 - Root filesystem mounted via `ROOTPARTUUID`/`ROOT` kernel cmdline parameter;
   FAT32 or ext2 both work as root (see the "/QEMU Boot (ext2 root)" Limine entry)
@@ -374,6 +383,19 @@ make -C kernel test-elf
   `mount`(1)/`unmount`(1) ship in /bin; df/lsblk/lsof are Chris's, reading
   these files.
 
+**The network bottom half (`kernel/src/knet.c`, `kernel/src/doorbell.c`) —
+DOORBELL.md is the design record.** A NIC's interrupt handler RINGS a
+doorbell (lock-free, a store and a self-IPI — it may never take the queue
+lock, the 9badced rule) and `knet`, a kernel daemon pinned to the BSP, wakes
+to DRAIN every registered NIC through the seam's `drain` verb, run the
+TCP/DHCP timers, and park. The tick rings the same bell once per tick, which
+is what keeps a NIC with no interrupt (virtio) at its old cadence.
+`/sys/net/knet` carries the counters (wakes, drain rounds, the longest wake)
+— read it FIRST when a transfer is slower than the wire; it caught a 5,800
+wakes-a-second loop the day it was born. The e1000 rings from its INTx
+handler, the RTL8125 from MSI (vector 0x46, P5 only), and `tcp_input` wakes a
+parked reader on arrival instead of at the tick.
+
 **System Drivers:**
 - **PCI** (`pci.c`): PCI device enumeration and configuration
 - **ACPI** (`acpi.c`): ACPI table parsing (RSDP, MADT, MCFG, etc.)
@@ -386,7 +408,50 @@ make -C kernel test-elf
   console_read (console.c) turns into end-of-input: read() returns 0 once,
   then the console reads normally again. The framebuffer renderer
   (BasicRenderer.c print_n) honors '\b' (cursor back one cell, clamped at
-  column 0 — erasure is caller overprint, e.g. husk's "\b \b") and '\r'
+  column 0 — erasure is caller overprint, e.g. husk's "\b \b") and '\r'.
+  **Arrow keys arrive as `ESC [ A/B/C/D`** — the VT100 spelling, chosen for
+  interop so that anything reading a terminal reads them unchanged
+
+### The terminal's escape sequences
+
+**A terminal that obeys a byte can be told what to do by whoever wrote it**,
+so os64 implements an escape WHEN SOMETHING ASKS FOR ONE and not before
+(Chris's ruling). What is read today, and nothing else: `ESC[<n>m` (SGR —
+colour and attributes), `ESC[<r>;<c>H` (cursor position), `ESC[<n>J` and
+`ESC[<n>K` (erase display, erase line), and `ESC]11;#rrggbb` (OSC 11 — the
+terminal's own background). Everything else is consumed and ignored, which
+is what every terminal does: printing the bytes of an unknown sequence
+spills its parameters across the screen, and logging them floods the log the
+first time a program with better taste in terminals runs.
+
+- **`kernel/src/ansi.c` is a pure state machine** — no kernel headers, no
+  locks, one byte in and one action out — so `tools/test_ansi_host.sh`
+  drives it with plain `cc` under ASan. That is not decoration: a sequence
+  arrives in whatever pieces `write()` was called with, and the harness
+  caught four real bugs (stale parameters leaking into the next sequence, a
+  leading `;` losing a parameter, an ESC mid-sequence printing as text, and
+  `ESC ( B` leaving its final letter on screen) before the kernel ever ran it.
+- **THE PEN AND THE PAPER are different things.** `t->color`/`t->bg`/
+  `t->attrs` are the pen — what the next character will look like, set by
+  SGR. `t->glass_bg` is the paper — what this terminal IS underneath,
+  including where nothing was ever written and the margins past the last
+  cell, set by OSC 11. `renderer_glass_background_locked` updates the
+  renderer's paper and remainder strips during a full tty repaint, including
+  focus changes and history views. Per tty; gterm's use of this paper is
+  deferred in DEBTS.md.
+- **A cell costs the same eight bytes it always did**: the glyph, an
+  attribute byte, a background palette INDEX, and the 32-bit foreground.
+  One byte remains padding. Size and field offsets are static-asserted
+  against `os64_pty_cell_t` because gterm renders the same cells in ring 3.
+  The background index covers the supported sixteen-colour SGR subset plus
+  default paper; extended indexed and RGB SGR colours are consumed without
+  applying them. `abi/include/os64/ansi.h` holds the palette and the two
+  functions that resolve a cell, so the glass and a gterm cannot disagree
+  about what red is.
+- A background of ZERO means "this terminal's own", not black. New grids
+  and form-feed clearing use zeroed cells; scrolling and ANSI erasure use
+  the active SGR background. Fixture: `/tests/ansiprobe` (add `paper` to
+  change the background)
 
 ### SMP (Symmetric Multiprocessing)
 
@@ -613,6 +678,10 @@ the library serves every process). How it fits together:
   - `NOAHCI`: Disable AHCI driver
   - `NONVME`: Disable NVMe driver
   - `NONET`: Disable networking entirely (there is no per-NIC off switch)
+  - `NETPOLL`: every NIC stays TICK-DRIVEN — no e1000 INTx probe, no RTL8125
+    MSI — and knet wakes only when the tick rings it (DOORBELL.md's
+    flashlight, the path that carried every packet before the doorbell).
+    Like every token: it does NOT travel to the P5 by itself
   - `USBQUIET`: Opt-in 2.4GHz hygiene — unpower idle xHCI controllers'
     ports after enumeration (USB3 signaling jams wireless dongles; Intel's
     2012 whitepaper). Default OFF: connector USB2/USB3 twins share VBUS —

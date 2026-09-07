@@ -661,7 +661,9 @@ void restore_user_cr3(void)
 // An app must not be able to panic the OS by handing a syscall a garbage
 // pointer (ls did exactly that, 2026-07-22), so every page of a user range is
 // vetted before the memcpy touches it:
-//   - VMA-covered → legal: a not-present page is just demand paging waiting
+//   - First virtual page → reject: the pager cannot resolve the NULL guard,
+//     even if a VMA covers it.
+//   - Other VMA-covered pages → legal: a not-present page is demand paging waiting
 //     to happen.  For copy-OUT the VMA must also be writable — a store to a
 //     read-only page would be a ring-0 protection violation, another panic
 //     door.  (CoW pages pass correctly: their VMA says PROT_WRITE and the
@@ -672,12 +674,15 @@ void restore_user_cr3(void)
 //     SYSCALL_RESULT_BAD_USER_DATA instead of the kernel faulting.
 static bool user_range_accessible(const void *user_ptr, size_t length, bool for_write)
 {
+	uintptr_t addr = (uintptr_t)user_ptr;
+	if (addr < PAGE_SIZE)
+		return false;
+
 	core_local_storage_t *cls = get_core_local_storage();
 	task_t *task = cls ? cls->task : NULL;
 	if (task == NULL)
 		return false;
 
-	uintptr_t addr = (uintptr_t)user_ptr;
 	uintptr_t end = addr + length;   // no overflow: callers range-check vs kHHDMOffset first
 
 	for (uintptr_t page = addr & ~(uintptr_t)(PAGE_SIZE - 1); page < end; page += PAGE_SIZE)
@@ -1993,11 +1998,22 @@ static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	return 0;
 }
 
-// The cell layouts must be the SAME BYTES — pty_snapshot memcpys grid rows
-// straight into the ABI struct. Pinned the ext2-superblock way: change either
-// side and the build stops here instead of the terminal rendering confetti.
+// pty_snapshot copies grid rows directly into the ABI struct, so their sizes
+// and field offsets must match. Catch layout drift before it reaches gterm.
 _Static_assert(sizeof(tty_cell_t) == sizeof(os64_pty_cell_t),
                "pty cell ABI drifted from tty_cell_t (size)");
+_Static_assert(__builtin_offsetof(tty_cell_t, ch) ==
+               __builtin_offsetof(os64_pty_cell_t, ch),
+               "pty cell ABI drifted from tty_cell_t (ch offset)");
+_Static_assert(__builtin_offsetof(tty_cell_t, attrs) ==
+               __builtin_offsetof(os64_pty_cell_t, attrs),
+               "pty cell ABI drifted from tty_cell_t (attrs offset)");
+_Static_assert(__builtin_offsetof(tty_cell_t, bg) ==
+               __builtin_offsetof(os64_pty_cell_t, bg),
+               "pty cell ABI drifted from tty_cell_t (bg offset)");
+_Static_assert(__builtin_offsetof(tty_cell_t, _pad) ==
+               __builtin_offsetof(os64_pty_cell_t, _pad),
+               "pty cell ABI drifted from tty_cell_t (_pad offset)");
 _Static_assert(__builtin_offsetof(tty_cell_t, color) ==
                __builtin_offsetof(os64_pty_cell_t, color),
                "pty cell ABI drifted from tty_cell_t (color offset)");
@@ -3375,6 +3391,12 @@ static int count_user_argv(char *const *user_argv)
 	}
 	return SPAWN_MAX_ARGS;
 }
+
+// The cap below is PUBLISHED, so ring 3 can say "that argument is too long"
+// instead of discovering it as a spawn that failed for no stated reason. Two
+// spellings of one number drift; this is what stops them.
+_Static_assert(TASK_MAX_PATH_LEN == OS64_SPAWN_ARG_MAX,
+               "spawn's argument cap and the ABI's OS64_SPAWN_ARG_MAX disagree");
 
 static int marshal_user_argv(char *const *user_argv, char *kargv[],
                              char *strbuf, size_t strbuf_len, int max_args)

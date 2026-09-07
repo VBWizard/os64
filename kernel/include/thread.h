@@ -72,6 +72,9 @@ typedef struct s_thread
 	volatile bool exited;
 	volatile bool exiting;
 	bool idleThread, execDontSaveRegisters;
+	// A doorbell answered for this thread this pass: the pick takes it over
+	// aging, once, and the dispatch clears it (doorbell.h). Not a priority.
+	bool expedite;
 	volatile uint64_t retVal;
 	thread_context_t regs;
 	// The x87/MMX/SSE register file belongs to the thread just as regs does.

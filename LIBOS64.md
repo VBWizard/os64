@@ -97,6 +97,7 @@ umbrella that pulled the world into every TU.
 | `<os64/mem.h>` | `os64_map`/`os64_unmap` (os64's anonymous mmap) and the heap on top of them: `os64_malloc`/`free`/`calloc`/`realloc`, `os64_heap_verify` — engine in `heap.c`, design in MALLOC.md |
 | `<os64/runtime.h>` | `os64_runtime_init` — what `launch` stands up before `main` (today: the heap) |
 | `<os64/str.h>` | str*/mem* primitives |
+| `<os64/url.h>` | `os64_url_parse` — the `scheme://host:port/path` grammar RFC 1738 wrote once for http and gopher as siblings. Grammar only: no scheme table, no default ports, no percent-decoding, so a caller says which schemes it serves and what each implies |
 | `<os64/proc.h>` | `spawn`, `fork`, `exec*`, `waitpid`, `exit`, `kill`, `getcwd`/`chdir` |
 | `<os64/pipe.h>` | `pipe`, `dup`/`dup2` |
 | `<os64/opt.h>` | the `CommandLineOption` getopt-style parser (kept from libChrisOS — it was good) |

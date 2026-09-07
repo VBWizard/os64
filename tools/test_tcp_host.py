@@ -45,6 +45,7 @@ static void kfree(void *p) { free(p); }
 static bool signal_park_must_end(thread_t *t) { (void)t; return false; }
 static void signal_raise(int s,uint64_t w,thread_t *t) { (void)s;(void)t;kTicksSinceStart=w; }
 static void scheduler_wake_isleep_thread_locked(thread_t *t) { (void)t; }
+static void scheduler_wake_isleep_thread(thread_t *t) { (void)t; }
 static void nap(unsigned n) { kTicksSinceStart+=n; }
 static ipv4_tx_t disposition=IPV4_TX_SENT;
 struct packet { uint64_t tick; uint32_t seq,ack; uint16_t len; uint8_t flags; ipv4_tx_t how; uint8_t payload[1460]; };

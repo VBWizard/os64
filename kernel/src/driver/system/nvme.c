@@ -25,9 +25,9 @@ extern block_device_info_t* kBlockDeviceInfo;
 extern int kBlockDeviceInfoCount;
 extern bool kWatchDMA;   // WATCHDMA cmdline flag (kernel_commandline.c)
 // The buffer whose page-table chain WATCHDMA watches: the first controller's
-// write bounce buffer. Both controllers' buffers sit under the same PML4E and
-// PDPTE (they are low identity mappings), so watching one covers the shared
-// upper levels, and four debug registers is the whole hardware budget anyway.
+// write bounce buffer. Both controllers' buffers are HHDM aliases under the
+// same PML4E and PDPTE, so watching one covers the shared upper levels, and
+// four debug registers is the whole hardware budget anyway.
 char *kNvmeWatchTarget = NULL;
 
 // ── The DMA bounce buffers' tripwire (2026-08-14) ───────────────────────────
@@ -106,7 +106,7 @@ static void nvme_dma_tripwire_check(const char *which, uintptr_t base,
 		                               : "DIFFERENT PAGE (the table itself was replaced or lost)");
 
 		panic("NVMe %s DMA buffer 0x%016lx lost its mapping at page 0x%016lx. "
-		      "The kernel's page tables were rewritten under a live identity "
+		      "The kernel's page tables were rewritten under a live "
 		      "mapping — see the walk above.\n", which, base, pages[i]);
 	}
 }
@@ -1367,13 +1367,26 @@ void nvme_init_device(pci_device_t* nvmeDevice)
 	printd(DEBUG_NVME | DEBUG_DETAILED, "Allocated controller_t at 0x%016lx\n",(uintptr_t)controller);
 	controller->nvmePCIDevice = nvmeDevice;
 	controller->mmioAddress = baseMemoryAddress;
-	controller->registers = (volatile nvme_controller_regs_t*)controller->mmioAddress;
 	controller->mmioSize = bar0_size;
 	controller->adminCID = controller->cmdCID = 0;
 	controller->cmdQID = 1;
 
-	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: Updating paging for MMIO Base Address, identity mapped at 0x%016lx\n", controller->mmioAddress);
-	paging_map_pages((pt_entry_t*)kKernelPML4v, controller->mmioAddress, controller->mmioAddress, bar0_size / PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	// The register window lives at its HHDM alias — an UPPER-half VA, which
+	// every task's PML4 shares with the kernel — for the same reason the NIC,
+	// xHCI and virtio windows do: a doorbell is rung from whatever page
+	// tables happen to be live, and the ELF loader opens a program (ext2
+	// resolving its path, reading its inode) under the SPAWNING task's CR3.
+	// A lower-half identity mapping exists in kKernelPML4 alone, so under any
+	// other CR3 the first doorbell after a block-cache miss is a kernel #PF —
+	// which is how the P5 died on 2026-09-06 (NOCACHE, then a 176MB write
+	// evicting the root's inode lines, then a spawn from the late-tests
+	// thread). PAGE_PCD: device registers are never cached.
+	paging_map_pages((pt_entry_t*)kKernelPML4v, kHHDMOffset + controller->mmioAddress,
+	                 controller->mmioAddress, bar0_size / PAGE_SIZE,
+	                 PAGE_PRESENT | PAGE_WRITE | PAGE_PCD);
+	controller->registers = (volatile nvme_controller_regs_t*)(kHHDMOffset + controller->mmioAddress);
+	printd(DEBUG_NVME | DEBUG_DETAILED,"NVME: MMIO window phys 0x%016lx mapped at its HHDM alias %p\n",
+	       controller->mmioAddress, controller->registers);
 
 	nvme_print_version(controller->registers->version);
 	nvme_extract_cap(controller);

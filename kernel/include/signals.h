@@ -207,6 +207,12 @@ static inline void sigset_clear_mask(signal_set_t *s, uint32_t mask)
 	#define SIGNALS_EXIT_SIGHUP   129   // 128 + 1
 	#define SIGNALS_EXIT_SIGINT   130   // 128 + 2
 	#define SIGNALS_EXIT_SIGKILL  137   // 128 + 9
+	// SIGSEGV is not raised through this file's delivery path — the page-fault
+	// handler kills the task where the fault happened — but the STATUS it
+	// leaves is the same encoding, so it belongs with its siblings rather than
+	// as a literal at the exception. A number that lives alone is a number the
+	// assertions below cannot reach.
+	#define SIGNALS_EXIT_SIGSEGV  139   // 128 + 11
 	#define SIGNALS_EXIT_SIGPIPE  141   // 128 + 13
 	#define SIGNALS_EXIT_SIGTERM  143   // 128 + 15
 

@@ -7,11 +7,16 @@
 // WHY IT IS ITS OWN FILE. os64get speaks two dialects now: the valet's
 // (`GET <name>\n`, one length, one CRC, RTL8125.md's 1971 shape) and the
 // world's. They share the .part-then-rename discipline and nothing else, so
-// they are kept apart here rather than braided through one function. The
-// browser campaign's later rungs — a gopher client, the browser itself —
-// will want this machinery too; BROWSER.md rules that the shared library is
-// a LATER slice with its own review, so what lives here is the SEAM, cut
-// where it will eventually be sawn through, and not the library.
+// they are kept apart here rather than braided through one function.
+//
+// WHAT AN ADDRESS IS LIVES IN libos64, NOT HERE. `os64_url_parse`
+// (os64/url.h) owns the scheme/host/port/path grammar, because gopher needs
+// every rule of it and a security-edged rule kept in two places drifts.
+// What stays here is everything that is HTTP's alone: which schemes this
+// program serves and what port each implies, the request line and the Host
+// header, and `http_url_absolute` — RFC 3986 §5.2 reference resolution,
+// which exists because a Location may be relative. Gopher has no relative
+// links at all, so §5.2 has exactly one customer and belongs beside it.
 //
 // WHY PARSING IS SEPARATE FROM THE SOCKET. Every function below that reads
 // takes its bytes from an `http_source_fn`, never from a handle. On os64 the
@@ -47,7 +52,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "os64/resolve.h"   // OS64_RESOLVE_NAME_MAX — DNS's own ceiling
+#include "os64/url.h"       // the common URL grammar, shared with gopher
 
 // A header line longer than this is DROPPED rather than fatal — but only
 // after the line's NAME has been read out of the truncated prefix and found
@@ -68,9 +73,12 @@
 #define HTTP_HEAD_MAX      65536
 #define HTTP_HEADERS_MAX   128
 
-#define HTTP_HOST_MAX      (OS64_RESOLVE_NAME_MAX + 1)
-#define HTTP_PATH_MAX      1024
-#define HTTP_SCHEME_MAX    16
+// Spelled as the library's, not merely equal to them: http_url_parse fills
+// an http_url_t by copying out of an os64_url_t, so a cap that drifted
+// SMALLER here would silently truncate an address the parser accepted.
+#define HTTP_HOST_MAX      OS64_URL_HOST_MAX
+#define HTTP_PATH_MAX      OS64_URL_PATH_MAX
+#define HTTP_SCHEME_MAX    OS64_URL_SCHEME_MAX
 #define HTTP_REASON_MAX    64
 #define HTTP_TOKEN_MAX     32     // a coding name: "chunked", "gzip", "identity"
 
@@ -88,11 +96,10 @@
 // ── A URL, taken apart ──────────────────────────────────────────────────
 
 typedef struct {
-    char     scheme[HTTP_SCHEME_MAX];   // lowercased; filled even when refused
+    char     scheme[HTTP_SCHEME_MAX];   // lowercased; filled whenever one was readable
     char     host[HTTP_HOST_MAX];       // no port, no userinfo, no brackets
     char     path[HTTP_PATH_MAX];       // always starts '/'; query kept, fragment dropped
     uint16_t port;                      // the scheme's default (80/443) unless the URL said so
-    bool     explicitPort;              // did it? (decides the Host: header's shape)
 } http_url_t;
 
 typedef enum {

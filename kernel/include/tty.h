@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include "driver/system/keyboard.h"   // keyboard_event_t — the input ring's coin
 #include "spinlock.h"
+#include "ansi.h"                     // the escape reader's state, held per tty
+#include "os64/ansi.h"                // the palette both renderers paint from
 
 // tty.h — the virtual terminal object (2026-08-08, "I WANT MY VTs!").
 //
@@ -48,13 +50,24 @@
 #define TTY_COUNT 8                    // tty1..tty8 — the os32 loadout, kept
 #define TTY_SCROLLBACK_SCREENS 4       // grid holds 4 screens: 1 live + 3 history
 
-// One character cell: the glyph and the color it was painted in. 8 bytes
-// with padding — at 1080p that is ~½MB per tty, ~4MB for the fleet, which is
-// the cheapest possible price for repaint-from-state plus scrollback.
+// One character cell: the glyph, how it was painted, and the colours it was
+// painted in. 8 bytes — at 1080p that is ~½MB per tty, ~4MB for the fleet,
+// which is the cheapest possible price for repaint-from-state plus
+// scrollback.
+//
+// An attribute byte and a background index keep the cell at 8 bytes. Its
+// size and field offsets are checked against os64_pty_cell_t in syscall.c
+// because gterm renders these same cells in ring 3. The index represents
+// this implementation's sixteen-colour SGR subset plus default paper;
+// extended indexed and RGB SGR colours are consumed without applying them.
+// A second full XRGB would increase each cell's size and scrollback cost.
 typedef struct tty_cell
 {
-	char ch;                           // 0 = blank (never painted)
-	uint32_t color;
+	char ch;                           // 0 = blank
+	uint8_t attrs;                     // OS64_ANSI_ATTR_* (bold, reverse)
+	uint8_t bg;                        // palette index+1; 0 = the tty's own
+	uint8_t _pad;
+	uint32_t color;                    // foreground, XRGB
 } tty_cell_t;
 
 // A tty with no shell seated: dark glass, waiting. First keystroke on a
@@ -82,7 +95,22 @@ typedef struct tty
 	uint32_t hist_lines;               // valid history lines above screen_top
 	uint32_t view_offset;              // >0 = viewing history, this many lines up
 	uint32_t cur_row, cur_col;         // cursor, relative to screen_top
-	uint32_t color;                    // current write color
+	uint32_t color;                    // current write color (foreground)
+
+	// ── What an escape sequence has said (guarded by `lock`) ───────────────
+	// The pen: every cell written takes these until something changes them.
+	// `glass_bg` is the terminal's OWN background — what a cell with no
+	// background of its own is painted on, what form feed restores,
+	// and what the margins beyond the last cell show. It is PER TTY, so VT2
+	// can be a different colour from VT1, and a gterm from both.
+	uint8_t  attrs;                    // OS64_ANSI_ATTR_*
+	uint8_t  bg;                       // palette index+1; 0 = glass_bg
+	uint8_t  fg_index;                 // which palette entry `color` came from,
+	                                   // or TTY_FG_NOT_INDEXED — kept so that a
+	                                   // later bold can brighten a colour chosen
+	                                   // before it, as a real terminal does
+	uint32_t glass_bg;                 // XRGB (OSC 11)
+	ansi_parser_t ansi;                // mid-sequence state, across writes
 	spinlock_t lock;                   // irqsave — grid/cursor/view; ALWAYS
 	                                   // taken BEFORE the renderer lock, never
 	                                   // after, and never two tty locks at once
@@ -151,6 +179,9 @@ tty_t *task_tty(struct task *t);
 // view; NULL if the row is out of range. THE one place that knows how the
 // ring, screen_top and view_offset combine. Caller holds t->lock.
 tty_cell_t *tty_visible_line(tty_t *t, uint32_t screen_row);
+// Resolve a cell for painting, before selection overlays. Caller holds t->lock.
+void tty_cell_colors(const tty_t *t, const tty_cell_t *cell,
+                     uint32_t *fg, uint32_t *bg);
 
 // Build the grids and take over the console. Call once kmalloc is up —
 // right after renderer_attach_shadow, so nearly all boot spew lands in VT1's

@@ -32,6 +32,7 @@
 #include "memset.h"
 #include "kworker.h"
 #include "test_framework.h"      // late_tests_thread — the "/latetests" task's body
+#include "knet.h"                // knet_thread — the "/knet" task's body
 #include "gui/compositor.h"
 #include "gui/gui_demos.h"
 #include "tty.h"   // per-tty foreground (task_wait) + the task-departure hook (shell gone, or the foreground job)
@@ -1776,6 +1777,27 @@ static void task_table_bracket_close(void)
 	}
 }
 
+void task_init_page_tables(task_t *task)
+{
+    // The private tables share one lifetime with the task. Upper-half
+    // entries refer to the kernel's tables; the low NULL guard is private.
+    task->tableArena = arena_create(16 * PAGE_SIZE);
+    if (task->tableArena == NULL)
+        panic("task_init_page_tables: cannot allocate a table arena\n");
+
+    task->pml4v = arena_alloc_aligned(task->tableArena, PAGE_SIZE, PAGE_SIZE);
+    if (task->pml4v == NULL)
+        panic("task_init_page_tables: table arena could not fund a PML4\n");
+    task->pml4 = (uintptr_t *)((uintptr_t)task->pml4v - kHHDMOffset);
+    memset(task->pml4v, 0, PAGE_SIZE);
+
+    uintptr_t *kernelPML4 = (uintptr_t *)kKernelPML4v;
+    for (int i = 256; i < 512; i++)
+        task->pml4v[i] = kernelPML4[i];
+
+    paging_init_null_guard(task->pml4v, task->tableArena);
+}
+
 task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint64_t pinnedAPICId)
 {
     printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED,
@@ -1841,35 +1863,7 @@ task_t* task_initialize(task_t* parentTask, bool kernelTask, bool idleTask, uint
 	}
 	else
 	{
-		// THIS TASK'S TABLES DIE WITH IT (PAGING_ARENA.md): the PML4 and every
-		// PDPT/PD/PT drawn while mapping this address space come from a
-		// per-task arena, returned wholesale at burial. The pool serves only
-		// the kernel's own (eternal) tables now — which is what made its
-		// sizing deterministic and ended the watch(1) bleed-out. 16KB covers
-		// a typical task's dozen tables without growth; the arena chains more
-		// when demand paging tours wider.
-		newTask->tableArena = arena_create(16 * PAGE_SIZE);
-		if (newTask->tableArena == NULL)
-			panic("task_initialize: cannot allocate a table arena for a new task\n");
-
-		// Allocate new PML4 for this task — the arena's first page. kmalloc
-		// backing means the HHDM math (virt - kHHDMOffset) is exact, same as
-		// the argv/env blobs already rely on.
-		newTask->pml4v = (uintptr_t*)arena_alloc_aligned(newTask->tableArena, PAGE_SIZE, PAGE_SIZE);
-		if (newTask->pml4v == NULL)
-			panic("task_initialize: table arena could not fund a PML4\n");
-		newTask->pml4 = (uintptr_t*)((uintptr_t)newTask->pml4v - kHHDMOffset);
-
-		// Clear the new PML4
-		memset(newTask->pml4v, 0, PAGE_SIZE);
-
-		// Copy upper-half PML4 entries (256-511) from kKernelPML4
-		// This shares the kernel page table structures (not the data, just the pointers)
-		uintptr_t* kernelPML4 = (uintptr_t*)kKernelPML4v;
-		for (int i = 256; i < 512; i++) {
-			newTask->pml4v[i] = kernelPML4[i];
-		}
-
+		task_init_page_tables(newTask);
 		newTask->taskMemoryNextVirt = kernelTask ? KERNEL_TASK_MEMORY_BASE : USER_TASK_MEMORY_BASE;
 		printd(DEBUG_TASK | DEBUG_DETAILED | DEBUG_EXTRA_DETAILED, "task_initialize: Allocated new PML4 at 0x%lx for %s%s task (shared upper-half)\n",
 			newTask->pml4, idleTask ? "idle " : "", kernelTask ? "kernel" : "user");
@@ -2286,6 +2280,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isGBounceTask = (path != NULL && strncmp(path, "/gbounce", 8) == 0);
 	bool isGKeysTask   = (path != NULL && strncmp(path, "/gkeys", 6) == 0);
 	bool isLateTestTask = (path != NULL && strncmp(path, "/latetests", 10) == 0);
+	bool isKnetTask    = (path != NULL && strncmp(path, "/knet", 5) == 0);
 
 	// ONE ANSWER TO "IS THIS THE KERNEL'S OWN CODE?", because the question is
 	// asked in more than one place and the copies drifted. The list used to be
@@ -2321,7 +2316,7 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 	bool isKernelBuiltinTask = isKernelTask &&
 	                          (isIdleTask || isLogdTask || isKWorkerTask ||
 	                           isGuiCompTask || isGBounceTask || isGKeysTask ||
-	                           isLateTestTask);
+	                           isLateTestTask || isKnetTask);
 
 	// Set when we actually load an ELF image below, so we know to latch the ELF
 	// entry registers (argc/argv/env) later — AFTER those fields are populated.
@@ -2486,6 +2481,8 @@ task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bo
 			newTask->threads->regs.RIP = (uint64_t)&gbounce_thread;
 		else if (isGKeysTask)
 			newTask->threads->regs.RIP = (uint64_t)&gkeys_thread;
+		else if (isKnetTask)
+			newTask->threads->regs.RIP = (uint64_t)&knet_thread;
 		else if (isLateTestTask)
 			newTask->threads->regs.RIP = (uint64_t)&late_tests_thread;
 	}

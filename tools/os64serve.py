@@ -1,78 +1,21 @@
 #!/usr/bin/env python3
-r"""os64serve.py - the other end of os64get. Run this on the build PC.
+r"""Serve build files to os64get. Run on the build PC; stop with Ctrl+C.
 
-It is a VALET, not a daemon: you start it when you want to refresh the P5
-and you stop it with Ctrl-C when you are done. It has no config file, no
-install step, no service registration, and it serves exactly the
-directories you name on the command line — one or several, searched in the
-order given, first hit wins (grown from one on 2026-08-21, the day the
-KERNEL started traveling this way: userland/bin carries the apps,
-kernel/bin carries os64_kernel, and a kernel refresh should not require
-copying binaries between them).
+Usage, from the repository root:
+    python3 tools/os64serve.py userland/bin userland/bin/tests=tests kernel/bin=kernelbin etc
 
-    python3 os64serve.py [directory|directory=LOT ...] [--port 6464]
+Options:
+    [PATH|PATH=LOT ...] [--port 6464] [--bind 0.0.0.0]
 
-A directory may carry a LOT label, which travels with every file it serves
-and is what os64get.conf routes on when no rule names the file itself
-(`@tests = /tests`). The label names the SOURCE, never the destination, so
-one lot can hold files bound for several places — see split_lot below.
+Directories are searched in order, first usable file wins, without recursion.
+LOT labels describe the source; the client's os64get.conf chooses destinations.
+With no directory arguments the server offers its current directory.
+The current os64get client uses port 6464 with no override.
 
-Run it on the WINDOWS side of the build PC, not inside WSL2. That is not a
-style preference: WSL2 lives behind a NAT of its own, so a listener there
-is not reachable from the P5 without port-proxy incantations, and the whole
-point of the P5 dialing OUT was to keep NAT out of the story entirely.
-
-BUT THE FILES LIVE IN WSL2, which looks like a contradiction and is not.
-Windows can read WSL2's filesystem directly over \\wsl$, so the listener
-runs as a Windows process (reachable on the LAN) while serving the build
-tree in place (no copy, no mirror, no staging directory). From a WSL2
-shell, invoking the Windows interpreter does both at once:
-
-    cd /mnt/c/temp     # a Windows-visible cwd; python.exe cannot use a Linux one
-    python3.exe '\\wsl$\<distro>\home\<you>\src\os64\tools\os64serve.py' \
-                '\\wsl$\<distro>\home\<you>\src\os64\userland\bin' \
-                '\\wsl$\<distro>\home\<you>\src\os64\kernel\bin'
-
-`wsl -l` names the distro. Verified 2026-08-16 serving userland/bin to the
-P5 with zero files copied anywhere.
-
-Windows will likely prompt about the firewall the first time Python binds —
-say yes, or the P5's connections are dropped before this program ever sees
-them. (The symptom is a client that says "timed out", not "refused".)
-
-THE PROTOCOL (RTL8125.md), deliberately 1971-shaped:
-
-    client -> server:   GET <name>\n
-    server -> client:   OK <length-decimal> <crc32-hex8>\n  then <length> bytes
-                   or:  NO <reason>\n
-
-    client -> server:   LIST\n
-    server -> client:   <name> <length-decimal> <crc32-hex8> <lot>\n
-                        .\n                          (one line per file)
-
-LIST arrived 2026-08-22, when libos64 became a shared object and the payload
-became 66 files: `os64get -a HOST` asks what the valet has and fetches all of
-it, routing each file by /etc/os64get.conf. The lone "." terminator is SMTP's,
-from 1982 - and it is still the right answer for a line protocol a human might
-drive by hand.
-
-One connection per file. ASCII where a human might read it, binary only
-where a machine must. You can drive it by hand with telnet, which matters
-more than it sounds: a protocol you can type is a protocol you can debug
-at 1am on a machine with no tooling.
-
-The CRC is zlib.crc32 - CRC-32/ISO-HDLC, the same one in Ethernet frames
-and PNG chunks and gzip. os64's os64_crc32 computes the identical value;
-tools/test_crc32_host.c checks both against the published vectors so that
-neither end has to be told which flavour the other meant.
-
-SECURITY, stated honestly: there is none. No authentication, no encryption,
-and the only access control is the one rule below - the requested name must
-be a single path component with no separators and no "..", so the serving
-directories are the entire namespace. That is adequate for an isolated
-two-node build segment with no gateway, which is what this was designed
-for, and it is NOT adequate for anything else. Do not run it on your home
-LAN and then forget it is running.
+See OS64GET.md for the installer workflow, configuration, replacement backups,
+cleanup, Windows/WSL setup, protocol, and limits. This is the GET/LIST valet,
+not an HTTP server. It has no authentication or encryption; CRC verifies
+transfer integrity, not the identity of the source.
 """
 
 import argparse

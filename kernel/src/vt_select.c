@@ -313,7 +313,8 @@ static void paint_row_locked(tty_t *t, uint32_t r)
 
 	for (uint32_t c = 0; c < t->cols; c++) {
 		char ch = line[c].ch ? line[c].ch : ' ';
-		uint32_t color = line[c].ch ? line[c].color : t->color;
+		uint32_t fg, bg;
+		tty_cell_colors(t, &line[c], &fg, &bg);
 		bool inverse = (hl && c >= hf && c <= ht) ||
 		               (ptr_here && c == s_ptr_col);
 
@@ -322,9 +323,9 @@ static void paint_row_locked(tty_t *t, uint32_t r)
 		// gpm drew exactly this on the Linux console, and it works on any
 		// glass that can paint a character.
 		if (inverse)
-			renderer_glass_putc_bg_locked(ch, r, c, kFrameBufferBackgroundColor, color);
+			renderer_glass_putc_bg_locked(ch, r, c, bg, fg);
 		else
-			renderer_glass_putc_locked(ch, r, c, color);
+			renderer_glass_putc_bg_locked(ch, r, c, fg, bg);
 	}
 }
 

@@ -153,6 +153,21 @@ Offer `-vnc :0` instead of `-display none` if the human wants to peek.
   Under WSL2 the serial drain can crawl (unsolved QEMU/WSL2 artifact) — a quiet
   log is not a dead kernel; give markers tens of seconds before declaring a
   hang.
+- **The NOCACHE leg: boot it once per slice that touches a driver, the
+  loader, or anything that opens a file from a task's context.** The block
+  cache serves directory and inode blocks from kernel memory that every
+  address space can see, so with it on, a disk path that only works under
+  the kernel's own page tables passes every boot — until a cache miss lands
+  under some task's CR3 and the machine dies in the NVMe driver. `NOCACHE`
+  on the cmdline turns every read into a miss, so the dependence shows on
+  the FIRST spawn instead of the first unlucky one (the P5, 2026-09-06: two
+  NOCACHE boots died five seconds after the prompt; with the cache on the
+  same bug needed a 176MB write during the late tests to evict the root's
+  inode lines). Test-rig the entry the way the deterministic-selection
+  bullet says — the token never ships, and it does not travel to the P5.
+  The test-suite verdicts read the same as on a cached boot, except the
+  block-cache test's coherence half, which skips itself when nothing is
+  cached.
 
 ## The chaos rig (weather in the wire)
 

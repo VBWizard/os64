@@ -54,6 +54,15 @@ typedef struct net_operations
 	// is pinned? until which interrupt?), and it is exactly the kind of
 	// cleverness you add AFTER the pcap says the simple thing works.
 	int32_t (*transmit)(struct net_device* dev, const void* frame, uint16_t length);
+
+	// Take what the hardware has: reclaim finished transmit descriptors and
+	// deliver every received frame through net_device_rx. Returns whether
+	// anything moved, so the caller knows to come around again. Called by
+	// knet, the network drainer thread, never from an interrupt handler —
+	// a handler RINGS (doorbell.h); the drain is the work the ring defers.
+	// The verb the seam lacked while there were two drivers and a per-driver
+	// poll call in the scheduler pass; the third driver made it pay.
+	bool (*drain)(struct net_device* dev);
 } net_operations_t;
 
 // One registered NIC. Drivers allocate this (kmalloc), fill it in, and
@@ -83,6 +92,16 @@ typedef struct net_device
 	// location keep.
 	uint32_t link_mbps;         // 10 / 100 / 1000 / 2500 …, 0 = not known
 	bool full_duplex;           // meaningless unless link_mbps is nonzero
+
+	// THE HARDWARE'S OWN LINK WORD, verbatim, for the day the decode above is
+	// not the whole story (2026-09-05: the P5 at 100/full on a gigabit
+	// switch, and the number that explained it was in no file anyone could
+	// read). A driver formats its status register here as hex — PHYstatus on
+	// the r8125, STATUS on the e1000 — meaningful only to someone with that
+	// chip's register map, and never decoded by the seam. Same contract as
+	// model and location: empty means the driver has no such word (virtio
+	// has no wire), and /sys/net omits the line.
+	char link_raw[16];          // "0x0000004b"
 
 	// WHAT THIS CARD ACTUALLY IS, for /sys/net/<card> (2026-08-20). The name
 	// above is the stack's handle for it; these two are the hardware's own

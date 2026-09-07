@@ -37,6 +37,7 @@
 #include "strftime.h"
 #include "console.h"   // console_read_deadline — the read-patience test
 #include "driver/net/net_device.h"   // test_net_wire — the driver's first packets
+#include "doorbell.h"                // test_doorbell_wakes_sleeper
 #include "driver/net/net_wire.h"     // Phase 2 stack tests build real wire bytes
 #include "driver/net/net_checksum.h"
 #include "driver/net/ethernet.h"
@@ -99,6 +100,58 @@ bool test_register(const char *name, bool (*func)(void), int phase)
     // test_register_policy.
     return test_register_policy(name, func, phase,
         phase == TEST_PHASE_PREBOOT ? TEST_POLICY_PANIC : TEST_POLICY_WARN);
+}
+
+static bool test_null_guard_for_root(pt_entry_t *root, const char *name)
+{
+    uintptr_t pte_address = paging_pte_address(root, 0);
+    if (pte_address == 0 || *(pt_entry_t *)pte_address != 0 ||
+        (paging_walk_paging_table_keep_flags(root, 0, true) & PAGE_PRESENT)) {
+        paging_report_walk(root, 0, name);
+        return false;
+    }
+
+    // A remap must be refused even without PAGE_PRESENT in the request,
+    // and an unaligned address must not bypass the first-page guard.
+    paging_map_page(root, 0, PAGE_SIZE, 0);
+    paging_map_page(root, PAGE_SIZE - 1, PAGE_SIZE, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    if (*(pt_entry_t *)pte_address != 0 ||
+        (paging_walk_paging_table_keep_flags(root, 0, true) & PAGE_PRESENT)) {
+        paging_report_walk(root, 0, name);
+        return false;
+    }
+    return true;
+}
+
+static bool test_page_zero_unmapped(void)
+{
+    if (!test_null_guard_for_root((pt_entry_t *)kKernelPML4v, "kernel NULL guard"))
+        TEST_FAIL("kernel page zero is not guarded");
+
+    // Exercise the production task-table constructor without creating a
+    // schedulable thread. Its arena owns the throwaway tables in full.
+    task_t *task = kmalloc(sizeof(*task));
+    if (task == NULL)
+        TEST_FAIL("cannot allocate the NULL-guard test task");
+    memset(task, 0, sizeof(*task));
+    task_init_page_tables(task);
+    bool ok = test_null_guard_for_root(task->pml4v, "fresh task NULL guard");
+
+    // Bulk mapping must retain the guard while still mapping its neighbour.
+    // The backing addresses are arena pages; the test reads only the tables.
+    uintptr_t phys = (uintptr_t)task->pml4;
+    paging_map_pages(task->pml4v, 0, phys, 2, PAGE_PRESENT | PAGE_WRITE | PAGE_USER);
+    ok = test_null_guard_for_root(task->pml4v, "task NULL guard after bulk map") && ok;
+    uintptr_t neighbour = paging_walk_paging_table_keep_flags(task->pml4v, PAGE_SIZE, true);
+    if ((neighbour & (PAGE_ADDRESS_MASK | PAGE_PRESENT | PAGE_WRITE | PAGE_USER)) !=
+        ((phys + PAGE_SIZE) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER))
+        ok = false;
+
+    arena_destroy(task->tableArena);
+    kfree(task);
+    if (!ok)
+        TEST_FAIL("task page zero guard or neighbouring mapping is incorrect");
+    return true;
 }
 
 static bool test_kmalloc_not_null(void)
@@ -2092,6 +2145,44 @@ static teardown_verdict_t teardown_leak_attempt(void)
 // bill the LATE phase exists to pay, since nobody is waiting on it.
 #define TEARDOWN_LEAK_ATTEMPTS 4
 #define TEARDOWN_LEAK_AGREE    2   // windows that must agree before we believe them
+
+// ── The doorbell (DOORBELL.md) ──────────────────────────────────────────
+// A sleeper parked on a bell is woken by the next pass that rings it, not
+// by its backstop. processSignals rings kDoorbellTestBell on the pass after
+// the arm is set, so a wake within a couple of ticks is the primitive
+// working end to end — service point, expedite, park — and a wake at the
+// five-second backstop is the primitive NOT working, unmistakably.
+
+static bool test_doorbell_wakes_sleeper(void)
+{
+    thread_t *self = get_core_local_storage()->currentThread;
+    doorbell_register(&kDoorbellTestBell, self, "test");
+
+    uint64_t worst = 0;
+    bool ok = true;
+    for (int round = 0; round < 3 && ok; round++) {
+        kDoorbellTestBell.rung = false;
+        __sync_synchronize();
+        uint64_t before = kTicksSinceStart;
+        kDoorbellTestArm = true;                                // the BSP's next pass rings
+        doorbell_park(&kDoorbellTestBell, 5 * TICKS_PER_SECOND);
+        uint64_t took = kTicksSinceStart - before;
+        if (took > worst)
+            worst = took;
+        if (!kDoorbellTestBell.rung) {
+            printd(DEBUG_TESTS, "\tFAIL: test_doorbell_wakes_sleeper - woke with the bell unrung after %lu ticks (the backstop, not the bell)\n", took);
+            ok = false;
+        } else if (took > 3) {
+            printd(DEBUG_TESTS, "\tFAIL: test_doorbell_wakes_sleeper - the ring took %lu ticks to wake the sleeper\n", took);
+            ok = false;
+        }
+    }
+    doorbell_unregister(&kDoorbellTestBell);
+    if (ok)
+        printd(DEBUG_TESTS, "\tPASS: test_doorbell_wakes_sleeper (3 rings, worst %lu tick(s), %lu wake(s) answered by a pass)\n",
+               worst, kDoorbellTestBell.wakes);
+    return ok;
+}
 
 static bool test_task_teardown_leak(void)
 {
@@ -5408,7 +5499,17 @@ static bool test_block_cache(void)
     if (homefs->fops->rm != NULL)
         homefs->fops->rm(tail, homefs);   // tidy; failure is not a verdict
 
-    if (got < (int)sizeof(contentB) || memcmp(chunk, contentB, sizeof(contentB)) != 0)
+    // Two failures that used to share one verdict, and must not: a SHORT
+    // read means the rewrite never landed (a full /home refuses the block —
+    // the P5, 2026-09-06, spent a morning on "invalidation broken" that was
+    // a disk with zero free blocks), while the OLD bytes at full length is
+    // the cache serving what the disk no longer holds.
+    if (got < (int)sizeof(contentB))
+    {
+        kfree(chunk);
+        TEST_FAIL("coherence: rewrite came back SHORT — the write was refused (is /home full?), the cache is not on trial");
+    }
+    if (memcmp(chunk, contentB, sizeof(contentB)) != 0)
     {
         kfree(chunk);
         TEST_FAIL("coherence: read-after-write returned STALE data — invalidation broken");
@@ -5550,6 +5651,7 @@ static void register_builtin_tests(void)
 	test_register("kmalloc_not_null", test_kmalloc_not_null, TEST_PHASE_PREBOOT);
 	test_register("fpu_state_round_trip", test_fpu_state_round_trip, TEST_PHASE_PREBOOT);
     test_register("page_fault_test_mode_returns", test_page_fault_does_not_panic_when_testing_flag_is_set, TEST_PHASE_PREBOOT);
+    test_register_policy("page_zero_unmapped", test_page_zero_unmapped, TEST_PHASE_PREBOOT, TEST_POLICY_PANIC);
     test_register("dlist_basic_operations", test_dlist_basic_operations, TEST_PHASE_PREBOOT);
     test_register("arena_create_and_destroy", test_arena_create_and_destroy, TEST_PHASE_PREBOOT);
     test_register("arena_basic_alloc", test_arena_basic_alloc, TEST_PHASE_PREBOOT);
@@ -5590,6 +5692,7 @@ static void register_builtin_tests(void)
     // drops the SYN instead of resetting it, and then SKIPS. Off the critical
     // path, both costs stop being costs at all.
     test_register("task_teardown_leak", test_task_teardown_leak, TEST_PHASE_LATE);
+    test_register("doorbell_wakes_sleeper", test_doorbell_wakes_sleeper, TEST_PHASE_LATE);
     test_register("ext2_real_partition", test_ext2_real_partition, TEST_PHASE_POSTBOOT);
     test_register("mount_table", test_mount_table, TEST_PHASE_POSTBOOT);
     test_register("devfs", test_devfs, TEST_PHASE_POSTBOOT);

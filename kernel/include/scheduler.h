@@ -49,6 +49,10 @@
 	void scheduler_change_thread_queue_locked(thread_t* thread, eThreadState newState);
 	void scheduler_wake_isleep_thread(thread_t *w);
 	void scheduler_wake_isleep_thread_locked(thread_t *w);
+	// The queue lock for thread-context callers outside scheduler.c (IF off
+	// while held, restored on unlock). doorbell_park is the customer.
+	uint64_t scheduler_lock_queues(void);
+	void scheduler_unlock_queues(uint64_t flags);
 	void scheduler_reap_zombie_thread(thread_t *thread);
 	// Unlink a task from the kTaskList spine (undertaker burial phase 1 —
 	// see the walker-safety note at the definition).

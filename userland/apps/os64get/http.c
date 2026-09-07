@@ -69,132 +69,60 @@ static size_t copy_span(char *dst, size_t cap, const char *src, size_t len)
 
 // ── A URL, taken apart ──────────────────────────────────────────────────
 
-// A host label's alphabet. Underscore is not legal in a hostname and is
-// nonetheless in use (service records, and more than one home router), so it
-// is accepted; everything else is refused, which is what keeps a '@', a '['
-// or a stray space from reaching the resolver or the request line.
-static bool is_host_byte(char c)
+static uint16_t scheme_default_port(const char *scheme);
+
+// The grammar is os64_url_parse's; what is left here is the part that is
+// HTTP's own. One refusal maps to another, one for one, so that os64get's
+// diagnostics keep saying "not http or https" in http's words rather than
+// the library's more general ones.
+static http_url_result_t url_result_from(os64_url_result_t rc)
 {
-    return is_alpha(c) || is_digit(c) || c == '-' || c == '.' || c == '_';
+    switch (rc) {
+        case OS64_URL_OK:         return HTTP_URL_OK;
+        case OS64_URL_NOT_A_URL:  return HTTP_URL_NOT_A_URL;
+        case OS64_URL_NO_HOST:    return HTTP_URL_NO_HOST;
+        case OS64_URL_HOST_CHARS: return HTTP_URL_HOST_CHARS;
+        case OS64_URL_PATH_CHARS: return HTTP_URL_PATH_CHARS;
+        case OS64_URL_PORT:       return HTTP_URL_PORT;
+        case OS64_URL_TOO_LONG:   return HTTP_URL_TOO_LONG;
+    }
+    return HTTP_URL_NOT_A_URL;
 }
 
 http_url_result_t http_url_parse(const char *url, http_url_t *out)
 {
     os64_memset(out, 0, sizeof(*out));
 
-    // THE SCHEME IS WHAT MAKES IT A URL. os64get's first operand has always
-    // been a valet HOST or a file NAME, and both are bare words; requiring
-    // "scheme://" is what keeps the two dialects from ever having to be told
-    // apart by guesswork. (wget accepts a bare "host/path" and guesses http;
-    // here that guess would collide with a name the valet serves.)
-    const char *sep = NULL;
-    for (const char *p = url; *p != '\0'; p++)
-        if (p[0] == ':' && p[1] == '/' && p[2] == '/') { sep = p; break; }
-    if (sep == NULL || sep == url)
-        return HTTP_URL_NOT_A_URL;
+    os64_url_t parsed;
+    os64_url_result_t rc = os64_url_parse(url, &parsed);
 
-    for (const char *p = url; p < sep; p++)
-        if (!is_alpha(*p) && !is_digit(*p) && *p != '+' && *p != '-' && *p != '.')
-            return HTTP_URL_NOT_A_URL;   // whatever this is, it is not a scheme
+    // AN UNSUPPORTED SCHEME OUTRANKS EVERY OTHER COMPLAINT, which is why the
+    // scheme is judged before `rc` is. Telling somebody that their `ftp://`
+    // address has a bad port answers a question they cannot use the answer
+    // to; naming the scheme sends them somewhere that can help. The library
+    // fills the scheme before it looks at anything else, so it is readable
+    // on a failed parse as well as a good one — and http.h promises it.
+    if (parsed.scheme[0] != '\0') {
+        copy_span(out->scheme, sizeof(out->scheme), parsed.scheme,
+                  os64_strlen(parsed.scheme));
+        if (!os64_streq(out->scheme, "http") && !os64_streq(out->scheme, "https"))
+            return HTTP_URL_SCHEME;
+    }
+    if (rc != OS64_URL_OK)
+        return url_result_from(rc);
 
     // BOTH SCHEMES PARSE. Which of them this machine can actually FETCH is
     // policy, not grammar, and it changes with the configuration: an https
     // URL is unreachable on its own and perfectly reachable through a
-    // TLS-terminating proxy. A parser that refused https would make that
-    // decision here, in the one place that cannot know about it — so the
-    // parser answers "what is this address", and the caller answers "can I
-    // go there". The default port comes from the scheme, as it has since
-    // 1994.
-    copy_lower(out->scheme, sizeof(out->scheme), url, (size_t)(sep - url));
-    if (os64_streq(out->scheme, "http"))
-        out->port = 80;
-    else if (os64_streq(out->scheme, "https"))
-        out->port = 443;
-    else
-        return HTTP_URL_SCHEME;
+    // TLS-terminating proxy. So the answer to "can I go there" is the
+    // caller's, and this function answers only "what is this address".
+    copy_span(out->host, sizeof(out->host), parsed.host, os64_strlen(parsed.host));
+    copy_span(out->path, sizeof(out->path), parsed.path, os64_strlen(parsed.path));
 
-    // ── The authority: everything up to the path, query or fragment ─────
-    const char *authority = sep + 3;
-    const char *p = authority;
-    while (*p != '\0' && *p != '/' && *p != '?' && *p != '#')
-        p++;
-    const char *authorityEnd = p;
-    if (authorityEnd == authority)
-        return HTTP_URL_NO_HOST;
-
-    // The port, if the authority names one. Searched from the RIGHT so that
-    // the refusals below still see the whole host: "user@host" and "[::1]"
-    // are rejected as host bytes rather than mistaken for ports.
-    const char *colon = NULL;
-    for (const char *q = authorityEnd; q > authority; q--)
-        if (q[-1] == ':') { colon = q - 1; break; }
-
-    const char *hostEnd = colon != NULL ? colon : authorityEnd;
-    if (hostEnd == authority)
-        return HTTP_URL_NO_HOST;
-    for (const char *q = authority; q < hostEnd; q++)
-        if (!is_host_byte(*q))
-            return HTTP_URL_HOST_CHARS;   // userinfo, an IPv6 literal, or junk
-    // THE HOST IS FOLDED, THE PATH IS NOT. A DNS name is case-insensitive by
-    // definition (RFC 4343), and so is the Host header a server matches it
-    // against — so the case a person typed carries no information, and
-    // keeping it would put two spellings of one machine in every diagnostic
-    // and every Host line. A PATH is the opposite: it is a name on somebody
-    // else's filesystem, and /Case and /case are two different pages.
-    if (copy_lower(out->host, sizeof(out->host), authority, (size_t)(hostEnd - authority)) >=
-        sizeof(out->host))
-        return HTTP_URL_TOO_LONG;
-
-    if (colon != NULL) {
-        const char *q = colon + 1;
-        if (q == authorityEnd)
-            return HTTP_URL_PORT;         // "host:" names no port
-        uint32_t port = 0;
-        for (; q < authorityEnd; q++) {
-            if (!is_digit(*q))
-                return HTTP_URL_PORT;
-            port = port * 10 + (uint32_t)(*q - '0');
-            if (port > 65535)
-                return HTTP_URL_PORT;
-        }
-        if (port == 0)
-            return HTTP_URL_PORT;
-        out->port = (uint16_t)port;
-        out->explicitPort = true;
-    }
-
-    // ── The path, with the query and without the fragment ───────────────
-    // A fragment is the BROWSER's business — it names a place inside the
-    // document and has never crossed the wire (RFC 1945 onward). Dropping it
-    // here rather than sending it is not tidiness: a '#' in a request line
-    // is a request the server was never asked.
-    const char *pathStart = authorityEnd;
-    const char *pathEnd = pathStart;
-    while (*pathEnd != '\0' && *pathEnd != '#')
-        pathEnd++;
-
-    // A space or a control byte in a request line ends the line early on the
-    // far side and starts a second request nobody typed. Refuse; percent-
-    // encoding what a person typed is a guess about their intent, and this
-    // is the wrong place to guess.
-    for (const char *q = pathStart; q < pathEnd; q++)
-        if ((unsigned char)*q <= 0x20 || (unsigned char)*q >= 0x7F)
-            return HTTP_URL_PATH_CHARS;
-
-    size_t wanted;
-    if (pathStart == pathEnd || *pathStart != '/') {
-        // "http://host", "http://host?q=1" — the origin's root, plus
-        // whatever query came with it.
-        out->path[0] = '/';
-        wanted = 1 + copy_span(out->path + 1, sizeof(out->path) - 1, pathStart,
-                               (size_t)(pathEnd - pathStart));
-    } else {
-        wanted = copy_span(out->path, sizeof(out->path), pathStart,
-                           (size_t)(pathEnd - pathStart));
-    }
-    if (wanted >= sizeof(out->path))
-        return HTTP_URL_TOO_LONG;
-
+    // The library reports port 0 for "the URL named none", which is where
+    // the scheme's default gets applied — the one place in this program
+    // that knows what http and https imply.
+    out->port = parsed.port != 0 ? parsed.port : scheme_default_port(out->scheme);
     return HTTP_URL_OK;
 }
 

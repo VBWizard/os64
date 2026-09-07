@@ -23,14 +23,21 @@
 //     (but the MAC read already argues strongly against that)
 //   - "chip disagreed" on RxConfig/TxConfig → a field this generation
 //     shapes differently; the read-back value is the clue
-//   - frames queue but never leave → THE DOORBELL. Register 0x90 and bit 0
-//     are [8125-SPECIFIC] and UNCONFIRMED, and they are the single most
-//     likely wrong thing in this file
+//   - frames queue but never leave → the doorbell (register 0x90, bit 0)
+//     — confirmed against the vendor driver and proven on the P5, so look
+//     at the ring state before the register
 //   - nothing ever arrives → the broadcast accept bit, or the rings' base
 //     registers. ARP dies without broadcast and takes everything with it
+//   - link at the wrong speed → the boot log prints both sides of the
+//     negotiation (r8125_phy_configure), and since 2026-09-05 the driver
+//     restores a stripped advertisement and renegotiates once when the
+//     link is below what both sides offer. Both offering 1000 and the
+//     link still 100 after that is a training failure — DEBTS' PHY
+//     firmware row, not the advertisement
 
 #include "driver/net/r8125.h"
 #include "driver/net/r8125_ring.h"
+#include "driver/net/r8125_phy.h"
 #include "driver/net/net_device.h"
 #include "driver/system/pci.h"
 #include "serial_logging.h"
@@ -44,6 +51,8 @@
 #include "memcpy.h"
 #include "memset.h"
 #include "strings/sprintf.h"   // snprintf — netdev.location, "02:00.0"
+#include "knet.h"                // kNetDoorbell — the interrupt handler rings it
+#include "smp.h"                 // kCPUInfo — the MSI is addressed at the BSP
 
 // kPCIDeviceHeaders / kPCIDeviceFunctions and their counts come from pci.h —
 // declared there, so NOT re-declared here. (Re-declaring them by hand is how
@@ -58,41 +67,36 @@ extern uintptr_t kKernelPML4v;
 extern bool kEnableR8125;
 
 // ── Registers ───────────────────────────────────────────────────────────────
-// Provenance tags per r8125.h. [8169-family] = shared across the lineage,
-// high confidence. [8125-SPECIFIC] = moved or widened in this generation,
-// from Linux r8169.c (RTL_GIGA_MAC_VER_60+), MUST be confirmed against the
-// vendor GPL r8125 driver before first light.
-//
-// ALL OF THESE ARE NOW LIVE. The first-light slice only read MAC0 and
-// PHYstatus, which is why it was safe to ship ahead of verification; this
-// one programs the chip, so a wrong offset can now do real damage. That is
-// the whole reason for the read-back checks (r8125_write32_verify) and for
-// the failure-mode list at the top of this file.
+// Provenance tags per r8125.h. [8169-family] = shared across the lineage.
+// [8125-SPECIFIC] = moved or widened in this generation. The offsets and
+// bits defined here were checked against Realtek's GPL r8125 driver
+// (r8125.h, the awesometic/realtek-r8125-dkms mirror) on 2026-09-05; the
+// ones the P5 had already proven by moving frames were confirmed on paper
+// too. The read-back checks (r8125_write32_verify) stay, because a
+// confirmed offset on a different board revision is still worth one read.
 
 #define R8125_MAC0        0x00   // [8169-family] 6 bytes, burned-in address
 #define R8125_CHIPCMD     0x37   // [8169-family] 8-bit: reset / Tx enable / Rx enable
 #define R8125_TXCONFIG    0x40   // [8169-family] 32-bit
 #define R8125_RXCONFIG    0x44   // [8169-family] 32-bit
 #define R8125_CFG9346     0x50   // [8169-family] 8-bit: config-register lock
-#define R8125_PHYSTATUS   0x6C   // [8169-family] 8-bit: link + speed + duplex
+#define R8125_PHYSTATUS   0x6C   // [8169-family] address; 32-bit on the 8125 — the
+                                 // 2.5G answers sit above the byte the 8169 had
+                                 // (bits in r8125_phy.h, R8125_PHYS_*)
 #define R8125_RXMAXSIZE   0xDA   // [8169-family] 16-bit (RMS)
 #define R8125_RDSAR_LOW   0xE4   // [8169-family] 32-bit: RX descriptor base
 #define R8125_RDSAR_HIGH  0xE8   // [8169-family]
 #define R8125_TNPDS_LOW   0x20   // [8169-family] 32-bit: TX descriptor base
 #define R8125_TNPDS_HIGH  0x24   // [8169-family]
 
-// The three that MOVED, and the reason this driver has a tripwire at all.
-// On the 8169/8168 the interrupt mask/status were 16-bit at 0x3C/0x3E and
-// the transmit doorbell (TxPoll) was 8-bit at 0x38. The 8125 widened the
-// interrupt pair to 32 bits and relocated it to 0x38/0x3C — which it could
-// only do because the doorbell moved OUT to 0x90. The three changes are one
-// change, and that internal consistency is the main reason to believe this
-// reading of them; it is NOT a substitute for checking the vendor driver.
-// UNCONFIRMED, and now USED — the doorbell in particular is the first
-// suspect if frames queue and never leave.
-#define R8125_IMR0_8125   0x38   // [8125-SPECIFIC] 32-bit interrupt mask   (UNCONFIRMED)
-#define R8125_ISR0_8125   0x3C   // [8125-SPECIFIC] 32-bit interrupt status (UNCONFIRMED)
-#define R8125_TPPOLL_8125 0x90   // [8125-SPECIFIC] 16-bit transmit doorbell (UNCONFIRMED)
+// The three that MOVED. On the 8169/8168 the interrupt mask/status were
+// 16-bit at 0x3C/0x3E and the transmit doorbell (TxPoll) was 8-bit at 0x38.
+// The 8125 widened the interrupt pair to 32 bits and relocated it to
+// 0x38/0x3C — which it could only do because the doorbell moved OUT to
+// 0x90. Vendor names: IMR0_8125, ISR0_8125, TPPOLL_8125, same three values.
+#define R8125_IMR0_8125   0x38   // [8125-SPECIFIC] 32-bit interrupt mask
+#define R8125_ISR0_8125   0x3C   // [8125-SPECIFIC] 32-bit interrupt status
+#define R8125_TPPOLL_8125 0x90   // [8125-SPECIFIC] 16-bit transmit doorbell
 
 // THE RECEIVE GATE — the prime suspect for a driver that transmits happily
 // and receives nothing, which is exactly what the P5 reported on its first
@@ -117,21 +121,12 @@ extern bool kEnableR8125;
 // write at init and it reports what it saw, which is exactly how we learned
 // it was innocent.
 //
-// [8125-SPECIFIC] (UNCONFIRMED as to bit and register — all we have measured
-// is that this address reads 0x3f on an RTL8125B, which is consistent with
-// bit 19 being clear but does not prove the field is where we think it is).
-#define R8125_MISC        0xF0        // [8125-SPECIFIC] 32-bit (UNCONFIRMED)
+// [8125-SPECIFIC]. The vendor's rtl8125_disable_rxdvgate clears bit 3 of
+// the BYTE at 0xF2, which is bit 19 of the 32-bit word at 0xF0 — the same
+// bit by a different address width, and Linux's r8169 spells it as this
+// driver does (MISC = 0xF0, RXDV_GATED_EN = BIT(19)).
+#define R8125_MISC        0xF0        // [8125-SPECIFIC] 32-bit
 #define R8125_RXDV_GATED  (1u << 19)  // 1 = receive gated OFF
-
-// PHYstatus bits [8169-family]. The 8125 adds a 2500Mbps indication that
-// this driver does not decode: the ratified topology is a gigabit switch,
-// so 1000/full is the expected and desired answer, and a link this driver
-// cannot name is reported by its raw value rather than guessed at.
-#define R8125_PHY_FULLDUP   0x01
-#define R8125_PHY_LINKSTS   0x02
-#define R8125_PHY_10M       0x04
-#define R8125_PHY_100M      0x08
-#define R8125_PHY_1000M     0x10
 
 // ChipCmd bits [8169-family].
 #define R8125_CMD_RESET     0x10
@@ -156,13 +151,13 @@ extern bool kEnableR8125;
 #define R8125_RX_ACCEPT_MULTICAST 0x04
 #define R8125_RX_ACCEPT_BROADCAST 0x08   // NOT optional — see the essay at setup
 
-// The DMA-burst / fetch fields. [8125-SPECIFIC] and UNCONFIRMED: the 8169
-// generation put an unlimited DMA burst at (7 << 8), and Linux appears to
-// add an 8125-only fetch-count field at (8 << 27). Read back and reported
-// at init precisely because this author cannot verify it — see
+// The DMA-burst / fetch fields. [8125-SPECIFIC]: the 8169 generation put an
+// unlimited DMA burst at (7 << 8) (vendor: RX_DMA_BURST_unlimited <<
+// RxCfgDMAShift), and the 8125 adds a fetch-count bit the vendor names
+// Rx_Fetch_Number_8 at bit 30. Still read back and reported at init — see
 // r8125_write32_verify.
 #define R8125_RX_DMA_BURST   (7u << 8)
-#define R8125_RX_FETCH_8125  (8u << 27)   // (UNCONFIRMED)
+#define R8125_RX_FETCH_8125  (1u << 30)
 
 // TxConfig [8169-family]: unlimited DMA burst, standard interframe gap.
 // 0x03000700 is the value this family has taken for twenty years.
@@ -183,12 +178,11 @@ extern bool kEnableR8125;
 #define R8125_TXCONFIG_HW_OWNED (R8125_HWVER_MASK | 0x00000800u)
 #define R8125_RXCONFIG_HW_OWNED 0x00020000u
 
-// The transmit doorbell's poke bit. [8125-SPECIFIC] (UNCONFIRMED) — on the
-// 8169 this was NPQ (0x40) in an 8-bit register at 0x38; on the 8125 the
-// doorbell moved to a 16-bit register at 0x90 and the poke appears to be
-// bit 0. If frames are queued but never leave, THIS CONSTANT AND ITS
-// REGISTER ARE THE FIRST TWO THINGS TO CHECK.
-#define R8125_TPPOLL_NPQ 0x0001
+// The transmit doorbell's poke bit. [8125-SPECIFIC] — on the 8169 this was
+// NPQ (0x40) in an 8-bit register at 0x38; on the 8125 the doorbell is a
+// 16-bit register at 0x90 with ONE BIT PER TRANSMIT QUEUE (the vendor
+// writes BIT(ring->index)). This driver has one queue, queue 0.
+#define R8125_TPPOLL_QUEUE0 0x0001
 
 typedef struct
 {
@@ -210,13 +204,20 @@ typedef struct
 	// (speed/duplex used to live here as strings; they are seam fields now —
 	//  net_device_t's link_mbps/full_duplex — so /sys/net can print them for
 	//  any card instead of only this driver's own boot line.)
+	uint32_t phystatus;       // the last PHYstatus word read, verbatim — the
+	                          // boot line and the link-change log print it
+	                          // beside the decode, so a link the decode cannot
+	                          // name still leaves the number that explains it
+	bool phy_ok;              // the PHY OCP window answered and the PHY says
+	                          // Realtek — the gate on ever WRITING the PHY
 
 	// The rings, and both addresses for each: the PHYSICAL one the device
 	// is given, and the HHDM alias we dereference. They are the same memory
 	// — allocate_memory_aligned hands back page-aligned physical memory that
 	// is HHDM-reachable while allocated (the lazy-HHDM rule), so one
 	// allocation yields both. Upper-half by construction, which is what lets
-	// r8125_poll touch them from processSignals under any task's CR3.
+	// the drain and the interrupt handler touch them from knet and from
+	// whatever context the interrupt lands in.
 	uint64_t rx_phys, rx_buf_phys;
 	uint64_t tx_phys, tx_buf_phys;
 	r8125_desc_t* rx;
@@ -263,6 +264,16 @@ typedef struct
 	uint64_t isr_acks;            // how many times the status register was cleared
 	uint32_t isr_last;            // the last non-zero status seen
 	bool     isr_trouble_reported;// one-shot for the alarming bits
+	// The top half's hand-off (DOORBELL.md). The interrupt handler acknowledges
+	// the status register itself — an MSI is edge-triggered, and a bit left
+	// latched is a message never sent again — and parks the bits here for the
+	// drain's bookkeeping, which is where the overrun accounting and every
+	// log line live: an interrupt handler prints nothing.
+	volatile uint32_t isr_pending;
+	bool     msi;                 // the capability was programmed and enabled
+	uint8_t  msi_vector;
+	volatile uint64_t msi_fires;  // handler entries with a non-zero status
+	volatile uint64_t msi_spurious;// handler entries that found nothing latched
 	// Overruns are COUNTED as well as announced, because their frequency is
 	// the whole question once acknowledging has made them survivable: one
 	// during a big transfer is the wire briefly outrunning us, and hundreds
@@ -354,9 +365,9 @@ static void r8125_write32_verify(r8125_t* r, uint32_t reg, uint32_t value,
 // "disagreeing" (wrote 0x03000700, read 0x67100f00), which was not a
 // disagreement at all — it was the chip stating its identity in bits nobody
 // can write. Masking gives 0x641, which is Linux's RTL_GIGA_MAC_VER_63: an
-// RTL8125B. That matters beyond curiosity, because every offset in this
-// driver marked UNCONFIRMED can now be checked against a SPECIFIC part
-// rather than against a family.
+// RTL8125B (the vendor's CFG_METHOD_4). That matters beyond curiosity: it
+// is what let the register map be checked against a SPECIFIC part rather
+// than against a family.
 static void r8125_report_version(r8125_t* r)
 {
 	uint32_t txcfg = r8125_read32(r, R8125_TXCONFIG);
@@ -393,12 +404,14 @@ static uint64_t r8125_bar_phys(pci_device_t* dev, uint8_t bar)
 
 // Map the register window at the kernel's HHDM alias, PAGE_PCD.
 //
-// The HHDM (upper half) rather than anywhere else because r8125_poll runs
-// from processSignals, under WHATEVER task's CR3 happened to be interrupted
-// — upper-half mappings are shared by every address space, lower-half ones
+// The HHDM (upper half) rather than anywhere else because the interrupt
+// handler runs under WHATEVER task's CR3 happened to be interrupted, the
+// drain in knet's address space, and transmit in the calling task's —
+// upper-half mappings are shared by every address space, lower-half ones
 // are not. That is not a style preference: it is the exact distinction that
-// panicked kworker earlier today when a lower-half DMA mapping turned out to
-// exist in one address space only (see DEBTS.md's kmalloc_dma row).
+// panicked kworker on 2026-08-19, when a lower-half DMA mapping turned out
+// to exist in one address space only (kmalloc.h's account of the identity-
+// map era).
 //
 // PAGE_PCD because device registers must never be cached — a cached read of
 // a ring cursor returns stale truth, which in a producer/consumer protocol
@@ -415,41 +428,457 @@ static volatile uint8_t* r8125_map_regs(uint64_t bar_phys)
 }
 
 // ── Link ────────────────────────────────────────────────────────────────────
-// Report what the PHY says, in words, either way. "No link" is a perfectly
-// good answer that means "check the cable" — and on a machine with no
-// debugger attached, an honest negative printed at boot is worth more than
-// most positives.
-static void r8125_report_link(r8125_t* r)
+// Read PHYstatus, decode it onto the seam, keep the raw word. Called at
+// bring-up (as found, and again once the PHY has been told what to
+// advertise) and from the poll when the chip reports a link change — so the
+// seam and /sys/net say what the link IS, not what it was at boot.
+//
+// ON THE SEAM, not in this driver's private struct (2026-08-20): speed and
+// duplex lived here as a string for the boot line only, which is exactly why
+// /sys/net could show a speed for no card at all. link_mbps 0 = up but not
+// decodable, and the raw word beside it is what explains it.
+static void r8125_read_link(r8125_t* r)
 {
-	uint8_t phy = r8125_read8(r, R8125_PHYSTATUS);
-	r->netdev.link_up = (phy & R8125_PHY_LINKSTS) != 0;
+	uint32_t status = r8125_read32(r, R8125_PHYSTATUS);
+	r8125_link_t link = r8125_phy_decode_status(status);
+	r->phystatus          = status;
+	r->netdev.link_up     = link.up;
+	r->netdev.link_mbps   = link.mbps;
+	r->netdev.full_duplex = link.full_duplex;
+	snprintf(r->netdev.link_raw, sizeof(r->netdev.link_raw), "0x%08x", status);
+}
 
+// "1000/full", "up, speed not decoded", or "DOWN" — one spelling for the
+// boot line, the negotiation lines and the link-change line, so a reader
+// grepping the log for one of them finds all of them.
+#define R8125_LINK_WORDS_CAP 32
+static void r8125_link_words(const r8125_t* r, char* out, uint32_t cap)
+{
 	if (!r->netdev.link_up)
+		snprintf(out, cap, "DOWN");
+	else if (r->netdev.link_mbps == 0)
+		snprintf(out, cap, "up, speed not decoded");
+	else
+		snprintf(out, cap, "%u/%s", r->netdev.link_mbps,
+		         r->netdev.full_duplex ? "full" : "half");
+}
+
+// ── The PHY ─────────────────────────────────────────────────────────────────
+//
+// WHY THE DRIVER TALKS TO THE PHY (2026-09-05): the P5 linked at 100/full
+// on a gigabit switch — four cables, a cold boot, the switch's own LED
+// agreeing — and this driver had never written a PHY register in its life.
+// It read one status byte and reported whatever negotiation the PHY's
+// power-on state had produced. Linux's r8169 never trusts that state:
+// genphy_config_aneg rewrites the advertisement and restarts negotiation at
+// every probe, which is why Linux users on the same silicon never see a
+// stuck 100M link. This block does the same, and PRINTS BOTH SIDES OF THE
+// NEGOTIATION first, so a wrong speed on the P5 is diagnosable from the log
+// rather than guessed at from a switch LED.
+//
+// The window and the register map are r8125_phy.h's business — verified
+// against the vendor driver, host-tested. This is only the part that needs
+// the silicon: the MMIO shuttle, the bounded waits, and the log lines.
+//
+// WHAT IS DELIBERATELY NOT DONE HERE, booked in DEBTS.md: the vendor's
+// hw_phy_config (a firmware blob plus thousands of per-revision register
+// pokes) and any change to the pause advertisement. Standard MII registers
+// only; one behaviour change per slice, so the attribution survives.
+
+// An OCP transaction completes in microseconds; the vendor allows 20ms.
+// Iteration-counted like the reset wait (one MMIO read per iteration is a
+// ceiling of tens of milliseconds on any PCIe bus), so a starved tick can
+// only slow it, never hang it.
+#define R8125_PHY_OCP_SPINS 100000u
+
+// The wait for the link after an autoneg restart. Gigabit negotiation takes
+// one to three seconds against a real switch. TWO bounds, whichever ends
+// first: the tick is the intended ceiling, the iteration count (each one an
+// OCP read of microseconds) is the backstop for a tick that is not
+// advancing — the e1000's INTx probe met exactly that.
+#define R8125_PHY_LINK_WAIT_TICKS (5 * TICKS_PER_SECOND)
+#define R8125_PHY_LINK_WAIT_SPINS 500000u
+// How long a BMCR restart may take to show — BMSR dropping "complete", or the
+// MAC seeing the link fall — before the driver stops
+// waiting for it, and how long the link-partner page may lag a completed
+// negotiation (both loops in r8125_phy_configure). Generous: a PHY that is
+// going to react does so in milliseconds.
+#define R8125_PHY_RESTART_TAKE_TICKS (1 * TICKS_PER_SECOND)
+#define R8125_PHY_PARTNER_WAIT_TICKS (1 * TICKS_PER_SECOND)
+
+static bool r8125_phy_read(r8125_t* r, uint16_t ocp_addr, uint16_t* value_out)
+{
+	r8125_write32(r, R8125_REG_PHYOCP, r8125_phy_ocp_read_command(ocp_addr));
+	for (uint32_t spin = 0; spin < R8125_PHY_OCP_SPINS; spin++)
 	{
-		printf("r8125: no link — is the cable in? (PHYstatus 0x%02x)\n", phy);
+		uint32_t word = r8125_read32(r, R8125_REG_PHYOCP);
+		if (word & R8125_PHYOCP_FLAG)
+		{
+			*value_out = (uint16_t)(word & R8125_PHYOCP_DATA_MASK);
+			return true;
+		}
+		__asm__ volatile("pause");
+	}
+	*value_out = 0xFFFF;   // what a dead window reads as, so a caller that
+	                       // ignores the verdict still sees an impossible value
+	return false;
+}
+
+static bool r8125_phy_write(r8125_t* r, uint16_t ocp_addr, uint16_t value)
+{
+	r8125_write32(r, R8125_REG_PHYOCP, r8125_phy_ocp_write_command(ocp_addr, value));
+	for (uint32_t spin = 0; spin < R8125_PHY_OCP_SPINS; spin++)
+	{
+		if ((r8125_read32(r, R8125_REG_PHYOCP) & R8125_PHYOCP_FLAG) == 0)
+			return true;
+		__asm__ volatile("pause");
+	}
+	return false;
+}
+
+static bool r8125_phy_mii_read(r8125_t* r, uint8_t mii_reg, uint16_t* value_out)
+{
+	return r8125_phy_read(r, r8125_phy_mii_ocp_addr(mii_reg), value_out);
+}
+
+static bool r8125_phy_mii_write(r8125_t* r, uint8_t mii_reg, uint16_t value)
+{
+	return r8125_phy_write(r, r8125_phy_mii_ocp_addr(mii_reg), value);
+}
+
+// The negotiation registers, both sides, in one read — the ones a person
+// needs to answer "why did this link at that speed?".
+typedef struct
+{
+	uint16_t bmcr, bmsr, estatus;
+	uint16_t anar, gbcr, adv2500;      // ours
+	uint16_t anlpar, gbsr, lpa2500;    // the partner's
+} r8125_phy_snapshot_t;
+
+static bool r8125_phy_snapshot(r8125_t* r, r8125_phy_snapshot_t* s)
+{
+	bool ok = true;
+	ok = r8125_phy_mii_read(r, R8125_MII_BMCR,    &s->bmcr)    && ok;
+	ok = r8125_phy_mii_read(r, R8125_MII_BMSR,    &s->bmsr)    && ok;
+	ok = r8125_phy_mii_read(r, R8125_MII_ESTATUS, &s->estatus) && ok;
+	ok = r8125_phy_mii_read(r, R8125_MII_ANAR,    &s->anar)    && ok;
+	ok = r8125_phy_mii_read(r, R8125_MII_GBCR,    &s->gbcr)    && ok;
+	ok = r8125_phy_read(r, R8125_PHY_OCP_ADV_2500, &s->adv2500) && ok;
+	ok = r8125_phy_mii_read(r, R8125_MII_ANLPAR,  &s->anlpar)  && ok;
+	ok = r8125_phy_mii_read(r, R8125_MII_GBSR,    &s->gbsr)    && ok;
+	ok = r8125_phy_read(r, R8125_PHY_OCP_LPA_2500, &s->lpa2500) && ok;
+	return ok;
+}
+
+// Print a snapshot: the registers verbatim on one line, the negotiation in
+// words on the next. DEBUG_BOOT and not DEBUG_NET, deliberately: the P5's
+// boot entries carry no DEBUG_NET, and the P5 is the only machine on which
+// these lines are ever true. A link at the wrong speed is diagnosed from
+// exactly these numbers, and a diagnosis that lands only in a log nobody
+// has switched on is no diagnosis. Negotiation happens once per link, which
+// is what makes it a boot fact rather than traffic.
+static void r8125_phy_print(r8125_t* r, const char* when, const r8125_phy_snapshot_t* s)
+{
+	char ours[R8125_ABILITY_TEXT_CAP], theirs[R8125_ABILITY_TEXT_CAP];
+	char link[R8125_LINK_WORDS_CAP];
+	r8125_phy_abilities_text(r8125_phy_abilities_ours(s->anar, s->gbcr, s->adv2500),
+	                         ours, sizeof ours);
+	uint8_t partner = r8125_phy_abilities_partner(s->anlpar, s->gbsr, s->lpa2500);
+	if (partner == 0 && r->netdev.link_up)
+		// A link exists, so the partner offered SOMETHING; an empty page is
+		// the PHY not having reported it (the settle loop's story), never a
+		// partner with nothing to say. Print the truth we have, not "none".
+		snprintf(theirs, sizeof theirs, "(not reported by the PHY)");
+	else
+		r8125_phy_abilities_text(partner, theirs, sizeof theirs);
+	r8125_link_words(r, link, sizeof link);
+
+	printd(DEBUG_BOOT, "r8125: PHY %s: BMCR 0x%04x BMSR 0x%04x ESTATUS 0x%04x | "
+	       "ANAR 0x%04x GBCR 0x%04x 2.5G-adv 0x%04x | ANLPAR 0x%04x GBSR 0x%04x 2.5G-lpa 0x%04x\n",
+	       when, s->bmcr, s->bmsr, s->estatus,
+	       s->anar, s->gbcr, s->adv2500, s->anlpar, s->gbsr, s->lpa2500);
+	printd(DEBUG_BOOT, "r8125: PHY %s: we advertise %s, partner offers %s, link %s (PHYstatus 0x%08x)\n",
+	       when, ours, theirs, link, r->phystatus);
+}
+
+// Put the three advertisement registers back to what a snapshot found. Best
+// effort by design: it runs on paths where a write has already failed, and
+// a window that stopped answering may refuse these too — the outcome is
+// printed by the caller either way, and the link stands as it was.
+static void r8125_phy_restore_advertisement(r8125_t* r, const r8125_phy_snapshot_t* found)
+{
+	r8125_phy_mii_write(r, R8125_MII_ANAR, found->anar);
+	r8125_phy_mii_write(r, R8125_MII_GBCR, found->gbcr);
+	r8125_phy_write(r, R8125_PHY_OCP_ADV_2500, found->adv2500);
+}
+
+// Identify the PHY, print the negotiation as found, set the advertisement,
+// and — only if that changed anything — restart negotiation and wait for
+// the link. Best effort throughout: a PHY that cannot be read is reported
+// and left alone, and the MAC bring-up continues on whatever link the
+// power-on state negotiated. The wire still moves frames at 100M; a driver
+// that refused to run because it could not IMPROVE the link would be
+// strictly worse than the one that linked at 100/full all summer.
+static void r8125_phy_configure(r8125_t* r)
+{
+	uint16_t id1, id2;
+	if (!r8125_phy_mii_read(r, R8125_MII_PHYID1, &id1) ||
+	    !r8125_phy_mii_read(r, R8125_MII_PHYID2, &id2))
+	{
+		printf("r8125: PHY window (0x%02x) did not answer — leaving the PHY as found\n",
+		       R8125_REG_PHYOCP);
+		return;
+	}
+	if (!r8125_phy_id_is_realtek(id1, id2))
+	{
+		// Not refusing to run — refusing to WRITE. A window that is not the
+		// PHY's reads as all ones or all zeroes, and advertising into that
+		// would be programming a register we cannot see.
+		printf("r8125: PHY id 0x%04x%04x is not Realtek's — leaving the PHY as found\n", id1, id2);
+		return;
+	}
+	r->phy_ok = true;
+	printd(DEBUG_BOOT, "r8125: PHY id 0x%04x%04x (Realtek) through the OCP window\n", id1, id2);
+
+	r8125_phy_snapshot_t found;
+	if (!r8125_phy_snapshot(r, &found))
+	{
+		printf("r8125: PHY registers stopped answering mid-read — leaving the PHY as found\n");
+		return;
+	}
+	// The link as it stands NOW, read beside the registers, not the read
+	// from before the MAC soft reset: a negotiation can finish between the
+	// two, and a decision about the link has to be made from the same moment
+	// as the registers it is compared with (Codex, PR #66).
+	r8125_read_link(r);
+	r8125_phy_print(r, "as found", &found);
+
+	// THREE REASONS TO RENEGOTIATE, and a healthy boot has none.
+	//
+	// (1) The advertisement is not what we want — a PHY somebody left at
+	//     10/100, or one missing gigabit. Write it, then restart.
+	// (2) The PHY was left OUT OF SERVICE: autonegotiation disabled (a
+	//     forced mode), powered down, isolated, in loopback, or in
+	//     collision-test mode — states firmware can leave behind and this
+	//     driver never wants. The one BMCR write below clears all of them.
+	//     Without this reason a PHY whose advertisement already matched
+	//     would have kept whatever mode it was left in (Codex, PR #66,
+	//     rounds 1 and 4).
+	// (3) The advertisement is fine but the LINK IS BELOW what both sides
+	//     offer — speed AND duplex, in annex 28B's priority order: 100/full
+	//     between two parties that both listed 1000F is a negotiation that
+	//     went wrong, and so is 100/half between two that both listed
+	//     100/full (Codex, PR #66 round 3). Not a slow partner; one restart
+	//     is what every OS tries before anyone blames a cable. This is the
+	//     shape the P5 reported on 2026-09-05, and the "as found" dump is
+	//     what makes it decidable rather than guessed.
+	//
+	// A boot where the PHY already advertises everything, is in service, and
+	// negotiated the best common mode touches nothing — restarting a
+	// negotiation that produced the right answer would only drop the link
+	// for nothing, and a link dropped at init is a link the post-boot
+	// network tests run on.
+	r8125_phy_adv_t have = { found.anar, found.gbcr, found.adv2500 }, want;
+	bool rewrite = r8125_phy_plan_advertisement(&have, &want, R8125_ADVERTISE_2500 != 0);
+	const char* why = rewrite ? "the advertisement changed" : NULL;
+	if (why == NULL && r8125_phy_bmcr_out_of_service(found.bmcr))
+		why = "the PHY was left out of autonegotiating service";
+	if (why == NULL && r->netdev.link_up && r->netdev.link_mbps != 0)
+	{
+		uint32_t best = r8125_phy_best_common_rank(
+			r8125_phy_abilities_ours(found.anar, found.gbcr, found.adv2500),
+			r8125_phy_abilities_partner(found.anlpar, found.gbsr, found.lpa2500));
+		uint32_t linked = r8125_phy_mode_rank(r->netdev.link_mbps, r->netdev.full_duplex);
+		if (best != R8125_MODE_RANK_NONE && linked < best)
+			why = "the link is below what both sides offer";
+	}
+	if (why == NULL)
+	{
+		printd(DEBUG_BOOT, "r8125: PHY advertisement is already what we want, the PHY is in "
+		       "service and the link is the best mode both sides offer — not renegotiating\n");
 		return;
 	}
 
-	// ON THE SEAM, not in this driver's private struct (2026-08-20). These
-	// lived here as a string for the boot line only, which is exactly why
-	// /sys/net could show a speed for no card at all — the fact existed, one
-	// layer too low for anyone else to read. Numeric now, because "1000" as
-	// text was a rendering decision masquerading as a value.
+	if (rewrite)
+	{
+		// All three, then read back before restarting: a PHY that declines
+		// a bit (a part that cannot do what was asked) shows here, and a
+		// write that stalls mid-way leaves a mixture that must not be
+		// negotiated.
+		// A mixture must never be left in the PHY, let alone negotiated: a
+		// write that stalls after ANAR took, or a readback that differs,
+		// both put back what was found (best effort — a window that stopped
+		// answering may refuse the restore too) and leave the link standing
+		// as it was. Restarting on a mixture would drop a working link and
+		// bring it back without the bit the PHY declined; leaving a mixture
+		// unrestarted would negotiate it at the next cable event (Codex, PR
+		// #66, both rounds).
+		if (!r8125_phy_mii_write(r, R8125_MII_ANAR, want.anar) ||
+		    !r8125_phy_mii_write(r, R8125_MII_GBCR, want.gbcr) ||
+		    !r8125_phy_write(r, R8125_PHY_OCP_ADV_2500, want.adv2500))
+		{
+			printf("r8125: PHY advertisement write did not complete — restoring it as found, not renegotiating\n");
+			r8125_phy_restore_advertisement(r, &found);
+			return;
+		}
+		r8125_phy_snapshot_t set;
+		if (!r8125_phy_snapshot(r, &set))
+		{
+			printf("r8125: PHY registers stopped answering after the write — restoring it as found, not renegotiating\n");
+			r8125_phy_restore_advertisement(r, &found);
+			return;
+		}
+		if (set.anar != want.anar || set.gbcr != want.gbcr || set.adv2500 != want.adv2500)
+		{
+			printf("r8125: PHY kept a different advertisement than written (ANAR 0x%04x/0x%04x GBCR 0x%04x/0x%04x 2.5G 0x%04x/0x%04x, wrote/read) — restoring it as found, not renegotiating\n",
+			       want.anar, set.anar, want.gbcr, set.gbcr, want.adv2500, set.adv2500);
+			r8125_phy_restore_advertisement(r, &found);
+			return;
+		}
+	}
+
+	// The state THIS restart will be judged against, read right before the
+	// write: "taken" below means a transition from here, never a level that
+	// may have been low already.
+	uint16_t bmsr_before = found.bmsr;
+	(void)r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr_before);
+	uint32_t phystatus_before = r8125_read32(r, R8125_PHYSTATUS);
+
+	printd(DEBUG_BOOT, "r8125: PHY renegotiating because %s\n", why);
+	if (!r8125_phy_mii_write(r, R8125_MII_BMCR, R8125_BMCR_RESTART_AUTONEG))
+	{
+		printf("r8125: PHY autonegotiation restart did not complete\n");
+		return;
+	}
+
+	// FIRST WAIT FOR THE RESTART TO TAKE. The old negotiation's "complete"
+	// bit and the MAC's link bit stay readable for a moment after the BMCR
+	// write, and a wait that accepts them returns before the link has even
+	// dropped — the P5 did exactly that on 2026-09-05: "took 0 ticks (0
+	// polls)", a snapshot taken mid-teardown (partner page already emptied,
+	// restart bit still pending), and then the real drop landed on the
+	// post-boot network tests. "Taken" is evidence tied to THIS write
+	// (r8125_phy_restart_taken, host-tested): the self-clearing restart bit
+	// reading back clear, complete going set-to-clear, or the link going
+	// up-to-down, each against the state captured above. A link that was
+	// already down, or a negotiation already in flight, shows none of those
+	// until the restart really initiates — and an older negotiation
+	// completing meanwhile shows the opposite transitions, which do not
+	// count (Codex, PR #66 round 2).
 	//
-	// 0 = unknown, and this part can genuinely reach it: an 8125 negotiating
-	// 2.5GbE sets a bit this driver does not decode (see the header), so the
-	// honest answer is "I don't know" and the raw PHYstatus below is what
-	// explains it.
-	r->netdev.link_mbps = (phy & R8125_PHY_1000M) ? 1000 :
-	                      (phy & R8125_PHY_100M)  ? 100  :
-	                      (phy & R8125_PHY_10M)   ? 10   : 0;
-	r->netdev.full_duplex = (phy & R8125_PHY_FULLDUP) != 0;
-	printd(DEBUG_NET, "r8125: link %u/%s (PHYstatus 0x%02x)\n",
-	       r->netdev.link_mbps, r->netdev.full_duplex ? "full" : "half", phy);
-	// The raw byte rides along on purpose: this is a 2.5GbE part reporting
-	// through a register whose speed encoding this driver only partly
-	// decodes, so if it ever negotiates something we cannot name, the number
-	// that would explain it is already in the log.
+	// A READ THAT TIMES OUT ENDS THE WAIT. Each failed OCP transaction has
+	// already spent its own bound (R8125_PHY_OCP_SPINS polls); a loop that
+	// retried it R8125_PHY_LINK_WAIT_SPINS times would spend fifty billion
+	// register reads with the tick stalled — the very condition the
+	// iteration bound exists for — and that is a boot hang, not a timeout
+	// (Codex, PR #66 round 3). So a window that stops answering ends every
+	// phase below at once, says so, and leaves the link as it stands.
+	uint64_t started = kTicksSinceStart;
+	uint32_t spins = 0;
+	bool restarted = false;
+	bool window_dead = false;
+	for (; spins < R8125_PHY_LINK_WAIT_SPINS; spins++)
+	{
+		uint16_t bmcr, bmsr;
+		if (!r8125_phy_mii_read(r, R8125_MII_BMCR, &bmcr) ||
+		    !r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr))
+		{
+			window_dead = true;
+			break;
+		}
+		if (r8125_phy_restart_taken(bmsr_before, phystatus_before,
+		                            bmcr, bmsr, r8125_read32(r, R8125_PHYSTATUS)))
+		{
+			restarted = true;
+			break;
+		}
+		if (kTicksSinceStart - started >= R8125_PHY_RESTART_TAKE_TICKS)
+			break;
+		__asm__ volatile("pause");
+	}
+
+	// THEN WAIT FOR IT TO FINISH — but only a restart that was SEEN to take
+	// has a finish to wait for. If neither sign appeared, the old completion
+	// is still what the registers say, and a loop that accepted it would
+	// report the old link as a new one: the exact failure the two halves
+	// exist to prevent. So "not observed" is a timeout, and the link stands
+	// as found; a PHY that applies the write late drops the link later, and
+	// the poll reports that as the link change it is (Codex, PR #66).
+	// Otherwise: the link comes back one to three seconds later on a gigabit
+	// partner, and a boot line printed in between would say DOWN about a
+	// wire that is fine. Complete AND the MAC sees the link. Either bound
+	// ends the wait; a timeout is reported, not fatal.
+	bool negotiated = false;
+	if (window_dead)
+		;   // reported below, once
+	else if (!restarted)
+		printd(DEBUG_BOOT, "r8125: PHY never showed the restart taking within %lu ticks (restart bit "
+		       "still set, no complete-to-incomplete, no link fall) — not waiting for a completion "
+		       "that would be the old negotiation's\n", kTicksSinceStart - started);
+	else
+	{
+		for (; spins < R8125_PHY_LINK_WAIT_SPINS; spins++)
+		{
+			uint16_t bmsr;
+			if (!r8125_phy_mii_read(r, R8125_MII_BMSR, &bmsr))
+			{
+				window_dead = true;
+				break;
+			}
+			if ((bmsr & R8125_BMSR_ANEGCOMPLETE) &&
+			    (r8125_read32(r, R8125_PHYSTATUS) & R8125_PHYS_LINK))
+			{
+				negotiated = true;
+				break;
+			}
+			if (kTicksSinceStart - started >= R8125_PHY_LINK_WAIT_TICKS)
+				break;
+			__asm__ volatile("pause");
+		}
+	}
+
+	// The restart empties the partner page and the new exchange writes it
+	// back; completion may be visible a moment before the page is, so give
+	// it a bounded moment. The print says so honestly if it stays empty.
+	uint32_t settle = 0;
+	if (negotiated)
+	{
+		uint64_t settle_started = kTicksSinceStart;
+		for (; settle < R8125_PHY_LINK_WAIT_SPINS; settle++)
+		{
+			uint16_t anlpar;
+			if (!r8125_phy_mii_read(r, R8125_MII_ANLPAR, &anlpar))
+			{
+				window_dead = true;
+				break;
+			}
+			if (anlpar != 0)
+				break;
+			if (kTicksSinceStart - settle_started >= R8125_PHY_PARTNER_WAIT_TICKS)
+				break;
+			__asm__ volatile("pause");
+		}
+	}
+
+	if (window_dead)
+	{
+		printf("r8125: PHY window stopped answering while waiting for the renegotiation — the link stands as it is\n");
+		r8125_read_link(r);
+		return;
+	}
+
+	r8125_read_link(r);
+	r8125_phy_snapshot_t after;
+	if (!r8125_phy_snapshot(r, &after))
+	{
+		printf("r8125: PHY registers stopped answering after renegotiation\n");
+		return;
+	}
+	r8125_phy_print(r, negotiated ? "renegotiated"
+	                  : restarted ? "renegotiation TIMED OUT" : "renegotiation NOT OBSERVED", &after);
+	printd(DEBUG_BOOT, "r8125: PHY renegotiation took %lu ticks (%u polls, %u more for the partner page)%s\n",
+	       kTicksSinceStart - started, spins, settle,
+	       negotiated ? "" : " — no new link yet; the poll reports it if it comes up later");
 }
 
 // ── Ring construction ───────────────────────────────────────────────────────
@@ -459,13 +888,14 @@ static void r8125_report_link(r8125_t* r)
 // needs: the physical one the bus master is given, and an upper-half kernel
 // pointer we can write through from any address space.
 //
-// NOT kmalloc_dma, and the reason is fresh: it identity-maps at a LOWER-half
-// VA in kKernelPML4 alone, so anything touching such a buffer from another
-// task's page tables takes a #PF — which is precisely what killed kworker
-// earlier today (DEBTS.md). r8125_poll runs from processSignals under
-// whatever CR3 was interrupted, so a lower-half buffer here would be a
-// scheduled crash rather than a latent one. Page alignment also satisfies
-// the hardware's 256-byte descriptor-base requirement several times over.
+// allocate_memory_aligned rather than kmalloc_dma: both hand back page-
+// aligned, HHDM-reachable memory today, and this driver keeps the one it
+// was written with. The rule that chose it holds: the drain runs in knet
+// and transmit in whatever task called it, so a buffer only the kernel's
+// own page tables map would be a scheduled crash rather than a latent one
+// (kworker died exactly that way on 2026-08-19 — kmalloc.h's account).
+// Page alignment also satisfies the hardware's 256-byte descriptor-base
+// requirement several times over.
 static bool r8125_setup_rings(r8125_t* r)
 {
 	r->rx_phys = allocate_memory_aligned(R8125_RX_DESCS * sizeof(r8125_desc_t));
@@ -494,7 +924,7 @@ static bool r8125_setup_rings(r8125_t* r)
 	r->tx_buf = (uint8_t*)(r->tx_buf_phys | kHHDMOffset);
 
 	// The protocol half — pure arithmetic, and the half that is already
-	// proven (tools/test_r8125_host.c, eleven tests including the EOR
+	// proven (the ring tests in tools/test_r8125_host.c assert the EOR
 	// invariant after every operation).
 	r8125_ring_init_rx(r->rx, R8125_RX_DESCS, r->rx_buf_phys, R8125_BUF_SIZE);
 	r8125_ring_init_tx(r->tx, R8125_TX_DESCS, r->tx_buf_phys, R8125_BUF_SIZE);
@@ -623,9 +1053,8 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 	r->tx_next = r8125_ring_next(r->tx_next, R8125_TX_DESCS);
 
 	// THE DOORBELL. The descriptor is only a message if somebody tells the
-	// device to look. [8125-SPECIFIC] and UNCONFIRMED — if frames queue and
-	// never leave, this register and this bit are the first two suspects.
-	r8125_write16(r, R8125_TPPOLL_8125, R8125_TPPOLL_NPQ);
+	// device to look.
+	r8125_write16(r, R8125_TPPOLL_8125, R8125_TPPOLL_QUEUE0);
 
 	r->netdev.tx_frames++;
 	r->netdev.tx_bytes += length;
@@ -636,14 +1065,17 @@ static int32_t r8125_transmit(struct net_device* dev, const void* frame, uint16_
 
 static net_operations_t s_r8125_ops = {
 	.transmit = r8125_transmit,
+	.drain    = r8125_drain,
 };
 
 // ── THE INTERRUPT STATUS REGISTER, ACKNOWLEDGED (2026-08-22) ────────────────
 //
-// This driver masks interrupts off (IMR0 = 0) and polls, which is a fine
-// choice. What it did NOT do — from its first slice until today — is ever
-// READ the status register. R8125_ISR0_8125 was defined and referenced
-// nowhere.
+// This driver masked interrupts off (IMR0 = 0) and polled until the MSI top
+// half arrived (2026-09-05, further down); on a NETPOLL boot or a chip
+// without the capability it still does, and either way the drain below
+// runs from knet. What the polled driver did NOT do — from its first slice
+// until 2026-08-22 — is ever READ the status register. R8125_ISR0_8125 was
+// defined and referenced nowhere.
 //
 // That is a trap this chip family is famous for. ISR is WRITE-ONE-TO-CLEAR,
 // and masking interrupts does not stop the device LATCHING status bits; it
@@ -665,12 +1097,9 @@ static net_operations_t s_r8125_ops = {
 // clear it. Acknowledging costs one MMIO read and (only when something
 // happened) one write per scheduler pass.
 //
-// HONESTY, because the register map here is annotated UNCONFIRMED and this
-// is written by someone who cannot test it: 0x3C/0x38 for ISR0/IMR0 match
-// what the vendor and mainline drivers use for the 8125, and a
-// write-one-to-clear of status bits is a safe operation if it IS the status
-// register. If the P5 shows no change, the honest next question is whether
-// the offset is right — not whether acknowledging was the wrong idea.
+// The bits below are the vendor's InterruptStatusBits, name for name
+// (RxOK, RxErr, TxOK, TxErr, RxDescUnavail, LinkChg, RxFIFOOver,
+// TxDescUnavail, SYSErr).
 #define R8125_ISR_ROK      0x0001   // a frame arrived
 #define R8125_ISR_RER      0x0002   // receive error
 #define R8125_ISR_TOK      0x0004   // a frame went out
@@ -687,9 +1116,25 @@ static net_operations_t s_r8125_ops = {
 
 static void r8125_ack_status(r8125_t* r)
 {
-	uint32_t status = r8125_read32(r, R8125_ISR0_8125);
+	// What the register says now, plus whatever the interrupt handler
+	// already acknowledged and parked for us (isr_pending): the accounting
+	// below wants every bit that was set since the last drain, whichever
+	// half of the driver cleared it.
+	uint32_t status = r8125_read32(r, R8125_ISR0_8125)
+	                | __sync_lock_test_and_set(&r->isr_pending, 0);
 	if (status == 0)
 		return;
+
+	// Write-one-to-clear FIRST, before any of the work below: hand back
+	// exactly the bits just read, so an event that lands from here on —
+	// including a second link transition while the link is re-read and
+	// logged further down — relatches and survives to the next pass instead
+	// of being cleared unseen (Codex, PR #66: a clear that came after the
+	// re-read swallowed the transition and left the seam holding the state
+	// in between).
+	r8125_write32(r, R8125_ISR0_8125, status);
+	r->isr_acks++;
+	r->isr_last = status;
 
 	if ((status & (R8125_ISR_RDU | R8125_ISR_RXFOVW)) != 0)
 	{
@@ -750,12 +1195,22 @@ static void r8125_ack_status(r8125_t* r)
 		           : "If the network is misbehaving, start here.");
 	}
 
-	// Write-one-to-clear: hand back exactly the bits we just read, so an
-	// event that lands between the read and the write survives to the next
-	// pass instead of being cleared unseen.
-	r8125_write32(r, R8125_ISR0_8125, status);
-	r->isr_acks++;
-	r->isr_last = status;
+	if (status & R8125_ISR_LINKCHG)
+	{
+		// The wire came or went. Re-read, so the seam and /sys/net say what
+		// the link IS rather than what it was at boot, and say so on the
+		// always-lit channel: a cable falling out ends the network, and
+		// nobody should need a debug bit on to learn that from the log.
+		// The bit was handed back BEFORE this read (top of the function), so
+		// a second transition landing during the read or the log line
+		// relatches it and is seen next pass, instead of being cleared
+		// unseen with the seam holding the state in between (Codex, PR #66).
+		char link[R8125_LINK_WORDS_CAP];
+		r8125_read_link(r);
+		r8125_link_words(r, link, sizeof link);
+		printd(DEBUG_EXCEPTIONS, "r8125: link changed: %s (PHYstatus 0x%08x)\n",
+		       link, r->phystatus);
+	}
 }
 
 // ── THE STALL WATCHDOG ──────────────────────────────────────────────────────
@@ -804,13 +1259,15 @@ static void r8125_check_stalled(r8125_t* r)
 		       "tx_next=%u tx_clean=%u rx_cursor=%u (rings of %u/%u), "
 		       "tx_frames=%lu tx_errors=%lu rx_frames=%lu rx_errors=%lu, "
 		       "%lu completions, %u sent since the last arrival, "
-		       "%lu status acks, %lu receive overruns.\n",
+		       "%lu status acks, %lu receive overruns, "
+		       "%s: %lu interrupts (%lu spurious).\n",
 		       what, r->tx_next, r->tx_clean, r->rx_cursor,
 		       (unsigned)R8125_TX_DESCS, (unsigned)R8125_RX_DESCS,
 		       r->netdev.tx_frames, r->netdev.tx_errors,
 		       r->netdev.rx_frames, r->netdev.rx_errors,
 		       r->tx_completions, r->tx_since_rx,
-		       r->isr_acks, r->isr_overrun_events);
+		       r->isr_acks, r->isr_overrun_events,
+		       r->msi ? "MSI" : "tick-driven", r->msi_fires, r->msi_spurious);
 	}
 	else if (!wedged && r->stall_reported && r->tx_clean == r->tx_next)
 	{
@@ -822,24 +1279,27 @@ static void r8125_check_stalled(r8125_t* r)
 	}
 }
 
-// ── The drain ───────────────────────────────────────────────────────────────
-void r8125_poll(void)
+// ── The drain (the seam's verb; knet calls it, DOORBELL.md) ────────────────
+// Returns whether anything moved — a completion reaped or a frame taken off
+// the ring — so the drainer knows to come around again.
+bool r8125_drain(struct net_device* dev)
 {
+	(void)dev;   // one RTL8125 per machine; the seam's handle and s_r8125 are the same card
 	r8125_t* r = &s_r8125;
 	if (!r->present)
-		return;
+		return false;
+	bool moved = false;
 
-	// Re-entrancy guard, the e1000's pattern: processSignals runs on the
-	// core that owns scheduling, but a transmit from another core takes the
-	// same lock, and nothing here should ever nest.
+	// The lock: a transmit from another core takes the same one, and
+	// nothing here should ever nest.
 	uint64_t flags = spinlock_acquire_irqsave(&r->lock);
 
 	// ACKNOWLEDGE FIRST. A latched RX-overflow or descriptors-exhausted bit
 	// can be holding reception stopped; clearing it before the drain gives
 	// the device permission to resume the moment the refills below give it
 	// somewhere to put things. Anything that arrives during the drain
-	// re-raises and is acknowledged next pass — the same re-evaluate-don't-
-	// remember-edges discipline the e1000 doorbell gate uses in signals.c.
+	// re-raises and is acknowledged next time — the same re-evaluate-don't-
+	// remember-edges discipline the doorbell itself lives by.
 	r8125_ack_status(r);
 
 	// Transmit completions first — cheap, and it frees slots for whatever
@@ -849,19 +1309,21 @@ void r8125_poll(void)
 	{
 		r->tx_completions += reaped;
 		r->last_progress_tick = kTicksSinceStart;
+		moved = true;
 	}
 
-	// Then every frame the device has finished with. Bounded per pass: a
-	// wire delivering faster than we drain must not let one scheduler pass
-	// run the whole ring repeatedly and starve everything else on this core.
-	// Whatever is left stays owned by us and is collected next pass.
+	// Then every frame the device has finished with. Bounded per call: a
+	// wire delivering faster than we drain must not let one call run the
+	// whole ring repeatedly; knet comes around again while anything moved,
+	// under a budget of its own, so the protocol timers still get their
+	// turn. Whatever is left stays owned by us and is collected next call.
 	//
 	// THE BOUND IS THE RING SIZE, AND THAT COUPLING IS DELIBERATE (restated
 	// 2026-08-22, when the receive ring went 64 -> 256). The ring exists to
-	// absorb a burst that arrives faster than passes happen; draining less
-	// than a full ring per pass would leave the tail of every burst sitting
+	// absorb a burst that arrives faster than drains happen; draining less
+	// than a full ring per call would leave the tail of every burst sitting
 	// there, which is how the card ran out of descriptors in the first
-	// place. One pass may therefore now handle 256 frames instead of 64 —
+	// place. One call may therefore handle 256 frames instead of 64 —
 	// roughly a millisecond of copying and stack work at the sizes this
 	// traffic uses, which is the right trade against dropping frames.
 	for (uint16_t drained = 0; drained < R8125_RX_DESCS; drained++)
@@ -906,11 +1368,13 @@ void r8125_poll(void)
 		// most for noticing it is not.
 		r->tx_since_rx = 0;
 		r->last_progress_tick = kTicksSinceStart;
+		moved = true;
 	}
 
 	r8125_check_stalled(r);
 
 	spinlock_release_irqrestore(&r->lock, flags);
+	return moved;
 }
 
 // ── Bring-up ────────────────────────────────────────────────────────────────
@@ -990,8 +1454,10 @@ static bool r8125_init_device(pci_device_t* dev)
 	// where the chip keeps its name.
 	r8125_report_version(r);
 
-	// BEACON 6: the link.
-	r8125_report_link(r);
+	// BEACON 6: the link as the power-on state negotiated it, before this
+	// driver has touched the PHY. r8125_phy_configure prints it beside the
+	// registers that produced it.
+	r8125_read_link(r);
 
 	// ── Soft reset ──────────────────────────────────────────────────────
 	// Set CmdReset and wait for the chip to clear it. Firmware or a warm
@@ -1021,6 +1487,15 @@ static bool r8125_init_device(pci_device_t* dev)
 		return false;
 	}
 	printd(DEBUG_NET, "r8125: soft reset complete\n");
+
+	// ── The PHY ─────────────────────────────────────────────────────────
+	// After the MAC reset (which leaves the PHY alone, and leaves the OCP
+	// window usable) and before the rings: the advertisement and the
+	// renegotiation it may trigger are independent of everything below, and
+	// the interrupt-status clear in the configuration step then swallows
+	// the link-change the restart latched, so the first poll does not
+	// announce a change it already knows about.
+	r8125_phy_configure(r);
 
 	// Reset has stopped the old engines and erased their stale descriptor
 	// state. DMA is safe to authorize now, before setup installs our new ring
@@ -1069,11 +1544,15 @@ static bool r8125_init_device(pci_device_t* dev)
 	r8125_write32_verify(r, R8125_TXCONFIG, R8125_TX_CONFIG_DEFAULT,
 	                     R8125_TXCONFIG_HW_OWNED, "TxConfig");
 
-	// Every interrupt masked. This driver POLLS (RTL8125.md's phased plan:
-	// prove the silicon moves frames before asking whether an interrupt
-	// routes). An unmasked legacy INTx line shared with another device would
-	// mean a level-triggered interrupt nobody ever acknowledges — which
-	// wedges that line for its rightful owner too.
+	// Every interrupt masked at bring-up. The MAC has no message to send
+	// until r8125_enable_msi unmasks it, at the platform moment the LAPIC
+	// becomes the interrupt controller (DOORBELL.md); on a NETPOLL boot, or
+	// a chip without the capability, this mask is permanent and the tick's
+	// ring of knet's bell drains the rings — RTL8125.md's phased plan, prove
+	// the silicon moves frames before asking whether an interrupt routes.
+	// An unmasked legacy INTx line shared with another device would mean a
+	// level-triggered interrupt nobody ever acknowledges — which wedges that
+	// line for its rightful owner too; MSI has no line to wedge.
 	r8125_write32(r, R8125_IMR0_8125, 0);
 	r8125_write32(r, R8125_ISR0_8125, 0xFFFFFFFF);   // clear anything pending
 
@@ -1135,7 +1614,7 @@ static bool r8125_init_device(pci_device_t* dev)
 	// promise is only made now that transmit is real.
 	//
 	// present goes true FIRST: registration makes us reachable, and
-	// r8125_poll must be willing to drain the moment anything can arrive.
+	// r8125_drain must be willing to drain the moment anything can arrive.
 	r->present = true;
 	if (net_device_register(&r->netdev) != 0)
 	{
@@ -1152,22 +1631,147 @@ static bool r8125_init_device(pci_device_t* dev)
 	// its printf, so a bring-up that stops still explains itself on screen.
 	// Speed/duplex ride along because they have already earned their place:
 	// the P5 negotiated 100/full rather than gigabit on its first light, and
-	// that one word is what said "look at the cable, not the driver".
-	if (r->netdev.link_up)
-		printf("r8125: %s at %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link %u/%s\n",
-		       r->model ? r->model : "RTL8125",
-		       r->bus, r->slot, r->func,
-		       r->netdev.mac[0], r->netdev.mac[1], r->netdev.mac[2],
-		       r->netdev.mac[3], r->netdev.mac[4], r->netdev.mac[5],
-		       r->netdev.link_mbps, r->netdev.full_duplex ? "full" : "half");
-	else
-		printf("r8125: %s at %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link DOWN\n",
-		       r->model ? r->model : "RTL8125",
-		       r->bus, r->slot, r->func,
-		       r->netdev.mac[0], r->netdev.mac[1], r->netdev.mac[2],
-		       r->netdev.mac[3], r->netdev.mac[4], r->netdev.mac[5]);
+	// that one word is what said "look at the cable, not the driver" — and
+	// then, on 2026-09-05, "look at the PHY's advertisement, not the cable".
+	// The raw PHYstatus rides beside it for the day the decode is not the
+	// whole story. Read once more here, because the PHY may have finished a
+	// negotiation the bounded wait gave up on.
+	char link[R8125_LINK_WORDS_CAP];
+	r8125_read_link(r);
+	r8125_link_words(r, link, sizeof link);
+	printf("r8125: %s at %02x:%02x.%u, MAC %02x:%02x:%02x:%02x:%02x:%02x, link %s (PHYstatus 0x%08x)\n",
+	       r->model ? r->model : "RTL8125",
+	       r->bus, r->slot, r->func,
+	       r->netdev.mac[0], r->netdev.mac[1], r->netdev.mac[2],
+	       r->netdev.mac[3], r->netdev.mac[4], r->netdev.mac[5],
+	       link, r->phystatus);
 	printd(DEBUG_NET, "r8125: registered as %s\n", r->netdev.name);
 	return true;
+}
+
+// ── The top half: MSI (DOORBELL.md, 2026-09-05) ─────────────────────────────
+//
+// MSI, and why not the e1000's INTx port (Chris ruled it, 2026-09-05): an
+// MSI is a message the device writes to the LAPIC — edge-triggered, ours
+// alone, needing no IOAPIC route and no GSI probe. The 8125 has no self-
+// trigger to probe with (the 8169's forced software interrupt did not
+// survive the doorbell register's move to 0x90), so an INTx port would have
+// had to transmit a frame and listen for TOK. MSI is what Linux runs this
+// chip on, and it costs three configuration-space writes.
+//
+// The message itself: address 0xFEE00000 with the destination APIC id in
+// bits 19:12 (physical destination, fixed delivery), data = the vector —
+// the LAPIC's message format from the Intel SDM, the one every OS programs.
+// The capability's layout is PCI 3.0 §6.8.1: a control word in the high
+// half of the capability dword, the address (one or two dwords, the 64-bit
+// flag says which), then the 16-bit data.
+//
+// THIS CANNOT BE REHEARSED HERE. QEMU's e1000 has no MSI capability and
+// QEMU has no RTL8125, so the P5 is the first machine to run this code, the
+// same position the PHY slice was in. Same discipline: read everything
+// back, print what was programmed, refuse to enable anything that did not
+// take, and keep NETPOLL as the flashlight.
+#define R8125_MSI_VECTOR          0x46
+#define MSI_CTRL_ENABLE           (1u << 16)   // message control is the capability dword's high half
+#define MSI_CTRL_MME_MASK         (7u << 20)   // multiple message enable: 0 = one vector
+#define MSI_CTRL_64BIT            (1u << 23)
+#define MSI_ADDRESS_BASE          0xFEE00000u
+#define PCI_COMMAND_INTX_DISABLE  (1u << 10)
+
+// Every event this driver decodes (the ack's bit table). TOK is in: a
+// download answers every segment with an ACK, and the transmit ring is 64
+// deep, so completions must be reaped as they happen, not at the tick. On
+// a burst these coalesce into one message anyway — the mask says WHICH
+// bits may send, and a message is sent when the first of them sets.
+#define R8125_IMR_EVENTS (R8125_ISR_ROK | R8125_ISR_RER | R8125_ISR_TOK | R8125_ISR_TER | \
+                          R8125_ISR_RDU | R8125_ISR_LINKCHG | R8125_ISR_RXFOVW | \
+                          R8125_ISR_TDU | R8125_ISR_SERR)
+
+// Interrupt context. Reads nothing that needs a lock, prints nothing, and
+// takes no lock — the doorbell rule (doorbell.h). The status is written
+// back HERE, not left for the drain: an MSI is edge-triggered, and a bit
+// left latched is an arrival the device will never announce again. The
+// bits are parked in isr_pending for the drain's accounting.
+void r8125_isr(void)
+{
+	r8125_t* r = &s_r8125;
+	if (!r->present)
+		return;
+
+	uint32_t status = r8125_read32(r, R8125_ISR0_8125);
+	if (status == 0)
+	{
+		r->msi_spurious++;
+		return;
+	}
+	r8125_write32(r, R8125_ISR0_8125, status);
+	__sync_fetch_and_or(&r->isr_pending, status);
+	r->msi_fires++;
+	doorbell_ring(&kNetDoorbell);
+}
+
+void r8125_enable_msi(void)
+{
+	r8125_t* r = &s_r8125;
+	if (!r->present)
+		return;
+	pci_device_t* dev = r->pci;
+	uint8_t bus = dev->busNo, slot = dev->deviceNo, func = dev->funcNo;
+
+	uint8_t cap = pci_find_capability(bus, slot, func, PCI_CAP_MSI);
+	if (cap == 0)
+	{
+		printf("r8125: no MSI capability in config space — staying tick-driven\n");
+		return;
+	}
+
+	uint32_t ctrl  = readPCIRegister(bus, slot, func, cap);
+	bool     is64  = (ctrl & MSI_CTRL_64BIT) != 0;
+	uint8_t  bsp   = kCPUInfo[0].apicID;
+	uint32_t addr  = MSI_ADDRESS_BASE | ((uint32_t)bsp << 12);
+
+	// Address, then data, then enable — the order the spec wants, so the
+	// first message the device sends already has somewhere to go.
+	writePCIRegister(bus, slot, func, cap + 4, addr);
+	if (is64)
+	{
+		writePCIRegister(bus, slot, func, cap + 8, 0);
+		writePCIRegister(bus, slot, func, cap + 12, R8125_MSI_VECTOR);
+	}
+	else
+		writePCIRegister(bus, slot, func, cap + 8, R8125_MSI_VECTOR);
+
+	writePCIRegister(bus, slot, func, cap, (ctrl & ~MSI_CTRL_MME_MASK) | MSI_CTRL_ENABLE);
+
+	// INTx off at the source, so a pin nobody routes cannot assert a level
+	// line nobody answers. A LIVE read-modify-write of the command word,
+	// the a848273 rule.
+	uint32_t live = readPCIRegister(bus, slot, func, 4) & 0xFFFF;
+	writePCIRegister(bus, slot, func, 4, live | PCI_COMMAND_INTX_DISABLE);
+
+	// Read it all back. On a machine with no debugger the read-back IS the
+	// investigation, and an enable bit that did not stick means the device
+	// will interrupt nobody — say so and keep the tick.
+	uint32_t ctrl_back = readPCIRegister(bus, slot, func, cap);
+	uint32_t addr_back = readPCIRegister(bus, slot, func, cap + 4);
+	uint32_t data_back = readPCIRegister(bus, slot, func, cap + (is64 ? 12 : 8)) & 0xFFFF;
+	printd(DEBUG_BOOT, "r8125: MSI capability at 0x%02x (%s-bit), address 0x%08x data 0x%04x, control 0x%04x -> 0x%04x\n",
+	       cap, is64 ? "64" : "32", addr_back, data_back, ctrl >> 16, ctrl_back >> 16);
+	if ((ctrl_back & MSI_CTRL_ENABLE) == 0 || addr_back != addr || data_back != R8125_MSI_VECTOR)
+	{
+		printf("r8125: MSI did not take (control 0x%04x address 0x%08x data 0x%04x) — staying tick-driven\n",
+		       ctrl_back >> 16, addr_back, data_back);
+		return;
+	}
+
+	// Now the MAC may speak: clear anything latched during bring-up so the
+	// first message is a real event, then unmask the events we decode.
+	r8125_write32(r, R8125_ISR0_8125, 0xFFFFFFFF);
+	r8125_write32(r, R8125_IMR0_8125, R8125_IMR_EVENTS);
+	r->msi = true;
+	r->msi_vector = R8125_MSI_VECTOR;
+	printf("r8125: interrupts live — MSI vector 0x%02x at APIC %u, IMR0 0x%08x\n",
+	       R8125_MSI_VECTOR, bsp, r8125_read32(r, R8125_IMR0_8125));
 }
 
 void init_r8125(void)

@@ -233,3 +233,16 @@ void init_PCI();
 
 #endif
 
+
+// ── Capabilities ────────────────────────────────────────────────────────────
+// Walk a function's capability list for one capability id (PCI 3.0 §6.7):
+// the pointer at config offset 0x34 names the first entry, each entry's
+// byte 1 names the next, and an entry is a dword whose low byte is the id.
+// Returns the entry's config-space offset, or 0 when the function does not
+// have it. Bounded, because a corrupt list is a loop: a real list is short
+// and a walk that visits the whole 256-byte space has proven the list lies.
+// First customer: the RTL8125's MSI (DOORBELL.md); MSI-X and the xHCI's
+// interrupt wiring are the named next ones.
+#define PCI_CAP_MSI   0x05
+#define PCI_CAP_MSIX  0x11
+uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t cap_id);
