@@ -4,7 +4,8 @@
 Run after make: python3 tools/test_early_exceptions.py OUTDIR
 GDB injects #UD or a first-page #PF into guest RAM; the ISO is unchanged.
 Both the default reporter and EXCOLD must finish without reading GS:0.
-Injection happens after paging and video initialization, before CLS setup.
+Injection happens before BSP CLS setup or on an AP after its IDT is loaded
+but before it installs GS. Paging and video are initialized in both cases.
 """
 
 import argparse
@@ -19,12 +20,18 @@ set confirm off
 tbreak hardware_init
 continue
 set kUseOldExceptions = $legacy
-tbreak logging_queueing_init
+{breakpoint}
 continue
+set scheduler-locking on
 python
-assert not int(gdb.parse_and_eval('kCLSInitialized'))
+assert bool(int(gdb.parse_and_eval('kCLSInitialized'))) == {ap}
 assert int(gdb.parse_and_eval('$gs_base')) == 0
 assert int(gdb.parse_and_eval('kKernelPML4v')) != 0
+cpu_id = int(gdb.parse_and_eval('apic_id')) if {ap} else 0
+assert (cpu_id != 0) == {ap}
+print('Injecting on AP%d with global CLS flag=%d and GS base=0' % (cpu_id, {ap}))
+previous_contexts = [int(gdb.parse_and_eval('kCurrentCtx[%d]' % i))
+                     for i in range(int(gdb.parse_and_eval('sizeof(kCurrentCtx) / sizeof(kCurrentCtx[0])')))]
 # Stop at the final outer unlock, after the complete report and log drain.
 finished = False
 class ReportEnd(gdb.Breakpoint):
@@ -45,6 +52,17 @@ end
 continue
 python
 assert finished, 'report did not reach its final unlock'
+assert int(gdb.parse_and_eval('kWireOwner')) == cpu_id, 'wire owner is not the faulting CPU'
+if not int(gdb.parse_and_eval('$legacy')):
+    ctx = gdb.parse_and_eval('kCurrentCtx[%d]' % cpu_id)
+    assert int(ctx['vector']) == {vector}, 'wrong per-core exception capture'
+    for i, previous in enumerate(previous_contexts):
+        if i != cpu_id:
+            assert int(gdb.parse_and_eval('kCurrentCtx[%d]' % i)) == previous, 'another CPU context was overwritten'
+end
+finish
+python
+assert int(gdb.parse_and_eval('kWireOwner')) == 0xffffffff, 'wire lock was not released'
 print('PASS early exception report completed without CLS')
 end
 detach
@@ -52,14 +70,17 @@ quit
 '''
 
 
-def run_case(root, iso, kernel, legacy, pagefault):
-    name = f"{'old' if legacy else 'new'}-{'pf' if pagefault else 'ud'}"
+def run_case(root, iso, kernel, legacy, pagefault, ap):
+    name = f"{'ap' if ap else 'bsp'}-{'old' if legacy else 'new'}-{'pf' if pagefault else 'ud'}"
     run = root / name
     run.mkdir()
     sock = run / 'gdb.sock'
     serial = run / 'serial.log'
     script = run / 'test.gdb'
     script.write_text(GDB_TEST.format(
+        breakpoint='tbreak init_core_local_storage if apic_id != 0' if ap else 'tbreak logging_queueing_init',
+        ap=ap,
+        vector=14 if pagefault else 6,
         code='48a10100000000000000' if pagefault else '0f0b',
     ))
     with (run / 'qemu.log').open('w') as qlog:
@@ -104,12 +125,14 @@ def main():
     parser.add_argument('outdir', type=Path)
     parser.add_argument('--iso', type=Path, default=Path('os64_kernel.iso'))
     parser.add_argument('--kernel', type=Path, default=Path('kernel/bin/os64_kernel'))
+    parser.add_argument('--cpu', choices=('bsp', 'ap', 'both'), default='both')
     args = parser.parse_args()
     args.outdir.mkdir(parents=True, exist_ok=True)
-    for legacy in (False, True):
-        for pagefault in (False, True):
-            run_case(args.outdir.resolve(), args.iso.resolve(), args.kernel.resolve(),
-                     legacy, pagefault)
+    for ap in ((False, True) if args.cpu == 'both' else (args.cpu == 'ap',)):
+        for legacy in (False, True):
+            for pagefault in (False, True):
+                run_case(args.outdir.resolve(), args.iso.resolve(), args.kernel.resolve(),
+                         legacy, pagefault, ap)
 
 
 if __name__ == '__main__':

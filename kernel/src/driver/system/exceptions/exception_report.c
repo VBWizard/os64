@@ -69,9 +69,15 @@ static volatile uint32_t kWireDepth = 0;
 
 static uint32_t wire_self(void)
 {
-	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
-	// 0xFE: the pre-CLS early-boot pseudo-identity. One core, no contention.
-	return (cls != NULL) ? (uint32_t)cls->apic_id : 0xFEu;
+	// AP startup can fault before GS is installed. The LAPIC is available
+	// by then; read_apic_id returns the BSP identity before LAPIC setup.
+	return read_apic_id();
+}
+
+static uint32_t exception_core_index(void)
+{
+	uint32_t core = read_apic_id();
+	return core < MAX_CPUS ? core : 0;
 }
 
 void exception_wire_lock(void)
@@ -428,7 +434,8 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 	// `mov rax, [gs:0]` — a wrong GS makes every cls-> read return garbage,
 	// which is the shape of a corruption family this OS spent weeks on. And
 	// after CLS initialization the base should be inside kCoreLocalStorage
-	// in ring 0 and ring 3 alike. Before BSP CLS setup, zero is expected.
+	// in ring 0 and ring 3 alike. During CPU bring-up, zero is expected until
+	// that CPU installs its GS base.
 	{
 		uint64_t gs_base = rdmsr64(IA32_GS_BASE);
 		uint64_t cls_lo = (uint64_t)&kCoreLocalStorage[0];
@@ -436,7 +443,7 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 		bool sane = (gs_base >= cls_lo && gs_base < cls_hi);
 		EXC_EMIT(dying, ">>> GS_BASE 0x%016lx  (%s) <<<\n",
 		         gs_base,
-		         (!kCLSInitialized && gs_base == 0) ? "not initialized (early boot)"
+		         (!kSMPInitDone && gs_base == 0) ? "not initialized (early boot)"
 		              : sane ? "in kCoreLocalStorage — ok"
 		              : "*** OUTSIDE kCoreLocalStorage — GS IS WRONG ***");
 	}
@@ -445,7 +452,7 @@ void exception_report_registers(const exception_context_t *ctx, bool dying)
 
 void exception_report(const exception_context_t *ctx, const char *why)
 {
-	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
+	core_local_storage_t *cls = try_get_core_local_storage();
 	uint64_t cr0, cr2, cr3, cr4;
 	char bits[96];
 
@@ -471,8 +478,7 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	// `dying` false, EXC_EMIT's printd copy carries the report into the log
 	// file when logd holds the sink. Read under the wire lock; per-core, so
 	// a concurrent fatal report on another core is unaffected.
-	uint32_t excCore = (cls != NULL && cls->apic_id < MAX_CPUS)
-	                       ? (uint32_t)cls->apic_id : 0;
+	uint32_t excCore = exception_core_index();
 	const bool resuming = kExcResumingCore[excCore];
 	const bool dying = !resuming;
 	kExcEmitToGlass = !resuming;
@@ -494,7 +500,7 @@ void exception_report(const exception_context_t *ctx, const char *why)
 	}
 
 	EXC_EMIT(dying, ">>> AP %lu (Thread 0x%08x)  vector %lu  error 0x%lx <<<\n",
-	         cls ? cls->apic_id : 0, cls ? cls->threadID : 0,
+	         (uint64_t)read_apic_id(), cls ? cls->threadID : 0,
 	         ctx->vector, ctx->error_code);
 
 	// The #PF error code decoded, in the SAME words the ring-3 segfault report
@@ -613,17 +619,14 @@ static exception_context_t *kCurrentCtx[MAX_CPUS];
 
 exception_context_t *exception_current_context(void)
 {
-	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
-	// Match dispatch's early-boot slot so the pager can report its captured
-	// context before GS-based CLS exists. Only the BSP is running then.
-	uint32_t core = (cls != NULL && cls->apic_id < MAX_CPUS) ? (uint32_t)cls->apic_id : 0;
-	return kCurrentCtx[core];
+	// Use the same CPU identity before and after GS setup. An AP without
+	// CLS must retain its own capture instead of borrowing the BSP's slot.
+	return kCurrentCtx[exception_core_index()];
 }
 
 void exception_dispatch(exception_context_t *ctx)
 {
-	core_local_storage_t *cls = kCLSInitialized ? get_core_local_storage() : NULL;
-	uint32_t core = (cls != NULL && cls->apic_id < MAX_CPUS) ? (uint32_t)cls->apic_id : 0;
+	uint32_t core = exception_core_index();
 
 	// Save-and-restore rather than set-and-clear, because exceptions NEST: a
 	// #PF taken inside the pager re-enters here with its own context, and a
