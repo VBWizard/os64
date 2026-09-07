@@ -120,6 +120,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/tartest",         NULL, 0x7A120000,  0,          "ustar create/list/extract, pipelines, ext2 atomic publication and path safety" },
     { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip and safe gzip/gunzip command publication" },
     { "/tests/pngtest",         NULL, 0x90640000,  0,          "standalone libpng: filtered RGBA decode, alpha, CRC and pixel cap" },
+    { "/tests/rngprobe",        NULL, 0,           3,          "CPU RNG availability and bounded sampling; not entropy certification" },
     { "/tests/renametest",      NULL, 0x4E4D0000,  0,          "rename policies on ext2 and FAT, plus invalid flags and legacy ABI compatibility" },
     { "/tests/openxtest",        NULL, 0x0EAC7000,  0,          "atomic exclusive create on ext2 and FAT, including contention and full-handle refusal" },
     { "/tests/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
