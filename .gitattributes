@@ -1,0 +1,2 @@
+userland/libtls/upstream/** linguist-vendored
+userland/libtls/test/vectors.h linguist-generated

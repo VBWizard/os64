@@ -307,6 +307,9 @@ APP_SLOT_SIZE  := $(shell $(CURDIR)/tools/app_bases.py --slot-size)
 $(foreach p,$(APP_BASE_PAIRS),\
   $(eval APP_BASE_$(word 1,$(subst =, ,$(p))) := $(word 2,$(subst =, ,$(p)))))
 
+.DEFAULT_GOAL := all
+include libtls/foundation.mk
+
 .PHONY: all
 all: $(LIBOS64_SO) $(LIBGZIP_SO) $(LIBPNG_SO) $(addprefix $(BIN)/,$(APPS)) $(addprefix $(TESTBIN)/,$(TESTS)) \
      $(addprefix $(BIN)/,$(APP_ALIASES)) $(BIN)/app_bases.gdb
@@ -390,9 +393,11 @@ define APP_RULE
 APP_OBJS_$(1) := $(patsubst %.c,$(OBJ)/%.c.o,$(wildcard $(2)/$(1)/*.c))
 APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),$(HEX_BUFFER_APPS)),$(HEX_BUFFER_OBJ)) \
-                       $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ))
+                       $(if $(filter $(1),$(TAR_FORMAT_PROGRAMS)),$(TAR_FORMAT_OBJ)) \
+                       $(if $(filter $(1),bearssltest),$(BEARSSL_TEST_OBJ))
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
-                       $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO))
+                       $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
+                       $(if $(filter $(1),bearssltest),$(BEARSSL_ARCHIVE))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):
 	@mkdir -p "$$(dir $$@)"
