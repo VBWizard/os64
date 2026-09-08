@@ -36,7 +36,8 @@ void random_init(void);
 // The kernel's verb. Never blocks and never fails: a caller before the pool
 // is seeded gets what the pool has, which still beats the tick counter.
 // Callers that must not proceed unseeded ask random_seeded() first
-// (/dev/random's reader is the one that waits).
+// (/dev/random's reader does, and REFUSES the read with -1 rather than
+// parking — its context may not sleep; devfs.c says why).
 void random_bytes(void* buf, size_t n);
 uint32_t random_u32(void);
 uint64_t random_u64(void);
@@ -58,7 +59,8 @@ void random_add_timing(random_source_t source);
 void random_fold_fast_pools(void);
 
 // A program's contribution through /dev/random: folded in, credited with
-// nothing — the kernel cannot know what the bytes are worth.
+// nothing — the kernel cannot know what the bytes are worth. Hashes under
+// the pool's lock, so the caller bounds n (devfs takes a page per write).
 void random_mix(const void* buf, size_t n);
 
 // The eyes, for /sys/random. Counters are best-effort (the timing ones are

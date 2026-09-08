@@ -170,9 +170,11 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 // /dev/zero` is meant to run until you stop it, exactly as it has since
 // System V. /dev/full reads as zeros for the same reason Linux's does: its
 // divergence is on the WRITE side, and a reader should not have to care.
-// The most /dev/random serves per read: one page, 64 ChaCha blocks. The
-// reason is written at the node's case below.
-#define DEV_RANDOM_READ_MAX 4096
+
+// The most /dev/random takes or gives in one call: a page — 64 ChaCha
+// blocks out, 64 BLAKE2s blocks in. The reason is written at the read
+// case; the write case cites it.
+#define DEV_RANDOM_IO_MAX 4096
 
 static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 {
@@ -221,8 +223,8 @@ static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 			}
 			if (size == 0)
 				return 0;
-			if (size > DEV_RANDOM_READ_MAX)
-				size = DEV_RANDOM_READ_MAX;
+			if (size > DEV_RANDOM_IO_MAX)
+				size = DEV_RANDOM_IO_MAX;
 			random_bytes(buffer, size);
 			return (int)size;
 
@@ -256,8 +258,14 @@ static int dev_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 
 		case DEV_NODE_RANDOM:
 			// A contribution: folded into the pool with no credit, since
-			// the kernel cannot know what the bytes are worth. Consumed
-			// whole for the same reason null and zero are.
+			// the kernel cannot know what the bytes are worth. Taken a
+			// PAGE at a time, a short write above it, for the read case's
+			// reason: the fold hashes under the pool's lock inside the
+			// borrowed context, and a megabyte is sixteen thousand BLAKE2s
+			// blocks at -O0 with this core's interrupts off. Null and
+			// zero swallow whole because swallowing costs nothing.
+			if (size > DEV_RANDOM_IO_MAX)
+				size = DEV_RANDOM_IO_MAX;
 			if (size)
 				random_mix(buffer, size);
 			return (int)size;

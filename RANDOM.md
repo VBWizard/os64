@@ -115,7 +115,9 @@ the split is a fossil of the days when the pool's estimator gated the
 "real" device, Linux made them the same generator in 5.6, and a second
 name would be one more thing to explain. A write to `/dev/random` mixes
 the bytes in with no credit, so a program that knows something the
-kernel does not (a saved seed, a probe's samples) can contribute.
+kernel does not (a saved seed, a probe's samples) can contribute — a page
+per call, a short write above it, for the read cap's reason: the fold
+hashes under the pool's lock inside the same borrowed context.
 
 **`/sys/random`.** The eyes: `seeded:` and by what, which instructions
 CPUID advertises and which passed the variation check, hardware draws

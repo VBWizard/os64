@@ -2151,8 +2151,9 @@ static teardown_verdict_t teardown_leak_attempt(void)
 // The entropy pool, right after random_init: two draws differ, neither is
 // one repeated byte, and the pool's own account of itself is consistent —
 // a trusted hardware instruction means it was seeded by hardware and gave
-// at least the 256 bits a seed takes; no hardware means the jitter loop or
-// nothing, and /sys/random will say. The construction itself is proven on
+// at least the 256 bits a seed takes, unless it ran dry mid-draw (then the
+// jitter loop, and hw_exhausted says why); no hardware means the jitter
+// loop or nothing, and /sys/random will say. The construction itself is proven on
 // the host (tools/test_random_host.sh); this is the instruction meeting
 // the real CPU, once per boot.
 
@@ -2176,13 +2177,25 @@ static bool test_random_pool(void)
 
     const random_stats_t *r = &kRandomStats;
     bool hw = r->rdseed_trusted || r->rdrand_trusted;
-    if (hw && (!r->seeded || r->hw_words < 4)) {
+    // A trusted instruction that then ran dry inside the seed draw's retry
+    // budget is a real, recoverable state: the pool falls through to the
+    // jitter loop, and hw_exhausted says so. That is not a failure of the
+    // pool — and this test runs PREBOOT, where a failure is a panic — so
+    // hardware is held to "seeded by hardware with a full seed" only when
+    // it never ran dry.
+    bool hw_ran_dry = r->hw_exhausted > 0;
+    if (hw && !hw_ran_dry && (!r->seeded || r->hw_words < 4)) {
         printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware trusted but pool %s (hw words %lu)\n",
                r->seeded ? "under-seeded" : "unseeded", r->hw_words);
         return false;
     }
-    if (hw && r->seeded_by[0] != 'r') {
+    if (hw && !hw_ran_dry && r->seeded_by[0] != 'r') {
         printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware trusted but seeded by %s\n", r->seeded_by);
+        return false;
+    }
+    if (hw && hw_ran_dry && r->seeded && r->seeded_by[0] != 'r' && r->seeded_by[0] != 'j') {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware ran dry (%lu exhausted) yet seeded by %s before any interrupt\n",
+               r->hw_exhausted, r->seeded_by);
         return false;
     }
     if (!hw && r->seeded && r->seeded_by[0] != 'j') {
@@ -2190,11 +2203,11 @@ static bool test_random_pool(void)
                r->seeded_by);
         return false;
     }
-    printd(DEBUG_TESTS, "\ttest_random_pool: seeded %s by %s (rdseed %s, rdrand %s, hw words %lu, retries %lu, jitter %lu)\n",
+    printd(DEBUG_TESTS, "\ttest_random_pool: seeded %s by %s (rdseed %s, rdrand %s, hw words %lu, retries %lu, exhausted %lu, jitter %lu)\n",
            r->seeded ? "yes" : "NO", r->seeded ? r->seeded_by : "-",
            !r->cpuid_rdseed ? "absent" : r->rdseed_trusted ? "ok" : "failed",
            !r->cpuid_rdrand ? "absent" : r->rdrand_trusted ? "ok" : "failed",
-           r->hw_words, r->hw_retries, r->jitter_samples);
+           r->hw_words, r->hw_retries, r->hw_exhausted, r->jitter_samples);
     return true;
 }
 

@@ -14,6 +14,7 @@
 //   0x5EED0002  first read short   0x5EED0006  write refused or short
 //   0x5EED0003  second read short  0x5EED0007  /sys/random missing or not seeded
 //   0x5EED0008  a read past a page was not cut to one
+//   0x5EED0009  a write past a page was not cut to one
 
 #include "os64/os64.h"
 
@@ -26,6 +27,7 @@
 #define RANDTEST_NO_WRITE     0x5EED0006
 #define RANDTEST_NOT_SEEDED   0x5EED0007
 #define RANDTEST_NO_CAP       0x5EED0008
+#define RANDTEST_NO_WRITE_CAP 0x5EED0009
 
 #define SEED_BYTES 32
 #define PAGE_BYTES 4096     // the most one read of /dev/random serves (RANDOM.md)
@@ -85,9 +87,13 @@ int main(int argc, char** argv)
 	if (w < 0)
 		return RANDTEST_NO_WRITE;
 	int64_t wrote = os64_write((int32_t)w, a, SEED_BYTES);
+	if (wrote != SEED_BYTES) { os64_close((int32_t)w); return RANDTEST_NO_WRITE; }
+	// And a contribution past a page is taken a page at a time, for the
+	// same reason a read is served that way.
+	wrote = os64_write((int32_t)w, big, sizeof(big));
 	os64_close((int32_t)w);
-	if (wrote != SEED_BYTES)
-		return RANDTEST_NO_WRITE;
+	if (wrote != PAGE_BYTES)
+		return RANDTEST_NO_WRITE_CAP;
 
 	// The eyes must agree the door is open for a reason.
 	int64_t s = os64_open("/sys/random", "r");
