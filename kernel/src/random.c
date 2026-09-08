@@ -11,6 +11,7 @@
 #include "random.h"
 #include "crypto/blake2s.h"
 #include "crypto/chacha20.h"
+#include "crypto/wipe.h"
 #include "spinlock.h"
 #include "smp_core.h"
 #include "kernel.h"
@@ -27,8 +28,9 @@
 #define RANDOM_RESEED_BYTES     (1u << 20)
 #define RANDOM_FOLD_EVERY       64      // fast-pool events between folds, per core
 #define RANDOM_TIMING_SEED_EVENTS 1024  // timing events that count as seeded when nothing else did
-#define RANDOM_JITTER_SAMPLES   256     // distinct-delta samples the boot jitter loop wants
+#define RANDOM_JITTER_SAMPLES   256     // samples past the stuck test the boot jitter loop wants
 #define RANDOM_JITTER_ROUNDS    (1u << 16)  // and the most walks it may spend collecting them
+#define RANDOM_JITTER_STEPS     256     // the one walk every round times
 #define RANDOM_FAST_POOLS       256     // indexed by APIC id, one cache line each
 
 // ── State ───────────────────────────────────────────────────────────────
@@ -171,6 +173,7 @@ static void fold_fast_pools_locked(void)
 		return;
 	material[n++] = hw_cycles();
 	key_fold(material, n * sizeof(uint64_t));
+	crypto_wipe(material, sizeof(material));
 	kRandomStats.folds++;
 	if (!kRandomStats.seeded && s_timing_seen >= RANDOM_TIMING_SEED_EVENTS)
 		set_seeded("timing");
@@ -188,6 +191,7 @@ static void reseed_locked(void)
 		got += hw_draw(hw_rdrand, hw + got, 4 - got);
 	if (got)
 		key_fold(hw, got * sizeof(uint64_t));
+	crypto_wipe(hw, sizeof(hw));
 	fold_fast_pools_locked();
 	uint64_t now = hw_cycles();
 	key_fold(&now, sizeof(now));
@@ -198,37 +202,47 @@ static void reseed_locked(void)
 
 // ── Seeding at boot ─────────────────────────────────────────────────────
 
-// The fallback when no instruction is trusted: time a memory walk of
-// varying length with the cycle counter and keep the deltas that differ
-// from the last. On a hypervisor the counter is the host's clock and the
-// walk's timing carries the host's scheduling noise; on bare metal without
-// RDSEED (nothing this house owns) it carries cache and bus noise. Bounded
-// by ITERATIONS, not ticks: it runs under the pool's lock with interrupts
-// off, so the tick cannot be its clock. RANDOM_JITTER_ROUNDS walks of at
-// most 4160 steps is well under a second anywhere; if the budget runs out
-// first the pool stays unseeded and the timing source finishes the job as
-// interrupts arrive.
+// The fallback when no instruction is trusted: time THE SAME memory walk,
+// round after round, with the cycle counter. The walk is fixed — one
+// length, one start, one stride — so the work timed never varies and
+// whatever the deltas do is the machine's doing: cache and bus noise on
+// bare metal without RDSEED (nothing this house owns), the host's
+// scheduling on a hypervisor. A sample is kept only when it passes the
+// STUCK TEST from Müller's Jitter RNG (the kernel crypto API's
+// jitterentropy): the delta, the delta of deltas and the delta of THOSE
+// must all be non-zero. That rejects a constant delta and one drifting at
+// a constant rate — a cache warming up, a counter advancing in fixed
+// steps — which are the only shapes a clock with no noise in it can
+// produce. It is a health test, not a measurement: it cannot tell noise
+// from a clock that lies in a pattern, and nothing can. Bounded by
+// ROUNDS, not ticks: it runs under the pool's lock with interrupts off,
+// so the tick cannot be its clock. If the budget runs out first the pool
+// stays unseeded and the timing source finishes the job as interrupts
+// arrive.
 static bool jitter_seed_locked(void)
 {
 	static volatile uint8_t arena[4096];
-	uint64_t last_delta = 0, walk = 0x9E3779B97F4A7C15ull;
+	uint64_t last_delta = 0, last_delta2 = 0;
 	uint64_t samples[32];
 	size_t n = 0, kept = 0;
 	for (uint32_t round = 0; round < RANDOM_JITTER_ROUNDS && kept < RANDOM_JITTER_SAMPLES; round++)
 	{
-		walk = walk * 6364136223846793005ull + 1442695040888963407ull;
-		uint32_t steps = 64 + (uint32_t)(walk >> 52);
 		uint64_t before = hw_cycles();
-		uint32_t at = (uint32_t)(walk >> 20) & 4095;
-		for (uint32_t i = 0; i < steps; i++)
+		uint32_t at = 0;
+		for (uint32_t i = 0; i < RANDOM_JITTER_STEPS; i++)
 		{
 			arena[at] = (uint8_t)(arena[at] + 1);
 			at = (at * 1103515245u + 12345u) & 4095;
 		}
 		uint64_t delta = hw_cycles() - before;
-		if (delta == last_delta)
-			continue;
+		uint64_t delta2 = delta - last_delta;
+		uint64_t delta3 = delta2 - last_delta2;
+		// The first two rounds have no history to test against.
+		bool stuck = round < 2 || delta == 0 || delta2 == 0 || delta3 == 0;
 		last_delta = delta;
+		last_delta2 = delta2;
+		if (stuck)
+			continue;
 		samples[n++] = delta;
 		kept++;
 		if (n == 32)
@@ -239,6 +253,7 @@ static bool jitter_seed_locked(void)
 	}
 	if (n)
 		key_fold(samples, n * sizeof(uint64_t));
+	crypto_wipe(samples, sizeof(samples));
 	kRandomStats.jitter_samples += kept;
 	return kept >= RANDOM_JITTER_SAMPLES;
 }
@@ -265,6 +280,7 @@ void random_init(void)
 	}
 	if (got)
 		key_fold(hw, got * sizeof(uint64_t));
+	crypto_wipe(hw, sizeof(hw));
 	if (!kRandomStats.seeded && jitter_seed_locked())
 		set_seeded("jitter");
 	uint64_t now = hw_cycles();
@@ -296,6 +312,12 @@ void random_bytes(void* buf, size_t n)
 	if (s_served_since_reseed >= RANDOM_RESEED_BYTES ||
 	    kTicksSinceStart - s_reseeded_at_tick >= RANDOM_RESEED_TICKS)
 		reseed_locked();
+	// Unseeded, take whatever the interrupts have left in the fast pools
+	// before answering: on a machine with no NIC there is no knet to fold
+	// them, and the tick alone crosses the threshold in seconds if
+	// something folds it. Seeded, only the cadence above folds here.
+	else if (!kRandomStats.seeded)
+		fold_fast_pools_locked();
 	if (!s_timing_seeded_announced && kRandomStats.seeded && kRandomStats.seeded_by[0] == 't')
 	{
 		s_timing_seeded_announced = true;
@@ -319,8 +341,7 @@ void random_bytes(void* buf, size_t n)
 			s_key[i] = block[i];
 		for (size_t i = 0; i < take; i++)
 			out[i] = block[RANDOM_KEY_BYTES + i];
-		for (size_t i = 0; i < RANDOM_KEY_BYTES + take; i++)
-			block[i] = 0;
+		crypto_wipe(block, RANDOM_KEY_BYTES + take);
 		out += take;
 		n -= take;
 		s_served_since_reseed += take;
@@ -350,7 +371,8 @@ void random_add_timing(random_source_t source)
 void random_fold_fast_pools(void)
 {
 	// Only when some core has accumulated a fold's worth: knet calls this
-	// on every wake, and taking the lock for nothing is the cost to avoid.
+	// on every wake and /dev/random on every read it would refuse, and
+	// taking the lock for nothing is the cost to avoid.
 	bool due = false;
 	for (uint32_t i = 0; i < RANDOM_FAST_POOLS && !due; i++)
 		due = s_fast[i].count >= RANDOM_FOLD_EVERY;

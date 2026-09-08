@@ -197,7 +197,12 @@ static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 			// call_in_kernel_context and may not sleep there (syscall.c,
 			// THE HANDLE ALIAS). Boot itself outlasts seeding on every
 			// machine this house owns, so the refusal is a tripwire for
-			// a source that failed, not a state a program meets.
+			// a source that failed, not a state a program meets. Before
+			// refusing, fold what the interrupts have left in the fast
+			// pools: a machine with no NIC has no knet to do it, and the
+			// tick alone seeds the pool if something folds it (random.h).
+			if (!random_seeded())
+				random_fold_fast_pools();
 			if (!random_seeded())
 			{
 				kRandomStats.reads_refused++;

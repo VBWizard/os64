@@ -12,7 +12,7 @@ static void reset(hw_mode_t rdseed, hw_mode_t rdrand, uint64_t cycle_step)
 	s_generation = s_served_since_reseed = s_reseeded_at_tick = s_timing_seen = 0;
 	s_lock = 0;
 	g_rdseed_mode = rdseed; g_rdrand_mode = rdrand;
-	g_cycle_step = cycle_step; g_flaky_calls = 0;
+	g_cycle_step = cycle_step; g_cycle_noise = 9; g_flaky_calls = 0;
 	kTicksSinceStart = 100;
 }
 
@@ -36,6 +36,12 @@ static void test_seeding(void)
 	CHECK(strcmp(kRandomStats.seeded_by, "jitter") == 0, "the jitter loop seeds when nothing else can: %s", kRandomStats.seeded_by);
 	CHECK(kRandomStats.jitter_samples >= RANDOM_JITTER_SAMPLES, "jitter samples %lu", kRandomStats.jitter_samples);
 
+	// A clock that advances in perfectly even steps carries no information;
+	// the stuck test's second difference is zero on every round, so the
+	// loop keeps nothing, whatever the rate.
+	reset(HW_DEAD, HW_DEAD, 7); g_cycle_noise = 0; random_init();
+	CHECK(!kRandomStats.seeded && kRandomStats.jitter_samples == 0, "a linear cycle counter cannot seed (kept %lu)", kRandomStats.jitter_samples);
+
 	reset(HW_ABSENT, HW_ABSENT, 0); random_init();
 	CHECK(!kRandomStats.seeded && !kRandomStats.cpuid_rdseed, "a frozen cycle counter and no instruction: unseeded");
 	// Interrupt timing finishes the job: events arrive, knet folds them.
@@ -55,6 +61,19 @@ static void test_seeding(void)
 	CHECK(kRandomStats.seeded && strcmp(kRandomStats.seeded_by, "timing") == 0, "timing seeds after the threshold: %s", kRandomStats.seeded_by);
 	CHECK(kRandomStats.timing_events[RANDOM_SOURCE_TICK] + kRandomStats.timing_events[RANDOM_SOURCE_NIC] == RANDOM_TIMING_SEED_EVENTS + RANDOM_FOLD_EVERY, "events counted by source");
 	CHECK(kRandomStats.folds > 0, "folds happened");
+
+	// The no-NIC boot: the tick lands events, nothing ever calls
+	// random_fold_fast_pools (there is no knet), and the first draw folds
+	// them itself. random_seeded() alone never does — it is a question.
+	reset(HW_ABSENT, HW_ABSENT, 0); random_init();
+	g_cycle_step = 3;
+	for (int i = 0; i < RANDOM_TIMING_SEED_EVENTS + RANDOM_FOLD_EVERY; i++) random_add_timing(RANDOM_SOURCE_TICK);
+	CHECK(!random_seeded() && kRandomStats.folds == 0, "events alone fold nothing");
+	uint8_t one;
+	random_bytes(&one, 1);
+	CHECK(kRandomStats.seeded && strcmp(kRandomStats.seeded_by, "timing") == 0 && kRandomStats.folds == 1, "a draw before seeding folds the fast pools: %s, folds %lu", kRandomStats.seeded_by, kRandomStats.folds);
+	random_bytes(&one, 1);
+	CHECK(kRandomStats.folds == 1, "a draw after seeding does not");
 }
 
 static void test_erasure_and_construction(void)

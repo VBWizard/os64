@@ -5,6 +5,7 @@
 // blake2s.h says why; tools/test_random_host.c proves it against hashlib.
 
 #include "crypto/blake2s.h"
+#include "crypto/wipe.h"
 
 static const uint32_t kIV[8] = {
 	0x6A09E667u, 0xBB67AE85u, 0x3C6EF372u, 0xA54FF53Au,
@@ -151,11 +152,11 @@ void blake2s_final(blake2s_state_t* s, void* out)
 	uint8_t* o = out;
 	for (size_t i = 0; i < s->outlen; i++)
 		o[i] = full[i];
-	// The state is spent; wipe what it held of the message and the key.
-	for (size_t i = 0; i < BLAKE2S_BLOCK_BYTES; i++)
-		s->buf[i] = 0;
-	for (int i = 0; i < 8; i++)
-		s->h[i] = 0;
+	// The state is spent, and the digest scratch is the pool's next key
+	// when the caller is key_fold: wipe both in a way -O2 cannot drop.
+	crypto_wipe(full, sizeof(full));
+	crypto_wipe(s->buf, sizeof(s->buf));
+	crypto_wipe(s->h, sizeof(s->h));
 }
 
 void blake2s(void* out, size_t outlen, const void* key, size_t keylen,

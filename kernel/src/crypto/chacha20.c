@@ -5,6 +5,7 @@
 // says what this is for and what it deliberately is not.
 
 #include "crypto/chacha20.h"
+#include "crypto/wipe.h"
 
 static inline uint32_t rotl32(uint32_t x, unsigned n) { return (x << n) | (x >> (32 - n)); }
 
@@ -70,6 +71,7 @@ void chacha20_stream(const uint8_t key[CHACHA20_KEY_BYTES], uint32_t counter,
 		out += take;
 		len -= take;
 	}
-	for (size_t i = 0; i < CHACHA20_BLOCK_BYTES; i++)
-		block[i] = 0;
+	// The last block holds keystream nobody was given — in the pool's
+	// use, the next key — so its wipe must survive the optimizer.
+	crypto_wipe(block, sizeof(block));
 }

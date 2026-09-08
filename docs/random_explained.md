@@ -56,11 +56,15 @@ On a machine with the noise circuit this is belt and braces; on one
 without, it is the belt.
 
 There is a third trick for the first second of boot, before enough
-interrupts have arrived: time a loop of memory accesses of varying length
-and keep the timings that differ from each other. Cache misses, bus
-contention, and on a virtual machine the host's own scheduling, all add
-jitter that no one can predict. Linux does this too. It seeds the pool in
-milliseconds on the one QEMU model that hides the instructions.
+interrupts have arrived: time the same short loop of memory accesses over
+and over, and keep only the timings that are not a pattern. The work is
+identical every time, so any difference between one run and the next is
+the machine's own noise — cache misses, bus contention, and on a virtual
+machine the host's own scheduling — which no one can predict. A timing
+that repeats the last one, or drifts from it at a steady rate, is thrown
+away: that is what a clock with no noise in it looks like. Linux does this
+too. It seeds the pool in milliseconds on the one QEMU model that hides
+the instructions.
 
 ## Why the raw bits are not handed out
 
@@ -104,8 +108,8 @@ you lose.
 
 The pool starts empty and becomes SEEDED when it has taken in enough
 unpredictability to be trusted: 256 bits from a trusted hardware
-instruction, or 256 distinct timings from the boot jitter loop, or 1024
-folded interrupt timings. `/sys/random` says which door it came through
+instruction, or 256 timings from the boot jitter loop that were not a
+pattern, or 1024 folded interrupt timings. `/sys/random` says which door it came through
 and how many of each it has seen. On every machine we own the answer is
 `rdseed`, decided microseconds into boot. Before the pool is seeded, a
 read of `/dev/random` is refused rather than served, on the principle that

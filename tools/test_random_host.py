@@ -92,6 +92,7 @@ def emit_pool_harness(path):
 #include <string.h>
 #include "crypto/blake2s.h"
 #include "crypto/chacha20.h"
+#include "crypto/wipe.h"
 #define TICKS_PER_SECOND 100
 #define DEBUG_BOOT 0
 #define printd(...) ((void)0)

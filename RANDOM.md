@@ -51,14 +51,17 @@ the kernel API and the generator.
   runs (eight draws; all equal means the instruction lies, the Zen 2
   post-resume bug), draws 256 bits from RDSEED (retrying, ten attempts per
   word, RDRAND if RDSEED is absent or exhausted), and folds them in. With
-  no trusted instruction it runs the JITTER LOOP: a memory walk of varying
-  length timed by the cycle counter, keeping the deltas that differ from
-  the last, until 256 of them are in or a bounded number of walks is
-  spent — bounded by iterations rather than ticks, because it runs under
-  the pool's lock with interrupts off. On a hypervisor that seeds in
-  milliseconds. Only if that fails too does the pool start UNSEEDED, and
-  the boot line says so; interrupt timing then finishes the job at 1024
-  folded events.
+  no trusted instruction it runs the JITTER LOOP: the SAME short memory
+  walk, timed by the cycle counter round after round, keeping a delta only
+  when it passes the Jitter RNG's stuck test (the delta, the delta of
+  deltas and the delta of those all non-zero — a constant delta and one
+  drifting at a steady rate are what a noiseless clock produces, and the
+  fixed workload is what makes any other shape the machine's own noise),
+  until 256 are in or a bounded number of walks is spent — bounded by
+  iterations rather than ticks, because it runs under the pool's lock with
+  interrupts off. On a hypervisor that seeds in milliseconds. Only if that
+  fails too does the pool start UNSEEDED, and the boot line says so;
+  interrupt timing then finishes the job at 1024 folded events.
 - `random_bytes(buf, n)` is the kernel's verb. It never fails and never
   blocks: kernel callers (the ISN, the port draw, DHCP) take what the pool
   has, seeded or not, because a boot must not hang on entropy, and an
@@ -71,7 +74,10 @@ the kernel API and the generator.
   xor-rotates the TSC and the tag into a PER-CORE fast pool (one cache
   line each, no lock, the same reason the doorbell's top half takes none).
   The pool folds the fast pools in under its lock at every reseed and
-  every 64 events, whichever first.
+  every 64 events, whichever first — knet's wake is the usual folder, and
+  a draw or a `/dev/random` read that finds the pool unseeded folds them
+  too, so a machine with no NIC (and so no knet) still seeds from the
+  tick.
 - Reseed: after 300 seconds or 1 MB served, whichever first, from RDSEED
   plus the fast pools. A reseed that finds RDSEED exhausted takes the fast
   pools alone and counts the miss.
@@ -153,7 +159,9 @@ model proves the timing-only path seeds and serves.
 feeds), ChaCha20 against the `cryptography` package and RFC 8439's block
 vector, then the pool with its hardware replaced by hooks — seeding by
 RDSEED, by RDRAND behind a stuck RDSEED, by the jitter loop, by interrupt
-timing; the variation check; the retry budget; fast key erasure and the
+timing; the jitter loop refusing a frozen clock and a perfectly linear
+one; a draw folding the fast pools when nothing else has (the no-NIC
+boot); the variation check; the retry budget; fast key erasure and the
 exact construction; the reseed cadence by bytes and by ticks. In the OS:
 `random_pool` in the pre-boot suite, `/tests/randtest` in the ring-3
 suite, and two headless boots (VERIFICATION.md), one with the instructions
