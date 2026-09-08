@@ -4,8 +4,10 @@ This slice depends on the BearSSL foundation in PR #74. Carry foundation
 review fixes forward before publishing the dependent slice.
 
 The source here is private: no installed header, shared library, application
-integration, or new kernel/libos64 interface. The production certificate
-validator and randomness adapter remain required for native HTTPS.
+integration, or new kernel/libos64 interface. The
+[certificate-policy factory](../../TLS_CERTIFICATE_POLICY.md) supplies DER trust
+snapshots and the acceptance gate. Trust-bundle loading and the production
+randomness adapter remain required for native HTTPS.
 
 ## Profile and ownership
 
@@ -27,7 +29,7 @@ validation date, and returns a fresh owned validator. It must retain its
 immutable trust snapshot and any other later dependencies. Factory context is
 borrowed during construction; it is not a connection dependency. A non-NULL
 partial result is destroyed even if the factory reports failure. The future
-public wrapper must supply the policy-enforcing factory specified in TLS.md;
+public wrapper must supply the policy-enforcing factory in `certificate_policy.h`;
 an application-provided trust bypass is not part of that public design.
 
 The synchronous entropy callback must fill the requested 32 bytes completely
@@ -104,6 +106,7 @@ functions should be `os64_malloc`, `os64_free`, `os64_memcpy`, `os64_memmove`,
 The new engine has not been executed in a guest or wired into a shipped test.
 Foundation guest evidence remains separate. This harness uses the adapted
 pinned server implementation, not an independent OpenSSL peer, and is not a
-fuzzing campaign. Certificate-policy negatives, production entropy integration,
-independent-peer interoperability, guest engine execution, fuzzing, and the
-production source allowlist remain later validation gates in TLS.md.
+fuzzing campaign. The certificate-policy harness supplies separate negative
+and handshake-gate coverage. Production entropy integration, independent-peer
+interoperability, guest engine execution, fuzzing, and the production source
+allowlist remain later validation gates in TLS.md.
