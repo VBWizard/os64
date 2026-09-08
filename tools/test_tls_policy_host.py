@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate signed policy regressions with cryptography/OpenSSL and run the C gate."""
+"""Generate certificate policy regressions with cryptography/OpenSSL and run the C gate."""
 import argparse
 import datetime as dt
 import os
@@ -139,6 +139,35 @@ def corpus(work):
         anchor(f"anchor-restriction-{tail}", replace_extension(root, root_key, tail, value), "EXTENSION")
     case("critical-metadata", replace_extension(leaf, int_key, 14, tlv(4, b"identifier"), True), reason="CRITICAL", upstream=1)
     case("metadata", replace_extension(leaf, int_key, 14, tlv(4, b"identifier")), success=True)
+    sct_oid = bytes.fromhex("2b06010401d679020402")
+    # This is an opaque SCT-shaped test value, not a verified CT log receipt.
+    sct_signature = int_key.sign(b"fixture SCT", ec.ECDSA(hashes.SHA256()))
+    sct = b"\0" + bytes(range(32)) + bytes(8) + b"\0\0\x04\x03" + len(sct_signature).to_bytes(2, "big") + sct_signature
+    entries = len(sct).to_bytes(2, "big") + sct
+    sct_value = tlv(4, len(entries).to_bytes(2, "big") + entries)
+    def with_sct(value, critical=False, duplicate=False):
+        encoded = tlv(0x30, tlv(6, sct_oid) + (b"\x01\x01\xff" if critical else b"") + tlv(4, value))
+        return mutate(leaf, int_key, lambda t: edit_extensions(t, lambda e: join(e) + encoded * (2 if duplicate else 1)))
+    case("sct-metadata", with_sct(sct_value), success=True, upstream=1)
+    case("sct-critical", with_sct(sct_value, critical=True), reason="CRITICAL")
+    case("sct-wrong-envelope", with_sct(b"\x05\0"), reason="DER")
+    case("sct-trailing-envelope", with_sct(sct_value + b"\x04\0"), reason="DER")
+    case("sct-duplicate", with_sct(sct_value, duplicate=True), reason="DUPLICATE")
+    def with_delegation(value, critical=False, duplicate=False):
+        encoded = tlv(0x30, tlv(6, bytes.fromhex("2b0601040182da4b2c")) +
+                      (b"\x01\x01\xff" if critical else b"") + tlv(4, value))
+        return mutate(leaf, int_key, lambda t: edit_extensions(t, lambda e: join(e) + encoded * (2 if duplicate else 1)))
+    case("delegation-metadata", with_delegation(b"\x05\0"), success=True, upstream=1)
+    case("delegation-critical", with_delegation(b"\x05\0", critical=True), reason="CRITICAL")
+    case("delegation-wrong-envelope", with_delegation(b"\x04\0"), reason="DER")
+    case("delegation-nonempty-null", with_delegation(b"\x05\x01\0"), reason="DER")
+    case("delegation-trailing-envelope", with_delegation(b"\x05\0\x05\0"), reason="DER")
+    case("delegation-duplicate", with_delegation(b"\x05\0", duplicate=True), reason="DUPLICATE")
+    for name, host in [("example-com", "example.com"), ("letsencrypt-isrgrootx1", "valid-isrgrootx1.letsencrypt.org")]:
+        public = x509.load_pem_x509_certificate((BASE / "test/public-certs" / (name + ".pem")).read_bytes())
+        # Policy inspection can pass, but the fixture root must not trust this
+        # public certificate. No public trust anchor enters the generated store.
+        case("public-leaf-" + name, chain=[public.public_bytes(serialization.Encoding.DER)], host=host)
     case("must-staple", mutate(leaf, int_key, lambda t: edit_extensions(t, lambda e: join(e) + tlv(0x30,
         tlv(6, bytes.fromhex("2b06010505070118")) + tlv(4, b"\x30\x03\x02\x01\x05")))), reason="EXTENSION", upstream=1)
     case("duplicate-san", mutate(leaf, int_key, lambda t: edit_extensions(t, lambda e: join(e) + next(tlv(*v) for v in e if split(v[1])[0][1] == b"\x55\x1d\x11"))), reason="DUPLICATE")
@@ -184,6 +213,9 @@ def corpus(work):
     case("invalid-ec-point", mutate(leaf, int_key, invalid_point), reason="KEY")
     anchor("anchor-invalid-ec-point", mutate(root, root_key, invalid_point), "KEY")
     anchor("anchor-good", root, "OK")
+    def v1(tbs):
+        tbs[:] = [(tag, value) for tag, value in tbs if tag not in (0xa0, 0xa3)]
+    anchor("anchor-v1", mutate(root, root_key, v1), "DER")
     anchor("anchor-intermediate", intermediate, "ANCHOR")
     anchor("anchor-end-entity", certificate(root_key, "policy root", None, root_key, ca=False, san=None, eku=False), "CA")
     anchor("anchor-pathlen", certificate(root_key, "policy root", None, root_key, ca=True, san=None, eku=False, path=0), "ANCHOR")

@@ -52,6 +52,9 @@ ASN.1 schema validator for every informational extension.
 | Authority/Subject Information Access | Accept noncritical metadata; no fetching. |
 | CRL Distribution Points, Freshest CRL | Accept noncritical metadata; no revocation claim. |
 | Certificate Policies | Accept noncritical metadata; no policy-tree claim. |
+| SCT List (1.3.6.1.4.1.11129.2.4.2) | Accept a noncritical DER OCTET STRING; contents are opaque metadata, without CT verification. |
+| DelegationUsage (1.3.6.1.4.1.44363.44) | Accept noncritical DER NULL. This TLS 1.2 client does not negotiate delegated credentials. |
+| TLS Feature / must-staple | Refuse, including noncritical forms; this client cannot enforce an OCSP-stapling requirement. |
 | Name Constraints, Policy Constraints, Policy Mappings, Inhibit Any Policy | Refuse, including noncritical forms. |
 | Other extensions | Refuse, including noncritical forms. Expanding the allowlist needs its own policy justification and fixtures. |
 
@@ -65,9 +68,18 @@ are not provided. The table follows the restriction semantics in
 boundary described in TLS.md. The pinned source, rather than the broader
 [BearSSL overview](https://bearssl.org/x509.html), defines upstream behavior.
 
+SCT handling follows [RFC 6962 section 3.3](https://www.rfc-editor.org/rfc/rfc6962.html#section-3.3).
+DelegationUsage is an optional permission under
+[RFC 9345 section 4.2](https://www.rfc-editor.org/rfc/rfc9345.html#section-4.2),
+not a restriction on ordinary certificate authentication. Both have typed
+DER envelope checks; neither enables a protocol feature. The must-staple
+refusal preserves the requirement in
+[RFC 7633](https://www.rfc-editor.org/rfc/rfc7633.html).
+
 ## Ownership and bounds
 
-Trust construction accepts explicit DER CA certificates. Anchors must be
+Trust construction accepts explicit DER CA certificates. Certificates must
+be X.509 v3, including anchors; legacy v1 roots are refused. Anchors must be
 self-issued (identical encoded issuer/subject), with no EKU or pathLen. This
 is an administrative trust input, not automatic promotion of downloaded
 intermediates. A self-signature is not the source of trust and is not verified
@@ -106,13 +118,18 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 81 chain cases and 15 anchor cases, with one-byte,
+The corpus covers 94 chain cases and 16 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 SAN/CN/wildcard boundaries, leaf/intermediate EKU, critical-extension refusals,
 restrictions after upstream trust success, signature/date/pathLen failures,
 RSA sizes from 1024 to 4097 bits, invalid EC points, malformed DER, duplicate
 extensions, and resource limits. Each proper prefix of a valid leaf is refused.
 Direct upstream comparisons demonstrate otherwise accepted policy negatives.
+The generated SCT/delegation positives and critical/malformed/duplicate
+negatives accompany two captured public leaf certificates. Those leaves pass
+the local policy inspection but remain untrusted under the generated test root;
+they establish metadata compatibility, not public-chain validation. Capture
+provenance and fingerprints are in `userland/libtls/test/public-certs/README.md`.
 OpenSSL independently validates the positive chain with server purpose and DNS
 identity enabled.
 
@@ -126,8 +143,10 @@ snapshot ownership. Handshake certificate processing performs no allocations.
 
 The x86-64 validator allocation is 36,264 bytes; a trust builder/snapshot is
 18,456 bytes plus copied DN/key bytes. The private sources compile with the
-existing freestanding PIC rule and `-Werror`. Compiler stack reports are
-per-function measurements, not a bound on the crypto call chain.
+normal userland build through the freestanding PIC rule and `-Werror`.
+They are members of the private foundation archive with generated header
+dependencies; unused objects are not linked into `bearssltest`. Compiler stack
+reports are per-function measurements, not a bound on the crypto call chain.
 
 ASan/UBSan are enabled in the harness. On hosts where LeakSanitizer cannot
 run under tracing, use `ASAN_OPTIONS=detect_leaks=0`; the fixture's allocation

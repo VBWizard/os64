@@ -197,7 +197,17 @@ static tls_policy_reason extensions(span s, unsigned role, const char *hostname,
         else if (OID(id, "\x55\x1d\x0f")) result = usage(value, role);
         else if (OID(id, "\x55\x1d\x11")) result = san(value, hostname, &matched);
         else if (OID(id, "\x55\x1d\x25")) result = eku(value, role);
-        else {
+        else if (OID(id, "\x2b\x06\x01\x04\x01\xd6\x79\x02\x04\x02")) {
+            // RFC 6962 SCT receipts are opaque metadata; this client makes no CT claim.
+            span receipts;
+            if (!field(&value, 4, &receipts) || value.length) result = TLS_POLICY_DER;
+            else result = critical ? TLS_POLICY_CRITICAL : TLS_POLICY_OK;
+        } else if (OID(id, "\x2b\x06\x01\x04\x01\x82\xda\x4b\x2c")) {
+            // RFC 9345 permits delegation; the TLS 1.2 profile never negotiates it.
+            span permission;
+            if (!field(&value, 5, &permission) || permission.length || value.length) result = TLS_POLICY_DER;
+            else result = critical ? TLS_POLICY_CRITICAL : TLS_POLICY_OK;
+        } else {
             bool metadata = OID(id, "\x55\x1d\x0e") || OID(id, "\x55\x1d\x23") ||
                 OID(id, "\x55\x1d\x1f") || OID(id, "\x55\x1d\x2e") || OID(id, "\x55\x1d\x20") ||
                 OID(id, "\x2b\x06\x01\x05\x05\x07\x01\x01") || OID(id, "\x2b\x06\x01\x05\x05\x07\x01\x0b");

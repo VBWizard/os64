@@ -247,8 +247,9 @@ The private [policy adapter](TLS_CERTIFICATE_POLICY.md) wraps the upstream
 X.509 vtable. It observes certificate bytes while forwarding the original
 chain until policy refusal, and makes policy failure override upstream success
 before the TLS engine can expose application data. It adds no cryptographic
-primitives. Its DER parsing and policy decisions have a signed regression
-corpus; review, fuzzing, and production integration remain validation gates.
+primitives. Its DER parsing and policy decisions have a generated regression
+corpus of signed certificates; review, fuzzing, and production integration
+remain validation gates.
 
 Required policy outcomes:
 
