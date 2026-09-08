@@ -55,6 +55,9 @@ void chacha20_block(const uint8_t key[CHACHA20_KEY_BYTES], uint32_t counter,
 	}
 	for (int i = 0; i < 16; i++)
 		store32(out + 4 * i, x[i] + s[i]);
+	// s[4..11] IS the key, and at -O0 both arrays live in this frame.
+	crypto_wipe(s, sizeof(s));
+	crypto_wipe(x, sizeof(x));
 }
 
 void chacha20_stream(const uint8_t key[CHACHA20_KEY_BYTES], uint32_t counter,

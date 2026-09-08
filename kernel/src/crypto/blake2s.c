@@ -80,6 +80,10 @@ static void blake2s_compress(blake2s_state_t* s, const uint8_t block[BLAKE2S_BLO
 	}
 	for (int i = 0; i < 8; i++)
 		s->h[i] ^= v[i] ^ v[i + 8];
+	// In the pool's fold the first block's m[0..7] is the old key, and at
+	// -O0 both arrays live in this frame.
+	crypto_wipe(m, sizeof(m));
+	crypto_wipe(v, sizeof(v));
 }
 
 void blake2s_init(blake2s_state_t* s, size_t outlen, const void* key, size_t keylen)

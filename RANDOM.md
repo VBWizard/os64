@@ -48,7 +48,8 @@ the kernel API and the generator.
 
 - `random_init()` runs in `kernel_init` before anything dials or leases:
   it reads CPUID for RDSEED and RDRAND, runs the VARIATION CHECK Linux
-  runs (eight draws; all equal means the instruction lies, the Zen 2
+  runs (eight draws, each with the retry budget — a slow RDSEED is not a
+  lying one; all equal means the instruction lies, the Zen 2
   post-resume bug), draws 256 bits from RDSEED (retrying, ten attempts per
   word, RDRAND if RDSEED is absent or exhausted), and folds them in. With
   no trusted instruction it runs the JITTER LOOP: the SAME short memory
@@ -61,18 +62,27 @@ the kernel API and the generator.
   iterations rather than ticks, because it runs under the pool's lock with
   interrupts off. On a hypervisor that seeds in milliseconds. Only if that
   fails too does the pool start UNSEEDED, and the boot line says so;
-  interrupt timing then finishes the job at 1024 folded events.
+  interrupt timing then finishes the job at 1024 folded events that passed
+  the same stuck test.
 - `random_bytes(buf, n)` is the kernel's verb. It never fails and never
   blocks: kernel callers (the ISN, the port draw, DHCP) take what the pool
   has, seeded or not, because a boot must not hang on entropy, and an
-  unseeded pool still beats the tick counter they draw from today.
+  unseeded pool still beats the tick counter they draw from today. It
+  serves in 1KB chunks and takes the pool's lock PER CHUNK — the lock is
+  irqsave (the ISN is drawn under TCP's), so a megabyte read must not hold
+  a core's interrupts off for the whole megabyte — and checks the reseed
+  cadence at every chunk, so a request cannot carry itself past the byte
+  threshold on one key.
   `random_seeded()` answers whether a hardware source has contributed 256
   bits or the timing source has crossed its threshold.
 - `random_add_timing(tag)` is the interrupt-side verb: lock-free, a few
   instructions, called from the interrupt top halves (the NIC ISRs before
   they ring the doorbell, the tick) and from knet's drain loop. It
   xor-rotates the TSC and the tag into a PER-CORE fast pool (one cache
-  line each, no lock, the same reason the doorbell's top half takes none).
+  line each, no lock, the same reason the doorbell's top half takes none),
+  and runs the jitter loop's stuck test on the arrival: a sample whose
+  delta, delta of deltas, or delta of those is zero is mixed in but not
+  counted toward seeding (`timing_rejected` in `/sys/random`).
   The pool folds the fast pools in under its lock at every reseed and
   every 64 events, whichever first — knet's wake is the usual folder, and
   a draw or a `/dev/random` read that finds the pool unseeded folds them

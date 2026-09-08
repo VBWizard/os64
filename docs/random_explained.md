@@ -109,7 +109,7 @@ you lose.
 The pool starts empty and becomes SEEDED when it has taken in enough
 unpredictability to be trusted: 256 bits from a trusted hardware
 instruction, or 256 timings from the boot jitter loop that were not a
-pattern, or 1024 folded interrupt timings. `/sys/random` says which door it came through
+pattern, or 1024 folded interrupt timings that were not a pattern either. `/sys/random` says which door it came through
 and how many of each it has seen. On every machine we own the answer is
 `rdseed`, decided microseconds into boot. Before the pool is seeded, a
 read of `/dev/random` is refused rather than served, on the principle that

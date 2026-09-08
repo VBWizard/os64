@@ -46,13 +46,19 @@ static uint64_t   s_timing_seen;           // events folded so far (seeding thre
 static bool       s_timing_seeded_announced;
 
 // One per core, written from interrupt context with no lock. Padded to a
-// cache line so two cores' pools never share one.
+// cache line so two cores' pools never share one. `count` is the samples
+// that passed the stuck test (random_add_timing) since the last fold —
+// the number the seeding threshold counts; the three `last_*` fields are
+// the test's history.
 typedef struct
 {
 	uint64_t acc;
+	uint64_t last_t, last_delta, last_delta2;
 	uint32_t count;
-	uint8_t  pad[64 - sizeof(uint64_t) - sizeof(uint32_t)];
+	uint8_t  history;                 // samples seen, saturating at 3: the test needs that much past
+	uint8_t  pad[64 - 4 * sizeof(uint64_t) - sizeof(uint32_t) - 1];
 } __attribute__((aligned(64))) fast_pool_t;
+_Static_assert(sizeof(fast_pool_t) == 64, "one fast pool is one cache line");
 static fast_pool_t s_fast[RANDOM_FAST_POOLS];
 
 // ── HOOKs: the hardware, replaceable by the host harness ────────────────
@@ -131,13 +137,25 @@ static size_t hw_draw(bool (*instr)(uint64_t*), uint64_t* out, size_t words)
 // The variation check: eight draws that all agree mean the instruction is
 // answering with a constant (the Zen 2 post-resume bug returned all ones),
 // and a constant is worse than nothing because it LOOKS like a source.
+// Each draw gets the retry budget, because "not ready" (CF=0) is an
+// answer RDSEED is allowed to give and the P5's gives it seven times in a
+// row; a source that is merely slow must not be branded a liar. The
+// retries are counted; the words are not, since this is a check and not
+// a seed.
 static bool hw_varies(bool (*instr)(uint64_t*))
 {
 	uint64_t first = 0, v = 0;
 	bool have_first = false;
 	for (int i = 0; i < RANDOM_VARIATION_DRAWS; i++)
 	{
-		if (!instr(&v))
+		bool ok = false;
+		for (int tries = 0; tries < RANDOM_HW_RETRIES && !ok; tries++)
+		{
+			ok = instr(&v);
+			if (!ok)
+				kRandomStats.hw_retries++;
+		}
+		if (!ok)
 			continue;
 		if (!have_first) { first = v; have_first = true; }
 		else if (v != first)
@@ -254,6 +272,8 @@ static bool jitter_seed_locked(void)
 	if (n)
 		key_fold(samples, n * sizeof(uint64_t));
 	crypto_wipe(samples, sizeof(samples));
+	crypto_wipe(&last_delta, sizeof(last_delta));      // the test's history is two samples too
+	crypto_wipe(&last_delta2, sizeof(last_delta2));
 	kRandomStats.jitter_samples += kept;
 	return kept >= RANDOM_JITTER_SAMPLES;
 }
@@ -305,33 +325,45 @@ void random_init(void)
 
 bool random_seeded(void) { return kRandomStats.seeded; }
 
+// A draw is served in chunks of at most RANDOM_CHUNK_BYTES, and THE LOCK
+// IS TAKEN PER CHUNK: it is an irqsave lock (the ISN is drawn under
+// TCP's), so holding it across a whole request would hold this core's
+// interrupts off for as long as the request takes — a ring-3 read may ask
+// for a megabyte, seventeen thousand ChaCha blocks at -O0. Each chunk is
+// its own generation with its own nonce, so two callers interleaving at
+// chunk boundaries take distinct stream. The reseed cadence is checked at
+// every chunk for the same reason: a request that starts under the byte
+// threshold must not carry a megabyte past it on one key.
+#define RANDOM_CHUNK_BYTES 1024
+
 void random_bytes(void* buf, size_t n)
 {
 	uint8_t* out = buf;
-	uint64_t f = spinlock_acquire_irqsave(&s_lock);
-	if (s_served_since_reseed >= RANDOM_RESEED_BYTES ||
-	    kTicksSinceStart - s_reseeded_at_tick >= RANDOM_RESEED_TICKS)
-		reseed_locked();
-	// Unseeded, take whatever the interrupts have left in the fast pools
-	// before answering: on a machine with no NIC there is no knet to fold
-	// them, and the tick alone crosses the threshold in seconds if
-	// something folds it. Seeded, only the cadence above folds here.
-	else if (!kRandomStats.seeded)
-		fold_fast_pools_locked();
-	if (!s_timing_seeded_announced && kRandomStats.seeded && kRandomStats.seeded_by[0] == 't')
-	{
-		s_timing_seeded_announced = true;
-		printd(DEBUG_BOOT, "random: pool seeded by interrupt timing after %lu events\n", s_timing_seen);
-	}
 	while (n > 0)
 	{
+		uint64_t f = spinlock_acquire_irqsave(&s_lock);
+		if (s_served_since_reseed >= RANDOM_RESEED_BYTES ||
+		    kTicksSinceStart - s_reseeded_at_tick >= RANDOM_RESEED_TICKS)
+			reseed_locked();
+		// Unseeded, take whatever the interrupts have left in the fast
+		// pools before answering: on a machine with no NIC there is no
+		// knet to fold them, and the tick alone crosses the threshold in
+		// seconds if something folds it. Seeded, only the cadence above
+		// folds here.
+		else if (!kRandomStats.seeded)
+			fold_fast_pools_locked();
+		if (!s_timing_seeded_announced && kRandomStats.seeded && kRandomStats.seeded_by[0] == 't')
+		{
+			s_timing_seeded_announced = true;
+			printd(DEBUG_BOOT, "random: pool seeded by interrupt timing after %lu samples past the stuck test\n", s_timing_seen);
+		}
 		// FAST KEY ERASURE: run the stream from the current key; the first
 		// 32 bytes of it become the next key and are never handed out, the
 		// rest is the answer. A key that leaks after this call cannot
 		// reproduce it. One chunk per nonce; the nonce is the generation
 		// count and the key changes every chunk, so no (key, nonce) repeats.
-		uint8_t block[RANDOM_KEY_BYTES + 1024];
-		size_t take = n < 1024 ? n : 1024;
+		uint8_t block[RANDOM_KEY_BYTES + RANDOM_CHUNK_BYTES];
+		size_t take = n < RANDOM_CHUNK_BYTES ? n : RANDOM_CHUNK_BYTES;
 		uint8_t nonce[CHACHA20_NONCE_BYTES] = {0};
 		for (int i = 0; i < 8; i++)
 			nonce[i] = (uint8_t)(s_generation >> (8 * i));
@@ -342,12 +374,12 @@ void random_bytes(void* buf, size_t n)
 		for (size_t i = 0; i < take; i++)
 			out[i] = block[RANDOM_KEY_BYTES + i];
 		crypto_wipe(block, RANDOM_KEY_BYTES + take);
-		out += take;
-		n -= take;
 		s_served_since_reseed += take;
 		kRandomStats.bytes_served += take;
+		spinlock_release_irqrestore(&s_lock, f);
+		out += take;
+		n -= take;
 	}
-	spinlock_release_irqrestore(&s_lock, f);
 }
 
 uint32_t random_u32(void) { uint32_t v; random_bytes(&v, sizeof(v)); return v; }
@@ -363,7 +395,21 @@ void random_add_timing(random_source_t source)
 	// rotate keeps successive samples from cancelling, the source tag keeps
 	// two sources' identical timestamps distinct.
 	p->acc = ((p->acc << 7) | (p->acc >> 57)) ^ t ^ ((uint64_t)source << 56);
-	p->count++;
+	// The same stuck test the boot jitter loop applies (jitter_seed_locked
+	// says why): an arrival whose delta, or delta of deltas, or delta of
+	// THOSE is zero is what a noiseless clock produces, and it is mixed in
+	// (harmless) but not COUNTED toward seeding. Per core, so no lock.
+	uint64_t delta = t - p->last_t, delta2 = delta - p->last_delta, delta3 = delta2 - p->last_delta2;
+	bool stuck = p->history < 3 || delta == 0 || delta2 == 0 || delta3 == 0;
+	p->last_t = t;
+	p->last_delta = delta;
+	p->last_delta2 = delta2;
+	if (p->history < 3)
+		p->history++;
+	if (stuck)
+		__atomic_add_fetch(&kRandomStats.timing_rejected, 1, __ATOMIC_RELAXED);
+	else
+		p->count++;
 	if (source < RANDOM_SOURCE_COUNT)
 		__atomic_add_fetch(&kRandomStats.timing_events[source], 1, __ATOMIC_RELAXED);
 }

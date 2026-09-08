@@ -755,6 +755,7 @@ static void sys_gen_random(synth_text_t *t)
 	synth_text_addf(t, "timing_tick: %lu\n", r->timing_events[RANDOM_SOURCE_TICK]);
 	synth_text_addf(t, "timing_nic: %lu\n", r->timing_events[RANDOM_SOURCE_NIC]);
 	synth_text_addf(t, "timing_drain: %lu\n", r->timing_events[RANDOM_SOURCE_DRAIN]);
+	synth_text_addf(t, "timing_rejected: %lu\n", r->timing_rejected);
 	synth_text_addf(t, "folds: %lu\n", r->folds);
 	synth_text_addf(t, "reseeds: %lu\n", r->reseeds);
 	synth_text_addf(t, "bytes_served: %lu\n", r->bytes_served);

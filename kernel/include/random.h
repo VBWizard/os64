@@ -42,7 +42,8 @@ uint32_t random_u32(void);
 uint64_t random_u64(void);
 
 // Has a hardware source contributed 256 bits, or the jitter loop or the
-// timing source crossed its threshold? /sys/random says which.
+// timing source crossed its threshold (samples that passed the stuck
+// test, never raw arrivals)? /sys/random says which.
 bool random_seeded(void);
 
 // The interrupt-side verb: a few instructions, no lock, safe from any
@@ -71,6 +72,7 @@ typedef struct
 	uint64_t hw_exhausted;                    // words given up on after the retry budget
 	uint64_t jitter_samples;                  // boot jitter loop: distinct deltas kept
 	uint64_t timing_events[RANDOM_SOURCE_COUNT];
+	uint64_t timing_rejected;                 // of those, arrivals the stuck test would not count (each core's first three are its warm-up)
 	uint64_t folds;                           // fast pools folded into the key
 	uint64_t reseeds;
 	uint64_t bytes_served;

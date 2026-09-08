@@ -15,7 +15,9 @@
 // contribution changing the key.
 
 // ── Hooks: what the "hardware" does in each test ────────────────────────
-typedef enum { HW_ABSENT, HW_OK, HW_STUCK, HW_FLAKY, HW_DEAD } hw_mode_t;
+// HW_FLAKY answers one call in three, HW_SLOW one in eight — the P5's
+// RDSEED, which needs the whole retry budget for a single word.
+typedef enum { HW_ABSENT, HW_OK, HW_STUCK, HW_FLAKY, HW_SLOW, HW_DEAD } hw_mode_t;
 static hw_mode_t g_rdseed_mode = HW_OK, g_rdrand_mode = HW_OK;
 static uint64_t g_hw_next = 0x1234567890ABCDEFull;
 static uint32_t g_flaky_calls;
@@ -33,6 +35,7 @@ static bool hw_answer(hw_mode_t mode, uint64_t* out)
 		case HW_DEAD:  return false;
 		case HW_STUCK: *out = 0xFFFFFFFFFFFFFFFFull; return true;
 		case HW_FLAKY: if (++g_flaky_calls % 3 != 0) return false; /* fall through */
+		case HW_SLOW:  if (mode == HW_SLOW && ++g_flaky_calls % 8 != 0) return false; /* fall through */
 		case HW_OK:    g_hw_next = g_hw_next * 6364136223846793005ull + 1442695040888963407ull;
 		               *out = g_hw_next; return true;
 	}
