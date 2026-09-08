@@ -67,8 +67,10 @@ uint32_t r8125_phy_ocp_write_command(uint16_t ocp_addr, uint16_t value);
 // the vendor's map_phy_ocp_addr computes for page 0 once its page/offset
 // gymnastics are unwound: page 0xA40 + N/8, register 0x10 + N%8, and the
 // page-shift-plus-double-the-offset arithmetic lands on exactly 0xA400 + 2N.
-// The host test asserts that against a literal transcription of the
-// vendor's formula, so a slip in either place fails on the host.
+// The host test asserts that against a hand-derived table of all sixteen
+// addresses (checked one by one against what the vendor's driver computes;
+// the vendor's code itself is GPL and is not reproduced in this tree), so
+// a slip in either place fails on the host.
 #define R8125_PHY_OCP_STD_BASE  0xA400
 uint16_t r8125_phy_mii_ocp_addr(uint8_t mii_reg);
 

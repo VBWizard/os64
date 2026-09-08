@@ -312,50 +312,38 @@ static void test_tx_wraps(void)
 // ── PHY ─────────────────────────────────────────────────────────────────
 //
 // The arithmetic behind r8125.c's PHY access (r8125_phy.c), checked
-// against LITERAL transcriptions of the vendor's formulas rather than
-// against numbers remembered from them. That distinction earned its keep
-// on day one: the design note for this slice had the PHY window at 0x64
-// (the CSI data register) until the vendor source was actually read.
+// against a table of the addresses the hardware actually uses rather
+// than against numbers remembered from a design note. That distinction
+// earned its keep on day one: the design note for this slice had the PHY
+// window at 0x64 (the CSI data register) until the vendor source was
+// actually read.
+//
+// PROVENANCE, said plainly: the addresses below were derived by hand and
+// then checked, one by one, against what Realtek's GPL-2.0 r8125 driver
+// computes (r8125_n.c, map_phy_ocp_addr; the awesometic/realtek-r8125-dkms
+// mirror) and against the direct accesses in the same source
+// (rtl8125_set_speed_xmii writes 0xA5D4; realtek.c names the 2.5G pair as
+// page 0xa5d, registers 0x12/0x13). The FACTS are the chip's and are
+// written here in our own words; the vendor's expression of them is not
+// reproduced, because this tree is MIT and that code is not. The rule
+// the table encodes: MII register N lives on OCP page 0xA40 at word
+// 0x10 + N, and an OCP address is (page << 4) + 2 * (word - 16), so MII
+// register N is 0xA400 + 2N.
+static const struct { uint8_t mii; uint16_t ocp; } kExpectedMiiOcp[16] = {
+	{  0, 0xA400 }, {  1, 0xA402 }, {  2, 0xA404 }, {  3, 0xA406 },
+	{  4, 0xA408 }, {  5, 0xA40A }, {  6, 0xA40C }, {  7, 0xA40E },
+	{  8, 0xA410 }, {  9, 0xA412 }, { 10, 0xA414 }, { 11, 0xA416 },
+	{ 12, 0xA418 }, { 13, 0xA41A }, { 14, 0xA41C }, { 15, 0xA41E },
+};
 
-// Realtek r8125_n.c, map_phy_ocp_addr, transcribed verbatim. If the
-// driver's MII-to-OCP mapping and this ever disagree, the driver is wrong.
-static uint16_t vendor_map_phy_ocp_addr(uint16_t PageNum, uint8_t RegNum)
+static void test_phy_mii_map_matches_the_hardware(void)
 {
-	uint16_t OcpPageNum = 0;
-	uint8_t OcpRegNum = 0;
-	uint16_t OcpPhyAddress = 0;
+	for (size_t i = 0; i < 16; i++)
+		CHECK(r8125_phy_mii_ocp_addr(kExpectedMiiOcp[i].mii) == kExpectedMiiOcp[i].ocp,
+		      "MII reg %u: ours 0x%04x, expected 0x%04x", kExpectedMiiOcp[i].mii,
+		      r8125_phy_mii_ocp_addr(kExpectedMiiOcp[i].mii), kExpectedMiiOcp[i].ocp);
 
-	if (PageNum == 0) {
-		OcpPageNum = 0x0A40 + (RegNum / 8);
-		OcpRegNum = 0x10 + (RegNum % 8);
-	} else {
-		OcpPageNum = PageNum;
-		OcpRegNum = RegNum;
-	}
-
-	OcpPageNum <<= 4;
-
-	if (OcpRegNum < 16) {
-		OcpPhyAddress = 0;
-	} else {
-		OcpRegNum -= 16;
-		OcpRegNum <<= 1;
-		OcpPhyAddress = OcpPageNum + OcpRegNum;
-	}
-
-	return OcpPhyAddress;
-}
-
-static void test_phy_mii_map_matches_the_vendor(void)
-{
-	for (uint8_t reg = 0; reg < 16; reg++)
-		CHECK(r8125_phy_mii_ocp_addr(reg) == vendor_map_phy_ocp_addr(0, reg),
-		      "MII reg %u: ours 0x%04x, vendor 0x%04x", reg,
-		      r8125_phy_mii_ocp_addr(reg), vendor_map_phy_ocp_addr(0, reg));
-
-	// The registers the driver names, at the addresses the vendor's own
-	// direct accesses spell out (rtl8125_set_speed_xmii reads MII_CTRL1000
-	// and writes 0xA5D4; realtek.c calls the 2.5G pair page 0xa5d, 0x12/0x13).
+	// The registers the driver names, by name.
 	CHECK(r8125_phy_mii_ocp_addr(R8125_MII_BMCR)    == 0xA400, "BMCR");
 	CHECK(r8125_phy_mii_ocp_addr(R8125_MII_BMSR)    == 0xA402, "BMSR");
 	CHECK(r8125_phy_mii_ocp_addr(R8125_MII_PHYID1)  == 0xA404, "PHYID1");
@@ -364,8 +352,10 @@ static void test_phy_mii_map_matches_the_vendor(void)
 	CHECK(r8125_phy_mii_ocp_addr(R8125_MII_GBCR)    == 0xA412, "GBCR");
 	CHECK(r8125_phy_mii_ocp_addr(R8125_MII_GBSR)    == 0xA414, "GBSR");
 	CHECK(r8125_phy_mii_ocp_addr(R8125_MII_ESTATUS) == 0xA41E, "ESTATUS");
-	CHECK(vendor_map_phy_ocp_addr(0xA5D, 0x12) == R8125_PHY_OCP_ADV_2500, "2.5G advertisement register");
-	CHECK(vendor_map_phy_ocp_addr(0xA5D, 0x13) == R8125_PHY_OCP_LPA_2500, "2.5G partner register");
+	// The 2.5G pair on page 0xA5D, words 0x12 and 0x13: (0xA5D << 4) +
+	// 2 * (0x12 - 16) and the word after it.
+	CHECK(R8125_PHY_OCP_ADV_2500 == 0xA5D4, "2.5G advertisement register");
+	CHECK(R8125_PHY_OCP_LPA_2500 == 0xA5D6, "2.5G partner register");
 }
 
 static void test_phy_ocp_command_words(void)
@@ -615,7 +605,7 @@ int main(void)
 	test_tx_reap_on_empty_ring_is_a_no_op();
 	test_tx_wraps();
 
-	test_phy_mii_map_matches_the_vendor();
+	test_phy_mii_map_matches_the_hardware();
 	test_phy_ocp_command_words();
 	test_phy_id_check();
 	test_phy_bmcr_service();
