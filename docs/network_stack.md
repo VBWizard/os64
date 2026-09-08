@@ -168,9 +168,8 @@ the syscall table reserves the shape). The connection is a handle
 (`tcp!host!port`); the handshake sends the MSS option, and a peer that
 advertises one below 48 has it ignored and the 536 default kept, because
 a tiny MSS is a division by zero waiting in the congestion arithmetic;
-the initial sequence number mixes the tick counter with the
-four-tuple and a per-dial serial, and its comment books the entropy pool
-it is waiting for.
+the initial sequence number is a fresh draw from the entropy pool
+(RANDOM.md), and the ephemeral port sequence starts at a random offset.
 
 **Receiving.** A 64 KB ring is the advertised window, which is the most a
 16-bit field can say. A segment inside the window but ahead of sequence
@@ -230,8 +229,10 @@ Ring 3, per process, in libos64. Two answers in order: the hosts files
 `/home/hosts` line sits over the system's), then one DNS question to one
 server, A records only, five seconds across two tries. The server is
 `nameserver =` in `net.conf` on the ladder, else the one DHCP was given.
-No cache, no search list, no TCP fallback, no IPv6 (DEBTS names the cache
-as the first to arrive, the day one process resolves twice).
+The query id is two bytes from `/dev/random`, since a guessable id is the
+Kaminsky poisoning surface. No cache, no search list, no TCP fallback, no
+IPv6 (DEBTS names the cache as the first to arrive, the day one process
+resolves twice).
 
 ## The eyes
 

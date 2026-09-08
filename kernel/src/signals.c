@@ -21,6 +21,7 @@
 #include "BasicRenderer.h"   // renderer_flush_if_dirty — the blit-throttle rider
 #include "driver/system/usb/xhci.h"
 #include "doorbell.h"   // the net drainer's bell — rung once per tick
+#include "random.h"     // the entropy pool's tick source — stirred once per tick
 #include "knet.h"
 #include "driver/net/virtio_net.h"
 #include "driver/net/e1000.h"
@@ -925,6 +926,17 @@ void processSignals()
 	{
 		s_net_rung_at_tick = kTicksSinceStart;
 		doorbell_ring_in_pass(&kNetDoorbell);
+	}
+
+	// The tick is the entropy pool's one guaranteed timing source: a NIC
+	// interrupt needs traffic, this fires a hundred times a second on every
+	// boot (RANDOM.md). Once per tick, same guard as the bell, a few
+	// instructions and no lock.
+	static uint64_t s_random_stirred_at_tick;
+	if (kTicksSinceStart != s_random_stirred_at_tick)
+	{
+		s_random_stirred_at_tick = kTicksSinceStart;
+		random_add_timing(RANDOM_SOURCE_TICK);
 	}
 
 	// The doorbell fixture (test_doorbell_wakes_sleeper) arms this so the

@@ -38,6 +38,7 @@
 #include "console.h"   // console_read_deadline — the read-patience test
 #include "driver/net/net_device.h"   // test_net_wire — the driver's first packets
 #include "doorbell.h"                // test_doorbell_wakes_sleeper
+#include "random.h"                  // test_random_pool
 #include "driver/net/net_wire.h"     // Phase 2 stack tests build real wire bytes
 #include "driver/net/net_checksum.h"
 #include "driver/net/ethernet.h"
@@ -2147,6 +2148,69 @@ static teardown_verdict_t teardown_leak_attempt(void)
 #define TEARDOWN_LEAK_AGREE    2   // windows that must agree before we believe them
 
 // ── The doorbell (DOORBELL.md) ──────────────────────────────────────────
+// The entropy pool, right after random_init: two draws differ, neither is
+// one repeated byte, and the pool's own account of itself is consistent —
+// a trusted hardware instruction means it was seeded by hardware and gave
+// at least the 256 bits a seed takes, unless it ran dry mid-draw (then the
+// jitter loop, and hw_exhausted says why); no hardware means the jitter
+// loop or nothing, and /sys/random will say. The construction itself is proven on
+// the host (tools/test_random_host.sh); this is the instruction meeting
+// the real CPU, once per boot.
+
+static bool test_random_pool(void)
+{
+    uint8_t a[64], b[64];
+    random_bytes(a, sizeof(a));
+    random_bytes(b, sizeof(b));
+
+    bool same = true, flat_a = true, flat_b = true;
+    for (size_t i = 0; i < sizeof(a); i++) {
+        if (a[i] != b[i]) same = false;
+        if (a[i] != a[0]) flat_a = false;
+        if (b[i] != b[0]) flat_b = false;
+    }
+    if (same || flat_a || flat_b) {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - draws %s\n",
+               same ? "identical" : "constant");
+        return false;
+    }
+
+    const random_stats_t *r = &kRandomStats;
+    bool hw = r->rdseed_trusted || r->rdrand_trusted;
+    // A trusted instruction that then ran dry inside the seed draw's retry
+    // budget is a real, recoverable state: the pool falls through to the
+    // jitter loop, and hw_exhausted says so. That is not a failure of the
+    // pool — and this test runs PREBOOT, where a failure is a panic — so
+    // hardware is held to "seeded by hardware with a full seed" only when
+    // it never ran dry.
+    bool hw_ran_dry = r->hw_exhausted > 0;
+    if (hw && !hw_ran_dry && (!r->seeded || r->hw_words < 4)) {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware trusted but pool %s (hw words %lu)\n",
+               r->seeded ? "under-seeded" : "unseeded", r->hw_words);
+        return false;
+    }
+    if (hw && !hw_ran_dry && r->seeded_by[0] != 'r') {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware trusted but seeded by %s\n", r->seeded_by);
+        return false;
+    }
+    if (hw && hw_ran_dry && r->seeded && r->seeded_by[0] != 'r' && r->seeded_by[0] != 'j') {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - hardware ran dry (%lu exhausted) yet seeded by %s before any interrupt\n",
+               r->hw_exhausted, r->seeded_by);
+        return false;
+    }
+    if (!hw && r->seeded && r->seeded_by[0] != 'j') {
+        printd(DEBUG_TESTS, "\tFAIL: test_random_pool - no hardware, yet seeded by %s before any interrupt\n",
+               r->seeded_by);
+        return false;
+    }
+    printd(DEBUG_TESTS, "\ttest_random_pool: seeded %s by %s (rdseed %s, rdrand %s, hw words %lu, retries %lu, exhausted %lu, jitter %lu)\n",
+           r->seeded ? "yes" : "NO", r->seeded ? r->seeded_by : "-",
+           !r->cpuid_rdseed ? "absent" : r->rdseed_trusted ? "ok" : "failed",
+           !r->cpuid_rdrand ? "absent" : r->rdrand_trusted ? "ok" : "failed",
+           r->hw_words, r->hw_retries, r->hw_exhausted, r->jitter_samples);
+    return true;
+}
+
 // A sleeper parked on a bell is woken by the next pass that rings it, not
 // by its backstop. processSignals rings kDoorbellTestBell on the pass after
 // the arm is set, so a wake within a couple of ticks is the primitive
@@ -5699,6 +5763,7 @@ static void register_builtin_tests(void)
     test_register("net_arp_pending_order", test_net_arp_pending_order, TEST_PHASE_POSTBOOT);
     test_register("net_wire", test_net_wire, TEST_PHASE_POSTBOOT);
     test_register("net_arp", test_net_arp, TEST_PHASE_POSTBOOT);
+    test_register("random_pool", test_random_pool, TEST_PHASE_PREBOOT);
     test_register("net_ping", test_net_ping, TEST_PHASE_POSTBOOT);
     test_register("net_echo_responder", test_net_echo_responder, TEST_PHASE_POSTBOOT);
     test_register("net_dhcp", test_net_dhcp, TEST_PHASE_POSTBOOT);

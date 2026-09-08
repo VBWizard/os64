@@ -54,6 +54,7 @@
 #include "driver/net/r8125.h"
 #include "driver/net/ethernet.h"   // init_net_stack — the protocol stack over the seam
 #include "knet.h"                  // the network drainer, minted beside kworker
+#include "random.h"                // the entropy pool, seeded before anything dials
 #include "driver/net/ipv4.h"       // kNetIPString — the "was IP= given?" DHCP election
 #include "driver/net/dhcp.h"
 #include "driver/filesystem/proc/procfs.h"
@@ -355,6 +356,11 @@ void kernel_init()
 	// there is no boot window where a frame can arrive unclaimed — the
 	// rx_dropped_no_handler counter should only ever move in a build
 	// where someone unhooked the stack on purpose.
+	// The entropy pool before anything dials or leases: the TCP initial
+	// sequence number, the ephemeral port and DHCP's transaction id all
+	// draw from it, and the boot line says what seeded it (RANDOM.md).
+	random_init();
+
 	if (kEnableNet)
 	{
 		init_net_stack();

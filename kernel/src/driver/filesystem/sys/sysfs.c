@@ -25,9 +25,14 @@
 //
 // The namespace (grown consumer-first, like everything else):
 //
-//   /sys/                        eleven entries: "bus", "cpu", "net", "block",
+//   /sys/                        the root: "bus", "cpu", "net", "block",
 //                                "cache", "conf", "gui", "log", "mounts",
-//                                "shlib", "clipboard"
+//                                "openfiles", "random", "shlib", "clipboard"
+//   /sys/random                  the entropy pool: which instructions the
+//                                CPU advertises and which passed the boot
+//                                variation check, what seeded the pool,
+//                                and every counter it keeps (RANDOM.md).
+//                                Read it FIRST when a TLS handshake stalls
 //   /sys/bus/                    one entry: "pci"
 //   /sys/bus/pci/                one file per discovered function, named
 //                                bus:dev.fn in hex — "00:1f.3", lspci's
@@ -140,6 +145,7 @@
 #include "driver/net/net_wire.h"        // NET_IPV4_OCTETS — the a.b.c.d splitter
 #include "driver/net/dhcp.h"            // kDhcpStats — the lease, and how it was got
 #include "driver/net/tcp.h"             // /sys/net/tcp — kTcpStats + the conn list
+#include "random.h"                     // /sys/random — the entropy pool's counters
 #include "gui/compositor.h"             // /sys/gui — kEnableGUI, seat, census
 #include "video.h"                      // kFrameBuffer — the resolution it reports
 #include "CONFIG.h"
@@ -324,6 +330,7 @@ typedef enum
 	SYS_NODE_CLIPFILE,   // /clipboard — the system clipboard (2026-08-21)
 	SYS_NODE_SHLIBFILE,  // /shlib — every loaded shared object (2026-08-22)
 	SYS_NODE_CONFFILE,   // /conf — the config search path, and who took what (2026-08-23)
+	SYS_NODE_RANDOMFILE, // /random — the entropy pool: sources, seeding, counters (RANDOM.md)
 } sys_node_type_t;
 
 #define SYS_NAME_MAX 32
@@ -433,6 +440,14 @@ static void sys_parse_path(const char *path, sys_path_t *out)
 		if (synth_next_component(path, &pos, comp, sizeof(comp)))
 			return;
 		out->type = SYS_NODE_SHLIBFILE;
+		return;
+	}
+
+	if (strcmp(comp, "random") == 0)
+	{
+		if (synth_next_component(path, &pos, comp, sizeof(comp)))
+			return;
+		out->type = SYS_NODE_RANDOMFILE;
 		return;
 	}
 
@@ -720,6 +735,34 @@ static void sys_gen_cache(synth_text_t *t)
 //
 // Deliberately NOT a directory of per-object files: the interesting question
 // is almost always comparative ("what is loaded, what does it cost"), and a
+// ── /sys/random (RANDOM.md) ─────────────────────────────────────────────
+// The pool's own account of itself: what the CPU offers, what seeded the
+// pool and by which door, and the counters behind every claim. Rendered
+// from kRandomStats without the pool's lock — the timing counters are
+// bumped from interrupt context and a torn read of a counter is a
+// counter off by one, which is what a snapshot is.
+static void sys_gen_random(synth_text_t *t)
+{
+	const random_stats_t *r = &kRandomStats;
+	synth_text_addf(t, "seeded: %s\n", r->seeded ? "yes" : "no");
+	synth_text_addf(t, "seeded_by: %s\n", r->seeded ? r->seeded_by : "-");
+	synth_text_addf(t, "rdrand: %s\n", !r->cpuid_rdrand ? "absent" : r->rdrand_trusted ? "ok" : "failed");
+	synth_text_addf(t, "rdseed: %s\n", !r->cpuid_rdseed ? "absent" : r->rdseed_trusted ? "ok" : "failed");
+	synth_text_addf(t, "hw_words: %lu\n", r->hw_words);
+	synth_text_addf(t, "hw_retries: %lu\n", r->hw_retries);
+	synth_text_addf(t, "hw_exhausted: %lu\n", r->hw_exhausted);
+	synth_text_addf(t, "jitter_samples: %lu\n", r->jitter_samples);
+	synth_text_addf(t, "timing_tick: %lu\n", r->timing_events[RANDOM_SOURCE_TICK]);
+	synth_text_addf(t, "timing_nic: %lu\n", r->timing_events[RANDOM_SOURCE_NIC]);
+	synth_text_addf(t, "timing_drain: %lu\n", r->timing_events[RANDOM_SOURCE_DRAIN]);
+	synth_text_addf(t, "timing_rejected: %lu\n", r->timing_rejected);
+	synth_text_addf(t, "folds: %lu\n", r->folds);
+	synth_text_addf(t, "reseeds: %lu\n", r->reseeds);
+	synth_text_addf(t, "bytes_served: %lu\n", r->bytes_served);
+	synth_text_addf(t, "mixes: %lu\n", r->mixes);
+	synth_text_addf(t, "reads_refused: %lu\n", r->reads_refused);
+}
+
 // single readable table answers it in one `cat`. The clipboard's ruling
 // applies in reverse — a file that wants to stay a file.
 static void sys_gen_shlib(synth_text_t *t)
@@ -1745,7 +1788,7 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 	         && sp.type != SYS_NODE_NETCARD
 	         && sp.type != SYS_NODE_SHLIBFILE && sp.type != SYS_NODE_CONFFILE
 	         && sp.type != SYS_NODE_MOUNTSFILE && sp.type != SYS_NODE_BLOCKFILE
-	         && sp.type != SYS_NODE_OPENFILESFILE)
+	         && sp.type != SYS_NODE_OPENFILESFILE && sp.type != SYS_NODE_RANDOMFILE)
 		return -1;   // directories go through dops; everything else is not a file
 
 	synth_text_t text;
@@ -1762,6 +1805,8 @@ static int sys_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		sys_gen_gui(&text);
 	else if (sp.type == SYS_NODE_SHLIBFILE)
 		sys_gen_shlib(&text);
+	else if (sp.type == SYS_NODE_RANDOMFILE)
+		sys_gen_random(&text);
 	else if (sp.type == SYS_NODE_CONFFILE)
 		sys_gen_conf(&text);
 	else if (sp.type == SYS_NODE_MOUNTSFILE)
@@ -1963,7 +2008,7 @@ static int sys_read_dir(vfs_directory_t *vfs_dir, os64_dirent_t *entry)
 			// a listing that drops a name reads exactly like a name that
 			// does not exist.)
 			static const char *kSysRootDirs[] = { "bus", "cpu", "net" };
-			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "shlib", "clipboard" };
+			static const char *kSysRootFiles[] = { "block", "cache", "conf", "gui", "log", "mounts", "openfiles", "random", "shlib", "clipboard" };
 			const int kDirCount  = (int)(sizeof(kSysRootDirs) / sizeof(kSysRootDirs[0]));
 			const int kFileCount = (int)(sizeof(kSysRootFiles) / sizeof(kSysRootFiles[0]));
 			if (h->index < kDirCount)
@@ -2158,6 +2203,10 @@ static int sys_stat(const char *path, os64_dirent_t *entry, vfs_filesystem_t *vf
 
 		case SYS_NODE_CONFFILE:
 			strncpy(entry->name, "conf", OS64_DIRENT_NAME_MAX);
+			return 0;
+
+		case SYS_NODE_RANDOMFILE:
+			strncpy(entry->name, "random", OS64_DIRENT_NAME_MAX);
 			return 0;
 
 		case SYS_NODE_MOUNTSFILE:

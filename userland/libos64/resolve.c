@@ -19,7 +19,7 @@
 #include "os64/fmt.h"     // os64_snprintf — the dial string for the name server
 #include "os64/dial.h"
 #include "os64/net.h"
-#include "os64/proc.h"    // os64_ticks — entropy enough for a query id
+#include "os64/proc.h"    // os64_ticks — the query id's fallback when /dev/random is missing
 
 #define DNS_PORT          53
 #define DNS_TRIES         2
@@ -223,9 +223,22 @@ static int64_t dns_query(uint32_t server, const char *name, uint32_t *ip)
 	n += put16(q + n, 1);                   // QTYPE A
 	n += put16(q + n, 1);                   // QCLASS IN
 
-	os64_ticks_t t;
-	os64_ticks(&t);
-	uint16_t id = (uint16_t)(t.ticks ^ (t.ticks >> 16) ^ 0x6f73);   // 'os'
+	// The query id is what an answer must match, and a guessable one is
+	// the Kaminsky cache-poisoning surface (2008): a forger who knows the
+	// id can answer before the real server does. Two bytes from the
+	// kernel's pool (/dev/random, RANDOM.md); the tick counter only if the
+	// door is missing — a lifeboat or an older kernel — so a name still
+	// resolves there, guessably.
+	uint16_t id;
+	int64_t rh = os64_open("/dev/random", "r");
+	if (rh < 0 || os64_read((int32_t)rh, &id, sizeof(id)) != (int64_t)sizeof(id))
+	{
+		os64_ticks_t t;
+		os64_ticks(&t);
+		id = (uint16_t)(t.ticks ^ (t.ticks >> 16) ^ 0x6f73);   // 'os'
+	}
+	if (rh >= 0)
+		os64_close((int32_t)rh);
 	put16(q + 0, id);
 	put16(q + 2, 0x0100);                   // RD: please recurse for us
 	put16(q + 4, 1);                        // one question

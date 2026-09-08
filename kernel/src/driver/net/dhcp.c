@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "kernel.h"          // kTicksSinceStart — the retry clock
+#include "random.h"          // the transaction id
 #include "serial_logging.h"
 #include "BasicRenderer.h"   // printf — the lease announcement on glass
 #include "memcpy.h"
@@ -256,11 +257,11 @@ void dhcp_poll(void)
 void dhcp_start(net_device_t* dev)
 {
 	s_dhcp.dev = dev;
-	// xid: unique-enough per boot (tick count entropy over a recognizable
-	// "o6" brand for pcap readers). Uniqueness matters across REBOOTS —
-	// a server matching a stale xid from our previous life could answer
-	// the wrong conversation.
-	s_dhcp.xid = 0x6F360000 | (uint32_t)(kTicksSinceStart & 0xFFFF);
+	// xid: a random half under a recognizable "o6" brand for pcap readers.
+	// Uniqueness matters across REBOOTS — a server matching a stale xid
+	// from our previous life could answer the wrong conversation — and the
+	// tick count this used to carry was the same small number every boot.
+	s_dhcp.xid = 0x6F360000 | (random_u32() & 0xFFFF);
 
 	if (udp_bind(UDP_PORT_DHCP_CLIENT, dhcp_rx, NULL) != 0)
 	{

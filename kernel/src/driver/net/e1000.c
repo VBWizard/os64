@@ -97,6 +97,7 @@
 #include "driver/system/pci.h"
 #include "driver/system/apic.h"  // ioapic_route_gsi / ioapic_mask_gsi — the INTx door
 #include "smp.h"                 // kCPUInfo — the BSP's APIC ID targets the doorbell
+#include "random.h"              // the interrupt's moment feeds the entropy pool
 #include "driver/net/net_device.h"
 #include "driver/net/e1000.h"
 #include "knet.h"                 // kNetDoorbell — the ISR rings it
@@ -1029,7 +1030,9 @@ void e1000_isr(void)
 	// Any confirmed cause rings knet's bell — RXT0 obviously, RXO because
 	// the drain is exactly what relieves an overrun, LSC harmlessly (one
 	// spare drain per cable event). The ring is the whole top half: one
-	// store and a self-IPI, no lock, microseconds (doorbell.h).
+	// store and a self-IPI, no lock, microseconds (doorbell.h). The
+	// arrival's moment goes to the entropy pool first, same rules.
+	random_add_timing(RANDOM_SOURCE_NIC);
 	doorbell_ring(&kNetDoorbell);
 }
 
