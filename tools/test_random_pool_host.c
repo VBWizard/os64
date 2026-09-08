@@ -62,5 +62,8 @@ static uint64_t hw_cycles(void)
 	return g_cycles;
 }
 static uint32_t hw_core_index(void) { return g_core; }
+// The producer's interrupt guard: a single-threaded host has nothing to guard.
+static uint64_t hw_irq_save(void) { return 0; }
+static void hw_irq_restore(uint64_t flags) { (void)flags; }
 
 #define RANDOM_HOST_HOOKS 1

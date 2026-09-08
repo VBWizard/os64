@@ -47,7 +47,9 @@ uint64_t random_u64(void);
 bool random_seeded(void);
 
 // The interrupt-side verb: a few instructions, no lock, safe from any
-// context. Reads the cycle counter and folds it into THIS core's fast
+// context (it holds this core's interrupt flag off while it writes, so
+// the pool has one writer at a time — nothing another core can wait on).
+// Reads the cycle counter and folds it into THIS core's fast
 // pool; the pool takes the fast pools in under its lock from thread
 // context — knet's wake, every reseed, and any draw or /dev/random read
 // that finds the pool unseeded, so a machine with no NIC (and so no

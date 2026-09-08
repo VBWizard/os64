@@ -13,6 +13,7 @@
 //   0x5EED0001  open refused       0x5EED0005  a read was one repeated byte
 //   0x5EED0002  first read short   0x5EED0006  write refused or short
 //   0x5EED0003  second read short  0x5EED0007  /sys/random missing or not seeded
+//   0x5EED0008  a read past a page was not cut to one
 
 #include "os64/os64.h"
 
@@ -24,8 +25,10 @@
 #define RANDTEST_CONSTANT     0x5EED0005
 #define RANDTEST_NO_WRITE     0x5EED0006
 #define RANDTEST_NOT_SEEDED   0x5EED0007
+#define RANDTEST_NO_CAP       0x5EED0008
 
 #define SEED_BYTES 32
+#define PAGE_BYTES 4096     // the most one read of /dev/random serves (RANDOM.md)
 
 static bool constant(const uint8_t* b, size_t n)
 {
@@ -62,6 +65,11 @@ int main(int argc, char** argv)
 	uint8_t a[SEED_BYTES], b[SEED_BYTES];
 	if (os64_read((int32_t)h, a, SEED_BYTES) != SEED_BYTES) { os64_close((int32_t)h); return RANDTEST_SHORT_1; }
 	if (os64_read((int32_t)h, b, SEED_BYTES) != SEED_BYTES) { os64_close((int32_t)h); return RANDTEST_SHORT_2; }
+	// A request past a page is cut to a page: the device bounds the work
+	// it does with the caller's interrupts off, and says so by a short
+	// read rather than by refusing.
+	static uint8_t big[PAGE_BYTES + 1];
+	if (os64_read((int32_t)h, big, sizeof(big)) != PAGE_BYTES) { os64_close((int32_t)h); return RANDTEST_NO_CAP; }
 	os64_close((int32_t)h);
 
 	bool same = true;
@@ -94,7 +102,7 @@ int main(int argc, char** argv)
 	if (!contains(text, "seeded: yes"))
 		return RANDTEST_NOT_SEEDED;
 
-	os64_printf("randtest: /dev/random answered %d + %d bytes, distinct, took a contribution; /sys/random says seeded\n",
-	            SEED_BYTES, SEED_BYTES);
+	os64_printf("randtest: /dev/random answered %d + %d bytes, distinct, cut a %d-byte ask to a page, took a contribution; /sys/random says seeded\n",
+	            SEED_BYTES, SEED_BYTES, PAGE_BYTES + 1);
 	return RANDTEST_OK;
 }

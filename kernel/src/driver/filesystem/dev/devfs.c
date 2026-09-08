@@ -170,6 +170,10 @@ static int dev_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 // /dev/zero` is meant to run until you stop it, exactly as it has since
 // System V. /dev/full reads as zeros for the same reason Linux's does: its
 // divergence is on the WRITE side, and a reader should not have to care.
+// The most /dev/random serves per read: one page, 64 ChaCha blocks. The
+// reason is written at the node's case below.
+#define DEV_RANDOM_READ_MAX 4096
+
 static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 {
 	dev_file_handle_t *h = (dev_file_handle_t *)vfs_file->handle;
@@ -190,17 +194,24 @@ static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 			return (int)size;
 
 		case DEV_NODE_RANDOM:
-			// Exactly the bytes asked for, never short — a faucet like
-			// zero, with contents. Before the pool is seeded the read is
-			// REFUSED and counted (random.h reads_refused) rather than
-			// parked: this read runs on the core's interrupt stack through
-			// call_in_kernel_context and may not sleep there (syscall.c,
-			// THE HANDLE ALIAS). Boot itself outlasts seeding on every
-			// machine this house owns, so the refusal is a tripwire for
-			// a source that failed, not a state a program meets. Before
-			// refusing, fold what the interrupts have left in the fast
-			// pools: a machine with no NIC has no knet to do it, and the
-			// tick alone seeds the pool if something folds it (random.h).
+			// Exactly the bytes asked for up to a PAGE, never short below
+			// it; a larger request is served a page and the rest on the
+			// next read — the short read every file read handles anyway.
+			// The cap is the reason zero has none: this read runs through
+			// call_in_kernel_context, which keeps this core's interrupts
+			// OFF for the whole operation, and generating is CPU work
+			// that scales with the request (a megabyte is seventeen
+			// thousand ChaCha blocks at -O0) where zero's is a memset.
+			// A page is 64 blocks: microseconds, under any tick.
+			// Before the pool is seeded the read is REFUSED and counted
+			// (random.h reads_refused) rather than parked: the same
+			// borrowed context may not sleep (syscall.c, THE HANDLE
+			// ALIAS). Boot itself outlasts seeding on every machine this
+			// house owns, so the refusal is a tripwire for a source that
+			// failed, not a state a program meets. Before refusing, fold
+			// what the interrupts have left in the fast pools: a machine
+			// with no NIC has no knet to do it, and the tick alone seeds
+			// the pool if something folds it (random.h).
 			if (!random_seeded())
 				random_fold_fast_pools();
 			if (!random_seeded())
@@ -210,6 +221,8 @@ static int dev_read(vfs_file_t *vfs_file, void *buffer, size_t size)
 			}
 			if (size == 0)
 				return 0;
+			if (size > DEV_RANDOM_READ_MAX)
+				size = DEV_RANDOM_READ_MAX;
 			random_bytes(buffer, size);
 			return (int)size;
 

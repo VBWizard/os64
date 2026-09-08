@@ -91,6 +91,22 @@ static void hw_probe_cpuid(bool* rdrand, bool* rdseed)
 }
 
 static uint64_t hw_cycles(void) { return rdtsc(); }
+
+// This core's interrupt flag, off and back: the producer's guard (see
+// random_add_timing). Not a lock — nothing another core can wait on.
+static uint64_t hw_irq_save(void)
+{
+	uint64_t flags;
+	__asm__ volatile("pushfq\n\tpop %0" : "=r"(flags) :: "memory");
+	__asm__ volatile("cli" ::: "memory");
+	return flags;
+}
+static void hw_irq_restore(uint64_t flags)
+{
+	if (flags & 0x200)
+		__asm__ volatile("sti" ::: "memory");
+}
+
 static uint32_t hw_core_index(void)
 {
 	core_local_storage_t* cls = try_get_core_local_storage();
@@ -172,20 +188,26 @@ static void set_seeded(const char* by)
 	kRandomStats.seeded_by[i] = '\0';
 }
 
-// Fold every core's fast pool into the key. Caller holds s_lock. A pool
-// that has not moved since the last fold contributes nothing new, and
-// folding it anyway is harmless, so no bookkeeping decides.
+// Fold every core's fast pool into the key. Caller holds s_lock, which
+// the producers never take, so THE SNAPSHOT IS ORDERED, NOT LOCKED: take
+// `count` first with an ACQUIRE exchange, then read `acc`. Every sample
+// the exchange counted was published with a release store AFTER its
+// timestamp went into `acc`, so the `acc` read that follows holds all of
+// them — a count is never credited for a timestamp the key has not seen.
+// A sample landing after the exchange is counted at the next fold; its
+// timestamp may already be in this read, and `acc` is cumulative, so it
+// is folded again then, which is harmless.
 static void fold_fast_pools_locked(void)
 {
 	uint64_t material[RANDOM_FAST_POOLS + 1];
 	size_t n = 0;
 	for (uint32_t i = 0; i < RANDOM_FAST_POOLS; i++)
 	{
-		if (s_fast[i].count == 0)
+		uint32_t count = __atomic_exchange_n(&s_fast[i].count, 0, __ATOMIC_ACQUIRE);
+		if (count == 0)
 			continue;
-		material[n++] = s_fast[i].acc;
-		s_timing_seen += s_fast[i].count;
-		s_fast[i].count = 0;
+		material[n++] = __atomic_load_n(&s_fast[i].acc, __ATOMIC_ACQUIRE);
+		s_timing_seen += count;
 	}
 	if (n == 0)
 		return;
@@ -326,14 +348,18 @@ void random_init(void)
 bool random_seeded(void) { return kRandomStats.seeded; }
 
 // A draw is served in chunks of at most RANDOM_CHUNK_BYTES, and THE LOCK
-// IS TAKEN PER CHUNK: it is an irqsave lock (the ISN is drawn under
-// TCP's), so holding it across a whole request would hold this core's
-// interrupts off for as long as the request takes — a ring-3 read may ask
-// for a megabyte, seventeen thousand ChaCha blocks at -O0. Each chunk is
-// its own generation with its own nonce, so two callers interleaving at
-// chunk boundaries take distinct stream. The reseed cadence is checked at
-// every chunk for the same reason: a request that starts under the byte
-// threshold must not carry a megabyte past it on one key.
+// IS TAKEN PER CHUNK, for the OTHER cores: it is an irqsave lock (the ISN
+// is drawn under TCP's), and a core waiting on it spins with its own
+// interrupts off, so a long draw must not hold it for its whole length.
+// It does NOT bound THIS core's interrupts-off time on the syscall path —
+// call_in_kernel_context keeps IF clear across the whole file operation,
+// whatever this loop releases — which is why /dev/random serves at most a
+// page per read (devfs.c) and why kernel callers draw a few bytes. Each
+// chunk is its own generation with its own nonce, so two callers
+// interleaving at chunk boundaries take distinct stream. The reseed
+// cadence is checked at every chunk for the same reason: a request that
+// starts under the byte threshold must not carry itself past it on one
+// key.
 #define RANDOM_CHUNK_BYTES 1024
 
 void random_bytes(void* buf, size_t n)
@@ -387,8 +413,22 @@ uint64_t random_u64(void) { uint64_t v; random_bytes(&v, sizeof(v)); return v; }
 
 // ── Stirring ────────────────────────────────────────────────────────────
 
+// THE PRODUCER'S GUARD. A core's pool has one writer at a time only if
+// this core's interrupts are off while it writes: the tick and the NIC
+// ISRs are producers, and so is knet's drain from THREAD context on the
+// same core — an ISR landing between its read of `acc` and its write
+// would have its sample overwritten and its count lost. The flag is
+// saved and restored (free where it was already off, which is every ISR),
+// and it is taken BEFORE the core index is read, so a thread cannot
+// migrate between choosing a pool and writing it. `count` is published
+// with a RELEASE atomic add after `acc` is written: the release is what
+// lets the fold on another core take a consistent snapshot without a
+// lock (fold_fast_pools_locked), and the atomic is what keeps that fold's
+// exchange-to-zero from landing between this core's read and its write —
+// a plain increment would resurrect a count the fold had already credited.
 void random_add_timing(random_source_t source)
 {
+	uint64_t flags = hw_irq_save();
 	fast_pool_t* p = &s_fast[hw_core_index()];
 	uint64_t t = hw_cycles();
 	// Rotate-and-xor: the low bits of the cycle count are the noise, the
@@ -409,9 +449,10 @@ void random_add_timing(random_source_t source)
 	if (stuck)
 		__atomic_add_fetch(&kRandomStats.timing_rejected, 1, __ATOMIC_RELAXED);
 	else
-		p->count++;
+		__atomic_add_fetch(&p->count, 1, __ATOMIC_RELEASE);
 	if (source < RANDOM_SOURCE_COUNT)
 		__atomic_add_fetch(&kRandomStats.timing_events[source], 1, __ATOMIC_RELAXED);
+	hw_irq_restore(flags);
 }
 
 void random_fold_fast_pools(void)

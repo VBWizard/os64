@@ -69,10 +69,12 @@ the kernel API and the generator.
   has, seeded or not, because a boot must not hang on entropy, and an
   unseeded pool still beats the tick counter they draw from today. It
   serves in 1KB chunks and takes the pool's lock PER CHUNK — the lock is
-  irqsave (the ISN is drawn under TCP's), so a megabyte read must not hold
-  a core's interrupts off for the whole megabyte — and checks the reseed
-  cadence at every chunk, so a request cannot carry itself past the byte
-  threshold on one key.
+  irqsave (the ISN is drawn under TCP's) and a core waiting on it spins
+  with its own interrupts off, so a long draw must not hold it for its
+  whole length; the calling core's own interrupts are a different matter,
+  bounded by `/dev/random`'s page cap below — and checks the reseed cadence at every
+  chunk, so a request cannot carry itself past the byte threshold on one
+  key.
   `random_seeded()` answers whether a hardware source has contributed 256
   bits or the timing source has crossed its threshold.
 - `random_add_timing(tag)` is the interrupt-side verb: lock-free, a few
@@ -93,8 +95,14 @@ the kernel API and the generator.
   pools alone and counts the miss.
 
 **`/dev/random`.** One node, in devfs beside null and zero. A read
-returns exactly the bytes asked for, never short, once the pool is
-seeded; before that it is REFUSED and counted (`reads_refused` in
+returns exactly the bytes asked for up to a PAGE, never short below it,
+once the pool is seeded; a larger request is served a page and the rest
+on the next read, the short read every file read handles anyway. The cap
+exists because a device read runs through `call_in_kernel_context`, which
+keeps the core's interrupts off for the whole operation, and generating
+is CPU work that scales with the request where zero's is a memset — a
+page is 64 ChaCha blocks, microseconds under any tick. Before the pool is
+seeded a read is REFUSED and counted (`reads_refused` in
 `/sys/random`). The design first said "park the reader", and the code
 said no: a filesystem read runs on the core's interrupt stack through
 `call_in_kernel_context` and may not sleep there (syscall.c, the handle
