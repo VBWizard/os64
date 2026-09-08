@@ -129,6 +129,12 @@ static bool test_page_zero_unmapped(void)
     if (!test_null_guard_for_root((pt_entry_t *)kKernelPML4v, "kernel NULL guard"))
         TEST_FAIL("kernel page zero is not guarded");
 
+    // The other address a NULL turns into: physical 0 is what a failed page
+    // walk returns, so `0 | kHHDMOffset` must fault too. The MP scan maps
+    // that alias to read the BIOS data area and must have taken it down.
+    if (paging_walk_paging_table_keep_flags((pt_entry_t *)kKernelPML4v, kHHDMOffset, true) & PAGE_PRESENT)
+        TEST_FAIL("the HHDM alias of physical page zero is still mapped after boot's BDA reads");
+
     // Exercise the production task-table constructor without creating a
     // schedulable thread. Its arena owns the throwaway tables in full.
     task_t *task = kmalloc(sizeof(*task));
