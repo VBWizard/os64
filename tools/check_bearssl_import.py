@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the patched import against its pristine per-file SHA-256 manifest."""
+"""Verify retained upstream files against their pristine SHA-256 manifest."""
 import argparse
 import hashlib
 from pathlib import Path

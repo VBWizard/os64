@@ -16,7 +16,7 @@ common elements is a weekend. The bosses are:
 1. **TLS.** The modern web is HTTPS-or-nothing. RULED: os64 BORROWS its TLS
    — recommendation BearSSL (no malloc, no syscalls, caller-owned buffers,
    constant-time), living in ring 3 as `/lib/libtls.so` with the trust
-   store at `/etc/certs` on the conf ladder. The kernel never learns about
+   store selected by `tls.conf` on the conf ladder (default `/etc/certs/roots.pem`, whole-store replacement). The kernel never learns about
    TLS. Rolling our own was considered and rejected on merit: the hazard is
    thirty years of side-channel and oracle attacks, and surviving them
    teaches no kernel lessons.

@@ -3,8 +3,9 @@
 Design and implementation plan, 2026-09-07. This document specifies the library slice of the
 [browser arc](BROWSER.md), its tests, and the prerequisites for native HTTPS.
 The foundation import and test fixture live in [userland/libtls](userland/libtls/README.md).
-The public TLS interface is proposed; native HTTPS is not ready. The entropy
-service contract and public certificate-store policy remain integration decisions.
+The public TLS interface is proposed; native HTTPS is not ready. Trust-store
+selection uses the approved configuration and replacement policy below;
+public root-bundle selection and production integration remain open.
 
 ## Intended result and scope
 
@@ -24,23 +25,15 @@ Borrow the cryptography and protocol implementation. Keep upstream changes
 small, explained, and mechanically diffable. Do not introduce TLS into the
 kernel or add a general cryptographic API to libos64 as part of this port.
 
-## Grounding in the current tree
-
-Inspected on 2026-09-07:
-
-The foundation implementation starts from merged `userland` at `3ce4330`
-(PR #71, the CPU RNG survey). The original design survey below records the
-earlier checkout; its hashes are provenance, not the implementation base.
+## Integration interfaces
 
 | Area | Evidence and consequence |
 |---|---|
-| Design checkout | `codex/page-zero` at `5c0ad8f77d6d8a7fa92dc13ab6bbbb79dc4cc881`. This document is authored here; implementation starts from a freshly checked `userland` base. |
-| Target branch | Local `userland` was `46cd8134ae45b2488592508aba579463a1c64f56`. Recheck the target before implementation; these hashes record the survey, not a lasting prerequisite version. |
 | Shared libraries | `userland/GNUmakefile` builds PIC `libos64.so`, `libgzip.so`, and `libpng.so`, with selective app dependencies, prelink slots, debug symbols, and header dependencies. Follow that machinery. |
 | Transport | `os64_dial`, `os64_read_for`, `os64_write`, and `os64_close` operate on ordinary handles. A finite read timeout is distinct from EOF. There is no timed-write API in the inspected public interface. |
-| TCP progress | The design checkout has the stop-and-wait writer. The sender worktree, `fable/tcp-send-window` at `7e3211bb54f5aced1e12653f45cea7f79025f69a`, queues into a 64 KiB ring but can still block when that ring fills. Its `TCP_SENDER.md` says so explicitly. |
+| TCP progress | A TLS transport deadline requires bounded writes even when the TCP send queue is full. Verify this property against the merged transport interface before integration. |
 | Time | `os64_time()` supplies signed UTC epoch seconds. `os64_ticks()` supplies monotonic ticks and their rate. Certificate dates and deadlines use different clocks. |
-| Randomness | No production random-byte service was found in the inspected libos64/ABI paths or local `userland` branch. TCP still documents its lack of an entropy pool. A CPUID feature bit is not a randomness service. |
+| Randomness | The production adapter reads `/dev/random`; an unseeded service refuses with `-1`. A CPUID feature bit does not establish service readiness. |
 | Configuration | `os64_conf_find()` / `os64_conf_find_from()` resolve basenames along the configured ladder. `kernel/src/conf.c` rejects slashes in the requested name. Reuse the ladder for `tls.conf`, not a nested certificate path. |
 | Existing HTTPS | `os64get` uses a terminating proxy. The port does not change proxy routing or publication of downloaded files. |
 
@@ -283,8 +276,8 @@ roots before that public-trust decision is settled.
 
 ## Trust-store location and lifecycle
 
-BROWSER.md calls for `/etc/certs` on the conf ladder. The existing resolver
-accepts basenames, not `certs/roots.pem`. Proposed concrete form: resolve
+The approved policy resolves a config basename through the conf ladder;
+the existing resolver does not accept `certs/roots.pem`. Resolve
 `tls.conf` through `os64_conf_find()` and read a `trust_store` setting naming
 an absolute PEM-bundle path. The default, when the config or setting is absent,
 is `/etc/certs/roots.pem`. A personal `tls.conf` can name a bundle under `/home`.
@@ -292,8 +285,7 @@ Reject empty/relative paths and malformed configuration; perform no shell or
 environment expansion. No kernel lookup change is needed.
 
 The selected bundle replaces the entire store. Do not silently union stores:
-that would make removing trust in a replacement file ineffective. This
-config-selection and whole-store replacement policy needs Chris's ruling.
+that would make removing trust in a replacement file ineffective.
 
 Load and parse one bounded PEM bundle through the resolved file handle into
 a fresh trust snapshot. Accept certificate blocks, blank lines, and documented
@@ -332,6 +324,13 @@ concurrency, and reseeding. TLS asks for 32 fresh bytes per connection from
 that provider and injects them into BearSSL before starting the handshake.
 The provider must supply cryptographic unpredictability, not merely produce
 32 bytes. BearSSL cannot assess the quality of caller-supplied entropy.
+
+The service read contract refuses with `-1` before the pool is seeded rather
+than parking the reader: the device read executes where it may not sleep.
+The production adapter maps that refusal to `ENTROPY_UNAVAILABLE` and does
+not start the handshake or silently retry in a busy loop. A later attempt
+requires a fresh connection. Short reads and interruption must be covered
+when the adapter is integrated with the approved service.
 
 Candidate sources are hardware RNG facilities on supported machines and a
 hypervisor entropy device under QEMU. Their availability and trust assumptions
@@ -499,10 +498,10 @@ fixtures; changing Internet behavior is not the regression oracle.
 | E: HTTPS integration | HTTP caller adoption, routing and publication tests | Separate integration design reviewed against the merged tree |
 
 The source pin is settled for the foundation. Before the public engine slice,
-review the proposed operations/profile. The OS randomness service ownership is agreed; its read,
-readiness, and failure contract must be settled with Fable. Further rulings are
-the root-store replacement policy/public
-bundle and acceptance of the documented TLS 1.2/PKI compatibility limits.
+review the proposed operations/profile. OS randomness ownership, unseeded-read
+refusal, and root-store selection/replacement are agreed. Production integration
+must verify the service behavior. Further decisions are public root-bundle
+selection and acceptance of the documented TLS 1.2/PKI compatibility limits.
 
 Port vectors do not depend on those later integration decisions. Work on the
 pure library can proceed once its design is agreed; no live HTTPS claim is

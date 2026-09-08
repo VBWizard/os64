@@ -18,24 +18,32 @@ integration are subsequent slices of [TLS.md](../../TLS.md).
 - License: [upstream/LICENSE.txt](upstream/LICENSE.txt), MIT.
 - Selection rationale and release delta: [UPSTREAM_REVIEW.md](UPSTREAM_REVIEW.md).
 
-`upstream/` retains the complete 466-file source distribution, including
-tests, T0 sources/compiler sources, build recipes, tools, and the upstream
-compiler executable. The os64 build does not execute that executable or the
-upstream build scripts. `sources.mk` explicitly lists the 294 core C files
+`upstream/` retains 465 files from the pinned distribution, including tests,
+T0 sources/compiler sources, build recipes, and tools. The prebuilt
+`T0Comp.exe` is excluded; its C# sources and build recipe are retained.
+The os64 build does not execute the upstream build scripts.
+`sources.mk` explicitly lists the 294 core C files
 used for the foundation archive. Reference tools and server/legacy algorithms
 are not a production client allowlist; only archive members reached by the
 fixture are linked into the guest program. This broad archive lets the link
 audit detect dependencies across the core before the client object selection.
 
-`upstream.sha256` records the pristine per-file hashes. Run:
+`samples/key-*.pem` and their C-header counterparts are published upstream
+fixture keys, retained with the matching sample certificates for reproducible
+tests. They are public test material, not deployment credentials; never use
+them for a service identity. Any scanner exception should name these fixture
+paths explicitly rather than suppressing private-key detection generally.
+
+`upstream.sha256` records the pristine hashes of the retained files. Run:
 
 ```sh
 python3 tools/check_bearssl_import.py
 ```
 
 The checker reverses the recorded patches in a temporary copy, checks every
-file and the source list, and verifies the extracted test header. Extra files,
-missing files, and content changes fail. This makes local changes reviewable;
+retained file and the source list, and verifies the extracted test header.
+Extra files (including the excluded executable), missing retained files, and
+content changes fail. This makes local changes reviewable;
 the hashes identify the fetched bytes, not independent authentication of the
 upstream publisher. Builds and tests do not fetch from the network.
 
@@ -77,8 +85,8 @@ Its temporary DSO is a link probe under `obj/`, not an installed library.
 
 Upstream-generated C is retained as published. Corresponding `.t0` inputs and
 the C# generator are included. Upstream `mk/Rules.mk` describes regeneration:
-build the generator with `mk/mkT0.sh`, then use `make T0` with Mono. No C#
-toolchain was available during this port, so regeneration was not verified.
+build the generator with `mk/mkT0.sh`, then use `make T0` with Mono.
+Generated-code regeneration is outside the foundation validation commands.
 Any future generated-code edit must change/review the T0 source and record
 the regenerated diff as well.
 
@@ -94,15 +102,17 @@ From the repository root:
 
 ```sh
 python3 tools/check_bearssl_import.py
-ASAN_OPTIONS=detect_leaks=0 python3 tools/test_bearssl_host.py --output /tmp/bearssl-proof
+python3 tools/test_bearssl_host.py
 make -C userland
 python3 tools/audit_bearssl.py
 make
 ```
 
-The host output directory must be new; omit `--output` to use disposable
-storage. `detect_leaks=0` is needed in the current ptrace environment;
-LeakSanitizer can be left enabled on hosts that support it. Address and
+Pass `--output PATH` to retain host artifacts in a new directory; the default
+uses disposable storage. Leave LeakSanitizer enabled on supported hosts. If
+the runner is traced and LeakSanitizer reports that it cannot run under ptrace,
+rerun with `ASAN_OPTIONS=detect_leaks=0`. This is a host-tool limitation, not
+an os64 requirement. Address and
 undefined-behavior sanitizers remain active, with no recovery after errors.
 
 The host runner tests 19 explicitly checked upstream crypto groups, including
@@ -124,31 +134,5 @@ The fixture owns its large contexts/buffers on the heap. Compiler `.su` files
 record individual core stack frames; those sizes are not whole-call-chain
 bounds or a production connection-cap measurement.
 
-## Recorded evidence (2026-09-07)
-
-- Import verification: 466 pristine file hashes, the recorded local patch,
-  all 294 core source entries, and extracted vector data checked.
-- Host GCC 13.3.0: all 19 selected crypto groups passed in both builds under
-  ASan/UBSan. Both X.509 suites passed (52 chain cases plus name extraction);
-  their complete output matched. LeakSanitizer was disabled for ptrace.
-- Cross GCC 14.2.0: strict userland and full-image builds passed. The image
-  build emitted existing RWX-segment warnings for legacy kernel fixtures;
-  the BearSSL build/audit emitted no warnings.
-- Whole-core audit: four runtime imports (`os64_memcpy`, `os64_memmove`,
-  `os64_memset`, `os64_strlen`), no exported BearSSL/private libc symbols,
-  and no hosted runtime, hardware RNG, or unsupported dynamic relocations.
-- QEMU 8.2.2 TCG, q35, default qemu64 CPU, 8 vCPUs, 8 GiB RAM: isolated
-  ext2 root/home disks reached boot complete; `/tests/testrun bearssltest`
-  reported **1 passed, 0 failed, 0 skipped**. The root UUID was
-  `1ec5f5ab-71b7-45cd-a7a4-05646e878e57`.
-- Reference, adapted, and guest fixture transcript digest:
-  `978e00828d5f0432e655182e175b37459c02e0896651aea2c5f9ed0ecb03def0`.
-- The largest reported individual core frame was 2432 bytes (i15 RSA private
-  operation, outside the intended production client profile). This does not
-  establish a whole-call-chain stack limit.
-
-Local evidence artifacts are under `/tmp/os64-bearssl-host-3` and
-`/tmp/os64-bearssl-qemu/scalar`; full-image and audit logs are
-`/tmp/os64-bearssl-image-build.log` and `/tmp/os64-bearssl-audit.log`.
 Physical-hardware runs, TLS interoperability, certificate-policy coverage,
 fuzzing, and production entropy integration are not established by this slice.
