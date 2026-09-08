@@ -60,11 +60,15 @@ bool mp_scan_for_config(uintptr_t start, uintptr_t length)
 
 bool mp_find_tables()
 {
-    // The BIOS data area lives in physical page zero. Its explicit HHDM
-    // alias lets MP discovery read the EBDA pointer without mapping NULL.
+    // The BIOS data area lives in physical page zero. Its HHDM alias is
+    // mapped for exactly one read and taken down again: physical 0 is what
+    // a failed page walk returns, and the lazy HHDM's whole point is that
+    // `0 | kHHDMOffset` FAULTS for a caller that forgot to check — an alias
+    // left behind would turn that tripwire into a silent read of the BDA.
     paging_map_page((pt_entry_t *)kKernelPML4v, kHHDMOffset, 0, PAGE_PRESENT);
     const uint16_t *ebda_segment = (const uint16_t *)(kHHDMOffset + 0x40e);
     uintptr_t ebda = (uintptr_t)*ebda_segment << 4;
+    paging_unmap_page((pt_entry_t *)kKernelPML4v, kHHDMOffset);
     bool lResult = false;
 
     // An absent or malformed EBDA pointer cannot name the guarded page.

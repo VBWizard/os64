@@ -143,22 +143,25 @@ void acpiFindTables() {
     acpiRSDPHeader_t* rsdpTable;
     void* rootSDT = NULL; // Supports both RSDT and XSDT
     acpiFADT_t* fadtSDP;
-	const uint16_t* ebdaPtr = (const uint16_t*)(kHHDMOffset + 0x40E);
-	const uint16_t* edbaSize = (const uint16_t*)(kHHDMOffset + 0x410);
 	uintptr_t rsdpBaseAddress = 0xFFFFFFFFFFFFFFFF;
 
 	if (kLimineRSDP==0)
 	{
 		printd(DEBUG_ACPI, "ACPI: Looking for ACPI tables\n");
 
-        // Read the BIOS data area through its physical-page alias, keeping
-        // virtual page zero absent during firmware table discovery.
+        // The BIOS data area lives in physical page zero. Its HHDM alias is
+        // mapped for the two reads and taken down again (smp.c's
+        // mp_find_tables says why an alias of physical 0 must not linger:
+        // it is the lazy HHDM's tripwire for a failed page walk).
         paging_map_page((pt_entry_t*)kKernelPML4v, kHHDMOffset, 0, PAGE_PRESENT);
+        uint16_t ebdaSegment = *(const uint16_t*)(kHHDMOffset + 0x40E);
+        uint16_t ebdaSize = *(const uint16_t*)(kHHDMOffset + 0x410);
+        paging_unmap_page((pt_entry_t*)kKernelPML4v, kHHDMOffset);
 
-		printd(DEBUG_ACPI, "ACPI: EBDA is at 0x%04x for 0x%04x bytes\n",*ebdaPtr, *edbaSize);
+		printd(DEBUG_ACPI, "ACPI: EBDA is at 0x%04x for 0x%04x bytes\n", ebdaSegment, ebdaSize);
 
 		// Search in the EBDA
-        uintptr_t ebdaAddress = (uintptr_t)(*ebdaPtr) * 16; // EBDA address in paragraphs
+        uintptr_t ebdaAddress = (uintptr_t)ebdaSegment * 16; // EBDA address in paragraphs
         if (ebdaAddress >= PAGE_SIZE) {
 			paging_map_pages((pt_entry_t*)kKernelPML4v, ebdaAddress, ebdaAddress, (0x60400 / PAGE_SIZE) + 1, PAGE_PRESENT);
 			rsdpBaseAddress = doRSDPSearch(ebdaAddress, 0x603ff);

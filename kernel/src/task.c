@@ -1777,6 +1777,14 @@ static void task_table_bracket_close(void)
 	}
 }
 
+// THIS TASK'S TABLES DIE WITH IT (PAGING_ARENA.md): the PML4 and every
+// PDPT/PD/PT drawn while mapping this address space come from a per-task
+// arena, returned wholesale at burial. The pool serves only the kernel's
+// own (eternal) tables — which is what made its sizing deterministic and
+// ended the watch(1) bleed-out. 16KB covers a typical task's dozen tables
+// without growth; the arena chains more when demand paging tours wider.
+// kmalloc backing means the HHDM math (virt - kHHDMOffset) is exact, the
+// same way the argv/env blobs rely on it.
 void task_init_page_tables(task_t *task)
 {
     // The private tables share one lifetime with the task. Upper-half
