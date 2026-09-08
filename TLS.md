@@ -3,6 +3,8 @@
 Design and implementation plan, 2026-09-07. This document specifies the library slice of the
 [browser arc](BROWSER.md), its tests, and the prerequisites for native HTTPS.
 The foundation import and test fixture live in [userland/libtls](userland/libtls/README.md).
+The dependent [private client engine](userland/libtls/CLIENT_ENGINE.md) implements
+connection ownership and byte transfers, with fixture-key handshake tests.
 The public TLS interface is proposed; native HTTPS is not ready. Trust-store
 selection uses the approved configuration and replacement policy below;
 public root-bundle selection and production integration remain open.
