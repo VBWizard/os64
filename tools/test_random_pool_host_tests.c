@@ -140,15 +140,16 @@ static void test_reseed_cadence(void)
 	CHECK(kRandomStats.reseeds == 2, "and not again until the next");
 
 	// A single request that crosses the byte threshold reseeds INSIDE
-	// itself, at the chunk that crosses — it cannot carry a megabyte past
-	// the limit on one key.
+	// itself, at the byte that crosses: the chunk is clipped at the
+	// boundary, so not one byte past the promise is served on the old key
+	// — even when the whole request would have fit in one chunk.
 	reset(HW_OK, HW_OK, 7); random_init();
 	static uint8_t big[RANDOM_RESEED_BYTES + 4096];
 	random_bytes(big, RANDOM_RESEED_BYTES - 100);
 	CHECK(kRandomStats.reseeds == 0, "just under the threshold: no reseed");
-	random_bytes(big, 4096);
-	CHECK(kRandomStats.reseeds == 1, "a request crossing the threshold reseeds within it (%lu)", kRandomStats.reseeds);
-	CHECK(s_served_since_reseed < 4096, "and the count restarted at the crossing chunk (%lu)", s_served_since_reseed);
+	random_bytes(big, 1024);
+	CHECK(kRandomStats.reseeds == 1, "a one-chunk request crossing the threshold reseeds within it (%lu)", kRandomStats.reseeds);
+	CHECK(s_served_since_reseed == 1024 - 100, "and only the bytes past the boundary count against the new key (%lu)", s_served_since_reseed);
 }
 
 int main(void)

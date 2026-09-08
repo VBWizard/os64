@@ -357,9 +357,9 @@ bool random_seeded(void) { return kRandomStats.seeded; }
 // page per read (devfs.c) and why kernel callers draw a few bytes. Each
 // chunk is its own generation with its own nonce, so two callers
 // interleaving at chunk boundaries take distinct stream. The reseed
-// cadence is checked at every chunk for the same reason: a request that
-// starts under the byte threshold must not carry itself past it on one
-// key.
+// cadence is checked at every chunk, and a chunk is clipped at the byte
+// threshold, for the same reason: a request that starts under the
+// threshold must not carry a single byte past it on one key.
 #define RANDOM_CHUNK_BYTES 1024
 
 void random_bytes(void* buf, size_t n)
@@ -390,6 +390,12 @@ void random_bytes(void* buf, size_t n)
 		// count and the key changes every chunk, so no (key, nonce) repeats.
 		uint8_t block[RANDOM_KEY_BYTES + RANDOM_CHUNK_BYTES];
 		size_t take = n < RANDOM_CHUNK_BYTES ? n : RANDOM_CHUNK_BYTES;
+		// And never past the byte threshold: a chunk that would cross it
+		// is clipped at the boundary, so the next pass reseeds before a
+		// byte beyond the promise is served on the old key.
+		size_t room = RANDOM_RESEED_BYTES - s_served_since_reseed;
+		if (take > room)
+			take = room;
 		uint8_t nonce[CHACHA20_NONCE_BYTES] = {0};
 		for (int i = 0; i < 8; i++)
 			nonce[i] = (uint8_t)(s_generation >> (8 * i));
