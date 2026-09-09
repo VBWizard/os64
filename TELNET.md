@@ -250,6 +250,23 @@ SIGWINCH marks the dimensions dirty and NAWS is sent from ordinary code.
 5. Run appropriate host tests, strict build, diff/comment checks, and capture
    serial/fixture evidence. Chris tests before commits per BROWSER.md.
 
+   **TWO INSTRUMENTS CAME OUT OF THE PASS AND ARE KEPT**, because the next
+   interop argument will want them and neither is telnet-specific in spirit.
+   `tools/telnettap.py` sits between a client and a real host and NAMES every
+   byte the client sends, which is the only way to answer "is it us or them"
+   — a screen shows what arrived, never what left. `tools/telnetwalk.py`
+   drives a service by an expect table, so a screen a dozen prompts behind a
+   login is seconds away instead of a minute of `sendkey`, and its `--probe`
+   asks a prompt which spelling of Return it will take. Together they are the
+   bare-CR finding, reproducible in one command:
+
+   ```
+   nul   b'\r\x00'    -> NOTHING
+   crlf  b'\r\n'      -> NOTHING
+   cr    b'\r'        -> 404 chars back
+   space b' '         -> 461 chars back
+   ```
+
 ## Questions for review
 
 Questions 2 and 3 of the original draft are answered by rulings 1 and 2.
