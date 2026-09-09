@@ -29,6 +29,9 @@ anchors; exponents must fit the upstream key buffer, be odd, and be at least 3.
 EC keys use uncompressed, valid P-256/P-384/P-521 points. Certificate signature
 identifiers must be SHA-256/384/512 with RSA PKCS#1 v1.5 or ECDSA, with matching
 inner/outer identifiers. This conservatively also applies to supplied roots.
+RSA `rsaEncryption` public-key identifiers require an explicit empty NULL
+parameter. SHA-2/RSA signature identifiers accept absent or NULL parameters,
+as required for verification by [RFC 4055 section 5](https://www.rfc-editor.org/rfc/rfc4055.html#section-5).
 The profile requires strictly positive certificate serial numbers, including
 in anchors and trailing certificates; zero and negative serials are refused.
 
@@ -45,7 +48,8 @@ not implement their schemas. This restriction applies to leaves, intermediates,
 anchors and certificates supplied after upstream reaches trust. A matching DNS
 name cannot rescue a malformed DNS name or an unsupported alternative.
 The leaf cannot be a CA; intermediates must be CAs. Key Usage,
-when present, requires digitalSignature in the leaf and keyCertSign in CAs.
+when present, requires digitalSignature and forbids keyCertSign in the leaf;
+it requires keyCertSign in CAs.
 BearSSL remains responsible for signatures, chain links, validity periods,
 and intermediate path-length enforcement.
 
@@ -54,6 +58,8 @@ and intermediate path-length enforcement.
 Extension OIDs must be unique within a certificate. DER envelopes, lengths,
 OIDs, booleans, INTEGER/ENUMERATED values, and bit strings are checked for
 canonical encodings.
+End-of-contents and universal kinds 14 and 15 are outside this subset and
+are refused in either encoding form.
 EXTERNAL, EMBEDDED PDV and unrestricted CHARACTER STRING universal types
 are refused in both primitive and constructed forms because their schemas
 are outside this certificate subset.
@@ -78,7 +84,7 @@ ASN.1 schema validator for every informational extension.
 | Extension | Rule |
 |---|---|
 | Basic Constraints | Require critical CA=true in intermediates and anchors; upstream enforces chain pathLen. Anchors refuse pathLen. Leaf Basic Constraints may be critical or noncritical. |
-| Key Usage | Parse canonical named bits; require the role's signing bit when present. |
+| Key Usage | Parse canonical named bits; require the role's signing bit when present. Refuse keyCertSign in leaves. |
 | Subject Alternative Name | Validate supported primitive forms; refuse constructed alternatives. Require a matching DNS identity for the leaf. |
 | Extended Key Usage | Nonempty unique OID list; require explicit serverAuth in leaf/intermediates. anyExtendedKeyUsage alone fails. Anchors refuse EKU because the converted anchor would lose it. Critical EKU remains an upstream compatibility refusal. |
 | Subject/Authority Key Identifier | Accept noncritical metadata. |
@@ -151,10 +157,11 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 239 chain cases and 33 anchor cases, with one-byte,
+The corpus covers 268 chain cases and 37 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 RDN ordering and string encodings, canonical ECDSA signatures,
 positive serials, SAN/CA Basic Constraints criticality, ENUMERATED minimality,
+RSA parameter rules and leaf Key Usage restrictions,
 primitive/constructed DER tags and unsupported universal types,
 adjacent links and validity through supplied tails,
 SAN/CN/wildcard boundaries, constructed SAN refusals,
@@ -179,6 +186,10 @@ restricted or unrelated trailing certificate. This is not independent-peer TLS
 interoperability. Allocation-failure injection, copied-input lifetime, owner
 release before validation, and four concurrent validator owners exercise
 snapshot ownership. Handshake certificate processing performs no allocations.
+The engine exposes the bounded local reason in `tls_state.policy_reason`,
+separately from its status and upstream error. Handshake probes check this
+diagnostic for policy refusals, upstream-only failures and success, including
+preservation after a later abort.
 
 The x86-64 validator allocation is 39,440 bytes; a trust builder/snapshot is
 18,456 bytes plus copied DN/key bytes. The second validator context adds

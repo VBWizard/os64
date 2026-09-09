@@ -51,6 +51,15 @@ both its count and status. Processing the final accepted bytes can return a
 terminal status together with a nonzero count. Zero-length calls do not
 acknowledge upstream buffers; invalid arguments do not poison a live engine.
 State flags tell the caller which operations can make progress.
+Before the initial handshake completes, accepted ciphertext is capped at
+1 MiB across calls, including warning records. A transfer crossing the cap
+accepts at most the remaining prefix; further input fails with `TLS_LIMIT`
+without acknowledging excess bytes. Post-handshake traffic has no such cap.
+
+State includes the bounded `policy_reason` supplied by the owned validator's
+optional diagnostic callback. The certificate-policy factory provides it;
+fixture factories without a callback report `TLS_POLICY_OK`. It remains
+separate from the terminal status and upstream error and exposes no peer text.
 
 Close stops new plaintext writes, flushes accepted output, and waits for the
 caller to drain already buffered authenticated input before invoking upstream
@@ -96,6 +105,8 @@ The fixtures cover:
 - Configuration copy lifetime, hostname/ALPN limits, negative epochs, midnight,
   leap-day conversion, allocation/factory/entropy failures, and wiped cleanup
   checks. Two interleaved connections must remain independent when one aborts.
+- Warning-record traffic at the 1 MiB initial-handshake input boundary and
+  more than 1 MiB of post-handshake traffic.
 - Certificate refusal, damaged authenticated records, bare EOF with buffered
   input and unflushed output, partial-record EOF, EOF with a pending close
   reply, cancellation,

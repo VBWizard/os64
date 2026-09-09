@@ -69,6 +69,7 @@ static bool structural(span s, unsigned depth, unsigned *nodes)
         if (++*nodes > 4096 || !take(&s, &tag, &v)) return false;
         if ((tag & 0xc0) == 0) {
             unsigned kind = tag & 31;
+            if (!kind || kind == 14 || kind == 15) return false;
             // EXTERNAL, EMBEDDED PDV and unrestricted CHARACTER STRING need
             // constructed schemas outside this certificate subset.
             if (kind == 8 || kind == 11 || kind == 29) return false;
@@ -181,6 +182,7 @@ static tls_policy_reason usage(span s, unsigned role)
     unsigned last = bits.data[bits.length - 1];
     if (!last || !(last & (1u << bits.data[0])) || (bits.length == 3 && bits.data[0] != 7))
         return TLS_POLICY_DER;
+    if (!role && (bits.data[1] & 4)) return TLS_POLICY_KEY_USAGE;
     return bits.data[1] & (role ? 4 : 128) ? TLS_POLICY_OK : TLS_POLICY_KEY_USAGE;
 }
 static tls_policy_reason extensions(span s, unsigned role, const char *hostname, bool empty_subject, unsigned *nodes)
@@ -235,6 +237,8 @@ static bool signature_algorithm(span s, bool *ecdsa)
         OID(id, "\x2a\x86\x48\x86\xf7\x0d\x01\x01\x0c") || OID(id, "\x2a\x86\x48\x86\xf7\x0d\x01\x01\x0d");
     bool ec = OID(id, "\x2a\x86\x48\xce\x3d\x04\x03\x02") ||
         OID(id, "\x2a\x86\x48\xce\x3d\x04\x03\x03") || OID(id, "\x2a\x86\x48\xce\x3d\x04\x03\x04");
+    // RFC 4055 section 5 requires verifiers to accept absent RSA signature
+    // parameters as well as NULL; rsaEncryption public keys differ below.
     if (rsa && s.length && (!field(&s, 5, &parameter) || parameter.length)) return false;
     *ecdsa = ec;
     return (rsa || ec) && !s.length;
@@ -257,7 +261,7 @@ static tls_policy_reason public_key(span s, br_x509_pkey *key)
     bits.data++; bits.length--;
     if (OID(id, "\x2a\x86\x48\x86\xf7\x0d\x01\x01\x01")) {
         span seq, n, e;
-        if (algorithm.length && (!field(&algorithm, 5, &v) || v.length)) return TLS_POLICY_DER;
+        if (!field(&algorithm, 5, &v) || v.length) return TLS_POLICY_DER;
         if (algorithm.length || !field(&bits, 0x30, &seq) || bits.length ||
             !nonnegative(&seq, &n) || !nonnegative(&seq, &e) || seq.length) return TLS_POLICY_DER;
         unsigned top = n.data[0], topbits = 0;

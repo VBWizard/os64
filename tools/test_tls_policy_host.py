@@ -110,7 +110,7 @@ def corpus(work):
         anchors.append((name, blob(data), reason))
 
     case("valid", success=True, upstream=1)
-    for kind in (8, 11, 29):
+    for kind in (0, 8, 11, 14, 15, 29):
         for constructed in (False, True):
             value = tlv(kind | (32 if constructed else 0), b"")
             case(f"unsupported-universal-{kind}-constructed-{constructed}",
@@ -383,6 +383,10 @@ def corpus(work):
              tlv(0x30, alternative + dns_name)), success=True, upstream=1)
     case("leaf-ca", certificate(leaf_key, "example.test", int_name, int_key, ca=True), reason="CA")
     case("leaf-ku", replace_extension(leaf, int_key, 15, b"\x03\x02\x05\x20", True), reason="KEY_USAGE")
+    for critical in (False, True):
+        case(f"leaf-keycertsign-critical-{critical}",
+             replace_extension(leaf, int_key, 15, b"\x03\x02\x02\x84", critical), reason="KEY_USAGE", upstream=1)
+    case("leaf-digital-and-crlsign", replace_extension(leaf, int_key, 15, b"\x03\x02\x01\x82"), success=True, upstream=1)
     case("intermediate-ku", chain=[leaf, replace_extension(intermediate, root_key, 15, b"\x03\x02\x07\x80", True)], reason="KEY_USAGE")
     case("intermediate-nonca", chain=[leaf, certificate(int_key, "policy intermediate", root_name, root_key, ca=False, san=None)], reason="CA")
     case("expired", certificate(leaf_key, "example.test", int_name, int_key, dates=(dt.datetime(2020, 1, 1), dt.datetime(2021, 1, 1))))
@@ -441,6 +445,26 @@ def corpus(work):
     rsa_root = certificate(rsa_key, "rsa root", None, rsa_key, ca=True, san=None, eku=False)
     rsa_issued = certificate(leaf_key, "example.test", x509.load_der_x509_certificate(rsa_root).subject, rsa_key)
     case("rsa-signature-and-anchor", chain=[rsa_issued], trust=rsa_root, success=True)
+    def rsa_spki_parameters(cert, signer, parameters):
+        def edit(tbs):
+            spki = split(tbs[6][1])
+            spki[0] = (0x30, tlv(*split(spki[0][1])[0]) + parameters)
+            tbs[6] = (0x30, join(spki))
+        return mutate(cert, signer, edit)
+    case("rsa-spki-absent-parameters", rsa_spki_parameters(rsa_leaf, int_key, b""), reason="DER", upstream=1)
+    bad_rsa_root = rsa_spki_parameters(rsa_root, rsa_key, b"")
+    anchor("anchor-rsa-spki-absent-parameters", bad_rsa_root, "DER")
+    case("tail-rsa-spki-absent-parameters", chain=[rsa_issued, bad_rsa_root], trust=rsa_root, reason="DER", upstream=1)
+    for code, digest in [(11, hashes.SHA256()), (12, hashes.SHA384()), (13, hashes.SHA512())]:
+        for label, parameters, reason in [("absent", b"", "OK"), ("null", b"\x05\0", "OK"),
+                                          ("octets", b"\x04\0", "SIGNATURE"),
+                                          ("duplicate", b"\x05\0\x05\0", "SIGNATURE"),
+                                          ("nonempty-null", b"\x05\x01\0", "DER")]:
+            alg = tlv(6, bytes.fromhex("2a864886f70d0101") + bytes([code])) + parameters
+            changed = mutate(rsa_issued, rsa_key, lambda t: t.__setitem__(2, (0x30, alg)), digest)
+            fields = split(split(changed)[0][1]); fields[1] = (0x30, alg)
+            case(f"rsa-signature-parameters-{code}-{label}", chain=[tlv(0x30, join(fields))], trust=rsa_root,
+                 success=reason == "OK", reason=reason, upstream=1)
     max_cert = replace_extension(rsa_issued, rsa_key, 14, tlv(4, bytes(32000)))
     max_cert = replace_extension(rsa_issued, rsa_key, 14, tlv(4, bytes(32000 + 32768 - len(max_cert))))
     assert len(max_cert) == 32768
