@@ -1388,8 +1388,20 @@ static int proc_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	if (task == NULL)
 		return -1;   // the task is gone — the command has no target
 
+	// A tty command is spoken by THE TASK THAT WRITES, never by the task
+	// that opened: `echo raw > /proc/self/tty &` has the shell open the
+	// file and a background child write through the inherited handle, and
+	// attributing that to the opener would make the shell the holder of a
+	// mode nobody it seated asked for. A handle that changed hands carries
+	// no authority here — the writer must be the task the file names.
 	if (h->is_tty)
-		return proc_tty_command(task, word, size);
+	{
+		core_local_storage_t *cls = get_core_local_storage();
+		task_t *writer = cls ? cls->task : NULL;
+		if (writer == NULL || writer != task)
+			return -1;
+		return proc_tty_command(writer, word, size);
+	}
 	return proc_ctl_command(task, word, size);
 }
 

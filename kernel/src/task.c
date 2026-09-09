@@ -1561,6 +1561,14 @@ static bool task_is_live_child(task_t *parent, task_t *candidate)
 	return false;
 }
 
+bool task_is_live(const task_t *candidate)
+{
+	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
+		if (t == candidate)
+			return !t->exited;
+	return false;
+}
+
 uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 {
 	core_local_storage_t *cls = get_core_local_storage();

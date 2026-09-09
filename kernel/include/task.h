@@ -375,6 +375,11 @@
     // Release tableArena after the address space is no longer in use.
     void task_init_page_tables(task_t *task);
 
+    // Is this pointer a live (not exited) task on the task list? By POINTER,
+    // for a caller holding one it did not take a reference on — the walk
+    // compares addresses and never dereferences the candidate.
+    bool task_is_live(const task_t *candidate);
+
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);
 	void task_exit_with_retval(void);   // asm stub: captures RAX into task->retVal then calls task_exit

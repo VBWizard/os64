@@ -58,17 +58,26 @@ typedef struct {
     uint32_t rows, cols;  // live-screen geometry, in character cells
     uint32_t scrollback;  // history lines currently reachable via Shift+PgUp
     uint64_t fg_task;     // whom Ctrl+C on this terminal would hit (0 = none)
-    uint64_t raw_task;    // who holds the terminal raw (0 = cooked)
     bool     focused;     // the glass is showing this terminal right now
     bool     live;        // a shell is seated here (false = dormant)
-    bool     raw;         // Ctrl+C and Ctrl+D arrive as bytes 0x03 / 0x04
 } os64_tty_info_t;
+// THIS STRUCT IS ABI: os64_tty_read fills it through a pointer, and a binary
+// built against an older shape keeps running against a newer libos64.so
+// (the kernel is the linker; the library is replaced under live programs).
+// A field added here overruns every such caller's object. New facts about
+// the terminal get a new call — os64_tty_mode is the first — not a new field.
+
+// The terminal's line discipline (SIGINT.md § Raw mode): raw means Ctrl+C
+// and Ctrl+D arrive as the bytes 0x03 / 0x04; holder is the task that asked
+// for raw (0 when cooked). Either output may be NULL. Reads /proc/self/tty.
+// Returns 0, or -1 if the file cannot be opened or parsed.
+int32_t os64_tty_mode(bool *raw, uint64_t *holder);
 
 // Switch the calling process's terminal between cooked (Ctrl+C is SIGINT,
 // Ctrl+D is end-of-input) and raw (both are bytes). A write of `raw` or
-// `cooked` to /proc/self/tty; only the terminal's foreground task may ask,
-// and the kernel restores cooked when that task exits, so no program ever
-// has to. Returns 0, or -1 when refused.
+// `cooked` to /proc/self/tty — through a handle THIS task opened; only the
+// terminal's foreground task may ask, and the kernel restores cooked when
+// that task exits, so no program ever has to. Returns 0, or -1 when refused.
 int32_t os64_tty_set_raw(bool raw);
 
 // Snapshot up to capacity live tasks, sorted by the /proc directory's PID

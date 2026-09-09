@@ -56,10 +56,11 @@ static void say(const char *s)
 
 static bool mode_is(bool raw, uint64_t holder)
 {
-	os64_tty_info_t info;
-	if (os64_tty_read(&info) != 0)
+	bool is_raw;
+	uint64_t who;
+	if (os64_tty_mode(&is_raw, &who) != 0)
 		return false;
-	return info.raw == raw && info.raw_task == holder;
+	return is_raw == raw && who == holder;
 }
 
 // ── The helper: a foreground grandchild of the raw holder ───────────────────

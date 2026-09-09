@@ -386,16 +386,37 @@ PR #80):
   clearing CAS, so the setter stores, fences, and re-reads the flag: if the
   CAS came after the store it cleared us, if before, the flag is already up
   and we clear ourselves. A freed task can never remain the holder.
+- THE WRITER SPEAKS, never the opener (Codex round 2). `echo raw >
+  /proc/self/tty &` has the shell open the file and a background child
+  write through the inherited handle; attributed to the opener, that made
+  the shell the holder of a mode nobody it seated asked for. A tty command
+  is authorized and attributed to the task doing the write, and a handle
+  that changed hands is refused. `os64_tty_set_raw` opens its own.
+- A DEAD CHILD HANDS THE CONSOLE TO ITS PARENT when the parent is a
+  foreground program on the same terminal, and to the shell otherwise
+  (Codex round 2). With the console moving at the spawn, a middleman whose
+  child died before it reached `wait` would otherwise find the shell in
+  the pointer at its wait's entry — neither itself nor a live child — and
+  never take the console back. Orphans are re-parented before their parent
+  is freed, so the parent pointer never dangles; `task_is_live` is the belt.
 
 **Where it acts:** both mode-controlled keys are classified WHEN THEY ENTER
 THE RING, in one epoch. `console_intr_intercept_tty` returns "data" for
 Ctrl+C when the terminal is raw, and `console_classify_tty` marks an EOT as
-end-of-input (`keyboard_event_t.eof`) only when the terminal is cooked — for
-a VT's keyboard and for a pty master's write alike, since both producers
-call them right before the push. `console_read` reads the mark, never the
-current mode, so a mode change lands on the next key and never re-reads
-one already queued. Nothing else changes: the ring, the waiter, the focus,
-the pushback slot are all as they were.
+end-of-input (`keyboard_event_t.eof`) only when the terminal is cooked —
+every producer that pushes into a tty ring (the keyboard router, a pty
+master's write, a clipboard paste) calls them right before the push, and a
+producer that skips the classification delivers a cooked terminal's Ctrl+D
+as a byte. `console_read` reads the mark, never the current mode, so a
+mode change lands on the next key and never re-reads one already queued.
+Nothing else changes: the ring, the waiter, the focus, the pushback slot
+are all as they were.
+
+**Ring 3:** `os64_tty_set_raw(bool)` and `os64_tty_mode(&raw, &holder)`.
+The mode is NOT a new field on `os64_tty_info_t`: that struct is filled
+through a pointer, the kernel is the linker, and a binary built against the
+older shape keeps running against a newer `libos64.so` — a grown struct
+overruns its object. A new fact about the terminal is a new call.
 
 **Proof:** `/tests/rawtty` (in the ring-3 suite): on a pty whose seated
 shell spawns an ordinary WORKER (a shell's Ctrl+C is data by the prompt rule

@@ -268,16 +268,45 @@ int32_t os64_tty_read(os64_tty_info_t *out)
         else if (os64_streq(line, "state"))      out->live = os64_streq(value, "live");
         else if (os64_streq(line, "scrollback")) out->scrollback = (uint32_t)os64_atou(value);
         else if (os64_streq(line, "fg_task"))    out->fg_task = os64_atou(value);
-        else if (os64_streq(line, "mode"))       out->raw = os64_streq(value, "raw");
-        else if (os64_streq(line, "raw_task"))   out->raw_task = os64_atou(value);
     }
     os64_close(h);
     return result < 0 ? -1 : 0;
 }
 
+// The line discipline, read from the same file into its own outputs rather
+// than into os64_tty_info_t — that struct is ABI (procfs.h says why), and a
+// new fact about the terminal is a new call, not a new field.
+int32_t os64_tty_mode(bool *raw, uint64_t *holder)
+{
+    char line[PROC_LINE_MAX];
+    bool is_raw = false;
+    uint64_t who = 0;
+
+    int32_t h = (int32_t)os64_open("/proc/self/tty", NULL);
+    if (h < 0)
+        return -1;
+    int64_t result;
+    while ((result = os64_readline(h, line, sizeof(line))) == 1)
+    {
+        char *value = split_value(line);
+        if (value == NULL)
+            continue;
+        if (os64_streq(line, "mode"))          is_raw = os64_streq(value, "raw");
+        else if (os64_streq(line, "raw_task")) who = os64_atou(value);
+    }
+    os64_close(h);
+    if (result < 0)
+        return -1;
+    if (raw) *raw = is_raw;
+    if (holder) *holder = who;
+    return 0;
+}
+
 // The mode switch is the same file, written: one word, the ctl file's
-// grammar. The kernel refuses a writer that is not the terminal's foreground,
-// which is what makes a refusal here mean "not your terminal to change".
+// grammar, through a handle this task opened itself (an inherited one is
+// refused — the kernel attributes the command to the writer). The kernel
+// also refuses a writer that is not the terminal's foreground, which is what
+// makes a refusal here mean "not your terminal to change".
 int32_t os64_tty_set_raw(bool raw)
 {
     int32_t h = (int32_t)os64_open("/proc/self/tty", "w");

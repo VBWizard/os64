@@ -74,10 +74,12 @@ bool console_intr_intercept_tty(struct tty *tty, char ascii);
 
 // The other half of the line discipline, at the same choke and the same
 // moment: an EOT entering a COOKED terminal's ring is marked end-of-input
-// (keyboard_event_t.eof); on a raw terminal it is the byte 0x04. Called by
-// both producers — the keyboard router and a pty master's write — right
-// before the push, so Ctrl+C and Ctrl+D are classified in one epoch and a
-// mode change applies to the next key, never to one already queued.
+// (keyboard_event_t.eof); on a raw terminal it is the byte 0x04. Every
+// producer that pushes into a tty ring — the keyboard router, a pty
+// master's write, a clipboard paste — calls this right before the push, so
+// Ctrl+C and Ctrl+D are classified in one epoch and a mode change applies
+// to the next key, never to one already queued. A producer that skips it
+// delivers a cooked terminal's Ctrl+D as a data byte.
 struct keyboard_event;
 void console_classify_tty(struct tty *tty, struct keyboard_event *ev);
 

@@ -851,7 +851,21 @@ void tty_task_departed(struct task *task)
 		// store, and A's death would overwrite B with the shell: Ctrl+C
 		// then reaches the shell as a keystroke instead of stopping B.
 		// The CAS replaces the pointer only if it still names A.
-		__sync_bool_compare_and_swap(&t->fgTask, task, t->shell);
+		//
+		// TO THE PARENT, when the parent is a foreground program on this
+		// terminal — a middleman (env, a script's husk, telnet's worker)
+		// whose child died BEFORE it reached wait must be the foreground
+		// again at the death, or its own wait finds neither itself nor a
+		// live child in the pointer and can never take the console back.
+		// Otherwise the shell. Orphans are re-parented to ktask before
+		// their parent is freed (task_reparent_orphans), so parentTask
+		// never dangles; task_is_live is the belt over those braces.
+		struct task *parent = task->parentTask;
+		struct task *heir = t->shell;
+		if (parent != NULL && parent != t->shell && task_is_live(parent) &&
+		    parent->tty == t && !parent->backgroundJob)
+			heir = parent;
+		__sync_bool_compare_and_swap(&t->fgTask, task, heir);
 		return;
 	}
 

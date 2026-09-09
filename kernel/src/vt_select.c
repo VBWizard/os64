@@ -28,6 +28,7 @@
 
 #include "vt_select.h"
 #include "tty.h"
+#include "console.h"           // console_classify_tty — a pasted EOT is classified at the door
 #include "clipboard.h"
 #include "BasicRenderer.h"
 #include "driver/system/keyboard.h"
@@ -286,6 +287,7 @@ static void do_paste_step(tty_t *t)
 
 		keyboard_event_t ev = { .ascii = byte, .scancode = 0,
 		                        .shift = false, .ctrl = false, .alt = false };
+		console_classify_tty(t, &ev);   // a pasted EOT: end-of-input or the byte, decided now
 		if (!tty_input_push_if_room(t, &ev))
 			return;      // ring full: the rest arrives next frame
 		s_paste_pos++;
