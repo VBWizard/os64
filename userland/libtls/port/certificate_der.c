@@ -71,7 +71,7 @@ static bool structural(span s, unsigned depth, unsigned *nodes)
             unsigned kind = tag & 31;
             if (((kind == 16 || kind == 17) != !!(tag & 32))) return false;
             if ((kind == 1 && (v.length != 1 || (v.data[0] != 0 && v.data[0] != 255))) ||
-                (kind == 2 && !integer_valid(v)) || (kind == 3 && !bits_valid(v)) ||
+                ((kind == 2 || kind == 10) && !integer_valid(v)) || (kind == 3 && !bits_valid(v)) ||
                 (kind == 5 && v.length) || (kind == 6 && !oid_valid(v))) return false;
         }
         if ((tag & 32) && !structural(v, depth + 1, nodes)) return false;
@@ -154,7 +154,7 @@ static tls_policy_reason eku(span s, unsigned role)
     }
     return role == 2 || !server ? TLS_POLICY_EKU : TLS_POLICY_OK;
 }
-static tls_policy_reason basic(span s, unsigned role, bool *ca)
+static tls_policy_reason basic(span s, unsigned role, bool critical, bool *ca)
 {
     span seq, v;
     if (!field(&s, 0x30, &seq) || s.length) return TLS_POLICY_DER;
@@ -168,7 +168,7 @@ static tls_policy_reason basic(span s, unsigned role, bool *ca)
         if (role == 2) return TLS_POLICY_ANCHOR;
     }
     if (seq.length) return TLS_POLICY_DER;
-    return (*ca != (role != 0)) ? TLS_POLICY_CA : TLS_POLICY_OK;
+    return (*ca != (role != 0) || (role && !critical)) ? TLS_POLICY_CA : TLS_POLICY_OK;
 }
 static tls_policy_reason usage(span s, unsigned role)
 {
@@ -197,7 +197,7 @@ static tls_policy_reason extensions(span s, unsigned role, const char *hostname,
         if (!field(&ext, 4, &value) || ext.length || !value.length) return TLS_POLICY_DER;
         if (!structural(value, 0, nodes)) return TLS_POLICY_DER;
         tls_policy_reason result;
-        if (OID(id, "\x55\x1d\x13")) result = basic(value, role, &ca);
+        if (OID(id, "\x55\x1d\x13")) result = basic(value, role, critical, &ca);
         else if (OID(id, "\x55\x1d\x0f")) result = usage(value, role);
         else if (OID(id, "\x55\x1d\x11")) {
             // An empty subject delegates its identity to a critical SAN.
