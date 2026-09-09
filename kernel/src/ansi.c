@@ -34,6 +34,7 @@ void ansi_reset(ansi_parser_t *p)
     p->state = ST_GROUND;
     p->nparams = 0;
     p->inter = 0;
+    p->ninter = 0;
     p->overflow = false;
     p->slen = 0;
 }
@@ -197,6 +198,7 @@ ansi_action_t ansi_feed(ansi_parser_t *p, char byte)
         if (c >= 0x20 && c <= 0x2f) {
             p->state = ST_ESC_INT;
             p->inter = (uint8_t)c;
+            p->ninter = 1;
             return nothing();
         }
         // Every other two-byte escape (`ESC 7`, `ESC c` …) is consumed and
@@ -207,16 +209,22 @@ ansi_action_t ansi_feed(ansi_parser_t *p, char byte)
 
     case ST_ESC_INT:
         // Intermediates may repeat; the first byte outside their range ends
-        // the sequence, whatever it was.
+        // the sequence, whatever it was. The FIRST one is the one kept, and
+        // the rest are counted rather than remembered: what the sequence
+        // means is decided by the whole run, so a later byte overwriting an
+        // earlier one would let `ESC ) ( U` pass for `ESC ( U` and change a
+        // terminal's character set on a program that asked for neither.
         if (c >= 0x20 && c <= 0x2f) {
-            p->inter = (uint8_t)c;
+            if (p->ninter < 255)
+                p->ninter++;
             return nothing();
         }
         if (c == 0x1B) { p->state = ST_ESC; return nothing(); }
         // WHICH CHARACTER SET THE HIGH HALF DRAWS AS, in the Linux console's
         // spelling. Only the G0 slot: os64 has no shift-out, so a G1 mapping
-        // would be a set nothing could ever select.
-        if (p->inter == '(') {
+        // would be a set nothing could ever select. And only with `(` as the
+        // sole intermediate — a longer run is some other sequence entirely.
+        if (p->ninter == 1 && p->inter == '(') {
             if (c == 'U')
                 return charset(p, OS64_CHARSET_CP437);
             if (c == 'B')

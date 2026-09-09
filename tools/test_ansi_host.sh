@@ -127,6 +127,13 @@ check("\\e(B", ["charset 0"], "ESC ( B puts Latin-1 back")
 check("\\e(0", [], "DEC line drawing is not read, and is consumed whole")
 check("\\e)U", [], "the G1 slot is not read, and is consumed whole")
 check("\\e(K", [], "a user mapping is not read, and is consumed whole")
+# TWO INTERMEDIATES ARE NOT ONE. The final byte belongs to the whole run, so
+# a parser that keeps only the last intermediate reads `ESC ) ( U` as the
+# supported `ESC ( U` and changes the terminal's character set on a program
+# that never asked for it.
+check("\\e)(U", [], "a second intermediate is a different sequence, not a G0 selection")
+check("\\e()U", [], "the same, with the supported intermediate first")
+check("\\e()UX", text("X"), "and the one after it still lands on the screen")
 check("A\\e(UB", text("A") + ["charset 1"] + text("B"),
       "text either side of a selection")
 check("\\e(", ["pending"], "a selection split before its final byte waits")

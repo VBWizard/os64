@@ -87,10 +87,13 @@ typedef struct {
 typedef struct {
     uint8_t  state;
     uint8_t  nparams;
-    // Which intermediate opened an `ESC <int> <final>` sequence. `ESC ( U`
-    // and `ESC ) U` name different character-set slots, so the byte has to
-    // survive until the final one arrives.
+    // Which intermediate opened an `ESC <int> <final>` sequence, and how many
+    // arrived. `ESC ( U` and `ESC ) U` name different character-set slots, so
+    // the byte has to survive until the final one does — and the COUNT has to
+    // survive with it, because a sequence carrying two intermediates is a
+    // different sequence from either of them alone.
     uint8_t  inter;
+    uint8_t  ninter;
     bool     overflow;                    // this sequence outgrew us: discard it
     uint16_t params[ANSI_PARAM_MAX];
     uint8_t  slen;
