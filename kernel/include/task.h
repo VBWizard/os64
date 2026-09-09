@@ -284,6 +284,13 @@
         // not a different object wired into the child's handle 0: fg must be
         // able to re-attach input without surgery on a running task's table.
         bool backgroundJob;
+        // RAW MODE IS THIS TASK'S WISH, not the terminal's state (SIGINT.md
+        // § Raw mode): the terminal is raw exactly while its foreground task
+        // wants it so. Set by the task itself (a write of `raw` to
+        // /proc/self/tty), never inherited, dies with the task — so the seat
+        // is cooked again the instant the foreground moves to a task that
+        // did not ask, and no shared holder word exists to race over.
+        bool wantsRaw;
         bool kernelTask;
         struct tm startTime, endTime;
         uint64_t entryPoint;

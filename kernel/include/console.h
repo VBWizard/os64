@@ -83,6 +83,10 @@ bool console_intr_intercept_tty(struct tty *tty, char ascii);
 struct keyboard_event;
 void console_classify_tty(struct tty *tty, struct keyboard_event *ev);
 
+// Is this terminal raw right now — does its foreground task want it so?
+// Derived from the foreground pointer, never stored (SIGINT.md § Raw mode).
+bool console_tty_raw(struct tty *tty);
+
 // Called from processSignals (scheduler context, every pass). If a reader is
 // asleep in console_read AND the keyboard driver has input, wake the reader.
 // Level-triggered on keyboard_has_event(), so a key arriving at any instant is

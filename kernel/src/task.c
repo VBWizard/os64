@@ -1670,7 +1670,11 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			if (exitCode != NULL) {
 				*exitCode = endedRetVal;
 			}
-			if (movesConsole)
+			// Take the console back — unless it already names a LIVE child
+			// of ours: a sibling thread may have spawned one while this
+			// wait was finishing, and its hand-off must not be undone by an
+			// older wait's restore.
+			if (movesConsole && !task_is_live_child(parent, (task_t *)console->fgTask))
 				console->fgTask = parent;
 			return endedPid;
 		}
@@ -1678,7 +1682,11 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		// No dead match. If there is no matching LIVE child either, there is
 		// nothing to wait for — fail rather than sleep forever.
 		if (task_find_live_child(parent, targetPid) == NULL) {
-			if (movesConsole)
+			// Take the console back — unless it already names a LIVE child
+			// of ours: a sibling thread may have spawned one while this
+			// wait was finishing, and its hand-off must not be undone by an
+			// older wait's restore.
+			if (movesConsole && !task_is_live_child(parent, (task_t *)console->fgTask))
 				console->fgTask = parent;
 			return 0;
 		}

@@ -360,45 +360,63 @@ needed on a cooked terminal is gone. ssh will want exactly the same bit.
    the same self-describing shape as `ctl`. Only `/proc/self` takes the
    write: a terminal mode is the sitter's own, so another task's tty file
    refuses at the open.
-3. **The kernel resets it.** Raw mode is held in the asking task's name
-   (`tty->rawHolder`) and `tty_task_departed` clears it at that task's death,
-   so a crashed raw program can never leave a seat deaf to Ctrl+C, and there
-   is no `stty sane` because nothing ever needs one. A fresh shell seating
-   also starts cooked.
+3. **The kernel resets it.** A crashed raw program can never leave a seat
+   deaf to Ctrl+C, and there is no `stty sane` because nothing ever needs
+   one. HOW that is true changed in the review (below): there is no state
+   to reset, because the mode was never stored.
 
-**Three rules beyond those** (the second and third from Codex's round on
-PR #80):
+**THE MECHANISM: RAW IS THE FOREGROUND'S WISH, NOT THE TERMINAL'S STATE.**
+The first three rounds of PR #80's review kept a holder pointer on the tty
+(`rawHolder`), and every round found one more interleaving of the four
+contexts that wrote it — spawn, wait, a task's departure, the setter —
+and added one more CAS. Round four found four more. That is the #65
+refusal-machinery lesson: when every fix is another compare-and-swap on a
+shared word, delete the word. Now `task_t.wantsRaw` is a flag a task sets
+on ITSELF (a write of `raw`/`cooked` to `/proc/self/tty`), and a terminal
+is raw exactly while `fgTask->wantsRaw` — derived at every read
+(`console_tty_raw`), stored nowhere. Every consequence the holder design
+had to engineer falls out:
 
-- Only the terminal's FOREGROUND task may ask. A background job flipping the
-  seat would steal Ctrl+C from the program the person is looking at.
-  `tty_set_raw` refuses anyone else. And the foreground changes hands AT THE
-  SPAWN, not first at the wait: a child is runnable the moment it is
-  submitted and can reach a syscall before its parent reaches `wait`, so a
-  telnet going raw as its first act would otherwise be refused by a race.
-  `task_wait` re-affirms the hand-off; it no longer originates it.
-- ONE HOLDER. A foreground child of the holder asking for raw is granted —
-  the terminal is raw — but the mode stays in the holder's name, so the
-  child's exit cannot cook a terminal its parent asked to have raw. Cooked
-  from anyone but the holder is refused.
-- A task that is TEARING DOWN cannot become the holder. A sibling thread
-  can be in `task_exit` while another thread writes `raw`; the exit sets
-  `tearingDown` (an exchange, a full barrier) before `tty_task_departed`'s
-  clearing CAS, so the setter stores, fences, and re-reads the flag: if the
-  CAS came after the store it cleared us, if before, the flag is already up
-  and we clear ourselves. A freed task can never remain the holder.
-- THE WRITER SPEAKS, never the opener (Codex round 2). `echo raw >
-  /proc/self/tty &` has the shell open the file and a background child
-  write through the inherited handle; attributed to the opener, that made
-  the shell the holder of a mode nobody it seated asked for. A tty command
-  is authorized and attributed to the task doing the write, and a handle
-  that changed hands is refused. `os64_tty_set_raw` opens its own.
-- A DEAD CHILD HANDS THE CONSOLE TO ITS PARENT when the parent is a
-  foreground program on the same terminal, and to the shell otherwise
-  (Codex round 2). With the console moving at the spawn, a middleman whose
-  child died before it reached `wait` would otherwise find the shell in
-  the pointer at its wait's entry — neither itself nor a live child — and
-  never take the console back. Orphans are re-parented before their parent
-  is freed, so the parent pointer never dangles; `task_is_live` is the belt.
+- The mode dies with the task: a dead task is not the foreground.
+- A foreground child that did not ask gets a cooked terminal (Ctrl+C
+  kills IT, which is right), and its parent's raw returns with the console
+  when the child exits. A child that asks gets raw in its own name for as
+  long as it is the foreground. Each foreground program gets the terminal
+  it asked for; no transfer, no "granted but not named".
+- Nothing to claim, so two threads or a parent and child asking at once
+  cannot race over a word; nothing to clear at a death, so a task tearing
+  down while a sibling thread writes `raw` sets a flag nobody will read.
+- Only the terminal's FOREGROUND task may ask (`tty_set_raw` refuses
+  anyone else — a background job's wish would be a lie about the seat),
+  and a wish recorded by a task that has just stopped being the foreground
+  changes nothing until, if ever, it is the foreground again.
+
+**The foreground pointer's own rules**, which the review sharpened
+because raw mode made them load-bearing:
+
+- The foreground changes hands AT THE SPAWN, not first at the wait: a
+  child is runnable the moment it is submitted and can reach a syscall
+  before its parent reaches `wait`, so a telnet going raw as its first act
+  would otherwise be refused by a race. `task_wait` re-affirms the
+  hand-off and follows a wait DOWN through a middleman; its finishing
+  restore never overwrites a LIVE child of the waiter, so an older wait
+  cannot undo a sibling thread's newer spawn.
+- A DEAD CHILD HANDS THE CONSOLE TO ITS PARENT when the parent is a live
+  foreground program on the same terminal, and to the shell otherwise:
+  with the console moving at the spawn, a middleman whose child died
+  before it reached `wait` would otherwise find the shell in the pointer
+  and never take the console back. Orphans are re-parented before their
+  parent is freed, so the parent pointer never dangles; and because the
+  parent may be dying at the same moment, the publish is followed by a
+  re-read of its `tearingDown` (its exit sets that, a full barrier, before
+  its own departure runs) — if the parent departed first, we hand the seat
+  to the shell ourselves. Either order leaves a live task in the pointer.
+- THE WRITER SPEAKS, never the opener. `echo raw > /proc/self/tty &` has
+  the shell open the file and a background child write through the
+  inherited handle; attributed to the opener, that made the shell wish for
+  a mode nobody asked it for. A tty command is authorized and attributed
+  to the task doing the write, and a handle that changed hands is refused.
+  `os64_tty_set_raw` opens its own.
 
 **Where it acts:** both mode-controlled keys are classified WHEN THEY ENTER
 THE RING, in one epoch. `console_intr_intercept_tty` returns "data" for
@@ -422,8 +440,9 @@ overruns its object. A new fact about the terminal is a new call.
 shell spawns an ordinary WORKER (a shell's Ctrl+C is data by the prompt rule
 and would prove nothing): cooked by default (a typed 0x04 is EOF), the worker
 raw on request (0x03 0x04 'x' arrive as three bytes — on a cooked terminal
-the 0x03 would have been SIGINT at the master's write), a helper child
-granted raw without taking the holder's name, cooked again on request, reset
-at the worker's exit, and a stranger's write to the child's tty file refused.
+the 0x03 would have been SIGINT at the master's write), a helper child that
+gets a cooked terminal until it asks and hands the worker's raw back by
+exiting, cooked again on request, reset at the worker's exit, and a
+stranger's write to the child's tty file refused.
 Plus the escape hatch Unix never had: a stuck raw program is killed from
 another VT, and its seat is cooked the moment it dies.

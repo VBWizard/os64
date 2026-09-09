@@ -776,7 +776,6 @@ void tty_seat_shell(tty_t *t, struct task *shell)
 	shell->tty = t;
 	t->shell = shell;
 	t->fgTask = shell;
-	t->rawHolder = NULL;               // a fresh seat is cooked, whatever came before
 	t->spawnRequested = false;
 	t->state = TTY_LIVE;
 }
@@ -787,41 +786,13 @@ int tty_set_raw(tty_t *t, struct task *caller, bool raw)
 		return -1;
 	if (t->fgTask != caller)
 		return -1;
-	if (raw)
-	{
-		if (caller->tearingDown)
-			return -1;
-		// ONE HOLDER, CLAIMED IN ONE STEP: a CAS from NULL, never a look
-		// and a store, because two askers can race — a thread of the
-		// foreground and a foreground child it just spawned, or two threads
-		// of one task — and a store after a stale look would overwrite a
-		// holder whose exit then could not clear the mode. The loser is
-		// granted all the same: the terminal is raw, and the mode stays in
-		// the winner's name, so a child's exit cannot cook a terminal its
-		// parent asked to have raw.
-		if (!__sync_bool_compare_and_swap(&t->rawHolder, NULL, caller))
-			return 0;
-		// THE TEARDOWN RACE: a sibling thread of the caller may be in
-		// task_exit right now. It sets tearingDown (an exchange, a full
-		// barrier) BEFORE tty_task_departed runs its clearing CAS, and the
-		// claim above is a full barrier too, so look at the flag AFTER it:
-		// if the exit's CAS came after our claim it cleared us; if before,
-		// the flag was already set when we look, and we clear ourselves.
-		// Either way a task that is leaving never stays the holder.
-		if (caller->tearingDown)
-		{
-			__sync_bool_compare_and_swap(&t->rawHolder, caller, NULL);
-			return -1;
-		}
-		return 0;
-	}
-	struct task *holder = t->rawHolder;
-	// Cooked is NULL. Asking for cooked twice is fine; asking for it on a
-	// seat some OTHER task holds raw is refused — that task asked for the
-	// mode and only it or its death may end it.
-	if (holder != NULL && holder != caller)
-		return -1;
-	__sync_bool_compare_and_swap(&t->rawHolder, holder, NULL);
+	// The wish is the caller's own field, so there is nothing to claim and
+	// nothing to race: the readers derive the terminal's mode from whoever
+	// is the foreground at the moment they look. A caller that stops being
+	// the foreground between the check above and this store has recorded
+	// a wish that changes nothing until, if ever, it is the foreground
+	// again — which is what its wish should mean then, too.
+	caller->wantsRaw = raw;
 	return 0;
 }
 
@@ -830,10 +801,10 @@ void tty_task_departed(struct task *task)
 	if (task == NULL || task->tty == NULL)
 		return;
 	tty_t *t = (tty_t *)task->tty;
-	// Raw mode dies with the task that asked for it — this is the whole of
-	// `stty sane`, done by the kernel at the death instead of by a person
-	// at a deaf prompt. A CAS, for the same reason fgTask's is one below.
-	__sync_bool_compare_and_swap(&t->rawHolder, task, NULL);
+	// (Raw mode needs nothing here: it is the foreground's wish, and the
+	// foreground is about to be somebody else — that is the whole of
+	// `stty sane`, done by the pointer move below instead of by a person
+	// at a deaf prompt.)
 	if (t->shell != task)
 	{
 		// A child died, not the seat-holder. If it was the FOREGROUND job,
@@ -865,9 +836,19 @@ void tty_task_departed(struct task *task)
 		struct task *parent = task->parentTask;
 		struct task *heir = t->shell;
 		if (parent != NULL && parent != t->shell && task_is_live(parent) &&
-		    parent->tty == t && !parent->backgroundJob)
+		    !parent->tearingDown && parent->tty == t && !parent->backgroundJob)
 			heir = parent;
 		__sync_bool_compare_and_swap(&t->fgTask, task, heir);
+		// THE PARENT MAY BE DYING TOO. Its own departure clears the pointer
+		// only if it finds itself there, so a parent that departed BEFORE
+		// our publish would stay published, dead. Its exit set tearingDown
+		// (a full barrier) before its departure ran, and the CAS above is a
+		// full barrier, so re-read the flag AFTER publishing: if the
+		// parent's departure came after our publish it replaced us; if it
+		// came before, the flag is up now and we hand the seat to the shell
+		// ourselves. Either order leaves a live task in the pointer.
+		if (heir != t->shell && parent->tearingDown)
+			__sync_bool_compare_and_swap(&t->fgTask, parent, t->shell);
 		return;
 	}
 
@@ -1137,8 +1118,8 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 		// SLAVE — a Ctrl+C typed at a terminal window aims at the program
 		// running INSIDE it, exactly as a Ctrl+C on VT3 aims at VT3's
 		// foreground. Consumed means it never enters the ring, same as the
-		// keyboard path — and a slave in raw mode consumes nothing, same
-		// as a VT (the intercept reads rawHolder for itself).
+		// keyboard path — and a slave whose foreground wants raw consumes
+		// nothing, same as a VT (the intercept asks console_tty_raw).
 		if (console_intr_intercept_tty(slave, c))
 			continue;
 

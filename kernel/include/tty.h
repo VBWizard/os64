@@ -131,14 +131,10 @@ typedef struct tty
 	volatile int pushbackCount;
 	struct task * volatile fgTask;     // who Ctrl+C aims at ON THIS tty
 	struct task * volatile shell;      // the controlling shell seated here
-	// RAW MODE (SIGINT.md § Raw mode): while non-NULL, the terminal
-	// interprets nothing — Ctrl+C and Ctrl+D reach the reader as the bytes
-	// 0x03 and 0x04 instead of becoming SIGINT and end-of-input. It names
-	// the task that asked (a write of `raw` to /proc/self/tty, foreground
-	// only), because the mode dies with that task: tty_task_departed clears
-	// it, so a crashed raw program can never leave a seat deaf to Ctrl+C.
-	// NULL is cooked, the state every seat starts in.
-	struct task * volatile rawHolder;
+	// Raw mode has no word here on purpose: the terminal is raw exactly
+	// while fgTask->wantsRaw (task.h) — derived, never stored, so there is
+	// no holder to publish, transfer, or clear at a death (SIGINT.md § Raw
+	// mode). Reading it: console_tty_raw.
 
 	// ── The summons (dormant ttys only) ─────────────────────────────────────
 	volatile tty_state_t state;
@@ -231,15 +227,12 @@ void tty_input_push(tty_t *t, const keyboard_event_t *ev);
 bool tty_input_push_if_room(tty_t *t, const keyboard_event_t *ev);
 
 // ── Raw mode (SIGINT.md § Raw mode) ────────────────────────────────────────
-// Switch the terminal a task sits on between cooked and raw. Only the
-// terminal's FOREGROUND task may ask — a background job flipping the seat
-// would steal Ctrl+C from the program the person is looking at — and the
-// mode is held in that task's name, cleared when it departs. One holder at
-// a time: a foreground child of the holder asking for raw is granted (the
-// terminal is raw) without taking the name, so its exit cannot cook what
-// its parent asked for. Returns 0, or -1 when the caller is not the
-// foreground, is tearing down, or asks for cooked on a seat another task
-// holds raw.
+// Record a task's wish for its terminal: raw or cooked. The wish is the
+// task's own (task.h wantsRaw) and takes effect exactly while the task is
+// the terminal's foreground — so only the foreground may ask (a background
+// job's wish would be a lie about the seat), and a wish set by a task that
+// is not the foreground changes nothing. Returns 0, or -1 when the caller
+// is not the foreground.
 int tty_set_raw(tty_t *t, struct task *caller, bool raw);
 
 // ── Focus (called from the keyboard drivers' chord intercepts) ─────────────

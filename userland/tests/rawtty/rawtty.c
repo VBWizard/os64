@@ -15,8 +15,10 @@
 //   2. the worker goes raw: /proc/self/tty says so and names it; a typed
 //      0x03 0x04 'x' arrives as three bytes — on a cooked terminal the 0x03
 //      would have been SIGINT at the master's write and the worker dead
-//   3. the worker spawns a helper that asks for raw too: granted, but the
-//      holder stays the worker; the helper's exit leaves the terminal raw
+//   3. the worker spawns a helper: the terminal follows the FOREGROUND's
+//      wish — cooked while the helper (who did not ask) runs, raw in the
+//      helper's own name once it asks, cooked again when it asks for that,
+//      and raw in the worker's name again the moment the helper exits
 //   4. cooked on request: the same 0x04 is end-of-input again
 //   5. reset at exit: the worker goes raw again and exits without undoing
 //      it; the child's terminal reads cooked afterwards
@@ -35,7 +37,7 @@
 //   0x2A710002  default not cooked      0x2A710007  reset at exit failed
 //   0x2A710003  cooked EOF not seen     0x2A710008  parent write not refused
 //   0x2A710004  raw not granted/shown   0x2A710009  child died the wrong way
-//   0x2A71000A  helper stole or cooked the worker's raw
+//   0x2A71000A  the terminal did not follow the foreground's wish
 
 #include "os64/os64.h"
 #include "os64/pty.h"
@@ -65,13 +67,18 @@ static bool mode_is(bool raw, uint64_t holder)
 
 // ── The helper: a foreground grandchild of the raw holder ───────────────────
 
-static int helper(uint64_t holder)
+static int helper(uint64_t parent)
 {
-	// Granted, because the terminal IS raw — but not transferred.
-	if (os64_tty_set_raw(true) != 0 || !mode_is(true, holder))
+	(void)parent;
+	// We are the foreground and we did not ask: cooked, whatever our
+	// parent wished.
+	if (!mode_is(false, 0))
 		return 1;
-	// And not ours to cook.
-	if (os64_tty_set_raw(false) == 0)
+	// Our own wish, in our own name.
+	if (os64_tty_set_raw(true) != 0 || !mode_is(true, os64_taskid()))
+		return 1;
+	// And our own to take back.
+	if (os64_tty_set_raw(false) != 0 || !mode_is(false, 0))
 		return 1;
 	return 0;
 }
@@ -99,7 +106,8 @@ static int worker(void)
 	if (got != 3 || buf[0] != 0x03 || buf[1] != 0x04 || buf[2] != 'x')
 		return STEP(5);
 
-	// Act 3: one holder. The helper is our foreground while we wait.
+	// Act 3: the terminal follows the foreground's wish. The helper is our
+	// foreground while we wait, and our wish returns with the console.
 	int64_t kid = os64_spawn("/tests/rawtty", (char *[]){ "/tests/rawtty", "helper", id, 0 });
 	if (kid < 0)
 		return STEP(10);
@@ -234,6 +242,6 @@ int main(int argc, char **argv)
 		os64_exit(code);   // the child's or worker's own step code, relayed
 
 	os64_close((int32_t)master);
-	os64_printf("rawtty: cooked by default, raw on request (0x03 0x04 arrive as bytes), one holder, cooked again, reset at the holder's exit, strangers refused\n");
+	os64_printf("rawtty: cooked by default, raw on request (0x03 0x04 arrive as bytes), the foreground's wish, cooked again, reset at the asker's exit, strangers refused\n");
 	os64_exit(RAWTTY_OK);
 }

@@ -91,7 +91,7 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	// RAW (SIGINT.md § Raw mode): the terminal interprets nothing, so the
 	// byte is data for whoever is reading — telnet sends it down the wire
 	// as IAC IP itself, the way character-mode telnet has since 4.2BSD.
-	if (tty->rawHolder != NULL)
+	if (console_tty_raw(tty))
 		return false;
 
 	task_t *fg = tty->fgTask;
@@ -122,11 +122,21 @@ bool console_intr_intercept(char ascii)
 	return console_intr_intercept_tty(kTTYFocused, ascii);
 }
 
-void console_classify_tty(tty_t *tty, keyboard_event_t *ev)
+// The terminal's mode is its foreground's wish, read at the moment of
+// asking. The pointer is read once; a foreground that is dying is replaced
+// in that pointer by its own departure, the same exposure every other
+// reader of fgTask in this file has always had.
+bool console_tty_raw(tty_t *tty)
 {
 	if (tty == NULL)
 		tty = &kTTY[0];
-	ev->eof = (ev->ascii == CONSOLE_EOT && tty->rawHolder == NULL);
+	task_t *fg = tty->fgTask;
+	return fg != NULL && fg->wantsRaw;
+}
+
+void console_classify_tty(tty_t *tty, keyboard_event_t *ev)
+{
+	ev->eof = (ev->ascii == CONSOLE_EOT && !console_tty_raw(tty));
 }
 
 long console_read(char *buf, size_t len)

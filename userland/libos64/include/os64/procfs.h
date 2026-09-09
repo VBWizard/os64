@@ -68,9 +68,10 @@ typedef struct {
 // the terminal get a new call — os64_tty_mode is the first — not a new field.
 
 // The terminal's line discipline (SIGINT.md § Raw mode): raw means Ctrl+C
-// and Ctrl+D arrive as the bytes 0x03 / 0x04; holder is the task that asked
-// for raw (0 when cooked). Either output may be NULL. Reads /proc/self/tty.
-// Returns 0, or -1 if the file cannot be opened or parsed.
+// and Ctrl+D arrive as the bytes 0x03 / 0x04. The mode is the FOREGROUND
+// task's wish, so holder names that task when raw and is 0 when cooked.
+// Either output may be NULL. Reads /proc/self/tty. Returns 0, or -1 if the
+// file cannot be opened or parsed.
 int32_t os64_tty_mode(bool *raw, uint64_t *holder);
 
 // Switch the calling process's terminal between cooked (Ctrl+C is SIGINT,
