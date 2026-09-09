@@ -1,0 +1,25 @@
+{
+  global:
+    os64_tls_client_create;
+    os64_tls_free;
+    os64_tls_state;
+    os64_tls_feed_ciphertext;
+    os64_tls_take_ciphertext;
+    os64_tls_write_plaintext;
+    os64_tls_read_plaintext;
+    os64_tls_flush;
+    os64_tls_begin_close;
+    os64_tls_transport_eof;
+    os64_tls_abort;
+    os64_tls_status_name;
+    os64_tls_license;
+    os64_tls_trust_create;
+    os64_tls_trust_add_der;
+    os64_tls_trust_seal;
+    os64_tls_trust_free;
+    os64_tls_trust_load_pem;
+    os64_tls_trust_reload;
+    os64_tls_trust_reload_path;
+    os64_tls_store_status_name;
+  local: *;
+};

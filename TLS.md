@@ -11,7 +11,8 @@ The [trust-store loader](TLS_TRUST_STORE.md) selects and validates complete
 PEM bundles, with a guest `tlstrusttest` fixture for parsing and replacement.
 The [production-inputs adapter](TLS_PRODUCTION_INPUTS.md) supplies `/dev/random`
 and UTC time to the private engine, with a guest `tlsinputtest` creation fixture.
-The public TLS interface is proposed; native HTTPS is not ready. Trust-store
+The [public byte library](TLS_PUBLIC_LIBRARY.md) exposes `<tls/tls.h>` and
+`libtls.so`; native HTTPS is not ready. Trust-store
 selection uses the approved configuration and replacement policy below;
 public root-bundle selection and network integration remain open.
 
@@ -80,9 +81,10 @@ tools/test_tls_host.c       deterministic engine and API fixtures
 userland/tests/tlstest/     guest vectors and explicit TLS test probes
 ```
 
-The public API/wrapper paths are proposed. The foundation has `upstream/`,
-`port/`, a private archive, and `test/` with `/tests/bearssltest`; it does not
-install `libtls.so`. Record source URL, commit,
+The public wrapper is `userland/libtls/api.c`, with its header under
+`include/tls/`. The foundation has `upstream/`, `port/`, a private archive,
+and `test/` with `/tests/bearssltest`. The shared build installs `libtls.so`
+and `/tests/tlslibtest`. Record source URL, commit,
 archive/tree hashes, license, selected files, configuration, and local patches
 in the import manifest. Preserve upstream paths. Ship its license with source
 and binary distributions. Keep upstream test data with its attribution.
@@ -91,8 +93,9 @@ procedure so a generated-file change cannot conceal its real source change.
 
 The foundation archive compiles the core for reference testing and dependency
 auditing. Its full list is not a production algorithm allowlist.
-The production source manifest must include the client, selected constant-time
-algorithms, X.509, and the required codecs. Server tooling, benchmarks, and
+The production source manifest `userland/libtls/public_sources.mk` selects
+the client, constant-time algorithms, X.509, and required codecs; the ELF
+audit checks its members against the linked archive closure. Server tooling, benchmarks, and
 unselected algorithms can remain reference-test inputs without being linked
 into `libtls.so`. No build-time download or automatic tracking of upstream.
 
@@ -165,12 +168,12 @@ copy cost keeps BearSSL's borrowed-buffer invalidation rules private: its
 Inside the wrapper, acquire one view, copy, acknowledge the exact positive
 count, then discard the view before any further engine operation.
 
-### Proposed operations, not a frozen ABI
+### Public byte operations
 
 | Operation | Contract |
 |---|---|
 | `trust_create` / `trust_add_der` / `trust_seal` / `trust_free` | Build an owned, bounded CA snapshot. A failed addition does not partly add an anchor. Sealed stores are immutable and remain alive while connections retain them. |
-| `client_create` | Validate parameters and acquire fresh entropy before starting a new handshake. No session reuse. Production and fixture providers are described below. |
+| `client_create` | Validate parameters, sample OS UTC and acquire fresh OS entropy before starting a new handshake. Retain a sealed trust snapshot; no session reuse or input overrides. |
 | `state` | Report handshake completion, available byte directions, closure progress, and terminal error separately. Availability can change after an operation. |
 | `feed_ciphertext` | Copy and acknowledge an accepted prefix. The caller retains the unaccepted suffix. Does not accept data after transport EOF. |
 | `take_ciphertext` | Copy pending encrypted output and transfer responsibility for those bytes to the caller. The transport must retain an unwritten suffix across short writes. |
@@ -179,18 +182,19 @@ count, then discard the view before any further engine operation.
 | `flush` | Request records for buffered plaintext; completing this call does not prove transport delivery. |
 | `transport_eof` | Record that no more encrypted input can arrive. A bare TCP FIN does not become successful TLS EOF. |
 | `begin_close` | Stop new plaintext writes and initiate orderly TLS closure after accepted plaintext is flushed. Continue driving encrypted I/O. |
-| `abort` / `free` | Release without blocking. Wipe connection secrets with a compiler-resistant routine. Never close a caller-owned TCP handle. |
+| `abort` / `free` | Abort stops I/O with a sticky terminal reason. Free wipes secrets and releases state without blocking. Neither closes a caller-owned TCP handle. |
 
 All names in that table receive the `os64_tls_` prefix. Transfer operations
 return both a status and `size_t transferred`; if processing an accepted
 prefix reveals an error, its consumed count remains meaningful. Zero-length
-calls are no-ops, never zero-byte BearSSL acknowledgements. Zero progress
+calls acknowledge no BearSSL buffers. Zero progress
 returns a named result, and callers inspect the state before retrying.
 
-Proposed status vocabulary distinguishes: OK, NEED_PROGRESS, CLEAN_EOF,
-BAD_ARGUMENT, NO_MEMORY, LIMIT, ENTROPY_UNAVAILABLE, BAD_TIME, TRUST_STORE,
-CERTIFICATE, UNSUPPORTED, PROTOCOL, TRUNCATED, TRANSPORT, TIMEOUT, and
-CANCELLED. Retain the upstream error/alert and a bounded policy-reason code
+Client status distinguishes OK, NEED_PROGRESS, CLEAN_EOF, BAD_ARGUMENT,
+NO_MEMORY, LIMIT, ENTROPY_UNAVAILABLE, BAD_TIME, CERTIFICATE, UNSUPPORTED,
+PROTOCOL, TRUNCATED, TRANSPORT, TIMEOUT, and CANCELLED. Trust loading uses
+a separate store-status enum with config, format and file-I/O reasons. Retain
+the upstream error/alert and a bounded policy-reason code
 as diagnostic detail, without making upstream integer values our public ABI.
 Peer-controlled certificate strings are not copied raw into diagnostics.
 Terminal failures are sticky; reconnect means a new context and fresh entropy.
@@ -388,7 +392,7 @@ are supplied by the caller. Dribbling bytes or warning alerts do not restart
 the handshake deadline. The nonblocking engine itself reports progress and
 does not own a scheduler timer.
 
-Bound an incoming chain to 16 certificates, 32 KiB per certificate, and
+Bound an incoming chain to 8 certificates, 32 KiB per certificate, and
 256 KiB total DER, enforced at the X.509 callback boundary before copying.
 Permit at most 1 MiB of received TLS bytes during the initial handshake;
 count across calls so empty records/warnings cannot bypass the bound.
@@ -511,8 +515,8 @@ fixtures; changing Internet behavior is not the regression oracle.
 | D: production inputs and transport | Approved entropy provider and bounded I/O adapter | Entropy/failure and end-to-end deadline/cancellation evidence; prerequisites landed through their own reviews |
 | E: HTTPS integration | HTTP caller adoption, routing and publication tests | Separate integration design reviewed against the merged tree |
 
-The source pin is settled for the foundation. Before the public engine slice,
-review the proposed operations/profile. OS randomness ownership, unseeded-read
+The source pin is settled for the foundation. The public byte library preserves the
+reviewed engine operations and profile. OS randomness ownership, unseeded-read
 refusal, and root-store selection/replacement are agreed. Production integration
 must verify the service behavior. Further decisions are public root-bundle
 selection and acceptance of the documented TLS 1.2/PKI compatibility limits.

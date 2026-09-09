@@ -8,14 +8,6 @@
 #define TLS_CHAIN_MAX 8u
 #define TLS_ANCHORS_MAX 256u
 #define TLS_ANCHOR_BYTES_MAX 1048576u
-typedef struct os64_tls_trust os64_tls_trust;
-
-tls_status os64_tls_trust_create(os64_tls_trust **out);
-// A builder has one serialized owner. Failure leaves its existing anchors intact.
-tls_status os64_tls_trust_add_der(os64_tls_trust *store, const void *der,
-                                 size_t length, tls_policy_reason *reason);
-tls_status os64_tls_trust_seal(os64_tls_trust *store);
-void os64_tls_trust_free(os64_tls_trust *store);
 // Keep a live owner reference while using the factory to create validators.
 // Successful validators retain the sealed snapshot independently.
 tls_validator_factory os64_tls_policy_factory(os64_tls_trust *store);

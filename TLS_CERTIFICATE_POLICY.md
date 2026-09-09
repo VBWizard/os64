@@ -2,7 +2,8 @@
 
 This private slice supplies the owned validator factory used by
 `userland/libtls/port/client_engine.h`. It builds on the engine and the pinned
-BearSSL foundation. It installs no public API or root bundle. The
+BearSSL foundation. The [public byte library](TLS_PUBLIC_LIBRARY.md) exposes
+the trust builder and bounded diagnostic value types; no root bundle is installed. The
 [PEM/config loader](TLS_TRUST_STORE.md) and [OS-input constructor](TLS_PRODUCTION_INPUTS.md)
 consume this interface. Transport and HTTPS integration remain separate slices in TLS.md.
 
@@ -151,8 +152,8 @@ Releasing an old owner reference cannot invalidate existing validators.
 Connection creation allocates a fixed validator working set, including one
 32 KiB certificate buffer. Certificate lengths never drive allocations during
 the handshake. Diagnostics use bounded enum reasons plus the upstream error;
-they do not copy certificate strings. The types remain private and may change
-when the public libtls boundary is introduced.
+they do not copy certificate strings. Public enums and value structs are
+defined in `<tls/tls.h>`; validator and engine internals remain private.
 On terminal validation failure, the engine maps `TLS_POLICY_LIMIT` to
 `TLS_LIMIT`, retaining the upstream error separately. Other certificate
 refusals report `TLS_CERTIFICATE`.
@@ -218,6 +219,7 @@ ASan/UBSan are enabled in the harness. On hosts where LeakSanitizer cannot
 run under tracing, use `ASAN_OPTIONS=detect_leaks=0`; the fixture's allocation
 counts still check owned cleanup. The trust-store slice's guest fixture covers
 selected certificate checks and snapshot replacement. The full policy corpus
-and TLS engine have no guest runner. A sustained fuzzing campaign, public-root
-compatibility and updates, and independent TLS-peer interoperability remain
+is exercised on the host; guest `tlsinputtest` and `tlslibtest` cover engine
+creation and byte progress without a network peer. A sustained fuzzing
+campaign, public-root compatibility and updates, and independent TLS-peer interoperability remain
 separate validation and integration work.

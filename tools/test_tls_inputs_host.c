@@ -9,6 +9,23 @@
 #include "os64/date.h"
 #include "os64/io.h"
 
+// Exercise the same failure matrix through the public entry points as well.
+#ifdef TLS_TEST_PUBLIC
+#define tls_os_config os64_tls_config_t
+#define os64_tls_engine os64_tls_client
+#define os64_tls_engine_create_os os64_tls_client_create
+#define os64_tls_engine_destroy os64_tls_free
+#define os64_tls_engine_state os64_tls_state
+#define os64_tls_engine_take os64_tls_take_ciphertext
+#define os64_tls_engine_feed os64_tls_feed_ciphertext
+#define os64_tls_engine_write os64_tls_write_plaintext
+#define os64_tls_engine_read os64_tls_read_plaintext
+#define os64_tls_engine_flush os64_tls_flush
+#define os64_tls_engine_close os64_tls_begin_close
+#define os64_tls_engine_eof os64_tls_transport_eof
+#define os64_tls_engine_abort os64_tls_abort
+#endif
+
 typedef struct { void *p; size_t n; bool engine; } allocation;
 static allocation allocations[32];
 static size_t calls, fail_allocation, live_allocations;
@@ -108,6 +125,56 @@ static void failure(const tls_os_config *cfg, tls_status expected)
     assert(create(cfg, &c) == expected && !c && !io.live);
     assert(live_allocations == saved);
 }
+static void pump(os64_tls_engine *client, br_ssl_server_context *server)
+{
+    size_t n;
+    unsigned char *p = br_ssl_engine_recvrec_buf(&server->eng, &n);
+    if (p && n) {
+        if (n > 37) n = 37;
+        tls_transfer moved = os64_tls_engine_take(client, p, n);
+        if (moved.transferred) br_ssl_engine_recvrec_ack(&server->eng, moved.transferred);
+    }
+    p = br_ssl_engine_sendrec_buf(&server->eng, &n);
+    if (p && n) {
+        if (n > 37) n = 37;
+        tls_transfer moved = os64_tls_engine_feed(client, p, n);
+        if (moved.transferred) br_ssl_engine_sendrec_ack(&server->eng, moved.transferred);
+    }
+}
+static void application_data(os64_tls_engine *client, br_ssl_server_context *server)
+{
+    const char request[] = "public request", response[] = "authenticated response";
+    tls_transfer sent = os64_tls_engine_write(client, request, sizeof request);
+    assert(sent.status == TLS_OK && sent.transferred == sizeof request);
+    assert(os64_tls_engine_flush(client) == TLS_OK);
+    bool replied = false;
+    size_t request_at = 0, response_at = 0;
+    for (unsigned step = 0; step < 20000 && (request_at < sizeof request || response_at < sizeof response); step++) {
+        pump(client, server);
+        size_t n;
+        unsigned char *p = br_ssl_engine_recvapp_buf(&server->eng, &n);
+        if (p && n) {
+            assert(request_at + n <= sizeof request && !memcmp(p, request + request_at, n));
+            request_at += n; br_ssl_engine_recvapp_ack(&server->eng, n);
+        }
+        p = br_ssl_engine_sendapp_buf(&server->eng, &n);
+        if (!replied && p && n >= sizeof response) {
+            memcpy(p, response, sizeof response);
+            br_ssl_engine_sendapp_ack(&server->eng, sizeof response);
+            br_ssl_engine_flush(&server->eng, 0); replied = true;
+        }
+        unsigned char got[3];
+        tls_transfer received = os64_tls_engine_read(client, got, sizeof got);
+        assert(response_at + received.transferred <= sizeof response);
+        assert(!memcmp(got, response + response_at, received.transferred));
+        response_at += received.transferred;
+    }
+    assert(request_at == sizeof request && response_at == sizeof response);
+    assert(os64_tls_engine_close(client) == TLS_OK);
+    for (unsigned step = 0; step < 20000 && os64_tls_engine_state(client).status == TLS_OK; step++) pump(client, server);
+    assert(os64_tls_engine_state(client).status == TLS_CLEAN_EOF);
+    assert(os64_tls_engine_eof(client) == TLS_CLEAN_EOF);
+}
 static void handshake(const tls_os_config *cfg, bool success, tls_policy_reason reason)
 {
     os64_tls_engine *client;
@@ -158,6 +225,7 @@ static void handshake(const tls_os_config *cfg, bool success, tls_policy_reason 
         }
     }
     assert(done && io.opens == 1 && io.closes == 1 && io.at == 32 && io.clocks == 1);
+    if (success) application_data(client, server);
     os64_tls_engine_destroy(client); free(records); free(server);
 }
 int main(void)
@@ -214,6 +282,6 @@ int main(void)
         handshake(&cfg, i == 0 || i == 3, i == 4 ? TLS_POLICY_SAN : TLS_POLICY_OK);
     }
     assert(!live_allocations);
-    puts("PASS five policy handshakes: UTC date/zone boundaries, wrong name and retained trust");
+    puts("PASS five policy handshakes, bidirectional application data and clean close");
     return 0;
 }
