@@ -4,39 +4,54 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "bearssl.h"
+#include "../include/tls/tls.h"
 
 // Private engine boundary, not an installed application API. A production
 // caller must provide the policy-enforcing validator described in TLS.md.
 typedef struct os64_tls_engine os64_tls_engine;
-typedef enum {
-    TLS_OK, TLS_NEED_PROGRESS, TLS_CLEAN_EOF, TLS_BAD_ARGUMENT, TLS_NO_MEMORY,
-    TLS_LIMIT, TLS_ENTROPY_UNAVAILABLE, TLS_BAD_TIME, TLS_CERTIFICATE,
-    TLS_UNSUPPORTED, TLS_PROTOCOL, TLS_TRUNCATED, TLS_TRANSPORT, TLS_TIMEOUT,
-    TLS_CANCELLED
-} tls_status;
-typedef enum {
-    TLS_POLICY_OK, TLS_POLICY_DER, TLS_POLICY_LIMIT, TLS_POLICY_DUPLICATE,
-    TLS_POLICY_EXTENSION, TLS_POLICY_CRITICAL, TLS_POLICY_SAN,
-    TLS_POLICY_EKU, TLS_POLICY_CA, TLS_POLICY_KEY_USAGE, TLS_POLICY_KEY,
-    TLS_POLICY_SIGNATURE, TLS_POLICY_ANCHOR, TLS_POLICY_SEQUENCE
-} tls_policy_reason;
+// Internal spellings share the public value types and constants.
+typedef os64_tls_status_t tls_status;
+typedef os64_tls_policy_reason_t tls_policy_reason;
+typedef os64_tls_transfer_t tls_transfer;
+typedef os64_tls_state_t tls_state;
+typedef os64_tls_name_t tls_name;
+#define TLS_BAD_ARGUMENT OS64_TLS_BAD_ARGUMENT
+#define TLS_BAD_TIME OS64_TLS_BAD_TIME
+#define TLS_CANCELLED OS64_TLS_CANCELLED
+#define TLS_CERTIFICATE OS64_TLS_CERTIFICATE
+#define TLS_CLEAN_EOF OS64_TLS_CLEAN_EOF
+#define TLS_CLOSING OS64_TLS_CLOSING
+#define TLS_ENTROPY_UNAVAILABLE OS64_TLS_ENTROPY_UNAVAILABLE
+#define TLS_HANDSHAKE_DONE OS64_TLS_HANDSHAKE_DONE
+#define TLS_LIMIT OS64_TLS_LIMIT
+#define TLS_NEED_PROGRESS OS64_TLS_NEED_PROGRESS
+#define TLS_NO_MEMORY OS64_TLS_NO_MEMORY
+#define TLS_OK OS64_TLS_OK
+#define TLS_POLICY_ANCHOR OS64_TLS_POLICY_ANCHOR
+#define TLS_POLICY_CA OS64_TLS_POLICY_CA
+#define TLS_POLICY_CRITICAL OS64_TLS_POLICY_CRITICAL
+#define TLS_POLICY_DER OS64_TLS_POLICY_DER
+#define TLS_POLICY_DUPLICATE OS64_TLS_POLICY_DUPLICATE
+#define TLS_POLICY_EKU OS64_TLS_POLICY_EKU
+#define TLS_POLICY_EXTENSION OS64_TLS_POLICY_EXTENSION
+#define TLS_POLICY_KEY OS64_TLS_POLICY_KEY
+#define TLS_POLICY_KEY_USAGE OS64_TLS_POLICY_KEY_USAGE
+#define TLS_POLICY_LIMIT OS64_TLS_POLICY_LIMIT
+#define TLS_POLICY_OK OS64_TLS_POLICY_OK
+#define TLS_POLICY_SAN OS64_TLS_POLICY_SAN
+#define TLS_POLICY_SEQUENCE OS64_TLS_POLICY_SEQUENCE
+#define TLS_POLICY_SIGNATURE OS64_TLS_POLICY_SIGNATURE
+#define TLS_PROTOCOL OS64_TLS_PROTOCOL
+#define TLS_RECV_CIPHER OS64_TLS_RECV_CIPHER
+#define TLS_RECV_PLAIN OS64_TLS_RECV_PLAIN
+#define TLS_SEND_CIPHER OS64_TLS_SEND_CIPHER
+#define TLS_SEND_PLAIN OS64_TLS_SEND_PLAIN
+#define TLS_TIMEOUT OS64_TLS_TIMEOUT
+#define TLS_TRANSPORT OS64_TLS_TRANSPORT
+#define TLS_TRUNCATED OS64_TLS_TRUNCATED
+#define TLS_UNSUPPORTED OS64_TLS_UNSUPPORTED
 
 #define TLS_HANDSHAKE_CIPHER_MAX 1048576u
-
-enum {
-    TLS_RECV_CIPHER = 1u << 0, TLS_SEND_CIPHER = 1u << 1,
-    TLS_RECV_PLAIN = 1u << 2, TLS_SEND_PLAIN = 1u << 3,
-    TLS_HANDSHAKE_DONE = 1u << 4, TLS_CLOSING = 1u << 5
-};
-typedef struct { tls_status status; size_t transferred; } tls_transfer;
-typedef struct {
-    tls_status status;
-    unsigned flags;
-    int upstream_error;
-    tls_policy_reason policy_reason;
-    const char *alpn; // Connection-owned; valid until destroy, or NULL.
-} tls_state;
-typedef struct { const char *data; size_t length; } tls_name;
 
 typedef struct {
     // A factory call returns a fresh owned validator. Its destruction function

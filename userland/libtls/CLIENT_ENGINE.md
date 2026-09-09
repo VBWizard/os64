@@ -3,8 +3,9 @@
 This slice depends on the BearSSL foundation in PR #74. Carry foundation
 review fixes forward before publishing the dependent slice.
 
-The source here is private: no installed header, shared library, application
-integration, or new kernel/libos64 interface. The
+The engine source here is private behind the
+[public byte library](../../TLS_PUBLIC_LIBRARY.md). It adds no kernel/libos64
+interface or transport integration. The
 [certificate-policy factory](../../TLS_CERTIFICATE_POLICY.md) supplies DER trust
 snapshots and the acceptance gate. The [trust-store loader](../../TLS_TRUST_STORE.md)
 supplies complete PEM snapshots. The [OS-input constructor](../../TLS_PRODUCTION_INPUTS.md)
@@ -127,4 +128,5 @@ cleanup through the [OS-input constructor](../../TLS_PRODUCTION_INPUTS.md).
 The host harness uses the adapted pinned server implementation; the
 certificate-policy harness supplies separate negative and handshake-gate
 coverage. Independent-peer interoperability, guest network handshakes,
-fuzzing, and the production source allowlist remain validation gates in TLS.md.
+and fuzzing remain validation gates in TLS.md. The public library audit
+checks its selected production source list against the linked objects.

@@ -59,5 +59,6 @@ and links the combined private objects against libos64. Inspect the optimized
 engine's seed wipe on success and refusal; the adapter does not own a scratch
 seed. Use the isolated-disk procedure in [VERIFICATION.md](VERIFICATION.md)
 for guest tests, with a freshly built kernel and userland. Public library
-wiring, transport deadlines, independent network interoperability, public
-roots and HTTPS integration remain separate.
+wiring is described in [TLS_PUBLIC_LIBRARY.md](TLS_PUBLIC_LIBRARY.md).
+Transport deadlines, independent network interoperability, public roots and
+HTTPS integration remain separate.

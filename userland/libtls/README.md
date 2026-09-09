@@ -1,11 +1,11 @@
 # BearSSL foundation
 
-This directory contains a pinned BearSSL core, a private os64 compatibility
-layer, and host/guest fixtures. It builds `userland/obj/libbearssl-foundation.a`
-and `/tests/bearssltest`. It does not install a public crypto header or
-`libtls.so`, enable native HTTPS, or change the kernel or libos64.
-The client API, selected production object list, trust policy, and transport
-integration are subsequent slices of [TLS.md](../../TLS.md).
+This directory contains the pinned BearSSL core, private os64 adapters,
+`libtls.so`, and host/guest fixtures. The public byte API is `<tls/tls.h>`;
+its boundary and tests are described in [TLS_PUBLIC_LIBRARY.md](../../TLS_PUBLIC_LIBRARY.md).
+The foundation archive and `/tests/bearssltest` remain separate reference
+and vector artifacts. Transport and native HTTPS integration remain separate
+slices of [TLS.md](../../TLS.md).
 
 ## Provenance
 
