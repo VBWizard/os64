@@ -131,6 +131,16 @@ typedef struct tty
 	volatile int pushbackCount;
 	struct task * volatile fgTask;     // who Ctrl+C aims at ON THIS tty
 	struct task * volatile shell;      // the controlling shell seated here
+	// THE FOREGROUND'S MUTATION LOCK. Every write to fgTask (and to shell)
+	// happens under it, and every check that decides a write ("is the
+	// pointer still me?", "does it name a live child of mine?") is made
+	// inside the same hold — so the hand-offs at a spawn, a wait's entry
+	// and finish, a task's departure and a seat are each one indivisible
+	// transition, never a check on one core and a store on another. A leaf
+	// lock, irqsave, held for a pointer compare and a task-list walk and
+	// nothing else; readers (the Ctrl+C intercept in IRQ context, the mode
+	// query, /proc) read the pointer bare — a single aligned word.
+	spinlock_t fg_lock;
 	// Raw mode has no word here on purpose: the terminal is raw exactly
 	// while fgTask->wantsRaw (task.h) — derived, never stored, so there is
 	// no holder to publish, transfer, or clear at a death (SIGINT.md § Raw

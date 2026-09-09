@@ -788,8 +788,10 @@ void tty_seat_shell(tty_t *t, struct task *shell)
 	// inherit it), foreground (who Ctrl+C aims at HERE), and the lights on.
 	shell->controllingShell = true;
 	shell->tty = t;
+	uint64_t flags = spinlock_acquire_irqsave(&t->fg_lock);
 	t->shell = shell;
 	t->fgTask = shell;
+	spinlock_release_irqrestore(&t->fg_lock, flags);
 	t->spawnRequested = false;
 	t->state = TTY_LIVE;
 }
@@ -831,13 +833,11 @@ void tty_task_departed(struct task *task)
 		// the shell, when the seat is empty — the same value an empty
 		// terminal starts with.
 		//
-		// ONE COMPARE-AND-SWAP, not a check and a store (rd5): the shell
-		// can leave wait(A) on a caught signal and enter wait(B) — which
-		// stores B — while A is dying on another core. A separate check
-		// ("still me?") and store ("then the shell") interleave with that
-		// store, and A's death would overwrite B with the shell: Ctrl+C
-		// then reaches the shell as a keystroke instead of stopping B.
-		// The CAS replaces the pointer only if it still names A.
+		// UNDER THE FOREGROUND LOCK (tty.h), "still me?" and "then the
+		// heir" are one transition: a shell leaving wait(A) on a caught
+		// signal and entering wait(B) while A dies on another core cannot
+		// have B overwritten by A's death, because B's publication and this
+		// check are serialized, and whichever runs second sees the other.
 		//
 		// TO THE PARENT, when the parent is a foreground program on this
 		// terminal — a middleman (env, a script's husk, telnet's worker)
@@ -847,27 +847,31 @@ void tty_task_departed(struct task *task)
 		// Otherwise the shell. Orphans are re-parented to ktask before
 		// their parent is freed (task_reparent_orphans), so parentTask
 		// never dangles; task_is_live is the belt over those braces.
+		//
+		// A PARENT DYING AT THE SAME MOMENT is ordered by the same lock:
+		// its exit marks it `exited` before its own departure runs here.
+		// If its departure came first, it is not live and the shell is the
+		// heir; if it comes later, it finds itself in the pointer and hands
+		// the seat on. Either order leaves a live task in the pointer, and
+		// nothing has to be re-read after publishing.
 		struct task *parent = task->parentTask;
-		struct task *heir = t->shell;
-		if (parent != NULL && parent != t->shell && task_is_live(parent) &&
-		    !parent->tearingDown && parent->tty == t && !parent->backgroundJob)
-			heir = parent;
-		__sync_bool_compare_and_swap(&t->fgTask, task, heir);
-		// THE PARENT MAY BE DYING TOO. Its own departure clears the pointer
-		// only if it finds itself there, so a parent that departed BEFORE
-		// our publish would stay published, dead. Its exit set tearingDown
-		// (a full barrier) before its departure ran, and the CAS above is a
-		// full barrier, so re-read the flag AFTER publishing: if the
-		// parent's departure came after our publish it replaced us; if it
-		// came before, the flag is up now and we hand the seat to the shell
-		// ourselves. Either order leaves a live task in the pointer.
-		if (heir != t->shell && parent->tearingDown)
-			__sync_bool_compare_and_swap(&t->fgTask, parent, t->shell);
+		uint64_t flags = spinlock_acquire_irqsave(&t->fg_lock);
+		if (t->fgTask == task)
+		{
+			struct task *heir = t->shell;
+			if (parent != NULL && parent != t->shell && task_is_live(parent) &&
+			    parent->tty == t && !parent->backgroundJob)
+				heir = parent;
+			t->fgTask = heir;
+		}
+		spinlock_release_irqrestore(&t->fg_lock, flags);
 		return;
 	}
 
+	uint64_t flags = spinlock_acquire_irqsave(&t->fg_lock);
 	t->shell = NULL;
 	t->fgTask = NULL;
+	spinlock_release_irqrestore(&t->fg_lock, flags);
 	t->spawnRequested = false;
 	t->state = TTY_DORMANT;
 

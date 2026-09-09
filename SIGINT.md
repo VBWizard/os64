@@ -394,6 +394,18 @@ had to engineer falls out:
 **The foreground pointer's own rules**, which the review sharpened
 because raw mode made them load-bearing:
 
+- EVERY HAND-OFF IS ONE TRANSITION UNDER THE TERMINAL'S FOREGROUND LOCK
+  (`tty_t.fg_lock`). Five contexts write the pointer — a spawn, a wait's
+  entry, a wait's finish, a task's departure, a seat — and each one first
+  asks something of the pointer ("still me?", "a live child of mine?")
+  and then stores. Rounds five through seven of #80 each found one more
+  way for a sibling thread's spawn to land between a check and its store;
+  the compare-and-swaps that answered the first of them could not answer
+  the rest, because the check is a task-list walk, not a word. So the
+  check and the store are made under one leaf spinlock, and no two
+  transitions on a terminal interleave. Readers never take it: Ctrl+C in
+  IRQ context, the mode query and `/proc` read the pointer bare, one
+  aligned word, exactly as before.
 - The foreground changes hands AT THE SPAWN, not first at the wait: a
   child is runnable the moment it is submitted and can reach a syscall
   before its parent reaches `wait`, so a telnet going raw as its first act
@@ -417,11 +429,11 @@ because raw mode made them load-bearing:
   with the console moving at the spawn, a middleman whose child died
   before it reached `wait` would otherwise find the shell in the pointer
   and never take the console back. Orphans are re-parented before their
-  parent is freed, so the parent pointer never dangles; and because the
-  parent may be dying at the same moment, the publish is followed by a
-  re-read of its `tearingDown` (its exit sets that, a full barrier, before
-  its own departure runs) — if the parent departed first, we hand the seat
-  to the shell ourselves. Either order leaves a live task in the pointer.
+  parent is freed, so the parent pointer never dangles; and a parent dying
+  at the same moment is ordered by the lock — its exit marks it `exited`
+  before its own departure runs, so either its departure came first and it
+  is not a live heir, or it comes later and finds itself in the pointer
+  and hands the seat on. Either order leaves a live task in the pointer.
 - THE WRITER SPEAKS, never the opener. `echo raw > /proc/self/tty &` has
   the shell open the file and a background child write through the
   inherited handle; attributed to the opener, that made the shell wish for

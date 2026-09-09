@@ -3545,12 +3545,17 @@ static void spawn_do_create(void *arg)
 	// parent's own, and only when the child inherits it — a child seated on
 	// a pty slave is that terminal's foreground already (tty_seat_shell,
 	// next), and the parent's terminal must keep its own. A background
-	// job never takes the console, here as at the wait.
+	// job never takes the console, here as at the wait. Test and store
+	// under the terminal's foreground lock (tty.h): a sibling thread's wait
+	// finishing at this instant restores the parent under the same lock,
+	// so the two cannot interleave into "checked, then overwritten".
 	if (p->ttySlave == NULL && !child->backgroundJob && p->parent != NULL)
 	{
 		tty_t *console = task_tty(p->parent);
+		uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
 		if (p->parent->controllingShell || console->fgTask == p->parent)
 			console->fgTask = child;
+		spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 	}
 
 	// Seat on a pty slave (PTY.md), BEFORE submission like everything else

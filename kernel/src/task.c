@@ -1619,7 +1619,13 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// is for the pointer that names the WAITER — a child the spawn did not
 	// hand the console to (one started with `&`, for instance) that a
 	// shell now waits on.
+	//
+	// EVERY CHECK-THEN-STORE ON THE POINTER, here and at the finish, runs
+	// under the terminal's foreground lock (tty.h): a sibling thread's
+	// spawn publishes its child under the same lock, so "not a live child"
+	// and "then store" cannot be split by a publication in between.
 	tty_t *console = task_tty(parent);
+	uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
 	bool movesConsole = parent->controllingShell || console->fgTask == parent ||
 	                    task_is_live_child(parent, (task_t *)console->fgTask);
 	if (movesConsole && !task_is_live_child(parent, (task_t *)console->fgTask)) {
@@ -1627,6 +1633,7 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 		if (fg != NULL)
 			console->fgTask = fg;
 	}
+	spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 
 	while (1==1)
 	{
@@ -1681,21 +1688,28 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			// Take the console back — unless it already names a LIVE child
 			// of ours: a sibling thread may have spawned one while this
 			// wait was finishing, and its hand-off must not be undone by an
-			// older wait's restore.
-			if (movesConsole && !task_is_live_child(parent, (task_t *)console->fgTask))
-				console->fgTask = parent;
+			// older wait's restore. Under the foreground lock, so that
+			// check and this store are one transition against that spawn.
+			if (movesConsole) {
+				fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				if (!task_is_live_child(parent, (task_t *)console->fgTask))
+					console->fgTask = parent;
+				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+			}
 			return endedPid;
 		}
 
 		// No dead match. If there is no matching LIVE child either, there is
 		// nothing to wait for — fail rather than sleep forever.
 		if (task_find_live_child(parent, targetPid) == NULL) {
-			// Take the console back — unless it already names a LIVE child
-			// of ours: a sibling thread may have spawned one while this
-			// wait was finishing, and its hand-off must not be undone by an
-			// older wait's restore.
-			if (movesConsole && !task_is_live_child(parent, (task_t *)console->fgTask))
-				console->fgTask = parent;
+			// Take the console back — same rule and same lock as the
+			// collected-corpse return above.
+			if (movesConsole) {
+				fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				if (!task_is_live_child(parent, (task_t *)console->fgTask))
+					console->fgTask = parent;
+				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+			}
 			return 0;
 		}
 

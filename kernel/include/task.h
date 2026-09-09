@@ -366,8 +366,10 @@
 	// its entry or its finish, so an older wait cannot undo a newer spawn's
 	// hand-off — a dead child hands it to a live foreground
 	// parent on the same terminal or else to the shell (tty_task_departed),
-	// a backgrounded (&) child never takes it at any of those points, and
-	// the keyboard IRQ path still reads it as a single aligned pointer,
+	// a backgrounded (&) child never takes it at any of those points. Each
+	// of those hand-offs is a check-then-store made under the terminal's
+	// foreground lock (tty_t.fg_lock), so no two of them interleave; the
+	// keyboard IRQ path still reads it as a single aligned pointer,
 	// atomically, no lock.
 
 	// THE RECLAIM LEDGER (task.c; the 2026-08-13 deferral ledger, PAID
