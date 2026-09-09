@@ -56,8 +56,8 @@ and intermediate path-length enforcement.
 ## Extension table
 
 Extension OIDs must be unique within a certificate. DER envelopes, lengths,
-OIDs, booleans, INTEGER/ENUMERATED values, and bit strings are checked for
-canonical encodings.
+OBJECT IDENTIFIER/RELATIVE-OID values, booleans, INTEGER/ENUMERATED values,
+and bit strings are checked for canonical encodings.
 End-of-contents and universal kinds 14 and 15 are outside this subset and
 are refused in either encoding form.
 EXTERNAL, EMBEDDED PDV and unrestricted CHARACTER STRING universal types
@@ -157,11 +157,12 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 268 chain cases and 37 anchor cases, with one-byte,
+The corpus covers 294 chain cases and 39 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 RDN ordering and string encodings, canonical ECDSA signatures,
 positive serials, SAN/CA Basic Constraints criticality, ENUMERATED minimality,
 RSA parameter rules and leaf Key Usage restrictions,
+OID/RELATIVE-OID component minimality and termination,
 primitive/constructed DER tags and unsupported universal types,
 adjacent links and validity through supplied tails,
 SAN/CN/wildcard boundaries, constructed SAN refusals,

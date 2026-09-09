@@ -110,6 +110,21 @@ def corpus(work):
         anchors.append((name, blob(data), reason))
 
     case("valid", success=True, upstream=1)
+    for kind, name in [(6, "oid"), (13, "relative-oid")]:
+        for label, value, valid in [
+                ("zero", b"\0", True), ("single-octet", b"\x7f", True),
+                ("multi-octet", b"\x81\0", True), ("multiple", b"\0\x81\0\x7f", True),
+                ("large-component", b"\x81" * 12 + b"\0", True),
+                ("empty", b"", False), ("unterminated-zero", b"\x80", False),
+                ("unterminated", b"\x81", False), ("padded", b"\x80\0", False),
+                ("later-padded", b"\0\x80\0", False), ("later-unterminated", b"\0\x81", False)]:
+            case(f"metadata-{name}-{label}", replace_extension(leaf, int_key, 14, tlv(kind, value)),
+                 success=valid, reason="OK" if valid else "DER", upstream=1)
+        case(f"metadata-{name}-constructed", replace_extension(leaf, int_key, 14, tlv(kind | 32, tlv(kind, b"\0"))),
+             reason="DER", upstream=1)
+        bad_root = replace_extension(root, root_key, 14, tlv(kind, b"\x81"))
+        anchor(f"anchor-{name}-unterminated", bad_root, "DER")
+        case(f"trailing-{name}-unterminated", chain=[leaf, intermediate, bad_root], reason="DER", upstream=1)
     for kind in (0, 8, 11, 14, 15, 29):
         for constructed in (False, True):
             value = tlv(kind | (32 if constructed else 0), b"")
