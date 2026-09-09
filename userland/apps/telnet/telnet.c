@@ -93,6 +93,13 @@
 #define SELECT_CP437       "\x1b(U"
 #define SELECT_LATIN1      "\x1b(B"
 
+// SGR 0, which puts the pen back to the terminal's OWN colours: attributes
+// off, foreground and background both default. One parameter resets all
+// three (tty.c), and "default" is the terminal's answer rather than a colour
+// this program picked — so the day os64 lets a person choose their own, this
+// asks for theirs and not for white.
+#define PEN_DEFAULT        "\x1b[0m"
+
 // Exit codes. 0 is a session that ended the way you asked.
 #define TELNET_OK          0
 #define TELNET_USAGE       2
@@ -167,6 +174,17 @@ static void screen_str(const char *s)
     screen(s, os64_strlen(s));
 }
 
+// An escape that only changes how the NEXT byte is drawn leaves the cursor
+// where it was, so it must not be mistaken for output that moved it —
+// `s_at_line_start` is about visible bytes, and the prompt's whole "am I on
+// a fresh row" question is answered from it.
+static void screen_control(const char *s)
+{
+    bool at_line_start = s_at_line_start;
+    screen_str(s);
+    s_at_line_start = at_line_start;
+}
+
 // THE PROMPT OWNS ITS LINE, which is what makes erasing one safe. `\r ESC[K`
 // clears from column zero, so anything else already on that row goes with it —
 // and the peer's bytes end wherever the peer stopped, very often mid-line. So
@@ -187,6 +205,12 @@ static void prompt_draw(void)
 {
     if (!s_at_line_start)
         screen_str("\r\n");
+    // A line the prompt owns, it owns the colours of: escaping out of a
+    // board that paints bright yellow on blue must not leave you typing
+    // commands into bright yellow on blue. `continue` then returns to a
+    // session whose pen is the terminal's default until the peer sets one
+    // again, which a board does with its very next field.
+    screen_control(PEN_DEFAULT);
     screen_str("telnet> ");
     screen(s_cmd, s_cmd_len);
 }
@@ -258,7 +282,7 @@ static void charset_select(bool cp437)
 {
     if (cp437 == s_cp437)
         return;
-    screen_str(cp437 ? SELECT_CP437 : SELECT_LATIN1);
+    screen_control(cp437 ? SELECT_CP437 : SELECT_LATIN1);
     s_cp437 = cp437;
 }
 
@@ -339,6 +363,15 @@ static void disconnect(const char *why)
     // the prompt is ASCII, which both sets agree about — and the way out of
     // the program hands it back.
     raw_release();
+
+    // THE PEN GOES BACK, and before the notice rather than after it. A board
+    // signs off in whatever colours its last screen was using, and without
+    // this that is what draws the line below, the telnet> prompt, and every
+    // command typed in the shell you return to. The character set stays and
+    // the pen does not, because they go wrong differently: a set is a way of
+    // reading bytes nobody is sending any more, and a colour is on the glass
+    // in front of you.
+    screen_control(PEN_DEFAULT);
 
     if (why != NULL)
         notice("Connection closed: %s.", why);
