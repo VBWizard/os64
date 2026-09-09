@@ -61,6 +61,9 @@ State includes the bounded `policy_reason` supplied by the owned validator's
 optional diagnostic callback. The certificate-policy factory provides it;
 fixture factories without a callback report `TLS_POLICY_OK`. It remains
 separate from the terminal status and upstream error and exposes no peer text.
+When that callback reports `TLS_POLICY_LIMIT`, terminal error classification
+returns `TLS_LIMIT` even if BearSSL reports an incomplete or invalid certificate.
+The upstream error remains available in state.
 
 Close stops new plaintext writes, flushes accepted output, and waits for the
 caller to drain already buffered authenticated input before invoking upstream

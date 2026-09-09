@@ -167,6 +167,14 @@ def corpus(work):
         case("metadata-primitive-" + label, replace_extension(leaf, int_key, 14, value), success=True, upstream=1)
     def with_serial(cert, signer, value):
         return mutate(cert, signer, lambda t: t.__setitem__(1, (2, value)))
+    # The issuer's 20-octet profile limit is not a verifier rejection rule.
+    for label, value in [("20-octets", b"\x7f" + bytes(19)), ("21-octets", b"\x01" + bytes(20)),
+                         ("20-padded", b"\0\x80" + bytes(18)), ("21-padded", b"\0\x80" + bytes(19))]:
+        case("serial-" + label, with_serial(leaf, int_key, value), success=True, upstream=1)
+        case("serial-intermediate-" + label, chain=[leaf, with_serial(intermediate, root_key, value)], success=True, upstream=1)
+        serial_root = with_serial(root, root_key, value)
+        anchor("anchor-serial-" + label, serial_root, "OK")
+        case("serial-trailing-" + label, chain=[leaf, intermediate, serial_root], success=True, upstream=1)
     case("serial-zero", with_serial(leaf, int_key, b"\0"), reason="DER", upstream=1)
     case("serial-zero-intermediate", chain=[leaf, with_serial(intermediate, root_key, b"\0")], reason="DER", upstream=1)
     zero_root = with_serial(root, root_key, b"\0")
@@ -402,6 +410,20 @@ def corpus(work):
         case(f"leaf-keycertsign-critical-{critical}",
              replace_extension(leaf, int_key, 15, b"\x03\x02\x02\x84", critical), reason="KEY_USAGE", upstream=1)
     case("leaf-digital-and-crlsign", replace_extension(leaf, int_key, 15, b"\x03\x02\x01\x82"), success=True, upstream=1)
+    # encipherOnly/decipherOnly constrain key agreement, not signature use.
+    for label, encipher, decipher in [("encipher", True, False), ("decipher", False, True), ("both", True, True)]:
+        for agreement in (False, True):
+            for critical in (False, True):
+                label_full = f"{label}-agreement-{agreement}-critical-{critical}"
+                def with_usage(cert, signer, required):
+                    first = required | (8 if agreement else 0) | (1 if encipher else 0)
+                    bits = bytes([7, first, 128]) if decipher else bytes([0, first])
+                    return replace_extension(cert, signer, 15, tlv(3, bits), critical)
+                case("leaf-ku-" + label_full, with_usage(leaf, int_key, 128), success=True, upstream=1)
+                case("intermediate-ku-" + label_full, chain=[leaf, with_usage(intermediate, root_key, 4)], success=True, upstream=1)
+                usage_root = with_usage(root, root_key, 4)
+                anchor("anchor-ku-" + label_full, usage_root, "OK")
+                case("trailing-ku-" + label_full, chain=[leaf, intermediate, usage_root], success=True, upstream=1)
     case("intermediate-ku", chain=[leaf, replace_extension(intermediate, root_key, 15, b"\x03\x02\x07\x80", True)], reason="KEY_USAGE")
     case("intermediate-nonca", chain=[leaf, certificate(int_key, "policy intermediate", root_name, root_key, ca=False, san=None)], reason="CA")
     case("expired", certificate(leaf_key, "example.test", int_name, int_key, dates=(dt.datetime(2020, 1, 1), dt.datetime(2021, 1, 1))))
@@ -412,6 +434,7 @@ def corpus(work):
     case("trailing-restriction-after-trust", chain=[leaf, intermediate, replace_extension(root, root_key, 30, b"\x30\0")], reason="EXTENSION", upstream=1)
     case("trailing-malformed-after-trust", chain=[leaf, intermediate, root + b"\0"], reason="DER", upstream=1)
     case("chain-limit", chain=[leaf, intermediate] + [root] * 7, reason="LIMIT")
+    case("chain-exact-limit", chain=[leaf, intermediate] + [root] * 6, success=True)
     case("certificate-limit", cert=b"\0" * 32769, chain=[b"\0" * 32769], reason="LIMIT")
     for label, data in [("truncated", leaf[:-1]), ("trailing", leaf + b"\0"), ("indefinite", b"\x30\x80" + leaf[4:] + b"\0\0"),
                         ("nonminimal-length", b"\x30\x83\0" + leaf[2:])]:
@@ -481,9 +504,13 @@ def corpus(work):
             case(f"rsa-signature-parameters-{code}-{label}", chain=[tlv(0x30, join(fields))], trust=rsa_root,
                  success=reason == "OK", reason=reason, upstream=1)
     max_cert = replace_extension(rsa_issued, rsa_key, 14, tlv(4, bytes(32000)))
-    max_cert = replace_extension(rsa_issued, rsa_key, 14, tlv(4, bytes(32000 + 32768 - len(max_cert))))
+    padding_length = 32000 + 32768 - len(max_cert)
+    max_cert = replace_extension(rsa_issued, rsa_key, 14, tlv(4, bytes(padding_length)))
     assert len(max_cert) == 32768
     case("certificate-exact-limit", chain=[max_cert], trust=rsa_root, success=True)
+    over_cert = replace_extension(rsa_issued, rsa_key, 14, tlv(4, bytes(padding_length + 1)))
+    assert len(over_cert) == 32769
+    case("certificate-over-limit", chain=[over_cert], trust=rsa_root, reason="LIMIT")
 
     def weak_modulus(tbs):
         spki = split(tbs[6][1])

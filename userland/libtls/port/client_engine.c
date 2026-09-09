@@ -53,8 +53,11 @@ static tls_status hostname_copy(char *out, tls_name name)
     return TLS_OK;
 }
 
-static tls_status classify(int error)
+static tls_status classify(const os64_tls_engine *c, int error)
 {
+    // A policy budget refusal can leave BearSSL with an incomplete certificate.
+    if (c->validator_reason && c->validator_reason(c->validator) == TLS_POLICY_LIMIT)
+        return TLS_LIMIT;
     if (error >= BR_ERR_X509_INVALID_VALUE && error <= BR_ERR_X509_NOT_TRUSTED)
         return TLS_CERTIFICATE;
     if (error == BR_ERR_NO_RANDOM) return TLS_ENTROPY_UNAVAILABLE;
@@ -74,7 +77,7 @@ static unsigned advance(os64_tls_engine *c)
     int error = br_ssl_engine_last_error(&c->client.eng);
     if (error) {
         if (!c->upstream_error) c->upstream_error = error;
-        fail(c, classify(error));
+        fail(c, classify(c, error));
     }
     if (state & (BR_SSL_SENDAPP | BR_SSL_RECVAPP)) c->handshake = true;
     if ((state & BR_SSL_CLOSED) && c->terminal == TLS_OK)
@@ -140,7 +143,7 @@ tls_status os64_tls_engine_create(const tls_engine_config *cfg, os64_tls_engine 
         goto cleanup;
     }
     if (!br_ssl_client_reset(&c->client, c->hostname, 0)) {
-        result = classify(br_ssl_engine_last_error(&c->client.eng));
+        result = classify(c, br_ssl_engine_last_error(&c->client.eng));
         goto cleanup;
     }
     *out = c;
