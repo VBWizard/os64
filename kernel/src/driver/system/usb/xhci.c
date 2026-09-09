@@ -536,14 +536,19 @@ static char hid_usage_ascii(const xhci_hid_t *kbd, uint8_t usage)
 	bool ctrl  = (kbd->mods & KEYBOARD_MOD_CTRL) != 0;
 
 	if (c >= 'a' && c <= 'z') {
-		if (ctrl) {
-			c = (char)(c - 'a' + 1);           // Ctrl+letter -> 0x01..0x1A (EOT & friends)
-		} else if (shift ^ caps) {
+		if (shift ^ caps)
 			c = (char)(c - 'a' + 'A');
-		}
 	} else if (shift && usage < sizeof(s_hid_shift) && s_hid_shift[usage] != 0) {
 		c = s_hid_shift[usage];
 	}
+
+	// Ctrl LAST, on the character the other modifiers settled on, and over
+	// the whole 1963 column rather than the letters alone —
+	// keyboard_has_control_code (keyboard.h) is the shared answer to which
+	// characters have a control code, so the two keyboard dialects cannot
+	// disagree about what Ctrl+] is.
+	if (ctrl && keyboard_has_control_code(c))
+		c = (char)(c & 0x1F);
 	return c;
 }
 
