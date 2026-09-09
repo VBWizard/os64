@@ -74,8 +74,12 @@ static void charset_verify(struct PSF1_FONT *f, uint64_t bytes)
 		if (found[i] != claimed)
 		{
 			wrong++;
-			printd(DEBUG_BOOT, "charset: 0x%02X wants glyph %u, %s holds it at %u\n",
-			       0x80 + i, claimed, FRAMEBUFFER_FONT, found[i]);
+			if (found[i] == OS64_CHARSET_NONE)
+				printd(DEBUG_BOOT, "charset: 0x%02X wants glyph %u, %s no longer carries it\n",
+				       0x80 + i, claimed, FRAMEBUFFER_FONT);
+			else
+				printd(DEBUG_BOOT, "charset: 0x%02X wants glyph %u, %s holds it at %u\n",
+				       0x80 + i, claimed, FRAMEBUFFER_FONT, found[i]);
 		}
 	}
 

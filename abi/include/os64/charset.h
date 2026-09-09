@@ -144,7 +144,14 @@ static inline const uint8_t *os64_charset_glyph(uint8_t byte, uint8_t charset,
     if (entry == OS64_CHARSET_NONE)
         return blank;
     if (entry >= OS64_CHARSET_BUILTIN)
-        return builtin[entry - OS64_CHARSET_BUILTIN];
+    {
+        // The sentinel space is not the face's, which is what caps a face
+        // index at the first 256 glyphs — the shipped face needs no more.
+        // A sentinel past the bitmaps that exist draws blank rather than
+        // reading whatever the linker put after them.
+        uint16_t which = (uint16_t)(entry - OS64_CHARSET_BUILTIN);
+        return which < sizeof(builtin) / sizeof(builtin[0]) ? builtin[which] : blank;
+    }
     return entry < nglyphs ? glyphs + (uint32_t)entry * charsize : blank;
 }
 
