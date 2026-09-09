@@ -585,9 +585,23 @@ void tty_flush_if_dirty(void)
 
 void tty_input_event(const keyboard_event_t *ev)
 {
+	// ONE read of the focused terminal for everything below — the veto, the
+	// knock, the classification and the push. Focus changes between reads
+	// (the switch chord and this path can run from different producers), and
+	// a byte judged for one terminal must not land in another: an ETX let
+	// through as raw data for tty A would arrive as a literal byte in cooked
+	// tty B instead of its SIGINT.
 	tty_t *t = kTTYFocused;
 	if (t == NULL)
 		t = &kTTY[0];
+
+	// The interrupt character is vetoed first, before the knock and the
+	// scrollback snap, exactly as it was when the keyboard driver asked
+	// (console.h: policy lives in console.c, this router only names the
+	// terminal). Consumed means SIGINT is pending on this terminal's
+	// foreground and the byte never enters the ring.
+	if (console_intr_intercept_tty(t, ev->ascii))
+		return;
 
 	// A keystroke on a dormant terminal is not input, it is a KNOCK: swallow
 	// the key and request a shell (kworker answers — see tty_summon_sweep).

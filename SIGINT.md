@@ -252,8 +252,8 @@ collection time was designed, then rejected for v1: more moving parts than the
 gap it covers.)
 
 What shipped instead — the SIGPIPE rail, generalized. The raise is still one
-word-OR at the keystroke (`console_intr_intercept`, console.c, called from
-keyboard.c's delivery choke). The KILL is `raise_terminating_signal_and_die`
+word-OR at the keystroke (`console_intr_intercept_tty`, console.c, asked by
+the tty router as a byte enters a ring). The KILL is `raise_terminating_signal_and_die`
 (syscall.c — born `raise_sigint_and_die`, twin of `raise_sigpipe_and_die`,
 renamed when it grew the HUP/TERM/PIPE ladder): the victim dies in its OWN context, through
 the normal `task_exit` path — free to sleep, safe to close handles, retVal
@@ -406,7 +406,12 @@ because raw mode made them load-bearing:
   hands at a spawn, a wait and a departure; the intercept decides what the
   byte means and whom it is aimed at from one snapshot, and the report
   derives `fg_task`, `mode` and `raw_task` from one, so neither can pair one
-  task's wish with another task's name.
+  task's wish with another task's name. THE SAME FOR THE TERMINAL ITSELF:
+  the keyboard router (`tty_input_event`) reads `kTTYFocused` once and asks
+  the veto, the classification and the push of that one terminal — the
+  driver no longer runs the intercept on its own read of the focus, because
+  a focus change between the two reads let an ETX vetoed as raw data for
+  one terminal land as a literal byte in another that was cooked.
 - A DEAD CHILD HANDS THE CONSOLE TO ITS PARENT when the parent is a live
   foreground program on the same terminal, and to the shell otherwise:
   with the console moving at the spawn, a middleman whose child died

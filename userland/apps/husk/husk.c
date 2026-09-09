@@ -544,7 +544,7 @@ static int read_line(char *buf, int cap)
 		if (c == 0x03)                       // ETX — Ctrl+C at the prompt
 		{
 			// The kernel only lets ETX through as DATA when the shell itself
-			// is foreground (console_intr_intercept) — any other time it
+			// is foreground (console_intr_intercept_tty) — any other time it
 			// becomes a SIGINT and we never see the byte. So this is always
 			// "Ctrl+C at the prompt": kill the half-typed line, say so, and
 			// let main() re-prompt. A keystroke that visibly does nothing

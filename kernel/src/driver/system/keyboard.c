@@ -238,14 +238,16 @@ static void keyboard_emit_event(uint8_t scancode, char ascii, uint8_t modifiers)
 // Alt+F1..F8 and Alt+arrows work identically from either side.
 //
 // GUI side gets BOTH edges (chords and modifier-drags need releases); the
-// text side keeps its press-only console discipline, with one byte vetoed
-// first: console_intr_intercept may CONSUME an ETX (Ctrl+C -> 0x03) as the
-// terminal interrupt character instead of letting it enter the ring as data.
-// On the GUI side Ctrl+C is an ordinary event to the focused window — a
-// terminal's interrupt character belongs to terminals. The POLICY (who is
-// foreground, who gets SIGINT) lives entirely in console.c — this file stays
-// a device driver, exactly the layering SIGINT.md prescribes; gui_owns_glass
-// is a routing predicate, not policy, same standing as tty_input_event.
+// text side keeps its press-only console discipline. An ETX (Ctrl+C ->
+// 0x03) may be CONSUMED as the terminal interrupt character instead of
+// entering the ring as data — that veto belongs to the tty router
+// (tty_input_event), which asks it of the terminal it is about to push
+// into, so the byte and the SIGINT cannot name different terminals. On the
+// GUI side Ctrl+C is an ordinary event to the focused window — a terminal's
+// interrupt character belongs to terminals. The POLICY (who is foreground,
+// who gets SIGINT) lives entirely in console.c — this file stays a device
+// driver, exactly the layering SIGINT.md prescribes; gui_owns_glass is a
+// routing predicate, not policy, same standing as tty_input_event.
 // Last modifier state seen by the choke below — the mouse path's window into
 // the keyboard (see keyboard_current_modifiers in the header for why it is
 // sampled HERE and not from s_modifiers). Written from IRQ context, read from
@@ -284,10 +286,8 @@ void keyboard_deliver_event(char ascii, uint8_t scancode, uint8_t modifiers, boo
         input_inject_key(ascii, scancode, modifiers, pressed);
         return;
     }
-    if (pressed) {
-        if (!console_intr_intercept(ascii))
-            keyboard_emit_event(scancode, ascii, modifiers);
-    }
+    if (pressed)
+        keyboard_emit_event(scancode, ascii, modifiers);
 }
 
 // Decide whether Caps Lock should affect this character.

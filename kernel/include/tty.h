@@ -210,9 +210,12 @@ void tty_write(tty_t *t, const char *bytes, size_t length);
 void tty_flush_if_dirty(void);
 
 // ── Input (called by tty.c's producers and console.c's consumer) ───────────
-// Deliver a translated keystroke to the FOCUSED tty. A dormant tty swallows
-// the key and requests its shell instead; a scrolled-back view snaps to the
-// present first (a keystroke means "I'm done reading history").
+// Deliver a translated keystroke to the FOCUSED tty — read ONCE, and that
+// one terminal answers everything: the interrupt-character veto (a 0x03 on
+// a cooked terminal becomes SIGINT here and never enters the ring), the
+// knock (a dormant tty swallows the key and requests its shell), and the
+// scrollback snap (a scrolled-back view returns to the present first — a
+// keystroke means "I'm done reading history").
 void tty_input_event(const keyboard_event_t *ev);
 bool tty_input_has(tty_t *t);
 bool tty_input_pop(tty_t *t, keyboard_event_t *ev);

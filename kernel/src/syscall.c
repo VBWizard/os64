@@ -1017,7 +1017,7 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // the sentence here used to say it could not), same 128+signo retVal
 // encoding for a waiting parent. The bit
 // is set somewhere the victim is NOT running — at the KEYSTROKE
-// (console_intr_intercept, IRQ path — cat writing a huge file is not reading
+// (console_intr_intercept_tty, IRQ path — cat writing a huge file is not reading
 // the console, so a buffered byte could never work), or by another task
 // writing to /proc/<id>/ctl. The KILL happens here, at the victim's own
 // syscall boundary, in its own context — free to sleep, safe to close handles,

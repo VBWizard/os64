@@ -58,17 +58,21 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline);
 // when the pushback slot is full (bounded, tiny — probes hold at most one).
 bool console_unread(char c);
 
-// The line-discipline peek (the ISIG/VINTR seed): called by keyboard.c at the
-// delivery choke for every key-down, BEFORE the byte enters the console ring.
-// Returns true if the byte was consumed as the interrupt character (ETX/0x03
-// -> SIGINT pending on the foreground task); false means "just data, deliver
-// it". Policy lives HERE, not in keyboard.c — the device layer stays blind to
-// tasks and signals. IRQ-safe on purpose: the raise is one word-OR; the
-// actual kill happens later, at the victim's own syscall boundary.
-bool console_intr_intercept(char ascii);
-// The tty-scoped core (PTY.md): a pty master's write asks on behalf of its
-// SLAVE — the keystroke "happened" on the terminal that window represents.
-// The focused-terminal spelling above is now a wrapper over this.
+// The line-discipline peek (the ISIG/VINTR seed): asked by every producer
+// that pushes into a tty's ring, for the terminal it is about to push into,
+// BEFORE the byte enters. Returns true if the byte was consumed as the
+// interrupt character (ETX/0x03 -> SIGINT pending on that terminal's
+// foreground task); false means "just data, deliver it". Policy lives HERE,
+// not in the keyboard driver — the device layer stays blind to tasks and
+// signals. IRQ-safe on purpose: the raise is one word-OR; the actual kill
+// happens later, at the victim's own syscall boundary.
+//
+// TTY-SCOPED, AND THE CALLER NAMES THE TERMINAL FROM ITS OWN SNAPSHOT: the
+// keyboard router asks for the terminal it read as focused and pushes into
+// that same one (focus can change between two reads of kTTYFocused, and a
+// byte vetoed for one terminal must not land in another); a pty master's
+// write asks on behalf of its SLAVE — the keystroke "happened" on the
+// terminal that window represents (PTY.md).
 struct tty;
 bool console_intr_intercept_tty(struct tty *tty, char ascii);
 

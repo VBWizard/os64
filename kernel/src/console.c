@@ -122,12 +122,6 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	return true;                    // consumed: the byte never enters the ring
 }
 
-// The keyboard's spelling: the keystroke happened on the FOCUSED terminal.
-bool console_intr_intercept(char ascii)
-{
-	return console_intr_intercept_tty(kTTYFocused, ascii);
-}
-
 // The terminal's mode is its foreground's wish, read at the moment of
 // asking. The pointer is read once; a foreground that is dying is replaced
 // in that pointer by its own departure, the same exposure every other
