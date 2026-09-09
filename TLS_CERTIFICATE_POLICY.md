@@ -47,7 +47,8 @@ and intermediate path-length enforcement.
 ## Extension table
 
 Extension OIDs must be unique within a certificate. DER envelopes, lengths,
-OIDs, booleans, integers, and bit strings are checked for canonical encodings.
+OIDs, booleans, INTEGER/ENUMERATED values, and bit strings are checked for
+canonical encodings.
 ECDSA signature BIT STRING contents must be a DER SEQUENCE of two minimally
 encoded, strictly positive INTEGERs with no trailing bytes. RSA signatures
 remain raw signature bytes; BearSSL checks their cryptographic validity.
@@ -68,7 +69,7 @@ ASN.1 schema validator for every informational extension.
 
 | Extension | Rule |
 |---|---|
-| Basic Constraints | Parse CA and pathLen; upstream enforces chain pathLen. Anchors require CA and refuse pathLen. |
+| Basic Constraints | Require critical CA=true in intermediates and anchors; upstream enforces chain pathLen. Anchors refuse pathLen. Leaf Basic Constraints may be critical or noncritical. |
 | Key Usage | Parse canonical named bits; require the role's signing bit when present. |
 | Subject Alternative Name | Validate supported primitive forms; refuse constructed alternatives. Require a matching DNS identity for the leaf. |
 | Extended Key Usage | Nonempty unique OID list; require explicit serverAuth in leaf/intermediates. anyExtendedKeyUsage alone fails. Anchors refuse EKU because the converted anchor would lose it. Critical EKU remains an upstream compatibility refusal. |
@@ -142,10 +143,11 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 210 chain cases and 27 anchor cases, with one-byte,
+The corpus covers 224 chain cases and 30 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 RDN ordering and string encodings, canonical ECDSA signatures,
-positive serials, empty-subject SAN criticality, primitive/constructed DER tags,
+positive serials, SAN/CA Basic Constraints criticality, ENUMERATED minimality,
+primitive/constructed DER tags,
 SAN/CN/wildcard boundaries, constructed SAN refusals,
 leaf/intermediate EKU,
 critical-extension refusals, restrictions after upstream trust success,

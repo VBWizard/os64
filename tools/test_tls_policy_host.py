@@ -110,6 +110,26 @@ def corpus(work):
         anchors.append((name, blob(data), reason))
 
     case("valid", success=True, upstream=1)
+    for label, value, valid in [("zero", b"\0", True), ("one", b"\x01", True),
+                                ("sign-padding", b"\0\x80", True), ("negative", b"\xff", True),
+                                ("empty", b"", False), ("redundant-zero", b"\0\x01", False),
+                                ("redundant-negative", b"\xff\xff", False)]:
+        case("metadata-enumerated-" + label, replace_extension(leaf, int_key, 14, tlv(10, value)),
+             success=valid, reason="OK" if valid else "DER", upstream=1)
+    bad_enum_root = replace_extension(root, root_key, 14, tlv(10, b"\0\x01"))
+    anchor("anchor-enumerated-padding", bad_enum_root, "DER")
+    case("trailing-enumerated-padding", chain=[leaf, intermediate, bad_enum_root], reason="DER", upstream=1)
+    ca_basic = tlv(0x30, b"\x01\x01\xff")
+    for critical in (False, True):
+        ca_cert = replace_extension(intermediate, root_key, 19, ca_basic, critical)
+        case(f"ca-basic-critical-{critical}", chain=[leaf, ca_cert],
+             success=critical, reason="OK" if critical else "CA", upstream=1)
+        ca_root = replace_extension(root, root_key, 19, ca_basic, critical)
+        anchor(f"anchor-basic-critical-{critical}", ca_root, "OK" if critical else "CA")
+        case(f"trailing-basic-critical-{critical}", chain=[leaf, intermediate, ca_root],
+             success=critical, reason="OK" if critical else "CA", upstream=1)
+        case(f"leaf-basic-critical-{critical}", replace_extension(leaf, int_key, 19, b"\x30\0", critical),
+             success=True, upstream=1)
     # Metadata is skipped by BearSSL, but its inner DER still crosses our gate.
     for label, value in [("constructed-bits", bytes.fromhex("2303030100")),
                          ("constructed-octets", bytes.fromhex("24020400")),
