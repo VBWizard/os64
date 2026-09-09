@@ -121,6 +121,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/gziptest",        NULL, 0x621A0000,  0,          "standalone libgzip and safe gzip/gunzip command publication" },
     { "/tests/pngtest",         NULL, 0x90640000,  0,          "standalone libpng: filtered RGBA decode, alpha, CRC and pixel cap" },
     { "/tests/bearssltest",     NULL, 0xBEA20000,  0,          "BearSSL foundation vectors and explicit entropy boundary" },
+    { "/tests/tlstrusttest",    NULL, 0x71570000,  0,          "TLS trust parsing, certificate gate and snapshot replacement" },
     { "/tests/rngprobe",        NULL, 0,           3,          "CPU RNG availability and bounded sampling; not entropy certification" },
     { "/tests/renametest",      NULL, 0x4E4D0000,  0,          "rename policies on ext2 and FAT, plus invalid flags and legacy ABI compatibility" },
     { "/tests/openxtest",        NULL, 0x0EAC7000,  0,          "atomic exclusive create on ext2 and FAT, including contention and full-handle refusal" },

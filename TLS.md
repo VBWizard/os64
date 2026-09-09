@@ -7,6 +7,8 @@ The dependent [private client engine](userland/libtls/CLIENT_ENGINE.md) implemen
 connection ownership and byte transfers, with fixture-key handshake tests.
 The [certificate-policy slice](TLS_CERTIFICATE_POLICY.md) adds bounded DER
 inspection and sealed trust snapshots behind the private validator factory.
+The [trust-store loader](TLS_TRUST_STORE.md) selects and validates complete
+PEM bundles, with a guest `tlstrusttest` fixture for parsing and replacement.
 The public TLS interface is proposed; native HTTPS is not ready. Trust-store
 selection uses the approved configuration and replacement policy below;
 public root-bundle selection and production integration remain open.

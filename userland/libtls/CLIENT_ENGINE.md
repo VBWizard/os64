@@ -6,8 +6,9 @@ review fixes forward before publishing the dependent slice.
 The source here is private: no installed header, shared library, application
 integration, or new kernel/libos64 interface. The
 [certificate-policy factory](../../TLS_CERTIFICATE_POLICY.md) supplies DER trust
-snapshots and the acceptance gate. Trust-bundle loading and the production
-randomness adapter remain required for native HTTPS.
+snapshots and the acceptance gate. The [trust-store loader](../../TLS_TRUST_STORE.md)
+supplies complete PEM snapshots. Production randomness and transport adapters
+remain required for native HTTPS.
 
 ## Profile and ownership
 
