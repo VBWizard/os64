@@ -222,7 +222,7 @@ static tls_policy_reason extensions(span s, unsigned role, const char *hostname,
     if (role && !ca) return TLS_POLICY_CA;
     return !role && !matched ? TLS_POLICY_SAN : TLS_POLICY_OK;
 }
-static bool signature_algorithm(span s)
+static bool signature_algorithm(span s, bool *ecdsa)
 {
     span id, parameter;
     if (!field(&s, 6, &id)) return false;
@@ -231,7 +231,18 @@ static bool signature_algorithm(span s)
     bool ec = OID(id, "\x2a\x86\x48\xce\x3d\x04\x03\x02") ||
         OID(id, "\x2a\x86\x48\xce\x3d\x04\x03\x03") || OID(id, "\x2a\x86\x48\xce\x3d\x04\x03\x04");
     if (rsa && s.length && (!field(&s, 5, &parameter) || parameter.length)) return false;
+    *ecdsa = ec;
     return (rsa || ec) && !s.length;
+}
+static bool ecdsa_signature_valid(span s)
+{
+    span sequence, value;
+    if (!field(&s, 0x30, &sequence) || s.length) return false;
+    // The BIT STRING contains DER here; BearSSL's signature converter also
+    // accepts nonminimal encodings. Keep that leniency outside this profile.
+    for (unsigned i = 0; i < 2; i++)
+        if (!positive(&sequence, &value) || (value.length == 1 && !value.data[0])) return false;
+    return !sequence.length;
 }
 static tls_policy_reason public_key(span s, br_x509_pkey *key)
 {
@@ -296,6 +307,55 @@ static bool der_ordered(span previous, span current)
         if (previous.data[i] != current.data[i]) return previous.data[i] < current.data[i];
     return previous.length <= current.length;
 }
+static bool scalar_valid(unsigned c)
+{
+    // NUL is outside the name profile, even in encodings that can represent it.
+    return c && c <= 0x10ffff && !(c >= 0xd800 && c <= 0xdfff);
+}
+static bool name_string_valid(unsigned tag, span s)
+{
+    if (!s.length) return false;
+    if (tag == 12) {
+        for (size_t i = 0; i < s.length;) {
+            unsigned c = s.data[i++], count = 0, minimum = 0;
+            if (c >= 0xc2 && c <= 0xdf) { count = 1; minimum = 0x80; c &= 31; }
+            else if (c >= 0xe0 && c <= 0xef) { count = 2; minimum = 0x800; c &= 15; }
+            else if (c >= 0xf0 && c <= 0xf4) { count = 3; minimum = 0x10000; c &= 7; }
+            else if (c >= 0x80) return false;
+            if (count > s.length - i) return false;
+            while (count--) {
+                unsigned next = s.data[i++];
+                if ((next & 0xc0) != 0x80) return false;
+                c = (c << 6) | (next & 63);
+            }
+            if (c < minimum || !scalar_valid(c)) return false;
+        }
+        return true;
+    }
+    if (tag == 28 || tag == 30) {
+        unsigned width = tag == 28 ? 4 : 2;
+        if (s.length % width) return false;
+        for (size_t i = 0; i < s.length; i += width) {
+            unsigned c = 0;
+            for (unsigned j = 0; j < width; j++) c = (c << 8) | s.data[i + j];
+            // BMPString uses single BMP characters, not UTF-16 surrogate pairs.
+            if (!scalar_valid(c)) return false;
+        }
+        return true;
+    }
+    if (tag != 18 && tag != 19 && tag != 22 && tag != 26) return false;
+    for (size_t i = 0; i < s.length; i++) {
+        unsigned c = s.data[i];
+        bool digit = c >= '0' && c <= '9';
+        if (tag == 18 && !(digit || c == ' ')) return false;
+        if (tag == 19 && !(digit || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            c == ' ' || c == '\'' || c == '(' || c == ')' || c == '+' || c == ',' ||
+            c == '-' || c == '.' || c == '/' || c == ':' || c == '=' || c == '?')) return false;
+        if (tag == 22 && (!c || c > 127)) return false;
+        if (tag == 26 && (c < 32 || c > 126)) return false;
+    }
+    return true;
+}
 static bool name_valid(span name)
 {
     while (name.length) {
@@ -311,9 +371,7 @@ static bool name_valid(span name)
             if (previous.length && !der_ordered(previous, encoded)) return false;
             previous = encoded;
             if (!field(&attribute, 6, &id) || !take(&attribute, &tag, &value) ||
-                attribute.length || !value.length) return false;
-            if (tag != 12 && tag != 18 && tag != 19 && tag != 20 && tag != 22 && tag != 26 && tag != 28 && tag != 30)
-                return false;
+                attribute.length || !name_string_valid(tag, value)) return false;
         }
     }
     return true;
@@ -329,12 +387,15 @@ tls_policy_reason os64_tls_certificate_inspect(const void *der, size_t length,
     if (!structural(s, 0, &nodes) || !field(&s, 0x30, &cert) || s.length ||
         !field(&cert, 0x30, &tbs) || !field(&cert, 0x30, &outer) ||
         !field(&cert, 3, &v) || cert.length || v.length < 2 || v.data[0]) return TLS_POLICY_DER;
+    span signature = {v.data + 1, v.length - 1};
     // The policy requires v3 because its role and identity rules use extensions.
     span version;
     if (!field(&tbs, 0xa0, &version) || !field(&version, 2, &v) || version.length ||
         v.length != 1 || v.data[0] != 2 || !positive(&tbs, &v) ||
         !field(&tbs, 0x30, &inner)) return TLS_POLICY_DER;
-    if (!equal(inner, outer) || !signature_algorithm(inner)) return TLS_POLICY_SIGNATURE;
+    bool ecdsa;
+    if (!equal(inner, outer) || !signature_algorithm(inner, &ecdsa)) return TLS_POLICY_SIGNATURE;
+    if (ecdsa && !ecdsa_signature_valid(signature)) return TLS_POLICY_DER;
     if (!field(&tbs, 0x30, &issuer) || !issuer.length || !name_valid(issuer) ||
         !field(&tbs, 0x30, &v)) return TLS_POLICY_DER;
     uint64_t before, after;
