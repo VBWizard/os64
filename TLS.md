@@ -3,6 +3,10 @@
 Design and implementation plan, 2026-09-07. This document specifies the library slice of the
 [browser arc](BROWSER.md), its tests, and the prerequisites for native HTTPS.
 The foundation import and test fixture live in [userland/libtls](userland/libtls/README.md).
+The dependent [private client engine](userland/libtls/CLIENT_ENGINE.md) implements
+connection ownership and byte transfers, with fixture-key handshake tests.
+The [certificate-policy slice](TLS_CERTIFICATE_POLICY.md) adds bounded DER
+inspection and sealed trust snapshots behind the private validator factory.
 The public TLS interface is proposed; native HTTPS is not ready. Trust-store
 selection uses the approved configuration and replacement policy below;
 public root-bundle selection and production integration remain open.
@@ -239,12 +243,13 @@ revocation checks. Its name matching permits CN fallback. Extended Key Usage
 Reference equality with that implementation does not prove a browser's
 server-identity policy. See upstream's [X.509 description](https://bearssl.org/x509.html).
 
-For production HTTPS, propose a bounded policy adapter around the upstream
+The private [policy adapter](TLS_CERTIFICATE_POLICY.md) wraps the upstream
 X.509 vtable. It observes certificate bytes while forwarding the original
-chain unchanged, and makes policy failure override upstream success before
-the TLS engine can expose application data. It adds no cryptographic
-primitives. Its DER parsing and policy decisions receive their own tests and
-review; this is a meaningful slice, not incidental glue.
+chain until policy refusal, and makes policy failure override upstream success
+before the TLS engine can expose application data. It adds no cryptographic
+primitives. Its DER parsing and policy decisions have a generated regression
+corpus of signed certificates; review, fuzzing, and production integration
+remain validation gates.
 
 Required policy outcomes:
 
@@ -258,9 +263,9 @@ Required policy outcomes:
   refused by the pinned engine even when serverAuth is present; document that
   compatibility refusal rather than suppressing critical-extension errors.
 - Refuse Name Constraints or other unimplemented restrictive extensions,
-  including noncritical encodings that would otherwise be ignored. Define
-  the handled/rejected extension table and malformed/duplicate-extension
-  behavior in the policy slice before it is enabled for public trust.
+  including noncritical encodings that would otherwise be ignored. The
+  policy slice defines its handled/rejected extension table, rejects duplicate
+  OIDs, and checks bounded DER structure before accepting a certificate.
 - Apply the corresponding checks when loading anchors: converting a
   certificate into a name/public-key pair must not silently discard a scope
   restriction. Initial anchors are explicit, unrestricted CA anchors, not

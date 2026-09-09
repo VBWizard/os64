@@ -1,6 +1,10 @@
-# Private PIC archive for build auditing and bearssltest. No public TLS ABI.
+# Private PIC archive for build auditing and TLS tests. No public TLS ABI.
+# Normal builds compile the client and track its headers; archive extraction
+# leaves unused client objects out of bearssltest.
+TLS_CLIENT_SOURCES := libtls/port/client_engine.c libtls/port/client_profile.c \
+                      libtls/port/certificate_policy.c libtls/port/certificate_der.c
 include libtls/sources.mk
-BEARSSL_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(BEARSSL_SOURCES)) \
+BEARSSL_OBJS := $(patsubst %,$(OBJ)/pic/%.o,$(BEARSSL_SOURCES) $(TLS_CLIENT_SOURCES)) \
                 $(OBJ)/pic/libtls/port/runtime.c.o
 BEARSSL_TEST_OBJ := $(OBJ)/libtls/test/foundation.c.o
 BEARSSL_ARCHIVE := $(OBJ)/libbearssl-foundation.a
