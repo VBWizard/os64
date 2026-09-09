@@ -25,6 +25,11 @@ or relative values, NUL/control bytes, and oversized config/path values refuse
 the load. A bad earlier setting is an error even if a later line overrides it.
 There is no quoting or escaping; spaces inside a path are literal.
 
+Unknown keys are a deliberate departure from the shared reader's tolerant
+behavior: a typo such as `trust_stroe` must not silently select the default
+roots. This trust-selection setting favors a visible refusal over forward
+compatibility with unknown settings; os64 userland is refreshed as one image.
+
 Open the selected PEM bundle once and read it through that handle. The parser
 consumes a bounded stream into a fresh builder, then seals it after clean EOF.
 An open/read/close error, invalid certificate, or malformed suffix discards the
@@ -35,13 +40,25 @@ this is not a global cache or lock-free publication API.
 
 ## Accepted PEM form and limits
 
-Accept ASCII `BEGIN CERTIFICATE` / `END CERTIFICATE` blocks, blank lines, and full
-`#` comment lines outside blocks. Boundaries are complete lines; surrounding
-spaces/tabs are permitted. Line endings are LF or CRLF, with an optional final
-newline. Body lines contain standard Base64 plus spaces/tabs. Require complete
+Accept ASCII `BEGIN CERTIFICATE` / `END CERTIFICATE` blocks. Ignore blank lines
+and explanatory text outside blocks, including `#` comments, certificate names,
+and `=` underline rows in curl's Mozilla-derived `cacert.pem` format.
+[RFC 7468 sections 2 and 5.2](https://www.rfc-editor.org/rfc/rfc7468.html#section-5.2)
+permit explanatory text. After trimming spaces/tabs, lines beginning with `-`
+are reserved for armor: malformed, truncated, unmatched or unsupported armor
+refuses the load, including after a valid certificate. Boundaries are complete
+lines; surrounding spaces/tabs are permitted. Line endings are LF or CRLF,
+with an optional final newline. Body lines contain standard Base64 plus spaces/tabs. Require complete
 quartets, canonical padding/unused bits, matching boundaries, and nonempty
-decoded certificates. Refuse other block types, preambles, nested blocks,
-headers, comments inside blocks, trailing garbage and truncated blocks.
+decoded certificates. Refuse other block types, nested blocks, headers,
+comments or other explanatory text inside blocks, and truncated blocks.
+Control bytes other than the documented whitespace, non-ASCII bytes and size
+violations are refused even in ignored explanatory text. A file containing
+only explanations still fails because it supplies no roots.
+
+This supports curl's outer text format; individual roots still must pass
+`TLS_CERTIFICATE_POLICY.md`. It does not establish that the complete curl or
+Debian root set satisfies that policy.
 
 | Resource | Limit |
 |---|---|
@@ -68,8 +85,8 @@ LeakSanitizer cannot run under tracing, set `ASAN_OPTIONS=detect_leaks=0`.
 Fixture allocation counts independently check owned cleanup.
 
 The host tests compile the real `os64_slurp` reader with injected file I/O.
-They cover malformed text and Base64, read splits from one byte through full
-reads, I/O failures at each byte of a fixture, exact input/config/path/DER caps,
+They cover annotated two-root bundles, malformed armor and Base64, read splits
+from one byte through full reads, I/O failures at each byte of a fixture, exact input/config/path/DER caps,
 config selection and no fallback, allocation and bundle-close failures,
 whole-store replacement, and old-validator lifetime.
 

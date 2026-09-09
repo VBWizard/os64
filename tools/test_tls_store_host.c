@@ -109,9 +109,11 @@ static void reloads(void)
     files[2].fail_at = SIZE_MAX; files[2].fail_close = true;
     assert(os64_tls_trust_reload(&current, &report) == TLS_STORE_IO && current == saved);
     files[2].fail_close = false;
-    char *bad = malloc(files[2].length + 1); assert(bad);
-    memcpy(bad, files[2].bytes, files[2].length); bad[files[2].length] = '!';
-    files[2].bytes = bad; files[2].length++;
+    static const char truncated[] = "-----BEGIN CERTIFICATE-----\n";
+    char *bad = malloc(files[2].length + sizeof truncated - 1); assert(bad);
+    memcpy(bad, files[2].bytes, files[2].length);
+    memcpy(bad + files[2].length, truncated, sizeof truncated - 1);
+    files[2].bytes = bad; files[2].length += sizeof truncated - 1;
     assert(os64_tls_trust_reload(&current, &report) == TLS_STORE_FORMAT && current == saved);
     free(bad); reset(); config_found = true;
     files[0].refuse_open = true;

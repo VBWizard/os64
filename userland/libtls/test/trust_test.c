@@ -56,6 +56,23 @@ int tls_trust_selftest(void (*report)(const char *))
     CHECK(parse(buffer, combined, 37, SIZE_MAX, &store, &detail) == TLS_STORE_OK, "FAIL multiple roots");
     CHECK(detail.certificates == 2 && tls_trust_test_verify(store, false) && tls_trust_test_verify(store, true), "FAIL two-root snapshot");
     os64_tls_trust_free(store); store = NULL;
+    static const char preamble[] = "## CA root bundle\n\nFixture Root A\n==============\n";
+    static const char between[] = "\nFixture Root B\n==============\n";
+    static const char after[] = "\nEnd of explanatory text";
+    const char *parts[] = {preamble, tls_fixture_a_pem, between, tls_fixture_b_pem, after};
+    size_t annotated = 0;
+    for (size_t i = 0; i < sizeof parts / sizeof parts[0]; i++) {
+        size_t n = os64_strlen(parts[i]);
+        os64_memcpy(buffer + annotated, parts[i], n); annotated += n;
+    }
+    for (size_t i = 0; i < sizeof fragments / sizeof fragments[0]; i++) {
+        CHECK(parse(buffer, annotated, fragments[i], SIZE_MAX, &store, &detail) == TLS_STORE_OK, "FAIL annotated PEM");
+        CHECK(detail.certificates == 2 && tls_trust_test_verify(store, false) && tls_trust_test_verify(store, true), "FAIL annotated two-root snapshot");
+        os64_tls_trust_free(store); store = NULL;
+    }
+    for (size_t i = 0; i <= annotated; i++)
+        CHECK(parse(buffer, annotated, 37, i, &store, &detail) == TLS_STORE_IO && !store, "FAIL annotated read error versus EOF");
+    report("PASS trust annotated PEM and complete-stream reads");
     // Convert the fixture's armor and body lines to CRLF with whitespace.
     size_t used = 0;
     for (size_t i = 0; i < tls_fixture_a_pem_length; i++) {
@@ -90,9 +107,24 @@ int tls_trust_selftest(void (*report)(const char *))
     CHECK(parse(tls_fixture_a_pem, tls_fixture_a_pem_length - 10, 7, SIZE_MAX, &store, &detail) == TLS_STORE_FORMAT && !store, "FAIL truncated armor");
     os64_memcpy(buffer, tls_fixture_a_pem, tls_fixture_a_pem_length);
     buffer[tls_fixture_a_pem_length] = '!';
-    CHECK(parse(buffer, tls_fixture_a_pem_length + 1, 7, SIZE_MAX, &store, &detail) == TLS_STORE_FORMAT && !store, "FAIL trailing garbage");
+    CHECK(parse(buffer, tls_fixture_a_pem_length + 1, 7, SIZE_MAX, &store, &detail) == TLS_STORE_OK, "FAIL explanatory suffix");
+    os64_tls_trust_free(store); store = NULL;
+    static const char *bad_suffixes[] = {
+        "-", "----", "-----BEGIN", "-----BEGIN CERTIFICATE----", "-----begin CERTIFICATE-----",
+        "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----",
+        "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+        "-----BEGIN CERTIFICATE-----\nTQ=\n-----END CERTIFICATE-----\n",
+        "-----BEGIN CERTIFICATE-----\nSubject: Fixture Root B\n-----END CERTIFICATE-----\n"
+    };
+    for (size_t i = 0; i < sizeof bad_suffixes / sizeof bad_suffixes[0]; i++) {
+        size_t n = os64_strlen(bad_suffixes[i]);
+        os64_memcpy(buffer + tls_fixture_a_pem_length, bad_suffixes[i], n);
+        CHECK(parse(buffer, tls_fixture_a_pem_length + n, 1, SIZE_MAX, &store, &detail) == TLS_STORE_FORMAT && !store, "FAIL malformed armor after valid root");
+    }
     buffer[tls_fixture_a_pem_length] = 0;
     CHECK(parse(buffer, tls_fixture_a_pem_length + 1, 7, SIZE_MAX, &store, &detail) == TLS_STORE_FORMAT && !store, "FAIL hidden PEM suffix");
+    buffer[tls_fixture_a_pem_length] = (char)0xff;
+    CHECK(parse(buffer, tls_fixture_a_pem_length + 1, 7, SIZE_MAX, &store, &detail) == TLS_STORE_FORMAT && !store, "FAIL non-ASCII explanation");
     for (size_t i = 0; i <= tls_fixture_a_pem_length; i++)
         CHECK(parse(tls_fixture_a_pem, tls_fixture_a_pem_length, 37, i, &store, &detail) == TLS_STORE_IO && !store, "FAIL read error versus EOF");
     report("PASS trust malformed PEM, padding, suffixes and read-error boundaries");

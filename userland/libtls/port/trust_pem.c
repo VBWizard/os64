@@ -58,8 +58,10 @@ static tls_store_status line(pem_workspace *w, os64_tls_trust *store, tls_store_
     while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
     if (!n) return TLS_STORE_OK;
     if (!w->in_certificate) {
-        if (*p == '#') return TLS_STORE_OK;
-        if (!matches(p, n, "-----BEGIN CERTIFICATE-----")) return TLS_STORE_FORMAT;
+        // Explanations outside blocks carry no trust. Reserve hyphen-led lines
+        // for armor so a malformed or truncated extra block cannot be ignored.
+        if (!matches(p, n, "-----BEGIN CERTIFICATE-----"))
+            return *p == '-' ? TLS_STORE_FORMAT : TLS_STORE_OK;
         w->in_certificate = true; w->der_length = 0;
         w->quartet_length = 0; w->padded = false;
         return TLS_STORE_OK;

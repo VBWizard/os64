@@ -295,9 +295,11 @@ The selected bundle replaces the entire store. Do not silently union stores:
 that would make removing trust in a replacement file ineffective.
 
 Load and parse one bounded PEM bundle through the resolved file handle into
-a fresh trust snapshot. Accept certificate blocks, blank lines, and documented
-comment lines; malformed blocks, private-key blocks, trailing garbage, read
-errors, and an empty result fail the load. A bad explicitly selected bundle
+a fresh trust snapshot. Accept certificate blocks and ignore bounded ASCII
+explanatory text outside them, including certificate names and underline rows.
+As specified in TLS_TRUST_STORE.md, hyphen-led lines are reserved for armor;
+malformed/unsupported armor, invalid block contents, control/non-ASCII bytes,
+read errors, and an empty result fail the load. A bad explicitly selected bundle
 does not cause a retry with the default bundle. Report both the selected
 config path, if any, and the bundle path. The resolver can conflate some inaccessible-path
 cases with absence, so do not promise stronger lookup guarantees than it has.
