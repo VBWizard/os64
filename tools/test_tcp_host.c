@@ -13,6 +13,7 @@ static tcp_conn_t* init(void)
 	c->rcv_buf = calloc(1, TCP_RCV_BUF); c->snd_buf = calloc(1, TCP_SND_BUF);
 	kTcpConnList = c; kTicksSinceStart = 100; npackets = 0;
 	disposition = IPV4_TX_SENT; dev.mtu = 1500;
+	cls.currentThread = &test_thread; interrupted = false; sleeps = 0; sleep_hook = NULL;
 	s_tomb_head = s_tomb_tail = NULL; s_tomb_count = 0;
 	memset(&kTcpStats, 0, sizeof(kTcpStats));
 	return c;
@@ -418,10 +419,82 @@ static void test_writer_wake(void)
 	cleanup(c);
 }
 
+static void fill_ring(tcp_conn_t *c)
+{
+	c->snd_count = TCP_SND_BUF;
+	c->snd_nxt = c->snd_max = c->snd_una + TCP_SND_BUF;
+}
+static void wake_room(uint64_t wake, thread_t *self)
+{
+	(void)wake;
+	assert(kTcpConnList->writer == self && !kTcpConnList->lock);
+	kTicksSinceStart++;
+	ack(kTcpConnList, kTcpConnList->snd_una + 7, 65535);
+}
+static void wake_interrupt(uint64_t wake, thread_t *self)
+{
+	assert(kTcpConnList->writer == self && !kTcpConnList->lock);
+	kTicksSinceStart = wake; interrupted = true;
+}
+static void wake_reset(uint64_t wake, thread_t *self)
+{
+	assert(kTcpConnList->writer == self && !kTcpConnList->lock);
+	kTicksSinceStart = wake; kTcpConnList->reset = true;
+}
+static void test_write_deadline(void)
+{
+	unsigned char bytes[40]; for (unsigned i = 0; i < sizeof bytes; i++) bytes[i] = (uint8_t)(i + 1);
+	tcp_conn_t *c = init(); fill_ring(c);
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 100) == TCP_ERR_TIMEOUT);
+	assert(!sleeps && !c->writer && !c->reset && !c->detached && c->snd_count == TCP_SND_BUF);
+	kTicksSinceStart = 0;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 0) == TCP_ERR_TIMEOUT && !sleeps);
+	kTicksSinceStart = 100;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 105) == TCP_ERR_TIMEOUT);
+	assert(sleeps == 1 && last_wake == 105 && !c->writer);
+	sleeps = 0;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 350) == TCP_ERR_TIMEOUT);
+	assert(sleeps == 3 && kTicksSinceStart == 350 && !c->writer);
+	sleeps = 0; kTicksSinceStart = UINT64_MAX - 3;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, UINT64_MAX) == TCP_ERR_TIMEOUT);
+	assert(sleeps == 1 && last_wake == UINT64_MAX && !c->writer);
+	cleanup(c);
+
+	c = init(); c->snd_wnd = 0; c->snd_head = TCP_SND_BUF - 3;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 0) == sizeof bytes);
+	assert(!memcmp(c->snd_buf + TCP_SND_BUF - 3, bytes, 3));
+	assert(!memcmp(c->snd_buf, bytes + 3, sizeof bytes - 3) && !sleeps);
+	cleanup(c);
+
+	c = init(); fill_ring(c); sleep_hook = wake_room;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 150) == 7);
+	assert(sleeps == 1 && !c->writer && !memcmp(c->snd_buf, bytes, 7));
+	cleanup(c);
+	c = init(); fill_ring(c); sleep_hook = wake_room;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, false, 0) == 7 && sleeps == 1);
+	assert(!c->writer); cleanup(c);
+
+	c = init(); fill_ring(c); sleep_hook = wake_interrupt;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 150) == TCP_ERR_INTERRUPTED);
+	assert(!c->writer && !c->reset); cleanup(c);
+	c = init(); fill_ring(c); sleep_hook = wake_reset;
+	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 150) == TCP_ERR_RESET);
+	assert(!c->writer); cleanup(c);
+
+	c = init(); fill_ring(c); sleep_hook = wake_room;
+	assert(tcp_conn_write(c, bytes, 14) == 14 && sleeps == 2 && !c->writer);
+	assert(!memcmp(c->snd_buf, bytes, 14)); cleanup(c);
+	c = init(); c->snd_count = TCP_SND_BUF - 7; c->snd_wnd = 0;
+	sleep_hook = wake_interrupt;
+	assert(tcp_conn_write(c, bytes, 14) == 7 && sleeps == 1 && !c->writer);
+	cleanup(c);
+	puts("TCP write waits: poll, finite expiry, partial/wrapped progress, wake, signal/reset and legacy writes PASS");
+}
+
 int main(void)
 {
 	test_submissions(); test_handshake_reset(); test_lifetime(); test_rto(); test_congestion();
-	test_persist(); test_wrap_fin_window(); test_stream(); test_arp_hold(); test_writer_wake();
+	test_persist(); test_wrap_fin_window(); test_stream(); test_arp_hold(); test_writer_wake(); test_write_deadline();
 	puts("TCP host: submission, lifetime, RTO, congestion, persist, ring/sequence/FIN, ARP-hold, writer-wake tests PASS");
 	return 0;
 }

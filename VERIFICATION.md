@@ -290,6 +290,32 @@ got through, the ledger is what did not, and `orphaned` (a frame the cable
 could not hand back because QEMU's inbound socket was gone) is never zero
 silently.
 
+## TCP write deadline acceptance (2026-09-09)
+
+The [contract and commands](TCP_WRITE_DEADLINE.md) cover `os64_write_for` and
+the `tcpwriteprobe` / `tools/test_tcp_write_peer.py` pair. The host peer holds
+data unread until the guest observes a full-ring poll and a finite timeout,
+then verifies the resumed stream through EOF on the same connection.
+
+The isolated guest used QEMU q35, TCG/qemu64, two CPUs, virtio-net and user
+networking, with a copied ext2 root and freshly built kernel/userland. Its
+disposable `/etc/os64.conf` selected `conf = /etc`; `/etc/crontab` ran the
+probe script with one `@reboot` job under `KWORKER CRON` without `HUSK`.
+This avoids executing a network fixture twice via the two VT shell rc files.
+
+| Check | Result |
+|---|---|
+| ASan/UBSan TCP host suite | Pass; poll, finite and saturated deadlines, wrapped prefixes, ACK wake, interruption/reset cleanup and legacy blocking writes, alongside sender regressions |
+| ASan/UBSan syscall/wrapper fixture | Pass; syscall ABI, handle restrictions, empty input, bounded copy, deadline conversion/overflow, error mapping and cleanup |
+| Strict kernel and userland builds | Pass |
+| Guest stalled-peer probe | Pass; full-ring poll, 100 ms timeout, successful retry; host verified exactly 2,025,800 bytes followed by EOF |
+| Guest boot suites | Pre-boot 30 passed and post-boot 29 passed, zero failures; DHCP and secondary-ext2 cases skipped by their fixture conditions |
+| Copied root after orderly shutdown | `e2fsck -fn` exited 0 |
+
+Host sanitizer runs disabled LeakSanitizer for the ptrace environment;
+ASan/UBSan remained enabled. The guest result covers virtio, with physical
+NIC validation left to the production-machine check.
+
 ## TCP sender refactor acceptance (2026-09-05)
 
 The refactor contract is `TCP_SENDER.md`. These are new runs, independent of

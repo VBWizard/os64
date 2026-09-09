@@ -4,6 +4,13 @@ The 64 KiB ring retains accepted application bytes until cumulative ACK
 retirement. Writes may block for ring space; close queues FIN behind the bytes
 and detaches the handle. All transitions below hold the connection lock.
 
+`os64_write_for` bounds a caller's wait for ring space and returns after
+queueing an available prefix. Its timeout leaves the connection open and
+does not discard accepted bytes or change the protocol timers below.
+`os64_write` retains its blocking fill-the-request behavior. See the
+[write-deadline contract](TCP_WRITE_DEADLINE.md) for polling, short results,
+signal handling and validation commands.
+
 ## Sequence and ownership
 
 - `snd_una` is the oldest unacknowledged sequence unit. The ring head starts

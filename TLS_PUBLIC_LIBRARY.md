@@ -46,10 +46,13 @@ and a guest consumer compiled against the public header and shared library.
 pre-authentication plaintext refusal and sticky aborts. A controlled host TLS
 peer exercises the public wrappers across authenticated application traffic.
 
-The TCP API has finite read waits but no bounded write operation. TCP deadline
-support, the transport driver, public-root distribution and HTTPS integration
-remain separate work. This library makes the byte API usable without claiming
-that an os64 application can yet make a bounded native HTTPS request.
+The TCP API provides finite read waits and the separate
+[timed-write operation](TCP_WRITE_DEADLINE.md). The transport driver must
+combine them with a total operation budget and retain pending ciphertext
+across short writes. That driver, public-root distribution and HTTPS
+integration remain separate work. This library makes the byte API usable
+without claiming that an os64 application can yet make a bounded native
+HTTPS request.
 
 Run `python3 tools/audit_tls.py` for the public ELF boundary and
 `python3 tools/audit_bearssl.py` for the private foundation boundary.

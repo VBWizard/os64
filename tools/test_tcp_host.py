@@ -34,7 +34,13 @@ s+=re.search(r"typedef enum\s*\{[^}]+\} ipv4_tx_t;", (r/"kernel/include/driver/n
 s+='''
 static uint64_t kTicksSinceStart;
 static uint32_t kNetIPv4Address=0x0a00020f;
+static uint32_t random_u32(void) { return 0x12345678; }
 static core_local_storage_t cls;
+static thread_t test_thread;
+static bool interrupted;
+static unsigned sleeps;
+static uint64_t last_wake;
+static void (*sleep_hook)(uint64_t, thread_t *);
 static core_local_storage_t *get_core_local_storage(void) { return &cls; }
 static void spinlock_acquire(spinlock_t *l) { assert(!*l); *l=1; }
 static void spinlock_release(spinlock_t *l) { assert(*l); *l=0; }
@@ -42,8 +48,12 @@ static uint64_t spinlock_acquire_irqsave(spinlock_t *l) { spinlock_acquire(l); r
 static void spinlock_release_irqrestore(spinlock_t *l,uint64_t f) { (void)f; spinlock_release(l); }
 static void *kmalloc(size_t n) { return calloc(1,n); }
 static void kfree(void *p) { free(p); }
-static bool signal_park_must_end(thread_t *t) { (void)t; return false; }
-static void signal_raise(int s,uint64_t w,thread_t *t) { (void)s;(void)t;kTicksSinceStart=w; }
+static bool signal_park_must_end(thread_t *t) { (void)t; return interrupted; }
+static void signal_raise(int s,uint64_t w,thread_t *t) {
+ (void)s; assert(++sleeps < 16); last_wake=w; t->threadState=THREAD_STATE_ISLEEP;
+ if (sleep_hook) sleep_hook(w,t); else kTicksSinceStart=w;
+ t->threadState=0;
+}
 static void scheduler_wake_isleep_thread_locked(thread_t *t) { (void)t; }
 static void scheduler_wake_isleep_thread(thread_t *t) { (void)t; }
 static void nap(unsigned n) { kTicksSinceStart+=n; }

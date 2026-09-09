@@ -39,8 +39,8 @@ kernel or add a general cryptographic API to libos64 as part of this port.
 | Area | Evidence and consequence |
 |---|---|
 | Shared libraries | `userland/GNUmakefile` builds PIC `libos64.so`, `libgzip.so`, and `libpng.so`, with selective app dependencies, prelink slots, debug symbols, and header dependencies. Follow that machinery. |
-| Transport | `os64_dial`, `os64_read_for`, `os64_write`, and `os64_close` operate on ordinary handles. A finite read timeout is distinct from EOF. There is no timed-write API in the inspected public interface. |
-| TCP progress | A TLS transport deadline requires bounded writes even when the TCP send queue is full. Verify this property against the merged transport interface before integration. |
+| Transport | `os64_dial`, `os64_read_for`, `os64_write_for`, and `os64_close` provide handle I/O for a TCP adapter. Finite read/write timeouts are distinct from EOF; the legacy `os64_write` still has no caller deadline. |
+| TCP progress | `os64_write_for` bounds the wait for TCP ring space and returns an available queued prefix. The adapter must retain its suffix and enforce its total budget across calls. See [TCP write deadlines](TCP_WRITE_DEADLINE.md). |
 | Time | `os64_time()` supplies signed UTC epoch seconds. `os64_ticks()` supplies monotonic ticks and their rate. Certificate dates and deadlines use different clocks. |
 | Randomness | The production adapter reads `/dev/random`; an unseeded service refuses with `-1`. A CPUID feature bit does not establish service readiness. |
 | Configuration | `os64_conf_find()` / `os64_conf_find_from()` resolve basenames along the configured ladder. `kernel/src/conf.c` rejects slashes in the requested name. Reuse the ladder for `tls.conf`, not a nested certificate path. |
@@ -400,20 +400,20 @@ Use checked counters and report LIMIT rather than malformed input for a valid
 but over-budget chain. Allocate fixed certificate-policy scratch at creation.
 Exact memory and stack budgets must be measured with the pinned build.
 
-### The TCP limitation that a wrapper cannot fix
+### Bounded TCP progress
 
-`os64_read_for()` supports finite waits, but `os64_write()` has no caller
-deadline. The sender refactor improves throughput without eliminating a
-blocked full-ring write; the inspected contract permits owned persist state
-without an overall lifetime bound. A read timeout around that call cannot
-provide an end-to-end handshake deadline.
+`os64_read_for()` and the TCP-only `os64_write_for()` provide finite waits.
+The [write-deadline contract](TCP_WRITE_DEADLINE.md) returns an available
+queued prefix and leaves the connection open on timeout. The legacy
+`os64_write()` has no caller deadline, and owned TCP persist state has no
+overall lifetime bound; a transport adapter must use the timed operation.
 
-The engine and its host driver can meet strict cancellation/deadline tests.
-A production single-threaded os64 transport adapter needs an existing or
-separately reviewed write-progress mechanism with bounded waits. Recheck
-merged APIs at integration time; do not assume a send-window merge alone
-satisfies this requirement. Do not add an ad hoc writer thread that shares
-the engine or races handle close to simulate cancellation.
+The adapter owns one total budget across reads, writes and engine progress.
+Ready ring space may produce a successful write even after its wait deadline,
+so the adapter must check its own clock between calls. Kernel waits do not
+bound scheduling latency or copying/submission work. Do not add an ad hoc
+writer thread that shares the engine or races handle close to simulate
+cancellation.
 
 Adapter byte ownership is explicit: a ciphertext chunk taken from the engine
 stays in one bounded pending-output buffer until fully written. A short write

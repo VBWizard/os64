@@ -16,6 +16,12 @@ int64_t os64_write(int32_t handle, const void *buf, size_t len)
                                (uint64_t)buf, (uint64_t)len);
 }
 
+int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t timeout_ms)
+{
+    return (long)os64_syscall4(SYSCALL_WRITE_FOR, (uint64_t)handle,
+                             (uint64_t)buf, (uint64_t)len, timeout_ms);
+}
+
 int64_t os64_read(int32_t handle, void *buf, size_t len)
 {
     // The explicit OS64_WAIT_FOREVER is load-bearing: arg3 is the read's

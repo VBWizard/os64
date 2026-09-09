@@ -38,6 +38,15 @@
 #define SYSCALL_STAT       23
 #define SYSCALL_REAP       24
 
+// write_for(handle, buf, len, timeout_ms): TCP-only, returns an available
+// queued prefix. 0 polls, finite milliseconds bound the wait for ring space,
+// OS64_WAIT_FOREVER waits for initial progress. Expiry without room returns
+// OS64_ERR_TIMEOUT; queued bytes remain TCP's responsibility and the handle
+// stays open.
+// Other handle types are refused. A valid TCP handle accepts len=0/NULL buf.
+// Separate from WRITE: old three-argument binaries keep their existing ABI.
+#define SYSCALL_WRITE_FOR 55
+
 // ── read's patience: the 4th argument (ruled 2026-08-05) ────────────────────
 // read(handle, buf, len, timeout_ms) — arg3 says how long the call may WAIT
 // for a byte to exist, in milliseconds, and it means what it says:

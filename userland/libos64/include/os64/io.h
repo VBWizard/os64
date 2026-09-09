@@ -23,6 +23,15 @@
 // negative value on error (the in-band status half of the ABI; no errno).
 int64_t os64_write(int32_t handle, const void *buf, size_t len);
 
+// TCP-only write of an available prefix, queued rather than acknowledged.
+// 0 polls, finite ms bound the wait for room (rounded up to a tick), and
+// OS64_WAIT_FOREVER waits for initial progress. Ready room precedes timeout.
+// Returns a positive prefix, OS64_ERR_TIMEOUT if no room by the deadline,
+// or another write error. Retain the suffix; timeout does not close/reset.
+// Large requests may return short without waiting. Empty input returns 0
+// on a valid TCP handle (NULL buffer allowed); other handle types return -1.
+int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t timeout_ms);
+
 // Read up to `len` bytes from `handle` into `buf`. Blocks until at least one
 // byte is available, then returns the count read (>= 1), or negative on error.
 // handle 0 (stdin) reads the console keyboard — UNLESS the shell redirected it
