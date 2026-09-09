@@ -428,7 +428,14 @@ terminal is, so obeying the move without the restore strands the cursor at
 the foot of the glass, which is worse than ignoring both. A relative move
 clamps at the edge and never scrolls — a terminal that scrolled to answer
 that probe would throw away a screen of output to describe its own size.
-Everything else is consumed and ignored, which
+**`ESC[2J` CLEARS AND HOMES; `ESC[0J` and `ESC[1J` clear and do not** — the
+partial erases are DEFINED by the cursor ("from here down", "from the top to
+here"), so moving it would answer a different question, while the full erase
+has no relationship to the position at all. Homing it is ANSI.SYS's
+behaviour and therefore what every DOS-era ANSI program expects: they clear
+and start painting, and a terminal that left the cursor alone puts their
+first line wherever the previous program stopped. Everything else is
+consumed and ignored, which
 is what every terminal does: printing the bytes of an unknown sequence
 spills its parameters across the screen, and logging them floods the log the
 first time a program with better taste in terminals runs.

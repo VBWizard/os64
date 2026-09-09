@@ -417,14 +417,35 @@ static void tty_apply_locked(tty_t *t, const ansi_action_t *a, bool *glass)
 		uint16_t mode = a->nparams > 0 ? a->params[0] : 0;
 		if (mode > 2)
 			return;   // unsupported ED modes must not fall back to ED0
-		// ED DOES NOT MOVE THE CURSOR. `clear` sends `ESC[2J` and then
-		// `ESC[H` precisely because the first does not imply the second,
-		// and a terminal that homed the cursor on its own would put the
-		// next line of output somewhere the program did not ask for.
+		// ED 2 HOMES THE CURSOR; ED 0 AND ED 1 DO NOT, AND CANNOT.
+		//
+		// The two partial erases are DEFINED BY the cursor — "from here to
+		// the end", "from the top to here" — so it is their argument, and a
+		// terminal that moved it would be answering a different question
+		// than the one asked. ED 2 has no relationship to the cursor at all:
+		// it erases everything wherever the cursor is, so there is nothing
+		// about the position for it to preserve, and it is the only mode
+		// where homing is even a coherent thing to add.
+		//
+		// It is added because ANSI.SYS did it, and ANSI.SYS is the terminal
+		// every DOS-era ANSI program was written against — which is the
+		// whole corpus this terminal grew CP437 and the relative moves to
+		// draw. Those programs clear the screen and start painting, and a
+		// terminal that left the cursor where it was puts their first line
+		// wherever the last program happened to stop. Legend of the Red
+		// Dragon's title screen landed in the bottom third of the glass, in
+		// a different place each time depending on which menu you arrived
+		// from, which is the fingerprint of exactly this.
+		//
+		// It costs os64's own callers nothing: `clear` sends `ESC[2J` and
+		// then `ESC[H`, so the home it already asked for is merely arriving
+		// twice.
 		if (mode == 2)
 		{
 			for (uint32_t r = 0; r < t->rows; r++)
 				tty_erase_span(t, tty_row_line(t, r), 0, t->cols);
+			t->cur_row = 0;
+			t->cur_col = 0;
 		}
 		else if (mode == 1)
 		{

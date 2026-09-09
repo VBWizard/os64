@@ -73,8 +73,19 @@ int main(void)
     check(t.cur_row == 1 && t.cur_col == 2, "unsupported erase moved cursor");
     feed(&t, "\033[1;2H\033[1K");
     check(!cells[0].ch && !cells[1].ch && cells[2].ch == 'C', "EL1 span");
+    // ED 2 CLEARS AND HOMES, the way ANSI.SYS did — a DOS-era program clears
+    // and starts painting, and a terminal that left the cursor alone puts its
+    // first line wherever the last program stopped.
     feed(&t, "\033[2J");
-    check(!cells[2].ch && t.cur_col == 1, "ED2 must erase without homing");
+    check(!cells[2].ch && t.cur_row == 0 && t.cur_col == 0,
+          "ED2 must erase the screen and home the cursor");
+
+    // ...and the PARTIAL erases must not, because the cursor is what they are
+    // defined by. Moving it would answer a different question than the asked.
+    feed(&t, "\033[2;3HAB\033[0J");
+    check(t.cur_row == 1 && t.cur_col == 4, "ED0 must not move the cursor");
+    feed(&t, "\033[2;3H\033[1J");
+    check(t.cur_row == 1 && t.cur_col == 2, "ED1 must not move the cursor");
 
     feed(&t, "\033[H\033[31;44;7mX");
     s_have_ptr = false;
