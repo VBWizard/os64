@@ -58,7 +58,9 @@ caller to drain already buffered authenticated input before invoking upstream
 closure. After closure starts, subsequently arriving application records use
 BearSSL's discard semantics. Closing during the initial handshake cancels it.
 Transport EOF forbids further ciphertext input and plaintext writes; buffered
-authenticated plaintext and pending output can drain. A peer close reply can
+authenticated plaintext and pending output can drain. Accepted plaintext is
+flushed into ciphertext before truncation is reported, including when the
+caller has not explicitly flushed it. A peer close reply can
 finish cleanly after EOF; a bare FIN or incomplete record yields truncation.
 Terminal errors are sticky, including across a later abort. Fatal-alert output
 may be drained when upstream supplies it; abort disables all I/O.
@@ -96,7 +98,8 @@ The fixtures cover:
   leap-day conversion, allocation/factory/entropy failures, and wiped cleanup
   checks. Two interleaved connections must remain independent when one aborts.
 - Certificate refusal, damaged authenticated records, bare EOF with buffered
-  plaintext, partial-record EOF, EOF with a pending close reply, cancellation,
+  input and unflushed output, partial-record EOF, EOF with a pending close
+  reply, cancellation,
   and sticky transport/timeout errors.
 
 Build the port sources through the existing private freestanding PIC build

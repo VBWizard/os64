@@ -12,6 +12,8 @@ struct os64_tls_trust {
 typedef struct {
     const br_x509_class *vtable;
     br_x509_minimal_context minimal;
+    // No anchors: keep checking the supplied chain past the trusted prefix.
+    br_x509_minimal_context full_chain;
     os64_tls_trust *trust;
     char hostname[254];
     unsigned char certificate[TLS_CERTIFICATE_MAX];
@@ -109,6 +111,7 @@ static void start_chain(const br_x509_class **ctx, const char *hostname)
             if (hostname[i] != v->hostname[i]) { reject(v, TLS_POLICY_SAN); break; }
     }
     v->minimal.vtable->start_chain(&v->minimal.vtable, v->hostname);
+    v->full_chain.vtable->start_chain(&v->full_chain.vtable, v->hostname);
 }
 static void start_cert(const br_x509_class **ctx, uint32_t length)
 {
@@ -120,6 +123,7 @@ static void start_cert(const br_x509_class **ctx, uint32_t length)
     else { v->count++; v->total += length; }
     if (!length) reject(v, TLS_POLICY_DER);
     v->minimal.vtable->start_cert(&v->minimal.vtable, length);
+    v->full_chain.vtable->start_cert(&v->full_chain.vtable, length);
 }
 static void append(const br_x509_class **ctx, const unsigned char *data, size_t length)
 {
@@ -130,6 +134,7 @@ static void append(const br_x509_class **ctx, const unsigned char *data, size_t 
     os64_memcpy(v->certificate + v->received, data, length);
     v->received += length;
     v->minimal.vtable->append(&v->minimal.vtable, data, length);
+    v->full_chain.vtable->append(&v->full_chain.vtable, data, length);
 }
 static void end_cert(const br_x509_class **ctx)
 {
@@ -143,6 +148,7 @@ static void end_cert(const br_x509_class **ctx)
             v->count == 1 ? 0 : 1, v->hostname, &view));
     }
     v->minimal.vtable->end_cert(&v->minimal.vtable);
+    v->full_chain.vtable->end_cert(&v->full_chain.vtable);
 }
 static unsigned end_chain(const br_x509_class **ctx)
 {
@@ -150,6 +156,11 @@ static unsigned end_chain(const br_x509_class **ctx)
     if (!v->ended) {
         if (!v->started || v->in_cert || !v->count) reject(v, TLS_POLICY_SEQUENCE);
         v->result.upstream_error = v->minimal.vtable->end_chain(&v->minimal.vtable);
+        unsigned full_error = v->full_chain.vtable->end_chain(&v->full_chain.vtable);
+        // NOT_TRUSTED is the expected completion of the anchor-free check;
+        // authentication still requires success from the snapshot-backed one.
+        if (!v->result.upstream_error && full_error != BR_ERR_X509_NOT_TRUSTED)
+            v->result.upstream_error = full_error ? full_error : BR_ERR_X509_NOT_TRUSTED;
         v->ended = true;
     }
     v->accepted = v->result.reason == TLS_POLICY_OK && !v->result.upstream_error;
@@ -168,6 +179,18 @@ static const br_x509_pkey *get_pkey(const br_x509_class *const *ctx, unsigned *u
 static const br_x509_class policy_vtable = {
     sizeof(policy_validator), start_chain, start_cert, append, end_cert, end_chain, get_pkey
 };
+static void minimal_init(br_x509_minimal_context *m, const br_x509_trust_anchor *anchors,
+                         size_t count, uint32_t days, uint32_t seconds)
+{
+    br_x509_minimal_init(m, &br_sha256_vtable, anchors, count);
+    br_x509_minimal_set_rsa(m, br_rsa_i31_pkcs1_vrfy);
+    br_x509_minimal_set_ecdsa(m, &br_ec_all_m31, br_ecdsa_i31_vrfy_asn1);
+    br_x509_minimal_set_minrsa(m, 256);
+    br_x509_minimal_set_hash(m, br_sha256_ID, &br_sha256_vtable);
+    br_x509_minimal_set_hash(m, br_sha384_ID, &br_sha384_vtable);
+    br_x509_minimal_set_hash(m, br_sha512_ID, &br_sha512_vtable);
+    br_x509_minimal_set_time(m, days, seconds);
+}
 static tls_status create(void *context, const char *hostname, uint32_t days,
                          uint32_t seconds, const br_x509_class ***out)
 {
@@ -184,14 +207,8 @@ static tls_status create(void *context, const char *hostname, uint32_t days,
     if (!retain(store)) { os64_free(v); return TLS_LIMIT; }
     v->trust = store; v->vtable = &policy_vtable;
     os64_memcpy(v->hostname, hostname, os64_strlen(hostname) + 1);
-    br_x509_minimal_init(&v->minimal, &br_sha256_vtable, store->anchors, store->count);
-    br_x509_minimal_set_rsa(&v->minimal, br_rsa_i31_pkcs1_vrfy);
-    br_x509_minimal_set_ecdsa(&v->minimal, &br_ec_all_m31, br_ecdsa_i31_vrfy_asn1);
-    br_x509_minimal_set_minrsa(&v->minimal, 256);
-    br_x509_minimal_set_hash(&v->minimal, br_sha256_ID, &br_sha256_vtable);
-    br_x509_minimal_set_hash(&v->minimal, br_sha384_ID, &br_sha384_vtable);
-    br_x509_minimal_set_hash(&v->minimal, br_sha512_ID, &br_sha512_vtable);
-    br_x509_minimal_set_time(&v->minimal, days, seconds);
+    minimal_init(&v->minimal, store->anchors, store->count, days, seconds);
+    minimal_init(&v->full_chain, NULL, 0, days, seconds);
     *out = &v->vtable;
     return TLS_OK;
 }

@@ -69,6 +69,9 @@ static bool structural(span s, unsigned depth, unsigned *nodes)
         if (++*nodes > 4096 || !take(&s, &tag, &v)) return false;
         if ((tag & 0xc0) == 0) {
             unsigned kind = tag & 31;
+            // EXTERNAL, EMBEDDED PDV and unrestricted CHARACTER STRING need
+            // constructed schemas outside this certificate subset.
+            if (kind == 8 || kind == 11 || kind == 29) return false;
             if (((kind == 16 || kind == 17) != !!(tag & 32))) return false;
             if ((kind == 1 && (v.length != 1 || (v.data[0] != 0 && v.data[0] != 255))) ||
                 ((kind == 2 || kind == 10) && !integer_valid(v)) || (kind == 3 && !bits_valid(v)) ||

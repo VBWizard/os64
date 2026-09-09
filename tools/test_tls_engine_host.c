@@ -344,6 +344,41 @@ static void peer_close_at_eof(void)
     disconnect_fixture(c);
 }
 
+static void pending_plaintext_at_eof(bool buffered_input)
+{
+    connection *c = connect_fixture(0xc02b, 1, false); handshake(c);
+    if (buffered_input) { server_message(c); await_plain(c); }
+    tls_transfer r = os64_tls_engine_write(c->client, "final", 5);
+    assert(r.status == TLS_OK && r.transferred == 5);
+    assert(!(os64_tls_engine_state(c->client).flags & TLS_SEND_CIPHER));
+    assert(os64_tls_engine_eof(c->client) == TLS_OK);
+    assert(os64_tls_engine_eof(c->client) == TLS_OK);
+    assert(!(os64_tls_engine_state(c->client).flags & (TLS_SEND_PLAIN | TLS_RECV_CIPHER)));
+    assert(!os64_tls_engine_write(c->client, "x", 1).transferred);
+    assert(!os64_tls_engine_feed(c->client, "x", 1).transferred);
+    if (buffered_input) {
+        unsigned char got[5];
+        r = os64_tls_engine_read(c->client, got, sizeof got);
+        assert(r.status == TLS_OK && r.transferred == 5 && !memcmp(got, "hello", 5));
+    }
+    size_t received = 0;
+    for (unsigned i = 0; i < 10000 && received < 5; i++) {
+        size_t progress = pump(c), n;
+        unsigned char *p = br_ssl_engine_recvapp_buf(&c->server.eng, &n);
+        if (p && n) {
+            assert(received + n <= 5 && !memcmp(p, "final" + received, n));
+            br_ssl_engine_recvapp_ack(&c->server.eng, n);
+            received += n; progress += n;
+        }
+        assert(progress);
+    }
+    assert(received == 5);
+    assert(os64_tls_engine_state(c->client).status == TLS_TRUNCATED);
+    assert(os64_tls_engine_eof(c->client) == TLS_TRUNCATED);
+    assert(os64_tls_engine_flush(c->client) == TLS_TRUNCATED);
+    disconnect_fixture(c);
+}
+
 static void partial_record_and_abort(void)
 {
     connection *c = connect_fixture(0xc02b, 17, false); handshake(c);
@@ -426,9 +461,11 @@ int main(void)
     assert(os64_tls_engine_close(c->client) == TLS_CANCELLED);
     assert(os64_tls_engine_take(c->client, got, sizeof got).transferred == 0);
     disconnect_fixture(c);
+    pending_plaintext_at_eof(false); pending_plaintext_at_eof(true);
     peer_close_at_eof(); partial_record_and_abort(); independent_connections();
     assert(allocations == frees && factory_destroys > 0);
     puts("PASS certificate refusal, authenticated drain before truncation, damaged records, and cancellation");
     puts("PASS EOF with pending close reply, partial record EOF, sticky abort, and interleaved connection ownership");
+    puts("PASS EOF flushes accepted plaintext with and without buffered input before truncation");
     return 0;
 }
