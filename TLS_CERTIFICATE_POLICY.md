@@ -29,8 +29,14 @@ The leaf must contain a matching DNS SAN. DNS names use ASCII labels of 1–63
 characters and a maximum total length of 253. Wildcards occupy a complete
 leftmost label and match one label. CN does not supply identity. There is no
 public suffix database or IP identity support. Non-DNS GeneralNames do not
-supply identity; malformed DNS names refuse the certificate even if a sibling
-name matches. The leaf cannot be a CA; intermediates must be CAs. Key Usage,
+supply identity. Primitive email/URI names have nonempty ASCII/NUL checks,
+IP names require 4 or 16 bytes, and registered IDs require a valid OID encoding.
+Constructed alternatives (`otherName`, `x400Address`, `directoryName`, and
+`ediPartyName`) are refused, including well-formed ones: this DNS profile does
+not implement their schemas. This restriction applies to leaves, intermediates,
+anchors and certificates supplied after upstream reaches trust. A matching DNS
+name cannot rescue a malformed DNS name or an unsupported alternative.
+The leaf cannot be a CA; intermediates must be CAs. Key Usage,
 when present, requires digitalSignature in the leaf and keyCertSign in CAs.
 BearSSL remains responsible for signatures, chain links, validity periods,
 and intermediate path-length enforcement.
@@ -46,7 +52,7 @@ ASN.1 schema validator for every informational extension.
 |---|---|
 | Basic Constraints | Parse CA and pathLen; upstream enforces chain pathLen. Anchors require CA and refuse pathLen. |
 | Key Usage | Parse canonical named bits; require the role's signing bit when present. |
-| Subject Alternative Name | Parse GeneralNames; require a matching DNS identity for the leaf. |
+| Subject Alternative Name | Validate supported primitive forms; refuse constructed alternatives. Require a matching DNS identity for the leaf. |
 | Extended Key Usage | Nonempty unique OID list; require explicit serverAuth in leaf/intermediates. anyExtendedKeyUsage alone fails. Anchors refuse EKU because the converted anchor would lose it. Critical EKU remains an upstream compatibility refusal. |
 | Subject/Authority Key Identifier | Accept noncritical metadata. |
 | Authority/Subject Information Access | Accept noncritical metadata; no fetching. |
@@ -118,10 +124,11 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 94 chain cases and 16 anchor cases, with one-byte,
+The corpus covers 121 chain cases and 20 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
-SAN/CN/wildcard boundaries, leaf/intermediate EKU, critical-extension refusals,
-restrictions after upstream trust success, signature/date/pathLen failures,
+SAN/CN/wildcard boundaries, constructed SAN refusals, leaf/intermediate EKU,
+critical-extension refusals, restrictions after upstream trust success,
+signature/date/pathLen failures,
 RSA sizes from 1024 to 4097 bits, invalid EC points, malformed DER, duplicate
 extensions, and resource limits. Each proper prefix of a valid leaf is refused.
 Direct upstream comparisons demonstrate otherwise accepted policy negatives.

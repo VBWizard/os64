@@ -177,6 +177,31 @@ def corpus(work):
         case("san-" + label, replace_extension(leaf, int_key, 17, tlv(0x30, tlv(0x82, name))), reason="SAN")
     case("ip-san", replace_extension(leaf, int_key, 17, tlv(0x30, tlv(0x87, bytes([127, 0, 0, 1])))), reason="SAN")
     case("non-dns-plus-dns", replace_extension(leaf, int_key, 17, tlv(0x30, tlv(0x86, b"https://example.test") + tlv(0x82, b"example.test"))), success=True)
+    dns_name = tlv(0x82, b"example.test")
+    constructed_names = [
+        ("otherName", 0xa0, tlv(6, b"\x2a\x03") + tlv(0xa0, tlv(12, b"fixture"))),
+        ("x400Address", 0xa3, tlv(0x30, b"")),
+        ("directoryName", 0xa4, tlv(0x30, tlv(0x31, tlv(0x30, tlv(6, b"\x55\x04\x03") + tlv(12, b"fixture"))))),
+        ("ediPartyName", 0xa5, tlv(0xa1, tlv(12, b"fixture"))),
+    ]
+    for label, tag, encoded in constructed_names:
+        for shape, value in [("empty", b""), ("wrong-schema", b"\x05\0")]:
+            for first in (False, True):
+                alternative = tlv(tag, value)
+                names = alternative + dns_name if first else dns_name + alternative
+                case(f"san-{label}-{shape}-first-{first}", replace_extension(leaf, int_key, 17, tlv(0x30, names)),
+                     reason="SAN", upstream=int(tag != 0xa0))
+        # Even well-formed constructed alternatives are outside this DNS profile.
+        case("san-unsupported-" + label, replace_extension(leaf, int_key, 17,
+             tlv(0x30, dns_name + tlv(tag, encoded))), reason="SAN", upstream=1)
+        restricted_root = replace_extension(root, root_key, 17, tlv(0x30, tlv(tag, b"")))
+        case("san-trailing-after-trust-" + label, chain=[leaf, intermediate, restricted_root], reason="SAN", upstream=1)
+        anchor("anchor-san-" + label, restricted_root, "SAN")
+    for label, alternative in [("email", tlv(0x81, b"user@example.test")),
+                               ("ip", tlv(0x87, bytes([127, 0, 0, 1]))),
+                               ("registered-id", tlv(0x88, b"\x2a\x03"))]:
+        case("san-primitive-plus-dns-" + label, replace_extension(leaf, int_key, 17,
+             tlv(0x30, alternative + dns_name)), success=True, upstream=1)
     case("leaf-ca", certificate(leaf_key, "example.test", int_name, int_key, ca=True), reason="CA")
     case("leaf-ku", replace_extension(leaf, int_key, 15, b"\x03\x02\x05\x20", True), reason="KEY_USAGE")
     case("intermediate-ku", chain=[leaf, replace_extension(intermediate, root_key, 15, b"\x03\x02\x07\x80", True)], reason="KEY_USAGE")

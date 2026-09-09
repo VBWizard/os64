@@ -76,9 +76,10 @@ unchanged. The host tests compile the real libos64 string implementation,
 renaming its compiler aliases to avoid interposing on the sanitizer runtime.
 
 `-O2`, PIC, hidden visibility, no red zone, and header dependencies apply to
-the core. The full-core link audit permits exactly four os64 imports and
-checks supported relocations, absence of runtime initialization/text
-relocations, private symbols, and absence of hardware RNG/syscall opcodes.
+the core and private client. The whole-archive link audit permits the six os64
+imports `malloc`, `free`, `memcpy`, `memmove`, `memset`, and `strlen` (each with
+the `os64_` prefix). It checks supported relocations, absence of runtime
+initialization/text relocations, private symbols, and absence of hardware RNG/syscall opcodes.
 Its temporary DSO is a link probe under `obj/`, not an installed library.
 
 ## Generated code and licensing

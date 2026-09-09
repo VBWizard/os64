@@ -132,7 +132,11 @@ static tls_policy_reason san(span s, const char *hostname, bool *matched)
             if (name.length != 4 && name.length != 16) return TLS_POLICY_DER;
         } else if (tag == 0x88) {
             if (!oid_valid(name)) return TLS_POLICY_DER;
-        } else if (tag != 0xa0 && tag != 0xa3 && tag != 0xa4 && tag != 0xa5) return TLS_POLICY_DER;
+        } else if (tag == 0xa0 || tag == 0xa3 || tag == 0xa4 || tag == 0xa5) {
+            // These constructed alternatives need schemas beyond this DNS
+            // profile; structural DER alone cannot validate their contents.
+            return TLS_POLICY_SAN;
+        } else return TLS_POLICY_DER;
     }
     return TLS_POLICY_OK;
 }
