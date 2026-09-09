@@ -42,6 +42,8 @@ static bool field(span *s, unsigned expected, span *value)
 }
 static bool oid_valid(span s)
 {
+    // OBJECT IDENTIFIER and RELATIVE-OID share minimal base-128 component
+    // encodings; checking their octets avoids imposing a machine-word limit.
     if (!s.length) return false;
     bool first = true;
     for (size_t i = 0; i < s.length; i++) {
@@ -76,7 +78,7 @@ static bool structural(span s, unsigned depth, unsigned *nodes)
             if (((kind == 16 || kind == 17) != !!(tag & 32))) return false;
             if ((kind == 1 && (v.length != 1 || (v.data[0] != 0 && v.data[0] != 255))) ||
                 ((kind == 2 || kind == 10) && !integer_valid(v)) || (kind == 3 && !bits_valid(v)) ||
-                (kind == 5 && v.length) || (kind == 6 && !oid_valid(v))) return false;
+                (kind == 5 && v.length) || ((kind == 6 || kind == 13) && !oid_valid(v))) return false;
         }
         if ((tag & 32) && !structural(v, depth + 1, nodes)) return false;
     }
