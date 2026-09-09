@@ -330,3 +330,56 @@ signal headers in the device layer.
 
 *The 2012 signal struct finally received the signal it was built for,
 fourteen years and one word-OR later.*
+
+## Raw mode (2026-09-08) — the one bit this terminal has
+
+Everything above made two keystrokes mean something: Ctrl+C is SIGINT at
+the foreground task, Ctrl+D is end-of-input. Those two interpretations are
+the console's whole line discipline. There is no line buffering and no kernel echo —
+husk edits its own line, arrow keys already arrive as VT100 bytes, and
+Ctrl+~ and the VT chords live outside the byte stream altogether, the way
+SysRq does. So where V7's `stty raw` flipped a dozen bits at once (and
+`stty sane` exists because programs died with them flipped), os64's raw
+mode is ONE bit: while it is set, the terminal interprets nothing and the
+program reads 0x03 and 0x04 like any other byte.
+
+The consumer was telnet (TELNET.md's booked gap: a Unix login you could not
+log out of with Ctrl+D). In raw mode telnet reads 0x03 and sends `IAC IP`
+itself, one path, bytes in and bytes out, which is what character-mode
+telnet has done since 4.2BSD — the SIGINT-handler workaround it would have
+needed on a cooked terminal is gone. ssh will want exactly the same bit.
+
+**The rulings (Chris, 2026-09-08):**
+
+1. **Both bytes, or neither.** A half-mode ("Ctrl+D is data, Ctrl+C still
+   kills") would be a third state no other system has, and ssh needs the
+   whole thing anyway. (Ruled by Fable on Chris's deferral.)
+2. **A file, not a syscall.** `/proc/self/tty` already answers "what is my
+   terminal"; a write of `raw` or `cooked` to the same file is how a program
+   asks. The file's `mode` line reports it and `raw_task` names the holder —
+   the same self-describing shape as `ctl`. Only `/proc/self` takes the
+   write: a terminal mode is the sitter's own, so another task's tty file
+   refuses at the open.
+3. **The kernel resets it.** Raw mode is held in the asking task's name
+   (`tty->rawHolder`) and `tty_task_departed` clears it at that task's death,
+   so a crashed raw program can never leave a seat deaf to Ctrl+C, and there
+   is no `stty sane` because nothing ever needs one. A fresh shell seating
+   also starts cooked.
+
+**One rule beyond those:** only the terminal's FOREGROUND task may ask. A
+background job flipping the seat would steal Ctrl+C from the program the
+person is looking at. `tty_set_raw` refuses anyone else.
+
+**Where it acts:** `console_intr_intercept_tty` returns "data" when the
+terminal is raw — for a VT's keyboard and for a pty master's write alike,
+since both go through it — and `console_read` treats EOT as end-of-input
+only when the terminal is cooked, checked per event so a mode change lands on
+the next key. Nothing else changes: the ring, the waiter, the focus, the
+pushback slot are all as they were.
+
+**Proof:** `/tests/rawtty` (in the ring-3 suite): on a pty, cooked by
+default (a typed 0x04 is EOF), raw on request (0x03 0x04 'x' arrive as three
+bytes — on a cooked pty the 0x03 would have been SIGINT at the write), cooked
+again on request, reset at a grandchild's exit, and a stranger's write to the
+child's tty file refused. Plus the escape hatch Unix never had: a stuck raw
+program is killed from another VT, and its seat is cooked the moment it dies.

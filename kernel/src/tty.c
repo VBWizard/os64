@@ -773,8 +773,31 @@ void tty_seat_shell(tty_t *t, struct task *shell)
 	shell->tty = t;
 	t->shell = shell;
 	t->fgTask = shell;
+	t->rawHolder = NULL;               // a fresh seat is cooked, whatever came before
 	t->spawnRequested = false;
 	t->state = TTY_LIVE;
+}
+
+int tty_set_raw(tty_t *t, struct task *caller, bool raw)
+{
+	if (t == NULL || caller == NULL)
+		return -1;
+	if (t->fgTask != caller)
+		return -1;
+	// Held in the caller's name so tty_task_departed can give it back.
+	// Cooked is NULL. Asking for cooked twice is fine; asking for it on a
+	// seat some OTHER task holds raw is refused — that task asked for the
+	// mode and only it or its death may end it.
+	if (raw)
+	{
+		t->rawHolder = caller;
+		return 0;
+	}
+	struct task *holder = t->rawHolder;
+	if (holder != NULL && holder != caller)
+		return -1;
+	__sync_bool_compare_and_swap(&t->rawHolder, holder, NULL);
+	return 0;
 }
 
 void tty_task_departed(struct task *task)
@@ -782,6 +805,10 @@ void tty_task_departed(struct task *task)
 	if (task == NULL || task->tty == NULL)
 		return;
 	tty_t *t = (tty_t *)task->tty;
+	// Raw mode dies with the task that asked for it — this is the whole of
+	// `stty sane`, done by the kernel at the death instead of by a person
+	// at a deaf prompt. A CAS, for the same reason fgTask's is one below.
+	__sync_bool_compare_and_swap(&t->rawHolder, task, NULL);
 	if (t->shell != task)
 	{
 		// A child died, not the seat-holder. If it was the FOREGROUND job,
@@ -1071,8 +1098,8 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 		// SLAVE — a Ctrl+C typed at a terminal window aims at the program
 		// running INSIDE it, exactly as a Ctrl+C on VT3 aims at VT3's
 		// foreground. Consumed means it never enters the ring, same as the
-		// keyboard path. (STREAM mode will want a raw pass-through flag;
-		// that rides the mode, per the design.)
+		// keyboard path — and a slave in raw mode consumes nothing, same
+		// as a VT (the intercept reads rawHolder for itself).
 		if (console_intr_intercept_tty(slave, c))
 			continue;
 

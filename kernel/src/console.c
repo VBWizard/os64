@@ -88,6 +88,12 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	if (tty == NULL)
 		tty = &kTTY[0];
 
+	// RAW (SIGINT.md § Raw mode): the terminal interprets nothing, so the
+	// byte is data for whoever is reading — telnet sends it down the wire
+	// as IAC IP itself, the way character-mode telnet has since 4.2BSD.
+	if (tty->rawHolder != NULL)
+		return false;
+
 	task_t *fg = tty->fgTask;
 	if (fg == NULL || fg->controllingShell)
 		return false;               // no owner yet, or the shell: stays data
@@ -199,7 +205,10 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		keyboard_event_t ev;
 		while (n < len && tty_input_pop(tty, &ev))
 		{
-			if (ev.ascii == CONSOLE_EOT)
+			// EOT is end-of-input only on a COOKED terminal; raw hands the
+			// byte over (SIGINT.md § Raw mode). Checked per event, so a
+			// mode change lands on the next key and never on a stale one.
+			if (ev.ascii == CONSOLE_EOT && tty->rawHolder == NULL)
 			{
 				if (n == 0)
 				{

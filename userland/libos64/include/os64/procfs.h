@@ -58,9 +58,18 @@ typedef struct {
     uint32_t rows, cols;  // live-screen geometry, in character cells
     uint32_t scrollback;  // history lines currently reachable via Shift+PgUp
     uint64_t fg_task;     // whom Ctrl+C on this terminal would hit (0 = none)
+    uint64_t raw_task;    // who holds the terminal raw (0 = cooked)
     bool     focused;     // the glass is showing this terminal right now
     bool     live;        // a shell is seated here (false = dormant)
+    bool     raw;         // Ctrl+C and Ctrl+D arrive as bytes 0x03 / 0x04
 } os64_tty_info_t;
+
+// Switch the calling process's terminal between cooked (Ctrl+C is SIGINT,
+// Ctrl+D is end-of-input) and raw (both are bytes). A write of `raw` or
+// `cooked` to /proc/self/tty; only the terminal's foreground task may ask,
+// and the kernel restores cooked when that task exits, so no program ever
+// has to. Returns 0, or -1 when refused.
+int32_t os64_tty_set_raw(bool raw);
 
 // Snapshot up to capacity live tasks, sorted by the /proc directory's PID
 // order. A task disappearing between readdir and open is an ordinary race and

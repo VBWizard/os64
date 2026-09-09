@@ -406,7 +406,10 @@ parked reader on arrival instead of at the tick.
   caps/num; Ctrl+letter is translated to its ASCII control code (0x01..0x1A —
   what Ctrl was designed to do in 1963). Ctrl+D = 0x04 = EOT, which
   console_read (console.c) turns into end-of-input: read() returns 0 once,
-  then the console reads normally again. The framebuffer renderer
+  then the console reads normally again. **A terminal in RAW mode interprets
+  neither Ctrl+C nor Ctrl+D** — both arrive as bytes; a foreground program
+  asks by writing `raw` to `/proc/self/tty` and the kernel restores cooked
+  when it exits (SIGINT.md § Raw mode; telnet is the consumer). The framebuffer renderer
   (BasicRenderer.c print_n) honors '\b' (cursor back one cell, clamped at
   column 0 — erasure is caller overprint, e.g. husk's "\b \b") and '\r'.
   **Arrow keys arrive as `ESC [ A/B/C/D`** — the VT100 spelling, chosen for

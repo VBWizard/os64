@@ -131,6 +131,14 @@ typedef struct tty
 	volatile int pushbackCount;
 	struct task * volatile fgTask;     // who Ctrl+C aims at ON THIS tty
 	struct task * volatile shell;      // the controlling shell seated here
+	// RAW MODE (SIGINT.md § Raw mode): while non-NULL, the terminal
+	// interprets nothing — Ctrl+C and Ctrl+D reach the reader as the bytes
+	// 0x03 and 0x04 instead of becoming SIGINT and end-of-input. It names
+	// the task that asked (a write of `raw` to /proc/self/tty, foreground
+	// only), because the mode dies with that task: tty_task_departed clears
+	// it, so a crashed raw program can never leave a seat deaf to Ctrl+C.
+	// NULL is cooked, the state every seat starts in.
+	struct task * volatile rawHolder;
 
 	// ── The summons (dormant ttys only) ─────────────────────────────────────
 	volatile tty_state_t state;
@@ -221,6 +229,14 @@ void tty_input_push(tty_t *t, const keyboard_event_t *ev);
 // producer that can come back later (the clipboard paste feeds a snarf in
 // across frames rather than truncating it). Returns false when full.
 bool tty_input_push_if_room(tty_t *t, const keyboard_event_t *ev);
+
+// ── Raw mode (SIGINT.md § Raw mode) ────────────────────────────────────────
+// Switch the terminal a task sits on between cooked and raw. Only the
+// terminal's FOREGROUND task may ask — a background job flipping the seat
+// would steal Ctrl+C from the program the person is looking at — and the
+// mode is held in that task's name, cleared when it departs. Returns 0, or
+// -1 when the caller is not the foreground.
+int tty_set_raw(tty_t *t, struct task *caller, bool raw);
 
 // ── Focus (called from the keyboard drivers' chord intercepts) ─────────────
 void tty_focus(uint32_t index);        // Alt+F1..F8 — direct select
