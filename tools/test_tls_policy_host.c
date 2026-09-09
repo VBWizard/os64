@@ -227,14 +227,20 @@ static void handshake(const policy_case *c)
             assert((state.status == TLS_OK) == c->success);
             assert(!!(state.flags & TLS_HANDSHAKE_DONE) == c->success);
             if (!c->success) {
-                assert(state.status == TLS_CERTIFICATE);
+                tls_status expected = c->reason == TLS_POLICY_LIMIT ? TLS_LIMIT : TLS_CERTIFICATE;
+                if (state.status != expected)
+                    fprintf(stderr, "%s: status=%d expected=%d policy=%d upstream=%d\n",
+                        c->name, state.status, expected, state.policy_reason, state.upstream_error);
+                assert(state.status == expected && state.upstream_error);
                 assert(!(state.flags & (TLS_SEND_PLAIN | TLS_RECV_PLAIN)));
                 assert(!os64_tls_engine_write(client, "secret", 6).transferred);
             }
             assert(state.policy_reason == c->reason);
             if (!c->success) {
                 assert(os64_tls_engine_abort(client, TLS_TIMEOUT) == state.status);
-                assert(os64_tls_engine_state(client).policy_reason == c->reason);
+                tls_state aborted = os64_tls_engine_state(client);
+                assert(aborted.status == state.status && aborted.policy_reason == c->reason);
+                assert(aborted.upstream_error == state.upstream_error);
             }
             done = true; break;
         }
@@ -272,7 +278,10 @@ int main(void)
         if (!strcmp(cases[i].name, "valid") || !strcmp(cases[i].name, "cn-only") ||
             !strcmp(cases[i].name, "client-auth") || !strcmp(cases[i].name, "critical-eku") ||
             !strcmp(cases[i].name, "trailing-restriction-after-trust") ||
-            !strcmp(cases[i].name, "tail-unrelated-ca")) {
+            !strcmp(cases[i].name, "tail-unrelated-ca") || !strcmp(cases[i].name, "chain-limit") ||
+            !strcmp(cases[i].name, "chain-exact-limit") || !strcmp(cases[i].name, "certificate-limit") ||
+            !strcmp(cases[i].name, "certificate-exact-limit") || !strcmp(cases[i].name, "certificate-over-limit") ||
+            !strcmp(cases[i].name, "eku-limit")) {
             handshake(&cases[i]); handshakes++;
         }
         printf("policy: %s PASS\n", cases[i].name);

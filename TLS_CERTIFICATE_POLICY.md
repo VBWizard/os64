@@ -34,6 +34,9 @@ parameter. SHA-2/RSA signature identifiers accept absent or NULL parameters,
 as required for verification by [RFC 4055 section 5](https://www.rfc-editor.org/rfc/rfc4055.html#section-5).
 The profile requires strictly positive certificate serial numbers, including
 in anchors and trailing certificates; zero and negative serials are refused.
+Serials longer than 20 encoded content octets remain accepted within the
+certificate size bound. [RFC 5280 section 4.1.2.2](https://www.rfc-editor.org/rfc/rfc5280.html#section-4.1.2.2) imposes the 20-octet maximum
+on conforming issuers, without requiring verifiers to reject longer values.
 
 The leaf must contain a matching DNS SAN. An empty leaf subject requires that
 SAN extension to be critical; CA subjects must be nonempty. DNS names use
@@ -50,6 +53,9 @@ name cannot rescue a malformed DNS name or an unsupported alternative.
 The leaf cannot be a CA; intermediates must be CAs. Key Usage,
 when present, requires digitalSignature and forbids keyCertSign in the leaf;
 it requires keyCertSign in CAs.
+encipherOnly and decipherOnly do not restrict the signature uses checked here.
+[RFC 5280 section 4.2.1.3](https://www.rfc-editor.org/rfc/rfc5280.html#section-4.2.1.3) leaves their meaning undefined without keyAgreement;
+this profile does not reject those combinations or use the keys for agreement.
 BearSSL remains responsible for signatures, chain links, validity periods,
 and intermediate path-length enforcement.
 
@@ -147,6 +153,9 @@ Connection creation allocates a fixed validator working set, including one
 the handshake. Diagnostics use bounded enum reasons plus the upstream error;
 they do not copy certificate strings. The types remain private and may change
 when the public libtls boundary is introduced.
+On terminal validation failure, the engine maps `TLS_POLICY_LIMIT` to
+`TLS_LIMIT`, retaining the upstream error separately. Other certificate
+refusals report `TLS_CERTIFICATE`.
 
 ## Validation
 
@@ -157,11 +166,12 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 294 chain cases and 39 anchor cases, with one-byte,
+The corpus covers 344 chain cases and 55 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 RDN ordering and string encodings, canonical ECDSA signatures,
 positive serials, SAN/CA Basic Constraints criticality, ENUMERATED minimality,
 RSA parameter rules and leaf Key Usage restrictions,
+signature-use compatibility for key-agreement bits and serials over 20 octets,
 OID/RELATIVE-OID component minimality and termination,
 primitive/constructed DER tags and unsupported universal types,
 adjacent links and validity through supplied tails,
@@ -180,11 +190,14 @@ provenance and fingerprints are in `userland/libtls/test/public-certs/README.md`
 OpenSSL independently validates the positive chain with server purpose and DNS
 identity enabled.
 
-Six complete or rejected TLS handshake probes use the policy factory and
+Twelve complete or rejected TLS handshake probes use the policy factory and
 the pinned BearSSL server. They verify successful authentication and refusal
 before plaintext access for CN-only, unsuitable EKU, critical EKU, and a
-restricted or unrelated trailing certificate. This is not independent-peer TLS
-interoperability. Allocation-failure injection, copied-input lifetime, owner
+restricted or unrelated trailing certificate. Certificate-size and chain-count
+boundaries and an EKU-count refusal check caller-visible `TLS_LIMIT` reporting,
+with upstream diagnostics and sticky status preserved after abort.
+This is not independent-peer TLS interoperability. Allocation-failure injection,
+copied-input lifetime, owner
 release before validation, and four concurrent validator owners exercise
 snapshot ownership. Handshake certificate processing performs no allocations.
 The engine exposes the bounded local reason in `tls_state.policy_reason`,
