@@ -4,6 +4,8 @@
 
 #include "ansi.h"
 
+#include "os64/charset.h"   // OS64_CHARSET_* — the names both painters use
+
 enum {
     ST_GROUND = 0,   // ordinary text
     ST_ESC,          // an ESC arrived; the next byte says what kind
@@ -31,6 +33,8 @@ void ansi_reset(ansi_parser_t *p)
 {
     p->state = ST_GROUND;
     p->nparams = 0;
+    p->inter = 0;
+    p->ninter = 0;
     p->overflow = false;
     p->slen = 0;
 }
@@ -62,6 +66,36 @@ static ansi_action_t finish(ansi_parser_t *p, ansi_action_kind_t kind)
         a.params[i] = p->params[i];
     a.nparams = p->nparams;
     ansi_reset(p);
+    return a;
+}
+
+// A character-set selection carries no parameters of its own, so it is built
+// rather than finished: there is nothing for an overflow to have spoiled.
+static ansi_action_t charset(ansi_parser_t *p, uint8_t which)
+{
+    ansi_action_t a = { .kind = ANSI_CHARSET };
+    a.params[0] = which;
+    a.nparams = 1;
+    ansi_reset(p);
+    return a;
+}
+
+// A RELATIVE MOVE'S COUNT DEFAULTS TO ONE, not to zero. `ESC[C` is one column
+// right, and it is the spelling ANSI art uses most — the count is omitted
+// whenever it is one, which is often. Reading the missing parameter as zero
+// would make the commonest sequence in the whole art form do nothing.
+static ansi_action_t cursor_move(ansi_parser_t *p, int32_t rows, int32_t cols)
+{
+    uint16_t count = p->nparams > 0 && p->params[0] > 0 ? p->params[0] : 1;
+    ansi_action_t a = finish(p, ANSI_CURSOR_MOVE);
+
+    // finish() hands back NOTHING for a sequence that overflowed; a move
+    // built on parameters we could not read is exactly that.
+    if (a.kind != ANSI_CURSOR_MOVE)
+        return a;
+
+    a.drow = rows * (int32_t)count;
+    a.dcol = cols * (int32_t)count;
     return a;
 }
 
@@ -156,11 +190,17 @@ ansi_action_t ansi_feed(ansi_parser_t *p, char byte)
         if (c == ']') { p->state = ST_OSC; p->slen = 0; p->overflow = false; return nothing(); }
         if (c == 0x1B) return nothing();   // ESC ESC: the second one starts over
         // An INTERMEDIATE byte means the escape is longer than two: `ESC ( B`
-        // selects a character set, and ncurses sends it at startup. Eating
-        // only the '(' would leave the 'B' to land on the screen as a letter
-        // nobody typed — which is precisely what happened before this state
-        // existed.
-        if (c >= 0x20 && c <= 0x2f) { p->state = ST_ESC_INT; return nothing(); }
+        // selects a character set, and ncurses sends it at startup. Two of
+        // those selections are read (below); the rest are consumed — and
+        // eating only the '(' would leave the final byte to land on the
+        // screen as a letter nobody typed, which is precisely what happened
+        // before this state existed.
+        if (c >= 0x20 && c <= 0x2f) {
+            p->state = ST_ESC_INT;
+            p->inter = (uint8_t)c;
+            p->ninter = 1;
+            return nothing();
+        }
         // Every other two-byte escape (`ESC 7`, `ESC c` …) is consumed and
         // ignored: none has a consumer here, and printing the letter would
         // put a stray 'c' on the screen.
@@ -169,10 +209,27 @@ ansi_action_t ansi_feed(ansi_parser_t *p, char byte)
 
     case ST_ESC_INT:
         // Intermediates may repeat; the first byte outside their range ends
-        // the sequence, whatever it was.
-        if (c >= 0x20 && c <= 0x2f)
+        // the sequence, whatever it was. The FIRST one is the one kept, and
+        // the rest are counted rather than remembered: what the sequence
+        // means is decided by the whole run, so a later byte overwriting an
+        // earlier one would let `ESC ) ( U` pass for `ESC ( U` and change a
+        // terminal's character set on a program that asked for neither.
+        if (c >= 0x20 && c <= 0x2f) {
+            if (p->ninter < 255)
+                p->ninter++;
             return nothing();
+        }
         if (c == 0x1B) { p->state = ST_ESC; return nothing(); }
+        // WHICH CHARACTER SET THE HIGH HALF DRAWS AS, in the Linux console's
+        // spelling. Only the G0 slot: os64 has no shift-out, so a G1 mapping
+        // would be a set nothing could ever select. And only with `(` as the
+        // sole intermediate — a longer run is some other sequence entirely.
+        if (p->ninter == 1 && p->inter == '(') {
+            if (c == 'U')
+                return charset(p, OS64_CHARSET_CP437);
+            if (c == 'B')
+                return charset(p, OS64_CHARSET_LATIN1);
+        }
         ansi_reset(p);
         return nothing();
 
@@ -235,6 +292,12 @@ ansi_action_t ansi_feed(ansi_parser_t *p, char byte)
         case 'm': return finish(p, ANSI_SGR);
         case 'H':
         case 'f': return finish(p, ANSI_CURSOR_POS);
+        case 'A': return cursor_move(p, -1, 0);
+        case 'B': return cursor_move(p, +1, 0);
+        case 'C': return cursor_move(p, 0, +1);
+        case 'D': return cursor_move(p, 0, -1);
+        case 's': return finish(p, ANSI_CURSOR_SAVE);
+        case 'u': return finish(p, ANSI_CURSOR_RESTORE);
         case 'J': return finish(p, ANSI_ERASE_DISPLAY);
         case 'K': return finish(p, ANSI_ERASE_LINE);
         default:

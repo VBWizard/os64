@@ -17,9 +17,13 @@ static const char *kind_name(ansi_action_kind_t k)
         case ANSI_PRINT:          return "print";
         case ANSI_SGR:            return "sgr";
         case ANSI_CURSOR_POS:     return "cup";
+        case ANSI_CURSOR_MOVE:    return "move";
+        case ANSI_CURSOR_SAVE:    return "scp";
+        case ANSI_CURSOR_RESTORE: return "rcp";
         case ANSI_ERASE_DISPLAY:  return "ed";
         case ANSI_ERASE_LINE:     return "el";
         case ANSI_GLASS_BG:       return "bg";
+        case ANSI_CHARSET:        return "charset";
     }
     return "?";
 }
@@ -79,6 +83,12 @@ int main(int argc, char **argv)
                 break;
             case ANSI_GLASS_BG:
                 printf("bg %06x\n", a.color);
+                break;
+            case ANSI_CURSOR_MOVE:
+                // The signed distance, not the raw parameter: the direction
+                // is spent in the parser, and the distance is the whole of
+                // what a terminal is told.
+                printf("move %d %d\n", a.drow, a.dcol);
                 break;
             default:
                 printf("%s", kind_name(a.kind));

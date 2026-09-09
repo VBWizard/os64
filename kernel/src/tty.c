@@ -135,7 +135,10 @@ static void tty_erase_span(tty_t *t, uint32_t ring_line, uint32_t from, uint32_t
 		line[c].ch = '\0';
 		line[c].attrs = 0;
 		line[c].bg = t->bg;
-		line[c]._pad = 0;
+		// An erased cell has no glyph, so it has no character set either —
+		// zeroed, so a blank made by erasing is identical to one made by
+		// form feed or by never having been written.
+		line[c].charset = OS64_CHARSET_LATIN1;
 		line[c].color = t->color;
 	}
 }
@@ -200,13 +203,18 @@ static void tty_putc_locked(tty_t *t, char ch, bool *glass)
 			cell->ch = ch;
 			cell->attrs = t->attrs;
 			cell->bg = t->bg;
-			cell->_pad = 0;
+			// The set this byte was written under travels WITH it, so a
+			// repaint, a walk back through history and gterm's own painter
+			// all draw what the program wrote — not what the terminal was
+			// told most recently.
+			cell->charset = t->charset;
 			cell->color = t->color;
 			if (*glass)
 			{
 				uint32_t fg, bg;
 				tty_cell_colors(t, cell, &fg, &bg);
-				renderer_glass_putc_bg_locked(ch, t->cur_row, t->cur_col, fg, bg);
+				renderer_glass_putc_bg_locked(ch, cell->charset,
+				                              t->cur_row, t->cur_col, fg, bg);
 			}
 			t->cur_col++;
 			break;
@@ -365,19 +373,79 @@ static void tty_apply_locked(tty_t *t, const ansi_action_t *a, bool *glass)
 		return;   // moving the cursor paints nothing
 	}
 
+	case ANSI_CURSOR_MOVE:
+	{
+		// A RELATIVE MOVE STOPS AT THE EDGE. It does not wrap to the next
+		// line and it does not scroll — a terminal that scrolled here would
+		// answer `ESC[255B` (which is how a program asks how tall you are)
+		// by throwing away 255 lines of somebody's screen.
+		//
+		// Signed arithmetic in 64 bits so that the count a sequence is
+		// allowed to carry cannot wrap the position it is added to.
+		int64_t row = (int64_t)t->cur_row + a->drow;
+		int64_t col = (int64_t)t->cur_col + a->dcol;
+		t->cur_row = row < 0 ? 0
+		           : row >= (int64_t)t->rows ? t->rows - 1 : (uint32_t)row;
+		t->cur_col = col < 0 ? 0
+		           : col >= (int64_t)t->cols ? t->cols - 1 : (uint32_t)col;
+		return;   // moving the cursor paints nothing
+	}
+
+	case ANSI_CHARSET:
+		// PART OF THE PEN, beside the colours and the attributes: it says
+		// how the NEXT byte is to be read, and every cell records the answer
+		// that was current when it was written. What is already on the
+		// screen does not change meaning because a program changed its mind.
+		t->charset = (uint8_t)a->params[0];
+		return;
+
+	case ANSI_CURSOR_SAVE:
+		t->save_row = t->cur_row;
+		t->save_col = t->cur_col;
+		return;
+
+	case ANSI_CURSOR_RESTORE:
+		// Clamped on the way out, because the screen may have been resized
+		// between the save and the restore and the remembered place may no
+		// longer be on it.
+		t->cur_row = t->save_row < t->rows ? t->save_row : t->rows - 1;
+		t->cur_col = t->save_col < t->cols ? t->save_col : t->cols - 1;
+		return;
+
 	case ANSI_ERASE_DISPLAY:
 	{
 		uint16_t mode = a->nparams > 0 ? a->params[0] : 0;
 		if (mode > 2)
 			return;   // unsupported ED modes must not fall back to ED0
-		// ED DOES NOT MOVE THE CURSOR. `clear` sends `ESC[2J` and then
-		// `ESC[H` precisely because the first does not imply the second,
-		// and a terminal that homed the cursor on its own would put the
-		// next line of output somewhere the program did not ask for.
+		// ED 2 HOMES THE CURSOR; ED 0 AND ED 1 DO NOT, AND CANNOT.
+		//
+		// The two partial erases are DEFINED BY the cursor — "from here to
+		// the end", "from the top to here" — so it is their argument, and a
+		// terminal that moved it would be answering a different question
+		// than the one asked. ED 2 has no relationship to the cursor at all:
+		// it erases everything wherever the cursor is, so there is nothing
+		// about the position for it to preserve, and it is the only mode
+		// where homing is even a coherent thing to add.
+		//
+		// It is added because ANSI.SYS did it, and ANSI.SYS is the terminal
+		// every DOS-era ANSI program was written against — which is the
+		// whole corpus this terminal grew CP437 and the relative moves to
+		// draw. Those programs clear the screen and start painting, and a
+		// terminal that left the cursor where it was puts their first line
+		// wherever the last program happened to stop. Legend of the Red
+		// Dragon's title screen landed in the bottom third of the glass, in
+		// a different place each time depending on which menu you arrived
+		// from, which is the fingerprint of exactly this.
+		//
+		// It costs os64's own callers nothing: `clear` sends `ESC[2J` and
+		// then `ESC[H`, so the home it already asked for is merely arriving
+		// twice.
 		if (mode == 2)
 		{
 			for (uint32_t r = 0; r < t->rows; r++)
 				tty_erase_span(t, tty_row_line(t, r), 0, t->cols);
+			t->cur_row = 0;
+			t->cur_col = 0;
 		}
 		else if (mode == 1)
 		{
@@ -469,7 +537,7 @@ static void tty_repaint_locked(tty_t *t)
 			char ch = line[c].ch ? line[c].ch : ' ';
 			uint32_t fg, bg;
 			tty_cell_colors(t, &line[c], &fg, &bg);
-			renderer_glass_putc_bg_locked(ch, r, c, fg, bg);
+			renderer_glass_putc_bg_locked(ch, line[c].charset, r, c, fg, bg);
 		}
 	}
 	renderer_glass_blit_locked();

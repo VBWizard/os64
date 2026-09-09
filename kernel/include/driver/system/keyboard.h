@@ -56,6 +56,39 @@ static inline bool keyboard_is_escape_key(uint8_t scancode, uint8_t modifiers)
     return (modifiers & KEYBOARD_MOD_HID) ? scancode == 0x29 : scancode == 0x01;
 }
 
+// Which characters Ctrl reaches a control code THROUGH, and it is not just
+// the letters. 1963 ASCII laid the control codes out so that clearing bit 6
+// of a printable character lands on one, and the column that lands is
+// `@ A-Z [ \ ] ^ _` — 0x40..0x5F — with the lowercase letters folding onto
+// the same codes. So Ctrl+[ is ESC, Ctrl+] is 0x1D, Ctrl+\ is 0x1C and
+// Ctrl+_ is 0x1F, exactly as they are on the terminal this keyboard is
+// pretending to be. Ctrl+] is why this reaches past the letters at all: it is
+// the escape character every telnet client has used since 4.2BSD, and it was
+// untypeable here.
+//
+// The backtick and `{ | } ~` are deliberately absent. They sit in the column
+// ABOVE, so clearing bit 6 sends them to codes column 4 already owns, and a
+// keyboard that mapped them would be inventing a second spelling for a code
+// that has one. Leaving them alone is also what keeps Ctrl+~ free to be the
+// debug-suppress toggle (keyboard.c).
+//
+// `@` IS ABSENT TOO, and for a different reason: its code is NUL, and a zero
+// ascii byte is already how a keystroke says "this key produced no character"
+// — the console ring's producer and the GUI key event a gterm reads both take
+// it that way, so a real NUL is indistinguishable from a modifier press.
+// Carrying one would mean a second field saying the zero means something, in
+// a struct ring 3 already compiles against, for a keystroke nothing here has
+// asked to type. So Ctrl+@ types '@', the way Ctrl+1 types '1'.
+//
+// It lives here, in the header, for the reason keyboard_arrow_updown does:
+// BOTH keyboard dialects translate their own keys, so a rule written down
+// once is a rule they cannot come to disagree about — and this one WAS
+// written twice, letter-only in each.
+static inline bool keyboard_has_control_code(char c)
+{
+    return (c >= 'A' && c <= '_') || (c >= 'a' && c <= 'z');
+}
+
 // Which VERTICAL arrow is this event: -1 up, +1 down, 0 neither. The one
 // place both dialects' arrow codes are written, for the same reason
 // keyboard_fkey_number exists — and here the dialects genuinely COLLIDE:

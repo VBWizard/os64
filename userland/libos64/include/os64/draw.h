@@ -76,6 +76,14 @@ void os64_draw_blit(os64_gui_surface_t *dst, int32_t x, int32_t y,
 // Text: the embedded PSF1 face (os64/font_psf1.h — the console's own,
 // 8x16, opaque fg-on-bg cells). Pen-advance only; wrapping and flow are
 // higher layers' business. Returns the x the pen ended at.
+// The same, told which character set the bytes are in (os64/charset.h) —
+// what a terminal emulator needs, because the cells it is drawing each
+// remember the set they were written under. os64_draw_text is this with
+// Latin-1, which is what the console has always drawn.
+int32_t os64_draw_text_charset(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                               const char *str, size_t len,
+                               uint32_t fg, uint32_t bg, uint8_t charset);
+
 int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
                        const char *str, size_t len,
                        uint32_t fg, uint32_t bg);

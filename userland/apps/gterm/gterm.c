@@ -172,6 +172,11 @@ static void render(os64_draw_ctx_t *ctx)
 			os64_ansi_apply_attrs(row[c].attrs, &fg, &bg);
 			uint8_t attrs = row[c].attrs;
 			uint8_t bgix = row[c].bg;
+			// AND THE SAME CHARACTER SET, which is the fourth thing that
+			// makes two cells look alike: the same byte draws a block under
+			// CP437 and an accented capital under Latin-1, so a run that
+			// spanned both would paint half of it wrong.
+			uint8_t cset = row[c].charset;
 			uint32_t base = row[c].color;
 			// Selection breaks a run exactly like a color change does — it IS
 			// a color change, just one the grid doesn't store. Highlighting
@@ -180,10 +185,13 @@ static void render(os64_draw_ctx_t *ctx)
 			uint32_t start = c, n = 0;
 			while (c < gHdr.cols && row[c].color == base &&
 			       row[c].bg == bgix && row[c].attrs == attrs &&
+			       row[c].charset == cset &&
 			       SELECTED(c) == sel && n < sizeof(run))
 			{
 				char ch = row[c].ch;
-				run[n++] = (ch >= ' ') ? ch : ' ';
+				// A byte at or above 0x80 is a GLYPH, not a control code —
+				// under either set. Only the low control range is blanked.
+				run[n++] = (ch >= ' ' || (unsigned char)ch >= 0x80) ? ch : ' ';
 				c++;
 			}
 			// Inverse video for the highlight: the oldest "this is selected"
@@ -191,10 +199,10 @@ static void render(os64_draw_ctx_t *ctx)
 			// agreement with whatever the program inside chose to paint. It
 			// swaps whatever the cell had ALREADY resolved to, so selecting
 			// text that is itself reversed reads correctly.
-			os64_draw_text(&ctx->surf, (int32_t)(start * CELL_W),
-			               (int32_t)(r * CELL_H), run, n,
-			               sel ? bg : fg,
-			               sel ? fg : bg);
+			os64_draw_text_charset(&ctx->surf, (int32_t)(start * CELL_W),
+			                       (int32_t)(r * CELL_H), run, n,
+			                       sel ? bg : fg,
+			                       sel ? fg : bg, cset);
 		}
 		#undef SELECTED
 	}

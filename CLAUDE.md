@@ -403,8 +403,21 @@ parked reader on arrival instead of at the tick.
 - **RTC** (`rtc.c`): Real-time clock
 - **PIT** (`pit.c`): Programmable Interval Timer
 - **Keyboard** (`keyboard.c`): PS/2 keyboard driver. Tracks shift/ctrl/alt/
-  caps/num; Ctrl+letter is translated to its ASCII control code (0x01..0x1A —
-  what Ctrl was designed to do in 1963). Ctrl+D = 0x04 = EOT, which
+  caps/num; **Ctrl is translated to the ASCII control code — what Ctrl was
+  designed to do in 1963, and not only for the letters.** 1963 ASCII placed
+  the control codes where clearing bit 6 of a printable character lands, so
+  `A-Z [ \ ] ^ _` and the lowercase letters that fold onto the same codes all
+  map: `c & 0x1F`. That is why Ctrl+[ is ESC and Ctrl+] is 0x1D, telnet's
+  escape character, which was untypeable while the rule was letters-only. The
+  backtick and `{ | } ~` are deliberately excluded — they would collide with
+  codes the column above already owns, and it is what keeps Ctrl+~ free for
+  the debug toggle. `@` is excluded for a different reason: its code is NUL,
+  and a zero byte is how a delivery path spells "this key produced no
+  character", so Ctrl+@ types `@`. The rule is written ONCE, as
+  `keyboard_has_control_code` in keyboard.h, because BOTH keyboard dialects
+  translate their own keys and it had been written twice. Ctrl is applied
+  LAST, after Shift, or `^` and `_` would never be seen.
+  Ctrl+D = 0x04 = EOT, which
   console_read (console.c) turns into end-of-input: read() returns 0 once,
   then the console reads normally again. **A terminal in RAW mode interprets
   neither Ctrl+C nor Ctrl+D** — both arrive as bytes; a foreground program
@@ -420,9 +433,25 @@ parked reader on arrival instead of at the tick.
 **A terminal that obeys a byte can be told what to do by whoever wrote it**,
 so os64 implements an escape WHEN SOMETHING ASKS FOR ONE and not before
 (Chris's ruling). What is read today, and nothing else: `ESC[<n>m` (SGR —
-colour and attributes), `ESC[<r>;<c>H` (cursor position), `ESC[<n>J` and
-`ESC[<n>K` (erase display, erase line), and `ESC]11;#rrggbb` (OSC 11 — the
-terminal's own background). Everything else is consumed and ignored, which
+colour and attributes), `ESC[<r>;<c>H` (cursor position), `ESC[<n>A/B/C/D`
+(move the cursor from where it is) with `ESC[s`/`ESC[u` (save it, put it
+back), `ESC[<n>J` and `ESC[<n>K` (erase display, erase line), and
+`ESC]11;#rrggbb` (OSC 11 — the terminal's own background), and `ESC ( U` /
+`ESC ( B` (which character set a byte over 0x7F draws as). The relative
+moves and the saved cursor are ANSI art's, and they arrived TOGETHER on
+purpose: `ESC[s ESC[255B ESC[6n ESC[u` is how a program asks how tall a
+terminal is, so obeying the move without the restore strands the cursor at
+the foot of the glass, which is worse than ignoring both. A relative move
+clamps at the edge and never scrolls — a terminal that scrolled to answer
+that probe would throw away a screen of output to describe its own size.
+**`ESC[2J` CLEARS AND HOMES; `ESC[0J` and `ESC[1J` clear and do not** — the
+partial erases are DEFINED by the cursor ("from here down", "from the top to
+here"), so moving it would answer a different question, while the full erase
+has no relationship to the position at all. Homing it is ANSI.SYS's
+behaviour and therefore what every DOS-era ANSI program expects: they clear
+and start painting, and a terminal that left the cursor alone puts their
+first line wherever the previous program stopped. Everything else is
+consumed and ignored, which
 is what every terminal does: printing the bytes of an unknown sequence
 spills its parameters across the screen, and logging them floods the log the
 first time a program with better taste in terminals runs.
@@ -443,8 +472,9 @@ first time a program with better taste in terminals runs.
   focus changes and history views. Per tty; gterm's use of this paper is
   deferred in DEBTS.md.
 - **A cell costs the same eight bytes it always did**: the glyph, an
-  attribute byte, a background palette INDEX, and the 32-bit foreground.
-  One byte remains padding. Size and field offsets are static-asserted
+  attribute byte, a background palette INDEX, the CHARACTER SET the glyph
+  was written under, and the 32-bit foreground. No byte is spare now — the
+  charset took the padding. Size and field offsets are static-asserted
   against `os64_pty_cell_t` because gterm renders the same cells in ring 3.
   The background index covers the supported sixteen-colour SGR subset plus
   default paper; extended indexed and RGB SGR colours are consumed without
@@ -454,7 +484,27 @@ first time a program with better taste in terminals runs.
 - A background of ZERO means "this terminal's own", not black. New grids
   and form-feed clearing use zeroed cells; scrolling and ANSI erasure use
   the active SGR background. Fixture: `/tests/ansiprobe` (add `paper` to
-  change the background)
+  change the background, `cp437` for the high half both ways)
+- **WHAT A BYTE OVER 0x7F DRAWS AS IS THE TERMINAL'S ANSWER, AND THE CELL
+  REMEMBERS IT** (`abi/include/os64/charset.h`). os64 has two consumers who
+  want different things from the same byte and neither is wrong: a gopher
+  menu written in 1994 is Latin-1 (the byte IS the glyph index, which is
+  what the console has always drawn), and ANSI art is CP437 — 0xB0..0xDF
+  are the shades, half blocks and box-drawing set the whole art form is
+  made of. So the set is PER TERMINAL, chosen by the program with `ESC ( U`
+  / `ESC ( B`, and VT1 can show a Latin-1 menu while VT2 shows a board.
+  The set is part of the PEN, but it is recorded on every CELL: what is
+  already on the screen must not change meaning because a program changed
+  its mind, and a repaint, a walk back through history and gterm's ring-3
+  painter all have to draw what was written. The table is INDICES into the
+  shipped face, written down because gterm's embedded font carries no
+  Unicode table to derive them from — and `charset_verify` (video.c)
+  re-derives every entry from the console face's own table at boot and says
+  so under `DEBUG_BOOT` if one moved. Five glyphs the face lacks (the dark
+  shade and the four half blocks) are supplied as bitmaps because art
+  cannot be drawn without them; the rest of a missing entry draws BLANK,
+  which reads as missing rather than as corruption — approximating a
+  box-drawing character is a lie about what the program asked for.
 
 ### SMP (Symmetric Multiprocessing)
 

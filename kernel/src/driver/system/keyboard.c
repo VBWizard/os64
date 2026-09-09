@@ -325,15 +325,6 @@ static char keyboard_translate_scancode(uint8_t scancode) {
     }
 
     if (keyboard_is_letter(base)) {
-        // Ctrl+letter yields the ASCII control code (0x01..0x1A). This is not
-        // a convention we're borrowing — it's what the Ctrl key was BUILT to
-        // do: 1963 ASCII laid out the control codes so that Ctrl simply strips
-        // the high bits of the letter. Ctrl+D = 0x04 = EOT ("End of
-        // Transmission"), which is why console_read treats it as end-of-input
-        // — same well Unix drank from, not an imitation of Unix.
-        if (ctrl_active) {
-            return (char)((base & ~0x20) - 'A' + 1);
-        }
         bool uppercase = shift_active ^ caps_active;
         if (uppercase) {
             if (base >= 'a' && base <= 'z') {
@@ -344,14 +335,26 @@ static char keyboard_translate_scancode(uint8_t scancode) {
                 base = (char)(base - 'A' + 'a');
             }
         }
-        return base;
-    }
-
-    if (shift_active) {
+    } else if (shift_active) {
         char shifted = s_scancode_shift_map[scancode];
         if (shifted != 0) {
-            return shifted;
+            base = shifted;
         }
+    }
+
+    // CTRL IS APPLIED LAST, to the character the other modifiers settled on.
+    // It has to be: `^` and `_` are what Shift makes of 6 and -, so a Ctrl
+    // that ran first would be handed the digit and produce the wrong code.
+    // Case does not matter here because folding a letter's case does not move
+    // the bits this keeps.
+    //
+    // This is not a convention we're borrowing — it's what the Ctrl key was
+    // BUILT to do; keyboard_has_control_code (keyboard.h) has the layout and
+    // is where both keyboard dialects read it from. Ctrl+D = 0x04 = EOT ("End
+    // of Transmission"), which is why console_read treats it as end-of-input;
+    // same well Unix drank from, not an imitation of Unix.
+    if (ctrl_active && keyboard_has_control_code(base)) {
+        return (char)(base & 0x1F);
     }
 
     return base;

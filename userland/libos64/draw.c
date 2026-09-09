@@ -11,6 +11,7 @@
 
 #include "os64/draw.h"
 #include "os64/font_psf1.h"
+#include "os64/charset.h"
 #include "os64/proc.h"     // os64_ticks / os64_sleep — the frame clock's feet
 #include "os64/str.h"      // os64_strlen — ctx_text's measure
 
@@ -138,6 +139,14 @@ int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
                        const char *str, size_t len,
                        uint32_t fg, uint32_t bg)
 {
+    return os64_draw_text_charset(dst, x, y, str, len, fg, bg,
+                                  OS64_CHARSET_LATIN1);
+}
+
+int32_t os64_draw_text_charset(os64_gui_surface_t *dst, int32_t x, int32_t y,
+                               const char *str, size_t len,
+                               uint32_t fg, uint32_t bg, uint8_t charset)
+{
     // surface_draw_text's gait, glyphs from the embedded face: paint the
     // opaque 8-wide cell, clipped per cell via one intersect. No layout
     // logic beyond advancing the pen — wrapping and flow live upstairs.
@@ -148,7 +157,12 @@ int32_t os64_draw_text(os64_gui_surface_t *dst, int32_t x, int32_t y,
                 surface_bounds(dst), &cell))
             continue;
 
-        const uint8_t *glyph = os64_font_glyph((uint8_t)str[i]);
+        // The SAME map the kernel's painter uses, against this face rather
+        // than the console's — which is what keeps a gterm and the glass
+        // showing one terminal's bytes the same way.
+        const uint8_t *glyph = os64_charset_glyph(
+            (uint8_t)str[i], charset, os64_font_glyph(0),
+            OS64_FONT_GLYPHS, OS64_FONT_GLYPH_H);
         for (int32_t cy = cell.y; cy < cell.y + cell.h; cy++) {
             uint8_t bits = glyph[cy - y];
             uint32_t *row = surface_row(dst, cy);

@@ -53,15 +53,21 @@ typedef struct os64_pty_header
 	uint32_t _reserved;
 } os64_pty_header_t;
 
-// One interpreted cell: glyph, attributes, background index, one padding
-// byte, and the XRGB foreground. syscall.c checks the size and field offsets
-// against the kernel's tty_cell_t because snapshots copy these bytes directly.
+// One interpreted cell: glyph, attributes, background index, the character
+// SET the glyph was written under, and the XRGB foreground. syscall.c checks
+// the size and field offsets against the kernel's tty_cell_t because
+// snapshots copy these bytes directly.
 typedef struct os64_pty_cell
 {
 	char     ch;                  // 0 = blank
 	uint8_t  attrs;               // OS64_ANSI_ATTR_* (os64/ansi.h)
 	uint8_t  bg;                  // palette index+1; 0 = the terminal's own
-	uint8_t  _pad;
+	// WHICH SET THIS BYTE WAS WRITTEN UNDER (OS64_CHARSET_*, os64/charset.h)
+	// — a property of the CELL and not of the terminal, so that a repaint,
+	// a scroll back through history, and gterm's own painter all draw what
+	// the program actually wrote rather than what the terminal was told
+	// most recently. It cost nothing: this byte was padding.
+	uint8_t  charset;
 	uint32_t color;               // foreground, XRGB
 } os64_pty_cell_t;
 

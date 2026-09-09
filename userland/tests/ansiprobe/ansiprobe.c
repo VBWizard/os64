@@ -9,6 +9,7 @@
 //
 //   ansiprobe          the palette, the attributes, and the cursor moves
 //   ansiprobe paper    the same, on a terminal whose own background changed
+//   ansiprobe cp437    the high half drawn as Latin-1 and as CP437, together
 //
 // The `paper` argument is separate because it changes the WHOLE terminal,
 // including the parts this program never wrote to — and a probe that did
@@ -34,6 +35,40 @@ int main(int argc, char **argv)
         static const char raw[] = "[write] \033[31;44mZ> \033[0mafter\n";
         os64_write(1, raw, sizeof(raw) - 1);
         os64_printf("[printf] \033[31;44mZ> \033[0mafter\n");
+        return 0;
+    }
+
+    // THE HIGH HALF, TWICE: once as the console has always drawn it (Latin-1,
+    // where the byte is the glyph index) and once as CP437, which is what
+    // ANSI art is made of. Its own argument for the same reason `paper` is:
+    // it is the screen you READ as the verdict, and it does not belong on top
+    // of the palette.
+    //
+    // The selection is handed back at the end, and the chart stays correct —
+    // which is the design saying so out loud. A cell remembers the set it was
+    // written under, so what is already on the screen does not change meaning
+    // when a program changes its mind.
+    if (argc > 1 && argv[1] != NULL && argv[1][0] == 'c')
+    {
+        esc("[2J");
+        esc("[1;1H");
+        os64_printf("ansiprobe cp437 - the high half, drawn both ways\n");
+        for (int set = 0; set < 2; set++)
+        {
+            os64_printf("\n\033[1m%s\033[0m\n", set ? "CP437 (ESC ( U)"
+                                                    : "Latin-1 (ESC ( B)");
+            esc(set ? "(U" : "(B");
+            for (unsigned row = 0x80; row < 0x100; row += 32)
+            {
+                os64_printf("  %02X ", row);
+                for (unsigned col = 0; col < 32; col++)
+                    os64_printf("%c", (char)(row + col));
+                os64_printf("\n");
+            }
+        }
+        esc("(B");
+        os64_printf("\n\033[32mdone.\033[0m the chart above keeps the set each "
+                    "cell was written under.\n");
         return 0;
     }
 
@@ -100,7 +135,23 @@ int main(int argc, char **argv)
                 row + 3);
     os64_printf("\033[%u;44H\033[K", row + 3);
 
-    esc("[19;1H");
+    // THE RELATIVE MOVES. A gap written as cursor-right rather than as
+    // spaces is how ANSI art has spelled a gap since the BBS days — the art
+    // was compressed that way — so a terminal that ignores the move runs
+    // these three words into one.
+    os64_printf("\033[%u;13Hrelative    left\033[6Cmiddle\033[6Cright", row + 5);
+
+    // THE HEIGHT PROBE, which is how a program that cannot negotiate a
+    // window size asks how tall this terminal is: save the cursor, drive it
+    // past the bottom, ask where it ended up, put it back. There is no
+    // answer to the question here and there does not need to be — what
+    // matters is that the drive-down neither scrolls the screen nor strands
+    // the cursor. If the restore is missing, the tail of this line is at the
+    // foot of the screen instead of on it.
+    os64_printf("\033[%u;13Hprobe       ", row + 6);
+    os64_printf("\033[s\033[255B\033[6n\033[u<- and back where it started");
+
+    esc("[22;1H");
     os64_printf("\033[32mdone.\033[0m %s\n",
                 paper ? "(paper changed; 'clear' leaves it changed)" : "");
     return 0;

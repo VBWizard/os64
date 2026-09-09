@@ -20,6 +20,9 @@
 
 #define OS64_FONT_GLYPH_W 8
 #define OS64_FONT_GLYPH_H 16
+// How many the embedded face holds — what a charset map needs in order to
+// know whether an index it names is in there at all.
+#define OS64_FONT_GLYPHS  256
 
 static const uint8_t os64_font_psf1[4100] = {
 	0x36, 0x04, 0x02, 0x10, 0x00, 0x00, 0x00, 0x3e, 0x63, 0x5d, 0x7d, 0x7b,
