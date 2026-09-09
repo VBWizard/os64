@@ -289,15 +289,29 @@ static bool date(span *s, uint64_t *order)
     return true;
 }
 
+static bool der_ordered(span previous, span current)
+{
+    size_t n = previous.length < current.length ? previous.length : current.length;
+    for (size_t i = 0; i < n; i++)
+        if (previous.data[i] != current.data[i]) return previous.data[i] < current.data[i];
+    return previous.length <= current.length;
+}
 static bool name_valid(span name)
 {
     while (name.length) {
         span set;
         if (!field(&name, 0x31, &set) || !set.length) return false;
+        // RDNs are SET OF: DER orders complete member encodings, not OIDs
+        // or values. The enclosing RDNSequence retains its supplied order.
+        span previous = {0};
         while (set.length) {
-            span attribute, id, value; unsigned tag;
-            if (!field(&set, 0x30, &attribute) || !field(&attribute, 6, &id) ||
-                !take(&attribute, &tag, &value) || attribute.length || !value.length) return false;
+            span encoded = set, attribute, id, value; unsigned tag;
+            if (!field(&set, 0x30, &attribute)) return false;
+            encoded.length -= set.length;
+            if (previous.length && !der_ordered(previous, encoded)) return false;
+            previous = encoded;
+            if (!field(&attribute, 6, &id) || !take(&attribute, &tag, &value) ||
+                attribute.length || !value.length) return false;
             if (tag != 12 && tag != 18 && tag != 19 && tag != 20 && tag != 22 && tag != 26 && tag != 28 && tag != 30)
                 return false;
         }
