@@ -67,9 +67,9 @@ ruling contradicts a paragraph, the ruling wins.
      program asks the console to stop interpreting Ctrl+C and Ctrl+D — is a
      small kernel slice of Fable's that ssh will want too; booked, not
      blocking.
-     **NOTE FROM FABLE, 2026-09-08 — RAW MODE IS BUILT** (branch
-     `fable/raw-tty`, PR pending Chris's test; SIGINT.md § Raw mode is the
-     design record). The shape, so step 3 can plan against it: it is ONE
+     **NOTE FROM FABLE, 2026-09-08 — RAW MODE IS BUILT** (SIGINT.md § Raw
+     mode is the design record). The shape, which this client is built
+     against: it is ONE
      bit per terminal — in raw mode BOTH Ctrl+C and Ctrl+D arrive as the
      bytes 0x03 and 0x04 (Chris deferred the half-mode question to me and
      I ruled both-or-neither: those two interpretations are the console's
@@ -127,6 +127,12 @@ directions, and offer NAWS for terminal dimensions. Refuse other options.
 Do not advertise a VT100/xterm terminal type that the local renderer cannot
 honor. Binary mode, environment exchange, authentication, encryption, and
 Telnet server support are outside this slice. Telnet traffic is plaintext.
+
+**A REAL DESTINATION HAS SINCE ASKED FOR BINARY MODE**, and the acceptance
+pass measured why: a DOS door on the target board takes a
+bare CR for Return and ignores both spellings this client can send. Booked in
+DEBTS § Networking rather than built, on Chris's call — the row carries the
+measurements and the two shapes a fix could take.
 
 The parser lives in `userland/apps/telnet/telnet_protocol.{c,h}`, independent
 of syscalls so a host harness can exercise it. It maintains state across
@@ -206,12 +212,41 @@ SIGWINCH marks the dimensions dirty and NAWS is sent from ordinary code.
    conversion, repeated and crossed negotiations, refused options, malformed
    subnegotiations, EOF, back-pressure, a differential comparison against
    Python's `telnetlib`, and live loopback scenarios judged from both ends.
-3. Add the session and command UI; test unsolicited output, echo transitions,
-   failed connections, reconnect, queue pressure, and stalled writes.
-4. Exercise both a VT and direct `gterm /bin/telnet ...` launch in QEMU:
-   typing, paste, local escape, peer close/reset, window close, and resize.
-   Validate against a real target selected by Chris. Full-screen behavior
-   is acceptance only if its terminal prerequisites are approved and built.
+3. DONE — `userland/apps/telnet/telnet.c`: one loop, the `telnet>` prompt,
+   unsolicited output, echo transitions, failed connections, reconnect,
+   queue pressure and stalled writes.
+4. DONE — exercised on a VT and as `gterm /bin/telnet x-bit.org 23230`, the
+   target Chris picked: SPITFIRE BBS 3.7, whose full-colour opening art
+   drew as CP437 in a window. What the launch proves beyond typing is that
+   no husk stands between the window and the program — `quit` ends telnet
+   and the window goes with it, through the ordinary hangup path.
+
+   **RAW MODE IS WHAT THIS PASS WAS WAITING FOR**, and the two keys behave
+   the way 4.2BSD's character mode always did. Against a byte-naming peer:
+   Ctrl+C leaves as `IAC IP`, Ctrl+D as the byte `0x04`, an ordinary key as
+   itself — neither is a signal and neither is an end of input any more.
+   Against the board, both travel and the session carries on (a DOS-era
+   BBS ignores an interrupt, which is its right). Ctrl+] still reaches the
+   `telnet>` prompt from inside a raw session, which is the whole reason
+   the escape character needed a kernel fix first.
+
+   **WHAT THE PASS FOUND, AND IT WAS THE RESIZE.** `os64_read_for` on the
+   connection answers `OS64_INTERRUPTED` when a caught signal ends the park,
+   and this client read every negative that was not a timeout as a broken
+   connection — so the FIRST window resize of a session hung up on it. One
+   Ctrl+Alt+M in a gterm, reproducibly. os64 has no `SA_RESTART` on purpose
+   (DIVERGENCES § Signals): the caller decides, and deciding "the peer is
+   gone" is the wrong decision. `wait_came_back_empty` is the rule written
+   down once — a timeout and an interruption both mean "nothing happened,
+   ask again" — and the read, the write and the keyboard all ask it.
+
+   **THE DIAL IS NOT INTERRUPTIBLE**, and that is the kernel's gap rather
+   than this client's: `tcp_connect` polls and naps to its own deadline
+   without asking `signal_park_must_end`, so a Ctrl+C at
+   `Trying host...` is not seen until the handshake ends. Booked in DEBTS
+   § Networking, together with the reason it cannot simply be fixed — the
+   dial vocabulary's -4 is `OS64_NET_ERR_BAD_ADDRESS` and the signal
+   sentinel is also -4.
 5. Run appropriate host tests, strict build, diff/comment checks, and capture
    serial/fixture evidence. Chris tests before commits per BROWSER.md.
 
@@ -220,7 +255,17 @@ SIGWINCH marks the dimensions dirty and NAWS is sent from ordinary code.
 Questions 2 and 3 of the original draft are answered by rulings 1 and 2.
 What is still open:
 
-1. **First real destination** (ruling 3: Chris's pick). A BBS with ANSI art
+1. **ANSWERED — x-bit.org:23230, Chris's pick**, a SPITFIRE BBS 3.7 behind a
+   Bot-Gate frontdoor. It worked the escape parser exactly as ruling 3
+   predicted: full-colour CP437 art, absolute and relative cursor moves,
+   the saved cursor for the height probe, and `ESC[2J` clearing and
+   homing — the last of which is why the art lands at the top of the glass
+   instead of in its bottom third. A Unix login was worked by
+   `telnettestd.py --scenario unix` rather than by a real host: ECHO
+   changing hands at a password prompt is the thing that matters and the
+   fixture takes it away on demand, which no public board will do twice.
+   The original question, kept because the reasoning stands: a BBS with
+   ANSI art
    works the escape parser hardest; a Unix login works the ECHO negotiation.
 2. **ANSWERED — the explicit one.** `charset cp437|latin1` at the prompt and
    `-8` on the command line, which is the ranking below in the order it was
@@ -228,8 +273,38 @@ What is still open:
    is a Unix login as often as it is a board. The set is handed back when the
    program exits and NOT when a session ends — a board drops you often, and
    re-typing `charset cp437` before every reconnect would be its own small
-   misery; the prompt is ASCII, which both sets agree about. The original
-   question, kept because it is the argument:
+   misery; the prompt is ASCII, which both sets agree about.
+
+   **THE PEN IS HANDED BACK ON THE OPPOSITE SCHEDULE — at every disconnect,
+   and at the prompt** (Chris, 2026-09-09, after running this on the P5:
+   "depending on what the screen looks like when exiting a login session,
+   you can end up with interesting color choices"). A board signs off in
+   whatever colours its last screen used, and a set and a colour go wrong
+   differently: a character set is a way of READING bytes nobody is sending
+   any more, so keeping it costs nothing between sessions, while a colour is
+   on the glass in front of you and outlives the program. `ESC[0m` before
+   the closing notice, and again whenever the `telnet>` prompt draws itself
+   — a line the prompt owns, it owns the colours of.
+
+   **AND `ESC[0m` RATHER THAN A SNAPSHOT**, which is what was asked for.
+   Reading the terminal's pen at startup would need a new procfs line and a
+   new libos64 call (`os64_tty_info_t` is ABI and cannot grow a field), and
+   it would buy nothing today: nothing in os64 sets a terminal colour and
+   leaves it set, so the pen at startup IS the default in every case a
+   person can currently produce. The stronger reason is where the knowledge
+   belongs — `ESC[0m` asks for THE TERMINAL'S OWN colours, so the day os64
+   lets somebody choose those, every program that resets is already asking
+   for the right thing, and every program that snapshotted would be
+   restoring a copy. A snapshot is only better than the default when a
+   program cannot ask, and here it can.
+
+   The paper — `ESC]11`, the terminal's own background — is NOT handed back,
+   because there is no spelling to hand it back with: os64 reads OSC 11 and
+   has no "reset" form of it, and telnet does not know the colour it would
+   name. Nothing on a 1992 board sends OSC 11; the day something does, the
+   fix is a reset spelling in the terminal, not a remembered colour here.
+
+   The original question, kept because it is the argument:
 
    **WHO SAYS CP437?** A board sends the art and never announces the set —
    `ESC ( U` is os64's own spelling, not something a 1992 BBS has heard of,
