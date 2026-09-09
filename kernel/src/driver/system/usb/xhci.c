@@ -543,10 +543,10 @@ static char hid_usage_ascii(const xhci_hid_t *kbd, uint8_t usage)
 	}
 
 	// Ctrl LAST, on the character the other modifiers settled on, and over
-	// the whole 1963 column rather than the letters alone —
+	// the punctuation 1963 ASCII gave a control code as well as the letters —
 	// keyboard_has_control_code (keyboard.h) is the shared answer to which
-	// characters have a control code, so the two keyboard dialects cannot
-	// disagree about what Ctrl+] is.
+	// characters have one, so the two keyboard dialects cannot disagree about
+	// what Ctrl+] is.
 	if (ctrl && keyboard_has_control_code(c))
 		c = (char)(c & 0x1F);
 	return c;

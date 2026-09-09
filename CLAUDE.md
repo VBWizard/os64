@@ -404,18 +404,20 @@ parked reader on arrival instead of at the tick.
 - **PIT** (`pit.c`): Programmable Interval Timer
 - **Keyboard** (`keyboard.c`): PS/2 keyboard driver. Tracks shift/ctrl/alt/
   caps/num; **Ctrl is translated to the ASCII control code — what Ctrl was
-  designed to do in 1963, over the whole column that design covers.** 1963
-  ASCII placed the control codes where clearing bit 6 of a printable
-  character lands, so `@ A-Z [ \ ] ^ _` (0x40..0x5F) and the lowercase
-  letters that fold onto the same codes ALL map: `c & 0x1F`. That is why
-  Ctrl+[ is ESC and Ctrl+] is 0x1D, telnet's escape character, which was
-  untypeable while the rule was letters-only. The backtick and `{ | } ~` are
-  deliberately excluded — they would collide with codes the column above
-  already owns, and it is what keeps Ctrl+~ free for the debug toggle. The
-  rule is written ONCE, as `keyboard_has_control_code` in keyboard.h, because
-  BOTH keyboard dialects translate their own keys and it had been written
-  twice. Ctrl is applied LAST, after Shift, or `^` and `_` and `@` would
-  never be seen. Ctrl+D = 0x04 = EOT, which
+  designed to do in 1963, and not only for the letters.** 1963 ASCII placed
+  the control codes where clearing bit 6 of a printable character lands, so
+  `A-Z [ \ ] ^ _` and the lowercase letters that fold onto the same codes all
+  map: `c & 0x1F`. That is why Ctrl+[ is ESC and Ctrl+] is 0x1D, telnet's
+  escape character, which was untypeable while the rule was letters-only. The
+  backtick and `{ | } ~` are deliberately excluded — they would collide with
+  codes the column above already owns, and it is what keeps Ctrl+~ free for
+  the debug toggle. `@` is excluded for a different reason: its code is NUL,
+  and a zero byte is how a delivery path spells "this key produced no
+  character", so Ctrl+@ types `@`. The rule is written ONCE, as
+  `keyboard_has_control_code` in keyboard.h, because BOTH keyboard dialects
+  translate their own keys and it had been written twice. Ctrl is applied
+  LAST, after Shift, or `^` and `_` would never be seen.
+  Ctrl+D = 0x04 = EOT, which
   console_read (console.c) turns into end-of-input: read() returns 0 once,
   then the console reads normally again. The framebuffer renderer
   (BasicRenderer.c print_n) honors '\b' (cursor back one cell, clamped at

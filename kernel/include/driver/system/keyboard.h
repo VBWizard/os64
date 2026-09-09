@@ -72,13 +72,21 @@ static inline bool keyboard_is_escape_key(uint8_t scancode, uint8_t modifiers)
 // that has one. Leaving them alone is also what keeps Ctrl+~ free to be the
 // debug-suppress toggle (keyboard.c).
 //
+// `@` IS ABSENT TOO, and for a different reason: its code is NUL, and a zero
+// ascii byte is already how a keystroke says "this key produced no character"
+// — the console ring's producer and the GUI key event a gterm reads both take
+// it that way, so a real NUL is indistinguishable from a modifier press.
+// Carrying one would mean a second field saying the zero means something, in
+// a struct ring 3 already compiles against, for a keystroke nothing here has
+// asked to type. So Ctrl+@ types '@', the way Ctrl+1 types '1'.
+//
 // It lives here, in the header, for the reason keyboard_arrow_updown does:
 // BOTH keyboard dialects translate their own keys, so a rule written down
 // once is a rule they cannot come to disagree about — and this one WAS
 // written twice, letter-only in each.
 static inline bool keyboard_has_control_code(char c)
 {
-    return (c >= '@' && c <= '_') || (c >= 'a' && c <= 'z');
+    return (c >= 'A' && c <= '_') || (c >= 'a' && c <= 'z');
 }
 
 // Which VERTICAL arrow is this event: -1 up, +1 down, 0 neither. The one

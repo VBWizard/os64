@@ -343,10 +343,10 @@ static char keyboard_translate_scancode(uint8_t scancode) {
     }
 
     // CTRL IS APPLIED LAST, to the character the other modifiers settled on.
-    // It has to be: `^` and `_` and `@` are what Shift makes of 6, - and 2, so
-    // a Ctrl that ran first would be handed the digit and produce the wrong
-    // code. Case does not matter here because folding a letter's case does not
-    // move the bits this keeps.
+    // It has to be: `^` and `_` are what Shift makes of 6 and -, so a Ctrl
+    // that ran first would be handed the digit and produce the wrong code.
+    // Case does not matter here because folding a letter's case does not move
+    // the bits this keeps.
     //
     // This is not a convention we're borrowing — it's what the Ctrl key was
     // BUILT to do; keyboard_has_control_code (keyboard.h) has the layout and
