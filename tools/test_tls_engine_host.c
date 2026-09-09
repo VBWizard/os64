@@ -78,7 +78,7 @@ static tls_engine_config config(policy *p)
     return (tls_engine_config){
         .hostname = {"ExAmPlE.TeSt", 12}, .alpn = alpn, .alpn_count = 1, .epoch = -1,
         .entropy = entropy, .entropy_context = p,
-        .validator = {create_peer, destroy_peer, p}
+        .validator = {.create = create_peer, .destroy = destroy_peer, .context = p}
     };
 }
 
@@ -169,6 +169,7 @@ static void handshake(connection *c)
     for (unsigned i = 0; i < 100000; i++) {
         tls_state state = os64_tls_engine_state(c->client);
         assert(state.status == TLS_OK);
+        assert(state.policy_reason == TLS_POLICY_OK);
         if ((state.flags & TLS_HANDSHAKE_DONE) &&
             (br_ssl_engine_current_state(&c->server.eng) & BR_SSL_SENDAPP)) {
             assert(state.alpn && !strcmp(state.alpn, "http/1.1")); return;
@@ -420,9 +421,42 @@ static void independent_connections(void)
     exchange(b); close_with_buffered_plaintext(b); disconnect_fixture(b);
 }
 
+static void handshake_cipher_budget(void)
+{
+    connection *c;
+    for (unsigned crossing = 0; crossing < 2; crossing++) {
+        c = connect_fixture(0xc02b, 37, false);
+        unsigned char hello[128];
+        while (os64_tls_engine_state(c->client).flags & TLS_SEND_CIPHER)
+            assert(os64_tls_engine_take(c->client, hello, sizeof hello).transferred);
+        const unsigned char warning[] = {21, 3, 3, 0, 2, 1, 90};
+        const size_t limit = 1048576;
+        size_t total = 0, at = 0;
+        while (total < limit) {
+            size_t n = sizeof warning - at;
+            if (!crossing) n = smaller(n, limit - total);
+            tls_transfer r = os64_tls_engine_feed(c->client, warning + at, n);
+            assert(r.status == TLS_OK && r.transferred);
+            total += r.transferred; at = (at + r.transferred) % sizeof warning;
+        }
+        assert(total == limit);
+        assert(!(os64_tls_engine_state(c->client).flags & TLS_HANDSHAKE_DONE));
+        assert(os64_tls_engine_feed(c->client, NULL, 0).status == TLS_OK);
+        tls_transfer r = os64_tls_engine_feed(c->client, warning + at, sizeof warning - at);
+        assert(r.status == TLS_LIMIT && !r.transferred);
+        assert(os64_tls_engine_abort(c->client, TLS_TIMEOUT) == TLS_LIMIT);
+        disconnect_fixture(c);
+    }
+    c = connect_fixture(0xc02b, 4096, false); handshake(c);
+    // Post-handshake traffic is outside the initial-handshake budget.
+    for (unsigned i = 0; i < 16; i++) exchange(c);
+    disconnect_fixture(c);
+}
+
 int main(void)
 {
     creation_failures(); puts("PASS creation validation, allocation/factory/entropy failures, and wiped cleanup");
+    handshake_cipher_budget(); puts("PASS initial-handshake ciphertext cap and post-handshake traffic beyond 1 MiB");
     const uint16_t suites[] = {0xcca9, 0xcca8, 0xc02b, 0xc02f, 0xc02c, 0xc030};
     const size_t fragments[] = {1, 7, 17, 4096, 13, 257};
     for (size_t i = 0; i < 6; i++) {

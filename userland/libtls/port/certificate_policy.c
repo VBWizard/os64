@@ -219,9 +219,13 @@ static void destroy(const br_x509_class **ctx)
     os64_tls_trust_free(v->trust);
     os64_free(v);
 }
+static tls_policy_reason validator_reason(const br_x509_class *const *ctx)
+{
+    return os64_tls_policy_result(ctx).reason;
+}
 tls_validator_factory os64_tls_policy_factory(os64_tls_trust *store)
 {
-    return (tls_validator_factory){create, destroy, store};
+    return (tls_validator_factory){create, destroy, store, validator_reason};
 }
 tls_policy_result os64_tls_policy_result(const br_x509_class *const *ctx)
 {

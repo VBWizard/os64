@@ -7,6 +7,8 @@ struct os64_tls_engine {
     br_ssl_client_context client;
     const br_x509_class **validator;
     void (*destroy_validator)(const br_x509_class **);
+    tls_policy_reason (*validator_reason)(const br_x509_class *const *);
+    size_t handshake_received;
     unsigned char records[BR_SSL_BUFSIZE_BIDI];
     char hostname[254];
     char alpn_bytes[1032];
@@ -121,6 +123,7 @@ tls_status os64_tls_engine_create(const tls_engine_config *cfg, os64_tls_engine 
     }
     os64_bearssl_client_algorithms(&c->client);
     c->destroy_validator = cfg->validator.destroy;
+    c->validator_reason = cfg->validator.policy_reason;
     result = cfg->validator.create(cfg->validator.context, c->hostname,
         (uint32_t)days, (uint32_t)seconds, &c->validator);
     if (result != TLS_OK) goto cleanup;
@@ -162,6 +165,7 @@ tls_state os64_tls_engine_state(os64_tls_engine *c)
     unsigned state = advance(c);
     result.status = c->terminal;
     result.upstream_error = c->upstream_error;
+    if (c->validator_reason) result.policy_reason = c->validator_reason(c->validator);
     if (c->handshake) {
         result.flags |= TLS_HANDSHAKE_DONE;
         result.alpn = br_ssl_engine_get_selected_protocol(&c->client.eng);
@@ -199,6 +203,14 @@ static tls_transfer transfer(os64_tls_engine *c, void *buffer, size_t length, tr
     }
     if (!view || !available) { result.status = TLS_NEED_PROGRESS; return result; }
     size_t count = length < available ? length : available;
+    if (kind == FEED && !c->handshake) {
+        size_t remaining = TLS_HANDSHAKE_CIPHER_MAX - c->handshake_received;
+        if (!remaining) {
+            fail(c, TLS_LIMIT); result.status = c->terminal; return result;
+        }
+        if (count > remaining) count = remaining;
+        c->handshake_received += count;
+    }
     if (kind == FEED || kind == WRITE) os64_memcpy(view, buffer, count);
     else os64_memcpy(buffer, view, count);
     switch (kind) {

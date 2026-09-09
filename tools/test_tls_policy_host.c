@@ -231,6 +231,11 @@ static void handshake(const policy_case *c)
                 assert(!(state.flags & (TLS_SEND_PLAIN | TLS_RECV_PLAIN)));
                 assert(!os64_tls_engine_write(client, "secret", 6).transferred);
             }
+            assert(state.policy_reason == c->reason);
+            if (!c->success) {
+                assert(os64_tls_engine_abort(client, TLS_TIMEOUT) == state.status);
+                assert(os64_tls_engine_state(client).policy_reason == c->reason);
+            }
             done = true; break;
         }
         size_t n;

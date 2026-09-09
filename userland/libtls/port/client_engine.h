@@ -14,6 +14,14 @@ typedef enum {
     TLS_UNSUPPORTED, TLS_PROTOCOL, TLS_TRUNCATED, TLS_TRANSPORT, TLS_TIMEOUT,
     TLS_CANCELLED
 } tls_status;
+typedef enum {
+    TLS_POLICY_OK, TLS_POLICY_DER, TLS_POLICY_LIMIT, TLS_POLICY_DUPLICATE,
+    TLS_POLICY_EXTENSION, TLS_POLICY_CRITICAL, TLS_POLICY_SAN,
+    TLS_POLICY_EKU, TLS_POLICY_CA, TLS_POLICY_KEY_USAGE, TLS_POLICY_KEY,
+    TLS_POLICY_SIGNATURE, TLS_POLICY_ANCHOR, TLS_POLICY_SEQUENCE
+} tls_policy_reason;
+
+#define TLS_HANDSHAKE_CIPHER_MAX 1048576u
 
 enum {
     TLS_RECV_CIPHER = 1u << 0, TLS_SEND_CIPHER = 1u << 1,
@@ -25,6 +33,7 @@ typedef struct {
     tls_status status;
     unsigned flags;
     int upstream_error;
+    tls_policy_reason policy_reason;
     const char *alpn; // Connection-owned; valid until destroy, or NULL.
 } tls_state;
 typedef struct { const char *data; size_t length; } tls_name;
@@ -39,6 +48,9 @@ typedef struct {
                          const br_x509_class ***out);
     void (*destroy)(const br_x509_class **validator);
     void *context;
+    // Optional bounded diagnostic from the owned validator; no factory context
+    // is retained. Without this callback, engine state reports TLS_POLICY_OK.
+    tls_policy_reason (*policy_reason)(const br_x509_class *const *validator);
 } tls_validator_factory;
 
 typedef struct {
@@ -76,7 +88,7 @@ tls_status os64_tls_engine_flush(os64_tls_engine *engine);
 // Closing during the initial handshake cancels the connection.
 tls_status os64_tls_engine_close(os64_tls_engine *engine);
 // EOF forbids new ciphertext input/writes, but permits draining authenticated
-// plaintext and a pending close reply. A bare FIN is not a clean TLS EOF.
+// plaintext, accepted output and a pending close reply. A bare FIN is not clean EOF.
 tls_status os64_tls_engine_eof(os64_tls_engine *engine);
 // Abort stops all I/O. The first terminal reason is retained.
 tls_status os64_tls_engine_abort(os64_tls_engine *engine, tls_status reason);
