@@ -7,8 +7,9 @@ The source here is private: no installed header, shared library, application
 integration, or new kernel/libos64 interface. The
 [certificate-policy factory](../../TLS_CERTIFICATE_POLICY.md) supplies DER trust
 snapshots and the acceptance gate. The [trust-store loader](../../TLS_TRUST_STORE.md)
-supplies complete PEM snapshots. Production randomness and transport adapters
-remain required for native HTTPS.
+supplies complete PEM snapshots. The [OS-input constructor](../../TLS_PRODUCTION_INPUTS.md)
+supplies production randomness and UTC time. Transport integration remains
+required for native HTTPS.
 
 ## Profile and ownership
 
@@ -121,10 +122,9 @@ rule and check a relocatable link against the foundation archive. Its external
 functions should be `os64_malloc`, `os64_free`, `os64_memcpy`, `os64_memmove`,
 `os64_memset`, and `os64_strlen`.
 
-The new engine has not been executed in a guest or wired into a shipped test.
-Foundation guest evidence remains separate. This harness uses the adapted
-pinned server implementation, not an independent OpenSSL peer, and is not a
-fuzzing campaign. The certificate-policy harness supplies separate negative
-and handshake-gate coverage. Production entropy integration, independent-peer
-interoperability, guest engine execution, fuzzing, and the production source
-allowlist remain later validation gates in TLS.md.
+The guest `tlsinputtest` exercises engine creation, ClientHello output and
+cleanup through the [OS-input constructor](../../TLS_PRODUCTION_INPUTS.md).
+The host harness uses the adapted pinned server implementation; the
+certificate-policy harness supplies separate negative and handshake-gate
+coverage. Independent-peer interoperability, guest network handshakes,
+fuzzing, and the production source allowlist remain validation gates in TLS.md.

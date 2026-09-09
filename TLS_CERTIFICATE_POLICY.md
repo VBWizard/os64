@@ -3,8 +3,8 @@
 This private slice supplies the owned validator factory used by
 `userland/libtls/port/client_engine.h`. It builds on the engine and the pinned
 BearSSL foundation. It installs no public API or root bundle. The
-[PEM/config loader](TLS_TRUST_STORE.md) consumes this interface. Production
-entropy, transport, and HTTPS integration remain separate slices in TLS.md.
+[PEM/config loader](TLS_TRUST_STORE.md) and [OS-input constructor](TLS_PRODUCTION_INPUTS.md)
+consume this interface. Transport and HTTPS integration remain separate slices in TLS.md.
 
 ## Acceptance gate
 

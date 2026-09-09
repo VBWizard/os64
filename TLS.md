@@ -9,9 +9,11 @@ The [certificate-policy slice](TLS_CERTIFICATE_POLICY.md) adds bounded DER
 inspection and sealed trust snapshots behind the private validator factory.
 The [trust-store loader](TLS_TRUST_STORE.md) selects and validates complete
 PEM bundles, with a guest `tlstrusttest` fixture for parsing and replacement.
+The [production-inputs adapter](TLS_PRODUCTION_INPUTS.md) supplies `/dev/random`
+and UTC time to the private engine, with a guest `tlsinputtest` creation fixture.
 The public TLS interface is proposed; native HTTPS is not ready. Trust-store
 selection uses the approved configuration and replacement policy below;
-public root-bundle selection and production integration remain open.
+public root-bundle selection and network integration remain open.
 
 ## Intended result and scope
 
@@ -135,8 +137,10 @@ HTTP client / future libfetch
 The engine layer does no socket I/O, DNS, file lookup, sleeping, or clock
 sampling. It receives a validated server name, an immutable trust snapshot,
 explicit validation time, and entropy through a provider. Host fixtures can
-therefore control every external input. The later convenience adapter obtains
-those inputs through os64 and drives the same engine.
+therefore control every external input. The private
+[OS-input constructor](TLS_PRODUCTION_INPUTS.md) obtains randomness and UTC
+through os64 and binds a caller-supplied sealed trust snapshot to the engine.
+The transport adapter drives byte progress separately.
 
 Use opaque connection and trust-store types. Creation allocates the complete
 connection working set, copies the server name, and retains a reference to
@@ -338,8 +342,9 @@ The service read contract refuses with `-1` before the pool is seeded rather
 than parking the reader: the device read executes where it may not sleep.
 The production adapter maps that refusal to `ENTROPY_UNAVAILABLE` and does
 not start the handshake or silently retry in a busy loop. A later attempt
-requires a fresh connection. Short reads and interruption must be covered
-when the adapter is integrated with the approved service.
+requires a fresh connection. The [input fixture](TLS_PRODUCTION_INPUTS.md)
+covers short reads and refusal at each seed offset. The generic read ABI
+does not distinguish interruption from other negative returns.
 
 Candidate sources are hardware RNG facilities on supported machines and a
 hypervisor entropy device under QEMU. Their availability and trust assumptions

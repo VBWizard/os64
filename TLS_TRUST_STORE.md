@@ -104,4 +104,6 @@ and leaf certificates from deliberately trivial test keys; it requires Python
 cryptography. The ordinary host and guest tests use the checked-in bytes and
 do not generate keys or consult the wall clock. These fixtures are not a root
 bundle for deployment. Public-root compatibility, provenance/update policy,
-and production entropy/transport integration remain separate work.
+and transport integration remain separate work. The private
+[OS-input constructor](TLS_PRODUCTION_INPUTS.md) uses sealed snapshots with
+production randomness and UTC time.
