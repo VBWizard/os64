@@ -131,6 +131,20 @@ typedef struct tty
 	volatile int pushbackCount;
 	struct task * volatile fgTask;     // who Ctrl+C aims at ON THIS tty
 	struct task * volatile shell;      // the controlling shell seated here
+	// THE FOREGROUND'S MUTATION LOCK. Every write to fgTask (and to shell)
+	// happens under it, and every check that decides a write ("is the
+	// pointer still me?", "does it name a live child of mine?") is made
+	// inside the same hold — so the hand-offs at a spawn, a wait's entry
+	// and finish, a task's departure and a seat are each one indivisible
+	// transition, never a check on one core and a store on another. A leaf
+	// lock, irqsave, held for a pointer compare and a task-list walk and
+	// nothing else; readers (the Ctrl+C intercept in IRQ context, the mode
+	// query, /proc) read the pointer bare — a single aligned word.
+	spinlock_t fg_lock;
+	// Raw mode has no word here on purpose: the terminal is raw exactly
+	// while fgTask->wantsRaw (task.h) — derived, never stored, so there is
+	// no holder to publish, transfer, or clear at a death (SIGINT.md § Raw
+	// mode). Reading it: console_tty_raw.
 
 	// ── The summons (dormant ttys only) ─────────────────────────────────────
 	volatile tty_state_t state;
@@ -206,9 +220,12 @@ void tty_write(tty_t *t, const char *bytes, size_t length);
 void tty_flush_if_dirty(void);
 
 // ── Input (called by tty.c's producers and console.c's consumer) ───────────
-// Deliver a translated keystroke to the FOCUSED tty. A dormant tty swallows
-// the key and requests its shell instead; a scrolled-back view snaps to the
-// present first (a keystroke means "I'm done reading history").
+// Deliver a translated keystroke to the FOCUSED tty — read ONCE, and that
+// one terminal answers everything: the interrupt-character veto (a 0x03 on
+// a cooked terminal becomes SIGINT here and never enters the ring), the
+// knock (a dormant tty swallows the key and requests its shell), and the
+// scrollback snap (a scrolled-back view returns to the present first — a
+// keystroke means "I'm done reading history").
 void tty_input_event(const keyboard_event_t *ev);
 bool tty_input_has(tty_t *t);
 bool tty_input_pop(tty_t *t, keyboard_event_t *ev);
@@ -221,6 +238,15 @@ void tty_input_push(tty_t *t, const keyboard_event_t *ev);
 // producer that can come back later (the clipboard paste feeds a snarf in
 // across frames rather than truncating it). Returns false when full.
 bool tty_input_push_if_room(tty_t *t, const keyboard_event_t *ev);
+
+// ── Raw mode (SIGINT.md § Raw mode) ────────────────────────────────────────
+// Record a task's wish for its terminal: raw or cooked. The wish is the
+// task's own (task.h wantsRaw) and takes effect exactly while the task is
+// the terminal's foreground — so only the foreground may ask (a background
+// job's wish would be a lie about the seat), and a wish set by a task that
+// is not the foreground changes nothing. Returns 0, or -1 when the caller
+// is not the foreground.
+int tty_set_raw(tty_t *t, struct task *caller, bool raw);
 
 // ── Focus (called from the keyboard drivers' chord intercepts) ─────────────
 void tty_focus(uint32_t index);        // Alt+F1..F8 — direct select

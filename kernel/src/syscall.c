@@ -1017,7 +1017,7 @@ static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 // the sentence here used to say it could not), same 128+signo retVal
 // encoding for a waiting parent. The bit
 // is set somewhere the victim is NOT running — at the KEYSTROKE
-// (console_intr_intercept, IRQ path — cat writing a huge file is not reading
+// (console_intr_intercept_tty, IRQ path — cat writing a huge file is not reading
 // the console, so a buffered byte could never work), or by another task
 // writing to /proc/<id>/ctl. The KILL happens here, at the victim's own
 // syscall boundary, in its own context — free to sleep, safe to close handles,
@@ -3535,6 +3535,31 @@ static void spawn_do_create(void *arg)
 	child->backgroundJob = p->background ||
 	                      (p->parent != NULL && p->parent->backgroundJob &&
 	                       p->ttySlave == NULL);
+
+	// THE FOREGROUND CHANGES HANDS AT THE SPAWN, not first at the wait
+	// (task_wait re-affirms it). The child is runnable the moment it is
+	// submitted below, and on SMP it can reach a syscall before the parent
+	// ever calls wait — so anything that asks "am I the foreground?" at
+	// startup (tty_set_raw: a telnet going raw as its first act) would be
+	// answered by a race. Same test as task_wait's, same terminal: the
+	// parent's own, and only when the child inherits it — a child seated on
+	// a pty slave is that terminal's foreground already (tty_seat_shell,
+	// next), and the parent's terminal must keep its own. A background
+	// job never takes the console, here as at the wait. Test and store
+	// under the terminal's foreground lock (tty.h): a sibling thread's wait
+	// finishing at this instant restores the parent under the same lock,
+	// so the two cannot interleave into "checked, then overwritten" — and
+	// that finish asks "a live child of mine?" of the POINTER, not of
+	// kTaskList, because the child is published here and joins the list
+	// only at its submission below.
+	if (p->ttySlave == NULL && !child->backgroundJob && p->parent != NULL)
+	{
+		tty_t *console = task_tty(p->parent);
+		uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+		if (p->parent->controllingShell || console->fgTask == p->parent)
+			console->fgTask = child;
+		spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+	}
 
 	// Seat on a pty slave (PTY.md), BEFORE submission like everything else
 	// here: the child must never run an instruction on the wrong terminal.

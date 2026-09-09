@@ -565,8 +565,39 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 	// How much history Shift+PgUp can reach right now — a pager that knows
 	// the terminal already holds N lines can choose not to repeat them.
 	synth_text_addf(t, "scrollback\t%u\n", hist);
-	synth_text_addf(t, "fg_task\t%lu\n",
-	           tty->fgTask ? ((task_t *)tty->fgTask)->taskID : 0);
+	// ONE read of the foreground for every line that derives from it: the
+	// pointer changes hands at a spawn, a wait and a departure, and a
+	// report that read it twice could say `mode raw` and then name a
+	// cooked task as raw_task — a pair no terminal was ever in.
+	task_t *fg = (task_t *)tty->fgTask;
+	synth_text_addf(t, "fg_task\t%lu\n", fg ? fg->taskID : 0);
+	// The line discipline, such as it is: `cooked` means Ctrl+C is SIGINT
+	// and Ctrl+D is end-of-input; `raw` means both are bytes, and raw_task
+	// names the foreground task whose wish that is (SIGINT.md § Raw mode).
+	// The same two words are what a write to this file accepts — a control
+	// surface that describes itself.
+	bool raw = fg != NULL && fg->wantsRaw;
+	synth_text_addf(t, "mode\t%s\n", raw ? "raw" : "cooked");
+	synth_text_addf(t, "raw_task\t%lu\n", raw ? fg->taskID : 0);
+}
+
+// A write to /proc/self/tty is a COMMAND, the ctl file's rule: the first
+// word is the verb, the whole write is consumed. Two verbs, and only the
+// terminal's foreground task may speak them (tty.c says why). -1 for a word
+// this kernel does not know or a caller the terminal does not answer to.
+static int proc_tty_command(task_t *task, const char *word, size_t consumed)
+{
+	bool raw;
+	if (strcmp(word, "raw") == 0)
+		raw = true;
+	else if (strcmp(word, "cooked") == 0)
+		raw = false;
+	else
+		return -1;
+	if (tty_set_raw(task_tty(task), task, raw) != 0)
+		return -1;
+	printd(DEBUG_SYSCALL, "proc: tty '%s' by task %lu (%s)\n", word, task->taskID, task->exename);
+	return (int)consumed;
 }
 
 // The leading "handle<TAB>type<TAB><escaped mount><escaped path>" of a file
@@ -1111,7 +1142,8 @@ typedef struct
 {
 	synth_snapshot_t snap;  // MUST be first — the generic fops see only this
 	                        // head, and close frees the whole struct by it
-	bool     is_ctl;        // writes to this handle are commands
+	bool     is_ctl;        // writes to this handle are commands (signals)
+	bool     is_tty;        // writes to this handle are commands (raw/cooked)
 	bool     is_mem;        // reads come from the task's address space, live
 	uint64_t mem_pos;       // mem's cursor: a virtual address in the task
 	uint64_t taskID;        // ctl's/mem's target, re-resolved at every use
@@ -1265,8 +1297,18 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 
 	bool is_ctl = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "ctl") == 0);
 	bool is_mem = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "mem") == 0);
-	if (mode[0] == 'w' && !is_ctl)
-		return -1;   // only ctl accepts a write, ever — mem included (see it)
+	bool is_tty = (pp.type == PROC_NODE_TASK_FILE && strcmp(pp.name, "tty") == 0);
+	// A write is a command, and two files take one: ctl (signals) and tty
+	// (raw/cooked). tty's is the task's OWN terminal mode, so a write to
+	// another task's tty file is refused at the boundary: only /proc/self.
+	if (mode[0] == 'w' && !is_ctl && !is_tty)
+		return -1;   // nothing else accepts a write, ever — mem included (see it)
+	if (mode[0] == 'w' && is_tty)
+	{
+		core_local_storage_t *cls = get_core_local_storage();
+		if (cls == NULL || cls->task != task)
+			return -1;
+	}
 
 	// Generate the whole file NOW, into a snapshot (PROC.md: an internally
 	// consistent file beats a fresh one — you can never read the first half of
@@ -1304,13 +1346,15 @@ static int proc_open(vfs_file_t **vfs_file, const char *path, const char *mode,
 		return -1;
 
 	h->is_ctl = is_ctl;
+	h->is_tty = is_tty;
 	h->is_mem = is_mem;
 	h->mem_pos = 0;
 	h->taskID = pp.taskID;
 	return 0;
 }
 
-// Writing to a /proc file is a COMMAND, not a store. Only ctl accepts one.
+// Writing to a /proc file is a COMMAND, not a store. ctl takes one (a
+// signal) and the task's own tty file takes one (raw/cooked).
 //
 // The buffer arrives as whatever the writer sent — `echo kill` sends "kill\n",
 // a program might send "kill" with no newline, husk might one day send several.
@@ -1323,7 +1367,7 @@ static int proc_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	char word[PROC_NAME_MAX];
 	size_t i = 0, n = 0;
 
-	if (!h->is_ctl || buffer == NULL || size == 0)
+	if ((!h->is_ctl && !h->is_tty) || buffer == NULL || size == 0)
 		return -1;
 
 	const char *b = (const char *)buffer;
@@ -1349,6 +1393,20 @@ static int proc_write(vfs_file_t *vfs_file, const void *buffer, size_t size)
 	if (task == NULL)
 		return -1;   // the task is gone — the command has no target
 
+	// A tty command is spoken by THE TASK THAT WRITES, never by the task
+	// that opened: `echo raw > /proc/self/tty &` has the shell open the
+	// file and a background child write through the inherited handle, and
+	// attributing that to the opener would make the shell the holder of a
+	// mode nobody it seated asked for. A handle that changed hands carries
+	// no authority here — the writer must be the task the file names.
+	if (h->is_tty)
+	{
+		core_local_storage_t *cls = get_core_local_storage();
+		task_t *writer = cls ? cls->task : NULL;
+		if (writer == NULL || writer != task)
+			return -1;
+		return proc_tty_command(writer, word, size);
+	}
 	return proc_ctl_command(task, word, size);
 }
 

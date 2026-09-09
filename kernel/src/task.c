@@ -1550,6 +1550,27 @@ static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 	return NULL;
 }
 
+// Is `candidate` — a value read from a terminal's fgTask — a live child of
+// `parent`? ASKED ONLY UNDER THAT TERMINAL'S fg_lock, and it dereferences
+// the candidate on the strength of two facts: a task's departure clears
+// itself from the pointer under the same lock before its burial can free
+// it, so whatever the pointer names while we hold the lock is not freed;
+// and the candidate may be a child the spawn has published but not yet
+// submitted — not on kTaskList yet — so a list walk would call a live,
+// about-to-run child dead and let an older wait take its console back.
+static bool task_is_live_child(task_t *parent, task_t *candidate)
+{
+	return candidate != NULL && candidate->parentTask == parent && !candidate->exited;
+}
+
+bool task_is_live(const task_t *candidate)
+{
+	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
+		if (t == candidate)
+			return !t->exited;
+	return false;
+}
+
 uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 {
 	core_local_storage_t *cls = get_core_local_storage();
@@ -1566,9 +1587,14 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// a script's husk running a line). The hand-off follows the wait DOWN
 	// so Ctrl+C reaches the program actually running; aimed at the
 	// middleman it killed `env X=1 sleep 30` at once and left sleep alive,
-	// ownerless, still writing to the terminal. Keyed on wait, not spawn,
-	// so a backgrounded (&) child never takes the console — a background
-	// job is not the foreground, so its own waits move nothing. Restored to
+	// ownerless, still writing to the terminal. The spawn syscall already
+	// moved the console to a foreground child the moment it was submitted
+	// (a child can reach a syscall before its parent reaches this wait, and
+	// tty_set_raw asks "am I the foreground?" at startup); this is the
+	// re-affirmation, and the one that follows a wait DOWN through a
+	// middleman. A backgrounded (&) child never takes the console at
+	// either point — a background job is not the foreground, so its own
+	// waits move nothing. Restored to
 	// the WAITER on every return path that FINISHES the wait (a corpse
 	// collected, or no child to wait for): a Ctrl+C at the prompt after this
 	// wait must find the shell foreground again (where it is a harmless
@@ -1581,13 +1607,41 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// THE console is now THIS SHELL'S TERMINAL (task_tty): husk-on-tty2
 	// handing its console to a child moves tty2's foreground pointer and
 	// nobody else's — the Ctrl+C you type on tty1 cannot reach across.
+	// "Is the waiter the foreground?" has a third spelling since the spawn
+	// began handing the console down: the foreground may already be one of
+	// the waiter's own children — which is exactly the case the finishing
+	// paths below must hand BACK to the waiter (a middleman going cooked
+	// after its helper exits was refused as "not the foreground" the day
+	// this test read only the first two).
+	//
+	// A WAIT ON A NAMED CHILD MAKES THAT CHILD THE FOREGROUND. This is
+	// what a pipeline needs: husk spawns every stage (each spawn hands the
+	// console down, so the LAST stage holds it) and then waits on the
+	// stages in launch order — `sleep 30 | true` must aim Ctrl+C at the
+	// sleep the shell is waiting on, not at a `true` that exits at once
+	// and hands the console back to a shell that is still blocked. The
+	// pointer naming some other live child is not a reason to leave it:
+	// a named wait is the program's explicit statement of which job it is
+	// attending, and it outranks the hand-off a spawn made in passing. (A
+	// program that waits on A from one thread while spawning B from
+	// another has said two things; the terminal believes the later one.)
+	// A WILDCARD wait names nobody and moves nothing at its entry — a
+	// reaper thread collecting whatever ends is not attending a job.
+	//
+	// EVERY CHECK-THEN-STORE ON THE POINTER, here and at the finish, runs
+	// under the terminal's foreground lock (tty.h): a sibling thread's
+	// spawn publishes its child under the same lock, so the finish's "not
+	// a live child" and "then store" cannot be split by a publication.
 	tty_t *console = task_tty(parent);
-	bool movesConsole = parent->controllingShell || console->fgTask == parent;
-	if (movesConsole) {
+	uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+	bool movesConsole = parent->controllingShell || console->fgTask == parent ||
+	                    task_is_live_child(parent, (task_t *)console->fgTask);
+	if (movesConsole && targetPid != 0) {
 		task_t *fg = task_find_live_child(parent, targetPid);
 		if (fg != NULL)
 			console->fgTask = fg;
 	}
+	spinlock_release_irqrestore(&console->fg_lock, fgFlags);
 
 	while (1==1)
 	{
@@ -1639,16 +1693,31 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 			if (exitCode != NULL) {
 				*exitCode = endedRetVal;
 			}
-			if (movesConsole)
-				console->fgTask = parent;
+			// Take the console back — unless it already names a LIVE child
+			// of ours: a sibling thread may have spawned one while this
+			// wait was finishing, and its hand-off must not be undone by an
+			// older wait's restore. Under the foreground lock, so that
+			// check and this store are one transition against that spawn.
+			if (movesConsole) {
+				fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				if (!task_is_live_child(parent, (task_t *)console->fgTask))
+					console->fgTask = parent;
+				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+			}
 			return endedPid;
 		}
 
 		// No dead match. If there is no matching LIVE child either, there is
 		// nothing to wait for — fail rather than sleep forever.
 		if (task_find_live_child(parent, targetPid) == NULL) {
-			if (movesConsole)
-				console->fgTask = parent;
+			// Take the console back — same rule and same lock as the
+			// collected-corpse return above.
+			if (movesConsole) {
+				fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
+				if (!task_is_live_child(parent, (task_t *)console->fgTask))
+					console->fgTask = parent;
+				spinlock_release_irqrestore(&console->fg_lock, fgFlags);
+			}
 			return 0;
 		}
 

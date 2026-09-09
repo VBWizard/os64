@@ -284,6 +284,13 @@
         // not a different object wired into the child's handle 0: fg must be
         // able to re-attach input without surgery on a running task's table.
         bool backgroundJob;
+        // RAW MODE IS THIS TASK'S WISH, not the terminal's state (SIGINT.md
+        // § Raw mode): the terminal is raw exactly while its foreground task
+        // wants it so. Set by the task itself (a write of `raw` to
+        // /proc/self/tty), never inherited, dies with the task — so the seat
+        // is cooked again the instant the foreground moves to a task that
+        // did not ask, and no shared holder word exists to race over.
+        bool wantsRaw;
         bool kernelTask;
         struct tm startTime, endTime;
         uint64_t entryPoint;
@@ -351,10 +358,22 @@
 	// (kForegroundTask, 2026-07..2026-08-08, promoted.) The foreground task
 	// — "the task the controlling shell is currently blocked waiting on" —
 	// lives in tty_t.fgTask now, one per terminal, exactly as its birth
-	// comment promised. Everything else about it survived the move: task_wait
-	// still moves it (keying the transfer on WAIT, not spawn, so a
-	// backgrounded (&) child never takes the console), and the keyboard IRQ
-	// path still reads it as a single aligned pointer, atomically, no lock.
+	// comment promised. What moved with it: the SPAWN hands the console to
+	// a foreground child at submission (a child can reach a syscall before
+	// its parent reaches wait, and "am I the foreground?" is asked at
+	// startup — tty_set_raw), a wait on a NAMED child makes that child the
+	// foreground (a pipeline's shell waits on its stages in order while
+	// the last one holds the spawn's hand-off; a wildcard wait moves
+	// nothing at its entry) and follows a wait DOWN through a middleman,
+	// a wait's FINISH restores the waiter but never over a LIVE child of
+	// its own, so an older wait cannot undo a newer spawn's hand-off —
+	// a dead child hands it to a live foreground
+	// parent on the same terminal or else to the shell (tty_task_departed),
+	// a backgrounded (&) child never takes it at any of those points. Each
+	// of those hand-offs is a check-then-store made under the terminal's
+	// foreground lock (tty_t.fg_lock), so no two of them interleave; the
+	// keyboard IRQ path still reads it as a single aligned pointer,
+	// atomically, no lock.
 
 	// THE RECLAIM LEDGER (task.c; the 2026-08-13 deferral ledger, PAID
 	// 2026-08-15). Cumulative bytes/pages of VMA backing memory the
@@ -374,6 +393,11 @@
     // Initialize a fresh task's private page tables, without threads or scheduling.
     // Release tableArena after the address space is no longer in use.
     void task_init_page_tables(task_t *task);
+
+    // Is this pointer a live (not exited) task on the task list? By POINTER,
+    // for a caller holding one it did not take a reference on — the walk
+    // compares addresses and never dereferences the candidate.
+    bool task_is_live(const task_t *candidate);
 
 		task_t* task_create(char* path, int argc, char** argv, task_t* parentTaskPtr, bool isKernelTask, uint64_t pinnedAPICID);
 	void task_exit(void);

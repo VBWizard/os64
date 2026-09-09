@@ -585,9 +585,23 @@ void tty_flush_if_dirty(void)
 
 void tty_input_event(const keyboard_event_t *ev)
 {
+	// ONE read of the focused terminal for everything below — the veto, the
+	// knock, the classification and the push. Focus changes between reads
+	// (the switch chord and this path can run from different producers), and
+	// a byte judged for one terminal must not land in another: an ETX let
+	// through as raw data for tty A would arrive as a literal byte in cooked
+	// tty B instead of its SIGINT.
 	tty_t *t = kTTYFocused;
 	if (t == NULL)
 		t = &kTTY[0];
+
+	// The interrupt character is vetoed first, before the knock and the
+	// scrollback snap, exactly as it was when the keyboard driver asked
+	// (console.h: policy lives in console.c, this router only names the
+	// terminal). Consumed means SIGINT is pending on this terminal's
+	// foreground and the byte never enters the ring.
+	if (console_intr_intercept_tty(t, ev->ascii))
+		return;
 
 	// A keystroke on a dormant terminal is not input, it is a KNOCK: swallow
 	// the key and request a shell (kworker answers — see tty_summon_sweep).
@@ -613,8 +627,11 @@ void tty_input_event(const keyboard_event_t *ev)
 		spinlock_release_irqrestore(&t->lock, flags);
 	}
 
-	// Push into THIS tty's ring.
-	tty_input_push(t, ev);
+	// Push into THIS tty's ring, classified for THIS tty's mode on the way
+	// in (console_classify_tty: is this EOT end-of-input, or the byte?).
+	keyboard_event_t classified = *ev;
+	console_classify_tty(t, &classified);
+	tty_input_push(t, &classified);
 }
 
 // The ring push alone — the choke both producers share: the keyboard path
@@ -771,10 +788,28 @@ void tty_seat_shell(tty_t *t, struct task *shell)
 	// inherit it), foreground (who Ctrl+C aims at HERE), and the lights on.
 	shell->controllingShell = true;
 	shell->tty = t;
+	uint64_t flags = spinlock_acquire_irqsave(&t->fg_lock);
 	t->shell = shell;
 	t->fgTask = shell;
+	spinlock_release_irqrestore(&t->fg_lock, flags);
 	t->spawnRequested = false;
 	t->state = TTY_LIVE;
+}
+
+int tty_set_raw(tty_t *t, struct task *caller, bool raw)
+{
+	if (t == NULL || caller == NULL)
+		return -1;
+	if (t->fgTask != caller)
+		return -1;
+	// The wish is the caller's own field, so there is nothing to claim and
+	// nothing to race: the readers derive the terminal's mode from whoever
+	// is the foreground at the moment they look. A caller that stops being
+	// the foreground between the check above and this store has recorded
+	// a wish that changes nothing until, if ever, it is the foreground
+	// again — which is what its wish should mean then, too.
+	caller->wantsRaw = raw;
+	return 0;
 }
 
 void tty_task_departed(struct task *task)
@@ -782,6 +817,10 @@ void tty_task_departed(struct task *task)
 	if (task == NULL || task->tty == NULL)
 		return;
 	tty_t *t = (tty_t *)task->tty;
+	// (Raw mode needs nothing here: it is the foreground's wish, and the
+	// foreground is about to be somebody else — that is the whole of
+	// `stty sane`, done by the pointer move below instead of by a person
+	// at a deaf prompt.)
 	if (t->shell != task)
 	{
 		// A child died, not the seat-holder. If it was the FOREGROUND job,
@@ -794,19 +833,45 @@ void tty_task_departed(struct task *task)
 		// the shell, when the seat is empty — the same value an empty
 		// terminal starts with.
 		//
-		// ONE COMPARE-AND-SWAP, not a check and a store (rd5): the shell
-		// can leave wait(A) on a caught signal and enter wait(B) — which
-		// stores B — while A is dying on another core. A separate check
-		// ("still me?") and store ("then the shell") interleave with that
-		// store, and A's death would overwrite B with the shell: Ctrl+C
-		// then reaches the shell as a keystroke instead of stopping B.
-		// The CAS replaces the pointer only if it still names A.
-		__sync_bool_compare_and_swap(&t->fgTask, task, t->shell);
+		// UNDER THE FOREGROUND LOCK (tty.h), "still me?" and "then the
+		// heir" are one transition: a shell leaving wait(A) on a caught
+		// signal and entering wait(B) while A dies on another core cannot
+		// have B overwritten by A's death, because B's publication and this
+		// check are serialized, and whichever runs second sees the other.
+		//
+		// TO THE PARENT, when the parent is a foreground program on this
+		// terminal — a middleman (env, a script's husk, telnet's worker)
+		// whose child died BEFORE it reached wait must be the foreground
+		// again at the death, or its own wait finds neither itself nor a
+		// live child in the pointer and can never take the console back.
+		// Otherwise the shell. Orphans are re-parented to ktask before
+		// their parent is freed (task_reparent_orphans), so parentTask
+		// never dangles; task_is_live is the belt over those braces.
+		//
+		// A PARENT DYING AT THE SAME MOMENT is ordered by the same lock:
+		// its exit marks it `exited` before its own departure runs here.
+		// If its departure came first, it is not live and the shell is the
+		// heir; if it comes later, it finds itself in the pointer and hands
+		// the seat on. Either order leaves a live task in the pointer, and
+		// nothing has to be re-read after publishing.
+		struct task *parent = task->parentTask;
+		uint64_t flags = spinlock_acquire_irqsave(&t->fg_lock);
+		if (t->fgTask == task)
+		{
+			struct task *heir = t->shell;
+			if (parent != NULL && parent != t->shell && task_is_live(parent) &&
+			    parent->tty == t && !parent->backgroundJob)
+				heir = parent;
+			t->fgTask = heir;
+		}
+		spinlock_release_irqrestore(&t->fg_lock, flags);
 		return;
 	}
 
+	uint64_t flags = spinlock_acquire_irqsave(&t->fg_lock);
 	t->shell = NULL;
 	t->fgTask = NULL;
+	spinlock_release_irqrestore(&t->fg_lock, flags);
 	t->spawnRequested = false;
 	t->state = TTY_DORMANT;
 
@@ -1071,8 +1136,8 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 		// SLAVE — a Ctrl+C typed at a terminal window aims at the program
 		// running INSIDE it, exactly as a Ctrl+C on VT3 aims at VT3's
 		// foreground. Consumed means it never enters the ring, same as the
-		// keyboard path. (STREAM mode will want a raw pass-through flag;
-		// that rides the mode, per the design.)
+		// keyboard path — and a slave whose foreground wants raw consumes
+		// nothing, same as a VT (the intercept reads the foreground's wish).
 		if (console_intr_intercept_tty(slave, c))
 			continue;
 
@@ -1094,6 +1159,7 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 		// to a full pipe — never drop a byte, just take longer.
 		keyboard_event_t ev = {0};
 		ev.ascii = c;
+		console_classify_tty(slave, &ev);   // EOT: end-of-input or the byte, decided now
 		if (!tty_input_push_if_room(slave, &ev))
 			return (int64_t)i;      // accepted this many; the rest is the caller's to resend
 	}

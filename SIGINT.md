@@ -252,8 +252,8 @@ collection time was designed, then rejected for v1: more moving parts than the
 gap it covers.)
 
 What shipped instead — the SIGPIPE rail, generalized. The raise is still one
-word-OR at the keystroke (`console_intr_intercept`, console.c, called from
-keyboard.c's delivery choke). The KILL is `raise_terminating_signal_and_die`
+word-OR at the keystroke (`console_intr_intercept_tty`, console.c, asked by
+the tty router as a byte enters a ring). The KILL is `raise_terminating_signal_and_die`
 (syscall.c — born `raise_sigint_and_die`, twin of `raise_sigpipe_and_die`,
 renamed when it grew the HUP/TERM/PIPE ladder): the victim dies in its OWN context, through
 the normal `task_exit` path — free to sleep, safe to close handles, retVal
@@ -330,3 +330,152 @@ signal headers in the device layer.
 
 *The 2012 signal struct finally received the signal it was built for,
 fourteen years and one word-OR later.*
+
+## Raw mode (2026-09-08) — the one bit this terminal has
+
+Everything above made two keystrokes mean something: Ctrl+C is SIGINT at
+the foreground task, Ctrl+D is end-of-input. Those two interpretations are
+the console's whole line discipline. There is no line buffering and no kernel echo —
+husk edits its own line, arrow keys already arrive as VT100 bytes, and
+Ctrl+~ and the VT chords live outside the byte stream altogether, the way
+SysRq does. So where V7's `stty raw` flipped a dozen bits at once (and
+`stty sane` exists because programs died with them flipped), os64's raw
+mode is ONE bit: while it is set, the terminal interprets nothing and the
+program reads 0x03 and 0x04 like any other byte.
+
+The consumer was telnet (TELNET.md's booked gap: a Unix login you could not
+log out of with Ctrl+D). In raw mode telnet reads 0x03 and sends `IAC IP`
+itself, one path, bytes in and bytes out, which is what character-mode
+telnet has done since 4.2BSD — the SIGINT-handler workaround it would have
+needed on a cooked terminal is gone. ssh will want exactly the same bit.
+
+**The rulings (Chris, 2026-09-08):**
+
+1. **Both bytes, or neither.** A half-mode ("Ctrl+D is data, Ctrl+C still
+   kills") would be a third state no other system has, and ssh needs the
+   whole thing anyway. (Ruled by Fable on Chris's deferral.)
+2. **A file, not a syscall.** `/proc/self/tty` already answers "what is my
+   terminal"; a write of `raw` or `cooked` to the same file is how a program
+   asks. The file's `mode` line reports it and `raw_task` names the holder —
+   the same self-describing shape as `ctl`. Only `/proc/self` takes the
+   write: a terminal mode is the sitter's own, so another task's tty file
+   refuses at the open.
+3. **The kernel resets it.** A crashed raw program can never leave a seat
+   deaf to Ctrl+C, and there is no `stty sane` because nothing ever needs
+   one. HOW that is true changed in the review (below): there is no state
+   to reset, because the mode was never stored.
+
+**THE MECHANISM: RAW IS THE FOREGROUND'S WISH, NOT THE TERMINAL'S STATE.**
+The first three rounds of PR #80's review kept a holder pointer on the tty
+(`rawHolder`), and every round found one more interleaving of the four
+contexts that wrote it — spawn, wait, a task's departure, the setter —
+and added one more CAS. Round four found four more. That is the #65
+refusal-machinery lesson: when every fix is another compare-and-swap on a
+shared word, delete the word. Now `task_t.wantsRaw` is a flag a task sets
+on ITSELF (a write of `raw`/`cooked` to `/proc/self/tty`), and a terminal
+is raw exactly while `fgTask->wantsRaw` — derived at every read
+(`console_tty_raw`), stored nowhere. Every consequence the holder design
+had to engineer falls out:
+
+- The mode dies with the task: a dead task is not the foreground.
+- A foreground child that did not ask gets a cooked terminal (Ctrl+C
+  kills IT, which is right), and its parent's raw returns with the console
+  when the child exits. A child that asks gets raw in its own name for as
+  long as it is the foreground. Each foreground program gets the terminal
+  it asked for; no transfer, no "granted but not named".
+- Nothing to claim, so two threads or a parent and child asking at once
+  cannot race over a word; nothing to clear at a death, so a task tearing
+  down while a sibling thread writes `raw` sets a flag nobody will read.
+- Only the terminal's FOREGROUND task may ask (`tty_set_raw` refuses
+  anyone else — a background job's wish would be a lie about the seat),
+  and a wish recorded by a task that has just stopped being the foreground
+  changes nothing until, if ever, it is the foreground again.
+
+**The foreground pointer's own rules**, which the review sharpened
+because raw mode made them load-bearing:
+
+- EVERY HAND-OFF IS ONE TRANSITION UNDER THE TERMINAL'S FOREGROUND LOCK
+  (`tty_t.fg_lock`). Five contexts write the pointer — a spawn, a wait's
+  entry, a wait's finish, a task's departure, a seat — and each one first
+  asks something of the pointer ("still me?", "a live child of mine?")
+  and then stores. Rounds five through seven of #80 each found one more
+  way for a sibling thread's spawn to land between a check and its store;
+  the compare-and-swaps that answered the first of them could not answer
+  the rest, because the check is a task-list walk, not a word. So the
+  check and the store are made under one leaf spinlock, and no two
+  transitions on a terminal interleave. Readers never take it: Ctrl+C in
+  IRQ context, the mode query and `/proc` read the pointer bare, one
+  aligned word, exactly as before.
+- The foreground changes hands AT THE SPAWN, not first at the wait: a
+  child is runnable the moment it is submitted and can reach a syscall
+  before its parent reaches `wait`, so a telnet going raw as its first act
+  would otherwise be refused by a race. A WAIT ON A NAMED CHILD MAKES THAT
+  CHILD THE FOREGROUND, whatever the pointer held: a pipeline's shell
+  spawns every stage (so the LAST stage holds the spawn's hand-off) and
+  then waits on them in launch order, and `sleep 30 | true` must aim
+  Ctrl+C at the `sleep` being waited on, not at a `true` that exits at
+  once and hands the console back to a shell still blocked in `wait`. The
+  named wait is the program's explicit statement of which job it attends
+  and outranks a hand-off made in passing; a program that waits on A from
+  one thread while spawning B from another has said two things, and the
+  terminal believes the later. A wildcard wait names nobody and moves
+  nothing at its entry. The wait's FINISH restores the waiter, but never
+  over a LIVE child of its own — a sibling thread's newer spawn keeps its
+  console — and "live child" is answered by dereferencing the pointer
+  under the lock, not by a task-list walk, because a spawn publishes its
+  child to the pointer before submission puts it on the list.
+- CTRL+C AND `/proc/self/tty` READ THE FOREGROUND ONCE. The pointer changes
+  hands at a spawn, a wait and a departure; the intercept decides what the
+  byte means and whom it is aimed at from one snapshot, and the report
+  derives `fg_task`, `mode` and `raw_task` from one, so neither can pair one
+  task's wish with another task's name. THE SAME FOR THE TERMINAL ITSELF:
+  the keyboard router (`tty_input_event`) reads `kTTYFocused` once and asks
+  the veto, the classification and the push of that one terminal — the
+  driver no longer runs the intercept on its own read of the focus, because
+  a focus change between the two reads let an ETX vetoed as raw data for
+  one terminal land as a literal byte in another that was cooked.
+- A DEAD CHILD HANDS THE CONSOLE TO ITS PARENT when the parent is a live
+  foreground program on the same terminal, and to the shell otherwise:
+  with the console moving at the spawn, a middleman whose child died
+  before it reached `wait` would otherwise find the shell in the pointer
+  and never take the console back. Orphans are re-parented before their
+  parent is freed, so the parent pointer never dangles; and a parent dying
+  at the same moment is ordered by the lock — its exit marks it `exited`
+  before its own departure runs, so either its departure came first and it
+  is not a live heir, or it comes later and finds itself in the pointer
+  and hands the seat on. Either order leaves a live task in the pointer.
+- THE WRITER SPEAKS, never the opener. `echo raw > /proc/self/tty &` has
+  the shell open the file and a background child write through the
+  inherited handle; attributed to the opener, that made the shell wish for
+  a mode nobody asked it for. A tty command is authorized and attributed
+  to the task doing the write, and a handle that changed hands is refused.
+  `os64_tty_set_raw` opens its own.
+
+**Where it acts:** both mode-controlled keys are classified WHEN THEY ENTER
+THE RING, in one epoch. `console_intr_intercept_tty` returns "data" for
+Ctrl+C when the terminal is raw, and `console_classify_tty` marks an EOT as
+end-of-input (`keyboard_event_t.eof`) only when the terminal is cooked —
+every producer that pushes into a tty ring (the keyboard router, a pty
+master's write, a clipboard paste) calls them right before the push, and a
+producer that skips the classification delivers a cooked terminal's Ctrl+D
+as a byte. `console_read` reads the mark, never the current mode, so a
+mode change lands on the next key and never re-reads one already queued.
+Nothing else changes: the ring, the waiter, the focus, the pushback slot
+are all as they were.
+
+**Ring 3:** `os64_tty_set_raw(bool)` and `os64_tty_mode(&raw, &holder)`.
+The mode is NOT a new field on `os64_tty_info_t`: that struct is filled
+through a pointer, the kernel is the linker, and a binary built against the
+older shape keeps running against a newer `libos64.so` — a grown struct
+overruns its object. A new fact about the terminal is a new call.
+
+**Proof:** `/tests/rawtty` (in the ring-3 suite): on a pty whose seated
+shell spawns an ordinary WORKER (a shell's Ctrl+C is data by the prompt rule
+and would prove nothing): cooked by default (a typed 0x04 is EOF), the worker
+raw on request (0x03 0x04 'x' arrive as three bytes — on a cooked terminal
+the 0x03 would have been SIGINT at the master's write), a helper child that
+gets a cooked terminal until it asks and hands the worker's raw back by
+exiting, cooked again on request, reset at the worker's exit, and a
+stranger's write to the child's tty file refused.
+Plus the escape hatch Unix never had: a stuck raw program is killed from
+another VT, and its seat is cooked the moment it dies.

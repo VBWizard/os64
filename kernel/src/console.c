@@ -88,7 +88,19 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	if (tty == NULL)
 		tty = &kTTY[0];
 
+	// ONE read of the foreground decides both what the byte means and whom
+	// it is aimed at. The pointer changes hands at a spawn, a wait and a
+	// departure; classify by one task's wish and then signal whatever the
+	// pointer names a moment later, and a cooked program gets 0x03 as data
+	// or a program whose raw request succeeded gets killed.
 	task_t *fg = tty->fgTask;
+
+	// RAW (SIGINT.md § Raw mode): the terminal interprets nothing, so the
+	// byte is data for whoever is reading — telnet sends it down the wire
+	// as IAC IP itself, the way character-mode telnet has since 4.2BSD.
+	if (fg != NULL && fg->wantsRaw)
+		return false;
+
 	if (fg == NULL || fg->controllingShell)
 		return false;               // no owner yet, or the shell: stays data
 
@@ -110,10 +122,23 @@ bool console_intr_intercept_tty(tty_t *tty, char ascii)
 	return true;                    // consumed: the byte never enters the ring
 }
 
-// The keyboard's spelling: the keystroke happened on the FOCUSED terminal.
-bool console_intr_intercept(char ascii)
+// The terminal's mode is its foreground's wish, read at the moment of
+// asking. The pointer is read once; a foreground that is dying is replaced
+// in that pointer by its own departure, the same exposure every other
+// reader of fgTask in this file has always had. A caller that goes on to
+// ACT on the foreground must not ask here and then read the pointer again
+// — it takes its own snapshot and asks that task's wish directly.
+bool console_tty_raw(tty_t *tty)
 {
-	return console_intr_intercept_tty(kTTYFocused, ascii);
+	if (tty == NULL)
+		tty = &kTTY[0];
+	task_t *fg = tty->fgTask;
+	return fg != NULL && fg->wantsRaw;
+}
+
+void console_classify_tty(tty_t *tty, keyboard_event_t *ev)
+{
+	ev->eof = (ev->ascii == CONSOLE_EOT && !console_tty_raw(tty));
 }
 
 long console_read(char *buf, size_t len)
@@ -199,7 +224,10 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		keyboard_event_t ev;
 		while (n < len && tty_input_pop(tty, &ev))
 		{
-			if (ev.ascii == CONSOLE_EOT)
+			// End-of-input was decided when the key entered the ring
+			// (console_classify_tty): on a raw terminal the same 0x04 is
+			// a byte, and a mode change never re-reads a queued key.
+			if (ev.eof)
 			{
 				if (n == 0)
 				{

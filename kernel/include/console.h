@@ -58,19 +58,38 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline);
 // when the pushback slot is full (bounded, tiny — probes hold at most one).
 bool console_unread(char c);
 
-// The line-discipline peek (the ISIG/VINTR seed): called by keyboard.c at the
-// delivery choke for every key-down, BEFORE the byte enters the console ring.
-// Returns true if the byte was consumed as the interrupt character (ETX/0x03
-// -> SIGINT pending on the foreground task); false means "just data, deliver
-// it". Policy lives HERE, not in keyboard.c — the device layer stays blind to
-// tasks and signals. IRQ-safe on purpose: the raise is one word-OR; the
-// actual kill happens later, at the victim's own syscall boundary.
-bool console_intr_intercept(char ascii);
-// The tty-scoped core (PTY.md): a pty master's write asks on behalf of its
-// SLAVE — the keystroke "happened" on the terminal that window represents.
-// The focused-terminal spelling above is now a wrapper over this.
+// The line-discipline peek (the ISIG/VINTR seed): asked by every producer
+// that pushes into a tty's ring, for the terminal it is about to push into,
+// BEFORE the byte enters. Returns true if the byte was consumed as the
+// interrupt character (ETX/0x03 -> SIGINT pending on that terminal's
+// foreground task); false means "just data, deliver it". Policy lives HERE,
+// not in the keyboard driver — the device layer stays blind to tasks and
+// signals. IRQ-safe on purpose: the raise is one word-OR; the actual kill
+// happens later, at the victim's own syscall boundary.
+//
+// TTY-SCOPED, AND THE CALLER NAMES THE TERMINAL FROM ITS OWN SNAPSHOT: the
+// keyboard router asks for the terminal it read as focused and pushes into
+// that same one (focus can change between two reads of kTTYFocused, and a
+// byte vetoed for one terminal must not land in another); a pty master's
+// write asks on behalf of its SLAVE — the keystroke "happened" on the
+// terminal that window represents (PTY.md).
 struct tty;
 bool console_intr_intercept_tty(struct tty *tty, char ascii);
+
+// The other half of the line discipline, at the same choke and the same
+// moment: an EOT entering a COOKED terminal's ring is marked end-of-input
+// (keyboard_event_t.eof); on a raw terminal it is the byte 0x04. Every
+// producer that pushes into a tty ring — the keyboard router, a pty
+// master's write, a clipboard paste — calls this right before the push, so
+// Ctrl+C and Ctrl+D are classified in one epoch and a mode change applies
+// to the next key, never to one already queued. A producer that skips it
+// delivers a cooked terminal's Ctrl+D as a data byte.
+struct keyboard_event;
+void console_classify_tty(struct tty *tty, struct keyboard_event *ev);
+
+// Is this terminal raw right now — does its foreground task want it so?
+// Derived from the foreground pointer, never stored (SIGINT.md § Raw mode).
+bool console_tty_raw(struct tty *tty);
 
 // Called from processSignals (scheduler context, every pass). If a reader is
 // asleep in console_read AND the keyboard driver has input, wake the reader.
