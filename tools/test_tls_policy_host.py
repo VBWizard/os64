@@ -145,6 +145,72 @@ def corpus(work):
     reverse_rdns = b"".join(tlv(0x31, value) for value in ordered[::-1])
     sequence_name = mutate(leaf, int_key, lambda t: t.__setitem__(5, (0x30, reverse_rdns)))
     case("rdn-sequence-order-preserved", sequence_name, success=True, upstream=1)
+    def signature_value(cert, change):
+        fields = split(split(cert)[0][1])
+        fields[2] = (3, b"\0" + change(fields[2][1][1:]))
+        return tlv(0x30, join(fields))
+    def padded_signature(value, index):
+        ints = split(split(value)[0][1])
+        ints[index] = (2, b"\0" + ints[index][1])
+        return tlv(0x30, join(ints))
+    # Exercise necessary sign padding regardless of the generated signature.
+    for attempt in range(128):
+        canonical = mutate(leaf, int_key, lambda t: None)
+        signature = split(split(canonical)[0][1])[2][1][1:]
+        if all(value[0] == 0 for _, value in split(split(signature)[0][1])):
+            break
+    else:
+        raise AssertionError("could not generate an ECDSA signature with both sign pads")
+    case("ecdsa-required-sign-padding", canonical, success=True, upstream=1)
+    for index in (0, 1):
+        changed = signature_value(leaf, lambda v: padded_signature(v, index))
+        case(f"ecdsa-redundant-zero-{index}", changed, reason="DER", upstream=1)
+        changed_root = signature_value(root, lambda v: padded_signature(v, index))
+        anchor(f"anchor-ecdsa-redundant-zero-{index}", changed_root, "DER")
+        case(f"ecdsa-trailing-root-padding-{index}", chain=[leaf, intermediate, changed_root], reason="DER", upstream=1)
+    case("ecdsa-long-form-short-length", signature_value(leaf, lambda v: b"\x30\x81" + v[1:]), reason="DER", upstream=1)
+    for label, value in [("empty-sequence", b"\x30\0"), ("zero-r", b"\x30\x06\x02\x01\0\x02\x01\x01"),
+                         ("zero-s", b"\x30\x06\x02\x01\x01\x02\x01\0"),
+                         ("negative-r", b"\x30\x06\x02\x01\xff\x02\x01\x01"),
+                         ("negative-s", b"\x30\x06\x02\x01\x01\x02\x01\xff"),
+                         ("empty-r", b"\x30\x05\x02\0\x02\x01\x01"),
+                         ("missing-s", b"\x30\x03\x02\x01\x01"),
+                         ("integer-long-form-short-length", b"\x30\x07\x02\x81\x01\x01\x02\x01\x01"),
+                         ("truncated-integer", b"\x30\x06\x02\x01\x01\x02\x02\x01"),
+                         ("third-integer", b"\x30\x09\x02\x01\x01\x02\x01\x01\x02\x01\x01"),
+                         ("trailing", b"\x30\x06\x02\x01\x01\x02\x01\x01\x05\0")]:
+        case("ecdsa-" + label, signature_value(leaf, lambda v: value), reason="DER")
+    def string_name(cert, signer, index, tag, value):
+        encoded = tlv(0x31, tlv(0x30, tlv(6, b"\x55\x04\x0a") + tlv(tag, value)))
+        return mutate(cert, signer, lambda t: t.__setitem__(index, (0x30, encoded)))
+    strings = [
+        ("utf8", 12, "Aé€🐻".encode(), True), ("utf8-upper", 12, b"\xf4\x8f\xbf\xbf", True),
+        ("utf8-ff", 12, b"\xff", False), ("utf8-overlong", 12, b"\xc0\x80", False),
+        ("utf8-overlong3", 12, b"\xe0\x80\xaf", False), ("utf8-overlong4", 12, b"\xf0\x80\x80\xaf", False),
+        ("utf8-truncated", 12, b"\xe2\x82", False), ("utf8-continuation", 12, b"\x80", False),
+        ("utf8-bad-continuation", 12, b"\xc2A", False), ("utf8-surrogate", 12, b"\xed\xa0\x80", False),
+        ("utf8-too-large", 12, b"\xf4\x90\x80\x80", False), ("utf8-nul", 12, b"A\0B", False),
+        ("numeric", 18, b"01 29", True), ("numeric-letter", 18, b"A", False),
+        ("printable", 19, b"AZaz09 '()+,-./:=?", True), ("printable-at", 19, b"@", False),
+        ("printable-high", 19, b"\x80", False), ("teletex-refused", 20, b"plain", False),
+        ("ia5", 22, b"mail@example.test", True), ("ia5-high", 22, b"\x80", False), ("ia5-nul", 22, b"A\0B", False),
+        ("visible", 26, b" !~", True), ("visible-control", 26, b"\x1f", False), ("visible-del", 26, b"\x7f", False),
+        ("universal", 28, "A🐻".encode("utf-32-be"), True), ("universal-width", 28, b"\0\0A", False),
+        ("universal-surrogate", 28, b"\0\0\xd8\0", False), ("universal-too-large", 28, b"\0\x11\0\0", False),
+        ("bmp", 30, "Aé€".encode("utf-16-be"), True), ("bmp-width", 30, b"\0", False),
+        ("bmp-surrogate", 30, b"\xd8\0", False), ("bmp-surrogate-pair", 30, "🐻".encode("utf-16-be"), False),
+        ("bmp-nul", 30, b"\0\0", False), ("universal-nul", 28, b"\0\0\0\0", False),
+    ]
+    for label, tag, value, valid in strings:
+        case("dn-string-" + label, string_name(leaf, int_key, 5, tag, value),
+             success=valid, reason="OK" if valid else "DER", upstream=1 if label == "utf8-ff" else -1)
+    bad_name = (12, b"\xff")
+    bad_int = string_name(intermediate, root_key, 5, *bad_name)
+    bad_leaf = string_name(leaf, int_key, 3, *bad_name)
+    case("dn-bad-matching-issuer", chain=[bad_leaf, bad_int], reason="DER", upstream=1)
+    bad_root = string_name(string_name(root, root_key, 3, *bad_name), root_key, 5, *bad_name)
+    anchor("anchor-bad-string", bad_root, "DER")
+    case("dn-bad-trailing-root", chain=[leaf, intermediate, bad_root], reason="DER", upstream=1)
     case("included-root", chain=[leaf, intermediate, root], success=True)
     case("mixed-case-san", certificate(leaf_key, "ignored", int_name, int_key, san="EXAMPLE.TEST"), success=True)
     case("wildcard", certificate(leaf_key, "ignored", int_name, int_key, san="*.example.test"), host="www.example.test", success=True)
