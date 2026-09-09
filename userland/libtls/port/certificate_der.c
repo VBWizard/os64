@@ -78,7 +78,7 @@ static bool structural(span s, unsigned depth, unsigned *nodes)
     }
     return true;
 }
-static bool positive(span *s, span *v)
+static bool nonnegative(span *s, span *v)
 {
     if (!field(s, 2, v) || !integer_valid(*v) || (v->data[0] & 128)) return false;
     if (v->length > 1 && !v->data[0]) { v->data++; v->length--; }
@@ -164,7 +164,7 @@ static tls_policy_reason basic(span s, unsigned role, bool *ca)
         *ca = true;
     }
     if (seq.length) {
-        if (!positive(&seq, &v) || !*ca) return TLS_POLICY_DER;
+        if (!nonnegative(&seq, &v) || !*ca) return TLS_POLICY_DER;
         if (role == 2) return TLS_POLICY_ANCHOR;
     }
     if (seq.length) return TLS_POLICY_DER;
@@ -180,7 +180,7 @@ static tls_policy_reason usage(span s, unsigned role)
         return TLS_POLICY_DER;
     return bits.data[1] & (role ? 4 : 128) ? TLS_POLICY_OK : TLS_POLICY_KEY_USAGE;
 }
-static tls_policy_reason extensions(span s, unsigned role, const char *hostname, unsigned *nodes)
+static tls_policy_reason extensions(span s, unsigned role, const char *hostname, bool empty_subject, unsigned *nodes)
 {
     span list, seen[32]; size_t count = 0; bool ca = false, matched = false;
     if (!field(&s, 0x30, &list) || s.length || !list.length) return TLS_POLICY_DER;
@@ -199,8 +199,10 @@ static tls_policy_reason extensions(span s, unsigned role, const char *hostname,
         tls_policy_reason result;
         if (OID(id, "\x55\x1d\x13")) result = basic(value, role, &ca);
         else if (OID(id, "\x55\x1d\x0f")) result = usage(value, role);
-        else if (OID(id, "\x55\x1d\x11")) result = san(value, hostname, &matched);
-        else if (OID(id, "\x55\x1d\x25")) result = eku(value, role);
+        else if (OID(id, "\x55\x1d\x11")) {
+            // An empty subject delegates its identity to a critical SAN.
+            result = empty_subject && !critical ? TLS_POLICY_SAN : san(value, hostname, &matched);
+        } else if (OID(id, "\x55\x1d\x25")) result = eku(value, role);
         else if (OID(id, "\x2b\x06\x01\x04\x01\xd6\x79\x02\x04\x02")) {
             // RFC 6962 SCT receipts are opaque metadata; this client makes no CT claim.
             span receipts;
@@ -241,7 +243,7 @@ static bool ecdsa_signature_valid(span s)
     // The BIT STRING contains DER here; BearSSL's signature converter also
     // accepts nonminimal encodings. Keep that leniency outside this profile.
     for (unsigned i = 0; i < 2; i++)
-        if (!positive(&sequence, &value) || (value.length == 1 && !value.data[0])) return false;
+        if (!nonnegative(&sequence, &value) || (value.length == 1 && !value.data[0])) return false;
     return !sequence.length;
 }
 static tls_policy_reason public_key(span s, br_x509_pkey *key)
@@ -254,7 +256,7 @@ static tls_policy_reason public_key(span s, br_x509_pkey *key)
         span seq, n, e;
         if (algorithm.length && (!field(&algorithm, 5, &v) || v.length)) return TLS_POLICY_DER;
         if (algorithm.length || !field(&bits, 0x30, &seq) || bits.length ||
-            !positive(&seq, &n) || !positive(&seq, &e) || seq.length) return TLS_POLICY_DER;
+            !nonnegative(&seq, &n) || !nonnegative(&seq, &e) || seq.length) return TLS_POLICY_DER;
         unsigned top = n.data[0], topbits = 0;
         while (top) { topbits++; top >>= 1; }
         size_t bitcount = (n.length - 1) * 8 + topbits;
@@ -391,7 +393,8 @@ tls_policy_reason os64_tls_certificate_inspect(const void *der, size_t length,
     // The policy requires v3 because its role and identity rules use extensions.
     span version;
     if (!field(&tbs, 0xa0, &version) || !field(&version, 2, &v) || version.length ||
-        v.length != 1 || v.data[0] != 2 || !positive(&tbs, &v) ||
+        v.length != 1 || v.data[0] != 2 || !nonnegative(&tbs, &v) ||
+        (v.length == 1 && !v.data[0]) ||
         !field(&tbs, 0x30, &inner)) return TLS_POLICY_DER;
     bool ecdsa;
     if (!equal(inner, outer) || !signature_algorithm(inner, &ecdsa)) return TLS_POLICY_SIGNATURE;
@@ -411,7 +414,7 @@ tls_policy_reason os64_tls_certificate_inspect(const void *der, size_t length,
     // Unique IDs are outside this profile, so no ignored fields can hide an
     // additional extension container between SPKI and the expected [3].
     if (!field(&tbs, 0xa3, &v) || tbs.length) return TLS_POLICY_DER;
-    result = extensions(v, role, hostname, &nodes);
+    result = extensions(v, role, hostname, !subject.length, &nodes);
     if (result == TLS_POLICY_OK) view->subject = encoded_subject;
     return result;
 }

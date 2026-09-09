@@ -110,6 +110,40 @@ def corpus(work):
         anchors.append((name, blob(data), reason))
 
     case("valid", success=True, upstream=1)
+    # Metadata is skipped by BearSSL, but its inner DER still crosses our gate.
+    for label, value in [("constructed-bits", bytes.fromhex("2303030100")),
+                         ("constructed-octets", bytes.fromhex("24020400")),
+                         ("constructed-utf8", bytes.fromhex("2c020500")),
+                         ("primitive-sequence", bytes.fromhex("1000")),
+                         ("primitive-set", bytes.fromhex("1100"))]:
+        case("metadata-" + label, replace_extension(leaf, int_key, 14, value), reason="DER", upstream=1)
+    constructed_root = replace_extension(root, root_key, 14, bytes.fromhex("2303030100"))
+    anchor("anchor-constructed-bits", constructed_root, "DER")
+    case("trailing-constructed-bits", chain=[leaf, intermediate, constructed_root], reason="DER", upstream=1)
+    for label, value in [("bits", bytes.fromhex("030100")), ("octets", bytes.fromhex("0400"))]:
+        case("metadata-primitive-" + label, replace_extension(leaf, int_key, 14, value), success=True, upstream=1)
+    def with_serial(cert, signer, value):
+        return mutate(cert, signer, lambda t: t.__setitem__(1, (2, value)))
+    case("serial-zero", with_serial(leaf, int_key, b"\0"), reason="DER", upstream=1)
+    case("serial-zero-intermediate", chain=[leaf, with_serial(intermediate, root_key, b"\0")], reason="DER", upstream=1)
+    zero_root = with_serial(root, root_key, b"\0")
+    anchor("anchor-serial-zero", zero_root, "DER")
+    case("serial-zero-trailing", chain=[leaf, intermediate, zero_root], reason="DER", upstream=1)
+    for label, value in [("one", b"\x01"), ("sign-padding", b"\0\x80")]:
+        case("serial-" + label, with_serial(leaf, int_key, value), success=True, upstream=1)
+    for label, value in [("negative", b"\xff"), ("empty", b""), ("nonminimal-zero", b"\0\0")]:
+        case("serial-" + label, with_serial(leaf, int_key, value), reason="DER")
+    empty_subject = mutate(leaf, int_key, lambda t: t.__setitem__(5, (0x30, b"")))
+    for critical in (False, True):
+        san_value = tlv(0x30, tlv(0x82, b"example.test"))
+        cert = replace_extension(empty_subject, int_key, 17, san_value, critical)
+        case(f"empty-subject-san-critical-{critical}", cert,
+             success=critical, reason="OK" if critical else "SAN", upstream=1)
+    no_san = certificate(leaf_key, "example.test", int_name, int_key, san=None)
+    case("empty-subject-no-san", mutate(no_san, int_key, lambda t: t.__setitem__(5, (0x30, b""))), reason="SAN")
+    case("empty-subject-wrong-critical-san", replace_extension(empty_subject, int_key, 17,
+         tlv(0x30, tlv(0x82, b"wrong.test")), True), reason="SAN")
+    case("empty-ca-subject", chain=[leaf, mutate(intermediate, root_key, lambda t: t.__setitem__(5, (0x30, b"")))], reason="DER")
     def attribute(tail, text):
         return tlv(0x30, tlv(6, b"\x55\x04" + bytes([tail])) + tlv(12, text))
     def with_name(cert, signer, index, attributes):
@@ -351,6 +385,7 @@ def corpus(work):
     lower = certificate(lower_key, "lower intermediate", int_name, int_key, ca=True, san=None)
     lower_leaf = certificate(leaf_key, "example.test", x509.load_der_x509_certificate(lower).subject, lower_key)
     no_path = certificate(int_key, "policy intermediate", root_name, root_key, ca=True, san=None, path=0)
+    case("pathlen-zero-allows-leaf", chain=[leaf, no_path], success=True)
     case("pathlen-allowed", chain=[lower_leaf, lower, intermediate], success=True)
     case("pathlen-exceeded", chain=[lower_leaf, lower, no_path])
     for curve in (ec.SECP384R1(), ec.SECP521R1()):
