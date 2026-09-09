@@ -894,6 +894,21 @@ static bool feed_keys(void)
     return moved;
 }
 
+// A WAIT THAT CAME BACK EMPTY IS NOT A FAILURE. Two answers mean it: the
+// patience expired, or a signal ended the park and the caller is being asked
+// to decide what happens next (DIVERGENCES § Signals — os64 has no
+// SA_RESTART, so deciding is the caller's job and not the kernel's). Both
+// mean "nothing happened, ask again"; anything else negative is the handle
+// itself failing.
+//
+// Reading it wrong is not theoretical: SIGWINCH ends the read on the peer,
+// so a client that takes every negative for a broken connection hangs up on
+// a window the person only widened.
+static bool wait_came_back_empty(int64_t n)
+{
+    return n == OS64_ERR_TIMEOUT || n == OS64_INTERRUPTED;
+}
+
 // Read the terminal, if there is room to put what it says.
 static bool read_keys(uint64_t patience_ms)
 {
@@ -930,8 +945,17 @@ static bool read_keys(uint64_t patience_ms)
         return true;
     }
 
-    // A timeout is the patience expiring, which is a WAIT and not an answer —
-    // so it separates one Ctrl+D from the next.
+    if (!wait_came_back_empty(n)) {
+        // The terminal itself is failing, which is the same news two instant
+        // end-of-inputs carry: there is nobody at the keyboard any more.
+        s_keys_gone = true;
+        if (s_conn < 0 || s_prompting)
+            s_running = false;
+        return false;
+    }
+
+    // An empty wait is a WAIT and not an answer, so it separates one Ctrl+D
+    // from the next.
     s_keys_eof = 0;
     return false;
 }
@@ -947,6 +971,10 @@ static bool flush_to_peer(void)
 
     int64_t n = os64_write(s_conn, out, len);
     if (n < 0) {
+        // An interrupted write queued nothing, so the bytes are still the
+        // engine's and the next pass offers them again.
+        if (wait_came_back_empty(n))
+            return false;
         disconnect("the connection broke");
         return true;
     }
@@ -998,7 +1026,7 @@ static bool serve_peer(uint64_t patience_ms)
             disconnect(telnet_mid_sequence(&s_engine)
                        ? "the peer stopped mid-command" : "the peer hung up");
             return true;
-        } else if (n != OS64_ERR_TIMEOUT) {
+        } else if (!wait_came_back_empty(n)) {
             disconnect("the connection broke");
             return true;
         }
