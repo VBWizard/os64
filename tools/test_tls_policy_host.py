@@ -110,6 +110,41 @@ def corpus(work):
         anchors.append((name, blob(data), reason))
 
     case("valid", success=True, upstream=1)
+    def attribute(tail, text):
+        return tlv(0x30, tlv(6, b"\x55\x04" + bytes([tail])) + tlv(12, text))
+    def with_name(cert, signer, index, attributes):
+        return mutate(cert, signer, lambda t: t.__setitem__(index, (0x30, tlv(0x31, b"".join(attributes)))))
+    # Compare complete encodings, including their lengths, not attribute values.
+    rdn_pairs = [
+        ("value", [attribute(3, b"a"), attribute(3, b"z")]),
+        ("length", [attribute(3, b"z"), attribute(3, b"aa")]),
+        ("long-length", [attribute(3, b"z" * 120), attribute(3, b"a" * 130)]),
+        ("oid", [attribute(3, b"z"), attribute(10, b"a")]),
+    ]
+    for label, attributes in rdn_pairs:
+        ordered = sorted(attributes)
+        for backwards in (False, True):
+            members = ordered[::-1] if backwards else ordered
+            changed = with_name(leaf, int_key, 5, members)
+            case(f"rdn-subject-{label}-descending-{backwards}", changed,
+                 success=not backwards, reason="DER" if backwards else "OK", upstream=1)
+    duplicate = [attribute(3, b"same")] * 2
+    case("rdn-equal-members", with_name(leaf, int_key, 5, duplicate), success=True, upstream=1)
+    ordered = sorted([attribute(3, b"root"), attribute(10, b"org")])
+    for backwards in (False, True):
+        members = ordered[::-1] if backwards else ordered
+        changed_int = with_name(intermediate, root_key, 5, members)
+        changed_leaf = with_name(leaf, int_key, 3, members)
+        case(f"rdn-matching-issuer-descending-{backwards}", chain=[changed_leaf, changed_int],
+             success=not backwards, reason="DER" if backwards else "OK", upstream=1)
+        changed_root = with_name(with_name(root, root_key, 3, members), root_key, 5, members)
+        anchor(f"anchor-rdn-descending-{backwards}", changed_root, "DER" if backwards else "OK")
+        case(f"rdn-trailing-after-trust-descending-{backwards}", chain=[leaf, intermediate, changed_root],
+             success=not backwards, reason="DER" if backwards else "OK", upstream=1)
+    # Separate RDNs are a SEQUENCE, so their relative order must not be sorted.
+    reverse_rdns = b"".join(tlv(0x31, value) for value in ordered[::-1])
+    sequence_name = mutate(leaf, int_key, lambda t: t.__setitem__(5, (0x30, reverse_rdns)))
+    case("rdn-sequence-order-preserved", sequence_name, success=True, upstream=1)
     case("included-root", chain=[leaf, intermediate, root], success=True)
     case("mixed-case-san", certificate(leaf_key, "ignored", int_name, int_key, san="EXAMPLE.TEST"), success=True)
     case("wildcard", certificate(leaf_key, "ignored", int_name, int_key, san="*.example.test"), host="www.example.test", success=True)

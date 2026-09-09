@@ -45,6 +45,10 @@ and intermediate path-length enforcement.
 
 Extension OIDs must be unique within a certificate. DER envelopes, lengths,
 OIDs, booleans, integers, and bit strings are checked for canonical encodings.
+Issuer and subject RDN SET OF members must be in nondecreasing order by their
+complete DER encodings (including tag and length); equal members are permitted.
+This schema-aware check does not reorder the enclosing RDNSequence or treat
+arbitrary ASN.1 SET values as SET OF.
 The parser checks the schema of policy-bearing fields; it is not a general
 ASN.1 schema validator for every informational extension.
 
@@ -124,9 +128,10 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 121 chain cases and 20 anchor cases, with one-byte,
+The corpus covers 135 chain cases and 22 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
-SAN/CN/wildcard boundaries, constructed SAN refusals, leaf/intermediate EKU,
+RDN ordering, SAN/CN/wildcard boundaries, constructed SAN refusals,
+leaf/intermediate EKU,
 critical-extension refusals, restrictions after upstream trust success,
 signature/date/pathLen failures,
 RSA sizes from 1024 to 4097 bits, invalid EC points, malformed DER, duplicate
