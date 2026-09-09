@@ -11,6 +11,8 @@ BEARSSL_ARCHIVE := $(OBJ)/libbearssl-foundation.a
 TLS_TRUST_TEST_OBJS := $(addprefix $(OBJ)/pic/libtls/port/,certificate_der.c.o \
                        certificate_policy.c.o trust_pem.c.o trust_config.c.o trust_file.c.o) \
                        $(OBJ)/pic/libtls/test/trust_test.c.o $(OBJ)/pic/libtls/test/trust_vectors.c.o
+TLS_INPUT_TEST_OBJS := $(addprefix $(OBJ)/pic/libtls/port/,platform_inputs.c.o trust_pem.c.o) \
+                      $(OBJ)/pic/libtls/test/trust_vectors.c.o $(BEARSSL_TEST_OBJ)
 BEARSSL_FLAGS := $(filter-out -fno-pic -fno-pie,$(CFLAGS)) -O2 -fPIC \
                  -fvisibility=hidden -fno-builtin -fstack-usage \
                  -include $(CURDIR)/libtls/port/config.h \
@@ -28,8 +30,10 @@ $(BEARSSL_ARCHIVE): $(BEARSSL_OBJS) libtls/sources.mk libtls/foundation.mk
 
 $(OBJ)/tests/bearssltest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/upstream/inc -I$(CURDIR)/libtls/port/include
 $(OBJ)/tests/tlstrusttest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/upstream/inc -I$(CURDIR)/libtls/port/include
+$(OBJ)/tests/tlsinputtest/%.c.o: CFLAGS += -O2 -I$(CURDIR)/libtls/upstream/inc -I$(CURDIR)/libtls/port/include
 -include $(BEARSSL_OBJS:.o=.d)
 -include $(TLS_TRUST_TEST_OBJS:.o=.d)
+-include $(TLS_INPUT_TEST_OBJS:.o=.d)
 
 $(BEARSSL_TEST_OBJ): CFLAGS += -O2 -I$(CURDIR)/libtls/upstream/inc -I$(CURDIR)/libtls/port/include
 -include $(BEARSSL_TEST_OBJ:.o=.d)
