@@ -3548,7 +3548,10 @@ static void spawn_do_create(void *arg)
 	// job never takes the console, here as at the wait. Test and store
 	// under the terminal's foreground lock (tty.h): a sibling thread's wait
 	// finishing at this instant restores the parent under the same lock,
-	// so the two cannot interleave into "checked, then overwritten".
+	// so the two cannot interleave into "checked, then overwritten" — and
+	// that finish asks "a live child of mine?" of the POINTER, not of
+	// kTaskList, because the child is published here and joins the list
+	// only at its submission below.
 	if (p->ttySlave == NULL && !child->backgroundJob && p->parent != NULL)
 	{
 		tty_t *console = task_tty(p->parent);

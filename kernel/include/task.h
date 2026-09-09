@@ -361,10 +361,13 @@
 	// comment promised. What moved with it: the SPAWN hands the console to
 	// a foreground child at submission (a child can reach a syscall before
 	// its parent reaches wait, and "am I the foreground?" is asked at
-	// startup — tty_set_raw), task_wait re-affirms it and follows a wait
-	// DOWN through a middleman — never over a LIVE child of the waiter, at
-	// its entry or its finish, so an older wait cannot undo a newer spawn's
-	// hand-off — a dead child hands it to a live foreground
+	// startup — tty_set_raw), a wait on a NAMED child makes that child the
+	// foreground (a pipeline's shell waits on its stages in order while
+	// the last one holds the spawn's hand-off; a wildcard wait moves
+	// nothing at its entry) and follows a wait DOWN through a middleman,
+	// a wait's FINISH restores the waiter but never over a LIVE child of
+	// its own, so an older wait cannot undo a newer spawn's hand-off —
+	// a dead child hands it to a live foreground
 	// parent on the same terminal or else to the shell (tty_task_departed),
 	// a backgrounded (&) child never takes it at any of those points. Each
 	// of those hand-offs is a check-then-store made under the terminal's

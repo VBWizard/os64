@@ -409,11 +409,21 @@ because raw mode made them load-bearing:
 - The foreground changes hands AT THE SPAWN, not first at the wait: a
   child is runnable the moment it is submitted and can reach a syscall
   before its parent reaches `wait`, so a telnet going raw as its first act
-  would otherwise be refused by a race. `task_wait` re-affirms the
-  hand-off and follows a wait DOWN through a middleman; neither its entry
-  nor its finishing restore overwrites a LIVE child of the waiter, so an
-  older wait cannot undo a newer spawn's hand-off — a sibling thread's, or
-  the waiter's own later one — at either end.
+  would otherwise be refused by a race. A WAIT ON A NAMED CHILD MAKES THAT
+  CHILD THE FOREGROUND, whatever the pointer held: a pipeline's shell
+  spawns every stage (so the LAST stage holds the spawn's hand-off) and
+  then waits on them in launch order, and `sleep 30 | true` must aim
+  Ctrl+C at the `sleep` being waited on, not at a `true` that exits at
+  once and hands the console back to a shell still blocked in `wait`. The
+  named wait is the program's explicit statement of which job it attends
+  and outranks a hand-off made in passing; a program that waits on A from
+  one thread while spawning B from another has said two things, and the
+  terminal believes the later. A wildcard wait names nobody and moves
+  nothing at its entry. The wait's FINISH restores the waiter, but never
+  over a LIVE child of its own — a sibling thread's newer spawn keeps its
+  console — and "live child" is answered by dereferencing the pointer
+  under the lock, not by a task-list walk, because a spawn publishes its
+  child to the pointer before submission puts it on the list.
 - CTRL+C AND `/proc/self/tty` READ THE FOREGROUND ONCE. The pointer changes
   hands at a spawn, a wait and a departure; the intercept decides what the
   byte means and whom it is aimed at from one snapshot, and the report

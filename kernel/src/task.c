@@ -1550,15 +1550,17 @@ static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 	return NULL;
 }
 
-// Is `candidate` a live child of `parent`? By POINTER, walking the parent's
-// side: the candidate is a foreground pointer that may name a task in the
-// act of dying, and a walk that compares addresses never dereferences it.
+// Is `candidate` — a value read from a terminal's fgTask — a live child of
+// `parent`? ASKED ONLY UNDER THAT TERMINAL'S fg_lock, and it dereferences
+// the candidate on the strength of two facts: a task's departure clears
+// itself from the pointer under the same lock before its burial can free
+// it, so whatever the pointer names while we hold the lock is not freed;
+// and the candidate may be a child the spawn has published but not yet
+// submitted — not on kTaskList yet — so a list walk would call a live,
+// about-to-run child dead and let an older wait take its console back.
 static bool task_is_live_child(task_t *parent, task_t *candidate)
 {
-	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
-		if (t == candidate && t->parentTask == parent && !t->exited)
-			return true;
-	return false;
+	return candidate != NULL && candidate->parentTask == parent && !candidate->exited;
 }
 
 bool task_is_live(const task_t *candidate)
@@ -1612,23 +1614,29 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// after its helper exits was refused as "not the foreground" the day
 	// this test read only the first two).
 	//
-	// A LIVE CHILD IN THE POINTER IS NEVER OVERWRITTEN, here or at the
-	// finish: it is either the child this wait is for (nothing to do) or a
-	// newer spawn — a sibling thread's, or this thread's own — whose
-	// hand-off an older wait has no business undoing. The re-affirmation
-	// is for the pointer that names the WAITER — a child the spawn did not
-	// hand the console to (one started with `&`, for instance) that a
-	// shell now waits on.
+	// A WAIT ON A NAMED CHILD MAKES THAT CHILD THE FOREGROUND. This is
+	// what a pipeline needs: husk spawns every stage (each spawn hands the
+	// console down, so the LAST stage holds it) and then waits on the
+	// stages in launch order — `sleep 30 | true` must aim Ctrl+C at the
+	// sleep the shell is waiting on, not at a `true` that exits at once
+	// and hands the console back to a shell that is still blocked. The
+	// pointer naming some other live child is not a reason to leave it:
+	// a named wait is the program's explicit statement of which job it is
+	// attending, and it outranks the hand-off a spawn made in passing. (A
+	// program that waits on A from one thread while spawning B from
+	// another has said two things; the terminal believes the later one.)
+	// A WILDCARD wait names nobody and moves nothing at its entry — a
+	// reaper thread collecting whatever ends is not attending a job.
 	//
 	// EVERY CHECK-THEN-STORE ON THE POINTER, here and at the finish, runs
 	// under the terminal's foreground lock (tty.h): a sibling thread's
-	// spawn publishes its child under the same lock, so "not a live child"
-	// and "then store" cannot be split by a publication in between.
+	// spawn publishes its child under the same lock, so the finish's "not
+	// a live child" and "then store" cannot be split by a publication.
 	tty_t *console = task_tty(parent);
 	uint64_t fgFlags = spinlock_acquire_irqsave(&console->fg_lock);
 	bool movesConsole = parent->controllingShell || console->fgTask == parent ||
 	                    task_is_live_child(parent, (task_t *)console->fgTask);
-	if (movesConsole && !task_is_live_child(parent, (task_t *)console->fgTask)) {
+	if (movesConsole && targetPid != 0) {
 		task_t *fg = task_find_live_child(parent, targetPid);
 		if (fg != NULL)
 			console->fgTask = fg;
