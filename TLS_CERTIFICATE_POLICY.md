@@ -2,9 +2,9 @@
 
 This private slice supplies the owned validator factory used by
 `userland/libtls/port/client_engine.h`. It builds on the engine and the pinned
-BearSSL foundation. It installs no public API or root bundle. The PEM/config
-loader, production entropy adapter, transport, and HTTPS integration are
-separate slices in TLS.md.
+BearSSL foundation. It installs no public API or root bundle. The
+[PEM/config loader](TLS_TRUST_STORE.md) consumes this interface. Production
+entropy, transport, and HTTPS integration remain separate slices in TLS.md.
 
 ## Acceptance gate
 
@@ -216,6 +216,8 @@ reports are per-function measurements, not a bound on the crypto call chain.
 
 ASan/UBSan are enabled in the harness. On hosts where LeakSanitizer cannot
 run under tracing, use `ASAN_OPTIONS=detect_leaks=0`; the fixture's allocation
-counts still check owned cleanup. Guest execution, a sustained fuzzing campaign,
-public-root compatibility and updates, bundle/config loading, and independent
-TLS-peer interoperability remain separate validation and integration work.
+counts still check owned cleanup. The trust-store slice's guest fixture covers
+selected certificate checks and snapshot replacement. The full policy corpus
+and TLS engine have no guest runner. A sustained fuzzing campaign, public-root
+compatibility and updates, and independent TLS-peer interoperability remain
+separate validation and integration work.
