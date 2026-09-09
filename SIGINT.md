@@ -398,9 +398,15 @@ because raw mode made them load-bearing:
   child is runnable the moment it is submitted and can reach a syscall
   before its parent reaches `wait`, so a telnet going raw as its first act
   would otherwise be refused by a race. `task_wait` re-affirms the
-  hand-off and follows a wait DOWN through a middleman; its finishing
-  restore never overwrites a LIVE child of the waiter, so an older wait
-  cannot undo a sibling thread's newer spawn.
+  hand-off and follows a wait DOWN through a middleman; neither its entry
+  nor its finishing restore overwrites a LIVE child of the waiter, so an
+  older wait cannot undo a newer spawn's hand-off — a sibling thread's, or
+  the waiter's own later one — at either end.
+- CTRL+C AND `/proc/self/tty` READ THE FOREGROUND ONCE. The pointer changes
+  hands at a spawn, a wait and a departure; the intercept decides what the
+  byte means and whom it is aimed at from one snapshot, and the report
+  derives `fg_task`, `mode` and `raw_task` from one, so neither can pair one
+  task's wish with another task's name.
 - A DEAD CHILD HANDS THE CONSOLE TO ITS PARENT when the parent is a live
   foreground program on the same terminal, and to the shell otherwise:
   with the console moving at the spawn, a middleman whose child died

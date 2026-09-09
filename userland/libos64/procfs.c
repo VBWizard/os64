@@ -281,6 +281,12 @@ int32_t os64_tty_mode(bool *raw, uint64_t *holder)
     char line[PROC_LINE_MAX];
     bool is_raw = false;
     uint64_t who = 0;
+    // A report is parsed only if it carries BOTH lines with a value this
+    // library knows. The library is replaced under a running kernel (the
+    // kernel is the linker), so a kernel older than this call reports
+    // neither line — and that is "cannot be parsed", the -1 the contract
+    // promises, not a terminal in cooked mode.
+    bool seen_mode = false, seen_task = false, known_mode = false;
 
     int32_t h = (int32_t)os64_open("/proc/self/tty", NULL);
     if (h < 0)
@@ -291,11 +297,15 @@ int32_t os64_tty_mode(bool *raw, uint64_t *holder)
         char *value = split_value(line);
         if (value == NULL)
             continue;
-        if (os64_streq(line, "mode"))          is_raw = os64_streq(value, "raw");
-        else if (os64_streq(line, "raw_task")) who = os64_atou(value);
+        if (os64_streq(line, "mode")) {
+            seen_mode = true;
+            is_raw = os64_streq(value, "raw");
+            known_mode = is_raw || os64_streq(value, "cooked");
+        }
+        else if (os64_streq(line, "raw_task")) { seen_task = true; who = os64_atou(value); }
     }
     os64_close(h);
-    if (result < 0)
+    if (result < 0 || !seen_mode || !seen_task || !known_mode)
         return -1;
     if (raw) *raw = is_raw;
     if (holder) *holder = who;

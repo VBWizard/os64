@@ -362,7 +362,9 @@
 	// a foreground child at submission (a child can reach a syscall before
 	// its parent reaches wait, and "am I the foreground?" is asked at
 	// startup — tty_set_raw), task_wait re-affirms it and follows a wait
-	// DOWN through a middleman, a dead child hands it to a live foreground
+	// DOWN through a middleman — never over a LIVE child of the waiter, at
+	// its entry or its finish, so an older wait cannot undo a newer spawn's
+	// hand-off — a dead child hands it to a live foreground
 	// parent on the same terminal or else to the shell (tty_task_departed),
 	// a backgrounded (&) child never takes it at any of those points, and
 	// the keyboard IRQ path still reads it as a single aligned pointer,

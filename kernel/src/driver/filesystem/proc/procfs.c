@@ -38,7 +38,6 @@
 #include "scheduler.h"
 #include "task.h"
 #include "tty.h"   // task_tty — the /proc tty + foreground fields
-#include "console.h"   // console_tty_raw — the terminal's mode is its foreground's wish
 #include "thread.h"
 #include "signals.h"
 #include "handle.h"
@@ -566,17 +565,20 @@ static void proc_gen_tty(synth_text_t *t, task_t *task)
 	// How much history Shift+PgUp can reach right now — a pager that knows
 	// the terminal already holds N lines can choose not to repeat them.
 	synth_text_addf(t, "scrollback\t%u\n", hist);
-	synth_text_addf(t, "fg_task\t%lu\n",
-	           tty->fgTask ? ((task_t *)tty->fgTask)->taskID : 0);
+	// ONE read of the foreground for every line that derives from it: the
+	// pointer changes hands at a spawn, a wait and a departure, and a
+	// report that read it twice could say `mode raw` and then name a
+	// cooked task as raw_task — a pair no terminal was ever in.
+	task_t *fg = (task_t *)tty->fgTask;
+	synth_text_addf(t, "fg_task\t%lu\n", fg ? fg->taskID : 0);
 	// The line discipline, such as it is: `cooked` means Ctrl+C is SIGINT
 	// and Ctrl+D is end-of-input; `raw` means both are bytes, and raw_task
 	// names the foreground task whose wish that is (SIGINT.md § Raw mode).
 	// The same two words are what a write to this file accepts — a control
 	// surface that describes itself.
-	bool raw = console_tty_raw(tty);
+	bool raw = fg != NULL && fg->wantsRaw;
 	synth_text_addf(t, "mode\t%s\n", raw ? "raw" : "cooked");
-	synth_text_addf(t, "raw_task\t%lu\n",
-	           (raw && tty->fgTask) ? ((task_t *)tty->fgTask)->taskID : 0);
+	synth_text_addf(t, "raw_task\t%lu\n", raw ? fg->taskID : 0);
 }
 
 // A write to /proc/self/tty is a COMMAND, the ctl file's rule: the first

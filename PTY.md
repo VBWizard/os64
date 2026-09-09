@@ -127,7 +127,7 @@ knowing anything happened.
   machinery the VT arc scoped per-terminal, doing its job for a terminal
   that happens to be a window — unless the slave's foreground wants RAW, in
   which case the 0x03 is a byte like any other (SIGINT.md § Raw mode; the
-  intercept asks `console_tty_raw` for itself, so nothing here knows the
+  intercept reads the foreground's wish for itself, so nothing here knows the
   difference).
 - **`SYSCALL_PTY_SNAPSHOT`** (GRID mode's read): copies out a small header
   (rows, cols, cursor row/col, a GENERATION counter, flags) and the live

@@ -1611,10 +1611,18 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// paths below must hand BACK to the waiter (a middleman going cooked
 	// after its helper exits was refused as "not the foreground" the day
 	// this test read only the first two).
+	//
+	// A LIVE CHILD IN THE POINTER IS NEVER OVERWRITTEN, here or at the
+	// finish: it is either the child this wait is for (nothing to do) or a
+	// newer spawn — a sibling thread's, or this thread's own — whose
+	// hand-off an older wait has no business undoing. The re-affirmation
+	// is for the pointer that names the WAITER — a child the spawn did not
+	// hand the console to (one started with `&`, for instance) that a
+	// shell now waits on.
 	tty_t *console = task_tty(parent);
 	bool movesConsole = parent->controllingShell || console->fgTask == parent ||
 	                    task_is_live_child(parent, (task_t *)console->fgTask);
-	if (movesConsole) {
+	if (movesConsole && !task_is_live_child(parent, (task_t *)console->fgTask)) {
 		task_t *fg = task_find_live_child(parent, targetPid);
 		if (fg != NULL)
 			console->fgTask = fg;

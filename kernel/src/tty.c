@@ -1119,7 +1119,7 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 		// running INSIDE it, exactly as a Ctrl+C on VT3 aims at VT3's
 		// foreground. Consumed means it never enters the ring, same as the
 		// keyboard path — and a slave whose foreground wants raw consumes
-		// nothing, same as a VT (the intercept asks console_tty_raw).
+		// nothing, same as a VT (the intercept reads the foreground's wish).
 		if (console_intr_intercept_tty(slave, c))
 			continue;
 
