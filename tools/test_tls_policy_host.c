@@ -255,6 +255,7 @@ static void handshake(const policy_case *c)
 int main(void)
 {
     tls_certificate_view view;
+    size_t handshakes = 0;
     const blob *leaf = cases[0].chain[0];
     for (size_t length = 0; length < leaf->length; length++)
         assert(os64_tls_certificate_inspect(leaf->data, length, 0, "example.test", &view) != TLS_POLICY_OK);
@@ -265,13 +266,16 @@ int main(void)
         check_case(&cases[i], 65536);
         if (!strcmp(cases[i].name, "valid") || !strcmp(cases[i].name, "cn-only") ||
             !strcmp(cases[i].name, "client-auth") || !strcmp(cases[i].name, "critical-eku") ||
-            !strcmp(cases[i].name, "trailing-restriction-after-trust")) handshake(&cases[i]);
+            !strcmp(cases[i].name, "trailing-restriction-after-trust") ||
+            !strcmp(cases[i].name, "tail-unrelated-ca")) {
+            handshake(&cases[i]); handshakes++;
+        }
         printf("policy: %s PASS\n", cases[i].name);
     }
     anchors_and_failures();
     ownership_and_sequence();
     assert(allocated == freed);
-    printf("TLS policy: %zu chain cases, %zu anchor cases, five TLS handshake gates, fragmented input, failure atomicity, owned snapshots, concurrent references PASS\n",
-        sizeof cases / sizeof cases[0], sizeof anchor_cases / sizeof anchor_cases[0]);
+    printf("TLS policy: %zu chain cases, %zu anchor cases, %zu TLS handshake gates, fragmented input, failure atomicity, owned snapshots, concurrent references PASS\n",
+        sizeof cases / sizeof cases[0], sizeof anchor_cases / sizeof anchor_cases[0], handshakes);
     return 0;
 }

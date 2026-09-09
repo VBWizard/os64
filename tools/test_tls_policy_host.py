@@ -110,6 +110,14 @@ def corpus(work):
         anchors.append((name, blob(data), reason))
 
     case("valid", success=True, upstream=1)
+    for kind in (8, 11, 29):
+        for constructed in (False, True):
+            value = tlv(kind | (32 if constructed else 0), b"")
+            case(f"unsupported-universal-{kind}-constructed-{constructed}",
+                 replace_extension(leaf, int_key, 14, value), reason="DER", upstream=1)
+        bad_root = replace_extension(root, root_key, 14, tlv(kind, b""))
+        anchor(f"anchor-unsupported-universal-{kind}", bad_root, "DER")
+        case(f"trailing-unsupported-universal-{kind}", chain=[leaf, intermediate, bad_root], reason="DER", upstream=1)
     for label, value, valid in [("zero", b"\0", True), ("one", b"\x01", True),
                                 ("sign-padding", b"\0\x80", True), ("negative", b"\xff", True),
                                 ("empty", b"", False), ("redundant-zero", b"\0\x01", False),
@@ -193,8 +201,10 @@ def corpus(work):
              success=not backwards, reason="DER" if backwards else "OK", upstream=1)
         changed_root = with_name(with_name(root, root_key, 3, members), root_key, 5, members)
         anchor(f"anchor-rdn-descending-{backwards}", changed_root, "DER" if backwards else "OK")
-        case(f"rdn-trailing-after-trust-descending-{backwards}", chain=[leaf, intermediate, changed_root],
-             success=not backwards, reason="DER" if backwards else "OK", upstream=1)
+        ordered_root = with_name(with_name(root, root_key, 3, ordered), root_key, 5, ordered)
+        ordered_issuer = with_name(intermediate, root_key, 3, ordered)
+        case(f"rdn-trailing-after-trust-descending-{backwards}", chain=[leaf, ordered_issuer, changed_root],
+             trust=ordered_root, success=not backwards, reason="DER" if backwards else "OK", upstream=1)
     # Separate RDNs are a SEQUENCE, so their relative order must not be sorted.
     reverse_rdns = b"".join(tlv(0x31, value) for value in ordered[::-1])
     sequence_name = mutate(leaf, int_key, lambda t: t.__setitem__(5, (0x30, reverse_rdns)))
@@ -266,6 +276,20 @@ def corpus(work):
     anchor("anchor-bad-string", bad_root, "DER")
     case("dn-bad-trailing-root", chain=[leaf, intermediate, bad_root], reason="DER", upstream=1)
     case("included-root", chain=[leaf, intermediate, root], success=True)
+    other_key = ec.generate_private_key(ec.SECP256R1())
+    unrelated = certificate(other_key, "unrelated root", None, other_key, ca=True, san=None, eku=False)
+    case("tail-unrelated-ca", chain=[leaf, intermediate, unrelated], upstream=1)
+    same_name_other_key = certificate(other_key, "policy root", None, other_key, ca=True, san=None, eku=False)
+    case("tail-same-name-wrong-key", chain=[leaf, intermediate, same_name_other_key], upstream=1)
+    wrongly_signed = mutate(root, other_key, lambda t: None)
+    case("tail-bad-adjacent-signature", chain=[leaf, intermediate, wrongly_signed, root], upstream=1)
+    case("tail-repeated-valid-root", chain=[leaf, intermediate, root, root], success=True, upstream=1)
+    cross_root = certificate(root_key, "policy root", x509.load_der_x509_certificate(unrelated).subject,
+                             other_key, ca=True, san=None, eku=False)
+    case("tail-cross-signed", chain=[leaf, intermediate, cross_root, unrelated], success=True, upstream=1)
+    expired_upper = certificate(other_key, "unrelated root", None, other_key, ca=True, san=None, eku=False,
+                                dates=(dt.datetime(2020, 1, 1), dt.datetime(2021, 1, 1)))
+    case("tail-expired-ca", chain=[leaf, intermediate, cross_root, expired_upper], upstream=1)
     case("mixed-case-san", certificate(leaf_key, "ignored", int_name, int_key, san="EXAMPLE.TEST"), success=True)
     case("wildcard", certificate(leaf_key, "ignored", int_name, int_key, san="*.example.test"), host="www.example.test", success=True)
     wildcard = certificate(leaf_key, "ignored", int_name, int_key, san="*.example.test")

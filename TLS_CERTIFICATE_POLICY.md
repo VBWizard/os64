@@ -8,14 +8,19 @@ separate slices in TLS.md.
 
 ## Acceptance gate
 
-The wrapper forwards the original certificate stream to BearSSL minimal X.509
-until policy refusal and inspects each complete certificate in a fixed heap
-buffer. `end_chain`
-requires both upstream success and policy success; `get_pkey` returns NULL
-until that gate succeeds. Policy errors cannot turn an upstream failure into
-success. Inspection continues through certificates supplied after upstream
-has found an anchor. A malformed or restricted trailing certificate therefore
-refuses the connection, even if upstream would ignore it.
+The wrapper forwards the original certificate stream to two BearSSL minimal
+X.509 contexts until policy refusal and inspects each complete certificate in
+a fixed heap buffer. One context establishes trust against the configured
+snapshot. The other has no anchors, so it checks adjacent issuer/signature
+links, validity periods and path constraints through the supplied list without
+stopping at a trusted prefix. Its expected final NOT_TRUSTED result supplies
+no authentication; the snapshot-backed context must independently succeed.
+`end_chain` requires both checks and policy success; `get_pkey` returns NULL
+until that gate succeeds. A malformed, restricted or unrelated trailing
+certificate therefore refuses the connection. Valid included roots and
+cross-signed tails remain accepted. The full-chain context checks each
+certificate against the next one; it does not validate the final certificate's
+signature. Trust comes from the separate snapshot-backed context.
 
 The factory copies the expected DNS hostname and uses explicit validation time.
 It configures the same SHA-256/384/512, RSA i31, and EC m31 algorithms as the
@@ -49,6 +54,9 @@ and intermediate path-length enforcement.
 Extension OIDs must be unique within a certificate. DER envelopes, lengths,
 OIDs, booleans, INTEGER/ENUMERATED values, and bit strings are checked for
 canonical encodings.
+EXTERNAL, EMBEDDED PDV and unrestricted CHARACTER STRING universal types
+are refused in both primitive and constructed forms because their schemas
+are outside this certificate subset.
 ECDSA signature BIT STRING contents must be a DER SEQUENCE of two minimally
 encoded, strictly positive INTEGERs with no trailing bytes. RSA signatures
 remain raw signature bytes; BearSSL checks their cryptographic validity.
@@ -143,11 +151,12 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 224 chain cases and 30 anchor cases, with one-byte,
+The corpus covers 239 chain cases and 33 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 RDN ordering and string encodings, canonical ECDSA signatures,
 positive serials, SAN/CA Basic Constraints criticality, ENUMERATED minimality,
-primitive/constructed DER tags,
+primitive/constructed DER tags and unsupported universal types,
+adjacent links and validity through supplied tails,
 SAN/CN/wildcard boundaries, constructed SAN refusals,
 leaf/intermediate EKU,
 critical-extension refusals, restrictions after upstream trust success,
@@ -163,17 +172,19 @@ provenance and fingerprints are in `userland/libtls/test/public-certs/README.md`
 OpenSSL independently validates the positive chain with server purpose and DNS
 identity enabled.
 
-Five complete or rejected TLS handshake probes use the policy factory and
+Six complete or rejected TLS handshake probes use the policy factory and
 the pinned BearSSL server. They verify successful authentication and refusal
 before plaintext access for CN-only, unsuitable EKU, critical EKU, and a
-restricted trailing certificate. This is not independent-peer TLS
+restricted or unrelated trailing certificate. This is not independent-peer TLS
 interoperability. Allocation-failure injection, copied-input lifetime, owner
 release before validation, and four concurrent validator owners exercise
 snapshot ownership. Handshake certificate processing performs no allocations.
 
-The x86-64 validator allocation is 36,264 bytes; a trust builder/snapshot is
-18,456 bytes plus copied DN/key bytes. The private sources compile with the
-normal userland build through the freestanding PIC rule and `-Werror`.
+The x86-64 validator allocation is 39,440 bytes; a trust builder/snapshot is
+18,456 bytes plus copied DN/key bytes. The second validator context adds
+3,176 fixed bytes and repeats validation of the trusted prefix to check the
+full supplied chain without another certificate buffer. The private sources
+compile with the normal userland build through the freestanding PIC rule and `-Werror`.
 They are members of the private foundation archive with generated header
 dependencies; unused objects are not linked into `bearssltest`. Compiler stack
 reports are per-function measurements, not a bound on the crypto call chain.

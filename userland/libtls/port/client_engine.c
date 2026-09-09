@@ -64,8 +64,8 @@ static void fail(os64_tls_engine *c, tls_status reason)
     if (c->terminal == TLS_OK) c->terminal = reason;
 }
 
-// Advancing close never retains a borrowed buffer view. Wait for readers to
-// consume buffered application data before invoking upstream's discarding close.
+// Advancing shutdown retains no borrowed buffer view. Drain authenticated input
+// and flush accepted output before upstream's discarding close or EOF truncation.
 static unsigned advance(os64_tls_engine *c)
 {
     unsigned state = br_ssl_engine_current_state(&c->client.eng);
@@ -78,10 +78,10 @@ static unsigned advance(os64_tls_engine *c)
     if ((state & BR_SSL_CLOSED) && c->terminal == TLS_OK)
         fail(c, c->handshake ? TLS_CLEAN_EOF : TLS_PROTOCOL);
     if (c->terminal != TLS_OK || c->aborted) return state;
-    if (c->closing && !c->close_started && !(state & (BR_SSL_RECVAPP | BR_SSL_SENDREC))) {
+    if (((c->closing && !c->close_started) || c->eof) && !(state & (BR_SSL_RECVAPP | BR_SSL_SENDREC))) {
         br_ssl_engine_flush(&c->client.eng, 0);
         state = br_ssl_engine_current_state(&c->client.eng);
-        if (!(state & BR_SSL_SENDREC)) {
+        if (c->closing && !c->close_started && !(state & BR_SSL_SENDREC)) {
             c->close_started = true;
             br_ssl_engine_close(&c->client.eng);
             return advance(c);
