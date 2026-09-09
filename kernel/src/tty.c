@@ -787,26 +787,27 @@ int tty_set_raw(tty_t *t, struct task *caller, bool raw)
 		return -1;
 	if (t->fgTask != caller)
 		return -1;
-	struct task *holder = t->rawHolder;
 	if (raw)
 	{
-		// ONE HOLDER. A foreground child of a raw holder asking for raw is
-		// granted — the terminal already is — but the mode stays in the
-		// holder's name, so the child's exit cannot cook a terminal its
+		if (caller->tearingDown)
+			return -1;
+		// ONE HOLDER, CLAIMED IN ONE STEP: a CAS from NULL, never a look
+		// and a store, because two askers can race — a thread of the
+		// foreground and a foreground child it just spawned, or two threads
+		// of one task — and a store after a stale look would overwrite a
+		// holder whose exit then could not clear the mode. The loser is
+		// granted all the same: the terminal is raw, and the mode stays in
+		// the winner's name, so a child's exit cannot cook a terminal its
 		// parent asked to have raw.
-		if (holder != NULL)
+		if (!__sync_bool_compare_and_swap(&t->rawHolder, NULL, caller))
 			return 0;
 		// THE TEARDOWN RACE: a sibling thread of the caller may be in
 		// task_exit right now. It sets tearingDown (an exchange, a full
-		// barrier) BEFORE tty_task_departed runs its clearing CAS, so:
-		// store the holder, fence, then look at the flag. If the exit's
-		// CAS came after our store it cleared us; if it came before, the
-		// flag was already set when we look, and we clear ourselves. Either
-		// way a task that is leaving never stays the holder.
-		if (caller->tearingDown)
-			return -1;
-		t->rawHolder = caller;
-		__sync_synchronize();
+		// barrier) BEFORE tty_task_departed runs its clearing CAS, and the
+		// claim above is a full barrier too, so look at the flag AFTER it:
+		// if the exit's CAS came after our claim it cleared us; if before,
+		// the flag was already set when we look, and we clear ourselves.
+		// Either way a task that is leaving never stays the holder.
 		if (caller->tearingDown)
 		{
 			__sync_bool_compare_and_swap(&t->rawHolder, caller, NULL);
@@ -814,6 +815,7 @@ int tty_set_raw(tty_t *t, struct task *caller, bool raw)
 		}
 		return 0;
 	}
+	struct task *holder = t->rawHolder;
 	// Cooked is NULL. Asking for cooked twice is fine; asking for it on a
 	// seat some OTHER task holds raw is refused — that task asked for the
 	// mode and only it or its death may end it.

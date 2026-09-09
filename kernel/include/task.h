@@ -351,10 +351,15 @@
 	// (kForegroundTask, 2026-07..2026-08-08, promoted.) The foreground task
 	// — "the task the controlling shell is currently blocked waiting on" —
 	// lives in tty_t.fgTask now, one per terminal, exactly as its birth
-	// comment promised. Everything else about it survived the move: task_wait
-	// still moves it (keying the transfer on WAIT, not spawn, so a
-	// backgrounded (&) child never takes the console), and the keyboard IRQ
-	// path still reads it as a single aligned pointer, atomically, no lock.
+	// comment promised. What moved with it: the SPAWN hands the console to
+	// a foreground child at submission (a child can reach a syscall before
+	// its parent reaches wait, and "am I the foreground?" is asked at
+	// startup — tty_set_raw), task_wait re-affirms it and follows a wait
+	// DOWN through a middleman, a dead child hands it to a live foreground
+	// parent on the same terminal or else to the shell (tty_task_departed),
+	// a backgrounded (&) child never takes it at any of those points, and
+	// the keyboard IRQ path still reads it as a single aligned pointer,
+	// atomically, no lock.
 
 	// THE RECLAIM LEDGER (task.c; the 2026-08-13 deferral ledger, PAID
 	// 2026-08-15). Cumulative bytes/pages of VMA backing memory the

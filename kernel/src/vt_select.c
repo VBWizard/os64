@@ -285,9 +285,16 @@ static void do_paste_step(tty_t *t)
 			continue;
 		}
 
+		// A pasted byte is a keystroke to the terminal: a 0x03 on a cooked
+		// terminal is the interrupt, consumed here as the keyboard path
+		// consumes it, and a 0x04 is end-of-input or the byte, decided now.
+		if (console_intr_intercept_tty(t, (char)byte)) {
+			s_paste_pos++;
+			continue;
+		}
 		keyboard_event_t ev = { .ascii = byte, .scancode = 0,
 		                        .shift = false, .ctrl = false, .alt = false };
-		console_classify_tty(t, &ev);   // a pasted EOT: end-of-input or the byte, decided now
+		console_classify_tty(t, &ev);
 		if (!tty_input_push_if_room(t, &ev))
 			return;      // ring full: the rest arrives next frame
 		s_paste_pos++;
