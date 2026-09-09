@@ -21,7 +21,8 @@ merged = OBJ / "bearssl-complete.o"
 command("x86_64-elf-ld", "-r", "--whole-archive", ARCHIVE, "--no-whole-archive", "-o", merged)
 symbols = command("x86_64-elf-nm", "-u", merged)
 undefined = {line.split()[-1] for line in symbols.splitlines()}
-expected = {"_GLOBAL_OFFSET_TABLE_", "os64_memcpy", "os64_memmove", "os64_memset", "os64_strlen"}
+expected = {"_GLOBAL_OFFSET_TABLE_", "os64_malloc", "os64_free",
+            "os64_memcpy", "os64_memmove", "os64_memset", "os64_strlen"}
 if undefined != expected:
     raise SystemExit("unexpected complete-core dependencies: " + repr(undefined))
 shared = OBJ / "bearssl-link-audit.so"
@@ -50,5 +51,5 @@ if re.search(r"\t(?:rdrand|rdseed|syscall|sysenter)\b", assembly):
 license_text = (ROOT / "userland/libtls/upstream/LICENSE.txt").read_bytes()
 if license_text not in (USERLAND / "bin/tests/bearssltest").read_bytes():
     raise SystemExit("fixture does not retain the upstream binary-distribution license")
-print("BearSSL ELF audit PASS: four os64 imports, hidden core, supported relocations, retained license")
+print("BearSSL ELF audit PASS: six os64 imports, hidden core/client, supported relocations, retained license")
 print("Audit artifacts: " + str(shared) + " and " + str(OBJ / "bearssl-link-audit.map"))
