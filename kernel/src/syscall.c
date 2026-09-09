@@ -3536,6 +3536,23 @@ static void spawn_do_create(void *arg)
 	                      (p->parent != NULL && p->parent->backgroundJob &&
 	                       p->ttySlave == NULL);
 
+	// THE FOREGROUND CHANGES HANDS AT THE SPAWN, not first at the wait
+	// (task_wait re-affirms it). The child is runnable the moment it is
+	// submitted below, and on SMP it can reach a syscall before the parent
+	// ever calls wait — so anything that asks "am I the foreground?" at
+	// startup (tty_set_raw: a telnet going raw as its first act) would be
+	// answered by a race. Same test as task_wait's, same terminal: the
+	// parent's own, and only when the child inherits it — a child seated on
+	// a pty slave is that terminal's foreground already (tty_seat_shell,
+	// next), and the parent's terminal must keep its own. A background
+	// job never takes the console, here as at the wait.
+	if (p->ttySlave == NULL && !child->backgroundJob && p->parent != NULL)
+	{
+		tty_t *console = task_tty(p->parent);
+		if (p->parent->controllingShell || console->fgTask == p->parent)
+			console->fgTask = child;
+	}
+
 	// Seat on a pty slave (PTY.md), BEFORE submission like everything else
 	// here: the child must never run an instruction on the wrong terminal.
 	// tty_seat_shell is the SAME seat the knock-summon gives a husk on a VT

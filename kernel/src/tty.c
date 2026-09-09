@@ -613,8 +613,11 @@ void tty_input_event(const keyboard_event_t *ev)
 		spinlock_release_irqrestore(&t->lock, flags);
 	}
 
-	// Push into THIS tty's ring.
-	tty_input_push(t, ev);
+	// Push into THIS tty's ring, classified for THIS tty's mode on the way
+	// in (console_classify_tty: is this EOT end-of-input, or the byte?).
+	keyboard_event_t classified = *ev;
+	console_classify_tty(t, &classified);
+	tty_input_push(t, &classified);
 }
 
 // The ring push alone — the choke both producers share: the keyboard path
@@ -784,16 +787,36 @@ int tty_set_raw(tty_t *t, struct task *caller, bool raw)
 		return -1;
 	if (t->fgTask != caller)
 		return -1;
-	// Held in the caller's name so tty_task_departed can give it back.
+	struct task *holder = t->rawHolder;
+	if (raw)
+	{
+		// ONE HOLDER. A foreground child of a raw holder asking for raw is
+		// granted — the terminal already is — but the mode stays in the
+		// holder's name, so the child's exit cannot cook a terminal its
+		// parent asked to have raw.
+		if (holder != NULL)
+			return 0;
+		// THE TEARDOWN RACE: a sibling thread of the caller may be in
+		// task_exit right now. It sets tearingDown (an exchange, a full
+		// barrier) BEFORE tty_task_departed runs its clearing CAS, so:
+		// store the holder, fence, then look at the flag. If the exit's
+		// CAS came after our store it cleared us; if it came before, the
+		// flag was already set when we look, and we clear ourselves. Either
+		// way a task that is leaving never stays the holder.
+		if (caller->tearingDown)
+			return -1;
+		t->rawHolder = caller;
+		__sync_synchronize();
+		if (caller->tearingDown)
+		{
+			__sync_bool_compare_and_swap(&t->rawHolder, caller, NULL);
+			return -1;
+		}
+		return 0;
+	}
 	// Cooked is NULL. Asking for cooked twice is fine; asking for it on a
 	// seat some OTHER task holds raw is refused — that task asked for the
 	// mode and only it or its death may end it.
-	if (raw)
-	{
-		t->rawHolder = caller;
-		return 0;
-	}
-	struct task *holder = t->rawHolder;
 	if (holder != NULL && holder != caller)
 		return -1;
 	__sync_bool_compare_and_swap(&t->rawHolder, holder, NULL);
@@ -1121,6 +1144,7 @@ int64_t pty_master_write(tty_t *slave, const char *bytes, size_t length)
 		// to a full pipe — never drop a byte, just take longer.
 		keyboard_event_t ev = {0};
 		ev.ascii = c;
+		console_classify_tty(slave, &ev);   // EOT: end-of-input or the byte, decided now
 		if (!tty_input_push_if_room(slave, &ev))
 			return (int64_t)i;      // accepted this many; the rest is the caller's to resend
 	}

@@ -82,6 +82,12 @@ typedef struct keyboard_event {
     bool shift;
     bool ctrl;
     bool alt;
+    // Decided when the key ENTERS the ring, not when it is read: EOT on a
+    // cooked terminal is end-of-input, on a raw one it is the byte 0x04
+    // (console_classify_tty). Ctrl+C is classified at the same moment by
+    // the intercept, so the two mode-controlled keys share one epoch and a
+    // mode change lands on the next key, never on one already queued.
+    bool eof;
 } keyboard_event_t;
 
 void keyboard_init(void);

@@ -366,20 +366,43 @@ needed on a cooked terminal is gone. ssh will want exactly the same bit.
    is no `stty sane` because nothing ever needs one. A fresh shell seating
    also starts cooked.
 
-**One rule beyond those:** only the terminal's FOREGROUND task may ask. A
-background job flipping the seat would steal Ctrl+C from the program the
-person is looking at. `tty_set_raw` refuses anyone else.
+**Three rules beyond those** (the second and third from Codex's round on
+PR #80):
 
-**Where it acts:** `console_intr_intercept_tty` returns "data" when the
-terminal is raw — for a VT's keyboard and for a pty master's write alike,
-since both go through it — and `console_read` treats EOT as end-of-input
-only when the terminal is cooked, checked per event so a mode change lands on
-the next key. Nothing else changes: the ring, the waiter, the focus, the
-pushback slot are all as they were.
+- Only the terminal's FOREGROUND task may ask. A background job flipping the
+  seat would steal Ctrl+C from the program the person is looking at.
+  `tty_set_raw` refuses anyone else. And the foreground changes hands AT THE
+  SPAWN, not first at the wait: a child is runnable the moment it is
+  submitted and can reach a syscall before its parent reaches `wait`, so a
+  telnet going raw as its first act would otherwise be refused by a race.
+  `task_wait` re-affirms the hand-off; it no longer originates it.
+- ONE HOLDER. A foreground child of the holder asking for raw is granted —
+  the terminal is raw — but the mode stays in the holder's name, so the
+  child's exit cannot cook a terminal its parent asked to have raw. Cooked
+  from anyone but the holder is refused.
+- A task that is TEARING DOWN cannot become the holder. A sibling thread
+  can be in `task_exit` while another thread writes `raw`; the exit sets
+  `tearingDown` (an exchange, a full barrier) before `tty_task_departed`'s
+  clearing CAS, so the setter stores, fences, and re-reads the flag: if the
+  CAS came after the store it cleared us, if before, the flag is already up
+  and we clear ourselves. A freed task can never remain the holder.
 
-**Proof:** `/tests/rawtty` (in the ring-3 suite): on a pty, cooked by
-default (a typed 0x04 is EOF), raw on request (0x03 0x04 'x' arrive as three
-bytes — on a cooked pty the 0x03 would have been SIGINT at the write), cooked
-again on request, reset at a grandchild's exit, and a stranger's write to the
-child's tty file refused. Plus the escape hatch Unix never had: a stuck raw
-program is killed from another VT, and its seat is cooked the moment it dies.
+**Where it acts:** both mode-controlled keys are classified WHEN THEY ENTER
+THE RING, in one epoch. `console_intr_intercept_tty` returns "data" for
+Ctrl+C when the terminal is raw, and `console_classify_tty` marks an EOT as
+end-of-input (`keyboard_event_t.eof`) only when the terminal is cooked — for
+a VT's keyboard and for a pty master's write alike, since both producers
+call them right before the push. `console_read` reads the mark, never the
+current mode, so a mode change lands on the next key and never re-reads
+one already queued. Nothing else changes: the ring, the waiter, the focus,
+the pushback slot are all as they were.
+
+**Proof:** `/tests/rawtty` (in the ring-3 suite): on a pty whose seated
+shell spawns an ordinary WORKER (a shell's Ctrl+C is data by the prompt rule
+and would prove nothing): cooked by default (a typed 0x04 is EOF), the worker
+raw on request (0x03 0x04 'x' arrive as three bytes — on a cooked terminal
+the 0x03 would have been SIGINT at the master's write), a helper child
+granted raw without taking the holder's name, cooked again on request, reset
+at the worker's exit, and a stranger's write to the child's tty file refused.
+Plus the escape hatch Unix never had: a stuck raw program is killed from
+another VT, and its seat is cooked the moment it dies.

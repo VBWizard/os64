@@ -234,8 +234,12 @@ bool tty_input_push_if_room(tty_t *t, const keyboard_event_t *ev);
 // Switch the terminal a task sits on between cooked and raw. Only the
 // terminal's FOREGROUND task may ask — a background job flipping the seat
 // would steal Ctrl+C from the program the person is looking at — and the
-// mode is held in that task's name, cleared when it departs. Returns 0, or
-// -1 when the caller is not the foreground.
+// mode is held in that task's name, cleared when it departs. One holder at
+// a time: a foreground child of the holder asking for raw is granted (the
+// terminal is raw) without taking the name, so its exit cannot cook what
+// its parent asked for. Returns 0, or -1 when the caller is not the
+// foreground, is tearing down, or asks for cooked on a seat another task
+// holds raw.
 int tty_set_raw(tty_t *t, struct task *caller, bool raw);
 
 // ── Focus (called from the keyboard drivers' chord intercepts) ─────────────

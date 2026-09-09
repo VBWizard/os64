@@ -1550,6 +1550,17 @@ static task_t *task_find_live_child(task_t *parent, uint64_t targetPid)
 	return NULL;
 }
 
+// Is `candidate` a live child of `parent`? By POINTER, walking the parent's
+// side: the candidate is a foreground pointer that may name a task in the
+// act of dying, and a walk that compares addresses never dereferences it.
+static bool task_is_live_child(task_t *parent, task_t *candidate)
+{
+	for (task_t *t = kTaskList; t != NULL && t != (task_t*)NO_TASK; t = t->next)
+		if (t == candidate && t->parentTask == parent && !t->exited)
+			return true;
+	return false;
+}
+
 uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 {
 	core_local_storage_t *cls = get_core_local_storage();
@@ -1566,9 +1577,14 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// a script's husk running a line). The hand-off follows the wait DOWN
 	// so Ctrl+C reaches the program actually running; aimed at the
 	// middleman it killed `env X=1 sleep 30` at once and left sleep alive,
-	// ownerless, still writing to the terminal. Keyed on wait, not spawn,
-	// so a backgrounded (&) child never takes the console — a background
-	// job is not the foreground, so its own waits move nothing. Restored to
+	// ownerless, still writing to the terminal. The spawn syscall already
+	// moved the console to a foreground child the moment it was submitted
+	// (a child can reach a syscall before its parent reaches this wait, and
+	// tty_set_raw asks "am I the foreground?" at startup); this is the
+	// re-affirmation, and the one that follows a wait DOWN through a
+	// middleman. A backgrounded (&) child never takes the console at
+	// either point — a background job is not the foreground, so its own
+	// waits move nothing. Restored to
 	// the WAITER on every return path that FINISHES the wait (a corpse
 	// collected, or no child to wait for): a Ctrl+C at the prompt after this
 	// wait must find the shell foreground again (where it is a harmless
@@ -1581,8 +1597,15 @@ uint64_t task_wait(task_t* parentTask, uint64_t targetPid, uint64_t* exitCode)
 	// THE console is now THIS SHELL'S TERMINAL (task_tty): husk-on-tty2
 	// handing its console to a child moves tty2's foreground pointer and
 	// nobody else's — the Ctrl+C you type on tty1 cannot reach across.
+	// "Is the waiter the foreground?" has a third spelling since the spawn
+	// began handing the console down: the foreground may already be one of
+	// the waiter's own children — which is exactly the case the finishing
+	// paths below must hand BACK to the waiter (a middleman going cooked
+	// after its helper exits was refused as "not the foreground" the day
+	// this test read only the first two).
 	tty_t *console = task_tty(parent);
-	bool movesConsole = parent->controllingShell || console->fgTask == parent;
+	bool movesConsole = parent->controllingShell || console->fgTask == parent ||
+	                    task_is_live_child(parent, (task_t *)console->fgTask);
 	if (movesConsole) {
 		task_t *fg = task_find_live_child(parent, targetPid);
 		if (fg != NULL)

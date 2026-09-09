@@ -122,6 +122,13 @@ bool console_intr_intercept(char ascii)
 	return console_intr_intercept_tty(kTTYFocused, ascii);
 }
 
+void console_classify_tty(tty_t *tty, keyboard_event_t *ev)
+{
+	if (tty == NULL)
+		tty = &kTTY[0];
+	ev->eof = (ev->ascii == CONSOLE_EOT && tty->rawHolder == NULL);
+}
+
 long console_read(char *buf, size_t len)
 {
 	// The classic blocking read is the no-deadline spelling of the timed one.
@@ -205,10 +212,10 @@ long console_read_deadline(char *buf, size_t len, uint64_t deadline)
 		keyboard_event_t ev;
 		while (n < len && tty_input_pop(tty, &ev))
 		{
-			// EOT is end-of-input only on a COOKED terminal; raw hands the
-			// byte over (SIGINT.md § Raw mode). Checked per event, so a
-			// mode change lands on the next key and never on a stale one.
-			if (ev.ascii == CONSOLE_EOT && tty->rawHolder == NULL)
+			// End-of-input was decided when the key entered the ring
+			// (console_classify_tty): on a raw terminal the same 0x04 is
+			// a byte, and a mode change never re-reads a queued key.
+			if (ev.eof)
 			{
 				if (n == 0)
 				{

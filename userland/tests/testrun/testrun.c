@@ -127,7 +127,7 @@ static const fixture_t kFixtures[] = {
     { "/tests/openxtest",        NULL, 0x0EAC7000,  0,          "atomic exclusive create on ext2 and FAT, including contention and full-handle refusal" },
     { "/tests/sigtest",         NULL, 0x05160000,  0,          "signal handlers: install, replace, restore, and the refusals" },
     { "/tests/winchtest",       NULL, 0x0A1D0000,  0,          "pty resize: the grid follows, the seats hear SIGWINCH, a blocked read and a blocked wait are interrupted" },
-    { "/tests/rawtty",          NULL, 0x2A710000,  0,          "raw mode: cooked by default, 0x03/0x04 arrive as bytes on request, cooked again, reset at the holder's exit, strangers refused" },
+    { "/tests/rawtty",          NULL, 0x2A710000,  0,          "raw mode: cooked by default, 0x03/0x04 arrive as bytes on request, one holder, cooked again, reset at the holder's exit, strangers refused" },
     { "/tests/df_test",         NULL, 0x0DF00000,  0,          "the direction flag does not cross a ring boundary (syscall, and into a handler)" },
     { "/tests/regleak_test",    NULL, 0x02E60000,  0,          "a syscall returns no kernel state in its scratch registers" },
     // PASSES BY DYING, like the nx_test pair above: 141 is SIGPIPE's default

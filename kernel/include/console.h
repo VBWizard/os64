@@ -72,6 +72,15 @@ bool console_intr_intercept(char ascii);
 struct tty;
 bool console_intr_intercept_tty(struct tty *tty, char ascii);
 
+// The other half of the line discipline, at the same choke and the same
+// moment: an EOT entering a COOKED terminal's ring is marked end-of-input
+// (keyboard_event_t.eof); on a raw terminal it is the byte 0x04. Called by
+// both producers — the keyboard router and a pty master's write — right
+// before the push, so Ctrl+C and Ctrl+D are classified in one epoch and a
+// mode change applies to the next key, never to one already queued.
+struct keyboard_event;
+void console_classify_tty(struct tty *tty, struct keyboard_event *ev);
+
 // Called from processSignals (scheduler context, every pass). If a reader is
 // asleep in console_read AND the keyboard driver has input, wake the reader.
 // Level-triggered on keyboard_has_event(), so a key arriving at any instant is
