@@ -24,10 +24,13 @@ anchors; exponents must fit the upstream key buffer, be odd, and be at least 3.
 EC keys use uncompressed, valid P-256/P-384/P-521 points. Certificate signature
 identifiers must be SHA-256/384/512 with RSA PKCS#1 v1.5 or ECDSA, with matching
 inner/outer identifiers. This conservatively also applies to supplied roots.
+The profile requires strictly positive certificate serial numbers, including
+in anchors and trailing certificates; zero and negative serials are refused.
 
-The leaf must contain a matching DNS SAN. DNS names use ASCII labels of 1–63
-characters and a maximum total length of 253. Wildcards occupy a complete
-leftmost label and match one label. CN does not supply identity. There is no
+The leaf must contain a matching DNS SAN. An empty leaf subject requires that
+SAN extension to be critical; CA subjects must be nonempty. DNS names use
+ASCII labels of 1–63 characters and a maximum total length of 253. Wildcards
+occupy a complete leftmost label and match one label. CN does not supply identity. There is no
 public suffix database or IP identity support. Non-DNS GeneralNames do not
 supply identity. Primitive email/URI names have nonempty ASCII/NUL checks,
 IP names require 4 or 16 bytes, and registered IDs require a valid OID encoding.
@@ -139,9 +142,10 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 188 chain cases and 25 anchor cases, with one-byte,
+The corpus covers 210 chain cases and 27 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 RDN ordering and string encodings, canonical ECDSA signatures,
+positive serials, empty-subject SAN criticality, primitive/constructed DER tags,
 SAN/CN/wildcard boundaries, constructed SAN refusals,
 leaf/intermediate EKU,
 critical-extension refusals, restrictions after upstream trust success,
