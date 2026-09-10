@@ -26,6 +26,10 @@ accepted bytes remain owned. `os64_write` supplies infinite patience. See
   RTO. Accepted probes retire through the same ACK path as normal data.
 - `snd_wl1`/`snd_wl2` order window updates by peer sequence and ACK. An old
   update cannot overwrite a more recent window with the same ACK.
+- `snd_wnd` is the peer's window field shifted left by the count it sent in
+  its SYN (RFC 7323, `tcp_options.h`), so it can exceed sixteen bits. The
+  SYN-ACK's own field is read unscaled, because the shift is what that
+  segment negotiates. A peer that sent no shift is read with a shift of 0.
 
 ## Submission contract
 

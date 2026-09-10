@@ -29,6 +29,7 @@
 #include "driver/net/ethernet.h"
 #include "driver/net/ipv4.h"
 #include "driver/net/tcp.h"
+#include "driver/net/tcp_options.h"
 
 tcp_stats_t kTcpStats;
 
@@ -123,7 +124,9 @@ static uint32_t tcp_initial_seq(void)
 // ── 2. SEGMENT CONSTRUCTION ─────────────────────────────────────────────────
 // How much room we still have for their bytes — this IS the flow control
 // the peer obeys. Advertising 0 stops them; we owe an update when drained.
-static uint16_t tcp_window(tcp_conn_t* c)
+// The whole ring's worth: tcp_send_segment turns it into the header field
+// through our shift count, and a SYN carries it unscaled and clamped.
+static uint32_t tcp_window(tcp_conn_t* c)
 {
 	uint32_t free_space = TCP_RCV_BUF - c->rcv_count;
 
@@ -149,20 +152,20 @@ static uint16_t tcp_window(tcp_conn_t* c)
 	if (free_space < TCP_MSS)
 		return 0;
 
-	return (uint16_t)(free_space > 0xFFFF ? 0xFFFF : free_space);
+	return free_space;
 }
 
-// Build and transmit one segment. `with_mss` adds the MSS option, which
-// only ever rides a SYN (that is the one moment both sides are allowed to
-// state their limits).
+// Build and transmit one segment. `syn_options` adds the MSS and window
+// scale options, which only ever ride a SYN (that is the one moment both
+// sides are allowed to state their limits).
 // The disposition is decided with submission. Driver drops remain TCP's
 // responsibility like network loss; PARKED/DROPPED stop a bulk output pass.
 // INVALID is a packet IPv4 cannot construct and terminates the connection.
 static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
-                                  const void* data, uint16_t data_len, bool with_mss)
+                                  const void* data, uint16_t data_len, bool syn_options)
 {
-	uint8_t seg[TCP_HDR_MIN + 4 + TCP_MSS];
-	uint16_t hdr_len = TCP_HDR_MIN + (with_mss ? 4 : 0);
+	uint8_t seg[TCP_HDR_MIN + TCP_SYN_OPTIONS_LEN + TCP_MSS];
+	uint16_t hdr_len = TCP_HDR_MIN + (syn_options ? TCP_SYN_OPTIONS_LEN : 0);
 
 	net_write16(seg + 0, c->local_port);
 	net_write16(seg + 2, c->peer_port);
@@ -172,19 +175,18 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	// be 20 to 60 bytes, and this is how the receiver finds the payload.
 	seg[12] = (uint8_t)((hdr_len / 4) << 4);
 	seg[13] = flags;
-	uint16_t win = tcp_window(c);
-	net_write16(seg + 14, win);
+	// A SYN's window field is never scaled (RFC 7323 §2.2): the shift is
+	// being negotiated in that very segment, so the field is read raw.
+	uint32_t win = tcp_window(c);
+	net_write16(seg + 14, tcp_window_field(win, (flags & TCP_SYN) ? 0 : c->rcv_wscale));
 	c->zero_window = (win == 0);
 	net_write16(seg + 16, 0);   // checksum, computed below
 	net_write16(seg + 18, 0);   // urgent pointer: never used here (URG is a
 	                            // 1981 idea that modern stacks treat as a
 	                            // security footgun and applications ignore)
 
-	if (with_mss)
-	{
-		seg[20] = 2; seg[21] = 4;                    // option kind 2, length 4
-		net_write16(seg + 22, TCP_MSS);
-	}
+	if (syn_options)
+		tcp_syn_options_write(seg + TCP_HDR_MIN, TCP_MSS, TCP_RCV_WSCALE);
 	if (data_len)
 		memcpy(seg + hdr_len, (void*)data, data_len);
 
@@ -966,7 +968,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	uint32_t ack      = net_read32(p + 8);
 	uint16_t hdr_len  = (uint16_t)((p[12] >> 4) * 4);
 	uint8_t  flags    = p[13];
-	uint16_t win      = net_read16(p + 14);
+	uint16_t win_field = net_read16(p + 14);
 	if (hdr_len < TCP_HDR_MIN || hdr_len > length)
 		return;
 	const uint8_t* data = p + hdr_len;
@@ -1098,9 +1100,15 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		return;
 	}
 
+	// What the window field means is the peer's shift applied to it —
+	// except on a SYN, whose field is raw because the shift is what the SYN
+	// is negotiating (RFC 7323 §2.2). snd_wscale is 0 until that SYN has
+	// been parsed, so the order here is right for the SYN-ACK too.
+	uint32_t win = tcp_window_scaled(win_field, (flags & TCP_SYN) ? 0 : c->snd_wscale);
+
 	// Retain the newest window announcement using both sequence spaces.
 	// A reordered data segment can carry a current ACK but an old window.
-	uint16_t old_wnd = c->snd_wnd;
+	uint32_t old_wnd = c->snd_wnd;
 	if ((flags & TCP_ACK) && seq_geq(ack, c->snd_una) &&
 	    (c->state == TCP_SYN_SENT || seq_gt(seq, c->snd_wl1) ||
 	     (seq == c->snd_wl1 && seq_geq(ack, c->snd_wl2))))
@@ -1151,35 +1159,42 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				c->state = TCP_ESTABLISHED;
 				kTcpStats.connections_opened++;
 
-				// Parse their MSS option if present — the one negotiation
-				// TCP does, and it lives in the SYN's option space.
+				// The SYN's option space is the one negotiation TCP does:
+				// their MSS, and their window shift (tcp_options.h). The
+				// parser reports what was said; what to make of it is
+				// decided here, out loud.
+				tcp_syn_options_t said;
+				tcp_syn_options_parse(p + TCP_HDR_MIN, hdr_len - TCP_HDR_MIN, &said);
 				c->snd_mss = 536;        // RFC 879's floor when nobody says otherwise
-				for (uint16_t o = TCP_HDR_MIN; o + 1 < hdr_len; )
-				{
-					uint8_t kind = p[o];
-					if (kind == 0) break;              // end of options
-					if (kind == 1) { o++; continue; }  // NOP padding
-					uint8_t olen = p[o + 1];
-					if (olen < 2 || o + olen > hdr_len) break;
-					if (kind == 2 && olen == 4)
-					{
-						uint16_t said = net_read16(p + o + 2);
-						if (said >= TCP_SND_MSS_MIN)   // tcp.h: a smaller one is refused, the floor stands
-							c->snd_mss = said;
-						else
-							printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u advertised MSS %u — refused, using %u\n",
-							       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, said, c->snd_mss);
-					}
-					o += olen;
-				}
+				if (said.mss >= TCP_SND_MSS_MIN)   // tcp.h: a smaller one is refused, the floor stands
+					c->snd_mss = said.mss;
+				else if (said.mss)
+					printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u advertised MSS %u — refused, using %u\n",
+					       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, said.mss, c->snd_mss);
 				if (c->snd_mss > TCP_MSS)
 					c->snd_mss = TCP_MSS;   // never send more than WE can build
+				// Scaling is in force only if both sides asked; we always
+				// do, so their answer decides. A shift past the RFC's
+				// ceiling is an error on their side and 14 is used, said
+				// aloud rather than silently.
+				if (said.wscale_sent)
+				{
+					c->snd_wscale = said.wscale;
+					if (c->snd_wscale > TCP_WSCALE_MAX)
+					{
+						printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u offered window shift %u — over the ceiling, using %u\n",
+						       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_wscale, TCP_WSCALE_MAX);
+						c->snd_wscale = TCP_WSCALE_MAX;
+					}
+					c->rcv_wscale = TCP_RCV_WSCALE;
+				}
 				c->cwnd = TCP_INIT_CWND_SEGMENTS * (uint32_t)c->snd_mss;
 				c->ssthresh = TCP_SND_BUF;  // slow start all the way up, until loss says otherwise
 
 				tcp_ack(c);
-				printd(DEBUG_NET, "tcp: established with %u.%u.%u.%u:%u (their mss %u, win %u)\n",
-				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_mss, win);
+				printd(DEBUG_NET, "tcp: established with %u.%u.%u.%u:%u (their mss %u, win %u, shifts %u/%u)\n",
+				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_mss, win,
+				       c->snd_wscale, c->rcv_wscale);
 			}
 			break;
 

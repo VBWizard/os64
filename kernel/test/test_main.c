@@ -2047,7 +2047,8 @@ static teardown_verdict_t teardown_leak_attempt(void)
     uint64_t reclaimed = kTaskVmaReclaimedBytes - reclaimed_before;
 
     // THE THIRD BRACKET, for the moves the other two cannot see: TCP's
-    // heap. A connection's receive ring is ~64KB allocated at the dial
+    // heap. A connection's rings (tcp.h TCP_RCV_BUF and TCP_SND_BUF) are
+    // allocated at the dial
     // and freed on the morgue's clock or at a failed dial's return, with
     // no task burial to census either edge and the free far too late for
     // the stillness probes to catch the culprit still allocating; each

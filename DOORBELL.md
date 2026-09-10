@@ -198,7 +198,8 @@ to the P5 by itself, and the hand-off says so.
 
 ## What this slice deliberately does NOT do (booked, discussed here first)
 
-- **Window scaling (RFC 7323) is slice 2b, its own PR after this one.**
+- **Window scaling (RFC 7323) is slice 2b, its own PR after this one**
+  (paid 2026-09-10 — `tcp_options.h`, DEBTS § no window scaling).
   With the three tick bounds gone the LAN ceiling becomes the copy path, and
   a 64KB window covers a gigabit link up to half a millisecond of round
   trip, which a switch does not approach. Scaling matters on the internet:

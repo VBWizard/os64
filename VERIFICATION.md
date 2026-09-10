@@ -361,6 +361,62 @@ A completed final flight still retains HANDSHAKE_DONE after a later error.
 The userland build, ELF audit, four QEMU transport cases, guest `tlslibtest`
 and copied-root `e2fsck -fn` passed with the correction.
 
+## TCP window scaling acceptance (2026-09-10)
+
+A window that never grows caps a connection at window ÷ round trip, and on
+2026-09-09 the P5 was measured sitting on that ceiling (DEBTS § no window
+scaling, now paid, carries the three numbers). RFC 7323's shift count is
+negotiated in the SYN exchange, so **the peer decides whether the rig can
+show anything**, and QEMU's user networking cannot: libslirp 4.7 answers a
+SYN carrying the window-scale option with an MSS-only SYN-ACK, so both
+shifts stay 0 and the field is the old 64KB. That splits the proof three
+ways.
+
+**The parser, on the host.** `tcp_options.c` is pure (its header says why),
+so `tools/test_tcp_options_host.sh` drives it under ASan and UBSan: Linux's
+and Windows's option orders, SACK-permitted and timestamps skipped, a shift
+of 15 reported raw for the caller to clamp, wrong-length options ignored
+without losing step, end-of-list, truncation and a zero length, and the
+window-field arithmetic in both directions including the SYN's unscaled
+clamp. This is the only proof of the parser that needs no scaling peer.
+`tools/test_tcp_host.sh` splices the module in beside tcp.c, so the sender
+suite runs against the 32-bit window too.
+
+**The wire and the regression, in QEMU.** Through the chaos cable at 50ms
+each way (a 100ms round trip, so the 64KB ceiling is 655KB/s), fetching
+`ftptestd.py`'s 16MiB `huge.bin` with `/bin/ftp`, which prints its rate:
+
+| Kernel | Our SYN | slirp's SYN-ACK | 16MiB at 100ms RTT |
+|---|---|---|---|
+| userland at 00d8d7c | `MSS=1460` | `MSS=1460` | 33.1 s, 494.9 KB/s |
+| this slice | `MSS=1460 NOP WS=5` | `MSS=1460` | 30.2 s, 542.5 KB/s |
+
+Same rate within noise, which is the point: a peer that sends no shift is
+read and written unscaled, and `/sys/net/tcp`'s `win` column showed 65535
+for it. The SYN lines are `tools/tcpopts.py` reading the rig's pcap — it
+decodes every SYN and SYN-ACK's options by name (`--all` prints every
+segment's window field), because tshark is not on every host this builds
+on and the question "did they answer with a shift" is the whole slice.
+Suites on the new kernel: 30/0, 29/0, late 3/0; the data image passed
+`e2fsck -fn` after the run. (A transfer started INSIDE the late phase trips
+`task_teardown_leak`, whose third bracket counts TCP's heap moves and
+cannot tell a dial from a leak; start the fetch after the late verdict.)
+
+**The window opening, on the P5.** Only a real peer scales, so the
+acceptance was Chris's, the same day: `/bin/ftp` pulled a 30,442,855-byte
+file at **19,758.8 KB/s** (158 Mb/s), then `zero.bin` from ftp.debian.org —
+1,073,741,824 bytes — at **19,275 KB/s sustained for 54 seconds** (154
+Mb/s), watched on the Windows task manager of the ICS host the P5 reaches
+the internet through; os64get over HTTP ran near 200 Mb/s. Against
+Tuesday's 1,996 KB/s from a 28ms host that is the 64KB box gone, not a
+tuning. It is not the link either: that connection regularly shows 300
+Mb/s, and where the rest goes is the next measurement (DEBTS § the gap to
+the link), a day's work for another day.
+
+A tap netdev (`make run-tap`, root once) would put the Linux host's own
+stack behind the cable as a scaling peer and let the rig show the window
+open under injected delay; it was not set up for this slice.
+
 ## TCP write patience acceptance (2026-09-09)
 
 Write's contract is beside read's patience in

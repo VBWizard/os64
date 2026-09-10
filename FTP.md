@@ -156,10 +156,10 @@ os64get had already learned this and written it down at `GET_CHUNK`: "at 4KB
 the file was written a block per syscall, and the transfer waited on the disk,
 not the wire." The lesson was in the tree and this client did not reuse it.
 
-Two things fix it, and 64KB is the size because it is three things at once —
-the receive ring (`TCP_RCV_BUF`), the send ring, and the block cache's line.
-One read can drain everything that arrived; one write is a run the disk takes
-in a single pass.
+Two things fix it, and 64KB is the size because it is the block cache's line:
+one write is a run the disk takes in a single pass, and one read drains a
+line's worth of whatever the receive ring (`TCP_RCV_BUF`, larger than this
+since window scaling) is holding.
 
 There is a second effect that only shows on a real link, and it is the one
 that probably explains the size of the gap. While the old loop sat in a
