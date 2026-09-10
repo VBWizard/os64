@@ -299,11 +299,18 @@ suite tests real TCP bodies with polls, finite expiry, wrapped copies,
 progress over timeout, interruption/reset cleanup and infinite patience.
 The syscall fixture exercises the actual dispatch prelude and console/TCP
 cases: finite console refusal, ordinary console writes, unchanged deadline
-across multiple copy chunks, partial results and cleanup.
+across multiple copy chunks, partial results and cleanup. Read/write deadline
+conversion also runs with 1 ms and 10 ms ticks, including the huge finite
+interval that would otherwise wrap to forever and read's rounding overflow.
+Gopher's request fixture checks the real encoder and shared send helper:
+30-second patience, complete requests, every short prefix, and failed I/O.
+Both page fetch and save close the connection on an incomplete request.
 
 ```sh
 ASAN_OPTIONS=detect_leaks=0 tools/test_tcp_host.sh
 ASAN_OPTIONS=detect_leaks=0 python3 tools/test_tcp_write_syscall_host.py
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_gopher_request_host.py
+ASAN_OPTIONS=detect_leaks=0 tools/test_gopher_host.sh
 ```
 
 For a guest or production-machine check, start the peer on a reachable host:
@@ -331,7 +338,7 @@ selects `conf = /etc`; one cron `@reboot` script runs the probe under
 Host ASan/UBSan remain enabled; LeakSanitizer is disabled for the ptrace
 fixture. Physical NIC validation belongs to the production-machine check.
 
-The revised syscall-3 build passed the host suites, kernel/userland builds
+The round-one correction passed the host suites, kernel/userland builds
 and this guest probe: the peer verified 2,025,800 exact bytes through EOF
 after timeout/retry. Guest `testrun syscall_smoke`, `fputest`, `df_test` and
 `sigpipe_test` each passed, covering the four raw-write sites that explicitly

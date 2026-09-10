@@ -32,7 +32,9 @@ header = '''#include <stdint.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include "os64/syscall_numbers.h"
-#define MS_PER_TICK 10
+#define HANDLE_CONSOLE_IN 0
+#define HANDLE_NET_UDP 6
+#define HANDLE_NET_ICMP 8
 #define HANDLE_NET_TCP 7
 #define HANDLE_CONSOLE_OUT 1
 #define HANDLE_CONSOLE_ERR 2
@@ -78,7 +80,12 @@ static uint64_t os64_syscall4(uint64_t n,uint64_t a,uint64_t b,uint64_t c,uint64
  captured_args[0]=n; captured_args[1]=a; captured_args[2]=b; captured_args[3]=c; captured_args[4]=d; return 23;
 }
 '''
-program = header + body + '\n'
+read = function(source, 'syscall_read')
+# Exercise the sibling's actual validation/deadline prelude, stopping before
+# its scratch allocation and device dispatch.
+read = read[:read.index('size_t want =')] + '(void)user_buffer; return deadline; }'
+program = header + function(source, 'syscall_io_deadline') + '\n' + body + '\n' + read + '\n'
+
 for name in ('os64_write', 'os64_write_for'):
     program += function((root / 'userland/libos64/io.c').read_text(), name) + '\n'
 program += '''int main(void) {
@@ -98,8 +105,26 @@ program += '''int main(void) {
  for(size_t i=0;i<sizeof ms/sizeof *ms;i++) {
   kTicksSinceStart=100; writes=0;
   assert(syscall_write(3,(uintptr_t)data,2*READ_CHUNK_SIZE+1,ms[i],0,0)==2*READ_CHUNK_SIZE+1 && !allocated && writes==3 && requested==1);
-  assert(captured_deadline==(ms[i]==OS64_WAIT_FOREVER ? 0 : 100+ms[i]/10+(ms[i]%10!=0)));
+  __uint128_t end = 100 + ((__uint128_t)ms[i]+MS_PER_TICK-1)/MS_PER_TICK;
+  uint64_t expected_end = ms[i]==OS64_WAIT_FOREVER ? 0 : end>UINT64_MAX ? UINT64_MAX : (uint64_t)end;
+  assert(captured_deadline==expected_end);
+  kTicksSinceStart=100;
+  assert(syscall_read(3,(uintptr_t)data,1,ms[i],0,0)==expected_end);
  }
+ // The reported 1ms-tick case at tick 2 used to become forever. Also
+ // exercise exact saturation and overflow in read's former ceil addition.
+ uint64_t starts[]={2,100,UINT64_MAX-10};
+ for(size_t i=0;i<sizeof starts/sizeof *starts;i++) {
+  for(size_t j=0;j<sizeof ms/sizeof *ms;j++) {
+   __uint128_t end = starts[i] + ((__uint128_t)ms[j]+MS_PER_TICK-1)/MS_PER_TICK;
+   uint64_t expected_end = ms[j]==OS64_WAIT_FOREVER ? 0 : end>UINT64_MAX ? UINT64_MAX : (uint64_t)end;
+   kTicksSinceStart=starts[i]; writes=0;
+   assert(syscall_write(3,(uintptr_t)data,1,ms[j],0,0)==1 && captured_deadline==expected_end);
+   kTicksSinceStart=starts[i];
+   assert(syscall_read(3,(uintptr_t)data,1,ms[j],0,0)==expected_end);
+  }
+ }
+ kTicksSinceStart=100;
  long errors[]={TCP_ERR_TIMEOUT,TCP_ERR_INTERRUPTED,TCP_ERR_RESET};
  int64_t expected[]={OS64_ERR_TIMEOUT,OS64_INTERRUPTED,(int64_t)SYSCALL_RESULT_INVALID};
  for(unsigned i=0;i<3;i++) {
@@ -117,10 +142,12 @@ program += '''int main(void) {
  writes=0; fail_alloc=0; fail_write=1; outcome=TCP_ERR_INTERRUPTED; caught=false;
  if(!setjmp(fatal)) { syscall_write(3,(uintptr_t)data,1,10,0,0); assert(false); }
  free(data);
- puts("write syscall: shared ABI, finite refusal, blocking console, multi-chunk deadline, progress/error mapping and cleanup PASS");
+ printf("%dms ticks: ", MS_PER_TICK);
+ puts("read/write deadline saturation; write syscall: shared ABI, finite refusal, blocking console, multi-chunk deadline, progress/error mapping and cleanup PASS");
 }'''
 with tempfile.TemporaryDirectory(prefix='tcp-write-syscall-') as directory:
     work = Path(directory); (work / 'test.c').write_text(program)
-    subprocess.run(['cc','-std=c11','-O2','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
-                    '-fno-sanitize-recover=all','-I'+str(root/'abi/include'),str(work/'test.c'),'-o',str(work/'test')],check=True)
-    subprocess.run([str(work/'test')],check=True)
+    for tick_ms in (1, 10):
+        subprocess.run(['cc','-std=c11','-O2','-g','-Wall','-Wextra','-Werror','-fsanitize=address,undefined',
+                    '-fno-sanitize-recover=all','-DMS_PER_TICK='+str(tick_ms),'-I'+str(root/'abi/include'),str(work/'test.c'),'-o',str(work/'test')],check=True)
+        subprocess.run([str(work/'test')],check=True)

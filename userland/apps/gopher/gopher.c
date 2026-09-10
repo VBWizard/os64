@@ -51,17 +51,9 @@
 #define GOPHER_MAX_ITEMS  4096
 #define GOPHER_MAX_LINES  65536
 
-// Thirty seconds of silence ends a READ. It is IDLE time — the wait between
-// bytes — so a slow server still arrives; os64get uses the same number for
-// the same reason.
-//
-// IT DOES NOT COVER THE REQUEST, and that is not this program's choice:
-// `os64_read_for` carries a patience and there is no `os64_write_for`, so the
-// write that asks for a page has no deadline to be given. A peer that
-// completes the handshake advertising a zero window stalls that write in the
-// kernel indefinitely — DEBTS.md, tcp_conn_write — and Ctrl+C is what ends it
-// until the kernel grows the bound. Saying "thirty seconds ends a fetch" here
-// was half true, and the half it left out is the half a hostile server picks.
+// Thirty seconds bounds queueing a complete request and each read's idle
+// wait. A short request write fails the fetch; the caller closes the conn
+// instead of reading an answer to an incomplete request.
 #define GOPHER_IDLE_MS    30000
 
 #define GOPHER_HISTORY_MAX 64
@@ -331,6 +323,14 @@ static void page_free(page_t *page)
     page->nlines = 0;
 }
 
+static bool request_send(int32_t conn, const gopher_addr_t *addr)
+{
+    char request[GOPHER_SELECTOR_MAX + GOPHER_QUERY_MAX + 8];
+    size_t reqlen = gopher_request(addr, request, sizeof(request));
+    return reqlen != 0 &&
+           os64_write_for(conn, request, reqlen, GOPHER_IDLE_MS) == (int64_t)reqlen;
+}
+
 // Dial, ask, and read the answer according to the framing the TYPE dictates.
 //
 // Returns 0; a NEGATIVE dial reason; GOPHER_FETCH_LOCAL for a failure that
@@ -360,9 +360,7 @@ static int64_t page_fetch(const gopher_addr_t *addr, page_t *page)
     if (conn < 0)
         return conn;
 
-    char request[GOPHER_SELECTOR_MAX + GOPHER_QUERY_MAX + 8];
-    size_t reqlen = gopher_request(addr, request, sizeof(request));
-    if (reqlen == 0 || os64_write((int32_t)conn, request, reqlen) < 0) {
+    if (!request_send((int32_t)conn, addr)) {
         os64_close((int32_t)conn);
         return GOPHER_FETCH_LOCAL;
     }
@@ -879,9 +877,7 @@ static save_result_t save_item(const gopher_addr_t *addr)
         return SAVE_UNREACHABLE;
     }
 
-    char request[GOPHER_SELECTOR_MAX + GOPHER_QUERY_MAX + 8];
-    size_t reqlen = gopher_request(addr, request, sizeof(request));
-    if (reqlen == 0 || os64_write((int32_t)conn, request, reqlen) < 0) {
+    if (!request_send((int32_t)conn, addr)) {
         os64_close((int32_t)conn);
         os64_strcopy(s_status, sizeof(s_status), " the request could not be sent");
         return SAVE_UNREACHABLE;
@@ -1695,17 +1691,9 @@ int main(int argc, char **argv)
 
     // Keys come from the TERMINAL, not from handle 0, so `gopher < file` and
     // a gopher inside a pipeline still read the person's arrows.
-    // CTRL+C IS AN EXIT TOO, and it was the one that skipped the cleanup:
-    // the default action kills the task where it stands, so `main` never
-    // reaches its restore and the shell drew its next prompt onto a browser
-    // screen. It matters most exactly where it is most likely to be pressed —
-    // a request write has no deadline this program can give it (DEBTS,
-    // tcp_conn_write), and a signal is what ends that park.
-    //
-    // The handler EXITS rather than setting a flag: a flag needs a loop to
-    // notice it, and the stall this is for is in the kernel with no loop of
-    // ours to return to. The code is the one the kernel's own death would
-    // have written, so a script cannot tell the two apart.
+    // Restore the screen before SIGINT exits, including during network I/O.
+    // The default action kills the task without reaching main's cleanup;
+    // the handler restores it and exits with the same signal-derived code.
     if (os64_signal_set_handler(OS64_SIGINT, on_interrupt) < 0)
         os64_hprintf(OS64_STDERR, "gopher: no SIGINT handler; Ctrl+C will"
                      " leave the screen as it was\n");

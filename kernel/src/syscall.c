@@ -1243,6 +1243,16 @@ static file_io_params_t *syscall_io_scratch(char **data_out)
 	return (file_io_params_t *)thread->syscallIOScratch;
 }
 
+// Lower finite I/O patience once. Round without overflowing the duration,
+// then saturate the absolute deadline so a large request cannot wrap into
+// the connection code's zero-means-forever sentinel or an expired deadline.
+static uint64_t syscall_io_deadline(uint64_t timeout_ms)
+{
+	uint64_t ticks = timeout_ms / MS_PER_TICK + (timeout_ms % MS_PER_TICK != 0);
+	uint64_t now = kTicksSinceStart;
+	return ticks > UINT64_MAX - now ? UINT64_MAX : now + ticks;
+}
+
 // write(handle, buffer, length, timeout_ms) — write with caller patience.
 //
 // The handle is resolved through the CALLING TASK'S HANDLE TABLE — which is the
@@ -1282,7 +1292,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 	if (timeout_ms != OS64_WAIT_FOREVER)
 	{
 		if (h->type != HANDLE_NET_TCP) return SYSCALL_RESULT_INVALID;
-		deadline = kTicksSinceStart + timeout_ms / MS_PER_TICK + (timeout_ms % MS_PER_TICK != 0);
+		deadline = syscall_io_deadline(timeout_ms);
 	}
 
 	switch (h->type)
@@ -1699,7 +1709,7 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP)
 			return SYSCALL_RESULT_INVALID;
-		deadline = kTicksSinceStart + (timeout_ms + MS_PER_TICK - 1) / MS_PER_TICK;
+		deadline = syscall_io_deadline(timeout_ms);
 	}
 
 	size_t want = length < READ_CHUNK_SIZE ? length : READ_CHUNK_SIZE;

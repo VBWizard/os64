@@ -38,6 +38,9 @@
 #define SYSCALL_STAT       23
 #define SYSCALL_REAP       24
 
+// Finite read/write deadlines saturate at the last representable tick when
+// the requested interval would overflow the absolute tick clock.
+//
 // Write's patience is arg3 of SYSCALL_WRITE, mirroring read below:
 // 0 polls, finite milliseconds round up to ticks, OS64_WAIT_FOREVER blocks.
 // Queue while room exists; once waiting would exceed the deadline, return
