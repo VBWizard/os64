@@ -23,6 +23,16 @@
 // negative value on error (the in-band status half of the ABI; no errno).
 int64_t os64_write(int32_t handle, const void *buf, size_t len);
 
+// Write with caller patience: 0 polls, finite milliseconds bound waiting
+// for room (rounded up to ticks), OS64_WAIT_FOREVER is ordinary os64_write.
+// TCP honors finite waits; other handle types refuse them on nonempty writes.
+// Queue while room exists, then return progress or OS64_ERR_TIMEOUT if a
+// full ring reaches the deadline before any bytes were queued. Ready room
+// precedes timeout. Retain any suffix; timeout does not close/reset the handle.
+// A positive result means queued, not acknowledged. Full contract beside
+// read's patience in os64/syscall_numbers.h.
+int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t timeout_ms);
+
 // Read up to `len` bytes from `handle` into `buf`. Blocks until at least one
 // byte is available, then returns the count read (>= 1), or negative on error.
 // handle 0 (stdin) reads the console keyboard — UNLESS the shell redirected it

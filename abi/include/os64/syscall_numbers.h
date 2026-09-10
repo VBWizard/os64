@@ -38,6 +38,18 @@
 #define SYSCALL_STAT       23
 #define SYSCALL_REAP       24
 
+// Finite read/write deadlines saturate at the last representable tick when
+// the requested interval would overflow the absolute tick clock.
+//
+// Write's patience is arg3 of SYSCALL_WRITE, mirroring read below:
+// 0 polls, finite milliseconds round up to ticks, OS64_WAIT_FOREVER blocks.
+// Queue while room exists; once waiting would exceed the deadline, return
+// bytes queued or OS64_ERR_TIMEOUT if none. Queued bytes remain TCP's
+// responsibility and timeout leaves the handle open. TCP honors finite
+// patience; nonempty writes on other handle types refuse it rather than
+// silently blocking. os64_write supplies OS64_WAIT_FOREVER explicitly;
+// os64_write_for exposes the argument. Raw syscall callers must set it too.
+
 // ── read's patience: the 4th argument (ruled 2026-08-05) ────────────────────
 // read(handle, buf, len, timeout_ms) — arg3 says how long the call may WAIT
 // for a byte to exist, in milliseconds, and it means what it says:

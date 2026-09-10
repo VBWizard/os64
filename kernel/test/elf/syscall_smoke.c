@@ -31,10 +31,7 @@
 
 #include <stdint.h>
 
-// Must match kernel/include/syscall_numbers.h.
-#define SYSCALL_YIELD      0
-#define SYSCALL_EXIT       2
-#define SYSCALL_WRITE      3
+#include "os64/syscall_numbers.h"
 #define CONSOLE_OUT        1
 
 #define SMOKE_OK           0x0005E00DUL   // "SGOOD" — all checks passed
@@ -61,6 +58,17 @@ static inline uint64_t os64_syscall3(uint64_t nr, uint64_t a0, uint64_t a1, uint
     return ret;
 }
 
+static inline uint64_t os64_syscall4(uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3)
+{
+    register uint64_t r10 __asm__("r10") = a3;
+    uint64_t ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret), "+D"(a0), "+S"(a1), "+d"(a2), "+r"(r10)
+                     : "a"(nr)
+                     : "rcx", "r11", "r8", "r9", "memory");
+    return ret;
+}
+
 // Freestanding — no libc, so no strlen; the message length is compile-time.
 static const char kMessage[] = "hello from ring 3 via write()\n";
 #define MESSAGE_LEN (sizeof(kMessage) - 1)
@@ -76,8 +84,8 @@ unsigned long _start(unsigned long argc, char **argv, char **env)
         return FAIL_YIELD;
 
     // 2. Prove pointer-carrying syscalls work end to end.
-    uint64_t written = os64_syscall3(SYSCALL_WRITE, CONSOLE_OUT,
-                                     (uint64_t)kMessage, MESSAGE_LEN);
+    uint64_t written = os64_syscall4(SYSCALL_WRITE, CONSOLE_OUT,
+                                     (uint64_t)kMessage, MESSAGE_LEN, OS64_WAIT_FOREVER);
     if (written != MESSAGE_LEN)
         os64_syscall3(SYSCALL_EXIT, FAIL_WRITE_RET, 0, 0);
 

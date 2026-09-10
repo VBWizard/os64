@@ -290,6 +290,60 @@ got through, the ledger is what did not, and `orphaned` (a frame the cable
 could not hand back because QEMU's inbound socket was gone) is never zero
 silently.
 
+## TCP write patience acceptance (2026-09-09)
+
+Write's contract is beside read's patience in
+[syscall_numbers.h](abi/include/os64/syscall_numbers.h): both public write
+stubs use syscall 3, with one deadline for the complete TCP write. The host
+suite tests real TCP bodies with polls, finite expiry, wrapped copies,
+progress over timeout, interruption/reset cleanup and infinite patience.
+The syscall fixture exercises the actual dispatch prelude and console/TCP
+cases: finite console refusal, ordinary console writes, unchanged deadline
+across multiple copy chunks, partial results and cleanup. Read/write deadline
+conversion also runs with 1 ms and 10 ms ticks, including the huge finite
+interval that would otherwise wrap to forever and read's rounding overflow.
+Gopher's request fixture checks the real encoder and shared send helper:
+30-second patience, complete requests, every short prefix, and failed I/O.
+Both page fetch and save close the connection on an incomplete request.
+
+```sh
+ASAN_OPTIONS=detect_leaks=0 tools/test_tcp_host.sh
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_tcp_write_syscall_host.py
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_gopher_request_host.py
+ASAN_OPTIONS=detect_leaks=0 tools/test_gopher_host.sh
+```
+
+For a guest or production-machine check, start the peer on a reachable host:
+
+```sh
+python3 tools/test_tcp_write_peer.py --bind HOST_IP
+```
+
+Then in os64, with the updated kernel and userland installed:
+
+```sh
+/tests/tcpwriteprobe HOST_IP 17260
+```
+
+Both sides must print PASS. The host holds data unread until the guest
+observes a full-ring poll and a 100 ms finite timeout, then checks the
+resumed stream's byte content, length and EOF. Restart the peer for each run.
+For QEMU user networking, omit `--bind` and pass `10.0.2.2` in the guest.
+This manual probe requires an external peer and is separate from `testrun`.
+
+The isolated rig uses QEMU q35, TCG/qemu64, two CPUs, virtio-net, a copied
+ext2 root and the rebuilt kernel/userland. Its disposable `/etc/os64.conf`
+selects `conf = /etc`; one cron `@reboot` script runs the probe under
+`KWORKER CRON` without `HUSK`, avoiding duplicate VT shell startup scripts.
+Host ASan/UBSan remain enabled; LeakSanitizer is disabled for the ptrace
+fixture. Physical NIC validation belongs to the production-machine check.
+
+The round-one correction passed the host suites, kernel/userland builds
+and this guest probe: the peer verified 2,025,800 exact bytes through EOF
+after timeout/retry. Guest `testrun syscall_smoke`, `fputest`, `df_test` and
+`sigpipe_test` each passed, covering the four raw-write sites that explicitly
+load infinite patience. The copied root passed `e2fsck -fn` after shutdown.
+
 ## TCP sender refactor acceptance (2026-09-05)
 
 The refactor contract is `TCP_SENDER.md`. These are new runs, independent of

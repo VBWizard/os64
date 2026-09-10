@@ -216,7 +216,7 @@ typedef enum
 // In-band sentinels (the pipe.c convention).
 #define TCP_ERR_INTERRUPTED (-3L)   // a signal ended the wait (signal_park_must_end)
 #define TCP_ERR_RESET       (-4L)   // peer sent RST, or the connection died
-#define TCP_ERR_TIMEOUT     (-5L)   // caller's read deadline expired, no bytes
+#define TCP_ERR_TIMEOUT     (-5L)   // caller's read/write wait expired, no bytes
 
 // One ahead-of-sequence range held in the receive ring (tcp_conn_t.held).
 #define TCP_HELD_MAX 16
@@ -457,8 +457,11 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline);
 // QUEUED — on their way, not yet acknowledged; the ring, the timer and the
 // ack clock carry them from here, and close() drains what remains before
 // its FIN. Blocks only while the ring is full (the peer is slower than the
-// writer, by a whole window). Negative = interrupted or reset.
-long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len);
+// writer, by a whole window). Negative = interrupted, reset or timeout.
+// deadline is an absolute tick count; 0 waits forever, as for reads.
+// Queue while room exists; a full ring past the deadline returns progress
+// or TCP_ERR_TIMEOUT when no bytes were queued. Timeout preserves ownership.
+long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len, uint64_t deadline);
 
 // Orderly shutdown: queues a FIN behind whatever the ring still holds,
 // detaches from the handle, and lets the ack clock and the poll finish

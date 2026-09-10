@@ -2044,7 +2044,7 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 	}
 }
 
-long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
+long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len, uint64_t deadline)
 {
 	core_local_storage_t* cls = get_core_local_storage();
 	thread_t* self = cls->currentThread;
@@ -2093,6 +2093,12 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 			continue;
 		}
 
+		if (deadline != 0 && kTicksSinceStart >= deadline)
+		{
+			spinlock_release_irqrestore(&c->lock, irqflags);
+			return sent ? (long)sent : TCP_ERR_TIMEOUT;
+		}
+
 		// The ring is full — a whole window ahead of the peer. Park until an
 		// ack makes room (tcp_wake_if_ready's condition) or the backstop
 		// re-checks. Registered UNDER THE SAME LOCK as the room check: a gap
@@ -2101,7 +2107,9 @@ long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
 		// for a wait that was already over.
 		c->writer = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
-		signal_raise(SIGSLEEP, kTicksSinceStart + TICKS_PER_SECOND, self);
+		uint64_t wake = kTicksSinceStart + TICKS_PER_SECOND;
+		if (deadline != 0 && deadline < wake) wake = deadline;
+		signal_raise(SIGSLEEP, wake, self);
 	}
 	return (long)sent;
 }

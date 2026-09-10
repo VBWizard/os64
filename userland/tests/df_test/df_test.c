@@ -203,6 +203,7 @@ int main(void)
     uint64_t flags_after = 0;
     __asm__ volatile(
         "std\n\t"
+        "mov r10, -1\n\t"       // OS64_WAIT_FOREVER: this raw write bypasses libos64.
         "syscall\n\t"            // delivery arms on THIS syscall's exit
         "pushfq\n\t"             // ...and we resume HERE, after sigreturn
         "pop %[after]\n\t"
@@ -210,7 +211,7 @@ int main(void)
         : [after] "=&r"(flags_after)
         : "a"((uint64_t)SYSCALL_WRITE), "D"((uint64_t)(uint32_t)ctl),
           "S"((uint64_t)(uintptr_t)kVerb), "d"((uint64_t)(sizeof(kVerb) - 1))
-        : "rcx", "r11", "memory");
+        : "rcx", "r11", "r10", "memory");
     os64_close((int32_t)ctl);
 
     if (gHandlerRan != OS64_SIGINT)

@@ -4,6 +4,11 @@ The 64 KiB ring retains accepted application bytes until cumulative ACK
 retirement. Writes may block for ring space; close queues FIN behind the bytes
 and detaches the handle. All transitions below hold the connection lock.
 
+`os64_write_for` supplies caller patience to write: queue while room exists,
+then return progress or timeout on an expired full-ring wait; the handle and
+accepted bytes remain owned. `os64_write` supplies infinite patience. See
+[write's patience](abi/include/os64/syscall_numbers.h) for the shared ABI.
+
 ## Sequence and ownership
 
 - `snd_una` is the oldest unacknowledged sequence unit. The ring head starts

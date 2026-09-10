@@ -1243,7 +1243,17 @@ static file_io_params_t *syscall_io_scratch(char **data_out)
 	return (file_io_params_t *)thread->syscallIOScratch;
 }
 
-// write(handle, buffer, length) — write bytes to an output handle.
+// Lower finite I/O patience once. Round without overflowing the duration,
+// then saturate the absolute deadline so a large request cannot wrap into
+// the connection code's zero-means-forever sentinel or an expired deadline.
+static uint64_t syscall_io_deadline(uint64_t timeout_ms)
+{
+	uint64_t ticks = timeout_ms / MS_PER_TICK + (timeout_ms % MS_PER_TICK != 0);
+	uint64_t now = kTicksSinceStart;
+	return ticks > UINT64_MAX - now ? UINT64_MAX : now + ticks;
+}
+
+// write(handle, buffer, length, timeout_ms) — write with caller patience.
 //
 // The handle is resolved through the CALLING TASK'S HANDLE TABLE — which is the
 // entire point of handles. This function does not know or care whether handle 1
@@ -1257,7 +1267,7 @@ static file_io_params_t *syscall_io_scratch(char **data_out)
 static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg3;
+	uint64_t timeout_ms = arg3;
 	(void)arg4;
 	(void)arg5;
 
@@ -1275,6 +1285,15 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	if (length == 0)
 		return 0;
+
+	// Like read, lower patience once for the complete call. TCP honors
+	// finite waits; nonempty writes on other handle types refuse them.
+	uint64_t deadline = 0;
+	if (timeout_ms != OS64_WAIT_FOREVER)
+	{
+		if (h->type != HANDLE_NET_TCP) return SYSCALL_RESULT_INVALID;
+		deadline = syscall_io_deadline(timeout_ms);
+	}
 
 	switch (h->type)
 	{
@@ -1475,7 +1494,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// tcp_conn_write queues into the connection's send ring and
 			// returns once the bytes are QUEUED (the ring, the ack clock
 			// and the timer carry them from there), blocking only while
-			// the ring is full. Bounce through kernel memory in MSS-ish
+			// the ring is full. Bounce through kernel memory in bounded
 			// chunks for the same fault discipline as every other write.
 			size_t written = 0;
 			while (written < length)
@@ -1493,7 +1512,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
 				}
 
-				long n = tcp_conn_write((tcp_conn_t *)h->object, kbuf, this_chunk);
+				long n = tcp_conn_write((tcp_conn_t *)h->object, kbuf, this_chunk, deadline);
 				kfree(kbuf);
 
 				if (n == TCP_ERR_INTERRUPTED)
@@ -1511,11 +1530,13 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
+				if (n == TCP_ERR_TIMEOUT)
+					return written ? written : (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
 				if (n < 0)
 					return written ? written : SYSCALL_RESULT_INVALID;
 				written += (size_t)n;
 				if ((size_t)n < this_chunk)
-					break;   // connection died mid-write: report progress
+					break;   // wait ended mid-write: report progress
 			}
 			return written;
 		}
@@ -1688,7 +1709,7 @@ static uint64_t syscall_read(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 		    h->type != HANDLE_NET_UDP && h->type != HANDLE_NET_TCP &&
 		    h->type != HANDLE_NET_ICMP)
 			return SYSCALL_RESULT_INVALID;
-		deadline = kTicksSinceStart + (timeout_ms + MS_PER_TICK - 1) / MS_PER_TICK;
+		deadline = syscall_io_deadline(timeout_ms);
 	}
 
 	size_t want = length < READ_CHUNK_SIZE ? length : READ_CHUNK_SIZE;

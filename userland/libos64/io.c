@@ -12,8 +12,16 @@
 
 int64_t os64_write(int32_t handle, const void *buf, size_t len)
 {
-    return (long)os64_syscall3(SYSCALL_WRITE, (uint64_t)handle,
-                               (uint64_t)buf, (uint64_t)len);
+    // As with read, the stub states its patience: syscall 3 consumes arg3,
+    // so an unspecified r10 would give an ordinary write an arbitrary wait.
+    return (long)os64_syscall4(SYSCALL_WRITE, (uint64_t)handle,
+                               (uint64_t)buf, (uint64_t)len, OS64_WAIT_FOREVER);
+}
+
+int64_t os64_write_for(int32_t handle, const void *buf, size_t len, uint64_t timeout_ms)
+{
+    return (long)os64_syscall4(SYSCALL_WRITE, (uint64_t)handle,
+                             (uint64_t)buf, (uint64_t)len, timeout_ms);
 }
 
 int64_t os64_read(int32_t handle, void *buf, size_t len)
