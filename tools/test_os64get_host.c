@@ -27,6 +27,7 @@ uint64_t os64_syscall6(uint64_t n, uint64_t a, uint64_t b, uint64_t c, uint64_t 
 #define main os64get_entry
 #include "../userland/apps/os64get/os64get.c"
 #undef main
+#include "../userland/apps/os64get/url_io.c"
 #include "os64/slurp.h"
 
 static char sandbox[512];
@@ -43,7 +44,8 @@ static const char *payloads[] = { "incoming A", "incoming B", "incoming C" };
 static const char *targets[] = { "/bin/a", "/home/b", "/fat/c" };
 static char network[16][1024];
 static size_t network_len[16], network_pos[16];
-static unsigned connections;
+static unsigned connections, tls_created, tls_freed, trust_loads;
+static bool network_closed[16];
 
 static bool is(const char *name) { return strcmp(scenario, name) == 0; }
 static void interrupt_run(void) { assert(handler); handler(OS64_SIGINT); injected = true; }
@@ -88,7 +90,15 @@ void os64_free(void *p) { free(p); }
 uint64_t os64_taskid(void) { return 42; }
 int64_t os64_getcwd(char *out, size_t cap) { return snprintf(out, cap, "/bin"); }
 const char *os64_getenv(const char *key)
-{ return is("url-https") && !strcmp(key, "https_proxy") ? "http://proxy:8888/" : NULL; }
+{
+    if ((is("url-https") || is("url-tls-bypass")) && !strcmp(key, "https_proxy")) return "http://proxy:8888/";
+    if (is("url-tls-bypass") && !strcmp(key, "no_proxy")) return "host";
+    return NULL;
+}
+int64_t os64_ticks(os64_ticks_t *out)
+{ static uint64_t ticks; out->ticks = ticks++; out->per_second = 1000; return 0; }
+int64_t os64_write_for(int32_t h, const void *p, size_t n, uint64_t ms)
+{ assert(ms > 0 && ms <= URL_IDLE_MS); return os64_write(h, p, n); }
 int64_t __wrap_os64_time(os64_time_t *out) { memset(out, 0, sizeof(*out)); out->epoch = 1788739200; return 0; }
 bool os64_parse_ipv4(const char *s, const char *end, uint32_t *ip)
 { (void)s; (void)end; *ip = 0x7f000001; return true; }
@@ -133,7 +143,7 @@ int64_t os64_open(const char *path, const char *mode)
 }
 int64_t os64_close(int32_t h)
 {
-    if (h >= 10000) return 0;
+    if (h >= 10000) { assert(!network_closed[h-10000]); network_closed[h-10000] = true; return 0; }
     bool fail = is("close") && !injected && strstr(fdpaths[h], "backup-");
     int rc = close(h); fdpaths[h][0] = 0;
     if (fail) { injected = true; return -1; }
@@ -251,6 +261,16 @@ int64_t os64_write(int32_t h, const void *buf, size_t n)
                 memcpy(network[i] + head, compressed, sizeof(compressed));
                 network_len[i] = (size_t)head + sizeof(compressed); return (int64_t)n;
             }
+            if ((is("url-tls-downgrade") || is("url-tls-redirect") || is("url-upgrade") || is("url-tls-other") || is("url-tls-head-alert")) && i == 0) {
+                snprintf(network[i], sizeof network[i], "HTTP/1.1 302 Found\r\nLocation: %s://%s/next\r\nContent-Length: 0\r\n\r\n",
+                         is("url-tls-downgrade") ? "http" : "https",
+                         is("url-tls-other") ? "other" : "host");
+                network_len[i] = strlen(network[i]); return (int64_t)n;
+            }
+            if (is("url-tls-cut") || is("url-tls-close")) {
+                strcpy(network[i], "HTTP/1.1 200 OK\r\n\r\nincoming A");
+                network_len[i] = strlen(network[i]); return (int64_t)n;
+            }
             snprintf(network[i], sizeof(network[i]), "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n%s",
                      is("url-short") ? "cut" : "incoming A");
         } else {
@@ -307,6 +327,58 @@ static unsigned file_count(const char *path)
     }
     closedir(dir); return count;
 }
+
+// This seam supplies authenticated bytes; cryptography and TCP pumping are
+// exercised separately by the real TLS peer. No fixture trust enters the app.
+struct os64_tls_transport { int32_t h; os64_tls_status_t status; };
+struct os64_tls_trust { int unused; };
+static struct os64_tls_trust host_trust;
+os64_tls_store_status_t os64_tls_trust_reload(os64_tls_trust **out, os64_tls_store_report_t *report)
+{
+    trust_loads++;
+    memset(report, 0, sizeof *report);
+    if (is("url-tls-roots")) return OS64_TLS_STORE_OPEN;
+    *out = &host_trust; return OS64_TLS_STORE_OK;
+}
+void os64_tls_trust_free(os64_tls_trust *t) { assert(!t || t == &host_trust); }
+const char *os64_tls_store_status_name(os64_tls_store_status_t s) { (void)s; return "fixture store"; }
+const char *os64_tls_status_name(os64_tls_status_t s) { (void)s; return "fixture TLS"; }
+os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *c, int32_t h,
+    const os64_tls_transport_limits_t *limits, os64_tls_transport **out)
+{
+    assert(!limits && c->trust == &host_trust && c->alpn_count == 1);
+    const char *hostname = is("url-tls-other") && tls_created ? "other" : "host";
+    assert(c->hostname.length == strlen(hostname) && !memcmp(c->hostname.data, hostname, strlen(hostname)));
+    assert(c->alpn[0].length == 8 && !memcmp(c->alpn[0].data, "http/1.1", 8));
+    *out = NULL;
+    if (is("url-tls-cert")) return OS64_TLS_CERTIFICATE;
+    *out = calloc(1, sizeof **out); assert(*out); (*out)->h = h;
+    tls_created++; return OS64_TLS_OK;
+}
+os64_tls_state_t os64_tls_transport_state(os64_tls_transport *t)
+{ return (os64_tls_state_t){.status=t->status, .flags=OS64_TLS_HANDSHAKE_DONE | OS64_TLS_SEND_PLAIN}; }
+os64_tls_transfer_t os64_tls_transport_write(os64_tls_transport *t, const void *p, size_t n)
+{ return (os64_tls_transfer_t){OS64_TLS_OK, (size_t)os64_write(t->h,p,n)}; }
+os64_tls_transfer_t os64_tls_transport_read(os64_tls_transport *t, void *p, size_t cap)
+{
+    if (t->status != OS64_TLS_OK) return (os64_tls_transfer_t){t->status,0};
+    int64_t n = os64_read(t->h,p,cap);
+    if (!n) t->status = is("url-tls-cut") ? OS64_TLS_TRUNCATED : OS64_TLS_CLEAN_EOF;
+    if (n < 0) { t->status = OS64_TLS_TRANSPORT; n = 0; }
+    if (n > 0 && network_pos[t->h-10000] == network_len[t->h-10000]) {
+        if (is("url-tls-alert") || is("url-tls-head-alert")) t->status = OS64_TLS_PROTOCOL;
+        if (is("url-tls-framed-cut")) t->status = OS64_TLS_TRUNCATED;
+    }
+    return (os64_tls_transfer_t){t->status,(size_t)n};
+}
+os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t ms)
+{ (void)ms; return t->status; }
+os64_tls_status_t os64_tls_transport_flush(os64_tls_transport *t) { return t->status; }
+os64_tls_status_t os64_tls_transport_begin_close(os64_tls_transport *t)
+{ return t->status = OS64_TLS_CLEAN_EOF; }
+os64_tls_status_t os64_tls_transport_abort(os64_tls_transport *t, os64_tls_status_t s)
+{ return t->status = s; }
+void os64_tls_transport_free(os64_tls_transport *t) { if(t) { os64_close(t->h); free(t); tls_freed++; } }
 
 static void integrity_scenario(void)
 {
@@ -473,7 +545,7 @@ int main(int argc, char **argv)
     char *force[] = { "os64get", "-a", "-q", "-f", "host", NULL };
     char *noarchive[] = { "os64get", "-a", "-q", "-n", "host", NULL };
     char *url[] = { "os64get", "-q", "http://host/a", "/bin/a", NULL };
-    if (is("url-https")) url[2] = "https://host/a";
+    if (is("url-https") || !strncmp(scenario, "url-tls-", 8)) url[2] = "https://host/a";
     if (is("url-archive-blocked")) put("/home/archive", "not a directory");
     bool url_mode = !strncmp(scenario, "url", 3);
     char *single[] = { "os64get", "-q", "host", "a", "/bin/a", NULL };
@@ -481,8 +553,21 @@ int main(int argc, char **argv)
              is("no-archive") ? os64get_entry(5, noarchive) :
              url_mode ? os64get_entry(4, url) : os64get_entry(4, args);
     bool cancel = !strncmp(scenario, "cancel-", 7) || is("url-cancel");
-    bool success = is("success") || is("absent") || is("unchanged") || is("force-identical") || is("no-archive") || is("url") || is("url-https") || is("url-archive-blocked") || is("single");
+    bool success = is("success") || is("absent") || is("unchanged") || is("force-identical") || is("no-archive") || is("url") || is("url-https") || is("url-archive-blocked") || is("single") || is("url-tls-good") || is("url-tls-close") || is("url-tls-framed-cut") || is("url-tls-redirect") || is("url-upgrade") || is("url-tls-other") || is("url-tls-bypass");
     assert(success ? rc == 0 : rc != 0);
+    assert(tls_created == tls_freed);
+    for (unsigned i = 0; i < connections; i++) assert(network_closed[i]);
+    if (!strncmp(scenario, "url-tls-", 8) || is("url-upgrade")) assert(trust_loads == 1);
+    else assert(trust_loads == 0);
+    if (is("url-tls-downgrade")) {
+        assert(rc == GET_REDIRECT && connections == 1);
+        assert(strstr(output_text, "refusing HTTPS-to-HTTP downgrade"));
+        assert(strstr(output_text, "os64get 'http://host/next'"));
+    }
+    if (is("url-tls-head-alert")) assert(rc == GET_BAD_HEADER && connections == 1);
+    if (is("url-tls-redirect")) assert(connections == 2 && tls_created == 2);
+    if (is("url-tls-roots") || is("url-tls-cert")) assert(rc == GET_TLS_FAILED);
+    if (is("url-tls-alert") || is("url-tls-cut")) assert(rc == GET_SHORT);
     bool published = success || is("cancel-commit") || is("cancel-cleanup") || is("publish");
     assert(!cancel || rc == GET_CANCELLED);
     for (unsigned i = 0; i < 3; i++) {

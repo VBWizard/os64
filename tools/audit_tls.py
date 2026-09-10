@@ -10,13 +10,14 @@ BASE = USERLAND / 'libtls'
 LIBRARY = USERLAND / 'bin/libtls.so'
 FIXTURE = USERLAND / 'bin/tests/tlslibtest'
 TRANSPORT_PROBE = USERLAND / 'bin/tests/tlstransportprobe'
+FETCHER = USERLAND / 'bin/os64get'
 
 
 def command(*args):
     return subprocess.check_output([str(a) for a in args], text=True)
 
 
-subprocess.run(['make', '-C', str(USERLAND), str(LIBRARY), str(FIXTURE), str(TRANSPORT_PROBE)], check=True)
+subprocess.run(['make', '-C', str(USERLAND), str(LIBRARY), str(FIXTURE), str(TRANSPORT_PROBE), str(FETCHER)], check=True)
 expected = set(re.findall(r'\b(os64_tls_\w+);', (BASE / 'exports.map').read_text()))
 public = set(re.findall(r'\b(os64_tls_\w+)\(', '\n'.join(p.read_text() for p in (BASE / 'include/tls').glob('*.h'))))
 assert expected == public, (expected - public, public - expected)
@@ -29,7 +30,8 @@ assert imports == {'os64_malloc', 'os64_free', 'os64_memcpy', 'os64_memmove', 'o
                    'os64_strlen', 'os64_open', 'os64_read', 'os64_close', 'os64_time',
                    'os64_conf_find', 'os64_slurp', 'os64_ticks', 'os64_read_for', 'os64_write_for'}, imports
 for binary, dependencies in ((LIBRARY, ['libos64.so']), (FIXTURE, ['libtls.so', 'libos64.so']),
-                             (TRANSPORT_PROBE, ['libtls.so', 'libos64.so'])):
+                             (TRANSPORT_PROBE, ['libtls.so', 'libos64.so']),
+                             (FETCHER, ['libgzip.so', 'libtls.so', 'libos64.so'])):
     dynamic = command('x86_64-elf-readelf', '-dW', binary)
     assert re.findall(r'\(NEEDED\).*\[(.*?)\]', dynamic) == dependencies, dynamic
     assert '(HASH)' in dynamic

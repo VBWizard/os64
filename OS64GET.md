@@ -353,7 +353,7 @@ filesystem limits.
 ## HTTP and HTTPS downloads
 
 ```sh
-os64get http://example.com/ /home/page.html
+os64get https://example.com/ /home/page.html
 os64get http://example.com/files/readme.txt
 ```
 
@@ -380,27 +380,47 @@ data checks pass. Its decoded size limit is 100 times a known wire length,
 with a 1 MiB floor and 16 MiB ceiling; without a known length the limit is
 16 MiB. These expansion limits do not apply to identity bodies.
 
-os64 has no native TLS here. HTTPS requires a terminating proxy, such as
-[`tools/tlsproxy.py`](tools/tlsproxy.py). For a QEMU guest, start it on the host:
+Direct HTTPS uses `libtls.so`, verifies the URL's DNS hostname and certificate
+chain, and offers HTTP/1.1. Trust comes from `tls.conf` through the config
+ladder: `trust_store = /absolute/bundle.pem`, default `/etc/certs/roots.pem`.
+A selected bundle replaces the complete store; missing or invalid roots fail
+without a fallback. The integration does not install a public root bundle.
+IP-literal HTTPS is refused by the TLS hostname policy; use a DNS name or a
+name mapped in the hosts file. See [TLS.md](TLS.md) for the TLS 1.2 profile and
+certificate compatibility limits.
 
-```sh
-python3 tools/tlsproxy.py
-```
+HTTPS-to-HTTP redirects stop with a visible explanation and the destination,
+even with `-q`. An explicit new HTTP command is required to follow one.
+HTTPS-to-HTTPS redirects authenticate the new origin. A failed TLS connection
+does not fall back to plaintext or another route.
 
-Then in os64:
+Handshake and request-write budgets are 30 seconds each. Response reads allow
+30 seconds without HTTP plaintext; TLS control traffic does not renew that
+interval. DNS/dial have their existing separate limits. Cancellation stops
+network work and keeps the installation cleanup rules above. Normal TLS
+shutdown is bounded to two seconds. A close-delimited HTTPS response needs a
+valid TLS close notification; raw TCP closure cannot publish it. Complete
+Content-Length/chunked responses do not require a peer close notification.
+
+An explicitly configured terminating proxy remains supported:
 
 ```sh
 export https_proxy=http://10.0.2.2:8888/
 os64get https://example.com/
 ```
 
-For the P5, use the proxy host's reachable LAN address. Lowercase
-`https_proxy` applies to HTTPS, `http_proxy` to HTTP, and `no_proxy` supplies
-comma-separated bypass hosts/domain suffixes or `*`. Bypassing the proxy
-does not make direct HTTPS available. The proxy must accept absolute-form
-HTTPS requests and fetch upstream itself; an ordinary CONNECT-only proxy
-does not supply this behavior. Only the proxy-to-origin leg uses TLS: the
-guest-to-proxy leg and data inside the proxy are plaintext.
+[`tools/tlsproxy.py`](tools/tlsproxy.py) supplies that optional helper. For the
+P5, use the proxy host's reachable LAN address. Lowercase `https_proxy` applies
+to HTTPS, `http_proxy` to HTTP, and `no_proxy` supplies comma-separated bypass
+hosts/domain suffixes or `*`. Bypassed HTTPS uses native TLS. Proxy requests
+remain absolute-form HTTP: the proxy fetches upstream itself, and only its
+origin leg uses TLS. The guest-to-proxy leg is plaintext and os64get discloses
+that even with `-q`. CONNECT tunneling and encrypted proxy connections are
+not supported.
+
+For controlled guest/P5 checkout, see
+[OS64GET_HTTPS.md](OS64GET_HTTPS.md#controlled-checkout). Its public fixture root
+is test material, not a public-web trust bundle.
 
 ## Exit status and troubleshooting
 
@@ -414,7 +434,8 @@ guest-to-proxy leg and data inside the proxy are plaintext.
 | 9 | Local write, staging, initialization, or cleanup failure. |
 | 10 | Installation rename failed; some files may have installed. |
 | 11 | Staged-file verification, backup preparation, or destination recheck failed. |
-| 13 / 14 / 15 | Unusable URL or missing HTTPS route / unsupported coding or gzip expansion limit / failed redirect chain. |
+| 13 / 14 / 15 | Unusable URL / unsupported coding or gzip expansion limit / failed redirect chain. |
+| 16 | TLS trust selection, identity, or handshake failure. Response TLS errors retain the header/body failure category and print TLS detail. |
 | 130 | Ctrl+C requested cancellation, or was deferred through successful installation. |
 
 Status 12 is an internal unchanged marker, not a public exit status. A

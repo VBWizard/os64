@@ -20,7 +20,7 @@
 //
 // WHY PARSING IS SEPARATE FROM THE SOCKET. Every function below that reads
 // takes its bytes from an `http_source_fn`, never from a handle. On os64 the
-// source is one os64_read of a dialed connection; in tools/test_http_host.sh
+// source supplies plain TCP or authenticated TLS bytes; in tools/test_http_host.sh
 // it is a memory buffer handing out one byte at a time, then two, then
 // seventeen — because a stream parser's bugs live exactly where a token
 // straddles two reads, and a parser that can only be driven by a real
@@ -39,14 +39,9 @@
 // there", which depends on the machine — whether a proxy is configured, how
 // many hops have been spent, whether the answer points back at itself.
 //
-// TLS IS NOT HERE EITHER AND NEVER WILL BE — os64 borrows a TLS when its day
-// comes, because thirty years of side-channel and oracle attacks teach no
-// kernel lessons (BROWSER.md's first ruling). What this file DOES know is
-// that an https URL is a perfectly ordinary address which some other machine
-// may be willing to fetch on our behalf: `http_url_parse` reads both schemes
-// and `http_request` can address a proxy, and the decision about whether a
-// given https URL is reachable belongs to the caller, which is the only
-// layer that knows whether a proxy is configured.
+// TLS belongs to the caller's byte source. This parser receives HTTP
+// plaintext on both direct and proxied routes; routing and certificate
+// verification do not change HTTP framing.
 
 #include <stdbool.h>
 #include <stddef.h>

@@ -978,35 +978,25 @@ static bool starts_with_url_prefix(const char *s)
 
 // WHAT OS64GET'S NUMBER MEANT, in a sentence.
 //
-// The handoff is only as good as this translation, which is the whole reason
-// os64get's exit codes were made precise one code at a time. A status bar
-// reading "os64get exited 2" asks the person to go and look it up, and the
-// two answers they most often need — "os64 has no TLS, so an https address
-// needs a proxy" and "it downloaded, here is where it went" — are exactly
-// the two that a bare number hides.
+// Translate os64get failures for the web-link status bar. TLS verification
+// and redirect policy belong to os64get, which prints their detailed reasons.
 static const char *os64get_said(int32_t code)
 {
     switch (code) {
         case 0:  return "fetched";
-        case 2:  return "os64 has no TLS: an https address needs $https_proxy set";
-                 // 13 and 2 say the same thing about a web link, and which
-                 // one arrives depends on WHERE the https showed up — typed
-                 // in the item (13) or reached by a redirect (2). A person
-                 // reading a status bar does not care which, and needs the
-                 // same next move either way.
+        case 2:  return "the request or proxy configuration is invalid";
         case 3:  return "could not reach that host";
         case 4:  return "the request could not be sent";
         case 5:  return "the server refused the page";
-        case 6:  return "the server answered something that was not HTTP";
+        case 6:  return "the response headers could not be read";
         case 7:  return "the connection died before the page was whole";
         case 8:  return "the page arrived complete and corrupt";
         case 9:  return "the page could not be written";
         case 10: return "fetched, but could not be put in place";
-        case 13: return "cannot fetch that address"
-                        " (an https link needs $https_proxy set: os64 has no TLS)";
+        case 13: return "cannot fetch that address";
         case 14: return "the page is coded in a way os64get cannot read";
-        case 15: return "the trail of redirects did not arrive"
-                        " (an https target needs $https_proxy set)";
+        case 15: return "a redirect could not be followed";
+        case 16: return "HTTPS trust or certificate verification failed, or the TLS connection could not be established";
         default: return "the fetch failed";
     }
 }

@@ -519,7 +519,7 @@ fixtures; changing Internet behavior is not the regression oracle.
 | B: engine port | `libtls.so`, opaque byte API, private adapters, host reference harness, guest vectors | Matching vectors, ownership/failure tests, strict build and guest evidence |
 | C: trust and certificate policy | Bounded bundle loader, policy adapter, identity regression corpus | Explicit policy outcomes tested independently; trust-store selection ruled |
 | D: production inputs and transport | Approved entropy provider and bounded I/O adapter | Entropy/failure and end-to-end deadline/cancellation evidence; prerequisites landed through their own reviews |
-| E: HTTPS integration | HTTP caller adoption, routing and publication tests | Separate integration design reviewed against the merged tree |
+| E: HTTPS integration | HTTP caller adoption, routing and publication tests | [OS64GET_HTTPS.md](OS64GET_HTTPS.md) defines the direct/proxy routes, downgrade refusal and controlled acceptance |
 
 The source pin is settled for the foundation. The public byte library preserves the
 reviewed engine operations and profile. OS randomness ownership, unseeded-read

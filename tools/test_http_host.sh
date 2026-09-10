@@ -4,7 +4,7 @@
 # Two references, both external to this tree: http.client for what a reply
 # means, urllib.parse for what a URL means. Where os64get is deliberately
 # STRICTER than either (a space before a colon, two disagreeing lengths, a
-# scheme with no TLS behind it), the expectation is spelled out here by hand
+# unsupported URL scheme), the expectation is spelled out here by hand
 # and the reason is in http.c beside the refusal.
 
 set -eu
@@ -74,7 +74,7 @@ good_urls = [
     "http://textfiles.com/computers/",
     "http://" + "a" * 60 + "." + "b" * 60 + ".example.com/deep/" + "p" * 900,
     # https PARSES — whether it can be FETCHED is a question about the
-    # machine (is there a proxy?) and is answered by os64get, not here. The
+    # caller (trust and routing) and is answered by os64get, not here. The
     # default port comes from the scheme.
     "https://example.com/",
     "https://example.com",

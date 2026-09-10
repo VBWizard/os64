@@ -111,11 +111,8 @@ http_url_result_t http_url_parse(const char *url, http_url_t *out)
     if (rc != OS64_URL_OK)
         return url_result_from(rc);
 
-    // BOTH SCHEMES PARSE. Which of them this machine can actually FETCH is
-    // policy, not grammar, and it changes with the configuration: an https
-    // URL is unreachable on its own and perfectly reachable through a
-    // TLS-terminating proxy. So the answer to "can I go there" is the
-    // caller's, and this function answers only "what is this address".
+    // Both HTTP schemes share URL grammar. The caller selects direct TLS
+    // or an explicit proxy and owns the trust/routing decisions.
     copy_span(out->host, sizeof(out->host), parsed.host, os64_strlen(parsed.host));
     copy_span(out->path, sizeof(out->path), parsed.path, os64_strlen(parsed.path));
 

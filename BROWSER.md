@@ -20,26 +20,13 @@ common elements is a weekend. The bosses are:
    TLS. Rolling our own was considered and rejected on merit: the hazard is
    thirty years of side-channel and oracle attacks, and surviving them
    teaches no kernel lessons.
-   **THE STOPGAP THIS RULING NAMED IS BUILT (2026-09-02): `tools/tlsproxy.py`.**
-   Chris asked for it after reading a badly-named test route (`/tohttps`,
-   since renamed) as a promise that the server would make the TLS call for
-   him — which is exactly what this line had sanctioned and nobody had yet
-   written. It speaks the proxy dialect every proxy has spoken since CERN's
-   in 1994 (the whole URL in the request line, "absolute-form", RFC 7230
-   §5.3.2), fetches over TLS with the host's own trust store, and hands the
-   answer back in plain HTTP. os64get picks it up from `$https_proxy`, with
-   `$http_proxy` and `$no_proxy` beside it; **the scheme picks the variable**,
-   which is load-bearing rather than tidy — one setting covering both
-   silently rerouted the local test fetches through a machine that could not
-   reach them (10.0.2.2 means nothing off the guest), and 502 was the first
-   anyone knew. **Verified: `https://example.com/` and the 137582-byte
-   `https://www.rfc-editor.org/rfc/rfc1945.txt` both arrived byte-identical
-   to curl's copies** — an OS with no TLS reading the HTTP/1.0 specification
-   over TLS. What it COSTS is printed on every proxied fetch and never
-   softened: the proxy terminates the TLS, so it holds the page in the clear
-   and the leg from os64 to it is plain text. Public reading, not secrets.
-   Plain-HTTP sources (neverssl.com, textfiles.com, FrogFind, mirrors) still
-   work with no proxy at all.
+   Native HTTPS in os64get uses this library for direct connections; see
+   [OS64GET_HTTPS.md](OS64GET_HTTPS.md) for its integration and controlled
+   acceptance. Public root-bundle selection remains separate. Explicit
+   `$https_proxy` retains the terminating `tools/tlsproxy.py` helper, with its
+   plaintext-leg disclosure; `$no_proxy` bypass uses native TLS. CONNECT
+   tunneling is deferred until needed.
+
 2. **Layout.** Block flow, inline flow, the box model. Distant; the ladder
    climbs there via the gopher/line-mode client's UI. Not yet designed —
    deliberately.
@@ -173,8 +160,8 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      **THE PROXY IS RE-ASKED AT EVERY HOP**, because `$https_proxy` and
      `$http_proxy` are chosen by SCHEME: a plain-HTTP page redirecting to
      https is carried by a variable that had nothing to do with the first
-     request, and an https target is a dead end or an ordinary hop
-     depending only on that. And a new exit code, **15**, for a road that
+     request. Direct HTTPS uses libtls when no proxy applies; an HTTPS-to-HTTP
+     redirect is refused with its target displayed. And a new exit code, **15**, for a road that
      did not arrive (hop cap, a circle, an unreachable target) — distinct
      from 5, the server's final answer about the page, because the thing to
      change is on a different side. `http_url_absolute` grew into RFC 3986
@@ -301,11 +288,9 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
      link and got their menu repainted with `exited 0` at the bottom has
      not been shown anything. It is HTML source — os64 has no renderer
      yet — and that is strictly more than nothing. Every code becomes a
-     SENTENCE: the one that matters is **an https link with no
-     `$https_proxy`**, which is most of the modern web and arrives as 13
-     when the item names it and 2 when a redirect reaches it. A status bar
-     reading `os64get exited 2` sends a person to look up a number; this
-     is the whole reason those codes were made precise one at a time.
+     sentence. Direct HTTPS uses os64get's selected trust store; status 16
+     names trust, identity or handshake failure. Invalid proxy settings,
+     unusable URLs and refused redirects retain their distinct statuses.
      **A DEAD LINK IS A PAGE THAT DID NOT LOAD, NOT THE END OF THE
      SESSION** (2026-09-04, Chris asking whether a "cannot reach" always
      killed the client — it did). The fetch lands in a second page and the

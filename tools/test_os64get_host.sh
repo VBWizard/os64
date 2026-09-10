@@ -6,11 +6,11 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cc -std=c11 -g -Wall -Wextra -Werror -ffunction-sections -fdata-sections \
    -fsanitize=address,undefined -fno-pie -no-pie \
-   -I userland/libos64/include -I abi/include -I userland/libgzip/include \
+   -I userland/libtls/include -I userland/libos64/include -I abi/include -I userland/libgzip/include \
    tools/test_os64get_host.c userland/apps/os64get/install.c userland/apps/os64get/http.c \
    userland/libos64/{str,fmt,args,date,crc32,url}.c userland/libgzip/{gzip,inflate,deflate}.c \
    -Wl,--gc-sections,--wrap=os64_time -o "$work/os64get-test"
-scenarios=(success absent unchanged force-identical no-archive single url url-https url-archive-blocked url-short url-cancel short crc \
+scenarios=(success absent unchanged force-identical no-archive single url url-https url-archive-blocked url-short url-cancel url-tls-good url-tls-close url-tls-framed-cut url-tls-alert url-tls-cut url-tls-roots url-tls-cert url-tls-downgrade url-tls-redirect url-tls-bypass url-upgrade url-tls-other url-tls-head-alert short crc \
                 backup-read backup-write backup-corrupt sync close publish aliases appeared unsafe-name archive-overlap \
                 cancel-list cancel-download cancel-backup cancel-verify cancel-commit cancel-cleanup cancel-transition
                 review-empty-backup review-partial-backup review-ro review-full review-all-full
