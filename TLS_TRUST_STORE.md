@@ -2,7 +2,9 @@
 
 This slice builds on the private client and certificate-policy factory. It
 loads administratively selected roots into that factory's sealed snapshots.
-It does not choose public roots or enable native HTTPS.
+The ext2 image supplies the pinned default described in
+[TLS_PUBLIC_ROOTS.md](TLS_PUBLIC_ROOTS.md); the loader also accepts explicitly
+selected administrative bundles.
 
 ## Selection and publication
 

@@ -290,7 +290,7 @@ static tls_policy_reason public_key(span s, br_x509_pkey *key)
     return TLS_POLICY_OK;
 }
 
-static bool date(span *s, uint64_t *order)
+static bool date(span *s, uint64_t *order, bool anchor)
 {
     unsigned tag; span v;
     if (!take(s, &tag, &v) || (tag != 23 && tag != 24) ||
@@ -305,7 +305,7 @@ static bool date(span *s, uint64_t *order)
     static const unsigned month_days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
     if (!year || !p[0] || p[0] > 12 || !p[1] || p[2] > 23 || p[3] > 59 || p[4] > 59) return false;
     unsigned days = month_days[p[0] - 1] + (p[0] == 2 && !(year % 4) && (year % 100 || !(year % 400)));
-    if (p[1] > days || (tag == 24 && year < 2050)) return false;
+    if (p[1] > days || (!anchor && tag == 24 && year < 2050)) return false;
     *order = year;
     for (unsigned i = 0; i < 5; i++) *order = *order * 100 + p[i];
     return true;
@@ -402,16 +402,26 @@ tls_policy_reason os64_tls_certificate_inspect(const void *der, size_t length,
     // The policy requires v3 because its role and identity rules use extensions.
     span version;
     if (!field(&tbs, 0xa0, &version) || !field(&version, 2, &v) || version.length ||
-        v.length != 1 || v.data[0] != 2 || !nonnegative(&tbs, &v) ||
-        (v.length == 1 && !v.data[0]) ||
-        !field(&tbs, 0x30, &inner)) return TLS_POLICY_DER;
-    bool ecdsa;
-    if (!equal(inner, outer) || !signature_algorithm(inner, &ecdsa)) return TLS_POLICY_SIGNATURE;
-    if (ecdsa && !ecdsa_signature_valid(signature)) return TLS_POLICY_DER;
+        v.length != 1 || v.data[0] != 2 || !field(&tbs, 2, &v)) return TLS_POLICY_DER;
+    // Installed anchors supply a name and key, not a certificate in the peer
+    // path. Their serial and self-signature do not establish trust. Structural
+    // DER checks still apply, as do the key and extension restrictions below.
+    if (role != 2 && ((v.data[0] & 128) || (v.length == 1 && !v.data[0]))) return TLS_POLICY_DER;
+    if (!field(&tbs, 0x30, &inner)) return TLS_POLICY_DER;
+    if (!equal(inner, outer)) return TLS_POLICY_SIGNATURE;
+    if (role == 2) {
+        span id, parameter; unsigned tag;
+        if (!field(&inner, 6, &id) ||
+            (inner.length && !take(&inner, &tag, &parameter)) || inner.length) return TLS_POLICY_DER;
+    } else {
+        bool ecdsa;
+        if (!signature_algorithm(inner, &ecdsa)) return TLS_POLICY_SIGNATURE;
+        if (ecdsa && !ecdsa_signature_valid(signature)) return TLS_POLICY_DER;
+    }
     if (!field(&tbs, 0x30, &issuer) || !issuer.length || !name_valid(issuer) ||
         !field(&tbs, 0x30, &v)) return TLS_POLICY_DER;
     uint64_t before, after;
-    if (!date(&v, &before) || !date(&v, &after) || v.length || before > after) return TLS_POLICY_DER;
+    if (!date(&v, &before, role == 2) || !date(&v, &after, role == 2) || v.length || before > after) return TLS_POLICY_DER;
     // Keep the full encoded subject Name for BearSSL's anchor DN hashing.
     span encoded_subject = tbs;
     if (!field(&tbs, 0x30, &subject) || (role && !subject.length) || !name_valid(subject)) return TLS_POLICY_DER;

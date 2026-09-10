@@ -27,14 +27,16 @@ The factory copies the expected DNS hostname and uses explicit validation time.
 It configures the same SHA-256/384/512, RSA i31, and EC m31 algorithms as the
 client profile. RSA moduli must have 2048 through 4096 actual bits, including
 anchors; exponents must fit the upstream key buffer, be odd, and be at least 3.
-EC keys use uncompressed, valid P-256/P-384/P-521 points. Certificate signature
+EC keys use uncompressed, valid P-256/P-384/P-521 points. Peer certificate signature
 identifiers must be SHA-256/384/512 with RSA PKCS#1 v1.5 or ECDSA, with matching
 inner/outer identifiers. This conservatively also applies to supplied roots.
 RSA `rsaEncryption` public-key identifiers require an explicit empty NULL
 parameter. SHA-2/RSA signature identifiers accept absent or NULL parameters,
 as required for verification by [RFC 4055 section 5](https://www.rfc-editor.org/rfc/rfc4055.html#section-5).
-The profile requires strictly positive certificate serial numbers, including
-in anchors and trailing certificates; zero and negative serials are refused.
+The profile requires strictly positive serial numbers in peer certificates,
+including trailing certificates; zero and negative peer serials are refused.
+Installed anchors accept minimally encoded INTEGER serials of either sign,
+including zero, because the serial is not part of the trusted name/key input.
 Serials longer than 20 encoded content octets remain accepted within the
 certificate size bound. [RFC 5280 section 4.1.2.2](https://www.rfc-editor.org/rfc/rfc5280.html#section-4.1.2.2) imposes the 20-octet maximum
 on conforming issuers, without requiring verifiers to reject longer values.
@@ -70,7 +72,7 @@ are refused in either encoding form.
 EXTERNAL, EMBEDDED PDV and unrestricted CHARACTER STRING universal types
 are refused in both primitive and constructed forms because their schemas
 are outside this certificate subset.
-ECDSA signature BIT STRING contents must be a DER SEQUENCE of two minimally
+Peer ECDSA signature BIT STRING contents must be a DER SEQUENCE of two minimally
 encoded, strictly positive INTEGERs with no trailing bytes. RSA signatures
 remain raw signature bytes; BearSSL checks their cryptographic validity.
 Issuer and subject RDN SET OF members must be in nondecreasing order by their
@@ -129,8 +131,21 @@ be X.509 v3, including anchors; legacy v1 roots are refused. Anchors must be
 self-issued (identical encoded issuer/subject), with no EKU or pathLen. This
 is an administrative trust input, not automatic promotion of downloaded
 intermediates. A self-signature is not the source of trust and is not verified
-at import. Anchor validity dates are metadata, not a validation-time constraint;
-the trust decision and subsequent removal belong to the store owner.
+at import. Its algorithm is not restricted to the peer SHA-2 allowlist, and
+its BIT STRING payload is not interpreted as a signature to validate. The
+AlgorithmIdentifier must still be well formed and match inside/outside TBS.
+Anchor validity dates are metadata, not a validation-time constraint;
+GeneralizedTime before 2050 is accepted, while syntax, calendar validity and
+before/after order are checked. The trust decision and subsequent removal
+belong to the store owner. This separates the trusted name/key input in
+[RFC 5280 section 6.1.1(d)](https://www.rfc-editor.org/rfc/rfc5280.html#section-6.1.1)
+from the certificates in the path. Key strength, critical CA Basic Constraints,
+Key Usage and restrictive/unsupported extension refusals still apply at import.
+
+This import exception does not promote a server-supplied certificate into an
+anchor. The supplied-chain policy also checks redundant roots after trust has
+been reached, so a peer that sends one of these out-of-profile roots may still
+be refused even when its name/key is installed.
 
 Addition copies the subject DN and public key after policy checks. A failed
 addition leaves the builder unchanged. Sealing requires a nonempty store and
@@ -167,10 +182,11 @@ matching adapted archive. Python cryptography and the OpenSSL command-line
 tool are host test dependencies; generation and validation need no network.
 Use `--output /tmp/new-directory` to retain the generated corpus and executable.
 
-The corpus covers 344 chain cases and 55 anchor cases, with one-byte,
+The corpus covers 354 chain cases and 61 anchor cases, with one-byte,
 37-byte, and whole-certificate delivery. It checks successful EC/RSA chains,
 RDN ordering and string encodings, canonical ECDSA signatures,
-positive serials, SAN/CA Basic Constraints criticality, ENUMERATED minimality,
+positive peer serials and zero/negative anchor serials, SAN/CA Basic Constraints
+criticality, ENUMERATED minimality,
 RSA parameter rules and leaf Key Usage restrictions,
 signature-use compatibility for key-agreement bits and serials over 20 octets,
 OID/RELATIVE-OID component minimality and termination,

@@ -19,6 +19,36 @@
       "policy": "OK"
     },
     {
+      "subject": "C = US, ST = Arizona, L = Scottsdale, O = \"GoDaddy.com, Inc.\", CN = Go Daddy Root Certificate Authority - G2",
+      "der_sha256": "45140b3247eb9cc8c5b4f0d7b53091f73292089e6e5a63e2749dd3aca9198eda",
+      "policy": "OK"
+    },
+    {
+      "subject": "C = US, ST = Arizona, L = Scottsdale, O = \"Starfield Technologies, Inc.\", CN = Starfield Root Certificate Authority - G2",
+      "der_sha256": "2ce1cb0bf9d2f9e102993fbe215152c3b2dd0cabde1c68e5319b839154dbb7f5",
+      "policy": "OK"
+    },
+    {
+      "subject": "C = US, ST = Arizona, L = Scottsdale, O = \"Starfield Technologies, Inc.\", CN = Starfield Services Root Certificate Authority - G2",
+      "der_sha256": "568d6905a2c88708a4b3025190edcfedb1974a606a13c6e5290fcb2ae63edab5",
+      "policy": "OK"
+    },
+    {
+      "subject": "C = PL, O = Unizeto Technologies S.A., OU = Certum Certification Authority, CN = Certum Trusted Network CA",
+      "der_sha256": "5c58468d55f58e497e743982d2b50010b6d165374acf83a7d4a32db768c4408e",
+      "policy": "OK"
+    },
+    {
+      "subject": "C = TW, O = TAIWAN-CA, OU = Root CA, CN = TWCA Root Certification Authority",
+      "der_sha256": "bfd88fe1101c41ae3e801bf8be56350ee9bad1a6b9bd515edc5c6d5b8711ac44",
+      "policy": "OK"
+    },
+    {
+      "subject": "C = JP, O = \"SECOM Trust Systems CO.,LTD.\", OU = Security Communication RootCA2",
+      "der_sha256": "513b2cecb810d4cde5dd85391adfc6c2dd60d87bb736d2b521484aa47a0ebef6",
+      "policy": "OK"
+    },
+    {
       "subject": "C = IT, L = Milan, O = Actalis S.p.A./03358520967, CN = Actalis Authentication Root CA",
       "der_sha256": "55926084ec963a64b96e2abe01ce0ba86a64fbfebcc7aab5afc155b37fd76066",
       "policy": "OK"
@@ -51,6 +81,11 @@
     {
       "subject": "C = SK, L = Bratislava, O = Disig a.s., CN = CA Disig Root R2",
       "der_sha256": "e23d4a036d7b70e9f595b1422079d2b91edfbb1fb651a0633eaa8a9dc5f80703",
+      "policy": "OK"
+    },
+    {
+      "subject": "CN = ACCVRAIZ1, OU = PKIACCV, O = ACCV, C = ES",
+      "der_sha256": "9a6ec012e1a7da9dbe34194d478ad7c0db1822fb071df12981496ed104384113",
       "policy": "OK"
     },
     {
@@ -141,6 +176,21 @@
     {
       "subject": "C = PL, O = Krajowa Izba Rozliczeniowa S.A., CN = SZAFIR ROOT CA2",
       "der_sha256": "a1339d33281a0b56e557d3d32b1ce7f9367eb094bd5fa72a7e5004c8ded7cafe",
+      "policy": "OK"
+    },
+    {
+      "subject": "C = PL, O = Unizeto Technologies S.A., OU = Certum Certification Authority, CN = Certum Trusted Network CA 2",
+      "der_sha256": "b676f2eddae8775cd36cb0f63cd1d4603961f49e6265ba013a2f0307b6d0b804",
+      "policy": "OK"
+    },
+    {
+      "subject": "C = GR, L = Athens, O = Hellenic Academic and Research Institutions Cert. Authority, CN = Hellenic Academic and Research Institutions RootCA 2015",
+      "der_sha256": "a040929a02ce53b4acf4f2ffc6981ce4496f755e6d45fe0b2a692bcd52523f36",
+      "policy": "OK"
+    },
+    {
+      "subject": "C = GR, L = Athens, O = Hellenic Academic and Research Institutions Cert. Authority, CN = Hellenic Academic and Research Institutions ECC RootCA 2015",
+      "der_sha256": "44b545aa8a25e65a73ca15dc27fc36d24c1cb9953a066539b11582dc487b4833",
       "policy": "OK"
     },
     {
@@ -536,59 +586,9 @@
       "policy": "SAN"
     },
     {
-      "subject": "C = US, ST = Arizona, L = Scottsdale, O = \"GoDaddy.com, Inc.\", CN = Go Daddy Root Certificate Authority - G2",
-      "der_sha256": "45140b3247eb9cc8c5b4f0d7b53091f73292089e6e5a63e2749dd3aca9198eda",
-      "policy": "DER"
-    },
-    {
-      "subject": "C = US, ST = Arizona, L = Scottsdale, O = \"Starfield Technologies, Inc.\", CN = Starfield Root Certificate Authority - G2",
-      "der_sha256": "2ce1cb0bf9d2f9e102993fbe215152c3b2dd0cabde1c68e5319b839154dbb7f5",
-      "policy": "DER"
-    },
-    {
-      "subject": "C = US, ST = Arizona, L = Scottsdale, O = \"Starfield Technologies, Inc.\", CN = Starfield Services Root Certificate Authority - G2",
-      "der_sha256": "568d6905a2c88708a4b3025190edcfedb1974a606a13c6e5290fcb2ae63edab5",
-      "policy": "DER"
-    },
-    {
-      "subject": "C = PL, O = Unizeto Technologies S.A., OU = Certum Certification Authority, CN = Certum Trusted Network CA",
-      "der_sha256": "5c58468d55f58e497e743982d2b50010b6d165374acf83a7d4a32db768c4408e",
-      "policy": "SIGNATURE"
-    },
-    {
-      "subject": "C = TW, O = TAIWAN-CA, OU = Root CA, CN = TWCA Root Certification Authority",
-      "der_sha256": "bfd88fe1101c41ae3e801bf8be56350ee9bad1a6b9bd515edc5c6d5b8711ac44",
-      "policy": "SIGNATURE"
-    },
-    {
-      "subject": "C = JP, O = \"SECOM Trust Systems CO.,LTD.\", OU = Security Communication RootCA2",
-      "der_sha256": "513b2cecb810d4cde5dd85391adfc6c2dd60d87bb736d2b521484aa47a0ebef6",
-      "policy": "DER"
-    },
-    {
-      "subject": "CN = ACCVRAIZ1, OU = PKIACCV, O = ACCV, C = ES",
-      "der_sha256": "9a6ec012e1a7da9dbe34194d478ad7c0db1822fb071df12981496ed104384113",
-      "policy": "SIGNATURE"
-    },
-    {
       "subject": "C = CH, O = WISeKey, OU = OISTE Foundation Endorsed, CN = OISTE WISeKey Global Root GB CA",
       "der_sha256": "6b9c08e86eb0f767cfad65cd98b62149e5494a67f5845e7bd1ed019f27b86bd6",
       "policy": "EXTENSION"
-    },
-    {
-      "subject": "C = PL, O = Unizeto Technologies S.A., OU = Certum Certification Authority, CN = Certum Trusted Network CA 2",
-      "der_sha256": "b676f2eddae8775cd36cb0f63cd1d4603961f49e6265ba013a2f0307b6d0b804",
-      "policy": "DER"
-    },
-    {
-      "subject": "C = GR, L = Athens, O = Hellenic Academic and Research Institutions Cert. Authority, CN = Hellenic Academic and Research Institutions RootCA 2015",
-      "der_sha256": "a040929a02ce53b4acf4f2ffc6981ce4496f755e6d45fe0b2a692bcd52523f36",
-      "policy": "DER"
-    },
-    {
-      "subject": "C = GR, L = Athens, O = Hellenic Academic and Research Institutions Cert. Authority, CN = Hellenic Academic and Research Institutions ECC RootCA 2015",
-      "der_sha256": "44b545aa8a25e65a73ca15dc27fc36d24c1cb9953a066539b11582dc487b4833",
-      "policy": "DER"
     },
     {
       "subject": "C = CH, O = WISeKey, OU = OISTE Foundation Endorsed, CN = OISTE WISeKey Global Root GC CA",
@@ -611,5 +611,5 @@
       "policy": "ANCHOR"
     }
   ],
-  "bundle_sha256": "6216af976e9de71b21b46a4d721c6b6f349f5218d1da593beb04b677676c96a5"
+  "bundle_sha256": "84731395ad8a9bbcd9cc09c68fc03c91be32be6b328760f5c0da657dafa87101"
 }
