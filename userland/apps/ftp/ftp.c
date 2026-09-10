@@ -58,12 +58,11 @@
 #define FTP_HOST_MAX       (OS64_RESOLVE_NAME_MAX + 1)
 #define FTP_INPUT_MAX      1024      // one typed line
 
-// 64KB, and the size is load-bearing rather than round. It is the receive
-// ring (`TCP_RCV_BUF`), the send ring, and the block cache's line all at
-// once, so one read can drain everything that has arrived and one write is a
-// run the disk can take in a single pass. os64get learned this first and
-// wrote it down: at 4KB the file was written a block per syscall and the
-// transfer waited on the disk, not the wire.
+// 64KB, and the size is load-bearing rather than round: it is the block
+// cache's line, so one write is a run the disk takes in a single pass, and
+// one read drains a line's worth of whatever the receive ring holds. os64get
+// learned this first and wrote it down: at 4KB the file was written a block
+// per syscall and the transfer waited on the disk, not the wire.
 #define FTP_XFER_BUF       65536
 #define FTP_LOCAL_MAX      (FTP_PATH_MAX + 8)   // room for the ".part"
 

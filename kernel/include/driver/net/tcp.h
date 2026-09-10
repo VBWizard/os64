@@ -50,9 +50,15 @@
 //     in miniature.
 //     What is NOT offered: Nagle (RFC 896 — a keystroke goes out as its
 //     own segment, which is what a terminal wants and what a bulk writer
-//     never notices because it fills segments anyway), window scaling
-//     (RFC 1323 — 64KB is the most either window can say), and SACK.
-//     Each booked in DEBTS.md.
+//     never notices because it fills segments anyway) and SACK. Each
+//     booked in DEBTS.md.
+//   - WINDOW SCALING (RFC 7323, tcp_options.h): both windows are read and
+//     written through a shift count each side names in its SYN, so a
+//     connection is bounded by the rings below and the round trip, not by
+//     the sixteen bits of the header field. A peer that does not send the
+//     option gets the unscaled field, which is the 64KB the field can say.
+//     We dial only, so the SYN-ACK is what gets parsed; the parser reads
+//     a SYN's options the same way, which is what a listener needs.
 //   - Out-of-order arrivals are HELD, not dropped, since 2026-09-04: a
 //     segment inside the window is written into the receive ring at its
 //     own offset and absorbed when the gap closes (tcp_hold / tcp_absorb
@@ -98,28 +104,45 @@ typedef enum tcp_state
 // Buffers. The receive buffer IS the advertised window, so it bounds what the
 // peer may have in flight toward us — and a window that never grows is a
 // THROUGHPUT CEILING of window ÷ ROUND TRIP, whatever the link can carry.
-// Measured on the P5, 2026-09-09: a fetch from a host 28ms away flattened at
-// 87% of 64KB/28ms, and the same machine against a LAN server ran 179 Mb/s,
-// which is that same ceiling at a 2.9ms round trip — throughput tracking
-// 1/RTT across a tenfold change is the fingerprint. 64KB is the most a 16-bit
-// window field can say; RFC 1323 scaling is booked in DEBTS.md, and that row
-// is priced now rather than hypothetical.
+// The P5 measured that ceiling at 64KB on 2026-09-09: a fetch from a host
+// 28ms away flattened at 87% of 64KB/28ms, the same machine against a LAN
+// server ran the same ceiling at a 2.9ms round trip, and a Windows browser
+// across the same wifi pulled ~200 Mb/s from the 28ms host because every
+// stack built since 1992 scales its window past the header field.
 //
-// A NIC WITH NO INTERRUPT OF ITS OWN carries a second ceiling, and this
-// comment described only that one until the measurement above: such a NIC is
+// 1MB is the size because it is the bandwidth-delay product the P5 was
+// measured against with headroom: 200 Mb/s at 28ms is 700KB, and 1MB at
+// 28ms is 300 Mb/s, about what the P5's own link carries on a LAN (the
+// 300 Mbit/s download DOORBELL.md's bottom-half work was measured against).
+// The advertised
+// field is this window shifted down by TCP_RCV_WSCALE (tcp_options.h), the
+// smallest shift under which the whole ring fits in sixteen bits; a peer
+// that did not send the option sees the unscaled field, 64KB at most,
+// which is the old ceiling and not a regression.
+//
+// A NIC WITH NO INTERRUPT OF ITS OWN carries a second ceiling: it is
 // drained when the TICK rings the doorbell, so it can take at most a window
-// per pass — 64KB per 10ms is ~6.4MB/s (DOORBELL.md; virtio is the one that
-// keeps this cadence). A NIC that rings its own doorbell is drained on
-// arrival and answers only to the round trip, which is how the P5 measured
-// past this number. The 64KB was chosen under the tick-driven regime, where
-// 8KB here measured 366KB/s: the window emptied inside every pass — five
-// segments, then win=0 — and the sender idled for the rest of each one.
+// per pass — or its own receive ring per pass, whichever is smaller, and at
+// 1MB the ring is: virtio's 64 slots are ~93KB a tick, ~9MB/s, and what a
+// scaling peer sends past them in a tick is dropped and recovered as loss
+// (DOORBELL.md; virtio is the one that keeps this cadence; DEBTS § the
+// tick-driven ring). A NIC that rings its own doorbell is drained on
+// arrival and answers only to the round trip.
 //
-// It costs 64KB of kmalloc per open connection. MSS 1460 = the classic
-// ethernet number: 1500 MTU - 20 IP - 20 TCP, the reason so much of the
-// internet's traffic arrives in 1460-byte pieces.
-#define TCP_RCV_BUF  65536
+// It costs 1MB of kmalloc per open connection for this ring and as much
+// again for the send ring below, freed when the connection is stripped. MSS 1460 = the classic ethernet number: 1500 MTU - 20 IP -
+// 20 TCP, the reason so much of the internet's traffic arrives in
+// 1460-byte pieces.
+#define TCP_RCV_BUF  (1024 * 1024)
 #define TCP_MSS      1460
+
+// Our shift count: the smallest under which the whole receive ring fits
+// the sixteen-bit field. Smaller would clamp the window below the ring;
+// larger would coarsen the granularity for nothing.
+#define TCP_RCV_WSCALE 5
+_Static_assert((TCP_RCV_BUF >> TCP_RCV_WSCALE) <= 0xFFFF, "the receive ring does not fit the scaled window field");
+_Static_assert((TCP_RCV_BUF >> (TCP_RCV_WSCALE - 1)) > 0xFFFF, "TCP_RCV_WSCALE is larger than the ring needs");
+_Static_assert(TCP_RCV_WSCALE <= 14, "RFC 7323 caps the shift at 14");
 
 // The smallest MSS a peer may talk us into. The option is the peer's word
 // for what it can take, and a peer can say anything — zero included, which
@@ -133,10 +156,12 @@ typedef enum tcp_state
 // The send ring holds everything written and not yet acknowledged —
 // the segments in flight AND the bytes waiting behind them — so it is
 // also how far a write() can run ahead of the wire before it parks. Its
-// size is the receive buffer's on purpose: a 16-bit window means no peer
-// can ever have more than 64KB of ours in flight, so a larger ring would
-// only queue bytes it cannot send.
-#define TCP_SND_BUF  65536
+// size is the receive buffer's on purpose: a scaling peer grows the window
+// it offers as a transfer runs (Linux starts near 128KB and autotunes into
+// the megabytes), so an upload is bounded by the same round-trip
+// arithmetic as a download, and a smaller ring here would cap uploads
+// below downloads for no reason.
+#define TCP_SND_BUF  TCP_RCV_BUF
 
 // The initial congestion window, in segments, also the ceiling a sender
 // restarts at after an idle spell: RFC 6928's ten (2013), which is what
@@ -263,7 +288,14 @@ typedef struct tcp_conn
 	// judged by bytes, a lost bare SYN or FIN was never resent. Probe
 	// offers are separate (probe_seq). See TCP_SENDER.md.
 	uint32_t snd_una, snd_nxt, snd_max;
-	uint16_t snd_wnd, snd_mss;
+	uint32_t snd_wnd;          // the peer's window, already shifted by snd_wscale
+	uint16_t snd_mss;
+	// The shift counts from the SYN exchange (tcp_options.h): snd_wscale
+	// is applied to every window field the peer sends after its SYN,
+	// rcv_wscale to every field we send after ours. Both stay 0 unless
+	// the peer offered a shift, since scaling is only in force when both
+	// sides asked for it.
+	uint8_t  snd_wscale, rcv_wscale;
 	uint32_t snd_wl1, snd_wl2; // sequence and ACK of the last window update
 	uint8_t* snd_buf;
 	uint32_t snd_head, snd_count;

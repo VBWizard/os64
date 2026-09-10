@@ -1268,13 +1268,15 @@ static void sys_gen_net_dhcp(synth_text_t *t)
 // The counters are the shakedown instruments. This stack spent its first
 // weeks on a LAN, where retransmits and out_of_order_held read zero
 // forever; the chaos rig (VERIFICATION.md) and the real internet are where
-// they report weather, and whether a booked v1 debt (window scaling, SACK
-// — tcp.h states them) is worth paying is a question these numbers answer
-// with data instead of theory. Reassembly was the first one paid that way
-// (out_of_order_dropped priced it, out_of_order_held is the receipt), the
-// measured retransmit timer the second (retransmits priced it; rto and
-// srtt are the receipt), and the send window the third (an upload's
-// seconds priced it; inflight, sndq and cwnd are the receipt).
+// they report weather, and whether a booked v1 debt (SACK — tcp.h states
+// it) is worth paying is a question these numbers answer with data instead
+// of theory. Reassembly was the first one paid that way (out_of_order_dropped
+// priced it, out_of_order_held is the receipt), the measured retransmit
+// timer the second (retransmits priced it; rto and srtt are the receipt),
+// the send window the third (an upload's seconds priced it; inflight, sndq
+// and cwnd are the receipt), and window scaling the fourth (a download's
+// rate against its round trip priced it; a win column past 65535 is the
+// receipt).
 static void sys_gen_net_tcp(synth_text_t *t)
 {
 	// RFC 793's own vocabulary, netstat's spelling since 4.2BSD.
@@ -1319,7 +1321,7 @@ static void sys_gen_net_tcp(synth_text_t *t)
 		uint16_t local_port;
 		uint32_t state;
 		uint16_t mss;
-		uint16_t win;
+		uint32_t win;          // the peer's window, after its shift — past 16 bits when it scales
 		uint32_t buf_used;
 		uint64_t rx, tx, rexmit, ooo, held;
 		uint32_t rto_ms, srtt_ms;

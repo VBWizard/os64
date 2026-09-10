@@ -47,9 +47,9 @@ common elements is a weekend. The bosses are:
 ## The stance: the ladder is a TCP shakedown wearing costumes
 
 Our TCP (`kernel/src/driver/net/tcp.c`) is honest, LAN-calibrated v1 —
-16-bit windows, no SACK, no Nagle, no listener (what it HAS the chaos rig
+no SACK, no Nagle, no listener (what it HAS the chaos rig and the P5
 paid for, one debt at a time: reassembly, a measured RTO, a send window
-with congestion control). Every omission is a decision stated in tcp.h and
+with congestion control, scaled windows). Every omission is a decision stated in tcp.h and
 booked. The P5's fetch ran
 with ZERO retransmits: the LAN has never tested the hard half. Each ladder
 slice points the stack at traffic the last one didn't — and

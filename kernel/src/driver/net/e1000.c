@@ -257,13 +257,18 @@ typedef struct
 
 // Ring sizes. RDLEN/TDLEN must be a multiple of 128 bytes, and a descriptor
 // is 16 bytes, so the count must be a multiple of 8. The RX ring has to hold
-// everything a peer can send between two drains, and without an interrupt
-// the drain is once per tick: with a 64KB TCP window (tcp.h) that is up to 45 full
-// frames per tick, so 128 slots (256KB of buffers) leaves headroom for a
-// second connection or a burst of ARP and ping on top. TX has 63 usable
-// slots: enough for one 64KB flight at MSS 1460, but smaller segments and
-// concurrent connections can fill it. A refused frame remains TCP's loss
-// recovery responsibility; queue depth does not guarantee submission.
+// everything a peer can send between two drains. With the INTx doorbell
+// (DOORBELL.md) the drain is on arrival and the ring is a burst buffer;
+// without it — NETPOLL — the drain is once per tick, and a scaled TCP
+// window (tcp.h, 1MB) is up to ~700 full frames per tick, more than any
+// ring here holds, so under that regime the ring, not the window, is the
+// ceiling and the excess is dropped and recovered as loss. 128 slots (256KB
+// of buffers) is a tick's worth at the old 64KB window with headroom for a
+// second connection or a burst of ARP and ping. TX has 63 usable slots,
+// ~92KB of MSS-sized segments — less than a scaling peer's window, so a
+// bulk output pass stops at the first refusal and the ack clock resumes it.
+// A refused frame remains TCP's loss recovery responsibility; queue depth
+// does not guarantee submission.
 #define E1000_RX_DESCS  128
 #define E1000_TX_DESCS  64
 #define E1000_BUF_SIZE  2048   // must match RCTL_BSIZE_2048 above

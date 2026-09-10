@@ -66,6 +66,8 @@ static int32_t ipv4_send(net_device_t *,uint32_t,uint8_t,const void *,uint16_t);
 '''
 s+=source('kernel/include/driver/net/net_wire.h')
 s+=source('kernel/src/driver/net/net_checksum.c')
+s+=source('kernel/include/driver/net/tcp_options.h')
+s+=source('kernel/src/driver/net/tcp_options.c')
 s+=source('kernel/include/driver/net/tcp.h')
 s+=source('kernel/src/driver/net/tcp.c')
 s+='''

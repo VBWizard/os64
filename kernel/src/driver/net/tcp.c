@@ -29,6 +29,7 @@
 #include "driver/net/ethernet.h"
 #include "driver/net/ipv4.h"
 #include "driver/net/tcp.h"
+#include "driver/net/tcp_options.h"
 
 tcp_stats_t kTcpStats;
 
@@ -121,11 +122,37 @@ static uint32_t tcp_initial_seq(void)
 }
 
 // ── 2. SEGMENT CONSTRUCTION ─────────────────────────────────────────────────
-// How much room we still have for their bytes — this IS the flow control
-// the peer obeys. Advertising 0 stops them; we owe an update when drained.
-static uint16_t tcp_window(tcp_conn_t* c)
+// How much of the ring this peer may fill: its free space, capped at the
+// most the peer can ever be TOLD at its shift (tcp_options.h). A peer that
+// sent no shift is bounded by the 64KB its field can carry, whatever the
+// ring holds behind it — the bytes past that edge were never inside a
+// window it was given, so a segment landing there is not ours to keep.
+// This is the bound for accepting and holding data. It is NOT rounded to
+// the shift's unit: the peer may send exactly what it was told, and what
+// it was told was a rounded-down value of THIS number, so rounding here
+// too could trim a byte the peer was promised.
+static uint32_t tcp_rcv_room(tcp_conn_t* c)
 {
 	uint32_t free_space = TCP_RCV_BUF - c->rcv_count;
+	uint32_t ceiling = tcp_window_ceiling(c->rcv_wscale);
+	return free_space < ceiling ? free_space : ceiling;
+}
+
+// How much room we still have for their bytes, AS THE PEER WILL READ IT —
+// this IS the flow control the peer obeys. Advertising 0 stops them; we
+// owe an update when drained. The value is the room above rounded down to
+// what the field can say at our shift, because the silly-window floor
+// below has to judge the number on the wire, not the ring's count: 1465
+// free bytes at shift 5 is a field of 45 units, 1440 bytes, and a peer
+// keeping its half of the rule waits for a full segment. Judged on the
+// ring, that would have cleared zero_window while the wire still said
+// "less than one segment", and nothing would have said more.
+// tcp_send_segment writes it through the same shift, so the field is
+// exact; a SYN carries it unscaled and clamped, which is what the shift
+// is at that moment anyway.
+static uint32_t tcp_window(tcp_conn_t* c)
+{
+	uint32_t free_space = tcp_window_told(tcp_rcv_room(c), c->rcv_wscale);
 
 	// SILLY WINDOW SYNDROME, RECEIVER SIDE (RFC 1122 4.2.3.3), and the
 	// single most expensive line in this file until 2026-08-16.
@@ -149,20 +176,20 @@ static uint16_t tcp_window(tcp_conn_t* c)
 	if (free_space < TCP_MSS)
 		return 0;
 
-	return (uint16_t)(free_space > 0xFFFF ? 0xFFFF : free_space);
+	return free_space;
 }
 
-// Build and transmit one segment. `with_mss` adds the MSS option, which
-// only ever rides a SYN (that is the one moment both sides are allowed to
-// state their limits).
+// Build and transmit one segment. `syn_options` adds the MSS and window
+// scale options, which only ever ride a SYN (that is the one moment both
+// sides are allowed to state their limits).
 // The disposition is decided with submission. Driver drops remain TCP's
 // responsibility like network loss; PARKED/DROPPED stop a bulk output pass.
 // INVALID is a packet IPv4 cannot construct and terminates the connection.
 static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
-                                  const void* data, uint16_t data_len, bool with_mss)
+                                  const void* data, uint16_t data_len, bool syn_options)
 {
-	uint8_t seg[TCP_HDR_MIN + 4 + TCP_MSS];
-	uint16_t hdr_len = TCP_HDR_MIN + (with_mss ? 4 : 0);
+	uint8_t seg[TCP_HDR_MIN + TCP_SYN_OPTIONS_LEN + TCP_MSS];
+	uint16_t hdr_len = TCP_HDR_MIN + (syn_options ? TCP_SYN_OPTIONS_LEN : 0);
 
 	net_write16(seg + 0, c->local_port);
 	net_write16(seg + 2, c->peer_port);
@@ -172,19 +199,18 @@ static ipv4_tx_t tcp_send_segment(tcp_conn_t* c, uint32_t seq, uint8_t flags,
 	// be 20 to 60 bytes, and this is how the receiver finds the payload.
 	seg[12] = (uint8_t)((hdr_len / 4) << 4);
 	seg[13] = flags;
-	uint16_t win = tcp_window(c);
-	net_write16(seg + 14, win);
+	// A SYN's window field is never scaled (RFC 7323 §2.2): the shift is
+	// being negotiated in that very segment, so the field is read raw.
+	uint32_t win = tcp_window(c);
+	net_write16(seg + 14, tcp_window_field(win, (flags & TCP_SYN) ? 0 : c->rcv_wscale));
 	c->zero_window = (win == 0);
 	net_write16(seg + 16, 0);   // checksum, computed below
 	net_write16(seg + 18, 0);   // urgent pointer: never used here (URG is a
 	                            // 1981 idea that modern stacks treat as a
 	                            // security footgun and applications ignore)
 
-	if (with_mss)
-	{
-		seg[20] = 2; seg[21] = 4;                    // option kind 2, length 4
-		net_write16(seg + 22, TCP_MSS);
-	}
+	if (syn_options)
+		tcp_syn_options_write(seg + TCP_HDR_MIN, TCP_MSS, TCP_RCV_WSCALE);
 	if (data_len)
 		memcpy(seg + hdr_len, (void*)data, data_len);
 
@@ -758,7 +784,7 @@ static void tcp_rcv_store(tcp_conn_t* c, const uint8_t* data, uint16_t len)
 // hold, and a segment for which no slot is free is dropped, counted.
 static void tcp_hold(tcp_conn_t* c, uint32_t seq, const uint8_t* data, uint32_t len)
 {
-	uint32_t room = TCP_RCV_BUF - c->rcv_count;    // exactly what tcp_window offers, before its SWS rounding
+	uint32_t room = tcp_rcv_room(c);    // the edge the peer could have been told, before tcp_window's rounding and SWS floor
 	uint32_t wnd_end = c->rcv_nxt + room;
 	if (!seq_lt(seq, wnd_end))
 	{
@@ -857,7 +883,7 @@ static void tcp_absorb_held(tcp_conn_t* c)
 		if (seq_gt(end, c->rcv_nxt))
 		{
 			uint32_t more = end - c->rcv_nxt;
-			uint32_t room = TCP_RCV_BUF - c->rcv_count;
+			uint32_t room = tcp_rcv_room(c);
 			if (more > room)
 			{
 				// Cannot happen: a held range was inside the window when it
@@ -966,7 +992,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 	uint32_t ack      = net_read32(p + 8);
 	uint16_t hdr_len  = (uint16_t)((p[12] >> 4) * 4);
 	uint8_t  flags    = p[13];
-	uint16_t win      = net_read16(p + 14);
+	uint16_t win_field = net_read16(p + 14);
 	if (hdr_len < TCP_HDR_MIN || hdr_len > length)
 		return;
 	const uint8_t* data = p + hdr_len;
@@ -1098,9 +1124,15 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 		return;
 	}
 
+	// What the window field means is the peer's shift applied to it —
+	// except on a SYN, whose field is raw because the shift is what the SYN
+	// is negotiating (RFC 7323 §2.2). snd_wscale is 0 until that SYN has
+	// been parsed, so the order here is right for the SYN-ACK too.
+	uint32_t win = tcp_window_scaled(win_field, (flags & TCP_SYN) ? 0 : c->snd_wscale);
+
 	// Retain the newest window announcement using both sequence spaces.
 	// A reordered data segment can carry a current ACK but an old window.
-	uint16_t old_wnd = c->snd_wnd;
+	uint32_t old_wnd = c->snd_wnd;
 	if ((flags & TCP_ACK) && seq_geq(ack, c->snd_una) &&
 	    (c->state == TCP_SYN_SENT || seq_gt(seq, c->snd_wl1) ||
 	     (seq == c->snd_wl1 && seq_geq(ack, c->snd_wl2))))
@@ -1151,35 +1183,42 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 				c->state = TCP_ESTABLISHED;
 				kTcpStats.connections_opened++;
 
-				// Parse their MSS option if present — the one negotiation
-				// TCP does, and it lives in the SYN's option space.
+				// The SYN's option space is the one negotiation TCP does:
+				// their MSS, and their window shift (tcp_options.h). The
+				// parser reports what was said; what to make of it is
+				// decided here, out loud.
+				tcp_syn_options_t said;
+				tcp_syn_options_parse(p + TCP_HDR_MIN, hdr_len - TCP_HDR_MIN, &said);
 				c->snd_mss = 536;        // RFC 879's floor when nobody says otherwise
-				for (uint16_t o = TCP_HDR_MIN; o + 1 < hdr_len; )
-				{
-					uint8_t kind = p[o];
-					if (kind == 0) break;              // end of options
-					if (kind == 1) { o++; continue; }  // NOP padding
-					uint8_t olen = p[o + 1];
-					if (olen < 2 || o + olen > hdr_len) break;
-					if (kind == 2 && olen == 4)
-					{
-						uint16_t said = net_read16(p + o + 2);
-						if (said >= TCP_SND_MSS_MIN)   // tcp.h: a smaller one is refused, the floor stands
-							c->snd_mss = said;
-						else
-							printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u advertised MSS %u — refused, using %u\n",
-							       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, said, c->snd_mss);
-					}
-					o += olen;
-				}
+				if (said.mss >= TCP_SND_MSS_MIN)   // tcp.h: a smaller one is refused, the floor stands
+					c->snd_mss = said.mss;
+				else if (said.mss)
+					printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u advertised MSS %u — refused, using %u\n",
+					       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, said.mss, c->snd_mss);
 				if (c->snd_mss > TCP_MSS)
 					c->snd_mss = TCP_MSS;   // never send more than WE can build
+				// Scaling is in force only if both sides asked; we always
+				// do, so their answer decides. A shift past the RFC's
+				// ceiling is an error on their side and 14 is used, said
+				// aloud rather than silently.
+				if (said.wscale_sent)
+				{
+					c->snd_wscale = said.wscale;
+					if (c->snd_wscale > TCP_WSCALE_MAX)
+					{
+						printd(DEBUG_NET, "tcp: %u.%u.%u.%u:%u offered window shift %u — over the ceiling, using %u\n",
+						       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_wscale, TCP_WSCALE_MAX);
+						c->snd_wscale = TCP_WSCALE_MAX;
+					}
+					c->rcv_wscale = TCP_RCV_WSCALE;
+				}
 				c->cwnd = TCP_INIT_CWND_SEGMENTS * (uint32_t)c->snd_mss;
 				c->ssthresh = TCP_SND_BUF;  // slow start all the way up, until loss says otherwise
 
 				tcp_ack(c);
-				printd(DEBUG_NET, "tcp: established with %u.%u.%u.%u:%u (their mss %u, win %u)\n",
-				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_mss, win);
+				printd(DEBUG_NET, "tcp: established with %u.%u.%u.%u:%u (their mss %u, win %u, shifts %u/%u)\n",
+				       NET_IPV4_OCTETS(c->peer_ip), c->peer_port, c->snd_mss, win,
+				       c->snd_wscale, c->rcv_wscale);
 			}
 			break;
 
@@ -1350,7 +1389,7 @@ void tcp_input(net_device_t* dev, uint32_t src_ip, uint32_t dst_ip,
 			{
 				if (seq == c->rcv_nxt)
 				{
-					uint32_t room = TCP_RCV_BUF - c->rcv_count;   // up to the whole buffer, past 16 bits
+					uint32_t room = tcp_rcv_room(c);   // the ring, or the 64KB an unscaled peer was told
 					uint16_t take = data_len < room ? data_len : room;
 					tcp_rcv_store(c, data, take);
 					c->rcv_nxt += take;
@@ -1868,9 +1907,12 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// TCP user waiting on the lock, so it has to be cheap at exactly the
 	// load — a full range — it exists to handle. A draw that walked the
 	// connection list per candidate was ~16384 × list-length compares
-	// under those conditions (Codex, PR #46; 16384 connections at ~64KB
-	// apiece fit comfortably in this machine's RAM, so a full range is
-	// reachable, not theoretical).
+	// under those conditions (Codex, PR #46). Whether a full range is
+	// reachable is the machine's call: a connection holds TCP_RCV_BUF +
+	// TCP_SND_BUF of rings (tcp.h), so 16384 of them is 32GB, and on the
+	// 8GB QEMU rig the allocator's exhaustion panic arrives long before
+	// the last port does — but a machine with the RAM reaches the range,
+	// and the draw has to be cheap there.
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	uint16_t local_port = 0;
 	bool found = false;
