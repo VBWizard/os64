@@ -129,8 +129,8 @@ typedef enum tcp_state
 // tick-driven ring). A NIC that rings its own doorbell is drained on
 // arrival and answers only to the round trip.
 //
-// It costs 1MB of kmalloc per open connection, freed when the connection
-// is stripped. MSS 1460 = the classic ethernet number: 1500 MTU - 20 IP -
+// It costs 1MB of kmalloc per open connection for this ring and as much
+// again for the send ring below, freed when the connection is stripped. MSS 1460 = the classic ethernet number: 1500 MTU - 20 IP -
 // 20 TCP, the reason so much of the internet's traffic arrives in
 // 1460-byte pieces.
 #define TCP_RCV_BUF  (1024 * 1024)

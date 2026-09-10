@@ -119,7 +119,9 @@ def main():
             if syn:
                 names = options(pkt[t + 20:t + doff])
                 ws = next((int(x[3:]) for x in names if x.startswith("WS=")), None)
-                shift[(src, dst)] = ws
+                # The option is shown as sent; the shift USED is what the
+                # kernel uses, RFC 7323 §2.3's ceiling of 14.
+                shift[(src, dst)] = min(ws, 14) if ws is not None else None
                 line += " " + " ".join(names)
             elif (src, dst) not in shift or (dst, src) not in shift:
                 line += " (no SYN seen)"
