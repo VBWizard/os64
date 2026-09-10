@@ -226,8 +226,11 @@ Disable TLS 1.0/1.1, static RSA/ECDH key exchange, CBC/RC4/3DES/NULL suites,
 renegotiation, session resumption, and client certificates for this slice.
 Client-auth-required peers fail without a retry that weakens policy.
 
-Accept SHA-256/384/512 certificate and handshake signatures supported by the
-pinned engine. Refuse SHA-1 signatures in the validation profile. Require
+Accept SHA-256/384/512 peer certificate and handshake signatures supported by the
+pinned engine. Refuse SHA-1 signatures in the peer validation profile. Installed
+anchors supply a trusted name and key; their self-signature algorithm is not an
+import restriction
+(see [TLS_CERTIFICATE_POLICY.md](TLS_CERTIFICATE_POLICY.md)). Require
 actual RSA modulus bit lengths of at least 2048 and at most the selected
 upstream limit, including trust anchors. The upstream minimum-RSA setter
 uses byte length and does not cover anchors, so it cannot alone establish
@@ -298,7 +301,9 @@ The approved policy resolves a config basename through the conf ladder;
 the existing resolver does not accept `certs/roots.pem`. Resolve
 `tls.conf` through `os64_conf_find()` and read a `trust_store` setting naming
 an absolute PEM-bundle path. The default, when the config or setting is absent,
-is `/etc/certs/roots.pem`. A personal `tls.conf` can name a bundle under `/home`.
+is `/etc/certs/roots.pem`. The ext2 image ships the pinned public bundle described
+in [TLS_PUBLIC_ROOTS.md](TLS_PUBLIC_ROOTS.md). A personal `tls.conf` can name a
+bundle under `/home`.
 Reject empty/relative paths and malformed configuration; perform no shell or
 environment expansion. No kernel lookup change is needed.
 

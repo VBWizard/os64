@@ -428,7 +428,9 @@ userland:
 # ext2-ROOT boot (see the "/QEMU Boot (ext2 root)" Limine entry) finds the
 # same programs a FAT boot does. Rebuilds when the generator OR any binary
 # that rides it changes.
-$(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf GNUmakefile
+TLS_PUBLIC_ROOTS := trust/mozilla/2026-08-13/install/roots.pem
+
+$(EXT2_TEST_IMAGE): $(TLS_PUBLIC_ROOTS) tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTBINS) $(USERLAND_LIBS) $(KERNEL_FIXTURES) kernel/test/partition_info.txt etc/husk.rc etc/logd.conf etc/os64get.conf etc/hosts etc/crontab etc/net.conf etc/desktop.conf etc/gclock.conf etc/os64.conf etc/gui.conf etc/menu.conf etc/bootenv.conf GNUmakefile
 	@mkdir -p "$$(dirname $(EXT2_TEST_IMAGE))"
 	python3 tools/gen_ext2_testdata.py $(EXT2_STAGING)
 	rm -f $(EXT2_TEST_IMAGE)
@@ -447,6 +449,9 @@ $(EXT2_TEST_IMAGE): tools/gen_ext2_testdata.py $(USERLAND_BINS) $(USERLAND_TESTB
 	# /home/husk.rc (the user's, on its own partition) still wins the
 	# search; /fat/husk.rc remains the lifeboat's copy.
 	printf 'mkdir /bin\nmkdir /tests\nmkdir /lib\nmkdir /etc\nmkdir /tmp\ncd /etc\nwrite etc/husk.rc husk.rc\nwrite etc/logd.conf logd.conf\nwrite etc/os64get.conf os64get.conf\nwrite etc/hosts hosts\nwrite etc/crontab crontab\nwrite etc/net.conf net.conf\nwrite etc/desktop.conf desktop.conf\nwrite etc/gclock.conf gclock.conf\nwrite etc/os64.conf os64.conf\nwrite etc/gui.conf gui.conf\nwrite etc/menu.conf menu.conf\nwrite etc/bootenv.conf bootenv.conf\ncd /bin\n' > $(EXT2_STAGING)/debugfs_bins.cmds
+	# The pinned public roots are system configuration; /home/tls.conf can
+	# select another store through the configuration ladder.
+	printf 'mkdir /etc/certs\nwrite %s /etc/certs/roots.pem\n' "$(TLS_PUBLIC_ROOTS)" >> $(EXT2_STAGING)/debugfs_bins.cmds
 	$(foreach b,$(USERLAND_BINS),printf 'write %s %s\n' "$(b)" "$(notdir $(b))" >> $(EXT2_STAGING)/debugfs_bins.cmds;)
 	# /tests: the proof harness — the userland fixtures and the kernel-born
 	# ones, on one shelf. NOTE the tie-break if two source trees ever claim one

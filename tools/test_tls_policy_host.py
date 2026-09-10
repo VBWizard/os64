@@ -178,7 +178,15 @@ def corpus(work):
     case("serial-zero", with_serial(leaf, int_key, b"\0"), reason="DER", upstream=1)
     case("serial-zero-intermediate", chain=[leaf, with_serial(intermediate, root_key, b"\0")], reason="DER", upstream=1)
     zero_root = with_serial(root, root_key, b"\0")
-    anchor("anchor-serial-zero", zero_root, "DER")
+    anchor("anchor-serial-zero", zero_root, "OK")
+    case("trusted-serial-zero", trust=zero_root, success=True, upstream=1)
+    negative_root = with_serial(root, root_key, b"\xff")
+    anchor("anchor-serial-negative", negative_root, "OK")
+    case("trusted-serial-negative", trust=negative_root, success=True, upstream=1)
+    case("serial-negative-intermediate", chain=[leaf, with_serial(intermediate, root_key, b"\xff")], reason="DER")
+    case("serial-negative-trailing", chain=[leaf, intermediate, negative_root], reason="DER", upstream=1)
+    for label, value in [("empty", b""), ("nonminimal-zero", b"\0\0"), ("nonminimal-negative", b"\xff\xff")]:
+        anchor("anchor-serial-" + label, with_serial(root, root_key, value), "DER")
     case("serial-zero-trailing", chain=[leaf, intermediate, zero_root], reason="DER", upstream=1)
     for label, value in [("one", b"\x01"), ("sign-padding", b"\0\x80")]:
         case("serial-" + label, with_serial(leaf, int_key, value), success=True, upstream=1)
@@ -253,7 +261,8 @@ def corpus(work):
         changed = signature_value(leaf, lambda v: padded_signature(v, index))
         case(f"ecdsa-redundant-zero-{index}", changed, reason="DER", upstream=1)
         changed_root = signature_value(root, lambda v: padded_signature(v, index))
-        anchor(f"anchor-ecdsa-redundant-zero-{index}", changed_root, "DER")
+        anchor(f"anchor-ecdsa-redundant-zero-{index}", changed_root, "OK")
+        case(f"trusted-ecdsa-redundant-zero-{index}", trust=changed_root, success=True, upstream=1)
         case(f"ecdsa-trailing-root-padding-{index}", chain=[leaf, intermediate, changed_root], reason="DER", upstream=1)
     case("ecdsa-long-form-short-length", signature_value(leaf, lambda v: b"\x30\x81" + v[1:]), reason="DER", upstream=1)
     for label, value in [("empty-sequence", b"\x30\0"), ("zero-r", b"\x30\x06\x02\x01\0\x02\x01\x01"),
@@ -542,6 +551,30 @@ def corpus(work):
     sha1 = mutate(leaf, int_key, lambda t: t.__setitem__(2, (0x30, sha1_alg)), hashes.SHA1())
     outer = split(split(sha1)[0][1]); outer[1] = (0x30, sha1_alg)
     case("sha1-signature", tlv(0x30, join(outer)), reason="SIGNATURE")
+
+    # Trust is the installed name/key; the anchor's self-signature hash and
+    # time choice are metadata. The same encodings in peers keep their policy.
+    def sha1_root(cert):
+        fields = split(split(cert)[0][1])
+        tbs = split(fields[0][1])
+        algorithm = (0x30, tlv(6, bytes.fromhex("2a864886f70d010105")) + tlv(5, b""))
+        tbs[2] = algorithm
+        fields[0] = (0x30, join(tbs))
+        fields[1] = algorithm
+        fields[2] = (3, b"\0" + rsa_key.sign(tlv(*fields[0]), padding.PKCS1v15(), hashes.SHA1()))
+        return tlv(0x30, join(fields))
+    legacy_root = sha1_root(rsa_root)
+    anchor("anchor-sha1", legacy_root, "OK")
+    case("trusted-sha1-root", chain=[rsa_issued], trust=legacy_root, success=True)
+    case("peer-sha1-root", chain=[rsa_issued, legacy_root], trust=legacy_root, reason="SIGNATURE", upstream=1)
+    def generalized(tbs):
+        values = split(tbs[4][1])
+        values = [(24, b"20" + value) if tag == 23 else (tag, value) for tag, value in values]
+        tbs[4] = (0x30, join(values))
+    early_generalized = mutate(root, root_key, generalized)
+    anchor("anchor-generalized-before-2050", early_generalized, "OK")
+    case("trusted-generalized-before-2050", trust=early_generalized, success=True, upstream=1)
+    case("peer-generalized-before-2050", chain=[leaf, intermediate, early_generalized], reason="DER", upstream=1)
 
     # A large encoded DN reaches the aggregate anchor-byte limit before count.
     def large_name(tbs):
