@@ -362,9 +362,18 @@ evidence deciding which kernel debt gets paid, with data instead of theory.
    NOTE: the kernel already names `telnetd` as TCP listen()'s future
    customer (syscall.c) — the LISTEN slice itself is kernel work, not this.
 
-6. **FTP, PASV mode (port 21).** The multi-connection shakedown: control
-   channel + a data connection per transfer, ephemeral-port churn — the
-   browser's connection pattern rehearsed before the browser exists.
+6. **FTP, PASV mode (port 21) — DONE 2026-09-09.** The multi-connection
+   shakedown: control channel + a data connection per transfer,
+   ephemeral-port churn — the browser's connection pattern rehearsed before
+   the browser exists. `/bin/ftp` is the interactive 4.2BSD client, passive
+   only, `TYPE I` always, LIST printed rather than parsed; `FTP.md` carries
+   the rulings and the deferrals, VERIFICATION.md § FTP client acceptance
+   carries the evidence. The rung delivered what it was put on the ladder
+   for: two live connections, a fresh ephemeral port per transfer, and the
+   NAT case — a server advertising an address the client cannot reach —
+   arriving for free through slirp rather than being staged.
+   An `ftp://` scheme for os64get is the increment this leaves cheap; the
+   protocol half is already a syscall-free file with a host harness.
 
 Beside the ladder, BUILT (2026-09-02): the **chaos rig**, `tools/cable.py`
 — a frame-level cable with weather in it (loss, delay, jitter, reorder,
