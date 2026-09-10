@@ -25,7 +25,7 @@ os64_tls_transfer_t os64_tls_read_plaintext(os64_tls_client *c, void *p, size_t 
 { return os64_tls_engine_read((os64_tls_engine *)c, p, n); }
 os64_tls_status_t os64_tls_flush(os64_tls_client *c) { return os64_tls_engine_flush((os64_tls_engine *)c); }
 os64_tls_status_t os64_tls_begin_close(os64_tls_client *c) { return os64_tls_engine_close((os64_tls_engine *)c); }
-os64_tls_status_t os64_tls_transport_eof(os64_tls_client *c) { return os64_tls_engine_eof((os64_tls_engine *)c); }
+os64_tls_status_t os64_tls_input_eof(os64_tls_client *c) { return os64_tls_engine_eof((os64_tls_engine *)c); }
 os64_tls_status_t os64_tls_abort(os64_tls_client *c, os64_tls_status_t reason)
 { return os64_tls_engine_abort((os64_tls_engine *)c, reason); }
 const char *os64_tls_license(void) { return tls_license; }

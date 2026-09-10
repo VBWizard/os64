@@ -17,7 +17,13 @@ static unsigned closed, freed, aborts, allocations, write_waits, read_waits;
 static int64_t write_error, read_error;
 static unsigned char offered[9000], sent[9000], received[9000], fed[9000];
 static size_t offered_at, offered_end, sent_end, received_at, received_end, fed_end, write_cap, feed_cap;
-static uint64_t create_ticks;
+static uint64_t create_ticks, last_read_ms, last_write_ms;
+static unsigned read_calls, write_calls;
+static bool interrupt_read_wait, interrupt_write_wait, freeze_wait;
+static void elapsed(uint64_t ms) {
+ if (!freeze_wait) clock_value.ticks += ms / 1000 * clock_value.per_second +
+     ((ms % 1000) * clock_value.per_second + 999) / 1000;
+}
 static size_t allocation_size;
 void *os64_malloc(size_t n) { if (fail_alloc) return NULL; allocations++; allocation_size=n; return calloc(1,n); }
 void os64_free(void *p) {
@@ -33,16 +39,24 @@ int64_t os64_close(int32_t h) { assert(h==7); closed++; return 0; }
 int64_t os64_write_for(int32_t h,const void *p,size_t n,uint64_t ms) {
  assert(h==7);
  assert(n);
- assert(!closed && ms<=10);
- if(ms) { write_waits++; clock_value.ticks++; }
+ assert(!closed && ms!=UINT64_MAX); write_calls++;
+ if(ms) {
+  write_waits++; last_write_ms=ms;
+  if(interrupt_write_wait) { interrupt_write_wait=false; return OS64_INTERRUPTED; }
+  elapsed(ms);
+ }
  if(write_error) return write_error;
  if(block_write) return OS64_ERR_TIMEOUT;
  if(n>write_cap) n=write_cap;
  assert(sent_end+n<=sizeof sent); memcpy(sent+sent_end,p,n); sent_end+=n; return n;
 }
 int64_t os64_read_for(int32_t h,void *p,size_t n,uint64_t ms) {
- assert(h==7 && !closed && ms<=10);
- if(ms) { read_waits++; clock_value.ticks++; }
+ assert(h==7 && !closed && ms!=UINT64_MAX); read_calls++;
+ if(ms) {
+  read_waits++; last_read_ms=ms;
+  if(interrupt_read_wait) { interrupt_read_wait=false; return OS64_INTERRUPTED; }
+  elapsed(ms);
+ }
  if(read_error) return read_error;
  if(eof) return 0;
  if(block_read || received_at==received_end) return OS64_ERR_TIMEOUT;
@@ -88,7 +102,7 @@ os64_tls_status_t os64_tls_begin_close(os64_tls_client *c) {
  if(!(engine.flags&OS64_TLS_HANDSHAKE_DONE)) return os64_tls_abort(c,OS64_TLS_CANCELLED);
  return engine.status;
 }
-os64_tls_status_t os64_tls_transport_eof(os64_tls_client *c) {
+os64_tls_status_t os64_tls_input_eof(os64_tls_client *c) {
  assert(c==&client); engine.status=OS64_TLS_TRUNCATED; return engine.status;
 }
 static void reset(void) {
@@ -97,7 +111,8 @@ static void reset(void) {
  clock_value=(os64_ticks_t){100,100};
  bad_clock=fail_alloc=refuse_create=eof=block_write=block_read=clean_after_take=false;
  closed=freed=aborts=write_waits=read_waits=0;
- write_error=read_error=0; create_ticks=0;
+ write_error=read_error=0; create_ticks=last_read_ms=last_write_ms=0;
+ read_calls=write_calls=0; interrupt_read_wait=interrupt_write_wait=freeze_wait=false;
  offered_at=offered_end=sent_end=received_at=received_end=fed_end=0;
  write_cap=3; feed_cap=2;
  for(size_t i=0;i<sizeof offered;i++) offered[i]=received[i]=(unsigned char)(i*13);
@@ -137,7 +152,7 @@ int main(void) {
  assert(os64_tls_transport_step(t,0)==OS64_TLS_OK); // Took ownership of pending output.
  assert(os64_tls_transport_step(t,1000)==OS64_TLS_NEED_PROGRESS);
  assert(os64_tls_transport_step(t,1000)==OS64_TLS_NEED_PROGRESS);
- assert(write_waits==1 && read_waits==1 && !closed); destroy(t);
+ assert(write_waits==1 && read_waits==1 && last_write_ms==10 && last_read_ms==10 && !closed); destroy(t);
 
  reset(); t=create();
  for(unsigned i=0;i<2999;i++) {
@@ -180,21 +195,79 @@ int main(void) {
  offered_end=7; engine.flags|=OS64_TLS_SEND_CIPHER; clean_after_take=true; write_error=-1;
  assert(os64_tls_transport_step(t,0)==OS64_TLS_TRANSPORT); destroy(t);
 
- for(unsigned i=0;i<7;i++) {
+ // A single direction gets the caller's patience, not a 10ms wake loop.
+ reset(); authenticated(); t=create();
+ assert(os64_tls_transport_step(t,5000)==OS64_TLS_NEED_PROGRESS);
+ assert(read_waits==1 && last_read_ms==5000 && !write_waits && clock_value.ticks==600); destroy(t);
+ reset(); authenticated(); t=create(); os64_tls_transport_state(t);
+ engine.flags &= ~OS64_TLS_RECV_CIPHER; engine.flags |= OS64_TLS_SEND_CIPHER;
+ offered_end=7; block_write=true;
+ assert(os64_tls_transport_step(t,0)==OS64_TLS_OK);
+ assert(os64_tls_transport_step(t,5000)==OS64_TLS_NEED_PROGRESS);
+ assert(write_waits==1 && last_write_ms==5000 && !read_waits && !closed); destroy(t);
+
+ // The protocol deadline still bounds a long one-direction wait, including
+ // a multi-second tail, a fractional millisecond and a saturated duration.
+ reset(); t=create(); clock_value.ticks+=2800;
+ assert(os64_tls_transport_step(t,5000)==OS64_TLS_TIMEOUT && last_read_ms==2000); destroy(t);
+ reset(); clock_value.per_second=333; t=create(); clock_value.ticks+=9989;
+ assert(os64_tls_transport_step(t,5000)==OS64_TLS_TIMEOUT && last_read_ms==4); destroy(t);
+ reset(); authenticated(); t=create(); os64_tls_transport_state(t);
+ assert(os64_tls_transport_begin_close(t)==OS64_TLS_OK);
+ assert(os64_tls_transport_step(t,5000)==OS64_TLS_TIMEOUT && last_read_ms==2000); destroy(t);
+ reset(); limits=(os64_tls_transport_limits_t){UINT64_MAX-1,2000}; freeze_wait=true;
+ assert(os64_tls_transport_create(&cfg,7,&limits,&t)==OS64_TLS_OK);
+ assert(os64_tls_transport_step(t,UINT64_MAX-1)==OS64_TLS_NEED_PROGRESS && last_read_ms==UINT64_MAX-1); destroy(t);
+
+ // Interrupt both poll and blocking paths. The step must return without
+ // another I/O attempt, and a later step must resume the exact retained data.
+ for(unsigned i=0;i<4;i++) {
+  reset(); authenticated(); t=create(); os64_tls_transport_state(t);
+  bool writing=(i&1)!=0, waiting=(i&2)!=0;
+  if(writing) {
+   engine.flags &= ~OS64_TLS_RECV_CIPHER; engine.flags |= OS64_TLS_SEND_CIPHER;
+   offered_end=7;
+   assert(os64_tls_transport_step(t,0)==OS64_TLS_OK && sent_end==3);
+   if(waiting) { block_write=true; interrupt_write_wait=true; }
+   else write_error=OS64_INTERRUPTED;
+  } else {
+   if(waiting) interrupt_read_wait=true;
+   else read_error=OS64_INTERRUPTED;
+  }
+  unsigned calls=writing ? write_calls : read_calls;
+  assert(os64_tls_transport_step(t,5000)==OS64_TLS_NEED_PROGRESS);
+  assert((writing ? write_calls : read_calls)==calls+(waiting ? 2u : 1u));
+  assert(!closed && !aborts && !freed && os64_tls_transport_state(t).status==OS64_TLS_OK);
+  read_error=write_error=0; block_write=false;
+  if(writing) {
+   while(sent_end<offered_end) assert(os64_tls_transport_step(t,0)==OS64_TLS_OK);
+   assert(sent_end==7 && !memcmp(sent,offered,7));
+  } else {
+   received_end=7;
+   while(fed_end<received_end) assert(os64_tls_transport_step(t,0)==OS64_TLS_OK);
+   assert(fed_end==7 && !memcmp(fed,received,7));
+  }
+  assert(os64_tls_transport_abort(t,OS64_TLS_CANCELLED)==OS64_TLS_CANCELLED && closed==1); destroy(t);
+ }
+ // A signal does not retire or restart the original handshake budget.
+ reset(); t=create(); read_error=OS64_INTERRUPTED;
+ assert(os64_tls_transport_step(t,5000)==OS64_TLS_NEED_PROGRESS && !closed);
+ clock_value.ticks+=3000;
+ assert(os64_tls_transport_step(t,5000)==OS64_TLS_TIMEOUT); destroy(t);
+
+ for(unsigned i=0;i<5;i++) {
   reset(); t=create();
-  if(i==0) read_error=OS64_INTERRUPTED;
-  if(i==1) read_error=-1;
-  if(i==2) eof=true;
-  if(i==3) bad_clock=true;
-  if(i==4) clock_value.ticks--;
-  if(i==5) { offered_end=3; engine.flags|=OS64_TLS_SEND_CIPHER; write_error=OS64_INTERRUPTED; }
-  if(i==6) clock_value.per_second++;
-  os64_tls_status_t expected[]={OS64_TLS_CANCELLED,OS64_TLS_TRANSPORT,OS64_TLS_TRUNCATED,OS64_TLS_BAD_TIME,OS64_TLS_BAD_TIME,OS64_TLS_CANCELLED,OS64_TLS_BAD_TIME};
+  if(i==0) read_error=-1;
+  if(i==1) eof=true;
+  if(i==2) bad_clock=true;
+  if(i==3) clock_value.ticks--;
+  if(i==4) clock_value.per_second++;
+  os64_tls_status_t expected[]={OS64_TLS_TRANSPORT,OS64_TLS_TRUNCATED,OS64_TLS_BAD_TIME,OS64_TLS_BAD_TIME,OS64_TLS_BAD_TIME};
   assert(os64_tls_transport_step(t,10)==expected[i]);
   assert(os64_tls_transport_abort(t,OS64_TLS_CANCELLED)==expected[i]); destroy(t);
  }
  reset(); t=create(); engine.status=OS64_TLS_CERTIFICATE; engine.policy_reason=OS64_TLS_POLICY_SAN; engine.upstream_error=99;
  os64_tls_state_t state=os64_tls_transport_state(t);
  assert(state.status==OS64_TLS_CERTIFICATE && state.policy_reason==OS64_TLS_POLICY_SAN && state.upstream_error==99); destroy(t);
- puts("TLS transport seams PASS: ownership, short I/O, both directions, deadlines, final flights, EOF, cancellation and clock failure");
+ puts("TLS transport seams PASS: ownership, short I/O, both directions, caller patience, interrupted/resumed I/O, deadlines, final flights, EOF, explicit cancellation and clock failure");
 }

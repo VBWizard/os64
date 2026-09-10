@@ -49,7 +49,17 @@ int main(int argc, char **argv)
                 os64_tls_transport_flush(transport);
             }
             os64_tls_transfer_t moved = os64_tls_transport_read(transport, bytes, sizeof bytes);
-            for (size_t i = 0; i < moved.transferred; i++) if (bytes[i] != pattern(received + i)) goto done;
+            for (size_t i = 0; i < moved.transferred; i++) {
+                if (bytes[i] != pattern(received + i)) {
+                    char mismatch[128];
+                    os64_snprintf(mismatch, sizeof mismatch,
+                        "TLSTRANSPORT plaintext mismatch at offset %lu: expected 0x%02x, got 0x%02x",
+                        (uint64_t)(received + i), (unsigned)pattern(received + i), (unsigned)bytes[i]);
+                    os64_printf("%s\n", mismatch);
+                    os64_serial_log(mismatch);
+                    goto done;
+                }
+            }
             received += moved.transferred;
             if (received > goal) goto done;
             if (moved.status != OS64_TLS_OK && moved.status != OS64_TLS_NEED_PROGRESS) { status = moved.status; break; }

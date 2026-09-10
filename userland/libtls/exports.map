@@ -9,7 +9,7 @@
     os64_tls_read_plaintext;
     os64_tls_flush;
     os64_tls_begin_close;
-    os64_tls_transport_eof;
+    os64_tls_input_eof;
     os64_tls_abort;
     os64_tls_status_name;
     os64_tls_license;

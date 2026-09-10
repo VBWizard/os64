@@ -183,7 +183,7 @@ count, then discard the view before any further engine operation.
 | `write_plaintext` | Accept a prefix only after the handshake and certificate policy succeed. Accepted means copied into TLS, not sent or acknowledged by the peer. |
 | `read_plaintext` | Return an authenticated prefix. Exhaustion while the connection is live is a need-for-progress result, not EOF. |
 | `flush` | Request records for buffered plaintext; completing this call does not prove transport delivery. |
-| `transport_eof` | Record that no more encrypted input can arrive. A bare TCP FIN does not become successful TLS EOF. |
+| `input_eof` | Record that no more encrypted input can arrive. A bare TCP FIN does not become successful TLS EOF. |
 | `begin_close` | Stop new plaintext writes and initiate orderly TLS closure after accepted plaintext is flushed. Continue driving encrypted I/O. |
 | `abort` / `free` | Abort stops I/O with a sticky terminal reason. Free wipes secrets and releases state without blocking. Neither closes a caller-owned TCP handle. |
 
@@ -421,7 +421,9 @@ cancellation.
 
 Adapter byte ownership is explicit: a ciphertext chunk taken from the engine
 stays in one bounded pending-output buffer until fully written. A short write
-advances its offset; an error aborts the connection. Never regenerate already
+advances its offset; a transport failure aborts the connection. Caught I/O
+interruption returns control with the connection and pending bytes intact;
+the caller decides whether to resume or explicitly abort. Never regenerate already
 accepted plaintext to retry an encrypted suffix. Retain unconsumed input too.
 The driver alternates ready directions and drains authenticated plaintext
 without unbounded buffering. On zero progress it waits for the required event

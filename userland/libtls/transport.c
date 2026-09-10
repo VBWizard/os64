@@ -34,6 +34,11 @@ static uint64_t deadline(uint64_t now, uint32_t rate, uint64_t ms)
     uint64_t ticks = seconds * rate + fraction;
     return ticks > UINT64_MAX - now ? UINT64_MAX : now + ticks;
 }
+static uint64_t remaining_ms(uint64_t ticks, uint32_t rate)
+{
+    uint64_t seconds = ticks / rate, fraction = ((ticks % rate) * 1000 + rate - 1) / rate;
+    return seconds > (UINT64_MAX - fraction) / 1000 ? UINT64_MAX : seconds * 1000 + fraction;
+}
 static void release_handle(os64_tls_transport *t)
 {
     if (t->handle < 0) return;
@@ -160,36 +165,40 @@ static bool can_write(os64_tls_transport *t)
 {
     return !fatal(inspect(t).status) && t->output_at < t->output_end;
 }
-static bool receive(os64_tls_transport *t, uint64_t ms)
+static bool receive(os64_tls_transport *t, uint64_t ms, bool *interrupted)
 {
     if (!can_read(t)) return false;
     int64_t n = os64_read_for(t->handle, t->input, sizeof t->input, ms);
+    if (n == OS64_INTERRUPTED) { *interrupted = true; return false; }
     if (n == OS64_ERR_TIMEOUT) return false;
     if (n < 0 || (uint64_t)n > sizeof t->input) {
-        fail(t, n == OS64_INTERRUPTED ? OS64_TLS_CANCELLED : OS64_TLS_TRANSPORT); return false;
+        fail(t, OS64_TLS_TRANSPORT); return false;
     }
     t->input_at = 0; t->input_end = (size_t)n;
-    if (!n) os64_tls_transport_eof(t->client);
+    if (!n) os64_tls_input_eof(t->client);
     return true;
 }
-static bool send(os64_tls_transport *t, uint64_t ms)
+static bool send(os64_tls_transport *t, uint64_t ms, bool *interrupted)
 {
     if (!can_write(t)) return false;
     size_t length = t->output_end - t->output_at;
     int64_t n = os64_write_for(t->handle, t->output + t->output_at, length, ms);
+    if (n == OS64_INTERRUPTED) { *interrupted = true; return false; }
     if (n == OS64_ERR_TIMEOUT) return false;
     if (n <= 0 || (uint64_t)n > length) {
-        fail(t, n == OS64_INTERRUPTED ? OS64_TLS_CANCELLED : OS64_TLS_TRANSPORT); return false;
+        fail(t, OS64_TLS_TRANSPORT); return false;
     }
     t->output_at += (size_t)n;
     return true;
 }
-static bool poll(os64_tls_transport *t)
+static bool poll(os64_tls_transport *t, bool *interrupted)
 {
     bool progress = feed(t);
     progress |= take(t);
-    progress |= send(t, 0);
-    progress |= receive(t, 0);
+    progress |= send(t, 0, interrupted);
+    if (*interrupted) return progress;
+    progress |= receive(t, 0, interrupted);
+    if (*interrupted) return progress;
     progress |= feed(t);
     return progress;
 }
@@ -199,9 +208,12 @@ os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t timeou
     if (!t || timeout_ms == UINT64_MAX) return OS64_TLS_BAD_ARGUMENT;
     os64_tls_state_t state = inspect(t);
     if (state.status != OS64_TLS_OK) return state.status;
-    bool progress = poll(t);
+    bool interrupted = false;
+    bool progress = poll(t, &interrupted);
     state = inspect(t);
     if (state.status != OS64_TLS_OK) return state.status;
+    // A caught signal gives control back to the caller without another park.
+    if (interrupted) return OS64_TLS_NEED_PROGRESS;
     if (progress) return OS64_TLS_OK;
     if (!timeout_ms || (state.flags & OS64_TLS_RECV_PLAIN)) return OS64_TLS_NEED_PROGRESS;
     bool reading = can_read(t), writing = can_write(t);
@@ -209,23 +221,22 @@ os64_tls_status_t os64_tls_transport_step(os64_tls_transport *t, uint64_t timeou
         state = inspect(t);
         return state.status == OS64_TLS_OK ? OS64_TLS_NEED_PROGRESS : state.status;
     }
-    uint64_t wait = timeout_ms < WAIT_SLICE_MS ? timeout_ms : WAIT_SLICE_MS;
+    uint64_t wait = timeout_ms;
+    if (reading && writing && wait > WAIT_SLICE_MS) wait = WAIT_SLICE_MS;
     if (!t->handshake_done || t->closing) {
         os64_tls_status_t status = inspect(t).status;
         if (status != OS64_TLS_OK) return status;
         uint64_t ticks = t->deadline - t->last_tick;
-        // Only convert the small tail; a distant saturated deadline needs no multiplication.
-        if (ticks <= t->rate) {
-            uint64_t remaining = (ticks * 1000 + t->rate - 1) / t->rate;
-            if (remaining < wait) wait = remaining;
-        }
+        uint64_t remaining = remaining_ms(ticks, t->rate);
+        if (remaining < wait) wait = remaining;
     }
-    if (reading && (!writing || t->wait_read)) progress = receive(t, wait);
-    else progress = send(t, wait);
+    if (reading && (!writing || t->wait_read)) progress = receive(t, wait, &interrupted);
+    else progress = send(t, wait, &interrupted);
     if (reading && writing) t->wait_read = !t->wait_read;
-    progress |= poll(t);
+    if (!interrupted) progress |= poll(t, &interrupted);
     state = inspect(t);
-    return state.status != OS64_TLS_OK ? state.status : progress ? OS64_TLS_OK : OS64_TLS_NEED_PROGRESS;
+    return state.status != OS64_TLS_OK ? state.status :
+           interrupted ? OS64_TLS_NEED_PROGRESS : progress ? OS64_TLS_OK : OS64_TLS_NEED_PROGRESS;
 }
 
 static os64_tls_transfer_t plaintext(os64_tls_transport *t, void *data, size_t length, bool writing)

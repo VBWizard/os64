@@ -19,14 +19,17 @@ typedef struct { uint64_t handshake_ms, shutdown_ms; } os64_tls_transport_limits
 // type. One serialized owner; do not use the handle or reenter operations.
 OS64_TLS_TRANSPORT_API os64_tls_status_t os64_tls_transport_create(const os64_tls_config_t *config,
     int32_t handle, const os64_tls_transport_limits_t *limits, os64_tls_transport **out);
+// State inspection enforces deadlines and may close the handle on terminal cleanup.
 OS64_TLS_TRANSPORT_API os64_tls_state_t os64_tls_transport_state(os64_tls_transport *transport);
 
-// Try ready network directions, then request a wait of min(timeout_ms,
-// 10 ms, remaining protocol budget), rounded up by the kernel to ticks,
-// on one needed direction. 0 polls; UINT64_MAX
-// is refused. OK means progress, NEED_PROGRESS means the caller must drain
-// plaintext, supply/flush output, or step with a wait. Empty waits preserve
-// the connection. Handshake/shutdown expiry and caught I/O signals abort it.
+// Try ready network directions, then wait up to timeout_ms, capped by the
+// remaining protocol budget and rounded up by the kernel to ticks. When
+// both directions need service, cap the wait at 10 ms and alternate them.
+// 0 polls; UINT64_MAX is refused. OK means progress; NEED_PROGRESS means an
+// empty or interrupted wait, or that plaintext/output needs caller service.
+// A caught I/O signal returns NEED_PROGRESS promptly with the connection and
+// pending bytes intact. The caller may resume or explicitly abort(CANCELLED).
+// Handshake/shutdown expiry aborts the connection.
 OS64_TLS_TRANSPORT_API os64_tls_status_t os64_tls_transport_step(os64_tls_transport *transport, uint64_t timeout_ms);
 
 // Nonblocking authenticated plaintext prefixes. Inspect transferred even

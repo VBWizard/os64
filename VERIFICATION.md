@@ -330,10 +330,27 @@ site packages disabled. It uses the fixed fixture key in PEM form and Python's
 standard library; it does not require the fixture generator's `cryptography`
 dependency.
 
-**Production checkout, reported by Chris:** all four transport cases (`good`,
+**Initial-slice production checkout, reported by Chris:** all four transport cases (`good`,
 `stall`, `truncated`, `badname`) passed on the Bosgame P5 against the peer
 running on the Windows host. This adds physical-machine/network-path evidence
 to the host and QEMU checks; the peer uses the same controlled fixture trust.
+
+**Fable review corrections (2026-09-10):** the ASan/UBSan adapter suite
+checks caught interruptions during reads/writes in both polls and waits,
+prompt return without another I/O attempt, exact resumed bytes and explicit
+cancellation. It checks 5-second single-direction waits, 10 ms alternating
+waits when both directions need service, multi-second/fractional/saturated
+protocol-budget conversion and unchanged deadlines across interruption.
+The sanitized public input/engine suite, userland build and ELF audit passed
+with the byte-client EOF entry point renamed to `os64_tls_input_eof`.
+
+The copied-root QEMU rig passed the four transport cases and guest
+`testrun tlslibtest`. A temporary peer variant sent an authenticated but
+incorrect first plaintext byte; the probe rejected it and reported
+`plaintext mismatch at offset 0: expected 0x00, got 0x01` to the console and
+serial log. The peer ran with `python3 -S`; post-shutdown `e2fsck -fn` passed.
+These correction results are host/QEMU evidence; the P5 results above cover
+the initial slice.
 
 ## TCP write patience acceptance (2026-09-09)
 

@@ -61,7 +61,7 @@ int main(int argc, char **argv)
         os64_tls_status_t terminal;
         if (!run) terminal = os64_tls_abort(client, OS64_TLS_TIMEOUT);
         else if (run == 1) terminal = os64_tls_begin_close(client);
-        else terminal = os64_tls_transport_eof(client);
+        else terminal = os64_tls_input_eof(client);
         pass &= terminal == (!run ? OS64_TLS_TIMEOUT : run == 1 ? OS64_TLS_CANCELLED : OS64_TLS_TRUNCATED);
         pass &= os64_tls_abort(client, OS64_TLS_TRANSPORT) == terminal;
         pass &= os64_tls_feed_ciphertext(client, "x", 1).status == terminal;

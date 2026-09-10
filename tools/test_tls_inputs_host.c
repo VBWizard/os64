@@ -22,7 +22,7 @@
 #define os64_tls_engine_read os64_tls_read_plaintext
 #define os64_tls_engine_flush os64_tls_flush
 #define os64_tls_engine_close os64_tls_begin_close
-#define os64_tls_engine_eof os64_tls_transport_eof
+#define os64_tls_engine_eof os64_tls_input_eof
 #define os64_tls_engine_abort os64_tls_abort
 #endif
 

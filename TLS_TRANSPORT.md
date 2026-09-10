@@ -21,12 +21,12 @@ budget too. An expired active deadline is checked before that transition.
 
 `step(timeout_ms)` performs bounded transport work, trying both ready
 network directions before waiting. Zero polls. It waits on one needed
-direction using the minimum of 10 ms, the supplied finite maximum, and the
-remaining protocol budget, rounded up by the kernel to scheduler ticks,
-then checks progress again. It alternates the waiting
-direction when both need service. An empty wait returns NEED_PROGRESS and
-leaves the connection usable. This scheduling quantum keeps the other
-direction and application cancellation reachable without a helper thread.
+direction using the supplied finite patience, capped by the remaining protocol
+budget and rounded up by the kernel to scheduler ticks, then checks progress
+again. When both directions need service, it caps the wait at 10 ms and
+alternates them so a full send ring cannot starve input. A single-direction
+wait uses the caller's patience without periodic adapter wakeups. Empty waits
+return NEED_PROGRESS and leave the connection usable.
 A caller must not busy-loop on NEED_PROGRESS: drain available plaintext,
 supply/flush output, or call step with a finite wait as appropriate.
 
@@ -44,7 +44,10 @@ handshake ciphertext has reached TCP, so a blocked final flight remains
 subject to the handshake deadline.
 
 Handshake/shutdown expiration is terminal TIMEOUT. Caught OS I/O interruption
-is terminal CANCELLED; network errors are TRANSPORT. Raw TCP EOF goes through
+returns NEED_PROGRESS promptly, preserving the connection and pending bytes;
+that step does not start another I/O attempt after the interruption. The caller
+decides whether to resume or explicitly abort with CANCELLED. Protocol deadline
+expiry still wins if the budget has expired. Network errors are TRANSPORT. Raw TCP EOF goes through
 the engine's truncation rules. Received close_notify is clean TLS EOF, but a
 pending close reply must be submitted before the adapter reports completed
 closure. An error while submitting that reply is a transport failure.
