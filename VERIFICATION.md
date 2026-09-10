@@ -396,6 +396,117 @@ Fable's PHY work is separate. Production r8125 unplug/replug and combined-tree
 throughput remain physical-hardware acceptance work. No link notification is
 used as a substitute for ACK progress.
 
+## FTP client acceptance (2026-09-09)
+
+BROWSER.md's rung 6, and the first thing in the tree to hold two connections
+open at once. `FTP.md` is the design record; what follows is what was run.
+
+**The host suite** is `tools/test_ftp_host.sh` — plain `cc` under ASan and
+UBSan, driving `userland/apps/ftp/wire.c` at chunk sizes 1, 2, 3, 7, 17, 64
+and whole. It has something the gopher suite next door did not: **Python's
+ftplib ships the same three parsers**, so the multiline reader, `parse227` and
+`parse257` are DIFFED against a reference rather than against this code's own
+opinion written twice. Two departures from ftplib are asserted by hand and
+each is written down where it lives.
+
+Three real defects came out of it before the OS ran a byte:
+
+| Found | What it was |
+|---|---|
+| A seven-number passive-mode list matched its own TAIL | `(10,0,2,2,195,80,7)` yielded the address `0.2.2.195` — the scan resumed inside the list. Runs are now taken whole and only a list of exactly six is an address |
+| The reply text stripped its own framing inconsistently | The opening and closing lines lost their code digits and the middle ones kept theirs. Now nothing is stripped, which is both what a client prints and what makes the ftplib diff exact |
+| A deadline and a broken connection shared one sticky flag | Found in the guest, fixed in the parser: the first quiet moment poisoned the control channel for the rest of the session. `FTP_SOURCE_STALLED` / `FTP_REPLY_STALLED` now say "nothing yet" without saying "broken", and the suite asks the same question twice to prove the channel survives |
+
+**The deterministic server** is `tools/ftptestd.py` (httptestd and gophertestd's
+sibling): a multiline banner with a complete-looking `500` inside it, four
+spellings of the 227 reply, a `550` that arrives with no data connection
+activity at all, a transfer that closes cleanly and THEN reports `451`, and a
+half-minute dribbler for interrupting.
+
+**In the guest**, headless QEMU over slirp against that server:
+
+| Case | Result |
+|---|---|
+| The multiline banner | All four lines read as one reply; the decoy `500` did not end it |
+| Anonymous login, `TYPE I` | Straight to the prompt, no password asked |
+| `ls` | The server's listing printed verbatim |
+| The 227 naming an address we cannot reach | slirp made the server advertise `127.0.0.1`; the client said so and dialed the address it was already talking to. **This was not staged** — it is the NAT case, produced by the harness |
+| `get /hello.txt`, `get /big.bin` | 21 bytes and 1 MiB, staged as `.part` and renamed |
+| 1 MiB round trip (`get` then `put`) | Byte-identical on the host (SHA-256 `d824bde2acff5ab2…`) |
+| `get /noperm.txt` | `550` on the control channel, no wait on the data connection |
+| `get /cut.bin` | Data connection ended cleanly at half the promised length, control channel said `451`; `cut.bin.part` kept, nothing published |
+| Ctrl+C during the dribbler | Transfer stopped, `.part` kept, prompt returned, session alive |
+| The command AFTER an interrupt | Gets its OWN reply. The transfer's outstanding reply is counted (`s_owed`) and spent first — without it, the `226` arrived as the answer to `pwd` |
+| A 227 naming no address at all | Refused by name, twice in a row, session still usable |
+| The server killed mid-session | "the server closed the control connection", no hang |
+| Typing at the prompt | Echoes, and Backspace rubs out |
+| `user NAME` | Password read without appearing on screen, and it reaches the server intact |
+| Copied guest filesystems afterwards | Root and data `e2fsck -fn` both clean |
+
+**Chris found the one this list could not.** Every screenshot above showed
+`ftp> 250 Directory changed` with the typed command missing, and it read as
+normal for a whole session: the harness types through `sendkey` and never
+looks for its own keystrokes. **In os64 echo is the READER's job** — console.c's
+discipline is "the caller echoes", recorded in PTY.md § What os64 already
+built without meaning to — so a program with a prompt paints its own input or
+the prompt answers commands nobody can see themselves typing. Two lessons for
+whoever drives this harness next: a screendump proves what is on the glass
+only if you know what should be, and a keystroke-injecting harness is blind to
+exactly this class of bug. The same mistake had also put a raw-mode dance
+around the password prompt to "hide" what nothing was going to show.
+
+Worth knowing for anyone reading the server's log: **os64 absorbs data arriving
+on a closed connection rather than resetting it** (`TCP_DETACHED_IDLE_TICKS`),
+so a server dribbling into a data connection the client walked away from runs
+to the end of the file before it notices. That is why the owed-reply count
+exists and a drain deadline alone would not do.
+
+**The throughput defect, and why the harness could not have found it.** Chris
+measured `get` at about 11 Mb/s on the P5 against os64get's 179 Mb/s over the
+same link. The transfer loop wrote every read, so a download handed
+write-through ext2 a block or two per TCP segment. Filling a 64KB buffer
+before writing it — os64get's `GET_CHUNK` shape, and its recorded lesson —
+is the fix. Measured on the same 16 MiB fetch, same QEMU, same server:
+
+| Build | Time | Rate |
+|---|---|---|
+| Write every read, 8KB buffer | 4.1 s | 3996 KB/s |
+| Fill 64KB, then write | 2.2 s | 7447 KB/s |
+
+**Where the remaining slowness actually lives, measured on the P5 and NOT in
+this client.** After the fix, `get` from ftp.gnu.org still ran at 1996 KB/s,
+and os64get fetching over HTTP from the same host took the same time. Two
+clients, two protocols, one number puts the cap beneath both of them. The
+P5's `ping` put that host at 28ms, and 64KB ÷ 28ms is 2340 KB/s — the
+transfer flattened at 87% of the receive window's ceiling. The same P5 to a
+LAN server ran at 179 Mb/s, which is the same ceiling at a 2.9ms round trip.
+A Windows browser across the same wifi and ICS pulled ~200 Mb/s, so the path
+is not the limit. This is DEBTS § no window scaling (RFC 1323), and its
+trigger has now fired. **The lesson for this harness: a client's throughput
+cannot be judged without the round-trip time beside it**, and `ping` is one
+command.
+
+**QEMU understates this and the reason matters.** Its disk is a page-cached
+host file, so the write stall is small; on real storage it is not. And while
+the old loop sat in a synchronous write, the receive ring filled and the
+window we advertise went to zero — recovering from which costs a round trip,
+free on loopback and not free over wifi. The penalty is the disk's slowness
+multiplied by the link's latency, so the rig can show the direction of the fix
+but not its size. **A rate measured in QEMU is evidence about a change, never
+about the machine.**
+
+Run the host suite from the worktree with:
+
+```sh
+tools/test_ftp_host.sh
+```
+
+and the server, for a guest to point at, with:
+
+```sh
+python3 -u tools/ftptestd.py --port 2121 --root /tmp/uploads
+```
+
 ## Reading the serial log
 
 **WHERE these lines live depends on the boot entry.** Every one of them is a
