@@ -21,5 +21,14 @@
     os64_tls_trust_reload;
     os64_tls_trust_reload_path;
     os64_tls_store_status_name;
+    os64_tls_transport_create;
+    os64_tls_transport_state;
+    os64_tls_transport_step;
+    os64_tls_transport_read;
+    os64_tls_transport_write;
+    os64_tls_transport_flush;
+    os64_tls_transport_begin_close;
+    os64_tls_transport_abort;
+    os64_tls_transport_free;
   local: *;
 };

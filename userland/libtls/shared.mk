@@ -4,7 +4,7 @@ LIBTLS_SO := $(BIN)/libtls.so
 LIBTLS_BASE := $(patsubst libtls.so=%,%,$(filter libtls.so=%,$(LIB_BASE_PAIRS)))
 include libtls/public_sources.mk
 LIBTLS_CORE_OBJS := $(patsubst %,$(OBJ)/tls-shared/%.o,$(LIBTLS_CORE_SOURCES))
-LIBTLS_ADAPTER_SRCS := libtls/api.c libtls/port/platform_inputs.c \
+LIBTLS_ADAPTER_SRCS := libtls/api.c libtls/transport.c libtls/port/platform_inputs.c \
                       libtls/port/trust_pem.c libtls/port/trust_config.c libtls/port/trust_file.c
 LIBTLS_ADAPTER_OBJS := $(patsubst %,$(OBJ)/tls-shared/%.o,$(LIBTLS_ADAPTER_SRCS))
 LIBTLS_ARCHIVE := $(OBJ)/tls-shared/core.a

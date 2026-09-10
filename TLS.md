@@ -12,15 +12,17 @@ PEM bundles, with a guest `tlstrusttest` fixture for parsing and replacement.
 The [production-inputs adapter](TLS_PRODUCTION_INPUTS.md) supplies `/dev/random`
 and UTC time to the private engine, with a guest `tlsinputtest` creation fixture.
 The [public byte library](TLS_PUBLIC_LIBRARY.md) exposes `<tls/tls.h>` and
-`libtls.so`; native HTTPS is not ready. Trust-store
+`libtls.so`; the [TCP transport adapter](TLS_TRANSPORT.md) adds owned network
+progress through `<tls/transport.h>`. Native HTTPS is not ready. Trust-store
 selection uses the approved configuration and replacement policy below;
-public root-bundle selection and network integration remain open.
+public root-bundle selection and HTTP integration remain open.
 
 ## Intended result and scope
 
 Build `/lib/libtls.so`: an os64-owned client interface around a pinned BearSSL
-implementation. Applications supply transport bytes and receive authenticated
-plaintext. Cryptography and the TLS protocol stay in userland. The public
+implementation. Applications can supply transport bytes themselves or adopt
+a connected TCP handle into the transport adapter, which drives ciphertext
+and exposes authenticated plaintext. Cryptography and the TLS protocol stay in userland. The public
 header is `<tls/tls.h>`, with `os64_tls_*` names; the shared-object name does
 not imply compatibility with OpenBSD's libtls API.
 
@@ -129,12 +131,12 @@ consumers; libos64 does not depend on libtls.
 
 ```
 HTTP client / future libfetch
-        | plaintext                       | ordinary TCP handle
-        v                                 v
-    libtls.so <---- encrypted bytes ---- transport adapter
+        | plaintext
+        v
+    libtls.so: byte engine <---- ciphertext ---- TCP transport adapter
         |
         v
-    libos64.so  (allocation and memory helpers)
+    libos64.so  (memory, configuration, entropy/time and TCP handle I/O)
 ```
 
 The engine layer does no socket I/O, DNS, file lookup, sleeping, or clock
@@ -143,7 +145,8 @@ explicit validation time, and entropy through a provider. Host fixtures can
 therefore control every external input. The private
 [OS-input constructor](TLS_PRODUCTION_INPUTS.md) obtains randomness and UTC
 through os64 and binds a caller-supplied sealed trust snapshot to the engine.
-The transport adapter drives byte progress separately.
+The [transport adapter](TLS_TRANSPORT.md) drives byte progress separately
+inside the shared library, with retained handshake/shutdown deadlines.
 
 Use opaque connection and trust-store types. Creation allocates the complete
 connection working set, copies the server name, and retains a reference to
@@ -386,7 +389,7 @@ dates beyond 2038. A successful clock syscall does not attest to clock
 correctness; os64's RTC/system clock is the trust assumption. Do not replace
 an implausible clock with the build date or disable validity checks.
 
-Use monotonic time for waits. Proposed adapter defaults: 30 seconds total for
+Use monotonic time for waits. Adapter defaults: 30 seconds total for
 the handshake and 2 seconds for orderly shutdown. Application read deadlines
 are supplied by the caller. Dribbling bytes or warning alerts do not restart
 the handshake deadline. The nonblocking engine itself reports progress and

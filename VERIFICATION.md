@@ -290,6 +290,51 @@ got through, the ledger is what did not, and `orphaned` (a frame the cable
 could not hand back because QEMU's inbound socket was gone) is never zero
 silently.
 
+## TLS transport acceptance (2026-09-09)
+
+The [adapter contract and commands](TLS_TRANSPORT.md) describe its host
+seams and manual guest probe. The guest used QEMU q35, TCG/qemu64, two CPUs,
+virtio-net and user networking, with a copied ext2 root, the TCP deadline
+parent's built kernel and this slice's freshly built userland. One cron
+`@reboot` script ran the four probes; the disposable config selected `/etc`.
+The peer used OpenSSL 3.0.13 via Python `ssl`, TLS 1.2 and
+ECDHE-ECDSA-AES128-GCM-SHA256 with the existing public fixture certificate.
+
+| Check | Result |
+|---|---|
+| ASan/UBSan adapter seams | Pass; partial ciphertext in both directions, stalled writes with readable input, alternating waits, retained/trickled deadlines, final handshake/close flights, interrupted reads/writes, clock errors, ownership and wiped adapter destruction |
+| ASan/UBSan public input/engine regression | Pass; creation failures, short entropy reads, five policy handshakes, bidirectional data and clean close |
+| Strict userland build and public/private ELF audits | Pass; 30 public exports, 15 OS imports, 63 selected core sources; both public consumers linked and checked |
+| Guest `good` | 65,536 exact plaintext bytes each way, then CLEAN_EOF |
+| Guest `stall` | TIMEOUT under the configured 200 ms handshake budget; probe checks elapsed ticks and a 2 s upper tolerance |
+| Guest `truncated` | Bare TCP FIN reported TRUNCATED |
+| Guest `badname` | Wrong hostname reported CERTIFICATE |
+| Copied root after orderly shutdown | `e2fsck -fn` exited 0 |
+
+The first stall probe verdict was discarded: it measured from after client
+creation and inspected a tick sample taken before the final wait. Measuring
+the complete creation/handshake interval with a fresh ending sample passed.
+The final run used the corrected probe and final adapter build. ASan/UBSan
+were active; LeakSanitizer was disabled for the ptrace environment. These
+QEMU fixtures establish controlled TLS interoperability, not public-root
+coverage, physical NIC behavior or HTTP integration.
+
+The host adapter tests, public ELF audit and four OpenSSL guest cases were
+revalidated after moving the stack onto PR #85's round-one correction
+`ad08014`. The constructor requires the caller to supply connected TCP;
+an empty write is not used as a handle-type query. The copied root again
+passed `e2fsck -fn` after shutdown.
+
+The peer also passed the four guest cases under `python3 -S`, with installed
+site packages disabled. It uses the fixed fixture key in PEM form and Python's
+standard library; it does not require the fixture generator's `cryptography`
+dependency.
+
+**Production checkout, reported by Chris:** all four transport cases (`good`,
+`stall`, `truncated`, `badname`) passed on the Bosgame P5 against the peer
+running on the Windows host. This adds physical-machine/network-path evidence
+to the host and QEMU checks; the peer uses the same controlled fixture trust.
+
 ## TCP write patience acceptance (2026-09-09)
 
 Write's contract is beside read's patience in

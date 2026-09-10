@@ -103,7 +103,8 @@ certificate paths, not a TLS exchange or the full policy-negative corpus.
 and leaf certificates from deliberately trivial test keys; it requires Python
 cryptography. The ordinary host and guest tests use the checked-in bytes and
 do not generate keys or consult the wall clock. These fixtures are not a root
-bundle for deployment. Public-root compatibility, provenance/update policy,
-and transport integration remain separate work. The private
+bundle for deployment. Public-root compatibility and provenance/update policy
+remain separate work. The [transport adapter](TLS_TRANSPORT.md) uses the
+public byte client around these trust snapshots. The private
 [OS-input constructor](TLS_PRODUCTION_INPUTS.md) uses sealed snapshots with
 production randomness and UTC time.
