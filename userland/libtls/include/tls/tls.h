@@ -93,7 +93,7 @@ OS64_TLS_API os64_tls_status_t os64_tls_flush(os64_tls_client *client);
 // Abort accepts TRANSPORT, TIMEOUT or CANCELLED, stops I/O and preserves the
 // first terminal reason. Free never blocks and wipes client secrets. None of these operations closes a transport handle.
 OS64_TLS_API os64_tls_status_t os64_tls_begin_close(os64_tls_client *client);
-OS64_TLS_API os64_tls_status_t os64_tls_transport_eof(os64_tls_client *client);
+OS64_TLS_API os64_tls_status_t os64_tls_input_eof(os64_tls_client *client);
 OS64_TLS_API os64_tls_status_t os64_tls_abort(os64_tls_client *client, os64_tls_status_t reason);
 OS64_TLS_API const char *os64_tls_status_name(os64_tls_status_t status);
 OS64_TLS_API const char *os64_tls_license(void);

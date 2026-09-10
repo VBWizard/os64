@@ -398,10 +398,10 @@ APP_EXTRA_OBJS_$(1) := $(if $(filter $(1),$(PAGER_APPS)),$(PAGER_OBJ)) \
                        $(if $(filter $(1),bearssltest),$(BEARSSL_TEST_OBJ)) \
                        $(if $(filter $(1),tlstrusttest),$(TLS_TRUST_TEST_OBJS)) \
                        $(if $(filter $(1),tlsinputtest),$(TLS_INPUT_TEST_OBJS)) \
-                       $(if $(filter $(1),tlslibtest),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
+                       $(if $(filter $(1),tlslibtest tlstransportprobe),$(OBJ)/pic/libtls/test/trust_vectors.c.o)
 APP_EXTRA_LIBS_$(1) := $(if $(filter $(1),$(LIBGZIP_PROGRAMS)),$(LIBGZIP_SO)) \
                        $(if $(filter $(1),$(LIBPNG_PROGRAMS)),$(LIBPNG_SO)) \
-                       $(if $(filter $(1),tlslibtest),$(LIBTLS_SO)) \
+                       $(if $(filter $(1),tlslibtest tlstransportprobe),$(LIBTLS_SO)) \
                        $(if $(filter $(1),bearssltest tlstrusttest tlsinputtest),$(BEARSSL_ARCHIVE))
 APP_BASE_STAMP_$(1) := $(OBJ)/$(2)/$(1)/.base-$(APP_BASE_$(1))
 $$(APP_BASE_STAMP_$(1)):

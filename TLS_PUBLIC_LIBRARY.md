@@ -3,7 +3,9 @@
 `/lib/libtls.so` exposes the byte operations and trust snapshots described in
 TLS.md through `<tls/tls.h>`. It depends on `libos64.so`; applications select
 it explicitly. The implementation uses the private engine, policy, loader,
-and production-input constructor. It owns no TCP handle or transport timer.
+and production-input constructor. Byte clients own no TCP handle or transport
+timer. The separate [transport API](TLS_TRANSPORT.md) in the same shared
+library owns those resources around a byte client.
 
 The public header contains os64 enums, value structs and opaque client/trust
 types, with no BearSSL headers or entropy/time/validator injection callbacks.
@@ -47,9 +49,9 @@ pre-authentication plaintext refusal and sticky aborts. A controlled host TLS
 peer exercises the public wrappers across authenticated application traffic.
 
 The TCP API provides finite read and write
-[patience](abi/include/os64/syscall_numbers.h). The transport driver must
-combine them with a total operation budget and retain pending ciphertext
-across short writes. That driver, public-root distribution and HTTPS
+[patience](abi/include/os64/syscall_numbers.h). The [transport driver](TLS_TRANSPORT.md)
+combines them with retained handshake/shutdown budgets and preserves pending
+ciphertext across short writes. Public-root distribution and HTTPS
 integration remain separate work. This library makes the byte API usable
 without claiming that an os64 application can yet make a bounded native
 HTTPS request.
