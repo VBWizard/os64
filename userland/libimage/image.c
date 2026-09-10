@@ -1,16 +1,10 @@
-// image.c — libimage's decoders (os64/image.h carries the doctrine).
-//
-// EVERY BYTE READ HERE CAME FROM A FILE SOMEBODY ELSE WROTE. That single
-// fact shapes the whole file: every length is checked against what is
-// actually present before it is trusted, every dimension is bounded BEFORE
-// it is multiplied, and a header that disagrees with the file's real size is
-// refused rather than clamped. A decoder that clamps a bad header keeps
-// running on a lie; one that refuses hands the caller a status it can print.
-
+// BMP/PPM decoding and format dispatch; PNG and JPEG own their format parsing.
 #include "os64/os64.h"
-#include "os64/image.h"
+#include "image/image.h"
 #include "os64/slurp.h"
 #include "os64/mem.h"
+#include "png/png.h"
+#include "jpeg/jpeg.h"
 
 const char *os64_image_status_name(os64_image_status_t status)
 {
@@ -23,6 +17,7 @@ const char *os64_image_status_name(os64_image_status_t status)
         case OS64_IMAGE_UNKNOWN_FORMAT: return "not an image we recognize";
         case OS64_IMAGE_MALFORMED:      return "malformed image";
         case OS64_IMAGE_UNSUPPORTED:    return "unsupported variant";
+        case OS64_IMAGE_LIMIT:          return "image resource limit";
     }
     return "unknown";
 }
@@ -369,7 +364,35 @@ os64_image_status_t os64_image_decode(const uint8_t *data, size_t len,
     if (data == NULL || len < 2)
         return OS64_IMAGE_UNKNOWN_FORMAT;
 
-    // MAGIC BYTES, not the name. See the header's argument.
+    static const uint8_t png_magic[] = {137,80,78,71,13,10,26,10};
+    bool png = len >= sizeof png_magic;
+    for (size_t i = 0; png && i < sizeof png_magic; i++) png = data[i] == png_magic[i];
+    if (png) {
+        os64_png_image_t image;
+        os64_png_status_t status = os64_png_decode(data, len, 0, &image);
+        if (status == OS64_PNG_OK) {
+            *out = (os64_image_t){image.width, image.height, image.pixels};
+            return OS64_IMAGE_OK;
+        }
+        if (status == OS64_PNG_UNSUPPORTED) return OS64_IMAGE_UNSUPPORTED;
+        if (status == OS64_PNG_LIMIT) return OS64_IMAGE_LIMIT;
+        if (status == OS64_PNG_NO_MEMORY) return OS64_IMAGE_NO_MEMORY;
+        return OS64_IMAGE_MALFORMED;
+    }
+    if (data[0] == 255 && data[1] == 216) {
+        os64_jpeg_image_t image;
+        os64_jpeg_status_t status = os64_jpeg_decode(data, len, 0, 0, &image);
+        if (status == OS64_JPEG_OK) {
+            *out = (os64_image_t){image.width, image.height, image.pixels};
+            return OS64_IMAGE_OK;
+        }
+        if (status == OS64_JPEG_UNSUPPORTED) return OS64_IMAGE_UNSUPPORTED;
+        if (status == OS64_JPEG_LIMIT) return OS64_IMAGE_LIMIT;
+        if (status == OS64_JPEG_NO_MEMORY) return OS64_IMAGE_NO_MEMORY;
+        return OS64_IMAGE_MALFORMED;
+    }
+
+    // Detect by file signature, regardless of filename.
     if (data[0] == 'P' && data[1] == '6')
         return decode_ppm(data, len, out);
     if (data[0] == 'B' && data[1] == 'M')
@@ -392,15 +415,7 @@ os64_image_status_t os64_image_load(const char *path, size_t cap,
 
     uint8_t *buf = NULL;
     size_t   len = 0;
-    // The tree's SHARED whole-file reader (os64/slurp.h) — shared, not yet
-    // sole, and the difference is worth stating plainly (Codex #30 rd1).
-    // Three hand-written capped loops still stand as this is committed:
-    // kernel/src/conf.c and both read paths in libos64/conf.c (a fourth,
-    // gui/desktop.c's, died with the kernel desktop on 2026-08-25). This
-    // decoder declines to be another. Their adoption is the DEBTS row's
-    // remaining payment; anyone fixing a whole-file-read bug still has to
-    // visit all of them until then, which is exactly the cost the row is
-    // about.
+    // Bound the file read before handing bytes to the format decoder.
     os64_slurp_status_t sst = os64_slurp(path, cap, &buf, &len);
     switch (sst) {
         case OS64_SLURP_OK:        break;

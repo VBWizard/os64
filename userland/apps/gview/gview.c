@@ -16,11 +16,9 @@
 
 #include "os64/os64.h"
 #include "os64/io.h"
-#include "os64/image.h"
+#include "image/image.h"
 #include "os64/draw.h"
 #include "os64/gui.h"
-#include "os64/slurp.h"
-#include "png/png.h"
 
 // The mat around a picture that does not fill its window. Not the theme's
 // business: this is a viewer's own furniture, and a neutral gray is what
@@ -32,54 +30,12 @@
 // a window born bigger than the glass cannot be dragged back into view.
 #define GVIEW_SCREEN_MARGIN 64u
 
-static bool is_png(const uint8_t *data, size_t length)
-{
-    static const uint8_t signature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
-    if (length < sizeof(signature))
-        return false;
-    for (size_t i = 0; i < sizeof(signature); i++)
-        if (data[i] != signature[i])
-            return false;
-    return true;
-}
-
 static bool load_picture(const char *path, os64_image_t *image,
                          const char **reason)
 {
-    image->width = 0;
-    image->height = 0;
-    image->pixels = NULL;
-
-    uint8_t *data = NULL;
-    size_t length = 0;
-    os64_slurp_status_t read_status = os64_slurp(
-        path, OS64_IMAGE_CAP_DEFAULT, &data, &length);
-    if (read_status != OS64_SLURP_OK) {
-        *reason = os64_slurp_status_name(read_status);
-        return false;
-    }
-
-    bool loaded = false;
-    if (is_png(data, length)) {
-        // This small fork is the transitional seam recorded in LIBIMAGE.md:
-        // libpng is independent now, while BMP/PPM still live in libos64.
-        // The eventual libimage façade will own this magic dispatch.
-        os64_png_image_t png;
-        os64_png_status_t status = os64_png_decode(data, length, 0, &png);
-        *reason = os64_png_status_name(status);
-        if (status == OS64_PNG_OK) {
-            image->width = png.width;
-            image->height = png.height;
-            image->pixels = png.pixels;
-            loaded = true;
-        }
-    } else {
-        os64_image_status_t status = os64_image_decode(data, length, image);
-        *reason = os64_image_status_name(status);
-        loaded = status == OS64_IMAGE_OK;
-    }
-    os64_free(data);
-    return loaded;
+    os64_image_status_t status = os64_image_load(path, 0, image);
+    *reason = os64_image_status_name(status);
+    return status == OS64_IMAGE_OK;
 }
 
 static void repaint(os64_draw_ctx_t *ctx, const os64_image_t *img)
