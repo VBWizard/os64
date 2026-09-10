@@ -1883,9 +1883,12 @@ tcp_conn_t* tcp_conn_dial(net_device_t* dev, uint32_t peer_ip, uint16_t peer_por
 	// TCP user waiting on the lock, so it has to be cheap at exactly the
 	// load — a full range — it exists to handle. A draw that walked the
 	// connection list per candidate was ~16384 × list-length compares
-	// under those conditions (Codex, PR #46; 16384 connections at ~64KB
-	// apiece fit comfortably in this machine's RAM, so a full range is
-	// reachable, not theoretical).
+	// under those conditions (Codex, PR #46). Whether a full range is
+	// reachable is the machine's call: a connection holds TCP_RCV_BUF +
+	// TCP_SND_BUF of rings (tcp.h), so 16384 of them is 32GB, and on the
+	// 8GB QEMU rig the allocator's exhaustion panic arrives long before
+	// the last port does — but a machine with the RAM reaches the range,
+	// and the draw has to be cheap there.
 	uint64_t lf = spinlock_acquire_irqsave(&kTcpListLock);
 	uint16_t local_port = 0;
 	bool found = false;

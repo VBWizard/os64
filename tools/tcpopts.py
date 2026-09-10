@@ -7,12 +7,18 @@ Prints every SYN and SYN-ACK in the capture with its window field and its
 options decoded by name (MSS, WS=<shift>, SACKok, TS), because that is the
 question window scaling turns on: did WE send the shift, and did THEY
 answer with one. tshark would do it, and is not installed on every host
-this project builds on; this is the thirty lines it takes with the standard
-library. `--all` prints every TCP segment's window field too, which is how
-to watch a scaled window walk past 65535 in the capture.
+this project builds on; this is what it takes with the standard library.
+
+`--all` prints every TCP segment's window too. The field is always shown
+raw, and once BOTH SYNs of a flow have been seen and both carried a shift,
+the bytes the field means follow it (`win=32768 = 4194304`) — the sender's
+own shift, which is the rule RFC 7323 §2.3 states: a window is scaled by
+the count its sender offered, and only if the other side offered one back.
+A flow whose handshake is not in the capture is marked `(no SYN seen)`,
+because its shift is unknowable from the segments alone.
 
 Reads the classic pcap format QEMU's filter-dump writes (both byte orders);
-not pcapng.
+not pcapng. Non-initial IPv4 fragments carry no TCP header and are skipped.
 """
 
 import struct
@@ -54,11 +60,36 @@ def options(blob):
     return names
 
 
+def tcp_segment(pkt):
+    """The TCP header's offset and the end of the TCP payload, or None for
+    anything that is not an initial IPv4 fragment carrying a whole TCP
+    header: a non-initial fragment has protocol 6 too, but its payload is
+    the middle of somebody's segment, not a header."""
+    if len(pkt) < 34 or pkt[12:14] != b"\x08\x00" or pkt[23] != 6:
+        return None
+    ihl = (pkt[14] & 0xF) * 4
+    if ihl < 20:
+        return None
+    total = struct.unpack(">H", pkt[16:18])[0]
+    fragment_offset = struct.unpack(">H", pkt[20:22])[0] & 0x1FFF
+    if fragment_offset:
+        return None
+    t = 14 + ihl
+    end = min(len(pkt), 14 + total)
+    if end < t + 20:
+        return None
+    doff = (pkt[t + 12] >> 4) * 4
+    if doff < 20 or t + doff > end:
+        return None
+    return t, doff
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         return 2
     everything = "--all" in sys.argv
+    shift = {}   # (src, dst) -> the shift src offered toward dst; None if its SYN carried none
     with open(sys.argv[1], "rb") as f:
         hdr = f.read(24)
         magic = struct.unpack("<I", hdr[:4])[0]
@@ -71,15 +102,14 @@ def main():
             _, _, incl, _ = struct.unpack(fmt, h)
             pkt = f.read(incl)
             n += 1
-            if len(pkt) < 54 or pkt[12:14] != b"\x08\x00" or pkt[23] != 6:
+            seg = tcp_segment(pkt)
+            if seg is None:
                 continue
-            ihl = (pkt[14] & 0xF) * 4
-            t = 14 + ihl
+            t, doff = seg
             flags = pkt[t + 13]
             syn = bool(flags & 0x02)
             if not syn and not everything:
                 continue
-            doff = (pkt[t + 12] >> 4) * 4
             win = struct.unpack(">H", pkt[t + 14:t + 16])[0]
             src = "%d.%d.%d.%d:%d" % (*pkt[26:30], struct.unpack(">H", pkt[t:t + 2])[0])
             dst = "%d.%d.%d.%d:%d" % (*pkt[30:34], struct.unpack(">H", pkt[t + 2:t + 4])[0])
@@ -87,7 +117,14 @@ def main():
                 "A" if flags & 0x10 else "", "F" if flags & 0x01 else "", "R" if flags & 0x04 else "")
             line = "#%-6d %-22s -> %-22s %-7s win=%5d" % (n, src, dst, what, win)
             if syn:
-                line += " " + " ".join(options(pkt[t + 20:t + doff]))
+                names = options(pkt[t + 20:t + doff])
+                ws = next((int(x[3:]) for x in names if x.startswith("WS=")), None)
+                shift[(src, dst)] = ws
+                line += " " + " ".join(names)
+            elif (src, dst) not in shift or (dst, src) not in shift:
+                line += " (no SYN seen)"
+            elif shift[(src, dst)] is not None and shift[(dst, src)] is not None:
+                line += " = %d" % (win << shift[(src, dst)])
             print(line)
     return 0
 
