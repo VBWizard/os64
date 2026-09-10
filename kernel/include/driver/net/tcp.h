@@ -95,16 +95,29 @@ typedef enum tcp_state
 	TCP_TIME_WAIT,     // the wait that protects the NEXT connection (see tcp.c)
 } tcp_state_t;
 
-// Buffers. The receive buffer IS the advertised window, so it sets how much
-// the peer may have in flight toward us — and since the NICs are drained
-// once per scheduler pass, it sets the THROUGHPUT CEILING: window per pass.
-// 64KB is the most a 16-bit window field can say (RFC 1323 scaling would
-// be the next step), 64KB per 10ms pass is ~6.4MB/s, and it costs 64KB of
-// kmalloc per open connection. (8KB here measured 366KB/s: the window
-// emptied inside every pass — five segments, then win=0 — and the sender
-// idled for the rest of each one.) MSS 1460 = the classic ethernet number:
-// 1500 MTU - 20 IP - 20 TCP, the reason so much of the internet's traffic
-// arrives in 1460-byte pieces.
+// Buffers. The receive buffer IS the advertised window, so it bounds what the
+// peer may have in flight toward us — and a window that never grows is a
+// THROUGHPUT CEILING of window ÷ ROUND TRIP, whatever the link can carry.
+// Measured on the P5, 2026-09-09: a fetch from a host 28ms away flattened at
+// 87% of 64KB/28ms, and the same machine against a LAN server ran 179 Mb/s,
+// which is that same ceiling at a 2.9ms round trip — throughput tracking
+// 1/RTT across a tenfold change is the fingerprint. 64KB is the most a 16-bit
+// window field can say; RFC 1323 scaling is booked in DEBTS.md, and that row
+// is priced now rather than hypothetical.
+//
+// A NIC WITH NO INTERRUPT OF ITS OWN carries a second ceiling, and this
+// comment described only that one until the measurement above: such a NIC is
+// drained when the TICK rings the doorbell, so it can take at most a window
+// per pass — 64KB per 10ms is ~6.4MB/s (DOORBELL.md; virtio is the one that
+// keeps this cadence). A NIC that rings its own doorbell is drained on
+// arrival and answers only to the round trip, which is how the P5 measured
+// past this number. The 64KB was chosen under the tick-driven regime, where
+// 8KB here measured 366KB/s: the window emptied inside every pass — five
+// segments, then win=0 — and the sender idled for the rest of each one.
+//
+// It costs 64KB of kmalloc per open connection. MSS 1460 = the classic
+// ethernet number: 1500 MTU - 20 IP - 20 TCP, the reason so much of the
+// internet's traffic arrives in 1460-byte pieces.
 #define TCP_RCV_BUF  65536
 #define TCP_MSS      1460
 
