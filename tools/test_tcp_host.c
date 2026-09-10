@@ -445,50 +445,44 @@ static void test_write_deadline(void)
 {
 	unsigned char bytes[40]; for (unsigned i = 0; i < sizeof bytes; i++) bytes[i] = (uint8_t)(i + 1);
 	tcp_conn_t *c = init(); fill_ring(c);
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 100) == TCP_ERR_TIMEOUT);
+	assert(tcp_conn_write(c, bytes, sizeof bytes, 100) == TCP_ERR_TIMEOUT);
 	assert(!sleeps && !c->writer && !c->reset && !c->detached && c->snd_count == TCP_SND_BUF);
-	kTicksSinceStart = 0;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 0) == TCP_ERR_TIMEOUT && !sleeps);
-	kTicksSinceStart = 100;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 105) == TCP_ERR_TIMEOUT);
+	assert(tcp_conn_write(c, bytes, sizeof bytes, 105) == TCP_ERR_TIMEOUT);
 	assert(sleeps == 1 && last_wake == 105 && !c->writer);
 	sleeps = 0;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 350) == TCP_ERR_TIMEOUT);
+	assert(tcp_conn_write(c, bytes, sizeof bytes, 350) == TCP_ERR_TIMEOUT);
 	assert(sleeps == 3 && kTicksSinceStart == 350 && !c->writer);
-	sleeps = 0; kTicksSinceStart = UINT64_MAX - 3;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, UINT64_MAX) == TCP_ERR_TIMEOUT);
-	assert(sleeps == 1 && last_wake == UINT64_MAX && !c->writer);
 	cleanup(c);
 
 	c = init(); c->snd_wnd = 0; c->snd_head = TCP_SND_BUF - 3;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 0) == sizeof bytes);
+	assert(tcp_conn_write(c, bytes, sizeof bytes, 99) == sizeof bytes);
 	assert(!memcmp(c->snd_buf + TCP_SND_BUF - 3, bytes, 3));
 	assert(!memcmp(c->snd_buf, bytes + 3, sizeof bytes - 3) && !sleeps);
 	cleanup(c);
 
 	c = init(); fill_ring(c); sleep_hook = wake_room;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 150) == 7);
-	assert(sleeps == 1 && !c->writer && !memcmp(c->snd_buf, bytes, 7));
+	assert(tcp_conn_write(c, bytes, sizeof bytes, 103) == 21);
+	assert(sleeps == 3 && !c->writer && !memcmp(c->snd_buf, bytes, 21));
 	cleanup(c);
 	c = init(); fill_ring(c); sleep_hook = wake_room;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, false, 0) == 7 && sleeps == 1);
+	assert(tcp_conn_write(c, bytes, sizeof bytes, 0) == sizeof bytes && sleeps == 6);
 	assert(!c->writer); cleanup(c);
 
 	c = init(); fill_ring(c); sleep_hook = wake_interrupt;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 150) == TCP_ERR_INTERRUPTED);
+	assert(tcp_conn_write(c, bytes, sizeof bytes, 150) == TCP_ERR_INTERRUPTED);
 	assert(!c->writer && !c->reset); cleanup(c);
 	c = init(); fill_ring(c); sleep_hook = wake_reset;
-	assert(tcp_conn_write_for(c, bytes, sizeof bytes, true, 150) == TCP_ERR_RESET);
+	assert(tcp_conn_write(c, bytes, sizeof bytes, 150) == TCP_ERR_RESET);
 	assert(!c->writer); cleanup(c);
 
 	c = init(); fill_ring(c); sleep_hook = wake_room;
-	assert(tcp_conn_write(c, bytes, 14) == 14 && sleeps == 2 && !c->writer);
+	assert(tcp_conn_write(c, bytes, 14, 0) == 14 && sleeps == 2 && !c->writer);
 	assert(!memcmp(c->snd_buf, bytes, 14)); cleanup(c);
 	c = init(); c->snd_count = TCP_SND_BUF - 7; c->snd_wnd = 0;
 	sleep_hook = wake_interrupt;
-	assert(tcp_conn_write(c, bytes, 14) == 7 && sleeps == 1 && !c->writer);
+	assert(tcp_conn_write(c, bytes, 14, 0) == 7 && sleeps == 1 && !c->writer);
 	cleanup(c);
-	puts("TCP write waits: poll, finite expiry, partial/wrapped progress, wake, signal/reset and legacy writes PASS");
+	puts("TCP write waits: poll, finite expiry, partial/wrapped progress, wake, signal/reset and blocking writes PASS");
 }
 
 int main(void)

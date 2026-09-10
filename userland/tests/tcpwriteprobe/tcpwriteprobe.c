@@ -20,8 +20,8 @@ int main(int argc, char **argv)
     bool pass = false; unsigned char bytes[4096], ready;
     size_t total = 0;
     if (os64_read_for((int32_t)control, &ready, 1, 5000) != 1 || ready != 'R') goto done;
-    if (os64_write_for(OS64_STDOUT, NULL, 0, 0) != -1 ||
-        os64_write_for((int32_t)data, NULL, 0, 0) != 0) goto done;
+    if (os64_write_for(OS64_STDOUT, &ready, 1, 0) != -1 ||
+        os64_write_for((int32_t)data, &ready, 0, 0) != 0) goto done;
     os64_ticks_t clock;
     if (os64_ticks(&clock) < 0 || !clock.per_second) goto done;
     uint64_t start = clock.ticks, before = 0, after = 0;

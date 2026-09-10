@@ -92,8 +92,6 @@ static uint64_t syscall_debug_log(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_exit(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
-static uint64_t syscall_write_for(uint64_t arg0, uint64_t arg1, uint64_t arg2,
-    uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5);
 static uint64_t syscall_pipe(uint64_t arg0, uint64_t arg1, uint64_t arg2,
@@ -217,7 +215,6 @@ syscall_entry_t syscall_table[MAX_SYSCALLS] = {
 	SYSCALL_DEFINE(SYSCALL_DEBUG_LOG, "debug_log", syscall_debug_log, false, 0x01),  // arg0 = message
 	SYSCALL_DEFINE(SYSCALL_EXIT,      "exit",      syscall_exit,      false, 0x00),
 	SYSCALL_DEFINE(SYSCALL_WRITE,     "write",     syscall_write,     false, 0x02),  // arg1 = buffer
-	SYSCALL_DEFINE(SYSCALL_WRITE_FOR, "write_for", syscall_write_for, false, 0x00), // nullable buffer; handler validates bounded copy
 	SYSCALL_DEFINE(SYSCALL_READ,      "read",      syscall_read,      false, 0x02),  // arg1 = buffer (written)
 	SYSCALL_DEFINE(SYSCALL_SPAWN,     "spawn",     syscall_spawn,     false, 0x03),  // arg0 = path, arg1 = argv (args 2-4 = in/out/err handles, NOT pointers)
 	SYSCALL_DEFINE(SYSCALL_WAIT,      "wait",      syscall_wait,      false, 0x02),  // arg1 = exit-code out ptr
@@ -1246,48 +1243,7 @@ static file_io_params_t *syscall_io_scratch(char **data_out)
 	return (file_io_params_t *)thread->syscallIOScratch;
 }
 
-// Timed TCP writes copy a bounded prefix and return on initial progress.
-// The ordinary write path below preserves its fill-the-request contract.
-#define TCP_WRITE_FOR_CHUNK_SIZE 4096u
-static uint64_t syscall_write_for(uint64_t arg0, uint64_t arg1, uint64_t arg2,
-    uint64_t arg3, uint64_t arg4, uint64_t arg5)
-{
-	(void)arg4; (void)arg5;
-	core_local_storage_t *cls = get_core_local_storage();
-	task_t *task = cls ? cls->task : NULL;
-	if (!task) return SYSCALL_RESULT_INVALID;
-	handle_t *h = handle_get(task, (int)(int64_t)arg0);
-	if (!h || h->type != HANDLE_NET_TCP) return SYSCALL_RESULT_INVALID;
-	if (!arg2) return 0;
-
-	bool bounded = arg3 != OS64_WAIT_FOREVER;
-	uint64_t now = kTicksSinceStart, deadline = 0;
-	if (bounded)
-	{
-		uint64_t ticks = arg3 / MS_PER_TICK + (arg3 % MS_PER_TICK != 0);
-		deadline = ticks > UINT64_MAX - now ? UINT64_MAX : now + ticks;
-	}
-	size_t length = arg2 < TCP_WRITE_FOR_CHUNK_SIZE ? (size_t)arg2 : TCP_WRITE_FOR_CHUNK_SIZE;
-	char *kbuf = kmalloc(length);
-	if (!kbuf) return SYSCALL_RESULT_INVALID;
-	if (!copy_user_buffer((const void *)arg1, kbuf, length))
-	{
-		kfree(kbuf);
-		return SYSCALL_RESULT_BAD_USER_DATA;
-	}
-	long n = tcp_conn_write_for((tcp_conn_t *)h->object, kbuf, length, bounded, deadline);
-	kfree(kbuf);
-	if (n == TCP_ERR_INTERRUPTED)
-	{
-		if (current_thread_will_catch()) return (uint64_t)(int64_t)OS64_INTERRUPTED;
-		raise_terminating_signal_and_die(task, NULL);
-		__builtin_unreachable();
-	}
-	if (n == TCP_ERR_TIMEOUT) return (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
-	return n < 0 ? SYSCALL_RESULT_INVALID : (uint64_t)n;
-}
-
-// write(handle, buffer, length) — write bytes to an output handle.
+// write(handle, buffer, length, timeout_ms) — write with caller patience.
 //
 // The handle is resolved through the CALLING TASK'S HANDLE TABLE — which is the
 // entire point of handles. This function does not know or care whether handle 1
@@ -1301,7 +1257,7 @@ static uint64_t syscall_write_for(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
     uint64_t arg3, uint64_t arg4, uint64_t arg5)
 {
-	(void)arg3;
+	uint64_t timeout_ms = arg3;
 	(void)arg4;
 	(void)arg5;
 
@@ -1319,6 +1275,15 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 
 	if (length == 0)
 		return 0;
+
+	// Like read, lower patience once for the complete call. TCP honors
+	// finite waits; nonempty writes on other handle types refuse them.
+	uint64_t deadline = 0;
+	if (timeout_ms != OS64_WAIT_FOREVER)
+	{
+		if (h->type != HANDLE_NET_TCP) return SYSCALL_RESULT_INVALID;
+		deadline = kTicksSinceStart + timeout_ms / MS_PER_TICK + (timeout_ms % MS_PER_TICK != 0);
+	}
 
 	switch (h->type)
 	{
@@ -1519,7 +1484,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 			// tcp_conn_write queues into the connection's send ring and
 			// returns once the bytes are QUEUED (the ring, the ack clock
 			// and the timer carry them from there), blocking only while
-			// the ring is full. Bounce through kernel memory in MSS-ish
+			// the ring is full. Bounce through kernel memory in bounded
 			// chunks for the same fault discipline as every other write.
 			size_t written = 0;
 			while (written < length)
@@ -1537,7 +1502,7 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 					return written ? written : SYSCALL_RESULT_BAD_USER_DATA;
 				}
 
-				long n = tcp_conn_write((tcp_conn_t *)h->object, kbuf, this_chunk);
+				long n = tcp_conn_write((tcp_conn_t *)h->object, kbuf, this_chunk, deadline);
 				kfree(kbuf);
 
 				if (n == TCP_ERR_INTERRUPTED)
@@ -1555,11 +1520,13 @@ static uint64_t syscall_write(uint64_t arg0, uint64_t arg1, uint64_t arg2,
 					raise_terminating_signal_and_die(task, NULL);
 					__builtin_unreachable();
 				}
+				if (n == TCP_ERR_TIMEOUT)
+					return written ? written : (uint64_t)(int64_t)OS64_ERR_TIMEOUT;
 				if (n < 0)
 					return written ? written : SYSCALL_RESULT_INVALID;
 				written += (size_t)n;
 				if ((size_t)n < this_chunk)
-					break;   // connection died mid-write: report progress
+					break;   // wait ended mid-write: report progress
 			}
 			return written;
 		}

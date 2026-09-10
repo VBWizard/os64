@@ -46,8 +46,8 @@ and a guest consumer compiled against the public header and shared library.
 pre-authentication plaintext refusal and sticky aborts. A controlled host TLS
 peer exercises the public wrappers across authenticated application traffic.
 
-The TCP API provides finite read waits and the separate
-[timed-write operation](TCP_WRITE_DEADLINE.md). The transport driver must
+The TCP API provides finite read and write
+[patience](abi/include/os64/syscall_numbers.h). The transport driver must
 combine them with a total operation budget and retain pending ciphertext
 across short writes. That driver, public-root distribution and HTTPS
 integration remain separate work. This library makes the byte API usable

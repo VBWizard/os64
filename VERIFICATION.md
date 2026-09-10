@@ -290,31 +290,52 @@ got through, the ledger is what did not, and `orphaned` (a frame the cable
 could not hand back because QEMU's inbound socket was gone) is never zero
 silently.
 
-## TCP write deadline acceptance (2026-09-09)
+## TCP write patience acceptance (2026-09-09)
 
-The [contract and commands](TCP_WRITE_DEADLINE.md) cover `os64_write_for` and
-the `tcpwriteprobe` / `tools/test_tcp_write_peer.py` pair. The host peer holds
-data unread until the guest observes a full-ring poll and a finite timeout,
-then verifies the resumed stream through EOF on the same connection.
+Write's contract is beside read's patience in
+[syscall_numbers.h](abi/include/os64/syscall_numbers.h): both public write
+stubs use syscall 3, with one deadline for the complete TCP write. The host
+suite tests real TCP bodies with polls, finite expiry, wrapped copies,
+progress over timeout, interruption/reset cleanup and infinite patience.
+The syscall fixture exercises the actual dispatch prelude and console/TCP
+cases: finite console refusal, ordinary console writes, unchanged deadline
+across multiple copy chunks, partial results and cleanup.
 
-The isolated guest used QEMU q35, TCG/qemu64, two CPUs, virtio-net and user
-networking, with a copied ext2 root and freshly built kernel/userland. Its
-disposable `/etc/os64.conf` selected `conf = /etc`; `/etc/crontab` ran the
-probe script with one `@reboot` job under `KWORKER CRON` without `HUSK`.
-This avoids executing a network fixture twice via the two VT shell rc files.
+```sh
+ASAN_OPTIONS=detect_leaks=0 tools/test_tcp_host.sh
+ASAN_OPTIONS=detect_leaks=0 python3 tools/test_tcp_write_syscall_host.py
+```
 
-| Check | Result |
-|---|---|
-| ASan/UBSan TCP host suite | Pass; poll, finite and saturated deadlines, wrapped prefixes, ACK wake, interruption/reset cleanup and legacy blocking writes, alongside sender regressions |
-| ASan/UBSan syscall/wrapper fixture | Pass; syscall ABI, handle restrictions, empty input, bounded copy, deadline conversion/overflow, error mapping and cleanup |
-| Strict kernel and userland builds | Pass |
-| Guest stalled-peer probe | Pass; full-ring poll, 100 ms timeout, successful retry; host verified exactly 2,025,800 bytes followed by EOF |
-| Guest boot suites | Pre-boot 30 passed and post-boot 29 passed, zero failures; DHCP and secondary-ext2 cases skipped by their fixture conditions |
-| Copied root after orderly shutdown | `e2fsck -fn` exited 0 |
+For a guest or production-machine check, start the peer on a reachable host:
 
-Host sanitizer runs disabled LeakSanitizer for the ptrace environment;
-ASan/UBSan remained enabled. The guest result covers virtio, with physical
-NIC validation left to the production-machine check.
+```sh
+python3 tools/test_tcp_write_peer.py --bind HOST_IP
+```
+
+Then in os64, with the updated kernel and userland installed:
+
+```sh
+/tests/tcpwriteprobe HOST_IP 17260
+```
+
+Both sides must print PASS. The host holds data unread until the guest
+observes a full-ring poll and a 100 ms finite timeout, then checks the
+resumed stream's byte content, length and EOF. Restart the peer for each run.
+For QEMU user networking, omit `--bind` and pass `10.0.2.2` in the guest.
+This manual probe requires an external peer and is separate from `testrun`.
+
+The isolated rig uses QEMU q35, TCG/qemu64, two CPUs, virtio-net, a copied
+ext2 root and the rebuilt kernel/userland. Its disposable `/etc/os64.conf`
+selects `conf = /etc`; one cron `@reboot` script runs the probe under
+`KWORKER CRON` without `HUSK`, avoiding duplicate VT shell startup scripts.
+Host ASan/UBSan remain enabled; LeakSanitizer is disabled for the ptrace
+fixture. Physical NIC validation belongs to the production-machine check.
+
+The revised syscall-3 build passed the host suites, kernel/userland builds
+and this guest probe: the peer verified 2,025,800 exact bytes through EOF
+after timeout/retry. Guest `testrun syscall_smoke`, `fputest`, `df_test` and
+`sigpipe_test` each passed, covering the four raw-write sites that explicitly
+load infinite patience. The copied root passed `e2fsck -fn` after shutdown.
 
 ## TCP sender refactor acceptance (2026-09-05)
 

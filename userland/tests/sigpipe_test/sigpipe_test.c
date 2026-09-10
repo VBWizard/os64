@@ -112,6 +112,7 @@ int main(void)
     __asm__ volatile(
         "mov %[save], rsp\n\t"
         "mov rsp, %[dead]\n\t"
+        "mov r10, -1\n\t"       // OS64_WAIT_FOREVER: this raw write bypasses libos64.
         "syscall\n\t"
         "mov rsp, %[save]\n\t"
         : [save] "+m"(gSavedRsp)
@@ -120,7 +121,7 @@ int main(void)
           "D"((uint64_t)(uint32_t)fds[1]),
           "S"((uint64_t)(uintptr_t)gPayload),
           "d"((uint64_t)sizeof(gPayload))
-        : "rcx", "r11", "memory");
+        : "rcx", "r11", "r10", "memory");
 
     // Only reached if the kernel did NOT apply SIGPIPE's default action —
     // which is the whole bug this fixture exists to catch.

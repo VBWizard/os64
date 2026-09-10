@@ -2044,8 +2044,7 @@ long tcp_conn_read(tcp_conn_t* c, void* buf, size_t len, uint64_t deadline)
 	}
 }
 
-static long tcp_write(tcp_conn_t* c, const void* buf, size_t len,
-                      bool first_progress, bool bounded, uint64_t deadline)
+long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len, uint64_t deadline)
 {
 	core_local_storage_t* cls = get_core_local_storage();
 	thread_t* self = cls->currentThread;
@@ -2091,11 +2090,10 @@ static long tcp_write(tcp_conn_t* c, const void* buf, size_t len,
 			sent += n;
 			tcp_output(c, 0);
 			spinlock_release_irqrestore(&c->lock, irqflags);
-			if (first_progress) return (long)sent;
 			continue;
 		}
 
-		if (bounded && kTicksSinceStart >= deadline)
+		if (deadline != 0 && kTicksSinceStart >= deadline)
 		{
 			spinlock_release_irqrestore(&c->lock, irqflags);
 			return sent ? (long)sent : TCP_ERR_TIMEOUT;
@@ -2109,23 +2107,11 @@ static long tcp_write(tcp_conn_t* c, const void* buf, size_t len,
 		// for a wait that was already over.
 		c->writer = self;
 		spinlock_release_irqrestore(&c->lock, irqflags);
-		uint64_t now = kTicksSinceStart;
-		uint64_t wake = now > UINT64_MAX - TICKS_PER_SECOND ? UINT64_MAX : now + TICKS_PER_SECOND;
-		if (bounded && deadline < wake) wake = deadline;
+		uint64_t wake = kTicksSinceStart + TICKS_PER_SECOND;
+		if (deadline != 0 && deadline < wake) wake = deadline;
 		signal_raise(SIGSLEEP, wake, self);
 	}
 	return (long)sent;
-}
-
-long tcp_conn_write(tcp_conn_t* c, const void* buf, size_t len)
-{
-	return tcp_write(c, buf, len, false, false, 0);
-}
-
-long tcp_conn_write_for(tcp_conn_t* c, const void* buf, size_t len,
-                       bool bounded, uint64_t deadline)
-{
-	return tcp_write(c, buf, len, true, bounded, deadline);
 }
 
 void tcp_conn_close(tcp_conn_t* c)

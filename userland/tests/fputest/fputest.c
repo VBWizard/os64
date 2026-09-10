@@ -269,9 +269,10 @@ static uint32_t run_chunk(const pattern_t *p)
 // built from the live file at the syscall's exit, the handler wipes it,
 // and sigreturn must put it back before this instruction stream resumes.
 //
-// The three syscall arguments travel in a struct behind ONE pointer: the
+// The three payload arguments travel in a struct behind ONE pointer: the
 // check already binds eight register operands, and eight plus three plus
-// the six registers the syscall clobbers is more than x86-64 has.
+// the six registers the syscall clobbers is more than x86-64 has. Write's
+// fourth argument, infinite patience, is loaded as an immediate.
 typedef struct { uint64_t handle; const char *text; uint64_t length; } syscall_args_t;
 
 static uint32_t run_syscall_checked(const pattern_t *p, int64_t handle,
@@ -286,6 +287,7 @@ static uint32_t run_syscall_checked(const pattern_t *p, int64_t handle,
         "mov rdi, [%[a]]\n\t"
         "mov rsi, [%[a] + 8]\n\t"
         "mov rdx, [%[a] + 16]\n\t"
+        "mov r10, -1\n\t"       // OS64_WAIT_FOREVER: this raw write bypasses libos64.
         "syscall\n\t"
         FPU_CHECK_ASM
         "fstp st(0)\n\t"

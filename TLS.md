@@ -39,8 +39,8 @@ kernel or add a general cryptographic API to libos64 as part of this port.
 | Area | Evidence and consequence |
 |---|---|
 | Shared libraries | `userland/GNUmakefile` builds PIC `libos64.so`, `libgzip.so`, and `libpng.so`, with selective app dependencies, prelink slots, debug symbols, and header dependencies. Follow that machinery. |
-| Transport | `os64_dial`, `os64_read_for`, `os64_write_for`, and `os64_close` provide handle I/O for a TCP adapter. Finite read/write timeouts are distinct from EOF; the legacy `os64_write` still has no caller deadline. |
-| TCP progress | `os64_write_for` bounds the wait for TCP ring space and returns an available queued prefix. The adapter must retain its suffix and enforce its total budget across calls. See [TCP write deadlines](TCP_WRITE_DEADLINE.md). |
+| Transport | `os64_dial`, `os64_read_for`, `os64_write_for`, and `os64_close` provide handle I/O for a TCP adapter. Finite read/write timeouts are distinct from EOF; `os64_write` supplies infinite patience. |
+| TCP progress | `os64_write_for` bounds waiting for TCP ring space and reports queued progress. The adapter must retain its suffix and enforce its total budget across calls. See [write's patience](abi/include/os64/syscall_numbers.h). |
 | Time | `os64_time()` supplies signed UTC epoch seconds. `os64_ticks()` supplies monotonic ticks and their rate. Certificate dates and deadlines use different clocks. |
 | Randomness | The production adapter reads `/dev/random`; an unseeded service refuses with `-1`. A CPUID feature bit does not establish service readiness. |
 | Configuration | `os64_conf_find()` / `os64_conf_find_from()` resolve basenames along the configured ladder. `kernel/src/conf.c` rejects slashes in the requested name. Reuse the ladder for `tls.conf`, not a nested certificate path. |
@@ -402,11 +402,12 @@ Exact memory and stack budgets must be measured with the pinned build.
 
 ### Bounded TCP progress
 
-`os64_read_for()` and the TCP-only `os64_write_for()` provide finite waits.
-The [write-deadline contract](TCP_WRITE_DEADLINE.md) returns an available
-queued prefix and leaves the connection open on timeout. The legacy
-`os64_write()` has no caller deadline, and owned TCP persist state has no
-overall lifetime bound; a transport adapter must use the timed operation.
+`os64_read_for()` and `os64_write_for()` provide finite waits. Write queues
+while room exists, then reports progress or timeout at an expired full-ring
+wait. Its [patience contract](abi/include/os64/syscall_numbers.h) leaves the
+connection open on timeout. `os64_write()` supplies infinite patience, and
+owned TCP persist state has no overall lifetime bound; a transport adapter
+must use a finite write patience.
 
 The adapter owns one total budget across reads, writes and engine progress.
 Ready ring space may produce a successful write even after its wait deadline,
